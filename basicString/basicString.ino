@@ -183,7 +183,7 @@ class StarsMode {
   public:
     StarsMode() {
     }
-    run() {
+    void run() {
       float micLevel = getMicLevel();
       color colorValue = getSingleColorValue();
     
@@ -269,7 +269,7 @@ class Runner {
       runCallCount = 0;
       totalPixels = strip.numPixels();
     }
-    run() {
+    void run() {
       this->handleThrottling();
 
       int lastIndex = this->headIndex;
@@ -325,7 +325,7 @@ class RunnerMode {
       runner4 = Runner();
       runner4.setHeadIndex(LEDS / 4 * 3);
     }
-    run() {
+    void run() {
       runner1.run();
       runner2.run();
       runner3.run();
