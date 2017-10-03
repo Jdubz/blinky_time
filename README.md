@@ -15,6 +15,14 @@ Neopixel control from arduino nano, with microphone and wifi transiever
 5. Select the appropriate port. Should be something like `/dev/tty.usb...`
 6. In the main IDE, select the button that has an arrow on it. This is the upload button.
 
+### Troubleshooting
+
+Arduino has their own guides for this [here](https://www.arduino.cc/en/Guide/Troubleshooting#upload). If none of the solutions there does the trick, see the sections below:
+
+#### Port Won't Show Up
+
+You may have purchased a non-genuine arduino. If so, [this blogpost](https://kig.re/2014/12/31/how-to-use-arduino-nano-mini-pro-with-CH340G-on-mac-osx-yosemite.html) will help you get setup with signed drivers for a variety of operating systems.
+
 ### To Do
 ```
 - organize code
