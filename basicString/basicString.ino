@@ -31,7 +31,7 @@ int numModes = 4;
 
 // Sketch Variables
 int frame = 0;
-int mode = 1;
+int mode = 0;
 int knobIn = 0;
 
 // TODO use library friendly data with strip.Color instead of this
