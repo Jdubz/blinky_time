@@ -13,6 +13,7 @@
 #include "Utils.h"
 #include "AudioLevelsMode.h"
 #include "StarsMode.h"
+#include "RunnerMode.h"
 #include "Button.h"
 //#include <nRF24L01.h>
 //#include <RF24.h>
@@ -33,14 +34,8 @@ const int LEDS = 50; // TODO use strip.numPixels() instead of setting a constant
 // Sketch Variables
 int mode = 0;
 
-
-
-
-
-
 Button* button = new Button(3);
 
-int ledLvls[LEDS][2];
 //const byte address[6] = "00001";
 
 //RF24 radio(CSNPIN, CEPIN);
@@ -83,86 +78,10 @@ class AlternatingMode: public Mode {
     }
 };
 
-class Runner {
-  public:
-    Runner() {
-      headIndex = 0;
-      tailLength = 5;
-      runThrottle = 15;
-      runCallCount = 0;
-      totalPixels = strip.numPixels();
-    }
-    void run() {
-      this->handleThrottling();
 
-      int lastIndex = this->headIndex;
-
-      color currentColor = getSingleColorValue();
-
-      for (int count = 0; count < this->tailLength; count++) {
-        float diminish = float(this->tailLength - count)/float(this->tailLength);
-        strip.setPixelColor(this->headIndex - count,
-          currentColor.green * diminish,
-          currentColor.red * diminish,
-          currentColor.blue * diminish);
-      }
-    }
-    void setHeadIndex(int newHeadIndex) {
-      this->headIndex = newHeadIndex;
-    }
-    int getHeadIndex() {
-      return this->headIndex;
-    }
-  private:
-    void handleThrottling() {
-      this->runCallCount++;
-
-      if (this->runCallCount >= this->runThrottle) {
-        this->headIndex++;
-
-        // reset to 0 if out of bounds
-        if (this->headIndex > this->totalPixels) {
-          this->headIndex = 0;
-        }
-
-        this->runCallCount = 0;
-      }
-    }
-    int headIndex;
-    int tailLength;
-    // determines throttle, lower is faster, should probably change this
-    int runThrottle;
-    int runCallCount;
-    int totalPixels;
-};
-
-class RunnerMode: public Mode {
-  public:
-    RunnerMode() {
-      runner1 = Runner();
-      runner1.setHeadIndex(0);
-      runner2 = Runner();
-      runner2.setHeadIndex(LEDS / 4);
-      runner3 = Runner();
-      runner3.setHeadIndex(LEDS / 4 * 2);
-      runner4 = Runner();
-      runner4.setHeadIndex(LEDS / 4 * 3);
-    }
-    void run() {
-      runner1.run();
-      runner2.run();
-      runner3.run();
-      runner4.run();
-    }
-  private:
-    Runner runner1;
-    Runner runner2;
-    Runner runner3;
-    Runner runner4;
-};
 
 Mode *registeredModes[] = {
-  new RunnerMode(),
+  new RunnerMode(&strip, LEDS),
   new AlternatingMode(),
   new AudioLevelsMode(&strip, &LEDS),
   new StarsMode(&strip, &LEDS)
