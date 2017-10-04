@@ -6,12 +6,11 @@
  *   - circuit diagram
  *   - component links
  */
-
-
 #include <Adafruit_NeoPixel.h>
 #include "Mode.h"
 #include "Utils.h"
 #include "AudioLevelsMode.h"
+#include "AlternatingMode.h"
 #include "StarsMode.h"
 #include "RunnerMode.h"
 #include "Button.h"
@@ -52,37 +51,9 @@ void renderStrip() {
 
 // TODO create interface for ModeManager to easily register/unregister
 // and handle mode execution
-
-
-class AlternatingMode: public Mode {
-  public:
-    void run() {
-      color colorValue = getSingleColorValue();
-      color flippedValue = getFlippedColorOf(colorValue);
-    
-      // All colors divided by two to reduce brightness and
-      // preserve battery
-      for (int ledIndex = 0; ledIndex < LEDS; ledIndex++) {
-        if (ledIndex % 2 == 0) {
-          strip.setPixelColor(ledIndex,
-            float(colorValue.green / 2),
-            float(colorValue.red / 2),
-            float(colorValue.blue / 2));
-        } else {
-          strip.setPixelColor(ledIndex,
-            float(flippedValue.green / 2),
-            float(flippedValue.red / 2),
-            float(flippedValue.blue / 2));
-        }
-      }
-    }
-};
-
-
-
 Mode *registeredModes[] = {
   new RunnerMode(&strip, LEDS),
-  new AlternatingMode(),
+  new AlternatingMode(&strip, &LEDS),
   new AudioLevelsMode(&strip, &LEDS),
   new StarsMode(&strip, &LEDS)
 };
