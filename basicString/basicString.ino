@@ -9,13 +9,13 @@
 
 
 #include <Adafruit_NeoPixel.h>
+#include "Mode.h"
+#include "Utils.h"
 //#include <nRF24L01.h>
 //#include <RF24.h>
 
 // Basic Inputs
 int LEDPIN = 2;
-int KNOBPIN = 14;
-int MICPIN = 15;
 
 // WiFi Radio Inputs
 //int CSNPIN = 7;
@@ -26,23 +26,12 @@ int MICPIN = 15;
 
 // Sketch Constants
 const int LEDS = 50; // TODO use strip.numPixels() instead of setting a constant
-int sampleSize = 30;
-int numModes = 4;
 
 // Sketch Variables
 int frame = 0;
 int mode = 0;
-int knobIn = 0;
 
-// TODO use library friendly data with strip.Color instead of this
-// Colors stored and set in the order of
-// green, red, blue not RGB
-typedef struct colorValues {
-  uint8_t green;
-  uint8_t red;
-  uint8_t blue;
-}
-color;
+
 
 // TODO move this to its own file and import
 // TODO refactor to make presses feel more immediate
@@ -86,8 +75,6 @@ class Button {
     float pressDuration;
 };
 
-int threshhold = 100;
-float gain = 50.0;
 
 Button button = Button(3);
 
@@ -97,77 +84,6 @@ int ledLvls[LEDS][2];
 //RF24 radio(CSNPIN, CEPIN);
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
-void keepBatteryOn() {
-  // Keep every fifth light on so phone battery doesn't turn off
-  color colorValue = getSingleColorValue();
-
-  for (int on = 0; on < 5; on++) {
-    strip.setPixelColor(on * 10,
-      colorValue.green,
-      colorValue.red,
-      colorValue.blue);
-  }
-}
-
-float getMicLevel() {
-  int lvl1;
-  unsigned long start = millis();
-  int high = 0;
-  int low = 1024;
-  while (millis() - start < sampleSize) {
-    int sample = analogRead(MICPIN);
-    if (sample < low) {
-      low = sample;
-    } else if (sample > high) {
-      high = sample;
-    }
-  }
-  lvl1 = high - low;
-  float micLvl = lvl1 / 1024.0;
-  if (threshhold > 20) {
-    threshhold = threshhold - 1;
-  }
-  if (lvl1 > threshhold) {
-    threshhold = lvl1;
-  }
-  gain = 1024.0 / threshhold;
-  micLvl = micLvl * gain;
-
-  return micLvl;
-}
-
-color getSingleColorValue() {
-  color colorValue;
-  knobIn = analogRead(KNOBPIN);
-  // which third of circle is the knob in
-  int phase = knobIn / 341.333;
-  float ramp = (knobIn % 342) / 341.333;
-  if (phase == 0) {
-    colorValue.green = int(ramp * 255.0);
-    colorValue.red = int((1.0 - ramp) * 255.0);
-    colorValue.blue = 0;
-  } else if (phase == 1) {
-    colorValue.blue = int(ramp * 255.0);
-    colorValue.green = int((1.0 - ramp) * 255.0);
-    colorValue.red = 0;
-  } else if (phase == 2) {
-    colorValue.red = int(ramp * 255.0);
-    colorValue.blue = int((1.0 - ramp) * 255.0);
-    colorValue.green = 0;
-  }
-
-  return colorValue;
-}
-
-color getFlippedColorOf(color referenceColor) {
-  color flipped;
-  flipped.green = 255 - referenceColor.green;
-  flipped.red = 255 - referenceColor.red;
-  flipped.blue = 255 - referenceColor.blue;
-
-  return flipped;
-}
-
 void renderStrip() {
   strip.show();
 
@@ -176,11 +92,6 @@ void renderStrip() {
     strip.setPixelColor(led, 0, 0, 0);
   }
 }
-
-class Mode {
-  public:
-    virtual void run() = 0;
-};
 
 // TODO create interface for ModeManager to easily register/unregister
 // and handle mode execution
@@ -237,8 +148,10 @@ class AudioLevelsMode: public Mode {
           float(colorValue.red) * micLevel,
           float(colorValue.blue) * micLevel);
       }
-    
-      keepBatteryOn();
+
+      // TODO call is causing color to remain constant. Temporarily
+      // commenting out to continue cleaning up files before addressing
+      // keepBatteryOn(strip);
     }
 };
 
@@ -346,9 +259,9 @@ class RunnerMode: public Mode {
 
 Mode *registeredModes[] = {
   new RunnerMode(),
-  new StarsMode(),
   new AlternatingMode(),
-  new AudioLevelsMode()
+  new AudioLevelsMode(),
+  new StarsMode()
 };
 
 void setup() {
