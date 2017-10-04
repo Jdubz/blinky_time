@@ -138,21 +138,24 @@ class StarsMode: public Mode {
 
 class AudioLevelsMode: public Mode {
   public:
+    AudioLevelsMode(Adafruit_NeoPixel *strip) {
+      this->strip = strip;
+    }
     void run() {
       float micLevel = getMicLevel();
       color colorValue = getSingleColorValue();
-    
+
       for (int test = 0; test < LEDS; test++) {
-        strip.setPixelColor(test,
+        this->strip->setPixelColor(test,
           float(colorValue.green) * micLevel,
           float(colorValue.red) * micLevel,
           float(colorValue.blue) * micLevel);
       }
 
-      // TODO call is causing color to remain constant. Temporarily
-      // commenting out to continue cleaning up files before addressing
-      // keepBatteryOn(strip);
+       keepBatteryOn(this->strip);
     }
+  private:
+    Adafruit_NeoPixel *strip;
 };
 
 class AlternatingMode: public Mode {
@@ -260,7 +263,7 @@ class RunnerMode: public Mode {
 Mode *registeredModes[] = {
   new RunnerMode(),
   new AlternatingMode(),
-  new AudioLevelsMode(),
+  new AudioLevelsMode(&strip),
   new StarsMode()
 };
 

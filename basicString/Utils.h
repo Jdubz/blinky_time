@@ -58,12 +58,12 @@ color getFlippedColorOf(color referenceColor) {
   return flipped;
 }
 
-void keepBatteryOn(Adafruit_NeoPixel strip) {
+void keepBatteryOn(Adafruit_NeoPixel *strip) {
   // Keep every fifth light on so phone battery doesn't turn off
   color colorValue = getSingleColorValue();
 
   for (int on = 0; on < 5; on++) {
-    strip.setPixelColor(on * 10,
+    strip->setPixelColor(on * 10,
       colorValue.green,
       colorValue.red,
       colorValue.blue);
