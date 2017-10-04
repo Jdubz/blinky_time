@@ -12,6 +12,7 @@
 #include "Mode.h"
 #include "Utils.h"
 #include "AudioLevelsMode.h"
+#include "StarsMode.h"
 //#include <nRF24L01.h>
 //#include <RF24.h>
 
@@ -29,7 +30,6 @@ int LEDPIN = 2;
 const int LEDS = 50; // TODO use strip.numPixels() instead of setting a constant
 
 // Sketch Variables
-int frame = 0;
 int mode = 0;
 
 
@@ -96,46 +96,7 @@ void renderStrip() {
 
 // TODO create interface for ModeManager to easily register/unregister
 // and handle mode execution
-class StarsMode: public Mode {
-  public:
-    StarsMode() {
-    }
-    void run() {
-      float micLevel = getMicLevel();
-      color colorValue = getSingleColorValue();
 
-      for (int star = 0; star < LEDS; star++) {
-        if (ledLvls[star][0] > 0) {
-          if (ledLvls[star][1] == 1) {
-            if (ledLvls[star][0] < 100) {
-              ledLvls[star][0]++;
-            } else {
-              ledLvls[star][1] = 0;
-            }
-          } else {
-            ledLvls[star][0]--;
-          }
-          float starLvl = ledLvls[star][0] / 100.0;
-          strip.setPixelColor(star,
-            float(colorValue.green) * micLevel * starLvl,
-            float(colorValue.red) * micLevel * starLvl,
-            float(colorValue.blue) * micLevel * starLvl);
-        }
-      }
-      if (frame == 5) {
-        int newStar = random(50);
-        int newStar2 = random(50);
-        ledLvls[newStar][0] = 1;
-        ledLvls[newStar][1] = 1;
-        ledLvls[newStar2][0] = 1;
-        ledLvls[newStar2][1] = 1;
-        frame = 0;
-      }
-      frame++;
-    }
-  private:
-    int ledLvls[50][2];
-};
 
 class AlternatingMode: public Mode {
   public:
@@ -243,7 +204,7 @@ Mode *registeredModes[] = {
   new RunnerMode(),
   new AlternatingMode(),
   new AudioLevelsMode(&strip, &LEDS),
-  new StarsMode()
+  new StarsMode(&strip, &LEDS)
 };
 
 void setup() {
