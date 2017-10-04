@@ -11,6 +11,7 @@
 #include <Adafruit_NeoPixel.h>
 #include "Mode.h"
 #include "Utils.h"
+#include "AudioLevelsMode.h"
 //#include <nRF24L01.h>
 //#include <RF24.h>
 
@@ -136,28 +137,6 @@ class StarsMode: public Mode {
     int ledLvls[50][2];
 };
 
-class AudioLevelsMode: public Mode {
-  public:
-    AudioLevelsMode(Adafruit_NeoPixel *strip) {
-      this->strip = strip;
-    }
-    void run() {
-      float micLevel = getMicLevel();
-      color colorValue = getSingleColorValue();
-
-      for (int test = 0; test < LEDS; test++) {
-        this->strip->setPixelColor(test,
-          float(colorValue.green) * micLevel,
-          float(colorValue.red) * micLevel,
-          float(colorValue.blue) * micLevel);
-      }
-
-       keepBatteryOn(this->strip);
-    }
-  private:
-    Adafruit_NeoPixel *strip;
-};
-
 class AlternatingMode: public Mode {
   public:
     void run() {
@@ -263,7 +242,7 @@ class RunnerMode: public Mode {
 Mode *registeredModes[] = {
   new RunnerMode(),
   new AlternatingMode(),
-  new AudioLevelsMode(&strip),
+  new AudioLevelsMode(&strip, &LEDS),
   new StarsMode()
 };
 
