@@ -13,6 +13,7 @@
 #include "Utils.h"
 #include "AudioLevelsMode.h"
 #include "StarsMode.h"
+#include "Button.h"
 //#include <nRF24L01.h>
 //#include <RF24.h>
 
@@ -34,50 +35,10 @@ int mode = 0;
 
 
 
-// TODO move this to its own file and import
-// TODO refactor to make presses feel more immediate
-class Button {
-  public:
-    Button(int inputPin) {
-      pin = inputPin;
-      pinMode(inputPin, INPUT);
-      wasDown = false;
-      wasPressed = false;
-      longPressDuration = 1000;
-      pressDuration = -1;
-    }
-    void update() {
-      bool isDown = digitalRead(this->pin) == HIGH;
-      bool isUp = digitalRead(this->pin) == LOW;
-
-      if (isDown && !this->wasDown) {
-        this->wasDown = true;
-        this->pressStart = millis();
-      } else if (isUp && this->wasDown) {
-        this->pressDuration = millis() - this->pressStart;
-        this->wasDown = false;
-        this->wasPressed = true;
-      } else {
-        this->wasPressed = false;
-      }
-    }
-    bool wasShortPressed() {
-      return this->wasPressed && this->pressDuration < this->longPressDuration;
-    }
-    bool wasLongPressed() {
-      return this->wasPressed && this->pressDuration >= this->longPressDuration;
-    }
-  private:
-    int pin;
-    bool wasDown;
-    bool wasPressed;
-    float pressStart;
-    float longPressDuration;
-    float pressDuration;
-};
 
 
-Button button = Button(3);
+
+Button* button = new Button(3);
 
 int ledLvls[LEDS][2];
 //const byte address[6] = "00001";
@@ -224,10 +185,10 @@ void setup() {
 
 void loop() {
   // Update components
-  button.update();
+  button->update();
   renderStrip();
 
-  if (button.wasShortPressed()) {
+  if (button->wasShortPressed()) {
     mode = (mode + 1) % sizeof(registeredModes);
   }
 
