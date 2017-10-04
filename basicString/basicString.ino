@@ -35,7 +35,7 @@ int mode = 0;
 int knobIn = 0;
 
 // TODO use library friendly data with strip.Color instead of this
-// Colors stored and set in the order of 
+// Colors stored and set in the order of
 // green, red, blue not RGB
 typedef struct colorValues {
   uint8_t green;
@@ -102,9 +102,9 @@ void keepBatteryOn() {
   color colorValue = getSingleColorValue();
 
   for (int on = 0; on < 5; on++) {
-    strip.setPixelColor(on * 10, 
-      colorValue.green, 
-      colorValue.red, 
+    strip.setPixelColor(on * 10,
+      colorValue.green,
+      colorValue.red,
       colorValue.blue);
   }
 }
@@ -177,16 +177,21 @@ void renderStrip() {
   }
 }
 
+class Mode {
+  public:
+    virtual void run() = 0;
+};
+
 // TODO create interface for ModeManager to easily register/unregister
 // and handle mode execution
-class StarsMode {
+class StarsMode: public Mode {
   public:
     StarsMode() {
     }
     void run() {
       float micLevel = getMicLevel();
       color colorValue = getSingleColorValue();
-    
+
       for (int star = 0; star < LEDS; star++) {
         if (ledLvls[star][0] > 0) {
           if (ledLvls[star][1] == 1) {
@@ -199,9 +204,9 @@ class StarsMode {
             ledLvls[star][0]--;
           }
           float starLvl = ledLvls[star][0] / 100.0;
-          strip.setPixelColor(star, 
-            float(colorValue.green) * micLevel * starLvl, 
-            float(colorValue.red) * micLevel * starLvl, 
+          strip.setPixelColor(star,
+            float(colorValue.green) * micLevel * starLvl,
+            float(colorValue.red) * micLevel * starLvl,
             float(colorValue.blue) * micLevel * starLvl);
         }
       }
@@ -220,51 +225,52 @@ class StarsMode {
     int ledLvls[50][2];
 };
 
-// TODO move to mode registration when polymorphism is figured out
-StarsMode starsMode = StarsMode();
-
-// TODO convert to mode using common Mode interface
-void doAudioLevelsMode() {
-  float micLevel = getMicLevel();
-  color colorValue = getSingleColorValue();
-
-  for (int test = 0; test < LEDS; test++) {
-    strip.setPixelColor(test, 
-      float(colorValue.green) * micLevel, 
-      float(colorValue.red) * micLevel, 
-      float(colorValue.blue) * micLevel);
-  }
-
-  keepBatteryOn();
-}
-
-// TODO convert to mode using common Mode interface
-void doAlternatingMode() {
-  color colorValue = getSingleColorValue();
-  color flippedValue = getFlippedColorOf(colorValue);
-
-  // All colors divided by two to reduce brightness and
-  // preserve battery
-  for (int ledIndex = 0; ledIndex < LEDS; ledIndex++) {
-    if (ledIndex % 2 == 0) {
-      strip.setPixelColor(ledIndex, 
-        float(colorValue.green / 2), 
-        float(colorValue.red / 2), 
-        float(colorValue.blue / 2));
-    } else {
-      strip.setPixelColor(ledIndex, 
-        float(flippedValue.green / 2), 
-        float(flippedValue.red / 2), 
-        float(flippedValue.blue / 2));
+class AudioLevelsMode: public Mode {
+  public:
+    void run() {
+      float micLevel = getMicLevel();
+      color colorValue = getSingleColorValue();
+    
+      for (int test = 0; test < LEDS; test++) {
+        strip.setPixelColor(test,
+          float(colorValue.green) * micLevel,
+          float(colorValue.red) * micLevel,
+          float(colorValue.blue) * micLevel);
+      }
+    
+      keepBatteryOn();
     }
-  }
-}
+};
+
+class AlternatingMode: public Mode {
+  public:
+    void run() {
+      color colorValue = getSingleColorValue();
+      color flippedValue = getFlippedColorOf(colorValue);
+    
+      // All colors divided by two to reduce brightness and
+      // preserve battery
+      for (int ledIndex = 0; ledIndex < LEDS; ledIndex++) {
+        if (ledIndex % 2 == 0) {
+          strip.setPixelColor(ledIndex,
+            float(colorValue.green / 2),
+            float(colorValue.red / 2),
+            float(colorValue.blue / 2));
+        } else {
+          strip.setPixelColor(ledIndex,
+            float(flippedValue.green / 2),
+            float(flippedValue.red / 2),
+            float(flippedValue.blue / 2));
+        }
+      }
+    }
+};
 
 class Runner {
   public:
     Runner() {
       headIndex = 0;
-      tailLength = 5; 
+      tailLength = 5;
       runThrottle = 15;
       runCallCount = 0;
       totalPixels = strip.numPixels();
@@ -278,9 +284,9 @@ class Runner {
 
       for (int count = 0; count < this->tailLength; count++) {
         float diminish = float(this->tailLength - count)/float(this->tailLength);
-        strip.setPixelColor(this->headIndex - count, 
-          currentColor.green * diminish, 
-          currentColor.red * diminish, 
+        strip.setPixelColor(this->headIndex - count,
+          currentColor.green * diminish,
+          currentColor.red * diminish,
           currentColor.blue * diminish);
       }
     }
@@ -301,7 +307,7 @@ class Runner {
         if (this->headIndex > this->totalPixels) {
           this->headIndex = 0;
         }
-        
+
         this->runCallCount = 0;
       }
     }
@@ -313,7 +319,7 @@ class Runner {
     int totalPixels;
 };
 
-class RunnerMode {
+class RunnerMode: public Mode {
   public:
     RunnerMode() {
       runner1 = Runner();
@@ -338,8 +344,12 @@ class RunnerMode {
     Runner runner4;
 };
 
-// TODO move to mode registration when polymorphism is figured out
-RunnerMode runnerMode = RunnerMode();
+Mode *registeredModes[] = {
+  new RunnerMode(),
+  new StarsMode(),
+  new AlternatingMode(),
+  new AudioLevelsMode()
+};
 
 void setup() {
   Serial.begin(9600);
@@ -360,24 +370,10 @@ void loop() {
   // Update components
   button.update();
   renderStrip();
-  
+
   if (button.wasShortPressed()) {
-    mode = (mode + 1) % numModes;
+    mode = (mode + 1) % sizeof(registeredModes);
   }
 
-  switch (mode) {
-    case 0:
-      starsMode.run();
-      break;
-    case 1:
-      doAudioLevelsMode();
-      break;
-    case 2:
-      doAlternatingMode();
-      break;
-    case 3:
-      runnerMode.run();
-      break;
-  }
+  registeredModes[mode]->run();
 }
-
