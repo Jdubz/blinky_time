@@ -1,49 +1,69 @@
 #include <nRF24L01.h>
 #include <RF24.h>
 #include <SPI.h>
-#include <Adafruit_NeoPixel.h>
 
-int CSNPIN = 7;
-int CEPIN = 8;
+int CSNPIN = 9;
+int CEPIN = 10;
 int MOSIPIN = 11;
 int MISOPIN = 12;
 int SCKPIN = 13;
 
-int LEDPIN = 2;
-int LEDS = 50;
+int KNOBPIN = 14;
+int LEDPIN = 3;
 
 RF24 radio(CSNPIN, CEPIN);
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
-const byte address[6] = "00125";
+const uint64_t address1 = 0xE8E8F0F0E1LL;
+const uint64_t address2 = 0xE6E6E6E6E6E6;
+
+int newKnob = 0;
+int oldKnob = 0;
+
+bool readKnob() {
+  int reading = 0;
+  for (int val = 0; val < 10; val++) {
+    reading = reading + analogRead(KNOBPIN);
+    newKnob = reading / 10;
+  }
+  if (newKnob > oldKnob + 5 || newKnob < oldKnob - 5) {
+    oldKnob = newKnob;
+    return true;
+  }
+  return false;
+}
 
 void setup() {
   Serial.begin(9600);
   radio.begin();
-  radio.openWritingPipe(address);
+  radio.openWritingPipe(address1);
+  radio.openReadingPipe(1, address2);
   radio.setPALevel(RF24_PA_MIN);
-  radio.stopListening();
-  strip.begin();
-  strip.show();
+
+  pinMode(LEDPIN, OUTPUT);
 }
 
 void loop() {
+  delay(5);
+  if (radio.available()) {
+    radio.startListening();
+    int knobIn = 0;
+    radio.read(&knobIn, sizeof(knobIn));
+    if (knobIn != -1) {
+      Serial.print("radio in : ");
+      Serial.println(knobIn);
+      analogWrite(LEDPIN, knobIn / 4);
+    }
 
-  int msg[1];
-  bool wrote;
-  msg[0] = 27;
-  wrote = radio.write(msg, 1);
-  if (wrote) {
-    for (int led = 0; led < LEDS; led++) {
-      strip.setPixelColor(led, 0, 50, 0);
+    delay(5);
+    if (readKnob()) {
+      radio.stopListening();
+      Serial.print("knob read : ");
+      Serial.println(newKnob / 4);
+      analogWrite(LEDPIN, newKnob / 4);
+      radio.write(&newKnob, sizeof(newKnob));
     }
-    strip.show();
+
   } else {
-    for (int led = 0; led < LEDS; led++) {
-      strip.setPixelColor(led, 0, 0, 0);
-    }
-    strip.show();
+    // Serial.println("no-radio");
   }
-  Serial.println(wrote);
-  delay(1000);
 }
