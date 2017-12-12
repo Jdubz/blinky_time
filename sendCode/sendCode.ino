@@ -8,7 +8,7 @@
 
 int LEDPIN = 3;
 
-RF24 radio(7,8); // CE, CSN
+RF24 radio(9,10); // CE, CSN
 
 // Pipes 2-5 only look at the first byte
 // try to only make the first byte unique
@@ -18,13 +18,11 @@ const uint8_t pipeNum = 0;
 
 // Used to control whether this node is sending or receiving
 // 1 for sender, 0 for receiver
-bool role = 0;
+bool role = 1;
 
 void setup() {
   Serial.begin(115200);
-
   pinMode(LEDPIN, OUTPUT);
-  
   radio.begin();
   radio.setPALevel(RF24_PA_MIN);
   
@@ -33,7 +31,7 @@ void setup() {
     Serial.println("Initializing sender");
     radio.openWritingPipe(address);
     radio.stopListening();
-  }else{
+  } else {
     Serial.println("Initializing receiver");
     radio.openReadingPipe(pipeNum, address);
     radio.startListening();
@@ -71,21 +69,21 @@ void loop() {
   }
 
   // Respond to serial commands
-  if ( Serial.available() ) {
-    char c = toupper(Serial.read());
-    Serial.print("Received serial communication: ");
-    Serial.println(c);
-    
-    if ( c == 'T' && role == 0 ) {      
-      Serial.println(F("*** CHANGING TO TRANSMIT ROLE -- PRESS 'R' TO SWITCH BACK"));
-      role = 1;                  // Become the primary transmitter (ping out)
-    
-    } else if ( c == 'R' && role == 1 ) {
-      Serial.println(F("*** CHANGING TO RECEIVE ROLE -- PRESS 'T' TO SWITCH BACK"));      
-      role = 0;                // Become the primary receiver (pong back)
-      radio.startListening();
-    }
-  }
+//  if ( Serial.available() ) {
+//    char c = toupper(Serial.read());
+//    Serial.print("Received serial communication: ");
+//    Serial.println(c);
+//    
+//    if ( c == 'T' && role == 0 ) {      
+//      Serial.println(F("*** CHANGING TO TRANSMIT ROLE -- PRESS 'R' TO SWITCH BACK"));
+//      role = 1;                  // Become the primary transmitter (ping out)
+//    
+//    } else if ( c == 'R' && role == 1 ) {
+//      Serial.println(F("*** CHANGING TO RECEIVE ROLE -- PRESS 'T' TO SWITCH BACK"));      
+//      role = 0;                // Become the primary receiver (pong back)
+//      radio.startListening();
+//    }
+//  }
 
 
 } // Loop
