@@ -7,6 +7,7 @@
 #include "RF24.h"
 
 int LEDPIN = 3;
+int KNOBPIN = 14;
 
 RF24 radio(9,10); // CE, CSN
 
@@ -18,7 +19,7 @@ const uint8_t pipeNum = 0;
 
 // Used to control whether this node is sending or receiving
 // 1 for sender, 0 for receiver
-bool role = 1;
+bool role = 0;
 
 void setup() {
   Serial.begin(115200);
@@ -42,8 +43,11 @@ void loop() {
   if (role == 1)  {
     // Sender
     analogWrite(LEDPIN, 50);
-    Serial.println(F("Sending code"));
-    const int code = 2145;
+
+    const int code = analogRead(KNOBPIN);
+    Serial.print("Sending code: ");
+    Serial.println(code);
+    
     // TODO add timeout if write takes too long
     radio.write(&code, sizeof(code));
     analogWrite(LEDPIN, 0);
@@ -54,7 +58,7 @@ void loop() {
       int code = 0;
       radio.read(&code, sizeof(code));
 
-      if (code == 2145) {
+      if (code == 482) {
         Serial.print("Correct code received: ");
         Serial.println(code);
         analogWrite(LEDPIN, 50);
