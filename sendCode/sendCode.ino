@@ -21,6 +21,27 @@ const uint8_t pipeNum = 0;
 // 1 for sender, 0 for receiver
 bool role = 0;
 
+// Knob Reading with throttling
+int currentKnobValue = 0;
+int lastKnobValue = 0;
+int knobBeforeMove = 0;
+
+bool readKnob() {
+  currentKnobValue = analogRead(KNOBPIN);
+  bool result = false;
+  bool isStopped = currentKnobValue == lastKnobValue;
+  bool isDifferentFromStart = currentKnobValue != knobBeforeMove;
+
+  // TODO: sometimes value jumps between two numbers and triggers a change
+  if (isStopped && isDifferentFromStart) {
+    result = true;
+    knobBeforeMove = currentKnobValue;
+  }
+
+  lastKnobValue = currentKnobValue;
+  return result;
+}
+
 void setup() {
   Serial.begin(115200);
   pinMode(LEDPIN, OUTPUT);
@@ -42,16 +63,18 @@ void setup() {
 void loop() {
   if (role == 1)  {
     // Sender
-    analogWrite(LEDPIN, 50);
+    if (readKnob()) {
+      analogWrite(LEDPIN, 50);
 
-    const int code = analogRead(KNOBPIN);
-    Serial.print("Sending code: ");
-    Serial.println(code);
-    
-    // TODO add timeout if write takes too long
-    radio.write(&code, sizeof(code));
-    analogWrite(LEDPIN, 0);
-    delay(1000);
+      const int code = currentKnobValue;
+      Serial.print("Sending code: ");
+      Serial.println(code);
+      
+      // TODO add timeout if write takes too long
+      radio.write(&code, sizeof(code));
+      analogWrite(LEDPIN, 0);
+    }
+    delay(100);
   } else if ( role == 0 ) {
     // Receiver
     if( radio.available(&pipeNum)){
@@ -62,7 +85,15 @@ void loop() {
         Serial.print("Correct code received: ");
         Serial.println(code);
         analogWrite(LEDPIN, 50);
-        delay(1000);
+        delay(500);
+        analogWrite(LEDPIN, 0);
+        delay(500);
+        analogWrite(LEDPIN, 50);
+        delay(500);
+        analogWrite(LEDPIN, 0);
+        delay(500);
+        analogWrite(LEDPIN, 50);
+        delay(500);
         analogWrite(LEDPIN, 0);
       } else {
         Serial.print("Incorrect received: ");
