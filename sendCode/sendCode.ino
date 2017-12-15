@@ -1,3 +1,16 @@
+/* Sketch By Josh Wentworth and Thomas Johnston
+ * 
+ * This sketch is used for both a sender of codes and a receiver of codes
+ * 
+ * Assuming the knob and LED strips are wired as per the Blinky Time spec
+ * at 12/15/2015, a sender will send values of it's knob once the knob
+ * stops moving. The first 5 LEDs will be blue of the sender as it sends.
+ * If the receiver gets a 0, it will blink green for about a second.
+ * 
+ * Role can be reversed by switching the `role` variable between 1 and 0. 
+ * See inline docs for more info
+ */
+
 // For Debugging
 //  1. #include <printf.h>
 //  2. Add `printf_begin();` after Serial.begin(...
@@ -20,13 +33,13 @@ const int CSNPIN = 10;
  * LED Stuff
  */
 const int NUM_LEDS = 5;
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(5, LEDPIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 void renderStrip(Adafruit_NeoPixel* strip, int g, int r, int b) {
   strip->show();
 
   // Set all LEDs to red
-  for (int index = 0; index < 5; index++) {
+  for (int index = 0; index < NUM_LEDS; index++) {
     strip->setPixelColor(index, g, r, b);
   }
 }
@@ -34,7 +47,7 @@ void renderStrip(Adafruit_NeoPixel* strip, int g, int r, int b) {
 /*
  * Network Stuff
  */
-RF24 radio(9,10); // CE, CSN
+RF24 radio(CEPIN, CSNPIN); // CE, CSN
 
 // Pipes 2-5 only look at the first byte
 // try to only make the first byte unique
