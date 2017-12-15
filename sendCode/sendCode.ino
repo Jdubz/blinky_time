@@ -19,17 +19,17 @@ const int CSNPIN = 10;
 /*
  * LED Stuff
  */
-//const int NUM_LEDS = 5;
-//Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
-//
-//void renderStrip(Adafruit_NeoPixel* strip, int g=0, int r=0, int b=0) {
-//  strip->show();
-//
-//  // Set all LEDs to red
-//  for (int index = 0; index < 5; index++) {
-//    strip->setPixelColor(index, g, r, b);
-//  }
-//}
+const int NUM_LEDS = 5;
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(5, LEDPIN, NEO_GRB + NEO_KHZ800);
+
+void renderStrip(Adafruit_NeoPixel* strip, int g, int r, int b) {
+  strip->show();
+
+  // Set all LEDs to red
+  for (int index = 0; index < 5; index++) {
+    strip->setPixelColor(index, g, r, b);
+  }
+}
 
 /*
  * Network Stuff
@@ -72,9 +72,15 @@ bool readKnob() {
 
 void setup() {
   Serial.begin(9600);
-//  pinMode(LEDPIN, OUTPUT);
   radio.begin();
   radio.setPALevel(RF24_PA_MIN);
+
+  strip.begin();
+  strip.show();
+  for (int led = 0; led < NUM_LEDS; led++) {
+    strip.setPixelColor(led, 0, 150, 0);
+  }
+  strip.show();
   
   // Open a writing and reading pipe on each radio, with opposite addresses
   if(role){
@@ -91,46 +97,48 @@ void setup() {
 void loop() {
   if (role == 1)  {
     // Sender
-    if (readKnob()) {
-//      analogWrite(LEDPIN, 50);
-//      renderStrip (&strip, 0, 100, 0);
 
+    // Clear strip
+    renderStrip (&strip, 0, 0, 0);
+    
+    if (readKnob()) {
       const int code = currentKnobValue;
       Serial.print("Sending code: ");
       Serial.println(code);
+
+      renderStrip (&strip, 0, 0, 100);
       
       // TODO add timeout if write takes too long
       radio.write(&code, sizeof(code));
-//      analogWrite(LEDPIN, 0);
-//      renderStrip (&strip, 0, 0, 0);
+
+      renderStrip (&strip, 0, 0, 0);
     }
     delay(500);
   } else if ( role == 0 ) {
     // Receiver
+
+    // Clear strip
+    renderStrip (&strip, 0, 0, 0);
+    
     if( radio.available(&pipeNum)){
       int code = 0;
       radio.read(&code, sizeof(code));
 
-      if (code == 482) {
+      if (code == 0) {
         Serial.print("Correct code received: ");
         Serial.println(code);
-//        analogWrite(LEDPIN, 50);
-//        renderStrip (0, 100, 0);
-//        delay(500);
-//        analogWrite(LEDPIN, 0);
-//        renderStrip (0, 0, 0);
-//        delay(500);
-//        analogWrite(LEDPIN, 50);
-//        renderStrip (0, 100, 0);
-//        delay(500);
-//        analogWrite(LEDPIN, 0);
-//        renderStrip (0, 0, 0);
-//        delay(500);
-//        analogWrite(LEDPIN, 50);
-//        renderStrip (0, 100, 0);
-//        delay(500);
-//        analogWrite(LEDPIN, 0);
-//        renderStrip (0, 0, 0);
+        delay(100);
+        renderStrip (&strip, 100, 0, 0);
+        delay(200);
+        renderStrip (&strip, 0, 0, 0);
+        delay(200);
+        renderStrip (&strip, 100, 0, 0);
+        delay(200);
+        renderStrip (&strip, 0, 0, 0);
+        delay(200);
+        renderStrip (&strip, 100, 0, 0);
+        delay(200);
+        renderStrip (&strip, 0, 0, 0);
       } else {
         Serial.print("Incorrect received: ");
         Serial.println(code);
