@@ -29,10 +29,12 @@ const int CSNPIN = 10;
  */
 // Knob Reading with throttling
 int currentKnobValue = 0;
-int lastKnobValue = 0;
-int knobBeforeMove = 0;
+
 
 bool readKnob() {
+  static int lastKnobValue = 0;
+  static int knobBeforeMove = 0;
+
   currentKnobValue = analogRead(KNOBPIN);
   bool result = false;
   bool isStopped = currentKnobValue == lastKnobValue;
@@ -85,8 +87,6 @@ struct payload_t {
   unsigned long ms;
   unsigned long data; // color or timestamp
 };
- 
-uint32_t displayTimer = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -109,6 +109,8 @@ void loop() {
     /* 
      *  Master Node
      */
+    static uint32_t displayTimer = 0;
+
     // Call mesh.update to keep the network updated
     mesh.update();
   
@@ -167,6 +169,8 @@ void loop() {
     /* 
      *  Child Node
      */
+    static uint32_t displayTimer = 0;
+
     mesh.update();
   
     // Send to the master node every second
