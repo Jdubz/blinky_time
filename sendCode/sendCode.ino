@@ -32,16 +32,27 @@ const int CSNPIN = 10;
 /*
  * LED Stuff
  */
-const int NUM_LEDS = 5;
+const int NUM_LEDS = 1;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 void renderStrip(Adafruit_NeoPixel* strip, int g, int r, int b) {
-  strip->show();
-
-  // Set all LEDs to red
   for (int index = 0; index < NUM_LEDS; index++) {
-    strip->setPixelColor(index, g, r, b);
+    strip->setPixelColor(0, g, r, b);
   }
+  strip->show();
+}
+
+void blinkStrip(Adafruit_NeoPixel* strip, int g, int r, int b) {
+  renderStrip (strip, g, r, b);
+  delay(300);
+  renderStrip (strip, 0, 0, 0);
+}
+
+void setupStrip(Adafruit_NeoPixel* strip) {
+  strip->begin();
+  strip->show();
+  renderStrip(strip, 0, 100, 0);
+  strip->show();
 }
 
 /*
@@ -57,7 +68,7 @@ const uint8_t pipeNum = 0;
 
 // Used to control whether this node is sending or receiving
 // 1 for sender, 0 for receiver
-bool role = 1;
+bool role = 0;
 
 /*
  * Knob Stuff
@@ -88,12 +99,7 @@ void setup() {
   radio.begin();
   radio.setPALevel(RF24_PA_MIN);
 
-  strip.begin();
-  strip.show();
-  for (int led = 0; led < NUM_LEDS; led++) {
-    strip.setPixelColor(led, 0, 150, 0);
-  }
-  strip.show();
+  setupStrip(&strip);
   
   // Open a writing and reading pipe on each radio, with opposite addresses
   if(role){
@@ -113,7 +119,8 @@ void loop() {
 
     // Clear strip
     renderStrip (&strip, 0, 0, 0);
-    
+
+    // If knob value has changed
     if (readKnob()) {
       const int code = currentKnobValue;
       Serial.print("Sending code: ");
@@ -138,24 +145,11 @@ void loop() {
       radio.read(&code, sizeof(code));
 
       if (code == 0) {
-        Serial.print("Correct code received: ");
-        Serial.println(code);
-        delay(100);
-        renderStrip (&strip, 100, 0, 0);
-        delay(200);
-        renderStrip (&strip, 0, 0, 0);
-        delay(200);
-        renderStrip (&strip, 100, 0, 0);
-        delay(200);
-        renderStrip (&strip, 0, 0, 0);
-        delay(200);
-        renderStrip (&strip, 100, 0, 0);
-        delay(200);
-        renderStrip (&strip, 0, 0, 0);
+        Serial.print("Correct code received: "); Serial.println(code);
+        blinkStrip(&strip, 100, 0, 0);
       } else {
-        Serial.print("Incorrect received: ");
-        Serial.println(code);
-        delay(100);
+        Serial.print("Incorrect received: "); Serial.println(code);
+        blinkStrip(&strip, 0, 100, 0);
       }
     }
   }
