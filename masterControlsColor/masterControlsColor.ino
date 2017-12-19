@@ -18,7 +18,7 @@
 #include "RF24Mesh.h"
 #include <SPI.h>
 //Include eeprom.h for AVR (Uno, Nano) etc. except ATTiny
-#include <EEPROM.h>
+//#include <EEPROM.h>
 
 /*
  * Pin Constants
@@ -56,7 +56,7 @@ bool readKnob() {
 /*
  * LED Stuff
  */
-const int NUM_LEDS = 5;
+const int NUM_LEDS = 50;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 void renderStrip(Adafruit_NeoPixel* strip, int g, int r, int b) {
@@ -84,7 +84,7 @@ void setupStrip(Adafruit_NeoPixel* strip) {
  */
 
 // 0 for master, 1-255 for nodes
-uint8_t nodeId = 2;
+uint8_t nodeId = 1;
 bool isMaster = nodeId == 0;
 
 RF24 radio(CEPIN,CSNPIN);
