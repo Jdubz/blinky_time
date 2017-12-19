@@ -1,4 +1,3 @@
-
 #include <Adafruit_NeoPixel.h>
 #include "RF24.h"
 #include "RF24Network.h"
@@ -10,7 +9,7 @@
  * Configure NODE_ID as 0 for the master node and 1-255 for other nodes
  * This will be stored in EEPROM on AVR devices, so remains persistent between further uploads, loss of power, etc.
  */
-#define NODE_ID 0
+#define NODE_ID 1
 #if NODE_ID == 0
   #define IS_MASTER true
 #endif
@@ -64,7 +63,7 @@ struct payload_t {
 void setup() {
 
   Serial.begin(9600);
-  //printf_begin();
+//  printf_begin();
 
   setupStrip(&strip);
   
@@ -102,8 +101,14 @@ void loop() {
       uint32_t dat=0;
       switch(header.type){
         // Display the incoming millis() values from the sensor nodes
-        case 'M': network.read(header,&dat,sizeof(dat)); Serial.println(dat); break;
-        default: network.read(header,0,0); Serial.println(header.type);break;
+        case 'M': 
+          network.read(header,&dat,sizeof(dat)); 
+          Serial.println(dat); 
+          break;
+        default: 
+          network.read(header,0,0); 
+          Serial.println(header.type);
+          break;
       }
   
       clearStrip(&strip);
@@ -122,11 +127,12 @@ void loop() {
       Serial.println(F("**********************************"));
     }
   #else
+    static unsigned long lastLightTurnedOn = 0;
+
     mesh.update();
   
     // Send to the master node every second
     if (millis() - displayTimer >= 1000) {
-      renderStrip(&strip, 100, 100, 100);
       displayTimer = millis();
   
       // Send an 'M' type message containing the current millis()
@@ -136,6 +142,8 @@ void loop() {
         if ( ! mesh.checkConnection() ) {
           //refresh the network address
           renderStrip(&strip, 0, 0, 100);
+          lastLightTurnedOn = millis();
+
           Serial.println("Renewing Address");
           uint16_t newAddress = mesh.renewAddress(5000);
           if (newAddress) {
@@ -145,15 +153,21 @@ void loop() {
           }
         } else {
           renderStrip(&strip, 0, 100, 0);
+          lastLightTurnedOn = millis();
+
           Serial.println("Send fail, Test OK");
         }
       } else {
         renderStrip(&strip, 100, 0, 0);
+        lastLightTurnedOn = millis();
+
         Serial.print("Send OK: "); Serial.println(displayTimer);
       }
-  
-      delay(400);
-      renderStrip(&strip, 0, 0, 0);
+    }
+
+    if (lastLightTurnedOn && (millis() - lastLightTurnedOn >= 400)) {
+      clearStrip(&strip);
+      lastLightTurnedOn = 0;
     }
   
     while (network.available()) {
