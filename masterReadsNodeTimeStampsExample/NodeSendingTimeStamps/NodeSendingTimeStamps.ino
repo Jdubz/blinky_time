@@ -110,7 +110,12 @@ void loop() {
         //refresh the network address
         renderStrip(&strip, 0, 0, 100);
         Serial.println("Renewing Address");
-        mesh.renewAddress();
+        uint16_t newAddress = mesh.renewAddress(5000);
+        if (newAddress) {
+          Serial.print("Address renewed as: "); Serial.println(newAddress);
+        } else {
+          Serial.println("Timeout while renewing address");
+        }
       } else {
         renderStrip(&strip, 0, 100, 0);
         Serial.println("Send fail, Test OK");
