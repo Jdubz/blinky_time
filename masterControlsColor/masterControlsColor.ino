@@ -84,7 +84,7 @@ void setupStrip(Adafruit_NeoPixel* strip) {
  */
 
 // 0 for master, 1-255 for nodes
-uint8_t nodeId = 1; 
+uint8_t nodeId = 2;
 bool isMaster = nodeId == 0;
 
 RF24 radio(CEPIN,CSNPIN);
@@ -111,7 +111,7 @@ void setup() {
   mesh.begin();
   Serial.println("Mesh begun");
 
-  renderStrip(&strip, 0, 0, 0);
+  clearStrip(&strip);
 }
 
 
@@ -120,8 +120,6 @@ void loop() {
     /* 
      *  Master Node
      */
-    clearStrip(&strip);
-
     // Call mesh.update to keep the network updated
     mesh.update();
   
@@ -153,7 +151,9 @@ void loop() {
     // Send each node a message every five seconds
     // Send a different message to node 1, containing another counter instead of millis()
     if(readKnob()){
-      renderStrip(&strip, 0, 0, 100);
+      // convert knob value (0-1023) to color (0-255) and type for payload
+      unsigned long color = currentKnobValue / 4;
+      renderStrip(&strip, color, color, color);
       Serial.println(F("********Sending to Nodes**********"));
       for (int i = 0; i < mesh.addrListTop; i++) {
         Serial.print("NodeID: ");
@@ -162,7 +162,7 @@ void loop() {
         Serial.print(mesh.addrList[i].address,OCT);
         Serial.print(": ");
         
-        payload_t payload = {millis(), currentKnobValue};
+        payload_t payload = {millis(), color};
         
         RF24NetworkHeader header(mesh.addrList[i].address, 'C'); //Constructing a header
         if (network.write(header, &payload, sizeof(payload))) {
@@ -173,7 +173,6 @@ void loop() {
       }
       Serial.println(F("**********************************"));
       displayTimer = millis();
-      clearStrip(&strip);
     }
   } else {
     /* 
@@ -183,7 +182,6 @@ void loop() {
   
     // Send to the master node every second
     if (millis() - displayTimer >= 1000) {
-      renderStrip(&strip, 0, 0, 100);
       displayTimer = millis();
   
       // Send an 'M' type message containing the current millis()
@@ -192,7 +190,6 @@ void loop() {
         // If a write fails, check connectivity to the mesh network
         if ( ! mesh.checkConnection() ) {
           //refresh the network address
-          renderStrip(&strip, 0, 0, 100);
           Serial.println("Renewing Address");
           uint16_t newAddress = mesh.renewAddress(5000);
           if (newAddress) {
@@ -201,43 +198,36 @@ void loop() {
             Serial.println("Timeout while renewing address");
           }
         } else {
-          renderStrip(&strip, 0, 100, 0);
           Serial.println("Send fail, Test OK");
         }
       } else {
-        renderStrip(&strip, 100, 0, 0);
         Serial.print("Send OK: "); Serial.println(displayTimer);
       }
-  
-      clearStrip(&strip);
     }
   
     while (network.available()) {
-      renderStrip(&strip, 100, 0, 0);
       RF24NetworkHeader header;
       payload_t payload;
-      uint32_t dat=0;
+      uint32_t color=0;
       network.read(header, &payload, sizeof(payload));
       switch(header.type){
-      case 'C': 
-        // Update color
-//        network.read(header,&dat,sizeof(dat));
+      case 'C':
+        // cap payload.data to be safe
+        color = payload.data > 255 ? 255 : payload.data;
+        // set strip color
+        renderStrip(&strip, color, color, color);
+
+        // Print to logs
         Serial.print(payload.data);
         Serial.print(" from RF24Network address 0");
         Serial.println(header.from_node, OCT);
+        
         break;
       default: 
         network.read(header,0,0); 
         Serial.print("Node recieved message with unknown header type: "); Serial.println(header.type);
         break;
       }
-//      Serial.print("Received packet #");
-//      Serial.print(payload.data);
-//      Serial.print(" with header type ");
-//      Serial.print(header.type);
-//      Serial.print(" at ");
-//      Serial.println(payload.ms);
-      clearStrip(&strip);
     }
   }
 }
