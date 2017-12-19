@@ -3,7 +3,7 @@
 #include "RF24Network.h"
 #include "RF24Mesh.h"
 #include <SPI.h>
-//#include <printf.h>
+#include <printf.h>
 
 /*
  * Configure NODE_ID as 0 for the master node and 1-255 for other nodes
@@ -63,7 +63,7 @@ struct payload_t {
 void setup() {
 
   Serial.begin(9600);
-//  printf_begin();
+  printf_begin();
 
   setupStrip(&strip);
   
@@ -100,31 +100,30 @@ void loop() {
   
       uint32_t dat=0;
       switch(header.type){
-        // Display the incoming millis() values from the sensor nodes
         case 'M': 
+          // Display the incoming millis() values from the sensor nodes
           network.read(header,&dat,sizeof(dat)); 
-          Serial.println(dat); 
+          printf("Received packet: %u, From node: %u\n", dat, header.from_node); 
           break;
         default: 
-          network.read(header,0,0); 
-          Serial.println(header.type);
+          network.read(header,0,0);
+          printf("Received packet from node: %u, with unknown header type %c", header.from_node, header.type); 
           break;
       }
   
       clearStrip(&strip);
     }
-  
+
+    // Dump addressed node list ever 5s
     if(millis() - displayTimer > 5000){
       displayTimer = millis();
-      Serial.println(" ");
-      Serial.println(F("********Assigned Addresses********"));
+      printf("********Assigned Addresses********\n");
        for(int i=0; i<mesh.addrListTop; i++){
-         Serial.print("NodeID: ");
-         Serial.print(mesh.addrList[i].nodeID);
-         Serial.print(" RF24Network Address: 0");
-         Serial.println(mesh.addrList[i].address,OCT);
+         printf("Node ID: %u RF24Network address: 0%o\n", 
+            mesh.addrList[i].nodeID, 
+            mesh.addrList[i].address);
        }
-      Serial.println(F("**********************************"));
+      printf("**********************************\n");
     }
   #else
     static unsigned long lastLightTurnedOn = 0;
@@ -134,6 +133,14 @@ void loop() {
     // Send to the master node every second
     if (millis() - displayTimer >= 1000) {
       displayTimer = millis();
+      
+      printf("********Assigned Addresses********\n");
+       for(int i=0; i<mesh.addrListTop; i++){
+         printf("Node ID: %u RF24Network address: 0%o\n", 
+            mesh.addrList[i].nodeID, 
+            mesh.addrList[i].address);
+       }
+      printf("**********************************\n");
   
       // Send an 'M' type message containing the current millis()
       if (!mesh.write(&displayTimer, 'M', sizeof(displayTimer))) {
@@ -144,24 +151,24 @@ void loop() {
           renderStrip(&strip, 0, 0, 100);
           lastLightTurnedOn = millis();
 
-          Serial.println("Renewing Address");
+          printf("Renewing Address\n");
           uint16_t newAddress = mesh.renewAddress(5000);
           if (newAddress) {
-            Serial.print("Address renewed as: "); Serial.println(newAddress);
+            printf("Address renewed as: %u\n", newAddress);
           } else {
-            Serial.println("Timeout while renewing address");
+            printf("Timeout while renewing address\n");
           }
         } else {
           renderStrip(&strip, 0, 100, 0);
           lastLightTurnedOn = millis();
 
-          Serial.println("Send fail, Test OK");
+          printf("Send fail, Test OK");
         }
       } else {
         renderStrip(&strip, 100, 0, 0);
         lastLightTurnedOn = millis();
 
-        Serial.print("Send OK: "); Serial.println(displayTimer);
+        printf("Send OK: %u\n", displayTimer);
       }
     }
 
