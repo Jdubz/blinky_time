@@ -1,17 +1,3 @@
-
-
- /** RF24Mesh_Example_Master.ino by TMRh20
-  *
-  *
-  * This example sketch shows how to manually configure a node via RF24Mesh as a master node, which
-  * will receive all data from sensor nodes.
-  *
-  * The nodes can change physical or logical position in the network, and reconnect through different
-  * routing nodes as required. The master node manages the address assignments for the individual nodes
-  * in a manner similar to DHCP.
-  *
-  */
-
 #include <Adafruit_NeoPixel.h>
 #include "RF24Network.h"
 #include "RF24.h"
@@ -19,6 +5,15 @@
 #include <SPI.h>
 //Include eeprom.h for AVR (Uno, Nano) etc. except ATTiny
 //#include <EEPROM.h>
+
+/*
+ * Configure NODE_ID as 0 for the master node and 1-255 for other nodes
+ * This will be stored in EEPROM on AVR devices, so remains persistent between further uploads, loss of power, etc.
+ */
+#define NODE_ID 0
+#if NODE_ID == 0
+  #define IS_MASTER true
+#endif
 
 /*
  * Pin Constants
@@ -82,11 +77,6 @@ void setupStrip(Adafruit_NeoPixel* strip) {
 /*
  * Network Stuff
  */
-
-// 0 for master, 1-255 for nodes
-uint8_t nodeId = 1;
-bool isMaster = nodeId == 0;
-
 RF24 radio(CEPIN,CSNPIN);
 RF24Network network(radio);
 RF24Mesh mesh(radio,network);
@@ -103,8 +93,7 @@ void setup() {
 
   setupStrip(&strip);
 
-  // Set the nodeID to 0 for the master node
-  mesh.setNodeID(nodeId);
+  mesh.setNodeID(NODE_ID);
   Serial.print("Node Id set to "); Serial.println(mesh.getNodeID());
   // Connect to the mesh
   Serial.println("Connecting to the mesh...");
@@ -116,7 +105,7 @@ void setup() {
 
 
 void loop() {
-  if (isMaster) {
+  #if defined(IS_MASTER)
     /* 
      *  Master Node
      */
@@ -174,7 +163,7 @@ void loop() {
       Serial.println(F("**********************************"));
       displayTimer = millis();
     }
-  } else {
+  #else
     /* 
      *  Child Node
      */
@@ -229,5 +218,5 @@ void loop() {
         break;
       }
     }
-  }
+  #endif
 }
