@@ -36,12 +36,12 @@ const int NUM_LEDS = 5;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 void renderStrip(Adafruit_NeoPixel* strip, int g, int r, int b) {
-  strip->show();
-
   // Set all LEDs to red
   for (int index = 0; index < NUM_LEDS; index++) {
     strip->setPixelColor(index, g, r, b);
   }
+  
+  strip->show();
 }
 
 void clearStrip(Adafruit_NeoPixel* strip) {
