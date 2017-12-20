@@ -10,7 +10,7 @@
  * Configure NODE_ID as 0 for the master node and 1-255 for other nodes
  * This will be stored in EEPROM on AVR devices, so remains persistent between further uploads, loss of power, etc.
  */
-#define NODE_ID 0
+#define NODE_ID 1
 #if NODE_ID == 0
   #define IS_MASTER true
 #endif
@@ -139,8 +139,7 @@ void loop() {
       }
     }
   
-    // Send each node a message every five seconds
-    // Send a different message to node 1, containing another counter instead of millis()
+    // Send nodes new knob value
     if(readKnob()){
       // convert knob value (0-1023) to color (0-255) and type for payload
       unsigned long color = currentKnobValue / 4;
@@ -198,7 +197,7 @@ void loop() {
       }
     }
   
-    while (network.available()) {
+    if (network.available()) {
       RF24NetworkHeader header;
       payload_t payload;
       uint32_t color=0;
