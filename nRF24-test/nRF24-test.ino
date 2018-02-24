@@ -13,23 +13,26 @@ int LEDPIN = 3;
 
 RF24 radio(CSNPIN, CEPIN);
 
-const uint64_t address1 = 0xE8E8F0F0E1LL;
-const uint64_t address2 = 0xE6E6E6E6E6E6;
+const uint64_t address2 = 0xE8E8F0F0E1LL;
+const uint64_t address1 = 0xE6E6E6E6E6E6;
+bool listening = false;
 
-int newKnob = 0;
-int oldKnob = 0;
+int knob = 0;
+bool newKnob = false;
 
-bool readKnob() {
+void readKnob() {
   int reading = 0;
+  int knobVal = 0;
   for (int val = 0; val < 10; val++) {
     reading = reading + analogRead(KNOBPIN);
-    newKnob = reading / 10;
   }
-  if (newKnob > oldKnob + 5 || newKnob < oldKnob - 5) {
-    oldKnob = newKnob;
-    return true;
+  knobVal = reading / 10;
+  if (knobVal > knob + 5 || knobVal < knob - 5) {
+    knob = knobVal;
+    newKnob = true;
+    Serial.print("knob read : ");
+    Serial.println(knobVal / 4);
   }
-  return false;
 }
 
 void setup() {
@@ -43,27 +46,31 @@ void setup() {
 }
 
 void loop() {
-  delay(5);
-  if (radio.available()) {
+  // delay(5);
+  readKnob();
+  if (!listening) {
     radio.startListening();
+    listening = true;
+  }
+  
+  if (radio.available()) {
     int knobIn = 0;
     radio.read(&knobIn, sizeof(knobIn));
-    if (knobIn != -1) {
+    if (knobIn > 0) {
       Serial.print("radio in : ");
       Serial.println(knobIn);
       analogWrite(LEDPIN, knobIn / 4);
     }
-
-    delay(5);
-    if (readKnob()) {
-      radio.stopListening();
-      Serial.print("knob read : ");
-      Serial.println(newKnob / 4);
-      analogWrite(LEDPIN, newKnob / 4);
-      radio.write(&newKnob, sizeof(newKnob));
-    }
-
   } else {
     // Serial.println("no-radio");
+  }
+  
+  if (newKnob) {
+    radio.stopListening();
+    analogWrite(LEDPIN, knob / 4);
+    radio.write(&knob, sizeof(knob));
+    // delay(5);
+    listening = false;
+    newKnob = false;
   }
 }
