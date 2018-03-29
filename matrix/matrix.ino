@@ -46,57 +46,19 @@ void setup() {
   strip.show();
 }
 
-// With `port.write('1,100,80,60');` in the node code
+// With `port.write('1,100,80,60,');` in the node code
 
 void loop() {
-  String buf = "";
-  char current = 'c';
-
-  if(Serial.available()) {
-    current = Serial.read();
-    buf = buf.concat(current);
-//      char ledNum = Serial.parseInt();
-//      char red = Serial.parseInt();
-//      char green = Serial.parseInt();
-//      char blue = Serial.parseInt();
-//      Serial.flush();
-//
-//      Serial.println(ledNum);
-//      Serial.println(red);
-//      Serial.println(green);
-//      Serial.println(blue);
+  int chan;
+  int r;
+  int g;
+  int b;
+  if (Serial.available() > 0) {
+    chan = Serial.parseInt();
+    r = Serial.parseInt();
+    g = Serial.parseInt();
+    b = Serial.parseInt();
+    strip.setPixelColor(chan, r, g, b);
+    Serial.println("packet " + String(chan));
   }
- 
-
-  Serial.println(buf);
- 
-//  if (Serial.available()) {
-//    incomingByte = Serial.read();
-//    Serial.println(incomingByte, DEC);
-//    Serial.flush();
-    
-//    byte read[768];
-//    Serial.readBytes(read, sizeof(read));
-//    Serial.println(sizeof(read));
-//    int nextPixel[3]; 
-//    for (int b = 0; b < sizeof(read); b++) {
-//      nextPixel[b%3] = read[b];
-//      if (b%3 == 2) {
-//        strip.setPixelColor(floor(b/3), nextPixel[0]/10, nextPixel[1]/10, nextPixel[2]/10);
-//      }
-//    }
-//
-//    for (int i = 0; i < sizeof(read); i++) {
-//      Serial.print(String(read[i]));
-//    }
-//    Serial.println();
-//    renderStrip();
-//  }
-//
-//  frame++;
-//
-//  if (frame == frameRate * 100) {
-//    renderStrip();
-//    frame = 0;
-//  }
 }
