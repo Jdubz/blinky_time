@@ -1,3 +1,7 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
 #include <Adafruit_NeoPixel.h>
 
 const int LEDPIN = 2;
@@ -6,6 +10,8 @@ const int BUTTONPIN = 3;
 const int NUMLEDS = 106;
 const int DELAYTIME = 30;
 const int NUMMODES = 2;
+const int CEPIN = 9;
+const int CSNPIN = 10;
 
 int mode = 1;
 int pressed = 0;
@@ -14,6 +20,16 @@ int xPos = 0;
 int yPos = 0;
 int lvl2 = 0;
 int frame = 0;
+
+RF24 radio(CEPIN, CSNPIN); // CE, CSN
+const byte address[6] = "00001";
+
+void startRadio() {
+  radio.begin();
+  radio.openWritingPipe(address);
+  radio.setPALevel(RF24_PA_MIN);
+  radio.stopListening();
+}
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
@@ -61,11 +77,18 @@ void setup() {
   Serial.begin(9600);
   strip.begin();
   strip.show();
+  startRadio();
 }
 
 void loop() {
   render();
   float micLvl = getMicLevel();
+  int payload[2] = {micLvl * 100, mode};
+  if (radio.write(payload, sizeof(payload))) {
+    Serial.println(payload[1]);
+  } else {
+    Serial.println("fail");
+  }
 
   if (digitalRead(BUTTONPIN) == HIGH && pressed == 0) {
     mode = (mode + 1) % NUMMODES;

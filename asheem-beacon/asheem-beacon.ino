@@ -1,6 +1,6 @@
 #include <Adafruit_NeoPixel.h>
 int LEDPIN = 2;
-const int LEDS = 120;
+const int LEDS = 47;
 int frameRate = 30;
 int frame = 0;
 

@@ -1,8 +1,34 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
 #include <Adafruit_NeoPixel.h>
-int LEDPIN = 2;
-const int LEDS = 120;
-int frameRate = 30;
+
+const int LEDPIN = 2;
+const int LEDS = 17;
+const int frameRate = 30;
 int frame = 0;
+
+const int CEPIN = 9;
+const int CSNPIN = 10;
+
+RF24 radio(CEPIN, CSNPIN); // CE, CSN
+const byte address[6] = "00001";
+
+void startRadio() {
+  radio.begin();
+  radio.openReadingPipe(0, address);
+  radio.setPALevel(RF24_PA_MIN);
+  radio.startListening();
+}
+
+void checkRadio() {
+  if (radio.available()) {
+    int readRadio[2];
+    radio.read(readRadio, sizeof(readRadio));
+    Serial.println(readRadio[1]);
+  }
+}
 
 int ledLvls[LEDS][2];
 
@@ -25,9 +51,13 @@ void setup() {
   }
   strip.show();
   delay(1000);
+
+  startRadio();
 }
 
 void loop() {
+  checkRadio();
+  
   for (int star = 0; star < LEDS; star++) {
     if (ledLvls[star][0] > 0) {
       if (ledLvls[star][1] == 1) {
