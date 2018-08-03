@@ -7,32 +7,29 @@
 const int LEDPIN = 2;
 const int LEDS = 17;
 const int frameRate = 30;
-int frame = 0;
+
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 const int CEPIN = 9;
 const int CSNPIN = 10;
+int RecievedMessage[1] = {0};
 
 RF24 radio(CEPIN, CSNPIN); // CE, CSN
-const byte address[6] = "00001";
+const uint64_t pipe = 0xE6E6E6E6E6E6;
 
 void startRadio() {
   radio.begin();
-  radio.openReadingPipe(0, address);
-  radio.setPALevel(RF24_PA_MIN);
+  radio.openReadingPipe(1, pipe);
+//   radio.setPALevel(RF24_PA_MIN);
   radio.startListening();
 }
 
 void checkRadio() {
-  if (radio.available()) {
-    int readRadio[2];
-    radio.read(readRadio, sizeof(readRadio));
-    Serial.println(readRadio[1]);
+  while (radio.available()) {
+    radio.read(RecievedMessage, 1);
+    Serial.print(RecievedMessage[0]);
   }
 }
-
-int ledLvls[LEDS][2];
-
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 void renderStrip() {
   strip.show();
@@ -57,37 +54,10 @@ void setup() {
 
 void loop() {
   checkRadio();
-  
-  for (int star = 0; star < LEDS; star++) {
-    if (ledLvls[star][0] > 0) {
-      if (ledLvls[star][1] == 1) {
-        if (ledLvls[star][0] < 100) {
-          ledLvls[star][0] +=5;
-        } else {
-          ledLvls[star][1] = 0;
-        }
-      } else {
-        ledLvls[star][0] -=5;
-      }
-      float starLvl = ledLvls[star][0] / 100.0;
-      strip.setPixelColor(star, 150 * starLvl, 0, 0);
-    }
-  }
-  if (frame == 5) {
-    int newStar = random(LEDS);
-    int newStar2 = random(LEDS);
-    int newStar3 = random(LEDS);
-    int newStar4 = random(LEDS);
-    ledLvls[newStar][0] = 1;
-    ledLvls[newStar][1] = 1;
-    ledLvls[newStar2][0] = 1;
-    ledLvls[newStar2][1] = 1;
-    ledLvls[newStar3][0] = 1;
-    ledLvls[newStar3][1] = 1;
-    ledLvls[newStar4][0] = 1;
-    ledLvls[newStar4][1] = 1;
-    frame = 0;
-  }
-  frame++;
-  renderStrip();
+//
+//  for (int led = 0; led < LEDS; led++) {
+//    strip.setPixelColor(led, RecievedMessage[1], 0, 0);
+//  }
+//  
+//  renderStrip();
 }

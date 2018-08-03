@@ -22,13 +22,12 @@ int lvl2 = 0;
 int frame = 0;
 
 RF24 radio(CEPIN, CSNPIN); // CE, CSN
-const byte address[6] = "00001";
+const uint64_t pipe = 0xE6E6E6E6E6E6;
 
 void startRadio() {
   radio.begin();
-  radio.openWritingPipe(address);
-  radio.setPALevel(RF24_PA_MIN);
-  radio.stopListening();
+  radio.openWritingPipe(pipe);
+//   radio.setPALevel(RF24_PA_MIN);
 }
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
@@ -83,11 +82,10 @@ void setup() {
 void loop() {
   render();
   float micLvl = getMicLevel();
-  int payload[2] = {micLvl * 100, mode};
-  if (radio.write(payload, sizeof(payload))) {
-    Serial.println(payload[1]);
-  } else {
-    Serial.println("fail");
+  int payload[1] = {micLvl * 100};
+  int radioCode = radio.write(payload, sizeof(payload));
+  if (radioCode) {
+    Serial.println(payload[0]);
   }
 
   if (digitalRead(BUTTONPIN) == HIGH && pressed == 0) {
