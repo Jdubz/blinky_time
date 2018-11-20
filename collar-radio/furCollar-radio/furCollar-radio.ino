@@ -1,3 +1,7 @@
+#include <SPI.h>
+#include <nRF24L01.h>
+#include <RF24.h>
+
 #include <Adafruit_NeoPixel.h>
 
 const int LEDPIN = 2;
@@ -6,14 +10,31 @@ const int BUTTONPIN = 3;
 const int NUMLEDS = 106;
 const int DELAYTIME = 30;
 const int NUMMODES = 2;
+const int CEPIN = 9;
+const int CSNPIN = 10;
 
 int mode = 1;
 int pressed = 0;
+
+int xPos = 0;
+int yPos = 0;
+int lvl2 = 0;
+int frame = 0;
+
+RF24 radio(CEPIN, CSNPIN); // CE, CSN
+const uint64_t pipe = 0xE6E6E6E6E6E6;
+
+void startRadio() {
+  radio.begin();
+  radio.openWritingPipe(pipe);
+//   radio.setPALevel(RF24_PA_MIN);
+}
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 //39, 36, 31
 
+int stars[NUMLEDS];
 int threshhold = 100;
 float gain = 50.0;
 
@@ -50,58 +71,54 @@ void render() {
   }
 }
 
-int sparks[NUMLEDS][3];
 void setup() {
   pinMode(BUTTONPIN, INPUT);
   Serial.begin(9600);
   strip.begin();
   strip.show();
+  startRadio();
 }
 
 void loop() {
+  render();
   float micLvl = getMicLevel();
+  int payload[1] = {micLvl * 100};
+  int radioCode = radio.write(payload, sizeof(payload));
+  if (radioCode) {
+    Serial.println(payload[0]);
+  }
 
   if (digitalRead(BUTTONPIN) == HIGH && pressed == 0) {
     mode = (mode + 1) % NUMMODES;
     pressed = 1;
+    frame = 0;
+    // Serial.println(mode);
   } else if (pressed == 1 && digitalRead(BUTTONPIN) == LOW) {
     pressed = 0;
   }
 
   if (mode == 0) {
-    // sleep
+    // do nothing
   } else if (mode == 1) {
-    int newSparks = 0;
-    if (micLvl > 0.5) {
-      newSparks = micLvl * 6;
-    } else if (random(7) == 6) {
-      newSparks = 1;
+    int create = random(3);
+    int newStars;
+    if (create == 0) {
+      newStars = random(1,3);
+    } else {
+      newStars = 0;
     }
-    for (int newSpark = 0; newSpark < newSparks; newSpark++) {
-      int sparkId = random(NUMLEDS);
-      sparks[sparkId][0] = 80;
-      sparks[sparkId][1] = random(4) * (micLvl * 15);
-      sparks[sparkId][2] = 1;
+    int createStars = newStars + ceil(micLvl * 20);
+    for (int num = 0; num < createStars; num++) {
+      stars[random(NUMLEDS)] = 150;
     }
-    for (int thisSpark = 0; thisSpark < NUMLEDS; thisSpark++) {
-      if (sparks[thisSpark][2] == 1) {       
-        if (sparks[thisSpark][1] > 2) {
-          sparks[thisSpark][1] -= 2;
-        } else if (sparks[thisSpark][1] != 0) {
-          Serial.println(sparks[thisSpark][1]);
-        }
-        if (sparks[thisSpark][0] > 2) {
-          sparks[thisSpark][0] -= 2;
-        } else {
-          sparks[thisSpark][0] = 0;
-          sparks[thisSpark][1] = 0;
-          sparks[thisSpark][2] = 0;
-        } 
+    for (int num2 = 0; num2 < NUMLEDS; num2++) {
+      strip.setPixelColor(num2, 0, 0, stars[num2]);
+      if (stars[num2] > 20) {
+        stars[num2] = stars[num2] - 20;
+      } else {
+        stars[num2] = 0;
       }
-      strip.setPixelColor(thisSpark, sparks[thisSpark][0], sparks[thisSpark][1], 0);
     }
   }
-
-  render();
 };
 
