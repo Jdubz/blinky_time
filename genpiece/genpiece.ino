@@ -3,13 +3,13 @@
 const int LEDPIN = 2;
 const int LEDS = 9;
 const int BUTTONPIN = 3;
-const int NUMMODES = 4;
+const int NUMMODES = 5;
 
 int frameRate = 30;
 int frame = 0;
 
 
-int mode = 3;
+int mode = 1;
 int pressed = 0;
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
@@ -20,6 +20,12 @@ int renderStrip(int G, int R, int B) {
   for (int led = 0; led < LEDS; led++) {
     strip.setPixelColor(led, G, R, B);
   }
+  frame++;
+}
+
+int renderStripNoBase() {
+  strip.show();
+  delay(frameRate);
   frame++;
 }
 
@@ -156,6 +162,22 @@ void skittles() {
   renderStrip(base[0], base[1], base[2]);
 }
 
+void randomColors() {
+
+  if (frame >= 20) {
+    int jump = random(3);
+    if (jump == 2) {
+      for (int pixel = 0; pixel < LEDS; pixel++) {
+        int color[3];
+        getColor((pixel * 40 + random(360)) % 360, color);
+        strip.setPixelColor(pixel, color[0], color[1], color[2]);
+      }
+    }
+  }
+
+  renderStripNoBase();
+}
+
 void loop() {
   buttonCheck();
   
@@ -167,5 +189,7 @@ void loop() {
     ice();
   } else if (mode == 3) {
     skittles();
+  } else if (mode == 4) {
+    randomColors();
   }
 }
