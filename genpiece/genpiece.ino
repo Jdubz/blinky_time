@@ -3,13 +3,13 @@
 const int LEDPIN = 2;
 const int LEDS = 9;
 const int BUTTONPIN = 3;
-const int NUMMODES = 3;
+const int NUMMODES = 4;
 
 int frameRate = 30;
 int frame = 0;
 
 
-int mode = 2;
+int mode = 3;
 int pressed = 0;
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(LEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
@@ -70,7 +70,7 @@ int levels[9][4] = {
 void slowFire() {
   int base[3] = {20, 50, 0};
   
-  if (frame == 50) {
+  if (frame >= 50) {
       int spark = random(LEDS);
       Serial.println(spark);
       levels[spark][0] = 1;
@@ -96,7 +96,7 @@ void slowFire() {
 void ice() {
   int base[3] = {30, 10, 40};
   
-  if (frame == 50) {
+  if (frame >= 50) {
       int spark = random(LEDS);
       Serial.println(spark);
       levels[spark][0] = 1;
@@ -119,6 +119,43 @@ void ice() {
     renderStrip(base[0], base[1], base[2]);
 }
 
+int getColor(int index, int color[3]) {
+  int brightness = 120;
+ 
+  if (index < 120) {
+    color[2] = 0;
+    color[1] = brightness - index;
+    color[0] = index;
+  } else if (index < 240) {
+    color[2] = index - 120;
+    color[1] = 0;
+    color[0] = brightness - (index - 120);
+  } else {
+    color[2] = brightness - (index - 240);
+    color[1] = index - 240;
+    color[0] = 0;
+  }
+}
+
+void skittles() {
+  int base[3] = {0,0,0};
+
+  if (frame >= 360) {
+    frame = 0;
+  }
+
+  int printCol[3];
+  getColor(frame, printCol);
+  Serial.println(String(printCol[0]) + ' ' + String(printCol[1]) + ' ' + String(printCol[2]));
+  for (int pixel = 0; pixel < LEDS; pixel++) {
+    int color[3];
+    getColor((pixel * 40 + frame) % 360, color);
+    strip.setPixelColor(pixel, color[0], color[1], color[2]);
+  }
+
+  renderStrip(base[0], base[1], base[2]);
+}
+
 void loop() {
   buttonCheck();
   
@@ -128,5 +165,7 @@ void loop() {
     slowFire();
   } else if (mode == 2) {
     ice();
+  } else if (mode == 3) {
+    skittles();
   }
 }
