@@ -26,6 +26,10 @@ typedef struct colorValues {
 }
 color;
 
+int getKnobValue() {
+  return analogRead(KNOBPIN);
+}
+
 color getSingleColorValue() {
   color colorValue;
   knobIn = analogRead(KNOBPIN);

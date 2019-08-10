@@ -9,6 +9,8 @@
 #include <Adafruit_NeoPixel.h>
 #include "Mode.h"
 #include "Utils.h"
+#include "ChristmasLightsMode.h"
+#include "ChristmasRunnerMode.h"
 #include "AudioLevelsMode.h"
 #include "AlternatingMode.h"
 #include "StarsMode.h"
@@ -52,11 +54,13 @@ void renderStrip() {
 // TODO create interface for ModeManager to easily register/unregister
 // and handle mode execution
 Mode *registeredModes[] = {
+  new ChristmasRunnerMode(&strip, &LEDS),
+  new ChristmasLightsMode(&strip, &LEDS),
   new RunnerMode(&strip, LEDS),
   new AlternatingMode(&strip, &LEDS),
-  new AudioLevelsMode(&strip, &LEDS),
-  new StarsMode(&strip, &LEDS)
+  new AudioLevelsMode(&strip, &LEDS)
 };
+int registeredModesLen = 5;
 
 void setup() {
   Serial.begin(9600);
@@ -79,7 +83,7 @@ void loop() {
   renderStrip();
 
   if (button->wasShortPressed()) {
-    mode = (mode + 1) % sizeof(registeredModes);
+    mode = (mode + 1) % registeredModesLen;
   }
 
   registeredModes[mode]->run();
