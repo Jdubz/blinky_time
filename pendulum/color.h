@@ -1,3 +1,4 @@
+
 typedef struct colorValues {
   uint8_t green;
   uint8_t red;
@@ -5,7 +6,7 @@ typedef struct colorValues {
 }
 color;
 
-color getSingleColorValue(uint8_t colorVal) {
+color getSingleColorValue(uint8_t colorVal, uint8_t brightness) {
   color colorValue;
   float ramp = (colorVal % 85) / 85;
   if (colorVal <= 85) {

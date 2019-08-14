@@ -17,14 +17,14 @@ const uint8_t waveDifference = 20;
 unsigned long getCycleLength() {
   unsigned long cycleLength = 1;
   for (int wave = 0; wave < NUMLEDS; wave++) {
-    cycleLength = lcm(cycleLength * (minWavelength + wave * waveDifference));
+    cycleLength = lcm(cycleLength, minWavelength + (wave * waveDifference));
   }
   return cycleLength;
 }
 
 unsigned long fullCycle = getCycleLength();
 
-void pendulumStep(color colorVal, uint8_t phase) {
+void pendulumStep(color colors, uint8_t phase) {
   for (int led = 0; led < NUMLEDS; led++) {
     int waveLength = minWavelength + waveDifference * led;
     int offset = phase % waveLength;
@@ -36,5 +36,4 @@ void pendulumStep(color colorVal, uint8_t phase) {
     }
     strip.setPixelColor(led, colors.green * height, colors.red * height, colors.blue * height);
   }
-  phase = phase + freq;
 }
