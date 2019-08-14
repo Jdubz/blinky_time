@@ -1,3 +1,7 @@
+#ifndef Color_h
+#define Color_h
+
+const uint8_t brightness = 150;
 
 typedef struct colorValues {
   uint8_t green;
@@ -6,7 +10,7 @@ typedef struct colorValues {
 }
 color;
 
-color getSingleColorValue(uint8_t colorVal, uint8_t brightness) {
+color getSingleColorValue(uint8_t colorVal) {
   color colorValue;
   float ramp = (colorVal % 85) / 85;
   if (colorVal <= 85) {
@@ -25,3 +29,5 @@ color getSingleColorValue(uint8_t colorVal, uint8_t brightness) {
 
   return colorValue;
 }
+
+#endif

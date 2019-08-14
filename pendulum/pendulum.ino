@@ -32,7 +32,7 @@ void loop() {
   }
 
   color colorVal = getSingleColorValue(patternValue.color);
-  pendulumStep(colorVal, pattern.phase);
+  pendulumStep(colorVal, patternValue.phase);
   
   render();
 };

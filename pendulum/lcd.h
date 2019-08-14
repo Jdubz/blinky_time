@@ -1,3 +1,5 @@
+#ifndef LeastCommonMultiple_h
+#define LeastCommonMultiple_h
 
 int gcd(int a, int b) {  
   if (a == 0) 
@@ -8,5 +10,6 @@ int gcd(int a, int b) {
 // Function to return LCM of two numbers  
 int lcm(int a, int b) {  
   return (a*b)/gcd(a, b);  
-}  
-  
+}
+
+#endif

@@ -1,3 +1,5 @@
+#ifndef PatternValues_h
+#define PatternValues_h
 
 typedef struct patternValues {
   uint8_t color;
@@ -14,3 +16,5 @@ pattern newPattern() {
 
   return patternValue;
 }
+
+#endif

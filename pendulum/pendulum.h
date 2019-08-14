@@ -1,3 +1,6 @@
+#ifndef Pendulum_h
+#define Pendulum_h
+
 #include <Adafruit_NeoPixel.h>
 #include "color.h"
 #include "lcd.h"
@@ -8,7 +11,6 @@ const int NUMLEDS = 5;
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
 
 const int DELAYTIME = 30;
-const uint8_t brightness = 150;
 
 const uint8_t minWavelength = 100;
 const uint8_t waveDifference = 20;
@@ -37,3 +39,5 @@ void pendulumStep(color colors, uint8_t phase) {
     strip.setPixelColor(led, colors.green * height, colors.red * height, colors.blue * height);
   }
 }
+
+#endif
