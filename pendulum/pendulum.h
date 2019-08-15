@@ -26,29 +26,9 @@ unsigned long getCycleLength() {
 
 unsigned long fullCycle = getCycleLength();
 
-//typedef struct phaseValues {
-//  uint8_t big;
-//  uint8_t small;
-//}
-//phase;
-//
-//phase phaseStep(uint8_t big, uint8_t small, uint8_t frequency) {
-//  phase nextPhase;
-//  int stepSize = frequency;
-//  int nextStep = small + frequency;
-//  if (nextStep > 255) {
-//    nextPhase.big = (big + 1) % 255;
-//  } else {
-//    nextPhase.big = big;
-//  }
-//  nextPhase.small = nextStep % 255;
-//
-//  return nextPhase;
-//}
-
-unsigned long phaseStep(unsigned long phase, uint8_t frequency) {
-  unsigned long nextPhase = (phase + frequency) % fullCycle;
-  // Serial.println(fullCycle);
+const int patternSpeed = 1;
+unsigned long phaseStep(unsigned long phase) {
+  unsigned long nextPhase = (phase + patternSpeed) % fullCycle;
   return nextPhase;
 }
 
