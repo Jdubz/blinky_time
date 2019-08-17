@@ -1,7 +1,7 @@
 #ifndef PatternValues_h
 #define PatternValues_h
 
-#include "pendulum.h"
+#include "Pendulum.h"
 
 unsigned long cycleLength = getCycleLength();
 

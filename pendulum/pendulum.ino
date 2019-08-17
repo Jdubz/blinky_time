@@ -1,14 +1,15 @@
-#include "pendulum.h"
-#include "color.h"
-#include "pattern.h"
-#include "button.h"
-#include "radio.h"
-
-Button* button = new Button(3);
-Radio* antenna = new Radio();
-pattern patternValue;
+#include "Pendulum.h"
+#include "Color.h"
+#include "Pattern.h"
+#include "Button.h"
+#include "Radio.h"
 
 const int DELAYTIME = 30;
+
+pattern patternValue;
+Button* button = new Button(3);
+Radio* antenna = new Radio();
+
 
 void render() {
   strip.show();
@@ -22,7 +23,7 @@ void setup() {
   strip.begin();
   strip.show();
   patternValue = newPattern();
-  antenna.init();
+  antenna->init();
 }
 
 void loop() {
@@ -36,9 +37,9 @@ void loop() {
   render();
   patternValue.phase = phaseStep(patternValue.phase);
   
-  antenna.send(patternValue);
+  antenna->send(patternValue);
   
-  if (Radio.listen(DELAYTIME)) {
-    patternValue = antenna.getNewPattern();
+  if (antenna->listen(DELAYTIME)) {
+    patternValue = antenna->getNewPattern();
   }
 };

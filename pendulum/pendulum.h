@@ -2,8 +2,8 @@
 #define Pendulum_h
 
 #include <Adafruit_NeoPixel.h>
-#include "color.h"
-#include "lcd.h"
+#include "Color.h"
+#include "LeastCommonMultiple.h"
 
 const int LEDPIN = 2;
 const int NUMLEDS = 5;
