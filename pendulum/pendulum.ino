@@ -10,7 +10,6 @@ pattern patternValue;
 Button* button = new Button(3);
 Radio* antenna = new Radio();
 
-
 void render() {
   strip.show();
   for (int led = 0; led < NUMLEDS; led++) {
@@ -31,6 +30,7 @@ void loop() {
   button->update();
   if (button->wasShortPressed()) {
     patternValue = newPattern();
+    antenna->incrementMutations();
   }
 
   pendulumStep(patternValue.color, patternValue.phase);
