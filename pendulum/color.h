@@ -30,9 +30,9 @@ color getSingleColorValue(uint8_t colorVal) {
 
 color getFlippedColorOf(color referenceColor) {
   color flipped;
-  flipped.green = 255 - referenceColor.green;
-  flipped.red = 255 - referenceColor.red;
-  flipped.blue = 255 - referenceColor.blue;
+  flipped.green = (referenceColor.green + 125) % 255;
+  flipped.red = (referenceColor.red + 125) % 255;
+  flipped.blue = (referenceColor.blue + 125) % 255;
 
   return flipped;
 }

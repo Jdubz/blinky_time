@@ -46,12 +46,16 @@ class Radio {
       byte data[7];
       data[0] = (byte) mutations;
       data[1] = (byte) mutations >> 8;
+      
       data[2] = (byte) patternValues.color;
+      
       data[3] = (byte) patternValues.phase;
       data[4] = (byte) patternValues.phase >> 8;
       data[5] = (byte) patternValues.phase >> 16;
       data[6] = (byte) patternValues.phase >> 24;
       
+      // Serial.println(String(mutations) + " " + String(patternValues.color) + " " + String(patternValues.phase));
+
       nrf24.send(data, sizeof(data));
       nrf24.waitPacketSent();
     }
@@ -66,11 +70,19 @@ class Radio {
           uint8_t len = sizeof(buf);
           
           if (nrf24.recv(buf, &len)) {
-            unsigned int mutationsCheck = (unsigned int)(buf[1] << 8) | buf[0];
+            
+            unsigned int mutationsCheck = 0;
+            mutationsCheck += buf[0];
+            (unsigned int)(buf[1] << 8) | buf[0];
 
             pattern newPattern;
             newPattern.color = buf[2];
-            newPattern.phase = (unsigned long)(buf[6] << 24) | (buf[5] << 16) | (buf[4] << 8) | buf[3];
+            newPattern.phase = 0;
+            newPattern.phase += buf[6] << 24;
+            newPattern.phase += buf[5] << 16;
+            newPattern.phase += buf[4] << 8;
+            newPattern.phase += buf[3];
+            
 
             if (mutationsCheck > this->mutations) {
               this->mutations = mutationsCheck;
