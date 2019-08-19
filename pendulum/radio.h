@@ -44,18 +44,16 @@ class Radio {
     void send(pattern patternValues) {
     // Sample message send code
       byte data[7];
-      data[0] = (byte) mutations;
-      data[1] = (byte) mutations >> 8;
+      data[0] = mutations;
+      data[1] = mutations >> 8;
       
-      data[2] = (byte) patternValues.color;
+      data[2] = patternValues.color;
       
-      data[3] = (byte) patternValues.phase;
-      data[4] = (byte) patternValues.phase >> 8;
-      data[5] = (byte) patternValues.phase >> 16;
-      data[6] = (byte) patternValues.phase >> 24;
-      
-      // Serial.println(String(mutations) + " " + String(patternValues.color) + " " + String(patternValues.phase));
-
+      data[3] = patternValues.phase;
+      data[4] = patternValues.phase >> 8;
+      data[5] = patternValues.phase >> 16;
+      data[6] = patternValues.phase >> 24;
+            
       nrf24.send(data, sizeof(data));
       nrf24.waitPacketSent();
     }
@@ -73,10 +71,11 @@ class Radio {
             
             unsigned int mutationsCheck = 0;
             mutationsCheck += buf[0];
-            (unsigned int)(buf[1] << 8) | buf[0];
-
+            mutationsCheck += buf[1];
+  
             pattern newPattern;
             newPattern.color = buf[2];
+            
             newPattern.phase = 0;
             newPattern.phase += buf[6] << 24;
             newPattern.phase += buf[5] << 16;
