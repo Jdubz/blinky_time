@@ -9,12 +9,17 @@ class Button {
       pinMode(inputPin, INPUT);
       wasDown = false;
       wasPressed = false;
-      longPressDuration = 1000;
+      longPressDuration = 1500;
       pressDuration = -1;
+      isLongPressed = false;
     }
     void update() {
       bool isDown = digitalRead(this->pin) == HIGH;
       bool isUp = digitalRead(this->pin) == LOW;
+
+      if (isUp) {
+        this->isLongPressed = false;
+      }
 
       if (isDown && !this->wasDown) {
         this->wasDown = true;
@@ -23,6 +28,8 @@ class Button {
         this->pressDuration = millis() - this->pressStart;
         this->wasDown = false;
         this->wasPressed = true;
+      } else if (isDown && this->wasDown) {
+        this->pressDuration = millis() - this->pressStart;
       } else {
         this->wasPressed = false;
       }
@@ -31,7 +38,11 @@ class Button {
       return this->wasPressed && this->pressDuration < this->longPressDuration;
     }
     bool wasLongPressed() {
-      return this->wasPressed && this->pressDuration >= this->longPressDuration;
+      bool longPressed = this->wasDown && this->pressDuration >= this->longPressDuration && !this->isLongPressed;
+      if (longPressed) {
+        this->isLongPressed = true;
+      }
+      return longPressed;
     }
   private:
     int pin;
@@ -40,6 +51,7 @@ class Button {
     float pressStart;
     float longPressDuration;
     float pressDuration;
+    bool isLongPressed;
 };
 
 #endif

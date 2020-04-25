@@ -1,6 +1,8 @@
 #ifndef Knob_h
 #define Knob_h
 
+const byte THRESHOLD = 20;
+
 class Knob {
   public:
     Knob(int KNOBPIN) {
@@ -8,7 +10,7 @@ class Knob {
     }
     bool update() {
       int newVal = analogRead(this->pin);
-      if (newVal > this->value +3 || newVal < this->value -3) {
+      if (newVal > (this->value + THRESHOLD) || newVal < (this->value - THRESHOLD)) {
         this->value = newVal;
         return true;
       }
