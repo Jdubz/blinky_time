@@ -3,12 +3,20 @@
 
 #include <ESP8266WebServer.h>
 
+#include "ROM.h"
+#include "Light.h"
+
 class Routes {
   public:
-    Routes();
+    Routes(Light light, ROM rom);
+    void status();
+    void on();
+    void color();
 
   private:
-    ESP8266WebServer server;
+    ESP8266WebServer _server;
+    Light _light;
+    ROM _rom;
 }
 
 #endif

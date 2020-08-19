@@ -23,6 +23,8 @@ bool WifiManager::connect(const char* SSID, const char* PASSWORD) {
     _led.toggle();
   }
 
+  Serial.println(WiFi.localIP());
+
   return this.connected();
 }
 

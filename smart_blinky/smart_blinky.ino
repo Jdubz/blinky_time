@@ -4,11 +4,21 @@
 #include "Routes.h"
 #include "WifiManager.h"
 
-ESP8266WebServer httpRestServer(HTTP_REST_PORT);
+#define ButtonPin D3
+#define LEDPin D4
+#define Rpin D5
+#define Gpin D6
+#define Bpin D7
+
+Button button = Button(ButtonPin);
+LED led = LED(LEDPin);
+ROM rom = ROM();
+Light light = Light(Rpin, Gpin, Bpin);
+WifiManager wifi = WifiManager(led);
 
 void setup() {
-  restServerRouting();
-  httpRestServer.begin();
+  
+  wifi.connect();
 
 }
 
