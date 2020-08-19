@@ -10,8 +10,8 @@ class ROM {
     bool getPW(char * buf);
     bool getColor(color RGB);
 
-    void writeSSID(string SSID);
-    void writePW(string PW);
+    void writeSSID(String SSID);
+    void writePW(String PW);
     void writeColor(color RGB);
 
     void forgetCreds();

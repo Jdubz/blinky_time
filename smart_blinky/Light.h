@@ -8,11 +8,12 @@ class Light {
     Light(int Rpin, int Gpin, int Bpin);
     void changeColor(color RGB);
     color getColor();
-    void fade();
+    void update();
     bool status();
 
     void on();
     void off();
+    void toggle();
   
   private:
     bool _shouldFade();

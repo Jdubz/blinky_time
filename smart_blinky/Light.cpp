@@ -3,8 +3,6 @@
 
 #include "Color.h"
 
-const byte fadeSpeed = 2;
-
 Light::Light(int Rpin, int Gpin, int Bpin) {
   _rpin = Rpin;
   pinMode(Rpin, OUTPUT);
@@ -24,7 +22,9 @@ void Light::_showColor(color RGB) {
   analogWrite(_bpin, RGB.B);
 }
 
-void Light::fade() {
+void Light::update() {
+  byte fadeSpeed = 2;
+
   if (_shouldFade()) {
     byte R = 0;
     byte G = 0;
@@ -59,6 +59,10 @@ void Light::off() {
   if (_isOn) {
     _isOn = false;
   }
+}
+
+void Light::toggle() {
+  _isOn = !_isOn;
 }
 
 bool Light::_shouldFade() {

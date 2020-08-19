@@ -4,10 +4,10 @@
 #include "EEPROM.h"
 #include "Color.h"
 
-const int EEPROM_SIZE = 132
-const int SSIDAddress = 0
-const int PWAddress = 64
-const int ColorAddress = 128
+const int EEPROM_SIZE = 132;
+const int SSIDAddress = 0;
+const int PWAddress = 64;
+const int ColorAddress = 128;
 
 ROM::ROM() {
   if (!EEPROM.begin(EEPROM_SIZE)) {

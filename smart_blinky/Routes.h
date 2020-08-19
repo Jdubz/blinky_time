@@ -9,14 +9,16 @@
 class Routes {
   public:
     Routes(Light light, ROM rom);
-    void status();
-    void on();
-    void color();
+    void handleClient();
 
   private:
     ESP8266WebServer _server;
     Light _light;
     ROM _rom;
+
+    void _status();
+    void _on();
+    void _color();
 }
 
 #endif

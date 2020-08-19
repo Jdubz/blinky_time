@@ -14,27 +14,30 @@ Routes::Routes(Light light, ROM rom) {
   _light = light;
   _rom = rom;
 
-  server = ESP8266WebServer(HTTP_REST_PORT);
+  _server = ESP8266WebServer(HTTP_REST_PORT);
 
-  server.on("/", HTTP_GET, status);
-  server.on("/on", HTTP_POST, on);
-  server.on("/color, HTTP_POST", color);
+  _server.on("/", HTTP_GET, _status);
+  _server.on("/on", HTTP_POST, _on);
+  _server.on("/color", HTTP_POST, _color);
 
-  server.begin();
+  _server.begin();
 }
 
-void Routes::status() {
-
+void Routes::handleClient() {
+  _server.handleClient();
 }
 
-void Routes::on() {
-  StaticJsonBuffer<500> jsonBuffer;
-  String post_body = http_rest_server.arg("plain");
-  Serial.println(post_body);
-
-  
+void Routes::_status() {
+  Serial.print('Get /');
+  Serial.println(_server.arg('plain'));
 }
 
-void Routes::color() {
+void Routes::_on() {
+  Serial.print('Post /on :');
+  Serial.println(_server.arg('plain'));
+}
 
+void Routes::_color() {
+  Serial.print('Post /color :');
+  Serial.println(_server.arg('plain'));
 }
