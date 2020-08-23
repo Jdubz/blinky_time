@@ -6,15 +6,23 @@
 class ROM {
   public:
     ROM();
-    bool getSSID(char * buf);
-    bool getPW(char * buf);
-    bool getColor(color RGB);
+    String getSSID();
+    String getPW();
+    struct color getColor();
+    bool getState();
+    byte getBrightness();
 
     void writeSSID(String SSID);
     void writePW(String PW);
     void writeColor(color RGB);
+    void writeState(bool state);
+    void writeBrightness(byte brightness);
 
     void forgetCreds();
+
+    private:
+      String _readString(int address);
+      void _writeString(int address, String data);
 };
 
 #endif

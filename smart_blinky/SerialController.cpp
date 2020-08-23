@@ -2,27 +2,30 @@
 #include "SerialController.h"
 
 #include "ROM.h"
+#include "WifiController.h"
 
-const int baudRate = 9600;
-
-SerialController::SerialController(ROM rom) {
+SerialController::SerialController(ROM* rom, WifiController* wifi) {
+  int baudRate = 115200;
   _rom = rom;
+  _wifi = wifi;
 
-  Serial.begin(buaudRate);
+  Serial.begin(baudRate);
 }
 
-bool read() {
+bool SerialController::read() {
   if (Serial.available()) {
-    string message = Serial.readString();
-    string msgType = message.substring(0, message.indexOf(':'));
-    if (msgType == 'wificreds') {
-      string SSID = message.substring(message.indexOf(':') + 1, message.lastIndexOf(':'));
+    String message = Serial.readString();
+    String msgType = message.substring(0, message.indexOf(":"));
+    if (msgType == "wificreds") {
+      String SSID = message.substring(message.indexOf(":") + 1, message.lastIndexOf(':'));
       Serial.println(SSID);
-      _rom.writeSSID(SSID);
-      string PW = message.substring(message.lastIndexOf(':') + 1);
+      _rom->writeSSID(SSID);
+      String PW = message.substring(message.lastIndexOf(":") + 1);
       Serial.println(PW);
-      _rom.writePW(PW);
+      _rom->writePW(PW);
       return true;
+    } else if (msgType == "ip") {
+      Serial.println(_wifi->getIp());
     }
   }
   return false;

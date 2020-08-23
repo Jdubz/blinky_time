@@ -4,64 +4,104 @@
 #include "EEPROM.h"
 #include "Color.h"
 
-const int EEPROM_SIZE = 132;
-const int SSIDAddress = 0;
-const int PWAddress = 64;
-const int ColorAddress = 128;
-
 ROM::ROM() {
-  if (!EEPROM.begin(EEPROM_SIZE)) {
-    Serial.println("EEPROM failed to initialize");
-  }
+  int EEPROM_SIZE = 133;
+  EEPROM.begin(EEPROM_SIZE);
 }
 
-bool ROM::getSSID(char * buf) {
-  String stringSSID = EEPROM.readString(SSIDAddress);
-  unsigned char ssidLength = stringSSID.length() + 1;
-  stringSSID.toCharArray(buf, ssidLength);
-  return ssidLength > 1;
+String ROM::getSSID() {
+  int SSIDAddress = 0;
+  return _readString(SSIDAddress);
 }
 
-bool ROM::getPW(char * buf) {
-  String stringPW = EEPROM.readString(PWAddress);
-  unsigned char pwLength = stringPW.length() + 1;
-  stringPW.toCharArray(buf, pwLength);
-  return pwLength > 1;
+String ROM::getPW() {
+  int PWAddress = 64;
+  return _readString(PWAddress);
 }
 
-bool ROM::getColor(color RGB) {
+color ROM::getColor() {
+  int colorAddress = 128;
+
+  color RGB;
   byte R = EEPROM.read(colorAddress);
   RGB.R = R;
   byte G = EEPROM.read(colorAddress + 1);
   RGB.G = G;
   byte B = EEPROM.read(colorAddress + 2);
   RGB.B = B;
-  return (!!R || !!G || !!B);
+  return RGB;
 }
 
-void ROM::writeSSID(string SSID) {
-  EEPROM.writeString(SSIDAddress, SSID);
-  EEPROM.commit();
-  char PW[64];
+bool ROM::getState() {
+  int stateAddress = 131;
+  byte isOn = EEPROM.read(stateAddress);
+  return !!isOn;
 }
 
-void ROM::writePW(string PW) {
-  EEPROM.writeString(PWAddress, PW);
+byte ROM::getBrightness() {
+  int brightnessAddress = 132;
+  byte brightness = EEPROM.read(brightnessAddress);
+  return brightness;
+}
+
+void ROM::writeState(bool state) {
+  int stateAddress = 131;
+  EEPROM.write(stateAddress, state);
   EEPROM.commit();
-  char SSID[64];
+}
+
+void ROM::writeSSID(String SSID) {
+  int SSIDAddress = 0;
+  _writeString(SSIDAddress, SSID);
+}
+
+void ROM::writePW(String PW) {
+  int PWAddress = 64;
+  _writeString(PWAddress, PW);
 }
 
 void ROM::writeColor(color RGB) {
-      EEPROM.write(colorAddress, RGB.R);
-      EEPROM.write(colorAddress + 1, RGB.G);
-      EEPROM.write(colorAddress + 2, RGB.B);
-      EEPROM.commit();
+  int colorAddress = 128;
+
+  EEPROM.write(colorAddress, RGB.R);
+  EEPROM.write(colorAddress + 1, RGB.G);
+  EEPROM.write(colorAddress + 2, RGB.B);
+  EEPROM.commit();
+}
+
+void ROM::writeBrightness(byte brightness) {
+  int brightnessAddress = 132;
+  EEPROM.write(brightness, brightnessAddress);
+  EEPROM.commit();
 }
 
 void ROM::forgetCreds() {
   for (uint8_t i = 0 ; i < 128 ; i++) {
     EEPROM.write(i, 0);
   }
+  EEPROM.commit();
+}
+
+String ROM::_readString(int address) {
+  char data[128];
+  unsigned char k;
+  int length = 0;
+  k = EEPROM.read(address);
+  while (k != '\0' && length < 64) {
+    k = EEPROM.read(address + length);
+    data[length] = k;
+    length++;
+  }
+  data[length]='\0';
+  return String(data);
+}
+
+void ROM::_writeString(int address, String data) {
+  int size = data.length();
+  for (int i = 0; i < size; i++) {
+    EEPROM.write(address + i, data[i]);
+  }
+  EEPROM.write(address + size, '\0');
   EEPROM.commit();
 }
 

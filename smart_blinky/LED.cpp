@@ -1,30 +1,31 @@
 #include "Arduino.h"
 #include "LED.h"
 
-LED::LED(int pin) {
+LED::LED(const int pin) {
   pinMode(pin, OUTPUT);
   _pin = pin;
-  isOn = false;
+  _isOn = false;
+  digitalWrite(_pin, LOW);
 }
 
 void LED::on() {
-  if (isOn) {
+  if (!_isOn) {
     digitalWrite(_pin, HIGH);
-    isOn = true;
+    _isOn = true;
   }
 }
 
 void LED::off() {
-  if (this->isOn) {
+  if (_isOn) {
     digitalWrite(_pin, LOW);
-    isOn = false;
+    _isOn = false;
   }
 }
 
 void LED::toggle() {
-  if (isOn) {
-    *this.off();
+  if (_isOn) {
+    off();
   } else {
-    *this.on();
+    on();
   }
 }

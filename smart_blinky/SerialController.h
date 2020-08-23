@@ -2,14 +2,16 @@
 #define SerialController_h
 
 #include "ROM.h"
+#include "WifiController.h"
 
 class SerialController {
   public:
-    SerialController(Rom rom);
+    SerialController(ROM* rom, WifiController* wifi);
     bool read();
 
   private:
-    ROM _rom;
-}
+    ROM* _rom;
+    WifiController* _wifi;
+};
 
 #endif

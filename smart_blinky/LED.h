@@ -3,14 +3,14 @@
 
 class LED {
   public:
-    LED(int LedPin);
+    LED(const int pin);
     void on();
     void off();
     void toggle();
 
   private:
     int _pin;
-    bool isOn;
+    bool _isOn;
 };
 
 #endif

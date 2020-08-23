@@ -5,16 +5,17 @@
 
 class WifiController {
   public:
-    WifiController(LED led);
-    void setup(const char* SSID, const char* PASSWORD);
+    WifiController(LED* led);
+    void setup(String SSID, String PASSWORD);
     bool checkConnection();
+    String getIp();
+    void connect();
 
   private:
     bool _isConnected();
-    bool _connect();
-    LED _led;
-    char _SSID;
-    char _PW;
+    LED* _led;
+    String _SSID;
+    String _PW;
 };
 
 #endif

@@ -1,6 +1,28 @@
 ## Wifi enabled 12v RGB led controller with RESTful API.
 
-### ToDo
-- implement JSON
+## ToDo
 - implement UDP discovery
-- 
+- implement RESTful light standard
+- GET "/" returns info/control webpage
+- GET "/status" returns light status
+- create system controller for abstracting state persistance and display
+  - multiple interfaces should call the same single class, not Light and ROM.
+  - any interface's changes should update other interfaces
+- create serial interface for MQTT config
+
+## MQTT Topics
+
+default mqtt schema: https://www.home-assistant.io/integrations/light.mqtt/
+example https://github.com/mertenats/open-home-automation/tree/master/ha_mqtt_rgb_light
+
+### Home Assistant Configuration:
+  light:
+    platform: mqtt
+    name: 'Office RGB light'
+    state_topic: 'office/rgb1/light/status'
+    command_topic: 'office/rgb1/light/switch'
+    brightness_state_topic: 'office/rgb1/brightness/status'
+    brightness_command_topic: 'office/rgb1/brightness/set'
+    rgb_state_topic: 'office/rgb1/rgb/status'
+    rgb_command_topic: 'office/rgb1/rgb/set'
+    optimistic: false

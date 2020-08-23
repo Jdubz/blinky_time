@@ -4,35 +4,56 @@
 #include "Routes.h"
 #include "WifiController.h"
 #include "SerialController.h"
+#include "MQTT.h"
+#include "Color.h"
 
-#define ButtonPin D3
-#define LEDPin D4
-#define Rpin D5
-#define Gpin D6
-#define Bpin D7
+const int ButtonPin = D1;
+const int LEDPin = D4;
+const int Rpin = D5;
+const int Gpin = D6;
+const int Bpin = D7;
 
-Button button;
-LED led;
-ROM rom;
-Light light;
-WifiController wifi;
-Routes api;
-SerialController serial;
-
+Button* button;
+LED* led;
+ROM* rom;
+Light* light;
+WifiController* wifi;
+Routes* api;
+SerialController* serial;
+MQTT* mqtt;
 
 void setupWifi() {
-  char SSID[64];
-  char PW[64];
+  String SSID = rom->getSSID();
+  String PW = rom->getPW();
 
-  bool hasCreds = rom.getSSID(SSID) && rom.getPW(PW);
-  if (hasCreds)) {
-    wifi.setup(SSID, PW);
-    Serial.print('WiFi SSID: ');
-    Serial.println(SSID);
-    Serial.print('Wifi PW: ');
-    Serial.println(PW);
+  bool hasCreds = SSID.length() > 0 || PW.length() > 0;
+  if (hasCreds) {
+    wifi->setup(SSID, PW);
+    wifi->connect();
   } else {
-    Serial.printls('No WiFi Credentials');
+    Serial.println("No WiFi Credentials");
+  }
+}
+
+void setupLight() {
+  color initColor = rom->getColor();
+  if (!(initColor.R > 0 || initColor.G > 0 || initColor.B > 0)) {
+    initColor.R = 150;
+    initColor.G = 100;
+    initColor.B = 50;
+  }
+  light->changeColor(initColor);
+
+  byte brightness = rom->getBrightness();
+  if (!brightness) {
+    brightness = 200;
+    rom->writeBrightness(brightness);
+  }
+  light->setBrightness(brightness);
+
+  bool isOn = rom->getState();
+  if (isOn) {
+    light->on();
   }
 }
 
@@ -40,27 +61,34 @@ void setup() {
   button = new Button(ButtonPin);
   led = new LED(LEDPin);
   rom = new ROM();
-  serial = new SerialController(rom);
   light = new Light(Rpin, Gpin, Bpin);
   wifi = new WifiController(led);
-  api = new Routes(light, rom);
+  serial = new SerialController(rom, wifi); 
+  mqtt = new MQTT(light, rom);
+  api = new Routes(light, rom, mqtt);
 
   setupWifi();
+  setupLight();
+  api->setup();
 }
 
 void loop() {
 
-  button.read();
-  if (button.isShortPress()) {
-    light.toggle();
+  button->read();
+  if (button->isLongPress()) {
+    ESP.restart();
   }
-  light.update();
+  if (button->isShortPress()) {
+    light->toggle();
+  }
+  light->update();
 
-  if (serial.read()) {
+  if (serial->read()) {
     setupWifi();
   }
 
-  wifi.checkConnection();
-
-  api.handleClient();
+  if (wifi->checkConnection() && mqtt->checkConnection()) {
+    mqtt->listen();
+  }
+  api->handleClient();
 }

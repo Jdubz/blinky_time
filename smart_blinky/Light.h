@@ -5,20 +5,23 @@
 
 class Light {
   public:
-    Light(int Rpin, int Gpin, int Bpin);
+    Light(const int Rpin, const int Gpin, const int Bpin);
     void changeColor(color RGB);
-    color getColor();
+    struct color getColor();
     void update();
-    bool status();
+    bool getState();
+    byte getBrightness();
 
     void on();
     void off();
     void toggle();
+    void setBrightness(byte brightness);
   
   private:
     bool _shouldFade();
-    byte _getNextColor(byte now, byte end);
+    int _getNextColor(byte now, byte end);
     void _showColor(color RGB);
+    struct color _getTargetColor();
 
     bool _isOn;
 
@@ -26,8 +29,11 @@ class Light {
     int _gpin;
     int _bpin;
 
-    color _RGB;
-    color _RGBNow;
-}
+    byte _brightness;
+    struct color _RGB;
+    struct color _RGBNow;
+
+    unsigned long _lastFade;
+};
 
 #endif

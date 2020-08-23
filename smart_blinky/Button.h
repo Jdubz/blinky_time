@@ -1,21 +1,19 @@
 #ifndef Button_h
 #define Button_h
 
-#include "Arduino.h"
-
 class Button {
   public:
-    Button(int ButtonPin);
+    Button(const int pin);
     bool isShortPress();
     bool isLongPress();
     void read();
     
   private:
     int _pin;
-    bool lastState;
-    unsigned long downPress;
-    bool shortPress;
-    bool longPress;
+    bool _lastState;
+    unsigned long _downPress;
+    bool _shortPress;
+    bool _longPress;
 };
 
 #endif
