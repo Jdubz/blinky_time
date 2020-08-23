@@ -16,6 +16,7 @@ class MQTT {
     void publishBrightness(byte brightness);
     bool checkConnection();
     void listen();
+    bool connect();
 
   private:
     PubSubClient  _client;
@@ -26,6 +27,7 @@ class MQTT {
     char* _msgBuffer;
 
     void _handleMessage(char* p_topic, byte* p_payload, unsigned int p_length);
+    bool _tryConnection();
 };
 
 #endif

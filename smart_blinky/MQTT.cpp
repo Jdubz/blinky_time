@@ -24,6 +24,22 @@ MQTT::MQTT(Light* light, ROM* rom) {
   _client.setCallback([this] (char* topic, byte* payload, unsigned int length) {
     this->_handleMessage(topic, payload, length);
   });
+
+  Serial.print("MQTT state: ");
+  Serial.println(_client.state());
+}
+
+bool MQTT::connect() {
+  int maxRetries = 20;
+  int retryDelay = 500;
+  int retryCount = 0;
+  Serial.print("Connecting to MQTT broker.");
+  while (!_tryConnection() && retryCount < maxRetries) {
+    delay(retryDelay);
+    retryCount++;
+    Serial.print(".");
+  }
+  return _client.connected();
 }
 
 void MQTT::listen() {
@@ -53,6 +69,11 @@ void MQTT::_handleMessage(char* p_topic, byte* p_payload, unsigned int p_length)
   for (uint8_t i = 0; i < p_length; i++) {
     payload.concat((char)p_payload[i]);
   }
+
+  Serial.print("MQTT message received, topic: ");
+  Serial.print(p_topic);
+  Serial.print(" payload: ");
+  Serial.println(payload);
 
   if (String(MQTT_LIGHT_COMMAND_TOPIC).equals(p_topic)) {
     if (payload.equals(String(LIGHT_ON))) {
@@ -93,22 +114,27 @@ bool MQTT::checkConnection() {
   if (_wifi.connected() && !_client.connected()) {
     Serial.println("Attempting MQTT connection...");
 
-    if (_client.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)) {
-      Serial.println("MQTT connected");
-
-      publishState(_light->getState());
-      publishBrightness(_light->getBrightness());
-      publishColor(_light->getColor());
-
-      _client.subscribe(MQTT_LIGHT_COMMAND_TOPIC);
-      _client.subscribe(MQTT_LIGHT_BRIGHTNESS_COMMAND_TOPIC);
-      _client.subscribe(MQTT_LIGHT_RGB_COMMAND_TOPIC);
-      return true;
-    } else {
+    if (!_tryConnection()) {
       Serial.print("ERROR: MQTT connection failed, rc=");
       Serial.println(_client.state());
-      return false;
     }
   }
-  return true;
+  return _client.connected();
+}
+
+bool MQTT::_tryConnection() {
+  if (_client.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD)) {
+    Serial.println("MQTT connected");
+
+    publishState(_light->getState());
+    publishBrightness(_light->getBrightness());
+    publishColor(_light->getColor());
+
+    _client.subscribe(MQTT_LIGHT_COMMAND_TOPIC);
+    _client.subscribe(MQTT_LIGHT_BRIGHTNESS_COMMAND_TOPIC);
+    _client.subscribe(MQTT_LIGHT_RGB_COMMAND_TOPIC);
+
+    return true;
+  }
+  return false;
 }

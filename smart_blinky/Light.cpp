@@ -41,14 +41,6 @@ void Light::update() {
     newColor.G = _getNextColor(_RGBNow.G, targetColor.G);
     newColor.B = _getNextColor(_RGBNow.B, targetColor.B);
 
-
-    Serial.print("fading to ");
-    Serial.print(newColor.R);
-    Serial.print(".");
-    Serial.print(newColor.G);
-    Serial.print(".");
-    Serial.println(newColor.B);
-
     _showColor(newColor);
     _RGBNow = newColor;
   }

@@ -9,7 +9,7 @@ class WifiController {
     void setup(String SSID, String PASSWORD);
     bool checkConnection();
     String getIp();
-    void connect();
+    bool connect();
 
   private:
     bool _isConnected();

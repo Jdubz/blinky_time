@@ -1,7 +1,6 @@
 #include "Button.h"
 #include "LED.h"
 #include "ROM.h"
-#include "Routes.h"
 #include "WifiController.h"
 #include "SerialController.h"
 #include "MQTT.h"
@@ -18,7 +17,6 @@ LED* led;
 ROM* rom;
 Light* light;
 WifiController* wifi;
-Routes* api;
 SerialController* serial;
 MQTT* mqtt;
 
@@ -29,7 +27,9 @@ void setupWifi() {
   bool hasCreds = SSID.length() > 0 || PW.length() > 0;
   if (hasCreds) {
     wifi->setup(SSID, PW);
-    wifi->connect();
+    if (wifi->connect()) {
+      mqtt->connect();
+    }
   } else {
     Serial.println("No WiFi Credentials");
   }
@@ -65,11 +65,9 @@ void setup() {
   wifi = new WifiController(led);
   serial = new SerialController(rom, wifi); 
   mqtt = new MQTT(light, rom);
-  api = new Routes(light, rom, mqtt);
 
   setupWifi();
   setupLight();
-  api->setup();
 }
 
 void loop() {
@@ -90,5 +88,4 @@ void loop() {
   if (wifi->checkConnection() && mqtt->checkConnection()) {
     mqtt->listen();
   }
-  api->handleClient();
 }

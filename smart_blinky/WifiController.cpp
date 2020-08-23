@@ -21,14 +21,14 @@ void WifiController::setup(String SSID, String PASSWORD) {
   wifi_set_macaddr(STATION_IF, &mac[0]);
   WiFi.hostname("Blinky-Smarty");
 
-  Serial.print("conntecting to ");
-  Serial.println(SSID);
+  Serial.print("connecting to ");
+  Serial.println(String(SSID));
   
   WiFi.mode(WIFI_STA);
   WiFi.begin(SSID, PASSWORD);
 }
 
-void WifiController::connect() {
+bool WifiController::connect() {
   int maxRetries = 20;
   int retryDelay = 500;
   int retryCount = 0;
@@ -40,9 +40,11 @@ void WifiController::connect() {
   }
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi Connection Failed");
+    return false;
   } else {
     Serial.print("Wifi Connected: ");
     Serial.println(WiFi.localIP());
+    return true;
   }
 }
 
