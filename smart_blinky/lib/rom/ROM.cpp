@@ -5,7 +5,7 @@
 #include "Color.h"
 
 ROM::ROM() {
-  int EEPROM_SIZE = 133;
+  int EEPROM_SIZE = 137;
   EEPROM.begin(EEPROM_SIZE);
 }
 
@@ -42,6 +42,25 @@ byte ROM::getBrightness() {
   int brightnessAddress = 132;
   byte brightness = EEPROM.read(brightnessAddress);
   return brightness;
+}
+
+byte getID() {
+  int IDAddress = 133;
+  byte ID[3];
+  if (EEPROM.read(IDAddress) == '#') {
+    ID[0] = EEPROM.read(IDAddress + 1);
+    ID[1] = EEPROM.read(IDAddress + 2);
+    ID[2] = EEPROM.read(IDAddress + 3);
+  } else {
+    randomSeed(analogRead(A0));
+    for (int i = 0; i < 3; i++) {
+      ID[i] = random(0, 255);
+      EEPROM.write(IDAddress + i + 1, ID[i]);
+    }
+    EEPROM.write(IDAddress, '#');
+    EEPROM.commit();
+  }
+  return ID;
 }
 
 void ROM::writeState(bool state) {

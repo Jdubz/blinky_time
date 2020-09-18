@@ -11,21 +11,21 @@ WifiController::WifiController(LED* led) {
   _led = led;
 }
 
-void WifiController::setup(String SSID, String PASSWORD) {
-  _SSID = SSID;
-  _PW = PASSWORD;
+void WifiController::setup(ROM* rom) {
+  _SSID = rom->getSSID();
+  _PW = rom->getPW();
 
+  byte ID[] = rom.getID();
   byte mac[] = {
-    0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED
+    0x5C, 0xCF, 0x7F, ID[0], ID[1], ID[2]
   };
   wifi_set_macaddr(STATION_IF, &mac[0]);
-  WiFi.hostname("Blinky-Smarty");
+  WiFi.hostname("smarty-blink-" + String(ID));
 
-  Serial.print("connecting to ");
-  Serial.println(String(SSID));
+  Serial.println("Connecting to " + SSID);
   
   WiFi.mode(WIFI_STA);
-  WiFi.begin(SSID, PASSWORD);
+  WiFi.begin(_SSID, _PW);
 }
 
 bool WifiController::connect() {

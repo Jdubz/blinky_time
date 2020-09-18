@@ -11,6 +11,8 @@ class ROM {
     struct color getColor();
     bool getState();
     byte getBrightness();
+    byte getID();
+    byte getMAC();
 
     void writeSSID(String SSID);
     void writePW(String PW);

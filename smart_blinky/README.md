@@ -10,16 +10,17 @@
   - any interface's changes should update other interfaces
 - create serial interface for MQTT config
 
-## MQTT Topics
+## resources
 
 default mqtt schema: https://www.home-assistant.io/integrations/light.mqtt/
 example https://github.com/mertenats/open-home-automation/tree/master/ha_mqtt_rgb_light
 with discovery https://github.com/mertenats/Open-Home-Automation/blob/master/ha_mqtt_rgbw_light_with_discovery/ha_mqtt_rgbw_light_with_discovery.ino
+Tasmota esp8266 https://github.com/arendst/Tasmota
 
 ### Home Assistant Configuration:
   light:
     platform: mqtt
-    name: 'Office RGB light'
+    name: 'MQTT RGB light'
     state_topic: 'office/rgb1/light/status'
     command_topic: 'office/rgb1/light/switch'
     brightness_state_topic: 'office/rgb1/brightness/status'

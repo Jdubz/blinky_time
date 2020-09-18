@@ -1,9 +1,9 @@
-#include "Button.h"
-#include "LED.h"
-#include "ROM.h"
-#include "WifiController.h"
-#include "SerialController.h"
-#include "MQTT.h"
+#include "lib/button/Button.h"
+#include "lib/led/LED.h"
+#include "lib/rom/ROM.h"
+#include "lib/wifi/WifiController.h"
+#include "lib/serial/SerialController.h"
+#include "lib/mqtt/MQTT.h"
 #include "Color.h"
 
 const int ButtonPin = D1;
@@ -26,7 +26,7 @@ void setupWifi() {
 
   bool hasCreds = SSID.length() > 0 || PW.length() > 0;
   if (hasCreds) {
-    wifi->setup(SSID, PW);
+    wifi->setup(rom);
     if (wifi->connect()) {
       mqtt->connect();
     }

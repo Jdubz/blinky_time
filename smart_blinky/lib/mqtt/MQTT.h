@@ -4,14 +4,14 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 
-#include "Color.h"
-#include "Light.h"
-#include "ROM.h"
+#include "../../Color.h"
+#include "../light/Light.h"
+#include "../rom/ROM.h"
 
 class MQTT {
   public:
     MQTT(Light* light, ROM* rom);
-    void publishColor(color RGB);
+    
     void publishState(bool state);
     void publishBrightness(byte brightness);
     bool checkConnection();
@@ -28,6 +28,14 @@ class MQTT {
 
     void _handleMessage(char* p_topic, byte* p_payload, unsigned int p_length);
     bool _tryConnection();
+    void _initTopics();
+    void _publish(char* p_topic, char* p_payload);
+
+    char CLIENT_ID;
+    char CONFIG_TOPIC;
+    char STATE_TOPIC;
+    char COMMAND_TOPIC;
+    char STATUS_TOPIC;
 };
 
 #endif

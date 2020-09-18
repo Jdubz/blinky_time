@@ -6,7 +6,7 @@
 class WifiController {
   public:
     WifiController(LED* led);
-    void setup(String SSID, String PASSWORD);
+    void setup(ROM* rom);
     bool checkConnection();
     String getIp();
     bool connect();
