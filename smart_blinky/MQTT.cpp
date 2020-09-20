@@ -7,10 +7,10 @@
 
 #define MQTT_VERSION MQTT_VERSION_3_1_1
 
-#include "../../Color.h"
-#include "../light/Light.h"
-#include "../rom/ROM.h"
-#include "../../config.h"
+#include "Color.h"
+#include "Light.h"
+#include "ROM.h"
+#include "config.h"
 
 MQTT::MQTT(Light* light, ROM* rom) {
   WiFiClient _wifi;
@@ -39,6 +39,7 @@ bool MQTT::connect() {
     retryCount++;
     Serial.print(".");
   }
+  Serial.println(_client.connected());
   return _client.connected();
 }
 
@@ -46,7 +47,13 @@ void MQTT::listen() {
   _client.loop();
 }
 
-void _initTopics() {
+void MQTT::_initTopics() {
+  CLIENT_ID[7] = {0};
+  CONFIG_TOPIC[sizeof(MQTT_HOME_ASSISTANT_DISCOVERY_PREFIX) + sizeof(CLIENT_ID) + sizeof(MQTT_CONFIG_TOPIC_TEMPLATE) - 4] = {0};
+  STATE_TOPIC[sizeof(CLIENT_ID) + sizeof(MQTT_STATE_TOPIC_TEMPLATE) - 2] = {0};
+  COMMAND_TOPIC[sizeof(CLIENT_ID) + sizeof(MQTT_COMMAND_TOPIC_TEMPLATE) - 2] = {0};
+  STATUS_TOPIC[sizeof(CLIENT_ID) + sizeof(MQTT_STATUS_TOPIC_TEMPLATE) - 2] = {0};
+
   sprintf(CLIENT_ID, "%06X", ESP.getChipId());
   sprintf(CONFIG_TOPIC, MQTT_CONFIG_TOPIC_TEMPLATE, MQTT_HOME_ASSISTANT_DISCOVERY_PREFIX, CLIENT_ID);
   sprintf(STATE_TOPIC, MQTT_STATE_TOPIC_TEMPLATE, CLIENT_ID);
@@ -54,76 +61,77 @@ void _initTopics() {
   sprintf(STATUS_TOPIC, MQTT_STATUS_TOPIC_TEMPLATE, CLIENT_ID);
 }
 
-void MQTT::_publish(char* p_topic, char* p_payload) {
-  if (mqttClient.publish(p_topic, p_payload, true)) {
+void MQTT::_publish(char* topic, char* payload) {
+  if (_client.publish(topic, payload, true)) {
     Serial.print("MQTT message published successfully, Topic: ");
-    Serial.println(p_topic);
+    Serial.println(topic);
   } else {
     Serial.print("ERROR: MQTT message not published, Topic: ");
-    Serial.println(p_topic);
+    Serial.println(topic);
   }
 }
 
-void MQTT::_handleMessage(char* p_topic, byte* p_payload, unsigned int p_length) {
+void MQTT::_handleMessage(char* topic, byte* p_payload, unsigned int length) {
   String payload;
-  for (uint8_t i = 0; i < p_length; i++) {
+  for (uint8_t i = 0; i < length; i++) {
     payload.concat((char)p_payload[i]);
   }
 
   Serial.print("MQTT message received, topic: ");
-  Serial.print(p_topic);
+  Serial.print(topic);
   Serial.print(" payload: ");
   Serial.println(payload);
 
-  if (String(COMMAND_TOPIC).equals(p_topic)) {
-    DynamicJsonBuffer dynamicJsonBuffer(1024);
-    JsonObject root = dynamicJsonBuffer.parseObject(p_payload);
-    if (!root.success()) {
-      DEBUG_PRINTLN(F("ERROR: parseObject() failed"));
+  if (String(COMMAND_TOPIC).equals(topic)) {
+    DynamicJsonDocument doc(256);
+    auto error = deserializeJson(doc, payload);
+    if (error) {
+      Serial.print("ERROR: deserializeJson() failed: ");
+      Serial.println(error.c_str());
       return;
     }
 
-    if (root.containsKey("state")) {
-      if (strcmp(root["state"], MQTT_STATE_ON_PAYLOAD) == 0) {
+    if (doc.containsKey("state")) {
+      if (strcmp(doc["state"], MQTT_STATE_ON_PAYLOAD) == 0) {
         _light->on();
         _rom->writeState(true);
         _publish(STATE_TOPIC, MQTT_STATE_ON_PAYLOAD);
-      } else if (strcmp(root["state"], MQTT_STATE_OFF_PAYLOAD) == 0) {
+      } else if (strcmp(doc["state"], MQTT_STATE_OFF_PAYLOAD) == 0) {
         _light->off();
         _rom->writeState(false);
-        _publish(STATE_TOPIC, MQTT_STATE_OFF_PAYLOAD);
+        _publish(STATE_TOPIC, _light->getState());
       }
     }
 
-    if (root.containsKey("color")) {
+    if (doc.containsKey("color")) {
       color newColor;
-      newColor.R = root["color"]["r"];
-      newColor.G = root["color"]["g"];
-      newColor.B = root["color"]["b"];
+      newColor.R = doc["color"]["r"];
+      newColor.G = doc["color"]["g"];
+      newColor.B = doc["color"]["b"];
 
       _light->changeColor(newColor);
       _rom->writeColor(newColor);
-      // FIXME
-      _publish(newColor);
+      _publish(STATE_TOPIC, _light->getState());
     }
 
-    if (root.containsKey("brightness")) {
-      uint8_t brightness = root["brightness"].toInt();
+    if (doc.containsKey("brightness")) {
+      uint8_t brightness = doc["brightness"];
+
       if (brightness < 0 || brightness > 255) {
         // do nothing...
         return;
       } else {
         _light->setBrightness(brightness);
         _rom->writeBrightness(brightness);
-        //FIXME
-        _publish(brightness);
+        _publish(STATE_TOPIC, _light->getState());
       }
     }
+  }
 }
 
 bool MQTT::checkConnection() {
   if (WiFi.status() != WL_CONNECTED && !_client.connected()) {
-    Serial.println("Attempting MQTT connection...");
+    Serial.println("Attempting MQTT connectionlib.");
 
     if (!_tryConnection()) {
       Serial.print("ERROR: MQTT connection failed, rc=");
@@ -133,21 +141,31 @@ bool MQTT::checkConnection() {
   return _client.connected();
 }
 
+char* MQTT::_getConfig() {
+  StaticJsonDocument<256> doc;
+  JsonObject root = doc.to<JsonObject>();
+  root["name"] = MQTT_ID + String(ESP.getChipId());
+  root["platform"] = "mqtt_json";
+  root["state_topic"] = STATE_TOPIC;
+  root["command_topic"] = COMMAND_TOPIC;
+  root["brightness"] = true;
+  root["rgb"] = true;
+  char config[256];
+  serializeJson(root, config);
+  return config;
+}
+
 bool MQTT::_tryConnection() {
-  if (_client.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASSWORD, )) {
+  if (_client.connect(CLIENT_ID, MQTT_USERNAME, MQTT_PASSWORD, STATUS_TOPIC, 0, 1, "dead")) {
     Serial.println("MQTT connected");
+    
+    _publish(STATUS_TOPIC, "alive");
+    _publish(CONFIG_TOPIC, _getConfig());
+    _publish(STATE_TOPIC, _light->getState());
 
-    publishState(_light->getState());
-    publishBrightness(_light->getBrightness());
-    publishColor(_light->getColor());
-
-    _client.subscribe(MQTT_LIGHT_COMMAND_TOPIC);
-    _client.subscribe(MQTT_LIGHT_BRIGHTNESS_COMMAND_TOPIC);
-    _client.subscribe(MQTT_LIGHT_RGB_COMMAND_TOPIC);
+    _client.subscribe(COMMAND_TOPIC);
 
     return true;
   }
   return false;
 }
-
-void MQTT::

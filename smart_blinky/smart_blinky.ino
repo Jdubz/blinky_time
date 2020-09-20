@@ -1,9 +1,9 @@
-#include "lib/button/Button.h"
-#include "lib/led/LED.h"
-#include "lib/rom/ROM.h"
-#include "lib/wifi/WifiController.h"
-#include "lib/serial/SerialController.h"
-#include "lib/mqtt/MQTT.h"
+#include "Button.h"
+#include "LED.h"
+#include "ROM.h"
+#include "WifiController.h"
+#include "SerialController.h"
+#include "MQTT.h"
 #include "Color.h"
 
 const int ButtonPin = D1;
@@ -11,6 +11,9 @@ const int LEDPin = D4;
 const int Rpin = D5;
 const int Gpin = D6;
 const int Bpin = D7;
+
+String defaultSSID = "mooseherd";
+String defaultPW = "fuzzyantlers9408";
 
 Button* button;
 LED* led;
@@ -24,18 +27,20 @@ void setupWifi() {
   String SSID = rom->getSSID();
   String PW = rom->getPW();
 
-  bool hasCreds = SSID.length() > 0 || PW.length() > 0;
-  if (hasCreds) {
-    wifi->setup(rom);
-    if (wifi->connect()) {
-      mqtt->connect();
-    }
-  } else {
-    Serial.println("No WiFi Credentials");
+  if (SSID.length() == 0) {
+    SSID = defaultSSID;
+    PW = defaultPW;
   }
+
+  wifi->setup(SSID, PW);
+  if (wifi->connect()) {
+    mqtt->connect();
+  }
+
 }
 
 void setupLight() {
+  Serial.println("setting up light");
   color initColor = rom->getColor();
   if (!(initColor.R > 0 || initColor.G > 0 || initColor.B > 0)) {
     initColor.R = 150;
@@ -55,6 +60,7 @@ void setupLight() {
   if (isOn) {
     light->on();
   }
+  Serial.println("light set up");
 }
 
 void setup() {
@@ -71,7 +77,7 @@ void setup() {
 }
 
 void loop() {
-
+  Serial.println("loop");
   button->read();
   if (button->isLongPress()) {
     ESP.restart();
@@ -85,7 +91,9 @@ void loop() {
     setupWifi();
   }
 
-  if (wifi->checkConnection() && mqtt->checkConnection()) {
-    mqtt->listen();
+  if (wifi->checkConnection()) {
+    if (mqtt->checkConnection()) {
+      mqtt->listen();
+    }
   }
 }

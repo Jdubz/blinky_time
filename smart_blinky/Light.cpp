@@ -1,6 +1,7 @@
-#include "Arduino.h"
-#include "Light.h"
+#include <Arduino.h>
+#include <ArduinoJson.h>
 
+#include "Light.h"
 #include "Color.h"
 
 Light::Light(const int Rpin, const int Gpin, const int Bpin) {
@@ -46,16 +47,18 @@ void Light::update() {
   }
 }
 
-bool Light::getState() {
-  return _isOn;
-}
-
-color Light::getColor() {
-  return _RGB;
-}
-
-byte Light::getBrightness() {
-  return _brightness;
+char* Light::getState() {
+  DynamicJsonDocument doc(256);
+  JsonObject root = doc.to<JsonObject>();
+  root["state"] = _isOn;
+  root["brightness"] = _brightness;
+  JsonObject color = root.createNestedObject("color");
+  color["r"] = _RGB.R;
+  color["g"] = _RGB.G;
+  color["b"] = _RGB.B;
+  char state[256];
+  serializeJson(root, state);
+  return state;
 }
 
 void Light::on() {

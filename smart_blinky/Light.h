@@ -6,16 +6,14 @@
 class Light {
   public:
     Light(const int Rpin, const int Gpin, const int Bpin);
-    void changeColor(color RGB);
-    struct color getColor();
     void update();
-    bool getState();
-    byte getBrightness();
-
     void on();
     void off();
     void toggle();
+    void changeColor(color RGB);
     void setBrightness(byte brightness);
+
+    char* getState();
   
   private:
     bool _shouldFade();
