@@ -24,12 +24,12 @@ void Button::read() {
     if (!_lastState) {
       _downPress = downNow;
     }
-    if (downNow - _downPress > PressLength) {
+    if ((downNow - _downPress) > PressLength) {
       _longPress = true;
       Serial.println("long press");
     }
 
-  } else {
+  } else if (buttonState == LOW) {
     if (_lastState && !_longPress) {
       _shortPress = true;
       Serial.println("short press");
@@ -41,5 +41,5 @@ void Button::read() {
     }
   }
 
-  _lastState = buttonState == HIGH;
+  _lastState = (buttonState == HIGH);
 }

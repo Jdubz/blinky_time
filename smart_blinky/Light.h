@@ -30,7 +30,7 @@ class Light {
     byte _brightness;
     struct color _RGB;
     struct color _RGBNow;
-
+    char _stateBuffer[256] = {0};
     unsigned long _lastFade;
 };
 

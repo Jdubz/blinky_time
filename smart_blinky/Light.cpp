@@ -3,6 +3,7 @@
 
 #include "Light.h"
 #include "Color.h"
+#include "config.h"
 
 Light::Light(const int Rpin, const int Gpin, const int Bpin) {
   _rpin = Rpin;
@@ -13,7 +14,6 @@ Light::Light(const int Rpin, const int Gpin, const int Bpin) {
   pinMode(Bpin, OUTPUT);
 
   _isOn = false;
-
   _lastFade = millis();
 }
 
@@ -48,17 +48,16 @@ void Light::update() {
 }
 
 char* Light::getState() {
-  DynamicJsonDocument doc(256);
-  JsonObject root = doc.to<JsonObject>();
-  root["state"] = _isOn;
+  DynamicJsonBuffer dynamicJsonBuffer;
+  JsonObject& root = dynamicJsonBuffer.createObject();
+  root["state"] = _isOn ? MQTT_STATE_ON_PAYLOAD : MQTT_STATE_OFF_PAYLOAD;
   root["brightness"] = _brightness;
-  JsonObject color = root.createNestedObject("color");
+  JsonObject& color = root.createNestedObject("color");
   color["r"] = _RGB.R;
   color["g"] = _RGB.G;
   color["b"] = _RGB.B;
-  char state[256];
-  serializeJson(root, state);
-  return state;
+  root.printTo(_stateBuffer, sizeof(_stateBuffer));
+  return _stateBuffer;
 }
 
 void Light::on() {

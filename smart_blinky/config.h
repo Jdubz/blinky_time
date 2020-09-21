@@ -6,6 +6,9 @@
 #define MQTT_SERVER       "192.168.86.23"
 #define MQTT_SERVER_PORT  1883
 
+#define DEFAULT_SSID "mooseherd"
+#define DEFAULT_PW "fuzzyantlers9408"
+
 #define MQTT_CONFIG_TOPIC_TEMPLATE  "%s/light/%s/config"
 
 // turn light on/off

@@ -10,9 +10,9 @@ class WifiController {
     bool checkConnection();
     String getIp();
     bool connect();
+    bool isConnected();
 
   private:
-    bool _isConnected();
     LED* _led;
     String _SSID;
     String _PW;
