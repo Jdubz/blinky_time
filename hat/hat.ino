@@ -1,42 +1,63 @@
 #include <Adafruit_NeoPixel.h>
 
-const int LEDPIN = 2;
-const int NUMLEDS = 17;
+#define LED_PIN     2
+#define NUM_LEDS    40
+#define BRIGHTNESS  50
+
 const int frameRate = 30;
 
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 void renderStrip() {
   strip.show();
-  for (int led = 0; led < NUMLEDS; led++) {
-    strip.setPixelColor(led, 0, 0, 0);
-  }
+  clear();
   delay(1000/frameRate);
 }
 
-void setup() {
-  strip.begin();
-  strip.show();
+void clear() {
+  for (int led = 0; led < NUM_LEDS; led++) {
+    strip.setPixelColor(led, 0, 0, 0);
+  }
+}
 
-  for (int led = 0; led < NUMLEDS; led++) {
+void startup() {
+  for (int led = 0; led < NUM_LEDS; led++) {
     strip.setPixelColor(led, 0, 50, 0);
   }
   strip.show();
   delay(1000);
+    for (int led = 0; led < NUM_LEDS; led++) {
+    strip.setPixelColor(led, 50, 0, 0);
+  }
+  strip.show();
+  delay(1000);
+    for (int led = 0; led < NUM_LEDS; led++) {
+    strip.setPixelColor(led, 50, 0, 0);
+  }
+  strip.show();
+  delay(1000);
+  clear();
+  delay(1000);
 }
 
-int sparks[NUMLEDS][3];
+void setup() {
+  delay(3000);
+  strip.begin();
+  startup();
+}
+
+int sparks[NUM_LEDS][3];
 
 void loop() {
 
   if (random(4) == 1) {
-    int sparkId = random(NUMLEDS);
+    int sparkId = random(NUM_LEDS);
     sparks[sparkId][0] = 80;
     sparks[sparkId][1] = random(4) * 10;
     sparks[sparkId][2] = 1;
   }
 
-  for (int thisSpark = 0; thisSpark < NUMLEDS; thisSpark++) {
+  for (int thisSpark = 0; thisSpark < NUM_LEDS; thisSpark++) {
     if (sparks[thisSpark][2] == 1) {       
       if (sparks[thisSpark][1] > 2) {
         sparks[thisSpark][1] -= 2;
