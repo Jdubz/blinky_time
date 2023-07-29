@@ -1,7 +1,7 @@
 #include <Adafruit_NeoPixel.h>
 
 #define LED_PIN     2
-#define NUM_LEDS    40
+#define NUM_LEDS    72
 #define PULL_PIN    5
 
 const int frameRate = 30;
@@ -14,9 +14,15 @@ void pullKey() {
   int now = millis();
   int seconds = now/1000;
   if (!(seconds % pingFreq) && !isLow) {
+    // Serial.print("Pull Low");
+    // Serial.println();
     digitalWrite(PULL_PIN, LOW);
+    isLow = true;
   } else if ((seconds % pingFreq) && isLow) {
+    // Serial.print("Pull High");
+    // Serial.println();
     digitalWrite(PULL_PIN, HIGH);
+    isLow = false;
   }
 }
 
@@ -33,27 +39,31 @@ void clear() {
 }
 
 void startup() {
+  digitalWrite(PULL_PIN, LOW);
   for (int led = 0; led < NUM_LEDS; led++) {
     strip.setPixelColor(led, 0, 50, 0);
   }
   strip.show();
-  delay(1000);
+  delay(500);
     for (int led = 0; led < NUM_LEDS; led++) {
     strip.setPixelColor(led, 50, 0, 0);
   }
   strip.show();
-  delay(1000);
+  delay(500);
     for (int led = 0; led < NUM_LEDS; led++) {
-    strip.setPixelColor(led, 50, 0, 0);
+    strip.setPixelColor(led, 0, 0, 50);
   }
   strip.show();
-  delay(1000);
+  delay(500);
+  digitalWrite(PULL_PIN, HIGH);
   clear();
+  strip.show();
   delay(1000);
 }
 
 void setup() {
   pinMode(PULL_PIN, OUTPUT);
+  // Serial.begin(9600);
 
   delay(3000);
   strip.begin();
@@ -76,8 +86,6 @@ void loop() {
     if (sparks[thisSpark][2] == 1) {       
       if (sparks[thisSpark][1] > 2) {
         sparks[thisSpark][1] -= 2;
-      } else if (sparks[thisSpark][1] != 0) {
-        Serial.println(sparks[thisSpark][1]);
       }
       if (sparks[thisSpark][0] > 2) {
         sparks[thisSpark][0] -= 2;
