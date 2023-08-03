@@ -26,84 +26,78 @@
 
 // */
 
-// #ifndef Radio_h
-// #define Radio_h
+#ifndef Radio_h
+#define Radio_h
 
-// #include "SimpleEspNowConnection.h"
+#include "SimpleEspNowConnection.h"
 
-// static SimpleEspNowConnection simpleEspConnection(SimpleEspNowRole::SERVER);
-// String inputString, clientAddress;
-// String newTimeout = "";
+static SimpleEspNowConnection simpleEspConnection(SimpleEspNowRole::SERVER);
 
-// void OnSendError(uint8_t* ad)
-// {
-//   Serial.println("Sending to '"+simpleEspConnection.macToStr(ad)+"' was not possible!");  
-// }
+class Server {
+  public:
+    Server() {}
+    void OnSendError(uint8_t* ad) {
+      Serial.println("Sending to '"+simpleEspConnection.macToStr(ad)+"' was not possible!");  
+    }
+    void OnSendError(uint8_t* ad) {
+      Serial.println("Sending to '"+simpleEspConnection.macToStr(ad)+"' was not possible!");  
+    }
+    void OnMessage(uint8_t* ad, const uint8_t* message, size_t len) {
+      Serial.println("Client '"+simpleEspConnection.macToStr(ad)+"' has sent me '"+String((char *)message)+"'");
+    }
+    void OnPaired(uint8_t *ga, String ad) {
+      Serial.println("EspNowConnection : Client '"+ad+"' paired! ");
+      simpleEspConnection.endPairing();  
+    }
+    void OnConnected(uint8_t *ga, String ad) {
+      Serial.println("connected: "+ad);
+    }
+    void startEsp() {
+      simpleEspConnection.begin();
+    //  simpleEspConnection.setPairingBlinkPort(2);
+      simpleEspConnection.onMessage(this->OnMessage);  
+      simpleEspConnection.onPaired(this->OnPaired);  
+      simpleEspConnection.onSendError(this->OnSendError);  
+      simpleEspConnection.onConnected(this->OnConnected);  
+    }
+    
+    void espLoop() {
+      simpleEspConnection.loop();
+    }
+    // simpleEspConnection.startPairing(120);
+}
 
-// void OnMessage(uint8_t* ad, const uint8_t* message, size_t len)
-// {
-//   Serial.println("Client '"+simpleEspConnection.macToStr(ad)+"' has sent me '"+String((char *)message)+"'");
-// }
 
-// void OnPaired(uint8_t *ga, String ad)
-// {
-//   Serial.println("EspNowConnection : Client '"+ad+"' paired! ");
 
-//   simpleEspConnection.endPairing();  
-// }
 
-// void OnConnected(uint8_t *ga, String ad)
-// {
-//   if(newTimeout != "")
-//   {
-//     simpleEspConnection.sendMessage((char *)(String("timeout:"+newTimeout).c_str()), ad );
-//     newTimeout = "";
-//   }
-// }
 
-// void setup() 
-// {
-//   Serial.begin(9600);
-//   Serial.println();
-//    // clientAddress = "ECFABC0CE7A2"; // Test if you know the client
 
-//   simpleEspConnection.begin();
-// //  simpleEspConnection.setPairingBlinkPort(2);
-//   simpleEspConnection.onMessage(&OnMessage);  
-//   simpleEspConnection.onPaired(&OnPaired);  
-//   simpleEspConnection.onSendError(&OnSendError);  
-//   simpleEspConnection.onConnected(&OnConnected);  
-// }
 
-// void loop() 
-// {
-//   simpleEspConnection.loop();
+
+
+
   
-//   while (Serial.available()) 
-//   {
-//     char inChar = (char)Serial.read();
-//     if (inChar == '\n') 
-//     {
-//       Serial.println(inputString);
+  while (Serial.available()) 
+  {
+    char inChar = (char)Serial.read();
+    if (inChar == '\n') 
+    {
+      Serial.println(inputString);
 
-//       if(inputString == "startpair")
-//       {
-//         Serial.println("Pairing started...");
-//         simpleEspConnection.startPairing(120);
-//       }
-//       else if(inputString.substring(0,11) == "settimeout ")
-//       {
-//         Serial.println("Will set new timeout of client next time when the device goes up...");
-//         newTimeout = atoi(inputString.substring(11).c_str());
-//       }          
+      if(inputString == "startpair")
+      {
+        Serial.println("Pairing started...");
+        
+      }
+      else if(inputString.substring(0,11) == "settimeout ")
+      {
+        Serial.println("Will set new timeout of client next time when the device goes up...");
+        newTimeout = atoi(inputString.substring(11).c_str());
+      }          
             
-//       inputString = "";
-//     }
-//     else
-//     {
-//       inputString += inChar;
-//     }
-//   }  
-// }
+      inputString = "";
+    }
+  }  
+}
 
-// #endif
+#endif
