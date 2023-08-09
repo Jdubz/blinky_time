@@ -1,103 +1,63 @@
-// /*
-//   SensorServer
-  
-//   Basic EspNowConnection Server implementation for a sensor server (gateway)
-
-//   HOWTO Arduino IDE:
-//   - Prepare two ESP8266 or ESP32 based devices (eg. WeMos) or mix an ESP8266 and an ESP32 device
-//   - Start two separate instances of Arduino IDE and load 
-//     on the first one the 'SensorServer.ino' and
-//     on the second one the 'SensorClientDigitalInput.ino' sketch and upload 
-//     these to the two ESP devices.
-//   - Start the 'Serial Monitor' in both instances and set baud rate to 9600
-//   - Type 'startpair' into the edit box of the SensorServer. Hold the pairing button on the SensorClientDigitalInput device and reset the device
-//   - After server and client are paired, you can change the sleep time of the client in the server
-//     by typing 'settimeout <seconds>' into the serial terminal. 
-//     This will than be send next time when sensor is up.
-  
-//   - You can use multiple clients which can be connected to one server
-
-//   Created 11 Mai 2020
-//   By Erich O. Pintar
-//   Modified 06 Oct 2020
-//   By Erich O. Pintar
-
-//   https://github.com/saghonfly/SimpleEspNowConnection
-
-// */
-
 #ifndef Radio_h
 #define Radio_h
 
-#include "SimpleEspNowConnection.h"
+#include <ESP8266WiFi.h>
+#include <espnow.h>
 
-static SimpleEspNowConnection simpleEspConnection(SimpleEspNowRole::SERVER);
+// REPLACE WITH RECEIVER MAC Address
+uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
-class Server {
+// Structure example to send data
+// Must match the receiver structure
+typedef struct struct_message {
+  char event[32];
+  int timeStamp;
+  float micLvl;
+} struct_message;
+
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus) {
+  Serial.print("Last Packet Send Status: ");
+  if (sendStatus == 0){
+    Serial.println("Delivery success");
+  }
+  else{
+    Serial.println("Delivery fail");
+  }
+}
+
+class WifiServer {
   public:
-    Server() {}
-    void OnSendError(uint8_t* ad) {
-      Serial.println("Sending to '"+simpleEspConnection.macToStr(ad)+"' was not possible!");  
-    }
-    void OnSendError(uint8_t* ad) {
-      Serial.println("Sending to '"+simpleEspConnection.macToStr(ad)+"' was not possible!");  
-    }
-    void OnMessage(uint8_t* ad, const uint8_t* message, size_t len) {
-      Serial.println("Client '"+simpleEspConnection.macToStr(ad)+"' has sent me '"+String((char *)message)+"'");
-    }
-    void OnPaired(uint8_t *ga, String ad) {
-      Serial.println("EspNowConnection : Client '"+ad+"' paired! ");
-      simpleEspConnection.endPairing();  
-    }
-    void OnConnected(uint8_t *ga, String ad) {
-      Serial.println("connected: "+ad);
-    }
+    WifiServer() {}
     void startEsp() {
-      simpleEspConnection.begin();
-    //  simpleEspConnection.setPairingBlinkPort(2);
-      simpleEspConnection.onMessage(this->OnMessage);  
-      simpleEspConnection.onPaired(this->OnPaired);  
-      simpleEspConnection.onSendError(this->OnSendError);  
-      simpleEspConnection.onConnected(this->OnConnected);  
-    }
-    
-    void espLoop() {
-      simpleEspConnection.loop();
-    }
-    // simpleEspConnection.startPairing(120);
-}
+      WiFi.mode(WIFI_STA);
 
-
-
-
-
-
-
-
-
-
-  
-  while (Serial.available()) 
-  {
-    char inChar = (char)Serial.read();
-    if (inChar == '\n') 
-    {
-      Serial.println(inputString);
-
-      if(inputString == "startpair")
-      {
-        Serial.println("Pairing started...");
-        
+      if (esp_now_init() != 0) {
+        Serial.println("Error initializing ESP-NOW");
+        return;
       }
-      else if(inputString.substring(0,11) == "settimeout ")
-      {
-        Serial.println("Will set new timeout of client next time when the device goes up...");
-        newTimeout = atoi(inputString.substring(11).c_str());
-      }          
-            
-      inputString = "";
+  
+      Serial.println(WiFi.macAddress());
+
+      // Once ESPNow is successfully Init, we will register for Send CB to
+      // get the status of Trasnmitted packet
+      esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
+      esp_now_register_send_cb(OnDataSent);
+      
+      // Register peer
+      esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
     }
-  }  
-}
+
+    void send(float micLvl) {
+      strcpy(this->data.event, "update");
+      this->data.timeStamp = millis();
+      this->data.micLvl = micLvl;
+
+      // Send message via ESP-NOW
+      esp_now_send(broadcastAddress, (uint8_t *) &this->data, sizeof(this->data));
+    }
+
+    private:
+      struct_message data;
+};
 
 #endif

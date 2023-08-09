@@ -7,20 +7,16 @@ class KeepAlive {
       pin = pullPin;
       isLow = false;
       pinMode(pullPin, OUTPUT);
-    }
-    void start() {
-      digitalWrite(this->pin, LOW);
-      delay(100);
       digitalWrite(this->pin, HIGH);
+      lastPull = millis();
     }
-    void pullKey() {
-      int pingFreq = 10;
+    void pullKey(bool pull) {
       int now = millis();
-      int seconds = now/1000;
-      if (!(seconds % pingFreq) && !isLow) {
+      if (!isLow && pull) {
         digitalWrite(this->pin, LOW);
         this->isLow = true;
-      } else if ((seconds % pingFreq) && isLow) {
+        this->lastPull = now;
+      } else if (isLow && !pull && now - this->lastPull > 100) {
         digitalWrite(this->pin, HIGH);
         this->isLow = false;
       }
@@ -29,6 +25,7 @@ class KeepAlive {
     private:
       bool isLow;
       int pin;
+      int lastPull;
 };
 
 

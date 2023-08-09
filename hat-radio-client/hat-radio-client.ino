@@ -2,30 +2,20 @@
 
 #include "types.h"
 #include "radio.h"
-#include "button.h"
-#include "microphone.h"
-#include "keepalive.h"
 #include "sparks.h"
 #include "timer.h"
 #include "radio.h"
 
 #define LED_PIN     2
-#define BUTTON_PIN  16
-#define MIC_PIN     A0
 #define PULL_PIN    5
 
-#define NUM_LEDS    72
+#define NUM_LEDS    5
 
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_RGB + NEO_KHZ800);
 
-Button* button = new Button(BUTTON_PIN);
-Microphone* mic = new Microphone(MIC_PIN);
-// KeepAlive* keepAlive = new KeepAlive(PULL_PIN);
-WifiServer* wifiServer = new WifiServer();
+WifiClient* wifiClient = new WifiClient();
 
 Timer* renderTimer = new Timer(30);
-// Timer* pullTimer = new Timer(10000);
-
 Sparks* sparks = new Sparks(NUM_LEDS);
 
 color frame[NUM_LEDS];
@@ -72,31 +62,18 @@ void render() {
   clear();
 }
 
-void update() {
-  button->update();
-  mic->update();
-  // keepAlive->pullKey(!pullTimer->trigger());
-}
-
 void setup() {
   Serial.begin(115200);
   startup();
   initFrame();
-  wifiServer->startEsp();
+  wifiClient->startEsp();
 }
 
 void loop() {
-  update();  
-  if (button->wasShortPressed()) {
-    Serial.print("short press");
-    Serial.println();
-  }
 
   if (renderTimer->trigger()) {
-    float micLvl = mic->read();
-    mic->attenuate();
+    float micLvl = wifiClient->read();
     sparks->run(frame, micLvl);
     render();
-    wifiServer->send(micLvl);
   }
 }
