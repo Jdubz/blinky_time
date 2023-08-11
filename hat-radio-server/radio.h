@@ -47,8 +47,8 @@ class WifiServer {
       esp_now_add_peer(broadcastAddress, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
     }
 
-    void send(float micLvl) {
-      strcpy(this->data.event, "update");
+    void send(char event[], float micLvl) {
+      strcpy(this->data.event, event);
       this->data.timeStamp = millis();
       this->data.micLvl = micLvl;
 

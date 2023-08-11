@@ -70,7 +70,6 @@ void setup() {
 }
 
 void loop() {
-
   if (renderTimer->trigger()) {
     float micLvl = wifiClient->read();
     sparks->run(frame, micLvl);

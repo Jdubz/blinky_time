@@ -97,6 +97,6 @@ void loop() {
     mic->attenuate();
     sparks->run(frame, micLvl);
     render();
-    wifiServer->send(micLvl);
+    wifiServer->send("update", micLvl);
   }
 }
