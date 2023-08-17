@@ -7,19 +7,23 @@ class Sparks: public Chase {
       numSparks = numPixels;
     }
     void run(color frame[], float micLvl) {
+      int newSparks = 2 + 20 * micLvl;
+      for (int spark = 0; spark < newSparks; spark++) {
+        int center = random(this->numSparks);
+        frame[center].red += int(10 + 200 * micLvl);
+        frame[center].green += int(10 + 200 * micLvl);
+      }
+      
       for (int pixel = 0; pixel < this->numSparks; pixel++) {
-        float seed = float(random(100)) + (20.0 * micLvl);
-        if (seed > 80.0) {
-          float brightness = float(random(200)) * micLvl;
-          frame[pixel].green = int(brightness * (float(random(5)) * 0.2));
-          frame[pixel].red = int(brightness);
-        }
         frame[pixel].blue = 0;
-        if (frame[pixel].red >= 1) {
-          frame[pixel].red -= 1;
-        } else { frame[pixel].red = 0; }
-        if (frame[pixel].green >= 2) {
-          frame[pixel].green -= 2;
+        if (frame[pixel].green > frame[pixel].red) { frame[pixel].green = frame[pixel].red; }
+        if (frame[pixel].red > 255)  { frame[pixel].red = 255; }
+        if (frame[pixel].green > 255)  { frame[pixel].green = 255; }
+        if (frame[pixel].red > 10) {
+          frame[pixel].red -= 4;
+        }
+        if (frame[pixel].green > 10) {
+          frame[pixel].green -= 5;
         } else { frame[pixel].green = 0; }
       }
     }

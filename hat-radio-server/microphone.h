@@ -5,7 +5,7 @@ class Microphone {
   public:
     Microphone(int inputPin) {
       pin = inputPin;
-      max = 5.0;
+      max = 20.0;
     }
     void update() {
       int now = analogRead(this->pin);
@@ -23,7 +23,7 @@ class Microphone {
     }
     void attenuate() {
       float decay = 0.25;
-      if (this->max >= 5.0) {
+      if (this->max >= 20.0) {
         this->max -= decay;
       }
     }

@@ -9,9 +9,9 @@
 #define LED_PIN     2
 #define PULL_PIN    5
 
-#define NUM_LEDS    5
+#define NUM_LEDS    144
 
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_RGB + NEO_KHZ800);
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 WifiClient* wifiClient = new WifiClient();
 
