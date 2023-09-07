@@ -7,7 +7,7 @@ class Sparks: public Chase {
       numSparks = numPixels;
     }
     void run(color frame[], float micLvl) {
-      int newSparks = 1 + 10 * micLvl;
+      int newSparks = 1 + (this->numSparks/10) * micLvl;
       for (int spark = 0; spark < newSparks; spark++) {
         int center = random(this->numSparks);
         frame[center].red += int(10 + 200 * micLvl);

@@ -11,11 +11,11 @@
 #define PULL_PIN    5
 #define MIC_PIN     A0
 
-#define NUM_LEDS    72
+#define NUM_LEDS    55
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-WifiClient* wifiClient = new WifiClient();
+//WifiClient* wifiClient = new WifiClient();
 
 Microphone* mic = new Microphone(MIC_PIN);
 Timer* renderTimer = new Timer(30);

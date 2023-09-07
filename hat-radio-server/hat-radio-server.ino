@@ -7,7 +7,7 @@
 #include "keepalive.h"
 #include "sparks.h"
 #include "timer.h"
-#include "radio.h"
+//#include "radio.h"
 
 #define LED_PIN     2
 #define BUTTON_PIN  16
@@ -21,7 +21,7 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 Button* button = new Button(BUTTON_PIN);
 Microphone* mic = new Microphone(MIC_PIN);
 // KeepAlive* keepAlive = new KeepAlive(PULL_PIN);
-WifiServer* wifiServer = new WifiServer();
+//WifiServer* wifiServer = new WifiServer();
 
 Timer* renderTimer = new Timer(30);
 // Timer* pullTimer = new Timer(10000);
@@ -82,7 +82,7 @@ void setup() {
   Serial.begin(115200);
   startup();
   initFrame();
-  wifiServer->startEsp();
+//  wifiServer->startEsp();
 }
 
 void loop() {
@@ -97,6 +97,6 @@ void loop() {
     mic->attenuate();
     sparks->run(frame, micLvl);
     render();
-    wifiServer->send("update", micLvl);
+//    wifiServer->send("update", micLvl);
   }
 }
