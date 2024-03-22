@@ -1,17 +1,22 @@
 
 #include "chase.h"
 
+int fadeSpeed = 10;
+int sparkBase = 20;
+int newSparksBase = 10;
+
 class Sparks: public Chase {
   public:
     Sparks(int numPixels) {
       numSparks = numPixels;
     }
     void run(color frame[], float micLvl) {
-      int newSparks = 1 + (this->numSparks/10) * micLvl;
+      int newSparks = newSparksBase * micLvl;
       for (int spark = 0; spark < newSparks; spark++) {
         int center = random(this->numSparks);
-        frame[center].red += int(10 + 200 * micLvl);
-        frame[center].green += int(10 + 200 * micLvl);
+        int sparkSize = int(sparkBase + (255 - sparkBase) * micLvl);
+        frame[center].red += sparkSize;
+        frame[center].green += sparkSize;
       }
       
       for (int pixel = 0; pixel < this->numSparks; pixel++) {
@@ -19,11 +24,11 @@ class Sparks: public Chase {
         if (frame[pixel].green > frame[pixel].red) { frame[pixel].green = frame[pixel].red; }
         if (frame[pixel].red > 255)  { frame[pixel].red = 255; }
         if (frame[pixel].green > 255)  { frame[pixel].green = 255; }
-        if (frame[pixel].red > 10) {
-          frame[pixel].red -= 4;
-        }
-        if (frame[pixel].green > 10) {
-          frame[pixel].green -= 5;
+        if (frame[pixel].red >= fadeSpeed) {
+          frame[pixel].red -= fadeSpeed;
+        } else { frame[pixel].red = 0; }
+        if (frame[pixel].green > (fadeSpeed * 2)) {
+          frame[pixel].green -= (fadeSpeed * 2);
         } else { frame[pixel].green = 0; }
       }
     }
