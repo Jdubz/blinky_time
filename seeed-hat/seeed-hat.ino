@@ -5,13 +5,13 @@
 #include "sparks.h"
 #include "timer.h"
 
-#define LED_PIN     0
+#define LED_PIN     D0
 
 #define NUM_LEDS    144
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-Microphone* mic = new Microphone();
+Microphone* mic;
 Timer* renderTimer = new Timer(30);
 Sparks* sparks = new Sparks(NUM_LEDS);
 
@@ -28,6 +28,7 @@ void clear() {
   }
 }
 void startup() {
+  mic = new Microphone();
   strip.begin();
   for (int led = 0; led < NUM_LEDS; led++) {
     strip.setPixelColor(led, 0, 50, 0);
@@ -56,14 +57,13 @@ void render() {
   clear();
 }
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);
   startup();
   initFrame();
 }
 
 void loop() {
-  mic->update();
-    if (renderTimer->trigger()) {
+  if (renderTimer->trigger()) {
     float micLvl = mic->read();
     mic->attenuate();
     sparks->run(frame, micLvl);

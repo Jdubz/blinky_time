@@ -6,31 +6,43 @@
 // default PCM output frequency
 static const int frequency = 16000;
 
+short sampleBuffer[512];
+volatile int samplesRead;
+
+void onPDMdata() {
+  // Query the number of available bytes
+  int bytesAvailable = PDM.available();
+
+  // Read into the sample buffer
+  PDM.read(sampleBuffer, bytesAvailable);
+
+  // 16-bit, 2 bytes per sample
+  samplesRead = bytesAvailable / 2;
+}
+
 class Microphone {
   public:
     Microphone() {
       max = 20.0;
-      PDM.onReceive(this->onPDMdata);
+      PDM.onReceive(onPDMdata);
       if (!PDM.begin(1, frequency)) {
         Serial.println("Failed to start PDM!");
       }
     }
-    void update() {
-      int now = analogRead(this->pin);
-      if (now > this->high) {
-        this->high = now;
-      }
-      if (now > this->max) {
-        this->max = float(now);
-      }
-    }
     float read() {
-      if (this->samplesRead) {
-        // Print samples to the serial monitor or plotter
-        for (int i = 0; i < this->samplesRead; i++) {
-          Serial.println(this->sampleBuffer[i]);
+      if (samplesRead) {
+        int high = 0;
+        int low = 1024;
+        for (int i = 0; i < samplesRead; i++) {
+          int sample = abs(sampleBuffer[i]);
+          if (sample < low) {
+            low = sample;
+          }
+          if (sample > high) {
+            high = sample;
+          }
         }
-        // Clear the read count
+        Serial.println(high, low, high-low);
         samplesRead = 0;
       }
       int sample = this->high;
@@ -43,20 +55,8 @@ class Microphone {
         this->max -= decay;
       }
     }
-    void onPDMdata() {
-      // Query the number of available bytes
-      int bytesAvailable = PDM.available();
-    
-      // Read into the sample buffer
-      PDM.read(this->sampleBuffer, bytesAvailable);
-    
-      // 16-bit, 2 bytes per sample
-      this->samplesRead = bytesAvailable / 2;
-    }
 
   private:
-    short sampleBuffer[512];
-    volatile int samplesRead;
     int high;
     float max;
 
