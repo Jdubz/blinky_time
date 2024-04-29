@@ -49,9 +49,9 @@ void startup() {
   strip.show();
   delay(500);
 }
-void render() {
+void render(float micLvl) {
   for (int led = 0; led < NUM_LEDS; led++) {
-    strip.setPixelColor(led, frame[led].red, frame[led].green, frame[led].blue);
+    strip.setPixelColor(led, frame[led].red, int(float(frame[led].green) * micLvl), frame[led].blue);
   }
   strip.show();
   clear();
@@ -65,8 +65,9 @@ void setup() {
 void loop() {
   if (renderTimer->trigger()) {
     float micLvl = mic->read();
+    Serial.println(micLvl);
     mic->attenuate();
     sparks->run(frame, micLvl);
-    render();
+    render(micLvl);
   }
 }

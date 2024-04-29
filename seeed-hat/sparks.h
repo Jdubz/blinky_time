@@ -1,7 +1,7 @@
 
 #include "chase.h"
 
-int fadeSpeed = 10;
+int fadeSpeed = 7;
 int sparkBase = 20;
 int newSparksBase = 10;
 

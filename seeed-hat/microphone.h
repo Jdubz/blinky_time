@@ -23,41 +23,40 @@ void onPDMdata() {
 class Microphone {
   public:
     Microphone() {
-      max = 20.0;
+      max = 1000.0;
       PDM.onReceive(onPDMdata);
+      //default 20 max 80
+      //PDM.setGain(30);
       if (!PDM.begin(1, frequency)) {
         Serial.println("Failed to start PDM!");
       }
     }
     float read() {
       if (samplesRead) {
-        int high = 0;
-        int low = 1024;
+        float high = 0.0;
         for (int i = 0; i < samplesRead; i++) {
-          int sample = abs(sampleBuffer[i]);
-          if (sample < low) {
-            low = sample;
-          }
+          float sample = abs(sampleBuffer[i]);
           if (sample > high) {
             high = sample;
           }
         }
-        Serial.println(high, low, high-low);
+        
         samplesRead = 0;
+        if (high > this->max) {
+          this->max = high;
+        }
+        return float(high) / this->max;
       }
-      int sample = this->high;
-      this->high = 0;
-      return float(sample) / this->max;
+      return 0.0;
     }
     void attenuate() {
-      float decay = 0.25;
-      if (this->max >= 20.0) {
+      float decay = 5.0;
+      if (this->max >= 1000.0) {
         this->max -= decay;
       }
     }
 
   private:
-    int high;
     float max;
 
 };
