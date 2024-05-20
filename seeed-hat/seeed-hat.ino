@@ -2,7 +2,8 @@
 
 #include "types.h"
 #include "microphone.h"
-#include "sparks.h"
+// #include "sparks.h"
+#include "punch-sparks.h"
 #include "timer.h"
 
 #define LED_PIN     D0
@@ -13,7 +14,7 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 Microphone* mic;
 Timer* renderTimer = new Timer(30);
-Sparks* sparks = new Sparks(NUM_LEDS);
+PunchSparks* sparks = new PunchSparks(NUM_LEDS);
 
 color frame[NUM_LEDS];
 void initFrame() {

@@ -50,7 +50,7 @@ class Microphone {
       return 0.0;
     }
     void attenuate() {
-      float decay = 5.0;
+      float decay = 1.0;
       if (this->max >= 1000.0) {
         this->max -= decay;
       }
