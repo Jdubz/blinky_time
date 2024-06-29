@@ -1,40 +1,48 @@
 #include <Adafruit_NeoPixel.h>
 
-int LEDPIN = 6;
-int MICPIN = A0; // 0 - 600
-int BUTTONPIN = 4;
+#include "types.h"
+#include "microphone.h"
+#include "timer.h"
+#include "button.h"
+
+#define LED_PIN     D0
+#define BTN_PIN     D1
+#define FRAME_TIME_MS 30
+
 int NUMLEDS = 112;
 int X = 14;
 int Y = 8;
-int DELAYTIME = 30;
+
 int NUMMODES = 5;
 
 int mode = 3;
-int pressed = 0;
 
 int xPos = 0;
 int yPos = 0;
 int lvl2 = 0;
 int frame = 0;
 
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LEDPIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUMLEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-int bucketMap[14][8] = {
-  {0,27,28,55,56,83,84,111},
-  {1,26,29,54,57,82,85,110},
-  {2,25,30,53,58,81,86,109},
-  {3,24,31,52,59,80,87,108},
-  {4,23,32,51,60,79,88,107},
-  {5,22,33,50,61,78,89,106},
-  {6,21,34,49,62,77,90,105},
-  {7,20,35,48,63,76,91,104},
-  {8,19,36,47,64,75,92,103},
-  {9,18,37,46,65,74,93,102},
-  {10,17,38,45,66,73,94,101},
-  {11,16,39,44,67,72,95,100},
-  {12,15,40,43,68,71,96,99},
-  {13,14,41,42,69,70,97,98},
-};
+Microphone* mic;
+Button* button = new Button(BTN_PIN);
+Timer* renderTimer = new Timer(FRAME_TIME_MS);
+
+int bucketMap[14][8];
+void initBucketMap() {
+  int row = 7;
+  for (int i = 0; i < NUMLEDS; i++) {
+    int column = i % 14;
+    int flipColumn = column;
+    if (row % 2){
+      flipColumn = 13 - column;
+    }
+    bucketMap[flipColumn][row] = i;
+    if (column == 13) {
+      row--;
+    }
+  }
+}
 
 int fireMap[14][2];
 int stars[112];
@@ -44,50 +52,19 @@ int snakes[3][7][2] = {
   {{8,5},{8,5},{8,5},{8,5},{8,5},{8,5},{8,5}},
 };
 
-int threshhold = 100;
-float gain = 6.0;
 int lvl1;
 
-void audioTune() {
-  if (threshhold > 30) {
-    threshhold = threshhold - 1;
-  }
-  gain = 300.0 / threshhold;
-  lvl1 = analogRead(MICPIN);
-  if (lvl1 > threshhold) {
-    threshhold = lvl1;
-  }
-  lvl1 = lvl1 * gain; 
+void readAudio() {
+  float micLvl = mic->read();
+  Serial.println(micLvl);
+  mic->attenuate();
+  lvl1 = micLvl * 1000;
 }
 
 void render() {
-  strip.show();
-  delay(DELAYTIME);
   for (int led = 0; led < NUMLEDS; led++) {
     strip.setPixelColor(led, 0, 0, 0);
   }
-}
-
-void setup() {
-  pinMode(BUTTONPIN, INPUT);
-  Serial.begin(9600);
-  strip.begin();
-  strip.show();
-}
-
-void loop() {
-  render();
-  audioTune();
-
-  if (digitalRead(BUTTONPIN) == HIGH && pressed == 0) {
-    mode = (mode + 1) % NUMMODES;
-    pressed = 1;
-    frame = 0;
-    Serial.println(mode);
-  } else if (pressed == 1 && digitalRead(BUTTONPIN) == LOW) {
-    pressed = 0;
-  }
-  
   if (mode == 0) {
     int rate = 30;
     xPos = floor(frame/rate);
@@ -192,6 +169,28 @@ void loop() {
       }
     }
     frame = (frame + 1) % 3;
+  }
+  strip.show();
+}
+
+void setup() {
+  initBucketMap();
+  Serial.begin(9600);
+  strip.begin();
+  strip.show();
+}
+
+void loop() {
+  button->update();
+
+  if (button->wasShortPressed()) {
+    mode = (mode + 1) % NUMMODES;
+    frame = 0;
+  }
+
+  if (renderTimer->trigger()) {
+    readAudio();
+    render();
   }
 };
 
