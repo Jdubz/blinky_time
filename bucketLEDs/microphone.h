@@ -26,7 +26,7 @@ class Microphone {
       max = 1000.0;
       PDM.onReceive(onPDMdata);
       //default 20 max 80
-      //PDM.setGain(30);
+      PDM.setGain(60);
       if (!PDM.begin(1, frequency)) {
         Serial.println("Failed to start PDM!");
       }
@@ -46,8 +46,6 @@ class Microphone {
           this->max = high;
         }
         return float(high) / this->max;
-      } else {
-        Serial.println("no samples");
       }
       return 0.0;
     }

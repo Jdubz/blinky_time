@@ -175,6 +175,7 @@ void render() {
 
 void setup() {
   initBucketMap();
+  mic = new Microphone();
   Serial.begin(9600);
   strip.begin();
   strip.show();
@@ -193,4 +194,3 @@ void loop() {
     render();
   }
 };
-
