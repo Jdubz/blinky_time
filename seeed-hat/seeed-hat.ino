@@ -8,7 +8,7 @@
 
 #define LED_PIN     D0
 
-#define NUM_LEDS    144
+#define NUM_LEDS    141
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 

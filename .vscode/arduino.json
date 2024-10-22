@@ -1,6 +1,6 @@
 {
     "board": "Seeeduino:mbed:xiaonRF52840Sense",
     "programmer": "nrfjprog",
-    "port": "COM4",
-    "sketch": "bucketLEDs\\bucketLEDs.ino"
+    "port": "COM12",
+    "sketch": "seeed-hat\\seeed-hat.ino"
 }
