@@ -6,9 +6,9 @@
 #include "punch-sparks.h"
 #include "timer.h"
 
-#define LED_PIN     D0
+#define LED_PIN     D10
 
-#define NUM_LEDS    150
+#define NUM_LEDS    60
 
 Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
 
