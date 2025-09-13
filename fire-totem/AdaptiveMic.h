@@ -4,41 +4,31 @@
 
 class AdaptiveMic {
 public:
-    AdaptiveMic(uint8_t channels = 1, uint32_t sampleRate = 16000);
+  void  begin();
+  void  update();
 
-    void begin();
-    void update();
-    float getLevel() const;         // short-term mic level (0.0–1.0+)
-    float getNormalizedRMS() const; // RMS after gain
-    int   getHardwareGain() const;
+  // Levels (0..~1)
+  float getRMS();         // software-gain normalized, smoothed (envelope-applied)
+  float getPeak();        // raw peak (pre software gain)
+  float getEnvelope();    // transient envelope * software gain
 
-    void setTargetRMS(float target);
-    void setHardwareGainLimits(int minGain, int maxGain);
+  // For debugging/tuning
+  float getSoftwareGain();
+  int   getHardwareGain();
 
 private:
-    static void onPDMdataStatic();
-    void onPDMdata();
+  static void onPDMdata();
+  static volatile int16_t sampleBuffer[512];
+  static volatile int     sampleBufferSize;
 
-    static AdaptiveMic* instance;
+  // Level tracking
+  float rms       = 0.0f;   // envelope * swGain
+  float peak      = 0.0f;   // raw peak
+  float avgRMS    = 0.0f;   // short-term RMS smoother (for sw gain control)
+  float envelope  = 0.0f;   // transient envelope (attack/release)
 
-    // Mic data
-    static const int BUFFER_SIZE = 256;
-    volatile int16_t micBuffer[BUFFER_SIZE];
-    volatile int bufferIndex = 0;
-
-    // Gain control
-    float softGain = 1.0;
-    float targetRMS = 0.5;
-    float softGainSmoothing = 0.002;
-    int hwGain = 127;
-    int hwGainMin = 10;
-    int hwGainMax = 250;
-
-    // Long-term stats
-    float rmsAccumulator = 0;
-    unsigned long sampleCount = 0;
-    unsigned long lastGainAdjust = 0;
-
-    // Results
-    float micLevel = 0;
+  // Gains
+  float swGain          = 1.0f;  // software gain (fast)
+  unsigned long lastHW  = 0;
+  int   hwGain          = 20;    // hardware gain (slow, PDM)
 };

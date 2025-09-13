@@ -1,85 +1,76 @@
 #include "AdaptiveMic.h"
 
-AdaptiveMic* AdaptiveMic::instance = nullptr;
-
-AdaptiveMic::AdaptiveMic(uint8_t channels, uint32_t sampleRate) {
-    instance = this;
-    PDM.begin(channels, sampleRate);
-    PDM.onReceive(onPDMdataStatic);
-    PDM.setGain(hwGain);
-}
+volatile int16_t AdaptiveMic::sampleBuffer[512];
+volatile int     AdaptiveMic::sampleBufferSize = 0;
 
 void AdaptiveMic::begin() {
-    // Already initialized in constructor, but could add error checking here
-}
-
-void AdaptiveMic::onPDMdataStatic() {
-    if (instance) instance->onPDMdata();
-}
-
-void AdaptiveMic::onPDMdata() {
-    int bytesAvailable = PDM.available();
-    PDM.read((int16_t *)&micBuffer[bufferIndex], bytesAvailable);
-    bufferIndex += bytesAvailable / 2;
-    if (bufferIndex >= BUFFER_SIZE) bufferIndex = 0;
+  PDM.onReceive(AdaptiveMic::onPDMdata);
+  PDM.setBufferSize(512);
+  PDM.setGain(hwGain);
+  PDM.begin(1, 16000); // mono, 16 kHz
 }
 
 void AdaptiveMic::update() {
-    // Calculate RMS
-    float sumSq = 0;
-    for (int i = 0; i < BUFFER_SIZE; i++) {
-        float s = micBuffer[i] / 32768.0;
-        sumSq += s * s;
-    }
-    float rms = sqrt(sumSq / BUFFER_SIZE);
+  if (sampleBufferSize == 0) return;
 
-    // Accumulate for hardware gain adjustment
-    rmsAccumulator += rms;
-    sampleCount++;
+  // Copy & reset buffer atomically
+  noInterrupts();
+  int size = sampleBufferSize;
+  sampleBufferSize = 0;
+  interrupts();
 
-    // Short-term software AGC
-    float adjRMS = rms * softGain;
-    float gainError = targetRMS - adjRMS;
-    softGain += gainError * softGainSmoothing;
-    softGain = constrain(softGain, 0.1, 10.0);
+  // Compute raw RMS & peak
+  long sumSq = 0;
+  int16_t maxS = 0;
+  for (int i = 0; i < size; i++) {
+    int16_t s = sampleBuffer[i];
+    if (abs(s) > maxS) maxS = abs(s);
+    sumSq += (long)s * (long)s;
+  }
 
-    micLevel = constrain(adjRMS * 3.0, 0.05, 3.0);
+  float rawRMS = (size > 0) ? sqrt((float)sumSq / (float)size) / 32768.0f : 0.0f;
+  peak = (float)maxS / 32768.0f;
 
-    // Slow hardware gain adjustment every ~1s
-    if (millis() - lastGainAdjust > 1000) {
-        float avgRMS = rmsAccumulator / (float)sampleCount;
-        rmsAccumulator = 0;
-        sampleCount = 0;
-        lastGainAdjust = millis();
+  // ---------- Software gain control (fast) ----------
+  // Track short-term RMS (LPF ~0.5s)
+  avgRMS = avgRMS * 0.95f + rawRMS * 0.05f;
 
-        if (avgRMS < 0.05 && hwGain < hwGainMax) {
-            hwGain += 8;
-            PDM.setGain(hwGain);
-        }
-        else if (avgRMS > 0.9 && hwGain > hwGainMin) {
-            hwGain -= 8;
-            PDM.setGain(hwGain);
-        }
-    }
+  // Aim for target average around ~0.3
+  if (avgRMS > 0.0005f) {
+    const float target = 0.30f;
+    float desired = target / avgRMS;
+    swGain = swGain * 0.95f + desired * 0.05f; // smooth adjustment
+  }
+  // ---------- Transient envelope (attack/release) ----------
+  // Quick “attack,” slower “release” for punchy hits
+  const float attack  = 0.60f;
+  const float release = 0.06f;
+  if (rawRMS > envelope)
+    envelope = attack * rawRMS  + (1.0f - attack)  * envelope;
+  else
+    envelope = release * rawRMS + (1.0f - release) * envelope;
+
+  // Final “RMS” that FireEffect uses = envelope * software gain
+  rms = envelope * swGain;
+
+  // ---------- Hardware gain control (slow ~60s) ----------
+  if (millis() - lastHW > 60000) {
+    if (peak < 0.05f && hwGain < 80)  hwGain += 2; // too quiet → boost a bit
+    if (peak > 0.95f && hwGain > 10)  hwGain -= 2; // too hot → reduce a bit
+    PDM.setGain(hwGain);
+    lastHW = millis();
+  }
 }
 
-float AdaptiveMic::getLevel() const {
-    return micLevel;
-}
+float AdaptiveMic::getRMS()         { return rms; }
+float AdaptiveMic::getPeak()        { return peak; }
+float AdaptiveMic::getEnvelope()    { return envelope * swGain; }
 
-float AdaptiveMic::getNormalizedRMS() const {
-    return micLevel / 3.0;
-}
+float AdaptiveMic::getSoftwareGain(){ return swGain; }
+int   AdaptiveMic::getHardwareGain(){ return hwGain; }
 
-int AdaptiveMic::getHardwareGain() const {
-    return hwGain;
-}
-
-void AdaptiveMic::setTargetRMS(float target) {
-    targetRMS = target;
-}
-
-void AdaptiveMic::setHardwareGainLimits(int minGain, int maxGain) {
-    hwGainMin = minGain;
-    hwGainMax = maxGain;
+void AdaptiveMic::onPDMdata() {
+  int bytes = PDM.available();
+  PDM.read((void*)sampleBuffer, bytes);
+  sampleBufferSize = bytes / 2; // 16-bit samples
 }

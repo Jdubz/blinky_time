@@ -1,37 +1,65 @@
 #include <Wire.h>
-#include <LSM6DS3.h>
+#include <LSM6DS3.h>              // Seeed IMU driver
 #include <Adafruit_NeoPixel.h>
 #include "AdaptiveMic.h"
 #include "FireEffect.h"
-#include "SimplexNoise.h"
 
-#define WIDTH 16
-#define HEIGHT 8
-#define LED_PIN D0
+// ---------------------- CONFIG ----------------------
+#define WIDTH      16
+#define HEIGHT     8
+#define LED_PIN    D0             // <-- change if needed
+#define NUMPIXELS  (WIDTH * HEIGHT)
+// ---------------------------------------------------
 
-Adafruit_NeoPixel strip(WIDTH*HEIGHT, LED_PIN, NEO_GRB+NEO_KHZ800);
-
+Adafruit_NeoPixel strip(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 AdaptiveMic mic;
-FireEffect fire(WIDTH, HEIGHT, strip);
+FireEffect fire(&strip, WIDTH, HEIGHT);
 
+// XIAO nRF52840 Sense IMU on I2C (default address 0x6A)
 LSM6DS3 imu(I2C_MODE, 0x6A);
 
 void setup() {
   Serial.begin(115200);
-  if (imu.begin()!=0) { Serial.println("IMU init failed!"); while(1); }
+  strip.begin();
+  strip.show();
+
+  // Mic
   mic.begin();
-  fire.begin();
+
+  // IMU
+  if (imu.begin() != 0) {
+    Serial.println("Failed to initialize IMU!");
+    while (1);
+  }
+
+  // Optional: small startup delay for stability
+  delay(50);
 }
 
 void loop() {
   mic.update();
-  float micLevel = mic.getLevel();
-  float micRMS   = mic.getNormalizedRMS();
 
+  // Read acceleration (g)
   float ax = imu.readFloatAccelX();
+  float ay = imu.readFloatAccelY();
+  // float az = imu.readFloatAccelZ(); // not needed here
 
-  fire.update(micLevel, micRMS, ax);
+  // Use transient envelope for punch, RMS for baseline “heat”
+  float musicEnvelope = mic.getEnvelope(); // fast, transient-reactive
+  float musicRMS      = mic.getRMS();      // normalized baseline (software gain applied)
+
+  fire.update(musicEnvelope, musicRMS, ax, ay);
   fire.render();
 
-  delay(30);
+  // Optional debug (uncomment to tune)
+  /*
+  static uint32_t t0 = 0;
+  if (millis() - t0 > 500) {
+    Serial.print("RMS: "); Serial.print(musicRMS, 3);
+    Serial.print("  Env: "); Serial.print(musicEnvelope, 3);
+    Serial.print("  HW Gain: "); Serial.print(mic.getHardwareGain());
+    Serial.print("  SW Gain: "); Serial.println(mic.getSoftwareGain(), 2);
+    t0 = millis();
+  }
+  */
 }
