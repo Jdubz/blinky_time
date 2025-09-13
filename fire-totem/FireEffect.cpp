@@ -12,9 +12,10 @@ void FireEffect::begin() {
 }
 
 int FireEffect::XY(int x, int y) {
+    // Wrap around in X
     x = (x + WIDTH) % WIDTH;
-    if (y % 2 == 0) return y * WIDTH + x;
-    return y * WIDTH + (WIDTH - 1 - x);
+    // Linear layout: row-major, no flipping
+    return y * WIDTH + x;
 }
 
 uint32_t FireEffect::heatColor(uint8_t temperature, float intensity) {
