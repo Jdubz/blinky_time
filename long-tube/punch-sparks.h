@@ -1,9 +1,7 @@
 
 #include "chase.h"
 
-int fadeSpeed = 7;
-int sparkBase = 20;
-int newSparksBase = 10;
+int fadeSpeed = 10;
 
 class PunchSparks: public Chase {
   public:
@@ -11,7 +9,8 @@ class PunchSparks: public Chase {
       numSparks = numPixels;
     }
     void run(color frame[], float micLvl) {
-      int newSparks = 2 + newSparksBase * micLvl;
+      int sparkBase = 20;
+      int newSparks = (this->numSparks / 20) + ((this->numSparks / 6) * micLvl);
       for (int spark = 0; spark < newSparks; spark++) {
         int center = random(this->numSparks);
         int sparkSize = int(sparkBase + (255 - sparkBase) * micLvl);
