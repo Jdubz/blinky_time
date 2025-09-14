@@ -1,31 +1,27 @@
 #pragma once
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
-#include "SimplexNoise.h"
 
 class FireEffect {
 public:
-  FireEffect(Adafruit_NeoPixel* strip, int width, int height);
+    FireEffect(Adafruit_NeoPixel* strip, int width, int height);
 
-  // micEnv: fast envelope (transients); micRMS: baseline loudness
-  // ax, ay: accelerometer (g). Cylinder upright; Δax drives horizontal slosh; Δay flares height.
-  void update(float micEnv, float micRMS, float ax, float ay);
-  void render();
+    // Call every frame: level from mic (0..1), ax/ay from accelerometer
+    void update(float level, float ax, float ay);
+
+    // Draw the current heat buffer to the LEDs
+    void render();
 
 private:
-  Adafruit_NeoPixel* strip;
-  int width, height;
+    Adafruit_NeoPixel* strip;
+    int width, height;
 
-  // Heat buffer (0..255). Size supports up to 32x32; your matrix is 16x8.
-  float heat[32][32];
+    // Heat buffer (max 32x32 so it fits your 16x8)
+    uint8_t heat[32][32];
 
-  // Motion state
-  float lastAx = 0.0f, lastAy = 0.0f;
-  float vx = 0.0f;            // horizontal velocity (for momentum)
-  float lastIntensity = 0.4f; // color temperature bias
+    // Map (x,y) to physical LED index on your top-wired matrix
+    int XY(int x, int y);
 
-  SimplexNoise noiseGen;
-
-  int  XY(int x, int y);                    // linear, top-wired, vertical flip
-  uint32_t heatToColor(float t, float bias); // bias warms/cools flame with music intensity
+    // Map a heat value (0..255) to a fire color
+    uint32_t heatToColor(uint8_t t);
 };
