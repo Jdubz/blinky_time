@@ -1,6 +1,5 @@
 #pragma once
 #include <stdint.h>
-#include "AdaptiveMic.h"  // for AdaptiveMic::BassMode
 
 namespace Defaults {
   // ---- Monitoring / UI ----
@@ -23,16 +22,6 @@ namespace Defaults {
   constexpr int8_t  CoolingAudioBias    = -50;   // negative => taller flames on loud parts
   constexpr uint8_t BottomRowsForSparks = 1;
 
-  // ---- Fluid / swirl defaults ----
-  constexpr bool   FluidEnabled       = true;   // master switch
-  constexpr float  Buoyancy        = 16.0f;   // up to ~8 cells/sec²
-  constexpr float  Viscosity       = 0.10f;
-  constexpr float  HeatDiffusion   = 0.08f;
-  constexpr float  SwirlAmp        = 1.2f;   // cells/sec
-  constexpr float  SwirlAudioGain  = 1.0f;
-  constexpr float  SwirlScaleCells = 6.0f;   // curl size ~5 cells
-  constexpr float  UpdraftBase     = 5.0f;
-
   // (optional) Ranges you show in help strings
   namespace Ranges {
     constexpr float NoiseGateMin = 0.0f, NoiseGateMax = 0.5f;
@@ -43,7 +32,5 @@ namespace Defaults {
 
     constexpr uint8_t CoolingMin = 0, CoolingMax = 255;
     constexpr float   SparkChanceMin = 0.0f, SparkChanceMax = 1.0f;
-    constexpr float   BassFreqMin = 30.0f, BassFreqMax = 400.0f;
-    constexpr float   BassQMin    = 0.3f, BassQMax    = 5.0f;
   }
 }
