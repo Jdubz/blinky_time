@@ -3,7 +3,7 @@
 
 namespace Defaults {
   // ---- Monitoring / UI ----
-  constexpr bool VuTopRowEnabled = false;  // off by default
+  constexpr bool VuTopRowEnabled = true;  // off by default
 
   // ---- Audio mapping (used by fire-totem + SerialConsole) ----
   constexpr float NoiseGate   = 0.06f;
@@ -13,13 +13,13 @@ namespace Defaults {
   constexpr float ReleaseTau  = 0.30f;   // seconds
 
   // ---- Fire engine params (used by FireEffect + SerialConsole) ----
-  constexpr uint8_t BaseCooling         = 200;
-  constexpr uint8_t SparkHeatMin        = 50;
+  constexpr uint8_t BaseCooling         = 150;
+  constexpr uint8_t SparkHeatMin        = 40;
   constexpr uint8_t SparkHeatMax        = 200;
-  constexpr float   SparkChance         = 0.05f;
-  constexpr float   AudioSparkBoost     = 0.5f;
-  constexpr uint8_t AudioHeatBoostMax   = 150;
-  constexpr int8_t  CoolingAudioBias    = -50;   // negative => taller flames on loud parts
+  constexpr float   SparkChance         = 0.25f;
+  constexpr float   AudioSparkBoost     = 0.3f;
+  constexpr uint8_t AudioHeatBoostMax   = 60;
+  constexpr int8_t  CoolingAudioBias    = -20;   // negative => taller flames on loud parts
   constexpr uint8_t BottomRowsForSparks = 1;
 
   // (optional) Ranges you show in help strings

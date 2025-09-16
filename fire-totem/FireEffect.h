@@ -58,7 +58,7 @@ private:
     void injectSparks(float energy);
 
     // palette
-    uint32_t heatToColor(float h) const;
+    uint32_t heatToColorRGB(float h) const;
 };
 
 #endif

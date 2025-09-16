@@ -7,7 +7,7 @@
 #define HEIGHT 8
 #define LED_PIN D10
 
-Adafruit_NeoPixel leds(WIDTH * HEIGHT, LED_PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel leds(WIDTH * HEIGHT, LED_PIN, NEO_RGB + NEO_KHZ800);
 
 FireEffect fire(leds, WIDTH, HEIGHT);
 AdaptiveMic mic;

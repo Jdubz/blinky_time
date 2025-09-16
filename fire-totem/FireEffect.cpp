@@ -91,15 +91,45 @@ void FireEffect::injectSparks(float energy) {
     }
 }
 
-uint32_t FireEffect::heatToColor(float h) const {
-    // map heat 0..1 to red-yellow-white
-    h = constrain(h, 0.0f, 1.0f);
-    uint8_t r = (uint8_t)(h * 255.0f);
-    uint8_t g = (uint8_t)min(h * 512.0f, 255.0f);
-    uint8_t b = (uint8_t)min(h * 128.0f, 255.0f);
-    return leds.Color(r,g,b);
-}
+uint32_t FireEffect::heatToColorRGB(float h) const {
+    // Doom-style palette using heat in [0,1]:
+    //  0.00–0.33 : black -> red
+    //  0.33–0.85 : red   -> yellow (green ramps in)
+    //  0.85–1.00 : yellow-> white  (blue ramps in near the very top)
 
+    // Clamp input
+    if (h < 0.0f) h = 0.0f;
+    if (h > 1.0f) h = 1.0f;
+
+    const float redEnd    = 0.33f;
+    const float yellowEnd = 0.85f;  // push white to the very top so you don't get strobing
+
+    uint8_t r, g, b;
+
+    if (h <= redEnd) {
+        // black -> red
+        float t = h / redEnd;                      // 0..1
+        r = (uint8_t)(t * 255.0f + 0.5f);
+        g = 0;
+        b = 0;
+    } else if (h <= yellowEnd) {
+        // red -> yellow (green ramps in, blue stays 0)
+        float t = (h - redEnd) / (yellowEnd - redEnd); // 0..1
+        r = 255;
+        g = (uint8_t)(t * 255.0f + 0.5f);
+        b = 0;
+    } else {
+        // yellow -> white (blue ramps in only near the very top)
+        float t = (h - yellowEnd) / (1.0f - yellowEnd); // 0..1
+        r = 255;
+        g = 255;
+        b = (uint8_t)(t * 255.0f + 0.5f);
+        // Optional: soften white caps if you still see harsh flashes
+        // b = (uint8_t)min(220, (int)(t * 255.0f + 0.5f));
+    }
+
+    return leds.Color(g, r, b);
+}
 // Note: LED matrix is 16x8 around a cylinder; your physical mapping may differ.
 // Here we assume x grows left→right, y grows top→bottom.
 // If your strip is wired row-major starting at top-left, this is correct.
@@ -111,17 +141,14 @@ uint16_t FireEffect::xyToIndex(int x, int y) const {
 }
 
 void FireEffect::render() {
-    // Render the grid to LEDs.
-    // IMPORTANT: Our propagation used y=0 as the "source" row.
-    // For visual correctness (fire rises upward), we flip vertically in render,
-    // so the brightest new sparks appear at the bottom of the cylinder.
-    for (int y = 0; y < HEIGHT; ++y) {
-        int visY = HEIGHT - 1 - y; // flip so y=0 (source) shows at bottom
-        for (int x = 0; x < WIDTH; ++x) {
-            uint32_t c = heatToColor(Hc(x, y));
-            leds.setPixelColor(xyToIndex(x, visY), c);
-        }
-    }
+  for (int y = 0; y < HEIGHT; ++y) {
+      int visY = HEIGHT - 1 - y; // if you flip vertically
+      for (int x = 0; x < WIDTH; ++x) {
+          float h = Hc(x, y);                 // 0..1 float heat
+          if (h < 0.0f) h = 0.0f; if (h > 1.0f) h = 1.0f;
+          leds.setPixelColor(xyToIndex(x, visY), heatToColorRGB(h));
+      }
+  }
 }
 
 void FireEffect::show() {
