@@ -1,6 +1,6 @@
 {
     "board": "Seeeduino:mbed:xiaonRF52840Sense",
     "programmer": "nrfjprog",
-    "port": "COM12",
-    "sketch": "seeed-hat\\seeed-hat.ino"
+    "port": "COM24",
+    "sketch": "fire-totem\\fire-totem.ino"
 }
