@@ -17,7 +17,7 @@ FireEffect::FireEffect(Adafruit_NeoPixel* s, const FireParams& def): strip(s), p
 }
 
 void FireEffect::restoreDefaults() {
-  // Caller should have copied Defaults into p before calling.
+  // Caller copies Defaults into p externally.
 }
 
 void FireEffect::update(float energy, float dx, float dy) {
@@ -42,15 +42,18 @@ void FireEffect::update(float energy, float dx, float dy) {
   diffuse();
 
   // 5) Cooling
-  cool(energy);
+  cool(energy, dt);
 }
 
 void FireEffect::addSparks(float energy) {
   const float chance = p.sparkChance + (p.audioSparkBoost * energy);
+  const uint8_t rows = (p.bottomRowsForSparks == 0) ? 1 : p.bottomRowsForSparks;
   for (int x = 0; x < p.width; ++x) {
     float r = (float)rand() / (float)RAND_MAX;
     if (r < chance) {
-      const int y = p.height - 1;
+      // pick a y within the bottom N rows
+      int y = p.height - 1 - (rand() % rows);
+      if (y < 0) y = 0;
       const int i = idx(x, y);
       float add = p.sparkHeatMin + ((float)rand() / (float)RAND_MAX) * (p.sparkHeatMax - p.sparkHeatMin);
       add += energy * p.audioHeatBoostMax;
@@ -168,14 +171,19 @@ void FireEffect::diffuse() {
   memcpy(heat, tmpHeat, W * H);
 }
 
-void FireEffect::cool(float energy) {
+void FireEffect::cool(float energy, float dt) {
+  // cooling scales with dt; louder audio reduces cooling via negative bias
+  float cooling = p.baseCooling + p.coolingAudioBias * energy; // e.g. 200 + (-60)*energy
+  if (cooling < 0.0f) cooling = 0.0f;
+
+  // Convert to a reasonable “heat units this frame” and add per-pixel randomness.
+  int maxSub = (int)(cooling * dt) + 1;   // at 200 * 0.016 -> 3 + 1 => 4
+  if (maxSub < 1) maxSub = 1;
   const int N = p.width * p.height;
-  const float bias = p.coolingAudioBias * energy; // negative => less cooling when loud
+
   for (int i = 0; i < N; ++i) {
-    int c = (int)p.baseCooling + (int)bias;
-    c -= rand() % (int)(p.baseCooling * 0.5f + 1.0f);
-    if (c < 0) c = 0;
-    int h = (int)heat[i] - (c / 255);
+    int sub = rand() % maxSub;            // 0..(maxSub-1)
+    int h = (int)heat[i] - sub;
     if (h < 0) h = 0;
     heat[i] = (uint8_t)h;
   }

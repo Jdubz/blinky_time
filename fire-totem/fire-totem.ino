@@ -12,11 +12,14 @@ Adafruit_NeoPixel strip(Defaults::Width * Defaults::Height, LED_PIN, NEO_GRB + N
 // ===== Modules =====
 AdaptiveMic   mic;
 IMUHelper     imu;
-SerialConsole console;
+FireParams    fp;
 
-// Fire effect
-FireParams   fp;
-FireEffect*  fire = nullptr;
+// Audio params block expected by SerialConsole
+AudioParams   audio;
+
+// Serial console expects specific constructor signature
+FireEffect*   fire = nullptr;
+SerialConsole* consolePtr = nullptr;
 
 void setup() {
   Serial.begin(115200);
@@ -24,7 +27,7 @@ void setup() {
   strip.setBrightness(Defaults::StripBrightness);
   strip.show();
 
-  // Load defaults into fp (unchanged from your current code)
+  // Load defaults (Fire)
   fp.width            = Defaults::Width;
   fp.height           = Defaults::Height;
   fp.fluidEnabled     = Defaults::FluidEnabled;
@@ -42,38 +45,41 @@ void setup() {
   fp.sparkHeatMax     = Defaults::SparkHeatMax;
   fp.audioHeatBoostMax= Defaults::AudioHeatBoostMax;
   fp.audioSparkBoost  = Defaults::AudioSparkBoost;
+  fp.bottomRowsForSparks = Defaults::BottomRowsForSparks;
   fp.vuTopRowEnabled  = Defaults::VuTopRowEnabled; // OFF by default
   fp.brightnessCap    = Defaults::BrightnessCap;   // 75% cap
 
   fire = new FireEffect(&strip, fp);
 
-  // ✅ AdaptiveMic has no-arg begin()
-  mic.begin();
+  // Audio defaults for SerialConsole / mic
+  audio.noiseGate   = Defaults::NoiseGate;
+  audio.globalGain  = Defaults::GlobalGain;
+  audio.gamma       = Defaults::Gamma;
+  audio.attackTau   = Defaults::AttackTau;
+  audio.releaseTau  = Defaults::ReleaseTau;
 
+  // Initialize mic & imu according to your existing APIs
+  mic.begin();      // your AdaptiveMic has no-arg begin()
   imu.begin();
-  console.begin(&fp);
+
+  // SerialConsole: SerialConsole(FireEffect* fire, AudioParams* audio, uint8_t maxRows, AdaptiveMic* mic);
+  consolePtr = new SerialConsole(fire, &audio, (uint8_t)fp.height, &mic);
+  consolePtr->begin();  // no args per your header
 }
 
 void loop() {
-  // ✅ Use your AdaptiveMic getter (choose the one your class exposes)
-  // If your class doesn't have getLevel(), try envelope(), value(), or levelNormalized().
+  // Audio energy from your mic API (replace with your actual getter if different)
   float energy = 0.0f;
-  // Example assuming getLevel() exists and returns 0..1
-  energy = mic.getLevel();
+  energy = mic.getLevel(); // common name in your repo; adjust if needed
 
-  // ✅ IMUHelper has no available(); just try to read accel and fall back to zeros
-  float ax = 0, ay = 0, az = 0;
-  if (!imu.getAccel(ax, ay, az)) {
-    ax = ay = az = 0;
-  }
+  // IMU tilt (accelerometer). If read fails, zeros.
+  float ax=0, ay=0, az=0;
+  if (!imu.getAccel(ax, ay, az)) { ax = ay = az = 0; }
 
-  // Pass accel X/Y as tilt inputs; FireEffect inverts to push opposite gravity
-  float dx = ax;
-  float dy = ay;
-
-  fire->update(energy, dx, dy);
+  // Pass tilt; FireEffect inverts to push opposite gravity
+  fire->update(energy, ax, ay);
   fire->render();
 
-  console.tick();
+  // No console.tick() — your console header doesn't define it
   delay(16); // ~60 fps
 }

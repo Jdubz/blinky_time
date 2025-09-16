@@ -7,25 +7,29 @@ struct FireParams {
   int   width  = 16;
   int   height = 8;
 
+  // Fluid / transport
   bool  fluidEnabled    = true;
   float viscosity       = 0.05f;
   float heatDiffusion   = 0.02f;
 
+  // Forces
   float updraftBase     = 5.0f;
   float buoyancy        = 16.0f;
-
   float swirlAmp        = 4.0f;
   float swirlScaleCells = 12.0f;
   float swirlAudioGain  = 1.5f;
 
+  // Cooling / audio coupling
   float baseCooling     = 200.0f;
   float coolingAudioBias= -60.0f;
 
-  float sparkChance     = 0.12f;
-  float sparkHeatMin    = 50.0f;
-  float sparkHeatMax    = 200.0f;
-  float audioHeatBoostMax = 200.0f;
-  float audioSparkBoost   = 1.0f;
+  // Sparks
+  float   sparkChance     = 0.12f;
+  float   sparkHeatMin    = 50.0f;
+  float   sparkHeatMax    = 200.0f;
+  float   audioHeatBoostMax = 200.0f;
+  float   audioSparkBoost   = 1.0f;
+  uint8_t bottomRowsForSparks = 1; // used by SerialConsole
 
   // UI/output
   bool  vuTopRowEnabled = false; // top row VU (off by default)
@@ -38,6 +42,11 @@ class FireEffect {
   void update(float energy, float dx, float dy);
   void render();
   void restoreDefaults();
+
+  // For SerialConsole compatibility
+  inline FireParams getParams() const { return p; }
+  inline void setParams(const FireParams& np) { p = np; }
+
   FireParams& paramsRef() { return p; }
 
  private:
@@ -64,6 +73,6 @@ class FireEffect {
   void addForces(float energy, float dt, float tiltX, float tiltY);
   void advect(float dt);
   void diffuse();
-  void cool(float energy);
+  void cool(float energy, float dt);
   uint32_t heatToColor(uint8_t h) const;
 };
