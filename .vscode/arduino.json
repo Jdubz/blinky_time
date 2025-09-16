@@ -1,7 +1,7 @@
 {
     "board": "Seeeduino:mbed:xiaonRF52840Sense",
     "programmer": "nrfjprog",
-    "port": "COM12",
+    "port": "COM24",
     "sketch": "fire-totem\\fire-totem.ino",
     "output": "arduinotemp"
 }

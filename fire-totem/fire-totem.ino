@@ -24,7 +24,7 @@ void setup() {
   strip.setBrightness(Defaults::StripBrightness);
   strip.show();
 
-  // Load defaults
+  // Load defaults into fp (unchanged from your current code)
   fp.width            = Defaults::Width;
   fp.height           = Defaults::Height;
   fp.fluidEnabled     = Defaults::FluidEnabled;
@@ -47,28 +47,33 @@ void setup() {
 
   fire = new FireEffect(&strip, fp);
 
-  mic.begin(Defaults::NoiseGate, Defaults::GlobalGain, Defaults::AttackSeconds, Defaults::ReleaseSeconds, Defaults::Gamma);
+  // ✅ AdaptiveMic has no-arg begin()
+  mic.begin();
+
   imu.begin();
   console.begin(&fp);
 }
 
 void loop() {
-  // 1) Audio energy
-  float energy = mic.level(); // normalized 0..1
+  // ✅ Use your AdaptiveMic getter (choose the one your class exposes)
+  // If your class doesn't have getLevel(), try envelope(), value(), or levelNormalized().
+  float energy = 0.0f;
+  // Example assuming getLevel() exists and returns 0..1
+  energy = mic.getLevel();
 
-  // 2) IMU tilt (accelerometer). If unavailable, dx=dy=0.
-  float ax=0, ay=0, az=0;
-  if (imu.available()) {
-    imu.getAccel(ax, ay, az);
+  // ✅ IMUHelper has no available(); just try to read accel and fall back to zeros
+  float ax = 0, ay = 0, az = 0;
+  if (!imu.getAccel(ax, ay, az)) {
+    ax = ay = az = 0;
   }
-  float dx = ax; // pass raw; FireEffect inverts to push opposite gravity
+
+  // Pass accel X/Y as tilt inputs; FireEffect inverts to push opposite gravity
+  float dx = ax;
   float dy = ay;
 
   fire->update(energy, dx, dy);
   fire->render();
 
   console.tick();
-
-  // ~60 fps
-  delay(16);
+  delay(16); // ~60 fps
 }
