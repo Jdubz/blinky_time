@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <PDM.h>
+#include "TotemDefaults.h"
 
 class AdaptiveMic {
 public:

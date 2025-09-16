@@ -2,11 +2,12 @@
 #define SERIAL_CONSOLE_H
 
 #include <Arduino.h>
+#include <Adafruit_NeoPixel.h>
 #include "FireEffect.h"
 
 class SerialConsole {
 public:
-    SerialConsole(FireEffect &fire);
+    SerialConsole(FireEffect &fire, Adafruit_NeoPixel &leds);
 
     void begin();
     void update();
@@ -19,6 +20,7 @@ public:
 
 private:
     FireEffect &fire;
+    Adafruit_NeoPixel &leds;   // hold a reference, no more extern
 };
 
 #endif
