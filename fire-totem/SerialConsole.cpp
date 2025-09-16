@@ -42,12 +42,6 @@ void SerialConsole::restoreDefaults() {
   p.vuTopRowEnabled = Defaults::VuTopRowEnabled;
   
   fire->setParams(p);
-
-  // Bass filter defaults
-  if (mic) mic->setBassFilter(Defaults::BassEnabledDefault,
-                               Defaults::BassFc,
-                               Defaults::BassQ,
-                               Defaults::BassModeDefault);
 }
 
 void SerialConsole::printHelp() {
@@ -69,10 +63,6 @@ void SerialConsole::printHelp() {
   Serial.println(F("  set coolbias <i>             -> cooling audio bias (-127..127)"));
   Serial.println(F("  set sparkrows <i>            -> bottom rows for sparks (1..max)"));
   Serial.println(F("  set vu on|off                -> show/hide top-row VU meter"));
-  Serial.println(F("  set bass on|off              -> enable/disable bass filter"));
-  Serial.println(F("  set bassfreq <Hz>            -> center/cutoff (30..400)"));
-  Serial.println(F("  set bassq <Q>                -> Q factor (0.3..5.0)"));
-  Serial.println(F("  set basstype lp|bp           -> low-pass or band-pass"));
   Serial.println(F("  set fluid on|off             -> enable/disable fluid advection"));
   Serial.println(F("  set buoy <f>                 -> buoyancy (cells/s^2 per heat)"));
   Serial.println(F("  set visc <f>                 -> velocity viscosity 0..1"));
@@ -85,8 +75,6 @@ void SerialConsole::printHelp() {
 
 void SerialConsole::printAll() {
   FireParams p = fire->getParams();
-  bool bOn; float bFc, bQ; AdaptiveMic::BassMode bMode;
-  if (mic) mic->getBassFilter(bOn, bFc, bQ, bMode); else { bOn=false; bFc=0; bQ=0; bMode=AdaptiveMic::BASS_BANDPASS; }
 
   Serial.print(F("[AUDIO] gate="));   Serial.print(audio->noiseGate, 3);
   Serial.print(F(" gamma="));         Serial.print(audio->gamma, 3);
@@ -97,13 +85,6 @@ void SerialConsole::printAll() {
 
   Serial.print(F("[VU] topRow="));
   Serial.println(p.vuTopRowEnabled ? F("on") : F("off"));
-  
-  Serial.print(F("[BASS ] enabled=")); Serial.print(bOn ? F("on") : F("off"));
-  Serial.print(F(" mode="));          Serial.print(bMode == AdaptiveMic::BASS_LOWPASS ? F("lp") : F("bp"));
-  Serial.print(F(" fc="));            Serial.print(bFc, 1);
-  Serial.print(F(" Q="));             Serial.print(bQ, 2);
-  Serial.print(F(" fs="));            Serial.print(mic ? mic->getSampleRate() : 0, 0);
-  Serial.println();
 
   Serial.print(F("[FIRE ] cooling="));    Serial.print(p.baseCooling);
   Serial.print(F(" spark(min..max)="));   Serial.print(p.sparkHeatMin); Serial.print(".."); Serial.print(p.sparkHeatMax);
@@ -201,39 +182,6 @@ void SerialConsole::handleCommand(const char* line) {
     else if (!strcmp(key, "updraft")) {
       if (!val) { Serial.println(F("ERR")); return; }
       p.updraftBase = (float)atof(val);
-    }
-
-    // ---- Bass keys ----
-    else if (!strcmp(key, "bass")) {
-      if (!val) { Serial.println(F("ERR: set bass on|off")); return; }
-      if (!mic) { Serial.println(F("ERR: mic null")); return; }
-      if (!strcmp(val, "on"))       mic->setBassFilter(true);
-      else if (!strcmp(val, "off")) mic->setBassFilter(false);
-      else { Serial.println(F("ERR: set bass on|off")); return; }
-    }
-    else if (!strcmp(key, "bassfreq")) {
-      if (!val || !mic) { Serial.println(F("ERR")); return; }
-      float hz = constrain((float)atof(val), Defaults::Ranges::BassFreqMin, Defaults::Ranges::BassFreqMax);
-      bool bOn; float bFc, bQ; AdaptiveMic::BassMode bMode;
-      mic->getBassFilter(bOn, bFc, bQ, bMode);
-      mic->setBassFilter(bOn, hz, bQ, bMode);
-    }
-    else if (!strcmp(key, "bassq")) {
-      if (!val || !mic) { Serial.println(F("ERR")); return; }
-      float q = constrain((float)atof(val), Defaults::Ranges::BassQMin, Defaults::Ranges::BassQMax);
-      bool bOn; float bFc, bQ; AdaptiveMic::BassMode bMode;
-      mic->getBassFilter(bOn, bFc, bQ, bMode);
-      mic->setBassFilter(bOn, bFc, q, bMode);
-    }
-    else if (!strcmp(key, "basstype")) {
-      if (!val || !mic) { Serial.println(F("ERR")); return; }
-      AdaptiveMic::BassMode m;
-      if (!strcmp(val, "lp")) m = AdaptiveMic::BASS_LOWPASS;
-      else if (!strcmp(val, "bp")) m = AdaptiveMic::BASS_BANDPASS;
-      else { Serial.println(F("ERR: basstype lp|bp")); return; }
-      bool bOn; float bFc, bQ; AdaptiveMic::BassMode bMode;
-      mic->getBassFilter(bOn, bFc, bQ, bMode);
-      mic->setBassFilter(bOn, bFc, bQ, m);
     }
 
     else { Serial.println(F("ERR: unknown key (type 'help')")); return; }

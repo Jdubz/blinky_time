@@ -33,12 +33,6 @@ namespace Defaults {
   constexpr float  SwirlScaleCells = 6.0f;   // curl size ~5 cells
   constexpr float  UpdraftBase     = 5.0f;
 
-  // ---- Bass filter defaults (used by SerialConsole -> AdaptiveMic) ----
-  constexpr bool     BassEnabledDefault = true;
-  constexpr float    BassFc             = 120.0f; // Hz
-  constexpr float    BassQ              = 0.8f;
-  constexpr AdaptiveMic::BassMode BassModeDefault = AdaptiveMic::BASS_BANDPASS;
-
   // (optional) Ranges you show in help strings
   namespace Ranges {
     constexpr float NoiseGateMin = 0.0f, NoiseGateMax = 0.5f;
