@@ -2,5 +2,6 @@
     "board": "Seeeduino:mbed:xiaonRF52840Sense",
     "programmer": "nrfjprog",
     "port": "COM12",
-    "sketch": "seeed-hat\\seeed-hat.ino"
+    "sketch": "fire-totem\\fire-totem.ino",
+    "output": "arduinotemp"
 }
