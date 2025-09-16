@@ -1,96 +1,116 @@
 #include "FireEffect.h"
+#include "TotemDefaults.h"
+#include <Arduino.h>
+#include <stdlib.h>
+#include <string.h>
 
-// ---- Constructor ----
 FireEffect::FireEffect(Adafruit_NeoPixel* strip, int width, int height)
-: strip(strip), width(width), height(height) {
-  heat = (uint8_t*)malloc((size_t)width * height);
-  if (heat) {
-    // Start cool (no preheat) for deterministic boot
-    memset(heat, 0, (size_t)width * height);
-  }
+: strip(strip), width(width), height(height), heat(nullptr) {
+  size_t n = (size_t)width * (size_t)height;
+  heat = (uint8_t*)malloc(n);
+  if (heat) memset(heat, 0, n);
+
+  // Pull defaults from a single place
+  params.baseCooling         = Defaults::BaseCooling;
+  params.sparkHeatMin        = Defaults::SparkHeatMin;
+  params.sparkHeatMax        = Defaults::SparkHeatMax;
+  params.sparkChance         = Defaults::SparkChance;
+  params.audioSparkBoost     = Defaults::AudioSparkBoost;
+  params.audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
+  params.coolingAudioBias    = Defaults::CoolingAudioBias;
+  params.bottomRowsForSparks = Defaults::BottomRowsForSparks;
 }
 
-// ---- Doom-style update (restored, tuned for 8-high) ----
+
+void FireEffect::setParams(const FireParams& p) { params = p; }
+FireParams FireEffect::getParams() const { return params; }
+
 void FireEffect::update(float level, float dx, float dy) {
   (void)dx; (void)dy;
-  // Keep parameter for API, but ensure fire still lives at silence
-  if (level < 0.0f) level = 0.0f;
-  if (level > 1.0f) level = 1.0f;
 
-  const float base = 0.20f;                      // baseline activity
-  const float intensity = base + level * (1.0f - base);
+  if (!isfinite(level)) level = 0.0f;
+  level = constrain(level, 0.0f, 1.0f);
 
-  // 1) Inject fuel along the *bottom* row (y = height-1)
+  // Cooling (lower value => taller flames). Audio bias reduces cooling on loud parts.
+  const int cooling = max(0, (int)params.baseCooling + (int)(params.coolingAudioBias * level));
+
+  // Per-cell cooling
   for (int x = 0; x < width; x++) {
-    // 60% chance of fuel → more dark gaps
-    if (random(0, 100) < 60) {
-      uint8_t fuel = (uint8_t)(random(50, 180) * intensity);
-      heat[idx(x, height - 1)] = fuel;
-    } else {
-      heat[idx(x, height - 1)] = 0;
+    for (int y = 0; y < height; y++) {
+      uint16_t i = idx(x,y);
+      uint8_t h  = heat[i];
+      if (h) {
+        uint8_t cool = random(0, cooling + 1);
+        heat[i] = (h > cool) ? (h - cool) : 0;
+      }
     }
   }
 
-  // 2) Propagate upward with cooling (classic Doom)
-  //    y = 0 is the TOP; we pull from row below (y+1) so flames rise
-  const int minCool = 30; // stronger cooling keeps height low
-  const int maxCool = 70;
+  // Rise/diffuse upward with X-wrap sampling of three cells below
+  for (int x = 0; x < width; x++) {
+    for (int y = 0; y < height - 1; y++) {
+      int xL = (x == 0) ? (width - 1) : (x - 1);
+      int xR = (x == width - 1) ? 0 : (x + 1);
+      uint16_t below      = idx(x,   y+1);
+      uint16_t belowLeft  = idx(xL,  y+1);
+      uint16_t belowRight = idx(xR,  y+1);
+      uint8_t avg = (uint8_t)(((int)heat[below] + (int)heat[belowLeft] + (int)heat[belowRight]) / 3);
+      uint8_t decay = random(0, 8); // flicker as it rises
+      int val = (int)avg - (int)decay;
+      if (val < 0) val = 0;
+      heat[idx(x,y)] = (uint8_t)val;
+    }
+  }
 
-  for (int y = 0; y < height - 1; y++) {
-    for (int x = 0; x < width; x++) {
-      // Horizontal drift: sample from one of the three below pixels
-      int srcX = (x + random(-1, 2) + width) % width; // wrap in X
-      uint8_t below = heat[idx(srcX, y + 1)];
+  // Bottom sparks driven by audio
+  const float    chance  = params.sparkChance + (params.audioSparkBoost * level);
+  const uint8_t  addHeat = (uint8_t)min<int>(params.audioHeatBoostMax, (int)(params.audioHeatBoostMax * level));
+  const int      bottomStart = max(0, height - (int)params.bottomRowsForSparks);
 
-      int cooled = (int)below - random(minCool, maxCool);
-      if (cooled < 0) cooled = 0;
-
-      heat[idx(x, y)] = (uint8_t)cooled;
+  for (int x = 0; x < width; x++) {
+    if (random(1000) < (int)(chance * 1000.0f)) {
+      for (int y = bottomStart; y < height; y++) {
+        uint8_t base = random(params.sparkHeatMin, (int)params.sparkHeatMax + 1);
+        int v = (int)base + (int)addHeat;
+        if (v > 255) v = 255;
+        uint16_t i = idx(x,y);
+        if (v > heat[i]) heat[i] = (uint8_t)v;
+      }
     }
   }
 }
 
-// ---- Render with 50% brightness cap ----
 void FireEffect::render() {
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      uint8_t h = heat[idx(x, y)];
-      strip->setPixelColor(idx(x, y), heatToColor(h));
-    }
+  const int n = width * height;
+  for (int i = 0; i < n; i++) {
+    strip->setPixelColor(i, heatToColor(heat[i]));
   }
   strip->show();
 }
 
-// Simple red→yellow palette (no blue), capped at 50% brightness
+// Palette: black -> red -> orange -> yellow -> white (blue-ish tip), 50% cap
 uint32_t FireEffect::heatToColor(uint8_t h) const {
-  // Map heat (0..255) to (r,g,b) in a warm palette
-  // Split into three bands for a fire-like gradient
-  uint16_t r=0, g=0, b=0;
-
-  if (h <= 80) {                  // dark → dim red
-    r = h * 3;                    // up to ~240
-    g = h >> 2;                   // subtle ember glow
-  } else if (h <= 170) {          // red → orange/yellow
-    r = 240 + (h - 80);           // up to ~255
-    g = (h - 80) * 2;             // up to ~180
-  } else {                        // bright yellow tip
+  uint8_t r=0,g=0,b=0;
+  if (h <= 85) {
+    r = h * 3;
+  } else if (h <= 170) {
     r = 255;
-    g = 180 + (h - 170) * 3 / 2;  // up to ~255
+    g = (h - 85) * 3;
+  } else {
+    r = 255; g = 255;
+    b = (h - 170) * 3 / 2;
   }
-  if (g > 255) g = 255;
-
-  // Hard cap overall brightness to ~50%
-  r >>= 1; g >>= 1; b >>= 1;      // divide by 2
-
-  return strip->Color((uint8_t)r, (uint8_t)g, (uint8_t)b);
+  // global 50% brightness cap (Stable V1 rule)
+  r >>= 1; g >>= 1; b >>= 1;
+  return strip->Color(r, g, b);
 }
 
-// ---- Debug helpers ----
+// ---- Telemetry helpers (definitions MUST match header) ----
 float FireEffect::getAverageHeat() const {
   uint32_t sum = 0;
   const int n = width * height;
   for (int i = 0; i < n; i++) sum += heat[i];
-  return (float)sum / (float)n;   // 0..255 range
+  return (float)sum / (float)n; // 0..255
 }
 
 int FireEffect::getActiveCount(uint8_t thresh) const {

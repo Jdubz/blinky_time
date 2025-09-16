@@ -2,6 +2,8 @@
 #include "AdaptiveMic.h"
 #include "IMUHelper.h"
 #include "FireEffect.h"
+#include "SerialConsole.h"
+#include <math.h>
 
 #define WIDTH       16
 #define HEIGHT       8
@@ -9,67 +11,80 @@
 #define NUMPIXELS  (WIDTH * HEIGHT)
 
 Adafruit_NeoPixel strip(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
-FireEffect fire(&strip, WIDTH, HEIGHT);
+FireEffect  fire(&strip, WIDTH, HEIGHT);
 AdaptiveMic mic;
-IMUHelper imu;
+IMUHelper   imu;
+
+// Shared audio params used by loop() and tuned via SerialConsole
+AudioParams audio;
+
+// Serial console (handles commands + 5s prints)
+SerialConsole console(&fire, &audio, HEIGHT, &mic);
+
+// State for envelope & telemetry
+static float s_audioEnv = 0.0f;
+static unsigned long s_lastMicros   = 0;
+static unsigned long s_lastTelemMs  = 0;
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial && millis() < 3000) {}
-
-  Serial.println("Booting...");
+  delay(50);
 
   strip.begin();
-  strip.setBrightness(40);
-  strip.fill(strip.Color(255,0,0));
-  strip.show();
-  delay(1000);
-  strip.clear();
+  strip.setBrightness(255); // per-pixel cap enforced in FireEffect
   strip.show();
 
   mic.begin();
   imu.begin();
+
+  console.begin(); // sets defaults and prints initial values
+
+  s_lastMicros = micros();
+  Serial.println(F("fire-totem: audio-reactive fire + serial console"));
 }
 
 void loop() {
-  // --- Mic ---
+  console.update();  // handle serial & 5s print
+
+  // ---- Mic / audio envelope ----
   mic.update();
-  float level = mic.getLevel();
-  float env = mic.getEnvelope();
-  float gain = mic.getGain();
 
-  // --- IMU ---
-  float ax = 0, ay = 0, az = 0;
-  if (imu.isReady()) {
-    imu.getAccel(ax, ay, az);
-  }
+  unsigned long now = micros();
+  float dt = (now - s_lastMicros) / 1e6f;
+  if (dt <= 0 || dt > 1.0f) dt = 1.0f;
+  s_lastMicros = now;
 
-  // --- Fire update ---
-  unsigned long frameStart = micros();
-  fire.update(level, ax, ay); // passing ax/ay as directional bias
+  float lvl = mic.getLevel();
+  if (!isfinite(lvl)) lvl = 0.0f;
+  lvl = constrain(lvl, 0.0f, 1.0f);
+
+  float aAttack  = 1.0f - expf(-dt / audio.attackTau);
+  float aRelease = 1.0f - expf(-dt / audio.releaseTau);
+  float alpha    = (lvl > s_audioEnv) ? aAttack : aRelease;
+  s_audioEnv    += alpha * (lvl - s_audioEnv);
+
+  float gated = s_audioEnv - audio.noiseGate;
+  if (gated < 0) gated = 0;
+  float norm  = (audio.noiseGate < 0.999f) ? (gated / (1.0f - audio.noiseGate)) : 0.0f;
+  norm = constrain(norm, 0.0f, 1.0f);
+
+  float energy = powf(norm, audio.gamma) * audio.globalGain;
+  energy = constrain(energy, 0.0f, 1.0f);
+
+  fire.update(energy, 0.0f, 0.0f);
   fire.render();
-  unsigned long frameTime = micros() - frameStart;
 
-  float avgHeat = fire.getAverageHeat();
-  int activePixels = fire.getActiveCount();
+  // ---- Telemetry (10 Hz) ----
+//  if (millis() - s_lastTelemMs > 100) {
+//    Serial.print(F("lvl="));     Serial.print(lvl, 3);
+//    Serial.print(F(" env="));    Serial.print(s_audioEnv, 3);
+//    Serial.print(F(" energy=")); Serial.print(energy, 3);
+//    Serial.print(F(" gain="));   Serial.print(mic.getGain());
+//    Serial.print(F(" avgHeat="));Serial.print(fire.getAverageHeat(), 1);
+//    Serial.print(F(" active=")); Serial.print(fire.getActiveCount(10));
+//    Serial.println();
+//    s_lastTelemMs = millis();
+//  }
 
-  // --- Console output ---
-  static unsigned long lastPrint = 0;
-  if (millis() - lastPrint > 500) {
-    Serial.print("lvl=");   Serial.print(level, 3);
-    Serial.print(" env=");  Serial.print(env, 4);
-    Serial.print(" gain="); Serial.print(gain, 1);
-
-    Serial.print("  ax=");  Serial.print(ax, 3);
-    Serial.print(" ay=");   Serial.print(ay, 3);
-    Serial.print(" az=");   Serial.print(az, 3);
-
-    Serial.print("  frame="); Serial.print(frameTime);
-    Serial.print("us avgHeat="); Serial.print(avgHeat, 3);
-    Serial.print(" active="); Serial.println(activePixels);
-
-    lastPrint = millis();
-  }
-
-  delay(30);
+  delay(16); // ~60 FPS
 }
