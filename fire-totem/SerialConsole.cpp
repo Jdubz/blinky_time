@@ -15,7 +15,7 @@ void SerialConsole::begin() {
 
 void SerialConsole::update() {
     if (Serial.available()) {
-        static char buf[64];
+        static char buf[96];
         size_t len = Serial.readBytesUntil('\n', buf, sizeof(buf) - 1);
         buf[len] = '\0';
         handleCommand(buf);
@@ -25,12 +25,12 @@ void SerialConsole::update() {
 void SerialConsole::handleCommand(const char *cmd) {
     if (strcmp(cmd, "help") == 0) {
         Serial.println(F("Commands: show, defaults"));
-        Serial.println(F(" Fire params: set cooling X, set sparkchance X, "
-                         "set sparkheatmin X, set sparkheatmax X, "
-                         "set audiosparkboost X, set audioheatboost X, "
-                         "set coolingaudiobias X, set bottomrows X"));
-        Serial.println(F(" Mic params: set gate X, set gamma X, set gain X, "
-                         "set attack X, set release X"));
+        Serial.println(F(" Fire: set cooling <0-255>, set sparkchance <0-1>, "
+                         "set sparkheatmin <0-255>, set sparkheatmax <0-255>, "
+                         "set audiosparkboost <0-1>, set audioheatboost <0-255>, "
+                         "set coolingaudiobias <-128..127>, set bottomrows <1-8>"));
+        Serial.println(F(" Mic : set gate <0-1>, set gamma <0.1-3>, set gain <0-5>, "
+                         "set attack <s>, set release <s>"));
         Serial.println(F(" vu on/off"));
     }
     else if (strcmp(cmd, "show") == 0) {
@@ -39,7 +39,7 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (strcmp(cmd, "defaults") == 0) {
         restoreDefaults();
     }
-    // --- Fire parameters ---
+    // Fire parameters
     else if (sscanf(cmd, "set cooling %hhu", &fire.params.baseCooling) == 1) {}
     else if (sscanf(cmd, "set sparkchance %f", &fire.params.sparkChance) == 1) {}
     else if (sscanf(cmd, "set sparkheatmin %hhu", &fire.params.sparkHeatMin) == 1) {}
@@ -48,13 +48,13 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (sscanf(cmd, "set audioheatboost %hhu", &fire.params.audioHeatBoostMax) == 1) {}
     else if (sscanf(cmd, "set coolingaudiobias %hhd", &fire.params.coolingAudioBias) == 1) {}
     else if (sscanf(cmd, "set bottomrows %hhu", &fire.params.bottomRowsForSparks) == 1) {}
-    // --- AdaptiveMic parameters ---
+    // Mic parameters
     else if (sscanf(cmd, "set gate %f", &mic.noiseGate) == 1) {}
     else if (sscanf(cmd, "set gamma %f", &mic.gamma) == 1) {}
     else if (sscanf(cmd, "set gain %f", &mic.globalGain) == 1) {}
     else if (sscanf(cmd, "set attack %f", &mic.attackTau) == 1) {}
     else if (sscanf(cmd, "set release %f", &mic.releaseTau) == 1) {}
-    // --- VU meter ---
+    // VU
     else if (strcmp(cmd, "vu on") == 0) {
         fire.params.vuTopRowEnabled = true;
     }
@@ -104,8 +104,9 @@ void SerialConsole::drawTopRowVU() {
     int lit = (int)(level * 16.0f + 0.5f);
     if (lit > 16) lit = 16;
 
-    for (int x = 0; x < 16; x++) {
+    int y = 0; // top row visually
+    for (int x = 0; x < 16; ++x) {
         uint32_t color = (x < lit) ? leds.Color(255, 0, 0) : 0;
-        leds.setPixelColor(x, 0, color);
+        leds.setPixelColor(fire.xyToIndex(x, y), color);
     }
 }

@@ -11,15 +11,21 @@ public:
     bool begin();
     static void onPDMdata();
 
-    void update();
-    float getLevel() const;
+    void update(float dt);
+    float getLevel() const;   // 0..1 after gate/gamma/gain & AR env
 
-    // Debug helpers
-    int getGain() const { return currentGain; }
-    float getEnv() const { return env; }
+    int   getGain() const { return currentGain; }
+    float getEnv()  const { return env; }
     float getEnvMean() const { return envMean; }
-    float getEnvMin() const { return minEnv; }
-    float getEnvMax() const { return maxEnv; }
+    float getEnvMin()  const { return minEnv; }
+    float getEnvMax()  const { return maxEnv; }
+
+    // Tunables (now accessible to SerialConsole)
+    float noiseGate  = Defaults::NoiseGate;
+    float gamma      = Defaults::Gamma;
+    float globalGain = Defaults::GlobalGain;
+    float attackTau  = Defaults::AttackTau;
+    float releaseTau = Defaults::ReleaseTau;
 
 private:
     static constexpr int sampleBufferSize = 512;
@@ -28,8 +34,10 @@ private:
 
     static int currentGain;
 
-    float env;
-    float envMean;
+    // envelope tracking
+    float env;       // fast absolute-average (raw)
+    float envAR;     // attack/release envelope used for output
+    float envMean;   // long-term average
     float minEnv;
     float maxEnv;
 
