@@ -30,6 +30,9 @@ struct FireParams {
   float   audioHeatBoostMax = 200.0f;
   float   audioSparkBoost   = 1.0f;
   uint8_t bottomRowsForSparks = 1; // bottom N rows can spawn sparks
+  float radiativeCooling = 90.0f;
+  float topCoolingBoost  = 2.5f;
+  float velDamping       = 0.985f;
 
   // UI/output
   bool  vuTopRowEnabled = false; // top row VU (off by default)

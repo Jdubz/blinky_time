@@ -56,22 +56,26 @@ namespace Defaults {
 
   // --- Fire sim defaults (retro tuned) ---
   constexpr bool  FluidEnabled       = true;
-  constexpr float Viscosity          = 0.05f;   // lower = more lively
-  constexpr float HeatDiffusion      = 0.02f;   // lower = crisper
-  constexpr float UpdraftBase        = 5.0f;
-  constexpr float Buoyancy           = 16.0f;
+  constexpr float Viscosity          = 0.08f;   // lower = more lively
+  constexpr float HeatDiffusion      = 0.03f;   // lower = crisper
+  constexpr float UpdraftBase        = 6.5f;
+  constexpr float Buoyancy           = 12.0f;
   constexpr float SwirlAmp           = 4.0f;
   constexpr float SwirlScaleCells    = 12.0f;   // larger = a single visible twist
   constexpr float SwirlAudioGain     = 1.5f;    // more swirl on loud audio
-  constexpr float BaseCooling        = 200.0f;
-  constexpr float CoolingAudioBias   = -60.0f;  // louder => less cooling => taller flame
-  constexpr float SparkChance        = 0.12f;   // frequent base flicker
-  constexpr float SparkHeatMin       = 50.0f;
-  constexpr float SparkHeatMax       = 200.0f;
+  constexpr float BaseCooling        = 2800.0f;
+  constexpr float CoolingAudioBias   = -80.0f;  // louder => less cooling => taller flame
+  constexpr float SparkChance        = 0.06f;   // frequent base flicker
+  constexpr float SparkHeatMin       = 35.0f;
+  constexpr float SparkHeatMax       = 110.0f;
   constexpr float AudioHeatBoostMax  = 200.0f;  // allow hot pops
-  constexpr float AudioSparkBoost    = 1.00f;
+  constexpr float AudioSparkBoost    = 0.60f;
   constexpr uint8_t BottomRowsForSparks = 1;    // how many bottom rows can spawn sparks
 
+  constexpr float RadiativeCooling = 90.0f;  // extra cooling at high heat (units/sec)
+  constexpr float TopCoolingBoost  = 2.5f;   // top rows cool faster (acts like exhaust)
+  constexpr float VelocityDamping  = 0.985f; // per-frame damping target @60fps (~0.985^1)
+  
   // Output
   constexpr float BrightnessCap      = 0.75f;   // 75% cap per request
   constexpr bool  VuTopRowEnabled    = false;   // OFF by default per request

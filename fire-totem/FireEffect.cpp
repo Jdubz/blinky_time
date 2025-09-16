@@ -21,33 +21,30 @@ void FireEffect::restoreDefaults() {
 }
 
 void FireEffect::update(float energy, float dx, float dy) {
-  // dt
   unsigned long now = millis();
   float dt = (now - lastMs) * 0.001f;
   if (dt < 0) dt = 0;
-  if (dt > 0.05f) dt = 0.05f; // prevent big jumps
+  if (dt > 0.05f) dt = 0.05f;
   lastMs = now;
+
+  // keep for VU draw, but clamp for simulation
   lastEnergy = energy;
+  float e = energy;
+  if (e < 0.0f) e = 0.0f;
+  if (e > 0.80f) e = 0.80f;
 
-  // 1) New sparks
-  addSparks(energy);
-
-  // 2) Forces: swirl + buoyancy + updraft + IMU tilt
-  addForces(energy, dt, dx, dy);
-
-  // 3) Move heat
+  addSparks(e);
+  addForces(e, dt, dx, dy);
   advect(dt);
-
-  // 4) Light diffusion
   diffuse();
-
-  // 5) Cooling
-  cool(energy, dt);
+  cool(e, dt);
 }
 
 void FireEffect::addSparks(float energy) {
+  // spawn probability per column, audio-boosted but controlled
   const float chance = p.sparkChance + (p.audioSparkBoost * energy);
   const uint8_t rows = (p.bottomRowsForSparks == 0) ? 1 : p.bottomRowsForSparks;
+
   for (int x = 0; x < p.width; ++x) {
     float r = (float)rand() / (float)RAND_MAX;
     if (r < chance) {
@@ -55,14 +52,19 @@ void FireEffect::addSparks(float energy) {
       int y = p.height - 1 - (rand() % rows);
       if (y < 0) y = 0;
       const int i = idx(x, y);
+
+      // fuel: smaller, capped; still audio-reactive
       float add = p.sparkHeatMin + ((float)rand() / (float)RAND_MAX) * (p.sparkHeatMax - p.sparkHeatMin);
       add += energy * p.audioHeatBoostMax;
+      if (add > 140.0f) add = 140.0f;    // cap injection
+
       int h = (int)heat[i] + (int)add;
-      if (h > 255) h = 255;
+      if (h > 240) h = 240;              // avoid constant bright yellow/white
       heat[i] = (uint8_t)h;
-      // initial nudge
-      vx[i] += 0.3f * sinf((float)x * 0.7f);
-      vy[i] -= 0.6f;
+
+      // gentler initial nudge so it doesn’t rocket upward
+      vx[i] += 0.2f * sinf((float)x * 0.7f);
+      vy[i] -= 0.45f;
     }
   }
 }
@@ -113,6 +115,18 @@ void FireEffect::addForces(float energy, float dt, float tiltX, float tiltY) {
         const int D = idx(x, y + 1);
         vx[i] = vx[i] * (1.0f - p.viscosity) + 0.25f * p.viscosity * (vx[L] + vx[R] + vx[U] + vx[D]);
         vy[i] = vy[i] * (1.0f - p.viscosity) + 0.25f * p.viscosity * (vy[L] + vy[R] + vy[U] + vy[D]);
+      }
+    }
+  }
+
+  if (p.velDamping > 0.0f && p.velDamping < 1.0f) {
+    float d = powf(p.velDamping, dt * 60.0f); // normalize to ~60fps
+    const int W = p.width, H = p.height;
+    for (int y = 0; y < H; ++y) {
+      for (int x = 0; x < W; ++x) {
+        int i = idx(x, y);
+        vx[i] *= d;
+        vy[i] *= d;
       }
     }
   }
@@ -172,20 +186,28 @@ void FireEffect::diffuse() {
 }
 
 void FireEffect::cool(float energy, float dt) {
-  // cooling scales with dt; louder audio reduces cooling via negative bias
-  float cooling = p.baseCooling + p.coolingAudioBias * energy; // e.g. 200 + (-60)*energy
+  float cooling = p.baseCooling + p.coolingAudioBias * energy;
   if (cooling < 0.0f) cooling = 0.0f;
 
-  // Convert to a reasonable "heat units this frame" and add per-pixel randomness.
-  int maxSub = (int)(cooling * dt) + 1;   // at 200 * 0.016 -> 3 + 1 => 4
-  if (maxSub < 1) maxSub = 1;
-  const int N = p.width * p.height;
+  const int W = p.width;
+  const int H = p.height;
+  int baseMaxSub = (int)(cooling * dt) + 1;
+  if (baseMaxSub < 1) baseMaxSub = 1;
 
-  for (int i = 0; i < N; ++i) {
-    int sub = rand() % maxSub;            // 0..(maxSub-1)
-    int h = (int)heat[i] - sub;
-    if (h < 0) h = 0;
-    heat[i] = (uint8_t)h;
+  for (int y = 0; y < H; ++y) {
+    float topBoost = (y <= 1) ? p.topCoolingBoost : 1.0f;   // faster near top
+    for (int x = 0; x < W; ++x) {
+      const int i = idx(x, y);
+      int sub = rand() % baseMaxSub;                         // random base cooling
+      float hnorm = (float)heat[i] * (1.0f / 255.0f);        // 0..1
+      int rad = (int)(p.radiativeCooling * dt * hnorm * hnorm); // stronger when hot
+      int dec = (int)((sub + rad) * topBoost);
+      if (dec < 0) dec = 0;
+      int h = (int)heat[i] - dec;
+      if (h < 0)   h = 0;
+      if (h > 240) h = 240;
+      heat[i] = (uint8_t)h;
+    }
   }
 }
 

@@ -46,6 +46,9 @@ void setup() {
   fp.bottomRowsForSparks = Defaults::BottomRowsForSparks;
   fp.vuTopRowEnabled  = Defaults::VuTopRowEnabled; // OFF by default
   fp.brightnessCap    = Defaults::BrightnessCap;   // 75% cap
+  fp.radiativeCooling = Defaults::RadiativeCooling;
+  fp.topCoolingBoost  = Defaults::TopCoolingBoost;
+  fp.velDamping       = Defaults::VelocityDamping;
 
   fire = new FireEffect(&strip, fp);
 
