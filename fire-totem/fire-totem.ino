@@ -15,9 +15,7 @@ IMUHelper     imu;
 FireParams    fp;
 
 // Audio params block expected by SerialConsole
-AudioParams   audio;
-
-// Serial console expects specific constructor signature
+// Serial console expects simplified constructor signature (no AudioParams)
 FireEffect*   fire = nullptr;
 SerialConsole* consolePtr = nullptr;
 
@@ -51,26 +49,19 @@ void setup() {
 
   fire = new FireEffect(&strip, fp);
 
-  // Audio defaults for SerialConsole / mic
-  audio.noiseGate   = Defaults::NoiseGate;
-  audio.globalGain  = Defaults::GlobalGain;
-  audio.gamma       = Defaults::Gamma;
-  audio.attackTau   = Defaults::AttackTau;
-  audio.releaseTau  = Defaults::ReleaseTau;
-
   // Initialize mic & imu according to your existing APIs
   mic.begin();      // your AdaptiveMic has no-arg begin()
   imu.begin();
 
   // SerialConsole: SerialConsole(FireEffect* fire, AudioParams* audio, uint8_t maxRows, AdaptiveMic* mic);
-  consolePtr = new SerialConsole(fire, &audio, (uint8_t)fp.height, &mic);
+  consolePtr = new SerialConsole(fire, (uint8_t)fp.height, &mic);
   consolePtr->begin();  // no args per your header
 }
 
 void loop() {
-  // Audio energy from your mic API (replace with your actual getter if different)
+  // Audio energy from your mic API (replace if your getter differs)
   float energy = 0.0f;
-  energy = mic.getLevel(); // common name in your repo; adjust if needed
+  energy = mic.getLevel();
 
   // IMU tilt (accelerometer). If read fails, zeros.
   float ax=0, ay=0, az=0;

@@ -176,7 +176,7 @@ void FireEffect::cool(float energy, float dt) {
   float cooling = p.baseCooling + p.coolingAudioBias * energy; // e.g. 200 + (-60)*energy
   if (cooling < 0.0f) cooling = 0.0f;
 
-  // Convert to a reasonable “heat units this frame” and add per-pixel randomness.
+  // Convert to a reasonable "heat units this frame" and add per-pixel randomness.
   int maxSub = (int)(cooling * dt) + 1;   // at 200 * 0.016 -> 3 + 1 => 4
   if (maxSub < 1) maxSub = 1;
   const int N = p.width * p.height;

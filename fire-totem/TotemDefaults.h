@@ -1,7 +1,9 @@
 #pragma once
+// Defaults aligned with your SerialConsole expectations.
+// Adds AttackTau/ReleaseTau, Ranges, Bass* defaults (typed as enum), BottomRowsForSparks,
+// and keeps BrightnessCap=0.75 with VU off by default.
 
-// Centralized defaults for Fire Totem.
-// Compatible with existing SerialConsole expectations.
+#include "AdaptiveMic.h"  // for AdaptiveMic::BassMode
 
 namespace Defaults {
 
@@ -17,16 +19,15 @@ namespace Defaults {
   constexpr float NoiseGate      = 0.06f;
   constexpr float GlobalGain     = 1.35f;
   constexpr float Gamma          = 0.60f;
-  // Time constants (SerialConsole expects *Tau* names)
+  // Time constants expected by SerialConsole (*Tau* names)
   constexpr float AttackTau      = 0.08f;   // seconds
   constexpr float ReleaseTau     = 0.30f;   // seconds
 
-  // Optional bass biquad defaults (SerialConsole/mic may use/expect these)
+  // Bass filter defaults (typed as the enum so SerialConsole -> setBassFilter matches signature)
   constexpr bool  BassEnabledDefault = false;
   constexpr float BassFc             = 120.0f;  // Hz
   constexpr float BassQ              = 0.707f;  // Q-factor
-  // Mode: 0=off/none, 1=low-pass, 2=band-pass
-  constexpr uint8_t BassModeDefault  = 2;
+  constexpr AdaptiveMic::BassMode BassModeDefault = AdaptiveMic::BASS_BANDPASS; // enum-typed
 
   // Valid ranges used by SerialConsole.cpp's constrain() calls
   namespace Ranges {
@@ -72,6 +73,6 @@ namespace Defaults {
   constexpr uint8_t BottomRowsForSparks = 1;    // how many bottom rows can spawn sparks
 
   // Output
-  constexpr float BrightnessCap      = 0.75f;   // 75% cap per user request
-  constexpr bool  VuTopRowEnabled    = false;   // OFF by default per user request
+  constexpr float BrightnessCap      = 0.75f;   // 75% cap per request
+  constexpr bool  VuTopRowEnabled    = false;   // OFF by default per request
 }

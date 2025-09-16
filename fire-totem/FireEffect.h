@@ -24,12 +24,12 @@ struct FireParams {
   float coolingAudioBias= -60.0f;
 
   // Sparks
-  float   sparkChance     = 0.12f;
-  float   sparkHeatMin    = 50.0f;
-  float   sparkHeatMax    = 200.0f;
+  float   sparkChance       = 0.12f;
+  float   sparkHeatMin      = 50.0f;
+  float   sparkHeatMax      = 200.0f;
   float   audioHeatBoostMax = 200.0f;
   float   audioSparkBoost   = 1.0f;
-  uint8_t bottomRowsForSparks = 1; // used by SerialConsole
+  uint8_t bottomRowsForSparks = 1; // bottom N rows can spawn sparks
 
   // UI/output
   bool  vuTopRowEnabled = false; // top row VU (off by default)
