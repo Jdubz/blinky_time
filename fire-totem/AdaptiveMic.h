@@ -7,6 +7,8 @@ public:
     void begin();
     void update();
     float getLevel();
+    float getEnvelope() const { return envelope; }
+    float getGain() const { return currentGain; }
 
 private:
     static void onPDMdata();
@@ -15,22 +17,12 @@ private:
 
     bool micReady = false;
 
-    // Level tracking
-    float envelope   = 0.0f;
-    float envMean    = 0.0f;
-    float minEnv     = 1.0f;
-    float maxEnv     = 0.0f;
+    float envelope = 0.0f;
+    float envMean = 0.0f;
+    float minEnv = 1.0f;
+    float maxEnv = 0.0f;
     float recentPeak = 0.0f;
 
-    // Calibration
-    bool calibrated = false;
-    unsigned long calibStart = 0;
-    unsigned long lastSoundTime = 0;
-
-    // Gain control
-    int hwGain = 50;             // starting gain
+    int currentGain = 50;
     unsigned long lastGainAdjust = 0;
-
-    // Debug
-    unsigned long lastPrint = 0;
 };

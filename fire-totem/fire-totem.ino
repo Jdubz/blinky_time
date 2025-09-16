@@ -1,7 +1,7 @@
 #include <Adafruit_NeoPixel.h>
-#include <Arduino_LSM6DS3.h>   // Built-in IMU on XIAO Sense
-#include "FireEffect.h"
 #include "AdaptiveMic.h"
+#include "IMUHelper.h"
+#include "FireEffect.h"
 
 #define WIDTH       16
 #define HEIGHT       8
@@ -11,78 +11,65 @@
 Adafruit_NeoPixel strip(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
 FireEffect fire(&strip, WIDTH, HEIGHT);
 AdaptiveMic mic;
-bool imuReady = false;
+IMUHelper imu;
 
 void setup() {
-  // Start serial and wait for connection
   Serial.begin(115200);
-  unsigned long start = millis();
-  while (!Serial && millis() - start < 5000) {
-    // wait up to 5 seconds for USB connection
-  }
+  while (!Serial && millis() < 3000) {}
 
   Serial.println("Booting...");
-  
+
   strip.begin();
   strip.setBrightness(40);
   strip.fill(strip.Color(255,0,0));
   strip.show();
   delay(1000);
-  strip.fill(strip.Color(0,0,0));
+  strip.clear();
   strip.show();
 
-  delay(500);           // give USB & mic time to power up
   mic.begin();
-  
-if (!IMU.begin()) {
-  Serial.println("IMU init failed! (continuing without IMU)");
-  imuReady = false;
-} else {
-  Serial.println("IMU ready");
-  imuReady = true;
-}
+  imu.begin();
 }
 
 void loop() {
+  // --- Mic ---
   mic.update();
-  float level = mic.getLevel();    // ← from AdaptiveMic
-  
-  fire.update(level, 0.0, 0.0);
+  float level = mic.getLevel();
+  float env = mic.getEnvelope();
+  float gain = mic.getGain();
+
+  // --- IMU ---
+  float ax = 0, ay = 0, az = 0;
+  if (imu.isReady()) {
+    imu.getAccel(ax, ay, az);
+  }
+
+  // --- Fire update ---
+  unsigned long frameStart = micros();
+  fire.update(level, ax, ay); // passing ax/ay as directional bias
   fire.render();
-  
+  unsigned long frameTime = micros() - frameStart;
+
+  float avgHeat = fire.getAverageHeat();
+  int activePixels = fire.getActiveCount();
+
+  // --- Console output ---
+  static unsigned long lastPrint = 0;
+  if (millis() - lastPrint > 500) {
+    Serial.print("lvl=");   Serial.print(level, 3);
+    Serial.print(" env=");  Serial.print(env, 4);
+    Serial.print(" gain="); Serial.print(gain, 1);
+
+    Serial.print("  ax=");  Serial.print(ax, 3);
+    Serial.print(" ay=");   Serial.print(ay, 3);
+    Serial.print(" az=");   Serial.print(az, 3);
+
+    Serial.print("  frame="); Serial.print(frameTime);
+    Serial.print("us avgHeat="); Serial.print(avgHeat, 3);
+    Serial.print(" active="); Serial.println(activePixels);
+
+    lastPrint = millis();
+  }
+
   delay(30);
 }
-//
-//  
-//  mic.update();
-//  
-//  float level = mic.getLevel();
-//  if (level < 0.3f) level = 0.3f;
-//
-//  float ax = 0, ay = 0, az = 0;
-//  if (imuReady && IMU.accelerationAvailable()) {
-//    if (!IMU.readAcceleration(ax, ay, az)) {
-//      ax = ay = az = 0;
-//    }
-//  }
-//
-//  static float lastAx = 0, lastAy = 0;
-//  float dx = ax - lastAx;
-//  float dy = ay - lastAy;
-//  lastAx = ax;
-//  lastAy = ay;
-//
-//  fire.update(level, dx, dy);
-//  fire.render();
-//
-//  // heartbeat debug
-//  static unsigned long lastPrint = 0;
-//  if (millis() - lastPrint > 1000) {
-//    Serial.print("tick level="); Serial.print(level, 3);
-//    Serial.print(" dx="); Serial.print(dx, 3);
-//    Serial.print(" dy="); Serial.println(dy, 3);
-//    lastPrint = millis();
-//  }
-//
-//  delay(30);
-//}

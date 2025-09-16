@@ -1,27 +1,24 @@
 #pragma once
-#include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 
 class FireEffect {
 public:
-    FireEffect(Adafruit_NeoPixel* strip, int width, int height);
+  FireEffect(Adafruit_NeoPixel* strip, int width, int height);
 
-    // Call every frame: level from mic (0..1), ax/ay from accelerometer
-    void update(float level, float ax, float ay);
+  // level: 0..1 loudness/intensity (kept for API compatibility; not required)
+  // dx,dy  : ignored in this restored version
+  void update(float level, float dx, float dy);
+  void render();
 
-    // Draw the current heat buffer to the LEDs
-    void render();
+  // Debug helpers for your console readout
+  float getAverageHeat() const;
+  int   getActiveCount(uint8_t thresh = 10) const;
 
 private:
-    Adafruit_NeoPixel* strip;
-    int width, height;
+  Adafruit_NeoPixel* strip;
+  int width, height;
+  uint8_t* heat;              // size = width*height
 
-    // Heat buffer (max 32x32 so it fits your 16x8)
-    uint8_t heat[32][32];
-
-    // Map (x,y) to physical LED index on your top-wired matrix
-    int XY(int x, int y);
-
-    // Map a heat value (0..255) to a fire color
-    uint32_t heatToColor(uint8_t t);
+  inline uint16_t idx(int x, int y) const { return (uint16_t)y * width + x; }
+  uint32_t heatToColor(uint8_t h) const;  // maps 0..255 -> RGB (with 50% cap)
 };
