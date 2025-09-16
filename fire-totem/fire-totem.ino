@@ -1,90 +1,74 @@
 #include <Adafruit_NeoPixel.h>
+#include "FireEffect.h"
+#include "TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "IMUHelper.h"
-#include "FireEffect.h"
 #include "SerialConsole.h"
-#include <math.h>
 
-#define WIDTH       16
-#define HEIGHT       8
-#define LED_PIN     D10
-#define NUMPIXELS  (WIDTH * HEIGHT)
+// ===== LED strip =====
+constexpr uint8_t LED_PIN = D10;
+Adafruit_NeoPixel strip(Defaults::Width * Defaults::Height, LED_PIN, NEO_GRB + NEO_KHZ800);
 
-Adafruit_NeoPixel strip(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
-FireEffect  fire(&strip, WIDTH, HEIGHT);
-AdaptiveMic mic;
-IMUHelper   imu;
+// ===== Modules =====
+AdaptiveMic   mic;
+IMUHelper     imu;
+SerialConsole console;
 
-// Shared audio params used by loop() and tuned via SerialConsole
-AudioParams audio;
-
-// Serial console (handles commands + 5s prints)
-SerialConsole console(&fire, &audio, HEIGHT, &mic);
-
-// State for envelope & telemetry
-static float s_audioEnv = 0.0f;
-static unsigned long s_lastMicros   = 0;
-static unsigned long s_lastTelemMs  = 0;
+// Fire effect
+FireParams   fp;
+FireEffect*  fire = nullptr;
 
 void setup() {
   Serial.begin(115200);
-  delay(50);
-
   strip.begin();
-  strip.setBrightness(255); // per-pixel cap enforced in FireEffect
+  strip.setBrightness(Defaults::StripBrightness);
   strip.show();
 
-  mic.begin();
+  // Load defaults
+  fp.width            = Defaults::Width;
+  fp.height           = Defaults::Height;
+  fp.fluidEnabled     = Defaults::FluidEnabled;
+  fp.viscosity        = Defaults::Viscosity;
+  fp.heatDiffusion    = Defaults::HeatDiffusion;
+  fp.updraftBase      = Defaults::UpdraftBase;
+  fp.buoyancy         = Defaults::Buoyancy;
+  fp.swirlAmp         = Defaults::SwirlAmp;
+  fp.swirlScaleCells  = Defaults::SwirlScaleCells;
+  fp.swirlAudioGain   = Defaults::SwirlAudioGain;
+  fp.baseCooling      = Defaults::BaseCooling;
+  fp.coolingAudioBias = Defaults::CoolingAudioBias;
+  fp.sparkChance      = Defaults::SparkChance;
+  fp.sparkHeatMin     = Defaults::SparkHeatMin;
+  fp.sparkHeatMax     = Defaults::SparkHeatMax;
+  fp.audioHeatBoostMax= Defaults::AudioHeatBoostMax;
+  fp.audioSparkBoost  = Defaults::AudioSparkBoost;
+  fp.vuTopRowEnabled  = Defaults::VuTopRowEnabled; // OFF by default
+  fp.brightnessCap    = Defaults::BrightnessCap;   // 75% cap
+
+  fire = new FireEffect(&strip, fp);
+
+  mic.begin(Defaults::NoiseGate, Defaults::GlobalGain, Defaults::AttackSeconds, Defaults::ReleaseSeconds, Defaults::Gamma);
   imu.begin();
-
-  console.begin(); // sets defaults and prints initial values
-
-  s_lastMicros = micros();
-  Serial.println(F("fire-totem: audio-reactive fire + serial console"));
+  console.begin(&fp);
 }
 
 void loop() {
-  console.update();  // handle serial & 5s print
+  // 1) Audio energy
+  float energy = mic.level(); // normalized 0..1
 
-  // ---- Mic / audio envelope ----
-  mic.update();
+  // 2) IMU tilt (accelerometer). If unavailable, dx=dy=0.
+  float ax=0, ay=0, az=0;
+  if (imu.available()) {
+    imu.getAccel(ax, ay, az);
+  }
+  float dx = ax; // pass raw; FireEffect inverts to push opposite gravity
+  float dy = ay;
 
-  unsigned long now = micros();
-  float dt = (now - s_lastMicros) / 1e6f;
-  if (dt <= 0 || dt > 1.0f) dt = 1.0f;
-  s_lastMicros = now;
+  fire->update(energy, dx, dy);
+  fire->render();
 
-  float lvl = mic.getLevel();
-  if (!isfinite(lvl)) lvl = 0.0f;
-  lvl = constrain(lvl, 0.0f, 1.0f);
+  console.tick();
 
-  float aAttack  = 1.0f - expf(-dt / audio.attackTau);
-  float aRelease = 1.0f - expf(-dt / audio.releaseTau);
-  float alpha    = (lvl > s_audioEnv) ? aAttack : aRelease;
-  s_audioEnv    += alpha * (lvl - s_audioEnv);
-
-  float gated = s_audioEnv - audio.noiseGate;
-  if (gated < 0) gated = 0;
-  float norm  = (audio.noiseGate < 0.999f) ? (gated / (1.0f - audio.noiseGate)) : 0.0f;
-  norm = constrain(norm, 0.0f, 1.0f);
-
-  float energy = powf(norm, audio.gamma) * audio.globalGain;
-  energy = constrain(energy, 0.0f, 1.0f);
-
-  fire.update(energy, 0.0f, 0.0f);
-  fire.render();
-
-  // ---- Telemetry (10 Hz) ----
-//  if (millis() - s_lastTelemMs > 100) {
-//    Serial.print(F("lvl="));     Serial.print(lvl, 3);
-//    Serial.print(F(" env="));    Serial.print(s_audioEnv, 3);
-//    Serial.print(F(" energy=")); Serial.print(energy, 3);
-//    Serial.print(F(" gain="));   Serial.print(mic.getGain());
-//    Serial.print(F(" avgHeat="));Serial.print(fire.getAverageHeat(), 1);
-//    Serial.print(F(" active=")); Serial.print(fire.getActiveCount(10));
-//    Serial.println();
-//    s_lastTelemMs = millis();
-//  }
-
-  delay(16); // ~60 FPS
+  // ~60 fps
+  delay(16);
 }

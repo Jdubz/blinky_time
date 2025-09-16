@@ -1,84 +1,69 @@
 #pragma once
-#include <Adafruit_NeoPixel.h>
-#include <stdint.h>
-#include "VUMeter.h"
+#include <Arduino.h>
+
+class Adafruit_NeoPixel;
 
 struct FireParams {
-  // Existing (from V2)
-  uint8_t baseCooling;          // 45
-  uint8_t sparkHeatMin;         // 110
-  uint8_t sparkHeatMax;         // 160
-  float   sparkChance;          // 0.12
-  float   audioSparkBoost;      // 0.95
-  uint8_t audioHeatBoostMax;    // 95
-  int8_t  coolingAudioBias;     // -18
-  uint8_t bottomRowsForSparks;  // 2
+  int   width  = 16;
+  int   height = 8;
 
-  // NEW: fluid / swirl controls
-  bool    fluidEnabled;         // true
-  float   buoyancy;             // 1.2
-  float   viscosity;            // 0.10
-  float   heatDiffusion;        // 0.08
-  float   swirlAmp;             // 1.2
-  float   swirlAudioGain;       // 1.0
-  float   swirlScaleCells;      // 6.0
-  float   updraftBase;          // 0.0;
+  bool  fluidEnabled    = true;
+  float viscosity       = 0.05f;
+  float heatDiffusion   = 0.02f;
 
-  bool  vuTopRowEnabled;
+  float updraftBase     = 5.0f;
+  float buoyancy        = 16.0f;
+
+  float swirlAmp        = 4.0f;
+  float swirlScaleCells = 12.0f;
+  float swirlAudioGain  = 1.5f;
+
+  float baseCooling     = 200.0f;
+  float coolingAudioBias= -60.0f;
+
+  float sparkChance     = 0.12f;
+  float sparkHeatMin    = 50.0f;
+  float sparkHeatMax    = 200.0f;
+  float audioHeatBoostMax = 200.0f;
+  float audioSparkBoost   = 1.0f;
+
+  // UI/output
+  bool  vuTopRowEnabled = false; // top row VU (off by default)
+  float brightnessCap   = 0.75f; // 0..1, global scale
 };
 
 class FireEffect {
-public:
-  FireEffect(Adafruit_NeoPixel* strip, int width, int height);
-
-  // energy: 0..1 (audio energy mapped in loop)
+ public:
+  FireEffect(Adafruit_NeoPixel* strip, const FireParams& params);
   void update(float energy, float dx, float dy);
   void render();
+  void restoreDefaults();
+  FireParams& paramsRef() { return p; }
 
-  // Telemetry
-  float getAverageHeat() const;
-  int   getActiveCount(uint8_t thresh = 10) const;
-
-  // Runtime tuning
-  void setParams(const FireParams& p);
-  FireParams getParams() const;
-
-private:
+ private:
+  FireParams p;
   Adafruit_NeoPixel* strip;
-  int width, height;
 
-  VUMeter vu;
-   
-  // Heat grid (0..255)
-  uint8_t* heat;
+  // internal buffers
+  uint8_t* heat   = nullptr; // size w*h
+  uint8_t* tmpHeat= nullptr; // size w*h
+  float*   vx     = nullptr; // velocity x
+  float*   vy     = nullptr; // velocity y
+  unsigned long lastMs = 0;
+  float lastEnergy = 0.0f;
 
-  // Fluid velocity field (cells/sec)
-  float* vx;
-  float* vy;
+  inline int idx(int x, int y) const {
+    // x wraps (cylinder), y clamps
+    x = (x % p.width + p.width) % p.width;
+    if (y < 0) y = 0;
+    if (y >= p.height) y = p.height - 1;
+    return y * p.width + x;
+  }
 
-  void riseClassic();  // fallback upward transport when fluid is OFF
-
-  // Scratch buffers
-  float* heatScratchF;   // for advection/diffusion
-  unsigned long lastMicros = 0;
-  float vuLevel = 0.0f;  // smoothed energy for VU bar
-
-  FireParams params;
-
-  inline uint16_t idx(int x, int y) const { return (uint16_t)y * width + x; }
-
-  // Sampling helpers with X-wrap, Y-clamp
-  float sampleHeatBilinear(float x, float y) const;
-  float sampleField(const float* f, float x, float y) const;
-
-  // Physics steps
-  float computeDt();
-  void  applyCooling(float energy, float dt);
-  void  addForces(float energy, float t, float dt);
-  void  diffuseVelocity(float dt);
-  void  advectHeat(float dt);
-  void  diffuseHeat(float dt);
-  void  injectSparks(float energy);
-
-  uint32_t heatToColor(uint8_t h) const;  // 50% brightness cap
+  void addSparks(float energy);
+  void addForces(float energy, float dt, float tiltX, float tiltY);
+  void advect(float dt);
+  void diffuse();
+  void cool(float energy);
+  uint32_t heatToColor(uint8_t h) const;
 };

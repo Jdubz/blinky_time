@@ -1,55 +1,38 @@
 #pragma once
-#include <stdint.h>
-#include "AdaptiveMic.h"  // for AdaptiveMic::BassMode
 
 namespace Defaults {
-  // ---- Monitoring / UI ----
-  constexpr bool VuTopRowEnabled = false;  // off by default
+  // Matrix size
+  constexpr int Width  = 16;
+  constexpr int Height = 8;
 
-  // ---- Audio mapping (used by fire-totem + SerialConsole) ----
-  constexpr float NoiseGate   = 0.06f;
-  constexpr float Gamma       = 0.60f;
-  constexpr float GlobalGain  = 1.35f;
-  constexpr float AttackTau   = 0.08f;   // seconds
-  constexpr float ReleaseTau  = 0.30f;   // seconds
+  // ===== AdaptiveMic defaults =====
+  constexpr float NoiseGate       = 0.06f;
+  constexpr float GlobalGain      = 1.35f;
+  constexpr float AttackSeconds   = 0.08f;
+  constexpr float ReleaseSeconds  = 0.30f;
+  constexpr float Gamma           = 0.60f;
 
-  // ---- Fire engine params (used by FireEffect + SerialConsole) ----
-  constexpr uint8_t BaseCooling         = 200;
-  constexpr uint8_t SparkHeatMin        = 50;
-  constexpr uint8_t SparkHeatMax        = 200;
-  constexpr float   SparkChance         = 0.05f;
-  constexpr float   AudioSparkBoost     = 0.5f;
-  constexpr uint8_t AudioHeatBoostMax   = 150;
-  constexpr int8_t  CoolingAudioBias    = -50;   // negative => taller flames on loud parts
-  constexpr uint8_t BottomRowsForSparks = 1;
+  // ===== Fire sim defaults (retro tuned) =====
+  constexpr bool  FluidEnabled          = true;
+  constexpr float Viscosity             = 0.05f;   // lower = more lively
+  constexpr float HeatDiffusion         = 0.02f;   // lower = crisper
+  constexpr float UpdraftBase           = 5.0f;
+  constexpr float Buoyancy              = 16.0f;
+  constexpr float SwirlAmp              = 4.0f;
+  constexpr float SwirlScaleCells       = 12.0f;   // larger = big visible column twist
+  constexpr float SwirlAudioGain        = 1.5f;    // more swirl on loud audio
+  constexpr float BaseCooling           = 200.0f;
+  constexpr float CoolingAudioBias      = -60.0f;  // louder => less cooling => taller flame
+  constexpr float SparkChance           = 0.12f;   // frequent base flicker
+  constexpr float SparkHeatMin          = 50.0f;
+  constexpr float SparkHeatMax          = 200.0f;
+  constexpr float AudioHeatBoostMax     = 200.0f;  // allow hot pops
+  constexpr float AudioSparkBoost       = 1.00f;
 
-  // ---- Fluid / swirl defaults ----
-  constexpr bool   FluidEnabled       = true;   // master switch
-  constexpr float  Buoyancy        = 16.0f;   // up to ~8 cells/sec²
-  constexpr float  Viscosity       = 0.10f;
-  constexpr float  HeatDiffusion   = 0.08f;
-  constexpr float  SwirlAmp        = 1.2f;   // cells/sec
-  constexpr float  SwirlAudioGain  = 1.0f;
-  constexpr float  SwirlScaleCells = 6.0f;   // curl size ~5 cells
-  constexpr float  UpdraftBase     = 5.0f;
+  // ===== LED output defaults =====
+  constexpr float   BrightnessCap       = 0.75f;   // 75% cap (user request)
+  constexpr bool    VuTopRowEnabled     = false;   // OFF by default (user request)
 
-  // ---- Bass filter defaults (used by SerialConsole -> AdaptiveMic) ----
-  constexpr bool     BassEnabledDefault = true;
-  constexpr float    BassFc             = 120.0f; // Hz
-  constexpr float    BassQ              = 0.8f;
-  constexpr AdaptiveMic::BassMode BassModeDefault = AdaptiveMic::BASS_BANDPASS;
-
-  // (optional) Ranges you show in help strings
-  namespace Ranges {
-    constexpr float NoiseGateMin = 0.0f, NoiseGateMax = 0.5f;
-    constexpr float GammaMin     = 0.2f, GammaMax     = 2.5f;
-    constexpr float GainMin      = 0.0f, GainMax      = 5.0f;
-    constexpr float AttackMin    = 0.005f, AttackMax  = 1.0f;
-    constexpr float ReleaseMin   = 0.02f,  ReleaseMax = 2.0f;
-
-    constexpr uint8_t CoolingMin = 0, CoolingMax = 255;
-    constexpr float   SparkChanceMin = 0.0f, SparkChanceMax = 1.0f;
-    constexpr float   BassFreqMin = 30.0f, BassFreqMax = 400.0f;
-    constexpr float   BassQMin    = 0.3f, BassQMax    = 5.0f;
-  }
+  // LED global brightness
+  constexpr uint8_t StripBrightness     = 255;
 }
