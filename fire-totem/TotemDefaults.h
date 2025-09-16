@@ -3,6 +3,8 @@
 #include "AdaptiveMic.h"  // for AdaptiveMic::BassMode
 
 namespace Defaults {
+  // ---- Monitoring / UI ----
+  constexpr bool VuTopRowEnabled = false;  // off by default
 
   // ---- Audio mapping (used by fire-totem + SerialConsole) ----
   constexpr float NoiseGate   = 0.06f;
@@ -20,6 +22,16 @@ namespace Defaults {
   constexpr uint8_t AudioHeatBoostMax   = 150;
   constexpr int8_t  CoolingAudioBias    = -50;   // negative => taller flames on loud parts
   constexpr uint8_t BottomRowsForSparks = 1;
+
+  // ---- Fluid / swirl defaults ----
+  constexpr bool   FluidEnabled       = true;   // master switch
+  constexpr float  Buoyancy        = 16.0f;   // up to ~8 cells/sec²
+  constexpr float  Viscosity       = 0.10f;
+  constexpr float  HeatDiffusion   = 0.08f;
+  constexpr float  SwirlAmp        = 1.2f;   // cells/sec
+  constexpr float  SwirlAudioGain  = 1.0f;
+  constexpr float  SwirlScaleCells = 6.0f;   // curl size ~5 cells
+  constexpr float  UpdraftBase     = 5.0f;
 
   // ---- Bass filter defaults (used by SerialConsole -> AdaptiveMic) ----
   constexpr bool     BassEnabledDefault = true;

@@ -30,6 +30,17 @@ void SerialConsole::restoreDefaults() {
   p.audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
   p.coolingAudioBias    = Defaults::CoolingAudioBias;
   p.bottomRowsForSparks = Defaults::BottomRowsForSparks;
+
+  p.fluidEnabled    = Defaults::FluidEnabled;
+  p.buoyancy        = Defaults::Buoyancy;
+  p.viscosity       = Defaults::Viscosity;
+  p.heatDiffusion   = Defaults::HeatDiffusion;
+  p.swirlAmp        = Defaults::SwirlAmp;
+  p.swirlAudioGain  = Defaults::SwirlAudioGain;
+  p.swirlScaleCells = Defaults::SwirlScaleCells;
+  p.updraftBase     = Defaults::UpdraftBase;
+  p.vuTopRowEnabled = Defaults::VuTopRowEnabled;
+  
   fire->setParams(p);
 
   // Bass filter defaults
@@ -42,6 +53,8 @@ void SerialConsole::restoreDefaults() {
 void SerialConsole::printHelp() {
   Serial.println(F("\nCommands:"));
   Serial.println(F("  show                         -> print current values"));
+  Serial.println(F("  defaults                     -> restore defaults"));
+  Serial.println(F("  help                         -> this help\n"));
   Serial.println(F("  set gate <f>                 -> noise gate (0..0.5)"));
   Serial.println(F("  set gamma <f>                -> gamma (0.2..2.5)"));
   Serial.println(F("  set gain <f>                 -> global gain (0..5)"));
@@ -55,12 +68,19 @@ void SerialConsole::printHelp() {
   Serial.println(F("  set heatboost <i>            -> audio heat boost max (0..255)"));
   Serial.println(F("  set coolbias <i>             -> cooling audio bias (-127..127)"));
   Serial.println(F("  set sparkrows <i>            -> bottom rows for sparks (1..max)"));
+  Serial.println(F("  set vu on|off                -> show/hide top-row VU meter"));
   Serial.println(F("  set bass on|off              -> enable/disable bass filter"));
   Serial.println(F("  set bassfreq <Hz>            -> center/cutoff (30..400)"));
   Serial.println(F("  set bassq <Q>                -> Q factor (0.3..5.0)"));
   Serial.println(F("  set basstype lp|bp           -> low-pass or band-pass"));
-  Serial.println(F("  defaults                     -> restore defaults"));
-  Serial.println(F("  help                         -> this help\n"));
+  Serial.println(F("  set fluid on|off             -> enable/disable fluid advection"));
+  Serial.println(F("  set buoy <f>                 -> buoyancy (cells/s^2 per heat)"));
+  Serial.println(F("  set visc <f>                 -> velocity viscosity 0..1"));
+  Serial.println(F("  set heatdiff <f>             -> heat diffusion 0..1"));
+  Serial.println(F("  set swirlamp <f>             -> swirl speed (cells/s)"));
+  Serial.println(F("  set swirlaudio <f>           -> extra swirl per energy"));
+  Serial.println(F("  set swirlscale <f>           -> swirl spatial period (cells)"));
+  Serial.println(F("  set updraft <f>              -> constant upward accel (cells/s^2)"));
 }
 
 void SerialConsole::printAll() {
@@ -75,6 +95,9 @@ void SerialConsole::printAll() {
   Serial.print(F(" release="));       Serial.print(audio->releaseTau, 3);
   Serial.println();
 
+  Serial.print(F("[VU] topRow="));
+  Serial.println(p.vuTopRowEnabled ? F("on") : F("off"));
+  
   Serial.print(F("[BASS ] enabled=")); Serial.print(bOn ? F("on") : F("off"));
   Serial.print(F(" mode="));          Serial.print(bMode == AdaptiveMic::BASS_LOWPASS ? F("lp") : F("bp"));
   Serial.print(F(" fc="));            Serial.print(bFc, 1);
@@ -89,6 +112,16 @@ void SerialConsole::printAll() {
   Serial.print(F(" heatBoostMax="));      Serial.print(p.audioHeatBoostMax);
   Serial.print(F(" coolBias="));          Serial.print(p.coolingAudioBias);
   Serial.print(F(" rows="));              Serial.print(p.bottomRowsForSparks);
+  Serial.println();
+
+  Serial.print(F("[FLUID] on=")); Serial.print(p.fluidEnabled ? F("on") : F("off"));
+  Serial.print(F(" buoy="));      Serial.print(p.buoyancy, 2);
+  Serial.print(F(" visc="));      Serial.print(p.viscosity, 2);
+  Serial.print(F(" heatDiff="));  Serial.print(p.heatDiffusion, 2);
+  Serial.print(F(" swirlAmp="));  Serial.print(p.swirlAmp, 2);
+  Serial.print(F(" swirlAud="));  Serial.print(p.swirlAudioGain, 2);
+  Serial.print(F(" scale="));     Serial.print(p.swirlScaleCells, 2);
+  Serial.print(F(" updraft="));   Serial.print(p.updraftBase, 2);
   Serial.println();
 }
 
@@ -135,6 +168,14 @@ void SerialConsole::handleCommand(const char* line) {
     else if (!strcmp(key, "gain"))   { if (!val) {Serial.println(F("ERR")); return;} audio->globalGain = constrain((float)atof(val), Defaults::Ranges::GainMin,       Defaults::Ranges::GainMax); }
     else if (!strcmp(key, "attack")) { if (!val) {Serial.println(F("ERR")); return;} audio->attackTau  = constrain((float)atof(val), Defaults::Ranges::AttackMin,     Defaults::Ranges::AttackMax); }
     else if (!strcmp(key, "release")){ if (!val) {Serial.println(F("ERR")); return;} audio->releaseTau = constrain((float)atof(val), Defaults::Ranges::ReleaseMin,    Defaults::Ranges::ReleaseMax); }
+    else if (!strcmp(key, "vu")) {
+      if (!val) { Serial.println(F("ERR")); return; }
+      if      (!strcmp(val, "on"))  p.vuTopRowEnabled = true;
+      else if (!strcmp(val, "off")) p.vuTopRowEnabled = false;
+      else { Serial.println(F("ERR: vu on|off")); return; }
+    }
+
+
 
     // ---- Fire keys ----
     else if (!strcmp(key, "cooling"))     { if (!val) {Serial.println(F("ERR")); return;} p.baseCooling         = (uint8_t)constrain(atoi(val), Defaults::Ranges::CoolingMin, Defaults::Ranges::CoolingMax); }
@@ -145,6 +186,22 @@ void SerialConsole::handleCommand(const char* line) {
     else if (!strcmp(key, "heatboost"))   { if (!val) {Serial.println(F("ERR")); return;} p.audioHeatBoostMax   = (uint8_t)constrain(atoi(val), 0, 255); }
     else if (!strcmp(key, "coolbias"))    { if (!val) {Serial.println(F("ERR")); return;} p.coolingAudioBias    = (int8_t) constrain(atoi(val), -127, 127); }
     else if (!strcmp(key, "sparkrows"))   { if (!val) {Serial.println(F("ERR")); return;} p.bottomRowsForSparks = (uint8_t)constrain(atoi(val), 1, (int)maxRows); }
+
+    // ---- Fluid / swirl keys ----
+    else if (!strcmp(key, "fluid"))     { if (!val) {Serial.println(F("ERR")); return;} 
+    if (!strcmp(val,"on"))  p.fluidEnabled = true;
+    else if (!strcmp(val,"off")) p.fluidEnabled = false;
+    else { Serial.println(F("ERR: fluid on|off")); return; } }
+    else if (!strcmp(key, "buoy"))      { if (!val) {Serial.println(F("ERR")); return;} p.buoyancy       = (float)atof(val); }
+    else if (!strcmp(key, "visc"))      { if (!val) {Serial.println(F("ERR")); return;} p.viscosity      = constrain((float)atof(val), 0.0f, 1.0f); }
+    else if (!strcmp(key, "heatdiff"))  { if (!val) {Serial.println(F("ERR")); return;} p.heatDiffusion  = constrain((float)atof(val), 0.0f, 1.0f); }
+    else if (!strcmp(key, "swirlamp"))  { if (!val) {Serial.println(F("ERR")); return;} p.swirlAmp       = (float)atof(val); }
+    else if (!strcmp(key, "swirlaudio")){ if (!val) {Serial.println(F("ERR")); return;} p.swirlAudioGain = (float)atof(val); }
+    else if (!strcmp(key, "swirlscale")){ if (!val) {Serial.println(F("ERR")); return;} p.swirlScaleCells= max(1.0f, (float)atof(val)); }
+    else if (!strcmp(key, "updraft")) {
+      if (!val) { Serial.println(F("ERR")); return; }
+      p.updraftBase = (float)atof(val);
+    }
 
     // ---- Bass keys ----
     else if (!strcmp(key, "bass")) {
