@@ -8,17 +8,28 @@ int AdaptiveMic::currentGain = 20;
 
 AdaptiveMic::AdaptiveMic()
     : env(0.0f), envAR(0.0f), envMean(0.0f),
-      minEnv(1e9f), maxEnv(0.0f), lastAvgAbs(0.0f),
+      minEnv(0.0f), maxEnv(0.0f), lastAvgAbs(0.0f),
       lastCalibMillis(0) {}
 
 bool AdaptiveMic::begin() {
-    // mono, 16 kHz
+    // Set the receive callback first so ISR can fire as soon as PDM starts
+    PDM.onReceive(onPDMdata);
+
+    // (Optional) buffer size can be set before or after on some cores; keeping here is fine
+    PDM.setBufferSize(sampleBufferSize);
+
+    // Start PDM: mono, 16 kHz
     if (!PDM.begin(1, 16000)) {
         return false;
     }
-    PDM.setBufferSize(sampleBufferSize);
-    PDM.onReceive(onPDMdata);
+
+    // Set initial hardware gain
     PDM.setGain(currentGain);
+
+    // Initialize min/max around the current envelope so normalization has a small, valid span
+    minEnv = envAR;
+    maxEnv = envAR;
+
     lastCalibMillis = millis();
     return true;
 }
