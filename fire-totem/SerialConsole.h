@@ -16,8 +16,6 @@ public:
     void restoreDefaults();
     void printAll();
 
-    void drawTopRowVU();
-
 private:
     FireEffect &fire;
     Adafruit_NeoPixel &leds;

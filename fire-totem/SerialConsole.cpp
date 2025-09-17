@@ -136,24 +136,6 @@ void SerialConsole::printAll() {
     Serial.print(F("ReleaseTau: ")); Serial.println(mic.releaseTau, 3);
 }
 
-void SerialConsole::drawTopRowVU() {
-    if (!fire.params.vuTopRowEnabled) return;
-
-    float level = mic.getLevel();
-    // Treat tiny/invalid as silence
-    if (!isfinite(level) || level < mic.noiseGate) level = 0.0f;
-
-    int lit = (int)(level * 16.0f); // floor; ensures silence => 0 LEDs
-    if (lit < 0)  lit = 0;
-    if (lit > 16) lit = 16;
-
-    const int y = 0; // top row
-    for (int x = 0; x < 16; ++x) {
-        uint32_t c = (x < lit) ? leds.Color(255, 0, 0) : 0;
-        leds.setPixelColor(fire.xyToIndex(x, y), c);
-    }
-}
-
 // ---- Mic debug tool ----
 void SerialConsole::micDebugTick() {
     if (!micDebugEnabled) return;

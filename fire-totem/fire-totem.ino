@@ -37,12 +37,6 @@ void loop() {
   fire.update(energy);
   fire.show();
 
-  // Draw optional VU meter overlay
-  if (fire.params.vuTopRowEnabled) {
-    console.drawTopRowVU();
-    leds.show();
-  }
-
   // Handle serial commands
   console.update();
 }
