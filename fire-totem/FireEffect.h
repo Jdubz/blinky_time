@@ -23,6 +23,7 @@ public:
     FireEffect(Adafruit_NeoPixel &strip, int width = 16, int height = 8);
     FireEffect(Adafruit_NeoPixel *strip, int width = 16, int height = 8)
         : FireEffect(*strip, width, height) {}
+    ~FireEffect();
 
     void begin();
     void update(float energy);
@@ -50,6 +51,8 @@ private:
     Adafruit_NeoPixel &leds;
     int WIDTH;
     int HEIGHT;
+      // frame timing for dt
+    unsigned long lastUpdateMs = 0; 
 
     // Retro fire heat grid
     // [x][y], y=0 is top row for rendering; we still treat bottom (y=HEIGHT-1) as the "fire source".

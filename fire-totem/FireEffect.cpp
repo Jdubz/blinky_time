@@ -24,24 +24,11 @@ void FireEffect::restoreDefaults() {
     params.bottomRowsForSparks = Defaults::BottomRowsForSparks;
 }
 
-static void advectRowWrap(const float* inRow, float* outRow, int W, float dShift) {
-  // Shift signs: dShift > 0 moves content to the RIGHT (leans flames right)
-  // Sample source at x - dShift with circular wrap and linear interpolation.
-  for (int x = 0; x < W; ++x) {
-    float srcX = x - dShift;           // where this output x comes FROM
-    // wrap into [0, W)
-    while (srcX < 0)      srcX += W;
-    while (srcX >= W)     srcX -= W;
-    int   i0   = (int)srcX;
-    int   i1   = (i0 + 1 == W) ? 0 : (i0 + 1);
-    float frac = srcX - i0;
-    outRow[x]  = inRow[i0] * (1.0f - frac) + inRow[i1] * frac;
-    if (outRow[x] < 0.0f) outRow[x] = 0.0f;
-    if (outRow[x] > 1.0f) outRow[x] = 1.0f;
-  }
-}
-
 void FireEffect::update(float energy) {
+    // --- frame dt (seconds) ---
+    unsigned long nowMs = millis();
+    float dt = (lastUpdateMs == 0) ? 0.0f : (nowMs - lastUpdateMs) * 0.001f;
+    lastUpdateMs = nowMs;
 
     // Cooling bias by audio (negative = taller flames for loud parts)
     int16_t coolingBias = params.coolingAudioBias; // int8_t promoted
@@ -55,6 +42,7 @@ void FireEffect::update(float energy) {
 
     // ---- IMU integration: wind-biased spark + upward stoke ----
 
+    // 1) Orientation: which way is up
     const int baseRowStart = 0;
     const int baseRowStep  = +1;
 
@@ -76,7 +64,6 @@ void FireEffect::update(float energy) {
     // 3) Wind: drift a “spark head” around the cylinder; spawn near it occasionally
     //    (keeps everything gentle—doesn't alter transport/cooling)
     static unsigned long lastWindMs = 0;
-    unsigned long nowMs = millis();
     float dtWind = (lastWindMs == 0) ? 0.016f : (nowMs - lastWindMs) * 0.001f;
     lastWindMs = nowMs;
 
@@ -124,6 +111,19 @@ void FireEffect::update(float energy) {
       }
 
       if (heatScratch) {
+        auto advectRowWrap = [](const float* inRow, float* outRow, int W, float s) {
+          for (int x = 0; x < W; ++x) {
+            float srcX = x - s;
+            while (srcX < 0)    srcX += W;
+            while (srcX >= W)   srcX -= W;
+            int   i0 = (int)srcX;
+            int   i1 = (i0 + 1 == W) ? 0 : (i0 + 1);
+            float f  = srcX - i0;
+            float v  = inRow[i0] * (1.0f - f) + inRow[i1] * f;
+            if (v < 0.0f) v = 0.0f; if (v > 1.0f) v = 1.0f;
+            outRow[x] = v;
+          }
+        };
         for (int y = 0; y < HEIGHT; ++y) {
           // copy current row to scratch
           for (int x = 0; x < WIDTH; ++x) {
@@ -141,7 +141,6 @@ void FireEffect::update(float energy) {
           }
 
           advectRowWrap(heatScratch, outRow, WIDTH, dShift);
-
           for (int x = 0; x < WIDTH; ++x) {
             heat[ xyToIndex(x, y) ] = outRow[x];
           }
