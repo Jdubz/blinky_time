@@ -3,9 +3,11 @@
 FireEffect::FireEffect(Adafruit_NeoPixel &strip, int width, int height)
     : leds(strip), WIDTH(width), HEIGHT(height), heat(nullptr) {
     restoreDefaults();
-    prevHeat = (uint8_t*)malloc(width * height);
-    if (prevHeat) memset(prevHeat, 0, width * height);
-    lastMs = millis();
+    const int N = leds.numPixels();
+    heatVis = (float*)malloc(N * sizeof(float));
+    if (heatVis) {
+      for (int i = 0; i < N; ++i) heatVis[i] = 0.0f;    // init to 0.0
+    }    lastMs = millis();
 }
 
 void FireEffect::begin() {
@@ -33,9 +35,6 @@ void FireEffect::update(float energy) {
     float dt = (now - lastMs) * 0.001f;
     if (dt < 0) dt = 0;
     lastMs = now;
-    // --- Save previous frame’s heat for decay smoothing ---
-    const int N = width * height;
-    if (prevHeat) memcpy(prevHeat, heat, N);   // assumes `heat[]` holds 0..255 per cell
 
     // Cooling bias by audio (negative = taller flames for loud parts)
     int16_t coolingBias = params.coolingAudioBias; // int8_t promoted
@@ -47,21 +46,29 @@ void FireEffect::update(float energy) {
 
     injectSparks(energy);
 
-    // --- Decay smoothing: slow only the downward changes ---
-    if (params.decayTau > 0.0f) {
-      float aR = 1.0f - expf(-dt / params.decayTau);   // release coefficient 0..1
-      // Smaller aR = slower fade; larger aR = faster fade
+    // --- visual smoothing (only affects rendering, never the physics heat[]) ---
+    if (heatVis && params.decayTau > 0.0f) {
+      const int N = leds.numPixels();
+      float aR = 1.0f - expf(-dt / params.decayTau);   // 0..1 release coefficient
+      if (aR < 0.0f) aR = 0.0f;
+      if (aR > 1.0f) aR = 1.0f;
+
       for (int i = 0; i < N; ++i) {
-        uint8_t oldv = prevHeat ? prevHeat[i] : heat[i];
-        uint8_t newv = heat[i];
-        if (newv < oldv) {
-          // Ease toward the new (lower) value; keep rises instantaneous
-          float blended = oldv + (newv - oldv) * aR;
-          if (blended < 0.0f) blended = 0.0f;
-          if (blended > 255.0f) blended = 255.0f;
-          heat[i] = (uint8_t)(blended + 0.5f);
+        float h  = heat[i];       // current physics (0..1)
+        float hv = heatVis[i];    // last visual (0..1)
+        if (h >= hv) {
+          heatVis[i] = h;         // instant attack
+        } else {
+          heatVis[i] = hv + (h - hv) * aR;  // eased release
         }
+        // clamp to [0,1] just in case
+        if (heatVis[i] < 0.0f) heatVis[i] = 0.0f;
+        if (heatVis[i] > 1.0f) heatVis[i] = 1.0f;
       }
+    } else if (heatVis) {
+      // no smoothing -> mirror physics
+      const int N = leds.numPixels();
+      for (int i = 0; i < N; ++i) heatVis[i] = heat[i];
     }
 
     render();
@@ -180,10 +187,17 @@ void FireEffect::render() {
 }
 
 void FireEffect::show() {
-    leds.show();
-}
+const int N = leds.numPixels();
+  const float* src = heatVis ? heatVis : heat;  // fallback if alloc failed
+
+  for (int i = 0; i < N; ++i) {
+    float h = src[i];
+    uint32_t c = heatToColorRGB(h);   // your existing Doom-style palette mapper
+    leds.setPixelColor(i, c);
+  }
+  leds.show();}
 
 FireEffect::~FireEffect() {
-  if (prevHeat) { free(prevHeat); prevHeat = nullptr; }
+  if (heatVis) { free(heatVis); heatVis = nullptr; }
 }
 

@@ -49,7 +49,8 @@ public:
     float lpAlpha         = 0.25f;  // 0..1 (higher = quicker)
   };
 
-  bool begin(const Config& cfg = Config());
+  bool begin();    // uses a default Config internally
+  bool begin(const Config& cfg);      // explicit config
 
   // One-shot read (enables divider, samples, disables)
   float readVoltage();      // volts

@@ -24,6 +24,7 @@ public:
     FireEffect(Adafruit_NeoPixel &strip, int width = 16, int height = 8);
     FireEffect(Adafruit_NeoPixel *strip, int width = 16, int height = 8)
         : FireEffect(*strip, width, height) {}
+    ~FireEffect();  
 
     void begin();
     void update(float energy);
@@ -57,7 +58,7 @@ private:
     void propagateUp();
     void injectSparks(float energy);
 
-    uint8_t* prevHeat = nullptr;     // previous-frame heat, for smoothing
+    float* heatVis = nullptr;     // previous-frame heat, for smoothing
     unsigned long lastMs = 0;         // for dt
 
     // palette

@@ -25,7 +25,7 @@ namespace Defaults {
   constexpr uint8_t AudioHeatBoostMax   = 60;
   constexpr int8_t  CoolingAudioBias    = -20;   // negative => taller flames on loud parts
   constexpr uint8_t BottomRowsForSparks = 1;
-  constexpr float   FireDecayTau = 0.28f;  // seconds; larger = smoother/slower fade
+  constexpr float   FireDecayTau = 0.08f;  // seconds; larger = smoother/slower fade
 
   // (optional) Ranges you show in help strings
   namespace Ranges {

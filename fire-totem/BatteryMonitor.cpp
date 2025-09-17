@@ -1,5 +1,10 @@
 #include "BatteryMonitor.h"
 
+bool BatteryMonitor::begin() {
+  Config cfg;             // default-constructed config
+  return begin(cfg);      // delegate to explicit overload
+}
+
 bool BatteryMonitor::begin(const Config& cfg) {
   cfg_ = cfg;
 
