@@ -48,7 +48,7 @@ void SerialConsole::handleCommand(const char *cmd) {
                          "set sparkheatmin <0-255>, set sparkheatmax <0-255>, "
                          "set audiosparkboost <0-1>, set audioheatboost <0-255>, "
                          "set coolingaudiobias <-128..127>, set bottomrows <1-8>"));
-        Serial.println(F(" Mic : set gate <0-1>, set gamma <0.1-3>, set gain <0-5>, "
+        Serial.println(F(" Mic : set gate <0-1>, set gain <0-5>, "
                          "set attack <s>, set release <s>"));
         Serial.println(F(" VU  : vu on/off"));
         Serial.println(F(" Mic Debug:"));
@@ -74,10 +74,9 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (sscanf(cmd, "set bottomrows %d", &tempInt) == 1) { fire.params.bottomRowsForSparks = (uint8_t)tempInt; Serial.print(F("BottomRowsForSparks=")); Serial.println(fire.params.bottomRowsForSparks); }
     // --- AdaptiveMic parameters ---
     else if (sscanf(cmd, "set gate %f", &tempFloat) == 1) { mic.noiseGate = tempFloat; Serial.print(F("NoiseGate=")); Serial.println(mic.noiseGate, 3); }
-    else if (sscanf(cmd, "set gamma %f", &tempFloat) == 1) { mic.gamma = tempFloat; Serial.print(F("Gamma=")); Serial.println(mic.gamma, 3); }
     else if (sscanf(cmd, "set gain %f", &tempFloat) == 1) { mic.globalGain = tempFloat; Serial.print(F("GlobalGain=")); Serial.println(mic.globalGain, 3); }
-    else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) { mic.attackTau = tempFloat; Serial.print(F("AttackTau=")); Serial.println(mic.attackTau, 3); }
-    else if (sscanf(cmd, "set release %f", &tempFloat) == 1) { mic.releaseTau = tempFloat; Serial.print(F("ReleaseTau=")); Serial.println(mic.releaseTau, 3); }
+    else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) { mic.attackSeconds = tempFloat; Serial.print(F("attackSeconds=")); Serial.println(mic.attackSeconds, 3); }
+    else if (sscanf(cmd, "set release %f", &tempFloat) == 1) { mic.releaseSeconds = tempFloat; Serial.print(F("releaseSeconds=")); Serial.println(mic.releaseSeconds, 3); }
     // --- Mic debug tool ---
     else if (strcmp(cmd, "mic debug on") == 0) {
         micDebugEnabled = true; Serial.println(F("MicDebug=on"));
@@ -103,10 +102,10 @@ void SerialConsole::handleCommand(const char *cmd) {
 
     // --- Auto-gain controls ---
     else if (strcmp(cmd, "ag on") == 0) {
-        mic.autoGainEnabled = true; Serial.println(F("AutoGain=on"));
+        mic.agEnabled = true; Serial.println(F("AutoGain=on"));
     }
     else if (strcmp(cmd, "ag off") == 0) {
-        mic.autoGainEnabled = false; Serial.println(F("AutoGain=off"));
+        mic.agEnabled = false; Serial.println(F("AutoGain=off"));
     }
     else if (sscanf(cmd, "ag target %f", &tempFloat) == 1) {
         mic.agTarget = constrain(tempFloat, 0.1f, 0.95f);
@@ -123,7 +122,7 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.print(mic.agMin,2); Serial.print(','); Serial.print(mic.agMax,2); Serial.println(']');
     }
     else if (strcmp(cmd, "ag stats") == 0) {
-        Serial.print(F("AutoGain: enabled=")); Serial.print(mic.autoGainEnabled ? F("yes") : F("no"));
+        Serial.print(F("AutoGain: enabled=")); Serial.print(mic.agEnabled ? F("yes") : F("no"));
         Serial.print(F(" target="));   Serial.print(mic.agTarget,3);
         Serial.print(F(" strength=")); Serial.print(mic.agStrength,3);
         Serial.print(F(" limits=["));  Serial.print(mic.agMin,2); Serial.print(','); Serial.print(mic.agMax,2); Serial.println(']');
@@ -151,10 +150,9 @@ void SerialConsole::handleCommand(const char *cmd) {
 void SerialConsole::restoreDefaults() {
     fire.restoreDefaults();
     mic.noiseGate   = Defaults::NoiseGate;
-    mic.gamma       = Defaults::Gamma;
     mic.globalGain  = Defaults::GlobalGain;
-    mic.attackTau   = Defaults::AttackTau;
-    mic.releaseTau  = Defaults::ReleaseTau;
+    mic.attackSeconds   = Defaults::AttackSeconds;
+    mic.releaseSeconds  = Defaults::ReleaseSeconds;
     Serial.println(F("Defaults restored."));
 }
 
@@ -170,10 +168,9 @@ void SerialConsole::printAll() {
     Serial.print(F("BottomRowsForSparks: ")); Serial.println(fire.params.bottomRowsForSparks);
     // Mic
     Serial.print(F("NoiseGate: ")); Serial.println(mic.noiseGate, 3);
-    Serial.print(F("Gamma: ")); Serial.println(mic.gamma, 3);
     Serial.print(F("GlobalGain: ")); Serial.println(mic.globalGain, 3);
-    Serial.print(F("AttackTau: ")); Serial.println(mic.attackTau, 3);
-    Serial.print(F("ReleaseTau: ")); Serial.println(mic.releaseTau, 3);
+    Serial.print(F("attackSeconds: ")); Serial.println(mic.attackSeconds, 3);
+    Serial.print(F("releaseSeconds: ")); Serial.println(mic.releaseSeconds, 3);
      // Battery (one-shot read; no background polling)
     float vbat = battery.readVoltage();                       // volts
     uint8_t soc = BatteryMonitor::voltageToPercent(vbat);     // % estimate
@@ -197,29 +194,16 @@ void SerialConsole::micDebugTick() {
 
 void SerialConsole::micDebugPrintLine() {
     unsigned long ms = millis();
-    float raw   = mic.getAvgAbs();  // << raw, pre-compensation
-    float level = mic.getLevel();   // normalized+gated+gain+gamma
-    float env   = mic.getEnvAR();
-    float floor = mic.getFloor();
-    float peak  = mic.getPeak();
-    int   gain  = mic.getGain();
+    float level = mic.getLevel();   // normalized+gated+gain
+    float env   = mic.getEnv();
 
     if (micDebugCsv) {
         // CSV header (printed when enabling CSV): #ms,rawAbs,level,envAR,floor,peak,gain
         Serial.print(ms);   Serial.print(',');
-        Serial.print(raw, 1);   Serial.print(',');  // RAW
-        Serial.print(level, 4); Serial.print(',');
-        Serial.print(env,   1); Serial.print(',');
-        Serial.print(floor, 1); Serial.print(',');
-        Serial.print(peak,  1); Serial.print(',');
-        Serial.println(gain);
+        Serial.println(level, 4);
     } else {
         Serial.print(F("[MIC] t=")); Serial.print(ms);
-        Serial.print(F("ms  RAW="));  Serial.print(raw, 1);    // RAW shown first
         Serial.print(F("  lvl="));    Serial.print(level, 4);
-        Serial.print(F("  env="));    Serial.print(env, 1);
-        Serial.print(F("  floor="));  Serial.print(floor, 1);
-        Serial.print(F("  peak="));   Serial.print(peak, 1);
-        Serial.print(F("  gain="));   Serial.println(gain);
+        Serial.print(F("  env="));    Serial.println(env, 1);
     }
 }

@@ -17,12 +17,19 @@ SerialConsole console(fire, leds);
 BatteryMonitor battery;
 IMUHelper imu;
 
+uint32_t lastMs = 0;
+
 void setup() {
   leds.begin();
   leds.setBrightness(150);
   leds.show();
   fire.begin();
-  mic.begin();
+  bool ok = mic.begin(16000, 32); // sample rate, initial hardware gain
+  if (!ok) {
+    Serial.println("Microphone failed to start");
+  } else {
+    Serial.println("Microphone initialized");
+  }
   console.begin();
   imu.begin();
 
@@ -31,12 +38,11 @@ void setup() {
 }
 
 void loop() {
-  static unsigned long lastMs = millis();
-  unsigned long now = millis();
-  float dt = (now - lastMs) / 1000.0f; if (dt < 0) dt = 0; lastMs = now;
-
+  uint32_t now = millis();
+  float dt = (now - lastMs) * 0.001f;
+  lastMs = now;
   mic.update(dt);
-  mic.autoGainTick(dt);  // NEW: fast software auto-gain
+
   imu.updateMotion(dt);
 
   const MotionState& m = imu.motion();  // or whatever your helper exposes
