@@ -17,6 +17,7 @@ BatteryMonitor battery;
 
 void setup() {
   leds.begin();
+  leds.setBrightness(150);
   leds.show();
   fire.begin();
   mic.begin();

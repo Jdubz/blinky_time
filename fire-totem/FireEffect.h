@@ -15,7 +15,6 @@ struct FireParams {
     uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
     int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
     uint8_t bottomRowsForSparks = Defaults::BottomRowsForSparks;
-    float   decayTau = Defaults::FireDecayTau;  // NEW: decay smoothing for downward changes
 };
 
 class FireEffect {
@@ -24,7 +23,6 @@ public:
     FireEffect(Adafruit_NeoPixel &strip, int width = 16, int height = 8);
     FireEffect(Adafruit_NeoPixel *strip, int width = 16, int height = 8)
         : FireEffect(*strip, width, height) {}
-    ~FireEffect();  
 
     void begin();
     void update(float energy);
@@ -57,9 +55,6 @@ private:
     void coolCells();
     void propagateUp();
     void injectSparks(float energy);
-
-    float* heatVis = nullptr;     // previous-frame heat, for smoothing
-    unsigned long lastMs = 0;         // for dt
 
     // palette
     uint32_t heatToColorRGB(float h) const;
