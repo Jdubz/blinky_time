@@ -3,6 +3,9 @@
 FireEffect::FireEffect(Adafruit_NeoPixel &strip, int width, int height)
     : leds(strip), WIDTH(width), HEIGHT(height), heat(nullptr) {
     restoreDefaults();
+    prevHeat = (uint8_t*)malloc(width * height);
+    if (prevHeat) memset(prevHeat, 0, width * height);
+    lastMs = millis();
 }
 
 void FireEffect::begin() {
@@ -22,10 +25,18 @@ void FireEffect::restoreDefaults() {
     params.audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
     params.coolingAudioBias    = Defaults::CoolingAudioBias;
     params.bottomRowsForSparks = Defaults::BottomRowsForSparks;
-    params.vuTopRowEnabled     = Defaults::VuTopRowEnabled;
 }
 
 void FireEffect::update(float energy) {
+    // --- Frame timing (for frame-rate independent smoothing) ---
+    unsigned long now = millis();
+    float dt = (now - lastMs) * 0.001f;
+    if (dt < 0) dt = 0;
+    lastMs = now;
+    // --- Save previous frame’s heat for decay smoothing ---
+    const int N = width * height;
+    if (prevHeat) memcpy(prevHeat, heat, N);   // assumes `heat[]` holds 0..255 per cell
+
     // Cooling bias by audio (negative = taller flames for loud parts)
     int16_t coolingBias = params.coolingAudioBias; // int8_t promoted
     int cooling = params.baseCooling + coolingBias; // can go below 0; clamp in coolCells
@@ -35,6 +46,23 @@ void FireEffect::update(float energy) {
     propagateUp();
 
     injectSparks(energy);
+
+    // --- Decay smoothing: slow only the downward changes ---
+    if (params.decayTau > 0.0f) {
+      float aR = 1.0f - expf(-dt / params.decayTau);   // release coefficient 0..1
+      // Smaller aR = slower fade; larger aR = faster fade
+      for (int i = 0; i < N; ++i) {
+        uint8_t oldv = prevHeat ? prevHeat[i] : heat[i];
+        uint8_t newv = heat[i];
+        if (newv < oldv) {
+          // Ease toward the new (lower) value; keep rises instantaneous
+          float blended = oldv + (newv - oldv) * aR;
+          if (blended < 0.0f) blended = 0.0f;
+          if (blended > 255.0f) blended = 255.0f;
+          heat[i] = (uint8_t)(blended + 0.5f);
+        }
+      }
+    }
 
     render();
 }
@@ -154,3 +182,8 @@ void FireEffect::render() {
 void FireEffect::show() {
     leds.show();
 }
+
+FireEffect::~FireEffect() {
+  if (prevHeat) { free(prevHeat); prevHeat = nullptr; }
+}
+

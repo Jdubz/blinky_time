@@ -2,9 +2,6 @@
 #include <stdint.h>
 
 namespace Defaults {
-  // ---- Monitoring / UI ----
-  constexpr bool VuTopRowEnabled = true;  // off by default
-
   // ---- Audio mapping (used by fire-totem + SerialConsole) ----
   constexpr float NoiseGate   = 0.06f;
   constexpr float Gamma       = 0.60f;
@@ -28,6 +25,7 @@ namespace Defaults {
   constexpr uint8_t AudioHeatBoostMax   = 60;
   constexpr int8_t  CoolingAudioBias    = -20;   // negative => taller flames on loud parts
   constexpr uint8_t BottomRowsForSparks = 1;
+  constexpr float   FireDecayTau = 0.28f;  // seconds; larger = smoother/slower fade
 
   // (optional) Ranges you show in help strings
   namespace Ranges {

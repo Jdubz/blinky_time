@@ -15,7 +15,7 @@ struct FireParams {
     uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
     int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
     uint8_t bottomRowsForSparks = Defaults::BottomRowsForSparks;
-    bool    vuTopRowEnabled     = Defaults::VuTopRowEnabled;
+    float   decayTau = Defaults::FireDecayTau;  // NEW: decay smoothing for downward changes
 };
 
 class FireEffect {
@@ -56,6 +56,9 @@ private:
     void coolCells();
     void propagateUp();
     void injectSparks(float energy);
+
+    uint8_t* prevHeat = nullptr;     // previous-frame heat, for smoothing
+    unsigned long lastMs = 0;         // for dt
 
     // palette
     uint32_t heatToColorRGB(float h) const;

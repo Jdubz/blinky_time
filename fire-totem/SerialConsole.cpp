@@ -1,8 +1,10 @@
 #include "SerialConsole.h"
 #include "TotemDefaults.h"
 #include "AdaptiveMic.h"
+#include "BatteryMonitor.h"
 
 extern AdaptiveMic mic;
+extern BatteryMonitor battery;
 
 SerialConsole::SerialConsole(FireEffect &f, Adafruit_NeoPixel &l)
     : fire(f), leds(l) {}
@@ -74,13 +76,6 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (sscanf(cmd, "set gain %f", &tempFloat) == 1) { mic.globalGain = tempFloat; Serial.print(F("GlobalGain=")); Serial.println(mic.globalGain, 3); }
     else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) { mic.attackTau = tempFloat; Serial.print(F("AttackTau=")); Serial.println(mic.attackTau, 3); }
     else if (sscanf(cmd, "set release %f", &tempFloat) == 1) { mic.releaseTau = tempFloat; Serial.print(F("ReleaseTau=")); Serial.println(mic.releaseTau, 3); }
-    // --- VU meter ---
-    else if (strcmp(cmd, "vu on") == 0) {
-        fire.params.vuTopRowEnabled = true; Serial.println(F("VU=on"));
-    }
-    else if (strcmp(cmd, "vu off") == 0) {
-        fire.params.vuTopRowEnabled = false; Serial.println(F("VU=off"));
-    }
     // --- Mic debug tool ---
     else if (strcmp(cmd, "mic debug on") == 0) {
         micDebugEnabled = true; Serial.println(F("MicDebug=on"));
@@ -158,13 +153,21 @@ void SerialConsole::printAll() {
     Serial.print(F("AudioHeatBoostMax: ")); Serial.println(fire.params.audioHeatBoostMax);
     Serial.print(F("CoolingAudioBias: ")); Serial.println(fire.params.coolingAudioBias);
     Serial.print(F("BottomRowsForSparks: ")); Serial.println(fire.params.bottomRowsForSparks);
-    Serial.print(F("VU meter: ")); Serial.println(fire.params.vuTopRowEnabled ? F("on") : F("off"));
     // Mic
     Serial.print(F("NoiseGate: ")); Serial.println(mic.noiseGate, 3);
     Serial.print(F("Gamma: ")); Serial.println(mic.gamma, 3);
     Serial.print(F("GlobalGain: ")); Serial.println(mic.globalGain, 3);
     Serial.print(F("AttackTau: ")); Serial.println(mic.attackTau, 3);
     Serial.print(F("ReleaseTau: ")); Serial.println(mic.releaseTau, 3);
+     // Battery (one-shot read; no background polling)
+    float vbat = battery.readVoltage();                       // volts
+    uint8_t soc = BatteryMonitor::voltageToPercent(vbat);     // % estimate
+    bool charging = battery.isCharging();                     // CHG pin if wired
+
+    Serial.print(F("Battery: "));
+    Serial.print(vbat, 3); Serial.print(F(" V  ("));
+    Serial.print(soc); Serial.print(F("%)  Charging: "));
+    Serial.println(charging ? F("yes") : F("no"));
 }
 
 // ---- Mic debug tool ----

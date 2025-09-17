@@ -2,6 +2,7 @@
 #include "AdaptiveMic.h"
 #include "FireEffect.h"
 #include "SerialConsole.h"
+#include "BatteryMonitor.h"
 
 #define WIDTH 16
 #define HEIGHT 8
@@ -12,6 +13,7 @@ Adafruit_NeoPixel leds(WIDTH * HEIGHT, LED_PIN, NEO_RGB + NEO_KHZ800);
 FireEffect fire(leds, WIDTH, HEIGHT);
 AdaptiveMic mic;
 SerialConsole console(fire, leds);
+BatteryMonitor battery;
 
 void setup() {
   leds.begin();
@@ -19,6 +21,9 @@ void setup() {
   fire.begin();
   mic.begin();
   console.begin();
+
+  battery.begin();                 // uses default pins/refs for XIAO Sense
+  battery.setFastCharge(true);     // optional: enable 100 mA fast charging
 }
 
 void loop() {
