@@ -9,37 +9,33 @@ SerialConsole::SerialConsole(FireEffect &f, Adafruit_NeoPixel &l)
 
 void SerialConsole::begin() {
     Serial.begin(115200);
-
-    // Don’t block forever on nRF52840
     unsigned long start = millis();
     while (!Serial && (millis() - start < 2000)) { delay(10); }
-
     Serial.println(F("Serial console ready. Type 'help' for commands."));
 }
 
 void SerialConsole::update() {
+    // Handle incoming commands
     if (Serial.available()) {
-        static char buf[96];
+        static char buf[128];
         size_t len = Serial.readBytesUntil('\n', buf, sizeof(buf) - 1);
         buf[len] = '\0';
-
         // Trim CR/LF
-        while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n')) {
+        while (len > 0 && (buf[len-1] == '\r' || buf[len-1] == '\n')) {
             buf[--len] = '\0';
         }
-
         // Debug echo
-        Serial.print(F("Received: '"));
-        Serial.print(buf);
-        Serial.println(F("'"));
-
+        // Serial.print(F("Received: '")); Serial.print(buf); Serial.println(F("'"));
         handleCommand(buf);
     }
+
+    // Periodic mic debug output
+    micDebugTick();
 }
 
 void SerialConsole::handleCommand(const char *cmd) {
-    int tempInt;
-    float tempFloat;
+    int tempInt = 0;
+    float tempFloat = 0.0f;
 
     if (strcmp(cmd, "help") == 0) {
         Serial.println(F("Commands: show, defaults"));
@@ -49,7 +45,12 @@ void SerialConsole::handleCommand(const char *cmd) {
                          "set coolingaudiobias <-128..127>, set bottomrows <1-8>"));
         Serial.println(F(" Mic : set gate <0-1>, set gamma <0.1-3>, set gain <0-5>, "
                          "set attack <s>, set release <s>"));
-        Serial.println(F(" vu on/off"));
+        Serial.println(F(" VU  : vu on/off"));
+        Serial.println(F(" Mic Debug:"));
+        Serial.println(F("   mic debug on/off"));
+        Serial.println(F("   mic debug rate <ms>"));
+        Serial.println(F("   mic debug csv on/off"));
+        Serial.println(F("   mic stats   (one snapshot)"));
     }
     else if (strcmp(cmd, "show") == 0) {
         printAll();
@@ -58,26 +59,48 @@ void SerialConsole::handleCommand(const char *cmd) {
         restoreDefaults();
     }
     // --- Fire parameters ---
-    else if (sscanf(cmd, "set cooling %d", &tempInt) == 1) { fire.params.baseCooling = (uint8_t)tempInt; }
-    else if (sscanf(cmd, "set sparkchance %f", &tempFloat) == 1) { fire.params.sparkChance = tempFloat; }
-    else if (sscanf(cmd, "set sparkheatmin %d", &tempInt) == 1) { fire.params.sparkHeatMin = (uint8_t)tempInt; }
-    else if (sscanf(cmd, "set sparkheatmax %d", &tempInt) == 1) { fire.params.sparkHeatMax = (uint8_t)tempInt; }
-    else if (sscanf(cmd, "set audiosparkboost %f", &tempFloat) == 1) { fire.params.audioSparkBoost = tempFloat; }
-    else if (sscanf(cmd, "set audioheatboost %d", &tempInt) == 1) { fire.params.audioHeatBoostMax = (uint8_t)tempInt; }
-    else if (sscanf(cmd, "set coolingaudiobias %d", &tempInt) == 1) { fire.params.coolingAudioBias = (int8_t)tempInt; }
-    else if (sscanf(cmd, "set bottomrows %d", &tempInt) == 1) { fire.params.bottomRowsForSparks = (uint8_t)tempInt; }
+    else if (sscanf(cmd, "set cooling %d", &tempInt) == 1) { fire.params.baseCooling = (uint8_t)tempInt; Serial.print(F("Cooling=")); Serial.println(fire.params.baseCooling); }
+    else if (sscanf(cmd, "set sparkchance %f", &tempFloat) == 1) { fire.params.sparkChance = tempFloat; Serial.print(F("SparkChance=")); Serial.println(fire.params.sparkChance, 3); }
+    else if (sscanf(cmd, "set sparkheatmin %d", &tempInt) == 1) { fire.params.sparkHeatMin = (uint8_t)tempInt; Serial.print(F("SparkHeatMin=")); Serial.println(fire.params.sparkHeatMin); }
+    else if (sscanf(cmd, "set sparkheatmax %d", &tempInt) == 1) { fire.params.sparkHeatMax = (uint8_t)tempInt; Serial.print(F("SparkHeatMax=")); Serial.println(fire.params.sparkHeatMax); }
+    else if (sscanf(cmd, "set audiosparkboost %f", &tempFloat) == 1) { fire.params.audioSparkBoost = tempFloat; Serial.print(F("AudioSparkBoost=")); Serial.println(fire.params.audioSparkBoost, 3); }
+    else if (sscanf(cmd, "set audioheatboost %d", &tempInt) == 1) { fire.params.audioHeatBoostMax = (uint8_t)tempInt; Serial.print(F("AudioHeatBoostMax=")); Serial.println(fire.params.audioHeatBoostMax); }
+    else if (sscanf(cmd, "set coolingaudiobias %d", &tempInt) == 1) { fire.params.coolingAudioBias = (int8_t)tempInt; Serial.print(F("CoolingAudioBias=")); Serial.println(fire.params.coolingAudioBias); }
+    else if (sscanf(cmd, "set bottomrows %d", &tempInt) == 1) { fire.params.bottomRowsForSparks = (uint8_t)tempInt; Serial.print(F("BottomRowsForSparks=")); Serial.println(fire.params.bottomRowsForSparks); }
     // --- AdaptiveMic parameters ---
-    else if (sscanf(cmd, "set gate %f", &tempFloat) == 1) { mic.noiseGate = tempFloat; }
-    else if (sscanf(cmd, "set gamma %f", &tempFloat) == 1) { mic.gamma = tempFloat; }
-    else if (sscanf(cmd, "set gain %f", &tempFloat) == 1) { mic.globalGain = tempFloat; }
-    else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) { mic.attackTau = tempFloat; }
-    else if (sscanf(cmd, "set release %f", &tempFloat) == 1) { mic.releaseTau = tempFloat; }
+    else if (sscanf(cmd, "set gate %f", &tempFloat) == 1) { mic.noiseGate = tempFloat; Serial.print(F("NoiseGate=")); Serial.println(mic.noiseGate, 3); }
+    else if (sscanf(cmd, "set gamma %f", &tempFloat) == 1) { mic.gamma = tempFloat; Serial.print(F("Gamma=")); Serial.println(mic.gamma, 3); }
+    else if (sscanf(cmd, "set gain %f", &tempFloat) == 1) { mic.globalGain = tempFloat; Serial.print(F("GlobalGain=")); Serial.println(mic.globalGain, 3); }
+    else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) { mic.attackTau = tempFloat; Serial.print(F("AttackTau=")); Serial.println(mic.attackTau, 3); }
+    else if (sscanf(cmd, "set release %f", &tempFloat) == 1) { mic.releaseTau = tempFloat; Serial.print(F("ReleaseTau=")); Serial.println(mic.releaseTau, 3); }
     // --- VU meter ---
     else if (strcmp(cmd, "vu on") == 0) {
-        fire.params.vuTopRowEnabled = true;
+        fire.params.vuTopRowEnabled = true; Serial.println(F("VU=on"));
     }
     else if (strcmp(cmd, "vu off") == 0) {
-        fire.params.vuTopRowEnabled = false;
+        fire.params.vuTopRowEnabled = false; Serial.println(F("VU=off"));
+    }
+    // --- Mic debug tool ---
+    else if (strcmp(cmd, "mic debug on") == 0) {
+        micDebugEnabled = true; Serial.println(F("MicDebug=on"));
+    }
+    else if (strcmp(cmd, "mic debug off") == 0) {
+        micDebugEnabled = false; Serial.println(F("MicDebug=off"));
+    }
+    else if (sscanf(cmd, "mic debug rate %d", &tempInt) == 1) {
+        if (tempInt < 20) tempInt = 20;
+        micDebugPeriodMs = (unsigned long)tempInt;
+        Serial.print(F("MicDebugRate(ms)=")); Serial.println(micDebugPeriodMs);
+    }
+    else if (strcmp(cmd, "mic debug csv on") == 0) {
+        micDebugCsv = true; Serial.println(F("MicDebugCSV=on"));
+        Serial.println(F("#ms,level,envAR,floor,peak,avgAbs,gain"));
+    }
+    else if (strcmp(cmd, "mic debug csv off") == 0) {
+        micDebugCsv = false; Serial.println(F("MicDebugCSV=off"));
+    }
+    else if (strcmp(cmd, "mic stats") == 0) {
+        micDebugPrintLine();
     }
     else {
         Serial.println(F("Unknown command"));
@@ -97,34 +120,75 @@ void SerialConsole::restoreDefaults() {
 void SerialConsole::printAll() {
     // Fire
     Serial.print(F("Cooling: ")); Serial.println(fire.params.baseCooling);
-    Serial.print(F("SparkChance: ")); Serial.println(fire.params.sparkChance);
+    Serial.print(F("SparkChance: ")); Serial.println(fire.params.sparkChance, 3);
     Serial.print(F("SparkHeatMin: ")); Serial.println(fire.params.sparkHeatMin);
     Serial.print(F("SparkHeatMax: ")); Serial.println(fire.params.sparkHeatMax);
-    Serial.print(F("AudioSparkBoost: ")); Serial.println(fire.params.audioSparkBoost);
+    Serial.print(F("AudioSparkBoost: ")); Serial.println(fire.params.audioSparkBoost, 3);
     Serial.print(F("AudioHeatBoostMax: ")); Serial.println(fire.params.audioHeatBoostMax);
     Serial.print(F("CoolingAudioBias: ")); Serial.println(fire.params.coolingAudioBias);
     Serial.print(F("BottomRowsForSparks: ")); Serial.println(fire.params.bottomRowsForSparks);
-    Serial.print(F("VU meter: "));
-    Serial.println(fire.params.vuTopRowEnabled ? F("on") : F("off"));
-
+    Serial.print(F("VU meter: ")); Serial.println(fire.params.vuTopRowEnabled ? F("on") : F("off"));
     // Mic
-    Serial.print(F("NoiseGate: ")); Serial.println(mic.noiseGate);
-    Serial.print(F("Gamma: ")); Serial.println(mic.gamma);
-    Serial.print(F("GlobalGain: ")); Serial.println(mic.globalGain);
-    Serial.print(F("AttackTau: ")); Serial.println(mic.attackTau);
-    Serial.print(F("ReleaseTau: ")); Serial.println(mic.releaseTau);
+    Serial.print(F("NoiseGate: ")); Serial.println(mic.noiseGate, 3);
+    Serial.print(F("Gamma: ")); Serial.println(mic.gamma, 3);
+    Serial.print(F("GlobalGain: ")); Serial.println(mic.globalGain, 3);
+    Serial.print(F("AttackTau: ")); Serial.println(mic.attackTau, 3);
+    Serial.print(F("ReleaseTau: ")); Serial.println(mic.releaseTau, 3);
 }
 
 void SerialConsole::drawTopRowVU() {
     if (!fire.params.vuTopRowEnabled) return;
 
     float level = mic.getLevel();
-    int lit = (int)(level * 16.0f + 0.5f);
+    // Treat tiny/invalid as silence
+    if (!isfinite(level) || level < mic.noiseGate) level = 0.0f;
+
+    int lit = (int)(level * 16.0f); // floor; ensures silence => 0 LEDs
+    if (lit < 0)  lit = 0;
     if (lit > 16) lit = 16;
 
-    int y = 0; // top row
+    const int y = 0; // top row
     for (int x = 0; x < 16; ++x) {
-        uint32_t color = (x < lit) ? leds.Color(255, 0, 0) : 0;
-        leds.setPixelColor(fire.xyToIndex(x, y), color);
+        uint32_t c = (x < lit) ? leds.Color(255, 0, 0) : 0;
+        leds.setPixelColor(fire.xyToIndex(x, y), c);
+    }
+}
+
+// ---- Mic debug tool ----
+void SerialConsole::micDebugTick() {
+    if (!micDebugEnabled) return;
+    unsigned long now = millis();
+    if (now - micDebugLastMs >= micDebugPeriodMs) {
+        micDebugLastMs = now;
+        micDebugPrintLine();
+    }
+}
+
+void SerialConsole::micDebugPrintLine() {
+    unsigned long ms = millis();
+    float level = mic.getLevel();
+    float env   = mic.getEnvAR();
+    float floor = mic.getFloor();
+    float peak  = mic.getPeak();
+    float avg   = mic.getAvgAbs();
+    int   gain  = mic.getGain();
+
+    if (micDebugCsv) {
+        // #ms,level,envAR,floor,peak,avgAbs,gain
+        Serial.print(ms); Serial.print(',');
+        Serial.print(level, 4); Serial.print(',');
+        Serial.print(env,   1); Serial.print(',');
+        Serial.print(floor, 1); Serial.print(',');
+        Serial.print(peak,  1); Serial.print(',');
+        Serial.print(avg,   1); Serial.print(',');
+        Serial.println(gain);
+    } else {
+        Serial.print(F("[MIC] t=")); Serial.print(ms);
+        Serial.print(F("ms  lvl=")); Serial.print(level, 4);
+        Serial.print(F("  env="));  Serial.print(env, 1);
+        Serial.print(F("  floor="));Serial.print(floor, 1);
+        Serial.print(F("  peak=")); Serial.print(peak, 1);
+        Serial.print(F("  avg="));  Serial.print(avg, 1);
+        Serial.print(F("  gain=")); Serial.println(gain);
     }
 }

@@ -12,39 +12,53 @@ public:
     bool begin();
     static void onPDMdata();
 
+    // Call once per frame with elapsed seconds
     void update(float dt);
-    float getLevel() const;   // 0..1 after gate/gamma/gain & AR env
 
-    int   getGain() const { return currentGain; }
-    float getEnv()  const { return env; }
-    float getEnvMean() const { return envMean; }
-    float getEnvMin()  const { return minEnv; }
-    float getEnvMax()  const { return maxEnv; }
+    // Normalized, gated, gamma-corrected level [0..1]
+    float getLevel() const { return levelOut; }
 
-    // Tunables (now accessible to SerialConsole)
-    float noiseGate  = Defaults::NoiseGate;
-    float gamma      = Defaults::Gamma;
-    float globalGain = Defaults::GlobalGain;
-    float attackTau  = Defaults::AttackTau;
-    float releaseTau = Defaults::ReleaseTau;
+    // Tunables (wired to your Defaults)
+    float noiseGate  = Defaults::NoiseGate;   // 0..1, applied after normalization
+    float gamma      = Defaults::Gamma;       // perceptual curve
+    float globalGain = Defaults::GlobalGain;  // software gain after gate
+    float attackTau  = Defaults::AttackTau;   // s
+    float releaseTau = Defaults::ReleaseTau;  // s
+
+    // Debug
+    int   getGain()     const { return currentGain; }
+    float getEnvAR()    const { return envAR; }
+    float getFloor()    const { return floorEMA; }
+    float getPeak()     const { return peakEMA; }
+    float getAvgAbs()   const { return lastAvgAbs; }
 
 private:
+    // PDM buffer
     static constexpr int sampleBufferSize = 512;
     static int16_t sampleBuffer[sampleBufferSize];
     static volatile int samplesRead;
 
+    // HW gain (0..64 typical)
     static int currentGain;
 
-    // envelope tracking
-    float env;       // fast absolute-average (raw)
-    float envAR;     // attack/release envelope used for output
-    float envMean;   // long-term average
-    float minEnv;
-    float maxEnv;
+    // Raw envelopes (in int16 abs-average units)
+    float envAR     = 0.0f;  // attack-release envelope of abs average
+    float floorEMA  = 0.0f;  // noise floor (fast down, ultra slow up)
+    float peakEMA   = 0.0f;  // decaying peak (fast up, slow down)
+    float levelOut  = 0.0f;  // final 0..1
+    float lastAvgAbs = 0.0f;
 
-    unsigned long lastCalibMillis;
+    bool  initialized = false;
 
-    void calibrate();
+    // Window stats for HW calibration
+    unsigned long lastCalibMs = 0;
+    uint32_t winFrames = 0;
+    uint32_t winActiveRawFrames = 0; // activity measured in raw units (not normalized)
+    uint32_t winClipped = 0;
+    uint32_t winTotal   = 0;
+
+    // Helpers
+    void calibrateHW();
 };
 
 #endif

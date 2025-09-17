@@ -20,7 +20,16 @@ public:
 
 private:
     FireEffect &fire;
-    Adafruit_NeoPixel &leds;   // hold a reference, no more extern
+    Adafruit_NeoPixel &leds;
+
+    // ---- AdaptiveMic debug tool ----
+    bool micDebugEnabled = false;         // toggled by "mic debug on/off"
+    bool micDebugCsv     = false;         // "mic debug csv on/off"
+    unsigned long micDebugPeriodMs = 200; // "mic debug rate <ms>"
+    unsigned long micDebugLastMs   = 0;
+
+    void micDebugTick();                  // periodic printer
+    void micDebugPrintLine();             // one line snapshot
 };
 
 #endif
