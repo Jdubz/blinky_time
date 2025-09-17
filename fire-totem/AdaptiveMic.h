@@ -51,6 +51,21 @@ public:
   float  globalGain    = 1.0f;  // software AGC multiplier
   int    currentHwGain = 32;    // PDM hardware gain
 
+  // --- Transient detection ---
+  float transient          = 0.0f;
+  float transientDecay     = 6.0f;    // decay per second (slower = longer punch)
+  float fastAvg            = 0.0f;    // short-term avg (~20ms)
+  float slowAvg            = 0.0f;    // medium-term avg (~200ms)
+  float fastAlpha          = 0.2f;    // 20ms window at ~60Hz
+  float slowAlpha          = 0.02f;   // 200ms window at ~60Hz
+  float transientFactor    = 2.5f;    // fast must exceed slow * this
+  float loudFloor          = 0.15f;   // must be at least this loud
+  uint32_t transientCooldownMs = 120;
+  uint32_t lastTransientMs = 0;
+  // float prevLevel = 0.0f;
+
+  float getTransient() const { return transient; }
+
   // Debug/health
   uint32_t lastIsrMs = 0;
   bool     pdmAlive  = false;

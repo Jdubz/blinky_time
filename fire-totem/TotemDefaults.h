@@ -8,6 +8,7 @@ namespace Defaults {
   constexpr float GlobalGain  = 1.35f;
   constexpr float AttackSeconds   = 0.08f;   // seconds
   constexpr float ReleaseSeconds  = 0.30f;   // seconds
+  constexpr uint16_t TransientCooldownMs = 500;
 
   // ---- Software auto-gain (fast) ----
   // Keeps typical normalized level near target across tracks/rooms.
@@ -17,14 +18,15 @@ namespace Defaults {
   constexpr float AutoGainMax      = 2.00f;
 
   // ---- Fire engine params (used by FireEffect + SerialConsole) ----
-  constexpr uint8_t BaseCooling         = 150;
+  constexpr uint8_t BaseCooling         = 100;
   constexpr uint8_t SparkHeatMin        = 40;
   constexpr uint8_t SparkHeatMax        = 200;
-  constexpr float   SparkChance         = 0.25f;
+  constexpr float   SparkChance         = 0.5f;
   constexpr float   AudioSparkBoost     = 0.3f;
   constexpr uint8_t AudioHeatBoostMax   = 60;
   constexpr int8_t  CoolingAudioBias    = -20;   // negative => taller flames on loud parts
   constexpr uint8_t BottomRowsForSparks = 1;
+  constexpr uint8_t TransientHeatMax = 100; // 0-255
 
   // (optional) Ranges you show in help strings
   namespace Ranges {

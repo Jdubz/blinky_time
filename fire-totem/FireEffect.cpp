@@ -1,5 +1,12 @@
 #include "FireEffect.h"
 
+// simple hash noise (fast, repeatable)
+static float hashNoise(int x, int y, float t) {
+    uint32_t n = x * 73856093u ^ y * 19349663u ^ (int)(t*1000);
+    n = (n << 13) ^ n;
+    return 1.0f - ((n * (n * n * 15731u + 789221u) + 1376312589u) & 0x7fffffff) / 1073741824.0f;
+}
+
 FireEffect::FireEffect(Adafruit_NeoPixel &strip, int WIDTH, int height)
     : leds(strip), WIDTH(WIDTH), HEIGHT(height), heat(nullptr) {
     restoreDefaults();
@@ -24,21 +31,14 @@ void FireEffect::restoreDefaults() {
     params.bottomRowsForSparks = Defaults::BottomRowsForSparks;
 }
 
-void FireEffect::update(float energy) {
+void FireEffect::update(float energy, float hit) {
+    float emberFloor = 0.05f; // 5% energy floor
+    float boostedEnergy = max(emberFloor, energy * (1.0f + hit * (params.transientHeatMax / 255.0f)));
+
     // --- frame dt (seconds) ---
     unsigned long nowMs = millis();
     float dt = (lastUpdateMs == 0) ? 0.0f : (nowMs - lastUpdateMs) * 0.001f;
     lastUpdateMs = nowMs;
-
-    // Ember floor when audio is quiet/off
-    const float emberFloor = 0.02f;     // 2% base
-    const float emberDepth = 0.01f;     // +1% slow shimmer
-    static float emberPhase = 0.f;
-    emberPhase += dt * 0.7f;            // ~0.7 Hz
-    if (emberPhase > TWO_PI) emberPhase -= TWO_PI;
-    float ember = emberFloor + emberDepth * (0.5f + 0.5f * sinf(emberPhase));
-
-    if (energy < ember) energy = ember;
 
     // Cooling bias by audio (negative = taller flames for loud parts)
     int16_t coolingBias = params.coolingAudioBias; // int8_t promoted
@@ -48,10 +48,9 @@ void FireEffect::update(float energy) {
 
     propagateUp();
 
-    injectSparks(energy);
+    injectSparks(boostedEnergy);
 
     // ---- IMU integration: wind-biased spark + upward stoke ----
-
     // 1) Orientation: which way is up
     const int baseRowStart = 0;
     const int baseRowStep  = +1;
@@ -104,7 +103,7 @@ void FireEffect::update(float energy) {
       float spark = sparkByte / 255.0f;
 
       // small audio coupling so louder moments bias brighter windsparks
-      spark *= (1.0f + Defaults::AudioSparkBoost * energy);
+      spark *= (1.0f + Defaults::AudioSparkBoost * boostedEnergy);
       float h = heat[idx] + spark;
       heat[idx] = (h > 1.0f) ? 1.0f : h;
     }
@@ -195,9 +194,7 @@ void FireEffect::injectSparks(float energy) {
     int rows = max<int>(1, params.bottomRowsForSparks);
     rows = min(rows, HEIGHT);
 
-    for (int y = 0; y < rows; ++y) { // bottom rows for sparks (y=0 is top in render; here we treat y=0 as source row in grid logic)
-        // NOTE: our render maps y=0 to top; to keep intuitive “bottom source”, we’ll inject at y=0 here,
-        // and the render will map so that high y becomes visually lower (see heatToColor/render comment).
+    for (int y = 0; y < rows; ++y) {
         for (int x = 0; x < WIDTH; ++x) {
             float roll = random(0, 10000) / 10000.0f;
             if (roll < params.sparkChance * chanceScale) {

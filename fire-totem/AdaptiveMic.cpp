@@ -48,7 +48,7 @@ void AdaptiveMic::update(float dt) {
   pdmAlive = !isMicDead(nowMs, 250);
 
   if (n > 0) {
-    // Raw instantaneous average (no smoothing)
+    // 1. Raw instantaneous average
     levelInstant = avgAbs;
 
     // Still update envelope & mean for adaptation
@@ -72,6 +72,30 @@ void AdaptiveMic::update(float dt) {
 
     float afterGain = clamp01(levelPreGate * globalGain);
     levelPostAGC = (afterGain < noiseGate) ? 0.0f : afterGain;
+
+      // --- Transient detection ---
+    float x = levelPostAGC;
+
+    // update fast and slow averages
+    fastAvg += fastAlpha * (x - fastAvg);
+    slowAvg += slowAlpha * (x - slowAvg);
+
+    uint32_t now = millis();
+    bool cooldownExpired = (now - lastTransientMs) > transientCooldownMs;
+
+    // condition: sharp jump + loud enough + cooldown
+    if (cooldownExpired &&
+        x > loudFloor &&
+        fastAvg > slowAvg * transientFactor) {
+        transient = 1.0f;
+        lastTransientMs = now;
+    }
+
+    // Decay transient ramp
+    float decay = transientDecay * dt;
+    if (decay > 1.0f) decay = 1.0f;
+    transient -= decay;
+    if (transient < 0.0f) transient = 0.0f;
   }
 
   if (!pdmAlive) return;

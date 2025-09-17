@@ -52,7 +52,9 @@ void loop() {
   fire.setStoke(m.stoke);
 
   float energy = mic.getLevel();
-  fire.update(energy);
+  float hit = mic.getTransient();
+
+  fire.update(energy, hit);
   fire.show();
 
   console.update();

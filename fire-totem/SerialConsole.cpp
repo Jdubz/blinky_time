@@ -71,11 +71,22 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (sscanf(cmd, "set audioheatboost %d", &tempInt) == 1) { fire.params.audioHeatBoostMax = (uint8_t)tempInt; Serial.print(F("AudioHeatBoostMax=")); Serial.println(fire.params.audioHeatBoostMax); }
     else if (sscanf(cmd, "set coolingaudiobias %d", &tempInt) == 1) { fire.params.coolingAudioBias = (int8_t)tempInt; Serial.print(F("CoolingAudioBias=")); Serial.println(fire.params.coolingAudioBias); }
     else if (sscanf(cmd, "set bottomrows %d", &tempInt) == 1) { fire.params.bottomRowsForSparks = (uint8_t)tempInt; Serial.print(F("BottomRowsForSparks=")); Serial.println(fire.params.bottomRowsForSparks); }
+    else if (sscanf(cmd, "set transientheatmax %d", &tempInt) == 1) {
+        fire.params.transientHeatMax = constrain(tempInt, 0, 255);
+        Serial.print(F("TransientHeatMax="));
+        Serial.println(fire.params.transientHeatMax);
+    }
+ 
     // --- AdaptiveMic parameters ---
     else if (sscanf(cmd, "set gate %f", &tempFloat) == 1) { mic.noiseGate = tempFloat; Serial.print(F("NoiseGate=")); Serial.println(mic.noiseGate, 3); }
     else if (sscanf(cmd, "set gain %f", &tempFloat) == 1) { mic.globalGain = tempFloat; Serial.print(F("GlobalGain=")); Serial.println(mic.globalGain, 3); }
     else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) { mic.attackSeconds = tempFloat; Serial.print(F("attackSeconds=")); Serial.println(mic.attackSeconds, 3); }
     else if (sscanf(cmd, "set release %f", &tempFloat) == 1) { mic.releaseSeconds = tempFloat; Serial.print(F("releaseSeconds=")); Serial.println(mic.releaseSeconds, 3); }
+    else if (sscanf(cmd, "set transientCooldown %d", &tempInt) == 1) {
+        mic.transientCooldownMs = constrain(tempInt, 10, 1000); // 10ms–1s
+        Serial.print(F("TransientCooldownMs="));
+        Serial.println(mic.transientCooldownMs);
+    }
     // --- Mic debug tool ---
     else if (strcmp(cmd, "mic debug on") == 0) {
         micDebugEnabled = true; Serial.println(F("MicDebug=on"));
@@ -140,6 +151,9 @@ void SerialConsole::restoreDefaults() {
     mic.globalGain  = Defaults::GlobalGain;
     mic.attackSeconds   = Defaults::AttackSeconds;
     mic.releaseSeconds  = Defaults::ReleaseSeconds;
+    fire.params.transientHeatMax = Defaults::TransientHeatMax;
+    mic.transientCooldownMs = Defaults::TransientCooldownMs;
+
     Serial.println(F("Defaults restored."));
 }
 
@@ -153,6 +167,9 @@ void SerialConsole::printAll() {
     Serial.print(F("AudioHeatBoostMax: ")); Serial.println(fire.params.audioHeatBoostMax);
     Serial.print(F("CoolingAudioBias: ")); Serial.println(fire.params.coolingAudioBias);
     Serial.print(F("BottomRowsForSparks: ")); Serial.println(fire.params.bottomRowsForSparks);
+    Serial.print(F("TransientHeatMax: ")); Serial.println(fire.params.transientHeatMax);
+    Serial.print(F("TransientCooldownMs: ")); Serial.println(mic.transientCooldownMs);
+
     // Mic
     Serial.print(F("NoiseGate: ")); Serial.println(mic.noiseGate, 3);
     Serial.print(F("GlobalGain: ")); Serial.println(mic.globalGain, 3);

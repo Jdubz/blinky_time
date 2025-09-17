@@ -15,6 +15,7 @@ struct FireParams {
     uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
     int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
     uint8_t bottomRowsForSparks = Defaults::BottomRowsForSparks;
+    uint8_t transientHeatMax    = Defaults::TransientHeatMax;
 };
 
 class FireEffect {
@@ -26,9 +27,9 @@ public:
     ~FireEffect();
 
     void begin();
-    void update(float energy);
+    void update(float energy, float hit);
     // Back-compat: ignore dx/dy so existing .ino compiles
-    void update(float energy, float /*dx*/, float /*dy*/) { update(energy); }
+    void update(float energy, float /*dx*/, float /*dy*/, float hit) { update(energy, hit); }
 
     void show();
     void render(); // public because .ino calls it
