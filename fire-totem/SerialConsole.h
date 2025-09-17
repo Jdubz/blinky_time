@@ -22,7 +22,6 @@ private:
 
     // ---- AdaptiveMic debug tool ----
     bool micDebugEnabled = false;         // toggled by "mic debug on/off"
-    bool micDebugCsv     = false;         // "mic debug csv on/off"
     unsigned long micDebugPeriodMs = 200; // "mic debug rate <ms>"
     unsigned long micDebugLastMs   = 0;
 

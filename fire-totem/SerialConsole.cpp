@@ -54,7 +54,6 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F(" Mic Debug:"));
         Serial.println(F("   mic debug on/off"));
         Serial.println(F("   mic debug rate <ms>"));
-        Serial.println(F("   mic debug csv on/off  (CSV: #ms,rawAbs,level,envAR,floor,peak,gain)"));
         Serial.println(F("   mic stats   (one snapshot)"));
     }
     else if (strcmp(cmd, "show") == 0) {
@@ -83,18 +82,6 @@ void SerialConsole::handleCommand(const char *cmd) {
     }
     else if (strcmp(cmd, "mic debug off") == 0) {
         micDebugEnabled = false; Serial.println(F("MicDebug=off"));
-    }
-    else if (sscanf(cmd, "mic debug rate %d", &tempInt) == 1) {
-        if (tempInt < 20) tempInt = 20;
-        micDebugPeriodMs = (unsigned long)tempInt;
-        Serial.print(F("MicDebugRate(ms)=")); Serial.println(micDebugPeriodMs);
-    }
-    else if (strcmp(cmd, "mic debug csv on") == 0) {
-        micDebugCsv = true; Serial.println(F("MicDebugCSV=on"));
-        Serial.println(F("#ms,level,envAR,floor,peak,avgAbs,gain"));
-    }
-    else if (strcmp(cmd, "mic debug csv off") == 0) {
-        micDebugCsv = false; Serial.println(F("MicDebugCSV=off"));
     }
     else if (strcmp(cmd, "mic stats") == 0) {
         micDebugPrintLine();
@@ -193,17 +180,12 @@ void SerialConsole::micDebugTick() {
 }
 
 void SerialConsole::micDebugPrintLine() {
-    unsigned long ms = millis();
-    float level = mic.getLevel();   // normalized+gated+gain
-    float env   = mic.getEnv();
-
-    if (micDebugCsv) {
-        // CSV header (printed when enabling CSV): #ms,rawAbs,level,envAR,floor,peak,gain
-        Serial.print(ms);   Serial.print(',');
-        Serial.println(level, 4);
-    } else {
-        Serial.print(F("[MIC] t=")); Serial.print(ms);
-        Serial.print(F("  lvl="));    Serial.print(level, 4);
-        Serial.print(F("  env="));    Serial.println(env, 1);
-    }
+    Serial.print("envAR=");       Serial.print(mic.getEnv(), 3);
+    Serial.print(" envMean=");    Serial.print(mic.getEnvMean(), 3);
+    Serial.print(" pre=");        Serial.print(mic.getLevelPreGate(), 3);
+    Serial.print(" post=");       Serial.print(mic.getLevelPostAGC(), 3);
+    Serial.print(" gGain=");      Serial.print(mic.getGlobalGain(), 3);
+    Serial.print(" hwGain=");     Serial.print(mic.getHwGain());
+    Serial.print(" isrCnt=");     Serial.print(mic.getIsrCount());
+    Serial.println();
 }

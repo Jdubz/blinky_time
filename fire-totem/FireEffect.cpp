@@ -30,6 +30,16 @@ void FireEffect::update(float energy) {
     float dt = (lastUpdateMs == 0) ? 0.0f : (nowMs - lastUpdateMs) * 0.001f;
     lastUpdateMs = nowMs;
 
+    // Ember floor when audio is quiet/off
+    const float emberFloor = 0.02f;     // 2% base
+    const float emberDepth = 0.01f;     // +1% slow shimmer
+    static float emberPhase = 0.f;
+    emberPhase += dt * 0.7f;            // ~0.7 Hz
+    if (emberPhase > TWO_PI) emberPhase -= TWO_PI;
+    float ember = emberFloor + emberDepth * (0.5f + 0.5f * sinf(emberPhase));
+
+    if (energy < ember) energy = ember;
+
     // Cooling bias by audio (negative = taller flames for loud parts)
     int16_t coolingBias = params.coolingAudioBias; // int8_t promoted
     int cooling = params.baseCooling + coolingBias; // can go below 0; clamp in coolCells
