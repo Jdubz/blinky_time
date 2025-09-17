@@ -39,6 +39,13 @@ public:
     // Make params public so SerialConsole can read/write them
     FireParams params;
 
+    // --- IMU-driven inputs ---
+    void setWindScale(float colsPerSec) { windColsPerSec = colsPerSec; }  // optional
+
+    void setWind(float wx, float wy) { windX = wx; windY = wy; } // wx used for columns
+    void setUpVector(float ux, float uy, float uz) { upx=ux; upy=uy; upz=uz; }
+    void setStoke(float s) { stoke = (s < 0.f ? 0.f : (s > 1.f ? 1.f : s)); }
+
 private:
     Adafruit_NeoPixel &leds;
     int WIDTH;
@@ -58,6 +65,19 @@ private:
 
     // palette
     uint32_t heatToColorRGB(float h) const;
+
+    // IMU-fed state
+    float windX = 0.f, windY = 0.f;
+    float upx = 0.f, upy = 1.f, upz = 0.f;  // unit "world up"
+    float stoke = 0.f;
+
+    // Wind-biased “spark head” that drifts around the cylinder
+    float sparkHeadX = 0.f;
+
+    // Minimal knobs (fixed defaults; we can expose later if desired)
+    float windColsPerSec = 6.0f;  // columns/sec per unit windX
+    int   sparkSpreadCols = 2;    // ± columns around head where we drop sparks
+    float* heatScratch = nullptr;     // temp row buffer for advection
 };
 
 #endif

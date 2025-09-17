@@ -1,7 +1,7 @@
 #include "FireEffect.h"
 
-FireEffect::FireEffect(Adafruit_NeoPixel &strip, int width, int height)
-    : leds(strip), WIDTH(width), HEIGHT(height), heat(nullptr) {
+FireEffect::FireEffect(Adafruit_NeoPixel &strip, int WIDTH, int height)
+    : leds(strip), WIDTH(WIDTH), HEIGHT(height), heat(nullptr) {
     restoreDefaults();
 }
 
@@ -24,6 +24,23 @@ void FireEffect::restoreDefaults() {
     params.bottomRowsForSparks = Defaults::BottomRowsForSparks;
 }
 
+static void advectRowWrap(const float* inRow, float* outRow, int W, float dShift) {
+  // Shift signs: dShift > 0 moves content to the RIGHT (leans flames right)
+  // Sample source at x - dShift with circular wrap and linear interpolation.
+  for (int x = 0; x < W; ++x) {
+    float srcX = x - dShift;           // where this output x comes FROM
+    // wrap into [0, W)
+    while (srcX < 0)      srcX += W;
+    while (srcX >= W)     srcX -= W;
+    int   i0   = (int)srcX;
+    int   i1   = (i0 + 1 == W) ? 0 : (i0 + 1);
+    float frac = srcX - i0;
+    outRow[x]  = inRow[i0] * (1.0f - frac) + inRow[i1] * frac;
+    if (outRow[x] < 0.0f) outRow[x] = 0.0f;
+    if (outRow[x] > 1.0f) outRow[x] = 1.0f;
+  }
+}
+
 void FireEffect::update(float energy) {
 
     // Cooling bias by audio (negative = taller flames for loud parts)
@@ -35,6 +52,102 @@ void FireEffect::update(float energy) {
     propagateUp();
 
     injectSparks(energy);
+
+    // ---- IMU integration: wind-biased spark + upward stoke ----
+
+    const int baseRowStart = 0;
+    const int baseRowStep  = +1;
+
+    // 2) Stoke: inject a small extra heat in the bottom N rows
+    if (stoke > 0.0f) {
+      // Reuse your AudioHeatBoostMax as a sane scale; convert to 0..1
+      const float boost = stoke * (Defaults::AudioHeatBoostMax / 255.0f);
+      const int rows = Defaults::BottomRowsForSparks;
+      for (int y = 0; y < rows; ++y) {
+        const int row = baseRowStart + baseRowStep * y;
+        for (int x = 0; x < WIDTH; ++x) {
+          const int idx = xyToIndex(x, row);
+          float h = heat[idx] + boost;
+          heat[idx] = (h > 1.0f) ? 1.0f : h;
+        }
+      }
+    }
+
+    // 3) Wind: drift a “spark head” around the cylinder; spawn near it occasionally
+    //    (keeps everything gentle—doesn't alter transport/cooling)
+    static unsigned long lastWindMs = 0;
+    unsigned long nowMs = millis();
+    float dtWind = (lastWindMs == 0) ? 0.016f : (nowMs - lastWindMs) * 0.001f;
+    lastWindMs = nowMs;
+
+    // drift head by windX (IMU wind already ~cells/sec-ish)
+    sparkHeadX += windX * windColsPerSec * dtWind;
+
+    // wrap into [0, WIDTH)
+    while (sparkHeadX < 0.0f) sparkHeadX += WIDTH;
+    while (sparkHeadX >= WIDTH) sparkHeadX -= WIDTH;
+
+    // probability to add an extra wind-biased spark this frame
+    // scales with |windX|; clamp to something subtle
+    float pExtra = fabsf(windX) * 0.12f;
+    if (pExtra > 0.35f) pExtra = 0.35f;
+
+    // quick RNG in [0,1)
+    if (random(1000) < (int)(pExtra * 1000.0f)) {
+      int xCenter = (int)(sparkHeadX + 0.5f);
+      int xSpawn  = xCenter + random(-sparkSpreadCols, sparkSpreadCols + 1);
+      if (xSpawn < 0) xSpawn += WIDTH;
+      if (xSpawn >= WIDTH) xSpawn -= WIDTH;
+
+      const int row = baseRowStart; // hottest row at the base end
+      const int idx = xyToIndex(xSpawn, row);
+
+      // pick a heat pulse within your configured spark range; convert to 0..1
+      int sparkByte = random(Defaults::SparkHeatMin, (int)Defaults::SparkHeatMax + 1);
+      float spark = sparkByte / 255.0f;
+
+      // small audio coupling so louder moments bias brighter windsparks
+      spark *= (1.0f + Defaults::AudioSparkBoost * energy);
+      float h = heat[idx] + spark;
+      heat[idx] = (h > 1.0f) ? 1.0f : h;
+    }
+
+    // ---- Lateral wind advection (visual “lean”) ----
+    if (fabsf(windX) > 1e-4f && WIDTH > 1) {
+      // how far to shift this frame, in columns
+      // positive windX shifts content to the right; negative to the left
+      float dShift = windX * windColsPerSec * dt;   // dt = seconds since last frame
+
+      // lazy-allocate a scratch row if needed
+      if (!heatScratch) {
+        heatScratch = (float*)malloc(sizeof(float) * WIDTH);
+      }
+
+      if (heatScratch) {
+        for (int y = 0; y < HEIGHT; ++y) {
+          // copy current row to scratch
+          for (int x = 0; x < WIDTH; ++x) {
+            heatScratch[x] = heat[ xyToIndex(x, y) ];
+          }
+          // advect into place
+          float tmpRow[32]; // if width <= 32; otherwise use a second heap buffer
+          float* outRow = nullptr;
+
+          // If width is small (<=32), use stack; otherwise use heap for out row too.
+          if (WIDTH <= 32) {
+            outRow = tmpRow;
+          } else {
+            outRow = (float*)alloca(sizeof(float) * WIDTH); // safe for moderate widths
+          }
+
+          advectRowWrap(heatScratch, outRow, WIDTH, dShift);
+
+          for (int x = 0; x < WIDTH; ++x) {
+            heat[ xyToIndex(x, y) ] = outRow[x];
+          }
+        }
+      }
+    }
 
     render();
 }
@@ -153,4 +266,8 @@ void FireEffect::render() {
 
 void FireEffect::show() {
   leds.show();
+}
+
+FireEffect::~FireEffect() {
+  if (heatScratch) { free(heatScratch); heatScratch = nullptr; }
 }

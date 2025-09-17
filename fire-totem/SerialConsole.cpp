@@ -2,9 +2,11 @@
 #include "TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
+#include "IMUHelper.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;
+extern IMUHelper imu;
 
 SerialConsole::SerialConsole(FireEffect &f, Adafruit_NeoPixel &l)
     : fire(f), leds(l) {}
@@ -127,6 +129,19 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.print(F(" limits=["));  Serial.print(mic.agMin,2); Serial.print(','); Serial.print(mic.agMax,2); Serial.println(']');
         Serial.print(F(" globalGain=")); Serial.println(mic.globalGain,3);
     }
+
+    // IMU stats
+    else if (strcmp(cmd, "imu stats") == 0) {
+      const MotionState& m = imu.motion();
+      Serial.print(F("IMU up=("));  Serial.print(m.up.x,3);  Serial.print(',');
+      Serial.print(m.up.y,3);       Serial.print(',');       Serial.print(m.up.z,3);
+      Serial.print(F(")  wind=(")); Serial.print(m.wind.x,3);Serial.print(','); Serial.print(m.wind.y,3);
+      Serial.print(F(")  stoke=")); Serial.println(m.stoke,3);
+    }
+    else if (sscanf(cmd, "imu tau %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.tauLP=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.tauLP=")); Serial.println(c.tauLP,3); }
+    else if (sscanf(cmd, "imu windaccel %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.kAccel=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.kAccel=")); Serial.println(c.kAccel,3); }
+    else if (sscanf(cmd, "imu windspin %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.kSpin=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.kSpin=")); Serial.println(c.kSpin,3); }
+    else if (sscanf(cmd, "imu stoke %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.kStoke=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.kStoke=")); Serial.println(c.kStoke,3); }
 
     else {
         Serial.println(F("Unknown command"));
