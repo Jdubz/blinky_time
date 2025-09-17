@@ -6,8 +6,8 @@ namespace Defaults {
   constexpr float NoiseGate   = 0.06f;
   constexpr float Gamma       = 0.60f;
   constexpr float GlobalGain  = 1.35f;
-  constexpr float AttackTau   = 0.08f;   // seconds
-  constexpr float ReleaseTau  = 0.30f;   // seconds
+  constexpr float AttackSeconds   = 0.08f;   // seconds
+  constexpr float ReleaseSeconds  = 0.30f;   // seconds
 
   // ---- Software auto-gain (fast) ----
   // Keeps typical normalized level near target across tracks/rooms.
