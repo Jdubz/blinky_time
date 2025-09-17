@@ -24,19 +24,14 @@ void setup() {
 void loop() {
   static unsigned long lastMs = millis();
   unsigned long now = millis();
-  float dt = (now - lastMs) / 1000.0f;
-  lastMs = now;
+  float dt = (now - lastMs) / 1000.0f; if (dt < 0) dt = 0; lastMs = now;
 
-  // Update microphone with elapsed time
   mic.update(dt);
+  mic.autoGainTick(dt);  // NEW: fast software auto-gain
 
-  // Get current audio energy level (0–1)
   float energy = mic.getLevel();
-
-  // Update fire effect
   fire.update(energy);
   fire.show();
 
-  // Handle serial commands
   console.update();
 }

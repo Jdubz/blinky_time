@@ -12,21 +12,15 @@ AdaptiveMic::AdaptiveMic()
       lastCalibMillis(0) {}
 
 bool AdaptiveMic::begin() {
-    // Set the receive callback first so ISR can fire as soon as PDM starts
+    // Register ISR BEFORE begin() so samples flow immediately
     PDM.onReceive(onPDMdata);
-
-    // (Optional) buffer size can be set before or after on some cores; keeping here is fine
     PDM.setBufferSize(sampleBufferSize);
-
-    // Start PDM: mono, 16 kHz
     if (!PDM.begin(1, 16000)) {
         return false;
     }
-
-    // Set initial hardware gain
     PDM.setGain(currentGain);
 
-    // Initialize min/max around the current envelope so normalization has a small, valid span
+    // Seed normalization window with current envelope
     minEnv = envAR;
     maxEnv = envAR;
 
@@ -41,7 +35,7 @@ void AdaptiveMic::onPDMdata() {
         bytesAvailable = sizeof(sampleBuffer);
     }
     PDM.read(sampleBuffer, bytesAvailable);
-    samplesRead = bytesAvailable / 2; // int16_t samples
+    samplesRead = bytesAvailable / 2;
 }
 
 void AdaptiveMic::update(float dt) {
@@ -53,7 +47,7 @@ void AdaptiveMic::update(float dt) {
         absSum += fabsf((float)sampleBuffer[i]);
     }
     float avg = absSum / (float)max(1, samplesRead);
-    lastAvgAbs = avg; // <-- expose raw reading for SerialConsole debug
+    lastAvgAbs = avg;
 
     // 2) fast smoothing and very long-term mean
     env     = 0.9f   * env     + 0.1f   * avg;
@@ -69,7 +63,7 @@ void AdaptiveMic::update(float dt) {
     if (env > envAR) envAR += aA * (env - envAR);
     else             envAR += aR * (env - envAR);
 
-    // 5) occasional hardware gain calibration (slow nudges)
+    // 5) occasional hardware gain calibration (gentle)
     if (millis() - lastCalibMillis > 5000UL) {
         calibrate();
         lastCalibMillis = millis();
@@ -80,12 +74,12 @@ void AdaptiveMic::update(float dt) {
 }
 
 float AdaptiveMic::getLevel() const {
-    // Normalize AR envelope into 0..1 using running min/max
     float denom = (maxEnv - minEnv);
     if (denom < 1e-6f || !isfinite(denom)) {
         return 0.0f; // not enough range yet
     }
 
+    // Normalize AR envelope into 0..1
     float n = (envAR - minEnv) / denom;
     if (!isfinite(n)) n = 0.0f;
     if (n < 0.0f) n = 0.0f;
@@ -103,6 +97,30 @@ float AdaptiveMic::getLevel() const {
     if (!isfinite(n)) n = 0.0f;
 
     return constrain(n, 0.0f, 1.0f);
+}
+
+// Small, robust software auto-gain loop.
+// Uses pre-gamma normalized level so it adapts to musical phrasing faster.
+void AdaptiveMic::autoGainTick(float dt) {
+    if (!autoGainEnabled || dt <= 0.f) return;
+
+    float denom = (maxEnv - minEnv);
+    if (denom < 1e-6f || !isfinite(denom)) return; // not ready yet
+
+    // Pre-gamma, pre-gate normalized value (clamped 0..1)
+    float n0 = (envAR - minEnv) / denom;
+    if (!isfinite(n0)) n0 = 0.0f;
+    if (n0 < 0.0f) n0 = 0.0f;
+    if (n0 > 1.0f) n0 = 1.0f;
+
+    // Integrate toward target occupancy
+    // err = (target - current); positive err => increase gain
+    float err = agTarget - n0;
+    globalGain += agStrength * err * dt;
+
+    // Clamp globalGain
+    if (globalGain < agMin) globalGain = agMin;
+    if (globalGain > agMax) globalGain = agMax;
 }
 
 void AdaptiveMic::calibrate() {

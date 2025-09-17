@@ -12,6 +12,13 @@ namespace Defaults {
   constexpr float AttackTau   = 0.08f;   // seconds
   constexpr float ReleaseTau  = 0.30f;   // seconds
 
+  // ---- Software auto-gain (fast) ----
+  // Keeps typical normalized level near target across tracks/rooms.
+  constexpr float AutoGainTarget   = 0.70f;  // aim to use ~70% of visual range
+  constexpr float AutoGainStrength = 0.025f; // integrator step (per second)
+  constexpr float AutoGainMin      = 0.60f;  // clamp on mic.globalGain
+  constexpr float AutoGainMax      = 2.00f;
+
   // ---- Fire engine params (used by FireEffect + SerialConsole) ----
   constexpr uint8_t BaseCooling         = 150;
   constexpr uint8_t SparkHeatMin        = 40;

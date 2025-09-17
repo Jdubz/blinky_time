@@ -36,6 +36,7 @@ void SerialConsole::update() {
 void SerialConsole::handleCommand(const char *cmd) {
     int tempInt = 0;
     float tempFloat = 0.0f;
+    float tempFloat2 = 0.0f;
 
     if (strcmp(cmd, "help") == 0) {
         Serial.println(F("Commands: show, defaults"));
@@ -102,6 +103,36 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (strcmp(cmd, "mic stats") == 0) {
         micDebugPrintLine();
     }
+
+    // --- Auto-gain controls ---
+    else if (strcmp(cmd, "ag on") == 0) {
+        mic.autoGainEnabled = true; Serial.println(F("AutoGain=on"));
+    }
+    else if (strcmp(cmd, "ag off") == 0) {
+        mic.autoGainEnabled = false; Serial.println(F("AutoGain=off"));
+    }
+    else if (sscanf(cmd, "ag target %f", &tempFloat) == 1) {
+        mic.agTarget = constrain(tempFloat, 0.1f, 0.95f);
+        Serial.print(F("AutoGainTarget=")); Serial.println(mic.agTarget, 3);
+    }
+    else if (sscanf(cmd, "ag strength %f", &tempFloat) == 1) {
+        mic.agStrength = max(0.0f, tempFloat);
+        Serial.print(F("AutoGainStrength=")); Serial.println(mic.agStrength, 3);
+    }
+    else if (sscanf(cmd, "ag limits %f %f", &tempFloat, &tempFloat2) == 2) {
+        mic.agMin = tempFloat; mic.agMax = tempFloat2;
+        if (mic.agMin > mic.agMax) { float t=mic.agMin; mic.agMin=mic.agMax; mic.agMax=t; }
+        Serial.print(F("AutoGainLimits=["));
+        Serial.print(mic.agMin,2); Serial.print(','); Serial.print(mic.agMax,2); Serial.println(']');
+    }
+    else if (strcmp(cmd, "ag stats") == 0) {
+        Serial.print(F("AutoGain: enabled=")); Serial.print(mic.autoGainEnabled ? F("yes") : F("no"));
+        Serial.print(F(" target="));   Serial.print(mic.agTarget,3);
+        Serial.print(F(" strength=")); Serial.print(mic.agStrength,3);
+        Serial.print(F(" limits=["));  Serial.print(mic.agMin,2); Serial.print(','); Serial.print(mic.agMax,2); Serial.println(']');
+        Serial.print(F(" globalGain=")); Serial.println(mic.globalGain,3);
+    }
+
     else {
         Serial.println(F("Unknown command"));
     }

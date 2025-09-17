@@ -36,6 +36,17 @@ public:
     float attackTau  = Defaults::AttackTau;   // seconds
     float releaseTau = Defaults::ReleaseTau;  // seconds
 
+    // ---- Software auto-gain controls (NEW) ----
+    bool  autoGainEnabled = true;
+    float agTarget   = Defaults::AutoGainTarget;
+    float agStrength = Defaults::AutoGainStrength;
+    float agMin      = Defaults::AutoGainMin;
+    float agMax      = Defaults::AutoGainMax;
+
+    // Call every frame; gently nudges globalGain
+    void autoGainTick(float dt);
+
+
 private:
     // PDM buffer
     static constexpr int sampleBufferSize = 512;
