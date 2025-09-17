@@ -49,7 +49,7 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F(" Mic Debug:"));
         Serial.println(F("   mic debug on/off"));
         Serial.println(F("   mic debug rate <ms>"));
-        Serial.println(F("   mic debug csv on/off"));
+        Serial.println(F("   mic debug csv on/off  (CSV: #ms,rawAbs,level,envAR,floor,peak,gain)"));
         Serial.println(F("   mic stats   (one snapshot)"));
     }
     else if (strcmp(cmd, "show") == 0) {
@@ -166,29 +166,29 @@ void SerialConsole::micDebugTick() {
 
 void SerialConsole::micDebugPrintLine() {
     unsigned long ms = millis();
-    float level = mic.getLevel();
+    float raw   = mic.getAvgAbs();  // << raw, pre-compensation
+    float level = mic.getLevel();   // normalized+gated+gain+gamma
     float env   = mic.getEnvAR();
     float floor = mic.getFloor();
     float peak  = mic.getPeak();
-    float avg   = mic.getAvgAbs();
     int   gain  = mic.getGain();
 
     if (micDebugCsv) {
-        // #ms,level,envAR,floor,peak,avgAbs,gain
-        Serial.print(ms); Serial.print(',');
+        // CSV header (printed when enabling CSV): #ms,rawAbs,level,envAR,floor,peak,gain
+        Serial.print(ms);   Serial.print(',');
+        Serial.print(raw, 1);   Serial.print(',');  // RAW
         Serial.print(level, 4); Serial.print(',');
         Serial.print(env,   1); Serial.print(',');
         Serial.print(floor, 1); Serial.print(',');
         Serial.print(peak,  1); Serial.print(',');
-        Serial.print(avg,   1); Serial.print(',');
         Serial.println(gain);
     } else {
         Serial.print(F("[MIC] t=")); Serial.print(ms);
-        Serial.print(F("ms  lvl=")); Serial.print(level, 4);
-        Serial.print(F("  env="));  Serial.print(env, 1);
-        Serial.print(F("  floor="));Serial.print(floor, 1);
-        Serial.print(F("  peak=")); Serial.print(peak, 1);
-        Serial.print(F("  avg="));  Serial.print(avg, 1);
-        Serial.print(F("  gain=")); Serial.println(gain);
+        Serial.print(F("ms  RAW="));  Serial.print(raw, 1);    // RAW shown first
+        Serial.print(F("  lvl="));    Serial.print(level, 4);
+        Serial.print(F("  env="));    Serial.print(env, 1);
+        Serial.print(F("  floor="));  Serial.print(floor, 1);
+        Serial.print(F("  peak="));   Serial.print(peak, 1);
+        Serial.print(F("  gain="));   Serial.println(gain);
     }
 }

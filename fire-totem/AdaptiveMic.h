@@ -15,22 +15,26 @@ public:
     // Call once per frame with elapsed seconds
     void update(float dt);
 
-    // Normalized, gated, gamma-corrected level [0..1]
-    float getLevel() const { return levelOut; }
+    // Normalized 0..1 level after gate/gain/gamma
+    float getLevel() const;
 
-    // Tunables (wired to your Defaults)
-    float noiseGate  = Defaults::NoiseGate;   // 0..1, applied after normalization
+    // ---- Debug / telemetry (for SerialConsole mic debug) ----
+    int   getGain()     const { return currentGain; }
+    float getEnv()      const { return env; }          // fast smoothed abs-avg
+    float getEnvAR()    const { return envAR; }        // attack/release envelope
+    float getEnvMean()  const { return envMean; }
+    float getEnvMin()   const { return minEnv; }       // running min (floor)
+    float getEnvMax()   const { return maxEnv; }       // running max (peak)
+    float getFloor()    const { return minEnv; }       // alias for console
+    float getPeak()     const { return maxEnv; }       // alias for console
+    float getAvgAbs()   const { return lastAvgAbs; }   // raw abs-avg of last buffer
+
+    // Tunables (wired to Defaults)
+    float noiseGate  = Defaults::NoiseGate;   // 0..1 gate after normalization
     float gamma      = Defaults::Gamma;       // perceptual curve
     float globalGain = Defaults::GlobalGain;  // software gain after gate
-    float attackTau  = Defaults::AttackTau;   // s
-    float releaseTau = Defaults::ReleaseTau;  // s
-
-    // Debug
-    int   getGain()     const { return currentGain; }
-    float getEnvAR()    const { return envAR; }
-    float getFloor()    const { return floorEMA; }
-    float getPeak()     const { return peakEMA; }
-    float getAvgAbs()   const { return lastAvgAbs; }
+    float attackTau  = Defaults::AttackTau;   // seconds
+    float releaseTau = Defaults::ReleaseTau;  // seconds
 
 private:
     // PDM buffer
@@ -38,27 +42,20 @@ private:
     static int16_t sampleBuffer[sampleBufferSize];
     static volatile int samplesRead;
 
-    // HW gain (0..64 typical)
+    // Hardware gain (0..64 typical)
     static int currentGain;
 
-    // Raw envelopes (in int16 abs-average units)
-    float envAR     = 0.0f;  // attack-release envelope of abs average
-    float floorEMA  = 0.0f;  // noise floor (fast down, ultra slow up)
-    float peakEMA   = 0.0f;  // decaying peak (fast up, slow down)
-    float levelOut  = 0.0f;  // final 0..1
-    float lastAvgAbs = 0.0f;
+    // Envelopes & stats (raw int16 abs-average units)
+    float env;         // smoothed absolute average (fast)
+    float envAR;       // attack/release envelope
+    float envMean;     // very long-term mean
+    float minEnv;      // running min
+    float maxEnv;      // running max
+    float lastAvgAbs;  // raw abs-avg from latest ISR batch (for debug)
 
-    bool  initialized = false;
+    unsigned long lastCalibMillis;
 
-    // Window stats for HW calibration
-    unsigned long lastCalibMs = 0;
-    uint32_t winFrames = 0;
-    uint32_t winActiveRawFrames = 0; // activity measured in raw units (not normalized)
-    uint32_t winClipped = 0;
-    uint32_t winTotal   = 0;
-
-    // Helpers
-    void calibrateHW();
+    void calibrate();
 };
 
 #endif
