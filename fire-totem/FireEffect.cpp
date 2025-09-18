@@ -7,14 +7,27 @@ static float hashNoise(int x, int y, float t) {
     return 1.0f - ((n * (n * n * 15731u + 789221u) + 1376312589u) & 0x7fffffff) / 1073741824.0f;
 }
 
-FireEffect::FireEffect(Adafruit_NeoPixel &strip, int WIDTH, int height)
-    : leds(strip), WIDTH(WIDTH), HEIGHT(height), heat(nullptr) {
+FireEffect::FireEffect(Adafruit_NeoPixel &strip, int width, int height)
+    : leds(strip), WIDTH(width), HEIGHT(height), heat(nullptr), heatScratch(nullptr) {
     restoreDefaults();
 }
 
 void FireEffect::begin() {
-    if (heat) { free(heat); heat = nullptr; }
+    if (heat) {
+        free(heat);
+        heat = nullptr;
+    }
+    if (heatScratch) {
+        free(heatScratch);
+        heatScratch = nullptr;
+    }
+
     heat = (float*)malloc(sizeof(float) * WIDTH * HEIGHT);
+    if (!heat) {
+        Serial.println(F("FireEffect: Failed to allocate heat buffer"));
+        return;
+    }
+
     for (int y = 0; y < HEIGHT; ++y)
         for (int x = 0; x < WIDTH;  ++x)
             H(x,y) = 0.0f;
@@ -85,8 +98,9 @@ void FireEffect::update(float energy, float hit) {
 
     // probability to add an extra wind-biased spark this frame
     // scales with |windX|; clamp to something subtle
-    float pExtra = fabsf(windX) * 0.12f;
-    if (pExtra > 0.35f) pExtra = 0.35f;
+    const float windSparkFactor = 0.12f;
+    const float maxWindSparkProb = 0.35f;
+    float pExtra = constrain(fabsf(windX) * windSparkFactor, 0.0f, maxWindSparkProb);
 
     // quick RNG in [0,1)
     if (random(1000) < (int)(pExtra * 1000.0f)) {
@@ -117,20 +131,25 @@ void FireEffect::update(float energy, float hit) {
       // lazy-allocate a scratch row if needed
       if (!heatScratch) {
         heatScratch = (float*)malloc(sizeof(float) * WIDTH);
+        if (!heatScratch) {
+          Serial.println(F("FireEffect: Failed to allocate scratch buffer"));
+          return;
+        }
       }
-
-      if (heatScratch) {
+        // Pre-calculate modulo for better performance
         auto advectRowWrap = [](const float* inRow, float* outRow, int W, float s) {
+          const float fW = (float)W;
           for (int x = 0; x < W; ++x) {
             float srcX = x - s;
-            while (srcX < 0)    srcX += W;
-            while (srcX >= W)   srcX -= W;
-            int   i0 = (int)srcX;
-            int   i1 = (i0 + 1 == W) ? 0 : (i0 + 1);
-            float f  = srcX - i0;
-            float v  = inRow[i0] * (1.0f - f) + inRow[i1] * f;
-            if (v < 0.0f) v = 0.0f; if (v > 1.0f) v = 1.0f;
-            outRow[x] = v;
+            // Efficient wrap using fmod instead of while loops
+            srcX = srcX - fW * floorf(srcX / fW);
+            if (srcX < 0.0f) srcX += fW;
+
+            const int i0 = (int)srcX;
+            const int i1 = (i0 + 1 >= W) ? 0 : (i0 + 1);
+            const float f = srcX - i0;
+            const float v = inRow[i0] * (1.0f - f) + inRow[i1] * f;
+            outRow[x] = constrain(v, 0.0f, 1.0f);
           }
         };
         for (int y = 0; y < HEIGHT; ++y) {
@@ -142,11 +161,19 @@ void FireEffect::update(float energy, float hit) {
           float tmpRow[32]; // if width <= 32; otherwise use a second heap buffer
           float* outRow = nullptr;
 
-          // If width is small (<=32), use stack; otherwise use heap for out row too.
+          // Use stack buffer for small widths, heap for larger
+          static float* largeTmpRow = nullptr;
           if (WIDTH <= 32) {
             outRow = tmpRow;
           } else {
-            outRow = (float*)alloca(sizeof(float) * WIDTH); // safe for moderate widths
+            if (!largeTmpRow) {
+              largeTmpRow = (float*)malloc(sizeof(float) * WIDTH);
+              if (!largeTmpRow) {
+                Serial.println(F("FireEffect: Failed to allocate temp row buffer"));
+                return;
+              }
+            }
+            outRow = largeTmpRow;
           }
 
           advectRowWrap(heatScratch, outRow, WIDTH, dShift);
@@ -162,13 +189,14 @@ void FireEffect::update(float energy, float hit) {
 
 void FireEffect::coolCells() {
     // Port of "cooling" using 0..255 style; random cooling per cell
+    const float coolingScale = 0.5f / 255.0f;
+    const int maxCooling = params.baseCooling + 1;
+
     for (int y = 0; y < HEIGHT; ++y) {
         for (int x = 0; x < WIDTH; ++x) {
             // Random cooling scaled from baseCooling; map to ~0..~0.1 subtraction
-            // Maintain compatibility with uint8_t cooling by dividing by 255.
-            float decay = (random(0, params.baseCooling + 1) / 255.0f) * 0.5f; // tune factor
-            H(x,y) -= decay;
-            if (H(x,y) < 0.0f) H(x,y) = 0.0f;
+            const float decay = random(0, maxCooling) * coolingScale;
+            H(x,y) = max(0.0f, H(x,y) - decay);
         }
     }
 }
@@ -275,5 +303,12 @@ void FireEffect::show() {
 }
 
 FireEffect::~FireEffect() {
-  if (heatScratch) { free(heatScratch); heatScratch = nullptr; }
+    if (heat) {
+        free(heat);
+        heat = nullptr;
+    }
+    if (heatScratch) {
+        free(heatScratch);
+        heatScratch = nullptr;
+    }
 }

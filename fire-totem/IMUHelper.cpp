@@ -13,11 +13,11 @@ bool IMUHelper::begin() {
     delay(500);
 
     if (senseIMU.begin() != 0) {
-        Serial.println("IMU Device error");
+        Serial.println(F("IMU Device error"));
         imuReady = false;
         return false;
     } else {
-        Serial.println("IMU Device OK!");
+        Serial.println(F("IMU Device OK!"));
         imuReady = true;
         return true;
     }

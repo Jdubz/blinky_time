@@ -1,5 +1,4 @@
-#ifndef FIRE_EFFECT_H
-#define FIRE_EFFECT_H
+#pragma once
 
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
@@ -84,4 +83,3 @@ private:
     float* heatScratch = nullptr;     // temp row buffer for advection
 };
 
-#endif

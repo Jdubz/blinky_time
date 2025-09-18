@@ -10,6 +10,11 @@ namespace Defaults {
   constexpr float ReleaseSeconds  = 0.30f;   // seconds
   constexpr uint16_t TransientCooldownMs = 500;
 
+  // ---- Performance constants ----
+  constexpr float WindSparkFactor = 0.12f;
+  constexpr float MaxWindSparkProb = 0.35f;
+  constexpr float CoolingScaleFactor = 0.5f / 255.0f;
+
   // ---- Software auto-gain (fast) ----
   // Keeps typical normalized level near target across tracks/rooms.
   constexpr float AutoGainTarget   = 0.70f;  // aim to use ~70% of visual range

@@ -4,6 +4,7 @@
 #include "SerialConsole.h"
 #include "BatteryMonitor.h"
 #include "IMUHelper.h"
+#include "TotemDefaults.h"
 
 #define WIDTH 16
 #define HEIGHT 8
@@ -20,36 +21,57 @@ IMUHelper imu;
 uint32_t lastMs = 0;
 
 void setup() {
+  Serial.begin(115200);
+  while (!Serial && millis() < 3000) {}
+  Serial.println(F("Fire Totem Starting..."));
+
   leds.begin();
   leds.setBrightness(150);
   leds.show();
-  fire.begin();
-  bool ok = mic.begin(16000, 32); // sample rate, initial hardware gain
-  if (!ok) {
-    Serial.println("Microphone failed to start");
-  } else {
-    Serial.println("Microphone initialized");
-  }
-  console.begin();
-  imu.begin();
 
-  battery.begin();                 // uses default pins/refs for XIAO Sense
-  battery.setFastCharge(true);     // optional: enable 100 mA fast charging
+  fire.begin();
+
+  bool micOk = mic.begin(16000, 32);
+  if (!micOk) {
+    Serial.println(F("ERROR: Microphone failed to start"));
+  } else {
+    Serial.println(F("Microphone initialized"));
+  }
+
+  console.begin();
+
+  if (!imu.begin()) {
+    Serial.println(F("WARNING: IMU initialization failed"));
+  } else {
+    Serial.println(F("IMU initialized"));
+  }
+
+  if (!battery.begin()) {
+    Serial.println(F("WARNING: Battery monitor failed to start"));
+  } else {
+    battery.setFastCharge(true);
+    Serial.println(F("Battery monitor initialized"));
+  }
+
+  Serial.println(F("Setup complete!"));
 }
 
 void loop() {
   uint32_t now = millis();
-  float dt = (now - lastMs) * 0.001f;
+  float dt = (lastMs == 0) ? 0.016f : (now - lastMs) * 0.001f;
+  dt = constrain(dt, 0.001f, 0.1f); // Clamp dt to reasonable range
   lastMs = now;
+
   mic.update(dt);
 
-  imu.updateMotion(dt);
+  if (imu.isReady()) {
+    imu.updateMotion(dt);
+    const MotionState& m = imu.motion();
 
-  const MotionState& m = imu.motion();  // or whatever your helper exposes
-
-  fire.setWind(m.wind.x, m.wind.y);
-  fire.setUpVector(m.up.x, m.up.y, m.up.z);
-  fire.setStoke(m.stoke);
+    fire.setWind(m.wind.x, m.wind.y);
+    fire.setUpVector(m.up.x, m.up.y, m.up.z);
+    fire.setStoke(m.stoke);
+  }
 
   float energy = mic.getLevel();
   float hit = mic.getTransient();
