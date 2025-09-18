@@ -3,10 +3,12 @@
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
 #include "IMUHelper.h"
+#include "configs/DeviceConfig.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;
 extern IMUHelper imu;
+extern const DeviceConfig& config;
 
 SerialConsole::SerialConsole(FireEffect &f, Adafruit_NeoPixel &l)
     : fire(f), leds(l) {}
@@ -46,7 +48,7 @@ void SerialConsole::handleCommand(const char *cmd) {
 
     if (strcmp(cmd, "help") == 0) {
         Serial.println(F("=== FIRE TOTEM DEBUG CONSOLE ==="));
-        Serial.println(F("General: show, defaults, save, load"));
+        Serial.println(F("General: show, defaults"));
         Serial.println(F(""));
         Serial.println(F("FIRE ENGINE:"));
         Serial.println(F("  set cooling <0-255>        - Base cooling rate"));
@@ -59,11 +61,6 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F("  set bottomrows <1-8>       - Spark injection rows"));
         Serial.println(F("  set transientheatmax <0-255> - Transient heat boost"));
         Serial.println(F("  set brightness <0-255>     - LED brightness"));
-        Serial.println(F(""));
-        Serial.println(F("MOTION EFFECTS:"));
-        Serial.println(F("  set windspeed <0-10>       - Wind lean speed"));
-        Serial.println(F("  set windscale <0-1>        - Wind intensity scale"));
-        Serial.println(F("  motion on/off              - Enable/disable motion"));
         Serial.println(F(""));
         Serial.println(F("AUDIO ENGINE:"));
         Serial.println(F("  set gate <0-1>             - Noise gate level"));
@@ -91,9 +88,15 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F("  imu viz on/off             - Show IMU orientation on matrix"));
         Serial.println(F("  imu test                   - Test IMU mapping"));
         Serial.println(F("  imu calibrate              - Help calibrate IMU orientation"));
-        Serial.println(F("  imu reduce wind            - Fix excessive wind sensitivity"));
-        Serial.println(F("  imu reduce stoke           - Fix constant stoke detection"));
-        Serial.println(F("  imu fix all                - Apply all sensitivity fixes"));
+        Serial.println(F(""));
+        Serial.println(F("BATTERY VISUALIZATION:"));
+        Serial.println(F("  battery viz on/off         - Show battery charge level on top row"));
+        Serial.println(F("  battery debug              - Show detailed battery readings"));
+        Serial.println(F(""));
+        Serial.println(F("TEST PATTERN:"));
+        Serial.println(F("  test pattern on/off        - Show RGB cycling rows for layout verification"));
+        Serial.println(F(""));
+        Serial.println(F("IMU ADVANCED:"));
         Serial.println(F("  imu test gravity           - Test gravity-based flame rising"));
         Serial.println(F("  imu mapping                - Guide for understanding IMU coordinates"));
         Serial.println(F("  imu raw                    - Show raw IMU sensor data"));
@@ -199,22 +202,6 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.print(F("LED Brightness=")); Serial.println(tempInt);
     }
 
-    // Motion control
-    else if (sscanf(cmd, "set windspeed %f", &tempFloat) == 1) {
-        windSpeed = constrain(tempFloat, 0.0f, 10.0f);
-        Serial.print(F("WindSpeed=")); Serial.println(windSpeed, 2);
-    }
-    else if (sscanf(cmd, "set windscale %f", &tempFloat) == 1) {
-        windScale = constrain(tempFloat, 0.0f, 1.0f);
-        Serial.print(F("WindScale=")); Serial.println(windScale, 3);
-    }
-    else if (strcmp(cmd, "motion on") == 0) {
-        motionEnabled = true; Serial.println(F("Motion=on"));
-    }
-    else if (strcmp(cmd, "motion off") == 0) {
-        motionEnabled = false; Serial.println(F("Motion=off"));
-    }
-
     // General debug control
     else if (strcmp(cmd, "debug on") == 0) {
         debugEnabled = true; Serial.println(F("Debug=on"));
@@ -245,6 +232,43 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (strcmp(cmd, "imu viz off") == 0) {
         imuVizEnabled = false;
         Serial.println(F("IMU Visualization=off"));
+    }
+
+    // Battery visualization commands
+    else if (strcmp(cmd, "battery viz on") == 0) {
+        batteryVizEnabled = true;
+        Serial.println(F("Battery Visualization=on"));
+        Serial.println(F("Shows battery charge level as horizontal bar on top row"));
+        Serial.println(F("GREEN=full, YELLOW=medium, RED=low, BLUE=charging"));
+    }
+    else if (strcmp(cmd, "battery viz off") == 0) {
+        batteryVizEnabled = false;
+        Serial.println(F("Battery Visualization=off"));
+    }
+
+    // Test pattern commands
+    else if (strcmp(cmd, "test pattern on") == 0) {
+        testPatternEnabled = true;
+        Serial.println(F("Test Pattern=on"));
+        Serial.println(F("Shows cycling RGB rows moving upward for layout verification"));
+    }
+    else if (strcmp(cmd, "test pattern off") == 0) {
+        testPatternEnabled = false;
+        Serial.println(F("Test Pattern=off"));
+    }
+    else if (strcmp(cmd, "battery debug") == 0) {
+        Serial.println(F("=== BATTERY DEBUG ==="));
+        uint16_t raw = battery.readRaw();
+        float voltage = battery.readVoltage();
+        uint8_t percent = battery.getPercent();
+        bool charging = battery.isCharging();
+
+        Serial.print(F("Raw ADC: ")); Serial.println(raw);
+        Serial.print(F("Calculated Voltage: ")); Serial.print(voltage, 3); Serial.println(F("V"));
+        Serial.print(F("Percentage: ")); Serial.print(percent); Serial.println(F("%"));
+        Serial.print(F("Charging: ")); Serial.println(charging ? F("YES") : F("NO"));
+        Serial.print(F("Config min/max: ")); Serial.print(config.charging.minVoltage, 1);
+        Serial.print(F("V / ")); Serial.print(config.charging.maxVoltage, 1); Serial.println(F("V"));
     }
     else if (strcmp(cmd, "imu test") == 0) {
         Serial.println(F("IMU Test Mode: Tilt device and watch orientation indicators"));
@@ -292,38 +316,6 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (strcmp(cmd, "imu invert z") == 0) {
         Serial.println(F("Z-axis inversion not yet implemented"));
         Serial.println(F("This requires code changes to flip Z readings"));
-    }
-    else if (strcmp(cmd, "imu reduce wind") == 0) {
-        MotionConfig c = imu.getMotionConfig();
-        c.kAccel = 0.1f;   // Reduce from 0.8f
-        c.kSpin = 0.05f;   // Reduce from 0.15f
-        c.maxWindSpeed = 3.0f; // Reduce from 12.0f
-        imu.setMotionConfig(c);
-        Serial.println(F("Wind sensitivity reduced significantly"));
-        Serial.println(F("kAccel: 0.8->0.1, kSpin: 0.15->0.05, maxWind: 12->3"));
-    }
-    else if (strcmp(cmd, "imu reduce stoke") == 0) {
-        MotionConfig c = imu.getMotionConfig();
-        c.kStoke = 0.01f;  // Reduce even further
-        c.gravityThresh = 5.0f; // Much less sensitive to small movements
-        c.stokeDecay = 0.95f; // Faster decay
-        imu.setMotionConfig(c);
-        Serial.println(F("Stoke sensitivity reduced dramatically"));
-        Serial.println(F("kStoke: ->0.01, gravityThresh: ->5.0, faster decay"));
-    }
-    else if (strcmp(cmd, "imu fix all") == 0) {
-        MotionConfig c = imu.getMotionConfig();
-        // Reduce wind sensitivity
-        c.kAccel = 0.1f;
-        c.kSpin = 0.05f;
-        c.maxWindSpeed = 3.0f;
-        // Reduce stoke sensitivity dramatically
-        c.kStoke = 0.01f;
-        c.gravityThresh = 5.0f;
-        c.stokeDecay = 0.95f;
-        imu.setMotionConfig(c);
-        Serial.println(F("Applied all IMU fixes for excessive sensitivity"));
-        Serial.println(F("Test with 'imu calibrate' after this"));
     }
     else if (strcmp(cmd, "imu test gravity") == 0) {
         Serial.println(F("=== GRAVITY-BASED FLAME RISING TEST ==="));
@@ -420,13 +412,6 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F("IMU Debug=off"));
     }
 
-    // Save/load presets (placeholder for future)
-    else if (strcmp(cmd, "save") == 0) {
-        Serial.println(F("Save preset feature not yet implemented"));
-    }
-    else if (strcmp(cmd, "load") == 0) {
-        Serial.println(F("Load preset feature not yet implemented"));
-    }
 
     else {
         Serial.println(F("Unknown command. Type 'help' for commands."));
@@ -461,11 +446,6 @@ void SerialConsole::printAll() {
     Serial.print(F("  TransientHeatMax: ")); Serial.println(fire.params.transientHeatMax);
     Serial.print(F("  LED Brightness: ")); Serial.println(leds.getBrightness());
 
-    // Motion
-    Serial.println(F("MOTION:"));
-    Serial.print(F("  Enabled: ")); Serial.println(motionEnabled ? F("YES") : F("NO"));
-    Serial.print(F("  WindSpeed: ")); Serial.println(windSpeed, 2);
-    Serial.print(F("  WindScale: ")); Serial.println(windScale, 3);
 
     // Audio Engine
     Serial.println(F("AUDIO:"));
@@ -493,13 +473,19 @@ void SerialConsole::printAll() {
     Serial.print(F("  Fire: ")); Serial.println(fireDisabled ? F("DISABLED") : F("ENABLED"));
     Serial.print(F("  Rate: ")); Serial.print(debugPeriodMs); Serial.println(F("ms"));
 
-    // Battery
-    float vbat = battery.readVoltage();
-    uint8_t soc = BatteryMonitor::voltageToPercent(vbat);
-    bool charging = battery.isCharging();
-    Serial.println(F("SYSTEM:"));
-    Serial.print(F("  Battery: ")); Serial.print(vbat, 2); Serial.print(F("V ("));
-    Serial.print(soc); Serial.print(F("%) ")); Serial.println(charging ? F("CHARGING") : F(""));
+    // Battery - detailed system data
+    Serial.println(F("BATTERY SYSTEM:"));
+    Serial.print(F("  Raw ADC: ")); Serial.println(battery.readRaw());
+    Serial.print(F("  Voltage: ")); Serial.print(battery.readVoltage(), 3); Serial.println(F("V"));
+    Serial.print(F("  Smoothed Voltage: ")); Serial.print(battery.getVoltage(), 3); Serial.println(F("V"));
+    Serial.print(F("  Percentage: ")); Serial.print(battery.getPercent()); Serial.println(F("%"));
+    Serial.print(F("  Charging: ")); Serial.println(battery.isCharging() ? F("YES") : F("NO"));
+    Serial.print(F("  Fast Charge: ")); Serial.println(config.charging.fastChargeEnabled ? F("ENABLED") : F("DISABLED"));
+    Serial.print(F("  Config Min/Max: ")); Serial.print(config.charging.minVoltage, 1);
+    Serial.print(F("V / ")); Serial.print(config.charging.maxVoltage, 1); Serial.println(F("V"));
+    Serial.print(F("  Low/Critical: ")); Serial.print(config.charging.lowBatteryThreshold, 1);
+    Serial.print(F("V / ")); Serial.print(config.charging.criticalBatteryThreshold, 1); Serial.println(F("V"));
+    Serial.print(F("  Auto Viz When Charging: ")); Serial.println(config.charging.autoShowVisualizationWhenCharging ? F("YES") : F("NO"));
 }
 
 void SerialConsole::renderIMUVisualization() {
@@ -581,6 +567,32 @@ void SerialConsole::renderIMUVisualization() {
     }
 
     leds.show();
+}
+
+int SerialConsole::xyToPixelIndex(int x, int y) {
+    // Get current device config for consistent mapping
+    extern const DeviceConfig& config;
+    int width = config.matrix.width;
+    int height = config.matrix.height;
+
+    // Wrap coordinates
+    x = (x % width + width) % width;
+    y = (y % height + height) % height;
+
+    // Handle different matrix orientations and wiring patterns
+    if (config.matrix.orientation == VERTICAL && width == 4 && height == 16) {
+        // Tube light: 4x16 zigzag pattern
+        if (x % 2 == 0) {
+            // Even columns (0,2): normal top-to-bottom
+            return x * height + y;
+        } else {
+            // Odd columns (1,3): bottom-to-top (reversed)
+            return x * height + (height - 1 - y);
+        }
+    } else {
+        // Fire totem: standard row-major mapping
+        return y * width + x;
+    }
 }
 
 void SerialConsole::renderTopVisualization() {
@@ -668,12 +680,6 @@ void SerialConsole::debugTick() {
         Serial.print(F(" cool=")); Serial.print(fire.params.baseCooling);
         Serial.print(F(" spark=")); Serial.print(fire.params.sparkChance, 2);
 
-        if (motionEnabled) {
-            const MotionState& m = imu.motion();
-            Serial.print(F(" wind=(")); Serial.print(m.wind.x * windScale, 2);
-            Serial.print(F(","));      Serial.print(m.wind.y * windScale, 2);
-            Serial.print(F(")"));
-        }
 
         Serial.print(F(" bright=")); Serial.print(leds.getBrightness());
         Serial.println();
@@ -699,19 +705,6 @@ void SerialConsole::printFireStats() {
     Serial.print(F("  Gate=")); Serial.print(mic.noiseGate, 3);
     Serial.print(F("  Gain=")); Serial.println(mic.globalGain, 3);
 
-    // Motion state
-    if (motionEnabled) {
-        const MotionState& m = imu.motion();
-        Serial.print(F("Motion: Wind=(")); Serial.print(m.wind.x * windScale, 3);
-        Serial.print(F(","));            Serial.print(m.wind.y * windScale, 3);
-        Serial.print(F(")  Up=(")); Serial.print(m.up.x, 2);
-        Serial.print(F(","));        Serial.print(m.up.y, 2);
-        Serial.print(F(","));        Serial.print(m.up.z, 2);
-        Serial.print(F(")  Scale=")); Serial.print(windScale, 3);
-        Serial.print(F("  Speed=")); Serial.println(windSpeed, 2);
-    } else {
-        Serial.println(F("Motion: DISABLED"));
-    }
 
     // Hardware
     Serial.print(F("LED Brightness: ")); Serial.print(leds.getBrightness());
@@ -776,4 +769,115 @@ void SerialConsole::printRawIMUData() {
     Serial.print(data.isMoving ? F(" MOVING") : F(" STILL"));
 
     Serial.println();
+}
+
+void SerialConsole::renderBatteryVisualization() {
+    // Clear the display first
+    for (int i = 0; i < leds.numPixels(); i++) {
+        leds.setPixelColor(i, 0);
+    }
+
+    // Get current device config
+    extern const DeviceConfig& config;
+    int width = config.matrix.width;
+    int height = config.matrix.height;
+
+    // Get battery voltage and normalize it
+    float voltage = battery.getVoltage();
+    if (voltage <= 0) {
+        // No battery data available - show red error indication on top row
+        for (int x = 0; x < width; x++) {
+            int pixelIndex = xyToPixelIndex(x, height - 1); // Top row
+            leds.setPixelColor(pixelIndex, leds.Color(50, 0, 0)); // Dim red
+        }
+        leds.show();
+        return;
+    }
+
+    // Include config for voltage range
+    float minV = config.charging.minVoltage;
+    float maxV = config.charging.maxVoltage;
+
+    // Normalize voltage to 0-1 range
+    float chargeLevel = (voltage - minV) / (maxV - minV);
+    chargeLevel = constrain(chargeLevel, 0.0f, 1.0f);
+
+    // Calculate how many pixels to light up (width pixels total on top row)
+    int numPixels = (int)(chargeLevel * width);
+
+    // Determine if charging
+    bool isCharging = battery.isCharging();
+
+    // Draw battery visualization on top row only
+    const int topRow = height - 1;
+    for (int x = 0; x < width; x++) {
+        int pixelIndex = xyToPixelIndex(x, topRow);
+
+        if (x < numPixels) {
+            // Lit portion of battery meter
+            uint32_t color;
+            if (isCharging) {
+                // Blue when charging
+                color = leds.Color(0, 50, 255);
+            } else if (chargeLevel > 0.6f) {
+                // Green when full
+                color = leds.Color(0, 255, 0);
+            } else if (chargeLevel > 0.3f) {
+                // Yellow when medium
+                color = leds.Color(255, 255, 0);
+            } else {
+                // Red when low
+                color = leds.Color(255, 0, 0);
+            }
+            leds.setPixelColor(pixelIndex, color);
+        } else {
+            // Empty portion - dim outline
+            leds.setPixelColor(pixelIndex, leds.Color(5, 5, 5)); // Very dim white outline
+        }
+    }
+
+    leds.show();
+}
+
+void SerialConsole::renderTestPattern() {
+    // Get current config for matrix dimensions
+    extern const DeviceConfig& config;
+    int width = config.matrix.width;
+    int height = config.matrix.height;
+
+    // Clear the display first
+    for (int i = 0; i < leds.numPixels(); i++) {
+        leds.setPixelColor(i, 0);
+    }
+
+    // Create cycling RGB pattern that moves upward
+    static unsigned long lastUpdate = 0;
+    static int offset = 0;
+
+    if (millis() - lastUpdate > 500) { // Update every 500ms
+        lastUpdate = millis();
+        offset = (offset + 1) % (height + 3); // +3 for the three colors
+    }
+
+    // Draw the pattern
+    for (int y = 0; y < height; y++) {
+        uint32_t color = 0;
+        int colorIndex = (y + offset) % 3;
+
+        switch (colorIndex) {
+            case 0: color = leds.Color(255, 0, 0); break; // Red
+            case 1: color = leds.Color(0, 255, 0); break; // Green
+            case 2: color = leds.Color(0, 0, 255); break; // Blue
+        }
+
+        // Light up entire row
+        for (int x = 0; x < width; x++) {
+            int pixelIndex = xyToPixelIndex(x, y);
+            if (pixelIndex < leds.numPixels()) {
+                leds.setPixelColor(pixelIndex, color);
+            }
+        }
+    }
+
+    leds.show();
 }

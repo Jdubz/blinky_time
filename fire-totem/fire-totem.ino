@@ -5,33 +5,34 @@
 #include "BatteryMonitor.h"
 #include "IMUHelper.h"
 #include "TotemDefaults.h"
+#include "configs/TubeLightConfig.h"
 
-#define WIDTH 16
-#define HEIGHT 8
-#define LED_PIN D10
+const DeviceConfig& config = TUBE_LIGHT_CONFIG;
 
-Adafruit_NeoPixel leds(WIDTH * HEIGHT, LED_PIN, NEO_RGB + NEO_KHZ800);
+Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
 
-FireEffect fire(leds, WIDTH, HEIGHT);
+FireEffect fire(leds, config.matrix.width, config.matrix.height);
 AdaptiveMic mic;
 SerialConsole console(fire, leds);
 BatteryMonitor battery;
 IMUHelper imu;
 
 uint32_t lastMs = 0;
+bool prevChargingState = false;
 
 void setup() {
-  Serial.begin(115200);
-  while (!Serial && millis() < 3000) {}
-  Serial.println(F("Fire Totem Starting..."));
+  Serial.begin(config.serial.baudRate);
+  while (!Serial && millis() < config.serial.initTimeoutMs) {}
+  Serial.print(F("Starting device: "));
+  Serial.println(config.deviceName);
 
   leds.begin();
-  leds.setBrightness(80);
+  leds.setBrightness(config.matrix.brightness);
   leds.show();
 
   fire.begin();
 
-  bool micOk = mic.begin(16000, 32);
+  bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
   if (!micOk) {
     Serial.println(F("ERROR: Microphone failed to start"));
   } else {
@@ -49,7 +50,7 @@ void setup() {
   if (!battery.begin()) {
     Serial.println(F("WARNING: Battery monitor failed to start"));
   } else {
-    battery.setFastCharge(true);
+    battery.setFastCharge(config.charging.fastChargeEnabled);
     Serial.println(F("Battery monitor initialized"));
   }
 
@@ -64,27 +65,39 @@ void loop() {
 
   mic.update(dt);
 
-  // Console-controlled IMU motion effects and visualization
-  if (imu.isReady() && (console.motionEnabled || console.heatVizEnabled)) {
-    imu.updateMotion(dt);
-    imu.updateIMUData(); // Update clean IMU data for debugging
-
-    if (console.motionEnabled) {
-      const MotionState& m = imu.motion();
-
-      // DISABLED: Wind effect not working as expected
-      // fire.setWind(m.wind.x * console.windScale, m.wind.y * console.windScale);
-
-      // Gravity-based heat rising: Invert Z-axis for upside-down mounting
-      fire.setUpVector(m.up.x, m.up.y, -m.up.z);  // Note the negative Z
-    }
+  // IMU data update for visualization only (no fire effects)
+  if (imu.isReady() && console.heatVizEnabled) {
+    imu.updateIMUData(); // Update clean IMU data for debugging only
   }
 
   float energy = mic.getLevel();
   float hit = mic.getTransient();
 
+  // Auto-activation of battery visualization when charging
+  if (config.charging.autoShowVisualizationWhenCharging) {
+    bool currentChargingState = battery.isCharging();
+    if (currentChargingState && !prevChargingState) {
+      // Just started charging - auto-activate battery visualization
+      console.batteryVizEnabled = true;
+      Serial.println(F("Auto-activated battery visualization (charging detected)"));
+    } else if (!currentChargingState && prevChargingState) {
+      // Just stopped charging - auto-deactivate if it was auto-activated
+      if (console.batteryVizEnabled) {
+        console.batteryVizEnabled = false;
+        Serial.println(F("Auto-deactivated battery visualization (charging stopped)"));
+      }
+    }
+    prevChargingState = currentChargingState;
+  }
+
   // Render fire effect or visualizations
-  if (console.imuVizEnabled) {
+  if (console.testPatternEnabled) {
+    // Test pattern mode - highest priority for layout verification
+    console.renderTestPattern();
+  } else if (console.batteryVizEnabled) {
+    // Battery visualization mode - override other displays
+    console.renderBatteryVisualization();
+  } else if (console.imuVizEnabled) {
     // IMU visualization mode - override fire display
     console.renderIMUVisualization();
   } else if (console.heatVizEnabled) {
@@ -95,7 +108,7 @@ void loop() {
       console.renderTopVisualization(); // Add top indicator and show
     } else {
       // Fire disabled - clear display and show only top indicator
-      for (int i = 0; i < 16 * 8; i++) {
+      for (int i = 0; i < config.matrix.width * config.matrix.height; i++) {
         leds.setPixelColor(i, 0);
       }
       console.renderTopVisualization();
@@ -107,7 +120,7 @@ void loop() {
       fire.show();
     } else {
       // Fire disabled - clear display
-      for (int i = 0; i < 16 * 8; i++) {
+      for (int i = 0; i < config.matrix.width * config.matrix.height; i++) {
         leds.setPixelColor(i, 0);
       }
       leds.show();
@@ -115,4 +128,20 @@ void loop() {
   }
 
   console.update();
+
+  // Battery monitoring
+  static uint32_t lastBatteryCheck = 0;
+  if (millis() - lastBatteryCheck > 30000) { // Check every 30 seconds
+    lastBatteryCheck = millis();
+    float voltage = battery.getVoltage();
+    if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
+      Serial.print(F("CRITICAL BATTERY: "));
+      Serial.print(voltage);
+      Serial.println(F("V"));
+    } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
+      Serial.print(F("Low battery: "));
+      Serial.print(voltage);
+      Serial.println(F("V"));
+    }
+  }
 }

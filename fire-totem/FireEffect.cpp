@@ -1,5 +1,6 @@
 #include "FireEffect.h"
 #include "SerialConsole.h"
+#include "configs/DeviceConfig.h"
 
 // Enhanced noise functions for more organic fire behavior
 static float hashNoise(int x, int y, float t) {
@@ -107,43 +108,6 @@ void FireEffect::update(float energy, float hit) {
     render();
 }
 
-void FireEffect::addWindLean(float dt) {
-    // Simple horizontal wind lean effect - only shifts the visual appearance
-    if (fabsf(windX) > 0.01f && WIDTH > 1) {
-        // Console-controlled wind lean speed
-        extern SerialConsole console;
-        float dShift = windX * console.windSpeed * dt;
-
-        // Allocate scratch buffer if needed
-        if (!heatScratch) {
-            heatScratch = (float*)malloc(sizeof(float) * WIDTH);
-            if (!heatScratch) return;
-        }
-
-        // Simple horizontal shift for lean effect
-        for (int y = 1; y < HEIGHT; ++y) {  // Skip bottom row to preserve sparks
-            // Copy current row
-            for (int x = 0; x < WIDTH; ++x) {
-                heatScratch[x] = H(x, y);
-            }
-
-            // Apply subtle horizontal shift
-            for (int x = 0; x < WIDTH; ++x) {
-                float srcX = x - dShift;
-
-                // Wrap around
-                while (srcX < 0) srcX += WIDTH;
-                while (srcX >= WIDTH) srcX -= WIDTH;
-
-                int i0 = (int)srcX;
-                int i1 = (i0 + 1) % WIDTH;
-                float f = srcX - i0;
-
-                H(x, y) = heatScratch[i0] * (1.0f - f) + heatScratch[i1] * f;
-            }
-        }
-    }
-}
 
 void FireEffect::coolCells() {
     const float coolingScale = 0.5f / 255.0f;
@@ -159,21 +123,11 @@ void FireEffect::coolCells() {
 }
 
 void FireEffect::propagateUp() {
-    // Gravity-based heat propagation - heat rises in direction of gravity
+    // Simple heat propagation - heat rises straight up (no IMU tilt effects)
 
-    // Calculate gravity direction on the cylindrical matrix
-    // upx, upy, upz represent the "up" direction in world space
-    // Map this to matrix coordinates for heat propagation
-
-    // For cylinder: X = around circumference, Y = vertical height
-    // upx affects horizontal direction, upy affects vertical direction
-
-    float gravityX = upx;  // Horizontal tilt component
-    float gravityY = upy;  // Vertical tilt component
-
-    // Limit gravity influence to prevent extreme effects
-    gravityX = constrain(gravityX, -0.8f, 0.8f);
-    gravityY = constrain(gravityY, -0.8f, 0.8f);
+    // Default gravity: straight up (no horizontal tilt)
+    float gravityX = 0.0f;  // No horizontal tilt
+    float gravityY = 0.0f;  // No vertical tilt effect
 
     for (int y = HEIGHT - 1; y > 0; --y) {
         for (int x = 0; x < WIDTH; ++x) {
@@ -295,9 +249,31 @@ uint32_t FireEffect::heatToColorRGB(float h) const {
 // If your strip is wired row-major starting at top-left, this is correct.
 // If not, adapt this mapping to your wiring (non-serpentine assumed).
 uint16_t FireEffect::xyToIndex(int x, int y) const {
+    // Get current device config
+    extern const DeviceConfig& config;
+
     x = (x % WIDTH + WIDTH) % WIDTH;
     y = (y % HEIGHT + HEIGHT) % HEIGHT;
-    return y * WIDTH + x;
+
+    // Handle different matrix orientations and wiring patterns
+    if (config.matrix.orientation == VERTICAL && WIDTH == 4 && HEIGHT == 16) {
+        // Tube light: 4x16 zigzag pattern
+        // Col 0: 0-15 (top to bottom)
+        // Col 1: 31-16 (bottom to top)
+        // Col 2: 32-47 (top to bottom)
+        // Col 3: 63-48 (bottom to top)
+
+        if (x % 2 == 0) {
+            // Even columns (0,2): normal top-to-bottom
+            return x * HEIGHT + y;
+        } else {
+            // Odd columns (1,3): bottom-to-top (reversed)
+            return x * HEIGHT + (HEIGHT - 1 - y);
+        }
+    } else {
+        // Fire totem: standard row-major mapping
+        return y * WIDTH + x;
+    }
 }
 
 void FireEffect::render() {
@@ -326,55 +302,3 @@ FireEffect::~FireEffect() {
     }
 }
 
-// ======== Enhanced FireEffect IMU Integration ========
-
-void FireEffect::setTorchMotion(float windXIn, float windYIn, float stokeLevel,
-                                float turbulence, float centrifugal, float flameBend,
-                                float tiltAngleIn, float motionIntensityIn) {
-    // Update basic motion state
-    windX = windXIn;
-    windY = windYIn;
-    stoke = constrain(stokeLevel, 0.0f, 1.0f);
-
-    // Update advanced motion effects
-    turbulenceLevel = constrain(turbulence, 0.0f, 1.0f);
-    centrifugalEffect = constrain(centrifugal, 0.0f, 2.0f);
-    flameBendAngle = constrain(flameBend, 0.0f, 1.0f);
-    tiltAngle = constrain(tiltAngleIn, 0.0f, 90.0f);
-    motionIntensity = constrain(motionIntensityIn, 0.0f, 1.0f);
-
-    // Adjust spark behavior based on motion
-    sparkIntensity = 1.0f + motionIntensity * motionSparkFactor;
-}
-
-void FireEffect::setRotationalEffects(float spinMag, float centrifugalForce) {
-    spinMagnitude = constrain(spinMag, 0.0f, 10.0f);
-    centrifugalEffect = constrain(centrifugalForce, 0.0f, 2.0f);
-
-    // Rotational motion affects spark spread and intensity
-    sparkSpreadCols = constrain((int)(3 + spinMagnitude), 2, 6);
-    sparkIntensity *= (1.0f + spinMagnitude * 0.2f);
-}
-
-void FireEffect::setInertialDrift(float driftX, float driftY) {
-    inertiaDriftX = constrain(driftX, -5.0f, 5.0f);
-    inertiaDriftY = constrain(driftY, -5.0f, 5.0f);
-
-    // Inertial drift affects spark head movement
-    sparkHeadX += inertiaDriftX * 0.1f;
-    sparkHeadY += inertiaDriftY * 0.05f;
-
-    // Keep spark head within bounds
-    while (sparkHeadX < 0.0f) sparkHeadX += WIDTH;
-    while (sparkHeadX >= WIDTH) sparkHeadX -= WIDTH;
-    sparkHeadY = constrain(sparkHeadY, -2.0f, 2.0f);
-}
-
-void FireEffect::setFlameDirection(float direction, float bend) {
-    flameDirection = direction;
-    flameBendAngle = constrain(bend, 0.0f, 1.0f);
-}
-
-void FireEffect::setMotionTurbulence(float level) {
-    turbulenceLevel = constrain(level, 0.0f, 1.0f);
-}

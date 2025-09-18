@@ -17,16 +17,24 @@ public:
     void printAll();
     void renderIMUVisualization();        // IMU orientation visualization
     void renderTopVisualization();        // Cylinder top column visualization
+    void renderBatteryVisualization();    // Battery charge level visualization
+    void renderTestPattern();             // RGB test pattern for layout verification
 
-    // Motion control access
-    bool motionEnabled = true;
-    float windSpeed = 2.0f;              // Wind lean speed multiplier
-    float windScale = 0.3f;              // Wind intensity scale
+private:
+    // Helper function for consistent matrix mapping
+    int xyToPixelIndex(int x, int y);
 
+public:
     // IMU visualization mode
     bool imuVizEnabled = false;          // Enable IMU visualization on matrix
     bool fireDisabled = false;           // Disable fire when showing IMU viz
     bool heatVizEnabled = false;         // Show cylinder top column visualization
+
+    // Battery visualization mode
+    bool batteryVizEnabled = false;      // Enable battery charge visualization
+
+    // Test pattern mode
+    bool testPatternEnabled = false;     // Enable test pattern for layout verification
 
 private:
     FireEffect &fire;

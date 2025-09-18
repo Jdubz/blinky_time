@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(arduino-cli compile:*)"
+      "Bash(arduino-cli compile:*)",
+      "Bash(mkdir:*)",
+      "Bash(arduino-cli:*)",
+      "Read(//c/Users/jwent/AppData/Local/Arduino15//**)",
+      "Read(//d/**)"
     ],
     "deny": [],
     "ask": []
