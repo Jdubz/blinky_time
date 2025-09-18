@@ -1,21 +1,27 @@
 #include <Adafruit_NeoPixel.h>
 #include "AdaptiveMic.h"
 #include "FireEffect.h"
+#include "StringFireEffect.h"
 #include "SerialConsole.h"
 #include "BatteryMonitor.h"
 #include "IMUHelper.h"
 #include "TotemDefaults.h"
-#include "configs/TubeLightConfig.h"
+// #include "configs/TubeLightConfig.h"
+#include "configs/HatConfig.h" // Hat device (89 LEDs, STRING_FIRE mode)
 #include "Globals.h"
 #include "Constants.h"
 
-// Currently configured for tube light device
-const DeviceConfig& config = TUBE_LIGHT_CONFIG;
+// Currently configured for hat device (89 LEDs, STRING_FIRE mode)
+// For tube light device, use: const DeviceConfig& config = TUBE_LIGHT_CONFIG; (4x15 matrix, MATRIX_FIRE mode)
+const DeviceConfig& config = HAT_CONFIG;
 LEDMapper ledMapper;
 
 Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
 
-FireEffect fire(leds, config.matrix.width, config.matrix.height);
+// Fire effect - will be initialized in setup() based on config
+FireEffect fire(leds, 1, 1); // Temporary initialization, will be reconfigured
+StringFireEffect* stringFire = nullptr; // Alternative fire effect for strings
+
 AdaptiveMic mic;
 SerialConsole console(fire, leds);
 BatteryMonitor battery;
@@ -31,6 +37,42 @@ void clearAllLEDs() {
   }
 }
 
+// Helper functions for fire effects
+void updateFireEffect(float energy, float hit) {
+  static uint32_t lastDebug = 0;
+  if (millis() - lastDebug > 5000) {  // Debug every 5 seconds
+    lastDebug = millis();
+    Serial.print(F("Fire update - energy: "));
+    Serial.print(energy);
+    Serial.print(F(", hit: "));
+    Serial.print(hit);
+    Serial.print(F(", using: "));
+    Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
+  }
+
+  if (config.matrix.fireType == STRING_FIRE && stringFire) {
+    stringFire->update(energy, hit);
+  } else {
+    fire.update(energy, hit);
+  }
+}
+
+void showFireEffect() {
+  if (config.matrix.fireType == STRING_FIRE && stringFire) {
+    stringFire->show();
+  } else {
+    fire.show();
+  }
+}
+
+void renderFireEffect() {
+  if (config.matrix.fireType == STRING_FIRE && stringFire) {
+    stringFire->render();
+  } else {
+    fire.render();
+  }
+}
+
 void setup() {
   Serial.begin(config.serial.baudRate);
   while (!Serial && millis() < config.serial.initTimeoutMs) {}
@@ -41,11 +83,55 @@ void setup() {
   leds.setBrightness(config.matrix.brightness);
   leds.show();
 
+  // Basic LED test - light up first few LEDs to verify hardware
+  Serial.print(F("LED Test: Lighting first 3 LEDs at brightness "));
+  Serial.println(config.matrix.brightness);
+  leds.setPixelColor(0, leds.Color(255, 0, 0));  // Should show RED
+  leds.setPixelColor(1, leds.Color(0, 255, 0));  // Should show GREEN
+  leds.setPixelColor(2, leds.Color(0, 0, 255));  // Should show BLUE
+  leds.show();
+  delay(3000);  // Hold for 3 seconds to verify colors are correct
+
+  // Clear test LEDs
+  leds.setPixelColor(0, 0);
+  leds.setPixelColor(1, 0);
+  leds.setPixelColor(2, 0);
+  leds.show();
+
   if (!ledMapper.begin(config)) {
     Serial.println(F("ERROR: LED mapper initialization failed"));
     while(1); // Halt execution
   }
-  fire.begin();
+
+  // Initialize fire effect based on config type
+  Serial.print(F("Config fire type: "));
+  Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
+  Serial.print(F("Matrix dimensions: "));
+  Serial.print(config.matrix.width);
+  Serial.print(F(" x "));
+  Serial.print(config.matrix.height);
+  Serial.print(F(" = "));
+  Serial.print(config.matrix.width * config.matrix.height);
+  Serial.println(F(" LEDs"));
+
+  if (config.matrix.fireType == STRING_FIRE) {
+    Serial.println(F("Initializing STRING fire effect"));
+    stringFire = new StringFireEffect(leds, config.matrix.width * config.matrix.height);
+    if (stringFire) {
+      stringFire->begin();
+      Serial.println(F("String fire effect initialized successfully"));
+    } else {
+      Serial.println(F("ERROR: String fire effect allocation failed"));
+      while(1); // Halt execution
+    }
+  } else {
+    Serial.println(F("Initializing MATRIX fire effect"));
+    // Reinitialize the matrix fire with proper dimensions
+    fire.~FireEffect();
+    new(&fire) FireEffect(leds, config.matrix.width, config.matrix.height);
+    fire.begin();
+    Serial.println(F("Matrix fire effect initialized successfully"));
+  }
 
   bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
   if (!micOk) {
@@ -123,8 +209,8 @@ void loop() {
   } else if (console.heatVizEnabled) {
     // Cylinder top visualization mode - show fire + top indicator
     if (!console.fireDisabled) {
-      fire.update(energy, hit);
-      fire.render(); // Render fire to matrix but don't show yet
+      updateFireEffect(energy, hit);
+      renderFireEffect(); // Render fire to matrix but don't show yet
       console.renderTopVisualization(); // Add top indicator and show
     } else {
       // Fire disabled - clear display and show only top indicator
@@ -134,8 +220,8 @@ void loop() {
   } else {
     // Normal fire mode
     if (!console.fireDisabled) {
-      fire.update(energy, hit);
-      fire.show();
+      updateFireEffect(energy, hit);
+      showFireEffect();
     } else {
       // Fire disabled - clear display
       clearAllLEDs();

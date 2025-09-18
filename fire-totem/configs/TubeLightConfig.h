@@ -20,7 +20,8 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
     .ledPin = D10,
     .brightness = 120,
     .ledType = NEO_RGB + NEO_KHZ800,
-    .orientation = VERTICAL
+    .orientation = VERTICAL,
+    .fireType = MATRIX_FIRE
   },
   .charging = {
     .fastChargeEnabled = true,

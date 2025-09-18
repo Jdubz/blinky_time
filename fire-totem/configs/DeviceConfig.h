@@ -6,6 +6,11 @@ enum MatrixOrientation {
   VERTICAL = 1     // Vertical layout (tube-light)
 };
 
+enum FireEffectType {
+  MATRIX_FIRE = 0,  // Traditional upward-propagating fire for matrices
+  STRING_FIRE = 1   // Sideways-dissipating fire for LED strings
+};
+
 struct MatrixConfig {
   uint8_t width;
   uint8_t height;
@@ -13,6 +18,7 @@ struct MatrixConfig {
   uint8_t brightness;
   uint32_t ledType;
   MatrixOrientation orientation;
+  FireEffectType fireType;
 };
 
 struct ChargingConfig {
