@@ -64,34 +64,30 @@ void loop() {
 
   mic.update(dt);
 
-  // IMU and torch simulation disabled for pure fire effect
-  /*
-  if (imu.isReady()) {
+  // Console-controlled IMU motion effects
+  if (console.motionEnabled && imu.isReady()) {
     imu.updateMotion(dt);
     const MotionState& m = imu.motion();
 
-    // Enhanced torch motion integration
-    fire.setTorchMotion(
-      m.wind.x, m.wind.y, m.stoke,
-      m.turbulenceLevel, m.centrifugalForce, m.flameBend,
-      m.tiltAngle, m.motionIntensity
-    );
-
-    fire.setRotationalEffects(m.spinMagnitude, m.centrifugalForce);
-    fire.setInertialDrift(m.inertiaDrift.x, m.inertiaDrift.y);
-    fire.setFlameDirection(m.flameDirection, m.flameBend);
-    fire.setMotionTurbulence(m.turbulenceLevel);
-
-    // Maintain backward compatibility
+    // Apply console-controlled wind scaling
+    fire.setWind(m.wind.x * console.windScale, m.wind.y * console.windScale);
     fire.setUpVector(m.up.x, m.up.y, m.up.z);
   }
-  */
 
   float energy = mic.getLevel();
   float hit = mic.getTransient();
 
-  fire.update(energy, hit);
-  fire.show();
+  // Render fire effect or IMU visualization
+  if (console.imuVizEnabled) {
+    // IMU visualization mode - override fire display
+    console.renderIMUVisualization();
+  } else {
+    // Normal fire mode
+    if (!console.fireDisabled) {
+      fire.update(energy, hit);
+      fire.show();
+    }
+  }
 
   console.update();
 }

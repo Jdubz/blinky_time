@@ -1,4 +1,5 @@
 #include "FireEffect.h"
+#include "SerialConsole.h"
 
 // Enhanced noise functions for more organic fire behavior
 static float hashNoise(int x, int y, float t) {
@@ -81,7 +82,8 @@ void FireEffect::restoreDefaults() {
 }
 
 void FireEffect::update(float energy, float hit) {
-    float emberFloor = 0.05f; // 5% energy floor
+    // Balanced ember floor - allows quiet adaptation but reduces silence activity
+    float emberFloor = 0.03f; // 3% energy floor (balanced between 1% and 5%)
     float boostedEnergy = max(emberFloor, energy * (1.0f + hit * (params.transientHeatMax / 255.0f)));
 
     // --- frame dt (seconds) ---
@@ -99,9 +101,48 @@ void FireEffect::update(float energy, float hit) {
 
     injectSparks(boostedEnergy);
 
-    // All torch simulation and IMU effects disabled for pure fire effect
+    // Add simple wind lean effect without changing brightness
+    addWindLean(dt);
 
     render();
+}
+
+void FireEffect::addWindLean(float dt) {
+    // Simple horizontal wind lean effect - only shifts the visual appearance
+    if (fabsf(windX) > 0.01f && WIDTH > 1) {
+        // Console-controlled wind lean speed
+        extern SerialConsole console;
+        float dShift = windX * console.windSpeed * dt;
+
+        // Allocate scratch buffer if needed
+        if (!heatScratch) {
+            heatScratch = (float*)malloc(sizeof(float) * WIDTH);
+            if (!heatScratch) return;
+        }
+
+        // Simple horizontal shift for lean effect
+        for (int y = 1; y < HEIGHT; ++y) {  // Skip bottom row to preserve sparks
+            // Copy current row
+            for (int x = 0; x < WIDTH; ++x) {
+                heatScratch[x] = H(x, y);
+            }
+
+            // Apply subtle horizontal shift
+            for (int x = 0; x < WIDTH; ++x) {
+                float srcX = x - dShift;
+
+                // Wrap around
+                while (srcX < 0) srcX += WIDTH;
+                while (srcX >= WIDTH) srcX -= WIDTH;
+
+                int i0 = (int)srcX;
+                int i1 = (i0 + 1) % WIDTH;
+                float f = srcX - i0;
+
+                H(x, y) = heatScratch[i0] * (1.0f - f) + heatScratch[i1] * f;
+            }
+        }
+    }
 }
 
 void FireEffect::coolCells() {
@@ -136,8 +177,13 @@ void FireEffect::propagateUp() {
 }
 
 void FireEffect::injectSparks(float energy) {
-    // Simple spark injection based on audio energy
-    float chanceScale = constrain(energy + params.audioSparkBoost * energy, 0.0f, 1.0f);
+    // Audio-responsive spark injection with balanced quiet/silence handling
+    float minActivity = 0.05f; // Minimum activity level for quiet environments
+    float adjustedEnergy = max(minActivity, energy);
+
+    // Use gentler scaling - square root instead of square for better quiet response
+    float energyScale = sqrt(adjustedEnergy); // Less aggressive than squaring
+    float chanceScale = constrain(energyScale + params.audioSparkBoost * adjustedEnergy, 0.0f, 1.0f);
 
     int rows = max<int>(1, params.bottomRowsForSparks);
     rows = min(rows, HEIGHT);
@@ -150,9 +196,9 @@ void FireEffect::injectSparks(float energy) {
                 uint8_t h8 = random(params.sparkHeatMin, params.sparkHeatMax + 1);
                 float h = h8 / 255.0f;
 
-                // Simple heat boost from audio
+                // Heat boost proportional to actual energy level
                 uint8_t boost8 = params.audioHeatBoostMax;
-                float boost = (boost8 / 255.0f) * energy;
+                float boost = (boost8 / 255.0f) * adjustedEnergy;
 
                 float finalHeat = min(1.0f, h + boost);
                 H(x, 0) = max(H(x, 0), finalHeat);

@@ -76,6 +76,7 @@ private:
     void coolCells();
     void propagateUp();
     void injectSparks(float energy);
+    void addWindLean(float dt);
 
     // palette
     uint32_t heatToColorRGB(float h) const;
