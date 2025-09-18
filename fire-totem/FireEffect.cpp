@@ -252,28 +252,11 @@ uint16_t FireEffect::xyToIndex(int x, int y) const {
     // Get current device config
     extern const DeviceConfig& config;
 
-    x = (x % WIDTH + WIDTH) % WIDTH;
-    y = (y % HEIGHT + HEIGHT) % HEIGHT;
+    x = ledMapper.wrapX(x);
+    y = ledMapper.wrapY(y);
 
-    // Handle different matrix orientations and wiring patterns
-    if (config.matrix.orientation == VERTICAL && WIDTH == 4 && HEIGHT == 16) {
-        // Tube light: 4x16 zigzag pattern
-        // Col 0: 0-15 (top to bottom)
-        // Col 1: 31-16 (bottom to top)
-        // Col 2: 32-47 (top to bottom)
-        // Col 3: 63-48 (bottom to top)
-
-        if (x % 2 == 0) {
-            // Even columns (0,2): normal top-to-bottom
-            return x * HEIGHT + y;
-        } else {
-            // Odd columns (1,3): bottom-to-top (reversed)
-            return x * HEIGHT + (HEIGHT - 1 - y);
-        }
-    } else {
-        // Fire totem: standard row-major mapping
-        return y * WIDTH + x;
-    }
+    // Use centralized LED mapper
+    return ledMapper.getIndex(x, y);
 }
 
 void FireEffect::render() {

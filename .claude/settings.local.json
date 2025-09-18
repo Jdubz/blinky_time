@@ -5,7 +5,19 @@
       "Bash(mkdir:*)",
       "Bash(arduino-cli:*)",
       "Read(//c/Users/jwent/AppData/Local/Arduino15//**)",
-      "Read(//d/**)"
+      "Read(//d/**)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn arduino:mbed_nano:nanoblesense fire-totem/)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" core list)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" core search seeed)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaoblesense fire-totem/)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" board listall Seeeduino:mbed)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaonRF52840Sense fire-totem/)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" lib search LSM6DS3)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" lib install \"Seeed Arduino LSM6DS3\")",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" lib uninstall \"Seeed Arduino LSM6DS3\")",
+      "WebSearch",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" lib install \"Seeed Arduino LSM6DS3@2.0.3\")",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaonRF52840Sense fire-totem/ --verbose)"
     ],
     "deny": [],
     "ask": []

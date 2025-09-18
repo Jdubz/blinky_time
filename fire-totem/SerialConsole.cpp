@@ -366,7 +366,7 @@ void SerialConsole::handleCommand(const char *cmd) {
             float angle = atan2(data.up.z, data.up.y);
             angle += PI / 2.0f; // Add 90-degree correction
             float normalizedAngle = (angle + PI) / (2.0f * PI);
-            int topColumn = (int)(normalizedAngle * 16 + 0.5f) % 16;
+            int topColumn = (int)(normalizedAngle * ledMapper.getWidth() + 0.5f) % ledMapper.getWidth();
 
             Serial.print(F("RAW accel=(")); Serial.print(data.accel.x, 3); Serial.print(F(","));
             Serial.print(data.accel.y, 3); Serial.print(F(","));  Serial.print(data.accel.z, 3); Serial.print(F(")"));
@@ -492,20 +492,20 @@ void SerialConsole::renderIMUVisualization() {
     if (!imuVizEnabled) return;
 
     // Clear the matrix
-    for (int i = 0; i < 16 * 8; i++) {
+    for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
         leds.setPixelColor(i, 0);
     }
 
     const MotionState& m = imu.motion();
 
-    // Matrix dimensions: 16 wide x 8 tall (cylindrical)
-    const int WIDTH = 16;
-    const int HEIGHT = 8;
+    // Matrix dimensions from mapper
+    const int WIDTH = ledMapper.getWidth();
+    const int HEIGHT = ledMapper.getHeight();
 
     // Helper function to set pixel safely
     auto setPixel = [&](int x, int y, uint32_t color) {
-        if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
-            int index = y * WIDTH + x;
+        int index = ledMapper.getIndex(x, y);
+        if (index >= 0) {
             leds.setPixelColor(index, color);
         }
     };
@@ -580,8 +580,8 @@ int SerialConsole::xyToPixelIndex(int x, int y) {
     y = (y % height + height) % height;
 
     // Handle different matrix orientations and wiring patterns
-    if (config.matrix.orientation == VERTICAL && width == 4 && height == 16) {
-        // Tube light: 4x16 zigzag pattern
+    if (config.matrix.orientation == VERTICAL && width == 4 && height == 15) {
+        // Tube light: 4x15 zigzag pattern
         if (x % 2 == 0) {
             // Even columns (0,2): normal top-to-bottom
             return x * height + y;
@@ -598,9 +598,9 @@ int SerialConsole::xyToPixelIndex(int x, int y) {
 void SerialConsole::renderTopVisualization() {
     if (!heatVizEnabled) return;
 
-    // Matrix dimensions: 16 wide x 8 tall (cylindrical)
-    const int WIDTH = 16;
-    const int HEIGHT = 8;
+    // Matrix dimensions from mapper
+    const int WIDTH = ledMapper.getWidth();
+    const int HEIGHT = ledMapper.getHeight();
 
     // Ensure IMU is updated for this visualization
     if (!imu.isReady()) return;

@@ -21,16 +21,16 @@ namespace TubeLightDefaults {
   constexpr float AutoGainMin      = 0.60f;
   constexpr float AutoGainMax      = 2.00f;
 
-  // ---- Fire engine params (adjusted for tube-light) ----
-  constexpr uint8_t BaseCooling         = 95;    // Slightly faster cooling for smaller matrix
-  constexpr uint8_t SparkHeatMin        = 45;    // Slightly higher min heat
-  constexpr uint8_t SparkHeatMax        = 210;   // Slightly higher max heat
-  constexpr float   SparkChance         = 0.34f; // Adjusted for 15 vs 16 bottom positions
-  constexpr float   AudioSparkBoost     = 0.3f;  // Same responsiveness
-  constexpr uint8_t AudioHeatBoostMax   = 65;    // Slightly higher boost for visibility
-  constexpr int8_t  CoolingAudioBias    = -22;   // Slightly more bias for taller flames
-  constexpr uint8_t BottomRowsForSparks = 1;     // Same as fire-totem
-  constexpr uint8_t TransientHeatMax = 110;      // Slightly higher for visibility
+  // ---- Fire engine params (tube-light optimized) ----
+  constexpr uint8_t BaseCooling         = 40;    // Slower cooling for better flames
+  constexpr uint8_t SparkHeatMin        = 50;    // New optimized range
+  constexpr uint8_t SparkHeatMax        = 200;   // New optimized range
+  constexpr float   SparkChance         = 0.200f; // Reduced for cleaner fire
+  constexpr float   AudioSparkBoost     = 0.300f; // Audio responsiveness
+  constexpr uint8_t AudioHeatBoostMax   = 60;    // Audio heat boost
+  constexpr int8_t  CoolingAudioBias    = -20;   // Audio cooling bias
+  constexpr uint8_t BottomRowsForSparks = 1;     // Single row for sparks
+  constexpr uint8_t TransientHeatMax    = 100;   // Transient heat maximum
 
   // (optional) Ranges
   namespace Ranges {

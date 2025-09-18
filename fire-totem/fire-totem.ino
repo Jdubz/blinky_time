@@ -6,8 +6,10 @@
 #include "IMUHelper.h"
 #include "TotemDefaults.h"
 #include "configs/TubeLightConfig.h"
+#include "Globals.h"
 
 const DeviceConfig& config = TUBE_LIGHT_CONFIG;
+LEDMapper ledMapper;
 
 Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
 
@@ -30,6 +32,7 @@ void setup() {
   leds.setBrightness(config.matrix.brightness);
   leds.show();
 
+  ledMapper.begin(config);
   fire.begin();
 
   bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
@@ -77,13 +80,20 @@ void loop() {
   if (config.charging.autoShowVisualizationWhenCharging) {
     bool currentChargingState = battery.isCharging();
     if (currentChargingState && !prevChargingState) {
-      // Just started charging - auto-activate battery visualization
+      // Just started charging - auto-activate battery visualization and disable fire
       console.batteryVizEnabled = true;
+      console.fireDisabled = true;
+      // Clear fire display immediately
+      for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
+        leds.setPixelColor(i, 0);
+      }
+      leds.show();
       Serial.println(F("Auto-activated battery visualization (charging detected)"));
     } else if (!currentChargingState && prevChargingState) {
-      // Just stopped charging - auto-deactivate if it was auto-activated
+      // Just stopped charging - auto-deactivate and re-enable fire
       if (console.batteryVizEnabled) {
         console.batteryVizEnabled = false;
+        console.fireDisabled = false;
         Serial.println(F("Auto-deactivated battery visualization (charging stopped)"));
       }
     }
@@ -108,7 +118,7 @@ void loop() {
       console.renderTopVisualization(); // Add top indicator and show
     } else {
       // Fire disabled - clear display and show only top indicator
-      for (int i = 0; i < config.matrix.width * config.matrix.height; i++) {
+      for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
         leds.setPixelColor(i, 0);
       }
       console.renderTopVisualization();
@@ -120,7 +130,7 @@ void loop() {
       fire.show();
     } else {
       // Fire disabled - clear display
-      for (int i = 0; i < config.matrix.width * config.matrix.height; i++) {
+      for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
         leds.setPixelColor(i, 0);
       }
       leds.show();

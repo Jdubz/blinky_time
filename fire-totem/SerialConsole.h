@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include "FireEffect.h"
+#include "Globals.h"
 
 class SerialConsole {
 public:
@@ -35,6 +36,7 @@ public:
 
     // Test pattern mode
     bool testPatternEnabled = false;     // Enable test pattern for layout verification
+
 
 private:
     FireEffect &fire;

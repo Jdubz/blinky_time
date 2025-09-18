@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include "TotemDefaults.h"
+#include "Globals.h"
 
 struct FireParams {
     // Matches Defaults.*
@@ -20,8 +21,8 @@ struct FireParams {
 class FireEffect {
 public:
     // Constructors: support both pointer & reference forms seen in .ino
-    FireEffect(Adafruit_NeoPixel &strip, int width = 16, int height = 8);
-    FireEffect(Adafruit_NeoPixel *strip, int width = 16, int height = 8)
+    FireEffect(Adafruit_NeoPixel &strip, int width = 4, int height = 15);
+    FireEffect(Adafruit_NeoPixel *strip, int width = 4, int height = 15)
         : FireEffect(*strip, width, height) {}
     ~FireEffect();
 

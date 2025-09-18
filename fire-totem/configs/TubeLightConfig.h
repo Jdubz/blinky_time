@@ -3,20 +3,20 @@
 #include "TubeLightDefaults.h"
 #include <Adafruit_NeoPixel.h>
 
-// Tube Light: 4x16 zigzag matrix (64 LEDs total)
+// Tube Light: 4x15 zigzag matrix (60 LEDs total)
 // Physical orientation: VERTICAL (strip runs top to bottom)
-// Layout: 4 columns of 16 LEDs each, zigzag wiring pattern
-// Col 0: LEDs 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15     (top to bottom)
-// Col 1: LEDs 31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16 (bottom to top)
-// Col 2: LEDs 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47 (top to bottom)
-// Col 3: LEDs 63,62,61,60,59,58,57,56,55,54,53,52,51,50,49,48 (bottom to top)
-// Bottom row: LEDs 0,16,32,48
+// Layout: 4 columns of 15 LEDs each, zigzag wiring pattern
+// Col 0: LEDs 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14        (top to bottom)
+// Col 1: LEDs 29,28,27,26,25,24,23,22,21,20,19,18,17,16,15 (bottom to top)
+// Col 2: LEDs 30,31,32,33,34,35,36,37,38,39,40,41,42,43,44 (top to bottom)
+// Col 3: LEDs 59,58,57,56,55,54,53,52,51,50,49,48,47,46,45 (bottom to top)
+// Top row: LEDs 0,29,30,59 | Bottom row: LEDs 14,15,44,45
 
 const DeviceConfig TUBE_LIGHT_CONFIG = {
   .deviceName = "Tube Light",
   .matrix = {
     .width = 4,
-    .height = 16,
+    .height = 15,
     .ledPin = D10,
     .brightness = 120,
     .ledType = NEO_RGB + NEO_KHZ800,

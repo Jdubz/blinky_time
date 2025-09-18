@@ -106,6 +106,7 @@ bool BatteryMonitor::isCharging() const {
   return active;
 }
 
+
 // Rough LiPo open-circuit voltage curve (no load)
 // 4.20V -> 100% ; 3.70V -> ~50% ; 3.30V -> 0%
 uint8_t BatteryMonitor::voltageToPercent(float v) {
