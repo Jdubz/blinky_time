@@ -99,231 +99,44 @@ void FireEffect::update(float energy, float hit) {
 
     injectSparks(boostedEnergy);
 
-    // ---- IMU integration: wind-biased spark + upward stoke ----
-    // 1) Orientation: which way is up
-    const int baseRowStart = 0;
-    const int baseRowStep  = +1;
-
-    // 2) Stoke: inject a small extra heat in the bottom N rows
-    if (stoke > 0.0f) {
-      // Reuse your AudioHeatBoostMax as a sane scale; convert to 0..1
-      const float boost = stoke * (Defaults::AudioHeatBoostMax / 255.0f);
-      const int rows = Defaults::BottomRowsForSparks;
-      for (int y = 0; y < rows; ++y) {
-        const int row = baseRowStart + baseRowStep * y;
-        for (int x = 0; x < WIDTH; ++x) {
-          const int idx = xyToIndex(x, row);
-          float h = heat[idx] + boost;
-          heat[idx] = (h > 1.0f) ? 1.0f : h;
-        }
-      }
-    }
-
-    // 3) Wind: drift a “spark head” around the cylinder; spawn near it occasionally
-    //    (keeps everything gentle—doesn't alter transport/cooling)
-    static unsigned long lastWindMs = 0;
-    float dtWind = (lastWindMs == 0) ? 0.016f : (nowMs - lastWindMs) * 0.001f;
-    lastWindMs = nowMs;
-
-    // drift head by windX (IMU wind already ~cells/sec-ish)
-    sparkHeadX += windX * windColsPerSec * dtWind;
-
-    // wrap into [0, WIDTH)
-    while (sparkHeadX < 0.0f) sparkHeadX += WIDTH;
-    while (sparkHeadX >= WIDTH) sparkHeadX -= WIDTH;
-
-    // probability to add an extra wind-biased spark this frame
-    // scales with |windX|; clamp to something subtle
-    const float windSparkFactor = 0.12f;
-    const float maxWindSparkProb = 0.35f;
-    float pExtra = constrain(fabsf(windX) * windSparkFactor, 0.0f, maxWindSparkProb);
-
-    // quick RNG in [0,1)
-    if (random(1000) < (int)(pExtra * 1000.0f)) {
-      int xCenter = (int)(sparkHeadX + 0.5f);
-      int xSpawn  = xCenter + random(-sparkSpreadCols, sparkSpreadCols + 1);
-      if (xSpawn < 0) xSpawn += WIDTH;
-      if (xSpawn >= WIDTH) xSpawn -= WIDTH;
-
-      const int row = baseRowStart; // hottest row at the base end
-      const int idx = xyToIndex(xSpawn, row);
-
-      // pick a heat pulse within your configured spark range; convert to 0..1
-      int sparkByte = random(Defaults::SparkHeatMin, (int)Defaults::SparkHeatMax + 1);
-      float spark = sparkByte / 255.0f;
-
-      // small audio coupling so louder moments bias brighter windsparks
-      spark *= (1.0f + Defaults::AudioSparkBoost * boostedEnergy);
-      float h = heat[idx] + spark;
-      heat[idx] = (h > 1.0f) ? 1.0f : h;
-    }
-
-    // ---- Lateral wind advection (visual “lean”) ----
-    if (fabsf(windX) > 1e-4f && WIDTH > 1) {
-      // how far to shift this frame, in columns
-      // positive windX shifts content to the right; negative to the left
-      float dShift = windX * windColsPerSec * dt;   // dt = seconds since last frame
-
-      // lazy-allocate a scratch row if needed
-      if (!heatScratch) {
-        heatScratch = (float*)malloc(sizeof(float) * WIDTH);
-        if (!heatScratch) {
-          Serial.println(F("FireEffect: Failed to allocate scratch buffer"));
-          return;
-        }
-      }
-
-      // Pre-calculate modulo for better performance
-      auto advectRowWrap = [](const float* inRow, float* outRow, int W, float s) {
-          const float fW = (float)W;
-          for (int x = 0; x < W; ++x) {
-            float srcX = x - s;
-            // Efficient wrap using fmod instead of while loops
-            srcX = srcX - fW * floorf(srcX / fW);
-            if (srcX < 0.0f) srcX += fW;
-
-            const int i0 = (int)srcX;
-            const int i1 = (i0 + 1 >= W) ? 0 : (i0 + 1);
-            const float f = srcX - i0;
-            const float v = inRow[i0] * (1.0f - f) + inRow[i1] * f;
-            outRow[x] = constrain(v, 0.0f, 1.0f);
-          }
-        };
-        for (int y = 0; y < HEIGHT; ++y) {
-          // copy current row to scratch
-          for (int x = 0; x < WIDTH; ++x) {
-            heatScratch[x] = heat[ xyToIndex(x, y) ];
-          }
-          // advect into place
-          float tmpRow[32]; // if width <= 32; otherwise use a second heap buffer
-          float* outRow = nullptr;
-
-          // Use stack buffer for small widths, heap for larger
-          static float* largeTmpRow = nullptr;
-          if (WIDTH <= 32) {
-            outRow = tmpRow;
-          } else {
-            if (!largeTmpRow) {
-              largeTmpRow = (float*)malloc(sizeof(float) * WIDTH);
-              if (!largeTmpRow) {
-                Serial.println(F("FireEffect: Failed to allocate temp row buffer"));
-                return;
-              }
-            }
-            outRow = largeTmpRow;
-          }
-
-          advectRowWrap(heatScratch, outRow, WIDTH, dShift);
-          for (int x = 0; x < WIDTH; ++x) {
-            heat[ xyToIndex(x, y) ] = outRow[x];
-          }
-        }
-      }
+    // All torch simulation and IMU effects disabled for pure fire effect
 
     render();
 }
 
 void FireEffect::coolCells() {
-    float time = millis() * 0.001f;
     const float coolingScale = 0.5f / 255.0f;
     const int maxCooling = params.baseCooling + 1;
 
     for (int y = 0; y < HEIGHT; ++y) {
         for (int x = 0; x < WIDTH; ++x) {
-            // Base random cooling
-            float baseCooling = random(0, maxCooling) * coolingScale;
-
-            // Add turbulent cooling variations for more organic decay
-            float turbCooling = turbulence(x * 0.3f, y * 0.5f, time * 0.8f) * 0.02f;
-
-            // Height-based cooling (flames cool more at the top)
-            float heightFactor = 1.0f + (float)y / HEIGHT * 0.5f;
-
-            // Apply enhanced cooling with flickering
-            float totalCooling = (baseCooling + turbCooling) * heightFactor;
-
-            // Add subtle pulsing to create flame breathing effect
-            float pulse = 1.0f + 0.15f * sin(time * 3.0f + x * 0.5f + y * 0.3f);
-            totalCooling *= pulse;
-
-            H(x,y) = max(0.0f, H(x,y) - totalCooling);
+            // Simple random cooling
+            const float decay = random(0, maxCooling) * coolingScale;
+            H(x,y) = max(0.0f, H(x,y) - decay);
         }
     }
 }
 
 void FireEffect::propagateUp() {
-    float time = millis() * 0.001f; // Time in seconds
-
-    // Enhanced upward propagation with turbulence
+    // Simple upward propagation without turbulence
     for (int y = HEIGHT - 1; y > 0; --y) {
         for (int x = 0; x < WIDTH; ++x) {
             float below      = H(x, y - 1);
             float belowLeft  = H((x + WIDTH - 1) % WIDTH, y - 1);
             float belowRight = H((x + 1) % WIDTH, y - 1);
 
-            // Add turbulence to create more organic flame shapes
-            float baseTurbOffset = turbulence(x * 0.5f, y * 0.3f, time * 2.0f) * 0.3f - 0.15f;
+            // Simple weighted average
+            float weightedSum = below * 1.4f + belowLeft * 0.8f + belowRight * 0.8f;
+            float totalWeight = 1.4f + 0.8f + 0.8f;
 
-            // Add motion-induced turbulence for torch realism
-            float motionTurbOffset = turbulenceLevel * turbulenceScale *
-                                   (smoothNoise(x * 0.7f, y * 0.4f, time * 3.0f) - 0.5f);
-
-            float totalTurbOffset = baseTurbOffset + motionTurbOffset;
-
-            // Calculate weighted average with enhanced turbulence influence
-            float centerWeight = 1.4f + totalTurbOffset;
-            float sideWeight = 0.8f - totalTurbOffset * 0.5f;
-
-            float totalWeight = centerWeight + 2.0f * sideWeight;
-            float weightedSum = below * centerWeight + belowLeft * sideWeight + belowRight * sideWeight;
-
-            // Apply heat rise with enhanced decay and turbulence
-            float baseDecay = 3.1f;
-            float turbulentDecay = baseDecay + smoothNoise(x * 0.8f, y * 0.4f, time * 1.5f) * 0.4f;
-
-            H(x, y) = weightedSum / turbulentDecay;
-
-            // Enhanced horizontal drift with motion and flame direction effects
-            float baseDrift = smoothNoise(x * 0.2f, y * 0.6f, time * 1.0f) * 0.1f;
-
-            // Add flame direction bias from motion
-            float directionBias = 0.0f;
-            if (flameBendAngle > 0.1f) {
-                float directionRad = flameDirection * M_PI / 180.0f;
-                directionBias = cos(directionRad) * flameBendAngle * 0.15f;
-            }
-
-            // Add inertial drift effects
-            float inertiaBias = (inertiaDriftX / WIDTH) * 0.1f;
-
-            // Add centrifugal effects for rotation
-            float centrifugalBias = 0.0f;
-            if (centrifugalEffect > 0.1f && y > HEIGHT/2) {
-                // Centrifugal force spreads flames outward at the top
-                float radiusFromCenter = abs(x - WIDTH/2) / (WIDTH/2.0f);
-                centrifugalBias = centrifugalEffect * radiusFromCenter * 0.08f;
-                if (x > WIDTH/2) centrifugalBias = abs(centrifugalBias);
-                else centrifugalBias = -abs(centrifugalBias);
-            }
-
-            float totalDrift = baseDrift + directionBias + inertiaBias + centrifugalBias;
-
-            if (totalDrift > 0.03f && x < WIDTH - 1) {
-                float mixFactor = min(totalDrift * 2.0f, 0.3f);
-                H(x, y) = H(x, y) * (1.0f - mixFactor) + H(x + 1, y) * mixFactor;
-            } else if (totalDrift < -0.03f && x > 0) {
-                float mixFactor = min(-totalDrift * 2.0f, 0.3f);
-                H(x, y) = H(x, y) * (1.0f - mixFactor) + H(x - 1, y) * mixFactor;
-            }
+            // Apply heat rise with simple decay
+            H(x, y) = weightedSum / 3.1f;
         }
     }
-    // Top row naturally dissipates via cooling
 }
 
 void FireEffect::injectSparks(float energy) {
-    float time = millis() * 0.001f;
-
-    // Enhanced audio energy scaling with more dynamic response
+    // Simple spark injection based on audio energy
     float chanceScale = constrain(energy + params.audioSparkBoost * energy, 0.0f, 1.0f);
 
     int rows = max<int>(1, params.bottomRowsForSparks);
@@ -333,37 +146,16 @@ void FireEffect::injectSparks(float energy) {
         for (int x = 0; x < WIDTH; ++x) {
             float roll = random(0, 10000) / 10000.0f;
 
-            // Enhanced spatial clustering with motion effects
-            float clusterNoise = smoothNoise(x * 0.6f, y * 0.4f, time * 0.5f);
-
-            // Motion-based spark enhancement
-            float motionSparkBoost = 1.0f + motionIntensity * 0.5f;
-            float intensityBasedChance = sparkIntensity * motionSparkBoost;
-
-            float clusterChance = params.sparkChance * chanceScale *
-                                (0.5f + clusterNoise) * intensityBasedChance;
-
-            if (roll < clusterChance) {
+            if (roll < params.sparkChance * chanceScale) {
                 uint8_t h8 = random(params.sparkHeatMin, params.sparkHeatMax + 1);
                 float h = h8 / 255.0f;
 
-                // Enhanced heat boost with turbulence variation
+                // Simple heat boost from audio
                 uint8_t boost8 = params.audioHeatBoostMax;
                 float boost = (boost8 / 255.0f) * energy;
 
-                // Add turbulent spark intensity variations
-                float turbVariation = turbulence(x * 0.8f, y * 0.6f, time * 4.0f) * 0.3f;
-                h += turbVariation;
-
-                // Create spark clusters with neighboring influence
                 float finalHeat = min(1.0f, h + boost);
                 H(x, 0) = max(H(x, 0), finalHeat);
-
-                // Add slight influence to neighboring cells for clustering
-                if (finalHeat > 0.7f) {
-                    if (x > 0) H(x - 1, 0) = max(H(x - 1, 0), finalHeat * 0.3f);
-                    if (x < WIDTH - 1) H(x + 1, 0) = max(H(x + 1, 0), finalHeat * 0.3f);
-                }
             }
         }
     }

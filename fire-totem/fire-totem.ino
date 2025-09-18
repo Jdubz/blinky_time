@@ -26,7 +26,7 @@ void setup() {
   Serial.println(F("Fire Totem Starting..."));
 
   leds.begin();
-  leds.setBrightness(150);
+  leds.setBrightness(80);
   leds.show();
 
   fire.begin();
@@ -64,6 +64,8 @@ void loop() {
 
   mic.update(dt);
 
+  // IMU and torch simulation disabled for pure fire effect
+  /*
   if (imu.isReady()) {
     imu.updateMotion(dt);
     const MotionState& m = imu.motion();
@@ -83,6 +85,7 @@ void loop() {
     // Maintain backward compatibility
     fire.setUpVector(m.up.x, m.up.y, m.up.z);
   }
+  */
 
   float energy = mic.getLevel();
   float hit = mic.getTransient();

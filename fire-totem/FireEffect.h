@@ -101,11 +101,11 @@ private:
     float sparkHeadY = 0.f;          // vertical spark drift
     float sparkIntensity = 1.f;      // motion-influenced spark intensity
 
-    // Adaptive parameters
-    float windColsPerSec = 8.0f;     // enhanced wind responsiveness
-    int   sparkSpreadCols = 3;       // larger spread for motion effects
-    float motionSparkFactor = 1.5f;  // motion enhances spark generation
-    float turbulenceScale = 2.0f;    // turbulence influence on heat propagation
+    // Adaptive parameters - tuned for balance between physics and visuals
+    float windColsPerSec = 4.0f;     // moderate wind responsiveness
+    int   sparkSpreadCols = 2;       // moderate spread for motion effects
+    float motionSparkFactor = 0.8f;  // gentle motion enhancement
+    float turbulenceScale = 0.8f;    // reduced turbulence influence
 
     float* heatScratch = nullptr;    // temp row buffer for advection
 };

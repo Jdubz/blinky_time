@@ -17,16 +17,16 @@ namespace Defaults {
 
   // ---- Software auto-gain (fast) ----
   // Keeps typical normalized level near target across tracks/rooms.
-  constexpr float AutoGainTarget   = 0.70f;  // aim to use ~70% of visual range
+  constexpr float AutoGainTarget   = 0.55f;  // aim to use ~55% of visual range
   constexpr float AutoGainStrength = 0.025f; // integrator step (per second)
   constexpr float AutoGainMin      = 0.60f;  // clamp on mic.globalGain
   constexpr float AutoGainMax      = 2.00f;
 
   // ---- Fire engine params (used by FireEffect + SerialConsole) ----
-  constexpr uint8_t BaseCooling         = 100;
+  constexpr uint8_t BaseCooling         = 80;
   constexpr uint8_t SparkHeatMin        = 40;
   constexpr uint8_t SparkHeatMax        = 200;
-  constexpr float   SparkChance         = 0.5f;
+  constexpr float   SparkChance         = 0.4f;
   constexpr float   AudioSparkBoost     = 0.3f;
   constexpr uint8_t AudioHeatBoostMax   = 60;
   constexpr int8_t  CoolingAudioBias    = -20;   // negative => taller flames on loud parts
