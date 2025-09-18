@@ -36,6 +36,7 @@ void SerialConsole::update() {
     // Periodic debug outputs
     micDebugTick();
     debugTick();
+    imuDebugTick();
 }
 
 void SerialConsole::handleCommand(const char *cmd) {
@@ -89,7 +90,19 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F("IMU VISUALIZATION:"));
         Serial.println(F("  imu viz on/off             - Show IMU orientation on matrix"));
         Serial.println(F("  imu test                   - Test IMU mapping"));
+        Serial.println(F("  imu calibrate              - Help calibrate IMU orientation"));
+        Serial.println(F("  imu reduce wind            - Fix excessive wind sensitivity"));
+        Serial.println(F("  imu reduce stoke           - Fix constant stoke detection"));
+        Serial.println(F("  imu fix all                - Apply all sensitivity fixes"));
+        Serial.println(F("  imu test gravity           - Test gravity-based flame rising"));
+        Serial.println(F("  imu mapping                - Guide for understanding IMU coordinates"));
+        Serial.println(F("  imu raw                    - Show raw IMU sensor data"));
+        Serial.println(F("  imu debug on/off           - Real-time IMU data stream"));
         Serial.println(F("  fire disable/enable        - Disable fire for IMU viz"));
+        Serial.println(F(""));
+        Serial.println(F("CYLINDER ORIENTATION:"));
+        Serial.println(F("  top viz on/off             - Show physical top column indicator"));
+        Serial.println(F("  top test                   - Test cylinder orientation detection"));
     }
     else if (strcmp(cmd, "show") == 0) {
         printAll();
@@ -162,18 +175,21 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.print(F(" globalGain=")); Serial.println(mic.globalGain,3);
     }
 
-    // IMU stats
+    // IMU stats - using clean IMU data interface
     else if (strcmp(cmd, "imu stats") == 0) {
-      const MotionState& m = imu.motion();
-      Serial.print(F("IMU up=("));  Serial.print(m.up.x,3);  Serial.print(',');
-      Serial.print(m.up.y,3);       Serial.print(',');       Serial.print(m.up.z,3);
-      Serial.print(F(")  wind=(")); Serial.print(m.wind.x,3);Serial.print(','); Serial.print(m.wind.y,3);
-      Serial.print(F(")  stoke=")); Serial.println(m.stoke,3);
+      if (imu.isReady() && imu.updateIMUData()) {
+        const IMUData& data = imu.getRawIMUData();
+        Serial.print(F("IMU up=("));  Serial.print(data.up.x,3);  Serial.print(',');
+        Serial.print(data.up.y,3);   Serial.print(',');         Serial.print(data.up.z,3);
+        Serial.print(F(")  tilt=")); Serial.print(data.tiltAngle,1); Serial.print(F("°"));
+        Serial.print(F("  motion=")); Serial.print(data.motionMagnitude,2);
+        Serial.print(data.isMoving ? F(" MOVING") : F(" STILL"));
+        Serial.println();
+      } else {
+        Serial.println(F("IMU not ready"));
+      }
     }
-    else if (sscanf(cmd, "imu tau %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.tauLP=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.tauLP=")); Serial.println(c.tauLP,3); }
-    else if (sscanf(cmd, "imu windaccel %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.kAccel=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.kAccel=")); Serial.println(c.kAccel,3); }
-    else if (sscanf(cmd, "imu windspin %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.kSpin=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.kSpin=")); Serial.println(c.kSpin,3); }
-    else if (sscanf(cmd, "imu stoke %f", &tempFloat) == 1) { MotionConfig c=imu.getMotionConfig(); c.kStoke=tempFloat; imu.setMotionConfig(c); Serial.print(F("imu.kStoke=")); Serial.println(c.kStoke,3); }
+    // Legacy IMU config commands removed - use 'imu raw' and 'imu debug' for monitoring
 
     // --- New enhanced commands ---
     // LED brightness control
@@ -219,9 +235,12 @@ void SerialConsole::handleCommand(const char *cmd) {
     // IMU visualization commands
     else if (strcmp(cmd, "imu viz on") == 0) {
         imuVizEnabled = true;
-        Serial.println(F("IMU Visualization=on (Matrix shows IMU orientation)"));
-        Serial.println(F("Blue=Up vector, Green=Wind vector, Red=Stoke level"));
-        Serial.println(F("Use 'fire disable' to turn off fire effect for clearer view"));
+        Serial.println(F("IMU Orientation Test=on"));
+        Serial.println(F("WHITE dot = UP direction (follows gravity)"));
+        Serial.println(F("RED edge = Tilted RIGHT, GREEN edge = Tilted LEFT"));
+        Serial.println(F("BLUE edge = Tilted FORWARD, YELLOW edge = Tilted BACK"));
+        Serial.println(F("DIM corners = Matrix reference points"));
+        Serial.println(F("Use 'fire disable' for clearer view"));
     }
     else if (strcmp(cmd, "imu viz off") == 0) {
         imuVizEnabled = false;
@@ -237,6 +256,94 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.print(F(","));        Serial.print(m.wind.y, 2);
         Serial.print(F(") Stoke=")); Serial.println(m.stoke, 2);
     }
+    else if (strcmp(cmd, "imu calibrate") == 0) {
+        Serial.println(F("=== IMU CALIBRATION ANALYSIS ==="));
+        const MotionState& m = imu.motion();
+        Serial.print(F("Current up vector: (")); Serial.print(m.up.x, 3);
+        Serial.print(F(","));                    Serial.print(m.up.y, 3);
+        Serial.print(F(","));                    Serial.print(m.up.z, 3);
+        Serial.println(F(")"));
+
+        Serial.println(F("Expected when upright: (0,0,1)"));
+        if (m.up.z < -0.8f) Serial.println(F("ISSUE: Z-axis inverted! Try 'imu invert z'"));
+        if (fabsf(m.up.x) > 0.2f) Serial.println(F("ISSUE: X-axis tilted"));
+        if (fabsf(m.up.y) > 0.2f) Serial.println(F("ISSUE: Y-axis tilted"));
+
+        Serial.print(F("Wind values: (")); Serial.print(m.wind.x, 2);
+        Serial.print(F(","));              Serial.print(m.wind.y, 2);
+        Serial.println(F(")"));
+        Serial.println(F("Expected range: roughly -2 to +2"));
+
+        if (fabsf(m.wind.x) > 5.0f || fabsf(m.wind.y) > 5.0f) {
+            Serial.println(F("WARNING: Wind values too high - check IMU config"));
+        }
+
+        Serial.print(F("Stoke level: ")); Serial.println(m.stoke, 3);
+        Serial.println(F("Expected when still: ~0.0"));
+        if (m.stoke > 0.8f) Serial.println(F("WARNING: Constant stoke detected"));
+
+        Serial.println(F(""));
+        Serial.println(F("RECOMMENDED FIXES:"));
+        Serial.println(F("1. imu invert z           - Fix upside-down mounting"));
+        Serial.println(F("2. imu reduce wind        - Fix excessive wind values"));
+        Serial.println(F("3. imu reduce stoke       - Fix constant stoke"));
+    }
+    // IMU configuration commands
+    else if (strcmp(cmd, "imu invert z") == 0) {
+        Serial.println(F("Z-axis inversion not yet implemented"));
+        Serial.println(F("This requires code changes to flip Z readings"));
+    }
+    else if (strcmp(cmd, "imu reduce wind") == 0) {
+        MotionConfig c = imu.getMotionConfig();
+        c.kAccel = 0.1f;   // Reduce from 0.8f
+        c.kSpin = 0.05f;   // Reduce from 0.15f
+        c.maxWindSpeed = 3.0f; // Reduce from 12.0f
+        imu.setMotionConfig(c);
+        Serial.println(F("Wind sensitivity reduced significantly"));
+        Serial.println(F("kAccel: 0.8->0.1, kSpin: 0.15->0.05, maxWind: 12->3"));
+    }
+    else if (strcmp(cmd, "imu reduce stoke") == 0) {
+        MotionConfig c = imu.getMotionConfig();
+        c.kStoke = 0.01f;  // Reduce even further
+        c.gravityThresh = 5.0f; // Much less sensitive to small movements
+        c.stokeDecay = 0.95f; // Faster decay
+        imu.setMotionConfig(c);
+        Serial.println(F("Stoke sensitivity reduced dramatically"));
+        Serial.println(F("kStoke: ->0.01, gravityThresh: ->5.0, faster decay"));
+    }
+    else if (strcmp(cmd, "imu fix all") == 0) {
+        MotionConfig c = imu.getMotionConfig();
+        // Reduce wind sensitivity
+        c.kAccel = 0.1f;
+        c.kSpin = 0.05f;
+        c.maxWindSpeed = 3.0f;
+        // Reduce stoke sensitivity dramatically
+        c.kStoke = 0.01f;
+        c.gravityThresh = 5.0f;
+        c.stokeDecay = 0.95f;
+        imu.setMotionConfig(c);
+        Serial.println(F("Applied all IMU fixes for excessive sensitivity"));
+        Serial.println(F("Test with 'imu calibrate' after this"));
+    }
+    else if (strcmp(cmd, "imu test gravity") == 0) {
+        Serial.println(F("=== GRAVITY-BASED FLAME RISING TEST ==="));
+        Serial.println(F("Tilt controller and observe flame behavior:"));
+        Serial.println(F(""));
+        Serial.println(F("Expected behavior:"));
+        Serial.println(F("- UPRIGHT -> Flames rise straight up"));
+        Serial.println(F("- TILT LEFT -> Flames lean LEFT (gravity pulls right)"));
+        Serial.println(F("- TILT RIGHT -> Flames lean RIGHT (gravity pulls left)"));
+        Serial.println(F("- TILT FORWARD -> Flames lean back"));
+        Serial.println(F("- TILT BACK -> Flames lean forward"));
+        Serial.println(F(""));
+        Serial.println(F("Wind effect DISABLED - only gravity affects flames"));
+        Serial.println(F("Use 'debug on' to monitor gravity values"));
+        const MotionState& m = imu.motion();
+        Serial.print(F("Current gravity: (")); Serial.print(-m.up.x, 2);
+        Serial.print(F(","));                  Serial.print(-m.up.y, 2);
+        Serial.print(F(","));                  Serial.print(-m.up.z, 2);
+        Serial.println(F(") - should be ~(0,0,1) when upright"));
+    }
     else if (strcmp(cmd, "fire disable") == 0) {
         fireDisabled = true;
         Serial.println(F("Fire effect disabled (IMU viz clearer)"));
@@ -244,6 +351,73 @@ void SerialConsole::handleCommand(const char *cmd) {
     else if (strcmp(cmd, "fire enable") == 0) {
         fireDisabled = false;
         Serial.println(F("Fire effect enabled"));
+    }
+    // Cylinder orientation visualization commands
+    else if (strcmp(cmd, "top viz on") == 0) {
+        heatVizEnabled = true;
+        Serial.println(F("Cylinder Top Visualization=on"));
+        Serial.println(F("GREEN line = Physical top of cylinder"));
+        Serial.println(F("Shows which column is physically highest when tilted"));
+    }
+    else if (strcmp(cmd, "top viz off") == 0) {
+        heatVizEnabled = false;
+        Serial.println(F("Cylinder Top Visualization=off"));
+    }
+    else if (strcmp(cmd, "top test") == 0) {
+        renderTopVisualization();
+        Serial.println(F("Top test - check which column shows GREEN line"));
+
+        // Debug IMU readings for top visualization using clean data
+        if (imu.isReady() && imu.updateIMUData()) {
+            const IMUData& data = imu.getRawIMUData();
+            float circumferenceMagnitude = sqrt(data.up.y * data.up.y + data.up.z * data.up.z);
+            float angle = atan2(data.up.z, data.up.y);
+            angle += PI / 2.0f; // Add 90-degree correction
+            float normalizedAngle = (angle + PI) / (2.0f * PI);
+            int topColumn = (int)(normalizedAngle * 16 + 0.5f) % 16;
+
+            Serial.print(F("RAW accel=(")); Serial.print(data.accel.x, 3); Serial.print(F(","));
+            Serial.print(data.accel.y, 3); Serial.print(F(","));  Serial.print(data.accel.z, 3); Serial.print(F(")"));
+            Serial.print(F(" UP=(")); Serial.print(data.up.x, 3); Serial.print(F(","));
+            Serial.print(data.up.y, 3); Serial.print(F(","));  Serial.print(data.up.z, 3); Serial.print(F(")"));
+            Serial.print(F(" upX=")); Serial.print(data.up.x, 3);
+            Serial.print(F(" circumfMag=")); Serial.print(circumferenceMagnitude, 3);
+            Serial.print(F(" angle=")); Serial.print(angle, 3);
+            Serial.print(F(" -> column=")); Serial.println(topColumn);
+
+            if (circumferenceMagnitude < 0.3f) {
+                Serial.println(F("Status: Cylinder upright (X-axis dominates) - showing full green top row"));
+            } else {
+                Serial.print(F("Status: Cylinder tilted - top at column ")); Serial.println(topColumn);
+            }
+        } else {
+            Serial.println(F("IMU not ready or failed to update"));
+        }
+    }
+    else if (strcmp(cmd, "imu mapping") == 0) {
+        Serial.println(F("=== IMU COORDINATE MAPPING TEST ==="));
+        Serial.println(F("Follow these steps to understand IMU orientation:"));
+        Serial.println(F(""));
+        Serial.println(F("1. Hold cylinder UPRIGHT, run 'imu stats'"));
+        Serial.println(F("2. Tilt cylinder LEFT, run 'imu stats'"));
+        Serial.println(F("3. Tilt cylinder RIGHT, run 'imu stats'"));
+        Serial.println(F("4. Tilt cylinder FORWARD, run 'imu stats'"));
+        Serial.println(F("5. Tilt cylinder BACKWARD, run 'imu stats'"));
+        Serial.println(F("6. Lay cylinder on SIDE, run 'imu stats'"));
+        Serial.println(F(""));
+        Serial.println(F("This will show which IMU axis corresponds to each physical direction"));
+    }
+    else if (strcmp(cmd, "imu raw") == 0) {
+        printRawIMUData();
+    }
+    else if (strcmp(cmd, "imu debug on") == 0) {
+        imuDebugEnabled = true;
+        Serial.println(F("IMU Debug=on"));
+        Serial.println(F("Real-time IMU sensor data streaming"));
+    }
+    else if (strcmp(cmd, "imu debug off") == 0) {
+        imuDebugEnabled = false;
+        Serial.println(F("IMU Debug=off"));
     }
 
     // Save/load presets (placeholder for future)
@@ -315,6 +489,7 @@ void SerialConsole::printAll() {
     Serial.print(F("  General: ")); Serial.println(debugEnabled ? F("ON") : F("OFF"));
     Serial.print(F("  Mic: ")); Serial.println(micDebugEnabled ? F("ON") : F("OFF"));
     Serial.print(F("  IMU Viz: ")); Serial.println(imuVizEnabled ? F("ON") : F("OFF"));
+    Serial.print(F("  Top Viz: ")); Serial.println(heatVizEnabled ? F("ON") : F("OFF"));
     Serial.print(F("  Fire: ")); Serial.println(fireDisabled ? F("DISABLED") : F("ENABLED"));
     Serial.print(F("  Rate: ")); Serial.print(debugPeriodMs); Serial.println(F("ms"));
 
@@ -340,68 +515,121 @@ void SerialConsole::renderIMUVisualization() {
     // Matrix dimensions: 16 wide x 8 tall (cylindrical)
     const int WIDTH = 16;
     const int HEIGHT = 8;
-    const int centerX = WIDTH / 2;
-    const int centerY = HEIGHT / 2;
 
     // Helper function to set pixel safely
     auto setPixel = [&](int x, int y, uint32_t color) {
         if (x >= 0 && x < WIDTH && y >= 0 && y < HEIGHT) {
-            // Convert to linear index (assuming row-major, top to bottom)
             int index = y * WIDTH + x;
             leds.setPixelColor(index, color);
         }
     };
 
-    // 1. Show UP VECTOR in BLUE
-    // Map up vector to matrix position (assumes up.z is vertical, up.x/y are horizontal)
-    int upX = centerX + (int)(m.up.x * (WIDTH/2 - 1));
-    int upY = centerY - (int)(m.up.z * (HEIGHT/2 - 1)); // Flip Z for screen coords
+    // SIMPLE ORIENTATION TEST
+    // Show which way the controller thinks is "UP" using gravity
+
+    // 1. ALWAYS show corner reference points in DIM WHITE
+    setPixel(0, 0, leds.Color(16, 16, 16));           // Top-left
+    setPixel(WIDTH-1, 0, leds.Color(16, 16, 16));     // Top-right
+    setPixel(0, HEIGHT-1, leds.Color(16, 16, 16));    // Bottom-left
+    setPixel(WIDTH-1, HEIGHT-1, leds.Color(16, 16, 16)); // Bottom-right
+
+    // 2. Show UP direction with a BRIGHT WHITE dot
+    // The dot will move to show which edge/corner is "up" according to IMU
+
+    // Map gravity vector (up.x, up.y, up.z) to matrix position
+    // up.z = vertical (controller face up/down)
+    // up.x = horizontal tilt left/right
+    // up.y = horizontal tilt forward/back
+
+    // Convert normalized up vector (-1 to 1) to matrix coordinates
+    int upX = (int)((m.up.x + 1.0f) * (WIDTH - 1) / 2.0f);   // -1..1 -> 0..15
+    int upY = (int)((m.up.y + 1.0f) * (HEIGHT - 1) / 2.0f);  // -1..1 -> 0..7
+
     upX = constrain(upX, 0, WIDTH-1);
     upY = constrain(upY, 0, HEIGHT-1);
-    setPixel(upX, upY, leds.Color(0, 0, 255)); // Blue for UP
 
-    // 2. Show WIND VECTOR in GREEN
-    // Wind shows tilt direction - larger vectors = more tilt
-    if (fabsf(m.wind.x) > 0.01f || fabsf(m.wind.y) > 0.01f) {
-        int windX = centerX + (int)(m.wind.x * (WIDTH/2 - 1));
-        int windY = centerY + (int)(m.wind.y * (HEIGHT/2 - 1));
-        windX = constrain(windX, 0, WIDTH-1);
-        windY = constrain(windY, 0, HEIGHT-1);
-        setPixel(windX, windY, leds.Color(0, 255, 0)); // Green for WIND
+    setPixel(upX, upY, leds.Color(255, 255, 255)); // BRIGHT WHITE = UP
 
-        // Draw a line from center to wind position for better visibility
-        int dx = windX - centerX;
-        int dy = windY - centerY;
-        int steps = max(abs(dx), abs(dy));
-        if (steps > 1) {
-            for (int i = 1; i < steps; i++) {
-                int lineX = centerX + (dx * i) / steps;
-                int lineY = centerY + (dy * i) / steps;
-                setPixel(lineX, lineY, leds.Color(0, 128, 0)); // Dimmer green for line
+    // 3. Show tilt magnitude with colored intensity at edges
+    // Red intensity on edges shows how much the controller is tilted
+
+    float tiltMagnitude = sqrt(m.up.x * m.up.x + m.up.y * m.up.y); // 0 = upright, 1 = flat
+    int tiltIntensity = (int)(tiltMagnitude * 128); // 0-128 intensity
+
+    if (tiltIntensity > 10) {
+        // Show tilt direction with colored edges
+        if (m.up.x > 0.3f) { // Tilted right
+            for (int y = 1; y < HEIGHT-1; y++) {
+                setPixel(WIDTH-1, y, leds.Color(tiltIntensity, 0, 0)); // Red right edge
+            }
+        }
+        if (m.up.x < -0.3f) { // Tilted left
+            for (int y = 1; y < HEIGHT-1; y++) {
+                setPixel(0, y, leds.Color(0, tiltIntensity, 0)); // Green left edge
+            }
+        }
+        if (m.up.y > 0.3f) { // Tilted forward
+            for (int x = 1; x < WIDTH-1; x++) {
+                setPixel(x, HEIGHT-1, leds.Color(0, 0, tiltIntensity)); // Blue bottom edge
+            }
+        }
+        if (m.up.y < -0.3f) { // Tilted back
+            for (int x = 1; x < WIDTH-1; x++) {
+                setPixel(x, 0, leds.Color(tiltIntensity, tiltIntensity, 0)); // Yellow top edge
             }
         }
     }
 
-    // 3. Show STOKE LEVEL as RED intensity at bottom center
-    if (m.stoke > 0.01f) {
-        int stokeIntensity = (int)(m.stoke * 255);
-        int stokeY = HEIGHT - 1; // Bottom row
-        // Show stoke as a horizontal bar at bottom
-        int stokeWidth = (int)(m.stoke * WIDTH);
-        for (int x = 0; x < stokeWidth; x++) {
-            setPixel(x, stokeY, leds.Color(stokeIntensity, 0, 0)); // Red for STOKE
+    leds.show();
+}
+
+void SerialConsole::renderTopVisualization() {
+    if (!heatVizEnabled) return;
+
+    // Matrix dimensions: 16 wide x 8 tall (cylindrical)
+    const int WIDTH = 16;
+    const int HEIGHT = 8;
+
+    // Ensure IMU is updated for this visualization
+    if (!imu.isReady()) return;
+
+    // Update and get clean IMU data
+    if (!imu.updateIMUData()) return;
+    const IMUData& data = imu.getRawIMUData();
+
+    // COORDINATE SYSTEM MAPPING:
+    // Cylinder length axis = X-axis (UP.x indicates vertical orientation)
+    // Cylinder circumference = Y-Z plane (UP.y, UP.z indicate which side is up)
+
+    // Check if cylinder is upright (X-axis dominates)
+    float circumferenceMagnitude = sqrt(data.up.y * data.up.y + data.up.z * data.up.z);
+
+    if (circumferenceMagnitude < 0.3f) {
+        // Cylinder is mostly upright (vertical) - show green across top row
+        for (int x = 0; x < WIDTH; x++) {
+            leds.setPixelColor(x, leds.Color(100, 0, 0)); // Green top row (GRB format)
+        }
+    } else {
+        // Cylinder is tilted - determine which column is highest
+        // Use Y-Z components (circumference plane) to find direction
+
+        // Calculate angle around cylinder circumference using Y-Z plane
+        float angle = atan2(data.up.z, data.up.y); // Angle in radians
+
+        // Add 90-degree offset to correct the orientation (PI/2 radians = 90 degrees)
+        angle += PI / 2.0f;
+
+        // Convert angle to column position (0-15 around cylinder)
+        // Add PI to shift from [-PI,PI] to [0,2PI], then normalize to [0,1]
+        float normalizedAngle = (angle + PI) / (2.0f * PI);
+        int topColumn = (int)(normalizedAngle * WIDTH + 0.5f) % WIDTH;
+
+        // Show green vertical line on the physically highest column
+        for (int y = 0; y < HEIGHT; y++) {
+            int index = y * WIDTH + topColumn;
+            leds.setPixelColor(index, leds.Color(255, 0, 0)); // Bright green column (GRB format)
         }
     }
-
-    // 4. Show CENTER REFERENCE in WHITE (dim)
-    setPixel(centerX, centerY, leds.Color(32, 32, 32)); // Dim white center
-
-    // 5. Show ORIENTATION MARKERS
-    // Top center = "UP" direction reference
-    setPixel(centerX, 0, leds.Color(64, 64, 64)); // Dim white at top
-    // Left/right markers for cylindrical orientation
-    setPixel(0, centerY, leds.Color(64, 0, 64));      // Magenta left
-    setPixel(WIDTH-1, centerY, leds.Color(0, 64, 64)); // Cyan right
 
     leds.show();
 }
@@ -496,4 +724,56 @@ void SerialConsole::printFireStats() {
     Serial.print(F("Battery: ")); Serial.print(vbat, 2); Serial.print(F("V ("));
     Serial.print(soc); Serial.print(F("%) "));
     Serial.println(battery.isCharging() ? F("CHARGING") : F(""));
+}
+
+// ---- IMU debug functions ----
+void SerialConsole::imuDebugTick() {
+    if (!imuDebugEnabled) return;
+    unsigned long now = millis();
+    if (now - imuDebugLastMs >= imuDebugPeriodMs) {
+        imuDebugLastMs = now;
+        printRawIMUData();
+    }
+}
+
+void SerialConsole::printRawIMUData() {
+    if (!imu.isReady()) {
+        Serial.println(F("IMU not ready"));
+        return;
+    }
+
+    // Update fresh IMU data
+    if (!imu.updateIMUData()) {
+        Serial.println(F("Failed to read IMU data"));
+        return;
+    }
+
+    const IMUData& data = imu.getRawIMUData();
+
+    // Print raw sensor data
+    Serial.print(F("RAW: accel=("));
+    Serial.print(data.accel.x, 3); Serial.print(F(","));
+    Serial.print(data.accel.y, 3); Serial.print(F(","));
+    Serial.print(data.accel.z, 3); Serial.print(F(")"));
+
+    Serial.print(F(" gyro=("));
+    Serial.print(data.gyro.x, 3); Serial.print(F(","));
+    Serial.print(data.gyro.y, 3); Serial.print(F(","));
+    Serial.print(data.gyro.z, 3); Serial.print(F(")"));
+
+    Serial.print(F(" temp=")); Serial.print(data.temp, 1); Serial.print(F("C"));
+
+    // Print processed orientation data
+    Serial.print(F(" | UP=("));
+    Serial.print(data.up.x, 3); Serial.print(F(","));
+    Serial.print(data.up.y, 3); Serial.print(F(","));
+    Serial.print(data.up.z, 3); Serial.print(F(")"));
+
+    Serial.print(F(" tilt=")); Serial.print(data.tiltAngle, 1); Serial.print(F("°"));
+
+    // Print motion data
+    Serial.print(F(" motion=")); Serial.print(data.motionMagnitude, 2);
+    Serial.print(data.isMoving ? F(" MOVING") : F(" STILL"));
+
+    Serial.println();
 }

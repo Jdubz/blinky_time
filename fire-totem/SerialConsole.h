@@ -16,6 +16,7 @@ public:
     void restoreDefaults();
     void printAll();
     void renderIMUVisualization();        // IMU orientation visualization
+    void renderTopVisualization();        // Cylinder top column visualization
 
     // Motion control access
     bool motionEnabled = true;
@@ -25,6 +26,7 @@ public:
     // IMU visualization mode
     bool imuVizEnabled = false;          // Enable IMU visualization on matrix
     bool fireDisabled = false;           // Disable fire when showing IMU viz
+    bool heatVizEnabled = false;         // Show cylinder top column visualization
 
 private:
     FireEffect &fire;
@@ -39,10 +41,16 @@ private:
     unsigned long debugPeriodMs = 500;    // General debug rate
     unsigned long debugLastMs = 0;
 
+    bool imuDebugEnabled = false;         // Real-time IMU debug output
+    unsigned long imuDebugPeriodMs = 200; // IMU debug rate
+    unsigned long imuDebugLastMs = 0;
+
     void micDebugTick();                  // periodic printer
     void micDebugPrintLine();             // one line snapshot
     void debugTick();                     // general debug output
     void printFireStats();               // fire engine statistics
+    void imuDebugTick();                  // periodic IMU debug output
+    void printRawIMUData();               // one-time raw IMU snapshot
 };
 
 #endif

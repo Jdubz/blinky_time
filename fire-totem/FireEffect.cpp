@@ -101,8 +101,8 @@ void FireEffect::update(float energy, float hit) {
 
     injectSparks(boostedEnergy);
 
-    // Add simple wind lean effect without changing brightness
-    addWindLean(dt);
+    // DISABLED: Wind lean effect not working as expected
+    // addWindLean(dt);
 
     render();
 }
@@ -159,19 +159,44 @@ void FireEffect::coolCells() {
 }
 
 void FireEffect::propagateUp() {
-    // Simple upward propagation without turbulence
+    // Gravity-based heat propagation - heat rises in direction of gravity
+
+    // Calculate gravity direction on the cylindrical matrix
+    // upx, upy, upz represent the "up" direction in world space
+    // Map this to matrix coordinates for heat propagation
+
+    // For cylinder: X = around circumference, Y = vertical height
+    // upx affects horizontal direction, upy affects vertical direction
+
+    float gravityX = upx;  // Horizontal tilt component
+    float gravityY = upy;  // Vertical tilt component
+
+    // Limit gravity influence to prevent extreme effects
+    gravityX = constrain(gravityX, -0.8f, 0.8f);
+    gravityY = constrain(gravityY, -0.8f, 0.8f);
+
     for (int y = HEIGHT - 1; y > 0; --y) {
         for (int x = 0; x < WIDTH; ++x) {
             float below      = H(x, y - 1);
             float belowLeft  = H((x + WIDTH - 1) % WIDTH, y - 1);
             float belowRight = H((x + 1) % WIDTH, y - 1);
 
-            // Simple weighted average
-            float weightedSum = below * 1.4f + belowLeft * 0.8f + belowRight * 0.8f;
-            float totalWeight = 1.4f + 0.8f + 0.8f;
+            // Adjust weights based on gravity direction
+            float centerWeight = 1.4f;
+            float leftWeight = 0.8f + gravityX * 0.3f;   // More weight if tilted left
+            float rightWeight = 0.8f - gravityX * 0.3f;  // Less weight if tilted left
 
-            // Apply heat rise with simple decay
-            H(x, y) = weightedSum / 3.1f;
+            // Ensure weights stay positive
+            leftWeight = max(0.2f, leftWeight);
+            rightWeight = max(0.2f, rightWeight);
+
+            float weightedSum = below * centerWeight + belowLeft * leftWeight + belowRight * rightWeight;
+
+            // Vertical propagation affected by gravity Y component
+            float propagationRate = 3.1f - gravityY * 0.5f;  // Heat rises more when tilted
+            propagationRate = constrain(propagationRate, 2.5f, 4.0f);
+
+            H(x, y) = weightedSum / propagationRate;
         }
     }
 }

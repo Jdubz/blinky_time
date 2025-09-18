@@ -4,71 +4,62 @@
 struct Vec3 { float x, y, z; };
 struct Vec2 { float x, y; };
 
-struct MotionConfig {
-  // Gravity and orientation
-  float tauLP    = 0.12f;  // s, low-pass for gravity estimate
-  float gravityThresh = 0.5f; // m/s² threshold to detect actual motion vs gravity
+// Clean IMU sensor data structure
+struct IMUData {
+    // Raw sensor readings
+    Vec3 accel;      // m/s² - raw accelerometer
+    Vec3 gyro;       // rad/s - raw gyroscope
+    float temp;      // °C - temperature
 
-  // Torch physics constants (calibrated for 1-inch pixels, cylindrical 16x8 matrix)
-  float torchLength = 8.0f;      // inches, height of cylinder
-  float torchRadius = 2.55f;     // inches, radius (16 pixels * 1" / 2π ≈ 2.55")
-  float airDensity  = 1.225f;    // kg/m³, standard air density
-  float flameInertia = 0.3f;     // flame response lag factor
+    // Basic processed data
+    Vec3 gravity;    // m/s² - estimated gravity vector
+    Vec3 linearAccel; // m/s² - accel with gravity removed
 
-  // Wind simulation
-  float kAccel   = 0.8f;   // lateral accel -> wind (increased for responsiveness)
-  float kSpin    = 0.15f;  // yaw rate -> wind (increased for rotation effects)
-  float kVelocity = 0.4f;  // integrated velocity -> wind drift
-  float windDamping = 0.92f; // per-frame wind decay (higher = more persistent)
-  float maxWindSpeed = 12.0f; // pixels/sec maximum wind effect
+    // Orientation
+    Vec3 up;         // unit vector pointing "up" (opposite of gravity)
+    float tiltAngle; // degrees from vertical
 
-  // Rotational effects
-  float centrifugalFactor = 0.25f; // how much rotation spreads flames outward
-  float coriolisFactor = 0.1f;     // how much rotation creates flame spiral
-  float spinDamping = 0.88f;       // rotational momentum decay
+    // Simple motion indicators
+    float motionMagnitude;  // overall motion level
+    bool isMoving;         // basic motion detection
 
-  // Stoking (upward motion)
-  float kStoke   = 0.35f;  // upward accel -> stoke (increased sensitivity)
-  float stokeMax = 1.0f;   // clamp 0..1 (allow full intensity)
-  float stokeDecay = 0.85f; // how quickly stoke effect fades
-  float stokeVelocityFactor = 0.2f; // upward velocity also contributes to stoke
-
-  // Motion dampening for smooth visuals
-  float jerkLimit = 15.0f;      // m/s³ maximum jerk (change in acceleration)
-  float smoothingFactor = 0.7f; // motion smoothing (0=raw, 1=heavily filtered)
-
-  // Torch orientation effects
-  float tiltSensitivity = 1.5f;    // how much tilt affects flame direction
-  float tiltMaxAngle = 45.0f;      // degrees, maximum tilt before flame direction changes
+    // Timestamp
+    unsigned long timestamp; // millis() when data was captured
 };
 
+// Legacy motion config - simplified for basic fire effects only
+struct MotionConfig {
+  // Basic orientation filtering
+  float tauLP    = 0.12f;  // s, low-pass for gravity estimate
+  float gravityThresh = 5.0f; // m/s² threshold to detect actual motion vs gravity (raised for less sensitivity)
+
+  // Simplified motion parameters (for legacy wind/stoke if still used)
+  float kAccel   = 0.1f;   // reduced sensitivity
+  float kSpin    = 0.05f;  // reduced sensitivity
+  float kStoke   = 0.01f;  // reduced sensitivity
+  float maxWindSpeed = 3.0f; // reduced maximum
+  float stokeDecay = 0.95f; // faster decay
+};
+
+// Legacy motion state - kept for backward compatibility with existing fire effect
+// TODO: Migrate fire effect to use IMUData instead
 struct MotionState {
-  // Orientation and gravity
+  // Basic orientation (still used by fire effect)
   Vec3  up {0,1,0};           // unit vector (world up in torch space)
-  Vec3  torchAxis {0,1,0};    // torch orientation axis
   float tiltAngle = 0.0f;     // degrees of tilt from vertical
 
-  // Linear motion
+  // Legacy fields - deprecated but kept for compatibility
   Vec3  velocity {0,0,0};     // integrated velocity (m/s)
   Vec3  smoothAccel {0,0,0};  // smoothed acceleration
-  Vec2  wind {0,0};           // wind effect (pixels/sec)
-  float stoke = 0.0f;         // 0..1 boost from upward motion
+  Vec2  wind {0,0};           // DEPRECATED: use IMUData instead
+  float stoke = 0.0f;         // DEPRECATED: use IMUData instead
 
-  // Rotational motion
+  // Rotational motion - may be useful for future effects
   Vec3  angularVel {0,0,0};   // angular velocity (rad/s)
-  Vec3  smoothAngularVel {0,0,0}; // smoothed angular velocity
   float spinMagnitude = 0.0f; // overall rotation speed
-  float centrifugalForce = 0.0f; // outward force from rotation
-
-  // Advanced torch effects
-  float flameDirection = 0.0f;  // angle (degrees) flames lean due to motion
-  float flameBend = 0.0f;       // 0-1 how much flames bend from vertical
-  float turbulenceLevel = 0.0f; // 0-1 motion-induced turbulence
-  Vec2  inertiaDrift {0,0};     // momentum-based drift effects
 
   // Motion analysis
   float motionIntensity = 0.0f; // overall motion level (0-1)
-  float jerkMagnitude = 0.0f;   // rate of acceleration change
   bool  isStationary = true;    // true if torch is relatively still
 };
 class IMUHelper {
@@ -96,6 +87,10 @@ public:
 
     const MotionState& motion() const { return motion_; }
 
+    // Clean IMU data interface
+    const IMUData& getRawIMUData() const { return imuData_; }
+    bool updateIMUData(); // Updates imuData_ with fresh sensor readings
+
 private:
     bool imuReady = false;
     // Return false if no fresh data.
@@ -115,34 +110,17 @@ private:
     static inline float radToDeg_(float rad){return rad * 180.0f / M_PI;}
     static inline float degToRad_(float deg){return deg * M_PI / 180.0f;}
 
-    // Enhanced physics methods
-    void updateTorchOrientation_(const Vec3& accel, const Vec3& gyro, float dt);
-    void updateWindPhysics_(const Vec3& linAccel, const Vec3& angularVel, float dt);
-    void updateRotationalEffects_(const Vec3& angularVel, float dt);
-    void updateStokePhysics_(const Vec3& linAccel, const Vec3& velocity, float dt);
-    void updateMotionAnalysis_(const Vec3& accel, const Vec3& gyro, float dt);
-    void applyMotionSmoothing_(float dt);
-    Vec3 calculateCentrifugalForce_(const Vec3& angularVel);
-    Vec3 calculateCoriolisEffect_(const Vec3& velocity, const Vec3& angularVel);
+    // Simplified physics methods (legacy compatibility)
+    void updateBasicOrientation_(const Vec3& accel, float dt);
+    void updateSimpleMotion_(const Vec3& accel, const Vec3& gyro, float dt);
 
     // state
     MotionConfig cfg_;
     MotionState  motion_;
+    IMUData      imuData_;         // clean IMU sensor data
     Vec3         gLP_{0,0,9.81f};  // low-pass gravity estimate
 
-    // Enhanced physics tracking
-    Vec3         prevAccel_{0,0,0};     // previous acceleration for jerk calculation
-    Vec3         prevAngularVel_{0,0,0}; // previous angular velocity
-    Vec3         rawVelocity_{0,0,0};   // integrated raw velocity
-    Vec3         flameVelocity_{0,0,0}; // flame-specific velocity with inertia
-
-    // Motion history for advanced analysis
-    static const int MOTION_HISTORY_SIZE = 8;
-    Vec3 accelHistory_[MOTION_HISTORY_SIZE];
-    Vec3 gyroHistory_[MOTION_HISTORY_SIZE];
-    int historyIndex_ = 0;
-
-    // Timing for realistic physics
-    uint32_t lastUpdateMs_ = 0;
-    float accumDt_ = 0.0f;  // accumulated time for sub-frame calculations
+    // Basic motion tracking
+    Vec3         prevAccel_{0,0,0};     // previous acceleration
+    uint32_t     lastUpdateMs_ = 0;     // timing
 };

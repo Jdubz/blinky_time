@@ -64,28 +64,53 @@ void loop() {
 
   mic.update(dt);
 
-  // Console-controlled IMU motion effects
-  if (console.motionEnabled && imu.isReady()) {
+  // Console-controlled IMU motion effects and visualization
+  if (imu.isReady() && (console.motionEnabled || console.heatVizEnabled)) {
     imu.updateMotion(dt);
-    const MotionState& m = imu.motion();
+    imu.updateIMUData(); // Update clean IMU data for debugging
 
-    // Apply console-controlled wind scaling
-    fire.setWind(m.wind.x * console.windScale, m.wind.y * console.windScale);
-    fire.setUpVector(m.up.x, m.up.y, m.up.z);
+    if (console.motionEnabled) {
+      const MotionState& m = imu.motion();
+
+      // DISABLED: Wind effect not working as expected
+      // fire.setWind(m.wind.x * console.windScale, m.wind.y * console.windScale);
+
+      // Gravity-based heat rising: Invert Z-axis for upside-down mounting
+      fire.setUpVector(m.up.x, m.up.y, -m.up.z);  // Note the negative Z
+    }
   }
 
   float energy = mic.getLevel();
   float hit = mic.getTransient();
 
-  // Render fire effect or IMU visualization
+  // Render fire effect or visualizations
   if (console.imuVizEnabled) {
     // IMU visualization mode - override fire display
     console.renderIMUVisualization();
+  } else if (console.heatVizEnabled) {
+    // Cylinder top visualization mode - show fire + top indicator
+    if (!console.fireDisabled) {
+      fire.update(energy, hit);
+      fire.render(); // Render fire to matrix but don't show yet
+      console.renderTopVisualization(); // Add top indicator and show
+    } else {
+      // Fire disabled - clear display and show only top indicator
+      for (int i = 0; i < 16 * 8; i++) {
+        leds.setPixelColor(i, 0);
+      }
+      console.renderTopVisualization();
+    }
   } else {
     // Normal fire mode
     if (!console.fireDisabled) {
       fire.update(energy, hit);
       fire.show();
+    } else {
+      // Fire disabled - clear display
+      for (int i = 0; i < 16 * 8; i++) {
+        leds.setPixelColor(i, 0);
+      }
+      leds.show();
     }
   }
 

@@ -37,6 +37,12 @@ public:
     // For VU meter / external mapping
     uint16_t xyToIndex(int x, int y) const;
 
+    // Heat access for visualization
+    float getHeat(int x, int y) const {
+        if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT || !heat) return 0.0f;
+        return Hc(x, y);
+    }
+
     // Make params public so SerialConsole can read/write them
     FireParams params;
 
