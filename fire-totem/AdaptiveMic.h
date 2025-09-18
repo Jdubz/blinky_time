@@ -51,7 +51,8 @@ public:
   float  globalGain    = 1.0f;  // software AGC multiplier
   int    currentHwGain = 32;    // PDM hardware gain
 
-  // --- Transient detection ---
+  // --- Enhanced Musical Analysis ---
+  // Frequency-aware transient detection
   float transient          = 0.0f;
   float transientDecay     = 6.0f;    // decay per second (slower = longer punch)
   float fastAvg            = 0.0f;    // short-term avg (~20ms)
@@ -62,9 +63,47 @@ public:
   float loudFloor          = 0.15f;   // must be at least this loud
   uint32_t transientCooldownMs = 120;
   uint32_t lastTransientMs = 0;
-  // float prevLevel = 0.0f;
+
+  // Frequency band analysis (simplified 4-band)
+  float bassLevel    = 0.0f;    // 20-250 Hz
+  float midLevel     = 0.0f;    // 250-2000 Hz
+  float highLevel    = 0.0f;    // 2000-8000 Hz
+  float spectralCentroid = 0.0f; // weighted frequency center
+
+  // Musical environment adaptation
+  float bassWeight   = 1.0f;    // weighting for bass-heavy music
+  float percWeight   = 1.0f;    // weighting for percussive content
+  float ambientNoise = 0.0f;    // background noise floor
+
+  // Dynamic range compression
+  float compRatio    = 4.0f;    // compression ratio for loud environments
+  float compThresh   = 0.7f;    // compression threshold
+  float compAttack   = 0.003f;  // compressor attack time
+  float compRelease  = 0.1f;    // compressor release time
+  float compGain     = 1.0f;    // makeup gain after compression
+
+  // Environment classification
+  enum AudioEnvironment {
+    ENV_UNKNOWN = 0,
+    ENV_QUIET,      // library, bedroom
+    ENV_AMBIENT,    // office, cafe background
+    ENV_MODERATE,   // normal conversation
+    ENV_LOUD,       // party, restaurant
+    ENV_CONCERT,    // live music, club
+    ENV_EXTREME     // very loud club, outdoor festival
+  };
+  AudioEnvironment currentEnv = ENV_UNKNOWN;
+  uint32_t envConfidence = 0;   // confidence counter for environment detection
 
   float getTransient() const { return transient; }
+
+  // Musical analysis getters
+  float getBassLevel() const { return bassLevel; }
+  float getMidLevel() const { return midLevel; }
+  float getHighLevel() const { return highLevel; }
+  float getSpectralCentroid() const { return spectralCentroid; }
+  AudioEnvironment getCurrentEnv() const { return currentEnv; }
+  float getAmbientNoise() const { return ambientNoise; }
 
   // Debug/health
   uint32_t lastIsrMs = 0;
@@ -120,6 +159,25 @@ private:
   float aAtk = 0.0f, aRel = 0.0f;
   uint32_t _sampleRate = 16000;
 
+  // Frequency analysis buffers
+  static const int FREQ_BUFFER_SIZE = 128;  // Small FFT for Arduino
+  float freqBuffer[FREQ_BUFFER_SIZE];
+  int freqBufferIndex = 0;
+  bool freqBufferReady = false;
+
+  // Compressor state
+  float compEnvelope = 0.0f;
+
+  // Environment detection history
+  float envHistory[8] = {0};  // Rolling history for environment classification
+  int envHistoryIndex = 0;
+
+  // Musical pattern detection
+  float beatHistory[16] = {0};  // Beat detection history
+  int beatHistoryIndex = 0;
+  uint32_t lastBeatMs = 0;
+  float estimatedBPM = 0.0f;
+
 private:
   void computeCoeffs(float dt);
   void consumeISR(float& avgAbs, uint16_t& maxAbs, uint32_t& n);
@@ -127,5 +185,17 @@ private:
   void updateNormWindow(float ref, float dt);
   void autoGainTick(float dt);
   void hardwareCalibrate(uint32_t nowMs, float dt);
+
+  // Enhanced musical analysis methods
+  void analyzeFrequencySpectrum(float avgAbs);
+  void updateEnvironmentClassification(float dt);
+  void detectMusicalPatterns(float level, uint32_t nowMs);
+  void applyDynamicRangeCompression(float& level);
+  void adaptToEnvironment();
+
+  // Simple FFT-like analysis for frequency bands
+  void computeSpectralBands();
+  float computeSpectralCentroid();
+
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

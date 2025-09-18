@@ -68,9 +68,20 @@ void loop() {
     imu.updateMotion(dt);
     const MotionState& m = imu.motion();
 
-    fire.setWind(m.wind.x, m.wind.y);
+    // Enhanced torch motion integration
+    fire.setTorchMotion(
+      m.wind.x, m.wind.y, m.stoke,
+      m.turbulenceLevel, m.centrifugalForce, m.flameBend,
+      m.tiltAngle, m.motionIntensity
+    );
+
+    fire.setRotationalEffects(m.spinMagnitude, m.centrifugalForce);
+    fire.setInertialDrift(m.inertiaDrift.x, m.inertiaDrift.y);
+    fire.setFlameDirection(m.flameDirection, m.flameBend);
+    fire.setMotionTurbulence(m.turbulenceLevel);
+
+    // Maintain backward compatibility
     fire.setUpVector(m.up.x, m.up.y, m.up.z);
-    fire.setStoke(m.stoke);
   }
 
   float energy = mic.getLevel();

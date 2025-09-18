@@ -1,10 +1,46 @@
 #include "FireEffect.h"
 
-// simple hash noise (fast, repeatable)
+// Enhanced noise functions for more organic fire behavior
 static float hashNoise(int x, int y, float t) {
     uint32_t n = x * 73856093u ^ y * 19349663u ^ (int)(t*1000);
     n = (n << 13) ^ n;
     return 1.0f - ((n * (n * n * 15731u + 789221u) + 1376312589u) & 0x7fffffff) / 1073741824.0f;
+}
+
+// Multi-octave turbulence for more complex patterns
+static float turbulence(float x, float y, float t, int octaves = 3) {
+    float value = 0.0f;
+    float amplitude = 1.0f;
+    float frequency = 1.0f;
+
+    for (int i = 0; i < octaves; i++) {
+        value += hashNoise((int)(x * frequency), (int)(y * frequency), t * frequency) * amplitude;
+        amplitude *= 0.5f;
+        frequency *= 2.0f;
+    }
+    return value / (2.0f - 1.0f / (1 << (octaves - 1)));
+}
+
+// Perlin-style smooth noise
+static float smoothNoise(float x, float y, float t) {
+    int ix = (int)x;
+    int iy = (int)y;
+    float fx = x - ix;
+    float fy = y - iy;
+
+    // Smooth interpolation (smoothstep)
+    fx = fx * fx * (3.0f - 2.0f * fx);
+    fy = fy * fy * (3.0f - 2.0f * fy);
+
+    float n00 = hashNoise(ix, iy, t);
+    float n10 = hashNoise(ix + 1, iy, t);
+    float n01 = hashNoise(ix, iy + 1, t);
+    float n11 = hashNoise(ix + 1, iy + 1, t);
+
+    float n0 = n00 * (1.0f - fx) + n10 * fx;
+    float n1 = n01 * (1.0f - fx) + n11 * fx;
+
+    return n0 * (1.0f - fy) + n1 * fy;
 }
 
 FireEffect::FireEffect(Adafruit_NeoPixel &strip, int width, int height)
@@ -136,8 +172,9 @@ void FireEffect::update(float energy, float hit) {
           return;
         }
       }
-        // Pre-calculate modulo for better performance
-        auto advectRowWrap = [](const float* inRow, float* outRow, int W, float s) {
+
+      // Pre-calculate modulo for better performance
+      auto advectRowWrap = [](const float* inRow, float* outRow, int W, float s) {
           const float fW = (float)W;
           for (int x = 0; x < W; ++x) {
             float srcX = x - s;
@@ -182,41 +219,111 @@ void FireEffect::update(float energy, float hit) {
           }
         }
       }
-    }
 
     render();
 }
 
 void FireEffect::coolCells() {
-    // Port of "cooling" using 0..255 style; random cooling per cell
+    float time = millis() * 0.001f;
     const float coolingScale = 0.5f / 255.0f;
     const int maxCooling = params.baseCooling + 1;
 
     for (int y = 0; y < HEIGHT; ++y) {
         for (int x = 0; x < WIDTH; ++x) {
-            // Random cooling scaled from baseCooling; map to ~0..~0.1 subtraction
-            const float decay = random(0, maxCooling) * coolingScale;
-            H(x,y) = max(0.0f, H(x,y) - decay);
+            // Base random cooling
+            float baseCooling = random(0, maxCooling) * coolingScale;
+
+            // Add turbulent cooling variations for more organic decay
+            float turbCooling = turbulence(x * 0.3f, y * 0.5f, time * 0.8f) * 0.02f;
+
+            // Height-based cooling (flames cool more at the top)
+            float heightFactor = 1.0f + (float)y / HEIGHT * 0.5f;
+
+            // Apply enhanced cooling with flickering
+            float totalCooling = (baseCooling + turbCooling) * heightFactor;
+
+            // Add subtle pulsing to create flame breathing effect
+            float pulse = 1.0f + 0.15f * sin(time * 3.0f + x * 0.5f + y * 0.3f);
+            totalCooling *= pulse;
+
+            H(x,y) = max(0.0f, H(x,y) - totalCooling);
         }
     }
 }
 
 void FireEffect::propagateUp() {
-    // classic doom-like upward blur from bottom to top
+    float time = millis() * 0.001f; // Time in seconds
+
+    // Enhanced upward propagation with turbulence
     for (int y = HEIGHT - 1; y > 0; --y) {
         for (int x = 0; x < WIDTH; ++x) {
             float below      = H(x, y - 1);
             float belowLeft  = H((x + WIDTH - 1) % WIDTH, y - 1);
             float belowRight = H((x + 1) % WIDTH, y - 1);
-            // average & slight decay
-            H(x, y) = (below + belowLeft + belowRight) / 3.05f; // small loss to keep from saturating
+
+            // Add turbulence to create more organic flame shapes
+            float baseTurbOffset = turbulence(x * 0.5f, y * 0.3f, time * 2.0f) * 0.3f - 0.15f;
+
+            // Add motion-induced turbulence for torch realism
+            float motionTurbOffset = turbulenceLevel * turbulenceScale *
+                                   (smoothNoise(x * 0.7f, y * 0.4f, time * 3.0f) - 0.5f);
+
+            float totalTurbOffset = baseTurbOffset + motionTurbOffset;
+
+            // Calculate weighted average with enhanced turbulence influence
+            float centerWeight = 1.4f + totalTurbOffset;
+            float sideWeight = 0.8f - totalTurbOffset * 0.5f;
+
+            float totalWeight = centerWeight + 2.0f * sideWeight;
+            float weightedSum = below * centerWeight + belowLeft * sideWeight + belowRight * sideWeight;
+
+            // Apply heat rise with enhanced decay and turbulence
+            float baseDecay = 3.1f;
+            float turbulentDecay = baseDecay + smoothNoise(x * 0.8f, y * 0.4f, time * 1.5f) * 0.4f;
+
+            H(x, y) = weightedSum / turbulentDecay;
+
+            // Enhanced horizontal drift with motion and flame direction effects
+            float baseDrift = smoothNoise(x * 0.2f, y * 0.6f, time * 1.0f) * 0.1f;
+
+            // Add flame direction bias from motion
+            float directionBias = 0.0f;
+            if (flameBendAngle > 0.1f) {
+                float directionRad = flameDirection * M_PI / 180.0f;
+                directionBias = cos(directionRad) * flameBendAngle * 0.15f;
+            }
+
+            // Add inertial drift effects
+            float inertiaBias = (inertiaDriftX / WIDTH) * 0.1f;
+
+            // Add centrifugal effects for rotation
+            float centrifugalBias = 0.0f;
+            if (centrifugalEffect > 0.1f && y > HEIGHT/2) {
+                // Centrifugal force spreads flames outward at the top
+                float radiusFromCenter = abs(x - WIDTH/2) / (WIDTH/2.0f);
+                centrifugalBias = centrifugalEffect * radiusFromCenter * 0.08f;
+                if (x > WIDTH/2) centrifugalBias = abs(centrifugalBias);
+                else centrifugalBias = -abs(centrifugalBias);
+            }
+
+            float totalDrift = baseDrift + directionBias + inertiaBias + centrifugalBias;
+
+            if (totalDrift > 0.03f && x < WIDTH - 1) {
+                float mixFactor = min(totalDrift * 2.0f, 0.3f);
+                H(x, y) = H(x, y) * (1.0f - mixFactor) + H(x + 1, y) * mixFactor;
+            } else if (totalDrift < -0.03f && x > 0) {
+                float mixFactor = min(-totalDrift * 2.0f, 0.3f);
+                H(x, y) = H(x, y) * (1.0f - mixFactor) + H(x - 1, y) * mixFactor;
+            }
         }
     }
     // Top row naturally dissipates via cooling
 }
 
 void FireEffect::injectSparks(float energy) {
-    // audioEnergy scales both chance and heat
+    float time = millis() * 0.001f;
+
+    // Enhanced audio energy scaling with more dynamic response
     float chanceScale = constrain(energy + params.audioSparkBoost * energy, 0.0f, 1.0f);
 
     int rows = max<int>(1, params.bottomRowsForSparks);
@@ -225,54 +332,97 @@ void FireEffect::injectSparks(float energy) {
     for (int y = 0; y < rows; ++y) {
         for (int x = 0; x < WIDTH; ++x) {
             float roll = random(0, 10000) / 10000.0f;
-            if (roll < params.sparkChance * chanceScale) {
+
+            // Enhanced spatial clustering with motion effects
+            float clusterNoise = smoothNoise(x * 0.6f, y * 0.4f, time * 0.5f);
+
+            // Motion-based spark enhancement
+            float motionSparkBoost = 1.0f + motionIntensity * 0.5f;
+            float intensityBasedChance = sparkIntensity * motionSparkBoost;
+
+            float clusterChance = params.sparkChance * chanceScale *
+                                (0.5f + clusterNoise) * intensityBasedChance;
+
+            if (roll < clusterChance) {
                 uint8_t h8 = random(params.sparkHeatMin, params.sparkHeatMax + 1);
                 float h = h8 / 255.0f;
 
-                // add audio heat boost
+                // Enhanced heat boost with turbulence variation
                 uint8_t boost8 = params.audioHeatBoostMax;
                 float boost = (boost8 / 255.0f) * energy;
-                H(x, 0) = min(1.0f, h + boost);
+
+                // Add turbulent spark intensity variations
+                float turbVariation = turbulence(x * 0.8f, y * 0.6f, time * 4.0f) * 0.3f;
+                h += turbVariation;
+
+                // Create spark clusters with neighboring influence
+                float finalHeat = min(1.0f, h + boost);
+                H(x, 0) = max(H(x, 0), finalHeat);
+
+                // Add slight influence to neighboring cells for clustering
+                if (finalHeat > 0.7f) {
+                    if (x > 0) H(x - 1, 0) = max(H(x - 1, 0), finalHeat * 0.3f);
+                    if (x < WIDTH - 1) H(x + 1, 0) = max(H(x + 1, 0), finalHeat * 0.3f);
+                }
             }
         }
     }
 }
 
 uint32_t FireEffect::heatToColorRGB(float h) const {
-    // Doom-style palette using heat in [0,1]:
-    //  0.00–0.33 : black -> red
-    //  0.33–0.85 : red   -> yellow (green ramps in)
-    //  0.85–1.00 : yellow-> white  (blue ramps in near the very top)
+    // Enhanced fire palette with more realistic color transitions
+    // 0.00-0.15 : black -> dark red
+    // 0.15-0.40 : dark red -> bright red
+    // 0.40-0.70 : bright red -> orange
+    // 0.70-0.90 : orange -> yellow
+    // 0.90-1.00 : yellow -> bright white/blue
 
     // Clamp input
     if (h < 0.0f) h = 0.0f;
     if (h > 1.0f) h = 1.0f;
 
-    const float redEnd    = 0.33f;
-    const float yellowEnd = 0.85f;  // push white to the very top so you don't get strobing
+    // Add subtle flicker to make fire more dynamic
+    float flicker = 1.0f + 0.05f * sin(millis() * 0.01f + h * 10.0f);
+    h *= flicker;
+    if (h > 1.0f) h = 1.0f;
+
+    const float darkRedEnd = 0.15f;
+    const float redEnd = 0.40f;
+    const float orangeEnd = 0.70f;
+    const float yellowEnd = 0.90f;
 
     uint8_t r, g, b;
 
-    if (h <= redEnd) {
-        // black -> red
-        float t = h / redEnd;                      // 0..1
-        r = (uint8_t)(t * 255.0f + 0.5f);
-        g = 0;
+    if (h <= darkRedEnd) {
+        // black -> dark red
+        float t = h / darkRedEnd;
+        r = (uint8_t)(t * 120.0f + 0.5f);  // Dark red
+        g = (uint8_t)(t * 15.0f + 0.5f);   // Tiny bit of green for warmth
         b = 0;
-    } else if (h <= yellowEnd) {
-        // red -> yellow (green ramps in, blue stays 0)
-        float t = (h - redEnd) / (yellowEnd - redEnd); // 0..1
+    } else if (h <= redEnd) {
+        // dark red -> bright red
+        float t = (h - darkRedEnd) / (redEnd - darkRedEnd);
+        r = (uint8_t)(120 + t * 135.0f + 0.5f);  // 120->255
+        g = (uint8_t)(15 + t * 25.0f + 0.5f);    // 15->40
+        b = 0;
+    } else if (h <= orangeEnd) {
+        // bright red -> orange
+        float t = (h - redEnd) / (orangeEnd - redEnd);
         r = 255;
-        g = (uint8_t)(t * 255.0f + 0.5f);
-        b = 0;
+        g = (uint8_t)(40 + t * 125.0f + 0.5f);   // 40->165
+        b = (uint8_t)(t * 20.0f + 0.5f);         // 0->20
+    } else if (h <= yellowEnd) {
+        // orange -> yellow
+        float t = (h - orangeEnd) / (yellowEnd - orangeEnd);
+        r = 255;
+        g = (uint8_t)(165 + t * 90.0f + 0.5f);   // 165->255
+        b = (uint8_t)(20 + t * 30.0f + 0.5f);    // 20->50
     } else {
-        // yellow -> white (blue ramps in only near the very top)
-        float t = (h - yellowEnd) / (1.0f - yellowEnd); // 0..1
+        // yellow -> bright white with blue
+        float t = (h - yellowEnd) / (1.0f - yellowEnd);
         r = 255;
         g = 255;
-        b = (uint8_t)(t * 255.0f + 0.5f);
-        // Optional: soften white caps if you still see harsh flashes
-        // b = (uint8_t)min(220, (int)(t * 255.0f + 0.5f));
+        b = (uint8_t)(50 + t * 205.0f + 0.5f);   // 50->255
     }
 
     return leds.Color(g, r, b);
@@ -311,4 +461,57 @@ FireEffect::~FireEffect() {
         free(heatScratch);
         heatScratch = nullptr;
     }
+}
+
+// ======== Enhanced FireEffect IMU Integration ========
+
+void FireEffect::setTorchMotion(float windXIn, float windYIn, float stokeLevel,
+                                float turbulence, float centrifugal, float flameBend,
+                                float tiltAngleIn, float motionIntensityIn) {
+    // Update basic motion state
+    windX = windXIn;
+    windY = windYIn;
+    stoke = constrain(stokeLevel, 0.0f, 1.0f);
+
+    // Update advanced motion effects
+    turbulenceLevel = constrain(turbulence, 0.0f, 1.0f);
+    centrifugalEffect = constrain(centrifugal, 0.0f, 2.0f);
+    flameBendAngle = constrain(flameBend, 0.0f, 1.0f);
+    tiltAngle = constrain(tiltAngleIn, 0.0f, 90.0f);
+    motionIntensity = constrain(motionIntensityIn, 0.0f, 1.0f);
+
+    // Adjust spark behavior based on motion
+    sparkIntensity = 1.0f + motionIntensity * motionSparkFactor;
+}
+
+void FireEffect::setRotationalEffects(float spinMag, float centrifugalForce) {
+    spinMagnitude = constrain(spinMag, 0.0f, 10.0f);
+    centrifugalEffect = constrain(centrifugalForce, 0.0f, 2.0f);
+
+    // Rotational motion affects spark spread and intensity
+    sparkSpreadCols = constrain((int)(3 + spinMagnitude), 2, 6);
+    sparkIntensity *= (1.0f + spinMagnitude * 0.2f);
+}
+
+void FireEffect::setInertialDrift(float driftX, float driftY) {
+    inertiaDriftX = constrain(driftX, -5.0f, 5.0f);
+    inertiaDriftY = constrain(driftY, -5.0f, 5.0f);
+
+    // Inertial drift affects spark head movement
+    sparkHeadX += inertiaDriftX * 0.1f;
+    sparkHeadY += inertiaDriftY * 0.05f;
+
+    // Keep spark head within bounds
+    while (sparkHeadX < 0.0f) sparkHeadX += WIDTH;
+    while (sparkHeadX >= WIDTH) sparkHeadX -= WIDTH;
+    sparkHeadY = constrain(sparkHeadY, -2.0f, 2.0f);
+}
+
+void FireEffect::setFlameDirection(float direction, float bend) {
+    flameDirection = direction;
+    flameBendAngle = constrain(bend, 0.0f, 1.0f);
+}
+
+void FireEffect::setMotionTurbulence(float level) {
+    turbulenceLevel = constrain(level, 0.0f, 1.0f);
 }

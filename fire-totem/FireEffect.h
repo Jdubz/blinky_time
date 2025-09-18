@@ -40,12 +40,23 @@ public:
     // Make params public so SerialConsole can read/write them
     FireParams params;
 
-    // --- IMU-driven inputs ---
+    // --- Enhanced IMU-driven inputs ---
     void setWindScale(float colsPerSec) { windColsPerSec = colsPerSec; }  // optional
 
-    void setWind(float wx, float wy) { windX = wx; windY = wy; } // wx used for columns
+    // Basic wind interface (backwards compatible)
+    void setWind(float wx, float wy) { windX = wx; windY = wy; }
     void setUpVector(float ux, float uy, float uz) { upx=ux; upy=uy; upz=uz; }
     void setStoke(float s) { stoke = (s < 0.f ? 0.f : (s > 1.f ? 1.f : s)); }
+
+    // Enhanced torch physics interface
+    void setTorchMotion(float windX, float windY, float stokeLevel,
+                        float turbulence, float centrifugal, float flameBend,
+                        float tiltAngle, float motionIntensity);
+
+    void setRotationalEffects(float spinMag, float centrifugalForce);
+    void setInertialDrift(float driftX, float driftY);
+    void setFlameDirection(float direction, float bend);
+    void setMotionTurbulence(float level);
 
 private:
     Adafruit_NeoPixel &leds;
@@ -69,17 +80,33 @@ private:
     // palette
     uint32_t heatToColorRGB(float h) const;
 
-    // IMU-fed state
+    // Enhanced IMU-fed torch physics state
     float windX = 0.f, windY = 0.f;
     float upx = 0.f, upy = 1.f, upz = 0.f;  // unit "world up"
     float stoke = 0.f;
 
-    // Wind-biased “spark head” that drifts around the cylinder
-    float sparkHeadX = 0.f;
+    // Advanced motion effects
+    float turbulenceLevel = 0.f;     // motion-induced turbulence (0-1)
+    float centrifugalEffect = 0.f;   // rotational spreading effect
+    float flameBendAngle = 0.f;      // flame bending from motion
+    float flameDirection = 0.f;      // direction flames lean (degrees)
+    float tiltAngle = 0.f;           // torch tilt from vertical
+    float motionIntensity = 0.f;     // overall motion level
+    float spinMagnitude = 0.f;       // rotation speed
+    float inertiaDriftX = 0.f;       // momentum-based drift
+    float inertiaDriftY = 0.f;
 
-    // Minimal knobs (fixed defaults; we can expose later if desired)
-    float windColsPerSec = 6.0f;  // columns/sec per unit windX
-    int   sparkSpreadCols = 2;    // ± columns around head where we drop sparks
-    float* heatScratch = nullptr;     // temp row buffer for advection
+    // Dynamic spark behavior
+    float sparkHeadX = 0.f;          // wind-biased spark position
+    float sparkHeadY = 0.f;          // vertical spark drift
+    float sparkIntensity = 1.f;      // motion-influenced spark intensity
+
+    // Adaptive parameters
+    float windColsPerSec = 8.0f;     // enhanced wind responsiveness
+    int   sparkSpreadCols = 3;       // larger spread for motion effects
+    float motionSparkFactor = 1.5f;  // motion enhances spark generation
+    float turbulenceScale = 2.0f;    // turbulence influence on heat propagation
+
+    float* heatScratch = nullptr;    // temp row buffer for advection
 };
 
