@@ -2,51 +2,9 @@
 #include "SerialConsole.h"
 #include "configs/DeviceConfig.h"
 
-// Enhanced noise functions for more organic fire behavior
-static float hashNoise(int x, int y, float t) {
-    uint32_t n = x * 73856093u ^ y * 19349663u ^ (int)(t*1000);
-    n = (n << 13) ^ n;
-    return 1.0f - ((n * (n * n * 15731u + 789221u) + 1376312589u) & 0x7fffffff) / 1073741824.0f;
-}
-
-// Multi-octave turbulence for more complex patterns
-static float turbulence(float x, float y, float t, int octaves = 3) {
-    float value = 0.0f;
-    float amplitude = 1.0f;
-    float frequency = 1.0f;
-
-    for (int i = 0; i < octaves; i++) {
-        value += hashNoise((int)(x * frequency), (int)(y * frequency), t * frequency) * amplitude;
-        amplitude *= 0.5f;
-        frequency *= 2.0f;
-    }
-    return value / (2.0f - 1.0f / (1 << (octaves - 1)));
-}
-
-// Perlin-style smooth noise
-static float smoothNoise(float x, float y, float t) {
-    int ix = (int)x;
-    int iy = (int)y;
-    float fx = x - ix;
-    float fy = y - iy;
-
-    // Smooth interpolation (smoothstep)
-    fx = fx * fx * (3.0f - 2.0f * fx);
-    fy = fy * fy * (3.0f - 2.0f * fy);
-
-    float n00 = hashNoise(ix, iy, t);
-    float n10 = hashNoise(ix + 1, iy, t);
-    float n01 = hashNoise(ix, iy + 1, t);
-    float n11 = hashNoise(ix + 1, iy + 1, t);
-
-    float n0 = n00 * (1.0f - fx) + n10 * fx;
-    float n1 = n01 * (1.0f - fx) + n11 * fx;
-
-    return n0 * (1.0f - fy) + n1 * fy;
-}
 
 FireEffect::FireEffect(Adafruit_NeoPixel &strip, int width, int height)
-    : leds(strip), WIDTH(width), HEIGHT(height), heat(nullptr), heatScratch(nullptr) {
+    : leds(strip), WIDTH(width), HEIGHT(height), heat(nullptr) {
     restoreDefaults();
 }
 
@@ -54,10 +12,6 @@ void FireEffect::begin() {
     if (heat) {
         free(heat);
         heat = nullptr;
-    }
-    if (heatScratch) {
-        free(heatScratch);
-        heatScratch = nullptr;
     }
 
     heat = (float*)malloc(sizeof(float) * WIDTH * HEIGHT);
@@ -68,7 +22,7 @@ void FireEffect::begin() {
 
     for (int y = 0; y < HEIGHT; ++y)
         for (int x = 0; x < WIDTH;  ++x)
-            H(x,y) = 0.0f;
+            getHeatRef(x,y) = 0.0f;
 }
 
 void FireEffect::restoreDefaults() {
@@ -102,8 +56,6 @@ void FireEffect::update(float energy, float hit) {
 
     injectSparks(boostedEnergy);
 
-    // DISABLED: Wind lean effect not working as expected
-    // addWindLean(dt);
 
     render();
 }
@@ -117,7 +69,7 @@ void FireEffect::coolCells() {
         for (int x = 0; x < WIDTH; ++x) {
             // Simple random cooling
             const float decay = random(0, maxCooling) * coolingScale;
-            H(x,y) = max(0.0f, H(x,y) - decay);
+            getHeatRef(x,y) = max(0.0f, getHeatRef(x,y) - decay);
         }
     }
 }
@@ -131,9 +83,9 @@ void FireEffect::propagateUp() {
 
     for (int y = HEIGHT - 1; y > 0; --y) {
         for (int x = 0; x < WIDTH; ++x) {
-            float below      = H(x, y - 1);
-            float belowLeft  = H((x + WIDTH - 1) % WIDTH, y - 1);
-            float belowRight = H((x + 1) % WIDTH, y - 1);
+            float below      = getHeatRef(x, y - 1);
+            float belowLeft  = getHeatRef((x + WIDTH - 1) % WIDTH, y - 1);
+            float belowRight = getHeatRef((x + 1) % WIDTH, y - 1);
 
             // Adjust weights based on gravity direction
             float centerWeight = 1.4f;
@@ -150,7 +102,7 @@ void FireEffect::propagateUp() {
             float propagationRate = 3.1f - gravityY * 0.5f;  // Heat rises more when tilted
             propagationRate = constrain(propagationRate, 2.5f, 4.0f);
 
-            H(x, y) = weightedSum / propagationRate;
+            getHeatRef(x, y) = weightedSum / propagationRate;
         }
     }
 }
@@ -180,7 +132,7 @@ void FireEffect::injectSparks(float energy) {
                 float boost = (boost8 / 255.0f) * adjustedEnergy;
 
                 float finalHeat = min(1.0f, h + boost);
-                H(x, 0) = max(H(x, 0), finalHeat);
+                getHeatRef(x, 0) = max(getHeatRef(x, 0), finalHeat);
             }
         }
     }
@@ -263,7 +215,7 @@ void FireEffect::render() {
   for (int y = 0; y < HEIGHT; ++y) {
       int visY = HEIGHT - 1 - y; // if you flip vertically
       for (int x = 0; x < WIDTH; ++x) {
-          float h = Hc(x, y);                 // 0..1 float heat
+          float h = getHeatValue(x, y);                 // 0..1 float heat
           if (h < 0.0f) h = 0.0f; if (h > 1.0f) h = 1.0f;
           leds.setPixelColor(xyToIndex(x, visY), heatToColorRGB(h));
       }
@@ -278,10 +230,6 @@ FireEffect::~FireEffect() {
     if (heat) {
         free(heat);
         heat = nullptr;
-    }
-    if (heatScratch) {
-        free(heatScratch);
-        heatScratch = nullptr;
     }
 }
 

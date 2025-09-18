@@ -41,7 +41,7 @@ public:
     // Heat access for visualization
     float getHeat(int x, int y) const {
         if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT || !heat) return 0.0f;
-        return Hc(x, y);
+        return getHeatValue(x, y);
     }
 
     // Make params public so SerialConsole can read/write them
@@ -60,20 +60,14 @@ private:
     // We’ll map carefully in render().
     float *heat; // flat allocation: WIDTH*HEIGHT
 
-    inline float& H(int x, int y) { return heat[y * WIDTH + x]; }
-    inline const float& Hc(int x, int y) const { return heat[y * WIDTH + x]; }
+    inline float& getHeatRef(int x, int y) { return heat[y * WIDTH + x]; }
+    inline const float& getHeatValue(int x, int y) const { return heat[y * WIDTH + x]; }
 
     void coolCells();
     void propagateUp();
     void injectSparks(float energy);
-    void addWindLean(float dt);
 
     // palette
     uint32_t heatToColorRGB(float h) const;
-
-
-
-
-    float* heatScratch = nullptr;    // temp row buffer for advection
 };
 

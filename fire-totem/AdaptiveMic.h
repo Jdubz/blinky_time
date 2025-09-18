@@ -49,7 +49,7 @@ public:
   float  envAR         = 0.0f;  // smoothed envelope (tracking only)
   float  envMean       = 0.0f;  // very slow EMA of envAR
   float  globalGain    = 1.0f;  // software AGC multiplier
-  int    currentHwGain = 32;    // PDM hardware gain
+  int    currentHardwareGain = 32;    // PDM hardware gain
 
   // --- Enhanced Musical Analysis ---
   // Frequency-aware transient detection
@@ -97,12 +97,12 @@ public:
 
   float getTransient() const { return transient; }
 
-  // Musical analysis getters
-  float getBassLevel() const { return bassLevel; }
-  float getMidLevel() const { return midLevel; }
-  float getHighLevel() const { return highLevel; }
+  // Time-domain frequency approximation getters (not real FFT)
+  float getApproxBassLevel() const { return bassLevel; }
+  float getApproxMidLevel() const { return midLevel; }
+  float getApproxHighLevel() const { return highLevel; }
   float getSpectralCentroid() const { return spectralCentroid; }
-  AudioEnvironment getCurrentEnv() const { return currentEnv; }
+  AudioEnvironment getNoiseClassification() const { return currentEnv; }
   float getAmbientNoise() const { return ambientNoise; }
 
   // Debug/health
@@ -118,7 +118,7 @@ public:
   float getLevelPostAGC() const { return levelPostAGC; }
   float getEnvMean()     const { return envMean; }
   float getGlobalGain()  const { return globalGain; }
-  int   getHwGain()      const { return currentHwGain; }
+  int   getHwGain()      const { return currentHardwareGain; }
   uint32_t getIsrCount() const { return s_isrCount; }
 
 public:

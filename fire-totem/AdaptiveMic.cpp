@@ -10,7 +10,7 @@ volatile uint16_t AdaptiveMic::s_maxAbs     = 0;
 // ---------- Public ----------
 bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   _sampleRate    = sampleRate;
-  currentHwGain  = constrain(gainInit, hwGainMin, hwGainMax);
+  currentHardwareGain  = constrain(gainInit, hwGainMin, hwGainMax);
   s_instance     = this;
 
   PDM.onReceive(AdaptiveMic::onPDMdata);
@@ -19,7 +19,7 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   bool ok = PDM.begin(1, _sampleRate); // mono @ 16k
   if (!ok) return false;
 
-  PDM.setGain(currentHwGain);
+  PDM.setGain(currentHardwareGain);
 
   envAR = envMean = 0.0f; minEnv = 1e9f; maxEnv = 0.0f;
   globalGain = levelInstant = levelPreGate = levelPostAGC = 0.0f;
@@ -220,16 +220,16 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
 
   int delta = 0;
   if (tooQuietEnv || swPinnedHigh) {
-    if (currentHwGain < hwGainMax) delta = +hwGainStep;
+    if (currentHardwareGain < hwGainMax) delta = +hwGainStep;
   } else if (tooLoudEnv || swPinnedLow) {
-    if (currentHwGain > hwGainMin) delta = -hwGainStep;
+    if (currentHardwareGain > hwGainMin) delta = -hwGainStep;
   }
 
   if (delta != 0) {
-    int oldGain = currentHwGain;
-    currentHwGain = constrain(currentHwGain + delta, hwGainMin, hwGainMax);
-    if (currentHwGain != oldGain) {
-      PDM.setGain(currentHwGain);
+    int oldGain = currentHardwareGain;
+    currentHardwareGain = constrain(currentHardwareGain + delta, hwGainMin, hwGainMax);
+    if (currentHardwareGain != oldGain) {
+      PDM.setGain(currentHardwareGain);
 
       float softComp = (delta > 0) ? (1.0f/1.05f) : 1.05f;
       globalGain = clamp01(globalGain * softComp);

@@ -7,7 +7,9 @@
 #include "TotemDefaults.h"
 #include "configs/TubeLightConfig.h"
 #include "Globals.h"
+#include "Constants.h"
 
+// Currently configured for tube light device
 const DeviceConfig& config = TUBE_LIGHT_CONFIG;
 LEDMapper ledMapper;
 
@@ -22,6 +24,13 @@ IMUHelper imu;
 uint32_t lastMs = 0;
 bool prevChargingState = false;
 
+// Helper function to clear all LEDs
+void clearAllLEDs() {
+  for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
+    leds.setPixelColor(i, Constants::LED_OFF);
+  }
+}
+
 void setup() {
   Serial.begin(config.serial.baudRate);
   while (!Serial && millis() < config.serial.initTimeoutMs) {}
@@ -32,7 +41,10 @@ void setup() {
   leds.setBrightness(config.matrix.brightness);
   leds.show();
 
-  ledMapper.begin(config);
+  if (!ledMapper.begin(config)) {
+    Serial.println(F("ERROR: LED mapper initialization failed"));
+    while(1); // Halt execution
+  }
   fire.begin();
 
   bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
@@ -62,8 +74,8 @@ void setup() {
 
 void loop() {
   uint32_t now = millis();
-  float dt = (lastMs == 0) ? 0.016f : (now - lastMs) * 0.001f;
-  dt = constrain(dt, 0.001f, 0.1f); // Clamp dt to reasonable range
+  float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
+  dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
   lastMs = now;
 
   mic.update(dt);
@@ -84,9 +96,7 @@ void loop() {
       console.batteryVizEnabled = true;
       console.fireDisabled = true;
       // Clear fire display immediately
-      for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
-        leds.setPixelColor(i, 0);
-      }
+      clearAllLEDs();
       leds.show();
       Serial.println(F("Auto-activated battery visualization (charging detected)"));
     } else if (!currentChargingState && prevChargingState) {
@@ -118,9 +128,7 @@ void loop() {
       console.renderTopVisualization(); // Add top indicator and show
     } else {
       // Fire disabled - clear display and show only top indicator
-      for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
-        leds.setPixelColor(i, 0);
-      }
+      clearAllLEDs();
       console.renderTopVisualization();
     }
   } else {
@@ -130,9 +138,7 @@ void loop() {
       fire.show();
     } else {
       // Fire disabled - clear display
-      for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
-        leds.setPixelColor(i, 0);
-      }
+      clearAllLEDs();
       leds.show();
     }
   }
@@ -141,7 +147,7 @@ void loop() {
 
   // Battery monitoring
   static uint32_t lastBatteryCheck = 0;
-  if (millis() - lastBatteryCheck > 30000) { // Check every 30 seconds
+  if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) { // Check every 30 seconds
     lastBatteryCheck = millis();
     float voltage = battery.getVoltage();
     if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {

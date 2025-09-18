@@ -1,5 +1,6 @@
 #pragma once
 #include "configs/DeviceConfig.h"
+#include <new>
 
 class LEDMapper {
 private:
@@ -9,29 +10,95 @@ private:
     int* indexToX;         // LED index -> x coordinate
     int* indexToY;         // LED index -> y coordinate
 
+    void cleanup() {
+        delete[] positionToIndex;
+        delete[] indexToX;
+        delete[] indexToY;
+        positionToIndex = nullptr;
+        indexToX = nullptr;
+        indexToY = nullptr;
+    }
+
 public:
     LEDMapper() : width(0), height(0), totalPixels(0), orientation(HORIZONTAL),
                   positionToIndex(nullptr), indexToX(nullptr), indexToY(nullptr) {}
 
-    ~LEDMapper() {
-        if (positionToIndex) delete[] positionToIndex;
-        if (indexToX) delete[] indexToX;
-        if (indexToY) delete[] indexToY;
+    // Copy constructor
+    LEDMapper(const LEDMapper& other) : width(other.width), height(other.height),
+                                        totalPixels(other.totalPixels), orientation(other.orientation),
+                                        positionToIndex(nullptr), indexToX(nullptr), indexToY(nullptr) {
+        if (other.totalPixels > 0) {
+            positionToIndex = new int[totalPixels];
+            indexToX = new int[totalPixels];
+            indexToY = new int[totalPixels];
+            for (int i = 0; i < totalPixels; i++) {
+                positionToIndex[i] = other.positionToIndex[i];
+                indexToX[i] = other.indexToX[i];
+                indexToY[i] = other.indexToY[i];
+            }
+        }
     }
 
-    void begin(const DeviceConfig& config) {
+    // Assignment operator
+    LEDMapper& operator=(const LEDMapper& other) {
+        if (this != &other) {
+            cleanup();
+            width = other.width;
+            height = other.height;
+            totalPixels = other.totalPixels;
+            orientation = other.orientation;
+
+            if (other.totalPixels > 0) {
+                positionToIndex = new int[totalPixels];
+                indexToX = new int[totalPixels];
+                indexToY = new int[totalPixels];
+                for (int i = 0; i < totalPixels; i++) {
+                    positionToIndex[i] = other.positionToIndex[i];
+                    indexToX[i] = other.indexToX[i];
+                    indexToY[i] = other.indexToY[i];
+                }
+            }
+        }
+        return *this;
+    }
+
+    ~LEDMapper() {
+        cleanup();
+    }
+
+    bool begin(const DeviceConfig& config) {
+        cleanup(); // Clean up any existing allocation
+
         width = config.matrix.width;
         height = config.matrix.height;
         totalPixels = width * height;
         orientation = config.matrix.orientation;
 
-        // Allocate mapping arrays
-        positionToIndex = new int[totalPixels];
-        indexToX = new int[totalPixels];
-        indexToY = new int[totalPixels];
+        if (totalPixels <= 0) return false;
+
+        // Allocate mapping arrays with error checking
+        positionToIndex = new(std::nothrow) int[totalPixels];
+        if (!positionToIndex) return false;
+
+        indexToX = new(std::nothrow) int[totalPixels];
+        if (!indexToX) {
+            delete[] positionToIndex;
+            positionToIndex = nullptr;
+            return false;
+        }
+
+        indexToY = new(std::nothrow) int[totalPixels];
+        if (!indexToY) {
+            delete[] positionToIndex;
+            delete[] indexToX;
+            positionToIndex = nullptr;
+            indexToX = nullptr;
+            return false;
+        }
 
         // Generate the mapping based on orientation and wiring pattern
         generateMapping();
+        return true;
     }
 
     // Get LED index from matrix coordinates (x, y)
