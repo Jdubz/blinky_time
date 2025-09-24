@@ -26,14 +26,16 @@ void FireEffect::begin() {
 }
 
 void FireEffect::restoreDefaults() {
-    params.baseCooling         = Defaults::BaseCooling;
-    params.sparkHeatMin        = Defaults::SparkHeatMin;
-    params.sparkHeatMax        = Defaults::SparkHeatMax;
-    params.sparkChance         = Defaults::SparkChance;
-    params.audioSparkBoost     = Defaults::AudioSparkBoost;
-    params.audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
-    params.coolingAudioBias    = Defaults::CoolingAudioBias;
-    params.bottomRowsForSparks = Defaults::BottomRowsForSparks;
+    // Use device config defaults instead of global defaults for consistency
+    params.baseCooling         = config.fireDefaults.baseCooling;
+    params.sparkHeatMin        = config.fireDefaults.sparkHeatMin;
+    params.sparkHeatMax        = config.fireDefaults.sparkHeatMax;
+    params.sparkChance         = config.fireDefaults.sparkChance;
+    params.audioSparkBoost     = config.fireDefaults.audioSparkBoost;
+    params.audioHeatBoostMax   = config.fireDefaults.audioHeatBoostMax;
+    params.coolingAudioBias    = config.fireDefaults.coolingAudioBias;
+    params.bottomRowsForSparks = config.fireDefaults.bottomRowsForSparks;
+    params.transientHeatMax    = config.fireDefaults.transientHeatMax;
 }
 
 void FireEffect::update(float energy, float hit) {

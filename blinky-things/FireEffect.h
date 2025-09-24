@@ -6,7 +6,7 @@
 #include "Globals.h"
 
 struct FireParams {
-    // Matches Defaults.*
+    // Matches config.fireDefaults.*
     uint8_t baseCooling         = Defaults::BaseCooling;
     uint8_t sparkHeatMin        = Defaults::SparkHeatMin;
     uint8_t sparkHeatMax        = Defaults::SparkHeatMax;

@@ -3,10 +3,18 @@
 
 // Default pins for XIAO BLE / Sense (override via Config if your core differs)
 #ifndef PIN_VBAT
-  #define PIN_VBAT        P0_31    // ADC input for VBAT divider
+  #if defined(P0_31)
+    #define PIN_VBAT        P0_31    // ADC input for VBAT divider (mbed core)
+  #else
+    #define PIN_VBAT        31       // ADC input for VBAT divider (non-mbed core)
+  #endif
 #endif
 #ifndef VBAT_ENABLE_PIN
-  #define VBAT_ENABLE_PIN P0_14    // LOW = enable divider to ADC, HIGH = disable
+  #if defined(P0_14)
+    #define VBAT_ENABLE_PIN P0_14    // LOW = enable divider to ADC, HIGH = disable (mbed)
+  #else
+    #define VBAT_ENABLE_PIN 14       // LOW = enable divider to ADC, HIGH = disable (non-mbed)
+  #endif
 #endif
 
 // HICHG (fast-charge) control:
@@ -22,7 +30,11 @@
 
 // CHG status pin: many cores wire it to P0_17 (active LOW while charging)
 #ifndef CHG_STATUS_PIN_DEFAULT
-  #define CHG_STATUS_PIN_DEFAULT P0_17
+  #if defined(P0_17)
+    #define CHG_STATUS_PIN_DEFAULT P0_17  // (mbed core)
+  #else
+    #define CHG_STATUS_PIN_DEFAULT 17     // (non-mbed core)
+  #endif
 #endif
 
 class BatteryMonitor {

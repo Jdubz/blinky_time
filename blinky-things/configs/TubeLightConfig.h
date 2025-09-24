@@ -1,7 +1,6 @@
 #pragma once
 #include "DeviceConfig.h"
-#include "TubeLightDefaults.h"
-#include <Adafruit_NeoPixel.h>
+#include "../TotemDefaults.h"
 
 // Tube Light: 4x15 zigzag matrix (60 LEDs total)
 // Physical orientation: VERTICAL (strip runs top to bottom)
@@ -50,14 +49,15 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
     .bufferSize = 32
   },
   .fireDefaults = {
-    .baseCooling = TubeLightDefaults::BaseCooling,
-    .sparkHeatMin = TubeLightDefaults::SparkHeatMin,
-    .sparkHeatMax = TubeLightDefaults::SparkHeatMax,
-    .sparkChance = TubeLightDefaults::SparkChance,
-    .audioSparkBoost = TubeLightDefaults::AudioSparkBoost,
-    .audioHeatBoostMax = TubeLightDefaults::AudioHeatBoostMax,
-    .coolingAudioBias = TubeLightDefaults::CoolingAudioBias,
-    .bottomRowsForSparks = TubeLightDefaults::BottomRowsForSparks,
-    .transientHeatMax = TubeLightDefaults::TransientHeatMax
+    // Tube light specific fire parameters - optimized for vertical matrix
+    .baseCooling = 40,        // Slower cooling for better flames
+    .sparkHeatMin = 50,       // Optimized range for tube display
+    .sparkHeatMax = 200,      // Higher maximum for brightness
+    .sparkChance = 0.200f,    // Reduced for cleaner fire
+    .audioSparkBoost = 0.300f, // Audio responsiveness
+    .audioHeatBoostMax = 60,   // Audio heat boost
+    .coolingAudioBias = -20,   // Audio cooling bias
+    .bottomRowsForSparks = 1,  // Single row for sparks
+    .transientHeatMax = 100    // Transient heat maximum
   }
 };

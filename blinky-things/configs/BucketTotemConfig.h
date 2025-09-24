@@ -1,7 +1,6 @@
 #pragma once
 #include "DeviceConfig.h"
 #include "../TotemDefaults.h"
-#include <Adafruit_NeoPixel.h>
 
 // Bucket Totem: 16x8 horizontal matrix (128 LEDs total)
 // Physical orientation: HORIZONTAL (standard row-major layout)
@@ -54,14 +53,15 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
     .bufferSize = 32
   },
   .fireDefaults = {
-    .baseCooling = Defaults::BaseCooling,
-    .sparkHeatMin = Defaults::SparkHeatMin,
-    .sparkHeatMax = Defaults::SparkHeatMax,
-    .sparkChance = Defaults::SparkChance,
-    .audioSparkBoost = Defaults::AudioSparkBoost,
-    .audioHeatBoostMax = Defaults::AudioHeatBoostMax,
-    .coolingAudioBias = Defaults::CoolingAudioBias,
-    .bottomRowsForSparks = Defaults::BottomRowsForSparks,
-    .transientHeatMax = Defaults::TransientHeatMax
+    // Bucket totem fire parameters - uses standard totem defaults
+    .baseCooling = 85,         // Standard cooling rate
+    .sparkHeatMin = 40,        // Standard spark heat range
+    .sparkHeatMax = 200,       // Standard maximum
+    .sparkChance = 0.32f,      // Standard spark probability
+    .audioSparkBoost = 0.3f,   // Standard audio boost
+    .audioHeatBoostMax = 60,   // Standard audio heat boost
+    .coolingAudioBias = -20,   // Standard audio cooling bias
+    .bottomRowsForSparks = 1,  // Single bottom row for sparks
+    .transientHeatMax = 100    // Standard transient heat maximum
   }
 };

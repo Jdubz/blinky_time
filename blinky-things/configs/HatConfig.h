@@ -1,7 +1,6 @@
 #pragma once
 #include "DeviceConfig.h"
 #include "../TotemDefaults.h"
-#include <Adafruit_NeoPixel.h>
 
 // Hat LED String: 89 LEDs in linear arrangement using STRING_FIRE mode
 // Physical layout: Single string of 89 LEDs arranged around hat brim

@@ -6,14 +6,30 @@
 #include "BatteryMonitor.h"
 #include "IMUHelper.h"
 #include "TotemDefaults.h"
-// #include "configs/TubeLightConfig.h"
-#include "configs/HatConfig.h" // Hat device (89 LEDs, STRING_FIRE mode)
 #include "Globals.h"
 #include "Constants.h"
 
-// Currently configured for hat device (89 LEDs, STRING_FIRE mode)
-// For tube light device, use: const DeviceConfig& config = TUBE_LIGHT_CONFIG; (4x15 matrix, MATRIX_FIRE mode)
+// Device Configuration Selection
+// Define DEVICE_TYPE to select active configuration:
+// 1 = Hat (89 LEDs, STRING_FIRE mode)
+// 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)  
+// 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
+#ifndef DEVICE_TYPE
+#define DEVICE_TYPE 1  // Default to Hat
+#endif
+
+#if DEVICE_TYPE == 1
+#include "configs/HatConfig.h"
 const DeviceConfig& config = HAT_CONFIG;
+#elif DEVICE_TYPE == 2
+#include "configs/TubeLightConfig.h"  
+const DeviceConfig& config = TUBE_LIGHT_CONFIG;
+#elif DEVICE_TYPE == 3
+#include "configs/BucketTotemConfig.h"
+const DeviceConfig& config = BUCKET_TOTEM_CONFIG;
+#else
+#error "Invalid DEVICE_TYPE. Use 1=Hat, 2=TubeLight, 3=BucketTotem"
+#endif
 LEDMapper ledMapper;
 
 Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
@@ -76,11 +92,30 @@ void renderFireEffect() {
 void setup() {
   Serial.begin(config.serial.baudRate);
   while (!Serial && millis() < config.serial.initTimeoutMs) {}
+  
+  // Display active device configuration
   Serial.print(F("Starting device: "));
   Serial.println(config.deviceName);
+  Serial.print(F("Device Type: "));
+#if DEVICE_TYPE == 1
+  Serial.println(F("Hat (Type 1)"));
+#elif DEVICE_TYPE == 2  
+  Serial.println(F("Tube Light (Type 2)"));
+#elif DEVICE_TYPE == 3
+  Serial.println(F("Bucket Totem (Type 3)"));
+#endif
 
+  // Validate critical configuration parameters
+  if (config.matrix.width <= 0 || config.matrix.height <= 0) {
+    Serial.println(F("ERROR: Invalid matrix dimensions"));
+    while(1); // Halt execution
+  }
+  if (config.matrix.brightness > 255) {
+    Serial.println(F("WARNING: Brightness clamped to 255"));
+  }
+  
   leds.begin();
-  leds.setBrightness(config.matrix.brightness);
+  leds.setBrightness(min(config.matrix.brightness, 255));
   leds.show();
 
   // Basic LED test - light up first few LEDs to verify hardware
@@ -119,7 +154,8 @@ void setup() {
     stringFire = new StringFireEffect(leds, config.matrix.width * config.matrix.height);
     if (stringFire) {
       stringFire->begin();
-      Serial.println(F("String fire effect initialized successfully"));
+      stringFire->restoreDefaults(); // Apply device-specific config defaults
+      Serial.println(F("String fire effect initialized with config defaults"));
     } else {
       Serial.println(F("ERROR: String fire effect allocation failed"));
       while(1); // Halt execution
@@ -130,7 +166,8 @@ void setup() {
     fire.~FireEffect();
     new(&fire) FireEffect(leds, config.matrix.width, config.matrix.height);
     fire.begin();
-    Serial.println(F("Matrix fire effect initialized successfully"));
+    fire.restoreDefaults(); // Apply device-specific config defaults
+    Serial.println(F("Matrix fire effect initialized with config defaults"));
   }
 
   bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);

@@ -419,15 +419,19 @@ void SerialConsole::handleCommand(const char *cmd) {
 }
 
 void SerialConsole::restoreDefaults() {
+    // First restore fire effect defaults (now uses config values)
     fire.restoreDefaults();
-    mic.noiseGate   = Defaults::NoiseGate;
-    mic.globalGain  = Defaults::GlobalGain;
-    mic.attackSeconds   = Defaults::AttackSeconds;
-    mic.releaseSeconds  = Defaults::ReleaseSeconds;
-    fire.params.transientHeatMax = Defaults::TransientHeatMax;
+    
+    // Then restore microphone defaults from global defaults (these aren't device-specific)
+    mic.noiseGate           = Defaults::NoiseGate;
+    mic.globalGain          = Defaults::GlobalGain;
+    mic.attackSeconds       = Defaults::AttackSeconds;
+    mic.releaseSeconds      = Defaults::ReleaseSeconds;
     mic.transientCooldownMs = Defaults::TransientCooldownMs;
 
-    Serial.println(F("Defaults restored."));
+    // Note: fire.params.transientHeatMax is now set by fire.restoreDefaults()
+    Serial.print(F("Defaults restored for device: "));
+    Serial.println(config.deviceName);
 }
 
 void SerialConsole::printAll() {
