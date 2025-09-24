@@ -65,10 +65,7 @@ bool IMUHelper::readAccelGyro_(float& ax, float& ay, float& az,
 bool IMUHelper::updateMotion(float dt) {
    float ax, ay, az, gx, gy, gz;
    if (!readAccelGyro_(ax, ay, az, gx, gy, gz) || dt <= 0.f) {
-     // Decay toward rest when no fresh data
-     motion_.wind.x *= 0.9f;
-     motion_.wind.y *= 0.9f;
-     motion_.stoke  *= 0.85f;
+     // No fresh data available
      return false;
    }
    return updateMotionWithRaw(ax, ay, az, gx, gy, gz, dt);
@@ -121,17 +118,6 @@ void IMUHelper::updateSimpleMotion_(const Vec3& accel, const Vec3& gyro, float d
     motion_.motionIntensity = linearMag + gyroMag * 0.1f;
     motion_.isStationary = motion_.motionIntensity < 1.0f;
 
-    // Legacy wind/stoke for fire effect compatibility (minimal values)
-    motion_.wind.x *= 0.9f; // Decay existing values
-    motion_.wind.y *= 0.9f;
-    motion_.stoke *= 0.85f;
-
-    // Add minimal motion if detected
-    if (!motion_.isStationary) {
-        motion_.wind.x += linAccel.x * cfg_.kAccel;
-        motion_.wind.y += linAccel.y * cfg_.kAccel;
-        motion_.stoke = constrain(motion_.stoke + linAccel.z * cfg_.kStoke, 0.0f, 1.0f);
-    }
 }
 
 // Clean IMU data interface implementation

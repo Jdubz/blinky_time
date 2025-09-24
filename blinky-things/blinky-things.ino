@@ -8,6 +8,7 @@
 #include "TotemDefaults.h"
 #include "Globals.h"
 #include "Constants.h"
+#include "ConfigStorage.h"
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
@@ -42,6 +43,7 @@ AdaptiveMic mic;
 SerialConsole console(fire, leds);
 BatteryMonitor battery;
 IMUHelper imu;
+ConfigStorage configStorage;
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
@@ -154,8 +156,7 @@ void setup() {
     stringFire = new StringFireEffect(leds, config.matrix.width * config.matrix.height);
     if (stringFire) {
       stringFire->begin();
-      stringFire->restoreDefaults(); // Apply device-specific config defaults
-      Serial.println(F("String fire effect initialized with config defaults"));
+      Serial.println(F("String fire effect initialized"));
     } else {
       Serial.println(F("ERROR: String fire effect allocation failed"));
       while(1); // Halt execution
@@ -166,8 +167,7 @@ void setup() {
     fire.~FireEffect();
     new(&fire) FireEffect(leds, config.matrix.width, config.matrix.height);
     fire.begin();
-    fire.restoreDefaults(); // Apply device-specific config defaults
-    Serial.println(F("Matrix fire effect initialized with config defaults"));
+    Serial.println(F("Matrix fire effect initialized"));
   }
 
   bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
@@ -177,7 +177,27 @@ void setup() {
     Serial.println(F("Microphone initialized"));
   }
 
+  // Initialize EEPROM configuration storage
+  configStorage.begin();
+  
+  // Load saved parameters or apply defaults to fire effects
+  if (config.matrix.fireType == STRING_FIRE && stringFire) {
+    stringFire->restoreDefaults(); // Apply device-specific config defaults first
+    configStorage.loadConfiguration(stringFire->params, mic); // Override with saved values
+    Serial.println(F("String fire: config defaults + EEPROM parameters applied"));
+  } else {
+    fire.restoreDefaults(); // Apply device-specific config defaults first  
+    configStorage.loadConfiguration(fire.params, mic); // Override with saved values
+    Serial.println(F("Matrix fire: config defaults + EEPROM parameters applied"));
+  }
+
   console.begin();
+  console.setConfigStorage(&configStorage); // Enable EEPROM saving for parameters
+  
+  // Set string fire reference if using STRING_FIRE mode
+  if (config.matrix.fireType == STRING_FIRE && stringFire) {
+    console.setStringFire(stringFire);
+  }
 
   if (!imu.begin()) {
     Serial.println(F("WARNING: IMU initialization failed"));

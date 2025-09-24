@@ -27,32 +27,23 @@ struct IMUData {
     unsigned long timestamp; // millis() when data was captured
 };
 
-// Legacy motion config - simplified for basic fire effects only
+// Simplified motion config for basic fire effects  
 struct MotionConfig {
   // Basic orientation filtering
   float tauLP    = 0.12f;  // s, low-pass for gravity estimate
-  float gravityThresh = 5.0f; // m/s² threshold to detect actual motion vs gravity (raised for less sensitivity)
-
-  // Simplified motion parameters (for legacy wind/stoke if still used)
-  float kAccel   = 0.1f;   // reduced sensitivity
-  float kSpin    = 0.05f;  // reduced sensitivity
-  float kStoke   = 0.01f;  // reduced sensitivity
-  float maxWindSpeed = 3.0f; // reduced maximum
-  float stokeDecay = 0.95f; // faster decay
+  float gravityThresh = 5.0f; // m/s² threshold to detect actual motion vs gravity
 };
 
-// Legacy motion state - kept for backward compatibility with existing fire effect
+// Motion state - simplified orientation data for fire effects
 // TODO: Migrate fire effect to use IMUData instead
 struct MotionState {
   // Basic orientation (still used by fire effect)
   Vec3  up {0,1,0};           // unit vector (world up in torch space)
   float tiltAngle = 0.0f;     // degrees of tilt from vertical
 
-  // Legacy fields - deprecated but kept for compatibility
+  // Motion data - available for potential future use
   Vec3  velocity {0,0,0};     // integrated velocity (m/s)
   Vec3  smoothAccel {0,0,0};  // smoothed acceleration
-  Vec2  wind {0,0};           // DEPRECATED: use IMUData instead
-  float stoke = 0.0f;         // DEPRECATED: use IMUData instead
 
   // Rotational motion - may be useful for future effects
   Vec3  angularVel {0,0,0};   // angular velocity (rad/s)

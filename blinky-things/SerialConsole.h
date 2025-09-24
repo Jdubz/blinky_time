@@ -6,6 +6,10 @@
 #include "FireEffect.h"
 #include "Globals.h"
 
+// Forward declarations to avoid circular includes
+class ConfigStorage;
+class StringFireEffect;
+
 class SerialConsole {
 public:
     SerialConsole(FireEffect &fire, Adafruit_NeoPixel &leds);
@@ -13,6 +17,12 @@ public:
     void begin();
     void update();
     void handleCommand(const char *cmd);
+    
+    // Set config storage for parameter persistence
+    void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
+    
+    // Set string fire effect for configuration (when using STRING_FIRE mode)
+    void setStringFire(StringFireEffect* stringFire) { stringFire_ = stringFire; }
 
     void restoreDefaults();
     void printAll();
@@ -24,6 +34,9 @@ public:
 private:
     // Helper function for consistent matrix mapping
     int xyToPixelIndex(int x, int y);
+    
+    // Helper for saving fire parameters to EEPROM
+    void saveFireParameterToEEPROM(const char* paramName);
 
 public:
     // IMU visualization mode
@@ -41,6 +54,8 @@ public:
 private:
     FireEffect &fire;
     Adafruit_NeoPixel &leds;
+    ConfigStorage* configStorage_;        // For saving parameters to EEPROM
+    StringFireEffect* stringFire_;        // For string fire mode parameters
 
     // ---- Debug systems ----
     bool micDebugEnabled = false;         // toggled by "mic debug on/off"

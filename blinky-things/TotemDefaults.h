@@ -11,8 +11,6 @@ namespace Defaults {
   constexpr uint16_t TransientCooldownMs = 500;
 
   // ---- Performance constants ----
-  constexpr float WindSparkFactor = 0.12f;
-  constexpr float MaxWindSparkProb = 0.35f;
   constexpr float CoolingScaleFactor = 0.5f / 255.0f;
 
   // ---- Software auto-gain (fast) ----
