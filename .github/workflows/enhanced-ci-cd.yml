@@ -2,7 +2,7 @@ name: Blinky Time CI/CD with Versioning
 
 on:
   push:
-    branches: [ master, staging, develop ]
+    branches: [ master, staging ]
   pull_request:
     branches: [ master, staging ]
 
