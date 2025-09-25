@@ -45,14 +45,17 @@ LEDMapper ledMapper;
 
 Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
 
-// Fire effect - will be initialized in setup() based on config
-FireEffect fire(leds, 1, 1); // Temporary initialization, will be reconfigured
-StringFireEffect* stringFire = nullptr; // Alternative fire effect for strings
+// New Generator-Effect-Renderer Architecture
+Generator* currentGenerator = nullptr;
+Effect* currentEffect = nullptr;
+EffectRenderer* renderer = nullptr;
+EffectMatrix* effectMatrix = nullptr;
 
 AdaptiveMic mic;
-SerialConsole console(fire, leds);
-BatteryMonitor battery;
-IMUHelper imu;
+// TODO: Uncomment when these are updated for new architecture
+// SerialConsole console;
+// BatteryMonitor battery;
+// IMUHelper imu;
 ConfigStorage configStorage;
 
 uint32_t lastMs = 0;
@@ -65,7 +68,7 @@ void clearAllLEDs() {
   }
 }
 
-// Helper functions for fire effects
+// Helper functions for new Generator-Effect-Renderer architecture
 void updateFireEffect(float energy, float hit) {
   static uint32_t lastDebug = 0;
   if (millis() - lastDebug > 5000) {  // Debug every 5 seconds
@@ -74,31 +77,29 @@ void updateFireEffect(float energy, float hit) {
     Serial.print(energy);
     Serial.print(F(", hit: "));
     Serial.print(hit);
-    Serial.print(F(", using: "));
-    Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
   }
 
-  if (config.matrix.fireType == STRING_FIRE && stringFire) {
-    stringFire->update(energy, hit);
-  } else {
-    fire.update(energy, hit);
+  // Update generator with audio energy and impact
+  if (currentGenerator) {
+    // TODO: Add generator update methods for audio input
+    currentGenerator->update();
   }
 }
 
 void showFireEffect() {
-  if (config.matrix.fireType == STRING_FIRE && stringFire) {
-    stringFire->show();
-  } else {
-    fire.show();
+  // Generate -> Effect -> Render -> Display pipeline
+  if (currentGenerator && currentEffect && renderer && effectMatrix) {
+    currentGenerator->generate(effectMatrix);
+    currentEffect->apply(effectMatrix);
+    renderer->render(effectMatrix, &leds);
+    leds.show();
   }
 }
 
 void renderFireEffect() {
-  if (config.matrix.fireType == STRING_FIRE && stringFire) {
-    stringFire->render();
-  } else {
-    fire.render();
-  }
+  // In the new architecture, rendering is handled by showFireEffect()
+  // This function can be used for additional processing if needed
+  showFireEffect();
 }
 
 void setup() {
