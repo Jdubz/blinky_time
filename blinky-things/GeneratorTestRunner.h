@@ -1,5 +1,5 @@
 #pragma once
-#include "generators/fire/FireTestRunner.h"
+#include "FireTestRunner.h"
 
 /**
  * GeneratorTestRunner - Main test coordinator for all generator types

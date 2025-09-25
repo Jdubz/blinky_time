@@ -1,6 +1,6 @@
 #pragma once
-#include "../Effect.h"
-#include "../EffectMatrix.h"
+#include "Effect.h"
+#include "EffectMatrix.h"
 
 /**
  * HueRotationEffect - Rotates the hue of all colors in the matrix

@@ -1,5 +1,5 @@
 #include "FireGenerator.h"
-#include "../../TotemDefaults.h"
+#include "TotemDefaults.h"
 #include <Arduino.h>
 
 FireGenerator::FireGenerator() 

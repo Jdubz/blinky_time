@@ -1,6 +1,6 @@
 #pragma once
 #include "FireGenerator.h"
-#include "../../EffectMatrix.h"
+#include "EffectMatrix.h"
 
 /**
  * FireGeneratorTest - Comprehensive test suite for FireGenerator
