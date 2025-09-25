@@ -1,3 +1,21 @@
+/**
+ * Blinky Time - LED Fire Effect Controller
+ * 
+ * A sophisticated fire effect system for wearable LED installations.
+ * Supports multiple device configurations with realistic fire simulation,
+ * audio reactivity, battery management, and motion sensing.
+ * 
+ * Hardware: nRF52840 XIAO Sense with WS2812B LED strips
+ * Author: Blinky Time Project Contributors
+ * License: Creative Commons Attribution-ShareAlike 4.0 International
+ * Repository: https://github.com/Jdubz/blinky_time
+ * 
+ * Device Types:
+ * - Hat: 89 LEDs in string configuration
+ * - Tube Light: 60 LEDs in 4x15 zigzag matrix
+ * - Bucket Totem: 128 LEDs in 16x8 matrix
+ */
+
 #include <Adafruit_NeoPixel.h>
 #include "AdaptiveMic.h"
 #include "FireEffect.h"
@@ -16,7 +34,7 @@
 // 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)  
 // 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
 #ifndef DEVICE_TYPE
-#define DEVICE_TYPE 1  // Default to Hat
+#define DEVICE_TYPE 2  // Set to Tube Light for testing
 #endif
 
 #if DEVICE_TYPE == 1

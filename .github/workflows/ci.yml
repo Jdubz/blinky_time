@@ -1,0 +1,182 @@
+name: Blinky Time CI/CD
+
+on:
+  push:
+    branches: [ master, develop ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  compilation-tests:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        device-type: [1, 2, 3]  # Hat, Tube Light, Bucket Totem
+        
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v1
+      
+    - name: Install Arduino cores and libraries
+      run: |
+        arduino-cli core update-index
+        arduino-cli core install Seeeduino:nrf52
+        arduino-cli lib install "Adafruit NeoPixel"
+        
+    - name: Set device type
+      run: |
+        sed -i 's/#define DEVICE_TYPE [0-9]/#define DEVICE_TYPE ${{ matrix.device-type }}/' blinky-things/blinky-things.ino
+        
+    - name: Compile sketch
+      run: |
+        arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things/
+        
+    - name: Check sketch size
+      run: |
+        size_output=$(arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things/ --output-dir /tmp/build 2>&1)
+        echo "Sketch size for device type ${{ matrix.device-type }}:"
+        echo "$size_output" | grep -E "(Sketch uses|Global variables use)"
+
+  code-quality:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        
+    - name: Install dependencies
+      run: |
+        pip install pyserial
+        
+    - name: Check code formatting
+      run: |
+        echo "Checking for common code issues..."
+        # Check for trailing whitespace
+        if grep -r "[ \t]$" blinky-things/ --include="*.cpp" --include="*.h" --include="*.ino"; then
+          echo "❌ Found trailing whitespace"
+          exit 1
+        fi
+        echo "✅ No trailing whitespace found"
+        
+    - name: Validate configurations
+      run: |
+        echo "Validating device configurations..."
+        python tests/validate_configs.py
+        
+    - name: Run static analysis
+      run: |
+        echo "Running basic static analysis..."
+        # Check for common Arduino issues
+        if grep -r "String(" blinky-things/ --include="*.cpp" --include="*.ino"; then
+          echo "⚠️  Warning: String objects found - consider using char arrays for memory efficiency"
+        fi
+        echo "✅ Static analysis complete"
+
+  documentation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Check documentation
+      run: |
+        echo "Checking documentation completeness..."
+        
+        # Check required files exist
+        required_files=("README.md" "LICENSE" "CONTRIBUTING.md")
+        for file in "${required_files[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "❌ Missing required file: $file"
+            exit 1
+          fi
+        done
+        echo "✅ All required documentation files present"
+        
+        # Check README has basic sections
+        if ! grep -q "## Features\|## Installation\|## Usage" README.md; then
+          echo "❌ README.md missing required sections"
+          exit 1
+        fi
+        echo "✅ README.md has required sections"
+
+  release-check:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    
+    needs: [compilation-tests, code-quality, documentation]
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Check version consistency
+      run: |
+        echo "Checking version consistency..."
+        
+        # Extract version from main sketch if it exists
+        if grep -q "Version:" blinky-things/blinky-things.ino; then
+          sketch_version=$(grep "Version:" blinky-things/blinky-things.ino | head -1 | sed 's/.*Version: //' | sed 's/ .*//')
+          echo "Sketch version: $sketch_version"
+        fi
+        
+        echo "✅ Version check complete"
+        
+    - name: Generate release notes
+      if: github.event_name == 'push'
+      run: |
+        echo "## 🔥 Blinky Time Release" > release-notes.md
+        echo "" >> release-notes.md
+        echo "**Compilation Status:**" >> release-notes.md
+        echo "- ✅ Hat configuration" >> release-notes.md
+        echo "- ✅ Tube Light configuration" >> release-notes.md  
+        echo "- ✅ Bucket Totem configuration" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "**Changes in this release:**" >> release-notes.md
+        git log --pretty=format:"- %s" --since="7 days ago" >> release-notes.md
+        
+    - name: Upload release artifacts
+      uses: actions/upload-artifact@v3
+      if: github.event_name == 'push'
+      with:
+        name: release-notes
+        path: release-notes.md
+
+  hardware-simulation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v1
+      
+    - name: Install dependencies
+      run: |
+        arduino-cli core update-index
+        arduino-cli core install Seeeduino:nrf52
+        arduino-cli lib install "Adafruit NeoPixel"
+        
+    - name: Compile test runner
+      run: |
+        arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense tests/
+        
+    - name: Validate test framework
+      run: |
+        echo "Validating test framework compilation..."
+        if [ -f "tests/test_runner.ino" ]; then
+          echo "✅ Test runner found"
+        else
+          echo "❌ Test runner missing"
+          exit 1
+        fi

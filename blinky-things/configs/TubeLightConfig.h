@@ -18,7 +18,7 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
     .height = 15,
     .ledPin = D10,
     .brightness = 120,
-    .ledType = NEO_RGB + NEO_KHZ800,
+    .ledType = NEO_GRB + NEO_KHZ800,  // CRITICAL: NEO_GRB for nRF52840 XIAO Sense
     .orientation = VERTICAL,
     .fireType = MATRIX_FIRE
   },

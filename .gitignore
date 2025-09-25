@@ -1,2 +1,133 @@
-.DS_Store
+# ===========================================
+# Blinky Time - Professional .gitignore
+# ===========================================
 
+# Build Artifacts
+build-*/
+*.elf
+*.hex
+*.map
+*.zip
+*.bin
+*.uf2
+
+# Arduino IDE Build Files
+build.options.json
+compile_commands.json
+includes.cache
+libraries.cache
+.arduino15/
+.vscode/c_cpp_properties.json
+
+# Arduino CLI Build Directory
+build/
+
+# Compilation Artifacts
+*.o
+*.a
+*.so
+*.dll
+*.exe
+
+# Platform-Specific Build Folders
+# Arduino IDE
+.arduino/
+# VS Code Arduino Extension
+.vscode/arduino.json
+.vscode/launch.json
+
+# Temporary Files
+*.tmp
+*.temp
+*~
+*.bak
+*.swp
+*.swo
+.cache/
+
+# IDE and Editor Files
+.vscode/
+.idea/
+*.sublime-*
+*.code-workspace
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Python (for test automation)
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Test Reports and Artifacts
+test_report.html
+*.log
+test-results/
+coverage/
+
+# Scratch and Experimental Code
+scratch/
+experimental/
+temp/
+debug/
+archive-local/
+
+# Hardware-Specific Files
+# Serial capture files
+*.cap
+*.pcap
+
+# Documentation Build Artifacts
+_build/
+.doctrees/
+
+# Node.js (if using any JS tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Package Management
+.pioenvs/
+.piolibdeps/
+.pio/
+
+# Personal Configuration
+config.local.*
+secrets.*
+*.key
+*.pem
+
+# Backup Files
+*.backup
+*_backup.*
+*.orig
+
+# ===========================================
+# Project-Specific Ignores
+# ===========================================
+
+# Hardware test recordings
+recordings/
+captures/
+
+# Personal hardware configurations
+my-config/
+local-config/
+
+# Development database files
+*.db
+*.sqlite
+*.sqlite3
