@@ -18,17 +18,7 @@
  */
 
 #include <Adafruit_NeoPixel.h>
-#include "BlinkyArchitecture.h"  // Includes all new architecture components
-#include "AdaptiveMic.h"
-#include "FireEffect.h"           // Legacy fire effect for device compatibility
-#include "StringFireEffect.h"     // Legacy string fire effect
-#include "SerialConsole.h"
-#include "BatteryMonitor.h"
-#include "IMUHelper.h"
-#include "TotemDefaults.h"
-#include "Globals.h"
-#include "Constants.h"
-#include "ConfigStorage.h"
+#include "BlinkyArchitecture.h"  // Includes all architecture components and config
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:

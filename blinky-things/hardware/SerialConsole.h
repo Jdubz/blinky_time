@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
 #include "FireEffect.h"
-#include "Globals.h"
+#include "../config/Globals.h"
 
 // Forward declarations to avoid circular includes
 class ConfigStorage;

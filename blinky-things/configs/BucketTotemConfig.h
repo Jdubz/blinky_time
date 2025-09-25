@@ -1,6 +1,6 @@
 #pragma once
 #include "DeviceConfig.h"
-#include "../TotemDefaults.h"
+#include "../config/TotemDefaults.h"
 
 // Bucket Totem: 16x8 horizontal matrix (128 LEDs total)
 // Physical orientation: HORIZONTAL (standard row-major layout)

@@ -1,7 +1,7 @@
 #pragma once
 #include <Adafruit_NeoPixel.h>
-#include "EffectMatrix.h"
-#include "LEDMapper.h"
+#include "../core/EffectMatrix.h"
+#include "../hardware/LEDMapper.h"
 
 /**
  * EffectRenderer - Renders EffectMatrix to physical LEDs

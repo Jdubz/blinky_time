@@ -1,6 +1,6 @@
 #pragma once
 #include "DeviceConfig.h"
-#include "../TotemDefaults.h"
+#include "../config/TotemDefaults.h"
 
 // Tube Light: 4x15 zigzag matrix (60 LEDs total)
 // Physical orientation: VERTICAL (strip runs top to bottom)

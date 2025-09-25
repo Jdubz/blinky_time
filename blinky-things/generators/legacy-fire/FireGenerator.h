@@ -1,6 +1,6 @@
 #pragma once
-#include "../../Generator.h"
-#include "../../EffectMatrix.h"
+#include "../../core/Generator.h"
+#include "../../core/EffectMatrix.h"
 
 /**
  * FireGenerator - Fire simulation pattern generator

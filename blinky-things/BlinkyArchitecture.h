@@ -14,13 +14,21 @@
  * Generator -> Effects -> Renderer -> Hardware
  */
 
+// Configuration and utilities
+#include "config/Constants.h"
+#include "config/Globals.h"
+#include "config/TotemDefaults.h"
+#include "config/ConfigStorage.h"
+
 // Core interfaces
-#include "Generator.h"
-#include "Effect.h"
-#include "EffectMatrix.h"
+#include "core/Generator.h"
+#include "core/Effect.h"
+#include "core/EffectMatrix.h"
 
 // Generators
-#include "generators/fire/FireGenerator.h"
+#include "generators/legacy-fire/FireGenerator.h"  // Legacy fire generator
+#include "generators/matrix-fire/MatrixFireGenerator.h"
+#include "generators/string-fire/StringFireGenerator.h"
 
 // Effects
 #include "effects/hue-rotation/HueRotationEffect.h"
