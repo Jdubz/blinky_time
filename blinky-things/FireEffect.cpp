@@ -196,7 +196,7 @@ uint32_t FireEffect::heatToColorRGB(float h) const {
         b = (uint8_t)(50 + t * 205.0f + 0.5f);   // 50->255
     }
 
-    return leds.Color(g, r, b);
+    return leds.Color(r, g, b);
 }
 // Note: LED matrix is 16x8 around a cylinder; your physical mapping may differ.
 // Here we assume x grows left→right, y grows top→bottom.

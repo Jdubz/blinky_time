@@ -9,6 +9,7 @@
 // Forward declarations to avoid circular includes
 class ConfigStorage;
 class StringFireEffect;
+class EffectTestRunner;
 
 class SerialConsole {
 public:
@@ -56,6 +57,7 @@ private:
     Adafruit_NeoPixel &leds;
     ConfigStorage* configStorage_;        // For saving parameters to EEPROM
     StringFireEffect* stringFire_;        // For string fire mode parameters
+    EffectTestRunner* testRunner_;        // For running effect tests
 
     // ---- Debug systems ----
     bool micDebugEnabled = false;         // toggled by "mic debug on/off"

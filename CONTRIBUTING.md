@@ -23,13 +23,23 @@ By participating in this project, you agree to maintain a respectful and inclusi
    git clone https://github.com/YOUR_USERNAME/blinky_time.git
    cd blinky_time
    ```
-3. **Create a branch** for your changes:
+3. **Set up branches** (run once):
    ```bash
+   # Windows
+   scripts/setup-branches.ps1
+   
+   # macOS/Linux  
+   bash scripts/setup-branches.sh
+   ```
+4. **Create a feature branch** from develop:
+   ```bash
+   git checkout develop
+   git pull origin develop
    git checkout -b feature/your-feature-name
    ```
-4. **Make your changes** and test thoroughly
-5. **Commit and push** your changes
-6. **Submit a pull request**
+5. **Make your changes** and test thoroughly
+6. **Commit and push** your changes
+7. **Submit a pull request** to the appropriate branch (see Workflow below)
 
 ## 📝 Contribution Types
 
@@ -104,7 +114,52 @@ When contributing code changes:
 - [ ] Serial console commands respond correctly
 - [ ] LED colors and brightness are accurate
 
-## 📋 Pull Request Process
+## � Branching Workflow
+
+We use a three-branch workflow for organized development:
+
+### Branch Types
+
+- **`master`** - Production-ready code, automatically releases
+- **`staging`** - Integration testing, pre-releases for validation  
+- **`develop`** - Active development, feature integration
+- **`feature/xyz`** - Individual features and bug fixes
+
+### Contribution Workflow
+
+1. **Feature Development**:
+   ```bash
+   git checkout develop
+   git pull origin develop
+   git checkout -b feature/your-feature
+   # Make changes, commit, push
+   # Create PR to develop
+   ```
+
+2. **Integration Testing**:
+   ```bash
+   # After feature is merged to develop
+   git checkout staging
+   git merge develop  # or create PR
+   # Automatic staging release created
+   # Test staging release on hardware
+   ```
+
+3. **Production Release**:
+   ```bash
+   # When staging is validated
+   # Create PR from staging to master
+   # After merge: automatic production release
+   ```
+
+### PR Target Guidelines
+
+- **Feature/Bug PRs** → `develop` branch
+- **Integration PRs** → `staging` branch (from develop)
+- **Release PRs** → `master` branch (from staging only)
+- **Hotfix PRs** → `master` branch (emergency fixes)
+
+## �📋 Pull Request Process
 
 ### Before Submitting
 

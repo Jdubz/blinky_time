@@ -1,5 +1,6 @@
 /**
  * Blinky Time - LED Fire Effect Controller
+ * Version: 1.0.0
  * 
  * A sophisticated fire effect system for wearable LED installations.
  * Supports multiple device configurations with realistic fire simulation,

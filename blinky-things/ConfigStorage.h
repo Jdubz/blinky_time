@@ -5,6 +5,13 @@
 #include "StringFireEffect.h"
 #include "AdaptiveMic.h"
 
+// Include EEPROM library for platforms that support it (not needed for nRF52 variants)
+#if !defined(ARDUINO_ARCH_NRF52) && !defined(NRF52) && !defined(TARGET_NAME) && !defined(MBED_CONF_TARGET_NAME)
+  #if defined(ESP32) || defined(ARDUINO_ARCH_AVR)
+    #include <EEPROM.h>
+  #endif
+#endif
+
 // Simple configuration storage that works across platforms
 // On nRF52: Parameters reset to defaults on each boot (no persistence yet)
 // On ESP32/AVR: Uses EEPROM for persistence
@@ -118,20 +125,6 @@ private:
     void copyStringFireParamsTo(StringFireParams& params) const;
     void copyStringFireParamsFrom(const StringFireParams& params);
     
-#ifndef ARDUINO_ARCH_NRF52
-    // EEPROM access helpers for AVR/ESP32 platforms
-    template<typename T>
-    void writeEEPROM(uint16_t address, const T& data) {
-        EEPROM.put(address, data);
-    }
-    
-    template<typename T>
-    void readEEPROM(uint16_t address, T& data) {
-        EEPROM.get(address, data);
-    }
-    
-    void commitEEPROM() {
-        EEPROM.commit(); // For ESP32 - no-op on AVR
-    }
-#endif
+    // Note: EEPROM functionality for ESP32/AVR platforms will be implemented when needed
+    // Currently all platforms use defaults-only mode
 };

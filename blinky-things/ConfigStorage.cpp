@@ -6,7 +6,21 @@ ConfigStorage::ConfigStorage() : valid_(false), needsSave_(false) {
 }
 
 void ConfigStorage::begin() {
-#ifdef ARDUINO_ARCH_NRF52
+    // Debug: Print detected platform macros
+    #ifdef ARDUINO_ARCH_NRF52
+    Serial.println(F("[DEBUG] ARDUINO_ARCH_NRF52 defined"));
+    #endif
+    #ifdef NRF52
+    Serial.println(F("[DEBUG] NRF52 defined"));
+    #endif
+    #ifdef TARGET_NAME
+    Serial.println(F("[DEBUG] TARGET_NAME defined"));
+    #endif
+    #ifdef MBED_CONF_TARGET_NAME
+    Serial.println(F("[DEBUG] MBED_CONF_TARGET_NAME defined"));
+    #endif
+    
+#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     Serial.println(F("[CONFIG] nRF52 detected - using defaults only (no persistence yet)"));
     loadDefaults();
     valid_ = true;
@@ -70,13 +84,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     copyFireParamsFrom(fireParams);
     copyMicParamsFrom(mic);
     
-    // For nRF52: Just keep in memory for now
+    // For nRF52 (all variants): Just keep in memory for now
     // TODO: Add persistent storage implementation
     
     valid_ = true;
     needsSave_ = false;
     
-    Serial.println(F("[CONFIG] Configuration saved (memory only on nRF52)"));
+    Serial.println(F("[CONFIG] Configuration saved (memory only on nRF52 variants)"));
 }
 
 // StringFireEffect overloads
@@ -96,13 +110,13 @@ void ConfigStorage::saveConfiguration(const StringFireParams& stringFireParams, 
     copyStringFireParamsFrom(stringFireParams);
     copyMicParamsFrom(mic);
     
-    // For nRF52: Parameters are now updated in memory, persistence would be a future enhancement
+    // For nRF52 variants: Parameters are now updated in memory, persistence would be a future enhancement
     // For other platforms: EEPROM saving would be implemented here
     
     valid_ = true;
     needsSave_ = false;
     
-#ifdef ARDUINO_ARCH_NRF52
+#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     Serial.println(F("[CONFIG] Configuration updated in memory (StringFire)"));
 #else
     Serial.println(F("[CONFIG] Configuration saved to EEPROM (StringFire)"));
@@ -204,7 +218,7 @@ void ConfigStorage::printStatus() const {
     Serial.print(F("Device Type: ")); Serial.println(configData_.header.deviceType);
     Serial.print(F("Version: ")); Serial.println(configData_.header.version);
     Serial.print(F("Storage: ")); 
-#ifdef ARDUINO_ARCH_NRF52
+#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     Serial.println(F("Memory only (no persistence)"));
 #else
     Serial.println(F("EEPROM"));

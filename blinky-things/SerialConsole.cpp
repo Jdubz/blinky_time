@@ -6,6 +6,7 @@
 #include "configs/DeviceConfig.h"
 #include "ConfigStorage.h"
 #include "StringFireEffect.h"
+#include "EffectTestRunner.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;
@@ -13,13 +14,18 @@ extern IMUHelper imu;
 extern const DeviceConfig& config;
 
 SerialConsole::SerialConsole(FireEffect &f, Adafruit_NeoPixel &l)
-    : fire(f), leds(l), configStorage_(nullptr), stringFire_(nullptr) {}
+    : fire(f), leds(l), configStorage_(nullptr), stringFire_(nullptr), testRunner_(nullptr) {}
 
 void SerialConsole::begin() {
     Serial.begin(115200);
     unsigned long start = millis();
     while (!Serial && (millis() - start < 2000)) { delay(10); }
     Serial.println(F("Serial console ready. Type 'help' for commands."));
+    
+    // Initialize test runner lazily when first needed
+    if (!testRunner_) {
+        testRunner_ = new EffectTestRunner();
+    }
 }
 
 void SerialConsole::update() {
@@ -115,6 +121,12 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F("  config status              - Show EEPROM configuration status"));
         Serial.println(F("  config factory             - Reset to factory defaults"));
         Serial.println(F("  config device <1-3>        - Set device type (1=Hat, 2=Tube, 3=Bucket)"));
+        Serial.println(F(""));
+        Serial.println(F("EFFECT TESTING:"));
+        Serial.println(F("  test all                   - Run all effect tests"));
+        Serial.println(F("  test fire                  - Test fire effect color generation"));
+        Serial.println(F("  test quick                 - Quick validation test"));
+        Serial.println(F("  test colors                - Test color palette generation"));
     }
     else if (strcmp(cmd, "show") == 0) {
         printAll();
@@ -559,6 +571,15 @@ void SerialConsole::handleCommand(const char *cmd) {
             }
         } else {
             Serial.println(F("ERROR: Device type must be 1, 2, or 3"));
+        }
+    }
+    
+    // --- Effect testing commands ---
+    else if (strncmp(cmd, "test ", 5) == 0) {
+        if (testRunner_) {
+            testRunner_->handleTestCommand(cmd);
+        } else {
+            Serial.println(F("ERROR: Test runner not available"));
         }
     }
 
