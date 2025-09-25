@@ -28,7 +28,7 @@
 
 // === Git Information ===
 #define BLINKY_GIT_BRANCH "staging"
-#define BLINKY_GIT_COMMIT "89e0c47"
+#define BLINKY_GIT_COMMIT "96e6954"
 
 // === Version Display Strings ===
 #define BLINKY_FULL_VERSION "Blinky Time v" BLINKY_VERSION_STRING " (" BLINKY_GIT_BRANCH ")"
