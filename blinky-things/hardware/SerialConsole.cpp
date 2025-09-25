@@ -1,12 +1,11 @@
 #include "SerialConsole.h"
-#include "TotemDefaults.h"
+#include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
 #include "IMUHelper.h"
-#include "configs/DeviceConfig.h"
-#include "ConfigStorage.h"
-#include "StringFireEffect.h"
-#include "tests/GeneratorTestRunner.h"
+#include "../devices/DeviceConfig.h"
+#include "../config/ConfigStorage.h"
+#include "../tests/GeneratorTestRunner.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;

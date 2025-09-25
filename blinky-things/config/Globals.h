@@ -1,6 +1,6 @@
 #pragma once
-#include "LEDMapper.h"
-#include "configs/DeviceConfig.h"
+#include "../hardware/LEDMapper.h"
+#include "../devices/DeviceConfig.h"
 
 // Global LED mapper instance
 extern LEDMapper ledMapper;

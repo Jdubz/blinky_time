@@ -1,5 +1,5 @@
 #pragma once
-#include "configs/DeviceConfig.h"
+#include "../devices/DeviceConfig.h"
 #include <new>
 
 class LEDMapper {

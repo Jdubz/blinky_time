@@ -81,7 +81,7 @@ We welcome various types of contributions:
 
 - **Main sketch**: `blinky-things/blinky-things.ino`
 - **Libraries**: Separate `.cpp/.h` files in main directory
-- **Configurations**: Device-specific configs in `configs/` directory
+- **Configurations**: Device-specific configs in `devices/` directory
 - **Documentation**: Additional docs in `docs/` directory
 
 ### Commit Messages

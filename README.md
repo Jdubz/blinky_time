@@ -62,7 +62,7 @@ blinky_time/
 │   ├── effects/            # Visual effects (hue rotation, etc.)
 │   ├── renderers/          # Hardware output mapping
 │   ├── tests/              # Component test coordination
-│   ├── configs/            # Device-specific configurations
+│   ├── devices/            # Device-specific configurations
 │   ├── AdaptiveMic.cpp/.h  # Audio processing
 │   ├── FireEffect.cpp/.h   # Legacy fire simulation
 │   ├── BatteryMonitor.cpp/.h # Power management
@@ -105,7 +105,7 @@ Choose your hardware configuration in `blinky-things.ino`:
 ```
 
 ### Hardware-Specific Settings
-Each device type has its own configuration file in `configs/`:
+Each device type has its own configuration file in `devices/`:
 - `HatConfig.h` - Hat installation settings
 - `TubeLightConfig.h` - Tube light parameters  
 - `BucketTotemConfig.h` - Bucket totem configuration
@@ -154,7 +154,7 @@ battery     - Battery status and settings
 ```
 
 ### Adding New Device Types
-1. Create new config file in `configs/`
+1. Create new config file in `devices/`
 2. Add device type constant in `blinky-things.ino`
 3. Implement device-specific LED mapping if needed
 4. Test and validate fire effect parameters

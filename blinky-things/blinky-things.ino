@@ -30,13 +30,13 @@
 #endif
 
 #if DEVICE_TYPE == 1
-#include "configs/HatConfig.h"
+#include "devices/HatConfig.h"
 const DeviceConfig& config = HAT_CONFIG;
 #elif DEVICE_TYPE == 2
-#include "configs/TubeLightConfig.h"  
+#include "devices/TubeLightConfig.h"  
 const DeviceConfig& config = TUBE_LIGHT_CONFIG;
 #elif DEVICE_TYPE == 3
-#include "configs/BucketTotemConfig.h"
+#include "devices/BucketTotemConfig.h"
 const DeviceConfig& config = BUCKET_TOTEM_CONFIG;
 #else
 #error "Invalid DEVICE_TYPE. Use 1=Hat, 2=TubeLight, 3=BucketTotem"

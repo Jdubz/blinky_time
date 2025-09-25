@@ -11,7 +11,7 @@ blinky-things/
 ├── Effect.h                       # Base effect interface  
 ├── EffectMatrix.h/cpp             # Visual buffer/matrix
 ├── SerialConsole.h/cpp            # Serial command interface
-├── configs/                       # Device configurations
+├── devices/                       # Device configurations
 ├── generators/                    # Pattern generators
 │   └── fire/                      # Fire generator
 │       ├── FireGenerator.h/cpp    # Fire pattern implementation
