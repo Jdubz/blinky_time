@@ -1,15 +1,17 @@
 #pragma once
-#include "VisualEffect.h"
-#include "EffectMatrix.h"
+#include "../Generator.h"
+#include "../EffectMatrix.h"
 
 /**
- * FireVisualEffect - Fire simulation visual effect
+ * FireGenerator - Fire simulation pattern generator
  * 
  * Generates realistic fire animation using heat diffusion simulation.
- * This is a refactored version that outputs to EffectMatrix instead
- * of directly to LEDs, enabling easier testing and effect composition.
+ * This creates the base fire pattern that can then be modified by effects
+ * (hue rotation, brightness modulation, etc.) before rendering.
+ * 
+ * Architecture: FireGenerator -> Effects -> Renderer -> Hardware
  */
-class FireVisualEffect : public VisualEffect {
+class FireGenerator : public Generator {
 public:
     // Fire parameters (same as original FireEffect)
     struct FireParams {
@@ -31,6 +33,8 @@ private:
     int height_;
     float* heat_;
     unsigned long lastUpdateMs_;
+    float currentEnergy_;
+    float currentHit_;
     
     // Helper functions
     float& getHeatRef(int x, int y);
@@ -40,18 +44,21 @@ private:
     int wrapY(int y) const;
     
 public:
-    FireVisualEffect();
-    virtual ~FireVisualEffect();
+    FireGenerator();
+    virtual ~FireGenerator();
     
-    // VisualEffect interface
+    // Generator interface
     virtual void begin(int width, int height) override;
-    virtual void update(float energy, float hit) override;
-    virtual void render(EffectMatrix& matrix) override;
-    virtual void restoreDefaults() override;
+    virtual void generate(EffectMatrix* matrix) override;
+    virtual void update() override;
     virtual const char* getName() const override { return "Fire"; }
+    
+    // Audio input for fire dynamics
+    void setAudioInput(float energy, float hit);
     
     // Testing helpers
     void setHeat(int x, int y, float heat);
     float getHeat(int x, int y) const;
     void clearHeat();
+    void restoreDefaults();
 };
