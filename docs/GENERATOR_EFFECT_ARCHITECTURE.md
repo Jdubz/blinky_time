@@ -30,28 +30,30 @@ FireGenerator -> HueRotationEffect -> EffectRenderer -> LEDs
 ## 📁 File Organization
 
 ### Directory Structure
-```
+
+**Arduino IDE Compatible (Flat Structure):**
+
+```text
 blinky-things/
 ├── Generator.h                    # Base generator interface
 ├── Effect.h                       # Base effect interface
 ├── EffectMatrix.h/cpp             # Shared matrix buffer
 ├── GeneratorTestRunner.h/cpp      # Main test coordinator
-├── generators/
-│   └── fire/
-│       ├── FireGenerator.h/cpp    # Fire pattern generator
-│       ├── FireGeneratorTest.h/cpp
-│       └── FireTestRunner.h/cpp
-├── effects/
-│   └── HueRotationEffect.h/cpp    # Color hue rotation effect
-└── renderers/
-    └── EffectRenderer.h/cpp       # Hardware mapping renderer
+├── FireGenerator.h/cpp            # Fire pattern generator
+├── FireGeneratorTest.h/cpp        # Fire generator tests
+├── FireTestRunner.h/cpp           # Fire test runner
+├── HueRotationEffect.h/cpp        # Color hue rotation effect
+└── EffectRenderer.h/cpp           # Hardware mapping renderer
 ```
 
-### Moved Files
-- `FireVisualEffect.h/cpp` → `generators/fire/FireGenerator.h/cpp`
-- `FireEffectTest.h/cpp` → `generators/fire/FireGeneratorTest.h/cpp`
+**Note**: Files are organized in a flat structure for Arduino IDE compatibility. Logical organization is maintained through consistent naming prefixes (Fire*, Hue*, Effect*).
+
+### File Migrations
+
+- `FireVisualEffect.h/cpp` → `FireGenerator.h/cpp`
+- `FireEffectTest.h/cpp` → `FireGeneratorTest.h/cpp`
 - `EffectTestRunner.h/cpp` → `GeneratorTestRunner.h/cpp`
-- `EffectRenderer.h/cpp` → `renderers/EffectRenderer.h/cpp`
+- Added: `HueRotationEffect.h/cpp`, `Generator.h`, `Effect.h`
 
 ## 🔧 Base Interfaces
 
