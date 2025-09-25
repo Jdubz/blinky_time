@@ -167,9 +167,10 @@ For additional development resources, check the [comprehensive documentation](do
 
 ### Development Setup
 1. Fork the repository
-2. Create a feature branch
+2. Work on `staging` branch or create feature branches from `staging`
 3. Test your changes on hardware
-4. Submit a pull request with detailed description
+4. Submit a pull request to `staging` with detailed description
+5. Production releases are promoted from `staging` to `master`
 
 ## 📜 License
 
