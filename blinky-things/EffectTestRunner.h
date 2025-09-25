@@ -1,5 +1,5 @@
 #pragma once
-#include "tests/FireEffectTest.h"
+#include "FireEffectTest.h"
 
 /**
  * EffectTestRunner - Simple test runner for visual effects
