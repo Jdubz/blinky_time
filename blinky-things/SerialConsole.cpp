@@ -6,7 +6,7 @@
 #include "configs/DeviceConfig.h"
 #include "ConfigStorage.h"
 #include "StringFireEffect.h"
-#include "EffectTestRunner.h"
+#include "GeneratorTestRunner.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;
@@ -24,7 +24,7 @@ void SerialConsole::begin() {
     
     // Initialize test runner lazily when first needed
     if (!testRunner_) {
-        testRunner_ = new EffectTestRunner();
+        testRunner_ = new GeneratorTestRunner();
     }
 }
 
@@ -122,11 +122,12 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F("  config factory             - Reset to factory defaults"));
         Serial.println(F("  config device <1-3>        - Set device type (1=Hat, 2=Tube, 3=Bucket)"));
         Serial.println(F(""));
-        Serial.println(F("EFFECT TESTING:"));
-        Serial.println(F("  test all                   - Run all effect tests"));
-        Serial.println(F("  test fire                  - Test fire effect color generation"));
-        Serial.println(F("  test quick                 - Quick validation test"));
-        Serial.println(F("  test colors                - Test color palette generation"));
+        Serial.println(F("GENERATOR TESTING:"));
+        Serial.println(F("  generators                 - Run all generator tests"));
+        Serial.println(F("  gen fire                   - Test fire generator"));
+        Serial.println(F("  fire all                   - All fire-specific tests"));
+        Serial.println(F("  fire color                 - Test fire color generation"));
+        Serial.println(F("  gen help                   - Show all generator test commands"));
     }
     else if (strcmp(cmd, "show") == 0) {
         printAll();
@@ -574,12 +575,12 @@ void SerialConsole::handleCommand(const char *cmd) {
         }
     }
     
-    // --- Effect testing commands ---
-    else if (strncmp(cmd, "test ", 5) == 0) {
+    // --- Generator testing commands ---
+    else if (strncmp(cmd, "test ", 5) == 0 || strncmp(cmd, "gen ", 4) == 0 || strncmp(cmd, "fire ", 5) == 0) {
         if (testRunner_) {
-            testRunner_->handleTestCommand(cmd);
+            testRunner_->handleCommand(cmd);
         } else {
-            Serial.println(F("ERROR: Test runner not available"));
+            Serial.println(F("ERROR: Generator test runner not available"));
         }
     }
 
