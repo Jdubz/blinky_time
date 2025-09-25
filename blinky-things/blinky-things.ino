@@ -1,6 +1,5 @@
 /**
  * Blinky Time - LED Fire Effect Controller
- * Version: 1.0.0
  * 
  * A sophisticated fire effect system for wearable LED installations.
  * Supports multiple device configurations with realistic fire simulation,
@@ -19,6 +18,7 @@
 
 #include <Adafruit_NeoPixel.h>
 #include "BlinkyArchitecture.h"  // Includes all architecture components and config
+#include "core/Version.h"        // Version information from repository
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
@@ -26,7 +26,7 @@
 // 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)  
 // 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
 #ifndef DEVICE_TYPE
-#define DEVICE_TYPE 3  // Set to Tube Light for testing
+#define DEVICE_TYPE 2  // Set to Tube Light for testing
 #endif
 
 #if DEVICE_TYPE == 1
@@ -105,6 +105,13 @@ void renderFireEffect() {
 void setup() {
   Serial.begin(config.serial.baudRate);
   while (!Serial && millis() < config.serial.initTimeoutMs) {}
+  
+  // Display version and device information
+  Serial.println(F("=== BLINKY TIME STARTUP ==="));
+  Serial.println(F(BLINKY_FULL_VERSION));
+  Serial.print(F("Build: ")); Serial.print(F(BLINKY_BUILD_DATE)); 
+  Serial.print(F(" ")); Serial.println(F(BLINKY_BUILD_TIME));
+  Serial.println();
   
   // Display active device configuration
   Serial.print(F("Starting device: "));

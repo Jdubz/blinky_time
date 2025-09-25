@@ -6,6 +6,7 @@
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../tests/GeneratorTestRunner.h"
+#include "../core/Version.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;
@@ -55,7 +56,7 @@ void SerialConsole::handleCommand(const char *cmd) {
 
     if (strcmp(cmd, "help") == 0) {
         Serial.println(F("=== FIRE TOTEM DEBUG CONSOLE ==="));
-        Serial.println(F("General: show, defaults"));
+        Serial.println(F("General: show, version, defaults"));
         Serial.println(F(""));
         Serial.println(F("FIRE ENGINE:"));
         Serial.println(F("  set cooling <0-255>        - Base cooling rate"));
@@ -127,9 +128,36 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F("  fire all                   - All fire-specific tests"));
         Serial.println(F("  fire color                 - Test fire color generation"));
         Serial.println(F("  gen help                   - Show all generator test commands"));
+        Serial.println(F(""));
+        Serial.println(F("VERSION UTILITIES:"));
+        Serial.println(F("  version check <M.m.p>      - Check if current version >= specified"));
+        Serial.println(F("  version compare <M.m.p>    - Compare current version to specified"));
     }
     else if (strcmp(cmd, "show") == 0) {
         printAll();
+    }
+    else if (strcmp(cmd, "version") == 0) {
+        Serial.println(F("=== VERSION INFORMATION ==="));
+        Serial.println(F(BLINKY_FULL_VERSION));
+        Serial.print(F("Semantic Version: ")); Serial.println(F(BLINKY_VERSION_STRING));
+        Serial.print(F("Version Number: ")); Serial.println(BLINKY_VERSION_NUMBER);
+        Serial.print(F("Components: ")); 
+        Serial.print(BLINKY_VERSION_MAJOR); Serial.print(F("."));
+        Serial.print(BLINKY_VERSION_MINOR); Serial.print(F("."));
+        Serial.println(BLINKY_VERSION_PATCH);
+        Serial.println();
+        Serial.print(F("Build: ")); Serial.println(F(BLINKY_BUILD_TIMESTAMP));
+        Serial.print(F("Git Branch: ")); Serial.println(F(BLINKY_GIT_BRANCH));
+        Serial.print(F("Git Commit: ")); Serial.println(F(BLINKY_GIT_COMMIT));
+        Serial.println();
+        Serial.print(F("Device Type: ")); Serial.println(DEVICE_TYPE);
+        Serial.print(F("Device Name: ")); Serial.println(config.deviceName);
+        Serial.println(F("Hardware: XIAO nRF52840 Sense"));
+        Serial.println();
+        Serial.println(F("Version Checks:"));
+        Serial.print(F("  >= 1.0.0: ")); Serial.println(BLINKY_VERSION_CHECK(1, 0, 0) ? F("YES") : F("NO"));
+        Serial.print(F("  >= 1.1.0: ")); Serial.println(BLINKY_VERSION_CHECK(1, 1, 0) ? F("YES") : F("NO"));
+        Serial.print(F("  >= 2.0.0: ")); Serial.println(BLINKY_VERSION_CHECK(2, 0, 0) ? F("YES") : F("NO"));
     }
     else if (strcmp(cmd, "defaults") == 0) {
         restoreDefaults();
@@ -571,6 +599,43 @@ void SerialConsole::handleCommand(const char *cmd) {
             }
         } else {
             Serial.println(F("ERROR: Device type must be 1, 2, or 3"));
+        }
+    }
+    
+    // --- Version utility commands ---
+    else if (strncmp(cmd, "version check ", 14) == 0) {
+        int major, minor, patch;
+        if (sscanf(cmd + 14, "%d.%d.%d", &major, &minor, &patch) == 3) {
+            bool result = BLINKY_VERSION_CHECK(major, minor, patch);
+            Serial.print(F("Version check ")); Serial.print(BLINKY_VERSION_STRING);
+            Serial.print(F(" >= ")); Serial.print(major); Serial.print(F(".")); 
+            Serial.print(minor); Serial.print(F(".")); Serial.print(patch);
+            Serial.print(F(" = ")); Serial.println(result ? F("TRUE") : F("FALSE"));
+        } else {
+            Serial.println(F("Usage: version check <major>.<minor>.<patch>"));
+        }
+    }
+    else if (strncmp(cmd, "version compare ", 16) == 0) {
+        int major, minor, patch;
+        if (sscanf(cmd + 16, "%d.%d.%d", &major, &minor, &patch) == 3) {
+            uint32_t otherVersion = major * 10000 + minor * 100 + patch;
+            uint32_t currentVersion = BLINKY_VERSION_NUMBER;
+            
+            Serial.print(F("Current: ")); Serial.print(BLINKY_VERSION_STRING);
+            Serial.print(F(" (")); Serial.print(currentVersion); Serial.println(F(")"));
+            Serial.print(F("Compare: ")); Serial.print(major); Serial.print(F("."));
+            Serial.print(minor); Serial.print(F(".")); Serial.print(patch);
+            Serial.print(F(" (")); Serial.print(otherVersion); Serial.println(F(")"));
+            
+            if (currentVersion > otherVersion) {
+                Serial.println(F("Result: NEWER"));
+            } else if (currentVersion < otherVersion) {
+                Serial.println(F("Result: OLDER"));
+            } else {
+                Serial.println(F("Result: EQUAL"));
+            }
+        } else {
+            Serial.println(F("Usage: version compare <major>.<minor>.<patch>"));
         }
     }
     
