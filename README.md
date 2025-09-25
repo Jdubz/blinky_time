@@ -57,23 +57,39 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 blinky_time/
 ├── blinky-things/           # Main Arduino sketch
 │   ├── blinky-things.ino   # Main sketch file
-│   ├── configs/            # Device-specific configurations
+│   ├── BlinkyArchitecture.h # Single include for all components
+│   ├── generators/         # Pattern generators (fire, etc.)
+│   ├── effects/            # Visual effects (hue rotation, etc.)
+│   ├── renderers/          # Hardware output mapping
+│   ├── tests/              # Component test coordination
+│   ├── devices/            # Device-specific configurations
 │   ├── AdaptiveMic.cpp/.h  # Audio processing
-│   ├── FireEffect.cpp/.h   # Fire simulation engine
+│   ├── FireEffect.cpp/.h   # Legacy fire simulation
 │   ├── BatteryMonitor.cpp/.h # Power management
 │   └── SerialConsole.cpp/.h # Debug interface
-├── tests/                  # Comprehensive test suite
+├── tests/                  # Project-wide test suite
 │   ├── BlinkyTest.h        # Custom test framework
 │   ├── test_runner.ino     # Hardware test runner
 │   ├── run_tests.py        # Automated test script
 │   └── unit/integration/   # Test categories
-├── docs/                   # Documentation
+├── docs/                   # 📚 Comprehensive documentation
 ├── examples/               # Example configurations
-├── scratch/                # Experimental code (git-ignored)
 ├── .github/workflows/      # CI/CD automation
 ├── LICENSE                 # Creative Commons BY-SA 4.0
 └── README.md              # This file
 ```
+
+## 📚 Documentation
+
+Comprehensive documentation is available in the [`docs/`](docs/) folder:
+
+**Quick Links:**
+- [📖 **Documentation Index**](docs/README.md) - Complete documentation overview
+- [🔧 **Hardware Guide**](docs/HARDWARE.md) - Supported devices and wiring
+- [🏗️ **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions
+- [🏛️ **Architecture Guide**](docs/GENERATOR_EFFECT_ARCHITECTURE.md) - Modern code architecture
+- [🔥 **Fire Settings**](docs/OPTIMAL_FIRE_SETTINGS.md) - Optimal configuration parameters
+- [🧪 **Testing Guide**](docs/TESTING_SUMMARY.md) - Test framework and procedures
 
 ## 🎛 Configuration
 
@@ -89,7 +105,7 @@ Choose your hardware configuration in `blinky-things.ino`:
 ```
 
 ### Hardware-Specific Settings
-Each device type has its own configuration file in `configs/`:
+Each device type has its own configuration file in `devices/`:
 - `HatConfig.h` - Hat installation settings
 - `TubeLightConfig.h` - Tube light parameters  
 - `BucketTotemConfig.h` - Bucket totem configuration
@@ -138,7 +154,7 @@ battery     - Battery status and settings
 ```
 
 ### Adding New Device Types
-1. Create new config file in `configs/`
+1. Create new config file in `devices/`
 2. Add device type constant in `blinky-things.ino`
 3. Implement device-specific LED mapping if needed
 4. Test and validate fire effect parameters
@@ -147,11 +163,14 @@ battery     - Battery status and settings
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
+For additional development resources, check the [comprehensive documentation](docs/).
+
 ### Development Setup
 1. Fork the repository
-2. Create a feature branch
+2. Work on `staging` branch or create feature branches from `staging`
 3. Test your changes on hardware
-4. Submit a pull request with detailed description
+4. Submit a pull request to `staging` with detailed description
+5. Production releases are promoted from `staging` to `master`
 
 ## 📜 License
 
