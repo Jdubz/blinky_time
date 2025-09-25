@@ -57,23 +57,39 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 blinky_time/
 ├── blinky-things/           # Main Arduino sketch
 │   ├── blinky-things.ino   # Main sketch file
+│   ├── BlinkyArchitecture.h # Single include for all components
+│   ├── generators/         # Pattern generators (fire, etc.)
+│   ├── effects/            # Visual effects (hue rotation, etc.)
+│   ├── renderers/          # Hardware output mapping
+│   ├── tests/              # Component test coordination
 │   ├── configs/            # Device-specific configurations
 │   ├── AdaptiveMic.cpp/.h  # Audio processing
-│   ├── FireEffect.cpp/.h   # Fire simulation engine
+│   ├── FireEffect.cpp/.h   # Legacy fire simulation
 │   ├── BatteryMonitor.cpp/.h # Power management
 │   └── SerialConsole.cpp/.h # Debug interface
-├── tests/                  # Comprehensive test suite
+├── tests/                  # Project-wide test suite
 │   ├── BlinkyTest.h        # Custom test framework
 │   ├── test_runner.ino     # Hardware test runner
 │   ├── run_tests.py        # Automated test script
 │   └── unit/integration/   # Test categories
-├── docs/                   # Documentation
+├── docs/                   # 📚 Comprehensive documentation
 ├── examples/               # Example configurations
-├── scratch/                # Experimental code (git-ignored)
 ├── .github/workflows/      # CI/CD automation
 ├── LICENSE                 # Creative Commons BY-SA 4.0
 └── README.md              # This file
 ```
+
+## 📚 Documentation
+
+Comprehensive documentation is available in the [`docs/`](docs/) folder:
+
+**Quick Links:**
+- [📖 **Documentation Index**](docs/README.md) - Complete documentation overview
+- [🔧 **Hardware Guide**](docs/HARDWARE.md) - Supported devices and wiring
+- [🏗️ **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions
+- [🏛️ **Architecture Guide**](docs/GENERATOR_EFFECT_ARCHITECTURE.md) - Modern code architecture
+- [🔥 **Fire Settings**](docs/OPTIMAL_FIRE_SETTINGS.md) - Optimal configuration parameters
+- [🧪 **Testing Guide**](docs/TESTING_SUMMARY.md) - Test framework and procedures
 
 ## 🎛 Configuration
 
@@ -146,6 +162,8 @@ battery     - Battery status and settings
 ## 🤝 Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+For additional development resources, check the [comprehensive documentation](docs/).
 
 ### Development Setup
 1. Fork the repository

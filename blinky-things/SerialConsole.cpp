@@ -6,7 +6,7 @@
 #include "configs/DeviceConfig.h"
 #include "ConfigStorage.h"
 #include "StringFireEffect.h"
-#include "GeneratorTestRunner.h"
+#include "tests/GeneratorTestRunner.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;
