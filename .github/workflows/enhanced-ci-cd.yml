@@ -64,10 +64,10 @@ jobs:
           exit 1
         fi
         
-        if [ -f "blinky-things/EffectTestRunner.h" ]; then
-          echo "✅ EffectTestRunner found"  
+        if [ -f "blinky-things/GeneratorTestRunner.h" ]; then
+          echo "✅ GeneratorTestRunner found"  
         else
-          echo "❌ EffectTestRunner missing"
+          echo "❌ GeneratorTestRunner missing"
           exit 1
         fi
 
