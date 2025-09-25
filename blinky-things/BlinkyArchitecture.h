@@ -36,6 +36,12 @@
 // Renderers
 #include "renderers/EffectRenderer.h"
 
+// Hardware components (temporarily commented out until updated for new architecture)
+#include "hardware/AdaptiveMic.h"
+// #include "hardware/SerialConsole.h"  // TODO: Update for new Generator architecture
+// #include "hardware/BatteryMonitor.h"  // TODO: Update for new Generator architecture  
+// #include "hardware/IMUHelper.h"       // TODO: Update for new Generator architecture
+
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING
 #include "tests/GeneratorTestRunner.h"

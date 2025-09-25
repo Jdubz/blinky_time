@@ -1,9 +1,10 @@
 #pragma once
 
 #include <Arduino.h>
-#include "FireEffect.h"
-#include "StringFireEffect.h"
-#include "AdaptiveMic.h"
+#include "../generators/legacy-fire/FireGenerator.h"
+#include "../generators/matrix-fire/MatrixFireGenerator.h"
+#include "../generators/string-fire/StringFireGenerator.h"
+#include "../hardware/AdaptiveMic.h"
 
 // Include EEPROM library for platforms that support it (not needed for nRF52 variants)
 #if !defined(ARDUINO_ARCH_NRF52) && !defined(NRF52) && !defined(TARGET_NAME) && !defined(MBED_CONF_TARGET_NAME)
@@ -85,7 +86,11 @@ public:
     void loadConfiguration(FireParams& fireParams, AdaptiveMic& mic);
     void saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic);
     
-    // Overloads for StringFireEffect
+    // Overloads for MatrixFireGenerator
+    void loadConfiguration(MatrixFireParams& matrixFireParams, AdaptiveMic& mic);
+    void saveConfiguration(const MatrixFireParams& matrixFireParams, const AdaptiveMic& mic);
+    
+    // Overloads for StringFireGenerator
     void loadConfiguration(StringFireParams& stringFireParams, AdaptiveMic& mic);
     void saveConfiguration(const StringFireParams& stringFireParams, const AdaptiveMic& mic);
     
@@ -100,7 +105,10 @@ public:
     void saveFireParam(const char* paramName, const FireParams& params);
     void saveMicParam(const char* paramName, const AdaptiveMic& mic);
     
-    // Overloads for StringFireEffect
+    // Overloads for MatrixFireGenerator
+    void saveMatrixFireParam(const char* paramName, const MatrixFireParams& params);
+    
+    // Overloads for StringFireGenerator
     void saveStringFireParam(const char* paramName, const StringFireParams& params);
     
     // Status and diagnostics
@@ -120,6 +128,10 @@ private:
     void copyFireParamsFrom(const FireParams& params);
     void copyMicParamsTo(AdaptiveMic& mic) const;
     void copyMicParamsFrom(const AdaptiveMic& mic);
+    
+    // MatrixFire parameter copying
+    void copyMatrixFireParamsTo(MatrixFireParams& params) const;
+    void copyMatrixFireParamsFrom(const MatrixFireParams& params);
     
     // StringFire parameter copying
     void copyStringFireParamsTo(StringFireParams& params) const;

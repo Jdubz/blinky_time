@@ -5,14 +5,22 @@
 GeneratorTestRunner::GeneratorTestRunner(int width, int height) 
     : matrixWidth_(width), matrixHeight_(height) {
     fireTestRunner_ = new FireTestRunner(width, height);
+    matrixFireTest_ = new MatrixFireGeneratorTest();
+    stringFireTest_ = new StringFireGeneratorTest();
+    hueRotationTest_ = new HueRotationEffectTest();
+    rendererTest_ = new EffectRendererTest();
 }
 
 GeneratorTestRunner::~GeneratorTestRunner() {
     delete fireTestRunner_;
+    delete matrixFireTest_;
+    delete stringFireTest_;
+    delete hueRotationTest_;
+    delete rendererTest_;
 }
 
 void GeneratorTestRunner::runAllTests() {
-    Serial.println(F("=== Generator Test Suite - All Types ==="));
+    Serial.println(F("=== Comprehensive Test Suite - All Components ==="));
     Serial.print(F("Matrix Size: "));
     Serial.print(matrixWidth_);
     Serial.print(F("x"));
@@ -20,9 +28,18 @@ void GeneratorTestRunner::runAllTests() {
     Serial.println();
     
     // Run all generator tests
+    Serial.println(F("--- Generator Tests ---"));
     fireTestRunner_->runAllTests();
+    matrixFireTest_->runAllTests();
+    stringFireTest_->runAllTests();
     
-    Serial.println(F("=== All Generator Tests Complete ==="));
+    Serial.println(F("--- Effect Tests ---"));
+    hueRotationTest_->runAllTests();
+    
+    Serial.println(F("--- Renderer Tests ---"));
+    rendererTest_->runAllTests();
+    
+    Serial.println(F("=== All Component Tests Complete ==="));
     printSystemStatus();
 }
 
@@ -40,10 +57,18 @@ void GeneratorTestRunner::runGeneratorTests(const char* generatorType) {
     
     if (strcmp(genType, "fire") == 0) {
         fireTestRunner_->runAllTests();
+    } else if (strcmp(genType, "matrix-fire") == 0 || strcmp(genType, "matrixfire") == 0) {
+        matrixFireTest_->runAllTests();
+    } else if (strcmp(genType, "string-fire") == 0 || strcmp(genType, "stringfire") == 0) {
+        stringFireTest_->runAllTests();
+    } else if (strcmp(genType, "effects") == 0 || strcmp(genType, "effect") == 0) {
+        hueRotationTest_->runAllTests();
+    } else if (strcmp(genType, "renderer") == 0 || strcmp(genType, "render") == 0) {
+        rendererTest_->runAllTests();
     } else {
-        Serial.print(F("Unknown generator type: "));
+        Serial.print(F("Unknown component type: "));
         Serial.println(generatorType);
-        Serial.println(F("Available types: fire"));
+        Serial.println(F("Available types: fire, matrix-fire, string-fire, effects, renderer"));
     }
 }
 
@@ -89,10 +114,14 @@ bool GeneratorTestRunner::handleCommand(const char* command) {
 }
 
 void GeneratorTestRunner::printHelp() const {
-    Serial.println(F("=== Generator Test Commands ==="));
-    Serial.println(F("generators      - Run all generator tests"));
-    Serial.println(F("gen all         - Run all generator tests"));
-    Serial.println(F("gen fire        - Run fire generator tests"));
+    Serial.println(F("=== Comprehensive Test Commands ==="));
+    Serial.println(F("generators      - Run all component tests"));
+    Serial.println(F("gen all         - Run all component tests"));
+    Serial.println(F("gen fire        - Run legacy fire generator tests"));
+    Serial.println(F("gen matrix-fire - Run matrix fire generator tests"));
+    Serial.println(F("gen string-fire - Run string fire generator tests"));
+    Serial.println(F("gen effects     - Run effect tests"));
+    Serial.println(F("gen renderer    - Run renderer tests"));
     Serial.println(F("gen status      - Show system status"));
     Serial.println(F("gen help        - Show this help"));
     Serial.println();
@@ -114,15 +143,20 @@ void GeneratorTestRunner::printSystemStatus() const {
     Serial.println(matrixHeight_);
     
     Serial.println(F("Available Generators:"));
-    Serial.println(F("  - Fire: ✓ Available"));
+    Serial.println(F("  - Legacy Fire: ✓ Available + Tests"));
+    Serial.println(F("  - Matrix Fire: ✓ Available + Tests"));
+    Serial.println(F("  - String Fire: ✓ Available + Tests"));
     Serial.println(F("  - Stars: ⏳ Planned"));
     Serial.println(F("  - Waves: ⏳ Planned"));
     Serial.println(F("  - Noise: ⏳ Planned"));
     
     Serial.println(F("Available Effects:"));
-    Serial.println(F("  - HueRotation: ✓ Available"));
+    Serial.println(F("  - HueRotation: ✓ Available + Tests"));
     Serial.println(F("  - Brightness: ⏳ Planned"));
     Serial.println(F("  - Blur: ⏳ Planned"));
+    
+    Serial.println(F("Available Renderers:"));
+    Serial.println(F("  - EffectRenderer: ✓ Available + Tests"));
     
     Serial.println(F("Architecture:"));
     Serial.println(F("  Generator -> Effects -> Renderer -> Hardware"));

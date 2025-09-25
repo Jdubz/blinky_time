@@ -1,5 +1,9 @@
 #pragma once
 #include "../generators/fire/tests/FireTestRunner.h"
+#include "../generators/matrix-fire/tests/MatrixFireGeneratorTest.h"
+#include "../generators/string-fire/tests/StringFireGeneratorTest.h"
+#include "../effects/hue-rotation/tests/HueRotationEffectTest.h"
+#include "../renderers/tests/EffectRendererTest.h"
 
 /**
  * GeneratorTestRunner - Main test coordinator for all generator types
@@ -12,6 +16,10 @@
 class GeneratorTestRunner {
 private:
     FireTestRunner* fireTestRunner_;
+    MatrixFireGeneratorTest* matrixFireTest_;
+    StringFireGeneratorTest* stringFireTest_;
+    HueRotationEffectTest* hueRotationTest_;
+    EffectRendererTest* rendererTest_;
     int matrixWidth_;
     int matrixHeight_;
     

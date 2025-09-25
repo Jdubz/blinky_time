@@ -93,7 +93,37 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     Serial.println(F("[CONFIG] Configuration saved (memory only on nRF52 variants)"));
 }
 
-// StringFireEffect overloads
+// MatrixFireGenerator overloads
+void ConfigStorage::loadConfiguration(MatrixFireParams& matrixFireParams, AdaptiveMic& mic) {
+    if (!valid_) {
+        Serial.println(F("[CONFIG] Cannot load - configuration invalid"));
+        return;
+    }
+    
+    copyMatrixFireParamsTo(matrixFireParams);
+    copyMicParamsTo(mic);
+    
+    Serial.println(F("[CONFIG] Applied saved parameters (MatrixFire)"));
+}
+
+void ConfigStorage::saveConfiguration(const MatrixFireParams& matrixFireParams, const AdaptiveMic& mic) {
+    copyMatrixFireParamsFrom(matrixFireParams);
+    copyMicParamsFrom(mic);
+    
+    // For nRF52 variants: Parameters are now updated in memory, persistence would be a future enhancement
+    // For other platforms: EEPROM saving would be implemented here
+    
+    valid_ = true;
+    needsSave_ = false;
+    
+#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
+    Serial.println(F("[CONFIG] Configuration updated in memory (MatrixFire)"));
+#else
+    Serial.println(F("[CONFIG] Configuration saved (MatrixFire)"));
+#endif
+}
+
+// StringFireGenerator overloads
 void ConfigStorage::loadConfiguration(StringFireParams& stringFireParams, AdaptiveMic& mic) {
     if (!valid_) {
         Serial.println(F("[CONFIG] Cannot load - configuration invalid"));
@@ -237,6 +267,40 @@ void ConfigStorage::printStatus() const {
     Serial.println(F("============================"));
 }
 
+void ConfigStorage::copyMatrixFireParamsTo(MatrixFireParams& params) const {
+    // Copy common parameters (MatrixFire has same base parameters as Fire)
+    params.baseCooling = configData_.fireParams.baseCooling;
+    params.sparkHeatMin = configData_.fireParams.sparkHeatMin;
+    params.sparkHeatMax = configData_.fireParams.sparkHeatMax;
+    params.sparkChance = configData_.fireParams.sparkChance;
+    params.audioSparkBoost = configData_.fireParams.audioSparkBoost;
+    params.audioHeatBoostMax = configData_.fireParams.audioHeatBoostMax;
+    params.coolingAudioBias = configData_.fireParams.coolingAudioBias;
+    params.bottomRowsForSparks = configData_.fireParams.bottomRowsForSparks;
+    params.transientHeatMax = configData_.fireParams.transientHeatMax;
+}
+
+void ConfigStorage::copyMatrixFireParamsFrom(const MatrixFireParams& params) {
+    // Copy common parameters (MatrixFire shares base parameters with Fire)
+    configData_.fireParams.baseCooling = params.baseCooling;
+    configData_.fireParams.sparkHeatMin = params.sparkHeatMin;
+    configData_.fireParams.sparkHeatMax = params.sparkHeatMax;
+    configData_.fireParams.sparkChance = params.sparkChance;
+    configData_.fireParams.audioSparkBoost = params.audioSparkBoost;
+    configData_.fireParams.audioHeatBoostMax = params.audioHeatBoostMax;
+    configData_.fireParams.coolingAudioBias = params.coolingAudioBias;
+    configData_.fireParams.bottomRowsForSparks = params.bottomRowsForSparks;
+    configData_.fireParams.transientHeatMax = params.transientHeatMax;
+}
+
+void ConfigStorage::saveMatrixFireParam(const char* paramName, const MatrixFireParams& params) {
+    copyMatrixFireParamsFrom(params);
+    // TODO: Add persistent storage for nRF52
+    
+    Serial.print(F("[CONFIG] Saved matrix fire parameter: "));
+    Serial.println(paramName);
+}
+
 void ConfigStorage::copyStringFireParamsTo(StringFireParams& params) const {
     // Copy common parameters (StringFire has same base parameters as Fire)
     params.baseCooling = configData_.fireParams.baseCooling;
@@ -248,9 +312,9 @@ void ConfigStorage::copyStringFireParamsTo(StringFireParams& params) const {
     params.coolingAudioBias = configData_.fireParams.coolingAudioBias;
     params.transientHeatMax = configData_.fireParams.transientHeatMax;
     
-    // StringFire doesn't use bottomRowsForSparks - it has its own sparkPositions
+    // StringFire doesn't use bottomRowsForSparks - it has its own sparkSpreadRange
     // StringFire-specific parameters keep their defaults (not stored in EEPROM yet)
-    // params.sparkPositions, lateralDecay, spreadDistance use compile-time defaults
+    // params.sparkSpreadRange uses compile-time defaults
 }
 
 void ConfigStorage::copyStringFireParamsFrom(const StringFireParams& params) {

@@ -26,7 +26,7 @@
 // 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)  
 // 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
 #ifndef DEVICE_TYPE
-#define DEVICE_TYPE 2  // Set to Tube Light for testing
+#define DEVICE_TYPE 3  // Set to Tube Light for testing
 #endif
 
 #if DEVICE_TYPE == 1

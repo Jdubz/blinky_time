@@ -1,7 +1,7 @@
 #pragma once
 
-#include "core/Generator.h"
-#include "core/EffectMatrix.h"
+#include "../../core/Generator.h"
+#include "../../core/EffectMatrix.h"
 #include "../../config/TotemDefaults.h"
 
 /**
