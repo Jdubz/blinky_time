@@ -52,6 +52,13 @@ void FireGenerator::setAudioInput(float energy, float hit) {
     currentHit_ = hit;
 }
 
+void FireGenerator::reset() {
+    clearHeat();
+    currentEnergy_ = 0.0f;
+    currentHit_ = 0.0f;
+    lastUpdateMs_ = 0;
+}
+
 void FireGenerator::update() {
     if (!heat_) return;
     
@@ -147,6 +154,12 @@ void FireGenerator::generate(EffectMatrix* matrix) {
             matrix->setPixel(x, y, color);
         }
     }
+}
+
+void FireGenerator::generate(EffectMatrix& matrix, float energy, float hit) {
+    // Set audio input and generate
+    setAudioInput(energy, hit);
+    generate(&matrix);
 }
 
 // Helper functions (same as original FireVisualEffect)

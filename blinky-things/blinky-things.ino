@@ -63,16 +63,10 @@ bool prevChargingState = false;
 
 // Helper function to clear all LEDs
 void clearAllLEDs() {
-  for (int i = 0; i < config.matrix.width * config.matrix.height; i++) {
-    leds.setPixelColor(i, 0);
-  }
-}
-
-// Helper function to clear all LEDs
-void clearAllLEDs() {
   for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
     leds.setPixelColor(i, Constants::LED_OFF);
   }
+}
 }
 
 // Helper functions for new Generator-Effect-Renderer architecture
@@ -88,17 +82,25 @@ void updateFireEffect(float energy, float hit) {
 
   // Update generator with audio energy and impact
   if (currentGenerator) {
-    // TODO: Add generator update methods for audio input
-    currentGenerator->update();
+    // Cast to FireGenerator to access update method
+    FireGenerator* fireGen = dynamic_cast<FireGenerator*>(currentGenerator);
+    if (fireGen) {
+      fireGen->setAudioInput(energy, hit);
+      fireGen->update();
+    }
   }
 }
 
 void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
   if (currentGenerator && currentEffect && renderer && effectMatrix) {
-    currentGenerator->generate(effectMatrix);
-    currentEffect->apply(effectMatrix);
-    renderer->render(effectMatrix, &leds);
+    // Get audio input for generation
+    float energy = adaptiveMic.getEnergy();
+    float hit = adaptiveMic.getHit();
+    
+    currentGenerator->generate(*effectMatrix, energy, hit);
+    currentEffect->apply(*effectMatrix);
+    renderer->render(*effectMatrix);
     leds.show();
   }
 }
@@ -186,18 +188,22 @@ void setup() {
   // Initialize appropriate generator based on config
   if (config.matrix.fireType == STRING_FIRE) {
     Serial.println(F("Initializing STRING fire generator"));
-    currentGenerator = new StringFireGenerator();
+    currentGenerator = new StringFireGenerator(config.matrix.width * config.matrix.height);
   } else {
     Serial.println(F("Initializing MATRIX fire generator"));
-    currentGenerator = new MatrixFireGenerator();
+    currentGenerator = new MatrixFireGenerator(config.matrix.width, config.matrix.height);
   }
   
   if (!currentGenerator) {
     Serial.println(F("ERROR: Generator allocation failed"));
     while(1); // Halt execution
   }
-  
-  currentGenerator->begin(config.matrix.width, config.matrix.height);
+
+  // Initialize FireGenerator specific setup
+  FireGenerator* fireGen = dynamic_cast<FireGenerator*>(currentGenerator);
+  if (fireGen) {
+    fireGen->begin(config.matrix.width, config.matrix.height);
+  }
 
   // Initialize effect (for now, just a pass-through effect)
   currentEffect = new HueRotationEffect();
@@ -205,15 +211,14 @@ void setup() {
     Serial.println(F("ERROR: Effect allocation failed"));
     while(1); // Halt execution
   }
-  currentEffect->begin();
+  currentEffect->begin(config.matrix.width, config.matrix.height);
 
   // Initialize renderer
-  renderer = new EffectRenderer();
+  renderer = new EffectRenderer(leds, ledMapper);
   if (!renderer) {
     Serial.println(F("ERROR: Renderer allocation failed"));
     while(1); // Halt execution
   }
-  renderer->begin();
 
   Serial.println(F("New architecture initialized successfully"));
 

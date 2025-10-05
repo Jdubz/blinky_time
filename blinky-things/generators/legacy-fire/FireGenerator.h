@@ -48,10 +48,13 @@ public:
     virtual ~FireGenerator();
     
     // Generator interface
-    virtual void begin(int width, int height) override;
-    virtual void generate(EffectMatrix* matrix) override;
-    virtual void update() override;
+    virtual void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
+    virtual void reset() override;
     virtual const char* getName() const override { return "Fire"; }
+    
+    // FireGenerator specific methods
+    void begin(int width, int height);
+    void update();
     
     // Audio input for fire dynamics
     void setAudioInput(float energy, float hit);

@@ -6,6 +6,9 @@
 #include "../generators/string-fire/StringFireGenerator.h"
 #include "../hardware/AdaptiveMic.h"
 
+// Use the legacy FireGenerator's FireParams for configuration compatibility
+using FireParams = FireGenerator::FireParams;
+
 // Include EEPROM library for platforms that support it (not needed for nRF52 variants)
 #if !defined(ARDUINO_ARCH_NRF52) && !defined(NRF52) && !defined(TARGET_NAME) && !defined(MBED_CONF_TARGET_NAME)
   #if defined(ESP32) || defined(ARDUINO_ARCH_AVR)
