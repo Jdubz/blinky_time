@@ -1,4 +1,6 @@
 #pragma once
+// NOTE: Adafruit_NeoPixel.h must be included in main .ino file BEFORE BlinkyArchitecture.h
+// to avoid pinDefinitions.h redefinition errors with PDM library
 #include <Adafruit_NeoPixel.h>
 #include "../types/PixelMatrix.h"
 #include "LEDMapper.h"
