@@ -1,6 +1,6 @@
 #pragma once
 #include "../HueRotationEffect.h"
-#include "../../../EffectMatrix.h"
+#include "../../types/PixelMatrix.h"
 
 /**
  * HueRotationEffectTest - Test suite for HueRotationEffect
@@ -11,7 +11,7 @@
 class HueRotationEffectTest {
 private:
     HueRotationEffect* hueEffect_;
-    EffectMatrix* testMatrix_;
+    PixelMatrix* testMatrix_;
     int testWidth_;
     int testHeight_;
     int testsRun_;

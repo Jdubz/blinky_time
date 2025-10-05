@@ -9,7 +9,7 @@
  * Generates realistic lightning patterns using branching algorithms
  * that adapts to different LED layout arrangements:
  * - MATRIX_LAYOUT: Branching lightning bolts across 2D matrices
- * - LINEAR_LAYOUT: Lightning bolts along strings/linear arrangements  
+ * - LINEAR_LAYOUT: Lightning bolts along strings/linear arrangements
  * - RANDOM_LAYOUT: Electric arcs between scattered points
  *
  * Key features:
@@ -22,7 +22,7 @@
 struct LightningParams {
     uint8_t baseFade           = 160;  // Base fade speed
     uint8_t boltIntensityMin   = 100;  // Minimum bolt intensity
-    uint8_t boltIntensityMax   = 255;  // Maximum bolt intensity  
+    uint8_t boltIntensityMax   = 255;  // Maximum bolt intensity
     float   boltChance         = 0.15f; // Chance of new bolt
     float   audioBoltBoost     = 0.5f; // Audio boost for bolts
     uint8_t audioIntensityBoostMax = 100; // Max intensity boost from audio
@@ -38,7 +38,7 @@ public:
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
+    virtual void generate(PixelMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Lightning"; }
 
@@ -70,7 +70,7 @@ private:
     void indexToCoords(int index, int& x, int& y);
     void createBranch(int startIndex, int direction, uint8_t intensity);
 
-    // State variables  
+    // State variables
     uint8_t* intensity_;  // Lightning intensity instead of heat
 
     // Configuration

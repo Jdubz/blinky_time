@@ -31,9 +31,9 @@ bool EffectRendererTest::testInitialization() {
     EffectRenderer renderer3(1);
 
     // Test that renderers can be used without crashing
-    EffectMatrix matrix1(10, 1);
-    EffectMatrix matrix2(50, 1);
-    EffectMatrix matrix3(1, 1);
+    PixelMatrix matrix1(10, 1);
+    PixelMatrix matrix2(50, 1);
+    PixelMatrix matrix3(1, 1);
 
     // Fill matrices with test data
     matrix1.setPixel(0, 0, createColor(255, 0, 0));
@@ -52,7 +52,7 @@ bool EffectRendererTest::testMatrixRendering() {
     logTestInfo("Testing matrix to LED mapping");
 
     EffectRenderer renderer(9); // 3x3 matrix
-    EffectMatrix matrix(3, 3);
+    PixelMatrix matrix(3, 3);
 
     // Fill matrix with known pattern
     uint32_t testColors[] = {
@@ -87,7 +87,7 @@ bool EffectRendererTest::testColorOutput() {
     logTestInfo("Testing color accuracy");
 
     EffectRenderer renderer(4);
-    EffectMatrix matrix(2, 2);
+    PixelMatrix matrix(2, 2);
 
     // Test primary colors
     uint32_t red = createColor(255, 0, 0);
@@ -116,7 +116,7 @@ bool EffectRendererTest::testBrightnessControl() {
     logTestInfo("Testing brightness scaling");
 
     EffectRenderer renderer(2);
-    EffectMatrix matrix(1, 2);
+    PixelMatrix matrix(1, 2);
 
     // Test full brightness color
     uint32_t fullColor = createColor(200, 100, 50);
@@ -153,7 +153,7 @@ bool EffectRendererTest::testDifferentSizes() {
         TestCase& tc = testCases[i];
 
         EffectRenderer renderer(tc.ledCount);
-        EffectMatrix matrix(tc.width, tc.height);
+        PixelMatrix matrix(tc.width, tc.height);
 
         // Fill with gradient pattern
         for (int y = 0; y < tc.height; y++) {
@@ -174,7 +174,7 @@ bool EffectRendererTest::testEdgeCases() {
     logTestInfo("Testing edge cases and error conditions");
 
     EffectRenderer renderer(4);
-    EffectMatrix matrix(2, 2);
+    PixelMatrix matrix(2, 2);
 
     // Test with all black (should work)
     for (int y = 0; y < 2; y++) {

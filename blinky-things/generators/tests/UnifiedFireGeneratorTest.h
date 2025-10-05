@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../UnifiedFireGenerator.h"
-#include "../../core/EffectMatrix.h"
+#include "../../types/PixelMatrix.h"
 
 /**
  * Unified Fire Generator Test - Tests all layout types (Matrix, Linear, Random)

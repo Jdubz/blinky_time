@@ -36,12 +36,12 @@ bool Lightning::begin(const DeviceConfig& config) {
 
     // Reset defaults
     resetToDefaults();
-    
+
     lastUpdateMs_ = millis();
     return true;
 }
 
-void Lightning::generate(EffectMatrix& matrix, float energy, float hit) {
+void Lightning::generate(PixelMatrix& matrix, float energy, float hit) {
     setAudioInput(energy, hit);
     update();
 
@@ -51,7 +51,7 @@ void Lightning::generate(EffectMatrix& matrix, float energy, float hit) {
         uint8_t r = (color >> 16) & 0xFF;
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
-        
+
         int x, y;
         indexToCoords(i, x, y);
         matrix.setPixel(x, y, r, g, b);
@@ -94,10 +94,10 @@ void Lightning::setAudioInput(float energy, bool hit) {
 void Lightning::updateMatrixLightning() {
     // Generate bolts from audio
     generateBolts();
-    
+
     // Propagate bolts with branching
     propagateBolts();
-    
+
     // Apply fade
     applyFade();
 }
@@ -122,29 +122,29 @@ void Lightning::generateBolts() {
     if (audioHit_) {
         boltProb += params_.audioBoltBoost;
     }
-    
+
     if (random(1000) / 1000.0f < boltProb) {
         int boltPosition;
         uint8_t boltIntensity = random(params_.boltIntensityMin, params_.boltIntensityMax + 1);
-        
+
         // Add audio boost to bolt intensity
         if (audioEnergy_ > 0.1f) {
             uint8_t audioBoost = (uint8_t)(audioEnergy_ * params_.audioIntensityBoostMax);
             boltIntensity = min(255, boltIntensity + audioBoost);
         }
-        
+
         // Choose bolt position based on layout
         switch (layout_) {
             case MATRIX_LAYOUT:
                 // Bolts can start anywhere
                 boltPosition = random(numLeds_);
                 intensity_[boltPosition] = boltIntensity;
-                
+
                 // Create branches
                 if (random(100) < params_.branchChance) {
                     int x, y;
                     indexToCoords(boltPosition, x, y);
-                    
+
                     // Branch in random directions
                     for (int dir = 0; dir < 4; dir++) {
                         if (random(100) < 50) { // 50% chance each direction
@@ -153,13 +153,13 @@ void Lightning::generateBolts() {
                     }
                 }
                 break;
-                
+
             case LINEAR_LAYOUT:
                 // Bolts start from random position and propagate
                 boltPosition = random(numLeds_);
                 intensity_[boltPosition] = boltIntensity;
                 break;
-                
+
             case RANDOM_LAYOUT:
                 // Random bolt position
                 boltPosition = random(numLeds_);
@@ -172,7 +172,7 @@ void Lightning::generateBolts() {
 void Lightning::createBranch(int startIndex, int direction, uint8_t intensity) {
     int x, y;
     indexToCoords(startIndex, x, y);
-    
+
     // Direction: 0=up, 1=right, 2=down, 3=left
     int dx = 0, dy = 0;
     switch (direction) {
@@ -181,13 +181,13 @@ void Lightning::createBranch(int startIndex, int direction, uint8_t intensity) {
         case 2: dy = 1; break;  // down
         case 3: dx = -1; break; // left
     }
-    
+
     // Create branch of random length
     int branchLength = random(2, 6);
     for (int i = 1; i <= branchLength; i++) {
         int newX = x + dx * i;
         int newY = y + dy * i;
-        
+
         if (newX >= 0 && newX < width_ && newY >= 0 && newY < height_) {
             int newIndex = coordsToIndex(newX, newY);
             if (newIndex >= 0) {
@@ -196,7 +196,7 @@ void Lightning::createBranch(int startIndex, int direction, uint8_t intensity) {
         } else {
             break; // Hit boundary
         }
-        
+
         // Random chance to change direction (zigzag effect)
         if (random(100) < 30) {
             if (dx != 0) {
@@ -213,12 +213,12 @@ void Lightning::createBranch(int startIndex, int direction, uint8_t intensity) {
 void Lightning::propagateBolts() {
     uint8_t* newIntensity = new uint8_t[numLeds_];
     memcpy(newIntensity, intensity_, numLeds_);
-    
+
     for (int i = 0; i < numLeds_; i++) {
         if (intensity_[i] > 50) { // Only propagate strong bolts
             int x, y;
             indexToCoords(i, x, y);
-            
+
             // Propagate based on layout
             switch (layout_) {
                 case MATRIX_LAYOUT:
@@ -226,10 +226,10 @@ void Lightning::propagateBolts() {
                     for (int dx = -1; dx <= 1; dx++) {
                         for (int dy = -1; dy <= 1; dy++) {
                             if (dx == 0 && dy == 0) continue;
-                            
+
                             int newX = x + dx;
                             int newY = y + dy;
-                            
+
                             if (newX >= 0 && newX < width_ && newY >= 0 && newY < height_) {
                                 int newIndex = coordsToIndex(newX, newY);
                                 if (newIndex >= 0 && random(100) < 20) { // 20% propagation chance
@@ -240,7 +240,7 @@ void Lightning::propagateBolts() {
                         }
                     }
                     break;
-                    
+
                 case LINEAR_LAYOUT:
                     // Propagate along the line
                     if (i > 0 && random(100) < 30) {
@@ -252,7 +252,7 @@ void Lightning::propagateBolts() {
                         newIntensity[i + 1] = max(newIntensity[i + 1], propagatedIntensity);
                     }
                     break;
-                    
+
                 case RANDOM_LAYOUT:
                     // Propagate to nearby positions (arc effect)
                     for (int j = max(0, i - 5); j <= min(numLeds_ - 1, i + 5); j++) {
@@ -265,7 +265,7 @@ void Lightning::propagateBolts() {
             }
         }
     }
-    
+
     memcpy(intensity_, newIntensity, numLeds_);
     delete[] newIntensity;
 }
@@ -277,7 +277,7 @@ void Lightning::applyFade() {
         int8_t audioBias = (int8_t)(audioEnergy_ * params_.fadeAudioBias);
         fadeRate = constrain(fadeRate + audioBias, 50, 255);
     }
-    
+
     // Fade all intensities
     for (int i = 0; i < numLeds_; i++) {
         if (intensity_[i] > 0) {
@@ -290,10 +290,10 @@ uint32_t Lightning::intensityToColor(uint8_t intensity) {
     if (intensity == 0) {
         return 0x000000; // Black (no lightning)
     }
-    
+
     // Lightning color palette: yellow -> white -> electric blue
     uint8_t r, g, b;
-    
+
     if (intensity < 85) {
         // Dark yellow to bright yellow
         r = map(intensity, 0, 84, 60, 255);
@@ -310,7 +310,7 @@ uint32_t Lightning::intensityToColor(uint8_t intensity) {
         g = map(intensity, 170, 255, 255, 200);
         b = map(intensity, 170, 255, 180, 255);
     }
-    
+
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 

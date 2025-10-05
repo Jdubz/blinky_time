@@ -1,15 +1,15 @@
 #pragma once
-#include "../core/EffectMatrix.h"
+#include "../types/PixelMatrix.h"
 #include "../devices/DeviceConfig.h"
 
 /**
  * Generator - Base class for visual pattern generators
  *
- * Generators create visual patterns and output them to an EffectMatrix.
+ * Generators create visual patterns and output them to a PixelMatrix.
  * They are the source of visual content (fire, water, lightning, etc.).
  *
  * Architecture flow:
- * Generator -> Effects -> Renderer -> Hardware
+ * Inputs -> Generator -> Effect (optional) -> Render -> LEDs
  */
 class Generator {
 public:
@@ -26,7 +26,7 @@ public:
      * @param energy Audio energy level (0.0 to 1.0)
      * @param hit Audio hit/transient level (0.0 to 1.0)
      */
-    virtual void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) = 0;
+    virtual void generate(PixelMatrix& matrix, float energy = 0.0f, float hit = 0.0f) = 0;
 
     /**
      * Reset the generator state
@@ -44,10 +44,10 @@ protected:
     uint16_t height_ = 0;
     uint16_t numLeds_ = 0;
     LayoutType layout_ = MATRIX_LAYOUT;
-    
+
     // Timing
     uint32_t lastUpdateMs_ = 0;
-    
+
     // Audio responsiveness
     bool audioReactive_ = true;
     float audioSensitivity_ = 1.0f;

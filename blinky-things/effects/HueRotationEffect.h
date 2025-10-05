@@ -1,6 +1,5 @@
 #pragma once
-#include "../../core/Effect.h"
-#include "../../core/EffectMatrix.h"
+#include "Effect.h"
 
 /**
  * HueRotationEffect - Rotates the hue of all colors in the matrix
@@ -9,7 +8,7 @@
  * specified hue amount. Useful for creating color variations of the
  * same pattern (e.g., blue fire, green fire, etc.).
  *
- * Architecture: Generator -> HueRotationEffect -> Renderer -> Hardware
+ * Architecture: Inputs -> Generator -> HueRotationEffect (optional) -> Render -> LEDs
  */
 class HueRotationEffect : public Effect {
 private:
@@ -27,7 +26,7 @@ public:
 
     // Effect interface
     virtual void begin(int width, int height) override;
-    virtual void apply(EffectMatrix* matrix) override;
+    virtual void apply(PixelMatrix* matrix) override;
     virtual const char* getName() const override { return "HueRotation"; }
 
     // Configuration

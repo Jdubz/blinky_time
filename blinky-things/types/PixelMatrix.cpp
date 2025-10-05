@@ -1,17 +1,17 @@
-#include "EffectMatrix.h"
+#include "PixelMatrix.h"
 #include <Arduino.h>
 
-EffectMatrix::EffectMatrix(int width, int height)
+PixelMatrix::PixelMatrix(int width, int height)
     : width_(width), height_(height) {
     pixels_ = new RGB[width * height];
     clear();
 }
 
-EffectMatrix::~EffectMatrix() {
+PixelMatrix::~PixelMatrix() {
     delete[] pixels_;
 }
 
-EffectMatrix::EffectMatrix(const EffectMatrix& other)
+PixelMatrix::PixelMatrix(const PixelMatrix& other)
     : width_(other.width_), height_(other.height_) {
     pixels_ = new RGB[width_ * height_];
     for (int i = 0; i < width_ * height_; i++) {
@@ -19,7 +19,7 @@ EffectMatrix::EffectMatrix(const EffectMatrix& other)
     }
 }
 
-EffectMatrix& EffectMatrix::operator=(const EffectMatrix& other) {
+PixelMatrix& PixelMatrix::operator=(const PixelMatrix& other) {
     if (this != &other) {
         delete[] pixels_;
         width_ = other.width_;
@@ -32,53 +32,53 @@ EffectMatrix& EffectMatrix::operator=(const EffectMatrix& other) {
     return *this;
 }
 
-RGB& EffectMatrix::getPixel(int x, int y) {
+RGB& PixelMatrix::getPixel(int x, int y) {
     return pixels_[y * width_ + x];
 }
 
-const RGB& EffectMatrix::getPixel(int x, int y) const {
+const RGB& PixelMatrix::getPixel(int x, int y) const {
     return pixels_[y * width_ + x];
 }
 
-void EffectMatrix::setPixel(int x, int y, const RGB& color) {
+void PixelMatrix::setPixel(int x, int y, const RGB& color) {
     if (isValidCoordinate(x, y)) {
         pixels_[y * width_ + x] = color;
     }
 }
 
-void EffectMatrix::setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
+void PixelMatrix::setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
     setPixel(x, y, RGB(r, g, b));
 }
 
-void EffectMatrix::clear() {
+void PixelMatrix::clear() {
     for (int i = 0; i < width_ * height_; i++) {
         pixels_[i] = RGB(0, 0, 0);
     }
 }
 
-void EffectMatrix::fill(const RGB& color) {
+void PixelMatrix::fill(const RGB& color) {
     for (int i = 0; i < width_ * height_; i++) {
         pixels_[i] = color;
     }
 }
 
-void EffectMatrix::fill(uint8_t r, uint8_t g, uint8_t b) {
+void PixelMatrix::fill(uint8_t r, uint8_t g, uint8_t b) {
     fill(RGB(r, g, b));
 }
 
-RGB EffectMatrix::getPixelSafe(int x, int y) const {
+RGB PixelMatrix::getPixelSafe(int x, int y) const {
     if (isValidCoordinate(x, y)) {
         return getPixel(x, y);
     }
     return RGB(0, 0, 0); // Return black for out of bounds
 }
 
-bool EffectMatrix::isValidCoordinate(int x, int y) const {
+bool PixelMatrix::isValidCoordinate(int x, int y) const {
     return x >= 0 && x < width_ && y >= 0 && y < height_;
 }
 
-void EffectMatrix::printMatrix() const {
-    Serial.print(F("EffectMatrix "));
+void PixelMatrix::printMatrix() const {
+    Serial.print(F("PixelMatrix "));
     Serial.print(width_);
     Serial.print(F("x"));
     Serial.print(height_);

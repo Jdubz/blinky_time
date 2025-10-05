@@ -49,7 +49,7 @@ public:
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
+    virtual void generate(PixelMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Fire"; }
 
@@ -80,7 +80,7 @@ private:
     int coordsToIndex(int x, int y);
     void indexToCoords(int index, int& x, int& y);
 
-    // State variables  
+    // State variables
     uint8_t* heat_;
 
     // Configuration

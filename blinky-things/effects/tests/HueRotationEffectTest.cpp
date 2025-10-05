@@ -4,7 +4,7 @@
 HueRotationEffectTest::HueRotationEffectTest(int width, int height)
     : testWidth_(width), testHeight_(height), testsRun_(0), testsPassed_(0), testsFailed_(0) {
     hueEffect_ = new HueRotationEffect();
-    testMatrix_ = new EffectMatrix(width, height);
+    testMatrix_ = new PixelMatrix(width, height);
     hueEffect_->begin(width, height);
 }
 

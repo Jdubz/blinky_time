@@ -2,7 +2,7 @@
 #define EFFECT_RENDERER_TEST_H
 
 #include "../EffectRenderer.h"
-#include "../../../core/EffectMatrix.h"
+#include "../../types/PixelMatrix.h"
 
 /**
  * Test suite for EffectRenderer

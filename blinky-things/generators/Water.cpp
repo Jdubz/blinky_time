@@ -36,12 +36,12 @@ bool Water::begin(const DeviceConfig& config) {
 
     // Reset defaults
     resetToDefaults();
-    
+
     lastUpdateMs_ = millis();
     return true;
 }
 
-void Water::generate(EffectMatrix& matrix, float energy, float hit) {
+void Water::generate(PixelMatrix& matrix, float energy, float hit) {
     setAudioInput(energy, hit);
     update();
 
@@ -51,7 +51,7 @@ void Water::generate(EffectMatrix& matrix, float energy, float hit) {
         uint8_t r = (color >> 16) & 0xFF;
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
-        
+
         int x, y;
         indexToCoords(i, x, y);
         matrix.setPixel(x, y, r, g, b);
@@ -94,10 +94,10 @@ void Water::setAudioInput(float energy, bool hit) {
 void Water::updateMatrixWater() {
     // Generate waves from audio
     generateWaves();
-    
+
     // Apply downward flow
     applyFlow();
-    
+
     // Propagate flow patterns
     propagateFlow();
 }
@@ -122,17 +122,17 @@ void Water::generateWaves() {
     if (audioHit_) {
         waveProb += params_.audioWaveBoost;
     }
-    
+
     if (random(1000) / 1000.0f < waveProb) {
         int wavePosition;
         uint8_t waveHeight = random(params_.waveHeightMin, params_.waveHeightMax + 1);
-        
+
         // Add audio boost to wave height
         if (audioEnergy_ > 0.1f) {
             uint8_t audioBoost = (uint8_t)(audioEnergy_ * params_.audioFlowBoostMax);
             waveHeight = min(255, waveHeight + audioBoost);
         }
-        
+
         // Choose wave position based on layout
         switch (layout_) {
             case MATRIX_LAYOUT:
@@ -142,13 +142,13 @@ void Water::generateWaves() {
                     depth_[wavePosition] = waveHeight;
                 }
                 break;
-                
+
             case LINEAR_LAYOUT:
                 // Waves start from beginning or end
                 wavePosition = random(2) == 0 ? 0 : numLeds_ - 1;
                 depth_[wavePosition] = waveHeight;
                 break;
-                
+
             case RANDOM_LAYOUT:
                 // Random wave position
                 wavePosition = random(numLeds_);
@@ -161,12 +161,12 @@ void Water::generateWaves() {
 void Water::propagateFlow() {
     uint8_t* newDepth = new uint8_t[numLeds_];
     memcpy(newDepth, depth_, numLeds_);
-    
+
     for (int i = 0; i < numLeds_; i++) {
         if (depth_[i] > 0) {
             int x, y;
             indexToCoords(i, x, y);
-            
+
             // Flow based on layout
             switch (layout_) {
                 case MATRIX_LAYOUT:
@@ -178,9 +178,9 @@ void Water::propagateFlow() {
                         newDepth[i] = max(0, newDepth[i] - flowAmount);
                     }
                     break;
-                    
+
                 case LINEAR_LAYOUT:
-                    // Flow in both directions  
+                    // Flow in both directions
                     if (i > 0) {
                         uint8_t flowAmount = depth_[i] / 6;
                         newDepth[i - 1] = min(255, newDepth[i - 1] + flowAmount);
@@ -192,7 +192,7 @@ void Water::propagateFlow() {
                         newDepth[i] = max(0, newDepth[i] - flowAmount);
                     }
                     break;
-                    
+
                 case RANDOM_LAYOUT:
                     // Ripple to nearby positions (simplified)
                     for (int j = max(0, i - 3); j <= min(numLeds_ - 1, i + 3); j++) {
@@ -206,7 +206,7 @@ void Water::propagateFlow() {
             }
         }
     }
-    
+
     memcpy(depth_, newDepth, numLeds_);
     delete[] newDepth;
 }
@@ -218,7 +218,7 @@ void Water::applyFlow() {
         int8_t audioBias = (int8_t)(audioEnergy_ * params_.flowAudioBias);
         flowRate = constrain(flowRate + audioBias, 0, 255);
     }
-    
+
     // Reduce all depths by flow rate
     for (int i = 0; i < numLeds_; i++) {
         if (depth_[i] > 0) {
@@ -231,10 +231,10 @@ uint32_t Water::depthToColor(uint8_t depth) {
     if (depth == 0) {
         return 0x000000; // Black (no water)
     }
-    
+
     // Blue color palette: deep blue -> cyan -> light blue
     uint8_t r, g, b;
-    
+
     if (depth < 85) {
         // Deep blue to medium blue
         r = 0;
@@ -251,7 +251,7 @@ uint32_t Water::depthToColor(uint8_t depth) {
         g = map(depth, 170, 255, 120, 200);
         b = 255;
     }
-    
+
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 

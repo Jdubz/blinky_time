@@ -19,7 +19,7 @@
 #include <Adafruit_NeoPixel.h>
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
-#include "core/Version.h"           // Version information from repository
+#include "types/Version.h"           // Version information from repository
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
@@ -46,17 +46,19 @@ LEDMapper ledMapper;
 
 Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
 
-// New Generator-Effect-Renderer Architecture
+// New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
-// ✅ Core System: Generator→Effects→Renderer pipeline operational
+// ✅ Core System: Inputs→Generator→Effect(optional)→Render pipeline operational
 // ✅ Fire: Realistic fire simulation (red/orange/yellow) for all layout types
-// ✅ Water: Flowing water effects (blue/cyan) for all layout types  
+// ✅ Water: Flowing water effects (blue/cyan) for all layout types
 // ✅ Lightning: Electric bolt effects (yellow/white) for all layout types
+// ✅ Effects: HueRotation for color cycling, NoOp for pass-through
 // ✅ Hardware: AdaptiveMic ready for audio input
-// ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)Generator* currentGenerator = nullptr;
+// ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
+Generator* currentGenerator = nullptr;
 Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
-EffectMatrix* effectMatrix = nullptr;
+PixelMatrix* pixelMatrix = nullptr;
 
 AdaptiveMic mic;
 // === TEMPORARILY DISABLED (ready for future enablement) ===
@@ -99,7 +101,7 @@ void updateFireEffect(float energy, float hit) {
 
 void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
-  if (currentGenerator && currentEffect && renderer && effectMatrix) {
+  if (currentGenerator && currentEffect && renderer && pixelMatrix) {
     // Get audio input for generation
     float energy = mic.getLevel();
     float hit = mic.getTransient();
@@ -108,9 +110,9 @@ void showFireEffect() {
     updateFireEffect(energy, hit);
 
     // Generate effects and render
-    currentGenerator->generate(*effectMatrix, energy, hit);
-    currentEffect->apply(effectMatrix);
-    renderer->render(*effectMatrix);
+    currentGenerator->generate(*pixelMatrix, energy, hit);
+    currentEffect->apply(pixelMatrix);
+    renderer->render(*pixelMatrix);
     leds.show();
   }
 }
@@ -188,10 +190,10 @@ void setup() {
   Serial.print(config.matrix.width * config.matrix.height);
   Serial.println(F(" LEDs"));
 
-  // Create EffectMatrix for the visual pipeline
-  effectMatrix = new EffectMatrix(config.matrix.width, config.matrix.height);
-  if (!effectMatrix) {
-    Serial.println(F("ERROR: EffectMatrix allocation failed"));
+  // Create PixelMatrix for the visual pipeline
+  pixelMatrix = new PixelMatrix(config.matrix.width, config.matrix.height);
+  if (!pixelMatrix) {
+    Serial.println(F("ERROR: PixelMatrix allocation failed"));
     while(1); // Halt execution
   }
 

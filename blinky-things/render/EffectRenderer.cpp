@@ -4,7 +4,7 @@ EffectRenderer::EffectRenderer(Adafruit_NeoPixel& leds, LEDMapper& mapper)
     : leds_(leds), ledMapper_(mapper) {
 }
 
-void EffectRenderer::render(const EffectMatrix& matrix) {
+void EffectRenderer::render(const PixelMatrix& matrix) {
     int width = matrix.getWidth();
     int height = matrix.getHeight();
 

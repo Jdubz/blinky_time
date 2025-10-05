@@ -9,7 +9,7 @@
  * Generates realistic water patterns using flow simulation
  * that adapts to different LED layout arrangements:
  * - MATRIX_LAYOUT: Downward flow with waves for 2D matrices
- * - LINEAR_LAYOUT: Wave propagation along strings/linear arrangements  
+ * - LINEAR_LAYOUT: Wave propagation along strings/linear arrangements
  * - RANDOM_LAYOUT: Ripple effects for scattered layouts
  *
  * Key features:
@@ -22,7 +22,7 @@
 struct WaterParams {
     uint8_t baseFlow           = 120;  // Base flow speed
     uint8_t waveHeightMin      = 30;   // Minimum wave height
-    uint8_t waveHeightMax      = 180;  // Maximum wave height  
+    uint8_t waveHeightMax      = 180;  // Maximum wave height
     float   waveChance         = 0.25f; // Chance of new wave
     float   audioWaveBoost     = 0.4f; // Audio boost for waves
     uint8_t audioFlowBoostMax  = 80;   // Max flow boost from audio
@@ -37,7 +37,7 @@ public:
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
+    virtual void generate(PixelMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Water"; }
 
@@ -68,7 +68,7 @@ private:
     int coordsToIndex(int x, int y);
     void indexToCoords(int index, int& x, int& y);
 
-    // State variables  
+    // State variables
     uint8_t* depth_;  // Water depth instead of heat
 
     // Configuration

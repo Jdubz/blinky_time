@@ -6,7 +6,7 @@
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../tests/GeneratorTestRunner.h"
-#include "../core/Version.h"
+#include "../types/Version.h"
 
 extern AdaptiveMic mic;
 extern BatteryMonitor battery;

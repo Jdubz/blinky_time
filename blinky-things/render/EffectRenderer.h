@@ -1,12 +1,12 @@
 #pragma once
 #include <Adafruit_NeoPixel.h>
-#include "../core/EffectMatrix.h"
-#include "../hardware/LEDMapper.h"
+#include "../types/PixelMatrix.h"
+#include "LEDMapper.h"
 
 /**
- * EffectRenderer - Renders EffectMatrix to physical LEDs
+ * EffectRenderer - Renders PixelMatrix to physical LEDs
  *
- * Handles the mapping from logical effect coordinates to physical
+ * Handles the mapping from logical pixel coordinates to physical
  * LED indices, taking into account different wiring patterns and
  * orientations.
  */
@@ -19,10 +19,10 @@ public:
     EffectRenderer(Adafruit_NeoPixel& leds, LEDMapper& mapper);
 
     /**
-     * Render an EffectMatrix to the physical LEDs
-     * @param matrix The effect matrix to render
+     * Render a PixelMatrix to the physical LEDs
+     * @param matrix The pixel matrix to render
      */
-    void render(const EffectMatrix& matrix);
+    void render(const PixelMatrix& matrix);
 
     /**
      * Clear all LEDs

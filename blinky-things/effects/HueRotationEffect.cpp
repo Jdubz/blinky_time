@@ -10,7 +10,7 @@ void HueRotationEffect::begin(int width, int height) {
     lastUpdateMs_ = millis();
 }
 
-void HueRotationEffect::apply(EffectMatrix* matrix) {
+void HueRotationEffect::apply(PixelMatrix* matrix) {
     if (!matrix) return;
 
     // Update hue shift if auto-rotating

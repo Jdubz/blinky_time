@@ -12,7 +12,7 @@
 
 // Example: Create generator instances
 Fire fireGenerator;
-Water waterGenerator; 
+Water waterGenerator;
 Lightning lightningGenerator;
 
 // Example: Generator switching system
@@ -24,7 +24,7 @@ Generator* generators[] = {
 
 const char* generatorNames[] = {
     "Fire",
-    "Water", 
+    "Water",
     "Lightning"
 };
 
@@ -48,7 +48,7 @@ void setupGenerators(const DeviceConfig& config) {
 void switchToNextGenerator() {
     currentGeneratorIndex = (currentGeneratorIndex + 1) % numGenerators;
     generators[currentGeneratorIndex]->reset();
-    
+
     Serial.print(F("Switched to: "));
     Serial.println(generatorNames[currentGeneratorIndex]);
 }
@@ -66,14 +66,14 @@ void customizeGenerators() {
     fireParams.sparkChance = 0.4f;       // More sparks
     fireParams.audioSparkBoost = 0.5f;   // Strong audio response
     fireGenerator.setParams(fireParams);
-    
-    // Customize Water generator  
+
+    // Customize Water generator
     WaterParams waterParams;
     waterParams.baseFlow = 80;           // Slower flow
     waterParams.waveChance = 0.3f;       // More waves
     waterParams.audioWaveBoost = 0.6f;   // Strong wave response
     waterGenerator.setParams(waterParams);
-    
+
     // Customize Lightning generator
     LightningParams lightningParams;
     lightningParams.boltChance = 0.2f;       // More frequent bolts
@@ -86,7 +86,7 @@ void customizeGenerators() {
 void selectGeneratorByAudio(float audioEnergy) {
     static uint32_t lastSwitchMs = 0;
     uint32_t currentMs = millis();
-    
+
     // Switch generators based on audio energy level
     if (currentMs - lastSwitchMs > 5000) { // Min 5 seconds between switches
         if (audioEnergy > 0.8f) {
@@ -115,26 +115,26 @@ void selectGeneratorByAudio(float audioEnergy) {
     }
 }
 
-/* 
+/*
  * USAGE NOTES:
- * 
+ *
  * 1. All generators work with any device layout:
  *    - Hat (LINEAR): String-based effects
  *    - Tube Light (MATRIX): 2D matrix effects
  *    - Bucket Totem (MATRIX): Large matrix effects
- * 
+ *
  * 2. Color palettes:
  *    - Fire: Red → Orange → Yellow → White
  *    - Water: Deep Blue → Blue → Cyan → Light Blue
  *    - Lightning: Yellow → White → Electric Blue
- * 
+ *
  * 3. Audio reactivity:
  *    - All generators respond to energy level (0.0-1.0)
  *    - Hit detection creates burst effects
  *    - Each generator has unique audio response characteristics
- * 
+ *
  * 4. Performance:
  *    - Fire: ~20 FPS update rate
- *    - Water: ~20 FPS update rate  
+ *    - Water: ~20 FPS update rate
  *    - Lightning: ~33 FPS update rate (faster for bolt effects)
  */

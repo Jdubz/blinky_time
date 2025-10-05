@@ -1,15 +1,14 @@
 #pragma once
-#include "EffectMatrix.h"
+#include "../types/PixelMatrix.h"
 
 /**
  * Effect - Base interface for visual effects that modify generated patterns
  *
  * Effects take a generated pattern and modify it (hue shift, brightness,
- * blur, color mapping, etc.). They operate on the matrix between generation
- * and rendering.
+ * blur, color mapping, etc.). They are OPTIONAL in the pipeline.
  *
  * Architecture flow:
- * Generator -> Effects -> Renderer -> Hardware
+ * Inputs -> Generator -> Effect (optional) -> Render -> LEDs
  */
 class Effect {
 public:
@@ -24,7 +23,7 @@ public:
      * Apply the effect to the matrix
      * @param matrix The matrix to modify (input and output)
      */
-    virtual void apply(EffectMatrix* matrix) = 0;
+    virtual void apply(PixelMatrix* matrix) = 0;
 
     /**
      * Get the name of this effect for debugging/logging

@@ -38,6 +38,23 @@ bool Fire::begin(const DeviceConfig& config) {
     return true;
 }
 
+void Fire::generate(PixelMatrix& matrix, float energy, float hit) {
+    setAudioInput(energy, hit > 0.5f);
+    update();
+
+    // Convert heat array to PixelMatrix colors
+    for (int y = 0; y < height_; y++) {
+        for (int x = 0; x < width_; x++) {
+            int index = coordsToIndex(x, y);
+            uint32_t color = heatToColor(heat_[index]);
+            uint8_t r = (color >> 16) & 0xFF;
+            uint8_t g = (color >> 8) & 0xFF;
+            uint8_t b = color & 0xFF;
+            matrix.setPixel(x, y, r, g, b);
+        }
+    }
+}
+
 void Fire::update() {
     unsigned long currentMs = millis();
     if (currentMs - this->lastUpdateMs_ < 30) {  // ~33 FPS max
@@ -53,30 +70,6 @@ void Fire::update() {
 
     // Propagate heat based on layout type
     propagateHeat();
-}
-
-void Fire::generate(EffectMatrix& matrix, float energy, float hit) {
-    if (!heat_) return;
-
-    // Store audio input for use in fire simulation
-    audioEnergy_ = energy;
-    audioHit_ = hit > 0.5f;  // Convert float hit to boolean
-
-    // Update fire simulation
-    update();
-
-    // Render to matrix
-    for (int i = 0; i < this->numLeds_; i++) {
-        uint32_t color = heatToColor(heat_[i]);
-        int x, y;
-        indexToCoords(i, x, y);
-
-        // Convert uint32_t color to RGB
-        uint8_t r = (color >> 16) & 0xFF;
-        uint8_t g = (color >> 8) & 0xFF;
-        uint8_t b = color & 0xFF;
-        matrix.setPixel(x, y, RGB(r, g, b));
-    }
 }
 
 void Fire::reset() {
