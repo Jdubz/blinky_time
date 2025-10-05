@@ -1,6 +1,6 @@
 #pragma once
-#include "../core/Effect.h"
-#include "../core/EffectMatrix.h"
+#include "../Effect.h"
+#include "../../types/PixelMatrix.h"
 
 /**
  * GeneralEffectTests - Universal test suite for all effects
@@ -14,7 +14,7 @@
 class GeneralEffectTests {
 private:
     Effect* testEffect_;
-    EffectMatrix* testMatrix_;
+    PixelMatrix* testMatrix_;
     int testWidth_;
     int testHeight_;
     int testsRun_;
@@ -23,7 +23,7 @@ private:
 
     void logTest(const char* testName, bool passed, const char* details = nullptr);
     bool isValidPixelData(uint8_t r, uint8_t g, uint8_t b) const;
-    bool matrixHasValidData(EffectMatrix* matrix) const;
+    bool matrixHasValidData(PixelMatrix* matrix) const;
 
 public:
     GeneralEffectTests(Effect* effect, int width = 4, int height = 4);

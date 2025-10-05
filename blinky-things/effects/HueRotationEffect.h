@@ -27,6 +27,7 @@ public:
     // Effect interface
     virtual void begin(int width, int height) override;
     virtual void apply(PixelMatrix* matrix) override;
+    virtual void reset() override;
     virtual const char* getName() const override { return "HueRotation"; }
 
     // Configuration

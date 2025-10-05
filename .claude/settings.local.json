@@ -17,7 +17,9 @@
       "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" lib uninstall \"Seeed Arduino LSM6DS3\")",
       "WebSearch",
       "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" lib install \"Seeed Arduino LSM6DS3@2.0.3\")",
-      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaonRF52840Sense fire-totem/ --verbose)"
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaonRF52840Sense fire-totem/ --verbose)",
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaonRF52840Sense \"d:\\Development\\Arduino\\blinky_time\\blinky-things\")",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

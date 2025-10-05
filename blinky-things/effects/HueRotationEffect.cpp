@@ -61,6 +61,11 @@ void HueRotationEffect::setRotationSpeed(float speed) {
     rotationSpeed_ = speed;
 }
 
+void HueRotationEffect::reset() {
+    hueShift_ = 0.0f;
+    lastUpdateMs_ = millis();
+}
+
 float HueRotationEffect::normalizeHue(float hue) const {
     while (hue < 0.0f) hue += 1.0f;
     while (hue >= 1.0f) hue -= 1.0f;

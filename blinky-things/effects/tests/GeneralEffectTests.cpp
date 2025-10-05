@@ -4,9 +4,9 @@
 GeneralEffectTests::GeneralEffectTests(Effect* effect, int width, int height)
     : testEffect_(effect), testMatrix_(nullptr), testWidth_(width), testHeight_(height),
       testsRun_(0), testsPassed_(0), testsFailed_(0) {
-    
+
     if (testEffect_) {
-        testMatrix_ = new EffectMatrix(width, height);
+        testMatrix_ = new PixelMatrix(width, height);
     }
 }
 
@@ -51,13 +51,13 @@ void GeneralEffectTests::runPerformanceTests() {
 
 bool GeneralEffectTests::testBasicInterface() {
     bool passed = true;
-    
+
     // Test that effect has a name
     if (!testEffect_) {
         logTest("Basic Interface", false, "Effect is null");
         return false;
     }
-    
+
     const char* name = testEffect_->getName();
     if (!name || strlen(name) == 0) {
         passed = false;
@@ -65,7 +65,7 @@ bool GeneralEffectTests::testBasicInterface() {
     } else {
         logTest("Basic Interface", true, "Effect has valid name");
     }
-    
+
     return passed;
 }
 
@@ -86,7 +86,7 @@ bool GeneralEffectTests::testMatrixSafety() {
     bool passed = true;
     try {
         testEffect_->apply(testMatrix_);
-        
+
         // Verify matrix still has valid data
         if (!matrixHasValidData(testMatrix_)) {
             passed = false;
@@ -150,7 +150,7 @@ bool GeneralEffectTests::testMultipleApplications() {
         for (int i = 0; i < 10; i++) {
             testEffect_->apply(testMatrix_);
         }
-        
+
         if (matrixHasValidData(testMatrix_)) {
             logTest("Multiple Applications", true, "Effect stable over multiple applications");
         } else {
@@ -175,15 +175,15 @@ bool GeneralEffectTests::testPerformanceConstraints() {
     unsigned long startTime = micros();
     testEffect_->apply(testMatrix_);
     unsigned long endTime = micros();
-    
+
     unsigned long executionTime = endTime - startTime;
-    
+
     // Effect should complete in reasonable time (< 10ms for small matrix)
     bool passed = executionTime < 10000; // 10ms in microseconds
-    
+
     char details[64];
     snprintf(details, sizeof(details), "Execution time: %lu microseconds", executionTime);
-    
+
     logTest("Performance Constraints", passed, details);
     return passed;
 }
@@ -196,19 +196,18 @@ bool GeneralEffectTests::testDataIntegrity() {
 
     // Set known values
     testMatrix_->setPixel(0, 0, 255, 0, 0);   // Red
-    testMatrix_->setPixel(1, 0, 0, 255, 0);   // Green  
+    testMatrix_->setPixel(1, 0, 0, 255, 0);   // Green
     testMatrix_->setPixel(2, 0, 0, 0, 255);   // Blue
 
     testEffect_->apply(testMatrix_);
 
     // Verify pixels still have reasonable values (effects may transform but shouldn't corrupt)
-    uint8_t r, g, b;
     bool passed = true;
-    
+
     for (int x = 0; x < testWidth_; x++) {
         for (int y = 0; y < testHeight_; y++) {
-            testMatrix_->getPixel(x, y, r, g, b);
-            if (!isValidPixelData(r, g, b)) {
+            RGB pixel = testMatrix_->getPixel(x, y);
+            if (!isValidPixelData(pixel.r, pixel.g, pixel.b)) {
                 passed = false;
                 break;
             }
@@ -227,14 +226,13 @@ bool GeneralEffectTests::isValidPixelData(uint8_t r, uint8_t g, uint8_t b) const
     return true; // uint8_t automatically constrains to 0-255
 }
 
-bool GeneralEffectTests::matrixHasValidData(EffectMatrix* matrix) const {
+bool GeneralEffectTests::matrixHasValidData(PixelMatrix* matrix) const {
     if (!matrix) return false;
-    
-    uint8_t r, g, b;
+
     for (int x = 0; x < testWidth_; x++) {
         for (int y = 0; y < testHeight_; y++) {
-            matrix->getPixel(x, y, r, g, b);
-            if (!isValidPixelData(r, g, b)) {
+            RGB pixel = matrix->getPixel(x, y);
+            if (!isValidPixelData(pixel.r, pixel.g, pixel.b)) {
                 return false;
             }
         }
@@ -251,7 +249,7 @@ void GeneralEffectTests::logTest(const char* testName, bool passed, const char* 
         testsFailed_++;
         Serial.print(F("❌ "));
     }
-    
+
     Serial.print(testName);
     if (details) {
         Serial.print(F(" - "));
@@ -269,7 +267,7 @@ void GeneralEffectTests::printResults() const {
     Serial.println(testsPassed_);
     Serial.print(F("Failed: "));
     Serial.println(testsFailed_);
-    
+
     if (testsFailed_ == 0) {
         Serial.println(F("🎉 All tests PASSED!"));
     } else {

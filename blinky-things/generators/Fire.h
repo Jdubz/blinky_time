@@ -28,18 +28,14 @@ struct FireParams {
     float   audioSparkBoost     = Defaults::AudioSparkBoost;
     uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
     int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
-    uint8_t maxSparkPositions   = 16;  // For random layout tracking
-};
-    uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
-    int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
     uint8_t bottomRowsForSparks = Defaults::BottomRowsForSparks;
     uint8_t transientHeatMax    = Defaults::TransientHeatMax;
 
     // Layout-specific parameters
     uint8_t spreadDistance      = 12;     // Heat spread distance for linear/random layouts
     float   heatDecay          = 0.92f;   // Heat decay factor for linear layouts
-    uint8_t maxSparkPositions  = 3;      // Max simultaneous spark positions
-    bool    useMaxHeatOnly     = false;   // Use max heat instead of additive (linear layouts)
+    uint8_t maxSparkPositions   = 16;     // Max simultaneous spark positions
+    bool    useMaxHeatOnly      = false;  // Use max heat instead of additive (linear layouts)
 };
 
 class Fire : public Generator {

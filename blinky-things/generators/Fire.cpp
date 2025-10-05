@@ -18,10 +18,10 @@ Fire::~Fire() {
 }
 
 bool Fire::begin(const DeviceConfig& config) {
-    this->width_ = config.layout.width;
-    this->height_ = config.layout.height;
+    this->width_ = config.matrix.width;
+    this->height_ = config.matrix.height;
     this->numLeds_ = this->width_ * this->height_;
-    layout_ = config.layout.type;
+    layout_ = config.matrix.layoutType;
 
     // Allocate heat array
     if (heat_) delete[] heat_;
@@ -87,33 +87,33 @@ void Fire::setAudioInput(float energy, bool hit) {
     audioHit_ = hit;
 }
 
-void Fire::setLayoutType(LayoutType layoutType) {
-    this->layout_ = layoutType;
+// TODO: These methods need to be added to Fire.h header
+// void Fire::setLayoutType(LayoutType layoutType) {
+//     this->layout_ = layoutType;
+//     // Adjust default parameters based on layout type
+//     switch (this->layout_) {
+//         case LINEAR_LAYOUT:
+//             params_.useMaxHeatOnly = true;
+//             params_.spreadDistance = 12;
+//             params_.heatDecay = 0.92f;
+//             break;
+//         case RANDOM_LAYOUT:
+//             params_.useMaxHeatOnly = false;
+//             params_.spreadDistance = 8;
+//             params_.heatDecay = 0.88f;
+//             break;
+//         case MATRIX_LAYOUT:
+//         default:
+//             params_.useMaxHeatOnly = false;
+//             params_.spreadDistance = 6;
+//             params_.heatDecay = 0.90f;
+//             break;
+//     }
+// }
 
-    // Adjust default parameters based on layout type
-    switch (this->layout_) {
-        case LINEAR_LAYOUT:
-            params_.useMaxHeatOnly = true;   // Use max heat instead of additive
-            params_.spreadDistance = 12;     // Wider spread for linear
-            params_.heatDecay = 0.92f;      // Slower decay
-            break;
-        case RANDOM_LAYOUT:
-            params_.useMaxHeatOnly = false;  // Allow additive heat
-            params_.spreadDistance = 8;      // Moderate spread
-            params_.heatDecay = 0.88f;      // Faster decay for randomness
-            break;
-        case MATRIX_LAYOUT:
-        default:
-            params_.useMaxHeatOnly = false;  // Traditional additive
-            params_.spreadDistance = 6;      // Upward focused
-            params_.heatDecay = 0.90f;      // Standard decay
-            break;
-    }
-}
-
-void Fire::setOrientation(MatrixOrientation orientation) {
-    orientation_ = orientation;
-}
+// void Fire::setOrientation(MatrixOrientation orientation) {
+//     orientation_ = orientation;
+// }
 
 void Fire::setParams(const FireParams& params) {
     params_ = params;
@@ -121,7 +121,8 @@ void Fire::setParams(const FireParams& params) {
 
 void Fire::resetToDefaults() {
     params_ = FireParams();
-    setLayoutType(this->layout_);  // Reapply layout-specific defaults
+    // TODO: Re-enable when setLayoutType is added to header
+    // setLayoutType(this->layout_);  // Reapply layout-specific defaults
 }
 
 void Fire::propagateHeat() {
@@ -323,22 +324,9 @@ int Fire::coordsToIndex(int x, int y) {
         return -1;
     }
 
-    // Handle different orientations and wiring patterns
-    switch (orientation_) {
-        case VERTICAL:
-            // Zigzag pattern for vertical orientation
-            if (x % 2 == 0) {
-                // Even columns: top to bottom
-                return x * this->height_ + y;
-            } else {
-                // Odd columns: bottom to top
-                return x * this->height_ + (this->height_ - 1 - y);
-            }
-        case HORIZONTAL:
-        default:
-            // Standard row-major order
-            return y * this->width_ + x;
-    }
+    // Standard row-major order
+    // TODO: Add orientation support when orientation_ field is added to header
+    return y * this->width_ + x;
 }
 
 void Fire::indexToCoords(int index, int& x, int& y) {
@@ -347,25 +335,10 @@ void Fire::indexToCoords(int index, int& x, int& y) {
         return;
     }
 
-    switch (orientation_) {
-        case VERTICAL:
-            // Reverse of zigzag pattern
-            x = index / this->height_;
-            if (x % 2 == 0) {
-                // Even columns: top to bottom
-                y = index % this->height_;
-            } else {
-                // Odd columns: bottom to top
-                y = this->height_ - 1 - (index % this->height_);
-            }
-            break;
-        case HORIZONTAL:
-        default:
-            // Standard row-major order
-            x = index % this->width_;
-            y = index / this->width_;
-            break;
-    }
+    // Standard row-major order
+    // TODO: Add orientation support when orientation_ field is added to header
+    x = index % this->width_;
+    y = index / this->width_;
 }
 
 // Implement parameter setters
@@ -385,13 +358,11 @@ void Fire::setAudioParams(float sparkBoost, uint8_t heatBoostMax, int8_t cooling
     params_.coolingAudioBias = coolingBias;
 }
 
-// Factory function
-Fire* createFireGenerator(const DeviceConfig& config) {
-    Fire* generator = new Fire();
-
-    // Configure layout type from device config
-    generator->setLayoutType(config.matrix.layoutType);
-    generator->setOrientation(config.matrix.orientation);
-
-    return generator;
-}
+// Factory function - Disabled until setLayoutType/setOrientation are added to header
+// Fire* createFireGenerator(const DeviceConfig& config) {
+//     Fire* generator = new Fire();
+//     // Configure layout type from device config
+//     generator->setLayoutType(config.matrix.layoutType);
+//     generator->setOrientation(config.matrix.orientation);
+//     return generator;
+// }

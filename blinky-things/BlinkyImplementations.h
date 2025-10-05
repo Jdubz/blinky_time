@@ -1,20 +1,7 @@
 #pragma once
- * CURRENT ARCHITECTURE STATUS:
- * ✅ Core: Inputs→Generator→Effect(optional)→Render pipeline operational
- * ✅ Fire: Realistic fire simulation (red/orange/yellow)
- * ✅ Water: Flowing water effects (blue/cyan)  
- * ✅ Lightning: Electric bolt effects (yellow/white)
- * ✅ Effects: HueRotation (color cycling), NoOp (pass-through)
- * ✅ Testing: General effect tests for all effects
- * ✅ Hardware: AdaptiveMic and BatteryMonitor ready
- * ⚠️  IMUHelper: Disabled until LSM6DS3 library dependency resolved
- * ⚠️  SerialConsole: Disabled until updated for unified architecture
- * ⚠️  ConfigStorage: Disabled until legacy fire params cleaned uplinkyImplementations.// Test implementations (only when testing enabled)
-#ifdef ENABLE_TESTING
-#include "tests/GeneratorTestRunner.cpp"
-#include "effects/tests/GeneralEffectTests.cpp"
-#include "effects/tests/HueRotationEffectTest.cpp"
-#endifclude all implementation files
+
+/**
+ * BlinkyImplementations.h - Include all implementation files
  *
  * Arduino IDE doesn't automatically compile .cpp files in subdirectories.
  * This file includes all implementations to ensure they're compiled.
@@ -24,6 +11,8 @@
  * ✅ Fire: Realistic fire simulation (red/orange/yellow)
  * ✅ Water: Flowing water effects (blue/cyan)
  * ✅ Lightning: Electric bolt effects (yellow/white)
+ * ✅ Effects: HueRotation (color cycling), NoOp (pass-through)
+ * ✅ Testing: General effect tests for all effects
  * ✅ Hardware: AdaptiveMic and BatteryMonitor ready
  * ⚠️  IMUHelper: Disabled until LSM6DS3 library dependency resolved
  * ⚠️  SerialConsole: Disabled until updated for unified architecture
@@ -58,5 +47,6 @@
 #ifdef ENABLE_TESTING
 #include "tests/GeneratorTestRunner.cpp"
 #include "render/tests/EffectRendererTest.cpp"
-#include "effects/HueRotationTests/HueRotationEffectTest.cpp"
+#include "effects/tests/GeneralEffectTests.cpp"
+#include "effects/tests/HueRotationEffectTest.cpp"
 #endif

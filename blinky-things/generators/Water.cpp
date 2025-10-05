@@ -18,10 +18,10 @@ Water::~Water() {
 }
 
 bool Water::begin(const DeviceConfig& config) {
-    width_ = config.layout.width;
-    height_ = config.layout.height;
+    width_ = config.matrix.width;
+    height_ = config.matrix.height;
     numLeds_ = width_ * height_;
-    layout_ = config.layout.type;
+    layout_ = config.matrix.layoutType;
 
     // Allocate depth array
     if (depth_) delete[] depth_;

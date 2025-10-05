@@ -26,6 +26,11 @@ public:
     virtual void apply(PixelMatrix* matrix) = 0;
 
     /**
+     * Reset the effect state to initial conditions
+     */
+    virtual void reset() = 0;
+
+    /**
      * Get the name of this effect for debugging/logging
      */
     virtual const char* getName() const = 0;

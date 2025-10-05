@@ -18,10 +18,10 @@ Lightning::~Lightning() {
 }
 
 bool Lightning::begin(const DeviceConfig& config) {
-    width_ = config.layout.width;
-    height_ = config.layout.height;
+    width_ = config.matrix.width;
+    height_ = config.matrix.height;
     numLeds_ = width_ * height_;
-    layout_ = config.layout.type;
+    layout_ = config.matrix.layoutType;
 
     // Allocate intensity array
     if (intensity_) delete[] intensity_;

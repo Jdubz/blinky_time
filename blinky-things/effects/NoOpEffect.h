@@ -1,5 +1,5 @@
 #pragma once
-#include "../Effect.h"
+#include "Effect.h"
 
 /**
  * NoOpEffect - A pass-through effect that does nothing
@@ -14,10 +14,17 @@ public:
     virtual ~NoOpEffect() = default;
 
     /**
-     * Apply no transformation to the matrix
-     * @param matrix The effect matrix to pass through unchanged
+     * Initialize effect (no-op has no initialization)
      */
-    virtual void apply(EffectMatrix* matrix) override {
+    virtual void begin(int width, int height) override {
+        (void)width; (void)height; // Suppress unused parameter warnings
+    }
+
+    /**
+     * Apply no transformation to the matrix
+     * @param matrix The pixel matrix to pass through unchanged
+     */
+    virtual void apply(PixelMatrix* matrix) override {
         // Intentionally do nothing - pass through the data unchanged
         (void)matrix; // Suppress unused parameter warning
     }
