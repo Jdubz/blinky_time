@@ -1,5 +1,5 @@
 #pragma once
-#include "../generators/fire/tests/FireTestRunner.h"
+#include "../generators/legacy-fire/tests/FireTestRunner.h"
 #include "../generators/matrix-fire/tests/MatrixFireGeneratorTest.h"
 #include "../generators/string-fire/tests/StringFireGeneratorTest.h"
 #include "../effects/hue-rotation/tests/HueRotationEffectTest.h"
