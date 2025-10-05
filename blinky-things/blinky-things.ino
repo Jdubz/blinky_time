@@ -17,8 +17,9 @@
  */
 
 #include <Adafruit_NeoPixel.h>
-#include "BlinkyArchitecture.h"  // Includes all architecture components and config
-#include "core/Version.h"        // Version information from repository
+#include "BlinkyArchitecture.h"     // Includes all architecture components and config
+#include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
+#include "core/Version.h"           // Version information from repository
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
@@ -56,7 +57,7 @@ AdaptiveMic mic;
 // SerialConsole console;
 // BatteryMonitor battery;
 // IMUHelper imu;
-ConfigStorage configStorage;
+// ConfigStorage configStorage;  // TODO: Clean up legacy fire params
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
@@ -245,7 +246,7 @@ void setup() {
   }
 
   // Initialize EEPROM configuration storage
-  configStorage.begin();
+  // configStorage.begin();  // TODO: Clean up legacy fire params
 
   // TODO: Update configuration loading for new architecture
   Serial.println(F("Configuration system initialized"));

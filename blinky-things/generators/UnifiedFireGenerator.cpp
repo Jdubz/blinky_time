@@ -3,7 +3,7 @@
 
 UnifiedFireGenerator::UnifiedFireGenerator() 
     : width_(0), height_(0), numLeds_(0), heat_(nullptr), lastUpdateMs_(0),
-      layoutType_(LAYOUT_MATRIX), orientation_(HORIZONTAL), 
+      layoutType_(MATRIX_LAYOUT), orientation_(HORIZONTAL), 
       audioEnergy_(0.0f), audioHit_(false),
       sparkPositions_(nullptr), numActivePositions_(0) {
 }
@@ -21,7 +21,7 @@ UnifiedFireGenerator::~UnifiedFireGenerator() {
 
 bool UnifiedFireGenerator::begin(int width, int height) {
     // Default to matrix layout for backward compatibility
-    return begin(width, height, LAYOUT_MATRIX);
+    return begin(width, height, MATRIX_LAYOUT);
 }
 
 bool UnifiedFireGenerator::begin(int width, int height, LayoutType layoutType) {
@@ -77,7 +77,12 @@ void UnifiedFireGenerator::generate(EffectMatrix& matrix, float energy, float hi
         uint32_t color = heatToColor(heat_[i]);
         int x, y;
         indexToCoords(i, x, y);
-        matrix.setPixel(x, y, color);
+        
+        // Convert uint32_t color to RGB
+        uint8_t r = (color >> 16) & 0xFF;
+        uint8_t g = (color >> 8) & 0xFF;
+        uint8_t b = color & 0xFF;
+        matrix.setPixel(x, y, RGB(r, g, b));
     }
 }
 

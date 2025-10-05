@@ -13,8 +13,8 @@ extern BatteryMonitor battery;
 extern IMUHelper imu;
 extern const DeviceConfig& config;
 
-SerialConsole::SerialConsole(FireEffect &f, Adafruit_NeoPixel &l)
-    : fire(f), leds(l), configStorage_(nullptr), stringFire_(nullptr), testRunner_(nullptr) {}
+SerialConsole::SerialConsole(UnifiedFireGenerator* fireGen, Adafruit_NeoPixel &l)
+    : fireGenerator_(fireGen), leds(l), configStorage_(nullptr), testRunner_(nullptr) {}
 
 void SerialConsole::begin() {
     Serial.begin(115200);

@@ -3,17 +3,17 @@
 
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
-#include "FireEffect.h"
+#include "../generators/UnifiedFireGenerator.h"
 #include "../config/Globals.h"
 
 // Forward declarations to avoid circular includes
 class ConfigStorage;
-class StringFireEffect;
+class UnifiedFireGenerator;
 class GeneratorTestRunner;
 
 class SerialConsole {
 public:
-    SerialConsole(FireEffect &fire, Adafruit_NeoPixel &leds);
+    SerialConsole(UnifiedFireGenerator* fireGen, Adafruit_NeoPixel &leds);
 
     void begin();
     void update();
@@ -23,7 +23,7 @@ public:
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
 
     // Set string fire effect for configuration (when using STRING_FIRE mode)
-    void setStringFire(StringFireEffect* stringFire) { stringFire_ = stringFire; }
+    void setUnifiedFireGenerator(UnifiedFireGenerator* fireGen) { fireGenerator_ = fireGen; }
 
     void restoreDefaults();
     void printAll();
@@ -53,10 +53,9 @@ public:
 
 
 private:
-    FireEffect &fire;
+    UnifiedFireGenerator* fireGenerator_; // Unified fire generator
     Adafruit_NeoPixel &leds;
     ConfigStorage* configStorage_;        // For saving parameters to EEPROM
-    StringFireEffect* stringFire_;        // For string fire mode parameters
     GeneratorTestRunner* testRunner_;     // For running generator tests
 
     // ---- Debug systems ----

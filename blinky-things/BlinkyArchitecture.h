@@ -18,7 +18,7 @@
 #include "config/Constants.h"
 #include "config/Globals.h"
 #include "config/TotemDefaults.h"
-#include "config/ConfigStorage.h"
+// #include "config/ConfigStorage.h"  // TODO: Clean up legacy fire params
 
 // Core interfaces
 #include "core/Generator.h"
