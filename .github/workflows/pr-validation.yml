@@ -1,0 +1,91 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  compilation-tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        device-type: [1, 2, 3]  # Hat, Tube Light, Bucket Totem
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Arduino CLI
+      uses: arduino/setup-arduino-cli@v2
+      with:
+        version: "1.0.4"
+
+    - name: Add Seeeduino board index
+      run: |
+        arduino-cli config add board_manager.additional_urls https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json
+
+    - name: Install Arduino cores and libraries
+      run: |
+        arduino-cli core update-index
+        arduino-cli core install Seeeduino:nrf52
+        arduino-cli lib install "Adafruit NeoPixel"
+        # Install adafruit-nrfutil for nRF52 packaging
+        pip install adafruit-nrfutil
+
+    - name: Set device type
+      run: |
+        sed -i 's/#define DEVICE_TYPE [0-9]/#define DEVICE_TYPE ${{ matrix.device-type }}/' blinky-things/blinky-things.ino
+
+    - name: Compile sketch
+      run: |
+        arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things/
+
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check code formatting
+      run: |
+        echo "Checking for common code issues..."
+
+        # Check for trailing whitespace (warning only - doesn't fail build)
+        if find blinky-things/ -name "*.cpp" -o -name "*.h" -o -name "*.ino" | xargs grep -l "[ \t]$"; then
+          echo "⚠️  Warning: Found trailing whitespace in files above"
+          echo "This doesn't affect compilation but should be cleaned up eventually"
+        else
+          echo "✅ No trailing whitespace found"
+        fi
+
+        # Check for consistent include guards
+        echo "Checking include guards..."
+        find blinky-things/ -name "*.h" -exec grep -L "#pragma once\|#ifndef.*_H" {} \; | while read file; do
+          if [ -n "$file" ]; then
+            echo "❌ Missing include guard in $file"
+            exit 1
+          fi
+        done
+        echo "✅ Include guards OK"
+
+  documentation:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check documentation
+      run: |
+        echo "Checking documentation completeness..."
+
+        required_files=("README.md" "LICENSE" "CONTRIBUTING.md")
+        for file in "${required_files[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "❌ Missing required file: $file"
+            exit 1
+          fi
+        done
+        echo "✅ All required documentation files present"
