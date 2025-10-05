@@ -63,6 +63,13 @@ bool prevChargingState = false;
 
 // Helper function to clear all LEDs
 void clearAllLEDs() {
+  for (int i = 0; i < config.matrix.width * config.matrix.height; i++) {
+    leds.setPixelColor(i, 0);
+  }
+}
+
+// Helper function to clear all LEDs
+void clearAllLEDs() {
   for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
     leds.setPixelColor(i, Constants::LED_OFF);
   }
@@ -158,7 +165,7 @@ void setup() {
     while(1); // Halt execution
   }
 
-  // Initialize fire effect based on config type
+  // Initialize new Generator-Effect-Renderer architecture
   Serial.print(F("Config fire type: "));
   Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
   Serial.print(F("Matrix dimensions: "));
@@ -169,24 +176,46 @@ void setup() {
   Serial.print(config.matrix.width * config.matrix.height);
   Serial.println(F(" LEDs"));
 
-  if (config.matrix.fireType == STRING_FIRE) {
-    Serial.println(F("Initializing STRING fire effect"));
-    stringFire = new StringFireEffect(leds, config.matrix.width * config.matrix.height);
-    if (stringFire) {
-      stringFire->begin();
-      Serial.println(F("String fire effect initialized"));
-    } else {
-      Serial.println(F("ERROR: String fire effect allocation failed"));
-      while(1); // Halt execution
-    }
-  } else {
-    Serial.println(F("Initializing MATRIX fire effect"));
-    // Reinitialize the matrix fire with proper dimensions
-    fire.~FireEffect();
-    new(&fire) FireEffect(leds, config.matrix.width, config.matrix.height);
-    fire.begin();
-    Serial.println(F("Matrix fire effect initialized"));
+  // Create EffectMatrix for the visual pipeline
+  effectMatrix = new EffectMatrix(config.matrix.width, config.matrix.height);
+  if (!effectMatrix) {
+    Serial.println(F("ERROR: EffectMatrix allocation failed"));
+    while(1); // Halt execution
   }
+
+  // Initialize appropriate generator based on config
+  if (config.matrix.fireType == STRING_FIRE) {
+    Serial.println(F("Initializing STRING fire generator"));
+    currentGenerator = new StringFireGenerator();
+  } else {
+    Serial.println(F("Initializing MATRIX fire generator"));
+    currentGenerator = new MatrixFireGenerator();
+  }
+  
+  if (!currentGenerator) {
+    Serial.println(F("ERROR: Generator allocation failed"));
+    while(1); // Halt execution
+  }
+  
+  currentGenerator->begin(config.matrix.width, config.matrix.height);
+
+  // Initialize effect (for now, just a pass-through effect)
+  currentEffect = new HueRotationEffect();
+  if (!currentEffect) {
+    Serial.println(F("ERROR: Effect allocation failed"));
+    while(1); // Halt execution
+  }
+  currentEffect->begin();
+
+  // Initialize renderer
+  renderer = new EffectRenderer();
+  if (!renderer) {
+    Serial.println(F("ERROR: Renderer allocation failed"));
+    while(1); // Halt execution
+  }
+  renderer->begin();
+
+  Serial.println(F("New architecture initialized successfully"));
 
   bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
   if (!micOk) {
@@ -198,37 +227,25 @@ void setup() {
   // Initialize EEPROM configuration storage
   configStorage.begin();
   
-  // Load saved parameters or apply defaults to fire effects
-  if (config.matrix.fireType == STRING_FIRE && stringFire) {
-    stringFire->restoreDefaults(); // Apply device-specific config defaults first
-    configStorage.loadConfiguration(stringFire->params, mic); // Override with saved values
-    Serial.println(F("String fire: config defaults + EEPROM parameters applied"));
-  } else {
-    fire.restoreDefaults(); // Apply device-specific config defaults first  
-    configStorage.loadConfiguration(fire.params, mic); // Override with saved values
-    Serial.println(F("Matrix fire: config defaults + EEPROM parameters applied"));
-  }
+  // TODO: Update configuration loading for new architecture
+  Serial.println(F("Configuration system initialized"));
 
-  console.begin();
-  console.setConfigStorage(&configStorage); // Enable EEPROM saving for parameters
+  // TODO: Uncomment when hardware components are updated for new architecture
+  // console.begin();
+  // console.setConfigStorage(&configStorage); // Enable EEPROM saving for parameters
   
-  // Set string fire reference if using STRING_FIRE mode
-  if (config.matrix.fireType == STRING_FIRE && stringFire) {
-    console.setStringFire(stringFire);
-  }
+  // if (!imu.begin()) {
+  //   Serial.println(F("WARNING: IMU initialization failed"));
+  // } else {
+  //   Serial.println(F("IMU initialized"));
+  // }
 
-  if (!imu.begin()) {
-    Serial.println(F("WARNING: IMU initialization failed"));
-  } else {
-    Serial.println(F("IMU initialized"));
-  }
-
-  if (!battery.begin()) {
-    Serial.println(F("WARNING: Battery monitor failed to start"));
-  } else {
-    battery.setFastCharge(config.charging.fastChargeEnabled);
-    Serial.println(F("Battery monitor initialized"));
-  }
+  // if (!battery.begin()) {
+  //   Serial.println(F("WARNING: Battery monitor failed to start"));
+  // } else {
+  //   battery.setFastCharge(config.charging.fastChargeEnabled);
+  //   Serial.println(F("Battery monitor initialized"));
+  // }
 
   Serial.println(F("Setup complete!"));
 }
@@ -241,84 +258,59 @@ void loop() {
 
   mic.update(dt);
 
+  // TODO: Uncomment when IMU is updated for new architecture
   // IMU data update for visualization only (no fire effects)
-  if (imu.isReady() && console.heatVizEnabled) {
-    imu.updateIMUData(); // Update clean IMU data for debugging only
-  }
+  // if (imu.isReady() && console.heatVizEnabled) {
+  //   imu.updateIMUData(); // Update clean IMU data for debugging only
+  // }
 
   float energy = mic.getLevel();
   float hit = mic.getTransient();
 
+  // TODO: Uncomment when battery monitor is updated for new architecture
   // Auto-activation of battery visualization when charging
-  if (config.charging.autoShowVisualizationWhenCharging) {
-    bool currentChargingState = battery.isCharging();
-    if (currentChargingState && !prevChargingState) {
-      // Just started charging - auto-activate battery visualization and disable fire
-      console.batteryVizEnabled = true;
-      console.fireDisabled = true;
-      // Clear fire display immediately
-      clearAllLEDs();
-      leds.show();
-      Serial.println(F("Auto-activated battery visualization (charging detected)"));
-    } else if (!currentChargingState && prevChargingState) {
-      // Just stopped charging - auto-deactivate and re-enable fire
-      if (console.batteryVizEnabled) {
-        console.batteryVizEnabled = false;
-        console.fireDisabled = false;
-        Serial.println(F("Auto-deactivated battery visualization (charging stopped)"));
-      }
-    }
-    prevChargingState = currentChargingState;
-  }
+  // if (config.charging.autoShowVisualizationWhenCharging) {
+  //   bool currentChargingState = battery.isCharging();
+  //   if (currentChargingState && !prevChargingState) {
+  //     // Just started charging - auto-activate battery visualization and disable fire
+  //     console.batteryVizEnabled = true;
+  //     console.fireDisabled = true;
+  //     // Clear fire display immediately
+  //     clearAllLEDs();
+  //     leds.show();
+  //     Serial.println(F("Auto-activated battery visualization (charging detected)"));
+  //   } else if (!currentChargingState && prevChargingState) {
+  //     // Just stopped charging - auto-deactivate and re-enable fire
+  //     if (console.batteryVizEnabled) {
+  //       console.batteryVizEnabled = false;
+  //       console.fireDisabled = false;
+  //       Serial.println(F("Auto-deactivated battery visualization (charging stopped)"));
+  //     }
+  //   }
+  //   prevChargingState = currentChargingState;
+  // }
 
-  // Render fire effect or visualizations
-  if (console.testPatternEnabled) {
-    // Test pattern mode - highest priority for layout verification
-    console.renderTestPattern();
-  } else if (console.batteryVizEnabled) {
-    // Battery visualization mode - override other displays
-    console.renderBatteryVisualization();
-  } else if (console.imuVizEnabled) {
-    // IMU visualization mode - override fire display
-    console.renderIMUVisualization();
-  } else if (console.heatVizEnabled) {
-    // Cylinder top visualization mode - show fire + top indicator
-    if (!console.fireDisabled) {
-      updateFireEffect(energy, hit);
-      renderFireEffect(); // Render fire to matrix but don't show yet
-      console.renderTopVisualization(); // Add top indicator and show
-    } else {
-      // Fire disabled - clear display and show only top indicator
-      clearAllLEDs();
-      console.renderTopVisualization();
-    }
-  } else {
-    // Normal fire mode
-    if (!console.fireDisabled) {
-      updateFireEffect(energy, hit);
-      showFireEffect();
-    } else {
-      // Fire disabled - clear display
-      clearAllLEDs();
-      leds.show();
-    }
-  }
+  // Simplified rendering for new architecture - just fire effect for now
+  updateFireEffect(energy, hit);
+  showFireEffect();
 
-  console.update();
+  // TODO: Uncomment when console is updated for new architecture
+  // console.update();
 
+  // TODO: Uncomment when battery monitor is updated for new architecture
   // Battery monitoring
-  static uint32_t lastBatteryCheck = 0;
-  if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) { // Check every 30 seconds
-    lastBatteryCheck = millis();
-    float voltage = battery.getVoltage();
-    if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
-      Serial.print(F("CRITICAL BATTERY: "));
-      Serial.print(voltage);
-      Serial.println(F("V"));
-    } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
-      Serial.print(F("Low battery: "));
-      Serial.print(voltage);
-      Serial.println(F("V"));
-    }
-  }
+  // static uint32_t lastBatteryCheck = 0;
+  // if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) { // Check every 30 seconds
+  //   lastBatteryCheck = millis();
+  //   float voltage = battery.getVoltage();
+  //   if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
+  //     Serial.print(F("CRITICAL BATTERY: "));
+  //     Serial.print(voltage);
+  //     Serial.println(F("V"));
+  //   } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
+  //     Serial.print(F("Low battery: "));
+  //     Serial.print(voltage);
+  //     Serial.println(F("V"));
+  //   }
+  // }
 }
