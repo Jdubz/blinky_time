@@ -67,7 +67,6 @@ void clearAllLEDs() {
     leds.setPixelColor(i, Constants::LED_OFF);
   }
 }
-}
 
 // Helper functions for new Generator-Effect-Renderer architecture
 void updateFireEffect(float energy, float hit) {
@@ -83,7 +82,7 @@ void updateFireEffect(float energy, float hit) {
   // Update generator with audio energy and impact
   if (currentGenerator) {
     // Cast to FireGenerator to access update method
-    FireGenerator* fireGen = dynamic_cast<FireGenerator*>(currentGenerator);
+    FireGenerator* fireGen = static_cast<FireGenerator*>(currentGenerator);
     if (fireGen) {
       fireGen->setAudioInput(energy, hit);
       fireGen->update();
@@ -95,11 +94,11 @@ void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
   if (currentGenerator && currentEffect && renderer && effectMatrix) {
     // Get audio input for generation
-    float energy = adaptiveMic.getEnergy();
-    float hit = adaptiveMic.getHit();
+    float energy = mic.getEnergy();
+    float hit = mic.getHit();
     
     currentGenerator->generate(*effectMatrix, energy, hit);
-    currentEffect->apply(*effectMatrix);
+    currentEffect->apply(effectMatrix);
     renderer->render(*effectMatrix);
     leds.show();
   }
@@ -200,7 +199,7 @@ void setup() {
   }
 
   // Initialize FireGenerator specific setup
-  FireGenerator* fireGen = dynamic_cast<FireGenerator*>(currentGenerator);
+  FireGenerator* fireGen = static_cast<FireGenerator*>(currentGenerator);
   if (fireGen) {
     fireGen->begin(config.matrix.width, config.matrix.height);
   }
