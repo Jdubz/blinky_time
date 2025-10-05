@@ -22,7 +22,7 @@
 // Hardware implementations
 #include "hardware/AdaptiveMic.cpp"
 #include "hardware/BatteryMonitor.cpp"
-#include "hardware/IMUHelper.cpp"
+// #include "hardware/IMUHelper.cpp"  // TODO: Enable when LSM6DS3 library is available
 // #include "hardware/SerialConsole.cpp"  // TODO: Update for unified fire generator
 
 // Configuration implementations
