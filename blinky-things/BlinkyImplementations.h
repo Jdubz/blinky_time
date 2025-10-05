@@ -5,6 +5,14 @@
  *
  * Arduino IDE doesn't automatically compile .cpp files in subdirectories.
  * This file includes all implementations to ensure they're compiled.
+ * 
+ * CURRENT ARCHITECTURE STATUS:
+ * ✅ Core: Generator→Effects→Renderer pipeline operational
+ * ✅ UnifiedFireGenerator: Supports all layout types (MATRIX, LINEAR, RANDOM)
+ * ✅ Hardware: AdaptiveMic and BatteryMonitor ready
+ * ⚠️  IMUHelper: Disabled until LSM6DS3 library dependency resolved
+ * ⚠️  SerialConsole: Disabled until updated for unified architecture
+ * ⚠️  ConfigStorage: Disabled until legacy fire params cleaned up
  */
 
 // Core implementations

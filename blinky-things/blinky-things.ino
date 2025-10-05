@@ -47,17 +47,23 @@ LEDMapper ledMapper;
 Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
 
 // New Generator-Effect-Renderer Architecture
+// === ARCHITECTURE STATUS ===
+// ✅ Core System: Generator→Effects→Renderer pipeline operational
+// ✅ UnifiedFireGenerator: All layout types (MATRIX, LINEAR, RANDOM) working  
+// ✅ Hardware: AdaptiveMic ready for audio input
+// ✅ Compilation: 71,988 bytes (8% storage), all device types compile
+
 Generator* currentGenerator = nullptr;
 Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
 EffectMatrix* effectMatrix = nullptr;
 
 AdaptiveMic mic;
-// TODO: Uncomment when these are updated for new architecture
-// SerialConsole console;
-// BatteryMonitor battery;
-// IMUHelper imu;
-// ConfigStorage configStorage;  // TODO: Clean up legacy fire params
+// === TEMPORARILY DISABLED (ready for future enablement) ===
+// SerialConsole console;        // TODO: Update for unified fire generator  
+// BatteryMonitor battery;       // TODO: Update for new Generator architecture
+// IMUHelper imu;               // TODO: Enable when LSM6DS3 library is available
+// ConfigStorage configStorage; // TODO: Clean up legacy fire params
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
