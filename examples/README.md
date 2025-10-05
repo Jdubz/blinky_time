@@ -4,6 +4,13 @@ This directory contains example configurations and code snippets for different B
 
 ## Available Examples
 
+### Generator Examples
+- `generator_examples.cpp` - Complete examples of Fire, Water, and Lightning generators
+  - How to create and initialize generators
+  - Parameter customization examples  
+  - Audio-reactive generator switching
+  - Layout-specific optimizations
+
 ### Basic Configurations
 - `simple-tube-light/` - Minimal tube light setup
 - `basic-hat/` - Simple hat installation
