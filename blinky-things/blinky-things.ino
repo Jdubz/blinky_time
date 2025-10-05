@@ -214,8 +214,8 @@ void setup() {
     while(1); // Halt execution
   }
   
-  // Initialize the generator
-  if (!currentGenerator->begin(config.matrix.width, config.matrix.height)) {
+  // Initialize the generator with layout type
+  if (!fireGen->begin(config.matrix.width, config.matrix.height, config.layoutType)) {
     Serial.println(F("ERROR: Generator initialization failed"));
     while(1); // Halt execution
   }

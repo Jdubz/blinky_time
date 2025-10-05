@@ -20,9 +20,15 @@ UnifiedFireGenerator::~UnifiedFireGenerator() {
 }
 
 bool UnifiedFireGenerator::begin(int width, int height) {
+    // Default to matrix layout for backward compatibility
+    return begin(width, height, LAYOUT_MATRIX);
+}
+
+bool UnifiedFireGenerator::begin(int width, int height, LayoutType layoutType) {
     width_ = width;
     height_ = height;
     numLeds_ = width * height;
+    layoutType_ = layoutType;
     
     // Allocate heat array
     if (heat_) delete[] heat_;
@@ -375,7 +381,7 @@ UnifiedFireGenerator* createFireGenerator(const DeviceConfig& config) {
     UnifiedFireGenerator* generator = new UnifiedFireGenerator();
     
     // Configure layout type from device config
-    generator->setLayoutType(config.matrix.layoutType);
+    generator->setLayoutType(config.layoutType);
     generator->setOrientation(config.matrix.orientation);
     
     return generator;

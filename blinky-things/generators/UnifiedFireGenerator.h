@@ -47,6 +47,7 @@ public:
     
     // Generator interface implementation
     virtual bool begin(int width, int height) override;
+    bool begin(int width, int height, LayoutType layoutType);
     virtual void update() override;
     virtual void generate(EffectMatrix* matrix) override;
     virtual void setAudioInput(float energy, bool hit) override;
