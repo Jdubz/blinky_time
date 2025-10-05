@@ -1,9 +1,9 @@
 #include "UnifiedFireGenerator.h"
 #include <Arduino.h>
 
-UnifiedFireGenerator::UnifiedFireGenerator() 
+UnifiedFireGenerator::UnifiedFireGenerator()
     : width_(0), height_(0), numLeds_(0), heat_(nullptr), lastUpdateMs_(0),
-      layoutType_(MATRIX_LAYOUT), orientation_(HORIZONTAL), 
+      layoutType_(MATRIX_LAYOUT), orientation_(HORIZONTAL),
       audioEnergy_(0.0f), audioHit_(false),
       sparkPositions_(nullptr), numActivePositions_(0) {
 }
@@ -29,18 +29,18 @@ bool UnifiedFireGenerator::begin(int width, int height, LayoutType layoutType) {
     height_ = height;
     numLeds_ = width * height;
     layoutType_ = layoutType;
-    
+
     // Allocate heat array
     if (heat_) delete[] heat_;
     heat_ = new uint8_t[numLeds_];
     memset(heat_, 0, numLeds_);
-    
+
     // Allocate spark positions for random layout
     if (sparkPositions_) delete[] sparkPositions_;
     sparkPositions_ = new uint8_t[params_.maxSparkPositions];
     memset(sparkPositions_, 0, params_.maxSparkPositions);
     numActivePositions_ = 0;
-    
+
     lastUpdateMs_ = millis();
     return true;
 }
@@ -51,33 +51,33 @@ void UnifiedFireGenerator::update() {
         return;
     }
     lastUpdateMs_ = currentMs;
-    
+
     // Apply cooling first
     applyCooling();
-    
+
     // Generate sparks based on audio input
     generateSparks();
-    
+
     // Propagate heat based on layout type
     propagateHeat();
 }
 
 void UnifiedFireGenerator::generate(EffectMatrix& matrix, float energy, float hit) {
     if (!heat_) return;
-    
+
     // Store audio input for use in fire simulation
     audioEnergy_ = energy;
     audioHit_ = hit > 0.5f;  // Convert float hit to boolean
-    
+
     // Update fire simulation
     update();
-    
+
     // Render to matrix
     for (int i = 0; i < numLeds_; i++) {
         uint32_t color = heatToColor(heat_[i]);
         int x, y;
         indexToCoords(i, x, y);
-        
+
         // Convert uint32_t color to RGB
         uint8_t r = (color >> 16) & 0xFF;
         uint8_t g = (color >> 8) & 0xFF;
@@ -103,7 +103,7 @@ void UnifiedFireGenerator::setAudioInput(float energy, bool hit) {
 
 void UnifiedFireGenerator::setLayoutType(LayoutType layoutType) {
     layoutType_ = layoutType;
-    
+
     // Adjust default parameters based on layout type
     switch (layoutType_) {
         case LINEAR_LAYOUT:
@@ -159,10 +159,10 @@ void UnifiedFireGenerator::updateMatrixFire() {
             int currentIndex = coordsToIndex(x, y);
             int belowIndex = coordsToIndex(x, y - 1);
             int below2Index = coordsToIndex(x, y - 2);
-            
+
             if (currentIndex >= 0 && belowIndex >= 0 && below2Index >= 0) {
                 uint16_t newHeat = (heat_[belowIndex] + heat_[below2Index] * 2) / 3;
-                
+
                 // Add horizontal spread
                 if (x > 0) {
                     int leftIndex = coordsToIndex(x - 1, y - 1);
@@ -172,7 +172,7 @@ void UnifiedFireGenerator::updateMatrixFire() {
                     int rightIndex = coordsToIndex(x + 1, y - 1);
                     if (rightIndex >= 0) newHeat = (newHeat + heat_[rightIndex]) / 2;
                 }
-                
+
                 heat_[currentIndex] = min(255, newHeat);
             }
         }
@@ -183,16 +183,16 @@ void UnifiedFireGenerator::updateLinearFire() {
     // Lateral heat propagation for linear arrangements
     uint8_t* newHeat = new uint8_t[numLeds_];
     memcpy(newHeat, heat_, numLeds_);
-    
+
     for (int i = 0; i < numLeds_; i++) {
         if (heat_[i] > 0) {
             uint16_t spreadHeat = heat_[i] * params_.heatDecay;
-            
+
             // Spread heat laterally
             for (int spread = 1; spread <= params_.spreadDistance; spread++) {
                 float falloff = 1.0f / (spread + 1);
                 uint8_t heatToSpread = spreadHeat * falloff;
-                
+
                 // Spread left
                 if (i - spread >= 0) {
                     if (params_.useMaxHeatOnly) {
@@ -201,7 +201,7 @@ void UnifiedFireGenerator::updateLinearFire() {
                         newHeat[i - spread] = min(255, newHeat[i - spread] + heatToSpread);
                     }
                 }
-                
+
                 // Spread right
                 if (i + spread < numLeds_) {
                     if (params_.useMaxHeatOnly) {
@@ -213,7 +213,7 @@ void UnifiedFireGenerator::updateLinearFire() {
             }
         }
     }
-    
+
     memcpy(heat_, newHeat, numLeds_);
     delete[] newHeat;
 }
@@ -222,34 +222,34 @@ void UnifiedFireGenerator::updateRandomFire() {
     // Omnidirectional heat propagation for random/scattered layouts
     uint8_t* newHeat = new uint8_t[numLeds_];
     memcpy(newHeat, heat_, numLeds_);
-    
+
     for (int i = 0; i < numLeds_; i++) {
         if (heat_[i] > 0) {
             int x, y;
             indexToCoords(i, x, y);
             uint16_t spreadHeat = heat_[i] * params_.heatDecay;
-            
+
             // Spread heat in all directions
             for (int dx = -params_.spreadDistance; dx <= params_.spreadDistance; dx++) {
                 for (int dy = -params_.spreadDistance; dy <= params_.spreadDistance; dy++) {
                     if (dx == 0 && dy == 0) continue;
-                    
+
                     int targetX = x + dx;
                     int targetY = y + dy;
                     int targetIndex = coordsToIndex(targetX, targetY);
-                    
+
                     if (targetIndex >= 0) {
                         float distance = sqrt(dx*dx + dy*dy);
                         float falloff = 1.0f / (distance + 1);
                         uint8_t heatToSpread = spreadHeat * falloff;
-                        
+
                         newHeat[targetIndex] = min(255, newHeat[targetIndex] + heatToSpread);
                     }
                 }
             }
         }
     }
-    
+
     memcpy(heat_, newHeat, numLeds_);
     delete[] newHeat;
 }
@@ -260,15 +260,15 @@ void UnifiedFireGenerator::generateSparks() {
     if (audioHit_) {
         sparkChance += params_.audioSparkBoost;
     }
-    
+
     if (random(1000) < sparkChance * 1000) {
         uint8_t sparkHeat = random(params_.sparkHeatMin, params_.sparkHeatMax + 1);
-        
+
         // Add audio boost to spark heat
         if (audioEnergy_ > 0.1f) {
             sparkHeat = min(255, sparkHeat + (audioEnergy_ * params_.audioHeatBoostMax));
         }
-        
+
         int sparkPosition;
         switch (layoutType_) {
             case MATRIX_LAYOUT:
@@ -291,7 +291,7 @@ void UnifiedFireGenerator::generateSparks() {
                 }
                 break;
         }
-        
+
         if (sparkPosition < numLeds_) {
             if (params_.useMaxHeatOnly) {
                 heat_[sparkPosition] = max(heat_[sparkPosition], sparkHeat);
@@ -304,12 +304,12 @@ void UnifiedFireGenerator::generateSparks() {
 
 void UnifiedFireGenerator::applyCooling() {
     uint8_t cooling = params_.baseCooling;
-    
+
     // Adjust cooling based on audio input
     if (audioEnergy_ > 0.1f) {
         cooling = max(0, cooling + params_.coolingAudioBias);
     }
-    
+
     for (int i = 0; i < numLeds_; i++) {
         uint8_t coolAmount = random(0, cooling + 1);
         heat_[i] = (heat_[i] > coolAmount) ? heat_[i] - coolAmount : 0;
@@ -336,7 +336,7 @@ int UnifiedFireGenerator::coordsToIndex(int x, int y) {
     if (x < 0 || x >= width_ || y < 0 || y >= height_) {
         return -1;
     }
-    
+
     // Handle different orientations and wiring patterns
     switch (orientation_) {
         case VERTICAL:
@@ -360,7 +360,7 @@ void UnifiedFireGenerator::indexToCoords(int index, int& x, int& y) {
         x = y = -1;
         return;
     }
-    
+
     switch (orientation_) {
         case VERTICAL:
             // Reverse of zigzag pattern
@@ -402,10 +402,10 @@ void UnifiedFireGenerator::setAudioParams(float sparkBoost, uint8_t heatBoostMax
 // Factory function
 UnifiedFireGenerator* createFireGenerator(const DeviceConfig& config) {
     UnifiedFireGenerator* generator = new UnifiedFireGenerator();
-    
+
     // Configure layout type from device config
     generator->setLayoutType(config.matrix.layoutType);
     generator->setOrientation(config.matrix.orientation);
-    
+
     return generator;
 }

@@ -2,7 +2,7 @@
 
 /**
  * BlinkyImplementations.h - Include all implementation files
- * 
+ *
  * Arduino IDE doesn't automatically compile .cpp files in subdirectories.
  * This file includes all implementations to ensure they're compiled.
  */
@@ -10,7 +10,7 @@
 // Core implementations
 #include "core/EffectMatrix.cpp"
 
-// Generator implementations  
+// Generator implementations
 #include "generators/UnifiedFireGenerator.cpp"
 
 // Effect implementations

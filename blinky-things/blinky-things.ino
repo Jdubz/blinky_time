@@ -100,7 +100,7 @@ void showFireEffect() {
 
     // Update generator with audio input (handled by updateFireEffect)
     updateFireEffect(energy, hit);
-    
+
     // Generate effects and render
     currentGenerator->generate(*effectMatrix, energy, hit);
     currentEffect->apply(effectMatrix);
@@ -205,16 +205,16 @@ void setup() {
       Serial.println(F("UNKNOWN"));
       break;
   }
-  
+
   // Create unified fire generator using factory function
   UnifiedFireGenerator* fireGen = createFireGenerator(config);
   currentGenerator = fireGen;
-  
+
   if (!currentGenerator) {
     Serial.println(F("ERROR: Generator allocation failed"));
     while(1); // Halt execution
   }
-  
+
   // Initialize the generator with layout type
   if (!fireGen->begin(config.matrix.width, config.matrix.height, config.matrix.layoutType)) {
     Serial.println(F("ERROR: Generator initialization failed"));
