@@ -2,14 +2,14 @@
 
 /**
  * BlinkyArchitecture.h - Main include for the Generator-Effect-Renderer architecture
- * 
+ *
  * This file provides a single include for the Arduino IDE main sketch to access
  * all the visual architecture components while maintaining clean folder structure
  * for development and testing.
- * 
+ *
  * Usage in main sketch:
  * #include "BlinkyArchitecture.h"
- * 
+ *
  * Architecture Overview:
  * Generator -> Effects -> Renderer -> Hardware
  */
@@ -39,7 +39,7 @@
 // Hardware components (temporarily commented out until updated for new architecture)
 #include "hardware/AdaptiveMic.h"
 // #include "hardware/SerialConsole.h"  // TODO: Update for new Generator architecture
-// #include "hardware/BatteryMonitor.h"  // TODO: Update for new Generator architecture  
+// #include "hardware/BatteryMonitor.h"  // TODO: Update for new Generator architecture
 // #include "hardware/IMUHelper.h"       // TODO: Update for new Generator architecture
 
 // Testing (for development/debugging)
@@ -49,20 +49,20 @@
 
 /**
  * Architecture Usage Example:
- * 
+ *
  * #include "BlinkyArchitecture.h"
- * 
+ *
  * FireGenerator fireGen;
  * HueRotationEffect hueEffect(0.1f);
  * EffectRenderer renderer;
  * EffectMatrix matrix(width, height);
- * 
+ *
  * void setup() {
  *   fireGen.begin(width, height);
  *   hueEffect.begin(width, height);
  *   renderer.begin(width, height, &leds);
  * }
- * 
+ *
  * void loop() {
  *   fireGen.setAudioInput(energy, hit);
  *   fireGen.update();

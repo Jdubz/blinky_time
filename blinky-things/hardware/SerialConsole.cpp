@@ -21,7 +21,7 @@ void SerialConsole::begin() {
     unsigned long start = millis();
     while (!Serial && (millis() - start < 2000)) { delay(10); }
     Serial.println(F("Serial console ready. Type 'help' for commands."));
-    
+
     // Initialize test runner lazily when first needed
     if (!testRunner_) {
         testRunner_ = new GeneratorTestRunner();
@@ -141,7 +141,7 @@ void SerialConsole::handleCommand(const char *cmd) {
         Serial.println(F(BLINKY_FULL_VERSION));
         Serial.print(F("Semantic Version: ")); Serial.println(F(BLINKY_VERSION_STRING));
         Serial.print(F("Version Number: ")); Serial.println(BLINKY_VERSION_NUMBER);
-        Serial.print(F("Components: ")); 
+        Serial.print(F("Components: "));
         Serial.print(BLINKY_VERSION_MAJOR); Serial.print(F("."));
         Serial.print(BLINKY_VERSION_MINOR); Serial.print(F("."));
         Serial.println(BLINKY_VERSION_PATCH);
@@ -163,81 +163,81 @@ void SerialConsole::handleCommand(const char *cmd) {
         restoreDefaults();
     }
     // --- Fire parameters ---
-    else if (sscanf(cmd, "set cooling %d", &tempInt) == 1) { 
+    else if (sscanf(cmd, "set cooling %d", &tempInt) == 1) {
         if (stringFire_) {
             stringFire_->params.baseCooling = (uint8_t)tempInt;
             Serial.print(F("Cooling=")); Serial.println(stringFire_->params.baseCooling);
         } else {
-            fire.params.baseCooling = (uint8_t)tempInt; 
+            fire.params.baseCooling = (uint8_t)tempInt;
             Serial.print(F("Cooling=")); Serial.println(fire.params.baseCooling);
         }
         saveFireParameterToEEPROM("baseCooling");
     }
-    else if (sscanf(cmd, "set sparkchance %f", &tempFloat) == 1) { 
+    else if (sscanf(cmd, "set sparkchance %f", &tempFloat) == 1) {
         if (stringFire_) {
             stringFire_->params.sparkChance = tempFloat;
             Serial.print(F("SparkChance=")); Serial.println(stringFire_->params.sparkChance, 3);
         } else {
-            fire.params.sparkChance = tempFloat; 
+            fire.params.sparkChance = tempFloat;
             Serial.print(F("SparkChance=")); Serial.println(fire.params.sparkChance, 3);
         }
         saveFireParameterToEEPROM("sparkChance");
     }
-    else if (sscanf(cmd, "set sparkheatmin %d", &tempInt) == 1) { 
+    else if (sscanf(cmd, "set sparkheatmin %d", &tempInt) == 1) {
         if (stringFire_) {
             stringFire_->params.sparkHeatMin = (uint8_t)tempInt;
             Serial.print(F("SparkHeatMin=")); Serial.println(stringFire_->params.sparkHeatMin);
         } else {
-            fire.params.sparkHeatMin = (uint8_t)tempInt; 
+            fire.params.sparkHeatMin = (uint8_t)tempInt;
             Serial.print(F("SparkHeatMin=")); Serial.println(fire.params.sparkHeatMin);
         }
         saveFireParameterToEEPROM("sparkHeatMin");
     }
-    else if (sscanf(cmd, "set sparkheatmax %d", &tempInt) == 1) { 
+    else if (sscanf(cmd, "set sparkheatmax %d", &tempInt) == 1) {
         if (stringFire_) {
             stringFire_->params.sparkHeatMax = (uint8_t)tempInt;
             Serial.print(F("SparkHeatMax=")); Serial.println(stringFire_->params.sparkHeatMax);
         } else {
-            fire.params.sparkHeatMax = (uint8_t)tempInt; 
+            fire.params.sparkHeatMax = (uint8_t)tempInt;
             Serial.print(F("SparkHeatMax=")); Serial.println(fire.params.sparkHeatMax);
         }
         saveFireParameterToEEPROM("sparkHeatMax");
     }
-    else if (sscanf(cmd, "set audiosparkboost %f", &tempFloat) == 1) { 
+    else if (sscanf(cmd, "set audiosparkboost %f", &tempFloat) == 1) {
         if (stringFire_) {
             stringFire_->params.audioSparkBoost = tempFloat;
             Serial.print(F("AudioSparkBoost=")); Serial.println(stringFire_->params.audioSparkBoost, 3);
         } else {
-            fire.params.audioSparkBoost = tempFloat; 
+            fire.params.audioSparkBoost = tempFloat;
             Serial.print(F("AudioSparkBoost=")); Serial.println(fire.params.audioSparkBoost, 3);
         }
         saveFireParameterToEEPROM("audioSparkBoost");
     }
-    else if (sscanf(cmd, "set audioheatboost %d", &tempInt) == 1) { 
+    else if (sscanf(cmd, "set audioheatboost %d", &tempInt) == 1) {
         if (stringFire_) {
             stringFire_->params.audioHeatBoostMax = (uint8_t)tempInt;
             Serial.print(F("AudioHeatBoostMax=")); Serial.println(stringFire_->params.audioHeatBoostMax);
         } else {
-            fire.params.audioHeatBoostMax = (uint8_t)tempInt; 
+            fire.params.audioHeatBoostMax = (uint8_t)tempInt;
             Serial.print(F("AudioHeatBoostMax=")); Serial.println(fire.params.audioHeatBoostMax);
         }
         saveFireParameterToEEPROM("audioHeatBoostMax");
     }
-    else if (sscanf(cmd, "set coolingaudiobias %d", &tempInt) == 1) { 
+    else if (sscanf(cmd, "set coolingaudiobias %d", &tempInt) == 1) {
         if (stringFire_) {
             stringFire_->params.coolingAudioBias = (int8_t)tempInt;
             Serial.print(F("CoolingAudioBias=")); Serial.println(stringFire_->params.coolingAudioBias);
         } else {
-            fire.params.coolingAudioBias = (int8_t)tempInt; 
+            fire.params.coolingAudioBias = (int8_t)tempInt;
             Serial.print(F("CoolingAudioBias=")); Serial.println(fire.params.coolingAudioBias);
         }
         saveFireParameterToEEPROM("coolingAudioBias");
     }
-    else if (sscanf(cmd, "set bottomrows %d", &tempInt) == 1) { 
+    else if (sscanf(cmd, "set bottomrows %d", &tempInt) == 1) {
         if (stringFire_) {
             Serial.println(F("BottomRowsForSparks not applicable to StringFire (uses sparkPositions instead)"));
         } else {
-            fire.params.bottomRowsForSparks = (uint8_t)tempInt; 
+            fire.params.bottomRowsForSparks = (uint8_t)tempInt;
             Serial.print(F("BottomRowsForSparks=")); Serial.println(fire.params.bottomRowsForSparks);
         }
         saveFireParameterToEEPROM("bottomRowsForSparks");
@@ -254,25 +254,25 @@ void SerialConsole::handleCommand(const char *cmd) {
         }
         saveFireParameterToEEPROM("transientHeatMax");
     }
- 
+
     // --- AdaptiveMic parameters ---
-    else if (sscanf(cmd, "set gate %f", &tempFloat) == 1) { 
-        mic.noiseGate = tempFloat; 
+    else if (sscanf(cmd, "set gate %f", &tempFloat) == 1) {
+        mic.noiseGate = tempFloat;
         Serial.print(F("NoiseGate=")); Serial.println(mic.noiseGate, 3);
         if (configStorage_) configStorage_->saveMicParam("noiseGate", mic);
     }
-    else if (sscanf(cmd, "set gain %f", &tempFloat) == 1) { 
-        mic.globalGain = tempFloat; 
+    else if (sscanf(cmd, "set gain %f", &tempFloat) == 1) {
+        mic.globalGain = tempFloat;
         Serial.print(F("GlobalGain=")); Serial.println(mic.globalGain, 3);
         if (configStorage_) configStorage_->saveMicParam("globalGain", mic);
     }
-    else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) { 
-        mic.attackSeconds = tempFloat; 
+    else if (sscanf(cmd, "set attack %f", &tempFloat) == 1) {
+        mic.attackSeconds = tempFloat;
         Serial.print(F("attackSeconds=")); Serial.println(mic.attackSeconds, 3);
         if (configStorage_) configStorage_->saveMicParam("attackSeconds", mic);
     }
-    else if (sscanf(cmd, "set release %f", &tempFloat) == 1) { 
-        mic.releaseSeconds = tempFloat; 
+    else if (sscanf(cmd, "set release %f", &tempFloat) == 1) {
+        mic.releaseSeconds = tempFloat;
         Serial.print(F("releaseSeconds=")); Serial.println(mic.releaseSeconds, 3);
         if (configStorage_) configStorage_->saveMicParam("releaseSeconds", mic);
     }
@@ -538,7 +538,7 @@ void SerialConsole::handleCommand(const char *cmd) {
         imuDebugEnabled = false;
         Serial.println(F("IMU Debug=off"));
     }
-    
+
     // --- Configuration storage commands ---
     else if (strcmp(cmd, "config save") == 0) {
         if (configStorage_) {
@@ -601,14 +601,14 @@ void SerialConsole::handleCommand(const char *cmd) {
             Serial.println(F("ERROR: Device type must be 1, 2, or 3"));
         }
     }
-    
+
     // --- Version utility commands ---
     else if (strncmp(cmd, "version check ", 14) == 0) {
         int major, minor, patch;
         if (sscanf(cmd + 14, "%d.%d.%d", &major, &minor, &patch) == 3) {
             bool result = BLINKY_VERSION_CHECK(major, minor, patch);
             Serial.print(F("Version check ")); Serial.print(BLINKY_VERSION_STRING);
-            Serial.print(F(" >= ")); Serial.print(major); Serial.print(F(".")); 
+            Serial.print(F(" >= ")); Serial.print(major); Serial.print(F("."));
             Serial.print(minor); Serial.print(F(".")); Serial.print(patch);
             Serial.print(F(" = ")); Serial.println(result ? F("TRUE") : F("FALSE"));
         } else {
@@ -620,13 +620,13 @@ void SerialConsole::handleCommand(const char *cmd) {
         if (sscanf(cmd + 16, "%d.%d.%d", &major, &minor, &patch) == 3) {
             uint32_t otherVersion = major * 10000 + minor * 100 + patch;
             uint32_t currentVersion = BLINKY_VERSION_NUMBER;
-            
+
             Serial.print(F("Current: ")); Serial.print(BLINKY_VERSION_STRING);
             Serial.print(F(" (")); Serial.print(currentVersion); Serial.println(F(")"));
             Serial.print(F("Compare: ")); Serial.print(major); Serial.print(F("."));
             Serial.print(minor); Serial.print(F(".")); Serial.print(patch);
             Serial.print(F(" (")); Serial.print(otherVersion); Serial.println(F(")"));
-            
+
             if (currentVersion > otherVersion) {
                 Serial.println(F("Result: NEWER"));
             } else if (currentVersion < otherVersion) {
@@ -638,7 +638,7 @@ void SerialConsole::handleCommand(const char *cmd) {
             Serial.println(F("Usage: version compare <major>.<minor>.<patch>"));
         }
     }
-    
+
     // --- Generator testing commands ---
     else if (strncmp(cmd, "test ", 5) == 0 || strncmp(cmd, "gen ", 4) == 0 || strncmp(cmd, "fire ", 5) == 0) {
         if (testRunner_) {
@@ -656,7 +656,7 @@ void SerialConsole::handleCommand(const char *cmd) {
 void SerialConsole::restoreDefaults() {
     // First restore fire effect defaults (now uses config values)
     fire.restoreDefaults();
-    
+
     // Then restore microphone defaults from global defaults (these aren't device-specific)
     mic.noiseGate           = Defaults::NoiseGate;
     mic.globalGain          = Defaults::GlobalGain;
@@ -1124,7 +1124,7 @@ void SerialConsole::renderTestPattern() {
 // Helper function to save fire parameters based on active fire type
 void SerialConsole::saveFireParameterToEEPROM(const char* paramName) {
     if (!configStorage_) return;
-    
+
     if (stringFire_) {
         configStorage_->saveStringFireParam(paramName, stringFire_->params);
     } else {

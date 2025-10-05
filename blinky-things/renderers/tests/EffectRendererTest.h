@@ -11,10 +11,10 @@
 class EffectRendererTest {
 public:
     EffectRendererTest();
-    
+
     // Main test runner
     bool runAllTests();
-    
+
 private:
     // Individual test methods
     bool testInitialization();
@@ -23,7 +23,7 @@ private:
     bool testBrightnessControl();
     bool testDifferentSizes();
     bool testEdgeCases();
-    
+
     // Helper methods
     bool compareColors(uint32_t color1, uint32_t color2, uint8_t tolerance = 5);
     uint32_t createColor(uint8_t r, uint8_t g, uint8_t b);
@@ -31,7 +31,7 @@ private:
     void logTestInfo(const char* info);
     void printResults();
     void printTestResult(const char* testName, bool passed);
-    
+
     // Test tracking
     int testsRun;
     int testsPassed;

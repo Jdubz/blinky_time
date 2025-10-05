@@ -1,15 +1,15 @@
 /**
  * Blinky Time - LED Fire Effect Controller
- * 
+ *
  * A sophisticated fire effect system for wearable LED installations.
  * Supports multiple device configurations with realistic fire simulation,
  * audio reactivity, battery management, and motion sensing.
- * 
+ *
  * Hardware: nRF52840 XIAO Sense with WS2812B LED strips
  * Author: Blinky Time Project Contributors
  * License: Creative Commons Attribution-ShareAlike 4.0 International
  * Repository: https://github.com/Jdubz/blinky_time
- * 
+ *
  * Device Types:
  * - Hat: 89 LEDs in string configuration
  * - Tube Light: 60 LEDs in 4x15 zigzag matrix
@@ -23,7 +23,7 @@
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
 // 1 = Hat (89 LEDs, STRING_FIRE mode)
-// 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)  
+// 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)
 // 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
 #ifndef DEVICE_TYPE
 #define DEVICE_TYPE 2  // Set to Tube Light for testing
@@ -33,7 +33,7 @@
 #include "devices/HatConfig.h"
 const DeviceConfig& config = HAT_CONFIG;
 #elif DEVICE_TYPE == 2
-#include "devices/TubeLightConfig.h"  
+#include "devices/TubeLightConfig.h"
 const DeviceConfig& config = TUBE_LIGHT_CONFIG;
 #elif DEVICE_TYPE == 3
 #include "devices/BucketTotemConfig.h"
@@ -96,7 +96,7 @@ void showFireEffect() {
     // Get audio input for generation
     float energy = mic.getLevel();
     float hit = mic.getTransient();
-    
+
     currentGenerator->generate(*effectMatrix, energy, hit);
     currentEffect->apply(effectMatrix);
     renderer->render(*effectMatrix);
@@ -113,21 +113,21 @@ void renderFireEffect() {
 void setup() {
   Serial.begin(config.serial.baudRate);
   while (!Serial && millis() < config.serial.initTimeoutMs) {}
-  
+
   // Display version and device information
   Serial.println(F("=== BLINKY TIME STARTUP ==="));
   Serial.println(F(BLINKY_FULL_VERSION));
-  Serial.print(F("Build: ")); Serial.print(F(BLINKY_BUILD_DATE)); 
+  Serial.print(F("Build: ")); Serial.print(F(BLINKY_BUILD_DATE));
   Serial.print(F(" ")); Serial.println(F(BLINKY_BUILD_TIME));
   Serial.println();
-  
+
   // Display active device configuration
   Serial.print(F("Starting device: "));
   Serial.println(config.deviceName);
   Serial.print(F("Device Type: "));
 #if DEVICE_TYPE == 1
   Serial.println(F("Hat (Type 1)"));
-#elif DEVICE_TYPE == 2  
+#elif DEVICE_TYPE == 2
   Serial.println(F("Tube Light (Type 2)"));
 #elif DEVICE_TYPE == 3
   Serial.println(F("Bucket Totem (Type 3)"));
@@ -141,7 +141,7 @@ void setup() {
   if (config.matrix.brightness > 255) {
     Serial.println(F("WARNING: Brightness clamped to 255"));
   }
-  
+
   leds.begin();
   leds.setBrightness(min(config.matrix.brightness, 255));
   leds.show();
@@ -192,7 +192,7 @@ void setup() {
     Serial.println(F("Initializing MATRIX fire generator"));
     currentGenerator = new MatrixFireGenerator(config.matrix.width, config.matrix.height);
   }
-  
+
   if (!currentGenerator) {
     Serial.println(F("ERROR: Generator allocation failed"));
     while(1); // Halt execution
@@ -230,14 +230,14 @@ void setup() {
 
   // Initialize EEPROM configuration storage
   configStorage.begin();
-  
+
   // TODO: Update configuration loading for new architecture
   Serial.println(F("Configuration system initialized"));
 
   // TODO: Uncomment when hardware components are updated for new architecture
   // console.begin();
   // console.setConfigStorage(&configStorage); // Enable EEPROM saving for parameters
-  
+
   // if (!imu.begin()) {
   //   Serial.println(F("WARNING: IMU initialization failed"));
   // } else {

@@ -27,7 +27,7 @@ struct IMUData {
     unsigned long timestamp; // millis() when data was captured
 };
 
-// Simplified motion config for basic fire effects  
+// Simplified motion config for basic fire effects
 struct MotionConfig {
   // Basic orientation filtering
   float tauLP    = 0.12f;  // s, low-pass for gravity estimate

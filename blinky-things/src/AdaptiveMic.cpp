@@ -1,4 +1,4 @@
-#include "AdaptiveMic.h"
+#include "../hardware/AdaptiveMic.h"
 
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;

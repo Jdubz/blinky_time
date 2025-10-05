@@ -3,7 +3,7 @@
 /**
  * Blinky Time Version Information
  * Auto-generated from VERSION file - DO NOT EDIT MANUALLY
- * 
+ *
  * Follows Arduino Library Specification 1.5+ and Semantic Versioning 2.0.0
  * See: https://arduino.github.io/arduino-cli/latest/library-specification/
  */
@@ -50,17 +50,17 @@ namespace BlinkyVersion {
     inline bool isGreaterThan(uint8_t major, uint8_t minor, uint8_t patch) {
         return BLINKY_VERSION_CHECK(major, minor, patch + 1);
     }
-    
+
     inline bool isAtLeast(uint8_t major, uint8_t minor, uint8_t patch) {
         return BLINKY_VERSION_CHECK(major, minor, patch);
     }
-    
+
     // Get version components at runtime
     constexpr uint8_t getMajor() { return BLINKY_VERSION_MAJOR; }
     constexpr uint8_t getMinor() { return BLINKY_VERSION_MINOR; }
     constexpr uint8_t getPatch() { return BLINKY_VERSION_PATCH; }
     constexpr uint32_t getNumber() { return BLINKY_VERSION_NUMBER; }
-    
+
     // Version string getters
     constexpr const char* getString() { return BLINKY_VERSION_STRING; }
     constexpr const char* getFullVersion() { return BLINKY_FULL_VERSION; }

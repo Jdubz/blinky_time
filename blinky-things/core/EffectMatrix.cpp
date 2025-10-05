@@ -1,7 +1,7 @@
 #include "EffectMatrix.h"
 #include <Arduino.h>
 
-EffectMatrix::EffectMatrix(int width, int height) 
+EffectMatrix::EffectMatrix(int width, int height)
     : width_(width), height_(height) {
     pixels_ = new RGB[width * height];
     clear();
@@ -11,7 +11,7 @@ EffectMatrix::~EffectMatrix() {
     delete[] pixels_;
 }
 
-EffectMatrix::EffectMatrix(const EffectMatrix& other) 
+EffectMatrix::EffectMatrix(const EffectMatrix& other)
     : width_(other.width_), height_(other.height_) {
     pixels_ = new RGB[width_ * height_];
     for (int i = 0; i < width_ * height_; i++) {
@@ -83,7 +83,7 @@ void EffectMatrix::printMatrix() const {
     Serial.print(F("x"));
     Serial.print(height_);
     Serial.println(F(":"));
-    
+
     for (int y = 0; y < height_; y++) {
         Serial.print(F("Row "));
         Serial.print(y);

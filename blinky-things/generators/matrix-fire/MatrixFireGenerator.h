@@ -6,10 +6,10 @@
 
 /**
  * MatrixFireGenerator - Fire simulation for 2D matrix arrangements
- * 
+ *
  * Generates realistic fire patterns using heat diffusion simulation
  * optimized for matrix-style LED arrangements where heat propagates upward.
- * 
+ *
  * Key features:
  * - Heat propagation in Y-axis (upward)
  * - Audio-reactive spark generation
@@ -37,12 +37,12 @@ public:
     // Generator interface
     void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
     void reset() override;
-    
+
     // Configuration
     void setParams(const MatrixFireParams& newParams) { params = newParams; }
     MatrixFireParams& getParams() { return params; }
     const MatrixFireParams& getParams() const { return params; }
-    
+
     // Heat access for debugging/visualization
     float getHeat(int x, int y) const;
 
@@ -51,15 +51,15 @@ private:
     float* heat;  // Heat simulation grid
     unsigned long lastUpdateMs;
     MatrixFireParams params;
-    
+
     // Heat simulation methods
     void coolCells();
     void propagateUp();
     void injectSparks(float energy);
-    
+
     // Color conversion
     uint32_t heatToColorRGB(float heat) const;
-    
+
     // Helper methods
     inline float& getHeatRef(int x, int y) { return heat[y * width + x]; }
     inline const float& getHeatValue(int x, int y) const { return heat[y * width + x]; }

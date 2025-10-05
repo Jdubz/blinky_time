@@ -18,10 +18,10 @@ public:
     void begin();
     void update();
     void handleCommand(const char *cmd);
-    
+
     // Set config storage for parameter persistence
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
-    
+
     // Set string fire effect for configuration (when using STRING_FIRE mode)
     void setStringFire(StringFireEffect* stringFire) { stringFire_ = stringFire; }
 
@@ -35,7 +35,7 @@ public:
 private:
     // Helper function for consistent matrix mapping
     int xyToPixelIndex(int x, int y);
-    
+
     // Helper for saving fire parameters to EEPROM
     void saveFireParameterToEEPROM(const char* paramName);
 

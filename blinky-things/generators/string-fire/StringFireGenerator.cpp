@@ -1,16 +1,16 @@
 #include "StringFireGenerator.h"
 #include <Arduino.h>
 
-StringFireGenerator::StringFireGenerator(int len) 
+StringFireGenerator::StringFireGenerator(int len)
     : length(len), heat(nullptr), lastUpdateMs(0) {
-    
+
     // Allocate heat buffer
     heat = (float*)malloc(sizeof(float) * length);
     if (!heat) {
         Serial.println(F("StringFireGenerator: Failed to allocate heat buffer"));
         return;
     }
-    
+
     reset();
 }
 
@@ -23,18 +23,18 @@ StringFireGenerator::~StringFireGenerator() {
 
 void StringFireGenerator::reset() {
     if (!heat) return;
-    
+
     // Clear heat array
     for (int i = 0; i < length; i++) {
         heat[i] = 0.0f;
     }
-    
+
     lastUpdateMs = 0;
 }
 
 void StringFireGenerator::generate(EffectMatrix& matrix, float energy, float hit) {
     if (!heat) return;
-    
+
     // Frame timing
     unsigned long now = millis();
     if (lastUpdateMs == 0) lastUpdateMs = now;
@@ -46,7 +46,7 @@ void StringFireGenerator::generate(EffectMatrix& matrix, float energy, float hit
     coolCells();
     propagateLateral();
     injectSparks(energy);
-    
+
     // For string fires, we typically map to a 1D matrix (width = length, height = 1)
     // or fill the entire matrix with the string pattern
     if (matrix.getHeight() == 1) {
@@ -113,7 +113,7 @@ void StringFireGenerator::propagateLateral() {
             // Share heat with immediate neighbors (distance 1-3)
             for (int distance = 1; distance <= params.sparkSpreadRange; distance++) {
                 // Stronger propagation for oozing effect
-                float diffusionRate = (distance == 1) ? 0.6f : 
+                float diffusionRate = (distance == 1) ? 0.6f :
                                      (distance == 2) ? 0.4f : 0.2f;
                 float spreadHeat = currentHeat * diffusionRate;
 
@@ -122,7 +122,7 @@ void StringFireGenerator::propagateLateral() {
                     newHeat[i - distance] = max(newHeat[i - distance], spreadHeat);
                 }
 
-                // Spread to right neighbor  
+                // Spread to right neighbor
                 if (i + distance < length) {
                     newHeat[i + distance] = max(newHeat[i + distance], spreadHeat);
                 }

@@ -2,7 +2,7 @@
 #include <Arduino.h>
 #include <string.h>
 
-FireTestRunner::FireTestRunner(int width, int height) 
+FireTestRunner::FireTestRunner(int width, int height)
     : testWidth_(width), testHeight_(height) {
     fireTest_ = new FireGeneratorTest(width, height);
 }
@@ -19,7 +19,7 @@ void FireTestRunner::runAllTests() {
 void FireTestRunner::runSpecificTest(const char* testName) {
     Serial.print(F("Running specific test: "));
     Serial.println(testName);
-    
+
     if (strcmp(testName, "init") == 0 || strcmp(testName, "initialization") == 0) {
         fireTest_->testInitialization();
     } else if (strcmp(testName, "heat") == 0 || strcmp(testName, "heatmanagement") == 0) {
@@ -47,20 +47,20 @@ void FireTestRunner::runSpecificTest(const char* testName) {
 
 bool FireTestRunner::handleCommand(const char* command) {
     if (!command) return false;
-    
+
     // Convert to lowercase for easier matching
     char cmd[64];
     strncpy(cmd, command, sizeof(cmd) - 1);
     cmd[sizeof(cmd) - 1] = '\0';
-    
+
     for (int i = 0; cmd[i]; i++) {
         cmd[i] = tolower(cmd[i]);
     }
-    
+
     if (strncmp(cmd, "fire", 4) == 0) {
         char* subCmd = cmd + 4;
         while (*subCmd == ' ') subCmd++; // Skip spaces
-        
+
         if (strlen(subCmd) == 0 || strcmp(subCmd, "all") == 0) {
             runAllTests();
             return true;
@@ -72,7 +72,7 @@ bool FireTestRunner::handleCommand(const char* command) {
             return true;
         }
     }
-    
+
     return false; // Command not handled
 }
 

@@ -1,16 +1,16 @@
-#include "MatrixFireGenerator.h"
+#include "../generators/MatrixFireGenerator.h"
 #include <Arduino.h>
 
-MatrixFireGenerator::MatrixFireGenerator(int w, int h) 
+MatrixFireGenerator::MatrixFireGenerator(int w, int h)
     : width(w), height(h), heat(nullptr), lastUpdateMs(0) {
-    
+
     // Allocate heat buffer
     heat = (float*)malloc(sizeof(float) * width * height);
     if (!heat) {
         Serial.println(F("MatrixFireGenerator: Failed to allocate heat buffer"));
         return;
     }
-    
+
     reset();
 }
 
@@ -23,14 +23,14 @@ MatrixFireGenerator::~MatrixFireGenerator() {
 
 void MatrixFireGenerator::reset() {
     if (!heat) return;
-    
+
     // Clear heat grid
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             getHeatRef(x, y) = 0.0f;
         }
     }
-    
+
     lastUpdateMs = 0;
 }
 
@@ -38,7 +38,7 @@ void MatrixFireGenerator::generate(EffectMatrix& matrix, float energy, float hit
     if (!heat || matrix.getWidth() != width || matrix.getHeight() != height) {
         return;
     }
-    
+
     // Balanced ember floor - allows quiet adaptation but reduces silence activity
     float emberFloor = 0.03f; // 3% energy floor
     float boostedEnergy = max(emberFloor, energy * (1.0f + hit * (params.transientHeatMax / 255.0f)));
@@ -52,7 +52,7 @@ void MatrixFireGenerator::generate(EffectMatrix& matrix, float energy, float hit
     coolCells();
     propagateUp();
     injectSparks(boostedEnergy);
-    
+
     // Convert heat to colors and populate matrix
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {

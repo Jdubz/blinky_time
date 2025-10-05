@@ -2,8 +2,8 @@
 #include "../../TotemDefaults.h"
 #include <Arduino.h>
 
-FireGenerator::FireGenerator() 
-    : width_(0), height_(0), heat_(nullptr), lastUpdateMs_(0), 
+FireGenerator::FireGenerator()
+    : width_(0), height_(0), heat_(nullptr), lastUpdateMs_(0),
       currentEnergy_(0.0f), currentHit_(0.0f) {
     restoreDefaults();
 }
@@ -18,18 +18,18 @@ FireGenerator::~FireGenerator() {
 void FireGenerator::begin(int width, int height) {
     width_ = width;
     height_ = height;
-    
+
     if (heat_) {
         free(heat_);
         heat_ = nullptr;
     }
-    
+
     heat_ = (float*)malloc(sizeof(float) * width * height);
     if (!heat_) {
         Serial.println(F("FireGenerator: Failed to allocate heat buffer"));
         return;
     }
-    
+
     clearHeat();
     lastUpdateMs_ = 0;
 }
@@ -61,27 +61,27 @@ void FireGenerator::reset() {
 
 void FireGenerator::update() {
     if (!heat_) return;
-    
+
     unsigned long currentMs = millis();
     if (lastUpdateMs_ == 0) {
         lastUpdateMs_ = currentMs;
         return;
     }
-    
+
     float deltaMs = currentMs - lastUpdateMs_;
     lastUpdateMs_ = currentMs;
-    
+
     // Step 1: Cool down every cell a little
     uint8_t baseCooling = params.baseCooling;
     int8_t audioAdjustment = params.coolingAudioBias * currentEnergy_;
     baseCooling = max(0, min(255, baseCooling + audioAdjustment));
-    
+
     float coolingAmount = (baseCooling / 255.0f) * (deltaMs / 16.67f); // Normalize to ~60fps
-    
+
     for (int i = 0; i < width_ * height_; i++) {
         heat_[i] = max(0.0f, heat_[i] - coolingAmount);
     }
-    
+
     // Step 2: Heat from each cell drifts 'up' and diffuses
     for (int x = 0; x < width_; x++) {
         for (int y = height_ - 1; y >= 2; y--) {
@@ -89,47 +89,47 @@ void FireGenerator::update() {
             if (currentHeat > 0.01f) {
                 // Calculate how much heat moves up
                 float heatToMove = currentHeat * 0.3f * (deltaMs / 16.67f);
-                
+
                 // Move heat up with some horizontal diffusion
                 getHeatRef(x, y) -= heatToMove;
-                
+
                 // Distribute to cells above
                 float upwardHeat = heatToMove * 0.7f;
                 float sideHeat = heatToMove * 0.15f;
-                
+
                 getHeatRef(x, y - 1) += upwardHeat;
                 getHeatRef(wrapX(x - 1), y - 1) += sideHeat;
                 getHeatRef(wrapX(x + 1), y - 1) += sideHeat;
             }
         }
     }
-    
+
     // Step 3: Add sparks at the bottom
     int bottomRows = min(params.bottomRowsForSparks, height_);
-    
+
     for (int x = 0; x < width_; x++) {
         for (int y = height_ - bottomRows; y < height_; y++) {
             float sparkChance = params.sparkChance;
-            
+
             // Audio boost for spark generation
             if (currentHit_ > 0.1f) {
                 sparkChance += params.audioSparkBoost * currentHit_;
             }
-            
+
             if (random(1000) / 1000.0f < sparkChance) {
                 float sparkHeat = random(params.sparkHeatMin, params.sparkHeatMax + 1) / 255.0f;
-                
+
                 // Audio boost for spark intensity
                 if (currentEnergy_ > 0.1f) {
                     float audioBoost = (params.audioHeatBoostMax / 255.0f) * currentEnergy_;
                     sparkHeat = min(1.0f, sparkHeat + audioBoost);
                 }
-                
+
                 getHeatRef(x, y) = max(getHeatValue(x, y), sparkHeat);
             }
         }
     }
-    
+
     // Step 4: Add transient heat for dramatic effect
     if (currentHit_ > 0.3f) {
         for (int x = 0; x < width_; x++) {
@@ -145,7 +145,7 @@ void FireGenerator::update() {
 
 void FireGenerator::generate(EffectMatrix* matrix) {
     if (!heat_ || !matrix) return;
-    
+
     // Convert heat values to colors and fill the matrix
     for (int x = 0; x < width_; x++) {
         for (int y = 0; y < height_; y++) {
@@ -179,7 +179,7 @@ float FireGenerator::getHeatValue(int x, int y) const {
 RGB FireGenerator::heatToColor(float heat) const {
     // Convert heat (0.0-1.0) to fire colors (black -> red -> orange -> yellow -> white)
     heat = max(0.0f, min(1.0f, heat));
-    
+
     if (heat < 0.25f) {
         // Black to red
         float t = heat * 4.0f;

@@ -11,10 +11,10 @@
 class StringFireGeneratorTest {
 public:
     StringFireGeneratorTest();
-    
+
     // Main test runner
     bool runAllTests();
-    
+
 private:
     // Individual test methods
     bool testInitialization();
@@ -24,14 +24,14 @@ private:
     bool testEnergyResponse();
     bool testMatrixOutput();
     bool testStringBehavior();
-    
+
     // Helper methods
     bool compareFloats(float a, float b, float tolerance = 0.01f);
     bool verifyColorRange(uint32_t color);
     void logTestInfo(const char* info);
     void printResults();
     void printTestResult(const char* testName, bool passed);
-    
+
     // Test tracking
     int testsRun;
     int testsPassed;
