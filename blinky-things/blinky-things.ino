@@ -94,8 +94,8 @@ void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
   if (currentGenerator && currentEffect && renderer && effectMatrix) {
     // Get audio input for generation
-    float energy = mic.getEnergy();
-    float hit = mic.getHit();
+    float energy = mic.getLevel();
+    float hit = mic.getTransient();
     
     currentGenerator->generate(*effectMatrix, energy, hit);
     currentEffect->apply(effectMatrix);
