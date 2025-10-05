@@ -74,7 +74,7 @@ blinky_time/
 │   └── unit/integration/   # Test categories
 ├── docs/                   # 📚 Comprehensive documentation
 ├── examples/               # Example configurations
-├── .github/workflows/      # CI/CD automation
+├── .github/workflows/      # Streamlined PR validation workflow
 ├── LICENSE                 # Creative Commons BY-SA 4.0
 └── README.md              # This file
 ```
