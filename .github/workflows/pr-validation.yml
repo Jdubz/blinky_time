@@ -30,6 +30,8 @@ jobs:
         arduino-cli core update-index
         arduino-cli core install Seeeduino:nrf52
         arduino-cli lib install "Adafruit NeoPixel"
+        # Install adafruit-nrfutil for nRF52 packaging
+        pip install adafruit-nrfutil
 
     - name: Set device type
       run: |
@@ -87,35 +89,3 @@ jobs:
           fi
         done
         echo "✅ All required documentation files present"
-
-  pr-summary:
-    runs-on: ubuntu-latest
-    needs: [compilation-tests, code-quality, documentation]
-    if: always()
-
-    steps:
-    - name: PR Status Summary
-      run: |
-        echo "## 🤖 PR Validation Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-
-        if [ "${{ needs.compilation-tests.result }}" == "success" ]; then
-          echo "✅ **Compilation Tests**: All device configurations compile successfully" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "❌ **Compilation Tests**: Failed" >> $GITHUB_STEP_SUMMARY
-        fi
-
-        if [ "${{ needs.code-quality.result }}" == "success" ]; then
-          echo "✅ **Code Quality**: All checks passed" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "❌ **Code Quality**: Issues found" >> $GITHUB_STEP_SUMMARY
-        fi
-
-        if [ "${{ needs.documentation.result }}" == "success" ]; then
-          echo "✅ **Documentation**: Complete" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "❌ **Documentation**: Missing files" >> $GITHUB_STEP_SUMMARY
-        fi
-
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "Ready for review! 🚀" >> $GITHUB_STEP_SUMMARY

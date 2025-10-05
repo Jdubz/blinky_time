@@ -49,7 +49,7 @@ Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix
 // New Generator-Effect-Renderer Architecture
 // === ARCHITECTURE STATUS ===
 // ✅ Core System: Generator→Effects→Renderer pipeline operational
-// ✅ UnifiedFireGenerator: All layout types (MATRIX, LINEAR, RANDOM) working  
+// ✅ UnifiedFireGenerator: All layout types (MATRIX, LINEAR, RANDOM) working
 // ✅ Hardware: AdaptiveMic ready for audio input
 // ✅ Compilation: 71,988 bytes (8% storage), all device types compile
 
@@ -60,7 +60,7 @@ EffectMatrix* effectMatrix = nullptr;
 
 AdaptiveMic mic;
 // === TEMPORARILY DISABLED (ready for future enablement) ===
-// SerialConsole console;        // TODO: Update for unified fire generator  
+// SerialConsole console;        // TODO: Update for unified fire generator
 // BatteryMonitor battery;       // TODO: Update for new Generator architecture
 // IMUHelper imu;               // TODO: Enable when LSM6DS3 library is available
 // ConfigStorage configStorage; // TODO: Clean up legacy fire params

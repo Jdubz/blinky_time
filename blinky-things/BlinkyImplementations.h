@@ -5,7 +5,7 @@
  *
  * Arduino IDE doesn't automatically compile .cpp files in subdirectories.
  * This file includes all implementations to ensure they're compiled.
- * 
+ *
  * CURRENT ARCHITECTURE STATUS:
  * ✅ Core: Generator→Effects→Renderer pipeline operational
  * ✅ UnifiedFireGenerator: Supports all layout types (MATRIX, LINEAR, RANDOM)
