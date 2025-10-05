@@ -4,8 +4,8 @@
 #include "../generators/UnifiedFireGenerator.h"
 #include "../hardware/AdaptiveMic.h"
 
-// Use the UnifiedFireGenerator's FireParams for configuration compatibility
-using FireParams = UnifiedFireGenerator::FireParams;
+// Use the UnifiedFireParams for configuration compatibility
+using FireParams = UnifiedFireParams;
 
 // Include EEPROM library for platforms that support it (not needed for nRF52 variants)
 #if !defined(ARDUINO_ARCH_NRF52) && !defined(NRF52) && !defined(TARGET_NAME) && !defined(MBED_CONF_TARGET_NAME)
@@ -87,14 +87,6 @@ public:
     void loadConfiguration(FireParams& fireParams, AdaptiveMic& mic);
     void saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic);
 
-    // Overloads for MatrixFireGenerator
-    void loadConfiguration(MatrixFireParams& matrixFireParams, AdaptiveMic& mic);
-    void saveConfiguration(const MatrixFireParams& matrixFireParams, const AdaptiveMic& mic);
-
-    // Overloads for StringFireGenerator
-    void loadConfiguration(StringFireParams& stringFireParams, AdaptiveMic& mic);
-    void saveConfiguration(const StringFireParams& stringFireParams, const AdaptiveMic& mic);
-
     // Device type management
     void setDeviceType(uint8_t deviceType);
     uint8_t getDeviceType() const { return configData_.header.deviceType; }
@@ -105,12 +97,6 @@ public:
     // Individual parameter save (for immediate persistence)
     void saveFireParam(const char* paramName, const FireParams& params);
     void saveMicParam(const char* paramName, const AdaptiveMic& mic);
-
-    // Overloads for MatrixFireGenerator
-    void saveMatrixFireParam(const char* paramName, const MatrixFireParams& params);
-
-    // Overloads for StringFireGenerator
-    void saveStringFireParam(const char* paramName, const StringFireParams& params);
 
     // Status and diagnostics
     void printStatus() const;
@@ -129,14 +115,6 @@ private:
     void copyFireParamsFrom(const FireParams& params);
     void copyMicParamsTo(AdaptiveMic& mic) const;
     void copyMicParamsFrom(const AdaptiveMic& mic);
-
-    // MatrixFire parameter copying
-    void copyMatrixFireParamsTo(MatrixFireParams& params) const;
-    void copyMatrixFireParamsFrom(const MatrixFireParams& params);
-
-    // StringFire parameter copying
-    void copyStringFireParamsTo(StringFireParams& params) const;
-    void copyStringFireParamsFrom(const StringFireParams& params);
 
     // Note: EEPROM functionality for ESP32/AVR platforms will be implemented when needed
     // Currently all platforms use defaults-only mode

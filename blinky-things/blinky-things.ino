@@ -101,7 +101,7 @@ void showFireEffect() {
     updateFireEffect(energy, hit);
     
     // Generate effects and render
-    currentGenerator->generate(effectMatrix);
+    currentGenerator->generate(*effectMatrix, energy, hit);
     currentEffect->apply(effectMatrix);
     renderer->render(*effectMatrix);
     leds.show();
@@ -215,7 +215,7 @@ void setup() {
   }
   
   // Initialize the generator with layout type
-  if (!fireGen->begin(config.matrix.width, config.matrix.height, config.layoutType)) {
+  if (!fireGen->begin(config.matrix.width, config.matrix.height, config.matrix.layoutType)) {
     Serial.println(F("ERROR: Generator initialization failed"));
     while(1); // Halt execution
   }

@@ -1,9 +1,9 @@
 #pragma once
 
-#include "../../core/Generator.h"
-#include "../../core/EffectMatrix.h"
-#include "../../config/TotemDefaults.h"
-#include "../../devices/DeviceConfig.h"
+#include "../core/Generator.h"
+#include "../core/EffectMatrix.h"
+#include "../config/TotemDefaults.h"
+#include "../devices/DeviceConfig.h"
 
 /**
  * UnifiedFireGenerator - Universal fire simulation for all layout types
@@ -46,11 +46,15 @@ public:
     virtual ~UnifiedFireGenerator();
     
     // Generator interface implementation
-    virtual bool begin(int width, int height) override;
+    virtual void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
+    virtual void reset() override;
+    virtual const char* getName() const override { return "UnifiedFireGenerator"; }
+    
+    // UnifiedFireGenerator specific methods
+    bool begin(int width, int height);
     bool begin(int width, int height, LayoutType layoutType);
-    virtual void update() override;
-    virtual void generate(EffectMatrix* matrix) override;
-    virtual void setAudioInput(float energy, bool hit) override;
+    void update();
+    void setAudioInput(float energy, bool hit);
     
     // Layout configuration
     void setLayoutType(LayoutType layoutType);

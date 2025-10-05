@@ -62,15 +62,33 @@ void UnifiedFireGenerator::update() {
     propagateHeat();
 }
 
-void UnifiedFireGenerator::generate(EffectMatrix* matrix) {
-    if (!matrix || !heat_) return;
+void UnifiedFireGenerator::generate(EffectMatrix& matrix, float energy, float hit) {
+    if (!heat_) return;
     
+    // Store audio input for use in fire simulation
+    audioEnergy_ = energy;
+    audioHit_ = hit > 0.5f;  // Convert float hit to boolean
+    
+    // Update fire simulation
+    update();
+    
+    // Render to matrix
     for (int i = 0; i < numLeds_; i++) {
         uint32_t color = heatToColor(heat_[i]);
         int x, y;
         indexToCoords(i, x, y);
-        matrix->setPixel(x, y, color);
+        matrix.setPixel(x, y, color);
     }
+}
+
+void UnifiedFireGenerator::reset() {
+    if (heat_) {
+        memset(heat_, 0, numLeds_);
+    }
+    numActivePositions_ = 0;
+    audioEnergy_ = 0.0f;
+    audioHit_ = false;
+    lastUpdateMs_ = millis();
 }
 
 void UnifiedFireGenerator::setAudioInput(float energy, bool hit) {
@@ -381,7 +399,7 @@ UnifiedFireGenerator* createFireGenerator(const DeviceConfig& config) {
     UnifiedFireGenerator* generator = new UnifiedFireGenerator();
     
     // Configure layout type from device config
-    generator->setLayoutType(config.layoutType);
+    generator->setLayoutType(config.matrix.layoutType);
     generator->setOrientation(config.matrix.orientation);
     
     return generator;
