@@ -21,12 +21,14 @@
 // #include "config/ConfigStorage.h"  // TODO: Clean up legacy fire params
 
 // Core interfaces
-#include "core/Generator.h"
 #include "core/Effect.h"
 #include "core/EffectMatrix.h"
 
 // Generators
-#include "generators/UnifiedFireGenerator.h"       // New unified fire generator for all layout types
+#include "generators/Generator.h"     // Base generator class
+#include "generators/Fire.h"          // Fire simulation generator
+#include "generators/Water.h"         // Water flow generator
+#include "generators/Lightning.h"     // Lightning bolt generator
 
 // Effects
 #include "effects/hue-rotation/HueRotationEffect.h"

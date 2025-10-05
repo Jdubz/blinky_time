@@ -8,7 +8,9 @@
  *
  * CURRENT ARCHITECTURE STATUS:
  * ✅ Core: Generator→Effects→Renderer pipeline operational
- * ✅ UnifiedFireGenerator: Supports all layout types (MATRIX, LINEAR, RANDOM)
+ * ✅ Fire: Realistic fire simulation (red/orange/yellow)
+ * ✅ Water: Flowing water effects (blue/cyan)  
+ * ✅ Lightning: Electric bolt effects (yellow/white)
  * ✅ Hardware: AdaptiveMic and BatteryMonitor ready
  * ⚠️  IMUHelper: Disabled until LSM6DS3 library dependency resolved
  * ⚠️  SerialConsole: Disabled until updated for unified architecture
@@ -19,7 +21,9 @@
 #include "core/EffectMatrix.cpp"
 
 // Generator implementations
-#include "generators/UnifiedFireGenerator.cpp"
+#include "generators/Fire.cpp"
+#include "generators/Water.cpp"
+#include "generators/Lightning.cpp"
 
 // Effect implementations
 #include "effects/hue-rotation/HueRotationEffect.cpp"

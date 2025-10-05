@@ -1,12 +1,10 @@
 #pragma once
 
-#include "../core/Generator.h"
-#include "../core/EffectMatrix.h"
+#include "Generator.h"
 #include "../config/TotemDefaults.h"
-#include "../devices/DeviceConfig.h"
 
 /**
- * UnifiedFireGenerator - Universal fire simulation for all layout types
+ * Fire - Realistic fire simulation generator
  *
  * Generates realistic fire patterns using heat diffusion simulation
  * that adapts to different LED layout arrangements:
@@ -18,16 +16,20 @@
  * - Layout-aware heat propagation algorithms
  * - Audio-reactive spark generation
  * - Configurable cooling and spark parameters
- * - Realistic fire color palette
+ * - Realistic fire color palette (red/orange/yellow)
  * - Automatic algorithm selection based on layout type
  */
 
-struct UnifiedFireParams {
+struct FireParams {
     uint8_t baseCooling         = Defaults::BaseCooling;
     uint8_t sparkHeatMin        = Defaults::SparkHeatMin;
     uint8_t sparkHeatMax        = Defaults::SparkHeatMax;
     float   sparkChance         = Defaults::SparkChance;
     float   audioSparkBoost     = Defaults::AudioSparkBoost;
+    uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
+    int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
+    uint8_t maxSparkPositions   = 16;  // For random layout tracking
+};
     uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
     int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
     uint8_t bottomRowsForSparks = Defaults::BottomRowsForSparks;
@@ -40,28 +42,23 @@ struct UnifiedFireParams {
     bool    useMaxHeatOnly     = false;   // Use max heat instead of additive (linear layouts)
 };
 
-class UnifiedFireGenerator : public Generator {
+class Fire : public Generator {
 public:
-    UnifiedFireGenerator();
-    virtual ~UnifiedFireGenerator();
+    Fire();
+    virtual ~Fire();
 
     // Generator interface implementation
+    virtual bool begin(const DeviceConfig& config) override;
     virtual void generate(EffectMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
     virtual void reset() override;
-    virtual const char* getName() const override { return "UnifiedFireGenerator"; }
+    virtual const char* getName() const override { return "Fire"; }
 
-    // UnifiedFireGenerator specific methods
-    bool begin(int width, int height);
-    bool begin(int width, int height, LayoutType layoutType);
+    // Fire specific methods
     void update();
     void setAudioInput(float energy, bool hit);
 
-    // Layout configuration
-    void setLayoutType(LayoutType layoutType);
-    void setOrientation(MatrixOrientation orientation);
-
     // Parameter configuration
-    void setParams(const UnifiedFireParams& params);
+    void setParams(const FireParams& params);
     void resetToDefaults();
 
     // Individual parameter setters
@@ -83,16 +80,11 @@ private:
     int coordsToIndex(int x, int y);
     void indexToCoords(int index, int& x, int& y);
 
-    // State variables
-    int width_, height_;
-    int numLeds_;
+    // State variables  
     uint8_t* heat_;
-    unsigned long lastUpdateMs_;
 
     // Configuration
-    LayoutType layoutType_;
-    MatrixOrientation orientation_;
-    UnifiedFireParams params_;
+    FireParams params_;
 
     // Audio input
     float audioEnergy_;
@@ -102,6 +94,3 @@ private:
     uint8_t* sparkPositions_;   // For random layout spark tracking
     uint8_t numActivePositions_;
 };
-
-// Factory function to create and configure generator based on device config
-UnifiedFireGenerator* createFireGenerator(const DeviceConfig& config);

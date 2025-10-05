@@ -49,11 +49,11 @@ Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix
 // New Generator-Effect-Renderer Architecture
 // === ARCHITECTURE STATUS ===
 // ✅ Core System: Generator→Effects→Renderer pipeline operational
-// ✅ UnifiedFireGenerator: All layout types (MATRIX, LINEAR, RANDOM) working
+// ✅ Fire: Realistic fire simulation (red/orange/yellow) for all layout types
+// ✅ Water: Flowing water effects (blue/cyan) for all layout types  
+// ✅ Lightning: Electric bolt effects (yellow/white) for all layout types
 // ✅ Hardware: AdaptiveMic ready for audio input
-// ✅ Compilation: 71,988 bytes (8% storage), all device types compile
-
-Generator* currentGenerator = nullptr;
+// ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)Generator* currentGenerator = nullptr;
 Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
 EffectMatrix* effectMatrix = nullptr;
@@ -88,8 +88,8 @@ void updateFireEffect(float energy, float hit) {
 
   // Update generator with audio energy and impact
   if (currentGenerator) {
-    // Cast to UnifiedFireGenerator to access update method and setAudioInput
-    UnifiedFireGenerator* fireGen = static_cast<UnifiedFireGenerator*>(currentGenerator);
+    // Cast to Fire to access update method and setAudioInput
+    Fire* fireGen = static_cast<Fire*>(currentGenerator);
     if (fireGen) {
       fireGen->setAudioInput(energy, hit);
       fireGen->update();
@@ -212,8 +212,8 @@ void setup() {
       break;
   }
 
-  // Create unified fire generator using factory function
-  UnifiedFireGenerator* fireGen = createFireGenerator(config);
+  // Create fire generator instance
+  Fire* fireGen = new Fire();
   currentGenerator = fireGen;
 
   if (!currentGenerator) {
@@ -221,8 +221,8 @@ void setup() {
     while(1); // Halt execution
   }
 
-  // Initialize the generator with layout type
-  if (!fireGen->begin(config.matrix.width, config.matrix.height, config.matrix.layoutType)) {
+  // Initialize the generator with device configuration
+  if (!fireGen->begin(config)) {
     Serial.println(F("ERROR: Generator initialization failed"));
     while(1); // Halt execution
   }
