@@ -39,9 +39,8 @@
 #include "render/LEDMapper.h"
 
 // Input components
-// NOTE: AdaptiveMic temporarily disabled due to PDM/NeoPixel pinDefinitions.h conflict
-// TODO: Fix pinDefinitions.h redefinition error between PDM and Adafruit_NeoPixel libraries
-// #include "inputs/AdaptiveMic.h"
+// NOTE: Requires patched pinDefinitions.h with include guards (see docs/PLATFORM_FIX.md)
+#include "inputs/AdaptiveMic.h"
 // #include "inputs/SerialConsole.h"  // TODO: Update for new Generator architecture
 // #include "inputs/BatteryMonitor.h"  // TODO: Update for new Generator architecture
 // #include "inputs/IMUHelper.h"       // TODO: Update for new Generator architecture

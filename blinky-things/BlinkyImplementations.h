@@ -35,7 +35,7 @@
 #include "render/EffectRenderer.cpp"
 
 // Input implementations
-// #include "inputs/AdaptiveMic.cpp"  // TODO: Fix pinDefinitions.h conflict with PDM/NeoPixel
+#include "inputs/AdaptiveMic.cpp"
 #include "inputs/BatteryMonitor.cpp"
 // #include "inputs/IMUHelper.cpp"  // TODO: Enable when LSM6DS3 library is available
 // #include "inputs/SerialConsole.cpp"  // TODO: Update for unified fire generator

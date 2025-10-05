@@ -62,8 +62,8 @@ Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
 PixelMatrix* pixelMatrix = nullptr;
 
+AdaptiveMic mic;
 // === TEMPORARILY DISABLED (ready for future enablement) ===
-// AdaptiveMic mic;              // TODO: Fix pinDefinitions.h conflict with PDM/NeoPixel
 // SerialConsole console;        // TODO: Update for unified fire generator
 // BatteryMonitor battery;       // TODO: Update for new Generator architecture
 // IMUHelper imu;               // TODO: Enable when LSM6DS3 library is available
@@ -104,9 +104,9 @@ void updateFireEffect(float energy, float hit) {
 void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
   if (currentGenerator && currentEffect && renderer && pixelMatrix) {
-    // Get audio input for generation (TODO: Re-enable when mic is fixed)
-    float energy = 0.0f; // mic.getLevel();
-    float hit = 0.0f;    // mic.getTransient();
+    // Get audio input for generation
+    float energy = mic.getLevel();
+    float hit = mic.getTransient();
 
     // Update generator with audio input (handled by updateFireEffect)
     updateFireEffect(energy, hit);
@@ -248,13 +248,12 @@ void setup() {
 
   Serial.println(F("New architecture initialized successfully"));
 
-  // TODO: Re-enable when PDM/NeoPixel pinDefinitions.h conflict is resolved
-  // bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
-  // if (!micOk) {
-  //   Serial.println(F("ERROR: Microphone failed to start"));
-  // } else {
-  //   Serial.println(F("Microphone initialized"));
-  // }
+  bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
+  if (!micOk) {
+    Serial.println(F("ERROR: Microphone failed to start"));
+  } else {
+    Serial.println(F("Microphone initialized"));
+  }
 
   // Initialize EEPROM configuration storage
   // configStorage.begin();  // TODO: Clean up legacy fire params
@@ -288,8 +287,7 @@ void loop() {
   dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
   lastMs = now;
 
-  // TODO: Re-enable when PDM/NeoPixel pinDefinitions.h conflict is resolved
-  // mic.update(dt);
+  mic.update(dt);
 
   // TODO: Uncomment when IMU is updated for new architecture
   // IMU data update for visualization only (no fire effects)
@@ -297,9 +295,8 @@ void loop() {
   //   imu.updateIMUData(); // Update clean IMU data for debugging only
   // }
 
-  // TODO: Re-enable when mic is fixed
-  float energy = 0.0f; // mic.getLevel();
-  float hit = 0.0f;    // mic.getTransient();
+  float energy = mic.getLevel();
+  float hit = mic.getTransient();
 
   // TODO: Uncomment when battery monitor is updated for new architecture
   // Auto-activation of battery visualization when charging
