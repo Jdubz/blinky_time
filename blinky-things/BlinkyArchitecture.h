@@ -26,9 +26,7 @@
 #include "core/EffectMatrix.h"
 
 // Generators
-#include "generators/legacy-fire/FireGenerator.h"  // Legacy fire generator
-#include "generators/matrix-fire/MatrixFireGenerator.h"
-#include "generators/string-fire/StringFireGenerator.h"
+#include "generators/UnifiedFireGenerator.h"       // New unified fire generator for all layout types
 
 // Effects
 #include "effects/hue-rotation/HueRotationEffect.h"

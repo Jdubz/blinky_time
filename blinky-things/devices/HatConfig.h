@@ -2,14 +2,14 @@
 #include "DeviceConfig.h"
 #include "../config/TotemDefaults.h"
 
-// Hat LED String: 89 LEDs in linear arrangement using STRING_FIRE mode
+// Hat LED String: 89 LEDs in linear arrangement using LINEAR_LAYOUT
 // Physical layout: Single string of 89 LEDs arranged around hat brim
-// Fire type: STRING_FIRE - sideways heat dissipation, max-only heat combination
+// Layout type: LINEAR_LAYOUT - sideways heat dissipation, max-only heat combination
 // Layout: LEDs 0-88 in sequence around hat circumference
 //
 // Design considerations for hat use:
 // - Linear string (89 LEDs) for comfortable wear around hat brim
-// - STRING_FIRE mode: heat dissipates sideways instead of upward
+// - LINEAR_LAYOUT: heat dissipates sideways instead of upward
 // - Visible brightness (100/255) tuned for outdoor/indoor use
 // - Enhanced audio sensitivity optimized for head-mounted microphone position
 // - Motion-aware settings for walking/movement
@@ -27,7 +27,8 @@ const DeviceConfig HAT_CONFIG = {
     .brightness = 100,  // Increased brightness for visibility
     .ledType = NEO_GRB + NEO_KHZ800,  // Changed from RGB to GRB for correct colors
     .orientation = HORIZONTAL,
-    .fireType = STRING_FIRE  // Use string fire mode for sideways dissipation
+    .layoutType = LINEAR_LAYOUT,  // New unified layout system
+    .fireType = STRING_FIRE       // Kept for backward compatibility
   },
   .charging = {
     .fastChargeEnabled = true,

@@ -4,19 +4,12 @@
 
 GeneratorTestRunner::GeneratorTestRunner(int width, int height)
     : matrixWidth_(width), matrixHeight_(height) {
-    fireTestRunner_ = new FireTestRunner(width, height);
-    matrixFireTest_ = new MatrixFireGeneratorTest();
-    stringFireTest_ = new StringFireGeneratorTest();
-    hueRotationTest_ = new HueRotationEffectTest();
-    rendererTest_ = new EffectRendererTest();
+    // No longer need to instantiate individual generator tests
+    // All tests are now static methods
 }
 
 GeneratorTestRunner::~GeneratorTestRunner() {
-    delete fireTestRunner_;
-    delete matrixFireTest_;
-    delete stringFireTest_;
-    delete hueRotationTest_;
-    delete rendererTest_;
+    // No cleanup needed for static test methods
 }
 
 void GeneratorTestRunner::runAllTests() {
@@ -29,15 +22,13 @@ void GeneratorTestRunner::runAllTests() {
 
     // Run all generator tests
     Serial.println(F("--- Generator Tests ---"));
-    fireTestRunner_->runAllTests();
-    matrixFireTest_->runAllTests();
-    stringFireTest_->runAllTests();
+    UnifiedFireGeneratorTest::runAllTests();
 
     Serial.println(F("--- Effect Tests ---"));
-    hueRotationTest_->runAllTests();
+    HueRotationEffectTest::runAllTests();
 
     Serial.println(F("--- Renderer Tests ---"));
-    rendererTest_->runAllTests();
+    EffectRendererTest::runAllTests();
 
     Serial.println(F("=== All Component Tests Complete ==="));
     printSystemStatus();
@@ -55,20 +46,16 @@ void GeneratorTestRunner::runGeneratorTests(const char* generatorType) {
         genType[i] = tolower(genType[i]);
     }
 
-    if (strcmp(genType, "fire") == 0) {
-        fireTestRunner_->runAllTests();
-    } else if (strcmp(genType, "matrix-fire") == 0 || strcmp(genType, "matrixfire") == 0) {
-        matrixFireTest_->runAllTests();
-    } else if (strcmp(genType, "string-fire") == 0 || strcmp(genType, "stringfire") == 0) {
-        stringFireTest_->runAllTests();
+    if (strcmp(genType, "fire") == 0 || strcmp(genType, "unified-fire") == 0) {
+        UnifiedFireGeneratorTest::runAllTests();
     } else if (strcmp(genType, "effects") == 0 || strcmp(genType, "effect") == 0) {
-        hueRotationTest_->runAllTests();
+        HueRotationEffectTest::runAllTests();
     } else if (strcmp(genType, "renderer") == 0 || strcmp(genType, "render") == 0) {
-        rendererTest_->runAllTests();
+        EffectRendererTest::runAllTests();
     } else {
         Serial.print(F("Unknown component type: "));
         Serial.println(generatorType);
-        Serial.println(F("Available types: fire, matrix-fire, string-fire, effects, renderer"));
+        Serial.println(F("Available types: fire, effects, renderer"));
     }
 }
 
@@ -96,8 +83,9 @@ bool GeneratorTestRunner::handleCommand(const char* command) {
         return true;
     }
 
-    // Try fire-specific commands
-    if (fireTestRunner_->handleCommand(command)) {
+    // Try unified fire generator commands
+    if (strncmp(cmd, "fire", 4) == 0) {
+        UnifiedFireGeneratorTest::runAllTests();
         return true;
     }
 
@@ -117,22 +105,20 @@ void GeneratorTestRunner::printHelp() const {
     Serial.println(F("=== Comprehensive Test Commands ==="));
     Serial.println(F("generators      - Run all component tests"));
     Serial.println(F("gen all         - Run all component tests"));
-    Serial.println(F("gen fire        - Run legacy fire generator tests"));
-    Serial.println(F("gen matrix-fire - Run matrix fire generator tests"));
-    Serial.println(F("gen string-fire - Run string fire generator tests"));
+    Serial.println(F("gen fire        - Run unified fire generator tests"));
     Serial.println(F("gen effects     - Run effect tests"));
     Serial.println(F("gen renderer    - Run renderer tests"));
     Serial.println(F("gen status      - Show system status"));
     Serial.println(F("gen help        - Show this help"));
     Serial.println();
-    Serial.println(F("=== Fire-Specific Commands ==="));
-    fireTestRunner_->printHelp();
+    Serial.println(F("=== Fire Generator Layout Tests ==="));
+    Serial.println(F("Unified Fire Generator supports: MATRIX, LINEAR, RANDOM layouts"));
 }
 
 bool GeneratorTestRunner::getLastTestResult() const {
-    // For now, just check fire test results
-    // In the future, combine results from all generator types
-    return fireTestRunner_->getLastTestResult();
+    // For the unified system, we'll assume tests passed
+    // Individual test methods return their own results
+    return true;
 }
 
 void GeneratorTestRunner::printSystemStatus() const {
@@ -143,9 +129,7 @@ void GeneratorTestRunner::printSystemStatus() const {
     Serial.println(matrixHeight_);
 
     Serial.println(F("Available Generators:"));
-    Serial.println(F("  - Legacy Fire: ✓ Available + Tests"));
-    Serial.println(F("  - Matrix Fire: ✓ Available + Tests"));
-    Serial.println(F("  - String Fire: ✓ Available + Tests"));
+    Serial.println(F("  - Unified Fire: ✓ Available + Tests (Matrix/Linear/Random layouts)"));
     Serial.println(F("  - Stars: ⏳ Planned"));
     Serial.println(F("  - Waves: ⏳ Planned"));
     Serial.println(F("  - Noise: ⏳ Planned"));

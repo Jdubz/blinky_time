@@ -81,8 +81,8 @@ void updateFireEffect(float energy, float hit) {
 
   // Update generator with audio energy and impact
   if (currentGenerator) {
-    // Cast to FireGenerator to access update method
-    FireGenerator* fireGen = static_cast<FireGenerator*>(currentGenerator);
+    // Cast to UnifiedFireGenerator to access update method and setAudioInput
+    UnifiedFireGenerator* fireGen = static_cast<UnifiedFireGenerator*>(currentGenerator);
     if (fireGen) {
       fireGen->setAudioInput(energy, hit);
       fireGen->update();
@@ -97,7 +97,11 @@ void showFireEffect() {
     float energy = mic.getLevel();
     float hit = mic.getTransient();
 
-    currentGenerator->generate(*effectMatrix, energy, hit);
+    // Update generator with audio input (handled by updateFireEffect)
+    updateFireEffect(energy, hit);
+    
+    // Generate effects and render
+    currentGenerator->generate(effectMatrix);
     currentEffect->apply(effectMatrix);
     renderer->render(*effectMatrix);
     leds.show();
@@ -184,24 +188,36 @@ void setup() {
     while(1); // Halt execution
   }
 
-  // Initialize appropriate generator based on config
-  if (config.matrix.fireType == STRING_FIRE) {
-    Serial.println(F("Initializing STRING fire generator"));
-    currentGenerator = new StringFireGenerator(config.matrix.width * config.matrix.height);
-  } else {
-    Serial.println(F("Initializing MATRIX fire generator"));
-    currentGenerator = new MatrixFireGenerator(config.matrix.width, config.matrix.height);
+  // Initialize appropriate generator based on layout type
+  Serial.print(F("Initializing fire generator for layout type: "));
+  switch (config.matrix.layoutType) {
+    case MATRIX_LAYOUT:
+      Serial.println(F("MATRIX"));
+      break;
+    case LINEAR_LAYOUT:
+      Serial.println(F("LINEAR"));
+      break;
+    case RANDOM_LAYOUT:
+      Serial.println(F("RANDOM"));
+      break;
+    default:
+      Serial.println(F("UNKNOWN"));
+      break;
   }
-
+  
+  // Create unified fire generator using factory function
+  UnifiedFireGenerator* fireGen = createFireGenerator(config);
+  currentGenerator = fireGen;
+  
   if (!currentGenerator) {
     Serial.println(F("ERROR: Generator allocation failed"));
     while(1); // Halt execution
   }
-
-  // Initialize FireGenerator specific setup
-  FireGenerator* fireGen = static_cast<FireGenerator*>(currentGenerator);
-  if (fireGen) {
-    fireGen->begin(config.matrix.width, config.matrix.height);
+  
+  // Initialize the generator
+  if (!currentGenerator->begin(config.matrix.width, config.matrix.height)) {
+    Serial.println(F("ERROR: Generator initialization failed"));
+    while(1); // Halt execution
   }
 
   // Initialize effect (for now, just a pass-through effect)

@@ -20,7 +20,8 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
     .brightness = 120,
     .ledType = NEO_GRB + NEO_KHZ800,  // CRITICAL: NEO_GRB for nRF52840 XIAO Sense
     .orientation = VERTICAL,
-    .fireType = MATRIX_FIRE
+    .layoutType = MATRIX_LAYOUT,      // New unified layout system
+    .fireType = MATRIX_FIRE           // Kept for backward compatibility
   },
   .charging = {
     .fastChargeEnabled = true,

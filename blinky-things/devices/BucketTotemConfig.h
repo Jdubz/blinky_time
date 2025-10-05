@@ -24,7 +24,8 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
     .brightness = 80,
     .ledType = NEO_RGB + NEO_KHZ800,
     .orientation = HORIZONTAL,
-    .fireType = MATRIX_FIRE
+    .layoutType = MATRIX_LAYOUT,      // New unified layout system
+    .fireType = MATRIX_FIRE           // Kept for backward compatibility
   },
   .charging = {
     .fastChargeEnabled = true,

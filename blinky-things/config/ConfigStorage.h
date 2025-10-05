@@ -1,13 +1,11 @@
 #pragma once
 
 #include <Arduino.h>
-#include "../generators/legacy-fire/FireGenerator.h"
-#include "../generators/matrix-fire/MatrixFireGenerator.h"
-#include "../generators/string-fire/StringFireGenerator.h"
+#include "../generators/UnifiedFireGenerator.h"
 #include "../hardware/AdaptiveMic.h"
 
-// Use the legacy FireGenerator's FireParams for configuration compatibility
-using FireParams = FireGenerator::FireParams;
+// Use the UnifiedFireGenerator's FireParams for configuration compatibility
+using FireParams = UnifiedFireGenerator::FireParams;
 
 // Include EEPROM library for platforms that support it (not needed for nRF52 variants)
 #if !defined(ARDUINO_ARCH_NRF52) && !defined(NRF52) && !defined(TARGET_NAME) && !defined(MBED_CONF_TARGET_NAME)
