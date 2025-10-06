@@ -1,140 +1,209 @@
-# Blinky Things - Todo List
-*Updated: September 23, 2025*
+# 🚀 Blinky Time - Improvement Plan
 
-## 🚀 TODO ITEMS
+*Last Updated: October 5, 2025*
 
-### High Priority - Next Implementation Phase
+## 📋 Quick Action Items (Portfolio Ready)
 
-#### Hardware Verification & Testing
-- [ ] **Test Hat configuration on actual XIAO nRF52840 Sense hardware**
-  - Verify 89 LED string fire effect  
-  - Test STRING_FIRE mode sideways heat dissipation
-  - Validate audio responsiveness and IMU orientation
-  - Check battery monitoring and charging visualization
+### Critical - Do Immediately
+- [ ] **Add demo video/GIFs to README** - Show fire effects in action
+- [ ] **Create hardware photos** - Document actual installations
+- [ ] **Clean up git branches** - Remove experimental branches (better-audio, playing-with-buffers)
+- [ ] **Add archive/README.md** - Document what's archived and why
 
-- [ ] **Test Tube Light configuration on target hardware**  
-  - Verify 4x15 matrix layout and zigzag wiring
-  - Test MATRIX_FIRE upward flame propagation
-  - Validate vertical orientation detection
-  - Check LED mapping for proper visual output
-
-- [ ] **Test Bucket Totem configuration on target hardware**
-  - Verify 16x8 matrix standard wiring  
-  - Test horizontal fire effect orientation
-  - Validate standard totem fire parameters
-  - Check overall performance and stability
-
-#### Runtime Configuration Management  
-- [ ] **Add serial commands for device configuration switching**
-  - `config hat` - Switch to Hat configuration
-  - `config tube` - Switch to Tube Light configuration  
-  - `config bucket` - Switch to Bucket Totem configuration
-  - `config show` - Display current active configuration
-  - `config save` - Save current config to EEPROM
-
-- [ ] **Implement EEPROM configuration storage**
-  - Persistent storage of custom fire parameters
-  - Device type selection persistence across reboots
-  - Configuration backup and restore functionality
-  - Factory reset capability
-
-### Medium Priority - Enhancements
-
-#### Advanced Configuration Features
-- [ ] **Configuration profile system**
-  - Multiple named presets per device type
-  - Profile switching via serial commands
-  - Import/export configuration profiles
-  - Preset management interface
-
-- [ ] **Hardware auto-detection system**
-  - Detect device type via hardware pins or connected LEDs
-  - Automatic configuration selection on startup  
-  - Override mechanism for manual selection
-  - LED count detection and validation
-
-#### Extended Hardware Support
-- [ ] **Additional device configurations**  
-  - Support for custom LED counts and arrangements
-  - Generic matrix configuration builder
-  - LED strip configuration templates
-  - Multi-strip synchronized configurations
-
-- [ ] **Enhanced error handling and diagnostics**
-  - LED-based error indication patterns
-  - Hardware fault detection and reporting
-  - Configuration mismatch warnings
-  - Performance monitoring and alerts
-
-### Low Priority - Advanced Features
-
-#### Development and Testing Tools
-- [ ] **Configuration testing framework**
-  - Automated validation of all device configurations
-  - Hardware-in-the-loop testing setup  
-  - Regression testing for configuration changes
-  - Continuous integration build verification
-
-- [ ] **Advanced debugging features**
-  - Real-time performance metrics display
-  - Memory usage monitoring and optimization
-  - Fire effect parameter optimization tools
-  - Visual configuration editor interface
-
-#### Future Enhancements
-- [ ] **Wireless configuration management**
-  - WiFi-based configuration portal
-  - Mobile app for parameter tuning
-  - Remote monitoring and control
-  - Over-the-air configuration updates
-
-- [ ] **Machine learning integration**
-  - Adaptive fire parameters based on usage patterns
-  - Automatic audio environment detection and optimization
-  - User preference learning system
-  - Predictive parameter adjustment
-
-## Implementation Priority
-
-### Phase 1: Hardware Validation (1-2 weeks)
-Focus on testing all three configurations on actual hardware to ensure the improvements work correctly in real-world scenarios.
-
-### Phase 2: Runtime Configuration (2-3 weeks)  
-Implement EEPROM storage and runtime configuration switching to make the system fully dynamic.
-
-### Phase 3: Advanced Features (Ongoing)
-Add enhanced features based on user feedback and hardware testing results.
-
-## Success Metrics for Remaining Work
-
-### Hardware Testing Phase
-- [ ] All three device types function correctly on hardware
-- [ ] Fire effects display properly with expected visual characteristics  
-- [ ] Audio responsiveness works as designed
-- [ ] IMU orientation detection functions correctly
-- [ ] Battery monitoring and charging features operational
-- [ ] Serial console commands work reliably
-
-### Runtime Configuration Phase  
-- [ ] Device switching works without recompilation
-- [ ] Configuration persistence survives power cycles
-- [ ] EEPROM storage is reliable and corruption-resistant
-- [ ] All configuration parameters can be modified at runtime
-- [ ] Factory reset capability restores known-good state
-
-### System Integration
-- [ ] Smooth transitions between configurations
-- [ ] No memory leaks during configuration changes
-- [ ] Stable operation over extended periods
-- [ ] Consistent behavior across all supported device types
+### Important - Polish for Employers
+- [ ] **Convert TODOs to GitHub issues** - Track ~50 TODO comments as proper issues
+- [ ] **Add architecture diagram** - Visual flowchart of pipeline
+- [ ] **Create skills showcase** - Add "Technologies Used" section to README
 
 ---
 
-## Current Status Summary
+## 🔧 Technical Improvements
 
-**✅ Major Implementation Complete**: All critical configuration improvements done  
-**⏳ Hardware Testing Required**: Need to validate on actual hardware  
-**🔄 Runtime Features Next**: EEPROM storage and dynamic configuration switching  
-**📈 System Ready**: Foundation is solid for advanced features
+### Phase 1: Hardware Validation (1-2 weeks)
 
-The codebase is now in excellent condition with a clean, maintainable architecture that supports easy extension for the remaining todo items.
+#### Test All Device Configurations
+- [ ] **Hat (89 LEDs, STRING_FIRE)**
+  - Test sideways heat dissipation
+  - Validate audio responsiveness
+  - Check IMU orientation detection
+  - Verify battery monitoring
+
+- [ ] **Tube Light (4x15 matrix, MATRIX_FIRE)**
+  - Test zigzag wiring/mapping
+  - Validate upward flame propagation
+  - Check vertical orientation
+  - Verify LED mapping accuracy
+
+- [ ] **Bucket Totem (16x8 matrix, MATRIX_FIRE)**
+  - Test standard matrix wiring
+  - Validate horizontal fire effect
+  - Check performance and stability
+  - Verify all fire parameters
+
+#### Testing Deliverables
+- [ ] Record video demos for each device
+- [ ] Document any hardware-specific issues
+- [ ] Optimize fire parameters per device
+- [ ] Create troubleshooting guide
+
+---
+
+### Phase 2: Code Quality (1 week)
+
+#### Clean Up Technical Debt
+- [ ] **Resolve TODOs**
+  - Enable SerialConsole for new architecture
+  - Enable BatteryMonitor for new architecture
+  - Enable IMUHelper when LSM6DS3 available
+  - Clean up ConfigStorage or remove
+
+- [ ] **Remove Deprecated Code**
+  - Remove `FireEffectType` enum (use `LayoutType`)
+  - Clean up legacy IMU compatibility methods
+  - Document or remove "legacy" comments
+
+#### Code Documentation
+- [ ] Add inline documentation for complex algorithms
+- [ ] Document fire simulation math/physics
+- [ ] Add usage examples to key classes
+- [ ] Create developer onboarding guide
+
+---
+
+### Phase 3: Runtime Configuration (2-3 weeks)
+
+#### Dynamic Device Switching
+- [ ] **Serial Commands**
+  - `config hat` - Switch to Hat config
+  - `config tube` - Switch to Tube Light config
+  - `config bucket` - Switch to Bucket Totem config
+  - `config show` - Display current configuration
+  - `config save` - Persist to EEPROM
+
+#### Persistent Storage
+- [ ] Implement EEPROM configuration storage
+- [ ] Save custom fire parameters
+- [ ] Store device type selection
+- [ ] Add factory reset capability
+- [ ] Configuration backup/restore
+
+#### Configuration Profiles
+- [ ] Multiple named presets per device
+- [ ] Profile import/export
+- [ ] Quick profile switching
+- [ ] Profile management commands
+
+---
+
+### Phase 4: Advanced Features (Ongoing)
+
+#### Hardware Enhancements
+- [ ] **Auto-detection System**
+  - Detect LED count automatically
+  - Identify device type via hardware
+  - Auto-select correct configuration
+  - Manual override capability
+
+- [ ] **Error Handling**
+  - LED-based error indication patterns
+  - Hardware fault detection
+  - Configuration mismatch warnings
+  - Performance monitoring
+
+#### Development Tools
+- [ ] **Testing Framework**
+  - Automated config validation
+  - Hardware-in-the-loop testing
+  - Regression testing for configs
+  - CI/CD build verification
+
+- [ ] **Debugging Tools**
+  - Real-time performance metrics
+  - Memory usage monitoring
+  - Fire parameter optimization tools
+  - Visual configuration editor
+
+#### Future Ideas (Low Priority)
+- [ ] Wireless configuration (WiFi portal)
+- [ ] Mobile app for tuning
+- [ ] Additional generator types (aurora, plasma, etc.)
+- [ ] Multi-strip synchronization
+- [ ] Machine learning parameter adaptation
+
+---
+
+## 🎯 Success Metrics
+
+### Hardware Testing Phase
+- ✅ All three device types work on hardware
+- ✅ Fire effects look realistic and smooth
+- ✅ Audio reactivity is responsive
+- ✅ IMU orientation works correctly
+- ✅ Battery features operational
+- ✅ Serial console reliable
+
+### Code Quality Phase
+- ✅ Zero TODO comments in main code
+- ✅ All deprecated code removed
+- ✅ Documentation complete
+- ✅ Examples provided for all features
+
+### Runtime Config Phase
+- ✅ Device switching without recompilation
+- ✅ Config persists across power cycles
+- ✅ EEPROM storage reliable
+- ✅ All parameters runtime adjustable
+- ✅ Factory reset works
+
+### System Integration
+- ✅ Smooth config transitions
+- ✅ No memory leaks
+- ✅ Stable long-term operation
+- ✅ Consistent across devices
+
+---
+
+## 📊 Current Status
+
+**✅ Completed (October 2025)**
+- Architecture refactored to Generator→Effect→Renderer
+- Duplicate code structures removed
+- Clean folder organization
+- All configs compile successfully
+- Memory usage optimized (12% flash, 19% RAM)
+
+**🔄 In Progress**
+- Documentation cleanup (removing redundant docs)
+- Portfolio presentation improvements
+- Git branch maintenance
+
+**⏳ Next Up**
+- Hardware validation on real devices
+- Demo video creation
+- Technical debt resolution
+
+---
+
+## 💡 Implementation Priority
+
+### This Week
+1. Add visual content to README (screenshots, GIFs)
+2. Create hardware photos/videos
+3. Clean up git branches
+4. Document archive folder
+
+### Next 2 Weeks
+1. Hardware testing on all three devices
+2. Record demo videos
+3. Resolve remaining TODOs
+4. Create architecture diagram
+
+### Next Month
+1. Implement runtime configuration
+2. Add EEPROM persistence
+3. Build configuration profiles
+4. Create developer guide
+
+---
+
+**Note:** This plan focuses on actionable items that improve the codebase and portfolio presentation. Lower priority items can be tackled as time permits or based on user feedback after hardware testing.
