@@ -36,6 +36,17 @@ struct FireParams {
     float   heatDecay          = 0.92f;   // Heat decay factor for linear layouts
     uint8_t maxSparkPositions   = 16;     // Max simultaneous spark positions
     bool    useMaxHeatOnly      = false;  // Use max heat instead of additive (linear layouts)
+
+    // Tuneable spark count on hits (burst mode)
+    uint8_t hitSparkBase        = 2;      // Base sparks on hit
+    uint8_t hitSparkMult        = 3;      // Multiplier for hit intensity (base + hit * mult)
+    uint8_t burstSparks         = 8;      // Sparks generated on burst
+    uint16_t suppressionMs      = 300;    // Suppress sparks for this long after burst
+
+    // Ember noise floor (subtle ambient glow using noise)
+    uint8_t emberHeatMax        = 18;     // Maximum ember heat (dim glow)
+    float   emberNoiseSpeed     = 0.00033f; // How fast noise shifts (10% faster)
+    float   emberAudioScale     = 0.2f;   // How much audio affects ember brightness
 };
 
 class Fire : public Generator {
@@ -51,7 +62,7 @@ public:
 
     // Fire specific methods
     void update();
-    void setAudioInput(float energy, bool hit);
+    void setAudioInput(float energy, float hit);
 
     // Parameter configuration
     void setParams(const FireParams& params);
@@ -72,6 +83,7 @@ private:
     void generateSparks();
     void propagateHeat();
     void applyCooling();
+    void applyEmbers();          // Subtle ambient ember glow
     uint32_t heatToColor(uint8_t heat);
     int coordsToIndex(int x, int y);
     void indexToCoords(int index, int& x, int& y);
@@ -84,7 +96,13 @@ private:
 
     // Audio input
     float audioEnergy_;
-    bool audioHit_;
+    float audioHit_;
+    float prevHit_;              // Previous hit value for edge detection
+    uint32_t lastBurstMs_;       // When last burst occurred
+    bool inSuppression_;         // Currently suppressing sparks after burst
+
+    // Ember noise state
+    float emberNoisePhase_;      // Phase for noise animation
 
     // Layout-specific state
     uint8_t* sparkPositions_;   // For random layout spark tracking

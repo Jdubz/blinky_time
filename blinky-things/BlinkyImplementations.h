@@ -16,7 +16,7 @@
  * ✅ Hardware: AdaptiveMic and BatteryMonitor ready
  * ⚠️  IMUHelper: Disabled until LSM6DS3 library dependency resolved
  * ⚠️  SerialConsole: Disabled until updated for unified architecture
- * ⚠️  ConfigStorage: Disabled until legacy fire params cleaned up
+ * ✅ ConfigStorage: Flash persistence for settings (nRF52)
  */
 
 // Core data types
@@ -41,7 +41,7 @@
 // #include "inputs/SerialConsole.cpp"  // TODO: Update for unified fire generator
 
 // Configuration implementations
-// #include "config/ConfigStorage.cpp"  // TODO: Clean up legacy fire params
+#include "config/ConfigStorage.cpp"  // Persistent settings storage
 
 // Test implementations (only when testing enabled)
 #ifdef ENABLE_TESTING

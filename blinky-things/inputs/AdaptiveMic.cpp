@@ -77,60 +77,30 @@ void AdaptiveMic::update(float dt) {
 
     levelPostAGC = (afterGain < noiseGate) ? 0.0f : afterGain;
 
-    // Enhanced musical analysis
-    analyzeFrequencySpectrum(levelInstant);
-    updateEnvironmentClassification(dt);
-    detectMusicalPatterns(levelPostAGC, nowMs);
-    adaptToEnvironment();
+    // Note: Environment adaptation handled naturally by AGC
+    // Hardware gain adapts slowly (minutes) to environment
+    // Software AGC adapts faster (seconds) to music dynamics
 
-    // --- Enhanced Transient detection with spectral awareness ---
+    // --- Simplified Transient detection ---
     float x = levelPostAGC;
 
-    // update fast and slow averages
-    fastAvg += fastAlpha * (x - fastAvg);
+    // Slow average tracks the baseline level
     slowAvg += slowAlpha * (x - slowAvg);
 
     uint32_t now = millis();
     bool cooldownExpired = (now - lastTransientMs) > transientCooldownMs;
 
-    // Enhanced transient detection with musical awareness
-    float dynamicTransientFactor = transientFactor;
-    float dynamicLoudFloor = loudFloor;
+    // Transient = current level significantly above baseline
+    // transientFactor 1.4 means level must be 40% above baseline
+    float threshold = max(loudFloor, slowAvg * transientFactor);
 
-    // Adjust sensitivity based on frequency content and environment
-    if (bassLevel > 0.6f) {
-        // Bass-heavy music needs less sensitivity to avoid constant triggering
-        dynamicTransientFactor *= 1.3f;
-        dynamicLoudFloor *= 1.2f;
-    }
-    if (currentEnv >= ENV_LOUD) {
-        // Loud environments need higher thresholds
-        dynamicTransientFactor *= 1.2f;
-        dynamicLoudFloor *= 1.1f;
-    }
-    if (spectralCentroid < 500.0f) {
-        // Low-frequency dominated content (bass, kick drums)
-        dynamicTransientFactor *= 0.9f;  // More sensitive for bass hits
-    }
-
-    // condition: sharp jump + loud enough + cooldown + spectral awareness
-    if (cooldownExpired &&
-        x > dynamicLoudFloor &&
-        fastAvg > slowAvg * dynamicTransientFactor) {
-
-        // Scale transient intensity based on frequency content
-        float intensity = 1.0f;
-        if (bassLevel > 0.7f) intensity *= 1.2f;  // Boost for bass hits
-        if (highLevel > 0.8f) intensity *= 1.1f; // Boost for percussive hits
-
-        transient = clamp01(intensity);
+    if (cooldownExpired && x > threshold) {
+        transient = 1.0f;
         lastTransientMs = now;
     }
 
-    // Decay transient ramp
-    float decay = transientDecay * dt;
-    if (decay > 1.0f) decay = 1.0f;
-    transient -= decay;
+    // Decay transient
+    transient -= transientDecay * dt;
     if (transient < 0.0f) transient = 0.0f;
   }
 
@@ -463,63 +433,30 @@ void AdaptiveMic::applyDynamicRangeCompression(float& level) {
 }
 
 void AdaptiveMic::adaptToEnvironment() {
-    // Automatically adjust parameters based on detected environment
+    // NOTE: User-tunable parameters (transientFactor, noiseGate, agTarget, transientDecay)
+    // are NOT modified here - they are set via serial console and saved to flash.
+    // Only internal parameters that don't affect user tuning are adjusted.
+
+    // Adapt compression based on environment (doesn't affect transient detection)
     switch (currentEnv) {
-        case ENV_QUIET:
-            agTarget = 0.4f;  // Higher target for quiet environments
-            transientFactor = 2.0f; // More sensitive
-            noiseGate = 0.03f; // Lower gate
-            break;
-
-        case ENV_AMBIENT:
-            agTarget = 0.35f;
-            transientFactor = 2.5f;
-            noiseGate = 0.06f;
-            break;
-
-        case ENV_MODERATE:
-            agTarget = 0.35f; // Default
-            transientFactor = 2.5f;
-            noiseGate = 0.06f;
-            break;
-
         case ENV_LOUD:
-            agTarget = 0.3f; // Lower target to prevent clipping
-            transientFactor = 3.0f; // Less sensitive to avoid false triggers
-            noiseGate = 0.08f; // Higher gate
-            compRatio = 3.0f; // More compression
+            compRatio = 3.0f;
             break;
-
         case ENV_CONCERT:
-            agTarget = 0.25f;
-            transientFactor = 3.5f;
-            noiseGate = 0.1f;
             compRatio = 4.0f;
             break;
-
         case ENV_EXTREME:
-            agTarget = 0.2f;
-            transientFactor = 4.0f;
-            noiseGate = 0.12f;
             compRatio = 5.0f;
             break;
-
         default:
+            compRatio = 4.0f;
             break;
     }
 
-    // Adapt to musical content
+    // Adapt to musical content (bass weighting only)
     if (bassLevel > 0.6f) {
-        bassWeight = 1.3f; // Emphasize bass response
+        bassWeight = 1.3f;
     } else {
         bassWeight = 1.0f;
-    }
-
-    if (estimatedBPM > 0 && estimatedBPM < 100) {
-        // Slower music - longer transient decay
-        transientDecay = 4.0f;
-    } else if (estimatedBPM > 140) {
-        // Faster music - shorter transient decay
-        transientDecay = 8.0f;
     }
 }

@@ -1,350 +1,193 @@
 #include "ConfigStorage.h"
-#include "TotemDefaults.h"
 
-ConfigStorage::ConfigStorage() : valid_(false), needsSave_(false) {
-    memset(&configData_, 0, sizeof(configData_));
+// Flash storage for nRF52 mbed core
+#if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
+#include "FlashIAP.h"
+static mbed::FlashIAP flash;
+static bool flashOk = false;
+static uint32_t flashAddr = 0;
+#endif
+
+ConfigStorage::ConfigStorage() : valid_(false), dirty_(false), lastSaveMs_(0) {
+    memset(&data_, 0, sizeof(data_));
 }
 
 void ConfigStorage::begin() {
-    // Debug: Print detected platform macros
-    #ifdef ARDUINO_ARCH_NRF52
-    Serial.println(F("[DEBUG] ARDUINO_ARCH_NRF52 defined"));
-    #endif
-    #ifdef NRF52
-    Serial.println(F("[DEBUG] NRF52 defined"));
-    #endif
-    #ifdef TARGET_NAME
-    Serial.println(F("[DEBUG] TARGET_NAME defined"));
-    #endif
-    #ifdef MBED_CONF_TARGET_NAME
-    Serial.println(F("[DEBUG] MBED_CONF_TARGET_NAME defined"));
-    #endif
+#if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
+    if (flash.init() == 0) {
+        flashOk = true;
+        // Use last 4KB of flash
+        flashAddr = flash.get_flash_start() + flash.get_flash_size() - 4096;
+        Serial.print(F("[CONFIG] Flash at 0x")); Serial.println(flashAddr, HEX);
 
-#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
-    Serial.println(F("[CONFIG] nRF52 detected - using defaults only (no persistence yet)"));
-    loadDefaults();
-    valid_ = true;
-#else
-    // TODO: Add EEPROM support for ESP32/AVR platforms
-    Serial.println(F("[CONFIG] EEPROM not implemented yet - using defaults only"));
-    loadDefaults();
-    valid_ = true;
+        if (loadFromFlash()) {
+            Serial.println(F("[CONFIG] Loaded from flash"));
+            valid_ = true;
+            return;
+        }
+    }
 #endif
+    Serial.println(F("[CONFIG] Using defaults"));
+    loadDefaults();
+    valid_ = true;
 }
 
 void ConfigStorage::loadDefaults() {
-    // Initialize header with defaults
-    configData_.header.magic = MAGIC_NUMBER;
-    configData_.header.version = CONFIG_VERSION;
-    configData_.header.deviceType = 1;  // Default to Hat, can be changed at runtime
+    data_.magic = MAGIC_NUMBER;
+    data_.version = CONFIG_VERSION;
 
-    // Load fire parameter defaults from TotemDefaults
-    configData_.fireParams.baseCooling = Defaults::BaseCooling;
-    configData_.fireParams.sparkHeatMin = Defaults::SparkHeatMin;
-    configData_.fireParams.sparkHeatMax = Defaults::SparkHeatMax;
-    configData_.fireParams.sparkChance = Defaults::SparkChance;
-    configData_.fireParams.audioSparkBoost = Defaults::AudioSparkBoost;
-    configData_.fireParams.audioHeatBoostMax = Defaults::AudioHeatBoostMax;
-    configData_.fireParams.coolingAudioBias = Defaults::CoolingAudioBias;
-    configData_.fireParams.bottomRowsForSparks = Defaults::BottomRowsForSparks;
-    configData_.fireParams.transientHeatMax = Defaults::TransientHeatMax;
+    // Fire defaults
+    data_.fire.baseCooling = 90;
+    data_.fire.sparkHeatMin = 200;
+    data_.fire.sparkHeatMax = 255;
+    data_.fire.sparkChance = 0.08f;
+    data_.fire.audioSparkBoost = 0.8f;
+    data_.fire.audioHeatBoostMax = 150;
+    data_.fire.coolingAudioBias = -70;
+    data_.fire.transientHeatMax = 200;
+    data_.fire.spreadDistance = 3;
+    data_.fire.heatDecay = 0.60f;
 
-    // Load microphone parameter defaults
-    configData_.micParams.attackSeconds = 0.08f;
-    configData_.micParams.releaseSeconds = 0.30f;
-    configData_.micParams.noiseGate = 0.06f;
-    configData_.micParams.globalGain = 1.0f;
-    configData_.micParams.transientCooldownMs = 120;
-    configData_.micParams.agEnabled = true;
-    configData_.micParams.agTarget = 0.35f;
-    configData_.micParams.agStrength = 0.9f;
-    configData_.micParams.transientFactor = 2.5f;
-    configData_.micParams.loudFloor = 0.15f;
-    configData_.micParams.transientDecay = 6.0f;
-    configData_.micParams.compRatio = 4.0f;
-    configData_.micParams.compThresh = 0.7f;
+    // Mic defaults
+    data_.mic.noiseGate = 0.04f;
+    data_.mic.globalGain = 3.0f;
+    data_.mic.agTarget = 0.50f;
+    data_.mic.agStrength = 0.25f;
+    data_.mic.agMin = 1.0f;
+    data_.mic.agMax = 12.0f;
+    data_.mic.transientFactor = 1.5f;
+    data_.mic.loudFloor = 0.05f;
+    data_.mic.transientDecay = 8.0f;
 
-    valid_ = true;
-    needsSave_ = false;
+    data_.brightness = 100;
+}
+
+bool ConfigStorage::loadFromFlash() {
+#if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
+    if (!flashOk) return false;
+
+    ConfigData temp;
+    if (flash.read(&temp, flashAddr, sizeof(ConfigData)) != 0) return false;
+    if (temp.magic != MAGIC_NUMBER) return false;
+    if (temp.version != CONFIG_VERSION) return false;
+
+    memcpy(&data_, &temp, sizeof(ConfigData));
+    return true;
+#else
+    return false;
+#endif
+}
+
+void ConfigStorage::saveToFlash() {
+#if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
+    if (!flashOk) {
+        Serial.println(F("[CONFIG] Flash not available"));
+        return;
+    }
+
+    data_.magic = MAGIC_NUMBER;
+    data_.version = CONFIG_VERSION;
+
+    uint32_t sectorSize = flash.get_sector_size(flashAddr);
+    if (flash.erase(flashAddr, sectorSize) != 0) {
+        Serial.println(F("[CONFIG] Erase failed"));
+        return;
+    }
+
+    if (flash.program(&data_, flashAddr, sizeof(ConfigData)) != 0) {
+        Serial.println(F("[CONFIG] Write failed"));
+        return;
+    }
+
+    Serial.println(F("[CONFIG] Saved to flash"));
+#else
+    Serial.println(F("[CONFIG] No flash on this platform"));
+#endif
 }
 
 void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) {
-    if (!valid_) {
-        Serial.println(F("[CONFIG] Cannot load - configuration invalid"));
-        return;
+    // Validate critical floats - if garbage, use defaults
+    bool corrupt = false;
+    if (data_.fire.heatDecay <= 0.0f || data_.fire.heatDecay > 1.0f) {
+        Serial.print(F("[CONFIG] BAD heatDecay: ")); Serial.println(data_.fire.heatDecay);
+        corrupt = true;
+    }
+    if (data_.fire.sparkChance < 0.0f || data_.fire.sparkChance > 1.0f) {
+        Serial.print(F("[CONFIG] BAD sparkChance: ")); Serial.println(data_.fire.sparkChance);
+        corrupt = true;
+    }
+    if (data_.mic.globalGain <= 0.0f || data_.mic.globalGain > 50.0f) {
+        Serial.print(F("[CONFIG] BAD globalGain: ")); Serial.println(data_.mic.globalGain);
+        corrupt = true;
     }
 
-    copyFireParamsTo(fireParams);
-    copyMicParamsTo(mic);
+    if (corrupt) {
+        Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
+        loadDefaults();
+    }
 
-    Serial.println(F("[CONFIG] Applied saved parameters"));
+    // Debug: show loaded values
+    Serial.print(F("[CONFIG] heatDecay=")); Serial.print(data_.fire.heatDecay, 2);
+    Serial.print(F(" cooling=")); Serial.print(data_.fire.baseCooling);
+    Serial.print(F(" spread=")); Serial.println(data_.fire.spreadDistance);
+
+    fireParams.baseCooling = data_.fire.baseCooling;
+    fireParams.sparkHeatMin = data_.fire.sparkHeatMin;
+    fireParams.sparkHeatMax = data_.fire.sparkHeatMax;
+    fireParams.sparkChance = data_.fire.sparkChance;
+    fireParams.audioSparkBoost = data_.fire.audioSparkBoost;
+    fireParams.audioHeatBoostMax = data_.fire.audioHeatBoostMax;
+    fireParams.coolingAudioBias = data_.fire.coolingAudioBias;
+    fireParams.transientHeatMax = data_.fire.transientHeatMax;
+    fireParams.spreadDistance = data_.fire.spreadDistance;
+    fireParams.heatDecay = data_.fire.heatDecay;
+
+    mic.noiseGate = data_.mic.noiseGate;
+    mic.globalGain = data_.mic.globalGain;
+    mic.agTarget = data_.mic.agTarget;
+    mic.agStrength = data_.mic.agStrength;
+    mic.agMin = data_.mic.agMin;
+    mic.agMax = data_.mic.agMax;
+    mic.transientFactor = data_.mic.transientFactor;
+    mic.loudFloor = data_.mic.loudFloor;
+    mic.transientDecay = data_.mic.transientDecay;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
-    copyFireParamsFrom(fireParams);
-    copyMicParamsFrom(mic);
+    data_.fire.baseCooling = fireParams.baseCooling;
+    data_.fire.sparkHeatMin = fireParams.sparkHeatMin;
+    data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
+    data_.fire.sparkChance = fireParams.sparkChance;
+    data_.fire.audioSparkBoost = fireParams.audioSparkBoost;
+    data_.fire.audioHeatBoostMax = fireParams.audioHeatBoostMax;
+    data_.fire.coolingAudioBias = fireParams.coolingAudioBias;
+    data_.fire.transientHeatMax = fireParams.transientHeatMax;
+    data_.fire.spreadDistance = fireParams.spreadDistance;
+    data_.fire.heatDecay = fireParams.heatDecay;
 
-    // For nRF52 (all variants): Just keep in memory for now
-    // TODO: Add persistent storage implementation
+    data_.mic.noiseGate = mic.noiseGate;
+    data_.mic.globalGain = mic.globalGain;
+    data_.mic.agTarget = mic.agTarget;
+    data_.mic.agStrength = mic.agStrength;
+    data_.mic.agMin = mic.agMin;
+    data_.mic.agMax = mic.agMax;
+    data_.mic.transientFactor = mic.transientFactor;
+    data_.mic.loudFloor = mic.loudFloor;
+    data_.mic.transientDecay = mic.transientDecay;
 
-    valid_ = true;
-    needsSave_ = false;
-
-    Serial.println(F("[CONFIG] Configuration saved (memory only on nRF52 variants)"));
+    saveToFlash();
+    dirty_ = false;
+    lastSaveMs_ = millis();
 }
 
-// MatrixFireGenerator overloads
-void ConfigStorage::loadConfiguration(MatrixFireParams& matrixFireParams, AdaptiveMic& mic) {
-    if (!valid_) {
-        Serial.println(F("[CONFIG] Cannot load - configuration invalid"));
-        return;
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic) {
+    if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
+        saveConfiguration(fireParams, mic);
     }
-
-    copyMatrixFireParamsTo(matrixFireParams);
-    copyMicParamsTo(mic);
-
-    Serial.println(F("[CONFIG] Applied saved parameters (MatrixFire)"));
-}
-
-void ConfigStorage::saveConfiguration(const MatrixFireParams& matrixFireParams, const AdaptiveMic& mic) {
-    copyMatrixFireParamsFrom(matrixFireParams);
-    copyMicParamsFrom(mic);
-
-    // For nRF52 variants: Parameters are now updated in memory, persistence would be a future enhancement
-    // For other platforms: EEPROM saving would be implemented here
-
-    valid_ = true;
-    needsSave_ = false;
-
-#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
-    Serial.println(F("[CONFIG] Configuration updated in memory (MatrixFire)"));
-#else
-    Serial.println(F("[CONFIG] Configuration saved (MatrixFire)"));
-#endif
-}
-
-// StringFireGenerator overloads
-void ConfigStorage::loadConfiguration(StringFireParams& stringFireParams, AdaptiveMic& mic) {
-    if (!valid_) {
-        Serial.println(F("[CONFIG] Cannot load - configuration invalid"));
-        return;
-    }
-
-    copyStringFireParamsTo(stringFireParams);
-    copyMicParamsTo(mic);
-
-    Serial.println(F("[CONFIG] Applied saved parameters (StringFire)"));
-}
-
-void ConfigStorage::saveConfiguration(const StringFireParams& stringFireParams, const AdaptiveMic& mic) {
-    copyStringFireParamsFrom(stringFireParams);
-    copyMicParamsFrom(mic);
-
-    // For nRF52 variants: Parameters are now updated in memory, persistence would be a future enhancement
-    // For other platforms: EEPROM saving would be implemented here
-
-    valid_ = true;
-    needsSave_ = false;
-
-#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
-    Serial.println(F("[CONFIG] Configuration updated in memory (StringFire)"));
-#else
-    Serial.println(F("[CONFIG] Configuration saved to EEPROM (StringFire)"));
-#endif
-}
-
-void ConfigStorage::copyFireParamsTo(FireParams& params) const {
-    params.baseCooling = configData_.fireParams.baseCooling;
-    params.sparkHeatMin = configData_.fireParams.sparkHeatMin;
-    params.sparkHeatMax = configData_.fireParams.sparkHeatMax;
-    params.sparkChance = configData_.fireParams.sparkChance;
-    params.audioSparkBoost = configData_.fireParams.audioSparkBoost;
-    params.audioHeatBoostMax = configData_.fireParams.audioHeatBoostMax;
-    params.coolingAudioBias = configData_.fireParams.coolingAudioBias;
-    params.bottomRowsForSparks = configData_.fireParams.bottomRowsForSparks;
-    params.transientHeatMax = configData_.fireParams.transientHeatMax;
-}
-
-void ConfigStorage::copyFireParamsFrom(const FireParams& params) {
-    configData_.fireParams.baseCooling = params.baseCooling;
-    configData_.fireParams.sparkHeatMin = params.sparkHeatMin;
-    configData_.fireParams.sparkHeatMax = params.sparkHeatMax;
-    configData_.fireParams.sparkChance = params.sparkChance;
-    configData_.fireParams.audioSparkBoost = params.audioSparkBoost;
-    configData_.fireParams.audioHeatBoostMax = params.audioHeatBoostMax;
-    configData_.fireParams.coolingAudioBias = params.coolingAudioBias;
-    configData_.fireParams.bottomRowsForSparks = params.bottomRowsForSparks;
-    configData_.fireParams.transientHeatMax = params.transientHeatMax;
-}
-
-void ConfigStorage::copyMicParamsTo(AdaptiveMic& mic) const {
-    mic.attackSeconds = configData_.micParams.attackSeconds;
-    mic.releaseSeconds = configData_.micParams.releaseSeconds;
-    mic.noiseGate = configData_.micParams.noiseGate;
-    mic.globalGain = configData_.micParams.globalGain;
-    mic.transientCooldownMs = configData_.micParams.transientCooldownMs;
-    mic.agEnabled = configData_.micParams.agEnabled;
-    mic.agTarget = configData_.micParams.agTarget;
-    mic.agStrength = configData_.micParams.agStrength;
-    mic.transientFactor = configData_.micParams.transientFactor;
-    mic.loudFloor = configData_.micParams.loudFloor;
-    mic.transientDecay = configData_.micParams.transientDecay;
-    mic.compRatio = configData_.micParams.compRatio;
-    mic.compThresh = configData_.micParams.compThresh;
-}
-
-void ConfigStorage::copyMicParamsFrom(const AdaptiveMic& mic) {
-    configData_.micParams.attackSeconds = mic.attackSeconds;
-    configData_.micParams.releaseSeconds = mic.releaseSeconds;
-    configData_.micParams.noiseGate = mic.noiseGate;
-    configData_.micParams.globalGain = mic.globalGain;
-    configData_.micParams.transientCooldownMs = mic.transientCooldownMs;
-    configData_.micParams.agEnabled = mic.agEnabled;
-    configData_.micParams.agTarget = mic.agTarget;
-    configData_.micParams.agStrength = mic.agStrength;
-    configData_.micParams.transientFactor = mic.transientFactor;
-    configData_.micParams.loudFloor = mic.loudFloor;
-    configData_.micParams.transientDecay = mic.transientDecay;
-    configData_.micParams.compRatio = mic.compRatio;
-    configData_.micParams.compThresh = mic.compThresh;
-}
-
-void ConfigStorage::setDeviceType(uint8_t deviceType) {
-    if (deviceType >= 1 && deviceType <= 3) {
-        configData_.header.deviceType = deviceType;
-        needsSave_ = true;
-    }
-}
-
-void ConfigStorage::saveFireParam(const char* paramName, const FireParams& params) {
-    copyFireParamsFrom(params);
-    // TODO: Add persistent storage for nRF52
-
-    Serial.print(F("[CONFIG] Saved fire parameter: "));
-    Serial.println(paramName);
-}
-
-void ConfigStorage::saveMicParam(const char* paramName, const AdaptiveMic& mic) {
-    copyMicParamsFrom(mic);
-    // TODO: Add persistent storage for nRF52
-
-    Serial.print(F("[CONFIG] Saved mic parameter: "));
-    Serial.println(paramName);
 }
 
 void ConfigStorage::factoryReset() {
-    Serial.println(F("[CONFIG] Performing factory reset..."));
-
-    // Clear configuration and reload defaults
-    memset(&configData_, 0, sizeof(configData_));
+    Serial.println(F("[CONFIG] Factory reset"));
     loadDefaults();
-
-    Serial.println(F("[CONFIG] Factory reset complete"));
-}
-
-void ConfigStorage::printStatus() const {
-    Serial.println(F("=== Configuration Status ==="));
-    Serial.print(F("Valid: ")); Serial.println(valid_ ? "YES" : "NO");
-    Serial.print(F("Device Type: ")); Serial.println(configData_.header.deviceType);
-    Serial.print(F("Version: ")); Serial.println(configData_.header.version);
-    Serial.print(F("Storage: "));
-#if defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
-    Serial.println(F("Memory only (no persistence)"));
-#else
-    Serial.println(F("EEPROM"));
-#endif
-
-    Serial.println(F("Fire Parameters:"));
-    Serial.print(F("  baseCooling: ")); Serial.println(configData_.fireParams.baseCooling);
-    Serial.print(F("  sparkChance: ")); Serial.println(configData_.fireParams.sparkChance, 3);
-    Serial.print(F("  audioSparkBoost: ")); Serial.println(configData_.fireParams.audioSparkBoost, 3);
-
-    Serial.println(F("Mic Parameters:"));
-    Serial.print(F("  globalGain: ")); Serial.println(configData_.micParams.globalGain, 3);
-    Serial.print(F("  noiseGate: ")); Serial.println(configData_.micParams.noiseGate, 3);
-    Serial.print(F("  attackSeconds: ")); Serial.println(configData_.micParams.attackSeconds, 3);
-    Serial.print(F("  releaseSeconds: ")); Serial.println(configData_.micParams.releaseSeconds, 3);
-    Serial.println(F("============================"));
-}
-
-void ConfigStorage::copyMatrixFireParamsTo(MatrixFireParams& params) const {
-    // Copy common parameters (MatrixFire has same base parameters as Fire)
-    params.baseCooling = configData_.fireParams.baseCooling;
-    params.sparkHeatMin = configData_.fireParams.sparkHeatMin;
-    params.sparkHeatMax = configData_.fireParams.sparkHeatMax;
-    params.sparkChance = configData_.fireParams.sparkChance;
-    params.audioSparkBoost = configData_.fireParams.audioSparkBoost;
-    params.audioHeatBoostMax = configData_.fireParams.audioHeatBoostMax;
-    params.coolingAudioBias = configData_.fireParams.coolingAudioBias;
-    params.bottomRowsForSparks = configData_.fireParams.bottomRowsForSparks;
-    params.transientHeatMax = configData_.fireParams.transientHeatMax;
-}
-
-void ConfigStorage::copyMatrixFireParamsFrom(const MatrixFireParams& params) {
-    // Copy common parameters (MatrixFire shares base parameters with Fire)
-    configData_.fireParams.baseCooling = params.baseCooling;
-    configData_.fireParams.sparkHeatMin = params.sparkHeatMin;
-    configData_.fireParams.sparkHeatMax = params.sparkHeatMax;
-    configData_.fireParams.sparkChance = params.sparkChance;
-    configData_.fireParams.audioSparkBoost = params.audioSparkBoost;
-    configData_.fireParams.audioHeatBoostMax = params.audioHeatBoostMax;
-    configData_.fireParams.coolingAudioBias = params.coolingAudioBias;
-    configData_.fireParams.bottomRowsForSparks = params.bottomRowsForSparks;
-    configData_.fireParams.transientHeatMax = params.transientHeatMax;
-}
-
-void ConfigStorage::saveMatrixFireParam(const char* paramName, const MatrixFireParams& params) {
-    copyMatrixFireParamsFrom(params);
-    // TODO: Add persistent storage for nRF52
-
-    Serial.print(F("[CONFIG] Saved matrix fire parameter: "));
-    Serial.println(paramName);
-}
-
-void ConfigStorage::copyStringFireParamsTo(StringFireParams& params) const {
-    // Copy common parameters (StringFire has same base parameters as Fire)
-    params.baseCooling = configData_.fireParams.baseCooling;
-    params.sparkHeatMin = configData_.fireParams.sparkHeatMin;
-    params.sparkHeatMax = configData_.fireParams.sparkHeatMax;
-    params.sparkChance = configData_.fireParams.sparkChance;
-    params.audioSparkBoost = configData_.fireParams.audioSparkBoost;
-    params.audioHeatBoostMax = configData_.fireParams.audioHeatBoostMax;
-    params.coolingAudioBias = configData_.fireParams.coolingAudioBias;
-    params.transientHeatMax = configData_.fireParams.transientHeatMax;
-
-    // StringFire doesn't use bottomRowsForSparks - it has its own sparkSpreadRange
-    // StringFire-specific parameters keep their defaults (not stored in EEPROM yet)
-    // params.sparkSpreadRange uses compile-time defaults
-}
-
-void ConfigStorage::copyStringFireParamsFrom(const StringFireParams& params) {
-    // Copy common parameters (StringFire shares base parameters with Fire)
-    configData_.fireParams.baseCooling = params.baseCooling;
-    configData_.fireParams.sparkHeatMin = params.sparkHeatMin;
-    configData_.fireParams.sparkHeatMax = params.sparkHeatMax;
-    configData_.fireParams.sparkChance = params.sparkChance;
-    configData_.fireParams.audioSparkBoost = params.audioSparkBoost;
-    configData_.fireParams.audioHeatBoostMax = params.audioHeatBoostMax;
-    configData_.fireParams.coolingAudioBias = params.coolingAudioBias;
-    configData_.fireParams.transientHeatMax = params.transientHeatMax;
-
-    // StringFire doesn't set bottomRowsForSparks - keep the existing value
-    // StringFire-specific parameters not stored yet (future enhancement)
-}
-
-void ConfigStorage::saveStringFireParam(const char* paramName, const StringFireParams& params) {
-    copyStringFireParamsFrom(params);
-    // TODO: Add persistent storage for nRF52
-
-    Serial.print(F("[CONFIG] Saved string fire parameter: "));
-    Serial.println(paramName);
-}
-
-uint32_t ConfigStorage::calculateChecksum(const void* data, size_t size) const {
-    uint32_t checksum = 0;
-    const uint8_t* bytes = (const uint8_t*)data;
-    for (size_t i = 0; i < size; i++) {
-        checksum = (checksum << 1) ^ bytes[i];
-    }
-    return checksum;
+    saveToFlash();
 }

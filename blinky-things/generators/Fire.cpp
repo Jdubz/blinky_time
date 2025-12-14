@@ -2,8 +2,9 @@
 #include <Arduino.h>
 
 Fire::Fire()
-    : heat_(nullptr), audioEnergy_(0.0f), audioHit_(false),
-      sparkPositions_(nullptr), numActivePositions_(0) {
+    : heat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
+      prevHit_(0.0f), lastBurstMs_(0), inSuppression_(false),
+      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0) {
 }
 
 Fire::~Fire() {
@@ -23,6 +24,24 @@ bool Fire::begin(const DeviceConfig& config) {
     this->numLeds_ = this->width_ * this->height_;
     layout_ = config.matrix.layoutType;
 
+    // Apply fire parameters from device config
+    params_.baseCooling = config.fireDefaults.baseCooling;
+    params_.sparkHeatMin = config.fireDefaults.sparkHeatMin;
+    params_.sparkHeatMax = config.fireDefaults.sparkHeatMax;
+    params_.sparkChance = config.fireDefaults.sparkChance;
+    params_.audioSparkBoost = config.fireDefaults.audioSparkBoost;
+    params_.audioHeatBoostMax = config.fireDefaults.audioHeatBoostMax;
+    params_.coolingAudioBias = config.fireDefaults.coolingAudioBias;
+    params_.bottomRowsForSparks = config.fireDefaults.bottomRowsForSparks;
+    params_.transientHeatMax = config.fireDefaults.transientHeatMax;
+
+    // Apply layout-specific defaults
+    if (layout_ == LINEAR_LAYOUT) {
+        params_.useMaxHeatOnly = true;
+        params_.spreadDistance = 12;      // Wide spread for visible tails
+        params_.heatDecay = 0.94f;        // Very slow decay for long ember trails
+    }
+
     // Allocate heat array
     if (heat_) delete[] heat_;
     heat_ = new uint8_t[this->numLeds_];
@@ -39,7 +58,7 @@ bool Fire::begin(const DeviceConfig& config) {
 }
 
 void Fire::generate(PixelMatrix& matrix, float energy, float hit) {
-    setAudioInput(energy, hit > 0.5f);
+    setAudioInput(energy, hit);
     update();
 
     // Convert heat array to PixelMatrix colors
@@ -70,6 +89,9 @@ void Fire::update() {
 
     // Propagate heat based on layout type
     propagateHeat();
+
+    // Apply subtle ember glow (noise floor)
+    applyEmbers();
 }
 
 void Fire::reset() {
@@ -78,11 +100,11 @@ void Fire::reset() {
     }
     numActivePositions_ = 0;
     audioEnergy_ = 0.0f;
-    audioHit_ = false;
+    audioHit_ = 0.0f;
     this->lastUpdateMs_ = millis();
 }
 
-void Fire::setAudioInput(float energy, bool hit) {
+void Fire::setAudioInput(float energy, float hit) {
     audioEnergy_ = energy;
     audioHit_ = hit;
 }
@@ -169,32 +191,34 @@ void Fire::updateMatrixFire() {
 void Fire::updateLinearFire() {
     // Lateral heat propagation for linear arrangements
     uint8_t* newHeat = new uint8_t[this->numLeds_];
-    memcpy(newHeat, heat_, this->numLeds_);
+    memset(newHeat, 0, this->numLeds_);  // Start fresh - heat must spread or decay
 
     for (int i = 0; i < this->numLeds_; i++) {
         if (heat_[i] > 0) {
-            uint16_t spreadHeat = heat_[i] * params_.heatDecay;
+            // Long tail decay: high heat decays fast, low heat persists ~1 second
+            // Using quartic (t^4) for very slow tail fade
+            // At heat=255: decayRate = 0.88 (fast drop)
+            // At heat=30: decayRate ~0.99 (very slow, ~1 sec to fade)
+            float t = heat_[i] / 255.0f;
+            float t4 = t * t * t * t;  // Quartic for dramatic tail
+            float decayRate = 0.88f + 0.12f * (1.0f - t4);
+            uint8_t decayedHeat = (uint8_t)(heat_[i] * decayRate);
 
-            // Spread heat laterally
-            for (int spread = 1; spread <= params_.spreadDistance; spread++) {
-                float falloff = 1.0f / (spread + 1);
-                uint8_t heatToSpread = spreadHeat * falloff;
+            // Source pixel keeps decayed heat
+            newHeat[i] = max(newHeat[i], decayedHeat);
 
-                // Spread left
-                if (i - spread >= 0) {
-                    if (params_.useMaxHeatOnly) {
+            // Smaller spread for tighter sparks (only spread high heat)
+            if (heat_[i] > 60) {
+                int spreadDist = min((int)params_.spreadDistance, 4);  // Tighter spread
+                for (int spread = 1; spread <= spreadDist; spread++) {
+                    float falloff = 1.0f / (spread + 2);  // Steeper falloff
+                    uint8_t heatToSpread = decayedHeat * falloff;
+
+                    if (i - spread >= 0) {
                         newHeat[i - spread] = max(newHeat[i - spread], heatToSpread);
-                    } else {
-                        newHeat[i - spread] = min(255, newHeat[i - spread] + heatToSpread);
                     }
-                }
-
-                // Spread right
-                if (i + spread < this->numLeds_) {
-                    if (params_.useMaxHeatOnly) {
+                    if (i + spread < this->numLeds_) {
                         newHeat[i + spread] = max(newHeat[i + spread], heatToSpread);
-                    } else {
-                        newHeat[i + spread] = min(255, newHeat[i + spread] + heatToSpread);
                     }
                 }
             }
@@ -242,40 +266,61 @@ void Fire::updateRandomFire() {
 }
 
 void Fire::generateSparks() {
-    // Base spark chance modified by audio
-    float sparkChance = params_.sparkChance;
-    if (audioHit_) {
-        sparkChance += params_.audioSparkBoost;
+    uint32_t now = millis();
+    int numSparks = 0;
+    uint8_t sparkHeat = params_.sparkHeatMax;
+
+    // Detect hit EDGE (rising edge - hit going from low to high)
+    bool hitEdge = (audioHit_ > 0.5f && prevHit_ < 0.3f);
+    prevHit_ = audioHit_;
+
+    // Update suppression state
+    if (inSuppression_ && (now - lastBurstMs_ > params_.suppressionMs)) {
+        inSuppression_ = false;
     }
 
-    if (random(1000) < sparkChance * 1000) {
-        uint8_t sparkHeat = random(params_.sparkHeatMin, params_.sparkHeatMax + 1);
+    // BASELINE: Generate sparks scaled by audio energy
+    // Higher energy = more sparks and hotter sparks
+    float energyBoost = audioEnergy_ * params_.audioSparkBoost;  // 0-1 scaled by boost
+    float effectiveChance = params_.sparkChance + energyBoost;
 
-        // Add audio boost to spark heat
-        if (audioEnergy_ > 0.1f) {
-            sparkHeat = min(255, sparkHeat + (audioEnergy_ * params_.audioHeatBoostMax));
-        }
+    if (random(100) < (int)(effectiveChance * 100)) {
+        numSparks = 1;
+        // Heat scales with energy: low energy = min heat, high energy = max heat
+        uint8_t energyHeat = params_.sparkHeatMin +
+            (uint8_t)(audioEnergy_ * (params_.sparkHeatMax - params_.sparkHeatMin));
+        sparkHeat = max(energyHeat, params_.sparkHeatMin);
+    }
 
+    // BURST: Add extra sparks on hit edge (only if not suppressed)
+    if (hitEdge && !inSuppression_) {
+        numSparks += params_.burstSparks;
+        sparkHeat = 255;  // Max heat for punch
+        lastBurstMs_ = now;
+        inSuppression_ = true;  // Suppress further bursts briefly
+    }
+
+    // Generate the sparks
+    for (int s = 0; s < numSparks; s++) {
         int sparkPosition;
         switch (this->layout_) {
             case MATRIX_LAYOUT:
-                // Generate sparks in bottom rows only
                 sparkPosition = random(this->width_ * params_.bottomRowsForSparks);
                 break;
             case LINEAR_LAYOUT:
-                // Generate sparks anywhere along the string
                 sparkPosition = random(this->numLeds_);
                 break;
             case RANDOM_LAYOUT:
-                // Track multiple spark positions
                 if (numActivePositions_ < params_.maxSparkPositions) {
                     sparkPosition = random(this->numLeds_);
                     sparkPositions_[numActivePositions_++] = sparkPosition;
                 } else {
-                    // Replace oldest spark
                     sparkPosition = random(this->numLeds_);
                     sparkPositions_[random(params_.maxSparkPositions)] = sparkPosition;
                 }
+                break;
+            default:
+                sparkPosition = random(this->numLeds_);
                 break;
         }
 
@@ -292,9 +337,10 @@ void Fire::generateSparks() {
 void Fire::applyCooling() {
     uint8_t cooling = params_.baseCooling;
 
-    // Adjust cooling based on audio input
-    if (audioEnergy_ > 0.1f) {
-        cooling = max(0, cooling + params_.coolingAudioBias);
+    // Reduce cooling when audio is present (flames persist longer with sound)
+    if (audioEnergy_ > 0.05f) {
+        int8_t reduction = (int8_t)(params_.coolingAudioBias * audioEnergy_ * 2.0f);
+        cooling = max(0, (int)cooling + reduction);
     }
 
     for (int i = 0; i < this->numLeds_; i++) {
@@ -303,19 +349,53 @@ void Fire::applyCooling() {
     }
 }
 
+void Fire::applyEmbers() {
+    // Advance noise phase very slowly
+    emberNoisePhase_ += params_.emberNoiseSpeed * 30.0f;  // 30ms frame time
+
+    // Ember brightness pulses directly with mic level (no transient influence)
+    // Base brightness + audio-reactive component
+    float micPulse = 0.3f + (audioEnergy_ * 2.0f);  // 0.3 base, scales up with mic
+    micPulse = min(1.0f, micPulse);
+
+    // Apply noise-based ember glow to all LEDs
+    for (int i = 0; i < this->numLeds_; i++) {
+        // Multi-octave noise using overlapping sine waves
+        // Creates organic, slowly shifting patterns
+        float pos = (float)i;
+        float noise =
+            sin(pos * 0.15f + emberNoisePhase_) * 0.4f +
+            sin(pos * 0.37f + emberNoisePhase_ * 1.3f) * 0.35f +
+            sin(pos * 0.71f + emberNoisePhase_ * 0.7f) * 0.25f;
+
+        // Normalize to 0-1 range
+        noise = (noise + 1.0f) * 0.5f;
+
+        // Apply threshold so only some areas glow (sparse embers)
+        if (noise > 0.55f) {
+            float intensity = (noise - 0.55f) / 0.45f;  // 0-1 above threshold
+            uint8_t emberHeat = (uint8_t)(intensity * micPulse * params_.emberHeatMax);
+
+            // Only apply if ember is brighter than current heat
+            if (emberHeat > heat_[i]) {
+                heat_[i] = emberHeat;
+            }
+        }
+    }
+}
+
 uint32_t Fire::heatToColor(uint8_t heat) {
-    // Fire color palette: black -> red -> orange -> yellow -> white
+    // Fire color palette: black -> red -> orange -> yellow (NO white)
     if (heat < 85) {
         // Black to red
         return ((uint32_t)(heat * 3) << 16);
     } else if (heat < 170) {
-        // Red to orange/yellow
+        // Red to orange
         uint8_t green = (heat - 85) * 3;
         return (0xFF0000 | ((uint32_t)green << 8));
     } else {
-        // Orange/yellow to white
-        uint8_t blue = (heat - 170) * 3;
-        return (0xFFFF00 | blue);
+        // Orange to bright yellow (cap at full yellow, no blue/white)
+        return 0xFFFF00;
     }
 }
 

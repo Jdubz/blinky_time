@@ -18,7 +18,7 @@
 #include "config/Constants.h"
 #include "config/Globals.h"
 #include "config/TotemDefaults.h"
-// #include "config/ConfigStorage.h"  // TODO: Clean up legacy fire params
+#include "config/ConfigStorage.h"  // Persistent settings storage
 
 // Core data types
 #include "types/PixelMatrix.h"

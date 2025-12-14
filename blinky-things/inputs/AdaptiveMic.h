@@ -16,18 +16,18 @@ public:
   float attackSeconds = 0.08f;
   float releaseSeconds = 0.30f;
 
-  // Normalization window
-  float normFloorDecay = 0.9995f;
-  float normCeilDecay  = 0.9995f;
+  // Normalization window (slow adaptation preserves dynamics)
+  float normFloorDecay = 0.99995f;  // Very slow floor tracking (~20s)
+  float normCeilDecay  = 0.9999f;   // Slow ceiling tracking (~10s)
   float normInset      = 0.02f;
-  float noiseGate      = 0.06f;
+  float noiseGate      = 0.04f;     // Lower gate for sensitivity
 
-  // Software AGC
+  // Software AGC (phrase-level adaptation ~6-8 seconds behind)
   bool  agEnabled      = true;
-  float agTarget       = 0.35f;
-  float agStrength     = 0.9f;
-  float agMin          = 0.10f;
-  float agMax          = 8.0f;
+  float agTarget       = 0.50f;     // Target level
+  float agStrength     = 0.25f;     // Faster adaptation
+  float agMin          = 1.0f;      // Never go below 1.0 gain
+  float agMax          = 12.0f;     // Allow high gain for quiet sources
 
   // Hardware gain (minutes scale)
   uint32_t hwCalibPeriodMs = 60000;
@@ -48,20 +48,20 @@ public:
   float  levelPostAGC  = 0.0f;  // final snappy output
   float  envAR         = 0.0f;  // smoothed envelope (tracking only)
   float  envMean       = 0.0f;  // very slow EMA of envAR
-  float  globalGain    = 1.0f;  // software AGC multiplier
+  float  globalGain    = 3.0f;  // software AGC multiplier (start higher)
   int    currentHardwareGain = 32;    // PDM hardware gain
 
   // --- Enhanced Musical Analysis ---
-  // Frequency-aware transient detection
+  // Frequency-aware transient detection (tuned for punchy response)
   float transient          = 0.0f;
-  float transientDecay     = 6.0f;    // decay per second (slower = longer punch)
-  float fastAvg            = 0.0f;    // short-term avg (~20ms)
-  float slowAvg            = 0.0f;    // medium-term avg (~200ms)
-  float fastAlpha          = 0.2f;    // 20ms window at ~60Hz
-  float slowAlpha          = 0.02f;   // 200ms window at ~60Hz
-  float transientFactor    = 2.5f;    // fast must exceed slow * this
-  float loudFloor          = 0.15f;   // must be at least this loud
-  uint32_t transientCooldownMs = 120;
+  float transientDecay     = 8.0f;    // faster decay for snappy response
+  float fastAvg            = 0.0f;    // short-term avg (~10ms)
+  float slowAvg            = 0.0f;    // medium-term avg (~150ms)
+  float fastAlpha          = 0.35f;   // faster tracking for quick attacks
+  float slowAlpha          = 0.025f;  // medium-term baseline
+  float transientFactor    = 1.5f;    // Threshold: level must be 1.5x above baseline
+  float loudFloor          = 0.05f;   // lower floor for sensitivity
+  uint32_t transientCooldownMs = 120; // ~8 hits/sec max for fast beats
   uint32_t lastTransientMs = 0;
 
   // Frequency band analysis (simplified 4-band)
