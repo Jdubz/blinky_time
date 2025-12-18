@@ -1,0 +1,25 @@
+# Cppcheck suppressions for Arduino/embedded projects
+# See: https://cppcheck.sourceforge.io/manual.html#suppressions
+
+# Arduino framework functions (setup/loop not called from our code)
+unusedFunction:*setup*
+unusedFunction:*loop*
+
+# Arduino ISR callbacks (called by hardware, not our code)
+unusedFunction:*ISR*
+unusedFunction:*onPDMdata*
+unusedFunction:*callback*
+
+# Arduino-specific patterns
+missingIncludeSystem
+noExplicitConstructor
+
+# Embedded-specific: volatile variables may appear unused
+unusedVariable:*volatile*
+
+# False positives on Arduino String class
+passedByValue:*String*
+
+# Suppress warnings in test files
+*:*/tests/*
+*:*/archive/*
