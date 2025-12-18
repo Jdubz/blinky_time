@@ -1,0 +1,8 @@
+# Requirements for Blinky Time tools
+# Install with: pip install -r requirements.txt
+
+# Required for audio_tuner.py
+pyserial>=3.5
+
+# Optional - for visualization (timeline command)
+matplotlib>=3.5.0

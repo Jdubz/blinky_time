@@ -1,7 +1,7 @@
 #pragma once
 
 /**
- * BlinkyArchitecture.h - Main include for the Generator-Effect-Renderer architecture
+ * BlinkyArchitecture.h - Main include for the rendering pipeline architecture
  *
  * This file provides a single include for the Arduino IDE main sketch to access
  * all the visual architecture components while maintaining clean folder structure
@@ -11,34 +11,40 @@
  * #include "BlinkyArchitecture.h"
  *
  * Architecture Overview:
- * Generator -> Effects -> Renderer -> Hardware
+ * Inputs -> Generator -> Effect (optional) -> Render -> LEDs
  */
 
 // Configuration and utilities
 #include "config/Constants.h"
 #include "config/Globals.h"
 #include "config/TotemDefaults.h"
-// #include "config/ConfigStorage.h"  // TODO: Clean up legacy fire params
+#include "config/ConfigStorage.h"     // Persistent settings storage
+#include "config/SettingsRegistry.h"  // Settings abstraction layer
 
-// Core interfaces
-#include "core/Generator.h"
-#include "core/Effect.h"
-#include "core/EffectMatrix.h"
+// Core data types
+#include "types/PixelMatrix.h"
 
 // Generators
-#include "generators/UnifiedFireGenerator.h"       // New unified fire generator for all layout types
+#include "generators/Generator.h"     // Base generator class
+#include "generators/Fire.h"          // Fire simulation generator
+#include "generators/Water.h"         // Water flow generator
+#include "generators/Lightning.h"     // Lightning bolt generator
 
 // Effects
-#include "effects/hue-rotation/HueRotationEffect.h"
+#include "effects/Effect.h"              // Base effect interface
+#include "effects/HueRotationEffect.h"   // Hue rotation effect
+#include "effects/NoOpEffect.h"          // Pass-through effect (no transformation)
 
-// Renderers
-#include "renderers/EffectRenderer.h"
+// Render
+#include "render/EffectRenderer.h"
+#include "render/LEDMapper.h"
 
-// Hardware components (temporarily commented out until updated for new architecture)
-#include "hardware/AdaptiveMic.h"
-// #include "hardware/SerialConsole.h"  // TODO: Update for new Generator architecture
-// #include "hardware/BatteryMonitor.h"  // TODO: Update for new Generator architecture
-// #include "hardware/IMUHelper.h"       // TODO: Update for new Generator architecture
+// Input components
+// NOTE: Requires patched pinDefinitions.h with include guards (see docs/PLATFORM_FIX.md)
+#include "inputs/AdaptiveMic.h"
+#include "inputs/BatteryMonitor.h"
+#include "inputs/IMUHelper.h"     // Compiles without LSM6DS3; define IMU_ENABLED to activate
+#include "inputs/SerialConsole.h"
 
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING

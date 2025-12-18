@@ -57,15 +57,15 @@ const DeviceConfig HAT_CONFIG = {
     .bufferSize = 32             // Larger buffer for head movement noise
   },
   .fireDefaults = {
-    // Hat fire parameters - bright oozing fire with strong audio response
-    .baseCooling = 12,          // Slightly faster cooling for brightness balance
-    .sparkHeatMin = 100,        // Higher minimum for more brightness
-    .sparkHeatMax = 200,        // Higher maximum for strong brightness
-    .sparkChance = 0.120f,      // More sparks for better brightness
-    .audioSparkBoost = 0.400f,  // Much higher audio sensitivity
-    .audioHeatBoostMax = 80,    // Strong audio boost for responsiveness
-    .coolingAudioBias = -15,    // Moderate negative bias for slow decay
-    .bottomRowsForSparks = 1,   // Not relevant for string fire, set to 1
-    .transientHeatMax = 120     // Higher transient for strong audio response
+    // Hat fire parameters - PUNCHY beat-reactive fire
+    .baseCooling = 90,          // Very fast cooling = quick fade to dark
+    .sparkHeatMin = 200,        // Bright sparks
+    .sparkHeatMax = 255,        // Maximum brightness
+    .sparkChance = 0.080f,      // LOW base rate = quiet when no audio
+    .audioSparkBoost = 0.800f,  // HUGE audio boost = explosive on hits
+    .audioHeatBoostMax = 150,   // Maximum heat boost from audio
+    .coolingAudioBias = -70,    // Big cooling reduction on audio
+    .bottomRowsForSparks = 1,   // Not relevant for string fire
+    .transientHeatMax = 200     // Massive boost on beat hits
   }
 };

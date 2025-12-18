@@ -16,10 +16,12 @@
  * - Bucket Totem: 128 LEDs in 16x8 matrix
  */
 
+// CRITICAL: Adafruit_NeoPixel must be included FIRST to avoid pinDefinitions.h
+// redefinition conflicts between PDM library and NeoPixel library
 #include <Adafruit_NeoPixel.h>
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
-#include "core/Version.h"           // Version information from repository
+#include "types/Version.h"           // Version information from repository
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
@@ -27,7 +29,7 @@
 // 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)
 // 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
 #ifndef DEVICE_TYPE
-#define DEVICE_TYPE 2  // Set to Tube Light for testing
+#define DEVICE_TYPE 1  // Hat (89 LEDs, STRING_FIRE mode)
 #endif
 
 #if DEVICE_TYPE == 1
@@ -46,27 +48,39 @@ LEDMapper ledMapper;
 
 Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
 
-// New Generator-Effect-Renderer Architecture
+// New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
-// ✅ Core System: Generator→Effects→Renderer pipeline operational
-// ✅ UnifiedFireGenerator: All layout types (MATRIX, LINEAR, RANDOM) working
+// ✅ Core System: Inputs→Generator→Effect(optional)→Render pipeline operational
+// ✅ Fire: Realistic fire simulation (red/orange/yellow) for all layout types
+// ✅ Water: Flowing water effects (blue/cyan) for all layout types
+// ✅ Lightning: Electric bolt effects (yellow/white) for all layout types
+// ✅ Effects: HueRotation for color cycling, NoOp for pass-through
 // ✅ Hardware: AdaptiveMic ready for audio input
-// ✅ Compilation: 71,988 bytes (8% storage), all device types compile
-
+// ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
 Generator* currentGenerator = nullptr;
 Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
-EffectMatrix* effectMatrix = nullptr;
+PixelMatrix* pixelMatrix = nullptr;
 
 AdaptiveMic mic;
-// === TEMPORARILY DISABLED (ready for future enablement) ===
-// SerialConsole console;        // TODO: Update for unified fire generator
-// BatteryMonitor battery;       // TODO: Update for new Generator architecture
-// IMUHelper imu;               // TODO: Enable when LSM6DS3 library is available
-// ConfigStorage configStorage; // TODO: Clean up legacy fire params
+BatteryMonitor battery;
+ConfigStorage configStorage;    // Persistent settings storage
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
+bool micDebugEnabled = false;
+uint32_t lastMicDebug = 0;
+uint16_t micDebugInterval = 100;  // ms between debug outputs (default 10Hz)
+
+// Live-tunable fire parameters
+FireParams fireParams;
+
+void updateFireParams() {
+  Fire* f = static_cast<Fire*>(currentGenerator);
+  if (f) {
+    f->setParams(fireParams);
+  }
+}
 
 // Helper function to clear all LEDs
 void clearAllLEDs() {
@@ -83,13 +97,13 @@ void updateFireEffect(float energy, float hit) {
     Serial.print(F("Fire update - energy: "));
     Serial.print(energy);
     Serial.print(F(", hit: "));
-    Serial.print(hit);
+    Serial.println(hit);
   }
 
   // Update generator with audio energy and impact
   if (currentGenerator) {
-    // Cast to UnifiedFireGenerator to access update method and setAudioInput
-    UnifiedFireGenerator* fireGen = static_cast<UnifiedFireGenerator*>(currentGenerator);
+    // Cast to Fire to access update method and setAudioInput
+    Fire* fireGen = static_cast<Fire*>(currentGenerator);
     if (fireGen) {
       fireGen->setAudioInput(energy, hit);
       fireGen->update();
@@ -99,7 +113,7 @@ void updateFireEffect(float energy, float hit) {
 
 void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
-  if (currentGenerator && currentEffect && renderer && effectMatrix) {
+  if (currentGenerator && currentEffect && renderer && pixelMatrix) {
     // Get audio input for generation
     float energy = mic.getLevel();
     float hit = mic.getTransient();
@@ -108,9 +122,9 @@ void showFireEffect() {
     updateFireEffect(energy, hit);
 
     // Generate effects and render
-    currentGenerator->generate(*effectMatrix, energy, hit);
-    currentEffect->apply(effectMatrix);
-    renderer->render(*effectMatrix);
+    currentGenerator->generate(*pixelMatrix, energy, hit);
+    currentEffect->apply(pixelMatrix);
+    renderer->render(*pixelMatrix);
     leds.show();
   }
 }
@@ -119,6 +133,297 @@ void renderFireEffect() {
   // In the new architecture, rendering is handled by showFireEffect()
   // This function can be used for additional processing if needed
   showFireEffect();
+}
+
+// Simple serial command handler
+void handleSerialCommands() {
+  if (Serial.available()) {
+    static char buf[64];
+    size_t len = Serial.readBytesUntil('\n', buf, sizeof(buf) - 1);
+    buf[len] = '\0';
+    // Trim CR/LF
+    while (len > 0 && (buf[len-1] == '\r' || buf[len-1] == '\n')) {
+      buf[--len] = '\0';
+    }
+
+    if (strcmp(buf, "help") == 0) {
+      Serial.println(F("=== COMMANDS ==="));
+      Serial.println(F("show         - Show all settings"));
+      Serial.println(F("save         - Save settings to flash"));
+      Serial.println(F("mic fast     - Fast mic stream (30Hz)"));
+      Serial.println(F("mic slow     - Slow mic stream (5Hz)"));
+      Serial.println(F("mic off      - Stop mic stream"));
+      Serial.println(F("fire stats   - Fire parameters"));
+      Serial.println(F(""));
+      Serial.println(F("=== FIRE TUNING ==="));
+      Serial.println(F("set cooling <0-255>"));
+      Serial.println(F("set sparkchance <0.0-1.0>"));
+      Serial.println(F("set sparkmin <0-255>"));
+      Serial.println(F("set sparkmax <0-255>"));
+      Serial.println(F("set audioboost <0.0-2.0>"));
+      Serial.println(F("set heatboost <0-255>"));
+      Serial.println(F("set coolbias <-128 to 0>"));
+      Serial.println(F("set spread <1-20>"));
+      Serial.println(F("set decay <0.0-1.0>"));
+      Serial.println(F("set brightness <0-255>"));
+      Serial.println(F(""));
+      Serial.println(F("=== MIC/AGC TUNING ==="));
+      Serial.println(F("set agstrength <0.01-1.0>  - AGC speed (lower=slower)"));
+      Serial.println(F("set agtarget <0.1-0.9>    - Target level"));
+      Serial.println(F("set gate <0.0-0.2>        - Noise gate"));
+      Serial.println(F(""));
+      Serial.println(F("=== TRANSIENT TUNING ==="));
+      Serial.println(F("set tfactor <1.1-5.0>     - Hit threshold (higher=less sensitive)"));
+      Serial.println(F("set tcooldown <50-500>    - Min ms between hits"));
+      Serial.println(F("set loudfloor <0.05-0.5>  - Min level for hit"));
+      Serial.println(F("set burst <1-30>          - Sparks on burst (punch)"));
+      Serial.println(F("set suppress <50-1000>    - Suppression time after burst (ms)"));
+    }
+    else if (strcmp(buf, "show") == 0 || strcmp(buf, "mic stats") == 0) {
+      Serial.println(F("=== MIC STATUS ==="));
+      Serial.print(F("Level: ")); Serial.println(mic.getLevel(), 3);
+      Serial.print(F("Transient: ")); Serial.println(mic.getTransient(), 3);
+      Serial.print(F("Envelope: ")); Serial.println(mic.getEnv(), 3);
+      Serial.print(F("EnvMean: ")); Serial.println(mic.getEnvMean(), 3);
+      Serial.print(F("PDM Alive: ")); Serial.println(mic.pdmAlive ? F("YES") : F("NO"));
+      Serial.println(F("=== AGC ==="));
+      Serial.print(F("GlobalGain: ")); Serial.println(mic.getGlobalGain(), 3);
+      Serial.print(F("HW Gain: ")); Serial.println(mic.getHwGain());
+      Serial.print(F("agStrength: ")); Serial.println(mic.agStrength, 3);
+      Serial.print(F("agTarget: ")); Serial.println(mic.agTarget, 2);
+      Serial.print(F("noiseGate: ")); Serial.println(mic.noiseGate, 3);
+    }
+    else if (strcmp(buf, "mic debug") == 0) {
+      micDebugEnabled = !micDebugEnabled;
+      Serial.print(F("Mic debug: ")); Serial.print(micDebugEnabled ? F("ON") : F("OFF"));
+      Serial.print(F(" (")); Serial.print(1000/micDebugInterval); Serial.println(F("Hz)"));
+    }
+    else if (strcmp(buf, "mic fast") == 0) {
+      micDebugEnabled = true;
+      micDebugInterval = 33;  // ~30Hz
+      Serial.println(F("Mic debug: FAST (30Hz)"));
+    }
+    else if (strcmp(buf, "mic slow") == 0) {
+      micDebugEnabled = true;
+      micDebugInterval = 200;  // 5Hz
+      Serial.println(F("Mic debug: SLOW (5Hz)"));
+    }
+    else if (strcmp(buf, "mic off") == 0) {
+      micDebugEnabled = false;
+      Serial.println(F("Mic debug: OFF"));
+    }
+    else if (strcmp(buf, "fire stats") == 0) {
+      Serial.println(F("=== FIRE STATUS ==="));
+      Fire* f = static_cast<Fire*>(currentGenerator);
+      if (f) {
+        Serial.print(F("Layout: "));
+        Serial.println(config.matrix.layoutType == LINEAR_LAYOUT ? F("LINEAR") : F("MATRIX"));
+        Serial.print(F("LEDs: ")); Serial.println(config.matrix.width * config.matrix.height);
+        Serial.print(F("Brightness: ")); Serial.println(leds.getBrightness());
+      }
+      Serial.println(F("Fire Params (live):"));
+      Serial.print(F("  cooling: ")); Serial.println(fireParams.baseCooling);
+      Serial.print(F("  sparkChance: ")); Serial.println(fireParams.sparkChance, 3);
+      Serial.print(F("  sparkMin: ")); Serial.println(fireParams.sparkHeatMin);
+      Serial.print(F("  sparkMax: ")); Serial.println(fireParams.sparkHeatMax);
+      Serial.print(F("  audioBoost: ")); Serial.println(fireParams.audioSparkBoost, 3);
+      Serial.print(F("  heatBoost: ")); Serial.println(fireParams.audioHeatBoostMax);
+      Serial.print(F("  coolBias: ")); Serial.println(fireParams.coolingAudioBias);
+      Serial.print(F("  spread: ")); Serial.println(fireParams.spreadDistance);
+      Serial.print(F("  decay: ")); Serial.println(fireParams.heatDecay, 2);
+      Serial.print(F("  burst: ")); Serial.println(fireParams.burstSparks);
+      Serial.print(F("  suppress: ")); Serial.println(fireParams.suppressionMs);
+    }
+    // Fire parameter tuning commands
+    else if (strncmp(buf, "set cooling ", 12) == 0) {
+      int val = atoi(buf + 12);
+      fireParams.baseCooling = constrain(val, 0, 255);
+      updateFireParams();
+      configStorage.markDirty();
+      Serial.print(F("cooling=")); Serial.println(fireParams.baseCooling);
+    }
+    else if (strncmp(buf, "set sparkchance ", 16) == 0) {
+      float val = atof(buf + 16);
+      fireParams.sparkChance = constrain(val, 0.0f, 1.0f);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("sparkChance=")); Serial.println(fireParams.sparkChance, 3);
+    }
+    else if (strncmp(buf, "set sparkmin ", 13) == 0) {
+      int val = atoi(buf + 13);
+      fireParams.sparkHeatMin = constrain(val, 0, 255);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("sparkMin=")); Serial.println(fireParams.sparkHeatMin);
+    }
+    else if (strncmp(buf, "set sparkmax ", 13) == 0) {
+      int val = atoi(buf + 13);
+      fireParams.sparkHeatMax = constrain(val, 0, 255);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("sparkMax=")); Serial.println(fireParams.sparkHeatMax);
+    }
+    else if (strncmp(buf, "set audioboost ", 15) == 0) {
+      float val = atof(buf + 15);
+      fireParams.audioSparkBoost = constrain(val, 0.0f, 2.0f);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("audioBoost=")); Serial.println(fireParams.audioSparkBoost, 3);
+    }
+    else if (strncmp(buf, "set heatboost ", 14) == 0) {
+      int val = atoi(buf + 14);
+      fireParams.audioHeatBoostMax = constrain(val, 0, 255);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("heatBoost=")); Serial.println(fireParams.audioHeatBoostMax);
+    }
+    else if (strncmp(buf, "set coolbias ", 13) == 0) {
+      int val = atoi(buf + 13);
+      fireParams.coolingAudioBias = constrain(val, -128, 0);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("coolBias=")); Serial.println(fireParams.coolingAudioBias);
+    }
+    else if (strncmp(buf, "set spread ", 11) == 0) {
+      int val = atoi(buf + 11);
+      fireParams.spreadDistance = constrain(val, 1, 20);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("spread=")); Serial.println(fireParams.spreadDistance);
+    }
+    else if (strncmp(buf, "set decay ", 10) == 0) {
+      float val = atof(buf + 10);
+      fireParams.heatDecay = constrain(val, 0.0f, 1.0f);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("decay=")); Serial.println(fireParams.heatDecay, 2);
+    }
+    else if (strncmp(buf, "set brightness ", 15) == 0) {
+      int val = atoi(buf + 15);
+      leds.setBrightness(constrain(val, 0, 255));
+      configStorage.markDirty();
+      Serial.print(F("brightness=")); Serial.println(leds.getBrightness());
+    }
+    // AGC tuning commands
+    else if (strncmp(buf, "set agstrength ", 15) == 0) {
+      float val = atof(buf + 15);
+      mic.agStrength = constrain(val, 0.01f, 1.0f);
+      configStorage.markDirty();
+      Serial.print(F("agStrength=")); Serial.println(mic.agStrength, 3);
+    }
+    else if (strncmp(buf, "set agtarget ", 13) == 0) {
+      float val = atof(buf + 13);
+      mic.agTarget = constrain(val, 0.1f, 0.9f);
+      configStorage.markDirty();
+      Serial.print(F("agTarget=")); Serial.println(mic.agTarget, 2);
+    }
+    else if (strncmp(buf, "set gate ", 9) == 0) {
+      float val = atof(buf + 9);
+      mic.noiseGate = constrain(val, 0.0f, 0.2f);
+      configStorage.markDirty();
+      Serial.print(F("noiseGate=")); Serial.println(mic.noiseGate, 3);
+    }
+    else if (strncmp(buf, "set gain ", 9) == 0) {
+      float val = atof(buf + 9);
+      mic.globalGain = constrain(val, 0.5f, 15.0f);
+      configStorage.markDirty();
+      Serial.print(F("globalGain=")); Serial.println(mic.globalGain, 2);
+    }
+    else if (strncmp(buf, "set agmin ", 10) == 0) {
+      float val = atof(buf + 10);
+      mic.agMin = constrain(val, 0.1f, 5.0f);
+      configStorage.markDirty();
+      Serial.print(F("agMin=")); Serial.println(mic.agMin, 2);
+    }
+    else if (strncmp(buf, "set agmax ", 10) == 0) {
+      float val = atof(buf + 10);
+      mic.agMax = constrain(val, 1.0f, 20.0f);
+      configStorage.markDirty();
+      Serial.print(F("agMax=")); Serial.println(mic.agMax, 2);
+    }
+    // Transient detection tuning
+    else if (strncmp(buf, "set tfactor ", 12) == 0) {
+      float val = atof(buf + 12);
+      mic.transientFactor = constrain(val, 1.1f, 5.0f);
+      configStorage.markDirty();
+      Serial.print(F("transientFactor=")); Serial.println(mic.transientFactor, 2);
+    }
+    else if (strncmp(buf, "set tcooldown ", 14) == 0) {
+      int val = atoi(buf + 14);
+      mic.transientCooldownMs = constrain(val, 50, 500);
+      configStorage.markDirty();
+      Serial.print(F("transientCooldownMs=")); Serial.println(mic.transientCooldownMs);
+    }
+    else if (strncmp(buf, "set loudfloor ", 14) == 0) {
+      float val = atof(buf + 14);
+      mic.loudFloor = constrain(val, 0.05f, 0.5f);
+      configStorage.markDirty();
+      Serial.print(F("loudFloor=")); Serial.println(mic.loudFloor, 2);
+    }
+    // Hit spark tuning
+    else if (strncmp(buf, "set hitbase ", 12) == 0) {
+      int val = atoi(buf + 12);
+      fireParams.hitSparkBase = constrain(val, 0, 10);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("hitSparkBase=")); Serial.println(fireParams.hitSparkBase);
+    }
+    else if (strncmp(buf, "set hitmult ", 12) == 0) {
+      int val = atoi(buf + 12);
+      fireParams.hitSparkMult = constrain(val, 0, 20);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("hitSparkMult=")); Serial.println(fireParams.hitSparkMult);
+    }
+    else if (strncmp(buf, "set burst ", 10) == 0) {
+      int val = atoi(buf + 10);
+      fireParams.burstSparks = constrain(val, 1, 30);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("burstSparks=")); Serial.println(fireParams.burstSparks);
+    }
+    else if (strncmp(buf, "set suppress ", 13) == 0) {
+      int val = atoi(buf + 13);
+      fireParams.suppressionMs = constrain(val, 50, 1000);
+      updateFireParams(); configStorage.markDirty();
+      Serial.print(F("suppressionMs=")); Serial.println(fireParams.suppressionMs);
+    }
+    else if (strcmp(buf, "save") == 0) {
+      Serial.println(F("Saving settings to flash..."));
+      configStorage.saveConfiguration(fireParams, mic);
+    }
+    else if (strcmp(buf, "reset") == 0) {
+      Serial.println(F("Factory reset..."));
+      configStorage.factoryReset();
+      configStorage.loadConfiguration(fireParams, mic);
+      updateFireParams();
+      Serial.println(F("Settings reset to defaults"));
+    }
+    else if (len > 0) {
+      Serial.println(F("Unknown command. Type 'help'"));
+    }
+  }
+
+  // Periodic mic debug output with activity monitor
+  if (micDebugEnabled && millis() - lastMicDebug > micDebugInterval) {
+    lastMicDebug = millis();
+
+    // Calculate total LED activity (sum of brightness)
+    uint32_t totalBrightness = 0;
+    for (int i = 0; i < leds.numPixels(); i++) {
+      uint32_t c = leds.getPixelColor(i);
+      totalBrightness += ((c >> 16) & 0xFF) + ((c >> 8) & 0xFF) + (c & 0xFF);
+    }
+    uint8_t activityPct = (uint8_t)(totalBrightness * 100 / (leds.numPixels() * 765));  // 765 = 255*3
+
+    // Calculate expected spark count using same formula as Fire::generateSparks
+    float energy = mic.getLevel();
+    float hit = mic.getTransient();
+    int sparks = 1;
+    if (energy > 0.15f) sparks = 1 + (int)((energy - 0.15f) * 6);
+    if (hit > 0.1f) sparks += fireParams.hitSparkBase + (int)(hit * fireParams.hitSparkMult);
+
+    // Transient detection threshold (same calc as AdaptiveMic)
+    float thresh = max(mic.loudFloor, mic.slowAvg * mic.transientFactor);
+
+    Serial.print(F("lvl="));  Serial.print(energy, 2);
+    Serial.print(F(" avg=")); Serial.print(mic.slowAvg, 2);
+    Serial.print(F(" thr=")); Serial.print(thresh, 2);
+    Serial.print(F(" hit=")); Serial.print(hit, 2);
+    Serial.print(F(" spk=")); Serial.print(sparks);
+    Serial.print(F(" act=")); Serial.print(activityPct);
+    Serial.print(F("%"));
+    Serial.println();
+  }
 }
 
 void setup() {
@@ -188,10 +493,10 @@ void setup() {
   Serial.print(config.matrix.width * config.matrix.height);
   Serial.println(F(" LEDs"));
 
-  // Create EffectMatrix for the visual pipeline
-  effectMatrix = new EffectMatrix(config.matrix.width, config.matrix.height);
-  if (!effectMatrix) {
-    Serial.println(F("ERROR: EffectMatrix allocation failed"));
+  // Create PixelMatrix for the visual pipeline
+  pixelMatrix = new PixelMatrix(config.matrix.width, config.matrix.height);
+  if (!pixelMatrix) {
+    Serial.println(F("ERROR: PixelMatrix allocation failed"));
     while(1); // Halt execution
   }
 
@@ -212,8 +517,8 @@ void setup() {
       break;
   }
 
-  // Create unified fire generator using factory function
-  UnifiedFireGenerator* fireGen = createFireGenerator(config);
+  // Create fire generator instance
+  Fire* fireGen = new Fire();
   currentGenerator = fireGen;
 
   if (!currentGenerator) {
@@ -221,14 +526,27 @@ void setup() {
     while(1); // Halt execution
   }
 
-  // Initialize the generator with layout type
-  if (!fireGen->begin(config.matrix.width, config.matrix.height, config.matrix.layoutType)) {
+  // Initialize the generator with device configuration
+  if (!fireGen->begin(config)) {
     Serial.println(F("ERROR: Generator initialization failed"));
     while(1); // Halt execution
   }
 
-  // Initialize effect (for now, just a pass-through effect)
-  currentEffect = new HueRotationEffect();
+  // Initialize live-tunable fire params from config
+  fireParams.baseCooling = config.fireDefaults.baseCooling;
+  fireParams.sparkHeatMin = config.fireDefaults.sparkHeatMin;
+  fireParams.sparkHeatMax = config.fireDefaults.sparkHeatMax;
+  fireParams.sparkChance = config.fireDefaults.sparkChance;
+  fireParams.audioSparkBoost = config.fireDefaults.audioSparkBoost;
+  fireParams.audioHeatBoostMax = config.fireDefaults.audioHeatBoostMax;
+  fireParams.coolingAudioBias = config.fireDefaults.coolingAudioBias;
+  fireParams.transientHeatMax = config.fireDefaults.transientHeatMax;
+  // Layout-specific params set by Fire::begin()
+  fireParams.spreadDistance = 3;
+  fireParams.heatDecay = 0.60f;
+
+  // Initialize effect (pass-through for pure fire colors)
+  currentEffect = new NoOpEffect();
   if (!currentEffect) {
     Serial.println(F("ERROR: Effect allocation failed"));
     while(1); // Halt execution
@@ -251,28 +569,23 @@ void setup() {
     Serial.println(F("Microphone initialized"));
   }
 
-  // Initialize EEPROM configuration storage
-  // configStorage.begin();  // TODO: Clean up legacy fire params
+  // Initialize configuration storage and load saved settings
+  configStorage.begin();
+  if (configStorage.isValid()) {
+    configStorage.loadConfiguration(fireParams, mic);
+    updateFireParams();
+    Serial.println(F("Loaded saved configuration from flash"));
+  } else {
+    Serial.println(F("Using default configuration"));
+  }
 
-  // TODO: Update configuration loading for new architecture
-  Serial.println(F("Configuration system initialized"));
-
-  // TODO: Uncomment when hardware components are updated for new architecture
-  // console.begin();
-  // console.setConfigStorage(&configStorage); // Enable EEPROM saving for parameters
-
-  // if (!imu.begin()) {
-  //   Serial.println(F("WARNING: IMU initialization failed"));
-  // } else {
-  //   Serial.println(F("IMU initialized"));
-  // }
-
-  // if (!battery.begin()) {
-  //   Serial.println(F("WARNING: Battery monitor failed to start"));
-  // } else {
-  //   battery.setFastCharge(config.charging.fastChargeEnabled);
-  //   Serial.println(F("Battery monitor initialized"));
-  // }
+  // Initialize battery monitor
+  if (!battery.begin()) {
+    Serial.println(F("WARNING: Battery monitor failed to start"));
+  } else {
+    battery.setFastCharge(config.charging.fastChargeEnabled);
+    Serial.println(F("Battery monitor initialized"));
+  }
 
   Serial.println(F("Setup complete!"));
 }
@@ -285,59 +598,42 @@ void loop() {
 
   mic.update(dt);
 
-  // TODO: Uncomment when IMU is updated for new architecture
-  // IMU data update for visualization only (no fire effects)
-  // if (imu.isReady() && console.heatVizEnabled) {
-  //   imu.updateIMUData(); // Update clean IMU data for debugging only
-  // }
-
   float energy = mic.getLevel();
   float hit = mic.getTransient();
 
-  // TODO: Uncomment when battery monitor is updated for new architecture
-  // Auto-activation of battery visualization when charging
-  // if (config.charging.autoShowVisualizationWhenCharging) {
-  //   bool currentChargingState = battery.isCharging();
-  //   if (currentChargingState && !prevChargingState) {
-  //     // Just started charging - auto-activate battery visualization and disable fire
-  //     console.batteryVizEnabled = true;
-  //     console.fireDisabled = true;
-  //     // Clear fire display immediately
-  //     clearAllLEDs();
-  //     leds.show();
-  //     Serial.println(F("Auto-activated battery visualization (charging detected)"));
-  //   } else if (!currentChargingState && prevChargingState) {
-  //     // Just stopped charging - auto-deactivate and re-enable fire
-  //     if (console.batteryVizEnabled) {
-  //       console.batteryVizEnabled = false;
-  //       console.fireDisabled = false;
-  //       Serial.println(F("Auto-deactivated battery visualization (charging stopped)"));
-  //     }
-  //   }
-  //   prevChargingState = currentChargingState;
-  // }
+  // Track charging state changes
+  bool currentChargingState = battery.isCharging();
+  if (currentChargingState != prevChargingState) {
+    if (currentChargingState) {
+      Serial.println(F("Charging started"));
+    } else {
+      Serial.println(F("Charging stopped"));
+    }
+    prevChargingState = currentChargingState;
+  }
 
   // Simplified rendering for new architecture - just fire effect for now
-  updateFireEffect(energy, hit);
   showFireEffect();
 
-  // TODO: Uncomment when console is updated for new architecture
-  // console.update();
+  // Handle serial commands for debugging
+  handleSerialCommands();
 
-  // TODO: Uncomment when battery monitor is updated for new architecture
-  // Battery monitoring
-  // static uint32_t lastBatteryCheck = 0;
-  // if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) { // Check every 30 seconds
-  //   lastBatteryCheck = millis();
-  //   float voltage = battery.getVoltage();
-  //   if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
-  //     Serial.print(F("CRITICAL BATTERY: "));
-  //     Serial.print(voltage);
-  //     Serial.println(F("V"));
-  //   } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
-  //     Serial.print(F("Low battery: "));
-  //     Serial.print(voltage);
-  //     Serial.println(F("V"));
-  //   }
-  // }
+  // Auto-save dirty settings to flash (debounced)
+  configStorage.saveIfDirty(fireParams, mic);
+
+  // Battery monitoring - periodic voltage check
+  static uint32_t lastBatteryCheck = 0;
+  if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+    lastBatteryCheck = millis();
+    float voltage = battery.getVoltage();
+    if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
+      Serial.print(F("CRITICAL BATTERY: "));
+      Serial.print(voltage);
+      Serial.println(F("V"));
+    } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
+      Serial.print(F("Low battery: "));
+      Serial.print(voltage);
+      Serial.println(F("V"));
+    }
+  }
 }

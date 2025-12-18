@@ -119,6 +119,18 @@ secrets.*
 # Project-Specific Ignores
 # ===========================================
 
+# Claude Code settings (user-specific)
+.claude/
+
+# Tool output files
+audio_recording.json
+audio_timeline.png
+recommended_params.json
+serial_log.txt
+
+# Windows artifacts
+nul
+
 # Hardware test recordings
 recordings/
 captures/

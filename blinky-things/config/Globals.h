@@ -1,5 +1,5 @@
 #pragma once
-#include "../hardware/LEDMapper.h"
+#include "../render/LEDMapper.h"
 #include "../devices/DeviceConfig.h"
 
 // Global LED mapper instance

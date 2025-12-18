@@ -4,12 +4,26 @@ This directory contains example configurations and code snippets for different B
 
 ## Available Examples
 
+### Generator Examples
+- `generator_examples.cpp` - Complete examples of Fire, Water, and Lightning generators
+  - How to create and initialize generators
+  - Parameter customization examples
+  - Audio-reactive generator switching
+  - Layout-specific optimizations
+
+### Effect Testing Examples
+- `effect_testing_examples.cpp` - Universal effect testing framework
+  - General tests that apply to all effects
+  - NoOp effect usage (pass-through for direct generator output)
+  - Performance testing and validation
+  - Integration examples for main application
+
 ### Basic Configurations
 - `simple-tube-light/` - Minimal tube light setup
 - `basic-hat/` - Simple hat installation
 - `matrix-display/` - Standard matrix configuration
 
-### Advanced Examples  
+### Advanced Examples
 - `audio-reactive/` - Enhanced audio processing
 - `multi-device/` - Coordinated multiple devices
 - `custom-effects/` - User-defined fire patterns

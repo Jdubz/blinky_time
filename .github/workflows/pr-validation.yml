@@ -2,15 +2,23 @@ name: PR Validation
 
 on:
   pull_request:
-    branches: [ master ]
+    branches: [ master, main ]
 
 jobs:
   compilation-tests:
+    name: Compile (${{ matrix.device-name }})
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
-        device-type: [1, 2, 3]  # Hat, Tube Light, Bucket Totem
+        include:
+          - device-type: 1
+            device-name: "Hat"
+          - device-type: 2
+            device-name: "Tube Light"
+          - device-type: 3
+            device-name: "Bucket Totem"
 
     steps:
     - name: Checkout repository
@@ -18,74 +26,154 @@ jobs:
 
     - name: Setup Arduino CLI
       uses: arduino/setup-arduino-cli@v2
-      with:
-        version: "1.0.4"
 
-    - name: Add Seeeduino board index
+    - name: Configure Arduino CLI
       run: |
+        arduino-cli config init
         arduino-cli config add board_manager.additional_urls https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json
 
-    - name: Install Arduino cores and libraries
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install adafruit-nrfutil
+      run: pip install adafruit-nrfutil
+
+    - name: Install board package and libraries
       run: |
         arduino-cli core update-index
-        arduino-cli core install Seeeduino:nrf52
+        arduino-cli core install Seeeduino:mbed
         arduino-cli lib install "Adafruit NeoPixel"
-        # Install adafruit-nrfutil for nRF52 packaging
-        pip install adafruit-nrfutil
 
     - name: Set device type
       run: |
         sed -i 's/#define DEVICE_TYPE [0-9]/#define DEVICE_TYPE ${{ matrix.device-type }}/' blinky-things/blinky-things.ino
+        echo "Building for ${{ matrix.device-name }} (DEVICE_TYPE=${{ matrix.device-type }})"
 
     - name: Compile sketch
       run: |
-        arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things/
+        arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things/
+
+  cppcheck:
+    name: Static Analysis (cppcheck)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install cppcheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cppcheck
+
+    - name: Run cppcheck
+      run: |
+        cppcheck \
+          --enable=warning,style,performance,portability \
+          --error-exitcode=1 \
+          --suppressions-list=.cppcheck-suppressions \
+          --inline-suppr \
+          -I blinky-things/ \
+          --std=c++14 \
+          --platform=native \
+          --quiet \
+          blinky-things/
+
+  syntax-validation:
+    name: Syntax Validation
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Run syntax validation
+      run: |
+        python tools/validate_syntax.py blinky-things/
 
   code-quality:
+    name: Code Quality
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Check code formatting
+    - name: Check include guards
       run: |
-        echo "Checking for common code issues..."
+        echo "Checking include guards..."
+        missing_guards=""
+        for file in $(find blinky-things/ -name "*.h" -type f); do
+          if ! grep -q "#pragma once" "$file" && ! grep -q "#ifndef.*_H" "$file"; then
+            missing_guards="$missing_guards\n  - $file"
+          fi
+        done
+        if [ -n "$missing_guards" ]; then
+          echo "❌ Missing include guards in:$missing_guards"
+          exit 1
+        fi
+        echo "✅ All header files have include guards"
 
-        # Check for trailing whitespace (warning only - doesn't fail build)
-        if find blinky-things/ -name "*.cpp" -o -name "*.h" -o -name "*.ino" | xargs grep -l "[ \t]$"; then
-          echo "⚠️  Warning: Found trailing whitespace in files above"
-          echo "This doesn't affect compilation but should be cleaned up eventually"
+    - name: Check for debug code
+      run: |
+        echo "Checking for leftover debug code..."
+        # These are warnings, not failures
+        if grep -rn "TODO\|FIXME\|HACK\|XXX" blinky-things/ --include="*.cpp" --include="*.h" --include="*.ino" 2>/dev/null; then
+          echo "⚠️  Found TODO/FIXME comments (not blocking)"
         else
-          echo "✅ No trailing whitespace found"
+          echo "✅ No TODO/FIXME comments found"
         fi
 
-        # Check for consistent include guards
-        echo "Checking include guards..."
-        find blinky-things/ -name "*.h" -exec grep -L "#pragma once\|#ifndef.*_H" {} \; | while read file; do
-          if [ -n "$file" ]; then
-            echo "❌ Missing include guard in $file"
-            exit 1
+    - name: Check for large files
+      run: |
+        echo "Checking for overly large source files..."
+        large_files=""
+        for file in $(find blinky-things/ -name "*.cpp" -o -name "*.h" -o -name "*.ino" | head -100); do
+          lines=$(wc -l < "$file")
+          if [ "$lines" -gt 1000 ]; then
+            large_files="$large_files\n  - $file ($lines lines)"
           fi
         done
-        echo "✅ Include guards OK"
+        if [ -n "$large_files" ]; then
+          echo "⚠️  Large files found (consider splitting):$large_files"
+        else
+          echo "✅ No overly large files"
+        fi
 
   documentation:
+    name: Documentation Check
     runs-on: ubuntu-latest
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Check documentation
+    - name: Check required files
       run: |
         echo "Checking documentation completeness..."
-
-        required_files=("README.md" "LICENSE" "CONTRIBUTING.md")
-        for file in "${required_files[@]}"; do
+        missing=""
+        for file in README.md LICENSE CONTRIBUTING.md; do
           if [ ! -f "$file" ]; then
-            echo "❌ Missing required file: $file"
-            exit 1
+            missing="$missing $file"
           fi
         done
+        if [ -n "$missing" ]; then
+          echo "❌ Missing required files:$missing"
+          exit 1
+        fi
         echo "✅ All required documentation files present"
+
+    - name: Check version file
+      run: |
+        if [ -f "VERSION" ]; then
+          echo "✅ VERSION file exists: $(cat VERSION)"
+        else
+          echo "⚠️  VERSION file not found"
+        fi
