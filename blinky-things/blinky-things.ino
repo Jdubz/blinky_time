@@ -64,9 +64,6 @@ PixelMatrix* pixelMatrix = nullptr;
 
 AdaptiveMic mic;
 BatteryMonitor battery;
-// === TEMPORARILY DISABLED ===
-// SerialConsole console;        // TODO: Re-enable when IMU dependency resolved
-// IMUHelper imu;               // TODO: Enable when LSM6DS3 library is available
 ConfigStorage configStorage;    // Persistent settings storage
 
 uint32_t lastMs = 0;
@@ -590,11 +587,6 @@ void setup() {
     Serial.println(F("Battery monitor initialized"));
   }
 
-  // TODO: Re-enable when dependencies resolved
-  // console.begin();
-  // console.setConfigStorage(&configStorage);
-  // if (!imu.begin()) { Serial.println(F("WARNING: IMU initialization failed")); }
-
   Serial.println(F("Setup complete!"));
 }
 
@@ -605,12 +597,6 @@ void loop() {
   lastMs = now;
 
   mic.update(dt);
-
-  // TODO: Uncomment when IMU is updated for new architecture
-  // IMU data update for visualization only (no fire effects)
-  // if (imu.isReady() && console.heatVizEnabled) {
-  //   imu.updateIMUData(); // Update clean IMU data for debugging only
-  // }
 
   float energy = mic.getLevel();
   float hit = mic.getTransient();
