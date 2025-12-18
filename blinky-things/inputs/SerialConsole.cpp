@@ -5,7 +5,10 @@
 #include "IMUHelper.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
+#ifdef ENABLE_TESTING
 #include "../tests/GeneratorTestRunner.h"
+#endif
+#include "../tests/SafetyTest.h"
 #include "../types/Version.h"
 
 extern BatteryMonitor battery;
@@ -23,10 +26,7 @@ SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic, Adafruit_NeoPixel&
 }
 
 void SerialConsole::begin() {
-    Serial.begin(115200);
-    unsigned long start = millis();
-    while (!Serial && (millis() - start < 2000)) { delay(10); }
-
+    // Note: Serial.begin() should be called by main setup() before this
     settings_.begin();
     registerSettings();
 
@@ -136,6 +136,10 @@ void SerialConsole::update() {
     if (Serial.available()) {
         static char buf[128];
         size_t len = Serial.readBytesUntil('\n', buf, sizeof(buf) - 1);
+        // Explicit bounds check for safety
+        if (len >= sizeof(buf)) {
+            len = sizeof(buf) - 1;
+        }
         buf[len] = '\0';
         // Trim CR/LF
         while (len > 0 && (buf[len-1] == '\r' || buf[len-1] == '\n')) {
@@ -150,6 +154,9 @@ void SerialConsole::update() {
     micDebugTick();
     debugTick();
     imuDebugTick();
+
+    // JSON streaming for UI app
+    streamTick();
 }
 
 void SerialConsole::handleCommand(const char* cmd) {
@@ -167,6 +174,39 @@ void SerialConsole::handleCommand(const char* cmd) {
 }
 
 bool SerialConsole::handleSpecialCommand(const char* cmd) {
+    // === JSON API COMMANDS (for UI app) ===
+    if (strcmp(cmd, "json settings") == 0) {
+        settings_.printSettingsJson();
+        return true;
+    }
+
+    if (strcmp(cmd, "json info") == 0) {
+        Serial.print(F("{\"device\":\""));
+        Serial.print(config.deviceName);
+        Serial.print(F("\",\"version\":\""));
+        Serial.print(F(BLINKY_VERSION_STRING));
+        Serial.print(F("\",\"width\":"));
+        Serial.print(config.matrix.width);
+        Serial.print(F(",\"height\":"));
+        Serial.print(config.matrix.height);
+        Serial.print(F(",\"leds\":"));
+        Serial.print(config.matrix.width * config.matrix.height);
+        Serial.println(F("}"));
+        return true;
+    }
+
+    if (strcmp(cmd, "stream on") == 0) {
+        streamEnabled_ = true;
+        Serial.println(F("OK"));
+        return true;
+    }
+
+    if (strcmp(cmd, "stream off") == 0) {
+        streamEnabled_ = false;
+        Serial.println(F("OK"));
+        return true;
+    }
+
     // === GENERAL COMMANDS ===
     if (strcmp(cmd, "help") == 0) {
         printHelp();
@@ -236,6 +276,18 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    // === SAFETY/DIAGNOSTIC COMMANDS ===
+    if (strcmp(cmd, "selftest") == 0) {
+        int failures = SafetyTest::runAllTests(true);
+        if (failures == 0) {
+            Serial.println(F("All safety tests PASSED"));
+        } else {
+            Serial.print(failures);
+            Serial.println(F(" test(s) FAILED - check output above"));
+        }
+        return true;
+    }
+
     // === SHORTCUT COMMANDS ===
     // Auto-gain shortcuts
     if (strcmp(cmd, "ag on") == 0) {
@@ -278,7 +330,8 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (strcmp(cmd, "imu debug on") == 0) { imuDebugEnabled_ = true; Serial.println(F("IMU Debug=on")); return true; }
     if (strcmp(cmd, "imu debug off") == 0) { imuDebugEnabled_ = false; Serial.println(F("IMU Debug=off")); return true; }
 
-    // Test runner commands
+    // Test runner commands (only available with ENABLE_TESTING)
+#ifdef ENABLE_TESTING
     if (strncmp(cmd, "test ", 5) == 0 || strncmp(cmd, "gen ", 4) == 0) {
         if (testRunner_) {
             testRunner_->handleCommand(cmd);
@@ -287,6 +340,12 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         }
         return true;
     }
+#else
+    if (strncmp(cmd, "test ", 5) == 0 || strncmp(cmd, "gen ", 4) == 0) {
+        Serial.println(F("Testing disabled. Define ENABLE_TESTING to enable."));
+        return true;
+    }
+#endif
 
     return false;
 }
@@ -312,11 +371,17 @@ void SerialConsole::printHelp() {
     Serial.println(F("  load                - Load from flash"));
     Serial.println(F("  reset               - Factory reset"));
     Serial.println();
-    Serial.println(F("STATS:"));
+    Serial.println(F("JSON API (for UI app):"));
+    Serial.println(F("  json info           - Device info as JSON"));
+    Serial.println(F("  json settings       - All settings as JSON"));
+    Serial.println(F("  stream on/off       - Audio data stream (~20Hz)"));
+    Serial.println();
+    Serial.println(F("STATS/DIAGNOSTICS:"));
     Serial.println(F("  mic stats           - Audio statistics"));
     Serial.println(F("  fire stats          - Fire engine stats"));
     Serial.println(F("  battery stats       - Battery status"));
     Serial.println(F("  imu stats           - IMU orientation"));
+    Serial.println(F("  selftest            - Run safety diagnostics"));
     Serial.println();
     Serial.println(F("SHORTCUTS:"));
     Serial.println(F("  ag on/off           - Toggle auto-gain"));
@@ -475,6 +540,26 @@ void SerialConsole::imuDebugTick() {
         imuDebugLastMs_ = now;
         printRawIMUData();
     }
+}
+
+void SerialConsole::streamTick() {
+    if (!streamEnabled_ || !mic_) return;
+
+    uint32_t now = millis();
+    if (now - streamLastMs_ < STREAM_PERIOD_MS) return;
+    streamLastMs_ = now;
+
+    // Output compact JSON for UI app (~20Hz)
+    // Format: {"a":{"l":0.45,"t":0.85,"e":0.32,"g":3.5}}
+    Serial.print(F("{\"a\":{\"l\":"));
+    Serial.print(mic_->getLevel(), 2);
+    Serial.print(F(",\"t\":"));
+    Serial.print(mic_->getTransient(), 2);
+    Serial.print(F(",\"e\":"));
+    Serial.print(mic_->getEnv(), 2);
+    Serial.print(F(",\"g\":"));
+    Serial.print(mic_->getGlobalGain(), 1);
+    Serial.println(F("}}"));
 }
 
 // === VISUALIZATION RENDERING ===

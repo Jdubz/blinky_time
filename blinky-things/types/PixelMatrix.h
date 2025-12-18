@@ -48,6 +48,7 @@ public:
     int getWidth() const { return width_; }
     int getHeight() const { return height_; }
     int getTotalPixels() const { return width_ * height_; }
+    bool isValid() const { return pixels_ != nullptr && width_ > 0 && height_ > 0; }
 
     // Pixel access
     RGB& getPixel(int x, int y);
