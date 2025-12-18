@@ -97,6 +97,7 @@ private:
 
     // State variables
     uint8_t* heat_;
+    uint8_t* tempHeat_;  // Pre-allocated temp buffer for heat propagation
 
     // Configuration
     FireParams params_;

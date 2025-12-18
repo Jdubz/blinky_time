@@ -33,10 +33,20 @@ PixelMatrix& PixelMatrix::operator=(const PixelMatrix& other) {
 }
 
 RGB& PixelMatrix::getPixel(int x, int y) {
+    // Bounds check to prevent buffer overflow
+    if (!isValidCoordinate(x, y)) {
+        // Return first pixel as safe fallback (avoids undefined behavior)
+        return pixels_[0];
+    }
     return pixels_[y * width_ + x];
 }
 
 const RGB& PixelMatrix::getPixel(int x, int y) const {
+    // Bounds check to prevent buffer overflow
+    if (!isValidCoordinate(x, y)) {
+        // Return first pixel as safe fallback (avoids undefined behavior)
+        return pixels_[0];
+    }
     return pixels_[y * width_ + x];
 }
 

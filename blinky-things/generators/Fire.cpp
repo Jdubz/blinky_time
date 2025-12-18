@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 Fire::Fire()
-    : heat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
+    : heat_(nullptr), tempHeat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
       prevHit_(0.0f), lastBurstMs_(0), inSuppression_(false),
       emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0) {
 }
@@ -11,6 +11,10 @@ Fire::~Fire() {
     if (heat_) {
         delete[] heat_;
         heat_ = nullptr;
+    }
+    if (tempHeat_) {
+        delete[] tempHeat_;
+        tempHeat_ = nullptr;
     }
     if (sparkPositions_) {
         delete[] sparkPositions_;
@@ -46,13 +50,35 @@ bool Fire::begin(const DeviceConfig& config) {
     // Allocate heat array
     if (heat_) delete[] heat_;
     heat_ = new uint8_t[this->numLeds_];
+    if (!heat_) {
+        Serial.println(F("ERROR: Failed to allocate heat buffer"));
+        return false;
+    }
     memset(heat_, 0, this->numLeds_);
 
     // Allocate spark positions for random layout
     if (sparkPositions_) delete[] sparkPositions_;
     sparkPositions_ = new uint8_t[params_.maxSparkPositions];
+    if (!sparkPositions_) {
+        Serial.println(F("ERROR: Failed to allocate spark positions"));
+        delete[] heat_;
+        heat_ = nullptr;
+        return false;
+    }
     memset(sparkPositions_, 0, params_.maxSparkPositions);
     numActivePositions_ = 0;
+
+    // Allocate temp buffer for heat propagation (avoids heap fragmentation)
+    if (tempHeat_) delete[] tempHeat_;
+    tempHeat_ = new uint8_t[this->numLeds_];
+    if (!tempHeat_) {
+        Serial.println(F("ERROR: Failed to allocate temp heat buffer"));
+        delete[] heat_;
+        delete[] sparkPositions_;
+        heat_ = nullptr;
+        sparkPositions_ = nullptr;
+        return false;
+    }
 
     this->lastUpdateMs_ = millis();
     return true;
@@ -189,8 +215,8 @@ void Fire::updateMatrixFire() {
 
 void Fire::updateLinearFire() {
     // Lateral heat propagation for linear arrangements
-    uint8_t* newHeat = new uint8_t[this->numLeds_];
-    memset(newHeat, 0, this->numLeds_);  // Start fresh - heat must spread or decay
+    // Use pre-allocated tempHeat_ to avoid heap fragmentation
+    memset(tempHeat_, 0, this->numLeds_);  // Start fresh - heat must spread or decay
 
     for (int i = 0; i < this->numLeds_; i++) {
         if (heat_[i] > 0) {
@@ -204,7 +230,7 @@ void Fire::updateLinearFire() {
             uint8_t decayedHeat = (uint8_t)(heat_[i] * decayRate);
 
             // Source pixel keeps decayed heat
-            newHeat[i] = max(newHeat[i], decayedHeat);
+            tempHeat_[i] = max(tempHeat_[i], decayedHeat);
 
             // Smaller spread for tighter sparks (only spread high heat)
             if (heat_[i] > 60) {
@@ -214,24 +240,23 @@ void Fire::updateLinearFire() {
                     uint8_t heatToSpread = decayedHeat * falloff;
 
                     if (i - spread >= 0) {
-                        newHeat[i - spread] = max(newHeat[i - spread], heatToSpread);
+                        tempHeat_[i - spread] = max(tempHeat_[i - spread], heatToSpread);
                     }
                     if (i + spread < this->numLeds_) {
-                        newHeat[i + spread] = max(newHeat[i + spread], heatToSpread);
+                        tempHeat_[i + spread] = max(tempHeat_[i + spread], heatToSpread);
                     }
                 }
             }
         }
     }
 
-    memcpy(heat_, newHeat, this->numLeds_);
-    delete[] newHeat;
+    memcpy(heat_, tempHeat_, this->numLeds_);
 }
 
 void Fire::updateRandomFire() {
     // Omnidirectional heat propagation for random/scattered layouts
-    uint8_t* newHeat = new uint8_t[this->numLeds_];
-    memcpy(newHeat, heat_, this->numLeds_);
+    // Use pre-allocated tempHeat_ to avoid heap fragmentation
+    memcpy(tempHeat_, heat_, this->numLeds_);
 
     for (int i = 0; i < this->numLeds_; i++) {
         if (heat_[i] > 0) {
@@ -253,15 +278,14 @@ void Fire::updateRandomFire() {
                         float falloff = 1.0f / (distance + 1);
                         uint8_t heatToSpread = spreadHeat * falloff;
 
-                        newHeat[targetIndex] = min(255, newHeat[targetIndex] + heatToSpread);
+                        tempHeat_[targetIndex] = min(255, tempHeat_[targetIndex] + heatToSpread);
                     }
                 }
             }
         }
     }
 
-    memcpy(heat_, newHeat, this->numLeds_);
-    delete[] newHeat;
+    memcpy(heat_, tempHeat_, this->numLeds_);
 }
 
 void Fire::generateSparks() {
@@ -304,7 +328,7 @@ void Fire::generateSparks() {
         int sparkPosition;
         switch (this->layout_) {
             case MATRIX_LAYOUT:
-                sparkPosition = random(this->width_ * params_.bottomRowsForSparks);
+                sparkPosition = random((uint32_t)this->width_ * params_.bottomRowsForSparks);
                 break;
             case LINEAR_LAYOUT:
                 sparkPosition = random(this->numLeds_);
