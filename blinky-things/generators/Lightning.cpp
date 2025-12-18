@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 Lightning::Lightning()
-    : intensity_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
+    : intensity_(nullptr), tempIntensity_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
       boltPositions_(nullptr), numActiveBolts_(0) {
 }
 
@@ -10,6 +10,10 @@ Lightning::~Lightning() {
     if (intensity_) {
         delete[] intensity_;
         intensity_ = nullptr;
+    }
+    if (tempIntensity_) {
+        delete[] tempIntensity_;
+        tempIntensity_ = nullptr;
     }
     if (boltPositions_) {
         delete[] boltPositions_;
@@ -26,11 +30,33 @@ bool Lightning::begin(const DeviceConfig& config) {
     // Allocate intensity array
     if (intensity_) delete[] intensity_;
     intensity_ = new uint8_t[numLeds_];
+    if (!intensity_) {
+        Serial.println(F("ERROR: Failed to allocate intensity buffer"));
+        return false;
+    }
     memset(intensity_, 0, numLeds_);
+
+    // Allocate temp buffer for bolt propagation (avoids heap fragmentation)
+    if (tempIntensity_) delete[] tempIntensity_;
+    tempIntensity_ = new uint8_t[numLeds_];
+    if (!tempIntensity_) {
+        Serial.println(F("ERROR: Failed to allocate temp intensity buffer"));
+        delete[] intensity_;
+        intensity_ = nullptr;
+        return false;
+    }
 
     // Allocate bolt positions for random layout
     if (boltPositions_) delete[] boltPositions_;
     boltPositions_ = new uint8_t[params_.maxBoltPositions];
+    if (!boltPositions_) {
+        Serial.println(F("ERROR: Failed to allocate bolt positions"));
+        delete[] intensity_;
+        delete[] tempIntensity_;
+        intensity_ = nullptr;
+        tempIntensity_ = nullptr;
+        return false;
+    }
     memset(boltPositions_, 0, params_.maxBoltPositions);
     numActiveBolts_ = 0;
 
@@ -211,8 +237,8 @@ void Lightning::createBranch(int startIndex, int direction, uint8_t intensity) {
 }
 
 void Lightning::propagateBolts() {
-    uint8_t* newIntensity = new uint8_t[numLeds_];
-    memcpy(newIntensity, intensity_, numLeds_);
+    // Use pre-allocated tempIntensity_ to avoid heap fragmentation
+    memcpy(tempIntensity_, intensity_, numLeds_);
 
     for (int i = 0; i < numLeds_; i++) {
         if (intensity_[i] > 50) { // Only propagate strong bolts
@@ -234,7 +260,7 @@ void Lightning::propagateBolts() {
                                 int newIndex = coordsToIndex(newX, newY);
                                 if (newIndex >= 0 && random(100) < 20) { // 20% propagation chance
                                     uint8_t propagatedIntensity = intensity_[i] / 3;
-                                    newIntensity[newIndex] = max(newIntensity[newIndex], propagatedIntensity);
+                                    tempIntensity_[newIndex] = max(tempIntensity_[newIndex], propagatedIntensity);
                                 }
                             }
                         }
@@ -245,11 +271,11 @@ void Lightning::propagateBolts() {
                     // Propagate along the line
                     if (i > 0 && random(100) < 30) {
                         uint8_t propagatedIntensity = intensity_[i] / 2;
-                        newIntensity[i - 1] = max(newIntensity[i - 1], propagatedIntensity);
+                        tempIntensity_[i - 1] = max(tempIntensity_[i - 1], propagatedIntensity);
                     }
                     if (i < numLeds_ - 1 && random(100) < 30) {
                         uint8_t propagatedIntensity = intensity_[i] / 2;
-                        newIntensity[i + 1] = max(newIntensity[i + 1], propagatedIntensity);
+                        tempIntensity_[i + 1] = max(tempIntensity_[i + 1], propagatedIntensity);
                     }
                     break;
 
@@ -258,7 +284,7 @@ void Lightning::propagateBolts() {
                     for (int j = max(0, i - 5); j <= min(numLeds_ - 1, i + 5); j++) {
                         if (j != i && random(100) < 15) { // 15% arc chance
                             uint8_t propagatedIntensity = intensity_[i] / 4;
-                            newIntensity[j] = max(newIntensity[j], propagatedIntensity);
+                            tempIntensity_[j] = max(tempIntensity_[j], propagatedIntensity);
                         }
                     }
                     break;
@@ -266,8 +292,7 @@ void Lightning::propagateBolts() {
         }
     }
 
-    memcpy(intensity_, newIntensity, numLeds_);
-    delete[] newIntensity;
+    memcpy(intensity_, tempIntensity_, numLeds_);
 }
 
 void Lightning::applyFade() {

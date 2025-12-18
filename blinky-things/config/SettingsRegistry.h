@@ -112,5 +112,6 @@ private:
     // Parse helpers
     static bool parseFloat(const char* str, float& out);
     static bool parseInt(const char* str, int32_t& out);
+    static bool parseUint32(const char* str, uint32_t& out);
     static bool parseBool(const char* str, bool& out);
 };

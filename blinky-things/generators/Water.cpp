@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 Water::Water()
-    : depth_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
+    : depth_(nullptr), tempDepth_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
       wavePositions_(nullptr), numActiveWaves_(0) {
 }
 
@@ -10,6 +10,10 @@ Water::~Water() {
     if (depth_) {
         delete[] depth_;
         depth_ = nullptr;
+    }
+    if (tempDepth_) {
+        delete[] tempDepth_;
+        tempDepth_ = nullptr;
     }
     if (wavePositions_) {
         delete[] wavePositions_;
@@ -26,11 +30,33 @@ bool Water::begin(const DeviceConfig& config) {
     // Allocate depth array
     if (depth_) delete[] depth_;
     depth_ = new uint8_t[numLeds_];
+    if (!depth_) {
+        Serial.println(F("ERROR: Failed to allocate depth buffer"));
+        return false;
+    }
     memset(depth_, 0, numLeds_);
+
+    // Allocate temp buffer for flow propagation (avoids heap fragmentation)
+    if (tempDepth_) delete[] tempDepth_;
+    tempDepth_ = new uint8_t[numLeds_];
+    if (!tempDepth_) {
+        Serial.println(F("ERROR: Failed to allocate temp depth buffer"));
+        delete[] depth_;
+        depth_ = nullptr;
+        return false;
+    }
 
     // Allocate wave positions for random layout
     if (wavePositions_) delete[] wavePositions_;
     wavePositions_ = new uint8_t[params_.maxWavePositions];
+    if (!wavePositions_) {
+        Serial.println(F("ERROR: Failed to allocate wave positions"));
+        delete[] depth_;
+        delete[] tempDepth_;
+        depth_ = nullptr;
+        tempDepth_ = nullptr;
+        return false;
+    }
     memset(wavePositions_, 0, params_.maxWavePositions);
     numActiveWaves_ = 0;
 
@@ -159,8 +185,8 @@ void Water::generateWaves() {
 }
 
 void Water::propagateFlow() {
-    uint8_t* newDepth = new uint8_t[numLeds_];
-    memcpy(newDepth, depth_, numLeds_);
+    // Use pre-allocated tempDepth_ to avoid heap fragmentation
+    memcpy(tempDepth_, depth_, numLeds_);
 
     for (int i = 0; i < numLeds_; i++) {
         if (depth_[i] > 0) {
@@ -174,8 +200,8 @@ void Water::propagateFlow() {
                     if (y < height_ - 1) {
                         int belowIndex = coordsToIndex(x, y + 1);
                         uint8_t flowAmount = depth_[i] / 4;
-                        newDepth[belowIndex] = min(255, newDepth[belowIndex] + flowAmount);
-                        newDepth[i] = max(0, newDepth[i] - flowAmount);
+                        tempDepth_[belowIndex] = min(255, tempDepth_[belowIndex] + flowAmount);
+                        tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                     }
                     break;
 
@@ -183,13 +209,13 @@ void Water::propagateFlow() {
                     // Flow in both directions
                     if (i > 0) {
                         uint8_t flowAmount = depth_[i] / 6;
-                        newDepth[i - 1] = min(255, newDepth[i - 1] + flowAmount);
-                        newDepth[i] = max(0, newDepth[i] - flowAmount);
+                        tempDepth_[i - 1] = min(255, tempDepth_[i - 1] + flowAmount);
+                        tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                     }
                     if (i < numLeds_ - 1) {
                         uint8_t flowAmount = depth_[i] / 6;
-                        newDepth[i + 1] = min(255, newDepth[i + 1] + flowAmount);
-                        newDepth[i] = max(0, newDepth[i] - flowAmount);
+                        tempDepth_[i + 1] = min(255, tempDepth_[i + 1] + flowAmount);
+                        tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                     }
                     break;
 
@@ -198,8 +224,8 @@ void Water::propagateFlow() {
                     for (int j = max(0, i - 3); j <= min(numLeds_ - 1, i + 3); j++) {
                         if (j != i) {
                             uint8_t flowAmount = depth_[i] / 12;
-                            newDepth[j] = min(255, newDepth[j] + flowAmount);
-                            newDepth[i] = max(0, newDepth[i] - flowAmount);
+                            tempDepth_[j] = min(255, tempDepth_[j] + flowAmount);
+                            tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                         }
                     }
                     break;
@@ -207,8 +233,7 @@ void Water::propagateFlow() {
         }
     }
 
-    memcpy(depth_, newDepth, numLeds_);
-    delete[] newDepth;
+    memcpy(depth_, tempDepth_, numLeds_);
 }
 
 void Water::applyFlow() {

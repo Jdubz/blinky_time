@@ -98,6 +98,14 @@ bool SettingsRegistry::parseInt(const char* str, int32_t& out) {
     return true;
 }
 
+bool SettingsRegistry::parseUint32(const char* str, uint32_t& out) {
+    char* end;
+    unsigned long val = strtoul(str, &end, 10);
+    if (end == str) return false;
+    out = (uint32_t)val;
+    return true;
+}
+
 bool SettingsRegistry::parseBool(const char* str, bool& out) {
     if (strcasecmp(str, "true") == 0 || strcasecmp(str, "on") == 0 ||
         strcasecmp(str, "yes") == 0 || strcmp(str, "1") == 0) {
@@ -136,11 +144,17 @@ bool SettingsRegistry::setValue(Setting* s, const char* valueStr) {
             *((uint16_t*)s->valuePtr) = (uint16_t)intVal;
             break;
 
-        case SettingType::UINT32:
-            if (!parseInt(valueStr, intVal)) return false;
-            intVal = constrain(intVal, (int32_t)s->minVal, (int32_t)s->maxVal);
-            *((uint32_t*)s->valuePtr) = (uint32_t)intVal;
+        case SettingType::UINT32: {
+            uint32_t uintVal;
+            if (!parseUint32(valueStr, uintVal)) return false;
+            // Use manual min/max to avoid signed/unsigned issues
+            uint32_t minU = (uint32_t)s->minVal;
+            uint32_t maxU = (uint32_t)s->maxVal;
+            if (uintVal < minU) uintVal = minU;
+            if (uintVal > maxU) uintVal = maxU;
+            *((uint32_t*)s->valuePtr) = uintVal;
             break;
+        }
 
         case SettingType::FLOAT:
             if (!parseFloat(valueStr, floatVal)) return false;

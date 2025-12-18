@@ -71,7 +71,8 @@ private:
     void createBranch(int startIndex, int direction, uint8_t intensity);
 
     // State variables
-    uint8_t* intensity_;  // Lightning intensity instead of heat
+    uint8_t* intensity_;      // Lightning intensity instead of heat
+    uint8_t* tempIntensity_;  // Pre-allocated temp buffer for bolt propagation
 
     // Configuration
     LightningParams params_;

@@ -6,23 +6,27 @@ Records audio metrics, visualizes the signal chain, and allows
 interactive parameter tuning to optimize kick/snare detection.
 
 Usage:
-  python audio_tuner.py record    - Record 30 seconds of data
-  python audio_tuner.py analyze   - Analyze and tune parameters
-  python audio_tuner.py apply     - Apply tuned parameters to device
+  python audio_tuner.py record              - Record 30 seconds of data
+  python audio_tuner.py analyze             - Analyze and tune parameters
+  python audio_tuner.py apply               - Apply tuned parameters to device
+  python audio_tuner.py --port COM5 record  - Use specific serial port
 """
 
 import serial
 import time
 import sys
 import json
+import argparse
+import os
 from datetime import datetime
 
-PORT = 'COM34'
+# Default port - can be overridden via CLI or environment variable
+DEFAULT_PORT = os.environ.get('BLINKY_PORT', 'COM34')
 BAUD = 115200
 DATA_FILE = 'audio_recording.json'
 
 class AudioRecorder:
-    def __init__(self, port=PORT, baud=BAUD):
+    def __init__(self, port=DEFAULT_PORT, baud=BAUD):
         self.port = port
         self.baud = baud
         self.data = []
@@ -471,7 +475,7 @@ class AudioAnalyzer:
 
 
 class DeviceController:
-    def __init__(self, port=PORT, baud=BAUD):
+    def __init__(self, port=DEFAULT_PORT, baud=BAUD):
         self.port = port
         self.baud = baud
 
@@ -514,27 +518,48 @@ class DeviceController:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__)
-        print("\nCommands:")
-        print("  record   - Record 30 seconds of audio data")
-        print("  analyze  - Analyze recording and find optimal params")
-        print("  timeline - Create visual timeline chart (requires matplotlib)")
-        print("  apply    - Apply recommended parameters to device")
-        print("  show     - Show current device parameters")
-        print("  live     - Live monitor with current settings")
+    parser = argparse.ArgumentParser(
+        description='Audio Tuner for Blinky Fire Effect',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Commands:
+  record   - Record audio data (default 30 seconds)
+  analyze  - Analyze recording and find optimal params
+  timeline - Create visual timeline chart (requires matplotlib)
+  apply    - Apply recommended parameters to device
+  show     - Show current device parameters
+  live     - Live monitor with current settings
+
+Examples:
+  python audio_tuner.py record
+  python audio_tuner.py --port COM5 record 60
+  python audio_tuner.py -p /dev/ttyUSB0 show
+'''
+    )
+    parser.add_argument('-p', '--port', default=DEFAULT_PORT,
+                        help=f'Serial port (default: {DEFAULT_PORT}, or set BLINKY_PORT env var)')
+    parser.add_argument('command', nargs='?', default='help',
+                        choices=['record', 'analyze', 'timeline', 'apply', 'show', 'live', 'help'],
+                        help='Command to execute')
+    parser.add_argument('args', nargs='*', help='Additional arguments (e.g., duration for record)')
+
+    args = parser.parse_args()
+
+    if args.command == 'help':
+        parser.print_help()
         return
 
-    cmd = sys.argv[1].lower()
+    cmd = args.command
+    port = args.port
 
     if cmd == 'record':
-        duration = int(sys.argv[2]) if len(sys.argv) > 2 else 30
-        recorder = AudioRecorder()
+        duration = int(args.args[0]) if args.args else 30
+        recorder = AudioRecorder(port=port)
         recorder.record(duration)
         recorder.save()
 
     elif cmd == 'analyze':
-        recorder = AudioRecorder()
+        recorder = AudioRecorder(port=port)
         recorder.load()
 
         analyzer = AudioAnalyzer(recorder.data)
@@ -558,10 +583,10 @@ def main():
         print(f"\nSaved recommendation to recommended_params.json")
 
     elif cmd == 'timeline':
-        recorder = AudioRecorder()
+        recorder = AudioRecorder(port=port)
         recorder.load()
         analyzer = AudioAnalyzer(recorder.data)
-        output = sys.argv[2] if len(sys.argv) > 2 else 'audio_timeline.png'
+        output = args.args[0] if args.args else 'audio_timeline.png'
         analyzer.timeline(output)
 
     elif cmd == 'apply':
@@ -569,23 +594,19 @@ def main():
             with open('recommended_params.json', 'r') as f:
                 params = json.load(f)
             print(f"Applying: {params}")
-            controller = DeviceController()
+            controller = DeviceController(port=port)
             controller.apply_params(params)
         except FileNotFoundError:
             print("No recommended_params.json found. Run 'analyze' first.")
 
     elif cmd == 'show':
-        controller = DeviceController()
+        controller = DeviceController(port=port)
         controller.get_current_params()
 
     elif cmd == 'live':
-        duration = int(sys.argv[2]) if len(sys.argv) > 2 else 60
-        recorder = AudioRecorder()
+        duration = int(args.args[0]) if args.args else 60
+        recorder = AudioRecorder(port=port)
         recorder.record(duration)
-
-    else:
-        print(f"Unknown command: {cmd}")
-        print("Use: record, analyze, apply, show, or live")
 
 
 if __name__ == '__main__':

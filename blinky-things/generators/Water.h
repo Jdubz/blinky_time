@@ -69,7 +69,8 @@ private:
     void indexToCoords(int index, int& x, int& y);
 
     // State variables
-    uint8_t* depth_;  // Water depth instead of heat
+    uint8_t* depth_;      // Water depth instead of heat
+    uint8_t* tempDepth_;  // Pre-allocated temp buffer for flow propagation
 
     // Configuration
     WaterParams params_;
