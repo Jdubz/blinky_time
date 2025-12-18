@@ -18,7 +18,8 @@
 #include "config/Constants.h"
 #include "config/Globals.h"
 #include "config/TotemDefaults.h"
-#include "config/ConfigStorage.h"  // Persistent settings storage
+#include "config/ConfigStorage.h"     // Persistent settings storage
+#include "config/SettingsRegistry.h"  // Settings abstraction layer
 
 // Core data types
 #include "types/PixelMatrix.h"
@@ -41,9 +42,9 @@
 // Input components
 // NOTE: Requires patched pinDefinitions.h with include guards (see docs/PLATFORM_FIX.md)
 #include "inputs/AdaptiveMic.h"
-// #include "inputs/SerialConsole.h"  // TODO: Update for new Generator architecture
-// #include "inputs/BatteryMonitor.h"  // TODO: Update for new Generator architecture
-// #include "inputs/IMUHelper.h"       // TODO: Update for new Generator architecture
+#include "inputs/BatteryMonitor.h"
+#include "inputs/IMUHelper.h"     // Compiles without LSM6DS3; define IMU_ENABLED to activate
+#include "inputs/SerialConsole.h"
 
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING

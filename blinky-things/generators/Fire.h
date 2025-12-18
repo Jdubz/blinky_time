@@ -67,13 +67,20 @@ public:
     // Parameter configuration
     void setParams(const FireParams& params);
     void resetToDefaults();
+    FireParams& getParams() { return params_; }
+    const FireParams& getParams() const { return params_; }
 
     // Individual parameter setters
     void setBaseCooling(uint8_t cooling);
     void setSparkParams(uint8_t heatMin, uint8_t heatMax, float chance);
     void setAudioParams(float sparkBoost, uint8_t heatBoostMax, int8_t coolingBias);
 
+    // Layout configuration (post-begin adjustments)
+    void setLayoutType(LayoutType layoutType);
+    void setOrientation(MatrixOrientation orientation);
+
 private:
+    MatrixOrientation orientation_ = HORIZONTAL;
     // Layout-specific heat propagation algorithms
     void updateMatrixFire();     // Traditional 2D upward propagation
     void updateLinearFire();     // 1D lateral propagation

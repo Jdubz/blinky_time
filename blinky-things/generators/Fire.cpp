@@ -23,6 +23,7 @@ bool Fire::begin(const DeviceConfig& config) {
     this->height_ = config.matrix.height;
     this->numLeds_ = this->width_ * this->height_;
     layout_ = config.matrix.layoutType;
+    orientation_ = config.matrix.orientation;
 
     // Apply fire parameters from device config
     params_.baseCooling = config.fireDefaults.baseCooling;
@@ -109,33 +110,32 @@ void Fire::setAudioInput(float energy, float hit) {
     audioHit_ = hit;
 }
 
-// TODO: These methods need to be added to Fire.h header
-// void Fire::setLayoutType(LayoutType layoutType) {
-//     this->layout_ = layoutType;
-//     // Adjust default parameters based on layout type
-//     switch (this->layout_) {
-//         case LINEAR_LAYOUT:
-//             params_.useMaxHeatOnly = true;
-//             params_.spreadDistance = 12;
-//             params_.heatDecay = 0.92f;
-//             break;
-//         case RANDOM_LAYOUT:
-//             params_.useMaxHeatOnly = false;
-//             params_.spreadDistance = 8;
-//             params_.heatDecay = 0.88f;
-//             break;
-//         case MATRIX_LAYOUT:
-//         default:
-//             params_.useMaxHeatOnly = false;
-//             params_.spreadDistance = 6;
-//             params_.heatDecay = 0.90f;
-//             break;
-//     }
-// }
+void Fire::setLayoutType(LayoutType layoutType) {
+    this->layout_ = layoutType;
+    // Adjust default parameters based on layout type
+    switch (this->layout_) {
+        case LINEAR_LAYOUT:
+            params_.useMaxHeatOnly = true;
+            params_.spreadDistance = 12;
+            params_.heatDecay = 0.92f;
+            break;
+        case RANDOM_LAYOUT:
+            params_.useMaxHeatOnly = false;
+            params_.spreadDistance = 8;
+            params_.heatDecay = 0.88f;
+            break;
+        case MATRIX_LAYOUT:
+        default:
+            params_.useMaxHeatOnly = false;
+            params_.spreadDistance = 6;
+            params_.heatDecay = 0.90f;
+            break;
+    }
+}
 
-// void Fire::setOrientation(MatrixOrientation orientation) {
-//     orientation_ = orientation;
-// }
+void Fire::setOrientation(MatrixOrientation orientation) {
+    orientation_ = orientation;
+}
 
 void Fire::setParams(const FireParams& params) {
     params_ = params;
@@ -143,8 +143,7 @@ void Fire::setParams(const FireParams& params) {
 
 void Fire::resetToDefaults() {
     params_ = FireParams();
-    // TODO: Re-enable when setLayoutType is added to header
-    // setLayoutType(this->layout_);  // Reapply layout-specific defaults
+    setLayoutType(this->layout_);  // Reapply layout-specific defaults
 }
 
 void Fire::propagateHeat() {
@@ -404,9 +403,22 @@ int Fire::coordsToIndex(int x, int y) {
         return -1;
     }
 
-    // Standard row-major order
-    // TODO: Add orientation support when orientation_ field is added to header
-    return y * this->width_ + x;
+    // Handle different orientations and wiring patterns
+    switch (orientation_) {
+        case VERTICAL:
+            // Zigzag pattern for vertical orientation
+            if (x % 2 == 0) {
+                // Even columns: top to bottom
+                return x * this->height_ + y;
+            } else {
+                // Odd columns: bottom to top
+                return x * this->height_ + (this->height_ - 1 - y);
+            }
+        case HORIZONTAL:
+        default:
+            // Standard row-major order
+            return y * this->width_ + x;
+    }
 }
 
 void Fire::indexToCoords(int index, int& x, int& y) {
@@ -415,10 +427,25 @@ void Fire::indexToCoords(int index, int& x, int& y) {
         return;
     }
 
-    // Standard row-major order
-    // TODO: Add orientation support when orientation_ field is added to header
-    x = index % this->width_;
-    y = index / this->width_;
+    switch (orientation_) {
+        case VERTICAL:
+            // Reverse of zigzag pattern
+            x = index / this->height_;
+            if (x % 2 == 0) {
+                // Even columns: top to bottom
+                y = index % this->height_;
+            } else {
+                // Odd columns: bottom to top
+                y = this->height_ - 1 - (index % this->height_);
+            }
+            break;
+        case HORIZONTAL:
+        default:
+            // Standard row-major order
+            x = index % this->width_;
+            y = index / this->width_;
+            break;
+    }
 }
 
 // Implement parameter setters

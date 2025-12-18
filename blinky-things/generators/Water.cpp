@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 Water::Water()
-    : depth_(nullptr), audioEnergy_(0.0f), audioHit_(false),
+    : depth_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
       wavePositions_(nullptr), numActiveWaves_(0) {
 }
 
@@ -63,7 +63,7 @@ void Water::reset() {
         memset(depth_, 0, numLeds_);
     }
     audioEnergy_ = 0.0f;
-    audioHit_ = false;
+    audioHit_ = 0.0f;
     numActiveWaves_ = 0;
 }
 
@@ -86,7 +86,7 @@ void Water::update() {
     }
 }
 
-void Water::setAudioInput(float energy, bool hit) {
+void Water::setAudioInput(float energy, float hit) {
     audioEnergy_ = energy;
     audioHit_ = hit;
 }
@@ -119,7 +119,7 @@ void Water::updateRandomWater() {
 void Water::generateWaves() {
     // Audio-reactive wave generation
     float waveProb = params_.waveChance;
-    if (audioHit_) {
+    if (audioHit_ > 0.5f) {
         waveProb += params_.audioWaveBoost;
     }
 

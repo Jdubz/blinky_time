@@ -1,7 +1,7 @@
 #pragma once
-#include "../generators/tests/UnifiedFireGeneratorTest.h"
-#include "../effects/hue-rotation/tests/HueRotationEffectTest.h"
-#include "../renderers/tests/EffectRendererTest.h"
+#include "../effects/tests/HueRotationEffectTest.h"
+#include "../effects/tests/GeneralEffectTests.h"
+#include "../render/tests/EffectRendererTest.h"
 
 /**
  * GeneratorTestRunner - Main test coordinator for all generator types

@@ -1,82 +1,122 @@
-#ifndef SERIAL_CONSOLE_H
-#define SERIAL_CONSOLE_H
+#pragma once
 
 #include <Arduino.h>
 #include <Adafruit_NeoPixel.h>
-#include "../generators/UnifiedFireGenerator.h"
+#include "../generators/Fire.h"
+#include "../config/SettingsRegistry.h"
 #include "../config/Globals.h"
 
-// Forward declarations to avoid circular includes
+// Forward declarations
 class ConfigStorage;
-class UnifiedFireGenerator;
+class Fire;
 class GeneratorTestRunner;
+class AdaptiveMic;
 
+/**
+ * SerialConsole - Interactive serial command interface
+ *
+ * Features:
+ * - Settings-based parameter tuning via SettingsRegistry
+ * - Debug output modes (mic, fire, IMU)
+ * - Visualization modes (IMU, battery, test pattern)
+ * - Configuration persistence
+ *
+ * Setting Commands (handled by SettingsRegistry):
+ *   set <name> <value>      - Set a parameter
+ *   get <name>              - Get current value
+ *   show                    - Show all settings
+ *   show <category>         - Show category (fire, audio, agc, debug)
+ *   settings                - Show all settings with descriptions
+ *
+ * Special Commands:
+ *   help                    - Show all available commands
+ *   version                 - Show version info
+ *   defaults                - Restore default values
+ *   save                    - Save settings to flash
+ *   load                    - Load settings from flash
+ *   reset                   - Factory reset
+ *
+ * Debug Commands:
+ *   mic stats               - Show mic statistics
+ *   fire stats              - Show fire statistics
+ *   battery stats           - Show battery statistics
+ *
+ * Visualization Commands:
+ *   imu viz on/off          - IMU orientation display
+ *   battery viz on/off      - Battery level display
+ *   test pattern on/off     - Test pattern display
+ *   fire disable/enable     - Disable fire for visualization
+ */
 class SerialConsole {
 public:
-    SerialConsole(UnifiedFireGenerator* fireGen, Adafruit_NeoPixel &leds);
+    SerialConsole(Fire* fireGen, AdaptiveMic* mic, Adafruit_NeoPixel& leds);
 
     void begin();
     void update();
-    void handleCommand(const char *cmd);
 
-    // Set config storage for parameter persistence
+    // External access
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
+    void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
+    SettingsRegistry& getSettings() { return settings_; }
 
-    // Set string fire effect for configuration (when using STRING_FIRE mode)
-    void setUnifiedFireGenerator(UnifiedFireGenerator* fireGen) { fireGenerator_ = fireGen; }
+    // Visualization rendering (called from main loop when enabled)
+    void renderIMUVisualization();
+    void renderTopVisualization();
+    void renderBatteryVisualization();
+    void renderTestPattern();
 
-    void restoreDefaults();
-    void printAll();
-    void renderIMUVisualization();        // IMU orientation visualization
-    void renderTopVisualization();        // Cylinder top column visualization
-    void renderBatteryVisualization();    // Battery charge level visualization
-    void renderTestPattern();             // RGB test pattern for layout verification
+    // Mode flags - public for main loop access
+    bool imuVizEnabled = false;
+    bool fireDisabled = false;
+    bool heatVizEnabled = false;
+    bool batteryVizEnabled = false;
+    bool testPatternEnabled = false;
 
 private:
-    // Helper function for consistent matrix mapping
+    void registerSettings();
+    void handleCommand(const char* cmd);
+    bool handleSpecialCommand(const char* cmd);
+    void printHelp();
+
+    // Callbacks for settings changes
+    static void onFireParamChanged();
+
+    // Debug/stats output
+    void micDebugTick();
+    void micDebugPrintLine();
+    void debugTick();
+    void imuDebugTick();
+    void printRawIMUData();
+    void printFireStats();
+    void printMicStats();
+    void printBatteryStats();
+    void printVersionInfo();
+    void restoreDefaults();
+
+    // Helpers
     int xyToPixelIndex(int x, int y);
 
-    // Helper for saving fire parameters to EEPROM
-    void saveFireParameterToEEPROM(const char* paramName);
+    // Members
+    Fire* fireGenerator_;
+    AdaptiveMic* mic_;
+    Adafruit_NeoPixel& leds_;
+    ConfigStorage* configStorage_;
+    GeneratorTestRunner* testRunner_;
+    SettingsRegistry settings_;
 
-public:
-    // IMU visualization mode
-    bool imuVizEnabled = false;          // Enable IMU visualization on matrix
-    bool fireDisabled = false;           // Disable fire when showing IMU viz
-    bool heatVizEnabled = false;         // Show cylinder top column visualization
+    // Debug state
+    bool micDebugEnabled_ = false;
+    bool debugEnabled_ = false;
+    bool imuDebugEnabled_ = false;
 
-    // Battery visualization mode
-    bool batteryVizEnabled = false;      // Enable battery charge visualization
+    uint32_t micDebugLastMs_ = 0;
+    uint32_t debugLastMs_ = 0;
+    uint32_t imuDebugLastMs_ = 0;
 
-    // Test pattern mode
-    bool testPatternEnabled = false;     // Enable test pattern for layout verification
+    uint16_t micDebugPeriodMs_ = 200;
+    uint16_t debugPeriodMs_ = 500;
+    uint16_t imuDebugPeriodMs_ = 200;
 
-
-private:
-    UnifiedFireGenerator* fireGenerator_; // Unified fire generator
-    Adafruit_NeoPixel &leds;
-    ConfigStorage* configStorage_;        // For saving parameters to EEPROM
-    GeneratorTestRunner* testRunner_;     // For running generator tests
-
-    // ---- Debug systems ----
-    bool micDebugEnabled = false;         // toggled by "mic debug on/off"
-    unsigned long micDebugPeriodMs = 200; // "mic debug rate <ms>"
-    unsigned long micDebugLastMs   = 0;
-
-    bool debugEnabled = false;            // General debug output
-    unsigned long debugPeriodMs = 500;    // General debug rate
-    unsigned long debugLastMs = 0;
-
-    bool imuDebugEnabled = false;         // Real-time IMU debug output
-    unsigned long imuDebugPeriodMs = 200; // IMU debug rate
-    unsigned long imuDebugLastMs = 0;
-
-    void micDebugTick();                  // periodic printer
-    void micDebugPrintLine();             // one line snapshot
-    void debugTick();                     // general debug output
-    void printFireStats();               // fire engine statistics
-    void imuDebugTick();                  // periodic IMU debug output
-    void printRawIMUData();               // one-time raw IMU snapshot
+    // Static instance pointer for callbacks
+    static SerialConsole* instance_;
 };
-
-#endif

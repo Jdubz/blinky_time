@@ -6,17 +6,16 @@
  * Arduino IDE doesn't automatically compile .cpp files in subdirectories.
  * This file includes all implementations to ensure they're compiled.
  *
- * CURRENT ARCHITECTURE STATUS:
- * ✅ Core: Inputs→Generator→Effect(optional)→Render pipeline operational
- * ✅ Fire: Realistic fire simulation (red/orange/yellow)
- * ✅ Water: Flowing water effects (blue/cyan)
- * ✅ Lightning: Electric bolt effects (yellow/white)
- * ✅ Effects: HueRotation (color cycling), NoOp (pass-through)
- * ✅ Testing: General effect tests for all effects
- * ✅ Hardware: AdaptiveMic and BatteryMonitor ready
- * ⚠️  IMUHelper: Disabled until LSM6DS3 library dependency resolved
- * ⚠️  SerialConsole: Disabled until updated for unified architecture
- * ✅ ConfigStorage: Flash persistence for settings (nRF52)
+ * ARCHITECTURE STATUS:
+ * ✅ Core: Generator→Effect(optional)→Render pipeline operational
+ * ✅ Fire: Layout-aware fire with orientation support
+ * ✅ Water: Flowing water effects (float hit interface)
+ * ✅ Lightning: Electric bolt effects (float hit interface)
+ * ✅ Effects: HueRotation, NoOp
+ * ✅ Hardware: AdaptiveMic, BatteryMonitor, SerialConsole
+ * ✅ ConfigStorage: Flash persistence (nRF52)
+ * ✅ SettingsRegistry: Unified settings management
+ * ⚠️  IMUHelper: Disabled (LSM6DS3 library dependency)
  */
 
 // Core data types
@@ -37,11 +36,12 @@
 // Input implementations
 #include "inputs/AdaptiveMic.cpp"
 #include "inputs/BatteryMonitor.cpp"
-// #include "inputs/IMUHelper.cpp"  // TODO: Enable when LSM6DS3 library is available
-// #include "inputs/SerialConsole.cpp"  // TODO: Update for unified fire generator
+#include "inputs/IMUHelper.cpp"     // Stub mode without LSM6DS3; define IMU_ENABLED to activate
+#include "inputs/SerialConsole.cpp"
 
 // Configuration implementations
-#include "config/ConfigStorage.cpp"  // Persistent settings storage
+#include "config/ConfigStorage.cpp"     // Persistent settings storage
+#include "config/SettingsRegistry.cpp"  // Settings abstraction layer
 
 // Test implementations (only when testing enabled)
 #ifdef ENABLE_TESTING

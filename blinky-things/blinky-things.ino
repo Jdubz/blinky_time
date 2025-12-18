@@ -63,9 +63,9 @@ EffectRenderer* renderer = nullptr;
 PixelMatrix* pixelMatrix = nullptr;
 
 AdaptiveMic mic;
-// === TEMPORARILY DISABLED (ready for future enablement) ===
-// SerialConsole console;        // TODO: Update for unified fire generator
-// BatteryMonitor battery;       // TODO: Update for new Generator architecture
+BatteryMonitor battery;
+// === TEMPORARILY DISABLED ===
+// SerialConsole console;        // TODO: Re-enable when IMU dependency resolved
 // IMUHelper imu;               // TODO: Enable when LSM6DS3 library is available
 ConfigStorage configStorage;    // Persistent settings storage
 
@@ -582,22 +582,18 @@ void setup() {
     Serial.println(F("Using default configuration"));
   }
 
-  // TODO: Uncomment when hardware components are updated for new architecture
+  // Initialize battery monitor
+  if (!battery.begin()) {
+    Serial.println(F("WARNING: Battery monitor failed to start"));
+  } else {
+    battery.setFastCharge(config.charging.fastChargeEnabled);
+    Serial.println(F("Battery monitor initialized"));
+  }
+
+  // TODO: Re-enable when dependencies resolved
   // console.begin();
-  // console.setConfigStorage(&configStorage); // Enable EEPROM saving for parameters
-
-  // if (!imu.begin()) {
-  //   Serial.println(F("WARNING: IMU initialization failed"));
-  // } else {
-  //   Serial.println(F("IMU initialized"));
-  // }
-
-  // if (!battery.begin()) {
-  //   Serial.println(F("WARNING: Battery monitor failed to start"));
-  // } else {
-  //   battery.setFastCharge(config.charging.fastChargeEnabled);
-  //   Serial.println(F("Battery monitor initialized"));
-  // }
+  // console.setConfigStorage(&configStorage);
+  // if (!imu.begin()) { Serial.println(F("WARNING: IMU initialization failed")); }
 
   Serial.println(F("Setup complete!"));
 }
@@ -619,28 +615,16 @@ void loop() {
   float energy = mic.getLevel();
   float hit = mic.getTransient();
 
-  // TODO: Uncomment when battery monitor is updated for new architecture
-  // Auto-activation of battery visualization when charging
-  // if (config.charging.autoShowVisualizationWhenCharging) {
-  //   bool currentChargingState = battery.isCharging();
-  //   if (currentChargingState && !prevChargingState) {
-  //     // Just started charging - auto-activate battery visualization and disable fire
-  //     console.batteryVizEnabled = true;
-  //     console.fireDisabled = true;
-  //     // Clear fire display immediately
-  //     clearAllLEDs();
-  //     leds.show();
-  //     Serial.println(F("Auto-activated battery visualization (charging detected)"));
-  //   } else if (!currentChargingState && prevChargingState) {
-  //     // Just stopped charging - auto-deactivate and re-enable fire
-  //     if (console.batteryVizEnabled) {
-  //       console.batteryVizEnabled = false;
-  //       console.fireDisabled = false;
-  //       Serial.println(F("Auto-deactivated battery visualization (charging stopped)"));
-  //     }
-  //   }
-  //   prevChargingState = currentChargingState;
-  // }
+  // Track charging state changes
+  bool currentChargingState = battery.isCharging();
+  if (currentChargingState != prevChargingState) {
+    if (currentChargingState) {
+      Serial.println(F("Charging started"));
+    } else {
+      Serial.println(F("Charging stopped"));
+    }
+    prevChargingState = currentChargingState;
+  }
 
   // Simplified rendering for new architecture - just fire effect for now
   showFireEffect();
@@ -651,20 +635,19 @@ void loop() {
   // Auto-save dirty settings to flash (debounced)
   configStorage.saveIfDirty(fireParams, mic);
 
-  // TODO: Uncomment when battery monitor is updated for new architecture
-  // Battery monitoring
-  // static uint32_t lastBatteryCheck = 0;
-  // if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) { // Check every 30 seconds
-  //   lastBatteryCheck = millis();
-  //   float voltage = battery.getVoltage();
-  //   if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
-  //     Serial.print(F("CRITICAL BATTERY: "));
-  //     Serial.print(voltage);
-  //     Serial.println(F("V"));
-  //   } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
-  //     Serial.print(F("Low battery: "));
-  //     Serial.print(voltage);
-  //     Serial.println(F("V"));
-  //   }
-  // }
+  // Battery monitoring - periodic voltage check
+  static uint32_t lastBatteryCheck = 0;
+  if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+    lastBatteryCheck = millis();
+    float voltage = battery.getVoltage();
+    if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
+      Serial.print(F("CRITICAL BATTERY: "));
+      Serial.print(voltage);
+      Serial.println(F("V"));
+    } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
+      Serial.print(F("Low battery: "));
+      Serial.print(voltage);
+      Serial.println(F("V"));
+    }
+  }
 }

@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 Lightning::Lightning()
-    : intensity_(nullptr), audioEnergy_(0.0f), audioHit_(false),
+    : intensity_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
       boltPositions_(nullptr), numActiveBolts_(0) {
 }
 
@@ -63,7 +63,7 @@ void Lightning::reset() {
         memset(intensity_, 0, numLeds_);
     }
     audioEnergy_ = 0.0f;
-    audioHit_ = false;
+    audioHit_ = 0.0f;
     numActiveBolts_ = 0;
 }
 
@@ -86,7 +86,7 @@ void Lightning::update() {
     }
 }
 
-void Lightning::setAudioInput(float energy, bool hit) {
+void Lightning::setAudioInput(float energy, float hit) {
     audioEnergy_ = energy;
     audioHit_ = hit;
 }
@@ -119,7 +119,7 @@ void Lightning::updateRandomLightning() {
 void Lightning::generateBolts() {
     // Audio-reactive bolt generation
     float boltProb = params_.boltChance;
-    if (audioHit_) {
+    if (audioHit_ > 0.5f) {
         boltProb += params_.audioBoltBoost;
     }
 

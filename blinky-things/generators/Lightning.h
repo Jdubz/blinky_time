@@ -44,7 +44,7 @@ public:
 
     // Lightning specific methods
     void update();
-    void setAudioInput(float energy, bool hit);
+    void setAudioInput(float energy, float hit);
 
     // Parameter configuration
     void setParams(const LightningParams& params);
@@ -78,7 +78,7 @@ private:
 
     // Audio input
     float audioEnergy_;
-    bool audioHit_;
+    float audioHit_;
 
     // Layout-specific state
     uint8_t* boltPositions_;   // For random layout bolt tracking

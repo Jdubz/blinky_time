@@ -43,7 +43,7 @@ public:
 
     // Water specific methods
     void update();
-    void setAudioInput(float energy, bool hit);
+    void setAudioInput(float energy, float hit);
 
     // Parameter configuration
     void setParams(const WaterParams& params);
@@ -76,7 +76,7 @@ private:
 
     // Audio input
     float audioEnergy_;
-    bool audioHit_;
+    float audioHit_;
 
     // Layout-specific state
     uint8_t* wavePositions_;   // For random layout wave tracking
