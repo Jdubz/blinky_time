@@ -21,7 +21,7 @@ private:
     float normalizeHue(float hue) const;
 
 public:
-    HueRotationEffect(float initialHueShift = 0.0f, float rotationSpeed = 0.0f);
+    explicit HueRotationEffect(float initialHueShift = 0.0f, float rotationSpeed = 0.0f);
     virtual ~HueRotationEffect() = default;
 
     // Effect interface
