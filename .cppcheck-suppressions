@@ -1,25 +1,55 @@
 # Cppcheck suppressions for Arduino/embedded projects
 # See: https://cppcheck.sourceforge.io/manual.html#suppressions
 
-# Arduino framework functions (setup/loop not called from our code)
+# ============================================
+# Arduino framework patterns
+# ============================================
+
+# Arduino ISR callbacks and setup/loop (called by framework, not our code)
 unusedFunction:*setup*
 unusedFunction:*loop*
-
-# Arduino ISR callbacks (called by hardware, not our code)
 unusedFunction:*ISR*
 unusedFunction:*onPDMdata*
 unusedFunction:*callback*
 
-# Arduino-specific patterns
+# Arduino-specific includes
 missingIncludeSystem
-noExplicitConstructor
 
-# Embedded-specific: volatile variables may appear unused
-unusedVariable:*volatile*
+# ============================================
+# Embedded C++ patterns (acceptable in this context)
+# ============================================
 
-# False positives on Arduino String class
-passedByValue:*String*
+# C-style casts are common and acceptable in embedded for type punning
+cstyleCast
 
-# Suppress warnings in test files
+# memset on structs with floats is intentional for zero-initialization
+memsetClassFloat
+
+# Unused private functions may be conditionally compiled or for future use
+unusedPrivateFunction
+
+# Variables that "could be const" - often intentional for embedded flexibility
+constVariablePointer
+constVariable
+
+# Scope reduction suggestions - embedded code often pre-declares for performance
+variableScope
+
+# Uninitialized members - embedded code often initializes in begin() not constructor
+uninitMemberVar
+uninitMemberVarPrivate
+
+# ============================================
+# Conditional compilation artifacts
+# ============================================
+
+# IMU code has conditions that are always true/false when IMU_ENABLED is not defined
+knownConditionTrueFalse:*IMUHelper*
+
+# ============================================
+# Directories to skip
+# ============================================
+
 *:*/tests/*
 *:*/archive/*
+*:*/examples/*

@@ -32,6 +32,14 @@ jobs:
         arduino-cli config init
         arduino-cli config add board_manager.additional_urls https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json
 
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install adafruit-nrfutil
+      run: pip install adafruit-nrfutil
+
     - name: Install board package and libraries
       run: |
         arduino-cli core update-index
