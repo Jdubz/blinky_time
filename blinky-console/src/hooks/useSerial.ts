@@ -58,7 +58,11 @@ export function useSerial(): UseSerialReturn {
       type,
       message
     };
-    setConsoleLog(prev => [...prev.slice(-200), entry]); // Keep last 200 entries
+    // Keep last 200 entries - only slice when limit exceeded
+    setConsoleLog(prev => {
+      const newLog = [...prev, entry];
+      return newLog.length > 200 ? newLog.slice(-200) : newLog;
+    });
   }, []);
 
   // Group settings by category - memoized to prevent recalculation on every render

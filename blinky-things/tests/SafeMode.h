@@ -30,6 +30,7 @@ namespace SafeMode {
     static constexpr uint32_t BLINK_INTERVAL_MS = 200; // LED blink rate in safe mode
 
     // Magic value to detect valid boot counter (not random RAM)
+    // Reads as "BOOT CODE" in hex - helps identify valid data vs uninitialized RAM
     static constexpr uint32_t MAGIC = 0xB007C0DE;
 
     // Boot counter structure - placed in no-init RAM section

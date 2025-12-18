@@ -259,7 +259,7 @@ namespace SafetyTest {
 
             // Halt forever - do NOT allow unsafe write
             while (1) {
-                delay(1000);
+                delay(10000);  // Long delay to minimize CPU wakeups and power usage
             }
         }
     }

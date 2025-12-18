@@ -132,6 +132,7 @@ class SerialService {
       }
     } catch (error) {
       console.error('Error disconnecting:', error);
+      this.emit({ type: 'error', error: error as Error });
     }
 
     this.emit({ type: 'disconnected' });

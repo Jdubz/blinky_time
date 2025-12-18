@@ -65,7 +65,7 @@ PixelMatrix* pixelMatrix = nullptr;
 
 AdaptiveMic mic;
 BatteryMonitor battery;
-IMUHelper imu;                     // IMU sensor interface (stub mode if LSM6DS3 not installed)
+IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
 
@@ -307,7 +307,7 @@ void setup() {
   }
 
   // Initialize serial console for interactive settings management
-  // Note: fireGen already declared above when creating Fire generator
+  // Uses fireGen created on line 240 for direct parameter access
   console = new(std::nothrow) SerialConsole(fireGen, &mic, leds);
   if (!console) {
     Serial.println(F("ERROR: SerialConsole allocation failed"));

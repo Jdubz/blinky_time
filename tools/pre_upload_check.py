@@ -149,7 +149,7 @@ def validate_safety(hex_data: dict, verbose: bool = True) -> list:
 
     min_addr = hex_data['min_addr']
     max_addr = hex_data['max_addr']
-    total_bytes = hex_data['total_bytes']
+    # Note: total_bytes available in hex_data but not needed for validation
 
     # Check 1: Minimum address (CRITICAL)
     if min_addr < ABSOLUTE_MIN_ADDRESS:
@@ -407,7 +407,7 @@ def run_self_test():
         'segments': [0x10000]
     }
     try:
-        results = validate_safety(dangerous_data, verbose=False)
+        validate_safety(dangerous_data, verbose=False)  # Should raise
         print("  [FAIL] Dangerous firmware should have raised SafetyError")
         tests_failed += 1
     except SafetyError:
@@ -424,7 +424,7 @@ def run_self_test():
         'segments': [0x20000]
     }
     try:
-        results = validate_safety(overflow_data, verbose=False)
+        validate_safety(overflow_data, verbose=False)  # Should raise
         print("  [FAIL] Flash overflow should have raised SafetyError")
         tests_failed += 1
     except SafetyError:
@@ -441,7 +441,7 @@ def run_self_test():
         'segments': [0x0]
     }
     try:
-        results = validate_safety(low_data, verbose=False)
+        validate_safety(low_data, verbose=False)  # Should raise
         print("  [FAIL] Low address should have raised SafetyError")
         tests_failed += 1
     except SafetyError:
