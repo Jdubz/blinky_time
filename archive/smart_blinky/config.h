@@ -1,13 +1,15 @@
+// NOTICE: This is archived/legacy code. Do not use in production.
+// Credentials have been sanitized. Replace with your own values if testing.
 
 #define MQTT_ID "Blinky-time"
 
-#define MQTT_USERNAME     "mqtt"
-#define MQTT_PASSWORD     "broker"
-#define MQTT_SERVER       "192.168.86.23"
+#define MQTT_USERNAME     "your_mqtt_username"
+#define MQTT_PASSWORD     "your_mqtt_password"
+#define MQTT_SERVER       "192.168.1.100"
 #define MQTT_SERVER_PORT  1883
 
-#define DEFAULT_SSID "mooseherd"
-#define DEFAULT_PW "fuzzyantlers9408"
+#define DEFAULT_SSID "your_wifi_ssid"
+#define DEFAULT_PW "your_wifi_password"
 
 #define MQTT_CONFIG_TOPIC_TEMPLATE  "%s/light/%s/config"
 
