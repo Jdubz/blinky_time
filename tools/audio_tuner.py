@@ -15,7 +15,6 @@ import serial
 import time
 import sys
 import json
-import os
 from datetime import datetime
 
 PORT = 'COM34'
@@ -85,17 +84,14 @@ class AudioRecorder:
                     elif key == 'gain':
                         sample['gain'] = float(val)
             return sample if 'energy' in sample else None
-        except:
+        except Exception:
             return None
 
     def _print_progress(self, sample):
         """Print live progress indicator."""
         bar_len = 30
         energy_bar = int(sample.get('energy', 0) * bar_len)
-        hit_bar = int(sample.get('hit', 0) * bar_len)
-
         energy_str = '#' * energy_bar + '-' * (bar_len - energy_bar)
-        hit_str = '#' * hit_bar + '-' * (bar_len - hit_bar)
 
         thresh = sample.get('threshold', 0)
         above = sample.get('energy', 0) > thresh
