@@ -48,6 +48,11 @@ export interface SerialEvent {
 
 export type SerialEventCallback = (event: SerialEvent) => void;
 
+// Constants for safety limits
+const MAX_BUFFER_SIZE = 4096;  // Max buffer size before truncation
+const MAX_COMMAND_LENGTH = 128;  // Max command length to send
+const ALLOWED_COMMAND_PATTERN = /^[a-zA-Z0-9_\-.\s]+$/;  // Alphanumeric + basic chars
+
 class SerialService {
   private port: SerialPort | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -137,14 +142,33 @@ class SerialService {
     return this.port !== null && this.writer !== null;
   }
 
-  // Send a command
+  // Validate command before sending
+  private validateCommand(command: string): string {
+    // Trim and limit length
+    let sanitized = command.trim().substring(0, MAX_COMMAND_LENGTH);
+
+    // Check for allowed characters (alphanumeric, spaces, basic punctuation)
+    if (!ALLOWED_COMMAND_PATTERN.test(sanitized)) {
+      // Remove any control characters or special chars
+      sanitized = sanitized.replace(/[^\w\s.\-]/g, '');
+    }
+
+    return sanitized;
+  }
+
+  // Send a command (with validation)
   async send(command: string): Promise<void> {
     if (!this.writer) {
       throw new Error('Not connected');
     }
 
+    const sanitized = this.validateCommand(command);
+    if (!sanitized) {
+      throw new Error('Invalid command');
+    }
+
     const encoder = new TextEncoder();
-    const data = encoder.encode(command + '\n');
+    const data = encoder.encode(sanitized + '\n');
     await this.writer.write(data);
   }
 
@@ -249,6 +273,12 @@ class SerialService {
 
         const text = decoder.decode(value);
         this.buffer += text;
+
+        // Prevent unbounded buffer growth - truncate if too large
+        if (this.buffer.length > MAX_BUFFER_SIZE) {
+          // Keep only the last portion that might contain complete data
+          this.buffer = this.buffer.substring(this.buffer.length - MAX_BUFFER_SIZE / 2);
+        }
 
         // Process complete lines
         const lines = this.buffer.split('\n');

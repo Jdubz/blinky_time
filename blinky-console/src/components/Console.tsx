@@ -1,6 +1,23 @@
 import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { ConsoleEntry } from '../types';
 
+// Constants for console safety
+const MAX_MESSAGE_LENGTH = 500;  // Truncate long messages
+
+// Sanitize message: strip control chars, limit length
+function sanitizeMessage(message: string): string {
+  // Remove control characters (except newline/tab which are fine)
+  // eslint-disable-next-line no-control-regex
+  let sanitized = message.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+
+  // Limit length
+  if (sanitized.length > MAX_MESSAGE_LENGTH) {
+    sanitized = sanitized.substring(0, MAX_MESSAGE_LENGTH) + '...';
+  }
+
+  return sanitized;
+}
+
 interface ConsoleProps {
   entries: ConsoleEntry[];
   onSendCommand: (command: string) => void;
@@ -104,7 +121,7 @@ export function Console({ entries, onSendCommand, onClear, disabled }: ConsolePr
           <div key={entry.id} className={`console-entry ${getEntryClass(entry.type)}`}>
             <span className="console-time">{formatTime(entry.timestamp)}</span>
             <span className="console-prefix">{getEntryPrefix(entry.type)}</span>
-            <span className="console-message">{entry.message}</span>
+            <span className="console-message">{sanitizeMessage(entry.message)}</span>
           </div>
         ))}
         <div ref={logEndRef} />

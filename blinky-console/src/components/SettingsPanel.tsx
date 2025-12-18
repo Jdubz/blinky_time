@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import { DeviceSetting, SettingsByCategory } from '../types';
 
 interface SettingsPanelProps {
@@ -19,6 +19,15 @@ interface SettingControlProps {
 
 function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Cleanup timeout on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
 
   const handleChange = useCallback((value: number | boolean) => {
     // Debounce changes to avoid flooding serial

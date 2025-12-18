@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { serialService, SerialEvent } from '../services/serial';
 import {
   DeviceInfo,
@@ -61,13 +61,13 @@ export function useSerial(): UseSerialReturn {
     setConsoleLog(prev => [...prev.slice(-200), entry]); // Keep last 200 entries
   }, []);
 
-  // Group settings by category
-  const settingsByCategory: SettingsByCategory = settings.reduce((acc, setting) => {
+  // Group settings by category - memoized to prevent recalculation on every render
+  const settingsByCategory = useMemo(() => settings.reduce((acc, setting) => {
     const cat = setting.cat || 'other';
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(setting);
     return acc;
-  }, {} as SettingsByCategory);
+  }, {} as SettingsByCategory), [settings]);
 
   // Handle serial events
   useEffect(() => {

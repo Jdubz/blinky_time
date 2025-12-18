@@ -136,6 +136,10 @@ void SerialConsole::update() {
     if (Serial.available()) {
         static char buf[128];
         size_t len = Serial.readBytesUntil('\n', buf, sizeof(buf) - 1);
+        // Explicit bounds check for safety
+        if (len >= sizeof(buf)) {
+            len = sizeof(buf) - 1;
+        }
         buf[len] = '\0';
         // Trim CR/LF
         while (len > 0 && (buf[len-1] == '\r' || buf[len-1] == '\n')) {

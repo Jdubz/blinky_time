@@ -14,16 +14,40 @@ REM 3. Instructs user to upload via Arduino IDE
 
 setlocal enabledelayedexpansion
 
-set ARDUINO_CLI=D:\Development\Arduino\arduino-cli.exe
-set FQBN=Seeeduino:mbed:xiaonRF52840Sense
-set SKETCH_DIR=D:\Development\Arduino\blinky_time\blinky-things
-set HEX_FILE=%SKETCH_DIR%\build\Seeeduino.mbed.xiaonRF52840Sense\blinky-things.ino.hex
-set TOOLS_DIR=D:\Development\Arduino\blinky_time\tools
+REM --- CONFIGURATION ---
+set "FQBN=Seeeduino:mbed:xiaonRF52840Sense"
+
+REM --- SCRIPT LOGIC (should not need changes) ---
+REM Get the directory of this script
+set "SCRIPT_DIR=%~dp0"
+REM Go up one level to the repo root
+for %%i in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fi"
+
+set "SKETCH_DIR=%REPO_ROOT%\blinky-things"
+set "TOOLS_DIR=%REPO_ROOT%\tools"
+
+REM Convert FQBN to path format for build directory (replace : with .)
+set "FQBN_PATH=%FQBN::=.%"
+set "HEX_FILE=%SKETCH_DIR%\build\%FQBN_PATH%\blinky-things.ino.hex"
+
+REM Find arduino-cli in PATH
+set "ARDUINO_CLI="
+for %%i in (arduino-cli.exe) do set "ARDUINO_CLI=%%~$PATH:i"
+if not defined ARDUINO_CLI (
+    echo ERROR: arduino-cli.exe not found in your system PATH.
+    echo Please install it and add it to your PATH, or set ARDUINO_CLI manually.
+    echo.
+    echo Installation: https://arduino.github.io/arduino-cli/installation/
+    exit /b 1
+)
 
 echo.
 echo ============================================================
 echo   SAFE BUILD - Blinky Things
 echo ============================================================
+echo.
+echo Using arduino-cli: %ARDUINO_CLI%
+echo Sketch: %SKETCH_DIR%
 echo.
 
 REM Step 1: Compile

@@ -1,5 +1,6 @@
 #include "PixelMatrix.h"
 #include <Arduino.h>
+#include <string.h>  // For memcpy
 
 PixelMatrix::PixelMatrix(int width, int height)
     : width_(width), height_(height), pixels_(nullptr) {
@@ -25,16 +26,19 @@ PixelMatrix::~PixelMatrix() {
 
 PixelMatrix::PixelMatrix(const PixelMatrix& other)
     : width_(other.width_), height_(other.height_), pixels_(nullptr) {
-    if (width_ > 0 && height_ > 0) {
+    if (other.isValid()) {
         pixels_ = new(std::nothrow) RGB[width_ * height_];
-        if (pixels_ && other.pixels_) {
-            for (int i = 0; i < width_ * height_; i++) {
-                pixels_[i] = other.pixels_[i];
-            }
-        } else if (!pixels_) {
+        if (pixels_) {
+            memcpy(pixels_, other.pixels_, sizeof(RGB) * width_ * height_);
+        } else {
+            // Allocation failed, mark as invalid
             width_ = 0;
             height_ = 0;
         }
+    } else {
+        // Source was invalid, so this object is also invalid
+        width_ = 0;
+        height_ = 0;
     }
 }
 
@@ -44,41 +48,45 @@ PixelMatrix& PixelMatrix::operator=(const PixelMatrix& other) {
         pixels_ = nullptr;
         width_ = other.width_;
         height_ = other.height_;
-        if (width_ > 0 && height_ > 0) {
+        if (other.isValid()) {
             pixels_ = new(std::nothrow) RGB[width_ * height_];
-            if (pixels_ && other.pixels_) {
-                for (int i = 0; i < width_ * height_; i++) {
-                    pixels_[i] = other.pixels_[i];
-                }
-            } else if (!pixels_) {
+            if (pixels_) {
+                memcpy(pixels_, other.pixels_, sizeof(RGB) * width_ * height_);
+            } else {
+                // Allocation failed, mark as invalid
                 width_ = 0;
                 height_ = 0;
             }
+        } else {
+            // Source was invalid, so this object is also invalid
+            width_ = 0;
+            height_ = 0;
         }
     }
     return *this;
 }
 
 RGB& PixelMatrix::getPixel(int x, int y) {
-    // Bounds check to prevent buffer overflow
-    if (!isValidCoordinate(x, y)) {
-        // Return first pixel as safe fallback (avoids undefined behavior)
-        return pixels_[0];
+    // Static fallback for invalid access - prevents undefined behavior
+    static RGB fallback;
+    if (!pixels_ || !isValidCoordinate(x, y)) {
+        fallback = RGB(0, 0, 0);  // Reset to black on each invalid access
+        return fallback;
     }
     return pixels_[y * width_ + x];
 }
 
 const RGB& PixelMatrix::getPixel(int x, int y) const {
-    // Bounds check to prevent buffer overflow
-    if (!isValidCoordinate(x, y)) {
-        // Return first pixel as safe fallback (avoids undefined behavior)
-        return pixels_[0];
+    // Static fallback for invalid access - prevents undefined behavior
+    static RGB fallback;
+    if (!pixels_ || !isValidCoordinate(x, y)) {
+        return fallback;
     }
     return pixels_[y * width_ + x];
 }
 
 void PixelMatrix::setPixel(int x, int y, const RGB& color) {
-    if (isValidCoordinate(x, y)) {
+    if (pixels_ && isValidCoordinate(x, y)) {
         pixels_[y * width_ + x] = color;
     }
 }
