@@ -1,4 +1,5 @@
 #include "ConfigStorage.h"
+#include "../tests/SafetyTest.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -20,10 +21,22 @@ void ConfigStorage::begin() {
         flashAddr = flash.get_flash_start() + flash.get_flash_size() - 4096;
         Serial.print(F("[CONFIG] Flash at 0x")); Serial.println(flashAddr, HEX);
 
-        if (loadFromFlash()) {
-            Serial.println(F("[CONFIG] Loaded from flash"));
-            valid_ = true;
-            return;
+        // CRITICAL: Validate flash address before ANY operations
+        // This prevents bootloader corruption
+        if (!SafetyTest::isFlashAddressSafe(flashAddr, 4096)) {
+            Serial.println(F("[CONFIG] !!! UNSAFE FLASH ADDRESS DETECTED !!!"));
+            Serial.print(F("[CONFIG] Address 0x")); Serial.print(flashAddr, HEX);
+            Serial.println(F(" is in protected region"));
+            Serial.println(F("[CONFIG] Flash operations DISABLED for safety"));
+            flashOk = false;  // Disable all flash operations
+        } else {
+            Serial.println(F("[CONFIG] Flash address validated OK"));
+
+            if (loadFromFlash()) {
+                Serial.println(F("[CONFIG] Loaded from flash"));
+                valid_ = true;
+                return;
+            }
         }
     }
 #endif
@@ -85,10 +98,14 @@ void ConfigStorage::saveToFlash() {
         return;
     }
 
+    // CRITICAL: Double-check flash address safety before EVERY write
+    // This is the last line of defense against bootloader corruption
+    uint32_t sectorSize = flash.get_sector_size(flashAddr);
+    SafetyTest::assertFlashSafe(flashAddr, sectorSize);
+
     data_.magic = MAGIC_NUMBER;
     data_.version = CONFIG_VERSION;
 
-    uint32_t sectorSize = flash.get_sector_size(flashAddr);
     if (flash.erase(flashAddr, sectorSize) != 0) {
         Serial.println(F("[CONFIG] Erase failed"));
         return;

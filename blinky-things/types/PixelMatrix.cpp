@@ -2,9 +2,21 @@
 #include <Arduino.h>
 
 PixelMatrix::PixelMatrix(int width, int height)
-    : width_(width), height_(height) {
-    pixels_ = new RGB[width * height];
-    clear();
+    : width_(width), height_(height), pixels_(nullptr) {
+    if (width <= 0 || height <= 0) {
+        width_ = 0;
+        height_ = 0;
+        return;
+    }
+    pixels_ = new(std::nothrow) RGB[width * height];
+    if (pixels_) {
+        clear();
+    } else {
+        // Allocation failed - set dimensions to 0 to indicate invalid state
+        width_ = 0;
+        height_ = 0;
+        Serial.println(F("[ERROR] PixelMatrix allocation failed!"));
+    }
 }
 
 PixelMatrix::~PixelMatrix() {
@@ -12,21 +24,36 @@ PixelMatrix::~PixelMatrix() {
 }
 
 PixelMatrix::PixelMatrix(const PixelMatrix& other)
-    : width_(other.width_), height_(other.height_) {
-    pixels_ = new RGB[width_ * height_];
-    for (int i = 0; i < width_ * height_; i++) {
-        pixels_[i] = other.pixels_[i];
+    : width_(other.width_), height_(other.height_), pixels_(nullptr) {
+    if (width_ > 0 && height_ > 0) {
+        pixels_ = new(std::nothrow) RGB[width_ * height_];
+        if (pixels_ && other.pixels_) {
+            for (int i = 0; i < width_ * height_; i++) {
+                pixels_[i] = other.pixels_[i];
+            }
+        } else if (!pixels_) {
+            width_ = 0;
+            height_ = 0;
+        }
     }
 }
 
 PixelMatrix& PixelMatrix::operator=(const PixelMatrix& other) {
     if (this != &other) {
         delete[] pixels_;
+        pixels_ = nullptr;
         width_ = other.width_;
         height_ = other.height_;
-        pixels_ = new RGB[width_ * height_];
-        for (int i = 0; i < width_ * height_; i++) {
-            pixels_[i] = other.pixels_[i];
+        if (width_ > 0 && height_ > 0) {
+            pixels_ = new(std::nothrow) RGB[width_ * height_];
+            if (pixels_ && other.pixels_) {
+                for (int i = 0; i < width_ * height_; i++) {
+                    pixels_[i] = other.pixels_[i];
+                }
+            } else if (!pixels_) {
+                width_ = 0;
+                height_ = 0;
+            }
         }
     }
     return *this;
@@ -61,12 +88,14 @@ void PixelMatrix::setPixel(int x, int y, uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void PixelMatrix::clear() {
+    if (!pixels_) return;
     for (int i = 0; i < width_ * height_; i++) {
         pixels_[i] = RGB(0, 0, 0);
     }
 }
 
 void PixelMatrix::fill(const RGB& color) {
+    if (!pixels_) return;
     for (int i = 0; i < width_ * height_; i++) {
         pixels_[i] = color;
     }

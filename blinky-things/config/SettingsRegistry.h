@@ -91,6 +91,10 @@ public:
     void printCategory(const char* category);  // Print settings in category
     void printHelp();                          // Print help with all commands
     void printValue(const char* name);         // Print single value
+    void printSettingsJson();                  // Print all settings as JSON (for UI)
+
+    // Type name helper (for JSON output)
+    static const char* typeString(SettingType t);
 
     // Utility
     Setting* findSetting(const char* name);

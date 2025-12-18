@@ -475,3 +475,72 @@ void SettingsRegistry::printHelp() {
         }
     }
 }
+
+const char* SettingsRegistry::typeString(SettingType t) {
+    switch (t) {
+        case SettingType::UINT8:  return "uint8";
+        case SettingType::INT8:   return "int8";
+        case SettingType::UINT16: return "uint16";
+        case SettingType::UINT32: return "uint32";
+        case SettingType::FLOAT:  return "float";
+        case SettingType::BOOL:   return "bool";
+        default:                  return "unknown";
+    }
+}
+
+void SettingsRegistry::printSettingsJson() {
+    Serial.print(F("{\"settings\":["));
+
+    for (uint8_t i = 0; i < numSettings_; i++) {
+        if (i > 0) Serial.print(',');
+
+        const Setting& s = settings_[i];
+
+        Serial.print(F("{\"name\":\""));
+        Serial.print(s.name);
+        Serial.print(F("\",\"value\":"));
+
+        // Print value based on type
+        switch (s.type) {
+            case SettingType::UINT8:
+                Serial.print(*((uint8_t*)s.valuePtr));
+                break;
+            case SettingType::INT8:
+                Serial.print(*((int8_t*)s.valuePtr));
+                break;
+            case SettingType::UINT16:
+                Serial.print(*((uint16_t*)s.valuePtr));
+                break;
+            case SettingType::UINT32:
+                Serial.print(*((uint32_t*)s.valuePtr));
+                break;
+            case SettingType::FLOAT:
+                Serial.print(*((float*)s.valuePtr), 3);
+                break;
+            case SettingType::BOOL:
+                Serial.print(*((bool*)s.valuePtr) ? "true" : "false");
+                break;
+        }
+
+        Serial.print(F(",\"type\":\""));
+        Serial.print(typeString(s.type));
+        Serial.print(F("\",\"cat\":\""));
+        Serial.print(s.category);
+        Serial.print(F("\",\"min\":"));
+
+        // Print min/max based on type
+        if (s.type == SettingType::FLOAT) {
+            Serial.print(s.minVal, 3);
+            Serial.print(F(",\"max\":"));
+            Serial.print(s.maxVal, 3);
+        } else {
+            Serial.print((int32_t)s.minVal);
+            Serial.print(F(",\"max\":"));
+            Serial.print((int32_t)s.maxVal);
+        }
+
+        Serial.print(F("}"));
+    }
+
+    Serial.println(F("]}"));
+}

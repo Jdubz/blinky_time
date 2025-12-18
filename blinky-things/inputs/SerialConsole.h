@@ -117,6 +117,13 @@ private:
     uint16_t debugPeriodMs_ = 500;
     uint16_t imuDebugPeriodMs_ = 200;
 
+    // JSON streaming state (for UI app)
+    bool streamEnabled_ = false;
+    uint32_t streamLastMs_ = 0;
+    static const uint16_t STREAM_PERIOD_MS = 50;  // ~20Hz
+
+    void streamTick();
+
     // Static instance pointer for callbacks
     static SerialConsole* instance_;
 };
