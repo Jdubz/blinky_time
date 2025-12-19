@@ -272,6 +272,7 @@ describe('App', () => {
 
       render(<App />);
 
+      // Note: E (envelope) value is tracked for chart but not displayed numerically
       expect(screen.getByText('L: 0.75')).toBeInTheDocument();
       expect(screen.getByText('T: 0.50')).toBeInTheDocument();
       expect(screen.getByText('G: 2.0x')).toBeInTheDocument();

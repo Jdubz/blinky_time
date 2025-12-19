@@ -71,6 +71,10 @@ blinky_time/
 │   ├── FireEffect.cpp/.h   # Legacy fire simulation
 │   ├── BatteryMonitor.cpp/.h # Power management
 │   └── SerialConsole.cpp/.h # Debug interface
+├── blinky-console/          # Web-based control interface (React PWA)
+│   ├── src/                # React components and hooks
+│   ├── firebase.json       # Firebase hosting configuration
+│   └── package.json        # Node.js dependencies
 ├── tests/                  # Project-wide test suite
 │   ├── BlinkyTest.h        # Custom test framework
 │   ├── test_runner.ino     # Hardware test runner
@@ -78,7 +82,7 @@ blinky_time/
 │   └── unit/integration/   # Test categories
 ├── docs/                   # 📚 Comprehensive documentation
 ├── examples/               # Example configurations
-├── .github/workflows/      # Streamlined PR validation workflow
+├── .github/workflows/      # CI/CD pipelines for validation and deployment
 ├── LICENSE                 # Creative Commons BY-SA 4.0
 └── README.md              # This file
 ```
@@ -175,11 +179,26 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 For additional development resources, check the [comprehensive documentation](docs/).
 
 ### Development Setup
+
+**Arduino Firmware:**
 1. Fork the repository
 2. Work on `staging` branch or create feature branches from `staging`
-3. Test your changes on hardware
-4. Submit a pull request to `staging` with detailed description
-5. Production releases are promoted from `staging` to `master`
+3. Apply the [platform patch](docs/PLATFORM_FIX.md) for audio-reactive features
+4. Test your changes on hardware
+5. Submit a pull request to `staging` with detailed description
+6. Production releases are promoted from `staging` to `master`
+
+**Blinky Console (Web Interface):**
+```bash
+cd blinky-console
+npm install          # Installs dependencies and sets up git hooks
+npm run dev          # Start development server with hot reload
+npm run test         # Run unit tests
+npm run lint         # Lint code
+npm run build        # Build for production
+```
+
+> **Note**: Run `npm install` from within the `blinky-console/` directory to properly set up git hooks (husky) for pre-commit linting and pre-push validation.
 
 ## 📜 License
 

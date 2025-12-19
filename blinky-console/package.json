@@ -15,7 +15,7 @@
     "test:ui": "vitest --ui",
     "test:ci": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
-    "prepare": "cd .. && husky blinky-console/.husky"
+    "prepare": "cd .. && husky blinky-console/.husky || true"
   },
   "dependencies": {
     "react": "^18.2.0",

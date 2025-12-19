@@ -38,18 +38,42 @@ window.ResizeObserver = vi.fn().mockImplementation(() => ({
 
 // Mock Chart.js to avoid canvas rendering issues in tests
 vi.mock('chart.js', () => {
-  const ChartJS = vi.fn() as unknown as { register: ReturnType<typeof vi.fn> };
-  ChartJS.register = vi.fn();
+  // Create a mock Chart constructor with static methods
+  const MockChart = Object.assign(
+    vi.fn().mockImplementation(() => ({
+      destroy: vi.fn(),
+      update: vi.fn(),
+      render: vi.fn(),
+      resize: vi.fn(),
+      clear: vi.fn(),
+      stop: vi.fn(),
+      canvas: null,
+      ctx: null,
+      data: {},
+      options: {},
+    })),
+    {
+      register: vi.fn(),
+      unregister: vi.fn(),
+      defaults: { font: {}, color: '' },
+      instances: {},
+    }
+  );
+
+  // Mock scale and element classes
+  const createMockClass = () => vi.fn().mockImplementation(() => ({}));
+
   return {
-    Chart: ChartJS,
-    CategoryScale: vi.fn(),
-    LinearScale: vi.fn(),
-    PointElement: vi.fn(),
-    LineElement: vi.fn(),
-    Title: vi.fn(),
-    Tooltip: vi.fn(),
-    Legend: vi.fn(),
-    Filler: vi.fn(),
+    Chart: MockChart,
+    CategoryScale: createMockClass(),
+    LinearScale: createMockClass(),
+    PointElement: createMockClass(),
+    LineElement: createMockClass(),
+    Title: createMockClass(),
+    Tooltip: createMockClass(),
+    Legend: createMockClass(),
+    Filler: createMockClass(),
+    registerables: [],
   };
 });
 

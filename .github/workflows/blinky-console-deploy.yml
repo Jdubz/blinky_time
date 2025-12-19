@@ -6,6 +6,11 @@ on:
     paths:
       - 'blinky-console/**'
       - '.github/workflows/blinky-console-deploy.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'blinky-console/**'
+      - '.github/workflows/blinky-console-deploy.yml'
   workflow_dispatch:
 
 defaults:
@@ -16,6 +21,7 @@ jobs:
   build-and-deploy:
     name: Build and Deploy to Firebase
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
 
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +48,7 @@ jobs:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           channelId: live
-          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          projectId: static-sites-257923
           entryPoint: blinky-console
           target: blinky-time
 
@@ -72,6 +78,6 @@ jobs:
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
+          projectId: static-sites-257923
           entryPoint: blinky-console
           target: blinky-time
