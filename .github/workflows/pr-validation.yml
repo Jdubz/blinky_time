@@ -177,3 +177,40 @@ jobs:
         else
           echo "⚠️  VERSION file not found"
         fi
+
+  blinky-console-tests:
+    name: Blinky Console Tests
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: blinky-console
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: blinky-console/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run linting
+      run: npm run lint
+
+    - name: Check formatting
+      run: npm run format:check
+
+    - name: Run type check
+      run: npm run typecheck
+
+    - name: Run tests
+      run: npm run test:ci
+
+    - name: Build
+      run: npm run build
