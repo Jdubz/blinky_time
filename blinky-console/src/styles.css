@@ -29,7 +29,9 @@
   --font-mono: 'Consolas', 'Monaco', 'Courier New', monospace;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
 }
 
@@ -333,7 +335,7 @@ body {
 
 .toggle-slider::before {
   position: absolute;
-  content: "";
+  content: '';
   height: 18px;
   width: 18px;
   left: 3px;
@@ -395,9 +397,15 @@ body {
   background-color: var(--bg-tertiary);
 }
 
-.audio-value.level { color: var(--accent-primary); }
-.audio-value.transient { color: var(--accent-danger); }
-.audio-value.gain { color: var(--text-secondary); }
+.audio-value.level {
+  color: var(--accent-primary);
+}
+.audio-value.transient {
+  color: var(--accent-danger);
+}
+.audio-value.gain {
+  color: var(--text-secondary);
+}
 
 .audio-chart-container {
   position: relative;
@@ -478,17 +486,33 @@ body {
   flex: 1;
 }
 
-.console-sent .console-prefix { color: var(--accent-secondary); }
-.console-sent .console-message { color: var(--accent-secondary); }
+.console-sent .console-prefix {
+  color: var(--accent-secondary);
+}
+.console-sent .console-message {
+  color: var(--accent-secondary);
+}
 
-.console-received .console-prefix { color: var(--text-primary); }
-.console-received .console-message { color: var(--text-primary); }
+.console-received .console-prefix {
+  color: var(--text-primary);
+}
+.console-received .console-message {
+  color: var(--text-primary);
+}
 
-.console-error .console-prefix { color: var(--accent-danger); }
-.console-error .console-message { color: var(--accent-danger); }
+.console-error .console-prefix {
+  color: var(--accent-danger);
+}
+.console-error .console-message {
+  color: var(--accent-danger);
+}
 
-.console-info .console-prefix { color: var(--accent-success); }
-.console-info .console-message { color: var(--accent-success); }
+.console-info .console-prefix {
+  color: var(--accent-success);
+}
+.console-info .console-message {
+  color: var(--accent-success);
+}
 
 .console-input-row {
   display: flex;

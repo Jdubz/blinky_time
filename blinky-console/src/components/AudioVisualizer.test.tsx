@@ -89,13 +89,7 @@ describe('AudioVisualizer', () => {
 
   describe('audio values display', () => {
     it('shows audio values when streaming with data', () => {
-      render(
-        <AudioVisualizer
-          {...defaultProps}
-          isStreaming={true}
-          audioData={mockAudioData}
-        />
-      );
+      render(<AudioVisualizer {...defaultProps} isStreaming={true} audioData={mockAudioData} />);
 
       expect(screen.getByText('L: 0.75')).toBeInTheDocument();
       expect(screen.getByText('T: 0.50')).toBeInTheDocument();
@@ -103,25 +97,13 @@ describe('AudioVisualizer', () => {
     });
 
     it('does not show audio values when not streaming', () => {
-      render(
-        <AudioVisualizer
-          {...defaultProps}
-          isStreaming={false}
-          audioData={mockAudioData}
-        />
-      );
+      render(<AudioVisualizer {...defaultProps} isStreaming={false} audioData={mockAudioData} />);
 
       expect(screen.queryByText('L:')).not.toBeInTheDocument();
     });
 
     it('does not show audio values when no audio data', () => {
-      render(
-        <AudioVisualizer
-          {...defaultProps}
-          isStreaming={true}
-          audioData={null}
-        />
-      );
+      render(<AudioVisualizer {...defaultProps} isStreaming={true} audioData={null} />);
 
       expect(screen.queryByText('L:')).not.toBeInTheDocument();
     });

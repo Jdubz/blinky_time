@@ -27,10 +27,10 @@ export interface SettingsResponse {
 
 // Audio sample from streaming `{"a":{...}}` messages
 export interface AudioSample {
-  l: number;  // level (0-1)
-  t: number;  // transient (0-1)
-  e: number;  // envelope (0-1)
-  g: number;  // gain multiplier
+  l: number; // level (0-1)
+  t: number; // transient (0-1)
+  e: number; // envelope (0-1)
+  g: number; // gain multiplier
 }
 
 // Streaming audio message format

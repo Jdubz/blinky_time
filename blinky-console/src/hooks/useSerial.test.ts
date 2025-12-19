@@ -158,7 +158,9 @@ describe('useSerial', () => {
       });
 
       expect(serialService.send).toHaveBeenCalledWith('test command');
-      expect(result.current.consoleLog.some(e => e.message === 'test command' && e.type === 'sent')).toBe(true);
+      expect(
+        result.current.consoleLog.some(e => e.message === 'test command' && e.type === 'sent')
+      ).toBe(true);
     });
   });
 
@@ -351,7 +353,11 @@ describe('useSerial', () => {
       });
 
       await waitFor(() => {
-        expect(result.current.consoleLog.some(e => e.message === 'received data' && e.type === 'received')).toBe(true);
+        expect(
+          result.current.consoleLog.some(
+            e => e.message === 'received data' && e.type === 'received'
+          )
+        ).toBe(true);
       });
     });
 
@@ -384,7 +390,9 @@ describe('useSerial', () => {
 
       await waitFor(() => {
         expect(result.current.connectionState).toBe('error');
-        expect(result.current.consoleLog.some(e => e.message === 'Test error' && e.type === 'error')).toBe(true);
+        expect(
+          result.current.consoleLog.some(e => e.message === 'Test error' && e.type === 'error')
+        ).toBe(true);
       });
     });
   });

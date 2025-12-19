@@ -23,7 +23,7 @@ function App() {
     loadSettings,
     resetDefaults,
     refreshSettings,
-    clearConsole
+    clearConsole,
   } = useSerial();
 
   const isDisabled = connectionState !== 'connected';

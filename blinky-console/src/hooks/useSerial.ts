@@ -6,7 +6,7 @@ import {
   AudioSample,
   ConnectionState,
   ConsoleEntry,
-  SettingsByCategory
+  SettingsByCategory,
 } from '../types';
 
 export interface UseSerialReturn {
@@ -56,7 +56,7 @@ export function useSerial(): UseSerialReturn {
       id: ++consoleIdRef.current,
       timestamp: new Date(),
       type,
-      message
+      message,
     };
     // Keep last 200 entries - only slice when limit exceeded
     setConsoleLog(prev => {
@@ -66,12 +66,16 @@ export function useSerial(): UseSerialReturn {
   }, []);
 
   // Group settings by category - memoized to prevent recalculation on every render
-  const settingsByCategory = useMemo(() => settings.reduce((acc, setting) => {
-    const cat = setting.cat || 'other';
-    if (!acc[cat]) acc[cat] = [];
-    acc[cat].push(setting);
-    return acc;
-  }, {} as SettingsByCategory), [settings]);
+  const settingsByCategory = useMemo(
+    () =>
+      settings.reduce((acc, setting) => {
+        const cat = setting.cat || 'other';
+        if (!acc[cat]) acc[cat] = [];
+        acc[cat].push(setting);
+        return acc;
+      }, {} as SettingsByCategory),
+    [settings]
+  );
 
   // Handle serial events
   useEffect(() => {
@@ -143,18 +147,19 @@ export function useSerial(): UseSerialReturn {
   }, [isStreaming]);
 
   // Send raw command
-  const sendCommand = useCallback(async (command: string) => {
-    addConsoleEntry('sent', command);
-    await serialService.send(command);
-  }, [addConsoleEntry]);
+  const sendCommand = useCallback(
+    async (command: string) => {
+      addConsoleEntry('sent', command);
+      await serialService.send(command);
+    },
+    [addConsoleEntry]
+  );
 
   // Set a setting value
   const setSetting = useCallback(async (name: string, value: number | boolean) => {
     await serialService.setSetting(name, value);
     // Update local state
-    setSettings(prev => prev.map(s =>
-      s.name === name ? { ...s, value } : s
-    ));
+    setSettings(prev => prev.map(s => (s.name === name ? { ...s, value } : s)));
   }, []);
 
   // Toggle audio streaming
@@ -228,6 +233,6 @@ export function useSerial(): UseSerialReturn {
     loadSettings,
     resetDefaults,
     refreshSettings,
-    clearConsole
+    clearConsole,
   };
 }
