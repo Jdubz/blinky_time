@@ -1,0 +1,17 @@
+# Check if any blinky-console files are in the commits being pushed
+if git diff --name-only @{push}.. 2>/dev/null | grep -q "^blinky-console/"; then
+  echo "🔍 blinky-console changes detected, running checks..."
+
+  cd blinky-console
+
+  echo "📝 Running lint..."
+  npm run lint || exit 1
+
+  echo "🔎 Running type check..."
+  npm run typecheck || exit 1
+
+  echo "🔨 Running build..."
+  npm run build || exit 1
+
+  echo "✅ All blinky-console checks passed!"
+fi
