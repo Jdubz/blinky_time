@@ -44,6 +44,7 @@ jobs:
           channelId: live
           projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
           entryPoint: blinky-console
+          target: blinky-time
 
   deploy-preview:
     name: Deploy Preview
@@ -73,3 +74,4 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           projectId: ${{ secrets.FIREBASE_PROJECT_ID }}
           entryPoint: blinky-console
+          target: blinky-time
