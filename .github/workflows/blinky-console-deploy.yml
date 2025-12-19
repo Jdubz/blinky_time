@@ -31,17 +31,15 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Cache node_modules
+      - name: Cache npm
         uses: actions/cache@v4
-        id: cache-node-modules
         with:
-          path: blinky-console/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('blinky-console/package-lock.json') }}
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('blinky-console/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-modules-
+            ${{ runner.os }}-npm-
 
       - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: npm install
 
       - name: Run tests
@@ -73,17 +71,15 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Cache node_modules
+      - name: Cache npm
         uses: actions/cache@v4
-        id: cache-node-modules
         with:
-          path: blinky-console/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('blinky-console/package-lock.json') }}
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('blinky-console/package-lock.json') }}
           restore-keys: |
-            ${{ runner.os }}-node-modules-
+            ${{ runner.os }}-npm-
 
       - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
         run: npm install
 
       - name: Build
