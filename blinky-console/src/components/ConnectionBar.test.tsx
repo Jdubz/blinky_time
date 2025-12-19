@@ -40,9 +40,10 @@ describe('ConnectionBar', () => {
 
     it('shows "Connecting..." status when connecting', () => {
       render(<ConnectionBar {...defaultProps} connectionState="connecting" />);
-      expect(screen.getByText('Connecting...')).toBeInTheDocument();
-      const button = screen.getByRole('button', { name: 'Connecting...' });
+      expect(screen.getByText('Connecting...', { selector: '.status-text' })).toBeInTheDocument();
+      const button = screen.getByRole('button');
       expect(button).toBeDisabled();
+      expect(button).toHaveTextContent('Connecting...');
     });
 
     it('shows "Connected" status when connected', () => {
@@ -60,11 +61,7 @@ describe('ConnectionBar', () => {
   describe('device info display', () => {
     it('shows device info when connected', () => {
       render(
-        <ConnectionBar
-          {...defaultProps}
-          connectionState="connected"
-          deviceInfo={mockDeviceInfo}
-        />
+        <ConnectionBar {...defaultProps} connectionState="connected" deviceInfo={mockDeviceInfo} />
       );
       expect(screen.getByText(/Blinky Time v1.0.0/)).toBeInTheDocument();
       expect(screen.getByText(/256 LEDs/)).toBeInTheDocument();
@@ -88,11 +85,7 @@ describe('ConnectionBar', () => {
     it('calls onDisconnect when Disconnect button is clicked', () => {
       const onDisconnect = vi.fn();
       render(
-        <ConnectionBar
-          {...defaultProps}
-          connectionState="connected"
-          onDisconnect={onDisconnect}
-        />
+        <ConnectionBar {...defaultProps} connectionState="connected" onDisconnect={onDisconnect} />
       );
 
       fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));

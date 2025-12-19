@@ -7,8 +7,18 @@ import { ConsoleEntry } from '../types';
 describe('Console', () => {
   const mockEntries: ConsoleEntry[] = [
     { id: 1, timestamp: new Date('2024-01-01T10:00:00'), type: 'sent', message: 'json info' },
-    { id: 2, timestamp: new Date('2024-01-01T10:00:01'), type: 'received', message: '{"device":"test"}' },
-    { id: 3, timestamp: new Date('2024-01-01T10:00:02'), type: 'error', message: 'Connection lost' },
+    {
+      id: 2,
+      timestamp: new Date('2024-01-01T10:00:01'),
+      type: 'received',
+      message: '{"device":"test"}',
+    },
+    {
+      id: 3,
+      timestamp: new Date('2024-01-01T10:00:02'),
+      type: 'error',
+      message: 'Connection lost',
+    },
     { id: 4, timestamp: new Date('2024-01-01T10:00:03'), type: 'info', message: 'Reconnecting...' },
   ];
 
@@ -52,7 +62,7 @@ describe('Console', () => {
 
     it('displays correct prefix for each entry type', () => {
       render(<Console {...defaultProps} entries={mockEntries} />);
-      const prefixes = screen.getAllByText(/^[><!\*]$/);
+      const prefixes = screen.getAllByText(/^[><!*]$/);
       expect(prefixes).toHaveLength(4);
     });
 
@@ -111,7 +121,9 @@ describe('Console', () => {
     it('clears input after sending command', async () => {
       render(<Console {...defaultProps} />);
 
-      const input = screen.getByPlaceholderText('Type command and press Enter...') as HTMLInputElement;
+      const input = screen.getByPlaceholderText(
+        'Type command and press Enter...'
+      ) as HTMLInputElement;
       await userEvent.type(input, 'test command{enter}');
 
       expect(input.value).toBe('');
@@ -143,7 +155,9 @@ describe('Console', () => {
       const onSendCommand = vi.fn();
       render(<Console {...defaultProps} onSendCommand={onSendCommand} />);
 
-      const input = screen.getByPlaceholderText('Type command and press Enter...') as HTMLInputElement;
+      const input = screen.getByPlaceholderText(
+        'Type command and press Enter...'
+      ) as HTMLInputElement;
 
       // Send some commands
       await userEvent.type(input, 'first{enter}');
@@ -161,7 +175,9 @@ describe('Console', () => {
       const onSendCommand = vi.fn();
       render(<Console {...defaultProps} onSendCommand={onSendCommand} />);
 
-      const input = screen.getByPlaceholderText('Type command and press Enter...') as HTMLInputElement;
+      const input = screen.getByPlaceholderText(
+        'Type command and press Enter...'
+      ) as HTMLInputElement;
 
       // Send some commands
       await userEvent.type(input, 'first{enter}');

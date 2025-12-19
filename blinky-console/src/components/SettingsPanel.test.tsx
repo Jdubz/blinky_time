@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { SettingsPanel } from './SettingsPanel';
 import { DeviceSetting, SettingsByCategory } from '../types';
 
@@ -31,7 +31,10 @@ describe('SettingsPanel', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders the settings header', () => {
@@ -152,36 +155,35 @@ describe('SettingsPanel', () => {
 
   describe('setting interactions', () => {
     it('calls onSettingChange when checkbox is toggled', async () => {
+      vi.useFakeTimers();
       const onSettingChange = vi.fn();
       render(<SettingsPanel {...defaultProps} onSettingChange={onSettingChange} />);
 
       const checkboxes = screen.getAllByRole('checkbox');
       fireEvent.click(checkboxes[0]); // Toggle 'enabled'
 
-      // Wait for debounce
-      vi.advanceTimersByTime(150);
+      // Advance timers for debounce
+      await vi.advanceTimersByTimeAsync(150);
 
-      await waitFor(() => {
-        expect(onSettingChange).toHaveBeenCalledWith('enabled', false);
-      });
+      expect(onSettingChange).toHaveBeenCalledWith('enabled', false);
     });
 
     it('calls onSettingChange when slider is changed', async () => {
+      vi.useFakeTimers();
       const onSettingChange = vi.fn();
       render(<SettingsPanel {...defaultProps} onSettingChange={onSettingChange} />);
 
       const sliders = screen.getAllByRole('slider');
       fireEvent.change(sliders[0], { target: { value: '0.5' } });
 
-      // Wait for debounce
-      vi.advanceTimersByTime(150);
+      // Advance timers for debounce
+      await vi.advanceTimersByTimeAsync(150);
 
-      await waitFor(() => {
-        expect(onSettingChange).toHaveBeenCalledWith('intensity', 0.5);
-      });
+      expect(onSettingChange).toHaveBeenCalledWith('intensity', 0.5);
     });
 
     it('debounces rapid slider changes', async () => {
+      vi.useFakeTimers();
       const onSettingChange = vi.fn();
       render(<SettingsPanel {...defaultProps} onSettingChange={onSettingChange} />);
 
@@ -193,14 +195,12 @@ describe('SettingsPanel', () => {
       fireEvent.change(sliders[0], { target: { value: '0.3' } });
       fireEvent.change(sliders[0], { target: { value: '0.4' } });
 
-      // Wait for debounce
-      vi.advanceTimersByTime(150);
+      // Advance timers for debounce
+      await vi.advanceTimersByTimeAsync(150);
 
-      await waitFor(() => {
-        // Should only call once with the final value
-        expect(onSettingChange).toHaveBeenCalledTimes(1);
-        expect(onSettingChange).toHaveBeenCalledWith('intensity', 0.4);
-      });
+      // Should only call once with the final value
+      expect(onSettingChange).toHaveBeenCalledTimes(1);
+      expect(onSettingChange).toHaveBeenCalledWith('intensity', 0.4);
     });
 
     it('disables controls when disabled prop is true', () => {

@@ -1,1 +1,1 @@
-npx lint-staged
+cd blinky-console && npx lint-staged

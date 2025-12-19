@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import App from '../App';
+import type { UseSerialReturn } from '../hooks/useSerial';
 
-// Mock the useSerial hook
-const mockUseSerial = {
-  connectionState: 'disconnected' as const,
+// Mock the useSerial hook with proper typing
+const mockUseSerial: UseSerialReturn = {
+  connectionState: 'disconnected',
   isSupported: true,
   deviceInfo: null,
   settings: [],
@@ -96,6 +97,11 @@ describe('App', () => {
 
   describe('disabled state', () => {
     it('disables controls when disconnected', () => {
+      // Add some settings so the settings panel renders buttons
+      mockUseSerial.settingsByCategory = {
+        test: [{ name: 'test', value: 1, type: 'uint8' as const, cat: 'test', min: 0, max: 255 }],
+      };
+
       render(<App />);
 
       // Console input should be disabled
@@ -154,6 +160,7 @@ describe('App', () => {
 
   describe('settings interaction', () => {
     it('calls setSetting when setting is changed', async () => {
+      vi.useFakeTimers();
       mockUseSerial.connectionState = 'connected';
       mockUseSerial.settingsByCategory = {
         fire: [
@@ -166,13 +173,11 @@ describe('App', () => {
       const checkbox = screen.getByRole('checkbox');
       fireEvent.click(checkbox);
 
-      // Wait for debounce
-      await waitFor(
-        () => {
-          expect(mockUseSerial.setSetting).toHaveBeenCalled();
-        },
-        { timeout: 200 }
-      );
+      // Advance timers for debounce
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(mockUseSerial.setSetting).toHaveBeenCalled();
+      vi.useRealTimers();
     });
 
     it('calls saveSettings when Save is clicked', () => {
@@ -230,7 +235,11 @@ describe('App', () => {
     it('calls clearConsole when Clear is clicked', () => {
       render(<App />);
 
-      fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+      // There are two Clear buttons (Console and AudioVisualizer), get the enabled one
+      const clearButtons = screen.getAllByRole('button', { name: 'Clear' });
+      // Console's Clear button is always enabled, AudioVisualizer's is disabled when not streaming
+      const consoleClearButton = clearButtons.find(btn => !btn.hasAttribute('disabled'));
+      fireEvent.click(consoleClearButton!);
 
       expect(mockUseSerial.clearConsole).toHaveBeenCalled();
     });

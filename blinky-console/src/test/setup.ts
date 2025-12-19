@@ -1,6 +1,9 @@
 import '@testing-library/jest-dom';
 import { vi } from 'vitest';
 
+// Mock scrollIntoView (not supported in jsdom)
+Element.prototype.scrollIntoView = vi.fn();
+
 // Mock WebSerial API for testing
 Object.defineProperty(navigator, 'serial', {
   value: {
@@ -8,6 +11,7 @@ Object.defineProperty(navigator, 'serial', {
     requestPort: vi.fn(),
   },
   writable: true,
+  configurable: true,
 });
 
 // Mock matchMedia for components that use it
@@ -26,24 +30,28 @@ Object.defineProperty(window, 'matchMedia', {
 });
 
 // Mock ResizeObserver
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
+window.ResizeObserver = vi.fn().mockImplementation(() => ({
   observe: vi.fn(),
   unobserve: vi.fn(),
   disconnect: vi.fn(),
 }));
 
 // Mock Chart.js to avoid canvas rendering issues in tests
-vi.mock('chart.js', () => ({
-  Chart: vi.fn(),
-  CategoryScale: vi.fn(),
-  LinearScale: vi.fn(),
-  PointElement: vi.fn(),
-  LineElement: vi.fn(),
-  Title: vi.fn(),
-  Tooltip: vi.fn(),
-  Legend: vi.fn(),
-  Filler: vi.fn(),
-}));
+vi.mock('chart.js', () => {
+  const ChartJS = vi.fn() as unknown as { register: ReturnType<typeof vi.fn> };
+  ChartJS.register = vi.fn();
+  return {
+    Chart: ChartJS,
+    CategoryScale: vi.fn(),
+    LinearScale: vi.fn(),
+    PointElement: vi.fn(),
+    LineElement: vi.fn(),
+    Title: vi.fn(),
+    Tooltip: vi.fn(),
+    Legend: vi.fn(),
+    Filler: vi.fn(),
+  };
+});
 
 vi.mock('react-chartjs-2', () => ({
   Line: vi.fn(() => null),
