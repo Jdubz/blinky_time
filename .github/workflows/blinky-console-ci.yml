@@ -28,18 +28,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('blinky-console/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
-
       - name: Install dependencies
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install
+        run: rm -f package-lock.json && npm install
 
       - name: Run ESLint
         run: npm run lint
@@ -58,18 +48,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('blinky-console/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
-
       - name: Install dependencies
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install
+        run: rm -f package-lock.json && npm install
 
       - name: Run tests
         run: npm run test:ci
@@ -94,18 +74,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Cache npm
-        uses: actions/cache@v4
-        with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('blinky-console/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
-
       - name: Install dependencies
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install
+        run: rm -f package-lock.json && npm install
 
       - name: Build
         run: npm run build
