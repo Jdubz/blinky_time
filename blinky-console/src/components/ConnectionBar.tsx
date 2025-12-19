@@ -13,23 +13,31 @@ export function ConnectionBar({
   deviceInfo,
   isSupported,
   onConnect,
-  onDisconnect
+  onDisconnect,
 }: ConnectionBarProps) {
   const getStatusColor = () => {
     switch (connectionState) {
-      case 'connected': return '#4ade80';
-      case 'connecting': return '#facc15';
-      case 'error': return '#f87171';
-      default: return '#6b7280';
+      case 'connected':
+        return '#4ade80';
+      case 'connecting':
+        return '#facc15';
+      case 'error':
+        return '#f87171';
+      default:
+        return '#6b7280';
     }
   };
 
   const getStatusText = () => {
     switch (connectionState) {
-      case 'connected': return 'Connected';
-      case 'connecting': return 'Connecting...';
-      case 'error': return 'Error';
-      default: return 'Disconnected';
+      case 'connected':
+        return 'Connected';
+      case 'connecting':
+        return 'Connecting...';
+      case 'error':
+        return 'Error';
+      default:
+        return 'Disconnected';
     }
   };
 
@@ -53,10 +61,7 @@ export function ConnectionBar({
         )}
       </div>
       <div className="connection-right">
-        <span
-          className="status-indicator"
-          style={{ backgroundColor: getStatusColor() }}
-        />
+        <span className="status-indicator" style={{ backgroundColor: getStatusColor() }} />
         <span className="status-text">{getStatusText()}</span>
         {connectionState === 'connected' ? (
           <button className="btn btn-disconnect" onClick={onDisconnect}>

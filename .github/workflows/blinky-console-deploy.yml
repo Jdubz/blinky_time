@@ -1,0 +1,79 @@
+name: Deploy Blinky Console
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'blinky-console/**'
+      - '.github/workflows/blinky-console-deploy.yml'
+  pull_request:
+    branches: [master]
+    paths:
+      - 'blinky-console/**'
+      - '.github/workflows/blinky-console-deploy.yml'
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: blinky-console
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy to Firebase
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: rm -f package-lock.json && npm install
+
+      - name: Run tests
+        run: npm run test:ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy to Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          channelId: live
+          projectId: static-sites-257923
+          entryPoint: blinky-console
+          target: blinky-time
+
+  deploy-preview:
+    name: Deploy Preview
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: rm -f package-lock.json && npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Deploy Preview to Firebase
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: static-sites-257923
+          entryPoint: blinky-console
+          target: blinky-time

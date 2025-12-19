@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, KeyboardEvent } from 'react';
 import { ConsoleEntry } from '../types';
 
 // Constants for console safety
-const MAX_MESSAGE_LENGTH = 500;  // Truncate long messages
+const MAX_MESSAGE_LENGTH = 500; // Truncate long messages
 
 // Sanitize message: strip control chars, limit length
 function sanitizeMessage(message: string): string {
@@ -77,27 +77,37 @@ export function Console({ entries, onSendCommand, onClear, disabled }: ConsolePr
       hour12: false,
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit'
+      second: '2-digit',
     });
   };
 
   const getEntryClass = (type: ConsoleEntry['type']) => {
     switch (type) {
-      case 'sent': return 'console-sent';
-      case 'received': return 'console-received';
-      case 'error': return 'console-error';
-      case 'info': return 'console-info';
-      default: return '';
+      case 'sent':
+        return 'console-sent';
+      case 'received':
+        return 'console-received';
+      case 'error':
+        return 'console-error';
+      case 'info':
+        return 'console-info';
+      default:
+        return '';
     }
   };
 
   const getEntryPrefix = (type: ConsoleEntry['type']) => {
     switch (type) {
-      case 'sent': return '>';
-      case 'received': return '<';
-      case 'error': return '!';
-      case 'info': return '*';
-      default: return ' ';
+      case 'sent':
+        return '>';
+      case 'received':
+        return '<';
+      case 'error':
+        return '!';
+      case 'info':
+        return '*';
+      default:
+        return ' ';
     }
   };
 
@@ -132,7 +142,7 @@ export function Console({ entries, onSendCommand, onClear, disabled }: ConsolePr
           type="text"
           className="console-input"
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={e => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={disabled ? 'Connect to send commands...' : 'Type command and press Enter...'}
           disabled={disabled}

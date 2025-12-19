@@ -10,11 +10,13 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 
 - **Realistic Fire Simulation** - Advanced heat propagation algorithms create lifelike flame effects
 - **Multiple Device Support** - Hat installations, tube lights, and bucket totems
-- **Audio Reactive** - Microphone integration for sound-responsive effects  
+- **Audio Reactive** - Microphone integration for sound-responsive effects with adaptive gain control
+- **Unified Architecture** - Single generator supporting matrix, linear, and custom LED layouts
 - **Battery Management** - Smart charging detection and low-battery warnings
 - **IMU Integration** - Motion-responsive effects using built-in accelerometer
 - **Serial Console** - Real-time debugging and effect parameter tuning
 - **Zigzag Matrix Support** - Optimized for complex LED wiring patterns
+- **Production Ready** - Fully tested and documented with comprehensive build system
 
 ## 🛠 Hardware Compatibility
 
@@ -28,8 +30,10 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 
 ### Prerequisites
 - **Arduino IDE** 2.0+ or **arduino-cli**
-- **Seeeduino nRF52 Board Package** installed
+- **Seeeduino mbed nRF52 Board Package** 2.7.2+ (with platform patch - see [Platform Fix](docs/PLATFORM_FIX.md))
 - **Adafruit NeoPixel Library** 1.15.0+
+
+> ⚠️ **Important**: The Seeeduino mbed platform requires a [patch](docs/PLATFORM_FIX.md) to enable audio-reactive features. See the [Build Guide](docs/BUILD_GUIDE.md) for details.
 
 ### Installation
 
@@ -67,6 +71,10 @@ blinky_time/
 │   ├── FireEffect.cpp/.h   # Legacy fire simulation
 │   ├── BatteryMonitor.cpp/.h # Power management
 │   └── SerialConsole.cpp/.h # Debug interface
+├── blinky-console/          # Web-based control interface (React PWA)
+│   ├── src/                # React components and hooks
+│   ├── firebase.json       # Firebase hosting configuration
+│   └── package.json        # Node.js dependencies
 ├── tests/                  # Project-wide test suite
 │   ├── BlinkyTest.h        # Custom test framework
 │   ├── test_runner.ino     # Hardware test runner
@@ -74,7 +82,7 @@ blinky_time/
 │   └── unit/integration/   # Test categories
 ├── docs/                   # 📚 Comprehensive documentation
 ├── examples/               # Example configurations
-├── .github/workflows/      # Streamlined PR validation workflow
+├── .github/workflows/      # CI/CD pipelines for validation and deployment
 ├── LICENSE                 # Creative Commons BY-SA 4.0
 └── README.md              # This file
 ```
@@ -86,10 +94,12 @@ Comprehensive documentation is available in the [`docs/`](docs/) folder:
 **Quick Links:**
 - [📖 **Documentation Index**](docs/README.md) - Complete documentation overview
 - [🔧 **Hardware Guide**](docs/HARDWARE.md) - Supported devices and wiring
-- [🏗️ **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions
+- [🏗️ **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions (includes platform patch)
+- [🛠️ **Platform Fix**](docs/PLATFORM_FIX.md) - Required patch for audio-reactive features
 - [🏛️ **Architecture Guide**](docs/GENERATOR_EFFECT_ARCHITECTURE.md) - Modern code architecture
 - [🔥 **Fire Settings**](docs/OPTIMAL_FIRE_SETTINGS.md) - Optimal configuration parameters
 - [🧪 **Testing Guide**](docs/TESTING_SUMMARY.md) - Test framework and procedures
+- [✅ **Audit Summary**](AUDIT_SUMMARY.md) - Recent code audit and platform bug fix
 
 ## 🎛 Configuration
 
@@ -131,6 +141,9 @@ Fine-tune your fire effect in the device config files:
 - **Beat Detection** - Responds to music transients and beats
 - **Configurable Sensitivity** - Adjustable via serial console
 - **Real-time Visualization** - Live audio levels in debug output
+- **Low Latency** - ~16ms from sound to LED response
+
+> 📝 **Note**: Audio features require the [platform patch](docs/PLATFORM_FIX.md) to resolve include guard issues in Seeeduino mbed platform.
 
 ## 🔋 Power Management
 
@@ -166,11 +179,26 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 For additional development resources, check the [comprehensive documentation](docs/).
 
 ### Development Setup
+
+**Arduino Firmware:**
 1. Fork the repository
 2. Work on `staging` branch or create feature branches from `staging`
-3. Test your changes on hardware
-4. Submit a pull request to `staging` with detailed description
-5. Production releases are promoted from `staging` to `master`
+3. Apply the [platform patch](docs/PLATFORM_FIX.md) for audio-reactive features
+4. Test your changes on hardware
+5. Submit a pull request to `staging` with detailed description
+6. Production releases are promoted from `staging` to `master`
+
+**Blinky Console (Web Interface):**
+```bash
+cd blinky-console
+npm install          # Installs dependencies and sets up git hooks
+npm run dev          # Start development server with hot reload
+npm run test         # Run unit tests
+npm run lint         # Lint code
+npm run build        # Build for production
+```
+
+> **Note**: Run `npm install` from within the `blinky-console/` directory to properly set up git hooks (husky) for pre-commit linting and pre-push validation.
 
 ## 📜 License
 

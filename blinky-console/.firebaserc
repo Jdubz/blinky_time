@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "static-sites-257923"
+  },
+  "targets": {
+    "static-sites-257923": {
+      "hosting": {
+        "blinky-time": [
+          "blinky-time"
+        ]
+      }
+    }
+  }
+}

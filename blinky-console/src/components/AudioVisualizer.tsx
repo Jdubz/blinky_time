@@ -8,7 +8,7 @@ import {
   Title,
   Tooltip,
   Legend,
-  Filler
+  Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import { AudioSample } from '../types';
@@ -38,7 +38,7 @@ export function AudioVisualizer({
   audioData,
   isStreaming,
   onToggleStreaming,
-  disabled
+  disabled,
 }: AudioVisualizerProps) {
   const levelDataRef = useRef<number[]>([]);
   const transientDataRef = useRef<number[]>([]);
@@ -100,7 +100,7 @@ export function AudioVisualizer({
         borderWidth: 2,
         pointRadius: 0,
         fill: true,
-        tension: 0.3
+        tension: 0.3,
       },
       {
         label: 'Transient',
@@ -110,7 +110,7 @@ export function AudioVisualizer({
         borderWidth: 2,
         pointRadius: 0,
         fill: false,
-        tension: 0
+        tension: 0,
       },
       {
         label: 'Envelope',
@@ -121,9 +121,9 @@ export function AudioVisualizer({
         pointRadius: 0,
         borderDash: [5, 5],
         fill: false,
-        tension: 0.3
-      }
-    ]
+        tension: 0.3,
+      },
+    ],
   };
 
   const chartOptions = {
@@ -132,18 +132,18 @@ export function AudioVisualizer({
     animation: false as const,
     scales: {
       x: {
-        display: false
+        display: false,
       },
       y: {
         min: 0,
         max: 1,
         grid: {
-          color: 'rgba(255, 255, 255, 0.1)'
+          color: 'rgba(255, 255, 255, 0.1)',
         },
         ticks: {
-          color: '#9ca3af'
-        }
-      }
+          color: '#9ca3af',
+        },
+      },
     },
     plugins: {
       legend: {
@@ -151,17 +151,17 @@ export function AudioVisualizer({
         labels: {
           color: '#e5e7eb',
           usePointStyle: true,
-          padding: 20
-        }
+          padding: 20,
+        },
       },
       tooltip: {
-        enabled: false
-      }
+        enabled: false,
+      },
     },
     interaction: {
       intersect: false,
-      mode: 'index' as const
-    }
+      mode: 'index' as const,
+    },
   };
 
   return (
@@ -176,11 +176,7 @@ export function AudioVisualizer({
               <span className="audio-value gain">G: {audioData.g.toFixed(1)}x</span>
             </div>
           )}
-          <button
-            className="btn btn-small"
-            onClick={clearData}
-            disabled={disabled || !isStreaming}
-          >
+          <button className="btn btn-small" onClick={clearData} disabled={disabled || !isStreaming}>
             Clear
           </button>
           <button
@@ -194,15 +190,9 @@ export function AudioVisualizer({
       </div>
       <div className="audio-chart-container">
         {!isStreaming && !disabled && (
-          <div className="audio-placeholder">
-            Click "Start Stream" to visualize audio input
-          </div>
+          <div className="audio-placeholder">Click "Start Stream" to visualize audio input</div>
         )}
-        {disabled && (
-          <div className="audio-placeholder">
-            Connect to device to monitor audio
-          </div>
-        )}
+        {disabled && <div className="audio-placeholder">Connect to device to monitor audio</div>}
         <Line ref={chartRef} data={chartData} options={chartOptions} />
       </div>
     </div>

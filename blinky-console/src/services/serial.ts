@@ -49,9 +49,9 @@ export interface SerialEvent {
 export type SerialEventCallback = (event: SerialEvent) => void;
 
 // Constants for safety limits
-const MAX_BUFFER_SIZE = 4096;  // Max buffer size before truncation
-const MAX_COMMAND_LENGTH = 128;  // Max command length to send
-const ALLOWED_COMMAND_PATTERN = /^[a-zA-Z0-9_\-.\s]+$/;  // Alphanumeric + basic chars
+const MAX_BUFFER_SIZE = 4096; // Max buffer size before truncation
+const MAX_COMMAND_LENGTH = 128; // Max command length to send
+const ALLOWED_COMMAND_PATTERN = /^[a-zA-Z0-9_\-.\s]+$/; // Alphanumeric + basic chars
 
 class SerialService {
   private port: SerialPort | null = null;
@@ -151,7 +151,7 @@ class SerialService {
     // Check for allowed characters (alphanumeric, spaces, basic punctuation)
     if (!ALLOWED_COMMAND_PATTERN.test(sanitized)) {
       // Remove any control characters or special chars
-      sanitized = sanitized.replace(/[^\w\s.\-]/g, '');
+      sanitized = sanitized.replace(/[^\w\s.-]/g, '');
     }
 
     return sanitized;
@@ -175,7 +175,7 @@ class SerialService {
 
   // Send command and wait for JSON response
   async sendAndReceiveJson<T>(command: string, timeoutMs: number = 2000): Promise<T | null> {
-    return new Promise((resolve) => {
+    return new Promise(resolve => {
       let jsonBuffer = '';
       let resolved = false;
 

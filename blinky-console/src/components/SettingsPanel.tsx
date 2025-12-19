@@ -29,15 +29,18 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
     };
   }, []);
 
-  const handleChange = useCallback((value: number | boolean) => {
-    // Debounce changes to avoid flooding serial
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-    debounceRef.current = setTimeout(() => {
-      onChange(value);
-    }, 100);
-  }, [onChange]);
+  const handleChange = useCallback(
+    (value: number | boolean) => {
+      // Debounce changes to avoid flooding serial
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+      }
+      debounceRef.current = setTimeout(() => {
+        onChange(value);
+      }, 100);
+    },
+    [onChange]
+  );
 
   // Boolean toggle
   if (setting.type === 'bool') {
@@ -48,7 +51,7 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
           <input
             type="checkbox"
             checked={setting.value as boolean}
-            onChange={(e) => handleChange(e.target.checked)}
+            onChange={e => handleChange(e.target.checked)}
             disabled={disabled}
           />
           <span className="toggle-slider" />
@@ -73,7 +76,7 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
           max={setting.max}
           step={step}
           value={numValue}
-          onChange={(e) => handleChange(parseFloat(e.target.value))}
+          onChange={e => handleChange(parseFloat(e.target.value))}
           disabled={disabled}
         />
         <span className="setting-value">{displayValue}</span>
@@ -88,7 +91,7 @@ const categoryNames: Record<string, string> = {
   audio: 'Audio Input',
   agc: 'Auto Gain Control',
   debug: 'Debug',
-  viz: 'Visualization'
+  viz: 'Visualization',
 };
 
 // Category order for display
@@ -101,7 +104,7 @@ export function SettingsPanel({
   onLoad,
   onReset,
   onRefresh,
-  disabled
+  disabled,
 }: SettingsPanelProps) {
   const categories = Object.keys(settingsByCategory);
 
@@ -151,15 +154,13 @@ export function SettingsPanel({
       <div className="settings-categories">
         {sortedCategories.map(category => (
           <div key={category} className="settings-category">
-            <h3 className="category-title">
-              {categoryNames[category] || category.toUpperCase()}
-            </h3>
+            <h3 className="category-title">{categoryNames[category] || category.toUpperCase()}</h3>
             <div className="category-settings">
               {settingsByCategory[category].map(setting => (
                 <SettingControl
                   key={setting.name}
                   setting={setting}
-                  onChange={(value) => onSettingChange(setting.name, value)}
+                  onChange={value => onSettingChange(setting.name, value)}
                   disabled={disabled}
                 />
               ))}
