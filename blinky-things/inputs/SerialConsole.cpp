@@ -23,14 +23,6 @@ void SerialConsole::begin() {
     Serial.println(F("Serial console ready."));
 }
 
-// Static callback - forwards to instance method
-void SerialConsole::onFireParamChanged() {
-    if (instance_ && instance_->fireGenerator_) {
-        // Get fire params from the generator and update
-        // The settings are directly modifying the generator's params
-    }
-}
-
 void SerialConsole::registerSettings() {
     // Get direct pointers to the fire generator's params
     FireParams* fp = nullptr;
@@ -69,11 +61,11 @@ void SerialConsole::registerSettings() {
     }
 
     // === AUDIO SETTINGS ===
+    // Note: globalGain is NOT registered here - it's auto-managed by AGC
+    // and displayed via streaming JSON as {"a":{"g":...}}
     if (mic_) {
         settings_.registerFloat("gate", &mic_->noiseGate, "audio",
             "Noise gate threshold", 0.0f, 1.0f);
-        settings_.registerFloat("gain", &mic_->globalGain, "audio",
-            "Global gain multiplier", 0.1f, 10.0f);
         settings_.registerFloat("attack", &mic_->attackSeconds, "audio",
             "Attack time (seconds)", 0.001f, 1.0f);
         settings_.registerFloat("release", &mic_->releaseSeconds, "audio",
@@ -119,24 +111,22 @@ void SerialConsole::update() {
         }
     }
 
-    // JSON streaming for UI app
+    // JSON streaming for web app
     streamTick();
 }
 
 void SerialConsole::handleCommand(const char* cmd) {
-    // Try settings registry for "set" command
-    if (strncmp(cmd, "set ", 4) == 0) {
-        if (settings_.handleCommand(cmd)) {
-            return;
-        }
+    // Try settings registry first (handles set/get/show/list/categories/settings)
+    if (settings_.handleCommand(cmd)) {
+        return;
     }
 
-    // Then try special commands (JSON API)
+    // Then try special commands (JSON API, config management)
     if (handleSpecialCommand(cmd)) {
         return;
     }
 
-    Serial.println(F("Unknown command"));
+    Serial.println(F("Unknown command. Try 'settings' for help."));
 }
 
 bool SerialConsole::handleSpecialCommand(const char* cmd) {

@@ -8,15 +8,13 @@ describe('SettingsPanel', () => {
     { name: 'intensity', value: 0.75, type: 'float', cat: 'fire', min: 0, max: 1 },
     { name: 'speed', value: 100, type: 'uint8', cat: 'fire', min: 0, max: 255 },
     { name: 'enabled', value: true, type: 'bool', cat: 'audio', min: 0, max: 1 },
-    { name: 'gain', value: 2.5, type: 'float', cat: 'agc', min: 0.1, max: 10 },
-    { name: 'debug', value: false, type: 'bool', cat: 'debug', min: 0, max: 1 },
+    { name: 'agtarget', value: 0.55, type: 'float', cat: 'agc', min: 0.1, max: 0.95 },
   ];
 
   const mockSettingsByCategory: SettingsByCategory = {
     fire: mockSettings.filter(s => s.cat === 'fire'),
     audio: mockSettings.filter(s => s.cat === 'audio'),
     agc: mockSettings.filter(s => s.cat === 'agc'),
-    debug: mockSettings.filter(s => s.cat === 'debug'),
   };
 
   const defaultProps = {
@@ -106,7 +104,6 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('Fire Effect')).toBeInTheDocument();
       expect(screen.getByText('Audio Input')).toBeInTheDocument();
       expect(screen.getByText('Auto Gain Control')).toBeInTheDocument();
-      expect(screen.getByText('Debug')).toBeInTheDocument();
     });
 
     it('renders categories in correct order', () => {
@@ -124,13 +121,13 @@ describe('SettingsPanel', () => {
     it('renders boolean settings as checkboxes', () => {
       render(<SettingsPanel {...defaultProps} />);
       const checkboxes = screen.getAllByRole('checkbox');
-      expect(checkboxes.length).toBe(2); // enabled and debug
+      expect(checkboxes.length).toBe(1); // enabled
     });
 
     it('renders numeric settings as sliders', () => {
       render(<SettingsPanel {...defaultProps} />);
       const sliders = screen.getAllByRole('slider');
-      expect(sliders.length).toBe(3); // intensity, speed, gain
+      expect(sliders.length).toBe(3); // intensity, speed, agtarget
     });
 
     it('displays setting names', () => {
@@ -138,13 +135,13 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('intensity')).toBeInTheDocument();
       expect(screen.getByText('speed')).toBeInTheDocument();
       expect(screen.getByText('enabled')).toBeInTheDocument();
-      expect(screen.getByText('gain')).toBeInTheDocument();
+      expect(screen.getByText('agtarget')).toBeInTheDocument();
     });
 
     it('displays current values for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
       expect(screen.getByText('0.75')).toBeInTheDocument();
-      expect(screen.getByText('2.50')).toBeInTheDocument();
+      expect(screen.getByText('0.55')).toBeInTheDocument();
     });
 
     it('displays current values for integer settings', () => {

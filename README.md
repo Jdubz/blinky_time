@@ -14,7 +14,7 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 - **Unified Architecture** - Single generator supporting matrix, linear, and custom LED layouts
 - **Battery Management** - Smart charging detection and low-battery warnings
 - **IMU Integration** - Motion-responsive effects using built-in accelerometer
-- **Serial Console** - Real-time debugging and effect parameter tuning
+- **Web App Control** - [Blinky Console](blinky-console/) PWA for settings and audio visualization
 - **Zigzag Matrix Support** - Optimized for complex LED wiring patterns
 - **Production Ready** - Fully tested and documented with comprehensive build system
 
@@ -139,7 +139,7 @@ Fine-tune your fire effect in the device config files:
 
 - **Adaptive Microphone** - Automatic gain control and noise filtering
 - **Beat Detection** - Responds to music transients and beats
-- **Configurable Sensitivity** - Adjustable via serial console
+- **Configurable Sensitivity** - Adjustable via web app or serial API
 - **Real-time Visualization** - Live audio levels in debug output
 - **Low Latency** - ~16ms from sound to LED response
 
@@ -154,16 +154,27 @@ Fine-tune your fire effect in the device config files:
 
 ## 🛠 Development
 
-### Serial Console Commands
-Connect via serial monitor (115200 baud) for real-time control:
+### Serial Console API
+Connect via serial monitor (115200 baud) or use the [Blinky Console](blinky-console/) web app:
 
 ```
-help        - Show available commands
-status      - Display system information  
-brightness  - Adjust LED brightness
-fire        - Toggle fire effect on/off
-audio       - Audio sensitivity settings
-battery     - Battery status and settings
+JSON API (for web app):
+  json info           - Device info as JSON
+  json settings       - All settings as JSON with metadata
+  stream on/off       - Audio data streaming (~20Hz)
+
+Settings:
+  set <name> <value>  - Set a parameter value
+  get <name>          - Get a parameter value
+  show [category]     - Show all settings or by category
+  categories          - List all setting categories
+  settings            - Show settings with help text
+
+Configuration:
+  save                - Save settings to flash
+  load                - Load settings from flash
+  defaults            - Restore default values
+  reset               - Factory reset
 ```
 
 ### Adding New Device Types

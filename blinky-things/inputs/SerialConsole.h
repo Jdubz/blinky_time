@@ -13,14 +13,24 @@ class AdaptiveMic;
  * SerialConsole - JSON API for web app communication
  *
  * Supported Commands:
- *   json info           - Device info as JSON
- *   json settings       - All settings as JSON with metadata
- *   set <name> <value>  - Set a parameter value
- *   stream on/off       - Audio data streaming (~20Hz)
- *   save                - Save settings to flash
- *   load                - Load settings from flash
- *   defaults            - Restore default values
- *   reset               - Factory reset
+ *   JSON API (for web app):
+ *     json info           - Device info as JSON
+ *     json settings       - All settings as JSON with metadata
+ *     stream on/off       - Audio data streaming (~20Hz)
+ *
+ *   Settings (via SettingsRegistry):
+ *     set <name> <value>  - Set a parameter value
+ *     get <name>          - Get a parameter value
+ *     show [category]     - Show all settings or by category
+ *     list                - List all settings (alias for show)
+ *     categories          - List all setting categories
+ *     settings            - Show settings with help text
+ *
+ *   Configuration:
+ *     save                - Save settings to flash
+ *     load                - Load settings from flash
+ *     defaults            - Restore default values
+ *     reset / factory     - Factory reset (clear saved settings)
  */
 class SerialConsole {
 public:
@@ -40,9 +50,6 @@ private:
     bool handleSpecialCommand(const char* cmd);
     void restoreDefaults();
     void streamTick();
-
-    // Callbacks for settings changes
-    static void onFireParamChanged();
 
     // Members
     Fire* fireGenerator_;
