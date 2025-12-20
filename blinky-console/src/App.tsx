@@ -2,7 +2,6 @@ import { useSerial } from './hooks/useSerial';
 import { ConnectionBar } from './components/ConnectionBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AudioVisualizer } from './components/AudioVisualizer';
-import { Console } from './components/Console';
 import './styles.css';
 
 function App() {
@@ -13,17 +12,14 @@ function App() {
     settingsByCategory,
     isStreaming,
     audioData,
-    consoleLog,
     connect,
     disconnect,
-    sendCommand,
     setSetting,
     toggleStreaming,
     saveSettings,
     loadSettings,
     resetDefaults,
     refreshSettings,
-    clearConsole,
   } = useSerial();
 
   const isDisabled = connectionState !== 'connected';
@@ -44,12 +40,6 @@ function App() {
             audioData={audioData}
             isStreaming={isStreaming}
             onToggleStreaming={toggleStreaming}
-            disabled={isDisabled}
-          />
-          <Console
-            entries={consoleLog}
-            onSendCommand={sendCommand}
-            onClear={clearConsole}
             disabled={isDisabled}
           />
         </div>

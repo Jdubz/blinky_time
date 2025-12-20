@@ -32,7 +32,6 @@ struct ChargingConfig {
   bool fastChargeEnabled;
   float lowBatteryThreshold;
   float criticalBatteryThreshold;
-  bool autoShowVisualizationWhenCharging;
   float minVoltage;
   float maxVoltage;
 };

@@ -41,14 +41,6 @@ export interface AudioMessage {
 // Connection state
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
-// Console log entry
-export interface ConsoleEntry {
-  id: number;
-  timestamp: Date;
-  type: 'sent' | 'received' | 'error' | 'info';
-  message: string;
-}
-
 // Settings grouped by category
 export interface SettingsByCategory {
   [category: string]: DeviceSetting[];

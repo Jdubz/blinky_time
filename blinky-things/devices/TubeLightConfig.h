@@ -27,7 +27,6 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
     .fastChargeEnabled = true,
     .lowBatteryThreshold = 1.5f,
     .criticalBatteryThreshold = 1.3f,
-    .autoShowVisualizationWhenCharging = false,
     .minVoltage = 1.3f,
     .maxVoltage = 1.8f
   },

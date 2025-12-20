@@ -70,7 +70,6 @@ describe('useSerial', () => {
       expect(result.current.settings).toEqual([]);
       expect(result.current.isStreaming).toBe(false);
       expect(result.current.audioData).toBeNull();
-      expect(result.current.consoleLog).toEqual([]);
     });
 
     it('checks WebSerial support', () => {
@@ -109,17 +108,6 @@ describe('useSerial', () => {
       });
       expect(result.current.settings).toHaveLength(2);
     });
-
-    it('adds console entries for connect actions', async () => {
-      const { result } = renderHook(() => useSerial());
-
-      await act(async () => {
-        await result.current.connect();
-      });
-
-      expect(result.current.consoleLog.some(e => e.message === 'json info')).toBe(true);
-      expect(result.current.consoleLog.some(e => e.message === 'json settings')).toBe(true);
-    });
   });
 
   describe('disconnect', () => {
@@ -146,21 +134,6 @@ describe('useSerial', () => {
       });
 
       expect(serialService.setStreamEnabled).toHaveBeenCalledWith(false);
-    });
-  });
-
-  describe('sendCommand', () => {
-    it('sends command and adds console entry', async () => {
-      const { result } = renderHook(() => useSerial());
-
-      await act(async () => {
-        await result.current.sendCommand('test command');
-      });
-
-      expect(serialService.send).toHaveBeenCalledWith('test command');
-      expect(
-        result.current.consoleLog.some(e => e.message === 'test command' && e.type === 'sent')
-      ).toBe(true);
     });
   });
 
@@ -242,7 +215,6 @@ describe('useSerial', () => {
       });
 
       expect(serialService.saveSettings).toHaveBeenCalled();
-      expect(result.current.consoleLog.some(e => e.message === 'save')).toBe(true);
     });
   });
 
@@ -284,26 +256,6 @@ describe('useSerial', () => {
     });
   });
 
-  describe('clearConsole', () => {
-    it('clears all console entries', async () => {
-      const { result } = renderHook(() => useSerial());
-
-      // Add some entries
-      await act(async () => {
-        await result.current.sendCommand('command 1');
-        await result.current.sendCommand('command 2');
-      });
-
-      expect(result.current.consoleLog.length).toBeGreaterThan(0);
-
-      act(() => {
-        result.current.clearConsole();
-      });
-
-      expect(result.current.consoleLog).toEqual([]);
-    });
-  });
-
   describe('event handling', () => {
     it('handles connected event', async () => {
       const { result } = renderHook(() => useSerial());
@@ -316,7 +268,6 @@ describe('useSerial', () => {
 
       await waitFor(() => {
         expect(result.current.connectionState).toBe('connected');
-        expect(result.current.consoleLog.some(e => e.message === 'Connected to device')).toBe(true);
       });
     });
 
@@ -339,25 +290,6 @@ describe('useSerial', () => {
         expect(result.current.deviceInfo).toBeNull();
         expect(result.current.settings).toEqual([]);
         expect(result.current.isStreaming).toBe(false);
-      });
-    });
-
-    it('handles data event', async () => {
-      const { result } = renderHook(() => useSerial());
-
-      act(() => {
-        (serialService as unknown as { _emit: (e: SerialEvent) => void })._emit({
-          type: 'data',
-          data: 'received data',
-        });
-      });
-
-      await waitFor(() => {
-        expect(
-          result.current.consoleLog.some(
-            e => e.message === 'received data' && e.type === 'received'
-          )
-        ).toBe(true);
       });
     });
 
@@ -390,9 +322,6 @@ describe('useSerial', () => {
 
       await waitFor(() => {
         expect(result.current.connectionState).toBe('error');
-        expect(
-          result.current.consoleLog.some(e => e.message === 'Test error' && e.type === 'error')
-        ).toBe(true);
       });
     });
   });
@@ -409,21 +338,6 @@ describe('useSerial', () => {
       expect(result.current.settingsByCategory.audio).toBeDefined();
       expect(result.current.settingsByCategory.fire[0].name).toBe('intensity');
       expect(result.current.settingsByCategory.audio[0].name).toBe('enabled');
-    });
-  });
-
-  describe('console log limit', () => {
-    it('keeps only last 200 entries', async () => {
-      const { result } = renderHook(() => useSerial());
-
-      // Add 250 entries
-      for (let i = 0; i < 250; i++) {
-        await act(async () => {
-          await result.current.sendCommand(`command ${i}`);
-        });
-      }
-
-      expect(result.current.consoleLog.length).toBeLessThanOrEqual(200);
     });
   });
 });

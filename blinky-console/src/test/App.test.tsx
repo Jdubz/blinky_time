@@ -12,17 +12,14 @@ const mockUseSerial: UseSerialReturn = {
   settingsByCategory: {},
   isStreaming: false,
   audioData: null,
-  consoleLog: [],
   connect: vi.fn(),
   disconnect: vi.fn(),
-  sendCommand: vi.fn(),
   setSetting: vi.fn(),
   toggleStreaming: vi.fn(),
   saveSettings: vi.fn(),
   loadSettings: vi.fn(),
   resetDefaults: vi.fn(),
   refreshSettings: vi.fn(),
-  clearConsole: vi.fn(),
 };
 
 vi.mock('../hooks/useSerial', () => ({
@@ -40,7 +37,6 @@ describe('App', () => {
     mockUseSerial.settingsByCategory = {};
     mockUseSerial.isStreaming = false;
     mockUseSerial.audioData = null;
-    mockUseSerial.consoleLog = [];
   });
 
   it('renders the main application', () => {
@@ -56,9 +52,6 @@ describe('App', () => {
 
     // Audio visualizer
     expect(screen.getByText('Audio Monitor')).toBeInTheDocument();
-
-    // Console
-    expect(screen.getByText('Console')).toBeInTheDocument();
 
     // Settings panel
     expect(screen.getByText('Settings')).toBeInTheDocument();
@@ -104,10 +97,6 @@ describe('App', () => {
 
       render(<App />);
 
-      // Console input should be disabled
-      const consoleInput = screen.getByPlaceholderText('Connect to send commands...');
-      expect(consoleInput).toBeDisabled();
-
       // Stream button should be disabled
       const streamButton = screen.getByRole('button', { name: 'Start Stream' });
       expect(streamButton).toBeDisabled();
@@ -120,10 +109,6 @@ describe('App', () => {
     it('enables controls when connected', () => {
       mockUseSerial.connectionState = 'connected';
       render(<App />);
-
-      // Console input should be enabled
-      const consoleInput = screen.getByPlaceholderText('Type command and press Enter...');
-      expect(consoleInput).not.toBeDisabled();
 
       // Stream button should be enabled
       const streamButton = screen.getByRole('button', { name: 'Start Stream' });
@@ -217,41 +202,6 @@ describe('App', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
 
       expect(mockUseSerial.resetDefaults).toHaveBeenCalled();
-    });
-  });
-
-  describe('console interaction', () => {
-    it('calls sendCommand when command is sent', async () => {
-      mockUseSerial.connectionState = 'connected';
-      render(<App />);
-
-      const input = screen.getByPlaceholderText('Type command and press Enter...');
-      fireEvent.change(input, { target: { value: 'test command' } });
-      fireEvent.keyDown(input, { key: 'Enter' });
-
-      expect(mockUseSerial.sendCommand).toHaveBeenCalledWith('test command');
-    });
-
-    it('calls clearConsole when Clear is clicked', () => {
-      render(<App />);
-
-      // There are two Clear buttons (Console and AudioVisualizer), get the enabled one
-      const clearButtons = screen.getAllByRole('button', { name: 'Clear' });
-      // Console's Clear button is always enabled, AudioVisualizer's is disabled when not streaming
-      const consoleClearButton = clearButtons.find(btn => !btn.hasAttribute('disabled'));
-      fireEvent.click(consoleClearButton!);
-
-      expect(mockUseSerial.clearConsole).toHaveBeenCalled();
-    });
-
-    it('displays console entries', () => {
-      mockUseSerial.consoleLog = [
-        { id: 1, timestamp: new Date(), type: 'sent' as const, message: 'test message' },
-      ];
-
-      render(<App />);
-
-      expect(screen.getByText('test message')).toBeInTheDocument();
     });
   });
 

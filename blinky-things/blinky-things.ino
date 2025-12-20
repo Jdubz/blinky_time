@@ -82,13 +82,6 @@ void updateFireParams() {
   }
 }
 
-// Helper function to clear all LEDs
-void clearAllLEDs() {
-  for (int i = 0; i < ledMapper.getTotalPixels(); i++) {
-    leds.setPixelColor(i, Constants::LED_OFF);
-  }
-}
-
 // Helper functions for new Generator-Effect-Renderer architecture
 void updateFireEffect(float energy, float hit) {
   static uint32_t lastDebug = 0;
@@ -127,12 +120,6 @@ void showFireEffect() {
     renderer->render(*pixelMatrix);
     leds.show();
   }
-}
-
-void renderFireEffect() {
-  // In the new architecture, rendering is handled by showFireEffect()
-  // This function can be used for additional processing if needed
-  showFireEffect();
 }
 
 void setup() {
@@ -308,7 +295,7 @@ void setup() {
 
   // Initialize serial console for interactive settings management
   // Uses fireGen created on line 240 for direct parameter access
-  console = new(std::nothrow) SerialConsole(fireGen, &mic, leds);
+  console = new(std::nothrow) SerialConsole(fireGen, &mic);
   if (!console) {
     Serial.println(F("ERROR: SerialConsole allocation failed"));
     while(1); // Halt execution
