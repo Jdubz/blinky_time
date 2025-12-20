@@ -34,7 +34,6 @@ const DeviceConfig HAT_CONFIG = {
     .fastChargeEnabled = true,
     .lowBatteryThreshold = 1.4f,        // Higher threshold for critical device
     .criticalBatteryThreshold = 1.2f,   // Earlier warning for hat use
-    .autoShowVisualizationWhenCharging = true,
     .minVoltage = 1.2f,
     .maxVoltage = 1.8f
   },

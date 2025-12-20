@@ -1,55 +1,41 @@
 #pragma once
 
 #include <Arduino.h>
-#include <Adafruit_NeoPixel.h>
 #include "../generators/Fire.h"
 #include "../config/SettingsRegistry.h"
-#include "../config/Globals.h"
 
 // Forward declarations
 class ConfigStorage;
 class Fire;
-class GeneratorTestRunner;
 class AdaptiveMic;
+class BatteryMonitor;
 
 /**
- * SerialConsole - Interactive serial command interface
+ * SerialConsole - JSON API for web app communication
  *
- * Features:
- * - Settings-based parameter tuning via SettingsRegistry
- * - Debug output modes (mic, fire, IMU)
- * - Visualization modes (IMU, battery, test pattern)
- * - Configuration persistence
+ * Supported Commands:
+ *   JSON API (for web app):
+ *     json info           - Device info as JSON
+ *     json settings       - All settings as JSON with metadata
+ *     stream on/off       - Audio data streaming (~20Hz)
  *
- * Setting Commands (handled by SettingsRegistry):
- *   set <name> <value>      - Set a parameter
- *   get <name>              - Get current value
- *   show                    - Show all settings
- *   show <category>         - Show category (fire, audio, agc, debug)
- *   settings                - Show all settings with descriptions
+ *   Settings (via SettingsRegistry):
+ *     set <name> <value>  - Set a parameter value
+ *     get <name>          - Get a parameter value
+ *     show [category]     - Show all settings or by category
+ *     list                - List all settings (alias for show)
+ *     categories          - List all setting categories
+ *     settings            - Show settings with help text
  *
- * Special Commands:
- *   help                    - Show all available commands
- *   version                 - Show version info
- *   defaults                - Restore default values
- *   save                    - Save settings to flash
- *   load                    - Load settings from flash
- *   reset                   - Factory reset
- *
- * Debug Commands:
- *   mic stats               - Show mic statistics
- *   fire stats              - Show fire statistics
- *   battery stats           - Show battery statistics
- *
- * Visualization Commands:
- *   imu viz on/off          - IMU orientation display
- *   battery viz on/off      - Battery level display
- *   test pattern on/off     - Test pattern display
- *   fire disable/enable     - Disable fire for visualization
+ *   Configuration:
+ *     save                - Save settings to flash
+ *     load                - Load settings from flash
+ *     defaults            - Restore default values
+ *     reset / factory     - Factory reset (clear saved settings)
  */
 class SerialConsole {
 public:
-    SerialConsole(Fire* fireGen, AdaptiveMic* mic, Adafruit_NeoPixel& leds);
+    SerialConsole(Fire* fireGen, AdaptiveMic* mic);
 
     void begin();
     void update();
@@ -57,72 +43,29 @@ public:
     // External access
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
+    void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     SettingsRegistry& getSettings() { return settings_; }
-
-    // Visualization rendering (called from main loop when enabled)
-    void renderIMUVisualization();
-    void renderTopVisualization();
-    void renderBatteryVisualization();
-    void renderTestPattern();
-
-    // Mode flags - public for main loop access
-    bool imuVizEnabled = false;
-    bool fireDisabled = false;
-    bool heatVizEnabled = false;
-    bool batteryVizEnabled = false;
-    bool testPatternEnabled = false;
 
 private:
     void registerSettings();
     void handleCommand(const char* cmd);
     bool handleSpecialCommand(const char* cmd);
-    void printHelp();
-
-    // Callbacks for settings changes
-    static void onFireParamChanged();
-
-    // Debug/stats output
-    void micDebugTick();
-    void micDebugPrintLine();
-    void debugTick();
-    void imuDebugTick();
-    void printRawIMUData();
-    void printFireStats();
-    void printMicStats();
-    void printBatteryStats();
-    void printVersionInfo();
     void restoreDefaults();
-
-    // Helpers
-    int xyToPixelIndex(int x, int y);
+    void streamTick();
 
     // Members
     Fire* fireGenerator_;
     AdaptiveMic* mic_;
-    Adafruit_NeoPixel& leds_;
+    BatteryMonitor* battery_;
     ConfigStorage* configStorage_;
-    GeneratorTestRunner* testRunner_;
     SettingsRegistry settings_;
 
-    // Debug state
-    bool micDebugEnabled_ = false;
-    bool debugEnabled_ = false;
-    bool imuDebugEnabled_ = false;
-
-    uint32_t micDebugLastMs_ = 0;
-    uint32_t debugLastMs_ = 0;
-    uint32_t imuDebugLastMs_ = 0;
-
-    uint16_t micDebugPeriodMs_ = 200;
-    uint16_t debugPeriodMs_ = 500;
-    uint16_t imuDebugPeriodMs_ = 200;
-
-    // JSON streaming state (for UI app)
+    // JSON streaming state (for web app)
     bool streamEnabled_ = false;
     uint32_t streamLastMs_ = 0;
-    static const uint16_t STREAM_PERIOD_MS = 50;  // ~20Hz
-
-    void streamTick();
+    uint32_t batteryLastMs_ = 0;
+    static const uint16_t STREAM_PERIOD_MS = 50;   // ~20Hz for audio
+    static const uint16_t BATTERY_PERIOD_MS = 1000; // 1Hz for battery
 
     // Static instance pointer for callbacks
     static SerialConsole* instance_;

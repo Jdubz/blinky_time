@@ -90,12 +90,10 @@ const categoryNames: Record<string, string> = {
   fire: 'Fire Effect',
   audio: 'Audio Input',
   agc: 'Auto Gain Control',
-  debug: 'Debug',
-  viz: 'Visualization',
 };
 
 // Category order for display
-const categoryOrder = ['fire', 'audio', 'agc', 'viz', 'debug'];
+const categoryOrder = ['fire', 'audio', 'agc'];
 
 export function SettingsPanel({
   settingsByCategory,

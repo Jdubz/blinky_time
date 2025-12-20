@@ -1,11 +1,11 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { serialService, SerialEvent } from '../services/serial';
 import {
   DeviceInfo,
   DeviceSetting,
   AudioSample,
+  BatterySample,
   ConnectionState,
-  ConsoleEntry,
   SettingsByCategory,
 } from '../types';
 
@@ -19,24 +19,20 @@ export interface UseSerialReturn {
   settings: DeviceSetting[];
   settingsByCategory: SettingsByCategory;
 
-  // Audio streaming
+  // Streaming data
   isStreaming: boolean;
   audioData: AudioSample | null;
-
-  // Console
-  consoleLog: ConsoleEntry[];
+  batteryData: BatterySample | null;
 
   // Actions
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
-  sendCommand: (command: string) => Promise<void>;
   setSetting: (name: string, value: number | boolean) => Promise<void>;
   toggleStreaming: () => Promise<void>;
   saveSettings: () => Promise<void>;
   loadSettings: () => Promise<void>;
   resetDefaults: () => Promise<void>;
   refreshSettings: () => Promise<void>;
-  clearConsole: () => void;
 }
 
 export function useSerial(): UseSerialReturn {
@@ -45,25 +41,9 @@ export function useSerial(): UseSerialReturn {
   const [settings, setSettings] = useState<DeviceSetting[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
-  const [consoleLog, setConsoleLog] = useState<ConsoleEntry[]>([]);
+  const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
 
-  const consoleIdRef = useRef(0);
   const isSupported = serialService.isSupported();
-
-  // Add console entry
-  const addConsoleEntry = useCallback((type: ConsoleEntry['type'], message: string) => {
-    const entry: ConsoleEntry = {
-      id: ++consoleIdRef.current,
-      timestamp: new Date(),
-      type,
-      message,
-    };
-    // Keep last 200 entries - only slice when limit exceeded
-    setConsoleLog(prev => {
-      const newLog = [...prev, entry];
-      return newLog.length > 200 ? newLog.slice(-200) : newLog;
-    });
-  }, []);
 
   // Group settings by category - memoized to prevent recalculation on every render
   const settingsByCategory = useMemo(
@@ -83,7 +63,6 @@ export function useSerial(): UseSerialReturn {
       switch (event.type) {
         case 'connected':
           setConnectionState('connected');
-          addConsoleEntry('info', 'Connected to device');
           break;
         case 'disconnected':
           setConnectionState('disconnected');
@@ -91,30 +70,27 @@ export function useSerial(): UseSerialReturn {
           setSettings([]);
           setIsStreaming(false);
           setAudioData(null);
-          addConsoleEntry('info', 'Disconnected from device');
-          break;
-        case 'data':
-          if (event.data) {
-            addConsoleEntry('received', event.data);
-          }
+          setBatteryData(null);
           break;
         case 'audio':
           if (event.audio) {
             setAudioData(event.audio.a);
           }
           break;
+        case 'battery':
+          if (event.battery) {
+            setBatteryData(event.battery.b);
+          }
+          break;
         case 'error':
           setConnectionState('error');
-          if (event.error) {
-            addConsoleEntry('error', event.error.message);
-          }
           break;
       }
     };
 
     serialService.addEventListener(handleEvent);
     return () => serialService.removeEventListener(handleEvent);
-  }, [addConsoleEntry]);
+  }, []);
 
   // Connect to device
   const connect = useCallback(async () => {
@@ -123,20 +99,18 @@ export function useSerial(): UseSerialReturn {
 
     if (success) {
       // Fetch device info
-      addConsoleEntry('sent', 'json info');
       const info = await serialService.getDeviceInfo();
       if (info) {
         setDeviceInfo(info);
       }
 
       // Fetch settings
-      addConsoleEntry('sent', 'json settings');
       const settingsResponse = await serialService.getSettings();
       if (settingsResponse) {
         setSettings(settingsResponse.settings);
       }
     }
-  }, [addConsoleEntry]);
+  }, []);
 
   // Disconnect from device
   const disconnect = useCallback(async () => {
@@ -145,15 +119,6 @@ export function useSerial(): UseSerialReturn {
     }
     await serialService.disconnect();
   }, [isStreaming]);
-
-  // Send raw command
-  const sendCommand = useCallback(
-    async (command: string) => {
-      addConsoleEntry('sent', command);
-      await serialService.send(command);
-    },
-    [addConsoleEntry]
-  );
 
   // Set a setting value
   const setSetting = useCallback(async (name: string, value: number | boolean) => {
@@ -165,54 +130,45 @@ export function useSerial(): UseSerialReturn {
   // Toggle audio streaming
   const toggleStreaming = useCallback(async () => {
     const newState = !isStreaming;
-    addConsoleEntry('sent', newState ? 'stream on' : 'stream off');
     await serialService.setStreamEnabled(newState);
     setIsStreaming(newState);
     if (!newState) {
       setAudioData(null);
+      setBatteryData(null);
     }
-  }, [isStreaming, addConsoleEntry]);
+  }, [isStreaming]);
 
   // Save settings to flash
   const saveSettings = useCallback(async () => {
-    addConsoleEntry('sent', 'save');
     await serialService.saveSettings();
-  }, [addConsoleEntry]);
+  }, []);
 
   // Load settings from flash
   const loadSettings = useCallback(async () => {
-    addConsoleEntry('sent', 'load');
     await serialService.loadSettings();
     // Refresh settings after load
     const settingsResponse = await serialService.getSettings();
     if (settingsResponse) {
       setSettings(settingsResponse.settings);
     }
-  }, [addConsoleEntry]);
+  }, []);
 
   // Reset to defaults
   const resetDefaults = useCallback(async () => {
-    addConsoleEntry('sent', 'defaults');
     await serialService.resetDefaults();
     // Refresh settings after reset
     const settingsResponse = await serialService.getSettings();
     if (settingsResponse) {
       setSettings(settingsResponse.settings);
     }
-  }, [addConsoleEntry]);
+  }, []);
 
   // Refresh settings
   const refreshSettings = useCallback(async () => {
-    addConsoleEntry('sent', 'json settings');
     const settingsResponse = await serialService.getSettings();
     if (settingsResponse) {
       setSettings(settingsResponse.settings);
     }
-  }, [addConsoleEntry]);
-
-  // Clear console
-  const clearConsole = useCallback(() => {
-    setConsoleLog([]);
   }, []);
 
   return {
@@ -223,16 +179,14 @@ export function useSerial(): UseSerialReturn {
     settingsByCategory,
     isStreaming,
     audioData,
-    consoleLog,
+    batteryData,
     connect,
     disconnect,
-    sendCommand,
     setSetting,
     toggleStreaming,
     saveSettings,
     loadSettings,
     resetDefaults,
     refreshSettings,
-    clearConsole,
   };
 }
