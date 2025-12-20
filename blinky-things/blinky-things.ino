@@ -301,6 +301,7 @@ void setup() {
     while(1); // Halt execution
   }
   console->setConfigStorage(&configStorage);
+  console->setBatteryMonitor(&battery);
   console->begin();
   Serial.println(F("Serial console initialized"));
 

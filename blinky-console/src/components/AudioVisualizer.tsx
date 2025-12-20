@@ -11,7 +11,7 @@ import {
   Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import { AudioSample } from '../types';
+import { AudioSample, BatterySample } from '../types';
 
 // Register Chart.js components
 ChartJS.register(
@@ -27,6 +27,7 @@ ChartJS.register(
 
 interface AudioVisualizerProps {
   audioData: AudioSample | null;
+  batteryData: BatterySample | null;
   isStreaming: boolean;
   onToggleStreaming: () => void;
   disabled: boolean;
@@ -36,6 +37,7 @@ const MAX_DATA_POINTS = 150; // ~7.5 seconds at 20Hz
 
 export function AudioVisualizer({
   audioData,
+  batteryData,
   isStreaming,
   onToggleStreaming,
   disabled,
@@ -188,6 +190,26 @@ export function AudioVisualizer({
           </button>
         </div>
       </div>
+
+      {batteryData && isStreaming && (
+        <div className="battery-status">
+          <div className="battery-indicator">
+            <div
+              className="battery-fill"
+              style={{
+                width: `${batteryData.p}%`,
+                backgroundColor:
+                  batteryData.p > 50 ? '#22c55e' : batteryData.p > 20 ? '#eab308' : '#ef4444',
+              }}
+            />
+            {batteryData.c && <span className="battery-charging">⚡</span>}
+          </div>
+          <span className="battery-text">
+            {batteryData.p}% • {batteryData.v.toFixed(2)}V{batteryData.c ? ' • Charging' : ''}
+          </span>
+        </div>
+      )}
+
       <div className="audio-chart-container">
         {!isStreaming && !disabled && (
           <div className="audio-placeholder">Click "Start Stream" to visualize audio input</div>

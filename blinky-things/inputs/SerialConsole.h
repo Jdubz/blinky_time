@@ -8,6 +8,7 @@
 class ConfigStorage;
 class Fire;
 class AdaptiveMic;
+class BatteryMonitor;
 
 /**
  * SerialConsole - JSON API for web app communication
@@ -42,6 +43,7 @@ public:
     // External access
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
+    void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     SettingsRegistry& getSettings() { return settings_; }
 
 private:
@@ -54,13 +56,16 @@ private:
     // Members
     Fire* fireGenerator_;
     AdaptiveMic* mic_;
+    BatteryMonitor* battery_;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
 
     // JSON streaming state (for web app)
     bool streamEnabled_ = false;
     uint32_t streamLastMs_ = 0;
-    static const uint16_t STREAM_PERIOD_MS = 50;  // ~20Hz
+    uint32_t batteryLastMs_ = 0;
+    static const uint16_t STREAM_PERIOD_MS = 50;   // ~20Hz for audio
+    static const uint16_t BATTERY_PERIOD_MS = 1000; // 1Hz for battery
 
     // Static instance pointer for callbacks
     static SerialConsole* instance_;

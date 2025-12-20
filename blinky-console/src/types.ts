@@ -38,6 +38,18 @@ export interface AudioMessage {
   a: AudioSample;
 }
 
+// Battery status from streaming `{"b":{...}}` messages
+export interface BatterySample {
+  c: boolean; // charging
+  v: number; // voltage
+  p: number; // percent (0-100)
+}
+
+// Streaming battery message format
+export interface BatteryMessage {
+  b: BatterySample;
+}
+
 // Connection state
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 

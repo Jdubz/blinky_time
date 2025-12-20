@@ -1,4 +1,4 @@
-import { DeviceInfo, SettingsResponse, AudioMessage } from '../types';
+import { DeviceInfo, SettingsResponse, AudioMessage, BatteryMessage } from '../types';
 
 // WebSerial type declarations
 declare global {
@@ -37,12 +37,13 @@ declare global {
   }
 }
 
-export type SerialEventType = 'connected' | 'disconnected' | 'data' | 'error' | 'audio';
+export type SerialEventType = 'connected' | 'disconnected' | 'data' | 'error' | 'audio' | 'battery';
 
 export interface SerialEvent {
   type: SerialEventType;
   data?: string;
   audio?: AudioMessage;
+  battery?: BatteryMessage;
   error?: Error;
 }
 
@@ -297,6 +298,17 @@ class SerialService {
               continue;
             } catch {
               // Not valid audio JSON
+            }
+          }
+
+          // Check if it's a battery streaming message
+          if (trimmed.startsWith('{"b":')) {
+            try {
+              const batteryMsg = JSON.parse(trimmed) as BatteryMessage;
+              this.emit({ type: 'battery', battery: batteryMsg });
+              continue;
+            } catch {
+              // Not valid battery JSON
             }
           }
 

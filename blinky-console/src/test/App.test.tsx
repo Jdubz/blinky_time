@@ -12,6 +12,7 @@ const mockUseSerial: UseSerialReturn = {
   settingsByCategory: {},
   isStreaming: false,
   audioData: null,
+  batteryData: null,
   connect: vi.fn(),
   disconnect: vi.fn(),
   setSetting: vi.fn(),

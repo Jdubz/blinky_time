@@ -1,6 +1,7 @@
 #include "SerialConsole.h"
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
+#include "BatteryMonitor.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../types/Version.h"
@@ -11,7 +12,7 @@ extern const DeviceConfig& config;
 SerialConsole* SerialConsole::instance_ = nullptr;
 
 SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : fireGenerator_(fireGen), mic_(mic), configStorage_(nullptr) {
+    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), configStorage_(nullptr) {
     instance_ = this;
 }
 
@@ -226,21 +227,39 @@ void SerialConsole::restoreDefaults() {
 }
 
 void SerialConsole::streamTick() {
-    if (!streamEnabled_ || !mic_) return;
+    if (!streamEnabled_) return;
 
     uint32_t now = millis();
-    if (now - streamLastMs_ < STREAM_PERIOD_MS) return;
-    streamLastMs_ = now;
 
-    // Output compact JSON for UI app (~20Hz)
-    // Format: {"a":{"l":0.45,"t":0.85,"e":0.32,"g":3.5}}
-    Serial.print(F("{\"a\":{\"l\":"));
-    Serial.print(mic_->getLevel(), 2);
-    Serial.print(F(",\"t\":"));
-    Serial.print(mic_->getTransient(), 2);
-    Serial.print(F(",\"e\":"));
-    Serial.print(mic_->getEnv(), 2);
-    Serial.print(F(",\"g\":"));
-    Serial.print(mic_->getGlobalGain(), 1);
-    Serial.println(F("}}"));
+    // Audio streaming at ~20Hz
+    if (mic_ && (now - streamLastMs_ >= STREAM_PERIOD_MS)) {
+        streamLastMs_ = now;
+
+        // Output compact JSON for web app
+        // Format: {"a":{"l":0.45,"t":0.85,"e":0.32,"g":3.5}}
+        Serial.print(F("{\"a\":{\"l\":"));
+        Serial.print(mic_->getLevel(), 2);
+        Serial.print(F(",\"t\":"));
+        Serial.print(mic_->getTransient(), 2);
+        Serial.print(F(",\"e\":"));
+        Serial.print(mic_->getEnv(), 2);
+        Serial.print(F(",\"g\":"));
+        Serial.print(mic_->getGlobalGain(), 1);
+        Serial.println(F("}}"));
+    }
+
+    // Battery streaming at ~1Hz
+    if (battery_ && (now - batteryLastMs_ >= BATTERY_PERIOD_MS)) {
+        batteryLastMs_ = now;
+
+        // Output battery status JSON
+        // Format: {"b":{"c":true,"v":3.85,"p":72}}
+        Serial.print(F("{\"b\":{\"c\":"));
+        Serial.print(battery_->isCharging() ? F("true") : F("false"));
+        Serial.print(F(",\"v\":"));
+        Serial.print(battery_->getVoltage(), 2);
+        Serial.print(F(",\"p\":"));
+        Serial.print(battery_->getPercent());
+        Serial.println(F("}}"));
+    }
 }

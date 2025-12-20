@@ -4,6 +4,7 @@ import {
   DeviceInfo,
   DeviceSetting,
   AudioSample,
+  BatterySample,
   ConnectionState,
   SettingsByCategory,
 } from '../types';
@@ -18,9 +19,10 @@ export interface UseSerialReturn {
   settings: DeviceSetting[];
   settingsByCategory: SettingsByCategory;
 
-  // Audio streaming
+  // Streaming data
   isStreaming: boolean;
   audioData: AudioSample | null;
+  batteryData: BatterySample | null;
 
   // Actions
   connect: () => Promise<void>;
@@ -39,6 +41,7 @@ export function useSerial(): UseSerialReturn {
   const [settings, setSettings] = useState<DeviceSetting[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
+  const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
 
   const isSupported = serialService.isSupported();
 
@@ -67,10 +70,16 @@ export function useSerial(): UseSerialReturn {
           setSettings([]);
           setIsStreaming(false);
           setAudioData(null);
+          setBatteryData(null);
           break;
         case 'audio':
           if (event.audio) {
             setAudioData(event.audio.a);
+          }
+          break;
+        case 'battery':
+          if (event.battery) {
+            setBatteryData(event.battery.b);
           }
           break;
         case 'error':
@@ -125,6 +134,7 @@ export function useSerial(): UseSerialReturn {
     setIsStreaming(newState);
     if (!newState) {
       setAudioData(null);
+      setBatteryData(null);
     }
   }, [isStreaming]);
 
@@ -169,6 +179,7 @@ export function useSerial(): UseSerialReturn {
     settingsByCategory,
     isStreaming,
     audioData,
+    batteryData,
     connect,
     disconnect,
     setSetting,

@@ -12,6 +12,7 @@ function App() {
     settingsByCategory,
     isStreaming,
     audioData,
+    batteryData,
     connect,
     disconnect,
     setSetting,
@@ -38,6 +39,7 @@ function App() {
         <div className="left-panel">
           <AudioVisualizer
             audioData={audioData}
+            batteryData={batteryData}
             isStreaming={isStreaming}
             onToggleStreaming={toggleStreaming}
             disabled={isDisabled}
