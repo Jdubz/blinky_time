@@ -1,7 +1,9 @@
 import { useSerial } from './hooks/useSerial';
+import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { ConnectionBar } from './components/ConnectionBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AudioVisualizer } from './components/AudioVisualizer';
+import { OfflineBanner } from './components/OfflineBanner';
 import './styles.css';
 
 function App() {
@@ -23,10 +25,12 @@ function App() {
     refreshSettings,
   } = useSerial();
 
+  const isOnline = useNetworkStatus();
   const isDisabled = connectionState !== 'connected';
 
   return (
     <div className="app">
+      <OfflineBanner isOnline={isOnline} />
       <ConnectionBar
         connectionState={connectionState}
         deviceInfo={deviceInfo}
