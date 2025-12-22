@@ -42,10 +42,7 @@ async function generateIcon(svgBuffer, config) {
     const padding = Math.floor(size * MASKABLE_PADDING_PERCENT);
 
     // Create the icon at 80% size
-    const iconBuffer = await sharp(svgBuffer)
-      .resize(iconSize, iconSize)
-      .png()
-      .toBuffer();
+    const iconBuffer = await sharp(svgBuffer).resize(iconSize, iconSize).png().toBuffer();
 
     // Composite onto a background with padding
     pipeline = sharp({
@@ -72,7 +69,7 @@ async function generateFavicon(svgBuffer) {
   // Generate ICO file with multiple sizes
   const sizes = [16, 32, 48];
   const layers = await Promise.all(
-    sizes.map(async (size) => {
+    sizes.map(async size => {
       return await sharp(svgBuffer).resize(size, size).png().toBuffer();
     })
   );
@@ -105,7 +102,7 @@ async function main() {
   console.log('\nAll icons generated successfully!');
 }
 
-main().catch((err) => {
+main().catch(err => {
   console.error('Error generating icons:', err);
   process.exit(1);
 });
