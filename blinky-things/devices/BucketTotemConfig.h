@@ -29,10 +29,10 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
   },
   .charging = {
     .fastChargeEnabled = true,
-    .lowBatteryThreshold = 1.5f,
-    .criticalBatteryThreshold = 1.3f,
-    .minVoltage = 1.3f,
-    .maxVoltage = 1.8f
+    .lowBatteryThreshold = Platform::Battery::DEFAULT_LOW_THRESHOLD,
+    .criticalBatteryThreshold = Platform::Battery::DEFAULT_CRITICAL_THRESHOLD,
+    .minVoltage = Platform::Battery::VOLTAGE_EMPTY,
+    .maxVoltage = Platform::Battery::VOLTAGE_FULL
   },
   .imu = {
     .upVectorX = 0.0f,

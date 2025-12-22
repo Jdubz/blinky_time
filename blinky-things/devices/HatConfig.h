@@ -32,10 +32,11 @@ const DeviceConfig HAT_CONFIG = {
   },
   .charging = {
     .fastChargeEnabled = true,
-    .lowBatteryThreshold = 1.4f,        // Higher threshold for critical device
-    .criticalBatteryThreshold = 1.2f,   // Earlier warning for hat use
-    .minVoltage = 1.2f,
-    .maxVoltage = 1.8f
+    // Higher thresholds for wearable safety (above Platform::Battery defaults)
+    .lowBatteryThreshold = 3.6f,        // LiPo ~20%, higher for wearable safety
+    .criticalBatteryThreshold = 3.4f,   // LiPo ~5%, earlier warning for hat use
+    .minVoltage = Platform::Battery::VOLTAGE_EMPTY,
+    .maxVoltage = Platform::Battery::VOLTAGE_FULL
   },
   .imu = {
     .upVectorX = 0.0f,

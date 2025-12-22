@@ -1,5 +1,9 @@
 #include "BatteryMonitor.h"
 
+BatteryMonitor::BatteryMonitor(IGpio& gpio, IAdc& adc, ISystemTime& time)
+    : gpio_(gpio), adc_(adc), time_(time) {
+}
+
 bool BatteryMonitor::begin() {
   Config cfg;             // default-constructed config
   return begin(cfg);      // delegate to explicit overload
@@ -9,33 +13,29 @@ bool BatteryMonitor::begin(const Config& cfg) {
   cfg_ = cfg;
 
   // ADC setup
-  #if defined(analogReadResolution)
-  analogReadResolution(cfg_.adcBits);
-  #endif
+  adc_.setResolution(cfg_.adcBits);
 
-  #if defined(AR_INTERNAL2V4)
   if (cfg_.useInternal2V4Ref) {
-    analogReference(AR_INTERNAL2V4);
+    adc_.setReference(IAdc::REF_INTERNAL_2V4);
   }
-  #endif
 
   // Divider control
   if (cfg_.pinVBATEnable >= 0) {
-    pinMode(cfg_.pinVBATEnable, OUTPUT);
+    gpio_.pinMode(cfg_.pinVBATEnable, IGpio::OUTPUT_MODE);
     // Keep disabled until read (HIGH = disable on XIAO)
-    digitalWrite(cfg_.pinVBATEnable, HIGH);
+    gpio_.digitalWrite(cfg_.pinVBATEnable, IGpio::HIGH_LEVEL);
   }
 
   // HICHG control
   if (cfg_.pinHiChg >= 0) {
-    pinMode(cfg_.pinHiChg, OUTPUT);
+    gpio_.pinMode(cfg_.pinHiChg, IGpio::OUTPUT_MODE);
     // Default to "slow" 50 mA to be gentle
-    digitalWrite(cfg_.pinHiChg, cfg_.hichgActiveLow ? HIGH : LOW);
+    gpio_.digitalWrite(cfg_.pinHiChg, cfg_.hichgActiveLow ? IGpio::HIGH_LEVEL : IGpio::LOW_LEVEL);
   }
 
   // CHG status input
   if (cfg_.pinChgStatus >= 0) {
-    pinMode(cfg_.pinChgStatus, INPUT_PULLUP);
+    gpio_.pinMode(cfg_.pinChgStatus, IGpio::INPUT_PULLUP_MODE);
   }
 
   // Seed smoothed value
@@ -49,21 +49,21 @@ bool BatteryMonitor::begin(const Config& cfg) {
 void BatteryMonitor::enableDivider_(bool on) {
   if (cfg_.pinVBATEnable < 0) return;
   // On XIAO BLE: LOW = enable divider, HIGH = disable
-  digitalWrite(cfg_.pinVBATEnable, on ? LOW : HIGH);
+  gpio_.digitalWrite(cfg_.pinVBATEnable, on ? IGpio::LOW_LEVEL : IGpio::HIGH_LEVEL);
 }
 
 uint16_t BatteryMonitor::readOnceRaw_() {
   uint32_t acc = 0;
   uint8_t n = cfg_.samples > 0 ? cfg_.samples : 1;
   for (uint8_t i = 0; i < n; ++i) {
-    acc += analogRead(cfg_.pinVBAT);
+    acc += adc_.analogRead(cfg_.pinVBAT);
   }
   return (uint16_t)(acc / n);
 }
 
 uint16_t BatteryMonitor::readRaw() {
   enableDivider_(true);
-  delay(3); // settle the MOSFET/divider & ADC mux
+  time_.delay(3); // settle the MOSFET/divider & ADC mux
   uint16_t raw = readOnceRaw_();
   enableDivider_(false);
   return raw;
@@ -94,40 +94,45 @@ void BatteryMonitor::update() {
 
 void BatteryMonitor::setFastCharge(bool enable) {
   if (cfg_.pinHiChg < 0) return;
-  bool out = enable ? (cfg_.hichgActiveLow ? LOW : HIGH)
-                    : (cfg_.hichgActiveLow ? HIGH : LOW);
-  digitalWrite(cfg_.pinHiChg, out);
+  uint8_t out = enable ? (cfg_.hichgActiveLow ? IGpio::LOW_LEVEL : IGpio::HIGH_LEVEL)
+                       : (cfg_.hichgActiveLow ? IGpio::HIGH_LEVEL : IGpio::LOW_LEVEL);
+  gpio_.digitalWrite(cfg_.pinHiChg, out);
 }
 
 bool BatteryMonitor::isCharging() const {
   if (cfg_.pinChgStatus < 0) return false;
-  int v = digitalRead(cfg_.pinChgStatus);
-  bool active = cfg_.chgActiveLow ? (v == LOW) : (v == HIGH);
+  int v = gpio_.digitalRead(cfg_.pinChgStatus);
+  bool active = cfg_.chgActiveLow ? (v == IGpio::LOW_LEVEL) : (v == IGpio::HIGH_LEVEL);
   return active;
 }
 
 
 // Rough LiPo open-circuit voltage curve (no load)
-// 4.20V -> 100% ; 3.70V -> ~50% ; 3.30V -> 0%
+// Uses Platform::Battery constants for thresholds
 uint8_t BatteryMonitor::voltageToPercent(float v) {
-  if (v <= 3.30f) return 0;
-  if (v >= 4.20f) return 100;
+  constexpr float V_EMPTY = Platform::Battery::VOLTAGE_CRITICAL;  // 3.30V -> 0%
+  constexpr float V_FULL  = Platform::Battery::VOLTAGE_FULL;      // 4.20V -> 100%
+  constexpr float V_LOW   = Platform::Battery::VOLTAGE_LOW;       // 3.50V -> ~10%
+  constexpr float V_NOM   = Platform::Battery::VOLTAGE_NOMINAL;   // 3.70V -> ~40%
+
+  if (v <= V_EMPTY) return 0;
+  if (v >= V_FULL) return 100;
 
   // Piecewise linear approximation for a pleasant gauge
-  if (v < 3.50f) {
+  if (v < V_LOW) {
     // 3.30 -> 3.50 : 0% -> 10%
-    return (uint8_t)((v - 3.30f) * (10.0f / 0.20f) + 0.5f);
-  } else if (v < 3.70f) {
+    return (uint8_t)((v - V_EMPTY) * (10.0f / (V_LOW - V_EMPTY)) + 0.5f);
+  } else if (v < V_NOM) {
     // 3.50 -> 3.70 : 10% -> 40%
-    return (uint8_t)(10 + (v - 3.50f) * (30.0f / 0.20f) + 0.5f);
+    return (uint8_t)(10 + (v - V_LOW) * (30.0f / (V_NOM - V_LOW)) + 0.5f);
   } else if (v < 3.90f) {
     // 3.70 -> 3.90 : 40% -> 75%
-    return (uint8_t)(40 + (v - 3.70f) * (35.0f / 0.20f) + 0.5f);
+    return (uint8_t)(40 + (v - V_NOM) * (35.0f / 0.20f) + 0.5f);
   } else if (v < 4.05f) {
     // 3.90 -> 4.05 : 75% -> 92%
     return (uint8_t)(75 + (v - 3.90f) * (17.0f / 0.15f) + 0.5f);
   } else {
     // 4.05 -> 4.20 : 92% -> 100%
-    return (uint8_t)(92 + (v - 4.05f) * (8.0f / 0.15f) + 0.5f);
+    return (uint8_t)(92 + (v - 4.05f) * (8.0f / (V_FULL - 4.05f)) + 0.5f);
   }
 }

@@ -1,6 +1,8 @@
 #pragma once
-#include <Arduino.h>
-#include <PDM.h>
+#include <stdint.h>
+#include "../hal/interfaces/IPdmMic.h"
+#include "../hal/interfaces/ISystemTime.h"
+#include "../hal/PlatformConstants.h"
 
 // AdaptiveMic
 // - Output uses raw instantaneous mic average (snappy, no smoothing).
@@ -9,6 +11,20 @@
 // - Software AGC adapts over ~10s.
 // - Continuous normalization window.
 
+// Time constants for envelope and gain adaptation
+namespace MicConstants {
+    constexpr float ENV_MEAN_TAU_SECONDS = 90.0f;     // ~90s EMA for long-term env tracking
+    constexpr float MIN_DT_SECONDS = 0.0001f;         // Minimum dt clamp (0.1ms)
+    constexpr float MAX_DT_SECONDS = 0.1000f;         // Maximum dt clamp (100ms)
+    constexpr uint32_t MIC_DEAD_TIMEOUT_MS = 250;     // PDM alive check timeout
+}
+
+/**
+ * AdaptiveMic - Audio input with auto-gain control
+ *
+ * Uses HAL interfaces for hardware abstraction, enabling unit testing.
+ * Default values from PlatformConstants.h.
+ */
 class AdaptiveMic {
 public:
   // ---- Tunables ----
@@ -69,7 +85,7 @@ public:
   // Debug/health
   uint32_t lastIsrMs = 0;
   bool     pdmAlive  = false;
-  inline bool isMicDead(uint32_t nowMs, uint32_t timeoutMs=250) const {
+  inline bool isMicDead(uint32_t nowMs, uint32_t timeoutMs = MicConstants::MIC_DEAD_TIMEOUT_MS) const {
     return (nowMs - lastIsrMs) > timeoutMs;
   }
 
@@ -83,7 +99,13 @@ public:
   uint32_t getIsrCount() const { return s_isrCount; }
 
 public:
-  bool begin(uint32_t sampleRate = 16000, int gainInit = 32);
+  /**
+   * Construct with HAL dependencies for testability
+   */
+  AdaptiveMic(IPdmMic& pdm, ISystemTime& time);
+
+  bool begin(uint32_t sampleRate = Platform::Microphone::DEFAULT_SAMPLE_RATE,
+             int gainInit = Platform::Microphone::DEFAULT_GAIN);
   void end();
 
   void update(float dt);
@@ -98,6 +120,10 @@ public:
   static void onPDMdata();
 
 private:
+  // HAL references
+  IPdmMic& pdm_;
+  ISystemTime& time_;
+
   // ISR accumulators
   static AdaptiveMic* s_instance;
   volatile static uint32_t s_isrCount;
@@ -122,7 +148,7 @@ private:
 
 private:
   void computeCoeffs(float dt);
-  void consumeISR(float& avgAbs, uint16_t& maxAbs, uint32_t& n);
+  void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);
   void updateEnvelope(float avgAbs, float dt);
   void updateNormWindow(float ref, float dt);
   void autoGainTick(float dt);

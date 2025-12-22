@@ -1,5 +1,9 @@
 #pragma once
-#include <Arduino.h>
+#include <stdint.h>
+#include "../hal/interfaces/IGpio.h"
+#include "../hal/interfaces/IAdc.h"
+#include "../hal/interfaces/ISystemTime.h"
+#include "../hal/PlatformConstants.h"
 
 // Default pins for XIAO BLE / Sense (override via Config if your core differs)
 #ifndef PIN_VBAT
@@ -37,6 +41,12 @@
   #endif
 #endif
 
+/**
+ * BatteryMonitor - Monitors battery voltage and charging status
+ *
+ * Uses HAL interfaces for hardware abstraction, enabling unit testing.
+ * All battery voltage thresholds are centralized in PlatformConstants.h.
+ */
 class BatteryMonitor {
 public:
   struct Config {
@@ -46,20 +56,25 @@ public:
     int pinHiChg       = HICHG_PIN_DEFAULT; // set <0 to disable fast-charge control
     int pinChgStatus   = CHG_STATUS_PIN_DEFAULT; // set <0 if not available
 
-    // Behavior
-    bool hichgActiveLow   = true;   // LOW => fast charge
-    bool chgActiveLow     = true;   // LOW while charging
+    // Behavior (defaults from PlatformConstants)
+    bool hichgActiveLow   = Platform::Charging::HICHG_ACTIVE_LOW;
+    bool chgActiveLow     = Platform::Charging::CHG_ACTIVE_LOW;
     bool useInternal2V4Ref= true;   // use AR_INTERNAL2V4 if available
-    uint8_t adcBits       = 12;     // 10/12 depending on core
-    uint8_t samples       = 8;      // oversampling
-    float dividerRatio    = (1.0f/3.0f); // VBAT -> ADC ≈ VBAT/3
+    uint8_t adcBits       = Platform::Adc::DEFAULT_RESOLUTION;
+    uint8_t samples       = Platform::Adc::DEFAULT_SAMPLES;
+    float dividerRatio    = Platform::Battery::DIVIDER_RATIO;
 
     // Reference voltage when using AR_INTERNAL2V4
-    float vrefVolts       = 2.4f;
+    float vrefVolts       = Platform::Battery::VREF_2V4;
 
     // Simple low-pass for update()
     float lpAlpha         = 0.25f;  // 0..1 (higher = quicker)
   };
+
+  /**
+   * Construct with HAL dependencies for testability
+   */
+  BatteryMonitor(IGpio& gpio, IAdc& adc, ISystemTime& time);
 
   bool begin();    // uses a default Config internally
   bool begin(const Config& cfg);      // explicit config
@@ -81,6 +96,11 @@ public:
   static uint8_t voltageToPercent(float v);
 
 private:
+  // HAL references
+  IGpio& gpio_;
+  IAdc& adc_;
+  ISystemTime& time_;
+
   Config cfg_;
   bool inited_ = false;
   float lastVoltage_ = 0.0f;

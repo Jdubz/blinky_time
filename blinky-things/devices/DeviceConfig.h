@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "../hal/PlatformConstants.h"
 
 enum MatrixOrientation {
   HORIZONTAL = 0,  // Standard horizontal layout (fire-totem)
@@ -12,9 +13,12 @@ enum LayoutType {
   RANDOM_LAYOUT = 2   // Random/scattered arrangement with omnidirectional heat propagation
 };
 
+// DEPRECATED: Use LayoutType instead. Kept only for backward compatibility.
+// Will be removed in a future version.
+// Migration: MATRIX_FIRE -> MATRIX_LAYOUT, STRING_FIRE -> LINEAR_LAYOUT
 enum FireEffectType {
-  MATRIX_FIRE = 0,  // Traditional upward-propagating fire for matrices (DEPRECATED - use MATRIX_LAYOUT)
-  STRING_FIRE = 1   // Sideways-dissipating fire for LED strings (DEPRECATED - use LINEAR_LAYOUT)
+  MATRIX_FIRE = 0,  // DEPRECATED: Use MATRIX_LAYOUT instead
+  STRING_FIRE = 1   // DEPRECATED: Use LINEAR_LAYOUT instead
 };
 
 struct MatrixConfig {
