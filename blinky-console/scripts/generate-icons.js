@@ -5,7 +5,7 @@
  */
 
 import sharp from 'sharp';
-import { readFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -66,16 +66,8 @@ async function generateIcon(svgBuffer, config) {
 }
 
 async function generateFavicon(svgBuffer) {
-  // Generate ICO file with multiple sizes
-  const sizes = [16, 32, 48];
-  const layers = await Promise.all(
-    sizes.map(async size => {
-      return await sharp(svgBuffer).resize(size, size).png().toBuffer();
-    })
-  );
-
-  // For simplicity, just use the 32x32 as the main favicon.ico
-  // A proper ICO would need additional tooling
+  // Note: This generates a 32x32 PNG saved as .ico
+  // Modern browsers handle this fine; proper multi-size ICO would need additional tooling
   const outputPath = join(PUBLIC_DIR, 'favicon.ico');
   await sharp(svgBuffer).resize(32, 32).png().toFile(outputPath);
   console.log('Generated: favicon.ico (32x32)');
