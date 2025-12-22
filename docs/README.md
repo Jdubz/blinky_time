@@ -16,6 +16,7 @@ Complete documentation for the Blinky Time LED Fire Effect Controller.
 
 ### Planning & Next Steps
 - [**IMPROVEMENT_PLAN.md**](IMPROVEMENT_PLAN.md) - Roadmap and action items
+- [**BLUETOOTH_IMPLEMENTATION_PLAN.md**](BLUETOOTH_IMPLEMENTATION_PLAN.md) - Bluetooth/BLE support plan
 
 ## 📋 Documentation Overview
 
@@ -28,6 +29,7 @@ Complete documentation for the Blinky Time LED Fire Effect Controller.
 | [TESTING_SUMMARY.md](TESTING_SUMMARY.md) | Test framework overview | Developers |
 | [PLATFORM_FIX.md](PLATFORM_FIX.md) | Platform bug analysis | Developers |
 | [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) | Roadmap and action items | Contributors |
+| [BLUETOOTH_IMPLEMENTATION_PLAN.md](BLUETOOTH_IMPLEMENTATION_PLAN.md) | Bluetooth/BLE support plan | Developers |
 
 ## 🚀 Getting Started
 

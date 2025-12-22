@@ -72,6 +72,32 @@ body {
   overflow-y: auto;
 }
 
+/* ===== Offline Banner ===== */
+.offline-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background-color: var(--accent-warning);
+  color: #111;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.offline-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  background-color: #111;
+  color: var(--accent-warning);
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: bold;
+}
+
 /* ===== Connection Bar ===== */
 .connection-bar {
   display: flex;

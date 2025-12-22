@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run generate-icons && tsc && vite build",
+    "generate-icons": "node scripts/generate-icons.js",
     "preview": "vite preview",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -18,10 +19,10 @@
     "prepare": "cd .. && husky blinky-console/.husky || true"
   },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
     "chart.js": "^4.4.1",
-    "react-chartjs-2": "^5.2.0"
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.2.0",
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.16.0",
@@ -42,6 +43,7 @@
     "jsdom": "^25.0.1",
     "lint-staged": "^15.2.11",
     "prettier": "^3.4.2",
+    "sharp": "^0.34.5",
     "typescript": "^5.3.3",
     "typescript-eslint": "^8.18.0",
     "vite": "^5.0.10",
