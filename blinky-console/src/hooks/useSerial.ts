@@ -25,6 +25,11 @@ export interface UseSerialReturn {
   batteryData: BatterySample | null;
   batteryDebugData: BatteryDebugData | null;
 
+  // Serial console
+  consoleLines: string[];
+  clearConsole: () => void;
+  sendCommand: (command: string) => Promise<void>;
+
   // Actions
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
@@ -37,6 +42,8 @@ export interface UseSerialReturn {
   requestBatteryDebug: () => Promise<void>;
 }
 
+const MAX_CONSOLE_LINES = 500;
+
 export function useSerial(): UseSerialReturn {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
@@ -45,6 +52,7 @@ export function useSerial(): UseSerialReturn {
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
   const [batteryDebugData, setBatteryDebugData] = useState<BatteryDebugData | null>(null);
+  const [consoleLines, setConsoleLines] = useState<string[]>([]);
 
   const isSupported = serialService.isSupported();
 
@@ -109,6 +117,7 @@ export function useSerial(): UseSerialReturn {
       switch (event.type) {
         case 'connected':
           setConnectionState('connected');
+          setConsoleLines([]);
           break;
         case 'disconnected':
           setConnectionState('disconnected');
@@ -131,6 +140,17 @@ export function useSerial(): UseSerialReturn {
         case 'batteryDebug':
           if (event.batteryDebug) {
             setBatteryDebugData(event.batteryDebug);
+          }
+          break;
+        case 'data':
+          if (event.data) {
+            setConsoleLines(prev => {
+              const newLines = [...prev, event.data!];
+              // Keep only the last MAX_CONSOLE_LINES
+              return newLines.length > MAX_CONSOLE_LINES
+                ? newLines.slice(newLines.length - MAX_CONSOLE_LINES)
+                : newLines;
+            });
           }
           break;
         case 'error':
@@ -227,6 +247,23 @@ export function useSerial(): UseSerialReturn {
     await serialService.requestBatteryDebug();
   }, []);
 
+  // Clear console
+  const clearConsole = useCallback(() => {
+    setConsoleLines([]);
+  }, []);
+
+  // Send command to serial
+  const sendCommand = useCallback(async (command: string) => {
+    await serialService.send(command);
+    // Add the command to console as well
+    setConsoleLines(prev => {
+      const newLines = [...prev, `> ${command}`];
+      return newLines.length > MAX_CONSOLE_LINES
+        ? newLines.slice(newLines.length - MAX_CONSOLE_LINES)
+        : newLines;
+    });
+  }, []);
+
   return {
     connectionState,
     isSupported,
@@ -237,6 +274,9 @@ export function useSerial(): UseSerialReturn {
     audioData,
     batteryData,
     batteryDebugData,
+    consoleLines,
+    clearConsole,
+    sendCommand,
     connect,
     disconnect,
     setSetting,

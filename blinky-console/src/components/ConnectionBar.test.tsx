@@ -18,6 +18,7 @@ describe('ConnectionBar', () => {
     isSupported: true,
     onConnect: vi.fn(),
     onDisconnect: vi.fn(),
+    onOpenConsole: vi.fn(),
   };
 
   it('renders the app title', () => {

@@ -6,6 +6,7 @@ interface ConnectionBarProps {
   isSupported: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
+  onOpenConsole: () => void;
 }
 
 export function ConnectionBar({
@@ -14,6 +15,7 @@ export function ConnectionBar({
   isSupported,
   onConnect,
   onDisconnect,
+  onOpenConsole,
 }: ConnectionBarProps) {
   const getStatusColor = () => {
     switch (connectionState) {
@@ -61,6 +63,13 @@ export function ConnectionBar({
         )}
       </div>
       <div className="connection-right">
+        <button
+          className="btn btn-small console-btn"
+          onClick={onOpenConsole}
+          title="Open Serial Console"
+        >
+          🖥️
+        </button>
         <span className="status-indicator" style={{ backgroundColor: getStatusColor() }} />
         <span className="status-text">{getStatusText()}</span>
         {connectionState === 'connected' ? (
