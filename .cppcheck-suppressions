@@ -15,6 +15,12 @@ unusedFunction:*callback*
 # Arduino-specific includes
 missingIncludeSystem
 
+# Arduino flash memory macro (PROGMEM)
+unknownMacro:blinky-things/generators/Fire.cpp
+
+# Suppress branch limiting information messages (not actual errors)
+normalCheckLevelMaxBranches
+
 # ============================================
 # Embedded C++ patterns (acceptable in this context)
 # ============================================

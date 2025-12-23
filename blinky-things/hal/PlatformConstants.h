@@ -16,8 +16,14 @@ namespace Platform {
         // Ratio = R2/(R1+R2) = 510/(1510+510) = 510/2020 ≈ 0.2525
         constexpr float DIVIDER_RATIO = 510.0f / (1510.0f + 510.0f);
 
-        // ADC reference voltage when using AR_INTERNAL2V4
-        constexpr float VREF_2V4 = 2.4f;
+        // ADC reference voltage (platform-dependent)
+        // mbed core: Can set to 2.4V with AR_INTERNAL2V4
+        // non-mbed Seeed nRF52 core: Stuck at hardware default (~2.76V empirically measured)
+        #if defined(P0_31) || defined(AR_INTERNAL2V4)
+        constexpr float VREF_2V4 = 2.4f;   // mbed core with configurable reference
+        #else
+        constexpr float VREF_2V4 = 2.76f;  // non-mbed core (empirically calibrated)
+        #endif
 
         // LiPo voltage thresholds (chemistry-dependent, not device-dependent)
         constexpr float VOLTAGE_FULL = 4.20f;      // Fully charged
@@ -29,6 +35,18 @@ namespace Platform {
         // Default thresholds for battery warnings
         constexpr float DEFAULT_LOW_THRESHOLD = VOLTAGE_LOW;
         constexpr float DEFAULT_CRITICAL_THRESHOLD = VOLTAGE_CRITICAL;
+
+        // Battery connection detection range (valid LiPo operating range)
+        constexpr float MIN_CONNECTED_VOLTAGE = 2.5f;  // Below this, battery is disconnected
+        constexpr float MAX_CONNECTED_VOLTAGE = 4.3f;  // Above this, battery is disconnected
+
+        // Voltage sanity check range (broader than operating range)
+        // Readings outside this range indicate hardware/configuration errors
+        constexpr float MIN_VALID_VOLTAGE = 2.0f;  // Minimum physically plausible reading
+        constexpr float MAX_VALID_VOLTAGE = 5.0f;  // Maximum physically plausible reading
+
+        // ADC settling time for voltage divider MOSFET switch (milliseconds)
+        constexpr uint8_t ADC_SETTLE_TIME_MS = 20;  // Time to wait after enabling divider
     }
 
     // Charging hardware constants

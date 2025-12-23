@@ -22,7 +22,7 @@ private:
 
 public:
     explicit HueRotationEffect(float initialHueShift = 0.0f, float rotationSpeed = 0.0f);
-    virtual ~HueRotationEffect() = default;
+    virtual ~HueRotationEffect() override = default;
 
     // Effect interface
     virtual void begin(int width, int height) override;

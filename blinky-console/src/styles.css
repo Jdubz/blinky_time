@@ -290,6 +290,8 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: help;
+  border-bottom: 1px dotted var(--text-secondary);
 }
 
 .setting-slider-group {
@@ -421,6 +423,7 @@ body {
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   background-color: var(--bg-tertiary);
+  cursor: help;
 }
 
 .audio-value.level {
@@ -458,6 +461,22 @@ body {
   padding: 0.5rem 0.75rem;
   background-color: var(--bg-tertiary);
   border-radius: var(--border-radius);
+}
+
+.battery-debug-btn {
+  background: none;
+  border: none;
+  font-size: 1.125rem;
+  cursor: pointer;
+  padding: 0.25rem;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+  line-height: 1;
+  margin-left: auto;
+}
+
+.battery-debug-btn:hover {
+  opacity: 1;
 }
 
 .battery-indicator {

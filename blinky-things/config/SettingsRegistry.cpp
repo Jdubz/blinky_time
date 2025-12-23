@@ -539,6 +539,10 @@ void SettingsRegistry::printSettingsJson() {
             Serial.print((int32_t)s.maxVal);
         }
 
+        Serial.print(F(",\"desc\":\""));
+        Serial.print(s.description);
+        Serial.print(F("\""));
+
         Serial.print(F("}"));
     }
 

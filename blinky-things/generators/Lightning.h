@@ -34,7 +34,7 @@ struct LightningParams {
 class Lightning : public Generator {
 public:
     Lightning();
-    virtual ~Lightning();
+    virtual ~Lightning() override;
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;

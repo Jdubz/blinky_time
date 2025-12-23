@@ -18,6 +18,7 @@ describe('ConnectionBar', () => {
     isSupported: true,
     onConnect: vi.fn(),
     onDisconnect: vi.fn(),
+    onOpenConsole: vi.fn(),
   };
 
   it('renders the app title', () => {
@@ -41,7 +42,7 @@ describe('ConnectionBar', () => {
     it('shows "Connecting..." status when connecting', () => {
       render(<ConnectionBar {...defaultProps} connectionState="connecting" />);
       expect(screen.getByText('Connecting...', { selector: '.status-text' })).toBeInTheDocument();
-      const button = screen.getByRole('button');
+      const button = screen.getByRole('button', { name: 'Connecting...' });
       expect(button).toBeDisabled();
       expect(button).toHaveTextContent('Connecting...');
     });

@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { useSerial } from './hooks/useSerial';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { ConnectionBar } from './components/ConnectionBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AudioVisualizer } from './components/AudioVisualizer';
 import { OfflineBanner } from './components/OfflineBanner';
+import { SerialConsoleModal } from './components/SerialConsoleModal';
 import './styles.css';
 
 function App() {
@@ -15,6 +17,9 @@ function App() {
     isStreaming,
     audioData,
     batteryData,
+    batteryStatusData,
+    consoleLines,
+    sendCommand,
     connect,
     disconnect,
     setSetting,
@@ -23,8 +28,10 @@ function App() {
     loadSettings,
     resetDefaults,
     refreshSettings,
+    requestBatteryStatus,
   } = useSerial();
 
+  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
   const isOnline = useNetworkStatus();
   const isDisabled = connectionState !== 'connected';
 
@@ -37,6 +44,7 @@ function App() {
         isSupported={isSupported}
         onConnect={connect}
         onDisconnect={disconnect}
+        onOpenConsole={() => setIsConsoleOpen(true)}
       />
 
       <main className="main-content">
@@ -44,8 +52,10 @@ function App() {
           <AudioVisualizer
             audioData={audioData}
             batteryData={batteryData}
+            batteryStatusData={batteryStatusData}
             isStreaming={isStreaming}
             onToggleStreaming={toggleStreaming}
+            onRequestBatteryStatus={requestBatteryStatus}
             disabled={isDisabled}
           />
         </div>
@@ -62,6 +72,14 @@ function App() {
           />
         </div>
       </main>
+
+      <SerialConsoleModal
+        isOpen={isConsoleOpen}
+        onClose={() => setIsConsoleOpen(false)}
+        onSendCommand={sendCommand}
+        consoleLines={consoleLines}
+        disabled={isDisabled}
+      />
     </div>
   );
 }

@@ -37,13 +37,28 @@ declare global {
   }
 }
 
-export type SerialEventType = 'connected' | 'disconnected' | 'data' | 'error' | 'audio' | 'battery';
+export type SerialEventType =
+  | 'connected'
+  | 'disconnected'
+  | 'data'
+  | 'error'
+  | 'audio'
+  | 'battery'
+  | 'batteryStatus';
+
+export interface BatteryStatusData {
+  voltage: number; // Battery voltage in volts
+  percent: number; // Battery percentage (0-100)
+  charging: boolean; // True if currently charging
+  connected: boolean; // True if battery is connected
+}
 
 export interface SerialEvent {
   type: SerialEventType;
   data?: string;
   audio?: AudioMessage;
   battery?: BatteryMessage;
+  batteryStatus?: BatteryStatusData;
   error?: Error;
 }
 
@@ -117,24 +132,43 @@ class SerialService {
   async disconnect(): Promise<void> {
     this.isReading = false;
 
-    try {
-      if (this.reader) {
+    // Release reader
+    if (this.reader) {
+      try {
         await this.reader.cancel();
+      } catch (e) {
+        console.warn('Error canceling reader:', e);
+      }
+      try {
         this.reader.releaseLock();
-        this.reader = null;
+      } catch (e) {
+        console.warn('Error releasing reader lock:', e);
       }
-      if (this.writer) {
-        this.writer.releaseLock();
-        this.writer = null;
-      }
-      if (this.port) {
-        await this.port.close();
-        this.port = null;
-      }
-    } catch (error) {
-      console.error('Error disconnecting:', error);
-      this.emit({ type: 'error', error: error as Error });
+      this.reader = null;
     }
+
+    // Release writer
+    if (this.writer) {
+      try {
+        this.writer.releaseLock();
+      } catch (e) {
+        console.warn('Error releasing writer lock:', e);
+      }
+      this.writer = null;
+    }
+
+    // Close port
+    if (this.port) {
+      try {
+        await this.port.close();
+      } catch (e) {
+        console.warn('Error closing port:', e);
+      }
+      this.port = null;
+    }
+
+    // Clear buffers
+    this.buffer = '';
 
     this.emit({ type: 'disconnected' });
   }
@@ -261,6 +295,11 @@ class SerialService {
     await this.send('defaults');
   }
 
+  // Request battery status data
+  async requestBatteryStatus(): Promise<void> {
+    await this.send('battery');
+  }
+
   // Start reading from serial port
   private async startReading(): Promise<void> {
     if (!this.reader) return;
@@ -309,6 +348,17 @@ class SerialService {
               continue;
             } catch {
               // Not valid battery JSON
+            }
+          }
+
+          // Check if it's a battery status message
+          if (trimmed.startsWith('{"battery":')) {
+            try {
+              const parsed = JSON.parse(trimmed) as { battery: BatteryStatusData };
+              this.emit({ type: 'batteryStatus', batteryStatus: parsed.battery });
+              continue;
+            } catch {
+              // Not valid battery status JSON
             }
           }
 

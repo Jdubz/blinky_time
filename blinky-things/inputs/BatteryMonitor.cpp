@@ -63,7 +63,7 @@ uint16_t BatteryMonitor::readOnceRaw_() {
 
 uint16_t BatteryMonitor::readRaw() {
   enableDivider_(true);
-  time_.delay(3); // settle the MOSFET/divider & ADC mux
+  time_.delay(Platform::Battery::ADC_SETTLE_TIME_MS); // settle the MOSFET/divider & ADC mux
   uint16_t raw = readOnceRaw_();
   enableDivider_(false);
   return raw;
@@ -82,6 +82,18 @@ float BatteryMonitor::readVoltage() {
 
   // Undo divider to get battery voltage
   float v_batt = v_adc / cfg_.dividerRatio;
+
+  // Sanity check: Readings outside the physically plausible range
+  // indicate hardware/configuration issues
+  if (v_batt < Platform::Battery::MIN_VALID_VOLTAGE || v_batt > Platform::Battery::MAX_VALID_VOLTAGE) {
+    // Invalid reading - return last known good value if available
+    if (lastVoltage_ >= Platform::Battery::MIN_VALID_VOLTAGE && lastVoltage_ <= Platform::Battery::MAX_VALID_VOLTAGE) {
+      return lastVoltage_;
+    }
+    // No good value available, return a clearly invalid value
+    return 0.0f;
+  }
+
   return v_batt;
 }
 
@@ -99,7 +111,16 @@ void BatteryMonitor::setFastCharge(bool enable) {
   gpio_.digitalWrite(cfg_.pinHiChg, out);
 }
 
+bool BatteryMonitor::isBatteryConnected() const {
+  // Battery is considered connected if voltage is in valid LiPo operating range
+  float v = lastVoltage_;
+  return (v >= Platform::Battery::MIN_CONNECTED_VOLTAGE && v <= Platform::Battery::MAX_CONNECTED_VOLTAGE);
+}
+
 bool BatteryMonitor::isCharging() const {
+  // Can't be charging without a battery connected
+  if (!isBatteryConnected()) return false;
+
   if (cfg_.pinChgStatus < 0) return false;
   int v = gpio_.digitalRead(cfg_.pinChgStatus);
   bool active = cfg_.chgActiveLow ? (v == IGpio::LOW_LEVEL) : (v == IGpio::HIGH_LEVEL);
@@ -136,3 +157,4 @@ uint8_t BatteryMonitor::voltageToPercent(float v) {
     return (uint8_t)(92 + (v - 4.05f) * (8.0f / (V_FULL - 4.05f)) + 0.5f);
   }
 }
+

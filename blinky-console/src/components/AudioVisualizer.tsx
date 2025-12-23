@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -12,6 +12,9 @@ import {
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 import { AudioSample, BatterySample } from '../types';
+import { audioMetricsMetadata } from '../data/settingsMetadata';
+import { BatteryModal } from './BatteryModal';
+import type { BatteryStatusData } from '../services/serial';
 
 // Register Chart.js components
 ChartJS.register(
@@ -28,8 +31,10 @@ ChartJS.register(
 interface AudioVisualizerProps {
   audioData: AudioSample | null;
   batteryData: BatterySample | null;
+  batteryStatusData: BatteryStatusData | null;
   isStreaming: boolean;
   onToggleStreaming: () => void;
+  onRequestBatteryStatus: () => void;
   disabled: boolean;
 }
 
@@ -38,8 +43,10 @@ const MAX_DATA_POINTS = 150; // ~7.5 seconds at 20Hz
 export function AudioVisualizer({
   audioData,
   batteryData,
+  batteryStatusData,
   isStreaming,
   onToggleStreaming,
+  onRequestBatteryStatus,
   disabled,
 }: AudioVisualizerProps) {
   const levelDataRef = useRef<number[]>([]);
@@ -47,6 +54,7 @@ export function AudioVisualizer({
   const envelopeDataRef = useRef<number[]>([]);
   const labelsRef = useRef<string[]>([]);
   const chartRef = useRef<ChartJS<'line'>>(null);
+  const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
 
   // Update data when new audio sample arrives
   useEffect(() => {
@@ -173,9 +181,15 @@ export function AudioVisualizer({
         <div className="audio-controls">
           {audioData && isStreaming && (
             <div className="audio-values">
-              <span className="audio-value level">L: {audioData.l.toFixed(2)}</span>
-              <span className="audio-value transient">T: {audioData.t.toFixed(2)}</span>
-              <span className="audio-value gain">G: {audioData.g.toFixed(1)}x</span>
+              <span className="audio-value level" title={audioMetricsMetadata['l'].tooltip}>
+                {audioMetricsMetadata['l'].displayName}: {audioData.l.toFixed(2)}
+              </span>
+              <span className="audio-value transient" title={audioMetricsMetadata['t'].tooltip}>
+                {audioMetricsMetadata['t'].displayName}: {audioData.t.toFixed(2)}
+              </span>
+              <span className="audio-value gain" title={audioMetricsMetadata['g'].tooltip}>
+                {audioMetricsMetadata['g'].displayName}: {audioData.g.toFixed(1)}x
+              </span>
             </div>
           )}
           <button className="btn btn-small" onClick={clearData} disabled={disabled || !isStreaming}>
@@ -193,22 +207,55 @@ export function AudioVisualizer({
 
       {batteryData && isStreaming && (
         <div className="battery-status">
-          <div className="battery-indicator">
-            <div
-              className="battery-fill"
-              style={{
-                width: `${batteryData.p}%`,
-                backgroundColor:
-                  batteryData.p > 50 ? '#22c55e' : batteryData.p > 20 ? '#eab308' : '#ef4444',
-              }}
-            />
-            {batteryData.c && <span className="battery-charging">⚡</span>}
-          </div>
-          <span className="battery-text">
-            {batteryData.p}% • {batteryData.v.toFixed(2)}V{batteryData.c ? ' • Charging' : ''}
-          </span>
+          {batteryData.n ? (
+            <>
+              <div className="battery-indicator">
+                <div
+                  className="battery-fill"
+                  style={{
+                    width: `${batteryData.p}%`,
+                    backgroundColor:
+                      batteryData.p > 50 ? '#22c55e' : batteryData.p > 20 ? '#eab308' : '#ef4444',
+                  }}
+                />
+                {batteryData.c && <span className="battery-charging">⚡</span>}
+              </div>
+              <span className="battery-text">
+                {batteryData.p}% • {batteryData.v.toFixed(2)}V{batteryData.c ? ' • Charging' : ''}
+              </span>
+              <button
+                className="battery-debug-btn"
+                onClick={() => setIsDebugModalOpen(true)}
+                title="Show battery debug info"
+                aria-label="Show battery debug info"
+              >
+                ℹ️
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="battery-text" style={{ color: '#6b7280' }}>
+                Battery Not Connected
+              </span>
+              <button
+                className="battery-debug-btn"
+                onClick={() => setIsDebugModalOpen(true)}
+                title="Show battery debug info"
+                aria-label="Show battery debug info"
+              >
+                ℹ️
+              </button>
+            </>
+          )}
         </div>
       )}
+
+      <BatteryModal
+        isOpen={isDebugModalOpen}
+        onClose={() => setIsDebugModalOpen(false)}
+        onRefresh={onRequestBatteryStatus}
+        statusData={batteryStatusData}
+      />
 
       <div className="audio-chart-container">
         {!isStreaming && !disabled && (

@@ -152,6 +152,52 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    if (strcmp(cmd, "battery debug") == 0 || strcmp(cmd, "batt debug") == 0) {
+        if (battery_) {
+            Serial.println(F("=== Battery Debug Info ==="));
+            Serial.print(F("Connected: "));
+            Serial.println(battery_->isBatteryConnected() ? F("Yes") : F("No"));
+            Serial.print(F("Voltage: "));
+            Serial.print(battery_->getVoltage(), 3);
+            Serial.println(F("V"));
+            Serial.print(F("Percent: "));
+            Serial.print(battery_->getPercent());
+            Serial.println(F("%"));
+            Serial.print(F("Charging: "));
+            Serial.println(battery_->isCharging() ? F("Yes") : F("No"));
+            Serial.println(F("(Use 'battery raw' for detailed ADC values)"));
+        } else {
+            Serial.println(F("Battery monitor not available"));
+        }
+        return true;
+    }
+
+
+    if (strcmp(cmd, "battery") == 0 || strcmp(cmd, "batt") == 0) {
+        if (battery_) {
+            // Get battery status
+            float voltage = battery_->getVoltage();
+            uint8_t percent = battery_->getPercent();
+            bool charging = battery_->isCharging();
+            bool connected = battery_->isBatteryConnected();
+
+            // Send as JSON
+            Serial.print(F("{\"battery\":{"));
+            Serial.print(F("\"voltage\":"));
+            Serial.print(voltage, 2);
+            Serial.print(F(",\"percent\":"));
+            Serial.print(percent);
+            Serial.print(F(",\"charging\":"));
+            Serial.print(charging ? F("true") : F("false"));
+            Serial.print(F(",\"connected\":"));
+            Serial.print(connected ? F("true") : F("false"));
+            Serial.println(F("}}"));
+        } else {
+            Serial.println(F("{\"error\":\"Battery monitor not available\"}"));
+        }
+        return true;
+    }
+
     if (strcmp(cmd, "stream on") == 0) {
         streamEnabled_ = true;
         Serial.println(F("OK"));
@@ -253,8 +299,14 @@ void SerialConsole::streamTick() {
         batteryLastMs_ = now;
 
         // Output battery status JSON
-        // Format: {"b":{"c":true,"v":3.85,"p":72}}
-        Serial.print(F("{\"b\":{\"c\":"));
+        // Format: {"b":{"n":true,"c":false,"v":3.85,"p":72}}
+        // n = connected (battery detected)
+        // c = charging (true if charging)
+        // v = voltage (in volts)
+        // p = percent (0-100)
+        Serial.print(F("{\"b\":{\"n\":"));
+        Serial.print(battery_->isBatteryConnected() ? F("true") : F("false"));
+        Serial.print(F(",\"c\":"));
         Serial.print(battery_->isCharging() ? F("true") : F("false"));
         Serial.print(F(",\"v\":"));
         Serial.print(battery_->getVoltage(), 2);

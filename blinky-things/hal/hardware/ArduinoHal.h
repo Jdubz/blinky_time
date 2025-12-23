@@ -36,27 +36,50 @@ public:
  * ArduinoAdc - IAdc implementation for Arduino platforms
  */
 class ArduinoAdc : public IAdc {
+private:
+    uint8_t currentBits_ = 10; // Default to 10-bit for Arduino
+
 public:
     void setResolution(uint8_t bits) override {
-        #if defined(analogReadResolution)
+        currentBits_ = bits;
+        // Most modern Arduino platforms support analogReadResolution()
+        // Known platforms: SAMD, nRF52, ESP32, STM32, Teensy, etc.
+        #if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || \
+            defined(ARDUINO_ARCH_MBED) || defined(ESP32) || defined(ARDUINO_ARCH_STM32) || \
+            defined(__SAMD21G18A__) || defined(__SAMD51__) || defined(TEENSYDUINO)
         analogReadResolution(bits);
         #else
-        (void)bits; // Suppress unused warning when analogReadResolution not available
+        // Platform doesn't support analogReadResolution() - will scale in analogRead()
+        (void)bits; // Suppress unused parameter warning
         #endif
     }
 
     void setReference(uint8_t reference) override {
-        #if defined(AR_INTERNAL2V4)
         if (reference == REF_INTERNAL_2V4) {
-            analogReference(AR_INTERNAL2V4);
+            #if defined(AR_INTERNAL2V4)
+            analogReference(AR_INTERNAL2V4);  // mbed core
+            #elif defined(AR_INTERNAL_2_4)
+            analogReference(AR_INTERNAL_2_4);  // non-mbed Seeed/Adafruit nRF52 core
+            #else
+            analogReference(AR_INTERNAL);      // fallback
+            #endif
         }
-        #else
-        (void)reference; // Suppress unused warning when AR_INTERNAL2V4 not available
-        #endif
     }
 
     uint16_t analogRead(int pin) override {
-        return ::analogRead(pin);
+        uint16_t raw = ::analogRead(pin);
+
+        // Workaround for platforms where analogReadResolution() doesn't work
+        // If we want 12-bit but getting 10-bit values, scale up
+        #if !defined(ARDUINO_ARCH_SAMD) && !defined(ARDUINO_ARCH_NRF52) && !defined(NRF52) && \
+            !defined(ARDUINO_ARCH_MBED) && !defined(ESP32) && !defined(ARDUINO_ARCH_STM32) && \
+            !defined(__SAMD21G18A__) && !defined(__SAMD51__) && !defined(TEENSYDUINO)
+        if (currentBits_ == 12 && raw <= 1023) {
+            raw = raw << 2; // Scale 10-bit (0-1023) to 12-bit (0-4092)
+        }
+        #endif
+
+        return raw;
     }
 };
 
