@@ -81,5 +81,3 @@
 #define STATIC_INIT_WARNING \
     "WARNING: Global objects with constructor arguments can brick the device. " \
     "Use pointers and initialize in setup() instead. See tests/StaticInitCheck.h"
-
-#endif // Intentionally omitted #ifndef - this is documentation only

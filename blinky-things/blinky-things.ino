@@ -278,7 +278,11 @@ void setup() {
   }
   currentEffect->begin(config.matrix.width, config.matrix.height);
 
-  // Initialize renderer
+  // Initialize renderer (leds must be valid at this point)
+  if (!leds) {
+    Serial.println(F("ERROR: LED strip not initialized before renderer"));
+    while(1); // Halt execution
+  }
   renderer = new EffectRenderer(*leds, ledMapper);
   if (!renderer) {
     Serial.println(F("ERROR: Renderer allocation failed"));

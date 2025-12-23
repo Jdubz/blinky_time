@@ -11,15 +11,20 @@ Usage:
 
 The script detects patterns like:
     ClassName instance(arg1, arg2);  // DANGEROUS at global scope
+    ClassName instance{arg1, arg2};  // DANGEROUS at global scope (C++11 brace init)
     ClassName instance = ClassName(args);  // DANGEROUS at global scope
 
 Safe patterns (not flagged):
     ClassName* ptr = nullptr;  // Safe - just a pointer
     ClassName instance;  // Safe if default constructor does no hardware access
-    static ClassName& get() { static ClassName x; return x; }  // Safe - Meyers singleton
+    static ClassName& get() { static ClassName x; return x; }  // Safe - Meyers singleton (inside function)
+
+Limitations:
+    - Uses brace-counting heuristic for scope detection (not a full C++ parser)
+    - May have false positives/negatives with complex macros or templates
+    - Only checks known dangerous classes listed in DANGEROUS_CLASSES
 """
 
-import os
 import re
 import sys
 from pathlib import Path
@@ -39,39 +44,68 @@ DANGEROUS_CLASSES = [
     # Add more as discovered
 ]
 
-# Patterns that indicate global scope (not inside a function)
-# We look for declarations outside of function bodies
+# Build class pattern for regex
+CLASS_PATTERN = '|'.join(DANGEROUS_CLASSES)
 
 # Pattern: ClassName instance(args);
 DANGEROUS_PATTERN_CTOR = re.compile(
-    r'^\s*(' + '|'.join(DANGEROUS_CLASSES) + r')\s+(\w+)\s*\([^)]+\)\s*;',
-    re.MULTILINE
+    r'^\s*(?:static\s+)?(' + CLASS_PATTERN + r')\s+(\w+)\s*\([^)]+\)\s*;'
+)
+
+# Pattern: ClassName instance{args}; (C++11 brace initialization)
+DANGEROUS_PATTERN_BRACE = re.compile(
+    r'^\s*(?:static\s+)?(' + CLASS_PATTERN + r')\s+(\w+)\s*\{[^}]+\}\s*;'
 )
 
 # Pattern: ClassName instance = ClassName(args);
 DANGEROUS_PATTERN_ASSIGN = re.compile(
-    r'^\s*(' + '|'.join(DANGEROUS_CLASSES) + r')\s+(\w+)\s*=\s*\w+\([^)]+\)\s*;',
-    re.MULTILINE
+    r'^\s*(?:static\s+)?(' + CLASS_PATTERN + r')\s+(\w+)\s*=\s*\w+\s*\([^)]+\)\s*;'
 )
 
-# Safe patterns to ignore
+# Pattern: ClassName instance = ClassName{args}; (C++11 brace)
+DANGEROUS_PATTERN_ASSIGN_BRACE = re.compile(
+    r'^\s*(?:static\s+)?(' + CLASS_PATTERN + r')\s+(\w+)\s*=\s*\w+\s*\{[^}]+\}\s*;'
+)
+
+ALL_DANGEROUS_PATTERNS = [
+    DANGEROUS_PATTERN_CTOR,
+    DANGEROUS_PATTERN_BRACE,
+    DANGEROUS_PATTERN_ASSIGN,
+    DANGEROUS_PATTERN_ASSIGN_BRACE,
+]
+
+# Safe patterns to ignore (only pointer declarations)
 SAFE_PATTERNS = [
     r'\*\s*\w+\s*=\s*nullptr',  # Pointer = nullptr
     r'\*\s*\w+\s*=\s*NULL',     # Pointer = NULL
     r'\*\s*\w+\s*=\s*new\s+',   # Pointer = new (inside function)
-    r'^\s*static\s+',          # Static local (Meyers singleton)
 ]
 
 
-def is_inside_function(content: str, match_pos: int) -> bool:
+def is_inside_function(content: str, line_num: int) -> bool:
     """
-    Check if a match position is inside a function body.
-    Simple heuristic: count braces before the position.
-    If more { than }, we're inside a function.
+    Check if a line is inside a function body using brace counting.
+
+    This heuristic counts opening and closing braces up to the given line.
+    If there are more opening braces than closing braces, we're likely
+    inside a function, class, or namespace body.
+
+    Note: This is more reliable than indentation-based detection but still
+    not perfect (doesn't handle braces in strings/comments properly).
     """
-    before = content[:match_pos]
-    open_braces = before.count('{')
-    close_braces = before.count('}')
+    lines = content.split('\n')
+    text_before = '\n'.join(lines[:line_num - 1])
+
+    # Remove string literals and comments to avoid counting braces inside them
+    # Simple approach: remove // comments and /* */ comments
+    text_before = re.sub(r'//.*$', '', text_before, flags=re.MULTILINE)
+    text_before = re.sub(r'/\*.*?\*/', '', text_before, flags=re.DOTALL)
+    # Remove string literals (simplified - doesn't handle all edge cases)
+    text_before = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', text_before)
+
+    open_braces = text_before.count('{')
+    close_braces = text_before.count('}')
+
     return open_braces > close_braces
 
 
@@ -88,16 +122,13 @@ def check_file(filepath: Path) -> list:
 
     # Check each line for dangerous patterns
     for line_num, line in enumerate(lines, 1):
-        # Skip if inside a function (simple heuristic based on indentation and context)
-        # Lines at column 0 or with minimal indentation are likely global
         stripped = line.lstrip()
-        indent = len(line) - len(stripped)
 
         # Skip comments
         if stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
             continue
 
-        # Skip if it's a safe pattern
+        # Skip if it's a safe pattern (pointer declaration)
         is_safe = False
         for safe in SAFE_PATTERNS:
             if re.search(safe, line):
@@ -107,14 +138,14 @@ def check_file(filepath: Path) -> list:
             continue
 
         # Check for dangerous constructor patterns
-        for pattern in [DANGEROUS_PATTERN_CTOR, DANGEROUS_PATTERN_ASSIGN]:
+        for pattern in ALL_DANGEROUS_PATTERNS:
             match = pattern.match(line)
             if match:
                 class_name = match.group(1)
                 var_name = match.group(2)
 
-                # If low indentation, likely global scope
-                if indent < 4:
+                # Use brace counting to determine if we're at global scope
+                if not is_inside_function(content, line_num):
                     issues.append({
                         'file': str(filepath),
                         'line': line_num,
@@ -162,7 +193,7 @@ def main():
         print("\nAll global objects appear to use safe patterns:")
         print("  - Pointers initialized to nullptr")
         print("  - Default constructors with begin() methods")
-        print("  - Static locals (Meyers singletons)")
+        print("  - Static locals (Meyers singletons inside functions)")
         sys.exit(0)
 
     print(f"Found {len(issues)} potential static initialization issues:\n")
