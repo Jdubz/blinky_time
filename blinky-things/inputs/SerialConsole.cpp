@@ -73,23 +73,19 @@ void SerialConsole::registerSettings() {
             "Transient sensitivity", 0.1f, 5.0f);
     }
 
-    // === AUTO-GAIN SETTINGS ===
+    // === AUTO-GAIN SETTINGS (Peak-based AGC, target always 1.0) ===
     if (mic_) {
         settings_.registerBool("agenabled", &mic_->agEnabled, "agc",
             "Auto-gain enabled");
-        settings_.registerFloat("agtarget", &mic_->agTarget, "agc",
-            "Target level", 0.1f, 0.95f);
-        settings_.registerFloat("agmin", &mic_->agMin, "agc",
-            "Minimum gain", 0.1f, 5.0f);
-        settings_.registerFloat("agmax", &mic_->agMax, "agc",
-            "Maximum gain", 1.0f, 20.0f);
-        // AGC time constants (professional audio standards)
-        settings_.registerFloat("agctau", &mic_->agcTauSeconds, "agc",
-            "AGC adaptation time (s)", 0.1f, 30.0f);
+
+        // AGC time constants (simplified peak-based)
         settings_.registerFloat("agcattack", &mic_->agcAttackTau, "agc",
-            "AGC attack time (s)", 0.1f, 10.0f);
+            "Peak envelope attack (s)", 0.01f, 5.0f);
         settings_.registerFloat("agcrelease", &mic_->agcReleaseTau, "agc",
-            "AGC release time (s)", 1.0f, 30.0f);
+            "Peak envelope release (s)", 0.1f, 10.0f);
+        settings_.registerFloat("agcgaintau", &mic_->agcGainTau, "agc",
+            "Gain adjustment speed (s)", 0.1f, 30.0f);
+
         // Hardware gain calibration period
         settings_.registerUint32("hwcalibperiod", &mic_->hwCalibPeriodMs, "agc",
             "HW gain period (ms)", 10000, 600000);
@@ -261,15 +257,15 @@ void SerialConsole::restoreDefaults() {
         fireGenerator_->resetToDefaults();
     }
 
-    // Restore mic defaults
+    // Restore mic defaults (peak-based AGC, target always 1.0)
     if (mic_) {
         mic_->noiseGate = Defaults::NoiseGate;
         mic_->globalGain = Defaults::GlobalGain;
         mic_->transientCooldownMs = Defaults::TransientCooldownMs;
         mic_->agEnabled = true;
-        mic_->agTarget = Defaults::AutoGainTarget;
-        mic_->agMin = Defaults::AutoGainMin;
-        mic_->agMax = Defaults::AutoGainMax;
+        mic_->agcAttackTau = 0.1f;   // 100ms peak attack
+        mic_->agcReleaseTau = 2.0f;  // 2s peak release
+        mic_->agcGainTau = 5.0f;     // 5s gain adjustment
     }
 }
 

@@ -62,18 +62,15 @@ void ConfigStorage::loadDefaults() {
     data_.fire.heatDecay = 0.60f;
     data_.fire.suppressionMs = 300;
 
-    // Mic defaults
+    // Mic defaults (peak-based AGC, target always 1.0)
     data_.mic.noiseGate = 0.04f;
     data_.mic.globalGain = 3.0f;
-    data_.mic.agTarget = 0.50f;
-    data_.mic.agMin = 1.0f;
-    data_.mic.agMax = 12.0f;
     data_.mic.transientFactor = 1.5f;
     data_.mic.loudFloor = 0.05f;
-    // AGC time constants
-    data_.mic.agcTauSeconds = 7.0f;
-    data_.mic.agcAttackTau = 2.0f;
-    data_.mic.agcReleaseTau = 10.0f;
+    // AGC time constants (simplified)
+    data_.mic.agcAttackTau = 0.1f;   // 100ms peak attack
+    data_.mic.agcReleaseTau = 2.0f;  // 2s peak release
+    data_.mic.agcGainTau = 5.0f;     // 5s gain adjustment
     // Timing parameters
     data_.mic.transientCooldownMs = 60;
     data_.mic.hwCalibPeriodMs = 180000;
@@ -157,10 +154,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     validateFloat(data_.fire.sparkChance, 0.0f, 1.0f, F("sparkChance"));
     validateFloat(data_.mic.globalGain, 0.0f, 50.0f, F("globalGain"));
 
-    // Validate AGC time constants (match SerialConsole ranges)
-    validateFloat(data_.mic.agcTauSeconds, 0.1f, 30.0f, F("agcTauSeconds"));
-    validateFloat(data_.mic.agcAttackTau, 0.1f, 10.0f, F("agcAttackTau"));
-    validateFloat(data_.mic.agcReleaseTau, 1.0f, 30.0f, F("agcReleaseTau"));
+    // Validate AGC time constants (peak-based AGC)
+    validateFloat(data_.mic.agcAttackTau, 0.01f, 5.0f, F("agcAttackTau"));
+    validateFloat(data_.mic.agcReleaseTau, 0.1f, 10.0f, F("agcReleaseTau"));
+    validateFloat(data_.mic.agcGainTau, 0.1f, 30.0f, F("agcGainTau"));
 
     // Validate timing parameters (match SerialConsole ranges)
     validateUint32(data_.mic.transientCooldownMs, 10, 10000, F("transientCooldownMs"));
@@ -190,15 +187,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
 
     mic.noiseGate = data_.mic.noiseGate;
     mic.globalGain = data_.mic.globalGain;
-    mic.agTarget = data_.mic.agTarget;
-    mic.agMin = data_.mic.agMin;
-    mic.agMax = data_.mic.agMax;
     mic.transientFactor = data_.mic.transientFactor;
     mic.loudFloor = data_.mic.loudFloor;
-    // AGC time constants
-    mic.agcTauSeconds = data_.mic.agcTauSeconds;
+    // AGC time constants (peak-based, target always 1.0)
     mic.agcAttackTau = data_.mic.agcAttackTau;
     mic.agcReleaseTau = data_.mic.agcReleaseTau;
+    mic.agcGainTau = data_.mic.agcGainTau;
     // Timing parameters
     mic.transientCooldownMs = data_.mic.transientCooldownMs;
     mic.hwCalibPeriodMs = data_.mic.hwCalibPeriodMs;
@@ -219,15 +213,12 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
 
     data_.mic.noiseGate = mic.noiseGate;
     data_.mic.globalGain = mic.globalGain;
-    data_.mic.agTarget = mic.agTarget;
-    data_.mic.agMin = mic.agMin;
-    data_.mic.agMax = mic.agMax;
     data_.mic.transientFactor = mic.transientFactor;
     data_.mic.loudFloor = mic.loudFloor;
-    // AGC time constants
-    data_.mic.agcTauSeconds = mic.agcTauSeconds;
+    // AGC time constants (peak-based, target always 1.0)
     data_.mic.agcAttackTau = mic.agcAttackTau;
     data_.mic.agcReleaseTau = mic.agcReleaseTau;
+    data_.mic.agcGainTau = mic.agcGainTau;
     // Timing parameters
     data_.mic.transientCooldownMs = mic.transientCooldownMs;
     data_.mic.hwCalibPeriodMs = mic.hwCalibPeriodMs;

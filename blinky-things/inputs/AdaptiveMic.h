@@ -30,16 +30,14 @@ public:
   // ---- Tunables ----
   float noiseGate      = 0.04f;     // Noise gate threshold (0-1)
 
-  // Software AGC
+  // Software AGC - Simplified peak-based design
   bool  agEnabled      = true;
-  float agTarget       = 0.50f;     // Target RMS level (0-1)
-  float agMin          = 1.0f;      // Minimum gain multiplier
-  float agMax          = 12.0f;     // Maximum gain multiplier
+  static constexpr float AG_PEAK_TARGET = 1.0f;  // Always target full dynamic range
 
-  // AGC time constants (professional audio standards)
-  float agcTauSeconds  = 7.0f;      // Main AGC adaptation time (5-10s window)
-  float agcAttackTau   = 2.0f;      // Attack time constant (faster response to increases)
-  float agcReleaseTau  = 10.0f;     // Release time constant (slower response to decreases)
+  // AGC time constants - Attack/Release envelope follower
+  float agcAttackTau   = 0.1f;      // Peak attack: how fast to catch peaks (100ms)
+  float agcReleaseTau  = 2.0f;      // Peak release: how slow peaks decay (2s)
+  float agcGainTau     = 5.0f;      // Gain adjustment speed (5s adaptation)
 
   // Hardware gain (environmental adaptation over minutes)
   uint32_t hwCalibPeriodMs = 180000;  // 3 minutes between calibration checks

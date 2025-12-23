@@ -111,44 +111,29 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: 'x',
   },
 
-  // AGC settings
+  // AGC settings (peak-based design, target always 100%)
   agenabled: {
     displayName: 'Auto-Gain Enabled',
-    tooltip: 'Enable automatic gain control to normalize quiet and loud audio sources.',
+    tooltip:
+      'Enable automatic gain control. AGC adapts gain to make loud peaks reach full dynamic range (100%), ensuring optimal use of available headroom.',
     unit: '',
   },
-  agtarget: {
-    displayName: 'AGC Target Level',
-    tooltip:
-      'Target RMS level for AGC to maintain (0-100%). AGC adjusts gain to keep average audio level near this target.',
-    unit: '%',
-  },
-  agmin: {
-    displayName: 'Min AGC Gain',
-    tooltip: 'Minimum gain multiplier. Prevents over-attenuation of loud sources.',
-    unit: 'x',
-  },
-  agmax: {
-    displayName: 'Max AGC Gain',
-    tooltip: 'Maximum gain multiplier. Prevents over-amplification of quiet sources.',
-    unit: 'x',
-  },
-  agctau: {
-    displayName: 'AGC Adaptation Time',
-    tooltip:
-      'Main AGC time constant for phrase-level adaptation (5-10s window). Controls how quickly AGC adapts to overall level changes. Higher = smoother but slower adaptation, Lower = faster but more reactive.',
-    unit: 's',
-  },
   agcattack: {
-    displayName: 'AGC Attack Time',
+    displayName: 'Peak Attack',
     tooltip:
-      'How quickly AGC responds to sudden volume increases (seconds). Lower values respond faster to loud sections, preventing clipping. Professional standard: 2s.',
+      'How quickly the AGC envelope follows sudden increases (0.01-5s). Lower = catches peaks faster. Default: 0.1s (100ms) for responsive peak tracking.',
     unit: 's',
   },
   agcrelease: {
-    displayName: 'AGC Release Time',
+    displayName: 'Peak Release',
     tooltip:
-      'How slowly AGC releases after volume decreases (seconds). Higher values preserve musical phrasing and prevent pumping/breathing artifacts. Professional standard: 10s.',
+      'How slowly the AGC envelope decays after peaks (0.1-10s). Higher = smoother tracking, preserves dynamics. Default: 2s.',
+    unit: 's',
+  },
+  agcgaintau: {
+    displayName: 'Gain Adaptation Speed',
+    tooltip:
+      'How quickly gain adjusts to match the peak target (0.1-30s). Higher = smoother but slower adaptation. Lower = faster but more reactive. Default: 5s.',
     unit: 's',
   },
   hwcalibperiod: {

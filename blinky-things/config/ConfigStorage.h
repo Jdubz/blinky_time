@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 8;  // Simplified: Removed envelope/attack/release
+    static const uint8_t CONFIG_VERSION = 10;  // Peak-based AGC: removed agTarget (always 1.0), agMin/agMax/agcTauSeconds
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -27,15 +27,12 @@ public:
     struct StoredMicParams {
         float noiseGate;
         float globalGain;
-        float agTarget;
-        float agMin;
-        float agMax;
         float transientFactor;
         float loudFloor;
-        // AGC time constants
-        float agcTauSeconds;
-        float agcAttackTau;
-        float agcReleaseTau;
+        // AGC time constants (peak target always 1.0)
+        float agcAttackTau;       // Peak envelope attack
+        float agcReleaseTau;      // Peak envelope release
+        float agcGainTau;         // Gain adjustment speed
         // Timing parameters
         uint32_t transientCooldownMs;
         uint32_t hwCalibPeriodMs;

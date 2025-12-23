@@ -122,38 +122,35 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
 }
 
 void AdaptiveMic::autoGainTick(float postGainLevel, float dt) {
-  // Use adaptive time constant (faster attack, slower release)
-  // Professional AGC: fast response to increases, slow to decreases
-  float tau = (postGainLevel > trackedLevel) ? agcAttackTau : agcReleaseTau;
-  float alpha = 1.0f - expf(-dt / maxValue(tau, 0.01f));
+  // Simplified peak-based AGC design
+  // 1. Track peak level with fast attack, slow release
+  // 2. Adjust gain to make peaks hit agTarget
 
-  // Track the post-gain level with EMA over AGC window
+  // Track peak level with envelope follower
+  float tau = (postGainLevel > trackedLevel) ? agcAttackTau : agcReleaseTau;
+  float alpha = 1.0f - expf(-dt / maxValue(tau, 0.001f));
   trackedLevel += alpha * (postGainLevel - trackedLevel);
 
-  // Compute gain error based on tracked level (not instantaneous)
-  // Goal: keep tracked RMS near agTarget, allowing peaks to hit ~1.0
-  float err = agTarget - trackedLevel;
+  // Compute error: how far are peaks from target (always 1.0 = full dynamic range)?
+  float err = AG_PEAK_TARGET - trackedLevel;
 
-  // Apply gain adjustment with defined time constant
-  float gainAlpha = 1.0f - expf(-dt / maxValue(agcTauSeconds, 0.1f));
+  // Adjust gain to correct the error
+  // Use proportional control with time constant for smooth adaptation
+  float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau, 0.1f));
   globalGain += gainAlpha * err * globalGain;  // Logarithmic adjustment
 
-  // Clamp to limits
-  globalGain = constrainValue(globalGain, agMin, agMax);
+  // Safety limits (prevent numerical issues, not behavior limits)
+  globalGain = constrainValue(globalGain, 0.01f, 100.0f);
 
-  // Dwell tracking (coordination with hardware gain)
-  // Track when AGC is pinned at limits for extended periods
-  if (fabsf(postGainLevel) < 1e-6f && globalGain >= agMax * 0.999f) {
-    dwellAtMax += dt;
-  } else if (globalGain >= agMax * 0.999f) {
+  // Dwell tracking for hardware gain coordination
+  // Detect when software AGC is struggling (needs HW adjustment)
+  if (globalGain >= 50.0f) {  // SW gain very high = input too quiet
     dwellAtMax += dt;
   } else if (dwellAtMax > 0.0f) {
     dwellAtMax = maxValue(0.0f, dwellAtMax - dt * (1.0f/limitDwellRelaxSec));
   }
 
-  if (postGainLevel >= 0.98f && globalGain <= agMin * 1.001f) {
-    dwellAtMin += dt;
-  } else if (globalGain <= agMin * 1.001f) {
+  if (globalGain <= 0.1f) {  // SW gain very low = input too loud
     dwellAtMin += dt;
   } else if (dwellAtMin > 0.0f) {
     dwellAtMin = maxValue(0.0f, dwellAtMin - dt * (1.0f/limitDwellRelaxSec));
