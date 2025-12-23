@@ -50,8 +50,10 @@ const DeviceConfig& config = BUCKET_TOTEM_CONFIG;
 LEDMapper ledMapper;
 
 // Hardware abstraction layer for testability
-Adafruit_NeoPixel neoPixelStrip(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
-NeoPixelLedStrip leds(neoPixelStrip);
+// Use pointers to avoid static initialization order fiasco
+// Adafruit_NeoPixel allocates memory in constructor - unsafe at global scope
+Adafruit_NeoPixel* neoPixelStrip = nullptr;
+NeoPixelLedStrip* leds = nullptr;
 
 // New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
@@ -67,9 +69,10 @@ Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
 PixelMatrix* pixelMatrix = nullptr;
 
-// HAL-enabled components for testability
-AdaptiveMic mic(DefaultHal::pdm(), DefaultHal::time());
-BatteryMonitor battery(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
+// HAL-enabled components - use pointers to avoid static initialization order fiasco
+// These are initialized in setup() AFTER Arduino runtime is ready
+AdaptiveMic* mic = nullptr;
+BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
@@ -109,8 +112,8 @@ void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
   if (currentGenerator && currentEffect && renderer && pixelMatrix) {
     // Get audio input for generation
-    float energy = mic.getLevel();
-    float hit = mic.getTransient();
+    float energy = mic ? mic->getLevel() : 0.0f;
+    float hit = mic ? mic->getTransient() : 0.0f;
 
     // Update generator with audio input (handled by updateFireEffect)
     updateFireEffect(energy, hit);
@@ -119,8 +122,35 @@ void showFireEffect() {
     currentGenerator->generate(*pixelMatrix, energy, hit);
     currentEffect->apply(pixelMatrix);
     renderer->render(*pixelMatrix);
-    leds.show();
+    leds->show();
   }
+}
+
+/**
+ * Cleanup all dynamically allocated resources.
+ * Called on allocation failure to prevent memory leaks.
+ * Also useful for future sleep/wake or restart scenarios.
+ */
+void cleanup() {
+  delete console;    console = nullptr;
+  delete renderer;   renderer = nullptr;
+  delete currentEffect; currentEffect = nullptr;
+  delete currentGenerator; currentGenerator = nullptr;
+  delete pixelMatrix; pixelMatrix = nullptr;
+  delete battery;    battery = nullptr;
+  delete mic;        mic = nullptr;
+  delete leds;       leds = nullptr;
+  delete neoPixelStrip; neoPixelStrip = nullptr;
+}
+
+/**
+ * Halt execution with error message after cleanup.
+ * Use instead of bare while(1) loops to prevent memory leaks.
+ */
+void haltWithError(const __FlashStringHelper* msg) {
+  Serial.println(msg);
+  cleanup();
+  while(1) { delay(10000); }
 }
 
 void setup() {
@@ -158,35 +188,46 @@ void setup() {
 
   // Validate critical configuration parameters
   if (config.matrix.width <= 0 || config.matrix.height <= 0) {
-    Serial.println(F("ERROR: Invalid matrix dimensions"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Invalid matrix dimensions"));
   }
   if (config.matrix.brightness > 255) {
     Serial.println(F("WARNING: Brightness clamped to 255"));
   }
 
-  leds.begin();
-  leds.setBrightness(min(config.matrix.brightness, 255));
-  leds.show();
+  // Initialize LED strip (must be done in setup, not global scope)
+  neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
+      config.matrix.width * config.matrix.height,
+      config.matrix.ledPin,
+      config.matrix.ledType);
+  if (!neoPixelStrip) {
+    haltWithError(F("ERROR: NeoPixel allocation failed"));
+  }
+  leds = new(std::nothrow) NeoPixelLedStrip(*neoPixelStrip);
+  if (!leds || !leds->isValid()) {
+    haltWithError(F("ERROR: LED strip wrapper allocation failed"));
+  }
+
+  leds->begin();
+  leds->setBrightness(min(config.matrix.brightness, 255));
+  leds->show();
 
   // Basic LED test - light up first few LEDs to verify hardware
   Serial.print(F("LED Test: Lighting first 3 LEDs at brightness "));
   Serial.println(config.matrix.brightness);
-  leds.setPixelColor(0, leds.Color(255, 0, 0));  // Should show RED
-  leds.setPixelColor(1, leds.Color(0, 255, 0));  // Should show GREEN
-  leds.setPixelColor(2, leds.Color(0, 0, 255));  // Should show BLUE
-  leds.show();
+  leds->setPixelColor(0, leds->Color(255, 0, 0));  // Should show RED
+  leds->setPixelColor(1, leds->Color(0, 255, 0));  // Should show GREEN
+  leds->setPixelColor(2, leds->Color(0, 0, 255));  // Should show BLUE
+  leds->show();
   delay(3000);  // Hold for 3 seconds to verify colors are correct
 
   // Clear test LEDs
-  leds.setPixelColor(0, 0);
-  leds.setPixelColor(1, 0);
-  leds.setPixelColor(2, 0);
-  leds.show();
+  leds->setPixelColor(0, 0);
+  leds->setPixelColor(1, 0);
+  leds->setPixelColor(2, 0);
+  leds->show();
 
   if (!ledMapper.begin(config)) {
-    Serial.println(F("ERROR: LED mapper initialization failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: LED mapper initialization failed"));
   }
 
   // Initialize new Generator-Effect-Renderer architecture
@@ -203,8 +244,7 @@ void setup() {
   // Create PixelMatrix for the visual pipeline
   pixelMatrix = new(std::nothrow) PixelMatrix(config.matrix.width, config.matrix.height);
   if (!pixelMatrix || !pixelMatrix->isValid()) {
-    Serial.println(F("ERROR: PixelMatrix allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: PixelMatrix allocation failed"));
   }
 
   // Initialize appropriate generator based on layout type
@@ -225,18 +265,16 @@ void setup() {
   }
 
   // Create fire generator instance
-  Fire* fireGen = new Fire();
+  Fire* fireGen = new(std::nothrow) Fire();
   currentGenerator = fireGen;
 
   if (!currentGenerator) {
-    Serial.println(F("ERROR: Generator allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Generator allocation failed"));
   }
 
   // Initialize the generator with device configuration
   if (!fireGen->begin(config)) {
-    Serial.println(F("ERROR: Generator initialization failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Generator initialization failed"));
   }
 
   // Initialize live-tunable fire params from config
@@ -253,23 +291,31 @@ void setup() {
   fireParams.heatDecay = 0.60f;
 
   // Initialize effect (pass-through for pure fire colors)
-  currentEffect = new NoOpEffect();
+  currentEffect = new(std::nothrow) NoOpEffect();
   if (!currentEffect) {
-    Serial.println(F("ERROR: Effect allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Effect allocation failed"));
   }
   currentEffect->begin(config.matrix.width, config.matrix.height);
 
-  // Initialize renderer
-  renderer = new EffectRenderer(leds, ledMapper);
+  // Initialize renderer (leds must be valid at this point)
+  if (!leds) {
+    haltWithError(F("ERROR: LED strip not initialized before renderer"));
+  }
+  renderer = new(std::nothrow) EffectRenderer(*leds, ledMapper);
   if (!renderer) {
-    Serial.println(F("ERROR: Renderer allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Renderer allocation failed"));
   }
 
   Serial.println(F("New architecture initialized successfully"));
 
-  bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
+  // Initialize HAL-enabled components (must be done in setup(), not at global scope)
+  mic = new(std::nothrow) AdaptiveMic(DefaultHal::pdm(), DefaultHal::time());
+  battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
+  if (!mic || !battery) {
+    haltWithError(F("ERROR: HAL component allocation failed"));
+  }
+
+  bool micOk = mic->begin(config.microphone.sampleRate, config.microphone.bufferSize);
   if (!micOk) {
     Serial.println(F("ERROR: Microphone failed to start"));
   } else {
@@ -279,7 +325,7 @@ void setup() {
   // Initialize configuration storage and load saved settings
   configStorage.begin();
   if (configStorage.isValid()) {
-    configStorage.loadConfiguration(fireParams, mic);
+    configStorage.loadConfiguration(fireParams, *mic);
     updateFireParams();
     Serial.println(F("Loaded saved configuration from flash"));
   } else {
@@ -287,22 +333,21 @@ void setup() {
   }
 
   // Initialize battery monitor
-  if (!battery.begin()) {
+  if (!battery->begin()) {
     Serial.println(F("WARNING: Battery monitor failed to start"));
   } else {
-    battery.setFastCharge(config.charging.fastChargeEnabled);
+    battery->setFastCharge(config.charging.fastChargeEnabled);
     Serial.println(F("Battery monitor initialized"));
   }
 
   // Initialize serial console for interactive settings management
   // Uses fireGen created on line 240 for direct parameter access
-  console = new(std::nothrow) SerialConsole(fireGen, &mic);
+  console = new(std::nothrow) SerialConsole(fireGen, mic);
   if (!console) {
-    Serial.println(F("ERROR: SerialConsole allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: SerialConsole allocation failed"));
   }
   console->setConfigStorage(&configStorage);
-  console->setBatteryMonitor(&battery);
+  console->setBatteryMonitor(battery);
   console->begin();
   Serial.println(F("Serial console initialized"));
 
@@ -319,13 +364,13 @@ void loop() {
   dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
   lastMs = now;
 
-  mic.update(dt);
+  if (mic) mic->update(dt);
 
-  float energy = mic.getLevel();
-  float hit = mic.getTransient();
+  float energy = mic ? mic->getLevel() : 0.0f;
+  float hit = mic ? mic->getTransient() : 0.0f;
 
   // Track charging state changes
-  bool currentChargingState = battery.isCharging();
+  bool currentChargingState = battery ? battery->isCharging() : false;
   if (currentChargingState != prevChargingState) {
     if (currentChargingState) {
       Serial.println(F("Charging started"));
@@ -344,13 +389,13 @@ void loop() {
   }
 
   // Auto-save dirty settings to flash (debounced)
-  configStorage.saveIfDirty(fireParams, mic);
+  if (mic) configStorage.saveIfDirty(fireParams, *mic);
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;
-  if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+  if (battery && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
     lastBatteryCheck = millis();
-    float voltage = battery.getVoltage();
+    float voltage = battery->getVoltage();
     if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
       Serial.print(F("CRITICAL BATTERY: "));
       Serial.print(voltage);
