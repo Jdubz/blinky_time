@@ -118,9 +118,9 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: 'ms',
   },
   transientfactor: {
-    displayName: 'Transient Sensitivity',
+    displayName: 'Transient Threshold',
     tooltip:
-      'How sensitive transient detection is. Controls Transient (red spikes) in AdaptiveMic visualizer. Higher values detect subtler attacks/beats.',
+      'Detection threshold for transients. Controls Transient (red spikes) in AdaptiveMic visualizer. LOWER values detect subtler attacks/beats (more sensitive). HIGHER values require stronger hits (less sensitive).',
     unit: 'x',
   },
 
@@ -155,6 +155,30 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'Maximum gain multiplier. Upper bound for Gain value shown in AdaptiveMic visualizer. Prevents over-amplification of quiet sources.',
     unit: 'x',
   },
+  agctau: {
+    displayName: 'AGC Adaptation Time',
+    tooltip:
+      'Main AGC time constant for phrase-level adaptation (5-10s window). Controls how quickly AGC adapts to overall level changes. Higher = smoother but slower adaptation, Lower = faster but more reactive.',
+    unit: 's',
+  },
+  agcattack: {
+    displayName: 'AGC Attack Time',
+    tooltip:
+      'How quickly AGC responds to sudden volume increases (seconds). Lower values respond faster to loud sections, preventing clipping. Professional standard: 2s.',
+    unit: 's',
+  },
+  agcrelease: {
+    displayName: 'AGC Release Time',
+    tooltip:
+      'How slowly AGC releases after volume decreases (seconds). Higher values preserve musical phrasing and prevent pumping/breathing artifacts. Professional standard: 10s.',
+    unit: 's',
+  },
+  hwcalibperiod: {
+    displayName: 'Hardware Calibration Period',
+    tooltip:
+      'How often hardware gain is recalibrated (milliseconds). Adapts to environmental changes (quiet room vs loud venue) over minutes. Default: 3 minutes (180000ms).',
+    unit: 'ms',
+  },
 };
 
 /**
@@ -169,7 +193,8 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
   },
   t: {
     displayName: 'Transient',
-    tooltip: 'Percussion/attack detection (0-1). Spikes to 1.0 on drum hits and sharp sounds.',
+    tooltip:
+      'Percussion/attack detection (0-1). Single-frame impulse when beat detected. Value represents transient strength.',
     unit: '',
   },
   e: {
