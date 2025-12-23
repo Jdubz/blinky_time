@@ -120,7 +120,7 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   transientfactor: {
     displayName: 'Transient Threshold',
     tooltip:
-      'Detection threshold for transients. Controls Transient (red spikes) in AdaptiveMic visualizer. LOWER values detect subtler attacks/beats (more sensitive). HIGHER values require stronger hits (less sensitive).',
+      'Detection threshold for transients. Controls Transient (red spikes) in AdaptiveMic visualizer. LOWER values detect subtler attacks/beats (more sensitive, e.g. 0.5 = very sensitive). HIGHER values require stronger hits (less sensitive, e.g. 3.0 = only strong beats). Range: 0.1-5.0.',
     unit: 'x',
   },
 

@@ -74,7 +74,7 @@ void SerialConsole::registerSettings() {
         settings_.registerUint32("transientcooldown", &mic_->transientCooldownMs, "audio",
             "Transient cooldown (ms)", 10, 1000);
         settings_.registerFloat("transientfactor", &mic_->transientFactor, "audio",
-            "Transient sensitivity", 1.0f, 5.0f);
+            "Transient sensitivity", 0.1f, 5.0f);
     }
 
     // === AUTO-GAIN SETTINGS ===
