@@ -67,9 +67,10 @@ Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
 PixelMatrix* pixelMatrix = nullptr;
 
-// HAL-enabled components for testability
-AdaptiveMic mic(DefaultHal::pdm(), DefaultHal::time());
-BatteryMonitor battery(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
+// HAL-enabled components - use pointers to avoid static initialization order fiasco
+// These are initialized in setup() AFTER Arduino runtime is ready
+AdaptiveMic* mic = nullptr;
+BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
@@ -109,8 +110,8 @@ void showFireEffect() {
   // Generate -> Effect -> Render -> Display pipeline
   if (currentGenerator && currentEffect && renderer && pixelMatrix) {
     // Get audio input for generation
-    float energy = mic.getLevel();
-    float hit = mic.getTransient();
+    float energy = mic ? mic->getLevel() : 0.0f;
+    float hit = mic ? mic->getTransient() : 0.0f;
 
     // Update generator with audio input (handled by updateFireEffect)
     updateFireEffect(energy, hit);
@@ -269,7 +270,15 @@ void setup() {
 
   Serial.println(F("New architecture initialized successfully"));
 
-  bool micOk = mic.begin(config.microphone.sampleRate, config.microphone.bufferSize);
+  // Initialize HAL-enabled components (must be done in setup(), not at global scope)
+  mic = new AdaptiveMic(DefaultHal::pdm(), DefaultHal::time());
+  battery = new BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
+  if (!mic || !battery) {
+    Serial.println(F("ERROR: HAL component allocation failed"));
+    while(1);
+  }
+
+  bool micOk = mic->begin(config.microphone.sampleRate, config.microphone.bufferSize);
   if (!micOk) {
     Serial.println(F("ERROR: Microphone failed to start"));
   } else {
@@ -279,7 +288,7 @@ void setup() {
   // Initialize configuration storage and load saved settings
   configStorage.begin();
   if (configStorage.isValid()) {
-    configStorage.loadConfiguration(fireParams, mic);
+    configStorage.loadConfiguration(fireParams, *mic);
     updateFireParams();
     Serial.println(F("Loaded saved configuration from flash"));
   } else {
@@ -287,16 +296,16 @@ void setup() {
   }
 
   // Initialize battery monitor
-  if (!battery.begin()) {
+  if (!battery->begin()) {
     Serial.println(F("WARNING: Battery monitor failed to start"));
   } else {
-    battery.setFastCharge(config.charging.fastChargeEnabled);
+    battery->setFastCharge(config.charging.fastChargeEnabled);
     Serial.println(F("Battery monitor initialized"));
   }
 
   // Initialize serial console for interactive settings management
   // Uses fireGen created on line 240 for direct parameter access
-  console = new(std::nothrow) SerialConsole(fireGen, &mic);
+  console = new(std::nothrow) SerialConsole(fireGen, mic);
   if (!console) {
     Serial.println(F("ERROR: SerialConsole allocation failed"));
     while(1); // Halt execution
@@ -319,13 +328,13 @@ void loop() {
   dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
   lastMs = now;
 
-  mic.update(dt);
+  if (mic) mic->update(dt);
 
-  float energy = mic.getLevel();
-  float hit = mic.getTransient();
+  float energy = mic ? mic->getLevel() : 0.0f;
+  float hit = mic ? mic->getTransient() : 0.0f;
 
   // Track charging state changes
-  bool currentChargingState = battery.isCharging();
+  bool currentChargingState = battery ? battery->isCharging() : false;
   if (currentChargingState != prevChargingState) {
     if (currentChargingState) {
       Serial.println(F("Charging started"));
@@ -344,13 +353,13 @@ void loop() {
   }
 
   // Auto-save dirty settings to flash (debounced)
-  configStorage.saveIfDirty(fireParams, mic);
+  if (mic) configStorage.saveIfDirty(fireParams, *mic);
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;
-  if (millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+  if (battery && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
     lastBatteryCheck = millis();
-    float voltage = battery.getVoltage();
+    float voltage = battery->getVoltage();
     if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
       Serial.print(F("CRITICAL BATTERY: "));
       Serial.print(voltage);
