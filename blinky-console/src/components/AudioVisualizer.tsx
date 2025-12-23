@@ -227,6 +227,7 @@ export function AudioVisualizer({
                 className="battery-debug-btn"
                 onClick={() => setIsDebugModalOpen(true)}
                 title="Show battery debug info"
+                aria-label="Show battery debug info"
               >
                 ℹ️
               </button>
@@ -240,6 +241,7 @@ export function AudioVisualizer({
                 className="battery-debug-btn"
                 onClick={() => setIsDebugModalOpen(true)}
                 title="Show battery debug info"
+                aria-label="Show battery debug info"
               >
                 ℹ️
               </button>

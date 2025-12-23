@@ -67,6 +67,7 @@ export function ConnectionBar({
           className="btn btn-small console-btn"
           onClick={onOpenConsole}
           title="Open Serial Console"
+          aria-label="Open Serial Console"
         >
           🖥️
         </button>

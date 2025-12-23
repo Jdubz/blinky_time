@@ -35,6 +35,18 @@ namespace Platform {
         // Default thresholds for battery warnings
         constexpr float DEFAULT_LOW_THRESHOLD = VOLTAGE_LOW;
         constexpr float DEFAULT_CRITICAL_THRESHOLD = VOLTAGE_CRITICAL;
+
+        // Battery connection detection range (valid LiPo operating range)
+        constexpr float MIN_CONNECTED_VOLTAGE = 2.5f;  // Below this, battery is disconnected
+        constexpr float MAX_CONNECTED_VOLTAGE = 4.3f;  // Above this, battery is disconnected
+
+        // Voltage sanity check range (broader than operating range)
+        // Readings outside this range indicate hardware/configuration errors
+        constexpr float MIN_VALID_VOLTAGE = 2.0f;  // Minimum physically plausible reading
+        constexpr float MAX_VALID_VOLTAGE = 5.0f;  // Maximum physically plausible reading
+
+        // ADC settling time for voltage divider MOSFET switch (milliseconds)
+        constexpr uint8_t ADC_SETTLE_TIME_MS = 20;  // Time to wait after enabling divider
     }
 
     // Charging hardware constants

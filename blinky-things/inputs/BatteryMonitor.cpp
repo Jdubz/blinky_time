@@ -63,7 +63,7 @@ uint16_t BatteryMonitor::readOnceRaw_() {
 
 uint16_t BatteryMonitor::readRaw() {
   enableDivider_(true);
-  time_.delay(20); // settle the MOSFET/divider & ADC mux (increased from 3ms)
+  time_.delay(Platform::Battery::ADC_SETTLE_TIME_MS); // settle the MOSFET/divider & ADC mux
   uint16_t raw = readOnceRaw_();
   enableDivider_(false);
   return raw;
@@ -83,11 +83,11 @@ float BatteryMonitor::readVoltage() {
   // Undo divider to get battery voltage
   float v_batt = v_adc / cfg_.dividerRatio;
 
-  // Sanity check: LiPo batteries should be between 2.5V and 4.3V
-  // Readings outside this range indicate hardware/configuration issues
-  if (v_batt < 2.0f || v_batt > 5.0f) {
+  // Sanity check: Readings outside the physically plausible range
+  // indicate hardware/configuration issues
+  if (v_batt < Platform::Battery::MIN_VALID_VOLTAGE || v_batt > Platform::Battery::MAX_VALID_VOLTAGE) {
     // Invalid reading - return last known good value if available
-    if (lastVoltage_ >= 2.0f && lastVoltage_ <= 5.0f) {
+    if (lastVoltage_ >= Platform::Battery::MIN_VALID_VOLTAGE && lastVoltage_ <= Platform::Battery::MAX_VALID_VOLTAGE) {
       return lastVoltage_;
     }
     // No good value available, return a clearly invalid value
@@ -112,10 +112,9 @@ void BatteryMonitor::setFastCharge(bool enable) {
 }
 
 bool BatteryMonitor::isBatteryConnected() const {
-  // Battery is considered connected if voltage is in valid LiPo range
-  // 2.5V - 4.3V is the reasonable operating range for LiPo batteries
+  // Battery is considered connected if voltage is in valid LiPo operating range
   float v = lastVoltage_;
-  return (v >= 2.5f && v <= 4.3f);
+  return (v >= Platform::Battery::MIN_CONNECTED_VOLTAGE && v <= Platform::Battery::MAX_CONNECTED_VOLTAGE);
 }
 
 bool BatteryMonitor::isCharging() const {

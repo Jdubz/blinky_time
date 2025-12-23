@@ -135,7 +135,8 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('intensity')).toBeInTheDocument();
       expect(screen.getByText('speed')).toBeInTheDocument();
       expect(screen.getByText('enabled')).toBeInTheDocument();
-      expect(screen.getByText('agtarget')).toBeInTheDocument();
+      // agtarget has metadata, so displays as "AGC Target Level"
+      expect(screen.getByText('AGC Target Level')).toBeInTheDocument();
     });
 
     it('displays current values for float settings', () => {
