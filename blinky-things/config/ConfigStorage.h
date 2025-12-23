@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 7;  // Phase 1: Transient impulse + AGC improvements
+    static const uint8_t CONFIG_VERSION = 8;  // Simplified: Removed envelope/attack/release
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -28,12 +28,11 @@ public:
         float noiseGate;
         float globalGain;
         float agTarget;
-        float agStrength;
         float agMin;
         float agMax;
         float transientFactor;
         float loudFloor;
-        // New AGC time constants
+        // AGC time constants
         float agcTauSeconds;
         float agcAttackTau;
         float agcReleaseTau;

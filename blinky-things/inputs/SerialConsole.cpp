@@ -67,10 +67,6 @@ void SerialConsole::registerSettings() {
     if (mic_) {
         settings_.registerFloat("gate", &mic_->noiseGate, "audio",
             "Noise gate threshold", 0.0f, 1.0f);
-        settings_.registerFloat("attack", &mic_->attackSeconds, "audio",
-            "Attack time (seconds)", 0.001f, 1.0f);
-        settings_.registerFloat("release", &mic_->releaseSeconds, "audio",
-            "Release time (seconds)", 0.01f, 2.0f);
         settings_.registerUint32("transientcooldown", &mic_->transientCooldownMs, "audio",
             "Transient cooldown (ms)", 10, 1000);
         settings_.registerFloat("transientfactor", &mic_->transientFactor, "audio",
@@ -83,8 +79,6 @@ void SerialConsole::registerSettings() {
             "Auto-gain enabled");
         settings_.registerFloat("agtarget", &mic_->agTarget, "agc",
             "Target level", 0.1f, 0.95f);
-        settings_.registerFloat("agstrength", &mic_->agStrength, "agc",
-            "Adjustment speed", 0.01f, 1.0f);
         settings_.registerFloat("agmin", &mic_->agMin, "agc",
             "Minimum gain", 0.1f, 5.0f);
         settings_.registerFloat("agmax", &mic_->agMax, "agc",
@@ -271,12 +265,9 @@ void SerialConsole::restoreDefaults() {
     if (mic_) {
         mic_->noiseGate = Defaults::NoiseGate;
         mic_->globalGain = Defaults::GlobalGain;
-        mic_->attackSeconds = Defaults::AttackSeconds;
-        mic_->releaseSeconds = Defaults::ReleaseSeconds;
         mic_->transientCooldownMs = Defaults::TransientCooldownMs;
         mic_->agEnabled = true;
         mic_->agTarget = Defaults::AutoGainTarget;
-        mic_->agStrength = Defaults::AutoGainStrength;
         mic_->agMin = Defaults::AutoGainMin;
         mic_->agMax = Defaults::AutoGainMax;
     }
@@ -292,13 +283,17 @@ void SerialConsole::streamTick() {
         streamLastMs_ = now;
 
         // Output compact JSON for web app
-        // Format: {"a":{"l":0.45,"t":0.85,"e":0.32,"g":3.5}}
+        // Format: {"a":{"l":0.45,"t":0.85,"r":0.32,"g":3.5}}
+        // l = level (post-AGC output)
+        // t = transient (percussion detection)
+        // r = RMS (tracked level for AGC)
+        // g = gain (AGC multiplier)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
         Serial.print(mic_->getTransient(), 2);
-        Serial.print(F(",\"e\":"));
-        Serial.print(mic_->getEnv(), 2);
+        Serial.print(F(",\"r\":"));
+        Serial.print(mic_->getTrackedLevel(), 2);
         Serial.print(F(",\"g\":"));
         Serial.print(mic_->getGlobalGain(), 1);
         Serial.println(F("}}"));

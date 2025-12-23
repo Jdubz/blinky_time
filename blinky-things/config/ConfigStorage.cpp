@@ -66,12 +66,11 @@ void ConfigStorage::loadDefaults() {
     data_.mic.noiseGate = 0.04f;
     data_.mic.globalGain = 3.0f;
     data_.mic.agTarget = 0.50f;
-    data_.mic.agStrength = 0.25f;
     data_.mic.agMin = 1.0f;
     data_.mic.agMax = 12.0f;
     data_.mic.transientFactor = 1.5f;
     data_.mic.loudFloor = 0.05f;
-    // New AGC time constants
+    // AGC time constants
     data_.mic.agcTauSeconds = 7.0f;
     data_.mic.agcAttackTau = 2.0f;
     data_.mic.agcReleaseTau = 10.0f;
@@ -194,12 +193,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     mic.noiseGate = data_.mic.noiseGate;
     mic.globalGain = data_.mic.globalGain;
     mic.agTarget = data_.mic.agTarget;
-    mic.agStrength = data_.mic.agStrength;
     mic.agMin = data_.mic.agMin;
     mic.agMax = data_.mic.agMax;
     mic.transientFactor = data_.mic.transientFactor;
     mic.loudFloor = data_.mic.loudFloor;
-    // New AGC time constants
+    // AGC time constants
     mic.agcTauSeconds = data_.mic.agcTauSeconds;
     mic.agcAttackTau = data_.mic.agcAttackTau;
     mic.agcReleaseTau = data_.mic.agcReleaseTau;
@@ -224,12 +222,11 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.noiseGate = mic.noiseGate;
     data_.mic.globalGain = mic.globalGain;
     data_.mic.agTarget = mic.agTarget;
-    data_.mic.agStrength = mic.agStrength;
     data_.mic.agMin = mic.agMin;
     data_.mic.agMax = mic.agMax;
     data_.mic.transientFactor = mic.transientFactor;
     data_.mic.loudFloor = mic.loudFloor;
-    // New AGC time constants
+    // AGC time constants
     data_.mic.agcTauSeconds = mic.agcTauSeconds;
     data_.mic.agcAttackTau = mic.agcAttackTau;
     data_.mic.agcReleaseTau = mic.agcReleaseTau;
