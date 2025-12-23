@@ -16,8 +16,8 @@
  * - Bucket Totem: 128 LEDs in 16x8 matrix
  */
 
-// CRITICAL: Adafruit_NeoPixel must be included FIRST to avoid pinDefinitions.h
-// redefinition conflicts between PDM library and NeoPixel library
+// NOTE: Adafruit_NeoPixel must be first. PDM.h is included separately in
+// Nrf52PdmMic.cpp to avoid pinDefinitions.h redefinition (Seeeduino mbed platform bug)
 #include <Adafruit_NeoPixel.h>
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
