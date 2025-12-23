@@ -467,8 +467,9 @@ body {
 }
 
 .tab-panel-settings {
-  width: 420px;
+  width: 400px;
   min-width: 320px;
+  max-width: 500px;
   flex-shrink: 0;
   overflow-y: auto;
 }
@@ -679,8 +680,15 @@ body {
 
 /* ===== Responsive ===== */
 
+/* Large desktop */
+@media (min-width: 1400px) {
+  .tab-panel-settings {
+    width: 480px;
+  }
+}
+
 /* Tablet and below */
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
   .tab-panel {
     flex-direction: column;
     overflow-y: auto;
@@ -700,7 +708,7 @@ body {
   }
 
   .audio-chart-container {
-    height: 250px;
+    height: 300px;
   }
 }
 
