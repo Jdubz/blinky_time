@@ -88,12 +88,18 @@ public:
   float getVoltage() const { return lastVoltage_; }     // smoothed volts
   uint8_t getPercent() const { return lastPercent_; }   // 0..100 (approximate)
 
+  // Battery presence detection
+  bool isBatteryConnected() const; // true if voltage is in valid LiPo range
+
   // Charger helpers (optional)
   void setFastCharge(bool enable); // controls HICHG if configured
-  bool isCharging() const;         // true if CHG pin present & active
+  bool isCharging() const;         // true if CHG pin present & active & battery connected
 
   // Utility: LiPo OCV → % (no load, rough curve)
   static uint8_t voltageToPercent(float v);
+
+  // Debug helpers
+  const Config& getConfig() const { return cfg_; }
 
 private:
   // HAL references

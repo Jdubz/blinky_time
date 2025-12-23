@@ -31,8 +31,10 @@ describe('AudioVisualizer', () => {
   const defaultProps = {
     audioData: null,
     batteryData: null,
+    batteryDebugData: null,
     isStreaming: false,
     onToggleStreaming: vi.fn(),
+    onRequestBatteryDebug: vi.fn(),
     disabled: false,
   };
 
@@ -92,21 +94,21 @@ describe('AudioVisualizer', () => {
     it('shows audio values when streaming with data', () => {
       render(<AudioVisualizer {...defaultProps} isStreaming={true} audioData={mockAudioData} />);
 
-      expect(screen.getByText('L: 0.75')).toBeInTheDocument();
-      expect(screen.getByText('T: 0.50')).toBeInTheDocument();
-      expect(screen.getByText('G: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
+      expect(screen.getByText('Transient: 0.50')).toBeInTheDocument();
+      expect(screen.getByText('AGC Gain: 2.0x')).toBeInTheDocument();
     });
 
     it('does not show audio values when not streaming', () => {
       render(<AudioVisualizer {...defaultProps} isStreaming={false} audioData={mockAudioData} />);
 
-      expect(screen.queryByText('L:')).not.toBeInTheDocument();
+      expect(screen.queryByText('Level:')).not.toBeInTheDocument();
     });
 
     it('does not show audio values when no audio data', () => {
       render(<AudioVisualizer {...defaultProps} isStreaming={true} audioData={null} />);
 
-      expect(screen.queryByText('L:')).not.toBeInTheDocument();
+      expect(screen.queryByText('Level:')).not.toBeInTheDocument();
     });
   });
 

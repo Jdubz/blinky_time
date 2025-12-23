@@ -15,6 +15,7 @@ function App() {
     isStreaming,
     audioData,
     batteryData,
+    batteryDebugData,
     connect,
     disconnect,
     setSetting,
@@ -23,6 +24,7 @@ function App() {
     loadSettings,
     resetDefaults,
     refreshSettings,
+    requestBatteryDebug,
   } = useSerial();
 
   const isOnline = useNetworkStatus();
@@ -44,8 +46,10 @@ function App() {
           <AudioVisualizer
             audioData={audioData}
             batteryData={batteryData}
+            batteryDebugData={batteryDebugData}
             isStreaming={isStreaming}
             onToggleStreaming={toggleStreaming}
+            onRequestBatteryDebug={requestBatteryDebug}
             disabled={isDisabled}
           />
         </div>

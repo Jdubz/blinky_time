@@ -18,6 +18,7 @@ export interface DeviceSetting {
   cat: string;
   min: number;
   max: number;
+  desc?: string; // Optional description from firmware
 }
 
 // Response from `json settings` command
@@ -40,6 +41,7 @@ export interface AudioMessage {
 
 // Battery status from streaming `{"b":{...}}` messages
 export interface BatterySample {
+  n: boolean; // connected (battery detected)
   c: boolean; // charging
   v: number; // voltage
   p: number; // percent (0-100)

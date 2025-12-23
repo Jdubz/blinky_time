@@ -152,6 +152,75 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    if (strcmp(cmd, "battery debug") == 0 || strcmp(cmd, "batt debug") == 0) {
+        if (battery_) {
+            Serial.println(F("=== Battery Debug Info ==="));
+            Serial.print(F("Connected: "));
+            Serial.println(battery_->isBatteryConnected() ? F("Yes") : F("No"));
+            Serial.print(F("Voltage: "));
+            Serial.print(battery_->getVoltage(), 3);
+            Serial.println(F("V"));
+            Serial.print(F("Percent: "));
+            Serial.print(battery_->getPercent());
+            Serial.println(F("%"));
+            Serial.print(F("Charging: "));
+            Serial.println(battery_->isCharging() ? F("Yes") : F("No"));
+            Serial.println(F("(Use 'battery raw' for detailed ADC values)"));
+        } else {
+            Serial.println(F("Battery monitor not available"));
+        }
+        return true;
+    }
+
+    if (strcmp(cmd, "battery raw") == 0 || strcmp(cmd, "batt raw") == 0) {
+        if (battery_) {
+            Serial.println(F("=== Battery Raw ADC Debug ==="));
+
+            // Read raw ADC value
+            uint16_t raw = battery_->readRaw();
+            Serial.print(F("Raw ADC count: "));
+            Serial.println(raw);
+
+            // Get config
+            const auto& cfg = battery_->getConfig();
+            Serial.print(F("ADC bits: "));
+            Serial.println(cfg.adcBits);
+
+            const float maxCount = (cfg.adcBits == 12) ? 4095.0f :
+                                   ((cfg.adcBits == 10) ? 1023.0f :
+                                   (float)((1UL<<cfg.adcBits)-1));
+            Serial.print(F("Max count: "));
+            Serial.println(maxCount, 0);
+
+            // Calculate v_adc
+            float v_adc = (raw * cfg.vrefVolts) / maxCount;
+            Serial.print(F("V_ref: "));
+            Serial.print(cfg.vrefVolts, 3);
+            Serial.println(F("V"));
+            Serial.print(F("V_adc (pin): "));
+            Serial.print(v_adc, 4);
+            Serial.println(F("V"));
+
+            // Calculate v_batt
+            Serial.print(F("Divider ratio: "));
+            Serial.println(cfg.dividerRatio, 4);
+            float v_batt = v_adc / cfg.dividerRatio;
+            Serial.print(F("V_batt (calculated): "));
+            Serial.print(v_batt, 4);
+            Serial.println(F("V"));
+
+            // Compare with actual reading
+            Serial.print(F("V_batt (from getVoltage()): "));
+            Serial.print(battery_->getVoltage(), 4);
+            Serial.println(F("V"));
+
+            Serial.println(F("==========================="));
+        } else {
+            Serial.println(F("Battery monitor not available"));
+        }
+        return true;
+    }
+
     if (strcmp(cmd, "stream on") == 0) {
         streamEnabled_ = true;
         Serial.println(F("OK"));
@@ -253,8 +322,14 @@ void SerialConsole::streamTick() {
         batteryLastMs_ = now;
 
         // Output battery status JSON
-        // Format: {"b":{"c":true,"v":3.85,"p":72}}
-        Serial.print(F("{\"b\":{\"c\":"));
+        // Format: {"b":{"n":true,"c":false,"v":3.85,"p":72}}
+        // n = connected (battery detected)
+        // c = charging (true if charging)
+        // v = voltage (in volts)
+        // p = percent (0-100)
+        Serial.print(F("{\"b\":{\"n\":"));
+        Serial.print(battery_->isBatteryConnected() ? F("true") : F("false"));
+        Serial.print(F(",\"c\":"));
         Serial.print(battery_->isCharging() ? F("true") : F("false"));
         Serial.print(F(",\"v\":"));
         Serial.print(battery_->getVoltage(), 2);

@@ -1,5 +1,6 @@
 import { useCallback, useRef, useEffect } from 'react';
 import { DeviceSetting, SettingsByCategory } from '../types';
+import { settingsMetadata } from '../data/settingsMetadata';
 
 interface SettingsPanelProps {
   settingsByCategory: SettingsByCategory;
@@ -44,9 +45,15 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
 
   // Boolean toggle
   if (setting.type === 'bool') {
+    const metadata = settingsMetadata[setting.name];
+    const displayName = metadata?.displayName || setting.desc || setting.name;
+    const tooltip = metadata?.tooltip || setting.desc || '';
+
     return (
       <div className="setting-control">
-        <label className="setting-label">{setting.name}</label>
+        <label className="setting-label" title={tooltip}>
+          {displayName}
+        </label>
         <label className="toggle">
           <input
             type="checkbox"
@@ -65,9 +72,15 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
   const step = setting.type === 'float' ? 0.01 : 1;
   const displayValue = setting.type === 'float' ? numValue.toFixed(2) : numValue;
 
+  const metadata = settingsMetadata[setting.name];
+  const displayName = metadata?.displayName || setting.desc || setting.name;
+  const tooltip = metadata?.tooltip || setting.desc || '';
+
   return (
     <div className="setting-control">
-      <label className="setting-label">{setting.name}</label>
+      <label className="setting-label" title={tooltip}>
+        {displayName}
+      </label>
       <div className="setting-slider-group">
         <input
           type="range"

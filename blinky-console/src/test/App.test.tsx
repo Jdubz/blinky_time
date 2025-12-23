@@ -13,6 +13,7 @@ const mockUseSerial: UseSerialReturn = {
   isStreaming: false,
   audioData: null,
   batteryData: null,
+  batteryDebugData: null,
   connect: vi.fn(),
   disconnect: vi.fn(),
   setSetting: vi.fn(),
@@ -21,6 +22,7 @@ const mockUseSerial: UseSerialReturn = {
   loadSettings: vi.fn(),
   resetDefaults: vi.fn(),
   refreshSettings: vi.fn(),
+  requestBatteryDebug: vi.fn(),
 };
 
 vi.mock('../hooks/useSerial', () => ({
@@ -224,9 +226,9 @@ describe('App', () => {
       render(<App />);
 
       // Note: E (envelope) value is tracked for chart but not displayed numerically
-      expect(screen.getByText('L: 0.75')).toBeInTheDocument();
-      expect(screen.getByText('T: 0.50')).toBeInTheDocument();
-      expect(screen.getByText('G: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
+      expect(screen.getByText('Transient: 0.50')).toBeInTheDocument();
+      expect(screen.getByText('AGC Gain: 2.0x')).toBeInTheDocument();
     });
   });
 });

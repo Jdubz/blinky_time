@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { serialService, SerialEvent } from '../services/serial';
+import { serialService, SerialEvent, BatteryDebugData } from '../services/serial';
 import {
   DeviceInfo,
   DeviceSetting,
@@ -23,6 +23,7 @@ export interface UseSerialReturn {
   isStreaming: boolean;
   audioData: AudioSample | null;
   batteryData: BatterySample | null;
+  batteryDebugData: BatteryDebugData | null;
 
   // Actions
   connect: () => Promise<void>;
@@ -33,6 +34,7 @@ export interface UseSerialReturn {
   loadSettings: () => Promise<void>;
   resetDefaults: () => Promise<void>;
   refreshSettings: () => Promise<void>;
+  requestBatteryDebug: () => Promise<void>;
 }
 
 export function useSerial(): UseSerialReturn {
@@ -42,8 +44,52 @@ export function useSerial(): UseSerialReturn {
   const [isStreaming, setIsStreaming] = useState(false);
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
+  const [batteryDebugData, setBatteryDebugData] = useState<BatteryDebugData | null>(null);
 
   const isSupported = serialService.isSupported();
+
+  // Cleanup on page unload - disconnect serial port to prevent it from being locked
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (connectionState === 'connected') {
+        serialService.disconnect();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      // If page becomes hidden and we're connected, optionally disconnect
+      if (document.hidden && connectionState === 'connected') {
+        // Optionally disconnect when tab is hidden
+        // serialService.disconnect();
+      }
+    };
+
+    // Keyboard shortcut: Ctrl+D or Escape to disconnect
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (connectionState === 'connected') {
+        if ((e.ctrlKey && e.key === 'd') || e.key === 'Escape') {
+          e.preventDefault();
+          serialService.disconnect();
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('keydown', handleKeyDown);
+      // Disconnect on component unmount
+      if (connectionState === 'connected') {
+        serialService.disconnect();
+      }
+    };
+  }, [connectionState]);
 
   // Group settings by category - memoized to prevent recalculation on every render
   const settingsByCategory = useMemo(
@@ -80,6 +126,11 @@ export function useSerial(): UseSerialReturn {
         case 'battery':
           if (event.battery) {
             setBatteryData(event.battery.b);
+          }
+          break;
+        case 'batteryDebug':
+          if (event.batteryDebug) {
+            setBatteryDebugData(event.batteryDebug);
           }
           break;
         case 'error':
@@ -171,6 +222,11 @@ export function useSerial(): UseSerialReturn {
     }
   }, []);
 
+  // Request battery debug data
+  const requestBatteryDebug = useCallback(async () => {
+    await serialService.requestBatteryDebug();
+  }, []);
+
   return {
     connectionState,
     isSupported,
@@ -180,6 +236,7 @@ export function useSerial(): UseSerialReturn {
     isStreaming,
     audioData,
     batteryData,
+    batteryDebugData,
     connect,
     disconnect,
     setSetting,
@@ -188,5 +245,6 @@ export function useSerial(): UseSerialReturn {
     loadSettings,
     resetDefaults,
     refreshSettings,
+    requestBatteryDebug,
   };
 }
