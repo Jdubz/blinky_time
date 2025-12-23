@@ -42,11 +42,15 @@ private:
 public:
     void setResolution(uint8_t bits) override {
         currentBits_ = bits;
-        #if defined(analogReadResolution)
+        // Most modern Arduino platforms support analogReadResolution()
+        // Known platforms: SAMD, nRF52, ESP32, STM32, Teensy, etc.
+        #if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || \
+            defined(ARDUINO_ARCH_MBED) || defined(ESP32) || defined(ARDUINO_ARCH_STM32) || \
+            defined(__SAMD21G18A__) || defined(__SAMD51__) || defined(TEENSYDUINO)
         analogReadResolution(bits);
         #else
-        // If analogReadResolution not available, we'll handle it in analogRead()
-        #warning "analogReadResolution() not available on this platform - ADC stuck at 10-bit"
+        // Platform doesn't support analogReadResolution() - will scale in analogRead()
+        (void)bits; // Suppress unused parameter warning
         #endif
     }
 
@@ -67,7 +71,9 @@ public:
 
         // Workaround for platforms where analogReadResolution() doesn't work
         // If we want 12-bit but getting 10-bit values, scale up
-        #if !defined(analogReadResolution)
+        #if !defined(ARDUINO_ARCH_SAMD) && !defined(ARDUINO_ARCH_NRF52) && !defined(NRF52) && \
+            !defined(ARDUINO_ARCH_MBED) && !defined(ESP32) && !defined(ARDUINO_ARCH_STM32) && \
+            !defined(__SAMD21G18A__) && !defined(__SAMD51__) && !defined(TEENSYDUINO)
         if (currentBits_ == 12 && raw <= 1023) {
             raw = raw << 2; // Scale 10-bit (0-1023) to 12-bit (0-4092)
         }
