@@ -305,15 +305,9 @@ void Water::setAudioParams(float waveBoost, uint8_t flowBoostMax, int8_t flowBia
 }
 
 int Water::coordsToIndex(int x, int y) {
-    if (x < 0 || x >= width_ || y < 0 || y >= height_) return -1;
-    return y * width_ + x;
+    return coordsToIndexRowMajor(x, y);
 }
 
 void Water::indexToCoords(int index, int& x, int& y) {
-    if (index < 0 || index >= numLeds_) {
-        x = y = -1;
-        return;
-    }
-    x = index % width_;
-    y = index / width_;
+    indexToCoordsRowMajor(index, x, y);
 }

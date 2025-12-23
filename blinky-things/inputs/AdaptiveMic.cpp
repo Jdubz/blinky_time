@@ -1,4 +1,25 @@
 #include "AdaptiveMic.h"
+#include <math.h>
+
+// Helper for constrain
+template<typename T>
+static T constrainValue(T value, T minVal, T maxVal) {
+    if (value < minVal) return minVal;
+    if (value > maxVal) return maxVal;
+    return value;
+}
+
+// Helper for max
+template<typename T>
+static T maxValue(T a, T b) {
+    return (a > b) ? a : b;
+}
+
+// Helper for min
+template<typename T>
+static T minValue(T a, T b) {
+    return (a < b) ? a : b;
+}
 
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
@@ -8,43 +29,48 @@ volatile uint32_t AdaptiveMic::s_numSamples = 0;
 volatile uint16_t AdaptiveMic::s_maxAbs     = 0;
 
 // ---------- Public ----------
+AdaptiveMic::AdaptiveMic(IPdmMic& pdm, ISystemTime& time)
+    : pdm_(pdm), time_(time) {
+}
+
 bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   _sampleRate    = sampleRate;
-  currentHardwareGain  = constrain(gainInit, hwGainMin, hwGainMax);
+  currentHardwareGain  = constrainValue(gainInit, hwGainMin, hwGainMax);
   s_instance     = this;
 
-  PDM.onReceive(AdaptiveMic::onPDMdata);
+  pdm_.onReceive(AdaptiveMic::onPDMdata);
   // PDM.setBufferSize(1024); // optional if core supports it
 
-  bool ok = PDM.begin(1, _sampleRate); // mono @ 16k
+  bool ok = pdm_.begin(1, _sampleRate); // mono @ 16k
   if (!ok) return false;
 
-  PDM.setGain(currentHardwareGain);
+  pdm_.setGain(currentHardwareGain);
 
   envAR = envMean = 0.0f; minEnv = 1e9f; maxEnv = 0.0f;
-  globalGain = levelInstant = levelPreGate = levelPostAGC = 0.0f;
-  lastHwCalibMs = millis();
-  lastIsrMs = millis(); pdmAlive = false;
+  levelInstant = levelPreGate = levelPostAGC = 0.0f;
+  // Note: globalGain intentionally NOT reset here - keep default of 3.0f for faster startup
+  lastHwCalibMs = time_.millis();
+  lastIsrMs = time_.millis(); pdmAlive = false;
   return true;
 }
 
 void AdaptiveMic::end() {
-  PDM.end();
+  pdm_.end();
   s_instance = nullptr;
 }
 
 void AdaptiveMic::update(float dt) {
-  if (dt < 0.0001f) dt = 0.0001f;
-  if (dt > 0.1000f) dt = 0.1000f;
+  if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
+  if (dt > MicConstants::MAX_DT_SECONDS) dt = MicConstants::MAX_DT_SECONDS;
 
   computeCoeffs(dt);
 
   float avgAbs = 0.0f;
-  uint16_t maxAbs = 0;
+  uint16_t maxAbsVal = 0;
   uint32_t n = 0;
-  consumeISR(avgAbs, maxAbs, n);
+  consumeISR(avgAbs, maxAbsVal, n);
 
-  uint32_t nowMs = millis();
+  uint32_t nowMs = time_.millis();
   pdmAlive = !isMicDead(nowMs, 250);
 
   if (n > 0) {
@@ -84,12 +110,12 @@ void AdaptiveMic::update(float dt) {
     // Slow average tracks the baseline level
     slowAvg += slowAlpha * (x - slowAvg);
 
-    uint32_t now = millis();
+    uint32_t now = time_.millis();
     bool cooldownExpired = (now - lastTransientMs) > transientCooldownMs;
 
     // Transient = current level significantly above baseline
     // transientFactor 1.4 means level must be 40% above baseline
-    float threshold = max(loudFloor, slowAvg * transientFactor);
+    float threshold = maxValue(loudFloor, slowAvg * transientFactor);
 
     if (cooldownExpired && x > threshold) {
         transient = 1.0f;
@@ -111,24 +137,24 @@ void AdaptiveMic::computeCoeffs(float /*dt*/) {
   // Placeholder; coefficients recomputed in updateEnvelope
 }
 
-void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbs, uint32_t& n) {
-  noInterrupts();
+void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
+  time_.noInterrupts();
   uint64_t sum = s_sumAbs;
   uint32_t cnt = s_numSamples;
   uint16_t m   = s_maxAbs;
   s_sumAbs = 0;
   s_numSamples = 0;
   s_maxAbs = 0;
-  interrupts();
+  time_.interrupts();
 
   n = cnt;
-  maxAbs = m;
+  maxAbsVal = m;
   avgAbs = (cnt > 0) ? float(sum) / float(cnt) : 0.0f;
 }
 
 void AdaptiveMic::updateEnvelope(float avgAbs, float dt) {
-  float aAtkFrame = 1.0f - expf(-dt / max(attackSeconds, 1e-3f));
-  float aRelFrame = 1.0f - expf(-dt / max(releaseSeconds, 1e-3f));
+  float aAtkFrame = 1.0f - expf(-dt / maxValue(attackSeconds, 1e-3f));
+  float aRelFrame = 1.0f - expf(-dt / maxValue(releaseSeconds, 1e-3f));
 
   if (avgAbs >= envAR) {
     envAR += aAtkFrame * (avgAbs - envAR);
@@ -136,7 +162,7 @@ void AdaptiveMic::updateEnvelope(float avgAbs, float dt) {
     envAR += aRelFrame * (avgAbs - envAR);
   }
 
-  float meanAlpha = 1.0f - expf(-dt / 90.0f); // ~90s
+  float meanAlpha = 1.0f - expf(-dt / MicConstants::ENV_MEAN_TAU_SECONDS);
   envMean += meanAlpha * (envAR - envMean);
 }
 
@@ -164,7 +190,7 @@ void AdaptiveMic::autoGainTick(float dt) {
   } else if (globalGain >= agMax * 0.999f) {
     dwellAtMax += dt;
   } else if (dwellAtMax > 0.0f) {
-    dwellAtMax = max(0.0f, dwellAtMax - dt * (1.0f/limitDwellRelaxSec));
+    dwellAtMax = maxValue(0.0f, dwellAtMax - dt * (1.0f/limitDwellRelaxSec));
   }
 
   if (levelPreGate >= 0.98f && globalGain <= agMin * 1.001f) {
@@ -172,7 +198,7 @@ void AdaptiveMic::autoGainTick(float dt) {
   } else if (globalGain <= agMin * 1.001f) {
     dwellAtMin += dt;
   } else if (dwellAtMin > 0.0f) {
-    dwellAtMin = max(0.0f, dwellAtMin - dt * (1.0f/limitDwellRelaxSec));
+    dwellAtMin = maxValue(0.0f, dwellAtMin - dt * (1.0f/limitDwellRelaxSec));
   }
 }
 
@@ -194,9 +220,9 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
 
   if (delta != 0) {
     int oldGain = currentHardwareGain;
-    currentHardwareGain = constrain(currentHardwareGain + delta, hwGainMin, hwGainMax);
+    currentHardwareGain = constrainValue(currentHardwareGain + delta, hwGainMin, hwGainMax);
     if (currentHardwareGain != oldGain) {
-      PDM.setGain(currentHardwareGain);
+      pdm_.setGain(currentHardwareGain);
 
       float softComp = (delta > 0) ? (1.0f/1.05f) : 1.05f;
       globalGain = clamp01(globalGain * softComp);
@@ -208,34 +234,38 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   lastHwCalibMs = nowMs;
 }
 
-// ---------- ISR ----------
+// ---------- ISR Callback ----------
+// This callback is invoked by the PDM library when audio data is available.
+// On nRF52840 with Seeeduino mbed core, PDM.onReceive() callbacks run in
+// interrupt context, so interrupts are already disabled during execution.
 void AdaptiveMic::onPDMdata() {
   if (!s_instance) return;
-  int bytesAvailable = PDM.available();
+  int bytesAvailable = s_instance->pdm_.available();
   if (bytesAvailable <= 0) return;
 
   static int16_t buffer[512];
-  int toRead = min<int>(bytesAvailable, (int)sizeof(buffer));
-  int read = PDM.read(buffer, toRead);
-  if (read <= 0) return;
+  int toRead = minValue(bytesAvailable, (int)sizeof(buffer));
+  int bytesRead = s_instance->pdm_.read(buffer, toRead);
+  if (bytesRead <= 0) return;
 
-  int samples = read / (int)sizeof(int16_t);
+  int samples = bytesRead / (int)sizeof(int16_t);
   uint64_t localSumAbs = 0;
   uint16_t localMaxAbs = 0;
 
   for (int i = 0; i < samples; ++i) {
     int16_t s = buffer[i];
-    uint16_t a = (uint16_t)abs(s);
+    // Use int32_t to avoid overflow when s == INT16_MIN (-32768)
+    uint16_t a = (uint16_t)((s < 0) ? -((int32_t)s) : s);
     localSumAbs += a;
     if (a > localMaxAbs) localMaxAbs = a;
   }
 
-  noInterrupts();
+  // Note: We're already in ISR context, so interrupts are disabled.
+  // Direct access to static volatiles is safe here without additional guards.
   s_sumAbs     += localSumAbs;
   s_numSamples += samples;
   if (localMaxAbs > s_maxAbs) s_maxAbs = localMaxAbs;
   s_isrCount++;
-  interrupts();
 
-  s_instance->lastIsrMs = millis();
+  s_instance->lastIsrMs = s_instance->time_.millis();
 }

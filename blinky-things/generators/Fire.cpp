@@ -1,6 +1,18 @@
 #include "Fire.h"
 #include <Arduino.h>
 
+// PROGMEM compatibility for non-AVR platforms (e.g., nRF52840)
+#if defined(ARDUINO_ARCH_AVR)
+#include <avr/pgmspace.h>
+#else
+#ifndef PROGMEM
+#define PROGMEM
+#endif
+#ifndef pgm_read_byte
+#define pgm_read_byte(addr) (*(const uint8_t *)(addr))
+#endif
+#endif
+
 // ============================================================================
 // Simplex Noise Implementation (2D)
 // Based on Stefan Gustavson's simplex noise, optimized for embedded systems
@@ -8,7 +20,8 @@
 
 namespace {
     // Permutation table (256 entries, doubled to avoid wrapping)
-    static const uint8_t perm[512] = {
+    // Stored in PROGMEM to save ~512 bytes of RAM
+    static const uint8_t perm[512] PROGMEM = {
         151,160,137,91,90,15,131,13,201,95,96,53,194,233,7,225,140,36,103,30,69,142,
         8,99,37,240,21,10,23,190,6,148,247,120,234,75,0,26,197,62,94,252,219,203,117,
         35,11,32,57,177,33,88,237,149,56,87,174,20,125,136,171,168,68,175,74,165,71,
@@ -81,11 +94,12 @@ namespace {
         float y2 = y0 - 1.0f + 2.0f * G2;
 
         // Hash coordinates to get gradient indices
+        // Use pgm_read_byte() to read from PROGMEM
         int ii = i & 255;
         int jj = j & 255;
-        int gi0 = perm[ii + perm[jj]] & 7;
-        int gi1 = perm[ii + i1 + perm[jj + j1]] & 7;
-        int gi2 = perm[ii + 1 + perm[jj + 1]] & 7;
+        int gi0 = pgm_read_byte(&perm[ii + pgm_read_byte(&perm[jj])]) & 7;
+        int gi1 = pgm_read_byte(&perm[ii + i1 + pgm_read_byte(&perm[jj + j1])]) & 7;
+        int gi2 = pgm_read_byte(&perm[ii + 1 + pgm_read_byte(&perm[jj + 1])]) & 7;
 
         // Calculate contributions from three corners
         float n0, n1, n2;

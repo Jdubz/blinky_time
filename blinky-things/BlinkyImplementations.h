@@ -33,6 +33,10 @@
 // Render implementations
 #include "render/EffectRenderer.cpp"
 
+// HAL implementations
+#include "hal/hardware/NeoPixelLedStrip.cpp"  // LED strip wrapper
+// NOTE: Nrf52PdmMic.cpp is in sketch root for separate compilation (avoids pinDefinitions.h conflict)
+
 // Input implementations
 #include "inputs/AdaptiveMic.cpp"
 #include "inputs/BatteryMonitor.cpp"

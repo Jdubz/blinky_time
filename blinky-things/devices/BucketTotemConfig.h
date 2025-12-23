@@ -27,12 +27,13 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
     .layoutType = MATRIX_LAYOUT,      // New unified layout system
     .fireType = MATRIX_FIRE           // Kept for backward compatibility
   },
+  // All XIAO BLE devices use single-cell LiPo batteries (3.0-4.2V range)
   .charging = {
     .fastChargeEnabled = true,
-    .lowBatteryThreshold = 1.5f,
-    .criticalBatteryThreshold = 1.3f,
-    .minVoltage = 1.3f,
-    .maxVoltage = 1.8f
+    .lowBatteryThreshold = Platform::Battery::DEFAULT_LOW_THRESHOLD,
+    .criticalBatteryThreshold = Platform::Battery::DEFAULT_CRITICAL_THRESHOLD,
+    .minVoltage = Platform::Battery::VOLTAGE_EMPTY,
+    .maxVoltage = Platform::Battery::VOLTAGE_FULL
   },
   .imu = {
     .upVectorX = 0.0f,

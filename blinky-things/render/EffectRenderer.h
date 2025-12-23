@@ -1,7 +1,5 @@
 #pragma once
-// NOTE: Adafruit_NeoPixel.h must be included in main .ino file BEFORE BlinkyArchitecture.h
-// to avoid pinDefinitions.h redefinition errors with PDM library
-#include <Adafruit_NeoPixel.h>
+#include "../hal/interfaces/ILedStrip.h"
 #include "../types/PixelMatrix.h"
 #include "LEDMapper.h"
 
@@ -11,14 +9,17 @@
  * Handles the mapping from logical pixel coordinates to physical
  * LED indices, taking into account different wiring patterns and
  * orientations.
+ *
+ * Uses ILedStrip interface for hardware abstraction, enabling
+ * unit testing with MockLedStrip.
  */
 class EffectRenderer {
 private:
-    Adafruit_NeoPixel& leds_;
+    ILedStrip& leds_;
     LEDMapper& ledMapper_;
 
 public:
-    EffectRenderer(Adafruit_NeoPixel& leds, LEDMapper& mapper);
+    EffectRenderer(ILedStrip& leds, LEDMapper& mapper);
 
     /**
      * Render a PixelMatrix to the physical LEDs

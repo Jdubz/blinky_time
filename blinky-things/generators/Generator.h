@@ -51,4 +51,20 @@ protected:
     // Audio responsiveness
     bool audioReactive_ = true;
     float audioSensitivity_ = 1.0f;
+
+    // Common coordinate conversion helpers (row-major layout)
+    // Subclasses can override for custom wiring patterns
+    int coordsToIndexRowMajor(int x, int y) const {
+        if (x < 0 || x >= width_ || y < 0 || y >= height_) return -1;
+        return y * width_ + x;
+    }
+
+    void indexToCoordsRowMajor(int index, int& x, int& y) const {
+        if (index < 0 || index >= numLeds_) {
+            x = y = -1;
+            return;
+        }
+        x = index % width_;
+        y = index / width_;
+    }
 };

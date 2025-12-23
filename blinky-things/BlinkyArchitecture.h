@@ -56,22 +56,20 @@
  *
  * #include "BlinkyArchitecture.h"
  *
- * FireGenerator fireGen;
+ * Fire fireGen;
  * HueRotationEffect hueEffect(0.1f);
- * EffectRenderer renderer;
- * EffectMatrix matrix(width, height);
+ * EffectRenderer renderer(leds, ledMapper);
+ * PixelMatrix matrix(width, height);
  *
  * void setup() {
- *   fireGen.begin(width, height);
+ *   fireGen.begin(config);
  *   hueEffect.begin(width, height);
- *   renderer.begin(width, height, &leds);
  * }
  *
  * void loop() {
- *   fireGen.setAudioInput(energy, hit);
- *   fireGen.update();
- *   fireGen.generate(&matrix);
+ *   fireGen.generate(matrix, energy, hit);
  *   hueEffect.apply(&matrix);
- *   renderer.render(&matrix);
+ *   renderer.render(matrix);
+ *   leds.show();
  * }
  */

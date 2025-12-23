@@ -1,6 +1,6 @@
 #include "EffectRenderer.h"
 
-EffectRenderer::EffectRenderer(Adafruit_NeoPixel& leds, LEDMapper& mapper)
+EffectRenderer::EffectRenderer(ILedStrip& leds, LEDMapper& mapper)
     : leds_(leds), ledMapper_(mapper) {
 }
 
@@ -59,7 +59,8 @@ void EffectRenderer::renderTestPattern(int pattern) {
         case 1: // Gradient from bottom (red) to top (blue)
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
-                    float t = (float)y / (height - 1);
+                    // Guard against division by zero when height == 1
+                    float t = (height > 1) ? (float)y / (height - 1) : 0.0f;
                     uint8_t r = (uint8_t)(255 * (1.0f - t));
                     uint8_t g = 0;
                     uint8_t b = (uint8_t)(255 * t);

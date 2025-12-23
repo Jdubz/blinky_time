@@ -16,13 +16,15 @@
  * - Bucket Totem: 128 LEDs in 16x8 matrix
  */
 
-// CRITICAL: Adafruit_NeoPixel must be included FIRST to avoid pinDefinitions.h
-// redefinition conflicts between PDM library and NeoPixel library
+// NOTE: Adafruit_NeoPixel must be first. PDM.h is included separately in
+// Nrf52PdmMic.cpp to avoid pinDefinitions.h redefinition (Seeeduino mbed platform bug)
 #include <Adafruit_NeoPixel.h>
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
 #include "types/Version.h"           // Version information from repository
 #include "tests/SafeMode.h"          // Crash recovery system
+#include "hal/DefaultHal.h"          // HAL singleton instances
+#include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
@@ -47,7 +49,9 @@ const DeviceConfig& config = BUCKET_TOTEM_CONFIG;
 #endif
 LEDMapper ledMapper;
 
-Adafruit_NeoPixel leds(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
+// Hardware abstraction layer for testability
+Adafruit_NeoPixel neoPixelStrip(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
+NeoPixelLedStrip leds(neoPixelStrip);
 
 // New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
@@ -63,8 +67,9 @@ Effect* currentEffect = nullptr;
 EffectRenderer* renderer = nullptr;
 PixelMatrix* pixelMatrix = nullptr;
 
-AdaptiveMic mic;
-BatteryMonitor battery;
+// HAL-enabled components for testability
+AdaptiveMic mic(DefaultHal::pdm(), DefaultHal::time());
+BatteryMonitor battery(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
@@ -76,14 +81,15 @@ bool prevChargingState = false;
 FireParams fireParams;
 
 void updateFireParams() {
+  if (!currentGenerator) return;
   Fire* f = static_cast<Fire*>(currentGenerator);
-  if (f) {
-    f->setParams(fireParams);
-  }
+  f->setParams(fireParams);
 }
 
 // Helper functions for new Generator-Effect-Renderer architecture
 void updateFireEffect(float energy, float hit) {
+  if (!currentGenerator) return;
+
   static uint32_t lastDebug = 0;
   if (millis() - lastDebug > 5000) {  // Debug every 5 seconds
     lastDebug = millis();
@@ -94,14 +100,9 @@ void updateFireEffect(float energy, float hit) {
   }
 
   // Update generator with audio energy and impact
-  if (currentGenerator) {
-    // Cast to Fire to access update method and setAudioInput
-    Fire* fireGen = static_cast<Fire*>(currentGenerator);
-    if (fireGen) {
-      fireGen->setAudioInput(energy, hit);
-      fireGen->update();
-    }
-  }
+  Fire* fireGen = static_cast<Fire*>(currentGenerator);
+  fireGen->setAudioInput(energy, hit);
+  fireGen->update();
 }
 
 void showFireEffect() {
