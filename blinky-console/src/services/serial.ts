@@ -44,32 +44,13 @@ export type SerialEventType =
   | 'error'
   | 'audio'
   | 'battery'
-  | 'batteryDebug';
+  | 'batteryStatus';
 
-export interface BatteryDebugData {
-  pins: {
-    vbat: number;
-    enable: number;
-  };
-  samples: number[];
-  adc: {
-    bits: number;
-    maxCount: number;
-    vref: number;
-  };
-  reading: {
-    raw: number;
-    vAdc: number;
-    dividerRatio: number;
-    vBattCalc: number;
-    vBattActual: number;
-  };
-  platform: {
-    p0_31: boolean;
-    p0_31_value?: number;
-    analogReadRes: boolean;
-    ar_internal2v4: boolean;
-  };
+export interface BatteryStatusData {
+  voltage: number; // Battery voltage in volts
+  percent: number; // Battery percentage (0-100)
+  charging: boolean; // True if currently charging
+  connected: boolean; // True if battery is connected
 }
 
 export interface SerialEvent {
@@ -77,7 +58,7 @@ export interface SerialEvent {
   data?: string;
   audio?: AudioMessage;
   battery?: BatteryMessage;
-  batteryDebug?: BatteryDebugData;
+  batteryStatus?: BatteryStatusData;
   error?: Error;
 }
 
@@ -314,9 +295,9 @@ class SerialService {
     await this.send('defaults');
   }
 
-  // Request battery debug data
-  async requestBatteryDebug(): Promise<void> {
-    await this.send('battery raw');
+  // Request battery status data
+  async requestBatteryStatus(): Promise<void> {
+    await this.send('battery');
   }
 
   // Start reading from serial port
@@ -370,14 +351,14 @@ class SerialService {
             }
           }
 
-          // Check if it's a battery debug message
-          if (trimmed.startsWith('{"batteryRaw":')) {
+          // Check if it's a battery status message
+          if (trimmed.startsWith('{"battery":')) {
             try {
-              const parsed = JSON.parse(trimmed) as { batteryRaw: BatteryDebugData };
-              this.emit({ type: 'batteryDebug', batteryDebug: parsed.batteryRaw });
+              const parsed = JSON.parse(trimmed) as { battery: BatteryStatusData };
+              this.emit({ type: 'batteryStatus', batteryStatus: parsed.battery });
               continue;
             } catch {
-              // Not valid battery debug JSON
+              // Not valid battery status JSON
             }
           }
 

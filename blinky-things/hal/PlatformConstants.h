@@ -16,8 +16,14 @@ namespace Platform {
         // Ratio = R2/(R1+R2) = 510/(1510+510) = 510/2020 ≈ 0.2525
         constexpr float DIVIDER_RATIO = 510.0f / (1510.0f + 510.0f);
 
-        // ADC reference voltage when using AR_INTERNAL2V4
-        constexpr float VREF_2V4 = 2.4f;
+        // ADC reference voltage (platform-dependent)
+        // mbed core: Can set to 2.4V with AR_INTERNAL2V4
+        // non-mbed Seeed nRF52 core: Stuck at hardware default (~2.76V empirically measured)
+        #if defined(P0_31) || defined(AR_INTERNAL2V4)
+        constexpr float VREF_2V4 = 2.4f;   // mbed core with configurable reference
+        #else
+        constexpr float VREF_2V4 = 2.76f;  // non-mbed core (empirically calibrated)
+        #endif
 
         // LiPo voltage thresholds (chemistry-dependent, not device-dependent)
         constexpr float VOLTAGE_FULL = 4.20f;      // Fully charged

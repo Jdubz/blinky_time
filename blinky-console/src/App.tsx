@@ -17,7 +17,7 @@ function App() {
     isStreaming,
     audioData,
     batteryData,
-    batteryDebugData,
+    batteryStatusData,
     consoleLines,
     sendCommand,
     connect,
@@ -28,7 +28,7 @@ function App() {
     loadSettings,
     resetDefaults,
     refreshSettings,
-    requestBatteryDebug,
+    requestBatteryStatus,
   } = useSerial();
 
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
@@ -52,10 +52,10 @@ function App() {
           <AudioVisualizer
             audioData={audioData}
             batteryData={batteryData}
-            batteryDebugData={batteryDebugData}
+            batteryStatusData={batteryStatusData}
             isStreaming={isStreaming}
             onToggleStreaming={toggleStreaming}
-            onRequestBatteryDebug={requestBatteryDebug}
+            onRequestBatteryStatus={requestBatteryStatus}
             disabled={isDisabled}
           />
         </div>

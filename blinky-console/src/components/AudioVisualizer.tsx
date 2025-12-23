@@ -13,8 +13,8 @@ import {
 import { Line } from 'react-chartjs-2';
 import { AudioSample, BatterySample } from '../types';
 import { audioMetricsMetadata } from '../data/settingsMetadata';
-import { BatteryDebugModal } from './BatteryDebugModal';
-import type { BatteryDebugData } from '../services/serial';
+import { BatteryModal } from './BatteryModal';
+import type { BatteryStatusData } from '../services/serial';
 
 // Register Chart.js components
 ChartJS.register(
@@ -31,10 +31,10 @@ ChartJS.register(
 interface AudioVisualizerProps {
   audioData: AudioSample | null;
   batteryData: BatterySample | null;
-  batteryDebugData: BatteryDebugData | null;
+  batteryStatusData: BatteryStatusData | null;
   isStreaming: boolean;
   onToggleStreaming: () => void;
-  onRequestBatteryDebug: () => void;
+  onRequestBatteryStatus: () => void;
   disabled: boolean;
 }
 
@@ -43,10 +43,10 @@ const MAX_DATA_POINTS = 150; // ~7.5 seconds at 20Hz
 export function AudioVisualizer({
   audioData,
   batteryData,
-  batteryDebugData,
+  batteryStatusData,
   isStreaming,
   onToggleStreaming,
-  onRequestBatteryDebug,
+  onRequestBatteryStatus,
   disabled,
 }: AudioVisualizerProps) {
   const levelDataRef = useRef<number[]>([]);
@@ -248,11 +248,11 @@ export function AudioVisualizer({
         </div>
       )}
 
-      <BatteryDebugModal
+      <BatteryModal
         isOpen={isDebugModalOpen}
         onClose={() => setIsDebugModalOpen(false)}
-        onRequestDebugData={onRequestBatteryDebug}
-        debugData={batteryDebugData}
+        onRefresh={onRequestBatteryStatus}
+        statusData={batteryStatusData}
       />
 
       <div className="audio-chart-container">

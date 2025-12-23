@@ -51,13 +51,15 @@ public:
     }
 
     void setReference(uint8_t reference) override {
-        #if defined(AR_INTERNAL2V4)
         if (reference == REF_INTERNAL_2V4) {
-            analogReference(AR_INTERNAL2V4);
+            #if defined(AR_INTERNAL2V4)
+            analogReference(AR_INTERNAL2V4);  // mbed core
+            #elif defined(AR_INTERNAL_2_4)
+            analogReference(AR_INTERNAL_2_4);  // non-mbed Seeed/Adafruit nRF52 core
+            #else
+            analogReference(AR_INTERNAL);      // fallback
+            #endif
         }
-        #else
-        (void)reference; // Suppress unused warning when AR_INTERNAL2V4 not available
-        #endif
     }
 
     uint16_t analogRead(int pin) override {

@@ -31,10 +31,10 @@ describe('AudioVisualizer', () => {
   const defaultProps = {
     audioData: null,
     batteryData: null,
-    batteryDebugData: null,
+    batteryStatusData: null,
     isStreaming: false,
     onToggleStreaming: vi.fn(),
-    onRequestBatteryDebug: vi.fn(),
+    onRequestBatteryStatus: vi.fn(),
     disabled: false,
   };
 

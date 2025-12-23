@@ -1,0 +1,156 @@
+.battery-modal-content {
+  background: #1e1e1e;
+  border-radius: 8px;
+  max-width: 500px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.battery-body {
+  padding: 24px;
+  min-height: 200px;
+}
+
+.battery-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  background: #2a2a2a;
+  border-radius: 8px;
+  margin-bottom: 24px;
+}
+
+.battery-icon {
+  font-size: 64px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.battery-percent {
+  font-size: 48px;
+  font-weight: bold;
+}
+
+.battery-level-high {
+  color: #4ade80;
+}
+
+.battery-level-medium {
+  color: #fbbf24;
+}
+
+.battery-level-low {
+  color: #fb923c;
+}
+
+.battery-level-critical {
+  color: #ef4444;
+  animation: blink 1s ease-in-out infinite;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.battery-status {
+  font-size: 18px;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.battery-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #2a2a2a;
+  padding: 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+
+.detail-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid #3a3a3a;
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+}
+
+.detail-label {
+  color: #9ca3af;
+  font-weight: 500;
+}
+
+.detail-value {
+  color: #e5e7eb;
+  font-weight: 600;
+}
+
+.charging-indicator {
+  color: #fbbf24;
+}
+
+.connected-indicator {
+  color: #4ade80;
+}
+
+.disconnected-indicator {
+  color: #ef4444;
+}
+
+.battery-health {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 6px;
+  text-align: center;
+  font-weight: 500;
+}
+
+.health-warning {
+  background: rgba(251, 146, 60, 0.1);
+  color: #fb923c;
+  border: 1px solid rgba(251, 146, 60, 0.3);
+}
+
+.health-good {
+  background: rgba(74, 222, 128, 0.1);
+  color: #4ade80;
+  border: 1px solid rgba(74, 222, 128, 0.3);
+}
+
+.battery-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 48px 24px;
+  color: #9ca3af;
+}
+
+.battery-loading p {
+  font-size: 16px;
+  margin: 0;
+}

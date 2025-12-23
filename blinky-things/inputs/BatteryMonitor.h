@@ -10,7 +10,7 @@
   #if defined(P0_31)
     #define PIN_VBAT        P0_31    // ADC input for VBAT divider (mbed core)
   #else
-    #define PIN_VBAT        31       // ADC input for VBAT divider (non-mbed core)
+    #define PIN_VBAT        32       // ADC input for VBAT divider (non-mbed core) - P0.31 = pin 32
   #endif
 #endif
 #ifndef VBAT_ENABLE_PIN
@@ -32,12 +32,12 @@
   #endif
 #endif
 
-// CHG status pin: many cores wire it to P0_17 (active LOW while charging)
+// CHG status pin: P0_17 on mbed, pin 23 on non-mbed (active LOW while charging = green LED on)
 #ifndef CHG_STATUS_PIN_DEFAULT
   #if defined(P0_17)
     #define CHG_STATUS_PIN_DEFAULT P0_17  // (mbed core)
   #else
-    #define CHG_STATUS_PIN_DEFAULT 17     // (non-mbed core)
+    #define CHG_STATUS_PIN_DEFAULT 23     // (non-mbed core) - green LED indicator
   #endif
 #endif
 
@@ -97,11 +97,6 @@ public:
 
   // Utility: LiPo OCV → % (no load, rough curve)
   static uint8_t voltageToPercent(float v);
-
-  // Debug helpers
-  const Config& getConfig() const { return cfg_; }
-  void testDividerEnable(); // Test if enable pin is working
-  void scanForEnablePin();  // Scan all pins to find correct enable pin
 
 private:
   // HAL references

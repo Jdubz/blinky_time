@@ -13,7 +13,7 @@ const mockUseSerial: UseSerialReturn = {
   isStreaming: false,
   audioData: null,
   batteryData: null,
-  batteryDebugData: null,
+  batteryStatusData: null,
   consoleLines: [],
   clearConsole: vi.fn(),
   sendCommand: vi.fn(),
@@ -25,7 +25,7 @@ const mockUseSerial: UseSerialReturn = {
   loadSettings: vi.fn(),
   resetDefaults: vi.fn(),
   refreshSettings: vi.fn(),
-  requestBatteryDebug: vi.fn(),
+  requestBatteryStatus: vi.fn(),
 };
 
 vi.mock('../hooks/useSerial', () => ({

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { serialService, SerialEvent, BatteryDebugData } from '../services/serial';
+import { serialService, SerialEvent, BatteryStatusData } from '../services/serial';
 import {
   DeviceInfo,
   DeviceSetting,
@@ -23,7 +23,7 @@ export interface UseSerialReturn {
   isStreaming: boolean;
   audioData: AudioSample | null;
   batteryData: BatterySample | null;
-  batteryDebugData: BatteryDebugData | null;
+  batteryStatusData: BatteryStatusData | null;
 
   // Serial console
   consoleLines: string[];
@@ -39,7 +39,7 @@ export interface UseSerialReturn {
   loadSettings: () => Promise<void>;
   resetDefaults: () => Promise<void>;
   refreshSettings: () => Promise<void>;
-  requestBatteryDebug: () => Promise<void>;
+  requestBatteryStatus: () => Promise<void>;
 }
 
 const MAX_CONSOLE_LINES = 500;
@@ -51,7 +51,7 @@ export function useSerial(): UseSerialReturn {
   const [isStreaming, setIsStreaming] = useState(false);
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
-  const [batteryDebugData, setBatteryDebugData] = useState<BatteryDebugData | null>(null);
+  const [batteryStatusData, setBatteryStatusData] = useState<BatteryStatusData | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
 
   const isSupported = serialService.isSupported();
@@ -137,9 +137,9 @@ export function useSerial(): UseSerialReturn {
             setBatteryData(event.battery.b);
           }
           break;
-        case 'batteryDebug':
-          if (event.batteryDebug) {
-            setBatteryDebugData(event.batteryDebug);
+        case 'batteryStatus':
+          if (event.batteryStatus) {
+            setBatteryStatusData(event.batteryStatus);
           }
           break;
         case 'data':
@@ -242,9 +242,9 @@ export function useSerial(): UseSerialReturn {
     }
   }, []);
 
-  // Request battery debug data
-  const requestBatteryDebug = useCallback(async () => {
-    await serialService.requestBatteryDebug();
+  // Request battery status data
+  const requestBatteryStatus = useCallback(async () => {
+    await serialService.requestBatteryStatus();
   }, []);
 
   // Clear console
@@ -273,7 +273,7 @@ export function useSerial(): UseSerialReturn {
     isStreaming,
     audioData,
     batteryData,
-    batteryDebugData,
+    batteryStatusData,
     consoleLines,
     clearConsole,
     sendCommand,
@@ -285,6 +285,6 @@ export function useSerial(): UseSerialReturn {
     loadSettings,
     resetDefaults,
     refreshSettings,
-    requestBatteryDebug,
+    requestBatteryStatus,
   };
 }

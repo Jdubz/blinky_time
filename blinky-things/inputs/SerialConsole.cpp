@@ -172,107 +172,25 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
-    if (strcmp(cmd, "battery test") == 0 || strcmp(cmd, "batt test") == 0) {
+
+    if (strcmp(cmd, "battery") == 0 || strcmp(cmd, "batt") == 0) {
         if (battery_) {
-            battery_->testDividerEnable();
-        } else {
-            Serial.println(F("Battery monitor not available"));
-        }
-        return true;
-    }
-
-    if (strcmp(cmd, "battery scan") == 0 || strcmp(cmd, "batt scan") == 0) {
-        if (battery_) {
-            battery_->scanForEnablePin();
-        } else {
-            Serial.println(F("Battery monitor not available"));
-        }
-        return true;
-    }
-
-    if (strcmp(cmd, "battery raw") == 0 || strcmp(cmd, "batt raw") == 0) {
-        if (battery_) {
-            // Get config
-            const auto& cfg = battery_->getConfig();
-
-            // Collect 5 samples
-            uint16_t samples[5];
-            for (int i = 0; i < 5; i++) {
-                samples[i] = battery_->readRaw();
-                if (i < 4) delay(10);
-            }
-
-            // Use last sample for calculations
-            uint16_t raw = samples[4];
-            const float maxCount = (cfg.adcBits == 12) ? 4095.0f :
-                                   ((cfg.adcBits == 10) ? 1023.0f :
-                                   (float)((1UL<<cfg.adcBits)-1));
-            float v_adc = (raw * cfg.vrefVolts) / maxCount;
-            float v_batt_calc = v_adc / cfg.dividerRatio;
-            float v_batt_actual = battery_->getVoltage();
+            // Get battery status
+            float voltage = battery_->getVoltage();
+            uint8_t percent = battery_->getPercent();
+            bool charging = battery_->isCharging();
+            bool connected = battery_->isBatteryConnected();
 
             // Send as JSON
-            Serial.print(F("{\"batteryRaw\":{"));
-
-            // Pins
-            Serial.print(F("\"pins\":{\"vbat\":"));
-            Serial.print(cfg.pinVBAT);
-            Serial.print(F(",\"enable\":"));
-            Serial.print(cfg.pinVBATEnable);
-            Serial.print(F("},"));
-
-            // Samples
-            Serial.print(F("\"samples\":["));
-            for (int i = 0; i < 5; i++) {
-                if (i > 0) Serial.print(F(","));
-                Serial.print(samples[i]);
-            }
-            Serial.print(F("],"));
-
-            // ADC config
-            Serial.print(F("\"adc\":{\"bits\":"));
-            Serial.print(cfg.adcBits);
-            Serial.print(F(",\"maxCount\":"));
-            Serial.print((uint16_t)maxCount);
-            Serial.print(F(",\"vref\":"));
-            Serial.print(cfg.vrefVolts, 3);
-            Serial.print(F("},"));
-
-            // Readings
-            Serial.print(F("\"reading\":{\"raw\":"));
-            Serial.print(raw);
-            Serial.print(F(",\"vAdc\":"));
-            Serial.print(v_adc, 4);
-            Serial.print(F(",\"dividerRatio\":"));
-            Serial.print(cfg.dividerRatio, 4);
-            Serial.print(F(",\"vBattCalc\":"));
-            Serial.print(v_batt_calc, 4);
-            Serial.print(F(",\"vBattActual\":"));
-            Serial.print(v_batt_actual, 4);
-            Serial.print(F("},"));
-
-            // Platform info
-            Serial.print(F("\"platform\":{\"p0_31\":"));
-            #if defined(P0_31)
-            Serial.print(F("true,\"p0_31_value\":"));
-            Serial.print(P0_31);
-            #else
-            Serial.print(F("false"));
-            #endif
-            Serial.print(F(",\"analogReadRes\":"));
-            #if defined(analogReadResolution)
-            Serial.print(F("true"));
-            #else
-            Serial.print(F("false"));
-            #endif
-            Serial.print(F(",\"ar_internal2v4\":"));
-            #if defined(AR_INTERNAL2V4)
-            Serial.print(F("true"));
-            #else
-            Serial.print(F("false"));
-            #endif
-            Serial.print(F("}"));
-
+            Serial.print(F("{\"battery\":{"));
+            Serial.print(F("\"voltage\":"));
+            Serial.print(voltage, 2);
+            Serial.print(F(",\"percent\":"));
+            Serial.print(percent);
+            Serial.print(F(",\"charging\":"));
+            Serial.print(charging ? F("true") : F("false"));
+            Serial.print(F(",\"connected\":"));
+            Serial.print(connected ? F("true") : F("false"));
             Serial.println(F("}}"));
         } else {
             Serial.println(F("{\"error\":\"Battery monitor not available\"}"));
