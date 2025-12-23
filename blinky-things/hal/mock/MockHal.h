@@ -183,7 +183,7 @@ public:
     static constexpr int MAX_BUFFER_SIZE = 512;
 
     MockPdmMic() : callback_(nullptr), gain_(0), running_(false),
-                   bufferSize_(0), bufferRead_(0) {}
+                   bufferSize_(0), bufferRead_(0), channels_(0), sampleRate_(0) {}
 
     bool begin(int channels, long sampleRate) override {
         channels_ = channels;
@@ -223,6 +223,7 @@ public:
 
     // Test helpers
     void simulateAudioData(const int16_t* samples, int count) {
+        if (!samples || count <= 0) return;
         int toCopy = (count < MAX_BUFFER_SIZE) ? count : MAX_BUFFER_SIZE;
         for (int i = 0; i < toCopy; i++) {
             audioBuffer_[i] = samples[i];

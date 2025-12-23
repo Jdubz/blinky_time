@@ -33,6 +33,12 @@ public:
     uint16_t numPixels() const override;
     uint32_t Color(uint8_t r, uint8_t g, uint8_t b) const override;
 
+    /**
+     * Check if the strip was successfully initialized
+     * Returns false if allocation failed in the owning constructor
+     */
+    bool isValid() const { return strip_ != nullptr; }
+
 private:
     Adafruit_NeoPixel* strip_;
     bool ownsStrip_;

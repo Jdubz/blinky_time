@@ -1,6 +1,17 @@
 #include "Fire.h"
 #include <Arduino.h>
+
+// PROGMEM compatibility for non-AVR platforms (e.g., nRF52840)
+#if defined(ARDUINO_ARCH_AVR)
 #include <avr/pgmspace.h>
+#else
+#ifndef PROGMEM
+#define PROGMEM
+#endif
+#ifndef pgm_read_byte
+#define pgm_read_byte(addr) (*(const uint8_t *)(addr))
+#endif
+#endif
 
 // ============================================================================
 // Simplex Noise Implementation (2D)

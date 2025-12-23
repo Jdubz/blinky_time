@@ -13,12 +13,14 @@ enum LayoutType {
   RANDOM_LAYOUT = 2   // Random/scattered arrangement with omnidirectional heat propagation
 };
 
-// DEPRECATED: Use LayoutType instead. Kept only for backward compatibility.
-// Will be removed in a future version.
-// Migration: MATRIX_FIRE -> MATRIX_LAYOUT, STRING_FIRE -> LINEAR_LAYOUT
+// DEPRECATED: Use LayoutType enum (defined above) instead.
+// Kept only for backward compatibility - will be removed in a future version.
+// Migration guide:
+//   MATRIX_FIRE (0) -> LayoutType::MATRIX_LAYOUT (0)
+//   STRING_FIRE (1) -> LayoutType::LINEAR_LAYOUT (1)
 enum FireEffectType {
-  MATRIX_FIRE = 0,  // DEPRECATED: Use MATRIX_LAYOUT instead
-  STRING_FIRE = 1   // DEPRECATED: Use LINEAR_LAYOUT instead
+  MATRIX_FIRE = 0,  // DEPRECATED: Use LayoutType::MATRIX_LAYOUT
+  STRING_FIRE = 1   // DEPRECATED: Use LayoutType::LINEAR_LAYOUT
 };
 
 struct MatrixConfig {

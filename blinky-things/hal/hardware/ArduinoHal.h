@@ -40,8 +40,9 @@ public:
     void setResolution(uint8_t bits) override {
         #if defined(analogReadResolution)
         analogReadResolution(bits);
-        #endif
+        #else
         (void)bits; // Suppress unused warning when analogReadResolution not available
+        #endif
     }
 
     void setReference(uint8_t reference) override {
@@ -49,8 +50,9 @@ public:
         if (reference == REF_INTERNAL_2V4) {
             analogReference(AR_INTERNAL2V4);
         }
-        #endif
+        #else
         (void)reference; // Suppress unused warning when AR_INTERNAL2V4 not available
+        #endif
     }
 
     uint16_t analogRead(int pin) override {

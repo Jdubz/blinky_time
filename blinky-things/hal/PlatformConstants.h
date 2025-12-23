@@ -12,8 +12,9 @@ namespace Platform {
     // Battery hardware constants (XIAO BLE Sense with typical LiPo)
     namespace Battery {
         // Voltage divider ratio on XIAO BLE boards
-        // Battery voltage is divided by ~3 before reaching ADC (1510:510 resistor divider)
-        constexpr float DIVIDER_RATIO = 1.0f / 3.0f;
+        // Battery voltage is divided by ~4 before reaching ADC (1510k:510k resistor divider)
+        // Ratio = R2/(R1+R2) = 510/(1510+510) = 510/2020 ≈ 0.2525
+        constexpr float DIVIDER_RATIO = 510.0f / (1510.0f + 510.0f);
 
         // ADC reference voltage when using AR_INTERNAL2V4
         constexpr float VREF_2V4 = 2.4f;

@@ -15,6 +15,12 @@ static T maxValue(T a, T b) {
     return (a > b) ? a : b;
 }
 
+// Helper for min
+template<typename T>
+static T minValue(T a, T b) {
+    return (a < b) ? a : b;
+}
+
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
 volatile uint32_t AdaptiveMic::s_isrCount   = 0;
@@ -228,13 +234,10 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   lastHwCalibMs = nowMs;
 }
 
-// Helper for min
-template<typename T>
-static T minValue(T a, T b) {
-    return (a < b) ? a : b;
-}
-
-// ---------- ISR ----------
+// ---------- ISR Callback ----------
+// This callback is invoked by the PDM library when audio data is available.
+// On nRF52840 with Seeeduino mbed core, PDM.onReceive() callbacks run in
+// interrupt context, so interrupts are already disabled during execution.
 void AdaptiveMic::onPDMdata() {
   if (!s_instance) return;
   int bytesAvailable = s_instance->pdm_.available();
