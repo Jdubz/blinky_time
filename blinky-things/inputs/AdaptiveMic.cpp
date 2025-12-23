@@ -82,14 +82,14 @@ void AdaptiveMic::update(float dt) {
     // avgAbs is average of int16_t samples (0-32768 range)
     float normalized = avgAbs / 32768.0f;
 
-    // Apply AGC
-    if (agEnabled) {
-      autoGainTick(normalized, dt);
-    }
-
     // Apply gain and clamp to 0-1
     float afterGain = normalized * globalGain;
     afterGain = clamp01(afterGain);
+
+    // Apply AGC (tracks post-gain level, adjusts globalGain for next frame)
+    if (agEnabled) {
+      autoGainTick(afterGain, dt);
+    }
 
     // Apply noise gate
     level = (afterGain < noiseGate) ? 0.0f : afterGain;
@@ -121,14 +121,14 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
   avgAbs = (cnt > 0) ? float(sum) / float(cnt) : 0.0f;
 }
 
-void AdaptiveMic::autoGainTick(float normalizedLevel, float dt) {
+void AdaptiveMic::autoGainTick(float postGainLevel, float dt) {
   // Use adaptive time constant (faster attack, slower release)
   // Professional AGC: fast response to increases, slow to decreases
-  float tau = (normalizedLevel > trackedLevel) ? agcAttackTau : agcReleaseTau;
+  float tau = (postGainLevel > trackedLevel) ? agcAttackTau : agcReleaseTau;
   float alpha = 1.0f - expf(-dt / maxValue(tau, 0.01f));
 
-  // Track the level with EMA over AGC window
-  trackedLevel += alpha * (normalizedLevel - trackedLevel);
+  // Track the post-gain level with EMA over AGC window
+  trackedLevel += alpha * (postGainLevel - trackedLevel);
 
   // Compute gain error based on tracked level (not instantaneous)
   // Goal: keep tracked RMS near agTarget, allowing peaks to hit ~1.0
@@ -142,7 +142,8 @@ void AdaptiveMic::autoGainTick(float normalizedLevel, float dt) {
   globalGain = constrainValue(globalGain, agMin, agMax);
 
   // Dwell tracking (coordination with hardware gain)
-  if (fabsf(normalizedLevel) < 1e-6f && globalGain >= agMax * 0.999f) {
+  // Track when AGC is pinned at limits for extended periods
+  if (fabsf(postGainLevel) < 1e-6f && globalGain >= agMax * 0.999f) {
     dwellAtMax += dt;
   } else if (globalGain >= agMax * 0.999f) {
     dwellAtMax += dt;
@@ -150,7 +151,7 @@ void AdaptiveMic::autoGainTick(float normalizedLevel, float dt) {
     dwellAtMax = maxValue(0.0f, dwellAtMax - dt * (1.0f/limitDwellRelaxSec));
   }
 
-  if (normalizedLevel >= 0.98f && globalGain <= agMin * 1.001f) {
+  if (postGainLevel >= 0.98f && globalGain <= agMin * 1.001f) {
     dwellAtMin += dt;
   } else if (globalGain <= agMin * 1.001f) {
     dwellAtMin += dt;
