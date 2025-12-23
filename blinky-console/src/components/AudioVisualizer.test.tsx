@@ -24,7 +24,7 @@ describe('AudioVisualizer', () => {
   const mockAudioData: AudioSample = {
     l: 0.75,
     t: 0.5,
-    e: 0.6,
+    r: 0.6,
     g: 2.0,
   };
 

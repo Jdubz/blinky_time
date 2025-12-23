@@ -191,7 +191,7 @@ describe('useSerial', () => {
       act(() => {
         (serialService as unknown as { _emit: (e: SerialEvent) => void })._emit({
           type: 'audio',
-          audio: { a: { l: 0.5, t: 0.3, e: 0.4, g: 1.5 } },
+          audio: { a: { l: 0.5, t: 0.3, r: 0.4, g: 1.5 } },
         });
       });
 
@@ -296,7 +296,7 @@ describe('useSerial', () => {
     it('handles audio event', async () => {
       const { result } = renderHook(() => useSerial());
 
-      const audioSample = { l: 0.5, t: 0.3, e: 0.4, g: 1.5 };
+      const audioSample = { l: 0.5, t: 0.3, r: 0.4, g: 1.5 };
 
       act(() => {
         (serialService as unknown as { _emit: (e: SerialEvent) => void })._emit({

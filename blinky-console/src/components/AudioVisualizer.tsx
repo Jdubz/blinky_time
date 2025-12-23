@@ -43,7 +43,7 @@ export function AudioVisualizer({
 }: AudioVisualizerProps) {
   const levelDataRef = useRef<number[]>([]);
   const transientDataRef = useRef<number[]>([]);
-  const envelopeDataRef = useRef<number[]>([]);
+  const rmsDataRef = useRef<number[]>([]);
   const labelsRef = useRef<string[]>([]);
   const chartRef = useRef<ChartJS<'line'>>(null);
 
@@ -54,14 +54,14 @@ export function AudioVisualizer({
     // Add new data point
     levelDataRef.current.push(audioData.l);
     transientDataRef.current.push(audioData.t);
-    envelopeDataRef.current.push(audioData.e);
+    rmsDataRef.current.push(audioData.r);
     labelsRef.current.push('');
 
     // Trim to max length
     if (levelDataRef.current.length > MAX_DATA_POINTS) {
       levelDataRef.current.shift();
       transientDataRef.current.shift();
-      envelopeDataRef.current.shift();
+      rmsDataRef.current.shift();
       labelsRef.current.shift();
     }
 
@@ -70,7 +70,7 @@ export function AudioVisualizer({
       chartRef.current.data.labels = labelsRef.current;
       chartRef.current.data.datasets[0].data = levelDataRef.current;
       chartRef.current.data.datasets[1].data = transientDataRef.current;
-      chartRef.current.data.datasets[2].data = envelopeDataRef.current;
+      chartRef.current.data.datasets[2].data = rmsDataRef.current;
       chartRef.current.update('none'); // 'none' mode skips animations for performance
     }
   }, [audioData, isStreaming]);
@@ -79,7 +79,7 @@ export function AudioVisualizer({
   const clearData = useCallback(() => {
     levelDataRef.current = [];
     transientDataRef.current = [];
-    envelopeDataRef.current = [];
+    rmsDataRef.current = [];
     labelsRef.current = [];
     if (chartRef.current) {
       chartRef.current.data.labels = [];
@@ -114,8 +114,8 @@ export function AudioVisualizer({
         tension: 0,
       },
       {
-        label: 'Envelope',
-        data: envelopeDataRef.current,
+        label: 'RMS Level',
+        data: rmsDataRef.current,
         borderColor: '#3b82f6',
         backgroundColor: 'transparent',
         borderWidth: 1,

@@ -28,10 +28,10 @@ export interface SettingsResponse {
 
 // Audio sample from streaming `{"a":{...}}` messages
 export interface AudioSample {
-  l: number; // level (0-1)
-  t: number; // transient (0-1)
-  e: number; // envelope (0-1)
-  g: number; // gain multiplier
+  l: number; // level (0-1, post-AGC output)
+  t: number; // transient (0-1, single-frame impulse)
+  r: number; // RMS tracked level (0-1, what AGC is targeting)
+  g: number; // gain multiplier (current AGC gain)
 }
 
 // Streaming audio message format
