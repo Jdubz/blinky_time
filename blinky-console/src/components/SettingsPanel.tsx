@@ -98,15 +98,22 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
   );
 }
 
-// Category display names
+// Category display names (architecture-based)
 const categoryNames: Record<string, string> = {
-  fire: 'Fire Effect',
-  audio: 'Audio Input',
-  agc: 'Auto Gain Control',
+  audio: 'Audio Processing',
+  agc: 'Auto-Gain Control',
+  fire: 'Fire Generator',
 };
 
-// Category order for display
-const categoryOrder = ['fire', 'audio', 'agc'];
+// Category descriptions
+const categoryDescriptions: Record<string, string> = {
+  audio: 'AdaptiveMic input processing → Produces: Level, Transient, Envelope, Gain',
+  agc: 'Auto-gain control (part of AdaptiveMic)',
+  fire: 'Fire pattern generation → Uses: Level, Transient from AdaptiveMic',
+};
+
+// Category order for display (input processing first, then generator)
+const categoryOrder = ['audio', 'agc', 'fire'];
 
 export function SettingsPanel({
   settingsByCategory,
@@ -166,6 +173,9 @@ export function SettingsPanel({
         {sortedCategories.map(category => (
           <div key={category} className="settings-category">
             <h3 className="category-title">{categoryNames[category] || category.toUpperCase()}</h3>
+            {categoryDescriptions[category] && (
+              <p className="category-description">{categoryDescriptions[category]}</p>
+            )}
             <div className="category-settings">
               {settingsByCategory[category].map(setting => (
                 <SettingControl

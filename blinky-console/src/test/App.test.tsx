@@ -57,7 +57,8 @@ describe('App', () => {
     expect(screen.getByText('Blinky Console')).toBeInTheDocument();
 
     // Audio visualizer
-    expect(screen.getByText('Audio Monitor')).toBeInTheDocument();
+    expect(screen.getByText('AdaptiveMic Output')).toBeInTheDocument();
+    expect(screen.getByText('Processing Pipeline')).toBeInTheDocument();
 
     // Settings panel
     expect(screen.getByText('Settings')).toBeInTheDocument();

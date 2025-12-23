@@ -40,19 +40,19 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   audiosparkboost: {
     displayName: 'Audio Spark Boost',
     tooltip:
-      'How much audio influences spark generation (0-100%). Higher values make fire more reactive to music.',
+      'How much audio influences spark generation (0-100%). Uses Level (orange area) from AdaptiveMic. Higher values make fire more reactive to music.',
     unit: '%',
   },
   audioheatboost: {
     displayName: 'Audio Heat Boost',
     tooltip:
-      'Maximum additional heat from audio input. Higher values create stronger audio-reactive flames.',
+      'Maximum additional heat from audio input. Uses Level (orange area) from AdaptiveMic. Higher values create stronger audio-reactive flames.',
     unit: '',
   },
   coolingaudiobias: {
     displayName: 'Audio Cooling Bias',
     tooltip:
-      'How audio affects cooling rate. Negative values slow cooling during loud audio, positive speeds it up.',
+      'How audio affects cooling rate. Uses Level (orange area) from AdaptiveMic. Negative values slow cooling during loud audio, positive speeds it up.',
     unit: '',
   },
   bottomrows: {
@@ -64,7 +64,7 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   transientheatmax: {
     displayName: 'Transient Heat Boost',
     tooltip:
-      'Maximum heat added on percussive hits/beats. Higher values make fire "jump" on drum hits.',
+      'Maximum heat added on percussive hits/beats. Uses Transient (red spikes) from AdaptiveMic. Higher values make fire "jump" on drum hits.',
     unit: '',
   },
   burstsparks: {
@@ -95,57 +95,64 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   // Audio settings
   gate: {
     displayName: 'Noise Gate',
-    tooltip: 'Minimum audio level to register (0-100%). Filters out background noise and hiss.',
+    tooltip:
+      'Minimum audio level to register (0-100%). Controls Level (orange area) in AdaptiveMic visualizer. Filters out background noise and hiss.',
     unit: '%',
   },
   attack: {
     displayName: 'Attack Time',
     tooltip:
-      'How quickly envelope responds to sudden increases in volume (seconds). Lower = more responsive.',
+      'How quickly envelope responds to sudden increases in volume (seconds). Controls Envelope (blue dashed line) in AdaptiveMic visualizer. Lower = more responsive.',
     unit: 's',
   },
   release: {
     displayName: 'Release Time',
-    tooltip: 'How quickly envelope decays after sound stops (seconds). Higher = longer sustain.',
+    tooltip:
+      'How quickly envelope decays after sound stops (seconds). Controls Envelope (blue dashed line) in AdaptiveMic visualizer. Higher = longer sustain.',
     unit: 's',
   },
   transientcooldown: {
     displayName: 'Transient Cooldown',
     tooltip:
-      'Minimum time between transient detections (milliseconds). Prevents retriggering on same hit.',
+      'Minimum time between transient detections (milliseconds). Controls Transient (red spikes) in AdaptiveMic visualizer. Prevents retriggering on same hit.',
     unit: 'ms',
   },
   transientfactor: {
     displayName: 'Transient Sensitivity',
-    tooltip: 'How sensitive transient detection is. Higher values detect subtler attacks/beats.',
+    tooltip:
+      'How sensitive transient detection is. Controls Transient (red spikes) in AdaptiveMic visualizer. Higher values detect subtler attacks/beats.',
     unit: 'x',
   },
 
   // AGC settings
   agenabled: {
     displayName: 'Auto-Gain Enabled',
-    tooltip: 'Enable automatic gain control to normalize quiet and loud audio sources.',
+    tooltip:
+      'Enable automatic gain control to normalize quiet and loud audio sources. Controls Gain value shown in AdaptiveMic visualizer.',
     unit: '',
   },
   agtarget: {
     displayName: 'AGC Target Level',
     tooltip:
-      'Target audio level for AGC to maintain (0-100%). AGC adjusts gain to reach this level.',
+      'Target audio level for AGC to maintain (0-100%). AGC adjusts Gain to bring Envelope (blue dashed line) to this level. Produces Level (orange area) output.',
     unit: '%',
   },
   agstrength: {
     displayName: 'AGC Responsiveness',
-    tooltip: 'How quickly AGC adapts to level changes (0-100%). Higher = faster adaptation.',
+    tooltip:
+      'How quickly AGC adapts to level changes (0-100%). Controls how fast Gain value changes. Higher = faster adaptation.',
     unit: '%',
   },
   agmin: {
     displayName: 'Min AGC Gain',
-    tooltip: 'Minimum gain multiplier. Prevents over-attenuation of loud sources.',
+    tooltip:
+      'Minimum gain multiplier. Lower bound for Gain value shown in AdaptiveMic visualizer. Prevents over-attenuation of loud sources.',
     unit: 'x',
   },
   agmax: {
     displayName: 'Max AGC Gain',
-    tooltip: 'Maximum gain multiplier. Prevents over-amplification of quiet sources.',
+    tooltip:
+      'Maximum gain multiplier. Upper bound for Gain value shown in AdaptiveMic visualizer. Prevents over-amplification of quiet sources.',
     unit: 'x',
   },
 };

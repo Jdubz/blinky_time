@@ -40,7 +40,8 @@ describe('AudioVisualizer', () => {
 
   it('renders the audio monitor header', () => {
     render(<AudioVisualizer {...defaultProps} />);
-    expect(screen.getByText('Audio Monitor')).toBeInTheDocument();
+    expect(screen.getByText('AdaptiveMic Output')).toBeInTheDocument();
+    expect(screen.getByText('Inputs to Fire Generator')).toBeInTheDocument();
   });
 
   describe('streaming controls', () => {

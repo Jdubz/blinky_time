@@ -268,7 +268,16 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--accent-primary);
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.category-description {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.75rem 0;
+  line-height: 1.4;
+  font-style: italic;
+  opacity: 0.8;
 }
 
 .category-settings {
@@ -384,6 +393,70 @@ body {
 .toggle input:disabled + .toggle-slider {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ===== Pipeline Diagram ===== */
+.pipeline-diagram {
+  background-color: var(--bg-card);
+  border-radius: var(--border-radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.pipeline-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: var(--text-primary);
+}
+
+.pipeline-flow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+}
+
+.pipeline-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 70px;
+  text-align: center;
+}
+
+.pipeline-stage.pipeline-highlight {
+  background-color: var(--bg-tertiary);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  border: 2px solid var(--accent-primary);
+}
+
+.pipeline-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.pipeline-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.pipeline-sublabel {
+  font-size: 0.625rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pipeline-arrow {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
 }
 
 /* ===== Audio Visualizer ===== */

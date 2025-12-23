@@ -4,6 +4,7 @@ import { useNetworkStatus } from './hooks/useNetworkStatus';
 import { ConnectionBar } from './components/ConnectionBar';
 import { SettingsPanel } from './components/SettingsPanel';
 import { AudioVisualizer } from './components/AudioVisualizer';
+import { PipelineDiagram } from './components/PipelineDiagram';
 import { OfflineBanner } from './components/OfflineBanner';
 import { SerialConsoleModal } from './components/SerialConsoleModal';
 import './styles.css';
@@ -49,6 +50,7 @@ function App() {
 
       <main className="main-content">
         <div className="left-panel">
+          <PipelineDiagram />
           <AudioVisualizer
             audioData={audioData}
             batteryData={batteryData}
