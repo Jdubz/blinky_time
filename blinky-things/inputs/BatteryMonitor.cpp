@@ -208,3 +208,62 @@ void BatteryMonitor::testDividerEnable() {
   }
   Serial.println(F("==========================="));
 }
+
+void BatteryMonitor::scanForEnablePin() {
+  Serial.println(F("=== Scanning for Correct Enable Pin ==="));
+  Serial.println(F("Testing pins 0-31 to find voltage divider control..."));
+  Serial.println();
+
+  // Get baseline reading with current pin disabled
+  if (cfg_.pinVBATEnable >= 0) {
+    gpio_.digitalWrite(cfg_.pinVBATEnable, IGpio::HIGH_LEVEL);
+    time_.delay(50);
+  }
+  uint16_t baseline = readOnceRaw_();
+  Serial.print(F("Baseline (no divider): "));
+  Serial.println(baseline);
+  Serial.println();
+
+  // Try each pin
+  for (int pin = 0; pin <= 31; pin++) {
+    // Skip the VBAT pin itself
+    if (pin == cfg_.pinVBAT) continue;
+
+    // Set pin as output
+    gpio_.pinMode(pin, IGpio::OUTPUT_MODE);
+
+    // Test LOW (should enable divider if correct pin)
+    gpio_.digitalWrite(pin, IGpio::LOW_LEVEL);
+    time_.delay(50);
+    uint16_t adcLow = readOnceRaw_();
+
+    // Test HIGH (should disable divider)
+    gpio_.digitalWrite(pin, IGpio::HIGH_LEVEL);
+    time_.delay(50);
+    uint16_t adcHigh = readOnceRaw_();
+
+    // Check if this pin affects the reading
+    int diff = abs((int)adcHigh - (int)adcLow);
+    if (diff > 50) {  // Significant change
+      Serial.print(F("*** FOUND IT! Pin "));
+      Serial.print(pin);
+      Serial.print(F(" changes ADC by "));
+      Serial.print(diff);
+      Serial.println(F(" counts"));
+      Serial.print(F("  LOW="));
+      Serial.print(adcLow);
+      Serial.print(F(", HIGH="));
+      Serial.println(adcHigh);
+
+      if (adcHigh > adcLow) {
+        Serial.println(F("  Logic: LOW=enabled, HIGH=disabled (correct)"));
+      } else {
+        Serial.println(F("  Logic: HIGH=enabled, LOW=disabled (inverted!)"));
+      }
+    }
+  }
+
+  Serial.println();
+  Serial.println(F("Scan complete. Update PIN_VBAT_ENABLE in code."));
+  Serial.println(F("==========================="));
+}

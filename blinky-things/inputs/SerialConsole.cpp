@@ -181,6 +181,15 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    if (strcmp(cmd, "battery scan") == 0 || strcmp(cmd, "batt scan") == 0) {
+        if (battery_) {
+            battery_->scanForEnablePin();
+        } else {
+            Serial.println(F("Battery monitor not available"));
+        }
+        return true;
+    }
+
     if (strcmp(cmd, "battery raw") == 0 || strcmp(cmd, "batt raw") == 0) {
         if (battery_) {
             // Get config
