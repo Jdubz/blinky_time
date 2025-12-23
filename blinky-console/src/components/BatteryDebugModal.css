@@ -128,6 +128,11 @@
   color: var(--accent-danger);
 }
 
+.debug-value.value-warning {
+  color: var(--accent-warning);
+  font-weight: 600;
+}
+
 .debug-info {
   background-color: rgba(59, 130, 246, 0.1);
   border-color: rgba(59, 130, 246, 0.3);

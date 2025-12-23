@@ -47,14 +47,29 @@ export type SerialEventType =
   | 'batteryDebug';
 
 export interface BatteryDebugData {
-  rawCount: number;
-  adcBits: number;
-  maxCount: number;
-  vRef: number;
-  vAdc: number;
-  dividerRatio: number;
-  vBattCalculated: number;
-  vBattActual: number;
+  pins: {
+    vbat: number;
+    enable: number;
+  };
+  samples: number[];
+  adc: {
+    bits: number;
+    maxCount: number;
+    vref: number;
+  };
+  reading: {
+    raw: number;
+    vAdc: number;
+    dividerRatio: number;
+    vBattCalc: number;
+    vBattActual: number;
+  };
+  platform: {
+    p0_31: boolean;
+    p0_31_value?: number;
+    analogReadRes: boolean;
+    ar_internal2v4: boolean;
+  };
 }
 
 export interface SerialEvent {
@@ -80,8 +95,6 @@ class SerialService {
   private listeners: SerialEventCallback[] = [];
   private buffer: string = '';
   private isReading: boolean = false;
-  private batteryDebugBuffer: string[] = [];
-  private collectingBatteryDebug: boolean = false;
 
   // Check if WebSerial is supported
   isSupported(): boolean {
@@ -175,8 +188,6 @@ class SerialService {
 
     // Clear buffers
     this.buffer = '';
-    this.batteryDebugBuffer = [];
-    this.collectingBatteryDebug = false;
 
     this.emit({ type: 'disconnected' });
   }
@@ -308,46 +319,6 @@ class SerialService {
     await this.send('battery raw');
   }
 
-  // Parse battery debug output
-  private parseBatteryDebugOutput(): void {
-    try {
-      const debugData: BatteryDebugData = {
-        rawCount: 0,
-        adcBits: 0,
-        maxCount: 0,
-        vRef: 0,
-        vAdc: 0,
-        dividerRatio: 0,
-        vBattCalculated: 0,
-        vBattActual: 0,
-      };
-
-      for (const line of this.batteryDebugBuffer) {
-        if (line.startsWith('Raw ADC count:')) {
-          debugData.rawCount = parseInt(line.split(':')[1].trim());
-        } else if (line.startsWith('ADC bits:')) {
-          debugData.adcBits = parseInt(line.split(':')[1].trim());
-        } else if (line.startsWith('Max count:')) {
-          debugData.maxCount = parseFloat(line.split(':')[1].trim());
-        } else if (line.startsWith('V_ref:')) {
-          debugData.vRef = parseFloat(line.split(':')[1].replace('V', '').trim());
-        } else if (line.startsWith('V_adc (pin):')) {
-          debugData.vAdc = parseFloat(line.split(':')[1].replace('V', '').trim());
-        } else if (line.startsWith('Divider ratio:')) {
-          debugData.dividerRatio = parseFloat(line.split(':')[1].trim());
-        } else if (line.startsWith('V_batt (calculated):')) {
-          debugData.vBattCalculated = parseFloat(line.split(':')[1].replace('V', '').trim());
-        } else if (line.startsWith('V_batt (from getVoltage()):')) {
-          debugData.vBattActual = parseFloat(line.split(':')[1].replace('V', '').trim());
-        }
-      }
-
-      this.emit({ type: 'batteryDebug', batteryDebug: debugData });
-    } catch (error) {
-      console.error('Failed to parse battery debug output:', error);
-    }
-  }
-
   // Start reading from serial port
   private async startReading(): Promise<void> {
     if (!this.reader) return;
@@ -399,23 +370,15 @@ class SerialService {
             }
           }
 
-          // Check for battery debug output
-          if (trimmed === '=== Battery Raw ADC Debug ===') {
-            this.collectingBatteryDebug = true;
-            this.batteryDebugBuffer = [];
-            continue;
-          }
-
-          if (this.collectingBatteryDebug) {
-            if (trimmed === '===========================') {
-              // End of battery debug output - parse it
-              this.parseBatteryDebugOutput();
-              this.collectingBatteryDebug = false;
-              this.batteryDebugBuffer = [];
+          // Check if it's a battery debug message
+          if (trimmed.startsWith('{"batteryRaw":')) {
+            try {
+              const parsed = JSON.parse(trimmed) as { batteryRaw: BatteryDebugData };
+              this.emit({ type: 'batteryDebug', batteryDebug: parsed.batteryRaw });
               continue;
+            } catch {
+              // Not valid battery debug JSON
             }
-            this.batteryDebugBuffer.push(trimmed);
-            continue;
           }
 
           // Regular data
