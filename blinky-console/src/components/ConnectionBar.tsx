@@ -107,12 +107,7 @@ export function ConnectionBar({
                 </>
               ) : (
                 <>
-                  <span
-                    className="battery-text"
-                    style={{ color: '#9ca3af', fontSize: '0.8125rem' }}
-                  >
-                    No Battery
-                  </span>
+                  <span className="battery-text">No Battery</span>
                   <button
                     className="battery-debug-btn"
                     onClick={() => setIsBatteryModalOpen(true)}

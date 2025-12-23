@@ -57,9 +57,9 @@ describe('App', () => {
     expect(screen.getByText('Blinky Console')).toBeInTheDocument();
 
     // Tab buttons
-    expect(screen.getByRole('button', { name: 'Inputs' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Generators' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Effects' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Inputs' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Generators' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Effects' })).toBeInTheDocument();
 
     // Audio visualizer (in Inputs tab by default)
     expect(screen.getByText('AdaptiveMic Output')).toBeInTheDocument();

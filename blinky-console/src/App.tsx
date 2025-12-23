@@ -36,6 +36,15 @@ function App() {
   const isOnline = useNetworkStatus();
   const isDisabled = connectionState !== 'connected';
 
+  const settingsPanelProps = {
+    onSettingChange: setSetting,
+    onSave: saveSettings,
+    onLoad: loadSettings,
+    onReset: resetDefaults,
+    onRefresh: refreshSettings,
+    disabled: isDisabled,
+  };
+
   return (
     <div className="app">
       <OfflineBanner isOnline={isOnline} />
@@ -69,16 +78,11 @@ function App() {
                   </div>
                   <div className="tab-panel-settings">
                     <SettingsPanel
+                      {...settingsPanelProps}
                       settingsByCategory={{
                         audio: settingsByCategory.audio || [],
                         agc: settingsByCategory.agc || [],
                       }}
-                      onSettingChange={setSetting}
-                      onSave={saveSettings}
-                      onLoad={loadSettings}
-                      onReset={resetDefaults}
-                      onRefresh={refreshSettings}
-                      disabled={isDisabled}
                     />
                   </div>
                 </div>
@@ -91,15 +95,10 @@ function App() {
                 <div className="tab-panel">
                   <div className="tab-panel-settings-full">
                     <SettingsPanel
+                      {...settingsPanelProps}
                       settingsByCategory={{
                         fire: settingsByCategory.fire || [],
                       }}
-                      onSettingChange={setSetting}
-                      onSave={saveSettings}
-                      onLoad={loadSettings}
-                      onReset={resetDefaults}
-                      onRefresh={refreshSettings}
-                      disabled={isDisabled}
                     />
                   </div>
                 </div>

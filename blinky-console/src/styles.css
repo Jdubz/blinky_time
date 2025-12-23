@@ -544,6 +544,12 @@ body {
   font-weight: 600;
 }
 
+.audio-header-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 .audio-controls {
   display: flex;
   align-items: center;

@@ -170,11 +170,7 @@ export function AudioVisualizer({
       <div className="audio-header">
         <div>
           <h2>AdaptiveMic Output</h2>
-          <span
-            style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontStyle: 'italic' }}
-          >
-            Inputs to Fire Generator
-          </span>
+          <span className="audio-header-subtitle">Inputs to Fire Generator</span>
         </div>
         <div className="audio-controls">
           {audioData && isStreaming && (
