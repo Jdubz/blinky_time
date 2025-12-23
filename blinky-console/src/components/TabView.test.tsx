@@ -33,6 +33,14 @@ describe('TabView', () => {
       expect(screen.queryByText('Inputs Content')).not.toBeInTheDocument();
     });
 
+    it('falls back to first tab when defaultTab is invalid', () => {
+      // @ts-expect-error Testing invalid tab ID
+      render(<TabView tabs={mockTabs} defaultTab="invalid" />);
+
+      // Should render first tab (Inputs) as fallback
+      expect(screen.getByText('Inputs Content')).toBeInTheDocument();
+    });
+
     it('has tablist role on tab header', () => {
       render(<TabView tabs={mockTabs} />);
 

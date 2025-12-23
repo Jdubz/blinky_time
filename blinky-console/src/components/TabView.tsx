@@ -14,7 +14,12 @@ interface TabViewProps {
 }
 
 export function TabView({ tabs, defaultTab = 'inputs' }: TabViewProps) {
-  const [activeTab, setActiveTab] = useState<TabId>(defaultTab);
+  // Validate defaultTab exists in tabs array, fallback to first tab if not
+  const initialActiveTab: TabId = tabs.some(tab => tab.id === defaultTab)
+    ? defaultTab
+    : (tabs[0]?.id ?? defaultTab);
+
+  const [activeTab, setActiveTab] = useState<TabId>(initialActiveTab);
 
   const activeContent = tabs.find(tab => tab.id === activeTab)?.content;
 
