@@ -60,6 +60,7 @@ void ConfigStorage::loadDefaults() {
     data_.fire.transientHeatMax = 200;
     data_.fire.spreadDistance = 3;
     data_.fire.heatDecay = 0.60f;
+    data_.fire.suppressionMs = 300;
 
     // Mic defaults
     data_.mic.noiseGate = 0.04f;
@@ -70,7 +71,13 @@ void ConfigStorage::loadDefaults() {
     data_.mic.agMax = 12.0f;
     data_.mic.transientFactor = 1.5f;
     data_.mic.loudFloor = 0.05f;
-    data_.mic.transientDecay = 8.0f;
+    // New AGC time constants
+    data_.mic.agcTauSeconds = 7.0f;
+    data_.mic.agcAttackTau = 2.0f;
+    data_.mic.agcReleaseTau = 10.0f;
+    // Timing parameters
+    data_.mic.transientCooldownMs = 60;
+    data_.mic.hwCalibPeriodMs = 180000;
 
     data_.brightness = 100;
 }
@@ -138,6 +145,30 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
         corrupt = true;
     }
 
+    // Validate new AGC time constants (Phase 1)
+    if (data_.mic.agcTauSeconds <= 0.0f || data_.mic.agcTauSeconds > 100.0f) {
+        Serial.print(F("[CONFIG] BAD agcTauSeconds: ")); Serial.println(data_.mic.agcTauSeconds);
+        corrupt = true;
+    }
+    if (data_.mic.agcAttackTau <= 0.0f || data_.mic.agcAttackTau > 100.0f) {
+        Serial.print(F("[CONFIG] BAD agcAttackTau: ")); Serial.println(data_.mic.agcAttackTau);
+        corrupt = true;
+    }
+    if (data_.mic.agcReleaseTau <= 0.0f || data_.mic.agcReleaseTau > 100.0f) {
+        Serial.print(F("[CONFIG] BAD agcReleaseTau: ")); Serial.println(data_.mic.agcReleaseTau);
+        corrupt = true;
+    }
+
+    // Validate timing parameters
+    if (data_.mic.transientCooldownMs < 10 || data_.mic.transientCooldownMs > 10000) {
+        Serial.print(F("[CONFIG] BAD transientCooldownMs: ")); Serial.println(data_.mic.transientCooldownMs);
+        corrupt = true;
+    }
+    if (data_.mic.hwCalibPeriodMs < 1000 || data_.mic.hwCalibPeriodMs > 3600000) {
+        Serial.print(F("[CONFIG] BAD hwCalibPeriodMs: ")); Serial.println(data_.mic.hwCalibPeriodMs);
+        corrupt = true;
+    }
+
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
         loadDefaults();
@@ -158,6 +189,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     fireParams.transientHeatMax = data_.fire.transientHeatMax;
     fireParams.spreadDistance = data_.fire.spreadDistance;
     fireParams.heatDecay = data_.fire.heatDecay;
+    fireParams.suppressionMs = data_.fire.suppressionMs;
 
     mic.noiseGate = data_.mic.noiseGate;
     mic.globalGain = data_.mic.globalGain;
@@ -167,7 +199,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     mic.agMax = data_.mic.agMax;
     mic.transientFactor = data_.mic.transientFactor;
     mic.loudFloor = data_.mic.loudFloor;
-    mic.transientDecay = data_.mic.transientDecay;
+    // New AGC time constants
+    mic.agcTauSeconds = data_.mic.agcTauSeconds;
+    mic.agcAttackTau = data_.mic.agcAttackTau;
+    mic.agcReleaseTau = data_.mic.agcReleaseTau;
+    // Timing parameters
+    mic.transientCooldownMs = data_.mic.transientCooldownMs;
+    mic.hwCalibPeriodMs = data_.mic.hwCalibPeriodMs;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -181,6 +219,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.fire.transientHeatMax = fireParams.transientHeatMax;
     data_.fire.spreadDistance = fireParams.spreadDistance;
     data_.fire.heatDecay = fireParams.heatDecay;
+    data_.fire.suppressionMs = fireParams.suppressionMs;
 
     data_.mic.noiseGate = mic.noiseGate;
     data_.mic.globalGain = mic.globalGain;
@@ -190,7 +229,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.agMax = mic.agMax;
     data_.mic.transientFactor = mic.transientFactor;
     data_.mic.loudFloor = mic.loudFloor;
-    data_.mic.transientDecay = mic.transientDecay;
+    // New AGC time constants
+    data_.mic.agcTauSeconds = mic.agcTauSeconds;
+    data_.mic.agcAttackTau = mic.agcAttackTau;
+    data_.mic.agcReleaseTau = mic.agcReleaseTau;
+    // Timing parameters
+    data_.mic.transientCooldownMs = mic.transientCooldownMs;
+    data_.mic.hwCalibPeriodMs = mic.hwCalibPeriodMs;
 
     saveToFlash();
     dirty_ = false;

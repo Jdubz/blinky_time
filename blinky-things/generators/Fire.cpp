@@ -153,7 +153,7 @@ namespace {
 
 Fire::Fire()
     : heat_(nullptr), tempHeat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
-      prevHit_(0.0f), lastBurstMs_(0), inSuppression_(false),
+      lastBurstMs_(0), inSuppression_(false),
       emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0) {
 }
 
@@ -474,10 +474,6 @@ void Fire::generateSparks() {
     int numSparks = 0;
     uint8_t sparkHeat = params_.sparkHeatMax;
 
-    // Detect hit EDGE (rising edge - hit going from low to high)
-    bool hitEdge = (audioHit_ > 0.5f && prevHit_ < 0.3f);
-    prevHit_ = audioHit_;
-
     // Update suppression state
     if (inSuppression_ && (now - lastBurstMs_ > params_.suppressionMs)) {
         inSuppression_ = false;
@@ -496,10 +492,14 @@ void Fire::generateSparks() {
         sparkHeat = max(energyHeat, params_.sparkHeatMin);
     }
 
-    // BURST: Add extra sparks on hit edge (only if not suppressed)
-    if (hitEdge && !inSuppression_) {
+    // BURST: Transient impulse triggers burst (only if not suppressed)
+    // audioHit_ is 0.0 normally, non-zero when transient detected (single frame)
+    if (audioHit_ > 0.0f && !inSuppression_) {
+        float strength = audioHit_;  // Use transient strength (0.0-1.0)
         numSparks += params_.burstSparks;
-        sparkHeat = 255;  // Max heat for punch
+        // Scale heat by strength: weak transients = less intense, strong = max
+        sparkHeat = params_.sparkHeatMin +
+            (uint8_t)(strength * (255 - params_.sparkHeatMin));
         lastBurstMs_ = now;
         inSuppression_ = true;  // Suppress further bursts briefly
     }

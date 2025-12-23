@@ -45,8 +45,13 @@ public:
   float agMin          = 1.0f;      // Never go below 1.0 gain
   float agMax          = 12.0f;     // Allow high gain for quiet sources
 
+  // AGC time constants (professional audio standards)
+  float agcTauSeconds  = 7.0f;      // Main AGC adaptation time (5-10s window)
+  float agcAttackTau   = 2.0f;      // Attack time constant (faster response to increases)
+  float agcReleaseTau  = 10.0f;     // Release time constant (slower response to decreases)
+
   // Hardware gain (minutes scale)
-  uint32_t hwCalibPeriodMs = 60000;
+  uint32_t hwCalibPeriodMs = 180000;  // 3 minutes - environmental adaptation
   float    envTargetRaw    = 1000.0f;
   float    envLowRatio     = 0.50f;
   float    envHighRatio    = 1.50f;
@@ -68,16 +73,14 @@ public:
   int    currentHardwareGain = 32;    // PDM hardware gain
 
   // --- Enhanced Musical Analysis ---
-  // Frequency-aware transient detection (tuned for punchy response)
-  float transient          = 0.0f;
-  float transientDecay     = 8.0f;    // faster decay for snappy response
-  float fastAvg            = 0.0f;    // short-term avg (~10ms)
-  float slowAvg            = 0.0f;    // medium-term avg (~150ms)
-  float fastAlpha          = 0.35f;   // faster tracking for quick attacks
-  float slowAlpha          = 0.025f;  // medium-term baseline
+  // Transient detection: single-frame impulse with strength
+  // Returns 0.0f normally, non-zero (0.0-1.0) for ONE frame when transient detected
+  float transient          = 0.0f;    // Impulse with strength (0.0 = none, >0.0 = detected)
+  float slowAvg            = 0.0f;    // Medium-term baseline (~150ms)
+  float slowAlpha          = 0.025f;  // Baseline tracking speed
   float transientFactor    = 1.5f;    // Threshold: level must be 1.5x above baseline
-  float loudFloor          = 0.05f;   // lower floor for sensitivity
-  uint32_t transientCooldownMs = 120; // ~8 hits/sec max for fast beats
+  float loudFloor          = 0.05f;   // Minimum threshold for sensitivity
+  uint32_t transientCooldownMs = 60;  // 60ms = 16.7 hits/sec (supports 32nd notes at 125 BPM)
   uint32_t lastTransientMs = 0;
 
   float getTransient() const { return transient; }
@@ -134,6 +137,9 @@ private:
   // Normalization window
   float minEnv = 1e9f;
   float maxEnv = 0.0f;
+
+  // AGC tracking
+  float trackedLevel = 0.0f;  // RMS level tracked over AGC window
 
   // Timing
   uint32_t lastHwCalibMs = 0;

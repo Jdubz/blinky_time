@@ -89,6 +89,16 @@ void SerialConsole::registerSettings() {
             "Minimum gain", 0.1f, 5.0f);
         settings_.registerFloat("agmax", &mic_->agMax, "agc",
             "Maximum gain", 1.0f, 20.0f);
+        // AGC time constants (professional audio standards)
+        settings_.registerFloat("agctau", &mic_->agcTauSeconds, "agc",
+            "AGC adaptation time (s)", 0.1f, 30.0f);
+        settings_.registerFloat("agcattack", &mic_->agcAttackTau, "agc",
+            "AGC attack time (s)", 0.1f, 10.0f);
+        settings_.registerFloat("agcrelease", &mic_->agcReleaseTau, "agc",
+            "AGC release time (s)", 1.0f, 30.0f);
+        // Hardware gain calibration period
+        settings_.registerUint32("hwcalibperiod", &mic_->hwCalibPeriodMs, "agc",
+            "HW gain period (ms)", 10000, 600000);
     }
 
 }

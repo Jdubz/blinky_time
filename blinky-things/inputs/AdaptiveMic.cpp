@@ -49,6 +49,15 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   envAR = envMean = 0.0f; minEnv = 1e9f; maxEnv = 0.0f;
   levelInstant = levelPreGate = levelPostAGC = 0.0f;
   // Note: globalGain intentionally NOT reset here - keep default of 3.0f for faster startup
+
+  // Initialize transient detection state
+  slowAvg = 0.0f;
+  transient = 0.0f;
+  lastTransientMs = time_.millis();
+
+  // Initialize AGC tracking state
+  trackedLevel = 0.0f;
+
   lastHwCalibMs = time_.millis();
   lastIsrMs = time_.millis(); pdmAlive = false;
   return true;
@@ -104,27 +113,34 @@ void AdaptiveMic::update(float dt) {
     // Hardware gain adapts slowly (minutes) to environment
     // Software AGC adapts faster (seconds) to music dynamics
 
-    // --- Simplified Transient detection ---
+    // --- Transient detection: single-frame impulse with strength ---
+    // Reset impulse each frame (ensures it's only true for ONE frame)
+    transient = 0.0f;
+
     float x = levelPostAGC;
 
-    // Slow average tracks the baseline level
-    slowAvg += slowAlpha * (x - slowAvg);
+    // Energy envelope first-order difference (use current baseline, before update)
+    float energyDiff = maxValue(0.0f, x - slowAvg);
 
     uint32_t now = time_.millis();
     bool cooldownExpired = (now - lastTransientMs) > transientCooldownMs;
 
-    // Transient = current level significantly above baseline
-    // transientFactor 1.4 means level must be 40% above baseline
-    float threshold = maxValue(loudFloor, slowAvg * transientFactor);
+    // Adaptive threshold based on recent activity (use current baseline)
+    float adaptiveThreshold = maxValue(loudFloor, slowAvg * transientFactor);
 
-    if (cooldownExpired && x > threshold) {
-        transient = 1.0f;
+    // Detect onset when:
+    // 1. Cooldown has expired
+    // 2. Energy difference exceeds threshold
+    // 3. Current level is above baseline (rising edge)
+    if (cooldownExpired && energyDiff > adaptiveThreshold && x > slowAvg * 1.2f) {
+        // Set transient strength (0.0-1.0+, clamped to reasonable range)
+        // Protect against division by zero
+        transient = minValue(1.0f, energyDiff / maxValue(adaptiveThreshold, 0.001f));
         lastTransientMs = now;
     }
 
-    // Decay transient
-    transient -= transientDecay * dt;
-    if (transient < 0.0f) transient = 0.0f;
+    // Update slow baseline AFTER detection (prevents threshold from chasing signal)
+    slowAvg += slowAlpha * (x - slowAvg);
   }
 
   if (!pdmAlive) return;
@@ -179,12 +195,26 @@ void AdaptiveMic::updateNormWindow(float ref, float dt) {
 }
 
 void AdaptiveMic::autoGainTick(float dt) {
-  float err = agTarget - levelPreGate;
-  globalGain += agStrength * err * dt;
+  // Use adaptive time constant (faster attack, slower release)
+  // Professional AGC: fast response to increases, slow to decreases
+  float tau = (levelPreGate > trackedLevel) ? agcAttackTau : agcReleaseTau;
+  float alpha = 1.0f - expf(-dt / maxValue(tau, 0.01f));
 
-  if (globalGain < agMin) globalGain = agMin;
-  if (globalGain > agMax) globalGain = agMax;
+  // Track the level with EMA over AGC window
+  trackedLevel += alpha * (levelPreGate - trackedLevel);
 
+  // Compute gain error based on tracked level (not instantaneous)
+  // Goal: keep tracked RMS near agTarget, allowing peaks to hit ~1.0
+  float err = agTarget - trackedLevel;
+
+  // Apply gain adjustment with defined time constant
+  float gainAlpha = 1.0f - expf(-dt / maxValue(agcTauSeconds, 0.1f));
+  globalGain += gainAlpha * err * globalGain;  // Logarithmic adjustment
+
+  // Clamp to limits
+  globalGain = constrainValue(globalGain, agMin, agMax);
+
+  // Dwell tracking (existing coordination logic)
   if (fabsf(levelPreGate) < 1e-6f && globalGain >= agMax * 0.999f) {
     dwellAtMax += dt;
   } else if (globalGain >= agMax * 0.999f) {

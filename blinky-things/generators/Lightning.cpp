@@ -145,8 +145,9 @@ void Lightning::updateRandomLightning() {
 void Lightning::generateBolts() {
     // Audio-reactive bolt generation
     float boltProb = params_.boltChance;
-    if (audioHit_ > 0.5f) {
-        boltProb += params_.audioBoltBoost;
+    // Transient impulse boosts bolt probability (audioHit_ is 0.0 or strength value)
+    if (audioHit_ > 0.0f) {
+        boltProb += params_.audioBoltBoost * audioHit_;  // Scale boost by transient strength
     }
 
     if (random(1000) / 1000.0f < boltProb) {

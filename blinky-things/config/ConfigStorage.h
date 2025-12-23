@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 6;  // More sensitive transient detection
+    static const uint8_t CONFIG_VERSION = 7;  // Phase 1: Transient impulse + AGC improvements
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -21,6 +21,7 @@ public:
         uint8_t transientHeatMax;
         uint8_t spreadDistance;
         float heatDecay;
+        uint16_t suppressionMs;
     };
 
     struct StoredMicParams {
@@ -32,7 +33,13 @@ public:
         float agMax;
         float transientFactor;
         float loudFloor;
-        float transientDecay;
+        // New AGC time constants
+        float agcTauSeconds;
+        float agcAttackTau;
+        float agcReleaseTau;
+        // Timing parameters
+        uint32_t transientCooldownMs;
+        uint32_t hwCalibPeriodMs;
     };
 
     struct ConfigData {
