@@ -126,6 +126,33 @@ void showFireEffect() {
   }
 }
 
+/**
+ * Cleanup all dynamically allocated resources.
+ * Called on allocation failure to prevent memory leaks.
+ * Also useful for future sleep/wake or restart scenarios.
+ */
+void cleanup() {
+  delete console;    console = nullptr;
+  delete renderer;   renderer = nullptr;
+  delete currentEffect; currentEffect = nullptr;
+  delete currentGenerator; currentGenerator = nullptr;
+  delete pixelMatrix; pixelMatrix = nullptr;
+  delete battery;    battery = nullptr;
+  delete mic;        mic = nullptr;
+  delete leds;       leds = nullptr;
+  delete neoPixelStrip; neoPixelStrip = nullptr;
+}
+
+/**
+ * Halt execution with error message after cleanup.
+ * Use instead of bare while(1) loops to prevent memory leaks.
+ */
+void haltWithError(const __FlashStringHelper* msg) {
+  Serial.println(msg);
+  cleanup();
+  while(1) { delay(10000); }
+}
+
 void setup() {
   // CRITICAL: Check for crash loop FIRST - before any other initialization
   // This allows recovery if the app is crashing on boot
@@ -161,26 +188,23 @@ void setup() {
 
   // Validate critical configuration parameters
   if (config.matrix.width <= 0 || config.matrix.height <= 0) {
-    Serial.println(F("ERROR: Invalid matrix dimensions"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Invalid matrix dimensions"));
   }
   if (config.matrix.brightness > 255) {
     Serial.println(F("WARNING: Brightness clamped to 255"));
   }
 
   // Initialize LED strip (must be done in setup, not global scope)
-  neoPixelStrip = new Adafruit_NeoPixel(
+  neoPixelStrip = new(std::nothrow) Adafruit_NeoPixel(
       config.matrix.width * config.matrix.height,
       config.matrix.ledPin,
       config.matrix.ledType);
   if (!neoPixelStrip) {
-    Serial.println(F("ERROR: NeoPixel allocation failed"));
-    while(1);
+    haltWithError(F("ERROR: NeoPixel allocation failed"));
   }
-  leds = new NeoPixelLedStrip(*neoPixelStrip);
+  leds = new(std::nothrow) NeoPixelLedStrip(*neoPixelStrip);
   if (!leds || !leds->isValid()) {
-    Serial.println(F("ERROR: LED strip wrapper allocation failed"));
-    while(1);
+    haltWithError(F("ERROR: LED strip wrapper allocation failed"));
   }
 
   leds->begin();
@@ -203,8 +227,7 @@ void setup() {
   leds->show();
 
   if (!ledMapper.begin(config)) {
-    Serial.println(F("ERROR: LED mapper initialization failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: LED mapper initialization failed"));
   }
 
   // Initialize new Generator-Effect-Renderer architecture
@@ -221,8 +244,7 @@ void setup() {
   // Create PixelMatrix for the visual pipeline
   pixelMatrix = new(std::nothrow) PixelMatrix(config.matrix.width, config.matrix.height);
   if (!pixelMatrix || !pixelMatrix->isValid()) {
-    Serial.println(F("ERROR: PixelMatrix allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: PixelMatrix allocation failed"));
   }
 
   // Initialize appropriate generator based on layout type
@@ -243,18 +265,16 @@ void setup() {
   }
 
   // Create fire generator instance
-  Fire* fireGen = new Fire();
+  Fire* fireGen = new(std::nothrow) Fire();
   currentGenerator = fireGen;
 
   if (!currentGenerator) {
-    Serial.println(F("ERROR: Generator allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Generator allocation failed"));
   }
 
   // Initialize the generator with device configuration
   if (!fireGen->begin(config)) {
-    Serial.println(F("ERROR: Generator initialization failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Generator initialization failed"));
   }
 
   // Initialize live-tunable fire params from config
@@ -271,32 +291,28 @@ void setup() {
   fireParams.heatDecay = 0.60f;
 
   // Initialize effect (pass-through for pure fire colors)
-  currentEffect = new NoOpEffect();
+  currentEffect = new(std::nothrow) NoOpEffect();
   if (!currentEffect) {
-    Serial.println(F("ERROR: Effect allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Effect allocation failed"));
   }
   currentEffect->begin(config.matrix.width, config.matrix.height);
 
   // Initialize renderer (leds must be valid at this point)
   if (!leds) {
-    Serial.println(F("ERROR: LED strip not initialized before renderer"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: LED strip not initialized before renderer"));
   }
-  renderer = new EffectRenderer(*leds, ledMapper);
+  renderer = new(std::nothrow) EffectRenderer(*leds, ledMapper);
   if (!renderer) {
-    Serial.println(F("ERROR: Renderer allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: Renderer allocation failed"));
   }
 
   Serial.println(F("New architecture initialized successfully"));
 
   // Initialize HAL-enabled components (must be done in setup(), not at global scope)
-  mic = new AdaptiveMic(DefaultHal::pdm(), DefaultHal::time());
-  battery = new BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
+  mic = new(std::nothrow) AdaptiveMic(DefaultHal::pdm(), DefaultHal::time());
+  battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
   if (!mic || !battery) {
-    Serial.println(F("ERROR: HAL component allocation failed"));
-    while(1);
+    haltWithError(F("ERROR: HAL component allocation failed"));
   }
 
   bool micOk = mic->begin(config.microphone.sampleRate, config.microphone.bufferSize);
@@ -328,8 +344,7 @@ void setup() {
   // Uses fireGen created on line 240 for direct parameter access
   console = new(std::nothrow) SerialConsole(fireGen, mic);
   if (!console) {
-    Serial.println(F("ERROR: SerialConsole allocation failed"));
-    while(1); // Halt execution
+    haltWithError(F("ERROR: SerialConsole allocation failed"));
   }
   console->setConfigStorage(&configStorage);
   console->setBatteryMonitor(battery);
