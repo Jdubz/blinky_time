@@ -50,8 +50,10 @@ const DeviceConfig& config = BUCKET_TOTEM_CONFIG;
 LEDMapper ledMapper;
 
 // Hardware abstraction layer for testability
-Adafruit_NeoPixel neoPixelStrip(config.matrix.width * config.matrix.height, config.matrix.ledPin, config.matrix.ledType);
-NeoPixelLedStrip leds(neoPixelStrip);
+// Use pointers to avoid static initialization order fiasco
+// Adafruit_NeoPixel allocates memory in constructor - unsafe at global scope
+Adafruit_NeoPixel* neoPixelStrip = nullptr;
+NeoPixelLedStrip* leds = nullptr;
 
 // New Generator-Effect-Render Architecture
 // === ARCHITECTURE STATUS ===
@@ -120,7 +122,7 @@ void showFireEffect() {
     currentGenerator->generate(*pixelMatrix, energy, hit);
     currentEffect->apply(pixelMatrix);
     renderer->render(*pixelMatrix);
-    leds.show();
+    leds->show();
   }
 }
 
@@ -166,24 +168,39 @@ void setup() {
     Serial.println(F("WARNING: Brightness clamped to 255"));
   }
 
-  leds.begin();
-  leds.setBrightness(min(config.matrix.brightness, 255));
-  leds.show();
+  // Initialize LED strip (must be done in setup, not global scope)
+  neoPixelStrip = new Adafruit_NeoPixel(
+      config.matrix.width * config.matrix.height,
+      config.matrix.ledPin,
+      config.matrix.ledType);
+  if (!neoPixelStrip) {
+    Serial.println(F("ERROR: NeoPixel allocation failed"));
+    while(1);
+  }
+  leds = new NeoPixelLedStrip(*neoPixelStrip);
+  if (!leds || !leds->isValid()) {
+    Serial.println(F("ERROR: LED strip wrapper allocation failed"));
+    while(1);
+  }
+
+  leds->begin();
+  leds->setBrightness(min(config.matrix.brightness, 255));
+  leds->show();
 
   // Basic LED test - light up first few LEDs to verify hardware
   Serial.print(F("LED Test: Lighting first 3 LEDs at brightness "));
   Serial.println(config.matrix.brightness);
-  leds.setPixelColor(0, leds.Color(255, 0, 0));  // Should show RED
-  leds.setPixelColor(1, leds.Color(0, 255, 0));  // Should show GREEN
-  leds.setPixelColor(2, leds.Color(0, 0, 255));  // Should show BLUE
-  leds.show();
+  leds->setPixelColor(0, leds->Color(255, 0, 0));  // Should show RED
+  leds->setPixelColor(1, leds->Color(0, 255, 0));  // Should show GREEN
+  leds->setPixelColor(2, leds->Color(0, 0, 255));  // Should show BLUE
+  leds->show();
   delay(3000);  // Hold for 3 seconds to verify colors are correct
 
   // Clear test LEDs
-  leds.setPixelColor(0, 0);
-  leds.setPixelColor(1, 0);
-  leds.setPixelColor(2, 0);
-  leds.show();
+  leds->setPixelColor(0, 0);
+  leds->setPixelColor(1, 0);
+  leds->setPixelColor(2, 0);
+  leds->show();
 
   if (!ledMapper.begin(config)) {
     Serial.println(F("ERROR: LED mapper initialization failed"));
@@ -262,7 +279,7 @@ void setup() {
   currentEffect->begin(config.matrix.width, config.matrix.height);
 
   // Initialize renderer
-  renderer = new EffectRenderer(leds, ledMapper);
+  renderer = new EffectRenderer(*leds, ledMapper);
   if (!renderer) {
     Serial.println(F("ERROR: Renderer allocation failed"));
     while(1); // Halt execution
@@ -311,7 +328,7 @@ void setup() {
     while(1); // Halt execution
   }
   console->setConfigStorage(&configStorage);
-  console->setBatteryMonitor(&battery);
+  console->setBatteryMonitor(battery);
   console->begin();
   Serial.println(F("Serial console initialized"));
 

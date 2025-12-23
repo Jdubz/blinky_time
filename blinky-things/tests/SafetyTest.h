@@ -12,6 +12,17 @@
  * - Buffer bounds validation
  *
  * Run at startup before any flash writes occur.
+ *
+ * IMPORTANT LIMITATION:
+ * These tests run AFTER setup() begins. They CANNOT detect Static Initialization
+ * Order Fiasco issues, which crash BEFORE main() runs and brick the device.
+ *
+ * For static initialization safety, see:
+ * - tests/StaticInitCheck.h (documentation)
+ * - scripts/check_static_init.py (static analysis tool)
+ *
+ * Run the static analysis script before uploading new code:
+ *   python scripts/check_static_init.py blinky-things/
  */
 
 namespace SafetyTest {
