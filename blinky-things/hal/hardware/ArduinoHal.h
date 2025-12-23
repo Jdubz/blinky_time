@@ -36,12 +36,17 @@ public:
  * ArduinoAdc - IAdc implementation for Arduino platforms
  */
 class ArduinoAdc : public IAdc {
+private:
+    uint8_t currentBits_ = 10; // Default to 10-bit for Arduino
+
 public:
     void setResolution(uint8_t bits) override {
+        currentBits_ = bits;
         #if defined(analogReadResolution)
         analogReadResolution(bits);
         #else
-        (void)bits; // Suppress unused warning when analogReadResolution not available
+        // If analogReadResolution not available, we'll handle it in analogRead()
+        #warning "analogReadResolution() not available on this platform - ADC stuck at 10-bit"
         #endif
     }
 
@@ -56,7 +61,17 @@ public:
     }
 
     uint16_t analogRead(int pin) override {
-        return ::analogRead(pin);
+        uint16_t raw = ::analogRead(pin);
+
+        // Workaround for platforms where analogReadResolution() doesn't work
+        // If we want 12-bit but getting 10-bit values, scale up
+        #if !defined(analogReadResolution)
+        if (currentBits_ == 12 && raw <= 1023) {
+            raw = raw << 2; // Scale 10-bit (0-1023) to 12-bit (0-4092)
+        }
+        #endif
+
+        return raw;
     }
 };
 

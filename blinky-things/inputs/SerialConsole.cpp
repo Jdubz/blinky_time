@@ -176,13 +176,32 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         if (battery_) {
             Serial.println(F("=== Battery Raw ADC Debug ==="));
 
+            // Get config first
+            const auto& cfg = battery_->getConfig();
+
+            // Show pin configuration
+            Serial.print(F("PIN_VBAT: "));
+            Serial.println(cfg.pinVBAT);
+            Serial.print(F("PIN_VBAT_ENABLE: "));
+            Serial.println(cfg.pinVBATEnable);
+
+            // Read multiple samples to check consistency
+            Serial.println(F("\nReading 5 samples:"));
+            for (int i = 0; i < 5; i++) {
+                uint16_t raw = battery_->readRaw();
+                Serial.print(F("  Sample "));
+                Serial.print(i + 1);
+                Serial.print(F(": "));
+                Serial.println(raw);
+                delay(10);
+            }
+
             // Read raw ADC value
             uint16_t raw = battery_->readRaw();
-            Serial.print(F("Raw ADC count: "));
+            Serial.print(F("\nRaw ADC count: "));
             Serial.println(raw);
 
-            // Get config
-            const auto& cfg = battery_->getConfig();
+            // Show ADC configuration
             Serial.print(F("ADC bits: "));
             Serial.println(cfg.adcBits);
 
@@ -213,6 +232,28 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
             Serial.print(F("V_batt (from getVoltage()): "));
             Serial.print(battery_->getVoltage(), 4);
             Serial.println(F("V"));
+
+            // Compile-time diagnostics
+            Serial.println(F("\n=== Platform Info ==="));
+            #if defined(P0_31)
+            Serial.println(F("P0_31 defined (mbed platform)"));
+            Serial.print(F("P0_31 = "));
+            Serial.println(P0_31);
+            #else
+            Serial.println(F("P0_31 NOT defined (non-mbed platform)"));
+            #endif
+
+            #if defined(analogReadResolution)
+            Serial.println(F("analogReadResolution() available"));
+            #else
+            Serial.println(F("analogReadResolution() NOT available"));
+            #endif
+
+            #if defined(AR_INTERNAL2V4)
+            Serial.println(F("AR_INTERNAL2V4 available"));
+            #else
+            Serial.println(F("AR_INTERNAL2V4 NOT available"));
+            #endif
 
             Serial.println(F("==========================="));
         } else {
