@@ -33,7 +33,7 @@ struct WaterParams {
 class Water : public Generator {
 public:
     Water();
-    virtual ~Water();
+    virtual ~Water() override;
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;

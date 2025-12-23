@@ -52,7 +52,7 @@ struct FireParams {
 class Fire : public Generator {
 public:
     Fire();
-    virtual ~Fire();
+    virtual ~Fire() override;
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;
