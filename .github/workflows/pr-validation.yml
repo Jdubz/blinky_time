@@ -81,6 +81,26 @@ jobs:
           --quiet \
           blinky-things/
 
+  static-init-safety:
+    name: Static Init Safety Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Check for dangerous static initialization
+      run: |
+        echo "Checking for static initialization order fiasco patterns..."
+        echo "These patterns can brick devices by crashing before setup() runs."
+        echo ""
+        python scripts/check_static_init.py blinky-things/
+
   syntax-validation:
     name: Syntax Validation
     runs-on: ubuntu-latest
