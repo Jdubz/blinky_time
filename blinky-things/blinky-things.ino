@@ -93,15 +93,6 @@ void updateFireParams() {
 void updateFireEffect(float energy, float hit) {
   if (!currentGenerator) return;
 
-  static uint32_t lastDebug = 0;
-  if (millis() - lastDebug > 5000) {  // Debug every 5 seconds
-    lastDebug = millis();
-    Serial.print(F("Fire update - energy: "));
-    Serial.print(energy);
-    Serial.print(F(", hit: "));
-    Serial.println(hit);
-  }
-
   // Update generator with audio energy and impact
   Fire* fireGen = static_cast<Fire*>(currentGenerator);
   fireGen->setAudioInput(energy, hit);
