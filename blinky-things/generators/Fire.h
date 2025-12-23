@@ -105,7 +105,6 @@ private:
     // Audio input
     float audioEnergy_;
     float audioHit_;
-    float prevHit_;              // Previous hit value for edge detection
     uint32_t lastBurstMs_;       // When last burst occurred
     bool inSuppression_;         // Currently suppressing sparks after burst
 

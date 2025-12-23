@@ -60,17 +60,23 @@ void ConfigStorage::loadDefaults() {
     data_.fire.transientHeatMax = 200;
     data_.fire.spreadDistance = 3;
     data_.fire.heatDecay = 0.60f;
+    data_.fire.suppressionMs = 300;
 
     // Mic defaults
     data_.mic.noiseGate = 0.04f;
     data_.mic.globalGain = 3.0f;
     data_.mic.agTarget = 0.50f;
-    data_.mic.agStrength = 0.25f;
     data_.mic.agMin = 1.0f;
     data_.mic.agMax = 12.0f;
     data_.mic.transientFactor = 1.5f;
     data_.mic.loudFloor = 0.05f;
-    data_.mic.transientDecay = 8.0f;
+    // AGC time constants
+    data_.mic.agcTauSeconds = 7.0f;
+    data_.mic.agcAttackTau = 2.0f;
+    data_.mic.agcReleaseTau = 10.0f;
+    // Timing parameters
+    data_.mic.transientCooldownMs = 60;
+    data_.mic.hwCalibPeriodMs = 180000;
 
     data_.brightness = 100;
 }
@@ -123,20 +129,42 @@ void ConfigStorage::saveToFlash() {
 }
 
 void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) {
-    // Validate critical floats - if garbage, use defaults
+    // Validation helpers to reduce code duplication
     bool corrupt = false;
-    if (data_.fire.heatDecay <= 0.0f || data_.fire.heatDecay > 1.0f) {
-        Serial.print(F("[CONFIG] BAD heatDecay: ")); Serial.println(data_.fire.heatDecay);
-        corrupt = true;
-    }
-    if (data_.fire.sparkChance < 0.0f || data_.fire.sparkChance > 1.0f) {
-        Serial.print(F("[CONFIG] BAD sparkChance: ")); Serial.println(data_.fire.sparkChance);
-        corrupt = true;
-    }
-    if (data_.mic.globalGain <= 0.0f || data_.mic.globalGain > 50.0f) {
-        Serial.print(F("[CONFIG] BAD globalGain: ")); Serial.println(data_.mic.globalGain);
-        corrupt = true;
-    }
+
+    auto validateFloat = [&](float value, float min, float max, const __FlashStringHelper* name) {
+        if (value < min || value > max) {
+            Serial.print(F("[CONFIG] BAD "));
+            Serial.print(name);
+            Serial.print(F(": "));
+            Serial.println(value);
+            corrupt = true;
+        }
+    };
+
+    auto validateUint32 = [&](uint32_t value, uint32_t min, uint32_t max, const __FlashStringHelper* name) {
+        if (value < min || value > max) {
+            Serial.print(F("[CONFIG] BAD "));
+            Serial.print(name);
+            Serial.print(F(": "));
+            Serial.println(value);
+            corrupt = true;
+        }
+    };
+
+    // Validate critical parameters - if out of range, use defaults
+    validateFloat(data_.fire.heatDecay, 0.0f, 1.0f, F("heatDecay"));
+    validateFloat(data_.fire.sparkChance, 0.0f, 1.0f, F("sparkChance"));
+    validateFloat(data_.mic.globalGain, 0.0f, 50.0f, F("globalGain"));
+
+    // Validate AGC time constants (match SerialConsole ranges)
+    validateFloat(data_.mic.agcTauSeconds, 0.1f, 30.0f, F("agcTauSeconds"));
+    validateFloat(data_.mic.agcAttackTau, 0.1f, 10.0f, F("agcAttackTau"));
+    validateFloat(data_.mic.agcReleaseTau, 1.0f, 30.0f, F("agcReleaseTau"));
+
+    // Validate timing parameters (match SerialConsole ranges)
+    validateUint32(data_.mic.transientCooldownMs, 10, 10000, F("transientCooldownMs"));
+    validateUint32(data_.mic.hwCalibPeriodMs, 10000, 600000, F("hwCalibPeriodMs"));
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
@@ -158,16 +186,22 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     fireParams.transientHeatMax = data_.fire.transientHeatMax;
     fireParams.spreadDistance = data_.fire.spreadDistance;
     fireParams.heatDecay = data_.fire.heatDecay;
+    fireParams.suppressionMs = data_.fire.suppressionMs;
 
     mic.noiseGate = data_.mic.noiseGate;
     mic.globalGain = data_.mic.globalGain;
     mic.agTarget = data_.mic.agTarget;
-    mic.agStrength = data_.mic.agStrength;
     mic.agMin = data_.mic.agMin;
     mic.agMax = data_.mic.agMax;
     mic.transientFactor = data_.mic.transientFactor;
     mic.loudFloor = data_.mic.loudFloor;
-    mic.transientDecay = data_.mic.transientDecay;
+    // AGC time constants
+    mic.agcTauSeconds = data_.mic.agcTauSeconds;
+    mic.agcAttackTau = data_.mic.agcAttackTau;
+    mic.agcReleaseTau = data_.mic.agcReleaseTau;
+    // Timing parameters
+    mic.transientCooldownMs = data_.mic.transientCooldownMs;
+    mic.hwCalibPeriodMs = data_.mic.hwCalibPeriodMs;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -181,16 +215,22 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.fire.transientHeatMax = fireParams.transientHeatMax;
     data_.fire.spreadDistance = fireParams.spreadDistance;
     data_.fire.heatDecay = fireParams.heatDecay;
+    data_.fire.suppressionMs = fireParams.suppressionMs;
 
     data_.mic.noiseGate = mic.noiseGate;
     data_.mic.globalGain = mic.globalGain;
     data_.mic.agTarget = mic.agTarget;
-    data_.mic.agStrength = mic.agStrength;
     data_.mic.agMin = mic.agMin;
     data_.mic.agMax = mic.agMax;
     data_.mic.transientFactor = mic.transientFactor;
     data_.mic.loudFloor = mic.loudFloor;
-    data_.mic.transientDecay = mic.transientDecay;
+    // AGC time constants
+    data_.mic.agcTauSeconds = mic.agcTauSeconds;
+    data_.mic.agcAttackTau = mic.agcAttackTau;
+    data_.mic.agcReleaseTau = mic.agcReleaseTau;
+    // Timing parameters
+    data_.mic.transientCooldownMs = mic.transientCooldownMs;
+    data_.mic.hwCalibPeriodMs = mic.hwCalibPeriodMs;
 
     saveToFlash();
     dirty_ = false;

@@ -39,18 +39,22 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   s_instance     = this;
 
   pdm_.onReceive(AdaptiveMic::onPDMdata);
-  // PDM.setBufferSize(1024); // optional if core supports it
 
   bool ok = pdm_.begin(1, _sampleRate); // mono @ 16k
   if (!ok) return false;
 
   pdm_.setGain(currentHardwareGain);
 
-  envAR = envMean = 0.0f; minEnv = 1e9f; maxEnv = 0.0f;
-  levelInstant = levelPreGate = levelPostAGC = 0.0f;
-  // Note: globalGain intentionally NOT reset here - keep default of 3.0f for faster startup
+  // Initialize state
+  level = 0.0f;
+  trackedLevel = 0.0f;
+  slowAvg = 0.0f;
+  transient = 0.0f;
+  lastTransientMs = time_.millis();
   lastHwCalibMs = time_.millis();
-  lastIsrMs = time_.millis(); pdmAlive = false;
+  lastIsrMs = time_.millis();
+  pdmAlive = false;
+
   return true;
 }
 
@@ -60,11 +64,11 @@ void AdaptiveMic::end() {
 }
 
 void AdaptiveMic::update(float dt) {
+  // Clamp dt to reasonable range
   if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
   if (dt > MicConstants::MAX_DT_SECONDS) dt = MicConstants::MAX_DT_SECONDS;
 
-  computeCoeffs(dt);
-
+  // Get raw audio samples from ISR
   float avgAbs = 0.0f;
   uint16_t maxAbsVal = 0;
   uint32_t n = 0;
@@ -74,68 +78,33 @@ void AdaptiveMic::update(float dt) {
   pdmAlive = !isMicDead(nowMs, 250);
 
   if (n > 0) {
-    // 1. Raw instantaneous average
-    levelInstant = avgAbs;
+    // Normalize raw samples to 0-1 range
+    // avgAbs is average of int16_t samples (0-32768 range)
+    float normalized = avgAbs / 32768.0f;
 
-    // Still update envelope & mean for adaptation
-    updateEnvelope(avgAbs, dt);
+    // Apply gain and clamp to 0-1
+    float afterGain = normalized * globalGain;
+    afterGain = clamp01(afterGain);
 
-    // Maintain normalization window based on envelope
-    updateNormWindow(envAR, dt);
-
-    // Normalize using raw instantaneous magnitude
-    float denom = (maxEnv - minEnv);
-    float norm = denom > 1e-6f ? (levelInstant - minEnv) / denom : 0.0f;
-    norm = clamp01(norm);
-
-    if (norm > 0.0f && norm < 1.0f) {
-      float insetLo = normInset, insetHi = 1.0f - normInset;
-      norm = insetLo + norm * (insetHi - insetLo);
-    }
-    levelPreGate = norm;
-
-    if (agEnabled) autoGainTick(dt);
-
-    float afterGain = clamp01(levelPreGate * globalGain);
-
-    levelPostAGC = (afterGain < noiseGate) ? 0.0f : afterGain;
-
-    // Note: Environment adaptation handled naturally by AGC
-    // Hardware gain adapts slowly (minutes) to environment
-    // Software AGC adapts faster (seconds) to music dynamics
-
-    // --- Simplified Transient detection ---
-    float x = levelPostAGC;
-
-    // Slow average tracks the baseline level
-    slowAvg += slowAlpha * (x - slowAvg);
-
-    uint32_t now = time_.millis();
-    bool cooldownExpired = (now - lastTransientMs) > transientCooldownMs;
-
-    // Transient = current level significantly above baseline
-    // transientFactor 1.4 means level must be 40% above baseline
-    float threshold = maxValue(loudFloor, slowAvg * transientFactor);
-
-    if (cooldownExpired && x > threshold) {
-        transient = 1.0f;
-        lastTransientMs = now;
+    // Apply AGC (tracks post-gain level, adjusts globalGain for next frame)
+    if (agEnabled) {
+      autoGainTick(afterGain, dt);
     }
 
-    // Decay transient
-    transient -= transientDecay * dt;
-    if (transient < 0.0f) transient = 0.0f;
+    // Apply noise gate
+    level = (afterGain < noiseGate) ? 0.0f : afterGain;
+
+    // Transient detection
+    detectTransient(level, dt, nowMs);
   }
 
   if (!pdmAlive) return;
+
+  // Hardware gain calibration (slow environmental adaptation)
   hardwareCalibrate(nowMs, dt);
 }
 
 // ---------- Private helpers ----------
-
-void AdaptiveMic::computeCoeffs(float /*dt*/) {
-  // Placeholder; coefficients recomputed in updateEnvelope
-}
 
 void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
   time_.noInterrupts();
@@ -152,40 +121,29 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
   avgAbs = (cnt > 0) ? float(sum) / float(cnt) : 0.0f;
 }
 
-void AdaptiveMic::updateEnvelope(float avgAbs, float dt) {
-  float aAtkFrame = 1.0f - expf(-dt / maxValue(attackSeconds, 1e-3f));
-  float aRelFrame = 1.0f - expf(-dt / maxValue(releaseSeconds, 1e-3f));
+void AdaptiveMic::autoGainTick(float postGainLevel, float dt) {
+  // Use adaptive time constant (faster attack, slower release)
+  // Professional AGC: fast response to increases, slow to decreases
+  float tau = (postGainLevel > trackedLevel) ? agcAttackTau : agcReleaseTau;
+  float alpha = 1.0f - expf(-dt / maxValue(tau, 0.01f));
 
-  if (avgAbs >= envAR) {
-    envAR += aAtkFrame * (avgAbs - envAR);
-  } else {
-    envAR += aRelFrame * (avgAbs - envAR);
-  }
+  // Track the post-gain level with EMA over AGC window
+  trackedLevel += alpha * (postGainLevel - trackedLevel);
 
-  float meanAlpha = 1.0f - expf(-dt / MicConstants::ENV_MEAN_TAU_SECONDS);
-  envMean += meanAlpha * (envAR - envMean);
-}
+  // Compute gain error based on tracked level (not instantaneous)
+  // Goal: keep tracked RMS near agTarget, allowing peaks to hit ~1.0
+  float err = agTarget - trackedLevel;
 
-void AdaptiveMic::updateNormWindow(float ref, float dt) {
-  if (ref < minEnv) minEnv = ref;
-  if (ref > maxEnv) maxEnv = ref;
+  // Apply gain adjustment with defined time constant
+  float gainAlpha = 1.0f - expf(-dt / maxValue(agcTauSeconds, 0.1f));
+  globalGain += gainAlpha * err * globalGain;  // Logarithmic adjustment
 
-  minEnv = minEnv * normFloorDecay + ref * (1.0f - normFloorDecay);
-  maxEnv = maxEnv * normCeilDecay  + ref * (1.0f - normCeilDecay);
+  // Clamp to limits
+  globalGain = constrainValue(globalGain, agMin, agMax);
 
-  if (maxEnv < minEnv + 1.0f) {
-    maxEnv = minEnv + 1.0f;
-  }
-}
-
-void AdaptiveMic::autoGainTick(float dt) {
-  float err = agTarget - levelPreGate;
-  globalGain += agStrength * err * dt;
-
-  if (globalGain < agMin) globalGain = agMin;
-  if (globalGain > agMax) globalGain = agMax;
-
-  if (fabsf(levelPreGate) < 1e-6f && globalGain >= agMax * 0.999f) {
+  // Dwell tracking (coordination with hardware gain)
+  // Track when AGC is pinned at limits for extended periods
+  if (fabsf(postGainLevel) < 1e-6f && globalGain >= agMax * 0.999f) {
     dwellAtMax += dt;
   } else if (globalGain >= agMax * 0.999f) {
     dwellAtMax += dt;
@@ -193,7 +151,7 @@ void AdaptiveMic::autoGainTick(float dt) {
     dwellAtMax = maxValue(0.0f, dwellAtMax - dt * (1.0f/limitDwellRelaxSec));
   }
 
-  if (levelPreGate >= 0.98f && globalGain <= agMin * 1.001f) {
+  if (postGainLevel >= 0.98f && globalGain <= agMin * 1.001f) {
     dwellAtMin += dt;
   } else if (globalGain <= agMin * 1.001f) {
     dwellAtMin += dt;
@@ -202,19 +160,48 @@ void AdaptiveMic::autoGainTick(float dt) {
   }
 }
 
+void AdaptiveMic::detectTransient(float normalizedLevel, float dt, uint32_t nowMs) {
+  // Reset impulse each frame (ensures it's only true for ONE frame)
+  transient = 0.0f;
+
+  // Energy envelope first-order difference (use current baseline, before update)
+  float energyDiff = maxValue(0.0f, normalizedLevel - slowAvg);
+
+  bool cooldownExpired = (nowMs - lastTransientMs) > transientCooldownMs;
+
+  // Adaptive threshold based on recent activity (use current baseline)
+  float adaptiveThreshold = maxValue(loudFloor, slowAvg * transientFactor);
+
+  // Detect onset when:
+  // 1. Cooldown has expired
+  // 2. Energy difference exceeds adaptive threshold
+  // 3. Rising edge check (level 20% above baseline)
+  //    - When loudFloor dominates: prevents false triggers during quiet periods
+  //    - When transientFactor dominates: redundant but harmless (already > 2.5x baseline)
+  if (cooldownExpired && energyDiff > adaptiveThreshold && normalizedLevel > slowAvg * 1.2f) {
+      // Set transient strength (0.0-1.0+, clamped to reasonable range)
+      // Protect against division by zero
+      transient = minValue(1.0f, energyDiff / maxValue(adaptiveThreshold, 0.001f));
+      lastTransientMs = nowMs;
+  }
+
+  // Update slow baseline AFTER detection (prevents threshold from chasing signal)
+  slowAvg += slowAlpha * (normalizedLevel - slowAvg);
+}
+
 void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   if ((nowMs - lastHwCalibMs) < hwCalibPeriodMs) return;
 
-  bool tooQuietEnv = (envMean < envTargetRaw * envLowRatio);
-  bool tooLoudEnv  = (envMean > envTargetRaw * envHighRatio);
-
+  // Simple coordination: adjust hardware gain when software AGC is pinned at limits
   bool swPinnedHigh = (dwellAtMax >= limitDwellTriggerSec);
   bool swPinnedLow  = (dwellAtMin >= limitDwellTriggerSec);
 
   int delta = 0;
-  if (tooQuietEnv || swPinnedHigh) {
+  if (swPinnedHigh) {
+    // Software gain maxed out → increase hardware gain
     if (currentHardwareGain < hwGainMax) delta = +hwGainStep;
-  } else if (tooLoudEnv || swPinnedLow) {
+  } else if (swPinnedLow) {
+    // Software gain at minimum → decrease hardware gain
     if (currentHardwareGain > hwGainMin) delta = -hwGainStep;
   }
 
@@ -224,6 +211,7 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
     if (currentHardwareGain != oldGain) {
       pdm_.setGain(currentHardwareGain);
 
+      // Compensate software gain to smooth transition
       float softComp = (delta > 0) ? (1.0f/1.05f) : 1.05f;
       globalGain = clamp01(globalGain * softComp);
       dwellAtMax = 0.0f;

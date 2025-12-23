@@ -4,16 +4,13 @@
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
 
-// AdaptiveMic
-// - Output uses raw instantaneous mic average (snappy, no smoothing).
-// - Envelope/envMean kept only for normalization + gain adaptation.
-// - Hardware gain adapts slowly (minutes).
-// - Software AGC adapts over ~10s.
-// - Continuous normalization window.
+// AdaptiveMic - Clean audio input with AGC
+// - Provides raw, unsmoothed audio level (generators can smooth if needed)
+// - AGC adapts gain to maintain target level
+// - Transient detection for beat/percussion events
+// - Hardware gain adapts to environment over minutes
 
-// Time constants for envelope and gain adaptation
 namespace MicConstants {
-    constexpr float ENV_MEAN_TAU_SECONDS = 90.0f;     // ~90s EMA for long-term env tracking
     constexpr float MIN_DT_SECONDS = 0.0001f;         // Minimum dt clamp (0.1ms)
     constexpr float MAX_DT_SECONDS = 0.1000f;         // Maximum dt clamp (100ms)
     constexpr uint32_t MIC_DEAD_TIMEOUT_MS = 250;     // PDM alive check timeout
@@ -22,65 +19,51 @@ namespace MicConstants {
 /**
  * AdaptiveMic - Audio input with auto-gain control
  *
- * Uses HAL interfaces for hardware abstraction, enabling unit testing.
- * Default values from PlatformConstants.h.
+ * Simplified architecture:
+ * - Raw samples → Normalize (0-1) → Apply AGC gain → Noise gate → Output
+ * - No envelope smoothing (visualizers handle their own smoothing)
+ * - AGC time constants control gain adaptation speed
+ * - Transient detection for percussion/beat events
  */
 class AdaptiveMic {
 public:
   // ---- Tunables ----
-  // Envelope smoothing (still used for tracking only)
-  float attackSeconds = 0.08f;
-  float releaseSeconds = 0.30f;
+  float noiseGate      = 0.04f;     // Noise gate threshold (0-1)
 
-  // Normalization window (slow adaptation preserves dynamics)
-  float normFloorDecay = 0.99995f;  // Very slow floor tracking (~20s)
-  float normCeilDecay  = 0.9999f;   // Slow ceiling tracking (~10s)
-  float normInset      = 0.02f;
-  float noiseGate      = 0.04f;     // Lower gate for sensitivity
-
-  // Software AGC (phrase-level adaptation ~6-8 seconds behind)
+  // Software AGC
   bool  agEnabled      = true;
-  float agTarget       = 0.50f;     // Target level
-  float agStrength     = 0.25f;     // Faster adaptation
-  float agMin          = 1.0f;      // Never go below 1.0 gain
-  float agMax          = 12.0f;     // Allow high gain for quiet sources
+  float agTarget       = 0.50f;     // Target RMS level (0-1)
+  float agMin          = 1.0f;      // Minimum gain multiplier
+  float agMax          = 12.0f;     // Maximum gain multiplier
 
-  // Hardware gain (minutes scale)
-  uint32_t hwCalibPeriodMs = 60000;
-  float    envTargetRaw    = 1000.0f;
-  float    envLowRatio     = 0.50f;
-  float    envHighRatio    = 1.50f;
+  // AGC time constants (professional audio standards)
+  float agcTauSeconds  = 7.0f;      // Main AGC adaptation time (5-10s window)
+  float agcAttackTau   = 2.0f;      // Attack time constant (faster response to increases)
+  float agcReleaseTau  = 10.0f;     // Release time constant (slower response to decreases)
+
+  // Hardware gain (environmental adaptation over minutes)
+  uint32_t hwCalibPeriodMs = 180000;  // 3 minutes between calibration checks
   int      hwGainMin       = 0;
   int      hwGainMax       = 64;
   int      hwGainStep      = 1;
 
-  // Dwell timers for coordination
+  // Dwell timers for HW/SW gain coordination
   float limitDwellTriggerSec = 8.0f;
   float limitDwellRelaxSec   = 3.0f;
 
   // ---- Public state ----
-  float  levelInstant  = 0.0f;  // raw instantaneous average
-  float  levelPreGate  = 0.0f;  // normalized, pre-gate, pre-AGC
-  float  levelPostAGC  = 0.0f;  // final snappy output
-  float  envAR         = 0.0f;  // smoothed envelope (tracking only)
-  float  envMean       = 0.0f;  // very slow EMA of envAR
-  float  globalGain    = 3.0f;  // software AGC multiplier (start higher)
+  float  level         = 0.0f;  // Final output level (0-1, post-AGC, post-gate)
+  float  globalGain    = 3.0f;  // Current AGC gain multiplier
   int    currentHardwareGain = 32;    // PDM hardware gain
 
-  // --- Enhanced Musical Analysis ---
-  // Frequency-aware transient detection (tuned for punchy response)
-  float transient          = 0.0f;
-  float transientDecay     = 8.0f;    // faster decay for snappy response
-  float fastAvg            = 0.0f;    // short-term avg (~10ms)
-  float slowAvg            = 0.0f;    // medium-term avg (~150ms)
-  float fastAlpha          = 0.35f;   // faster tracking for quick attacks
-  float slowAlpha          = 0.025f;  // medium-term baseline
-  float transientFactor    = 1.5f;    // Threshold: level must be 1.5x above baseline
-  float loudFloor          = 0.05f;   // lower floor for sensitivity
-  uint32_t transientCooldownMs = 120; // ~8 hits/sec max for fast beats
+  // Transient detection: single-frame impulse with strength
+  float transient          = 0.0f;    // Impulse strength (0.0 = none, typically 0.0-1.0, clamped but can exceed 1.0 for very strong hits)
+  float slowAvg            = 0.0f;    // Medium-term baseline (~150ms)
+  float slowAlpha          = 0.025f;  // Baseline tracking speed
+  float transientFactor    = 1.5f;    // Threshold multiplier
+  float loudFloor          = 0.05f;   // Minimum absolute threshold
+  uint32_t transientCooldownMs = 60;  // Cooldown between detections (ms)
   uint32_t lastTransientMs = 0;
-
-  float getTransient() const { return transient; }
 
   // Debug/health
   uint32_t lastIsrMs = 0;
@@ -89,14 +72,13 @@ public:
     return (nowMs - lastIsrMs) > timeoutMs;
   }
 
-  // Debug helpers
-  float getLevelInstant() const { return levelInstant; }
-  float getLevelPreGate() const { return levelPreGate; }
-  float getLevelPostAGC() const { return levelPostAGC; }
-  float getEnvMean()     const { return envMean; }
-  float getGlobalGain()  const { return globalGain; }
-  int   getHwGain()      const { return currentHardwareGain; }
-  uint32_t getIsrCount() const { return s_isrCount; }
+  // Public getters
+  inline float getLevel() const { return level; }
+  inline float getTransient() const { return transient; }
+  inline float getTrackedLevel() const { return trackedLevel; }  // RMS level AGC is tracking
+  inline float getGlobalGain() const { return globalGain; }
+  inline int getHwGain() const { return currentHardwareGain; }
+  inline uint32_t getIsrCount() const { return s_isrCount; }
 
 public:
   /**
@@ -109,12 +91,6 @@ public:
   void end();
 
   void update(float dt);
-
-  // The main thing FireEffect consumes
-  inline float getLevel() const { return levelPostAGC; }
-
-  // Envelope access for debugging
-  inline float getEnv() const { return envAR; }
 
   // ISR hook
   static void onPDMdata();
@@ -131,27 +107,22 @@ private:
   volatile static uint32_t s_numSamples;
   volatile static uint16_t s_maxAbs;
 
-  // Normalization window
-  float minEnv = 1e9f;
-  float maxEnv = 0.0f;
+  // AGC tracking
+  float trackedLevel = 0.0f;  // RMS level tracked over AGC window
 
   // Timing
   uint32_t lastHwCalibMs = 0;
 
-  // Dwell timers
+  // Dwell timers for HW/SW coordination
   float dwellAtMin = 0.0f;
   float dwellAtMax = 0.0f;
 
-  // Cached coeffs
-  float aAtk = 0.0f, aRel = 0.0f;
   uint32_t _sampleRate = 16000;
 
 private:
-  void computeCoeffs(float dt);
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);
-  void updateEnvelope(float avgAbs, float dt);
-  void updateNormWindow(float ref, float dt);
-  void autoGainTick(float dt);
+  void autoGainTick(float normalizedLevel, float dt);
+  void detectTransient(float normalizedLevel, float dt, uint32_t nowMs);
   void hardwareCalibrate(uint32_t nowMs, float dt);
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }

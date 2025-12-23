@@ -145,8 +145,9 @@ void Water::updateRandomWater() {
 void Water::generateWaves() {
     // Audio-reactive wave generation
     float waveProb = params_.waveChance;
-    if (audioHit_ > 0.5f) {
-        waveProb += params_.audioWaveBoost;
+    // Transient impulse boosts wave probability (audioHit_ is 0.0 or strength value)
+    if (audioHit_ > 0.0f) {
+        waveProb += params_.audioWaveBoost * audioHit_;  // Scale boost by transient strength
     }
 
     if (random(1000) / 1000.0f < waveProb) {

@@ -95,65 +95,67 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   // Audio settings
   gate: {
     displayName: 'Noise Gate',
-    tooltip:
-      'Minimum audio level to register (0-100%). Controls Level (orange area) in AdaptiveMic visualizer. Filters out background noise and hiss.',
+    tooltip: 'Minimum audio level to register (0-100%). Filters out background noise and hiss.',
     unit: '%',
-  },
-  attack: {
-    displayName: 'Attack Time',
-    tooltip:
-      'How quickly envelope responds to sudden increases in volume (seconds). Controls Envelope (blue dashed line) in AdaptiveMic visualizer. Lower = more responsive.',
-    unit: 's',
-  },
-  release: {
-    displayName: 'Release Time',
-    tooltip:
-      'How quickly envelope decays after sound stops (seconds). Controls Envelope (blue dashed line) in AdaptiveMic visualizer. Higher = longer sustain.',
-    unit: 's',
   },
   transientcooldown: {
     displayName: 'Transient Cooldown',
     tooltip:
-      'Minimum time between transient detections (milliseconds). Controls Transient (red spikes) in AdaptiveMic visualizer. Prevents retriggering on same hit.',
+      'Minimum time between transient detections (milliseconds). Prevents retriggering on same percussion hit.',
     unit: 'ms',
   },
   transientfactor: {
-    displayName: 'Transient Sensitivity',
+    displayName: 'Transient Threshold',
     tooltip:
-      'How sensitive transient detection is. Controls Transient (red spikes) in AdaptiveMic visualizer. Higher values detect subtler attacks/beats.',
+      'Detection threshold for transients. LOWER values detect subtler attacks/beats (more sensitive, e.g. 0.5 = very sensitive). HIGHER values require stronger hits (less sensitive, e.g. 3.0 = only strong beats). Range: 0.1-5.0.',
     unit: 'x',
   },
 
   // AGC settings
   agenabled: {
     displayName: 'Auto-Gain Enabled',
-    tooltip:
-      'Enable automatic gain control to normalize quiet and loud audio sources. Controls Gain value shown in AdaptiveMic visualizer.',
+    tooltip: 'Enable automatic gain control to normalize quiet and loud audio sources.',
     unit: '',
   },
   agtarget: {
     displayName: 'AGC Target Level',
     tooltip:
-      'Target audio level for AGC to maintain (0-100%). AGC adjusts Gain to bring Envelope (blue dashed line) to this level. Produces Level (orange area) output.',
-    unit: '%',
-  },
-  agstrength: {
-    displayName: 'AGC Responsiveness',
-    tooltip:
-      'How quickly AGC adapts to level changes (0-100%). Controls how fast Gain value changes. Higher = faster adaptation.',
+      'Target RMS level for AGC to maintain (0-100%). AGC adjusts gain to keep average audio level near this target.',
     unit: '%',
   },
   agmin: {
     displayName: 'Min AGC Gain',
-    tooltip:
-      'Minimum gain multiplier. Lower bound for Gain value shown in AdaptiveMic visualizer. Prevents over-attenuation of loud sources.',
+    tooltip: 'Minimum gain multiplier. Prevents over-attenuation of loud sources.',
     unit: 'x',
   },
   agmax: {
     displayName: 'Max AGC Gain',
-    tooltip:
-      'Maximum gain multiplier. Upper bound for Gain value shown in AdaptiveMic visualizer. Prevents over-amplification of quiet sources.',
+    tooltip: 'Maximum gain multiplier. Prevents over-amplification of quiet sources.',
     unit: 'x',
+  },
+  agctau: {
+    displayName: 'AGC Adaptation Time',
+    tooltip:
+      'Main AGC time constant for phrase-level adaptation (5-10s window). Controls how quickly AGC adapts to overall level changes. Higher = smoother but slower adaptation, Lower = faster but more reactive.',
+    unit: 's',
+  },
+  agcattack: {
+    displayName: 'AGC Attack Time',
+    tooltip:
+      'How quickly AGC responds to sudden volume increases (seconds). Lower values respond faster to loud sections, preventing clipping. Professional standard: 2s.',
+    unit: 's',
+  },
+  agcrelease: {
+    displayName: 'AGC Release Time',
+    tooltip:
+      'How slowly AGC releases after volume decreases (seconds). Higher values preserve musical phrasing and prevent pumping/breathing artifacts. Professional standard: 10s.',
+    unit: 's',
+  },
+  hwcalibperiod: {
+    displayName: 'Hardware Calibration Period',
+    tooltip:
+      'How often hardware gain is recalibrated (milliseconds). Adapts to environmental changes (quiet room vs loud venue) over minutes. Default: 3 minutes (180000ms).',
+    unit: 'ms',
   },
 };
 
@@ -169,12 +171,14 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
   },
   t: {
     displayName: 'Transient',
-    tooltip: 'Percussion/attack detection (0-1). Spikes to 1.0 on drum hits and sharp sounds.',
+    tooltip:
+      'Percussion/attack detection (0-1). Single-frame impulse when beat detected. Value represents transient strength.',
     unit: '',
   },
-  e: {
-    displayName: 'Envelope',
-    tooltip: 'Smoothed audio envelope (0-1). Uses attack/release times for gradual changes.',
+  r: {
+    displayName: 'RMS Level',
+    tooltip:
+      'Tracked RMS level (0-1). The average audio level that AGC is targeting. Smoother than instantaneous level.',
     unit: '',
   },
   g: {
