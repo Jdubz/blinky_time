@@ -15,10 +15,13 @@ describe('ConnectionBar', () => {
   const defaultProps = {
     connectionState: 'disconnected' as ConnectionState,
     deviceInfo: null,
+    batteryData: null,
+    batteryStatusData: null,
     isSupported: true,
     onConnect: vi.fn(),
     onDisconnect: vi.fn(),
     onOpenConsole: vi.fn(),
+    onRequestBatteryStatus: vi.fn(),
   };
 
   it('renders the app title', () => {

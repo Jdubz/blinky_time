@@ -1,22 +1,32 @@
-import { DeviceInfo, ConnectionState } from '../types';
+import { useState } from 'react';
+import { DeviceInfo, ConnectionState, BatterySample } from '../types';
+import { BatteryModal } from './BatteryModal';
+import type { BatteryStatusData } from '../services/serial';
 
 interface ConnectionBarProps {
   connectionState: ConnectionState;
   deviceInfo: DeviceInfo | null;
+  batteryData: BatterySample | null;
+  batteryStatusData: BatteryStatusData | null;
   isSupported: boolean;
   onConnect: () => void;
   onDisconnect: () => void;
   onOpenConsole: () => void;
+  onRequestBatteryStatus: () => void;
 }
 
 export function ConnectionBar({
   connectionState,
   deviceInfo,
+  batteryData,
+  batteryStatusData,
   isSupported,
   onConnect,
   onDisconnect,
   onOpenConsole,
+  onRequestBatteryStatus,
 }: ConnectionBarProps) {
+  const [isBatteryModalOpen, setIsBatteryModalOpen] = useState(false);
   const getStatusColor = () => {
     switch (connectionState) {
       case 'connected':
@@ -53,40 +63,95 @@ export function ConnectionBar({
   }
 
   return (
-    <div className="connection-bar">
-      <div className="connection-left">
-        <span className="app-title">Blinky Console</span>
-        {deviceInfo && (
-          <span className="device-info">
-            {deviceInfo.device} v{deviceInfo.version} &bull; {deviceInfo.leds} LEDs
-          </span>
-        )}
-      </div>
-      <div className="connection-right">
-        <button
-          className="btn btn-small console-btn"
-          onClick={onOpenConsole}
-          title="Open Serial Console"
-          aria-label="Open Serial Console"
-        >
-          🖥️
-        </button>
-        <span className="status-indicator" style={{ backgroundColor: getStatusColor() }} />
-        <span className="status-text">{getStatusText()}</span>
-        {connectionState === 'connected' ? (
-          <button className="btn btn-disconnect" onClick={onDisconnect}>
-            Disconnect
-          </button>
-        ) : (
+    <>
+      <div className="connection-bar">
+        <div className="connection-left">
+          <span className="app-title">Blinky Console</span>
+          {deviceInfo && (
+            <span className="device-info">
+              {deviceInfo.device} v{deviceInfo.version} &bull; {deviceInfo.leds} LEDs
+            </span>
+          )}
+        </div>
+        <div className="connection-right">
+          {batteryData && connectionState === 'connected' && (
+            <div className="battery-status-header">
+              {batteryData.n ? (
+                <>
+                  <div className="battery-indicator">
+                    <div
+                      className="battery-fill"
+                      style={{
+                        width: `${batteryData.p}%`,
+                        backgroundColor:
+                          batteryData.p > 50
+                            ? '#22c55e'
+                            : batteryData.p > 20
+                              ? '#eab308'
+                              : '#ef4444',
+                      }}
+                    />
+                    {batteryData.c && <span className="battery-charging">⚡</span>}
+                  </div>
+                  <span className="battery-text">
+                    {batteryData.p}% • {batteryData.v.toFixed(2)}V{batteryData.c ? ' • ⚡' : ''}
+                  </span>
+                  <button
+                    className="battery-debug-btn"
+                    onClick={() => setIsBatteryModalOpen(true)}
+                    title="Show battery info"
+                    aria-label="Show battery info"
+                  >
+                    ℹ️
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="battery-text">No Battery</span>
+                  <button
+                    className="battery-debug-btn"
+                    onClick={() => setIsBatteryModalOpen(true)}
+                    title="Show battery info"
+                    aria-label="Show battery info"
+                  >
+                    ℹ️
+                  </button>
+                </>
+              )}
+            </div>
+          )}
           <button
-            className="btn btn-connect"
-            onClick={onConnect}
-            disabled={connectionState === 'connecting'}
+            className="btn btn-small console-btn"
+            onClick={onOpenConsole}
+            title="Open Serial Console"
+            aria-label="Open Serial Console"
           >
-            {connectionState === 'connecting' ? 'Connecting...' : 'Connect'}
+            🖥️
           </button>
-        )}
+          <span className="status-indicator" style={{ backgroundColor: getStatusColor() }} />
+          <span className="status-text">{getStatusText()}</span>
+          {connectionState === 'connected' ? (
+            <button className="btn btn-disconnect" onClick={onDisconnect}>
+              Disconnect
+            </button>
+          ) : (
+            <button
+              className="btn btn-connect"
+              onClick={onConnect}
+              disabled={connectionState === 'connecting'}
+            >
+              {connectionState === 'connecting' ? 'Connecting...' : 'Connect'}
+            </button>
+          )}
+        </div>
       </div>
-    </div>
+
+      <BatteryModal
+        isOpen={isBatteryModalOpen}
+        onClose={() => setIsBatteryModalOpen(false)}
+        onRefresh={onRequestBatteryStatus}
+        statusData={batteryStatusData}
+      />
+    </>
   );
 }

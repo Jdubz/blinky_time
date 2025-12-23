@@ -56,10 +56,15 @@ describe('App', () => {
     // Connection bar
     expect(screen.getByText('Blinky Console')).toBeInTheDocument();
 
-    // Audio visualizer
-    expect(screen.getByText('Audio Monitor')).toBeInTheDocument();
+    // Tab buttons
+    expect(screen.getByRole('tab', { name: 'Inputs' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Generators' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Effects' })).toBeInTheDocument();
 
-    // Settings panel
+    // Audio visualizer (in Inputs tab by default)
+    expect(screen.getByText('AdaptiveMic Output')).toBeInTheDocument();
+
+    // Settings panel (in Inputs tab by default)
     expect(screen.getByText('Settings')).toBeInTheDocument();
   });
 
@@ -154,13 +159,14 @@ describe('App', () => {
       vi.useFakeTimers();
       mockUseSerial.connectionState = 'connected';
       mockUseSerial.settingsByCategory = {
-        fire: [
-          { name: 'intensity', value: true, type: 'bool' as const, cat: 'fire', min: 0, max: 1 },
+        audio: [
+          { name: 'enabled', value: true, type: 'bool' as const, cat: 'audio', min: 0, max: 1 },
         ],
       };
 
       render(<App />);
 
+      // Audio settings are in the Inputs tab (default)
       const checkbox = screen.getByRole('checkbox');
       fireEvent.click(checkbox);
 

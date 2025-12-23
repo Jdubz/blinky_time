@@ -101,9 +101,9 @@ describe('SettingsPanel', () => {
   describe('category display', () => {
     it('renders all categories with proper names', () => {
       render(<SettingsPanel {...defaultProps} />);
-      expect(screen.getByText('Fire Effect')).toBeInTheDocument();
-      expect(screen.getByText('Audio Input')).toBeInTheDocument();
-      expect(screen.getByText('Auto Gain Control')).toBeInTheDocument();
+      expect(screen.getByText('Fire Generator')).toBeInTheDocument();
+      expect(screen.getByText('Audio Processing')).toBeInTheDocument();
+      expect(screen.getByText('Auto-Gain Control')).toBeInTheDocument();
     });
 
     it('renders categories in correct order', () => {
@@ -111,9 +111,9 @@ describe('SettingsPanel', () => {
       const categoryTitles = screen.getAllByRole('heading', { level: 3 });
       const titles = categoryTitles.map(h => h.textContent);
 
-      // fire, audio, agc, debug is the expected order
-      expect(titles.indexOf('Fire Effect')).toBeLessThan(titles.indexOf('Audio Input'));
-      expect(titles.indexOf('Audio Input')).toBeLessThan(titles.indexOf('Auto Gain Control'));
+      // audio, agc, fire is the expected order (pipeline flow)
+      expect(titles.indexOf('Audio Processing')).toBeLessThan(titles.indexOf('Auto-Gain Control'));
+      expect(titles.indexOf('Auto-Gain Control')).toBeLessThan(titles.indexOf('Fire Generator'));
     });
   });
 
@@ -177,7 +177,8 @@ describe('SettingsPanel', () => {
       // Advance timers for debounce
       await vi.advanceTimersByTimeAsync(150);
 
-      expect(onSettingChange).toHaveBeenCalledWith('intensity', 0.5);
+      // sliders[0] is now agtarget due to category reordering (audio → agc → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('agtarget', 0.5);
     });
 
     it('debounces rapid slider changes', async () => {
@@ -198,7 +199,8 @@ describe('SettingsPanel', () => {
 
       // Should only call once with the final value
       expect(onSettingChange).toHaveBeenCalledTimes(1);
-      expect(onSettingChange).toHaveBeenCalledWith('intensity', 0.4);
+      // sliders[0] is now agtarget due to category reordering (audio → agc → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('agtarget', 0.4);
     });
 
     it('disables controls when disabled prop is true', () => {
@@ -222,26 +224,29 @@ describe('SettingsPanel', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const sliders = screen.getAllByRole('slider');
-      const intensitySlider = sliders[0];
+      // sliders[0] is now agtarget due to category reordering (audio → agc → fire)
+      const agtargetSlider = sliders[0];
 
-      expect(intensitySlider).toHaveAttribute('min', '0');
-      expect(intensitySlider).toHaveAttribute('max', '1');
+      expect(agtargetSlider).toHaveAttribute('min', '0.1');
+      expect(agtargetSlider).toHaveAttribute('max', '0.95');
     });
 
     it('uses correct step for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const sliders = screen.getAllByRole('slider');
-      const intensitySlider = sliders[0]; // float type
+      // sliders[0] is agtarget (float type)
+      const agtargetSlider = sliders[0];
 
-      expect(intensitySlider).toHaveAttribute('step', '0.01');
+      expect(agtargetSlider).toHaveAttribute('step', '0.01');
     });
 
     it('uses correct step for integer settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const sliders = screen.getAllByRole('slider');
-      const speedSlider = sliders[1]; // uint8 type
+      // sliders[2] is speed (uint8 type) due to category reordering (audio → agc → fire)
+      const speedSlider = sliders[2];
 
       expect(speedSlider).toHaveAttribute('step', '1');
     });

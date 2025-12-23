@@ -54,22 +54,7 @@ body {
   display: flex;
   flex: 1;
   overflow: hidden;
-  gap: 1rem;
   padding: 1rem;
-}
-
-.left-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  min-width: 0;
-}
-
-.right-panel {
-  width: 380px;
-  flex-shrink: 0;
-  overflow-y: auto;
 }
 
 /* ===== Offline Banner ===== */
@@ -268,7 +253,16 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--accent-primary);
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.category-description {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin: 0 0 0.75rem 0;
+  line-height: 1.4;
+  font-style: italic;
+  opacity: 0.8;
 }
 
 .category-settings {
@@ -386,12 +380,142 @@ body {
   cursor: not-allowed;
 }
 
+/* ===== Tab View ===== */
+.tab-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tab-header {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background-color: var(--bg-secondary);
+  border-bottom: 2px solid var(--border-color);
+}
+
+.tab-button {
+  padding: 0.5rem 1.25rem;
+  border: none;
+  border-radius: var(--border-radius) var(--border-radius) 0 0;
+  background-color: transparent;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.tab-button:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.tab-button.active {
+  background-color: var(--bg-card);
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.tab-button.active::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: var(--accent-primary);
+}
+
+.tab-content {
+  flex: 1;
+  overflow-y: auto;
+  background-color: var(--bg-primary);
+}
+
+.tab-panel {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+  min-height: 100%;
+  overflow: hidden;
+}
+
+.tab-panel-visualizer {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-panel-settings {
+  width: 400px;
+  min-width: 320px;
+  max-width: 500px;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+.tab-panel-settings-full {
+  flex: 1;
+  max-width: 1000px;
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: 0 1rem;
+}
+
+.tab-panel-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.placeholder-content {
+  text-align: center;
+  color: var(--text-secondary);
+  max-width: 400px;
+}
+
+.placeholder-icon {
+  font-size: 4rem;
+  display: block;
+  margin-bottom: 1rem;
+  opacity: 0.5;
+}
+
+.placeholder-content h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: var(--text-primary);
+}
+
+.placeholder-content p {
+  margin: 0.25rem 0;
+  font-size: 0.875rem;
+}
+
+.placeholder-hint {
+  margin-top: 1rem !important;
+  font-size: 0.8125rem !important;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* ===== Audio Visualizer ===== */
 .audio-visualizer {
   background-color: var(--bg-card);
   border-radius: var(--border-radius);
   padding: 1rem;
-  flex: 0 0 250px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 
 .audio-header {
@@ -399,11 +523,18 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 0.75rem;
+  flex-shrink: 0;
 }
 
 .audio-header h2 {
   font-size: 1rem;
   font-weight: 600;
+}
+
+.audio-header-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 .audio-controls {
@@ -438,7 +569,8 @@ body {
 
 .audio-chart-container {
   position: relative;
-  height: 160px;
+  flex: 1;
+  min-height: 200px;
 }
 
 .audio-placeholder {
@@ -453,6 +585,15 @@ body {
 }
 
 /* ===== Battery Status ===== */
+.battery-status-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding-right: 0.75rem;
+  margin-right: 0.75rem;
+  border-right: 1px solid var(--border-color);
+}
+
 .battery-status {
   display: flex;
   align-items: center;
@@ -524,39 +665,262 @@ body {
 }
 
 /* ===== Responsive ===== */
-@media (max-width: 900px) {
-  .main-content {
-    flex-direction: column;
-  }
 
-  .right-panel {
-    width: 100%;
-    max-height: 400px;
-  }
-
-  .left-panel {
-    min-height: 0;
+/* Large desktop */
+@media (min-width: 1400px) {
+  .tab-panel-settings {
+    width: 480px;
   }
 }
 
-@media (max-width: 600px) {
-  .connection-bar {
+/* Tablet and below */
+@media (max-width: 1024px) {
+  .tab-panel {
     flex-direction: column;
-    gap: 0.75rem;
+    overflow-y: auto;
   }
 
-  .connection-left,
-  .connection-right {
+  .tab-panel-settings {
+    width: 100%;
+    max-height: none;
+  }
+
+  .tab-panel-visualizer {
+    flex: 0 0 auto;
+  }
+
+  .audio-visualizer {
+    flex: 0 0 auto;
+  }
+
+  .audio-chart-container {
+    height: 300px;
+  }
+}
+
+/* Mobile devices */
+@media (max-width: 600px) {
+  /* Connection bar - stack vertically */
+  .connection-bar {
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .connection-left {
     width: 100%;
     justify-content: center;
+    text-align: center;
+  }
+
+  .connection-right {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
   }
 
   .device-info {
     display: none;
   }
 
+  .app-title {
+    font-size: 1.125rem;
+  }
+
+  /* Battery in header - simplify for mobile */
+  .battery-status-header {
+    order: -1; /* Move battery to top */
+    width: 100%;
+    justify-content: center;
+    padding-right: 0;
+    margin-right: 0;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.5rem;
+  }
+
+  .battery-text {
+    font-size: 0.75rem;
+  }
+
+  .battery-indicator {
+    width: 40px;
+    height: 18px;
+  }
+
+  /* Tab header - make tabs touch-friendly */
+  .tab-header {
+    padding: 0.5rem;
+    gap: 0.25rem;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tab-button {
+    padding: 0.625rem 1rem;
+    font-size: 0.8125rem;
+    white-space: nowrap;
+    min-width: fit-content;
+  }
+
+  /* Tab content - adjust padding */
+  .tab-panel {
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+
+  /* Audio visualizer - optimize for mobile */
+  .audio-visualizer {
+    padding: 0.75rem;
+  }
+
+  .audio-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .audio-header h2 {
+    font-size: 0.9375rem;
+  }
+
+  .audio-header span {
+    font-size: 0.6875rem !important;
+  }
+
+  .audio-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .audio-values {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .audio-value {
+    font-size: 0.6875rem;
+    padding: 0.1875rem 0.375rem;
+  }
+
+  .audio-chart-container {
+    height: 180px;
+  }
+
+  /* Settings panel - optimize for mobile touch */
+  .settings-panel {
+    padding: 0.75rem;
+  }
+
+  .settings-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .settings-header h2 {
+    font-size: 0.9375rem;
+    text-align: center;
+  }
+
+  .settings-actions {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+  }
+
+  .settings-category {
+    padding-bottom: 0.75rem;
+  }
+
+  .category-title {
+    font-size: 0.6875rem;
+  }
+
+  .category-description {
+    font-size: 0.6875rem;
+    line-height: 1.3;
+  }
+
   .setting-label {
-    flex: 0 0 80px;
+    flex: 0 0 90px;
+    font-size: 0.75rem;
+  }
+
+  .setting-slider {
+    height: 8px; /* Thicker for easier touch */
+  }
+
+  .setting-slider::-webkit-slider-thumb {
+    width: 20px; /* Larger thumb for touch */
+    height: 20px;
+  }
+
+  .setting-value {
+    flex: 0 0 45px;
+    font-size: 0.75rem;
+  }
+
+  .toggle {
+    width: 40px; /* Slightly smaller toggle */
+    height: 22px;
+  }
+
+  .toggle-slider::before {
+    height: 16px;
+    width: 16px;
+  }
+
+  .toggle input:checked + .toggle-slider::before {
+    transform: translateX(18px);
+  }
+
+  /* Buttons - larger touch targets */
+  .btn {
+    padding: 0.625rem 1rem;
+    font-size: 0.8125rem;
+    min-height: 44px; /* iOS recommended touch target */
+  }
+
+  .btn-small {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.75rem;
+    min-height: 38px;
+  }
+
+  /* Placeholder content */
+  .placeholder-icon {
+    font-size: 3rem;
+  }
+
+  .placeholder-content h3 {
+    font-size: 1.125rem;
+  }
+
+  .placeholder-content p {
+    font-size: 0.8125rem;
+  }
+}
+
+/* Very small devices */
+@media (max-width: 360px) {
+  .tab-button {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.75rem;
+  }
+
+  .setting-label {
+    flex: 0 0 75px;
+    font-size: 0.6875rem;
+  }
+
+  .battery-text {
+    font-size: 0.6875rem;
+  }
+
+  .audio-chart-container {
+    height: 160px;
   }
 }
 
