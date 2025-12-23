@@ -57,7 +57,7 @@ public:
   int    currentHardwareGain = 32;    // PDM hardware gain
 
   // Transient detection: single-frame impulse with strength
-  float transient          = 0.0f;    // Impulse strength (0.0 = none, >0.0 = detected)
+  float transient          = 0.0f;    // Impulse strength (0.0 = none, typically 0.0-1.0, clamped but can exceed 1.0 for very strong hits)
   float slowAvg            = 0.0f;    // Medium-term baseline (~150ms)
   float slowAlpha          = 0.025f;  // Baseline tracking speed
   float transientFactor    = 1.5f;    // Threshold multiplier

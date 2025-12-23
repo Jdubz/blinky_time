@@ -129,44 +129,42 @@ void ConfigStorage::saveToFlash() {
 }
 
 void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) {
-    // Validate critical floats - if garbage, use defaults
+    // Validation helpers to reduce code duplication
     bool corrupt = false;
-    if (data_.fire.heatDecay <= 0.0f || data_.fire.heatDecay > 1.0f) {
-        Serial.print(F("[CONFIG] BAD heatDecay: ")); Serial.println(data_.fire.heatDecay);
-        corrupt = true;
-    }
-    if (data_.fire.sparkChance < 0.0f || data_.fire.sparkChance > 1.0f) {
-        Serial.print(F("[CONFIG] BAD sparkChance: ")); Serial.println(data_.fire.sparkChance);
-        corrupt = true;
-    }
-    if (data_.mic.globalGain <= 0.0f || data_.mic.globalGain > 50.0f) {
-        Serial.print(F("[CONFIG] BAD globalGain: ")); Serial.println(data_.mic.globalGain);
-        corrupt = true;
-    }
 
-    // Validate new AGC time constants (Phase 1)
-    if (data_.mic.agcTauSeconds <= 0.0f || data_.mic.agcTauSeconds > 100.0f) {
-        Serial.print(F("[CONFIG] BAD agcTauSeconds: ")); Serial.println(data_.mic.agcTauSeconds);
-        corrupt = true;
-    }
-    if (data_.mic.agcAttackTau <= 0.0f || data_.mic.agcAttackTau > 100.0f) {
-        Serial.print(F("[CONFIG] BAD agcAttackTau: ")); Serial.println(data_.mic.agcAttackTau);
-        corrupt = true;
-    }
-    if (data_.mic.agcReleaseTau <= 0.0f || data_.mic.agcReleaseTau > 100.0f) {
-        Serial.print(F("[CONFIG] BAD agcReleaseTau: ")); Serial.println(data_.mic.agcReleaseTau);
-        corrupt = true;
-    }
+    auto validateFloat = [&](float value, float min, float max, const __FlashStringHelper* name) {
+        if (value < min || value > max) {
+            Serial.print(F("[CONFIG] BAD "));
+            Serial.print(name);
+            Serial.print(F(": "));
+            Serial.println(value);
+            corrupt = true;
+        }
+    };
 
-    // Validate timing parameters
-    if (data_.mic.transientCooldownMs < 10 || data_.mic.transientCooldownMs > 10000) {
-        Serial.print(F("[CONFIG] BAD transientCooldownMs: ")); Serial.println(data_.mic.transientCooldownMs);
-        corrupt = true;
-    }
-    if (data_.mic.hwCalibPeriodMs < 1000 || data_.mic.hwCalibPeriodMs > 3600000) {
-        Serial.print(F("[CONFIG] BAD hwCalibPeriodMs: ")); Serial.println(data_.mic.hwCalibPeriodMs);
-        corrupt = true;
-    }
+    auto validateUint32 = [&](uint32_t value, uint32_t min, uint32_t max, const __FlashStringHelper* name) {
+        if (value < min || value > max) {
+            Serial.print(F("[CONFIG] BAD "));
+            Serial.print(name);
+            Serial.print(F(": "));
+            Serial.println(value);
+            corrupt = true;
+        }
+    };
+
+    // Validate critical parameters - if out of range, use defaults
+    validateFloat(data_.fire.heatDecay, 0.0f, 1.0f, F("heatDecay"));
+    validateFloat(data_.fire.sparkChance, 0.0f, 1.0f, F("sparkChance"));
+    validateFloat(data_.mic.globalGain, 0.0f, 50.0f, F("globalGain"));
+
+    // Validate AGC time constants (match SerialConsole ranges)
+    validateFloat(data_.mic.agcTauSeconds, 0.1f, 30.0f, F("agcTauSeconds"));
+    validateFloat(data_.mic.agcAttackTau, 0.1f, 10.0f, F("agcAttackTau"));
+    validateFloat(data_.mic.agcReleaseTau, 1.0f, 30.0f, F("agcReleaseTau"));
+
+    // Validate timing parameters (match SerialConsole ranges)
+    validateUint32(data_.mic.transientCooldownMs, 10, 10000, F("transientCooldownMs"));
+    validateUint32(data_.mic.hwCalibPeriodMs, 10000, 600000, F("hwCalibPeriodMs"));
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));

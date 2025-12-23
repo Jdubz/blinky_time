@@ -173,8 +173,10 @@ void AdaptiveMic::detectTransient(float normalizedLevel, float dt, uint32_t nowM
 
   // Detect onset when:
   // 1. Cooldown has expired
-  // 2. Energy difference exceeds threshold
-  // 3. Current level is above baseline (rising edge)
+  // 2. Energy difference exceeds adaptive threshold
+  // 3. Rising edge check (level 20% above baseline)
+  //    - When loudFloor dominates: prevents false triggers during quiet periods
+  //    - When transientFactor dominates: redundant but harmless (already > 2.5x baseline)
   if (cooldownExpired && energyDiff > adaptiveThreshold && normalizedLevel > slowAvg * 1.2f) {
       // Set transient strength (0.0-1.0+, clamped to reasonable range)
       // Protect against division by zero

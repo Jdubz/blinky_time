@@ -123,7 +123,7 @@ uint32_t hwCalibPeriodMs = 180000;  // 3 minutes (180 seconds)
 
 3. **Frequency-Specific Detection**
    - Bass (60-130 Hz): Kick drums
-   - Low-mid (301-750 Hz): Snare drums
+   - Low-mid (130-750 Hz): Snare drums
    - High (8-12 kHz): Hi-hats
    - Allows instrument-specific triggering
 
@@ -219,14 +219,12 @@ Transient Detection:    |  <60ms
 // In AdaptiveMic.h - Replace existing transient variables
 public:
   // Enhanced transient detection
-  bool     transientImpulse = false;    // One-shot trigger (binary)
-  float    transientStrength = 0.0f;    // Strength of detected transient (0-1)
+  float transient = 0.0f;    // Impulse with strength (0.0 = none, >0.0 = detected)
 
-  // Remove old 'transient' and 'transientDecay' members
+  // Remove old 'transientDecay' member
 
-  // Getters
-  bool getTransientImpulse() const { return transientImpulse; }
-  float getTransientStrength() const { return transientStrength; }
+  // Getter
+  float getTransient() const { return transient; }  // Returns strength (0.0 if no impulse)
 ```
 
 ```cpp
@@ -234,16 +232,13 @@ public:
 void AdaptiveMic::update(float dt) {
     // ... existing code ...
 
-    // Reset impulse each frame
-    transientImpulse = false;
+    // Reset impulse each frame (ensures it's only true for ONE frame)
+    transient = 0.0f;
 
     float x = levelPostAGC;
 
-    // Energy envelope first-order difference
+    // Energy envelope first-order difference (use current baseline, before update)
     float energyDiff = maxValue(0.0f, x - slowAvg);
-
-    // Update slow baseline (medium-term average ~150ms)
-    slowAvg += slowAlpha * (x - slowAvg);
 
     uint32_t now = time_.millis();
     bool cooldownExpired = (now - lastTransientMs) > transientCooldownMs;
@@ -256,19 +251,25 @@ void AdaptiveMic::update(float dt) {
     // 2. Energy difference exceeds threshold
     // 3. Current level is above baseline (rising edge)
     if (cooldownExpired && energyDiff > adaptiveThreshold && x > slowAvg * 1.2f) {
-        transientImpulse = true;
-        transientStrength = minValue(1.0f, energyDiff / adaptiveThreshold);
+        // Set transient strength (0.0-1.0, clamped to reasonable range)
+        // Protect against division by zero
+        transient = minValue(1.0f, energyDiff / maxValue(adaptiveThreshold, 0.001f));
         lastTransientMs = now;
     }
+
+    // Update slow baseline AFTER detection (prevents threshold from chasing signal)
+    slowAvg += slowAlpha * (x - slowAvg);
 }
 ```
 
 **Usage in Effects**:
 ```cpp
 // In fire effect or other visual effects
-if (mic->getTransientImpulse()) {
+float hit = mic->getTransient();
+if (hit > 0.0f) {
     // Trigger envelope, flash, particle burst, etc.
-    sparkIntensity = mic->getTransientStrength();
+    // Use strength directly for graduated effects
+    sparkIntensity = hit;
     triggerFlash();
 }
 
@@ -324,23 +325,19 @@ void AdaptiveMic::autoGainTick(float dt) {
 
     // Apply gain adjustment with defined time constant
     float gainAlpha = 1.0f - expf(-dt / MicConstants::AGC_TAU_SECONDS);
-    globalGain += gainAlpha * err * globalGain;  // Proportional adjustment
+    globalGain += gainAlpha * err * globalGain;  // Logarithmic adjustment
 
     // Clamp to limits
     globalGain = constrainValue(globalGain, agMin, agMax);
 
-    // Dwell tracking (existing logic)
-    if (fabsf(levelPreGate) < 1e-6f && globalGain >= agMax * 0.999f) {
-        dwellAtMax += dt;
-    } else if (globalGain >= agMax * 0.999f) {
+    // Dwell tracking (coordination with hardware gain)
+    if (globalGain >= agMax * 0.999f) {
         dwellAtMax += dt;
     } else if (dwellAtMax > 0.0f) {
         dwellAtMax = maxValue(0.0f, dwellAtMax - dt * (1.0f/limitDwellRelaxSec));
     }
 
-    if (levelPreGate >= 0.98f && globalGain <= agMin * 1.001f) {
-        dwellAtMin += dt;
-    } else if (globalGain <= agMin * 1.001f) {
+    if (globalGain <= agMin * 1.001f) {
         dwellAtMin += dt;
     } else if (dwellAtMin > 0.0f) {
         dwellAtMin = maxValue(0.0f, dwellAtMin - dt * (1.0f/limitDwellRelaxSec));
