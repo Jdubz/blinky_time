@@ -22,6 +22,10 @@ public:
 
     ~NeoPixelLedStrip() override;
 
+    // Non-copyable (Rule of Three: has destructor with resource management)
+    NeoPixelLedStrip(const NeoPixelLedStrip&) = delete;
+    NeoPixelLedStrip& operator=(const NeoPixelLedStrip&) = delete;
+
     // ILedStrip interface
     void begin() override;
     void show() override;
