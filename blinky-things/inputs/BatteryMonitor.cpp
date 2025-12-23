@@ -158,3 +158,53 @@ uint8_t BatteryMonitor::voltageToPercent(float v) {
     return (uint8_t)(92 + (v - 4.05f) * (8.0f / (V_FULL - 4.05f)) + 0.5f);
   }
 }
+
+void BatteryMonitor::testDividerEnable() {
+  if (cfg_.pinVBATEnable < 0) {
+    Serial.println(F("ERROR: No enable pin configured"));
+    return;
+  }
+
+  Serial.println(F("=== Battery Divider Enable Test ==="));
+  Serial.print(F("PIN_VBAT_ENABLE: "));
+  Serial.println(cfg_.pinVBATEnable);
+
+  // Test 1: Divider DISABLED (HIGH)
+  Serial.println(F("\nTest 1: Divider DISABLED (pin HIGH)"));
+  gpio_.digitalWrite(cfg_.pinVBATEnable, IGpio::HIGH_LEVEL);
+  time_.delay(50);
+  uint16_t rawHigh = readOnceRaw_();
+  Serial.print(F("  Raw ADC: "));
+  Serial.println(rawHigh);
+
+  // Test 2: Divider ENABLED (LOW)
+  Serial.println(F("\nTest 2: Divider ENABLED (pin LOW)"));
+  gpio_.digitalWrite(cfg_.pinVBATEnable, IGpio::LOW_LEVEL);
+  time_.delay(50);
+  uint16_t rawLow = readOnceRaw_();
+  Serial.print(F("  Raw ADC: "));
+  Serial.println(rawLow);
+
+  // Return to disabled state
+  gpio_.digitalWrite(cfg_.pinVBATEnable, IGpio::HIGH_LEVEL);
+
+  // Analyze results
+  Serial.println(F("\n=== Results ==="));
+  if (rawHigh == rawLow) {
+    Serial.println(F("ERROR: No change! Enable pin not working!"));
+    Serial.println(F("Possible issues:"));
+    Serial.println(F("  - Wrong pin number for this platform"));
+    Serial.println(F("  - Pin not connected to divider circuit"));
+    Serial.println(F("  - Hardware issue with MOSFET"));
+  } else if (rawHigh < rawLow) {
+    Serial.println(F("ERROR: Logic is INVERTED!"));
+    Serial.println(F("  HIGH = enabled (should be disabled)"));
+    Serial.println(F("  LOW = disabled (should be enabled)"));
+  } else {
+    Serial.println(F("SUCCESS: Enable pin working correctly!"));
+    Serial.print(F("  Difference: "));
+    Serial.print(rawHigh - rawLow);
+    Serial.println(F(" counts"));
+  }
+  Serial.println(F("==========================="));
+}

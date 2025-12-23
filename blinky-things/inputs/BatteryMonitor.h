@@ -100,6 +100,7 @@ public:
 
   // Debug helpers
   const Config& getConfig() const { return cfg_; }
+  void testDividerEnable(); // Test if enable pin is working
 
 private:
   // HAL references
