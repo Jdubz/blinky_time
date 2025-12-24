@@ -16,23 +16,28 @@ export function PercussionIndicator({ audioData, isStreaming }: PercussionIndica
   useEffect(() => {
     if (!audioData || !isStreaming) return;
 
+    const timers: number[] = [];
+
     // Kick detection
     if (audioData.k === 1) {
       setKickActive(true);
-      setTimeout(() => setKickActive(false), 150); // Flash for 150ms
+      timers.push(setTimeout(() => setKickActive(false), 150)); // Flash for 150ms
     }
 
     // Snare detection
     if (audioData.sn === 1) {
       setSnareActive(true);
-      setTimeout(() => setSnareActive(false), 150);
+      timers.push(setTimeout(() => setSnareActive(false), 150));
     }
 
     // Hihat detection
     if (audioData.hh === 1) {
       setHihatActive(true);
-      setTimeout(() => setHihatActive(false), 150);
+      timers.push(setTimeout(() => setHihatActive(false), 150));
     }
+
+    // Cleanup timers on unmount or when dependencies change
+    return () => timers.forEach(clearTimeout);
   }, [audioData, isStreaming]);
 
   if (!isStreaming) {

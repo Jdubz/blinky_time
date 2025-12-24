@@ -218,7 +218,8 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
     // Compensate software gain to smooth transition (reduce audio artifacts)
     // Estimate: each HW gain step ≈ 5% change
     float hwGainChange = (currentHardwareGain - oldGain) * 0.05f;
-    float softComp = 1.0f / (1.0f + hwGainChange);
+    // Safety check: prevent divide-by-zero if hwGainChange approaches -1.0
+    float softComp = (hwGainChange > -0.99f) ? 1.0f / (1.0f + hwGainChange) : 10.0f;
     globalGain = constrainValue(globalGain * softComp, 0.1f, 100.0f);
   }
 
