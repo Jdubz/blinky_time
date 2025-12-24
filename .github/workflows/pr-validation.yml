@@ -230,5 +230,13 @@ jobs:
     - name: Run tests
       run: npm run test:ci
 
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      if: always()
+      with:
+        directory: blinky-console/coverage
+        flags: blinky-console
+        fail_ci_if_error: false
+
     - name: Build
       run: npm run build

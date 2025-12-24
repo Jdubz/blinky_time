@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useSerial } from './useSerial';
 import { serialService, SerialEvent, SerialEventCallback } from '../services/serial';
+import type { AudioSample } from '../types';
 
 // Mock the serial service
 vi.mock('../services/serial', () => {
@@ -191,7 +192,22 @@ describe('useSerial', () => {
       act(() => {
         (serialService as unknown as { _emit: (e: SerialEvent) => void })._emit({
           type: 'audio',
-          audio: { a: { l: 0.5, t: 0.3, e: 0.4, g: 1.5 } },
+          audio: {
+            a: {
+              l: 0.5,
+              t: 0.3,
+              r: 0.4,
+              s: 1.5,
+              h: 32,
+              k: 0,
+              sn: 0,
+              hh: 0,
+              ks: 0.0,
+              ss: 0.0,
+              hs: 0.0,
+              z: 0.1,
+            },
+          },
         });
       });
 
@@ -296,7 +312,20 @@ describe('useSerial', () => {
     it('handles audio event', async () => {
       const { result } = renderHook(() => useSerial());
 
-      const audioSample = { l: 0.5, t: 0.3, e: 0.4, g: 1.5 };
+      const audioSample: AudioSample = {
+        l: 0.5,
+        t: 0.3,
+        r: 0.4,
+        s: 1.5,
+        h: 32,
+        k: 0,
+        sn: 0,
+        hh: 0,
+        ks: 0.0,
+        ss: 0.0,
+        hs: 0.0,
+        z: 0.1,
+      };
 
       act(() => {
         (serialService as unknown as { _emit: (e: SerialEvent) => void })._emit({

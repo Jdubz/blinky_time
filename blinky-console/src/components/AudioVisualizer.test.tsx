@@ -24,8 +24,16 @@ describe('AudioVisualizer', () => {
   const mockAudioData: AudioSample = {
     l: 0.75,
     t: 0.5,
-    e: 0.6,
-    g: 2.0,
+    r: 0.6,
+    s: 2.0,
+    h: 32,
+    k: 0,
+    sn: 1,
+    hh: 0,
+    ks: 0.0,
+    ss: 0.82,
+    hs: 0.0,
+    z: 0.15,
   };
 
   const defaultProps = {
@@ -96,8 +104,9 @@ describe('AudioVisualizer', () => {
       render(<AudioVisualizer {...defaultProps} isStreaming={true} audioData={mockAudioData} />);
 
       expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
-      expect(screen.getByText('Transient: 0.50')).toBeInTheDocument();
-      expect(screen.getByText('AGC Gain: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('Percussion: 0.50')).toBeInTheDocument();
+      expect(screen.getByText('SW Gain: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('HW Gain: 32')).toBeInTheDocument();
     });
 
     it('does not show audio values when not streaming', () => {

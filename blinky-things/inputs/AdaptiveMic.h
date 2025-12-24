@@ -4,10 +4,10 @@
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
 
-// AdaptiveMic - Clean audio input with AGC
+// AdaptiveMic - Clean audio input with AGC and percussion detection
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
 // - AGC adapts gain to maintain target level
-// - Transient detection for beat/percussion events
+// - Frequency-specific percussion detection (kick/snare/hihat)
 // - Hardware gain adapts to environment over minutes
 
 namespace MicConstants {
@@ -17,59 +17,71 @@ namespace MicConstants {
 }
 
 /**
- * AdaptiveMic - Audio input with auto-gain control
+ * AdaptiveMic - Audio input with auto-gain control and percussion detection
  *
- * Simplified architecture:
+ * Architecture:
  * - Raw samples → Normalize (0-1) → Apply AGC gain → Noise gate → Output
+ * - Frequency-specific percussion detection via biquad bandpass filters
  * - No envelope smoothing (visualizers handle their own smoothing)
- * - AGC time constants control gain adaptation speed
- * - Transient detection for percussion/beat events
+ * - Hardware-primary AGC: HW gain optimizes ADC input, SW gain fine-tunes output
+ * - Percussion detection: kick (60-130 Hz), snare (300-750 Hz), hihat (5-7 kHz)
  */
 class AdaptiveMic {
 public:
   // ---- Tunables ----
   float noiseGate      = 0.04f;     // Noise gate threshold (0-1)
 
-  // Software AGC
+  // Software AGC - Simplified peak-based design
   bool  agEnabled      = true;
-  float agTarget       = 0.50f;     // Target RMS level (0-1)
-  float agMin          = 1.0f;      // Minimum gain multiplier
-  float agMax          = 12.0f;     // Maximum gain multiplier
+  static constexpr float AG_PEAK_TARGET = 1.0f;  // Always target full dynamic range
 
-  // AGC time constants (professional audio standards)
-  float agcTauSeconds  = 7.0f;      // Main AGC adaptation time (5-10s window)
-  float agcAttackTau   = 2.0f;      // Attack time constant (faster response to increases)
-  float agcReleaseTau  = 10.0f;     // Release time constant (slower response to decreases)
+  // AGC time constants - Attack/Release envelope follower
+  float agcAttackTau   = 0.1f;      // Peak attack: how fast to catch peaks (100ms)
+  float agcReleaseTau  = 2.0f;      // Peak release: how slow peaks decay (2s)
+  float agcGainTau     = 5.0f;      // Gain adjustment speed (5s adaptation)
 
-  // Hardware gain (environmental adaptation over minutes)
-  uint32_t hwCalibPeriodMs = 180000;  // 3 minutes between calibration checks
+  // Hardware gain (PRIMARY - adapts to raw ADC input for best signal quality)
+  uint32_t hwCalibPeriodMs = 30000;   // 30 seconds between calibration checks
   int      hwGainMin       = 0;
   int      hwGainMax       = 64;
   int      hwGainStep      = 1;
-
-  // Dwell timers for HW/SW gain coordination
-  float limitDwellTriggerSec = 8.0f;
-  float limitDwellRelaxSec   = 3.0f;
+  float    hwTargetLow     = 0.15f;   // If raw input below this, increase HW gain
+  float    hwTargetHigh    = 0.35f;   // If raw input above this, decrease HW gain
+  float    hwTrackingTau   = 30.0f;   // Time constant for tracking raw input (30s)
 
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, post-AGC, post-gate)
   float  globalGain    = 3.0f;  // Current AGC gain multiplier
-  int    currentHardwareGain = 32;    // PDM hardware gain
+  int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
 
-  // Transient detection: single-frame impulse with strength
-  float transient          = 0.0f;    // Impulse strength (0.0 = none, typically 0.0-1.0, clamped but can exceed 1.0 for very strong hits)
-  float slowAvg            = 0.0f;    // Medium-term baseline (~150ms)
-  float slowAlpha          = 0.025f;  // Baseline tracking speed
-  float transientFactor    = 1.5f;    // Threshold multiplier
-  float loudFloor          = 0.05f;   // Minimum absolute threshold
+  // Percussion transient: single-frame impulse with strength (max of kick/snare/hihat)
+  float transient          = 0.0f;    // Impulse strength (0.0 = none, typically 0.0-1.0, can exceed 1.0 for very strong hits)
   uint32_t transientCooldownMs = 60;  // Cooldown between detections (ms)
   uint32_t lastTransientMs = 0;
+
+  // Frequency-specific percussion detection (Phase 3)
+  bool  kickImpulse  = false;     // Single-frame kick detection
+  bool  snareImpulse = false;     // Single-frame snare detection
+  bool  hihatImpulse = false;     // Single-frame hihat detection
+  float kickStrength = 0.0f;      // Kick strength (0.0-1.0+)
+  float snareStrength = 0.0f;     // Snare strength (0.0-1.0+)
+  float hihatStrength = 0.0f;     // Hihat strength (0.0-1.0+)
+
+  // Frequency detection thresholds (tunable)
+  // Lower values = more sensitive (1.0 = any energy above baseline triggers)
+  float kickThreshold  = 1.3f;    // Bass energy must exceed baseline * threshold
+  float snareThreshold = 1.3f;    // Mid energy must exceed baseline * threshold
+  float hihatThreshold = 1.3f;    // High energy must exceed baseline * threshold
+
+  // Zero-crossing rate (for improved classification and reliability)
+  float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
 
   // Debug/health
   uint32_t lastIsrMs = 0;
   bool     pdmAlive  = false;
   inline bool isMicDead(uint32_t nowMs, uint32_t timeoutMs = MicConstants::MIC_DEAD_TIMEOUT_MS) const {
-    return (nowMs - lastIsrMs) > timeoutMs;
+    // Use signed arithmetic to handle millis() wraparound at 49.7 days
+    return (int32_t)(nowMs - lastIsrMs) > (int32_t)timeoutMs;
   }
 
   // Public getters
@@ -79,6 +91,14 @@ public:
   inline float getGlobalGain() const { return globalGain; }
   inline int getHwGain() const { return currentHardwareGain; }
   inline uint32_t getIsrCount() const { return s_isrCount; }
+
+  // Frequency-specific getters
+  inline bool getKickImpulse() const { return kickImpulse; }
+  inline bool getSnareImpulse() const { return snareImpulse; }
+  inline bool getHihatImpulse() const { return hihatImpulse; }
+  inline float getKickStrength() const { return kickStrength; }
+  inline float getSnareStrength() const { return snareStrength; }
+  inline float getHihatStrength() const { return hihatStrength; }
 
 public:
   /**
@@ -106,24 +126,57 @@ private:
   volatile static uint64_t s_sumAbs;
   volatile static uint32_t s_numSamples;
   volatile static uint16_t s_maxAbs;
+  volatile static uint32_t s_zeroCrossings;  // Count of zero crossings
+  volatile static int16_t s_lastSample;       // Previous sample for ZCR
 
   // AGC tracking
-  float trackedLevel = 0.0f;  // RMS level tracked over AGC window
+  float trackedLevel = 0.0f;     // Peak level tracked for software AGC (post-gain)
+  float rawTrackedLevel = 0.0f;  // Raw ADC level tracked for hardware AGC (pre-gain)
 
   // Timing
   uint32_t lastHwCalibMs = 0;
 
-  // Dwell timers for HW/SW coordination
-  float dwellAtMin = 0.0f;
-  float dwellAtMax = 0.0f;
-
   uint32_t _sampleRate = 16000;
 
+  // Biquad filter state for frequency-specific detection
+  // Note: Filter state is only accessed within ISR, no volatile needed
+  // Kick filter: bandpass 60-130 Hz (center: 90 Hz)
+  float kickZ1 = 0.0f, kickZ2 = 0.0f;
+  float kickB0, kickB1, kickB2, kickA1, kickA2;
+
+  // Snare filter: bandpass 300-750 Hz (center: 500 Hz)
+  float snareZ1 = 0.0f, snareZ2 = 0.0f;
+  float snareB0, snareB1, snareB2, snareA1, snareA2;
+
+  // Hihat filter: bandpass 5-7 kHz (center: 6 kHz)
+  float hihatZ1 = 0.0f, hihatZ2 = 0.0f;
+  float hihatB0, hihatB1, hihatB2, hihatA1, hihatA2;
+
+  // Energy tracking per frequency band (volatile: accessed from ISR)
+  volatile float kickEnergy = 0.0f;
+  volatile float snareEnergy = 0.0f;
+  volatile float hihatEnergy = 0.0f;
+
+  // Baselines per frequency band
+  float kickBaseline = 0.0f;
+  float snareBaseline = 0.0f;
+  float hihatBaseline = 0.0f;
+
+  // Timing for frequency-specific cooldowns
+  uint32_t lastKickMs = 0;
+  uint32_t lastSnareMs = 0;
+  uint32_t lastHihatMs = 0;
+
 private:
-  void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);
+  void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
   void autoGainTick(float normalizedLevel, float dt);
-  void detectTransient(float normalizedLevel, float dt, uint32_t nowMs);
   void hardwareCalibrate(uint32_t nowMs, float dt);
+
+  // Biquad filter helpers
+  void initBiquadFilters();
+  void calcBiquadBPF(float fc, float Q, float fs, float& b0, float& b1, float& b2, float& a1, float& a2);
+  inline float processBiquad(float input, float& z1, float& z2, float b0, float b1, float b2, float a1, float a2);
+  void detectFrequencySpecific(uint32_t nowMs, float dt);
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

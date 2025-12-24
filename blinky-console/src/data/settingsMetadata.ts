@@ -62,9 +62,9 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: 'rows',
   },
   transientheatmax: {
-    displayName: 'Transient Heat Boost',
+    displayName: 'Percussion Heat Boost',
     tooltip:
-      'Maximum heat added on percussive hits/beats. Uses Transient (red spikes) from AdaptiveMic. Higher values make fire "jump" on drum hits.',
+      'Maximum heat added on percussion hits (kick/snare/hihat). Higher values make fire "jump" more dramatically on drum hits.',
     unit: '',
   },
   burstsparks: {
@@ -99,63 +99,36 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '%',
   },
   transientcooldown: {
-    displayName: 'Transient Cooldown',
+    displayName: 'Percussion Cooldown',
     tooltip:
-      'Minimum time between transient detections (milliseconds). Prevents retriggering on same percussion hit.',
+      'Minimum time between percussion detections (milliseconds). Prevents retriggering on same kick/snare/hihat hit.',
     unit: 'ms',
   },
-  transientfactor: {
-    displayName: 'Transient Threshold',
-    tooltip:
-      'Detection threshold for transients. LOWER values detect subtler attacks/beats (more sensitive, e.g. 0.5 = very sensitive). HIGHER values require stronger hits (less sensitive, e.g. 3.0 = only strong beats). Range: 0.1-5.0.',
-    unit: 'x',
-  },
 
-  // AGC settings
+  // AGC settings (peak-based design, target always 100%)
   agenabled: {
     displayName: 'Auto-Gain Enabled',
-    tooltip: 'Enable automatic gain control to normalize quiet and loud audio sources.',
+    tooltip:
+      'Enable automatic gain control. AGC adapts gain to make loud peaks reach full dynamic range (100%), ensuring optimal use of available headroom.',
     unit: '',
   },
-  agtarget: {
-    displayName: 'AGC Target Level',
-    tooltip:
-      'Target RMS level for AGC to maintain (0-100%). AGC adjusts gain to keep average audio level near this target.',
-    unit: '%',
-  },
-  agmin: {
-    displayName: 'Min AGC Gain',
-    tooltip: 'Minimum gain multiplier. Prevents over-attenuation of loud sources.',
-    unit: 'x',
-  },
-  agmax: {
-    displayName: 'Max AGC Gain',
-    tooltip: 'Maximum gain multiplier. Prevents over-amplification of quiet sources.',
-    unit: 'x',
-  },
-  agctau: {
-    displayName: 'AGC Adaptation Time',
-    tooltip:
-      'Main AGC time constant for phrase-level adaptation (5-10s window). Controls how quickly AGC adapts to overall level changes. Higher = smoother but slower adaptation, Lower = faster but more reactive.',
-    unit: 's',
-  },
   agcattack: {
-    displayName: 'AGC Attack Time',
+    displayName: 'Peak Attack',
     tooltip:
-      'How quickly AGC responds to sudden volume increases (seconds). Lower values respond faster to loud sections, preventing clipping. Professional standard: 2s.',
+      'How quickly the AGC envelope follows sudden increases (0.01-5s). Lower = catches peaks faster. Default: 0.1s (100ms) for responsive peak tracking.',
     unit: 's',
   },
   agcrelease: {
-    displayName: 'AGC Release Time',
+    displayName: 'Peak Release',
     tooltip:
-      'How slowly AGC releases after volume decreases (seconds). Higher values preserve musical phrasing and prevent pumping/breathing artifacts. Professional standard: 10s.',
+      'How slowly the AGC envelope decays after peaks (0.1-10s). Higher = smoother tracking, preserves dynamics. Default: 2s.',
     unit: 's',
   },
-  hwcalibperiod: {
-    displayName: 'Hardware Calibration Period',
+  agcgaintau: {
+    displayName: 'Gain Adaptation Speed',
     tooltip:
-      'How often hardware gain is recalibrated (milliseconds). Adapts to environmental changes (quiet room vs loud venue) over minutes. Default: 3 minutes (180000ms).',
-    unit: 'ms',
+      'How quickly gain adjusts to match the peak target (0.1-30s). Higher = smoother but slower adaptation. Lower = faster but more reactive. Default: 5s.',
+    unit: 's',
   },
 };
 
@@ -170,9 +143,9 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
   t: {
-    displayName: 'Transient',
+    displayName: 'Percussion',
     tooltip:
-      'Percussion/attack detection (0-1). Single-frame impulse when beat detected. Value represents transient strength.',
+      'Percussion strength (0-1+). Maximum of kick/snare/hihat detection. Single-frame impulse when percussion detected. Drives fire bursts.',
     unit: '',
   },
   r: {
@@ -181,10 +154,17 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
       'Tracked RMS level (0-1). The average audio level that AGC is targeting. Smoother than instantaneous level.',
     unit: '',
   },
-  g: {
-    displayName: 'AGC Gain',
-    tooltip: 'Current auto-gain multiplier (1-20x). Shows how much the AGC is boosting the signal.',
+  s: {
+    displayName: 'SW Gain',
+    tooltip:
+      'Software AGC gain multiplier (0.01-100x). Fast-adapting automatic gain control. Works with hardware gain for full dynamic range.',
     unit: 'x',
+  },
+  h: {
+    displayName: 'HW Gain',
+    tooltip:
+      'Hardware PDM gain setting (0-80). Slow-adapting discrete gain. Adjusts when software gain is pinned at limits for extended periods.',
+    unit: '',
   },
 };
 

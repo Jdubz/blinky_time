@@ -230,14 +230,28 @@ describe('App', () => {
     it('displays audio values when streaming', () => {
       mockUseSerial.connectionState = 'connected';
       mockUseSerial.isStreaming = true;
-      mockUseSerial.audioData = { l: 0.75, t: 0.5, e: 0.6, g: 2.0 };
+      mockUseSerial.audioData = {
+        l: 0.75,
+        t: 0.5,
+        r: 0.6,
+        s: 2.0,
+        h: 32,
+        k: 0,
+        sn: 1,
+        hh: 0,
+        ks: 0.0,
+        ss: 0.82,
+        hs: 0.0,
+        z: 0.15,
+      };
 
       render(<App />);
 
-      // Note: E (envelope) value is tracked for chart but not displayed numerically
+      // Note: R (RMS level) value is tracked for chart but not displayed numerically
       expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
-      expect(screen.getByText('Transient: 0.50')).toBeInTheDocument();
-      expect(screen.getByText('AGC Gain: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('Percussion: 0.50')).toBeInTheDocument();
+      expect(screen.getByText('SW Gain: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('HW Gain: 32')).toBeInTheDocument();
     });
   });
 });

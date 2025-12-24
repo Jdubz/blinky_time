@@ -68,31 +68,40 @@ void SerialConsole::registerSettings() {
         settings_.registerFloat("gate", &mic_->noiseGate, "audio",
             "Noise gate threshold", 0.0f, 1.0f);
         settings_.registerUint32("transientcooldown", &mic_->transientCooldownMs, "audio",
-            "Transient cooldown (ms)", 10, 1000);
-        settings_.registerFloat("transientfactor", &mic_->transientFactor, "audio",
-            "Transient sensitivity", 0.1f, 5.0f);
+            "Percussion cooldown (ms)", 10, 10000);
     }
 
-    // === AUTO-GAIN SETTINGS ===
+    // === AUTO-GAIN SETTINGS (Hardware-primary architecture) ===
+    // Signal flow: Mic → HW Gain (PRIMARY) → ADC → SW Gain (SECONDARY) → Output
+    // HW gain optimizes raw ADC input for best SNR (adapts to keep raw in target range)
+    // SW gain fine-tunes output to 1.0 target (limited to 0.1-10x range)
     if (mic_) {
         settings_.registerBool("agenabled", &mic_->agEnabled, "agc",
-            "Auto-gain enabled");
-        settings_.registerFloat("agtarget", &mic_->agTarget, "agc",
-            "Target level", 0.1f, 0.95f);
-        settings_.registerFloat("agmin", &mic_->agMin, "agc",
-            "Minimum gain", 0.1f, 5.0f);
-        settings_.registerFloat("agmax", &mic_->agMax, "agc",
-            "Maximum gain", 1.0f, 20.0f);
-        // AGC time constants (professional audio standards)
-        settings_.registerFloat("agctau", &mic_->agcTauSeconds, "agc",
-            "AGC adaptation time (s)", 0.1f, 30.0f);
+            "Software AGC enabled");
+
+        // Software AGC time constants (secondary - fine adjustments only)
         settings_.registerFloat("agcattack", &mic_->agcAttackTau, "agc",
-            "AGC attack time (s)", 0.1f, 10.0f);
+            "Peak envelope attack (s)", 0.01f, 10.0f);
         settings_.registerFloat("agcrelease", &mic_->agcReleaseTau, "agc",
-            "AGC release time (s)", 1.0f, 30.0f);
-        // Hardware gain calibration period
-        settings_.registerUint32("hwcalibperiod", &mic_->hwCalibPeriodMs, "agc",
-            "HW gain period (ms)", 10000, 600000);
+            "Peak envelope release (s)", 0.1f, 60.0f);
+        settings_.registerFloat("agcgaintau", &mic_->agcGainTau, "agc",
+            "Gain adjustment speed (s)", 0.1f, 120.0f);
+
+        // Hardware AGC parameters (primary - optimizes ADC signal quality)
+        settings_.registerFloat("hwtargetlow", &mic_->hwTargetLow, "agc",
+            "HW target low (raw)", 0.05f, 0.5f);
+        settings_.registerFloat("hwtargethigh", &mic_->hwTargetHigh, "agc",
+            "HW target high (raw)", 0.1f, 0.9f);
+    }
+
+    // === FREQUENCY-SPECIFIC DETECTION (always enabled) ===
+    if (mic_) {
+        settings_.registerFloat("kickthresh", &mic_->kickThreshold, "freq",
+            "Kick detection threshold", 1.0f, 5.0f);
+        settings_.registerFloat("snarethresh", &mic_->snareThreshold, "freq",
+            "Snare detection threshold", 1.0f, 5.0f);
+        settings_.registerFloat("hihatthresh", &mic_->hihatThreshold, "freq",
+            "Hi-hat detection threshold", 1.0f, 5.0f);
     }
 
 }
@@ -261,15 +270,15 @@ void SerialConsole::restoreDefaults() {
         fireGenerator_->resetToDefaults();
     }
 
-    // Restore mic defaults
+    // Restore mic defaults (peak-based AGC, target always 1.0)
     if (mic_) {
         mic_->noiseGate = Defaults::NoiseGate;
         mic_->globalGain = Defaults::GlobalGain;
         mic_->transientCooldownMs = Defaults::TransientCooldownMs;
         mic_->agEnabled = true;
-        mic_->agTarget = Defaults::AutoGainTarget;
-        mic_->agMin = Defaults::AutoGainMin;
-        mic_->agMax = Defaults::AutoGainMax;
+        mic_->agcAttackTau = 0.1f;   // 100ms peak attack
+        mic_->agcReleaseTau = 2.0f;  // 2s peak release
+        mic_->agcGainTau = 5.0f;     // 5s gain adjustment
     }
 }
 
@@ -283,19 +292,43 @@ void SerialConsole::streamTick() {
         streamLastMs_ = now;
 
         // Output compact JSON for web app
-        // Format: {"a":{"l":0.45,"t":0.85,"r":0.32,"g":3.5}}
+        // Format: {"a":{"l":0.45,"t":0.85,"r":0.32,"s":3.5,"h":32,"k":0,"sn":1,"hh":0,"ks":0.0,"ss":0.82,"hs":0.0,"z":0.15}}
         // l = level (post-AGC output)
-        // t = transient (percussion detection)
+        // t = transient (max percussion strength: kick/snare/hihat)
         // r = RMS (tracked level for AGC)
-        // g = gain (AGC multiplier)
+        // s = software gain (AGC multiplier)
+        // h = hardware gain (PDM gain setting)
+        // k = kick impulse (boolean: 0 or 1)
+        // sn = snare impulse (boolean: 0 or 1)
+        // hh = hihat impulse (boolean: 0 or 1)
+        // ks = kick strength (0.0-1.0)
+        // ss = snare strength (0.0-1.0)
+        // hs = hihat strength (0.0-1.0)
+        // z = zero-crossing rate (0.0-1.0)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
         Serial.print(mic_->getTransient(), 2);
         Serial.print(F(",\"r\":"));
         Serial.print(mic_->getTrackedLevel(), 2);
-        Serial.print(F(",\"g\":"));
+        Serial.print(F(",\"s\":"));
         Serial.print(mic_->getGlobalGain(), 1);
+        Serial.print(F(",\"h\":"));
+        Serial.print(mic_->getHwGain());
+        Serial.print(F(",\"k\":"));
+        Serial.print(mic_->getKickImpulse() ? 1 : 0);
+        Serial.print(F(",\"sn\":"));
+        Serial.print(mic_->getSnareImpulse() ? 1 : 0);
+        Serial.print(F(",\"hh\":"));
+        Serial.print(mic_->getHihatImpulse() ? 1 : 0);
+        Serial.print(F(",\"ks\":"));
+        Serial.print(mic_->getKickStrength(), 2);
+        Serial.print(F(",\"ss\":"));
+        Serial.print(mic_->getSnareStrength(), 2);
+        Serial.print(F(",\"hs\":"));
+        Serial.print(mic_->getHihatStrength(), 2);
+        Serial.print(F(",\"z\":"));
+        Serial.print(mic_->zeroCrossingRate, 2);
         Serial.println(F("}}"));
     }
 

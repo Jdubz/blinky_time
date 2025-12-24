@@ -28,10 +28,18 @@ export interface SettingsResponse {
 
 // Audio sample from streaming `{"a":{...}}` messages
 export interface AudioSample {
-  l: number; // level (0-1)
-  t: number; // transient (0-1)
-  e: number; // envelope (0-1)
-  g: number; // gain multiplier
+  l: number; // level (0-1, post-AGC output)
+  t: number; // percussion strength (0-1+, max of kick/snare/hihat, single-frame impulse)
+  r: number; // RMS tracked level (0-1, what AGC is targeting)
+  s: number; // software gain (AGC multiplier, typically 0.01-100)
+  h: number; // hardware gain (PDM gain setting, 0-80)
+  k: 0 | 1; // kick impulse (boolean flag)
+  sn: 0 | 1; // snare impulse (boolean flag)
+  hh: 0 | 1; // hihat impulse (boolean flag)
+  ks: number; // kick strength (0.0-1.0)
+  ss: number; // snare strength (0.0-1.0)
+  hs: number; // hihat strength (0.0-1.0)
+  z: number; // zero-crossing rate (0.0-1.0)
 }
 
 // Streaming audio message format
