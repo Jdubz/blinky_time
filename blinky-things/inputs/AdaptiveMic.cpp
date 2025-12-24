@@ -337,10 +337,14 @@ inline float AdaptiveMic::processBiquad(float input, float& z1, float& z2, float
 }
 
 void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt) {
-  // Reset impulses each frame
+  // Reset impulses and transient each frame (single-frame pulse behavior)
   kickImpulse = false;
   snareImpulse = false;
   hihatImpulse = false;
+  transient = 0.0f;
+  kickStrength = 0.0f;
+  snareStrength = 0.0f;
+  hihatStrength = 0.0f;
 
   // Track maximum percussion strength to link with generic transient
   float maxPercussionStrength = 0.0f;
