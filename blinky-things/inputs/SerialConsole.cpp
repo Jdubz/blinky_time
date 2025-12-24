@@ -73,12 +73,15 @@ void SerialConsole::registerSettings() {
             "Transient sensitivity", 0.1f, 5.0f);
     }
 
-    // === AUTO-GAIN SETTINGS (Peak-based AGC, target always 1.0) ===
+    // === AUTO-GAIN SETTINGS (Hardware-primary architecture) ===
+    // Signal flow: Mic → HW Gain (PRIMARY) → ADC → SW Gain (SECONDARY) → Output
+    // HW gain optimizes raw ADC input for best SNR (adapts to keep raw in target range)
+    // SW gain fine-tunes output to 1.0 target (limited to 0.1-10x range)
     if (mic_) {
         settings_.registerBool("agenabled", &mic_->agEnabled, "agc",
-            "Auto-gain enabled");
+            "Software AGC enabled");
 
-        // AGC time constants (simplified peak-based)
+        // Software AGC time constants (secondary - fine adjustments only)
         settings_.registerFloat("agcattack", &mic_->agcAttackTau, "agc",
             "Peak envelope attack (s)", 0.01f, 5.0f);
         settings_.registerFloat("agcrelease", &mic_->agcReleaseTau, "agc",
@@ -86,9 +89,15 @@ void SerialConsole::registerSettings() {
         settings_.registerFloat("agcgaintau", &mic_->agcGainTau, "agc",
             "Gain adjustment speed (s)", 0.1f, 30.0f);
 
-        // Hardware gain calibration period
+        // Hardware AGC parameters (primary - optimizes ADC signal quality)
+        settings_.registerFloat("hwtargetlow", &mic_->hwTargetLow, "agc",
+            "HW target low (raw)", 0.05f, 0.5f);
+        settings_.registerFloat("hwtargethigh", &mic_->hwTargetHigh, "agc",
+            "HW target high (raw)", 0.1f, 0.8f);
+        settings_.registerFloat("hwtrackingtau", &mic_->hwTrackingTau, "agc",
+            "HW tracking time (s)", 1.0f, 60.0f);
         settings_.registerUint32("hwcalibperiod", &mic_->hwCalibPeriodMs, "agc",
-            "HW gain period (ms)", 10000, 600000);
+            "HW gain period (ms)", 5000, 600000);
     }
 
 }
@@ -279,19 +288,22 @@ void SerialConsole::streamTick() {
         streamLastMs_ = now;
 
         // Output compact JSON for web app
-        // Format: {"a":{"l":0.45,"t":0.85,"r":0.32,"g":3.5}}
+        // Format: {"a":{"l":0.45,"t":0.85,"r":0.32,"s":3.5,"h":32}}
         // l = level (post-AGC output)
         // t = transient (percussion detection)
         // r = RMS (tracked level for AGC)
-        // g = gain (AGC multiplier)
+        // s = software gain (AGC multiplier)
+        // h = hardware gain (PDM gain setting)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
         Serial.print(mic_->getTransient(), 2);
         Serial.print(F(",\"r\":"));
         Serial.print(mic_->getTrackedLevel(), 2);
-        Serial.print(F(",\"g\":"));
+        Serial.print(F(",\"s\":"));
         Serial.print(mic_->getGlobalGain(), 1);
+        Serial.print(F(",\"h\":"));
+        Serial.print(mic_->getHwGain());
         Serial.println(F("}}"));
     }
 

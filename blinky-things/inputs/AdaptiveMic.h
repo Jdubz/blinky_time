@@ -39,15 +39,14 @@ public:
   float agcReleaseTau  = 2.0f;      // Peak release: how slow peaks decay (2s)
   float agcGainTau     = 5.0f;      // Gain adjustment speed (5s adaptation)
 
-  // Hardware gain (environmental adaptation over minutes)
-  uint32_t hwCalibPeriodMs = 180000;  // 3 minutes between calibration checks
+  // Hardware gain (PRIMARY - adapts to raw ADC input for best signal quality)
+  uint32_t hwCalibPeriodMs = 30000;   // 30 seconds between calibration checks
   int      hwGainMin       = 0;
   int      hwGainMax       = 64;
   int      hwGainStep      = 1;
-
-  // Dwell timers for HW/SW gain coordination
-  float limitDwellTriggerSec = 8.0f;
-  float limitDwellRelaxSec   = 3.0f;
+  float    hwTargetLow     = 0.15f;   // If raw input below this, increase HW gain
+  float    hwTargetHigh    = 0.35f;   // If raw input above this, decrease HW gain
+  float    hwTrackingTau   = 10.0f;   // Time constant for tracking raw input (10s)
 
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, post-AGC, post-gate)
@@ -106,14 +105,11 @@ private:
   volatile static uint16_t s_maxAbs;
 
   // AGC tracking
-  float trackedLevel = 0.0f;  // RMS level tracked over AGC window
+  float trackedLevel = 0.0f;     // Peak level tracked for software AGC (post-gain)
+  float rawTrackedLevel = 0.0f;  // Raw ADC level tracked for hardware AGC (pre-gain)
 
   // Timing
   uint32_t lastHwCalibMs = 0;
-
-  // Dwell timers for HW/SW coordination
-  float dwellAtMin = 0.0f;
-  float dwellAtMax = 0.0f;
 
   uint32_t _sampleRate = 16000;
 

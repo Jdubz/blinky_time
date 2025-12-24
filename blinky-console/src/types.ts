@@ -31,7 +31,8 @@ export interface AudioSample {
   l: number; // level (0-1, post-AGC output)
   t: number; // transient (0-1, single-frame impulse)
   r: number; // RMS tracked level (0-1, what AGC is targeting)
-  g: number; // gain multiplier (current AGC gain)
+  s: number; // software gain (AGC multiplier, typically 0.01-100)
+  h: number; // hardware gain (PDM gain setting, 0-80)
 }
 
 // Streaming audio message format

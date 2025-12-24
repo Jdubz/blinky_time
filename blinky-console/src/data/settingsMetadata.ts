@@ -166,10 +166,17 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
       'Tracked RMS level (0-1). The average audio level that AGC is targeting. Smoother than instantaneous level.',
     unit: '',
   },
-  g: {
-    displayName: 'AGC Gain',
-    tooltip: 'Current auto-gain multiplier (1-20x). Shows how much the AGC is boosting the signal.',
+  s: {
+    displayName: 'SW Gain',
+    tooltip:
+      'Software AGC gain multiplier (0.01-100x). Fast-adapting automatic gain control. Works with hardware gain for full dynamic range.',
     unit: 'x',
+  },
+  h: {
+    displayName: 'HW Gain',
+    tooltip:
+      'Hardware PDM gain setting (0-80). Slow-adapting discrete gain. Adjusts when software gain is pinned at limits for extended periods.',
+    unit: '',
   },
 };
 

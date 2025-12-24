@@ -25,7 +25,8 @@ describe('AudioVisualizer', () => {
     l: 0.75,
     t: 0.5,
     r: 0.6,
-    g: 2.0,
+    s: 2.0,
+    h: 32,
   };
 
   const defaultProps = {
@@ -97,7 +98,8 @@ describe('AudioVisualizer', () => {
 
       expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
       expect(screen.getByText('Transient: 0.50')).toBeInTheDocument();
-      expect(screen.getByText('AGC Gain: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('SW Gain: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('HW Gain: 32')).toBeInTheDocument();
     });
 
     it('does not show audio values when not streaming', () => {

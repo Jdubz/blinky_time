@@ -181,8 +181,11 @@ export function AudioVisualizer({
               <span className="audio-value transient" title={audioMetricsMetadata['t'].tooltip}>
                 {audioMetricsMetadata['t'].displayName}: {audioData.t.toFixed(2)}
               </span>
-              <span className="audio-value gain" title={audioMetricsMetadata['g'].tooltip}>
-                {audioMetricsMetadata['g'].displayName}: {audioData.g.toFixed(1)}x
+              <span className="audio-value gain" title={audioMetricsMetadata['s'].tooltip}>
+                {audioMetricsMetadata['s'].displayName}: {audioData.s.toFixed(1)}x
+              </span>
+              <span className="audio-value gain" title={audioMetricsMetadata['h'].tooltip}>
+                {audioMetricsMetadata['h'].displayName}: {audioData.h}
               </span>
             </div>
           )}

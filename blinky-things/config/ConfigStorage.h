@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 10;  // Peak-based AGC: removed agTarget (always 1.0), agMin/agMax/agcTauSeconds
+    static const uint8_t CONFIG_VERSION = 11;  // Hardware-primary AGC: HW adapts to raw input, SW for fine-tuning
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -29,10 +29,14 @@ public:
         float globalGain;
         float transientFactor;
         float loudFloor;
-        // AGC time constants (peak target always 1.0)
+        // Software AGC time constants (secondary - fine adjustments, range 0.1-10x)
         float agcAttackTau;       // Peak envelope attack
         float agcReleaseTau;      // Peak envelope release
         float agcGainTau;         // Gain adjustment speed
+        // Hardware AGC parameters (primary - optimizes ADC signal quality)
+        float hwTargetLow;        // Raw input below this → increase HW gain
+        float hwTargetHigh;       // Raw input above this → decrease HW gain
+        float hwTrackingTau;      // Time constant for tracking raw input
         // Timing parameters
         uint32_t transientCooldownMs;
         uint32_t hwCalibPeriodMs;

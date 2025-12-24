@@ -82,11 +82,16 @@ void AdaptiveMic::update(float dt) {
     // avgAbs is average of int16_t samples (0-32768 range)
     float normalized = avgAbs / 32768.0f;
 
-    // Apply gain and clamp to 0-1
+    // Track raw input for hardware AGC (PRIMARY gain control)
+    // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
+    float alpha = 1.0f - expf(-dt / maxValue(hwTrackingTau, 1.0f));
+    rawTrackedLevel += alpha * (normalized - rawTrackedLevel);
+
+    // Apply software gain (SECONDARY - fine adjustments only)
     float afterGain = normalized * globalGain;
     afterGain = clamp01(afterGain);
 
-    // Apply AGC (tracks post-gain level, adjusts globalGain for next frame)
+    // Software AGC fine-tunes output to target (tracks post-gain level)
     if (agEnabled) {
       autoGainTick(afterGain, dt);
     }
@@ -100,7 +105,7 @@ void AdaptiveMic::update(float dt) {
 
   if (!pdmAlive) return;
 
-  // Hardware gain calibration (slow environmental adaptation)
+  // Hardware gain adaptation (PRIMARY - optimizes ADC signal quality)
   hardwareCalibrate(nowMs, dt);
 }
 
@@ -122,39 +127,29 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
 }
 
 void AdaptiveMic::autoGainTick(float postGainLevel, float dt) {
-  // Simplified peak-based AGC design
-  // 1. Track peak level with fast attack, slow release
-  // 2. Adjust gain to make peaks hit agTarget
+  // SECONDARY GAIN CONTROL: Software AGC for fine-tuning
+  // Hardware gain (PRIMARY) already optimized raw ADC input
+  // Software gain just makes small adjustments to hit target output level
+  //
+  // Design: Peak-based AGC with fast attack, slow release
+  // 1. Track peak level with envelope follower
+  // 2. Adjust gain to make peaks hit target (1.0 = full dynamic range)
 
   // Track peak level with envelope follower
   float tau = (postGainLevel > trackedLevel) ? agcAttackTau : agcReleaseTau;
   float alpha = 1.0f - expf(-dt / maxValue(tau, 0.001f));
   trackedLevel += alpha * (postGainLevel - trackedLevel);
 
-  // Compute error: how far are peaks from target (always 1.0 = full dynamic range)?
+  // Compute error: how far are peaks from target?
   float err = AG_PEAK_TARGET - trackedLevel;
 
-  // Adjust gain to correct the error
-  // Use proportional control with time constant for smooth adaptation
+  // Adjust gain to correct the error (proportional control)
   float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau, 0.1f));
   globalGain += gainAlpha * err * globalGain;  // Logarithmic adjustment
 
-  // Safety limits (prevent numerical issues, not behavior limits)
-  globalGain = constrainValue(globalGain, 0.01f, 100.0f);
-
-  // Dwell tracking for hardware gain coordination
-  // Detect when software AGC is struggling (needs HW adjustment)
-  if (globalGain >= 50.0f) {  // SW gain very high = input too quiet
-    dwellAtMax += dt;
-  } else if (dwellAtMax > 0.0f) {
-    dwellAtMax = maxValue(0.0f, dwellAtMax - dt * (1.0f/limitDwellRelaxSec));
-  }
-
-  if (globalGain <= 0.1f) {  // SW gain very low = input too loud
-    dwellAtMin += dt;
-  } else if (dwellAtMin > 0.0f) {
-    dwellAtMin = maxValue(0.0f, dwellAtMin - dt * (1.0f/limitDwellRelaxSec));
-  }
+  // Constrain software gain to narrow range (fine adjustments only)
+  // Hardware gain handles large changes, software just tweaks around 1.0x
+  globalGain = constrainValue(globalGain, 0.1f, 10.0f);
 }
 
 void AdaptiveMic::detectTransient(float normalizedLevel, float dt, uint32_t nowMs) {
@@ -187,33 +182,57 @@ void AdaptiveMic::detectTransient(float normalizedLevel, float dt, uint32_t nowM
 }
 
 void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
+  // PRIMARY GAIN CONTROL: Adjust hardware gain based on raw ADC input level
+  // Goal: Keep raw input in optimal range (hwTargetLow - hwTargetHigh) for best SNR
+  // This ensures high-quality signal into ADC before software processing
+
+  // Adaptation period must be >= tracking window for stable measurements
+  // hwTrackingTau = 10s, so check every 30s (3x tracking window for stability)
   if ((nowMs - lastHwCalibMs) < hwCalibPeriodMs) return;
 
-  // Simple coordination: adjust hardware gain when software AGC is pinned at limits
-  bool swPinnedHigh = (dwellAtMax >= limitDwellTriggerSec);
-  bool swPinnedLow  = (dwellAtMin >= limitDwellTriggerSec);
+  // Calculate how far we are from target range
+  float errorMagnitude = 0.0f;
+  int direction = 0;
 
-  int delta = 0;
-  if (swPinnedHigh) {
-    // Software gain maxed out → increase hardware gain
-    if (currentHardwareGain < hwGainMax) delta = +hwGainStep;
-  } else if (swPinnedLow) {
-    // Software gain at minimum → decrease hardware gain
-    if (currentHardwareGain > hwGainMin) delta = -hwGainStep;
+  if (rawTrackedLevel < hwTargetLow) {
+    // Raw input too quiet → increase hardware gain for better SNR
+    errorMagnitude = hwTargetLow - rawTrackedLevel;
+    direction = +1;
+  } else if (rawTrackedLevel > hwTargetHigh) {
+    // Raw input too loud → decrease hardware gain to prevent clipping
+    errorMagnitude = rawTrackedLevel - hwTargetHigh;
+    direction = -1;
+  } else {
+    // In target range - no adjustment needed
+    lastHwCalibMs = nowMs;
+    return;
   }
 
-  if (delta != 0) {
-    int oldGain = currentHardwareGain;
-    currentHardwareGain = constrainValue(currentHardwareGain + delta, hwGainMin, hwGainMax);
-    if (currentHardwareGain != oldGain) {
-      pdm_.setGain(currentHardwareGain);
+  // Adaptive step size: take bigger steps when far from target
+  // Small error (< 0.05): +/- 1 step (fine-tuning)
+  // Medium error (0.05-0.15): +/- 2 steps (adjusting)
+  // Large error (> 0.15): +/- 4 steps (rapid correction)
+  int stepSize;
+  if (errorMagnitude > 0.15f) {
+    stepSize = 4;  // Large error: 4 steps for fast convergence
+  } else if (errorMagnitude > 0.05f) {
+    stepSize = 2;  // Medium error: 2 steps for moderate correction
+  } else {
+    stepSize = 1;  // Small error: 1 step for fine-tuning
+  }
 
-      // Compensate software gain to smooth transition
-      float softComp = (delta > 0) ? (1.0f/1.05f) : 1.05f;
-      globalGain = clamp01(globalGain * softComp);
-      dwellAtMax = 0.0f;
-      dwellAtMin = 0.0f;
-    }
+  int delta = direction * stepSize;
+  int oldGain = currentHardwareGain;
+  currentHardwareGain = constrainValue(currentHardwareGain + delta, hwGainMin, hwGainMax);
+
+  if (currentHardwareGain != oldGain) {
+    pdm_.setGain(currentHardwareGain);
+
+    // Compensate software gain to smooth transition (reduce audio artifacts)
+    // Estimate: each HW gain step ≈ 5% change
+    float hwGainChange = (currentHardwareGain - oldGain) * 0.05f;
+    float softComp = 1.0f / (1.0f + hwGainChange);
+    globalGain = constrainValue(globalGain * softComp, 0.1f, 10.0f);
   }
 
   lastHwCalibMs = nowMs;

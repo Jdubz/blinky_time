@@ -8,7 +8,7 @@ describe('SettingsPanel', () => {
     { name: 'intensity', value: 0.75, type: 'float', cat: 'fire', min: 0, max: 1 },
     { name: 'speed', value: 100, type: 'uint8', cat: 'fire', min: 0, max: 255 },
     { name: 'enabled', value: true, type: 'bool', cat: 'audio', min: 0, max: 1 },
-    { name: 'agtarget', value: 0.55, type: 'float', cat: 'agc', min: 0.1, max: 0.95 },
+    { name: 'agcattack', value: 0.1, type: 'float', cat: 'agc', min: 0.01, max: 5.0 },
   ];
 
   const mockSettingsByCategory: SettingsByCategory = {
@@ -127,7 +127,7 @@ describe('SettingsPanel', () => {
     it('renders numeric settings as sliders', () => {
       render(<SettingsPanel {...defaultProps} />);
       const sliders = screen.getAllByRole('slider');
-      expect(sliders.length).toBe(3); // intensity, speed, agtarget
+      expect(sliders.length).toBe(3); // intensity, speed, agcattack
     });
 
     it('displays setting names', () => {
@@ -135,14 +135,14 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('intensity')).toBeInTheDocument();
       expect(screen.getByText('speed')).toBeInTheDocument();
       expect(screen.getByText('enabled')).toBeInTheDocument();
-      // agtarget has metadata, so displays as "AGC Target Level"
-      expect(screen.getByText('AGC Target Level')).toBeInTheDocument();
+      // agcattack has metadata, so displays as "Peak Attack"
+      expect(screen.getByText('Peak Attack')).toBeInTheDocument();
     });
 
     it('displays current values for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
       expect(screen.getByText('0.75')).toBeInTheDocument();
-      expect(screen.getByText('0.55')).toBeInTheDocument();
+      expect(screen.getByText('0.10')).toBeInTheDocument();
     });
 
     it('displays current values for integer settings', () => {
@@ -177,8 +177,8 @@ describe('SettingsPanel', () => {
       // Advance timers for debounce
       await vi.advanceTimersByTimeAsync(150);
 
-      // sliders[0] is now agtarget due to category reordering (audio → agc → fire)
-      expect(onSettingChange).toHaveBeenCalledWith('agtarget', 0.5);
+      // sliders[0] is now agcattack due to category reordering (audio → agc → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('agcattack', 0.5);
     });
 
     it('debounces rapid slider changes', async () => {
@@ -199,8 +199,8 @@ describe('SettingsPanel', () => {
 
       // Should only call once with the final value
       expect(onSettingChange).toHaveBeenCalledTimes(1);
-      // sliders[0] is now agtarget due to category reordering (audio → agc → fire)
-      expect(onSettingChange).toHaveBeenCalledWith('agtarget', 0.4);
+      // sliders[0] is now agcattack due to category reordering (audio → agc → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('agcattack', 0.4);
     });
 
     it('disables controls when disabled prop is true', () => {
@@ -224,21 +224,21 @@ describe('SettingsPanel', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const sliders = screen.getAllByRole('slider');
-      // sliders[0] is now agtarget due to category reordering (audio → agc → fire)
-      const agtargetSlider = sliders[0];
+      // sliders[0] is now agcattack due to category reordering (audio → agc → fire)
+      const agcattackSlider = sliders[0];
 
-      expect(agtargetSlider).toHaveAttribute('min', '0.1');
-      expect(agtargetSlider).toHaveAttribute('max', '0.95');
+      expect(agcattackSlider).toHaveAttribute('min', '0.01');
+      expect(agcattackSlider).toHaveAttribute('max', '5');
     });
 
     it('uses correct step for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const sliders = screen.getAllByRole('slider');
-      // sliders[0] is agtarget (float type)
-      const agtargetSlider = sliders[0];
+      // sliders[0] is agcattack (float type)
+      const agcattackSlider = sliders[0];
 
-      expect(agtargetSlider).toHaveAttribute('step', '0.01');
+      expect(agcattackSlider).toHaveAttribute('step', '0.01');
     });
 
     it('uses correct step for integer settings', () => {
