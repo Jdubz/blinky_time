@@ -80,7 +80,8 @@ public:
   uint32_t lastIsrMs = 0;
   bool     pdmAlive  = false;
   inline bool isMicDead(uint32_t nowMs, uint32_t timeoutMs = MicConstants::MIC_DEAD_TIMEOUT_MS) const {
-    return (nowMs - lastIsrMs) > timeoutMs;
+    // Use signed arithmetic to handle millis() wraparound at 49.7 days
+    return (int32_t)(nowMs - lastIsrMs) > (int32_t)timeoutMs;
   }
 
   // Public getters
@@ -138,6 +139,7 @@ private:
   uint32_t _sampleRate = 16000;
 
   // Biquad filter state for frequency-specific detection
+  // Note: Filter state is only accessed within ISR, no volatile needed
   // Kick filter: bandpass 60-130 Hz (center: 90 Hz)
   float kickZ1 = 0.0f, kickZ2 = 0.0f;
   float kickB0, kickB1, kickB2, kickA1, kickA2;
@@ -150,10 +152,10 @@ private:
   float hihatZ1 = 0.0f, hihatZ2 = 0.0f;
   float hihatB0, hihatB1, hihatB2, hihatA1, hihatA2;
 
-  // Energy tracking per frequency band
-  float kickEnergy = 0.0f;
-  float snareEnergy = 0.0f;
-  float hihatEnergy = 0.0f;
+  // Energy tracking per frequency band (volatile: accessed from ISR)
+  volatile float kickEnergy = 0.0f;
+  volatile float snareEnergy = 0.0f;
+  volatile float hihatEnergy = 0.0f;
 
   // Baselines per frequency band
   float kickBaseline = 0.0f;

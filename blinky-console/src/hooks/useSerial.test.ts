@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useSerial } from './useSerial';
 import { serialService, SerialEvent, SerialEventCallback } from '../services/serial';
+import type { AudioSample } from '../types';
 
 // Mock the serial service
 vi.mock('../services/serial', () => {
@@ -311,7 +312,7 @@ describe('useSerial', () => {
     it('handles audio event', async () => {
       const { result } = renderHook(() => useSerial());
 
-      const audioSample = {
+      const audioSample: AudioSample = {
         l: 0.5,
         t: 0.3,
         r: 0.4,

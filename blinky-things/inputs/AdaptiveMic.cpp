@@ -176,7 +176,8 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
 
   // Adaptation period must be >= tracking window for stable measurements
   // hwTrackingTau = 30s, so check every 30s (matching tracking window for stability)
-  if ((nowMs - lastHwCalibMs) < hwCalibPeriodMs) return;
+  // Use signed arithmetic to handle millis() wraparound at 49.7 days
+  if ((int32_t)(nowMs - lastHwCalibMs) < (int32_t)hwCalibPeriodMs) return;
 
   // Calculate how far we are from target range
   float errorMagnitude = 0.0f;
@@ -350,11 +351,19 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt) {
   // Track maximum percussion strength to link with generic transient
   float maxPercussionStrength = 0.0f;
 
+  // Read energy values atomically (ISR may be updating them)
+  float localKickEnergy, localSnareEnergy, localHihatEnergy;
+  time_.noInterrupts();
+  localKickEnergy = kickEnergy;
+  localSnareEnergy = snareEnergy;
+  localHihatEnergy = hihatEnergy;
+  time_.interrupts();
+
   // Update baselines (slow exponential moving average, ~150ms for baseline tracking)
   constexpr float BASELINE_ALPHA = 0.025f;  // Baseline tracking speed (~150ms time constant)
-  kickBaseline += BASELINE_ALPHA * (kickEnergy - kickBaseline);
-  snareBaseline += BASELINE_ALPHA * (snareEnergy - snareBaseline);
-  hihatBaseline += BASELINE_ALPHA * (hihatEnergy - hihatBaseline);
+  kickBaseline += BASELINE_ALPHA * (localKickEnergy - kickBaseline);
+  snareBaseline += BASELINE_ALPHA * (localSnareEnergy - snareBaseline);
+  hihatBaseline += BASELINE_ALPHA * (localHihatEnergy - hihatBaseline);
 
   // Check which bands have energy above threshold
   bool kickDetected = false;
@@ -365,29 +374,32 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt) {
   constexpr float PERCUSSION_FLOOR = 0.02f;  // 2% of full scale minimum threshold
 
   // Detect kick (bass transient)
-  if ((nowMs - lastKickMs) > transientCooldownMs) {
+  // Use signed arithmetic to handle millis() wraparound at 49.7 days
+  if ((int32_t)(nowMs - lastKickMs) > (int32_t)transientCooldownMs) {
     float kickThresh = maxValue(PERCUSSION_FLOOR, kickBaseline * kickThreshold);
-    if (kickEnergy > kickThresh && kickEnergy > kickBaseline * 1.1f) {
+    if (localKickEnergy > kickThresh && localKickEnergy > kickBaseline * 1.1f) {
       kickDetected = true;
-      kickStrength = kickEnergy / maxValue(kickThresh, 0.001f);
+      kickStrength = localKickEnergy / maxValue(kickThresh, 0.001f);
     }
   }
 
   // Detect snare (mid transient)
-  if ((nowMs - lastSnareMs) > transientCooldownMs) {
+  // Use signed arithmetic to handle millis() wraparound at 49.7 days
+  if ((int32_t)(nowMs - lastSnareMs) > (int32_t)transientCooldownMs) {
     float snareThresh = maxValue(PERCUSSION_FLOOR, snareBaseline * snareThreshold);
-    if (snareEnergy > snareThresh && snareEnergy > snareBaseline * 1.1f) {
+    if (localSnareEnergy > snareThresh && localSnareEnergy > snareBaseline * 1.1f) {
       snareDetected = true;
-      snareStrength = snareEnergy / maxValue(snareThresh, 0.001f);
+      snareStrength = localSnareEnergy / maxValue(snareThresh, 0.001f);
     }
   }
 
   // Detect hihat (high transient)
-  if ((nowMs - lastHihatMs) > transientCooldownMs) {
+  // Use signed arithmetic to handle millis() wraparound at 49.7 days
+  if ((int32_t)(nowMs - lastHihatMs) > (int32_t)transientCooldownMs) {
     float hihatThresh = maxValue(PERCUSSION_FLOOR, hihatBaseline * hihatThreshold);
-    if (hihatEnergy > hihatThresh && hihatEnergy > hihatBaseline * 1.1f) {
+    if (localHihatEnergy > hihatThresh && localHihatEnergy > hihatBaseline * 1.1f) {
       hihatDetected = true;
-      hihatStrength = hihatEnergy / maxValue(hihatThresh, 0.001f);
+      hihatStrength = localHihatEnergy / maxValue(hihatThresh, 0.001f);
     }
   }
 
@@ -434,8 +446,10 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt) {
     lastTransientMs = nowMs;
   }
 
-  // Reset energy accumulators for next frame
+  // Reset energy accumulators atomically for next frame (ISR is accumulating)
+  time_.noInterrupts();
   kickEnergy = 0.0f;
   snareEnergy = 0.0f;
   hihatEnergy = 0.0f;
+  time_.interrupts();
 }
