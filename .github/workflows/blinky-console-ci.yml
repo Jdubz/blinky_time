@@ -1,11 +1,6 @@
 name: Blinky Console CI
 
 on:
-  push:
-    branches: [master, staging]
-    paths:
-      - 'blinky-console/**'
-      - '.github/workflows/blinky-console-ci.yml'
   pull_request:
     branches: [master]
     paths:
