@@ -104,7 +104,7 @@ describe('AudioVisualizer', () => {
       render(<AudioVisualizer {...defaultProps} isStreaming={true} audioData={mockAudioData} />);
 
       expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
-      expect(screen.getByText('Transient: 0.50')).toBeInTheDocument();
+      expect(screen.getByText('Percussion: 0.50')).toBeInTheDocument();
       expect(screen.getByText('SW Gain: 2.0x')).toBeInTheDocument();
       expect(screen.getByText('HW Gain: 32')).toBeInTheDocument();
     });

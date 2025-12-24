@@ -249,7 +249,7 @@ describe('App', () => {
 
       // Note: R (RMS level) value is tracked for chart but not displayed numerically
       expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
-      expect(screen.getByText('Transient: 0.50')).toBeInTheDocument();
+      expect(screen.getByText('Percussion: 0.50')).toBeInTheDocument();
       expect(screen.getByText('SW Gain: 2.0x')).toBeInTheDocument();
       expect(screen.getByText('HW Gain: 32')).toBeInTheDocument();
     });
