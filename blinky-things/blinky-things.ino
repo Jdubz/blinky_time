@@ -306,7 +306,9 @@ void setup() {
     haltWithError(F("ERROR: HAL component allocation failed"));
   }
 
-  bool micOk = mic->begin(config.microphone.sampleRate, config.microphone.bufferSize);
+  // Initialize microphone with default gain from PlatformConstants.h
+  // Second parameter defaults to Platform::Microphone::DEFAULT_GAIN (60)
+  bool micOk = mic->begin(config.microphone.sampleRate);
   if (!micOk) {
     Serial.println(F("ERROR: Microphone failed to start"));
   } else {

@@ -13,6 +13,7 @@ import {
 import { Line } from 'react-chartjs-2';
 import { AudioSample } from '../types';
 import { audioMetricsMetadata } from '../data/settingsMetadata';
+import { PercussionIndicator } from './PercussionIndicator';
 
 // Register Chart.js components
 ChartJS.register(
@@ -201,6 +202,8 @@ export function AudioVisualizer({
           </button>
         </div>
       </div>
+
+      <PercussionIndicator audioData={audioData} isStreaming={isStreaming} />
 
       <div className="audio-chart-container">
         {!isStreaming && !disabled && (

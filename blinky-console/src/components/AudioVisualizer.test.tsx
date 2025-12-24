@@ -27,6 +27,13 @@ describe('AudioVisualizer', () => {
     r: 0.6,
     s: 2.0,
     h: 32,
+    k: 0,
+    sn: 1,
+    hh: 0,
+    ks: 0.0,
+    ss: 0.82,
+    hs: 0.0,
+    z: 0.15,
   };
 
   const defaultProps = {

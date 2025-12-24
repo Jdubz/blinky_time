@@ -68,9 +68,7 @@ void SerialConsole::registerSettings() {
         settings_.registerFloat("gate", &mic_->noiseGate, "audio",
             "Noise gate threshold", 0.0f, 1.0f);
         settings_.registerUint32("transientcooldown", &mic_->transientCooldownMs, "audio",
-            "Transient cooldown (ms)", 10, 1000);
-        settings_.registerFloat("transientfactor", &mic_->transientFactor, "audio",
-            "Transient sensitivity", 0.1f, 5.0f);
+            "Percussion cooldown (ms)", 10, 10000);
     }
 
     // === AUTO-GAIN SETTINGS (Hardware-primary architecture) ===
@@ -83,21 +81,27 @@ void SerialConsole::registerSettings() {
 
         // Software AGC time constants (secondary - fine adjustments only)
         settings_.registerFloat("agcattack", &mic_->agcAttackTau, "agc",
-            "Peak envelope attack (s)", 0.01f, 5.0f);
+            "Peak envelope attack (s)", 0.01f, 10.0f);
         settings_.registerFloat("agcrelease", &mic_->agcReleaseTau, "agc",
-            "Peak envelope release (s)", 0.1f, 10.0f);
+            "Peak envelope release (s)", 0.1f, 60.0f);
         settings_.registerFloat("agcgaintau", &mic_->agcGainTau, "agc",
-            "Gain adjustment speed (s)", 0.1f, 30.0f);
+            "Gain adjustment speed (s)", 0.1f, 120.0f);
 
         // Hardware AGC parameters (primary - optimizes ADC signal quality)
         settings_.registerFloat("hwtargetlow", &mic_->hwTargetLow, "agc",
             "HW target low (raw)", 0.05f, 0.5f);
         settings_.registerFloat("hwtargethigh", &mic_->hwTargetHigh, "agc",
-            "HW target high (raw)", 0.1f, 0.8f);
-        settings_.registerFloat("hwtrackingtau", &mic_->hwTrackingTau, "agc",
-            "HW tracking time (s)", 1.0f, 60.0f);
-        settings_.registerUint32("hwcalibperiod", &mic_->hwCalibPeriodMs, "agc",
-            "HW gain period (ms)", 5000, 600000);
+            "HW target high (raw)", 0.1f, 0.9f);
+    }
+
+    // === FREQUENCY-SPECIFIC DETECTION (always enabled) ===
+    if (mic_) {
+        settings_.registerFloat("kickthresh", &mic_->kickThreshold, "freq",
+            "Kick detection threshold", 1.0f, 5.0f);
+        settings_.registerFloat("snarethresh", &mic_->snareThreshold, "freq",
+            "Snare detection threshold", 1.0f, 5.0f);
+        settings_.registerFloat("hihatthresh", &mic_->hihatThreshold, "freq",
+            "Hi-hat detection threshold", 1.0f, 5.0f);
     }
 
 }
@@ -288,12 +292,19 @@ void SerialConsole::streamTick() {
         streamLastMs_ = now;
 
         // Output compact JSON for web app
-        // Format: {"a":{"l":0.45,"t":0.85,"r":0.32,"s":3.5,"h":32}}
+        // Format: {"a":{"l":0.45,"t":0.85,"r":0.32,"s":3.5,"h":32,"k":0,"sn":1,"hh":0,"ks":0.0,"ss":0.82,"hs":0.0,"z":0.15}}
         // l = level (post-AGC output)
-        // t = transient (percussion detection)
+        // t = transient (max percussion strength: kick/snare/hihat)
         // r = RMS (tracked level for AGC)
         // s = software gain (AGC multiplier)
         // h = hardware gain (PDM gain setting)
+        // k = kick impulse (boolean: 0 or 1)
+        // sn = snare impulse (boolean: 0 or 1)
+        // hh = hihat impulse (boolean: 0 or 1)
+        // ks = kick strength (0.0-1.0)
+        // ss = snare strength (0.0-1.0)
+        // hs = hihat strength (0.0-1.0)
+        // z = zero-crossing rate (0.0-1.0)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
@@ -304,6 +315,20 @@ void SerialConsole::streamTick() {
         Serial.print(mic_->getGlobalGain(), 1);
         Serial.print(F(",\"h\":"));
         Serial.print(mic_->getHwGain());
+        Serial.print(F(",\"k\":"));
+        Serial.print(mic_->getKickImpulse() ? 1 : 0);
+        Serial.print(F(",\"sn\":"));
+        Serial.print(mic_->getSnareImpulse() ? 1 : 0);
+        Serial.print(F(",\"hh\":"));
+        Serial.print(mic_->getHihatImpulse() ? 1 : 0);
+        Serial.print(F(",\"ks\":"));
+        Serial.print(mic_->getKickStrength(), 2);
+        Serial.print(F(",\"ss\":"));
+        Serial.print(mic_->getSnareStrength(), 2);
+        Serial.print(F(",\"hs\":"));
+        Serial.print(mic_->getHihatStrength(), 2);
+        Serial.print(F(",\"z\":"));
+        Serial.print(mic_->zeroCrossingRate, 2);
         Serial.println(F("}}"));
     }
 

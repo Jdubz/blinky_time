@@ -230,7 +230,20 @@ describe('App', () => {
     it('displays audio values when streaming', () => {
       mockUseSerial.connectionState = 'connected';
       mockUseSerial.isStreaming = true;
-      mockUseSerial.audioData = { l: 0.75, t: 0.5, r: 0.6, s: 2.0, h: 32 };
+      mockUseSerial.audioData = {
+        l: 0.75,
+        t: 0.5,
+        r: 0.6,
+        s: 2.0,
+        h: 32,
+        k: 0,
+        sn: 1,
+        hh: 0,
+        ks: 0.0,
+        ss: 0.82,
+        hs: 0.0,
+        z: 0.15,
+      };
 
       render(<App />);
 

@@ -1,0 +1,176 @@
+.percussion-indicator-container {
+  padding: 1rem;
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%);
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.percussion-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin: 0 0 1rem 0;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.percussion-placeholder {
+  text-align: center;
+  color: #64748b;
+  padding: 2rem;
+  font-size: 0.875rem;
+}
+
+.percussion-indicators {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.percussion-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1rem;
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 8px;
+  border: 2px solid rgba(100, 116, 139, 0.2);
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.percussion-item.active {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+}
+
+.percussion-item.kick.active {
+  border-color: rgba(239, 68, 68, 0.8);
+  box-shadow: 0 0 25px rgba(239, 68, 68, 0.6);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.percussion-item.snare.active {
+  border-color: rgba(59, 130, 246, 0.8);
+  box-shadow: 0 0 25px rgba(59, 130, 246, 0.6);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.percussion-item.hihat.active {
+  border-color: rgba(234, 179, 8, 0.8);
+  box-shadow: 0 0 25px rgba(234, 179, 8, 0.6);
+  background: rgba(234, 179, 8, 0.1);
+}
+
+.percussion-circle {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(100, 116, 139, 0.2);
+  margin-bottom: 0.75rem;
+  transition: all 0.15s ease;
+}
+
+.percussion-item.kick .percussion-circle {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.percussion-item.snare .percussion-circle {
+  background: rgba(59, 130, 246, 0.2);
+}
+
+.percussion-item.hihat .percussion-circle {
+  background: rgba(234, 179, 8, 0.2);
+}
+
+.percussion-item.active .percussion-circle {
+  transform: scale(1.1);
+}
+
+.percussion-icon {
+  font-size: 2rem;
+  filter: grayscale(50%);
+  transition: filter 0.15s ease;
+}
+
+.percussion-item.active .percussion-icon {
+  filter: grayscale(0%);
+}
+
+.percussion-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.percussion-strength {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.percussion-bar {
+  width: 100%;
+  height: 6px;
+  background: rgba(100, 116, 139, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.percussion-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.1s ease-out;
+}
+
+.kick-fill {
+  background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%);
+}
+
+.snare-fill {
+  background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%);
+}
+
+.hihat-fill {
+  background: linear-gradient(90deg, #ca8a04 0%, #eab308 100%);
+}
+
+.percussion-metadata {
+  display: flex;
+  justify-content: center;
+  gap: 1.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(100, 116, 139, 0.2);
+}
+
+.metadata-item {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .percussion-indicators {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+
+  .percussion-circle {
+    width: 50px;
+    height: 50px;
+  }
+
+  .percussion-icon {
+    font-size: 1.5rem;
+  }
+}

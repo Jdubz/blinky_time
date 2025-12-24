@@ -67,6 +67,6 @@ namespace Platform {
     // Microphone configuration
     namespace Microphone {
         constexpr uint32_t DEFAULT_SAMPLE_RATE = 16000;  // 16 kHz
-        constexpr int DEFAULT_GAIN = 32;                  // Initial PDM gain (0-64)
+        constexpr int DEFAULT_GAIN = 60;                  // Initial PDM gain (0-80)
     }
 }

@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 11;  // Hardware-primary AGC: HW adapts to raw input, SW for fine-tuning
+    static const uint8_t CONFIG_VERSION = 12;  // Phase 3: Frequency-specific detection + ZCR + reliability fixes
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -27,8 +27,6 @@ public:
     struct StoredMicParams {
         float noiseGate;
         float globalGain;
-        float transientFactor;
-        float loudFloor;
         // Software AGC time constants (secondary - fine adjustments, range 0.1-10x)
         float agcAttackTau;       // Peak envelope attack
         float agcReleaseTau;      // Peak envelope release
@@ -40,6 +38,10 @@ public:
         // Timing parameters
         uint32_t transientCooldownMs;
         uint32_t hwCalibPeriodMs;
+        // Frequency-specific detection thresholds (always enabled)
+        float kickThreshold;
+        float snareThreshold;
+        float hihatThreshold;
     };
 
     struct ConfigData {

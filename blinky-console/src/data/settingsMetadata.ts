@@ -62,9 +62,9 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: 'rows',
   },
   transientheatmax: {
-    displayName: 'Transient Heat Boost',
+    displayName: 'Percussion Heat Boost',
     tooltip:
-      'Maximum heat added on percussive hits/beats. Uses Transient (red spikes) from AdaptiveMic. Higher values make fire "jump" on drum hits.',
+      'Maximum heat added on percussion hits (kick/snare/hihat). Higher values make fire "jump" more dramatically on drum hits.',
     unit: '',
   },
   burstsparks: {
@@ -99,16 +99,10 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '%',
   },
   transientcooldown: {
-    displayName: 'Transient Cooldown',
+    displayName: 'Percussion Cooldown',
     tooltip:
-      'Minimum time between transient detections (milliseconds). Prevents retriggering on same percussion hit.',
+      'Minimum time between percussion detections (milliseconds). Prevents retriggering on same kick/snare/hihat hit.',
     unit: 'ms',
-  },
-  transientfactor: {
-    displayName: 'Transient Threshold',
-    tooltip:
-      'Detection threshold for transients. LOWER values detect subtler attacks/beats (more sensitive, e.g. 0.5 = very sensitive). HIGHER values require stronger hits (less sensitive, e.g. 3.0 = only strong beats). Range: 0.1-5.0.',
-    unit: 'x',
   },
 
   // AGC settings (peak-based design, target always 100%)
@@ -136,12 +130,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'How quickly gain adjusts to match the peak target (0.1-30s). Higher = smoother but slower adaptation. Lower = faster but more reactive. Default: 5s.',
     unit: 's',
   },
-  hwcalibperiod: {
-    displayName: 'Hardware Calibration Period',
-    tooltip:
-      'How often hardware gain is recalibrated (milliseconds). Adapts to environmental changes (quiet room vs loud venue) over minutes. Default: 3 minutes (180000ms).',
-    unit: 'ms',
-  },
 };
 
 /**
@@ -155,9 +143,9 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
   t: {
-    displayName: 'Transient',
+    displayName: 'Percussion',
     tooltip:
-      'Percussion/attack detection (0-1). Single-frame impulse when beat detected. Value represents transient strength.',
+      'Percussion strength (0-1+). Maximum of kick/snare/hihat detection. Single-frame impulse when percussion detected. Drives fire bursts.',
     unit: '',
   },
   r: {
