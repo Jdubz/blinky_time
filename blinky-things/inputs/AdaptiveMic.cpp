@@ -103,7 +103,8 @@ void AdaptiveMic::update(float dt) {
     afterGain = clamp01(afterGain);
 
     // Software AGC fine-tunes output to target (tracks post-gain level)
-    if (agEnabled) {
+    // Only adapt when there's actual signal (not just amplifying noise/silence)
+    if (agEnabled && afterGain > noiseGate) {
       autoGainTick(afterGain, dt);
     }
 
