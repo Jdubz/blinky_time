@@ -1,15 +1,21 @@
 /**
  * TestPanel - Percussion detection testing interface
  *
- * Allows loading test audio + ground truth, playing tests,
- * and viewing real-time accuracy metrics.
+ * Uses programmatic test patterns with built-in soft-synths.
+ * No file uploads required - patterns are defined in code.
  */
 
 import { useState, useEffect, useRef } from 'react';
-import type { GroundTruthHit, DetectionEvent, TypeMetrics } from '../types/testTypes';
+import type { GroundTruthHit, DetectionEvent, TypeMetrics, TestPattern } from '../types/testTypes';
 import type { PercussionMessage, ConnectionState } from '../types';
-import { parseGroundTruthCSV, calculateAllMetrics, exportResultsCSV } from '../lib/testMetrics';
+import { calculateAllMetrics, exportResultsCSV } from '../lib/testMetrics';
+import { PercussionSynth } from '../lib/audioSynth';
+import { TEST_PATTERNS } from '../lib/testPatterns';
 import './TestPanel.css';
+
+// Test timing constants
+const TEST_COMPLETION_BUFFER_MS = 100; // Buffer time after pattern ends to allow final events
+const FINAL_METRICS_DELAY_MS = 500; // Wait for final serial messages before calculating metrics
 
 interface TestPanelProps {
   onPercussionEvent: (callback: (msg: PercussionMessage) => void) => () => void;
@@ -17,44 +23,73 @@ interface TestPanelProps {
 }
 
 export default function TestPanel({ onPercussionEvent, connectionState }: TestPanelProps) {
-  const [audioFile, setAudioFile] = useState<File | null>(null);
-  const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [groundTruth, setGroundTruth] = useState<GroundTruthHit[]>([]);
+  const [selectedPattern, setSelectedPattern] = useState<TestPattern | null>(null);
   const [detections, setDetections] = useState<DetectionEvent[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [testStartTime, setTestStartTime] = useState<number | null>(null);
   const [metrics, setMetrics] = useState<TypeMetrics | null>(null);
   const [progress, setProgress] = useState(0);
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const synthRef = useRef<PercussionSynth | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const groundTruthRef = useRef<GroundTruthHit[]>([]);
 
-  // Load CSV ground truth
-  const handleCsvUpload = async (file: File) => {
-    setCsvFile(file);
-    try {
-      const gt = await parseGroundTruthCSV(file);
-      setGroundTruth(gt);
-      console.log(`Loaded ${gt.length} ground truth annotations`);
-    } catch (error) {
-      console.error('Failed to parse CSV:', error);
-      alert('Failed to parse CSV file. Check format.');
+  // Initialize synthesizer on mount
+  useEffect(() => {
+    synthRef.current = new PercussionSynth();
+
+    return () => {
+      // Clean up timers on unmount
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+      // Clean up synthesizer
+      if (synthRef.current) {
+        synthRef.current.stop();
+        synthRef.current.dispose();
+      }
+    };
+  }, []);
+
+  // Handle pattern selection
+  const handlePatternSelect = (patternId: string) => {
+    const pattern = TEST_PATTERNS.find(p => p.id === patternId);
+    if (pattern) {
+      setSelectedPattern(pattern);
+      groundTruthRef.current = pattern.hits; // Update ref to avoid stale closure
+      setMetrics(null);
+      setDetections([]);
+      setProgress(0);
     }
   };
 
-  // Load audio file
-  const handleAudioUpload = (file: File) => {
-    setAudioFile(file);
-  };
-
-  // Play test
-  const playTest = () => {
+  // Play test pattern
+  const playTest = async () => {
     if (connectionState !== 'connected') {
       alert('Device not connected. Please connect device first.');
       return;
     }
 
-    if (!audioFile || groundTruth.length === 0) {
-      alert('Please load both audio file and CSV annotations');
+    if (!selectedPattern) {
+      alert('Please select a test pattern');
+      return;
+    }
+
+    if (!synthRef.current) {
+      alert('Audio synthesizer not initialized');
+      return;
+    }
+
+    // Resume audio context (required after user interaction)
+    try {
+      await synthRef.current.resume();
+    } catch (error) {
+      alert('Failed to start audio. Please check browser permissions.');
+      console.error('AudioContext resume failed:', error);
       return;
     }
 
@@ -65,45 +100,56 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
     setIsPlaying(true);
     setTestStartTime(Date.now());
 
-    // Create and play audio (Fix BUG #9: Track URL for cleanup)
-    const audioUrl = URL.createObjectURL(audioFile);
-    const audio = new Audio(audioUrl);
-    audioRef.current = audio;
+    // Schedule all percussion hits relative to a single start time for precise timing
+    const synth = synthRef.current;
+    synth.start(); // Ensure audio is enabled
 
-    audio.play();
+    const schedulingStartTime = synth.getCurrentTime();
+    for (const hit of selectedPattern.hits) {
+      synth.trigger(hit.type, schedulingStartTime + hit.time, hit.strength);
+    }
 
-    // Update progress (Fix BUG #10: Check for zero duration)
-    const progressInterval = setInterval(() => {
-      if (audio.currentTime && audio.duration && audio.duration > 0) {
-        setProgress((audio.currentTime / audio.duration) * 100);
-      }
+    // Update progress based on elapsed time
+    const durationMs = selectedPattern.durationMs;
+    const actualStartTime = Date.now();
+
+    const progressTimer = setInterval(() => {
+      const elapsed = Date.now() - actualStartTime;
+      setProgress(Math.min((elapsed / durationMs) * 100, 100));
     }, 100);
+    progressIntervalRef.current = progressTimer;
 
-    audio.onended = () => {
-      clearInterval(progressInterval);
+    // Stop test when pattern completes
+    const testTimeout = setTimeout(() => {
+      clearInterval(progressTimer);
       setIsPlaying(false);
       setProgress(100);
 
-      // Fix BUG #5: Wait for final serial messages to arrive
+      // Wait for final serial messages to arrive
       setTimeout(() => {
         setDetections(current => {
-          const finalMetrics = calculateAllMetrics(groundTruth, current);
+          const finalMetrics = calculateAllMetrics(groundTruthRef.current, current);
           setMetrics(finalMetrics);
-          console.log('Test complete. Metrics:', finalMetrics);
           return current;
         });
-      }, 500);
+      }, FINAL_METRICS_DELAY_MS);
+    }, durationMs + TEST_COMPLETION_BUFFER_MS);
 
-      // Clean up audio URL
-      URL.revokeObjectURL(audioUrl);
-    };
+    timeoutRef.current = testTimeout;
   };
 
   // Stop test
   const stopTest = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
+    // Stop audio immediately
+    if (synthRef.current) {
+      synthRef.current.stop();
+    }
+
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
     }
     setIsPlaying(false);
     setProgress(0);
@@ -142,11 +188,10 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
       }
 
       if (newDetections.length > 0) {
-        // Fix BUG #4: Race condition - use functional state update
         setDetections(prev => {
           const updated = [...prev, ...newDetections];
           // Calculate live metrics with updated detections
-          const liveMetrics = calculateAllMetrics(groundTruth, updated);
+          const liveMetrics = calculateAllMetrics(groundTruthRef.current, updated);
           setMetrics(liveMetrics);
           return updated;
         });
@@ -157,19 +202,19 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
     const cleanup = onPercussionEvent(handlePercussion);
 
     return cleanup;
-  }, [isPlaying, testStartTime, groundTruth, onPercussionEvent]);
+  }, [isPlaying, testStartTime, onPercussionEvent]);
 
   // Export results
   const exportResults = () => {
-    if (!metrics || !audioFile) return;
+    if (!metrics || !selectedPattern) return;
 
-    const csv = exportResultsCSV(audioFile.name, metrics);
+    const csv = exportResultsCSV(selectedPattern.name, metrics);
 
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `test-results-${Date.now()}.csv`;
+    a.download = `test-results-${selectedPattern.id}-${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -178,38 +223,40 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
     <div className="test-panel">
       <h2>Percussion Detection Test</h2>
 
-      {/* File Upload Section */}
-      <div className="upload-section">
-        <div className="file-input">
-          <label htmlFor="audio-file">Audio File:</label>
-          <input
-            id="audio-file"
-            type="file"
-            accept=".wav,.mp3"
-            onChange={e => e.target.files?.[0] && handleAudioUpload(e.target.files[0])}
-          />
-          {audioFile && <span className="file-name">✓ {audioFile.name}</span>}
-        </div>
+      {/* Pattern Selection */}
+      <div className="pattern-section">
+        <label htmlFor="pattern-select">Test Pattern:</label>
+        <select
+          id="pattern-select"
+          value={selectedPattern?.id || ''}
+          onChange={e => handlePatternSelect(e.target.value)}
+          disabled={isPlaying}
+          aria-label="Select percussion test pattern"
+          aria-describedby={selectedPattern ? 'pattern-info' : undefined}
+        >
+          <option value="">Select a pattern...</option>
+          {TEST_PATTERNS.map(pattern => (
+            <option key={pattern.id} value={pattern.id}>
+              {pattern.name}
+            </option>
+          ))}
+        </select>
 
-        <div className="file-input">
-          <label htmlFor="csv-file">Ground Truth CSV:</label>
-          <input
-            id="csv-file"
-            type="file"
-            accept=".csv"
-            onChange={e => e.target.files?.[0] && handleCsvUpload(e.target.files[0])}
-          />
-          {csvFile && <span className="file-name">✓ {groundTruth.length} annotations</span>}
-        </div>
+        {selectedPattern && (
+          <div className="pattern-info" id="pattern-info">
+            <p className="pattern-description">{selectedPattern.description}</p>
+            <div className="pattern-stats">
+              <span>Duration: {(selectedPattern.durationMs / 1000).toFixed(1)}s</span>
+              {selectedPattern.bpm && <span>BPM: {selectedPattern.bpm}</span>}
+              <span>Hits: {selectedPattern.hits.length}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Control Buttons */}
       <div className="controls">
-        <button
-          className="play-button"
-          onClick={playTest}
-          disabled={!audioFile || groundTruth.length === 0 || isPlaying}
-        >
+        <button className="play-button" onClick={playTest} disabled={!selectedPattern || isPlaying}>
           ▶ Play Test
         </button>
         <button className="stop-button" onClick={stopTest} disabled={!isPlaying}>
@@ -331,17 +378,27 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
       )}
 
       {/* Instructions */}
-      {!audioFile && !csvFile && (
+      {!selectedPattern && (
         <div className="instructions">
           <h3>How to Use</h3>
           <ol>
-            <li>Load a test audio file (WAV or MP3)</li>
-            <li>Load the corresponding ground truth CSV file</li>
+            <li>Select a test pattern from the dropdown</li>
             <li>Position the device near your speaker</li>
-            <li>Click "Play Test" and watch the metrics update live</li>
+            <li>Click "Play Test" - synthesized percussion will play</li>
+            <li>Watch metrics update live as device detects percussion</li>
             <li>Adjust detection parameters in Settings tab</li>
             <li>Re-run tests to see improvements</li>
           </ol>
+          <div className="pattern-list">
+            <h4>Available Patterns:</h4>
+            <ul>
+              {TEST_PATTERNS.map(pattern => (
+                <li key={pattern.id}>
+                  <strong>{pattern.name}</strong>: {pattern.description}
+                </li>
+              ))}
+            </ul>
+          </div>
         </div>
       )}
     </div>
