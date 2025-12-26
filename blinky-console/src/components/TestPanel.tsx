@@ -13,6 +13,10 @@ import { PercussionSynth } from '../lib/audioSynth';
 import { TEST_PATTERNS } from '../lib/testPatterns';
 import './TestPanel.css';
 
+// Test timing constants
+const TEST_COMPLETION_BUFFER_MS = 100; // Buffer time after pattern ends to allow final events
+const FINAL_METRICS_DELAY_MS = 500; // Wait for final serial messages before calculating metrics
+
 interface TestPanelProps {
   onPercussionEvent: (callback: (msg: PercussionMessage) => void) => () => void;
   connectionState: ConnectionState;
@@ -20,7 +24,6 @@ interface TestPanelProps {
 
 export default function TestPanel({ onPercussionEvent, connectionState }: TestPanelProps) {
   const [selectedPattern, setSelectedPattern] = useState<TestPattern | null>(null);
-  const [groundTruth, setGroundTruth] = useState<GroundTruthHit[]>([]);
   const [detections, setDetections] = useState<DetectionEvent[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [testStartTime, setTestStartTime] = useState<number | null>(null);
@@ -28,15 +31,25 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
   const [progress, setProgress] = useState(0);
 
   const synthRef = useRef<PercussionSynth | null>(null);
-  const timeoutRef = useRef<number | null>(null);
-  const progressIntervalRef = useRef<number | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const groundTruthRef = useRef<GroundTruthHit[]>([]);
 
   // Initialize synthesizer on mount
   useEffect(() => {
     synthRef.current = new PercussionSynth();
 
     return () => {
+      // Clean up timers on unmount
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+      if (progressIntervalRef.current) {
+        clearInterval(progressIntervalRef.current);
+      }
+      // Clean up synthesizer
       if (synthRef.current) {
+        synthRef.current.stop();
         synthRef.current.dispose();
       }
     };
@@ -47,7 +60,7 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
     const pattern = TEST_PATTERNS.find(p => p.id === patternId);
     if (pattern) {
       setSelectedPattern(pattern);
-      setGroundTruth(pattern.hits);
+      groundTruthRef.current = pattern.hits; // Update ref to avoid stale closure
       setMetrics(null);
       setDetections([]);
       setProgress(0);
@@ -72,7 +85,13 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
     }
 
     // Resume audio context (required after user interaction)
-    await synthRef.current.resume();
+    try {
+      await synthRef.current.resume();
+    } catch (error) {
+      alert('Failed to start audio. Please check browser permissions.');
+      console.error('AudioContext resume failed:', error);
+      return;
+    }
 
     // Reset state
     setDetections([]);
@@ -108,12 +127,12 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
       // Wait for final serial messages to arrive
       setTimeout(() => {
         setDetections(current => {
-          const finalMetrics = calculateAllMetrics(groundTruth, current);
+          const finalMetrics = calculateAllMetrics(groundTruthRef.current, current);
           setMetrics(finalMetrics);
           return current;
         });
-      }, 500);
-    }, durationMs + 100);
+      }, FINAL_METRICS_DELAY_MS);
+    }, durationMs + TEST_COMPLETION_BUFFER_MS);
 
     timeoutRef.current = testTimeout;
   };
@@ -171,7 +190,7 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
         setDetections(prev => {
           const updated = [...prev, ...newDetections];
           // Calculate live metrics with updated detections
-          const liveMetrics = calculateAllMetrics(groundTruth, updated);
+          const liveMetrics = calculateAllMetrics(groundTruthRef.current, updated);
           setMetrics(liveMetrics);
           return updated;
         });
@@ -182,7 +201,7 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
     const cleanup = onPercussionEvent(handlePercussion);
 
     return cleanup;
-  }, [isPlaying, testStartTime, groundTruth, onPercussionEvent]);
+  }, [isPlaying, testStartTime, onPercussionEvent]);
 
   // Export results
   const exportResults = () => {
@@ -211,6 +230,8 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
           value={selectedPattern?.id || ''}
           onChange={e => handlePatternSelect(e.target.value)}
           disabled={isPlaying}
+          aria-label="Select percussion test pattern"
+          aria-describedby={selectedPattern ? 'pattern-info' : undefined}
         >
           <option value="">Select a pattern...</option>
           {TEST_PATTERNS.map(pattern => (
@@ -221,7 +242,7 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
         </select>
 
         {selectedPattern && (
-          <div className="pattern-info">
+          <div className="pattern-info" id="pattern-info">
             <p className="pattern-description">{selectedPattern.description}</p>
             <div className="pattern-stats">
               <span>Duration: {(selectedPattern.durationMs / 1000).toFixed(1)}s</span>

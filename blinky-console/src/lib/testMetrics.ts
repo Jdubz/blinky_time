@@ -131,61 +131,6 @@ export function calculateAllMetrics(
 }
 
 /**
- * Parse CSV ground truth file
- */
-export async function parseGroundTruthCSV(file: File): Promise<GroundTruthHit[]> {
-  const text = await file.text();
-  const lines = text.trim().split('\n');
-
-  // Fix BUG #7: Better header detection
-  const hasHeader = /^time\s*,\s*type\s*,\s*strength/i.test(lines[0]);
-  const dataLines = hasHeader ? lines.slice(1) : lines;
-
-  const validTypes = ['kick', 'snare', 'hihat'];
-  let skippedLines = 0;
-
-  const hits = dataLines
-    .filter(line => line.trim().length > 0)
-    .map((line, idx) => {
-      const [time, type, strength] = line.split(',').map(s => s.trim());
-
-      const timeValue = parseFloat(time);
-      const strengthValue = parseFloat(strength);
-      const percType = type.toLowerCase();
-
-      // Fix BUG #8: Warn about malformed lines
-      if (isNaN(timeValue) || isNaN(strengthValue)) {
-        console.warn(`Skipping malformed CSV line ${idx + 2}: ${line}`);
-        skippedLines++;
-        return null;
-      }
-
-      // Fix BUG #6: Validate percussion type
-      if (!validTypes.includes(percType)) {
-        console.warn(
-          `Skipping invalid percussion type "${type}" at time ${timeValue}s (line ${idx + 2})`
-        );
-        skippedLines++;
-        return null;
-      }
-
-      return {
-        time: timeValue,
-        type: percType as PercussionType,
-        strength: strengthValue,
-      };
-    })
-    .filter((hit): hit is GroundTruthHit => hit !== null);
-
-  // Fix BUG #8: Notify user of skipped lines
-  if (skippedLines > 0) {
-    console.warn(`Loaded ${hits.length} annotations (${skippedLines} lines skipped due to errors)`);
-  }
-
-  return hits;
-}
-
-/**
  * Export test results as CSV
  */
 export function exportResultsCSV(testName: string, metrics: TypeMetrics): string {

@@ -7,49 +7,78 @@
 
 import type { PercussionType } from '../types/testTypes';
 
+// Kick drum synthesis constants
+const KICK_START_FREQ = 150; // Hz - initial pitch
+const KICK_END_FREQ = 50; // Hz - final pitch
+const KICK_PITCH_BEND_TIME = 0.05; // seconds
+const KICK_ATTACK_GAIN = 0.8; // 0.0-1.0
+const KICK_DECAY_TIME = 0.5; // seconds
+const KICK_MIN_GAIN = 0.01; // Minimum for exponential ramp
+
+// Snare drum synthesis constants
+const SNARE_DURATION = 0.2; // seconds
+const SNARE_NOISE_GAIN = 0.7; // 0.0-1.0
+const SNARE_TONE_GAIN = 0.3; // 0.0-1.0
+const SNARE_TONE_FREQ = 180; // Hz - shell resonance
+const SNARE_TONE_DECAY = 0.1; // seconds
+const SNARE_FILTER_FREQ = 1000; // Hz - highpass cutoff
+const SNARE_MIN_GAIN = 0.01; // Minimum for exponential ramp
+
+// Hi-hat synthesis constants
+const HIHAT_DURATION = 0.05; // seconds
+const HIHAT_GAIN = 0.5; // 0.0-1.0
+const HIHAT_FILTER_FREQ = 8000; // Hz - highpass cutoff
+const HIHAT_FILTER_Q = 1.0; // Filter resonance
+const HIHAT_MIN_GAIN = 0.01; // Minimum for exponential ramp
+
+// Master synthesizer constants
+const MASTER_VOLUME = 0.8; // 0.0-1.0
+
 /**
  * Synthesize a kick drum sound
  * Low-frequency sine wave (50-80Hz) with exponential decay
+ * Returns the oscillator for cleanup tracking
  */
 function synthKick(
   audioContext: AudioContext,
   destination: AudioNode,
   startTime: number,
   strength: number = 1.0
-): void {
-  // Oscillator for the "thump" - pitch drops from 150Hz to 50Hz
+): OscillatorNode {
+  // Oscillator for the "thump" - pitch drops from start to end frequency
   const osc = audioContext.createOscillator();
   const oscGain = audioContext.createGain();
 
   osc.type = 'sine';
-  osc.frequency.setValueAtTime(150, startTime);
-  osc.frequency.exponentialRampToValueAtTime(50, startTime + 0.05);
+  osc.frequency.setValueAtTime(KICK_START_FREQ, startTime);
+  osc.frequency.exponentialRampToValueAtTime(KICK_END_FREQ, startTime + KICK_PITCH_BEND_TIME);
 
   // Amplitude envelope - quick attack, exponential decay
-  oscGain.gain.setValueAtTime(0.8 * strength, startTime);
-  oscGain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.5);
+  oscGain.gain.setValueAtTime(KICK_ATTACK_GAIN * strength, startTime);
+  oscGain.gain.exponentialRampToValueAtTime(KICK_MIN_GAIN, startTime + KICK_DECAY_TIME);
 
   osc.connect(oscGain);
   oscGain.connect(destination);
 
   osc.start(startTime);
-  osc.stop(startTime + 0.5);
+  osc.stop(startTime + KICK_DECAY_TIME);
+
+  return osc;
 }
 
 /**
  * Synthesize a snare drum sound
  * Filtered white noise + tonal component for shell resonance
+ * Returns noise source and oscillator for cleanup tracking
  */
 function synthSnare(
   audioContext: AudioContext,
   destination: AudioNode,
   startTime: number,
   strength: number = 1.0
-): void {
-  const duration = 0.2;
-
+): [AudioBufferSourceNode, OscillatorNode] {
   // Noise component (rattle)
-  const bufferSize = audioContext.sampleRate * duration;
+  const bufferSize = audioContext.sampleRate * SNARE_DURATION;
   const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
   const data = buffer.getChannelData(0);
 
@@ -63,11 +92,11 @@ function synthSnare(
   // High-pass filter for noise (gives it "snare" character)
   const noiseFilter = audioContext.createBiquadFilter();
   noiseFilter.type = 'highpass';
-  noiseFilter.frequency.value = 1000;
+  noiseFilter.frequency.value = SNARE_FILTER_FREQ;
 
   const noiseGain = audioContext.createGain();
-  noiseGain.gain.setValueAtTime(0.7 * strength, startTime);
-  noiseGain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+  noiseGain.gain.setValueAtTime(SNARE_NOISE_GAIN * strength, startTime);
+  noiseGain.gain.exponentialRampToValueAtTime(SNARE_MIN_GAIN, startTime + SNARE_DURATION);
 
   noise.connect(noiseFilter);
   noiseFilter.connect(noiseGain);
@@ -78,10 +107,10 @@ function synthSnare(
   const toneGain = audioContext.createGain();
 
   toneOsc.type = 'triangle';
-  toneOsc.frequency.value = 180;
+  toneOsc.frequency.value = SNARE_TONE_FREQ;
 
-  toneGain.gain.setValueAtTime(0.3 * strength, startTime);
-  toneGain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.1);
+  toneGain.gain.setValueAtTime(SNARE_TONE_GAIN * strength, startTime);
+  toneGain.gain.exponentialRampToValueAtTime(SNARE_MIN_GAIN, startTime + SNARE_TONE_DECAY);
 
   toneOsc.connect(toneGain);
   toneGain.connect(destination);
@@ -89,23 +118,24 @@ function synthSnare(
   // Start both components
   noise.start(startTime);
   toneOsc.start(startTime);
-  toneOsc.stop(startTime + 0.1);
+  toneOsc.stop(startTime + SNARE_TONE_DECAY);
+
+  return [noise, toneOsc];
 }
 
 /**
  * Synthesize a hi-hat sound
  * High-frequency filtered noise with very short decay
+ * Returns noise source for cleanup tracking
  */
 function synthHihat(
   audioContext: AudioContext,
   destination: AudioNode,
   startTime: number,
   strength: number = 1.0
-): void {
-  const duration = 0.05;
-
+): AudioBufferSourceNode {
   // White noise
-  const bufferSize = audioContext.sampleRate * duration;
+  const bufferSize = audioContext.sampleRate * HIHAT_DURATION;
   const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
   const data = buffer.getChannelData(0);
 
@@ -116,21 +146,23 @@ function synthHihat(
   const noise = audioContext.createBufferSource();
   noise.buffer = buffer;
 
-  // High-pass filter (8kHz+) for metallic character
+  // High-pass filter for metallic character
   const filter = audioContext.createBiquadFilter();
   filter.type = 'highpass';
-  filter.frequency.value = 8000;
-  filter.Q.value = 1.0;
+  filter.frequency.value = HIHAT_FILTER_FREQ;
+  filter.Q.value = HIHAT_FILTER_Q;
 
   const gain = audioContext.createGain();
-  gain.gain.setValueAtTime(0.5 * strength, startTime);
-  gain.gain.exponentialRampToValueAtTime(0.01, startTime + duration);
+  gain.gain.setValueAtTime(HIHAT_GAIN * strength, startTime);
+  gain.gain.exponentialRampToValueAtTime(HIHAT_MIN_GAIN, startTime + HIHAT_DURATION);
 
   noise.connect(filter);
   filter.connect(gain);
   gain.connect(destination);
 
   noise.start(startTime);
+
+  return noise;
 }
 
 /**
@@ -140,12 +172,14 @@ function synthHihat(
 export class PercussionSynth {
   private audioContext: AudioContext;
   private masterGain: GainNode;
+  private scheduledSources: Array<AudioScheduledSourceNode>;
 
   constructor() {
     this.audioContext = new AudioContext();
     this.masterGain = this.audioContext.createGain();
-    this.masterGain.gain.value = 0.8; // Master volume
+    this.masterGain.gain.value = MASTER_VOLUME;
     this.masterGain.connect(this.audioContext.destination);
+    this.scheduledSources = [];
   }
 
   /**
@@ -158,15 +192,21 @@ export class PercussionSynth {
     const audioTime = this.audioContext.currentTime + timeSeconds;
 
     switch (type) {
-      case 'kick':
-        synthKick(this.audioContext, this.masterGain, audioTime, strength);
+      case 'kick': {
+        const osc = synthKick(this.audioContext, this.masterGain, audioTime, strength);
+        this.scheduledSources.push(osc);
         break;
-      case 'snare':
-        synthSnare(this.audioContext, this.masterGain, audioTime, strength);
+      }
+      case 'snare': {
+        const [noise, osc] = synthSnare(this.audioContext, this.masterGain, audioTime, strength);
+        this.scheduledSources.push(noise, osc);
         break;
-      case 'hihat':
-        synthHihat(this.audioContext, this.masterGain, audioTime, strength);
+      }
+      case 'hihat': {
+        const noise = synthHihat(this.audioContext, this.masterGain, audioTime, strength);
+        this.scheduledSources.push(noise);
         break;
+      }
     }
   }
 
@@ -187,19 +227,32 @@ export class PercussionSynth {
   }
 
   /**
-   * Stop all audio playback immediately by muting master gain
+   * Stop all audio playback immediately by muting master gain and canceling scheduled sounds
    */
   stop(): void {
+    // Stop and disconnect all scheduled audio sources
+    for (const source of this.scheduledSources) {
+      try {
+        source.stop();
+        source.disconnect();
+      } catch {
+        // Source may have already stopped naturally, ignore error
+      }
+    }
+    this.scheduledSources = [];
+
     // Immediately cut off all audio
     this.masterGain.gain.setValueAtTime(0, this.audioContext.currentTime);
   }
 
   /**
-   * Resume audio playback by restoring master gain
+   * Resume audio playback by restoring master gain and clearing source list
    */
   start(): void {
+    // Clear any previous scheduled sources
+    this.scheduledSources = [];
     // Restore master volume
-    this.masterGain.gain.setValueAtTime(0.8, this.audioContext.currentTime);
+    this.masterGain.gain.setValueAtTime(MASTER_VOLUME, this.audioContext.currentTime);
   }
 
   /**
