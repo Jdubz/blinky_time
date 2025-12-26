@@ -63,9 +63,7 @@ const DeviceConfig HAT_CONFIG = {
     .sparkHeatMax = 255,        // Maximum brightness
     .sparkChance = 0.080f,      // LOW base rate = quiet when no audio
     .audioSparkBoost = 0.800f,  // HUGE audio boost = explosive on hits
-    .audioHeatBoostMax = 150,   // Maximum heat boost from audio
     .coolingAudioBias = -70,    // Big cooling reduction on audio
-    .bottomRowsForSparks = 1,   // Not relevant for string fire
-    .transientHeatMax = 200     // Massive boost on beat hits
+    .bottomRowsForSparks = 1    // Not relevant for string fire
   }
 };

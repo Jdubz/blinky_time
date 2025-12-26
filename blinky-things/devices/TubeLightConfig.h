@@ -56,9 +56,7 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
     .sparkHeatMax = 200,      // Higher maximum for brightness
     .sparkChance = 0.200f,    // Reduced for cleaner fire
     .audioSparkBoost = 0.300f, // Audio responsiveness
-    .audioHeatBoostMax = 60,   // Audio heat boost
     .coolingAudioBias = -20,   // Audio cooling bias
-    .bottomRowsForSparks = 1,  // Single row for sparks
-    .transientHeatMax = 100    // Transient heat maximum
+    .bottomRowsForSparks = 1   // Single row for sparks
   }
 };

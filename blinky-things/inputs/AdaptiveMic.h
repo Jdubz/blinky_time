@@ -44,21 +44,17 @@ namespace MicConstants {
 class AdaptiveMic {
 public:
   // ---- Tunables ----
-  float noiseGate      = 0.04f;     // Noise gate threshold (0-1)
-
   // Window/Range auto-normalization - Peak/valley tracking
   float peakTau        = 2.0f;      // Peak adaptation speed (attack time, seconds)
   float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
 
-  // Hardware gain (PRIMARY - adapts to raw ADC input for best signal quality)
-  int      hwGainMin       = 0;
-  int      hwGainMax       = 80;  // Hardware maximum (nRF52840 PDM supports 0-80)
-  int      hwGainStep      = 1;
+  // Hardware gain targets (adapts to raw ADC input for best signal quality)
+  // Note: hwGainMin/Max are hardware limits (0-80 for nRF52840 PDM), not configurable
   float    hwTargetLow     = 0.15f;   // If raw input below this, increase HW gain
   float    hwTargetHigh    = 0.35f;   // If raw input above this, decrease HW gain
 
   // ---- Public state ----
-  float  level         = 0.0f;  // Final output level (0-1, post-range-mapping, post-gate)
+  float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
 
   // Percussion transient: single-frame impulse with strength (max of kick/snare/hihat)

@@ -26,27 +26,22 @@ struct FireParams {
     uint8_t sparkHeatMax        = Defaults::SparkHeatMax;
     float   sparkChance         = Defaults::SparkChance;
     float   audioSparkBoost     = Defaults::AudioSparkBoost;
-    uint8_t audioHeatBoostMax   = Defaults::AudioHeatBoostMax;
     int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
     uint8_t bottomRowsForSparks = Defaults::BottomRowsForSparks;
-    uint8_t transientHeatMax    = Defaults::TransientHeatMax;
 
     // Layout-specific parameters
-    uint8_t spreadDistance      = 12;     // Heat spread distance for linear/random layouts
-    float   heatDecay          = 0.92f;   // Heat decay factor for linear layouts
+    uint8_t spreadDistance      = Defaults::SpreadDistance;
+    float   heatDecay           = Defaults::HeatDecay;
     uint8_t maxSparkPositions   = 16;     // Max simultaneous spark positions
     bool    useMaxHeatOnly      = false;  // Use max heat instead of additive (linear layouts)
 
-    // Tuneable spark count on hits (burst mode)
-    uint8_t hitSparkBase        = 2;      // Base sparks on hit
-    uint8_t hitSparkMult        = 3;      // Multiplier for hit intensity (base + hit * mult)
+    // Burst mode parameters
     uint8_t burstSparks         = 8;      // Sparks generated on burst
     uint16_t suppressionMs      = 300;    // Suppress sparks for this long after burst
 
     // Ember noise floor (subtle ambient glow using noise)
-    uint8_t emberHeatMax        = 18;     // Maximum ember heat (dim glow)
-    float   emberNoiseSpeed     = 0.00033f; // How fast noise shifts (10% faster)
-    float   emberAudioScale     = 0.2f;   // How much audio affects ember brightness
+    uint8_t emberHeatMax        = Defaults::EmberHeatMax;
+    float   emberNoiseSpeed     = Defaults::EmberNoiseSpeed;
 };
 
 class Fire : public Generator {
@@ -73,7 +68,7 @@ public:
     // Individual parameter setters
     void setBaseCooling(const uint8_t cooling);
     void setSparkParams(const uint8_t heatMin, const uint8_t heatMax, const float chance);
-    void setAudioParams(const float sparkBoost, const uint8_t heatBoostMax, const int8_t coolingBias);
+    void setAudioParams(const float sparkBoost, const int8_t coolingBias);
 
     // Layout configuration (post-begin adjustments)
     void setLayoutType(LayoutType layoutType);

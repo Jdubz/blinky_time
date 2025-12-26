@@ -185,10 +185,8 @@ bool Fire::begin(const DeviceConfig& config) {
     params_.sparkHeatMax = config.fireDefaults.sparkHeatMax;
     params_.sparkChance = config.fireDefaults.sparkChance;
     params_.audioSparkBoost = config.fireDefaults.audioSparkBoost;
-    params_.audioHeatBoostMax = config.fireDefaults.audioHeatBoostMax;
     params_.coolingAudioBias = config.fireDefaults.coolingAudioBias;
     params_.bottomRowsForSparks = config.fireDefaults.bottomRowsForSparks;
-    params_.transientHeatMax = config.fireDefaults.transientHeatMax;
 
     // Apply layout-specific defaults
     if (layout_ == LINEAR_LAYOUT) {
@@ -704,9 +702,8 @@ void Fire::setSparkParams(const uint8_t heatMin, const uint8_t heatMax, const fl
     params_.sparkChance = chance;
 }
 
-void Fire::setAudioParams(const float sparkBoost, const uint8_t heatBoostMax, const int8_t coolingBias) {
+void Fire::setAudioParams(const float sparkBoost, const int8_t coolingBias) {
     params_.audioSparkBoost = sparkBoost;
-    params_.audioHeatBoostMax = heatBoostMax;
     params_.coolingAudioBias = coolingBias;
 }
 
