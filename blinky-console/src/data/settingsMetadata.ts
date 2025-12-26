@@ -43,12 +43,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'How much audio influences spark generation (0-100%). Uses Level (orange area) from AdaptiveMic. Higher values make fire more reactive to music.',
     unit: '%',
   },
-  audioheatboost: {
-    displayName: 'Audio Heat Boost',
-    tooltip:
-      'Maximum additional heat from audio input. Uses Level (orange area) from AdaptiveMic. Higher values create stronger audio-reactive flames.',
-    unit: '',
-  },
   coolingaudiobias: {
     displayName: 'Audio Cooling Bias',
     tooltip:
@@ -60,12 +54,6 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     tooltip:
       'Number of bottom rows where sparks can appear. More rows create taller initial flames.',
     unit: 'rows',
-  },
-  transientheatmax: {
-    displayName: 'Percussion Heat Boost',
-    tooltip:
-      'Maximum heat added on percussion hits (kick/snare/hihat). Higher values make fire "jump" more dramatically on drum hits.',
-    unit: '',
   },
   burstsparks: {
     displayName: 'Burst Spark Count',
@@ -91,13 +79,19 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'Maximum heat for ambient ember glow. Creates subtle background glow even without sparks.',
     unit: '',
   },
+  spreaddistance: {
+    displayName: 'Heat Spread Distance',
+    tooltip:
+      'How far heat propagates between pixels during each frame. Higher values create longer, more flowing flames.',
+    unit: 'pixels',
+  },
+  embernoisespeed: {
+    displayName: 'Ember Animation Speed',
+    tooltip: 'Speed of the ember glow animation. Higher values create faster flickering embers.',
+    unit: '',
+  },
 
   // Audio settings
-  gate: {
-    displayName: 'Noise Gate',
-    tooltip: 'Minimum audio level to register (0-100%). Filters out background noise and hiss.',
-    unit: '%',
-  },
   transientcooldown: {
     displayName: 'Percussion Cooldown',
     tooltip:

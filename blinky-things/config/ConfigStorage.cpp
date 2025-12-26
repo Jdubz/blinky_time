@@ -55,15 +55,13 @@ void ConfigStorage::loadDefaults() {
     data_.fire.sparkHeatMax = 255;
     data_.fire.sparkChance = 0.08f;
     data_.fire.audioSparkBoost = 0.8f;
-    data_.fire.audioHeatBoostMax = 150;
     data_.fire.coolingAudioBias = -70;
-    data_.fire.transientHeatMax = 200;
     data_.fire.spreadDistance = 3;
     data_.fire.heatDecay = 0.60f;
     data_.fire.suppressionMs = 300;
+    data_.fire.emberNoiseSpeed = 0.00033f;
 
     // Mic defaults (hardware-primary, window/range normalization)
-    data_.mic.noiseGate = 0.04f;
     // Window/Range normalization parameters
     data_.mic.peakTau = 2.0f;        // 2s peak adaptation
     data_.mic.releaseTau = 5.0f;     // 5s peak release
@@ -76,11 +74,6 @@ void ConfigStorage::loadDefaults() {
     data_.mic.kickThreshold = 1.3f;
     data_.mic.snareThreshold = 1.3f;
     data_.mic.hihatThreshold = 1.3f;
-
-    // Note: Timing behavior is now controlled by compile-time constants in MicConstants:
-    // - TRANSIENT_COOLDOWN_MS
-    // - HW_CALIB_PERIOD_MS
-    // - HW_TRACKING_TAU
 
     data_.brightness = 100;
 }
@@ -188,14 +181,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     fireParams.sparkHeatMax = data_.fire.sparkHeatMax;
     fireParams.sparkChance = data_.fire.sparkChance;
     fireParams.audioSparkBoost = data_.fire.audioSparkBoost;
-    fireParams.audioHeatBoostMax = data_.fire.audioHeatBoostMax;
     fireParams.coolingAudioBias = data_.fire.coolingAudioBias;
-    fireParams.transientHeatMax = data_.fire.transientHeatMax;
     fireParams.spreadDistance = data_.fire.spreadDistance;
     fireParams.heatDecay = data_.fire.heatDecay;
     fireParams.suppressionMs = data_.fire.suppressionMs;
+    fireParams.emberNoiseSpeed = data_.fire.emberNoiseSpeed;
 
-    mic.noiseGate = data_.mic.noiseGate;
     // Window/Range normalization parameters
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
@@ -207,8 +198,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     mic.kickThreshold = data_.mic.kickThreshold;
     mic.snareThreshold = data_.mic.snareThreshold;
     mic.hihatThreshold = data_.mic.hihatThreshold;
-
-    // Note: Timing constants are compile-time in MicConstants, not loaded from config
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -217,14 +206,12 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
     data_.fire.sparkChance = fireParams.sparkChance;
     data_.fire.audioSparkBoost = fireParams.audioSparkBoost;
-    data_.fire.audioHeatBoostMax = fireParams.audioHeatBoostMax;
     data_.fire.coolingAudioBias = fireParams.coolingAudioBias;
-    data_.fire.transientHeatMax = fireParams.transientHeatMax;
     data_.fire.spreadDistance = fireParams.spreadDistance;
     data_.fire.heatDecay = fireParams.heatDecay;
     data_.fire.suppressionMs = fireParams.suppressionMs;
+    data_.fire.emberNoiseSpeed = fireParams.emberNoiseSpeed;
 
-    data_.mic.noiseGate = mic.noiseGate;
     // Window/Range normalization parameters
     data_.mic.peakTau = mic.peakTau;
     data_.mic.releaseTau = mic.releaseTau;
@@ -236,8 +223,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.kickThreshold = mic.kickThreshold;
     data_.mic.snareThreshold = mic.snareThreshold;
     data_.mic.hihatThreshold = mic.hihatThreshold;
-
-    // Note: Timing constants are compile-time in MicConstants, not saved to config
 
     saveToFlash();
     dirty_ = false;

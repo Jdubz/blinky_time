@@ -60,9 +60,7 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
     .sparkHeatMax = 200,       // Standard maximum
     .sparkChance = 0.32f,      // Standard spark probability
     .audioSparkBoost = 0.3f,   // Standard audio boost
-    .audioHeatBoostMax = 60,   // Standard audio heat boost
     .coolingAudioBias = -20,   // Standard audio cooling bias
-    .bottomRowsForSparks = 1,  // Single bottom row for sparks
-    .transientHeatMax = 100    // Standard transient heat maximum
+    .bottomRowsForSparks = 1   // Single bottom row for sparks
   }
 };

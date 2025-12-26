@@ -280,9 +280,7 @@ void setup() {
   fireParams.sparkHeatMax = config.fireDefaults.sparkHeatMax;
   fireParams.sparkChance = config.fireDefaults.sparkChance;
   fireParams.audioSparkBoost = config.fireDefaults.audioSparkBoost;
-  fireParams.audioHeatBoostMax = config.fireDefaults.audioHeatBoostMax;
   fireParams.coolingAudioBias = config.fireDefaults.coolingAudioBias;
-  fireParams.transientHeatMax = config.fireDefaults.transientHeatMax;
   // Layout-specific params set by Fire::begin()
   fireParams.spreadDistance = 3;
   fireParams.heatDecay = 0.60f;

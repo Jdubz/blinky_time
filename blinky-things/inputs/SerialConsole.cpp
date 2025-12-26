@@ -43,14 +43,10 @@ void SerialConsole::registerSettings() {
             "Max spark heat", 0, 255);
         settings_.registerFloat("audiosparkboost", &fp->audioSparkBoost, "fire",
             "Audio influence on sparks", 0.0f, 1.0f);
-        settings_.registerUint8("audioheatboost", &fp->audioHeatBoostMax, "fire",
-            "Max audio heat boost", 0, 255);
         settings_.registerInt8("coolingaudiobias", &fp->coolingAudioBias, "fire",
             "Audio cooling bias", -128, 127);
         settings_.registerUint8("bottomrows", &fp->bottomRowsForSparks, "fire",
             "Spark injection rows", 1, 8);
-        settings_.registerUint8("transientheatmax", &fp->transientHeatMax, "fire",
-            "Transient heat boost", 0, 255);
         settings_.registerUint8("burstsparks", &fp->burstSparks, "fire",
             "Sparks per burst", 1, 20);
         settings_.registerUint16("suppressionms", &fp->suppressionMs, "fire",
@@ -59,15 +55,16 @@ void SerialConsole::registerSettings() {
             "Heat decay rate", 0.5f, 0.99f);
         settings_.registerUint8("emberheatmax", &fp->emberHeatMax, "fire",
             "Max ember heat", 0, 50);
+        settings_.registerUint8("spreaddistance", &fp->spreadDistance, "fire",
+            "Heat spread distance", 1, 24);
+        settings_.registerFloat("embernoisespeed", &fp->emberNoiseSpeed, "fire",
+            "Ember animation speed", 0.0001f, 0.002f);
     }
 
     // === AUDIO SETTINGS ===
+    // Window/Range normalization settings
+    // Peak/valley tracking adapts to signal (valley = adaptive noise floor)
     if (mic_) {
-        settings_.registerFloat("gate", &mic_->noiseGate, "audio",
-            "Noise gate threshold", 0.0f, 1.0f);
-
-        // Window/Range normalization settings
-        // Peak tracks actual signal (no target - follows loudness naturally)
         settings_.registerFloat("peaktau", &mic_->peakTau, "audio",
             "Peak adaptation speed (s)", 0.5f, 10.0f);
         settings_.registerFloat("releasetau", &mic_->releaseTau, "audio",
@@ -264,10 +261,8 @@ void SerialConsole::restoreDefaults() {
 
     // Restore mic defaults (window/range normalization)
     if (mic_) {
-        mic_->noiseGate = Defaults::NoiseGate;
         mic_->peakTau = Defaults::PeakTau;        // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;  // 5s peak release
-        // Note: Timing constants (transient cooldown, hw calib, hw tracking) are now compile-time constants
     }
 }
 

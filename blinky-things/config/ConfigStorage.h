@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 14;  // Config schema v14: peakTarget removed; timing constants are now compile-time
+    static const uint8_t CONFIG_VERSION = 15;  // Config schema v15: removed deprecated params (noiseGate, audioHeatBoostMax, transientHeatMax), added emberNoiseSpeed
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -16,16 +16,14 @@ public:
         uint8_t sparkHeatMax;
         float sparkChance;
         float audioSparkBoost;
-        uint8_t audioHeatBoostMax;
         int8_t coolingAudioBias;
-        uint8_t transientHeatMax;
         uint8_t spreadDistance;
         float heatDecay;
         uint16_t suppressionMs;
+        float emberNoiseSpeed;
     };
 
     struct StoredMicParams {
-        float noiseGate;
         // Window/Range normalization parameters
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
@@ -36,7 +34,6 @@ public:
         float kickThreshold;
         float snareThreshold;
         float hihatThreshold;
-        // Note: Timing constants (transient cooldown, hw calib, hw tracking) are now compile-time constants in MicConstants
     };
 
     struct ConfigData {

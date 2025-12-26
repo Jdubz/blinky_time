@@ -69,10 +69,8 @@ struct FireDefaults {
   uint8_t sparkHeatMax;
   float sparkChance;
   float audioSparkBoost;
-  uint8_t audioHeatBoostMax;
   int8_t coolingAudioBias;
   uint8_t bottomRowsForSparks;
-  uint8_t transientHeatMax;
 };
 
 struct DeviceConfig {
