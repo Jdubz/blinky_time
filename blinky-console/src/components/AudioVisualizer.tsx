@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -13,7 +13,6 @@ import {
 import { Line } from 'react-chartjs-2';
 import { AudioSample } from '../types';
 import { audioMetricsMetadata } from '../data/settingsMetadata';
-import { PercussionIndicator } from './PercussionIndicator';
 
 // Register Chart.js components
 ChartJS.register(
@@ -34,6 +33,14 @@ interface AudioVisualizerProps {
   disabled: boolean;
 }
 
+interface PercussionEvent {
+  index: number;
+  type: 'kick' | 'snare' | 'hihat';
+  strength: number;
+  icon: string;
+  color: string;
+}
+
 const MAX_DATA_POINTS = 150; // ~7.5 seconds at 20Hz
 
 export function AudioVisualizer({
@@ -47,10 +54,52 @@ export function AudioVisualizer({
   const rmsDataRef = useRef<number[]>([]);
   const labelsRef = useRef<string[]>([]);
   const chartRef = useRef<ChartJS<'line'>>(null);
+  const percussionEventsRef = useRef<PercussionEvent[]>([]);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [, setRenderTrigger] = useState(0);
 
   // Update data when new audio sample arrives
   useEffect(() => {
     if (!audioData || !isStreaming) return;
+
+    const currentIndex = levelDataRef.current.length;
+    let hasNewPercussion = false;
+
+    // Track percussion events
+    if (audioData.k === 1) {
+      percussionEventsRef.current.push({
+        index: currentIndex,
+        type: 'kick',
+        strength: audioData.ks,
+        icon: '🥁',
+        color: '#ef4444',
+      });
+      hasNewPercussion = true;
+    }
+    if (audioData.sn === 1) {
+      percussionEventsRef.current.push({
+        index: currentIndex,
+        type: 'snare',
+        strength: audioData.ss,
+        icon: '🥁',
+        color: '#3b82f6',
+      });
+      hasNewPercussion = true;
+    }
+    if (audioData.hh === 1) {
+      percussionEventsRef.current.push({
+        index: currentIndex,
+        type: 'hihat',
+        strength: audioData.hs,
+        icon: '🎵',
+        color: '#eab308',
+      });
+      hasNewPercussion = true;
+    }
+
+    if (hasNewPercussion) {
+      setRenderTrigger(n => n + 1);
+    }
 
     // Add new data point
     levelDataRef.current.push(audioData.l);
@@ -64,6 +113,11 @@ export function AudioVisualizer({
       transientDataRef.current.shift();
       rmsDataRef.current.shift();
       labelsRef.current.shift();
+
+      // Shift percussion events and remove those that are off the chart
+      percussionEventsRef.current = percussionEventsRef.current
+        .map(event => ({ ...event, index: event.index - 1 }))
+        .filter(event => event.index >= 0);
     }
 
     // Update chart
@@ -82,6 +136,7 @@ export function AudioVisualizer({
     transientDataRef.current = [];
     rmsDataRef.current = [];
     labelsRef.current = [];
+    percussionEventsRef.current = [];
     if (chartRef.current) {
       chartRef.current.data.labels = [];
       chartRef.current.data.datasets[0].data = [];
@@ -166,6 +221,61 @@ export function AudioVisualizer({
     },
   };
 
+  // Calculate percussion marker positions
+  const getPercussionMarkers = () => {
+    if (!chartRef.current || percussionEventsRef.current.length === 0) return null;
+
+    const chart = chartRef.current;
+    const xScale = chart.scales.x;
+    const yScale = chart.scales.y;
+
+    if (!xScale || !yScale) return null;
+
+    return percussionEventsRef.current.map((event, i) => {
+      const xPixel = xScale.getPixelForValue(event.index);
+      const yPixel = yScale.getPixelForValue(event.strength);
+      const bottomPixel = yScale.getPixelForValue(0);
+
+      return (
+        <div key={`${event.type}-${event.index}-${i}`} className="percussion-marker">
+          <svg
+            style={{
+              position: 'absolute',
+              left: xPixel,
+              top: 0,
+              width: 2,
+              height: '100%',
+              pointerEvents: 'none',
+            }}
+          >
+            <line
+              x1="0"
+              y1={yPixel}
+              x2="0"
+              y2={bottomPixel}
+              stroke={event.color}
+              strokeWidth="2"
+              opacity="0.8"
+            />
+          </svg>
+          <div
+            className="percussion-marker-icon"
+            style={{
+              position: 'absolute',
+              left: xPixel - 12,
+              top: yPixel - 12,
+              fontSize: '24px',
+              pointerEvents: 'none',
+              filter: `drop-shadow(0 0 4px ${event.color})`,
+            }}
+          >
+            {event.icon}
+          </div>
+        </div>
+      );
+    });
+  };
+
   return (
     <div className="audio-visualizer">
       <div className="audio-header">
@@ -203,14 +313,17 @@ export function AudioVisualizer({
         </div>
       </div>
 
-      <PercussionIndicator audioData={audioData} isStreaming={isStreaming} />
-
-      <div className="audio-chart-container">
+      <div
+        className="audio-chart-container"
+        ref={chartContainerRef}
+        style={{ position: 'relative' }}
+      >
         {!isStreaming && !disabled && (
           <div className="audio-placeholder">Click "Start Stream" to visualize audio input</div>
         )}
         {disabled && <div className="audio-placeholder">Connect to device to monitor audio</div>}
         <Line ref={chartRef} data={chartData} options={chartOptions} />
+        {getPercussionMarkers()}
       </div>
     </div>
   );
