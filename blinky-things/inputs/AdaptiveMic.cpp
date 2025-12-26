@@ -28,6 +28,13 @@ constexpr float MIN_NORMALIZATION_RANGE = 0.01f; // Minimum range to prevent div
 constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f; // Jump to signal if it exceeds peak * threshold
 constexpr float SNARE_DOMINANCE_THRESHOLD = 1.5f;  // Snare must exceed kick by this factor for simultaneous detection
 
+// Valley tracking constants (for low-noise MEMS microphone)
+constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f; // Valley releases 4x slower than peak (very slow upward drift)
+constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of full scale, suits low-noise mic)
+
+// Noise gate constant
+constexpr float MAPPED_NOISE_GATE_THRESHOLD = 0.01f; // Gate at 1% of mapped range (very permissive for low-noise mic)
+
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
 volatile uint32_t AdaptiveMic::s_isrCount   = 0;
@@ -56,7 +63,7 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
 
   // Initialize state
   level = 0.0f;
-  valleyLevel = 0.001f;  // Start valley very low for low-noise microphone (0.1% of full scale)
+  valleyLevel = VALLEY_FLOOR;  // Start valley very low for low-noise microphone (0.1% of full scale)
   peakLevel = 0.01f;  // Start peak at 1% of full scale
   transient = 0.0f;
   lastTransientMs = time_.millis();
@@ -126,14 +133,14 @@ void AdaptiveMic::update(float dt) {
       valleyTau = peakTau;
     } else {
       // Very slow release upward (valley can rise if noise floor increases)
-      valleyTau = releaseTau * 4.0f;
+      valleyTau = releaseTau * VALLEY_RELEASE_MULTIPLIER;
     }
     float valleyAlpha = 1.0f - expf(-dt / maxValue(valleyTau, MIN_TAU_RANGE));
 
     // Valley tracks toward current signal (with asymmetric response)
     valleyLevel += valleyAlpha * (normalized - valleyLevel);
-    // Low-noise mic: Allow valley to go very low (0.001 = 0.1% of full scale)
-    valleyLevel = maxValue(valleyLevel, 0.001f);
+    // Low-noise mic: Allow valley to go very low (0.1% of full scale)
+    valleyLevel = maxValue(valleyLevel, VALLEY_FLOOR);
 
     // Map current signal to 0-1 range based on peak/valley window
     float range = maxValue(MIN_NORMALIZATION_RANGE, peakLevel - valleyLevel);
@@ -141,8 +148,8 @@ void AdaptiveMic::update(float dt) {
     mapped = clamp01(mapped);
 
     // Apply noise gate to mapped output (very low threshold for low-noise microphone)
-    // Gate at 1% of mapped range to filter only the quietest noise
-    level = (mapped < 0.01f) ? 0.0f : mapped;
+    // Gate filters only the quietest noise (1% of mapped range)
+    level = (mapped < MAPPED_NOISE_GATE_THRESHOLD) ? 0.0f : mapped;
 
     // Frequency-specific percussion detection (always enabled)
     detectFrequencySpecific(nowMs, dt, n);
@@ -405,7 +412,8 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
     if (localKickEnergy > kickThresh) {
       kickDetected = true;
       // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
-      float ratio = localKickEnergy / maxValue(kickThresh, 0.0001f);
+      // Note: kickThresh is guaranteed >= PERCUSSION_FLOOR, so division is safe
+      float ratio = localKickEnergy / kickThresh;
       kickStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
     }
   }
@@ -416,7 +424,8 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
     if (localSnareEnergy > snareThresh) {
       snareDetected = true;
       // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
-      float ratio = localSnareEnergy / maxValue(snareThresh, 0.0001f);
+      // Note: snareThresh is guaranteed >= PERCUSSION_FLOOR, so division is safe
+      float ratio = localSnareEnergy / snareThresh;
       snareStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
     }
   }
@@ -427,7 +436,8 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
     if (localHihatEnergy > hihatThresh) {
       hihatDetected = true;
       // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
-      float ratio = localHihatEnergy / maxValue(hihatThresh, 0.0001f);
+      // Note: hihatThresh is guaranteed >= PERCUSSION_FLOOR, so division is safe
+      float ratio = localHihatEnergy / hihatThresh;
       hihatStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
     }
   }
