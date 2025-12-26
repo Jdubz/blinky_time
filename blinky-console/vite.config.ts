@@ -50,25 +50,26 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Minimal precaching - only essential shell assets
-        // JS/CSS have content hashes so fresh deploys get new URLs
-        globPatterns: ['**/*.{ico,woff2}'],
+        // Precache essential shell assets including index.html for offline PWA
+        globPatterns: ['index.html', '**/*.{ico,woff2}'],
         // Navigation fallback for SPA
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
-        // Runtime caching strategies - NetworkFirst for app assets
+        // Runtime caching strategies
         runtimeCaching: [
           {
-            // App JS/CSS - network first, fall back to cache
-            urlPattern: /\.(?:js|css)$/i,
-            handler: 'NetworkFirst',
+            // Hashed app assets - CacheFirst since new deploys get new URLs
+            // Only match same-origin assets in /assets/ with content hashes
+            urlPattern: ({ url }) =>
+              url.origin === self.location.origin &&
+              /\/assets\/.*\.[a-f0-9]+\.(?:js|css)$/i.test(url.pathname),
+            handler: 'CacheFirst',
             options: {
               cacheName: 'app-assets',
               expiration: {
                 maxEntries: 50,
-                maxAgeSeconds: 60 * 60 * 24, // 1 day
+                maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
               },
-              networkTimeoutSeconds: 3,
             },
           },
           {

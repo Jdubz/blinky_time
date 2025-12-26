@@ -60,16 +60,7 @@
         ]
       },
       {
-        "source": "/sw.js",
-        "headers": [
-          {
-            "key": "Cache-Control",
-            "value": "no-cache, no-store, must-revalidate"
-          }
-        ]
-      },
-      {
-        "source": "/workbox-*.js",
+        "source": "/@(sw|workbox-*).js",
         "headers": [
           {
             "key": "Cache-Control",
