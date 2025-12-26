@@ -62,18 +62,18 @@ public:
 
     // Fire specific methods
     void update();
-    void setAudioInput(float energy, float hit);
+    void setAudioInput(const float energy, const float hit);
 
     // Parameter configuration
     void setParams(const FireParams& params);
     void resetToDefaults();
-    FireParams& getParams() { return params_; }
     const FireParams& getParams() const { return params_; }
+    FireParams& getParamsMutable() { return params_; }  // For SerialConsole and config loading
 
     // Individual parameter setters
-    void setBaseCooling(uint8_t cooling);
-    void setSparkParams(uint8_t heatMin, uint8_t heatMax, float chance);
-    void setAudioParams(float sparkBoost, uint8_t heatBoostMax, int8_t coolingBias);
+    void setBaseCooling(const uint8_t cooling);
+    void setSparkParams(const uint8_t heatMin, const uint8_t heatMax, const float chance);
+    void setAudioParams(const float sparkBoost, const uint8_t heatBoostMax, const int8_t coolingBias);
 
     // Layout configuration (post-begin adjustments)
     void setLayoutType(LayoutType layoutType);

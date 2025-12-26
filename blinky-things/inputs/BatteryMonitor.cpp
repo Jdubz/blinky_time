@@ -97,10 +97,24 @@ float BatteryMonitor::readVoltage() {
   return v_batt;
 }
 
-void BatteryMonitor::update() {
+void BatteryMonitor::update(float dt) {
   float v = readVoltage();
-  // Low-pass filter
-  lastVoltage_ = (1.0f - cfg_.lpAlpha) * lastVoltage_ + cfg_.lpAlpha * v;
+
+  // FIX: Use time-based smoothing when dt is provided (frame-rate independent)
+  float alpha;
+  if (dt > 0.0f) {
+    // Time-based: convert lpAlpha to time constant and use exponential smoothing
+    // Assume lpAlpha was intended for ~30ms updates (typical battery check rate)
+    constexpr float NOMINAL_UPDATE_RATE = 0.03f;  // 30ms
+    float tau = -NOMINAL_UPDATE_RATE / logf(1.0f - cfg_.lpAlpha);
+    alpha = 1.0f - expf(-dt / tau);
+  } else {
+    // Backwards compatibility: use lpAlpha directly if dt not provided
+    alpha = cfg_.lpAlpha;
+  }
+
+  // Low-pass filter with calculated alpha
+  lastVoltage_ = (1.0f - alpha) * lastVoltage_ + alpha * v;
   lastPercent_ = voltageToPercent(lastVoltage_);
 }
 

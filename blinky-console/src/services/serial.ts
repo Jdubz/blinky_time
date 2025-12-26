@@ -1,4 +1,10 @@
-import { DeviceInfo, SettingsResponse, AudioMessage, BatteryMessage } from '../types';
+import {
+  DeviceInfo,
+  SettingsResponse,
+  AudioMessage,
+  BatteryMessage,
+  PercussionMessage,
+} from '../types';
 
 // WebSerial type declarations
 declare global {
@@ -44,7 +50,8 @@ export type SerialEventType =
   | 'error'
   | 'audio'
   | 'battery'
-  | 'batteryStatus';
+  | 'batteryStatus'
+  | 'percussion';
 
 export interface BatteryStatusData {
   voltage: number; // Battery voltage in volts
@@ -59,6 +66,7 @@ export interface SerialEvent {
   audio?: AudioMessage;
   battery?: BatteryMessage;
   batteryStatus?: BatteryStatusData;
+  percussion?: PercussionMessage;
   error?: Error;
 }
 
@@ -359,6 +367,17 @@ class SerialService {
               continue;
             } catch {
               // Not valid battery status JSON
+            }
+          }
+
+          // Check if it's a percussion detection message
+          if (trimmed.startsWith('{"type":"PERCUSSION"')) {
+            try {
+              const percMsg = JSON.parse(trimmed) as PercussionMessage;
+              this.emit({ type: 'percussion', percussion: percMsg });
+              continue;
+            } catch {
+              // Not valid percussion JSON
             }
           }
 
