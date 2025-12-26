@@ -395,6 +395,12 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
   // Minimum percussion floor threshold (absolute minimum to prevent noise triggers)
   constexpr float PERCUSSION_FLOOR = 0.0001f;  // Very low floor - rely on relative thresholds
 
+  // Percussion strength normalization: Map energy/threshold ratio to 0-1 range
+  // At threshold (1.0x): strength = 0.0
+  // At 3x threshold: strength = 1.0 (very strong hit)
+  // Above 3x: clamped to 1.0
+  constexpr float MAX_PERCUSSION_RATIO = 3.0f;
+
   // IMPROVED THRESHOLD LOGIC (#6): Clearer, simpler threshold calculation
   // Use maximum of absolute floor OR relative threshold
   // Detect kick (bass transient)
@@ -402,7 +408,9 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
     float kickThresh = maxValue(PERCUSSION_FLOOR, kickBaseline * kickThreshold);
     if (localKickEnergy > kickThresh) {
       kickDetected = true;
-      kickStrength = localKickEnergy / maxValue(kickThresh, 0.0001f);
+      // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
+      float ratio = localKickEnergy / maxValue(kickThresh, 0.0001f);
+      kickStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
     }
   }
 
@@ -411,7 +419,9 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
     float snareThresh = maxValue(PERCUSSION_FLOOR, snareBaseline * snareThreshold);
     if (localSnareEnergy > snareThresh) {
       snareDetected = true;
-      snareStrength = localSnareEnergy / maxValue(snareThresh, 0.0001f);
+      // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
+      float ratio = localSnareEnergy / maxValue(snareThresh, 0.0001f);
+      snareStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
     }
   }
 
@@ -420,7 +430,9 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
     float hihatThresh = maxValue(PERCUSSION_FLOOR, hihatBaseline * hihatThreshold);
     if (localHihatEnergy > hihatThresh) {
       hihatDetected = true;
-      hihatStrength = localHihatEnergy / maxValue(hihatThresh, 0.0001f);
+      // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
+      float ratio = localHihatEnergy / maxValue(hihatThresh, 0.0001f);
+      hihatStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
     }
   }
 

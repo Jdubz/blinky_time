@@ -229,12 +229,12 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
   });
 
   describe('Percussion detection values', () => {
-    it('percussion strength can exceed 1.0', () => {
-      // Regression test: Percussion strength is energy/threshold ratio
-      // Can be > 1.0 for strong hits (2.0-3.0 typical for loud percussion)
+    it('percussion strength is normalized to 0-1 range', () => {
+      // Regression test: Percussion strength is now normalized to 0-1
+      // 0.0 at threshold, 1.0 at 3x threshold (very strong hit)
       const sample: AudioSample = {
         l: 0.8,
-        t: 2.5, // Strong transient
+        t: 1.0, // Strong transient (normalized)
         pk: 0.15,
         vl: 0.03,
         raw: 0.3,
@@ -243,14 +243,16 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         k: 1,
         sn: 0,
         hh: 0,
-        ks: 2.5, // Kick strength > 1.0 (very strong hit)
+        ks: 1.0, // Kick strength at max (3x threshold)
         ss: 0.0,
         hs: 0.0,
         z: 0.05,
       };
 
-      expect(sample.ks).toBeGreaterThan(1.0);
-      expect(sample.t).toBeGreaterThan(1.0);
+      expect(sample.ks).toBeLessThanOrEqual(1.0);
+      expect(sample.ks).toBeGreaterThanOrEqual(0.0);
+      expect(sample.t).toBeLessThanOrEqual(1.0);
+      expect(sample.t).toBeGreaterThanOrEqual(0.0);
     });
 
     it('percussion impulse flags are boolean 0 or 1', () => {
@@ -258,7 +260,7 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
       const samples: AudioSample[] = [
         {
           l: 0.5,
-          t: 1.8,
+          t: 0.9,
           pk: 0.1,
           vl: 0.02,
           raw: 0.2,
@@ -267,14 +269,14 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           k: 1, // Kick detected
           sn: 0,
           hh: 1, // Hihat detected
-          ks: 1.8,
+          ks: 0.9,
           ss: 0.0,
-          hs: 1.2,
+          hs: 0.6,
           z: 0.15,
         },
         {
           l: 0.6,
-          t: 2.1,
+          t: 1.0,
           pk: 0.12,
           vl: 0.03,
           raw: 0.25,
@@ -284,7 +286,7 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           sn: 1, // Snare detected
           hh: 0,
           ks: 0.0,
-          ss: 2.1,
+          ss: 1.0,
           hs: 0.0,
           z: 0.3,
         },
