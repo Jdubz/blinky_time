@@ -100,12 +100,13 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
     setIsPlaying(true);
     setTestStartTime(Date.now());
 
-    // Schedule all percussion hits
+    // Schedule all percussion hits relative to a single start time for precise timing
     const synth = synthRef.current;
     synth.start(); // Ensure audio is enabled
 
+    const schedulingStartTime = synth.getCurrentTime();
     for (const hit of selectedPattern.hits) {
-      synth.trigger(hit.type, hit.time, hit.strength);
+      synth.trigger(hit.type, schedulingStartTime + hit.time, hit.strength);
     }
 
     // Update progress based on elapsed time

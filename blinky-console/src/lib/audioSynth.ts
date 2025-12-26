@@ -82,8 +82,9 @@ function synthSnare(
   const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
   const data = buffer.getChannelData(0);
 
+  // Generate normalized noise (-1 to 1), strength applied via gain node
   for (let i = 0; i < bufferSize; i++) {
-    data[i] = (Math.random() * 2 - 1) * strength;
+    data[i] = Math.random() * 2 - 1;
   }
 
   const noise = audioContext.createBufferSource();
@@ -139,8 +140,9 @@ function synthHihat(
   const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
   const data = buffer.getChannelData(0);
 
+  // Generate normalized noise (-1 to 1), strength applied via gain node
   for (let i = 0; i < bufferSize; i++) {
-    data[i] = (Math.random() * 2 - 1) * strength;
+    data[i] = Math.random() * 2 - 1;
   }
 
   const noise = audioContext.createBufferSource();
@@ -183,14 +185,12 @@ export class PercussionSynth {
   }
 
   /**
-   * Trigger a percussion sound at specified time
+   * Trigger a percussion sound at specified absolute time
    * @param type - Percussion type (kick/snare/hihat)
-   * @param timeSeconds - When to play (in seconds relative to AudioContext time)
+   * @param audioTime - Absolute time in AudioContext timeline (seconds)
    * @param strength - Hit strength 0.0-1.0
    */
-  trigger(type: PercussionType, timeSeconds: number, strength: number = 1.0): void {
-    const audioTime = this.audioContext.currentTime + timeSeconds;
-
+  trigger(type: PercussionType, audioTime: number, strength: number = 1.0): void {
     switch (type) {
       case 'kick': {
         const osc = synthKick(this.audioContext, this.masterGain, audioTime, strength);
