@@ -1,6 +1,6 @@
 import { useState, ReactNode, useCallback, KeyboardEvent } from 'react';
 
-export type TabId = 'inputs' | 'generators' | 'effects';
+export type TabId = 'inputs' | 'generators' | 'effects' | 'test';
 
 interface Tab {
   id: TabId;

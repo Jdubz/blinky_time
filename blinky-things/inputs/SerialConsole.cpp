@@ -28,7 +28,7 @@ void SerialConsole::registerSettings() {
     // Get direct pointers to the fire generator's params
     FireParams* fp = nullptr;
     if (fireGenerator_) {
-        fp = &fireGenerator_->getParams();
+        fp = &fireGenerator_->getParamsMutable();
     }
 
     // === FIRE SETTINGS ===
@@ -236,7 +236,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
 
     if (strcmp(cmd, "load") == 0) {
         if (configStorage_ && fireGenerator_ && mic_) {
-            configStorage_->loadConfiguration(fireGenerator_->getParams(), *mic_);
+            configStorage_->loadConfiguration(fireGenerator_->getParamsMutable(), *mic_);
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));

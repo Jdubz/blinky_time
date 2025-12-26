@@ -85,13 +85,19 @@ FireParams fireParams;
 
 void updateFireParams() {
   if (!currentGenerator) return;
-  Fire* f = static_cast<Fire*>(currentGenerator);
-  f->setParams(fireParams);
+  // FIX: Add type safety - only cast if it's actually a Fire generator
+  if (strcmp(currentGenerator->getName(), "Fire") == 0) {
+    Fire* f = static_cast<Fire*>(currentGenerator);
+    f->setParams(fireParams);
+  }
 }
 
 // Helper functions for new Generator-Effect-Renderer architecture
 void updateFireEffect(float energy, float hit) {
   if (!currentGenerator) return;
+
+  // FIX: Add type safety - only cast if it's actually a Fire generator
+  if (strcmp(currentGenerator->getName(), "Fire") != 0) return;
 
   // Update generator with audio energy and impact
   Fire* fireGen = static_cast<Fire*>(currentGenerator);
@@ -344,6 +350,9 @@ void setup() {
   console->begin();
   Serial.println(F("Serial console initialized"));
 
+  // FIX: Reset frame timing to prevent stale state from previous boot
+  lastMs = 0;
+
   Serial.println(F("Setup complete!"));
 
   // Mark boot as stable - we made it through setup without crashing
@@ -354,6 +363,14 @@ void setup() {
 void loop() {
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
+
+  // FIX: Add diagnostics when frame time exceeds maximum (indicates performance issues)
+  if (dt > Constants::MAX_FRAME_TIME) {
+    Serial.print(F("WARNING: Frame time exceeded: "));
+    Serial.print((now - lastMs));
+    Serial.println(F("ms - loop() running too slowly!"));
+  }
+
   dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
   lastMs = now;
 
@@ -361,6 +378,25 @@ void loop() {
 
   float energy = mic ? mic->getLevel() : 0.0f;
   float hit = mic ? mic->getTransient() : 0.0f;
+
+  // Send percussion detection events for test analysis (always enabled)
+  if (mic && (mic->getKickImpulse() || mic->getSnareImpulse() || mic->getHihatImpulse())) {
+    Serial.print(F("{\"type\":\"PERCUSSION\",\"timestampMs\":"));
+    Serial.print(now);
+    Serial.print(F(",\"kick\":"));
+    Serial.print(mic->getKickImpulse() ? "true" : "false");
+    Serial.print(F(",\"snare\":"));
+    Serial.print(mic->getSnareImpulse() ? "true" : "false");
+    Serial.print(F(",\"hihat\":"));
+    Serial.print(mic->getHihatImpulse() ? "true" : "false");
+    Serial.print(F(",\"kickStrength\":"));
+    Serial.print(mic->getKickStrength(), 2);
+    Serial.print(F(",\"snareStrength\":"));
+    Serial.print(mic->getSnareStrength(), 2);
+    Serial.print(F(",\"hihatStrength\":"));
+    Serial.print(mic->getHihatStrength(), 2);
+    Serial.println(F("}"));
+  }
 
   // Track charging state changes
   bool currentChargingState = battery ? battery->isCharging() : false;

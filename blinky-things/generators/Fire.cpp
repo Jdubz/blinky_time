@@ -281,7 +281,7 @@ void Fire::reset() {
     this->lastUpdateMs_ = millis();
 }
 
-void Fire::setAudioInput(float energy, float hit) {
+void Fire::setAudioInput(const float energy, const float hit) {
     audioEnergy_ = energy;
     audioHit_ = hit;
 }
@@ -341,6 +341,14 @@ void Fire::updateMatrixFire() {
     // VERTICAL: y=0 is physical top, so fire rises from high y to low y
     // HORIZONTAL: y=0 is physical bottom, so fire rises from low y to high y
 
+    // Heat propagation weights - weighted average of nearby cells
+    // Overflow safety: heat_ values are uint8_t (0-255), weights are small constants
+    // Max calculation: (255 * 1) + (255 * 2) = 765, well within uint16_t range (65535)
+    // After division and averaging: result stays <= 255, safe to cast back to uint8_t
+    constexpr uint16_t HEAT_WEIGHT_NEAR = 1;  // Weight for adjacent cell
+    constexpr uint16_t HEAT_WEIGHT_FAR = 2;   // Weight for cell 2 away (stronger influence)
+    constexpr uint16_t HEAT_WEIGHT_TOTAL = HEAT_WEIGHT_NEAR + HEAT_WEIGHT_FAR;
+
     if (orientation_ == VERTICAL) {
         // Fire rises from bottom (high y) to top (low y)
         for (int x = 0; x < this->width_; x++) {
@@ -350,16 +358,22 @@ void Fire::updateMatrixFire() {
                 int below2Index = coordsToIndex(x, y + 2);
 
                 if (currentIndex >= 0 && belowIndex >= 0 && below2Index >= 0) {
-                    uint16_t newHeat = (heat_[belowIndex] + heat_[below2Index] * 2) / 3;
+                    // FIX: Use uint16_t arithmetic to prevent overflow
+                    uint16_t newHeat = ((uint16_t)heat_[belowIndex] * HEAT_WEIGHT_NEAR +
+                                        (uint16_t)heat_[below2Index] * HEAT_WEIGHT_FAR) / HEAT_WEIGHT_TOTAL;
 
-                    // Add horizontal spread
+                    // Add horizontal spread (prevent overflow with uint16_t)
                     if (x > 0) {
                         int leftIndex = coordsToIndex(x - 1, y + 1);
-                        if (leftIndex >= 0) newHeat = (newHeat + heat_[leftIndex]) / 2;
+                        if (leftIndex >= 0) {
+                            newHeat = ((uint16_t)newHeat + (uint16_t)heat_[leftIndex]) / 2;
+                        }
                     }
                     if (x < this->width_ - 1) {
                         int rightIndex = coordsToIndex(x + 1, y + 1);
-                        if (rightIndex >= 0) newHeat = (newHeat + heat_[rightIndex]) / 2;
+                        if (rightIndex >= 0) {
+                            newHeat = ((uint16_t)newHeat + (uint16_t)heat_[rightIndex]) / 2;
+                        }
                     }
 
                     heat_[currentIndex] = min(255, newHeat);
@@ -375,16 +389,22 @@ void Fire::updateMatrixFire() {
                 int below2Index = coordsToIndex(x, y - 2);
 
                 if (currentIndex >= 0 && belowIndex >= 0 && below2Index >= 0) {
-                    uint16_t newHeat = (heat_[belowIndex] + heat_[below2Index] * 2) / 3;
+                    // FIX: Use uint16_t arithmetic to prevent overflow
+                    uint16_t newHeat = ((uint16_t)heat_[belowIndex] * HEAT_WEIGHT_NEAR +
+                                        (uint16_t)heat_[below2Index] * HEAT_WEIGHT_FAR) / HEAT_WEIGHT_TOTAL;
 
-                    // Add horizontal spread
+                    // Add horizontal spread (prevent overflow with uint16_t)
                     if (x > 0) {
                         int leftIndex = coordsToIndex(x - 1, y - 1);
-                        if (leftIndex >= 0) newHeat = (newHeat + heat_[leftIndex]) / 2;
+                        if (leftIndex >= 0) {
+                            newHeat = ((uint16_t)newHeat + (uint16_t)heat_[leftIndex]) / 2;
+                        }
                     }
                     if (x < this->width_ - 1) {
                         int rightIndex = coordsToIndex(x + 1, y - 1);
-                        if (rightIndex >= 0) newHeat = (newHeat + heat_[rightIndex]) / 2;
+                        if (rightIndex >= 0) {
+                            newHeat = ((uint16_t)newHeat + (uint16_t)heat_[rightIndex]) / 2;
+                        }
                     }
 
                     heat_[currentIndex] = min(255, newHeat);
@@ -674,17 +694,17 @@ void Fire::indexToCoords(int index, int& x, int& y) {
 }
 
 // Implement parameter setters
-void Fire::setBaseCooling(uint8_t cooling) {
+void Fire::setBaseCooling(const uint8_t cooling) {
     params_.baseCooling = cooling;
 }
 
-void Fire::setSparkParams(uint8_t heatMin, uint8_t heatMax, float chance) {
+void Fire::setSparkParams(const uint8_t heatMin, const uint8_t heatMax, const float chance) {
     params_.sparkHeatMin = heatMin;
     params_.sparkHeatMax = heatMax;
     params_.sparkChance = chance;
 }
 
-void Fire::setAudioParams(float sparkBoost, uint8_t heatBoostMax, int8_t coolingBias) {
+void Fire::setAudioParams(const float sparkBoost, const uint8_t heatBoostMax, const int8_t coolingBias) {
     params_.audioSparkBoost = sparkBoost;
     params_.audioHeatBoostMax = heatBoostMax;
     params_.coolingAudioBias = coolingBias;

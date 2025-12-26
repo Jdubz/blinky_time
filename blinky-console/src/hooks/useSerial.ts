@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { serialService, SerialEvent, BatteryStatusData } from '../services/serial';
 import {
   DeviceInfo,
@@ -7,6 +7,7 @@ import {
   BatterySample,
   ConnectionState,
   SettingsByCategory,
+  PercussionMessage,
 } from '../types';
 
 export interface UseSerialReturn {
@@ -24,6 +25,9 @@ export interface UseSerialReturn {
   audioData: AudioSample | null;
   batteryData: BatterySample | null;
   batteryStatusData: BatteryStatusData | null;
+
+  // Percussion detection
+  onPercussionEvent: (callback: (msg: PercussionMessage) => void) => () => void;
 
   // Serial console
   consoleLines: string[];
@@ -53,6 +57,9 @@ export function useSerial(): UseSerialReturn {
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
   const [batteryStatusData, setBatteryStatusData] = useState<BatteryStatusData | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
+
+  // Percussion event callbacks
+  const percussionCallbacksRef = useRef<Set<(msg: PercussionMessage) => void>>(new Set());
 
   const isSupported = serialService.isSupported();
 
@@ -140,6 +147,14 @@ export function useSerial(): UseSerialReturn {
         case 'batteryStatus':
           if (event.batteryStatus) {
             setBatteryStatusData(event.batteryStatus);
+          }
+          break;
+        case 'percussion':
+          if (event.percussion) {
+            // Notify all registered percussion callbacks
+            percussionCallbacksRef.current.forEach(callback => {
+              callback(event.percussion!);
+            });
           }
           break;
         case 'data':
@@ -264,6 +279,15 @@ export function useSerial(): UseSerialReturn {
     });
   }, []);
 
+  // Register callback for percussion events
+  const onPercussionEvent = useCallback((callback: (msg: PercussionMessage) => void) => {
+    percussionCallbacksRef.current.add(callback);
+    // Return cleanup function
+    return () => {
+      percussionCallbacksRef.current.delete(callback);
+    };
+  }, []);
+
   return {
     connectionState,
     isSupported,
@@ -274,6 +298,7 @@ export function useSerial(): UseSerialReturn {
     audioData,
     batteryData,
     batteryStatusData,
+    onPercussionEvent,
     consoleLines,
     clearConsole,
     sendCommand,

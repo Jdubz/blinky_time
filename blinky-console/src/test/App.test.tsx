@@ -14,6 +14,7 @@ const mockUseSerial: UseSerialReturn = {
   audioData: null,
   batteryData: null,
   batteryStatusData: null,
+  onPercussionEvent: vi.fn(() => () => {}),
   consoleLines: [],
   clearConsole: vi.fn(),
   sendCommand: vi.fn(),

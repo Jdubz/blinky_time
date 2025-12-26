@@ -84,7 +84,8 @@ public:
   uint16_t readRaw();       // raw ADC units (0..2^adcBits-1)
 
   // Periodic smoother (calls readVoltage() internally)
-  void update();
+  // FIX: Use time-based smoothing instead of frame-rate dependent alpha
+  void update(float dt = 0.0f);  // dt in seconds (0 = use lpAlpha directly for backwards compat)
   float getVoltage() const { return lastVoltage_; }     // smoothed volts
   uint8_t getPercent() const { return lastPercent_; }   // 0..100 (approximate)
 

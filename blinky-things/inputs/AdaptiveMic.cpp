@@ -21,6 +21,14 @@ static T minValue(T a, T b) {
     return (a < b) ? a : b;
 }
 
+// -------- AGC and tracking constants --------
+constexpr float MIN_TAU_HARDWARE = 1.0f;      // Minimum hardware tracking tau (1s) to prevent instability
+constexpr float MIN_TAU_ENVELOPE = 0.001f;    // Minimum envelope follower tau (1ms)
+constexpr float MIN_TAU_GAIN = 0.1f;          // Minimum gain adaptation tau (100ms)
+constexpr float NOMINAL_GAIN = 3.0f;          // Nominal/target software gain during silence
+constexpr float GAIN_DECAY_RATE = 0.3f;       // Decay rate toward nominal gain (30% per tau)
+constexpr float SNARE_DOMINANCE_THRESHOLD = 1.5f;  // Snare must exceed kick by this factor for simultaneous detection
+
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
 volatile uint32_t AdaptiveMic::s_isrCount   = 0;
@@ -95,7 +103,7 @@ void AdaptiveMic::update(float dt) {
 
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
-    float alpha = 1.0f - expf(-dt / maxValue(hwTrackingTau, 1.0f));
+    float alpha = 1.0f - expf(-dt / maxValue(hwTrackingTau, MIN_TAU_HARDWARE));
     rawTrackedLevel += alpha * (normalized - rawTrackedLevel);
 
     // Apply software gain (SECONDARY - fine adjustments only)
@@ -103,16 +111,36 @@ void AdaptiveMic::update(float dt) {
     afterGain = clamp01(afterGain);
 
     // Software AGC fine-tunes output to target (tracks post-gain level)
-    // Only adapt when there's actual signal (not just amplifying noise/silence)
-    if (agEnabled && afterGain > noiseGate) {
-      autoGainTick(afterGain, dt);
+    // CRITICAL FIX: Always update trackedLevel (even during silence) to prevent stale state
+    // This fixes the 100x gain pegging bug caused by frozen trackedLevel
+    if (agEnabled) {
+      // Always track level with envelope follower (prevents stale state during silence)
+      float tau = (afterGain > trackedLevel) ? agcAttackTau : agcReleaseTau;
+      float trackAlpha = 1.0f - expf(-dt / maxValue(tau, MIN_TAU_ENVELOPE));
+      trackedLevel += trackAlpha * (afterGain - trackedLevel);
+
+      // Only adjust gain when there's real signal (prevents amplifying noise)
+      // Can always decrease gain, but only increase when signal present
+      if (afterGain > noiseGate) {
+        // Real signal present - allow gain adjustments
+        float err = AG_PEAK_TARGET - trackedLevel;
+        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau, MIN_TAU_GAIN));
+        globalGain += gainAlpha * err * globalGain;
+      } else if (globalGain > NOMINAL_GAIN) {
+        // During silence, slowly reduce excessive gain toward nominal level
+        // This prevents runaway gain from persisting
+        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau * 3.0f, MIN_TAU_GAIN));
+        globalGain += gainAlpha * (NOMINAL_GAIN - globalGain) * GAIN_DECAY_RATE;
+      }
+
+      globalGain = constrainValue(globalGain, 0.1f, 100.0f);
     }
 
-    // Apply noise gate to final output level
+    // Apply noise gate to final output level (keeps visual effects clean)
     level = (afterGain < noiseGate) ? 0.0f : afterGain;
 
     // Frequency-specific percussion detection (always enabled)
-    detectFrequencySpecific(nowMs, dt);
+    detectFrequencySpecific(nowMs, dt, n);
   }
 
   if (!pdmAlive) return;
@@ -141,33 +169,8 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, ui
   avgAbs = (cnt > 0) ? float(sum) / float(cnt) : 0.0f;
 }
 
-void AdaptiveMic::autoGainTick(float postGainLevel, float dt) {
-  // SECONDARY GAIN CONTROL: Software AGC for fine-tuning
-  // Hardware gain (PRIMARY) already optimized raw ADC input
-  // Software gain just makes small adjustments to hit target output level
-  //
-  // Design: Peak-based AGC with fast attack, slow release
-  // 1. Track peak level with envelope follower
-  // 2. Adjust gain to make peaks hit target (1.0 = full dynamic range)
-
-  // Track peak level with envelope follower
-  float tau = (postGainLevel > trackedLevel) ? agcAttackTau : agcReleaseTau;
-  float alpha = 1.0f - expf(-dt / maxValue(tau, 0.001f));
-  trackedLevel += alpha * (postGainLevel - trackedLevel);
-
-  // Compute error: how far are peaks from target?
-  float err = AG_PEAK_TARGET - trackedLevel;
-
-  // Adjust gain to correct the error (proportional control)
-  float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau, 0.1f));
-  globalGain += gainAlpha * err * globalGain;  // Logarithmic adjustment
-
-  // Software gain: wide range for fast response to audio level changes
-  // Hardware gain (PRIMARY) will slowly optimize ADC input over 30s+ intervals
-  // Software gain (SECONDARY) provides immediate response and handles transients
-  // Upper limit expanded to 100x - trust adaptive algorithm, not arbitrary limits
-  globalGain = constrainValue(globalGain, 0.1f, 100.0f);
-}
+// autoGainTick() removed - logic now inlined in update() with critical fixes
+// for preventing stale trackedLevel during silence (Issue #2)
 
 void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   // PRIMARY GAIN CONTROL: Adjust hardware gain based on raw ADC input level
@@ -338,7 +341,7 @@ inline float AdaptiveMic::processBiquad(float input, float& z1, float& z2, float
   return out;
 }
 
-void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt) {
+void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sampleCount) {
   // Reset impulses and transient each frame (single-frame pulse behavior)
   kickImpulse = false;
   snareImpulse = false;
@@ -359,57 +362,81 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt) {
   localHihatEnergy = hihatEnergy;
   time_.interrupts();
 
-  // Update baselines (slow exponential moving average, ~150ms for baseline tracking)
-  constexpr float BASELINE_ALPHA = 0.025f;  // Baseline tracking speed (~150ms time constant)
-  kickBaseline += BASELINE_ALPHA * (localKickEnergy - kickBaseline);
-  snareBaseline += BASELINE_ALPHA * (localSnareEnergy - snareBaseline);
-  hihatBaseline += BASELINE_ALPHA * (localHihatEnergy - hihatBaseline);
+  // CRITICAL FIX #1: Normalize energy by sample count to handle variable frame rates
+  // This prevents false triggers when update() is called at inconsistent intervals
+  if (sampleCount > 0) {
+    localKickEnergy /= (float)sampleCount;
+    localSnareEnergy /= (float)sampleCount;
+    localHihatEnergy /= (float)sampleCount;
+  } else {
+    // No samples processed, skip detection this frame
+    time_.noInterrupts();
+    kickEnergy = 0.0f;
+    snareEnergy = 0.0f;
+    hihatEnergy = 0.0f;
+    time_.interrupts();
+    return;
+  }
+
+  // CRITICAL FIX #3: Time-based exponential moving average for baselines
+  // This makes baseline tracking frame-rate independent
+  constexpr float BASELINE_TAU = 0.15f;  // 150ms time constant
+  float baselineAlpha = 1.0f - expf(-dt / maxValue(BASELINE_TAU, 0.001f));
+  kickBaseline += baselineAlpha * (localKickEnergy - kickBaseline);
+  snareBaseline += baselineAlpha * (localSnareEnergy - snareBaseline);
+  hihatBaseline += baselineAlpha * (localHihatEnergy - hihatBaseline);
 
   // Check which bands have energy above threshold
   bool kickDetected = false;
   bool snareDetected = false;
   bool hihatDetected = false;
 
-  // Minimum percussion floor threshold (lower than legacy - frequency filters are more reliable)
-  constexpr float PERCUSSION_FLOOR = 0.02f;  // 2% of full scale minimum threshold
+  // Minimum percussion floor threshold (absolute minimum to prevent noise triggers)
+  constexpr float PERCUSSION_FLOOR = 0.0001f;  // Very low floor - rely on relative thresholds
 
+  // IMPROVED THRESHOLD LOGIC (#6): Clearer, simpler threshold calculation
+  // Use maximum of absolute floor OR relative threshold
   // Detect kick (bass transient)
-  // Use signed arithmetic to handle millis() wraparound at 49.7 days
   if ((int32_t)(nowMs - lastKickMs) > (int32_t)transientCooldownMs) {
     float kickThresh = maxValue(PERCUSSION_FLOOR, kickBaseline * kickThreshold);
-    if (localKickEnergy > kickThresh && localKickEnergy > kickBaseline * 1.1f) {
+    if (localKickEnergy > kickThresh) {
       kickDetected = true;
-      kickStrength = localKickEnergy / maxValue(kickThresh, 0.001f);
+      kickStrength = localKickEnergy / maxValue(kickThresh, 0.0001f);
     }
   }
 
   // Detect snare (mid transient)
-  // Use signed arithmetic to handle millis() wraparound at 49.7 days
   if ((int32_t)(nowMs - lastSnareMs) > (int32_t)transientCooldownMs) {
     float snareThresh = maxValue(PERCUSSION_FLOOR, snareBaseline * snareThreshold);
-    if (localSnareEnergy > snareThresh && localSnareEnergy > snareBaseline * 1.1f) {
+    if (localSnareEnergy > snareThresh) {
       snareDetected = true;
-      snareStrength = localSnareEnergy / maxValue(snareThresh, 0.001f);
+      snareStrength = localSnareEnergy / maxValue(snareThresh, 0.0001f);
     }
   }
 
   // Detect hihat (high transient)
-  // Use signed arithmetic to handle millis() wraparound at 49.7 days
   if ((int32_t)(nowMs - lastHihatMs) > (int32_t)transientCooldownMs) {
     float hihatThresh = maxValue(PERCUSSION_FLOOR, hihatBaseline * hihatThreshold);
-    if (localHihatEnergy > hihatThresh && localHihatEnergy > hihatBaseline * 1.1f) {
+    if (localHihatEnergy > hihatThresh) {
       hihatDetected = true;
-      hihatStrength = localHihatEnergy / maxValue(hihatThresh, 0.001f);
+      hihatStrength = localHihatEnergy / maxValue(hihatThresh, 0.0001f);
     }
   }
 
-  // PRIORITIZATION: Kick drums have harmonics in snare range, so prefer bass detection
-  // This prevents kick drums from being misclassified as snares
+  // IMPROVED PRIORITIZATION (#5): Allow simultaneous kick+snare when snare is dominant
+  // This prevents missing real snare hits that occur with kick drums (e.g., backbeats)
   if (kickDetected) {
-    // Kick detected - trigger kick, suppress snare if both triggered
+    // Kick detected - always trigger kick
     kickImpulse = true;
     maxPercussionStrength = maxValue(maxPercussionStrength, kickStrength);
     lastKickMs = nowMs;
+
+    // Allow snare if it's MUCH stronger than kick (likely a real snare hit)
+    if (snareDetected && snareStrength > kickStrength * SNARE_DOMINANCE_THRESHOLD) {
+      snareImpulse = true;
+      maxPercussionStrength = maxValue(maxPercussionStrength, snareStrength);
+      lastSnareMs = nowMs;
+    }
 
     // Allow simultaneous hihat (common in music)
     if (hihatDetected) {
@@ -438,7 +465,6 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt) {
 
   // Link frequency-specific detection to generic transient
   // This ensures percussion hits trigger fire bursts and appear in UI chart
-  // Generic transient detector may still fire independently for non-percussion sounds
   if (maxPercussionStrength > 0.0f) {
     // Set transient to maximum percussion strength detected this frame
     transient = maxPercussionStrength;

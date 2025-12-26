@@ -60,6 +60,18 @@ export interface BatteryMessage {
   b: BatterySample;
 }
 
+// Percussion detection message from `{"type":"PERCUSSION",...}` messages
+export interface PercussionMessage {
+  type: 'PERCUSSION';
+  timestampMs: number;
+  kick: boolean;
+  snare: boolean;
+  hihat: boolean;
+  kickStrength: number;
+  snareStrength: number;
+  hihatStrength: number;
+}
+
 // Connection state
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 

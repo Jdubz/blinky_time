@@ -7,6 +7,7 @@ import { AudioVisualizer } from './components/AudioVisualizer';
 import { TabView } from './components/TabView';
 import { OfflineBanner } from './components/OfflineBanner';
 import { SerialConsoleModal } from './components/SerialConsoleModal';
+import TestPanel from './components/TestPanel';
 import './styles.css';
 
 function App() {
@@ -19,6 +20,7 @@ function App() {
     audioData,
     batteryData,
     batteryStatusData,
+    onPercussionEvent,
     consoleLines,
     sendCommand,
     connect,
@@ -118,6 +120,20 @@ function App() {
                         Future: Configurable effect chains and parameters
                       </p>
                     </div>
+                  </div>
+                </div>
+              ),
+            },
+            {
+              id: 'test',
+              label: 'Test',
+              content: (
+                <div className="tab-panel">
+                  <div className="tab-panel-full">
+                    <TestPanel
+                      onPercussionEvent={onPercussionEvent}
+                      connectionState={connectionState}
+                    />
                   </div>
                 </div>
               ),
