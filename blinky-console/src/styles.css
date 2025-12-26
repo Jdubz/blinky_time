@@ -590,6 +590,28 @@ body {
   z-index: 1;
 }
 
+.percussion-marker {
+  pointer-events: none;
+}
+
+.percussion-marker-icon {
+  animation: percussion-pulse 0.3s ease-out;
+}
+
+@keyframes percussion-pulse {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
 /* ===== Battery Status ===== */
 .battery-status-header {
   display: flex;

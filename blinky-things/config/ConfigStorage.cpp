@@ -62,26 +62,25 @@ void ConfigStorage::loadDefaults() {
     data_.fire.heatDecay = 0.60f;
     data_.fire.suppressionMs = 300;
 
-    // Mic defaults (hardware-primary AGC architecture)
+    // Mic defaults (hardware-primary, window/range normalization)
     data_.mic.noiseGate = 0.04f;
-    data_.mic.globalGain = 1.0f;     // Start at unity (hardware does primary gain)
-    // Software AGC time constants (secondary - fine adjustments only)
-    data_.mic.agcAttackTau = 0.1f;   // 100ms peak attack
-    data_.mic.agcReleaseTau = 2.0f;  // 2s peak release
-    data_.mic.agcGainTau = 5.0f;     // 5s gain adjustment
+    // Window/Range normalization parameters
+    data_.mic.peakTau = 2.0f;        // 2s peak adaptation
+    data_.mic.releaseTau = 5.0f;     // 5s peak release
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTargetLow = 0.15f;   // Increase HW gain if raw < 15%
     data_.mic.hwTargetHigh = 0.35f;  // Decrease HW gain if raw > 35%
-    data_.mic.hwTrackingTau = 30.0f; // 30s tracking of raw input
-    // Timing parameters
-    data_.mic.transientCooldownMs = 60;
-    data_.mic.hwCalibPeriodMs = 30000;  // 30s between HW gain checks
 
     // Frequency-specific detection defaults (always enabled)
     // Lower thresholds for better sensitivity (1.3 = 30% above baseline)
     data_.mic.kickThreshold = 1.3f;
     data_.mic.snareThreshold = 1.3f;
     data_.mic.hihatThreshold = 1.3f;
+
+    // Note: Timing behavior is now controlled by compile-time constants in MicConstants:
+    // - TRANSIENT_COOLDOWN_MS
+    // - HW_CALIB_PERIOD_MS
+    // - HW_TRACKING_TAU
 
     data_.brightness = 100;
 }
@@ -160,21 +159,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     // Validate critical parameters - if out of range, use defaults
     validateFloat(data_.fire.heatDecay, 0.0f, 1.0f, F("heatDecay"));
     validateFloat(data_.fire.sparkChance, 0.0f, 1.0f, F("sparkChance"));
-    validateFloat(data_.mic.globalGain, 0.1f, 100.0f, F("globalGain"));
 
-    // Validate software AGC time constants (expanded - trust adaptive algorithm)
-    validateFloat(data_.mic.agcAttackTau, 0.01f, 10.0f, F("agcAttackTau"));
-    validateFloat(data_.mic.agcReleaseTau, 0.1f, 60.0f, F("agcReleaseTau"));
-    validateFloat(data_.mic.agcGainTau, 0.1f, 120.0f, F("agcGainTau"));
+    // Validate window/range normalization parameters
+    validateFloat(data_.mic.peakTau, 0.5f, 10.0f, F("peakTau"));
+    validateFloat(data_.mic.releaseTau, 1.0f, 30.0f, F("releaseTau"));
 
     // Validate hardware AGC parameters (expanded - allow full ADC range usage)
     validateFloat(data_.mic.hwTargetLow, 0.05f, 0.5f, F("hwTargetLow"));
     validateFloat(data_.mic.hwTargetHigh, 0.1f, 0.9f, F("hwTargetHigh"));
-    validateFloat(data_.mic.hwTrackingTau, 1.0f, 300.0f, F("hwTrackingTau"));
-
-    // Validate timing parameters (match SerialConsole ranges)
-    validateUint32(data_.mic.transientCooldownMs, 10, 10000, F("transientCooldownMs"));
-    validateUint32(data_.mic.hwCalibPeriodMs, 5000, 600000, F("hwCalibPeriodMs"));
 
     // Validate frequency detection thresholds (reasonable range: 1.0-5.0)
     validateFloat(data_.mic.kickThreshold, 1.0f, 5.0f, F("kickThreshold"));
@@ -204,23 +196,19 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     fireParams.suppressionMs = data_.fire.suppressionMs;
 
     mic.noiseGate = data_.mic.noiseGate;
-    mic.globalGain = data_.mic.globalGain;
-    // Software AGC time constants (secondary - fine adjustments)
-    mic.agcAttackTau = data_.mic.agcAttackTau;
-    mic.agcReleaseTau = data_.mic.agcReleaseTau;
-    mic.agcGainTau = data_.mic.agcGainTau;
+    // Window/Range normalization parameters
+    mic.peakTau = data_.mic.peakTau;
+    mic.releaseTau = data_.mic.releaseTau;
     // Hardware AGC parameters (primary - raw input tracking)
     mic.hwTargetLow = data_.mic.hwTargetLow;
     mic.hwTargetHigh = data_.mic.hwTargetHigh;
-    mic.hwTrackingTau = data_.mic.hwTrackingTau;
-    // Timing parameters
-    mic.transientCooldownMs = data_.mic.transientCooldownMs;
-    mic.hwCalibPeriodMs = data_.mic.hwCalibPeriodMs;
 
     // Frequency-specific detection thresholds
     mic.kickThreshold = data_.mic.kickThreshold;
     mic.snareThreshold = data_.mic.snareThreshold;
     mic.hihatThreshold = data_.mic.hihatThreshold;
+
+    // Note: Timing constants are compile-time in MicConstants, not loaded from config
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -237,23 +225,19 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.fire.suppressionMs = fireParams.suppressionMs;
 
     data_.mic.noiseGate = mic.noiseGate;
-    data_.mic.globalGain = mic.globalGain;
-    // Software AGC time constants (secondary - fine adjustments)
-    data_.mic.agcAttackTau = mic.agcAttackTau;
-    data_.mic.agcReleaseTau = mic.agcReleaseTau;
-    data_.mic.agcGainTau = mic.agcGainTau;
+    // Window/Range normalization parameters
+    data_.mic.peakTau = mic.peakTau;
+    data_.mic.releaseTau = mic.releaseTau;
     // Hardware AGC parameters (primary - raw input tracking)
     data_.mic.hwTargetLow = mic.hwTargetLow;
     data_.mic.hwTargetHigh = mic.hwTargetHigh;
-    data_.mic.hwTrackingTau = mic.hwTrackingTau;
-    // Timing parameters
-    data_.mic.transientCooldownMs = mic.transientCooldownMs;
-    data_.mic.hwCalibPeriodMs = mic.hwCalibPeriodMs;
 
     // Frequency-specific detection thresholds
     data_.mic.kickThreshold = mic.kickThreshold;
     data_.mic.snareThreshold = mic.snareThreshold;
     data_.mic.hihatThreshold = mic.hihatThreshold;
+
+    // Note: Timing constants are compile-time in MicConstants, not saved to config
 
     saveToFlash();
     dirty_ = false;

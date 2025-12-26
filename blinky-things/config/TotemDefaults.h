@@ -2,20 +2,15 @@
 #include <stdint.h>
 
 namespace Defaults {
-  // ---- Audio mapping (used by fire-totem + SerialConsole) ----
+  // ---- Audio settings (used by SerialConsole restoreDefaults) ----
   constexpr float NoiseGate   = 0.06f;
-  constexpr float Gamma       = 0.60f;
-  constexpr float GlobalGain  = 1.35f;
-  constexpr uint16_t TransientCooldownMs = 500;
+
+  // ---- Window/Range normalization ----
+  constexpr float PeakTau     = 2.0f;   // Peak adaptation time constant (s)
+  constexpr float ReleaseTau  = 5.0f;   // Peak release time constant (s)
 
   // ---- Performance constants ----
   constexpr float CoolingScaleFactor = 0.5f / 255.0f;
-
-  // ---- Software auto-gain ----
-  // Keeps typical normalized level near target across tracks/rooms.
-  constexpr float AutoGainTarget   = 0.55f;  // aim to use ~55% of visual range
-  constexpr float AutoGainMin      = 0.60f;  // clamp on mic.globalGain
-  constexpr float AutoGainMax      = 2.00f;
 
   // ---- Fire engine params (used by FireEffect + SerialConsole) ----
   constexpr uint8_t BaseCooling         = 85;
@@ -31,9 +26,6 @@ namespace Defaults {
   // (optional) Ranges you show in help strings
   namespace Ranges {
     constexpr float NoiseGateMin = 0.0f, NoiseGateMax = 0.5f;
-    constexpr float GammaMin     = 0.2f, GammaMax     = 2.5f;
-    constexpr float GainMin      = 0.0f, GainMax      = 5.0f;
-
     constexpr uint8_t CoolingMin = 0, CoolingMax = 255;
     constexpr float   SparkChanceMin = 0.0f, SparkChanceMax = 1.0f;
   }

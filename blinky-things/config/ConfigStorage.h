@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 12;  // Phase 3: Frequency-specific detection + ZCR + reliability fixes
+    static const uint8_t CONFIG_VERSION = 14;  // Config schema v14: peakTarget removed; timing constants are now compile-time
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -26,22 +26,17 @@ public:
 
     struct StoredMicParams {
         float noiseGate;
-        float globalGain;
-        // Software AGC time constants (secondary - fine adjustments, range 0.1-10x)
-        float agcAttackTau;       // Peak envelope attack
-        float agcReleaseTau;      // Peak envelope release
-        float agcGainTau;         // Gain adjustment speed
+        // Window/Range normalization parameters
+        float peakTau;            // Peak adaptation speed (attack time, seconds)
+        float releaseTau;         // Peak release speed (release time, seconds)
         // Hardware AGC parameters (primary - optimizes ADC signal quality)
         float hwTargetLow;        // Raw input below this → increase HW gain
         float hwTargetHigh;       // Raw input above this → decrease HW gain
-        float hwTrackingTau;      // Time constant for tracking raw input
-        // Timing parameters
-        uint32_t transientCooldownMs;
-        uint32_t hwCalibPeriodMs;
         // Frequency-specific detection thresholds (always enabled)
         float kickThreshold;
         float snareThreshold;
         float hihatThreshold;
+        // Note: Timing constants (transient cooldown, hw calib, hw tracking) are now compile-time constants in MicConstants
     };
 
     struct ConfigData {
