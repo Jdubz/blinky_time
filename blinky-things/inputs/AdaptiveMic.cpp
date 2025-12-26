@@ -56,8 +56,8 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
 
   // Initialize state
   level = 0.0f;
-  valleyLevel = noiseGate * 0.5f;  // FIX: Start valley at half of noise gate (2% instead of 4%)
-  peakLevel = valleyLevel + MIN_NORMALIZATION_RANGE;  // FIX: Start peak just above valley
+  valleyLevel = 0.001f;  // Start valley very low for low-noise microphone (0.1% of full scale)
+  peakLevel = 0.01f;  // Start peak at 1% of full scale
   transient = 0.0f;
   lastTransientMs = time_.millis();
   lastHwCalibMs = time_.millis();
@@ -112,18 +112,13 @@ void AdaptiveMic::update(float dt) {
     float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MIN_TAU_RANGE));
     peakLevel += peakAlpha * (normalized - peakLevel);
 
-    // Enforce minimum peak floor: valley + minimum range
-    // This ensures range >= MIN_NORMALIZATION_RANGE without artificially inflating peak
-    float minPeak = valleyLevel + MIN_NORMALIZATION_RANGE;
-    peakLevel = maxValue(peakLevel, minPeak);
-
     // Immediate adaptation: jump to signal if far outside current range
     // This ensures loud transients are captured immediately without clipping
     if (normalized > peakLevel * INSTANT_ADAPT_THRESHOLD) {
       peakLevel = normalized;
     }
 
-    // FIX: Valley should track the actual signal floor (minimum), not a percentage
+    // Valley tracking: Track actual signal floor (minimum) for low-noise microphone
     // Use asymmetric attack/release: fast attack to new minimums, slow release upward
     float valleyTau;
     if (normalized < valleyLevel) {
@@ -137,16 +132,17 @@ void AdaptiveMic::update(float dt) {
 
     // Valley tracks toward current signal (with asymmetric response)
     valleyLevel += valleyAlpha * (normalized - valleyLevel);
-    valleyLevel = maxValue(valleyLevel, noiseGate * 0.5f);  // Enforce minimum at half of noise gate
+    // Low-noise mic: Allow valley to go very low (0.001 = 0.1% of full scale)
+    valleyLevel = maxValue(valleyLevel, 0.001f);
 
     // Map current signal to 0-1 range based on peak/valley window
     float range = maxValue(MIN_NORMALIZATION_RANGE, peakLevel - valleyLevel);
     float mapped = (normalized - valleyLevel) / range;
     mapped = clamp01(mapped);
 
-    // FIX: Apply noise gate to MAPPED output, not raw signal
-    // This allows quiet signals to be visible after normalization
-    level = (mapped < 0.05f) ? 0.0f : mapped;  // Gate at 5% of mapped range instead of raw signal
+    // Apply noise gate to mapped output (very low threshold for low-noise microphone)
+    // Gate at 1% of mapped range to filter only the quietest noise
+    level = (mapped < 0.01f) ? 0.0f : mapped;
 
     // Frequency-specific percussion detection (always enabled)
     detectFrequencySpecific(nowMs, dt, n);

@@ -52,7 +52,7 @@ public:
 
   // Hardware gain (PRIMARY - adapts to raw ADC input for best signal quality)
   int      hwGainMin       = 0;
-  int      hwGainMax       = 64;
+  int      hwGainMax       = 80;  // Hardware maximum (nRF52840 PDM supports 0-80)
   int      hwGainStep      = 1;
   float    hwTargetLow     = 0.15f;   // If raw input below this, increase HW gain
   float    hwTargetHigh    = 0.35f;   // If raw input above this, decrease HW gain
