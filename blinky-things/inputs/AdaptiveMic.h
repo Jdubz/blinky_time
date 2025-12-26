@@ -69,9 +69,10 @@ public:
 
   // Frequency detection thresholds (tunable)
   // Lower values = more sensitive (1.0 = any energy above baseline triggers)
-  float kickThreshold  = 1.3f;    // Bass energy must exceed baseline * threshold
-  float snareThreshold = 1.3f;    // Mid energy must exceed baseline * threshold
-  float hihatThreshold = 1.3f;    // High energy must exceed baseline * threshold
+  // Kick is most important (lowest), hihat often continuous (highest)
+  float kickThreshold  = 1.15f;   // Bass energy must exceed baseline * threshold (was 1.3f)
+  float snareThreshold = 1.20f;   // Mid energy must exceed baseline * threshold (was 1.3f)
+  float hihatThreshold = 1.25f;   // High energy must exceed baseline * threshold (was 1.3f)
 
   // Zero-crossing rate (for improved classification and reliability)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
@@ -169,14 +170,13 @@ private:
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
-  void autoGainTick(float normalizedLevel, float dt);
   void hardwareCalibrate(uint32_t nowMs, float dt);
 
   // Biquad filter helpers
   void initBiquadFilters();
   void calcBiquadBPF(float fc, float Q, float fs, float& b0, float& b1, float& b2, float& a1, float& a2);
   inline float processBiquad(float input, float& z1, float& z2, float b0, float b1, float b2, float a1, float a2);
-  void detectFrequencySpecific(uint32_t nowMs, float dt);
+  void detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sampleCount);
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };
