@@ -91,15 +91,49 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
 
-  // Audio settings
-  transientcooldown: {
-    displayName: 'Percussion Cooldown',
+  // Audio settings (window/range normalization)
+  peaktau: {
+    displayName: 'Peak Adaptation',
     tooltip:
-      'Minimum time between percussion detections (milliseconds). Prevents retriggering on same kick/snare/hihat hit.',
-    unit: 'ms',
+      'How quickly the peak tracker adapts to louder signals (0.5-10s). Lower = faster peak tracking, higher = smoother.',
+    unit: 's',
+  },
+  releasetau: {
+    displayName: 'Peak Release',
+    tooltip:
+      'How slowly the peak tracker releases when audio gets quieter (1-30s). Higher = sustains peaks longer.',
+    unit: 's',
   },
 
-  // AGC settings (peak-based design, target always 100%)
+  // Onset detection settings (freq category)
+  onsetthresh: {
+    displayName: 'Onset Threshold',
+    tooltip:
+      'Energy must exceed baseline by this factor to trigger onset (1.5-5x). Higher = fewer false positives, may miss subtle hits.',
+    unit: 'x',
+  },
+  risethresh: {
+    displayName: 'Rise Threshold',
+    tooltip:
+      'Energy must rise by this factor from previous frame (1.1-2x). Higher = requires sharper transients.',
+    unit: 'x',
+  },
+
+  // Hardware AGC settings (agc category)
+  hwtargetlow: {
+    displayName: 'HW Target Low',
+    tooltip:
+      'Minimum raw ADC level target. Hardware gain increases if raw level stays below this (0.05-0.5).',
+    unit: '',
+  },
+  hwtargethigh: {
+    displayName: 'HW Target High',
+    tooltip:
+      'Maximum raw ADC level target. Hardware gain decreases if raw level exceeds this (0.1-0.9).',
+    unit: '',
+  },
+
+  // Legacy AGC settings (may be deprecated)
   agenabled: {
     displayName: 'Auto-Gain Enabled',
     tooltip:
@@ -137,9 +171,9 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
   t: {
-    displayName: 'Percussion',
+    displayName: 'Transient',
     tooltip:
-      'Percussion strength (0-1+). Maximum of kick/snare/hihat detection. Single-frame impulse when percussion detected. Drives fire bursts.',
+      'Transient strength (0-1). Maximum of low/high band onset detection. Single-frame impulse when transient detected. Drives fire bursts.',
     unit: '',
   },
   pk: {

@@ -1,15 +1,18 @@
 /**
- * Types for percussion detection testing system
+ * Types for transient detection testing system
  */
 
-export type PercussionType = 'kick' | 'snare' | 'hihat';
+export type TransientType = 'low' | 'high';
+
+// Legacy alias for backwards compatibility
+export type PercussionType = TransientType;
 
 /**
- * Ground truth annotation from CSV file
+ * Ground truth annotation for test patterns
  */
 export interface GroundTruthHit {
   time: number; // Time in seconds
-  type: PercussionType;
+  type: TransientType;
   strength: number; // 0.0 - 1.0
 }
 
@@ -18,7 +21,7 @@ export interface GroundTruthHit {
  */
 export interface DetectionEvent {
   timestampMs: number; // Timestamp from device (millis())
-  type: PercussionType;
+  type: TransientType;
   strength: number;
   matched?: boolean; // Set during metrics calculation
 }
@@ -37,12 +40,11 @@ export interface TestMetrics {
 }
 
 /**
- * Per-type metrics breakdown
+ * Per-band metrics breakdown
  */
 export interface TypeMetrics {
-  kick: TestMetrics;
-  snare: TestMetrics;
-  hihat: TestMetrics;
+  low: TestMetrics; // Low band (50-200 Hz, bass transients)
+  high: TestMetrics; // High band (2-8 kHz, brightness transients)
   overall: TestMetrics;
 }
 

@@ -7,7 +7,7 @@ import {
   BatterySample,
   ConnectionState,
   SettingsByCategory,
-  PercussionMessage,
+  TransientMessage,
 } from '../types';
 
 export interface UseSerialReturn {
@@ -26,8 +26,8 @@ export interface UseSerialReturn {
   batteryData: BatterySample | null;
   batteryStatusData: BatteryStatusData | null;
 
-  // Percussion detection
-  onPercussionEvent: (callback: (msg: PercussionMessage) => void) => () => void;
+  // Transient detection (legacy name kept for compatibility)
+  onPercussionEvent: (callback: (msg: TransientMessage) => void) => () => void;
 
   // Serial console
   consoleLines: string[];
@@ -61,9 +61,8 @@ function validateAudioSample(sample: AudioSample): boolean {
     sample.vl,
     sample.raw,
     sample.h,
-    sample.ks,
-    sample.ss,
-    sample.hs,
+    sample.los,
+    sample.his,
     sample.z,
   ];
   if (numericFields.some(v => !Number.isFinite(v))) {
@@ -89,9 +88,8 @@ function validateAudioSample(sample: AudioSample): boolean {
   // Check boolean flags are exactly 0 or 1
   if (
     ![0, 1].includes(sample.alive) ||
-    ![0, 1].includes(sample.k) ||
-    ![0, 1].includes(sample.sn) ||
-    ![0, 1].includes(sample.hh)
+    ![0, 1].includes(sample.lo) ||
+    ![0, 1].includes(sample.hi)
   ) {
     console.warn('Invalid audio sample: boolean flag not 0 or 1', sample);
     return false;
@@ -110,8 +108,8 @@ export function useSerial(): UseSerialReturn {
   const [batteryStatusData, setBatteryStatusData] = useState<BatteryStatusData | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
 
-  // Percussion event callbacks
-  const percussionCallbacksRef = useRef<Set<(msg: PercussionMessage) => void>>(new Set());
+  // Transient event callbacks (legacy name kept for compatibility)
+  const percussionCallbacksRef = useRef<Set<(msg: TransientMessage) => void>>(new Set());
 
   const isSupported = serialService.isSupported();
 
@@ -201,11 +199,11 @@ export function useSerial(): UseSerialReturn {
             setBatteryStatusData(event.batteryStatus);
           }
           break;
-        case 'percussion':
-          if (event.percussion) {
-            // Notify all registered percussion callbacks
+        case 'transient':
+          if (event.transient) {
+            // Notify all registered transient callbacks
             percussionCallbacksRef.current.forEach(callback => {
-              callback(event.percussion!);
+              callback(event.transient!);
             });
           }
           break;
@@ -331,8 +329,8 @@ export function useSerial(): UseSerialReturn {
     });
   }, []);
 
-  // Register callback for percussion events
-  const onPercussionEvent = useCallback((callback: (msg: PercussionMessage) => void) => {
+  // Register callback for transient events (legacy name kept for compatibility)
+  const onPercussionEvent = useCallback((callback: (msg: TransientMessage) => void) => {
     percussionCallbacksRef.current.add(callback);
     // Return cleanup function
     return () => {

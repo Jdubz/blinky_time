@@ -4,10 +4,10 @@
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
 
-// AdaptiveMic - Clean audio input with window/range normalization and percussion detection
+// AdaptiveMic - Clean audio input with window/range normalization and onset detection
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
 // - Auto-ranging: Tracks peak/valley, maps to 0-1 output (no clipping)
-// - Frequency-specific percussion detection (kick/snare/hihat)
+// - Two-band onset detection: low (bass) and high (brightness/attack)
 // - Hardware gain adapts to environment over minutes
 
 namespace MicConstants {
@@ -16,30 +16,32 @@ namespace MicConstants {
     constexpr uint32_t MIC_DEAD_TIMEOUT_MS = 250;     // PDM alive check timeout
 
     // Timing constants (not user-configurable)
-    constexpr uint32_t TRANSIENT_COOLDOWN_MS = 60;    // Percussion detection cooldown
+    constexpr uint32_t ONSET_COOLDOWN_MS = 80;        // Onset detection cooldown (80ms = 12.5 hits/sec max)
     constexpr uint32_t HW_CALIB_PERIOD_MS = 30000;    // Hardware gain calibration period (30s)
     constexpr float HW_TRACKING_TAU = 30.0f;          // Hardware gain tracking time constant (30s)
 }
 
 /**
- * AdaptiveMic - Audio input with window/range normalization and percussion detection
+ * AdaptiveMic - Audio input with window/range normalization and onset detection
  *
  * Architecture:
  * - Raw samples → Normalize (0-1) → Window/Range mapping → Noise gate → Output
- * - Frequency-specific percussion detection via biquad bandpass filters
- * - No envelope smoothing (visualizers handle their own smoothing)
+ * - Two-band onset detection via biquad bandpass filters:
+ *   - Low band (50-200 Hz): Bass transients (kicks, bass hits)
+ *   - High band (2-8 kHz): Brightness/attack transients (snare crack, hi-hats)
+ * - Onset detection: Detects RISING energy, not just high energy
  * - Hardware-primary: HW gain optimizes ADC input, window/range maps to 0-1 output
- * - Percussion detection: kick (60-130 Hz), snare (300-750 Hz), hihat (5-7 kHz)
  *
- * Window/Range Normalization (Follows Loudness):
+ * Onset Detection Algorithm:
+ * - Tracks energy in each frequency band
+ * - Detects when energy RISES sharply (>1.5x previous frame)
+ * - AND exceeds baseline by threshold (2x baseline)
+ * - Prevents false triggers on sustained audio
+ *
+ * Window/Range Normalization:
  * - Peak tracker follows actual signal levels (exponential moving average)
- * - Fast attack (peakTau) when signal exceeds peak
- * - Slow release (releaseTau) when signal drops below peak
- * - Instant adaptation for loud transients (>1.3x current peak)
+ * - Fast attack, slow release for natural loudness following
  * - Output = (signal - valleyLevel) / (peak - valleyLevel) → always 0-1
- * - As music gets louder: peak increases, range expands, still maps to 0-1
- * - As music gets quieter: peak decreases, range shrinks, still maps to 0-1
- * - NO clipping - full dynamic range preserved
  */
 class AdaptiveMic {
 public:
@@ -57,26 +59,22 @@ public:
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
 
-  // Percussion transient: single-frame impulse with strength (max of kick/snare/hihat)
+  // Combined transient output: single-frame impulse with strength (max of low/high)
   float transient          = 0.0f;    // Impulse strength (0.0 = none, typically 0.0-1.0, can exceed 1.0 for very strong hits)
   uint32_t lastTransientMs = 0;
 
-  // Frequency-specific percussion detection (Phase 3)
-  bool  kickImpulse  = false;     // Single-frame kick detection
-  bool  snareImpulse = false;     // Single-frame snare detection
-  bool  hihatImpulse = false;     // Single-frame hihat detection
-  float kickStrength = 0.0f;      // Kick strength (0.0-1.0+)
-  float snareStrength = 0.0f;     // Snare strength (0.0-1.0+)
-  float hihatStrength = 0.0f;     // Hihat strength (0.0-1.0+)
+  // Two-band onset detection
+  bool  lowOnset   = false;       // Single-frame low-band onset (bass transient)
+  bool  highOnset  = false;       // Single-frame high-band onset (brightness transient)
+  float lowStrength  = 0.0f;      // Low-band onset strength (0.0-1.0)
+  float highStrength = 0.0f;      // High-band onset strength (0.0-1.0)
 
-  // Frequency detection thresholds (tunable)
-  // Lower values = more sensitive (1.0 = any energy above baseline triggers)
-  // Kick is most important (lowest), hihat often continuous (highest)
-  float kickThreshold  = 1.15f;   // Bass energy must exceed baseline * threshold (was 1.3f)
-  float snareThreshold = 1.20f;   // Mid energy must exceed baseline * threshold (was 1.3f)
-  float hihatThreshold = 1.25f;   // High energy must exceed baseline * threshold (was 1.3f)
+  // Onset detection thresholds (tunable)
+  // Higher values = less sensitive, fewer false positives
+  float onsetThreshold = 2.5f;    // Energy must exceed baseline * threshold (default: 2.5x)
+  float riseThreshold  = 1.5f;    // Energy must rise by this factor from previous frame (default: 1.5x)
 
-  // Zero-crossing rate (for improved classification and reliability)
+  // Zero-crossing rate (for additional context)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
 
   // Debug/health
@@ -97,13 +95,11 @@ public:
   inline uint32_t getIsrCount() const { return s_isrCount; }
   inline bool isPdmAlive() const { return pdmAlive; }
 
-  // Frequency-specific getters
-  inline bool getKickImpulse() const { return kickImpulse; }
-  inline bool getSnareImpulse() const { return snareImpulse; }
-  inline bool getHihatImpulse() const { return hihatImpulse; }
-  inline float getKickStrength() const { return kickStrength; }
-  inline float getSnareStrength() const { return snareStrength; }
-  inline float getHihatStrength() const { return hihatStrength; }
+  // Onset detection getters
+  inline bool getLowOnset() const { return lowOnset; }
+  inline bool getHighOnset() const { return highOnset; }
+  inline float getLowStrength() const { return lowStrength; }
+  inline float getHighStrength() const { return highStrength; }
 
 public:
   /**
@@ -144,34 +140,31 @@ private:
 
   uint32_t _sampleRate = 16000;
 
-  // Biquad filter state for frequency-specific detection
+  // Biquad filter state for two-band onset detection
   // Note: Filter state is only accessed within ISR, no volatile needed
-  // Kick filter: bandpass 60-130 Hz (center: 90 Hz)
-  float kickZ1 = 0.0f, kickZ2 = 0.0f;
-  float kickB0, kickB1, kickB2, kickA1, kickA2;
+  // Low band filter: bandpass 50-200 Hz (center: 100 Hz, Q=0.7)
+  float lowZ1 = 0.0f, lowZ2 = 0.0f;
+  float lowB0, lowB1, lowB2, lowA1, lowA2;
 
-  // Snare filter: bandpass 300-750 Hz (center: 500 Hz)
-  float snareZ1 = 0.0f, snareZ2 = 0.0f;
-  float snareB0, snareB1, snareB2, snareA1, snareA2;
+  // High band filter: bandpass 2-8 kHz (center: 4 kHz, Q=0.5)
+  float highZ1 = 0.0f, highZ2 = 0.0f;
+  float highB0, highB1, highB2, highA1, highA2;
 
-  // Hihat filter: bandpass 5-7 kHz (center: 6 kHz)
-  float hihatZ1 = 0.0f, hihatZ2 = 0.0f;
-  float hihatB0, hihatB1, hihatB2, hihatA1, hihatA2;
+  // Energy tracking per band (volatile: accessed from ISR)
+  volatile float lowEnergy = 0.0f;
+  volatile float highEnergy = 0.0f;
 
-  // Energy tracking per frequency band (volatile: accessed from ISR)
-  volatile float kickEnergy = 0.0f;
-  volatile float snareEnergy = 0.0f;
-  volatile float hihatEnergy = 0.0f;
+  // Previous frame energy for onset detection (rise detection)
+  float prevLowEnergy = 0.0f;
+  float prevHighEnergy = 0.0f;
 
-  // Baselines per frequency band
-  float kickBaseline = 0.0f;
-  float snareBaseline = 0.0f;
-  float hihatBaseline = 0.0f;
+  // Baselines per band (slow-adapting average)
+  float lowBaseline = 0.0f;
+  float highBaseline = 0.0f;
 
-  // Timing for frequency-specific cooldowns
-  uint32_t lastKickMs = 0;
-  uint32_t lastSnareMs = 0;
-  uint32_t lastHihatMs = 0;
+  // Timing for cooldowns
+  uint32_t lastLowOnsetMs = 0;
+  uint32_t lastHighOnsetMs = 0;
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
@@ -181,7 +174,7 @@ private:
   void initBiquadFilters();
   void calcBiquadBPF(float fc, float Q, float fs, float& b0, float& b1, float& b2, float& a1, float& a2);
   inline float processBiquad(float input, float& z1, float& z2, float b0, float b1, float b2, float a1, float a2);
-  void detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sampleCount);
+  void detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount);
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

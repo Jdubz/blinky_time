@@ -377,22 +377,18 @@ void loop() {
   float energy = mic ? mic->getLevel() : 0.0f;
   float hit = mic ? mic->getTransient() : 0.0f;
 
-  // Send percussion detection events for test analysis (always enabled)
-  if (mic && (mic->getKickImpulse() || mic->getSnareImpulse() || mic->getHihatImpulse())) {
-    Serial.print(F("{\"type\":\"PERCUSSION\",\"timestampMs\":"));
+  // Send transient detection events for test analysis (always enabled)
+  if (mic && (mic->getLowOnset() || mic->getHighOnset())) {
+    Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
     Serial.print(now);
-    Serial.print(F(",\"kick\":"));
-    Serial.print(mic->getKickImpulse() ? "true" : "false");
-    Serial.print(F(",\"snare\":"));
-    Serial.print(mic->getSnareImpulse() ? "true" : "false");
-    Serial.print(F(",\"hihat\":"));
-    Serial.print(mic->getHihatImpulse() ? "true" : "false");
-    Serial.print(F(",\"kickStrength\":"));
-    Serial.print(mic->getKickStrength(), 2);
-    Serial.print(F(",\"snareStrength\":"));
-    Serial.print(mic->getSnareStrength(), 2);
-    Serial.print(F(",\"hihatStrength\":"));
-    Serial.print(mic->getHihatStrength(), 2);
+    Serial.print(F(",\"low\":"));
+    Serial.print(mic->getLowOnset() ? "true" : "false");
+    Serial.print(F(",\"high\":"));
+    Serial.print(mic->getHighOnset() ? "true" : "false");
+    Serial.print(F(",\"lowStrength\":"));
+    Serial.print(mic->getLowStrength(), 2);
+    Serial.print(F(",\"highStrength\":"));
+    Serial.print(mic->getHighStrength(), 2);
     Serial.println(F("}"));
   }
 

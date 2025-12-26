@@ -72,11 +72,9 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hwTargetLow = 0.15f;   // Increase HW gain if raw < 15%
     data_.mic.hwTargetHigh = 0.35f;  // Decrease HW gain if raw > 35%
 
-    // Frequency-specific detection defaults (always enabled)
-    // Lower thresholds for better sensitivity (1.3 = 30% above baseline)
-    data_.mic.kickThreshold = 1.3f;
-    data_.mic.snareThreshold = 1.3f;
-    data_.mic.hihatThreshold = 1.3f;
+    // Onset detection defaults (two-band system) - use TotemDefaults
+    data_.mic.onsetThreshold = Defaults::OnsetThreshold;
+    data_.mic.riseThreshold = Defaults::RiseThreshold;
 
     data_.brightness = 100;
 }
@@ -164,10 +162,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     validateFloat(data_.mic.hwTargetLow, 0.05f, 0.5f, F("hwTargetLow"));
     validateFloat(data_.mic.hwTargetHigh, 0.1f, 0.9f, F("hwTargetHigh"));
 
-    // Validate frequency detection thresholds (reasonable range: 1.0-5.0)
-    validateFloat(data_.mic.kickThreshold, 1.0f, 5.0f, F("kickThreshold"));
-    validateFloat(data_.mic.snareThreshold, 1.0f, 5.0f, F("snareThreshold"));
-    validateFloat(data_.mic.hihatThreshold, 1.0f, 5.0f, F("hihatThreshold"));
+    // Validate onset detection thresholds (two-band system)
+    validateFloat(data_.mic.onsetThreshold, 1.5f, 5.0f, F("onsetThreshold"));
+    validateFloat(data_.mic.riseThreshold, 1.1f, 2.0f, F("riseThreshold"));
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
@@ -200,10 +197,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     mic.hwTargetLow = data_.mic.hwTargetLow;
     mic.hwTargetHigh = data_.mic.hwTargetHigh;
 
-    // Frequency-specific detection thresholds
-    mic.kickThreshold = data_.mic.kickThreshold;
-    mic.snareThreshold = data_.mic.snareThreshold;
-    mic.hihatThreshold = data_.mic.hihatThreshold;
+    // Onset detection thresholds (two-band system)
+    mic.onsetThreshold = data_.mic.onsetThreshold;
+    mic.riseThreshold = data_.mic.riseThreshold;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -228,10 +224,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.hwTargetLow = mic.hwTargetLow;
     data_.mic.hwTargetHigh = mic.hwTargetHigh;
 
-    // Frequency-specific detection thresholds
-    data_.mic.kickThreshold = mic.kickThreshold;
-    data_.mic.snareThreshold = mic.snareThreshold;
-    data_.mic.hihatThreshold = mic.hihatThreshold;
+    // Onset detection thresholds (two-band system)
+    data_.mic.onsetThreshold = mic.onsetThreshold;
+    data_.mic.riseThreshold = mic.riseThreshold;
 
     saveToFlash();
     dirty_ = false;

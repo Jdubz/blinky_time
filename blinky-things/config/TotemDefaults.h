@@ -6,6 +6,10 @@ namespace Defaults {
   constexpr float PeakTau     = 2.0f;   // Peak adaptation time constant (s)
   constexpr float ReleaseTau  = 5.0f;   // Peak release time constant (s)
 
+  // ---- Onset detection thresholds (two-band system) ----
+  constexpr float OnsetThreshold = 2.5f;  // Energy must exceed baseline * threshold (2.5x)
+  constexpr float RiseThreshold  = 1.5f;  // Energy must rise by this factor from previous frame
+
   // ---- Performance constants ----
   constexpr float CoolingScaleFactor = 0.5f / 255.0f;
 
