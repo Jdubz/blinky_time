@@ -50,13 +50,27 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Precache all static assets
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        // Minimal precaching - only essential shell assets
+        // JS/CSS have content hashes so fresh deploys get new URLs
+        globPatterns: ['**/*.{ico,woff2}'],
         // Navigation fallback for SPA
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
-        // Runtime caching strategies
+        // Runtime caching strategies - NetworkFirst for app assets
         runtimeCaching: [
+          {
+            // App JS/CSS - network first, fall back to cache
+            urlPattern: /\.(?:js|css)$/i,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'app-assets',
+              expiration: {
+                maxEntries: 50,
+                maxAgeSeconds: 60 * 60 * 24, // 1 day
+              },
+              networkTimeoutSeconds: 3,
+            },
+          },
           {
             // Cache Google Fonts stylesheets
             urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
