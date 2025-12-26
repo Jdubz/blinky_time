@@ -83,6 +83,7 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
 
     // Schedule all percussion hits
     const synth = synthRef.current;
+    synth.start(); // Ensure audio is enabled
 
     for (const hit of selectedPattern.hits) {
       synth.trigger(hit.type, hit.time, hit.strength);
@@ -119,6 +120,11 @@ export default function TestPanel({ onPercussionEvent, connectionState }: TestPa
 
   // Stop test
   const stopTest = () => {
+    // Stop audio immediately
+    if (synthRef.current) {
+      synthRef.current.stop();
+    }
+
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
     }

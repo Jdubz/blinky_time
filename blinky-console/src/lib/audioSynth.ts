@@ -187,6 +187,22 @@ export class PercussionSynth {
   }
 
   /**
+   * Stop all audio playback immediately by muting master gain
+   */
+  stop(): void {
+    // Immediately cut off all audio
+    this.masterGain.gain.setValueAtTime(0, this.audioContext.currentTime);
+  }
+
+  /**
+   * Resume audio playback by restoring master gain
+   */
+  start(): void {
+    // Restore master volume
+    this.masterGain.gain.setValueAtTime(0.8, this.audioContext.currentTime);
+  }
+
+  /**
    * Clean up resources
    */
   dispose(): void {
