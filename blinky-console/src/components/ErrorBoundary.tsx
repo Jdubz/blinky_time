@@ -3,6 +3,7 @@ import { Component, ErrorInfo, ReactNode } from 'react';
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  onError?: (error: Error, errorInfo: ErrorInfo) => void;
 }
 
 interface State {
@@ -19,6 +20,7 @@ interface State {
  * - Displays a user-friendly error message with details
  * - Provides a "Reload" button to recover
  * - Logs errors to console for debugging
+ * - Optional error reporting callback for analytics/telemetry integration
  *
  * Note: Error boundaries do NOT catch:
  * - Event handlers (use try-catch)
@@ -51,6 +53,16 @@ export class ErrorBoundary extends Component<Props, State> {
       error,
       errorInfo,
     });
+
+    // Call optional error reporting callback for analytics/telemetry
+    if (this.props.onError) {
+      try {
+        this.props.onError(error, errorInfo);
+      } catch (reportingError) {
+        // Don't let error reporting itself crash the error boundary
+        console.error('Error in error reporting callback:', reportingError);
+      }
+    }
   }
 
   handleReload = (): void => {
