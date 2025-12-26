@@ -60,6 +60,9 @@ void ConfigStorage::loadDefaults() {
     data_.fire.heatDecay = 0.60f;
     data_.fire.suppressionMs = 300;
     data_.fire.emberNoiseSpeed = 0.00033f;
+    data_.fire.emberHeatMax = 18;
+    data_.fire.bottomRowsForSparks = 1;
+    data_.fire.burstSparks = 8;
 
     // Mic defaults (hardware-primary, window/range normalization)
     // Window/Range normalization parameters
@@ -186,6 +189,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     fireParams.heatDecay = data_.fire.heatDecay;
     fireParams.suppressionMs = data_.fire.suppressionMs;
     fireParams.emberNoiseSpeed = data_.fire.emberNoiseSpeed;
+    fireParams.emberHeatMax = data_.fire.emberHeatMax;
+    fireParams.bottomRowsForSparks = data_.fire.bottomRowsForSparks;
+    fireParams.burstSparks = data_.fire.burstSparks;
 
     // Window/Range normalization parameters
     mic.peakTau = data_.mic.peakTau;
@@ -211,6 +217,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.fire.heatDecay = fireParams.heatDecay;
     data_.fire.suppressionMs = fireParams.suppressionMs;
     data_.fire.emberNoiseSpeed = fireParams.emberNoiseSpeed;
+    data_.fire.emberHeatMax = fireParams.emberHeatMax;
+    data_.fire.bottomRowsForSparks = fireParams.bottomRowsForSparks;
+    data_.fire.burstSparks = fireParams.burstSparks;
 
     // Window/Range normalization parameters
     data_.mic.peakTau = mic.peakTau;

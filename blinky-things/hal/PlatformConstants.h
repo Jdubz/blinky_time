@@ -68,5 +68,9 @@ namespace Platform {
     namespace Microphone {
         constexpr uint32_t DEFAULT_SAMPLE_RATE = 16000;  // 16 kHz
         constexpr int DEFAULT_GAIN = 60;                  // Initial PDM gain (0-80)
+
+        // Hardware gain limits (nRF52840 PDM hardware range, not user-configurable)
+        constexpr int HW_GAIN_MIN = 0;
+        constexpr int HW_GAIN_MAX = 80;
     }
 }

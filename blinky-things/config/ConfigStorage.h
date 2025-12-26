@@ -8,19 +8,23 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 15;  // Config schema v15: removed deprecated params (noiseGate, audioHeatBoostMax, transientHeatMax), added emberNoiseSpeed
+    static const uint8_t CONFIG_VERSION = 16;  // Config schema v16: added missing persisted params (emberHeatMax, bottomRowsForSparks, burstSparks), reordered for memory efficiency
 
+    // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
+        float sparkChance;
+        float audioSparkBoost;
+        float heatDecay;
+        float emberNoiseSpeed;
+        uint16_t suppressionMs;
         uint8_t baseCooling;
         uint8_t sparkHeatMin;
         uint8_t sparkHeatMax;
-        float sparkChance;
-        float audioSparkBoost;
         int8_t coolingAudioBias;
         uint8_t spreadDistance;
-        float heatDecay;
-        uint16_t suppressionMs;
-        float emberNoiseSpeed;
+        uint8_t emberHeatMax;
+        uint8_t bottomRowsForSparks;
+        uint8_t burstSparks;
     };
 
     struct StoredMicParams {

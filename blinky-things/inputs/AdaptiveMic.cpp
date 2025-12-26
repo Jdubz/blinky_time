@@ -1,4 +1,5 @@
 #include "AdaptiveMic.h"
+#include "../hal/PlatformConstants.h"
 #include <math.h>
 
 // Helper for constrain
@@ -32,9 +33,9 @@ constexpr float SNARE_DOMINANCE_THRESHOLD = 1.5f;  // Snare must exceed kick by 
 constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f; // Valley releases 4x slower than peak (very slow upward drift)
 constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of full scale, suits low-noise mic)
 
-// Hardware gain limits (nRF52840 PDM hardware range, not user-configurable)
-constexpr int HW_GAIN_MIN = 0;
-constexpr int HW_GAIN_MAX = 80;
+// Alias for brevity (hardware gain limits are in PlatformConstants.h)
+using Platform::Microphone::HW_GAIN_MIN;
+using Platform::Microphone::HW_GAIN_MAX;
 
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
