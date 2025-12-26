@@ -227,7 +227,9 @@ export function AudioVisualizer({
 
     try {
       await synthRef.current.resume();
-    } catch {
+    } catch (error) {
+      alert('Failed to start audio. Please check browser permissions.');
+      console.error('AudioContext resume failed:', error);
       return;
     }
 

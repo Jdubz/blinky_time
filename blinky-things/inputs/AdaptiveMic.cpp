@@ -36,6 +36,7 @@ constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of ful
 constexpr float BASELINE_TAU = 0.5f;          // 500ms time constant for baseline (slower = more stable)
 constexpr float ONSET_FLOOR = 0.001f;         // Minimum energy floor to prevent noise triggers
 constexpr float MAX_ONSET_RATIO = 3.0f;       // Strength normalization: 1.0 at 3x threshold
+constexpr float MIN_ENERGY_FOR_RISE = 0.0001f; // Minimum previous energy for rise calculation (prevents div-by-zero)
 
 // Alias for brevity (hardware gain limits are in PlatformConstants.h)
 using Platform::Microphone::HW_GAIN_MIN;
@@ -336,8 +337,9 @@ void AdaptiveMic::initBiquadFilters() {
   highZ1 = highZ2 = 0.0f;
 
   // Reset energy accumulators, baselines, and previous energy
+  // Initialize baselines to ONSET_FLOOR to prevent spurious triggers on first frames
   lowEnergy = highEnergy = 0.0f;
-  lowBaseline = highBaseline = 0.0f;
+  lowBaseline = highBaseline = ONSET_FLOOR;
   prevLowEnergy = prevHighEnergy = 0.0f;
 }
 
@@ -384,8 +386,8 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   highBaseline += baselineAlpha * (localHighEnergy - highBaseline);
 
   // Calculate rise from previous frame (for onset detection)
-  float lowRise = (prevLowEnergy > 0.0001f) ? localLowEnergy / prevLowEnergy : 1.0f;
-  float highRise = (prevHighEnergy > 0.0001f) ? localHighEnergy / prevHighEnergy : 1.0f;
+  float lowRise = (prevLowEnergy > MIN_ENERGY_FOR_RISE) ? localLowEnergy / prevLowEnergy : 1.0f;
+  float highRise = (prevHighEnergy > MIN_ENERGY_FOR_RISE) ? localHighEnergy / prevHighEnergy : 1.0f;
 
   // Store current energy for next frame's rise calculation
   prevLowEnergy = localLowEnergy;
