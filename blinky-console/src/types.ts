@@ -28,17 +28,19 @@ export interface SettingsResponse {
 
 // Audio sample from streaming `{"a":{...}}` messages
 export interface AudioSample {
-  l: number; // level (0-1, post-AGC output)
+  l: number; // level (0-1, post-range-mapping output)
   t: number; // percussion strength (0-1+, max of kick/snare/hihat, single-frame impulse)
-  r: number; // RMS tracked level (0-1, what AGC is targeting)
-  s: number; // software gain (AGC multiplier, typically 0.01-100)
+  pk: number; // peak level (current tracked peak for window normalization, raw 0-1 range)
+  vl: number; // valley level (current tracked valley for window normalization, raw 0-1 range)
+  raw: number; // raw ADC level (what HW gain targets, 0-1 range)
   h: number; // hardware gain (PDM gain setting, 0-80)
+  alive: 0 | 1; // PDM status (0=dead, 1=alive)
   k: 0 | 1; // kick impulse (boolean flag)
   sn: 0 | 1; // snare impulse (boolean flag)
   hh: 0 | 1; // hihat impulse (boolean flag)
-  ks: number; // kick strength (0.0-1.0)
-  ss: number; // snare strength (0.0-1.0)
-  hs: number; // hihat strength (0.0-1.0)
+  ks: number; // kick strength (0.0-1.0+)
+  ss: number; // snare strength (0.0-1.0+)
+  hs: number; // hihat strength (0.0-1.0+)
   z: number; // zero-crossing rate (0.0-1.0)
 }
 

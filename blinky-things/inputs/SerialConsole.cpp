@@ -281,18 +281,20 @@ void SerialConsole::streamTick() {
         streamLastMs_ = now;
 
         // Output compact JSON for web app
-        // Format: {"a":{"l":0.45,"t":0.85,"pk":0.32,"vl":0.04,"h":32,"k":0,"sn":1,"hh":0,"ks":0.0,"ss":0.82,"hs":0.0,"z":0.15}}
-        // l = level (post-range-mapping output)
-        // t = transient (max percussion strength: kick/snare/hihat)
-        // pk = peak level (current tracked peak for window)
-        // vl = valley level (current tracked valley for window)
-        // h = hardware gain (PDM gain setting)
+        // Format: {"a":{"l":0.45,"t":0.85,"pk":0.32,"vl":0.04,"raw":0.12,"h":32,"alive":1,"k":0,"sn":1,"hh":0,"ks":0.0,"ss":0.82,"hs":0.0,"z":0.15}}
+        // l = level (post-range-mapping output, 0-1)
+        // t = transient (max percussion strength: kick/snare/hihat, 0-1+)
+        // pk = peak level (current tracked peak for window, raw 0-1 range)
+        // vl = valley level (current tracked valley for window, raw 0-1 range)
+        // raw = raw ADC level (what HW gain targets, 0-1 range)
+        // h = hardware gain (PDM gain setting, 0-80)
+        // alive = PDM status (0=dead, 1=alive)
         // k = kick impulse (boolean: 0 or 1)
         // sn = snare impulse (boolean: 0 or 1)
         // hh = hihat impulse (boolean: 0 or 1)
-        // ks = kick strength (0.0-1.0)
-        // ss = snare strength (0.0-1.0)
-        // hs = hihat strength (0.0-1.0)
+        // ks = kick strength (0.0-1.0+)
+        // ss = snare strength (0.0-1.0+)
+        // hs = hihat strength (0.0-1.0+)
         // z = zero-crossing rate (0.0-1.0)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
@@ -302,8 +304,12 @@ void SerialConsole::streamTick() {
         Serial.print(mic_->getPeakLevel(), 2);
         Serial.print(F(",\"vl\":"));
         Serial.print(mic_->getValleyLevel(), 2);
+        Serial.print(F(",\"raw\":"));
+        Serial.print(mic_->getRawLevel(), 2);
         Serial.print(F(",\"h\":"));
         Serial.print(mic_->getHwGain());
+        Serial.print(F(",\"alive\":"));
+        Serial.print(mic_->isPdmAlive() ? 1 : 0);
         Serial.print(F(",\"k\":"));
         Serial.print(mic_->getKickImpulse() ? 1 : 0);
         Serial.print(F(",\"sn\":"));

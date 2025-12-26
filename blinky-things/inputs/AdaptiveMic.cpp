@@ -58,7 +58,7 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   // Initialize state
   level = 0.0f;
   peakLevel = noiseGate * PEAK_FLOOR_MULTIPLIER;  // FIX: Start at minimum peak floor to prevent startup glitch
-  valleyLevel = noiseGate;
+  valleyLevel = noiseGate * 0.5f;  // FIX: Start valley at half of noise gate (2% instead of 4%)
   transient = 0.0f;
   lastTransientMs = time_.millis();
   lastHwCalibMs = time_.millis();
@@ -123,16 +123,24 @@ void AdaptiveMic::update(float dt) {
       peakLevel = normalized;
     }
 
-    // Valley is noise gate (provides consistent floor)
-    valleyLevel = noiseGate;
+    // FIX: Valley should track the actual signal floor, not be hardcoded
+    // Use a slow-moving valley tracker that follows the minimum signal level
+    float valleyTau = releaseTau * 2.0f;  // Valley moves even slower than peak release
+    float valleyAlpha = 1.0f - expf(-dt / maxValue(valleyTau, MIN_TAU_RANGE));
+
+    // Valley tracks the noise floor (use noise gate as minimum)
+    float targetValley = maxValue(normalized * 0.1f, noiseGate * 0.5f);  // Dynamic floor at 10% of signal, min 2%
+    valleyLevel += valleyAlpha * (targetValley - valleyLevel);
+    valleyLevel = maxValue(valleyLevel, noiseGate * 0.5f);  // Enforce minimum at half of noise gate
 
     // Map current signal to 0-1 range based on peak/valley window
     float range = maxValue(MIN_NORMALIZATION_RANGE, peakLevel - valleyLevel);
     float mapped = (normalized - valleyLevel) / range;
     mapped = clamp01(mapped);
 
-    // Apply noise gate to final output level (keeps visual effects clean)
-    level = (normalized < noiseGate) ? 0.0f : mapped;
+    // FIX: Apply noise gate to MAPPED output, not raw signal
+    // This allows quiet signals to be visible after normalization
+    level = (mapped < 0.05f) ? 0.0f : mapped;  // Gate at 5% of mapped range instead of raw signal
 
     // Frequency-specific percussion detection (always enabled)
     detectFrequencySpecific(nowMs, dt, n);

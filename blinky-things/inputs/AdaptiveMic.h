@@ -94,10 +94,12 @@ public:
   // Public getters
   inline float getLevel() const { return level; }
   inline float getTransient() const { return transient; }
-  inline float getPeakLevel() const { return peakLevel; }      // Current tracked peak
-  inline float getValleyLevel() const { return valleyLevel; }  // Current tracked valley
+  inline float getPeakLevel() const { return peakLevel; }      // Current tracked peak (raw 0-1 range)
+  inline float getValleyLevel() const { return valleyLevel; }  // Current tracked valley (raw 0-1 range)
+  inline float getRawLevel() const { return rawTrackedLevel; } // Raw ADC level for HW gain tracking
   inline int getHwGain() const { return currentHardwareGain; }
   inline uint32_t getIsrCount() const { return s_isrCount; }
+  inline bool isPdmAlive() const { return pdmAlive; }
 
   // Frequency-specific getters
   inline bool getKickImpulse() const { return kickImpulse; }

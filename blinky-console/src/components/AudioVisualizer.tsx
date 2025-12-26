@@ -50,8 +50,8 @@ export function AudioVisualizer({
   disabled,
 }: AudioVisualizerProps) {
   const levelDataRef = useRef<number[]>([]);
-  const transientDataRef = useRef<number[]>([]);
-  const rmsDataRef = useRef<number[]>([]);
+  const peakDataRef = useRef<number[]>([]);
+  const valleyDataRef = useRef<number[]>([]);
   const labelsRef = useRef<string[]>([]);
   const chartRef = useRef<ChartJS<'line'>>(null);
   const percussionEventsRef = useRef<PercussionEvent[]>([]);
@@ -103,15 +103,15 @@ export function AudioVisualizer({
 
     // Add new data point
     levelDataRef.current.push(audioData.l);
-    transientDataRef.current.push(audioData.t);
-    rmsDataRef.current.push(audioData.r);
+    peakDataRef.current.push(audioData.pk);
+    valleyDataRef.current.push(audioData.vl);
     labelsRef.current.push('');
 
     // Trim to max length
     if (levelDataRef.current.length > MAX_DATA_POINTS) {
       levelDataRef.current.shift();
-      transientDataRef.current.shift();
-      rmsDataRef.current.shift();
+      peakDataRef.current.shift();
+      valleyDataRef.current.shift();
       labelsRef.current.shift();
 
       // Shift percussion events and remove those that are off the chart
@@ -124,8 +124,8 @@ export function AudioVisualizer({
     if (chartRef.current) {
       chartRef.current.data.labels = labelsRef.current;
       chartRef.current.data.datasets[0].data = levelDataRef.current;
-      chartRef.current.data.datasets[1].data = transientDataRef.current;
-      chartRef.current.data.datasets[2].data = rmsDataRef.current;
+      chartRef.current.data.datasets[1].data = peakDataRef.current;
+      chartRef.current.data.datasets[2].data = valleyDataRef.current;
       chartRef.current.update('none'); // 'none' mode skips animations for performance
     }
   }, [audioData, isStreaming]);
@@ -133,8 +133,8 @@ export function AudioVisualizer({
   // Clear data when streaming stops
   const clearData = useCallback(() => {
     levelDataRef.current = [];
-    transientDataRef.current = [];
-    rmsDataRef.current = [];
+    peakDataRef.current = [];
+    valleyDataRef.current = [];
     labelsRef.current = [];
     percussionEventsRef.current = [];
     if (chartRef.current) {
@@ -160,19 +160,20 @@ export function AudioVisualizer({
         tension: 0.3,
       },
       {
-        label: 'Transient',
-        data: transientDataRef.current,
-        borderColor: '#ef4444',
+        label: 'Peak',
+        data: peakDataRef.current,
+        borderColor: '#3b82f6',
         backgroundColor: 'transparent',
-        borderWidth: 2,
+        borderWidth: 1,
         pointRadius: 0,
+        borderDash: [5, 5],
         fill: false,
-        tension: 0,
+        tension: 0.3,
       },
       {
-        label: 'RMS Level',
-        data: rmsDataRef.current,
-        borderColor: '#3b82f6',
+        label: 'Valley',
+        data: valleyDataRef.current,
+        borderColor: '#10b981',
         backgroundColor: 'transparent',
         borderWidth: 1,
         pointRadius: 0,
@@ -233,7 +234,9 @@ export function AudioVisualizer({
 
     return percussionEventsRef.current.map((event, i) => {
       const xPixel = xScale.getPixelForValue(event.index);
-      const yPixel = yScale.getPixelForValue(event.strength);
+      // Clamp strength to 0-1 range so markers don't render off the chart
+      const clampedStrength = Math.min(event.strength, 1.0);
+      const yPixel = yScale.getPixelForValue(clampedStrength);
       const bottomPixel = yScale.getPixelForValue(0);
 
       return (
@@ -289,11 +292,11 @@ export function AudioVisualizer({
               <span className="audio-value level" title={audioMetricsMetadata['l'].tooltip}>
                 {audioMetricsMetadata['l'].displayName}: {audioData.l.toFixed(2)}
               </span>
-              <span className="audio-value transient" title={audioMetricsMetadata['t'].tooltip}>
-                {audioMetricsMetadata['t'].displayName}: {audioData.t.toFixed(2)}
+              <span className="audio-value gain" title={audioMetricsMetadata['pk'].tooltip}>
+                {audioMetricsMetadata['pk'].displayName}: {audioData.pk.toFixed(2)}
               </span>
-              <span className="audio-value gain" title={audioMetricsMetadata['s'].tooltip}>
-                {audioMetricsMetadata['s'].displayName}: {audioData.s.toFixed(1)}x
+              <span className="audio-value gain" title={audioMetricsMetadata['vl'].tooltip}>
+                {audioMetricsMetadata['vl'].displayName}: {audioData.vl.toFixed(2)}
               </span>
               <span className="audio-value gain" title={audioMetricsMetadata['h'].tooltip}>
                 {audioMetricsMetadata['h'].displayName}: {audioData.h}
