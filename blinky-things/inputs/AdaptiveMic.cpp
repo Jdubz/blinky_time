@@ -128,7 +128,7 @@ void AdaptiveMic::update(float dt) {
     float valleyTau;
     if (normalized < valleyLevel) {
       // Fast attack to new minimum (capture quiet signals quickly)
-      valleyTau = attackTau;
+      valleyTau = peakTau;
     } else {
       // Very slow release upward (valley can rise if noise floor increases)
       valleyTau = releaseTau * 4.0f;
