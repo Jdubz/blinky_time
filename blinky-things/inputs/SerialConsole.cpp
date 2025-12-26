@@ -280,20 +280,24 @@ void SerialConsole::streamTick() {
     if (mic_ && (now - streamLastMs_ >= STREAM_PERIOD_MS)) {
         streamLastMs_ = now;
 
-        // Output compact JSON for web app
-        // Format: {"a":{"l":0.45,"t":0.85,"pk":0.32,"vl":0.04,"h":32,"k":0,"sn":1,"hh":0,"ks":0.0,"ss":0.82,"hs":0.0,"z":0.15}}
-        // l = level (post-range-mapping output)
-        // t = transient (max percussion strength: kick/snare/hihat)
-        // pk = peak level (current tracked peak for window)
-        // vl = valley level (current tracked valley for window)
-        // h = hardware gain (PDM gain setting)
-        // k = kick impulse (boolean: 0 or 1)
-        // sn = snare impulse (boolean: 0 or 1)
-        // hh = hihat impulse (boolean: 0 or 1)
-        // ks = kick strength (0.0-1.0)
-        // ss = snare strength (0.0-1.0)
-        // hs = hihat strength (0.0-1.0)
-        // z = zero-crossing rate (0.0-1.0)
+        // Output compact JSON for web app (abbreviated field names for serial bandwidth)
+        // Format: {"a":{"l":0.45,"t":0.85,"pk":0.32,"vl":0.04,"raw":0.12,"h":32,"alive":1,"k":0,"sn":1,"hh":0,"ks":0.0,"ss":0.82,"hs":0.0,"z":0.15}}
+        //
+        // Field Mapping (abbreviated → full name : range):
+        // l     → level            : 0-1 (post-range-mapping output, noise-gated)
+        // t     → transient        : 0-1 (max percussion strength: kick/snare/hihat, normalized)
+        // pk    → peak             : 0-1 (current tracked peak for window normalization, raw range)
+        // vl    → valley           : 0-1 (current tracked valley for window normalization, raw range)
+        // raw   → raw ADC level    : 0-1 (what HW gain targets, pre-normalization)
+        // h     → hardware gain    : 0-80 (PDM gain setting)
+        // alive → PDM alive status : 0 or 1 (microphone health: 0=dead, 1=working)
+        // k     → kick impulse     : 0 or 1 (boolean flag: kick detected this frame)
+        // sn    → snare impulse    : 0 or 1 (boolean flag: snare detected this frame)
+        // hh    → hihat impulse    : 0 or 1 (boolean flag: hihat detected this frame)
+        // ks    → kick strength    : 0-1 (normalized: 0 at threshold, 1.0 at 3x threshold)
+        // ss    → snare strength   : 0-1 (normalized: 0 at threshold, 1.0 at 3x threshold)
+        // hs    → hihat strength   : 0-1 (normalized: 0 at threshold, 1.0 at 3x threshold)
+        // z     → zero-crossing    : 0-1 (zero-crossing rate, for frequency classification)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
@@ -302,8 +306,12 @@ void SerialConsole::streamTick() {
         Serial.print(mic_->getPeakLevel(), 2);
         Serial.print(F(",\"vl\":"));
         Serial.print(mic_->getValleyLevel(), 2);
+        Serial.print(F(",\"raw\":"));
+        Serial.print(mic_->getRawLevel(), 2);
         Serial.print(F(",\"h\":"));
         Serial.print(mic_->getHwGain());
+        Serial.print(F(",\"alive\":"));
+        Serial.print(mic_->isPdmAlive() ? 1 : 0);
         Serial.print(F(",\"k\":"));
         Serial.print(mic_->getKickImpulse() ? 1 : 0);
         Serial.print(F(",\"sn\":"));

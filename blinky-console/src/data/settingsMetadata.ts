@@ -139,7 +139,7 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
   l: {
     displayName: 'Level',
     tooltip:
-      'Post-AGC audio level (0-1). This is the final processed amplitude that drives fire intensity.',
+      'Post-range-mapping audio level (0-1). Final processed amplitude that drives fire intensity. Automatically normalized using peak/valley window tracking.',
     unit: '',
   },
   t: {
@@ -148,22 +148,34 @@ export const audioMetricsMetadata: Record<string, SettingMetadata> = {
       'Percussion strength (0-1+). Maximum of kick/snare/hihat detection. Single-frame impulse when percussion detected. Drives fire bursts.',
     unit: '',
   },
-  r: {
-    displayName: 'RMS Level',
+  pk: {
+    displayName: 'Peak',
     tooltip:
-      'Tracked RMS level (0-1). The average audio level that AGC is targeting. Smoother than instantaneous level.',
+      'Current tracked peak level (raw 0-1 range). The upper bound of the dynamic range window. Adapts to loud signals with fast attack, releases slowly when audio gets quieter.',
     unit: '',
   },
-  s: {
-    displayName: 'SW Gain',
+  vl: {
+    displayName: 'Valley',
     tooltip:
-      'Software AGC gain multiplier (0.01-100x). Fast-adapting automatic gain control. Works with hardware gain for full dynamic range.',
-    unit: 'x',
+      'Current tracked valley level (raw 0-1 range). The lower bound of the dynamic range window. Tracks the noise floor and quiet passages.',
+    unit: '',
+  },
+  raw: {
+    displayName: 'Raw ADC',
+    tooltip:
+      'Raw ADC input level (0-1 range, before window/range mapping). This is what the hardware gain system targets to keep in optimal range (0.15-0.35) for best signal quality.',
+    unit: '',
   },
   h: {
     displayName: 'HW Gain',
     tooltip:
-      'Hardware PDM gain setting (0-80). Slow-adapting discrete gain. Adjusts when software gain is pinned at limits for extended periods.',
+      'Hardware PDM gain setting (0-80). Primary gain control that adapts slowly to optimize raw ADC signal quality and signal-to-noise ratio.',
+    unit: '',
+  },
+  alive: {
+    displayName: 'PDM Status',
+    tooltip:
+      'PDM microphone status (0=dead, 1=alive). Shows whether the microphone is actively producing audio data.',
     unit: '',
   },
 };

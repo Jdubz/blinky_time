@@ -48,6 +48,58 @@ export interface UseSerialReturn {
 
 const MAX_CONSOLE_LINES = 500;
 
+/**
+ * Validates incoming AudioSample data to prevent crashes from malformed serial data
+ * Checks for NaN, Infinity, and out-of-range values
+ */
+function validateAudioSample(sample: AudioSample): boolean {
+  // Check all numeric fields are finite numbers
+  const numericFields = [
+    sample.l,
+    sample.t,
+    sample.pk,
+    sample.vl,
+    sample.raw,
+    sample.h,
+    sample.ks,
+    sample.ss,
+    sample.hs,
+    sample.z,
+  ];
+  if (numericFields.some(v => !Number.isFinite(v))) {
+    console.warn('Invalid audio sample: non-finite value detected', sample);
+    return false;
+  }
+
+  // Check ranges for critical fields
+  if (
+    sample.l < 0 ||
+    sample.l > 1 ||
+    sample.pk < 0 ||
+    sample.pk > 1 ||
+    sample.vl < 0 ||
+    sample.vl > 1 ||
+    sample.raw < 0 ||
+    sample.raw > 1
+  ) {
+    console.warn('Invalid audio sample: value out of 0-1 range', sample);
+    return false;
+  }
+
+  // Check boolean flags are exactly 0 or 1
+  if (
+    ![0, 1].includes(sample.alive) ||
+    ![0, 1].includes(sample.k) ||
+    ![0, 1].includes(sample.sn) ||
+    ![0, 1].includes(sample.hh)
+  ) {
+    console.warn('Invalid audio sample: boolean flag not 0 or 1', sample);
+    return false;
+  }
+
+  return true;
+}
+
 export function useSerial(): UseSerialReturn {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
@@ -135,7 +187,7 @@ export function useSerial(): UseSerialReturn {
           setBatteryData(null);
           break;
         case 'audio':
-          if (event.audio) {
+          if (event.audio && validateAudioSample(event.audio.a)) {
             setAudioData(event.audio.a);
           }
           break;

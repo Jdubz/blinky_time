@@ -24,9 +24,11 @@ describe('AudioVisualizer', () => {
   const mockAudioData: AudioSample = {
     l: 0.75,
     t: 0.5,
-    r: 0.6,
-    s: 2.0,
+    pk: 0.6,
+    vl: 0.05,
+    raw: 0.25,
     h: 32,
+    alive: 1,
     k: 0,
     sn: 1,
     hh: 0,
@@ -104,8 +106,8 @@ describe('AudioVisualizer', () => {
       render(<AudioVisualizer {...defaultProps} isStreaming={true} audioData={mockAudioData} />);
 
       expect(screen.getByText('Level: 0.75')).toBeInTheDocument();
-      expect(screen.getByText('Percussion: 0.50')).toBeInTheDocument();
-      expect(screen.getByText('SW Gain: 2.0x')).toBeInTheDocument();
+      expect(screen.getByText('Peak: 0.60')).toBeInTheDocument();
+      expect(screen.getByText('Valley: 0.05')).toBeInTheDocument();
       expect(screen.getByText('HW Gain: 32')).toBeInTheDocument();
     });
 

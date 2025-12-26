@@ -7,6 +7,7 @@ import { AudioVisualizer } from './components/AudioVisualizer';
 import { TabView } from './components/TabView';
 import { OfflineBanner } from './components/OfflineBanner';
 import { SerialConsoleModal } from './components/SerialConsoleModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import TestPanel from './components/TestPanel';
 import './styles.css';
 
@@ -71,12 +72,32 @@ function App() {
               content: (
                 <div className="tab-panel">
                   <div className="tab-panel-visualizer">
-                    <AudioVisualizer
-                      audioData={audioData}
-                      isStreaming={isStreaming}
-                      onToggleStreaming={toggleStreaming}
-                      disabled={isDisabled}
-                    />
+                    <ErrorBoundary
+                      fallback={
+                        <div className="audio-visualizer-error">
+                          <div className="error-boundary-content">
+                            <div className="error-boundary-icon">⚠️</div>
+                            <h3>Audio Visualizer Error</h3>
+                            <p>
+                              The audio visualizer encountered an error. Try restarting the stream.
+                            </p>
+                            <button
+                              className="btn btn-primary"
+                              onClick={() => window.location.reload()}
+                            >
+                              Reload Page
+                            </button>
+                          </div>
+                        </div>
+                      }
+                    >
+                      <AudioVisualizer
+                        audioData={audioData}
+                        isStreaming={isStreaming}
+                        onToggleStreaming={toggleStreaming}
+                        disabled={isDisabled}
+                      />
+                    </ErrorBoundary>
                   </div>
                   <div className="tab-panel-settings">
                     <SettingsPanel
