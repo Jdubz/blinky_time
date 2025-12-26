@@ -342,6 +342,9 @@ void Fire::updateMatrixFire() {
     // HORIZONTAL: y=0 is physical bottom, so fire rises from low y to high y
 
     // Heat propagation weights - weighted average of nearby cells
+    // Overflow safety: heat_ values are uint8_t (0-255), weights are small constants
+    // Max calculation: (255 * 1) + (255 * 2) = 765, well within uint16_t range (65535)
+    // After division and averaging: result stays <= 255, safe to cast back to uint8_t
     constexpr uint16_t HEAT_WEIGHT_NEAR = 1;  // Weight for adjacent cell
     constexpr uint16_t HEAT_WEIGHT_FAR = 2;   // Weight for cell 2 away (stronger influence)
     constexpr uint16_t HEAT_WEIGHT_TOTAL = HEAT_WEIGHT_NEAR + HEAT_WEIGHT_FAR;

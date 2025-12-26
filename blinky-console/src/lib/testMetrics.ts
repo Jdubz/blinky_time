@@ -200,12 +200,13 @@ export function exportResultsCSV(testName: string, metrics: TypeMetrics): string
     `True Positives,${metrics.overall.truePositives}`,
     `False Positives,${metrics.overall.falsePositives}`,
     `False Negatives,${metrics.overall.falseNegatives}`,
+    `Avg Timing Error,${metrics.overall.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}ms`,
     '',
     'Per-Type Metrics:',
-    'Type,F1,Precision,Recall,TP,FP,FN',
-    `Kick,${(metrics.kick.f1Score * 100).toFixed(1)}%,${(metrics.kick.precision * 100).toFixed(1)}%,${(metrics.kick.recall * 100).toFixed(1)}%,${metrics.kick.truePositives},${metrics.kick.falsePositives},${metrics.kick.falseNegatives}`,
-    `Snare,${(metrics.snare.f1Score * 100).toFixed(1)}%,${(metrics.snare.precision * 100).toFixed(1)}%,${(metrics.snare.recall * 100).toFixed(1)}%,${metrics.snare.truePositives},${metrics.snare.falsePositives},${metrics.snare.falseNegatives}`,
-    `Hihat,${(metrics.hihat.f1Score * 100).toFixed(1)}%,${(metrics.hihat.precision * 100).toFixed(1)}%,${(metrics.hihat.recall * 100).toFixed(1)}%,${metrics.hihat.truePositives},${metrics.hihat.falsePositives},${metrics.hihat.falseNegatives}`,
+    'Type,F1,Precision,Recall,TP,FP,FN,Avg Timing Error (ms)',
+    `Kick,${(metrics.kick.f1Score * 100).toFixed(1)}%,${(metrics.kick.precision * 100).toFixed(1)}%,${(metrics.kick.recall * 100).toFixed(1)}%,${metrics.kick.truePositives},${metrics.kick.falsePositives},${metrics.kick.falseNegatives},${metrics.kick.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}`,
+    `Snare,${(metrics.snare.f1Score * 100).toFixed(1)}%,${(metrics.snare.precision * 100).toFixed(1)}%,${(metrics.snare.recall * 100).toFixed(1)}%,${metrics.snare.truePositives},${metrics.snare.falsePositives},${metrics.snare.falseNegatives},${metrics.snare.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}`,
+    `Hihat,${(metrics.hihat.f1Score * 100).toFixed(1)}%,${(metrics.hihat.precision * 100).toFixed(1)}%,${(metrics.hihat.recall * 100).toFixed(1)}%,${metrics.hihat.truePositives},${metrics.hihat.falsePositives},${metrics.hihat.falseNegatives},${metrics.hihat.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}`,
   ];
 
   return lines.join('\n');

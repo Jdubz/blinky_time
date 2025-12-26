@@ -21,6 +21,14 @@ static T minValue(T a, T b) {
     return (a < b) ? a : b;
 }
 
+// -------- AGC and tracking constants --------
+constexpr float MIN_TAU_HARDWARE = 1.0f;      // Minimum hardware tracking tau (1s) to prevent instability
+constexpr float MIN_TAU_ENVELOPE = 0.001f;    // Minimum envelope follower tau (1ms)
+constexpr float MIN_TAU_GAIN = 0.1f;          // Minimum gain adaptation tau (100ms)
+constexpr float NOMINAL_GAIN = 3.0f;          // Nominal/target software gain during silence
+constexpr float GAIN_DECAY_RATE = 0.3f;       // Decay rate toward nominal gain (30% per tau)
+constexpr float SNARE_DOMINANCE_THRESHOLD = 1.5f;  // Snare must exceed kick by this factor for simultaneous detection
+
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
 volatile uint32_t AdaptiveMic::s_isrCount   = 0;
@@ -95,7 +103,7 @@ void AdaptiveMic::update(float dt) {
 
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
-    float alpha = 1.0f - expf(-dt / maxValue(hwTrackingTau, 1.0f));
+    float alpha = 1.0f - expf(-dt / maxValue(hwTrackingTau, MIN_TAU_HARDWARE));
     rawTrackedLevel += alpha * (normalized - rawTrackedLevel);
 
     // Apply software gain (SECONDARY - fine adjustments only)
@@ -108,7 +116,7 @@ void AdaptiveMic::update(float dt) {
     if (agEnabled) {
       // Always track level with envelope follower (prevents stale state during silence)
       float tau = (afterGain > trackedLevel) ? agcAttackTau : agcReleaseTau;
-      float trackAlpha = 1.0f - expf(-dt / maxValue(tau, 0.001f));
+      float trackAlpha = 1.0f - expf(-dt / maxValue(tau, MIN_TAU_ENVELOPE));
       trackedLevel += trackAlpha * (afterGain - trackedLevel);
 
       // Only adjust gain when there's real signal (prevents amplifying noise)
@@ -116,13 +124,13 @@ void AdaptiveMic::update(float dt) {
       if (afterGain > noiseGate) {
         // Real signal present - allow gain adjustments
         float err = AG_PEAK_TARGET - trackedLevel;
-        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau, 0.1f));
+        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau, MIN_TAU_GAIN));
         globalGain += gainAlpha * err * globalGain;
-      } else if (globalGain > 3.0f) {
+      } else if (globalGain > NOMINAL_GAIN) {
         // During silence, slowly reduce excessive gain toward nominal level
         // This prevents runaway gain from persisting
-        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau * 3.0f, 0.1f));
-        globalGain += gainAlpha * (3.0f - globalGain) * 0.3f;
+        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau * 3.0f, MIN_TAU_GAIN));
+        globalGain += gainAlpha * (NOMINAL_GAIN - globalGain) * GAIN_DECAY_RATE;
       }
 
       globalGain = constrainValue(globalGain, 0.1f, 100.0f);
@@ -424,7 +432,7 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
     lastKickMs = nowMs;
 
     // Allow snare if it's MUCH stronger than kick (likely a real snare hit)
-    if (snareDetected && snareStrength > kickStrength * 1.5f) {
+    if (snareDetected && snareStrength > kickStrength * SNARE_DOMINANCE_THRESHOLD) {
       snareImpulse = true;
       maxPercussionStrength = maxValue(maxPercussionStrength, snareStrength);
       lastSnareMs = nowMs;
