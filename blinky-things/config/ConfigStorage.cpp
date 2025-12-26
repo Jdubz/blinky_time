@@ -65,7 +65,6 @@ void ConfigStorage::loadDefaults() {
     // Mic defaults (hardware-primary, window/range normalization)
     data_.mic.noiseGate = 0.04f;
     // Window/Range normalization parameters
-    // (Peak tracks actual signal - no target, follows loudness naturally)
     data_.mic.peakTau = 2.0f;        // 2s peak adaptation
     data_.mic.releaseTau = 5.0f;     // 5s peak release
     // Hardware AGC parameters (primary - optimizes raw ADC input)
@@ -78,10 +77,10 @@ void ConfigStorage::loadDefaults() {
     data_.mic.snareThreshold = 1.3f;
     data_.mic.hihatThreshold = 1.3f;
 
-    // Note: Timing constants are now compile-time in MicConstants:
-    // - TRANSIENT_COOLDOWN_MS = 60ms
-    // - HW_CALIB_PERIOD_MS = 30000ms
-    // - HW_TRACKING_TAU = 30.0s
+    // Note: Timing behavior is now controlled by compile-time constants in MicConstants:
+    // - TRANSIENT_COOLDOWN_MS
+    // - HW_CALIB_PERIOD_MS
+    // - HW_TRACKING_TAU
 
     data_.brightness = 100;
 }

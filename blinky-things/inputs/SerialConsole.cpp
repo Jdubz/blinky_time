@@ -267,7 +267,7 @@ void SerialConsole::restoreDefaults() {
         mic_->noiseGate = Defaults::NoiseGate;
         mic_->peakTau = Defaults::PeakTau;        // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;  // 5s peak release
-        // Note: Timing constants (transient cooldown, hw calib) are now compile-time constants
+        // Note: Timing constants (transient cooldown, hw calib, hw tracking) are now compile-time constants
     }
 }
 

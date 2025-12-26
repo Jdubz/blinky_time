@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 14;  // Removed peakTarget, timing constants now compile-time
+    static const uint8_t CONFIG_VERSION = 14;  // Config schema v14: peakTarget removed; timing constants are now compile-time
 
     struct StoredFireParams {
         uint8_t baseCooling;
@@ -27,7 +27,6 @@ public:
     struct StoredMicParams {
         float noiseGate;
         // Window/Range normalization parameters
-        // (Peak tracks actual signal - no target, follows loudness naturally)
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
         // Hardware AGC parameters (primary - optimizes ADC signal quality)

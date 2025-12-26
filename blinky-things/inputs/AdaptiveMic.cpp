@@ -24,6 +24,7 @@ static T minValue(T a, T b) {
 // -------- Window/Range and tracking constants --------
 constexpr float MIN_TAU_HARDWARE = 1.0f;      // Minimum hardware tracking tau (1s) to prevent instability
 constexpr float MIN_TAU_RANGE = 0.1f;         // Minimum peak/valley tracking tau (100ms)
+constexpr float MIN_NORMALIZATION_RANGE = 0.01f; // Minimum range to prevent division by zero
 constexpr float PEAK_FLOOR_MULTIPLIER = 2.0f; // Peak floor = noiseGate * multiplier
 constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f; // Jump to signal if it exceeds peak * threshold
 constexpr float SNARE_DOMINANCE_THRESHOLD = 1.5f;  // Snare must exceed kick by this factor for simultaneous detection
@@ -126,7 +127,7 @@ void AdaptiveMic::update(float dt) {
     valleyLevel = noiseGate;
 
     // Map current signal to 0-1 range based on peak/valley window
-    float range = maxValue(0.01f, peakLevel - valleyLevel);
+    float range = maxValue(MIN_NORMALIZATION_RANGE, peakLevel - valleyLevel);
     float mapped = (normalized - valleyLevel) / range;
     mapped = clamp01(mapped);
 

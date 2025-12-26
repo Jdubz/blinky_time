@@ -36,7 +36,7 @@ namespace MicConstants {
  * - Fast attack (peakTau) when signal exceeds peak
  * - Slow release (releaseTau) when signal drops below peak
  * - Instant adaptation for loud transients (>1.3x current peak)
- * - Output = (signal - noiseGate) / (peak - noiseGate) → always 0-1
+ * - Output = (signal - valleyLevel) / (peak - valleyLevel) → always 0-1
  * - As music gets louder: peak increases, range expands, still maps to 0-1
  * - As music gets quieter: peak decreases, range shrinks, still maps to 0-1
  * - NO clipping - full dynamic range preserved
@@ -47,7 +47,6 @@ public:
   float noiseGate      = 0.04f;     // Noise gate threshold (0-1)
 
   // Window/Range auto-normalization - Peak/valley tracking
-  // Peak tracks actual signal levels (no target - follows loudness naturally)
   float peakTau        = 2.0f;      // Peak adaptation speed (attack time, seconds)
   float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
 
