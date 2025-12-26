@@ -47,6 +47,18 @@ export interface TypeMetrics {
 }
 
 /**
+ * Programmatic test pattern with built-in ground truth
+ */
+export interface TestPattern {
+  id: string;
+  name: string;
+  description: string;
+  durationMs: number; // Total pattern duration
+  bpm?: number; // Optional BPM for musical patterns
+  hits: GroundTruthHit[]; // Automatically serves as ground truth
+}
+
+/**
  * Test run state
  */
 export interface TestRun {
