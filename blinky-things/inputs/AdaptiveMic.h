@@ -4,9 +4,9 @@
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
 
-// AdaptiveMic - Clean audio input with AGC and percussion detection
+// AdaptiveMic - Clean audio input with window/range normalization and percussion detection
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
-// - AGC adapts gain to maintain target level
+// - Auto-ranging: Tracks peak/valley, maps to 0-1 output (no clipping)
 // - Frequency-specific percussion detection (kick/snare/hihat)
 // - Hardware gain adapts to environment over minutes
 
@@ -14,49 +14,56 @@ namespace MicConstants {
     constexpr float MIN_DT_SECONDS = 0.0001f;         // Minimum dt clamp (0.1ms)
     constexpr float MAX_DT_SECONDS = 0.1000f;         // Maximum dt clamp (100ms)
     constexpr uint32_t MIC_DEAD_TIMEOUT_MS = 250;     // PDM alive check timeout
+
+    // Timing constants (not user-configurable)
+    constexpr uint32_t TRANSIENT_COOLDOWN_MS = 60;    // Percussion detection cooldown
+    constexpr uint32_t HW_CALIB_PERIOD_MS = 30000;    // Hardware gain calibration period (30s)
+    constexpr float HW_TRACKING_TAU = 30.0f;          // Hardware gain tracking time constant (30s)
 }
 
 /**
- * AdaptiveMic - Audio input with auto-gain control and percussion detection
+ * AdaptiveMic - Audio input with window/range normalization and percussion detection
  *
  * Architecture:
- * - Raw samples → Normalize (0-1) → Apply AGC gain → Noise gate → Output
+ * - Raw samples → Normalize (0-1) → Window/Range mapping → Noise gate → Output
  * - Frequency-specific percussion detection via biquad bandpass filters
  * - No envelope smoothing (visualizers handle their own smoothing)
- * - Hardware-primary AGC: HW gain optimizes ADC input, SW gain fine-tunes output
+ * - Hardware-primary: HW gain optimizes ADC input, window/range maps to 0-1 output
  * - Percussion detection: kick (60-130 Hz), snare (300-750 Hz), hihat (5-7 kHz)
+ *
+ * Window/Range Normalization (Follows Loudness):
+ * - Peak tracker follows actual signal levels (exponential moving average)
+ * - Fast attack (peakTau) when signal exceeds peak
+ * - Slow release (releaseTau) when signal drops below peak
+ * - Instant adaptation for loud transients (>1.3x current peak)
+ * - Output = (signal - noiseGate) / (peak - noiseGate) → always 0-1
+ * - As music gets louder: peak increases, range expands, still maps to 0-1
+ * - As music gets quieter: peak decreases, range shrinks, still maps to 0-1
+ * - NO clipping - full dynamic range preserved
  */
 class AdaptiveMic {
 public:
   // ---- Tunables ----
   float noiseGate      = 0.04f;     // Noise gate threshold (0-1)
 
-  // Software AGC - Simplified peak-based design
-  bool  agEnabled      = true;
-  static constexpr float AG_PEAK_TARGET = 1.0f;  // Always target full dynamic range
-
-  // AGC time constants - Attack/Release envelope follower
-  float agcAttackTau   = 0.1f;      // Peak attack: how fast to catch peaks (100ms)
-  float agcReleaseTau  = 2.0f;      // Peak release: how slow peaks decay (2s)
-  float agcGainTau     = 5.0f;      // Gain adjustment speed (5s adaptation)
+  // Window/Range auto-normalization - Peak/valley tracking
+  // Peak tracks actual signal levels (no target - follows loudness naturally)
+  float peakTau        = 2.0f;      // Peak adaptation speed (attack time, seconds)
+  float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
 
   // Hardware gain (PRIMARY - adapts to raw ADC input for best signal quality)
-  uint32_t hwCalibPeriodMs = 30000;   // 30 seconds between calibration checks
   int      hwGainMin       = 0;
   int      hwGainMax       = 64;
   int      hwGainStep      = 1;
   float    hwTargetLow     = 0.15f;   // If raw input below this, increase HW gain
   float    hwTargetHigh    = 0.35f;   // If raw input above this, decrease HW gain
-  float    hwTrackingTau   = 30.0f;   // Time constant for tracking raw input (30s)
 
   // ---- Public state ----
-  float  level         = 0.0f;  // Final output level (0-1, post-AGC, post-gate)
-  float  globalGain    = 3.0f;  // Current AGC gain multiplier
+  float  level         = 0.0f;  // Final output level (0-1, post-range-mapping, post-gate)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
 
   // Percussion transient: single-frame impulse with strength (max of kick/snare/hihat)
   float transient          = 0.0f;    // Impulse strength (0.0 = none, typically 0.0-1.0, can exceed 1.0 for very strong hits)
-  uint32_t transientCooldownMs = 60;  // Cooldown between detections (ms)
   uint32_t lastTransientMs = 0;
 
   // Frequency-specific percussion detection (Phase 3)
@@ -88,8 +95,8 @@ public:
   // Public getters
   inline float getLevel() const { return level; }
   inline float getTransient() const { return transient; }
-  inline float getTrackedLevel() const { return trackedLevel; }  // RMS level AGC is tracking
-  inline float getGlobalGain() const { return globalGain; }
+  inline float getPeakLevel() const { return peakLevel; }      // Current tracked peak
+  inline float getValleyLevel() const { return valleyLevel; }  // Current tracked valley
   inline int getHwGain() const { return currentHardwareGain; }
   inline uint32_t getIsrCount() const { return s_isrCount; }
 
@@ -130,9 +137,10 @@ private:
   volatile static uint32_t s_zeroCrossings;  // Count of zero crossings
   volatile static int16_t s_lastSample;       // Previous sample for ZCR
 
-  // AGC tracking
-  float trackedLevel = 0.0f;     // Peak level tracked for software AGC (post-gain)
-  float rawTrackedLevel = 0.0f;  // Raw ADC level tracked for hardware AGC (pre-gain)
+  // Window/Range tracking
+  float peakLevel = 0.0f;        // Tracked peak for range window
+  float valleyLevel = 0.0f;      // Tracked valley for range window (typically noise gate)
+  float rawTrackedLevel = 0.0f;  // Raw ADC level tracked for hardware AGC
 
   // Timing
   uint32_t lastHwCalibMs = 0;

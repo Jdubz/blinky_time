@@ -21,12 +21,11 @@ static T minValue(T a, T b) {
     return (a < b) ? a : b;
 }
 
-// -------- AGC and tracking constants --------
+// -------- Window/Range and tracking constants --------
 constexpr float MIN_TAU_HARDWARE = 1.0f;      // Minimum hardware tracking tau (1s) to prevent instability
-constexpr float MIN_TAU_ENVELOPE = 0.001f;    // Minimum envelope follower tau (1ms)
-constexpr float MIN_TAU_GAIN = 0.1f;          // Minimum gain adaptation tau (100ms)
-constexpr float NOMINAL_GAIN = 3.0f;          // Nominal/target software gain during silence
-constexpr float GAIN_DECAY_RATE = 0.3f;       // Decay rate toward nominal gain (30% per tau)
+constexpr float MIN_TAU_RANGE = 0.1f;         // Minimum peak/valley tracking tau (100ms)
+constexpr float PEAK_FLOOR_MULTIPLIER = 2.0f; // Peak floor = noiseGate * multiplier
+constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f; // Jump to signal if it exceeds peak * threshold
 constexpr float SNARE_DOMINANCE_THRESHOLD = 1.5f;  // Snare must exceed kick by this factor for simultaneous detection
 
 // -------- Static ISR accumulators --------
@@ -57,7 +56,8 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
 
   // Initialize state
   level = 0.0f;
-  trackedLevel = 0.0f;
+  peakLevel = noiseGate * PEAK_FLOOR_MULTIPLIER;  // FIX: Start at minimum peak floor to prevent startup glitch
+  valleyLevel = noiseGate;
   transient = 0.0f;
   lastTransientMs = time_.millis();
   lastHwCalibMs = time_.millis();
@@ -103,41 +103,35 @@ void AdaptiveMic::update(float dt) {
 
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
-    float alpha = 1.0f - expf(-dt / maxValue(hwTrackingTau, MIN_TAU_HARDWARE));
+    float alpha = 1.0f - expf(-dt / maxValue(MicConstants::HW_TRACKING_TAU, MIN_TAU_HARDWARE));
     rawTrackedLevel += alpha * (normalized - rawTrackedLevel);
 
-    // Apply software gain (SECONDARY - fine adjustments only)
-    float afterGain = normalized * globalGain;
-    afterGain = clamp01(afterGain);
+    // Window/Range normalization (SECONDARY - maps to 0-1 output)
+    // Track peak with attack/release envelope
+    float tau = (normalized > peakLevel) ? peakTau : releaseTau;
+    float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MIN_TAU_RANGE));
+    peakLevel += peakAlpha * (normalized - peakLevel);
 
-    // Software AGC fine-tunes output to target (tracks post-gain level)
-    // CRITICAL FIX: Always update trackedLevel (even during silence) to prevent stale state
-    // This fixes the 100x gain pegging bug caused by frozen trackedLevel
-    if (agEnabled) {
-      // Always track level with envelope follower (prevents stale state during silence)
-      float tau = (afterGain > trackedLevel) ? agcAttackTau : agcReleaseTau;
-      float trackAlpha = 1.0f - expf(-dt / maxValue(tau, MIN_TAU_ENVELOPE));
-      trackedLevel += trackAlpha * (afterGain - trackedLevel);
+    // Enforce minimum peak floor to prevent division by zero and noise amplification
+    float minPeak = noiseGate * PEAK_FLOOR_MULTIPLIER;
+    peakLevel = maxValue(peakLevel, minPeak);
 
-      // Only adjust gain when there's real signal (prevents amplifying noise)
-      // Can always decrease gain, but only increase when signal present
-      if (afterGain > noiseGate) {
-        // Real signal present - allow gain adjustments
-        float err = AG_PEAK_TARGET - trackedLevel;
-        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau, MIN_TAU_GAIN));
-        globalGain += gainAlpha * err * globalGain;
-      } else if (globalGain > NOMINAL_GAIN) {
-        // During silence, slowly reduce excessive gain toward nominal level
-        // This prevents runaway gain from persisting
-        float gainAlpha = 1.0f - expf(-dt / maxValue(agcGainTau * 3.0f, MIN_TAU_GAIN));
-        globalGain += gainAlpha * (NOMINAL_GAIN - globalGain) * GAIN_DECAY_RATE;
-      }
-
-      globalGain = constrainValue(globalGain, 0.1f, 100.0f);
+    // Immediate adaptation: jump to signal if far outside current range
+    // This ensures loud transients are captured immediately without clipping
+    if (normalized > peakLevel * INSTANT_ADAPT_THRESHOLD) {
+      peakLevel = normalized;
     }
 
+    // Valley is noise gate (provides consistent floor)
+    valleyLevel = noiseGate;
+
+    // Map current signal to 0-1 range based on peak/valley window
+    float range = maxValue(0.01f, peakLevel - valleyLevel);
+    float mapped = (normalized - valleyLevel) / range;
+    mapped = clamp01(mapped);
+
     // Apply noise gate to final output level (keeps visual effects clean)
-    level = (afterGain < noiseGate) ? 0.0f : afterGain;
+    level = (normalized < noiseGate) ? 0.0f : mapped;
 
     // Frequency-specific percussion detection (always enabled)
     detectFrequencySpecific(nowMs, dt, n);
@@ -169,18 +163,15 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, ui
   avgAbs = (cnt > 0) ? float(sum) / float(cnt) : 0.0f;
 }
 
-// autoGainTick() removed - logic now inlined in update() with critical fixes
-// for preventing stale trackedLevel during silence (Issue #2)
-
 void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   // PRIMARY GAIN CONTROL: Adjust hardware gain based on raw ADC input level
   // Goal: Keep raw input in optimal range (hwTargetLow - hwTargetHigh) for best SNR
   // This ensures high-quality signal into ADC before software processing
 
   // Adaptation period must be >= tracking window for stable measurements
-  // hwTrackingTau = 30s, so check every 30s (matching tracking window for stability)
+  // HW_TRACKING_TAU = 30s, so check every 30s (matching tracking window for stability)
   // Use signed arithmetic to handle millis() wraparound at 49.7 days
-  if ((int32_t)(nowMs - lastHwCalibMs) < (int32_t)hwCalibPeriodMs) return;
+  if ((int32_t)(nowMs - lastHwCalibMs) < (int32_t)MicConstants::HW_CALIB_PERIOD_MS) return;
 
   // Calculate how far we are from target range
   float errorMagnitude = 0.0f;
@@ -219,13 +210,8 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
 
   if (currentHardwareGain != oldGain) {
     pdm_.setGain(currentHardwareGain);
-
-    // Compensate software gain to smooth transition (reduce audio artifacts)
-    // Estimate: each HW gain step ≈ 5% change
-    float hwGainChange = (currentHardwareGain - oldGain) * 0.05f;
-    // Safety check: prevent divide-by-zero if hwGainChange approaches -1.0
-    float softComp = (hwGainChange > -0.99f) ? 1.0f / (1.0f + hwGainChange) : 10.0f;
-    globalGain = constrainValue(globalGain * softComp, 0.1f, 100.0f);
+    // Note: With window/range normalization, no compensation needed
+    // The peak tracker will naturally adapt to the new gain level
   }
 
   lastHwCalibMs = nowMs;
@@ -397,7 +383,7 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
   // IMPROVED THRESHOLD LOGIC (#6): Clearer, simpler threshold calculation
   // Use maximum of absolute floor OR relative threshold
   // Detect kick (bass transient)
-  if ((int32_t)(nowMs - lastKickMs) > (int32_t)transientCooldownMs) {
+  if ((int32_t)(nowMs - lastKickMs) > (int32_t)MicConstants::TRANSIENT_COOLDOWN_MS) {
     float kickThresh = maxValue(PERCUSSION_FLOOR, kickBaseline * kickThreshold);
     if (localKickEnergy > kickThresh) {
       kickDetected = true;
@@ -406,7 +392,7 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
   }
 
   // Detect snare (mid transient)
-  if ((int32_t)(nowMs - lastSnareMs) > (int32_t)transientCooldownMs) {
+  if ((int32_t)(nowMs - lastSnareMs) > (int32_t)MicConstants::TRANSIENT_COOLDOWN_MS) {
     float snareThresh = maxValue(PERCUSSION_FLOOR, snareBaseline * snareThreshold);
     if (localSnareEnergy > snareThresh) {
       snareDetected = true;
@@ -415,7 +401,7 @@ void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sam
   }
 
   // Detect hihat (high transient)
-  if ((int32_t)(nowMs - lastHihatMs) > (int32_t)transientCooldownMs) {
+  if ((int32_t)(nowMs - lastHihatMs) > (int32_t)MicConstants::TRANSIENT_COOLDOWN_MS) {
     float hihatThresh = maxValue(PERCUSSION_FLOOR, hihatBaseline * hihatThreshold);
     if (localHihatEnergy > hihatThresh) {
       hihatDetected = true;
