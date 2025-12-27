@@ -510,12 +510,12 @@ void Fire::generateSparks() {
         sparkHeat = max(energyHeat, params_.sparkHeatMin);
     }
 
-    // BURST: Percussion impulse triggers burst (only if not suppressed)
-    // audioHit_ is 0.0 normally, non-zero when percussion detected (kick/snare/hihat)
+    // BURST: Transient impulse triggers burst (only if not suppressed)
+    // audioHit_ is 0.0 normally, non-zero when transient detected (low/high band onset)
     if (audioHit_ > 0.0f && !inSuppression_) {
-        float strength = audioHit_;  // Use percussion strength (0.0-1.0+)
+        float strength = audioHit_;  // Use transient strength (0.0-1.0)
         numSparks += params_.burstSparks;
-        // Scale heat by strength: weak percussion = less intense, strong = max
+        // Scale heat by strength: weak transient = less intense, strong = max
         sparkHeat = params_.sparkHeatMin +
             (uint8_t)(strength * (255 - params_.sparkHeatMin));
         lastBurstMs_ = now;

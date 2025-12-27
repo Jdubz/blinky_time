@@ -27,11 +27,16 @@ constexpr float MIN_TAU_HARDWARE = 1.0f;      // Minimum hardware tracking tau (
 constexpr float MIN_TAU_RANGE = 0.1f;         // Minimum peak/valley tracking tau (100ms)
 constexpr float MIN_NORMALIZATION_RANGE = 0.01f; // Minimum range to prevent division by zero (peak must be valley + this)
 constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f; // Jump to signal if it exceeds peak * threshold
-constexpr float SNARE_DOMINANCE_THRESHOLD = 1.5f;  // Snare must exceed kick by this factor for simultaneous detection
 
 // Valley tracking constants (for low-noise MEMS microphone)
 constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f; // Valley releases 4x slower than peak (very slow upward drift)
 constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of full scale, suits low-noise mic)
+
+// Onset detection constants
+constexpr float BASELINE_TAU = 0.5f;          // 500ms time constant for baseline (slower = more stable)
+constexpr float ONSET_FLOOR = 0.001f;         // Minimum energy floor to prevent noise triggers
+constexpr float MAX_ONSET_RATIO = 3.0f;       // Strength normalization: 1.0 at 3x threshold
+constexpr float MIN_ENERGY_FOR_RISE = 0.0001f; // Minimum previous energy for rise calculation (prevents div-by-zero)
 
 // Alias for brevity (hardware gain limits are in PlatformConstants.h)
 using Platform::Microphone::HW_GAIN_MIN;
@@ -71,12 +76,11 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   lastTransientMs = time_.millis();
   lastHwCalibMs = time_.millis();
   lastIsrMs = time_.millis();
-  lastKickMs = time_.millis();
-  lastSnareMs = time_.millis();
-  lastHihatMs = time_.millis();
+  lastLowOnsetMs = time_.millis();
+  lastHighOnsetMs = time_.millis();
   pdmAlive = false;
 
-  // Initialize biquad filters for frequency-specific detection
+  // Initialize biquad filters for onset detection
   initBiquadFilters();
 
   return true;
@@ -85,6 +89,19 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
 void AdaptiveMic::end() {
   pdm_.end();
   s_instance = nullptr;
+}
+
+void AdaptiveMic::resetBaselines() {
+  // Reset baselines to floor value for fresh detection
+  // Useful for test mode to start with known state
+  time_.noInterrupts();
+  lowBaseline = ONSET_FLOOR;
+  highBaseline = ONSET_FLOOR;
+  prevLowEnergy = 0.0f;
+  prevHighEnergy = 0.0f;
+  lowEnergy = 0.0f;
+  highEnergy = 0.0f;
+  time_.interrupts();
 }
 
 void AdaptiveMic::update(float dt) {
@@ -109,6 +126,9 @@ void AdaptiveMic::update(float dt) {
     // Normalize raw samples to 0-1 range
     // avgAbs is average of int16_t samples (0-32768 range)
     float normalized = avgAbs / 32768.0f;
+
+    // Store instantaneous raw level for debugging
+    rawInstantLevel = normalized;
 
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
@@ -150,8 +170,8 @@ void AdaptiveMic::update(float dt) {
     float mapped = (normalized - valleyLevel) / range;
     level = clamp01(mapped);
 
-    // Frequency-specific percussion detection (always enabled)
-    detectFrequencySpecific(nowMs, dt, n);
+    // Two-band onset detection (always enabled)
+    detectOnsets(nowMs, dt, n);
   }
 
   if (!pdmAlive) return;
@@ -241,9 +261,9 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
 //
 // PERFORMANCE NOTES:
 // - Typical execution: 256 samples @ 16kHz = ~1.5-2.0ms per ISR call
-// - Biquad filters: 3 filters × 256 samples × ~20 cycles/filter = ~15k cycles
-// - ARM Cortex-M4 @ 64MHz with FPU: ~0.23ms for biquad processing
-// - Total ISR time: ~0.5-0.8ms (well under 16ms buffer interval)
+// - Biquad filters: 2 filters × 256 samples × ~20 cycles/filter = ~10k cycles
+// - ARM Cortex-M4 @ 64MHz with FPU: ~0.16ms for biquad processing
+// - Total ISR time: ~0.4-0.6ms (well under 16ms buffer interval)
 // - Critical section (noInterrupts): <10µs for atomic variable updates
 // - ISR does not block other interrupts except during critical section
 void AdaptiveMic::onPDMdata() {
@@ -274,25 +294,21 @@ void AdaptiveMic::onPDMdata() {
     }
     s_lastSample = s;
 
-    // Frequency-specific filtering (always enabled)
+    // Two-band filtering for onset detection
     // Process normalized sample through biquad filters and accumulate band energies
     float normalized = (float)s / 32768.0f;
 
     // Process through each frequency band filter
-    float kickOut = s_instance->processBiquad(normalized, s_instance->kickZ1, s_instance->kickZ2,
-                                                s_instance->kickB0, s_instance->kickB1, s_instance->kickB2,
-                                                s_instance->kickA1, s_instance->kickA2);
-    float snareOut = s_instance->processBiquad(normalized, s_instance->snareZ1, s_instance->snareZ2,
-                                                 s_instance->snareB0, s_instance->snareB1, s_instance->snareB2,
-                                                 s_instance->snareA1, s_instance->snareA2);
-    float hihatOut = s_instance->processBiquad(normalized, s_instance->hihatZ1, s_instance->hihatZ2,
-                                                 s_instance->hihatB0, s_instance->hihatB1, s_instance->hihatB2,
-                                                 s_instance->hihatA1, s_instance->hihatA2);
+    float lowOut = s_instance->processBiquad(normalized, s_instance->lowZ1, s_instance->lowZ2,
+                                              s_instance->lowB0, s_instance->lowB1, s_instance->lowB2,
+                                              s_instance->lowA1, s_instance->lowA2);
+    float highOut = s_instance->processBiquad(normalized, s_instance->highZ1, s_instance->highZ2,
+                                               s_instance->highB0, s_instance->highB1, s_instance->highB2,
+                                               s_instance->highA1, s_instance->highA2);
 
     // Accumulate energy (absolute value)
-    s_instance->kickEnergy += (kickOut < 0.0f) ? -kickOut : kickOut;
-    s_instance->snareEnergy += (snareOut < 0.0f) ? -snareOut : snareOut;
-    s_instance->hihatEnergy += (hihatOut < 0.0f) ? -hihatOut : hihatOut;
+    s_instance->lowEnergy += (lowOut < 0.0f) ? -lowOut : lowOut;
+    s_instance->highEnergy += (highOut < 0.0f) ? -highOut : highOut;
   }
 
   // Note: We're already in ISR context, so interrupts are disabled.
@@ -324,23 +340,23 @@ void AdaptiveMic::calcBiquadBPF(float fc, float Q, float fs, float& b0, float& b
 }
 
 void AdaptiveMic::initBiquadFilters() {
-  // Kick filter: 60-130 Hz bandpass, center = 90 Hz, Q = 1.5 for moderate bandwidth
-  calcBiquadBPF(90.0f, 1.5f, (float)_sampleRate, kickB0, kickB1, kickB2, kickA1, kickA2);
+  // Low band filter: 50-200 Hz bandpass for bass transients
+  // Center = 100 Hz, Q = 0.7 for wide bandwidth (~50-200 Hz)
+  calcBiquadBPF(100.0f, 0.7f, (float)_sampleRate, lowB0, lowB1, lowB2, lowA1, lowA2);
 
-  // Snare filter: 300-750 Hz bandpass, center = 500 Hz, Q = 1.5
-  calcBiquadBPF(500.0f, 1.5f, (float)_sampleRate, snareB0, snareB1, snareB2, snareA1, snareA2);
-
-  // Hihat filter: 5-7 kHz bandpass, center = 6 kHz, Q = 1.5
-  calcBiquadBPF(6000.0f, 1.5f, (float)_sampleRate, hihatB0, hihatB1, hihatB2, hihatA1, hihatA2);
+  // High band filter: 2-8 kHz bandpass for brightness/attack transients
+  // Center = 4 kHz, Q = 0.5 for very wide bandwidth (~2-8 kHz)
+  calcBiquadBPF(4000.0f, 0.5f, (float)_sampleRate, highB0, highB1, highB2, highA1, highA2);
 
   // Reset filter state
-  kickZ1 = kickZ2 = 0.0f;
-  snareZ1 = snareZ2 = 0.0f;
-  hihatZ1 = hihatZ2 = 0.0f;
+  lowZ1 = lowZ2 = 0.0f;
+  highZ1 = highZ2 = 0.0f;
 
-  // Reset energy accumulators and baselines
-  kickEnergy = snareEnergy = hihatEnergy = 0.0f;
-  kickBaseline = snareBaseline = hihatBaseline = 0.0f;
+  // Reset energy accumulators, baselines, and previous energy
+  // Initialize baselines to ONSET_FLOOR to prevent spurious triggers on first frames
+  lowEnergy = highEnergy = 0.0f;
+  lowBaseline = highBaseline = ONSET_FLOOR;
+  prevLowEnergy = prevHighEnergy = 0.0f;
 }
 
 inline float AdaptiveMic::processBiquad(float input, float& z1, float& z2, float b0, float b1, float b2, float a1, float a2) {
@@ -352,156 +368,90 @@ inline float AdaptiveMic::processBiquad(float input, float& z1, float& z2, float
   return out;
 }
 
-void AdaptiveMic::detectFrequencySpecific(uint32_t nowMs, float dt, uint32_t sampleCount) {
-  // Reset impulses and transient each frame (single-frame pulse behavior)
-  kickImpulse = false;
-  snareImpulse = false;
-  hihatImpulse = false;
+void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
+  // Reset onsets and transient each frame (single-frame pulse behavior)
+  lowOnset = false;
+  highOnset = false;
   transient = 0.0f;
-  kickStrength = 0.0f;
-  snareStrength = 0.0f;
-  hihatStrength = 0.0f;
-
-  // Track maximum percussion strength to link with generic transient
-  float maxPercussionStrength = 0.0f;
+  lowStrength = 0.0f;
+  highStrength = 0.0f;
 
   // Read energy values atomically (ISR may be updating them)
-  float localKickEnergy, localSnareEnergy, localHihatEnergy;
+  float localLowEnergy, localHighEnergy;
   time_.noInterrupts();
-  localKickEnergy = kickEnergy;
-  localSnareEnergy = snareEnergy;
-  localHihatEnergy = hihatEnergy;
+  localLowEnergy = lowEnergy;
+  localHighEnergy = highEnergy;
   time_.interrupts();
 
-  // CRITICAL FIX #1: Normalize energy by sample count to handle variable frame rates
-  // This prevents false triggers when update() is called at inconsistent intervals
+  // Normalize energy by sample count to handle variable frame rates
   if (sampleCount > 0) {
-    localKickEnergy /= (float)sampleCount;
-    localSnareEnergy /= (float)sampleCount;
-    localHihatEnergy /= (float)sampleCount;
+    localLowEnergy /= (float)sampleCount;
+    localHighEnergy /= (float)sampleCount;
   } else {
     // No samples processed, skip detection this frame
     time_.noInterrupts();
-    kickEnergy = 0.0f;
-    snareEnergy = 0.0f;
-    hihatEnergy = 0.0f;
+    lowEnergy = 0.0f;
+    highEnergy = 0.0f;
     time_.interrupts();
     return;
   }
 
-  // CRITICAL FIX #3: Time-based exponential moving average for baselines
-  // This makes baseline tracking frame-rate independent
-  constexpr float BASELINE_TAU = 0.15f;  // 150ms time constant
-  float baselineAlpha = 1.0f - expf(-dt / maxValue(BASELINE_TAU, 0.001f));
-  kickBaseline += baselineAlpha * (localKickEnergy - kickBaseline);
-  snareBaseline += baselineAlpha * (localSnareEnergy - snareBaseline);
-  hihatBaseline += baselineAlpha * (localHihatEnergy - hihatBaseline);
+  // Update baselines with slow exponential moving average (frame-rate independent)
+  float baselineAlpha = 1.0f - expf(-dt / maxValue(baselineTau, 0.001f));
+  lowBaseline += baselineAlpha * (localLowEnergy - lowBaseline);
+  highBaseline += baselineAlpha * (localHighEnergy - highBaseline);
 
-  // Check which bands have energy above threshold
-  bool kickDetected = false;
-  bool snareDetected = false;
-  bool hihatDetected = false;
+  // Calculate rise from previous frame (for onset detection)
+  // When previous energy is too small to compute meaningful ratio, return large value
+  // to allow first-frame detection (10.0f passes default riseThreshold of 1.5)
+  float lowRise = (prevLowEnergy > MIN_ENERGY_FOR_RISE) ? localLowEnergy / prevLowEnergy : 10.0f;
+  float highRise = (prevHighEnergy > MIN_ENERGY_FOR_RISE) ? localHighEnergy / prevHighEnergy : 10.0f;
 
-  // Minimum percussion floor threshold (absolute minimum to prevent noise triggers)
-  constexpr float PERCUSSION_FLOOR = 0.0001f;  // Very low floor - rely on relative thresholds
+  // Store current energy for next frame's rise calculation
+  prevLowEnergy = localLowEnergy;
+  prevHighEnergy = localHighEnergy;
 
-  // Percussion strength normalization: Map energy/threshold ratio to 0-1 range
-  // At threshold (1.0x): strength = 0.0
-  // At 3x threshold: strength = 1.0 (very strong hit)
-  // Above 3x: clamped to 1.0
-  constexpr float MAX_PERCUSSION_RATIO = 3.0f;
+  // Calculate thresholds (max of absolute floor and relative threshold)
+  float lowThresh = maxValue(ONSET_FLOOR, lowBaseline * onsetThreshold);
+  float highThresh = maxValue(ONSET_FLOOR, highBaseline * onsetThreshold);
 
-  // IMPROVED THRESHOLD LOGIC (#6): Clearer, simpler threshold calculation
-  // Use maximum of absolute floor OR relative threshold
-  // Detect kick (bass transient)
-  if ((int32_t)(nowMs - lastKickMs) > (int32_t)MicConstants::TRANSIENT_COOLDOWN_MS) {
-    float kickThresh = maxValue(PERCUSSION_FLOOR, kickBaseline * kickThreshold);
-    if (localKickEnergy > kickThresh) {
-      kickDetected = true;
-      // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
-      // Note: kickThresh is guaranteed >= PERCUSSION_FLOOR, so division is safe
-      float ratio = localKickEnergy / kickThresh;
-      kickStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
+  // Track maximum strength for combined transient output
+  float maxOnsetStrength = 0.0f;
+
+  // Detect low band onset (bass transient)
+  // Requires: cooldown elapsed AND energy above threshold AND rising sharply
+  if ((int32_t)(nowMs - lastLowOnsetMs) > (int32_t)onsetCooldownMs) {
+    if (localLowEnergy > lowThresh && lowRise > riseThreshold) {
+      lowOnset = true;
+      // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
+      float ratio = localLowEnergy / lowThresh;
+      lowStrength = clamp01((ratio - 1.0f) / (MAX_ONSET_RATIO - 1.0f));
+      maxOnsetStrength = maxValue(maxOnsetStrength, lowStrength);
+      lastLowOnsetMs = nowMs;
     }
   }
 
-  // Detect snare (mid transient)
-  if ((int32_t)(nowMs - lastSnareMs) > (int32_t)MicConstants::TRANSIENT_COOLDOWN_MS) {
-    float snareThresh = maxValue(PERCUSSION_FLOOR, snareBaseline * snareThreshold);
-    if (localSnareEnergy > snareThresh) {
-      snareDetected = true;
-      // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
-      // Note: snareThresh is guaranteed >= PERCUSSION_FLOOR, so division is safe
-      float ratio = localSnareEnergy / snareThresh;
-      snareStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
+  // Detect high band onset (brightness transient)
+  if ((int32_t)(nowMs - lastHighOnsetMs) > (int32_t)onsetCooldownMs) {
+    if (localHighEnergy > highThresh && highRise > riseThreshold) {
+      highOnset = true;
+      // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
+      float ratio = localHighEnergy / highThresh;
+      highStrength = clamp01((ratio - 1.0f) / (MAX_ONSET_RATIO - 1.0f));
+      maxOnsetStrength = maxValue(maxOnsetStrength, highStrength);
+      lastHighOnsetMs = nowMs;
     }
   }
 
-  // Detect hihat (high transient)
-  if ((int32_t)(nowMs - lastHihatMs) > (int32_t)MicConstants::TRANSIENT_COOLDOWN_MS) {
-    float hihatThresh = maxValue(PERCUSSION_FLOOR, hihatBaseline * hihatThreshold);
-    if (localHihatEnergy > hihatThresh) {
-      hihatDetected = true;
-      // Normalize to 0-1 range: 0 at threshold, 1.0 at 3x threshold
-      // Note: hihatThresh is guaranteed >= PERCUSSION_FLOOR, so division is safe
-      float ratio = localHihatEnergy / hihatThresh;
-      hihatStrength = minValue((ratio - 1.0f) / (MAX_PERCUSSION_RATIO - 1.0f), 1.0f);
-    }
-  }
-
-  // IMPROVED PRIORITIZATION (#5): Allow simultaneous kick+snare when snare is dominant
-  // This prevents missing real snare hits that occur with kick drums (e.g., backbeats)
-  if (kickDetected) {
-    // Kick detected - always trigger kick
-    kickImpulse = true;
-    maxPercussionStrength = maxValue(maxPercussionStrength, kickStrength);
-    lastKickMs = nowMs;
-
-    // Allow snare if it's MUCH stronger than kick (likely a real snare hit)
-    if (snareDetected && snareStrength > kickStrength * SNARE_DOMINANCE_THRESHOLD) {
-      snareImpulse = true;
-      maxPercussionStrength = maxValue(maxPercussionStrength, snareStrength);
-      lastSnareMs = nowMs;
-    }
-
-    // Allow simultaneous hihat (common in music)
-    if (hihatDetected) {
-      hihatImpulse = true;
-      maxPercussionStrength = maxValue(maxPercussionStrength, hihatStrength);
-      lastHihatMs = nowMs;
-    }
-  } else if (snareDetected) {
-    // Snare detected (and no kick) - trigger snare
-    snareImpulse = true;
-    maxPercussionStrength = maxValue(maxPercussionStrength, snareStrength);
-    lastSnareMs = nowMs;
-
-    // Allow simultaneous hihat
-    if (hihatDetected) {
-      hihatImpulse = true;
-      maxPercussionStrength = maxValue(maxPercussionStrength, hihatStrength);
-      lastHihatMs = nowMs;
-    }
-  } else if (hihatDetected) {
-    // Only hihat detected
-    hihatImpulse = true;
-    maxPercussionStrength = maxValue(maxPercussionStrength, hihatStrength);
-    lastHihatMs = nowMs;
-  }
-
-  // Link frequency-specific detection to generic transient
-  // This ensures percussion hits trigger fire bursts and appear in UI chart
-  if (maxPercussionStrength > 0.0f) {
-    // Set transient to maximum percussion strength detected this frame
-    transient = maxPercussionStrength;
-    // Update cooldown timer to prevent generic detector from immediately overriding
+  // Set combined transient output
+  if (maxOnsetStrength > 0.0f) {
+    transient = maxOnsetStrength;
     lastTransientMs = nowMs;
   }
 
-  // Reset energy accumulators atomically for next frame (ISR is accumulating)
+  // Reset energy accumulators atomically for next frame
   time_.noInterrupts();
-  kickEnergy = 0.0f;
-  snareEnergy = 0.0f;
-  hihatEnergy = 0.0f;
+  lowEnergy = 0.0f;
+  highEnergy = 0.0f;
   time_.interrupts();
 }

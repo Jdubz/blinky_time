@@ -1,11 +1,15 @@
 /**
- * Pre-defined percussion test patterns
+ * Pre-defined transient test patterns
  *
- * Each pattern defines a sequence of percussion hits with exact timing.
+ * Each pattern defines a sequence of transient hits with exact timing.
  * Ground truth is automatically derived from the pattern definition.
+ *
+ * Two-band system:
+ * - 'low': Bass transients (50-200 Hz)
+ * - 'high': Brightness transients (2-8 kHz)
  */
 
-import type { TestPattern, GroundTruthHit } from '../types/testTypes';
+import type { TestPattern, GroundTruthHit, TransientType } from '../types/testTypes';
 
 /**
  * Helper to convert BPM and beat number to time in seconds
@@ -16,13 +20,13 @@ function beatToTime(beat: number, bpm: number): number {
 }
 
 /**
- * Simple 4/4 beat pattern (120 BPM, 8 bars)
- * Classic rock/pop beat: Kick on 1 and 3, snare on 2 and 4, eighth-note hi-hats
+ * Simple alternating pattern (120 BPM, 8 bars)
+ * Low transients on 1 and 3, high transients on 2 and 4
  */
 export const SIMPLE_BEAT: TestPattern = {
   id: 'simple-beat',
-  name: 'Simple 4/4 Beat',
-  description: 'Basic rock beat - kick on 1&3, snare on 2&4, eighth hi-hats (120 BPM, 8 bars)',
+  name: 'Alternating Low/High',
+  description: 'Low on 1&3, high on 2&4, alternating (120 BPM, 8 bars)',
   durationMs: 16000, // 8 bars at 120 BPM
   bpm: 120,
   hits: (() => {
@@ -33,38 +37,29 @@ export const SIMPLE_BEAT: TestPattern = {
     for (let bar = 0; bar < bars; bar++) {
       const barOffset = bar * 4; // 4 beats per bar
 
-      // Kick on beats 1 and 3
+      // Low on beats 1 and 3
       hits.push({
         time: beatToTime(barOffset + 0, bpm),
-        type: 'kick',
+        type: 'low',
         strength: 0.9,
       });
       hits.push({
         time: beatToTime(barOffset + 2, bpm),
-        type: 'kick',
+        type: 'low',
         strength: 0.9,
       });
 
-      // Snare on beats 2 and 4
+      // High on beats 2 and 4
       hits.push({
         time: beatToTime(barOffset + 1, bpm),
-        type: 'snare',
+        type: 'high',
         strength: 0.8,
       });
       hits.push({
         time: beatToTime(barOffset + 3, bpm),
-        type: 'snare',
+        type: 'high',
         strength: 0.8,
       });
-
-      // Hi-hats on eighth notes (8 per bar)
-      for (let eighth = 0; eighth < 8; eighth++) {
-        hits.push({
-          time: beatToTime(barOffset + eighth * 0.5, bpm),
-          type: 'hihat',
-          strength: 0.6,
-        });
-      }
     }
 
     return hits.sort((a, b) => a.time - b.time);
@@ -72,13 +67,13 @@ export const SIMPLE_BEAT: TestPattern = {
 };
 
 /**
- * Kick drum barrage - rapid kick hits at varying intervals
- * Tests kick detection accuracy and timing precision
+ * Low band barrage - rapid bass transients at varying intervals
+ * Tests low-band detection accuracy and timing precision
  */
-export const KICK_BARRAGE: TestPattern = {
-  id: 'kick-barrage',
-  name: 'Kick Barrage',
-  description: 'Rapid kick drums at varying intervals - tests kick detection accuracy',
+export const LOW_BARRAGE: TestPattern = {
+  id: 'low-barrage',
+  name: 'Low Band Barrage',
+  description: 'Rapid bass transients at varying intervals - tests low-band detection accuracy',
   durationMs: 8000,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
@@ -88,7 +83,7 @@ export const KICK_BARRAGE: TestPattern = {
     for (const interval of intervals) {
       hits.push({
         time,
-        type: 'kick',
+        type: 'low',
         strength: 0.9,
       });
       time += interval;
@@ -97,7 +92,7 @@ export const KICK_BARRAGE: TestPattern = {
       for (let i = 0; i < 3; i++) {
         hits.push({
           time,
-          type: 'kick',
+          type: 'low',
           strength: 0.9,
         });
         time += interval;
@@ -109,29 +104,29 @@ export const KICK_BARRAGE: TestPattern = {
 };
 
 /**
- * Snare roll - fast snare hits
- * Tests snare detection with rapid consecutive hits
+ * High band burst - rapid high-frequency transients
+ * Tests high-band detection with rapid consecutive hits
  */
-export const SNARE_ROLL: TestPattern = {
-  id: 'snare-roll',
-  name: 'Snare Roll',
-  description: 'Rapid snare hits in rolls - tests snare detection accuracy',
+export const HIGH_BURST: TestPattern = {
+  id: 'high-burst',
+  name: 'High Band Burst',
+  description: 'Rapid high-frequency transients - tests high-band detection accuracy',
   durationMs: 6000,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
 
-    // Series of rolls with varying speeds
-    const rolls = [
-      { start: 0.5, interval: 0.2, count: 8 }, // Slow roll
-      { start: 2.5, interval: 0.15, count: 10 }, // Medium roll
-      { start: 4.0, interval: 0.1, count: 12 }, // Fast roll
+    // Series of bursts with varying speeds
+    const bursts = [
+      { start: 0.5, interval: 0.2, count: 8 }, // Slow burst
+      { start: 2.5, interval: 0.15, count: 10 }, // Medium burst
+      { start: 4.0, interval: 0.1, count: 12 }, // Fast burst
     ];
 
-    for (const roll of rolls) {
-      for (let i = 0; i < roll.count; i++) {
+    for (const burst of bursts) {
+      for (let i = 0; i < burst.count; i++) {
         hits.push({
-          time: roll.start + i * roll.interval,
-          type: 'snare',
+          time: burst.start + i * burst.interval,
+          type: 'high',
           strength: 0.8,
         });
       }
@@ -142,78 +137,35 @@ export const SNARE_ROLL: TestPattern = {
 };
 
 /**
- * Hi-hat groove - complex hi-hat patterns with accents
- * Tests hi-hat detection and strength variations
+ * Mixed pattern - interleaved low and high with varying dynamics
+ * Tests classification when both bands are active
  */
-export const HIHAT_GROOVE: TestPattern = {
-  id: 'hihat-groove',
-  name: 'Hi-Hat Groove',
-  description: 'Complex hi-hat patterns with accents - tests classification and dynamics',
-  durationMs: 8000,
+export const MIXED_PATTERN: TestPattern = {
+  id: 'mixed-pattern',
+  name: 'Mixed Low/High',
+  description: 'Interleaved low and high transients with varying dynamics',
+  durationMs: 10000,
   bpm: 100,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
     const bpm = 100;
-    const bars = 4;
+    const duration = 10; // 10 seconds
 
-    for (let bar = 0; bar < bars; bar++) {
-      const barOffset = bar * 4;
-
-      // Sixteenth-note hi-hats with accents
-      for (let sixteenth = 0; sixteenth < 16; sixteenth++) {
-        const isAccent = sixteenth % 4 === 0; // Accent every quarter note
-        hits.push({
-          time: beatToTime(barOffset + sixteenth * 0.25, bpm),
-          type: 'hihat',
-          strength: isAccent ? 0.9 : 0.5,
-        });
-      }
-    }
-
-    return hits;
-  })(),
-};
-
-/**
- * Polyrhythm chaos - overlapping percussion types at different rhythms
- * Tests classification when multiple types play close together
- */
-export const POLYRHYTHM_CHAOS: TestPattern = {
-  id: 'polyrhythm',
-  name: 'Polyrhythm Chaos',
-  description:
-    'Overlapping kick/snare/hihat at different rhythms - tests classification under pressure',
-  durationMs: 12000,
-  bpm: 90,
-  hits: (() => {
-    const hits: GroundTruthHit[] = [];
-    const bpm = 90;
-    const duration = 12; // 12 seconds
-
-    // Kick in 4/4
+    // Low in quarter notes
     for (let beat = 0; beat < duration * (bpm / 60); beat += 1) {
       hits.push({
         time: beatToTime(beat, bpm),
-        type: 'kick',
+        type: 'low',
         strength: 0.9,
       });
     }
 
-    // Snare in 3/4 (polyrhythm against kick)
-    for (let beat = 0; beat < duration * (bpm / 60); beat += 1.5) {
+    // High in eighth notes (offset by half beat)
+    for (let beat = 0.5; beat < duration * (bpm / 60); beat += 1) {
       hits.push({
         time: beatToTime(beat, bpm),
-        type: 'snare',
-        strength: 0.8,
-      });
-    }
-
-    // Hi-hat in constant eighths
-    for (let beat = 0; beat < duration * (bpm / 60); beat += 0.5) {
-      hits.push({
-        time: beatToTime(beat, bpm),
-        type: 'hihat',
-        strength: 0.6,
+        type: 'high',
+        strength: 0.7,
       });
     }
 
@@ -228,7 +180,7 @@ export const POLYRHYTHM_CHAOS: TestPattern = {
 export const TIMING_TEST: TestPattern = {
   id: 'timing-test',
   name: 'Timing Precision Test',
-  description: 'Percussion at 100ms, 150ms, 200ms, 250ms intervals - tests timing accuracy',
+  description: 'Transients at 100ms, 150ms, 200ms, 250ms intervals - tests timing accuracy',
   durationMs: 10000,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
@@ -238,11 +190,11 @@ export const TIMING_TEST: TestPattern = {
       const sectionStart = hits.length > 0 ? hits[hits.length - 1].time + 0.5 : 0.5;
 
       for (let i = 0; i < 10; i++) {
-        // Cycle through kick, snare, hihat
-        const types: ('kick' | 'snare' | 'hihat')[] = ['kick', 'snare', 'hihat'];
+        // Alternate between low and high
+        const types: TransientType[] = ['low', 'high'];
         hits.push({
           time: sectionStart + i * interval,
-          type: types[i % 3],
+          type: types[i % 2],
           strength: 0.8,
         });
       }
@@ -253,13 +205,44 @@ export const TIMING_TEST: TestPattern = {
 };
 
 /**
+ * Simultaneous hits - low and high at exact same time
+ * Tests detection when both bands trigger simultaneously
+ */
+export const SIMULTANEOUS_TEST: TestPattern = {
+  id: 'simultaneous',
+  name: 'Simultaneous Hits',
+  description: 'Low and high transients at exactly the same time - tests concurrent detection',
+  durationMs: 8000,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const times = [0.5, 1.0, 1.5, 2.0, 2.75, 3.5, 4.5, 5.5, 6.25, 7.0];
+
+    for (const time of times) {
+      // Both low and high at same time
+      hits.push({
+        time,
+        type: 'low',
+        strength: 0.9,
+      });
+      hits.push({
+        time,
+        type: 'high',
+        strength: 0.8,
+      });
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
  * All available test patterns
  */
 export const TEST_PATTERNS: TestPattern[] = [
   SIMPLE_BEAT,
-  KICK_BARRAGE,
-  SNARE_ROLL,
-  HIHAT_GROOVE,
-  POLYRHYTHM_CHAOS,
+  LOW_BARRAGE,
+  HIGH_BURST,
+  MIXED_PATTERN,
   TIMING_TEST,
+  SIMULTANEOUS_TEST,
 ];

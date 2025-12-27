@@ -21,12 +21,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.2,
         h: 32,
         alive: 1,
-        k: 0,
-        sn: 1,
-        hh: 0,
-        ks: 0.5,
-        ss: 0.8,
-        hs: 0.3,
+        lo: 0,
+        hi: 1,
+        los: 0.5,
+        his: 0.8,
         z: 0.15,
       };
 
@@ -38,12 +36,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
       expect(sample.raw).toBeDefined();
       expect(sample.h).toBeDefined();
       expect(sample.alive).toBeDefined();
-      expect(sample.k).toBeDefined();
-      expect(sample.sn).toBeDefined();
-      expect(sample.hh).toBeDefined();
-      expect(sample.ks).toBeDefined();
-      expect(sample.ss).toBeDefined();
-      expect(sample.hs).toBeDefined();
+      expect(sample.lo).toBeDefined();
+      expect(sample.hi).toBeDefined();
+      expect(sample.los).toBeDefined();
+      expect(sample.his).toBeDefined();
       expect(sample.z).toBeDefined();
     });
 
@@ -56,12 +52,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.2,
         h: 32,
         alive: 1,
-        k: 0,
-        sn: 1,
-        hh: 0,
-        ks: 0.5,
-        ss: 0.8,
-        hs: 0.3,
+        lo: 0,
+        hi: 1,
+        los: 0.5,
+        his: 0.8,
         z: 0.15,
       };
 
@@ -72,16 +66,14 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
       expect(typeof sample.vl).toBe('number');
       expect(typeof sample.raw).toBe('number');
       expect(typeof sample.h).toBe('number');
-      expect(typeof sample.ks).toBe('number');
-      expect(typeof sample.ss).toBe('number');
-      expect(typeof sample.hs).toBe('number');
+      expect(typeof sample.los).toBe('number');
+      expect(typeof sample.his).toBe('number');
       expect(typeof sample.z).toBe('number');
 
       // Boolean flags (0 or 1)
       expect([0, 1]).toContain(sample.alive);
-      expect([0, 1]).toContain(sample.k);
-      expect([0, 1]).toContain(sample.sn);
-      expect([0, 1]).toContain(sample.hh);
+      expect([0, 1]).toContain(sample.lo);
+      expect([0, 1]).toContain(sample.hi);
     });
   });
 
@@ -97,12 +89,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.25,
         h: 32,
         alive: 1,
-        k: 0,
-        sn: 0,
-        hh: 0,
-        ks: 0.0,
-        ss: 0.0,
-        hs: 0.0,
+        lo: 0,
+        hi: 0,
+        los: 0.0,
+        his: 0.0,
         z: 0.15,
       };
 
@@ -126,12 +116,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           raw: 0.2,
           h: 32,
           alive: 1,
-          k: 0,
-          sn: 0,
-          hh: 0,
-          ks: 0.0,
-          ss: 0.0,
-          hs: 0.0,
+          lo: 0,
+          hi: 0,
+          los: 0.0,
+          his: 0.0,
           z: 0.1,
         },
         {
@@ -142,12 +130,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           raw: 0.25,
           h: 32,
           alive: 1,
-          k: 0,
-          sn: 0,
-          hh: 0,
-          ks: 0.0,
-          ss: 0.0,
-          hs: 0.0,
+          lo: 0,
+          hi: 0,
+          los: 0.0,
+          his: 0.0,
           z: 0.12,
         },
       ];
@@ -168,12 +154,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.25, // Raw ADC level (before any processing)
         h: 32,
         alive: 1,
-        k: 0,
-        sn: 0,
-        hh: 0,
-        ks: 0.0,
-        ss: 0.0,
-        hs: 0.0,
+        lo: 0,
+        hi: 0,
+        los: 0.0,
+        his: 0.0,
         z: 0.1,
       };
 
@@ -197,12 +181,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.2,
         h: 32,
         alive: 1, // PDM working
-        k: 0,
-        sn: 0,
-        hh: 0,
-        ks: 0.0,
-        ss: 0.0,
-        hs: 0.0,
+        lo: 0,
+        hi: 0,
+        los: 0.0,
+        his: 0.0,
         z: 0.1,
       };
 
@@ -214,12 +196,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.0,
         h: 32,
         alive: 0, // PDM dead
-        k: 0,
-        sn: 0,
-        hh: 0,
-        ks: 0.0,
-        ss: 0.0,
-        hs: 0.0,
+        lo: 0,
+        hi: 0,
+        los: 0.0,
+        his: 0.0,
         z: 0.0,
       };
 
@@ -228,9 +208,9 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
     });
   });
 
-  describe('Percussion detection values', () => {
-    it('percussion strength is normalized to 0-1 range', () => {
-      // Regression test: Percussion strength is now normalized to 0-1
+  describe('Transient detection values', () => {
+    it('transient strength is normalized to 0-1 range', () => {
+      // Regression test: Transient strength is now normalized to 0-1
       // 0.0 at threshold, 1.0 at 3x threshold (very strong hit)
       const sample: AudioSample = {
         l: 0.8,
@@ -240,22 +220,20 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.3,
         h: 32,
         alive: 1,
-        k: 1,
-        sn: 0,
-        hh: 0,
-        ks: 1.0, // Kick strength at max (3x threshold)
-        ss: 0.0,
-        hs: 0.0,
+        lo: 1,
+        hi: 0,
+        los: 1.0, // Low band strength at max (3x threshold)
+        his: 0.0,
         z: 0.05,
       };
 
-      expect(sample.ks).toBeLessThanOrEqual(1.0);
-      expect(sample.ks).toBeGreaterThanOrEqual(0.0);
+      expect(sample.los).toBeLessThanOrEqual(1.0);
+      expect(sample.los).toBeGreaterThanOrEqual(0.0);
       expect(sample.t).toBeLessThanOrEqual(1.0);
       expect(sample.t).toBeGreaterThanOrEqual(0.0);
     });
 
-    it('percussion impulse flags are boolean 0 or 1', () => {
+    it('transient impulse flags are boolean 0 or 1', () => {
       // Regression test: Impulse flags must be exactly 0 or 1
       const samples: AudioSample[] = [
         {
@@ -266,12 +244,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           raw: 0.2,
           h: 32,
           alive: 1,
-          k: 1, // Kick detected
-          sn: 0,
-          hh: 1, // Hihat detected
-          ks: 0.9,
-          ss: 0.0,
-          hs: 0.6,
+          lo: 1, // Low band detected
+          hi: 1, // High band detected
+          los: 0.9,
+          his: 0.6,
           z: 0.15,
         },
         {
@@ -282,21 +258,18 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           raw: 0.25,
           h: 32,
           alive: 1,
-          k: 0,
-          sn: 1, // Snare detected
-          hh: 0,
-          ks: 0.0,
-          ss: 1.0,
-          hs: 0.0,
+          lo: 0,
+          hi: 1, // High band detected
+          los: 0.0,
+          his: 1.0,
           z: 0.3,
         },
       ];
 
       // All impulse flags must be exactly 0 or 1
       for (const sample of samples) {
-        expect([0, 1]).toContain(sample.k);
-        expect([0, 1]).toContain(sample.sn);
-        expect([0, 1]).toContain(sample.hh);
+        expect([0, 1]).toContain(sample.lo);
+        expect([0, 1]).toContain(sample.hi);
       }
     });
   });
@@ -312,12 +285,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         raw: 0.2,
         h: 32,
         alive: 1,
-        k: 0,
-        sn: 0,
-        hh: 0,
-        ks: 0.0,
-        ss: 0.0,
-        hs: 0.0,
+        lo: 0,
+        hi: 0,
+        los: 0.0,
+        his: 0.0,
         z: 0.1,
       };
 
@@ -336,12 +307,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           raw: 0.05, // Very low raw signal
           h: 64, // High gain compensates
           alive: 1,
-          k: 0,
-          sn: 0,
-          hh: 0,
-          ks: 0.0,
-          ss: 0.0,
-          hs: 0.0,
+          lo: 0,
+          hi: 0,
+          los: 0.0,
+          his: 0.0,
           z: 0.1,
         },
         {
@@ -352,12 +321,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
           raw: 0.28, // Much higher raw signal
           h: 20, // Lower gain
           alive: 1,
-          k: 0,
-          sn: 0,
-          hh: 0,
-          ks: 0.0,
-          ss: 0.0,
-          hs: 0.0,
+          lo: 0,
+          hi: 0,
+          los: 0.0,
+          his: 0.0,
           z: 0.12,
         },
       ];

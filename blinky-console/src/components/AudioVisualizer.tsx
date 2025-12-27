@@ -11,8 +11,18 @@ import {
   Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import { AudioSample } from '../types';
+import { AudioSample, TransientMessage, ConnectionState } from '../types';
 import { audioMetricsMetadata } from '../data/settingsMetadata';
+import type {
+  GroundTruthHit,
+  DetectionEvent,
+  TypeMetrics,
+  TestPattern,
+  TransientType,
+} from '../types/testTypes';
+import { calculateAllMetrics, exportResultsCSV } from '../lib/testMetrics';
+import { PercussionSynth } from '../lib/audioSynth';
+import { TEST_PATTERNS } from '../lib/testPatterns';
 
 // Register Chart.js components
 ChartJS.register(
@@ -26,78 +36,99 @@ ChartJS.register(
   Filler
 );
 
+// Test timing constants
+const TEST_COMPLETION_BUFFER_MS = 100;
+const FINAL_METRICS_DELAY_MS = 500;
+
 interface AudioVisualizerProps {
   audioData: AudioSample | null;
   isStreaming: boolean;
   onToggleStreaming: () => void;
   disabled: boolean;
+  // Test mode props
+  onPercussionEvent?: (callback: (msg: TransientMessage) => void) => () => void;
+  connectionState?: ConnectionState;
 }
 
-interface PercussionEvent {
+interface TransientEvent {
   index: number;
-  type: 'kick' | 'snare' | 'hihat';
+  type: TransientType;
   strength: number;
   icon: string;
   color: string;
 }
 
+interface GroundTruthMarker {
+  index: number;
+  type: TransientType;
+  strength: number;
+  matched: boolean;
+}
+
 const MAX_DATA_POINTS = 150; // ~7.5 seconds at 20Hz
+const SAMPLES_PER_SECOND = 20; // Approximate sample rate for timing calculations
 
 export function AudioVisualizer({
   audioData,
   isStreaming,
   onToggleStreaming,
   disabled,
+  onPercussionEvent,
+  connectionState,
 }: AudioVisualizerProps) {
   const levelDataRef = useRef<number[]>([]);
   const peakDataRef = useRef<number[]>([]);
   const valleyDataRef = useRef<number[]>([]);
   const labelsRef = useRef<string[]>([]);
   const chartRef = useRef<ChartJS<'line'>>(null);
-  const percussionEventsRef = useRef<PercussionEvent[]>([]);
+  const transientEventsRef = useRef<TransientEvent[]>([]);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [, setRenderTrigger] = useState(0);
+
+  // Test mode state
+  const [selectedPattern, setSelectedPattern] = useState<TestPattern | null>(null);
+  const [isTestPlaying, setIsTestPlaying] = useState(false);
+  const [testStartTime, setTestStartTime] = useState<number | null>(null);
+  const [, setTestDetections] = useState<DetectionEvent[]>([]);
+  const [testMetrics, setTestMetrics] = useState<TypeMetrics | null>(null);
+  const [testProgress, setTestProgress] = useState(0);
+  const groundTruthMarkersRef = useRef<GroundTruthMarker[]>([]);
+  const synthRef = useRef<PercussionSynth | null>(null);
+  const testTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const groundTruthRef = useRef<GroundTruthHit[]>([]);
+  const testStartIndexRef = useRef<number>(0);
 
   // Update data when new audio sample arrives
   useEffect(() => {
     if (!audioData || !isStreaming) return;
 
     const currentIndex = levelDataRef.current.length;
-    let hasNewPercussion = false;
+    let hasNewTransient = false;
 
-    // Track percussion events
-    if (audioData.k === 1) {
-      percussionEventsRef.current.push({
+    // Track transient events (two-band onset detection)
+    if (audioData.lo === 1) {
+      transientEventsRef.current.push({
         index: currentIndex,
-        type: 'kick',
-        strength: audioData.ks,
-        icon: '🥁',
-        color: '#ef4444',
+        type: 'low',
+        strength: audioData.los,
+        icon: '🔊',
+        color: '#ef4444', // Red for bass
       });
-      hasNewPercussion = true;
+      hasNewTransient = true;
     }
-    if (audioData.sn === 1) {
-      percussionEventsRef.current.push({
+    if (audioData.hi === 1) {
+      transientEventsRef.current.push({
         index: currentIndex,
-        type: 'snare',
-        strength: audioData.ss,
-        icon: '🥁',
-        color: '#3b82f6',
+        type: 'high',
+        strength: audioData.his,
+        icon: '✨',
+        color: '#3b82f6', // Blue for brightness
       });
-      hasNewPercussion = true;
-    }
-    if (audioData.hh === 1) {
-      percussionEventsRef.current.push({
-        index: currentIndex,
-        type: 'hihat',
-        strength: audioData.hs,
-        icon: '🎵',
-        color: '#eab308',
-      });
-      hasNewPercussion = true;
+      hasNewTransient = true;
     }
 
-    if (hasNewPercussion) {
+    if (hasNewTransient) {
       setRenderTrigger(n => n + 1);
     }
 
@@ -114,8 +145,8 @@ export function AudioVisualizer({
       valleyDataRef.current.shift();
       labelsRef.current.shift();
 
-      // Shift percussion events and remove those that are off the chart
-      percussionEventsRef.current = percussionEventsRef.current
+      // Shift transient events and remove those that are off the chart
+      transientEventsRef.current = transientEventsRef.current
         .map(event => ({ ...event, index: event.index - 1 }))
         .filter(event => event.index >= 0);
     }
@@ -130,13 +161,161 @@ export function AudioVisualizer({
     }
   }, [audioData, isStreaming]);
 
+  // Initialize synthesizer for test mode
+  useEffect(() => {
+    synthRef.current = new PercussionSynth();
+
+    return () => {
+      if (testTimeoutRef.current) clearTimeout(testTimeoutRef.current);
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+      if (synthRef.current) {
+        synthRef.current.stop();
+        synthRef.current.dispose();
+      }
+    };
+  }, []);
+
+  // Listen for transient events during test
+  useEffect(() => {
+    if (!isTestPlaying || !testStartTime || !onPercussionEvent) return;
+
+    const handleTransient = (msg: TransientMessage) => {
+      const elapsedMs = Date.now() - testStartTime;
+      const newDetections: DetectionEvent[] = [];
+
+      if (msg.low) {
+        newDetections.push({ timestampMs: elapsedMs, type: 'low', strength: msg.lowStrength || 0 });
+      }
+      if (msg.high) {
+        newDetections.push({
+          timestampMs: elapsedMs,
+          type: 'high',
+          strength: msg.highStrength || 0,
+        });
+      }
+
+      if (newDetections.length > 0) {
+        setTestDetections(prev => {
+          const updated = [...prev, ...newDetections];
+          const liveMetrics = calculateAllMetrics(groundTruthRef.current, updated);
+          setTestMetrics(liveMetrics);
+          return updated;
+        });
+      }
+    };
+
+    const cleanup = onPercussionEvent(handleTransient);
+    return cleanup;
+  }, [isTestPlaying, testStartTime, onPercussionEvent]);
+
+  // Handle pattern selection
+  const handlePatternSelect = (patternId: string) => {
+    const pattern = TEST_PATTERNS.find(p => p.id === patternId);
+    if (pattern) {
+      setSelectedPattern(pattern);
+      groundTruthRef.current = pattern.hits;
+      setTestMetrics(null);
+      setTestDetections([]);
+      setTestProgress(0);
+      groundTruthMarkersRef.current = [];
+    }
+  };
+
+  // Play test
+  const playTest = async () => {
+    if (connectionState !== 'connected' || !selectedPattern || !synthRef.current) return;
+
+    try {
+      await synthRef.current.resume();
+    } catch (error) {
+      alert('Failed to start audio. Please check browser permissions.');
+      console.error('AudioContext resume failed:', error);
+      return;
+    }
+
+    // Clear previous data and reset state
+    clearData();
+    setTestDetections([]);
+    setTestMetrics(null);
+    setTestProgress(0);
+    setIsTestPlaying(true);
+    setTestStartTime(Date.now());
+    testStartIndexRef.current = levelDataRef.current.length;
+
+    // Pre-calculate ground truth marker positions
+    groundTruthMarkersRef.current = selectedPattern.hits.map(hit => ({
+      index: Math.round(hit.time * SAMPLES_PER_SECOND),
+      type: hit.type,
+      strength: hit.strength,
+      matched: false,
+    }));
+
+    // Schedule all percussion hits
+    const synth = synthRef.current;
+    synth.start();
+    const schedulingStartTime = synth.getCurrentTime();
+    for (const hit of selectedPattern.hits) {
+      synth.trigger(hit.type, schedulingStartTime + hit.time, hit.strength);
+    }
+
+    // Update progress
+    const durationMs = selectedPattern.durationMs;
+    const actualStartTime = Date.now();
+
+    const progressTimer = setInterval(() => {
+      const elapsed = Date.now() - actualStartTime;
+      setTestProgress(Math.min((elapsed / durationMs) * 100, 100));
+    }, 100);
+    progressIntervalRef.current = progressTimer;
+
+    // Stop test when pattern completes
+    const testTimeout = setTimeout(() => {
+      clearInterval(progressTimer);
+      setIsTestPlaying(false);
+      setTestProgress(100);
+
+      setTimeout(() => {
+        setTestDetections(current => {
+          const finalMetrics = calculateAllMetrics(groundTruthRef.current, current);
+          setTestMetrics(finalMetrics);
+          return current;
+        });
+      }, FINAL_METRICS_DELAY_MS);
+    }, durationMs + TEST_COMPLETION_BUFFER_MS);
+
+    testTimeoutRef.current = testTimeout;
+  };
+
+  // Stop test
+  const stopTest = () => {
+    if (synthRef.current) synthRef.current.stop();
+    if (testTimeoutRef.current) clearTimeout(testTimeoutRef.current);
+    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+    setIsTestPlaying(false);
+    setTestProgress(0);
+  };
+
+  // Export results
+  const exportResults = () => {
+    if (!testMetrics || !selectedPattern) return;
+    const csv = exportResultsCSV(selectedPattern.name, testMetrics);
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `test-results-${selectedPattern.id}-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Clear data when streaming stops
   const clearData = useCallback(() => {
     levelDataRef.current = [];
     peakDataRef.current = [];
     valleyDataRef.current = [];
     labelsRef.current = [];
-    percussionEventsRef.current = [];
+    transientEventsRef.current = [];
+    groundTruthMarkersRef.current = [];
     if (chartRef.current) {
       chartRef.current.data.labels = [];
       chartRef.current.data.datasets[0].data = [];
@@ -222,9 +401,9 @@ export function AudioVisualizer({
     },
   };
 
-  // Calculate percussion marker positions
-  const getPercussionMarkers = () => {
-    if (!chartRef.current || percussionEventsRef.current.length === 0) return null;
+  // Calculate transient marker positions
+  const getTransientMarkers = () => {
+    if (!chartRef.current || transientEventsRef.current.length === 0) return null;
 
     const chart = chartRef.current;
     const xScale = chart.scales.x;
@@ -232,7 +411,7 @@ export function AudioVisualizer({
 
     if (!xScale || !yScale) return null;
 
-    return percussionEventsRef.current.map((event, i) => {
+    return transientEventsRef.current.map((event, i) => {
       const xPixel = xScale.getPixelForValue(event.index);
       // Clamp strength to 0-1 range so markers don't render off the chart
       const clampedStrength = Math.min(event.strength, 1.0);
@@ -240,7 +419,7 @@ export function AudioVisualizer({
       const bottomPixel = yScale.getPixelForValue(0);
 
       return (
-        <div key={`${event.type}-${event.index}-${i}`} className="percussion-marker">
+        <div key={`${event.type}-${event.index}-${i}`} className="transient-marker">
           <svg
             style={{
               position: 'absolute',
@@ -262,7 +441,7 @@ export function AudioVisualizer({
             />
           </svg>
           <div
-            className="percussion-marker-icon"
+            className="transient-marker-icon"
             style={{
               position: 'absolute',
               left: xPixel - 12,
@@ -278,6 +457,51 @@ export function AudioVisualizer({
       );
     });
   };
+
+  // Calculate ground truth marker positions (triangles at top, pointing down)
+  const getGroundTruthMarkers = () => {
+    if (!chartRef.current || !isTestPlaying || groundTruthMarkersRef.current.length === 0)
+      return null;
+
+    const chart = chartRef.current;
+    const xScale = chart.scales.x;
+    const yScale = chart.scales.y;
+
+    if (!xScale || !yScale) return null;
+
+    const topPixel = yScale.getPixelForValue(1);
+    const typeColors: Record<TransientType, string> = {
+      low: '#ef4444', // Red for bass
+      high: '#3b82f6', // Blue for brightness
+    };
+
+    return groundTruthMarkersRef.current
+      .filter(marker => marker.index >= 0 && marker.index < levelDataRef.current.length)
+      .map((marker, i) => {
+        const xPixel = xScale.getPixelForValue(marker.index);
+        const color = typeColors[marker.type];
+
+        return (
+          <div key={`gt-${marker.type}-${marker.index}-${i}`} className="ground-truth-marker">
+            <svg
+              style={{
+                position: 'absolute',
+                left: xPixel - 6,
+                top: topPixel - 2,
+                width: 12,
+                height: 12,
+                pointerEvents: 'none',
+              }}
+            >
+              <polygon points="6,12 0,0 12,0" fill={color} opacity="0.6" />
+            </svg>
+          </div>
+        );
+      });
+  };
+
+  // Determine if test mode is available
+  const testModeAvailable = onPercussionEvent !== undefined;
 
   return (
     <div className="audio-visualizer">
@@ -316,6 +540,49 @@ export function AudioVisualizer({
         </div>
       </div>
 
+      {/* Test Controls */}
+      {testModeAvailable && (
+        <div className="test-controls">
+          <select
+            className="test-pattern-select"
+            value={selectedPattern?.id || ''}
+            onChange={e => handlePatternSelect(e.target.value)}
+            disabled={isTestPlaying || disabled}
+          >
+            <option value="">Select test pattern...</option>
+            {TEST_PATTERNS.map(pattern => (
+              <option key={pattern.id} value={pattern.id}>
+                {pattern.name}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn btn-small btn-success"
+            onClick={playTest}
+            disabled={!selectedPattern || isTestPlaying || connectionState !== 'connected'}
+          >
+            {isTestPlaying ? `Testing... ${testProgress.toFixed(0)}%` : 'Run Test'}
+          </button>
+          {isTestPlaying && (
+            <button className="btn btn-small btn-danger" onClick={stopTest}>
+              Stop
+            </button>
+          )}
+          {testMetrics && !isTestPlaying && (
+            <button className="btn btn-small" onClick={exportResults}>
+              Export CSV
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Progress Bar during test */}
+      {isTestPlaying && (
+        <div className="test-progress-bar">
+          <div className="test-progress-fill" style={{ width: `${testProgress}%` }} />
+        </div>
+      )}
+
       <div
         className="audio-chart-container"
         ref={chartContainerRef}
@@ -326,8 +593,67 @@ export function AudioVisualizer({
         )}
         {disabled && <div className="audio-placeholder">Connect to device to monitor audio</div>}
         <Line ref={chartRef} data={chartData} options={chartOptions} />
-        {getPercussionMarkers()}
+        {getTransientMarkers()}
+        {getGroundTruthMarkers()}
       </div>
+
+      {/* Compact Metrics Panel */}
+      {testMetrics && (
+        <div className="test-metrics-compact">
+          <div className="test-metrics-row">
+            <div className="test-metric">
+              <span className="test-metric-label">F1</span>
+              <span
+                className={`test-metric-value ${testMetrics.overall.f1Score > 0.5 ? 'good' : testMetrics.overall.f1Score > 0.2 ? 'warn' : 'bad'}`}
+              >
+                {(testMetrics.overall.f1Score * 100).toFixed(1)}%
+              </span>
+            </div>
+            <div className="test-metric">
+              <span className="test-metric-label">Precision</span>
+              <span className="test-metric-value">
+                {(testMetrics.overall.precision * 100).toFixed(1)}%
+              </span>
+            </div>
+            <div className="test-metric">
+              <span className="test-metric-label">Recall</span>
+              <span className="test-metric-value">
+                {(testMetrics.overall.recall * 100).toFixed(1)}%
+              </span>
+            </div>
+            <div className="test-metric">
+              <span className="test-metric-label">TP</span>
+              <span className="test-metric-value good">{testMetrics.overall.truePositives}</span>
+            </div>
+            <div className="test-metric">
+              <span className="test-metric-label">FP</span>
+              <span className="test-metric-value bad">{testMetrics.overall.falsePositives}</span>
+            </div>
+            <div className="test-metric">
+              <span className="test-metric-label">FN</span>
+              <span className="test-metric-value bad">{testMetrics.overall.falseNegatives}</span>
+            </div>
+            {testMetrics.overall.avgTimingErrorMs !== undefined && (
+              <div className="test-metric">
+                <span className="test-metric-label">Timing</span>
+                <span className="test-metric-value">
+                  {testMetrics.overall.avgTimingErrorMs.toFixed(1)}ms
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="test-metrics-breakdown">
+            <span className="breakdown-item low">
+              Lo: {testMetrics.low.truePositives}/
+              {testMetrics.low.truePositives + testMetrics.low.falseNegatives}
+            </span>
+            <span className="breakdown-item high">
+              Hi: {testMetrics.high.truePositives}/
+              {testMetrics.high.truePositives + testMetrics.high.falseNegatives}
+            </span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

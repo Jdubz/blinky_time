@@ -3,7 +3,7 @@ import {
   SettingsResponse,
   AudioMessage,
   BatteryMessage,
-  PercussionMessage,
+  TransientMessage,
 } from '../types';
 
 // WebSerial type declarations
@@ -51,7 +51,7 @@ export type SerialEventType =
   | 'audio'
   | 'battery'
   | 'batteryStatus'
-  | 'percussion';
+  | 'transient';
 
 export interface BatteryStatusData {
   voltage: number; // Battery voltage in volts
@@ -66,7 +66,7 @@ export interface SerialEvent {
   audio?: AudioMessage;
   battery?: BatteryMessage;
   batteryStatus?: BatteryStatusData;
-  percussion?: PercussionMessage;
+  transient?: TransientMessage;
   error?: Error;
 }
 
@@ -370,14 +370,14 @@ class SerialService {
             }
           }
 
-          // Check if it's a percussion detection message
-          if (trimmed.startsWith('{"type":"PERCUSSION"')) {
+          // Check if it's a transient detection message
+          if (trimmed.startsWith('{"type":"TRANSIENT"')) {
             try {
-              const percMsg = JSON.parse(trimmed) as PercussionMessage;
-              this.emit({ type: 'percussion', percussion: percMsg });
+              const transMsg = JSON.parse(trimmed) as TransientMessage;
+              this.emit({ type: 'transient', transient: transMsg });
               continue;
             } catch {
-              // Not valid percussion JSON
+              // Not valid transient JSON
             }
           }
 

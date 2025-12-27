@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Blinky Test Player</title>
+  <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
+</head>
+<body>
+  <h1>Blinky Test Pattern Player</h1>
+  <div id="status">Ready</div>
+  <div id="samples">Loading samples...</div>
+
+  <script>
+    // Sample categories and their detection band mapping
+    const SAMPLE_CONFIG = {
+      kick:       { band: 'low',  folder: 'kick' },
+      tom:        { band: 'low',  folder: 'tom' },
+      bass:       { band: 'low',  folder: 'bass' },
+      snare:      { band: 'high', folder: 'snare' },
+      hat:        { band: 'high', folder: 'hat' },
+      clap:       { band: 'high', folder: 'clap' },
+      percussion: { band: 'high', folder: 'percussion' }
+    };
+
+    // Loaded sample buffers organized by type
+    let loadedSamples = {};
+    let samplesReady = false;
+
+    // Load all samples from the provided manifest
+    // Manifest format: { kick: [{name: 'kick1.wav', url: 'file:///...'}], ... }
+    async function loadSamples(sampleManifest) {
+      const status = document.getElementById('status');
+      const samplesDiv = document.getElementById('samples');
+
+      status.textContent = 'Loading samples...';
+      loadedSamples = {};
+
+      let totalLoaded = 0;
+      let totalFailed = 0;
+
+      for (const [type, samples] of Object.entries(sampleManifest)) {
+        if (!samples || samples.length === 0) continue;
+
+        loadedSamples[type] = [];
+
+        for (const sample of samples) {
+          try {
+            // sample can be {name, url} or just a filename string
+            const url = typeof sample === 'string' ? `samples/${type}/${sample}` : sample.url;
+            const name = typeof sample === 'string' ? sample : sample.name;
+
+            const player = new Tone.Player(url).toDestination();
+            await player.load(url);
+            loadedSamples[type].push({ name, player });
+            totalLoaded++;
+          } catch (err) {
+            const name = typeof sample === 'string' ? sample : sample.name;
+            console.warn(`Failed to load sample: ${type}/${name}`, err);
+            totalFailed++;
+          }
+        }
+      }
+
+      // Build summary
+      const summary = Object.entries(loadedSamples)
+        .filter(([_, samples]) => samples.length > 0)
+        .map(([type, samples]) => `${type}: ${samples.length}`)
+        .join(', ');
+
+      samplesDiv.textContent = summary || 'No samples loaded';
+      status.textContent = `Loaded ${totalLoaded} samples` + (totalFailed ? ` (${totalFailed} failed)` : '');
+      samplesReady = totalLoaded > 0;
+
+      console.log('SAMPLES_LOADED:' + JSON.stringify({
+        total: totalLoaded,
+        failed: totalFailed,
+        types: Object.keys(loadedSamples).filter(k => loadedSamples[k].length > 0)
+      }));
+
+      return { loaded: totalLoaded, failed: totalFailed };
+    }
+
+    // Get a random sample of a given type
+    function getRandomSample(type) {
+      const samples = loadedSamples[type];
+      if (!samples || samples.length === 0) {
+        console.warn(`No samples available for type: ${type}`);
+        return null;
+      }
+      return samples[Math.floor(Math.random() * samples.length)];
+    }
+
+    // Get detection band for a sample type
+    function getBandForType(type) {
+      return SAMPLE_CONFIG[type]?.band || 'high';
+    }
+
+    // Main playPattern function exposed to Playwright
+    // hits: array of { timeMs, type, strength? }
+    // type can be: kick, snare, hat, tom, clap, percussion, bass
+    window.playPattern = async function(hits, durationMs) {
+      const status = document.getElementById('status');
+
+      if (!samplesReady) {
+        throw new Error('Samples not loaded. Call loadSamples() first.');
+      }
+
+      status.textContent = 'Starting...';
+
+      // Start audio context (required for user gesture on some browsers)
+      await Tone.start();
+
+      // Build ground truth from scheduled hits
+      const groundTruth = [];
+
+      // Track created players for cleanup
+      const createdPlayers = [];
+
+      // Schedule all hits
+      const now = Tone.now();
+      const startOffset = 0.1; // Small delay to ensure everything is ready
+
+      for (const hit of hits) {
+        const sample = getRandomSample(hit.type);
+        if (!sample) {
+          console.warn(`Skipping hit - no sample for type: ${hit.type}`);
+          continue;
+        }
+
+        const hitTimeSec = hit.timeMs / 1000;
+        const scheduledTime = now + startOffset + hitTimeSec;
+
+        // Clone the player for overlapping sounds
+        const player = new Tone.Player(sample.player.buffer).toDestination();
+        player.volume.value = hit.strength ? (hit.strength - 1) * 12 : 0; // Convert 0-1 strength to dB
+        player.start(scheduledTime);
+        createdPlayers.push(player);
+
+        // Record ground truth
+        groundTruth.push({
+          timeMs: hit.timeMs,
+          type: getBandForType(hit.type),
+          instrument: hit.type,
+          sample: sample.name,
+          strength: hit.strength || 1.0
+        });
+      }
+
+      // Log start time for synchronization
+      const startedAt = new Date().toISOString();
+      console.log('PATTERN_STARTED:' + startedAt);
+      console.log('GROUND_TRUTH:' + JSON.stringify(groundTruth));
+      status.textContent = 'Playing...';
+
+      // Wait for pattern to complete
+      const totalDuration = (durationMs / 1000) + 1.0; // Add buffer for samples to finish
+      await new Promise(resolve => setTimeout(resolve, totalDuration * 1000));
+
+      // Dispose all created players to prevent memory leaks
+      for (const player of createdPlayers) {
+        player.dispose();
+      }
+
+      status.textContent = 'Complete';
+      console.log('PATTERN_COMPLETE');
+
+      return { startedAt, groundTruth };
+    };
+
+    // Expose loadSamples to Playwright
+    window.loadSamples = loadSamples;
+
+    // Expose utility to check sample status
+    window.getSampleStatus = function() {
+      return {
+        ready: samplesReady,
+        types: Object.keys(loadedSamples).filter(k => loadedSamples[k].length > 0),
+        counts: Object.fromEntries(
+          Object.entries(loadedSamples).map(([k, v]) => [k, v.length])
+        )
+      };
+    };
+
+    // Signal that page is ready
+    console.log('PLAYER_READY');
+  </script>
+</body>
+</html>

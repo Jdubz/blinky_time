@@ -29,18 +29,16 @@ export interface SettingsResponse {
 // Audio sample from streaming `{"a":{...}}` messages
 export interface AudioSample {
   l: number; // level (0-1, post-range-mapping output)
-  t: number; // percussion strength (0-1, max of kick/snare/hihat, normalized to match level)
+  t: number; // transient strength (0-1, max of low/high band onsets)
   pk: number; // peak level (current tracked peak for window normalization, raw 0-1 range)
   vl: number; // valley level (current tracked valley for window normalization, raw 0-1 range)
   raw: number; // raw ADC level (what HW gain targets, 0-1 range)
   h: number; // hardware gain (PDM gain setting, 0-80)
   alive: 0 | 1; // PDM status (0=dead, 1=alive)
-  k: 0 | 1; // kick impulse (boolean flag)
-  sn: 0 | 1; // snare impulse (boolean flag)
-  hh: 0 | 1; // hihat impulse (boolean flag)
-  ks: number; // kick strength (0-1, 0 at threshold, 1.0 at 3x threshold)
-  ss: number; // snare strength (0-1, 0 at threshold, 1.0 at 3x threshold)
-  hs: number; // hihat strength (0-1, 0 at threshold, 1.0 at 3x threshold)
+  lo: 0 | 1; // low band onset (bass transient, 50-200 Hz)
+  hi: 0 | 1; // high band onset (brightness transient, 2-8 kHz)
+  los: number; // low band onset strength (0-1, 0 at threshold, 1.0 at 3x threshold)
+  his: number; // high band onset strength (0-1, 0 at threshold, 1.0 at 3x threshold)
   z: number; // zero-crossing rate (0.0-1.0)
 }
 
@@ -62,17 +60,18 @@ export interface BatteryMessage {
   b: BatterySample;
 }
 
-// Percussion detection message from `{"type":"PERCUSSION",...}` messages
-export interface PercussionMessage {
-  type: 'PERCUSSION';
+// Transient detection message from `{"type":"TRANSIENT",...}` messages
+export interface TransientMessage {
+  type: 'TRANSIENT';
   timestampMs: number;
-  kick: boolean;
-  snare: boolean;
-  hihat: boolean;
-  kickStrength: number;
-  snareStrength: number;
-  hihatStrength: number;
+  low: boolean; // Low band onset (bass transient)
+  high: boolean; // High band onset (brightness transient)
+  lowStrength: number; // Low band strength (0-1)
+  highStrength: number; // High band strength (0-1)
 }
+
+// Legacy percussion message type for backwards compatibility
+export type PercussionMessage = TransientMessage;
 
 // Connection state
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';

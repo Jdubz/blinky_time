@@ -62,10 +62,17 @@ private:
 
     // JSON streaming state (for web app)
     bool streamEnabled_ = false;
+    bool streamDebug_ = false;     // Include debug fields (baselines, raw energy)
+    bool streamFast_ = false;      // 100Hz mode for testing
     uint32_t streamLastMs_ = 0;
     uint32_t batteryLastMs_ = 0;
-    static const uint16_t STREAM_PERIOD_MS = 50;   // ~20Hz for audio
-    static const uint16_t BATTERY_PERIOD_MS = 1000; // 1Hz for battery
+    static const uint16_t STREAM_PERIOD_MS = 50;        // Normal: ~20Hz for audio
+    static const uint16_t STREAM_FAST_PERIOD_MS = 10;   // Fast: ~100Hz for testing
+    static const uint16_t BATTERY_PERIOD_MS = 1000;     // 1Hz for battery
+
+    // Test mode state
+    bool testHwGainLocked_ = false;
+    int testLockedHwGain_ = 40;
 
     // Static instance pointer for callbacks
     static SerialConsole* instance_;

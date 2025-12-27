@@ -8,7 +8,6 @@ import { TabView } from './components/TabView';
 import { OfflineBanner } from './components/OfflineBanner';
 import { SerialConsoleModal } from './components/SerialConsoleModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import TestPanel from './components/TestPanel';
 import './styles.css';
 
 function App() {
@@ -96,6 +95,8 @@ function App() {
                         isStreaming={isStreaming}
                         onToggleStreaming={toggleStreaming}
                         disabled={isDisabled}
+                        onPercussionEvent={onPercussionEvent}
+                        connectionState={connectionState}
                       />
                     </ErrorBoundary>
                   </div>
@@ -105,6 +106,7 @@ function App() {
                       settingsByCategory={{
                         audio: settingsByCategory.audio || [],
                         agc: settingsByCategory.agc || [],
+                        freq: settingsByCategory.freq || [],
                       }}
                     />
                   </div>
@@ -141,20 +143,6 @@ function App() {
                         Future: Configurable effect chains and parameters
                       </p>
                     </div>
-                  </div>
-                </div>
-              ),
-            },
-            {
-              id: 'test',
-              label: 'Test',
-              content: (
-                <div className="tab-panel">
-                  <div className="tab-panel-full">
-                    <TestPanel
-                      onPercussionEvent={onPercussionEvent}
-                      connectionState={connectionState}
-                    />
                   </div>
                 </div>
               ),

@@ -4,6 +4,34 @@ import { vi } from 'vitest';
 // Mock scrollIntoView (not supported in jsdom)
 Element.prototype.scrollIntoView = vi.fn();
 
+// Mock AudioContext (not supported in jsdom)
+class MockAudioContext {
+  currentTime = 0;
+  destination = {};
+  state = 'running';
+  resume = vi.fn().mockResolvedValue(undefined);
+  close = vi.fn().mockResolvedValue(undefined);
+  createOscillator = vi.fn(() => ({
+    type: 'sine',
+    frequency: { value: 440, setValueAtTime: vi.fn() },
+    connect: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+  }));
+  createGain = vi.fn(() => ({
+    gain: { value: 1, setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+    connect: vi.fn(),
+  }));
+  createBiquadFilter = vi.fn(() => ({
+    type: 'lowpass',
+    frequency: { value: 1000, setValueAtTime: vi.fn() },
+    Q: { value: 1 },
+    connect: vi.fn(),
+  }));
+}
+(globalThis as unknown as { AudioContext: typeof MockAudioContext }).AudioContext =
+  MockAudioContext;
+
 // Mock WebSerial API for testing
 Object.defineProperty(navigator, 'serial', {
   value: {

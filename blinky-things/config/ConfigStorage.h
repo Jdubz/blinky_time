@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 16;  // Config schema v16: added missing persisted params (emberHeatMax, bottomRowsForSparks, burstSparks), reordered for memory efficiency
+    static const uint8_t CONFIG_VERSION = 17;  // Config schema v17: two-band onset detection (onsetThreshold, riseThreshold replaces kick/snare/hihat)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -34,10 +34,9 @@ public:
         // Hardware AGC parameters (primary - optimizes ADC signal quality)
         float hwTargetLow;        // Raw input below this → increase HW gain
         float hwTargetHigh;       // Raw input above this → decrease HW gain
-        // Frequency-specific detection thresholds (always enabled)
-        float kickThreshold;
-        float snareThreshold;
-        float hihatThreshold;
+        // Onset detection thresholds (two-band system)
+        float onsetThreshold;     // Multiples of baseline for onset detection
+        float riseThreshold;      // Ratio to previous frame for rise detection
     };
 
     struct ConfigData {

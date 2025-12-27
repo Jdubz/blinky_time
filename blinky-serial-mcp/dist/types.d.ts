@@ -1,0 +1,71 @@
+/**
+ * Types for blinky device serial communication
+ */
+export interface DeviceInfo {
+    device: string;
+    version: string;
+    width: number;
+    height: number;
+    leds: number;
+}
+export interface AudioSample {
+    l: number;
+    t: number;
+    pk: number;
+    vl: number;
+    raw: number;
+    h: number;
+    alive: number;
+    lo: number;
+    hi: number;
+    los: number;
+    his: number;
+    z: number;
+    lob?: number;
+    hib?: number;
+    lop?: number;
+    hip?: number;
+}
+export interface BatteryStatus {
+    n: boolean;
+    c: boolean;
+    v: number;
+    p: number;
+}
+export interface Setting {
+    name: string;
+    value: number;
+    type: 'uint8' | 'uint16' | 'int8' | 'float';
+    cat: string;
+    min: number;
+    max: number;
+    desc?: string;
+}
+export interface ConnectionState {
+    connected: boolean;
+    port: string | null;
+    deviceInfo: DeviceInfo | null;
+    streaming: boolean;
+}
+export interface TestResult {
+    pattern: string;
+    duration: number;
+    detections: TransientEvent[];
+    metrics: TestMetrics;
+}
+export interface TransientEvent {
+    timestampMs: number;
+    type: 'low' | 'high';
+    strength: number;
+}
+export interface TestMetrics {
+    f1Score: number;
+    precision: number;
+    recall: number;
+    truePositives: number;
+    falsePositives: number;
+    falseNegatives: number;
+    expectedTotal: number;
+    avgTimingErrorMs: number | null;
+    audioLatencyMs: number;
+}
