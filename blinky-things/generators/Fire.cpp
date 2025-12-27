@@ -256,6 +256,7 @@ void Fire::update() {
     if (currentMs - this->lastUpdateMs_ < 30) {  // ~33 FPS max
         return;
     }
+    float dtMs = (float)(currentMs - this->lastUpdateMs_);
     this->lastUpdateMs_ = currentMs;
 
     // Apply cooling first
@@ -268,7 +269,7 @@ void Fire::update() {
     propagateHeat();
 
     // Apply subtle ember glow (noise floor)
-    applyEmbers();
+    applyEmbers(dtMs);
 }
 
 void Fire::reset() {
@@ -606,9 +607,9 @@ void Fire::applyCooling() {
     }
 }
 
-void Fire::applyEmbers() {
-    // Advance noise phase very slowly
-    emberNoisePhase_ += params_.emberNoiseSpeed * 30.0f;  // 30ms frame time
+void Fire::applyEmbers(float dtMs) {
+    // Advance noise phase very slowly (uses actual frame time for consistency)
+    emberNoisePhase_ += params_.emberNoiseSpeed * dtMs;
 
     // Ember brightness pulses directly with mic level (no transient influence)
     // Base brightness + audio-reactive component

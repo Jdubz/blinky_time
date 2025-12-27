@@ -91,7 +91,7 @@ private:
     void generateSparks();
     void propagateHeat();
     void applyCooling();
-    void applyEmbers();          // Subtle ambient ember glow
+    void applyEmbers(float dtMs);    // Subtle ambient ember glow (dtMs = delta time in milliseconds)
     uint32_t heatToColor(uint8_t heat);
     int coordsToIndex(int x, int y);
     void indexToCoords(int index, int& x, int& y);

@@ -83,16 +83,36 @@ void MusicMode::updatePhase(float dt) {
     // Wrap phase (0.0 - 1.0) and trigger beat events
     // Handle edge case where phase >= 2.0 (large dt or very fast BPM)
     if (phase >= 1.0f) {
+        // Safety: Clamp phase to prevent overflow (should never exceed ~10 in practice)
+        // If phase is extremely large, something is wrong - clamp and continue
+        if (phase > 100.0f) {
+            Serial.print(F("[MUSIC] WARNING: Phase overflow detected: "));
+            Serial.println(phase);
+            phase = 1.0f;  // Reset to minimal overflow
+        }
+
         // Count how many beats occurred (normally 1, but handles edge cases)
         uint32_t beatsToAdd = (uint32_t)phase;
         phase = fmodf(phase, 1.0f);  // Properly wrap to [0, 1)
+
+        // Safety: Cap beatsToAdd to prevent beatNumber overflow
+        // In practice, this should never exceed 2-3 beats
+        if (beatsToAdd > 10) {
+            Serial.print(F("[MUSIC] WARNING: Excessive beats detected: "));
+            Serial.println(beatsToAdd);
+            beatsToAdd = 1;  // Treat as single beat to avoid corruption
+        }
+
         beatNumber += beatsToAdd;
 
-        // Set beat event flags (last beat that occurred)
+        // Set beat event flags based on the final beat that occurred
+        // NOTE: If multiple beats occurred (beatsToAdd > 1), intermediate beats are skipped.
+        // This is acceptable behavior - it means frame rate is very low relative to BPM.
+        // Consumers should check beatHappened for any beat event.
         beatHappened = true;
-        quarterNote = true;
-        halfNote = (beatNumber % 2 == 0);
-        wholeNote = (beatNumber % 4 == 0);
+        quarterNote = true;              // Every beat is a quarter note
+        halfNote = (beatNumber % 2 == 0);     // Every 2nd beat
+        wholeNote = (beatNumber % 4 == 0);    // Every 4th beat
     }
 }
 
@@ -102,8 +122,9 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
         uint32_t interval = timestampMs - lastOnsetTime_;
 
         // Only store intervals in valid BPM range (300-1000ms = 200-60 BPM)
+        // This validation also ensures safe narrowing to uint16_t (max value = 1000)
         if (interval >= 300 && interval <= 1000) {
-            // Store interval (clamped to uint16_t range)
+            // Safe cast: interval is validated to be <= 1000, well within uint16_t range (0-65535)
             onsetIntervals_[intervalIndex_] = (uint16_t)interval;
             intervalIndex_ = (intervalIndex_ + 1) % MAX_INTERVALS;
             if (intervalCount_ < MAX_INTERVALS) intervalCount_++;
