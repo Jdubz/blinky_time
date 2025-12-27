@@ -53,7 +53,7 @@ public:
 
     // ===== CONSTRUCTOR =====
 
-    MusicMode(ISystemTime& time);
+    explicit MusicMode(ISystemTime& time);
 
     // ===== UPDATE METHODS =====
 
