@@ -155,7 +155,24 @@ void AdaptiveMic::update(float dt) {
   if (!pdmAlive) return;
 
   // Hardware gain adaptation (PRIMARY - optimizes ADC signal quality)
-  hardwareCalibrate(nowMs, dt);
+  // Skip if gain is locked for testing
+  if (!hwGainLocked_) {
+    hardwareCalibrate(nowMs, dt);
+  }
+}
+
+void AdaptiveMic::lockHwGain(int gain) {
+  // Lock hardware gain at specific value for testing (disables AGC)
+  hwGainLocked_ = true;
+  currentHardwareGain = constrainValue(gain, HW_GAIN_MIN, HW_GAIN_MAX);
+  pdm_.setGain(currentHardwareGain);
+}
+
+void AdaptiveMic::unlockHwGain() {
+  // Unlock hardware gain and re-enable AGC
+  hwGainLocked_ = false;
+  // Reset calibration timer to trigger immediate recalibration
+  lastHwCalibMs = time_.millis() - MicConstants::HW_CALIB_PERIOD_MS;
 }
 
 // ---------- Private helpers ----------
