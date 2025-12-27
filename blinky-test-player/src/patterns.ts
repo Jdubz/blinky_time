@@ -1,15 +1,16 @@
 /**
- * Pre-defined transient test patterns
+ * Pre-defined transient test patterns using real samples
  *
- * Each pattern defines a sequence of transient hits with exact timing.
- * Ground truth is automatically derived from the pattern definition.
+ * Each pattern defines a sequence of instrument hits with exact timing.
+ * Ground truth is automatically derived from instrument → band mapping.
  *
- * Two-band system:
- * - 'low': Bass transients (50-200 Hz)
- * - 'high': Brightness transients (2-8 kHz)
+ * Instruments and their detection bands:
+ * - Low band (50-200 Hz): kick, tom, bass
+ * - High band (2-8 kHz): snare, hat, clap, percussion
  */
 
-import type { TestPattern, GroundTruthHit, TransientType, BackgroundConfig } from './types.js';
+import type { TestPattern, GroundTruthHit, InstrumentType } from './types.js';
+import { INSTRUMENT_TO_BAND } from './types.js';
 
 /**
  * Helper to convert BPM and beat number to time in seconds
@@ -20,14 +21,26 @@ function beatToTime(beat: number, bpm: number): number {
 }
 
 /**
- * Simple alternating pattern (120 BPM, 8 bars)
- * Low transients on 1 and 3, high transients on 2 and 4
+ * Helper to create a hit with automatic band detection
  */
-export const SIMPLE_BEAT: TestPattern = {
-  id: 'simple-beat',
-  name: 'Alternating Low/High',
-  description: 'Low on 1&3, high on 2&4, alternating (120 BPM, 8 bars)',
-  durationMs: 16000, // 8 bars at 120 BPM
+function hit(time: number, instrument: InstrumentType, strength: number = 0.9): GroundTruthHit {
+  return {
+    time,
+    type: INSTRUMENT_TO_BAND[instrument],
+    instrument,
+    strength,
+  };
+}
+
+/**
+ * Basic drum pattern (120 BPM, 8 bars)
+ * Kick on 1 and 3, snare on 2 and 4, hats on 8th notes
+ */
+export const BASIC_DRUMS: TestPattern = {
+  id: 'basic-drums',
+  name: 'Basic Drum Pattern',
+  description: 'Kick on 1&3, snare on 2&4, hats on 8th notes (120 BPM, 8 bars)',
+  durationMs: 16000,
   bpm: 120,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
@@ -37,29 +50,18 @@ export const SIMPLE_BEAT: TestPattern = {
     for (let bar = 0; bar < bars; bar++) {
       const barOffset = bar * 4; // 4 beats per bar
 
-      // Low on beats 1 and 3
-      hits.push({
-        time: beatToTime(barOffset + 0, bpm),
-        type: 'low',
-        strength: 0.9,
-      });
-      hits.push({
-        time: beatToTime(barOffset + 2, bpm),
-        type: 'low',
-        strength: 0.9,
-      });
+      // Kick on beats 1 and 3
+      hits.push(hit(beatToTime(barOffset + 0, bpm), 'kick'));
+      hits.push(hit(beatToTime(barOffset + 2, bpm), 'kick'));
 
-      // High on beats 2 and 4
-      hits.push({
-        time: beatToTime(barOffset + 1, bpm),
-        type: 'high',
-        strength: 0.8,
-      });
-      hits.push({
-        time: beatToTime(barOffset + 3, bpm),
-        type: 'high',
-        strength: 0.8,
-      });
+      // Snare on beats 2 and 4
+      hits.push(hit(beatToTime(barOffset + 1, bpm), 'snare'));
+      hits.push(hit(beatToTime(barOffset + 3, bpm), 'snare'));
+
+      // Hats on 8th notes
+      for (let eighth = 0; eighth < 8; eighth++) {
+        hits.push(hit(beatToTime(barOffset + eighth * 0.5, bpm), 'hat', 0.6));
+      }
     }
 
     return hits.sort((a, b) => a.time - b.time);
@@ -67,69 +69,243 @@ export const SIMPLE_BEAT: TestPattern = {
 };
 
 /**
- * Low band barrage - rapid bass transients at varying intervals
- * Tests low-band detection accuracy and timing precision
+ * Kick focus pattern - various kick patterns
+ * Tests low-band detection accuracy
  */
-export const LOW_BARRAGE: TestPattern = {
-  id: 'low-barrage',
-  name: 'Low Band Barrage',
-  description: 'Rapid bass transients at varying intervals - tests low-band detection accuracy',
-  durationMs: 8000,
+export const KICK_FOCUS: TestPattern = {
+  id: 'kick-focus',
+  name: 'Kick Focus',
+  description: 'Various kick patterns at different intervals - tests low-band detection',
+  durationMs: 12000,
+  bpm: 100,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
-    const intervals = [0.5, 0.4, 0.3, 0.25, 0.2, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]; // Seconds
+    const bpm = 100;
 
-    let time = 0.5; // Start at 0.5s
-    for (const interval of intervals) {
-      hits.push({
-        time,
-        type: 'low',
-        strength: 0.9,
-      });
-      time += interval;
-
-      // Add a few more repeats
-      for (let i = 0; i < 3; i++) {
-        hits.push({
-          time,
-          type: 'low',
-          strength: 0.9,
-        });
-        time += interval;
-      }
+    // Section 1: Quarter notes (0-4s)
+    for (let beat = 0; beat < 8; beat++) {
+      hits.push(hit(beatToTime(beat, bpm), 'kick'));
     }
 
-    return hits.filter(h => h.time < 8.0); // Keep within 8 seconds
+    // Section 2: 8th notes (5-8s) - faster kicks
+    for (let beat = 10; beat < 16; beat += 0.5) {
+      hits.push(hit(beatToTime(beat, bpm), 'kick', 0.85));
+    }
+
+    // Section 3: Syncopated (9-12s)
+    const syncopated = [0, 0.75, 1.5, 2, 2.5, 3.25, 3.75];
+    for (const b of syncopated) {
+      hits.push(hit(beatToTime(18 + b, bpm), 'kick'));
+    }
+
+    return hits.filter(h => h.time < 12);
   })(),
 };
 
 /**
- * High band burst - rapid high-frequency transients
- * Tests high-band detection with rapid consecutive hits
+ * Snare focus pattern
+ * Tests high-band detection with snare variations
  */
-export const HIGH_BURST: TestPattern = {
-  id: 'high-burst',
-  name: 'High Band Burst',
-  description: 'Rapid high-frequency transients - tests high-band detection accuracy',
-  durationMs: 6000,
+export const SNARE_FOCUS: TestPattern = {
+  id: 'snare-focus',
+  name: 'Snare Focus',
+  description: 'Various snare patterns including rolls - tests high-band detection',
+  durationMs: 10000,
+  bpm: 110,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 110;
+
+    // Section 1: Backbeat (0-4s)
+    for (let bar = 0; bar < 4; bar++) {
+      const barOffset = bar * 4;
+      hits.push(hit(beatToTime(barOffset + 1, bpm), 'snare'));
+      hits.push(hit(beatToTime(barOffset + 3, bpm), 'snare'));
+    }
+
+    // Section 2: Snare roll (5-7s)
+    for (let beat = 10; beat < 14; beat += 0.25) {
+      hits.push(hit(beatToTime(beat, bpm), 'snare', 0.7));
+    }
+
+    // Section 3: Ghost notes + accents (7-10s)
+    for (let bar = 0; bar < 2; bar++) {
+      const barOffset = 14 + bar * 4;
+      hits.push(hit(beatToTime(barOffset + 1, bpm), 'snare', 1.0)); // Accent
+      hits.push(hit(beatToTime(barOffset + 1.5, bpm), 'snare', 0.4)); // Ghost
+      hits.push(hit(beatToTime(barOffset + 2.75, bpm), 'snare', 0.4)); // Ghost
+      hits.push(hit(beatToTime(barOffset + 3, bpm), 'snare', 1.0)); // Accent
+    }
+
+    return hits.filter(h => h.time < 10);
+  })(),
+};
+
+/**
+ * Hi-hat patterns
+ * Tests high-band detection with hat variations
+ */
+export const HAT_PATTERNS: TestPattern = {
+  id: 'hat-patterns',
+  name: 'Hi-Hat Patterns',
+  description: 'Various hi-hat patterns: 8ths, 16ths, offbeats',
+  durationMs: 12000,
+  bpm: 125,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 125;
+
+    // Section 1: 8th notes (0-4s)
+    for (let beat = 0; beat < 8; beat += 0.5) {
+      hits.push(hit(beatToTime(beat, bpm), 'hat', 0.7));
+    }
+
+    // Section 2: 16th notes (4-8s)
+    for (let beat = 8; beat < 16; beat += 0.25) {
+      const accent = beat % 1 === 0 ? 0.8 : 0.5;
+      hits.push(hit(beatToTime(beat, bpm), 'hat', accent));
+    }
+
+    // Section 3: Offbeat only (8-12s)
+    for (let beat = 16; beat < 24; beat += 1) {
+      hits.push(hit(beatToTime(beat + 0.5, bpm), 'hat', 0.75));
+    }
+
+    return hits.filter(h => h.time < 12);
+  })(),
+};
+
+/**
+ * Full kit pattern - kick, snare, hat, tom, clap
+ * Tests all instrument types together
+ */
+export const FULL_KIT: TestPattern = {
+  id: 'full-kit',
+  name: 'Full Drum Kit',
+  description: 'All drum elements: kick, snare, hat, tom, clap',
+  durationMs: 16000,
+  bpm: 115,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 115;
+    const bars = 8;
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barOffset = bar * 4;
+
+      // Kick pattern
+      hits.push(hit(beatToTime(barOffset + 0, bpm), 'kick'));
+      hits.push(hit(beatToTime(barOffset + 2.5, bpm), 'kick', 0.8));
+
+      // Snare on 2 and 4
+      hits.push(hit(beatToTime(barOffset + 1, bpm), 'snare'));
+      hits.push(hit(beatToTime(barOffset + 3, bpm), 'snare'));
+
+      // Hi-hats on 8ths
+      for (let eighth = 0; eighth < 8; eighth++) {
+        hits.push(hit(beatToTime(barOffset + eighth * 0.5, bpm), 'hat', 0.5));
+      }
+
+      // Tom fill every 4 bars
+      if (bar % 4 === 3) {
+        hits.push(hit(beatToTime(barOffset + 3.5, bpm), 'tom', 0.9));
+        hits.push(hit(beatToTime(barOffset + 3.75, bpm), 'tom', 0.85));
+      }
+
+      // Clap layered with snare on beat 3 every 2 bars
+      if (bar % 2 === 1) {
+        hits.push(hit(beatToTime(barOffset + 3, bpm), 'clap', 0.7));
+      }
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * Simultaneous hits - kick + snare, kick + clap
+ * Tests detection when multiple bands trigger at once
+ */
+export const SIMULTANEOUS_HITS: TestPattern = {
+  id: 'simultaneous',
+  name: 'Simultaneous Hits',
+  description: 'Kick + snare/clap at same time - tests concurrent detection',
+  durationMs: 10000,
+  bpm: 100,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 100;
+
+    for (let beat = 0; beat < 16; beat += 2) {
+      const time = beatToTime(beat, bpm);
+      // Kick + snare together
+      hits.push(hit(time, 'kick'));
+      hits.push(hit(time, 'snare'));
+
+      // Kick + clap together (offset by 1 beat)
+      const time2 = beatToTime(beat + 1, bpm);
+      hits.push(hit(time2, 'kick', 0.8));
+      hits.push(hit(time2, 'clap', 0.8));
+    }
+
+    return hits.filter(h => h.time < 10).sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * Fast tempo test (150 BPM)
+ * Tests detection at higher speeds
+ */
+export const FAST_TEMPO: TestPattern = {
+  id: 'fast-tempo',
+  name: 'Fast Tempo (150 BPM)',
+  description: 'High-speed drum pattern - tests detection at fast tempos',
+  durationMs: 10000,
+  bpm: 150,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 150;
+
+    for (let bar = 0; bar < 6; bar++) {
+      const barOffset = bar * 4;
+
+      // Kick on every beat
+      for (let beat = 0; beat < 4; beat++) {
+        hits.push(hit(beatToTime(barOffset + beat, bpm), 'kick', 0.85));
+      }
+
+      // Snare on 2 and 4
+      hits.push(hit(beatToTime(barOffset + 1, bpm), 'snare'));
+      hits.push(hit(beatToTime(barOffset + 3, bpm), 'snare'));
+
+      // 16th note hats
+      for (let sixteenth = 0; sixteenth < 16; sixteenth++) {
+        hits.push(hit(beatToTime(barOffset + sixteenth * 0.25, bpm), 'hat', 0.4));
+      }
+    }
+
+    return hits.filter(h => h.time < 10).sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * Sparse pattern - widely spaced hits
+ * Tests detection with long gaps between transients
+ */
+export const SPARSE_PATTERN: TestPattern = {
+  id: 'sparse',
+  name: 'Sparse Pattern',
+  description: 'Widely spaced hits - tests detection after silence periods',
+  durationMs: 15000,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
 
-    // Series of bursts with varying speeds
-    const bursts = [
-      { start: 0.5, interval: 0.2, count: 8 }, // Slow burst
-      { start: 2.5, interval: 0.15, count: 10 }, // Medium burst
-      { start: 4.0, interval: 0.1, count: 12 }, // Fast burst
-    ];
+    // Hits at irregular, wide intervals
+    const times = [0.5, 2.0, 3.5, 6.0, 8.0, 9.5, 12.0, 14.0];
+    const instruments: InstrumentType[] = ['kick', 'snare', 'kick', 'tom', 'kick', 'clap', 'snare', 'kick'];
 
-    for (const burst of bursts) {
-      for (let i = 0; i < burst.count; i++) {
-        hits.push({
-          time: burst.start + i * burst.interval,
-          type: 'high',
-          strength: 0.8,
-        });
-      }
+    for (let i = 0; i < times.length; i++) {
+      hits.push(hit(times[i], instruments[i]));
     }
 
     return hits;
@@ -137,233 +313,17 @@ export const HIGH_BURST: TestPattern = {
 };
 
 /**
- * Mixed pattern - interleaved low and high with varying dynamics
- * Tests classification when both bands are active
- */
-export const MIXED_PATTERN: TestPattern = {
-  id: 'mixed-pattern',
-  name: 'Mixed Low/High',
-  description: 'Interleaved low and high transients with varying dynamics',
-  durationMs: 10000,
-  bpm: 100,
-  hits: (() => {
-    const hits: GroundTruthHit[] = [];
-    const bpm = 100;
-    const duration = 10; // 10 seconds
-
-    // Low in quarter notes
-    for (let beat = 0; beat < duration * (bpm / 60); beat += 1) {
-      hits.push({
-        time: beatToTime(beat, bpm),
-        type: 'low',
-        strength: 0.9,
-      });
-    }
-
-    // High in eighth notes (offset by half beat)
-    for (let beat = 0.5; beat < duration * (bpm / 60); beat += 1) {
-      hits.push({
-        time: beatToTime(beat, bpm),
-        type: 'high',
-        strength: 0.7,
-      });
-    }
-
-    return hits.filter(h => h.time < duration).sort((a, b) => a.time - b.time);
-  })(),
-};
-
-/**
- * Timing precision test - hits at precise intervals
- * Tests timing accuracy with various intervals: 100ms, 150ms, 200ms, 250ms
- */
-export const TIMING_TEST: TestPattern = {
-  id: 'timing-test',
-  name: 'Timing Precision Test',
-  description: 'Transients at 100ms, 150ms, 200ms, 250ms intervals - tests timing accuracy',
-  durationMs: 10000,
-  hits: (() => {
-    const hits: GroundTruthHit[] = [];
-    const intervals = [0.1, 0.15, 0.2, 0.25]; // Seconds
-
-    for (const interval of intervals) {
-      const sectionStart = hits.length > 0 ? hits[hits.length - 1].time + 0.5 : 0.5;
-
-      for (let i = 0; i < 10; i++) {
-        // Alternate between low and high
-        const types: TransientType[] = ['low', 'high'];
-        hits.push({
-          time: sectionStart + i * interval,
-          type: types[i % 2],
-          strength: 0.8,
-        });
-      }
-    }
-
-    return hits.filter(h => h.time < 10.0);
-  })(),
-};
-
-/**
- * Simultaneous hits - low and high at exact same time
- * Tests detection when both bands trigger simultaneously
- */
-export const SIMULTANEOUS_TEST: TestPattern = {
-  id: 'simultaneous',
-  name: 'Simultaneous Hits',
-  description: 'Low and high transients at exactly the same time - tests concurrent detection',
-  durationMs: 8000,
-  hits: (() => {
-    const hits: GroundTruthHit[] = [];
-    const times = [0.5, 1.0, 1.5, 2.0, 2.75, 3.5, 4.5, 5.5, 6.25, 7.0];
-
-    for (const time of times) {
-      // Both low and high at same time
-      hits.push({
-        time,
-        type: 'low',
-        strength: 0.9,
-      });
-      hits.push({
-        time,
-        type: 'high',
-        strength: 0.8,
-      });
-    }
-
-    return hits.sort((a, b) => a.time - b.time);
-  })(),
-};
-
-/**
- * Realistic electronic track simulation
- * Background: sub-bass drone + mid pad + noise floor
- * This tests detection in the presence of continuous audio, like real music
- */
-export const REALISTIC_TRACK: TestPattern = {
-  id: 'realistic-track',
-  name: 'Realistic Electronic Track',
-  description: 'Kick/hi-hat pattern with background audio (sub-bass, pad, noise floor)',
-  durationMs: 16000,
-  bpm: 128,
-  background: {
-    lowDrone: { frequency: 55, gain: 0.15 }, // A1 sub-bass
-    midPad: { frequency: 220, gain: 0.08 }, // A3 pad
-    noiseFloor: { gain: 0.03 }, // Subtle hi-hat bleed
-  },
-  hits: (() => {
-    const hits: GroundTruthHit[] = [];
-    const bpm = 128;
-    const bars = 8;
-
-    for (let bar = 0; bar < bars; bar++) {
-      const barOffset = bar * 4;
-
-      // Kick on 1 and 3
-      hits.push({ time: beatToTime(barOffset + 0, bpm), type: 'low', strength: 0.9 });
-      hits.push({ time: beatToTime(barOffset + 2, bpm), type: 'low', strength: 0.9 });
-
-      // Open hi-hat on offbeats (8th notes)
-      for (let i = 0; i < 4; i++) {
-        hits.push({ time: beatToTime(barOffset + i + 0.5, bpm), type: 'high', strength: 0.7 });
-      }
-    }
-
-    return hits.sort((a, b) => a.time - b.time);
-  })(),
-};
-
-/**
- * Heavy background test
- * High background levels to test detection sensitivity in loud environments
- */
-export const HEAVY_BACKGROUND: TestPattern = {
-  id: 'heavy-background',
-  name: 'Heavy Background',
-  description: 'Transients over loud continuous audio - tests detection in high-energy environment',
-  durationMs: 10000,
-  bpm: 140,
-  background: {
-    lowDrone: { frequency: 60, gain: 0.25 }, // Loud sub-bass
-    midPad: { frequency: 300, gain: 0.15 }, // Loud pad
-    noiseFloor: { gain: 0.08 }, // Significant noise floor
-  },
-  hits: (() => {
-    const hits: GroundTruthHit[] = [];
-    const bpm = 140;
-
-    // Sparse but strong transients
-    for (let beat = 0; beat < 20; beat += 2) {
-      hits.push({ time: beatToTime(beat, bpm), type: 'low', strength: 1.0 });
-      hits.push({ time: beatToTime(beat + 1, bpm), type: 'high', strength: 1.0 });
-    }
-
-    return hits.filter(h => h.time < 10.0);
-  })(),
-};
-
-/**
- * Dynamic background test
- * No transients, just background - for observing baseline adaptation
- */
-export const BASELINE_ONLY: TestPattern = {
-  id: 'baseline-only',
-  name: 'Baseline Only (No Transients)',
-  description: 'Only background audio, no transients - observe baseline behavior',
-  durationMs: 8000,
-  background: {
-    lowDrone: { frequency: 80, gain: 0.2 },
-    midPad: { frequency: 250, gain: 0.1 },
-    noiseFloor: { gain: 0.05 },
-  },
-  hits: [], // No transients - any detections are false positives
-};
-
-/**
- * Quiet section test
- * Simulates a breakdown/quiet section in a track
- */
-export const QUIET_SECTION: TestPattern = {
-  id: 'quiet-section',
-  name: 'Quiet Section',
-  description: 'Low-level background with subtle transients - tests sensitivity',
-  durationMs: 12000,
-  bpm: 100,
-  background: {
-    lowDrone: { frequency: 50, gain: 0.05 }, // Very quiet sub-bass
-    noiseFloor: { gain: 0.01 }, // Minimal noise
-  },
-  hits: (() => {
-    const hits: GroundTruthHit[] = [];
-    const bpm = 100;
-
-    // Soft, sparse transients
-    for (let beat = 0; beat < 16; beat += 2) {
-      hits.push({ time: beatToTime(beat, bpm), type: 'low', strength: 0.5 });
-      if (beat % 4 === 0) {
-        hits.push({ time: beatToTime(beat + 1.5, bpm), type: 'high', strength: 0.4 });
-      }
-    }
-
-    return hits.filter(h => h.time < 12.0);
-  })(),
-};
-
-/**
  * All available test patterns
  */
 export const TEST_PATTERNS: TestPattern[] = [
-  SIMPLE_BEAT,
-  LOW_BARRAGE,
-  HIGH_BURST,
-  MIXED_PATTERN,
-  TIMING_TEST,
-  SIMULTANEOUS_TEST,
-  // Realistic patterns with background audio
-  REALISTIC_TRACK,
-  HEAVY_BACKGROUND,
-  BASELINE_ONLY,
-  QUIET_SECTION,
+  BASIC_DRUMS,
+  KICK_FOCUS,
+  SNARE_FOCUS,
+  HAT_PATTERNS,
+  FULL_KIT,
+  SIMULTANEOUS_HITS,
+  FAST_TEMPO,
+  SPARSE_PATTERN,
 ];
 
 /**

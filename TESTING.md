@@ -129,7 +129,7 @@ Download pre-labeled datasets:
 **IDMT-SMT-Drums** (Recommended):
 - 608 files, isolated percussion samples
 - https://zenodo.org/records/7544164
-- Map kick → low, snare/hihat → high
+- Map by frequency: kick/tom/bass → low, snare/hat/clap → high
 
 **WaivOps TR-808/909**:
 - Synthetic drum machine sounds

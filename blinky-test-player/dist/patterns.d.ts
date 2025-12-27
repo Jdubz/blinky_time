@@ -1,65 +1,54 @@
 /**
- * Pre-defined transient test patterns
+ * Pre-defined transient test patterns using real samples
  *
- * Each pattern defines a sequence of transient hits with exact timing.
- * Ground truth is automatically derived from the pattern definition.
+ * Each pattern defines a sequence of instrument hits with exact timing.
+ * Ground truth is automatically derived from instrument → band mapping.
  *
- * Two-band system:
- * - 'low': Bass transients (50-200 Hz)
- * - 'high': Brightness transients (2-8 kHz)
+ * Instruments and their detection bands:
+ * - Low band (50-200 Hz): kick, tom, bass
+ * - High band (2-8 kHz): snare, hat, clap, percussion
  */
 import type { TestPattern } from './types.js';
 /**
- * Simple alternating pattern (120 BPM, 8 bars)
- * Low transients on 1 and 3, high transients on 2 and 4
+ * Basic drum pattern (120 BPM, 8 bars)
+ * Kick on 1 and 3, snare on 2 and 4, hats on 8th notes
  */
-export declare const SIMPLE_BEAT: TestPattern;
+export declare const BASIC_DRUMS: TestPattern;
 /**
- * Low band barrage - rapid bass transients at varying intervals
- * Tests low-band detection accuracy and timing precision
+ * Kick focus pattern - various kick patterns
+ * Tests low-band detection accuracy
  */
-export declare const LOW_BARRAGE: TestPattern;
+export declare const KICK_FOCUS: TestPattern;
 /**
- * High band burst - rapid high-frequency transients
- * Tests high-band detection with rapid consecutive hits
+ * Snare focus pattern
+ * Tests high-band detection with snare variations
  */
-export declare const HIGH_BURST: TestPattern;
+export declare const SNARE_FOCUS: TestPattern;
 /**
- * Mixed pattern - interleaved low and high with varying dynamics
- * Tests classification when both bands are active
+ * Hi-hat patterns
+ * Tests high-band detection with hat variations
  */
-export declare const MIXED_PATTERN: TestPattern;
+export declare const HAT_PATTERNS: TestPattern;
 /**
- * Timing precision test - hits at precise intervals
- * Tests timing accuracy with various intervals: 100ms, 150ms, 200ms, 250ms
+ * Full kit pattern - kick, snare, hat, tom, clap
+ * Tests all instrument types together
  */
-export declare const TIMING_TEST: TestPattern;
+export declare const FULL_KIT: TestPattern;
 /**
- * Simultaneous hits - low and high at exact same time
- * Tests detection when both bands trigger simultaneously
+ * Simultaneous hits - kick + snare, kick + clap
+ * Tests detection when multiple bands trigger at once
  */
-export declare const SIMULTANEOUS_TEST: TestPattern;
+export declare const SIMULTANEOUS_HITS: TestPattern;
 /**
- * Realistic electronic track simulation
- * Background: sub-bass drone + mid pad + noise floor
- * This tests detection in the presence of continuous audio, like real music
+ * Fast tempo test (150 BPM)
+ * Tests detection at higher speeds
  */
-export declare const REALISTIC_TRACK: TestPattern;
+export declare const FAST_TEMPO: TestPattern;
 /**
- * Heavy background test
- * High background levels to test detection sensitivity in loud environments
+ * Sparse pattern - widely spaced hits
+ * Tests detection with long gaps between transients
  */
-export declare const HEAVY_BACKGROUND: TestPattern;
-/**
- * Dynamic background test
- * No transients, just background - for observing baseline adaptation
- */
-export declare const BASELINE_ONLY: TestPattern;
-/**
- * Quiet section test
- * Simulates a breakdown/quiet section in a track
- */
-export declare const QUIET_SECTION: TestPattern;
+export declare const SPARSE_PATTERN: TestPattern;
 /**
  * All available test patterns
  */

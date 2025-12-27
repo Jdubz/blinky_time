@@ -2,17 +2,84 @@
 /**
  * Blinky Test Pattern Player CLI
  *
- * Plays known test patterns through system audio using Playwright + Web Audio API.
+ * Plays known test patterns through system audio using Playwright + Tone.js.
+ * Uses real drum samples for authentic transient testing.
  * Outputs ground truth timing data for comparison with device detections.
  */
 import { chromium } from 'playwright';
 import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync } from 'fs';
+import { writeFileSync, readdirSync, existsSync } from 'fs';
 import { TEST_PATTERNS, getPatternById } from './patterns.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+// Project root (one level up from dist/)
+const PROJECT_ROOT = join(__dirname, '..');
+// Sample folder types
+const SAMPLE_TYPES = ['kick', 'snare', 'hat', 'tom', 'clap', 'percussion', 'bass'];
+/**
+ * Convert a Windows path to a proper file:// URL
+ */
+function pathToFileUrl(filePath) {
+    // Normalize to forward slashes
+    const normalized = filePath.replace(/\\/g, '/');
+    // Ensure it starts with file:///
+    if (normalized.startsWith('/')) {
+        return `file://${normalized}`;
+    }
+    // Windows absolute path (C:/...)
+    return `file:///${normalized}`;
+}
+/**
+ * Scan samples folder and build manifest of available samples
+ */
+function scanSamples(samplesPath) {
+    const manifest = {};
+    for (const type of SAMPLE_TYPES) {
+        const folderPath = join(samplesPath, type);
+        if (existsSync(folderPath)) {
+            try {
+                const files = readdirSync(folderPath)
+                    .filter(f => /\.(wav|mp3|ogg|flac)$/i.test(f));
+                if (files.length > 0) {
+                    manifest[type] = files;
+                }
+            }
+            catch {
+                // Ignore read errors
+            }
+        }
+    }
+    return manifest;
+}
+/**
+ * Build manifest with full file:// URLs for each sample
+ */
+function buildManifestWithUrls(samplesPath, manifest) {
+    const result = {};
+    for (const [type, files] of Object.entries(manifest)) {
+        if (!files || files.length === 0)
+            continue;
+        result[type] = files.map((file) => ({
+            name: file,
+            url: pathToFileUrl(join(samplesPath, type, file)),
+        }));
+    }
+    return result;
+}
+/**
+ * Get sample counts summary
+ */
+function getSampleSummary(manifest) {
+    const parts = [];
+    for (const [type, files] of Object.entries(manifest)) {
+        if (files && files.length > 0) {
+            parts.push(`${type}: ${files.length}`);
+        }
+    }
+    return parts.length > 0 ? parts.join(', ') : 'No samples found';
+}
 const program = new Command();
 program
     .name('blinky-test-player')
@@ -31,13 +98,34 @@ program
     }
 });
 program
+    .command('samples')
+    .description('List available samples in the samples folder')
+    .action(() => {
+    const samplesPath = join(PROJECT_ROOT, 'samples');
+    const manifest = scanSamples(samplesPath);
+    console.log('\nSample folders:\n');
+    for (const type of SAMPLE_TYPES) {
+        const files = manifest[type] || [];
+        console.log(`  ${type.padEnd(12)} ${files.length} sample(s)`);
+        for (const file of files.slice(0, 5)) {
+            console.log(`    - ${file}`);
+        }
+        if (files.length > 5) {
+            console.log(`    ... and ${files.length - 5} more`);
+        }
+    }
+    console.log(`\nSamples path: ${samplesPath}`);
+    console.log('Add .wav/.mp3/.ogg/.flac files to the appropriate folders.');
+});
+program
     .command('play <pattern>')
-    .description('Play a test pattern')
+    .description('Play a test pattern using samples')
     .option('-o, --output <file>', 'Output ground truth to file (default: stdout)')
     .option('-f, --format <fmt>', 'Output format: json | csv', 'json')
     .option('-d, --delay <ms>', 'Delay before starting in milliseconds', '500')
     .option('-q, --quiet', 'Suppress progress messages')
     .option('--headless', 'Run browser in headless mode (no visible window)')
+    .option('-s, --samples <path>', 'Path to samples folder', join(PROJECT_ROOT, 'samples'))
     .action(async (patternId, options) => {
     const pattern = getPatternById(patternId);
     if (!pattern) {
@@ -47,9 +135,29 @@ program
     }
     const quiet = options.quiet;
     const delay = parseInt(options.delay, 10);
+    const samplesPath = options.samples;
+    // Scan for samples
+    const manifest = scanSamples(samplesPath);
+    const sampleSummary = getSampleSummary(manifest);
+    if (Object.keys(manifest).length === 0) {
+        console.error('Error: No samples found in samples folder.');
+        console.error(`Add .wav/.mp3 files to: ${samplesPath}`);
+        console.error('Subfolders: kick, snare, hat, tom, clap, percussion, bass');
+        process.exit(1);
+    }
     if (!quiet) {
         console.error(`\nPlaying pattern: ${pattern.name}`);
         console.error(`Duration: ${pattern.durationMs / 1000}s, Hits: ${pattern.hits.length}`);
+        console.error(`Samples: ${sampleSummary}`);
+    }
+    // Check if pattern uses instruments we have samples for
+    const requiredInstruments = new Set(pattern.hits.map(h => h.instrument).filter(Boolean));
+    const availableInstruments = new Set(Object.keys(manifest));
+    const missingInstruments = [...requiredInstruments].filter(i => !availableInstruments.has(i));
+    if (missingInstruments.length > 0) {
+        console.error(`Error: Missing samples for required instruments: ${missingInstruments.join(', ')}`);
+        console.error(`Add samples to: ${missingInstruments.map(i => join(samplesPath, i)).join(', ')}`);
+        process.exit(1);
     }
     // Launch browser
     if (!quiet)
@@ -57,52 +165,87 @@ program
     const browser = await chromium.launch({
         headless: options.headless ?? false,
         args: [
-            '--autoplay-policy=no-user-gesture-required', // Allow audio without user gesture
+            '--autoplay-policy=no-user-gesture-required',
         ],
     });
     const context = await browser.newContext();
     const page = await context.newPage();
     // Capture console messages
     let startedAt = null;
+    let groundTruth = null;
     let patternComplete = false;
     page.on('console', msg => {
         const text = msg.text();
         if (text.startsWith('PATTERN_STARTED:')) {
             startedAt = text.replace('PATTERN_STARTED:', '');
         }
+        else if (text.startsWith('GROUND_TRUTH:')) {
+            try {
+                groundTruth = JSON.parse(text.replace('GROUND_TRUTH:', ''));
+            }
+            catch { /* ignore */ }
+        }
         else if (text === 'PATTERN_COMPLETE') {
             patternComplete = true;
         }
+        else if (text.startsWith('SAMPLES_LOADED:')) {
+            if (!quiet) {
+                const info = JSON.parse(text.replace('SAMPLES_LOADED:', ''));
+                console.error(`Loaded ${info.total} samples`);
+            }
+        }
     });
-    // Load the player HTML
-    const playerPath = join(__dirname, 'player.html');
-    await page.goto(`file://${playerPath}`);
+    // Load the player HTML with proper file:// URL format
+    const playerHtmlPath = join(__dirname, 'player.html');
+    const playerUrl = pathToFileUrl(playerHtmlPath);
+    await page.goto(playerUrl);
     // Wait for page to be ready
-    await page.waitForFunction(() => window.playPattern !== undefined);
+    await page.waitForFunction(() => window.loadSamples !== undefined);
+    // Build manifest with full file:// URLs for each sample
+    const manifestWithUrls = buildManifestWithUrls(samplesPath, manifest);
+    // Load samples into the player
+    if (!quiet)
+        console.error('Loading samples...');
+    await page.evaluate((manifest) => {
+        return window.loadSamples(manifest);
+    }, manifestWithUrls);
     if (!quiet)
         console.error(`Starting in ${delay}ms...`);
     await new Promise(resolve => setTimeout(resolve, delay));
+    // Convert pattern hits to player format
+    const playerHits = pattern.hits.map(h => ({
+        timeMs: Math.round(h.time * 1000),
+        type: h.instrument || (h.type === 'low' ? 'kick' : 'snare'), // Fallback for old patterns
+        strength: h.strength,
+    }));
     // Play the pattern
     if (!quiet)
         console.error('Playing...');
-    await page.evaluate(({ hits, durationMs, background }) => {
-        return window.playPattern(hits, durationMs, background);
-    }, { hits: pattern.hits, durationMs: pattern.durationMs, background: pattern.background || null });
-    // Wait for completion
+    await page.evaluate(({ hits, durationMs }) => {
+        return window.playPattern(hits, durationMs);
+    }, { hits: playerHits, durationMs: pattern.durationMs });
+    // Wait for completion with timeout
+    const maxWaitMs = pattern.durationMs + 10000; // Pattern duration + 10s buffer
+    const startWait = Date.now();
     while (!patternComplete) {
+        if (Date.now() - startWait > maxWaitMs) {
+            console.error('Warning: Pattern playback timed out');
+            break;
+        }
         await new Promise(resolve => setTimeout(resolve, 100));
     }
     await browser.close();
     if (!quiet)
         console.error('Pattern complete.');
-    // Build output
+    // Build output using ground truth from player (includes actual samples used)
     const output = {
         pattern: pattern.id,
         durationMs: pattern.durationMs,
         startedAt: startedAt || new Date().toISOString(),
-        hits: pattern.hits.map(h => ({
+        hits: groundTruth || pattern.hits.map(h => ({
             timeMs: Math.round(h.time * 1000),
             type: h.type,
+            instrument: h.instrument,
             strength: h.strength,
         })),
     };
@@ -113,8 +256,8 @@ program
             `# Pattern: ${pattern.id}`,
             `# Started: ${output.startedAt}`,
             `# Duration: ${output.durationMs}ms`,
-            'timeMs,type,strength',
-            ...output.hits.map(h => `${h.timeMs},${h.type},${h.strength}`),
+            'timeMs,type,instrument,sample,strength',
+            ...output.hits.map(h => `${h.timeMs},${h.type},${h.instrument || ''},${h.sample || ''},${h.strength}`),
         ];
         outputStr = lines.join('\n');
     }

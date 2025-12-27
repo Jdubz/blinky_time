@@ -5,33 +5,33 @@
 export type TransientType = 'low' | 'high';
 
 /**
+ * Instrument types that map to detection bands
+ * - Low band (50-200 Hz): kick, tom, bass
+ * - High band (2-8 kHz): snare, hat, clap, percussion
+ */
+export type InstrumentType = 'kick' | 'snare' | 'hat' | 'tom' | 'clap' | 'percussion' | 'bass';
+
+/**
+ * Mapping from instrument type to detection band
+ */
+export const INSTRUMENT_TO_BAND: Record<InstrumentType, TransientType> = {
+  kick: 'low',
+  tom: 'low',
+  bass: 'low',
+  snare: 'high',
+  hat: 'high',
+  clap: 'high',
+  percussion: 'high',
+};
+
+/**
  * Ground truth annotation for test patterns
  */
 export interface GroundTruthHit {
   time: number; // Time in seconds
-  type: TransientType;
+  type: TransientType; // Detection band (low/high)
+  instrument?: InstrumentType; // Optional instrument type for sample playback
   strength: number; // 0.0 - 1.0
-}
-
-/**
- * Background audio configuration
- * Simulates continuous audio present in real music (pads, bass, synths)
- */
-export interface BackgroundConfig {
-  // Low frequency drone (simulates sub-bass, kick sustain)
-  lowDrone?: {
-    frequency: number; // Hz (typically 40-80)
-    gain: number; // 0-1
-  };
-  // Mid frequency pad (simulates synth pads, sustained notes)
-  midPad?: {
-    frequency: number; // Hz (typically 200-500)
-    gain: number; // 0-1
-  };
-  // High frequency noise floor (simulates room tone, hi-hat bleed)
-  noiseFloor?: {
-    gain: number; // 0-1
-  };
 }
 
 /**
@@ -44,7 +44,19 @@ export interface TestPattern {
   durationMs: number; // Total pattern duration
   bpm?: number; // Optional BPM for musical patterns
   hits: GroundTruthHit[]; // Automatically serves as ground truth
-  background?: BackgroundConfig; // Continuous audio during pattern
+}
+
+/**
+ * Sample manifest - files available in each sample folder
+ */
+export interface SampleManifest {
+  kick?: string[];
+  snare?: string[];
+  hat?: string[];
+  tom?: string[];
+  clap?: string[];
+  percussion?: string[];
+  bass?: string[];
 }
 
 /**
@@ -57,6 +69,8 @@ export interface PatternOutput {
   hits: Array<{
     timeMs: number;
     type: TransientType;
+    instrument?: InstrumentType;
+    sample?: string; // Which sample file was used
     strength: number;
   }>;
 }

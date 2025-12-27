@@ -402,8 +402,10 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   highBaseline += baselineAlpha * (localHighEnergy - highBaseline);
 
   // Calculate rise from previous frame (for onset detection)
-  float lowRise = (prevLowEnergy > MIN_ENERGY_FOR_RISE) ? localLowEnergy / prevLowEnergy : 1.0f;
-  float highRise = (prevHighEnergy > MIN_ENERGY_FOR_RISE) ? localHighEnergy / prevHighEnergy : 1.0f;
+  // When previous energy is too small to compute meaningful ratio, return large value
+  // to allow first-frame detection (10.0f passes default riseThreshold of 1.5)
+  float lowRise = (prevLowEnergy > MIN_ENERGY_FOR_RISE) ? localLowEnergy / prevLowEnergy : 10.0f;
+  float highRise = (prevHighEnergy > MIN_ENERGY_FOR_RISE) ? localHighEnergy / prevHighEnergy : 10.0f;
 
   // Store current energy for next frame's rise calculation
   prevLowEnergy = localLowEnergy;
@@ -433,6 +435,7 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   if ((int32_t)(nowMs - lastHighOnsetMs) > (int32_t)onsetCooldownMs) {
     if (localHighEnergy > highThresh && highRise > riseThreshold) {
       highOnset = true;
+      // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
       float ratio = localHighEnergy / highThresh;
       highStrength = clamp01((ratio - 1.0f) / (MAX_ONSET_RATIO - 1.0f));
       maxOnsetStrength = maxValue(maxOnsetStrength, highStrength);

@@ -2,187 +2,182 @@
 <html>
 <head>
   <title>Blinky Test Player</title>
+  <script src="https://unpkg.com/tone@14.8.49/build/Tone.js"></script>
 </head>
 <body>
   <h1>Blinky Test Pattern Player</h1>
   <div id="status">Ready</div>
+  <div id="samples">Loading samples...</div>
 
   <script>
-    // Low-band synthesis - targets 50-200 Hz detection range
-    // Uses frequencies computer speakers can reproduce (100-200Hz)
-    const LOW_FREQ = 120;           // Center of detection band, reproducible by speakers
-    const LOW_ATTACK_GAIN = 0.9;
-    const LOW_DECAY_TIME = 0.15;    // Shorter decay, concentrated energy
-    const LOW_MIN_GAIN = 0.01;
+    // Sample categories and their detection band mapping
+    const SAMPLE_CONFIG = {
+      kick:       { band: 'low',  folder: 'kick' },
+      tom:        { band: 'low',  folder: 'tom' },
+      bass:       { band: 'low',  folder: 'bass' },
+      snare:      { band: 'high', folder: 'snare' },
+      hat:        { band: 'high', folder: 'hat' },
+      clap:       { band: 'high', folder: 'clap' },
+      percussion: { band: 'high', folder: 'percussion' }
+    };
 
-    // High-band synthesis - targets 2-8 kHz detection range
-    const HIGH_DURATION = 0.1;      // Slightly longer for more energy
-    const HIGH_GAIN = 0.8;          // Boosted gain
-    const HIGH_FILTER_FREQ = 5000;  // Center of detection band
-    const HIGH_FILTER_Q = 0.4;      // Wide bandwidth (~2-10kHz)
-    const HIGH_MIN_GAIN = 0.01;
+    // Loaded sample buffers organized by type
+    let loadedSamples = {};
+    let samplesReady = false;
 
-    const MASTER_VOLUME = 0.9;
+    // Load all samples from the provided manifest
+    // Manifest format: { kick: [{name: 'kick1.wav', url: 'file:///...'}], ... }
+    async function loadSamples(sampleManifest) {
+      const status = document.getElementById('status');
+      const samplesDiv = document.getElementById('samples');
 
-    // Background synthesis - creates continuous audio to simulate real music environment
-    function createBackground(audioContext, destination, background, durationMs) {
-      const nodes = [];
-      const durationSec = durationMs / 1000;
+      status.textContent = 'Loading samples...';
+      loadedSamples = {};
 
-      // Low frequency drone (sub-bass)
-      if (background.lowDrone) {
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = background.lowDrone.frequency;
-        gain.gain.value = background.lowDrone.gain;
-        osc.connect(gain);
-        gain.connect(destination);
-        osc.start();
-        osc.stop(audioContext.currentTime + durationSec + 1);
-        nodes.push(osc);
-      }
+      let totalLoaded = 0;
+      let totalFailed = 0;
 
-      // Mid frequency pad
-      if (background.midPad) {
-        const osc = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        osc.type = 'triangle'; // Softer than sine, pad-like
-        osc.frequency.value = background.midPad.frequency;
-        gain.gain.value = background.midPad.gain;
-        osc.connect(gain);
-        gain.connect(destination);
-        osc.start();
-        osc.stop(audioContext.currentTime + durationSec + 1);
-        nodes.push(osc);
-      }
+      for (const [type, samples] of Object.entries(sampleManifest)) {
+        if (!samples || samples.length === 0) continue;
 
-      // High frequency noise floor
-      if (background.noiseFloor) {
-        const bufferSize = audioContext.sampleRate * (durationSec + 1);
-        const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-        const data = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-          data[i] = Math.random() * 2 - 1;
+        loadedSamples[type] = [];
+
+        for (const sample of samples) {
+          try {
+            // sample can be {name, url} or just a filename string
+            const url = typeof sample === 'string' ? `samples/${type}/${sample}` : sample.url;
+            const name = typeof sample === 'string' ? sample : sample.name;
+
+            const player = new Tone.Player(url).toDestination();
+            await player.load(url);
+            loadedSamples[type].push({ name, player });
+            totalLoaded++;
+          } catch (err) {
+            const name = typeof sample === 'string' ? sample : sample.name;
+            console.warn(`Failed to load sample: ${type}/${name}`, err);
+            totalFailed++;
+          }
         }
-        const noise = audioContext.createBufferSource();
-        noise.buffer = buffer;
-
-        // High-pass filter to keep only high frequencies
-        const filter = audioContext.createBiquadFilter();
-        filter.type = 'highpass';
-        filter.frequency.value = 3000;
-
-        const gain = audioContext.createGain();
-        gain.gain.value = background.noiseFloor.gain;
-
-        noise.connect(filter);
-        filter.connect(gain);
-        gain.connect(destination);
-        noise.start();
-        nodes.push(noise);
       }
 
-      return nodes;
+      // Build summary
+      const summary = Object.entries(loadedSamples)
+        .filter(([_, samples]) => samples.length > 0)
+        .map(([type, samples]) => `${type}: ${samples.length}`)
+        .join(', ');
+
+      samplesDiv.textContent = summary || 'No samples loaded';
+      status.textContent = `Loaded ${totalLoaded} samples` + (totalFailed ? ` (${totalFailed} failed)` : '');
+      samplesReady = totalLoaded > 0;
+
+      console.log('SAMPLES_LOADED:' + JSON.stringify({
+        total: totalLoaded,
+        failed: totalFailed,
+        types: Object.keys(loadedSamples).filter(k => loadedSamples[k].length > 0)
+      }));
+
+      return { loaded: totalLoaded, failed: totalFailed };
     }
 
-    function synthLow(audioContext, destination, startTime, strength = 1.0) {
-      // Use square wave for richer harmonic content in the 100-200Hz range
-      const osc = audioContext.createOscillator();
-      const oscGain = audioContext.createGain();
-
-      osc.type = 'square';  // More harmonics than sine
-      osc.frequency.setValueAtTime(LOW_FREQ, startTime);
-
-      // Sharp attack, quick decay - concentrated transient energy
-      oscGain.gain.setValueAtTime(0, startTime);
-      oscGain.gain.linearRampToValueAtTime(LOW_ATTACK_GAIN * strength, startTime + 0.005); // 5ms attack
-      oscGain.gain.exponentialRampToValueAtTime(LOW_MIN_GAIN, startTime + LOW_DECAY_TIME);
-
-      osc.connect(oscGain);
-      oscGain.connect(destination);
-
-      osc.start(startTime);
-      osc.stop(startTime + LOW_DECAY_TIME);
-
-      return osc;
-    }
-
-    function synthHigh(audioContext, destination, startTime, strength = 1.0) {
-      // Longer noise burst with wider bandwidth
-      const bufferSize = audioContext.sampleRate * HIGH_DURATION;
-      const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-      const data = buffer.getChannelData(0);
-
-      for (let i = 0; i < bufferSize; i++) {
-        data[i] = Math.random() * 2 - 1;
+    // Get a random sample of a given type
+    function getRandomSample(type) {
+      const samples = loadedSamples[type];
+      if (!samples || samples.length === 0) {
+        console.warn(`No samples available for type: ${type}`);
+        return null;
       }
+      return samples[Math.floor(Math.random() * samples.length)];
+    }
 
-      const noise = audioContext.createBufferSource();
-      noise.buffer = buffer;
-
-      // Bandpass filter centered in detection range
-      const filter = audioContext.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.value = HIGH_FILTER_FREQ;
-      filter.Q.value = HIGH_FILTER_Q;
-
-      const gain = audioContext.createGain();
-      // Sharp attack
-      gain.gain.setValueAtTime(0, startTime);
-      gain.gain.linearRampToValueAtTime(HIGH_GAIN * strength, startTime + 0.003); // 3ms attack
-      gain.gain.exponentialRampToValueAtTime(HIGH_MIN_GAIN, startTime + HIGH_DURATION);
-
-      noise.connect(filter);
-      filter.connect(gain);
-      gain.connect(destination);
-
-      noise.start(startTime);
-
-      return noise;
+    // Get detection band for a sample type
+    function getBandForType(type) {
+      return SAMPLE_CONFIG[type]?.band || 'high';
     }
 
     // Main playPattern function exposed to Playwright
-    window.playPattern = async function(hits, durationMs, background = null) {
+    // hits: array of { timeMs, type, strength? }
+    // type can be: kick, snare, hat, tom, clap, percussion, bass
+    window.playPattern = async function(hits, durationMs) {
       const status = document.getElementById('status');
-      status.textContent = 'Starting...';
 
-      const audioContext = new AudioContext();
-      const masterGain = audioContext.createGain();
-      masterGain.gain.value = MASTER_VOLUME;
-      masterGain.connect(audioContext.destination);
-
-      // Start background audio if specified
-      if (background) {
-        createBackground(audioContext, masterGain, background, durationMs);
+      if (!samplesReady) {
+        throw new Error('Samples not loaded. Call loadSamples() first.');
       }
 
+      status.textContent = 'Starting...';
+
+      // Start audio context (required for user gesture on some browsers)
+      await Tone.start();
+
+      // Build ground truth from scheduled hits
+      const groundTruth = [];
+
+      // Track created players for cleanup
+      const createdPlayers = [];
+
       // Schedule all hits
-      const baseTime = audioContext.currentTime + 0.1; // Small delay to ensure audio context is ready
+      const now = Tone.now();
+      const startOffset = 0.1; // Small delay to ensure everything is ready
 
       for (const hit of hits) {
-        const hitTime = baseTime + hit.time;
-        if (hit.type === 'low') {
-          synthLow(audioContext, masterGain, hitTime, hit.strength);
-        } else if (hit.type === 'high') {
-          synthHigh(audioContext, masterGain, hitTime, hit.strength);
+        const sample = getRandomSample(hit.type);
+        if (!sample) {
+          console.warn(`Skipping hit - no sample for type: ${hit.type}`);
+          continue;
         }
+
+        const hitTimeSec = hit.timeMs / 1000;
+        const scheduledTime = now + startOffset + hitTimeSec;
+
+        // Clone the player for overlapping sounds
+        const player = new Tone.Player(sample.player.buffer).toDestination();
+        player.volume.value = hit.strength ? (hit.strength - 1) * 12 : 0; // Convert 0-1 strength to dB
+        player.start(scheduledTime);
+        createdPlayers.push(player);
+
+        // Record ground truth
+        groundTruth.push({
+          timeMs: hit.timeMs,
+          type: getBandForType(hit.type),
+          instrument: hit.type,
+          sample: sample.name,
+          strength: hit.strength || 1.0
+        });
       }
 
       // Log start time for synchronization
       const startedAt = new Date().toISOString();
       console.log('PATTERN_STARTED:' + startedAt);
+      console.log('GROUND_TRUTH:' + JSON.stringify(groundTruth));
       status.textContent = 'Playing...';
 
       // Wait for pattern to complete
-      const totalDuration = (durationMs / 1000) + 0.5; // Add buffer for last sound to finish
+      const totalDuration = (durationMs / 1000) + 1.0; // Add buffer for samples to finish
       await new Promise(resolve => setTimeout(resolve, totalDuration * 1000));
+
+      // Dispose all created players to prevent memory leaks
+      for (const player of createdPlayers) {
+        player.dispose();
+      }
 
       status.textContent = 'Complete';
       console.log('PATTERN_COMPLETE');
 
-      await audioContext.close();
-      return startedAt;
+      return { startedAt, groundTruth };
+    };
+
+    // Expose loadSamples to Playwright
+    window.loadSamples = loadSamples;
+
+    // Expose utility to check sample status
+    window.getSampleStatus = function() {
+      return {
+        ready: samplesReady,
+        types: Object.keys(loadedSamples).filter(k => loadedSamples[k].length > 0),
+        counts: Object.fromEntries(
+          Object.entries(loadedSamples).map(([k, v]) => [k, v.length])
+        )
+      };
     };
 
     // Signal that page is ready

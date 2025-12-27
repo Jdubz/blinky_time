@@ -498,19 +498,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             case 'list_patterns': {
                 // Available patterns (must match blinky-test-player)
+                // These patterns use real drum samples for authentic transient testing
                 const patterns = [
-                    // Basic patterns (no background audio)
-                    { id: 'simple-beat', name: 'Alternating Low/High', durationMs: 16000, description: 'Low on 1&3, high on 2&4 (120 BPM, 8 bars)', hasBackground: false },
-                    { id: 'low-barrage', name: 'Low Band Barrage', durationMs: 8000, description: 'Rapid bass transients at varying intervals', hasBackground: false },
-                    { id: 'high-burst', name: 'High Band Burst', durationMs: 6000, description: 'Rapid high-frequency transients', hasBackground: false },
-                    { id: 'mixed-pattern', name: 'Mixed Low/High', durationMs: 10000, description: 'Interleaved low and high with varying dynamics', hasBackground: false },
-                    { id: 'timing-test', name: 'Timing Precision Test', durationMs: 10000, description: 'Transients at 100-250ms intervals', hasBackground: false },
-                    { id: 'simultaneous', name: 'Simultaneous Hits', durationMs: 8000, description: 'Low and high at exactly the same time', hasBackground: false },
-                    // Realistic patterns with background audio
-                    { id: 'realistic-track', name: 'Realistic Electronic Track', durationMs: 16000, description: 'Kick/hi-hat with sub-bass drone, pad, noise floor (128 BPM)', hasBackground: true },
-                    { id: 'heavy-background', name: 'Heavy Background', durationMs: 10000, description: 'Transients over loud continuous audio (140 BPM)', hasBackground: true },
-                    { id: 'baseline-only', name: 'Baseline Only (No Transients)', durationMs: 8000, description: 'Only background audio - any detections are false positives', hasBackground: true },
-                    { id: 'quiet-section', name: 'Quiet Section', durationMs: 12000, description: 'Low-level background with subtle transients (100 BPM)', hasBackground: true },
+                    { id: 'basic-drums', name: 'Basic Drum Pattern', durationMs: 16000, description: 'Kick on 1&3, snare on 2&4, hats on 8ths (120 BPM)', instruments: ['kick', 'snare', 'hat'] },
+                    { id: 'kick-focus', name: 'Kick Focus', durationMs: 12000, description: 'Various kick patterns - tests low-band detection', instruments: ['kick'] },
+                    { id: 'snare-focus', name: 'Snare Focus', durationMs: 10000, description: 'Snare patterns including rolls - tests high-band detection', instruments: ['snare'] },
+                    { id: 'hat-patterns', name: 'Hi-Hat Patterns', durationMs: 12000, description: 'Various hi-hat patterns: 8ths, 16ths, offbeats', instruments: ['hat'] },
+                    { id: 'full-kit', name: 'Full Drum Kit', durationMs: 16000, description: 'All drum elements: kick, snare, hat, tom, clap', instruments: ['kick', 'snare', 'hat', 'tom', 'clap'] },
+                    { id: 'simultaneous', name: 'Simultaneous Hits', durationMs: 10000, description: 'Kick + snare/clap at same time - tests concurrent detection', instruments: ['kick', 'snare', 'clap'] },
+                    { id: 'fast-tempo', name: 'Fast Tempo (150 BPM)', durationMs: 10000, description: 'High-speed drum pattern - tests detection at fast tempos', instruments: ['kick', 'snare', 'hat'] },
+                    { id: 'sparse', name: 'Sparse Pattern', durationMs: 15000, description: 'Widely spaced hits - tests detection after silence', instruments: ['kick', 'snare', 'tom', 'clap'] },
                 ];
                 return {
                     content: [
@@ -639,9 +636,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         offsets.sort((a, b) => a - b);
                         audioLatencyMs = offsets[Math.floor(offsets.length / 2)];
                     }
-                    // Track which expected hits were matched
+                    // Track which expected hits were matched and the mapping
                     const matchedExpected = new Set();
                     const matchedDetections = new Set();
+                    // Store actual match pairs: detection index -> { expectedIdx, timingError }
+                    const matchPairs = new Map();
                     // Match each detection to nearest expected hit (if within tolerance)
                     // Apply latency correction to detection timestamps
                     detections.forEach((detection, dIdx) => {
@@ -662,6 +661,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         if (bestMatchIdx >= 0) {
                             matchedExpected.add(bestMatchIdx);
                             matchedDetections.add(dIdx);
+                            matchPairs.set(dIdx, { expectedIdx: bestMatchIdx, timingError: bestMatchDist });
                         }
                     });
                     const truePositives = matchedDetections.size;
@@ -672,25 +672,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const f1Score = (precision + recall) > 0
                         ? 2 * (precision * recall) / (precision + recall)
                         : 0;
-                    // Calculate average timing error for matched detections (after latency correction)
+                    // Calculate average timing error from matched pairs
                     let totalTimingError = 0;
-                    let matchCount = 0;
-                    detections.forEach((detection, dIdx) => {
-                        if (!matchedDetections.has(dIdx))
-                            return;
-                        const correctedTime = detection.timestampMs - audioLatencyMs;
-                        // Find the expected hit this was matched to
-                        expectedHits.forEach((expected, eIdx) => {
-                            if (matchedExpected.has(eIdx) && expected.type === detection.type) {
-                                const dist = Math.abs(correctedTime - expected.timeMs);
-                                if (dist <= TIMING_TOLERANCE_MS) {
-                                    totalTimingError += dist;
-                                    matchCount++;
-                                }
-                            }
-                        });
+                    matchPairs.forEach(({ timingError }) => {
+                        totalTimingError += timingError;
                     });
-                    const avgTimingErrorMs = matchCount > 0 ? totalTimingError / matchCount : null;
+                    const avgTimingErrorMs = matchPairs.size > 0 ? totalTimingError / matchPairs.size : null;
                     const metrics = {
                         f1Score: Math.round(f1Score * 1000) / 1000,
                         precision: Math.round(precision * 1000) / 1000,

@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactored fire effect to use EffectMatrix for better testability
 - Fixed fire effect color generation (was showing green instead of red)
 - Enhanced serial console with effect testing capabilities
+- **BREAKING:** Refactored onset detection from 3-band to 2-band system
+  - Removed mid-frequency band (was 500-2000 Hz)
+  - Now uses only low (50-200 Hz) and high (2-8 kHz) bands
+  - Transient events now report 'low' or 'high' type only
+  - Removed `midthresh` serial command
+  - Improved first-frame detection (no longer blocked by zero-energy history)
 
 ### Fixed
 - EEPROM compilation errors on nRF52840 platform
