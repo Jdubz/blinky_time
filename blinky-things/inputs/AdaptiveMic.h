@@ -95,6 +95,7 @@ public:
   inline bool isPdmAlive() const { return pdmAlive; }
   inline float getRecentAverage() const { return recentAverage; }  // Recent average level for debugging
   inline float getPreviousLevel() const { return previousLevel; }  // Previous frame level for debugging
+  inline bool isHwGainLocked() const { return hwGainLocked_; }     // Check if hardware gain is locked for testing
 
 public:
   /**
@@ -107,6 +108,10 @@ public:
   void end();
 
   void update(float dt);
+
+  // Hardware gain lock/unlock for testing (bypasses AGC)
+  void lockHwGain(int gain);    // Lock hardware gain at specific value (disables AGC)
+  void unlockHwGain();          // Unlock hardware gain (re-enables AGC)
 
   // ISR hook
   static void onPDMdata();
@@ -140,6 +145,9 @@ private:
   // Only 3 variables needed for transient detection
   float recentAverage = 0.0f;   // Rolling average of audio level (~1 second window)
   float previousLevel = 0.0f;   // Last frame's level (for attack detection)
+
+  // Hardware gain lock state (for testing/bypass)
+  bool hwGainLocked_ = false;   // When true, AGC is disabled and gain is fixed
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);

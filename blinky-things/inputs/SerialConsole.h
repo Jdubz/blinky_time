@@ -73,10 +73,6 @@ private:
     static const uint16_t STREAM_FAST_PERIOD_MS = 10;   // Fast: ~100Hz for testing
     static const uint16_t BATTERY_PERIOD_MS = 1000;     // 1Hz for battery
 
-    // Test mode state
-    bool testHwGainLocked_ = false;
-    int testLockedHwGain_ = 40;
-
     // Static instance pointer for callbacks
     static SerialConsole* instance_;
 };

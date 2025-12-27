@@ -254,22 +254,29 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
 
     // === TEST MODE COMMANDS ===
     if (strncmp(cmd, "test lock hwgain", 16) == 0) {
-        testHwGainLocked_ = true;
-        // Parse optional gain value
-        if (strlen(cmd) > 17 && mic_) {
-            int gain = atoi(cmd + 17);
-            if (gain >= 0 && gain <= 80) {
-                testLockedHwGain_ = gain;
-                mic_->currentHardwareGain = gain;
-            }
+        if (!mic_) {
+            Serial.println(F("ERROR: Microphone not available"));
+            return true;
         }
+        // Parse optional gain value (default to current gain)
+        int gain = mic_->getHwGain();
+        if (strlen(cmd) > 17) {
+            gain = atoi(cmd + 17);
+        }
+        // Lock hardware gain at specified value (disables AGC)
+        mic_->lockHwGain(gain);
         Serial.print(F("OK locked at "));
-        Serial.println(testLockedHwGain_);
+        Serial.println(mic_->getHwGain());
         return true;
     }
 
     if (strcmp(cmd, "test unlock hwgain") == 0) {
-        testHwGainLocked_ = false;
+        if (!mic_) {
+            Serial.println(F("ERROR: Microphone not available"));
+            return true;
+        }
+        // Unlock hardware gain (re-enables AGC)
+        mic_->unlockHwGain();
         Serial.println(F("OK unlocked"));
         return true;
     }
