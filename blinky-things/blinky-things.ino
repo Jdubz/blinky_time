@@ -395,23 +395,18 @@ void loop() {
   float hit = mic ? mic->getTransient() : 0.0f;
 
   // Send transient detection events for test analysis (always enabled)
-  // AND notify music mode of onsets for beat tracking
-  if (mic && (mic->getLowOnset() || mic->getHighOnset())) {
-    // Notify music mode (use low-band onset as primary beat indicator)
+  // AND notify music mode of transients for beat tracking
+  if (mic && hit > 0.0f) {
+    // Notify music mode of transient (simplified - no band differentiation)
     if (music) {
-      music->onOnsetDetected(now, mic->getLowOnset());
+      music->onOnsetDetected(now, true);  // isLowBand=true (not used in simplified detection)
     }
 
+    // TRANSIENT message: simplified single-band detection
     Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
     Serial.print(now);
-    Serial.print(F(",\"low\":"));
-    Serial.print(mic->getLowOnset() ? "true" : "false");
-    Serial.print(F(",\"high\":"));
-    Serial.print(mic->getHighOnset() ? "true" : "false");
-    Serial.print(F(",\"lowStrength\":"));
-    Serial.print(mic->getLowStrength(), 2);
-    Serial.print(F(",\"highStrength\":"));
-    Serial.print(mic->getHighStrength(), 2);
+    Serial.print(F(",\"strength\":"));
+    Serial.print(hit, 2);
     Serial.println(F("}"));
   }
 

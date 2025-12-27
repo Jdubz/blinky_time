@@ -104,31 +104,16 @@ export function AudioVisualizer({
     if (!audioData || !isStreaming) return;
 
     const currentIndex = levelDataRef.current.length;
-    let hasNewTransient = false;
 
-    // Track transient events (two-band onset detection)
-    if (audioData.lo === 1) {
+    // Track transient events (simplified single-band amplitude spike detection)
+    if (audioData.t > 0) {
       transientEventsRef.current.push({
         index: currentIndex,
-        type: 'low',
-        strength: audioData.los,
-        icon: '🔊',
-        color: '#ef4444', // Red for bass
+        type: 'transient',
+        strength: audioData.t,
+        icon: '💥',
+        color: '#f59e0b', // Amber for transients
       });
-      hasNewTransient = true;
-    }
-    if (audioData.hi === 1) {
-      transientEventsRef.current.push({
-        index: currentIndex,
-        type: 'high',
-        strength: audioData.his,
-        icon: '✨',
-        color: '#3b82f6', // Blue for brightness
-      });
-      hasNewTransient = true;
-    }
-
-    if (hasNewTransient) {
       setRenderTrigger(n => n + 1);
     }
 
@@ -183,16 +168,12 @@ export function AudioVisualizer({
       const elapsedMs = Date.now() - testStartTime;
       const newDetections: DetectionEvent[] = [];
 
-      if (msg.low) {
-        newDetections.push({ timestampMs: elapsedMs, type: 'low', strength: msg.lowStrength || 0 });
-      }
-      if (msg.high) {
-        newDetections.push({
-          timestampMs: elapsedMs,
-          type: 'high',
-          strength: msg.highStrength || 0,
-        });
-      }
+      // Simplified single-band detection
+      newDetections.push({
+        timestampMs: elapsedMs,
+        type: 'transient',
+        strength: msg.strength,
+      });
 
       if (newDetections.length > 0) {
         setTestDetections(prev => {

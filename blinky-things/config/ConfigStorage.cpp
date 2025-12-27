@@ -106,15 +106,13 @@ void ConfigStorage::loadDefaults() {
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
-    // Onset detection defaults (two-band system) - use TotemDefaults
-    data_.mic.onsetThreshold = Defaults::OnsetThreshold;
-    data_.mic.riseThreshold = Defaults::RiseThreshold;
-
-    // Advanced onset detection defaults
-    data_.mic.baselineAttackTau = 0.1f;   // 100ms fast attack
-    data_.mic.baselineReleaseTau = 2.0f;  // 2s slow release
-    data_.mic.logCompressionFactor = 0.0f; // Disabled by default (not helpful at low signal levels)
-    data_.mic.riseWindowMs = 100;         // 100ms rise window
+    // Simplified transient detection defaults (v19+)
+    // NOTE: Old onset detection configs (v18 and below) are incompatible with simplified detection.
+    // Version check in loadFromFlash() will reject old configs, forcing these defaults on upgrade.
+    data_.mic.transientThreshold = 3.0f;  // 3x louder than recent average
+    data_.mic.attackMultiplier = 1.3f;    // 30% sudden rise required
+    data_.mic.averageTau = 0.8f;          // Recent average tracking time
+    data_.mic.cooldownMs = 80;            // 80ms cooldown between hits
 
     data_.brightness = 100;
 }
@@ -248,15 +246,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     // Validate hardware AGC parameters (expanded - allow full ADC range usage)
     validateFloat(data_.mic.hwTarget, 0.05f, 0.9f, F("hwTarget"));
 
-    // Validate onset detection thresholds (two-band system)
-    validateFloat(data_.mic.onsetThreshold, 1.5f, 5.0f, F("onsetThreshold"));
-    validateFloat(data_.mic.riseThreshold, 1.1f, 2.0f, F("riseThreshold"));
-
-    // Validate advanced onset detection parameters (v18+)
-    validateFloat(data_.mic.baselineAttackTau, 0.01f, 1.0f, F("baselineAttackTau"));
-    validateFloat(data_.mic.baselineReleaseTau, 0.5f, 10.0f, F("baselineReleaseTau"));
-    validateFloat(data_.mic.logCompressionFactor, 0.0f, 10.0f, F("logCompressionFactor"));
-    validateUint32(data_.mic.riseWindowMs, 20, 500, F("riseWindowMs"));
+    // Validate simplified transient detection parameters (v19+)
+    validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
+    validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
+    validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
+    validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs")); // uint16_t safely converts to uint32_t
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
@@ -288,15 +282,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     // Hardware AGC parameters (primary - raw input tracking)
     mic.hwTarget = data_.mic.hwTarget;
 
-    // Onset detection thresholds (two-band system)
-    mic.onsetThreshold = data_.mic.onsetThreshold;
-    mic.riseThreshold = data_.mic.riseThreshold;
-
-    // Advanced onset detection parameters
-    mic.baselineAttackTau = data_.mic.baselineAttackTau;
-    mic.baselineReleaseTau = data_.mic.baselineReleaseTau;
-    mic.logCompressionFactor = data_.mic.logCompressionFactor;
-    mic.riseWindowMs = data_.mic.riseWindowMs;
+    // Simplified transient detection parameters
+    mic.transientThreshold = data_.mic.transientThreshold;
+    mic.attackMultiplier = data_.mic.attackMultiplier;
+    mic.averageTau = data_.mic.averageTau;
+    mic.cooldownMs = data_.mic.cooldownMs;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -320,15 +310,11 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     // Hardware AGC parameters (primary - raw input tracking)
     data_.mic.hwTarget = mic.hwTarget;
 
-    // Onset detection thresholds (two-band system)
-    data_.mic.onsetThreshold = mic.onsetThreshold;
-    data_.mic.riseThreshold = mic.riseThreshold;
-
-    // Advanced onset detection parameters
-    data_.mic.baselineAttackTau = mic.baselineAttackTau;
-    data_.mic.baselineReleaseTau = mic.baselineReleaseTau;
-    data_.mic.logCompressionFactor = mic.logCompressionFactor;
-    data_.mic.riseWindowMs = mic.riseWindowMs;
+    // Simplified transient detection parameters
+    data_.mic.transientThreshold = mic.transientThreshold;
+    data_.mic.attackMultiplier = mic.attackMultiplier;
+    data_.mic.averageTau = mic.averageTau;
+    data_.mic.cooldownMs = mic.cooldownMs;
 
     saveToFlash();
     dirty_ = false;
