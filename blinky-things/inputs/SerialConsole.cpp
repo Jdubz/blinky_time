@@ -77,10 +77,8 @@ void SerialConsole::registerSettings() {
     // Window/range tracks peak/valley and maps to 0-1 output (no clipping)
     if (mic_) {
         // Hardware AGC parameters (primary - optimizes ADC signal quality)
-        settings_.registerFloat("hwtargetlow", &mic_->hwTargetLow, "agc",
-            "HW target low (raw)", 0.05f, 0.5f);
-        settings_.registerFloat("hwtargethigh", &mic_->hwTargetHigh, "agc",
-            "HW target high (raw)", 0.1f, 0.9f);
+        settings_.registerFloat("hwtarget", &mic_->hwTarget, "agc",
+            "HW target level (raw, ±0.01 dead zone)", 0.05f, 0.9f);
     }
 
     // === ONSET DETECTION SETTINGS (two-band transient detection) ===
@@ -91,8 +89,16 @@ void SerialConsole::registerSettings() {
             "Rise detection threshold (ratio to prev frame)", 1.1f, 2.0f);
         settings_.registerUint16("cooldown", &mic_->onsetCooldownMs, "freq",
             "Onset cooldown (ms between detections)", 20, 500);
-        settings_.registerFloat("baselinetau", &mic_->baselineTau, "freq",
-            "Baseline adaptation time constant (s)", 0.1f, 5.0f);
+
+        // Advanced onset detection parameters (for tuning)
+        settings_.registerFloat("baseattack", &mic_->baselineAttackTau, "advanced",
+            "Baseline attack tau (s, fast drop)", 0.01f, 1.0f);
+        settings_.registerFloat("baserelease", &mic_->baselineReleaseTau, "advanced",
+            "Baseline release tau (s, slow rise)", 0.5f, 10.0f);
+        settings_.registerFloat("logcompress", &mic_->logCompressionFactor, "advanced",
+            "Log compression factor (0=off, 1.0=standard)", 0.0f, 10.0f);
+        settings_.registerUint16("risewindow", &mic_->riseWindowMs, "advanced",
+            "Multi-frame rise window (ms)", 20, 500);
     }
 
 }
@@ -318,10 +324,15 @@ void SerialConsole::restoreDefaults() {
     if (mic_) {
         mic_->peakTau = Defaults::PeakTau;              // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
+        mic_->hwTarget = 0.35f;                         // Target raw input level (±0.01 dead zone)
         mic_->onsetThreshold = Defaults::OnsetThreshold; // 2.5x baseline
         mic_->riseThreshold = Defaults::RiseThreshold;   // 1.5x rise required
         mic_->onsetCooldownMs = Defaults::OnsetCooldownMs; // 80ms cooldown
-        mic_->baselineTau = Defaults::BaselineTau;       // 0.5s baseline tau
+        // Advanced parameters
+        mic_->baselineAttackTau = 0.1f;    // 100ms attack
+        mic_->baselineReleaseTau = 2.0f;   // 2s release
+        mic_->logCompressionFactor = 0.0f; // Disabled
+        mic_->riseWindowMs = 100;          // 100ms window
     }
 }
 

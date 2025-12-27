@@ -21,6 +21,11 @@ void ConfigStorage::begin() {
         flashAddr = flash.get_flash_start() + flash.get_flash_size() - 4096;
         Serial.print(F("[CONFIG] Flash at 0x")); Serial.println(flashAddr, HEX);
 
+        // Runtime struct size validation (helps catch padding issues)
+        Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
+        Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
+        Serial.println(F(" bytes)"));
+
         // CRITICAL: Validate flash address before ANY operations
         // This prevents bootloader corruption
         if (!SafetyTest::isFlashAddressSafe(flashAddr, 4096)) {
@@ -69,12 +74,17 @@ void ConfigStorage::loadDefaults() {
     data_.mic.peakTau = 2.0f;        // 2s peak adaptation
     data_.mic.releaseTau = 5.0f;     // 5s peak release
     // Hardware AGC parameters (primary - optimizes raw ADC input)
-    data_.mic.hwTargetLow = 0.15f;   // Increase HW gain if raw < 15%
-    data_.mic.hwTargetHigh = 0.35f;  // Decrease HW gain if raw > 35%
+    data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
     // Onset detection defaults (two-band system) - use TotemDefaults
     data_.mic.onsetThreshold = Defaults::OnsetThreshold;
     data_.mic.riseThreshold = Defaults::RiseThreshold;
+
+    // Advanced onset detection defaults
+    data_.mic.baselineAttackTau = 0.1f;   // 100ms fast attack
+    data_.mic.baselineReleaseTau = 2.0f;  // 2s slow release
+    data_.mic.logCompressionFactor = 0.0f; // Disabled by default (not helpful at low signal levels)
+    data_.mic.riseWindowMs = 100;         // 100ms rise window
 
     data_.brightness = 100;
 }
@@ -159,12 +169,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     validateFloat(data_.mic.releaseTau, 1.0f, 30.0f, F("releaseTau"));
 
     // Validate hardware AGC parameters (expanded - allow full ADC range usage)
-    validateFloat(data_.mic.hwTargetLow, 0.05f, 0.5f, F("hwTargetLow"));
-    validateFloat(data_.mic.hwTargetHigh, 0.1f, 0.9f, F("hwTargetHigh"));
+    validateFloat(data_.mic.hwTarget, 0.05f, 0.9f, F("hwTarget"));
 
     // Validate onset detection thresholds (two-band system)
     validateFloat(data_.mic.onsetThreshold, 1.5f, 5.0f, F("onsetThreshold"));
     validateFloat(data_.mic.riseThreshold, 1.1f, 2.0f, F("riseThreshold"));
+
+    // Validate advanced onset detection parameters (v18+)
+    validateFloat(data_.mic.baselineAttackTau, 0.01f, 1.0f, F("baselineAttackTau"));
+    validateFloat(data_.mic.baselineReleaseTau, 0.5f, 10.0f, F("baselineReleaseTau"));
+    validateFloat(data_.mic.logCompressionFactor, 0.0f, 10.0f, F("logCompressionFactor"));
+    validateUint32(data_.mic.riseWindowMs, 20, 500, F("riseWindowMs"));
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
@@ -194,12 +209,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
     // Hardware AGC parameters (primary - raw input tracking)
-    mic.hwTargetLow = data_.mic.hwTargetLow;
-    mic.hwTargetHigh = data_.mic.hwTargetHigh;
+    mic.hwTarget = data_.mic.hwTarget;
 
     // Onset detection thresholds (two-band system)
     mic.onsetThreshold = data_.mic.onsetThreshold;
     mic.riseThreshold = data_.mic.riseThreshold;
+
+    // Advanced onset detection parameters
+    mic.baselineAttackTau = data_.mic.baselineAttackTau;
+    mic.baselineReleaseTau = data_.mic.baselineReleaseTau;
+    mic.logCompressionFactor = data_.mic.logCompressionFactor;
+    mic.riseWindowMs = data_.mic.riseWindowMs;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -221,12 +241,17 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.peakTau = mic.peakTau;
     data_.mic.releaseTau = mic.releaseTau;
     // Hardware AGC parameters (primary - raw input tracking)
-    data_.mic.hwTargetLow = mic.hwTargetLow;
-    data_.mic.hwTargetHigh = mic.hwTargetHigh;
+    data_.mic.hwTarget = mic.hwTarget;
 
     // Onset detection thresholds (two-band system)
     data_.mic.onsetThreshold = mic.onsetThreshold;
     data_.mic.riseThreshold = mic.riseThreshold;
+
+    // Advanced onset detection parameters
+    data_.mic.baselineAttackTau = mic.baselineAttackTau;
+    data_.mic.baselineReleaseTau = mic.baselineReleaseTau;
+    data_.mic.logCompressionFactor = mic.logCompressionFactor;
+    data_.mic.riseWindowMs = mic.riseWindowMs;
 
     saveToFlash();
     dirty_ = false;

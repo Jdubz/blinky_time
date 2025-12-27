@@ -50,10 +50,10 @@ public:
   float peakTau        = 2.0f;      // Peak adaptation speed (attack time, seconds)
   float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
 
-  // Hardware gain targets (adapts to raw ADC input for best signal quality)
+  // Hardware gain target (adapts to raw ADC input for best signal quality)
   // Note: hwGainMin/Max are hardware limits (0-80 for nRF52840 PDM), not configurable
-  float    hwTargetLow     = 0.15f;   // If raw input below this, increase HW gain
-  float    hwTargetHigh    = 0.35f;   // If raw input above this, decrease HW gain
+  // Dead zone: ±0.01 around target (no adjustment if within range)
+  float    hwTarget = 0.35f;   // Target raw input level for optimal ADC quality
 
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
@@ -76,7 +76,12 @@ public:
 
   // Onset detection timing (tunable)
   uint16_t onsetCooldownMs = 80;  // Cooldown between detections (default: 80ms = 12.5 hits/sec max)
-  float baselineTau = 0.5f;       // Baseline adaptation time constant (default: 0.5s)
+
+  // NEW: Advanced onset detection parameters (tunable via serial console)
+  float baselineAttackTau = 0.1f;    // Baseline fast attack when energy drops (default: 0.1s = 100ms)
+  float baselineReleaseTau = 2.0f;   // Baseline slow release when energy rises (default: 2.0s)
+  float logCompressionFactor = 0.0f; // Log compression: 0=disabled, 1.0=aubio standard (default: disabled for low signals)
+  uint16_t riseWindowMs = 100;       // Multi-frame rise detection window (default: 100ms)
 
   // Zero-crossing rate (for additional context)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
@@ -172,7 +177,13 @@ private:
   float prevLowEnergy = 0.0f;
   float prevHighEnergy = 0.0f;
 
-  // Baselines per band (slow-adapting average)
+  // Multi-frame rise detection: track recent minimum energy
+  float lowEnergyMin = 0.0f;
+  float highEnergyMin = 0.0f;
+  uint32_t lastLowMinMs = 0;
+  uint32_t lastHighMinMs = 0;
+
+  // Baselines per band (slow-adapting average with asymmetric attack/release)
   float lowBaseline = 0.0f;
   float highBaseline = 0.0f;
 

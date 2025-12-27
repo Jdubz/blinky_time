@@ -205,10 +205,23 @@ program
     // Launch browser
     if (!quiet) console.error('Launching browser...');
 
+    // SECURITY WARNING: These flags disable critical browser security features!
+    // --allow-file-access-from-files: Allows file:// URLs to access other local files
+    // --disable-web-security: Disables same-origin policy (DANGEROUS!)
+    //
+    // These flags are ONLY acceptable because:
+    // 1. This is a LOCAL TESTING TOOL (not production code)
+    // 2. Browser is launched programmatically, not exposed to web
+    // 3. Only loads local HTML + WAV files from known safe directories
+    //
+    // DO NOT use these flags in any production or web-facing context!
+    // Alternative for production: Use a local HTTP server instead of file:// URLs
     const browser = await chromium.launch({
       headless: options.headless ?? false,
       args: [
         '--autoplay-policy=no-user-gesture-required',
+        '--allow-file-access-from-files',  // Required for file:// → file:// access (WAV loading)
+        '--disable-web-security',           // Required for CORS with local files
       ],
     });
 

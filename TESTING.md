@@ -10,7 +10,19 @@ The testing system allows you to:
 - Compare parameter changes quantitatively
 - Export results for analysis
 
-**Key insight:** The Arduino device doesn't know it's being tested - it just sends transient events as usual. The blinky-console handles all the test intelligence.
+**Key insight:** The Arduino device doesn't know it's being tested - it just sends transient events as usual.
+
+## Actual Testing Architecture
+
+The testing system consists of three independent components:
+
+1. **blinky-console** (React PWA) - Test backend exists (`testPatterns.ts`, `testMetrics.ts`), but UI not implemented yet
+2. **blinky-test-player** (CLI) - Standalone pattern player with real drum samples
+3. **blinky-serial-mcp** (MCP Server) - **Primary testing interface** via MCP tools
+
+**Recommended workflow**: Use the `run_test` MCP tool from blinky-serial-mcp server (see `.mcp.json`). It handles the complete pipeline: pattern playback + detection recording + metrics calculation.
+
+For details, see `blinky-serial-mcp/src/index.ts:580-805`.
 
 ---
 
