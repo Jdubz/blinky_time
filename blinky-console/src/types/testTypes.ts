@@ -1,10 +1,11 @@
 /**
  * Types for transient detection testing system
+ * Simplified single-band amplitude spike detection
  */
 
-export type TransientType = 'low' | 'high';
+export type TransientType = 'transient';
 
-// Legacy alias for backwards compatibility
+// Legacy aliases for backwards compatibility
 export type PercussionType = TransientType;
 
 /**
@@ -40,12 +41,11 @@ export interface TestMetrics {
 }
 
 /**
- * Per-band metrics breakdown
+ * Metrics breakdown for simplified single-band detection
  */
 export interface TypeMetrics {
-  low: TestMetrics; // Low band (50-200 Hz, bass transients)
-  high: TestMetrics; // High band (2-8 kHz, brightness transients)
-  overall: TestMetrics;
+  transient: TestMetrics; // Simplified amplitude spike detection
+  overall: TestMetrics; // Overall metrics (same as transient for single-band)
 }
 
 /**

@@ -239,10 +239,6 @@ describe('App', () => {
         raw: 0.25,
         h: 32,
         alive: 1,
-        lo: 0,
-        hi: 1,
-        los: 0.0,
-        his: 0.82,
         z: 0.15,
       };
 

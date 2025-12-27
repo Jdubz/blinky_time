@@ -35,10 +35,6 @@ export interface AudioSample {
   raw: number; // raw ADC level (what HW gain targets, 0-1 range)
   h: number; // hardware gain (PDM gain setting, 0-80)
   alive: 0 | 1; // PDM status (0=dead, 1=alive)
-  lo: 0 | 1; // low band onset (bass transient, 50-200 Hz)
-  hi: 0 | 1; // high band onset (brightness transient, 2-8 kHz)
-  los: number; // low band onset strength (0-1, 0 at threshold, 1.0 at 3x threshold)
-  his: number; // high band onset strength (0-1, 0 at threshold, 1.0 at 3x threshold)
   z: number; // zero-crossing rate (0.0-1.0)
 }
 
@@ -61,13 +57,11 @@ export interface BatteryMessage {
 }
 
 // Transient detection message from `{"type":"TRANSIENT",...}` messages
+// Simplified single-band amplitude spike detection
 export interface TransientMessage {
   type: 'TRANSIENT';
   timestampMs: number;
-  low: boolean; // Low band onset (bass transient)
-  high: boolean; // High band onset (brightness transient)
-  lowStrength: number; // Low band strength (0-1)
-  highStrength: number; // High band strength (0-1)
+  strength: number; // Transient strength (0-1, LOUD + SUDDEN spike detection)
 }
 
 // Legacy percussion message type for backwards compatibility

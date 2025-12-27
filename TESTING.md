@@ -1,6 +1,6 @@
-# Onset Detection Testing Guide
+# Transient Detection Testing Guide
 
-This guide explains how to use the onset detection testing system to measure and improve algorithm accuracy.
+This guide explains how to use the transient detection testing system to measure and improve algorithm accuracy using simplified amplitude spike detection.
 
 ## Overview
 
@@ -46,7 +46,7 @@ time,type,strength
 
 **Fields:**
 - `time`: Seconds from audio start
-- `type`: `low` (bass, 50-200 Hz) or `high` (brightness, 2-8 kHz)
+- `type`: `transient` (simplified single-band amplitude spike detection)
 - `strength`: 0.0-1.0 (how strong the hit is)
 
 ### 2. Run a Test
@@ -83,13 +83,13 @@ time,type,strength
 1. **Baseline Test**
    ```
    Run test → F1: 75%
-   Note: Low recall (65%), missing high-band transients
+   Note: Low recall (65%), missing some transients
    ```
 
 2. **Adjust Parameters**
    ```
-   Go to Settings → Inputs tab → Onset Detection
-   Lower "Onset Threshold" from 2.5 to 2.0
+   Go to Settings → Inputs tab → Transient Detection
+   Lower "Hit Threshold" from 3.0 to 2.5
    Save settings
    ```
 

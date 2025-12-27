@@ -208,7 +208,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: 'run_test',
-                description: 'Run a complete test: play a pattern and record detections simultaneously. Automatically connects and disconnects from the device.',
+                description: 'Run a complete test: play a pattern and record detections simultaneously. Automatically connects and disconnects from the device. If gain is specified, locks hardware gain for the test and unlocks afterward.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -219,6 +219,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                         port: {
                             type: 'string',
                             description: 'Serial port to connect to (e.g., "COM5"). Required.',
+                        },
+                        gain: {
+                            type: 'number',
+                            description: 'Optional hardware gain to lock during test (0-80). If specified, gain will be locked before test and unlocked (255) after completion.',
                         },
                     },
                     required: ['pattern', 'port'],
@@ -519,11 +523,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case 'run_test': {
-                const { pattern: patternId, port } = args;
+                const { pattern: patternId, port, gain } = args;
                 // Connect to device (will disconnect at end)
                 try {
                     if (!serial.getState().connected) {
                         await serial.connect(port);
+                    }
+                    // Lock hardware gain if specified
+                    if (gain !== undefined) {
+                        await serial.sendCommand(`set hwgainlock ${gain}`);
                     }
                     // Clear buffers and start recording
                     transientBuffer = [];
@@ -711,6 +719,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     };
                 }
                 finally {
+                    // Unlock hardware gain if it was locked
+                    if (gain !== undefined && serial.getState().connected) {
+                        try {
+                            await serial.sendCommand('set hwgainlock 255');
+                        }
+                        catch (err) {
+                            // Log error but don't throw - we still want to disconnect
+                            console.error('Failed to unlock hardware gain:', err);
+                        }
+                    }
                     // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
                     await serial.disconnect();
                 }

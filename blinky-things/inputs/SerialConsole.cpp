@@ -2,6 +2,7 @@
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
+#include "../music/MusicMode.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../types/Version.h"
@@ -12,7 +13,7 @@ extern const DeviceConfig& config;
 SerialConsole* SerialConsole::instance_ = nullptr;
 
 SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), configStorage_(nullptr) {
+    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), music_(nullptr), configStorage_(nullptr) {
     instance_ = this;
 }
 
@@ -81,24 +82,34 @@ void SerialConsole::registerSettings() {
             "HW target level (raw, ±0.01 dead zone)", 0.05f, 0.9f);
     }
 
-    // === ONSET DETECTION SETTINGS (two-band transient detection) ===
+    // === SIMPLIFIED TRANSIENT DETECTION SETTINGS ===
     if (mic_) {
-        settings_.registerFloat("onsetthresh", &mic_->onsetThreshold, "freq",
-            "Onset detection threshold (multiples of baseline)", 1.5f, 5.0f);
-        settings_.registerFloat("risethresh", &mic_->riseThreshold, "freq",
-            "Rise detection threshold (ratio to prev frame)", 1.1f, 2.0f);
-        settings_.registerUint16("cooldown", &mic_->onsetCooldownMs, "freq",
-            "Onset cooldown (ms between detections)", 20, 500);
+        settings_.registerFloat("hitthresh", &mic_->transientThreshold, "transient",
+            "Hit threshold (multiples of recent average)", 1.5f, 10.0f);
+        settings_.registerFloat("attackmult", &mic_->attackMultiplier, "transient",
+            "Attack multiplier (sudden rise ratio)", 1.1f, 2.0f);
+        settings_.registerFloat("avgtau", &mic_->averageTau, "transient",
+            "Recent average tracking time (s)", 0.1f, 5.0f);
+        settings_.registerUint16("cooldown", &mic_->cooldownMs, "transient",
+            "Cooldown between hits (ms)", 20, 500);
+    }
 
-        // Advanced onset detection parameters (for tuning)
-        settings_.registerFloat("baseattack", &mic_->baselineAttackTau, "advanced",
-            "Baseline attack tau (s, fast drop)", 0.01f, 1.0f);
-        settings_.registerFloat("baserelease", &mic_->baselineReleaseTau, "advanced",
-            "Baseline release tau (s, slow rise)", 0.5f, 10.0f);
-        settings_.registerFloat("logcompress", &mic_->logCompressionFactor, "advanced",
-            "Log compression factor (0=off, 1.0=standard)", 0.0f, 10.0f);
-        settings_.registerUint16("risewindow", &mic_->riseWindowMs, "advanced",
-            "Multi-frame rise window (ms)", 20, 500);
+    // === MUSIC MODE SETTINGS ===
+    if (music_) {
+        settings_.registerFloat("musicthresh", &music_->activationThreshold, "music",
+            "Music mode activation threshold (0-1)", 0.0f, 1.0f);
+        settings_.registerUint8("musicbeats", &music_->minBeatsToActivate, "music",
+            "Stable beats to activate", 2, 16);
+        settings_.registerUint8("musicmissed", &music_->maxMissedBeats, "music",
+            "Missed beats before deactivation", 4, 16);
+        settings_.registerFloat("bpmmin", &music_->bpmMin, "music",
+            "Minimum BPM", 40.0f, 120.0f);
+        settings_.registerFloat("bpmmax", &music_->bpmMax, "music",
+            "Maximum BPM", 120.0f, 240.0f);
+        settings_.registerFloat("pllkp", &music_->pllKp, "music",
+            "PLL proportional gain (responsiveness)", 0.01f, 0.5f);
+        settings_.registerFloat("pllki", &music_->pllKi, "music",
+            "PLL integral gain (stability)", 0.001f, 0.1f);
     }
 
 }
@@ -263,12 +274,24 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
-    if (strcmp(cmd, "test reset baselines") == 0) {
-        if (mic_) {
-            mic_->resetBaselines();
-            Serial.println(F("OK baselines reset"));
+    // Note: "test reset baselines" command removed with simplified transient detection
+
+    // === MUSIC MODE STATUS ===
+    if (strcmp(cmd, "music") == 0) {
+        if (music_) {
+            Serial.println(F("=== Music Mode Status ==="));
+            Serial.print(F("Active: "));
+            Serial.println(music_->active ? F("YES") : F("NO"));
+            Serial.print(F("BPM: "));
+            Serial.println(music_->bpm);
+            Serial.print(F("Phase: "));
+            Serial.println(music_->phase);
+            Serial.print(F("Beat #: "));
+            Serial.println(music_->beatNumber);
+            Serial.print(F("Confidence: "));
+            Serial.println(music_->getConfidence());
         } else {
-            Serial.println(F("ERROR no mic"));
+            Serial.println(F("Music mode not available"));
         }
         return true;
     }
@@ -320,19 +343,15 @@ void SerialConsole::restoreDefaults() {
         fireGenerator_->resetToDefaults();
     }
 
-    // Restore mic defaults (window/range normalization and onset detection)
+    // Restore mic defaults (window/range normalization and simplified transient detection)
     if (mic_) {
         mic_->peakTau = Defaults::PeakTau;              // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
         mic_->hwTarget = 0.35f;                         // Target raw input level (±0.01 dead zone)
-        mic_->onsetThreshold = Defaults::OnsetThreshold; // 2.5x baseline
-        mic_->riseThreshold = Defaults::RiseThreshold;   // 1.5x rise required
-        mic_->onsetCooldownMs = Defaults::OnsetCooldownMs; // 80ms cooldown
-        // Advanced parameters
-        mic_->baselineAttackTau = 0.1f;    // 100ms attack
-        mic_->baselineReleaseTau = 2.0f;   // 2s release
-        mic_->logCompressionFactor = 0.0f; // Disabled
-        mic_->riseWindowMs = 100;          // 100ms window
+        mic_->transientThreshold = 3.0f;                // 3x louder than recent average
+        mic_->attackMultiplier = 1.3f;                  // 30% sudden rise required
+        mic_->averageTau = 0.8f;                        // Recent average tracking time
+        mic_->cooldownMs = 80;                          // 80ms cooldown between hits
     }
 }
 
@@ -347,27 +366,21 @@ void SerialConsole::streamTick() {
         streamLastMs_ = now;
 
         // Output compact JSON for web app (abbreviated field names for serial bandwidth)
-        // Format: {"a":{"l":0.45,"t":0.85,"pk":0.32,"vl":0.04,"raw":0.12,"h":32,"alive":1,"lo":0,"hi":1,"los":0.0,"his":0.82,"z":0.15}}
+        // Format: {"a":{"l":0.45,"t":0.85,"pk":0.32,"vl":0.04,"raw":0.12,"h":32,"alive":1,"z":0.15}}
         //
         // Field Mapping (abbreviated → full name : range):
         // l     → level            : 0-1 (post-range-mapping output, noise-gated)
-        // t     → transient        : 0-1 (max onset strength: low/high band, normalized)
+        // t     → transient        : 0-1 (simplified amplitude spike strength, LOUD + SUDDEN detection)
         // pk    → peak             : 0-1 (current tracked peak for window normalization, raw range)
         // vl    → valley           : 0-1 (current tracked valley for window normalization, raw range)
         // raw   → raw ADC level    : 0-1 (what HW gain targets, pre-normalization)
         // h     → hardware gain    : 0-80 (PDM gain setting)
         // alive → PDM alive status : 0 or 1 (microphone health: 0=dead, 1=working)
-        // lo    → low band onset   : 0 or 1 (boolean flag: bass transient detected, 50-200 Hz)
-        // hi    → high band onset  : 0 or 1 (boolean flag: brightness transient detected, 2-8 kHz)
-        // los   → low strength     : 0-1 (normalized: 0 at threshold, 1.0 at 3x threshold)
-        // his   → high strength    : 0-1 (normalized: 0 at threshold, 1.0 at 3x threshold)
         // z     → zero-crossing    : 0-1 (zero-crossing rate, for frequency classification)
         //
         // Debug mode additional fields:
-        // lob   → low baseline     : float (adaptive baseline for low band)
-        // hib   → high baseline    : float (adaptive baseline for high band)
-        // lop   → low prev energy  : float (previous frame energy for rise calculation)
-        // hip   → high prev energy : float (previous frame energy for rise calculation)
+        // avg   → recent average   : float (rolling average for transient threshold)
+        // prev  → previous level   : float (previous frame level for attack detection)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
@@ -382,27 +395,15 @@ void SerialConsole::streamTick() {
         Serial.print(mic_->getHwGain());
         Serial.print(F(",\"alive\":"));
         Serial.print(mic_->isPdmAlive() ? 1 : 0);
-        Serial.print(F(",\"lo\":"));
-        Serial.print(mic_->getLowOnset() ? 1 : 0);
-        Serial.print(F(",\"hi\":"));
-        Serial.print(mic_->getHighOnset() ? 1 : 0);
-        Serial.print(F(",\"los\":"));
-        Serial.print(mic_->getLowStrength(), 2);
-        Serial.print(F(",\"his\":"));
-        Serial.print(mic_->getHighStrength(), 2);
         Serial.print(F(",\"z\":"));
         Serial.print(mic_->zeroCrossingRate, 2);
 
-        // Debug mode: add baseline and previous energy fields
+        // Debug mode: add transient detection internal state
         if (streamDebug_) {
-            Serial.print(F(",\"lob\":"));
-            Serial.print(mic_->getLowBaseline(), 4);
-            Serial.print(F(",\"hib\":"));
-            Serial.print(mic_->getHighBaseline(), 4);
-            Serial.print(F(",\"lop\":"));
-            Serial.print(mic_->getPrevLowEnergy(), 4);
-            Serial.print(F(",\"hip\":"));
-            Serial.print(mic_->getPrevHighEnergy(), 4);
+            Serial.print(F(",\"avg\":"));
+            Serial.print(mic_->getRecentAverage(), 4);
+            Serial.print(F(",\"prev\":"));
+            Serial.print(mic_->getPreviousLevel(), 4);
         }
 
         Serial.println(F("}}"));

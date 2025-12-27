@@ -47,6 +47,9 @@
 #include "config/ConfigStorage.cpp"     // Persistent settings storage
 #include "config/SettingsRegistry.cpp"  // Settings abstraction layer
 
+// Music detection implementations
+#include "music/MusicMode.cpp"
+
 // Test implementations (only when testing enabled)
 #ifdef ENABLE_TESTING
 #include "tests/GeneratorTestRunner.cpp"

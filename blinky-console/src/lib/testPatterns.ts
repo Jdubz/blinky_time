@@ -4,12 +4,11 @@
  * Each pattern defines a sequence of transient hits with exact timing.
  * Ground truth is automatically derived from the pattern definition.
  *
- * Two-band system:
- * - 'low': Bass transients (50-200 Hz)
- * - 'high': Brightness transients (2-8 kHz)
+ * Simplified single-band system:
+ * - 'transient': Unified transient detection
  */
 
-import type { TestPattern, GroundTruthHit, TransientType } from '../types/testTypes';
+import type { TestPattern, GroundTruthHit } from '../types/testTypes';
 
 /**
  * Helper to convert BPM and beat number to time in seconds
@@ -20,13 +19,13 @@ function beatToTime(beat: number, bpm: number): number {
 }
 
 /**
- * Simple alternating pattern (120 BPM, 8 bars)
- * Low transients on 1 and 3, high transients on 2 and 4
+ * Simple beat pattern (120 BPM, 8 bars)
+ * Transients on all four beats
  */
 export const SIMPLE_BEAT: TestPattern = {
   id: 'simple-beat',
-  name: 'Alternating Low/High',
-  description: 'Low on 1&3, high on 2&4, alternating (120 BPM, 8 bars)',
+  name: 'Simple Beat',
+  description: 'Transients on all beats (120 BPM, 8 bars)',
   durationMs: 16000, // 8 bars at 120 BPM
   bpm: 120,
   hits: (() => {
@@ -37,27 +36,25 @@ export const SIMPLE_BEAT: TestPattern = {
     for (let bar = 0; bar < bars; bar++) {
       const barOffset = bar * 4; // 4 beats per bar
 
-      // Low on beats 1 and 3
+      // Transients on all beats
       hits.push({
         time: beatToTime(barOffset + 0, bpm),
-        type: 'low',
+        type: 'transient',
         strength: 0.9,
       });
-      hits.push({
-        time: beatToTime(barOffset + 2, bpm),
-        type: 'low',
-        strength: 0.9,
-      });
-
-      // High on beats 2 and 4
       hits.push({
         time: beatToTime(barOffset + 1, bpm),
-        type: 'high',
+        type: 'transient',
         strength: 0.8,
       });
       hits.push({
+        time: beatToTime(barOffset + 2, bpm),
+        type: 'transient',
+        strength: 0.9,
+      });
+      hits.push({
         time: beatToTime(barOffset + 3, bpm),
-        type: 'high',
+        type: 'transient',
         strength: 0.8,
       });
     }
@@ -67,13 +64,13 @@ export const SIMPLE_BEAT: TestPattern = {
 };
 
 /**
- * Low band barrage - rapid bass transients at varying intervals
- * Tests low-band detection accuracy and timing precision
+ * Rapid barrage - rapid transients at varying intervals
+ * Tests detection accuracy and timing precision
  */
 export const LOW_BARRAGE: TestPattern = {
   id: 'low-barrage',
-  name: 'Low Band Barrage',
-  description: 'Rapid bass transients at varying intervals - tests low-band detection accuracy',
+  name: 'Rapid Barrage',
+  description: 'Rapid transients at varying intervals - tests detection accuracy',
   durationMs: 8000,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
@@ -83,7 +80,7 @@ export const LOW_BARRAGE: TestPattern = {
     for (const interval of intervals) {
       hits.push({
         time,
-        type: 'low',
+        type: 'transient',
         strength: 0.9,
       });
       time += interval;
@@ -92,7 +89,7 @@ export const LOW_BARRAGE: TestPattern = {
       for (let i = 0; i < 3; i++) {
         hits.push({
           time,
-          type: 'low',
+          type: 'transient',
           strength: 0.9,
         });
         time += interval;
@@ -104,13 +101,13 @@ export const LOW_BARRAGE: TestPattern = {
 };
 
 /**
- * High band burst - rapid high-frequency transients
- * Tests high-band detection with rapid consecutive hits
+ * Burst pattern - rapid consecutive transients
+ * Tests detection with rapid consecutive hits
  */
 export const HIGH_BURST: TestPattern = {
   id: 'high-burst',
-  name: 'High Band Burst',
-  description: 'Rapid high-frequency transients - tests high-band detection accuracy',
+  name: 'Burst Pattern',
+  description: 'Rapid consecutive transients - tests detection accuracy',
   durationMs: 6000,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
@@ -126,7 +123,7 @@ export const HIGH_BURST: TestPattern = {
       for (let i = 0; i < burst.count; i++) {
         hits.push({
           time: burst.start + i * burst.interval,
-          type: 'high',
+          type: 'transient',
           strength: 0.8,
         });
       }
@@ -137,13 +134,13 @@ export const HIGH_BURST: TestPattern = {
 };
 
 /**
- * Mixed pattern - interleaved low and high with varying dynamics
- * Tests classification when both bands are active
+ * Mixed pattern - varying rhythmic intervals
+ * Tests detection with complex timing
  */
 export const MIXED_PATTERN: TestPattern = {
   id: 'mixed-pattern',
-  name: 'Mixed Low/High',
-  description: 'Interleaved low and high transients with varying dynamics',
+  name: 'Mixed Rhythm',
+  description: 'Transients at varying rhythmic intervals',
   durationMs: 10000,
   bpm: 100,
   hits: (() => {
@@ -151,20 +148,20 @@ export const MIXED_PATTERN: TestPattern = {
     const bpm = 100;
     const duration = 10; // 10 seconds
 
-    // Low in quarter notes
+    // Transients in quarter notes
     for (let beat = 0; beat < duration * (bpm / 60); beat += 1) {
       hits.push({
         time: beatToTime(beat, bpm),
-        type: 'low',
+        type: 'transient',
         strength: 0.9,
       });
     }
 
-    // High in eighth notes (offset by half beat)
+    // Additional transients in eighth notes (offset by half beat)
     for (let beat = 0.5; beat < duration * (bpm / 60); beat += 1) {
       hits.push({
         time: beatToTime(beat, bpm),
-        type: 'high',
+        type: 'transient',
         strength: 0.7,
       });
     }
@@ -190,11 +187,9 @@ export const TIMING_TEST: TestPattern = {
       const sectionStart = hits.length > 0 ? hits[hits.length - 1].time + 0.5 : 0.5;
 
       for (let i = 0; i < 10; i++) {
-        // Alternate between low and high
-        const types: TransientType[] = ['low', 'high'];
         hits.push({
           time: sectionStart + i * interval,
-          type: types[i % 2],
+          type: 'transient',
           strength: 0.8,
         });
       }
@@ -205,29 +200,23 @@ export const TIMING_TEST: TestPattern = {
 };
 
 /**
- * Simultaneous hits - low and high at exact same time
- * Tests detection when both bands trigger simultaneously
+ * Sparse pattern - transients at irregular intervals
+ * Tests detection with varying gaps
  */
 export const SIMULTANEOUS_TEST: TestPattern = {
   id: 'simultaneous',
-  name: 'Simultaneous Hits',
-  description: 'Low and high transients at exactly the same time - tests concurrent detection',
+  name: 'Sparse Pattern',
+  description: 'Transients at irregular intervals - tests detection with varying gaps',
   durationMs: 8000,
   hits: (() => {
     const hits: GroundTruthHit[] = [];
     const times = [0.5, 1.0, 1.5, 2.0, 2.75, 3.5, 4.5, 5.5, 6.25, 7.0];
 
     for (const time of times) {
-      // Both low and high at same time
       hits.push({
         time,
-        type: 'low',
+        type: 'transient',
         strength: 0.9,
-      });
-      hits.push({
-        time,
-        type: 'high',
-        strength: 0.8,
       });
     }
 

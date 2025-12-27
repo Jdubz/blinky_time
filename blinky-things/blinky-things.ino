@@ -76,6 +76,7 @@ BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
+MusicMode* music = nullptr;        // Beat detection and tempo tracking
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
@@ -130,6 +131,7 @@ void showFireEffect() {
  */
 void cleanup() {
   delete console;    console = nullptr;
+  delete music;      music = nullptr;
   delete renderer;   renderer = nullptr;
   delete currentEffect; currentEffect = nullptr;
   delete currentGenerator; currentGenerator = nullptr;
@@ -337,6 +339,19 @@ void setup() {
     Serial.println(F("Battery monitor initialized"));
   }
 
+  // Initialize music mode for beat detection and tempo tracking
+  music = new(std::nothrow) MusicMode(DefaultHal::time());
+  if (!music) {
+    haltWithError(F("ERROR: MusicMode allocation failed"));
+  }
+  Serial.println(F("Music mode initialized"));
+
+  // Connect music mode to fire generator for beat-synced effects
+  if (fireGen && music) {
+    fireGen->setMusicMode(music);
+    Serial.println(F("Fire generator connected to music mode"));
+  }
+
   // Initialize serial console for interactive settings management
   // Uses fireGen created on line 240 for direct parameter access
   console = new(std::nothrow) SerialConsole(fireGen, mic);
@@ -345,6 +360,7 @@ void setup() {
   }
   console->setConfigStorage(&configStorage);
   console->setBatteryMonitor(battery);
+  console->setMusicMode(music);
   console->begin();
   Serial.println(F("Serial console initialized"));
 
@@ -373,22 +389,24 @@ void loop() {
   lastMs = now;
 
   if (mic) mic->update(dt);
+  if (music) music->update(dt);
 
   float energy = mic ? mic->getLevel() : 0.0f;
   float hit = mic ? mic->getTransient() : 0.0f;
 
   // Send transient detection events for test analysis (always enabled)
-  if (mic && (mic->getLowOnset() || mic->getHighOnset())) {
+  // AND notify music mode of transients for beat tracking
+  if (mic && hit > 0.0f) {
+    // Notify music mode of transient (simplified - no band differentiation)
+    if (music) {
+      music->onOnsetDetected(now, true);  // isLowBand=true (not used in simplified detection)
+    }
+
+    // TRANSIENT message: simplified single-band detection
     Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
     Serial.print(now);
-    Serial.print(F(",\"low\":"));
-    Serial.print(mic->getLowOnset() ? "true" : "false");
-    Serial.print(F(",\"high\":"));
-    Serial.print(mic->getHighOnset() ? "true" : "false");
-    Serial.print(F(",\"lowStrength\":"));
-    Serial.print(mic->getLowStrength(), 2);
-    Serial.print(F(",\"highStrength\":"));
-    Serial.print(mic->getHighStrength(), 2);
+    Serial.print(F(",\"strength\":"));
+    Serial.print(hit, 2);
     Serial.println(F("}"));
   }
 

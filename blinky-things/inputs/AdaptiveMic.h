@@ -4,11 +4,14 @@
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
 
-// AdaptiveMic - Clean audio input with window/range normalization and onset detection
+// AdaptiveMic - Clean audio input with window/range normalization and transient detection
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
 // - Auto-ranging: Tracks peak/valley, maps to 0-1 output (no clipping)
-// - Two-band onset detection: low (bass) and high (brightness/attack)
+// - Simplified transient detection: amplitude spike detection (LOUD + SUDDEN + INFREQUENT)
 // - Hardware gain adapts to environment over minutes
+//
+// NOTE: "Transient detection" is the simplified term for what was previously called "onset detection".
+// MusicMode still uses onOnsetDetected() callback for historical reasons, but both refer to the same concept.
 
 namespace MicConstants {
     constexpr float MIN_DT_SECONDS = 0.0001f;         // Minimum dt clamp (0.1ms)
@@ -22,21 +25,21 @@ namespace MicConstants {
 }
 
 /**
- * AdaptiveMic - Audio input with window/range normalization and onset detection
+ * AdaptiveMic - Audio input with window/range normalization and transient detection
  *
  * Architecture:
  * - Raw samples → Normalize (0-1) → Window/Range mapping → Noise gate → Output
- * - Two-band onset detection via biquad bandpass filters:
- *   - Low band (50-200 Hz): Bass transients (kicks, bass hits)
- *   - High band (2-8 kHz): Brightness/attack transients (snare crack, hi-hats)
- * - Onset detection: Detects RISING energy, not just high energy
+ * - Simplified transient detection: "The Drummer's Algorithm"
+ *   - LOUD: Signal significantly louder than recent average (3x default)
+ *   - SUDDEN: Rapidly rising (30% increase from previous frame)
+ *   - INFREQUENT: Cooldown prevents double-triggers (80ms default)
  * - Hardware-primary: HW gain optimizes ADC input, window/range maps to 0-1 output
  *
- * Onset Detection Algorithm:
- * - Tracks energy in each frequency band
- * - Detects when energy RISES sharply (>1.5x previous frame)
- * - AND exceeds baseline by threshold (2x baseline)
- * - Prevents false triggers on sustained audio
+ * Transient Detection Algorithm:
+ * - Tracks recent average level with exponential moving average
+ * - Detects amplitude spikes that are LOUD + SUDDEN + past cooldown
+ * - Returns strength: 0.0 at threshold, 1.0 at 2x threshold
+ * - Focuses on musical events (kicks, snares, bass drops), not waveform analysis
  *
  * Window/Range Normalization:
  * - Peak tracker follows actual signal levels (exponential moving average)
@@ -59,29 +62,16 @@ public:
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
 
-  // Combined transient output: single-frame impulse with strength (max of low/high)
-  float transient          = 0.0f;    // Impulse strength (0.0 = none, typically 0.0-1.0, can exceed 1.0 for very strong hits)
+  // SIMPLIFIED TRANSIENT DETECTION
+  // Single-frame impulse when amplitude spike detected
+  float transient          = 0.0f;    // Impulse strength (0.0 = none, 1.0 = strong hit)
   uint32_t lastTransientMs = 0;
 
-  // Two-band onset detection
-  bool  lowOnset   = false;       // Single-frame low-band onset (bass transient)
-  bool  highOnset  = false;       // Single-frame high-band onset (brightness transient)
-  float lowStrength  = 0.0f;      // Low-band onset strength (0.0-1.0)
-  float highStrength = 0.0f;      // High-band onset strength (0.0-1.0)
-
-  // Onset detection thresholds (tunable)
-  // Higher values = less sensitive, fewer false positives
-  float onsetThreshold = 2.5f;    // Energy must exceed baseline * threshold (default: 2.5x)
-  float riseThreshold  = 1.5f;    // Energy must rise by this factor from previous frame (default: 1.5x)
-
-  // Onset detection timing (tunable)
-  uint16_t onsetCooldownMs = 80;  // Cooldown between detections (default: 80ms = 12.5 hits/sec max)
-
-  // NEW: Advanced onset detection parameters (tunable via serial console)
-  float baselineAttackTau = 0.1f;    // Baseline fast attack when energy drops (default: 0.1s = 100ms)
-  float baselineReleaseTau = 2.0f;   // Baseline slow release when energy rises (default: 2.0s)
-  float logCompressionFactor = 0.0f; // Log compression: 0=disabled, 1.0=aubio standard (default: disabled for low signals)
-  uint16_t riseWindowMs = 100;       // Multi-frame rise detection window (default: 100ms)
+  // Transient detection parameters (tunable)
+  float transientThreshold = 3.0f;    // Must be 3x louder than recent average
+  float attackMultiplier   = 1.3f;    // Must be 30% louder than previous frame (rapid rise)
+  float averageTau         = 0.8f;    // Recent average tracking time (seconds)
+  uint16_t cooldownMs      = 80;      // Cooldown between hits (ms)
 
   // Zero-crossing rate (for additional context)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
@@ -103,21 +93,8 @@ public:
   inline int getHwGain() const { return currentHardwareGain; }
   inline uint32_t getIsrCount() const { return s_isrCount; }
   inline bool isPdmAlive() const { return pdmAlive; }
-
-  // Onset detection getters
-  inline bool getLowOnset() const { return lowOnset; }
-  inline bool getHighOnset() const { return highOnset; }
-  inline float getLowStrength() const { return lowStrength; }
-  inline float getHighStrength() const { return highStrength; }
-
-  // Debug getters for testing/tuning (exposes internal detection state)
-  inline float getLowBaseline() const { return lowBaseline; }
-  inline float getHighBaseline() const { return highBaseline; }
-  inline float getPrevLowEnergy() const { return prevLowEnergy; }
-  inline float getPrevHighEnergy() const { return prevHighEnergy; }
-
-  // Reset baselines (for test mode - start fresh detection)
-  void resetBaselines();
+  inline float getRecentAverage() const { return recentAverage; }  // Recent average level for debugging
+  inline float getPreviousLevel() const { return previousLevel; }  // Previous frame level for debugging
 
 public:
   /**
@@ -159,47 +136,15 @@ private:
 
   uint32_t _sampleRate = 16000;
 
-  // Biquad filter state for two-band onset detection
-  // Note: Filter state is only accessed within ISR, no volatile needed
-  // Low band filter: bandpass 50-200 Hz (center: 100 Hz, Q=0.7)
-  float lowZ1 = 0.0f, lowZ2 = 0.0f;
-  float lowB0, lowB1, lowB2, lowA1, lowA2;
-
-  // High band filter: bandpass 2-8 kHz (center: 4 kHz, Q=0.5)
-  float highZ1 = 0.0f, highZ2 = 0.0f;
-  float highB0, highB1, highB2, highA1, highA2;
-
-  // Energy tracking per band (volatile: accessed from ISR)
-  volatile float lowEnergy = 0.0f;
-  volatile float highEnergy = 0.0f;
-
-  // Previous frame energy for onset detection (rise detection)
-  float prevLowEnergy = 0.0f;
-  float prevHighEnergy = 0.0f;
-
-  // Multi-frame rise detection: track recent minimum energy
-  float lowEnergyMin = 0.0f;
-  float highEnergyMin = 0.0f;
-  uint32_t lastLowMinMs = 0;
-  uint32_t lastHighMinMs = 0;
-
-  // Baselines per band (slow-adapting average with asymmetric attack/release)
-  float lowBaseline = 0.0f;
-  float highBaseline = 0.0f;
-
-  // Timing for cooldowns
-  uint32_t lastLowOnsetMs = 0;
-  uint32_t lastHighOnsetMs = 0;
+  // SIMPLIFIED AMPLITUDE SPIKE DETECTION
+  // Only 3 variables needed for transient detection
+  float recentAverage = 0.0f;   // Rolling average of audio level (~1 second window)
+  float previousLevel = 0.0f;   // Last frame's level (for attack detection)
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
   void hardwareCalibrate(uint32_t nowMs, float dt);
-
-  // Biquad filter helpers
-  void initBiquadFilters();
-  void calcBiquadBPF(float fc, float Q, float fs, float& b0, float& b1, float& b2, float& a1, float& a2);
-  inline float processBiquad(float input, float& z1, float& z2, float b0, float b1, float b2, float a1, float a2);
-  void detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount);
+  void detectTransients(uint32_t nowMs, float dt);  // Simplified amplitude spike detection
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };
