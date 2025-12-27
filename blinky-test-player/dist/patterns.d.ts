@@ -50,6 +50,38 @@ export declare const FAST_TEMPO: TestPattern;
  */
 export declare const SPARSE_PATTERN: TestPattern;
 /**
+ * CALIBRATED: Strong beats only (120 BPM, 8 bars)
+ * Uses only hard kick and snare samples - should be easy to detect
+ * Expected: ~100% recall with any reasonable threshold
+ */
+export declare const STRONG_BEATS: TestPattern;
+/**
+ * CALIBRATED: Medium beats (120 BPM, 8 bars)
+ * Uses medium kick and snare samples - moderate detection challenge
+ */
+export declare const MEDIUM_BEATS: TestPattern;
+/**
+ * CALIBRATED: Soft beats (120 BPM, 8 bars)
+ * Uses soft kick and snare samples - difficult detection, tests sensitivity
+ */
+export declare const SOFT_BEATS: TestPattern;
+/**
+ * CALIBRATED: Hat rejection test (120 BPM, 8 bars)
+ * Hard kicks/snares with soft hi-hats - tests ability to ignore weak transients
+ * Expected: Detect kicks/snares, reject hi-hats
+ */
+export declare const HAT_REJECTION: TestPattern;
+/**
+ * CALIBRATED: Mixed dynamics (120 BPM, 8 bars)
+ * Realistic pattern with varying loudness - simulates real music
+ */
+export declare const MIXED_DYNAMICS: TestPattern;
+/**
+ * CALIBRATED: Tempo sweep (4 bars each at 80, 100, 120, 140 BPM)
+ * Tests detection across tempo range
+ */
+export declare const TEMPO_SWEEP: TestPattern;
+/**
  * All available test patterns
  */
 export declare const TEST_PATTERNS: TestPattern[];

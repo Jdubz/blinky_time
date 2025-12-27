@@ -413,7 +413,31 @@ void SerialConsole::streamTick() {
             Serial.print(mic_->getPreviousLevel(), 4);
         }
 
-        Serial.println(F("}}"));
+        Serial.print(F("}"));
+
+        // Music mode telemetry (always include when music_ is available)
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"conf":0.82,"q":1,"h":0,"w":0}
+        // a = active, bpm = tempo, ph = phase, conf = confidence
+        // q/h/w = quarter/half/whole note events (1 = event this frame)
+        if (music_) {
+            Serial.print(F(",\"m\":{\"a\":"));
+            Serial.print(music_->isActive() ? 1 : 0);
+            Serial.print(F(",\"bpm\":"));
+            Serial.print(music_->getBPM(), 1);
+            Serial.print(F(",\"ph\":"));
+            Serial.print(music_->getPhase(), 2);
+            Serial.print(F(",\"conf\":"));
+            Serial.print(music_->getConfidence(), 2);
+            Serial.print(F(",\"q\":"));
+            Serial.print(music_->quarterNote ? 1 : 0);
+            Serial.print(F(",\"h\":"));
+            Serial.print(music_->halfNote ? 1 : 0);
+            Serial.print(F(",\"w\":"));
+            Serial.print(music_->wholeNote ? 1 : 0);
+            Serial.print(F("}"));
+        }
+
+        Serial.println(F("}"));
     }
 
     // Battery streaming at ~1Hz

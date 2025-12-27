@@ -11,10 +11,19 @@ import { BlinkySerial } from './serial.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // Path to test player CLI
 const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'blinky-test-player', 'dist', 'index.js');
+// Path to test results directory
+const TEST_RESULTS_DIR = join(__dirname, '..', '..', 'test-results');
+// Ensure test results directory exists
+function ensureTestResultsDir() {
+    if (!existsSync(TEST_RESULTS_DIR)) {
+        mkdirSync(TEST_RESULTS_DIR, { recursive: true });
+    }
+}
 // Global serial connection
 const serial = new BlinkySerial();
 // Audio sample buffer for monitoring
@@ -24,6 +33,9 @@ let audioSampleCount = 0;
 let transientBuffer = [];
 let testStartTime = null;
 let audioSampleBuffer = [];
+let musicStateBuffer = [];
+let beatEventBuffer = [];
+let lastMusicState = null;
 // Set up event listeners
 serial.on('audio', (sample) => {
     lastAudioSample = sample;
@@ -36,28 +48,47 @@ serial.on('audio', (sample) => {
             timestampMs,
             level: sample.l,
             raw: sample.raw,
-            lowStrength: sample.los,
-            highStrength: sample.his,
+            transient: sample.t || 0, // Record transient for debugging
         });
-        // Record transients
-        if (sample.lo === 1) {
+        // Record transients (unified detection using 't' field)
+        // The simplified "Drummer's Algorithm" outputs a single transient strength
+        if (sample.t > 0) {
             transientBuffer.push({
                 timestampMs,
-                type: 'low',
-                strength: sample.los,
-            });
-        }
-        if (sample.hi === 1) {
-            transientBuffer.push({
-                timestampMs,
-                type: 'high',
-                strength: sample.his,
+                type: 'unified',
+                strength: sample.t,
             });
         }
     }
 });
 serial.on('error', (err) => {
     console.error('Serial error:', err.message);
+});
+// Music mode event listeners
+serial.on('music', (state) => {
+    lastMusicState = state;
+    // If in test mode, record music state
+    if (testStartTime !== null) {
+        const timestampMs = Date.now() - testStartTime;
+        musicStateBuffer.push({
+            timestampMs,
+            active: state.a === 1,
+            bpm: state.bpm,
+            phase: state.ph,
+            confidence: state.conf,
+        });
+    }
+});
+serial.on('beat', (beat) => {
+    // If in test mode, record beat events
+    if (testStartTime !== null) {
+        const timestampMs = Date.now() - testStartTime;
+        beatEventBuffer.push({
+            timestampMs,
+            bpm: beat.bpm,
+            type: beat.type,
+        });
+    }
 });
 // Create MCP server
 const server = new Server({
@@ -502,16 +533,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
             case 'list_patterns': {
                 // Available patterns (must match blinky-test-player)
-                // These patterns use real drum samples for authentic transient testing
                 const patterns = [
-                    { id: 'basic-drums', name: 'Basic Drum Pattern', durationMs: 16000, description: 'Kick on 1&3, snare on 2&4, hats on 8ths (120 BPM)', instruments: ['kick', 'snare', 'hat'] },
-                    { id: 'kick-focus', name: 'Kick Focus', durationMs: 12000, description: 'Various kick patterns - tests low-band detection', instruments: ['kick'] },
-                    { id: 'snare-focus', name: 'Snare Focus', durationMs: 10000, description: 'Snare patterns including rolls - tests high-band detection', instruments: ['snare'] },
-                    { id: 'hat-patterns', name: 'Hi-Hat Patterns', durationMs: 12000, description: 'Various hi-hat patterns: 8ths, 16ths, offbeats', instruments: ['hat'] },
-                    { id: 'full-kit', name: 'Full Drum Kit', durationMs: 16000, description: 'All drum elements: kick, snare, hat, tom, clap', instruments: ['kick', 'snare', 'hat', 'tom', 'clap'] },
-                    { id: 'simultaneous', name: 'Simultaneous Hits', durationMs: 10000, description: 'Kick + snare/clap at same time - tests concurrent detection', instruments: ['kick', 'snare', 'clap'] },
-                    { id: 'fast-tempo', name: 'Fast Tempo (150 BPM)', durationMs: 10000, description: 'High-speed drum pattern - tests detection at fast tempos', instruments: ['kick', 'snare', 'hat'] },
-                    { id: 'sparse', name: 'Sparse Pattern', durationMs: 15000, description: 'Widely spaced hits - tests detection after silence', instruments: ['kick', 'snare', 'tom', 'clap'] },
+                    // Calibrated patterns (deterministic samples with known loudness)
+                    { id: 'strong-beats', name: 'Strong Beats (Calibrated)', durationMs: 16000, description: 'Hard kicks/snares only - baseline test (120 BPM)', calibrated: true },
+                    { id: 'medium-beats', name: 'Medium Beats (Calibrated)', durationMs: 16000, description: 'Medium kicks/snares - moderate challenge (120 BPM)', calibrated: true },
+                    { id: 'soft-beats', name: 'Soft Beats (Calibrated)', durationMs: 16000, description: 'Soft kicks/snares - sensitivity test (120 BPM)', calibrated: true },
+                    { id: 'hat-rejection', name: 'Hat Rejection (Calibrated)', durationMs: 16000, description: 'Hard beats + soft hats - rejection test (120 BPM)', calibrated: true },
+                    { id: 'mixed-dynamics', name: 'Mixed Dynamics (Calibrated)', durationMs: 16000, description: 'Varying loudness - realistic simulation (120 BPM)', calibrated: true },
+                    { id: 'tempo-sweep', name: 'Tempo Sweep (Calibrated)', durationMs: 16000, description: 'Tests 80, 100, 120, 140 BPM', calibrated: true },
+                    // Legacy patterns (random samples)
+                    { id: 'basic-drums', name: 'Basic Drum Pattern', durationMs: 16000, description: 'Kick on 1&3, snare on 2&4, hats on 8ths (120 BPM)' },
+                    { id: 'kick-focus', name: 'Kick Focus', durationMs: 12000, description: 'Various kick patterns - tests low-band detection' },
+                    { id: 'snare-focus', name: 'Snare Focus', durationMs: 10000, description: 'Snare patterns including rolls - tests high-band detection' },
+                    { id: 'hat-patterns', name: 'Hi-Hat Patterns', durationMs: 12000, description: 'Various hi-hat patterns: 8ths, 16ths, offbeats' },
+                    { id: 'full-kit', name: 'Full Drum Kit', durationMs: 16000, description: 'All drum elements: kick, snare, hat, tom, clap' },
+                    { id: 'simultaneous', name: 'Simultaneous Hits', durationMs: 10000, description: 'Kick + snare/clap at same time - tests concurrent detection' },
+                    { id: 'fast-tempo', name: 'Fast Tempo (150 BPM)', durationMs: 10000, description: 'High-speed drum pattern - tests detection at fast tempos' },
+                    { id: 'sparse', name: 'Sparse Pattern', durationMs: 15000, description: 'Widely spaced hits - tests detection after silence' },
                 ];
                 return {
                     content: [
@@ -536,10 +574,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     // Clear buffers and start recording
                     transientBuffer = [];
                     audioSampleBuffer = [];
-                    // Ensure streaming is on
-                    if (!serial.getState().streaming) {
-                        await serial.startStream();
-                    }
+                    musicStateBuffer = [];
+                    beatEventBuffer = [];
+                    // Use fast streaming (100Hz) for tests to catch transient pulses
+                    // Transients are single-frame pulses that last ~16ms at 60Hz update rate
+                    // Normal streaming at 20Hz (50ms) would miss most of them
+                    await serial.sendCommand('stream fast');
                     // Run the test player CLI and capture output
                     const result = await new Promise((resolve) => {
                         const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
@@ -578,10 +618,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const rawDuration = recordStopTime - (testStartTime || recordStopTime);
                     let detections = [...transientBuffer];
                     let audioSamples = [...audioSampleBuffer];
+                    let musicStates = [...musicStateBuffer];
+                    let beatEvents = [...beatEventBuffer];
                     const recordStartTime = testStartTime;
                     testStartTime = null;
                     transientBuffer = [];
                     audioSampleBuffer = [];
+                    musicStateBuffer = [];
+                    beatEventBuffer = [];
                     if (!result.success) {
                         return {
                             content: [
@@ -609,6 +653,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             ...s,
                             timestampMs: s.timestampMs - timingOffsetMs,
                         })).filter(s => s.timestampMs >= 0);
+                        musicStates = musicStates.map(s => ({
+                            ...s,
+                            timestampMs: s.timestampMs - timingOffsetMs,
+                        })).filter(s => s.timestampMs >= 0);
+                        beatEvents = beatEvents.map(b => ({
+                            ...b,
+                            timestampMs: b.timestampMs - timingOffsetMs,
+                        })).filter(b => b.timestampMs >= 0);
                     }
                     // Calculate stats
                     const lowCount = detections.filter(d => d.type === 'low').length;
@@ -617,16 +669,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     // Calculate F1/precision/recall metrics
                     // Match detections to expected hits within a timing tolerance
                     const TIMING_TOLERANCE_MS = 350; // Allow 350ms timing variance (accounts for audio output latency)
-                    const expectedHits = groundTruth.hits || [];
+                    const STRONG_BEAT_THRESHOLD = 0.8; // Only count strong beats (kicks, snares) not hi-hats
+                    const allHits = groundTruth.hits || [];
+                    // Filter to strong beats only - we want to detect kicks and snares, not hi-hats
+                    const expectedHits = allHits.filter(h => h.strength >= STRONG_BEAT_THRESHOLD);
                     // First pass: estimate systematic audio latency by finding median offset
                     // This helps compensate for consistent delays (speaker output, air travel, mic processing)
                     const offsets = [];
                     detections.forEach((detection) => {
-                        // Find closest expected hit of same type
+                        // Find closest expected hit ('unified' type matches any expected type)
                         let minDist = Infinity;
                         let closestOffset = 0;
                         expectedHits.forEach((expected) => {
-                            if (expected.type !== detection.type)
+                            // 'unified' type matches any expected type (we no longer have dual-band detection)
+                            if (detection.type !== 'unified' && expected.type !== detection.type)
                                 return;
                             const offset = detection.timestampMs - expected.timeMs;
                             if (Math.abs(offset) < Math.abs(minDist)) {
@@ -658,8 +714,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         expectedHits.forEach((expected, eIdx) => {
                             if (matchedExpected.has(eIdx))
                                 return; // Already matched
-                            if (expected.type !== detection.type)
-                                return; // Wrong type
+                            // 'unified' type matches any expected type (we no longer have dual-band detection)
+                            if (detection.type !== 'unified' && expected.type !== detection.type)
+                                return;
                             const dist = Math.abs(correctedTime - expected.timeMs);
                             if (dist < bestMatchDist && dist <= TIMING_TOLERANCE_MS) {
                                 bestMatchDist = dist;
@@ -695,25 +752,88 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         falseNegatives,
                         expectedTotal: expectedHits.length,
                         avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
-                        audioLatencyMs: Math.round(audioLatencyMs), // Estimated systematic audio latency
+                        audioLatencyMs: Math.round(audioLatencyMs),
+                    };
+                    // Calculate music mode metrics
+                    const activeStates = musicStates.filter(s => s.active);
+                    const activationTime = activeStates.length > 0 ? activeStates[0].timestampMs : null;
+                    const avgConfidence = activeStates.length > 0
+                        ? activeStates.reduce((sum, s) => sum + s.confidence, 0) / activeStates.length
+                        : 0;
+                    const avgBpm = activeStates.length > 0
+                        ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length
+                        : 0;
+                    // Get expected BPM from ground truth if available
+                    const expectedBPM = groundTruth.bpm || 0;
+                    const bpmError = expectedBPM > 0 && avgBpm > 0
+                        ? Math.abs(avgBpm - expectedBPM) / expectedBPM * 100
+                        : null;
+                    const musicMetrics = {
+                        activationMs: activationTime,
+                        avgConfidence: Math.round(avgConfidence * 100) / 100,
+                        avgBpm: Math.round(avgBpm * 10) / 10,
+                        expectedBpm: expectedBPM,
+                        bpmError: bpmError !== null ? Math.round(bpmError * 10) / 10 : null,
+                        beatCount: beatEvents.length,
+                    };
+                    // Write detailed results to file (saves tokens)
+                    ensureTestResultsDir();
+                    const timestamp = Date.now();
+                    const detailsFilename = `${patternId}-${timestamp}.json`;
+                    const detailsPath = join(TEST_RESULTS_DIR, detailsFilename);
+                    const fullResults = {
+                        pattern: patternId,
+                        timestamp: new Date(timestamp).toISOString(),
+                        durationMs: duration,
+                        timingOffsetMs,
+                        metrics,
+                        musicMetrics,
+                        groundTruth: result.groundTruth,
+                        detections,
+                        audioSamples,
+                        musicStates,
+                        beatEvents,
+                    };
+                    writeFileSync(detailsPath, JSON.stringify(fullResults, null, 2));
+                    // Also write to latest.json for quick access
+                    writeFileSync(join(TEST_RESULTS_DIR, 'latest.json'), JSON.stringify(fullResults, null, 2));
+                    // Return compact summary only (saves tokens)
+                    const summary = {
+                        pattern: patternId,
+                        durationMs: duration,
+                        transient: {
+                            f1: metrics.f1Score,
+                            precision: metrics.precision,
+                            recall: metrics.recall,
+                            tp: truePositives,
+                            fp: falsePositives,
+                            fn: falseNegatives,
+                        },
+                        music: {
+                            active: activationTime !== null,
+                            activationMs: musicMetrics.activationMs,
+                            bpm: musicMetrics.avgBpm,
+                            bpmError: musicMetrics.bpmError,
+                            confidence: musicMetrics.avgConfidence,
+                            beats: musicMetrics.beatCount,
+                        },
+                        timing: {
+                            avgErrorMs: metrics.avgTimingErrorMs,
+                            latencyMs: metrics.audioLatencyMs,
+                        },
+                        counts: {
+                            expected: expectedHits.length,
+                            detected: detections.length,
+                            low: lowCount,
+                            high: highCount,
+                        },
+                        detailsFile: detailsFilename,
                     };
                     return {
                         content: [
                             {
                                 type: 'text',
-                                text: JSON.stringify({
-                                    success: true,
-                                    pattern: patternId,
-                                    durationMs: duration,
-                                    timingOffsetMs,
-                                    metrics,
-                                    groundTruth: result.groundTruth,
-                                    totalDetections: detections.length,
-                                    lowDetections: lowCount,
-                                    highDetections: highCount,
-                                    detections,
-                                    audioSamples,
-                                }, null, 2),
+                                text: JSON.stringify(summary),
                             },
                         ],
                     };

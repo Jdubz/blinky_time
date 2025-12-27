@@ -182,18 +182,31 @@ export class BlinkySerial extends EventEmitter {
      * Handle incoming line from serial
      */
     handleLine(line) {
-        // Check for JSON audio data
+        // Check for JSON audio data (may include music mode: {"a":{...},"m":{...}})
         if (line.startsWith('{"a":')) {
             try {
                 const parsed = JSON.parse(line);
                 const audio = parsed.a;
                 this.emit('audio', audio);
-                // Emit transient events
-                if (audio.lo === 1) {
-                    this.emit('transient', { type: 'low', strength: audio.los });
+                // Emit transient events (unified detection using 't' field)
+                // The simplified "Drummer's Algorithm" outputs a single transient strength
+                if (audio.t > 0) {
+                    this.emit('transient', { type: 'unified', strength: audio.t });
                 }
-                if (audio.hi === 1) {
-                    this.emit('transient', { type: 'high', strength: audio.his });
+                // Emit music mode state if present
+                if (parsed.m) {
+                    const music = parsed.m;
+                    this.emit('music', music);
+                    // Emit beat events
+                    if (music.q === 1) {
+                        this.emit('beat', { type: 'quarter', bpm: music.bpm });
+                    }
+                    if (music.h === 1) {
+                        this.emit('beat', { type: 'half', bpm: music.bpm });
+                    }
+                    if (music.w === 1) {
+                        this.emit('beat', { type: 'whole', bpm: music.bpm });
+                    }
                 }
             }
             catch {

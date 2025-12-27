@@ -87,6 +87,10 @@ void AdaptiveMic::update(float dt) {
   if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
   if (dt > MicConstants::MAX_DT_SECONDS) dt = MicConstants::MAX_DT_SECONDS;
 
+  // CRITICAL: Reset transient at start of EVERY update, not just when samples available
+  // This ensures transient is a single-frame pulse that doesn't persist across frames
+  transient = 0.0f;
+
   // Get raw audio samples from ISR
   float avgAbs = 0.0f;
   uint16_t maxAbsVal = 0;
@@ -308,8 +312,8 @@ void AdaptiveMic::onPDMdata() {
  * "did someone hit a drum?" logic.
  */
 void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
-  // Reset transient (single-frame pulse)
-  transient = 0.0f;
+  // Note: transient is reset at the start of update(), not here
+  // This ensures it resets even when no audio samples are available (n==0)
 
   // Track recent average with exponential moving average
   float alpha = 1.0f - expf(-dt / averageTau);

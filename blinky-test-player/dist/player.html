@@ -22,40 +22,69 @@
     };
 
     // Loaded sample buffers organized by type
-    let loadedSamples = {};
+    let loadedSamples = {};        // { type: [{name, player}] }
+    let loadedSamplesById = {};    // { id: {name, player, type, loudness, rms} }
     let samplesReady = false;
 
     // Load all samples from the provided manifest
-    // Manifest format: { kick: [{name: 'kick1.wav', url: 'file:///...'}], ... }
+    // Manifest format can be:
+    // 1. Legacy: { kick: [{name: 'kick1.wav', url: 'file:///...'}], ... }
+    // 2. Curated: { samples: [{id, type, loudness, rms, ...}], byType: {...} }
     async function loadSamples(sampleManifest) {
       const status = document.getElementById('status');
       const samplesDiv = document.getElementById('samples');
 
       status.textContent = 'Loading samples...';
       loadedSamples = {};
+      loadedSamplesById = {};
 
       let totalLoaded = 0;
       let totalFailed = 0;
 
-      for (const [type, samples] of Object.entries(sampleManifest)) {
-        if (!samples || samples.length === 0) continue;
+      // Check if this is the new curated manifest format
+      if (sampleManifest.samples && Array.isArray(sampleManifest.samples)) {
+        // New format: load from samples array with IDs
+        for (const sample of sampleManifest.samples) {
+          const { id, type, loudness, rms, newPath } = sample;
+          // newPath is relative like "samples/kick/kick_hard_1.wav"
+          const url = newPath.replace(/\\/g, '/');
 
-        loadedSamples[type] = [];
+          if (!loadedSamples[type]) loadedSamples[type] = [];
 
-        for (const sample of samples) {
           try {
-            // sample can be {name, url} or just a filename string
-            const url = typeof sample === 'string' ? `samples/${type}/${sample}` : sample.url;
-            const name = typeof sample === 'string' ? sample : sample.name;
-
             const player = new Tone.Player(url).toDestination();
             await player.load(url);
-            loadedSamples[type].push({ name, player });
+            const sampleData = { name: id, player, id, type, loudness, rms };
+            loadedSamples[type].push(sampleData);
+            loadedSamplesById[id] = sampleData;
             totalLoaded++;
           } catch (err) {
-            const name = typeof sample === 'string' ? sample : sample.name;
-            console.warn(`Failed to load sample: ${type}/${name}`, err);
+            console.warn(`Failed to load sample: ${id}`, err);
             totalFailed++;
+          }
+        }
+      } else {
+        // Legacy format: load by type folders
+        for (const [type, samples] of Object.entries(sampleManifest)) {
+          if (!samples || samples.length === 0) continue;
+
+          loadedSamples[type] = [];
+
+          for (const sample of samples) {
+            try {
+              // sample can be {name, url} or just a filename string
+              const url = typeof sample === 'string' ? `samples/${type}/${sample}` : sample.url;
+              const name = typeof sample === 'string' ? sample : sample.name;
+
+              const player = new Tone.Player(url).toDestination();
+              await player.load(url);
+              loadedSamples[type].push({ name, player });
+              totalLoaded++;
+            } catch (err) {
+              const name = typeof sample === 'string' ? sample : sample.name;
+              console.warn(`Failed to load sample: ${type}/${name}`, err);
+              totalFailed++;
+            }
           }
         }
       }
@@ -79,14 +108,54 @@
       return { loaded: totalLoaded, failed: totalFailed };
     }
 
-    // Get a random sample of a given type
-    function getRandomSample(type) {
-      const samples = loadedSamples[type];
-      if (!samples || samples.length === 0) {
-        console.warn(`No samples available for type: ${type}`);
-        return null;
+    // Get a sample by ID (deterministic) or type (random fallback)
+    // sampleSpec can be:
+    // - string ID like "kick_hard_1" (deterministic)
+    // - string type like "kick" (random from type)
+    // - object {type, loudness} like {type: 'kick', loudness: 'hard'} (random from category)
+    function getSample(sampleSpec) {
+      // Direct ID lookup (deterministic)
+      if (typeof sampleSpec === 'string' && loadedSamplesById[sampleSpec]) {
+        return loadedSamplesById[sampleSpec];
       }
-      return samples[Math.floor(Math.random() * samples.length)];
+
+      // Type lookup (random from type)
+      if (typeof sampleSpec === 'string') {
+        const samples = loadedSamples[sampleSpec];
+        if (!samples || samples.length === 0) {
+          console.warn(`No samples available for type: ${sampleSpec}`);
+          return null;
+        }
+        return samples[Math.floor(Math.random() * samples.length)];
+      }
+
+      // Object with type and optional loudness
+      if (typeof sampleSpec === 'object' && sampleSpec.type) {
+        const samples = loadedSamples[sampleSpec.type];
+        if (!samples || samples.length === 0) {
+          console.warn(`No samples available for type: ${sampleSpec.type}`);
+          return null;
+        }
+
+        // Filter by loudness if specified
+        if (sampleSpec.loudness) {
+          const filtered = samples.filter(s => s.loudness === sampleSpec.loudness);
+          if (filtered.length > 0) {
+            return filtered[Math.floor(Math.random() * filtered.length)];
+          }
+          console.warn(`No samples for ${sampleSpec.type}/${sampleSpec.loudness}, using random`);
+        }
+
+        return samples[Math.floor(Math.random() * samples.length)];
+      }
+
+      console.warn(`Invalid sample spec:`, sampleSpec);
+      return null;
+    }
+
+    // Alias for backward compatibility
+    function getRandomSample(type) {
+      return getSample(type);
     }
 
     // Get detection band for a sample type
@@ -120,9 +189,12 @@
       const startOffset = 0.1; // Small delay to ensure everything is ready
 
       for (const hit of hits) {
-        const sample = getRandomSample(hit.type);
+        // Support deterministic selection via hit.sampleId or hit.sample
+        // Falls back to random selection by type
+        const sampleSpec = hit.sampleId || hit.sample || hit.type;
+        const sample = getSample(sampleSpec);
         if (!sample) {
-          console.warn(`Skipping hit - no sample for type: ${hit.type}`);
+          console.warn(`Skipping hit - no sample for:`, sampleSpec);
           continue;
         }
 
@@ -146,7 +218,9 @@
       }
 
       // Log start time for synchronization
-      const startedAt = new Date().toISOString();
+      // Add startOffset to the timestamp since audio actually starts 100ms after scheduling
+      // This ensures ground truth timing aligns with when samples actually play
+      const startedAt = new Date(Date.now() + Math.round(startOffset * 1000)).toISOString();
       console.log('PATTERN_STARTED:' + startedAt);
       console.log('GROUND_TRUTH:' + JSON.stringify(groundTruth));
       status.textContent = 'Playing...';

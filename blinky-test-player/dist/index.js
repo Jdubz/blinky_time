@@ -10,7 +10,7 @@ import { chromium } from 'playwright';
 import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, readdirSync, existsSync } from 'fs';
+import { writeFileSync, readFileSync, readdirSync, existsSync } from 'fs';
 import { TEST_PATTERNS, getPatternById } from './patterns.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -162,12 +162,23 @@ program
     // Launch browser
     if (!quiet)
         console.error('Launching browser...');
+    // SECURITY WARNING: These flags disable critical browser security features!
+    // --allow-file-access-from-files: Allows file:// URLs to access other local files
+    // --disable-web-security: Disables same-origin policy (DANGEROUS!)
+    //
+    // These flags are ONLY acceptable because:
+    // 1. This is a LOCAL TESTING TOOL (not production code)
+    // 2. Browser is launched programmatically, not exposed to web
+    // 3. Only loads local HTML + WAV files from known safe directories
+    //
+    // DO NOT use these flags in any production or web-facing context!
+    // Alternative for production: Use a local HTTP server instead of file:// URLs
     const browser = await chromium.launch({
         headless: options.headless ?? false,
         args: [
             '--autoplay-policy=no-user-gesture-required',
-            '--allow-file-access-from-files',
-            '--disable-web-security',
+            '--allow-file-access-from-files', // Required for file:// → file:// access (WAV loading)
+            '--disable-web-security', // Required for CORS with local files
         ],
     });
     const context = await browser.newContext();
@@ -203,21 +214,44 @@ program
     await page.goto(playerUrl);
     // Wait for page to be ready
     await page.waitForFunction(() => window.loadSamples !== undefined);
-    // Build manifest with full file:// URLs for each sample
-    const manifestWithUrls = buildManifestWithUrls(samplesPath, manifest);
+    // Check for curated manifest (deterministic samples with known loudness)
+    const curatedManifestPath = join(samplesPath, 'manifest.json');
+    let sampleManifest;
+    if (existsSync(curatedManifestPath)) {
+        // Use curated manifest for deterministic testing
+        if (!quiet)
+            console.error('Using curated sample manifest (deterministic)');
+        const curatedManifest = JSON.parse(readFileSync(curatedManifestPath, 'utf-8'));
+        // Convert paths to file:// URLs
+        sampleManifest = {
+            ...curatedManifest,
+            samples: curatedManifest.samples.map((s) => ({
+                ...s,
+                newPath: pathToFileUrl(join(samplesPath, '..', s.newPath)),
+            })),
+        };
+    }
+    else {
+        // Fall back to legacy folder-based manifest
+        if (!quiet)
+            console.error('Using folder-based samples (random selection)');
+        sampleManifest = buildManifestWithUrls(samplesPath, manifest);
+    }
     // Load samples into the player
     if (!quiet)
         console.error('Loading samples...');
     await page.evaluate((manifest) => {
         return window.loadSamples(manifest);
-    }, manifestWithUrls);
+    }, sampleManifest);
     if (!quiet)
         console.error(`Starting in ${delay}ms...`);
     await new Promise(resolve => setTimeout(resolve, delay));
     // Convert pattern hits to player format
+    // Supports sampleId for deterministic testing or falls back to instrument type
     const playerHits = pattern.hits.map(h => ({
         timeMs: Math.round(h.time * 1000),
         type: h.instrument || (h.type === 'low' ? 'kick' : 'snare'), // Fallback for old patterns
+        sampleId: h.sampleId, // Deterministic sample selection
         strength: h.strength,
     }));
     // Play the pattern

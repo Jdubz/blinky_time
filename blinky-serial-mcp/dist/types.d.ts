@@ -26,6 +26,28 @@ export interface AudioSample {
     lop?: number;
     hip?: number;
 }
+export interface MusicModeState {
+    a: number;
+    bpm: number;
+    ph: number;
+    conf: number;
+    q: number;
+    h: number;
+    w: number;
+}
+export interface BeatEvent {
+    timestampMs: number;
+    bpm: number;
+    type: 'quarter' | 'half' | 'whole';
+}
+export interface MusicModeMetrics {
+    bpmAccuracy: number;
+    expectedBPM: number;
+    detectedBPM: number;
+    activationTimeMs: number;
+    beatF1Score: number;
+    confidenceAvg: number;
+}
 export interface BatteryStatus {
     n: boolean;
     c: boolean;
@@ -55,7 +77,7 @@ export interface TestResult {
 }
 export interface TransientEvent {
     timestampMs: number;
-    type: 'low' | 'high';
+    type: 'low' | 'high' | 'unified';
     strength: number;
 }
 export interface TestMetrics {
