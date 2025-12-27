@@ -516,19 +516,7 @@ void Fire::generateSparks() {
         sparkHeat = max(energyHeat, params_.sparkHeatMin);
     }
 
-    // BURST: Transient impulse triggers burst (only if not suppressed)
-    // audioHit_ is 0.0 normally, non-zero when transient detected (low/high band onset)
-    if (audioHit_ > 0.0f && !inSuppression_) {
-        float strength = audioHit_;  // Use transient strength (0.0-1.0)
-        numSparks += params_.burstSparks;
-        // Scale heat by strength: weak transient = less intense, strong = max
-        sparkHeat = params_.sparkHeatMin +
-            (uint8_t)(strength * (255 - params_.sparkHeatMin));
-        lastBurstMs_ = now;
-        inSuppression_ = true;  // Suppress further bursts briefly
-    }
-
-    // MUSIC MODE: Beat-synced spark bursts
+    // MUSIC MODE: Beat-synced spark bursts (highest priority)
     // Triggers on detected beats when music mode is active
     if (music_ && music_->isActive() && music_->beatHappened && !inSuppression_) {
         // Stronger bursts on downbeats (wholeNote = every 4 beats)
@@ -537,6 +525,17 @@ void Fire::generateSparks() {
         sparkHeat = 255;  // Max heat for music-driven beats
         lastBurstMs_ = now;
         inSuppression_ = true;
+    }
+    // BURST: Transient impulse triggers burst (only if music didn't trigger)
+    // audioHit_ is 0.0 normally, non-zero when transient detected (low/high band onset)
+    else if (audioHit_ > 0.0f && !inSuppression_) {
+        float strength = audioHit_;  // Use transient strength (0.0-1.0)
+        numSparks += params_.burstSparks;
+        // Scale heat by strength: weak transient = less intense, strong = max
+        sparkHeat = params_.sparkHeatMin +
+            (uint8_t)(strength * (255 - params_.sparkHeatMin));
+        lastBurstMs_ = now;
+        inSuppression_ = true;  // Suppress further bursts briefly
     }
 
     // Generate the sparks

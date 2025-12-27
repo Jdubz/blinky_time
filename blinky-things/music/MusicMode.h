@@ -94,6 +94,7 @@ private:
     static constexpr uint8_t MAX_ONSETS = 64;  // Circular buffer size
     uint32_t onsetTimes_[MAX_ONSETS];          // Timestamp of each onset
     uint8_t onsetIndex_ = 0;                   // Current write position
+    uint8_t onsetCount_ = 0;                   // Number of valid onsets (0-MAX_ONSETS)
     uint32_t lastOnsetTime_ = 0;               // Timestamp of last onset
 
     /**
@@ -123,6 +124,7 @@ private:
     float confidence_ = 0.0f;       // 0.0-1.0 pattern confidence
     uint8_t stableBeats_ = 0;       // Count of consecutive stable beats
     uint8_t missedBeats_ = 0;       // Count of consecutive missed beats
+    uint32_t lastMissedBeatCheck_ = 0;  // Last time we checked for missed beats
 
     /**
      * Update confidence based on phase error

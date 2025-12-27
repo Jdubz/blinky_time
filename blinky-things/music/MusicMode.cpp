@@ -22,8 +22,10 @@ void MusicMode::reset() {
     confidence_ = 0.0f;
     stableBeats_ = 0;
     missedBeats_ = 0;
+    lastMissedBeatCheck_ = 0;
 
     onsetIndex_ = 0;
+    onsetCount_ = 0;
     lastOnsetTime_ = 0;
 
     // Clear onset buffer
@@ -43,13 +45,19 @@ void MusicMode::update(float dt) {
     updatePhase(dt);
 
     // Check for missed beats (no onsets for too long)
+    // Only check once per beat period to avoid incrementing missedBeats_ every frame
     uint32_t nowMs = time_.millis();
     uint32_t timeSinceOnset = nowMs - lastOnsetTime_;
+    uint32_t timeSinceCheck = nowMs - lastMissedBeatCheck_;
 
-    if (timeSinceOnset > beatPeriodMs_ * 2.0f) {
-        missedBeats_++;
-        confidence_ = confidence_ - 0.05f;
-        if (confidence_ < 0.0f) confidence_ = 0.0f;
+    // Only check at beat intervals when active
+    if (active && timeSinceCheck > beatPeriodMs_) {
+        if (timeSinceOnset > beatPeriodMs_ * 1.5f) {  // 1.5x tolerance
+            missedBeats_++;
+            confidence_ -= 0.05f;
+            if (confidence_ < 0.0f) confidence_ = 0.0f;
+        }
+        lastMissedBeatCheck_ = nowMs;
     }
 
     // Check activation/deactivation conditions
@@ -73,11 +81,14 @@ void MusicMode::updatePhase(float dt) {
     phase += dtMs / beatPeriodMs_;
 
     // Wrap phase (0.0 - 1.0) and trigger beat events
+    // Handle edge case where phase >= 2.0 (large dt or very fast BPM)
     if (phase >= 1.0f) {
-        phase -= 1.0f;
-        beatNumber++;
+        // Count how many beats occurred (normally 1, but handles edge cases)
+        uint32_t beatsToAdd = (uint32_t)phase;
+        phase = fmodf(phase, 1.0f);  // Properly wrap to [0, 1)
+        beatNumber += beatsToAdd;
 
-        // Set beat event flags
+        // Set beat event flags (last beat that occurred)
         beatHappened = true;
         quarterNote = true;
         halfNote = (beatNumber % 2 == 0);
@@ -89,6 +100,7 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
     // Store onset time in circular buffer
     onsetTimes_[onsetIndex_] = timestampMs;
     onsetIndex_ = (onsetIndex_ + 1) % MAX_ONSETS;
+    if (onsetCount_ < MAX_ONSETS) onsetCount_++;  // Track actual count
 
     // Calculate phase error (expected: onset near phase 0.0 or 1.0)
     float error = phase;
@@ -96,6 +108,8 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
 
     // PLL correction (Proportional-Integral controller)
     errorIntegral_ += error;
+    // Anti-windup: clamp integral to prevent excessive accumulation
+    errorIntegral_ = clampFloat(errorIntegral_, -10.0f, 10.0f);
     float correction = pllKp * error + pllKi * errorIntegral_;
 
     // Adjust beat period based on correction
@@ -128,15 +142,14 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
 }
 
 void MusicMode::estimateTempo() {
-    // Need at least 4 intervals for meaningful analysis
-    uint8_t numOnsets = minInt(onsetIndex_, MAX_ONSETS);
-    if (numOnsets < 4) return;
+    // Need at least 4 onsets for meaningful analysis (gives 3 intervals)
+    if (onsetCount_ < 4) return;
 
     // Simple histogram-based autocorrelation
     // Count inter-onset intervals (IOI) falling into BPM bins
     uint16_t histogram[40] = {0};  // 40 bins covering 60-200 BPM
 
-    for (uint8_t i = 1; i < numOnsets; i++) {
+    for (uint8_t i = 1; i < onsetCount_; i++) {
         uint32_t ioi = onsetTimes_[i] - onsetTimes_[i - 1];
 
         // Convert IOI to BPM bin (60-200 BPM range, 20ms bin width)
@@ -163,6 +176,9 @@ void MusicMode::estimateTempo() {
     if (peakValue >= 3) {  // Need at least 3 matching intervals
         uint32_t ioi = 300 + (peakBin * 20);
         float newBPM = 60000.0f / ioi;
+
+        // Clamp new BPM to valid range before mixing
+        newBPM = clampFloat(newBPM, bpmMin, bpmMax);
 
         // Smooth update (80% old, 20% new)
         bpm = bpm * 0.8f + newBPM * 0.2f;
