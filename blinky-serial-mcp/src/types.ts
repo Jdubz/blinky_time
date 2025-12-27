@@ -76,4 +76,5 @@ export interface TestMetrics {
   falseNegatives: number;
   expectedTotal: number;
   avgTimingErrorMs: number | null;
+  audioLatencyMs: number; // Estimated systematic audio latency (median offset)
 }

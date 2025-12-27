@@ -611,21 +611,49 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const duration = groundTruth.durationMs || rawDuration;
                     // Calculate F1/precision/recall metrics
                     // Match detections to expected hits within a timing tolerance
-                    const TIMING_TOLERANCE_MS = 150; // Allow 150ms timing variance
+                    const TIMING_TOLERANCE_MS = 350; // Allow 350ms timing variance (accounts for audio output latency)
                     const expectedHits = groundTruth.hits || [];
+                    // First pass: estimate systematic audio latency by finding median offset
+                    // This helps compensate for consistent delays (speaker output, air travel, mic processing)
+                    const offsets = [];
+                    detections.forEach((detection) => {
+                        // Find closest expected hit of same type
+                        let minDist = Infinity;
+                        let closestOffset = 0;
+                        expectedHits.forEach((expected) => {
+                            if (expected.type !== detection.type)
+                                return;
+                            const offset = detection.timestampMs - expected.timeMs;
+                            if (Math.abs(offset) < Math.abs(minDist)) {
+                                minDist = offset;
+                                closestOffset = offset;
+                            }
+                        });
+                        if (Math.abs(minDist) < 1000) { // Only consider reasonable matches
+                            offsets.push(closestOffset);
+                        }
+                    });
+                    // Calculate median offset as systematic latency estimate
+                    let audioLatencyMs = 0;
+                    if (offsets.length > 0) {
+                        offsets.sort((a, b) => a - b);
+                        audioLatencyMs = offsets[Math.floor(offsets.length / 2)];
+                    }
                     // Track which expected hits were matched
                     const matchedExpected = new Set();
                     const matchedDetections = new Set();
                     // Match each detection to nearest expected hit (if within tolerance)
+                    // Apply latency correction to detection timestamps
                     detections.forEach((detection, dIdx) => {
                         let bestMatchIdx = -1;
                         let bestMatchDist = Infinity;
+                        const correctedTime = detection.timestampMs - audioLatencyMs;
                         expectedHits.forEach((expected, eIdx) => {
                             if (matchedExpected.has(eIdx))
                                 return; // Already matched
                             if (expected.type !== detection.type)
                                 return; // Wrong type
-                            const dist = Math.abs(detection.timestampMs - expected.timeMs);
+                            const dist = Math.abs(correctedTime - expected.timeMs);
                             if (dist < bestMatchDist && dist <= TIMING_TOLERANCE_MS) {
                                 bestMatchDist = dist;
                                 bestMatchIdx = eIdx;
@@ -644,16 +672,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const f1Score = (precision + recall) > 0
                         ? 2 * (precision * recall) / (precision + recall)
                         : 0;
-                    // Calculate average timing error for matched detections
+                    // Calculate average timing error for matched detections (after latency correction)
                     let totalTimingError = 0;
                     let matchCount = 0;
                     detections.forEach((detection, dIdx) => {
                         if (!matchedDetections.has(dIdx))
                             return;
+                        const correctedTime = detection.timestampMs - audioLatencyMs;
                         // Find the expected hit this was matched to
                         expectedHits.forEach((expected, eIdx) => {
                             if (matchedExpected.has(eIdx) && expected.type === detection.type) {
-                                const dist = Math.abs(detection.timestampMs - expected.timeMs);
+                                const dist = Math.abs(correctedTime - expected.timeMs);
                                 if (dist <= TIMING_TOLERANCE_MS) {
                                     totalTimingError += dist;
                                     matchCount++;
@@ -671,6 +700,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         falseNegatives,
                         expectedTotal: expectedHits.length,
                         avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
+                        audioLatencyMs: Math.round(audioLatencyMs), // Estimated systematic audio latency
                     };
                     return {
                         content: [

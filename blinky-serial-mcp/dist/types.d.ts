@@ -67,4 +67,5 @@ export interface TestMetrics {
     falseNegatives: number;
     expectedTotal: number;
     avgTimingErrorMs: number | null;
+    audioLatencyMs: number;
 }
