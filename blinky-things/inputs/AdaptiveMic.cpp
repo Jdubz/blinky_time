@@ -127,6 +127,9 @@ void AdaptiveMic::update(float dt) {
     // avgAbs is average of int16_t samples (0-32768 range)
     float normalized = avgAbs / 32768.0f;
 
+    // Store instantaneous raw level for debugging
+    rawInstantLevel = normalized;
+
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
     float alpha = 1.0f - expf(-dt / maxValue(MicConstants::HW_TRACKING_TAU, MIN_TAU_HARDWARE));
