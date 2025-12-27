@@ -208,7 +208,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: 'run_test',
-                description: 'Run a complete test: play a pattern and record detections simultaneously',
+                description: 'Run a complete test: play a pattern and record detections simultaneously. Automatically connects and disconnects from the device.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -216,8 +216,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             type: 'string',
                             description: 'Pattern ID to play (e.g., "simple-beat", "simultaneous")',
                         },
+                        port: {
+                            type: 'string',
+                            description: 'Serial port to connect to (e.g., "COM5"). Required.',
+                        },
                     },
-                    required: ['pattern'],
+                    required: ['pattern', 'port'],
                 },
             },
             {
@@ -518,183 +522,181 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 };
             }
             case 'run_test': {
-                const patternId = args.pattern;
-                // Ensure connected
-                const state = serial.getState();
-                if (!state.connected) {
-                    return {
-                        content: [
-                            {
-                                type: 'text',
-                                text: JSON.stringify({ error: 'Not connected to device' }, null, 2),
-                            },
-                        ],
-                    };
-                }
-                // Clear buffers and start recording
-                transientBuffer = [];
-                audioSampleBuffer = [];
-                // Ensure streaming is on
-                if (!state.streaming) {
-                    await serial.startStream();
-                }
-                // Run the test player CLI and capture output
-                const result = await new Promise((resolve) => {
-                    const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
-                        stdio: ['ignore', 'pipe', 'pipe'],
-                    });
-                    let stdout = '';
-                    let stderr = '';
-                    // Start recording when the process starts
-                    testStartTime = Date.now();
-                    child.stdout.on('data', (data) => {
-                        stdout += data.toString();
-                    });
-                    child.stderr.on('data', (data) => {
-                        stderr += data.toString();
-                    });
-                    child.on('close', (code) => {
-                        if (code === 0) {
-                            try {
-                                const groundTruth = JSON.parse(stdout);
-                                resolve({ success: true, groundTruth });
-                            }
-                            catch {
-                                resolve({ success: false, error: 'Failed to parse ground truth: ' + stdout });
-                            }
-                        }
-                        else {
-                            resolve({ success: false, error: stderr || `Process exited with code ${code}` });
-                        }
-                    });
-                    child.on('error', (err) => {
-                        resolve({ success: false, error: err.message });
-                    });
-                });
-                // Stop recording
-                const recordStopTime = Date.now();
-                const rawDuration = recordStopTime - (testStartTime || recordStopTime);
-                let detections = [...transientBuffer];
-                let audioSamples = [...audioSampleBuffer];
-                const recordStartTime = testStartTime;
-                testStartTime = null;
-                transientBuffer = [];
-                audioSampleBuffer = [];
-                if (!result.success) {
-                    return {
-                        content: [
-                            {
-                                type: 'text',
-                                text: JSON.stringify({ error: result.error }, null, 2),
-                            },
-                        ],
-                    };
-                }
-                // Calculate timing offset: ground truth startedAt vs our recording start
-                // The ground truth contains the actual audio playback start time
-                // Our recording started earlier (when CLI process launched)
-                const groundTruth = result.groundTruth;
-                let timingOffsetMs = 0;
-                if (groundTruth.startedAt && recordStartTime) {
-                    const audioStartTime = new Date(groundTruth.startedAt).getTime();
-                    timingOffsetMs = audioStartTime - recordStartTime;
-                    // Adjust all timestamps to be relative to actual audio start
-                    detections = detections.map(d => ({
-                        ...d,
-                        timestampMs: d.timestampMs - timingOffsetMs,
-                    })).filter(d => d.timestampMs >= 0); // Remove detections before audio started
-                    audioSamples = audioSamples.map(s => ({
-                        ...s,
-                        timestampMs: s.timestampMs - timingOffsetMs,
-                    })).filter(s => s.timestampMs >= 0);
-                }
-                // Calculate stats
-                const lowCount = detections.filter(d => d.type === 'low').length;
-                const highCount = detections.filter(d => d.type === 'high').length;
-                const duration = groundTruth.durationMs || rawDuration;
-                // Calculate F1/precision/recall metrics
-                // Match detections to expected hits within a timing tolerance
-                const TIMING_TOLERANCE_MS = 150; // Allow 150ms timing variance
-                const expectedHits = groundTruth.hits || [];
-                // Track which expected hits were matched
-                const matchedExpected = new Set();
-                const matchedDetections = new Set();
-                // Match each detection to nearest expected hit (if within tolerance)
-                detections.forEach((detection, dIdx) => {
-                    let bestMatchIdx = -1;
-                    let bestMatchDist = Infinity;
-                    expectedHits.forEach((expected, eIdx) => {
-                        if (matchedExpected.has(eIdx))
-                            return; // Already matched
-                        if (expected.type !== detection.type)
-                            return; // Wrong type
-                        const dist = Math.abs(detection.timestampMs - expected.timeMs);
-                        if (dist < bestMatchDist && dist <= TIMING_TOLERANCE_MS) {
-                            bestMatchDist = dist;
-                            bestMatchIdx = eIdx;
-                        }
-                    });
-                    if (bestMatchIdx >= 0) {
-                        matchedExpected.add(bestMatchIdx);
-                        matchedDetections.add(dIdx);
+                const { pattern: patternId, port } = args;
+                // Connect to device (will disconnect at end)
+                try {
+                    if (!serial.getState().connected) {
+                        await serial.connect(port);
                     }
-                });
-                const truePositives = matchedDetections.size;
-                const falsePositives = detections.length - truePositives;
-                const falseNegatives = expectedHits.length - truePositives;
-                const precision = detections.length > 0 ? truePositives / detections.length : 0;
-                const recall = expectedHits.length > 0 ? truePositives / expectedHits.length : 0;
-                const f1Score = (precision + recall) > 0
-                    ? 2 * (precision * recall) / (precision + recall)
-                    : 0;
-                // Calculate average timing error for matched detections
-                let totalTimingError = 0;
-                let matchCount = 0;
-                detections.forEach((detection, dIdx) => {
-                    if (!matchedDetections.has(dIdx))
-                        return;
-                    // Find the expected hit this was matched to
-                    expectedHits.forEach((expected, eIdx) => {
-                        if (matchedExpected.has(eIdx) && expected.type === detection.type) {
-                            const dist = Math.abs(detection.timestampMs - expected.timeMs);
-                            if (dist <= TIMING_TOLERANCE_MS) {
-                                totalTimingError += dist;
-                                matchCount++;
+                    // Clear buffers and start recording
+                    transientBuffer = [];
+                    audioSampleBuffer = [];
+                    // Ensure streaming is on
+                    if (!serial.getState().streaming) {
+                        await serial.startStream();
+                    }
+                    // Run the test player CLI and capture output
+                    const result = await new Promise((resolve) => {
+                        const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
+                            stdio: ['ignore', 'pipe', 'pipe'],
+                        });
+                        let stdout = '';
+                        let stderr = '';
+                        // Start recording when the process starts
+                        testStartTime = Date.now();
+                        child.stdout.on('data', (data) => {
+                            stdout += data.toString();
+                        });
+                        child.stderr.on('data', (data) => {
+                            stderr += data.toString();
+                        });
+                        child.on('close', (code) => {
+                            if (code === 0) {
+                                try {
+                                    const groundTruth = JSON.parse(stdout);
+                                    resolve({ success: true, groundTruth });
+                                }
+                                catch {
+                                    resolve({ success: false, error: 'Failed to parse ground truth: ' + stdout });
+                                }
                             }
+                            else {
+                                resolve({ success: false, error: stderr || `Process exited with code ${code}` });
+                            }
+                        });
+                        child.on('error', (err) => {
+                            resolve({ success: false, error: err.message });
+                        });
+                    });
+                    // Stop recording
+                    const recordStopTime = Date.now();
+                    const rawDuration = recordStopTime - (testStartTime || recordStopTime);
+                    let detections = [...transientBuffer];
+                    let audioSamples = [...audioSampleBuffer];
+                    const recordStartTime = testStartTime;
+                    testStartTime = null;
+                    transientBuffer = [];
+                    audioSampleBuffer = [];
+                    if (!result.success) {
+                        return {
+                            content: [
+                                {
+                                    type: 'text',
+                                    text: JSON.stringify({ error: result.error }, null, 2),
+                                },
+                            ],
+                        };
+                    }
+                    // Calculate timing offset: ground truth startedAt vs our recording start
+                    // The ground truth contains the actual audio playback start time
+                    // Our recording started earlier (when CLI process launched)
+                    const groundTruth = result.groundTruth;
+                    let timingOffsetMs = 0;
+                    if (groundTruth.startedAt && recordStartTime) {
+                        const audioStartTime = new Date(groundTruth.startedAt).getTime();
+                        timingOffsetMs = audioStartTime - recordStartTime;
+                        // Adjust all timestamps to be relative to actual audio start
+                        detections = detections.map(d => ({
+                            ...d,
+                            timestampMs: d.timestampMs - timingOffsetMs,
+                        })).filter(d => d.timestampMs >= 0); // Remove detections before audio started
+                        audioSamples = audioSamples.map(s => ({
+                            ...s,
+                            timestampMs: s.timestampMs - timingOffsetMs,
+                        })).filter(s => s.timestampMs >= 0);
+                    }
+                    // Calculate stats
+                    const lowCount = detections.filter(d => d.type === 'low').length;
+                    const highCount = detections.filter(d => d.type === 'high').length;
+                    const duration = groundTruth.durationMs || rawDuration;
+                    // Calculate F1/precision/recall metrics
+                    // Match detections to expected hits within a timing tolerance
+                    const TIMING_TOLERANCE_MS = 150; // Allow 150ms timing variance
+                    const expectedHits = groundTruth.hits || [];
+                    // Track which expected hits were matched
+                    const matchedExpected = new Set();
+                    const matchedDetections = new Set();
+                    // Match each detection to nearest expected hit (if within tolerance)
+                    detections.forEach((detection, dIdx) => {
+                        let bestMatchIdx = -1;
+                        let bestMatchDist = Infinity;
+                        expectedHits.forEach((expected, eIdx) => {
+                            if (matchedExpected.has(eIdx))
+                                return; // Already matched
+                            if (expected.type !== detection.type)
+                                return; // Wrong type
+                            const dist = Math.abs(detection.timestampMs - expected.timeMs);
+                            if (dist < bestMatchDist && dist <= TIMING_TOLERANCE_MS) {
+                                bestMatchDist = dist;
+                                bestMatchIdx = eIdx;
+                            }
+                        });
+                        if (bestMatchIdx >= 0) {
+                            matchedExpected.add(bestMatchIdx);
+                            matchedDetections.add(dIdx);
                         }
                     });
-                });
-                const avgTimingErrorMs = matchCount > 0 ? totalTimingError / matchCount : null;
-                const metrics = {
-                    f1Score: Math.round(f1Score * 1000) / 1000,
-                    precision: Math.round(precision * 1000) / 1000,
-                    recall: Math.round(recall * 1000) / 1000,
-                    truePositives,
-                    falsePositives,
-                    falseNegatives,
-                    expectedTotal: expectedHits.length,
-                    avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
-                };
-                return {
-                    content: [
-                        {
-                            type: 'text',
-                            text: JSON.stringify({
-                                success: true,
-                                pattern: patternId,
-                                durationMs: duration,
-                                timingOffsetMs,
-                                metrics,
-                                groundTruth: result.groundTruth,
-                                totalDetections: detections.length,
-                                lowDetections: lowCount,
-                                highDetections: highCount,
-                                detections,
-                                audioSamples,
-                            }, null, 2),
-                        },
-                    ],
-                };
+                    const truePositives = matchedDetections.size;
+                    const falsePositives = detections.length - truePositives;
+                    const falseNegatives = expectedHits.length - truePositives;
+                    const precision = detections.length > 0 ? truePositives / detections.length : 0;
+                    const recall = expectedHits.length > 0 ? truePositives / expectedHits.length : 0;
+                    const f1Score = (precision + recall) > 0
+                        ? 2 * (precision * recall) / (precision + recall)
+                        : 0;
+                    // Calculate average timing error for matched detections
+                    let totalTimingError = 0;
+                    let matchCount = 0;
+                    detections.forEach((detection, dIdx) => {
+                        if (!matchedDetections.has(dIdx))
+                            return;
+                        // Find the expected hit this was matched to
+                        expectedHits.forEach((expected, eIdx) => {
+                            if (matchedExpected.has(eIdx) && expected.type === detection.type) {
+                                const dist = Math.abs(detection.timestampMs - expected.timeMs);
+                                if (dist <= TIMING_TOLERANCE_MS) {
+                                    totalTimingError += dist;
+                                    matchCount++;
+                                }
+                            }
+                        });
+                    });
+                    const avgTimingErrorMs = matchCount > 0 ? totalTimingError / matchCount : null;
+                    const metrics = {
+                        f1Score: Math.round(f1Score * 1000) / 1000,
+                        precision: Math.round(precision * 1000) / 1000,
+                        recall: Math.round(recall * 1000) / 1000,
+                        truePositives,
+                        falsePositives,
+                        falseNegatives,
+                        expectedTotal: expectedHits.length,
+                        avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
+                    };
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    success: true,
+                                    pattern: patternId,
+                                    durationMs: duration,
+                                    timingOffsetMs,
+                                    metrics,
+                                    groundTruth: result.groundTruth,
+                                    totalDetections: detections.length,
+                                    lowDetections: lowCount,
+                                    highDetections: highCount,
+                                    detections,
+                                    audioSamples,
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                finally {
+                    // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
+                    await serial.disconnect();
+                }
             }
             default:
                 return {

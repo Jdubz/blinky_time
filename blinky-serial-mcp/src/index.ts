@@ -237,7 +237,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'run_test',
-        description: 'Run a complete test: play a pattern and record detections simultaneously',
+        description: 'Run a complete test: play a pattern and record detections simultaneously. Automatically connects and disconnects from the device.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -245,8 +245,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'Pattern ID to play (e.g., "simple-beat", "simultaneous")',
             },
+            port: {
+              type: 'string',
+              description: 'Serial port to connect to (e.g., "COM5"). Required.',
+            },
           },
-          required: ['pattern'],
+          required: ['pattern', 'port'],
         },
       },
       {
@@ -577,29 +581,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_test': {
-        const patternId = (args as { pattern: string }).pattern;
+        const { pattern: patternId, port } = args as { pattern: string; port: string };
 
-        // Ensure connected
-        const state = serial.getState();
-        if (!state.connected) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({ error: 'Not connected to device' }, null, 2),
-              },
-            ],
-          };
-        }
+        // Connect to device (will disconnect at end)
+        try {
+          if (!serial.getState().connected) {
+            await serial.connect(port);
+          }
+          // Clear buffers and start recording
+          transientBuffer = [];
+          audioSampleBuffer = [];
 
-        // Clear buffers and start recording
-        transientBuffer = [];
-        audioSampleBuffer = [];
-
-        // Ensure streaming is on
-        if (!state.streaming) {
-          await serial.startStream();
-        }
+          // Ensure streaming is on
+          if (!serial.getState().streaming) {
+            await serial.startStream();
+          }
 
         // Run the test player CLI and capture output
         const result = await new Promise<{ success: boolean; groundTruth?: unknown; error?: string }>((resolve) => {
@@ -763,26 +759,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
         };
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success: true,
-                pattern: patternId,
-                durationMs: duration,
-                timingOffsetMs,
-                metrics,
-                groundTruth: result.groundTruth,
-                totalDetections: detections.length,
-                lowDetections: lowCount,
-                highDetections: highCount,
-                detections,
-                audioSamples,
-              }, null, 2),
-            },
-          ],
-        };
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  success: true,
+                  pattern: patternId,
+                  durationMs: duration,
+                  timingOffsetMs,
+                  metrics,
+                  groundTruth: result.groundTruth,
+                  totalDetections: detections.length,
+                  lowDetections: lowCount,
+                  highDetections: highCount,
+                  detections,
+                  audioSamples,
+                }, null, 2),
+              },
+            ],
+          };
+        } finally {
+          // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
+          await serial.disconnect();
+        }
       }
 
       default:
