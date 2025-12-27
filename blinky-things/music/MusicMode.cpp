@@ -24,13 +24,13 @@ void MusicMode::reset() {
     missedBeats_ = 0;
     lastMissedBeatCheck_ = 0;
 
-    onsetIndex_ = 0;
-    onsetCount_ = 0;
+    intervalIndex_ = 0;
+    intervalCount_ = 0;
     lastOnsetTime_ = 0;
 
-    // Clear onset buffer
-    for (uint8_t i = 0; i < MAX_ONSETS; i++) {
-        onsetTimes_[i] = 0;
+    // Clear interval buffer
+    for (uint8_t i = 0; i < MAX_INTERVALS; i++) {
+        onsetIntervals_[i] = 0;
     }
 }
 
@@ -97,10 +97,18 @@ void MusicMode::updatePhase(float dt) {
 }
 
 void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
-    // Store onset time in circular buffer
-    onsetTimes_[onsetIndex_] = timestampMs;
-    onsetIndex_ = (onsetIndex_ + 1) % MAX_ONSETS;
-    if (onsetCount_ < MAX_ONSETS) onsetCount_++;  // Track actual count
+    // Calculate and store inter-onset interval (if we have a previous onset)
+    if (lastOnsetTime_ != 0) {
+        uint32_t interval = timestampMs - lastOnsetTime_;
+
+        // Only store intervals in valid BPM range (300-1000ms = 200-60 BPM)
+        if (interval >= 300 && interval <= 1000) {
+            // Store interval (clamped to uint16_t range)
+            onsetIntervals_[intervalIndex_] = (uint16_t)interval;
+            intervalIndex_ = (intervalIndex_ + 1) % MAX_INTERVALS;
+            if (intervalCount_ < MAX_INTERVALS) intervalCount_++;
+        }
+    }
 
     // Calculate phase error (expected: onset near phase 0.0 or 1.0)
     float error = phase;
@@ -133,8 +141,8 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
         if (confidence_ < 0.0f) confidence_ = 0.0f;
     }
 
-    // Periodically estimate tempo (every 8 onsets to reduce CPU)
-    if (onsetIndex_ % 8 == 0) {
+    // Periodically estimate tempo (every 8 intervals to reduce CPU)
+    if (intervalCount_ > 0 && intervalCount_ % 8 == 0) {
         estimateTempo();
     }
 
@@ -142,23 +150,23 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
 }
 
 void MusicMode::estimateTempo() {
-    // Need at least 4 onsets for meaningful analysis (gives 3 intervals)
-    if (onsetCount_ < 4) return;
+    // Need at least 3 intervals for meaningful analysis
+    if (intervalCount_ < 3) return;
 
     // Simple histogram-based autocorrelation
     // Count inter-onset intervals (IOI) falling into BPM bins
     uint16_t histogram[40] = {0};  // 40 bins covering 60-200 BPM
 
-    for (uint8_t i = 1; i < onsetCount_; i++) {
-        uint32_t ioi = onsetTimes_[i] - onsetTimes_[i - 1];
+    // Iterate through stored intervals directly (already filtered to 300-1000ms range)
+    for (uint8_t i = 0; i < intervalCount_; i++) {
+        uint16_t ioi = onsetIntervals_[i];
 
         // Convert IOI to BPM bin (60-200 BPM range, 20ms bin width)
         // 60 BPM = 1000ms, 200 BPM = 300ms
-        if (ioi >= 300 && ioi <= 1000) {
-            uint8_t bin = (ioi - 300) / 20;  // 20ms bins
-            if (bin < 40) {
-                histogram[bin]++;
-            }
+        // Intervals are pre-filtered to valid range in onOnsetDetected()
+        uint8_t bin = (ioi - 300) / 20;  // 20ms bins
+        if (bin < 40) {
+            histogram[bin]++;
         }
     }
 

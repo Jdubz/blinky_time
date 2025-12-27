@@ -91,11 +91,11 @@ private:
 
     // ===== TEMPO ESTIMATION (Autocorrelation) =====
 
-    static constexpr uint8_t MAX_ONSETS = 64;  // Circular buffer size
-    uint32_t onsetTimes_[MAX_ONSETS];          // Timestamp of each onset
-    uint8_t onsetIndex_ = 0;                   // Current write position
-    uint8_t onsetCount_ = 0;                   // Number of valid onsets (0-MAX_ONSETS)
-    uint32_t lastOnsetTime_ = 0;               // Timestamp of last onset
+    static constexpr uint8_t MAX_INTERVALS = 63;  // One less than onset count (N onsets = N-1 intervals)
+    uint16_t onsetIntervals_[MAX_INTERVALS];      // Inter-onset intervals in ms (300-1000ms for 60-200 BPM)
+    uint8_t intervalIndex_ = 0;                   // Current write position in circular buffer
+    uint8_t intervalCount_ = 0;                   // Number of valid intervals (0-MAX_INTERVALS)
+    uint32_t lastOnsetTime_ = 0;                  // Timestamp of last onset (for interval calculation)
 
     /**
      * Estimate tempo from onset history using simple histogram
