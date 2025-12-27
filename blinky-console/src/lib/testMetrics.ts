@@ -119,10 +119,9 @@ export function exportResultsCSV(testName: string, metrics: TypeMetrics): string
     `False Negatives,${metrics.overall.falseNegatives}`,
     `Avg Timing Error,${metrics.overall.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}ms`,
     '',
-    'Per-Band Metrics:',
-    'Band,F1,Precision,Recall,TP,FP,FN,Avg Timing Error (ms)',
-    `Low (50-200Hz),${(metrics.low.f1Score * 100).toFixed(1)}%,${(metrics.low.precision * 100).toFixed(1)}%,${(metrics.low.recall * 100).toFixed(1)}%,${metrics.low.truePositives},${metrics.low.falsePositives},${metrics.low.falseNegatives},${metrics.low.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}`,
-    `High (2-8kHz),${(metrics.high.f1Score * 100).toFixed(1)}%,${(metrics.high.precision * 100).toFixed(1)}%,${(metrics.high.recall * 100).toFixed(1)}%,${metrics.high.truePositives},${metrics.high.falsePositives},${metrics.high.falseNegatives},${metrics.high.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}`,
+    'Transient Metrics:',
+    'Type,F1,Precision,Recall,TP,FP,FN,Avg Timing Error (ms)',
+    `Transient,${(metrics.transient.f1Score * 100).toFixed(1)}%,${(metrics.transient.precision * 100).toFixed(1)}%,${(metrics.transient.recall * 100).toFixed(1)}%,${metrics.transient.truePositives},${metrics.transient.falsePositives},${metrics.transient.falseNegatives},${metrics.transient.avgTimingErrorMs?.toFixed(2) ?? 'N/A'}`,
   ];
 
   return lines.join('\n');

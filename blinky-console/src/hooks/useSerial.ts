@@ -54,17 +54,7 @@ const MAX_CONSOLE_LINES = 500;
  */
 function validateAudioSample(sample: AudioSample): boolean {
   // Check all numeric fields are finite numbers
-  const numericFields = [
-    sample.l,
-    sample.t,
-    sample.pk,
-    sample.vl,
-    sample.raw,
-    sample.h,
-    sample.los,
-    sample.his,
-    sample.z,
-  ];
+  const numericFields = [sample.l, sample.t, sample.pk, sample.vl, sample.raw, sample.h, sample.z];
   if (numericFields.some(v => !Number.isFinite(v))) {
     console.warn('Invalid audio sample: non-finite value detected', sample);
     return false;
@@ -86,11 +76,7 @@ function validateAudioSample(sample: AudioSample): boolean {
   }
 
   // Check boolean flags are exactly 0 or 1
-  if (
-    ![0, 1].includes(sample.alive) ||
-    ![0, 1].includes(sample.lo) ||
-    ![0, 1].includes(sample.hi)
-  ) {
+  if (![0, 1].includes(sample.alive)) {
     console.warn('Invalid audio sample: boolean flag not 0 or 1', sample);
     return false;
   }

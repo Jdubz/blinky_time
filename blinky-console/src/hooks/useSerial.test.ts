@@ -201,10 +201,6 @@ describe('useSerial', () => {
               raw: 0.2,
               h: 32,
               alive: 1,
-              lo: 0,
-              hi: 0,
-              los: 0.0,
-              his: 0.0,
               z: 0.1,
             },
           },
@@ -320,10 +316,6 @@ describe('useSerial', () => {
         raw: 0.2,
         h: 32,
         alive: 1,
-        lo: 0,
-        hi: 0,
-        los: 0.0,
-        his: 0.0,
         z: 0.1,
       };
 

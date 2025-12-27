@@ -452,8 +452,7 @@ export function AudioVisualizer({
 
     const topPixel = yScale.getPixelForValue(1);
     const typeColors: Record<TransientType, string> = {
-      low: '#ef4444', // Red for bass
-      high: '#3b82f6', // Blue for brightness
+      transient: '#f59e0b', // Amber for transients
     };
 
     return groundTruthMarkersRef.current
@@ -622,16 +621,6 @@ export function AudioVisualizer({
                 </span>
               </div>
             )}
-          </div>
-          <div className="test-metrics-breakdown">
-            <span className="breakdown-item low">
-              Lo: {testMetrics.low.truePositives}/
-              {testMetrics.low.truePositives + testMetrics.low.falseNegatives}
-            </span>
-            <span className="breakdown-item high">
-              Hi: {testMetrics.high.truePositives}/
-              {testMetrics.high.truePositives + testMetrics.high.falseNegatives}
-            </span>
           </div>
         </div>
       )}
