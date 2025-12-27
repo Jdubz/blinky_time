@@ -41,6 +41,7 @@ public:
         float baselineReleaseTau; // Baseline release time constant
         float logCompressionFactor; // Log compression factor (0=disabled)
         uint16_t riseWindowMs;    // Multi-frame rise detection window
+        uint16_t _padding;        // Explicit padding for 4-byte alignment (total: 36 bytes)
     };
 
     struct ConfigData {
@@ -54,8 +55,8 @@ public:
     // Compile-time safety checks
     // These verify struct sizes match expected values to catch accidental changes
     // If these fail, you MUST increment CONFIG_VERSION!
-    static_assert(sizeof(StoredMicParams) == 34,
-        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion.");
+    static_assert(sizeof(StoredMicParams) == 36,
+        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (36 bytes = 8 floats + 2 uint16_t)");
     static_assert(sizeof(ConfigData) <= 80,
         "ConfigData too large! May not fit in flash sector. Review struct padding.");
 
