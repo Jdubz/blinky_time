@@ -1,4 +1,5 @@
 #include "Fire.h"
+#include "../music/MusicMode.h"
 #include <Arduino.h>
 
 // PROGMEM compatibility for non-AVR platforms (e.g., nRF52840)
@@ -154,7 +155,8 @@ namespace {
 Fire::Fire()
     : heat_(nullptr), tempHeat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
       lastBurstMs_(0), inSuppression_(false),
-      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0) {
+      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0),
+      music_(nullptr) {
 }
 
 Fire::~Fire() {
@@ -309,6 +311,10 @@ void Fire::setLayoutType(LayoutType layoutType) {
 
 void Fire::setOrientation(MatrixOrientation orientation) {
     orientation_ = orientation;
+}
+
+void Fire::setMusicMode(MusicMode* music) {
+    music_ = music;
 }
 
 void Fire::setParams(const FireParams& params) {
@@ -522,6 +528,17 @@ void Fire::generateSparks() {
         inSuppression_ = true;  // Suppress further bursts briefly
     }
 
+    // MUSIC MODE: Beat-synced spark bursts
+    // Triggers on detected beats when music mode is active
+    if (music_ && music_->isActive() && music_->beatHappened && !inSuppression_) {
+        // Stronger bursts on downbeats (wholeNote = every 4 beats)
+        uint8_t beatSparks = music_->wholeNote ? params_.burstSparks * 2 : params_.burstSparks;
+        numSparks += beatSparks;
+        sparkHeat = 255;  // Max heat for music-driven beats
+        lastBurstMs_ = now;
+        inSuppression_ = true;
+    }
+
     // Generate the sparks
     for (int s = 0; s < numSparks; s++) {
         int sparkPosition;
@@ -574,6 +591,14 @@ void Fire::applyCooling() {
     if (audioEnergy_ > 0.05f) {
         int8_t reduction = (int8_t)(params_.coolingAudioBias * audioEnergy_ * 2.0f);
         cooling = max(0, (int)cooling + reduction);
+    }
+
+    // MUSIC MODE: Phase-synced breathing effect
+    // Cooling oscillates with beat phase for rhythmic pulsing
+    if (music_ && music_->isActive()) {
+        float breathe = sin(music_->phase * 2.0f * PI);  // -1 to 1
+        int8_t coolingMod = (int8_t)(breathe * 15.0f);    // ±15 variation
+        cooling = max(0, min(255, (int)cooling + coolingMod));
     }
 
     for (int i = 0; i < this->numLeds_; i++) {

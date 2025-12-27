@@ -2,6 +2,7 @@
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
+#include "../music/MusicMode.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../types/Version.h"
@@ -12,7 +13,7 @@ extern const DeviceConfig& config;
 SerialConsole* SerialConsole::instance_ = nullptr;
 
 SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), configStorage_(nullptr) {
+    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), music_(nullptr), configStorage_(nullptr) {
     instance_ = this;
 }
 
@@ -99,6 +100,32 @@ void SerialConsole::registerSettings() {
             "Log compression factor (0=off, 1.0=standard)", 0.0f, 10.0f);
         settings_.registerUint16("risewindow", &mic_->riseWindowMs, "advanced",
             "Multi-frame rise window (ms)", 20, 500);
+
+        // Algorithmic improvements (NEW - for iterative tuning)
+        settings_.registerFloat("smoothtau", &mic_->energySmoothingTau, "advanced",
+            "Energy smoothing tau (s, 0=off)", 0.0f, 0.2f);
+        settings_.registerBool("localthresh", &mic_->useLocalThreshold, "advanced",
+            "Use adaptive local threshold (vs slow baseline)");
+        settings_.registerBool("peakpick", &mic_->requirePeakPicking, "advanced",
+            "Require local maxima (rising edge) for onset");
+    }
+
+    // === MUSIC MODE SETTINGS ===
+    if (music_) {
+        settings_.registerFloat("musicthresh", &music_->activationThreshold, "music",
+            "Music mode activation threshold (0-1)", 0.0f, 1.0f);
+        settings_.registerUint8("musicbeats", &music_->minBeatsToActivate, "music",
+            "Stable beats to activate", 2, 16);
+        settings_.registerUint8("musicmissed", &music_->maxMissedBeats, "music",
+            "Missed beats before deactivation", 4, 16);
+        settings_.registerFloat("bpmmin", &music_->bpmMin, "music",
+            "Minimum BPM", 40.0f, 120.0f);
+        settings_.registerFloat("bpmmax", &music_->bpmMax, "music",
+            "Maximum BPM", 120.0f, 240.0f);
+        settings_.registerFloat("pllkp", &music_->pllKp, "music",
+            "PLL proportional gain (responsiveness)", 0.01f, 0.5f);
+        settings_.registerFloat("pllki", &music_->pllKi, "music",
+            "PLL integral gain (stability)", 0.001f, 0.1f);
     }
 
 }
@@ -269,6 +296,26 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
             Serial.println(F("OK baselines reset"));
         } else {
             Serial.println(F("ERROR no mic"));
+        }
+        return true;
+    }
+
+    // === MUSIC MODE STATUS ===
+    if (strcmp(cmd, "music") == 0) {
+        if (music_) {
+            Serial.println(F("=== Music Mode Status ==="));
+            Serial.print(F("Active: "));
+            Serial.println(music_->active ? F("YES") : F("NO"));
+            Serial.print(F("BPM: "));
+            Serial.println(music_->bpm);
+            Serial.print(F("Phase: "));
+            Serial.println(music_->phase);
+            Serial.print(F("Beat #: "));
+            Serial.println(music_->beatNumber);
+            Serial.print(F("Confidence: "));
+            Serial.println(music_->getConfidence());
+        } else {
+            Serial.println(F("Music mode not available"));
         }
         return true;
     }

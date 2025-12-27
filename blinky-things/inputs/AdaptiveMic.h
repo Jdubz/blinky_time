@@ -83,6 +83,11 @@ public:
   float logCompressionFactor = 0.0f; // Log compression: 0=disabled, 1.0=aubio standard (default: disabled for low signals)
   uint16_t riseWindowMs = 100;       // Multi-frame rise detection window (default: 100ms)
 
+  // Algorithmic improvements (tunable)
+  float energySmoothingTau = 0.03f;  // Energy smoothing time constant (default: 30ms - fast enough for transients)
+  bool useLocalThreshold = false;    // Use adaptive local threshold instead of slow baseline (default: disabled - needs tuning)
+  bool requirePeakPicking = false;   // Require local maxima (rising edge) for onset (default: disabled - conflicts with smoothing lag)
+
   // Zero-crossing rate (for additional context)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
 
@@ -191,6 +196,18 @@ private:
   uint32_t lastLowOnsetMs = 0;
   uint32_t lastHighOnsetMs = 0;
 
+  // Smoothed energy for noise reduction
+  float smoothedLowEnergy = 0.0f;
+  float smoothedHighEnergy = 0.0f;
+  float prevSmoothedLowEnergy = 0.0f;
+  float prevSmoothedHighEnergy = 0.0f;
+
+  // Adaptive local threshold: circular buffer of recent energy
+  static constexpr uint8_t ENERGY_HISTORY_SIZE = 8;  // 8 samples @ 60fps ≈ 133ms history
+  float lowEnergyHistory[ENERGY_HISTORY_SIZE] = {0};
+  float highEnergyHistory[ENERGY_HISTORY_SIZE] = {0};
+  uint8_t energyHistoryIndex = 0;
+
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
   void hardwareCalibrate(uint32_t nowMs, float dt);
@@ -200,6 +217,7 @@ private:
   void calcBiquadBPF(float fc, float Q, float fs, float& b0, float& b1, float& b2, float& a1, float& a2);
   inline float processBiquad(float input, float& z1, float& z2, float b0, float b1, float b2, float a1, float a2);
   void detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount);
+  float calculateMedian(const float* values, uint8_t size) const;
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

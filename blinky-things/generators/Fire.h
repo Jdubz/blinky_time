@@ -3,6 +3,9 @@
 #include "Generator.h"
 #include "../config/TotemDefaults.h"
 
+// Forward declaration
+class MusicMode;
+
 /**
  * Fire - Realistic fire simulation generator
  *
@@ -74,6 +77,9 @@ public:
     void setLayoutType(LayoutType layoutType);
     void setOrientation(MatrixOrientation orientation);
 
+    // Music mode integration
+    void setMusicMode(MusicMode* music);
+
 private:
     MatrixOrientation orientation_ = HORIZONTAL;
     // Layout-specific heat propagation algorithms
@@ -109,4 +115,7 @@ private:
     // Layout-specific state
     uint8_t* sparkPositions_;   // For random layout spark tracking
     uint8_t numActivePositions_;
+
+    // Music mode integration
+    MusicMode* music_;          // Optional music mode for beat-synced effects
 };

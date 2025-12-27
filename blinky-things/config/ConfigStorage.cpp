@@ -7,6 +7,16 @@
 static mbed::FlashIAP flash;
 static bool flashOk = false;
 static uint32_t flashAddr = 0;
+// Flash storage for native nRF52 platform (Seeeduino:nrf52)
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+#include <Adafruit_LittleFS.h>
+#include <InternalFileSystem.h>
+using namespace Adafruit_LittleFS_Namespace;
+// CRITICAL: Use pointer to avoid Static Initialization Order Fiasco (SIOF)
+// Static File object constructor could crash before main() if InternalFS not ready
+static File* configFile = nullptr;
+static bool flashOk = false;
+static const char* CONFIG_FILENAME = "/config.bin";
 #endif
 
 ConfigStorage::ConfigStorage() : valid_(false), dirty_(false), lastSaveMs_(0) {
@@ -43,6 +53,26 @@ void ConfigStorage::begin() {
                 return;
             }
         }
+    }
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    // Initialize InternalFS (should already be initialized by core)
+    InternalFS.begin();
+
+    // CRITICAL: Initialize File pointer AFTER InternalFS is ready (prevents SIOF)
+    if (configFile == nullptr) {
+        configFile = new File(InternalFS);
+    }
+    flashOk = true;
+
+    // Runtime struct size validation
+    Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
+    Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
+    Serial.println(F(" bytes)"));
+
+    if (loadFromFlash()) {
+        Serial.println(F("[CONFIG] Loaded from flash"));
+        valid_ = true;
+        return;
     }
 #endif
     Serial.println(F("[CONFIG] Using defaults"));
@@ -100,6 +130,23 @@ bool ConfigStorage::loadFromFlash() {
 
     memcpy(&data_, &temp, sizeof(ConfigData));
     return true;
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    if (!flashOk || configFile == nullptr) return false;
+
+    // Open config file for reading
+    configFile->open(CONFIG_FILENAME, FILE_O_READ);
+    if (!(*configFile)) return false;  // Check if file opened successfully
+
+    ConfigData temp;
+    uint32_t bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
+    configFile->close();
+
+    if (bytesRead != sizeof(ConfigData)) return false;
+    if (temp.magic != MAGIC_NUMBER) return false;
+    if (temp.version != CONFIG_VERSION) return false;
+
+    memcpy(&data_, &temp, sizeof(ConfigData));
+    return true;
 #else
     return false;
 #endif
@@ -126,6 +173,36 @@ void ConfigStorage::saveToFlash() {
     }
 
     if (flash.program(&data_, flashAddr, sizeof(ConfigData)) != 0) {
+        Serial.println(F("[CONFIG] Write failed"));
+        return;
+    }
+
+    Serial.println(F("[CONFIG] Saved to flash"));
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    if (!flashOk || configFile == nullptr) {
+        Serial.println(F("[CONFIG] Flash not available"));
+        return;
+    }
+
+    data_.magic = MAGIC_NUMBER;
+    data_.version = CONFIG_VERSION;
+
+    // Delete existing file if present
+    if (InternalFS.exists(CONFIG_FILENAME)) {
+        InternalFS.remove(CONFIG_FILENAME);
+    }
+
+    // Write config to file
+    configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
+    if (!(*configFile)) {
+        Serial.println(F("[CONFIG] Failed to open file for writing"));
+        return;
+    }
+
+    uint32_t bytesWritten = configFile->write((const uint8_t*)&data_, sizeof(ConfigData));
+    configFile->close();
+
+    if (bytesWritten != sizeof(ConfigData)) {
         Serial.println(F("[CONFIG] Write failed"));
         return;
     }

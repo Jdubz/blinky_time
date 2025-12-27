@@ -372,6 +372,33 @@ inline float AdaptiveMic::processBiquad(float input, float& z1, float& z2, float
   return out;
 }
 
+float AdaptiveMic::calculateMedian(const float* values, uint8_t size) const {
+  // Simple insertion sort for small arrays (size ≤ 8)
+  // Creates temporary sorted copy to avoid modifying history
+  float sorted[ENERGY_HISTORY_SIZE];
+  for (uint8_t i = 0; i < size; i++) {
+    sorted[i] = values[i];
+  }
+
+  // Insertion sort
+  for (uint8_t i = 1; i < size; i++) {
+    float key = sorted[i];
+    int8_t j = i - 1;
+    while (j >= 0 && sorted[j] > key) {
+      sorted[j + 1] = sorted[j];
+      j--;
+    }
+    sorted[j + 1] = key;
+  }
+
+  // Return median (middle value for odd size, average of two middle for even)
+  if (size % 2 == 1) {
+    return sorted[size / 2];
+  } else {
+    return (sorted[size / 2 - 1] + sorted[size / 2]) / 2.0f;
+  }
+}
+
 void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   // Reset onsets and transient each frame (single-frame pulse behavior)
   lowOnset = false;
@@ -411,6 +438,25 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
     localLowEnergy = logf(1.0f + logCompressionFactor * localLowEnergy);
     localHighEnergy = logf(1.0f + logCompressionFactor * localHighEnergy);
   }
+
+  // === ALGORITHMIC IMPROVEMENT 1: Energy Smoothing ===
+  // Apply exponential moving average to reduce noise while preserving transients
+  // Fast enough (30ms default) to capture drum hits but smooths out high-frequency noise
+  float smoothingAlpha = 1.0f - expf(-dt / maxValue(energySmoothingTau, 0.001f));
+  prevSmoothedLowEnergy = smoothedLowEnergy;   // Store previous for peak picking
+  prevSmoothedHighEnergy = smoothedHighEnergy;
+  smoothedLowEnergy += smoothingAlpha * (localLowEnergy - smoothedLowEnergy);
+  smoothedHighEnergy += smoothingAlpha * (localHighEnergy - smoothedHighEnergy);
+
+  // Use smoothed energy for detection (reduces false positives from noise)
+  float detectionLowEnergy = smoothedLowEnergy;
+  float detectionHighEnergy = smoothedHighEnergy;
+
+  // === ALGORITHMIC IMPROVEMENT 2: Adaptive Local Thresholding ===
+  // Store current energy in circular buffer for local statistics
+  lowEnergyHistory[energyHistoryIndex] = detectionLowEnergy;
+  highEnergyHistory[energyHistoryIndex] = detectionHighEnergy;
+  energyHistoryIndex = (energyHistoryIndex + 1) % ENERGY_HISTORY_SIZE;
 
   // Update baselines with asymmetric attack/release (frame-rate independent)
   // Fast attack when energy drops, slow release when energy rises
@@ -454,9 +500,20 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   prevLowEnergy = localLowEnergy;
   prevHighEnergy = localHighEnergy;
 
-  // Calculate thresholds (max of absolute floor and relative threshold)
-  float lowThresh = maxValue(ONSET_FLOOR, lowBaseline * onsetThreshold);
-  float highThresh = maxValue(ONSET_FLOOR, highBaseline * onsetThreshold);
+  // Calculate thresholds using adaptive local threshold or slow baseline
+  float lowThresh, highThresh;
+  if (useLocalThreshold) {
+    // === ALGORITHMIC IMPROVEMENT 2: Use median of recent energy ===
+    // More adaptive to local music dynamics than slow baseline
+    float lowMedian = calculateMedian(lowEnergyHistory, ENERGY_HISTORY_SIZE);
+    float highMedian = calculateMedian(highEnergyHistory, ENERGY_HISTORY_SIZE);
+    lowThresh = maxValue(ONSET_FLOOR, lowMedian * onsetThreshold);
+    highThresh = maxValue(ONSET_FLOOR, highMedian * onsetThreshold);
+  } else {
+    // Original: slow-adapting baseline (2s release)
+    lowThresh = maxValue(ONSET_FLOOR, lowBaseline * onsetThreshold);
+    highThresh = maxValue(ONSET_FLOOR, highBaseline * onsetThreshold);
+  }
 
   // Track maximum strength for combined transient output
   float maxOnsetStrength = 0.0f;
@@ -464,11 +521,19 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   // Detect low band onset (bass transient)
   // Requires: cooldown elapsed AND energy above threshold AND rising sharply
   if ((int32_t)(nowMs - lastLowOnsetMs) > (int32_t)onsetCooldownMs) {
-    if (localLowEnergy > lowThresh && lowRise > riseThreshold) {
+    // === ALGORITHMIC IMPROVEMENT 3: Local Maxima Peak Picking ===
+    // Require energy to be rising (local peak) to prevent sustained notes from triggering
+    bool isPeak = !requirePeakPicking || (detectionLowEnergy > prevSmoothedLowEnergy);
+
+    if (detectionLowEnergy > lowThresh && lowRise > riseThreshold && isPeak) {
       lowOnset = true;
-      // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
-      float ratio = localLowEnergy / lowThresh;
-      lowStrength = clamp01((ratio - 1.0f) / (MAX_ONSET_RATIO - 1.0f));
+
+      // === ALGORITHMIC IMPROVEMENT 4: Enhanced Strength Calculation ===
+      // Combine onset component (how far above threshold) with rise component (how sharp the attack)
+      float onsetComponent = (detectionLowEnergy / lowThresh - 1.0f) / (MAX_ONSET_RATIO - 1.0f);
+      float riseComponent = (lowRise / riseThreshold - 1.0f) / (MAX_ONSET_RATIO - 1.0f);
+      lowStrength = clamp01(onsetComponent * 0.7f + riseComponent * 0.3f);
+
       maxOnsetStrength = maxValue(maxOnsetStrength, lowStrength);
       lastLowOnsetMs = nowMs;
     }
@@ -476,11 +541,17 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
 
   // Detect high band onset (brightness transient)
   if ((int32_t)(nowMs - lastHighOnsetMs) > (int32_t)onsetCooldownMs) {
-    if (localHighEnergy > highThresh && highRise > riseThreshold) {
+    // === ALGORITHMIC IMPROVEMENT 3: Local Maxima Peak Picking ===
+    bool isPeak = !requirePeakPicking || (detectionHighEnergy > prevSmoothedHighEnergy);
+
+    if (detectionHighEnergy > highThresh && highRise > riseThreshold && isPeak) {
       highOnset = true;
-      // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
-      float ratio = localHighEnergy / highThresh;
-      highStrength = clamp01((ratio - 1.0f) / (MAX_ONSET_RATIO - 1.0f));
+
+      // === ALGORITHMIC IMPROVEMENT 4: Enhanced Strength Calculation ===
+      float onsetComponent = (detectionHighEnergy / highThresh - 1.0f) / (MAX_ONSET_RATIO - 1.0f);
+      float riseComponent = (highRise / riseThreshold - 1.0f) / (MAX_ONSET_RATIO - 1.0f);
+      highStrength = clamp01(onsetComponent * 0.7f + riseComponent * 0.3f);
+
       maxOnsetStrength = maxValue(maxOnsetStrength, highStrength);
       lastHighOnsetMs = nowMs;
     }
