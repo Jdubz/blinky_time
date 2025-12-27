@@ -38,7 +38,6 @@ constexpr float BASELINE_TAU_RELEASE = 2.0f;  // 2s time constant for baseline r
 constexpr float ONSET_FLOOR = 0.0001f;        // Minimum energy floor to prevent noise triggers (lowered for sensitivity)
 constexpr float MAX_ONSET_RATIO = 3.0f;       // Strength normalization: 1.0 at 3x threshold
 constexpr float MIN_ENERGY_FOR_RISE = 0.00001f; // Minimum previous energy for rise calculation (prevents div-by-zero)
-constexpr float LOG_COMPRESSION_FACTOR = 1.0f; // Logarithmic compression constant (aubio standard: 1.0)
 constexpr uint32_t ENERGY_MIN_WINDOW_MS = 100; // Window for tracking recent minimum energy (multi-frame rise detection)
 
 // Alias for brevity (hardware gain limits are in PlatformConstants.h)

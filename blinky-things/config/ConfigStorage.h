@@ -51,6 +51,14 @@ public:
         uint8_t brightness;
     };
 
+    // Compile-time safety checks
+    // These verify struct sizes match expected values to catch accidental changes
+    // If these fail, you MUST increment CONFIG_VERSION!
+    static_assert(sizeof(StoredMicParams) == 34,
+        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion.");
+    static_assert(sizeof(ConfigData) <= 80,
+        "ConfigData too large! May not fit in flash sector. Review struct padding.");
+
     ConfigStorage();
     void begin();
     bool isValid() const { return valid_; }

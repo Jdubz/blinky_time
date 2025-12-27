@@ -21,6 +21,11 @@ void ConfigStorage::begin() {
         flashAddr = flash.get_flash_start() + flash.get_flash_size() - 4096;
         Serial.print(F("[CONFIG] Flash at 0x")); Serial.println(flashAddr, HEX);
 
+        // Runtime struct size validation (helps catch padding issues)
+        Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
+        Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
+        Serial.println(F(" bytes)"));
+
         // CRITICAL: Validate flash address before ANY operations
         // This prevents bootloader corruption
         if (!SafetyTest::isFlashAddressSafe(flashAddr, 4096)) {

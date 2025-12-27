@@ -129,9 +129,14 @@ This ensures the onset detection algorithm generalizes well across different sou
 
 Here's a helper script to download some free samples from Freesound:
 
-```bash
-# TODO: Create download_samples.sh script
-# - Uses Freesound API
+```powershell
+# See download_samples.ps1 in this folder for a template script
+# Customize it with your preferred sample sources:
+# - Uses Freesound API or direct URLs
 # - Downloads CC0 samples automatically
 # - Organizes into correct folders
+
+.\download_samples.ps1
 ```
+
+Note: Currently PowerShell only. Linux/Mac users can adapt the logic to bash.

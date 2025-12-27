@@ -324,6 +324,7 @@ void SerialConsole::restoreDefaults() {
     if (mic_) {
         mic_->peakTau = Defaults::PeakTau;              // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
+        mic_->hwTarget = 0.35f;                         // Target raw input level (±0.01 dead zone)
         mic_->onsetThreshold = Defaults::OnsetThreshold; // 2.5x baseline
         mic_->riseThreshold = Defaults::RiseThreshold;   // 1.5x rise required
         mic_->onsetCooldownMs = Defaults::OnsetCooldownMs; // 80ms cooldown
