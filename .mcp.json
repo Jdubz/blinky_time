@@ -15,7 +15,7 @@
       "type": "stdio",
       "command": "node",
       "args": [
-        "C:/Development/blinky_time/blinky-serial-mcp/dist/index.js"
+        "blinky-serial-mcp/dist/index.js"
       ],
       "env": {}
     }

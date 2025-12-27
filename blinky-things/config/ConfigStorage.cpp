@@ -7,6 +7,16 @@
 static mbed::FlashIAP flash;
 static bool flashOk = false;
 static uint32_t flashAddr = 0;
+// Flash storage for native nRF52 platform (Seeeduino:nrf52)
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+#include <Adafruit_LittleFS.h>
+#include <InternalFileSystem.h>
+using namespace Adafruit_LittleFS_Namespace;
+// CRITICAL: Use pointer to avoid Static Initialization Order Fiasco (SIOF)
+// Static File object constructor could crash before main() if InternalFS not ready
+static File* configFile = nullptr;
+static bool flashOk = false;
+static const char* CONFIG_FILENAME = "/config.bin";
 #endif
 
 ConfigStorage::ConfigStorage() : valid_(false), dirty_(false), lastSaveMs_(0) {
@@ -20,6 +30,11 @@ void ConfigStorage::begin() {
         // Use last 4KB of flash
         flashAddr = flash.get_flash_start() + flash.get_flash_size() - 4096;
         Serial.print(F("[CONFIG] Flash at 0x")); Serial.println(flashAddr, HEX);
+
+        // Runtime struct size validation (helps catch padding issues)
+        Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
+        Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
+        Serial.println(F(" bytes)"));
 
         // CRITICAL: Validate flash address before ANY operations
         // This prevents bootloader corruption
@@ -38,6 +53,26 @@ void ConfigStorage::begin() {
                 return;
             }
         }
+    }
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    // Initialize InternalFS (should already be initialized by core)
+    InternalFS.begin();
+
+    // CRITICAL: Initialize File pointer AFTER InternalFS is ready (prevents SIOF)
+    if (configFile == nullptr) {
+        configFile = new File(InternalFS);
+    }
+    flashOk = true;
+
+    // Runtime struct size validation
+    Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
+    Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
+    Serial.println(F(" bytes)"));
+
+    if (loadFromFlash()) {
+        Serial.println(F("[CONFIG] Loaded from flash"));
+        valid_ = true;
+        return;
     }
 #endif
     Serial.println(F("[CONFIG] Using defaults"));
@@ -69,12 +104,15 @@ void ConfigStorage::loadDefaults() {
     data_.mic.peakTau = 2.0f;        // 2s peak adaptation
     data_.mic.releaseTau = 5.0f;     // 5s peak release
     // Hardware AGC parameters (primary - optimizes raw ADC input)
-    data_.mic.hwTargetLow = 0.15f;   // Increase HW gain if raw < 15%
-    data_.mic.hwTargetHigh = 0.35f;  // Decrease HW gain if raw > 35%
+    data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
-    // Onset detection defaults (two-band system) - use TotemDefaults
-    data_.mic.onsetThreshold = Defaults::OnsetThreshold;
-    data_.mic.riseThreshold = Defaults::RiseThreshold;
+    // Simplified transient detection defaults (v19+)
+    // NOTE: Old onset detection configs (v18 and below) are incompatible with simplified detection.
+    // Version check in loadFromFlash() will reject old configs, forcing these defaults on upgrade.
+    data_.mic.transientThreshold = 3.0f;  // 3x louder than recent average
+    data_.mic.attackMultiplier = 1.3f;    // 30% sudden rise required
+    data_.mic.averageTau = 0.8f;          // Recent average tracking time
+    data_.mic.cooldownMs = 80;            // 80ms cooldown between hits
 
     data_.brightness = 100;
 }
@@ -85,6 +123,23 @@ bool ConfigStorage::loadFromFlash() {
 
     ConfigData temp;
     if (flash.read(&temp, flashAddr, sizeof(ConfigData)) != 0) return false;
+    if (temp.magic != MAGIC_NUMBER) return false;
+    if (temp.version != CONFIG_VERSION) return false;
+
+    memcpy(&data_, &temp, sizeof(ConfigData));
+    return true;
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    if (!flashOk || configFile == nullptr) return false;
+
+    // Open config file for reading
+    configFile->open(CONFIG_FILENAME, FILE_O_READ);
+    if (!(*configFile)) return false;  // Check if file opened successfully
+
+    ConfigData temp;
+    uint32_t bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
+    configFile->close();
+
+    if (bytesRead != sizeof(ConfigData)) return false;
     if (temp.magic != MAGIC_NUMBER) return false;
     if (temp.version != CONFIG_VERSION) return false;
 
@@ -116,6 +171,36 @@ void ConfigStorage::saveToFlash() {
     }
 
     if (flash.program(&data_, flashAddr, sizeof(ConfigData)) != 0) {
+        Serial.println(F("[CONFIG] Write failed"));
+        return;
+    }
+
+    Serial.println(F("[CONFIG] Saved to flash"));
+#elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
+    if (!flashOk || configFile == nullptr) {
+        Serial.println(F("[CONFIG] Flash not available"));
+        return;
+    }
+
+    data_.magic = MAGIC_NUMBER;
+    data_.version = CONFIG_VERSION;
+
+    // Delete existing file if present
+    if (InternalFS.exists(CONFIG_FILENAME)) {
+        InternalFS.remove(CONFIG_FILENAME);
+    }
+
+    // Write config to file
+    configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
+    if (!(*configFile)) {
+        Serial.println(F("[CONFIG] Failed to open file for writing"));
+        return;
+    }
+
+    uint32_t bytesWritten = configFile->write((const uint8_t*)&data_, sizeof(ConfigData));
+    configFile->close();
+
+    if (bytesWritten != sizeof(ConfigData)) {
         Serial.println(F("[CONFIG] Write failed"));
         return;
     }
@@ -159,12 +244,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     validateFloat(data_.mic.releaseTau, 1.0f, 30.0f, F("releaseTau"));
 
     // Validate hardware AGC parameters (expanded - allow full ADC range usage)
-    validateFloat(data_.mic.hwTargetLow, 0.05f, 0.5f, F("hwTargetLow"));
-    validateFloat(data_.mic.hwTargetHigh, 0.1f, 0.9f, F("hwTargetHigh"));
+    validateFloat(data_.mic.hwTarget, 0.05f, 0.9f, F("hwTarget"));
 
-    // Validate onset detection thresholds (two-band system)
-    validateFloat(data_.mic.onsetThreshold, 1.5f, 5.0f, F("onsetThreshold"));
-    validateFloat(data_.mic.riseThreshold, 1.1f, 2.0f, F("riseThreshold"));
+    // Validate simplified transient detection parameters (v19+)
+    validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
+    validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
+    validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
+    validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs")); // uint16_t safely converts to uint32_t
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
@@ -194,12 +280,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
     // Hardware AGC parameters (primary - raw input tracking)
-    mic.hwTargetLow = data_.mic.hwTargetLow;
-    mic.hwTargetHigh = data_.mic.hwTargetHigh;
+    mic.hwTarget = data_.mic.hwTarget;
 
-    // Onset detection thresholds (two-band system)
-    mic.onsetThreshold = data_.mic.onsetThreshold;
-    mic.riseThreshold = data_.mic.riseThreshold;
+    // Simplified transient detection parameters
+    mic.transientThreshold = data_.mic.transientThreshold;
+    mic.attackMultiplier = data_.mic.attackMultiplier;
+    mic.averageTau = data_.mic.averageTau;
+    mic.cooldownMs = data_.mic.cooldownMs;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -221,12 +308,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.peakTau = mic.peakTau;
     data_.mic.releaseTau = mic.releaseTau;
     // Hardware AGC parameters (primary - raw input tracking)
-    data_.mic.hwTargetLow = mic.hwTargetLow;
-    data_.mic.hwTargetHigh = mic.hwTargetHigh;
+    data_.mic.hwTarget = mic.hwTarget;
 
-    // Onset detection thresholds (two-band system)
-    data_.mic.onsetThreshold = mic.onsetThreshold;
-    data_.mic.riseThreshold = mic.riseThreshold;
+    // Simplified transient detection parameters
+    data_.mic.transientThreshold = mic.transientThreshold;
+    data_.mic.attackMultiplier = mic.attackMultiplier;
+    data_.mic.averageTau = mic.averageTau;
+    data_.mic.cooldownMs = mic.cooldownMs;
 
     saveToFlash();
     dirty_ = false;

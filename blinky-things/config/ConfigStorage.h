@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 17;  // Config schema v17: two-band onset detection (onsetThreshold, riseThreshold replaces kick/snare/hihat)
+    static const uint8_t CONFIG_VERSION = 19;  // Config schema v19: simplified transient detection (removed complex onset parameters)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -32,11 +32,13 @@ public:
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
         // Hardware AGC parameters (primary - optimizes ADC signal quality)
-        float hwTargetLow;        // Raw input below this → increase HW gain
-        float hwTargetHigh;       // Raw input above this → decrease HW gain
-        // Onset detection thresholds (two-band system)
-        float onsetThreshold;     // Multiples of baseline for onset detection
-        float riseThreshold;      // Ratio to previous frame for rise detection
+        float hwTarget;           // Target raw input level (±0.01 dead zone)
+        // Simplified transient detection parameters
+        float transientThreshold; // Hit threshold (multiples of recent average)
+        float attackMultiplier;   // Attack multiplier (sudden rise ratio)
+        float averageTau;         // Recent average tracking time (seconds)
+        uint16_t cooldownMs;      // Cooldown between hits (ms)
+        uint16_t _padding;        // Explicit padding for 4-byte alignment (total: 28 bytes)
     };
 
     struct ConfigData {
@@ -46,6 +48,14 @@ public:
         StoredMicParams mic;
         uint8_t brightness;
     };
+
+    // Compile-time safety checks
+    // These verify struct sizes match expected values to catch accidental changes
+    // If these fail, you MUST increment CONFIG_VERSION!
+    static_assert(sizeof(StoredMicParams) == 28,
+        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (28 bytes = 6 floats + 2 uint16_t)");
+    static_assert(sizeof(ConfigData) <= 80,
+        "ConfigData too large! May not fit in flash sector. Review struct padding.");
 
     ConfigStorage();
     void begin();

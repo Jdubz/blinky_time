@@ -9,6 +9,7 @@ class ConfigStorage;
 class Fire;
 class AdaptiveMic;
 class BatteryMonitor;
+class MusicMode;
 
 /**
  * SerialConsole - JSON API for web app communication
@@ -44,6 +45,7 @@ public:
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
+    void setMusicMode(MusicMode* music) { music_ = music; }
     SettingsRegistry& getSettings() { return settings_; }
 
 private:
@@ -57,6 +59,7 @@ private:
     Fire* fireGenerator_;
     AdaptiveMic* mic_;
     BatteryMonitor* battery_;
+    MusicMode* music_;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
 
@@ -69,10 +72,6 @@ private:
     static const uint16_t STREAM_PERIOD_MS = 50;        // Normal: ~20Hz for audio
     static const uint16_t STREAM_FAST_PERIOD_MS = 10;   // Fast: ~100Hz for testing
     static const uint16_t BATTERY_PERIOD_MS = 1000;     // 1Hz for battery
-
-    // Test mode state
-    bool testHwGainLocked_ = false;
-    int testLockedHwGain_ = 40;
 
     // Static instance pointer for callbacks
     static SerialConsole* instance_;

@@ -32,12 +32,6 @@ constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f; // Jump to signal if it exceeds 
 constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f; // Valley releases 4x slower than peak (very slow upward drift)
 constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of full scale, suits low-noise mic)
 
-// Onset detection constants
-constexpr float BASELINE_TAU = 0.5f;          // 500ms time constant for baseline (slower = more stable)
-constexpr float ONSET_FLOOR = 0.001f;         // Minimum energy floor to prevent noise triggers
-constexpr float MAX_ONSET_RATIO = 3.0f;       // Strength normalization: 1.0 at 3x threshold
-constexpr float MIN_ENERGY_FOR_RISE = 0.0001f; // Minimum previous energy for rise calculation (prevents div-by-zero)
-
 // Alias for brevity (hardware gain limits are in PlatformConstants.h)
 using Platform::Microphone::HW_GAIN_MIN;
 using Platform::Microphone::HW_GAIN_MAX;
@@ -76,12 +70,9 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   lastTransientMs = time_.millis();
   lastHwCalibMs = time_.millis();
   lastIsrMs = time_.millis();
-  lastLowOnsetMs = time_.millis();
-  lastHighOnsetMs = time_.millis();
   pdmAlive = false;
-
-  // Initialize biquad filters for onset detection
-  initBiquadFilters();
+  recentAverage = 0.0f;
+  previousLevel = 0.0f;
 
   return true;
 }
@@ -89,19 +80,6 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
 void AdaptiveMic::end() {
   pdm_.end();
   s_instance = nullptr;
-}
-
-void AdaptiveMic::resetBaselines() {
-  // Reset baselines to floor value for fresh detection
-  // Useful for test mode to start with known state
-  time_.noInterrupts();
-  lowBaseline = ONSET_FLOOR;
-  highBaseline = ONSET_FLOOR;
-  prevLowEnergy = 0.0f;
-  prevHighEnergy = 0.0f;
-  lowEnergy = 0.0f;
-  highEnergy = 0.0f;
-  time_.interrupts();
 }
 
 void AdaptiveMic::update(float dt) {
@@ -170,14 +148,31 @@ void AdaptiveMic::update(float dt) {
     float mapped = (normalized - valleyLevel) / range;
     level = clamp01(mapped);
 
-    // Two-band onset detection (always enabled)
-    detectOnsets(nowMs, dt, n);
+    // Simplified amplitude spike detection
+    detectTransients(nowMs, dt);
   }
 
   if (!pdmAlive) return;
 
   // Hardware gain adaptation (PRIMARY - optimizes ADC signal quality)
-  hardwareCalibrate(nowMs, dt);
+  // Skip if gain is locked for testing
+  if (!hwGainLocked_) {
+    hardwareCalibrate(nowMs, dt);
+  }
+}
+
+void AdaptiveMic::lockHwGain(int gain) {
+  // Lock hardware gain at specific value for testing (disables AGC)
+  hwGainLocked_ = true;
+  currentHardwareGain = constrainValue(gain, HW_GAIN_MIN, HW_GAIN_MAX);
+  pdm_.setGain(currentHardwareGain);
+}
+
+void AdaptiveMic::unlockHwGain() {
+  // Unlock hardware gain and re-enable AGC
+  hwGainLocked_ = false;
+  // Reset calibration timer to trigger immediate recalibration
+  lastHwCalibMs = time_.millis() - MicConstants::HW_CALIB_PERIOD_MS;
 }
 
 // ---------- Private helpers ----------
@@ -202,7 +197,7 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, ui
 
 void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   // PRIMARY GAIN CONTROL: Adjust hardware gain based on raw ADC input level
-  // Goal: Keep raw input in optimal range (hwTargetLow - hwTargetHigh) for best SNR
+  // Goal: Keep raw input at target level (hwTarget) for best SNR
   // This ensures high-quality signal into ADC before software processing
 
   // Adaptation period must be >= tracking window for stable measurements
@@ -210,23 +205,19 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   // Use signed arithmetic to handle millis() wraparound at 49.7 days
   if ((int32_t)(nowMs - lastHwCalibMs) < (int32_t)MicConstants::HW_CALIB_PERIOD_MS) return;
 
-  // Calculate how far we are from target range
-  float errorMagnitude = 0.0f;
-  int direction = 0;
+  // Calculate error from target (signed: negative = too quiet, positive = too loud)
+  constexpr float HW_TARGET_DEADZONE = 0.01f;  // ±0.01 dead zone around target
+  float error = rawTrackedLevel - hwTarget;
+  float errorMagnitude = fabsf(error);
 
-  if (rawTrackedLevel < hwTargetLow) {
-    // Raw input too quiet → increase hardware gain for better SNR
-    errorMagnitude = hwTargetLow - rawTrackedLevel;
-    direction = +1;
-  } else if (rawTrackedLevel > hwTargetHigh) {
-    // Raw input too loud → decrease hardware gain to prevent clipping
-    errorMagnitude = rawTrackedLevel - hwTargetHigh;
-    direction = -1;
-  } else {
-    // In target range - no adjustment needed
+  // Dead zone: Don't adjust if within ±0.01 of target
+  if (errorMagnitude <= HW_TARGET_DEADZONE) {
     lastHwCalibMs = nowMs;
     return;
   }
+
+  // Determine direction: negative error = too quiet → increase gain
+  int direction = (error < 0.0f) ? +1 : -1;
 
   // Adaptive step size: take bigger steps when far from target
   // Small error (< 0.05): +/- 1 step (fine-tuning)
@@ -293,22 +284,6 @@ void AdaptiveMic::onPDMdata() {
       s_zeroCrossings++;
     }
     s_lastSample = s;
-
-    // Two-band filtering for onset detection
-    // Process normalized sample through biquad filters and accumulate band energies
-    float normalized = (float)s / 32768.0f;
-
-    // Process through each frequency band filter
-    float lowOut = s_instance->processBiquad(normalized, s_instance->lowZ1, s_instance->lowZ2,
-                                              s_instance->lowB0, s_instance->lowB1, s_instance->lowB2,
-                                              s_instance->lowA1, s_instance->lowA2);
-    float highOut = s_instance->processBiquad(normalized, s_instance->highZ1, s_instance->highZ2,
-                                               s_instance->highB0, s_instance->highB1, s_instance->highB2,
-                                               s_instance->highA1, s_instance->highA2);
-
-    // Accumulate energy (absolute value)
-    s_instance->lowEnergy += (lowOut < 0.0f) ? -lowOut : lowOut;
-    s_instance->highEnergy += (highOut < 0.0f) ? -highOut : highOut;
   }
 
   // Note: We're already in ISR context, so interrupts are disabled.
@@ -321,137 +296,37 @@ void AdaptiveMic::onPDMdata() {
   s_instance->lastIsrMs = s_instance->time_.millis();
 }
 
-// ---------- Biquad Filter Implementation ----------
-
-void AdaptiveMic::calcBiquadBPF(float fc, float Q, float fs, float& b0, float& b1, float& b2, float& a1, float& a2) {
-  // Bandpass filter using Audio EQ Cookbook formulas
-  // fc = center frequency, Q = quality factor, fs = sample rate
-  float omega = 2.0f * M_PI * fc / fs;
-  float sinW = sinf(omega);
-  float cosW = cosf(omega);
-  float alpha = sinW / (2.0f * Q);
-
-  float a0 = 1.0f + alpha;
-  b0 = alpha / a0;
-  b1 = 0.0f;
-  b2 = -alpha / a0;
-  a1 = -2.0f * cosW / a0;
-  a2 = (1.0f - alpha) / a0;
-}
-
-void AdaptiveMic::initBiquadFilters() {
-  // Low band filter: 50-200 Hz bandpass for bass transients
-  // Center = 100 Hz, Q = 0.7 for wide bandwidth (~50-200 Hz)
-  calcBiquadBPF(100.0f, 0.7f, (float)_sampleRate, lowB0, lowB1, lowB2, lowA1, lowA2);
-
-  // High band filter: 2-8 kHz bandpass for brightness/attack transients
-  // Center = 4 kHz, Q = 0.5 for very wide bandwidth (~2-8 kHz)
-  calcBiquadBPF(4000.0f, 0.5f, (float)_sampleRate, highB0, highB1, highB2, highA1, highA2);
-
-  // Reset filter state
-  lowZ1 = lowZ2 = 0.0f;
-  highZ1 = highZ2 = 0.0f;
-
-  // Reset energy accumulators, baselines, and previous energy
-  // Initialize baselines to ONSET_FLOOR to prevent spurious triggers on first frames
-  lowEnergy = highEnergy = 0.0f;
-  lowBaseline = highBaseline = ONSET_FLOOR;
-  prevLowEnergy = prevHighEnergy = 0.0f;
-}
-
-inline float AdaptiveMic::processBiquad(float input, float& z1, float& z2, float b0, float b1, float b2, float a1, float a2) {
-  // Direct Form II implementation (most efficient for embedded)
-  // y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
-  float out = b0 * input + z1;
-  z1 = b1 * input - a1 * out + z2;
-  z2 = b2 * input - a2 * out;
-  return out;
-}
-
-void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
-  // Reset onsets and transient each frame (single-frame pulse behavior)
-  lowOnset = false;
-  highOnset = false;
+/**
+ * SIMPLIFIED TRANSIENT DETECTION - "The Drummer's Algorithm"
+ *
+ * Detects MUSICAL hits (kicks, snares, bass drops) by looking for:
+ * 1. LOUD: Significantly louder than recent average (3x default)
+ * 2. SUDDEN: Rapidly rising (30% increase from previous frame)
+ * 3. INFREQUENT: Cooldown prevents double-triggers
+ *
+ * This replaces 170 lines of DSP complexity with 15 lines of
+ * "did someone hit a drum?" logic.
+ */
+void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
+  // Reset transient (single-frame pulse)
   transient = 0.0f;
-  lowStrength = 0.0f;
-  highStrength = 0.0f;
 
-  // Read energy values atomically (ISR may be updating them)
-  float localLowEnergy, localHighEnergy;
-  time_.noInterrupts();
-  localLowEnergy = lowEnergy;
-  localHighEnergy = highEnergy;
-  time_.interrupts();
+  // Track recent average with exponential moving average
+  float alpha = 1.0f - expf(-dt / averageTau);
+  recentAverage += alpha * (level - recentAverage);
 
-  // Normalize energy by sample count to handle variable frame rates
-  if (sampleCount > 0) {
-    localLowEnergy /= (float)sampleCount;
-    localHighEnergy /= (float)sampleCount;
-  } else {
-    // No samples processed, skip detection this frame
-    time_.noInterrupts();
-    lowEnergy = 0.0f;
-    highEnergy = 0.0f;
-    time_.interrupts();
-    return;
-  }
+  // Detect transient: LOUD + SUDDEN + not in cooldown
+  bool isLoudEnough = level > recentAverage * transientThreshold;
+  bool isAttacking = level > previousLevel * attackMultiplier;
+  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
 
-  // Update baselines with slow exponential moving average (frame-rate independent)
-  float baselineAlpha = 1.0f - expf(-dt / maxValue(baselineTau, 0.001f));
-  lowBaseline += baselineAlpha * (localLowEnergy - lowBaseline);
-  highBaseline += baselineAlpha * (localHighEnergy - highBaseline);
-
-  // Calculate rise from previous frame (for onset detection)
-  // When previous energy is too small to compute meaningful ratio, return large value
-  // to allow first-frame detection (10.0f passes default riseThreshold of 1.5)
-  float lowRise = (prevLowEnergy > MIN_ENERGY_FOR_RISE) ? localLowEnergy / prevLowEnergy : 10.0f;
-  float highRise = (prevHighEnergy > MIN_ENERGY_FOR_RISE) ? localHighEnergy / prevHighEnergy : 10.0f;
-
-  // Store current energy for next frame's rise calculation
-  prevLowEnergy = localLowEnergy;
-  prevHighEnergy = localHighEnergy;
-
-  // Calculate thresholds (max of absolute floor and relative threshold)
-  float lowThresh = maxValue(ONSET_FLOOR, lowBaseline * onsetThreshold);
-  float highThresh = maxValue(ONSET_FLOOR, highBaseline * onsetThreshold);
-
-  // Track maximum strength for combined transient output
-  float maxOnsetStrength = 0.0f;
-
-  // Detect low band onset (bass transient)
-  // Requires: cooldown elapsed AND energy above threshold AND rising sharply
-  if ((int32_t)(nowMs - lastLowOnsetMs) > (int32_t)onsetCooldownMs) {
-    if (localLowEnergy > lowThresh && lowRise > riseThreshold) {
-      lowOnset = true;
-      // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
-      float ratio = localLowEnergy / lowThresh;
-      lowStrength = clamp01((ratio - 1.0f) / (MAX_ONSET_RATIO - 1.0f));
-      maxOnsetStrength = maxValue(maxOnsetStrength, lowStrength);
-      lastLowOnsetMs = nowMs;
-    }
-  }
-
-  // Detect high band onset (brightness transient)
-  if ((int32_t)(nowMs - lastHighOnsetMs) > (int32_t)onsetCooldownMs) {
-    if (localHighEnergy > highThresh && highRise > riseThreshold) {
-      highOnset = true;
-      // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
-      float ratio = localHighEnergy / highThresh;
-      highStrength = clamp01((ratio - 1.0f) / (MAX_ONSET_RATIO - 1.0f));
-      maxOnsetStrength = maxValue(maxOnsetStrength, highStrength);
-      lastHighOnsetMs = nowMs;
-    }
-  }
-
-  // Set combined transient output
-  if (maxOnsetStrength > 0.0f) {
-    transient = maxOnsetStrength;
+  if (isLoudEnough && isAttacking && cooldownElapsed) {
+    // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
+    float ratio = level / maxValue(recentAverage, 0.001f);
+    transient = clamp01((ratio - transientThreshold) / transientThreshold);
     lastTransientMs = nowMs;
   }
 
-  // Reset energy accumulators atomically for next frame
-  time_.noInterrupts();
-  lowEnergy = 0.0f;
-  highEnergy = 0.0f;
-  time_.interrupts();
+  // Store for next frame
+  previousLevel = level;
 }

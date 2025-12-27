@@ -1,0 +1,35 @@
+# Critical Rules for Blinky Development
+
+## 🚨 UPLOAD METHOD - CRITICAL
+**NEVER use arduino-cli for uploading firmware!**
+- arduino-cli is fundamentally flawed and WILL brick the device
+- ONLY upload using Arduino IDE GUI
+- This is non-negotiable - devices cannot be recovered without SWD hardware
+
+## 🔧 Before ANY Firmware Upload
+1. Run safety checks: `python scripts/check_config_safety.py`
+2. Review struct size changes in ConfigStorage.h
+3. Increment CONFIG_VERSION when adding/removing config fields
+4. Add validation for new config parameters in ConfigStorage.cpp
+5. Test in safe mode first if available
+
+## 📋 Config Version Management
+When modifying ConfigStorage structs:
+- **ALWAYS** increment CONFIG_VERSION constant
+- **ALWAYS** add validation for new parameters in loadConfiguration()
+- Document changes in CONFIG_VERSION comment
+
+## ⚠️ High-Risk Operations
+- Flash writes (config storage)
+- Struct size changes (config/settings)
+- Static initialization (global constructors)
+- Interrupt handler modifications
+- Memory allocations in setup()
+
+## 🧪 Pre-Upload Checklist
+- [ ] All tests pass
+- [ ] Safety checks pass
+- [ ] CONFIG_VERSION incremented if needed
+- [ ] New parameters validated
+- [ ] Compiled successfully in Arduino IDE
+- [ ] Upload using Arduino IDE (NOT arduino-cli)

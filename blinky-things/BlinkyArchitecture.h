@@ -46,6 +46,9 @@
 #include "inputs/IMUHelper.h"     // Compiles without LSM6DS3; define IMU_ENABLED to activate
 #include "inputs/SerialConsole.h"
 
+// Music detection
+#include "music/MusicMode.h"
+
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING
 #include "tests/GeneratorTestRunner.h"

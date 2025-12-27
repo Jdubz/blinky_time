@@ -1,4 +1,5 @@
 #include "Fire.h"
+#include "../music/MusicMode.h"
 #include <Arduino.h>
 
 // PROGMEM compatibility for non-AVR platforms (e.g., nRF52840)
@@ -154,7 +155,8 @@ namespace {
 Fire::Fire()
     : heat_(nullptr), tempHeat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
       lastBurstMs_(0), inSuppression_(false),
-      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0) {
+      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0),
+      music_(nullptr) {
 }
 
 Fire::~Fire() {
@@ -254,6 +256,7 @@ void Fire::update() {
     if (currentMs - this->lastUpdateMs_ < 30) {  // ~33 FPS max
         return;
     }
+    float dtMs = (float)(currentMs - this->lastUpdateMs_);
     this->lastUpdateMs_ = currentMs;
 
     // Apply cooling first
@@ -266,7 +269,7 @@ void Fire::update() {
     propagateHeat();
 
     // Apply subtle ember glow (noise floor)
-    applyEmbers();
+    applyEmbers(dtMs);
 }
 
 void Fire::reset() {
@@ -309,6 +312,10 @@ void Fire::setLayoutType(LayoutType layoutType) {
 
 void Fire::setOrientation(MatrixOrientation orientation) {
     orientation_ = orientation;
+}
+
+void Fire::setMusicMode(MusicMode* music) {
+    music_ = music;
 }
 
 void Fire::setParams(const FireParams& params) {
@@ -510,9 +517,19 @@ void Fire::generateSparks() {
         sparkHeat = max(energyHeat, params_.sparkHeatMin);
     }
 
-    // BURST: Transient impulse triggers burst (only if not suppressed)
+    // MUSIC MODE: Beat-synced spark bursts (highest priority)
+    // Triggers on detected beats when music mode is active
+    if (music_ && music_->isActive() && music_->beatHappened && !inSuppression_) {
+        // Stronger bursts on downbeats (wholeNote = every 4 beats)
+        uint8_t beatSparks = music_->wholeNote ? params_.burstSparks * 2 : params_.burstSparks;
+        numSparks += beatSparks;
+        sparkHeat = 255;  // Max heat for music-driven beats
+        lastBurstMs_ = now;
+        inSuppression_ = true;
+    }
+    // BURST: Transient impulse triggers burst (only if music didn't trigger)
     // audioHit_ is 0.0 normally, non-zero when transient detected (low/high band onset)
-    if (audioHit_ > 0.0f && !inSuppression_) {
+    else if (audioHit_ > 0.0f && !inSuppression_) {
         float strength = audioHit_;  // Use transient strength (0.0-1.0)
         numSparks += params_.burstSparks;
         // Scale heat by strength: weak transient = less intense, strong = max
@@ -576,15 +593,23 @@ void Fire::applyCooling() {
         cooling = max(0, (int)cooling + reduction);
     }
 
+    // MUSIC MODE: Phase-synced breathing effect
+    // Cooling oscillates with beat phase for rhythmic pulsing
+    if (music_ && music_->isActive()) {
+        float breathe = sin(music_->phase * 2.0f * PI);  // -1 to 1
+        int8_t coolingMod = (int8_t)(breathe * 15.0f);    // ±15 variation
+        cooling = max(0, min(255, (int)cooling + coolingMod));
+    }
+
     for (int i = 0; i < this->numLeds_; i++) {
         uint8_t coolAmount = random(0, cooling + 1);
         heat_[i] = (heat_[i] > coolAmount) ? heat_[i] - coolAmount : 0;
     }
 }
 
-void Fire::applyEmbers() {
-    // Advance noise phase very slowly
-    emberNoisePhase_ += params_.emberNoiseSpeed * 30.0f;  // 30ms frame time
+void Fire::applyEmbers(float dtMs) {
+    // Advance noise phase very slowly (uses actual frame time for consistency)
+    emberNoisePhase_ += params_.emberNoiseSpeed * dtMs;
 
     // Ember brightness pulses directly with mic level (no transient influence)
     // Base brightness + audio-reactive component
