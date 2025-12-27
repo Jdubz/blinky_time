@@ -89,6 +89,10 @@ void SerialConsole::registerSettings() {
             "Onset detection threshold (multiples of baseline)", 1.5f, 5.0f);
         settings_.registerFloat("risethresh", &mic_->riseThreshold, "freq",
             "Rise detection threshold (ratio to prev frame)", 1.1f, 2.0f);
+        settings_.registerUint16("cooldown", &mic_->onsetCooldownMs, "freq",
+            "Onset cooldown (ms between detections)", 20, 500);
+        settings_.registerFloat("baselinetau", &mic_->baselineTau, "freq",
+            "Baseline adaptation time constant (s)", 0.1f, 5.0f);
     }
 
 }
@@ -210,6 +214,59 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    if (strcmp(cmd, "stream debug") == 0) {
+        streamEnabled_ = true;
+        streamDebug_ = true;
+        Serial.println(F("OK debug"));
+        return true;
+    }
+
+    if (strcmp(cmd, "stream normal") == 0) {
+        streamDebug_ = false;
+        streamFast_ = false;
+        Serial.println(F("OK normal"));
+        return true;
+    }
+
+    if (strcmp(cmd, "stream fast") == 0) {
+        streamEnabled_ = true;
+        streamFast_ = true;
+        Serial.println(F("OK fast"));
+        return true;
+    }
+
+    // === TEST MODE COMMANDS ===
+    if (strncmp(cmd, "test lock hwgain", 16) == 0) {
+        testHwGainLocked_ = true;
+        // Parse optional gain value
+        if (strlen(cmd) > 17 && mic_) {
+            int gain = atoi(cmd + 17);
+            if (gain >= 0 && gain <= 80) {
+                testLockedHwGain_ = gain;
+                mic_->currentHardwareGain = gain;
+            }
+        }
+        Serial.print(F("OK locked at "));
+        Serial.println(testLockedHwGain_);
+        return true;
+    }
+
+    if (strcmp(cmd, "test unlock hwgain") == 0) {
+        testHwGainLocked_ = false;
+        Serial.println(F("OK unlocked"));
+        return true;
+    }
+
+    if (strcmp(cmd, "test reset baselines") == 0) {
+        if (mic_) {
+            mic_->resetBaselines();
+            Serial.println(F("OK baselines reset"));
+        } else {
+            Serial.println(F("ERROR no mic"));
+        }
+        return true;
+    }
+
     // === CONFIGURATION COMMANDS ===
     if (strcmp(cmd, "save") == 0) {
         if (configStorage_ && fireGenerator_ && mic_) {
@@ -263,6 +320,8 @@ void SerialConsole::restoreDefaults() {
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
         mic_->onsetThreshold = Defaults::OnsetThreshold; // 2.5x baseline
         mic_->riseThreshold = Defaults::RiseThreshold;   // 1.5x rise required
+        mic_->onsetCooldownMs = Defaults::OnsetCooldownMs; // 80ms cooldown
+        mic_->baselineTau = Defaults::BaselineTau;       // 0.5s baseline tau
     }
 }
 
@@ -271,8 +330,9 @@ void SerialConsole::streamTick() {
 
     uint32_t now = millis();
 
-    // Audio streaming at ~20Hz
-    if (mic_ && (now - streamLastMs_ >= STREAM_PERIOD_MS)) {
+    // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
+    uint16_t period = streamFast_ ? STREAM_FAST_PERIOD_MS : STREAM_PERIOD_MS;
+    if (mic_ && (now - streamLastMs_ >= period)) {
         streamLastMs_ = now;
 
         // Output compact JSON for web app (abbreviated field names for serial bandwidth)
@@ -291,6 +351,12 @@ void SerialConsole::streamTick() {
         // los   → low strength     : 0-1 (normalized: 0 at threshold, 1.0 at 3x threshold)
         // his   → high strength    : 0-1 (normalized: 0 at threshold, 1.0 at 3x threshold)
         // z     → zero-crossing    : 0-1 (zero-crossing rate, for frequency classification)
+        //
+        // Debug mode additional fields:
+        // lob   → low baseline     : float (adaptive baseline for low band)
+        // hib   → high baseline    : float (adaptive baseline for high band)
+        // lop   → low prev energy  : float (previous frame energy for rise calculation)
+        // hip   → high prev energy : float (previous frame energy for rise calculation)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
@@ -315,6 +381,19 @@ void SerialConsole::streamTick() {
         Serial.print(mic_->getHighStrength(), 2);
         Serial.print(F(",\"z\":"));
         Serial.print(mic_->zeroCrossingRate, 2);
+
+        // Debug mode: add baseline and previous energy fields
+        if (streamDebug_) {
+            Serial.print(F(",\"lob\":"));
+            Serial.print(mic_->getLowBaseline(), 4);
+            Serial.print(F(",\"hib\":"));
+            Serial.print(mic_->getHighBaseline(), 4);
+            Serial.print(F(",\"lop\":"));
+            Serial.print(mic_->getPrevLowEnergy(), 4);
+            Serial.print(F(",\"hip\":"));
+            Serial.print(mic_->getPrevHighEnergy(), 4);
+        }
+
         Serial.println(F("}}"));
     }
 

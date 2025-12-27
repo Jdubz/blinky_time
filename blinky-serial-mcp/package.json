@@ -1,0 +1,24 @@
+{
+  "name": "blinky-serial-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for blinky device serial communication",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "blinky-serial-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "serialport": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}

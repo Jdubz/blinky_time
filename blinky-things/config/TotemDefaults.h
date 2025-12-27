@@ -9,6 +9,8 @@ namespace Defaults {
   // ---- Onset detection thresholds (two-band system) ----
   constexpr float OnsetThreshold = 2.5f;  // Energy must exceed baseline * threshold (2.5x)
   constexpr float RiseThreshold  = 1.5f;  // Energy must rise by this factor from previous frame
+  constexpr uint16_t OnsetCooldownMs = 80;  // Cooldown between detections (80ms = 12.5 hits/sec max)
+  constexpr float BaselineTau = 0.5f;       // Baseline adaptation time constant (s)
 
   // ---- Performance constants ----
   constexpr float CoolingScaleFactor = 0.5f / 255.0f;

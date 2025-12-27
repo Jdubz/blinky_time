@@ -74,6 +74,10 @@ public:
   float onsetThreshold = 2.5f;    // Energy must exceed baseline * threshold (default: 2.5x)
   float riseThreshold  = 1.5f;    // Energy must rise by this factor from previous frame (default: 1.5x)
 
+  // Onset detection timing (tunable)
+  uint16_t onsetCooldownMs = 80;  // Cooldown between detections (default: 80ms = 12.5 hits/sec max)
+  float baselineTau = 0.5f;       // Baseline adaptation time constant (default: 0.5s)
+
   // Zero-crossing rate (for additional context)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
 
@@ -100,6 +104,15 @@ public:
   inline bool getHighOnset() const { return highOnset; }
   inline float getLowStrength() const { return lowStrength; }
   inline float getHighStrength() const { return highStrength; }
+
+  // Debug getters for testing/tuning (exposes internal detection state)
+  inline float getLowBaseline() const { return lowBaseline; }
+  inline float getHighBaseline() const { return highBaseline; }
+  inline float getPrevLowEnergy() const { return prevLowEnergy; }
+  inline float getPrevHighEnergy() const { return prevHighEnergy; }
+
+  // Reset baselines (for test mode - start fresh detection)
+  void resetBaselines();
 
 public:
   /**

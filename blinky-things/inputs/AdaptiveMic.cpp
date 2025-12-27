@@ -91,6 +91,19 @@ void AdaptiveMic::end() {
   s_instance = nullptr;
 }
 
+void AdaptiveMic::resetBaselines() {
+  // Reset baselines to floor value for fresh detection
+  // Useful for test mode to start with known state
+  time_.noInterrupts();
+  lowBaseline = ONSET_FLOOR;
+  highBaseline = ONSET_FLOOR;
+  prevLowEnergy = 0.0f;
+  prevHighEnergy = 0.0f;
+  lowEnergy = 0.0f;
+  highEnergy = 0.0f;
+  time_.interrupts();
+}
+
 void AdaptiveMic::update(float dt) {
   // Clamp dt to reasonable range
   if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
@@ -381,7 +394,7 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   }
 
   // Update baselines with slow exponential moving average (frame-rate independent)
-  float baselineAlpha = 1.0f - expf(-dt / maxValue(BASELINE_TAU, 0.001f));
+  float baselineAlpha = 1.0f - expf(-dt / maxValue(baselineTau, 0.001f));
   lowBaseline += baselineAlpha * (localLowEnergy - lowBaseline);
   highBaseline += baselineAlpha * (localHighEnergy - highBaseline);
 
@@ -402,7 +415,7 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
 
   // Detect low band onset (bass transient)
   // Requires: cooldown elapsed AND energy above threshold AND rising sharply
-  if ((int32_t)(nowMs - lastLowOnsetMs) > (int32_t)MicConstants::ONSET_COOLDOWN_MS) {
+  if ((int32_t)(nowMs - lastLowOnsetMs) > (int32_t)onsetCooldownMs) {
     if (localLowEnergy > lowThresh && lowRise > riseThreshold) {
       lowOnset = true;
       // Normalize strength: 0 at threshold, 1.0 at MAX_ONSET_RATIO × threshold
@@ -414,7 +427,7 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
   }
 
   // Detect high band onset (brightness transient)
-  if ((int32_t)(nowMs - lastHighOnsetMs) > (int32_t)MicConstants::ONSET_COOLDOWN_MS) {
+  if ((int32_t)(nowMs - lastHighOnsetMs) > (int32_t)onsetCooldownMs) {
     if (localHighEnergy > highThresh && highRise > riseThreshold) {
       highOnset = true;
       float ratio = localHighEnergy / highThresh;

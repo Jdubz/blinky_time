@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Blinky Test Player</title>
+</head>
+<body>
+  <h1>Blinky Test Pattern Player</h1>
+  <div id="status">Ready</div>
+
+  <script>
+    // Low-band synthesis - targets 50-200 Hz detection range
+    // Uses frequencies computer speakers can reproduce (100-200Hz)
+    const LOW_FREQ = 120;           // Center of detection band, reproducible by speakers
+    const LOW_ATTACK_GAIN = 0.9;
+    const LOW_DECAY_TIME = 0.15;    // Shorter decay, concentrated energy
+    const LOW_MIN_GAIN = 0.01;
+
+    // High-band synthesis - targets 2-8 kHz detection range
+    const HIGH_DURATION = 0.1;      // Slightly longer for more energy
+    const HIGH_GAIN = 0.8;          // Boosted gain
+    const HIGH_FILTER_FREQ = 5000;  // Center of detection band
+    const HIGH_FILTER_Q = 0.4;      // Wide bandwidth (~2-10kHz)
+    const HIGH_MIN_GAIN = 0.01;
+
+    const MASTER_VOLUME = 0.9;
+
+    // Background synthesis - creates continuous audio to simulate real music environment
+    function createBackground(audioContext, destination, background, durationMs) {
+      const nodes = [];
+      const durationSec = durationMs / 1000;
+
+      // Low frequency drone (sub-bass)
+      if (background.lowDrone) {
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = background.lowDrone.frequency;
+        gain.gain.value = background.lowDrone.gain;
+        osc.connect(gain);
+        gain.connect(destination);
+        osc.start();
+        osc.stop(audioContext.currentTime + durationSec + 1);
+        nodes.push(osc);
+      }
+
+      // Mid frequency pad
+      if (background.midPad) {
+        const osc = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        osc.type = 'triangle'; // Softer than sine, pad-like
+        osc.frequency.value = background.midPad.frequency;
+        gain.gain.value = background.midPad.gain;
+        osc.connect(gain);
+        gain.connect(destination);
+        osc.start();
+        osc.stop(audioContext.currentTime + durationSec + 1);
+        nodes.push(osc);
+      }
+
+      // High frequency noise floor
+      if (background.noiseFloor) {
+        const bufferSize = audioContext.sampleRate * (durationSec + 1);
+        const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+          data[i] = Math.random() * 2 - 1;
+        }
+        const noise = audioContext.createBufferSource();
+        noise.buffer = buffer;
+
+        // High-pass filter to keep only high frequencies
+        const filter = audioContext.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.value = 3000;
+
+        const gain = audioContext.createGain();
+        gain.gain.value = background.noiseFloor.gain;
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(destination);
+        noise.start();
+        nodes.push(noise);
+      }
+
+      return nodes;
+    }
+
+    function synthLow(audioContext, destination, startTime, strength = 1.0) {
+      // Use square wave for richer harmonic content in the 100-200Hz range
+      const osc = audioContext.createOscillator();
+      const oscGain = audioContext.createGain();
+
+      osc.type = 'square';  // More harmonics than sine
+      osc.frequency.setValueAtTime(LOW_FREQ, startTime);
+
+      // Sharp attack, quick decay - concentrated transient energy
+      oscGain.gain.setValueAtTime(0, startTime);
+      oscGain.gain.linearRampToValueAtTime(LOW_ATTACK_GAIN * strength, startTime + 0.005); // 5ms attack
+      oscGain.gain.exponentialRampToValueAtTime(LOW_MIN_GAIN, startTime + LOW_DECAY_TIME);
+
+      osc.connect(oscGain);
+      oscGain.connect(destination);
+
+      osc.start(startTime);
+      osc.stop(startTime + LOW_DECAY_TIME);
+
+      return osc;
+    }
+
+    function synthHigh(audioContext, destination, startTime, strength = 1.0) {
+      // Longer noise burst with wider bandwidth
+      const bufferSize = audioContext.sampleRate * HIGH_DURATION;
+      const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+      const data = buffer.getChannelData(0);
+
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+
+      const noise = audioContext.createBufferSource();
+      noise.buffer = buffer;
+
+      // Bandpass filter centered in detection range
+      const filter = audioContext.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = HIGH_FILTER_FREQ;
+      filter.Q.value = HIGH_FILTER_Q;
+
+      const gain = audioContext.createGain();
+      // Sharp attack
+      gain.gain.setValueAtTime(0, startTime);
+      gain.gain.linearRampToValueAtTime(HIGH_GAIN * strength, startTime + 0.003); // 3ms attack
+      gain.gain.exponentialRampToValueAtTime(HIGH_MIN_GAIN, startTime + HIGH_DURATION);
+
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(destination);
+
+      noise.start(startTime);
+
+      return noise;
+    }
+
+    // Main playPattern function exposed to Playwright
+    window.playPattern = async function(hits, durationMs, background = null) {
+      const status = document.getElementById('status');
+      status.textContent = 'Starting...';
+
+      const audioContext = new AudioContext();
+      const masterGain = audioContext.createGain();
+      masterGain.gain.value = MASTER_VOLUME;
+      masterGain.connect(audioContext.destination);
+
+      // Start background audio if specified
+      if (background) {
+        createBackground(audioContext, masterGain, background, durationMs);
+      }
+
+      // Schedule all hits
+      const baseTime = audioContext.currentTime + 0.1; // Small delay to ensure audio context is ready
+
+      for (const hit of hits) {
+        const hitTime = baseTime + hit.time;
+        if (hit.type === 'low') {
+          synthLow(audioContext, masterGain, hitTime, hit.strength);
+        } else if (hit.type === 'high') {
+          synthHigh(audioContext, masterGain, hitTime, hit.strength);
+        }
+      }
+
+      // Log start time for synchronization
+      const startedAt = new Date().toISOString();
+      console.log('PATTERN_STARTED:' + startedAt);
+      status.textContent = 'Playing...';
+
+      // Wait for pattern to complete
+      const totalDuration = (durationMs / 1000) + 0.5; // Add buffer for last sound to finish
+      await new Promise(resolve => setTimeout(resolve, totalDuration * 1000));
+
+      status.textContent = 'Complete';
+      console.log('PATTERN_COMPLETE');
+
+      await audioContext.close();
+      return startedAt;
+    };
+
+    // Signal that page is ready
+    console.log('PLAYER_READY');
+  </script>
+</body>
+</html>
