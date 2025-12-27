@@ -209,6 +209,8 @@ program
       headless: options.headless ?? false,
       args: [
         '--autoplay-policy=no-user-gesture-required',
+        '--allow-file-access-from-files',
+        '--disable-web-security',
       ],
     });
 

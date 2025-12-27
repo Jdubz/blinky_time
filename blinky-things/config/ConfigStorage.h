@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 17;  // Config schema v17: two-band onset detection (onsetThreshold, riseThreshold replaces kick/snare/hihat)
+    static const uint8_t CONFIG_VERSION = 18;  // Config schema v18: added advanced onset parameters (baselineAttackTau, baselineReleaseTau, logCompressionFactor, riseWindowMs)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -32,11 +32,15 @@ public:
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
         // Hardware AGC parameters (primary - optimizes ADC signal quality)
-        float hwTargetLow;        // Raw input below this → increase HW gain
-        float hwTargetHigh;       // Raw input above this → decrease HW gain
+        float hwTarget;           // Target raw input level (±0.01 dead zone)
         // Onset detection thresholds (two-band system)
         float onsetThreshold;     // Multiples of baseline for onset detection
         float riseThreshold;      // Ratio to previous frame for rise detection
+        // Advanced onset detection parameters (new)
+        float baselineAttackTau;  // Baseline attack time constant
+        float baselineReleaseTau; // Baseline release time constant
+        float logCompressionFactor; // Log compression factor (0=disabled)
+        uint16_t riseWindowMs;    // Multi-frame rise detection window
     };
 
     struct ConfigData {

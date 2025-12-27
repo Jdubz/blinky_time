@@ -33,10 +33,13 @@ constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f; // Valley releases 4x slower t
 constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of full scale, suits low-noise mic)
 
 // Onset detection constants
-constexpr float BASELINE_TAU = 0.5f;          // 500ms time constant for baseline (slower = more stable)
-constexpr float ONSET_FLOOR = 0.001f;         // Minimum energy floor to prevent noise triggers
+constexpr float BASELINE_TAU_ATTACK = 0.1f;   // 100ms time constant for baseline attack (fast drop)
+constexpr float BASELINE_TAU_RELEASE = 2.0f;  // 2s time constant for baseline release (slow rise)
+constexpr float ONSET_FLOOR = 0.0001f;        // Minimum energy floor to prevent noise triggers (lowered for sensitivity)
 constexpr float MAX_ONSET_RATIO = 3.0f;       // Strength normalization: 1.0 at 3x threshold
-constexpr float MIN_ENERGY_FOR_RISE = 0.0001f; // Minimum previous energy for rise calculation (prevents div-by-zero)
+constexpr float MIN_ENERGY_FOR_RISE = 0.00001f; // Minimum previous energy for rise calculation (prevents div-by-zero)
+constexpr float LOG_COMPRESSION_FACTOR = 1.0f; // Logarithmic compression constant (aubio standard: 1.0)
+constexpr uint32_t ENERGY_MIN_WINDOW_MS = 100; // Window for tracking recent minimum energy (multi-frame rise detection)
 
 // Alias for brevity (hardware gain limits are in PlatformConstants.h)
 using Platform::Microphone::HW_GAIN_MIN;
@@ -102,6 +105,12 @@ void AdaptiveMic::resetBaselines() {
   lowEnergy = 0.0f;
   highEnergy = 0.0f;
   time_.interrupts();
+
+  // Reset multi-frame rise detection tracking
+  lowEnergyMin = 0.0f;
+  highEnergyMin = 0.0f;
+  lastLowMinMs = 0;
+  lastHighMinMs = 0;
 }
 
 void AdaptiveMic::update(float dt) {
@@ -202,7 +211,7 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, ui
 
 void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   // PRIMARY GAIN CONTROL: Adjust hardware gain based on raw ADC input level
-  // Goal: Keep raw input in optimal range (hwTargetLow - hwTargetHigh) for best SNR
+  // Goal: Keep raw input at target level (hwTarget) for best SNR
   // This ensures high-quality signal into ADC before software processing
 
   // Adaptation period must be >= tracking window for stable measurements
@@ -210,23 +219,19 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float /*dt*/) {
   // Use signed arithmetic to handle millis() wraparound at 49.7 days
   if ((int32_t)(nowMs - lastHwCalibMs) < (int32_t)MicConstants::HW_CALIB_PERIOD_MS) return;
 
-  // Calculate how far we are from target range
-  float errorMagnitude = 0.0f;
-  int direction = 0;
+  // Calculate error from target (signed: negative = too quiet, positive = too loud)
+  constexpr float HW_TARGET_DEADZONE = 0.01f;  // ±0.01 dead zone around target
+  float error = rawTrackedLevel - hwTarget;
+  float errorMagnitude = fabsf(error);
 
-  if (rawTrackedLevel < hwTargetLow) {
-    // Raw input too quiet → increase hardware gain for better SNR
-    errorMagnitude = hwTargetLow - rawTrackedLevel;
-    direction = +1;
-  } else if (rawTrackedLevel > hwTargetHigh) {
-    // Raw input too loud → decrease hardware gain to prevent clipping
-    errorMagnitude = rawTrackedLevel - hwTargetHigh;
-    direction = -1;
-  } else {
-    // In target range - no adjustment needed
+  // Dead zone: Don't adjust if within ±0.01 of target
+  if (errorMagnitude <= HW_TARGET_DEADZONE) {
     lastHwCalibMs = nowMs;
     return;
   }
+
+  // Determine direction: negative error = too quiet → increase gain
+  int direction = (error < 0.0f) ? +1 : -1;
 
   // Adaptive step size: take bigger steps when far from target
   // Small error (< 0.05): +/- 1 step (fine-tuning)
@@ -306,9 +311,9 @@ void AdaptiveMic::onPDMdata() {
                                                s_instance->highB0, s_instance->highB1, s_instance->highB2,
                                                s_instance->highA1, s_instance->highA2);
 
-    // Accumulate energy (absolute value)
-    s_instance->lowEnergy += (lowOut < 0.0f) ? -lowOut : lowOut;
-    s_instance->highEnergy += (highOut < 0.0f) ? -highOut : highOut;
+    // Accumulate squared energy for RMS calculation (more sensitive to transients)
+    s_instance->lowEnergy += lowOut * lowOut;
+    s_instance->highEnergy += highOut * highOut;
   }
 
   // Note: We're already in ISR context, so interrupts are disabled.
@@ -396,18 +401,57 @@ void AdaptiveMic::detectOnsets(uint32_t nowMs, float dt, uint32_t sampleCount) {
     return;
   }
 
-  // Update baselines with slow exponential moving average (frame-rate independent)
-  float baselineAlpha = 1.0f - expf(-dt / maxValue(baselineTau, 0.001f));
-  lowBaseline += baselineAlpha * (localLowEnergy - lowBaseline);
-  highBaseline += baselineAlpha * (localHighEnergy - highBaseline);
+  // Take square root for RMS (we accumulated squared values in ISR)
+  localLowEnergy = sqrtf(localLowEnergy);
+  localHighEnergy = sqrtf(localHighEnergy);
 
-  // Calculate rise from previous frame (for onset detection)
-  // When previous energy is too small to compute meaningful ratio, return large value
-  // to allow first-frame detection (10.0f passes default riseThreshold of 1.5)
-  float lowRise = (prevLowEnergy > MIN_ENERGY_FOR_RISE) ? localLowEnergy / prevLowEnergy : 10.0f;
-  float highRise = (prevHighEnergy > MIN_ENERGY_FOR_RISE) ? localHighEnergy / prevHighEnergy : 10.0f;
+  // Apply logarithmic compression to enhance weak transients (if enabled)
+  // log(1 + C*x) compresses dynamic range, making quiet hits more detectable
+  // Set logCompressionFactor=0 to disable, 1.0 for aubio standard
+  if (logCompressionFactor > 0.0f) {
+    localLowEnergy = logf(1.0f + logCompressionFactor * localLowEnergy);
+    localHighEnergy = logf(1.0f + logCompressionFactor * localHighEnergy);
+  }
 
-  // Store current energy for next frame's rise calculation
+  // Update baselines with asymmetric attack/release (frame-rate independent)
+  // Fast attack when energy drops, slow release when energy rises
+  // This prevents baseline from rising up during sustained hits
+  float lowBaselineAlpha, highBaselineAlpha;
+  if (localLowEnergy < lowBaseline) {
+    lowBaselineAlpha = 1.0f - expf(-dt / maxValue(baselineAttackTau, 0.001f));
+  } else {
+    lowBaselineAlpha = 1.0f - expf(-dt / maxValue(baselineReleaseTau, 0.001f));
+  }
+  if (localHighEnergy < highBaseline) {
+    highBaselineAlpha = 1.0f - expf(-dt / maxValue(baselineAttackTau, 0.001f));
+  } else {
+    highBaselineAlpha = 1.0f - expf(-dt / maxValue(baselineReleaseTau, 0.001f));
+  }
+  lowBaseline += lowBaselineAlpha * (localLowEnergy - lowBaseline);
+  highBaseline += highBaselineAlpha * (localHighEnergy - highBaseline);
+
+  // Multi-frame rise detection: track recent minimum energy
+  // Update minimum every riseWindowMs, otherwise track current minimum
+  // On first frame (lastLowMinMs == 0 and nowMs < riseWindowMs), initialize
+  if ((int32_t)(nowMs - lastLowMinMs) > (int32_t)riseWindowMs || lowEnergyMin == 0.0f) {
+    lowEnergyMin = localLowEnergy;
+    lastLowMinMs = nowMs;
+  } else {
+    lowEnergyMin = minValue(lowEnergyMin, localLowEnergy);
+  }
+  if ((int32_t)(nowMs - lastHighMinMs) > (int32_t)riseWindowMs || highEnergyMin == 0.0f) {
+    highEnergyMin = localHighEnergy;
+    lastHighMinMs = nowMs;
+  } else {
+    highEnergyMin = minValue(highEnergyMin, localHighEnergy);
+  }
+
+  // Calculate rise from recent minimum (more robust than single-frame comparison)
+  // When minimum is too small, return large value to allow first-frame detection
+  float lowRise = (lowEnergyMin > MIN_ENERGY_FOR_RISE) ? localLowEnergy / lowEnergyMin : 10.0f;
+  float highRise = (highEnergyMin > MIN_ENERGY_FOR_RISE) ? localHighEnergy / highEnergyMin : 10.0f;
+
+  // Store current energy for backward compatibility (not used for detection anymore)
   prevLowEnergy = localLowEnergy;
   prevHighEnergy = localHighEnergy;
 

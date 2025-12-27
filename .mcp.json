@@ -10,6 +10,14 @@
         "@executeautomation/playwright-mcp-server"
       ],
       "env": {}
+    },
+    "blinky-serial": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "D:\\Development\\Arduino\\blinky_time\\blinky-serial-mcp\\dist\\index.js"
+      ],
+      "env": {}
     }
   }
 }

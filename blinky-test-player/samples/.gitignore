@@ -1,0 +1,15 @@
+# Ignore all audio sample files (can be large)
+*.wav
+*.mp3
+*.ogg
+*.flac
+*.aiff
+*.aif
+
+# But keep the folder structure and documentation
+!.gitignore
+!README.md
+!download_samples.ps1
+
+# Keep placeholder files if needed
+!.gitkeep
