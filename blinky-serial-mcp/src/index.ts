@@ -612,6 +612,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           { id: 'hat-rejection', name: 'Hat Rejection (Calibrated)', durationMs: 16000, description: 'Hard beats + soft hats - rejection test (120 BPM)', calibrated: true },
           { id: 'mixed-dynamics', name: 'Mixed Dynamics (Calibrated)', durationMs: 16000, description: 'Varying loudness - realistic simulation (120 BPM)', calibrated: true },
           { id: 'tempo-sweep', name: 'Tempo Sweep (Calibrated)', durationMs: 16000, description: 'Tests 80, 100, 120, 140 BPM', calibrated: true },
+          // Melodic/harmonic patterns (bass, synth, lead, pad, chord)
+          { id: 'bass-line', name: 'Bass Line (Calibrated)', durationMs: 16000, description: 'Kicks + bass notes - tests low freq transients', calibrated: true },
+          { id: 'synth-stabs', name: 'Synth Stabs (Calibrated)', durationMs: 16000, description: 'Sharp synth stabs - should trigger detection', calibrated: true },
+          { id: 'lead-melody', name: 'Lead Melody (Calibrated)', durationMs: 19200, description: 'Lead notes + drums - tests melodic transients', calibrated: true },
+          { id: 'pad-rejection', name: 'Pad Rejection (Calibrated)', durationMs: 24000, description: 'Sustained pads - tests false positive rejection', calibrated: true },
+          { id: 'chord-rejection', name: 'Chord Rejection (Calibrated)', durationMs: 21333, description: 'Sustained chords - tests false positive rejection', calibrated: true },
+          { id: 'full-mix', name: 'Full Mix (Calibrated)', durationMs: 16000, description: 'Drums + bass + synth + lead - realistic music', calibrated: true },
           // Legacy patterns (random samples)
           { id: 'basic-drums', name: 'Basic Drum Pattern', durationMs: 16000, description: 'Kick on 1&3, snare on 2&4, hats on 8ths (120 BPM)' },
           { id: 'kick-focus', name: 'Kick Focus', durationMs: 12000, description: 'Various kick patterns - tests low-band detection' },
@@ -768,8 +775,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const TIMING_TOLERANCE_MS = 350; // Allow 350ms timing variance (accounts for audio output latency)
         const STRONG_BEAT_THRESHOLD = 0.8; // Only count strong beats (kicks, snares) not hi-hats
         const allHits = groundTruth.hits || [];
-        // Filter to strong beats only - we want to detect kicks and snares, not hi-hats
-        const expectedHits = allHits.filter(h => h.strength >= STRONG_BEAT_THRESHOLD);
+        // Filter to expected transients only:
+        // 1. If expectTrigger is defined, use it (explicit: pads/chords = false)
+        // 2. Otherwise, fall back to strength threshold (hi-hats are weak)
+        const expectedHits = allHits.filter((h: { strength: number; expectTrigger?: boolean }) => {
+          // Use expectTrigger if defined (new patterns with explicit transient marking)
+          if (typeof h.expectTrigger === 'boolean') {
+            return h.expectTrigger;
+          }
+          // Fall back to strength threshold for legacy patterns
+          return h.strength >= STRONG_BEAT_THRESHOLD;
+        });
 
         // First pass: estimate systematic audio latency by finding median offset
         // This helps compensate for consistent delays (speaker output, air travel, mic processing)

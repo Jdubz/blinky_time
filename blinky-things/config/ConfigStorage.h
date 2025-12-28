@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 20;  // Config schema v20: multi-algorithm detection (drummer, bass, hfc, flux)
+    static const uint8_t CONFIG_VERSION = 21;  // Config schema v21: add hybrid mode weights (tuned 2024-12)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -46,12 +46,16 @@ public:
         float hfcThresh;          // HFC detection threshold
         // Spectral flux parameters
         float fluxThresh;         // Spectral flux threshold
+        // Hybrid mode parameters (mode 4) - tuned 2024-12
+        float hybridFluxWeight;   // Weight when only flux detects
+        float hybridDrumWeight;   // Weight when only drummer detects
+        float hybridBothBoost;    // Multiplier when both agree
         // uint16_t members
         uint16_t cooldownMs;      // Cooldown between hits (ms)
         // uint8_t members
-        uint8_t detectionMode;    // 0=drummer, 1=bass, 2=hfc, 3=flux
+        uint8_t detectionMode;    // 0=drummer, 1=bass, 2=hfc, 3=flux, 4=hybrid
         uint8_t fluxBins;         // FFT bins to analyze
-        // Total: 12 floats (48) + 1 uint16 (2) + 2 uint8 (2) = 52 bytes
+        // Total: 15 floats (60) + 1 uint16 (2) + 2 uint8 (2) = 64 bytes
     };
 
     struct ConfigData {
@@ -65,8 +69,8 @@ public:
     // Compile-time safety checks
     // These verify struct sizes match expected values to catch accidental changes
     // If these fail, you MUST increment CONFIG_VERSION!
-    static_assert(sizeof(StoredMicParams) == 52,
-        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (52 bytes = 12 floats + 1 uint16 + 2 uint8)");
+    static_assert(sizeof(StoredMicParams) == 64,
+        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (64 bytes = 15 floats + 1 uint16 + 2 uint8)");
     static_assert(sizeof(ConfigData) <= 112,
         "ConfigData too large! May not fit in flash sector. Review struct padding.");
 

@@ -22,8 +22,11 @@ const __dirname = dirname(__filename);
 // Project root (one level up from dist/)
 const PROJECT_ROOT = join(__dirname, '..');
 
-// Sample folder types
-const SAMPLE_TYPES: InstrumentType[] = ['kick', 'snare', 'hat', 'tom', 'clap', 'percussion', 'bass'];
+// Sample folder types (all instrument types that can have audio samples)
+const SAMPLE_TYPES: InstrumentType[] = [
+  'kick', 'snare', 'hat', 'tom', 'clap', 'percussion', 'bass',  // Drums
+  'synth_stab', 'lead', 'pad', 'chord',  // Melodic/harmonic
+];
 
 /**
  * Convert a Windows path to a proper file:// URL

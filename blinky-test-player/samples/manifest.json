@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2025-12-27T22:57:11.333Z",
+  "generatedAt": "2025-12-28T03:48:47.067Z",
   "samples": [
     {
       "id": "kick_hard_1",
@@ -360,6 +360,196 @@
       "rms": 0.089,
       "peak": 0.675,
       "durationMs": 405
+    },
+    {
+      "id": "bass_hard_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_1.wav",
+      "newPath": "samples\\bass\\bass_hard_1.wav",
+      "type": "bass",
+      "loudness": "hard",
+      "rms": 0.5,
+      "peak": 0.9,
+      "durationMs": 500
+    },
+    {
+      "id": "bass_hard_2",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_2.wav",
+      "newPath": "samples\\bass\\bass_hard_2.wav",
+      "type": "bass",
+      "loudness": "hard",
+      "rms": 0.5,
+      "peak": 0.9,
+      "durationMs": 500
+    },
+    {
+      "id": "bass_medium_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_1.wav",
+      "newPath": "samples\\bass\\bass_medium_1.wav",
+      "type": "bass",
+      "loudness": "medium",
+      "rms": 0.25,
+      "peak": 0.9,
+      "durationMs": 500
+    },
+    {
+      "id": "bass_medium_2",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_2.wav",
+      "newPath": "samples\\bass\\bass_medium_2.wav",
+      "type": "bass",
+      "loudness": "medium",
+      "rms": 0.25,
+      "peak": 0.9,
+      "durationMs": 500
+    },
+    {
+      "id": "bass_soft_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_soft_1.wav",
+      "newPath": "samples\\bass\\bass_soft_1.wav",
+      "type": "bass",
+      "loudness": "soft",
+      "rms": 0.1,
+      "peak": 0.9,
+      "durationMs": 500
+    },
+    {
+      "id": "synth_stab_hard_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_1.wav",
+      "newPath": "samples\\synth_stab\\synth_stab_hard_1.wav",
+      "type": "synth_stab",
+      "loudness": "hard",
+      "rms": 0.5,
+      "peak": 0.9,
+      "durationMs": 300
+    },
+    {
+      "id": "synth_stab_hard_2",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_2.wav",
+      "newPath": "samples\\synth_stab\\synth_stab_hard_2.wav",
+      "type": "synth_stab",
+      "loudness": "hard",
+      "rms": 0.5,
+      "peak": 0.9,
+      "durationMs": 300
+    },
+    {
+      "id": "synth_stab_medium_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_medium_1.wav",
+      "newPath": "samples\\synth_stab\\synth_stab_medium_1.wav",
+      "type": "synth_stab",
+      "loudness": "medium",
+      "rms": 0.25,
+      "peak": 0.9,
+      "durationMs": 300
+    },
+    {
+      "id": "synth_stab_soft_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_soft_1.wav",
+      "newPath": "samples\\synth_stab\\synth_stab_soft_1.wav",
+      "type": "synth_stab",
+      "loudness": "soft",
+      "rms": 0.1,
+      "peak": 0.9,
+      "durationMs": 300
+    },
+    {
+      "id": "lead_hard_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_1.wav",
+      "newPath": "samples\\lead\\lead_hard_1.wav",
+      "type": "lead",
+      "loudness": "hard",
+      "rms": 0.5,
+      "peak": 0.9,
+      "durationMs": 400
+    },
+    {
+      "id": "lead_hard_2",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_2.wav",
+      "newPath": "samples\\lead\\lead_hard_2.wav",
+      "type": "lead",
+      "loudness": "hard",
+      "rms": 0.5,
+      "peak": 0.9,
+      "durationMs": 400
+    },
+    {
+      "id": "lead_medium_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_medium_1.wav",
+      "newPath": "samples\\lead\\lead_medium_1.wav",
+      "type": "lead",
+      "loudness": "medium",
+      "rms": 0.25,
+      "peak": 0.9,
+      "durationMs": 400
+    },
+    {
+      "id": "lead_soft_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_soft_1.wav",
+      "newPath": "samples\\lead\\lead_soft_1.wav",
+      "type": "lead",
+      "loudness": "soft",
+      "rms": 0.1,
+      "peak": 0.9,
+      "durationMs": 400
+    },
+    {
+      "id": "pad_medium_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_medium_1.wav",
+      "newPath": "samples\\pad\\pad_medium_1.wav",
+      "type": "pad",
+      "loudness": "medium",
+      "rms": 0.25,
+      "peak": 0.9,
+      "durationMs": 2000
+    },
+    {
+      "id": "pad_slow_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_1.wav",
+      "newPath": "samples\\pad\\pad_slow_1.wav",
+      "type": "pad",
+      "loudness": "soft",
+      "rms": 0.1,
+      "peak": 0.9,
+      "durationMs": 2000
+    },
+    {
+      "id": "pad_slow_2",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_2.wav",
+      "newPath": "samples\\pad\\pad_slow_2.wav",
+      "type": "pad",
+      "loudness": "soft",
+      "rms": 0.1,
+      "peak": 0.9,
+      "durationMs": 2000
+    },
+    {
+      "id": "chord_medium_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_medium_1.wav",
+      "newPath": "samples\\chord\\chord_medium_1.wav",
+      "type": "chord",
+      "loudness": "medium",
+      "rms": 0.25,
+      "peak": 0.9,
+      "durationMs": 1500
+    },
+    {
+      "id": "chord_slow_1",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_1.wav",
+      "newPath": "samples\\chord\\chord_slow_1.wav",
+      "type": "chord",
+      "loudness": "soft",
+      "rms": 0.1,
+      "peak": 0.9,
+      "durationMs": 1500
+    },
+    {
+      "id": "chord_slow_2",
+      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_2.wav",
+      "newPath": "samples\\chord\\chord_slow_2.wav",
+      "type": "chord",
+      "loudness": "soft",
+      "rms": 0.1,
+      "peak": 0.9,
+      "durationMs": 1500
     }
   ],
   "byType": {
@@ -761,6 +951,232 @@
         }
       ],
       "soft": []
+    },
+    "bass": {
+      "hard": [
+        {
+          "id": "bass_hard_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_1.wav",
+          "newPath": "samples\\bass\\bass_hard_1.wav",
+          "type": "bass",
+          "loudness": "hard",
+          "rms": 0.5,
+          "peak": 0.9,
+          "durationMs": 500
+        },
+        {
+          "id": "bass_hard_2",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_2.wav",
+          "newPath": "samples\\bass\\bass_hard_2.wav",
+          "type": "bass",
+          "loudness": "hard",
+          "rms": 0.5,
+          "peak": 0.9,
+          "durationMs": 500
+        }
+      ],
+      "medium": [
+        {
+          "id": "bass_medium_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_1.wav",
+          "newPath": "samples\\bass\\bass_medium_1.wav",
+          "type": "bass",
+          "loudness": "medium",
+          "rms": 0.25,
+          "peak": 0.9,
+          "durationMs": 500
+        },
+        {
+          "id": "bass_medium_2",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_2.wav",
+          "newPath": "samples\\bass\\bass_medium_2.wav",
+          "type": "bass",
+          "loudness": "medium",
+          "rms": 0.25,
+          "peak": 0.9,
+          "durationMs": 500
+        }
+      ],
+      "soft": [
+        {
+          "id": "bass_soft_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_soft_1.wav",
+          "newPath": "samples\\bass\\bass_soft_1.wav",
+          "type": "bass",
+          "loudness": "soft",
+          "rms": 0.1,
+          "peak": 0.9,
+          "durationMs": 500
+        }
+      ]
+    },
+    "synth_stab": {
+      "hard": [
+        {
+          "id": "synth_stab_hard_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_1.wav",
+          "newPath": "samples\\synth_stab\\synth_stab_hard_1.wav",
+          "type": "synth_stab",
+          "loudness": "hard",
+          "rms": 0.5,
+          "peak": 0.9,
+          "durationMs": 300
+        },
+        {
+          "id": "synth_stab_hard_2",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_2.wav",
+          "newPath": "samples\\synth_stab\\synth_stab_hard_2.wav",
+          "type": "synth_stab",
+          "loudness": "hard",
+          "rms": 0.5,
+          "peak": 0.9,
+          "durationMs": 300
+        }
+      ],
+      "medium": [
+        {
+          "id": "synth_stab_medium_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_medium_1.wav",
+          "newPath": "samples\\synth_stab\\synth_stab_medium_1.wav",
+          "type": "synth_stab",
+          "loudness": "medium",
+          "rms": 0.25,
+          "peak": 0.9,
+          "durationMs": 300
+        }
+      ],
+      "soft": [
+        {
+          "id": "synth_stab_soft_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_soft_1.wav",
+          "newPath": "samples\\synth_stab\\synth_stab_soft_1.wav",
+          "type": "synth_stab",
+          "loudness": "soft",
+          "rms": 0.1,
+          "peak": 0.9,
+          "durationMs": 300
+        }
+      ]
+    },
+    "lead": {
+      "hard": [
+        {
+          "id": "lead_hard_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_1.wav",
+          "newPath": "samples\\lead\\lead_hard_1.wav",
+          "type": "lead",
+          "loudness": "hard",
+          "rms": 0.5,
+          "peak": 0.9,
+          "durationMs": 400
+        },
+        {
+          "id": "lead_hard_2",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_2.wav",
+          "newPath": "samples\\lead\\lead_hard_2.wav",
+          "type": "lead",
+          "loudness": "hard",
+          "rms": 0.5,
+          "peak": 0.9,
+          "durationMs": 400
+        }
+      ],
+      "medium": [
+        {
+          "id": "lead_medium_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_medium_1.wav",
+          "newPath": "samples\\lead\\lead_medium_1.wav",
+          "type": "lead",
+          "loudness": "medium",
+          "rms": 0.25,
+          "peak": 0.9,
+          "durationMs": 400
+        }
+      ],
+      "soft": [
+        {
+          "id": "lead_soft_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_soft_1.wav",
+          "newPath": "samples\\lead\\lead_soft_1.wav",
+          "type": "lead",
+          "loudness": "soft",
+          "rms": 0.1,
+          "peak": 0.9,
+          "durationMs": 400
+        }
+      ]
+    },
+    "pad": {
+      "medium": [
+        {
+          "id": "pad_medium_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_medium_1.wav",
+          "newPath": "samples\\pad\\pad_medium_1.wav",
+          "type": "pad",
+          "loudness": "medium",
+          "rms": 0.25,
+          "peak": 0.9,
+          "durationMs": 2000
+        }
+      ],
+      "soft": [
+        {
+          "id": "pad_slow_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_1.wav",
+          "newPath": "samples\\pad\\pad_slow_1.wav",
+          "type": "pad",
+          "loudness": "soft",
+          "rms": 0.1,
+          "peak": 0.9,
+          "durationMs": 2000
+        },
+        {
+          "id": "pad_slow_2",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_2.wav",
+          "newPath": "samples\\pad\\pad_slow_2.wav",
+          "type": "pad",
+          "loudness": "soft",
+          "rms": 0.1,
+          "peak": 0.9,
+          "durationMs": 2000
+        }
+      ]
+    },
+    "chord": {
+      "medium": [
+        {
+          "id": "chord_medium_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_medium_1.wav",
+          "newPath": "samples\\chord\\chord_medium_1.wav",
+          "type": "chord",
+          "loudness": "medium",
+          "rms": 0.25,
+          "peak": 0.9,
+          "durationMs": 1500
+        }
+      ],
+      "soft": [
+        {
+          "id": "chord_slow_1",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_1.wav",
+          "newPath": "samples\\chord\\chord_slow_1.wav",
+          "type": "chord",
+          "loudness": "soft",
+          "rms": 0.1,
+          "peak": 0.9,
+          "durationMs": 1500
+        },
+        {
+          "id": "chord_slow_2",
+          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_2.wav",
+          "newPath": "samples\\chord\\chord_slow_2.wav",
+          "type": "chord",
+          "loudness": "soft",
+          "rms": 0.1,
+          "peak": 0.9,
+          "durationMs": 1500
+        }
+      ]
     }
   }
 }

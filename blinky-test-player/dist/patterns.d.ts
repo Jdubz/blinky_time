@@ -82,6 +82,41 @@ export declare const MIXED_DYNAMICS: TestPattern;
  */
 export declare const TEMPO_SWEEP: TestPattern;
 /**
+ * CALIBRATED: Bass line with kicks (120 BPM, 8 bars)
+ * Tests bass note detection alongside kicks
+ * Expected: Both kicks AND bass notes should trigger (both are transients)
+ */
+export declare const BASS_LINE: TestPattern;
+/**
+ * CALIBRATED: Synth stab pattern (120 BPM, 8 bars)
+ * Sharp synth stabs that SHOULD trigger transient detection
+ */
+export declare const SYNTH_STABS: TestPattern;
+/**
+ * CALIBRATED: Lead melody with drum accents (100 BPM, 8 bars)
+ * Tests if lead note attacks are detected alongside drums
+ */
+export declare const LEAD_MELODY: TestPattern;
+/**
+ * CALIBRATED: Pad rejection test (80 BPM, 8 bars)
+ * Sustained pads playing throughout with sparse drum hits
+ * Pads should NOT trigger - only drums should be detected
+ * Tests false positive rejection for sustained sounds
+ */
+export declare const PAD_REJECTION: TestPattern;
+/**
+ * CALIBRATED: Chord rejection test (90 BPM, 8 bars)
+ * Sustained chords playing with drum hits
+ * Chords should NOT trigger - only drums should be detected
+ */
+export declare const CHORD_REJECTION: TestPattern;
+/**
+ * CALIBRATED: Full mix (120 BPM, 8 bars)
+ * Realistic EDM-style mix with drums, bass, synths, leads
+ * Tests detection in complex, layered audio
+ */
+export declare const FULL_MIX: TestPattern;
+/**
  * All available test patterns
  */
 export declare const TEST_PATTERNS: TestPattern[];
