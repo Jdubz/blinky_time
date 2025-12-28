@@ -98,7 +98,7 @@ void SerialConsole::registerSettings() {
     // Switch between different onset detection algorithms
     if (mic_) {
         settings_.registerUint8("detectmode", &mic_->detectionMode, "detection",
-            "Algorithm (0=drummer,1=bass,2=hfc,3=flux)", 0, 3);
+            "Algorithm (0=drummer,1=bass,2=hfc,3=flux,4=hybrid)", 0, 4);
 
         // Bass Band Filter parameters (mode 1)
         settings_.registerFloat("bassfreq", &mic_->bassFreq, "detection",
