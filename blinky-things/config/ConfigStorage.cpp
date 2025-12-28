@@ -106,14 +106,14 @@ void ConfigStorage::loadDefaults() {
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
-    // Shared transient detection defaults
-    data_.mic.transientThreshold = 3.0f;  // 3x louder than recent average
-    data_.mic.attackMultiplier = 1.3f;    // 30% sudden rise required
+    // Shared transient detection defaults (tuned via param-tuner 2024-12)
+    data_.mic.transientThreshold = 2.0f;  // 2x louder than recent average (was 3.0)
+    data_.mic.attackMultiplier = 1.2f;    // 20% sudden rise required (was 1.3)
     data_.mic.averageTau = 0.8f;          // Recent average tracking time
-    data_.mic.cooldownMs = 80;            // 80ms cooldown between hits
+    data_.mic.cooldownMs = 40;            // 40ms cooldown between hits (was 80)
 
     // Detection mode (v20+): multi-algorithm support
-    data_.mic.detectionMode = 0;          // 0 = Drummer's Algorithm (default)
+    data_.mic.detectionMode = 4;          // 4 = Hybrid (best F1: 0.705)
 
     // Bass band filter defaults
     data_.mic.bassFreq = 120.0f;          // 120 Hz cutoff (kick drum range)
@@ -124,8 +124,8 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hfcWeight = 1.0f;           // No weighting adjustment
     data_.mic.hfcThresh = 3.0f;           // Same threshold as main
 
-    // Spectral flux defaults
-    data_.mic.fluxThresh = 3.0f;          // Same threshold as main
+    // Spectral flux defaults (tuned via param-tuner 2024-12)
+    data_.mic.fluxThresh = 2.6f;          // Optimal for F1: 0.661 (was 3.0)
     data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
     data_.brightness = 100;
@@ -267,7 +267,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
 
     // Validate detection mode and algorithm-specific parameters (v20+)
-    validateUint32(data_.mic.detectionMode, 0, 3, F("detectionMode"));
+    validateUint32(data_.mic.detectionMode, 0, 4, F("detectionMode"));  // 0-4: drummer, bass, hfc, flux, hybrid
 
     // Bass band filter validation
     validateFloat(data_.mic.bassFreq, 40.0f, 200.0f, F("bassFreq"));

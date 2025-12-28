@@ -16,6 +16,7 @@ import { runSweeps, showSweepSummary } from './sweep.js';
 import { runInteractions, showInteractionSummary } from './interact.js';
 import { runValidation, showValidationSummary } from './validate.js';
 import { generateReport, showReportSummary } from './report.js';
+import { runFastTune } from './fast-tune.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -48,7 +49,10 @@ async function main() {
       default: DEFAULT_OUTPUT_DIR,
       description: 'Output directory for results',
     })
-    .command('full', 'Run complete tuning suite (all phases)', {}, async (args) => {
+    .command('fast', 'Fast tuning with binary search (~30 min)', {}, async (args) => {
+      await runFast(args as GlobalArgs);
+    })
+    .command('full', 'Run complete tuning suite (all phases, 4-6 hrs)', {}, async (args) => {
       await runFull(args as GlobalArgs);
     })
     .command('baseline', 'Run Phase 1: Baseline testing', {}, async (args) => {
@@ -97,9 +101,20 @@ function createOptions(args: GlobalArgs, requirePort = true): TunerOptions {
   };
 }
 
+async function runFast(args: GlobalArgs): Promise<void> {
+  const options = createOptions(args);
+
+  try {
+    await runFastTune(options);
+  } catch (err) {
+    console.error('\n Error:', err);
+    process.exit(1);
+  }
+}
+
 async function runFull(args: GlobalArgs): Promise<void> {
-  console.log('\n🎛️  Blinky Parameter Tuner v1.0');
-  console.log('═'.repeat(50));
+  console.log('\n Blinky Parameter Tuner v1.0');
+  console.log('='.repeat(50));
   console.log('Running complete parameter tuning suite.\n');
   console.log('Estimated time: 4-6 hours');
   console.log('Press Ctrl+C to pause (progress will be saved).\n');
