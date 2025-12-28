@@ -93,9 +93,11 @@ void MusicMode::update(float dt) {
 
     // Only check at beat intervals when active
     if (active && timeSinceCheck > beatPeriodMs_) {
-        if (timeSinceOnset > beatPeriodMs_ * 1.5f) {  // 1.5x tolerance
+        if (timeSinceOnset > beatPeriodMs_ * missedBeatTolerance) {
             missedBeats_++;
-            confidence_ -= 0.05f;
+            // FIX BUG #16: Missed beat should be penalized same as incorrect timing
+            // No detection is arguably worse than wrong timing
+            confidence_ -= confidenceDecrement;
             if (confidence_ < 0.0f) confidence_ = 0.0f;
         }
         lastMissedBeatCheck_ = nowMs;
@@ -173,7 +175,11 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
     }
 
     // Calculate phase error (expected: onset near phase 0.0 or 1.0)
-    float error = phase;
+    // FIX BUG #14: Ensure phase is properly wrapped before calculating error
+    float wrappedPhase = fmodf(phase, 1.0f);
+    if (wrappedPhase < 0.0f) wrappedPhase += 1.0f;  // Handle negative (shouldn't happen)
+
+    float error = wrappedPhase;
     if (error > 0.5f) error -= 1.0f;  // Wrap to -0.5 to 0.5 range
 
     // PLL correction (Proportional-Integral controller)
@@ -192,14 +198,14 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
 
     // Update confidence based on phase error
     float absError = absFloat(error);
-    if (absError < 0.2f) {  // Onset within 20% of expected position
+    if (absError < phaseErrorTolerance) {  // Onset within tolerance of expected position
         stableBeats_++;
         missedBeats_ = 0;
-        confidence_ += 0.1f;
+        confidence_ += confidenceIncrement;
         if (confidence_ > 1.0f) confidence_ = 1.0f;
     } else {
         missedBeats_++;
-        confidence_ -= 0.1f;
+        confidence_ -= confidenceDecrement;
         if (confidence_ < 0.0f) confidence_ = 0.0f;
     }
 

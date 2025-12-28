@@ -182,6 +182,7 @@ private:
   static constexpr int ATTACK_BUFFER_SIZE = 4;  // 4 frames @ 60Hz = ~67ms lookback
   float attackBuffer[ATTACK_BUFFER_SIZE] = {0};
   int attackBufferIdx = 0;
+  bool attackBufferInitialized_ = false;  // Track if buffer has been pre-filled
   float recentAverage = 0.0f;   // Rolling average of audio level (~1 second window)
   float previousLevel = 0.0f;   // Last frame's level (kept for compatibility)
 

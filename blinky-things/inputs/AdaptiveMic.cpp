@@ -123,6 +123,16 @@ void AdaptiveMic::update(float dt) {
     // Store instantaneous raw level for debugging
     rawInstantLevel = normalized;
 
+    // FIX BUG #1: Pre-fill attack buffer on first update to prevent false positives
+    // Without this, buffer starts at 0, making any audio appear as "attacking"
+    if (!attackBufferInitialized_) {
+      for (int i = 0; i < ATTACK_BUFFER_SIZE; i++) {
+        attackBuffer[i] = normalized;
+      }
+      recentAverage = normalized;  // Also initialize recent average
+      attackBufferInitialized_ = true;
+    }
+
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
     float alpha = 1.0f - expf(-dt / maxValue(MicConstants::HW_TRACKING_TAU, MIN_TAU_HARDWARE));
@@ -412,10 +422,15 @@ void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
 
   // Read available samples from ISR ring buffer (same as spectral flux mode)
   uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
-  uint32_t available = writeIdx - s_fftReadIdx;  // Handles wrap correctly
+  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
+
+  // Handle negative values (shouldn't happen, but be defensive)
+  if (available < 0) {
+    available = 0;
+  }
 
   // Limit to ring buffer size to prevent reading stale data
-  if (available > FFT_RING_SIZE) {
+  if ((uint32_t)available > FFT_RING_SIZE) {
     s_fftReadIdx = writeIdx - FFT_RING_SIZE;
     available = FFT_RING_SIZE;
   }
@@ -486,6 +501,13 @@ void AdaptiveMic::detectHFC(uint32_t nowMs, float dt, float rawLevel) {
   float diff = rawLevel - previousLevel;
   float hfc = diff * diff * hfcWeight;
 
+  // FIX BUG #6: Initialize lastHfcValue on first call to prevent first-frame bias
+  // Without this, lastHfcValue = 0 makes first frame always pass attack test
+  if (lastHfcValue == 0.0f && hfc > 0.0f) {
+    lastHfcValue = hfc;
+    hfcRecentAverage = hfc;  // Also initialize average
+  }
+
   // Track recent average of HFC
   float alpha = 1.0f - expf(-dt / averageTau);
   hfcRecentAverage += alpha * (hfc - hfcRecentAverage);
@@ -525,12 +547,17 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
   spectralFlux_.setAnalysisRange(1, fluxBins);  // Skip DC (bin 0)
 
   // Read available samples from ISR ring buffer
-  // Use signed comparison to handle uint32_t wrap-around correctly (~74 hours at 16kHz)
+  // FIX BUG #7: Use signed arithmetic for wraparound safety (consistent with millis() handling)
   uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
-  uint32_t available = writeIdx - s_fftReadIdx;  // Handles wrap correctly
+  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed handles wraparound correctly
+
+  // Handle negative values (shouldn't happen, but be defensive)
+  if (available < 0) {
+    available = 0;
+  }
 
   // Limit to ring buffer size to prevent reading stale data if we fell behind
-  if (available > FFT_RING_SIZE) {
+  if ((uint32_t)available > FFT_RING_SIZE) {
     // We fell behind - skip old samples to catch up
     s_fftReadIdx = writeIdx - FFT_RING_SIZE;
     available = FFT_RING_SIZE;
@@ -610,9 +637,14 @@ void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
   // Process spectral flux (feed samples to FFT)
   spectralFlux_.setAnalysisRange(1, fluxBins);
   uint32_t writeIdx = s_fftWriteIdx;
-  uint32_t available = writeIdx - s_fftReadIdx;
+  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
 
-  if (available > FFT_RING_SIZE) {
+  // Handle negative values (shouldn't happen, but be defensive)
+  if (available < 0) {
+    available = 0;
+  }
+
+  if ((uint32_t)available > FFT_RING_SIZE) {
     s_fftReadIdx = writeIdx - FFT_RING_SIZE;
     available = FFT_RING_SIZE;
   }
