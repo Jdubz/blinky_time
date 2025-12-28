@@ -3,12 +3,12 @@
   "samples": [
     {
       "id": "kick_hard_1",
-      "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
+      "originalPath": "E:AbletonDrumsprime loops d&bKicksTemple_Kick15.wav",
       "newPath": "samples\\kick\\kick_hard_1.wav",
       "type": "kick",
       "loudness": "hard",
-      "rms": 0.664,
-      "peak": 0.683,
+      "rms": 0.486,
+      "peak": 0.533,
       "durationMs": 657
     },
     {
@@ -367,12 +367,12 @@
       "hard": [
         {
           "id": "kick_hard_1",
-          "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
+          "originalPath": "E:AbletonDrumsprime loops d&bKicksTemple_Kick15.wav",
           "newPath": "samples\\kick\\kick_hard_1.wav",
           "type": "kick",
           "loudness": "hard",
-          "rms": 0.664,
-          "peak": 0.683,
+          "rms": 0.486,
+          "peak": 0.533,
           "durationMs": 657
         },
         {
