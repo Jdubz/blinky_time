@@ -70,11 +70,11 @@ public:
   float transient          = 0.0f;    // Impulse strength (0.0 = none, 1.0 = strong hit)
   uint32_t lastTransientMs = 0;
 
-  // Transient detection parameters (tunable) - shared by all algorithms (tuned 2024-12)
-  float transientThreshold = 3.5f;    // Must be 3.5x louder than recent average
-  float attackMultiplier   = 1.2f;    // Must be 20% louder than previous frame (rapid rise)
+  // Transient detection parameters (tunable) - shared by all algorithms (fast-tune 2025-12-28)
+  float transientThreshold = 2.813f;  // Hybrid-optimal: 2.813x louder (drummer: 1.688, hybrid: 2.813)
+  float attackMultiplier   = 1.1f;    // Must be 10% louder than previous frame (rapid rise)
   float averageTau         = 0.8f;    // Recent average tracking time (seconds)
-  uint16_t cooldownMs      = 30;      // Cooldown between hits (ms)
+  uint16_t cooldownMs      = 40;      // Cooldown between hits (ms)
 
   // ---- DETECTION MODE ----
   // Switch between different onset detection algorithms
@@ -89,13 +89,13 @@ public:
   float hfcWeight = 1.0f;      // HFC weighting factor
   float hfcThresh = 3.0f;      // Detection threshold for HFC
 
-  // Spectral Flux parameters (mode 3) - tuned 2024-12
-  float fluxThresh = 2.0f;     // Detection threshold for spectral flux
+  // Spectral Flux parameters (mode 3) - fast-tune 2025-12-28
+  float fluxThresh = 1.4f;     // Detection threshold for spectral flux (binary search optimal)
   uint8_t fluxBins = 64;       // Number of FFT bins to analyze (focus on bass-mid)
 
-  // Hybrid parameters (mode 4) - tuned via param-tuner 2024-12 (F1: 0.705)
-  float hybridFluxWeight = 0.3f;   // Weight when only flux detects (was 0.7)
-  float hybridDrumWeight = 0.3f;   // Weight when only drummer detects (was 0.5)
+  // Hybrid parameters (mode 4) - fast-tune 2025-12-28 (F1: 0.669)
+  float hybridFluxWeight = 0.7f;   // Weight when only flux detects (tuned from 0.3)
+  float hybridDrumWeight = 0.3f;   // Weight when only drummer detects
   float hybridBothBoost = 1.2f;    // Multiplier when both agree (1.0-2.0)
 
   // Zero-crossing rate (for additional context)

@@ -108,11 +108,11 @@ void ConfigStorage::loadDefaults() {
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
-    // Shared transient detection defaults (tuned via param-tuner 2024-12)
-    data_.mic.transientThreshold = 3.5f;  // 3.5x louder than recent average (tuned from 2.0, was 3.0)
-    data_.mic.attackMultiplier = 1.2f;    // 20% sudden rise required (was 1.3)
-    data_.mic.averageTau = 0.8f;          // Recent average tracking time
-    data_.mic.cooldownMs = 30;            // 30ms cooldown between hits (was 40, originally 80)
+    // Shared transient detection defaults (tuned via fast-tune 2025-12-28)
+    data_.mic.transientThreshold = 2.813f;  // Hybrid-optimal (drummer: 1.688, hybrid: 2.813)
+    data_.mic.attackMultiplier = 1.1f;      // 10% sudden rise required (tuned from 1.2, was 1.3)
+    data_.mic.averageTau = 0.8f;            // Recent average tracking time
+    data_.mic.cooldownMs = 40;              // 40ms cooldown between hits (tuned from 30, was 80)
 
     // Detection mode (v20+): multi-algorithm support
     data_.mic.detectionMode = 4;          // 4 = Hybrid (best F1: 0.705)
@@ -126,12 +126,12 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hfcWeight = 1.0f;           // No weighting adjustment
     data_.mic.hfcThresh = 3.0f;           // Same threshold as main
 
-    // Spectral flux defaults (tuned via param-tuner 2024-12, extended bounds)
-    data_.mic.fluxThresh = 2.0f;          // Optimal from sweep (tuned from 2.8, was 2.641, originally 3.0)
+    // Spectral flux defaults (tuned via fast-tune 2025-12-28)
+    data_.mic.fluxThresh = 1.4f;          // Binary search optimal (tuned from 2.0, was 2.8, was 2.641, originally 3.0)
     data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
-    // Hybrid mode defaults (mode 4) - tuned via param-tuner 2024-12 (F1: 0.767)
-    data_.mic.hybridFluxWeight = 0.3f;    // Weight when only flux detects
+    // Hybrid mode defaults (mode 4) - tuned via fast-tune 2025-12-28 (F1: 0.669)
+    data_.mic.hybridFluxWeight = 0.7f;    // Weight when only flux detects (tuned from 0.3)
     data_.mic.hybridDrumWeight = 0.3f;    // Weight when only drummer detects
     data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
 

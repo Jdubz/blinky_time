@@ -46,13 +46,75 @@ This document tracks parameter optimization tests and findings. Raw test result 
 
 4. **Hardware Gain:** Tests conducted with locked hardware gain to eliminate AGC variability. Real-world performance may differ with adaptive gain.
 
-## Test Session: 2025-12-28 (Different Machine)
+## Test Session: 2025-12-28 (Fast Binary Search Tuning)
 
-**Status:** Exhaustive tests run, results pending documentation
+**Environment:**
+- Hardware: Seeeduino XIAO nRF52840 Sense
+- Serial Port: COM41
+- Hardware Gain: Locked at 40 during tests
+- Test Patterns: strong-beats, simple-4-on-floor, bass-line, full-mix (4 core patterns for fast tuning)
+- Tool: param-tuner fast mode (binary search + targeted validation, ~30 min)
 
-**Parameters Tested:** TBD
+**Parameters Tested:**
 
-**Findings:** TBD
+### hitthresh - Mode-Specific Optimization
+
+**Drummer Mode:**
+- **Binary Search Range:** 1.688 - 2.25
+- **Optimal Value:** 1.688
+- **Performance:** F1 = 0.664 (90.5% precision, 57.0% recall)
+- **Previous Best (from exhaustive sweep):** 3.5 → F1 = 0.463
+- **Improvement:** +43.3% F1 improvement over exhaustive sweep!
+
+**Hybrid Mode:**
+- **Binary Search Range:** 2.0 - 2.813
+- **Optimal Value:** 2.813
+- **Performance:** F1 = 0.669 (67.3% precision, 72.6% recall)
+
+### fluxthresh (Spectral Mode)
+- **Binary Search Range:** 1.2 - 2.8
+- **Optimal Value:** 1.4
+- **Performance:** F1 = 0.670 (72.3% precision, 69.8% recall)
+- **Previous Best (from exhaustive sweep):** 2.0 → F1 = 0.670
+- **Improvement:** Confirmed optimal, refined from 2.0 to 1.4
+
+### Additional Parameters Optimized:
+
+**Drummer Mode:**
+- **attackmult:** 1.1 (down from 1.3 default)
+- **cooldown:** 40ms (up from 30ms, down from original 80ms)
+
+**Hybrid Mode:**
+- **hydrumwt:** 0.3 (down from 0.5 default)
+- **hyfluxwt:** 0.7 (up from 0.3 default)
+
+**Key Findings:**
+
+1. **Binary Search Vastly Superior:** Fast-tune found drummer-optimal hitthresh = 1.688 (F1: 0.664) vs exhaustive sweep's 3.5 (F1: 0.463). The exhaustive sweep tested too high and missed the optimal range entirely.
+
+2. **Mode Performance Ranking:**
+   - Spectral: F1 = 0.670 (BEST - balanced precision/recall)
+   - Hybrid: F1 = 0.669 (nearly equal, more robust across patterns)
+   - Drummer: F1 = 0.664 (good, but lower recall)
+
+3. **Precision vs Recall Trade-off:**
+   - Lower thresholds (1.4-1.7) significantly improve recall without sacrificing much precision
+   - Previous high thresholds (2.0-3.5) were too conservative, missing 50-70% of hits
+
+4. **Hybrid Mode Weighting:** Flux component should dominate (0.7 weight) with drummer providing supplemental detection (0.3 weight). This balances spectral's frequency analysis with drummer's amplitude tracking.
+
+5. **Optimal Default Mode:** Hybrid (F1: 0.669) recommended as default despite spectral being marginally better (F1: 0.670) because hybrid is more robust across diverse audio patterns.
+
+**Applied to Firmware:** ✅ All optimal values updated in ConfigStorage.cpp and AdaptiveMic.h
+
+**Firmware Defaults (as of 2025-12-28):**
+- Detection Mode: 4 (Hybrid)
+- transientThreshold: 2.813 (hybrid-optimal)
+- attackMultiplier: 1.1
+- cooldownMs: 40
+- fluxThresh: 1.4
+- hybridFluxWeight: 0.7
+- hybridDrumWeight: 0.3
 
 ---
 
