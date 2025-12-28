@@ -93,6 +93,11 @@ public:
   float fluxThresh = 3.0f;     // Detection threshold for spectral flux
   uint8_t fluxBins = 64;       // Number of FFT bins to analyze (focus on bass-mid)
 
+  // Hybrid parameters (mode 4) - confidence weights for combining algorithms
+  float hybridFluxWeight = 0.7f;   // Weight when only flux detects (0.0-1.0)
+  float hybridDrumWeight = 0.5f;   // Weight when only drummer detects (0.0-1.0)
+  float hybridBothBoost = 1.2f;    // Multiplier when both agree (1.0-2.0)
+
   // Zero-crossing rate (for additional context)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
 

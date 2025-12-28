@@ -119,6 +119,14 @@ void SerialConsole::registerSettings() {
             "Spectral flux threshold", 1.0f, 10.0f);
         settings_.registerUint8("fluxbins", &mic_->fluxBins, "detection",
             "FFT bins to analyze", 4, 128);
+
+        // Hybrid parameters (mode 4) - confidence weights
+        settings_.registerFloat("hyfluxwt", &mic_->hybridFluxWeight, "detection",
+            "Hybrid: flux-only weight", 0.1f, 1.0f);
+        settings_.registerFloat("hydrumwt", &mic_->hybridDrumWeight, "detection",
+            "Hybrid: drummer-only weight", 0.1f, 1.0f);
+        settings_.registerFloat("hybothboost", &mic_->hybridBothBoost, "detection",
+            "Hybrid: both-agree boost", 1.0f, 2.0f);
     }
 
     // === MUSIC MODE SETTINGS ===

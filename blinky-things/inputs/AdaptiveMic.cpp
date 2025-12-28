@@ -608,13 +608,13 @@ void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
       // Both algorithms agree - high confidence
       // Use max strength, boosted by agreement
       confidence = maxValue(drummerStrength, fluxStrength);
-      confidence = minValue(1.0f, confidence * 1.2f);  // 20% boost for agreement
+      confidence = minValue(1.0f, confidence * hybridBothBoost);
     } else if (fluxStrength > 0.0f) {
       // Spectral flux only - medium-high confidence
-      confidence = fluxStrength * 0.7f;
+      confidence = fluxStrength * hybridFluxWeight;
     } else if (drummerStrength > 0.0f) {
       // Drummer only - medium confidence
-      confidence = drummerStrength * 0.5f;
+      confidence = drummerStrength * hybridDrumWeight;
     }
 
     if (confidence > 0.0f) {
@@ -646,7 +646,8 @@ float AdaptiveMic::evalDrummerStrength(float rawLevel) {
 }
 
 /**
- * Evaluate spectral flux strength without side effects
+ * Evaluate spectral flux strength and process FFT frame
+ * NOTE: This consumes the FFT frame and updates fluxRecentAverage_
  * Returns 0.0 if no detection or frame not ready, 0.0-1.0 for detection strength
  */
 float AdaptiveMic::evalSpectralFluxStrength(float dt) {
