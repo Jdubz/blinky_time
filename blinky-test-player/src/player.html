@@ -11,14 +11,22 @@
 
   <script>
     // Sample categories and their detection band mapping
+    // Note: band is used for ground truth classification, not detection behavior
     const SAMPLE_CONFIG = {
+      // Drums (all transient)
       kick:       { band: 'low',  folder: 'kick' },
       tom:        { band: 'low',  folder: 'tom' },
       bass:       { band: 'low',  folder: 'bass' },
       snare:      { band: 'high', folder: 'snare' },
       hat:        { band: 'high', folder: 'hat' },
       clap:       { band: 'high', folder: 'clap' },
-      percussion: { band: 'high', folder: 'percussion' }
+      percussion: { band: 'high', folder: 'percussion' },
+      // Melodic/harmonic (transient - sharp attack)
+      synth_stab: { band: 'high', folder: 'synth_stab' },
+      lead:       { band: 'high', folder: 'lead' },
+      // Sustained (should NOT trigger detection - slow attack)
+      pad:        { band: 'low',  folder: 'pad' },
+      chord:      { band: 'high', folder: 'chord' }
     };
 
     // Loaded sample buffers organized by type

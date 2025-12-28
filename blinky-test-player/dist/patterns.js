@@ -8,7 +8,7 @@
  * - Low band (50-200 Hz): kick, tom, bass
  * - High band (2-8 kHz): snare, hat, clap, percussion
  */
-import { INSTRUMENT_TO_BAND } from './types.js';
+import { INSTRUMENT_TO_BAND, INSTRUMENT_SHOULD_TRIGGER } from './types.js';
 /**
  * Helper to convert BPM and beat number to time in seconds
  */
@@ -17,7 +17,7 @@ function beatToTime(beat, bpm) {
     return beat / beatsPerSecond;
 }
 /**
- * Helper to create a hit with automatic band detection
+ * Helper to create a hit with automatic band detection and trigger expectation
  */
 function hit(time, instrument, strength = 0.9) {
     return {
@@ -25,6 +25,7 @@ function hit(time, instrument, strength = 0.9) {
         type: INSTRUMENT_TO_BAND[instrument],
         instrument,
         strength,
+        expectTrigger: INSTRUMENT_SHOULD_TRIGGER[instrument],
     };
 }
 /**
@@ -273,8 +274,20 @@ export const SPARSE_PATTERN = {
  * Helper to create a deterministic hit with a specific sample ID
  */
 function deterministicHit(time, sampleId, strength = 1.0) {
-    // Extract type from sampleId (e.g., "kick_hard_1" -> "kick")
-    const type = sampleId.split('_')[0];
+    // Extract type from sampleId (e.g., "kick_hard_1" -> "kick", "synth_stab_hard_1" -> "synth_stab")
+    const parts = sampleId.split('_');
+    // Handle compound types like "synth_stab" - check if second part is a loudness level
+    const loudnessLevels = ['hard', 'medium', 'soft', 'slow'];
+    let type;
+    if (parts.length >= 3 && loudnessLevels.includes(parts[1])) {
+        type = parts[0]; // Simple type like "kick"
+    }
+    else if (parts.length >= 3) {
+        type = parts.slice(0, 2).join('_'); // Compound type like "synth_stab"
+    }
+    else {
+        type = parts[0];
+    }
     const instrument = type;
     return {
         time,
@@ -282,6 +295,7 @@ function deterministicHit(time, sampleId, strength = 1.0) {
         instrument,
         strength,
         sampleId, // New field for deterministic selection
+        expectTrigger: INSTRUMENT_SHOULD_TRIGGER[instrument] ?? true,
     };
 }
 /**
@@ -456,6 +470,211 @@ export const TEMPO_SWEEP = {
         return hits.sort((a, b) => a.time - b.time);
     })(),
 };
+// ============================================================================
+// MELODIC/HARMONIC PATTERNS - Tests with bass, synth, lead, pad, chord
+// These patterns test detection accuracy with non-drum content
+// ============================================================================
+/**
+ * CALIBRATED: Bass line with kicks (120 BPM, 8 bars)
+ * Tests bass note detection alongside kicks
+ * Expected: Both kicks AND bass notes should trigger (both are transients)
+ */
+export const BASS_LINE = {
+    id: 'bass-line',
+    name: 'Bass Line (Calibrated)',
+    description: 'Kicks + bass notes - tests low frequency transient detection',
+    durationMs: 16000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Kick on beat 1
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            // Bass notes on offbeats (should also trigger!)
+            hits.push(deterministicHit(beatToTime(barOffset + 0.5, bpm), 'bass_hard_1', 0.8));
+            hits.push(deterministicHit(beatToTime(barOffset + 1.5, bpm), 'bass_medium_1', 0.6));
+            hits.push(deterministicHit(beatToTime(barOffset + 2.5, bpm), 'bass_hard_2', 0.8));
+            hits.push(deterministicHit(beatToTime(barOffset + 3.5, bpm), 'bass_medium_2', 0.6));
+            // Snare on 2 and 4
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * CALIBRATED: Synth stab pattern (120 BPM, 8 bars)
+ * Sharp synth stabs that SHOULD trigger transient detection
+ */
+export const SYNTH_STABS = {
+    id: 'synth-stabs',
+    name: 'Synth Stabs (Calibrated)',
+    description: 'Sharp synth stabs - should trigger transient detection',
+    durationMs: 16000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Kick on 1
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            // Synth stabs on offbeats
+            hits.push(deterministicHit(beatToTime(barOffset + 0.5, bpm), 'synth_stab_hard_1', 0.85));
+            hits.push(deterministicHit(beatToTime(barOffset + 2.5, bpm), 'synth_stab_hard_2', 0.8));
+            // Snare on 2 and 4
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * CALIBRATED: Lead melody with drum accents (100 BPM, 8 bars)
+ * Tests if lead note attacks are detected alongside drums
+ */
+export const LEAD_MELODY = {
+    id: 'lead-melody',
+    name: 'Lead Melody (Calibrated)',
+    description: 'Lead notes + drums - tests melodic transient detection',
+    durationMs: 19200, // 8 bars at 100 BPM
+    bpm: 100,
+    hits: (() => {
+        const hits = [];
+        const bpm = 100;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Kick on 1 and 3
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_medium_1', 0.7));
+            // Lead melody notes (arpeggiated pattern)
+            hits.push(deterministicHit(beatToTime(barOffset + 0.5, bpm), 'lead_hard_1', 0.75));
+            hits.push(deterministicHit(beatToTime(barOffset + 1.0, bpm), 'lead_medium_1', 0.5));
+            hits.push(deterministicHit(beatToTime(barOffset + 1.5, bpm), 'lead_hard_2', 0.7));
+            hits.push(deterministicHit(beatToTime(barOffset + 2.5, bpm), 'lead_medium_1', 0.5));
+            hits.push(deterministicHit(beatToTime(barOffset + 3.0, bpm), 'lead_hard_1', 0.75));
+            hits.push(deterministicHit(beatToTime(barOffset + 3.5, bpm), 'lead_soft_1', 0.3));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * CALIBRATED: Pad rejection test (80 BPM, 8 bars)
+ * Sustained pads playing throughout with sparse drum hits
+ * Pads should NOT trigger - only drums should be detected
+ * Tests false positive rejection for sustained sounds
+ */
+export const PAD_REJECTION = {
+    id: 'pad-rejection',
+    name: 'Pad Rejection (Calibrated)',
+    description: 'Sustained pads + sparse drums - pads should NOT trigger',
+    durationMs: 24000, // 8 bars at 80 BPM
+    bpm: 80,
+    hits: (() => {
+        const hits = [];
+        const bpm = 80;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Sparse drum hits (should be detected - expectTrigger: true)
+            if (bar % 2 === 0) {
+                hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+                hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'snare_hard_1', 1.0));
+            }
+            // Pads playing on every bar - these should NOT trigger!
+            // They play but expectTrigger will be false (from INSTRUMENT_SHOULD_TRIGGER)
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'pad_slow_1', 0.7));
+            if (bar % 2 === 1) {
+                hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'pad_slow_2', 0.65));
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * CALIBRATED: Chord rejection test (90 BPM, 8 bars)
+ * Sustained chords playing with drum hits
+ * Chords should NOT trigger - only drums should be detected
+ */
+export const CHORD_REJECTION = {
+    id: 'chord-rejection',
+    name: 'Chord Rejection (Calibrated)',
+    description: 'Sustained chords + drums - chords should NOT trigger',
+    durationMs: 21333, // 8 bars at 90 BPM
+    bpm: 90,
+    hits: (() => {
+        const hits = [];
+        const bpm = 90;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Drum hits (should be detected - expectTrigger: true)
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'snare_hard_1', 1.0));
+            // Chords playing - these should NOT trigger!
+            // They play but expectTrigger will be false (from INSTRUMENT_SHOULD_TRIGGER)
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'chord_slow_1', 0.6));
+            if (bar % 2 === 0) {
+                hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'chord_slow_2', 0.55));
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * CALIBRATED: Full mix (120 BPM, 8 bars)
+ * Realistic EDM-style mix with drums, bass, synths, leads
+ * Tests detection in complex, layered audio
+ */
+export const FULL_MIX = {
+    id: 'full-mix',
+    name: 'Full Mix (Calibrated)',
+    description: 'Drums + bass + synth + lead - realistic music simulation',
+    durationMs: 16000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // === DRUMS ===
+            // Kick on 1 and 3
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.9));
+            // Snare on 2 and 4
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+            // Hi-hats (soft - may or may not trigger depending on threshold)
+            for (let eighth = 0; eighth < 8; eighth++) {
+                hits.push(deterministicHit(beatToTime(barOffset + eighth * 0.5, bpm), 'hat_soft_1', 0.3));
+            }
+            // === BASS ===
+            // Bass on offbeats
+            hits.push(deterministicHit(beatToTime(barOffset + 0.5, bpm), 'bass_hard_1', 0.75));
+            hits.push(deterministicHit(beatToTime(barOffset + 1.5, bpm), 'bass_medium_1', 0.55));
+            hits.push(deterministicHit(beatToTime(barOffset + 2.5, bpm), 'bass_hard_2', 0.75));
+            hits.push(deterministicHit(beatToTime(barOffset + 3.5, bpm), 'bass_medium_2', 0.55));
+            // === SYNTH STABS (every other bar) ===
+            if (bar % 2 === 0) {
+                hits.push(deterministicHit(beatToTime(barOffset + 1.5, bpm), 'synth_stab_hard_1', 0.7));
+                hits.push(deterministicHit(beatToTime(barOffset + 3.5, bpm), 'synth_stab_medium_1', 0.5));
+            }
+            // === LEAD (every 4th bar - melody fragment) ===
+            if (bar % 4 === 2) {
+                hits.push(deterministicHit(beatToTime(barOffset + 0.75, bpm), 'lead_hard_1', 0.65));
+                hits.push(deterministicHit(beatToTime(barOffset + 1.25, bpm), 'lead_medium_1', 0.45));
+                hits.push(deterministicHit(beatToTime(barOffset + 2.75, bpm), 'lead_hard_2', 0.65));
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
 /**
  * All available test patterns
  */
@@ -467,6 +686,13 @@ export const TEST_PATTERNS = [
     HAT_REJECTION,
     MIXED_DYNAMICS,
     TEMPO_SWEEP,
+    // Melodic/harmonic patterns (with bass, synth, lead)
+    BASS_LINE,
+    SYNTH_STABS,
+    LEAD_MELODY,
+    PAD_REJECTION,
+    CHORD_REJECTION,
+    FULL_MIX,
     // Legacy patterns (random samples, for variety testing)
     BASIC_DRUMS,
     KICK_FOCUS,
