@@ -5,6 +5,7 @@
 #include "../hal/PlatformConstants.h"
 #include "DetectionMode.h"
 #include "BiquadFilter.h"
+#include "SpectralFlux.h"
 
 // AdaptiveMic - Clean audio input with window/range normalization and transient detection
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
@@ -151,6 +152,13 @@ private:
   volatile static uint32_t s_zeroCrossings;  // Count of zero crossings
   volatile static int16_t s_lastSample;       // Previous sample for ZCR
 
+  // FFT sample ring buffer (ISR writes, main thread reads)
+  // Size must be >= FFT_SIZE (256) to ensure we capture a full frame
+  static constexpr int FFT_RING_SIZE = 512;  // Power of 2 for efficient modulo
+  volatile static int16_t s_fftRing[FFT_RING_SIZE];
+  volatile static uint32_t s_fftWriteIdx;    // ISR increments this
+  static uint32_t s_fftReadIdx;              // Main thread increments this
+
   // Window/Range tracking
   float peakLevel = 0.0f;        // Tracked peak for range window
   float valleyLevel = 0.0f;      // Tracked valley for range window (typically noise gate)
@@ -183,6 +191,10 @@ private:
   // HFC state
   float hfcRecentAverage = 0.0f;      // Rolling average for HFC detection
   float lastHfcValue = 0.0f;          // Previous HFC value for attack detection
+
+  // Spectral Flux state (FFT-based detection)
+  SpectralFlux spectralFlux_;
+  float fluxRecentAverage_ = 0.0f;    // Rolling average for flux detection
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);

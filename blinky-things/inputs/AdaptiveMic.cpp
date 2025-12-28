@@ -45,6 +45,11 @@ volatile uint16_t AdaptiveMic::s_maxAbs     = 0;
 volatile uint32_t AdaptiveMic::s_zeroCrossings = 0;
 volatile int16_t AdaptiveMic::s_lastSample     = 0;
 
+// FFT sample ring buffer
+volatile int16_t AdaptiveMic::s_fftRing[AdaptiveMic::FFT_RING_SIZE] = {0};
+volatile uint32_t AdaptiveMic::s_fftWriteIdx = 0;
+uint32_t AdaptiveMic::s_fftReadIdx = 0;
+
 // ---------- Public ----------
 AdaptiveMic::AdaptiveMic(IPdmMic& pdm, ISystemTime& time)
     : pdm_(pdm), time_(time) {
@@ -73,6 +78,11 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   pdmAlive = false;
   recentAverage = 0.0f;
   previousLevel = 0.0f;
+
+  // Initialize spectral flux detector
+  spectralFlux_.begin();
+  s_fftWriteIdx = 0;
+  s_fftReadIdx = 0;
 
   return true;
 }
@@ -297,6 +307,15 @@ void AdaptiveMic::onPDMdata() {
   if (localMaxAbs > s_maxAbs) s_maxAbs = localMaxAbs;
   s_isrCount++;
 
+  // Copy samples to FFT ring buffer for spectral flux detection
+  // This is a lock-free single-producer (ISR) / single-consumer (main) pattern
+  uint32_t writeIdx = s_fftWriteIdx;
+  for (int i = 0; i < samples; ++i) {
+    s_fftRing[writeIdx & (FFT_RING_SIZE - 1)] = buffer[i];
+    writeIdx++;
+  }
+  s_fftWriteIdx = writeIdx;  // Atomic write of final index
+
   s_instance->lastIsrMs = s_instance->time_.millis();
 }
 
@@ -455,14 +474,60 @@ void AdaptiveMic::detectHFC(uint32_t nowMs, float dt, float rawLevel) {
 }
 
 /**
- * SPECTRAL FLUX (Mode 3) - FFT-based detection (PLACEHOLDER)
+ * SPECTRAL FLUX (Mode 3) - FFT-based detection
  *
- * This requires ArduinoFFT library and additional memory (~2.5KB).
- * For now, falls back to Drummer's Algorithm.
- * TODO: Implement proper FFT-based spectral flux detection.
+ * Computes spectral flux by comparing magnitude spectra between frames.
+ * Spectral flux spikes during transients (drums, bass drops) because
+ * the frequency content changes rapidly.
+ *
+ * Algorithm:
+ * 1. Read samples from ISR ring buffer
+ * 2. Pass to SpectralFlux for FFT processing
+ * 3. Detect spikes in flux signal (LOUD + SUDDEN + COOLDOWN)
  */
 void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
-  // PLACEHOLDER: Fall back to Drummer's Algorithm until FFT is implemented
-  // TODO: Implement proper spectral flux with ArduinoFFT
-  detectDrummer(nowMs, dt, rawLevel);
+  // Update analysis range based on fluxBins parameter
+  // fluxBins controls how many frequency bins to analyze (focus on bass-mid)
+  spectralFlux_.setAnalysisRange(1, fluxBins);  // Skip DC (bin 0)
+
+  // Read available samples from ISR ring buffer
+  uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
+
+  // Feed samples to spectral flux processor
+  while (s_fftReadIdx < writeIdx) {
+    // Read in batches for efficiency
+    int16_t batch[64];
+    int batchSize = 0;
+
+    while (batchSize < 64 && s_fftReadIdx < writeIdx) {
+      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
+      s_fftReadIdx++;
+    }
+
+    spectralFlux_.addSamples(batch, batchSize);
+  }
+
+  // Process FFT frame if ready
+  if (spectralFlux_.isFrameReady()) {
+    float flux = spectralFlux_.process();
+
+    // Update running average (for threshold comparison)
+    float alpha = 1.0f - expf(-dt / averageTau);
+    fluxRecentAverage_ += alpha * (flux - fluxRecentAverage_);
+
+    // Detect transient using same LOUD + SUDDEN + COOLDOWN logic
+    bool isLoudEnough = flux > fluxRecentAverage_ * fluxThresh;
+    bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
+
+    if (isLoudEnough && cooldownElapsed) {
+      // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
+      float ratio = flux / maxValue(fluxRecentAverage_, 0.001f);
+      transient = clamp01((ratio - fluxThresh) / fluxThresh);
+      lastTransientMs = nowMs;
+    }
+  }
+
+  // Also update main recentAverage for compatibility (using raw level)
+  float alpha = 1.0f - expf(-dt / averageTau);
+  recentAverage += alpha * (rawLevel - recentAverage);
 }
