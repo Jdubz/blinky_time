@@ -379,7 +379,12 @@ void AdaptiveMic::detectDrummer(uint32_t nowMs, float dt, float rawLevel) {
 void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
   // Initialize filter if needed (or if frequency changed)
   if (!bassFilterInitialized) {
-    bassFilter.setLowpass(bassFreq, (float)_sampleRate, bassQ);
+    // SAFETY: setLowpass returns false if parameters are invalid
+    // Fall back to drummer algorithm on failure
+    if (!bassFilter.setLowpass(bassFreq, (float)_sampleRate, bassQ)) {
+      detectDrummer(nowMs, dt, rawLevel);  // Safe fallback
+      return;
+    }
     bassFilterInitialized = true;
   }
 

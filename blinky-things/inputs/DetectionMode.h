@@ -55,3 +55,11 @@ inline bool parseDetectionMode(const char* str, DetectionMode& mode) {
 
     return false;
 }
+
+/**
+ * Clamp detection mode to valid range
+ * Returns 0 (DRUMMER) if out of range - safe default
+ */
+inline uint8_t clampDetectionMode(uint8_t mode) {
+    return (mode < static_cast<uint8_t>(DetectionMode::MODE_COUNT)) ? mode : 0;
+}
