@@ -357,8 +357,8 @@ export const STRONG_BEATS: TestPattern = {
     for (let bar = 0; bar < bars; bar++) {
       const barOffset = bar * 4;
       // Hard kicks on 1 and 3, alternating samples
-      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_1', 1.0));
-      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 1.0));
       // Hard snares on 2 and 4, alternating samples
       hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
       hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
@@ -442,8 +442,8 @@ export const HAT_REJECTION: TestPattern = {
       const barOffset = bar * 4;
 
       // Hard kicks on 1 and 3 (should detect)
-      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_1', 1.0));
-      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 1.0));
 
       // Hard snares on 2 and 4 (should detect)
       hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
@@ -479,8 +479,8 @@ export const MIXED_DYNAMICS: TestPattern = {
       const isEvenBar = bar % 2 === 0;
 
       // Kicks: hard on downbeats, medium on offbeats
-      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_1', 1.0));
-      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), isEvenBar ? 'kick_hard_2' : 'kick_medium_1', isEvenBar ? 1.0 : 0.7));
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), isEvenBar ? 'kick_hard_1' : 'kick_medium_1', isEvenBar ? 1.0 : 0.7));
 
       // Snares: alternating hard/medium
       hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), isEvenBar ? 'snare_hard_1' : 'snare_medium_1', isEvenBar ? 1.0 : 0.7));
@@ -521,7 +521,7 @@ export const TEMPO_SWEEP: TestPattern = {
         const time = currentTime + beat * beatDuration;
         // Kick on 1 and 3
         if (beat === 0 || beat === 2) {
-          hits.push(deterministicHit(time, 'kick_hard_1', 1.0));
+          hits.push(deterministicHit(time, 'kick_hard_2', 1.0));
         }
         // Snare on 2 and 4
         if (beat === 1 || beat === 3) {

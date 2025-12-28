@@ -315,22 +315,26 @@ void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
   // Note: transient is reset at the start of update(), not here
   // This ensures it resets even when no audio samples are available (n==0)
 
+  // Use RAW level for detection (not normalized 'level' which clips at 1.0)
+  // This ensures we can detect attack even when audio is loud
+  float rawLevel = rawInstantLevel;
+
   // Track recent average with exponential moving average
   float alpha = 1.0f - expf(-dt / averageTau);
-  recentAverage += alpha * (level - recentAverage);
+  recentAverage += alpha * (rawLevel - recentAverage);
 
   // Detect transient: LOUD + SUDDEN + not in cooldown
-  bool isLoudEnough = level > recentAverage * transientThreshold;
-  bool isAttacking = level > previousLevel * attackMultiplier;
+  bool isLoudEnough = rawLevel > recentAverage * transientThreshold;
+  bool isAttacking = rawLevel > previousLevel * attackMultiplier;
   bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
 
   if (isLoudEnough && isAttacking && cooldownElapsed) {
     // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
-    float ratio = level / maxValue(recentAverage, 0.001f);
+    float ratio = rawLevel / maxValue(recentAverage, 0.001f);
     transient = clamp01((ratio - transientThreshold) / transientThreshold);
     lastTransientMs = nowMs;
   }
 
   // Store for next frame
-  previousLevel = level;
+  previousLevel = rawLevel;
 }
