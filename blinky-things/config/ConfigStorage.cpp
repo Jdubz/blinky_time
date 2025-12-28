@@ -404,7 +404,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     }
 }
 
-void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, RhythmAnalyzer* rhythm, MusicMode* music) {
+void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
     data_.fire.baseCooling = fireParams.baseCooling;
     data_.fire.sparkHeatMin = fireParams.sparkHeatMin;
     data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
@@ -477,7 +477,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     lastSaveMs_ = millis();
 }
 
-void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, RhythmAnalyzer* rhythm, MusicMode* music) {
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
         saveConfiguration(fireParams, mic, rhythm, music);
     }
