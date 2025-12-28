@@ -9,13 +9,15 @@
  * - BASS_BAND: Biquad lowpass filter focusing on kick frequencies (60-200Hz)
  * - HFC: High Frequency Content emphasizes percussive transients
  * - SPECTRAL_FLUX: FFT-based, compares magnitude spectra between frames
+ * - HYBRID: Combines DRUMMER + SPECTRAL_FLUX for confidence scoring
  */
 enum class DetectionMode : uint8_t {
     DRUMMER = 0,        // Current "Drummer's Algorithm" - amplitude-based
     BASS_BAND = 1,      // Biquad lowpass focus on kicks
     HFC = 2,            // High frequency content for percussive
     SPECTRAL_FLUX = 3,  // FFT-based spectral difference
-    MODE_COUNT = 4      // Number of modes (for bounds checking)
+    HYBRID = 4,         // Combined drummer + spectral flux (confidence scoring)
+    MODE_COUNT = 5      // Number of modes (for bounds checking)
 };
 
 /**
@@ -27,6 +29,7 @@ inline const char* getDetectionModeName(DetectionMode mode) {
         case DetectionMode::BASS_BAND:    return "bass";
         case DetectionMode::HFC:          return "hfc";
         case DetectionMode::SPECTRAL_FLUX: return "flux";
+        case DetectionMode::HYBRID:       return "hybrid";
         default:                          return "unknown";
     }
 }
@@ -39,7 +42,7 @@ inline bool parseDetectionMode(const char* str, DetectionMode& mode) {
     if (!str) return false;
 
     // Check numeric values first
-    if (str[0] >= '0' && str[0] <= '3' && str[1] == '\0') {
+    if (str[0] >= '0' && str[0] <= '4' && str[1] == '\0') {
         mode = static_cast<DetectionMode>(str[0] - '0');
         return true;
     }
@@ -50,8 +53,17 @@ inline bool parseDetectionMode(const char* str, DetectionMode& mode) {
 
     if (c == 'd') { mode = DetectionMode::DRUMMER; return true; }
     if (c == 'b') { mode = DetectionMode::BASS_BAND; return true; }
-    if (c == 'h') { mode = DetectionMode::HFC; return true; }
     if (c == 'f' || c == 's') { mode = DetectionMode::SPECTRAL_FLUX; return true; }
+    if (c == 'y') { mode = DetectionMode::HYBRID; return true; }
+    // 'h' could be HFC or hybrid - check second char
+    if (c == 'h') {
+        if (str[1] == 'y' || str[1] == 'Y') {
+            mode = DetectionMode::HYBRID;
+        } else {
+            mode = DetectionMode::HFC;
+        }
+        return true;
+    }
 
     return false;
 }

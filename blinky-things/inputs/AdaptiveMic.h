@@ -207,7 +207,12 @@ private:
   void detectDrummer(uint32_t nowMs, float dt, float rawLevel);      // Mode 0: Original amplitude-based
   void detectBassBand(uint32_t nowMs, float dt, float rawLevel);     // Mode 1: Bass band filter
   void detectHFC(uint32_t nowMs, float dt, float rawLevel);          // Mode 2: High frequency content
-  void detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel); // Mode 3: FFT-based (placeholder)
+  void detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel); // Mode 3: FFT-based
+  void detectHybrid(uint32_t nowMs, float dt, float rawLevel);       // Mode 4: Combined drummer + flux
+
+  // Helper methods for hybrid detection (return detection strength without side effects)
+  float evalDrummerStrength(float rawLevel);      // Returns drummer detection strength (0-1)
+  float evalSpectralFluxStrength(float dt);       // Returns spectral flux detection strength (0-1)
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

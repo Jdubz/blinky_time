@@ -345,6 +345,9 @@ void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
     case DetectionMode::SPECTRAL_FLUX:
       detectSpectralFlux(nowMs, dt, rawLevel);
       break;
+    case DetectionMode::HYBRID:
+      detectHybrid(nowMs, dt, rawLevel);
+      break;
     case DetectionMode::DRUMMER:
     default:
       detectDrummer(nowMs, dt, rawLevel);
@@ -550,4 +553,127 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
   // Also update main recentAverage for compatibility (using raw level)
   float alpha = 1.0f - expf(-dt / averageTau);
   recentAverage += alpha * (rawLevel - recentAverage);
+}
+
+/**
+ * HYBRID DETECTION (Mode 4) - Combines drummer + spectral flux
+ *
+ * Runs both algorithms and combines their outputs for confidence scoring:
+ * - Both detect: High confidence (1.0 strength)
+ * - Flux only: Medium-high confidence (0.7 strength)
+ * - Drummer only: Medium confidence (0.5 strength)
+ * - Neither: No detection
+ *
+ * This leverages:
+ * - Spectral flux's high recall (catches most beats)
+ * - Drummer's precision on certain patterns (good hat rejection)
+ */
+void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
+  // Update tracking averages (needed by both algorithms)
+  float alpha = 1.0f - expf(-dt / averageTau);
+  recentAverage += alpha * (rawLevel - recentAverage);
+
+  // Process spectral flux (feed samples to FFT)
+  spectralFlux_.setAnalysisRange(1, fluxBins);
+  uint32_t writeIdx = s_fftWriteIdx;
+  uint32_t available = writeIdx - s_fftReadIdx;
+
+  if (available > FFT_RING_SIZE) {
+    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
+    available = FFT_RING_SIZE;
+  }
+
+  while (available > 0) {
+    int16_t batch[64];
+    int batchSize = 0;
+    while (batchSize < 64 && available > 0) {
+      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
+      s_fftReadIdx++;
+      available--;
+    }
+    spectralFlux_.addSamples(batch, batchSize);
+  }
+
+  // Evaluate both algorithms (without triggering detection yet)
+  float drummerStrength = evalDrummerStrength(rawLevel);
+  float fluxStrength = evalSpectralFluxStrength(dt);
+
+  // Combine detections with confidence weighting
+  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
+
+  if (cooldownElapsed) {
+    float confidence = 0.0f;
+
+    if (drummerStrength > 0.0f && fluxStrength > 0.0f) {
+      // Both algorithms agree - high confidence
+      // Use max strength, boosted by agreement
+      confidence = maxValue(drummerStrength, fluxStrength);
+      confidence = minValue(1.0f, confidence * 1.2f);  // 20% boost for agreement
+    } else if (fluxStrength > 0.0f) {
+      // Spectral flux only - medium-high confidence
+      confidence = fluxStrength * 0.7f;
+    } else if (drummerStrength > 0.0f) {
+      // Drummer only - medium confidence
+      confidence = drummerStrength * 0.5f;
+    }
+
+    if (confidence > 0.0f) {
+      transient = clamp01(confidence);
+      lastTransientMs = nowMs;
+    }
+  }
+
+  // Update attack buffer for drummer algorithm
+  attackBuffer[attackBufferIdx] = rawLevel;
+  attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
+}
+
+/**
+ * Evaluate drummer algorithm strength without side effects
+ * Returns 0.0 if no detection, 0.0-1.0 for detection strength
+ */
+float AdaptiveMic::evalDrummerStrength(float rawLevel) {
+  float baselineLevel = attackBuffer[attackBufferIdx];
+
+  bool isLoudEnough = rawLevel > recentAverage * transientThreshold;
+  bool isAttacking = rawLevel > baselineLevel * attackMultiplier;
+
+  if (isLoudEnough && isAttacking) {
+    float ratio = rawLevel / maxValue(recentAverage, 0.001f);
+    return clamp01((ratio - transientThreshold) / transientThreshold);
+  }
+  return 0.0f;
+}
+
+/**
+ * Evaluate spectral flux strength without side effects
+ * Returns 0.0 if no detection or frame not ready, 0.0-1.0 for detection strength
+ */
+float AdaptiveMic::evalSpectralFluxStrength(float dt) {
+  if (!spectralFlux_.isFrameReady()) {
+    return 0.0f;
+  }
+
+  float flux = spectralFlux_.process();
+
+  // SAFETY: Skip if flux is invalid
+  if (!isfinite(flux)) {
+    return 0.0f;
+  }
+
+  // Update running average
+  float alpha = 1.0f - expf(-dt / averageTau);
+  fluxRecentAverage_ += alpha * (flux - fluxRecentAverage_);
+
+  if (!isfinite(fluxRecentAverage_)) {
+    fluxRecentAverage_ = 0.0f;
+    return 0.0f;
+  }
+
+  // Check if loud enough
+  if (flux > fluxRecentAverage_ * fluxThresh) {
+    float ratio = flux / maxValue(fluxRecentAverage_, 0.001f);
+    return clamp01((ratio - fluxThresh) / fluxThresh);
+  }
+  return 0.0f;
 }
