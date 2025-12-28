@@ -491,17 +491,27 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
   spectralFlux_.setAnalysisRange(1, fluxBins);  // Skip DC (bin 0)
 
   // Read available samples from ISR ring buffer
+  // Use signed comparison to handle uint32_t wrap-around correctly (~74 hours at 16kHz)
   uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
+  uint32_t available = writeIdx - s_fftReadIdx;  // Handles wrap correctly
+
+  // Limit to ring buffer size to prevent reading stale data if we fell behind
+  if (available > FFT_RING_SIZE) {
+    // We fell behind - skip old samples to catch up
+    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
+    available = FFT_RING_SIZE;
+  }
 
   // Feed samples to spectral flux processor
-  while (s_fftReadIdx < writeIdx) {
+  while (available > 0) {
     // Read in batches for efficiency
     int16_t batch[64];
     int batchSize = 0;
 
-    while (batchSize < 64 && s_fftReadIdx < writeIdx) {
+    while (batchSize < 64 && available > 0) {
       batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
       s_fftReadIdx++;
+      available--;
     }
 
     spectralFlux_.addSamples(batch, batchSize);
@@ -511,9 +521,19 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
   if (spectralFlux_.isFrameReady()) {
     float flux = spectralFlux_.process();
 
+    // SAFETY: Skip if flux is invalid
+    if (!isfinite(flux)) {
+      flux = 0.0f;
+    }
+
     // Update running average (for threshold comparison)
     float alpha = 1.0f - expf(-dt / averageTau);
     fluxRecentAverage_ += alpha * (flux - fluxRecentAverage_);
+
+    // SAFETY: Reset if average becomes corrupted
+    if (!isfinite(fluxRecentAverage_)) {
+      fluxRecentAverage_ = 0.0f;
+    }
 
     // Detect transient using same LOUD + SUDDEN + COOLDOWN logic
     bool isLoudEnough = flux > fluxRecentAverage_ * fluxThresh;

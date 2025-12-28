@@ -4,9 +4,6 @@
 
 using namespace SpectralFluxConstants;
 
-// Static FFT instance (ArduinoFFT uses templates)
-static ArduinoFFT<float> fft;
-
 SpectralFlux::SpectralFlux()
     : sampleCount_(0)
     , writeIndex_(0)
@@ -68,8 +65,16 @@ void SpectralFlux::computeMagnitudes() {
     for (int i = 0; i < NUM_BINS; i++) {
         float real = vReal_[i];
         float imag = vImag_[i];
+
+        // SAFETY: Check for NaN/Inf from FFT output
+        if (!isfinite(real)) real = 0.0f;
+        if (!isfinite(imag)) imag = 0.0f;
+
         // Store in vReal_ temporarily (we'll copy to prevMagnitude_ after flux calc)
-        vReal_[i] = sqrtf(real * real + imag * imag);
+        float mag = sqrtf(real * real + imag * imag);
+
+        // SAFETY: Ensure magnitude is valid
+        vReal_[i] = isfinite(mag) ? mag : 0.0f;
     }
 }
 
@@ -84,7 +89,7 @@ float SpectralFlux::computeFlux() {
 
     for (int i = minB; i < maxB; i++) {
         float diff = vReal_[i] - prevMagnitude_[i];
-        if (diff > 0.0f) {
+        if (diff > 0.0f && isfinite(diff)) {
             flux += diff;
         }
     }
@@ -95,7 +100,8 @@ float SpectralFlux::computeFlux() {
         flux /= numBins;
     }
 
-    return flux;
+    // SAFETY: Final NaN/Inf check
+    return isfinite(flux) ? flux : 0.0f;
 }
 
 float SpectralFlux::process() {
@@ -117,7 +123,10 @@ float SpectralFlux::process() {
     applyHammingWindow();
 
     // Compute FFT in place
-    fft.compute(vReal_, vImag_, FFT_SIZE, FFTDirection::Forward);
+    // ArduinoFFT requires buffer references at construction time
+    // We create a temporary instance each frame (small overhead, but safe)
+    ArduinoFFT<float> fft(vReal_, vImag_, FFT_SIZE, 16000.0f);
+    fft.compute(FFTDirection::Forward);
 
     // Compute magnitudes (stored back in vReal_[0..NUM_BINS-1])
     computeMagnitudes();
@@ -129,6 +138,11 @@ float SpectralFlux::process() {
         // Update running average (exponential moving average, ~0.5s time constant at 60fps)
         const float alpha = 0.03f;  // ~33 frames to reach 63%
         averageFlux_ += alpha * (currentFlux_ - averageFlux_);
+
+        // SAFETY: Reset if averageFlux becomes corrupted
+        if (!isfinite(averageFlux_)) {
+            averageFlux_ = 0.0f;
+        }
     } else {
         currentFlux_ = 0.0f;
         hasPrevFrame_ = true;
