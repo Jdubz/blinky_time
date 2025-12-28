@@ -14,7 +14,7 @@ export const INSTRUMENT_TO_BAND = {
     percussion: 'high',
     synth_stab: 'high', // Synth stabs are transient, high-frequency content
     lead: 'high', // Lead notes with attack are transient
-    pad: 'low', // Pads are sustained, low frequency (but should NOT trigger)
+    pad: 'low', // Spectrally low-band; sustained sounds should NOT trigger (see INSTRUMENT_SHOULD_TRIGGER)
     chord: 'high', // Chord stabs can have transient attack
 };
 /**

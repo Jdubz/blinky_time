@@ -38,7 +38,6 @@ export async function generateReport(
 }
 
 function generateSummary(stateManager: StateManager): string {
-  const state = stateManager.getState();
   const lines: string[] = [];
 
   lines.push('# Parameter Tuning Results');

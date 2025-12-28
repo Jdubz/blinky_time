@@ -18,7 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DEFAULT_OUTPUT_DIR = join(__dirname, '..', '..', 'tuning-results');
 async function main() {
-    const argv = await yargs(hideBin(process.argv))
+    await yargs(hideBin(process.argv))
         .scriptName('param-tuner')
         .usage('$0 <command> [options]')
         .option('port', {

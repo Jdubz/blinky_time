@@ -25,7 +25,6 @@ export async function generateReport(outputDir, stateManager) {
     console.log('\n✅ Report generation complete.\n');
 }
 function generateSummary(stateManager) {
-    const state = stateManager.getState();
     const lines = [];
     lines.push('# Parameter Tuning Results');
     lines.push('');

@@ -328,25 +328,32 @@ function deterministicHit(
   strength: number = 1.0
 ): GroundTruthHit {
   // Extract type from sampleId (e.g., "kick_hard_1" -> "kick", "synth_stab_hard_1" -> "synth_stab")
+  // Format: <type>_<loudness>_<variant> where type can be compound (e.g., "synth_stab")
   const parts = sampleId.split('_');
-  // Handle compound types like "synth_stab" - check if second part is a loudness level
   const loudnessLevels = ['hard', 'medium', 'soft', 'slow'];
-  let type: string;
-  if (parts.length >= 3 && loudnessLevels.includes(parts[1])) {
-    type = parts[0]; // Simple type like "kick"
-  } else if (parts.length >= 3) {
-    type = parts.slice(0, 2).join('_'); // Compound type like "synth_stab"
-  } else {
-    type = parts[0];
+
+  // Find the loudness marker to determine where the type ends
+  let loudnessIndex = parts.findIndex(p => loudnessLevels.includes(p));
+  if (loudnessIndex === -1) {
+    throw new Error(`Invalid sampleId format: "${sampleId}" - missing loudness level (hard/medium/soft/slow)`);
   }
+
+  // Everything before the loudness marker is the instrument type
+  const type = parts.slice(0, loudnessIndex).join('_');
   const instrument = type as InstrumentType;
+
+  // Validate the instrument type exists in our mappings
+  if (!(instrument in INSTRUMENT_TO_BAND)) {
+    throw new Error(`Unknown instrument type: "${type}" from sampleId "${sampleId}"`);
+  }
+
   return {
     time,
-    type: INSTRUMENT_TO_BAND[instrument] || 'high',
+    type: INSTRUMENT_TO_BAND[instrument],
     instrument,
     strength,
     sampleId, // New field for deterministic selection
-    expectTrigger: INSTRUMENT_SHOULD_TRIGGER[instrument] ?? true,
+    expectTrigger: INSTRUMENT_SHOULD_TRIGGER[instrument],
   } as GroundTruthHit & { sampleId: string };
 }
 

@@ -12,9 +12,17 @@ export type TransientType = 'low' | 'high';
  * - Sustained: pad, chord (slow attack, should NOT trigger)
  */
 export type InstrumentType =
-  | 'kick' | 'snare' | 'hat' | 'tom' | 'clap' | 'percussion' | 'bass'  // Drums + bass
-  | 'synth_stab' | 'lead'    // Transient melodic (should trigger)
-  | 'pad' | 'chord';          // Sustained (should NOT trigger - false positive test)
+  | 'kick'
+  | 'snare'
+  | 'hat'
+  | 'tom'
+  | 'clap'
+  | 'percussion'
+  | 'bass'        // Drums + bass
+  | 'synth_stab'
+  | 'lead'        // Transient melodic (should trigger)
+  | 'pad'
+  | 'chord';      // Sustained (should NOT trigger - false positive test)
 
 /**
  * Mapping from instrument type to detection band
@@ -29,7 +37,7 @@ export const INSTRUMENT_TO_BAND: Record<InstrumentType, TransientType> = {
   percussion: 'high',
   synth_stab: 'high',  // Synth stabs are transient, high-frequency content
   lead: 'high',        // Lead notes with attack are transient
-  pad: 'low',          // Pads are sustained, low frequency (but should NOT trigger)
+  pad: 'low',          // Spectrally low-band; sustained sounds should NOT trigger (see INSTRUMENT_SHOULD_TRIGGER)
   chord: 'high',       // Chord stabs can have transient attack
 };
 

@@ -8,7 +8,6 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync } from 'fs';
 import type { TunerOptions } from './types.js';
 import { StateManager } from './state.js';
 import { runBaseline, showBaselineSummary } from './baseline.js';
@@ -30,7 +29,7 @@ interface GlobalArgs {
 }
 
 async function main() {
-  const argv = await yargs(hideBin(process.argv))
+  await yargs(hideBin(process.argv))
     .scriptName('param-tuner')
     .usage('$0 <command> [options]')
     .option('port', {

@@ -5,7 +5,7 @@
 
 import cliProgress from 'cli-progress';
 import type { InteractionResult, InteractionPoint, TunerOptions, TestResult } from './types.js';
-import { REPRESENTATIVE_PATTERNS, PARAMETERS } from './types.js';
+import { REPRESENTATIVE_PATTERNS } from './types.js';
 import { StateManager } from './state.js';
 import { TestRunner } from './runner.js';
 

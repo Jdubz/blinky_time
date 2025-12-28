@@ -5,7 +5,7 @@
 
 import cliProgress from 'cli-progress';
 import type { DetectionMode, SweepResult, SweepPoint, TunerOptions } from './types.js';
-import { PARAMETERS, REPRESENTATIVE_PATTERNS, MODE_IDS } from './types.js';
+import { PARAMETERS, REPRESENTATIVE_PATTERNS } from './types.js';
 import { StateManager } from './state.js';
 import { TestRunner } from './runner.js';
 
