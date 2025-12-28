@@ -252,19 +252,30 @@ void MusicMode::estimateTempo() {
         // to lock onto half-note intervals (kick-to-kick) instead of quarter notes
         if (newBPM < 100.0f && newBPM >= 50.0f) {
             // Check if there are also hits at half the interval (double BPM)
-            // Half interval would be in a different bin
             uint16_t halfIoi = ioi / 2;  // e.g., 1000ms -> 500ms
             if (halfIoi >= 300) {  // Only if half-interval is in valid range
                 uint8_t halfBin = (halfIoi - 300) / 20;
                 if (halfBin < 40) {
+                    // IMPROVED: Check center bin and adjacent bins for timing jitter
                     uint16_t halfBinValue = histogram[halfBin];
-                    // Also check adjacent bins (timing jitter)
                     if (halfBin > 0) halfBinValue += histogram[halfBin - 1];
                     if (halfBin < 39) halfBinValue += histogram[halfBin + 1];
 
-                    // If we have significant evidence at double-tempo, use that instead
-                    // Threshold: at least 2 hits at half-interval, or half the peak value
-                    if (halfBinValue >= 2 || halfBinValue >= peakValue / 2) {
+                    // IMPROVED: Better octave detection criteria
+                    // - Minimum absolute threshold: need at least 3 hits at double-tempo
+                    // - Relative threshold: double-tempo peak should be at least 40% of main peak
+                    // - Switch only if double-tempo is STRONGER or equally strong
+                    constexpr uint16_t MIN_OCTAVE_HITS = 3;  // Minimum hits required
+                    constexpr float OCTAVE_STRENGTH_RATIO = 0.4f;  // Min ratio to main peak
+
+                    bool hasMinimumHits = (halfBinValue >= MIN_OCTAVE_HITS);
+                    bool hasSignificantStrength = (halfBinValue >= peakValue * OCTAVE_STRENGTH_RATIO);
+                    bool isStrongerThanMain = (halfBinValue > peakValue);
+
+                    // Switch to double-tempo if:
+                    // 1. Double-tempo peak is stronger (clear winner), OR
+                    // 2. Both minimum hits AND significant strength criteria met
+                    if (isStrongerThanMain || (hasMinimumHits && hasSignificantStrength)) {
                         newBPM = 60000.0f / halfIoi;  // Double the tempo
                     }
                 }

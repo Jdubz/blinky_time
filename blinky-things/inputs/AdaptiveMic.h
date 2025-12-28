@@ -219,7 +219,7 @@ private:
 
   // Helper methods for hybrid detection (return detection strength without side effects)
   float evalDrummerStrength(float rawLevel);      // Returns drummer detection strength (0-1)
-  float evalSpectralFluxStrength(float dt);       // Returns spectral flux detection strength (0-1)
+  float evalSpectralFluxStrength(float flux, bool frameReady);  // Returns spectral flux detection strength (0-1) from cached flux
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

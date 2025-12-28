@@ -114,6 +114,17 @@ void showFireEffect() {
     float energy = mic ? mic->getLevel() : 0.0f;
     float hit = mic ? mic->getTransient() : 0.0f;
 
+    // INTEGRATION: Modulate energy based on beat likelihood from RhythmAnalyzer
+    // Provides visual feedback that the system is "locked" to a beat pattern
+    if (rhythm && rhythm->periodicityStrength > 0.5f) {
+      float beatLikelihood = rhythm->beatLikelihood;
+      // High beat likelihood (near expected beat) → boost energy by up to 50%
+      // Low beat likelihood (between beats) → natural energy level
+      float energyBoost = 1.0f + (beatLikelihood * 0.5f);
+      energy *= energyBoost;
+      energy = constrain(energy, 0.0f, 1.0f);  // Keep in valid range
+    }
+
     // Update generator with audio input (handled by updateFireEffect)
     updateFireEffect(energy, hit);
 

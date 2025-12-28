@@ -628,9 +628,36 @@ void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
     spectralFlux_.addSamples(batch, batchSize);
   }
 
-  // Evaluate both algorithms (without triggering detection yet)
+  // FIXED: Process FFT frame ONCE and cache the result
+  // This prevents state corruption and makes eval functions pure
+  float currentFlux = 0.0f;
+  bool fluxFrameReady = false;
+
+  if (spectralFlux_.isFrameReady()) {
+    currentFlux = spectralFlux_.process();
+    fluxFrameReady = true;
+
+    // SAFETY: Skip if flux is invalid
+    if (!isfinite(currentFlux)) {
+      currentFlux = 0.0f;
+      fluxFrameReady = false;
+    } else {
+      // Update running average (side effect done here, not in eval function)
+      fluxRecentAverage_ += alpha * (currentFlux - fluxRecentAverage_);
+
+      // SAFETY: Reset if average becomes corrupted
+      if (!isfinite(fluxRecentAverage_)) {
+        fluxRecentAverage_ = 0.0f;
+      }
+
+      // Store for external access (e.g., RhythmAnalyzer)
+      lastFluxValue_ = currentFlux;
+    }
+  }
+
+  // Evaluate both algorithms (now pure functions without side effects)
   float drummerStrength = evalDrummerStrength(rawLevel);
-  float fluxStrength = evalSpectralFluxStrength(dt);
+  float fluxStrength = evalSpectralFluxStrength(currentFlux, fluxFrameReady);
 
   // Combine detections with confidence weighting
   bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
@@ -680,28 +707,12 @@ float AdaptiveMic::evalDrummerStrength(float rawLevel) {
 }
 
 /**
- * Evaluate spectral flux strength and process FFT frame
- * NOTE: This consumes the FFT frame and updates fluxRecentAverage_
+ * Evaluate spectral flux strength from cached flux value (pure function)
+ * FIXED: No longer processes FFT frame - caller must provide pre-computed flux
  * Returns 0.0 if no detection or frame not ready, 0.0-1.0 for detection strength
  */
-float AdaptiveMic::evalSpectralFluxStrength(float dt) {
-  if (!spectralFlux_.isFrameReady()) {
-    return 0.0f;
-  }
-
-  float flux = spectralFlux_.process();
-
-  // SAFETY: Skip if flux is invalid
-  if (!isfinite(flux)) {
-    return 0.0f;
-  }
-
-  // Update running average
-  float alpha = 1.0f - expf(-dt / averageTau);
-  fluxRecentAverage_ += alpha * (flux - fluxRecentAverage_);
-
-  if (!isfinite(fluxRecentAverage_)) {
-    fluxRecentAverage_ = 0.0f;
+float AdaptiveMic::evalSpectralFluxStrength(float flux, bool frameReady) {
+  if (!frameReady) {
     return 0.0f;
   }
 
