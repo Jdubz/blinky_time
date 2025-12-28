@@ -403,10 +403,12 @@ void loop() {
 
   if (mic) mic->update(dt);
 
-  // Feed spectral flux to rhythm analyzer (when using Mode 3 or Mode 4)
+  // Feed spectral flux to rhythm analyzer (only in spectral flux modes)
+  // Note: Only SPECTRAL_FLUX and HYBRID modes compute spectral flux values
   if (mic && rhythm) {
     uint8_t mode = mic->getDetectionMode();
-    if (mode == 3 || mode == 4) {  // SPECTRAL_FLUX or HYBRID mode
+    if (mode == static_cast<uint8_t>(DetectionMode::SPECTRAL_FLUX) ||
+        mode == static_cast<uint8_t>(DetectionMode::HYBRID)) {
       float flux = mic->getLastFluxValue();
       rhythm->addSample(flux);
     }
@@ -488,7 +490,7 @@ void loop() {
   }
 
   // Auto-save dirty settings to flash (debounced)
-  if (mic) configStorage.saveIfDirty(fireParams, *mic);
+  if (mic) configStorage.saveIfDirty(fireParams, *mic, rhythm, music);
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;

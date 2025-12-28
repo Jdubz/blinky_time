@@ -81,12 +81,12 @@ bool RhythmAnalyzer::update(uint32_t nowMs, float frameRate) {
         if (detectedPeriodMs > 0.0f) {
             // Check if tempo changed significantly (>10% difference)
             float tempoDiff = fabsf(detectedPeriodMs - newPeriodMs);
-            if (tempoDiff > detectedPeriodMs * 0.1f) {
+            if (tempoDiff > detectedPeriodMs * TEMPO_CHANGE_THRESHOLD) {
                 // Big tempo change - reset phase for resync
                 currentPhase_ = 0.0f;
             }
             // Smooth tempo estimate
-            detectedPeriodMs = detectedPeriodMs * 0.8f + newPeriodMs * 0.2f;
+            detectedPeriodMs = detectedPeriodMs * TEMPO_SMOOTHING_OLD_WEIGHT + newPeriodMs * TEMPO_SMOOTHING_NEW_WEIGHT;
         } else {
             // First detection - accept immediately
             detectedPeriodMs = newPeriodMs;

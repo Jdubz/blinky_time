@@ -107,6 +107,11 @@ public:
     inline float getCurrentPhase() const { return currentPhase_; }
 
 private:
+    // Tempo tracking constants
+    static constexpr float TEMPO_SMOOTHING_OLD_WEIGHT = 0.8f;  // Weight for previous tempo estimate
+    static constexpr float TEMPO_SMOOTHING_NEW_WEIGHT = 0.2f;  // Weight for new tempo estimate
+    static constexpr float TEMPO_CHANGE_THRESHOLD = 0.1f;      // 10% change triggers phase reset
+
     // Circular buffer for Onset Strength Signal (OSS) history
     float ossHistory_[BUFFER_SIZE];
     int writeIdx_ = 0;
