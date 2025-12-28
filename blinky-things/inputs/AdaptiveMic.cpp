@@ -78,6 +78,7 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   pdmAlive = false;
   recentAverage = 0.0f;
   previousLevel = 0.0f;
+  lastFluxValue_ = 0.0f;  // Initialize spectral flux value for RhythmAnalyzer
 
   // Initialize spectral flux detector
   spectralFlux_.begin();
@@ -164,6 +165,11 @@ void AdaptiveMic::update(float dt) {
 
     // Simplified amplitude spike detection
     detectTransients(nowMs, dt);
+
+    // Clear spectral flux value if not in flux mode (prevent stale data)
+    if (detectionMode != 3 && detectionMode != 4) {
+      lastFluxValue_ = 0.0f;
+    }
   }
 
   if (!pdmAlive) return;
@@ -528,6 +534,9 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
     if (!isfinite(flux)) {
       flux = 0.0f;
     }
+
+    // Store for external access (e.g., RhythmAnalyzer)
+    lastFluxValue_ = flux;
 
     // Update running average (for threshold comparison)
     float alpha = 1.0f - expf(-dt / averageTau);

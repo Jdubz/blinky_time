@@ -123,6 +123,7 @@ public:
   inline bool isHwGainLocked() const { return hwGainLocked_; }     // Check if hardware gain is locked for testing
   inline uint8_t getDetectionMode() const { return detectionMode; }  // Current detection algorithm
   inline float getBassLevel() const { return bassFilteredLevel; }    // Bass-filtered level (for debugging)
+  inline float getLastFluxValue() const { return lastFluxValue_; }   // Last spectral flux value (for RhythmAnalyzer)
 
 public:
   /**
@@ -200,6 +201,7 @@ private:
   // Spectral Flux state (FFT-based detection)
   SpectralFlux spectralFlux_;
   float fluxRecentAverage_ = 0.0f;    // Rolling average for flux detection
+  float lastFluxValue_ = 0.0f;        // Last computed flux value (for RhythmAnalyzer)
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
