@@ -170,10 +170,9 @@ void RhythmAnalyzer::updatePhase(uint32_t dtMs) {
     // Increment phase by time ratio: dtMs / periodMs
     currentPhase_ += (float)dtMs / detectedPeriodMs;
 
-    // Wrap phase to [0, 1) - use fmodf for efficient single-operation wrap
-    if (currentPhase_ >= 1.0f) {
-        currentPhase_ = fmodf(currentPhase_, 1.0f);
-    }
+    // Wrap phase to [0, 1) - always use fmodf to handle all cases including millis() wraparound
+    currentPhase_ = fmodf(currentPhase_, 1.0f);
+    if (currentPhase_ < 0.0f) currentPhase_ += 1.0f;  // Handle negative result from fmodf
 }
 
 float RhythmAnalyzer::getBeatLikelihood() const {
@@ -203,7 +202,7 @@ float RhythmAnalyzer::getBeatLikelihood() const {
 
     // Also consider phase: likelihood peaks near phase = 0 (beat position)
     // Phase modulation: cos(2π * phase) maps to [-1, 1], shift to [0, 1]
-    float phaseFactor = 0.5f + 0.5f * cosf(2.0f * 3.14159f * currentPhase_);
+    float phaseFactor = 0.5f + 0.5f * cosf(TWO_PI * currentPhase_);
 
     // Combine ratio and phase, weighted by periodicity strength
     float likelihood = (ratio - 1.0f) * phaseFactor * periodicityStrength;

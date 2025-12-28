@@ -317,6 +317,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     validateFloat(data_.rhythm.minPeriodicityStrength, 0.3f, 0.8f, F("minPeriodicity"));
     validateUint32(data_.rhythm.autocorrUpdateIntervalMs, 500, 2000, F("rhythmInterval"));
 
+    // Validate BPM range consistency for RhythmAnalyzer
+    if (data_.rhythm.minBPM >= data_.rhythm.maxBPM) {
+        Serial.println(F("[CONFIG] Invalid rhythm BPM range (minBPM >= maxBPM), using defaults"));
+        data_.rhythm.minBPM = 60.0f;
+        data_.rhythm.maxBPM = 200.0f;
+        corrupt = true;
+    }
+
     // MusicMode validation (v22+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
     validateUint32(data_.music.minBeatsToActivate, 2, 16, F("musicBeats"));
@@ -325,6 +333,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
     validateFloat(data_.music.pllKp, 0.01f, 0.5f, F("pllKp"));
     validateFloat(data_.music.pllKi, 0.001f, 0.1f, F("pllKi"));
+
+    // Validate BPM range consistency for MusicMode
+    if (data_.music.bpmMin >= data_.music.bpmMax) {
+        Serial.println(F("[CONFIG] Invalid music BPM range (bpmMin >= bpmMax), using defaults"));
+        data_.music.bpmMin = 90.0f;
+        data_.music.bpmMax = 180.0f;
+        corrupt = true;
+    }
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));

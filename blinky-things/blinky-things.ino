@@ -322,6 +322,10 @@ void setup() {
     Serial.println(F("Microphone initialized"));
   }
 
+  // CRITICAL: Initialize rhythm and music BEFORE configStorage.begin()
+  // This ensures the objects exist when loadConfiguration() tries to populate their parameters.
+  // Initialization order matters: rhythm/music → config load → parameter apply
+
   // Initialize music mode for beat detection and tempo tracking
   music = new(std::nothrow) MusicMode(DefaultHal::time());
   if (!music) {

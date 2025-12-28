@@ -138,11 +138,12 @@ private:
     /**
      * Get sample from circular buffer (with wraparound)
      * @param framesAgo How many frames back (0 = most recent)
-     * @return Sample value
+     * @return Sample value (0.0 if out of bounds)
      */
     inline float getSample(int framesAgo) const {
+        // Bounds check to prevent buffer overflow
+        if (framesAgo < 0 || framesAgo >= BUFFER_SIZE) return 0.0f;
         int idx = (writeIdx_ - 1 - framesAgo + BUFFER_SIZE) % BUFFER_SIZE;
-        if (idx < 0) idx += BUFFER_SIZE;  // Handle negative wraparound
         return ossHistory_[idx];
     }
 
