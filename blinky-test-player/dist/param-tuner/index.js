@@ -37,6 +37,21 @@ async function main() {
         default: DEFAULT_OUTPUT_DIR,
         description: 'Output directory for results',
     })
+        .option('params', {
+        type: 'string',
+        description: 'Comma-separated param names to tune (default: all)',
+        example: '--params hitthresh,attackmult,musicthresh',
+    })
+        .option('modes', {
+        type: 'string',
+        description: 'Comma-separated modes to tune (drummer,spectral,hybrid,bass,hfc,music,rhythm)',
+        example: '--modes music,rhythm',
+    })
+        .option('patterns', {
+        type: 'string',
+        description: 'Comma-separated test patterns to use (default: all representative patterns)',
+        example: '--patterns strong-beats,simple-4-on-floor',
+    })
         .command('fast', 'Fast tuning with binary search (~30 min)', {}, async (args) => {
         await runFast(args);
     })
@@ -84,6 +99,9 @@ function createOptions(args, requirePort = true) {
         port: requirePort ? validatePort(args) : args.port || '',
         gain: args.gain,
         outputDir: args.output || DEFAULT_OUTPUT_DIR,
+        params: args.params ? args.params.split(',').map(p => p.trim()) : undefined,
+        modes: args.modes ? args.modes.split(',').map(m => m.trim()) : undefined,
+        patterns: args.patterns ? args.patterns.split(',').map(p => p.trim()) : undefined,
     };
 }
 async function runFast(args) {

@@ -71,7 +71,7 @@ public:
   uint32_t lastTransientMs = 0;
 
   // Transient detection parameters (tunable) - shared by all algorithms (tuned 2024-12)
-  float transientThreshold = 2.0f;    // Must be 2x louder than recent average
+  float transientThreshold = 3.5f;    // Must be 3.5x louder than recent average
   float attackMultiplier   = 1.2f;    // Must be 20% louder than previous frame (rapid rise)
   float averageTau         = 0.8f;    // Recent average tracking time (seconds)
   uint16_t cooldownMs      = 30;      // Cooldown between hits (ms)
@@ -90,7 +90,7 @@ public:
   float hfcThresh = 3.0f;      // Detection threshold for HFC
 
   // Spectral Flux parameters (mode 3) - tuned 2024-12
-  float fluxThresh = 2.8f;     // Detection threshold for spectral flux
+  float fluxThresh = 2.0f;     // Detection threshold for spectral flux
   uint8_t fluxBins = 64;       // Number of FFT bins to analyze (focus on bass-mid)
 
   // Hybrid parameters (mode 4) - tuned via param-tuner 2024-12 (F1: 0.705)

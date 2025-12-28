@@ -109,7 +109,7 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
     // Shared transient detection defaults (tuned via param-tuner 2024-12)
-    data_.mic.transientThreshold = 2.0f;  // 2x louder than recent average (was 3.0)
+    data_.mic.transientThreshold = 3.5f;  // 3.5x louder than recent average (tuned from 2.0, was 3.0)
     data_.mic.attackMultiplier = 1.2f;    // 20% sudden rise required (was 1.3)
     data_.mic.averageTau = 0.8f;          // Recent average tracking time
     data_.mic.cooldownMs = 30;            // 30ms cooldown between hits (was 40, originally 80)
@@ -127,7 +127,7 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hfcThresh = 3.0f;           // Same threshold as main
 
     // Spectral flux defaults (tuned via param-tuner 2024-12, extended bounds)
-    data_.mic.fluxThresh = 2.8f;          // Extended bounds optimal (was 2.641, originally 3.0)
+    data_.mic.fluxThresh = 2.0f;          // Optimal from sweep (tuned from 2.8, was 2.641, originally 3.0)
     data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
     // Hybrid mode defaults (mode 4) - tuned via param-tuner 2024-12 (F1: 0.767)
