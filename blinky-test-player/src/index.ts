@@ -12,7 +12,7 @@ import { chromium } from 'playwright';
 import { Command } from 'commander';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, readdirSync, existsSync } from 'fs';
+import { writeFileSync, readFileSync, readdirSync, existsSync } from 'fs';
 import { TEST_PATTERNS, getPatternById } from './patterns.js';
 import type { PatternOutput, SampleManifest, InstrumentType } from './types.js';
 
@@ -265,8 +265,28 @@ program
     // Wait for page to be ready
     await page.waitForFunction(() => (window as unknown as { loadSamples: unknown }).loadSamples !== undefined);
 
-    // Build manifest with full file:// URLs for each sample
-    const manifestWithUrls = buildManifestWithUrls(samplesPath, manifest);
+    // Check for curated manifest (deterministic samples with known loudness)
+    const curatedManifestPath = join(samplesPath, 'manifest.json');
+    let sampleManifest: unknown;
+
+    if (existsSync(curatedManifestPath)) {
+      // Use curated manifest for deterministic testing
+      if (!quiet) console.error('Using curated sample manifest (deterministic)');
+      const curatedManifest = JSON.parse(readFileSync(curatedManifestPath, 'utf-8'));
+
+      // Convert paths to file:// URLs
+      sampleManifest = {
+        ...curatedManifest,
+        samples: curatedManifest.samples.map((s: { newPath: string }) => ({
+          ...s,
+          newPath: pathToFileUrl(join(samplesPath, '..', s.newPath)),
+        })),
+      };
+    } else {
+      // Fall back to legacy folder-based manifest
+      if (!quiet) console.error('Using folder-based samples (random selection)');
+      sampleManifest = buildManifestWithUrls(samplesPath, manifest);
+    }
 
     // Load samples into the player
     if (!quiet) console.error('Loading samples...');
@@ -274,16 +294,18 @@ program
       (manifest) => {
         return (window as unknown as { loadSamples: (m: unknown) => Promise<unknown> }).loadSamples(manifest);
       },
-      manifestWithUrls
+      sampleManifest
     );
 
     if (!quiet) console.error(`Starting in ${delay}ms...`);
     await new Promise(resolve => setTimeout(resolve, delay));
 
     // Convert pattern hits to player format
+    // Supports sampleId for deterministic testing or falls back to instrument type
     const playerHits = pattern.hits.map(h => ({
       timeMs: Math.round(h.time * 1000),
       type: h.instrument || (h.type === 'low' ? 'kick' : 'snare'), // Fallback for old patterns
+      sampleId: (h as { sampleId?: string }).sampleId, // Deterministic sample selection
       strength: h.strength,
     }));
 

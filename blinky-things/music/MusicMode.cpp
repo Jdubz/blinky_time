@@ -206,6 +206,30 @@ void MusicMode::estimateTempo() {
         uint32_t ioi = 300 + (peakBin * 20);
         float newBPM = 60000.0f / ioi;
 
+        // OCTAVE DETECTION: When BPM < 100, check if we're detecting half-time
+        // This happens when hi-hats or other subdivisions cause the histogram
+        // to lock onto half-note intervals (kick-to-kick) instead of quarter notes
+        if (newBPM < 100.0f && newBPM >= 50.0f) {
+            // Check if there are also hits at half the interval (double BPM)
+            // Half interval would be in a different bin
+            uint16_t halfIoi = ioi / 2;  // e.g., 1000ms -> 500ms
+            if (halfIoi >= 300) {  // Only if half-interval is in valid range
+                uint8_t halfBin = (halfIoi - 300) / 20;
+                if (halfBin < 40) {
+                    uint16_t halfBinValue = histogram[halfBin];
+                    // Also check adjacent bins (timing jitter)
+                    if (halfBin > 0) halfBinValue += histogram[halfBin - 1];
+                    if (halfBin < 39) halfBinValue += histogram[halfBin + 1];
+
+                    // If we have significant evidence at double-tempo, use that instead
+                    // Threshold: at least 2 hits at half-interval, or half the peak value
+                    if (halfBinValue >= 2 || halfBinValue >= peakValue / 2) {
+                        newBPM = 60000.0f / halfIoi;  // Double the tempo
+                    }
+                }
+            }
+        }
+
         // Clamp new BPM to valid range before mixing
         newBPM = clampFloat(newBPM, bpmMin, bpmMax);
 

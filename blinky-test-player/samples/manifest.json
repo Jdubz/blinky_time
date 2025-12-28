@@ -1,0 +1,766 @@
+{
+  "generatedAt": "2025-12-27T22:57:11.333Z",
+  "samples": [
+    {
+      "id": "kick_hard_1",
+      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
+      "newPath": "samples\\kick\\kick_hard_1.wav",
+      "type": "kick",
+      "loudness": "hard",
+      "rms": 0.664,
+      "peak": 0.683,
+      "durationMs": 657
+    },
+    {
+      "id": "kick_hard_2",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick04.wav",
+      "newPath": "samples\\kick\\kick_hard_2.wav",
+      "type": "kick",
+      "loudness": "hard",
+      "rms": 0.473,
+      "peak": 1,
+      "durationMs": 253
+    },
+    {
+      "id": "kick_hard_3",
+      "originalPath": "D:\\Ableton\\drums\\MK05\\Analogued\\Kick Analogued 1.wav",
+      "newPath": "samples\\kick\\kick_hard_3.wav",
+      "type": "kick",
+      "loudness": "hard",
+      "rms": 0.407,
+      "peak": 0.903,
+      "durationMs": 93
+    },
+    {
+      "id": "kick_medium_1",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Temple_Kick08.wav",
+      "newPath": "samples\\kick\\kick_medium_1.wav",
+      "type": "kick",
+      "loudness": "medium",
+      "rms": 0.349,
+      "peak": 0.971,
+      "durationMs": 165
+    },
+    {
+      "id": "kick_medium_2",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick21.wav",
+      "newPath": "samples\\kick\\kick_medium_2.wav",
+      "type": "kick",
+      "loudness": "medium",
+      "rms": 0.295,
+      "peak": 0.975,
+      "durationMs": 543
+    },
+    {
+      "id": "kick_medium_3",
+      "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Kicks\\Monarchy_Kick02.wav",
+      "newPath": "samples\\kick\\kick_medium_3.wav",
+      "type": "kick",
+      "loudness": "medium",
+      "rms": 0.219,
+      "peak": 0.794,
+      "durationMs": 214
+    },
+    {
+      "id": "kick_soft_1",
+      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Kick w_Cym7.wav",
+      "newPath": "samples\\kick\\kick_soft_1.wav",
+      "type": "kick",
+      "loudness": "soft",
+      "rms": 0.15,
+      "peak": 0.944,
+      "durationMs": 413
+    },
+    {
+      "id": "kick_soft_2",
+      "originalPath": "D:\\Ableton\\drums\\Chamber\\Chamber Kick 02.wav",
+      "newPath": "samples\\kick\\kick_soft_2.wav",
+      "type": "kick",
+      "loudness": "soft",
+      "rms": 0.111,
+      "peak": 0.784,
+      "durationMs": 309
+    },
+    {
+      "id": "kick_soft_3",
+      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Drum Kicks\\LR_Drumkick_08.wav",
+      "newPath": "samples\\kick\\kick_soft_3.wav",
+      "type": "kick",
+      "loudness": "soft",
+      "rms": 0.081,
+      "peak": 0.688,
+      "durationMs": 343
+    },
+    {
+      "id": "snare_hard_1",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare01.wav",
+      "newPath": "samples\\snare\\snare_hard_1.wav",
+      "type": "snare",
+      "loudness": "hard",
+      "rms": 0.458,
+      "peak": 0.989,
+      "durationMs": 171
+    },
+    {
+      "id": "snare_hard_2",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare14.wav",
+      "newPath": "samples\\snare\\snare_hard_2.wav",
+      "type": "snare",
+      "loudness": "hard",
+      "rms": 0.318,
+      "peak": 0.993,
+      "durationMs": 167
+    },
+    {
+      "id": "snare_hard_3",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare12.wav",
+      "newPath": "samples\\snare\\snare_hard_3.wav",
+      "type": "snare",
+      "loudness": "hard",
+      "rms": 0.276,
+      "peak": 1,
+      "durationMs": 172
+    },
+    {
+      "id": "snare_medium_1",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Dark_Snare21.wav",
+      "newPath": "samples\\snare\\snare_medium_1.wav",
+      "type": "snare",
+      "loudness": "medium",
+      "rms": 0.248,
+      "peak": 0.999,
+      "durationMs": 173
+    },
+    {
+      "id": "snare_medium_2",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Liquid_Snare03.wav",
+      "newPath": "samples\\snare\\snare_medium_2.wav",
+      "type": "snare",
+      "loudness": "medium",
+      "rms": 0.198,
+      "peak": 0.987,
+      "durationMs": 161
+    },
+    {
+      "id": "snare_medium_3",
+      "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare06.wav",
+      "newPath": "samples\\snare\\snare_medium_3.wav",
+      "type": "snare",
+      "loudness": "medium",
+      "rms": 0.145,
+      "peak": 0.794,
+      "durationMs": 357
+    },
+    {
+      "id": "snare_soft_1",
+      "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare07.wav",
+      "newPath": "samples\\snare\\snare_soft_1.wav",
+      "type": "snare",
+      "loudness": "soft",
+      "rms": 0.099,
+      "peak": 0.699,
+      "durationMs": 429
+    },
+    {
+      "id": "snare_soft_2",
+      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Snare Warlord ghost1.wav",
+      "newPath": "samples\\snare\\snare_soft_2.wav",
+      "type": "snare",
+      "loudness": "soft",
+      "rms": 0.085,
+      "peak": 0.93,
+      "durationMs": 640
+    },
+    {
+      "id": "snare_soft_3",
+      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Snares\\LR_Snare_10.wav",
+      "newPath": "samples\\snare\\snare_soft_3.wav",
+      "type": "snare",
+      "loudness": "soft",
+      "rms": 0.067,
+      "peak": 0.688,
+      "durationMs": 343
+    },
+    {
+      "id": "hat_hard_1",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat08.wav",
+      "newPath": "samples\\hat\\hat_hard_1.wav",
+      "type": "hat",
+      "loudness": "hard",
+      "rms": 0.352,
+      "peak": 0.955,
+      "durationMs": 141
+    },
+    {
+      "id": "hat_hard_2",
+      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (8).wav",
+      "newPath": "samples\\hat\\hat_hard_2.wav",
+      "type": "hat",
+      "loudness": "hard",
+      "rms": 0.185,
+      "peak": 0.502,
+      "durationMs": 86
+    },
+    {
+      "id": "hat_hard_3",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat18.wav",
+      "newPath": "samples\\hat\\hat_hard_3.wav",
+      "type": "hat",
+      "loudness": "hard",
+      "rms": 0.168,
+      "peak": 1,
+      "durationMs": 220
+    },
+    {
+      "id": "hat_medium_1",
+      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (45).wav",
+      "newPath": "samples\\hat\\hat_medium_1.wav",
+      "type": "hat",
+      "loudness": "medium",
+      "rms": 0.15,
+      "peak": 0.562,
+      "durationMs": 171
+    },
+    {
+      "id": "hat_medium_2",
+      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (25).wav",
+      "newPath": "samples\\hat\\hat_medium_2.wav",
+      "type": "hat",
+      "loudness": "medium",
+      "rms": 0.115,
+      "peak": 0.599,
+      "durationMs": 82
+    },
+    {
+      "id": "hat_medium_3",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat28.wav",
+      "newPath": "samples\\hat\\hat_medium_3.wav",
+      "type": "hat",
+      "loudness": "medium",
+      "rms": 0.086,
+      "peak": 0.999,
+      "durationMs": 317
+    },
+    {
+      "id": "hat_soft_1",
+      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (40).wav",
+      "newPath": "samples\\hat\\hat_soft_1.wav",
+      "type": "hat",
+      "loudness": "soft",
+      "rms": 0.05,
+      "peak": 0.684,
+      "durationMs": 82
+    },
+    {
+      "id": "hat_soft_2",
+      "originalPath": "D:\\Ableton\\drums\\Flutter\\Flutter HiHat 02.wav",
+      "newPath": "samples\\hat\\hat_soft_2.wav",
+      "type": "hat",
+      "loudness": "soft",
+      "rms": 0.031,
+      "peak": 0.229,
+      "durationMs": 329
+    },
+    {
+      "id": "hat_soft_3",
+      "originalPath": "D:\\Ableton\\drums\\Ballistic Drum & SFX Shots\\HiHat Shots\\Hat07.wav",
+      "newPath": "samples\\hat\\hat_soft_3.wav",
+      "type": "hat",
+      "loudness": "soft",
+      "rms": 0.022,
+      "peak": 0.7,
+      "durationMs": 1371
+    },
+    {
+      "id": "tom_hard_1",
+      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama3.wav",
+      "newPath": "samples\\tom\\tom_hard_1.wav",
+      "type": "tom",
+      "loudness": "hard",
+      "rms": 0.323,
+      "peak": 0.944,
+      "durationMs": 422
+    },
+    {
+      "id": "tom_hard_2",
+      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Floor Tom Tama5.wav",
+      "newPath": "samples\\tom\\tom_hard_2.wav",
+      "type": "tom",
+      "loudness": "hard",
+      "rms": 0.237,
+      "peak": 0.944,
+      "durationMs": 742
+    },
+    {
+      "id": "tom_medium_1",
+      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama1.wav",
+      "newPath": "samples\\tom\\tom_medium_1.wav",
+      "type": "tom",
+      "loudness": "medium",
+      "rms": 0.199,
+      "peak": 0.944,
+      "durationMs": 349
+    },
+    {
+      "id": "tom_medium_2",
+      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_3.wav",
+      "newPath": "samples\\tom\\tom_medium_2.wav",
+      "type": "tom",
+      "loudness": "medium",
+      "rms": 0.153,
+      "peak": 0.675,
+      "durationMs": 500
+    },
+    {
+      "id": "tom_soft_1",
+      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_7.wav",
+      "newPath": "samples\\tom\\tom_soft_1.wav",
+      "type": "tom",
+      "loudness": "soft",
+      "rms": 0.091,
+      "peak": 0.675,
+      "durationMs": 499
+    },
+    {
+      "id": "clap_hard_1",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap01.wav",
+      "newPath": "samples\\clap\\clap_hard_1.wav",
+      "type": "clap",
+      "loudness": "hard",
+      "rms": 0.251,
+      "peak": 0.968,
+      "durationMs": 126
+    },
+    {
+      "id": "clap_hard_2",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap09.wav",
+      "newPath": "samples\\clap\\clap_hard_2.wav",
+      "type": "clap",
+      "loudness": "hard",
+      "rms": 0.184,
+      "peak": 1,
+      "durationMs": 264
+    },
+    {
+      "id": "clap_medium_1",
+      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap02.wav",
+      "newPath": "samples\\clap\\clap_medium_1.wav",
+      "type": "clap",
+      "loudness": "medium",
+      "rms": 0.141,
+      "peak": 0.973,
+      "durationMs": 159
+    },
+    {
+      "id": "clap_medium_2",
+      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Claps\\LR_Clap_4.wav",
+      "newPath": "samples\\clap\\clap_medium_2.wav",
+      "type": "clap",
+      "loudness": "medium",
+      "rms": 0.089,
+      "peak": 0.675,
+      "durationMs": 405
+    }
+  ],
+  "byType": {
+    "kick": {
+      "hard": [
+        {
+          "id": "kick_hard_1",
+          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
+          "newPath": "samples\\kick\\kick_hard_1.wav",
+          "type": "kick",
+          "loudness": "hard",
+          "rms": 0.664,
+          "peak": 0.683,
+          "durationMs": 657
+        },
+        {
+          "id": "kick_hard_2",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick04.wav",
+          "newPath": "samples\\kick\\kick_hard_2.wav",
+          "type": "kick",
+          "loudness": "hard",
+          "rms": 0.473,
+          "peak": 1,
+          "durationMs": 253
+        },
+        {
+          "id": "kick_hard_3",
+          "originalPath": "D:\\Ableton\\drums\\MK05\\Analogued\\Kick Analogued 1.wav",
+          "newPath": "samples\\kick\\kick_hard_3.wav",
+          "type": "kick",
+          "loudness": "hard",
+          "rms": 0.407,
+          "peak": 0.903,
+          "durationMs": 93
+        }
+      ],
+      "medium": [
+        {
+          "id": "kick_medium_1",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Temple_Kick08.wav",
+          "newPath": "samples\\kick\\kick_medium_1.wav",
+          "type": "kick",
+          "loudness": "medium",
+          "rms": 0.349,
+          "peak": 0.971,
+          "durationMs": 165
+        },
+        {
+          "id": "kick_medium_2",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick21.wav",
+          "newPath": "samples\\kick\\kick_medium_2.wav",
+          "type": "kick",
+          "loudness": "medium",
+          "rms": 0.295,
+          "peak": 0.975,
+          "durationMs": 543
+        },
+        {
+          "id": "kick_medium_3",
+          "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Kicks\\Monarchy_Kick02.wav",
+          "newPath": "samples\\kick\\kick_medium_3.wav",
+          "type": "kick",
+          "loudness": "medium",
+          "rms": 0.219,
+          "peak": 0.794,
+          "durationMs": 214
+        }
+      ],
+      "soft": [
+        {
+          "id": "kick_soft_1",
+          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Kick w_Cym7.wav",
+          "newPath": "samples\\kick\\kick_soft_1.wav",
+          "type": "kick",
+          "loudness": "soft",
+          "rms": 0.15,
+          "peak": 0.944,
+          "durationMs": 413
+        },
+        {
+          "id": "kick_soft_2",
+          "originalPath": "D:\\Ableton\\drums\\Chamber\\Chamber Kick 02.wav",
+          "newPath": "samples\\kick\\kick_soft_2.wav",
+          "type": "kick",
+          "loudness": "soft",
+          "rms": 0.111,
+          "peak": 0.784,
+          "durationMs": 309
+        },
+        {
+          "id": "kick_soft_3",
+          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Drum Kicks\\LR_Drumkick_08.wav",
+          "newPath": "samples\\kick\\kick_soft_3.wav",
+          "type": "kick",
+          "loudness": "soft",
+          "rms": 0.081,
+          "peak": 0.688,
+          "durationMs": 343
+        }
+      ]
+    },
+    "snare": {
+      "hard": [
+        {
+          "id": "snare_hard_1",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare01.wav",
+          "newPath": "samples\\snare\\snare_hard_1.wav",
+          "type": "snare",
+          "loudness": "hard",
+          "rms": 0.458,
+          "peak": 0.989,
+          "durationMs": 171
+        },
+        {
+          "id": "snare_hard_2",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare14.wav",
+          "newPath": "samples\\snare\\snare_hard_2.wav",
+          "type": "snare",
+          "loudness": "hard",
+          "rms": 0.318,
+          "peak": 0.993,
+          "durationMs": 167
+        },
+        {
+          "id": "snare_hard_3",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare12.wav",
+          "newPath": "samples\\snare\\snare_hard_3.wav",
+          "type": "snare",
+          "loudness": "hard",
+          "rms": 0.276,
+          "peak": 1,
+          "durationMs": 172
+        }
+      ],
+      "medium": [
+        {
+          "id": "snare_medium_1",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Dark_Snare21.wav",
+          "newPath": "samples\\snare\\snare_medium_1.wav",
+          "type": "snare",
+          "loudness": "medium",
+          "rms": 0.248,
+          "peak": 0.999,
+          "durationMs": 173
+        },
+        {
+          "id": "snare_medium_2",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Liquid_Snare03.wav",
+          "newPath": "samples\\snare\\snare_medium_2.wav",
+          "type": "snare",
+          "loudness": "medium",
+          "rms": 0.198,
+          "peak": 0.987,
+          "durationMs": 161
+        },
+        {
+          "id": "snare_medium_3",
+          "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare06.wav",
+          "newPath": "samples\\snare\\snare_medium_3.wav",
+          "type": "snare",
+          "loudness": "medium",
+          "rms": 0.145,
+          "peak": 0.794,
+          "durationMs": 357
+        }
+      ],
+      "soft": [
+        {
+          "id": "snare_soft_1",
+          "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare07.wav",
+          "newPath": "samples\\snare\\snare_soft_1.wav",
+          "type": "snare",
+          "loudness": "soft",
+          "rms": 0.099,
+          "peak": 0.699,
+          "durationMs": 429
+        },
+        {
+          "id": "snare_soft_2",
+          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Snare Warlord ghost1.wav",
+          "newPath": "samples\\snare\\snare_soft_2.wav",
+          "type": "snare",
+          "loudness": "soft",
+          "rms": 0.085,
+          "peak": 0.93,
+          "durationMs": 640
+        },
+        {
+          "id": "snare_soft_3",
+          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Snares\\LR_Snare_10.wav",
+          "newPath": "samples\\snare\\snare_soft_3.wav",
+          "type": "snare",
+          "loudness": "soft",
+          "rms": 0.067,
+          "peak": 0.688,
+          "durationMs": 343
+        }
+      ]
+    },
+    "hat": {
+      "hard": [
+        {
+          "id": "hat_hard_1",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat08.wav",
+          "newPath": "samples\\hat\\hat_hard_1.wav",
+          "type": "hat",
+          "loudness": "hard",
+          "rms": 0.352,
+          "peak": 0.955,
+          "durationMs": 141
+        },
+        {
+          "id": "hat_hard_2",
+          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (8).wav",
+          "newPath": "samples\\hat\\hat_hard_2.wav",
+          "type": "hat",
+          "loudness": "hard",
+          "rms": 0.185,
+          "peak": 0.502,
+          "durationMs": 86
+        },
+        {
+          "id": "hat_hard_3",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat18.wav",
+          "newPath": "samples\\hat\\hat_hard_3.wav",
+          "type": "hat",
+          "loudness": "hard",
+          "rms": 0.168,
+          "peak": 1,
+          "durationMs": 220
+        }
+      ],
+      "medium": [
+        {
+          "id": "hat_medium_1",
+          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (45).wav",
+          "newPath": "samples\\hat\\hat_medium_1.wav",
+          "type": "hat",
+          "loudness": "medium",
+          "rms": 0.15,
+          "peak": 0.562,
+          "durationMs": 171
+        },
+        {
+          "id": "hat_medium_2",
+          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (25).wav",
+          "newPath": "samples\\hat\\hat_medium_2.wav",
+          "type": "hat",
+          "loudness": "medium",
+          "rms": 0.115,
+          "peak": 0.599,
+          "durationMs": 82
+        },
+        {
+          "id": "hat_medium_3",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat28.wav",
+          "newPath": "samples\\hat\\hat_medium_3.wav",
+          "type": "hat",
+          "loudness": "medium",
+          "rms": 0.086,
+          "peak": 0.999,
+          "durationMs": 317
+        }
+      ],
+      "soft": [
+        {
+          "id": "hat_soft_1",
+          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (40).wav",
+          "newPath": "samples\\hat\\hat_soft_1.wav",
+          "type": "hat",
+          "loudness": "soft",
+          "rms": 0.05,
+          "peak": 0.684,
+          "durationMs": 82
+        },
+        {
+          "id": "hat_soft_2",
+          "originalPath": "D:\\Ableton\\drums\\Flutter\\Flutter HiHat 02.wav",
+          "newPath": "samples\\hat\\hat_soft_2.wav",
+          "type": "hat",
+          "loudness": "soft",
+          "rms": 0.031,
+          "peak": 0.229,
+          "durationMs": 329
+        },
+        {
+          "id": "hat_soft_3",
+          "originalPath": "D:\\Ableton\\drums\\Ballistic Drum & SFX Shots\\HiHat Shots\\Hat07.wav",
+          "newPath": "samples\\hat\\hat_soft_3.wav",
+          "type": "hat",
+          "loudness": "soft",
+          "rms": 0.022,
+          "peak": 0.7,
+          "durationMs": 1371
+        }
+      ]
+    },
+    "tom": {
+      "hard": [
+        {
+          "id": "tom_hard_1",
+          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama3.wav",
+          "newPath": "samples\\tom\\tom_hard_1.wav",
+          "type": "tom",
+          "loudness": "hard",
+          "rms": 0.323,
+          "peak": 0.944,
+          "durationMs": 422
+        },
+        {
+          "id": "tom_hard_2",
+          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Floor Tom Tama5.wav",
+          "newPath": "samples\\tom\\tom_hard_2.wav",
+          "type": "tom",
+          "loudness": "hard",
+          "rms": 0.237,
+          "peak": 0.944,
+          "durationMs": 742
+        }
+      ],
+      "medium": [
+        {
+          "id": "tom_medium_1",
+          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama1.wav",
+          "newPath": "samples\\tom\\tom_medium_1.wav",
+          "type": "tom",
+          "loudness": "medium",
+          "rms": 0.199,
+          "peak": 0.944,
+          "durationMs": 349
+        },
+        {
+          "id": "tom_medium_2",
+          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_3.wav",
+          "newPath": "samples\\tom\\tom_medium_2.wav",
+          "type": "tom",
+          "loudness": "medium",
+          "rms": 0.153,
+          "peak": 0.675,
+          "durationMs": 500
+        }
+      ],
+      "soft": [
+        {
+          "id": "tom_soft_1",
+          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_7.wav",
+          "newPath": "samples\\tom\\tom_soft_1.wav",
+          "type": "tom",
+          "loudness": "soft",
+          "rms": 0.091,
+          "peak": 0.675,
+          "durationMs": 499
+        }
+      ]
+    },
+    "clap": {
+      "hard": [
+        {
+          "id": "clap_hard_1",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap01.wav",
+          "newPath": "samples\\clap\\clap_hard_1.wav",
+          "type": "clap",
+          "loudness": "hard",
+          "rms": 0.251,
+          "peak": 0.968,
+          "durationMs": 126
+        },
+        {
+          "id": "clap_hard_2",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap09.wav",
+          "newPath": "samples\\clap\\clap_hard_2.wav",
+          "type": "clap",
+          "loudness": "hard",
+          "rms": 0.184,
+          "peak": 1,
+          "durationMs": 264
+        }
+      ],
+      "medium": [
+        {
+          "id": "clap_medium_1",
+          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap02.wav",
+          "newPath": "samples\\clap\\clap_medium_1.wav",
+          "type": "clap",
+          "loudness": "medium",
+          "rms": 0.141,
+          "peak": 0.973,
+          "durationMs": 159
+        },
+        {
+          "id": "clap_medium_2",
+          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Claps\\LR_Clap_4.wav",
+          "newPath": "samples\\clap\\clap_medium_2.wav",
+          "type": "clap",
+          "loudness": "medium",
+          "rms": 0.089,
+          "peak": 0.675,
+          "durationMs": 405
+        }
+      ],
+      "soft": []
+    }
+  }
+}

@@ -8,7 +8,7 @@
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 19;  // Config schema v19: simplified transient detection (removed complex onset parameters)
+    static const uint8_t CONFIG_VERSION = 20;  // Config schema v20: multi-algorithm detection (drummer, bass, hfc, flux)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -31,14 +31,27 @@ public:
         // Window/Range normalization parameters
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
-        // Hardware AGC parameters (primary - optimizes ADC signal quality)
+        // Hardware AGC parameters
         float hwTarget;           // Target raw input level (±0.01 dead zone)
-        // Simplified transient detection parameters
+        // Shared transient detection parameters
         float transientThreshold; // Hit threshold (multiples of recent average)
         float attackMultiplier;   // Attack multiplier (sudden rise ratio)
         float averageTau;         // Recent average tracking time (seconds)
+        // Bass band filter parameters
+        float bassFreq;           // Filter cutoff frequency (Hz)
+        float bassQ;              // Filter Q factor
+        float bassThresh;         // Bass detection threshold
+        // HFC parameters
+        float hfcWeight;          // HFC weighting factor
+        float hfcThresh;          // HFC detection threshold
+        // Spectral flux parameters
+        float fluxThresh;         // Spectral flux threshold
+        // uint16_t members
         uint16_t cooldownMs;      // Cooldown between hits (ms)
-        uint16_t _padding;        // Explicit padding for 4-byte alignment (total: 28 bytes)
+        // uint8_t members
+        uint8_t detectionMode;    // 0=drummer, 1=bass, 2=hfc, 3=flux
+        uint8_t fluxBins;         // FFT bins to analyze
+        // Total: 12 floats (48) + 1 uint16 (2) + 2 uint8 (2) = 52 bytes
     };
 
     struct ConfigData {
@@ -52,9 +65,9 @@ public:
     // Compile-time safety checks
     // These verify struct sizes match expected values to catch accidental changes
     // If these fail, you MUST increment CONFIG_VERSION!
-    static_assert(sizeof(StoredMicParams) == 28,
-        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (28 bytes = 6 floats + 2 uint16_t)");
-    static_assert(sizeof(ConfigData) <= 80,
+    static_assert(sizeof(StoredMicParams) == 52,
+        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (52 bytes = 12 floats + 1 uint16 + 2 uint8)");
+    static_assert(sizeof(ConfigData) <= 112,
         "ConfigData too large! May not fit in flash sector. Review struct padding.");
 
     ConfigStorage();

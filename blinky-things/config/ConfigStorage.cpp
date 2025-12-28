@@ -106,13 +106,27 @@ void ConfigStorage::loadDefaults() {
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
-    // Simplified transient detection defaults (v19+)
-    // NOTE: Old onset detection configs (v18 and below) are incompatible with simplified detection.
-    // Version check in loadFromFlash() will reject old configs, forcing these defaults on upgrade.
+    // Shared transient detection defaults
     data_.mic.transientThreshold = 3.0f;  // 3x louder than recent average
     data_.mic.attackMultiplier = 1.3f;    // 30% sudden rise required
     data_.mic.averageTau = 0.8f;          // Recent average tracking time
     data_.mic.cooldownMs = 80;            // 80ms cooldown between hits
+
+    // Detection mode (v20+): multi-algorithm support
+    data_.mic.detectionMode = 0;          // 0 = Drummer's Algorithm (default)
+
+    // Bass band filter defaults
+    data_.mic.bassFreq = 120.0f;          // 120 Hz cutoff (kick drum range)
+    data_.mic.bassQ = 1.0f;               // Butterworth Q
+    data_.mic.bassThresh = 3.0f;          // Same threshold as main
+
+    // HFC defaults
+    data_.mic.hfcWeight = 1.0f;           // No weighting adjustment
+    data_.mic.hfcThresh = 3.0f;           // Same threshold as main
+
+    // Spectral flux defaults
+    data_.mic.fluxThresh = 3.0f;          // Same threshold as main
+    data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
     data_.brightness = 100;
 }
@@ -246,11 +260,27 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     // Validate hardware AGC parameters (expanded - allow full ADC range usage)
     validateFloat(data_.mic.hwTarget, 0.05f, 0.9f, F("hwTarget"));
 
-    // Validate simplified transient detection parameters (v19+)
+    // Validate shared transient detection parameters
     validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
     validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
     validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
-    validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs")); // uint16_t safely converts to uint32_t
+    validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
+
+    // Validate detection mode and algorithm-specific parameters (v20+)
+    validateUint32(data_.mic.detectionMode, 0, 3, F("detectionMode"));
+
+    // Bass band filter validation
+    validateFloat(data_.mic.bassFreq, 40.0f, 200.0f, F("bassFreq"));
+    validateFloat(data_.mic.bassQ, 0.5f, 3.0f, F("bassQ"));
+    validateFloat(data_.mic.bassThresh, 1.5f, 10.0f, F("bassThresh"));
+
+    // HFC validation
+    validateFloat(data_.mic.hfcWeight, 0.5f, 5.0f, F("hfcWeight"));
+    validateFloat(data_.mic.hfcThresh, 1.5f, 10.0f, F("hfcThresh"));
+
+    // Spectral flux validation
+    validateFloat(data_.mic.fluxThresh, 1.0f, 10.0f, F("fluxThresh"));
+    validateUint32(data_.mic.fluxBins, 4, 128, F("fluxBins"));
 
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
@@ -282,11 +312,27 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     // Hardware AGC parameters (primary - raw input tracking)
     mic.hwTarget = data_.mic.hwTarget;
 
-    // Simplified transient detection parameters
+    // Shared transient detection parameters
     mic.transientThreshold = data_.mic.transientThreshold;
     mic.attackMultiplier = data_.mic.attackMultiplier;
     mic.averageTau = data_.mic.averageTau;
     mic.cooldownMs = data_.mic.cooldownMs;
+
+    // Detection mode (v20+)
+    mic.detectionMode = data_.mic.detectionMode;
+
+    // Bass band filter parameters
+    mic.bassFreq = data_.mic.bassFreq;
+    mic.bassQ = data_.mic.bassQ;
+    mic.bassThresh = data_.mic.bassThresh;
+
+    // HFC parameters
+    mic.hfcWeight = data_.mic.hfcWeight;
+    mic.hfcThresh = data_.mic.hfcThresh;
+
+    // Spectral flux parameters
+    mic.fluxThresh = data_.mic.fluxThresh;
+    mic.fluxBins = data_.mic.fluxBins;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -315,6 +361,22 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.attackMultiplier = mic.attackMultiplier;
     data_.mic.averageTau = mic.averageTau;
     data_.mic.cooldownMs = mic.cooldownMs;
+
+    // Detection mode and algorithm-specific parameters (v20+)
+    data_.mic.detectionMode = mic.detectionMode;
+
+    // Bass band filter parameters
+    data_.mic.bassFreq = mic.bassFreq;
+    data_.mic.bassQ = mic.bassQ;
+    data_.mic.bassThresh = mic.bassThresh;
+
+    // HFC parameters
+    data_.mic.hfcWeight = mic.hfcWeight;
+    data_.mic.hfcThresh = mic.hfcThresh;
+
+    // Spectral flux parameters
+    data_.mic.fluxThresh = mic.fluxThresh;
+    data_.mic.fluxBins = mic.fluxBins;
 
     saveToFlash();
     dirty_ = false;

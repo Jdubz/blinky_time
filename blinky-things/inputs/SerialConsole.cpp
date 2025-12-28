@@ -94,6 +94,41 @@ void SerialConsole::registerSettings() {
             "Cooldown between hits (ms)", 20, 500);
     }
 
+    // === DETECTION MODE SETTINGS ===
+    // Switch between different onset detection algorithms
+    if (mic_) {
+        settings_.registerUint8("detectmode", &mic_->detectionMode, "detection",
+            "Algorithm (0=drummer,1=bass,2=hfc,3=flux,4=hybrid)", 0, 4);
+
+        // Bass Band Filter parameters (mode 1)
+        settings_.registerFloat("bassfreq", &mic_->bassFreq, "detection",
+            "Bass filter cutoff freq (Hz)", 40.0f, 200.0f);
+        settings_.registerFloat("bassq", &mic_->bassQ, "detection",
+            "Bass filter Q factor", 0.5f, 3.0f);
+        settings_.registerFloat("bassthresh", &mic_->bassThresh, "detection",
+            "Bass detection threshold", 1.5f, 10.0f);
+
+        // HFC parameters (mode 2)
+        settings_.registerFloat("hfcweight", &mic_->hfcWeight, "detection",
+            "HFC weighting factor", 0.5f, 5.0f);
+        settings_.registerFloat("hfcthresh", &mic_->hfcThresh, "detection",
+            "HFC detection threshold", 1.5f, 10.0f);
+
+        // Spectral Flux parameters (mode 3)
+        settings_.registerFloat("fluxthresh", &mic_->fluxThresh, "detection",
+            "Spectral flux threshold", 1.0f, 10.0f);
+        settings_.registerUint8("fluxbins", &mic_->fluxBins, "detection",
+            "FFT bins to analyze", 4, 128);
+
+        // Hybrid parameters (mode 4) - confidence weights
+        settings_.registerFloat("hyfluxwt", &mic_->hybridFluxWeight, "detection",
+            "Hybrid: flux-only weight", 0.1f, 1.0f);
+        settings_.registerFloat("hydrumwt", &mic_->hybridDrumWeight, "detection",
+            "Hybrid: drummer-only weight", 0.1f, 1.0f);
+        settings_.registerFloat("hybothboost", &mic_->hybridBothBoost, "detection",
+            "Hybrid: both-agree boost", 1.0f, 2.0f);
+    }
+
     // === MUSIC MODE SETTINGS ===
     if (music_) {
         settings_.registerFloat("musicthresh", &music_->activationThreshold, "music",
@@ -254,22 +289,39 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
 
     // === TEST MODE COMMANDS ===
     if (strncmp(cmd, "test lock hwgain", 16) == 0) {
-        testHwGainLocked_ = true;
-        // Parse optional gain value
-        if (strlen(cmd) > 17 && mic_) {
-            int gain = atoi(cmd + 17);
-            if (gain >= 0 && gain <= 80) {
-                testLockedHwGain_ = gain;
-                mic_->currentHardwareGain = gain;
+        // Ensure command is exact match or followed by space (not "test lock hwgainXYZ")
+        if (cmd[16] != '\0' && cmd[16] != ' ') {
+            return false;  // Not a valid command, fall through
+        }
+        if (!mic_) {
+            Serial.println(F("ERROR: Microphone not available"));
+            return true;
+        }
+        // Parse optional gain value (default to current gain)
+        int gain = mic_->getHwGain();
+        if (strlen(cmd) > 17) {
+            gain = atoi(cmd + 17);
+            // Validate gain range (0-80) and warn if out of bounds
+            if (gain < 0 || gain > 80) {
+                Serial.print(F("WARNING: Gain "));
+                Serial.print(gain);
+                Serial.println(F(" out of range (0-80), will be clamped"));
             }
         }
+        // Lock hardware gain at specified value (disables AGC)
+        mic_->lockHwGain(gain);
         Serial.print(F("OK locked at "));
-        Serial.println(testLockedHwGain_);
+        Serial.println(mic_->getHwGain());
         return true;
     }
 
     if (strcmp(cmd, "test unlock hwgain") == 0) {
-        testHwGainLocked_ = false;
+        if (!mic_) {
+            Serial.println(F("ERROR: Microphone not available"));
+            return true;
+        }
+        // Unlock hardware gain (re-enables AGC)
+        mic_->unlockHwGain();
         Serial.println(F("OK unlocked"));
         return true;
     }
@@ -406,7 +458,31 @@ void SerialConsole::streamTick() {
             Serial.print(mic_->getPreviousLevel(), 4);
         }
 
-        Serial.println(F("}}"));
+        Serial.print(F("}"));
+
+        // Music mode telemetry (always include when music_ is available)
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"conf":0.82,"q":1,"h":0,"w":0}
+        // a = active, bpm = tempo, ph = phase, conf = confidence
+        // q/h/w = quarter/half/whole note events (1 = event this frame)
+        if (music_) {
+            Serial.print(F(",\"m\":{\"a\":"));
+            Serial.print(music_->isActive() ? 1 : 0);
+            Serial.print(F(",\"bpm\":"));
+            Serial.print(music_->getBPM(), 1);
+            Serial.print(F(",\"ph\":"));
+            Serial.print(music_->getPhase(), 2);
+            Serial.print(F(",\"conf\":"));
+            Serial.print(music_->getConfidence(), 2);
+            Serial.print(F(",\"q\":"));
+            Serial.print(music_->quarterNote ? 1 : 0);
+            Serial.print(F(",\"h\":"));
+            Serial.print(music_->halfNote ? 1 : 0);
+            Serial.print(F(",\"w\":"));
+            Serial.print(music_->wholeNote ? 1 : 0);
+            Serial.print(F("}"));
+        }
+
+        Serial.println(F("}"));
     }
 
     // Battery streaming at ~1Hz

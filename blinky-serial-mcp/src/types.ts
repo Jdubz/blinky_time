@@ -30,6 +30,31 @@ export interface AudioSample {
   hip?: number;   // High band previous energy
 }
 
+export interface MusicModeState {
+  a: number;      // Active (0 or 1)
+  bpm: number;    // Tempo (BPM)
+  ph: number;     // Phase (0-1)
+  conf: number;   // Confidence (0-1)
+  q: number;      // Quarter note event (0 or 1)
+  h: number;      // Half note event (0 or 1)
+  w: number;      // Whole note event (0 or 1)
+}
+
+export interface BeatEvent {
+  timestampMs: number;
+  bpm: number;
+  type: 'quarter' | 'half' | 'whole';
+}
+
+export interface MusicModeMetrics {
+  bpmAccuracy: number;       // % accuracy vs expected BPM
+  expectedBPM: number;
+  detectedBPM: number;
+  activationTimeMs: number;  // Time until active=true
+  beatF1Score: number;       // Beat detection F1
+  confidenceAvg: number;     // Average confidence while active
+}
+
 export interface BatteryStatus {
   n: boolean;     // Connected
   c: boolean;     // Charging
@@ -63,7 +88,7 @@ export interface TestResult {
 
 export interface TransientEvent {
   timestampMs: number;
-  type: 'low' | 'high';
+  type: 'low' | 'high' | 'unified';
   strength: number;
 }
 

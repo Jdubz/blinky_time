@@ -312,10 +312,242 @@ export const SPARSE_PATTERN: TestPattern = {
   })(),
 };
 
+// ============================================================================
+// CALIBRATED PATTERNS - Deterministic samples with known loudness
+// These patterns use specific sample IDs from the curated manifest for
+// reproducible testing and precise characterization of detection performance.
+// ============================================================================
+
+/**
+ * Helper to create a deterministic hit with a specific sample ID
+ */
+function deterministicHit(
+  time: number,
+  sampleId: string,
+  strength: number = 1.0
+): GroundTruthHit {
+  // Extract type from sampleId (e.g., "kick_hard_1" -> "kick")
+  const type = sampleId.split('_')[0];
+  const instrument = type as InstrumentType;
+  return {
+    time,
+    type: INSTRUMENT_TO_BAND[instrument] || 'high',
+    instrument,
+    strength,
+    sampleId, // New field for deterministic selection
+  } as GroundTruthHit & { sampleId: string };
+}
+
+/**
+ * CALIBRATED: Strong beats only (120 BPM, 8 bars)
+ * Uses only hard kick and snare samples - should be easy to detect
+ * Expected: ~100% recall with any reasonable threshold
+ */
+export const STRONG_BEATS: TestPattern = {
+  id: 'strong-beats',
+  name: 'Strong Beats (Calibrated)',
+  description: 'Hard kicks and snares only - baseline detection test',
+  durationMs: 16000,
+  bpm: 120,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 120;
+    const bars = 8;
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barOffset = bar * 4;
+      // Hard kicks on 1 and 3, alternating samples
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 1.0));
+      // Hard snares on 2 and 4, alternating samples
+      hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * CALIBRATED: Medium beats (120 BPM, 8 bars)
+ * Uses medium kick and snare samples - moderate detection challenge
+ */
+export const MEDIUM_BEATS: TestPattern = {
+  id: 'medium-beats',
+  name: 'Medium Beats (Calibrated)',
+  description: 'Medium loudness kicks and snares - moderate detection challenge',
+  durationMs: 16000,
+  bpm: 120,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 120;
+    const bars = 8;
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barOffset = bar * 4;
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_medium_1', 0.7));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_medium_2', 0.7));
+      hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_medium_1', 0.7));
+      hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_medium_2', 0.7));
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * CALIBRATED: Soft beats (120 BPM, 8 bars)
+ * Uses soft kick and snare samples - difficult detection, tests sensitivity
+ */
+export const SOFT_BEATS: TestPattern = {
+  id: 'soft-beats',
+  name: 'Soft Beats (Calibrated)',
+  description: 'Soft kicks and snares - tests detection sensitivity limits',
+  durationMs: 16000,
+  bpm: 120,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 120;
+    const bars = 8;
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barOffset = bar * 4;
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_soft_1', 0.4));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_soft_2', 0.4));
+      hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_soft_1', 0.4));
+      hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_soft_2', 0.4));
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * CALIBRATED: Hat rejection test (120 BPM, 8 bars)
+ * Hard kicks/snares with soft hi-hats - tests ability to ignore weak transients
+ * Expected: Detect kicks/snares, reject hi-hats
+ */
+export const HAT_REJECTION: TestPattern = {
+  id: 'hat-rejection',
+  name: 'Hat Rejection (Calibrated)',
+  description: 'Hard kicks/snares + soft hats - tests hi-hat rejection',
+  durationMs: 16000,
+  bpm: 120,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 120;
+    const bars = 8;
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barOffset = bar * 4;
+
+      // Hard kicks on 1 and 3 (should detect)
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 1.0));
+
+      // Hard snares on 2 and 4 (should detect)
+      hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+
+      // Soft hi-hats on 8th notes (should NOT detect)
+      for (let eighth = 0; eighth < 8; eighth++) {
+        hits.push(deterministicHit(beatToTime(barOffset + eighth * 0.5, bpm), 'hat_soft_1', 0.3));
+      }
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * CALIBRATED: Mixed dynamics (120 BPM, 8 bars)
+ * Realistic pattern with varying loudness - simulates real music
+ */
+export const MIXED_DYNAMICS: TestPattern = {
+  id: 'mixed-dynamics',
+  name: 'Mixed Dynamics (Calibrated)',
+  description: 'Varying loudness pattern - realistic music simulation',
+  durationMs: 16000,
+  bpm: 120,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 120;
+    const bars = 8;
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barOffset = bar * 4;
+      const isEvenBar = bar % 2 === 0;
+
+      // Kicks: hard on downbeats, medium on offbeats
+      hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+      hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), isEvenBar ? 'kick_hard_1' : 'kick_medium_1', isEvenBar ? 1.0 : 0.7));
+
+      // Snares: alternating hard/medium
+      hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), isEvenBar ? 'snare_hard_1' : 'snare_medium_1', isEvenBar ? 1.0 : 0.7));
+      hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+
+      // Hats: medium on downbeats, soft on upbeats
+      for (let eighth = 0; eighth < 8; eighth++) {
+        const isDownbeat = eighth % 2 === 0;
+        const hatSample = isDownbeat ? 'hat_medium_1' : 'hat_soft_1';
+        const hatStrength = isDownbeat ? 0.5 : 0.3;
+        hits.push(deterministicHit(beatToTime(barOffset + eighth * 0.5, bpm), hatSample, hatStrength));
+      }
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
+ * CALIBRATED: Tempo sweep (4 bars each at 80, 100, 120, 140 BPM)
+ * Tests detection across tempo range
+ */
+export const TEMPO_SWEEP: TestPattern = {
+  id: 'tempo-sweep',
+  name: 'Tempo Sweep (Calibrated)',
+  description: 'Tests detection at 80, 100, 120, 140 BPM',
+  durationMs: 16000,
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const tempos = [80, 100, 120, 140];
+    let currentTime = 0;
+
+    for (const bpm of tempos) {
+      const beatDuration = 60 / bpm;
+      const sectionDuration = 4 * beatDuration; // 4 beats per section
+
+      for (let beat = 0; beat < 4; beat++) {
+        const time = currentTime + beat * beatDuration;
+        // Kick on 1 and 3
+        if (beat === 0 || beat === 2) {
+          hits.push(deterministicHit(time, 'kick_hard_2', 1.0));
+        }
+        // Snare on 2 and 4
+        if (beat === 1 || beat === 3) {
+          hits.push(deterministicHit(time, 'snare_hard_1', 1.0));
+        }
+      }
+
+      currentTime += sectionDuration;
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
 /**
  * All available test patterns
  */
 export const TEST_PATTERNS: TestPattern[] = [
+  // Calibrated patterns (deterministic, for precise measurement)
+  STRONG_BEATS,
+  MEDIUM_BEATS,
+  SOFT_BEATS,
+  HAT_REJECTION,
+  MIXED_DYNAMICS,
+  TEMPO_SWEEP,
+  // Legacy patterns (random samples, for variety testing)
   BASIC_DRUMS,
   KICK_FOCUS,
   SNARE_FOCUS,
