@@ -1,0 +1,139 @@
+{
+  "timestamp": "2025-12-28T06:06:37.420Z",
+  "results": {
+    "hyfluxwt": [
+      {
+        "value": 0.1,
+        "f1": 0.714,
+        "precision": 0.776,
+        "recall": 0.708
+      },
+      {
+        "value": 0.15,
+        "f1": 0.725,
+        "precision": 0.834,
+        "recall": 0.66
+      },
+      {
+        "value": 0.2,
+        "f1": 0.648,
+        "precision": 0.859,
+        "recall": 0.561
+      },
+      {
+        "value": 0.25,
+        "f1": 0.762,
+        "precision": 0.758,
+        "recall": 0.775
+      },
+      {
+        "value": 0.3,
+        "f1": 0.771,
+        "precision": 0.826,
+        "recall": 0.763
+      }
+    ],
+    "hydrumwt": [
+      {
+        "value": 0.1,
+        "f1": 0.74,
+        "precision": 0.783,
+        "recall": 0.74
+      },
+      {
+        "value": 0.15,
+        "f1": 0.698,
+        "precision": 0.718,
+        "recall": 0.739
+      },
+      {
+        "value": 0.2,
+        "f1": 0.72,
+        "precision": 0.878,
+        "recall": 0.653
+      },
+      {
+        "value": 0.25,
+        "f1": 0.654,
+        "precision": 0.811,
+        "recall": 0.619
+      },
+      {
+        "value": 0.3,
+        "f1": 0.746,
+        "precision": 0.752,
+        "recall": 0.747
+      }
+    ],
+    "cooldown": [
+      {
+        "value": 20,
+        "f1": 0.698,
+        "precision": 0.713,
+        "recall": 0.764
+      },
+      {
+        "value": 25,
+        "f1": 0.683,
+        "precision": 0.737,
+        "recall": 0.687
+      },
+      {
+        "value": 30,
+        "f1": 0.767,
+        "precision": 0.77,
+        "recall": 0.783
+      },
+      {
+        "value": 35,
+        "f1": 0.686,
+        "precision": 0.816,
+        "recall": 0.634
+      },
+      {
+        "value": 40,
+        "f1": 0.732,
+        "precision": 0.76,
+        "recall": 0.707
+      }
+    ],
+    "fluxthresh": [
+      {
+        "value": 2.4,
+        "f1": 0.601,
+        "precision": 0.77,
+        "recall": 0.528
+      },
+      {
+        "value": 2.6,
+        "f1": 0.599,
+        "precision": 0.778,
+        "recall": 0.519
+      },
+      {
+        "value": 2.8,
+        "f1": 0.664,
+        "precision": 0.789,
+        "recall": 0.615
+      },
+      {
+        "value": 3,
+        "f1": 0.66,
+        "precision": 0.873,
+        "recall": 0.537
+      },
+      {
+        "value": 3.2,
+        "f1": 0.587,
+        "precision": 0.756,
+        "recall": 0.481
+      }
+    ]
+  },
+  "optimal": {
+    "hyfluxwt": 0.3,
+    "hydrumwt": 0.3,
+    "cooldown": 30,
+    "fluxthresh": 2.8
+  }
+}

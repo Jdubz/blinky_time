@@ -110,7 +110,7 @@ void ConfigStorage::loadDefaults() {
     data_.mic.transientThreshold = 2.0f;  // 2x louder than recent average (was 3.0)
     data_.mic.attackMultiplier = 1.2f;    // 20% sudden rise required (was 1.3)
     data_.mic.averageTau = 0.8f;          // Recent average tracking time
-    data_.mic.cooldownMs = 40;            // 40ms cooldown between hits (was 80)
+    data_.mic.cooldownMs = 30;            // 30ms cooldown between hits (was 40, originally 80)
 
     // Detection mode (v20+): multi-algorithm support
     data_.mic.detectionMode = 4;          // 4 = Hybrid (best F1: 0.705)
@@ -124,8 +124,8 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hfcWeight = 1.0f;           // No weighting adjustment
     data_.mic.hfcThresh = 3.0f;           // Same threshold as main
 
-    // Spectral flux defaults (tuned via param-tuner 2024-12)
-    data_.mic.fluxThresh = 2.6f;          // Optimal for F1: 0.661 (was 3.0)
+    // Spectral flux defaults (tuned via param-tuner 2024-12, extended bounds)
+    data_.mic.fluxThresh = 2.8f;          // Extended bounds optimal (was 2.641, originally 3.0)
     data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
     data_.brightness = 100;

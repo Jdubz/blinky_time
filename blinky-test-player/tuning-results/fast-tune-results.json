@@ -1,0 +1,357 @@
+{
+  "timestamp": "2025-12-28T05:35:29.168Z",
+  "results": [
+    {
+      "mode": "drummer",
+      "params": {
+        "hitthresh": 1.875,
+        "attackmult": 1.2,
+        "cooldown": 40,
+        "avgtau": 0.8
+      },
+      "f1": 0.491,
+      "precision": 0.848,
+      "recall": 0.378,
+      "byPattern": {
+        "strong-beats": {
+          "pattern": "strong-beats",
+          "durationMs": 16000,
+          "f1": 0.793,
+          "precision": 0.885,
+          "recall": 0.719,
+          "truePositives": 23,
+          "falsePositives": 3,
+          "falseNegatives": 9,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 76,
+          "audioLatencyMs": 134
+        },
+        "sparse": {
+          "pattern": "sparse",
+          "durationMs": 15000,
+          "f1": 0.4,
+          "precision": 1,
+          "recall": 0.25,
+          "truePositives": 2,
+          "falsePositives": 0,
+          "falseNegatives": 6,
+          "expectedTotal": 8,
+          "avgTimingErrorMs": 6,
+          "audioLatencyMs": 256
+        },
+        "bass-line": {
+          "pattern": "bass-line",
+          "durationMs": 16000,
+          "f1": 0.36,
+          "precision": 0.9,
+          "recall": 0.225,
+          "truePositives": 9,
+          "falsePositives": 1,
+          "falseNegatives": 31,
+          "expectedTotal": 40,
+          "avgTimingErrorMs": 66,
+          "audioLatencyMs": -8
+        },
+        "synth-stabs": {
+          "pattern": "synth-stabs",
+          "durationMs": 16000,
+          "f1": 0.571,
+          "precision": 1,
+          "recall": 0.4,
+          "truePositives": 16,
+          "falsePositives": 0,
+          "falseNegatives": 24,
+          "expectedTotal": 40,
+          "avgTimingErrorMs": 41,
+          "audioLatencyMs": 190
+        },
+        "pad-rejection": {
+          "pattern": "pad-rejection",
+          "durationMs": 24000,
+          "f1": 0.286,
+          "precision": 0.231,
+          "recall": 0.375,
+          "truePositives": 3,
+          "falsePositives": 10,
+          "falseNegatives": 5,
+          "expectedTotal": 8,
+          "avgTimingErrorMs": 43,
+          "audioLatencyMs": -108
+        },
+        "fast-tempo": {
+          "pattern": "fast-tempo",
+          "durationMs": 10000,
+          "f1": 0.5,
+          "precision": 1,
+          "recall": 0.333,
+          "truePositives": 12,
+          "falsePositives": 0,
+          "falseNegatives": 24,
+          "expectedTotal": 36,
+          "avgTimingErrorMs": 55,
+          "audioLatencyMs": 155
+        },
+        "simultaneous": {
+          "pattern": "simultaneous",
+          "durationMs": 10000,
+          "f1": 0.578,
+          "precision": 1,
+          "recall": 0.406,
+          "truePositives": 13,
+          "falsePositives": 0,
+          "falseNegatives": 19,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 35,
+          "audioLatencyMs": 195
+        },
+        "full-mix": {
+          "pattern": "full-mix",
+          "durationMs": 16000,
+          "f1": 0.444,
+          "precision": 0.769,
+          "recall": 0.313,
+          "truePositives": 10,
+          "falsePositives": 3,
+          "falseNegatives": 22,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 69,
+          "audioLatencyMs": 176
+        }
+      }
+    },
+    {
+      "mode": "spectral",
+      "params": {
+        "fluxthresh": 2.641,
+        "fluxbins": 64
+      },
+      "f1": 0.661,
+      "precision": 0.688,
+      "recall": 0.677,
+      "byPattern": {
+        "strong-beats": {
+          "pattern": "strong-beats",
+          "durationMs": 16000,
+          "f1": 0.692,
+          "precision": 0.587,
+          "recall": 0.844,
+          "truePositives": 27,
+          "falsePositives": 19,
+          "falseNegatives": 5,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 78,
+          "audioLatencyMs": 196
+        },
+        "sparse": {
+          "pattern": "sparse",
+          "durationMs": 15000,
+          "f1": 0.556,
+          "precision": 0.5,
+          "recall": 0.625,
+          "truePositives": 5,
+          "falsePositives": 5,
+          "falseNegatives": 3,
+          "expectedTotal": 8,
+          "avgTimingErrorMs": 29,
+          "audioLatencyMs": 257
+        },
+        "bass-line": {
+          "pattern": "bass-line",
+          "durationMs": 16000,
+          "f1": 0.816,
+          "precision": 0.861,
+          "recall": 0.775,
+          "truePositives": 31,
+          "falsePositives": 5,
+          "falseNegatives": 9,
+          "expectedTotal": 40,
+          "avgTimingErrorMs": 54,
+          "audioLatencyMs": 175
+        },
+        "synth-stabs": {
+          "pattern": "synth-stabs",
+          "durationMs": 16000,
+          "f1": 0.838,
+          "precision": 0.912,
+          "recall": 0.775,
+          "truePositives": 31,
+          "falsePositives": 3,
+          "falseNegatives": 9,
+          "expectedTotal": 40,
+          "avgTimingErrorMs": 49,
+          "audioLatencyMs": 180
+        },
+        "pad-rejection": {
+          "pattern": "pad-rejection",
+          "durationMs": 24000,
+          "f1": 0.476,
+          "precision": 0.385,
+          "recall": 0.625,
+          "truePositives": 5,
+          "falsePositives": 8,
+          "falseNegatives": 3,
+          "expectedTotal": 8,
+          "avgTimingErrorMs": 94,
+          "audioLatencyMs": 185
+        },
+        "fast-tempo": {
+          "pattern": "fast-tempo",
+          "durationMs": 10000,
+          "f1": 0.702,
+          "precision": 0.952,
+          "recall": 0.556,
+          "truePositives": 20,
+          "falsePositives": 1,
+          "falseNegatives": 16,
+          "expectedTotal": 36,
+          "avgTimingErrorMs": 133,
+          "audioLatencyMs": 60
+        },
+        "simultaneous": {
+          "pattern": "simultaneous",
+          "durationMs": 10000,
+          "f1": 0.549,
+          "precision": 0.737,
+          "recall": 0.438,
+          "truePositives": 14,
+          "falsePositives": 5,
+          "falseNegatives": 18,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 61,
+          "audioLatencyMs": 196
+        },
+        "full-mix": {
+          "pattern": "full-mix",
+          "durationMs": 16000,
+          "f1": 0.658,
+          "precision": 0.568,
+          "recall": 0.781,
+          "truePositives": 25,
+          "falsePositives": 19,
+          "falseNegatives": 7,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 110,
+          "audioLatencyMs": 148
+        }
+      }
+    },
+    {
+      "mode": "hybrid",
+      "params": {
+        "hitthresh": 2.063,
+        "hyfluxwt": 0.3,
+        "hydrumwt": 0.3,
+        "hybothboost": 1.2
+      },
+      "f1": 0.705,
+      "precision": 0.691,
+      "recall": 0.801,
+      "byPattern": {
+        "strong-beats": {
+          "pattern": "strong-beats",
+          "durationMs": 16000,
+          "f1": 0.7,
+          "precision": 0.583,
+          "recall": 0.875,
+          "truePositives": 28,
+          "falsePositives": 20,
+          "falseNegatives": 4,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 59,
+          "audioLatencyMs": 199
+        },
+        "sparse": {
+          "pattern": "sparse",
+          "durationMs": 15000,
+          "f1": 0.778,
+          "precision": 0.7,
+          "recall": 0.875,
+          "truePositives": 7,
+          "falsePositives": 3,
+          "falseNegatives": 1,
+          "expectedTotal": 8,
+          "avgTimingErrorMs": 51,
+          "audioLatencyMs": 237
+        },
+        "bass-line": {
+          "pattern": "bass-line",
+          "durationMs": 16000,
+          "f1": 0.73,
+          "precision": 0.794,
+          "recall": 0.675,
+          "truePositives": 27,
+          "falsePositives": 7,
+          "falseNegatives": 13,
+          "expectedTotal": 40,
+          "avgTimingErrorMs": 130,
+          "audioLatencyMs": -8
+        },
+        "synth-stabs": {
+          "pattern": "synth-stabs",
+          "durationMs": 16000,
+          "f1": 0.744,
+          "precision": 0.763,
+          "recall": 0.725,
+          "truePositives": 29,
+          "falsePositives": 9,
+          "falseNegatives": 11,
+          "expectedTotal": 40,
+          "avgTimingErrorMs": 123,
+          "audioLatencyMs": -13
+        },
+        "pad-rejection": {
+          "pattern": "pad-rejection",
+          "durationMs": 24000,
+          "f1": 0.444,
+          "precision": 0.286,
+          "recall": 1,
+          "truePositives": 8,
+          "falsePositives": 20,
+          "falseNegatives": 0,
+          "expectedTotal": 8,
+          "avgTimingErrorMs": 130,
+          "audioLatencyMs": 193
+        },
+        "fast-tempo": {
+          "pattern": "fast-tempo",
+          "durationMs": 10000,
+          "f1": 0.8,
+          "precision": 1,
+          "recall": 0.667,
+          "truePositives": 24,
+          "falsePositives": 0,
+          "falseNegatives": 12,
+          "expectedTotal": 36,
+          "avgTimingErrorMs": 106,
+          "audioLatencyMs": 81
+        },
+        "simultaneous": {
+          "pattern": "simultaneous",
+          "durationMs": 10000,
+          "f1": 0.793,
+          "precision": 0.885,
+          "recall": 0.719,
+          "truePositives": 23,
+          "falsePositives": 3,
+          "falseNegatives": 9,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 56,
+          "audioLatencyMs": 196
+        },
+        "full-mix": {
+          "pattern": "full-mix",
+          "durationMs": 16000,
+          "f1": 0.651,
+          "precision": 0.519,
+          "recall": 0.875,
+          "truePositives": 28,
+          "falsePositives": 26,
+          "falseNegatives": 4,
+          "expectedTotal": 32,
+          "avgTimingErrorMs": 99,
+          "audioLatencyMs": 156
+        }
+      }
+    }
+  ]
+}
