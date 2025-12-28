@@ -94,6 +94,33 @@ void SerialConsole::registerSettings() {
             "Cooldown between hits (ms)", 20, 500);
     }
 
+    // === DETECTION MODE SETTINGS ===
+    // Switch between different onset detection algorithms
+    if (mic_) {
+        settings_.registerUint8("detectmode", &mic_->detectionMode, "detection",
+            "Algorithm (0=drummer,1=bass,2=hfc,3=flux)", 0, 3);
+
+        // Bass Band Filter parameters (mode 1)
+        settings_.registerFloat("bassfreq", &mic_->bassFreq, "detection",
+            "Bass filter cutoff freq (Hz)", 40.0f, 200.0f);
+        settings_.registerFloat("bassq", &mic_->bassQ, "detection",
+            "Bass filter Q factor", 0.5f, 3.0f);
+        settings_.registerFloat("bassthresh", &mic_->bassThresh, "detection",
+            "Bass detection threshold", 1.5f, 10.0f);
+
+        // HFC parameters (mode 2)
+        settings_.registerFloat("hfcweight", &mic_->hfcWeight, "detection",
+            "HFC weighting factor", 0.5f, 5.0f);
+        settings_.registerFloat("hfcthresh", &mic_->hfcThresh, "detection",
+            "HFC detection threshold", 1.5f, 10.0f);
+
+        // Spectral Flux parameters (mode 3)
+        settings_.registerFloat("fluxthresh", &mic_->fluxThresh, "detection",
+            "Spectral flux threshold", 1.0f, 10.0f);
+        settings_.registerUint8("fluxbins", &mic_->fluxBins, "detection",
+            "FFT bins to analyze", 4, 128);
+    }
+
     // === MUSIC MODE SETTINGS ===
     if (music_) {
         settings_.registerFloat("musicthresh", &music_->activationThreshold, "music",

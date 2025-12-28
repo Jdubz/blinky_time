@@ -3,6 +3,8 @@
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
+#include "DetectionMode.h"
+#include "BiquadFilter.h"
 
 // AdaptiveMic - Clean audio input with window/range normalization and transient detection
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
@@ -67,11 +69,28 @@ public:
   float transient          = 0.0f;    // Impulse strength (0.0 = none, 1.0 = strong hit)
   uint32_t lastTransientMs = 0;
 
-  // Transient detection parameters (tunable)
+  // Transient detection parameters (tunable) - shared by all algorithms
   float transientThreshold = 3.0f;    // Must be 3x louder than recent average
   float attackMultiplier   = 1.3f;    // Must be 30% louder than previous frame (rapid rise)
   float averageTau         = 0.8f;    // Recent average tracking time (seconds)
   uint16_t cooldownMs      = 80;      // Cooldown between hits (ms)
+
+  // ---- DETECTION MODE ----
+  // Switch between different onset detection algorithms
+  uint8_t detectionMode = 0;  // 0=drummer, 1=bass, 2=hfc, 3=flux (use uint8_t for serial registration)
+
+  // Bass Band Filter parameters (mode 1)
+  float bassFreq   = 120.0f;   // Filter cutoff frequency (Hz)
+  float bassQ      = 1.0f;     // Filter Q factor (0.5=Butterworth, higher=sharper)
+  float bassThresh = 3.0f;     // Detection threshold for bass energy
+
+  // High Frequency Content parameters (mode 2)
+  float hfcWeight = 1.0f;      // HFC weighting factor
+  float hfcThresh = 3.0f;      // Detection threshold for HFC
+
+  // Spectral Flux parameters (mode 3)
+  float fluxThresh = 3.0f;     // Detection threshold for spectral flux
+  uint8_t fluxBins = 64;       // Number of FFT bins to analyze (focus on bass-mid)
 
   // Zero-crossing rate (for additional context)
   float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
@@ -96,6 +115,8 @@ public:
   inline float getRecentAverage() const { return recentAverage; }  // Recent average level for debugging
   inline float getPreviousLevel() const { return previousLevel; }  // Previous frame level for debugging
   inline bool isHwGainLocked() const { return hwGainLocked_; }     // Check if hardware gain is locked for testing
+  inline uint8_t getDetectionMode() const { return detectionMode; }  // Current detection algorithm
+  inline float getBassLevel() const { return bassFilteredLevel; }    // Bass-filtered level (for debugging)
 
 public:
   /**
@@ -153,10 +174,28 @@ private:
   // Hardware gain lock state (for testing/bypass)
   bool hwGainLocked_ = false;   // When true, AGC is disabled and gain is fixed
 
+  // Bass band filter state
+  BiquadFilter bassFilter;
+  float bassFilteredLevel = 0.0f;     // Filtered bass level (for envelope tracking)
+  float bassRecentAverage = 0.0f;     // Rolling average for bass detection
+  bool bassFilterInitialized = false; // Track if filter coefficients are set
+
+  // HFC state
+  float hfcRecentAverage = 0.0f;      // Rolling average for HFC detection
+  float lastHfcValue = 0.0f;          // Previous HFC value for attack detection
+
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
   void hardwareCalibrate(uint32_t nowMs, float dt);
-  void detectTransients(uint32_t nowMs, float dt);  // Simplified amplitude spike detection
+
+  // Detection method dispatcher (calls appropriate algorithm based on detectionMode)
+  void detectTransients(uint32_t nowMs, float dt);
+
+  // Individual detection algorithms
+  void detectDrummer(uint32_t nowMs, float dt, float rawLevel);      // Mode 0: Original amplitude-based
+  void detectBassBand(uint32_t nowMs, float dt, float rawLevel);     // Mode 1: Bass band filter
+  void detectHFC(uint32_t nowMs, float dt, float rawLevel);          // Mode 2: High frequency content
+  void detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel); // Mode 3: FFT-based (placeholder)
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

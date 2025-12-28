@@ -301,31 +301,55 @@ void AdaptiveMic::onPDMdata() {
 }
 
 /**
- * SIMPLIFIED TRANSIENT DETECTION - "The Drummer's Algorithm"
+ * TRANSIENT DETECTION DISPATCHER
  *
- * Detects MUSICAL hits (kicks, snares, bass drops) by looking for:
- * 1. LOUD: Significantly louder than recent average (3x default)
- * 2. SUDDEN: Rapidly rising compared to ~50ms ago (not just previous frame)
- * 3. INFREQUENT: Cooldown prevents double-triggers
- *
- * The key improvement: We compare against the level from ~50-70ms ago using a
- * ring buffer, not just the previous frame. This catches gradual attacks that
- * rise over multiple frames while still requiring a "sudden" increase musically.
+ * Routes to the appropriate detection algorithm based on detectionMode:
+ * - 0 (DRUMMER): Original amplitude-based "Drummer's Algorithm"
+ * - 1 (BASS_BAND): Biquad lowpass filter focusing on kick frequencies
+ * - 2 (HFC): High Frequency Content for percussive transients
+ * - 3 (SPECTRAL_FLUX): FFT-based spectral difference (placeholder)
  */
 void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
   // Note: transient is reset at the start of update(), not here
   // This ensures it resets even when no audio samples are available (n==0)
 
-  // Use RAW level for detection (not normalized 'level' which clips at 1.0)
-  // This ensures we can detect attack even when audio is loud
   float rawLevel = rawInstantLevel;
 
+  // Dispatch to appropriate algorithm
+  switch (static_cast<DetectionMode>(detectionMode)) {
+    case DetectionMode::BASS_BAND:
+      detectBassBand(nowMs, dt, rawLevel);
+      break;
+    case DetectionMode::HFC:
+      detectHFC(nowMs, dt, rawLevel);
+      break;
+    case DetectionMode::SPECTRAL_FLUX:
+      detectSpectralFlux(nowMs, dt, rawLevel);
+      break;
+    case DetectionMode::DRUMMER:
+    default:
+      detectDrummer(nowMs, dt, rawLevel);
+      break;
+  }
+
+  // Keep previousLevel updated for compatibility (all algorithms use this)
+  previousLevel = rawLevel;
+}
+
+/**
+ * DRUMMER'S ALGORITHM (Mode 0) - Original amplitude-based detection
+ *
+ * Detects MUSICAL hits (kicks, snares, bass drops) by looking for:
+ * 1. LOUD: Significantly louder than recent average (3x default)
+ * 2. SUDDEN: Rapidly rising compared to ~50ms ago (ring buffer lookback)
+ * 3. INFREQUENT: Cooldown prevents double-triggers
+ */
+void AdaptiveMic::detectDrummer(uint32_t nowMs, float dt, float rawLevel) {
   // Track recent average with exponential moving average
   float alpha = 1.0f - expf(-dt / averageTau);
   recentAverage += alpha * (rawLevel - recentAverage);
 
   // Get baseline level from ~50-70ms ago (the oldest entry in ring buffer)
-  // This catches gradual attacks that rise over 50-100ms
   float baselineLevel = attackBuffer[attackBufferIdx];
 
   // Detect transient: LOUD + SUDDEN + not in cooldown
@@ -343,7 +367,97 @@ void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
   // Update ring buffer with current level (overwrites oldest entry)
   attackBuffer[attackBufferIdx] = rawLevel;
   attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
+}
 
-  // Keep previousLevel updated for compatibility
-  previousLevel = rawLevel;
+/**
+ * BASS BAND FILTER (Mode 1) - Focus on kick drum frequencies
+ *
+ * Uses a biquad lowpass filter to isolate bass frequencies (60-200Hz),
+ * then applies the same LOUD + SUDDEN + COOLDOWN logic to the filtered signal.
+ * This should improve kick detection while reducing hi-hat false positives.
+ */
+void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
+  // Initialize filter if needed (or if frequency changed)
+  if (!bassFilterInitialized) {
+    bassFilter.setLowpass(bassFreq, (float)_sampleRate, bassQ);
+    bassFilterInitialized = true;
+  }
+
+  // Filter the raw level to extract bass content
+  // Note: We're filtering the envelope, not raw samples - this is a simplification
+  // For proper bass detection, we'd filter the raw PCM samples in the ISR
+  float filteredLevel = bassFilter.process(rawLevel);
+  bassFilteredLevel = maxValue(0.0f, filteredLevel);  // Ensure non-negative
+
+  // Track recent average of bass content
+  float alpha = 1.0f - expf(-dt / averageTau);
+  bassRecentAverage += alpha * (bassFilteredLevel - bassRecentAverage);
+
+  // Get baseline from ring buffer (reuse existing buffer)
+  float baselineLevel = attackBuffer[attackBufferIdx];
+
+  // Detect transient in bass content
+  bool isLoudEnough = bassFilteredLevel > bassRecentAverage * bassThresh;
+  bool isAttacking = bassFilteredLevel > baselineLevel * attackMultiplier;
+  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
+
+  if (isLoudEnough && isAttacking && cooldownElapsed) {
+    float ratio = bassFilteredLevel / maxValue(bassRecentAverage, 0.001f);
+    transient = clamp01((ratio - bassThresh) / bassThresh);
+    lastTransientMs = nowMs;
+  }
+
+  // Update ring buffer with bass-filtered level
+  attackBuffer[attackBufferIdx] = bassFilteredLevel;
+  attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
+
+  // Also update main recentAverage for compatibility
+  recentAverage += alpha * (rawLevel - recentAverage);
+}
+
+/**
+ * HIGH FREQUENCY CONTENT (Mode 2) - Emphasizes percussive transients
+ *
+ * HFC weights high frequencies heavily, which emphasizes transients
+ * (drums have bright attacks with lots of high frequency content).
+ * We approximate HFC using the derivative of the signal (sample differences).
+ */
+void AdaptiveMic::detectHFC(uint32_t nowMs, float dt, float rawLevel) {
+  // Approximate HFC using signal derivative (emphasizes changes)
+  // HFC = |current - previous|^2 weighted by hfcWeight
+  float diff = rawLevel - previousLevel;
+  float hfc = diff * diff * hfcWeight;
+
+  // Track recent average of HFC
+  float alpha = 1.0f - expf(-dt / averageTau);
+  hfcRecentAverage += alpha * (hfc - hfcRecentAverage);
+
+  // Detect transient in HFC signal
+  bool isLoudEnough = hfc > hfcRecentAverage * hfcThresh;
+  bool isAttacking = hfc > lastHfcValue * attackMultiplier;
+  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
+
+  if (isLoudEnough && isAttacking && cooldownElapsed) {
+    float ratio = hfc / maxValue(hfcRecentAverage, 0.0001f);
+    transient = clamp01((ratio - hfcThresh) / hfcThresh);
+    lastTransientMs = nowMs;
+  }
+
+  lastHfcValue = hfc;
+
+  // Also update main recentAverage for compatibility
+  recentAverage += alpha * (rawLevel - recentAverage);
+}
+
+/**
+ * SPECTRAL FLUX (Mode 3) - FFT-based detection (PLACEHOLDER)
+ *
+ * This requires ArduinoFFT library and additional memory (~2.5KB).
+ * For now, falls back to Drummer's Algorithm.
+ * TODO: Implement proper FFT-based spectral flux detection.
+ */
+void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
+  // PLACEHOLDER: Fall back to Drummer's Algorithm until FFT is implemented
+  // TODO: Implement proper spectral flux with ArduinoFFT
+  detectDrummer(nowMs, dt, rawLevel);
 }
