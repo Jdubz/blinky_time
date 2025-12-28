@@ -396,14 +396,20 @@ void SerialConsole::restoreDefaults() {
     }
 
     // Restore mic defaults (window/range normalization and simplified transient detection)
+    // All values tuned via param-tuner 2024-12
     if (mic_) {
         mic_->peakTau = Defaults::PeakTau;              // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
         mic_->hwTarget = 0.35f;                         // Target raw input level (±0.01 dead zone)
-        mic_->transientThreshold = 3.0f;                // 3x louder than recent average
-        mic_->attackMultiplier = 1.3f;                  // 30% sudden rise required
+        mic_->transientThreshold = 2.0f;                // 2x louder than recent average
+        mic_->attackMultiplier = 1.2f;                  // 20% sudden rise required
         mic_->averageTau = 0.8f;                        // Recent average tracking time
-        mic_->cooldownMs = 80;                          // 80ms cooldown between hits
+        mic_->cooldownMs = 30;                          // 30ms cooldown between hits
+        mic_->fluxThresh = 2.8f;                        // Spectral flux threshold
+        mic_->detectionMode = 4;                        // Hybrid mode (best F1: 0.705)
+        mic_->hybridFluxWeight = 0.3f;                  // Hybrid flux weight
+        mic_->hybridDrumWeight = 0.3f;                  // Hybrid drum weight
+        mic_->hybridBothBoost = 1.2f;                   // Hybrid both-agree boost
     }
 }
 

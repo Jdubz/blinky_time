@@ -128,6 +128,11 @@ void ConfigStorage::loadDefaults() {
     data_.mic.fluxThresh = 2.8f;          // Extended bounds optimal (was 2.641, originally 3.0)
     data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
+    // Hybrid mode defaults (mode 4) - tuned via param-tuner 2024-12 (F1: 0.767)
+    data_.mic.hybridFluxWeight = 0.3f;    // Weight when only flux detects
+    data_.mic.hybridDrumWeight = 0.3f;    // Weight when only drummer detects
+    data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
+
     data_.brightness = 100;
 }
 
@@ -282,6 +287,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     validateFloat(data_.mic.fluxThresh, 1.0f, 10.0f, F("fluxThresh"));
     validateUint32(data_.mic.fluxBins, 4, 128, F("fluxBins"));
 
+    // Hybrid mode validation (v21+)
+    validateFloat(data_.mic.hybridFluxWeight, 0.1f, 1.0f, F("hybridFluxWeight"));
+    validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
+    validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
+
     if (corrupt) {
         Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
         loadDefaults();
@@ -333,6 +343,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic) 
     // Spectral flux parameters
     mic.fluxThresh = data_.mic.fluxThresh;
     mic.fluxBins = data_.mic.fluxBins;
+
+    // Hybrid mode parameters (v21+)
+    mic.hybridFluxWeight = data_.mic.hybridFluxWeight;
+    mic.hybridDrumWeight = data_.mic.hybridDrumWeight;
+    mic.hybridBothBoost = data_.mic.hybridBothBoost;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic) {
@@ -377,6 +392,11 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     // Spectral flux parameters
     data_.mic.fluxThresh = mic.fluxThresh;
     data_.mic.fluxBins = mic.fluxBins;
+
+    // Hybrid mode parameters (v21+)
+    data_.mic.hybridFluxWeight = mic.hybridFluxWeight;
+    data_.mic.hybridDrumWeight = mic.hybridDrumWeight;
+    data_.mic.hybridBothBoost = mic.hybridBothBoost;
 
     saveToFlash();
     dirty_ = false;

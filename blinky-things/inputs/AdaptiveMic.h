@@ -22,7 +22,7 @@ namespace MicConstants {
     constexpr uint32_t MIC_DEAD_TIMEOUT_MS = 250;     // PDM alive check timeout
 
     // Timing constants (not user-configurable)
-    constexpr uint32_t ONSET_COOLDOWN_MS = 80;        // Onset detection cooldown (80ms = 12.5 hits/sec max)
+    constexpr uint32_t ONSET_COOLDOWN_MS = 30;        // Onset detection cooldown (30ms = 33 hits/sec max, tuned 2024-12)
     constexpr uint32_t HW_CALIB_PERIOD_MS = 30000;    // Hardware gain calibration period (30s)
     constexpr float HW_TRACKING_TAU = 30.0f;          // Hardware gain tracking time constant (30s)
 }
@@ -33,9 +33,9 @@ namespace MicConstants {
  * Architecture:
  * - Raw samples → Normalize (0-1) → Window/Range mapping → Noise gate → Output
  * - Simplified transient detection: "The Drummer's Algorithm"
- *   - LOUD: Signal significantly louder than recent average (3x default)
- *   - SUDDEN: Rapidly rising (30% increase from previous frame)
- *   - INFREQUENT: Cooldown prevents double-triggers (80ms default)
+ *   - LOUD: Signal significantly louder than recent average (2x default, tuned 2024-12)
+ *   - SUDDEN: Rapidly rising (20% increase from previous frame)
+ *   - INFREQUENT: Cooldown prevents double-triggers (30ms default)
  * - Hardware-primary: HW gain optimizes ADC input, window/range maps to 0-1 output
  *
  * Transient Detection Algorithm:
@@ -70,11 +70,11 @@ public:
   float transient          = 0.0f;    // Impulse strength (0.0 = none, 1.0 = strong hit)
   uint32_t lastTransientMs = 0;
 
-  // Transient detection parameters (tunable) - shared by all algorithms
-  float transientThreshold = 3.0f;    // Must be 3x louder than recent average
-  float attackMultiplier   = 1.3f;    // Must be 30% louder than previous frame (rapid rise)
+  // Transient detection parameters (tunable) - shared by all algorithms (tuned 2024-12)
+  float transientThreshold = 2.0f;    // Must be 2x louder than recent average
+  float attackMultiplier   = 1.2f;    // Must be 20% louder than previous frame (rapid rise)
   float averageTau         = 0.8f;    // Recent average tracking time (seconds)
-  uint16_t cooldownMs      = 80;      // Cooldown between hits (ms)
+  uint16_t cooldownMs      = 30;      // Cooldown between hits (ms)
 
   // ---- DETECTION MODE ----
   // Switch between different onset detection algorithms
@@ -89,8 +89,8 @@ public:
   float hfcWeight = 1.0f;      // HFC weighting factor
   float hfcThresh = 3.0f;      // Detection threshold for HFC
 
-  // Spectral Flux parameters (mode 3)
-  float fluxThresh = 3.0f;     // Detection threshold for spectral flux
+  // Spectral Flux parameters (mode 3) - tuned 2024-12
+  float fluxThresh = 2.8f;     // Detection threshold for spectral flux
   uint8_t fluxBins = 64;       // Number of FFT bins to analyze (focus on bass-mid)
 
   // Hybrid parameters (mode 4) - tuned via param-tuner 2024-12 (F1: 0.705)
