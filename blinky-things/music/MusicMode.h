@@ -78,6 +78,17 @@ public:
      */
     void reset();
 
+    /**
+     * Provide external BPM guidance (e.g., from RhythmAnalyzer)
+     * - Only affects BPM if external estimate is confident and within range
+     * - Smoothly blends external BPM with current PLL estimate
+     * - Helps prevent PLL drift during quiet sections
+     *
+     * @param externalBPM BPM estimate from external source
+     * @param confidence Confidence in estimate (0.0-1.0)
+     */
+    void applyExternalBPMGuidance(float externalBPM, float confidence);
+
     // ===== GETTERS =====
 
     inline float getPhase() const { return phase; }

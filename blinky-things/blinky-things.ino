@@ -419,10 +419,37 @@ void loop() {
     rhythm->update(now, 60.0f);  // 60 Hz frame rate assumption
   }
 
+  // INTEGRATION: Use RhythmAnalyzer's BPM to anchor MusicMode's PLL
+  // This prevents drift during quiet sections and improves long-term stability
+  if (rhythm && music && rhythm->periodicityStrength > 0.7f) {
+    float detectedBPM = rhythm->getDetectedBPM();
+    if (detectedBPM > 0.0f) {
+      music->applyExternalBPMGuidance(detectedBPM, rhythm->periodicityStrength);
+    }
+  }
+
   if (music) music->update(dt);
 
   float energy = mic ? mic->getLevel() : 0.0f;
   float hit = mic ? mic->getTransient() : 0.0f;
+
+  // INTEGRATION: Context-aware transient filtering using rhythm data
+  // When rhythm is strong, boost hits near expected beats and suppress random hits
+  if (rhythm && hit > 0.0f && rhythm->periodicityStrength > 0.5f) {
+    float phase = rhythm->getCurrentPhase();
+
+    // Calculate distance from nearest beat (0 = on beat, 0.5 = anti-beat)
+    float distanceFromBeat = fabsf(phase - 0.5f);  // 0.0 at phase 0 or 1, 0.5 at phase 0.5
+    distanceFromBeat = 0.5f - distanceFromBeat;     // Invert: 0.5 at beat, 0.0 at anti-beat
+
+    // Modulate hit strength based on beat alignment and rhythm confidence
+    // Strong rhythm + on-beat = boost by up to 30%
+    // Strong rhythm + off-beat = reduce by up to 40%
+    float rhythmFactor = 1.0f + (distanceFromBeat - 0.25f) * rhythm->periodicityStrength;
+    rhythmFactor = constrain(rhythmFactor, 0.6f, 1.3f);  // Limit range
+
+    hit *= rhythmFactor;
+  }
 
   // Send transient detection events for test analysis (always enabled)
   // AND notify music mode of transients for beat tracking

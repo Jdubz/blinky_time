@@ -34,6 +34,47 @@ void MusicMode::reset() {
     }
 }
 
+void MusicMode::applyExternalBPMGuidance(float externalBPM, float confidence) {
+    // Only apply guidance if confidence is high enough (> 0.7)
+    if (confidence < 0.7f) {
+        return;
+    }
+
+    // Validate external BPM is within acceptable range
+    if (externalBPM < bpmMin || externalBPM > bpmMax) {
+        return;
+    }
+
+    // Check if external BPM is reasonably close to current estimate
+    // (within 20% - prevents sudden jumps from octave errors)
+    float bpmDiff = fabsf(externalBPM - bpm);
+    float maxAllowedDiff = bpm * 0.2f;  // 20% tolerance
+
+    if (bpmDiff > maxAllowedDiff) {
+        // External BPM too different - might be octave error
+        // Check if it's a 2x or 0.5x relationship (octave)
+        bool isDoubleOctave = fabsf(externalBPM - bpm * 2.0f) < bpm * 0.1f;
+        bool isHalfOctave = fabsf(externalBPM - bpm * 0.5f) < bpm * 0.1f;
+
+        if (!isDoubleOctave && !isHalfOctave) {
+            // Not an octave relationship - ignore
+            return;
+        }
+        // If it IS an octave, allow the update (helps correct octave errors)
+    }
+
+    // Smoothly blend external BPM with current estimate
+    // Weight by confidence: high confidence = more influence
+    float blendWeight = confidence * 0.3f;  // Max 30% influence per frame
+    bpm = bpm * (1.0f - blendWeight) + externalBPM * blendWeight;
+
+    // Update beat period to match
+    beatPeriodMs_ = 60000.0f / bpm;
+
+    // Reset integral term to prevent windup from old tempo
+    errorIntegral_ *= 0.9f;  // Decay integral, don't zero it completely
+}
+
 void MusicMode::update(float dt) {
     // Clear one-shot events at start of frame
     beatHappened = false;

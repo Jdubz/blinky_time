@@ -405,46 +405,71 @@ void AdaptiveMic::detectDrummer(uint32_t nowMs, float dt, float rawLevel) {
  * This should improve kick detection while reducing hi-hat false positives.
  */
 void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
-  // Initialize filter if needed (or if frequency changed)
-  if (!bassFilterInitialized) {
-    // SAFETY: setLowpass returns false if parameters are invalid
-    // Fall back to drummer algorithm on failure
-    if (!bassFilter.setLowpass(bassFreq, (float)_sampleRate, bassQ)) {
-      detectDrummer(nowMs, dt, rawLevel);  // Safe fallback
-      return;
+  // FIXED: Use SpectralFlux with bass frequency range instead of envelope filtering
+  // Bass range: bins 1-6 covers 62.5-375 Hz (kick drum + bass fundamentals)
+  // At 16kHz sample rate: bin 1 = 62.5 Hz, bin 6 = 375 Hz
+  spectralFlux_.setAnalysisRange(1, 6);  // Focus on bass frequencies
+
+  // Read available samples from ISR ring buffer (same as spectral flux mode)
+  uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
+  uint32_t available = writeIdx - s_fftReadIdx;  // Handles wrap correctly
+
+  // Limit to ring buffer size to prevent reading stale data
+  if (available > FFT_RING_SIZE) {
+    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
+    available = FFT_RING_SIZE;
+  }
+
+  // Feed samples to spectral flux processor
+  while (available > 0) {
+    int16_t batch[64];
+    int batchSize = 0;
+
+    while (batchSize < 64 && available > 0) {
+      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
+      s_fftReadIdx++;
+      available--;
     }
-    bassFilterInitialized = true;
+
+    spectralFlux_.addSamples(batch, batchSize);
   }
 
-  // Filter the raw level to extract bass content
-  // Note: We're filtering the envelope, not raw samples - this is a simplification
-  // For proper bass detection, we'd filter the raw PCM samples in the ISR
-  float filteredLevel = bassFilter.process(rawLevel);
-  bassFilteredLevel = maxValue(0.0f, filteredLevel);  // Ensure non-negative
+  // Process FFT frame if ready
+  if (spectralFlux_.isFrameReady()) {
+    float bassFlux = spectralFlux_.process();
 
-  // Track recent average of bass content
+    // SAFETY: Skip if flux is invalid
+    if (!isfinite(bassFlux)) {
+      bassFlux = 0.0f;
+    }
+
+    // Store as bassFilteredLevel for compatibility with debugging/telemetry
+    bassFilteredLevel = bassFlux;
+
+    // Track recent average of bass flux (for threshold comparison)
+    float alpha = 1.0f - expf(-dt / averageTau);
+    bassRecentAverage += alpha * (bassFlux - bassRecentAverage);
+
+    // SAFETY: Reset if average becomes corrupted
+    if (!isfinite(bassRecentAverage)) {
+      bassRecentAverage = 0.0f;
+    }
+
+    // Detect transient using LOUD + COOLDOWN logic
+    // Note: Bass flux is already a change measure, so we don't need "SUDDEN" check
+    bool isLoudEnough = bassFlux > bassRecentAverage * bassThresh;
+    bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
+
+    if (isLoudEnough && cooldownElapsed) {
+      // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
+      float ratio = bassFlux / maxValue(bassRecentAverage, 0.001f);
+      transient = clamp01((ratio - bassThresh) / bassThresh);
+      lastTransientMs = nowMs;
+    }
+  }
+
+  // Also update main recentAverage for compatibility (using raw level)
   float alpha = 1.0f - expf(-dt / averageTau);
-  bassRecentAverage += alpha * (bassFilteredLevel - bassRecentAverage);
-
-  // Get baseline from ring buffer (reuse existing buffer)
-  float baselineLevel = attackBuffer[attackBufferIdx];
-
-  // Detect transient in bass content
-  bool isLoudEnough = bassFilteredLevel > bassRecentAverage * bassThresh;
-  bool isAttacking = bassFilteredLevel > baselineLevel * attackMultiplier;
-  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-  if (isLoudEnough && isAttacking && cooldownElapsed) {
-    float ratio = bassFilteredLevel / maxValue(bassRecentAverage, 0.001f);
-    transient = clamp01((ratio - bassThresh) / bassThresh);
-    lastTransientMs = nowMs;
-  }
-
-  // Update ring buffer with bass-filtered level
-  attackBuffer[attackBufferIdx] = bassFilteredLevel;
-  attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
-
-  // Also update main recentAverage for compatibility
   recentAverage += alpha * (rawLevel - recentAverage);
 }
 
