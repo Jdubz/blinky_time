@@ -36,19 +36,19 @@ export const PARAMETERS: Record<string, ParameterDef> = {
   hitthresh: {
     name: 'hitthresh',
     mode: 'drummer',
-    min: 1.5,
+    min: 1.0,  // Extended from 1.5 (optimal 1.688 was near boundary)
     max: 10.0,
-    default: 2.0,
-    sweepValues: [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 10.0],
+    default: 1.688,  // Fast-tune optimal (was 2.0)
+    sweepValues: [1.0, 1.2, 1.4, 1.5, 1.688, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 10.0],
     description: 'Main detection threshold',
   },
   attackmult: {
     name: 'attackmult',
     mode: 'drummer',
-    min: 1.1,
+    min: 1.0,  // Extended from 1.1 (optimal 1.1 was AT boundary)
     max: 2.0,
-    default: 1.3,
-    sweepValues: [1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0],
+    default: 1.1,  // Fast-tune optimal (was 1.3)
+    sweepValues: [1.0, 1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0],
     description: 'Attack sensitivity multiplier',
   },
   avgtau: {
@@ -56,7 +56,7 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     mode: 'drummer',
     min: 0.1,
     max: 5.0,
-    default: 0.8,
+    default: 0.8,  // Confirmed optimal
     sweepValues: [0.1, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0, 3.0, 5.0],
     description: 'Envelope smoothing time constant',
   },
@@ -65,7 +65,7 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     mode: 'drummer',
     min: 20,
     max: 500,
-    default: 80,
+    default: 40,  // Fast-tune optimal (was 80)
     sweepValues: [20, 40, 60, 80, 100, 150, 200, 300, 500],
     description: 'Minimum ms between detections',
   },
@@ -74,10 +74,10 @@ export const PARAMETERS: Record<string, ParameterDef> = {
   fluxthresh: {
     name: 'fluxthresh',
     mode: 'spectral',
-    min: 1.0,
+    min: 0.5,  // Extended from 1.0 (optimal 1.4 was near boundary)
     max: 10.0,
-    default: 2.8,
-    sweepValues: [1.0, 1.5, 2.0, 2.5, 2.8, 3.0, 4.0, 5.0, 7.0, 10.0],
+    default: 1.4,  // Fast-tune optimal (was 2.8)
+    sweepValues: [0.5, 0.8, 1.0, 1.2, 1.4, 1.5, 2.0, 2.5, 2.8, 3.0, 4.0, 5.0, 7.0, 10.0],
     description: 'Spectral flux threshold',
   },
   fluxbins: {
@@ -96,7 +96,7 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     mode: 'hybrid',
     min: 0.1,
     max: 1.0,
-    default: 0.7,
+    default: 0.7,  // Fast-tune confirmed optimal
     sweepValues: [0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
     description: 'Weight for spectral flux component',
   },
@@ -105,7 +105,7 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     mode: 'hybrid',
     min: 0.1,
     max: 1.0,
-    default: 0.5,
+    default: 0.3,  // Fast-tune optimal (was 0.5)
     sweepValues: [0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
     description: 'Weight for drummer component',
   },
