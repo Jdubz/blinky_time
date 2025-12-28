@@ -20,6 +20,9 @@ function App() {
     audioData,
     batteryData,
     batteryStatusData,
+    rhythmData,
+    musicModeData,
+    statusData,
     onPercussionEvent,
     consoleLines,
     sendCommand,
@@ -92,6 +95,9 @@ function App() {
                     >
                       <AudioVisualizer
                         audioData={audioData}
+                        rhythmData={rhythmData}
+                        musicModeData={musicModeData}
+                        statusData={statusData}
                         isStreaming={isStreaming}
                         onToggleStreaming={toggleStreaming}
                         disabled={isDisabled}
