@@ -46,6 +46,8 @@ jobs:
         arduino-cli core install Seeeduino:mbed
         arduino-cli lib install "Adafruit NeoPixel"
         arduino-cli lib install "arduinoFFT"
+        echo "Installed libraries:"
+        arduino-cli lib list
 
     - name: Set device type
       run: |
