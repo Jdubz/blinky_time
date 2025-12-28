@@ -1,9 +1,9 @@
 {
-  "generatedAt": "2025-12-28T03:48:47.067Z",
+  "generatedAt": "2025-12-28T18:53:10.975Z",
   "samples": [
     {
       "id": "kick_hard_1",
-      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
+      "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
       "newPath": "samples\\kick\\kick_hard_1.wav",
       "type": "kick",
       "loudness": "hard",
@@ -13,7 +13,7 @@
     },
     {
       "id": "kick_hard_2",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick04.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Liquid_Kick04.wav",
       "newPath": "samples\\kick\\kick_hard_2.wav",
       "type": "kick",
       "loudness": "hard",
@@ -23,7 +23,7 @@
     },
     {
       "id": "kick_hard_3",
-      "originalPath": "D:\\Ableton\\drums\\MK05\\Analogued\\Kick Analogued 1.wav",
+      "originalPath": "E:\\Ableton\\Drums\\MK05\\Analogued\\Kick Analogued 1.wav",
       "newPath": "samples\\kick\\kick_hard_3.wav",
       "type": "kick",
       "loudness": "hard",
@@ -33,7 +33,7 @@
     },
     {
       "id": "kick_medium_1",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Temple_Kick08.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Temple_Kick08.wav",
       "newPath": "samples\\kick\\kick_medium_1.wav",
       "type": "kick",
       "loudness": "medium",
@@ -43,7 +43,7 @@
     },
     {
       "id": "kick_medium_2",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick21.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Liquid_Kick21.wav",
       "newPath": "samples\\kick\\kick_medium_2.wav",
       "type": "kick",
       "loudness": "medium",
@@ -53,7 +53,7 @@
     },
     {
       "id": "kick_medium_3",
-      "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Kicks\\Monarchy_Kick02.wav",
+      "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Kicks\\Monarchy_Kick02.wav",
       "newPath": "samples\\kick\\kick_medium_3.wav",
       "type": "kick",
       "loudness": "medium",
@@ -63,7 +63,7 @@
     },
     {
       "id": "kick_soft_1",
-      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Kick w_Cym7.wav",
+      "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Kick w_Cym7.wav",
       "newPath": "samples\\kick\\kick_soft_1.wav",
       "type": "kick",
       "loudness": "soft",
@@ -73,7 +73,7 @@
     },
     {
       "id": "kick_soft_2",
-      "originalPath": "D:\\Ableton\\drums\\Chamber\\Chamber Kick 02.wav",
+      "originalPath": "E:\\Ableton\\Drums\\Chamber\\Chamber Kick 02.wav",
       "newPath": "samples\\kick\\kick_soft_2.wav",
       "type": "kick",
       "loudness": "soft",
@@ -83,7 +83,7 @@
     },
     {
       "id": "kick_soft_3",
-      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Drum Kicks\\LR_Drumkick_08.wav",
+      "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Drum Kicks\\LR_Drumkick_08.wav",
       "newPath": "samples\\kick\\kick_soft_3.wav",
       "type": "kick",
       "loudness": "soft",
@@ -93,7 +93,7 @@
     },
     {
       "id": "snare_hard_1",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare01.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare01.wav",
       "newPath": "samples\\snare\\snare_hard_1.wav",
       "type": "snare",
       "loudness": "hard",
@@ -103,7 +103,7 @@
     },
     {
       "id": "snare_hard_2",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare14.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare14.wav",
       "newPath": "samples\\snare\\snare_hard_2.wav",
       "type": "snare",
       "loudness": "hard",
@@ -113,7 +113,7 @@
     },
     {
       "id": "snare_hard_3",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare12.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare12.wav",
       "newPath": "samples\\snare\\snare_hard_3.wav",
       "type": "snare",
       "loudness": "hard",
@@ -123,7 +123,7 @@
     },
     {
       "id": "snare_medium_1",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Dark_Snare21.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Dark_Snare21.wav",
       "newPath": "samples\\snare\\snare_medium_1.wav",
       "type": "snare",
       "loudness": "medium",
@@ -133,7 +133,7 @@
     },
     {
       "id": "snare_medium_2",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Liquid_Snare03.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Liquid_Snare03.wav",
       "newPath": "samples\\snare\\snare_medium_2.wav",
       "type": "snare",
       "loudness": "medium",
@@ -143,7 +143,7 @@
     },
     {
       "id": "snare_medium_3",
-      "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare06.wav",
+      "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Snares\\Monarchy_Snare06.wav",
       "newPath": "samples\\snare\\snare_medium_3.wav",
       "type": "snare",
       "loudness": "medium",
@@ -153,7 +153,7 @@
     },
     {
       "id": "snare_soft_1",
-      "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare07.wav",
+      "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Snares\\Monarchy_Snare07.wav",
       "newPath": "samples\\snare\\snare_soft_1.wav",
       "type": "snare",
       "loudness": "soft",
@@ -163,7 +163,7 @@
     },
     {
       "id": "snare_soft_2",
-      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Snare Warlord ghost1.wav",
+      "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Snare Warlord ghost1.wav",
       "newPath": "samples\\snare\\snare_soft_2.wav",
       "type": "snare",
       "loudness": "soft",
@@ -173,7 +173,7 @@
     },
     {
       "id": "snare_soft_3",
-      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Snares\\LR_Snare_10.wav",
+      "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Snares\\LR_Snare_10.wav",
       "newPath": "samples\\snare\\snare_soft_3.wav",
       "type": "snare",
       "loudness": "soft",
@@ -183,7 +183,7 @@
     },
     {
       "id": "hat_hard_1",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat08.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat08.wav",
       "newPath": "samples\\hat\\hat_hard_1.wav",
       "type": "hat",
       "loudness": "hard",
@@ -193,7 +193,7 @@
     },
     {
       "id": "hat_hard_2",
-      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (8).wav",
+      "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (8).wav",
       "newPath": "samples\\hat\\hat_hard_2.wav",
       "type": "hat",
       "loudness": "hard",
@@ -203,7 +203,7 @@
     },
     {
       "id": "hat_hard_3",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat18.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat18.wav",
       "newPath": "samples\\hat\\hat_hard_3.wav",
       "type": "hat",
       "loudness": "hard",
@@ -213,7 +213,7 @@
     },
     {
       "id": "hat_medium_1",
-      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (45).wav",
+      "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (45).wav",
       "newPath": "samples\\hat\\hat_medium_1.wav",
       "type": "hat",
       "loudness": "medium",
@@ -223,7 +223,7 @@
     },
     {
       "id": "hat_medium_2",
-      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (25).wav",
+      "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (25).wav",
       "newPath": "samples\\hat\\hat_medium_2.wav",
       "type": "hat",
       "loudness": "medium",
@@ -233,7 +233,7 @@
     },
     {
       "id": "hat_medium_3",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat28.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat28.wav",
       "newPath": "samples\\hat\\hat_medium_3.wav",
       "type": "hat",
       "loudness": "medium",
@@ -243,7 +243,7 @@
     },
     {
       "id": "hat_soft_1",
-      "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (40).wav",
+      "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (40).wav",
       "newPath": "samples\\hat\\hat_soft_1.wav",
       "type": "hat",
       "loudness": "soft",
@@ -253,7 +253,7 @@
     },
     {
       "id": "hat_soft_2",
-      "originalPath": "D:\\Ableton\\drums\\Flutter\\Flutter HiHat 02.wav",
+      "originalPath": "E:\\Ableton\\Drums\\Flutter\\Flutter HiHat 02.wav",
       "newPath": "samples\\hat\\hat_soft_2.wav",
       "type": "hat",
       "loudness": "soft",
@@ -263,7 +263,7 @@
     },
     {
       "id": "hat_soft_3",
-      "originalPath": "D:\\Ableton\\drums\\Ballistic Drum & SFX Shots\\HiHat Shots\\Hat07.wav",
+      "originalPath": "E:\\Ableton\\Drums\\Ballistic Drum & SFX Shots\\HiHat Shots\\Hat07.wav",
       "newPath": "samples\\hat\\hat_soft_3.wav",
       "type": "hat",
       "loudness": "soft",
@@ -273,7 +273,7 @@
     },
     {
       "id": "tom_hard_1",
-      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama3.wav",
+      "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Tom Tama3.wav",
       "newPath": "samples\\tom\\tom_hard_1.wav",
       "type": "tom",
       "loudness": "hard",
@@ -283,7 +283,7 @@
     },
     {
       "id": "tom_hard_2",
-      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Floor Tom Tama5.wav",
+      "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Floor Tom Tama5.wav",
       "newPath": "samples\\tom\\tom_hard_2.wav",
       "type": "tom",
       "loudness": "hard",
@@ -293,7 +293,7 @@
     },
     {
       "id": "tom_medium_1",
-      "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama1.wav",
+      "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Tom Tama1.wav",
       "newPath": "samples\\tom\\tom_medium_1.wav",
       "type": "tom",
       "loudness": "medium",
@@ -303,7 +303,7 @@
     },
     {
       "id": "tom_medium_2",
-      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_3.wav",
+      "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Toms\\LR_Tom_3.wav",
       "newPath": "samples\\tom\\tom_medium_2.wav",
       "type": "tom",
       "loudness": "medium",
@@ -313,7 +313,7 @@
     },
     {
       "id": "tom_soft_1",
-      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_7.wav",
+      "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Toms\\LR_Tom_7.wav",
       "newPath": "samples\\tom\\tom_soft_1.wav",
       "type": "tom",
       "loudness": "soft",
@@ -323,7 +323,7 @@
     },
     {
       "id": "clap_hard_1",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap01.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap01.wav",
       "newPath": "samples\\clap\\clap_hard_1.wav",
       "type": "clap",
       "loudness": "hard",
@@ -333,7 +333,7 @@
     },
     {
       "id": "clap_hard_2",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap09.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap09.wav",
       "newPath": "samples\\clap\\clap_hard_2.wav",
       "type": "clap",
       "loudness": "hard",
@@ -343,7 +343,7 @@
     },
     {
       "id": "clap_medium_1",
-      "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap02.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap02.wav",
       "newPath": "samples\\clap\\clap_medium_1.wav",
       "type": "clap",
       "loudness": "medium",
@@ -353,203 +353,13 @@
     },
     {
       "id": "clap_medium_2",
-      "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Claps\\LR_Clap_4.wav",
+      "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Claps\\LR_Clap_4.wav",
       "newPath": "samples\\clap\\clap_medium_2.wav",
       "type": "clap",
       "loudness": "medium",
       "rms": 0.089,
       "peak": 0.675,
       "durationMs": 405
-    },
-    {
-      "id": "bass_hard_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_1.wav",
-      "newPath": "samples\\bass\\bass_hard_1.wav",
-      "type": "bass",
-      "loudness": "hard",
-      "rms": 0.5,
-      "peak": 0.9,
-      "durationMs": 500
-    },
-    {
-      "id": "bass_hard_2",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_2.wav",
-      "newPath": "samples\\bass\\bass_hard_2.wav",
-      "type": "bass",
-      "loudness": "hard",
-      "rms": 0.5,
-      "peak": 0.9,
-      "durationMs": 500
-    },
-    {
-      "id": "bass_medium_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_1.wav",
-      "newPath": "samples\\bass\\bass_medium_1.wav",
-      "type": "bass",
-      "loudness": "medium",
-      "rms": 0.25,
-      "peak": 0.9,
-      "durationMs": 500
-    },
-    {
-      "id": "bass_medium_2",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_2.wav",
-      "newPath": "samples\\bass\\bass_medium_2.wav",
-      "type": "bass",
-      "loudness": "medium",
-      "rms": 0.25,
-      "peak": 0.9,
-      "durationMs": 500
-    },
-    {
-      "id": "bass_soft_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_soft_1.wav",
-      "newPath": "samples\\bass\\bass_soft_1.wav",
-      "type": "bass",
-      "loudness": "soft",
-      "rms": 0.1,
-      "peak": 0.9,
-      "durationMs": 500
-    },
-    {
-      "id": "synth_stab_hard_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_1.wav",
-      "newPath": "samples\\synth_stab\\synth_stab_hard_1.wav",
-      "type": "synth_stab",
-      "loudness": "hard",
-      "rms": 0.5,
-      "peak": 0.9,
-      "durationMs": 300
-    },
-    {
-      "id": "synth_stab_hard_2",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_2.wav",
-      "newPath": "samples\\synth_stab\\synth_stab_hard_2.wav",
-      "type": "synth_stab",
-      "loudness": "hard",
-      "rms": 0.5,
-      "peak": 0.9,
-      "durationMs": 300
-    },
-    {
-      "id": "synth_stab_medium_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_medium_1.wav",
-      "newPath": "samples\\synth_stab\\synth_stab_medium_1.wav",
-      "type": "synth_stab",
-      "loudness": "medium",
-      "rms": 0.25,
-      "peak": 0.9,
-      "durationMs": 300
-    },
-    {
-      "id": "synth_stab_soft_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_soft_1.wav",
-      "newPath": "samples\\synth_stab\\synth_stab_soft_1.wav",
-      "type": "synth_stab",
-      "loudness": "soft",
-      "rms": 0.1,
-      "peak": 0.9,
-      "durationMs": 300
-    },
-    {
-      "id": "lead_hard_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_1.wav",
-      "newPath": "samples\\lead\\lead_hard_1.wav",
-      "type": "lead",
-      "loudness": "hard",
-      "rms": 0.5,
-      "peak": 0.9,
-      "durationMs": 400
-    },
-    {
-      "id": "lead_hard_2",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_2.wav",
-      "newPath": "samples\\lead\\lead_hard_2.wav",
-      "type": "lead",
-      "loudness": "hard",
-      "rms": 0.5,
-      "peak": 0.9,
-      "durationMs": 400
-    },
-    {
-      "id": "lead_medium_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_medium_1.wav",
-      "newPath": "samples\\lead\\lead_medium_1.wav",
-      "type": "lead",
-      "loudness": "medium",
-      "rms": 0.25,
-      "peak": 0.9,
-      "durationMs": 400
-    },
-    {
-      "id": "lead_soft_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_soft_1.wav",
-      "newPath": "samples\\lead\\lead_soft_1.wav",
-      "type": "lead",
-      "loudness": "soft",
-      "rms": 0.1,
-      "peak": 0.9,
-      "durationMs": 400
-    },
-    {
-      "id": "pad_medium_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_medium_1.wav",
-      "newPath": "samples\\pad\\pad_medium_1.wav",
-      "type": "pad",
-      "loudness": "medium",
-      "rms": 0.25,
-      "peak": 0.9,
-      "durationMs": 2000
-    },
-    {
-      "id": "pad_slow_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_1.wav",
-      "newPath": "samples\\pad\\pad_slow_1.wav",
-      "type": "pad",
-      "loudness": "soft",
-      "rms": 0.1,
-      "peak": 0.9,
-      "durationMs": 2000
-    },
-    {
-      "id": "pad_slow_2",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_2.wav",
-      "newPath": "samples\\pad\\pad_slow_2.wav",
-      "type": "pad",
-      "loudness": "soft",
-      "rms": 0.1,
-      "peak": 0.9,
-      "durationMs": 2000
-    },
-    {
-      "id": "chord_medium_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_medium_1.wav",
-      "newPath": "samples\\chord\\chord_medium_1.wav",
-      "type": "chord",
-      "loudness": "medium",
-      "rms": 0.25,
-      "peak": 0.9,
-      "durationMs": 1500
-    },
-    {
-      "id": "chord_slow_1",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_1.wav",
-      "newPath": "samples\\chord\\chord_slow_1.wav",
-      "type": "chord",
-      "loudness": "soft",
-      "rms": 0.1,
-      "peak": 0.9,
-      "durationMs": 1500
-    },
-    {
-      "id": "chord_slow_2",
-      "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_2.wav",
-      "newPath": "samples\\chord\\chord_slow_2.wav",
-      "type": "chord",
-      "loudness": "soft",
-      "rms": 0.1,
-      "peak": 0.9,
-      "durationMs": 1500
     }
   ],
   "byType": {
@@ -557,7 +367,7 @@
       "hard": [
         {
           "id": "kick_hard_1",
-          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
+          "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Hardcore Kicks\\LR_Kick_10.wav",
           "newPath": "samples\\kick\\kick_hard_1.wav",
           "type": "kick",
           "loudness": "hard",
@@ -567,7 +377,7 @@
         },
         {
           "id": "kick_hard_2",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick04.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Liquid_Kick04.wav",
           "newPath": "samples\\kick\\kick_hard_2.wav",
           "type": "kick",
           "loudness": "hard",
@@ -577,7 +387,7 @@
         },
         {
           "id": "kick_hard_3",
-          "originalPath": "D:\\Ableton\\drums\\MK05\\Analogued\\Kick Analogued 1.wav",
+          "originalPath": "E:\\Ableton\\Drums\\MK05\\Analogued\\Kick Analogued 1.wav",
           "newPath": "samples\\kick\\kick_hard_3.wav",
           "type": "kick",
           "loudness": "hard",
@@ -589,7 +399,7 @@
       "medium": [
         {
           "id": "kick_medium_1",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Temple_Kick08.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Temple_Kick08.wav",
           "newPath": "samples\\kick\\kick_medium_1.wav",
           "type": "kick",
           "loudness": "medium",
@@ -599,7 +409,7 @@
         },
         {
           "id": "kick_medium_2",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Kicks\\Liquid_Kick21.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Liquid_Kick21.wav",
           "newPath": "samples\\kick\\kick_medium_2.wav",
           "type": "kick",
           "loudness": "medium",
@@ -609,7 +419,7 @@
         },
         {
           "id": "kick_medium_3",
-          "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Kicks\\Monarchy_Kick02.wav",
+          "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Kicks\\Monarchy_Kick02.wav",
           "newPath": "samples\\kick\\kick_medium_3.wav",
           "type": "kick",
           "loudness": "medium",
@@ -621,7 +431,7 @@
       "soft": [
         {
           "id": "kick_soft_1",
-          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Kick w_Cym7.wav",
+          "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Kick w_Cym7.wav",
           "newPath": "samples\\kick\\kick_soft_1.wav",
           "type": "kick",
           "loudness": "soft",
@@ -631,7 +441,7 @@
         },
         {
           "id": "kick_soft_2",
-          "originalPath": "D:\\Ableton\\drums\\Chamber\\Chamber Kick 02.wav",
+          "originalPath": "E:\\Ableton\\Drums\\Chamber\\Chamber Kick 02.wav",
           "newPath": "samples\\kick\\kick_soft_2.wav",
           "type": "kick",
           "loudness": "soft",
@@ -641,7 +451,7 @@
         },
         {
           "id": "kick_soft_3",
-          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Drum Kicks\\LR_Drumkick_08.wav",
+          "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Drum Kicks\\LR_Drumkick_08.wav",
           "newPath": "samples\\kick\\kick_soft_3.wav",
           "type": "kick",
           "loudness": "soft",
@@ -655,7 +465,7 @@
       "hard": [
         {
           "id": "snare_hard_1",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare01.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare01.wav",
           "newPath": "samples\\snare\\snare_hard_1.wav",
           "type": "snare",
           "loudness": "hard",
@@ -665,7 +475,7 @@
         },
         {
           "id": "snare_hard_2",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare14.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare14.wav",
           "newPath": "samples\\snare\\snare_hard_2.wav",
           "type": "snare",
           "loudness": "hard",
@@ -675,7 +485,7 @@
         },
         {
           "id": "snare_hard_3",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Temple_Snare12.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare12.wav",
           "newPath": "samples\\snare\\snare_hard_3.wav",
           "type": "snare",
           "loudness": "hard",
@@ -687,7 +497,7 @@
       "medium": [
         {
           "id": "snare_medium_1",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Dark_Snare21.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Dark_Snare21.wav",
           "newPath": "samples\\snare\\snare_medium_1.wav",
           "type": "snare",
           "loudness": "medium",
@@ -697,7 +507,7 @@
         },
         {
           "id": "snare_medium_2",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Snares\\Liquid_Snare03.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Liquid_Snare03.wav",
           "newPath": "samples\\snare\\snare_medium_2.wav",
           "type": "snare",
           "loudness": "medium",
@@ -707,7 +517,7 @@
         },
         {
           "id": "snare_medium_3",
-          "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare06.wav",
+          "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Snares\\Monarchy_Snare06.wav",
           "newPath": "samples\\snare\\snare_medium_3.wav",
           "type": "snare",
           "loudness": "medium",
@@ -719,7 +529,7 @@
       "soft": [
         {
           "id": "snare_soft_1",
-          "originalPath": "D:\\Ableton\\drums\\hip hop monarchy\\Snares\\Monarchy_Snare07.wav",
+          "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Snares\\Monarchy_Snare07.wav",
           "newPath": "samples\\snare\\snare_soft_1.wav",
           "type": "snare",
           "loudness": "soft",
@@ -729,7 +539,7 @@
         },
         {
           "id": "snare_soft_2",
-          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Snare Warlord ghost1.wav",
+          "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Snare Warlord ghost1.wav",
           "newPath": "samples\\snare\\snare_soft_2.wav",
           "type": "snare",
           "loudness": "soft",
@@ -739,7 +549,7 @@
         },
         {
           "id": "snare_soft_3",
-          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Snares\\LR_Snare_10.wav",
+          "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Snares\\LR_Snare_10.wav",
           "newPath": "samples\\snare\\snare_soft_3.wav",
           "type": "snare",
           "loudness": "soft",
@@ -753,7 +563,7 @@
       "hard": [
         {
           "id": "hat_hard_1",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat08.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat08.wav",
           "newPath": "samples\\hat\\hat_hard_1.wav",
           "type": "hat",
           "loudness": "hard",
@@ -763,7 +573,7 @@
         },
         {
           "id": "hat_hard_2",
-          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (8).wav",
+          "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (8).wav",
           "newPath": "samples\\hat\\hat_hard_2.wav",
           "type": "hat",
           "loudness": "hard",
@@ -773,7 +583,7 @@
         },
         {
           "id": "hat_hard_3",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat18.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat18.wav",
           "newPath": "samples\\hat\\hat_hard_3.wav",
           "type": "hat",
           "loudness": "hard",
@@ -785,7 +595,7 @@
       "medium": [
         {
           "id": "hat_medium_1",
-          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (45).wav",
+          "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (45).wav",
           "newPath": "samples\\hat\\hat_medium_1.wav",
           "type": "hat",
           "loudness": "medium",
@@ -795,7 +605,7 @@
         },
         {
           "id": "hat_medium_2",
-          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (25).wav",
+          "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (25).wav",
           "newPath": "samples\\hat\\hat_medium_2.wav",
           "type": "hat",
           "loudness": "medium",
@@ -805,7 +615,7 @@
         },
         {
           "id": "hat_medium_3",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Hats\\Liquid_Hat28.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat28.wav",
           "newPath": "samples\\hat\\hat_medium_3.wav",
           "type": "hat",
           "loudness": "medium",
@@ -817,7 +627,7 @@
       "soft": [
         {
           "id": "hat_soft_1",
-          "originalPath": "D:\\Ableton\\drums\\ISR_One Shots\\Hi hats\\DD_HiHat (40).wav",
+          "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (40).wav",
           "newPath": "samples\\hat\\hat_soft_1.wav",
           "type": "hat",
           "loudness": "soft",
@@ -827,7 +637,7 @@
         },
         {
           "id": "hat_soft_2",
-          "originalPath": "D:\\Ableton\\drums\\Flutter\\Flutter HiHat 02.wav",
+          "originalPath": "E:\\Ableton\\Drums\\Flutter\\Flutter HiHat 02.wav",
           "newPath": "samples\\hat\\hat_soft_2.wav",
           "type": "hat",
           "loudness": "soft",
@@ -837,7 +647,7 @@
         },
         {
           "id": "hat_soft_3",
-          "originalPath": "D:\\Ableton\\drums\\Ballistic Drum & SFX Shots\\HiHat Shots\\Hat07.wav",
+          "originalPath": "E:\\Ableton\\Drums\\Ballistic Drum & SFX Shots\\HiHat Shots\\Hat07.wav",
           "newPath": "samples\\hat\\hat_soft_3.wav",
           "type": "hat",
           "loudness": "soft",
@@ -851,7 +661,7 @@
       "hard": [
         {
           "id": "tom_hard_1",
-          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama3.wav",
+          "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Tom Tama3.wav",
           "newPath": "samples\\tom\\tom_hard_1.wav",
           "type": "tom",
           "loudness": "hard",
@@ -861,7 +671,7 @@
         },
         {
           "id": "tom_hard_2",
-          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Floor Tom Tama5.wav",
+          "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Floor Tom Tama5.wav",
           "newPath": "samples\\tom\\tom_hard_2.wav",
           "type": "tom",
           "loudness": "hard",
@@ -873,7 +683,7 @@
       "medium": [
         {
           "id": "tom_medium_1",
-          "originalPath": "D:\\Ableton\\drums\\KJ\\80x\\KJ SAWKA Tom Tama1.wav",
+          "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Tom Tama1.wav",
           "newPath": "samples\\tom\\tom_medium_1.wav",
           "type": "tom",
           "loudness": "medium",
@@ -883,7 +693,7 @@
         },
         {
           "id": "tom_medium_2",
-          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_3.wav",
+          "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Toms\\LR_Tom_3.wav",
           "newPath": "samples\\tom\\tom_medium_2.wav",
           "type": "tom",
           "loudness": "medium",
@@ -895,7 +705,7 @@
       "soft": [
         {
           "id": "tom_soft_1",
-          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Toms\\LR_Tom_7.wav",
+          "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Toms\\LR_Tom_7.wav",
           "newPath": "samples\\tom\\tom_soft_1.wav",
           "type": "tom",
           "loudness": "soft",
@@ -909,7 +719,7 @@
       "hard": [
         {
           "id": "clap_hard_1",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap01.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap01.wav",
           "newPath": "samples\\clap\\clap_hard_1.wav",
           "type": "clap",
           "loudness": "hard",
@@ -919,7 +729,7 @@
         },
         {
           "id": "clap_hard_2",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap09.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap09.wav",
           "newPath": "samples\\clap\\clap_hard_2.wav",
           "type": "clap",
           "loudness": "hard",
@@ -931,7 +741,7 @@
       "medium": [
         {
           "id": "clap_medium_1",
-          "originalPath": "D:\\Ableton\\drums\\prime loops d&b\\Claps\\Liquid_Clap02.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap02.wav",
           "newPath": "samples\\clap\\clap_medium_1.wav",
           "type": "clap",
           "loudness": "medium",
@@ -941,7 +751,7 @@
         },
         {
           "id": "clap_medium_2",
-          "originalPath": "D:\\Ableton\\drums\\LR_One Shots\\LR_Claps\\LR_Clap_4.wav",
+          "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Claps\\LR_Clap_4.wav",
           "newPath": "samples\\clap\\clap_medium_2.wav",
           "type": "clap",
           "loudness": "medium",
@@ -951,232 +761,6 @@
         }
       ],
       "soft": []
-    },
-    "bass": {
-      "hard": [
-        {
-          "id": "bass_hard_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_1.wav",
-          "newPath": "samples\\bass\\bass_hard_1.wav",
-          "type": "bass",
-          "loudness": "hard",
-          "rms": 0.5,
-          "peak": 0.9,
-          "durationMs": 500
-        },
-        {
-          "id": "bass_hard_2",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_hard_2.wav",
-          "newPath": "samples\\bass\\bass_hard_2.wav",
-          "type": "bass",
-          "loudness": "hard",
-          "rms": 0.5,
-          "peak": 0.9,
-          "durationMs": 500
-        }
-      ],
-      "medium": [
-        {
-          "id": "bass_medium_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_1.wav",
-          "newPath": "samples\\bass\\bass_medium_1.wav",
-          "type": "bass",
-          "loudness": "medium",
-          "rms": 0.25,
-          "peak": 0.9,
-          "durationMs": 500
-        },
-        {
-          "id": "bass_medium_2",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_medium_2.wav",
-          "newPath": "samples\\bass\\bass_medium_2.wav",
-          "type": "bass",
-          "loudness": "medium",
-          "rms": 0.25,
-          "peak": 0.9,
-          "durationMs": 500
-        }
-      ],
-      "soft": [
-        {
-          "id": "bass_soft_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\bass\\bass_soft_1.wav",
-          "newPath": "samples\\bass\\bass_soft_1.wav",
-          "type": "bass",
-          "loudness": "soft",
-          "rms": 0.1,
-          "peak": 0.9,
-          "durationMs": 500
-        }
-      ]
-    },
-    "synth_stab": {
-      "hard": [
-        {
-          "id": "synth_stab_hard_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_1.wav",
-          "newPath": "samples\\synth_stab\\synth_stab_hard_1.wav",
-          "type": "synth_stab",
-          "loudness": "hard",
-          "rms": 0.5,
-          "peak": 0.9,
-          "durationMs": 300
-        },
-        {
-          "id": "synth_stab_hard_2",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_hard_2.wav",
-          "newPath": "samples\\synth_stab\\synth_stab_hard_2.wav",
-          "type": "synth_stab",
-          "loudness": "hard",
-          "rms": 0.5,
-          "peak": 0.9,
-          "durationMs": 300
-        }
-      ],
-      "medium": [
-        {
-          "id": "synth_stab_medium_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_medium_1.wav",
-          "newPath": "samples\\synth_stab\\synth_stab_medium_1.wav",
-          "type": "synth_stab",
-          "loudness": "medium",
-          "rms": 0.25,
-          "peak": 0.9,
-          "durationMs": 300
-        }
-      ],
-      "soft": [
-        {
-          "id": "synth_stab_soft_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\synth_stab\\synth_stab_soft_1.wav",
-          "newPath": "samples\\synth_stab\\synth_stab_soft_1.wav",
-          "type": "synth_stab",
-          "loudness": "soft",
-          "rms": 0.1,
-          "peak": 0.9,
-          "durationMs": 300
-        }
-      ]
-    },
-    "lead": {
-      "hard": [
-        {
-          "id": "lead_hard_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_1.wav",
-          "newPath": "samples\\lead\\lead_hard_1.wav",
-          "type": "lead",
-          "loudness": "hard",
-          "rms": 0.5,
-          "peak": 0.9,
-          "durationMs": 400
-        },
-        {
-          "id": "lead_hard_2",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_hard_2.wav",
-          "newPath": "samples\\lead\\lead_hard_2.wav",
-          "type": "lead",
-          "loudness": "hard",
-          "rms": 0.5,
-          "peak": 0.9,
-          "durationMs": 400
-        }
-      ],
-      "medium": [
-        {
-          "id": "lead_medium_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_medium_1.wav",
-          "newPath": "samples\\lead\\lead_medium_1.wav",
-          "type": "lead",
-          "loudness": "medium",
-          "rms": 0.25,
-          "peak": 0.9,
-          "durationMs": 400
-        }
-      ],
-      "soft": [
-        {
-          "id": "lead_soft_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\lead\\lead_soft_1.wav",
-          "newPath": "samples\\lead\\lead_soft_1.wav",
-          "type": "lead",
-          "loudness": "soft",
-          "rms": 0.1,
-          "peak": 0.9,
-          "durationMs": 400
-        }
-      ]
-    },
-    "pad": {
-      "medium": [
-        {
-          "id": "pad_medium_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_medium_1.wav",
-          "newPath": "samples\\pad\\pad_medium_1.wav",
-          "type": "pad",
-          "loudness": "medium",
-          "rms": 0.25,
-          "peak": 0.9,
-          "durationMs": 2000
-        }
-      ],
-      "soft": [
-        {
-          "id": "pad_slow_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_1.wav",
-          "newPath": "samples\\pad\\pad_slow_1.wav",
-          "type": "pad",
-          "loudness": "soft",
-          "rms": 0.1,
-          "peak": 0.9,
-          "durationMs": 2000
-        },
-        {
-          "id": "pad_slow_2",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\pad\\pad_slow_2.wav",
-          "newPath": "samples\\pad\\pad_slow_2.wav",
-          "type": "pad",
-          "loudness": "soft",
-          "rms": 0.1,
-          "peak": 0.9,
-          "durationMs": 2000
-        }
-      ]
-    },
-    "chord": {
-      "medium": [
-        {
-          "id": "chord_medium_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_medium_1.wav",
-          "newPath": "samples\\chord\\chord_medium_1.wav",
-          "type": "chord",
-          "loudness": "medium",
-          "rms": 0.25,
-          "peak": 0.9,
-          "durationMs": 1500
-        }
-      ],
-      "soft": [
-        {
-          "id": "chord_slow_1",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_1.wav",
-          "newPath": "samples\\chord\\chord_slow_1.wav",
-          "type": "chord",
-          "loudness": "soft",
-          "rms": 0.1,
-          "peak": 0.9,
-          "durationMs": 1500
-        },
-        {
-          "id": "chord_slow_2",
-          "originalPath": "C:\\Development\\blinky_time\\blinky-test-player\\samples\\chord\\chord_slow_2.wav",
-          "newPath": "samples\\chord\\chord_slow_2.wav",
-          "type": "chord",
-          "loudness": "soft",
-          "rms": 0.1,
-          "peak": 0.9,
-          "durationMs": 1500
-        }
-      ]
     }
   }
 }
