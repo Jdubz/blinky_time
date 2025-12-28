@@ -305,11 +305,12 @@ void AdaptiveMic::onPDMdata() {
  *
  * Detects MUSICAL hits (kicks, snares, bass drops) by looking for:
  * 1. LOUD: Significantly louder than recent average (3x default)
- * 2. SUDDEN: Rapidly rising (30% increase from previous frame)
+ * 2. SUDDEN: Rapidly rising compared to ~50ms ago (not just previous frame)
  * 3. INFREQUENT: Cooldown prevents double-triggers
  *
- * This replaces 170 lines of DSP complexity with 15 lines of
- * "did someone hit a drum?" logic.
+ * The key improvement: We compare against the level from ~50-70ms ago using a
+ * ring buffer, not just the previous frame. This catches gradual attacks that
+ * rise over multiple frames while still requiring a "sudden" increase musically.
  */
 void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
   // Note: transient is reset at the start of update(), not here
@@ -323,9 +324,13 @@ void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
   float alpha = 1.0f - expf(-dt / averageTau);
   recentAverage += alpha * (rawLevel - recentAverage);
 
+  // Get baseline level from ~50-70ms ago (the oldest entry in ring buffer)
+  // This catches gradual attacks that rise over 50-100ms
+  float baselineLevel = attackBuffer[attackBufferIdx];
+
   // Detect transient: LOUD + SUDDEN + not in cooldown
   bool isLoudEnough = rawLevel > recentAverage * transientThreshold;
-  bool isAttacking = rawLevel > previousLevel * attackMultiplier;
+  bool isAttacking = rawLevel > baselineLevel * attackMultiplier;
   bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
 
   if (isLoudEnough && isAttacking && cooldownElapsed) {
@@ -335,6 +340,10 @@ void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
     lastTransientMs = nowMs;
   }
 
-  // Store for next frame
+  // Update ring buffer with current level (overwrites oldest entry)
+  attackBuffer[attackBufferIdx] = rawLevel;
+  attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
+
+  // Keep previousLevel updated for compatibility
   previousLevel = rawLevel;
 }

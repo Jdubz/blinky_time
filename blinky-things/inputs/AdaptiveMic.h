@@ -142,9 +142,13 @@ private:
   uint32_t _sampleRate = 16000;
 
   // SIMPLIFIED AMPLITUDE SPIKE DETECTION
-  // Only 3 variables needed for transient detection
+  // Ring buffer for attack detection (compare against level from ~50ms ago, not just previous frame)
+  // This catches gradual attacks that rise over 50-100ms while still being "sudden" musically
+  static constexpr int ATTACK_BUFFER_SIZE = 4;  // 4 frames @ 60Hz = ~67ms lookback
+  float attackBuffer[ATTACK_BUFFER_SIZE] = {0};
+  int attackBufferIdx = 0;
   float recentAverage = 0.0f;   // Rolling average of audio level (~1 second window)
-  float previousLevel = 0.0f;   // Last frame's level (for attack detection)
+  float previousLevel = 0.0f;   // Last frame's level (kept for compatibility)
 
   // Hardware gain lock state (for testing/bypass)
   bool hwGainLocked_ = false;   // When true, AGC is disabled and gain is fixed
