@@ -281,6 +281,10 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
 
     // === TEST MODE COMMANDS ===
     if (strncmp(cmd, "test lock hwgain", 16) == 0) {
+        // Ensure command is exact match or followed by space (not "test lock hwgainXYZ")
+        if (cmd[16] != '\0' && cmd[16] != ' ') {
+            return false;  // Not a valid command, fall through
+        }
         if (!mic_) {
             Serial.println(F("ERROR: Microphone not available"));
             return true;
@@ -289,6 +293,12 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         int gain = mic_->getHwGain();
         if (strlen(cmd) > 17) {
             gain = atoi(cmd + 17);
+            // Validate gain range (0-80) and warn if out of bounds
+            if (gain < 0 || gain > 80) {
+                Serial.print(F("WARNING: Gain "));
+                Serial.print(gain);
+                Serial.println(F(" out of range (0-80), will be clamped"));
+            }
         }
         // Lock hardware gain at specified value (disables AGC)
         mic_->lockHwGain(gain);
