@@ -449,6 +449,9 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
             Serial.println(F("ERROR: Mic or music not available"));
             return true;
         }
+        // Buffer safety: cmd is null-terminated at line 236 after readBytesUntil.
+        // strncmp above ensures "preset " prefix exists, so cmd+7 is valid.
+        // parsePresetName handles empty string and null pointer gracefully.
         const char* presetName = cmd + 7;
         PresetId id = PresetManager::parsePresetName(presetName);
         if (id != PresetId::NUM_PRESETS) {

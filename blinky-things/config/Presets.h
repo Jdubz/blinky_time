@@ -30,10 +30,17 @@ enum class PresetId : uint8_t {
 /**
  * Preset parameter values
  * Contains all tunable parameters affected by presets
+ *
+ * Naming convention: Field names use abbreviated serial command names
+ * (e.g., 'hitthresh') for consistency with the serial API, while
+ * AdaptiveMic member variables use descriptive names (e.g.,
+ * 'transientThreshold') for code clarity. This is intentional to
+ * maintain backwards compatibility with existing serial commands
+ * while keeping internal code self-documenting.
  */
 struct PresetParams {
-    // Transient detection
-    float hitthresh;
+    // Transient detection (serial: hitthresh, attackmult, avgtau, cooldown)
+    float hitthresh;         // Maps to AdaptiveMic::transientThreshold
     float attackmult;
     float avgtau;
     uint16_t cooldown;

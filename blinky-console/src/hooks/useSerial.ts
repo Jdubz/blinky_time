@@ -357,12 +357,18 @@ export function useSerial(): UseSerialReturn {
 
   // Apply a preset
   const applyPreset = useCallback(async (name: string) => {
-    await serialService.applyPreset(name);
-    setCurrentPreset(name);
-    // Refresh settings after applying preset
-    const settingsResponse = await serialService.getSettings();
-    if (settingsResponse) {
-      setSettings(settingsResponse.settings);
+    try {
+      await serialService.applyPreset(name);
+      setCurrentPreset(name);
+      // Refresh settings after applying preset
+      const settingsResponse = await serialService.getSettings();
+      if (settingsResponse) {
+        setSettings(settingsResponse.settings);
+      }
+    } catch (error) {
+      console.error('Failed to apply preset:', error);
+      // Re-throw to allow caller to handle if needed
+      throw error;
     }
   }, []);
 
