@@ -60,6 +60,7 @@ public:
     float confidenceIncrement = 0.1f;   // Confidence gained per stable beat
     float confidenceDecrement = 0.1f;   // Confidence lost per unstable beat
     float missedBeatPenalty = 0.05f;    // Confidence lost per missed beat
+    float missedBeatTolerance = 1.5f;   // Beat period multiplier for missed beat detection
 
     // Tempo estimation tuning (comb filter resonator bank)
     float tempoFilterDecay = 0.95f;     // Comb filter energy decay per frame (0.9-0.99)
@@ -98,6 +99,17 @@ public:
      * Reset to initial state
      */
     void reset();
+
+    /**
+     * Provide external BPM guidance (e.g., from RhythmAnalyzer)
+     * - Only affects BPM if external estimate is confident and within range
+     * - Smoothly blends external BPM with current PLL estimate
+     * - Helps prevent PLL drift during quiet sections
+     *
+     * @param externalBPM BPM estimate from external source
+     * @param confidence Confidence in estimate (0.0-1.0)
+     */
+    void applyExternalBPMGuidance(float externalBPM, float confidence);
 
     // ===== GETTERS =====
 

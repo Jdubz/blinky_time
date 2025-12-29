@@ -10,8 +10,8 @@ import { dirname, join } from 'path';
 import { MODE_IDS, PARAMETERS } from './types.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-// Path to test player CLI
-const TEST_PLAYER_PATH = join(__dirname, '..', 'index.js');
+// Path to test player CLI (use dist/index.js compiled version)
+const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'dist', 'index.js');
 const BAUD_RATE = 115200;
 const COMMAND_TIMEOUT_MS = 2000;
 export class TestRunner extends EventEmitter {

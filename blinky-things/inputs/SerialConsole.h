@@ -10,6 +10,7 @@ class Fire;
 class AdaptiveMic;
 class BatteryMonitor;
 class MusicMode;
+class RhythmAnalyzer;
 
 /**
  * SerialConsole - JSON API for web app communication
@@ -46,6 +47,7 @@ public:
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     void setMusicMode(MusicMode* music) { music_ = music; }
+    void setRhythmAnalyzer(RhythmAnalyzer* rhythm) { rhythm_ = rhythm; }
     SettingsRegistry& getSettings() { return settings_; }
 
 private:
@@ -60,6 +62,7 @@ private:
     AdaptiveMic* mic_;
     BatteryMonitor* battery_;
     MusicMode* music_;
+    RhythmAnalyzer* rhythm_;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
 

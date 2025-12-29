@@ -131,6 +131,8 @@ function generateSummary(stateManager: StateManager): string {
   // Group patterns by best mode
   const byMode: Record<DetectionMode, string[]> = {
     drummer: [],
+    bass: [],
+    hfc: [],
     spectral: [],
     hybrid: [],
   };

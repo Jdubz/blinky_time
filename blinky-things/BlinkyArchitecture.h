@@ -48,6 +48,7 @@
 
 // Music detection
 #include "music/MusicMode.h"
+#include "music/RhythmAnalyzer.h"
 
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING

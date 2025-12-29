@@ -1,10 +1,14 @@
 /**
  * Types for parameter tuning system
  */
-export const DETECTION_MODES = ['drummer', 'spectral', 'hybrid'];
-// Mode IDs as they appear in device settings
+export const DETECTION_MODES = ['drummer', 'spectral', 'hybrid', 'bass', 'hfc'];
+export const SUBSYSTEM_MODES = ['music', 'rhythm'];
+export const ALL_MODES = [...DETECTION_MODES, ...SUBSYSTEM_MODES];
+// Mode IDs as they appear in device settings (detection modes only)
 export const MODE_IDS = {
     drummer: 0,
+    bass: 1,
+    hfc: 2,
     spectral: 3,
     hybrid: 4,
 };
@@ -13,19 +17,19 @@ export const PARAMETERS = {
     hitthresh: {
         name: 'hitthresh',
         mode: 'drummer',
-        min: 1.5,
+        min: 1.0, // Extended from 1.5 (optimal 1.688 was near boundary)
         max: 10.0,
-        default: 3.0,
-        sweepValues: [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 10.0],
+        default: 1.688, // Fast-tune optimal (was 2.0)
+        sweepValues: [1.0, 1.2, 1.4, 1.5, 1.688, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 10.0],
         description: 'Main detection threshold',
     },
     attackmult: {
         name: 'attackmult',
         mode: 'drummer',
-        min: 1.1,
+        min: 1.0, // Extended from 1.1 (optimal 1.1 was AT boundary)
         max: 2.0,
-        default: 1.3,
-        sweepValues: [1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0],
+        default: 1.1, // Fast-tune optimal (was 1.3)
+        sweepValues: [1.0, 1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0],
         description: 'Attack sensitivity multiplier',
     },
     avgtau: {
@@ -33,7 +37,7 @@ export const PARAMETERS = {
         mode: 'drummer',
         min: 0.1,
         max: 5.0,
-        default: 0.8,
+        default: 0.8, // Confirmed optimal
         sweepValues: [0.1, 0.3, 0.5, 0.8, 1.0, 1.5, 2.0, 3.0, 5.0],
         description: 'Envelope smoothing time constant',
     },
@@ -42,7 +46,7 @@ export const PARAMETERS = {
         mode: 'drummer',
         min: 20,
         max: 500,
-        default: 80,
+        default: 40, // Fast-tune optimal (was 80)
         sweepValues: [20, 40, 60, 80, 100, 150, 200, 300, 500],
         description: 'Minimum ms between detections',
     },
@@ -50,10 +54,10 @@ export const PARAMETERS = {
     fluxthresh: {
         name: 'fluxthresh',
         mode: 'spectral',
-        min: 1.0,
+        min: 0.5, // Extended from 1.0 (optimal 1.4 was near boundary)
         max: 10.0,
-        default: 3.0,
-        sweepValues: [1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0],
+        default: 1.4, // Fast-tune optimal (was 2.8)
+        sweepValues: [0.5, 0.8, 1.0, 1.2, 1.4, 1.5, 2.0, 2.5, 2.8, 3.0, 4.0, 5.0, 7.0, 10.0],
         description: 'Spectral flux threshold',
     },
     fluxbins: {
@@ -71,7 +75,7 @@ export const PARAMETERS = {
         mode: 'hybrid',
         min: 0.1,
         max: 1.0,
-        default: 0.7,
+        default: 0.7, // Fast-tune confirmed optimal
         sweepValues: [0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
         description: 'Weight for spectral flux component',
     },
@@ -80,7 +84,7 @@ export const PARAMETERS = {
         mode: 'hybrid',
         min: 0.1,
         max: 1.0,
-        default: 0.5,
+        default: 0.3, // Fast-tune optimal (was 0.5)
         sweepValues: [0.1, 0.3, 0.5, 0.7, 0.9, 1.0],
         description: 'Weight for drummer component',
     },
@@ -92,6 +96,199 @@ export const PARAMETERS = {
         default: 1.2,
         sweepValues: [1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0],
         description: 'Boost when both algorithms agree',
+    },
+    // Bass Band mode parameters (mode 1)
+    bassfreq: {
+        name: 'bassfreq',
+        mode: 'bass',
+        min: 40.0,
+        max: 200.0,
+        default: 120.0,
+        sweepValues: [40, 60, 80, 100, 120, 150, 180, 200],
+        description: 'Bass filter cutoff frequency (Hz)',
+    },
+    bassq: {
+        name: 'bassq',
+        mode: 'bass',
+        min: 0.5,
+        max: 3.0,
+        default: 1.0,
+        sweepValues: [0.5, 0.7, 1.0, 1.5, 2.0, 2.5, 3.0],
+        description: 'Bass filter Q factor',
+    },
+    bassthresh: {
+        name: 'bassthresh',
+        mode: 'bass',
+        min: 1.5,
+        max: 10.0,
+        default: 3.0,
+        sweepValues: [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0],
+        description: 'Bass detection threshold',
+    },
+    // HFC mode parameters (mode 2)
+    hfcweight: {
+        name: 'hfcweight',
+        mode: 'hfc',
+        min: 0.5,
+        max: 5.0,
+        default: 1.0,
+        sweepValues: [0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0],
+        description: 'HFC weighting factor',
+    },
+    hfcthresh: {
+        name: 'hfcthresh',
+        mode: 'hfc',
+        min: 1.5,
+        max: 10.0,
+        default: 3.0,
+        sweepValues: [1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 7.0, 10.0],
+        description: 'HFC detection threshold',
+    },
+    // MusicMode parameters (PLL-based beat tracking)
+    musicthresh: {
+        name: 'musicthresh',
+        mode: 'music',
+        min: 0.0,
+        max: 1.0,
+        default: 0.6,
+        sweepValues: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+        description: 'Music mode activation threshold',
+    },
+    musicbeats: {
+        name: 'musicbeats',
+        mode: 'music',
+        min: 2,
+        max: 16,
+        default: 4,
+        sweepValues: [2, 3, 4, 6, 8, 12, 16],
+        description: 'Stable beats required to activate',
+    },
+    musicmissed: {
+        name: 'musicmissed',
+        mode: 'music',
+        min: 4,
+        max: 16,
+        default: 8,
+        sweepValues: [4, 6, 8, 10, 12, 16],
+        description: 'Missed beats before deactivation',
+    },
+    confinc: {
+        name: 'confinc',
+        mode: 'music',
+        min: 0.05,
+        max: 0.2,
+        default: 0.1,
+        sweepValues: [0.05, 0.08, 0.1, 0.12, 0.15, 0.2],
+        description: 'Confidence gain per good beat',
+    },
+    confdec: {
+        name: 'confdec',
+        mode: 'music',
+        min: 0.05,
+        max: 0.2,
+        default: 0.1,
+        sweepValues: [0.05, 0.08, 0.1, 0.12, 0.15, 0.2],
+        description: 'Confidence loss per bad/missed beat',
+    },
+    phasetol: {
+        name: 'phasetol',
+        mode: 'music',
+        min: 0.1,
+        max: 0.5,
+        default: 0.2,
+        sweepValues: [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5],
+        description: 'Phase error tolerance for good beat',
+    },
+    missedtol: {
+        name: 'missedtol',
+        mode: 'music',
+        min: 1.0,
+        max: 3.0,
+        default: 1.5,
+        sweepValues: [1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0],
+        description: 'Missed beat tolerance (period multiplier)',
+    },
+    bpmmin: {
+        name: 'bpmmin',
+        mode: 'music',
+        min: 40.0,
+        max: 120.0,
+        default: 60.0,
+        sweepValues: [40, 50, 60, 70, 80, 100, 120],
+        description: 'Minimum BPM',
+    },
+    bpmmax: {
+        name: 'bpmmax',
+        mode: 'music',
+        min: 120.0,
+        max: 240.0,
+        default: 200.0,
+        sweepValues: [120, 140, 160, 180, 200, 220, 240],
+        description: 'Maximum BPM',
+    },
+    pllkp: {
+        name: 'pllkp',
+        mode: 'music',
+        min: 0.01,
+        max: 0.5,
+        default: 0.1,
+        sweepValues: [0.01, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5],
+        description: 'PLL proportional gain',
+    },
+    pllki: {
+        name: 'pllki',
+        mode: 'music',
+        min: 0.001,
+        max: 0.1,
+        default: 0.01,
+        sweepValues: [0.001, 0.005, 0.01, 0.02, 0.05, 0.1],
+        description: 'PLL integral gain',
+    },
+    // RhythmAnalyzer parameters (autocorrelation-based tempo detection)
+    rhythmminbpm: {
+        name: 'rhythmminbpm',
+        mode: 'rhythm',
+        min: 60.0,
+        max: 120.0,
+        default: 60.0,
+        sweepValues: [60, 70, 80, 90, 100, 110, 120],
+        description: 'Minimum BPM for autocorrelation',
+    },
+    rhythmmaxbpm: {
+        name: 'rhythmmaxbpm',
+        mode: 'rhythm',
+        min: 120.0,
+        max: 240.0,
+        default: 200.0,
+        sweepValues: [120, 140, 160, 180, 200, 220, 240],
+        description: 'Maximum BPM for autocorrelation',
+    },
+    rhythminterval: {
+        name: 'rhythminterval',
+        mode: 'rhythm',
+        min: 500,
+        max: 2000,
+        default: 1000,
+        sweepValues: [500, 750, 1000, 1250, 1500, 2000],
+        description: 'Autocorrelation update interval (ms)',
+    },
+    beatthresh: {
+        name: 'beatthresh',
+        mode: 'rhythm',
+        min: 0.5,
+        max: 0.9,
+        default: 0.7,
+        sweepValues: [0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9],
+        description: 'Beat likelihood threshold',
+    },
+    minperiodicity: {
+        name: 'minperiodicity',
+        mode: 'rhythm',
+        min: 0.3,
+        max: 0.8,
+        default: 0.5,
+        sweepValues: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
+        description: 'Minimum periodicity strength',
     },
 };
 // Pattern categories for testing

@@ -8,6 +8,10 @@ import {
   ConnectionState,
   SettingsByCategory,
   TransientMessage,
+  RhythmData,
+  MusicModeData,
+  RhythmMessage,
+  StatusMessage,
 } from '../types';
 
 export interface UseSerialReturn {
@@ -29,9 +33,18 @@ export interface UseSerialReturn {
   audioData: AudioSample | null;
   batteryData: BatterySample | null;
   batteryStatusData: BatteryStatusData | null;
+  rhythmData: RhythmData | null;
+  musicModeData: MusicModeData | null;
+  statusData: StatusMessage | null;
 
   // Transient detection (legacy name kept for compatibility)
   onPercussionEvent: (callback: (msg: TransientMessage) => void) => () => void;
+
+  // Rhythm analyzer events
+  onRhythmEvent: (callback: (msg: RhythmMessage) => void) => () => void;
+
+  // Status events
+  onStatusEvent: (callback: (msg: StatusMessage) => void) => () => void;
 
   // Serial console
   consoleLines: string[];
@@ -99,10 +112,17 @@ export function useSerial(): UseSerialReturn {
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
   const [batteryStatusData, setBatteryStatusData] = useState<BatteryStatusData | null>(null);
+  const [rhythmData, setRhythmData] = useState<RhythmData | null>(null);
+  const [musicModeData, setMusicModeData] = useState<MusicModeData | null>(null);
+  const [statusData, setStatusData] = useState<StatusMessage | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
 
   // Transient event callbacks (legacy name kept for compatibility)
   const percussionCallbacksRef = useRef<Set<(msg: TransientMessage) => void>>(new Set());
+  // Rhythm analyzer event callbacks
+  const rhythmCallbacksRef = useRef<Set<(msg: RhythmMessage) => void>>(new Set());
+  // Status event callbacks
+  const statusCallbacksRef = useRef<Set<(msg: StatusMessage) => void>>(new Set());
 
   const isSupported = serialService.isSupported();
 
@@ -180,6 +200,13 @@ export function useSerial(): UseSerialReturn {
         case 'audio':
           if (event.audio && validateAudioSample(event.audio.a)) {
             setAudioData(event.audio.a);
+            // Update rhythm and music mode data if present in audio stream
+            if (event.audio.r) {
+              setRhythmData(event.audio.r);
+            }
+            if (event.audio.m) {
+              setMusicModeData(event.audio.m);
+            }
           }
           break;
         case 'battery':
@@ -197,6 +224,23 @@ export function useSerial(): UseSerialReturn {
             // Notify all registered transient callbacks
             percussionCallbacksRef.current.forEach(callback => {
               callback(event.transient!);
+            });
+          }
+          break;
+        case 'rhythm':
+          if (event.rhythm) {
+            // Notify all registered rhythm callbacks
+            rhythmCallbacksRef.current.forEach(callback => {
+              callback(event.rhythm!);
+            });
+          }
+          break;
+        case 'status':
+          if (event.status) {
+            setStatusData(event.status);
+            // Notify all registered status callbacks
+            statusCallbacksRef.current.forEach(callback => {
+              callback(event.status!);
             });
           }
           break;
@@ -348,6 +392,24 @@ export function useSerial(): UseSerialReturn {
     };
   }, []);
 
+  // Register callback for rhythm analyzer events
+  const onRhythmEvent = useCallback((callback: (msg: RhythmMessage) => void) => {
+    rhythmCallbacksRef.current.add(callback);
+    // Return cleanup function
+    return () => {
+      rhythmCallbacksRef.current.delete(callback);
+    };
+  }, []);
+
+  // Register callback for status events
+  const onStatusEvent = useCallback((callback: (msg: StatusMessage) => void) => {
+    statusCallbacksRef.current.add(callback);
+    // Return cleanup function
+    return () => {
+      statusCallbacksRef.current.delete(callback);
+    };
+  }, []);
+
   return {
     connectionState,
     isSupported,
@@ -360,7 +422,12 @@ export function useSerial(): UseSerialReturn {
     audioData,
     batteryData,
     batteryStatusData,
+    rhythmData,
+    musicModeData,
+    statusData,
     onPercussionEvent,
+    onRhythmEvent,
+    onStatusEvent,
     consoleLines,
     clearConsole,
     sendCommand,

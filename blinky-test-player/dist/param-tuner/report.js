@@ -100,6 +100,8 @@ function generateSummary(stateManager) {
     // Group patterns by best mode
     const byMode = {
         drummer: [],
+        bass: [],
+        hfc: [],
         spectral: [],
         hybrid: [],
     };

@@ -4,6 +4,8 @@ import {
   AudioMessage,
   BatteryMessage,
   TransientMessage,
+  RhythmMessage,
+  StatusMessage,
 } from '../types';
 
 // WebSerial type declarations
@@ -51,7 +53,9 @@ export type SerialEventType =
   | 'audio'
   | 'battery'
   | 'batteryStatus'
-  | 'transient';
+  | 'transient'
+  | 'rhythm'
+  | 'status';
 
 export interface BatteryStatusData {
   voltage: number; // Battery voltage in volts
@@ -67,6 +71,8 @@ export interface SerialEvent {
   battery?: BatteryMessage;
   batteryStatus?: BatteryStatusData;
   transient?: TransientMessage;
+  rhythm?: RhythmMessage;
+  status?: StatusMessage;
   error?: Error;
 }
 
@@ -385,10 +391,36 @@ class SerialService {
           if (trimmed.startsWith('{"type":"TRANSIENT"')) {
             try {
               const transMsg = JSON.parse(trimmed) as TransientMessage;
+              // Support legacy timestampMs field
+              if (!transMsg.ts && transMsg.timestampMs) {
+                transMsg.ts = transMsg.timestampMs;
+              }
               this.emit({ type: 'transient', transient: transMsg });
               continue;
             } catch {
               // Not valid transient JSON
+            }
+          }
+
+          // Check if it's a rhythm analyzer message
+          if (trimmed.startsWith('{"type":"RHYTHM"')) {
+            try {
+              const rhythmMsg = JSON.parse(trimmed) as RhythmMessage;
+              this.emit({ type: 'rhythm', rhythm: rhythmMsg });
+              continue;
+            } catch {
+              // Not valid rhythm JSON
+            }
+          }
+
+          // Check if it's a status message
+          if (trimmed.startsWith('{"type":"STATUS"')) {
+            try {
+              const statusMsg = JSON.parse(trimmed) as StatusMessage;
+              this.emit({ type: 'status', status: statusMsg });
+              continue;
+            } catch {
+              // Not valid status JSON
             }
           }
 

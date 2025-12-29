@@ -78,6 +78,7 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   pdmAlive = false;
   recentAverage = 0.0f;
   previousLevel = 0.0f;
+  lastFluxValue_ = 0.0f;  // Initialize spectral flux value for RhythmAnalyzer
 
   // Initialize spectral flux detector
   spectralFlux_.begin();
@@ -142,6 +143,16 @@ void AdaptiveMic::update(float dt) {
     // Store instantaneous raw level for debugging
     rawInstantLevel = normalized;
 
+    // FIX BUG #1: Pre-fill attack buffer on first update to prevent false positives
+    // Without this, buffer starts at 0, making any audio appear as "attacking"
+    if (!attackBufferInitialized_) {
+      for (int i = 0; i < ATTACK_BUFFER_SIZE; i++) {
+        attackBuffer[i] = normalized;
+      }
+      recentAverage = normalized;  // Also initialize recent average
+      attackBufferInitialized_ = true;
+    }
+
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
     float alpha = 1.0f - expf(-dt / maxValue(MicConstants::HW_TRACKING_TAU, MIN_TAU_HARDWARE));
@@ -184,6 +195,11 @@ void AdaptiveMic::update(float dt) {
 
     // Simplified amplitude spike detection
     detectTransients(nowMs, dt);
+
+    // Clear spectral flux value if not in flux mode (prevent stale data)
+    if (detectionMode != 3 && detectionMode != 4) {
+      lastFluxValue_ = 0.0f;
+    }
   }
 
   if (!pdmAlive) return;
@@ -560,54 +576,76 @@ void AdaptiveMic::detectDrummer(uint32_t nowMs, float dt, float rawLevel) {
  * Uses local median adaptive threshold for better accuracy.
  */
 void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
-  // Initialize filter if needed (or if frequency changed)
-  if (!bassFilterInitialized) {
-    // SAFETY: setLowpass returns false if parameters are invalid
-    // Fall back to drummer algorithm on failure
-    if (!bassFilter.setLowpass(bassFreq, (float)_sampleRate, bassQ)) {
-      detectDrummer(nowMs, dt, rawLevel);  // Safe fallback
-      return;
+  // FIXED: Use SpectralFlux with bass frequency range instead of envelope filtering
+  // Bass range: bins 1-6 covers 62.5-375 Hz (kick drum + bass fundamentals)
+  // At 16kHz sample rate: bin 1 = 62.5 Hz, bin 6 = 375 Hz
+  spectralFlux_.setAnalysisRange(1, 6);  // Focus on bass frequencies
+
+  // Read available samples from ISR ring buffer (same as spectral flux mode)
+  uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
+  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
+
+  // Handle negative values (shouldn't happen, but be defensive)
+  if (available < 0) {
+    available = 0;
+  }
+
+  // Limit to ring buffer size to prevent reading stale data
+  if ((uint32_t)available > FFT_RING_SIZE) {
+    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
+    available = FFT_RING_SIZE;
+  }
+
+  // Feed samples to spectral flux processor
+  while (available > 0) {
+    int16_t batch[64];
+    int batchSize = 0;
+
+    while (batchSize < 64 && available > 0) {
+      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
+      s_fftReadIdx++;
+      available--;
     }
-    bassFilterInitialized = true;
+
+    spectralFlux_.addSamples(batch, batchSize);
   }
 
-  // Filter the raw level to extract bass content
-  // Note: We're filtering the envelope, not raw samples - this is a simplification
-  // For proper bass detection, we'd filter the raw PCM samples in the ISR
-  float filteredLevel = bassFilter.process(rawLevel);
-  bassFilteredLevel = maxValue(0.0f, filteredLevel);  // Ensure non-negative
+  // Process FFT frame if ready
+  if (spectralFlux_.isFrameReady()) {
+    float bassFlux = spectralFlux_.process();
 
-  // Track recent average of bass content (for fallback and compatibility)
+    // SAFETY: Skip if flux is invalid
+    if (!isfinite(bassFlux)) {
+      bassFlux = 0.0f;
+    }
+
+    // Store as bassFilteredLevel for compatibility with debugging/telemetry
+    bassFilteredLevel = bassFlux;
+
+    // Track recent average of bass flux (for threshold comparison)
+    float alpha = 1.0f - expf(-dt / averageTau);
+    bassRecentAverage += alpha * (bassFlux - bassRecentAverage);
+
+    // SAFETY: Reset if average becomes corrupted
+    if (!isfinite(bassRecentAverage)) {
+      bassRecentAverage = 0.0f;
+    }
+
+    // Detect transient using LOUD + COOLDOWN logic
+    // Note: Bass flux is already a change measure, so we don't need "SUDDEN" check
+    bool isLoudEnough = bassFlux > bassRecentAverage * bassThresh;
+    bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
+
+    if (isLoudEnough && cooldownElapsed) {
+      // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
+      float ratio = bassFlux / maxValue(bassRecentAverage, 0.001f);
+      transient = clamp01((ratio - bassThresh) / bassThresh);
+      lastTransientMs = nowMs;
+    }
+  }
+
+  // Also update main recentAverage for compatibility (using raw level)
   float alpha = 1.0f - expf(-dt / averageTau);
-  bassRecentAverage += alpha * (bassFilteredLevel - bassRecentAverage);
-
-  // Get baseline from ring buffer (reuse existing buffer)
-  float baselineLevel = attackBuffer[attackBufferIdx];
-
-  // Compute local adaptive threshold using median of recent values
-  float localMedian = computeLocalMedian();
-  float localThreshold = localMedian * bassThresh;
-  localThreshold = maxValue(localThreshold, 0.001f);
-
-  // Detect transient in bass content
-  bool isLoudEnough = bassFilteredLevel > localThreshold;
-  bool isAttacking = bassFilteredLevel > baselineLevel * attackMultiplier;
-  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-  if (isLoudEnough && isAttacking && cooldownElapsed) {
-    float ratio = bassFilteredLevel / maxValue(localMedian, 0.001f);
-    transient = clamp01((ratio - bassThresh) / bassThresh);
-    lastTransientMs = nowMs;
-  }
-
-  // Update ring buffer with bass-filtered level
-  attackBuffer[attackBufferIdx] = bassFilteredLevel;
-  attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
-
-  // Update threshold buffer for adaptive threshold computation
-  updateThresholdBuffer(bassFilteredLevel);
-
-  // Also update main recentAverage for compatibility
   recentAverage += alpha * (rawLevel - recentAverage);
 }
 
@@ -625,7 +663,14 @@ void AdaptiveMic::detectHFC(uint32_t nowMs, float dt, float rawLevel) {
   float diff = rawLevel - previousLevel;
   float hfc = diff * diff * hfcWeight;
 
-  // Track recent average of HFC (for fallback and compatibility)
+  // FIX BUG #6: Initialize lastHfcValue on first call to prevent first-frame bias
+  // Without this, lastHfcValue = 0 makes first frame always pass attack test
+  if (lastHfcValue == 0.0f && hfc > 0.0f) {
+    lastHfcValue = hfc;
+    hfcRecentAverage = hfc;  // Also initialize average
+  }
+
+  // Track recent average of HFC
   float alpha = 1.0f - expf(-dt / averageTau);
   hfcRecentAverage += alpha * (hfc - hfcRecentAverage);
 
@@ -673,12 +718,17 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
   spectralFlux_.setAnalysisRange(1, fluxBins);  // Skip DC (bin 0)
 
   // Read available samples from ISR ring buffer
-  // Use signed comparison to handle uint32_t wrap-around correctly (~74 hours at 16kHz)
+  // FIX BUG #7: Use signed arithmetic for wraparound safety (consistent with millis() handling)
   uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
-  uint32_t available = writeIdx - s_fftReadIdx;  // Handles wrap correctly
+  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed handles wraparound correctly
+
+  // Handle negative values (shouldn't happen, but be defensive)
+  if (available < 0) {
+    available = 0;
+  }
 
   // Limit to ring buffer size to prevent reading stale data if we fell behind
-  if (available > FFT_RING_SIZE) {
+  if ((uint32_t)available > FFT_RING_SIZE) {
     // We fell behind - skip old samples to catch up
     s_fftReadIdx = writeIdx - FFT_RING_SIZE;
     available = FFT_RING_SIZE;
@@ -708,7 +758,10 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
       flux = 0.0f;
     }
 
-    // Update running average (for fallback and compatibility)
+    // Store for external access (e.g., RhythmAnalyzer)
+    lastFluxValue_ = flux;
+
+    // Update running average (for threshold comparison)
     float alpha = 1.0f - expf(-dt / averageTau);
     fluxRecentAverage_ += alpha * (flux - fluxRecentAverage_);
 
@@ -764,9 +817,14 @@ void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
   // Process spectral flux (feed samples to FFT)
   spectralFlux_.setAnalysisRange(1, fluxBins);
   uint32_t writeIdx = s_fftWriteIdx;
-  uint32_t available = writeIdx - s_fftReadIdx;
+  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
 
-  if (available > FFT_RING_SIZE) {
+  // Handle negative values (shouldn't happen, but be defensive)
+  if (available < 0) {
+    available = 0;
+  }
+
+  if ((uint32_t)available > FFT_RING_SIZE) {
     s_fftReadIdx = writeIdx - FFT_RING_SIZE;
     available = FFT_RING_SIZE;
   }
@@ -782,9 +840,36 @@ void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
     spectralFlux_.addSamples(batch, batchSize);
   }
 
-  // Evaluate both algorithms (without triggering detection yet)
+  // FIXED: Process FFT frame ONCE and cache the result
+  // This prevents state corruption and makes eval functions pure
+  float currentFlux = 0.0f;
+  bool fluxFrameReady = false;
+
+  if (spectralFlux_.isFrameReady()) {
+    currentFlux = spectralFlux_.process();
+    fluxFrameReady = true;
+
+    // SAFETY: Skip if flux is invalid
+    if (!isfinite(currentFlux)) {
+      currentFlux = 0.0f;
+      fluxFrameReady = false;
+    } else {
+      // Update running average (side effect done here, not in eval function)
+      fluxRecentAverage_ += alpha * (currentFlux - fluxRecentAverage_);
+
+      // SAFETY: Reset if average becomes corrupted
+      if (!isfinite(fluxRecentAverage_)) {
+        fluxRecentAverage_ = 0.0f;
+      }
+
+      // Store for external access (e.g., RhythmAnalyzer)
+      lastFluxValue_ = currentFlux;
+    }
+  }
+
+  // Evaluate both algorithms (now pure functions without side effects)
   float drummerStrength = evalDrummerStrength(rawLevel);
-  float fluxStrength = evalSpectralFluxStrength(dt);
+  float fluxStrength = evalSpectralFluxStrength(currentFlux, fluxFrameReady);
 
   // Combine detections with confidence weighting
   bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
@@ -842,29 +927,12 @@ float AdaptiveMic::evalDrummerStrength(float rawLevel) {
 }
 
 /**
- * Evaluate spectral flux strength and process FFT frame
- * Uses local median adaptive threshold for better accuracy
- * NOTE: This consumes the FFT frame and updates fluxRecentAverage_
+ * Evaluate spectral flux strength from cached flux value (pure function)
+ * FIXED: No longer processes FFT frame - caller must provide pre-computed flux
  * Returns 0.0 if no detection or frame not ready, 0.0-1.0 for detection strength
  */
-float AdaptiveMic::evalSpectralFluxStrength(float dt) {
-  if (!spectralFlux_.isFrameReady()) {
-    return 0.0f;
-  }
-
-  float flux = spectralFlux_.process();
-
-  // SAFETY: Skip if flux is invalid
-  if (!isfinite(flux)) {
-    return 0.0f;
-  }
-
-  // Update running average (for compatibility)
-  float alpha = 1.0f - expf(-dt / averageTau);
-  fluxRecentAverage_ += alpha * (flux - fluxRecentAverage_);
-
-  if (!isfinite(fluxRecentAverage_)) {
-    fluxRecentAverage_ = 0.0f;
+float AdaptiveMic::evalSpectralFluxStrength(float flux, bool frameReady) {
+  if (!frameReady) {
     return 0.0f;
   }
 

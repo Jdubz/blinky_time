@@ -1,9 +1,0 @@
-# Sample audio files (curated from local collection)
-# These are copied by scripts/curate-samples.ts
-*.wav
-*.mp3
-*.ogg
-*.flac
-
-# Keep the manifest (defines which samples to use)
-!manifest.json

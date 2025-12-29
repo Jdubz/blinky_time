@@ -77,6 +77,7 @@ IMUHelper imu;                     // IMU sensor interface; auto-initializes, us
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
 MusicMode* music = nullptr;        // Beat detection and tempo tracking
+RhythmAnalyzer* rhythm = nullptr;  // Onset Strength Signal buffering for improved beat tracking
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
@@ -112,6 +113,17 @@ void showFireEffect() {
     // Get audio input for generation
     float energy = mic ? mic->getLevel() : 0.0f;
     float hit = mic ? mic->getTransient() : 0.0f;
+
+    // INTEGRATION: Modulate energy based on beat likelihood from RhythmAnalyzer
+    // Provides visual feedback that the system is "locked" to a beat pattern
+    if (rhythm && rhythm->periodicityStrength > 0.5f) {
+      float beatLikelihood = rhythm->beatLikelihood;
+      // High beat likelihood (near expected beat) → boost energy by up to 50%
+      // Low beat likelihood (between beats) → natural energy level
+      float energyBoost = 1.0f + (beatLikelihood * 0.5f);
+      energy *= energyBoost;
+      energy = constrain(energy, 0.0f, 1.0f);  // Keep in valid range
+    }
 
     // Update generator with audio input (handled by updateFireEffect)
     updateFireEffect(energy, hit);
@@ -321,10 +333,28 @@ void setup() {
     Serial.println(F("Microphone initialized"));
   }
 
+  // CRITICAL: Initialize rhythm and music BEFORE configStorage.begin()
+  // This ensures the objects exist when loadConfiguration() tries to populate their parameters.
+  // Initialization order matters: rhythm/music → config load → parameter apply
+
+  // Initialize music mode for beat detection and tempo tracking
+  music = new(std::nothrow) MusicMode(DefaultHal::time());
+  if (!music) {
+    haltWithError(F("ERROR: MusicMode allocation failed"));
+  }
+  Serial.println(F("Music mode initialized"));
+
+  // Initialize rhythm analyzer for OSS-based tempo detection
+  rhythm = new(std::nothrow) RhythmAnalyzer();
+  if (!rhythm) {
+    haltWithError(F("ERROR: RhythmAnalyzer allocation failed"));
+  }
+  Serial.println(F("Rhythm analyzer initialized"));
+
   // Initialize configuration storage and load saved settings
   configStorage.begin();
   if (configStorage.isValid()) {
-    configStorage.loadConfiguration(fireParams, *mic);
+    configStorage.loadConfiguration(fireParams, *mic, rhythm, music);
     updateFireParams();
     Serial.println(F("Loaded saved configuration from flash"));
   } else {
@@ -338,13 +368,6 @@ void setup() {
     battery->setFastCharge(config.charging.fastChargeEnabled);
     Serial.println(F("Battery monitor initialized"));
   }
-
-  // Initialize music mode for beat detection and tempo tracking
-  music = new(std::nothrow) MusicMode(DefaultHal::time());
-  if (!music) {
-    haltWithError(F("ERROR: MusicMode allocation failed"));
-  }
-  Serial.println(F("Music mode initialized"));
 
   // Connect music mode to fire generator for beat-synced effects
   if (fireGen && music) {
@@ -361,6 +384,7 @@ void setup() {
   console->setConfigStorage(&configStorage);
   console->setBatteryMonitor(battery);
   console->setMusicMode(music);
+  console->setRhythmAnalyzer(rhythm);
   console->begin();
   Serial.println(F("Serial console initialized"));
 
@@ -389,10 +413,54 @@ void loop() {
   lastMs = now;
 
   if (mic) mic->update(dt);
+
+  // Feed spectral flux to rhythm analyzer (only in spectral flux modes)
+  // Note: Only SPECTRAL_FLUX and HYBRID modes compute spectral flux values
+  if (mic && rhythm) {
+    uint8_t mode = mic->getDetectionMode();
+    if (mode == static_cast<uint8_t>(DetectionMode::SPECTRAL_FLUX) ||
+        mode == static_cast<uint8_t>(DetectionMode::HYBRID)) {
+      float flux = mic->getLastFluxValue();
+      rhythm->addSample(flux);
+    }
+  }
+
+  // Update rhythm analyzer (autocorrelation - throttled to 1 Hz internally)
+  if (rhythm) {
+    rhythm->update(now, 60.0f);  // 60 Hz frame rate assumption
+  }
+
+  // INTEGRATION: Use RhythmAnalyzer's BPM to anchor MusicMode's PLL
+  // This prevents drift during quiet sections and improves long-term stability
+  if (rhythm && music && rhythm->periodicityStrength > 0.7f) {
+    float detectedBPM = rhythm->getDetectedBPM();
+    if (detectedBPM > 0.0f) {
+      music->applyExternalBPMGuidance(detectedBPM, rhythm->periodicityStrength);
+    }
+  }
+
   if (music) music->update(dt);
 
   float energy = mic ? mic->getLevel() : 0.0f;
   float hit = mic ? mic->getTransient() : 0.0f;
+
+  // INTEGRATION: Context-aware transient filtering using rhythm data
+  // When rhythm is strong, boost hits near expected beats and suppress random hits
+  if (rhythm && hit > 0.0f && rhythm->periodicityStrength > 0.5f) {
+    float phase = rhythm->getCurrentPhase();
+
+    // Calculate distance from nearest beat (0 = on beat, 0.5 = anti-beat)
+    float distanceFromBeat = fabsf(phase - 0.5f);  // 0.0 at phase 0 or 1, 0.5 at phase 0.5
+    distanceFromBeat = 0.5f - distanceFromBeat;     // Invert: 0.5 at beat, 0.0 at anti-beat
+
+    // Modulate hit strength based on beat alignment and rhythm confidence
+    // Strong rhythm + on-beat = boost by up to 30%
+    // Strong rhythm + off-beat = reduce by up to 40%
+    float rhythmFactor = 1.0f + (distanceFromBeat - 0.25f) * rhythm->periodicityStrength;
+    rhythmFactor = constrain(rhythmFactor, 0.6f, 1.3f);  // Limit range
+
+    hit *= rhythmFactor;
+  }
 
   // Send transient detection events for test analysis (always enabled)
   // AND notify music mode of transients for beat tracking
@@ -402,11 +470,26 @@ void loop() {
       music->onOnsetDetected(now, true);  // isLowBand=true (not used in simplified detection)
     }
 
-    // TRANSIENT message: simplified single-band detection
-    Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
+    // TRANSIENT message with mode-specific diagnostics
+    uint8_t mode = mic->getDetectionMode();
+    float energyValue = 0.0f;
+    // Get mode-specific energy value
+    if (mode == 1) {
+      energyValue = mic->getBassLevel();
+    } else if (mode == 3 || mode == 4) {
+      energyValue = mic->getLastFluxValue();
+    }
+
+    Serial.print(F("{\"type\":\"TRANSIENT\",\"ts\":"));
     Serial.print(now);
     Serial.print(F(",\"strength\":"));
     Serial.print(hit, 2);
+    Serial.print(F(",\"mode\":"));
+    Serial.print(mode);
+    Serial.print(F(",\"level\":"));
+    Serial.print(energy, 2);
+    Serial.print(F(",\"energy\":"));
+    Serial.print(energyValue, 2);
     Serial.println(F("}"));
   }
 
@@ -429,8 +512,23 @@ void loop() {
     console->update();
   }
 
+  // Rhythm analyzer debug output (periodic, every 2 seconds when pattern detected)
+  static uint32_t lastRhythmDebug = 0;
+  if (rhythm && millis() - lastRhythmDebug > 2000) {
+    if (rhythm->detectedPeriodMs > 0.0f && rhythm->periodicityStrength > 0.5f) {
+      lastRhythmDebug = millis();
+      Serial.print(F("{\"type\":\"RHYTHM\",\"bpm\":"));
+      Serial.print(rhythm->getDetectedBPM(), 1);
+      Serial.print(F(",\"strength\":"));
+      Serial.print(rhythm->periodicityStrength, 2);
+      Serial.print(F(",\"periodMs\":"));
+      Serial.print(rhythm->detectedPeriodMs, 1);
+      Serial.println(F("}"));
+    }
+  }
+
   // Auto-save dirty settings to flash (debounced)
-  if (mic) configStorage.saveIfDirty(fireParams, *mic);
+  if (mic) configStorage.saveIfDirty(fireParams, *mic, rhythm, music);
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;

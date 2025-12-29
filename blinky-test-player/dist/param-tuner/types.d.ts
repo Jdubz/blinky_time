@@ -1,12 +1,16 @@
 /**
  * Types for parameter tuning system
  */
-export type DetectionMode = 'drummer' | 'spectral' | 'hybrid';
+export type DetectionMode = 'drummer' | 'spectral' | 'hybrid' | 'bass' | 'hfc';
+export type SubsystemMode = 'music' | 'rhythm';
+export type ParameterMode = DetectionMode | SubsystemMode;
 export declare const DETECTION_MODES: DetectionMode[];
+export declare const SUBSYSTEM_MODES: SubsystemMode[];
+export declare const ALL_MODES: ParameterMode[];
 export declare const MODE_IDS: Record<DetectionMode, number>;
 export interface ParameterDef {
     name: string;
-    mode: DetectionMode;
+    mode: ParameterMode;
     min: number;
     max: number;
     default: number;
@@ -50,7 +54,7 @@ export interface SweepPoint {
 }
 export interface SweepResult {
     parameter: string;
-    mode: DetectionMode;
+    mode: ParameterMode;
     timestamp: string;
     sweep: SweepPoint[];
     optimal: {
@@ -118,6 +122,8 @@ export interface TuningState {
     };
     optimalParams?: {
         drummer: Record<string, number>;
+        bass: Record<string, number>;
+        hfc: Record<string, number>;
         spectral: Record<string, number>;
         hybrid: Record<string, number>;
     };
@@ -126,4 +132,7 @@ export interface TunerOptions {
     port: string;
     gain?: number;
     outputDir?: string;
+    params?: string[];
+    modes?: ParameterMode[];
+    patterns?: string[];
 }

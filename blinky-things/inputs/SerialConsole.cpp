@@ -4,6 +4,7 @@
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
 #include "../music/MusicMode.h"
+#include "../music/RhythmAnalyzer.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../types/Version.h"
@@ -14,7 +15,7 @@ extern const DeviceConfig& config;
 SerialConsole* SerialConsole::instance_ = nullptr;
 
 SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), music_(nullptr), configStorage_(nullptr) {
+    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), music_(nullptr), rhythm_(nullptr), configStorage_(nullptr) {
     instance_ = this;
 }
 
@@ -207,6 +208,20 @@ void SerialConsole::registerSettings() {
             "Confidence to unlock BPM", 0.2f, 0.6f);
     }
 
+    // === RHYTHM ANALYZER SETTINGS ===
+    if (rhythm_) {
+        settings_.registerFloat("rhythmminbpm", &rhythm_->minBPM, "rhythm",
+            "Minimum BPM for autocorrelation", 60.0f, 120.0f);
+        settings_.registerFloat("rhythmmaxbpm", &rhythm_->maxBPM, "rhythm",
+            "Maximum BPM for autocorrelation", 120.0f, 240.0f);
+        settings_.registerUint32("rhythminterval", &rhythm_->autocorrUpdateIntervalMs, "rhythm",
+            "Autocorrelation update interval (ms)", 500, 2000);
+        settings_.registerFloat("beatthresh", &rhythm_->beatLikelihoodThreshold, "rhythm",
+            "Beat likelihood threshold", 0.5f, 0.9f);
+        settings_.registerFloat("minperiodicity", &rhythm_->minPeriodicityStrength, "rhythm",
+            "Minimum periodicity strength", 0.3f, 0.8f);
+    }
+
 }
 
 void SerialConsole::update() {
@@ -386,6 +401,26 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    if (strcmp(cmd, "test reset rhythm") == 0) {
+        if (rhythm_) {
+            rhythm_->reset();
+            Serial.println(F("OK rhythm reset"));
+        } else {
+            Serial.println(F("ERROR: Rhythm analyzer not available"));
+        }
+        return true;
+    }
+
+    if (strcmp(cmd, "test reset music") == 0) {
+        if (music_) {
+            music_->reset();
+            Serial.println(F("OK music reset"));
+        } else {
+            Serial.println(F("ERROR: Music mode not available"));
+        }
+        return true;
+    }
+
     // Note: "test reset baselines" command removed with simplified transient detection
 
     // === MUSIC MODE STATUS ===
@@ -426,6 +461,33 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    // === RHYTHM ANALYZER STATUS ===
+    if (strcmp(cmd, "rhythm") == 0 || strcmp(cmd, "rhythm status") == 0) {
+        if (rhythm_) {
+            Serial.println(F("=== Rhythm Analyzer Status ==="));
+            Serial.print(F("Detected BPM: "));
+            Serial.println(rhythm_->getDetectedBPM(), 1);
+            Serial.print(F("Period: "));
+            Serial.print(rhythm_->detectedPeriodMs, 1);
+            Serial.println(F(" ms"));
+            Serial.print(F("Periodicity Strength: "));
+            Serial.println(rhythm_->periodicityStrength, 2);
+            Serial.print(F("Beat Likelihood: "));
+            Serial.println(rhythm_->beatLikelihood, 2);
+            Serial.print(F("Buffer Fill: "));
+            Serial.print(rhythm_->getBufferFillLevel());
+            Serial.print(F("/"));
+            Serial.println(RhythmAnalyzer::BUFFER_SIZE);
+            Serial.print(F("BPM Range: "));
+            Serial.print(rhythm_->minBPM, 0);
+            Serial.print(F("-"));
+            Serial.println(rhythm_->maxBPM, 0);
+        } else {
+            Serial.println(F("Rhythm analyzer not available"));
+        }
+        return true;
+    }
+
     if (strcmp(cmd, "presets") == 0) {
         Serial.println(F("Available presets:"));
         Serial.println(F("  default - Production defaults"));
@@ -447,10 +509,44 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    // === DETECTION MODE STATUS ===
+    if (strcmp(cmd, "mode") == 0) {
+        if (mic_) {
+            uint8_t mode = mic_->getDetectionMode();
+            Serial.println(F("=== Detection Mode Status ==="));
+            Serial.print(F("Current Mode: "));
+            Serial.print(mode);
+            Serial.print(F(" - "));
+            switch(mode) {
+                case 0: Serial.println(F("DRUMMER")); break;
+                case 1: Serial.println(F("BASS_BAND")); break;
+                case 2: Serial.println(F("HFC")); break;
+                case 3: Serial.println(F("SPECTRAL_FLUX")); break;
+                case 4: Serial.println(F("HYBRID")); break;
+                default: Serial.println(F("UNKNOWN")); break;
+            }
+            // Mode-specific diagnostics
+            if (mode == 1) {
+                Serial.print(F("Bass Level: "));
+                Serial.println(mic_->getBassLevel(), 3);
+            } else if (mode == 3 || mode == 4) {
+                Serial.print(F("Flux Value: "));
+                Serial.println(mic_->getLastFluxValue(), 3);
+            }
+            Serial.print(F("Transient Threshold: "));
+            Serial.println(mic_->transientThreshold, 2);
+            Serial.print(F("Recent Average: "));
+            Serial.println(mic_->getRecentAverage(), 3);
+        } else {
+            Serial.println(F("Microphone not available"));
+        }
+        return true;
+    }
+
     // === CONFIGURATION COMMANDS ===
     if (strcmp(cmd, "save") == 0) {
         if (configStorage_ && fireGenerator_ && mic_) {
-            configStorage_->saveConfiguration(fireGenerator_->getParams(), *mic_);
+            configStorage_->saveConfiguration(fireGenerator_->getParams(), *mic_, rhythm_, music_);
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -460,7 +556,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
 
     if (strcmp(cmd, "load") == 0) {
         if (configStorage_ && fireGenerator_ && mic_) {
-            configStorage_->loadConfiguration(fireGenerator_->getParamsMutable(), *mic_);
+            configStorage_->loadConfiguration(fireGenerator_->getParamsMutable(), *mic_, rhythm_, music_);
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -538,6 +634,25 @@ void SerialConsole::streamTick() {
     if (!streamEnabled_) return;
 
     uint32_t now = millis();
+
+    // STATUS update at ~1Hz
+    static uint32_t lastStatusMs = 0;
+    if (mic_ && (now - lastStatusMs >= 1000)) {
+        lastStatusMs = now;
+        Serial.print(F("{\"type\":\"STATUS\",\"ts\":"));
+        Serial.print(now);
+        Serial.print(F(",\"mode\":"));
+        Serial.print(mic_->getDetectionMode());
+        Serial.print(F(",\"hwGain\":"));
+        Serial.print(mic_->getHwGain());
+        Serial.print(F(",\"level\":"));
+        Serial.print(mic_->getLevel(), 2);
+        Serial.print(F(",\"avgLevel\":"));
+        Serial.print(mic_->getRecentAverage(), 2);
+        Serial.print(F(",\"peakLevel\":"));
+        Serial.print(mic_->getPeakLevel(), 2);
+        Serial.println(F("}"));
+    }
 
     // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
     uint16_t period = streamFast_ ? STREAM_FAST_PERIOD_MS : STREAM_PERIOD_MS;
@@ -633,6 +748,26 @@ void SerialConsole::streamTick() {
             Serial.print(fireGenerator_->getTotalHeat());
             Serial.print(F(",\"pct\":"));
             Serial.print(fireGenerator_->getBrightnessPercent(), 1);
+            Serial.print(F("}"));
+        }
+
+        // RhythmAnalyzer telemetry (always include when rhythm_ is available)
+        // Format: "r":{"bpm":125.3,"str":0.82,"per":480.2,"lik":0.73,"ph":0.45,"buf":256}
+        // bpm = detected BPM, str = periodicity strength, per = period (ms)
+        // lik = beat likelihood, ph = phase, buf = buffer fill level
+        if (rhythm_) {
+            Serial.print(F(",\"r\":{\"bpm\":"));
+            Serial.print(rhythm_->getDetectedBPM(), 1);
+            Serial.print(F(",\"str\":"));
+            Serial.print(rhythm_->periodicityStrength, 2);
+            Serial.print(F(",\"per\":"));
+            Serial.print(rhythm_->detectedPeriodMs, 1);
+            Serial.print(F(",\"lik\":"));
+            Serial.print(rhythm_->beatLikelihood, 2);
+            Serial.print(F(",\"ph\":"));
+            Serial.print(rhythm_->getCurrentPhase(), 2);
+            Serial.print(F(",\"buf\":"));
+            Serial.print(rhythm_->getBufferFillLevel());
             Serial.print(F("}"));
         }
 

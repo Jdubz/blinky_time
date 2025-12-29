@@ -76,6 +76,7 @@ test_report.html
 *.log
 test-results/
 coverage/
+blinky-test-player/tuning-results/
 
 # Scratch and Experimental Code
 scratch/

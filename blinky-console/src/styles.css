@@ -764,6 +764,65 @@ body {
   color: #3b82f6;
 }
 
+/* ===== Telemetry Indicators ===== */
+.telemetry-indicators {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  background-color: var(--bg-tertiary);
+  border-radius: var(--border-radius);
+  padding: 0.5rem 0.75rem;
+  margin-top: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.telemetry-group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.telemetry-label {
+  color: var(--text-secondary);
+  font-size: 0.6875rem;
+}
+
+.telemetry-value {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.telemetry-value.good {
+  color: var(--accent-success);
+}
+
+.telemetry-value.warn {
+  color: var(--accent-warning);
+}
+
+/* Beat markers */
+.beat-marker {
+  pointer-events: none;
+}
+
+.beat-marker-icon {
+  user-select: none;
+  animation: beatPulse 0.3s ease-out;
+}
+
+@keyframes beatPulse {
+  0% {
+    transform: scale(1.5);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
 /* ===== Battery Status ===== */
 .battery-status-header {
   display: flex;

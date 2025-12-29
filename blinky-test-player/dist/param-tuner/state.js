@@ -225,6 +225,8 @@ export class StateManager {
         if (!this.state.optimalParams) {
             this.state.optimalParams = {
                 drummer: {},
+                bass: {},
+                hfc: {},
                 spectral: {},
                 hybrid: {},
             };
