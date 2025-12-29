@@ -245,10 +245,12 @@ float AdaptiveMic::computeLocalMedian() const {
   }
 
   // Copy to temporary array for sorting
-  float sorted[THRESHOLD_BUFFER_SIZE];
+  // Initialize to zero to satisfy static analysis (cppcheck uninitvar warning)
+  float sorted[THRESHOLD_BUFFER_SIZE] = {0.0f};
   int n = minValue(thresholdBufferCount_, THRESHOLD_BUFFER_SIZE);
 
-  // Return default if no samples yet
+  // Note: n >= 3 is guaranteed by the thresholdBufferCount_ < 3 check above,
+  // but we keep this guard for defensive programming
   if (n == 0) {
     return 0.0f;
   }
