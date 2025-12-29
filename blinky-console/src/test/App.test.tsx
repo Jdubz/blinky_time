@@ -10,6 +10,8 @@ const mockUseSerial: UseSerialReturn = {
   deviceInfo: null,
   settings: [],
   settingsByCategory: {},
+  presets: [],
+  currentPreset: null,
   isStreaming: false,
   audioData: null,
   batteryData: null,
@@ -32,6 +34,7 @@ const mockUseSerial: UseSerialReturn = {
   resetDefaults: vi.fn(),
   refreshSettings: vi.fn(),
   requestBatteryStatus: vi.fn(),
+  applyPreset: vi.fn(),
 };
 
 vi.mock('../hooks/useSerial', () => ({

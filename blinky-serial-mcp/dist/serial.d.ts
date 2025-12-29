@@ -10,6 +10,9 @@ export declare class BlinkySerial extends EventEmitter {
     private deviceInfo;
     private streaming;
     private pendingCommand;
+    private responseBuffer;
+    private responseTimeout;
+    private static readonly RESPONSE_LINE_TIMEOUT_MS;
     /**
      * List available serial ports
      */

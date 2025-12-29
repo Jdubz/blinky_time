@@ -18,16 +18,10 @@ export interface AudioSample {
   raw: number;    // Raw ADC level (0-1)
   h: number;      // Hardware gain (0-80)
   alive: number;  // PDM status (0 or 1)
-  lo: number;     // Low band onset (0 or 1)
-  hi: number;     // High band onset (0 or 1)
-  los: number;    // Low band strength (0-1)
-  his: number;    // High band strength (0-1)
   z: number;      // Zero-crossing rate (0-1)
   // Debug fields (only present in debug stream mode)
-  lob?: number;   // Low band baseline
-  hib?: number;   // High band baseline
-  lop?: number;   // Low band previous energy
-  hip?: number;   // High band previous energy
+  avg?: number;   // Recent average level (for threshold calculation)
+  prev?: number;  // Previous frame level (for attack detection)
 }
 
 export interface MusicModeState {
@@ -38,6 +32,16 @@ export interface MusicModeState {
   q: number;      // Quarter note event (0 or 1)
   h: number;      // Half note event (0 or 1)
   w: number;      // Whole note event (0 or 1)
+  // Debug fields (only present in debug stream mode)
+  sb?: number;    // Stable beats count
+  mb?: number;    // Missed beats count
+  pe?: number;    // Peak tempo energy (comb filter confidence)
+  ei?: number;    // PLL error integral
+}
+
+export interface LedTelemetry {
+  tot: number;    // Total heat (sum of all heat values)
+  pct: number;    // Brightness percent (0-100)
 }
 
 export interface BeatEvent {

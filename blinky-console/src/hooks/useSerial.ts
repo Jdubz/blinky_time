@@ -24,6 +24,10 @@ export interface UseSerialReturn {
   settings: DeviceSetting[];
   settingsByCategory: SettingsByCategory;
 
+  // Preset data
+  presets: string[];
+  currentPreset: string | null;
+
   // Streaming data
   isStreaming: boolean;
   audioData: AudioSample | null;
@@ -57,6 +61,7 @@ export interface UseSerialReturn {
   resetDefaults: () => Promise<void>;
   refreshSettings: () => Promise<void>;
   requestBatteryStatus: () => Promise<void>;
+  applyPreset: (name: string) => Promise<void>;
 }
 
 const MAX_CONSOLE_LINES = 500;
@@ -101,6 +106,8 @@ export function useSerial(): UseSerialReturn {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [settings, setSettings] = useState<DeviceSetting[]>([]);
+  const [presets, setPresets] = useState<string[]>([]);
+  const [currentPreset, setCurrentPreset] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
@@ -275,6 +282,12 @@ export function useSerial(): UseSerialReturn {
       if (settingsResponse) {
         setSettings(settingsResponse.settings);
       }
+
+      // Fetch available presets
+      const presetList = await serialService.getPresets();
+      if (presetList) {
+        setPresets(presetList);
+      }
     }
   }, []);
 
@@ -342,6 +355,23 @@ export function useSerial(): UseSerialReturn {
     await serialService.requestBatteryStatus();
   }, []);
 
+  // Apply a preset
+  const applyPreset = useCallback(async (name: string) => {
+    try {
+      await serialService.applyPreset(name);
+      setCurrentPreset(name);
+      // Refresh settings after applying preset
+      const settingsResponse = await serialService.getSettings();
+      if (settingsResponse) {
+        setSettings(settingsResponse.settings);
+      }
+    } catch (error) {
+      console.error('Failed to apply preset:', error);
+      // Re-throw to allow caller to handle if needed
+      throw error;
+    }
+  }, []);
+
   // Clear console
   const clearConsole = useCallback(() => {
     setConsoleLines([]);
@@ -392,6 +422,8 @@ export function useSerial(): UseSerialReturn {
     deviceInfo,
     settings,
     settingsByCategory,
+    presets,
+    currentPreset,
     isStreaming,
     audioData,
     batteryData,
@@ -414,5 +446,6 @@ export function useSerial(): UseSerialReturn {
     resetDefaults,
     refreshSettings,
     requestBatteryStatus,
+    applyPreset,
   };
 }

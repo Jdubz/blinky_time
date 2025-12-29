@@ -28,6 +28,7 @@ function ensureTestResultsDir() {
 const serial = new BlinkySerial();
 // Audio sample buffer for monitoring
 let lastAudioSample = null;
+let lastLedSample = null;
 let audioSampleCount = 0;
 // Transient event buffer for test mode
 let transientBuffer = [];
@@ -89,6 +90,9 @@ serial.on('beat', (beat) => {
             type: beat.type,
         });
     }
+});
+serial.on('led', (led) => {
+    lastLedSample = led;
 });
 // Create MCP server
 const server = new Server({
@@ -269,7 +273,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: 'monitor_audio',
-                description: 'Monitor audio for a specified duration and return statistics',
+                description: 'Monitor audio for a specified duration and return statistics including transient count, level min/max/avg, and music mode status',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -278,6 +282,53 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             description: 'Duration to monitor in milliseconds (default: 1000)',
                         },
                     },
+                },
+            },
+            {
+                name: 'get_music_status',
+                description: 'Get current music mode status (BPM, confidence, phase, beat counts). Requires streaming to be active.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {},
+                },
+            },
+            {
+                name: 'monitor_music',
+                description: 'Monitor music mode for BPM tracking assessment over a duration. Returns BPM accuracy, stability, confidence trends, and beat detection metrics.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        duration_ms: {
+                            type: 'number',
+                            description: 'Duration to monitor in milliseconds (default: 5000)',
+                        },
+                        expected_bpm: {
+                            type: 'number',
+                            description: 'Expected BPM for accuracy calculation (optional)',
+                        },
+                    },
+                },
+            },
+            {
+                name: 'list_presets',
+                description: 'List available audio presets (default, quiet, loud, live). Presets provide pre-tuned parameter sets for different audio scenarios.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {},
+                },
+            },
+            {
+                name: 'apply_preset',
+                description: 'Apply a named audio preset. Presets configure transient detection, AGC, and music mode parameters for specific scenarios: default (balanced), quiet (low-level audio), loud (high-level audio), live (live performance).',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        name: {
+                            type: 'string',
+                            description: 'Preset name: "default", "quiet", "loud", or "live"',
+                        },
+                    },
+                    required: ['name'],
                 },
             },
         ],
@@ -348,6 +399,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             case 'stream_start': {
                 await serial.startStream();
                 lastAudioSample = null;
+                lastLedSample = null;
                 audioSampleCount = 0;
                 return {
                     content: [
@@ -391,6 +443,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             type: 'text',
                             text: JSON.stringify({
                                 sample: lastAudioSample,
+                                music: lastMusicState,
+                                led: lastLedSample,
                                 sampleCount: audioSampleCount,
                             }, null, 2),
                         },
@@ -509,24 +563,241 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 if (!state.streaming) {
                     await serial.startStream();
                 }
-                // Collect samples for the duration
-                const samples = [];
+                // Initialize statistics collectors
+                let transientCount = 0;
+                let levelSum = 0;
+                let levelMin = Infinity;
+                let levelMax = -Infinity;
+                let rawSum = 0;
+                let rawMin = Infinity;
+                let rawMax = -Infinity;
+                let musicSampleCount = 0;
+                let musicActiveCount = 0;
+                let bpmSum = 0;
+                let confSum = 0;
+                let beatCount = 0;
+                let samplesDuringMonitor = 0;
                 const startCount = audioSampleCount;
+                // Set up temporary listeners for statistics
+                const onAudio = (sample) => {
+                    samplesDuringMonitor++;
+                    if (sample.t > 0)
+                        transientCount++;
+                    levelSum += sample.l;
+                    levelMin = Math.min(levelMin, sample.l);
+                    levelMax = Math.max(levelMax, sample.l);
+                    rawSum += sample.raw;
+                    rawMin = Math.min(rawMin, sample.raw);
+                    rawMax = Math.max(rawMax, sample.raw);
+                };
+                const onMusic = (musicState) => {
+                    musicSampleCount++;
+                    if (musicState.a === 1) {
+                        musicActiveCount++;
+                        bpmSum += musicState.bpm;
+                        confSum += musicState.conf;
+                    }
+                    if (musicState.q === 1)
+                        beatCount++;
+                };
+                serial.on('audio', onAudio);
+                serial.on('music', onMusic);
                 await new Promise(resolve => setTimeout(resolve, durationMs));
+                serial.off('audio', onAudio);
+                serial.off('music', onMusic);
                 const endCount = audioSampleCount;
-                const sampleRate = (endCount - startCount) / (durationMs / 1000);
-                // Get current sample for analysis
-                const current = lastAudioSample;
+                const samplesReceived = endCount - startCount;
+                const sampleRate = samplesReceived / (durationMs / 1000);
+                // Build response with statistics
+                const response = {
+                    durationMs,
+                    samplesReceived,
+                    sampleRate: sampleRate.toFixed(1) + ' Hz',
+                    statistics: {
+                        transientCount,
+                        transientRate: (transientCount / (durationMs / 1000)).toFixed(2) + ' /sec',
+                        level: {
+                            min: levelMin === Infinity ? null : parseFloat(levelMin.toFixed(3)),
+                            max: levelMax === -Infinity ? null : parseFloat(levelMax.toFixed(3)),
+                            avg: samplesDuringMonitor > 0 ? parseFloat((levelSum / samplesDuringMonitor).toFixed(3)) : null,
+                        },
+                        raw: {
+                            min: rawMin === Infinity ? null : parseFloat(rawMin.toFixed(3)),
+                            max: rawMax === -Infinity ? null : parseFloat(rawMax.toFixed(3)),
+                            avg: samplesDuringMonitor > 0 ? parseFloat((rawSum / samplesDuringMonitor).toFixed(3)) : null,
+                        },
+                    },
+                    currentSample: lastAudioSample,
+                };
+                // Add music mode statistics if we received any music data
+                if (musicSampleCount > 0) {
+                    response.musicMode = {
+                        samplesReceived: musicSampleCount,
+                        activePercent: parseFloat(((musicActiveCount / musicSampleCount) * 100).toFixed(1)),
+                        avgBpm: musicActiveCount > 0 ? parseFloat((bpmSum / musicActiveCount).toFixed(1)) : null,
+                        avgConfidence: musicActiveCount > 0 ? parseFloat((confSum / musicActiveCount).toFixed(2)) : null,
+                        beatCount,
+                        beatRate: (beatCount / (durationMs / 1000)).toFixed(2) + ' /sec',
+                    };
+                    response.currentMusic = lastMusicState;
+                }
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(response, null, 2),
+                        },
+                    ],
+                };
+            }
+            case 'get_music_status': {
+                const state = serial.getState();
+                if (!state.streaming) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: 'Streaming not active. Call stream_start first.',
+                                    hint: 'Use stream_start to begin receiving music mode data',
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                if (!lastMusicState) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: 'No music mode data received yet',
+                                    hint: 'Wait a moment for data to arrive, or check if device supports music mode',
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
                 return {
                     content: [
                         {
                             type: 'text',
                             text: JSON.stringify({
-                                durationMs,
-                                samplesReceived: endCount - startCount,
-                                sampleRate: sampleRate.toFixed(1) + ' Hz',
-                                currentSample: current,
+                                active: lastMusicState.a === 1,
+                                bpm: lastMusicState.bpm,
+                                phase: lastMusicState.ph,
+                                confidence: lastMusicState.conf,
+                                beats: {
+                                    quarter: lastMusicState.q === 1,
+                                    half: lastMusicState.h === 1,
+                                    whole: lastMusicState.w === 1,
+                                },
+                                debug: {
+                                    stableBeats: lastMusicState.sb,
+                                    missedBeats: lastMusicState.mb,
+                                    peakEnergy: lastMusicState.pe,
+                                    errorIntegral: lastMusicState.ei,
+                                },
                             }, null, 2),
+                        },
+                    ],
+                };
+            }
+            case 'monitor_music': {
+                const durationMs = args.duration_ms || 5000;
+                const expectedBpm = args.expected_bpm;
+                const state = serial.getState();
+                if (!state.streaming) {
+                    await serial.startStream();
+                }
+                // Enable debug mode for detailed music tracking
+                await serial.sendCommand('stream debug');
+                const samples = [];
+                const beats = [];
+                const startTime = Date.now();
+                const onMusic = (musicState) => {
+                    const timestampMs = Date.now() - startTime;
+                    samples.push({ ...musicState, timestampMs });
+                    if (musicState.q === 1)
+                        beats.push({ type: 'quarter', timestampMs, bpm: musicState.bpm });
+                    if (musicState.h === 1)
+                        beats.push({ type: 'half', timestampMs, bpm: musicState.bpm });
+                    if (musicState.w === 1)
+                        beats.push({ type: 'whole', timestampMs, bpm: musicState.bpm });
+                };
+                serial.on('music', onMusic);
+                await new Promise(resolve => setTimeout(resolve, durationMs));
+                serial.off('music', onMusic);
+                // Calculate metrics
+                const activeStates = samples.filter(s => s.a === 1);
+                const firstActive = activeStates.length > 0 ? activeStates[0] : null;
+                const bpmValues = activeStates.map(s => s.bpm);
+                // BPM statistics
+                const avgBpm = bpmValues.length > 0
+                    ? bpmValues.reduce((a, b) => a + b, 0) / bpmValues.length : 0;
+                const bpmVariance = bpmValues.length > 1
+                    ? bpmValues.reduce((sum, b) => sum + Math.pow(b - avgBpm, 2), 0) / bpmValues.length : 0;
+                const bpmStdDev = Math.sqrt(bpmVariance);
+                // Confidence statistics
+                const confValues = activeStates.map(s => s.conf);
+                const avgConf = confValues.length > 0
+                    ? confValues.reduce((a, b) => a + b, 0) / confValues.length : 0;
+                const finalConf = samples.length > 0 ? samples[samples.length - 1].conf : 0;
+                // Stability assessment
+                let stability;
+                if (bpmStdDev < 0.5)
+                    stability = 'excellent';
+                else if (bpmStdDev < 2)
+                    stability = 'good';
+                else if (bpmStdDev < 5)
+                    stability = 'fair';
+                else
+                    stability = 'poor';
+                // BPM accuracy if expected provided
+                const bpmError = expectedBpm && avgBpm > 0
+                    ? Math.abs(avgBpm - expectedBpm) / expectedBpm * 100 : null;
+                // Get debug fields from last sample
+                const lastSample = samples.length > 0 ? samples[samples.length - 1] : null;
+                const response = {
+                    durationMs,
+                    totalSamples: samples.length,
+                    activation: {
+                        activeSamples: activeStates.length,
+                        activePercent: samples.length > 0 ? parseFloat(((activeStates.length / samples.length) * 100).toFixed(1)) : 0,
+                        activationMs: firstActive?.timestampMs || null,
+                    },
+                    bpm: {
+                        current: lastSample?.bpm || null,
+                        average: avgBpm > 0 ? parseFloat(avgBpm.toFixed(1)) : null,
+                        stdDev: parseFloat(bpmStdDev.toFixed(2)),
+                        stability,
+                        expected: expectedBpm || null,
+                        errorPercent: bpmError !== null ? parseFloat(bpmError.toFixed(1)) : null,
+                    },
+                    confidence: {
+                        current: finalConf,
+                        average: parseFloat(avgConf.toFixed(2)),
+                    },
+                    beats: {
+                        total: beats.length,
+                        quarterNotes: beats.filter(b => b.type === 'quarter').length,
+                        rate: parseFloat((beats.filter(b => b.type === 'quarter').length / (durationMs / 1000)).toFixed(2)),
+                    },
+                };
+                // Add debug info if available
+                if (lastSample && (lastSample.sb !== undefined || lastSample.mb !== undefined)) {
+                    response.debug = {
+                        stableBeats: lastSample.sb,
+                        missedBeats: lastSample.mb,
+                        peakEnergy: lastSample.pe !== undefined ? parseFloat(lastSample.pe.toFixed(4)) : null,
+                        errorIntegral: lastSample.ei !== undefined ? parseFloat(lastSample.ei.toFixed(3)) : null,
+                    };
+                }
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(response, null, 2),
                         },
                     ],
                 };
@@ -868,6 +1139,73 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
                     await serial.disconnect();
                 }
+            }
+            case 'list_presets': {
+                // Query device for available presets in JSON format
+                const jsonResponse = await serial.sendCommand('json presets');
+                try {
+                    const presets = JSON.parse(jsonResponse);
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    presets,
+                                    descriptions: {
+                                        default: 'Production defaults - balanced for general use',
+                                        quiet: 'Optimized for low-level/ambient audio - lower thresholds, adaptive features enabled',
+                                        loud: 'Optimized for loud sources - higher thresholds, fast AGC disabled',
+                                        live: 'Balanced for live performance - adaptive features enabled, moderate thresholds',
+                                    },
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                catch {
+                    // Fall back to text response using non-JSON command
+                    const textResponse = await serial.sendCommand('presets');
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: textResponse,
+                            },
+                        ],
+                    };
+                }
+            }
+            case 'apply_preset': {
+                const presetName = args.name.toLowerCase();
+                const validPresets = ['default', 'quiet', 'loud', 'live'];
+                if (!validPresets.includes(presetName)) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: `Invalid preset name: ${presetName}`,
+                                    validPresets,
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                const response = await serial.sendCommand(`preset ${presetName}`);
+                // Check if the preset was applied successfully
+                const success = response.includes('OK') || response.includes('Applied');
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success,
+                                preset: presetName,
+                                response: response.trim(),
+                            }, null, 2),
+                        },
+                    ],
+                };
             }
             default:
                 return {

@@ -32,6 +32,19 @@ void MusicMode::reset() {
     for (uint8_t i = 0; i < MAX_INTERVALS; i++) {
         onsetIntervals_[i] = 0;
     }
+
+    // Clear comb filter state
+    for (int i = 0; i < NUM_TEMPO_FILTERS; i++) {
+        tempoEnergy_[i] = 0.0f;
+    }
+    for (int i = 0; i < COMB_DELAY_SIZE; i++) {
+        combDelayLine_[i] = 0.0f;
+    }
+    combDelayIdx_ = 0;
+    lastOnsetStrength_ = 0.0f;
+
+    // BPM lock state
+    bpmLocked_ = false;
 }
 
 void MusicMode::applyExternalBPMGuidance(float externalBPM, float confidence) {
@@ -82,8 +95,21 @@ void MusicMode::update(float dt) {
     halfNote = false;
     wholeNote = false;
 
+    // Update BPM lock state with hysteresis
+    // Lock when confidence rises above threshold, unlock when it falls below unlock threshold
+    if (!bpmLocked_ && confidence_ >= bpmLockThreshold) {
+        bpmLocked_ = true;
+    } else if (bpmLocked_ && confidence_ < bpmUnlockThreshold) {
+        bpmLocked_ = false;
+    }
+
     // Update phase (may trigger beat events)
     updatePhase(dt);
+
+    // Update comb filter tempo estimation every frame
+    // This provides continuous tempo tracking even between onsets
+    updateTempoFilters(lastOnsetStrength_, dt);
+    lastOnsetStrength_ = 0.0f;  // Reset after use
 
     // Check for missed beats (no onsets for too long)
     // Only check once per beat period to avoid incrementing missedBeats_ every frame
@@ -95,9 +121,7 @@ void MusicMode::update(float dt) {
     if (active && timeSinceCheck > beatPeriodMs_) {
         if (timeSinceOnset > beatPeriodMs_ * missedBeatTolerance) {
             missedBeats_++;
-            // FIX BUG #16: Missed beat should be penalized same as incorrect timing
-            // No detection is arguably worse than wrong timing
-            confidence_ -= confidenceDecrement;
+            confidence_ -= missedBeatPenalty;
             if (confidence_ < 0.0f) confidence_ = 0.0f;
         }
         lastMissedBeatCheck_ = nowMs;
@@ -160,6 +184,10 @@ void MusicMode::updatePhase(float dt) {
 }
 
 void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
+    // Store onset strength for comb filter processing in next update()
+    // Low band onsets (bass) get higher weight for tempo tracking
+    lastOnsetStrength_ = isLowBand ? 1.0f : 0.7f;
+
     // Calculate and store inter-onset interval (if we have a previous onset)
     if (lastOnsetTime_ != 0) {
         uint32_t interval = timestampMs - lastOnsetTime_;
@@ -181,24 +209,38 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
 
     float error = wrappedPhase;
     if (error > 0.5f) error -= 1.0f;  // Wrap to -0.5 to 0.5 range
+    float absError = absFloat(error);
 
-    // PLL correction (Proportional-Integral controller)
-    errorIntegral_ += error;
-    // Anti-windup: clamp integral to prevent excessive accumulation
-    errorIntegral_ = clampFloat(errorIntegral_, -10.0f, 10.0f);
-    float correction = pllKp * error + pllKi * errorIntegral_;
+    // ADAPTIVE PLL GAINS
+    // High confidence = tight tracking (lower gains), Low confidence = fast acquisition (higher gains)
+    // This allows quick lock-on when uncertain, and stable tracking when locked
+    float adaptiveFactor = 2.0f - confidence_;  // Range: 1.0 (high conf) to 2.0 (low conf)
+    float adaptiveKp = pllKp * adaptiveFactor;
+    float adaptiveKi = pllKi * adaptiveFactor;
 
-    // Adjust beat period based on correction
-    beatPeriodMs_ *= (1.0f - correction);
-    bpm = 60000.0f / beatPeriodMs_;
+    // Phase jump on large error with low confidence
+    // If we're way off and not confident, snap to onset rather than slowly correct
+    if (absError > phaseSnapThreshold && confidence_ < phaseSnapConfidence) {
+        phase = 0.0f;  // Snap phase to onset
+        errorIntegral_ = 0.0f;  // Clear integral windup
+    } else {
+        // Normal PLL correction (Proportional-Integral controller)
+        errorIntegral_ += error;
+        // Anti-windup: clamp integral to prevent excessive accumulation
+        errorIntegral_ = clampFloat(errorIntegral_, -10.0f, 10.0f);
+        float correction = adaptiveKp * error + adaptiveKi * errorIntegral_;
 
-    // Clamp BPM to valid range
-    bpm = clampFloat(bpm, bpmMin, bpmMax);
-    beatPeriodMs_ = 60000.0f / bpm;
+        // Adjust beat period based on correction
+        beatPeriodMs_ *= (1.0f - correction);
+        bpm = 60000.0f / beatPeriodMs_;
+
+        // Clamp BPM to valid range
+        bpm = clampFloat(bpm, bpmMin, bpmMax);
+        beatPeriodMs_ = 60000.0f / bpm;
+    }
 
     // Update confidence based on phase error
-    float absError = absFloat(error);
-    if (absError < phaseErrorTolerance) {  // Onset within tolerance of expected position
+    if (absError < stablePhaseThreshold) {  // Onset within threshold of expected position
         stableBeats_++;
         missedBeats_ = 0;
         confidence_ += confidenceIncrement;
@@ -209,7 +251,7 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
         if (confidence_ < 0.0f) confidence_ = 0.0f;
     }
 
-    // Periodically estimate tempo (every 8 intervals to reduce CPU)
+    // Periodically estimate tempo using histogram (backup method, every 8 intervals)
     if (intervalCount_ > 0 && intervalCount_ % 8 == 0) {
         estimateTempo();
     }
@@ -291,12 +333,12 @@ void MusicMode::estimateTempo() {
         // Clamp new BPM to valid range before mixing
         newBPM = clampFloat(newBPM, bpmMin, bpmMax);
 
-        // Smooth update (80% old, 20% new)
-        bpm = bpm * 0.8f + newBPM * 0.2f;
+        // Smooth update using histogramBlend parameter
+        bpm = bpm * (1.0f - histogramBlend) + newBPM * histogramBlend;
         beatPeriodMs_ = 60000.0f / bpm;
 
         // Boost confidence when tempo estimation succeeds
-        confidence_ += 0.2f;
+        confidence_ += confidenceIncrement * 2.0f;  // Double increment for histogram match
         if (confidence_ > 1.0f) confidence_ = 1.0f;
     }
 }
@@ -309,4 +351,94 @@ bool MusicMode::shouldActivate() const {
 bool MusicMode::shouldDeactivate() const {
     return (confidence_ < activationThreshold * 0.5f ||
             missedBeats_ >= maxMissedBeats);
+}
+
+/**
+ * COMB FILTER RESONATOR BANK - Continuous tempo estimation
+ *
+ * Each comb filter resonates at a specific tempo (60-200 BPM).
+ * When onsets occur at regular intervals matching a filter's period,
+ * that filter accumulates energy (resonance). The filter with highest
+ * energy indicates the dominant tempo.
+ *
+ * Advantages over histogram:
+ * - Continuous tracking (every frame, not just every 8 onsets)
+ * - Better octave handling (filters at related tempos compete)
+ * - Faster convergence (resonance builds quickly)
+ * - Handles tempo drift naturally
+ *
+ * Reference: Scheirer, "Tempo and Beat Analysis of Acoustic Musical Signals"
+ */
+void MusicMode::updateTempoFilters(float onsetStrength, float dt) {
+    // Store current onset in delay line
+    combDelayLine_[combDelayIdx_] = onsetStrength;
+
+    // Update each tempo hypothesis
+    for (int i = 0; i < NUM_TEMPO_FILTERS; i++) {
+        float targetBpm = filterIndexToBPM(i);
+        float periodFrames = bpmToFramePeriod(targetBpm);
+        int period = (int)(periodFrames + 0.5f);  // Round to nearest frame
+
+        // Clamp period to valid delay line range
+        if (period < 1) period = 1;
+        if (period >= COMB_DELAY_SIZE) period = COMB_DELAY_SIZE - 1;
+
+        // Get onset from 1 beat ago (comb filter feedback)
+        int delayIdx = (combDelayIdx_ - period + COMB_DELAY_SIZE) % COMB_DELAY_SIZE;
+        float delayedOnset = combDelayLine_[delayIdx];
+
+        // Comb filter resonance: current + weighted delayed (reinforces periodic signals)
+        float resonance = onsetStrength + combFeedback * delayedOnset;
+
+        // Exponential decay of accumulated energy with new resonance added
+        tempoEnergy_[i] = tempoFilterDecay * tempoEnergy_[i] + (1.0f - tempoFilterDecay) * resonance;
+    }
+
+    // Advance delay line index
+    combDelayIdx_ = (combDelayIdx_ + 1) % COMB_DELAY_SIZE;
+
+    // Find peak tempo hypothesis
+    int peakIdx = 0;
+    float peakEnergy = 0.0f;
+    for (int i = 0; i < NUM_TEMPO_FILTERS; i++) {
+        if (tempoEnergy_[i] > peakEnergy) {
+            peakEnergy = tempoEnergy_[i];
+            peakIdx = i;
+        }
+    }
+
+    // Store peak energy for debugging
+    peakTempoEnergy_ = peakEnergy;
+
+    // Update BPM if we have significant energy (avoid updating on noise)
+    // Threshold scales with overall energy to adapt to different volume levels
+    float energySum = 0.0f;
+    for (int i = 0; i < NUM_TEMPO_FILTERS; i++) {
+        energySum += tempoEnergy_[i];
+    }
+    float avgEnergy = energySum / NUM_TEMPO_FILTERS;
+
+    // Only update BPM from comb filters when confidence is LOW (acquisition phase)
+    // When confidence is HIGH, the PLL in onOnsetDetected() is the primary tempo tracker
+    // This prevents competing updates that cause BPM jitter
+    if (confidence_ < combConfidenceThreshold && peakEnergy > avgEnergy * 1.5f && peakEnergy > 0.02f) {
+        float newBPM = filterIndexToBPM(peakIdx);
+
+        // Apply BPM locking rate limit when locked
+        if (bpmLocked_) {
+            float maxDelta = bpmLockMaxChange * dt;  // Max change this frame
+            float delta = newBPM - bpm;
+            if (absFloat(delta) > maxDelta) {
+                // Rate limit: move toward new BPM at max rate
+                newBPM = bpm + (delta > 0 ? maxDelta : -maxDelta);
+            }
+        }
+
+        // Blend based on inverse confidence: lower confidence = more comb filter influence
+        // At confidence=0: 10% new BPM, at confidence=0.5: 5% new BPM
+        float blendFactor = 0.05f + 0.05f * (1.0f - confidence_ * 2.0f);
+        bpm = bpm * (1.0f - blendFactor) + newBPM * blendFactor;
+        bpm = clampFloat(bpm, bpmMin, bpmMax);
+        beatPeriodMs_ = 60000.0f / bpm;
+    }
 }

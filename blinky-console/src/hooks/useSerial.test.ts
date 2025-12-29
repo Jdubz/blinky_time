@@ -31,6 +31,9 @@ vi.mock('../services/serial', () => {
           ],
         })
       ),
+      getPresets: vi.fn(() => Promise.resolve(['default', 'quiet', 'loud', 'live'])),
+      applyPreset: vi.fn(() => Promise.resolve()),
+      requestBatteryStatus: vi.fn(() => Promise.resolve()),
       setSetting: vi.fn(() => Promise.resolve()),
       setStreamEnabled: vi.fn(() => Promise.resolve()),
       saveSettings: vi.fn(() => Promise.resolve()),

@@ -61,6 +61,12 @@ public:
   // Dead zone: ±0.01 around target (no adjustment if within range)
   float    hwTarget = 0.35f;   // Target raw input level for optimal ADC quality
 
+  // Fast AGC for low-level sources (accelerates calibration when signal is persistently low)
+  bool     fastAgcEnabled = true;       // Enable fast AGC when signal is low and gain is high
+  float    fastAgcThreshold = 0.15f;    // Raw level threshold to trigger fast AGC
+  uint16_t fastAgcPeriodMs = 5000;      // Calibration period in fast mode (5s vs 30s)
+  float    fastAgcTrackingTau = 5.0f;   // Tracking tau in fast mode (5s vs 30s)
+
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
@@ -75,6 +81,13 @@ public:
   float attackMultiplier   = 1.1f;    // Must be 10% louder than previous frame (rapid rise)
   float averageTau         = 0.8f;    // Recent average tracking time (seconds)
   uint16_t cooldownMs      = 40;      // Cooldown between hits (ms)
+
+  // Adaptive threshold scaling for low-level audio
+  // When hardware gain is near max and signal is still low, scales down transientThreshold
+  bool  adaptiveThresholdEnabled = false;  // Enable adaptive threshold scaling (default off for backwards compat)
+  float adaptiveMinRaw = 0.1f;             // Below this raw level, start scaling threshold
+  float adaptiveMaxScale = 0.6f;           // Minimum scale factor (threshold * 0.6 at very low levels)
+  float adaptiveBlendTau = 5.0f;           // Blend time for smooth transitions (seconds)
 
   // ---- DETECTION MODE ----
   // Switch between different onset detection algorithms
@@ -123,6 +136,8 @@ public:
   inline bool isHwGainLocked() const { return hwGainLocked_; }     // Check if hardware gain is locked for testing
   inline uint8_t getDetectionMode() const { return detectionMode; }  // Current detection algorithm
   inline float getBassLevel() const { return bassFilteredLevel; }    // Bass-filtered level (for debugging)
+  inline float getAdaptiveScale() const { return adaptiveScale_; }   // Current adaptive threshold scale (for debugging)
+  inline bool isInFastAgcMode() const { return inFastAgcMode_; }     // Check if fast AGC is active
   inline float getLastFluxValue() const { return lastFluxValue_; }   // Last spectral flux value (for RhythmAnalyzer)
 
 public:
@@ -149,11 +164,20 @@ private:
   IPdmMic& pdm_;
   ISystemTime& time_;
 
-  // ISR accumulators
+  // ISR accumulators - written by ISR, read/reset by main thread
+  // Thread safety: consumeISR() disables interrupts during read to prevent
+  // torn reads of multi-byte values. The volatile keyword ensures the
+  // compiler doesn't optimize away reads/writes.
+  //
+  // Wraparound behavior: s_numSamples and s_sumAbs can technically overflow
+  // after ~75 hours at 16kHz (2^32 samples). In practice, consumeISR() is
+  // called every frame (~16ms), resetting accumulators before overflow.
+  // Even if overflow occurred, the ratio-based calculations (average level)
+  // would still produce valid results due to integer wraparound semantics.
   static AdaptiveMic* s_instance;
   volatile static uint32_t s_isrCount;
-  volatile static uint64_t s_sumAbs;
-  volatile static uint32_t s_numSamples;
+  volatile static uint64_t s_sumAbs;        // Sum of absolute sample values (uint64 prevents overflow)
+  volatile static uint32_t s_numSamples;    // Count of samples processed (reset each frame)
   volatile static uint16_t s_maxAbs;
   volatile static uint32_t s_zeroCrossings;  // Count of zero crossings
   volatile static int16_t s_lastSample;       // Previous sample for ZCR
@@ -189,6 +213,15 @@ private:
   // Hardware gain lock state (for testing/bypass)
   bool hwGainLocked_ = false;   // When true, AGC is disabled and gain is fixed
 
+  // Adaptive threshold state
+  float adaptiveScale_ = 1.0f;  // Current threshold scale factor (smoothed)
+
+  // Fast AGC state
+  bool inFastAgcMode_ = false;  // Currently in fast AGC mode
+
+  // Detection mode tracking (for clearing threshold buffer on mode change)
+  uint8_t lastDetectionMode_ = 0;
+
   // Bass band filter state
   BiquadFilter bassFilter;
   float bassFilteredLevel = 0.0f;     // Filtered bass level (for envelope tracking)
@@ -203,6 +236,19 @@ private:
   SpectralFlux spectralFlux_;
   float fluxRecentAverage_ = 0.0f;    // Rolling average for flux detection
   float lastFluxValue_ = 0.0f;        // Last computed flux value (for RhythmAnalyzer)
+
+  // Local median adaptive threshold buffer
+  // Stores recent detection function values for adaptive thresholding
+  // Local median + offset is more robust than global exponential average
+  static constexpr int THRESHOLD_BUFFER_SIZE = 16;  // ~250ms at 60fps
+  float thresholdBuffer_[THRESHOLD_BUFFER_SIZE] = {0};
+  int thresholdBufferIdx_ = 0;
+  int thresholdBufferCount_ = 0;
+
+  // Helper methods for adaptive threshold
+  float computeLocalMedian() const;
+  float computeLocalThreshold(float median) const;
+  void updateThresholdBuffer(float value);
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);

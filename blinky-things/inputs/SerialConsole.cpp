@@ -1,5 +1,6 @@
 #include "SerialConsole.h"
 #include "../config/TotemDefaults.h"
+#include "../config/Presets.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
 #include "../music/MusicMode.h"
@@ -81,6 +82,16 @@ void SerialConsole::registerSettings() {
         // Hardware AGC parameters (primary - optimizes ADC signal quality)
         settings_.registerFloat("hwtarget", &mic_->hwTarget, "agc",
             "HW target level (raw, ±0.01 dead zone)", 0.05f, 0.9f);
+
+        // Fast AGC for low-level sources
+        settings_.registerBool("fastagc", &mic_->fastAgcEnabled, "agc",
+            "Enable fast AGC for low-level sources");
+        settings_.registerFloat("fastagcthresh", &mic_->fastAgcThreshold, "agc",
+            "Raw level threshold for fast AGC", 0.05f, 0.3f);
+        settings_.registerUint16("fastagcperiod", &mic_->fastAgcPeriodMs, "agc",
+            "Fast AGC calibration period (ms)", 2000, 15000);
+        settings_.registerFloat("fastagctau", &mic_->fastAgcTrackingTau, "agc",
+            "Fast AGC tracking time (s)", 1.0f, 15.0f);
     }
 
     // === SIMPLIFIED TRANSIENT DETECTION SETTINGS ===
@@ -93,6 +104,16 @@ void SerialConsole::registerSettings() {
             "Recent average tracking time (s)", 0.1f, 5.0f);
         settings_.registerUint16("cooldown", &mic_->cooldownMs, "transient",
             "Cooldown between hits (ms)", 20, 500);
+
+        // Adaptive threshold for low-level audio
+        settings_.registerBool("adaptthresh", &mic_->adaptiveThresholdEnabled, "transient",
+            "Enable adaptive threshold scaling");
+        settings_.registerFloat("adaptminraw", &mic_->adaptiveMinRaw, "transient",
+            "Raw level to start threshold scaling", 0.01f, 0.5f);
+        settings_.registerFloat("adaptmaxscale", &mic_->adaptiveMaxScale, "transient",
+            "Minimum threshold scale factor", 0.3f, 1.0f);
+        settings_.registerFloat("adaptblend", &mic_->adaptiveBlendTau, "transient",
+            "Adaptive threshold blend time (s)", 1.0f, 15.0f);
     }
 
     // === DETECTION MODE SETTINGS ===
@@ -132,20 +153,59 @@ void SerialConsole::registerSettings() {
 
     // === MUSIC MODE SETTINGS ===
     if (music_) {
+        // Activation/deactivation
         settings_.registerFloat("musicthresh", &music_->activationThreshold, "music",
             "Music mode activation threshold (0-1)", 0.0f, 1.0f);
         settings_.registerUint8("musicbeats", &music_->minBeatsToActivate, "music",
             "Stable beats to activate", 2, 16);
         settings_.registerUint8("musicmissed", &music_->maxMissedBeats, "music",
             "Missed beats before deactivation", 4, 16);
+
+        // BPM range
         settings_.registerFloat("bpmmin", &music_->bpmMin, "music",
             "Minimum BPM", 40.0f, 120.0f);
         settings_.registerFloat("bpmmax", &music_->bpmMax, "music",
             "Maximum BPM", 120.0f, 240.0f);
+
+        // PLL tuning
         settings_.registerFloat("pllkp", &music_->pllKp, "music",
             "PLL proportional gain (responsiveness)", 0.01f, 0.5f);
         settings_.registerFloat("pllki", &music_->pllKi, "music",
             "PLL integral gain (stability)", 0.001f, 0.1f);
+
+        // Phase snap tuning
+        settings_.registerFloat("phasesnap", &music_->phaseSnapThreshold, "music",
+            "Phase error for snap (vs gradual)", 0.1f, 0.5f);
+        settings_.registerFloat("snapconf", &music_->phaseSnapConfidence, "music",
+            "Confidence below enables snap", 0.1f, 0.8f);
+        settings_.registerFloat("stablephase", &music_->stablePhaseThreshold, "music",
+            "Phase error for stable beat", 0.1f, 0.4f);
+
+        // Confidence tuning
+        settings_.registerFloat("confinc", &music_->confidenceIncrement, "music",
+            "Confidence gained per stable beat", 0.01f, 0.3f);
+        settings_.registerFloat("confdec", &music_->confidenceDecrement, "music",
+            "Confidence lost per unstable beat", 0.01f, 0.3f);
+        settings_.registerFloat("misspenalty", &music_->missedBeatPenalty, "music",
+            "Confidence lost per missed beat", 0.01f, 0.2f);
+
+        // Tempo estimation (comb filter)
+        settings_.registerFloat("combdecay", &music_->tempoFilterDecay, "music",
+            "Comb filter energy decay (0.9-0.99)", 0.85f, 0.99f);
+        settings_.registerFloat("combfb", &music_->combFeedback, "music",
+            "Comb filter resonance (0.5-0.95)", 0.4f, 0.95f);
+        settings_.registerFloat("combconf", &music_->combConfidenceThreshold, "music",
+            "Comb updates only below this conf", 0.2f, 0.8f);
+        settings_.registerFloat("histblend", &music_->histogramBlend, "music",
+            "Histogram tempo blend factor", 0.05f, 0.5f);
+
+        // BPM locking hysteresis
+        settings_.registerFloat("bpmlock", &music_->bpmLockThreshold, "music",
+            "Confidence to lock BPM", 0.5f, 0.95f);
+        settings_.registerFloat("bpmmaxchange", &music_->bpmLockMaxChange, "music",
+            "Max BPM change/sec when locked", 1.0f, 20.0f);
+        settings_.registerFloat("bpmunlock", &music_->bpmUnlockThreshold, "music",
+            "Confidence to unlock BPM", 0.2f, 0.6f);
     }
 
     // === RHYTHM ANALYZER SETTINGS ===
@@ -383,6 +443,27 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    // === PRESET COMMANDS ===
+    if (strncmp(cmd, "preset ", 7) == 0) {
+        if (!mic_ || !music_) {
+            Serial.println(F("ERROR: Mic or music not available"));
+            return true;
+        }
+        // Buffer safety: cmd is null-terminated at line 236 after readBytesUntil.
+        // strncmp above ensures "preset " prefix exists, so cmd+7 is valid.
+        // parsePresetName handles empty string and null pointer gracefully.
+        const char* presetName = cmd + 7;
+        PresetId id = PresetManager::parsePresetName(presetName);
+        if (id != PresetId::NUM_PRESETS) {
+            PresetManager::applyPreset(id, *mic_, *music_);
+            Serial.print(F("OK "));
+            Serial.println(PresetManager::getPresetName(id));
+        } else {
+            Serial.println(F("Unknown preset. Use: default, quiet, loud, live"));
+        }
+        return true;
+    }
+
     // === RHYTHM ANALYZER STATUS ===
     if (strcmp(cmd, "rhythm") == 0 || strcmp(cmd, "rhythm status") == 0) {
         if (rhythm_) {
@@ -407,6 +488,27 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         } else {
             Serial.println(F("Rhythm analyzer not available"));
         }
+        return true;
+    }
+
+    if (strcmp(cmd, "presets") == 0) {
+        Serial.println(F("Available presets:"));
+        Serial.println(F("  default - Production defaults"));
+        Serial.println(F("  quiet   - Optimized for low-level audio"));
+        Serial.println(F("  loud    - Optimized for loud sources"));
+        Serial.println(F("  live    - Balanced for live performance"));
+        return true;
+    }
+
+    if (strcmp(cmd, "json presets") == 0) {
+        Serial.print(F("{\"presets\":["));
+        for (uint8_t i = 0; i < PresetManager::getPresetCount(); i++) {
+            if (i > 0) Serial.print(',');
+            Serial.print('"');
+            Serial.print(PresetManager::getPresetName(static_cast<PresetId>(i)));
+            Serial.print('"');
+        }
+        Serial.println(F("]}"));
         return true;
     }
 
@@ -506,6 +608,28 @@ void SerialConsole::restoreDefaults() {
         mic_->hybridFluxWeight = 0.3f;                  // Hybrid flux weight
         mic_->hybridDrumWeight = 0.3f;                  // Hybrid drum weight
         mic_->hybridBothBoost = 1.2f;                   // Hybrid both-agree boost
+
+        // Adaptive threshold defaults (disabled by default for backwards compat)
+        mic_->adaptiveThresholdEnabled = false;
+        mic_->adaptiveMinRaw = 0.1f;
+        mic_->adaptiveMaxScale = 0.6f;
+        mic_->adaptiveBlendTau = 5.0f;
+
+        // Fast AGC defaults (enabled by default for better low-level response)
+        mic_->fastAgcEnabled = true;
+        mic_->fastAgcThreshold = 0.15f;
+        mic_->fastAgcPeriodMs = 5000;
+        mic_->fastAgcTrackingTau = 5.0f;
+    }
+
+    // Restore music mode defaults
+    if (music_) {
+        music_->activationThreshold = 0.6f;
+        music_->confidenceIncrement = 0.1f;
+        music_->stablePhaseThreshold = 0.2f;
+        music_->bpmLockThreshold = 0.7f;
+        music_->bpmLockMaxChange = 5.0f;
+        music_->bpmUnlockThreshold = 0.4f;
     }
 }
 
@@ -585,6 +709,8 @@ void SerialConsole::streamTick() {
         // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"conf":0.82,"q":1,"h":0,"w":0}
         // a = active, bpm = tempo, ph = phase, conf = confidence
         // q/h/w = quarter/half/whole note events (1 = event this frame)
+        // Debug fields (when streamDebug_):
+        // sb = stable beats, mb = missed beats, pe = peak tempo energy, ei = error integral
         if (music_) {
             Serial.print(F(",\"m\":{\"a\":"));
             Serial.print(music_->isActive() ? 1 : 0);
@@ -600,6 +726,31 @@ void SerialConsole::streamTick() {
             Serial.print(music_->halfNote ? 1 : 0);
             Serial.print(F(",\"w\":"));
             Serial.print(music_->wholeNote ? 1 : 0);
+
+            // Debug mode: add internal state for tuning
+            if (streamDebug_) {
+                Serial.print(F(",\"sb\":"));
+                Serial.print(music_->getStableBeats());
+                Serial.print(F(",\"mb\":"));
+                Serial.print(music_->getMissedBeats());
+                Serial.print(F(",\"pe\":"));
+                Serial.print(music_->getPeakTempoEnergy(), 4);
+                Serial.print(F(",\"ei\":"));
+                Serial.print(music_->getErrorIntegral(), 3);
+            }
+
+            Serial.print(F("}"));
+        }
+
+        // LED brightness telemetry
+        // Format: "led":{"tot":12345,"pct":37.5}
+        // tot = total heat (sum of all heat values)
+        // pct = brightness percent (0-100)
+        if (fireGenerator_) {
+            Serial.print(F(",\"led\":{\"tot\":"));
+            Serial.print(fireGenerator_->getTotalHeat());
+            Serial.print(F(",\"pct\":"));
+            Serial.print(fireGenerator_->getBrightnessPercent(), 1);
             Serial.print(F("}"));
         }
 

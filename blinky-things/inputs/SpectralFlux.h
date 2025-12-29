@@ -248,16 +248,30 @@ private:
     }
 
     float computeFlux() {
-        // Half-wave rectified spectral flux:
-        // Only count positive differences (increases in energy)
-        // This detects onsets better than full flux (which also catches offsets)
+        // SuperFlux algorithm: Half-wave rectified spectral flux with max-filter
+        // The max-filter on previous frame magnitudes suppresses vibrato/pitch wobble
+        // by smoothing out small frequency variations before computing differences.
+        // Reference: Böck & Widmer, "Maximum Filter Vibrato Suppression for Onset Detection"
         float flux = 0.0f;
 
         int minB = (minBin_ < 0) ? 0 : minBin_;
         int maxB = (maxBin_ > SpectralFluxConstants::NUM_BINS) ? SpectralFluxConstants::NUM_BINS : maxBin_;
 
         for (int i = minB; i < maxB; i++) {
-            float diff = vReal_[i] - prevMagnitude_[i];
+            // Apply 3-bin max-filter to previous frame magnitudes
+            // This smooths pitch variations while preserving onset edges
+            float maxPrev = prevMagnitude_[i];
+            if (i > 0) {
+                float left = prevMagnitude_[i - 1];
+                if (left > maxPrev) maxPrev = left;
+            }
+            if (i < SpectralFluxConstants::NUM_BINS - 1) {
+                float right = prevMagnitude_[i + 1];
+                if (right > maxPrev) maxPrev = right;
+            }
+
+            // Half-wave rectified difference against max-filtered previous
+            float diff = vReal_[i] - maxPrev;
             if (diff > 0.0f && safeIsFinite(diff)) {
                 flux += diff;
             }

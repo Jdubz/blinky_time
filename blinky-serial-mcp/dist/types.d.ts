@@ -16,15 +16,9 @@ export interface AudioSample {
     raw: number;
     h: number;
     alive: number;
-    lo: number;
-    hi: number;
-    los: number;
-    his: number;
     z: number;
-    lob?: number;
-    hib?: number;
-    lop?: number;
-    hip?: number;
+    avg?: number;
+    prev?: number;
 }
 export interface MusicModeState {
     a: number;
@@ -34,6 +28,14 @@ export interface MusicModeState {
     q: number;
     h: number;
     w: number;
+    sb?: number;
+    mb?: number;
+    pe?: number;
+    ei?: number;
+}
+export interface LedTelemetry {
+    tot: number;
+    pct: number;
 }
 export interface BeatEvent {
     timestampMs: number;

@@ -5,7 +5,7 @@
 import { SerialPort } from 'serialport';
 import { ReadlineParser } from '@serialport/parser-readline';
 import { EventEmitter } from 'events';
-import type { DeviceInfo, AudioSample, BatteryStatus, Setting, ConnectionState, MusicModeState } from './types.js';
+import type { DeviceInfo, AudioSample, BatteryStatus, Setting, ConnectionState, MusicModeState, LedTelemetry } from './types.js';
 
 const BAUD_RATE = 115200;
 const COMMAND_TIMEOUT_MS = 2000;
@@ -21,6 +21,10 @@ export class BlinkySerial extends EventEmitter {
     reject: (error: Error) => void;
     timeout: NodeJS.Timeout;
   } | null = null;
+  // Multi-line response accumulation
+  private responseBuffer: string[] = [];
+  private responseTimeout: NodeJS.Timeout | null = null;
+  private static readonly RESPONSE_LINE_TIMEOUT_MS = 100; // Wait for more lines
 
   /**
    * List available serial ports
@@ -92,6 +96,13 @@ export class BlinkySerial extends EventEmitter {
     if (this.streaming) {
       await this.stopStream();
     }
+
+    // Clear any pending response state
+    if (this.responseTimeout) {
+      clearTimeout(this.responseTimeout);
+      this.responseTimeout = null;
+    }
+    this.responseBuffer = [];
 
     if (this.port && this.port.isOpen) {
       return new Promise((resolve) => {
@@ -245,6 +256,12 @@ export class BlinkySerial extends EventEmitter {
             this.emit('beat', { type: 'whole', bpm: music.bpm });
           }
         }
+
+        // Emit LED telemetry if present
+        if (parsed.led) {
+          const led: LedTelemetry = parsed.led;
+          this.emit('led', led);
+        }
       } catch {
         // Ignore parse errors
       }
@@ -265,9 +282,28 @@ export class BlinkySerial extends EventEmitter {
 
     // Check for pending command response
     if (this.pendingCommand) {
-      clearTimeout(this.pendingCommand.timeout);
-      this.pendingCommand.resolve(line);
-      this.pendingCommand = null;
+      // Clear any existing line timeout
+      if (this.responseTimeout) {
+        clearTimeout(this.responseTimeout);
+        this.responseTimeout = null;
+      }
+
+      // Add line to buffer
+      this.responseBuffer.push(line);
+
+      // Set a short timeout to wait for more lines
+      // If no more lines arrive within timeout, finalize the response
+      this.responseTimeout = setTimeout(() => {
+        if (this.pendingCommand) {
+          clearTimeout(this.pendingCommand.timeout);
+          const response = this.responseBuffer.join('\n');
+          this.responseBuffer = [];
+          this.responseTimeout = null;
+          this.pendingCommand.resolve(response);
+          this.pendingCommand = null;
+        }
+      }, BlinkySerial.RESPONSE_LINE_TIMEOUT_MS);
+
       return;
     }
 

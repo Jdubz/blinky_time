@@ -18,6 +18,7 @@ export const MODE_IDS: Record<DetectionMode, number> = {
   hfc: 2,
   spectral: 3,
   hybrid: 4,
+  music: -1,  // Not a detection mode - used for BPM tracking params
 };
 
 // Parameter definitions with ranges
@@ -168,7 +169,9 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     description: 'HFC detection threshold',
   },
 
-  // MusicMode parameters (PLL-based beat tracking)
+  // ===== MusicMode Parameters (BPM Tracking) =====
+
+  // Activation parameters
   musicthresh: {
     name: 'musicthresh',
     mode: 'music',
@@ -196,42 +199,66 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     sweepValues: [4, 6, 8, 10, 12, 16],
     description: 'Missed beats before deactivation',
   },
+
+  // Phase snap tuning
+  phasesnap: {
+    name: 'phasesnap',
+    mode: 'music',
+    min: 0.1,
+    max: 0.5,
+    default: 0.3,
+    sweepValues: [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45],
+    description: 'Phase error threshold for snap vs gradual correction',
+  },
+  snapconf: {
+    name: 'snapconf',
+    mode: 'music',
+    min: 0.1,
+    max: 0.8,
+    default: 0.4,
+    sweepValues: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+    description: 'Confidence below this enables phase snap',
+  },
+  stablephase: {
+    name: 'stablephase',
+    mode: 'music',
+    min: 0.1,
+    max: 0.4,
+    default: 0.2,
+    sweepValues: [0.1, 0.15, 0.2, 0.25, 0.3, 0.35],
+    description: 'Phase error below this counts as stable beat',
+  },
+
+  // Confidence tuning
   confinc: {
     name: 'confinc',
     mode: 'music',
-    min: 0.05,
-    max: 0.2,
+    min: 0.01,
+    max: 0.3,
     default: 0.1,
-    sweepValues: [0.05, 0.08, 0.1, 0.12, 0.15, 0.2],
-    description: 'Confidence gain per good beat',
+    sweepValues: [0.03, 0.05, 0.08, 0.1, 0.15, 0.2, 0.25],
+    description: 'Confidence gained per stable beat',
   },
   confdec: {
     name: 'confdec',
     mode: 'music',
-    min: 0.05,
-    max: 0.2,
+    min: 0.01,
+    max: 0.3,
     default: 0.1,
-    sweepValues: [0.05, 0.08, 0.1, 0.12, 0.15, 0.2],
-    description: 'Confidence loss per bad/missed beat',
+    sweepValues: [0.03, 0.05, 0.08, 0.1, 0.15, 0.2, 0.25],
+    description: 'Confidence lost per unstable beat',
   },
-  phasetol: {
-    name: 'phasetol',
+  misspenalty: {
+    name: 'misspenalty',
     mode: 'music',
-    min: 0.1,
-    max: 0.5,
-    default: 0.2,
-    sweepValues: [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5],
-    description: 'Phase error tolerance for good beat',
+    min: 0.01,
+    max: 0.2,
+    default: 0.05,
+    sweepValues: [0.02, 0.03, 0.05, 0.08, 0.1, 0.15],
+    description: 'Confidence lost per missed beat',
   },
-  missedtol: {
-    name: 'missedtol',
-    mode: 'music',
-    min: 1.0,
-    max: 3.0,
-    default: 1.5,
-    sweepValues: [1.0, 1.2, 1.5, 1.8, 2.0, 2.5, 3.0],
-    description: 'Missed beat tolerance (period multiplier)',
-  },
+
+  // BPM range
   bpmmin: {
     name: 'bpmmin',
     mode: 'music',
@@ -250,6 +277,8 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     sweepValues: [120, 140, 160, 180, 200, 220, 240],
     description: 'Maximum BPM',
   },
+
+  // PLL tuning
   pllkp: {
     name: 'pllkp',
     mode: 'music',
@@ -267,6 +296,44 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     default: 0.01,
     sweepValues: [0.001, 0.005, 0.01, 0.02, 0.05, 0.1],
     description: 'PLL integral gain',
+  },
+
+  // Tempo estimation (comb filter)
+  combdecay: {
+    name: 'combdecay',
+    mode: 'music',
+    min: 0.85,
+    max: 0.99,
+    default: 0.95,
+    sweepValues: [0.88, 0.90, 0.92, 0.95, 0.97, 0.98],
+    description: 'Comb filter energy decay per frame (higher = more memory)',
+  },
+  combfb: {
+    name: 'combfb',
+    mode: 'music',
+    min: 0.4,
+    max: 0.95,
+    default: 0.8,
+    sweepValues: [0.5, 0.6, 0.7, 0.8, 0.85, 0.9],
+    description: 'Comb filter resonance sharpness',
+  },
+  combconf: {
+    name: 'combconf',
+    mode: 'music',
+    min: 0.2,
+    max: 0.8,
+    default: 0.5,
+    sweepValues: [0.3, 0.4, 0.5, 0.6, 0.7],
+    description: 'Comb filters only update BPM below this confidence',
+  },
+  histblend: {
+    name: 'histblend',
+    mode: 'music',
+    min: 0.05,
+    max: 0.5,
+    default: 0.2,
+    sweepValues: [0.1, 0.15, 0.2, 0.25, 0.3, 0.4],
+    description: 'Histogram tempo estimate blend factor',
   },
 
   // RhythmAnalyzer parameters (autocorrelation-based tempo detection)
