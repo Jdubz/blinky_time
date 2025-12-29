@@ -247,6 +247,12 @@ float AdaptiveMic::computeLocalMedian() const {
   // Copy to temporary array for sorting
   float sorted[THRESHOLD_BUFFER_SIZE];
   int n = minValue(thresholdBufferCount_, THRESHOLD_BUFFER_SIZE);
+
+  // Return default if no samples yet
+  if (n == 0) {
+    return 0.0f;
+  }
+
   for (int i = 0; i < n; i++) {
     sorted[i] = thresholdBuffer_[i];
   }

@@ -745,7 +745,7 @@ void Fire::setAudioParams(const float sparkBoost, const int8_t coolingBias) {
 }
 
 uint32_t Fire::getTotalHeat() const {
-    if (!heat_ || numLeds_ <= 0) return 0;
+    if (!heat_ || numLeds_ == 0) return 0;
     uint32_t total = 0;
     for (int i = 0; i < numLeds_; i++) {
         total += heat_[i];
@@ -754,7 +754,7 @@ uint32_t Fire::getTotalHeat() const {
 }
 
 float Fire::getBrightnessPercent() const {
-    if (!heat_ || numLeds_ <= 0) return 0.0f;
+    if (!heat_ || numLeds_ == 0) return 0.0f;
     uint32_t maxPossible = (uint32_t)numLeds_ * 255;
     return (getTotalHeat() * 100.0f) / maxPossible;
 }
