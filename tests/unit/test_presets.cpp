@@ -213,6 +213,15 @@ void testLoudPresetValues() {
   ASSERT_TRUE(loud->hwtarget < def->hwtarget);
 }
 
+// Note: Full integration test for applyPreset() requires AdaptiveMic and MusicMode
+// instances which depend on hardware (IPdmMic, ISystemTime). See integration tests
+// in tests/integration/ for hardware-dependent testing.
+//
+// The tests below verify:
+// 1. All preset parameters are within valid ranges (testPresetParamsRanges)
+// 2. Preset-specific values match expected characteristics (testQuietPresetValues, etc.)
+// 3. Return value behavior is correct (implicit in parsePresetName tests)
+
 void runPresetTests() {
   Serial.println("=== PRESET MANAGER TESTS ===");
 

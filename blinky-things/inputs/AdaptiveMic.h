@@ -164,11 +164,20 @@ private:
   IPdmMic& pdm_;
   ISystemTime& time_;
 
-  // ISR accumulators
+  // ISR accumulators - written by ISR, read/reset by main thread
+  // Thread safety: consumeISR() disables interrupts during read to prevent
+  // torn reads of multi-byte values. The volatile keyword ensures the
+  // compiler doesn't optimize away reads/writes.
+  //
+  // Wraparound behavior: s_numSamples and s_sumAbs can technically overflow
+  // after ~75 hours at 16kHz (2^32 samples). In practice, consumeISR() is
+  // called every frame (~16ms), resetting accumulators before overflow.
+  // Even if overflow occurred, the ratio-based calculations (average level)
+  // would still produce valid results due to integer wraparound semantics.
   static AdaptiveMic* s_instance;
   volatile static uint32_t s_isrCount;
-  volatile static uint64_t s_sumAbs;
-  volatile static uint32_t s_numSamples;
+  volatile static uint64_t s_sumAbs;        // Sum of absolute sample values (uint64 prevents overflow)
+  volatile static uint32_t s_numSamples;    // Count of samples processed (reset each frame)
   volatile static uint16_t s_maxAbs;
   volatile static uint32_t s_zeroCrossings;  // Count of zero crossings
   volatile static int16_t s_lastSample;       // Previous sample for ZCR

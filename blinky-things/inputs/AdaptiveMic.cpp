@@ -300,8 +300,13 @@ void AdaptiveMic::updateThresholdBuffer(float value) {
   }
 }
 
+/**
+ * Consume accumulated ISR data atomically
+ * Disables interrupts to prevent torn reads of multi-byte values (uint64_t, uint32_t).
+ * The critical section is kept minimal (~20 cycles) to minimize interrupt latency.
+ */
 void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings) {
-  time_.noInterrupts();
+  time_.noInterrupts();  // Begin critical section
   uint64_t sum = s_sumAbs;
   uint32_t cnt = s_numSamples;
   uint16_t m   = s_maxAbs;
@@ -310,7 +315,7 @@ void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, ui
   s_numSamples = 0;
   s_maxAbs = 0;
   s_zeroCrossings = 0;
-  time_.interrupts();
+  time_.interrupts();  // End critical section
 
   n = cnt;
   maxAbsVal = m;

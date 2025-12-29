@@ -79,8 +79,9 @@ public:
      * @param id Preset to apply
      * @param mic AdaptiveMic instance to configure
      * @param music MusicMode instance to configure
+     * @return true if preset was applied successfully, false if invalid preset ID
      */
-    static void applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music);
+    static bool applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music);
 
     /**
      * Get the name of a preset

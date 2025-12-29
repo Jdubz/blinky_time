@@ -158,10 +158,10 @@ const PresetParams PresetManager::PRESETS[] = {
     },
 };
 
-void PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music) {
+bool PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music) {
     if (id >= PresetId::NUM_PRESETS) {
         Serial.println(F("Invalid preset ID"));
-        return;
+        return false;
     }
 
     const PresetParams& p = PRESETS[static_cast<uint8_t>(id)];
@@ -195,6 +195,7 @@ void PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music)
 
     Serial.print(F("Applied preset: "));
     Serial.println(getPresetName(id));
+    return true;
 }
 
 const char* PresetManager::getPresetName(PresetId id) {
