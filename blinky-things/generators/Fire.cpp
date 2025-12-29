@@ -386,12 +386,24 @@ void Fire::updateMatrixFire() {
             }
         }
     } else {
-        // HORIZONTAL: Traditional upward heat propagation (low y to high y)
+        // HORIZONTAL: Fire rises from physical bottom (high y) to physical top (low y)
+        // Same direction as VERTICAL since both have y=0 at physical top
         for (int x = 0; x < this->width_; x++) {
-            for (int y = this->height_ - 1; y >= 2; y--) {
-                int currentIndex = coordsToIndex(x, y);
-                int belowIndex = coordsToIndex(x, y - 1);
-                int below2Index = coordsToIndex(x, y - 2);
+            // First handle the second-to-last row specially (only one row below)
+            int y = this->height_ - 2;
+            int currentIndex = coordsToIndex(x, y);
+            int belowIndex = coordsToIndex(x, y + 1);
+            if (currentIndex >= 0 && belowIndex >= 0) {
+                // Only one row below, use its heat directly with some decay
+                uint16_t newHeat = (uint16_t)heat_[belowIndex] * 2 / 3;
+                heat_[currentIndex] = min(255, newHeat);
+            }
+
+            // Then handle the rest of the rows
+            for (y = 0; y < this->height_ - 2; y++) {
+                currentIndex = coordsToIndex(x, y);
+                belowIndex = coordsToIndex(x, y + 1);
+                int below2Index = coordsToIndex(x, y + 2);
 
                 if (currentIndex >= 0 && belowIndex >= 0 && below2Index >= 0) {
                     // FIX: Use uint16_t arithmetic to prevent overflow
@@ -400,13 +412,13 @@ void Fire::updateMatrixFire() {
 
                     // Add horizontal spread (prevent overflow with uint16_t)
                     if (x > 0) {
-                        int leftIndex = coordsToIndex(x - 1, y - 1);
+                        int leftIndex = coordsToIndex(x - 1, y + 1);
                         if (leftIndex >= 0) {
                             newHeat = ((uint16_t)newHeat + (uint16_t)heat_[leftIndex]) / 2;
                         }
                     }
                     if (x < this->width_ - 1) {
-                        int rightIndex = coordsToIndex(x + 1, y - 1);
+                        int rightIndex = coordsToIndex(x + 1, y + 1);
                         if (rightIndex >= 0) {
                             newHeat = ((uint16_t)newHeat + (uint16_t)heat_[rightIndex]) / 2;
                         }
@@ -551,8 +563,8 @@ void Fire::generateSparks() {
                     // VERTICAL: physical bottom is high y values
                     y = this->height_ - 1 - random(params_.bottomRowsForSparks);
                 } else {
-                    // HORIZONTAL: physical bottom is low y values
-                    y = random(params_.bottomRowsForSparks);
+                    // HORIZONTAL: physical bottom is high y values (same as VERTICAL for standard row-major layouts)
+                    y = this->height_ - 1 - random(params_.bottomRowsForSparks);
                 }
                 sparkPosition = coordsToIndex(x, y);
                 break;
@@ -730,6 +742,21 @@ void Fire::setSparkParams(const uint8_t heatMin, const uint8_t heatMax, const fl
 void Fire::setAudioParams(const float sparkBoost, const int8_t coolingBias) {
     params_.audioSparkBoost = sparkBoost;
     params_.coolingAudioBias = coolingBias;
+}
+
+uint32_t Fire::getTotalHeat() const {
+    if (!heat_ || numLeds_ <= 0) return 0;
+    uint32_t total = 0;
+    for (int i = 0; i < numLeds_; i++) {
+        total += heat_[i];
+    }
+    return total;
+}
+
+float Fire::getBrightnessPercent() const {
+    if (!heat_ || numLeds_ <= 0) return 0.0f;
+    uint32_t maxPossible = (uint32_t)numLeds_ * 255;
+    return (getTotalHeat() * 100.0f) / maxPossible;
 }
 
 // Factory function - Disabled until setLayoutType/setOrientation are added to header

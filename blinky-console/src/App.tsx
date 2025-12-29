@@ -16,6 +16,8 @@ function App() {
     isSupported,
     deviceInfo,
     settingsByCategory,
+    presets,
+    currentPreset,
     isStreaming,
     audioData,
     batteryData,
@@ -32,6 +34,7 @@ function App() {
     resetDefaults,
     refreshSettings,
     requestBatteryStatus,
+    applyPreset,
   } = useSerial();
 
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
@@ -45,6 +48,9 @@ function App() {
     onReset: resetDefaults,
     onRefresh: refreshSettings,
     disabled: isDisabled,
+    presets,
+    currentPreset,
+    onApplyPreset: applyPreset,
   };
 
   return (

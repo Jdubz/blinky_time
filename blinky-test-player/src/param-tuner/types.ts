@@ -3,14 +3,16 @@
  */
 
 // Detection modes
-export type DetectionMode = 'drummer' | 'spectral' | 'hybrid';
+export type DetectionMode = 'drummer' | 'spectral' | 'hybrid' | 'music';
 export const DETECTION_MODES: DetectionMode[] = ['drummer', 'spectral', 'hybrid'];
+export const MUSIC_MODE = 'music' as const;  // BPM tracking mode (not detection)
 
 // Mode IDs as they appear in device settings
 export const MODE_IDS: Record<DetectionMode, number> = {
   drummer: 0,
   spectral: 3,
   hybrid: 4,
+  music: -1,  // Not a detection mode - used for BPM tracking params
 };
 
 // Parameter definitions with ranges
@@ -110,6 +112,104 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     default: 1.2,
     sweepValues: [1.0, 1.1, 1.2, 1.3, 1.5, 1.7, 2.0],
     description: 'Boost when both algorithms agree',
+  },
+
+  // ===== MusicMode Parameters (BPM Tracking) =====
+
+  // Phase snap tuning
+  phasesnap: {
+    name: 'phasesnap',
+    mode: 'music',
+    min: 0.1,
+    max: 0.5,
+    default: 0.3,
+    sweepValues: [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45],
+    description: 'Phase error threshold for snap vs gradual correction',
+  },
+  snapconf: {
+    name: 'snapconf',
+    mode: 'music',
+    min: 0.1,
+    max: 0.8,
+    default: 0.4,
+    sweepValues: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+    description: 'Confidence below this enables phase snap',
+  },
+  stablephase: {
+    name: 'stablephase',
+    mode: 'music',
+    min: 0.1,
+    max: 0.4,
+    default: 0.2,
+    sweepValues: [0.1, 0.15, 0.2, 0.25, 0.3, 0.35],
+    description: 'Phase error below this counts as stable beat',
+  },
+
+  // Confidence tuning
+  confinc: {
+    name: 'confinc',
+    mode: 'music',
+    min: 0.01,
+    max: 0.3,
+    default: 0.1,
+    sweepValues: [0.03, 0.05, 0.08, 0.1, 0.15, 0.2, 0.25],
+    description: 'Confidence gained per stable beat',
+  },
+  confdec: {
+    name: 'confdec',
+    mode: 'music',
+    min: 0.01,
+    max: 0.3,
+    default: 0.1,
+    sweepValues: [0.03, 0.05, 0.08, 0.1, 0.15, 0.2, 0.25],
+    description: 'Confidence lost per unstable beat',
+  },
+  misspenalty: {
+    name: 'misspenalty',
+    mode: 'music',
+    min: 0.01,
+    max: 0.2,
+    default: 0.05,
+    sweepValues: [0.02, 0.03, 0.05, 0.08, 0.1, 0.15],
+    description: 'Confidence lost per missed beat',
+  },
+
+  // Tempo estimation (comb filter)
+  combdecay: {
+    name: 'combdecay',
+    mode: 'music',
+    min: 0.85,
+    max: 0.99,
+    default: 0.95,
+    sweepValues: [0.88, 0.90, 0.92, 0.95, 0.97, 0.98],
+    description: 'Comb filter energy decay per frame (higher = more memory)',
+  },
+  combfb: {
+    name: 'combfb',
+    mode: 'music',
+    min: 0.4,
+    max: 0.95,
+    default: 0.8,
+    sweepValues: [0.5, 0.6, 0.7, 0.8, 0.85, 0.9],
+    description: 'Comb filter resonance sharpness',
+  },
+  combconf: {
+    name: 'combconf',
+    mode: 'music',
+    min: 0.2,
+    max: 0.8,
+    default: 0.5,
+    sweepValues: [0.3, 0.4, 0.5, 0.6, 0.7],
+    description: 'Comb filters only update BPM below this confidence',
+  },
+  histblend: {
+    name: 'histblend',
+    mode: 'music',
+    min: 0.05,
+    max: 0.5,
+    default: 0.2,
+    sweepValues: [0.1, 0.15, 0.2, 0.25, 0.3, 0.4],
+    description: 'Histogram tempo estimate blend factor',
   },
 };
 

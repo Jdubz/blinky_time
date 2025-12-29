@@ -308,6 +308,17 @@ class SerialService {
     await this.send('battery');
   }
 
+  // Apply a preset by name
+  async applyPreset(name: string): Promise<void> {
+    await this.send(`preset ${name}`);
+  }
+
+  // Get list of available presets
+  async getPresets(): Promise<string[] | null> {
+    const response = await this.sendAndReceiveJson<{ presets: string[] }>('json presets');
+    return response?.presets || null;
+  }
+
   // Start reading from serial port
   private async startReading(): Promise<void> {
     if (!this.reader) return;

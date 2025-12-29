@@ -80,6 +80,10 @@ public:
     // Music mode integration
     void setMusicMode(MusicMode* music);
 
+    // Brightness telemetry
+    uint32_t getTotalHeat() const;
+    float getBrightnessPercent() const;
+
 private:
     MatrixOrientation orientation_ = HORIZONTAL;
     // Layout-specific heat propagation algorithms

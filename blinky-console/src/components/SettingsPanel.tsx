@@ -10,7 +10,19 @@ interface SettingsPanelProps {
   onReset: () => void;
   onRefresh: () => void;
   disabled: boolean;
+  // Preset support
+  presets?: string[];
+  currentPreset?: string | null;
+  onApplyPreset?: (name: string) => void;
 }
+
+// Preset descriptions for tooltips
+const presetDescriptions: Record<string, string> = {
+  default: 'Balanced settings for general use',
+  quiet: 'Optimized for low-level/ambient audio - lower thresholds, adaptive features enabled',
+  loud: 'Optimized for loud sources - higher thresholds, fast AGC disabled',
+  live: 'Balanced for live performance - adaptive features enabled, moderate thresholds',
+};
 
 interface SettingControlProps {
   setting: DeviceSetting;
@@ -123,6 +135,9 @@ export function SettingsPanel({
   onReset,
   onRefresh,
   disabled,
+  presets = [],
+  currentPreset,
+  onApplyPreset,
 }: SettingsPanelProps) {
   const categories = Object.keys(settingsByCategory);
 
@@ -168,6 +183,26 @@ export function SettingsPanel({
           </button>
         </div>
       </div>
+
+      {/* Preset Selector */}
+      {presets.length > 0 && onApplyPreset && (
+        <div className="preset-selector">
+          <label className="preset-label">Audio Preset:</label>
+          <div className="preset-buttons">
+            {presets.map(preset => (
+              <button
+                key={preset}
+                className={`btn btn-small preset-btn ${currentPreset === preset ? 'btn-primary' : ''}`}
+                onClick={() => onApplyPreset(preset)}
+                disabled={disabled}
+                title={presetDescriptions[preset] || preset}
+              >
+                {preset.charAt(0).toUpperCase() + preset.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="settings-categories">
         {sortedCategories.map(category => (
