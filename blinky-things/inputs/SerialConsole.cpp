@@ -62,6 +62,26 @@ void SerialConsole::registerSettings() {
             "Heat spread distance", 1, 24);
         settings_.registerFloat("embernoisespeed", &fp->emberNoiseSpeed, "fire",
             "Ember animation speed", 0.0001f, 0.002f);
+
+        // === MUSIC MODE FIRE SETTINGS ===
+        // These control how fire behaves when music mode is active (beat-synced)
+        settings_.registerFloat("musicemberpulse", &fp->musicEmberPulse, "firemusic",
+            "Ember pulse intensity on beat", 0.0f, 1.0f);
+        settings_.registerFloat("musicsparkpulse", &fp->musicSparkPulse, "firemusic",
+            "Spark heat pulse on beat", 0.0f, 1.0f);
+        settings_.registerFloat("musiccoolpulse", &fp->musicCoolingPulse, "firemusic",
+            "Cooling oscillation amplitude", 0.0f, 30.0f);
+
+        // === ORGANIC MODE FIRE SETTINGS ===
+        // These control how fire behaves when music mode is NOT active (organic fire)
+        settings_.registerFloat("organicsparkchance", &fp->organicSparkChance, "fireorganic",
+            "Baseline random spark rate", 0.0f, 0.5f);
+        settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fireorganic",
+            "Min transient to trigger burst", 0.0f, 1.0f);
+        settings_.registerFloat("organicaudiomix", &fp->organicAudioMix, "fireorganic",
+            "Audio influence in organic mode", 0.0f, 1.0f);
+        settings_.registerBool("organicburstsuppress", &fp->organicBurstSuppress, "fireorganic",
+            "Suppress after bursts in organic mode");
     }
 
     // === AUDIO SETTINGS ===

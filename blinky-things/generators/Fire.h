@@ -45,6 +45,19 @@ struct FireParams {
     // Ember noise floor (subtle ambient glow using noise)
     uint8_t emberHeatMax        = Defaults::EmberHeatMax;
     float   emberNoiseSpeed     = Defaults::EmberNoiseSpeed;
+
+    // === MUSIC MODE PARAMETERS ===
+    // When music mode is active, fire pulses on beat
+    float   musicEmberPulse     = 0.6f;   // How much embers pulse with phase (0=none, 1=full)
+    float   musicSparkPulse     = 0.5f;   // How much spark heat scales with phase (0=none, 1=full)
+    float   musicCoolingPulse   = 15.0f;  // Cooling oscillation amplitude (±value)
+
+    // === ORGANIC MODE PARAMETERS ===
+    // When music mode is NOT active, fire behaves more organically
+    float   organicSparkChance  = 0.15f;  // Baseline random spark rate (independent of audio)
+    float   organicTransientMin = 0.5f;   // Minimum transient strength to trigger burst (0-1)
+    float   organicAudioMix     = 0.3f;   // How much audio affects organic mode (0=none, 1=full)
+    bool    organicBurstSuppress = false; // Whether to suppress after bursts in organic mode
 };
 
 class Fire : public Generator {
