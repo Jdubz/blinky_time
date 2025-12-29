@@ -34,6 +34,47 @@ void MusicMode::reset() {
     }
 }
 
+void MusicMode::applyExternalBPMGuidance(float externalBPM, float confidence) {
+    // Only apply guidance if confidence is high enough (> 0.7)
+    if (confidence < 0.7f) {
+        return;
+    }
+
+    // Validate external BPM is within acceptable range
+    if (externalBPM < bpmMin || externalBPM > bpmMax) {
+        return;
+    }
+
+    // Check if external BPM is reasonably close to current estimate
+    // (within 20% - prevents sudden jumps from octave errors)
+    float bpmDiff = fabsf(externalBPM - bpm);
+    float maxAllowedDiff = bpm * 0.2f;  // 20% tolerance
+
+    if (bpmDiff > maxAllowedDiff) {
+        // External BPM too different - might be octave error
+        // Check if it's a 2x or 0.5x relationship (octave)
+        bool isDoubleOctave = fabsf(externalBPM - bpm * 2.0f) < bpm * 0.1f;
+        bool isHalfOctave = fabsf(externalBPM - bpm * 0.5f) < bpm * 0.1f;
+
+        if (!isDoubleOctave && !isHalfOctave) {
+            // Not an octave relationship - ignore
+            return;
+        }
+        // If it IS an octave, allow the update (helps correct octave errors)
+    }
+
+    // Smoothly blend external BPM with current estimate
+    // Weight by confidence: high confidence = more influence
+    float blendWeight = confidence * 0.3f;  // Max 30% influence per frame
+    bpm = bpm * (1.0f - blendWeight) + externalBPM * blendWeight;
+
+    // Update beat period to match
+    beatPeriodMs_ = 60000.0f / bpm;
+
+    // Reset integral term to prevent windup from old tempo
+    errorIntegral_ *= 0.9f;  // Decay integral, don't zero it completely
+}
+
 void MusicMode::update(float dt) {
     // Clear one-shot events at start of frame
     beatHappened = false;
@@ -52,9 +93,11 @@ void MusicMode::update(float dt) {
 
     // Only check at beat intervals when active
     if (active && timeSinceCheck > beatPeriodMs_) {
-        if (timeSinceOnset > beatPeriodMs_ * 1.5f) {  // 1.5x tolerance
+        if (timeSinceOnset > beatPeriodMs_ * missedBeatTolerance) {
             missedBeats_++;
-            confidence_ -= 0.05f;
+            // FIX BUG #16: Missed beat should be penalized same as incorrect timing
+            // No detection is arguably worse than wrong timing
+            confidence_ -= confidenceDecrement;
             if (confidence_ < 0.0f) confidence_ = 0.0f;
         }
         lastMissedBeatCheck_ = nowMs;
@@ -132,7 +175,11 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
     }
 
     // Calculate phase error (expected: onset near phase 0.0 or 1.0)
-    float error = phase;
+    // FIX BUG #14: Ensure phase is properly wrapped before calculating error
+    float wrappedPhase = fmodf(phase, 1.0f);
+    if (wrappedPhase < 0.0f) wrappedPhase += 1.0f;  // Handle negative (shouldn't happen)
+
+    float error = wrappedPhase;
     if (error > 0.5f) error -= 1.0f;  // Wrap to -0.5 to 0.5 range
 
     // PLL correction (Proportional-Integral controller)
@@ -151,14 +198,14 @@ void MusicMode::onOnsetDetected(uint32_t timestampMs, bool isLowBand) {
 
     // Update confidence based on phase error
     float absError = absFloat(error);
-    if (absError < 0.2f) {  // Onset within 20% of expected position
+    if (absError < phaseErrorTolerance) {  // Onset within tolerance of expected position
         stableBeats_++;
         missedBeats_ = 0;
-        confidence_ += 0.1f;
+        confidence_ += confidenceIncrement;
         if (confidence_ > 1.0f) confidence_ = 1.0f;
     } else {
         missedBeats_++;
-        confidence_ -= 0.1f;
+        confidence_ -= confidenceDecrement;
         if (confidence_ < 0.0f) confidence_ = 0.0f;
     }
 
@@ -211,19 +258,30 @@ void MusicMode::estimateTempo() {
         // to lock onto half-note intervals (kick-to-kick) instead of quarter notes
         if (newBPM < 100.0f && newBPM >= 50.0f) {
             // Check if there are also hits at half the interval (double BPM)
-            // Half interval would be in a different bin
             uint16_t halfIoi = ioi / 2;  // e.g., 1000ms -> 500ms
             if (halfIoi >= 300) {  // Only if half-interval is in valid range
                 uint8_t halfBin = (halfIoi - 300) / 20;
                 if (halfBin < 40) {
+                    // IMPROVED: Check center bin and adjacent bins for timing jitter
                     uint16_t halfBinValue = histogram[halfBin];
-                    // Also check adjacent bins (timing jitter)
                     if (halfBin > 0) halfBinValue += histogram[halfBin - 1];
                     if (halfBin < 39) halfBinValue += histogram[halfBin + 1];
 
-                    // If we have significant evidence at double-tempo, use that instead
-                    // Threshold: at least 2 hits at half-interval, or half the peak value
-                    if (halfBinValue >= 2 || halfBinValue >= peakValue / 2) {
+                    // IMPROVED: Better octave detection criteria
+                    // - Minimum absolute threshold: need at least 3 hits at double-tempo
+                    // - Relative threshold: double-tempo peak should be at least 40% of main peak
+                    // - Switch only if double-tempo is STRONGER or equally strong
+                    constexpr uint16_t MIN_OCTAVE_HITS = 3;  // Minimum hits required
+                    constexpr float OCTAVE_STRENGTH_RATIO = 0.4f;  // Min ratio to main peak
+
+                    bool hasMinimumHits = (halfBinValue >= MIN_OCTAVE_HITS);
+                    bool hasSignificantStrength = (halfBinValue >= peakValue * OCTAVE_STRENGTH_RATIO);
+                    bool isStrongerThanMain = (halfBinValue > peakValue);
+
+                    // Switch to double-tempo if:
+                    // 1. Double-tempo peak is stronger (clear winner), OR
+                    // 2. Both minimum hits AND significant strength criteria met
+                    if (isStrongerThanMain || (hasMinimumHits && hasSignificantStrength)) {
                         newBPM = 60000.0f / halfIoi;  // Double the tempo
                     }
                 }

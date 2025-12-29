@@ -5,6 +5,21 @@
 import cliProgress from 'cli-progress';
 import { PARAMETERS, REPRESENTATIVE_PATTERNS } from './types.js';
 import { TestRunner } from './runner.js';
+/**
+ * Filter parameters based on options.params and options.modes
+ */
+function filterParameters(allParams, options) {
+    let filtered = allParams;
+    // Filter by mode if specified
+    if (options.modes && options.modes.length > 0) {
+        filtered = filtered.filter(p => options.modes.includes(p.mode));
+    }
+    // Filter by specific parameter names if specified
+    if (options.params && options.params.length > 0) {
+        filtered = filtered.filter(p => options.params.includes(p.name));
+    }
+    return filtered;
+}
 export async function runSweeps(options, stateManager) {
     console.log('\n🔄 Phase 2: Parameter Sweeps');
     console.log('═'.repeat(50));
@@ -12,8 +27,21 @@ export async function runSweeps(options, stateManager) {
     const runner = new TestRunner(options);
     await runner.connect();
     try {
-        const params = Object.values(PARAMETERS);
-        const patterns = REPRESENTATIVE_PATTERNS;
+        const allParams = Object.values(PARAMETERS);
+        const params = filterParameters(allParams, options);
+        // Show filtering info if filters are active
+        if (options.params || options.modes) {
+            console.log(`Filtering: ${params.length} of ${allParams.length} parameters selected`);
+            if (options.modes)
+                console.log(`   Modes: ${options.modes.join(', ')}`);
+            if (options.params)
+                console.log(`   Params: ${options.params.join(', ')}`);
+            console.log();
+        }
+        // Use specified patterns or all representative patterns
+        const patterns = (options.patterns && options.patterns.length > 0)
+            ? options.patterns
+            : REPRESENTATIVE_PATTERNS;
         for (const param of params) {
             if (stateManager.isSweepComplete(param.name)) {
                 const existing = stateManager.getSweepResult(param.name);
@@ -24,9 +52,12 @@ export async function runSweeps(options, stateManager) {
             }
             console.log(`\nSweeping ${param.name} (${param.mode})...`);
             console.log(`   Values: ${param.sweepValues.join(', ')}`);
-            // Set to the correct mode
-            await runner.setMode(param.mode);
-            await runner.resetDefaults(param.mode);
+            // Set to the correct mode (only for detection modes, not subsystem modes like music/rhythm)
+            const isDetectionMode = ['drummer', 'bass', 'hfc', 'spectral', 'hybrid'].includes(param.mode);
+            if (isDetectionMode) {
+                await runner.setMode(param.mode);
+                await runner.resetDefaults(param.mode);
+            }
             const sweepPoints = [];
             const resumeIndex = stateManager.getSweepResumeIndex(param.name);
             // Progress bar
@@ -131,8 +162,12 @@ export async function showSweepSummary(stateManager) {
     const params = Object.values(PARAMETERS);
     const byMode = {
         drummer: [],
+        bass: [],
+        hfc: [],
         spectral: [],
         hybrid: [],
+        music: [],
+        rhythm: [],
     };
     for (const param of params) {
         const result = stateManager.getSweepResult(param.name);

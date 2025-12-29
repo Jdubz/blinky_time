@@ -70,11 +70,11 @@ public:
   float transient          = 0.0f;    // Impulse strength (0.0 = none, 1.0 = strong hit)
   uint32_t lastTransientMs = 0;
 
-  // Transient detection parameters (tunable) - shared by all algorithms (tuned 2024-12)
-  float transientThreshold = 2.0f;    // Must be 2x louder than recent average
-  float attackMultiplier   = 1.2f;    // Must be 20% louder than previous frame (rapid rise)
+  // Transient detection parameters (tunable) - shared by all algorithms (fast-tune 2025-12-28)
+  float transientThreshold = 2.813f;  // Hybrid-optimal: 2.813x louder (drummer: 1.688, hybrid: 2.813)
+  float attackMultiplier   = 1.1f;    // Must be 10% louder than previous frame (rapid rise)
   float averageTau         = 0.8f;    // Recent average tracking time (seconds)
-  uint16_t cooldownMs      = 30;      // Cooldown between hits (ms)
+  uint16_t cooldownMs      = 40;      // Cooldown between hits (ms)
 
   // ---- DETECTION MODE ----
   // Switch between different onset detection algorithms
@@ -89,13 +89,13 @@ public:
   float hfcWeight = 1.0f;      // HFC weighting factor
   float hfcThresh = 3.0f;      // Detection threshold for HFC
 
-  // Spectral Flux parameters (mode 3) - tuned 2024-12
-  float fluxThresh = 2.8f;     // Detection threshold for spectral flux
+  // Spectral Flux parameters (mode 3) - fast-tune 2025-12-28
+  float fluxThresh = 1.4f;     // Detection threshold for spectral flux (binary search optimal)
   uint8_t fluxBins = 64;       // Number of FFT bins to analyze (focus on bass-mid)
 
-  // Hybrid parameters (mode 4) - tuned via param-tuner 2024-12 (F1: 0.705)
-  float hybridFluxWeight = 0.3f;   // Weight when only flux detects (was 0.7)
-  float hybridDrumWeight = 0.3f;   // Weight when only drummer detects (was 0.5)
+  // Hybrid parameters (mode 4) - fast-tune 2025-12-28 (F1: 0.669)
+  float hybridFluxWeight = 0.7f;   // Weight when only flux detects (tuned from 0.3)
+  float hybridDrumWeight = 0.3f;   // Weight when only drummer detects
   float hybridBothBoost = 1.2f;    // Multiplier when both agree (1.0-2.0)
 
   // Zero-crossing rate (for additional context)
@@ -123,6 +123,7 @@ public:
   inline bool isHwGainLocked() const { return hwGainLocked_; }     // Check if hardware gain is locked for testing
   inline uint8_t getDetectionMode() const { return detectionMode; }  // Current detection algorithm
   inline float getBassLevel() const { return bassFilteredLevel; }    // Bass-filtered level (for debugging)
+  inline float getLastFluxValue() const { return lastFluxValue_; }   // Last spectral flux value (for RhythmAnalyzer)
 
 public:
   /**
@@ -181,6 +182,7 @@ private:
   static constexpr int ATTACK_BUFFER_SIZE = 4;  // 4 frames @ 60Hz = ~67ms lookback
   float attackBuffer[ATTACK_BUFFER_SIZE] = {0};
   int attackBufferIdx = 0;
+  bool attackBufferInitialized_ = false;  // Track if buffer has been pre-filled
   float recentAverage = 0.0f;   // Rolling average of audio level (~1 second window)
   float previousLevel = 0.0f;   // Last frame's level (kept for compatibility)
 
@@ -200,6 +202,7 @@ private:
   // Spectral Flux state (FFT-based detection)
   SpectralFlux spectralFlux_;
   float fluxRecentAverage_ = 0.0f;    // Rolling average for flux detection
+  float lastFluxValue_ = 0.0f;        // Last computed flux value (for RhythmAnalyzer)
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
@@ -217,7 +220,7 @@ private:
 
   // Helper methods for hybrid detection (return detection strength without side effects)
   float evalDrummerStrength(float rawLevel);      // Returns drummer detection strength (0-1)
-  float evalSpectralFluxStrength(float dt);       // Returns spectral flux detection strength (0-1)
+  float evalSpectralFluxStrength(float flux, bool frameReady);  // Returns spectral flux detection strength (0-1) from cached flux
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

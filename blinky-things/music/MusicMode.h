@@ -51,6 +51,12 @@ public:
     float pllKp = 0.1f;                 // Proportional gain (responsiveness)
     float pllKi = 0.01f;                // Integral gain (stability)
 
+    // Confidence tracking (named constants for magic numbers)
+    float confidenceIncrement = 0.1f;   // Confidence gain per good beat
+    float confidenceDecrement = 0.1f;   // Confidence loss per bad/missed beat
+    float phaseErrorTolerance = 0.2f;   // Max phase error to count as "good beat" (0-0.5)
+    float missedBeatTolerance = 1.5f;   // Beat period multiplier for missed beat detection
+
     // ===== CONSTRUCTOR =====
 
     explicit MusicMode(ISystemTime& time);
@@ -77,6 +83,17 @@ public:
      * Reset to initial state
      */
     void reset();
+
+    /**
+     * Provide external BPM guidance (e.g., from RhythmAnalyzer)
+     * - Only affects BPM if external estimate is confident and within range
+     * - Smoothly blends external BPM with current PLL estimate
+     * - Helps prevent PLL drift during quiet sections
+     *
+     * @param externalBPM BPM estimate from external source
+     * @param confidence Confidence in estimate (0.0-1.0)
+     */
+    void applyExternalBPMGuidance(float externalBPM, float confidence);
 
     // ===== GETTERS =====
 
