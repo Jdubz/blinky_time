@@ -2,6 +2,27 @@
 #include "../music/MusicMode.h"
 #include <Arduino.h>
 
+// ============================================================================
+// Named Constants (extracted from magic numbers per PR review feedback)
+// ============================================================================
+namespace FireConstants {
+    // Phase calculation: full cycle constant (2*PI already defined in Arduino.h as TWO_PI)
+    constexpr float PHASE_FULL_CYCLE = TWO_PI;
+
+    // Audio energy threshold for detecting "presence" of audio
+    constexpr float AUDIO_PRESENCE_THRESHOLD = 0.05f;
+
+    // Ember brightness base values
+    constexpr float MUSIC_EMBER_BASE_BRIGHTNESS = 0.4f;
+    constexpr float ORGANIC_EMBER_BASE_BRIGHTNESS = 0.3f;
+    constexpr float ORGANIC_EMBER_SCALE = 0.7f;
+}
+
+// Helper: Convert beat phase (0-1) to pulse intensity (0-1, max at phase=0)
+inline float beatPhaseToPulse(float phase) {
+    return 0.5f + 0.5f * cos(phase * FireConstants::PHASE_FULL_CYCLE);
+}
+
 // PROGMEM compatibility for non-AVR platforms (e.g., nRF52840)
 #if defined(ARDUINO_ARCH_AVR)
 #include <avr/pgmspace.h>
@@ -524,7 +545,7 @@ void Fire::generateSparks() {
         // ============================================================
 
         // Phase-modulated spark heat: brightest on beat (phase=0), dimmest off-beat
-        float phaseMod = 0.5f + 0.5f * cos(music_->phase * 2.0f * PI);  // 0-1, max at phase=0
+        float phaseMod = beatPhaseToPulse(music_->phase);  // 0-1, max at phase=0
         float heatScale = 1.0f - params_.musicSparkPulse * (1.0f - phaseMod);  // 1.0 on beat, reduced off-beat
 
         // Baseline sparks still occur, but heat scales with phase
@@ -559,8 +580,8 @@ void Fire::generateSparks() {
         if (random(100) < (int)(effectiveChance * 100)) {
             numSparks = 1;
             // Random heat variation for organic look (not tied to audio)
-            sparkHeat = params_.sparkHeatMin +
-                random(params_.sparkHeatMax - params_.sparkHeatMin);
+            // Use random(min, max) to safely handle edge case where min >= max
+            sparkHeat = random(params_.sparkHeatMin, params_.sparkHeatMax);
         }
 
         // Only react to STRONG transients in organic mode
@@ -631,17 +652,19 @@ void Fire::applyCooling() {
         // MUSIC MODE: Phase-synced breathing effect
         // Cooling oscillates with beat phase for rhythmic pulsing
         // Low cooling on beat (fire flares up), high cooling off-beat (fire dims)
-        float breathe = sin(music_->phase * 2.0f * PI);  // -1 to 1
+        // Use -cos() so minimum cooling occurs at phase=0 (on-beat)
+        float breathe = -cos(music_->phase * FireConstants::PHASE_FULL_CYCLE);  // -1 to 1, min at phase=0
         int8_t coolingMod = (int8_t)(breathe * params_.musicCoolingPulse);
         cooling = max(0, min(255, (int)cooling + coolingMod));
     } else {
         // ORGANIC MODE: Gentle audio-reactive cooling
         // Reduce cooling when audio is present (flames persist longer with sound)
         // Use organicAudioMix to control how much audio affects cooling
-        if (audioEnergy_ > 0.05f) {
+        if (audioEnergy_ > FireConstants::AUDIO_PRESENCE_THRESHOLD) {
             float audioEffect = audioEnergy_ * params_.organicAudioMix;
-            int8_t reduction = (int8_t)(params_.coolingAudioBias * audioEffect * 2.0f);
-            cooling = max(0, (int)cooling + reduction);
+            // coolingAudioBias is typically negative, so adding it reduces cooling
+            int8_t coolingAdjustment = (int8_t)(params_.coolingAudioBias * audioEffect * 2.0f);
+            cooling = max(0, (int)cooling + coolingAdjustment);
         }
     }
 
@@ -661,15 +684,16 @@ void Fire::applyEmbers(float dtMs) {
     if (music_ && music_->isActive()) {
         // MUSIC MODE: Embers pulse with beat phase
         // phase=0 is on-beat (brightest), phase=0.5 is off-beat (dimmest)
-        float beatPulse = 0.5f + 0.5f * cos(music_->phase * 2.0f * PI);  // 0-1, max at phase=0
-        float baseBrightness = 0.4f;  // Minimum brightness
-        float pulsedBrightness = baseBrightness + (1.0f - baseBrightness) * beatPulse * params_.musicEmberPulse;
+        float beatPulse = beatPhaseToPulse(music_->phase);  // 0-1, max at phase=0
+        float pulsedBrightness = FireConstants::MUSIC_EMBER_BASE_BRIGHTNESS +
+            (1.0f - FireConstants::MUSIC_EMBER_BASE_BRIGHTNESS) * beatPulse * params_.musicEmberPulse;
         emberBrightness = pulsedBrightness;
     } else {
         // ORGANIC MODE: Embers pulse gently with mic level
         // Less reactive than music mode - more ambient/organic
         float audioInfluence = audioEnergy_ * params_.organicAudioMix;
-        emberBrightness = 0.3f + audioInfluence * 0.7f;  // 0.3 base, gentle audio scaling
+        emberBrightness = FireConstants::ORGANIC_EMBER_BASE_BRIGHTNESS +
+            audioInfluence * FireConstants::ORGANIC_EMBER_SCALE;
     }
 
     emberBrightness = min(1.0f, emberBrightness);
