@@ -15,6 +15,10 @@ namespace FireConstants {
     constexpr float MUSIC_EMBER_BASE_BRIGHTNESS = 0.4f;
     constexpr float ORGANIC_EMBER_BASE_BRIGHTNESS = 0.3f;
     constexpr float ORGANIC_EMBER_SCALE = 0.7f;
+
+    // Organic mode cooling adjustment scale factor
+    // Amplifies the audio effect on cooling for more visible response
+    constexpr float ORGANIC_COOLING_SCALE = 2.0f;
 }
 
 // Helper: Convert beat phase (0-1) to pulse intensity (0-1, max at phase=0)
@@ -577,8 +581,8 @@ void Fire::generateSparks() {
         if (random(100) < (int)(effectiveChance * 100)) {
             numSparks = 1;
             // Random heat variation for organic look (not tied to audio)
-            // Use random(min, max) to safely handle edge case where min >= max
-            sparkHeat = random(params_.sparkHeatMin, params_.sparkHeatMax);
+            // Arduino random(min, max) is exclusive of max, so +1 to include sparkHeatMax
+            sparkHeat = random(params_.sparkHeatMin, params_.sparkHeatMax + 1);
         }
 
         // Only react to STRONG transients in organic mode
@@ -663,7 +667,7 @@ void Fire::applyCooling() {
         if (audio_.energy > FireConstants::AUDIO_PRESENCE_THRESHOLD) {
             float audioEffect = audio_.energy * params_.organicAudioMix;
             // coolingAudioBias is typically negative, so adding it reduces cooling
-            int8_t coolingAdjustment = (int8_t)(params_.coolingAudioBias * audioEffect * 2.0f);
+            int8_t coolingAdjustment = (int8_t)(params_.coolingAudioBias * audioEffect * FireConstants::ORGANIC_COOLING_SCALE);
             cooling = max(0, (int)cooling + coolingAdjustment);
         }
     }
@@ -696,7 +700,8 @@ void Fire::applyEmbers(float dtMs) {
             audioInfluence * FireConstants::ORGANIC_EMBER_SCALE;
     }
 
-    emberBrightness = min(1.0f, emberBrightness);
+    // Clamp to valid range [0.0, 1.0]
+    emberBrightness = max(0.0f, min(1.0f, emberBrightness));
 
     // Noise scale controls the "size" of ember patches
     // Smaller values = larger patches, larger values = more detail
