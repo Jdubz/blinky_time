@@ -19,6 +19,14 @@ namespace FireConstants {
     // Organic mode cooling adjustment scale factor
     // Amplifies the audio effect on cooling for more visible response
     constexpr float ORGANIC_COOLING_SCALE = 2.0f;
+
+    // Beat detection phase thresholds
+    // Beat is detected when phase wraps from near 1.0 back to near 0.0
+    constexpr float BEAT_PHASE_LOW_THRESHOLD = 0.2f;   // Current phase must be below this
+    constexpr float BEAT_PHASE_HIGH_THRESHOLD = 0.8f;  // Previous phase must be above this
+
+    // Frame timing
+    constexpr unsigned long MIN_UPDATE_INTERVAL_MS = 30;  // ~33 FPS max
 }
 
 // Helper: Convert beat phase (0-1) to pulse intensity (0-1, max at phase=0)
@@ -276,7 +284,7 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
 
 void Fire::update() {
     unsigned long currentMs = millis();
-    if (currentMs - this->lastUpdateMs_ < 30) {  // ~33 FPS max
+    if (currentMs - this->lastUpdateMs_ < FireConstants::MIN_UPDATE_INTERVAL_MS) {
         return;
     }
     float dtMs = (float)(currentMs - this->lastUpdateMs_);
@@ -552,7 +560,8 @@ void Fire::generateSparks() {
         }
 
         // Beat detection via phase wraparound (phase went from near 1.0 back to near 0)
-        bool beatHappened = (audio_.phase < 0.2f && prevPhase_ > 0.8f);
+        bool beatHappened = (audio_.phase < FireConstants::BEAT_PHASE_LOW_THRESHOLD &&
+                             prevPhase_ > FireConstants::BEAT_PHASE_HIGH_THRESHOLD);
         if (beatHappened) {
             beatCount_++;
         }
