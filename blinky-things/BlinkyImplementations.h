@@ -48,9 +48,8 @@
 #include "config/SettingsRegistry.cpp"  // Settings abstraction layer
 #include "config/Presets.cpp"           // Audio parameter presets
 
-// Music detection implementations
-#include "music/MusicMode.cpp"
-#include "music/RhythmAnalyzer.cpp"
+// Audio processing implementations
+#include "audio/AudioController.cpp"
 
 // Test implementations (only when testing enabled)
 #ifdef ENABLE_TESTING

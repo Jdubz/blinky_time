@@ -1,5 +1,4 @@
 #include "Fire.h"
-#include "../music/MusicMode.h"
 #include <Arduino.h>
 
 // ============================================================================
@@ -174,10 +173,9 @@ namespace {
 // ============================================================================
 
 Fire::Fire()
-    : heat_(nullptr), tempHeat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
+    : heat_(nullptr), tempHeat_(nullptr),
       lastBurstMs_(0), inSuppression_(false),
-      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0),
-      music_(nullptr) {
+      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0) {
 }
 
 Fire::~Fire() {
@@ -255,8 +253,8 @@ bool Fire::begin(const DeviceConfig& config) {
     return true;
 }
 
-void Fire::generate(PixelMatrix& matrix, float energy, float hit) {
-    setAudioInput(energy, hit);
+void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    audio_ = audio;
     update();
 
     // Convert heat array to PixelMatrix colors
@@ -298,15 +296,12 @@ void Fire::reset() {
         memset(heat_, 0, this->numLeds_);
     }
     numActivePositions_ = 0;
-    audioEnergy_ = 0.0f;
-    audioHit_ = 0.0f;
+    audio_ = AudioControl();
+    prevPhase_ = 1.0f;
+    beatCount_ = 0;
     this->lastUpdateMs_ = millis();
 }
 
-void Fire::setAudioInput(const float energy, const float hit) {
-    audioEnergy_ = energy;
-    audioHit_ = hit;
-}
 
 void Fire::setLayoutType(LayoutType layoutType) {
     this->layout_ = layoutType;
@@ -335,9 +330,6 @@ void Fire::setOrientation(MatrixOrientation orientation) {
     orientation_ = orientation;
 }
 
-void Fire::setMusicMode(MusicMode* music) {
-    music_ = music;
-}
 
 void Fire::setParams(const FireParams& params) {
     params_ = params;
@@ -537,7 +529,7 @@ void Fire::generateSparks() {
         inSuppression_ = false;
     }
 
-    bool inMusicMode = music_ && music_->isActive();
+    bool inMusicMode = audio_.hasRhythm();
 
     if (inMusicMode) {
         // ============================================================
@@ -545,7 +537,7 @@ void Fire::generateSparks() {
         // ============================================================
 
         // Phase-modulated spark heat: brightest on beat (phase=0), dimmest off-beat
-        float phaseMod = beatPhaseToPulse(music_->phase);  // 0-1, max at phase=0
+        float phaseMod = beatPhaseToPulse(audio_.phase);  // 0-1, max at phase=0
         float heatScale = 1.0f - params_.musicSparkPulse * (1.0f - phaseMod);  // 1.0 on beat, reduced off-beat
 
         // Baseline sparks still occur, but heat scales with phase
@@ -555,11 +547,16 @@ void Fire::generateSparks() {
             sparkHeat = (uint8_t)(params_.sparkHeatMax * heatScale);
         }
 
+        // Beat detection via phase wraparound (phase went from near 1.0 back to near 0)
+        bool beatHappened = (audio_.phase < 0.2f && prevPhase_ > 0.8f);
+        if (beatHappened) {
+            beatCount_++;
+        }
+
         // Beat-synced spark bursts (highest priority)
-        // Triggers on detected beats
-        if (music_->beatHappened && !inSuppression_) {
-            // Stronger bursts on downbeats (wholeNote = every 4 beats)
-            uint8_t beatSparks = music_->wholeNote ? params_.burstSparks * 2 : params_.burstSparks;
+        if (beatHappened && !inSuppression_) {
+            // Stronger bursts on downbeats (every 4 beats)
+            uint8_t beatSparks = (beatCount_ % 4 == 0) ? params_.burstSparks * 2 : params_.burstSparks;
             numSparks += beatSparks;
             sparkHeat = 255;  // Max heat for music-driven beats
             lastBurstMs_ = now;
@@ -574,7 +571,7 @@ void Fire::generateSparks() {
         float organicChance = params_.organicSparkChance;
 
         // Add gentle audio influence (scaled by organicAudioMix)
-        float audioBoost = audioEnergy_ * params_.audioSparkBoost * params_.organicAudioMix;
+        float audioBoost = audio_.energy * params_.audioSparkBoost * params_.organicAudioMix;
         float effectiveChance = organicChance + audioBoost;
 
         if (random(100) < (int)(effectiveChance * 100)) {
@@ -587,8 +584,8 @@ void Fire::generateSparks() {
         // Only react to STRONG transients in organic mode
         // This prevents fire from being too reactive to every sound
         bool shouldSuppress = params_.organicBurstSuppress && inSuppression_;
-        if (audioHit_ >= params_.organicTransientMin && !shouldSuppress) {
-            float strength = audioHit_;
+        if (audio_.pulse >= params_.organicTransientMin && !shouldSuppress) {
+            float strength = audio_.pulse;
             numSparks += params_.burstSparks;
             sparkHeat = params_.sparkHeatMin +
                 (uint8_t)(strength * (255 - params_.sparkHeatMin));
@@ -643,25 +640,28 @@ void Fire::generateSparks() {
             }
         }
     }
+
+    // Update prevPhase_ for next frame beat detection
+    prevPhase_ = audio_.phase;
 }
 
 void Fire::applyCooling() {
     uint8_t cooling = params_.baseCooling;
 
-    if (music_ && music_->isActive()) {
+    if (audio_.hasRhythm()) {
         // MUSIC MODE: Phase-synced breathing effect
         // Cooling oscillates with beat phase for rhythmic pulsing
         // Low cooling on beat (fire flares up), high cooling off-beat (fire dims)
         // Use -cos() so minimum cooling occurs at phase=0 (on-beat)
-        float breathe = -cos(music_->phase * FireConstants::PHASE_FULL_CYCLE);  // -1 to 1, min at phase=0
+        float breathe = -cos(audio_.phase * FireConstants::PHASE_FULL_CYCLE);  // -1 to 1, min at phase=0
         int8_t coolingMod = (int8_t)(breathe * params_.musicCoolingPulse);
         cooling = max(0, min(255, (int)cooling + coolingMod));
     } else {
         // ORGANIC MODE: Gentle audio-reactive cooling
         // Reduce cooling when audio is present (flames persist longer with sound)
         // Use organicAudioMix to control how much audio affects cooling
-        if (audioEnergy_ > FireConstants::AUDIO_PRESENCE_THRESHOLD) {
-            float audioEffect = audioEnergy_ * params_.organicAudioMix;
+        if (audio_.energy > FireConstants::AUDIO_PRESENCE_THRESHOLD) {
+            float audioEffect = audio_.energy * params_.organicAudioMix;
             // coolingAudioBias is typically negative, so adding it reduces cooling
             int8_t coolingAdjustment = (int8_t)(params_.coolingAudioBias * audioEffect * 2.0f);
             cooling = max(0, (int)cooling + coolingAdjustment);
@@ -681,17 +681,17 @@ void Fire::applyEmbers(float dtMs) {
     // Calculate ember brightness multiplier based on mode
     float emberBrightness;
 
-    if (music_ && music_->isActive()) {
+    if (audio_.hasRhythm()) {
         // MUSIC MODE: Embers pulse with beat phase
         // phase=0 is on-beat (brightest), phase=0.5 is off-beat (dimmest)
-        float beatPulse = beatPhaseToPulse(music_->phase);  // 0-1, max at phase=0
+        float beatPulse = beatPhaseToPulse(audio_.phase);  // 0-1, max at phase=0
         float pulsedBrightness = FireConstants::MUSIC_EMBER_BASE_BRIGHTNESS +
             (1.0f - FireConstants::MUSIC_EMBER_BASE_BRIGHTNESS) * beatPulse * params_.musicEmberPulse;
         emberBrightness = pulsedBrightness;
     } else {
         // ORGANIC MODE: Embers pulse gently with mic level
         // Less reactive than music mode - more ambient/organic
-        float audioInfluence = audioEnergy_ * params_.organicAudioMix;
+        float audioInfluence = audio_.energy * params_.organicAudioMix;
         emberBrightness = FireConstants::ORGANIC_EMBER_BASE_BRIGHTNESS +
             audioInfluence * FireConstants::ORGANIC_EMBER_SCALE;
     }

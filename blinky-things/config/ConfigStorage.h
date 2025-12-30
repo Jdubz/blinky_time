@@ -5,8 +5,7 @@
 #include "../inputs/AdaptiveMic.h"
 
 // Forward declarations
-class RhythmAnalyzer;
-class MusicMode;
+class AudioController;
 
 // Simple configuration storage with flash persistence for nRF52
 class ConfigStorage {
@@ -109,13 +108,13 @@ public:
     void begin();
     bool isValid() const { return valid_; }
 
-    void loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, RhythmAnalyzer* rhythm = nullptr, MusicMode* music = nullptr);
-    void saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm = nullptr, const MusicMode* music = nullptr);
+    void loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, AudioController* audioCtrl = nullptr);
+    void saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
     void factoryReset();
 
     // Auto-save support
     void markDirty() { dirty_ = true; }
-    void saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm = nullptr, const MusicMode* music = nullptr);
+    void saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
 
 private:
     ConfigData data_;

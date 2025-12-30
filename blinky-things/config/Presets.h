@@ -4,7 +4,7 @@
 
 // Forward declarations
 class AdaptiveMic;
-class MusicMode;
+class AudioController;
 
 /**
  * Audio parameter presets for quick configuration changes
@@ -78,10 +78,10 @@ public:
      * Apply a preset to the audio system
      * @param id Preset to apply
      * @param mic AdaptiveMic instance to configure
-     * @param music MusicMode instance to configure
+     * @param audioCtrl AudioController instance to configure (optional)
      * @return true if preset was applied successfully, false if invalid preset ID
      */
-    static bool applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music);
+    static bool applyPreset(PresetId id, AdaptiveMic& mic, AudioController* audioCtrl = nullptr);
 
     /**
      * Get the name of a preset

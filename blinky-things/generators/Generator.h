@@ -1,6 +1,7 @@
 #pragma once
 #include "../types/PixelMatrix.h"
 #include "../devices/DeviceConfig.h"
+#include "../audio/AudioControl.h"
 
 /**
  * Generator - Base class for visual pattern generators
@@ -9,7 +10,7 @@
  * They are the source of visual content (fire, water, lightning, etc.).
  *
  * Architecture flow:
- * Inputs -> Generator -> Effect (optional) -> Render -> LEDs
+ * AudioController -> Generator -> Effect (optional) -> Render -> LEDs
  */
 class Generator {
 public:
@@ -23,10 +24,9 @@ public:
     /**
      * Generate the next frame of the pattern with audio input
      * @param matrix The output matrix to fill with generated pattern
-     * @param energy Audio energy level (0.0 to 1.0)
-     * @param hit Audio hit/transient level (0.0 to 1.0)
+     * @param audio Unified audio control signal (energy, pulse, phase, rhythmStrength)
      */
-    virtual void generate(PixelMatrix& matrix, float energy = 0.0f, float hit = 0.0f) = 0;
+    virtual void generate(PixelMatrix& matrix, const AudioControl& audio) = 0;
 
     /**
      * Reset the generator state
@@ -48,9 +48,6 @@ protected:
     // Timing
     uint32_t lastUpdateMs_ = 0;
 
-    // Audio responsiveness
-    bool audioReactive_ = true;
-    float audioSensitivity_ = 1.0f;
 
     // Common coordinate conversion helpers (row-major layout)
     // Subclasses can override for custom wiring patterns

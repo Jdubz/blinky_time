@@ -67,8 +67,8 @@ bool Water::begin(const DeviceConfig& config) {
     return true;
 }
 
-void Water::generate(PixelMatrix& matrix, float energy, float hit) {
-    setAudioInput(energy, hit);
+void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    setAudioInput(audio.energy, audio.pulse);
     update();
 
     // Convert depth values to colors and fill matrix

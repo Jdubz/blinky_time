@@ -1,6 +1,6 @@
 #include "Presets.h"
 #include "../inputs/AdaptiveMic.h"
-#include "../music/MusicMode.h"
+#include "../audio/AudioController.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -158,7 +158,7 @@ const PresetParams PresetManager::PRESETS[] = {
     },
 };
 
-bool PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music) {
+bool PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, AudioController* audioCtrl) {
     if (id >= PresetId::NUM_PRESETS) {
         Serial.println(F("Invalid preset ID"));
         return false;
@@ -185,13 +185,12 @@ bool PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music)
     mic.fastAgcPeriodMs = p.fastAgcPeriodMs;
     mic.fastAgcTrackingTau = p.fastAgcTrackingTau;
 
-    // Apply music mode parameters
-    music.activationThreshold = p.musicthresh;
-    music.confidenceIncrement = p.confinc;
-    music.stablePhaseThreshold = p.stablephase;
-    music.bpmLockThreshold = p.bpmLockThreshold;
-    music.bpmLockMaxChange = p.bpmLockMaxChange;
-    music.bpmUnlockThreshold = p.bpmUnlockThreshold;
+    // Apply audio controller rhythm parameters (if available)
+    if (audioCtrl) {
+        audioCtrl->activationThreshold = p.musicthresh;
+        // Note: Some old MusicMode params don't have direct AudioController equivalents
+        // bpmLockThreshold, bpmLockMaxChange, bpmUnlockThreshold are deprecated
+    }
 
     Serial.print(F("Applied preset: "));
     Serial.println(getPresetName(id));

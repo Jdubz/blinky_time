@@ -1,7 +1,6 @@
 #include "ConfigStorage.h"
 #include "../tests/SafetyTest.h"
-#include "../music/RhythmAnalyzer.h"
-#include "../music/MusicMode.h"
+#include "../audio/AudioController.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -248,7 +247,7 @@ void ConfigStorage::saveToFlash() {
 #endif
 }
 
-void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, RhythmAnalyzer* rhythm, MusicMode* music) {
+void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, AudioController* audioCtrl) {
     // Validation helpers to reduce code duplication
     bool corrupt = false;
 
@@ -399,28 +398,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     mic.hybridDrumWeight = data_.mic.hybridDrumWeight;
     mic.hybridBothBoost = data_.mic.hybridBothBoost;
 
-    // RhythmAnalyzer parameters (v22+)
-    if (rhythm) {
-        rhythm->minBPM = data_.rhythm.minBPM;
-        rhythm->maxBPM = data_.rhythm.maxBPM;
-        rhythm->beatLikelihoodThreshold = data_.rhythm.beatLikelihoodThreshold;
-        rhythm->minPeriodicityStrength = data_.rhythm.minPeriodicityStrength;
-        rhythm->autocorrUpdateIntervalMs = data_.rhythm.autocorrUpdateIntervalMs;
-    }
-
-    // MusicMode parameters (v22+)
-    if (music) {
-        music->activationThreshold = data_.music.activationThreshold;
-        music->minBeatsToActivate = data_.music.minBeatsToActivate;
-        music->maxMissedBeats = data_.music.maxMissedBeats;
-        music->bpmMin = data_.music.bpmMin;
-        music->bpmMax = data_.music.bpmMax;
-        music->pllKp = data_.music.pllKp;
-        music->pllKi = data_.music.pllKi;
+    // AudioController parameters (v22+)
+    // Note: Rhythm params (beatLikelihood, periodicity, etc.) are now internal to AudioController
+    // We load from stored data but only apply the exposed tuning params
+    if (audioCtrl) {
+        // BPM range from music settings (takes precedence over rhythm settings)
+        audioCtrl->setBpmRange(data_.music.bpmMin, data_.music.bpmMax);
+        audioCtrl->activationThreshold = data_.music.activationThreshold;
     }
 }
 
-void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
+void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
     data_.fire.baseCooling = fireParams.baseCooling;
     data_.fire.sparkHeatMin = fireParams.sparkHeatMin;
     data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
@@ -468,24 +456,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.hybridDrumWeight = mic.hybridDrumWeight;
     data_.mic.hybridBothBoost = mic.hybridBothBoost;
 
-    // RhythmAnalyzer parameters (v22+)
-    if (rhythm) {
-        data_.rhythm.minBPM = rhythm->minBPM;
-        data_.rhythm.maxBPM = rhythm->maxBPM;
-        data_.rhythm.beatLikelihoodThreshold = rhythm->beatLikelihoodThreshold;
-        data_.rhythm.minPeriodicityStrength = rhythm->minPeriodicityStrength;
-        data_.rhythm.autocorrUpdateIntervalMs = rhythm->autocorrUpdateIntervalMs;
-    }
-
-    // MusicMode parameters (v22+)
-    if (music) {
-        data_.music.activationThreshold = music->activationThreshold;
-        data_.music.minBeatsToActivate = music->minBeatsToActivate;
-        data_.music.maxMissedBeats = music->maxMissedBeats;
-        data_.music.bpmMin = music->bpmMin;
-        data_.music.bpmMax = music->bpmMax;
-        data_.music.pllKp = music->pllKp;
-        data_.music.pllKi = music->pllKi;
+    // AudioController parameters (v22+)
+    // Note: Internal rhythm params (beatLikelihood, periodicity, etc.) are not user-tunable
+    // so we don't save them - they use hardcoded values in AudioController
+    if (audioCtrl) {
+        data_.music.bpmMin = audioCtrl->getBpmMin();
+        data_.music.bpmMax = audioCtrl->getBpmMax();
+        data_.music.activationThreshold = audioCtrl->activationThreshold;
     }
 
     saveToFlash();
@@ -493,9 +470,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     lastSaveMs_ = millis();
 }
 
-void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, mic, rhythm, music);
+        saveConfiguration(fireParams, mic, audioCtrl);
     }
 }
 

@@ -3,8 +3,7 @@
 #include "../config/Presets.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
-#include "../music/MusicMode.h"
-#include "../music/RhythmAnalyzer.h"
+#include "../audio/AudioController.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../types/Version.h"
@@ -15,7 +14,7 @@ extern const DeviceConfig& config;
 SerialConsole* SerialConsole::instance_ = nullptr;
 
 SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), music_(nullptr), rhythm_(nullptr), configStorage_(nullptr) {
+    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
 }
 
@@ -171,75 +170,25 @@ void SerialConsole::registerSettings() {
             "Hybrid: both-agree boost", 1.0f, 2.0f);
     }
 
-    // === MUSIC MODE SETTINGS ===
-    if (music_) {
-        // Activation/deactivation
-        settings_.registerFloat("musicthresh", &music_->activationThreshold, "music",
-            "Music mode activation threshold (0-1)", 0.0f, 1.0f);
-        settings_.registerUint8("musicbeats", &music_->minBeatsToActivate, "music",
-            "Stable beats to activate", 2, 16);
-        settings_.registerUint8("musicmissed", &music_->maxMissedBeats, "music",
-            "Missed beats before deactivation", 4, 16);
-
-        // BPM range
-        settings_.registerFloat("bpmmin", &music_->bpmMin, "music",
-            "Minimum BPM", 40.0f, 120.0f);
-        settings_.registerFloat("bpmmax", &music_->bpmMax, "music",
-            "Maximum BPM", 120.0f, 240.0f);
+    // === AUDIO CONTROLLER SETTINGS (rhythm tracking) ===
+    if (audioCtrl_) {
+        // Rhythm tracking activation
+        settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
+            "Rhythm activation threshold (0-1)", 0.0f, 1.0f);
 
         // PLL tuning
-        settings_.registerFloat("pllkp", &music_->pllKp, "music",
-            "PLL proportional gain (responsiveness)", 0.01f, 0.5f);
-        settings_.registerFloat("pllki", &music_->pllKi, "music",
-            "PLL integral gain (stability)", 0.001f, 0.1f);
+        settings_.registerFloat("pllkp", &audioCtrl_->pllKp, "rhythm",
+            "PLL proportional gain", 0.01f, 0.5f);
+        settings_.registerFloat("pllki", &audioCtrl_->pllKi, "rhythm",
+            "PLL integral gain", 0.001f, 0.1f);
 
-        // Phase snap tuning
-        settings_.registerFloat("phasesnap", &music_->phaseSnapThreshold, "music",
-            "Phase error for snap (vs gradual)", 0.1f, 0.5f);
-        settings_.registerFloat("snapconf", &music_->phaseSnapConfidence, "music",
-            "Confidence below enables snap", 0.1f, 0.8f);
-        settings_.registerFloat("stablephase", &music_->stablePhaseThreshold, "music",
-            "Phase error for stable beat", 0.1f, 0.4f);
-
-        // Confidence tuning
-        settings_.registerFloat("confinc", &music_->confidenceIncrement, "music",
-            "Confidence gained per stable beat", 0.01f, 0.3f);
-        settings_.registerFloat("confdec", &music_->confidenceDecrement, "music",
-            "Confidence lost per unstable beat", 0.01f, 0.3f);
-        settings_.registerFloat("misspenalty", &music_->missedBeatPenalty, "music",
-            "Confidence lost per missed beat", 0.01f, 0.2f);
-
-        // Tempo estimation (comb filter)
-        settings_.registerFloat("combdecay", &music_->tempoFilterDecay, "music",
-            "Comb filter energy decay (0.9-0.99)", 0.85f, 0.99f);
-        settings_.registerFloat("combfb", &music_->combFeedback, "music",
-            "Comb filter resonance (0.5-0.95)", 0.4f, 0.95f);
-        settings_.registerFloat("combconf", &music_->combConfidenceThreshold, "music",
-            "Comb updates only below this conf", 0.2f, 0.8f);
-        settings_.registerFloat("histblend", &music_->histogramBlend, "music",
-            "Histogram tempo blend factor", 0.05f, 0.5f);
-
-        // BPM locking hysteresis
-        settings_.registerFloat("bpmlock", &music_->bpmLockThreshold, "music",
-            "Confidence to lock BPM", 0.5f, 0.95f);
-        settings_.registerFloat("bpmmaxchange", &music_->bpmLockMaxChange, "music",
-            "Max BPM change/sec when locked", 1.0f, 20.0f);
-        settings_.registerFloat("bpmunlock", &music_->bpmUnlockThreshold, "music",
-            "Confidence to unlock BPM", 0.2f, 0.6f);
-    }
-
-    // === RHYTHM ANALYZER SETTINGS ===
-    if (rhythm_) {
-        settings_.registerFloat("rhythmminbpm", &rhythm_->minBPM, "rhythm",
-            "Minimum BPM for autocorrelation", 60.0f, 120.0f);
-        settings_.registerFloat("rhythmmaxbpm", &rhythm_->maxBPM, "rhythm",
-            "Maximum BPM for autocorrelation", 120.0f, 240.0f);
-        settings_.registerUint32("rhythminterval", &rhythm_->autocorrUpdateIntervalMs, "rhythm",
-            "Autocorrelation update interval (ms)", 500, 2000);
-        settings_.registerFloat("beatthresh", &rhythm_->beatLikelihoodThreshold, "rhythm",
-            "Beat likelihood threshold", 0.5f, 0.9f);
-        settings_.registerFloat("minperiodicity", &rhythm_->minPeriodicityStrength, "rhythm",
-            "Minimum periodicity strength", 0.3f, 0.8f);
+        // Beat alignment modulation
+        settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "rhythm",
+            "Pulse boost on beat", 1.0f, 2.0f);
+        settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "rhythm",
+            "Pulse suppress off beat", 0.3f, 1.0f);
+        settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "rhythm",
+            "Energy boost on beat", 0.0f, 1.0f);
     }
 
 }
@@ -421,92 +370,51 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
-    if (strcmp(cmd, "test reset rhythm") == 0) {
-        if (rhythm_) {
-            rhythm_->reset();
-            Serial.println(F("OK rhythm reset"));
-        } else {
-            Serial.println(F("ERROR: Rhythm analyzer not available"));
-        }
-        return true;
-    }
-
-    if (strcmp(cmd, "test reset music") == 0) {
-        if (music_) {
-            music_->reset();
-            Serial.println(F("OK music reset"));
-        } else {
-            Serial.println(F("ERROR: Music mode not available"));
-        }
-        return true;
-    }
-
     // Note: "test reset baselines" command removed with simplified transient detection
 
-    // === MUSIC MODE STATUS ===
-    if (strcmp(cmd, "music") == 0) {
-        if (music_) {
-            Serial.println(F("=== Music Mode Status ==="));
-            Serial.print(F("Active: "));
-            Serial.println(music_->active ? F("YES") : F("NO"));
+    // === AUDIO CONTROLLER STATUS ===
+    if (strcmp(cmd, "music") == 0 || strcmp(cmd, "rhythm") == 0 || strcmp(cmd, "audio") == 0) {
+        if (audioCtrl_) {
+            const AudioControl& audio = audioCtrl_->getControl();
+            Serial.println(F("=== Audio Controller Status ==="));
+            Serial.print(F("Rhythm Active: "));
+            Serial.println(audio.hasRhythm() ? F("YES") : F("NO"));
             Serial.print(F("BPM: "));
-            Serial.println(music_->bpm);
+            Serial.println(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F("Phase: "));
-            Serial.println(music_->phase);
-            Serial.print(F("Beat #: "));
-            Serial.println(music_->beatNumber);
+            Serial.println(audio.phase, 2);
+            Serial.print(F("Rhythm Strength: "));
+            Serial.println(audio.rhythmStrength, 2);
             Serial.print(F("Confidence: "));
-            Serial.println(music_->getConfidence());
+            Serial.println(audioCtrl_->getConfidence(), 2);
+            Serial.print(F("Energy: "));
+            Serial.println(audio.energy, 2);
+            Serial.print(F("Pulse: "));
+            Serial.println(audio.pulse, 2);
+            Serial.print(F("BPM Range: "));
+            Serial.print(audioCtrl_->getBpmMin(), 0);
+            Serial.print(F("-"));
+            Serial.println(audioCtrl_->getBpmMax(), 0);
         } else {
-            Serial.println(F("Music mode not available"));
+            Serial.println(F("Audio controller not available"));
         }
         return true;
     }
 
     // === PRESET COMMANDS ===
     if (strncmp(cmd, "preset ", 7) == 0) {
-        if (!mic_ || !music_) {
-            Serial.println(F("ERROR: Mic or music not available"));
+        if (!mic_) {
+            Serial.println(F("ERROR: Mic not available"));
             return true;
         }
-        // Buffer safety: cmd is null-terminated at line 236 after readBytesUntil.
-        // strncmp above ensures "preset " prefix exists, so cmd+7 is valid.
-        // parsePresetName handles empty string and null pointer gracefully.
         const char* presetName = cmd + 7;
         PresetId id = PresetManager::parsePresetName(presetName);
         if (id != PresetId::NUM_PRESETS) {
-            PresetManager::applyPreset(id, *mic_, *music_);
+            PresetManager::applyPreset(id, *mic_, audioCtrl_);
             Serial.print(F("OK "));
             Serial.println(PresetManager::getPresetName(id));
         } else {
             Serial.println(F("Unknown preset. Use: default, quiet, loud, live"));
-        }
-        return true;
-    }
-
-    // === RHYTHM ANALYZER STATUS ===
-    if (strcmp(cmd, "rhythm") == 0 || strcmp(cmd, "rhythm status") == 0) {
-        if (rhythm_) {
-            Serial.println(F("=== Rhythm Analyzer Status ==="));
-            Serial.print(F("Detected BPM: "));
-            Serial.println(rhythm_->getDetectedBPM(), 1);
-            Serial.print(F("Period: "));
-            Serial.print(rhythm_->detectedPeriodMs, 1);
-            Serial.println(F(" ms"));
-            Serial.print(F("Periodicity Strength: "));
-            Serial.println(rhythm_->periodicityStrength, 2);
-            Serial.print(F("Beat Likelihood: "));
-            Serial.println(rhythm_->beatLikelihood, 2);
-            Serial.print(F("Buffer Fill: "));
-            Serial.print(rhythm_->getBufferFillLevel());
-            Serial.print(F("/"));
-            Serial.println(RhythmAnalyzer::BUFFER_SIZE);
-            Serial.print(F("BPM Range: "));
-            Serial.print(rhythm_->minBPM, 0);
-            Serial.print(F("-"));
-            Serial.println(rhythm_->maxBPM, 0);
-        } else {
-            Serial.println(F("Rhythm analyzer not available"));
         }
         return true;
     }
@@ -569,7 +477,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     // === CONFIGURATION COMMANDS ===
     if (strcmp(cmd, "save") == 0) {
         if (configStorage_ && fireGenerator_ && mic_) {
-            configStorage_->saveConfiguration(fireGenerator_->getParams(), *mic_, rhythm_, music_);
+            configStorage_->saveConfiguration(fireGenerator_->getParams(), *mic_, audioCtrl_);
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -579,7 +487,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
 
     if (strcmp(cmd, "load") == 0) {
         if (configStorage_ && fireGenerator_ && mic_) {
-            configStorage_->loadConfiguration(fireGenerator_->getParamsMutable(), *mic_, rhythm_, music_);
+            configStorage_->loadConfiguration(fireGenerator_->getParamsMutable(), *mic_, audioCtrl_);
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -642,14 +550,14 @@ void SerialConsole::restoreDefaults() {
         mic_->fastAgcTrackingTau = 5.0f;
     }
 
-    // Restore music mode defaults
-    if (music_) {
-        music_->activationThreshold = 0.6f;
-        music_->confidenceIncrement = 0.1f;
-        music_->stablePhaseThreshold = 0.2f;
-        music_->bpmLockThreshold = 0.7f;
-        music_->bpmLockMaxChange = 5.0f;
-        music_->bpmUnlockThreshold = 0.4f;
+    // Restore audio controller defaults
+    if (audioCtrl_) {
+        audioCtrl_->activationThreshold = 0.5f;
+        audioCtrl_->pllKp = 0.15f;
+        audioCtrl_->pllKi = 0.02f;
+        audioCtrl_->pulseBoostOnBeat = 1.3f;
+        audioCtrl_->pulseSuppressOffBeat = 0.6f;
+        audioCtrl_->energyBoostOnBeat = 0.3f;
     }
 }
 
@@ -725,38 +633,33 @@ void SerialConsole::streamTick() {
 
         Serial.print(F("}"));
 
-        // Music mode telemetry (always include when music_ is available)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"conf":0.82,"q":1,"h":0,"w":0}
-        // a = active, bpm = tempo, ph = phase, conf = confidence
-        // q/h/w = quarter/half/whole note events (1 = event this frame)
-        // Debug fields (when streamDebug_):
-        // sb = stable beats, mb = missed beats, pe = peak tempo energy, ei = error integral
-        if (music_) {
+        // AudioController telemetry (unified rhythm tracking)
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"e":0.5,"p":0.8}
+        // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
+        // conf = confidence, e = energy, p = pulse
+        if (audioCtrl_) {
+            const AudioControl& audio = audioCtrl_->getControl();
             Serial.print(F(",\"m\":{\"a\":"));
-            Serial.print(music_->isActive() ? 1 : 0);
+            Serial.print(audio.hasRhythm() ? 1 : 0);
             Serial.print(F(",\"bpm\":"));
-            Serial.print(music_->getBPM(), 1);
+            Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"ph\":"));
-            Serial.print(music_->getPhase(), 2);
+            Serial.print(audio.phase, 2);
+            Serial.print(F(",\"str\":"));
+            Serial.print(audio.rhythmStrength, 2);
             Serial.print(F(",\"conf\":"));
-            Serial.print(music_->getConfidence(), 2);
-            Serial.print(F(",\"q\":"));
-            Serial.print(music_->quarterNote ? 1 : 0);
-            Serial.print(F(",\"h\":"));
-            Serial.print(music_->halfNote ? 1 : 0);
-            Serial.print(F(",\"w\":"));
-            Serial.print(music_->wholeNote ? 1 : 0);
+            Serial.print(audioCtrl_->getConfidence(), 2);
+            Serial.print(F(",\"e\":"));
+            Serial.print(audio.energy, 2);
+            Serial.print(F(",\"p\":"));
+            Serial.print(audio.pulse, 2);
 
             // Debug mode: add internal state for tuning
             if (streamDebug_) {
-                Serial.print(F(",\"sb\":"));
-                Serial.print(music_->getStableBeats());
-                Serial.print(F(",\"mb\":"));
-                Serial.print(music_->getMissedBeats());
                 Serial.print(F(",\"pe\":"));
-                Serial.print(music_->getPeakTempoEnergy(), 4);
-                Serial.print(F(",\"ei\":"));
-                Serial.print(music_->getErrorIntegral(), 3);
+                Serial.print(audioCtrl_->getPhaseError(), 3);
+                Serial.print(F(",\"ps\":"));
+                Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
             }
 
             Serial.print(F("}"));
@@ -771,26 +674,6 @@ void SerialConsole::streamTick() {
             Serial.print(fireGenerator_->getTotalHeat());
             Serial.print(F(",\"pct\":"));
             Serial.print(fireGenerator_->getBrightnessPercent(), 1);
-            Serial.print(F("}"));
-        }
-
-        // RhythmAnalyzer telemetry (always include when rhythm_ is available)
-        // Format: "r":{"bpm":125.3,"str":0.82,"per":480.2,"lik":0.73,"ph":0.45,"buf":256}
-        // bpm = detected BPM, str = periodicity strength, per = period (ms)
-        // lik = beat likelihood, ph = phase, buf = buffer fill level
-        if (rhythm_) {
-            Serial.print(F(",\"r\":{\"bpm\":"));
-            Serial.print(rhythm_->getDetectedBPM(), 1);
-            Serial.print(F(",\"str\":"));
-            Serial.print(rhythm_->periodicityStrength, 2);
-            Serial.print(F(",\"per\":"));
-            Serial.print(rhythm_->detectedPeriodMs, 1);
-            Serial.print(F(",\"lik\":"));
-            Serial.print(rhythm_->beatLikelihood, 2);
-            Serial.print(F(",\"ph\":"));
-            Serial.print(rhythm_->getCurrentPhase(), 2);
-            Serial.print(F(",\"buf\":"));
-            Serial.print(rhythm_->getBufferFillLevel());
             Serial.print(F("}"));
         }
 
