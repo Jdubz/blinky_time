@@ -16,7 +16,7 @@ class AudioController;
  * - LIVE: Balanced for live performance
  *
  * Usage:
- *   PresetManager::applyPreset(PresetId::QUIET, mic, music);
+ *   PresetManager::applyPreset(PresetId::QUIET, mic, audioCtrl);
  */
 
 enum class PresetId : uint8_t {
@@ -58,15 +58,8 @@ struct PresetParams {
     uint16_t fastAgcPeriodMs;
     float fastAgcTrackingTau;
 
-    // Music mode
-    float musicthresh;
-    float confinc;
-    float stablephase;
-
-    // BPM locking
-    float bpmLockThreshold;
-    float bpmLockMaxChange;
-    float bpmUnlockThreshold;
+    // AudioController rhythm tracking
+    float musicthresh;       // Maps to AudioController::activationThreshold
 };
 
 /**

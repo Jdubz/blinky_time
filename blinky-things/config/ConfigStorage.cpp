@@ -134,21 +134,11 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hybridDrumWeight = 0.3f;    // Weight when only drummer detects
     data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
 
-    // RhythmAnalyzer defaults
-    data_.rhythm.minBPM = 60.0f;
-    data_.rhythm.maxBPM = 200.0f;
-    data_.rhythm.beatLikelihoodThreshold = 0.7f;
-    data_.rhythm.minPeriodicityStrength = 0.5f;
-    data_.rhythm.autocorrUpdateIntervalMs = 1000;
-
-    // MusicMode defaults
-    data_.music.activationThreshold = 0.6f;
-    data_.music.minBeatsToActivate = 4;
-    data_.music.maxMissedBeats = 8;
+    // AudioController rhythm tracking defaults
+    data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
-    data_.music.pllKp = 0.1f;
-    data_.music.pllKi = 0.01f;
+    data_.music.phaseAdaptRate = 0.15f;
 
     data_.brightness = 100;
 }
@@ -309,35 +299,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
     validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
 
-    // RhythmAnalyzer validation (v22+)
-    validateFloat(data_.rhythm.minBPM, 60.0f, 120.0f, F("rhythmMinBPM"));
-    validateFloat(data_.rhythm.maxBPM, 120.0f, 240.0f, F("rhythmMaxBPM"));
-    validateFloat(data_.rhythm.beatLikelihoodThreshold, 0.5f, 0.9f, F("beatThreshold"));
-    validateFloat(data_.rhythm.minPeriodicityStrength, 0.3f, 0.8f, F("minPeriodicity"));
-    validateUint32(data_.rhythm.autocorrUpdateIntervalMs, 500, 2000, F("rhythmInterval"));
-
-    // Validate BPM range consistency for RhythmAnalyzer
-    if (data_.rhythm.minBPM >= data_.rhythm.maxBPM) {
-        Serial.println(F("[CONFIG] Invalid rhythm BPM range (minBPM >= maxBPM), using defaults"));
-        data_.rhythm.minBPM = 60.0f;
-        data_.rhythm.maxBPM = 200.0f;
-        corrupt = true;
-    }
-
-    // MusicMode validation (v22+)
+    // AudioController validation (v23+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
-    validateUint32(data_.music.minBeatsToActivate, 2, 16, F("musicBeats"));
-    validateUint32(data_.music.maxMissedBeats, 4, 16, F("musicMissed"));
     validateFloat(data_.music.bpmMin, 40.0f, 120.0f, F("bpmMin"));
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
-    validateFloat(data_.music.pllKp, 0.01f, 0.5f, F("pllKp"));
-    validateFloat(data_.music.pllKi, 0.001f, 0.1f, F("pllKi"));
+    validateFloat(data_.music.phaseAdaptRate, 0.01f, 1.0f, F("phaseAdaptRate"));
 
-    // Validate BPM range consistency for MusicMode
+    // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
-        Serial.println(F("[CONFIG] Invalid music BPM range (bpmMin >= bpmMax), using defaults"));
-        data_.music.bpmMin = 90.0f;
-        data_.music.bpmMax = 180.0f;
+        Serial.println(F("[CONFIG] Invalid BPM range (bpmMin >= bpmMax), using defaults"));
+        data_.music.bpmMin = 60.0f;
+        data_.music.bpmMax = 200.0f;
         corrupt = true;
     }
 
@@ -398,13 +370,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     mic.hybridDrumWeight = data_.mic.hybridDrumWeight;
     mic.hybridBothBoost = data_.mic.hybridBothBoost;
 
-    // AudioController parameters (v22+)
-    // Note: Rhythm params (beatLikelihood, periodicity, etc.) are now internal to AudioController
+    // AudioController parameters (v23+)
+    // Note: Rhythm params are now internal to AudioController
     // We load from stored data but only apply the exposed tuning params
     if (audioCtrl) {
-        // BPM range from music settings (takes precedence over rhythm settings)
         audioCtrl->setBpmRange(data_.music.bpmMin, data_.music.bpmMax);
         audioCtrl->activationThreshold = data_.music.activationThreshold;
+        audioCtrl->phaseAdaptRate = data_.music.phaseAdaptRate;
     }
 }
 
@@ -456,13 +428,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.hybridDrumWeight = mic.hybridDrumWeight;
     data_.mic.hybridBothBoost = mic.hybridBothBoost;
 
-    // AudioController parameters (v22+)
-    // Note: Internal rhythm params (beatLikelihood, periodicity, etc.) are not user-tunable
-    // so we don't save them - they use hardcoded values in AudioController
+    // AudioController parameters (v23+)
+    // Note: Internal rhythm params (periodicity, etc.) are not user-tunable
     if (audioCtrl) {
         data_.music.bpmMin = audioCtrl->getBpmMin();
         data_.music.bpmMax = audioCtrl->getBpmMax();
         data_.music.activationThreshold = audioCtrl->activationThreshold;
+        data_.music.phaseAdaptRate = audioCtrl->phaseAdaptRate;
     }
 
     saveToFlash();

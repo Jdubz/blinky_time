@@ -176,11 +176,9 @@ void SerialConsole::registerSettings() {
         settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
             "Rhythm activation threshold (0-1)", 0.0f, 1.0f);
 
-        // PLL tuning
-        settings_.registerFloat("pllkp", &audioCtrl_->pllKp, "rhythm",
-            "PLL proportional gain", 0.01f, 0.5f);
-        settings_.registerFloat("pllki", &audioCtrl_->pllKi, "rhythm",
-            "PLL integral gain", 0.001f, 0.1f);
+        // Phase tracking
+        settings_.registerFloat("phaseadapt", &audioCtrl_->phaseAdaptRate, "rhythm",
+            "Phase adaptation rate (0-1)", 0.01f, 1.0f);
 
         // Beat alignment modulation
         settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "rhythm",
@@ -385,8 +383,8 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
             Serial.println(audio.phase, 2);
             Serial.print(F("Rhythm Strength: "));
             Serial.println(audio.rhythmStrength, 2);
-            Serial.print(F("Confidence: "));
-            Serial.println(audioCtrl_->getConfidence(), 2);
+            Serial.print(F("Periodicity: "));
+            Serial.println(audioCtrl_->getPeriodicityStrength(), 2);
             Serial.print(F("Energy: "));
             Serial.println(audio.energy, 2);
             Serial.print(F("Pulse: "));
@@ -552,9 +550,8 @@ void SerialConsole::restoreDefaults() {
 
     // Restore audio controller defaults
     if (audioCtrl_) {
-        audioCtrl_->activationThreshold = 0.5f;
-        audioCtrl_->pllKp = 0.15f;
-        audioCtrl_->pllKi = 0.02f;
+        audioCtrl_->activationThreshold = 0.4f;
+        audioCtrl_->phaseAdaptRate = 0.15f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
@@ -634,9 +631,9 @@ void SerialConsole::streamTick() {
         Serial.print(F("}"));
 
         // AudioController telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"e":0.5,"p":0.8}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"e":0.5,"p":0.8}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
-        // conf = confidence, e = energy, p = pulse
+        // e = energy, p = pulse
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
             Serial.print(F(",\"m\":{\"a\":"));
@@ -647,8 +644,6 @@ void SerialConsole::streamTick() {
             Serial.print(audio.phase, 2);
             Serial.print(F(",\"str\":"));
             Serial.print(audio.rhythmStrength, 2);
-            Serial.print(F(",\"conf\":"));
-            Serial.print(audioCtrl_->getConfidence(), 2);
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
@@ -656,8 +651,6 @@ void SerialConsole::streamTick() {
 
             // Debug mode: add internal state for tuning
             if (streamDebug_) {
-                Serial.print(F(",\"pe\":"));
-                Serial.print(audioCtrl_->getPhaseError(), 3);
                 Serial.print(F(",\"ps\":"));
                 Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
             }

@@ -11,22 +11,31 @@
  * Combines microphone input processing and rhythm analysis into a single
  * interface that outputs a simple 4-parameter AudioControl struct.
  *
- * Generators and the main sketch should ONLY interact with AudioControl.
- * All audio analysis internals (transient detection, beat tracking, tempo
- * estimation) are encapsulated here.
+ * Rhythm Tracking Approach (pattern-based, not event-based):
+ *   1. Buffer 6 seconds of onset strength (spectral flux)
+ *   2. Run autocorrelation to find periodicity and tempo
+ *   3. Derive phase from autocorrelation pattern
+ *   4. Predict beats ahead of time
+ *
+ * Key Design Decision:
+ *   Transient detection drives VISUAL PULSE output only.
+ *   Beat tracking is derived from buffered pattern analysis.
+ *   This prevents unreliable transients from disrupting beat sync.
  *
  * Architecture:
  *   PDM Microphone
  *        |
  *   AdaptiveMic (level, transient, spectral flux)
  *        |
- *   RhythmTracker (BPM estimation, phase tracking)
- *        |
+ *   OSS Buffer (6s) --> Autocorrelation --> Tempo + Phase
+ *        |                                      |
+ *   Transient -----> Pulse (visual only)        |
+ *        |                                      |
  *   AudioControl { energy, pulse, phase, rhythmStrength }
  *        |
  *   Generators
  *
- * Memory: ~6 KB (AdaptiveMic + rhythm tracking buffers)
+ * Memory: ~6.5 KB (AdaptiveMic + 360-sample OSS buffer)
  * CPU: ~5-6% @ 64 MHz with FFT enabled
  */
 class AudioController {
@@ -76,27 +85,25 @@ public:
     // === TUNING PARAMETERS ===
     // Exposed for SerialConsole tuning
 
-    // Rhythm tracking sensitivity
-    float activationThreshold = 0.5f;   // Confidence needed to activate rhythm mode
-    float pllKp = 0.15f;                // Phase-locked loop proportional gain
-    float pllKi = 0.02f;                // Phase-locked loop integral gain
+    // Rhythm activation threshold (periodicity strength needed to activate)
+    float activationThreshold = 0.4f;
 
-    // Beat alignment pulse modulation
+    // Beat alignment pulse modulation (visual effect only)
     float pulseBoostOnBeat = 1.3f;      // Boost factor for on-beat transients
     float pulseSuppressOffBeat = 0.6f;  // Suppress factor for off-beat transients
 
     // Energy boost during rhythm lock
-    float energyBoostOnBeat = 0.3f;     // Energy boost on detected beats
+    float energyBoostOnBeat = 0.3f;     // Energy boost near predicted beats
+
+    // Phase tracking smoothing
+    float phaseAdaptRate = 0.15f;       // How quickly phase adapts to autocorrelation (0-1)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
-    // These expose internal state but should NOT be used by generators
 
     AdaptiveMic& getMicForTuning() { return mic_; }
     const AdaptiveMic& getMic() const { return mic_; }
 
     // Debug getters
-    float getPhaseError() const { return lastPhaseError_; }
-    float getConfidence() const { return confidence_; }
     float getPeriodicityStrength() const { return periodicityStrength_; }
 
 private:
@@ -112,9 +119,9 @@ private:
     float bpmMin_ = 60.0f;
     float bpmMax_ = 200.0f;
 
-    // Tempo estimation (autocorrelation on onset strength)
-    static constexpr int OSS_BUFFER_SIZE = 256;  // ~4.3 seconds at 60 Hz
-    float ossBuffer_[OSS_BUFFER_SIZE] = {0};     // Onset Strength Signal history
+    // Onset Strength Signal buffer (6 seconds at 60 Hz frame rate)
+    static constexpr int OSS_BUFFER_SIZE = 360;
+    float ossBuffer_[OSS_BUFFER_SIZE] = {0};
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -123,19 +130,19 @@ private:
     float beatPeriodMs_ = 500.0f;
     float periodicityStrength_ = 0.0f;
 
-    // Phase tracking (simplified PLL)
+    // Phase tracking (derived from autocorrelation, not from transients)
     float phase_ = 0.0f;                // Current beat phase (0-1)
-    float errorIntegral_ = 0.0f;        // PLL integral term
-    float lastPhaseError_ = 0.0f;       // For debugging
-    uint32_t lastOnsetMs_ = 0;          // Last onset timestamp
+    float targetPhase_ = 0.0f;          // Phase derived from autocorrelation
 
-    // Confidence tracking
-    float confidence_ = 0.0f;           // Overall rhythm confidence (0-1)
-    float confidenceSmooth_ = 0.0f;     // Smoothed confidence for output
-
-    // Autocorrelation throttling
+    // Autocorrelation timing
     uint32_t lastAutocorrMs_ = 0;
-    static constexpr uint32_t AUTOCORR_PERIOD_MS = 1000;  // Run autocorrelation every 1 second
+    static constexpr uint32_t AUTOCORR_PERIOD_MS = 500;  // Run every 500ms
+
+    // Silence detection
+    uint32_t lastSignificantAudioMs_ = 0;
+
+    // Level tracking for non-FFT modes
+    float prevLevel_ = 0.0f;
 
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
@@ -146,7 +153,6 @@ private:
     void addOssSample(float onsetStrength);
     void runAutocorrelation(uint32_t nowMs);
     void updatePhase(float dt, uint32_t nowMs);
-    void onTransientDetected(uint32_t nowMs, float strength);
 
     // Output synthesis
     void synthesizeEnergy();
