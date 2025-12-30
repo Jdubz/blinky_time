@@ -187,6 +187,12 @@ void SerialConsole::registerSettings() {
             "Pulse suppress off beat", 0.3f, 1.0f);
         settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "rhythm",
             "Energy boost on beat", 0.0f, 1.0f);
+
+        // BPM detection range (affects autocorrelation lag search)
+        settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "rhythm",
+            "Minimum BPM to detect", 40.0f, 120.0f);
+        settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
+            "Maximum BPM to detect", 80.0f, 240.0f);
     }
 
 }
@@ -555,6 +561,8 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
+        audioCtrl_->bpmMin = 60.0f;
+        audioCtrl_->bpmMax = 200.0f;
     }
 }
 

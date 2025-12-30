@@ -371,10 +371,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     mic.hybridBothBoost = data_.mic.hybridBothBoost;
 
     // AudioController parameters (v23+)
-    // Note: Rhythm params are now internal to AudioController
-    // We load from stored data but only apply the exposed tuning params
+    // All rhythm tracking params are now public tunable members
     if (audioCtrl) {
-        audioCtrl->setBpmRange(data_.music.bpmMin, data_.music.bpmMax);
+        audioCtrl->bpmMin = data_.music.bpmMin;
+        audioCtrl->bpmMax = data_.music.bpmMax;
         audioCtrl->activationThreshold = data_.music.activationThreshold;
         audioCtrl->phaseAdaptRate = data_.music.phaseAdaptRate;
     }
@@ -429,10 +429,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.hybridBothBoost = mic.hybridBothBoost;
 
     // AudioController parameters (v23+)
-    // Note: Internal rhythm params (periodicity, etc.) are not user-tunable
+    // All rhythm tracking params are now public tunable members
     if (audioCtrl) {
-        data_.music.bpmMin = audioCtrl->getBpmMin();
-        data_.music.bpmMax = audioCtrl->getBpmMax();
+        data_.music.bpmMin = audioCtrl->bpmMin;
+        data_.music.bpmMax = audioCtrl->bpmMax;
         data_.music.activationThreshold = audioCtrl->activationThreshold;
         data_.music.phaseAdaptRate = audioCtrl->phaseAdaptRate;
     }

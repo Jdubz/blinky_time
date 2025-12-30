@@ -112,12 +112,12 @@ uint8_t AudioController::getDetectionMode() const {
 }
 
 void AudioController::setBpmRange(float minBpm, float maxBpm) {
-    bpmMin_ = clampf(minBpm, 30.0f, 120.0f);
-    bpmMax_ = clampf(maxBpm, 80.0f, 300.0f);
+    bpmMin = clampf(minBpm, 30.0f, 120.0f);
+    bpmMax = clampf(maxBpm, 80.0f, 300.0f);
 
-    if (bpmMin_ >= bpmMax_) {
-        bpmMin_ = 60.0f;
-        bpmMax_ = 200.0f;
+    if (bpmMin >= bpmMax) {
+        bpmMin = 60.0f;
+        bpmMax = 200.0f;
     }
 }
 
@@ -156,8 +156,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Convert BPM range to lag range (in frames at ~60 Hz)
     // lag = 60 / bpm * frameRate
     // At 60 Hz: 200 BPM = 18 frames, 60 BPM = 60 frames
-    int minLag = static_cast<int>(60.0f / bpmMax_ * 60.0f);
-    int maxLag = static_cast<int>(60.0f / bpmMin_ * 60.0f);
+    int minLag = static_cast<int>(60.0f / bpmMax * 60.0f);
+    int maxLag = static_cast<int>(60.0f / bpmMin * 60.0f);
 
     if (minLag < 10) minLag = 10;
     if (maxLag > ossCount_ / 2) maxLag = ossCount_ / 2;
@@ -209,7 +209,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Update tempo if periodicity is strong enough
     if (bestLag > 0 && periodicityStrength_ > 0.25f) {
         float newBpm = 60.0f / (static_cast<float>(bestLag) / 60.0f);
-        newBpm = clampf(newBpm, bpmMin_, bpmMax_);
+        newBpm = clampf(newBpm, bpmMin, bpmMax);
 
         // Smooth BPM changes
         bpm_ = bpm_ * 0.8f + newBpm * 0.2f;

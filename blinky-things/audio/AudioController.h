@@ -68,10 +68,10 @@ public:
     void setDetectionMode(uint8_t mode);
     uint8_t getDetectionMode() const;
 
-    // BPM range constraints
+    // BPM range constraints (legacy API)
     void setBpmRange(float minBpm, float maxBpm);
-    float getBpmMin() const { return bpmMin_; }
-    float getBpmMax() const { return bpmMax_; }
+    float getBpmMin() const { return bpmMin; }
+    float getBpmMax() const { return bpmMax; }
 
     // Get current BPM estimate (for debugging/display)
     float getCurrentBpm() const { return bpm_; }
@@ -98,6 +98,10 @@ public:
     // Phase tracking smoothing
     float phaseAdaptRate = 0.15f;       // How quickly phase adapts to autocorrelation (0-1)
 
+    // BPM range for autocorrelation tempo detection
+    float bpmMin = 60.0f;               // Minimum BPM to detect (affects autocorr lag range)
+    float bpmMax = 200.0f;              // Maximum BPM to detect (affects autocorr lag range)
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }
@@ -114,10 +118,6 @@ private:
     AdaptiveMic mic_;
 
     // === RHYTHM TRACKING STATE ===
-
-    // BPM constraints
-    float bpmMin_ = 60.0f;
-    float bpmMax_ = 200.0f;
 
     // Onset Strength Signal buffer (6 seconds at 60 Hz frame rate)
     static constexpr int OSS_BUFFER_SIZE = 360;

@@ -1,6 +1,22 @@
 # Parameter Tuning History
 
+> **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive documentation.
+
 This document tracks parameter optimization tests and findings. Raw test result files are excluded from git (see .gitignore) to avoid repo bloat.
+
+---
+
+## Architecture Change: December 2025
+
+**Major Refactor:** Replaced PLL-based MusicMode + RhythmAnalyzer with unified AudioController using autocorrelation-based rhythm tracking.
+
+**Impact on Tuning:**
+- PLL parameters (pllkp, pllki, confinc, confdec, etc.) no longer exist
+- Rhythm tracking now uses: `musicthresh`, `phaseadapt`, `bpmmin`, `bpmmax`
+- Previous MusicMode tuning results are obsolete
+- Transient detection parameters remain valid
+
+---
 
 ## Test Session: 2025-12-27
 
@@ -279,6 +295,6 @@ npm run tuner -- validate --port COM41 --gain 40
 - spectral (mode 3): FFT-based spectral flux
 - hybrid (mode 4): Combined drummer + spectral
 
-**Subsystems:**
-- music: PLL-based beat tracking
-- rhythm: Autocorrelation tempo detection
+**Subsystems (December 2025 Architecture):**
+- AudioController: Autocorrelation-based rhythm tracking (replaced MusicMode + RhythmAnalyzer)
+- AdaptiveMic: Transient detection (5 algorithms: drummer, bass, hfc, spectral, hybrid)
