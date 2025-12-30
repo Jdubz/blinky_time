@@ -1,5 +1,7 @@
 # Next Testing Priorities
 
+> **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive 2-3 hour test plan.
+
 Based on fast-tune analysis (2025-12-28), this document outlines the next testing priorities to address performance gaps and boundary conditions.
 
 ## Critical Findings from Fast-Tune
@@ -165,22 +167,30 @@ Test values: 1.4, 1.6, 1.8, 2.0, 2.2, 2.5
 - But may reduce recall on weak transients
 - Need to find balance
 
-## Priority 5: Untested Parameters (Background)
+## Priority 5: Rhythm Tracking Parameters (Background)
 
-**MusicMode Parameters** (PLL beat tracking) - Not yet tuned:
-- musicthresh, musicbeats, musicmissed
-- confinc, confdec, phasetol, missedtol
-- bpmmin, bpmmax, pllkp, pllki
+> **Note:** Architecture changed in December 2025. MusicMode PLL and RhythmAnalyzer
+> were replaced by AudioController with autocorrelation-based rhythm tracking.
 
-**RhythmAnalyzer Parameters** (autocorrelation) - Not yet tuned:
-- rhythmminbpm, rhythmmaxbpm, rhythminterval
-- beatthresh, minperiodicity
+**AudioController Parameters** (new architecture) - Not yet tuned:
+- `musicthresh` (0.0-1.0): Rhythm activation threshold
+- `phaseadapt` (0.01-1.0): Phase adaptation rate
+- `bpmmin` (40-120): Minimum BPM to detect
+- `bpmmax` (80-240): Maximum BPM to detect
+- `pulseboost` (1.0-2.0): On-beat pulse enhancement
+- `pulsesuppress` (0.3-1.0): Off-beat pulse suppression
+- `energyboost` (0.0-1.0): On-beat energy enhancement
+
+**REMOVED Parameters** (no longer exist):
+- ~~pllkp, pllki~~ (PLL removed)
+- ~~confinc, confdec, misspenalty~~ (PLL removed)
+- ~~combdecay, combfb, combconf~~ (merged into autocorrelation)
 
 **Bass/HFC Modes** - Not included in fast-tune:
 - bassfreq, bassq, bassthresh
 - hfcweight, hfcthresh
 
-**Recommendation:** Defer until core transient detection is optimized
+**Recommendation:** See [AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) Phase 3 for rhythm tracking tests
 
 ## Priority 6: Cross-Pattern Validation
 

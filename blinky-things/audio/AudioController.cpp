@@ -1,0 +1,334 @@
+#include "AudioController.h"
+#include <math.h>
+
+// ===== CONSTRUCTION =====
+
+AudioController::AudioController(IPdmMic& pdm, ISystemTime& time)
+    : time_(time)
+    , mic_(pdm, time)
+{
+}
+
+AudioController::~AudioController() {
+    end();
+}
+
+// ===== LIFECYCLE =====
+
+bool AudioController::begin(uint32_t sampleRate) {
+    if (!mic_.begin(sampleRate)) {
+        return false;
+    }
+
+    // Reset OSS buffer
+    for (int i = 0; i < OSS_BUFFER_SIZE; i++) {
+        ossBuffer_[i] = 0.0f;
+    }
+    ossWriteIdx_ = 0;
+    ossCount_ = 0;
+
+    // Reset tempo estimation
+    bpm_ = 120.0f;
+    beatPeriodMs_ = 500.0f;
+    periodicityStrength_ = 0.0f;
+
+    // Reset phase tracking
+    phase_ = 0.0f;
+    targetPhase_ = 0.0f;
+
+    // Reset timing
+    lastAutocorrMs_ = 0;
+    lastSignificantAudioMs_ = 0;
+
+    // Reset level tracking
+    prevLevel_ = 0.0f;
+
+    // Reset output
+    control_ = AudioControl();
+
+    return true;
+}
+
+void AudioController::end() {
+    mic_.end();
+}
+
+// ===== MAIN UPDATE =====
+
+const AudioControl& AudioController::update(float dt) {
+    uint32_t nowMs = time_.millis();
+
+    // 1. Update microphone (transient detection, level)
+    mic_.update(dt);
+
+    // 2. Get onset strength for rhythm analysis (prefer spectral flux)
+    float onsetStrength = 0.0f;
+    uint8_t mode = mic_.getDetectionMode();
+
+    if (mode == static_cast<uint8_t>(DetectionMode::SPECTRAL_FLUX) ||
+        mode == static_cast<uint8_t>(DetectionMode::HYBRID)) {
+        onsetStrength = mic_.getLastFluxValue();
+    } else {
+        // Use level derivative as onset strength for non-FFT modes
+        float level = mic_.getLevel();
+        onsetStrength = (level > prevLevel_) ? (level - prevLevel_) * 5.0f : 0.0f;
+        prevLevel_ = level;
+    }
+
+    // Track when we last had significant audio
+    if (onsetStrength > 0.1f || mic_.getLevel() > 0.1f) {
+        lastSignificantAudioMs_ = nowMs;
+    }
+
+    // 3. Add sample to onset strength buffer
+    addOssSample(onsetStrength);
+
+    // 4. Run autocorrelation periodically (every 500ms)
+    if (nowMs - lastAutocorrMs_ >= AUTOCORR_PERIOD_MS) {
+        runAutocorrelation(nowMs);
+        lastAutocorrMs_ = nowMs;
+    }
+
+    // 5. Update phase tracking
+    updatePhase(dt, nowMs);
+
+    // 6. Synthesize output
+    synthesizeEnergy();
+    synthesizePulse();
+    synthesizePhase();
+    synthesizeRhythmStrength();
+
+    return control_;
+}
+
+// ===== CONFIGURATION =====
+
+void AudioController::setDetectionMode(uint8_t mode) {
+    mic_.detectionMode = mode;
+}
+
+uint8_t AudioController::getDetectionMode() const {
+    return mic_.getDetectionMode();
+}
+
+void AudioController::setBpmRange(float minBpm, float maxBpm) {
+    bpmMin = clampf(minBpm, 30.0f, 120.0f);
+    bpmMax = clampf(maxBpm, 80.0f, 300.0f);
+
+    if (bpmMin >= bpmMax) {
+        bpmMin = 60.0f;
+        bpmMax = 200.0f;
+    }
+}
+
+void AudioController::lockHwGain(int gain) {
+    mic_.lockHwGain(gain);
+}
+
+void AudioController::unlockHwGain() {
+    mic_.unlockHwGain();
+}
+
+bool AudioController::isHwGainLocked() const {
+    return mic_.isHwGainLocked();
+}
+
+int AudioController::getHwGain() const {
+    return mic_.getHwGain();
+}
+
+// ===== RHYTHM TRACKING =====
+
+void AudioController::addOssSample(float onsetStrength) {
+    ossBuffer_[ossWriteIdx_] = onsetStrength;
+    ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
+    if (ossCount_ < OSS_BUFFER_SIZE) {
+        ossCount_++;
+    }
+}
+
+void AudioController::runAutocorrelation(uint32_t nowMs) {
+    // Need at least 3 seconds of data for reliable tempo estimation
+    if (ossCount_ < 180) {
+        return;
+    }
+
+    // Convert BPM range to lag range (in frames at ~60 Hz)
+    // lag = 60 / bpm * frameRate
+    // At 60 Hz: 200 BPM = 18 frames, 60 BPM = 60 frames
+    int minLag = static_cast<int>(60.0f / bpmMax * 60.0f);
+    int maxLag = static_cast<int>(60.0f / bpmMin * 60.0f);
+
+    if (minLag < 10) minLag = 10;
+    if (maxLag > ossCount_ / 2) maxLag = ossCount_ / 2;
+    if (minLag >= maxLag) return;
+
+    // Compute signal energy for normalization
+    float signalEnergy = 0.0f;
+    for (int i = 0; i < ossCount_; i++) {
+        int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+        signalEnergy += ossBuffer_[idx] * ossBuffer_[idx];
+    }
+
+    if (signalEnergy < 0.001f) {
+        // No signal - decay periodicity
+        periodicityStrength_ *= 0.9f;
+        return;
+    }
+
+    // Autocorrelation: find the lag with maximum correlation
+    float maxCorrelation = 0.0f;
+    int bestLag = 0;
+
+    for (int lag = minLag; lag <= maxLag; lag++) {
+        float correlation = 0.0f;
+        int count = ossCount_ - lag;
+
+        for (int i = 0; i < count; i++) {
+            int idx1 = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+            int idx2 = (ossWriteIdx_ - 1 - i - lag + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+            correlation += ossBuffer_[idx1] * ossBuffer_[idx2];
+        }
+
+        correlation /= static_cast<float>(count);
+
+        if (correlation > maxCorrelation) {
+            maxCorrelation = correlation;
+            bestLag = lag;
+        }
+    }
+
+    // Compute periodicity strength (normalized correlation)
+    float avgEnergy = signalEnergy / static_cast<float>(ossCount_);
+    float normCorrelation = maxCorrelation / (avgEnergy + 0.001f);
+
+    // Smooth periodicity strength updates
+    float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
+    periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
+
+    // Update tempo if periodicity is strong enough
+    if (bestLag > 0 && periodicityStrength_ > 0.25f) {
+        float newBpm = 60.0f / (static_cast<float>(bestLag) / 60.0f);
+        newBpm = clampf(newBpm, bpmMin, bpmMax);
+
+        // Smooth BPM changes
+        bpm_ = bpm_ * 0.8f + newBpm * 0.2f;
+        beatPeriodMs_ = 60000.0f / bpm_;
+
+        // Derive target phase from autocorrelation
+        // Find where we are in the current beat cycle by looking at recent samples
+        // The position of maximum correlation in the recent window indicates phase
+        int recentWindow = bestLag;  // Look at one beat period
+        float maxRecent = 0.0f;
+        int maxRecentIdx = 0;
+
+        for (int i = 0; i < recentWindow && i < ossCount_; i++) {
+            int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+            if (ossBuffer_[idx] > maxRecent) {
+                maxRecent = ossBuffer_[idx];
+                maxRecentIdx = i;
+            }
+        }
+
+        // Convert to phase (0 = just had a beat, approaching 1 = beat coming)
+        if (maxRecent > 0.05f) {
+            targetPhase_ = static_cast<float>(maxRecentIdx) / static_cast<float>(bestLag);
+            targetPhase_ = clampf(targetPhase_, 0.0f, 1.0f);
+        }
+    }
+}
+
+void AudioController::updatePhase(float dt, uint32_t nowMs) {
+    // Advance phase based on current tempo estimate
+    float phaseIncrement = dt * 1000.0f / beatPeriodMs_;
+    phase_ += phaseIncrement;
+
+    // Wrap phase at 1.0
+    while (phase_ >= 1.0f) phase_ -= 1.0f;
+    while (phase_ < 0.0f) phase_ += 1.0f;
+
+    // Gradually adapt phase toward target (derived from autocorrelation)
+    if (periodicityStrength_ > activationThreshold) {
+        float phaseDiff = targetPhase_ - phase_;
+
+        // Handle wraparound
+        if (phaseDiff > 0.5f) phaseDiff -= 1.0f;
+        if (phaseDiff < -0.5f) phaseDiff += 1.0f;
+
+        // Apply gradual correction
+        phase_ += phaseDiff * phaseAdaptRate * dt * 10.0f;
+
+        // Re-wrap after correction
+        while (phase_ >= 1.0f) phase_ -= 1.0f;
+        while (phase_ < 0.0f) phase_ += 1.0f;
+    }
+
+    // Decay periodicity during silence
+    uint32_t silenceMs = nowMs - lastSignificantAudioMs_;
+    if (silenceMs > 3000) {
+        periodicityStrength_ *= 0.995f;
+    }
+}
+
+// ===== OUTPUT SYNTHESIS =====
+
+void AudioController::synthesizeEnergy() {
+    float energy = mic_.getLevel();
+
+    // Apply beat-aligned energy boost when rhythm is locked
+    if (periodicityStrength_ > activationThreshold) {
+        // Distance from beat: 0 at phase 0 or 1, max 0.5 at phase 0.5
+        float distFromBeat = phase_ < 0.5f ? phase_ : (1.0f - phase_);
+        // Convert to proximity: 1.0 at beat, 0.0 at off-beat
+        float nearBeat = 1.0f - distFromBeat * 2.0f;
+
+        // Boost near beats
+        float beatBoost = nearBeat * energyBoostOnBeat * periodicityStrength_;
+        energy *= (1.0f + beatBoost);
+    }
+
+    control_.energy = clampf(energy, 0.0f, 1.0f);
+}
+
+void AudioController::synthesizePulse() {
+    float pulse = mic_.getTransient();
+
+    // Apply beat-aligned modulation when rhythm is detected (visual effect only)
+    if (pulse > 0.0f && periodicityStrength_ > activationThreshold) {
+        float distFromBeat = phase_ < 0.5f ? phase_ : (1.0f - phase_);
+
+        float modulation;
+        if (distFromBeat < 0.2f) {
+            // Near beat: boost transient
+            modulation = pulseBoostOnBeat;
+        } else if (distFromBeat > 0.3f) {
+            // Away from beat: suppress transient
+            modulation = pulseSuppressOffBeat;
+        } else {
+            // Transition zone
+            float t = (distFromBeat - 0.2f) / 0.1f;
+            modulation = pulseBoostOnBeat * (1.0f - t) + pulseSuppressOffBeat * t;
+        }
+
+        // Blend modulation based on periodicity strength
+        pulse *= (1.0f - periodicityStrength_) + modulation * periodicityStrength_;
+    }
+
+    control_.pulse = clampf(pulse, 0.0f, 1.0f);
+}
+
+void AudioController::synthesizePhase() {
+    control_.phase = phase_;
+}
+
+void AudioController::synthesizeRhythmStrength() {
+    // Single metric: autocorrelation periodicity strength
+    float strength = periodicityStrength_;
+
+    // Apply activation threshold with soft knee
+    if (strength < activationThreshold) {
+        strength *= strength / activationThreshold;  // Quadratic falloff below threshold
+    }
+
+    control_.rhythmStrength = clampf(strength, 0.0f, 1.0f);
+}

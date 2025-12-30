@@ -1,7 +1,6 @@
 #include "ConfigStorage.h"
 #include "../tests/SafetyTest.h"
-#include "../music/RhythmAnalyzer.h"
-#include "../music/MusicMode.h"
+#include "../audio/AudioController.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -135,21 +134,11 @@ void ConfigStorage::loadDefaults() {
     data_.mic.hybridDrumWeight = 0.3f;    // Weight when only drummer detects
     data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
 
-    // RhythmAnalyzer defaults
-    data_.rhythm.minBPM = 60.0f;
-    data_.rhythm.maxBPM = 200.0f;
-    data_.rhythm.beatLikelihoodThreshold = 0.7f;
-    data_.rhythm.minPeriodicityStrength = 0.5f;
-    data_.rhythm.autocorrUpdateIntervalMs = 1000;
-
-    // MusicMode defaults
-    data_.music.activationThreshold = 0.6f;
-    data_.music.minBeatsToActivate = 4;
-    data_.music.maxMissedBeats = 8;
+    // AudioController rhythm tracking defaults
+    data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
-    data_.music.pllKp = 0.1f;
-    data_.music.pllKi = 0.01f;
+    data_.music.phaseAdaptRate = 0.15f;
 
     data_.brightness = 100;
 }
@@ -248,7 +237,7 @@ void ConfigStorage::saveToFlash() {
 #endif
 }
 
-void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, RhythmAnalyzer* rhythm, MusicMode* music) {
+void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, AudioController* audioCtrl) {
     // Validation helpers to reduce code duplication
     bool corrupt = false;
 
@@ -310,35 +299,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
     validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
 
-    // RhythmAnalyzer validation (v22+)
-    validateFloat(data_.rhythm.minBPM, 60.0f, 120.0f, F("rhythmMinBPM"));
-    validateFloat(data_.rhythm.maxBPM, 120.0f, 240.0f, F("rhythmMaxBPM"));
-    validateFloat(data_.rhythm.beatLikelihoodThreshold, 0.5f, 0.9f, F("beatThreshold"));
-    validateFloat(data_.rhythm.minPeriodicityStrength, 0.3f, 0.8f, F("minPeriodicity"));
-    validateUint32(data_.rhythm.autocorrUpdateIntervalMs, 500, 2000, F("rhythmInterval"));
-
-    // Validate BPM range consistency for RhythmAnalyzer
-    if (data_.rhythm.minBPM >= data_.rhythm.maxBPM) {
-        Serial.println(F("[CONFIG] Invalid rhythm BPM range (minBPM >= maxBPM), using defaults"));
-        data_.rhythm.minBPM = 60.0f;
-        data_.rhythm.maxBPM = 200.0f;
-        corrupt = true;
-    }
-
-    // MusicMode validation (v22+)
+    // AudioController validation (v23+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
-    validateUint32(data_.music.minBeatsToActivate, 2, 16, F("musicBeats"));
-    validateUint32(data_.music.maxMissedBeats, 4, 16, F("musicMissed"));
     validateFloat(data_.music.bpmMin, 40.0f, 120.0f, F("bpmMin"));
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
-    validateFloat(data_.music.pllKp, 0.01f, 0.5f, F("pllKp"));
-    validateFloat(data_.music.pllKi, 0.001f, 0.1f, F("pllKi"));
+    validateFloat(data_.music.phaseAdaptRate, 0.01f, 1.0f, F("phaseAdaptRate"));
 
-    // Validate BPM range consistency for MusicMode
+    // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
-        Serial.println(F("[CONFIG] Invalid music BPM range (bpmMin >= bpmMax), using defaults"));
-        data_.music.bpmMin = 90.0f;
-        data_.music.bpmMax = 180.0f;
+        Serial.println(F("[CONFIG] Invalid BPM range (bpmMin >= bpmMax), using defaults"));
+        data_.music.bpmMin = 60.0f;
+        data_.music.bpmMax = 200.0f;
         corrupt = true;
     }
 
@@ -399,28 +370,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     mic.hybridDrumWeight = data_.mic.hybridDrumWeight;
     mic.hybridBothBoost = data_.mic.hybridBothBoost;
 
-    // RhythmAnalyzer parameters (v22+)
-    if (rhythm) {
-        rhythm->minBPM = data_.rhythm.minBPM;
-        rhythm->maxBPM = data_.rhythm.maxBPM;
-        rhythm->beatLikelihoodThreshold = data_.rhythm.beatLikelihoodThreshold;
-        rhythm->minPeriodicityStrength = data_.rhythm.minPeriodicityStrength;
-        rhythm->autocorrUpdateIntervalMs = data_.rhythm.autocorrUpdateIntervalMs;
-    }
-
-    // MusicMode parameters (v22+)
-    if (music) {
-        music->activationThreshold = data_.music.activationThreshold;
-        music->minBeatsToActivate = data_.music.minBeatsToActivate;
-        music->maxMissedBeats = data_.music.maxMissedBeats;
-        music->bpmMin = data_.music.bpmMin;
-        music->bpmMax = data_.music.bpmMax;
-        music->pllKp = data_.music.pllKp;
-        music->pllKi = data_.music.pllKi;
+    // AudioController parameters (v23+)
+    // All rhythm tracking params are now public tunable members
+    if (audioCtrl) {
+        audioCtrl->bpmMin = data_.music.bpmMin;
+        audioCtrl->bpmMax = data_.music.bpmMax;
+        audioCtrl->activationThreshold = data_.music.activationThreshold;
+        audioCtrl->phaseAdaptRate = data_.music.phaseAdaptRate;
     }
 }
 
-void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
+void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
     data_.fire.baseCooling = fireParams.baseCooling;
     data_.fire.sparkHeatMin = fireParams.sparkHeatMin;
     data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
@@ -468,24 +428,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.mic.hybridDrumWeight = mic.hybridDrumWeight;
     data_.mic.hybridBothBoost = mic.hybridBothBoost;
 
-    // RhythmAnalyzer parameters (v22+)
-    if (rhythm) {
-        data_.rhythm.minBPM = rhythm->minBPM;
-        data_.rhythm.maxBPM = rhythm->maxBPM;
-        data_.rhythm.beatLikelihoodThreshold = rhythm->beatLikelihoodThreshold;
-        data_.rhythm.minPeriodicityStrength = rhythm->minPeriodicityStrength;
-        data_.rhythm.autocorrUpdateIntervalMs = rhythm->autocorrUpdateIntervalMs;
-    }
-
-    // MusicMode parameters (v22+)
-    if (music) {
-        data_.music.activationThreshold = music->activationThreshold;
-        data_.music.minBeatsToActivate = music->minBeatsToActivate;
-        data_.music.maxMissedBeats = music->maxMissedBeats;
-        data_.music.bpmMin = music->bpmMin;
-        data_.music.bpmMax = music->bpmMax;
-        data_.music.pllKp = music->pllKp;
-        data_.music.pllKi = music->pllKi;
+    // AudioController parameters (v23+)
+    // All rhythm tracking params are now public tunable members
+    if (audioCtrl) {
+        data_.music.bpmMin = audioCtrl->bpmMin;
+        data_.music.bpmMax = audioCtrl->bpmMax;
+        data_.music.activationThreshold = audioCtrl->activationThreshold;
+        data_.music.phaseAdaptRate = audioCtrl->phaseAdaptRate;
     }
 
     saveToFlash();
@@ -493,9 +442,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     lastSaveMs_ = millis();
 }
 
-void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, mic, rhythm, music);
+        saveConfiguration(fireParams, mic, audioCtrl);
     }
 }
 

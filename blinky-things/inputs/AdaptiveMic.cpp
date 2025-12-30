@@ -78,7 +78,7 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   pdmAlive = false;
   recentAverage = 0.0f;
   previousLevel = 0.0f;
-  lastFluxValue_ = 0.0f;  // Initialize spectral flux value for RhythmAnalyzer
+  lastFluxValue_ = 0.0f;  // Initialize spectral flux value for AudioController
 
   // Initialize spectral flux detector
   spectralFlux_.begin();
@@ -771,7 +771,7 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
       flux = 0.0f;
     }
 
-    // Store for external access (e.g., RhythmAnalyzer)
+    // Store for external access (AudioController uses for rhythm tracking)
     lastFluxValue_ = flux;
 
     // Update running average (for threshold comparison)
@@ -875,7 +875,7 @@ void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
         fluxRecentAverage_ = 0.0f;
       }
 
-      // Store for external access (e.g., RhythmAnalyzer)
+      // Store for external access (AudioController uses for rhythm tracking)
       lastFluxValue_ = currentFlux;
     }
   }

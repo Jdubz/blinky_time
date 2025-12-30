@@ -4,7 +4,7 @@
 
 // Forward declarations
 class AdaptiveMic;
-class MusicMode;
+class AudioController;
 
 /**
  * Audio parameter presets for quick configuration changes
@@ -16,7 +16,7 @@ class MusicMode;
  * - LIVE: Balanced for live performance
  *
  * Usage:
- *   PresetManager::applyPreset(PresetId::QUIET, mic, music);
+ *   PresetManager::applyPreset(PresetId::QUIET, mic, audioCtrl);
  */
 
 enum class PresetId : uint8_t {
@@ -58,15 +58,8 @@ struct PresetParams {
     uint16_t fastAgcPeriodMs;
     float fastAgcTrackingTau;
 
-    // Music mode
-    float musicthresh;
-    float confinc;
-    float stablephase;
-
-    // BPM locking
-    float bpmLockThreshold;
-    float bpmLockMaxChange;
-    float bpmUnlockThreshold;
+    // AudioController rhythm tracking
+    float musicthresh;       // Maps to AudioController::activationThreshold
 };
 
 /**
@@ -78,10 +71,10 @@ public:
      * Apply a preset to the audio system
      * @param id Preset to apply
      * @param mic AdaptiveMic instance to configure
-     * @param music MusicMode instance to configure
+     * @param audioCtrl AudioController instance to configure (optional)
      * @return true if preset was applied successfully, false if invalid preset ID
      */
-    static bool applyPreset(PresetId id, AdaptiveMic& mic, MusicMode& music);
+    static bool applyPreset(PresetId id, AdaptiveMic& mic, AudioController* audioCtrl = nullptr);
 
     /**
      * Get the name of a preset

@@ -12,9 +12,7 @@
 // - Auto-ranging: Tracks peak/valley, maps to 0-1 output (no clipping)
 // - Simplified transient detection: amplitude spike detection (LOUD + SUDDEN + INFREQUENT)
 // - Hardware gain adapts to environment over minutes
-//
-// NOTE: "Transient detection" is the simplified term for what was previously called "onset detection".
-// MusicMode still uses onOnsetDetected() callback for historical reasons, but both refer to the same concept.
+// - Spectral flux output for rhythm tracking in AudioController
 
 namespace MicConstants {
     constexpr float MIN_DT_SECONDS = 0.0001f;         // Minimum dt clamp (0.1ms)
@@ -138,7 +136,7 @@ public:
   inline float getBassLevel() const { return bassFilteredLevel; }    // Bass-filtered level (for debugging)
   inline float getAdaptiveScale() const { return adaptiveScale_; }   // Current adaptive threshold scale (for debugging)
   inline bool isInFastAgcMode() const { return inFastAgcMode_; }     // Check if fast AGC is active
-  inline float getLastFluxValue() const { return lastFluxValue_; }   // Last spectral flux value (for RhythmAnalyzer)
+  inline float getLastFluxValue() const { return lastFluxValue_; }   // Last spectral flux value (for AudioController)
 
 public:
   /**
@@ -235,7 +233,7 @@ private:
   // Spectral Flux state (FFT-based detection)
   SpectralFlux spectralFlux_;
   float fluxRecentAverage_ = 0.0f;    // Rolling average for flux detection
-  float lastFluxValue_ = 0.0f;        // Last computed flux value (for RhythmAnalyzer)
+  float lastFluxValue_ = 0.0f;        // Last computed flux value (for AudioController)
 
   // Local median adaptive threshold buffer
   // Stores recent detection function values for adaptive thresholding

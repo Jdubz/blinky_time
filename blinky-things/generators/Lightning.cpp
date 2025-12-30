@@ -67,8 +67,8 @@ bool Lightning::begin(const DeviceConfig& config) {
     return true;
 }
 
-void Lightning::generate(PixelMatrix& matrix, float energy, float hit) {
-    setAudioInput(energy, hit);
+void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    setAudioInput(audio.energy, audio.pulse);
     update();
 
     // Convert intensity values to colors and fill matrix
