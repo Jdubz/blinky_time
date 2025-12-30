@@ -35,6 +35,14 @@
  *        |
  *   Generators
  *
+ * FRAME RATE ASSUMPTION:
+ *   The OSS buffer and autocorrelation calculations assume ~60 Hz frame rate.
+ *   - OSS_BUFFER_SIZE = 360 samples = 6 seconds @ 60 Hz
+ *   - BPM-to-lag conversion: lag = 60 / bpm * 60 (assumes 60 Hz)
+ *   If frame rate drops significantly (e.g., due to serial flooding or
+ *   heavy LED updates), BPM estimates will drift. Phase tracking uses
+ *   actual dt values, so phase remains accurate even with variable frame rate.
+ *
  * Memory: ~6.5 KB (AdaptiveMic + 360-sample OSS buffer)
  * CPU: ~5-6% @ 64 MHz with FFT enabled
  */

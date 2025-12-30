@@ -501,8 +501,14 @@ void Fire::updateRandomFire() {
     // Use pre-allocated tempHeat_ to avoid heap fragmentation
     memcpy(tempHeat_, heat_, this->numLeds_);
 
+    // Performance note: With spreadDistance=8, inner loop is (2*8+1)²=289 iterations.
+    // Optimization: Only spread from "hot" pixels (heat > threshold) to reduce iterations.
+    // Cold pixels (< threshold) still decay but don't spread, saving ~70% of iterations
+    // when fire is sparse.
+    static constexpr uint8_t SPREAD_HEAT_THRESHOLD = 30;  // Only spread from visibly hot pixels
+
     for (int i = 0; i < this->numLeds_; i++) {
-        if (heat_[i] > 0) {
+        if (heat_[i] > SPREAD_HEAT_THRESHOLD) {
             int x, y;
             indexToCoords(i, x, y);
             uint16_t spreadHeat = heat_[i] * params_.heatDecay;
@@ -517,7 +523,14 @@ void Fire::updateRandomFire() {
                     int targetIndex = coordsToIndex(targetX, targetY);
 
                     if (targetIndex >= 0) {
-                        float distance = sqrt(dx*dx + dy*dy);
+                        // Use fast integer approximation: avoid sqrt() in hot loop
+                        // Manhattan distance approximation: max(|dx|,|dy|) + 0.5*min(|dx|,|dy|)
+                        int absDx = dx < 0 ? -dx : dx;
+                        int absDy = dy < 0 ? -dy : dy;
+                        int maxD = absDx > absDy ? absDx : absDy;
+                        int minD = absDx < absDy ? absDx : absDy;
+                        float distance = maxD + 0.41f * minD;  // Octagonal approximation
+
                         float falloff = 1.0f / (distance + 1);
                         uint8_t heatToSpread = spreadHeat * falloff;
 

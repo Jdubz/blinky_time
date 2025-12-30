@@ -1,6 +1,17 @@
 #include "AudioController.h"
 #include <math.h>
 
+// ============================================================================
+// Named Constants for rhythm-based pulse modulation
+// ============================================================================
+
+// Beat proximity thresholds for pulse modulation
+// When phase is near 0 or 1, we're "on beat"; near 0.5 we're "off beat"
+// distFromBeat ranges from 0 (on beat) to 0.5 (off beat)
+static constexpr float PULSE_NEAR_BEAT_THRESHOLD = 0.2f;   // Below this = boost transients
+static constexpr float PULSE_FAR_FROM_BEAT_THRESHOLD = 0.3f;  // Above this = suppress transients
+// Transition zone width (derived): 0.3 - 0.2 = 0.1
+
 // ===== CONSTRUCTION =====
 
 AudioController::AudioController(IPdmMic& pdm, ISystemTime& time)
@@ -154,10 +165,12 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 
     // Convert BPM range to lag range (in frames at ~60 Hz)
-    // lag = 60 / bpm * frameRate
+    // Formula: lag = 60 / bpm * frameRate
     // At 60 Hz: 200 BPM = 18 frames, 60 BPM = 60 frames
-    int minLag = static_cast<int>(60.0f / bpmMax * 60.0f);
-    int maxLag = static_cast<int>(60.0f / bpmMin * 60.0f);
+    // NOTE: This assumes consistent 60 Hz frame rate. See header for implications.
+    constexpr float ASSUMED_FRAME_RATE = 60.0f;
+    int minLag = static_cast<int>(60.0f / bpmMax * ASSUMED_FRAME_RATE);
+    int maxLag = static_cast<int>(60.0f / bpmMin * ASSUMED_FRAME_RATE);
 
     if (minLag < 10) minLag = 10;
     if (maxLag > ossCount_ / 2) maxLag = ossCount_ / 2;
@@ -207,6 +220,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
     // Update tempo if periodicity is strong enough
+    // Safety: bestLag > 0 check prevents division by zero in calculations below
     if (bestLag > 0 && periodicityStrength_ > 0.25f) {
         float newBpm = 60.0f / (static_cast<float>(bestLag) / 60.0f);
         newBpm = clampf(newBpm, bpmMin, bpmMax);
@@ -243,9 +257,9 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
     float phaseIncrement = dt * 1000.0f / beatPeriodMs_;
     phase_ += phaseIncrement;
 
-    // Wrap phase at 1.0
-    while (phase_ >= 1.0f) phase_ -= 1.0f;
-    while (phase_ < 0.0f) phase_ += 1.0f;
+    // Wrap phase at 1.0 using fmodf (safe for large jumps, prevents infinite loops)
+    phase_ = fmodf(phase_, 1.0f);
+    if (phase_ < 0.0f) phase_ += 1.0f;
 
     // Gradually adapt phase toward target (derived from autocorrelation)
     if (periodicityStrength_ > activationThreshold) {
@@ -258,9 +272,9 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
         // Apply gradual correction
         phase_ += phaseDiff * phaseAdaptRate * dt * 10.0f;
 
-        // Re-wrap after correction
-        while (phase_ >= 1.0f) phase_ -= 1.0f;
-        while (phase_ < 0.0f) phase_ += 1.0f;
+        // Re-wrap after correction (fmodf is safe for any phase value)
+        phase_ = fmodf(phase_, 1.0f);
+        if (phase_ < 0.0f) phase_ += 1.0f;
     }
 
     // Decay periodicity during silence
@@ -298,15 +312,16 @@ void AudioController::synthesizePulse() {
         float distFromBeat = phase_ < 0.5f ? phase_ : (1.0f - phase_);
 
         float modulation;
-        if (distFromBeat < 0.2f) {
+        if (distFromBeat < PULSE_NEAR_BEAT_THRESHOLD) {
             // Near beat: boost transient
             modulation = pulseBoostOnBeat;
-        } else if (distFromBeat > 0.3f) {
+        } else if (distFromBeat > PULSE_FAR_FROM_BEAT_THRESHOLD) {
             // Away from beat: suppress transient
             modulation = pulseSuppressOffBeat;
         } else {
-            // Transition zone
-            float t = (distFromBeat - 0.2f) / 0.1f;
+            // Transition zone: interpolate between boost and suppress
+            float transitionWidth = PULSE_FAR_FROM_BEAT_THRESHOLD - PULSE_NEAR_BEAT_THRESHOLD;
+            float t = (distFromBeat - PULSE_NEAR_BEAT_THRESHOLD) / transitionWidth;
             modulation = pulseBoostOnBeat * (1.0f - t) + pulseSuppressOffBeat * t;
         }
 

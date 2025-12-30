@@ -150,6 +150,8 @@ bool ConfigStorage::loadFromFlash() {
     ConfigData temp;
     if (flash.read(&temp, flashAddr, sizeof(ConfigData)) != 0) return false;
     if (temp.magic != MAGIC_NUMBER) return false;
+    // Version mismatch: intentionally discard old config and use defaults
+    // See ConfigStorage.h for migration policy rationale
     if (temp.version != CONFIG_VERSION) return false;
 
     memcpy(&data_, &temp, sizeof(ConfigData));
@@ -167,6 +169,8 @@ bool ConfigStorage::loadFromFlash() {
 
     if (bytesRead != sizeof(ConfigData)) return false;
     if (temp.magic != MAGIC_NUMBER) return false;
+    // Version mismatch: intentionally discard old config and use defaults
+    // See ConfigStorage.h for migration policy rationale
     if (temp.version != CONFIG_VERSION) return false;
 
     memcpy(&data_, &temp, sizeof(ConfigData));
