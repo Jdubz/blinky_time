@@ -151,6 +151,11 @@ function App() {
                       {...settingsPanelProps}
                       settingsByCategory={{
                         [currentGenerator]: settingsByCategory[currentGenerator] || [],
+                        // Include related categories for fire generator
+                        ...(currentGenerator === 'fire' && {
+                          firemusic: settingsByCategory.firemusic || [],
+                          fireorganic: settingsByCategory.fireorganic || [],
+                        }),
                       }}
                     />
                   </div>
@@ -169,13 +174,20 @@ function App() {
                       onEffectChange={setEffect}
                       disabled={isDisabled}
                     />
-                    <div className="effect-info">
-                      <p className="effect-description">
-                        {currentEffect === 'none'
-                          ? 'No effect applied - using original generator colors.'
-                          : 'Hue rotation cycles all colors through the rainbow over time.'}
-                      </p>
-                    </div>
+                    {currentEffect === 'none' ? (
+                      <div className="effect-info">
+                        <p className="effect-description">
+                          No effect applied - using original generator colors.
+                        </p>
+                      </div>
+                    ) : (
+                      <SettingsPanel
+                        {...settingsPanelProps}
+                        settingsByCategory={{
+                          effect: settingsByCategory.effect || [],
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
               ),
