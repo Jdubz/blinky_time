@@ -7,14 +7,34 @@
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../types/Version.h"
+#include "../render/RenderPipeline.h"
+#include "../effects/HueRotationEffect.h"
 
 extern const DeviceConfig& config;
 
 // Static instance for callbacks
 SerialConsole* SerialConsole::instance_ = nullptr;
 
+// New constructor with RenderPipeline
+SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
+    : pipeline_(pipeline), fireGenerator_(nullptr), waterGenerator_(nullptr),
+      lightningGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
+      battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
+    instance_ = this;
+    // Get generator pointers from pipeline
+    if (pipeline_) {
+        fireGenerator_ = pipeline_->getFireGenerator();
+        waterGenerator_ = pipeline_->getWaterGenerator();
+        lightningGenerator_ = pipeline_->getLightningGenerator();
+        hueEffect_ = pipeline_->getHueRotationEffect();
+    }
+}
+
+// Legacy constructor for backward compatibility
 SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
+    : pipeline_(nullptr), fireGenerator_(fireGen), waterGenerator_(nullptr),
+      lightningGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
+      battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
 }
 
@@ -37,6 +57,23 @@ void SerialConsole::registerSettings() {
     registerFireSettings(fp);
     registerFireMusicSettings(fp);
     registerFireOrganicSettings(fp);
+
+    // Register Water generator settings
+    if (waterGenerator_) {
+        waterParams_ = waterGenerator_->getParams();
+        registerWaterSettings(&waterParams_);
+    }
+
+    // Register Lightning generator settings
+    if (lightningGenerator_) {
+        lightningParams_ = lightningGenerator_->getParams();
+        registerLightningSettings(&lightningParams_);
+    }
+
+    // Register effect settings (HueRotation)
+    registerEffectSettings();
+
+    // Audio settings
     registerAudioSettings();
     registerAgcSettings();
     registerTransientSettings();
@@ -253,6 +290,8 @@ void SerialConsole::handleCommand(const char* cmd) {
 bool SerialConsole::handleSpecialCommand(const char* cmd) {
     // Dispatch to specialized handlers (order matters for prefix matching)
     if (handleJsonCommand(cmd)) return true;
+    if (handleGeneratorCommand(cmd)) return true;
+    if (handleEffectCommand(cmd)) return true;
     if (handleBatteryCommand(cmd)) return true;
     if (handleStreamCommand(cmd)) return true;
     if (handleTestCommand(cmd)) return true;
@@ -612,6 +651,196 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
     }
+
+    // Restore water defaults
+    if (waterGenerator_) {
+        waterGenerator_->resetToDefaults();
+        waterParams_ = WaterParams();
+    }
+
+    // Restore lightning defaults
+    if (lightningGenerator_) {
+        lightningGenerator_->resetToDefaults();
+        lightningParams_ = LightningParams();
+    }
+
+    // Restore effect defaults
+    if (hueEffect_) {
+        hueEffect_->setHueShift(0.0f);
+        hueEffect_->setRotationSpeed(0.0f);
+    }
+}
+
+// === GENERATOR COMMANDS ===
+bool SerialConsole::handleGeneratorCommand(const char* cmd) {
+    if (!pipeline_) return false;
+
+    // "gen list" - list available generators
+    if (strcmp(cmd, "gen list") == 0 || strcmp(cmd, "gen") == 0) {
+        Serial.println(F("Available generators:"));
+        for (int i = 0; i < RenderPipeline::NUM_GENERATORS; i++) {
+            const char* name = RenderPipeline::getGeneratorNameByIndex(i);
+            bool active = (RenderPipeline::getGeneratorTypeByIndex(i) == pipeline_->getGeneratorType());
+            Serial.print(F("  "));
+            Serial.print(name);
+            if (active) Serial.print(F(" (active)"));
+            Serial.println();
+        }
+        return true;
+    }
+
+    // "gen <name>" - switch to generator
+    if (strncmp(cmd, "gen ", 4) == 0) {
+        const char* name = cmd + 4;
+
+        // Match generator by name
+        GeneratorType type = GeneratorType::FIRE;  // Default
+        bool found = false;
+
+        if (strcmp(name, "fire") == 0) {
+            type = GeneratorType::FIRE;
+            found = true;
+        } else if (strcmp(name, "water") == 0) {
+            type = GeneratorType::WATER;
+            found = true;
+        } else if (strcmp(name, "lightning") == 0) {
+            type = GeneratorType::LIGHTNING;
+            found = true;
+        }
+
+        if (found) {
+            if (pipeline_->setGenerator(type)) {
+                Serial.print(F("OK switched to "));
+                Serial.println(pipeline_->getGeneratorName());
+            } else {
+                Serial.println(F("ERROR: Failed to switch generator"));
+            }
+        } else {
+            Serial.print(F("Unknown generator: "));
+            Serial.println(name);
+            Serial.println(F("Use: fire, water, lightning"));
+        }
+        return true;
+    }
+
+    return false;
+}
+
+// === EFFECT COMMANDS ===
+bool SerialConsole::handleEffectCommand(const char* cmd) {
+    if (!pipeline_) return false;
+
+    // "effect list" - list available effects
+    if (strcmp(cmd, "effect list") == 0 || strcmp(cmd, "effect") == 0) {
+        Serial.println(F("Available effects:"));
+        for (int i = 0; i < RenderPipeline::NUM_EFFECTS; i++) {
+            const char* name = RenderPipeline::getEffectNameByIndex(i);
+            bool active = (RenderPipeline::getEffectTypeByIndex(i) == pipeline_->getEffectType());
+            Serial.print(F("  "));
+            Serial.print(name);
+            if (active) Serial.print(F(" (active)"));
+            Serial.println();
+        }
+        return true;
+    }
+
+    // "effect <name>" - switch to effect (or disable with "none")
+    if (strncmp(cmd, "effect ", 7) == 0) {
+        const char* name = cmd + 7;
+
+        // Match effect by name
+        EffectType type = EffectType::NONE;
+        bool found = false;
+
+        if (strcmp(name, "none") == 0 || strcmp(name, "off") == 0) {
+            type = EffectType::NONE;
+            found = true;
+        } else if (strcmp(name, "hue") == 0 || strcmp(name, "huerotation") == 0) {
+            type = EffectType::HUE_ROTATION;
+            found = true;
+        }
+
+        if (found) {
+            if (pipeline_->setEffect(type)) {
+                Serial.print(F("OK effect: "));
+                Serial.println(pipeline_->getEffectName());
+            } else {
+                Serial.println(F("ERROR: Failed to set effect"));
+            }
+        } else {
+            Serial.print(F("Unknown effect: "));
+            Serial.println(name);
+            Serial.println(F("Use: none, hue"));
+        }
+        return true;
+    }
+
+    return false;
+}
+
+// === WATER SETTINGS ===
+void SerialConsole::registerWaterSettings(WaterParams* wp) {
+    if (!wp) return;
+
+    settings_.registerUint8("waterflow", &wp->baseFlow, "water",
+        "Base flow speed", 0, 255);
+    settings_.registerUint8("wavemin", &wp->waveHeightMin, "water",
+        "Min wave height", 0, 255);
+    settings_.registerUint8("wavemax", &wp->waveHeightMax, "water",
+        "Max wave height", 0, 255);
+    settings_.registerFloat("wavechance", &wp->waveChance, "water",
+        "Probability of new wave", 0.0f, 1.0f);
+    settings_.registerFloat("audiowaveboost", &wp->audioWaveBoost, "water",
+        "Audio boost for waves", 0.0f, 1.0f);
+    settings_.registerUint8("audioflowmax", &wp->audioFlowBoostMax, "water",
+        "Max flow boost from audio", 0, 255);
+    settings_.registerInt8("flowaudiobias", &wp->flowAudioBias, "water",
+        "Flow speed audio bias", -128, 127);
+}
+
+// === LIGHTNING SETTINGS ===
+void SerialConsole::registerLightningSettings(LightningParams* lp) {
+    if (!lp) return;
+
+    settings_.registerUint8("lightfade", &lp->baseFade, "lightning",
+        "Base fade speed", 0, 255);
+    settings_.registerUint8("boltmin", &lp->boltIntensityMin, "lightning",
+        "Min bolt intensity", 0, 255);
+    settings_.registerUint8("boltmax", &lp->boltIntensityMax, "lightning",
+        "Max bolt intensity", 0, 255);
+    settings_.registerFloat("boltchance", &lp->boltChance, "lightning",
+        "Probability of new bolt", 0.0f, 1.0f);
+    settings_.registerFloat("audioboltboost", &lp->audioBoltBoost, "lightning",
+        "Audio boost for bolts", 0.0f, 1.0f);
+    settings_.registerUint8("audiointensitymax", &lp->audioIntensityBoostMax, "lightning",
+        "Max intensity boost from audio", 0, 255);
+    settings_.registerInt8("fadeaudiobias", &lp->fadeAudioBias, "lightning",
+        "Fade speed audio bias", -128, 127);
+    settings_.registerUint8("branchchance", &lp->branchChance, "lightning",
+        "Branch probability (%)", 0, 100);
+}
+
+// === EFFECT SETTINGS ===
+void SerialConsole::registerEffectSettings() {
+    if (!hueEffect_) return;
+
+    // HueRotation effect settings
+    // Note: We need static storage for the float values since hueEffect_ stores them internally
+    static float hueShift = 0.0f;
+    static float rotationSpeed = 0.0f;
+
+    // Initialize from current effect state
+    hueShift = hueEffect_->getHueShift();
+    rotationSpeed = hueEffect_->getRotationSpeed();
+
+    settings_.registerFloat("hueshift", &hueShift, "effect",
+        "Static hue offset (0-1)", 0.0f, 1.0f);
+    settings_.registerFloat("huespeed", &rotationSpeed, "effect",
+        "Auto-rotation speed (cycles/sec)", 0.0f, 2.0f);
+
+    // Note: Changes to these values need to be applied to the effect
+    // This is handled by listening for changes in the streamTick or by
+    // adding a callback mechanism (TODO: add setter callbacks to SettingsRegistry)
 }
 
 void SerialConsole::streamTick() {

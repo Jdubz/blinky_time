@@ -50,6 +50,8 @@ public:
     // Parameter configuration
     void setParams(const LightningParams& params);
     void resetToDefaults();
+    const LightningParams& getParams() const { return params_; }
+    LightningParams& getParamsMutable() { return params_; }
 
     // Individual parameter setters
     void setBaseFade(uint8_t fade);

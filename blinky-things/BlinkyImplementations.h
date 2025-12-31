@@ -32,6 +32,7 @@
 
 // Render implementations
 #include "render/EffectRenderer.cpp"
+#include "render/RenderPipeline.cpp"
 
 // HAL implementations
 #include "hal/hardware/NeoPixelLedStrip.cpp"  // LED strip wrapper

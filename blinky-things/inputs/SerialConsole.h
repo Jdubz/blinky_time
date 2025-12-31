@@ -2,14 +2,20 @@
 
 #include <Arduino.h>
 #include "../generators/Fire.h"
+#include "../generators/Water.h"
+#include "../generators/Lightning.h"
 #include "../config/SettingsRegistry.h"
 
 // Forward declarations
 class ConfigStorage;
 class Fire;
+class Water;
+class Lightning;
 class AdaptiveMic;
 class BatteryMonitor;
 class AudioController;
+class RenderPipeline;
+class HueRotationEffect;
 
 /**
  * SerialConsole - JSON API for web app communication
@@ -33,9 +39,19 @@ class AudioController;
  *     load                - Load settings from flash
  *     defaults            - Restore default values
  *     reset / factory     - Factory reset (clear saved settings)
+ *
+ *   Generator/Effect Control:
+ *     gen list            - List available generators
+ *     gen <name>          - Switch to generator (fire, water, lightning)
+ *     effect list         - List available effects
+ *     effect <name>       - Switch to effect (none, hue)
  */
 class SerialConsole {
 public:
+    // New constructor with RenderPipeline
+    SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic);
+
+    // Legacy constructor for backward compatibility
     SerialConsole(Fire* fireGen, AdaptiveMic* mic);
 
     void begin();
@@ -43,6 +59,7 @@ public:
 
     // External access
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
+    void setRenderPipeline(RenderPipeline* pipeline) { pipeline_ = pipeline; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     void setAudioController(AudioController* audioCtrl) { audioCtrl_ = audioCtrl; }
@@ -74,14 +91,29 @@ private:
     bool handlePresetCommand(const char* cmd);
     bool handleModeCommand(const char* cmd);
     bool handleConfigCommand(const char* cmd);
+    bool handleGeneratorCommand(const char* cmd);
+    bool handleEffectCommand(const char* cmd);
+
+    // Settings registration for other generators
+    void registerWaterSettings(WaterParams* wp);
+    void registerLightningSettings(LightningParams* lp);
+    void registerEffectSettings();
 
     // Members
+    RenderPipeline* pipeline_;
     Fire* fireGenerator_;
+    Water* waterGenerator_;
+    Lightning* lightningGenerator_;
+    HueRotationEffect* hueEffect_;
     AdaptiveMic* mic_;
     BatteryMonitor* battery_;
     AudioController* audioCtrl_;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
+
+    // Live-tunable params (stored here for settings registry access)
+    WaterParams waterParams_;
+    LightningParams lightningParams_;
 
     // JSON streaming state (for web app)
     bool streamEnabled_ = false;

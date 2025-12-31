@@ -49,6 +49,8 @@ public:
     // Parameter configuration
     void setParams(const WaterParams& params);
     void resetToDefaults();
+    const WaterParams& getParams() const { return params_; }
+    WaterParams& getParamsMutable() { return params_; }
 
     // Individual parameter setters
     void setBaseFlow(uint8_t flow);
