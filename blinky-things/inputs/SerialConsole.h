@@ -65,11 +65,7 @@ enum class LogLevel : uint8_t {
 };
 class SerialConsole {
 public:
-    // New constructor with RenderPipeline
     SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic);
-
-    // Legacy constructor for backward compatibility
-    SerialConsole(Fire* fireGen, AdaptiveMic* mic);
 
     void begin();
     void update();
@@ -116,7 +112,6 @@ private:
     bool handleStreamCommand(const char* cmd);
     bool handleTestCommand(const char* cmd);
     bool handleAudioStatusCommand(const char* cmd);
-    bool handlePresetCommand(const char* cmd);
     bool handleModeCommand(const char* cmd);
     bool handleConfigCommand(const char* cmd);
     bool handleGeneratorCommand(const char* cmd);
@@ -140,10 +135,6 @@ private:
     AudioController* audioCtrl_;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
-
-    // Live-tunable params (stored here for settings registry access)
-    WaterParams waterParams_;
-    LightningParams lightningParams_;
 
     // JSON streaming state (for web app)
     bool streamEnabled_ = false;

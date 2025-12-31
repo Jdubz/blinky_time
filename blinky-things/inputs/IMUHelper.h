@@ -101,7 +101,7 @@ private:
     static inline float radToDeg_(float rad){return rad * 180.0f / M_PI;}
     static inline float degToRad_(float deg){return deg * M_PI / 180.0f;}
 
-    // Simplified physics methods (legacy compatibility)
+    // Simplified physics methods
     void updateBasicOrientation_(const Vec3& accel, float dt);
     void updateSimpleMotion_(const Vec3& accel, const Vec3& gyro, float dt);
 

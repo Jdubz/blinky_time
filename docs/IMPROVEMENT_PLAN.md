@@ -72,7 +72,6 @@ Test all device configurations on actual hardware:
 
 - [ ] Dynamic device switching via serial
 - [ ] EEPROM configuration persistence
-- [ ] Multiple named presets per device
 
 ---
 

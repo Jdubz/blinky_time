@@ -70,7 +70,6 @@ Short keys to minimize serial bandwidth: `l`=level, `t`=transient, `e`=envelope,
    - Text input to send commands
 
 ### Not in MVP
-- Presets
 - Themes
 - Multi-device
 - Fancy animations
@@ -380,7 +379,6 @@ firebase deploy --only hosting
 
 ## Future Enhancements (Post-MVP)
 - PWA offline support with service worker
-- Settings presets (save/load configurations)
 - Dark/light theme toggle
 - LED matrix preview visualization
 - Export audio recording to file

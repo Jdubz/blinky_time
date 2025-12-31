@@ -31,7 +31,6 @@ export interface LoadingState {
   connecting: boolean;
   settings: boolean;
   streaming: boolean;
-  preset: boolean;
   generator: boolean;
   effect: boolean;
   saving: boolean;
@@ -56,10 +55,6 @@ export interface UseSerialReturn {
   availableGenerators: GeneratorType[];
   availableEffects: EffectType[];
 
-  // Preset data
-  presets: string[];
-  currentPreset: string | null;
-
   // Streaming data
   isStreaming: boolean;
   audioData: AudioSample | null;
@@ -69,8 +64,8 @@ export interface UseSerialReturn {
   musicModeData: MusicModeData | null;
   statusData: StatusMessage | null;
 
-  // Transient detection (legacy name kept for compatibility)
-  onPercussionEvent: (callback: (msg: TransientMessage) => void) => () => void;
+  // Transient detection events
+  onTransientEvent: (callback: (msg: TransientMessage) => void) => () => void;
 
   // Rhythm analyzer events
   onRhythmEvent: (callback: (msg: RhythmMessage) => void) => () => void;
@@ -92,8 +87,8 @@ export interface UseSerialReturn {
   loadSettings: () => Promise<void>;
   resetDefaults: () => Promise<void>;
   refreshSettings: () => Promise<void>;
+  loadSettingsByCategory: (category: string) => Promise<void>;
   requestBatteryStatus: () => Promise<void>;
-  applyPreset: (name: string) => Promise<void>;
   setGenerator: (name: GeneratorType) => Promise<void>;
   setEffect: (name: EffectType) => Promise<void>;
 }
@@ -144,7 +139,6 @@ const initialLoadingState: LoadingState = {
   connecting: false,
   settings: false,
   streaming: false,
-  preset: false,
   generator: false,
   effect: false,
   saving: false,
@@ -157,8 +151,6 @@ export function useSerial(): UseSerialReturn {
   const [loading, setLoading] = useState<LoadingState>(initialLoadingState);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [settings, setSettings] = useState<DeviceSetting[]>([]);
-  const [presets, setPresets] = useState<string[]>([]);
-  const [currentPreset, setCurrentPreset] = useState<string | null>(null);
   const [currentGenerator, setCurrentGenerator] = useState<GeneratorType>('fire');
   const [currentEffect, setCurrentEffect] = useState<EffectType>('none');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -175,8 +167,8 @@ export function useSerial(): UseSerialReturn {
     setLoading(prev => ({ ...prev, [key]: value }));
   }, []);
 
-  // Transient event callbacks (legacy name kept for compatibility)
-  const percussionCallbacksRef = useRef<Set<(msg: TransientMessage) => void>>(new Set());
+  // Transient event callbacks
+  const transientCallbacksRef = useRef<Set<(msg: TransientMessage) => void>>(new Set());
   // Rhythm analyzer event callbacks
   const rhythmCallbacksRef = useRef<Set<(msg: RhythmMessage) => void>>(new Set());
   // Status event callbacks
@@ -281,8 +273,7 @@ export function useSerial(): UseSerialReturn {
           break;
         case 'transient':
           if (event.transient) {
-            // Notify all registered transient callbacks
-            percussionCallbacksRef.current.forEach(callback => {
+            transientCallbacksRef.current.forEach(callback => {
               callback(event.transient!);
             });
           }
@@ -363,13 +354,6 @@ export function useSerial(): UseSerialReturn {
           logger.info('Settings loaded', { count: settingsResponse.settings.length });
         } else {
           logger.warn('Failed to fetch settings');
-        }
-
-        // Fetch available presets
-        const presetList = await serialService.getPresets();
-        if (presetList) {
-          setPresets(presetList);
-          logger.debug('Presets loaded', { count: presetList.length });
         }
 
         setLoadingState('settings', false);
@@ -492,37 +476,42 @@ export function useSerial(): UseSerialReturn {
     }
   }, []);
 
-  // Request battery status data
-  const requestBatteryStatus = useCallback(async () => {
-    await serialService.requestBatteryStatus();
-  }, []);
-
-  // Apply a preset
-  const applyPreset = useCallback(
-    async (name: string) => {
-      logger.debug('Applying preset', { name });
-      setLoadingState('preset', true);
+  // Load settings for a specific category (lazy loading)
+  const loadSettingsByCategory = useCallback(
+    async (category: string) => {
+      logger.debug('Loading settings for category', { category });
+      setLoadingState('settings', true);
       try {
-        await serialService.applyPreset(name);
-        setCurrentPreset(name);
-        // Refresh settings after applying preset
-        const settingsResponse = await serialService.getSettings();
-        if (settingsResponse) {
-          setSettings(settingsResponse.settings);
+        const response = await serialService.getSettingsByCategory(category);
+        if (response?.settings) {
+          // Capture settings from response before the state update
+          const newSettings = response.settings;
+          // Merge category settings with existing settings using functional update
+          // This ensures we always merge with the latest state, preventing race conditions
+          setSettings(prev => {
+            // Remove old settings from this category, add new ones
+            const filtered = prev.filter(s => s.cat !== category);
+            return [...filtered, ...newSettings];
+          });
+          logger.debug('Category settings loaded', { category, count: newSettings.length });
+        } else {
+          logger.warn('No settings returned for category', { category });
         }
-        notify.success(`Preset "${name}" applied`);
-        logger.info('Preset applied', { name });
       } catch (error) {
-        const message = error instanceof Error ? error.message : 'Preset failed';
-        logger.error('Apply preset error', { name, error: message });
-        notify.error(`Failed to apply preset: ${message}`);
-        throw error;
+        const message = error instanceof Error ? error.message : 'Failed to load category settings';
+        logger.error('Load category settings error', { category, error: message });
+        notify.error(`Failed to load ${category} settings: ${message}`);
       } finally {
-        setLoadingState('preset', false);
+        setLoadingState('settings', false);
       }
     },
     [setLoadingState]
   );
+
+  // Request battery status data
+  const requestBatteryStatus = useCallback(async () => {
+    await serialService.requestBatteryStatus();
+  }, []);
 
   // Set active generator
   const setGenerator = useCallback(
@@ -590,12 +579,11 @@ export function useSerial(): UseSerialReturn {
     });
   }, []);
 
-  // Register callback for transient events (legacy name kept for compatibility)
-  const onPercussionEvent = useCallback((callback: (msg: TransientMessage) => void) => {
-    percussionCallbacksRef.current.add(callback);
-    // Return cleanup function
+  // Register callback for transient events
+  const onTransientEvent = useCallback((callback: (msg: TransientMessage) => void) => {
+    transientCallbacksRef.current.add(callback);
     return () => {
-      percussionCallbacksRef.current.delete(callback);
+      transientCallbacksRef.current.delete(callback);
     };
   }, []);
 
@@ -630,8 +618,6 @@ export function useSerial(): UseSerialReturn {
     currentEffect,
     availableGenerators: AVAILABLE_GENERATORS,
     availableEffects: AVAILABLE_EFFECTS,
-    presets,
-    currentPreset,
     isStreaming,
     audioData,
     batteryData,
@@ -639,7 +625,7 @@ export function useSerial(): UseSerialReturn {
     rhythmData,
     musicModeData,
     statusData,
-    onPercussionEvent,
+    onTransientEvent,
     onRhythmEvent,
     onStatusEvent,
     consoleLines,
@@ -653,8 +639,8 @@ export function useSerial(): UseSerialReturn {
     loadSettings,
     resetDefaults,
     refreshSettings,
+    loadSettingsByCategory,
     requestBatteryStatus,
-    applyPreset,
     setGenerator,
     setEffect,
   };

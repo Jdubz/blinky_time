@@ -352,28 +352,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
-      {
-        name: 'list_presets',
-        description: 'List available audio presets (default, quiet, loud, live). Presets provide pre-tuned parameter sets for different audio scenarios.',
-        inputSchema: {
-          type: 'object',
-          properties: {},
-        },
-      },
-      {
-        name: 'apply_preset',
-        description: 'Apply a named audio preset. Presets configure transient detection, AGC, and music mode parameters for specific scenarios: default (balanced), quiet (low-level audio), loud (high-level audio), live (live performance).',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            name: {
-              type: 'string',
-              description: 'Preset name: "default", "quiet", "loud", or "live"',
-            },
-          },
-          required: ['name'],
-        },
-      },
     ],
   };
 });
@@ -1272,79 +1250,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
           await serial.disconnect();
         }
-      }
-
-      case 'list_presets': {
-        // Query device for available presets in JSON format
-        const jsonResponse = await serial.sendCommand('json presets');
-
-        try {
-          const presets = JSON.parse(jsonResponse);
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  presets,
-                  descriptions: {
-                    default: 'Production defaults - balanced for general use',
-                    quiet: 'Optimized for low-level/ambient audio - lower thresholds, adaptive features enabled',
-                    loud: 'Optimized for loud sources - higher thresholds, fast AGC disabled',
-                    live: 'Balanced for live performance - adaptive features enabled, moderate thresholds',
-                  },
-                }, null, 2),
-              },
-            ],
-          };
-        } catch {
-          // Fall back to text response using non-JSON command
-          const textResponse = await serial.sendCommand('presets');
-          return {
-            content: [
-              {
-                type: 'text',
-                text: textResponse,
-              },
-            ],
-          };
-        }
-      }
-
-      case 'apply_preset': {
-        const presetName = (args as { name: string }).name.toLowerCase();
-        const validPresets = ['default', 'quiet', 'loud', 'live'];
-
-        if (!validPresets.includes(presetName)) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  error: `Invalid preset name: ${presetName}`,
-                  validPresets,
-                }, null, 2),
-              },
-            ],
-          };
-        }
-
-        const response = await serial.sendCommand(`preset ${presetName}`);
-
-        // Check if the preset was applied successfully
-        const success = response.includes('OK') || response.includes('Applied');
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                success,
-                preset: presetName,
-                response: response.trim(),
-              }, null, 2),
-            },
-          ],
-        };
       }
 
       default:

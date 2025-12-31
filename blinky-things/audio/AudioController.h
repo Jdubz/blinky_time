@@ -76,7 +76,7 @@ public:
     void setDetectionMode(uint8_t mode);
     uint8_t getDetectionMode() const;
 
-    // BPM range constraints (legacy API)
+    // BPM range constraints
     void setBpmRange(float minBpm, float maxBpm);
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }

@@ -27,8 +27,7 @@ const DeviceConfig HAT_CONFIG = {
     .brightness = 100,  // Increased brightness for visibility
     .ledType = NEO_GRB + NEO_KHZ800,  // Changed from RGB to GRB for correct colors
     .orientation = HORIZONTAL,
-    .layoutType = LINEAR_LAYOUT,  // New unified layout system
-    .fireType = STRING_FIRE       // Kept for backward compatibility
+    .layoutType = LINEAR_LAYOUT
   },
   .charging = {
     .fastChargeEnabled = true,

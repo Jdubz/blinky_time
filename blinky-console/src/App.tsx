@@ -23,8 +23,6 @@ function App() {
     currentEffect,
     availableGenerators,
     availableEffects,
-    presets,
-    currentPreset,
     isStreaming,
     audioData,
     batteryData,
@@ -32,7 +30,7 @@ function App() {
     rhythmData,
     musicModeData,
     statusData,
-    onPercussionEvent,
+    onTransientEvent,
     consoleLines,
     sendCommand,
     connect,
@@ -44,7 +42,6 @@ function App() {
     resetDefaults,
     refreshSettings,
     requestBatteryStatus,
-    applyPreset,
     setGenerator,
     setEffect,
   } = useSerial();
@@ -60,9 +57,6 @@ function App() {
     onReset: resetDefaults,
     onRefresh: refreshSettings,
     disabled: isDisabled,
-    presets,
-    currentPreset,
-    onApplyPreset: applyPreset,
   };
 
   return (
@@ -117,7 +111,7 @@ function App() {
                         isStreaming={isStreaming}
                         onToggleStreaming={toggleStreaming}
                         disabled={isDisabled}
-                        onPercussionEvent={onPercussionEvent}
+                        onTransientEvent={onTransientEvent}
                         connectionState={connectionState}
                       />
                     </ErrorBoundary>

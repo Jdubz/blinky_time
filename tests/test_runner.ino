@@ -19,7 +19,6 @@
 // Include all test suites
 extern void runFireEffectTests();
 extern void runAudioTests();
-extern void runPresetTests();
 extern void runHardwareTests();
 
 // Test configuration
@@ -55,7 +54,6 @@ void setup() {
   #if TEST_MODE == TEST_MODE_UNIT || TEST_MODE == TEST_MODE_ALL
     runFireEffectTests();
     runAudioTests();
-    runPresetTests();
   #endif
   
   #if TEST_MODE == TEST_MODE_INTEGRATION || TEST_MODE == TEST_MODE_ALL

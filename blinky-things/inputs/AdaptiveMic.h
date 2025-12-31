@@ -82,7 +82,7 @@ public:
 
   // Adaptive threshold scaling for low-level audio
   // When hardware gain is near max and signal is still low, scales down transientThreshold
-  bool  adaptiveThresholdEnabled = false;  // Enable adaptive threshold scaling (default off for backwards compat)
+  bool  adaptiveThresholdEnabled = false;  // Enable adaptive threshold scaling (disabled by default)
   float adaptiveMinRaw = 0.1f;             // Below this raw level, start scaling threshold
   float adaptiveMaxScale = 0.6f;           // Minimum scale factor (threshold * 0.6 at very low levels)
   float adaptiveBlendTau = 5.0f;           // Blend time for smooth transitions (seconds)

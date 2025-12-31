@@ -224,7 +224,7 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
 
-  // Legacy AGC settings (may be deprecated)
+  // Software AGC settings (envelope-based gain control)
   agenabled: {
     displayName: 'Auto-Gain Enabled',
     tooltip:

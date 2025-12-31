@@ -488,62 +488,78 @@ const char* SettingsRegistry::typeString(SettingType t) {
     }
 }
 
+// Helper to print a single setting as JSON object (without leading comma)
+void SettingsRegistry::printSettingJson(const Setting& s) {
+    Serial.print(F("{\"name\":\""));
+    Serial.print(s.name);
+    Serial.print(F("\",\"value\":"));
+
+    // Print value based on type
+    switch (s.type) {
+        case SettingType::UINT8:
+            Serial.print(*((uint8_t*)s.valuePtr));
+            break;
+        case SettingType::INT8:
+            Serial.print(*((int8_t*)s.valuePtr));
+            break;
+        case SettingType::UINT16:
+            Serial.print(*((uint16_t*)s.valuePtr));
+            break;
+        case SettingType::UINT32:
+            Serial.print(*((uint32_t*)s.valuePtr));
+            break;
+        case SettingType::FLOAT:
+            Serial.print(*((float*)s.valuePtr), 3);
+            break;
+        case SettingType::BOOL:
+            Serial.print(*((bool*)s.valuePtr) ? "true" : "false");
+            break;
+    }
+
+    Serial.print(F(",\"type\":\""));
+    Serial.print(typeString(s.type));
+    Serial.print(F("\",\"cat\":\""));
+    Serial.print(s.category);
+    Serial.print(F("\",\"min\":"));
+
+    // Print min/max based on type
+    if (s.type == SettingType::FLOAT) {
+        Serial.print(s.minVal, 3);
+        Serial.print(F(",\"max\":"));
+        Serial.print(s.maxVal, 3);
+    } else {
+        Serial.print((int32_t)s.minVal);
+        Serial.print(F(",\"max\":"));
+        Serial.print((int32_t)s.maxVal);
+    }
+
+    Serial.print(F(",\"desc\":\""));
+    Serial.print(s.description);
+    Serial.print(F("\"}"));
+}
+
 void SettingsRegistry::printSettingsJson() {
     Serial.print(F("{\"settings\":["));
 
     for (uint8_t i = 0; i < numSettings_; i++) {
         if (i > 0) Serial.print(',');
+        printSettingJson(settings_[i]);
+    }
 
-        const Setting& s = settings_[i];
+    Serial.println(F("]}"));
+}
 
-        Serial.print(F("{\"name\":\""));
-        Serial.print(s.name);
-        Serial.print(F("\",\"value\":"));
+void SettingsRegistry::printSettingsCategoryJson(const char* category) {
+    Serial.print(F("{\"settings\":["));
 
-        // Print value based on type
-        switch (s.type) {
-            case SettingType::UINT8:
-                Serial.print(*((uint8_t*)s.valuePtr));
-                break;
-            case SettingType::INT8:
-                Serial.print(*((int8_t*)s.valuePtr));
-                break;
-            case SettingType::UINT16:
-                Serial.print(*((uint16_t*)s.valuePtr));
-                break;
-            case SettingType::UINT32:
-                Serial.print(*((uint32_t*)s.valuePtr));
-                break;
-            case SettingType::FLOAT:
-                Serial.print(*((float*)s.valuePtr), 3);
-                break;
-            case SettingType::BOOL:
-                Serial.print(*((bool*)s.valuePtr) ? "true" : "false");
-                break;
-        }
+    bool first = true;
+    for (uint8_t i = 0; i < numSettings_; i++) {
+        if (strcasecmp(settings_[i].category, category) != 0) continue;
 
-        Serial.print(F(",\"type\":\""));
-        Serial.print(typeString(s.type));
-        Serial.print(F("\",\"cat\":\""));
-        Serial.print(s.category);
-        Serial.print(F("\",\"min\":"));
+        if (!first) Serial.print(',');
+        first = false;
 
-        // Print min/max based on type
-        if (s.type == SettingType::FLOAT) {
-            Serial.print(s.minVal, 3);
-            Serial.print(F(",\"max\":"));
-            Serial.print(s.maxVal, 3);
-        } else {
-            Serial.print((int32_t)s.minVal);
-            Serial.print(F(",\"max\":"));
-            Serial.print((int32_t)s.maxVal);
-        }
-
-        Serial.print(F(",\"desc\":\""));
-        Serial.print(s.description);
-        Serial.print(F("\""));
-
-        Serial.print(F("}"));
+        printSettingJson(settings_[i]);
     }
 
     Serial.println(F("]}"));
