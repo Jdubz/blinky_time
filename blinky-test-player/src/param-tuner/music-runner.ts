@@ -438,8 +438,8 @@ export class MusicModeRunner extends EventEmitter {
           diff += 1;
         }
         // Detect phase reset (large discontinuity after normalization)
-        // A normalized diff > 0.3 indicates a significant phase jump
-        if (Math.abs(diff) > 0.3) {
+        // A normalized diff > 0.25 indicates a significant phase jump
+        if (Math.abs(diff) > 0.25) {
           phaseResets++;
         }
         phaseDiffs.push(Math.abs(diff));

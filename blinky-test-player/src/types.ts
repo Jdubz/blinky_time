@@ -197,42 +197,6 @@ export interface ExtendedTestPattern extends TestPattern {
  */
 export type PatternRegistry = Record<string, ExtendedTestPattern>;
 
-// =============================================================================
-// PATTERN DISCOVERY UTILITIES
-// =============================================================================
-
-/**
- * Get patterns by category
- */
-export function filterPatternsByCategory(
-  registry: PatternRegistry,
-  category: PatternCategory
-): ExtendedTestPattern[] {
-  return Object.values(registry).filter(
-    p => p.metadata.category === category && p.metadata.enabled
-  );
-}
-
-/**
- * Get patterns that target a specific parameter
- */
-export function filterPatternsByParam(
-  registry: PatternRegistry,
-  param: string
-): ExtendedTestPattern[] {
-  return Object.values(registry).filter(
-    p => p.metadata.enabled && p.metadata.targetParams?.includes(param)
-  ).sort((a, b) => (b.metadata.priority || 0) - (a.metadata.priority || 0));
-}
-
-/**
- * Get patterns that use a specific primary metric
- */
-export function filterPatternsByMetric(
-  registry: PatternRegistry,
-  metric: OptimizationMetric
-): ExtendedTestPattern[] {
-  return Object.values(registry).filter(
-    p => p.metadata.enabled && p.metadata.expectedMetrics.primary === metric
-  );
-}
+// Pattern discovery utilities are in patterns.ts:
+// - getPatternsByCategory(category)
+// - getPatternsForParam(param)

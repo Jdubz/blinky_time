@@ -17,7 +17,7 @@ import { runInteractions, showInteractionSummary } from './interact.js';
 import { runValidation, showValidationSummary } from './validate.js';
 import { generateReport, showReportSummary } from './report.js';
 import { runFastTune } from './fast-tune.js';
-import { SuiteRunner, listSuites, getSuite, PREDEFINED_SUITES, validateSuiteConfig, createSuiteFromOptions } from './suite.js';
+import { SuiteRunner, listSuites, getSuite, PREDEFINED_SUITES, validateSuiteConfig } from './suite.js';
 import { QueueManager, createQueue, listQueues } from './queue.js';
 import { getPatternsForParam } from '../patterns.js';
 
@@ -449,6 +449,7 @@ async function runQueueCommand(args: GlobalArgs & {
 
   // Need queue ID for most operations
   const queueId = args.id || `queue-${Date.now()}`;
+  // Second arg (requirePort=false) allows status/clear operations without --port
   const options = createOptions(args, false);
 
   // Show status
@@ -468,7 +469,7 @@ async function runQueueCommand(args: GlobalArgs & {
   // Create and run queue from suite list
   if (args.suites) {
     if (!args.port) {
-      console.error('Error: --port is required to run a queue');
+      console.error('Error: --port is required to create and run a queue');
       process.exit(1);
     }
 
