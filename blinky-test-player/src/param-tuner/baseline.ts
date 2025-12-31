@@ -6,7 +6,7 @@
 import cliProgress from 'cli-progress';
 import type { DetectionMode, BaselineResult, TunerOptions, TestResult } from './types.js';
 import { DETECTION_MODES, PARAMETERS, ALL_PATTERNS } from './types.js';
-import { StateManager, IncrementalBaselineProgress } from './state.js';
+import { StateManager } from './state.js';
 import { TestRunner } from './runner.js';
 
 export async function runBaseline(
@@ -29,7 +29,7 @@ export async function runBaseline(
     // Use specified patterns or default to all
     const patternsToUse = (options.patterns && options.patterns.length > 0)
       ? options.patterns
-      : (ALL_PATTERNS as unknown as string[]);
+      : [...ALL_PATTERNS];
 
     for (const mode of modesToTest) {
       if (stateManager.isBaselineComplete(mode)) {

@@ -374,8 +374,8 @@ async function resetState(args: GlobalArgs): Promise<void> {
 // =============================================================================
 
 async function runSuiteCommand(args: GlobalArgs & { name: string; 'save-to-device'?: boolean }): Promise<void> {
-  const suite = getSuite(args.name);
-  if (!suite) {
+  const suiteConfig = getSuite(args.name);
+  if (!suiteConfig) {
     console.error(`Unknown suite: ${args.name}`);
     console.log('\nAvailable suites:');
     for (const id of Object.keys(PREDEFINED_SUITES)) {
@@ -383,6 +383,9 @@ async function runSuiteCommand(args: GlobalArgs & { name: string; 'save-to-devic
     }
     process.exit(1);
   }
+
+  // Create a copy to avoid mutating the predefined suite
+  const suite = { ...suiteConfig };
 
   // Validate the suite
   const errors = validateSuiteConfig(suite);

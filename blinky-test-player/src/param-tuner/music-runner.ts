@@ -253,10 +253,10 @@ export class MusicModeRunner extends EventEmitter {
 
           this.bpmSampleBuffer.push({
             timestampMs,
-            bpm: musicData.bpm || 0,
-            phase: musicData.ph || 0,
-            confidence: musicData.conf || musicData.str || 0,
-            rhythmStrength: musicData.str || 0,
+            bpm: musicData.bpm ?? 0,
+            phase: musicData.ph ?? 0,
+            confidence: musicData.conf ?? musicData.str ?? 0,
+            rhythmStrength: musicData.str ?? 0,
             musicActive,
           });
         }
@@ -430,12 +430,17 @@ export class MusicModeRunner extends EventEmitter {
       const phaseDiffs: number[] = [];
       for (let i = 1; i < phaseValues.length; i++) {
         let diff = phaseValues[i] - phaseValues[i - 1];
-        // Detect phase reset (large jump)
-        if (Math.abs(diff) > 0.5) {
+        // Normalize phase difference to handle wrap-around at 0/1 boundary
+        // A jump from 0.9 to 0.1 should be +0.2, not -0.8
+        if (diff > 0.5) {
+          diff -= 1;
+        } else if (diff < -0.5) {
+          diff += 1;
+        }
+        // Detect phase reset (large discontinuity after normalization)
+        // A normalized diff > 0.3 indicates a significant phase jump
+        if (Math.abs(diff) > 0.3) {
           phaseResets++;
-          // Normalize the difference
-          if (diff > 0.5) diff -= 1;
-          if (diff < -0.5) diff += 1;
         }
         phaseDiffs.push(Math.abs(diff));
       }

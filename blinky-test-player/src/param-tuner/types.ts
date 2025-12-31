@@ -59,24 +59,23 @@ export interface ParameterDef {
 
 /**
  * Generate sweep values from min/max/step if sweepValues not provided
+ * Uses index-based loop to avoid floating-point precision issues
  */
 export function generateSweepValues(param: ParameterDef): number[] {
   if (param.sweepValues.length > 0) {
     return param.sweepValues;
   }
-  if (!param.step) {
-    // Default: 10 steps between min and max
-    const step = (param.max - param.min) / 10;
-    const values: number[] = [];
-    for (let v = param.min; v <= param.max; v += step) {
-      values.push(Math.round(v * 1000) / 1000);
-    }
-    return values;
-  }
+
+  const step = param.step ?? (param.max - param.min) / 10;
   const values: number[] = [];
-  for (let v = param.min; v <= param.max; v += param.step) {
+
+  // Use index-based loop to avoid floating-point accumulation errors
+  for (let i = 0; ; i++) {
+    const v = param.min + i * step;
+    if (v > param.max + 1e-9) break;  // Small epsilon for floating-point comparison
     values.push(Math.round(v * 1000) / 1000);
   }
+
   return values;
 }
 

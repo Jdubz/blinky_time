@@ -6,7 +6,7 @@
  */
 
 import type { DetectionMode } from './types.js';
-import { PARAMETERS } from './types.js';
+import { DETECTION_MODES, PARAMETERS } from './types.js';
 import { StateManager } from './state.js';
 import { TestRunner } from './runner.js';
 import type { TunerOptions } from './types.js';
@@ -69,7 +69,7 @@ export async function saveOptimizedToDevice(
     await runner.connect();
 
     // Get all sweep results
-    const modesToSave = modes || ['drummer', 'spectral', 'hybrid'] as DetectionMode[];
+    const modesToSave = modes || [...DETECTION_MODES];
 
     for (const mode of modesToSave) {
       const optimalParams = stateManager.getOptimalParams(mode);
@@ -162,7 +162,7 @@ export function previewDeviceSave(
   console.log('  DEVICE SAVE PREVIEW (dry-run)');
   console.log('='.repeat(60));
 
-  const modesToShow = modes || ['drummer', 'spectral', 'hybrid'] as DetectionMode[];
+  const modesToShow = modes || [...DETECTION_MODES];
   let totalChanges = 0;
 
   for (const mode of modesToShow) {

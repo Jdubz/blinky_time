@@ -159,7 +159,7 @@ export const SUITE_COOLDOWN: SuiteConfig = {
     {
       parameter: 'cooldown',
       values: [20, 30, 40, 50, 60, 80, 100],
-      patterns: ['fast-tempo', 'simultaneous', 'rapid-decay'],
+      patterns: ['fast-tempo', 'simultaneous', 'cooldown-stress-40ms'],
     },
   ],
   validation: {
@@ -186,7 +186,7 @@ export const SUITE_THRESHOLD: SuiteConfig = {
   sweeps: [
     {
       parameter: 'hitthresh',
-      patterns: ['strong-beats', 'quiet-passages', 'sparse'],
+      patterns: ['strong-beats', 'soft-beats', 'sparse'],
     },
     {
       parameter: 'fluxthresh',
@@ -221,7 +221,7 @@ export const SUITE_FALSE_POSITIVE: SuiteConfig = {
     },
     {
       parameter: 'hitthresh',
-      patterns: ['pad-rejection', 'quiet-passages'],
+      patterns: ['pad-rejection', 'soft-beats'],
     },
   ],
   validation: {
@@ -420,11 +420,12 @@ export class SuiteRunner {
         ),
       };
 
-      // If custom values specified, we'd need to temporarily modify PARAMETERS
-      // For now, use default sweep values
+      // Custom sweep values are not yet supported
       if (sweepConfig.values) {
-        console.log(`Using custom values: ${sweepConfig.values.join(', ')}`);
-        // TODO: Support custom values by extending sweep.ts
+        throw new Error(
+          `Custom sweep values are not yet supported for parameter '${sweepConfig.parameter}'. ` +
+          `Remove 'values' from sweep config or modify PARAMETERS[${sweepConfig.parameter}].sweepValues instead.`
+        );
       }
 
       await runSweeps(sweepOptions, this.stateManager);

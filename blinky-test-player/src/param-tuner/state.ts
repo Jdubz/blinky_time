@@ -7,7 +7,7 @@
  * - Auto-save at configurable intervals
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import type { TuningState, BaselineResult, SweepResult, SweepPoint, InteractionResult, ValidationResult, DetectionMode, TestResult } from './types.js';
 
@@ -254,7 +254,6 @@ export class StateManager {
   clearIncrementalProgress(param: string): void {
     const path = this.getIncrementalPath(param);
     if (existsSync(path)) {
-      const { unlinkSync } = require('fs');
       try {
         unlinkSync(path);
       } catch {
@@ -424,7 +423,6 @@ export class StateManager {
   clearIncrementalBaselineProgress(mode: DetectionMode): void {
     const path = this.getIncrementalBaselinePath(mode);
     if (existsSync(path)) {
-      const { unlinkSync } = require('fs');
       try {
         unlinkSync(path);
       } catch {

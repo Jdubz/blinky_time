@@ -8,7 +8,7 @@
  * - Summary report after all suites complete
  */
 
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, readdirSync } from 'fs';
 import { join } from 'path';
 import type { TunerOptions } from './types.js';
 import type { SuiteConfig, SuiteStatus } from './suite.js';
@@ -77,6 +77,8 @@ export interface QueueState {
   currentIndex: number;
   /** Overall queue status */
   status: 'pending' | 'running' | 'completed' | 'failed' | 'paused';
+  /** Custom suite configurations (stored in queue, not in global registry) */
+  customSuites?: Record<string, SuiteConfig>;
 }
 
 // =============================================================================
@@ -145,7 +147,6 @@ export class QueueManager {
     this.state.lastUpdated = new Date().toISOString();
     const dir = join(this.baseOptions.outputDir || 'tuning-output', 'queues');
     if (!existsSync(dir)) {
-      const { mkdirSync } = require('fs');
       mkdirSync(dir, { recursive: true });
     }
     writeFileSync(this.statePath, JSON.stringify(this.state, null, 2));
@@ -189,8 +190,11 @@ export class QueueManager {
    * Add a custom suite configuration to the queue
    */
   addCustomSuite(config: SuiteConfig): void {
-    // Store custom suite in PREDEFINED_SUITES temporarily
-    (PREDEFINED_SUITES as Record<string, SuiteConfig>)[config.id] = config;
+    // Store custom suite in queue state (not in global registry)
+    if (!this.state.customSuites) {
+      this.state.customSuites = {};
+    }
+    this.state.customSuites[config.id] = config;
 
     this.state.suites.push({
       suiteId: config.id,
@@ -200,6 +204,13 @@ export class QueueManager {
     });
 
     this.saveState();
+  }
+
+  /**
+   * Get suite config by ID (checks predefined first, then custom)
+   */
+  private getSuiteConfig(suiteId: string): SuiteConfig | undefined {
+    return getSuite(suiteId) || this.state.customSuites?.[suiteId];
   }
 
   /**
@@ -260,10 +271,10 @@ export class QueueManager {
    * Run a single suite with retry logic
    */
   private async runSuite(queuedSuite: QueuedSuite): Promise<boolean> {
-    const suite = getSuite(queuedSuite.suiteId);
+    const suite = this.getSuiteConfig(queuedSuite.suiteId);
     if (!suite) {
       queuedSuite.status = 'skipped';
-      queuedSuite.error = 'Suite not found';
+      queuedSuite.error = `Suite not found: ${queuedSuite.suiteId}`;
       this.saveState();
       return false;
     }
@@ -355,9 +366,9 @@ export class QueueManager {
 
     console.log('\n  Suite Details:');
     for (const suite of this.state.suites) {
-      const icon = suite.status === 'completed' ? '  ' :
-                   suite.status === 'failed' ? '  ' :
-                   suite.status === 'skipped' ? '  ' : '  ';
+      const icon = suite.status === 'completed' ? '✅' :
+                   suite.status === 'failed'    ? '❌' :
+                   suite.status === 'skipped'   ? '⚠️' : '⏳';
       console.log(`    ${icon} ${suite.suiteId}: ${suite.status}`);
       if (suite.error) {
         console.log(`       Error: ${suite.error}`);
@@ -407,8 +418,7 @@ export function listQueues(outputDir: string = 'tuning-output'): string[] {
     return [];
   }
 
-  const { readdirSync } = require('fs');
-  const files: string[] = readdirSync(queueDir);
+  const files = readdirSync(queueDir);
   return files
     .filter((f: string) => f.endsWith('.json'))
     .map((f: string) => f.replace('.json', ''));

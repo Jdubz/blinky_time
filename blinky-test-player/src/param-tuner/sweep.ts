@@ -54,7 +54,7 @@ export async function runSweeps(
     // Use specified patterns or all representative patterns
     const patterns = (options.patterns && options.patterns.length > 0)
       ? options.patterns
-      : (REPRESENTATIVE_PATTERNS as unknown as string[]);
+      : [...REPRESENTATIVE_PATTERNS];
 
     for (const param of params) {
       if (stateManager.isSweepComplete(param.name)) {
