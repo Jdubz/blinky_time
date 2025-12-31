@@ -38,6 +38,7 @@
 // Render
 #include "render/EffectRenderer.h"
 #include "render/LEDMapper.h"
+#include "render/RenderPipeline.h"
 
 // Input components
 // NOTE: Requires patched pinDefinitions.h with include guards (see docs/PLATFORM_FIX.md)

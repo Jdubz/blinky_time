@@ -64,10 +64,8 @@ NeoPixelLedStrip* leds = nullptr;
 // ✅ Effects: HueRotation for color cycling, NoOp for pass-through
 // ✅ Hardware: AdaptiveMic ready for audio input
 // ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
-Generator* currentGenerator = nullptr;
-Effect* currentEffect = nullptr;
-EffectRenderer* renderer = nullptr;
-PixelMatrix* pixelMatrix = nullptr;
+// ✅ RenderPipeline: Unified generator/effect switching via serial console
+RenderPipeline* pipeline = nullptr;
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
@@ -80,29 +78,23 @@ AudioController* audioCtrl = nullptr;  // Unified audio controller (owns mic, rh
 uint32_t lastMs = 0;
 bool prevChargingState = false;
 
-// Live-tunable fire parameters
+// Live-tunable fire parameters (still needed for ConfigStorage compatibility)
 FireParams fireParams;
 
 void updateFireParams() {
-  if (!currentGenerator) return;
-  // FIX: Add type safety - only cast if it's actually a Fire generator
-  if (strcmp(currentGenerator->getName(), "Fire") == 0) {
-    Fire* f = static_cast<Fire*>(currentGenerator);
+  if (!pipeline) return;
+  Fire* f = pipeline->getFireGenerator();
+  if (f) {
     f->setParams(fireParams);
   }
 }
 
-// Helper functions for new Generator-Effect-Renderer architecture
-void showFireEffect() {
-  // Generate -> Effect -> Render -> Display pipeline
-  if (currentGenerator && currentEffect && renderer && pixelMatrix && audioCtrl) {
-    // Get unified audio control (all processing done in AudioController)
+// Helper function for new Generator-Effect-Renderer architecture
+void renderFrame() {
+  // Pipeline handles: Generate -> Effect -> Render
+  if (pipeline && pipeline->isValid() && audioCtrl) {
     const AudioControl& audio = audioCtrl->getControl();
-
-    // Generate effects and render
-    currentGenerator->generate(*pixelMatrix, audio);
-    currentEffect->apply(pixelMatrix);
-    renderer->render(*pixelMatrix);
+    pipeline->render(audio);
     leds->show();
   }
 }
@@ -115,10 +107,7 @@ void showFireEffect() {
 void cleanup() {
   delete console;    console = nullptr;
   delete audioCtrl;  audioCtrl = nullptr;
-  delete renderer;   renderer = nullptr;
-  delete currentEffect; currentEffect = nullptr;
-  delete currentGenerator; currentGenerator = nullptr;
-  delete pixelMatrix; pixelMatrix = nullptr;
+  delete pipeline;   pipeline = nullptr;
   delete battery;    battery = nullptr;
   delete leds;       leds = nullptr;
   delete neoPixelStrip; neoPixelStrip = nullptr;
@@ -222,14 +211,8 @@ void setup() {
   Serial.print(config.matrix.width * config.matrix.height);
   Serial.println(F(" LEDs"));
 
-  // Create PixelMatrix for the visual pipeline
-  pixelMatrix = new(std::nothrow) PixelMatrix(config.matrix.width, config.matrix.height);
-  if (!pixelMatrix || !pixelMatrix->isValid()) {
-    haltWithError(F("ERROR: PixelMatrix allocation failed"));
-  }
-
   // Initialize appropriate generator based on layout type
-  Serial.print(F("Initializing fire generator for layout type: "));
+  Serial.print(F("Initializing generators for layout type: "));
   switch (config.matrix.layoutType) {
     case MATRIX_LAYOUT:
       Serial.println(F("MATRIX"));
@@ -245,17 +228,14 @@ void setup() {
       break;
   }
 
-  // Create fire generator instance
-  Fire* fireGen = new(std::nothrow) Fire();
-  currentGenerator = fireGen;
-
-  if (!currentGenerator) {
-    haltWithError(F("ERROR: Generator allocation failed"));
+  // Create unified render pipeline (manages all generators and effects)
+  pipeline = new(std::nothrow) RenderPipeline();
+  if (!pipeline) {
+    haltWithError(F("ERROR: RenderPipeline allocation failed"));
   }
 
-  // Initialize the generator with device configuration
-  if (!fireGen->begin(config)) {
-    haltWithError(F("ERROR: Generator initialization failed"));
+  if (!pipeline->begin(config, *leds, ledMapper)) {
+    haltWithError(F("ERROR: RenderPipeline initialization failed"));
   }
 
   // Initialize live-tunable fire params from config
@@ -269,23 +249,8 @@ void setup() {
   fireParams.spreadDistance = 3;
   fireParams.heatDecay = 0.60f;
 
-  // Initialize effect (pass-through for pure fire colors)
-  currentEffect = new(std::nothrow) NoOpEffect();
-  if (!currentEffect) {
-    haltWithError(F("ERROR: Effect allocation failed"));
-  }
-  currentEffect->begin(config.matrix.width, config.matrix.height);
-
-  // Initialize renderer (leds must be valid at this point)
-  if (!leds) {
-    haltWithError(F("ERROR: LED strip not initialized before renderer"));
-  }
-  renderer = new(std::nothrow) EffectRenderer(*leds, ledMapper);
-  if (!renderer) {
-    haltWithError(F("ERROR: Renderer allocation failed"));
-  }
-
-  Serial.println(F("New architecture initialized successfully"));
+  Serial.println(F("RenderPipeline initialized with Fire, Water, Lightning generators"));
+  Serial.println(F("Available effects: None, HueRotation"));
 
   // Initialize HAL-enabled components (must be done in setup(), not at global scope)
   battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
@@ -308,8 +273,9 @@ void setup() {
   // Initialize configuration storage and load saved settings
   configStorage.begin();
   if (configStorage.isValid()) {
+    // Load into local fireParams, then apply to pipeline's fire generator
     configStorage.loadConfiguration(fireParams, audioCtrl->getMicForTuning(), audioCtrl);
-    updateFireParams();
+    updateFireParams();  // Apply to pipeline's fire generator
     Serial.println(F("Loaded saved configuration from flash"));
   } else {
     Serial.println(F("Using default configuration"));
@@ -324,8 +290,8 @@ void setup() {
   }
 
   // Initialize serial console for interactive settings management
-  // Uses fireGen created on line 240 for direct parameter access
-  console = new(std::nothrow) SerialConsole(fireGen, &audioCtrl->getMicForTuning());
+  // Uses pipeline for generator/effect switching
+  console = new(std::nothrow) SerialConsole(pipeline, &audioCtrl->getMicForTuning());
   if (!console) {
     haltWithError(F("ERROR: SerialConsole allocation failed"));
   }
@@ -334,6 +300,7 @@ void setup() {
   console->setAudioController(audioCtrl);
   console->begin();
   Serial.println(F("Serial console initialized"));
+  Serial.println(F("Commands: 'gen list', 'gen <fire|water|lightning>', 'effect list', 'effect <none|hue>'"));
 
   // FIX: Reset frame timing to prevent stale state from previous boot
   lastMs = 0;
@@ -393,8 +360,8 @@ void loop() {
     prevChargingState = currentChargingState;
   }
 
-  // Simplified rendering for new architecture - just fire effect for now
-  showFireEffect();
+  // Render current generator through pipeline
+  renderFrame();
 
   // Handle serial commands via SerialConsole
   if (console) {

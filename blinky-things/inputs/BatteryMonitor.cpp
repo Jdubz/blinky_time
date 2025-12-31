@@ -143,32 +143,40 @@ bool BatteryMonitor::isCharging() const {
 
 
 // Rough LiPo open-circuit voltage curve (no load)
-// Uses Platform::Battery constants for thresholds
+// Uses Platform::Battery constants for thresholds and percentages
 uint8_t BatteryMonitor::voltageToPercent(float v) {
-  constexpr float V_EMPTY = Platform::Battery::VOLTAGE_CRITICAL;  // 3.30V -> 0%
-  constexpr float V_FULL  = Platform::Battery::VOLTAGE_FULL;      // 4.20V -> 100%
-  constexpr float V_LOW   = Platform::Battery::VOLTAGE_LOW;       // 3.50V -> ~10%
-  constexpr float V_NOM   = Platform::Battery::VOLTAGE_NOMINAL;   // 3.70V -> ~40%
+  using namespace Platform::Battery;
 
-  if (v <= V_EMPTY) return 0;
-  if (v >= V_FULL) return 100;
+  if (v <= VOLTAGE_CRITICAL) return PERCENT_CRITICAL;
+  if (v >= VOLTAGE_FULL) return PERCENT_FULL;
 
   // Piecewise linear approximation for a pleasant gauge
-  if (v < V_LOW) {
-    // 3.30 -> 3.50 : 0% -> 10%
-    return (uint8_t)((v - V_EMPTY) * (10.0f / (V_LOW - V_EMPTY)) + 0.5f);
-  } else if (v < V_NOM) {
-    // 3.50 -> 3.70 : 10% -> 40%
-    return (uint8_t)(10 + (v - V_LOW) * (30.0f / (V_NOM - V_LOW)) + 0.5f);
-  } else if (v < 3.90f) {
-    // 3.70 -> 3.90 : 40% -> 75%
-    return (uint8_t)(40 + (v - V_NOM) * (35.0f / 0.20f) + 0.5f);
-  } else if (v < 4.05f) {
-    // 3.90 -> 4.05 : 75% -> 92%
-    return (uint8_t)(75 + (v - 3.90f) * (17.0f / 0.15f) + 0.5f);
+  // Each segment interpolates between two voltage/percentage breakpoints
+  if (v < VOLTAGE_LOW) {
+    // CRITICAL -> LOW : 0% -> 10%
+    float range = VOLTAGE_LOW - VOLTAGE_CRITICAL;
+    float pctRange = PERCENT_LOW - PERCENT_CRITICAL;
+    return (uint8_t)(PERCENT_CRITICAL + (v - VOLTAGE_CRITICAL) * (pctRange / range) + 0.5f);
+  } else if (v < VOLTAGE_NOMINAL) {
+    // LOW -> NOMINAL : 10% -> 40%
+    float range = VOLTAGE_NOMINAL - VOLTAGE_LOW;
+    float pctRange = PERCENT_NOMINAL - PERCENT_LOW;
+    return (uint8_t)(PERCENT_LOW + (v - VOLTAGE_LOW) * (pctRange / range) + 0.5f);
+  } else if (v < VOLTAGE_GOOD) {
+    // NOMINAL -> GOOD : 40% -> 75%
+    float range = VOLTAGE_GOOD - VOLTAGE_NOMINAL;
+    float pctRange = PERCENT_GOOD - PERCENT_NOMINAL;
+    return (uint8_t)(PERCENT_NOMINAL + (v - VOLTAGE_NOMINAL) * (pctRange / range) + 0.5f);
+  } else if (v < VOLTAGE_HIGH) {
+    // GOOD -> HIGH : 75% -> 92%
+    float range = VOLTAGE_HIGH - VOLTAGE_GOOD;
+    float pctRange = PERCENT_HIGH - PERCENT_GOOD;
+    return (uint8_t)(PERCENT_GOOD + (v - VOLTAGE_GOOD) * (pctRange / range) + 0.5f);
   } else {
-    // 4.05 -> 4.20 : 92% -> 100%
-    return (uint8_t)(92 + (v - 4.05f) * (8.0f / (V_FULL - 4.05f)) + 0.5f);
+    // HIGH -> FULL : 92% -> 100%
+    float range = VOLTAGE_FULL - VOLTAGE_HIGH;
+    float pctRange = PERCENT_FULL - PERCENT_HIGH;
+    return (uint8_t)(PERCENT_HIGH + (v - VOLTAGE_HIGH) * (pctRange / range) + 0.5f);
   }
 }
 

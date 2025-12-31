@@ -10,6 +10,10 @@ const mockUseSerial: UseSerialReturn = {
   deviceInfo: null,
   settings: [],
   settingsByCategory: {},
+  currentGenerator: 'fire',
+  currentEffect: 'none',
+  availableGenerators: ['fire', 'water', 'lightning'],
+  availableEffects: ['none', 'hue'],
   presets: [],
   currentPreset: null,
   isStreaming: false,
@@ -35,6 +39,8 @@ const mockUseSerial: UseSerialReturn = {
   refreshSettings: vi.fn(),
   requestBatteryStatus: vi.fn(),
   applyPreset: vi.fn(),
+  setGenerator: vi.fn(),
+  setEffect: vi.fn(),
 };
 
 vi.mock('../hooks/useSerial', () => ({

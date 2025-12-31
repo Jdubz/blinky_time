@@ -8,6 +8,8 @@ import { TabView } from './components/TabView';
 import { OfflineBanner } from './components/OfflineBanner';
 import { SerialConsoleModal } from './components/SerialConsoleModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { GeneratorSelector } from './components/GeneratorSelector';
+import { EffectSelector } from './components/EffectSelector';
 import './styles.css';
 
 function App() {
@@ -16,6 +18,10 @@ function App() {
     isSupported,
     deviceInfo,
     settingsByCategory,
+    currentGenerator,
+    currentEffect,
+    availableGenerators,
+    availableEffects,
     presets,
     currentPreset,
     isStreaming,
@@ -38,6 +44,8 @@ function App() {
     refreshSettings,
     requestBatteryStatus,
     applyPreset,
+    setGenerator,
+    setEffect,
   } = useSerial();
 
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
@@ -131,10 +139,16 @@ function App() {
               content: (
                 <div className="tab-panel">
                   <div className="tab-panel-settings-full">
+                    <GeneratorSelector
+                      currentGenerator={currentGenerator}
+                      availableGenerators={availableGenerators}
+                      onGeneratorChange={setGenerator}
+                      disabled={isDisabled}
+                    />
                     <SettingsPanel
                       {...settingsPanelProps}
                       settingsByCategory={{
-                        fire: settingsByCategory.fire || [],
+                        [currentGenerator]: settingsByCategory[currentGenerator] || [],
                       }}
                     />
                   </div>
@@ -146,13 +160,18 @@ function App() {
               label: 'Effects',
               content: (
                 <div className="tab-panel">
-                  <div className="tab-panel-placeholder">
-                    <div className="placeholder-content">
-                      <span className="placeholder-icon">🎨</span>
-                      <h3>No Effect Settings</h3>
-                      <p>Effects are currently hardcoded (HueRotation)</p>
-                      <p className="placeholder-hint">
-                        Future: Configurable effect chains and parameters
+                  <div className="tab-panel-settings-full">
+                    <EffectSelector
+                      currentEffect={currentEffect}
+                      availableEffects={availableEffects}
+                      onEffectChange={setEffect}
+                      disabled={isDisabled}
+                    />
+                    <div className="effect-info">
+                      <p className="effect-description">
+                        {currentEffect === 'none'
+                          ? 'No effect applied - using original generator colors.'
+                          : 'Hue rotation cycles all colors through the rainbow over time.'}
                       </p>
                     </div>
                   </div>

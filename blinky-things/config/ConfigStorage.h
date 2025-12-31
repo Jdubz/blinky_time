@@ -7,7 +7,19 @@
 // Forward declarations
 class AudioController;
 
-// Simple configuration storage with flash persistence for nRF52
+/**
+ * ConfigStorage - Flash-based configuration persistence for nRF52
+ *
+ * Version Migration Policy:
+ *   When CONFIG_VERSION changes, all older configs are intentionally DISCARDED
+ *   and factory defaults are loaded. This is by design:
+ *   - Config schema changes often make old data invalid or misinterpretable
+ *   - Parameters can be re-tuned via serial console after upgrade
+ *   - Safer than attempting complex migration logic on embedded device
+ *
+ *   If you need to preserve user settings across versions, manually save
+ *   current tuning values before upgrading, then restore via serial console.
+ */
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;

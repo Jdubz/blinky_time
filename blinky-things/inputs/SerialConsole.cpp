@@ -7,14 +7,38 @@
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../types/Version.h"
+#include "../render/RenderPipeline.h"
+#include "../effects/HueRotationEffect.h"
 
 extern const DeviceConfig& config;
 
 // Static instance for callbacks
 SerialConsole* SerialConsole::instance_ = nullptr;
 
+// File-scope storage for effect settings (accessible from both register and sync functions)
+static float effectHueShift_ = 0.0f;
+static float effectRotationSpeed_ = 0.0f;
+
+// New constructor with RenderPipeline
+SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
+    : pipeline_(pipeline), fireGenerator_(nullptr), waterGenerator_(nullptr),
+      lightningGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
+      battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
+    instance_ = this;
+    // Get generator pointers from pipeline
+    if (pipeline_) {
+        fireGenerator_ = pipeline_->getFireGenerator();
+        waterGenerator_ = pipeline_->getWaterGenerator();
+        lightningGenerator_ = pipeline_->getLightningGenerator();
+        hueEffect_ = pipeline_->getHueRotationEffect();
+    }
+}
+
+// Legacy constructor for backward compatibility
 SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : fireGenerator_(fireGen), mic_(mic), battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
+    : pipeline_(nullptr), fireGenerator_(fireGen), waterGenerator_(nullptr),
+      lightningGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
+      battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
 }
 
@@ -33,168 +57,201 @@ void SerialConsole::registerSettings() {
         fp = &fireGenerator_->getParamsMutable();
     }
 
-    // === FIRE SETTINGS ===
-    if (fp) {
-        settings_.registerUint8("cooling", &fp->baseCooling, "fire",
-            "Base cooling rate", 0, 255);
-        settings_.registerFloat("sparkchance", &fp->sparkChance, "fire",
-            "Probability of sparks", 0.0f, 1.0f);
-        settings_.registerUint8("sparkheatmin", &fp->sparkHeatMin, "fire",
-            "Min spark heat", 0, 255);
-        settings_.registerUint8("sparkheatmax", &fp->sparkHeatMax, "fire",
-            "Max spark heat", 0, 255);
-        settings_.registerFloat("audiosparkboost", &fp->audioSparkBoost, "fire",
-            "Audio influence on sparks", 0.0f, 1.0f);
-        settings_.registerInt8("coolingaudiobias", &fp->coolingAudioBias, "fire",
-            "Audio cooling bias", -128, 127);
-        settings_.registerUint8("bottomrows", &fp->bottomRowsForSparks, "fire",
-            "Spark injection rows", 1, 8);
-        settings_.registerUint8("burstsparks", &fp->burstSparks, "fire",
-            "Sparks per burst", 1, 20);
-        settings_.registerUint16("suppressionms", &fp->suppressionMs, "fire",
-            "Burst suppression time", 50, 1000);
-        settings_.registerFloat("heatdecay", &fp->heatDecay, "fire",
-            "Heat decay rate", 0.5f, 0.99f);
-        settings_.registerUint8("emberheatmax", &fp->emberHeatMax, "fire",
-            "Max ember heat", 0, 50);
-        settings_.registerUint8("spreaddistance", &fp->spreadDistance, "fire",
-            "Heat spread distance", 1, 24);
-        settings_.registerFloat("embernoisespeed", &fp->emberNoiseSpeed, "fire",
-            "Ember animation speed", 0.0001f, 0.002f);
+    // Register all settings by category
+    registerFireSettings(fp);
+    registerFireMusicSettings(fp);
+    registerFireOrganicSettings(fp);
 
-        // === MUSIC MODE FIRE SETTINGS ===
-        // These control how fire behaves when music mode is active (beat-synced)
-        settings_.registerFloat("musicemberpulse", &fp->musicEmberPulse, "firemusic",
-            "Ember pulse intensity on beat", 0.0f, 1.0f);
-        settings_.registerFloat("musicsparkpulse", &fp->musicSparkPulse, "firemusic",
-            "Spark heat pulse on beat", 0.0f, 1.0f);
-        settings_.registerFloat("musiccoolpulse", &fp->musicCoolingPulse, "firemusic",
-            "Cooling oscillation amplitude", 0.0f, 30.0f);
-
-        // === ORGANIC MODE FIRE SETTINGS ===
-        // These control how fire behaves when music mode is NOT active (organic fire)
-        settings_.registerFloat("organicsparkchance", &fp->organicSparkChance, "fireorganic",
-            "Baseline random spark rate", 0.0f, 0.5f);
-        settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fireorganic",
-            "Min transient to trigger burst", 0.0f, 1.0f);
-        settings_.registerFloat("organicaudiomix", &fp->organicAudioMix, "fireorganic",
-            "Audio influence in organic mode", 0.0f, 1.0f);
-        settings_.registerBool("organicburstsuppress", &fp->organicBurstSuppress, "fireorganic",
-            "Suppress after bursts in organic mode");
+    // Register Water generator settings
+    if (waterGenerator_) {
+        waterParams_ = waterGenerator_->getParams();
+        registerWaterSettings(&waterParams_);
     }
 
-    // === AUDIO SETTINGS ===
-    // Window/Range normalization settings
-    // Peak/valley tracking adapts to signal (valley = adaptive noise floor)
-    if (mic_) {
-        settings_.registerFloat("peaktau", &mic_->peakTau, "audio",
-            "Peak adaptation speed (s)", 0.5f, 10.0f);
-        settings_.registerFloat("releasetau", &mic_->releaseTau, "audio",
-            "Peak release speed (s)", 1.0f, 30.0f);
+    // Register Lightning generator settings
+    if (lightningGenerator_) {
+        lightningParams_ = lightningGenerator_->getParams();
+        registerLightningSettings(&lightningParams_);
     }
 
-    // === HARDWARE AGC SETTINGS (Primary gain control) ===
-    // Signal flow: Mic → HW Gain (PRIMARY) → ADC → Window/Range (SECONDARY) → Output
-    // HW gain optimizes raw ADC input for best SNR (adapts to keep raw in target range)
-    // Window/range tracks peak/valley and maps to 0-1 output (no clipping)
-    if (mic_) {
-        // Hardware AGC parameters (primary - optimizes ADC signal quality)
-        settings_.registerFloat("hwtarget", &mic_->hwTarget, "agc",
-            "HW target level (raw, ±0.01 dead zone)", 0.05f, 0.9f);
+    // Register effect settings (HueRotation)
+    registerEffectSettings();
 
-        // Fast AGC for low-level sources
-        settings_.registerBool("fastagc", &mic_->fastAgcEnabled, "agc",
-            "Enable fast AGC for low-level sources");
-        settings_.registerFloat("fastagcthresh", &mic_->fastAgcThreshold, "agc",
-            "Raw level threshold for fast AGC", 0.05f, 0.3f);
-        settings_.registerUint16("fastagcperiod", &mic_->fastAgcPeriodMs, "agc",
-            "Fast AGC calibration period (ms)", 2000, 15000);
-        settings_.registerFloat("fastagctau", &mic_->fastAgcTrackingTau, "agc",
-            "Fast AGC tracking time (s)", 1.0f, 15.0f);
-    }
+    // Audio settings
+    registerAudioSettings();
+    registerAgcSettings();
+    registerTransientSettings();
+    registerDetectionSettings();
+    registerRhythmSettings();
+}
 
-    // === SIMPLIFIED TRANSIENT DETECTION SETTINGS ===
-    if (mic_) {
-        settings_.registerFloat("hitthresh", &mic_->transientThreshold, "transient",
-            "Hit threshold (multiples of recent average)", 1.5f, 10.0f);
-        settings_.registerFloat("attackmult", &mic_->attackMultiplier, "transient",
-            "Attack multiplier (sudden rise ratio)", 1.1f, 2.0f);
-        settings_.registerFloat("avgtau", &mic_->averageTau, "transient",
-            "Recent average tracking time (s)", 0.1f, 5.0f);
-        settings_.registerUint16("cooldown", &mic_->cooldownMs, "transient",
-            "Cooldown between hits (ms)", 20, 500);
+// === FIRE SETTINGS ===
+void SerialConsole::registerFireSettings(FireParams* fp) {
+    if (!fp) return;
 
-        // Adaptive threshold for low-level audio
-        settings_.registerBool("adaptthresh", &mic_->adaptiveThresholdEnabled, "transient",
-            "Enable adaptive threshold scaling");
-        settings_.registerFloat("adaptminraw", &mic_->adaptiveMinRaw, "transient",
-            "Raw level to start threshold scaling", 0.01f, 0.5f);
-        settings_.registerFloat("adaptmaxscale", &mic_->adaptiveMaxScale, "transient",
-            "Minimum threshold scale factor", 0.3f, 1.0f);
-        settings_.registerFloat("adaptblend", &mic_->adaptiveBlendTau, "transient",
-            "Adaptive threshold blend time (s)", 1.0f, 15.0f);
-    }
+    settings_.registerUint8("cooling", &fp->baseCooling, "fire",
+        "Base cooling rate", 0, 255);
+    settings_.registerFloat("sparkchance", &fp->sparkChance, "fire",
+        "Probability of sparks", 0.0f, 1.0f);
+    settings_.registerUint8("sparkheatmin", &fp->sparkHeatMin, "fire",
+        "Min spark heat", 0, 255);
+    settings_.registerUint8("sparkheatmax", &fp->sparkHeatMax, "fire",
+        "Max spark heat", 0, 255);
+    settings_.registerFloat("audiosparkboost", &fp->audioSparkBoost, "fire",
+        "Audio influence on sparks", 0.0f, 1.0f);
+    settings_.registerInt8("coolingaudiobias", &fp->coolingAudioBias, "fire",
+        "Audio cooling bias", -128, 127);
+    settings_.registerUint8("bottomrows", &fp->bottomRowsForSparks, "fire",
+        "Spark injection rows", 1, 8);
+    settings_.registerUint8("burstsparks", &fp->burstSparks, "fire",
+        "Sparks per burst", 1, 20);
+    settings_.registerUint16("suppressionms", &fp->suppressionMs, "fire",
+        "Burst suppression time", 50, 1000);
+    settings_.registerFloat("heatdecay", &fp->heatDecay, "fire",
+        "Heat decay rate", 0.5f, 0.99f);
+    settings_.registerUint8("emberheatmax", &fp->emberHeatMax, "fire",
+        "Max ember heat", 0, 50);
+    settings_.registerUint8("spreaddistance", &fp->spreadDistance, "fire",
+        "Heat spread distance", 1, 24);
+    settings_.registerFloat("embernoisespeed", &fp->emberNoiseSpeed, "fire",
+        "Ember animation speed", 0.0001f, 0.002f);
+}
 
-    // === DETECTION MODE SETTINGS ===
-    // Switch between different onset detection algorithms
-    if (mic_) {
-        settings_.registerUint8("detectmode", &mic_->detectionMode, "detection",
-            "Algorithm (0=drummer,1=bass,2=hfc,3=flux,4=hybrid)", 0, 4);
+// === MUSIC MODE FIRE SETTINGS ===
+// Controls fire behavior when music mode is active (beat-synced)
+void SerialConsole::registerFireMusicSettings(FireParams* fp) {
+    if (!fp) return;
 
-        // Bass Band Filter parameters (mode 1)
-        settings_.registerFloat("bassfreq", &mic_->bassFreq, "detection",
-            "Bass filter cutoff freq (Hz)", 40.0f, 200.0f);
-        settings_.registerFloat("bassq", &mic_->bassQ, "detection",
-            "Bass filter Q factor", 0.5f, 3.0f);
-        settings_.registerFloat("bassthresh", &mic_->bassThresh, "detection",
-            "Bass detection threshold", 1.5f, 10.0f);
+    settings_.registerFloat("musicemberpulse", &fp->musicEmberPulse, "firemusic",
+        "Ember pulse intensity on beat", 0.0f, 1.0f);
+    settings_.registerFloat("musicsparkpulse", &fp->musicSparkPulse, "firemusic",
+        "Spark heat pulse on beat", 0.0f, 1.0f);
+    settings_.registerFloat("musiccoolpulse", &fp->musicCoolingPulse, "firemusic",
+        "Cooling oscillation amplitude", 0.0f, 30.0f);
+}
 
-        // HFC parameters (mode 2)
-        settings_.registerFloat("hfcweight", &mic_->hfcWeight, "detection",
-            "HFC weighting factor", 0.5f, 5.0f);
-        settings_.registerFloat("hfcthresh", &mic_->hfcThresh, "detection",
-            "HFC detection threshold", 1.5f, 10.0f);
+// === ORGANIC MODE FIRE SETTINGS ===
+// Controls fire behavior when music mode is NOT active
+void SerialConsole::registerFireOrganicSettings(FireParams* fp) {
+    if (!fp) return;
 
-        // Spectral Flux parameters (mode 3)
-        settings_.registerFloat("fluxthresh", &mic_->fluxThresh, "detection",
-            "Spectral flux threshold", 1.0f, 10.0f);
-        settings_.registerUint8("fluxbins", &mic_->fluxBins, "detection",
-            "FFT bins to analyze", 4, 128);
+    settings_.registerFloat("organicsparkchance", &fp->organicSparkChance, "fireorganic",
+        "Baseline random spark rate", 0.0f, 0.5f);
+    settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fireorganic",
+        "Min transient to trigger burst", 0.0f, 1.0f);
+    settings_.registerFloat("organicaudiomix", &fp->organicAudioMix, "fireorganic",
+        "Audio influence in organic mode", 0.0f, 1.0f);
+    settings_.registerBool("organicburstsuppress", &fp->organicBurstSuppress, "fireorganic",
+        "Suppress after bursts in organic mode");
+}
 
-        // Hybrid parameters (mode 4) - confidence weights
-        settings_.registerFloat("hyfluxwt", &mic_->hybridFluxWeight, "detection",
-            "Hybrid: flux-only weight", 0.1f, 1.0f);
-        settings_.registerFloat("hydrumwt", &mic_->hybridDrumWeight, "detection",
-            "Hybrid: drummer-only weight", 0.1f, 1.0f);
-        settings_.registerFloat("hybothboost", &mic_->hybridBothBoost, "detection",
-            "Hybrid: both-agree boost", 1.0f, 2.0f);
-    }
+// === AUDIO SETTINGS ===
+// Window/Range normalization: peak/valley tracking adapts to signal
+void SerialConsole::registerAudioSettings() {
+    if (!mic_) return;
 
-    // === AUDIO CONTROLLER SETTINGS (rhythm tracking) ===
-    if (audioCtrl_) {
-        // Rhythm tracking activation
-        settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
-            "Rhythm activation threshold (0-1)", 0.0f, 1.0f);
+    settings_.registerFloat("peaktau", &mic_->peakTau, "audio",
+        "Peak adaptation speed (s)", 0.5f, 10.0f);
+    settings_.registerFloat("releasetau", &mic_->releaseTau, "audio",
+        "Peak release speed (s)", 1.0f, 30.0f);
+}
 
-        // Phase tracking
-        settings_.registerFloat("phaseadapt", &audioCtrl_->phaseAdaptRate, "rhythm",
-            "Phase adaptation rate (0-1)", 0.01f, 1.0f);
+// === HARDWARE AGC SETTINGS ===
+// Signal flow: Mic → HW Gain (PRIMARY) → ADC → Window/Range (SECONDARY) → Output
+void SerialConsole::registerAgcSettings() {
+    if (!mic_) return;
 
-        // Beat alignment modulation
-        settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "rhythm",
-            "Pulse boost on beat", 1.0f, 2.0f);
-        settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "rhythm",
-            "Pulse suppress off beat", 0.3f, 1.0f);
-        settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "rhythm",
-            "Energy boost on beat", 0.0f, 1.0f);
+    settings_.registerFloat("hwtarget", &mic_->hwTarget, "agc",
+        "HW target level (raw, ±0.01 dead zone)", 0.05f, 0.9f);
+    settings_.registerBool("fastagc", &mic_->fastAgcEnabled, "agc",
+        "Enable fast AGC for low-level sources");
+    settings_.registerFloat("fastagcthresh", &mic_->fastAgcThreshold, "agc",
+        "Raw level threshold for fast AGC", 0.05f, 0.3f);
+    settings_.registerUint16("fastagcperiod", &mic_->fastAgcPeriodMs, "agc",
+        "Fast AGC calibration period (ms)", 2000, 15000);
+    settings_.registerFloat("fastagctau", &mic_->fastAgcTrackingTau, "agc",
+        "Fast AGC tracking time (s)", 1.0f, 15.0f);
+}
 
-        // BPM detection range (affects autocorrelation lag search)
-        settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "rhythm",
-            "Minimum BPM to detect", 40.0f, 120.0f);
-        settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
-            "Maximum BPM to detect", 80.0f, 240.0f);
-    }
+// === TRANSIENT DETECTION SETTINGS ===
+void SerialConsole::registerTransientSettings() {
+    if (!mic_) return;
 
+    settings_.registerFloat("hitthresh", &mic_->transientThreshold, "transient",
+        "Hit threshold (multiples of recent average)", 1.5f, 10.0f);
+    settings_.registerFloat("attackmult", &mic_->attackMultiplier, "transient",
+        "Attack multiplier (sudden rise ratio)", 1.1f, 2.0f);
+    settings_.registerFloat("avgtau", &mic_->averageTau, "transient",
+        "Recent average tracking time (s)", 0.1f, 5.0f);
+    settings_.registerUint16("cooldown", &mic_->cooldownMs, "transient",
+        "Cooldown between hits (ms)", 20, 500);
+
+    // Adaptive threshold for low-level audio
+    settings_.registerBool("adaptthresh", &mic_->adaptiveThresholdEnabled, "transient",
+        "Enable adaptive threshold scaling");
+    settings_.registerFloat("adaptminraw", &mic_->adaptiveMinRaw, "transient",
+        "Raw level to start threshold scaling", 0.01f, 0.5f);
+    settings_.registerFloat("adaptmaxscale", &mic_->adaptiveMaxScale, "transient",
+        "Minimum threshold scale factor", 0.3f, 1.0f);
+    settings_.registerFloat("adaptblend", &mic_->adaptiveBlendTau, "transient",
+        "Adaptive threshold blend time (s)", 1.0f, 15.0f);
+}
+
+// === DETECTION MODE SETTINGS ===
+// Different onset detection algorithms
+void SerialConsole::registerDetectionSettings() {
+    if (!mic_) return;
+
+    settings_.registerUint8("detectmode", &mic_->detectionMode, "detection",
+        "Algorithm (0=drummer,1=bass,2=hfc,3=flux,4=hybrid)", 0, 4);
+
+    // Bass Band Filter parameters (mode 1)
+    settings_.registerFloat("bassfreq", &mic_->bassFreq, "detection",
+        "Bass filter cutoff freq (Hz)", 40.0f, 200.0f);
+    settings_.registerFloat("bassq", &mic_->bassQ, "detection",
+        "Bass filter Q factor", 0.5f, 3.0f);
+    settings_.registerFloat("bassthresh", &mic_->bassThresh, "detection",
+        "Bass detection threshold", 1.5f, 10.0f);
+
+    // HFC parameters (mode 2)
+    settings_.registerFloat("hfcweight", &mic_->hfcWeight, "detection",
+        "HFC weighting factor", 0.5f, 5.0f);
+    settings_.registerFloat("hfcthresh", &mic_->hfcThresh, "detection",
+        "HFC detection threshold", 1.5f, 10.0f);
+
+    // Spectral Flux parameters (mode 3)
+    settings_.registerFloat("fluxthresh", &mic_->fluxThresh, "detection",
+        "Spectral flux threshold", 1.0f, 10.0f);
+    settings_.registerUint8("fluxbins", &mic_->fluxBins, "detection",
+        "FFT bins to analyze", 4, 128);
+
+    // Hybrid parameters (mode 4) - confidence weights
+    settings_.registerFloat("hyfluxwt", &mic_->hybridFluxWeight, "detection",
+        "Hybrid: flux-only weight", 0.1f, 1.0f);
+    settings_.registerFloat("hydrumwt", &mic_->hybridDrumWeight, "detection",
+        "Hybrid: drummer-only weight", 0.1f, 1.0f);
+    settings_.registerFloat("hybothboost", &mic_->hybridBothBoost, "detection",
+        "Hybrid: both-agree boost", 1.0f, 2.0f);
+}
+
+// === RHYTHM TRACKING SETTINGS (AudioController) ===
+void SerialConsole::registerRhythmSettings() {
+    if (!audioCtrl_) return;
+
+    settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
+        "Rhythm activation threshold (0-1)", 0.0f, 1.0f);
+    settings_.registerFloat("phaseadapt", &audioCtrl_->phaseAdaptRate, "rhythm",
+        "Phase adaptation rate (0-1)", 0.01f, 1.0f);
+    settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "rhythm",
+        "Pulse boost on beat", 1.0f, 2.0f);
+    settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "rhythm",
+        "Pulse suppress off beat", 0.3f, 1.0f);
+    settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "rhythm",
+        "Energy boost on beat", 0.0f, 1.0f);
+    settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "rhythm",
+        "Minimum BPM to detect", 40.0f, 120.0f);
+    settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
+        "Maximum BPM to detect", 80.0f, 240.0f);
 }
 
 void SerialConsole::update() {
@@ -223,6 +280,8 @@ void SerialConsole::update() {
 void SerialConsole::handleCommand(const char* cmd) {
     // Try settings registry first (handles set/get/show/list/categories/settings)
     if (settings_.handleCommand(cmd)) {
+        // Sync effect settings to actual effect after any settings change
+        syncEffectSettings();
         return;
     }
 
@@ -235,7 +294,22 @@ void SerialConsole::handleCommand(const char* cmd) {
 }
 
 bool SerialConsole::handleSpecialCommand(const char* cmd) {
-    // === JSON API COMMANDS (for web app) ===
+    // Dispatch to specialized handlers (order matters for prefix matching)
+    if (handleJsonCommand(cmd)) return true;
+    if (handleGeneratorCommand(cmd)) return true;
+    if (handleEffectCommand(cmd)) return true;
+    if (handleBatteryCommand(cmd)) return true;
+    if (handleStreamCommand(cmd)) return true;
+    if (handleTestCommand(cmd)) return true;
+    if (handleAudioStatusCommand(cmd)) return true;
+    if (handlePresetCommand(cmd)) return true;
+    if (handleModeCommand(cmd)) return true;
+    if (handleConfigCommand(cmd)) return true;
+    return false;
+}
+
+// === JSON API COMMANDS (for web app) ===
+bool SerialConsole::handleJsonCommand(const char* cmd) {
     if (strcmp(cmd, "json settings") == 0) {
         settings_.printSettingsJson();
         return true;
@@ -256,6 +330,50 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    if (strcmp(cmd, "json presets") == 0) {
+        Serial.print(F("{\"presets\":["));
+        for (uint8_t i = 0; i < PresetManager::getPresetCount(); i++) {
+            if (i > 0) Serial.print(',');
+            Serial.print('"');
+            Serial.print(PresetManager::getPresetName(static_cast<PresetId>(i)));
+            Serial.print('"');
+        }
+        Serial.println(F("]}"));
+        return true;
+    }
+
+    if (strcmp(cmd, "json state") == 0) {
+        if (!pipeline_) {
+            Serial.println(F("{\"error\":\"Pipeline not available\"}"));
+            return true;
+        }
+        Serial.print(F("{\"generator\":\""));
+        Serial.print(pipeline_->getGeneratorName());
+        Serial.print(F("\",\"effect\":\""));
+        Serial.print(pipeline_->getEffectName());
+        Serial.print(F("\",\"generators\":["));
+        for (int i = 0; i < RenderPipeline::NUM_GENERATORS; i++) {
+            if (i > 0) Serial.print(',');
+            Serial.print('"');
+            Serial.print(RenderPipeline::getGeneratorNameByIndex(i));
+            Serial.print('"');
+        }
+        Serial.print(F("],\"effects\":["));
+        for (int i = 0; i < RenderPipeline::NUM_EFFECTS; i++) {
+            if (i > 0) Serial.print(',');
+            Serial.print('"');
+            Serial.print(RenderPipeline::getEffectNameByIndex(i));
+            Serial.print('"');
+        }
+        Serial.println(F("]}"));
+        return true;
+    }
+
+    return false;
+}
+
+// === BATTERY COMMANDS ===
+bool SerialConsole::handleBatteryCommand(const char* cmd) {
     if (strcmp(cmd, "battery debug") == 0 || strcmp(cmd, "batt debug") == 0) {
         if (battery_) {
             Serial.println(F("=== Battery Debug Info ==="));
@@ -276,16 +394,13 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
-
     if (strcmp(cmd, "battery") == 0 || strcmp(cmd, "batt") == 0) {
         if (battery_) {
-            // Get battery status
             float voltage = battery_->getVoltage();
             uint8_t percent = battery_->getPercent();
             bool charging = battery_->isCharging();
             bool connected = battery_->isBatteryConnected();
 
-            // Send as JSON
             Serial.print(F("{\"battery\":{"));
             Serial.print(F("\"voltage\":"));
             Serial.print(voltage, 2);
@@ -302,6 +417,11 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
+    return false;
+}
+
+// === STREAM COMMANDS ===
+bool SerialConsole::handleStreamCommand(const char* cmd) {
     if (strcmp(cmd, "stream on") == 0) {
         streamEnabled_ = true;
         Serial.println(F("OK"));
@@ -335,11 +455,15 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
-    // === TEST MODE COMMANDS ===
+    return false;
+}
+
+// === TEST MODE COMMANDS ===
+bool SerialConsole::handleTestCommand(const char* cmd) {
     if (strncmp(cmd, "test lock hwgain", 16) == 0) {
         // Ensure command is exact match or followed by space (not "test lock hwgainXYZ")
         if (cmd[16] != '\0' && cmd[16] != ' ') {
-            return false;  // Not a valid command, fall through
+            return false;
         }
         if (!mic_) {
             Serial.println(F("ERROR: Microphone not available"));
@@ -349,14 +473,12 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         int gain = mic_->getHwGain();
         if (strlen(cmd) > 17) {
             gain = atoi(cmd + 17);
-            // Validate gain range (0-80) and warn if out of bounds
             if (gain < 0 || gain > 80) {
                 Serial.print(F("WARNING: Gain "));
                 Serial.print(gain);
                 Serial.println(F(" out of range (0-80), will be clamped"));
             }
         }
-        // Lock hardware gain at specified value (disables AGC)
         mic_->lockHwGain(gain);
         Serial.print(F("OK locked at "));
         Serial.println(mic_->getHwGain());
@@ -368,15 +490,16 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
             Serial.println(F("ERROR: Microphone not available"));
             return true;
         }
-        // Unlock hardware gain (re-enables AGC)
         mic_->unlockHwGain();
         Serial.println(F("OK unlocked"));
         return true;
     }
 
-    // Note: "test reset baselines" command removed with simplified transient detection
+    return false;
+}
 
-    // === AUDIO CONTROLLER STATUS ===
+// === AUDIO CONTROLLER STATUS ===
+bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
     if (strcmp(cmd, "music") == 0 || strcmp(cmd, "rhythm") == 0 || strcmp(cmd, "audio") == 0) {
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
@@ -405,10 +528,14 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
-    // === PRESET COMMANDS ===
+    return false;
+}
+
+// === PRESET COMMANDS ===
+bool SerialConsole::handlePresetCommand(const char* cmd) {
     if (strncmp(cmd, "preset ", 7) == 0) {
         if (!mic_) {
-            Serial.println(F("ERROR: Mic not available"));
+            Serial.println(F("ERROR: Microphone not available"));
             return true;
         }
         const char* presetName = cmd + 7;
@@ -418,33 +545,23 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
             Serial.print(F("OK "));
             Serial.println(PresetManager::getPresetName(id));
         } else {
-            Serial.println(F("Unknown preset. Use: default, quiet, loud, live"));
+            Serial.println(F("Unknown preset. Use: default"));
         }
         return true;
     }
 
     if (strcmp(cmd, "presets") == 0) {
         Serial.println(F("Available presets:"));
-        Serial.println(F("  default - Production defaults"));
-        Serial.println(F("  quiet   - Optimized for low-level audio"));
-        Serial.println(F("  loud    - Optimized for loud sources"));
-        Serial.println(F("  live    - Balanced for live performance"));
+        Serial.println(F("  default - Production defaults (only preset)"));
+        Serial.println(F("Note: Quiet mode auto-activates when AGC gain is maxed."));
         return true;
     }
 
-    if (strcmp(cmd, "json presets") == 0) {
-        Serial.print(F("{\"presets\":["));
-        for (uint8_t i = 0; i < PresetManager::getPresetCount(); i++) {
-            if (i > 0) Serial.print(',');
-            Serial.print('"');
-            Serial.print(PresetManager::getPresetName(static_cast<PresetId>(i)));
-            Serial.print('"');
-        }
-        Serial.println(F("]}"));
-        return true;
-    }
+    return false;
+}
 
-    // === DETECTION MODE STATUS ===
+// === DETECTION MODE STATUS ===
+bool SerialConsole::handleModeCommand(const char* cmd) {
     if (strcmp(cmd, "mode") == 0) {
         if (mic_) {
             uint8_t mode = mic_->getDetectionMode();
@@ -460,7 +577,6 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
                 case 4: Serial.println(F("HYBRID")); break;
                 default: Serial.println(F("UNKNOWN")); break;
             }
-            // Mode-specific diagnostics
             if (mode == 1) {
                 Serial.print(F("Bass Level: "));
                 Serial.println(mic_->getBassLevel(), 3);
@@ -478,7 +594,11 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
         return true;
     }
 
-    // === CONFIGURATION COMMANDS ===
+    return false;
+}
+
+// === CONFIGURATION COMMANDS ===
+bool SerialConsole::handleConfigCommand(const char* cmd) {
     if (strcmp(cmd, "save") == 0) {
         if (configStorage_ && fireGenerator_ && mic_) {
             configStorage_->saveConfiguration(fireGenerator_->getParams(), *mic_, audioCtrl_);
@@ -534,11 +654,11 @@ void SerialConsole::restoreDefaults() {
         mic_->transientThreshold = 2.0f;                // 2x louder than recent average
         mic_->attackMultiplier = 1.2f;                  // 20% sudden rise required
         mic_->averageTau = 0.8f;                        // Recent average tracking time
-        mic_->cooldownMs = 30;                          // 30ms cooldown between hits
+        mic_->cooldownMs = 80;                          // 80ms cooldown (tuned 2025-12-30)
         mic_->fluxThresh = 2.8f;                        // Spectral flux threshold
         mic_->detectionMode = 4;                        // Hybrid mode (best F1: 0.705)
-        mic_->hybridFluxWeight = 0.3f;                  // Hybrid flux weight
-        mic_->hybridDrumWeight = 0.3f;                  // Hybrid drum weight
+        mic_->hybridFluxWeight = 0.5f;                  // Hybrid flux weight (tuned 2025-12-30)
+        mic_->hybridDrumWeight = 0.5f;                  // Hybrid drum weight (tuned 2025-12-30)
         mic_->hybridBothBoost = 1.2f;                   // Hybrid both-agree boost
 
         // Adaptive threshold defaults (disabled by default for backwards compat)
@@ -564,6 +684,195 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
     }
+
+    // Restore water defaults
+    if (waterGenerator_) {
+        waterGenerator_->resetToDefaults();
+        waterParams_ = WaterParams();
+    }
+
+    // Restore lightning defaults
+    if (lightningGenerator_) {
+        lightningGenerator_->resetToDefaults();
+        lightningParams_ = LightningParams();
+    }
+
+    // Restore effect defaults
+    if (hueEffect_) {
+        hueEffect_->setHueShift(0.0f);
+        hueEffect_->setRotationSpeed(0.0f);
+    }
+}
+
+// === GENERATOR COMMANDS ===
+bool SerialConsole::handleGeneratorCommand(const char* cmd) {
+    if (!pipeline_) return false;
+
+    // "gen list" - list available generators
+    if (strcmp(cmd, "gen list") == 0 || strcmp(cmd, "gen") == 0) {
+        Serial.println(F("Available generators:"));
+        for (int i = 0; i < RenderPipeline::NUM_GENERATORS; i++) {
+            const char* name = RenderPipeline::getGeneratorNameByIndex(i);
+            bool active = (RenderPipeline::getGeneratorTypeByIndex(i) == pipeline_->getGeneratorType());
+            Serial.print(F("  "));
+            Serial.print(name);
+            if (active) Serial.print(F(" (active)"));
+            Serial.println();
+        }
+        return true;
+    }
+
+    // "gen <name>" - switch to generator
+    if (strncmp(cmd, "gen ", 4) == 0) {
+        const char* name = cmd + 4;
+
+        // Match generator by name
+        GeneratorType type = GeneratorType::FIRE;  // Default
+        bool found = false;
+
+        if (strcmp(name, "fire") == 0) {
+            type = GeneratorType::FIRE;
+            found = true;
+        } else if (strcmp(name, "water") == 0) {
+            type = GeneratorType::WATER;
+            found = true;
+        } else if (strcmp(name, "lightning") == 0) {
+            type = GeneratorType::LIGHTNING;
+            found = true;
+        }
+
+        if (found) {
+            if (pipeline_->setGenerator(type)) {
+                Serial.print(F("OK switched to "));
+                Serial.println(pipeline_->getGeneratorName());
+            } else {
+                Serial.println(F("ERROR: Failed to switch generator"));
+            }
+        } else {
+            Serial.print(F("Unknown generator: "));
+            Serial.println(name);
+            Serial.println(F("Use: fire, water, lightning"));
+        }
+        return true;
+    }
+
+    return false;
+}
+
+// === EFFECT COMMANDS ===
+bool SerialConsole::handleEffectCommand(const char* cmd) {
+    if (!pipeline_) return false;
+
+    // "effect list" - list available effects
+    if (strcmp(cmd, "effect list") == 0 || strcmp(cmd, "effect") == 0) {
+        Serial.println(F("Available effects:"));
+        for (int i = 0; i < RenderPipeline::NUM_EFFECTS; i++) {
+            const char* name = RenderPipeline::getEffectNameByIndex(i);
+            bool active = (RenderPipeline::getEffectTypeByIndex(i) == pipeline_->getEffectType());
+            Serial.print(F("  "));
+            Serial.print(name);
+            if (active) Serial.print(F(" (active)"));
+            Serial.println();
+        }
+        return true;
+    }
+
+    // "effect <name>" - switch to effect (or disable with "none")
+    if (strncmp(cmd, "effect ", 7) == 0) {
+        const char* name = cmd + 7;
+
+        // Match effect by name
+        EffectType type = EffectType::NONE;
+        bool found = false;
+
+        if (strcmp(name, "none") == 0 || strcmp(name, "off") == 0) {
+            type = EffectType::NONE;
+            found = true;
+        } else if (strcmp(name, "hue") == 0 || strcmp(name, "huerotation") == 0) {
+            type = EffectType::HUE_ROTATION;
+            found = true;
+        }
+
+        if (found) {
+            if (pipeline_->setEffect(type)) {
+                Serial.print(F("OK effect: "));
+                Serial.println(pipeline_->getEffectName());
+            } else {
+                Serial.println(F("ERROR: Failed to set effect"));
+            }
+        } else {
+            Serial.print(F("Unknown effect: "));
+            Serial.println(name);
+            Serial.println(F("Use: none, hue"));
+        }
+        return true;
+    }
+
+    return false;
+}
+
+// === WATER SETTINGS ===
+void SerialConsole::registerWaterSettings(WaterParams* wp) {
+    if (!wp) return;
+
+    settings_.registerUint8("waterflow", &wp->baseFlow, "water",
+        "Base flow speed", 0, 255);
+    settings_.registerUint8("wavemin", &wp->waveHeightMin, "water",
+        "Min wave height", 0, 255);
+    settings_.registerUint8("wavemax", &wp->waveHeightMax, "water",
+        "Max wave height", 0, 255);
+    settings_.registerFloat("wavechance", &wp->waveChance, "water",
+        "Probability of new wave", 0.0f, 1.0f);
+    settings_.registerFloat("audiowaveboost", &wp->audioWaveBoost, "water",
+        "Audio boost for waves", 0.0f, 1.0f);
+    settings_.registerUint8("audioflowmax", &wp->audioFlowBoostMax, "water",
+        "Max flow boost from audio", 0, 255);
+    settings_.registerInt8("flowaudiobias", &wp->flowAudioBias, "water",
+        "Flow speed audio bias", -128, 127);
+}
+
+// === LIGHTNING SETTINGS ===
+void SerialConsole::registerLightningSettings(LightningParams* lp) {
+    if (!lp) return;
+
+    settings_.registerUint8("lightfade", &lp->baseFade, "lightning",
+        "Base fade speed", 0, 255);
+    settings_.registerUint8("boltmin", &lp->boltIntensityMin, "lightning",
+        "Min bolt intensity", 0, 255);
+    settings_.registerUint8("boltmax", &lp->boltIntensityMax, "lightning",
+        "Max bolt intensity", 0, 255);
+    settings_.registerFloat("boltchance", &lp->boltChance, "lightning",
+        "Probability of new bolt", 0.0f, 1.0f);
+    settings_.registerFloat("audioboltboost", &lp->audioBoltBoost, "lightning",
+        "Audio boost for bolts", 0.0f, 1.0f);
+    settings_.registerUint8("audiointensitymax", &lp->audioIntensityBoostMax, "lightning",
+        "Max intensity boost from audio", 0, 255);
+    settings_.registerInt8("fadeaudiobias", &lp->fadeAudioBias, "lightning",
+        "Fade speed audio bias", -128, 127);
+    settings_.registerUint8("branchchance", &lp->branchChance, "lightning",
+        "Branch probability (%)", 0, 100);
+}
+
+// === EFFECT SETTINGS ===
+void SerialConsole::registerEffectSettings() {
+    if (!hueEffect_) return;
+
+    // Initialize file-scope statics from current effect state
+    effectHueShift_ = hueEffect_->getHueShift();
+    effectRotationSpeed_ = hueEffect_->getRotationSpeed();
+
+    settings_.registerFloat("hueshift", &effectHueShift_, "effect",
+        "Static hue offset (0-1)", 0.0f, 1.0f);
+    settings_.registerFloat("huespeed", &effectRotationSpeed_, "effect",
+        "Auto-rotation speed (cycles/sec)", 0.0f, 2.0f);
+}
+
+void SerialConsole::syncEffectSettings() {
+    if (!hueEffect_) return;
+
+    // Apply file-scope statics (modified by SettingsRegistry) to the actual effect
+    hueEffect_->setHueShift(effectHueShift_);
+    hueEffect_->setRotationSpeed(effectRotationSpeed_);
 }
 
 void SerialConsole::streamTick() {

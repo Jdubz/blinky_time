@@ -27,6 +27,18 @@ namespace FireConstants {
 
     // Frame timing
     constexpr unsigned long MIN_UPDATE_INTERVAL_MS = 30;  // ~33 FPS max
+
+    // Ember noise parameters
+    constexpr float EMBER_NOISE_SCALE = 0.25f;      // Spatial frequency of ember patches
+    constexpr float EMBER_THRESHOLD = 0.55f;        // Noise must exceed this to glow
+    constexpr float EMBER_RANGE = 0.45f;            // 1.0 - EMBER_THRESHOLD (normalization)
+    constexpr int EMBER_UPDATE_SKIP = 2;            // Update embers every N frames (performance)
+
+    // Fire color palette breakpoints (kept separate from unified palette for visual consistency)
+    // Fire uses simple multiply (heat*3) rather than lerp for historical reasons
+    constexpr uint8_t COLOR_SEGMENT_1 = 85;         // End of black-to-red segment
+    constexpr uint8_t COLOR_SEGMENT_2 = 170;        // End of red-to-orange segment
+    constexpr uint8_t COLOR_MULTIPLIER = 3;         // Scale factor for RGB components
 }
 
 // Helper: Convert beat phase (0-1) to pulse intensity (0-1, max at phase=0)
@@ -187,7 +199,8 @@ namespace {
 Fire::Fire()
     : heat_(nullptr), tempHeat_(nullptr),
       lastBurstMs_(0), inSuppression_(false),
-      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0) {
+      emberNoisePhase_(0.0f), emberFrameCounter_(0),
+      sparkPositions_(nullptr), numActivePositions_(0) {
 }
 
 Fire::~Fire() {
@@ -311,6 +324,7 @@ void Fire::reset() {
     audio_ = AudioControl();
     prevPhase_ = 1.0f;
     beatCount_ = 0;
+    emberFrameCounter_ = 0;
     this->lastUpdateMs_ = millis();
 }
 
@@ -501,8 +515,14 @@ void Fire::updateRandomFire() {
     // Use pre-allocated tempHeat_ to avoid heap fragmentation
     memcpy(tempHeat_, heat_, this->numLeds_);
 
+    // Performance note: With spreadDistance=8, inner loop is (2*8+1)²=289 iterations.
+    // Optimization: Only spread from "hot" pixels (heat > threshold) to reduce iterations.
+    // Cold pixels (< threshold) still decay but don't spread, saving ~70% of iterations
+    // when fire is sparse.
+    static constexpr uint8_t SPREAD_HEAT_THRESHOLD = 30;  // Only spread from visibly hot pixels
+
     for (int i = 0; i < this->numLeds_; i++) {
-        if (heat_[i] > 0) {
+        if (heat_[i] > SPREAD_HEAT_THRESHOLD) {
             int x, y;
             indexToCoords(i, x, y);
             uint16_t spreadHeat = heat_[i] * params_.heatDecay;
@@ -517,7 +537,14 @@ void Fire::updateRandomFire() {
                     int targetIndex = coordsToIndex(targetX, targetY);
 
                     if (targetIndex >= 0) {
-                        float distance = sqrt(dx*dx + dy*dy);
+                        // Use fast integer approximation: avoid sqrt() in hot loop
+                        // Manhattan distance approximation: max(|dx|,|dy|) + 0.5*min(|dx|,|dy|)
+                        int absDx = dx < 0 ? -dx : dx;
+                        int absDy = dy < 0 ? -dy : dy;
+                        int maxD = absDx > absDy ? absDx : absDy;
+                        int minD = absDx < absDy ? absDx : absDy;
+                        float distance = maxD + 0.414f * minD;  // Octagonal approximation (sqrt(2)-1)
+
                         float falloff = 1.0f / (distance + 1);
                         uint8_t heatToSpread = spreadHeat * falloff;
 
@@ -691,6 +718,17 @@ void Fire::applyEmbers(float dtMs) {
     // Advance noise phase very slowly (uses actual frame time for consistency)
     emberNoisePhase_ += params_.emberNoiseSpeed * dtMs;
 
+    // Performance optimization: Update ember noise every N frames
+    // This reduces expensive FBM noise calculations significantly.
+    // Visual impact: Ember patterns shift at ~16 FPS instead of ~33 FPS.
+    // This is acceptable because embers are subtle, slow-moving background elements.
+    // Fast-changing sparks and heat propagation still update every frame.
+    emberFrameCounter_++;
+    if (emberFrameCounter_ < FireConstants::EMBER_UPDATE_SKIP) {
+        return;  // Skip this frame, keep previous ember pattern
+    }
+    emberFrameCounter_ = 0;
+
     // Calculate ember brightness multiplier based on mode
     float emberBrightness;
 
@@ -712,10 +750,6 @@ void Fire::applyEmbers(float dtMs) {
     // Clamp to valid range [0.0, 1.0]
     emberBrightness = max(0.0f, min(1.0f, emberBrightness));
 
-    // Noise scale controls the "size" of ember patches
-    // Smaller values = larger patches, larger values = more detail
-    const float noiseScale = 0.25f;
-
     // Apply simplex noise-based ember glow to all LEDs
     for (int i = 0; i < this->numLeds_; i++) {
         // Convert linear index to 2D coordinates for better spatial coherence
@@ -725,8 +759,8 @@ void Fire::applyEmbers(float dtMs) {
         // Use 2D simplex noise with time dimension for animation
         // FBM (Fractional Brownian Motion) with 2 octaves for organic look
         float noise = fbmSimplex2D(
-            x * noiseScale,
-            y * noiseScale + emberNoisePhase_,
+            x * FireConstants::EMBER_NOISE_SCALE,
+            y * FireConstants::EMBER_NOISE_SCALE + emberNoisePhase_,
             2,      // octaves
             0.5f    // persistence
         );
@@ -735,8 +769,8 @@ void Fire::applyEmbers(float dtMs) {
         noise = (noise + 1.0f) * 0.5f;
 
         // Apply threshold so only some areas glow (sparse embers)
-        if (noise > 0.55f) {
-            float intensity = (noise - 0.55f) / 0.45f;  // 0-1 above threshold
+        if (noise > FireConstants::EMBER_THRESHOLD) {
+            float intensity = (noise - FireConstants::EMBER_THRESHOLD) / FireConstants::EMBER_RANGE;
             uint8_t emberHeat = (uint8_t)(intensity * emberBrightness * params_.emberHeatMax);
 
             // Only apply if ember is brighter than current heat
@@ -749,12 +783,20 @@ void Fire::applyEmbers(float dtMs) {
 
 uint32_t Fire::heatToColor(uint8_t heat) {
     // Fire color palette: black -> red -> orange -> yellow (NO white)
-    if (heat < 85) {
+    //
+    // NOTE: Fire uses a custom palette algorithm (heat*3 multiply) rather than
+    // the shared ColorPalette.h system. This is intentional:
+    // - The multiply produces warmer reds that look more like real fire
+    // - Water and Lightning generators use ColorPalette::WATER/LIGHTNING
+    // - See types/ColorPalette.h for the unified palette system
+    //
+    // Uses simple multiply (heat*3) rather than lerp for historical visual consistency
+    if (heat < FireConstants::COLOR_SEGMENT_1) {
         // Black to red
-        return ((uint32_t)(heat * 3) << 16);
-    } else if (heat < 170) {
+        return ((uint32_t)(heat * FireConstants::COLOR_MULTIPLIER) << 16);
+    } else if (heat < FireConstants::COLOR_SEGMENT_2) {
         // Red to orange
-        uint8_t green = (heat - 85) * 3;
+        uint8_t green = (heat - FireConstants::COLOR_SEGMENT_1) * FireConstants::COLOR_MULTIPLIER;
         return (0xFF0000 | ((uint32_t)green << 8));
     } else {
         // Orange to bright yellow (cap at full yellow, no blue/white)
@@ -762,55 +804,7 @@ uint32_t Fire::heatToColor(uint8_t heat) {
     }
 }
 
-int Fire::coordsToIndex(int x, int y) {
-    if (x < 0 || x >= this->width_ || y < 0 || y >= this->height_) {
-        return -1;
-    }
-
-    // Handle different orientations and wiring patterns
-    switch (orientation_) {
-        case VERTICAL:
-            // Zigzag pattern for vertical orientation
-            if (x % 2 == 0) {
-                // Even columns: top to bottom
-                return x * this->height_ + y;
-            } else {
-                // Odd columns: bottom to top
-                return x * this->height_ + (this->height_ - 1 - y);
-            }
-        case HORIZONTAL:
-        default:
-            // Standard row-major order
-            return y * this->width_ + x;
-    }
-}
-
-void Fire::indexToCoords(int index, int& x, int& y) {
-    if (index < 0 || index >= this->numLeds_) {
-        x = y = -1;
-        return;
-    }
-
-    switch (orientation_) {
-        case VERTICAL:
-            // Reverse of zigzag pattern
-            x = index / this->height_;
-            if (x % 2 == 0) {
-                // Even columns: top to bottom
-                y = index % this->height_;
-            } else {
-                // Odd columns: bottom to top
-                y = this->height_ - 1 - (index % this->height_);
-            }
-            break;
-        case HORIZONTAL:
-        default:
-            // Standard row-major order
-            x = index % this->width_;
-            y = index / this->width_;
-            break;
-    }
-}
+// Note: coordsToIndex and indexToCoords are now inherited from Generator base class
 
 // Implement parameter setters
 void Fire::setBaseCooling(const uint8_t cooling) {
@@ -842,12 +836,3 @@ float Fire::getBrightnessPercent() const {
     uint32_t maxPossible = (uint32_t)numLeds_ * 255;
     return (getTotalHeat() * 100.0f) / maxPossible;
 }
-
-// Factory function - Disabled until setLayoutType/setOrientation are added to header
-// Fire* createFireGenerator(const DeviceConfig& config) {
-//     Fire* generator = new Fire();
-//     // Configure layout type from device config
-//     generator->setLayoutType(config.matrix.layoutType);
-//     generator->setOrientation(config.matrix.orientation);
-//     return generator;
-// }

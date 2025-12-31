@@ -12,6 +12,8 @@ import {
   MusicModeData,
   RhythmMessage,
   StatusMessage,
+  GeneratorType,
+  EffectType,
 } from '../types';
 
 export interface UseSerialReturn {
@@ -23,6 +25,12 @@ export interface UseSerialReturn {
   deviceInfo: DeviceInfo | null;
   settings: DeviceSetting[];
   settingsByCategory: SettingsByCategory;
+
+  // Generator/effect state
+  currentGenerator: GeneratorType;
+  currentEffect: EffectType;
+  availableGenerators: GeneratorType[];
+  availableEffects: EffectType[];
 
   // Preset data
   presets: string[];
@@ -62,6 +70,8 @@ export interface UseSerialReturn {
   refreshSettings: () => Promise<void>;
   requestBatteryStatus: () => Promise<void>;
   applyPreset: (name: string) => Promise<void>;
+  setGenerator: (name: GeneratorType) => Promise<void>;
+  setEffect: (name: EffectType) => Promise<void>;
 }
 
 const MAX_CONSOLE_LINES = 500;
@@ -102,12 +112,18 @@ function validateAudioSample(sample: AudioSample): boolean {
   return true;
 }
 
+// Available generators and effects (matching firmware RenderPipeline)
+const AVAILABLE_GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning'];
+const AVAILABLE_EFFECTS: EffectType[] = ['none', 'hue'];
+
 export function useSerial(): UseSerialReturn {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [settings, setSettings] = useState<DeviceSetting[]>([]);
   const [presets, setPresets] = useState<string[]>([]);
   const [currentPreset, setCurrentPreset] = useState<string | null>(null);
+  const [currentGenerator, setCurrentGenerator] = useState<GeneratorType>('fire');
+  const [currentEffect, setCurrentEffect] = useState<EffectType>('none');
   const [isStreaming, setIsStreaming] = useState(false);
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
@@ -372,6 +388,33 @@ export function useSerial(): UseSerialReturn {
     }
   }, []);
 
+  // Set active generator
+  const setGenerator = useCallback(async (name: GeneratorType) => {
+    try {
+      await serialService.setGenerator(name);
+      setCurrentGenerator(name);
+      // Refresh settings after switching generator
+      const settingsResponse = await serialService.getSettings();
+      if (settingsResponse) {
+        setSettings(settingsResponse.settings);
+      }
+    } catch (error) {
+      console.error('Failed to set generator:', error);
+      throw error;
+    }
+  }, []);
+
+  // Set active effect
+  const setEffect = useCallback(async (name: EffectType) => {
+    try {
+      await serialService.setEffect(name);
+      setCurrentEffect(name);
+    } catch (error) {
+      console.error('Failed to set effect:', error);
+      throw error;
+    }
+  }, []);
+
   // Clear console
   const clearConsole = useCallback(() => {
     setConsoleLines([]);
@@ -422,6 +465,10 @@ export function useSerial(): UseSerialReturn {
     deviceInfo,
     settings,
     settingsByCategory,
+    currentGenerator,
+    currentEffect,
+    availableGenerators: AVAILABLE_GENERATORS,
+    availableEffects: AVAILABLE_EFFECTS,
     presets,
     currentPreset,
     isStreaming,
@@ -447,5 +494,7 @@ export function useSerial(): UseSerialReturn {
     refreshSettings,
     requestBatteryStatus,
     applyPreset,
+    setGenerator,
+    setEffect,
   };
 }
