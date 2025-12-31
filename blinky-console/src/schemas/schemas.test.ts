@@ -143,22 +143,19 @@ const FIRMWARE_SAMPLES = {
     },
   },
 
-  // Transient detection event
+  // Transient detection event (minimal format from firmware)
   transientMessage: {
     type: 'TRANSIENT',
-    ts: 12345678,
+    timestampMs: 12345678,
     strength: 0.85,
-    mode: 4,
-    level: 0.72,
-    energy: 0.65,
   },
 
-  // Transient with legacy timestampMs field
-  transientMessageLegacy: {
+  // Transient with extended fields (optional, for future use)
+  transientMessageExtended: {
     type: 'TRANSIENT',
-    ts: 12345678,
     timestampMs: 12345678,
     strength: 0.75,
+    ts: 12345678,
     mode: 3,
     level: 0.68,
     energy: 0.55,
@@ -337,16 +334,19 @@ describe('TransientMessageSchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.type).toBe('TRANSIENT');
-      expect(result.data.mode).toBe(4);
+      expect(result.data.timestampMs).toBe(12345678);
       expect(result.data.strength).toBe(0.85);
+      expect(result.data.mode).toBeUndefined(); // mode is optional
     }
   });
 
-  it('validates transient with legacy timestampMs', () => {
-    const result = TransientMessageSchema.safeParse(FIRMWARE_SAMPLES.transientMessageLegacy);
+  it('validates transient with extended fields', () => {
+    const result = TransientMessageSchema.safeParse(FIRMWARE_SAMPLES.transientMessageExtended);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.timestampMs).toBe(12345678);
+      expect(result.data.mode).toBe(3);
+      expect(result.data.level).toBe(0.68);
     }
   });
 
@@ -424,9 +424,9 @@ describe('Contract validation', () => {
       true
     );
     expect(TransientMessageSchema.safeParse(FIRMWARE_SAMPLES.transientMessage).success).toBe(true);
-    expect(TransientMessageSchema.safeParse(FIRMWARE_SAMPLES.transientMessageLegacy).success).toBe(
-      true
-    );
+    expect(
+      TransientMessageSchema.safeParse(FIRMWARE_SAMPLES.transientMessageExtended).success
+    ).toBe(true);
     expect(RhythmMessageSchema.safeParse(FIRMWARE_SAMPLES.rhythmMessage).success).toBe(true);
     expect(StatusMessageSchema.safeParse(FIRMWARE_SAMPLES.statusMessage).success).toBe(true);
   });

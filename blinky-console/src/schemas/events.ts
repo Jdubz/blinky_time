@@ -21,16 +21,19 @@ export type DetectionMode = z.infer<typeof DetectionModeSchema>;
 
 /**
  * Transient detection message from `{"type":"TRANSIENT",...}` messages
+ *
+ * Firmware sends minimal format: {"type":"TRANSIENT","timestampMs":123,"strength":0.85}
+ * Extended fields (mode, level, energy, ts) are optional for future expansion.
  */
 export const TransientMessageSchema = z.object({
   type: z.literal('TRANSIENT'),
-  ts: z.number().int().nonnegative(), // Timestamp in milliseconds
+  timestampMs: z.number().int().nonnegative(), // Primary timestamp field
   strength: z.number().min(0).max(1), // Transient strength (0-1)
-  mode: DetectionModeSchema, // Detection mode (0-4)
-  level: z.number().min(0).max(1), // Normalized level (0-1)
-  energy: z.number().min(0), // Mode-specific energy value
-  // Legacy field for backwards compatibility
-  timestampMs: z.number().int().nonnegative().optional(),
+  // Optional extended fields (not currently sent by firmware)
+  ts: z.number().int().nonnegative().optional(), // Alias for timestampMs
+  mode: DetectionModeSchema.optional(), // Detection mode (0-4)
+  level: z.number().min(0).max(1).optional(), // Normalized level (0-1)
+  energy: z.number().min(0).optional(), // Mode-specific energy value
 });
 
 export type TransientMessage = z.infer<typeof TransientMessageSchema>;

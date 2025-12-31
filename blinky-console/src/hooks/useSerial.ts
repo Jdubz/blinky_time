@@ -358,9 +358,9 @@ export function useSerial(): UseSerialReturn {
 
         // Fetch settings
         const settingsResponse = await serialService.getSettings();
-        if (settingsResponse) {
+        if (settingsResponse?.settings) {
           setSettings(settingsResponse.settings);
-          logger.debug('Settings loaded', { count: settingsResponse.settings.length });
+          logger.info('Settings loaded', { count: settingsResponse.settings.length });
         } else {
           logger.warn('Failed to fetch settings');
         }

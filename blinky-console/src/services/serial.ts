@@ -616,10 +616,6 @@ class SerialService {
           if (trimmed.startsWith('{"type":"TRANSIENT"')) {
             try {
               const parsed = JSON.parse(trimmed);
-              // Support legacy timestampMs field before validation
-              if (!parsed.ts && parsed.timestampMs) {
-                parsed.ts = parsed.timestampMs;
-              }
               const validation = TransientMessageSchema.safeParse(parsed);
               if (validation.success) {
                 this.emit({ type: 'transient', transient: validation.data });
