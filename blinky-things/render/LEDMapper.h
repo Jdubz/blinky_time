@@ -27,14 +27,23 @@ public:
     LEDMapper(const LEDMapper& other) : width(other.width), height(other.height),
                                         totalPixels(other.totalPixels), orientation(other.orientation),
                                         positionToIndex(nullptr), indexToX(nullptr), indexToY(nullptr) {
-        if (other.totalPixels > 0) {
-            positionToIndex = new int[totalPixels];
-            indexToX = new int[totalPixels];
-            indexToY = new int[totalPixels];
-            for (int i = 0; i < totalPixels; i++) {
-                positionToIndex[i] = other.positionToIndex[i];
-                indexToX[i] = other.indexToX[i];
-                indexToY[i] = other.indexToY[i];
+        if (other.totalPixels > 0 && other.positionToIndex && other.indexToX && other.indexToY) {
+            positionToIndex = new(std::nothrow) int[totalPixels];
+            indexToX = new(std::nothrow) int[totalPixels];
+            indexToY = new(std::nothrow) int[totalPixels];
+            // Check all allocations succeeded before copying
+            if (positionToIndex && indexToX && indexToY) {
+                for (int i = 0; i < totalPixels; i++) {
+                    positionToIndex[i] = other.positionToIndex[i];
+                    indexToX[i] = other.indexToX[i];
+                    indexToY[i] = other.indexToY[i];
+                }
+            } else {
+                // Allocation failed - clean up and reset state
+                cleanup();
+                width = 0;
+                height = 0;
+                totalPixels = 0;
             }
         }
     }
@@ -48,14 +57,23 @@ public:
             totalPixels = other.totalPixels;
             orientation = other.orientation;
 
-            if (other.totalPixels > 0) {
-                positionToIndex = new int[totalPixels];
-                indexToX = new int[totalPixels];
-                indexToY = new int[totalPixels];
-                for (int i = 0; i < totalPixels; i++) {
-                    positionToIndex[i] = other.positionToIndex[i];
-                    indexToX[i] = other.indexToX[i];
-                    indexToY[i] = other.indexToY[i];
+            if (other.totalPixels > 0 && other.positionToIndex && other.indexToX && other.indexToY) {
+                positionToIndex = new(std::nothrow) int[totalPixels];
+                indexToX = new(std::nothrow) int[totalPixels];
+                indexToY = new(std::nothrow) int[totalPixels];
+                // Check all allocations succeeded before copying
+                if (positionToIndex && indexToX && indexToY) {
+                    for (int i = 0; i < totalPixels; i++) {
+                        positionToIndex[i] = other.positionToIndex[i];
+                        indexToX[i] = other.indexToX[i];
+                        indexToY[i] = other.indexToY[i];
+                    }
+                } else {
+                    // Allocation failed - clean up and reset state
+                    cleanup();
+                    width = 0;
+                    height = 0;
+                    totalPixels = 0;
                 }
             }
         }
@@ -122,6 +140,11 @@ public:
     int getWidth() const { return width; }
     int getHeight() const { return height; }
     int getTotalPixels() const { return totalPixels; }
+
+    // Check if mapper is properly initialized (useful after copy operations)
+    bool isValid() const {
+        return totalPixels > 0 && positionToIndex && indexToX && indexToY;
+    }
 
     // Helper function to wrap coordinates
     int wrapX(int x) const {

@@ -55,6 +55,26 @@ private:
     void restoreDefaults();
     void streamTick();
 
+    // Settings registration helpers (extracted from registerSettings for clarity)
+    void registerFireSettings(FireParams* fp);
+    void registerFireMusicSettings(FireParams* fp);
+    void registerFireOrganicSettings(FireParams* fp);
+    void registerAudioSettings();
+    void registerAgcSettings();
+    void registerTransientSettings();
+    void registerDetectionSettings();
+    void registerRhythmSettings();
+
+    // Command handlers (extracted from handleSpecialCommand for clarity)
+    bool handleJsonCommand(const char* cmd);
+    bool handleBatteryCommand(const char* cmd);
+    bool handleStreamCommand(const char* cmd);
+    bool handleTestCommand(const char* cmd);
+    bool handleAudioStatusCommand(const char* cmd);
+    bool handlePresetCommand(const char* cmd);
+    bool handleModeCommand(const char* cmd);
+    bool handleConfigCommand(const char* cmd);
+
     // Members
     Fire* fireGenerator_;
     AdaptiveMic* mic_;

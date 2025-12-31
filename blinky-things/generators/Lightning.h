@@ -41,6 +41,7 @@ public:
     virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Lightning"; }
+    virtual GeneratorType getType() const override { return GeneratorType::LIGHTNING; }
 
     // Lightning specific methods
     void update();
@@ -66,9 +67,8 @@ private:
     void propagateBolts();
     void applyFade();
     uint32_t intensityToColor(uint8_t intensity);
-    int coordsToIndex(int x, int y);
-    void indexToCoords(int index, int& x, int& y);
     void createBranch(int startIndex, int direction, uint8_t intensity);
+    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
 
     // State variables
     uint8_t* intensity_;      // Lightning intensity instead of heat
@@ -83,5 +83,4 @@ private:
 
     // Layout-specific state
     uint8_t* boltPositions_;   // For random layout bolt tracking
-    uint8_t numActiveBolts_;
 };

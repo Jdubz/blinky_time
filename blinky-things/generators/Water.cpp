@@ -1,5 +1,19 @@
 #include "Water.h"
+#include "../types/ColorPalette.h"
 #include <Arduino.h>
+
+// Animation and behavior constants
+namespace WaterConstants {
+    constexpr uint32_t FRAME_INTERVAL_MS = 50;     // ~20 FPS update rate
+    constexpr float AUDIO_PRESENCE_THRESHOLD = 0.1f;  // Minimum audio energy to react
+    constexpr int PROBABILITY_SCALE = 1000;        // Scale for random probability checks
+
+    // Flow propagation rates (divisors for heat transfer)
+    constexpr uint8_t MATRIX_FLOW_DIVISOR = 4;     // Downward flow rate for matrix
+    constexpr uint8_t LINEAR_FLOW_DIVISOR = 6;     // Lateral flow rate for linear
+    constexpr uint8_t RANDOM_FLOW_DIVISOR = 12;    // Ripple flow rate for random
+    constexpr uint8_t BASE_FLOW_DIVISOR = 20;      // Base flow reduction rate
+}
 
 Water::Water()
     : depth_(nullptr), tempDepth_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
@@ -95,7 +109,7 @@ void Water::reset() {
 
 void Water::update() {
     uint32_t currentMs = millis();
-    if (currentMs - lastUpdateMs_ < 50) return; // 20 FPS
+    if (currentMs - lastUpdateMs_ < WaterConstants::FRAME_INTERVAL_MS) return;
     lastUpdateMs_ = currentMs;
 
     // Choose algorithm based on layout
@@ -150,12 +164,12 @@ void Water::generateWaves() {
         waveProb += params_.audioWaveBoost * audioHit_;  // Scale boost by transient strength
     }
 
-    if (random(1000) / 1000.0f < waveProb) {
+    if (random(WaterConstants::PROBABILITY_SCALE) / (float)WaterConstants::PROBABILITY_SCALE < waveProb) {
         int wavePosition;
         uint8_t waveHeight = random(params_.waveHeightMin, params_.waveHeightMax + 1);
 
         // Add audio boost to wave height
-        if (audioEnergy_ > 0.1f) {
+        if (audioEnergy_ > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
             uint8_t audioBoost = (uint8_t)(audioEnergy_ * params_.audioFlowBoostMax);
             waveHeight = min(255, waveHeight + audioBoost);
         }
@@ -200,7 +214,7 @@ void Water::propagateFlow() {
                     // Flow downward
                     if (y < height_ - 1) {
                         int belowIndex = coordsToIndex(x, y + 1);
-                        uint8_t flowAmount = depth_[i] / 4;
+                        uint8_t flowAmount = depth_[i] / WaterConstants::MATRIX_FLOW_DIVISOR;
                         tempDepth_[belowIndex] = min(255, tempDepth_[belowIndex] + flowAmount);
                         tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                     }
@@ -209,12 +223,12 @@ void Water::propagateFlow() {
                 case LINEAR_LAYOUT:
                     // Flow in both directions
                     if (i > 0) {
-                        uint8_t flowAmount = depth_[i] / 6;
+                        uint8_t flowAmount = depth_[i] / WaterConstants::LINEAR_FLOW_DIVISOR;
                         tempDepth_[i - 1] = min(255, tempDepth_[i - 1] + flowAmount);
                         tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                     }
                     if (i < numLeds_ - 1) {
-                        uint8_t flowAmount = depth_[i] / 6;
+                        uint8_t flowAmount = depth_[i] / WaterConstants::LINEAR_FLOW_DIVISOR;
                         tempDepth_[i + 1] = min(255, tempDepth_[i + 1] + flowAmount);
                         tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                     }
@@ -224,7 +238,7 @@ void Water::propagateFlow() {
                     // Ripple to nearby positions (simplified)
                     for (int j = max(0, i - 3); j <= min(numLeds_ - 1, i + 3); j++) {
                         if (j != i) {
-                            uint8_t flowAmount = depth_[i] / 12;
+                            uint8_t flowAmount = depth_[i] / WaterConstants::RANDOM_FLOW_DIVISOR;
                             tempDepth_[j] = min(255, tempDepth_[j] + flowAmount);
                             tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
                         }
@@ -240,7 +254,7 @@ void Water::propagateFlow() {
 void Water::applyFlow() {
     // Apply base flow rate with audio influence
     uint8_t flowRate = params_.baseFlow;
-    if (audioEnergy_ > 0.1f) {
+    if (audioEnergy_ > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
         int8_t audioBias = (int8_t)(audioEnergy_ * params_.flowAudioBias);
         flowRate = constrain(flowRate + audioBias, 0, 255);
     }
@@ -248,37 +262,14 @@ void Water::applyFlow() {
     // Reduce all depths by flow rate
     for (int i = 0; i < numLeds_; i++) {
         if (depth_[i] > 0) {
-            depth_[i] = max(0, depth_[i] - (flowRate / 20));
+            depth_[i] = max(0, depth_[i] - (flowRate / WaterConstants::BASE_FLOW_DIVISOR));
         }
     }
 }
 
 uint32_t Water::depthToColor(uint8_t depth) {
-    if (depth == 0) {
-        return 0x000000; // Black (no water)
-    }
-
-    // Blue color palette: deep blue -> cyan -> light blue
-    uint8_t r, g, b;
-
-    if (depth < 85) {
-        // Deep blue to medium blue
-        r = 0;
-        g = 0;
-        b = map(depth, 0, 84, 60, 150);
-    } else if (depth < 170) {
-        // Medium blue to cyan
-        r = 0;
-        g = map(depth, 85, 169, 0, 120);
-        b = map(depth, 85, 169, 150, 255);
-    } else {
-        // Cyan to light blue
-        r = map(depth, 170, 255, 0, 80);
-        g = map(depth, 170, 255, 120, 200);
-        b = 255;
-    }
-
-    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+    // Use shared palette system for consistent color handling
+    return Palette::WATER.toColor(depth);
 }
 
 void Water::setParams(const WaterParams& params) {
@@ -305,10 +296,4 @@ void Water::setAudioParams(float waveBoost, uint8_t flowBoostMax, int8_t flowBia
     params_.flowAudioBias = flowBias;
 }
 
-int Water::coordsToIndex(int x, int y) {
-    return coordsToIndexRowMajor(x, y);
-}
-
-void Water::indexToCoords(int index, int& x, int& y) {
-    indexToCoordsRowMajor(index, x, y);
-}
+// Note: coordsToIndex and indexToCoords are now inherited from Generator base class

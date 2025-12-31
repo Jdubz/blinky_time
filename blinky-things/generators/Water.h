@@ -40,6 +40,7 @@ public:
     virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Water"; }
+    virtual GeneratorType getType() const override { return GeneratorType::WATER; }
 
     // Water specific methods
     void update();
@@ -65,8 +66,7 @@ private:
     void propagateFlow();
     void applyFlow();
     uint32_t depthToColor(uint8_t depth);
-    int coordsToIndex(int x, int y);
-    void indexToCoords(int index, int& x, int& y);
+    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
 
     // State variables
     uint8_t* depth_;      // Water depth instead of heat

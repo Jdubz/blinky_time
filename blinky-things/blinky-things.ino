@@ -85,8 +85,8 @@ FireParams fireParams;
 
 void updateFireParams() {
   if (!currentGenerator) return;
-  // FIX: Add type safety - only cast if it's actually a Fire generator
-  if (strcmp(currentGenerator->getName(), "Fire") == 0) {
+  // Type-safe check using GeneratorType enum instead of string comparison
+  if (currentGenerator->getType() == GeneratorType::FIRE) {
     Fire* f = static_cast<Fire*>(currentGenerator);
     f->setParams(fireParams);
   }

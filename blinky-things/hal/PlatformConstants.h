@@ -26,11 +26,21 @@ namespace Platform {
         #endif
 
         // LiPo voltage thresholds (chemistry-dependent, not device-dependent)
-        constexpr float VOLTAGE_FULL = 4.20f;      // Fully charged
-        constexpr float VOLTAGE_NOMINAL = 3.70f;   // Nominal voltage (~50%)
-        constexpr float VOLTAGE_LOW = 3.50f;       // Low battery warning (~10-20%)
-        constexpr float VOLTAGE_CRITICAL = 3.30f;  // Critical - shutdown soon (~0%)
+        constexpr float VOLTAGE_FULL = 4.20f;      // Fully charged (100%)
+        constexpr float VOLTAGE_HIGH = 4.05f;      // Nearly full (92%)
+        constexpr float VOLTAGE_GOOD = 3.90f;      // Good charge (75%)
+        constexpr float VOLTAGE_NOMINAL = 3.70f;   // Nominal voltage (40%)
+        constexpr float VOLTAGE_LOW = 3.50f;       // Low battery warning (10%)
+        constexpr float VOLTAGE_CRITICAL = 3.30f;  // Critical - shutdown soon (0%)
         constexpr float VOLTAGE_EMPTY = 3.00f;     // Over-discharge protection
+
+        // Percentage breakpoints for voltage-to-percent curve
+        constexpr uint8_t PERCENT_FULL = 100;
+        constexpr uint8_t PERCENT_HIGH = 92;
+        constexpr uint8_t PERCENT_GOOD = 75;
+        constexpr uint8_t PERCENT_NOMINAL = 40;
+        constexpr uint8_t PERCENT_LOW = 10;
+        constexpr uint8_t PERCENT_CRITICAL = 0;
 
         // Default thresholds for battery warnings
         constexpr float DEFAULT_LOW_THRESHOLD = VOLTAGE_LOW;

@@ -68,6 +68,7 @@ public:
     virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Fire"; }
+    virtual GeneratorType getType() const override { return GeneratorType::FIRE; }
 
     // Fire specific methods
     void update();
@@ -93,7 +94,6 @@ public:
     float getBrightnessPercent() const;
 
 private:
-    MatrixOrientation orientation_ = HORIZONTAL;
     // Layout-specific heat propagation algorithms
     void updateMatrixFire();     // Traditional 2D upward propagation
     void updateLinearFire();     // 1D lateral propagation
@@ -105,8 +105,7 @@ private:
     void applyCooling();
     void applyEmbers(float dtMs);    // Subtle ambient ember glow (dtMs = delta time in milliseconds)
     uint32_t heatToColor(uint8_t heat);
-    int coordsToIndex(int x, int y);
-    void indexToCoords(int index, int& x, int& y);
+    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
 
     // State variables
     uint8_t* heat_;
@@ -124,6 +123,7 @@ private:
 
     // Ember noise state
     float emberNoisePhase_;      // Phase for noise animation
+    uint8_t emberFrameCounter_;  // Frame counter for update skipping (performance)
 
     // Layout-specific state
     uint8_t* sparkPositions_;   // For random layout spark tracking

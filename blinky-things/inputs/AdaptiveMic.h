@@ -78,7 +78,7 @@ public:
   float transientThreshold = 2.813f;  // Hybrid-optimal: 2.813x louder (drummer: 1.688, hybrid: 2.813)
   float attackMultiplier   = 1.1f;    // Must be 10% louder than previous frame (rapid rise)
   float averageTau         = 0.8f;    // Recent average tracking time (seconds)
-  uint16_t cooldownMs      = 40;      // Cooldown between hits (ms)
+  uint16_t cooldownMs      = 80;      // Cooldown between hits (ms) - tuned 2025-12-30
 
   // Adaptive threshold scaling for low-level audio
   // When hardware gain is near max and signal is still low, scales down transientThreshold
@@ -104,9 +104,9 @@ public:
   float fluxThresh = 1.4f;     // Detection threshold for spectral flux (binary search optimal)
   uint8_t fluxBins = 64;       // Number of FFT bins to analyze (focus on bass-mid)
 
-  // Hybrid parameters (mode 4) - fast-tune 2025-12-28 (F1: 0.669)
-  float hybridFluxWeight = 0.7f;   // Weight when only flux detects (tuned from 0.3)
-  float hybridDrumWeight = 0.3f;   // Weight when only drummer detects
+  // Hybrid parameters (mode 4) - fast-tune 2025-12-30 (F1: 0.598, equal weights outperform 0.7/0.3)
+  float hybridFluxWeight = 0.5f;   // Weight when only flux detects (tuned from 0.7)
+  float hybridDrumWeight = 0.5f;   // Weight when only drummer detects (tuned from 0.3)
   float hybridBothBoost = 1.2f;    // Multiplier when both agree (1.0-2.0)
 
   // Zero-crossing rate (for additional context)
@@ -265,6 +265,15 @@ private:
   // Helper methods for hybrid detection (return detection strength without side effects)
   float evalDrummerStrength(float rawLevel);      // Returns drummer detection strength (0-1)
   float evalSpectralFluxStrength(float flux, bool frameReady);  // Returns spectral flux detection strength (0-1) from cached flux
+
+  // Ring buffer helper - feeds samples from ISR ring buffer to spectral flux processor
+  // Returns number of samples fed
+  int feedSamplesToSpectralFlux();
+
+  // Detection finalization helper - common pattern for all detection modes
+  // Returns transient strength (0-1) if detected, 0 otherwise
+  // Updates lastTransientMs if detection occurs
+  float finalizeDetection(float signal, float median, float threshold, uint32_t nowMs);
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }
 };

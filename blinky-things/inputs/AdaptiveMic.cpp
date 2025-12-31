@@ -2,23 +2,26 @@
 #include "../hal/PlatformConstants.h"
 #include <math.h>
 
-// Helper for constrain
+// ============================================================================
+// Type-safe utility functions
+// These exist instead of Arduino's constrain/max/min macros because:
+// 1. Macros can evaluate arguments multiple times (side effect issues)
+// 2. Templates provide proper type deduction and avoid implicit conversions
+// 3. These are static inline, so no code bloat
+// ============================================================================
+
 template<typename T>
-static T constrainValue(T value, T minVal, T maxVal) {
-    if (value < minVal) return minVal;
-    if (value > maxVal) return maxVal;
-    return value;
+static inline T constrainValue(T value, T minVal, T maxVal) {
+    return (value < minVal) ? minVal : ((value > maxVal) ? maxVal : value);
 }
 
-// Helper for max
 template<typename T>
-static T maxValue(T a, T b) {
+static inline T maxValue(T a, T b) {
     return (a > b) ? a : b;
 }
 
-// Helper for min
 template<typename T>
-static T minValue(T a, T b) {
+static inline T minValue(T a, T b) {
     return (a < b) ? a : b;
 }
 
@@ -31,6 +34,10 @@ constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f; // Jump to signal if it exceeds 
 // Valley tracking constants (for low-noise MEMS microphone)
 constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f; // Valley releases 4x slower than peak (very slow upward drift)
 constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of full scale, suits low-noise mic)
+
+// ISR processing constants
+constexpr int ISR_BUFFER_SIZE = 512;              // PDM read buffer size (samples per ISR call)
+constexpr int SAMPLE_BATCH_SIZE = 64;             // Batch size for feeding samples to spectral flux
 
 // Alias for brevity (hardware gain limits are in PlatformConstants.h)
 using Platform::Microphone::HW_GAIN_MIN;
@@ -415,7 +422,7 @@ void AdaptiveMic::onPDMdata() {
   int bytesAvailable = s_instance->pdm_.available();
   if (bytesAvailable <= 0) return;
 
-  static int16_t buffer[512];
+  static int16_t buffer[ISR_BUFFER_SIZE];
   int toRead = minValue(bytesAvailable, (int)sizeof(buffer));
   int bytesRead = s_instance->pdm_.read(buffer, toRead);
   if (bytesRead <= 0) return;
@@ -538,6 +545,70 @@ void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
 }
 
 /**
+ * Feed samples from ISR ring buffer to spectral flux processor
+ * Handles wraparound and overflow conditions safely.
+ *
+ * @return Number of samples fed to the spectral flux processor
+ */
+int AdaptiveMic::feedSamplesToSpectralFlux() {
+  uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
+  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
+
+  // Handle negative values (shouldn't happen, but be defensive)
+  if (available < 0) {
+    available = 0;
+  }
+
+  // Limit to ring buffer size to prevent reading stale data if we fell behind
+  if ((uint32_t)available > FFT_RING_SIZE) {
+    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
+    available = FFT_RING_SIZE;
+  }
+
+  int totalFed = 0;
+
+  // Feed samples to spectral flux processor in batches
+  while (available > 0) {
+    int16_t batch[SAMPLE_BATCH_SIZE];
+    int batchSize = 0;
+
+    while (batchSize < SAMPLE_BATCH_SIZE && available > 0) {
+      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
+      s_fftReadIdx++;
+      available--;
+    }
+
+    spectralFlux_.addSamples(batch, batchSize);
+    totalFed += batchSize;
+  }
+
+  return totalFed;
+}
+
+/**
+ * Common detection finalization pattern
+ * Checks if signal exceeds threshold with cooldown, calculates strength
+ *
+ * @param signal Current signal value (raw level or flux)
+ * @param median Local median for threshold computation
+ * @param threshold Multiplier for median to get detection threshold
+ * @param nowMs Current timestamp
+ * @return Detection strength 0-1, or 0 if no detection
+ */
+float AdaptiveMic::finalizeDetection(float signal, float median, float threshold, uint32_t nowMs) {
+  float effectiveThreshold = maxValue(median * threshold, 0.001f);
+  bool isLoudEnough = signal > effectiveThreshold;
+  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
+
+  if (isLoudEnough && cooldownElapsed) {
+    float ratio = signal / maxValue(median, 0.001f);
+    lastTransientMs = nowMs;
+    return clamp01((ratio - threshold) / threshold);
+  }
+  return 0.0f;
+}
+
+/**
  * DRUMMER'S ALGORITHM (Mode 0) - Original amplitude-based detection
  *
  * Detects MUSICAL hits (kicks, snares, bass drops) by looking for:
@@ -594,34 +665,8 @@ void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
   // At 16kHz sample rate: bin 1 = 62.5 Hz, bin 6 = 375 Hz
   spectralFlux_.setAnalysisRange(1, 6);  // Focus on bass frequencies
 
-  // Read available samples from ISR ring buffer (same as spectral flux mode)
-  uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
-  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
-
-  // Handle negative values (shouldn't happen, but be defensive)
-  if (available < 0) {
-    available = 0;
-  }
-
-  // Limit to ring buffer size to prevent reading stale data
-  if ((uint32_t)available > FFT_RING_SIZE) {
-    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
-    available = FFT_RING_SIZE;
-  }
-
-  // Feed samples to spectral flux processor
-  while (available > 0) {
-    int16_t batch[64];
-    int batchSize = 0;
-
-    while (batchSize < 64 && available > 0) {
-      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
-      s_fftReadIdx++;
-      available--;
-    }
-
-    spectralFlux_.addSamples(batch, batchSize);
-  }
+  // Feed samples from ISR ring buffer to spectral flux processor
+  feedSamplesToSpectralFlux();
 
   // Process FFT frame if ready
   if (spectralFlux_.isFrameReady()) {
@@ -646,14 +691,9 @@ void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
 
     // Detect transient using LOUD + COOLDOWN logic
     // Note: Bass flux is already a change measure, so we don't need "SUDDEN" check
-    bool isLoudEnough = bassFlux > bassRecentAverage * bassThresh;
-    bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-    if (isLoudEnough && cooldownElapsed) {
-      // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
-      float ratio = bassFlux / maxValue(bassRecentAverage, 0.001f);
-      transient = clamp01((ratio - bassThresh) / bassThresh);
-      lastTransientMs = nowMs;
+    float strength = finalizeDetection(bassFlux, bassRecentAverage, bassThresh, nowMs);
+    if (strength > 0.0f) {
+      transient = strength;
     }
   }
 
@@ -730,37 +770,8 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
   // fluxBins controls how many frequency bins to analyze (focus on bass-mid)
   spectralFlux_.setAnalysisRange(1, fluxBins);  // Skip DC (bin 0)
 
-  // Read available samples from ISR ring buffer
-  // FIX BUG #7: Use signed arithmetic for wraparound safety (consistent with millis() handling)
-  uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
-  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed handles wraparound correctly
-
-  // Handle negative values (shouldn't happen, but be defensive)
-  if (available < 0) {
-    available = 0;
-  }
-
-  // Limit to ring buffer size to prevent reading stale data if we fell behind
-  if ((uint32_t)available > FFT_RING_SIZE) {
-    // We fell behind - skip old samples to catch up
-    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
-    available = FFT_RING_SIZE;
-  }
-
-  // Feed samples to spectral flux processor
-  while (available > 0) {
-    // Read in batches for efficiency
-    int16_t batch[64];
-    int batchSize = 0;
-
-    while (batchSize < 64 && available > 0) {
-      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
-      s_fftReadIdx++;
-      available--;
-    }
-
-    spectralFlux_.addSamples(batch, batchSize);
-  }
+  // Feed samples from ISR ring buffer to spectral flux processor
+  feedSamplesToSpectralFlux();
 
   // Process FFT frame if ready
   if (spectralFlux_.isFrameReady()) {
@@ -783,20 +794,11 @@ void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
       fluxRecentAverage_ = 0.0f;
     }
 
-    // Compute local adaptive threshold using median of recent flux values
-    float localMedian = computeLocalMedian();
-    float localThreshold = localMedian * fluxThresh;
-    localThreshold = maxValue(localThreshold, 0.001f);
-
     // Detect transient using local adaptive threshold
-    bool isLoudEnough = flux > localThreshold;
-    bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-    if (isLoudEnough && cooldownElapsed) {
-      // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
-      float ratio = flux / maxValue(localMedian, 0.001f);
-      transient = clamp01((ratio - fluxThresh) / fluxThresh);
-      lastTransientMs = nowMs;
+    float localMedian = computeLocalMedian();
+    float strength = finalizeDetection(flux, localMedian, fluxThresh, nowMs);
+    if (strength > 0.0f) {
+      transient = strength;
     }
 
     // Update threshold buffer with flux value for adaptive threshold
@@ -829,29 +831,7 @@ void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
 
   // Process spectral flux (feed samples to FFT)
   spectralFlux_.setAnalysisRange(1, fluxBins);
-  uint32_t writeIdx = s_fftWriteIdx;
-  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
-
-  // Handle negative values (shouldn't happen, but be defensive)
-  if (available < 0) {
-    available = 0;
-  }
-
-  if ((uint32_t)available > FFT_RING_SIZE) {
-    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
-    available = FFT_RING_SIZE;
-  }
-
-  while (available > 0) {
-    int16_t batch[64];
-    int batchSize = 0;
-    while (batchSize < 64 && available > 0) {
-      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
-      s_fftReadIdx++;
-      available--;
-    }
-    spectralFlux_.addSamples(batch, batchSize);
-  }
+  feedSamplesToSpectralFlux();
 
   // FIXED: Process FFT frame ONCE and cache the result
   // This prevents state corruption and makes eval functions pure
