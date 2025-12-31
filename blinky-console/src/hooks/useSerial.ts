@@ -230,7 +230,7 @@ export function useSerial(): UseSerialReturn {
   // Group settings by category - memoized to prevent recalculation on every render
   const settingsByCategory = useMemo(
     () =>
-      settings.reduce((acc, setting) => {
+      (settings || []).reduce((acc, setting) => {
         const cat = setting.cat || 'other';
         if (!acc[cat]) acc[cat] = [];
         acc[cat].push(setting);
