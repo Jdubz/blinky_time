@@ -305,6 +305,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handlePresetCommand(cmd)) return true;
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
+    if (handleLogCommand(cmd)) return true;
     return false;
 }
 
@@ -1009,5 +1010,87 @@ void SerialConsole::streamTick() {
         Serial.print(F(",\"p\":"));
         Serial.print(battery_->getPercent());
         Serial.println(F("}}"));
+    }
+}
+
+// === LOG LEVEL COMMANDS ===
+bool SerialConsole::handleLogCommand(const char* cmd) {
+    // "log" - show current level
+    if (strcmp(cmd, "log") == 0) {
+        Serial.print(F("Log level: "));
+        switch (logLevel_) {
+            case LogLevel::OFF:   Serial.println(F("off")); break;
+            case LogLevel::ERROR: Serial.println(F("error")); break;
+            case LogLevel::WARN:  Serial.println(F("warn")); break;
+            case LogLevel::INFO:  Serial.println(F("info")); break;
+            case LogLevel::DEBUG: Serial.println(F("debug")); break;
+        }
+        return true;
+    }
+
+    // "log off" - disable logging
+    if (strcmp(cmd, "log off") == 0) {
+        logLevel_ = LogLevel::OFF;
+        Serial.println(F("OK log off"));
+        return true;
+    }
+
+    // "log error" - errors only
+    if (strcmp(cmd, "log error") == 0) {
+        logLevel_ = LogLevel::ERROR;
+        Serial.println(F("OK log error"));
+        return true;
+    }
+
+    // "log warn" - warnings and errors
+    if (strcmp(cmd, "log warn") == 0) {
+        logLevel_ = LogLevel::WARN;
+        Serial.println(F("OK log warn"));
+        return true;
+    }
+
+    // "log info" - info and above (default)
+    if (strcmp(cmd, "log info") == 0) {
+        logLevel_ = LogLevel::INFO;
+        Serial.println(F("OK log info"));
+        return true;
+    }
+
+    // "log debug" - all messages
+    if (strcmp(cmd, "log debug") == 0) {
+        logLevel_ = LogLevel::DEBUG;
+        Serial.println(F("OK log debug"));
+        return true;
+    }
+
+    return false;
+}
+
+// === LOGGING HELPERS ===
+void SerialConsole::logDebug(const __FlashStringHelper* msg) {
+    if (getGlobalLogLevel() >= LogLevel::DEBUG) {
+        Serial.print(F("[DEBUG] "));
+        Serial.println(msg);
+    }
+}
+
+void SerialConsole::logInfo(const __FlashStringHelper* msg) {
+    if (getGlobalLogLevel() >= LogLevel::INFO) {
+        Serial.print(F("[INFO] "));
+        Serial.println(msg);
+    }
+}
+
+void SerialConsole::logWarn(const __FlashStringHelper* msg) {
+    if (getGlobalLogLevel() >= LogLevel::WARN) {
+        Serial.print(F("[WARN] "));
+        Serial.println(msg);
+    }
+}
+
+void SerialConsole::logError(const __FlashStringHelper* msg) {
+    if (getGlobalLogLevel() >= LogLevel::ERROR) {
+        Serial.print(F("[ERROR] "));
+        Serial.println(msg);
     }
 }
