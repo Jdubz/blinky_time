@@ -98,6 +98,7 @@ private:
     void registerWaterSettings(WaterParams* wp);
     void registerLightningSettings(LightningParams* lp);
     void registerEffectSettings();
+    void syncEffectSettings();  // Apply effect settings to actual effect
 
     // Members
     RenderPipeline* pipeline_;
