@@ -6,7 +6,7 @@
 import cliProgress from 'cli-progress';
 import type { DetectionMode, BaselineResult, TunerOptions, TestResult } from './types.js';
 import { DETECTION_MODES, PARAMETERS, ALL_PATTERNS } from './types.js';
-import { StateManager } from './state.js';
+import { StateManager, IncrementalBaselineProgress } from './state.js';
 import { TestRunner } from './runner.js';
 
 export async function runBaseline(
@@ -21,7 +21,17 @@ export async function runBaseline(
   await runner.connect();
 
   try {
-    for (const mode of DETECTION_MODES) {
+    // Use specified modes or default to all detection modes
+    const modesToTest = (options.modes && options.modes.length > 0)
+      ? options.modes.filter((m): m is DetectionMode => DETECTION_MODES.includes(m as DetectionMode))
+      : DETECTION_MODES;
+
+    // Use specified patterns or default to all
+    const patternsToUse = (options.patterns && options.patterns.length > 0)
+      ? options.patterns
+      : (ALL_PATTERNS as unknown as string[]);
+
+    for (const mode of modesToTest) {
       if (stateManager.isBaselineComplete(mode)) {
         console.log(`✓ ${mode}: Already complete (skipping)`);
         continue;
@@ -42,6 +52,23 @@ export async function runBaseline(
         }
       }
 
+      const patterns = patternsToUse;
+
+      // Load any partial results from previous interrupted run
+      const existingProgress = stateManager.getIncrementalBaselineProgress(mode);
+      const results: Record<string, TestResult> = existingProgress?.partialResults || {};
+      const completedPatterns = new Set(existingProgress?.completedPatterns || []);
+
+      // Calculate already-accumulated totals from partial results
+      let totalF1 = 0;
+      let totalPrecision = 0;
+      let totalRecall = 0;
+      for (const result of Object.values(results)) {
+        totalF1 += result.f1;
+        totalPrecision += result.precision;
+        totalRecall += result.recall;
+      }
+
       // Progress bar for patterns
       const progress = new cliProgress.SingleBar({
         format: '   {bar} {percentage}% | {value}/{total} patterns | {eta_formatted}',
@@ -50,15 +77,19 @@ export async function runBaseline(
         hideCursor: true,
       });
 
-      const patterns = ALL_PATTERNS as unknown as string[];
-      const results: Record<string, TestResult> = {};
-      let totalF1 = 0;
-      let totalPrecision = 0;
-      let totalRecall = 0;
+      progress.start(patterns.length, completedPatterns.size);
 
-      progress.start(patterns.length, 0);
+      // Log resume info if resuming
+      if (completedPatterns.size > 0) {
+        console.log(`   Resuming from pattern ${completedPatterns.size + 1}/${patterns.length}`);
+      }
 
       for (const pattern of patterns) {
+        // Skip already-completed patterns
+        if (completedPatterns.has(pattern)) {
+          continue;
+        }
+
         try {
           // Run pattern 3 times for consistency, take average
           let sumF1 = 0;
@@ -75,15 +106,19 @@ export async function runBaseline(
           }
 
           if (lastResult) {
-            results[pattern] = {
+            const avgResult: TestResult = {
               ...lastResult,
               f1: Math.round((sumF1 / 3) * 1000) / 1000,
               precision: Math.round((sumPrecision / 3) * 1000) / 1000,
               recall: Math.round((sumRecall / 3) * 1000) / 1000,
             };
-            totalF1 += results[pattern].f1;
-            totalPrecision += results[pattern].precision;
-            totalRecall += results[pattern].recall;
+            results[pattern] = avgResult;
+            totalF1 += avgResult.f1;
+            totalPrecision += avgResult.precision;
+            totalRecall += avgResult.recall;
+
+            // INCREMENTAL SAVE: Save after each pattern completes (all 3 runs)
+            stateManager.appendBaselinePatternResult(mode, pattern, avgResult);
           }
         } catch (err) {
           console.error(`\n   Error on ${pattern}:`, err);
@@ -113,6 +148,9 @@ export async function runBaseline(
       };
 
       stateManager.saveBaselineResult(mode, baseline);
+
+      // Clear incremental progress now that baseline for this mode is complete
+      stateManager.clearIncrementalBaselineProgress(mode);
 
       console.log(`   Avg F1: ${baseline.overall.avgF1} | Precision: ${baseline.overall.avgPrecision} | Recall: ${baseline.overall.avgRecall}`);
     }

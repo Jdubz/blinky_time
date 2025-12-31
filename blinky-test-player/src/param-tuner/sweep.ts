@@ -4,9 +4,9 @@
  */
 
 import cliProgress from 'cli-progress';
-import type { DetectionMode, ParameterMode, SweepResult, SweepPoint, TunerOptions, ParameterDef } from './types.js';
+import type { DetectionMode, ParameterMode, SweepResult, SweepPoint, TunerOptions, ParameterDef, TestResult } from './types.js';
 import { PARAMETERS, REPRESENTATIVE_PATTERNS } from './types.js';
-import { StateManager } from './state.js';
+import { StateManager, IncrementalSweepProgress } from './state.js';
 import { TestRunner } from './runner.js';
 
 /**
@@ -75,20 +75,31 @@ export async function runSweeps(
         await runner.resetDefaults(param.mode as DetectionMode);
       }
 
-      const sweepPoints: SweepPoint[] = [];
-      const resumeIndex = stateManager.getSweepResumeIndex(param.name);
+      // Load any partial results from previous interrupted run
+      const existingProgress = stateManager.getIncrementalSweepProgress(param.name);
+      const sweepPoints: SweepPoint[] = existingProgress?.partialResults || [];
+      const resumeValueIndex = existingProgress?.valueIndex ?? 0;
+      const resumePatternIndex = existingProgress?.patternIndex ?? 0;
+
+      // Calculate progress for display
+      const totalTests = param.sweepValues.length * patterns.length;
+      const completedTests = (sweepPoints.length * patterns.length) + resumePatternIndex;
 
       // Progress bar
-      const totalTests = param.sweepValues.length * patterns.length;
       const progress = new cliProgress.SingleBar({
         format: '   {bar} {percentage}% | {value}/{total} tests | {eta_formatted}',
         barCompleteChar: '█',
         barIncompleteChar: '░',
         hideCursor: true,
       });
-      progress.start(totalTests, resumeIndex * patterns.length);
+      progress.start(totalTests, completedTests);
 
-      for (let i = resumeIndex; i < param.sweepValues.length; i++) {
+      // Log resume info if resuming mid-sweep
+      if (resumeValueIndex > 0 || resumePatternIndex > 0) {
+        console.log(`   Resuming from value ${resumeValueIndex + 1}/${param.sweepValues.length}, pattern ${resumePatternIndex + 1}/${patterns.length}`);
+      }
+
+      for (let i = resumeValueIndex; i < param.sweepValues.length; i++) {
         const value = param.sweepValues[i];
         stateManager.setSweepInProgress(param.name, i);
 
@@ -96,18 +107,39 @@ export async function runSweeps(
         await runner.setParameter(param.name, value);
 
         // Run all representative patterns
-        const byPattern: Record<string, import('./types.js').TestResult> = {};
+        const byPattern: Record<string, TestResult> = {};
         let totalF1 = 0;
         let totalPrecision = 0;
         let totalRecall = 0;
 
-        for (const pattern of patterns) {
+        // Determine starting pattern index (only non-zero for first value when resuming)
+        const startPatternIndex = (i === resumeValueIndex) ? resumePatternIndex : 0;
+
+        // Restore partial pattern results for current value if resuming
+        if (i === resumeValueIndex && existingProgress?.currentValueResults) {
+          for (let p = 0; p < existingProgress.currentValueResults.length && p < patterns.length; p++) {
+            const patternName = patterns[p];
+            const result = existingProgress.currentValueResults[p];
+            byPattern[patternName] = result;
+            totalF1 += result.f1;
+            totalPrecision += result.precision;
+            totalRecall += result.recall;
+          }
+        }
+
+        for (let j = startPatternIndex; j < patterns.length; j++) {
+          const pattern = patterns[j];
+
           try {
             const result = await runner.runPattern(pattern);
             byPattern[pattern] = result;
             totalF1 += result.f1;
             totalPrecision += result.precision;
             totalRecall += result.recall;
+
+            // INCREMENTAL SAVE: Save after each pattern completes
+            stateManager.appendPatternResult(param.name, i, value, result);
+
           } catch (err) {
             console.error(`\n   Error on ${pattern}:`, err);
           }
@@ -116,13 +148,17 @@ export async function runSweeps(
 
         const n = Object.keys(byPattern).length;
         if (n > 0) {
-          sweepPoints.push({
+          const sweepPoint: SweepPoint = {
             value,
             avgF1: Math.round((totalF1 / n) * 1000) / 1000,
             avgPrecision: Math.round((totalPrecision / n) * 1000) / 1000,
             avgRecall: Math.round((totalRecall / n) * 1000) / 1000,
             byPattern,
-          });
+          };
+          sweepPoints.push(sweepPoint);
+
+          // INCREMENTAL SAVE: Finalize this value (moves to partialResults, resets currentValueResults)
+          stateManager.finalizeSweepValue(param.name, sweepPoint);
         }
       }
 
@@ -153,6 +189,9 @@ export async function runSweeps(
       };
 
       stateManager.saveSweepResult(param.name, result);
+
+      // Clear incremental progress now that sweep is complete
+      stateManager.clearIncrementalProgress(param.name);
 
       console.log(`   Optimal: ${optimalPoint.value} (F1: ${optimalPoint.avgF1})`);
 
