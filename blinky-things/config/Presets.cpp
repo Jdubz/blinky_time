@@ -6,14 +6,18 @@
 
 // Preset names (must match PresetId enum order)
 const char* const PresetManager::PRESET_NAMES[] = {
-    "default",
-    "quiet",
-    "loud",
-    "live"
+    "default"
 };
 
 /**
  * Built-in preset definitions
+ *
+ * NOTE: Only DEFAULT preset exists. Quiet/loud mode adaptation is handled
+ * AUTOMATICALLY by the AGC system based on gain levels (inFastAgcMode_).
+ *
+ * The AGC automatically enters "fast mode" when gain is maxed out and
+ * signal is persistently low, providing the quiet-source optimization
+ * without manual preset selection.
  *
  * Parameter Value Rationale:
  * ==========================
@@ -22,115 +26,23 @@ const char* const PresetManager::PRESET_NAMES[] = {
  * - Rhythm tracking activation rate (target: >90% for musical content)
  * - False positive rate (target: <5% for non-musical content)
  * - Response latency (target: <100ms beat-to-light delay)
- *
- * Threshold Ranges:
- * - hitthresh (1.5-10.0): Multiples of recent average for transient detection
- *   Lower = more sensitive but more false positives
- * - attackmult (1.1-2.0): Required rise ratio for "sudden" detection
- *   Lower = catches gradual rises, higher = only sharp attacks
- * - musicthresh (0.0-1.0): Periodicity strength required for rhythm activation
- *   Lower = activates with less certainty, higher = requires stronger pattern
- *
- * Timing Constants:
- * - avgtau (0.1-5.0s): Rolling average time constant
- *   Shorter = faster adaptation, longer = more stability
- * - cooldown (20-500ms): Minimum time between hits
- *   Prevents double-triggering on complex transients
- *
- * Each preset is tuned for a specific audio scenario:
- *
- * DEFAULT: Production defaults - balanced for general use
- *   Values from extended testing across multiple music genres.
- *   Standard thresholds, no adaptive features for predictable behavior.
- *
- * QUIET: For low-level/ambient audio
- *   - Lower hitthresh (1.5) for better detection at low levels
- *   - Higher attackmult (1.4) for more sensitive attack detection
- *   - Lower musicthresh (0.3) for easier rhythm activation
- *   - Adaptive threshold enabled to scale with signal level
- *   - Faster AGC for dynamic quiet sources
- *
- * LOUD: For loud live music (PA systems, concerts)
- *   - Higher hitthresh (2.5) to reject noise from compression
- *   - Lower hwtarget (0.25) for louder signal headroom (avoids clipping)
- *   - Higher musicthresh (0.6) for confident activation only
- *   - No adaptive features (signal is consistently strong)
- *
- * LIVE: Balanced for live performance (DJ sets, bands)
- *   - Moderate thresholds for wide dynamic range
- *   - Adaptive features enabled for varying levels
- *   - 4s AGC period for medium responsiveness
  */
 const PresetParams PresetManager::PRESETS[] = {
-    // DEFAULT - Production defaults
+    // DEFAULT - Production defaults (tuned via fast-tune 2025-12-30)
     {
-        .hitthresh = 2.0f,
-        .attackmult = 1.2f,
+        .hitthresh = 2.813f,                // Hybrid-optimal threshold (conservative)
+        .attackmult = 1.1f,                 // 10% sudden rise required
         .avgtau = 0.8f,
-        .cooldown = 30,
+        .cooldown = 80,                     // Increased from 40 to reduce false positives
         .adaptiveThresholdEnabled = false,
         .adaptiveMinRaw = 0.1f,
         .adaptiveMaxScale = 0.6f,
         .adaptiveBlendTau = 5.0f,
         .hwtarget = 0.35f,
-        .fastAgcEnabled = true,
+        .fastAgcEnabled = true,             // Auto quiet-mode when gain maxed
         .fastAgcThreshold = 0.15f,
         .fastAgcPeriodMs = 5000,
         .fastAgcTrackingTau = 5.0f,
-        .musicthresh = 0.5f,
-    },
-
-    // QUIET - Optimized for low-level/ambient audio
-    {
-        .hitthresh = 1.5f,
-        .attackmult = 1.4f,
-        .avgtau = 0.8f,
-        .cooldown = 30,
-        .adaptiveThresholdEnabled = true,
-        .adaptiveMinRaw = 0.1f,
-        .adaptiveMaxScale = 0.5f,
-        .adaptiveBlendTau = 3.0f,           // Faster adaptation for dynamic quiet sources
-        .hwtarget = 0.35f,
-        .fastAgcEnabled = true,
-        .fastAgcThreshold = 0.12f,          // Lower threshold to trigger fast AGC sooner
-        .fastAgcPeriodMs = 3000,            // Faster calibration (3s vs 5s)
-        .fastAgcTrackingTau = 3.0f,         // Faster tracking
-        .musicthresh = 0.3f,                // Lower threshold for quiet sources
-    },
-
-    // LOUD - Optimized for loud sources
-    {
-        .hitthresh = 2.5f,
-        .attackmult = 1.2f,
-        .avgtau = 0.5f,
-        .cooldown = 40,
-        .adaptiveThresholdEnabled = false,
-        .adaptiveMinRaw = 0.1f,
-        .adaptiveMaxScale = 0.6f,
-        .adaptiveBlendTau = 5.0f,
-        .hwtarget = 0.25f,
-        .fastAgcEnabled = false,            // No fast AGC needed for loud sources
-        .fastAgcThreshold = 0.15f,
-        .fastAgcPeriodMs = 5000,
-        .fastAgcTrackingTau = 5.0f,
-        .musicthresh = 0.6f,                // Higher threshold for confident activation
-    },
-
-    // LIVE - Balanced for live performance
-    {
-        .hitthresh = 2.0f,
-        .attackmult = 1.3f,
-        .avgtau = 0.6f,
-        .cooldown = 35,
-        .adaptiveThresholdEnabled = true,
-        .adaptiveMinRaw = 0.12f,
-        .adaptiveMaxScale = 0.7f,
-        .adaptiveBlendTau = 4.0f,
-        .hwtarget = 0.30f,
-        .fastAgcEnabled = true,
-        .fastAgcThreshold = 0.15f,
-        .fastAgcPeriodMs = 4000,
-        .fastAgcTrackingTau = 4.0f,
         .musicthresh = 0.4f,
     },
 };

@@ -107,7 +107,7 @@ npm run tuner -- validate --port COM5 --gain 40
 | `hitthresh` | 2.813 | 1.0-10.0 | Hit threshold (multiples of recent average) |
 | `attackmult` | 1.1 | 1.0-2.0 | Attack multiplier (sudden rise ratio) |
 | `avgtau` | 0.8 | 0.1-5.0 | Recent average tracking time (seconds) |
-| `cooldown` | 40 | 20-500 | Cooldown between hits (ms) |
+| `cooldown` | 80 | 20-500 | Cooldown between hits (ms) |
 | `adaptthresh` | false | bool | Enable adaptive threshold scaling |
 | `adaptminraw` | 0.1 | 0.01-0.5 | Raw level to start scaling |
 | `adaptmaxscale` | 0.6 | 0.3-1.0 | Minimum threshold scale factor |
@@ -125,8 +125,8 @@ npm run tuner -- validate --port COM5 --gain 40
 | `hfcthresh` | 3.0 | 1.5-10.0 | HFC threshold [Mode 2] |
 | `fluxthresh` | 1.4 | 0.5-10.0 | Spectral flux threshold [Mode 3,4] |
 | `fluxbins` | 64 | 4-128 | FFT bins to analyze [Mode 3,4] |
-| `hyfluxwt` | 0.7 | 0.1-1.0 | Hybrid: flux-only weight [Mode 4] |
-| `hydrumwt` | 0.3 | 0.1-1.0 | Hybrid: drummer-only weight [Mode 4] |
+| `hyfluxwt` | 0.5 | 0.1-1.0 | Hybrid: flux-only weight [Mode 4] |
+| `hydrumwt` | 0.5 | 0.1-1.0 | Hybrid: drummer-only weight [Mode 4] |
 | `hybothboost` | 1.2 | 1.0-2.0 | Hybrid: both-agree boost [Mode 4] |
 
 ### Category: `rhythm` (7 parameters) - Beat Tracking
@@ -199,20 +199,22 @@ npm run tuner -- validate --port COM5 --gain 40
 
 ## Current Best Settings
 
-### Transient Detection (as of 2025-12-28)
+### Transient Detection (as of 2025-12-30)
 
-Best overall mode: **Hybrid (mode 4)** with F1 = 0.705
+Best overall mode: **Hybrid (mode 4)** with F1 = 0.598
 
 ```
 detectmode: 4
 hitthresh: 2.813
 attackmult: 1.1
-cooldown: 40
+cooldown: 80
 fluxthresh: 1.4
-hyfluxwt: 0.7
-hydrumwt: 0.3
+hyfluxwt: 0.5
+hydrumwt: 0.5
 hybothboost: 1.2
 ```
+
+**Note:** Equal hybrid weights (0.5/0.5) significantly outperformed the original 0.7/0.3 split.
 
 ### Mode Performance Comparison
 

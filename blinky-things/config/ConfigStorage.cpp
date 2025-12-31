@@ -111,7 +111,7 @@ void ConfigStorage::loadDefaults() {
     data_.mic.transientThreshold = 2.813f;  // Hybrid-optimal (drummer: 1.688, hybrid: 2.813)
     data_.mic.attackMultiplier = 1.1f;      // 10% sudden rise required (tuned from 1.2, was 1.3)
     data_.mic.averageTau = 0.8f;            // Recent average tracking time
-    data_.mic.cooldownMs = 40;              // 40ms cooldown between hits (tuned from 30, was 80)
+    data_.mic.cooldownMs = 80;              // 80ms cooldown between hits (tuned 2025-12-30, was 40)
 
     // Detection mode (v20+): multi-algorithm support
     data_.mic.detectionMode = 4;          // 4 = Hybrid (best F1: 0.705)
@@ -129,9 +129,9 @@ void ConfigStorage::loadDefaults() {
     data_.mic.fluxThresh = 1.4f;          // Binary search optimal (tuned from 2.0, was 2.8, was 2.641, originally 3.0)
     data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
-    // Hybrid mode defaults (mode 4) - tuned via fast-tune 2025-12-28 (F1: 0.669)
-    data_.mic.hybridFluxWeight = 0.7f;    // Weight when only flux detects (tuned from 0.3)
-    data_.mic.hybridDrumWeight = 0.3f;    // Weight when only drummer detects
+    // Hybrid mode defaults (mode 4) - tuned via fast-tune 2025-12-30 (F1: 0.598, equal weights best)
+    data_.mic.hybridFluxWeight = 0.5f;    // Weight when only flux detects (tuned from 0.7)
+    data_.mic.hybridDrumWeight = 0.5f;    // Weight when only drummer detects (tuned from 0.3)
     data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
 
     // AudioController rhythm tracking defaults
