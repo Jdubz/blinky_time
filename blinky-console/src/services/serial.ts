@@ -317,7 +317,6 @@ class SerialService {
     timeoutMs: number = 2000
   ): Promise<{ data: T | null; error?: SerialError }> {
     return new Promise(resolve => {
-      let jsonBuffer = '';
       let resolved = false;
       let parseAttempts = 0;
       const maxParseAttempts = 10; // Prevent infinite parsing attempts
@@ -344,22 +343,14 @@ class SerialService {
 
       const handler = (event: SerialEvent) => {
         if (event.type === 'data' && event.data) {
-          jsonBuffer += event.data;
+          // Each 'data' event is already a single line from startReading()
+          // Check this line directly instead of buffering (which loses line boundaries)
+          const trimmed = event.data.trim();
 
-          // Limit buffer size to prevent memory issues
-          if (jsonBuffer.length > MAX_BUFFER_SIZE) {
-            jsonBuffer = jsonBuffer.substring(jsonBuffer.length - MAX_BUFFER_SIZE / 2);
-          }
-
-          // Try to find a complete JSON object
-          const lines = jsonBuffer.split('\n');
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-              parseAttempts++;
-              if (parseAttempts > maxParseAttempts) {
-                continue; // Skip further parse attempts
-              }
+          // Check if this line is a complete JSON object
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            parseAttempts++;
+            if (parseAttempts <= maxParseAttempts) {
               try {
                 const parsed = JSON.parse(trimmed) as T;
                 if (!resolved) {
@@ -370,7 +361,7 @@ class SerialService {
                 }
                 return;
               } catch {
-                // Not valid JSON, continue checking other lines
+                // Not valid JSON, continue waiting for next event
               }
             }
           }
