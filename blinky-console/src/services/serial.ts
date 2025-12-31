@@ -138,6 +138,26 @@ const MAX_BUFFER_SIZE = 16384; // Max buffer size before truncation (16KB for la
 const MAX_COMMAND_LENGTH = 128; // Max command length to send
 const ALLOWED_COMMAND_PATTERN = /^[a-zA-Z0-9_\-.\s]+$/; // Alphanumeric + basic chars
 
+// Valid category names for settings (matches firmware SettingsRegistry categories)
+const VALID_CATEGORIES = [
+  'fire',
+  'firemusic',
+  'fireorganic',
+  'water',
+  'lightning',
+  'audio',
+  'agc',
+  'transient',
+  'detection',
+  'rhythm',
+] as const;
+
+type SettingsCategory = (typeof VALID_CATEGORIES)[number];
+
+function isValidCategory(category: string): category is SettingsCategory {
+  return VALID_CATEGORIES.includes(category as SettingsCategory);
+}
+
 class SerialService {
   private port: SerialPort | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -476,6 +496,12 @@ class SerialService {
 
   // Get settings for a specific category (with Zod validation)
   async getSettingsByCategory(category: string): Promise<SettingsResponse | null> {
+    // Validate category parameter before sending to device
+    if (!isValidCategory(category)) {
+      logger.error('Invalid category requested', { category, validCategories: VALID_CATEGORIES });
+      return null;
+    }
+
     logger.debug('Requesting settings for category', { category });
     const result = await this.sendAndReceiveJsonWithError<SettingsResponse>(
       `json settings ${category}`
@@ -492,13 +518,13 @@ class SerialService {
     // Validate response against schema
     const validation = SettingsResponseSchema.safeParse(result.data);
     if (!validation.success) {
-      logger.warn('Category settings validation failed', {
+      logger.error('Category settings validation failed, returning null', {
         category,
         errors: validation.error.issues,
         settingsCount: result.data?.settings?.length,
       });
-      // Return data anyway for graceful degradation
-      return result.data;
+      // Return null instead of invalid data (strict validation)
+      return null;
     }
 
     logger.debug('Category settings received', {

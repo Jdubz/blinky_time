@@ -477,19 +477,36 @@ export function useSerial(): UseSerialReturn {
   }, []);
 
   // Load settings for a specific category (lazy loading)
-  const loadSettingsByCategory = useCallback(async (category: string) => {
-    logger.debug('Loading settings for category', { category });
-    const response = await serialService.getSettingsByCategory(category);
-    if (response?.settings) {
-      // Merge category settings with existing settings
-      setSettings(prev => {
-        // Remove old settings from this category, add new ones
-        const filtered = prev.filter(s => s.cat !== category);
-        return [...filtered, ...response.settings];
-      });
-      logger.debug('Category settings loaded', { category, count: response.settings.length });
-    }
-  }, []);
+  const loadSettingsByCategory = useCallback(
+    async (category: string) => {
+      logger.debug('Loading settings for category', { category });
+      setLoadingState('settings', true);
+      try {
+        const response = await serialService.getSettingsByCategory(category);
+        if (response?.settings) {
+          // Capture settings from response before the state update
+          const newSettings = response.settings;
+          // Merge category settings with existing settings using functional update
+          // This ensures we always merge with the latest state, preventing race conditions
+          setSettings(prev => {
+            // Remove old settings from this category, add new ones
+            const filtered = prev.filter(s => s.cat !== category);
+            return [...filtered, ...newSettings];
+          });
+          logger.debug('Category settings loaded', { category, count: newSettings.length });
+        } else {
+          logger.warn('No settings returned for category', { category });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to load category settings';
+        logger.error('Load category settings error', { category, error: message });
+        notify.error(`Failed to load ${category} settings: ${message}`);
+      } finally {
+        setLoadingState('settings', false);
+      }
+    },
+    [setLoadingState]
+  );
 
   // Request battery status data
   const requestBatteryStatus = useCallback(async () => {
