@@ -1,18 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { useSerial } from './useSerial';
-import { serialService, SerialEvent, SerialEventCallback } from '../services/serial';
+import {
+  serialService,
+  SerialEvent,
+  SerialEventCallback,
+  SerialError,
+  SerialErrorCode,
+} from '../services/serial';
 import type { AudioSample } from '../types';
-
-// Mock SerialError class
-class MockSerialError extends Error {
-  code: string;
-  constructor(message: string, code: string) {
-    super(message);
-    this.name = 'SerialError';
-    this.code = code;
-  }
-}
 
 // Mock the serial service
 vi.mock('../services/serial', () => {
@@ -376,13 +372,14 @@ describe('useSerial', () => {
       act(() => {
         (serialService as unknown as { _emit: (e: SerialEvent) => void })._emit({
           type: 'error',
-          error: new MockSerialError('Test error', 'CONNECTION_FAILED'),
+          error: new SerialError('Test error', SerialErrorCode.CONNECTION_FAILED),
         });
       });
 
       await waitFor(() => {
         expect(result.current.connectionState).toBe('error');
         expect(result.current.errorMessage).toBe('Test error');
+        expect(result.current.errorCode).toBe('CONNECTION_FAILED');
       });
     });
   });

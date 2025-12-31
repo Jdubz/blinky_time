@@ -93,7 +93,7 @@ void updateFireParams() {
 }
 
 // Helper function for Generator-Effect-Renderer pipeline
-void showFireEffect() {
+void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
   if (currentGenerator && currentEffect && renderer && pixelMatrix && audioController) {
     // Get unified audio control signal
@@ -319,7 +319,7 @@ void setup() {
   // Note: Rhythm tracking is now handled internally by AudioController
 
   // Initialize serial console for interactive settings management
-  // Uses fireGen created on line 240 for direct parameter access
+  // Uses fireGen for direct Fire generator parameter access
   console = new(std::nothrow) SerialConsole(fireGen, &audioController->getMicForTuning());
   if (!console) {
     haltWithError(F("ERROR: SerialConsole allocation failed"));
@@ -386,8 +386,8 @@ void loop() {
     prevChargingState = currentChargingState;
   }
 
-  // Simplified rendering for new architecture - just fire effect for now
-  showFireEffect();
+  // Render current generator through the effect pipeline
+  renderFrame();
 
   // Handle serial commands via SerialConsole
   if (console) {
