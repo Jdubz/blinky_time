@@ -502,7 +502,7 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
 bool SerialConsole::handlePresetCommand(const char* cmd) {
     if (strncmp(cmd, "preset ", 7) == 0) {
         if (!mic_) {
-            Serial.println(F("ERROR: Mic not available"));
+            Serial.println(F("ERROR: Microphone not available"));
             return true;
         }
         const char* presetName = cmd + 7;

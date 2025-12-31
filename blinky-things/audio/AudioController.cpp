@@ -178,9 +178,26 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
 
     // Compute signal energy for normalization
     float signalEnergy = 0.0f;
+    float maxOss = 0.0f;
     for (int i = 0; i < ossCount_; i++) {
         int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
         signalEnergy += ossBuffer_[idx] * ossBuffer_[idx];
+        if (ossBuffer_[idx] > maxOss) maxOss = ossBuffer_[idx];
+    }
+
+    // DEBUG: Print autocorrelation diagnostics
+    static uint32_t lastDebugMs = 0;
+    if (nowMs - lastDebugMs > 2000) {
+        lastDebugMs = nowMs;
+        Serial.print(F("{\"type\":\"RHYTHM_DEBUG\",\"ossCount\":"));
+        Serial.print(ossCount_);
+        Serial.print(F(",\"sigEnergy\":"));
+        Serial.print(signalEnergy, 4);
+        Serial.print(F(",\"maxOss\":"));
+        Serial.print(maxOss, 4);
+        Serial.print(F(",\"strength\":"));
+        Serial.print(periodicityStrength_, 3);
+        Serial.println(F("}"));
     }
 
     if (signalEnergy < 0.001f) {
@@ -219,6 +236,22 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
+    // DEBUG: Print correlation results (continues from earlier debug block)
+    if (nowMs - lastDebugMs < 100) {  // Only if we just printed debug above
+        float detectedBpm = (bestLag > 0) ? 60.0f / (static_cast<float>(bestLag) / 60.0f) : 0.0f;
+        Serial.print(F("{\"type\":\"RHYTHM_DEBUG2\",\"bestLag\":"));
+        Serial.print(bestLag);
+        Serial.print(F(",\"maxCorr\":"));
+        Serial.print(maxCorrelation, 6);
+        Serial.print(F(",\"normCorr\":"));
+        Serial.print(normCorrelation, 4);
+        Serial.print(F(",\"newStr\":"));
+        Serial.print(newStrength, 3);
+        Serial.print(F(",\"bpm\":"));
+        Serial.print(detectedBpm, 1);
+        Serial.println(F("}"));
+    }
+
     // Update tempo if periodicity is strong enough
     // Safety: bestLag > 0 check prevents division by zero in calculations below
     if (bestLag > 0 && periodicityStrength_ > 0.25f) {
@@ -256,6 +289,11 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
     // Advance phase based on current tempo estimate
     float phaseIncrement = dt * 1000.0f / beatPeriodMs_;
     phase_ += phaseIncrement;
+
+    // Safety check: if phase becomes NaN or infinite, reset to 0
+    if (!isfinite(phase_)) {
+        phase_ = 0.0f;
+    }
 
     // Wrap phase at 1.0 using fmodf (safe for large jumps, prevents infinite loops)
     phase_ = fmodf(phase_, 1.0f);

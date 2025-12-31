@@ -543,7 +543,7 @@ void Fire::updateRandomFire() {
                         int absDy = dy < 0 ? -dy : dy;
                         int maxD = absDx > absDy ? absDx : absDy;
                         int minD = absDx < absDy ? absDx : absDy;
-                        float distance = maxD + 0.41f * minD;  // Octagonal approximation
+                        float distance = maxD + 0.414f * minD;  // Octagonal approximation (sqrt(2)-1)
 
                         float falloff = 1.0f / (distance + 1);
                         uint8_t heatToSpread = spreadHeat * falloff;
