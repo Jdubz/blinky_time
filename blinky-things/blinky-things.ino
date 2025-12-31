@@ -64,37 +64,45 @@ NeoPixelLedStrip* leds = nullptr;
 // ✅ Effects: HueRotation for color cycling, NoOp for pass-through
 // ✅ Hardware: AdaptiveMic ready for audio input
 // ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
-// ✅ RenderPipeline: Unified generator/effect switching via serial console
-RenderPipeline* pipeline = nullptr;
+Generator* currentGenerator = nullptr;
+Effect* currentEffect = nullptr;
+EffectRenderer* renderer = nullptr;
+PixelMatrix* pixelMatrix = nullptr;
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
+AudioController* audioController = nullptr;  // Unified audio analysis (owns AdaptiveMic internally)
 BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
-AudioController* audioCtrl = nullptr;  // Unified audio controller (owns mic, rhythm tracking)
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
 
-// Live-tunable fire parameters (still needed for ConfigStorage compatibility)
+// Live-tunable fire parameters
 FireParams fireParams;
 
 void updateFireParams() {
-  if (!pipeline) return;
-  Fire* f = pipeline->getFireGenerator();
-  if (f) {
+  if (!currentGenerator) return;
+  // FIX: Add type safety - only cast if it's actually a Fire generator
+  if (strcmp(currentGenerator->getName(), "Fire") == 0) {
+    Fire* f = static_cast<Fire*>(currentGenerator);
     f->setParams(fireParams);
   }
 }
 
-// Helper function for new Generator-Effect-Renderer architecture
-void renderFrame() {
-  // Pipeline handles: Generate -> Effect -> Render
-  if (pipeline && pipeline->isValid() && audioCtrl) {
-    const AudioControl& audio = audioCtrl->getControl();
-    pipeline->render(audio);
+// Helper function for Generator-Effect-Renderer pipeline
+void showFireEffect() {
+  // Generate -> Effect -> Render -> Display pipeline
+  if (currentGenerator && currentEffect && renderer && pixelMatrix && audioController) {
+    // Get unified audio control signal
+    const AudioControl& audio = audioController->getControl();
+
+    // Generate pattern, apply effects, and render
+    currentGenerator->generate(*pixelMatrix, audio);
+    currentEffect->apply(pixelMatrix);
+    renderer->render(*pixelMatrix);
     leds->show();
   }
 }
@@ -106,9 +114,12 @@ void renderFrame() {
  */
 void cleanup() {
   delete console;    console = nullptr;
-  delete audioCtrl;  audioCtrl = nullptr;
-  delete pipeline;   pipeline = nullptr;
+  delete renderer;   renderer = nullptr;
+  delete currentEffect; currentEffect = nullptr;
+  delete currentGenerator; currentGenerator = nullptr;
+  delete pixelMatrix; pixelMatrix = nullptr;
   delete battery;    battery = nullptr;
+  delete audioController; audioController = nullptr;
   delete leds;       leds = nullptr;
   delete neoPixelStrip; neoPixelStrip = nullptr;
 }
@@ -211,8 +222,14 @@ void setup() {
   Serial.print(config.matrix.width * config.matrix.height);
   Serial.println(F(" LEDs"));
 
+  // Create PixelMatrix for the visual pipeline
+  pixelMatrix = new(std::nothrow) PixelMatrix(config.matrix.width, config.matrix.height);
+  if (!pixelMatrix || !pixelMatrix->isValid()) {
+    haltWithError(F("ERROR: PixelMatrix allocation failed"));
+  }
+
   // Initialize appropriate generator based on layout type
-  Serial.print(F("Initializing generators for layout type: "));
+  Serial.print(F("Initializing fire generator for layout type: "));
   switch (config.matrix.layoutType) {
     case MATRIX_LAYOUT:
       Serial.println(F("MATRIX"));
@@ -228,14 +245,17 @@ void setup() {
       break;
   }
 
-  // Create unified render pipeline (manages all generators and effects)
-  pipeline = new(std::nothrow) RenderPipeline();
-  if (!pipeline) {
-    haltWithError(F("ERROR: RenderPipeline allocation failed"));
+  // Create fire generator instance
+  Fire* fireGen = new(std::nothrow) Fire();
+  currentGenerator = fireGen;
+
+  if (!currentGenerator) {
+    haltWithError(F("ERROR: Generator allocation failed"));
   }
 
-  if (!pipeline->begin(config, *leds, ledMapper)) {
-    haltWithError(F("ERROR: RenderPipeline initialization failed"));
+  // Initialize the generator with device configuration
+  if (!fireGen->begin(config)) {
+    haltWithError(F("ERROR: Generator initialization failed"));
   }
 
   // Initialize live-tunable fire params from config
@@ -249,33 +269,44 @@ void setup() {
   fireParams.spreadDistance = 3;
   fireParams.heatDecay = 0.60f;
 
-  Serial.println(F("RenderPipeline initialized with Fire, Water, Lightning generators"));
-  Serial.println(F("Available effects: None, HueRotation"));
+  // Initialize effect (pass-through for pure fire colors)
+  currentEffect = new(std::nothrow) NoOpEffect();
+  if (!currentEffect) {
+    haltWithError(F("ERROR: Effect allocation failed"));
+  }
+  currentEffect->begin(config.matrix.width, config.matrix.height);
+
+  // Initialize renderer (leds must be valid at this point)
+  if (!leds) {
+    haltWithError(F("ERROR: LED strip not initialized before renderer"));
+  }
+  renderer = new(std::nothrow) EffectRenderer(*leds, ledMapper);
+  if (!renderer) {
+    haltWithError(F("ERROR: Renderer allocation failed"));
+  }
+
+  Serial.println(F("New architecture initialized successfully"));
 
   // Initialize HAL-enabled components (must be done in setup(), not at global scope)
+  audioController = new(std::nothrow) AudioController(DefaultHal::pdm(), DefaultHal::time());
   battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
-  if (!battery) {
-    haltWithError(F("ERROR: Battery monitor allocation failed"));
+  if (!audioController || !battery) {
+    haltWithError(F("ERROR: HAL component allocation failed"));
   }
 
-  // Initialize unified AudioController (owns mic + rhythm tracking)
-  audioCtrl = new(std::nothrow) AudioController(DefaultHal::pdm(), DefaultHal::time());
-  if (!audioCtrl) {
-    haltWithError(F("ERROR: AudioController allocation failed"));
-  }
-
-  if (!audioCtrl->begin(config.microphone.sampleRate)) {
-    Serial.println(F("ERROR: AudioController failed to start"));
+  // Initialize audio controller (owns microphone internally)
+  bool audioOk = audioController->begin(config.microphone.sampleRate);
+  if (!audioOk) {
+    Serial.println(F("ERROR: Audio controller failed to start"));
   } else {
-    Serial.println(F("AudioController initialized (mic + rhythm tracking)"));
+    Serial.println(F("Audio controller initialized"));
   }
 
   // Initialize configuration storage and load saved settings
   configStorage.begin();
   if (configStorage.isValid()) {
-    // Load into local fireParams, then apply to pipeline's fire generator
-    configStorage.loadConfiguration(fireParams, audioCtrl->getMicForTuning(), audioCtrl);
-    updateFireParams();  // Apply to pipeline's fire generator
+    configStorage.loadConfiguration(fireParams, audioController->getMicForTuning(), audioController);
+    updateFireParams();
     Serial.println(F("Loaded saved configuration from flash"));
   } else {
     Serial.println(F("Using default configuration"));
@@ -289,18 +320,19 @@ void setup() {
     Serial.println(F("Battery monitor initialized"));
   }
 
+  // Note: Rhythm tracking is now handled internally by AudioController
+
   // Initialize serial console for interactive settings management
-  // Uses pipeline for generator/effect switching
-  console = new(std::nothrow) SerialConsole(pipeline, &audioCtrl->getMicForTuning());
+  // Uses fireGen created on line 240 for direct parameter access
+  console = new(std::nothrow) SerialConsole(fireGen, &audioController->getMicForTuning());
   if (!console) {
     haltWithError(F("ERROR: SerialConsole allocation failed"));
   }
   console->setConfigStorage(&configStorage);
   console->setBatteryMonitor(battery);
-  console->setAudioController(audioCtrl);
+  console->setAudioController(audioController);
   console->begin();
   Serial.println(F("Serial console initialized"));
-  Serial.println(F("Commands: 'gen list', 'gen <fire|water|lightning>', 'effect list', 'effect <none|hue>'"));
 
   // FIX: Reset frame timing to prevent stale state from previous boot
   lastMs = 0;
@@ -326,27 +358,23 @@ void loop() {
   dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
   lastMs = now;
 
-  // Update unified audio controller (handles mic, rhythm tracking, and synthesis)
-  if (audioCtrl) {
-    const AudioControl& audio = audioCtrl->update(dt);
+  // Update unified audio controller (handles mic + rhythm tracking internally)
+  if (audioController) {
+    audioController->update(dt);
+  }
 
-    // Optional: Send transient detection events for test analysis
-    if (audio.pulse > 0.0f) {
-      uint8_t mode = audioCtrl->getDetectionMode();
-      Serial.print(F("{\"type\":\"TRANSIENT\",\"ts\":"));
-      Serial.print(now);
-      Serial.print(F(",\"strength\":"));
-      Serial.print(audio.pulse, 2);
-      Serial.print(F(",\"mode\":"));
-      Serial.print(mode);
-      Serial.print(F(",\"level\":"));
-      Serial.print(audio.energy, 2);
-      Serial.print(F(",\"phase\":"));
-      Serial.print(audio.phase, 2);
-      Serial.print(F(",\"rhythm\":"));
-      Serial.print(audio.rhythmStrength, 2);
-      Serial.println(F("}"));
-    }
+  // Get pulse from audio control signal for transient logging
+  const AudioControl& audio = audioController ? audioController->getControl() : AudioControl{};
+  float pulse = audio.pulse;
+
+  // Send transient detection events for test analysis (always enabled)
+  if (audioController && pulse > 0.0f) {
+    // TRANSIENT message: simplified single-band detection
+    Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
+    Serial.print(now);
+    Serial.print(F(",\"strength\":"));
+    Serial.print(pulse, 2);
+    Serial.println(F("}"));
   }
 
   // Track charging state changes
@@ -360,30 +388,16 @@ void loop() {
     prevChargingState = currentChargingState;
   }
 
-  // Render current generator through pipeline
-  renderFrame();
+  // Simplified rendering for new architecture - just fire effect for now
+  showFireEffect();
 
   // Handle serial commands via SerialConsole
   if (console) {
     console->update();
   }
 
-  // Rhythm analyzer debug output (periodic, every 2 seconds when pattern detected)
-  static uint32_t lastRhythmDebug = 0;
-  if (audioCtrl && millis() - lastRhythmDebug > 2000) {
-    const AudioControl& audio = audioCtrl->getControl();
-    if (audio.rhythmStrength > 0.5f) {
-      lastRhythmDebug = millis();
-      Serial.print(F("{\"type\":\"RHYTHM\",\"bpm\":"));
-      Serial.print(audioCtrl->getCurrentBpm(), 1);
-      Serial.print(F(",\"strength\":"));
-      Serial.print(audio.rhythmStrength, 2);
-      Serial.println(F("}"));
-    }
-  }
-
   // Auto-save dirty settings to flash (debounced)
-  if (audioCtrl) configStorage.saveIfDirty(fireParams, audioCtrl->getMicForTuning(), audioCtrl);
+  if (audioController) configStorage.saveIfDirty(fireParams, audioController->getMicForTuning(), audioController);
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;
