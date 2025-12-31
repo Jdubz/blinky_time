@@ -16,8 +16,7 @@ namespace WaterConstants {
 }
 
 Water::Water()
-    : depth_(nullptr), tempDepth_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
-      wavePositions_(nullptr), numActiveWaves_(0) {
+    : depth_(nullptr), tempDepth_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f) {
 }
 
 Water::~Water() {
@@ -28,10 +27,6 @@ Water::~Water() {
     if (tempDepth_) {
         delete[] tempDepth_;
         tempDepth_ = nullptr;
-    }
-    if (wavePositions_) {
-        delete[] wavePositions_;
-        wavePositions_ = nullptr;
     }
 }
 
@@ -59,20 +54,6 @@ bool Water::begin(const DeviceConfig& config) {
         depth_ = nullptr;
         return false;
     }
-
-    // Allocate wave positions for random layout
-    if (wavePositions_) delete[] wavePositions_;
-    wavePositions_ = new uint8_t[params_.maxWavePositions];
-    if (!wavePositions_) {
-        Serial.println(F("ERROR: Failed to allocate wave positions"));
-        delete[] depth_;
-        delete[] tempDepth_;
-        depth_ = nullptr;
-        tempDepth_ = nullptr;
-        return false;
-    }
-    memset(wavePositions_, 0, params_.maxWavePositions);
-    numActiveWaves_ = 0;
 
     // Reset defaults
     resetToDefaults();
@@ -104,7 +85,6 @@ void Water::reset() {
     }
     audioEnergy_ = 0.0f;
     audioHit_ = 0.0f;
-    numActiveWaves_ = 0;
 }
 
 void Water::update() {

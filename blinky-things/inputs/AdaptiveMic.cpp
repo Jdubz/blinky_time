@@ -589,6 +589,10 @@ int AdaptiveMic::feedSamplesToSpectralFlux() {
  * Common detection finalization pattern
  * Checks if signal exceeds threshold with cooldown, calculates strength
  *
+ * SIDE EFFECT: Updates lastTransientMs member variable when detection occurs.
+ * This is intentional - it prevents re-detection during the cooldown period.
+ * Callers should be aware that this function modifies class state.
+ *
  * @param signal Current signal value (raw level or flux)
  * @param median Local median for threshold computation
  * @param threshold Multiplier for median to get detection threshold

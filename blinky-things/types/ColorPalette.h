@@ -15,8 +15,11 @@
 namespace Palette {
 
 // Segment breakpoints (shared by all palettes)
-constexpr uint8_t SEGMENT_1_END = 85;
-constexpr uint8_t SEGMENT_2_END = 170;
+// Intensity values [0, SEGMENT_1_THRESHOLD) are in segment 1
+// Intensity values [SEGMENT_1_THRESHOLD, SEGMENT_2_THRESHOLD) are in segment 2
+// Intensity values [SEGMENT_2_THRESHOLD, 255] are in segment 3
+constexpr uint8_t SEGMENT_1_THRESHOLD = 85;   // Start of segment 2
+constexpr uint8_t SEGMENT_2_THRESHOLD = 170;  // Start of segment 3
 
 // RGB color struct for palette definition
 struct RGB {
@@ -31,8 +34,12 @@ struct RGB {
 };
 
 // Linear interpolation between two values
+// Clamps value to [minVal, maxVal] to prevent underflow
 inline uint8_t lerp(uint8_t a, uint8_t b, uint8_t value, uint8_t minVal, uint8_t maxVal) {
     if (maxVal <= minVal) return a;
+    // Clamp value to prevent underflow when value < minVal
+    if (value < minVal) value = minVal;
+    if (value > maxVal) value = maxVal;
     uint16_t range = maxVal - minVal;
     uint16_t pos = value - minVal;
     return a + (((int16_t)b - (int16_t)a) * pos) / range;
@@ -63,12 +70,12 @@ struct ThreeSegmentPalette {
     uint32_t toColor(uint8_t value) const {
         if (value == 0) {
             return color0.pack();
-        } else if (value < SEGMENT_1_END) {
-            return lerpRGB(color0, color85, value, 0, SEGMENT_1_END - 1).pack();
-        } else if (value < SEGMENT_2_END) {
-            return lerpRGB(color85, color170, value, SEGMENT_1_END, SEGMENT_2_END - 1).pack();
+        } else if (value < SEGMENT_1_THRESHOLD) {
+            return lerpRGB(color0, color85, value, 0, SEGMENT_1_THRESHOLD - 1).pack();
+        } else if (value < SEGMENT_2_THRESHOLD) {
+            return lerpRGB(color85, color170, value, SEGMENT_1_THRESHOLD, SEGMENT_2_THRESHOLD - 1).pack();
         } else {
-            return lerpRGB(color170, color255, value, SEGMENT_2_END, 255).pack();
+            return lerpRGB(color170, color255, value, SEGMENT_2_THRESHOLD, 255).pack();
         }
     }
 };

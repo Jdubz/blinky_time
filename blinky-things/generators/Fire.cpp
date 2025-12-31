@@ -719,7 +719,10 @@ void Fire::applyEmbers(float dtMs) {
     emberNoisePhase_ += params_.emberNoiseSpeed * dtMs;
 
     // Performance optimization: Update ember noise every N frames
-    // This reduces expensive FBM noise calculations significantly
+    // This reduces expensive FBM noise calculations significantly.
+    // Visual impact: Ember patterns shift at ~16 FPS instead of ~33 FPS.
+    // This is acceptable because embers are subtle, slow-moving background elements.
+    // Fast-changing sparks and heat propagation still update every frame.
     emberFrameCounter_++;
     if (emberFrameCounter_ < FireConstants::EMBER_UPDATE_SKIP) {
         return;  // Skip this frame, keep previous ember pattern
@@ -780,6 +783,13 @@ void Fire::applyEmbers(float dtMs) {
 
 uint32_t Fire::heatToColor(uint8_t heat) {
     // Fire color palette: black -> red -> orange -> yellow (NO white)
+    //
+    // NOTE: Fire uses a custom palette algorithm (heat*3 multiply) rather than
+    // the shared ColorPalette.h system. This is intentional:
+    // - The multiply produces warmer reds that look more like real fire
+    // - Water and Lightning generators use ColorPalette::WATER/LIGHTNING
+    // - See types/ColorPalette.h for the unified palette system
+    //
     // Uses simple multiply (heat*3) rather than lerp for historical visual consistency
     if (heat < FireConstants::COLOR_SEGMENT_1) {
         // Black to red

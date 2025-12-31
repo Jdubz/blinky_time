@@ -27,7 +27,6 @@ struct LightningParams {
     float   audioBoltBoost     = 0.5f; // Audio boost for bolts
     uint8_t audioIntensityBoostMax = 100; // Max intensity boost from audio
     int8_t  fadeAudioBias      = -30;  // Fade speed audio bias (negative = slower fade on audio)
-    uint8_t maxBoltPositions   = 8;    // For random layout tracking
     uint8_t branchChance       = 30;   // Percentage chance of branching
 };
 
@@ -83,6 +82,4 @@ private:
     float audioEnergy_;
     float audioHit_;
 
-    // Layout-specific state
-    uint8_t* boltPositions_;   // For random layout bolt tracking
 };

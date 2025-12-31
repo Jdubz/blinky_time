@@ -34,8 +34,7 @@ namespace LightningConstants {
 }
 
 Lightning::Lightning()
-    : intensity_(nullptr), tempIntensity_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
-      boltPositions_(nullptr) {
+    : intensity_(nullptr), tempIntensity_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f) {
 }
 
 Lightning::~Lightning() {
@@ -46,10 +45,6 @@ Lightning::~Lightning() {
     if (tempIntensity_) {
         delete[] tempIntensity_;
         tempIntensity_ = nullptr;
-    }
-    if (boltPositions_) {
-        delete[] boltPositions_;
-        boltPositions_ = nullptr;
     }
 }
 
@@ -77,19 +72,6 @@ bool Lightning::begin(const DeviceConfig& config) {
         intensity_ = nullptr;
         return false;
     }
-
-    // Allocate bolt positions for random layout
-    if (boltPositions_) delete[] boltPositions_;
-    boltPositions_ = new uint8_t[params_.maxBoltPositions];
-    if (!boltPositions_) {
-        Serial.println(F("ERROR: Failed to allocate bolt positions"));
-        delete[] intensity_;
-        delete[] tempIntensity_;
-        intensity_ = nullptr;
-        tempIntensity_ = nullptr;
-        return false;
-    }
-    memset(boltPositions_, 0, params_.maxBoltPositions);
 
     // Reset defaults
     resetToDefaults();

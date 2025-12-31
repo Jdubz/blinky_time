@@ -80,8 +80,4 @@ private:
     // Audio input
     float audioEnergy_;
     float audioHit_;
-
-    // Layout-specific state
-    uint8_t* wavePositions_;   // For random layout wave tracking
-    uint8_t numActiveWaves_;
 };
