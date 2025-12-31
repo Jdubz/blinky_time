@@ -1,6 +1,5 @@
 #include "SerialConsole.h"
 #include "../config/TotemDefaults.h"
-#include "../config/Presets.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
 #include "../audio/AudioController.h"
@@ -32,14 +31,6 @@ SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
         lightningGenerator_ = pipeline_->getLightningGenerator();
         hueEffect_ = pipeline_->getHueRotationEffect();
     }
-}
-
-// Legacy constructor for backward compatibility
-SerialConsole::SerialConsole(Fire* fireGen, AdaptiveMic* mic)
-    : pipeline_(nullptr), fireGenerator_(fireGen), waterGenerator_(nullptr),
-      lightningGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
-      battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
-    instance_ = this;
 }
 
 void SerialConsole::begin() {
@@ -300,7 +291,6 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleStreamCommand(cmd)) return true;
     if (handleTestCommand(cmd)) return true;
     if (handleAudioStatusCommand(cmd)) return true;
-    if (handlePresetCommand(cmd)) return true;
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
     if (handleLogCommand(cmd)) return true;
@@ -334,19 +324,6 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
         Serial.print(F(",\"leds\":"));
         Serial.print(config.matrix.width * config.matrix.height);
         Serial.println(F("}"));
-        return true;
-    }
-
-    if (strcmp(cmd, "json presets") == 0) {
-        Serial.print(F("{\"presets\":["));
-        for (uint8_t i = 0; i < PresetManager::getPresetCount(); i++) {
-            // cppcheck-suppress knownConditionTrueFalse ; future-proof for multiple presets
-            if (i > 0) Serial.print(',');
-            Serial.print('"');
-            Serial.print(PresetManager::getPresetName(static_cast<PresetId>(i)));
-            Serial.print('"');
-        }
-        Serial.println(F("]}"));
         return true;
     }
 
@@ -539,35 +516,6 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
     return false;
 }
 
-// === PRESET COMMANDS ===
-bool SerialConsole::handlePresetCommand(const char* cmd) {
-    if (strncmp(cmd, "preset ", 7) == 0) {
-        if (!mic_) {
-            Serial.println(F("ERROR: Microphone not available"));
-            return true;
-        }
-        const char* presetName = cmd + 7;
-        PresetId id = PresetManager::parsePresetName(presetName);
-        if (id != PresetId::NUM_PRESETS) {
-            PresetManager::applyPreset(id, *mic_, audioCtrl_);
-            Serial.print(F("OK "));
-            Serial.println(PresetManager::getPresetName(id));
-        } else {
-            Serial.println(F("Unknown preset. Use: default"));
-        }
-        return true;
-    }
-
-    if (strcmp(cmd, "presets") == 0) {
-        Serial.println(F("Available presets:"));
-        Serial.println(F("  default - Production defaults (only preset)"));
-        Serial.println(F("Note: Quiet mode auto-activates when AGC gain is maxed."));
-        return true;
-    }
-
-    return false;
-}
-
 // === DETECTION MODE STATUS ===
 bool SerialConsole::handleModeCommand(const char* cmd) {
     if (strcmp(cmd, "mode") == 0) {
@@ -669,7 +617,7 @@ void SerialConsole::restoreDefaults() {
         mic_->hybridDrumWeight = 0.5f;                  // Hybrid drum weight (tuned 2025-12-30)
         mic_->hybridBothBoost = 1.2f;                   // Hybrid both-agree boost
 
-        // Adaptive threshold defaults (disabled by default for backwards compat)
+        // Adaptive threshold defaults (disabled by default, enable via settings)
         mic_->adaptiveThresholdEnabled = false;
         mic_->adaptiveMinRaw = 0.1f;
         mic_->adaptiveMaxScale = 0.6f;

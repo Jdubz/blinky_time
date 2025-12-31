@@ -85,9 +85,8 @@ struct ThreeSegmentPalette {
 // ============================================================================
 
 // Fire: black -> red -> orange -> yellow
-// Note: Fire uses a slightly different algorithm for historical reasons
-// (simple multiply instead of lerp in segment 1), so we keep its original
-// implementation for exact backward compatibility.
+// Note: Fire uses a slightly different algorithm (simple multiply instead of
+// lerp in segment 1) to preserve the original visual appearance.
 
 // Lightning: black -> bright yellow -> white -> electric blue
 constexpr ThreeSegmentPalette LIGHTNING = {

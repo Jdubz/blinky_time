@@ -60,12 +60,10 @@ export {
   TransientMessageSchema,
   RhythmMessageSchema,
   StatusMessageSchema,
-  PercussionMessageSchema,
   type DetectionMode,
   type TransientMessage,
   type RhythmMessage,
   type StatusMessage,
-  type PercussionMessage,
 } from './events';
 
 // Common types

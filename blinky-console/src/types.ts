@@ -29,7 +29,6 @@ export type {
   TransientMessage,
   RhythmMessage,
   StatusMessage,
-  PercussionMessage,
   // Common
   ConnectionState,
   GeneratorType,
@@ -57,7 +56,6 @@ export {
   TransientMessageSchema,
   RhythmMessageSchema,
   StatusMessageSchema,
-  PercussionMessageSchema,
   ConnectionStateSchema,
   GeneratorTypeSchema,
   EffectTypeSchema,

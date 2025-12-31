@@ -441,7 +441,7 @@ class SerialService {
         errors: validation.error.issues,
         data: result.data,
       });
-      // Return data anyway for backwards compatibility
+      // Return data anyway for graceful degradation
       return result.data;
     }
 
@@ -466,7 +466,7 @@ class SerialService {
         errors: validation.error.issues,
         settingsCount: result.data?.settings?.length,
       });
-      // Return data anyway for backwards compatibility
+      // Return data anyway for graceful degradation
       return result.data;
     }
 
@@ -497,7 +497,7 @@ class SerialService {
         errors: validation.error.issues,
         settingsCount: result.data?.settings?.length,
       });
-      // Return data anyway for backwards compatibility
+      // Return data anyway for graceful degradation
       return result.data;
     }
 
@@ -536,17 +536,6 @@ class SerialService {
   // Request battery status data
   async requestBatteryStatus(): Promise<void> {
     await this.send('battery');
-  }
-
-  // Apply a preset by name
-  async applyPreset(name: string): Promise<void> {
-    await this.send(`preset ${name}`);
-  }
-
-  // Get list of available presets
-  async getPresets(): Promise<string[] | null> {
-    const response = await this.sendAndReceiveJson<{ presets: string[] }>('json presets');
-    return response?.presets || null;
   }
 
   // Set active generator
@@ -596,7 +585,7 @@ class SerialService {
               if (validation.success) {
                 this.emit({ type: 'audio', audio: validation.data });
               } else {
-                // Emit anyway for backwards compatibility, but log warning
+                // Emit anyway for graceful degradation, but log warning
                 logger.debug('Audio message validation warning', {
                   errors: validation.error.issues,
                 });

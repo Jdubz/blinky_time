@@ -13,16 +13,6 @@ enum LayoutType {
   RANDOM_LAYOUT = 2   // Random/scattered arrangement with omnidirectional heat propagation
 };
 
-// DEPRECATED: Use LayoutType enum (defined above) instead.
-// Kept only for backward compatibility - will be removed in a future version.
-// Migration guide:
-//   MATRIX_FIRE (0) -> LayoutType::MATRIX_LAYOUT (0)
-//   STRING_FIRE (1) -> LayoutType::LINEAR_LAYOUT (1)
-enum FireEffectType {
-  MATRIX_FIRE = 0,  // DEPRECATED: Use LayoutType::MATRIX_LAYOUT
-  STRING_FIRE = 1   // DEPRECATED: Use LayoutType::LINEAR_LAYOUT
-};
-
 struct MatrixConfig {
   uint8_t width;
   uint8_t height;
@@ -30,8 +20,7 @@ struct MatrixConfig {
   uint8_t brightness;
   uint32_t ledType;
   MatrixOrientation orientation;
-  LayoutType layoutType;         // New unified layout system
-  FireEffectType fireType;       // Deprecated - kept for backward compatibility
+  LayoutType layoutType;
 };
 
 struct ChargingConfig {

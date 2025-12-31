@@ -129,19 +129,4 @@ protected:
                 break;
         }
     }
-
-    // Legacy helpers for backward compatibility (deprecated - use coordsToIndex/indexToCoords)
-    int coordsToIndexRowMajor(int x, int y) const {
-        if (x < 0 || x >= width_ || y < 0 || y >= height_) return -1;
-        return y * width_ + x;
-    }
-
-    void indexToCoordsRowMajor(int index, int& x, int& y) const {
-        if (index < 0 || index >= numLeds_) {
-            x = y = -1;
-            return;
-        }
-        x = index % width_;
-        y = index / width_;
-    }
 };

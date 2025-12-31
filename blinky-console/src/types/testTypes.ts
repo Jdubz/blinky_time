@@ -5,9 +5,6 @@
 
 export type TransientType = 'transient';
 
-// Legacy aliases for backwards compatibility
-export type PercussionType = TransientType;
-
 /**
  * Ground truth annotation for test patterns
  */

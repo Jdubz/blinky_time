@@ -67,9 +67,3 @@ export const StatusMessageSchema = z.object({
 });
 
 export type StatusMessage = z.infer<typeof StatusMessageSchema>;
-
-/**
- * Legacy percussion message type alias for backwards compatibility
- */
-export type PercussionMessage = TransientMessage;
-export const PercussionMessageSchema = TransientMessageSchema;

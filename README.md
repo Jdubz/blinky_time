@@ -62,15 +62,13 @@ blinky_time/
 ├── blinky-things/           # Main Arduino sketch
 │   ├── blinky-things.ino   # Main sketch file
 │   ├── BlinkyArchitecture.h # Single include for all components
-│   ├── generators/         # Pattern generators (fire, etc.)
-│   ├── effects/            # Visual effects (hue rotation, etc.)
-│   ├── renderers/          # Hardware output mapping
-│   ├── tests/              # Component test coordination
-│   ├── devices/            # Device-specific configurations
-│   ├── AdaptiveMic.cpp/.h  # Audio processing
-│   ├── FireEffect.cpp/.h   # Legacy fire simulation
-│   ├── BatteryMonitor.cpp/.h # Power management
-│   └── SerialConsole.cpp/.h # Debug interface
+│   ├── generators/         # Pattern generators (Fire, Water, Lightning)
+│   ├── effects/            # Visual effects (HueRotation, etc.)
+│   ├── render/             # Render pipeline and LED mapping
+│   ├── audio/              # Audio processing (AudioController)
+│   ├── inputs/             # Input devices (AdaptiveMic, SerialConsole)
+│   ├── config/             # Settings and configuration storage
+│   └── devices/            # Device-specific configurations
 ├── blinky-console/          # Web-based control interface (React PWA)
 │   ├── src/                # React components and hooks
 │   ├── firebase.json       # Firebase hosting configuration

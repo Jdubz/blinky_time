@@ -47,7 +47,6 @@
 // Configuration implementations
 #include "config/ConfigStorage.cpp"     // Persistent settings storage
 #include "config/SettingsRegistry.cpp"  // Settings abstraction layer
-#include "config/Presets.cpp"           // Audio parameter presets
 
 // Audio processing implementations
 #include "audio/AudioController.cpp"

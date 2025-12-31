@@ -56,7 +56,7 @@ interface AudioVisualizerProps {
   onToggleStreaming: () => void;
   disabled: boolean;
   // Test mode props
-  onPercussionEvent?: (callback: (msg: TransientMessage) => void) => () => void;
+  onTransientEvent?: (callback: (msg: TransientMessage) => void) => () => void;
   connectionState?: ConnectionState;
 }
 
@@ -86,7 +86,7 @@ export function AudioVisualizer({
   isStreaming,
   onToggleStreaming,
   disabled,
-  onPercussionEvent,
+  onTransientEvent,
   connectionState,
 }: AudioVisualizerProps) {
   const levelDataRef = useRef<number[]>([]);
@@ -218,7 +218,7 @@ export function AudioVisualizer({
 
   // Listen for transient events during test
   useEffect(() => {
-    if (!isTestPlaying || !testStartTime || !onPercussionEvent) return;
+    if (!isTestPlaying || !testStartTime || !onTransientEvent) return;
 
     const handleTransient = (msg: TransientMessage) => {
       const elapsedMs = Date.now() - testStartTime;
@@ -241,9 +241,9 @@ export function AudioVisualizer({
       }
     };
 
-    const cleanup = onPercussionEvent(handleTransient);
+    const cleanup = onTransientEvent(handleTransient);
     return cleanup;
-  }, [isTestPlaying, testStartTime, onPercussionEvent]);
+  }, [isTestPlaying, testStartTime, onTransientEvent]);
 
   // Handle pattern selection
   const handlePatternSelect = (patternId: string) => {
@@ -575,7 +575,7 @@ export function AudioVisualizer({
   };
 
   // Determine if test mode is available
-  const testModeAvailable = onPercussionEvent !== undefined;
+  const testModeAvailable = onTransientEvent !== undefined;
 
   return (
     <div className="audio-visualizer">

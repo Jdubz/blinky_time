@@ -89,7 +89,6 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -229,38 +228,6 @@ body {
   color: var(--text-muted);
   text-align: center;
   padding: 2rem;
-}
-
-/* Preset Selector */
-.preset-selector {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem;
-  margin-bottom: 1rem;
-  background-color: var(--bg-tertiary);
-  border-radius: var(--border-radius);
-  border: 1px solid var(--border-color);
-}
-
-.preset-label {
-  font-size: 0.875rem;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.preset-buttons {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-
-.preset-btn {
-  text-transform: capitalize;
-}
-
-.preset-btn:not(.btn-primary):hover {
-  background-color: var(--bg-secondary);
 }
 
 .settings-categories {
@@ -425,7 +392,6 @@ body {
   display: flex;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background-color: var(--bg-secondary);
   border-bottom: 2px solid var(--border-color);
 }
 
@@ -583,7 +549,6 @@ body {
   padding: 0.625rem 1rem;
   border: 2px solid var(--border-color);
   border-radius: var(--border-radius);
-  background-color: var(--bg-secondary);
   color: var(--text-secondary);
   font-size: 0.875rem;
   font-weight: 500;
@@ -947,7 +912,6 @@ body {
   position: relative;
   width: 48px;
   height: 20px;
-  background-color: var(--bg-secondary);
   border: 2px solid var(--border-color);
   border-radius: 4px;
 }

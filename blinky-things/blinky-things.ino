@@ -29,9 +29,9 @@
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
-// 1 = Hat (89 LEDs, STRING_FIRE mode)
-// 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)
-// 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
+// 1 = Hat (89 LEDs, LINEAR_LAYOUT)
+// 2 = Tube Light (4x15 matrix, MATRIX_LAYOUT)
+// 3 = Bucket Totem (16x8 matrix, MATRIX_LAYOUT)
 #ifndef DEVICE_TYPE
 #define DEVICE_TYPE 3  // Bucket Totem (16x8 matrix)
 #endif
@@ -202,26 +202,20 @@ void setup() {
 
   // Debug: detailed config info
   if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
-    Serial.print(F("[DEBUG] Fire type: "));
-    Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
-    Serial.print(F("[DEBUG] Matrix: "));
+    Serial.print(F("[DEBUG] Layout: "));
+    switch (config.matrix.layoutType) {
+      case MATRIX_LAYOUT:  Serial.print(F("MATRIX")); break;
+      case LINEAR_LAYOUT:  Serial.print(F("LINEAR")); break;
+      case RANDOM_LAYOUT:  Serial.print(F("RANDOM")); break;
+      default:             Serial.print(F("UNKNOWN")); break;
+    }
+    Serial.print(F(", Matrix: "));
     Serial.print(config.matrix.width);
     Serial.print(F("x"));
     Serial.print(config.matrix.height);
     Serial.print(F(" = "));
     Serial.print(config.matrix.width * config.matrix.height);
     Serial.println(F(" LEDs"));
-  }
-
-  // Debug: layout type info
-  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
-    Serial.print(F("[DEBUG] Layout type: "));
-    switch (config.matrix.layoutType) {
-      case MATRIX_LAYOUT:  Serial.println(F("MATRIX")); break;
-      case LINEAR_LAYOUT:  Serial.println(F("LINEAR")); break;
-      case RANDOM_LAYOUT:  Serial.println(F("RANDOM")); break;
-      default:             Serial.println(F("UNKNOWN")); break;
-    }
   }
 
   // Initialize RenderPipeline (manages generators, effects, and rendering)
