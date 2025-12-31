@@ -163,32 +163,31 @@ const char* RenderPipeline::getEffectName() const {
     }
 }
 
-// Parameter access
+// Parameter access - returns mutable pointers to generator params
 FireParams* RenderPipeline::getFireParams() {
-    // For parameter access, we need to store params externally
-    // since Fire stores a copy. Return null for now - params
-    // are managed via setParams/getters on the generators directly
-    return nullptr;
+    return fire_ ? &fire_->getParamsMutable() : nullptr;
 }
 
 WaterParams* RenderPipeline::getWaterParams() {
-    return nullptr;
+    return water_ ? &water_->getParamsMutable() : nullptr;
 }
 
 LightningParams* RenderPipeline::getLightningParams() {
-    return nullptr;
+    return lightning_ ? &lightning_->getParamsMutable() : nullptr;
 }
 
+// Apply methods - params are modified in-place, so these are no-ops
+// Kept for API consistency if future implementations need explicit apply
 void RenderPipeline::applyFireParams() {
-    // Parameters are applied directly via Fire::setParams()
+    // Parameters modified via getFireParams() take effect immediately
 }
 
 void RenderPipeline::applyWaterParams() {
-    // Parameters are applied directly via Water::setParams()
+    // Parameters modified via getWaterParams() take effect immediately
 }
 
 void RenderPipeline::applyLightningParams() {
-    // Parameters are applied directly via Lightning::setParams()
+    // Parameters modified via getLightningParams() take effect immediately
 }
 
 // Static helpers for listing options

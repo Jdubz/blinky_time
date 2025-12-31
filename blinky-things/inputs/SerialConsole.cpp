@@ -15,6 +15,10 @@ extern const DeviceConfig& config;
 // Static instance for callbacks
 SerialConsole* SerialConsole::instance_ = nullptr;
 
+// File-scope storage for effect settings (accessible from both register and sync functions)
+static float effectHueShift_ = 0.0f;
+static float effectRotationSpeed_ = 0.0f;
+
 // New constructor with RenderPipeline
 SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
     : pipeline_(pipeline), fireGenerator_(nullptr), waterGenerator_(nullptr),
@@ -276,6 +280,8 @@ void SerialConsole::update() {
 void SerialConsole::handleCommand(const char* cmd) {
     // Try settings registry first (handles set/get/show/list/categories/settings)
     if (settings_.handleCommand(cmd)) {
+        // Sync effect settings to actual effect after any settings change
+        syncEffectSettings();
         return;
     }
 
@@ -330,6 +336,33 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
             if (i > 0) Serial.print(',');
             Serial.print('"');
             Serial.print(PresetManager::getPresetName(static_cast<PresetId>(i)));
+            Serial.print('"');
+        }
+        Serial.println(F("]}"));
+        return true;
+    }
+
+    if (strcmp(cmd, "json state") == 0) {
+        if (!pipeline_) {
+            Serial.println(F("{\"error\":\"Pipeline not available\"}"));
+            return true;
+        }
+        Serial.print(F("{\"generator\":\""));
+        Serial.print(pipeline_->getGeneratorName());
+        Serial.print(F("\",\"effect\":\""));
+        Serial.print(pipeline_->getEffectName());
+        Serial.print(F("\",\"generators\":["));
+        for (int i = 0; i < RenderPipeline::NUM_GENERATORS; i++) {
+            if (i > 0) Serial.print(',');
+            Serial.print('"');
+            Serial.print(RenderPipeline::getGeneratorNameByIndex(i));
+            Serial.print('"');
+        }
+        Serial.print(F("],\"effects\":["));
+        for (int i = 0; i < RenderPipeline::NUM_EFFECTS; i++) {
+            if (i > 0) Serial.print(',');
+            Serial.print('"');
+            Serial.print(RenderPipeline::getEffectNameByIndex(i));
             Serial.print('"');
         }
         Serial.println(F("]}"));
@@ -824,23 +857,22 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
 void SerialConsole::registerEffectSettings() {
     if (!hueEffect_) return;
 
-    // HueRotation effect settings
-    // Note: We need static storage for the float values since hueEffect_ stores them internally
-    static float hueShift = 0.0f;
-    static float rotationSpeed = 0.0f;
+    // Initialize file-scope statics from current effect state
+    effectHueShift_ = hueEffect_->getHueShift();
+    effectRotationSpeed_ = hueEffect_->getRotationSpeed();
 
-    // Initialize from current effect state
-    hueShift = hueEffect_->getHueShift();
-    rotationSpeed = hueEffect_->getRotationSpeed();
-
-    settings_.registerFloat("hueshift", &hueShift, "effect",
+    settings_.registerFloat("hueshift", &effectHueShift_, "effect",
         "Static hue offset (0-1)", 0.0f, 1.0f);
-    settings_.registerFloat("huespeed", &rotationSpeed, "effect",
+    settings_.registerFloat("huespeed", &effectRotationSpeed_, "effect",
         "Auto-rotation speed (cycles/sec)", 0.0f, 2.0f);
+}
 
-    // Note: Changes to these values need to be applied to the effect
-    // This is handled by listening for changes in the streamTick or by
-    // adding a callback mechanism (TODO: add setter callbacks to SettingsRegistry)
+void SerialConsole::syncEffectSettings() {
+    if (!hueEffect_) return;
+
+    // Apply file-scope statics (modified by SettingsRegistry) to the actual effect
+    hueEffect_->setHueShift(effectHueShift_);
+    hueEffect_->setRotationSpeed(effectRotationSpeed_);
 }
 
 void SerialConsole::streamTick() {

@@ -10,6 +10,50 @@ import {
   EffectType,
 } from '../types';
 
+// Custom error classes for better error handling
+export class SerialError extends Error {
+  constructor(
+    message: string,
+    public readonly code: SerialErrorCode
+  ) {
+    super(message);
+    this.name = 'SerialError';
+  }
+}
+
+export enum SerialErrorCode {
+  NOT_SUPPORTED = 'NOT_SUPPORTED',
+  NOT_CONNECTED = 'NOT_CONNECTED',
+  CONNECTION_FAILED = 'CONNECTION_FAILED',
+  DISCONNECTED = 'DISCONNECTED',
+  COMMAND_INVALID = 'COMMAND_INVALID',
+  COMMAND_FAILED = 'COMMAND_FAILED',
+  TIMEOUT = 'TIMEOUT',
+  PARSE_ERROR = 'PARSE_ERROR',
+  PORT_IN_USE = 'PORT_IN_USE',
+  PERMISSION_DENIED = 'PERMISSION_DENIED',
+  DEVICE_LOST = 'DEVICE_LOST',
+}
+
+// Map native error types to our error codes
+function classifyError(error: unknown): SerialErrorCode {
+  if (error instanceof DOMException) {
+    switch (error.name) {
+      case 'NotFoundError':
+        return SerialErrorCode.NOT_CONNECTED;
+      case 'SecurityError':
+        return SerialErrorCode.PERMISSION_DENIED;
+      case 'InvalidStateError':
+        return SerialErrorCode.PORT_IN_USE;
+      case 'NetworkError':
+        return SerialErrorCode.DEVICE_LOST;
+      case 'AbortError':
+        return SerialErrorCode.DISCONNECTED;
+    }
+  }
+  return SerialErrorCode.CONNECTION_FAILED;
+}
+
 // WebSerial type declarations
 declare global {
   interface Navigator {
@@ -116,7 +160,11 @@ class SerialService {
   // Request and connect to a serial port
   async connect(baudRate: number = 115200): Promise<boolean> {
     if (!this.isSupported()) {
-      this.emit({ type: 'error', error: new Error('WebSerial not supported') });
+      const error = new SerialError(
+        'WebSerial API not supported in this browser',
+        SerialErrorCode.NOT_SUPPORTED
+      );
+      this.emit({ type: 'error', error });
       return false;
     }
 
@@ -131,15 +179,31 @@ class SerialService {
       if (this.port.readable) {
         this.reader = this.port.readable.getReader();
         this.startReading();
+      } else {
+        throw new SerialError('Port is not readable', SerialErrorCode.CONNECTION_FAILED);
       }
+
       if (this.port.writable) {
         this.writer = this.port.writable.getWriter();
+      } else {
+        throw new SerialError('Port is not writable', SerialErrorCode.CONNECTION_FAILED);
       }
 
       this.emit({ type: 'connected' });
       return true;
     } catch (error) {
-      this.emit({ type: 'error', error: error as Error });
+      // Clean up partial connection state
+      await this.disconnect().catch(() => {});
+
+      // Classify and emit the error
+      if (error instanceof SerialError) {
+        this.emit({ type: 'error', error });
+      } else {
+        const code = classifyError(error);
+        const message = error instanceof Error ? error.message : 'Connection failed';
+        const serialError = new SerialError(message, code);
+        this.emit({ type: 'error', error: serialError });
+      }
       return false;
     }
   }
@@ -211,30 +275,70 @@ class SerialService {
   // Send a command (with validation)
   async send(command: string): Promise<void> {
     if (!this.writer) {
-      throw new Error('Not connected');
+      throw new SerialError('Cannot send: not connected to device', SerialErrorCode.NOT_CONNECTED);
     }
 
     const sanitized = this.validateCommand(command);
     if (!sanitized) {
-      throw new Error('Invalid command');
+      throw new SerialError(
+        `Invalid command: "${command.substring(0, 20)}"`,
+        SerialErrorCode.COMMAND_INVALID
+      );
     }
 
-    const encoder = new TextEncoder();
-    const data = encoder.encode(sanitized + '\n');
-    await this.writer.write(data);
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(sanitized + '\n');
+      await this.writer.write(data);
+    } catch (error) {
+      const code = classifyError(error);
+      const message = error instanceof Error ? error.message : 'Failed to send command';
+      throw new SerialError(message, code);
+    }
+  }
+
+  // Result type for sendAndReceiveJson with error details
+  private sendJsonResult<T>(
+    data: T | null,
+    error?: SerialError
+  ): { data: T | null; error?: SerialError } {
+    return { data, error };
   }
 
   // Send command and wait for JSON response
   async sendAndReceiveJson<T>(command: string, timeoutMs: number = 2000): Promise<T | null> {
+    const result = await this.sendAndReceiveJsonWithError<T>(command, timeoutMs);
+    return result.data;
+  }
+
+  // Send command and wait for JSON response, with detailed error info
+  async sendAndReceiveJsonWithError<T>(
+    command: string,
+    timeoutMs: number = 2000
+  ): Promise<{ data: T | null; error?: SerialError }> {
     return new Promise(resolve => {
       let jsonBuffer = '';
       let resolved = false;
+      let parseAttempts = 0;
+      const maxParseAttempts = 10; // Prevent infinite parsing attempts
+
+      const cleanup = () => {
+        this.removeEventListener(handler);
+      };
 
       const timeout = setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          this.removeEventListener(handler);
-          resolve(null);
+          cleanup();
+          resolve(
+            this.sendJsonResult<T>(
+              null,
+              new SerialError(
+                `Timeout waiting for response to "${command}" (${timeoutMs}ms)`,
+                SerialErrorCode.TIMEOUT
+              )
+            )
+          );
         }
       }, timeoutMs);
 
@@ -242,35 +346,67 @@ class SerialService {
         if (event.type === 'data' && event.data) {
           jsonBuffer += event.data;
 
+          // Limit buffer size to prevent memory issues
+          if (jsonBuffer.length > MAX_BUFFER_SIZE) {
+            jsonBuffer = jsonBuffer.substring(jsonBuffer.length - MAX_BUFFER_SIZE / 2);
+          }
+
           // Try to find a complete JSON object
           const lines = jsonBuffer.split('\n');
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+              parseAttempts++;
+              if (parseAttempts > maxParseAttempts) {
+                continue; // Skip further parse attempts
+              }
               try {
                 const parsed = JSON.parse(trimmed) as T;
                 if (!resolved) {
                   resolved = true;
                   clearTimeout(timeout);
-                  this.removeEventListener(handler);
-                  resolve(parsed);
+                  cleanup();
+                  resolve(this.sendJsonResult(parsed));
                 }
                 return;
               } catch {
-                // Not valid JSON, continue
+                // Not valid JSON, continue checking other lines
               }
             }
+          }
+        }
+
+        // Handle disconnect during wait
+        if (event.type === 'disconnected' || event.type === 'error') {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            cleanup();
+            resolve(
+              this.sendJsonResult<T>(
+                null,
+                new SerialError(
+                  'Device disconnected while waiting for response',
+                  SerialErrorCode.DISCONNECTED
+                )
+              )
+            );
           }
         }
       };
 
       this.addEventListener(handler);
-      this.send(command).catch(() => {
+
+      this.send(command).catch((error: Error) => {
         if (!resolved) {
           resolved = true;
           clearTimeout(timeout);
-          this.removeEventListener(handler);
-          resolve(null);
+          cleanup();
+          const serialError =
+            error instanceof SerialError
+              ? error
+              : new SerialError(error.message, SerialErrorCode.COMMAND_FAILED);
+          resolve(this.sendJsonResult<T>(null, serialError));
         }
       });
     });
@@ -442,9 +578,26 @@ class SerialService {
       }
     } catch (error) {
       if (this.isReading) {
-        this.emit({ type: 'error', error: error as Error });
+        const code = classifyError(error);
+        const message = error instanceof Error ? error.message : 'Read error';
+        const serialError = new SerialError(message, code);
+        this.emit({ type: 'error', error: serialError });
+
+        // If device was lost, trigger disconnection
+        if (code === SerialErrorCode.DEVICE_LOST || code === SerialErrorCode.DISCONNECTED) {
+          this.disconnect().catch(() => {});
+        }
       }
     }
+  }
+
+  // Get last error if any - useful for debugging
+  getConnectionState(): { connected: boolean; readable: boolean; writable: boolean } {
+    return {
+      connected: this.port !== null,
+      readable: this.reader !== null,
+      writable: this.writer !== null,
+    };
   }
 }
 
