@@ -474,6 +474,40 @@ class SerialService {
     return validation.data;
   }
 
+  // Get settings for a specific category (with Zod validation)
+  async getSettingsByCategory(category: string): Promise<SettingsResponse | null> {
+    logger.debug('Requesting settings for category', { category });
+    const result = await this.sendAndReceiveJsonWithError<SettingsResponse>(
+      `json settings ${category}`
+    );
+
+    if (result.error || !result.data) {
+      logger.error('Failed to get settings for category', {
+        category,
+        error: result.error?.message,
+      });
+      return null;
+    }
+
+    // Validate response against schema
+    const validation = SettingsResponseSchema.safeParse(result.data);
+    if (!validation.success) {
+      logger.warn('Category settings validation failed', {
+        category,
+        errors: validation.error.issues,
+        settingsCount: result.data?.settings?.length,
+      });
+      // Return data anyway for backwards compatibility
+      return result.data;
+    }
+
+    logger.debug('Category settings received', {
+      category,
+      count: validation.data.settings.length,
+    });
+    return validation.data;
+  }
+
   // Set a setting value
   async setSetting(name: string, value: number | boolean): Promise<void> {
     await this.send(`set ${name} ${value}`);

@@ -141,10 +141,6 @@ private:
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
 
-    // Live-tunable params (stored here for settings registry access)
-    WaterParams waterParams_;
-    LightningParams lightningParams_;
-
     // JSON streaming state (for web app)
     bool streamEnabled_ = false;
     bool streamDebug_ = false;     // Include debug fields (baselines, raw energy)

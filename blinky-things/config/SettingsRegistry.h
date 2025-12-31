@@ -93,6 +93,7 @@ public:
     void printHelp();                          // Print help with all commands
     void printValue(const char* name);         // Print single value
     void printSettingsJson();                  // Print all settings as JSON (for UI)
+    void printSettingsCategoryJson(const char* category);  // Print category settings as JSON
 
     // Type name helper (for JSON output)
     static const char* typeString(SettingType t);

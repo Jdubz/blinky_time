@@ -62,16 +62,14 @@ void SerialConsole::registerSettings() {
     registerFireMusicSettings(fp);
     registerFireOrganicSettings(fp);
 
-    // Register Water generator settings
+    // Register Water generator settings (use mutable ref so changes apply directly)
     if (waterGenerator_) {
-        waterParams_ = waterGenerator_->getParams();
-        registerWaterSettings(&waterParams_);
+        registerWaterSettings(&waterGenerator_->getParamsMutable());
     }
 
-    // Register Lightning generator settings
+    // Register Lightning generator settings (use mutable ref so changes apply directly)
     if (lightningGenerator_) {
-        lightningParams_ = lightningGenerator_->getParams();
-        registerLightningSettings(&lightningParams_);
+        registerLightningSettings(&lightningGenerator_->getParamsMutable());
     }
 
     // Register effect settings (HueRotation)
@@ -311,8 +309,16 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
 
 // === JSON API COMMANDS (for web app) ===
 bool SerialConsole::handleJsonCommand(const char* cmd) {
-    if (strcmp(cmd, "json settings") == 0) {
-        settings_.printSettingsJson();
+    // Handle "json settings" or "json settings <category>"
+    if (strncmp(cmd, "json settings", 13) == 0) {
+        const char* category = cmd + 13;
+        while (*category == ' ') category++;  // Skip whitespace
+
+        if (*category == '\0') {
+            settings_.printSettingsJson();    // All settings
+        } else {
+            settings_.printSettingsCategoryJson(category);  // Category only
+        }
         return true;
     }
 
@@ -687,16 +693,14 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->bpmMax = 200.0f;
     }
 
-    // Restore water defaults
+    // Restore water defaults (settings now point directly to generator's params)
     if (waterGenerator_) {
         waterGenerator_->resetToDefaults();
-        waterParams_ = WaterParams();
     }
 
-    // Restore lightning defaults
+    // Restore lightning defaults (settings now point directly to generator's params)
     if (lightningGenerator_) {
         lightningGenerator_->resetToDefaults();
-        lightningParams_ = LightningParams();
     }
 
     // Restore effect defaults

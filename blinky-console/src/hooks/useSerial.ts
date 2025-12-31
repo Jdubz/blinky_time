@@ -92,6 +92,7 @@ export interface UseSerialReturn {
   loadSettings: () => Promise<void>;
   resetDefaults: () => Promise<void>;
   refreshSettings: () => Promise<void>;
+  loadSettingsByCategory: (category: string) => Promise<void>;
   requestBatteryStatus: () => Promise<void>;
   applyPreset: (name: string) => Promise<void>;
   setGenerator: (name: GeneratorType) => Promise<void>;
@@ -492,6 +493,21 @@ export function useSerial(): UseSerialReturn {
     }
   }, []);
 
+  // Load settings for a specific category (lazy loading)
+  const loadSettingsByCategory = useCallback(async (category: string) => {
+    logger.debug('Loading settings for category', { category });
+    const response = await serialService.getSettingsByCategory(category);
+    if (response?.settings) {
+      // Merge category settings with existing settings
+      setSettings(prev => {
+        // Remove old settings from this category, add new ones
+        const filtered = prev.filter(s => s.cat !== category);
+        return [...filtered, ...response.settings];
+      });
+      logger.debug('Category settings loaded', { category, count: response.settings.length });
+    }
+  }, []);
+
   // Request battery status data
   const requestBatteryStatus = useCallback(async () => {
     await serialService.requestBatteryStatus();
@@ -653,6 +669,7 @@ export function useSerial(): UseSerialReturn {
     loadSettings,
     resetDefaults,
     refreshSettings,
+    loadSettingsByCategory,
     requestBatteryStatus,
     applyPreset,
     setGenerator,

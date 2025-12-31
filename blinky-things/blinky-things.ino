@@ -21,6 +21,7 @@
 #include <Adafruit_NeoPixel.h>
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
+#include "render/RenderPipeline.h"  // Generator/Effect/Renderer management
 #include "types/Version.h"           // Version information from repository
 #include "tests/SafeMode.h"          // Crash recovery system
 #include "hal/DefaultHal.h"          // HAL singleton instances
@@ -64,10 +65,7 @@ NeoPixelLedStrip* leds = nullptr;
 // ✅ Effects: HueRotation for color cycling, NoOp for pass-through
 // ✅ Hardware: AdaptiveMic ready for audio input
 // ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
-Generator* currentGenerator = nullptr;
-Effect* currentEffect = nullptr;
-EffectRenderer* renderer = nullptr;
-PixelMatrix* pixelMatrix = nullptr;
+RenderPipeline* pipeline = nullptr;  // Manages generators, effects, and rendering
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
@@ -84,10 +82,9 @@ bool prevChargingState = false;
 FireParams fireParams;
 
 void updateFireParams() {
-  if (!currentGenerator) return;
-  // FIX: Add type safety - only cast if it's actually a Fire generator
-  if (strcmp(currentGenerator->getName(), "Fire") == 0) {
-    Fire* f = static_cast<Fire*>(currentGenerator);
+  if (!pipeline) return;
+  Fire* f = pipeline->getFireGenerator();
+  if (f) {
     f->setParams(fireParams);
   }
 }
@@ -95,14 +92,9 @@ void updateFireParams() {
 // Helper function for Generator-Effect-Renderer pipeline
 void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
-  if (currentGenerator && currentEffect && renderer && pixelMatrix && audioController) {
-    // Get unified audio control signal
+  if (pipeline && audioController) {
     const AudioControl& audio = audioController->getControl();
-
-    // Generate pattern, apply effects, and render
-    currentGenerator->generate(*pixelMatrix, audio);
-    currentEffect->apply(pixelMatrix);
-    renderer->render(*pixelMatrix);
+    pipeline->render(audio);
     leds->show();
   }
 }
@@ -114,10 +106,7 @@ void renderFrame() {
  */
 void cleanup() {
   delete console;    console = nullptr;
-  delete renderer;   renderer = nullptr;
-  delete currentEffect; currentEffect = nullptr;
-  delete currentGenerator; currentGenerator = nullptr;
-  delete pixelMatrix; pixelMatrix = nullptr;
+  delete pipeline;   pipeline = nullptr;  // RenderPipeline cleans up generators/effects/renderer
   delete battery;    battery = nullptr;
   delete audioController; audioController = nullptr;
   delete leds;       leds = nullptr;
@@ -224,12 +213,6 @@ void setup() {
     Serial.println(F(" LEDs"));
   }
 
-  // Create PixelMatrix for the visual pipeline
-  pixelMatrix = new(std::nothrow) PixelMatrix(config.matrix.width, config.matrix.height);
-  if (!pixelMatrix || !pixelMatrix->isValid()) {
-    haltWithError(F("ERROR: PixelMatrix allocation failed"));
-  }
-
   // Debug: layout type info
   if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
     Serial.print(F("[DEBUG] Layout type: "));
@@ -241,47 +224,19 @@ void setup() {
     }
   }
 
-  // Create fire generator instance
-  Fire* fireGen = new(std::nothrow) Fire();
-  currentGenerator = fireGen;
-
-  if (!currentGenerator) {
-    haltWithError(F("ERROR: Generator allocation failed"));
+  // Initialize RenderPipeline (manages generators, effects, and rendering)
+  pipeline = new(std::nothrow) RenderPipeline();
+  if (!pipeline || !pipeline->begin(config, *leds, ledMapper)) {
+    haltWithError(F("ERROR: RenderPipeline initialization failed"));
   }
 
-  // Initialize the generator with device configuration
-  if (!fireGen->begin(config)) {
-    haltWithError(F("ERROR: Generator initialization failed"));
+  // Sync fireParams FROM the Fire generator (preserves layout-specific values set by Fire::begin)
+  Fire* fireGen = pipeline->getFireGenerator();
+  if (fireGen) {
+    fireParams = fireGen->getParams();  // Copy all params including layout-specific ones
   }
 
-  // Initialize live-tunable fire params from config
-  fireParams.baseCooling = config.fireDefaults.baseCooling;
-  fireParams.sparkHeatMin = config.fireDefaults.sparkHeatMin;
-  fireParams.sparkHeatMax = config.fireDefaults.sparkHeatMax;
-  fireParams.sparkChance = config.fireDefaults.sparkChance;
-  fireParams.audioSparkBoost = config.fireDefaults.audioSparkBoost;
-  fireParams.coolingAudioBias = config.fireDefaults.coolingAudioBias;
-  // Layout-specific params set by Fire::begin()
-  fireParams.spreadDistance = 3;
-  fireParams.heatDecay = 0.60f;
-
-  // Initialize effect (pass-through for pure fire colors)
-  currentEffect = new(std::nothrow) NoOpEffect();
-  if (!currentEffect) {
-    haltWithError(F("ERROR: Effect allocation failed"));
-  }
-  currentEffect->begin(config.matrix.width, config.matrix.height);
-
-  // Initialize renderer (leds must be valid at this point)
-  if (!leds) {
-    haltWithError(F("ERROR: LED strip not initialized before renderer"));
-  }
-  renderer = new(std::nothrow) EffectRenderer(*leds, ledMapper);
-  if (!renderer) {
-    haltWithError(F("ERROR: Renderer allocation failed"));
-  }
-
-  SerialConsole::logDebug(F("Architecture initialized"));
+  SerialConsole::logDebug(F("RenderPipeline initialized"));
 
   // Initialize HAL-enabled components (must be done in setup(), not at global scope)
   audioController = new(std::nothrow) AudioController(DefaultHal::pdm(), DefaultHal::time());
@@ -319,8 +274,8 @@ void setup() {
   // Note: Rhythm tracking is now handled internally by AudioController
 
   // Initialize serial console for interactive settings management
-  // Uses fireGen for direct Fire generator parameter access
-  console = new(std::nothrow) SerialConsole(fireGen, &audioController->getMicForTuning());
+  // Uses RenderPipeline for generator/effect switching
+  console = new(std::nothrow) SerialConsole(pipeline, &audioController->getMicForTuning());
   if (!console) {
     haltWithError(F("ERROR: SerialConsole allocation failed"));
   }

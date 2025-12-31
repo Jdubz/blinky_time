@@ -48,6 +48,7 @@ const mockUseSerial: UseSerialReturn = {
   loadSettings: vi.fn(),
   resetDefaults: vi.fn(),
   refreshSettings: vi.fn(),
+  loadSettingsByCategory: vi.fn(),
   requestBatteryStatus: vi.fn(),
   applyPreset: vi.fn(),
   setGenerator: vi.fn(),
