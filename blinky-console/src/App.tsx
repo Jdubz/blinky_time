@@ -16,6 +16,7 @@ function App() {
   const {
     connectionState,
     isSupported,
+    errorMessage,
     deviceInfo,
     settingsByCategory,
     currentGenerator,
@@ -73,6 +74,7 @@ function App() {
         batteryData={batteryData}
         batteryStatusData={batteryStatusData}
         isSupported={isSupported}
+        errorMessage={errorMessage}
         onConnect={connect}
         onDisconnect={disconnect}
         onOpenConsole={() => setIsConsoleOpen(true)}

@@ -7,6 +7,8 @@ import type { UseSerialReturn } from '../hooks/useSerial';
 const mockUseSerial: UseSerialReturn = {
   connectionState: 'disconnected',
   isSupported: true,
+  errorMessage: null,
+  errorCode: null,
   deviceInfo: null,
   settings: [],
   settingsByCategory: {},

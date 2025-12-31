@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { serialService, SerialEvent, BatteryStatusData } from '../services/serial';
+import {
+  serialService,
+  SerialEvent,
+  BatteryStatusData,
+  SerialError,
+  SerialErrorCode,
+} from '../services/serial';
 import {
   DeviceInfo,
   DeviceSetting,
@@ -20,6 +26,8 @@ export interface UseSerialReturn {
   // Connection state
   connectionState: ConnectionState;
   isSupported: boolean;
+  errorMessage: string | null;
+  errorCode: SerialErrorCode | null;
 
   // Device data
   deviceInfo: DeviceInfo | null;
@@ -118,6 +126,8 @@ const AVAILABLE_EFFECTS: EffectType[] = ['none', 'hue'];
 
 export function useSerial(): UseSerialReturn {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<SerialErrorCode | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [settings, setSettings] = useState<DeviceSetting[]>([]);
   const [presets, setPresets] = useState<string[]>([]);
@@ -203,6 +213,8 @@ export function useSerial(): UseSerialReturn {
       switch (event.type) {
         case 'connected':
           setConnectionState('connected');
+          setErrorMessage(null);
+          setErrorCode(null);
           setConsoleLines([]);
           break;
         case 'disconnected':
@@ -273,6 +285,13 @@ export function useSerial(): UseSerialReturn {
           break;
         case 'error':
           setConnectionState('error');
+          if (event.error) {
+            const message = event.error.message || 'Unknown error';
+            const code = event.error instanceof SerialError ? event.error.code : null;
+            setErrorMessage(message);
+            setErrorCode(code);
+            console.error('[Serial Error]', code || 'UNKNOWN', '-', message);
+          }
           break;
       }
     };
@@ -462,6 +481,8 @@ export function useSerial(): UseSerialReturn {
   return {
     connectionState,
     isSupported,
+    errorMessage,
+    errorCode,
     deviceInfo,
     settings,
     settingsByCategory,
