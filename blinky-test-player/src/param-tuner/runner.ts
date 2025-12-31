@@ -228,6 +228,28 @@ export class TestRunner extends EventEmitter {
   }
 
   /**
+   * Save current settings to device flash memory
+   */
+  async saveToFlash(): Promise<void> {
+    await this.sendCommand('save');
+    // Give the device time to complete the flash write
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  /**
+   * Get current parameter value from device
+   */
+  async getParameter(name: string): Promise<number> {
+    const response = await this.sendCommand(`show ${name}`);
+    // Parse response like "hitthresh: 2.0"
+    const match = response.match(/:\s*([\d.]+)/);
+    if (match) {
+      return parseFloat(match[1]);
+    }
+    throw new Error(`Failed to parse parameter value: ${response}`);
+  }
+
+  /**
    * Run a single test pattern and return results
    */
   async runPattern(patternId: string): Promise<TestResult> {

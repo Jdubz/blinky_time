@@ -18,18 +18,65 @@ export const MODE_IDS: Record<DetectionMode, number> = {
   hfc: 2,
   spectral: 3,
   hybrid: 4,
-  music: -1,  // Not a detection mode - used for BPM tracking params
 };
 
-// Parameter definitions with ranges
+// Import pattern types for extensibility
+import type { PatternCategory, OptimizationMetric } from '../types.js';
+
+/**
+ * Parameter definition with extensibility fields
+ *
+ * EXTENSIBILITY: Adding a new parameter requires only:
+ * 1. Add entry to PARAMETERS with targetPatterns
+ * 2. System auto-selects relevant patterns for sweeps
+ */
 export interface ParameterDef {
   name: string;
   mode: ParameterMode;
   min: number;
   max: number;
   default: number;
+
+  /** Step size for auto-generating sweep values (optional) */
+  step?: number;
+
+  /** Manual sweep values (takes precedence over step-generated) */
   sweepValues: number[];
+
   description: string;
+
+  // EXTENSIBILITY FIELDS
+
+  /** Pattern categories relevant for testing this parameter */
+  targetPatternCategories?: PatternCategory[];
+
+  /** Specific pattern IDs that test this parameter */
+  targetPatterns?: string[];
+
+  /** Primary metric to optimize for this parameter */
+  optimizeFor?: OptimizationMetric;
+}
+
+/**
+ * Generate sweep values from min/max/step if sweepValues not provided
+ * Uses index-based loop to avoid floating-point precision issues
+ */
+export function generateSweepValues(param: ParameterDef): number[] {
+  if (param.sweepValues.length > 0) {
+    return param.sweepValues;
+  }
+
+  const step = param.step ?? (param.max - param.min) / 10;
+  const values: number[] = [];
+
+  // Use index-based loop to avoid floating-point accumulation errors
+  for (let i = 0; ; i++) {
+    const v = param.min + i * step;
+    if (v > param.max + 1e-9) break;  // Small epsilon for floating-point comparison
+    values.push(Math.round(v * 1000) / 1000);
+  }
+
+  return values;
 }
 
 export const PARAMETERS: Record<string, ParameterDef> = {
@@ -42,6 +89,10 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     default: 1.688,  // Fast-tune optimal (was 2.0)
     sweepValues: [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.5, 1.688, 2.0, 2.5, 3.0, 4.0, 5.0],
     description: 'Main detection threshold',
+    // Extensibility: patterns that test this parameter
+    targetPatternCategories: ['transient', 'parameter-targeted'],
+    targetPatterns: ['strong-beats', 'soft-beats', 'threshold-gradient'],
+    optimizeFor: 'f1',
   },
   attackmult: {
     name: 'attackmult',
@@ -51,6 +102,9 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     default: 1.1,  // Fast-tune optimal (was 1.3)
     sweepValues: [0.9, 0.95, 1.0, 1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0],
     description: 'Attack sensitivity multiplier',
+    targetPatternCategories: ['transient', 'parameter-targeted'],
+    targetPatterns: ['strong-beats', 'attack-sharp', 'attack-gradual'],
+    optimizeFor: 'f1',
   },
   avgtau: {
     name: 'avgtau',
@@ -69,6 +123,9 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     default: 40,  // Fast-tune optimal (was 80)
     sweepValues: [20, 40, 60, 80, 100, 150, 200, 300, 500],
     description: 'Minimum ms between detections',
+    targetPatternCategories: ['transient', 'parameter-targeted'],
+    targetPatterns: ['fast-tempo', 'simultaneous', 'cooldown-stress-20ms', 'cooldown-stress-40ms'],
+    optimizeFor: 'f1',
   },
 
   // Spectral Flux parameters
@@ -80,6 +137,9 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     default: 1.4,  // Fast-tune optimal (was 2.8)
     sweepValues: [0.5, 0.8, 1.0, 1.2, 1.4, 1.5, 2.0, 2.5, 2.8, 3.0, 4.0, 5.0, 7.0, 10.0],
     description: 'Spectral flux threshold',
+    targetPatternCategories: ['transient', 'rejection'],
+    targetPatterns: ['strong-beats', 'pad-rejection', 'chord-rejection', 'threshold-gradient'],
+    optimizeFor: 'f1',
   },
   fluxbins: {
     name: 'fluxbins',
@@ -180,6 +240,9 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     default: 0.6,
     sweepValues: [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
     description: 'Music mode activation threshold',
+    targetPatternCategories: ['music-mode'],
+    targetPatterns: ['steady-120bpm', 'non-musical-random', 'silence-gaps'],
+    optimizeFor: 'bpm_accuracy',
   },
   musicbeats: {
     name: 'musicbeats',
@@ -422,6 +485,26 @@ export const ALL_PATTERNS = [
   'simultaneous',
   'fast-tempo',
   'sparse',
+  // Parameter-targeted patterns
+  'cooldown-stress-20ms',
+  'cooldown-stress-40ms',
+  'cooldown-stress-80ms',
+  'threshold-gradient',
+  'attack-sharp',
+  'attack-gradual',
+  'freq-low-only',
+  'freq-high-only',
+  // Music mode patterns
+  'steady-120bpm',
+  'steady-80bpm',
+  'steady-160bpm',
+  'tempo-ramp',
+  'tempo-sudden',
+  'phase-on-beat',
+  'phase-off-beat',
+  'non-musical-random',
+  'non-musical-clustered',
+  'silence-gaps',
 ] as const;
 
 export type PatternId = (typeof ALL_PATTERNS)[number];

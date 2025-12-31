@@ -21,9 +21,17 @@ export async function runValidation(
   await runner.connect();
 
   try {
-    const patterns = ALL_PATTERNS as unknown as string[];
+    // Use specified patterns or default to all
+    const patterns = (options.patterns && options.patterns.length > 0)
+      ? options.patterns
+      : (ALL_PATTERNS as unknown as string[]);
 
-    for (const mode of DETECTION_MODES) {
+    // Use specified modes or default to all detection modes
+    const modesToValidate = (options.modes && options.modes.length > 0)
+      ? options.modes.filter((m): m is DetectionMode => DETECTION_MODES.includes(m as DetectionMode))
+      : DETECTION_MODES;
+
+    for (const mode of modesToValidate) {
       if (stateManager.isValidationComplete(mode)) {
         const existing = stateManager.getValidationResult(mode);
         if (existing) {
