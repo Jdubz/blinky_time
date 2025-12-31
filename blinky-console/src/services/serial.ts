@@ -6,6 +6,8 @@ import {
   TransientMessage,
   RhythmMessage,
   StatusMessage,
+  GeneratorType,
+  EffectType,
 } from '../types';
 
 // WebSerial type declarations
@@ -323,6 +325,16 @@ class SerialService {
   async getPresets(): Promise<string[] | null> {
     const response = await this.sendAndReceiveJson<{ presets: string[] }>('json presets');
     return response?.presets || null;
+  }
+
+  // Set active generator
+  async setGenerator(name: GeneratorType): Promise<void> {
+    await this.send(`gen ${name}`);
+  }
+
+  // Set active effect
+  async setEffect(name: EffectType): Promise<void> {
+    await this.send(`effect ${name}`);
   }
 
   // Start reading from serial port

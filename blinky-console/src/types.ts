@@ -123,3 +123,20 @@ export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'err
 export interface SettingsByCategory {
   [category: string]: DeviceSetting[];
 }
+
+// Generator types supported by RenderPipeline
+export type GeneratorType = 'fire' | 'water' | 'lightning';
+
+// Effect types supported by RenderPipeline
+export type EffectType = 'none' | 'hue';
+
+// Generator/effect state
+export interface GeneratorState {
+  current: GeneratorType;
+  available: GeneratorType[];
+}
+
+export interface EffectState {
+  current: EffectType;
+  available: EffectType[];
+}
