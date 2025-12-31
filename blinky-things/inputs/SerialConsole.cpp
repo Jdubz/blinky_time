@@ -334,6 +334,7 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
     if (strcmp(cmd, "json presets") == 0) {
         Serial.print(F("{\"presets\":["));
         for (uint8_t i = 0; i < PresetManager::getPresetCount(); i++) {
+            // cppcheck-suppress knownConditionTrueFalse ; future-proof for multiple presets
             if (i > 0) Serial.print(',');
             Serial.print('"');
             Serial.print(PresetManager::getPresetName(static_cast<PresetId>(i)));

@@ -1,6 +1,7 @@
 #include "Presets.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../audio/AudioController.h"
+#include "../inputs/SerialConsole.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -49,7 +50,7 @@ const PresetParams PresetManager::PRESETS[] = {
 
 bool PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, AudioController* audioCtrl) {
     if (id >= PresetId::NUM_PRESETS) {
-        Serial.println(F("Invalid preset ID"));
+        SerialConsole::logWarn(F("Invalid preset ID"));
         return false;
     }
 
@@ -79,8 +80,10 @@ bool PresetManager::applyPreset(PresetId id, AdaptiveMic& mic, AudioController* 
         audioCtrl->activationThreshold = p.musicthresh;
     }
 
-    Serial.print(F("Applied preset: "));
-    Serial.println(getPresetName(id));
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
+        Serial.print(F("[INFO] Applied preset: "));
+        Serial.println(getPresetName(id));
+    }
     return true;
 }
 

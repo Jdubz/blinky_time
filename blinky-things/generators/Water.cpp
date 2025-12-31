@@ -1,6 +1,7 @@
 #include "Water.h"
 #include "../types/ColorPalette.h"
 #include <Arduino.h>
+#include "../inputs/SerialConsole.h"
 
 // Animation and behavior constants
 namespace WaterConstants {
@@ -40,7 +41,7 @@ bool Water::begin(const DeviceConfig& config) {
     if (depth_) delete[] depth_;
     depth_ = new uint8_t[numLeds_];
     if (!depth_) {
-        Serial.println(F("ERROR: Failed to allocate depth buffer"));
+        SerialConsole::logError(F("Failed to allocate depth buffer"));
         return false;
     }
     memset(depth_, 0, numLeds_);
@@ -49,7 +50,7 @@ bool Water::begin(const DeviceConfig& config) {
     if (tempDepth_) delete[] tempDepth_;
     tempDepth_ = new uint8_t[numLeds_];
     if (!tempDepth_) {
-        Serial.println(F("ERROR: Failed to allocate temp depth buffer"));
+        SerialConsole::logError(F("Failed to allocate temp depth buffer"));
         delete[] depth_;
         depth_ = nullptr;
         return false;

@@ -142,37 +142,35 @@ void setup() {
   Serial.begin(config.serial.baudRate);
   while (!Serial && millis() < config.serial.initTimeoutMs) {}
 
-  // Log boot count (from SafeMode crash detection)
-  Serial.print(F("[BOOT] Count: "));
-  Serial.print(SafeMode::getCrashCount());
-  Serial.print(F("/"));
-  Serial.println(SafeMode::CRASH_THRESHOLD);
-
-  // Display version and device information
+  // Display version and device information (always show on boot)
   Serial.println(F("=== BLINKY TIME STARTUP ==="));
   Serial.println(F(BLINKY_FULL_VERSION));
-  Serial.print(F("Build: ")); Serial.print(F(BLINKY_BUILD_DATE));
-  Serial.print(F(" ")); Serial.println(F(BLINKY_BUILD_TIME));
-  Serial.println();
-
-  // Display active device configuration
-  Serial.print(F("Starting device: "));
+  Serial.print(F("Device: "));
   Serial.println(config.deviceName);
-  Serial.print(F("Device Type: "));
+
+  // Debug: detailed boot info
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+    Serial.print(F("[DEBUG] Boot count: "));
+    Serial.print(SafeMode::getCrashCount());
+    Serial.print(F("/"));
+    Serial.println(SafeMode::CRASH_THRESHOLD);
+    Serial.print(F("[DEBUG] Build: ")); Serial.print(F(BLINKY_BUILD_DATE));
+    Serial.print(F(" ")); Serial.println(F(BLINKY_BUILD_TIME));
 #if DEVICE_TYPE == 1
-  Serial.println(F("Hat (Type 1)"));
+    Serial.println(F("[DEBUG] Device Type: Hat (Type 1)"));
 #elif DEVICE_TYPE == 2
-  Serial.println(F("Tube Light (Type 2)"));
+    Serial.println(F("[DEBUG] Device Type: Tube Light (Type 2)"));
 #elif DEVICE_TYPE == 3
-  Serial.println(F("Bucket Totem (Type 3)"));
+    Serial.println(F("[DEBUG] Device Type: Bucket Totem (Type 3)"));
 #endif
+  }
 
   // Validate critical configuration parameters
   if (config.matrix.width <= 0 || config.matrix.height <= 0) {
     haltWithError(F("ERROR: Invalid matrix dimensions"));
   }
   if (config.matrix.brightness > 255) {
-    Serial.println(F("WARNING: Brightness clamped to 255"));
+    SerialConsole::logWarn(F("Brightness clamped to 255"));
   }
 
   // Initialize LED strip (must be done in setup, not global scope)
@@ -193,8 +191,10 @@ void setup() {
   leds->show();
 
   // Basic LED test - light up first few LEDs to verify hardware
-  Serial.print(F("LED Test: Lighting first 3 LEDs at brightness "));
-  Serial.println(config.matrix.brightness);
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+    Serial.print(F("[DEBUG] LED Test at brightness "));
+    Serial.println(config.matrix.brightness);
+  }
   leds->setPixelColor(0, leds->Color(255, 0, 0));  // Should show RED
   leds->setPixelColor(1, leds->Color(0, 255, 0));  // Should show GREEN
   leds->setPixelColor(2, leds->Color(0, 0, 255));  // Should show BLUE
@@ -211,16 +211,18 @@ void setup() {
     haltWithError(F("ERROR: LED mapper initialization failed"));
   }
 
-  // Initialize new Generator-Effect-Renderer architecture
-  Serial.print(F("Config fire type: "));
-  Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
-  Serial.print(F("Matrix dimensions: "));
-  Serial.print(config.matrix.width);
-  Serial.print(F(" x "));
-  Serial.print(config.matrix.height);
-  Serial.print(F(" = "));
-  Serial.print(config.matrix.width * config.matrix.height);
-  Serial.println(F(" LEDs"));
+  // Debug: detailed config info
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+    Serial.print(F("[DEBUG] Fire type: "));
+    Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
+    Serial.print(F("[DEBUG] Matrix: "));
+    Serial.print(config.matrix.width);
+    Serial.print(F("x"));
+    Serial.print(config.matrix.height);
+    Serial.print(F(" = "));
+    Serial.print(config.matrix.width * config.matrix.height);
+    Serial.println(F(" LEDs"));
+  }
 
   // Create PixelMatrix for the visual pipeline
   pixelMatrix = new(std::nothrow) PixelMatrix(config.matrix.width, config.matrix.height);
@@ -228,21 +230,15 @@ void setup() {
     haltWithError(F("ERROR: PixelMatrix allocation failed"));
   }
 
-  // Initialize appropriate generator based on layout type
-  Serial.print(F("Initializing fire generator for layout type: "));
-  switch (config.matrix.layoutType) {
-    case MATRIX_LAYOUT:
-      Serial.println(F("MATRIX"));
-      break;
-    case LINEAR_LAYOUT:
-      Serial.println(F("LINEAR"));
-      break;
-    case RANDOM_LAYOUT:
-      Serial.println(F("RANDOM"));
-      break;
-    default:
-      Serial.println(F("UNKNOWN"));
-      break;
+  // Debug: layout type info
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+    Serial.print(F("[DEBUG] Layout type: "));
+    switch (config.matrix.layoutType) {
+      case MATRIX_LAYOUT:  Serial.println(F("MATRIX")); break;
+      case LINEAR_LAYOUT:  Serial.println(F("LINEAR")); break;
+      case RANDOM_LAYOUT:  Serial.println(F("RANDOM")); break;
+      default:             Serial.println(F("UNKNOWN")); break;
+    }
   }
 
   // Create fire generator instance
@@ -285,7 +281,7 @@ void setup() {
     haltWithError(F("ERROR: Renderer allocation failed"));
   }
 
-  Serial.println(F("New architecture initialized successfully"));
+  SerialConsole::logDebug(F("Architecture initialized"));
 
   // Initialize HAL-enabled components (must be done in setup(), not at global scope)
   audioController = new(std::nothrow) AudioController(DefaultHal::pdm(), DefaultHal::time());
@@ -297,9 +293,9 @@ void setup() {
   // Initialize audio controller (owns microphone internally)
   bool audioOk = audioController->begin(config.microphone.sampleRate);
   if (!audioOk) {
-    Serial.println(F("ERROR: Audio controller failed to start"));
+    SerialConsole::logError(F("Audio controller failed to start"));
   } else {
-    Serial.println(F("Audio controller initialized"));
+    SerialConsole::logDebug(F("Audio controller initialized"));
   }
 
   // Initialize configuration storage and load saved settings
@@ -307,17 +303,17 @@ void setup() {
   if (configStorage.isValid()) {
     configStorage.loadConfiguration(fireParams, audioController->getMicForTuning(), audioController);
     updateFireParams();
-    Serial.println(F("Loaded saved configuration from flash"));
+    SerialConsole::logDebug(F("Loaded config from flash"));
   } else {
-    Serial.println(F("Using default configuration"));
+    SerialConsole::logDebug(F("Using default config"));
   }
 
   // Initialize battery monitor
   if (!battery->begin()) {
-    Serial.println(F("WARNING: Battery monitor failed to start"));
+    SerialConsole::logWarn(F("Battery monitor failed to start"));
   } else {
     battery->setFastCharge(config.charging.fastChargeEnabled);
-    Serial.println(F("Battery monitor initialized"));
+    SerialConsole::logDebug(F("Battery monitor initialized"));
   }
 
   // Note: Rhythm tracking is now handled internally by AudioController
@@ -332,12 +328,12 @@ void setup() {
   console->setBatteryMonitor(battery);
   console->setAudioController(audioController);
   console->begin();
-  Serial.println(F("Serial console initialized"));
+  SerialConsole::logDebug(F("Serial console initialized"));
 
   // FIX: Reset frame timing to prevent stale state from previous boot
   lastMs = 0;
 
-  Serial.println(F("Setup complete!"));
+  Serial.println(F("Ready."));
 
   // Mark boot as stable - we made it through setup without crashing
   // This resets the crash counter so future boots start fresh
@@ -350,9 +346,11 @@ void loop() {
 
   // FIX: Add diagnostics when frame time exceeds maximum (indicates performance issues)
   if (dt > Constants::MAX_FRAME_TIME) {
-    Serial.print(F("WARNING: Frame time exceeded: "));
-    Serial.print((now - lastMs));
-    Serial.println(F("ms - loop() running too slowly!"));
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+      Serial.print(F("[WARN] Frame time: "));
+      Serial.print((now - lastMs));
+      Serial.println(F("ms"));
+    }
   }
 
   dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
@@ -381,9 +379,9 @@ void loop() {
   bool currentChargingState = battery ? battery->isCharging() : false;
   if (currentChargingState != prevChargingState) {
     if (currentChargingState) {
-      Serial.println(F("Charging started"));
+      SerialConsole::logInfo(F("Charging started"));
     } else {
-      Serial.println(F("Charging stopped"));
+      SerialConsole::logInfo(F("Charging stopped"));
     }
     prevChargingState = currentChargingState;
   }
@@ -405,13 +403,17 @@ void loop() {
     lastBatteryCheck = millis();
     float voltage = battery->getVoltage();
     if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
-      Serial.print(F("CRITICAL BATTERY: "));
-      Serial.print(voltage);
-      Serial.println(F("V"));
+      if (SerialConsole::getGlobalLogLevel() >= LogLevel::ERROR) {
+        Serial.print(F("[ERROR] CRITICAL BATTERY: "));
+        Serial.print(voltage);
+        Serial.println(F("V"));
+      }
     } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
-      Serial.print(F("Low battery: "));
-      Serial.print(voltage);
-      Serial.println(F("V"));
+      if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+        Serial.print(F("[WARN] Low battery: "));
+        Serial.print(voltage);
+        Serial.println(F("V"));
+      }
     }
   }
 }

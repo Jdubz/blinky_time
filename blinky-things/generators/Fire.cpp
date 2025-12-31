@@ -1,5 +1,6 @@
 #include "Fire.h"
 #include <Arduino.h>
+#include "../inputs/SerialConsole.h"
 
 // ============================================================================
 // Named Constants (extracted from magic numbers per PR review feedback)
@@ -245,7 +246,7 @@ bool Fire::begin(const DeviceConfig& config) {
     if (heat_) delete[] heat_;
     heat_ = new uint8_t[this->numLeds_];
     if (!heat_) {
-        Serial.println(F("ERROR: Failed to allocate heat buffer"));
+        SerialConsole::logError(F("Failed to allocate heat buffer"));
         return false;
     }
     memset(heat_, 0, this->numLeds_);
@@ -254,7 +255,7 @@ bool Fire::begin(const DeviceConfig& config) {
     if (sparkPositions_) delete[] sparkPositions_;
     sparkPositions_ = new uint8_t[params_.maxSparkPositions];
     if (!sparkPositions_) {
-        Serial.println(F("ERROR: Failed to allocate spark positions"));
+        SerialConsole::logError(F("Failed to allocate spark positions"));
         delete[] heat_;
         heat_ = nullptr;
         return false;
@@ -266,7 +267,7 @@ bool Fire::begin(const DeviceConfig& config) {
     if (tempHeat_) delete[] tempHeat_;
     tempHeat_ = new uint8_t[this->numLeds_];
     if (!tempHeat_) {
-        Serial.println(F("ERROR: Failed to allocate temp heat buffer"));
+        SerialConsole::logError(F("Failed to allocate temp buffer"));
         delete[] heat_;
         delete[] sparkPositions_;
         heat_ = nullptr;

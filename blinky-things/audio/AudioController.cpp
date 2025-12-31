@@ -1,4 +1,5 @@
 #include "AudioController.h"
+#include "../inputs/SerialConsole.h"
 #include <math.h>
 
 // ============================================================================
@@ -185,9 +186,11 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         if (ossBuffer_[idx] > maxOss) maxOss = ossBuffer_[idx];
     }
 
-    // DEBUG: Print autocorrelation diagnostics
+    // DEBUG: Print autocorrelation diagnostics (only when debug enabled)
     static uint32_t lastDebugMs = 0;
-    if (nowMs - lastDebugMs > 2000) {
+    bool shouldPrintDebug = (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) &&
+                            (nowMs - lastDebugMs > 2000);
+    if (shouldPrintDebug) {
         lastDebugMs = nowMs;
         Serial.print(F("{\"type\":\"RHYTHM_DEBUG\",\"ossCount\":"));
         Serial.print(ossCount_);
@@ -236,8 +239,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
-    // DEBUG: Print correlation results (continues from earlier debug block)
-    if (nowMs - lastDebugMs < 100) {  // Only if we just printed debug above
+    // DEBUG: Print correlation results (only when debug enabled)
+    if (shouldPrintDebug) {
         float detectedBpm = (bestLag > 0) ? 60.0f / (static_cast<float>(bestLag) / 60.0f) : 0.0f;
         Serial.print(F("{\"type\":\"RHYTHM_DEBUG2\",\"bestLag\":"));
         Serial.print(bestLag);
