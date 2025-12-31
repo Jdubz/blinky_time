@@ -1,6 +1,25 @@
 import '@testing-library/jest-dom';
 import { vi } from 'vitest';
 
+// Mock react-hot-toast
+vi.mock('react-hot-toast', () => ({
+  default: {
+    success: vi.fn(),
+    error: vi.fn(),
+    loading: vi.fn(),
+    dismiss: vi.fn(),
+    promise: vi.fn((promise: Promise<unknown>) => promise),
+  },
+  Toaster: () => null,
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    loading: vi.fn(),
+    dismiss: vi.fn(),
+    promise: vi.fn((promise: Promise<unknown>) => promise),
+  },
+}));
+
 // Mock scrollIntoView (not supported in jsdom)
 Element.prototype.scrollIntoView = vi.fn();
 

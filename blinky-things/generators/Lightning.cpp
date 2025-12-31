@@ -1,6 +1,7 @@
 #include "Lightning.h"
 #include "../types/ColorPalette.h"
 #include <Arduino.h>
+#include "../inputs/SerialConsole.h"
 
 // Animation and behavior constants
 namespace LightningConstants {
@@ -58,7 +59,7 @@ bool Lightning::begin(const DeviceConfig& config) {
     if (intensity_) delete[] intensity_;
     intensity_ = new uint8_t[numLeds_];
     if (!intensity_) {
-        Serial.println(F("ERROR: Failed to allocate intensity buffer"));
+        SerialConsole::logError(F("Failed to allocate intensity buffer"));
         return false;
     }
     memset(intensity_, 0, numLeds_);
@@ -67,7 +68,7 @@ bool Lightning::begin(const DeviceConfig& config) {
     if (tempIntensity_) delete[] tempIntensity_;
     tempIntensity_ = new uint8_t[numLeds_];
     if (!tempIntensity_) {
-        Serial.println(F("ERROR: Failed to allocate temp intensity buffer"));
+        SerialConsole::logError(F("Failed to allocate temp buffer"));
         delete[] intensity_;
         intensity_ = nullptr;
         return false;

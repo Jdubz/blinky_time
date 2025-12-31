@@ -1,6 +1,7 @@
 #include "ConfigStorage.h"
 #include "../tests/SafetyTest.h"
 #include "../audio/AudioController.h"
+#include "../inputs/SerialConsole.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -30,26 +31,24 @@ void ConfigStorage::begin() {
         flashOk = true;
         // Use last 4KB of flash
         flashAddr = flash.get_flash_start() + flash.get_flash_size() - 4096;
-        Serial.print(F("[CONFIG] Flash at 0x")); Serial.println(flashAddr, HEX);
 
-        // Runtime struct size validation (helps catch padding issues)
-        Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
-        Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
-        Serial.println(F(" bytes)"));
+        if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+            Serial.print(F("[DEBUG] Flash at 0x")); Serial.println(flashAddr, HEX);
+            Serial.print(F("[DEBUG] ConfigData: ")); Serial.print(sizeof(ConfigData));
+            Serial.print(F("B (MicParams: ")); Serial.print(sizeof(StoredMicParams));
+            Serial.println(F("B)"));
+        }
 
         // CRITICAL: Validate flash address before ANY operations
         // This prevents bootloader corruption
         if (!SafetyTest::isFlashAddressSafe(flashAddr, 4096)) {
-            Serial.println(F("[CONFIG] !!! UNSAFE FLASH ADDRESS DETECTED !!!"));
-            Serial.print(F("[CONFIG] Address 0x")); Serial.print(flashAddr, HEX);
-            Serial.println(F(" is in protected region"));
-            Serial.println(F("[CONFIG] Flash operations DISABLED for safety"));
+            SerialConsole::logError(F("UNSAFE FLASH ADDRESS - operations disabled"));
             flashOk = false;  // Disable all flash operations
         } else {
-            Serial.println(F("[CONFIG] Flash address validated OK"));
+            SerialConsole::logDebug(F("Flash address validated"));
 
             if (loadFromFlash()) {
-                Serial.println(F("[CONFIG] Loaded from flash"));
+                SerialConsole::logDebug(F("Config loaded from flash"));
                 valid_ = true;
                 return;
             }
@@ -65,18 +64,19 @@ void ConfigStorage::begin() {
     }
     flashOk = true;
 
-    // Runtime struct size validation
-    Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
-    Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
-    Serial.println(F(" bytes)"));
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+        Serial.print(F("[DEBUG] ConfigData: ")); Serial.print(sizeof(ConfigData));
+        Serial.print(F("B (MicParams: ")); Serial.print(sizeof(StoredMicParams));
+        Serial.println(F("B)"));
+    }
 
     if (loadFromFlash()) {
-        Serial.println(F("[CONFIG] Loaded from flash"));
+        SerialConsole::logDebug(F("Config loaded from flash"));
         valid_ = true;
         return;
     }
 #endif
-    Serial.println(F("[CONFIG] Using defaults"));
+    SerialConsole::logDebug(F("Using default config"));
     loadDefaults();
     valid_ = true;
 }
@@ -111,7 +111,7 @@ void ConfigStorage::loadDefaults() {
     data_.mic.transientThreshold = 2.813f;  // Hybrid-optimal (drummer: 1.688, hybrid: 2.813)
     data_.mic.attackMultiplier = 1.1f;      // 10% sudden rise required (tuned from 1.2, was 1.3)
     data_.mic.averageTau = 0.8f;            // Recent average tracking time
-    data_.mic.cooldownMs = 40;              // 40ms cooldown between hits (tuned from 30, was 80)
+    data_.mic.cooldownMs = 80;              // 80ms cooldown between hits (tuned 2025-12-30, was 40)
 
     // Detection mode (v20+): multi-algorithm support
     data_.mic.detectionMode = 4;          // 4 = Hybrid (best F1: 0.705)
@@ -129,9 +129,9 @@ void ConfigStorage::loadDefaults() {
     data_.mic.fluxThresh = 1.4f;          // Binary search optimal (tuned from 2.0, was 2.8, was 2.641, originally 3.0)
     data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
 
-    // Hybrid mode defaults (mode 4) - tuned via fast-tune 2025-12-28 (F1: 0.669)
-    data_.mic.hybridFluxWeight = 0.7f;    // Weight when only flux detects (tuned from 0.3)
-    data_.mic.hybridDrumWeight = 0.3f;    // Weight when only drummer detects
+    // Hybrid mode defaults (mode 4) - tuned via fast-tune 2025-12-30 (F1: 0.598, equal weights best)
+    data_.mic.hybridFluxWeight = 0.5f;    // Weight when only flux detects (tuned from 0.7)
+    data_.mic.hybridDrumWeight = 0.5f;    // Weight when only drummer detects (tuned from 0.3)
     data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
 
     // AudioController rhythm tracking defaults
@@ -183,7 +183,7 @@ bool ConfigStorage::loadFromFlash() {
 void ConfigStorage::saveToFlash() {
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     if (!flashOk) {
-        Serial.println(F("[CONFIG] Flash not available"));
+        SerialConsole::logWarn(F("Flash not available"));
         return;
     }
 
@@ -196,19 +196,19 @@ void ConfigStorage::saveToFlash() {
     data_.version = CONFIG_VERSION;
 
     if (flash.erase(flashAddr, sectorSize) != 0) {
-        Serial.println(F("[CONFIG] Erase failed"));
+        SerialConsole::logError(F("Flash erase failed"));
         return;
     }
 
     if (flash.program(&data_, flashAddr, sizeof(ConfigData)) != 0) {
-        Serial.println(F("[CONFIG] Write failed"));
+        SerialConsole::logError(F("Flash write failed"));
         return;
     }
 
-    Serial.println(F("[CONFIG] Saved to flash"));
+    SerialConsole::logDebug(F("Config saved to flash"));
 #elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
     if (!flashOk || configFile == nullptr) {
-        Serial.println(F("[CONFIG] Flash not available"));
+        SerialConsole::logWarn(F("Flash not available"));
         return;
     }
 
@@ -223,7 +223,7 @@ void ConfigStorage::saveToFlash() {
     // Write config to file
     configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
     if (!(*configFile)) {
-        Serial.println(F("[CONFIG] Failed to open file for writing"));
+        SerialConsole::logError(F("Failed to open config file"));
         return;
     }
 
@@ -231,13 +231,13 @@ void ConfigStorage::saveToFlash() {
     configFile->close();
 
     if (bytesWritten != sizeof(ConfigData)) {
-        Serial.println(F("[CONFIG] Write failed"));
+        SerialConsole::logError(F("Config write failed"));
         return;
     }
 
-    Serial.println(F("[CONFIG] Saved to flash"));
+    SerialConsole::logDebug(F("Config saved to flash"));
 #else
-    Serial.println(F("[CONFIG] No flash on this platform"));
+    SerialConsole::logWarn(F("No flash on this platform"));
 #endif
 }
 
@@ -247,20 +247,24 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
 
     auto validateFloat = [&](float value, float min, float max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
-            Serial.print(F("[CONFIG] BAD "));
-            Serial.print(name);
-            Serial.print(F(": "));
-            Serial.println(value);
+            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+                Serial.print(F("[WARN] Bad config "));
+                Serial.print(name);
+                Serial.print(F(": "));
+                Serial.println(value);
+            }
             corrupt = true;
         }
     };
 
     auto validateUint32 = [&](uint32_t value, uint32_t min, uint32_t max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
-            Serial.print(F("[CONFIG] BAD "));
-            Serial.print(name);
-            Serial.print(F(": "));
-            Serial.println(value);
+            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+                Serial.print(F("[WARN] Bad config "));
+                Serial.print(name);
+                Serial.print(F(": "));
+                Serial.println(value);
+            }
             corrupt = true;
         }
     };
@@ -311,21 +315,23 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
-        Serial.println(F("[CONFIG] Invalid BPM range (bpmMin >= bpmMax), using defaults"));
+        SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
         data_.music.bpmMin = 60.0f;
         data_.music.bpmMax = 200.0f;
         corrupt = true;
     }
 
     if (corrupt) {
-        Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
+        SerialConsole::logWarn(F("Corrupt config detected, using defaults"));
         loadDefaults();
     }
 
     // Debug: show loaded values
-    Serial.print(F("[CONFIG] heatDecay=")); Serial.print(data_.fire.heatDecay, 2);
-    Serial.print(F(" cooling=")); Serial.print(data_.fire.baseCooling);
-    Serial.print(F(" spread=")); Serial.println(data_.fire.spreadDistance);
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+        Serial.print(F("[DEBUG] heatDecay=")); Serial.print(data_.fire.heatDecay, 2);
+        Serial.print(F(" cooling=")); Serial.print(data_.fire.baseCooling);
+        Serial.print(F(" spread=")); Serial.println(data_.fire.spreadDistance);
+    }
 
     fireParams.baseCooling = data_.fire.baseCooling;
     fireParams.sparkHeatMin = data_.fire.sparkHeatMin;
@@ -453,7 +459,7 @@ void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic&
 }
 
 void ConfigStorage::factoryReset() {
-    Serial.println(F("[CONFIG] Factory reset"));
+    SerialConsole::logInfo(F("Factory reset"));
     loadDefaults();
     saveToFlash();
 }

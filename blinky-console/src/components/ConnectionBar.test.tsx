@@ -18,6 +18,7 @@ describe('ConnectionBar', () => {
     batteryData: null,
     batteryStatusData: null,
     isSupported: true,
+    errorMessage: null,
     onConnect: vi.fn(),
     onDisconnect: vi.fn(),
     onOpenConsole: vi.fn(),
@@ -56,9 +57,16 @@ describe('ConnectionBar', () => {
       expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument();
     });
 
-    it('shows "Error" status when error occurs', () => {
-      render(<ConnectionBar {...defaultProps} connectionState="error" />);
-      expect(screen.getByText('Error')).toBeInTheDocument();
+    it('shows "Connection Error" status when error occurs without message', () => {
+      render(<ConnectionBar {...defaultProps} connectionState="error" errorMessage={null} />);
+      expect(screen.getByText('Connection Error')).toBeInTheDocument();
+    });
+
+    it('shows error message when error occurs with message', () => {
+      render(
+        <ConnectionBar {...defaultProps} connectionState="error" errorMessage="Device not found" />
+      );
+      expect(screen.getByText('Error: Device not found')).toBeInTheDocument();
     });
   });
 

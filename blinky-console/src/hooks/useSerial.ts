@@ -1,5 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { serialService, SerialEvent, BatteryStatusData } from '../services/serial';
+import {
+  serialService,
+  SerialEvent,
+  BatteryStatusData,
+  SerialError,
+  SerialErrorCode,
+} from '../services/serial';
 import {
   DeviceInfo,
   DeviceSetting,
@@ -15,11 +21,29 @@ import {
   GeneratorType,
   EffectType,
 } from '../types';
+import { logger } from '../lib/logger';
+import { notify } from '../lib/toast';
+
+/**
+ * Loading states for various async operations
+ */
+export interface LoadingState {
+  connecting: boolean;
+  settings: boolean;
+  streaming: boolean;
+  preset: boolean;
+  generator: boolean;
+  effect: boolean;
+  saving: boolean;
+}
 
 export interface UseSerialReturn {
   // Connection state
   connectionState: ConnectionState;
   isSupported: boolean;
+  errorMessage: string | null;
+  errorCode: SerialErrorCode | null;
+  loading: LoadingState;
 
   // Device data
   deviceInfo: DeviceInfo | null;
@@ -116,8 +140,21 @@ function validateAudioSample(sample: AudioSample): boolean {
 const AVAILABLE_GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning'];
 const AVAILABLE_EFFECTS: EffectType[] = ['none', 'hue'];
 
+const initialLoadingState: LoadingState = {
+  connecting: false,
+  settings: false,
+  streaming: false,
+  preset: false,
+  generator: false,
+  effect: false,
+  saving: false,
+};
+
 export function useSerial(): UseSerialReturn {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<SerialErrorCode | null>(null);
+  const [loading, setLoading] = useState<LoadingState>(initialLoadingState);
   const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const [settings, setSettings] = useState<DeviceSetting[]>([]);
   const [presets, setPresets] = useState<string[]>([]);
@@ -132,6 +169,11 @@ export function useSerial(): UseSerialReturn {
   const [musicModeData, setMusicModeData] = useState<MusicModeData | null>(null);
   const [statusData, setStatusData] = useState<StatusMessage | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
+
+  // Helper to update loading state
+  const setLoadingState = useCallback((key: keyof LoadingState, value: boolean) => {
+    setLoading(prev => ({ ...prev, [key]: value }));
+  }, []);
 
   // Transient event callbacks (legacy name kept for compatibility)
   const percussionCallbacksRef = useRef<Set<(msg: TransientMessage) => void>>(new Set());
@@ -188,7 +230,7 @@ export function useSerial(): UseSerialReturn {
   // Group settings by category - memoized to prevent recalculation on every render
   const settingsByCategory = useMemo(
     () =>
-      settings.reduce((acc, setting) => {
+      (settings || []).reduce((acc, setting) => {
         const cat = setting.cat || 'other';
         if (!acc[cat]) acc[cat] = [];
         acc[cat].push(setting);
@@ -203,6 +245,8 @@ export function useSerial(): UseSerialReturn {
       switch (event.type) {
         case 'connected':
           setConnectionState('connected');
+          setErrorMessage(null);
+          setErrorCode(null);
           setConsoleLines([]);
           break;
         case 'disconnected':
@@ -273,6 +317,15 @@ export function useSerial(): UseSerialReturn {
           break;
         case 'error':
           setConnectionState('error');
+          setLoading(initialLoadingState); // Reset all loading states on error
+          if (event.error) {
+            const message = event.error.message || 'Unknown error';
+            const code = event.error instanceof SerialError ? event.error.code : null;
+            setErrorMessage(message);
+            setErrorCode(code);
+            logger.error('Serial error', { code, message });
+            notify.error(`Connection error: ${message}`);
+          }
           break;
       }
     };
@@ -283,36 +336,70 @@ export function useSerial(): UseSerialReturn {
 
   // Connect to device
   const connect = useCallback(async () => {
+    logger.info('Initiating device connection');
     setConnectionState('connecting');
-    const success = await serialService.connect();
+    setLoadingState('connecting', true);
 
-    if (success) {
-      // Fetch device info
-      const info = await serialService.getDeviceInfo();
-      if (info) {
-        setDeviceInfo(info);
-      }
+    try {
+      const success = await serialService.connect();
 
-      // Fetch settings
-      const settingsResponse = await serialService.getSettings();
-      if (settingsResponse) {
-        setSettings(settingsResponse.settings);
-      }
+      if (success) {
+        setLoadingState('connecting', false);
+        setLoadingState('settings', true);
 
-      // Fetch available presets
-      const presetList = await serialService.getPresets();
-      if (presetList) {
-        setPresets(presetList);
+        // Fetch device info
+        const info = await serialService.getDeviceInfo();
+        if (info) {
+          setDeviceInfo(info);
+          logger.debug('Device info loaded', { device: info.device });
+        } else {
+          logger.warn('Failed to fetch device info');
+        }
+
+        // Fetch settings
+        const settingsResponse = await serialService.getSettings();
+        if (settingsResponse?.settings) {
+          setSettings(settingsResponse.settings);
+          logger.info('Settings loaded', { count: settingsResponse.settings.length });
+        } else {
+          logger.warn('Failed to fetch settings');
+        }
+
+        // Fetch available presets
+        const presetList = await serialService.getPresets();
+        if (presetList) {
+          setPresets(presetList);
+          logger.debug('Presets loaded', { count: presetList.length });
+        }
+
+        setLoadingState('settings', false);
+        notify.success('Connected to device');
+      } else {
+        setLoadingState('connecting', false);
+        notify.error('Failed to connect');
       }
+    } catch (error) {
+      setLoadingState('connecting', false);
+      setLoadingState('settings', false);
+      const message = error instanceof Error ? error.message : 'Connection failed';
+      logger.error('Connection error', { error: message });
+      notify.error(message);
     }
-  }, []);
+  }, [setLoadingState]);
 
   // Disconnect from device
   const disconnect = useCallback(async () => {
-    if (isStreaming) {
-      await serialService.setStreamEnabled(false);
+    logger.info('Disconnecting from device');
+    try {
+      if (isStreaming) {
+        await serialService.setStreamEnabled(false);
+      }
+      await serialService.disconnect();
+      notify.info('Disconnected from device');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Disconnect failed';
+      logger.error('Disconnect error', { error: message });
     }
-    await serialService.disconnect();
   }, [isStreaming]);
 
   // Set a setting value
@@ -335,28 +422,67 @@ export function useSerial(): UseSerialReturn {
 
   // Save settings to flash
   const saveSettings = useCallback(async () => {
-    await serialService.saveSettings();
-  }, []);
+    logger.debug('Saving settings to flash');
+    setLoadingState('saving', true);
+    try {
+      await serialService.saveSettings();
+      notify.success('Settings saved');
+      logger.info('Settings saved to flash');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Save failed';
+      logger.error('Save settings error', { error: message });
+      notify.error(`Failed to save: ${message}`);
+      throw error;
+    } finally {
+      setLoadingState('saving', false);
+    }
+  }, [setLoadingState]);
 
   // Load settings from flash
   const loadSettings = useCallback(async () => {
-    await serialService.loadSettings();
-    // Refresh settings after load
-    const settingsResponse = await serialService.getSettings();
-    if (settingsResponse) {
-      setSettings(settingsResponse.settings);
+    logger.debug('Loading settings from flash');
+    setLoadingState('settings', true);
+    try {
+      await serialService.loadSettings();
+      // Refresh settings after load
+      const settingsResponse = await serialService.getSettings();
+      if (settingsResponse) {
+        setSettings(settingsResponse.settings);
+        notify.success('Settings loaded');
+        logger.info('Settings loaded from flash', { count: settingsResponse.settings.length });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Load failed';
+      logger.error('Load settings error', { error: message });
+      notify.error(`Failed to load: ${message}`);
+      throw error;
+    } finally {
+      setLoadingState('settings', false);
     }
-  }, []);
+  }, [setLoadingState]);
 
   // Reset to defaults
   const resetDefaults = useCallback(async () => {
-    await serialService.resetDefaults();
-    // Refresh settings after reset
-    const settingsResponse = await serialService.getSettings();
-    if (settingsResponse) {
-      setSettings(settingsResponse.settings);
+    logger.debug('Resetting to defaults');
+    setLoadingState('settings', true);
+    try {
+      await serialService.resetDefaults();
+      // Refresh settings after reset
+      const settingsResponse = await serialService.getSettings();
+      if (settingsResponse) {
+        setSettings(settingsResponse.settings);
+        notify.success('Reset to defaults');
+        logger.info('Settings reset to defaults');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Reset failed';
+      logger.error('Reset defaults error', { error: message });
+      notify.error(`Failed to reset: ${message}`);
+      throw error;
+    } finally {
+      setLoadingState('settings', false);
     }
-  }, []);
+  }, [setLoadingState]);
 
   // Refresh settings
   const refreshSettings = useCallback(async () => {
@@ -372,48 +498,80 @@ export function useSerial(): UseSerialReturn {
   }, []);
 
   // Apply a preset
-  const applyPreset = useCallback(async (name: string) => {
-    try {
-      await serialService.applyPreset(name);
-      setCurrentPreset(name);
-      // Refresh settings after applying preset
-      const settingsResponse = await serialService.getSettings();
-      if (settingsResponse) {
-        setSettings(settingsResponse.settings);
+  const applyPreset = useCallback(
+    async (name: string) => {
+      logger.debug('Applying preset', { name });
+      setLoadingState('preset', true);
+      try {
+        await serialService.applyPreset(name);
+        setCurrentPreset(name);
+        // Refresh settings after applying preset
+        const settingsResponse = await serialService.getSettings();
+        if (settingsResponse) {
+          setSettings(settingsResponse.settings);
+        }
+        notify.success(`Preset "${name}" applied`);
+        logger.info('Preset applied', { name });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Preset failed';
+        logger.error('Apply preset error', { name, error: message });
+        notify.error(`Failed to apply preset: ${message}`);
+        throw error;
+      } finally {
+        setLoadingState('preset', false);
       }
-    } catch (error) {
-      console.error('Failed to apply preset:', error);
-      // Re-throw to allow caller to handle if needed
-      throw error;
-    }
-  }, []);
+    },
+    [setLoadingState]
+  );
 
   // Set active generator
-  const setGenerator = useCallback(async (name: GeneratorType) => {
-    try {
-      await serialService.setGenerator(name);
-      setCurrentGenerator(name);
-      // Refresh settings after switching generator
-      const settingsResponse = await serialService.getSettings();
-      if (settingsResponse) {
-        setSettings(settingsResponse.settings);
+  const setGenerator = useCallback(
+    async (name: GeneratorType) => {
+      logger.debug('Setting generator', { name });
+      setLoadingState('generator', true);
+      try {
+        await serialService.setGenerator(name);
+        setCurrentGenerator(name);
+        // Refresh settings after switching generator
+        const settingsResponse = await serialService.getSettings();
+        if (settingsResponse) {
+          setSettings(settingsResponse.settings);
+        }
+        notify.success(`Generator: ${name}`);
+        logger.info('Generator set', { name });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Generator switch failed';
+        logger.error('Set generator error', { name, error: message });
+        notify.error(`Failed to set generator: ${message}`);
+        throw error;
+      } finally {
+        setLoadingState('generator', false);
       }
-    } catch (error) {
-      console.error('Failed to set generator:', error);
-      throw error;
-    }
-  }, []);
+    },
+    [setLoadingState]
+  );
 
   // Set active effect
-  const setEffect = useCallback(async (name: EffectType) => {
-    try {
-      await serialService.setEffect(name);
-      setCurrentEffect(name);
-    } catch (error) {
-      console.error('Failed to set effect:', error);
-      throw error;
-    }
-  }, []);
+  const setEffect = useCallback(
+    async (name: EffectType) => {
+      logger.debug('Setting effect', { name });
+      setLoadingState('effect', true);
+      try {
+        await serialService.setEffect(name);
+        setCurrentEffect(name);
+        notify.success(`Effect: ${name}`);
+        logger.info('Effect set', { name });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Effect switch failed';
+        logger.error('Set effect error', { name, error: message });
+        notify.error(`Failed to set effect: ${message}`);
+        throw error;
+      } finally {
+        setLoadingState('effect', false);
+      }
+    },
+    [setLoadingState]
+  );
 
   // Clear console
   const clearConsole = useCallback(() => {
@@ -462,6 +620,9 @@ export function useSerial(): UseSerialReturn {
   return {
     connectionState,
     isSupported,
+    errorMessage,
+    errorCode,
+    loading,
     deviceInfo,
     settings,
     settingsByCategory,

@@ -1,14 +1,23 @@
 import {
   DeviceInfo,
+  DeviceInfoSchema,
   SettingsResponse,
+  SettingsResponseSchema,
   AudioMessage,
+  AudioMessageSchema,
   BatteryMessage,
+  BatteryMessageSchema,
+  BatteryStatusResponseSchema,
   TransientMessage,
+  TransientMessageSchema,
   RhythmMessage,
+  RhythmMessageSchema,
   StatusMessage,
+  StatusMessageSchema,
   GeneratorType,
   EffectType,
 } from '../types';
+import { logger } from '../lib/logger';
 
 // Custom error classes for better error handling
 export class SerialError extends Error {
@@ -159,20 +168,25 @@ class SerialService {
 
   // Request and connect to a serial port
   async connect(baudRate: number = 115200): Promise<boolean> {
+    logger.info('Attempting serial connection', { baudRate });
+
     if (!this.isSupported()) {
       const error = new SerialError(
         'WebSerial API not supported in this browser',
         SerialErrorCode.NOT_SUPPORTED
       );
+      logger.error('WebSerial not supported');
       this.emit({ type: 'error', error });
       return false;
     }
 
     try {
       // Request port from user
+      logger.debug('Requesting serial port from user');
       this.port = await navigator.serial.requestPort();
 
       // Open with specified baud rate
+      logger.debug('Opening port', { baudRate });
       await this.port.open({ baudRate });
 
       // Set up reader and writer
@@ -189,10 +203,12 @@ class SerialService {
         throw new SerialError('Port is not writable', SerialErrorCode.CONNECTION_FAILED);
       }
 
+      logger.info('Serial connection established');
       this.emit({ type: 'connected' });
       return true;
     } catch (error) {
       // Clean up partial connection state
+      logger.error('Connection failed', { error });
       await this.disconnect().catch(() => {});
 
       // Classify and emit the error
@@ -210,6 +226,7 @@ class SerialService {
 
   // Disconnect from serial port
   async disconnect(): Promise<void> {
+    logger.info('Disconnecting from serial port');
     this.isReading = false;
 
     // Release reader
@@ -217,12 +234,12 @@ class SerialService {
       try {
         await this.reader.cancel();
       } catch (e) {
-        console.warn('Error canceling reader:', e);
+        logger.warn('Error canceling reader', { error: e });
       }
       try {
         this.reader.releaseLock();
       } catch (e) {
-        console.warn('Error releasing reader lock:', e);
+        logger.warn('Error releasing reader lock', { error: e });
       }
       this.reader = null;
     }
@@ -232,7 +249,7 @@ class SerialService {
       try {
         this.writer.releaseLock();
       } catch (e) {
-        console.warn('Error releasing writer lock:', e);
+        logger.warn('Error releasing writer lock', { error: e });
       }
       this.writer = null;
     }
@@ -242,7 +259,7 @@ class SerialService {
       try {
         await this.port.close();
       } catch (e) {
-        console.warn('Error closing port:', e);
+        logger.warn('Error closing port', { error: e });
       }
       this.port = null;
     }
@@ -250,6 +267,7 @@ class SerialService {
     // Clear buffers
     this.buffer = '';
 
+    logger.info('Serial port disconnected');
     this.emit({ type: 'disconnected' });
   }
 
@@ -280,6 +298,7 @@ class SerialService {
 
     const sanitized = this.validateCommand(command);
     if (!sanitized) {
+      logger.error('Invalid command rejected', { command: command.substring(0, 20) });
       throw new SerialError(
         `Invalid command: "${command.substring(0, 20)}"`,
         SerialErrorCode.COMMAND_INVALID
@@ -287,12 +306,14 @@ class SerialService {
     }
 
     try {
+      logger.debug('Sending command', { command: sanitized });
       const encoder = new TextEncoder();
       const data = encoder.encode(sanitized + '\n');
       await this.writer.write(data);
     } catch (error) {
       const code = classifyError(error);
       const message = error instanceof Error ? error.message : 'Failed to send command';
+      logger.error('Command send failed', { command: sanitized, error: message });
       throw new SerialError(message, code);
     }
   }
@@ -317,7 +338,6 @@ class SerialService {
     timeoutMs: number = 2000
   ): Promise<{ data: T | null; error?: SerialError }> {
     return new Promise(resolve => {
-      let jsonBuffer = '';
       let resolved = false;
       let parseAttempts = 0;
       const maxParseAttempts = 10; // Prevent infinite parsing attempts
@@ -344,22 +364,14 @@ class SerialService {
 
       const handler = (event: SerialEvent) => {
         if (event.type === 'data' && event.data) {
-          jsonBuffer += event.data;
+          // Each 'data' event is already a single line from startReading()
+          // Check this line directly instead of buffering (which loses line boundaries)
+          const trimmed = event.data.trim();
 
-          // Limit buffer size to prevent memory issues
-          if (jsonBuffer.length > MAX_BUFFER_SIZE) {
-            jsonBuffer = jsonBuffer.substring(jsonBuffer.length - MAX_BUFFER_SIZE / 2);
-          }
-
-          // Try to find a complete JSON object
-          const lines = jsonBuffer.split('\n');
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-              parseAttempts++;
-              if (parseAttempts > maxParseAttempts) {
-                continue; // Skip further parse attempts
-              }
+          // Check if this line is a complete JSON object
+          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+            parseAttempts++;
+            if (parseAttempts <= maxParseAttempts) {
               try {
                 const parsed = JSON.parse(trimmed) as T;
                 if (!resolved) {
@@ -370,7 +382,7 @@ class SerialService {
                 }
                 return;
               } catch {
-                // Not valid JSON, continue checking other lines
+                // Not valid JSON, continue waiting for next event
               }
             }
           }
@@ -412,14 +424,54 @@ class SerialService {
     });
   }
 
-  // Get device info
+  // Get device info (with Zod validation)
   async getDeviceInfo(): Promise<DeviceInfo | null> {
-    return this.sendAndReceiveJson<DeviceInfo>('json info');
+    logger.debug('Requesting device info');
+    const result = await this.sendAndReceiveJsonWithError<DeviceInfo>('json info');
+
+    if (result.error || !result.data) {
+      logger.error('Failed to get device info', { error: result.error?.message });
+      return null;
+    }
+
+    // Validate response against schema
+    const validation = DeviceInfoSchema.safeParse(result.data);
+    if (!validation.success) {
+      logger.warn('Device info validation failed', {
+        errors: validation.error.issues,
+        data: result.data,
+      });
+      // Return data anyway for backwards compatibility
+      return result.data;
+    }
+
+    logger.debug('Device info received', { device: validation.data.device });
+    return validation.data;
   }
 
-  // Get all settings
+  // Get all settings (with Zod validation)
   async getSettings(): Promise<SettingsResponse | null> {
-    return this.sendAndReceiveJson<SettingsResponse>('json settings');
+    logger.debug('Requesting settings');
+    const result = await this.sendAndReceiveJsonWithError<SettingsResponse>('json settings');
+
+    if (result.error || !result.data) {
+      logger.error('Failed to get settings', { error: result.error?.message });
+      return null;
+    }
+
+    // Validate response against schema
+    const validation = SettingsResponseSchema.safeParse(result.data);
+    if (!validation.success) {
+      logger.warn('Settings validation failed', {
+        errors: validation.error.issues,
+        settingsCount: result.data?.settings?.length,
+      });
+      // Return data anyway for backwards compatibility
+      return result.data;
+    }
+
+    logger.debug('Settings received', { count: validation.data.settings.length });
+    return validation.data;
   }
 
   // Set a setting value
@@ -505,8 +557,17 @@ class SerialService {
           // Check if it's an audio streaming message
           if (trimmed.startsWith('{"a":')) {
             try {
-              const audioMsg = JSON.parse(trimmed) as AudioMessage;
-              this.emit({ type: 'audio', audio: audioMsg });
+              const parsed = JSON.parse(trimmed);
+              const validation = AudioMessageSchema.safeParse(parsed);
+              if (validation.success) {
+                this.emit({ type: 'audio', audio: validation.data });
+              } else {
+                // Emit anyway for backwards compatibility, but log warning
+                logger.debug('Audio message validation warning', {
+                  errors: validation.error.issues,
+                });
+                this.emit({ type: 'audio', audio: parsed as AudioMessage });
+              }
               continue;
             } catch {
               // Not valid audio JSON
@@ -516,8 +577,16 @@ class SerialService {
           // Check if it's a battery streaming message
           if (trimmed.startsWith('{"b":')) {
             try {
-              const batteryMsg = JSON.parse(trimmed) as BatteryMessage;
-              this.emit({ type: 'battery', battery: batteryMsg });
+              const parsed = JSON.parse(trimmed);
+              const validation = BatteryMessageSchema.safeParse(parsed);
+              if (validation.success) {
+                this.emit({ type: 'battery', battery: validation.data });
+              } else {
+                logger.debug('Battery message validation warning', {
+                  errors: validation.error.issues,
+                });
+                this.emit({ type: 'battery', battery: parsed as BatteryMessage });
+              }
               continue;
             } catch {
               // Not valid battery JSON
@@ -527,8 +596,16 @@ class SerialService {
           // Check if it's a battery status message
           if (trimmed.startsWith('{"battery":')) {
             try {
-              const parsed = JSON.parse(trimmed) as { battery: BatteryStatusData };
-              this.emit({ type: 'batteryStatus', batteryStatus: parsed.battery });
+              const parsed = JSON.parse(trimmed);
+              const validation = BatteryStatusResponseSchema.safeParse(parsed);
+              if (validation.success) {
+                this.emit({ type: 'batteryStatus', batteryStatus: validation.data.battery });
+              } else {
+                logger.debug('Battery status validation warning', {
+                  errors: validation.error.issues,
+                });
+                this.emit({ type: 'batteryStatus', batteryStatus: parsed.battery });
+              }
               continue;
             } catch {
               // Not valid battery status JSON
@@ -538,12 +615,16 @@ class SerialService {
           // Check if it's a transient detection message
           if (trimmed.startsWith('{"type":"TRANSIENT"')) {
             try {
-              const transMsg = JSON.parse(trimmed) as TransientMessage;
-              // Support legacy timestampMs field
-              if (!transMsg.ts && transMsg.timestampMs) {
-                transMsg.ts = transMsg.timestampMs;
+              const parsed = JSON.parse(trimmed);
+              const validation = TransientMessageSchema.safeParse(parsed);
+              if (validation.success) {
+                this.emit({ type: 'transient', transient: validation.data });
+              } else {
+                logger.debug('Transient message validation warning', {
+                  errors: validation.error.issues,
+                });
+                this.emit({ type: 'transient', transient: parsed as TransientMessage });
               }
-              this.emit({ type: 'transient', transient: transMsg });
               continue;
             } catch {
               // Not valid transient JSON
@@ -553,8 +634,16 @@ class SerialService {
           // Check if it's a rhythm analyzer message
           if (trimmed.startsWith('{"type":"RHYTHM"')) {
             try {
-              const rhythmMsg = JSON.parse(trimmed) as RhythmMessage;
-              this.emit({ type: 'rhythm', rhythm: rhythmMsg });
+              const parsed = JSON.parse(trimmed);
+              const validation = RhythmMessageSchema.safeParse(parsed);
+              if (validation.success) {
+                this.emit({ type: 'rhythm', rhythm: validation.data });
+              } else {
+                logger.debug('Rhythm message validation warning', {
+                  errors: validation.error.issues,
+                });
+                this.emit({ type: 'rhythm', rhythm: parsed as RhythmMessage });
+              }
               continue;
             } catch {
               // Not valid rhythm JSON
@@ -564,7 +653,17 @@ class SerialService {
           // Check if it's a status message
           if (trimmed.startsWith('{"type":"STATUS"')) {
             try {
-              const statusMsg = JSON.parse(trimmed) as StatusMessage;
+              const parsed = JSON.parse(trimmed);
+              const validation = StatusMessageSchema.safeParse(parsed);
+              if (validation.success) {
+                this.emit({ type: 'status', status: validation.data });
+                continue;
+              } else {
+                logger.debug('Status message validation warning', {
+                  errors: validation.error.issues,
+                });
+              }
+              const statusMsg = parsed as StatusMessage;
               this.emit({ type: 'status', status: statusMsg });
               continue;
             } catch {

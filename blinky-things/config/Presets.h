@@ -7,23 +7,22 @@ class AdaptiveMic;
 class AudioController;
 
 /**
- * Audio parameter presets for quick configuration changes
+ * Audio parameter presets
  *
- * Presets store tuned parameter sets for different audio scenarios:
- * - DEFAULT: Production defaults (balanced for most situations)
- * - QUIET: Optimized for low-level/ambient audio
- * - LOUD: Optimized for loud live music
- * - LIVE: Balanced for live performance
+ * NOTE: Only DEFAULT preset is available. Quiet/loud mode adaptation
+ * is handled AUTOMATICALLY by the AGC system based on gain levels.
+ * Manual preset selection has been removed to prevent configuration drift.
+ *
+ * The AGC automatically enters "fast mode" when:
+ * - Hardware gain >= 70 (near maximum)
+ * - Raw signal level < fastAgcThreshold
  *
  * Usage:
- *   PresetManager::applyPreset(PresetId::QUIET, mic, audioCtrl);
+ *   PresetManager::applyPreset(PresetId::DEFAULT, mic, audioCtrl);
  */
 
 enum class PresetId : uint8_t {
-    DEFAULT = 0,    // Production defaults
-    QUIET = 1,      // Optimized for quiet/ambient audio
-    LOUD = 2,       // Optimized for loud sources
-    LIVE = 3,       // Balanced for live performance
+    DEFAULT = 0,    // Production defaults (only preset available)
     NUM_PRESETS
 };
 

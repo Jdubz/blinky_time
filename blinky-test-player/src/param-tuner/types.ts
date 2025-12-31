@@ -37,19 +37,19 @@ export const PARAMETERS: Record<string, ParameterDef> = {
   hitthresh: {
     name: 'hitthresh',
     mode: 'drummer',
-    min: 1.0,  // Extended from 1.5 (optimal 1.688 was near boundary)
+    min: 0.5,  // Extended from 1.0 (2025-12-30: optimal 1.192 was near boundary, needs retest)
     max: 10.0,
     default: 1.688,  // Fast-tune optimal (was 2.0)
-    sweepValues: [1.0, 1.2, 1.4, 1.5, 1.688, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 7.0, 10.0],
+    sweepValues: [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.4, 1.5, 1.688, 2.0, 2.5, 3.0, 4.0, 5.0],
     description: 'Main detection threshold',
   },
   attackmult: {
     name: 'attackmult',
     mode: 'drummer',
-    min: 1.0,  // Extended from 1.1 (optimal 1.1 was AT boundary)
+    min: 0.9,  // Extended from 1.0 (2025-12-30: optimal 1.1 still near boundary, needs retest)
     max: 2.0,
     default: 1.1,  // Fast-tune optimal (was 1.3)
-    sweepValues: [1.0, 1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0],
+    sweepValues: [0.9, 0.95, 1.0, 1.05, 1.1, 1.2, 1.3, 1.4, 1.5, 1.7, 2.0],
     description: 'Attack sensitivity multiplier',
   },
   avgtau: {

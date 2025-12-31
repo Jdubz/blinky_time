@@ -89,17 +89,17 @@ struct ThreeSegmentPalette {
 // (simple multiply instead of lerp in segment 1), so we keep its original
 // implementation for exact backward compatibility.
 
-// Lightning: dark yellow -> bright yellow -> white -> electric blue
+// Lightning: black -> bright yellow -> white -> electric blue
 constexpr ThreeSegmentPalette LIGHTNING = {
-    RGB(60, 50, 0),      // value 0: dark yellow
+    RGB(0, 0, 0),        // value 0: off (black)
     RGB(255, 200, 0),    // value 85: bright yellow
     RGB(255, 255, 180),  // value 170: white-ish
     RGB(150, 200, 255)   // value 255: electric blue
 };
 
-// Water: deep blue -> medium blue -> cyan -> light blue
+// Water: black -> medium blue -> cyan -> light blue
 constexpr ThreeSegmentPalette WATER = {
-    RGB(0, 0, 60),       // value 0: deep blue
+    RGB(0, 0, 0),        // value 0: off (black)
     RGB(0, 0, 150),      // value 85: medium blue
     RGB(0, 120, 255),    // value 170: cyan
     RGB(80, 200, 255)    // value 255: light blue
