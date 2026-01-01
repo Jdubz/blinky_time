@@ -933,8 +933,8 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             Serial.println(F("ERROR: AudioController not available"));
             return true;
         }
-        EnsembleDetector& ens = audioCtrl_->getEnsemble();
-        EnsembleFusion& fusion = ens.getFusion();
+        const EnsembleDetector& ens = audioCtrl_->getEnsemble();
+        const EnsembleFusion& fusion = ens.getFusion();
 
         Serial.println(F("=== Ensemble Detectors ==="));
         Serial.println(F("Name      Weight  Thresh  Enabled  LastStrength"));
@@ -967,7 +967,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             Serial.println(F("ERROR: AudioController not available"));
             return true;
         }
-        EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
+        const EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
 
         Serial.println(F("=== Ensemble Fusion Configuration ==="));
         Serial.println(F("Agreement Boost Values:"));
