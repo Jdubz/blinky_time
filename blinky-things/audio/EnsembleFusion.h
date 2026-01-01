@@ -113,22 +113,28 @@ private:
 
 // --- Default calibrated values ---
 // These are initial values; run calibration suite to optimize for your patterns
+//
+// WEIGHT ORIGIN (December 2025):
+// Initial weights derived from algorithm characteristics and literature:
+// - Drummer (0.22): Time-domain amplitude detection has highest precision for clear transients
+// - SpectralFlux (0.20): SuperFlux algorithm provides robust onset detection with good recall
+// - BassBand (0.18): Low-frequency flux critical for kick/bass-heavy music
+// - HFC (0.15): High-frequency content excels at percussive attacks
+// - ComplexDomain (0.13): Phase deviation catches soft onsets others miss
+// - MelFlux (0.12): Perceptual scaling provides human-ear-matched detection
+//
+// Weights sum to 1.0 for normalized fusion. Run the calibration suite
+// (npm run tuner -- sweep-weights) to optimize for your specific test patterns.
 
 namespace FusionDefaults {
-    // Detector weights (determined by relative F1 contribution)
-    // Drummer: Strong on amplitude spikes, precise timing
-    // SpectralFlux: High recall, robust to noise
-    // HFC: Excellent on percussive attacks
-    // BassBand: Focused on kicks/bass
-    // ComplexDomain: Catches soft onsets
-    // MelFlux: Perceptually accurate
+    // Detector weights - see WEIGHT ORIGIN comment above for derivation
     constexpr float WEIGHTS[] = {
-        0.22f,  // DRUMMER
-        0.20f,  // SPECTRAL_FLUX
-        0.15f,  // HFC
-        0.18f,  // BASS_BAND
-        0.13f,  // COMPLEX_DOMAIN
-        0.12f   // MEL_FLUX
+        0.22f,  // DRUMMER - highest precision on amplitude transients
+        0.20f,  // SPECTRAL_FLUX - robust SuperFlux algorithm
+        0.15f,  // HFC - percussive attack detection
+        0.18f,  // BASS_BAND - kick/bass emphasis
+        0.13f,  // COMPLEX_DOMAIN - soft onset detection
+        0.12f   // MEL_FLUX - perceptual scaling
     };
 
     // Agreement boost values
@@ -152,4 +158,12 @@ namespace FusionDefaults {
         2.0f,   // COMPLEX_DOMAIN: phase deviation threshold
         2.5f    // MEL_FLUX: mel flux vs local median
     };
+
+    // Compile-time validation: ensure arrays match detector count
+    static_assert(sizeof(WEIGHTS) / sizeof(WEIGHTS[0]) == static_cast<int>(DetectorType::COUNT),
+                  "WEIGHTS array size must match DetectorType::COUNT");
+    static_assert(sizeof(THRESHOLDS) / sizeof(THRESHOLDS[0]) == static_cast<int>(DetectorType::COUNT),
+                  "THRESHOLDS array size must match DetectorType::COUNT");
+    static_assert(sizeof(AGREEMENT_BOOSTS) / sizeof(AGREEMENT_BOOSTS[0]) == static_cast<int>(DetectorType::COUNT) + 1,
+                  "AGREEMENT_BOOSTS array size must be DetectorType::COUNT + 1");
 }
