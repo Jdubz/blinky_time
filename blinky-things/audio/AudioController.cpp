@@ -32,6 +32,9 @@ bool AudioController::begin(uint32_t sampleRate) {
         return false;
     }
 
+    // Initialize ensemble detector
+    ensemble_.begin();
+
     // Reset OSS buffer
     for (int i = 0; i < OSS_BUFFER_SIZE; i++) {
         ossBuffer_[i] = 0.0f;
@@ -57,6 +60,7 @@ bool AudioController::begin(uint32_t sampleRate) {
 
     // Reset output
     control_ = AudioControl();
+    lastEnsembleOutput_ = EnsembleOutput();
 
     return true;
 }
@@ -70,18 +74,37 @@ void AudioController::end() {
 const AudioControl& AudioController::update(float dt) {
     uint32_t nowMs = time_.millis();
 
-    // 1. Update microphone (transient detection, level)
+    // 1. Update microphone (level normalization, gain control)
     mic_.update(dt);
 
-    // 2. Get onset strength for rhythm analysis (prefer spectral flux)
-    float onsetStrength = 0.0f;
-    uint8_t mode = mic_.getDetectionMode();
+    // 2. Feed samples to ensemble detector from mic's ring buffer
+    //    This provides samples for all spectral detectors (FFT-based)
+    static int16_t sampleBuffer[256];  // Matches FFT_SIZE
+    int samplesRead = mic_.getSamplesForExternal(sampleBuffer, 256);
+    if (samplesRead > 0) {
+        ensemble_.addSamples(sampleBuffer, samplesRead);
+    }
 
-    if (mode == static_cast<uint8_t>(DetectionMode::SPECTRAL_FLUX) ||
-        mode == static_cast<uint8_t>(DetectionMode::HYBRID)) {
-        onsetStrength = mic_.getLastFluxValue();
+    // 3. Run ensemble detector with current audio frame data
+    //    The ensemble uses level for time-domain detectors (drummer)
+    //    and spectral data when available
+    lastEnsembleOutput_ = ensemble_.update(
+        mic_.getLevel(),
+        mic_.getRawLevel(),
+        nowMs,
+        dt
+    );
+
+    // 4. Get onset strength for rhythm analysis
+    //    Use spectral flux from ensemble when available, fallback to level derivative
+    float onsetStrength = 0.0f;
+
+    // Get spectral flux from ensemble's SpectralFluxDetector
+    const IDetector* fluxDetector = ensemble_.getDetector(DetectorType::SPECTRAL_FLUX);
+    if (fluxDetector && fluxDetector->getLastRawValue() > 0.0f) {
+        onsetStrength = fluxDetector->getLastRawValue();
     } else {
-        // Use level derivative as onset strength for non-FFT modes
+        // Fallback: use level derivative as onset strength
         float level = mic_.getLevel();
         onsetStrength = (level > prevLevel_) ? (level - prevLevel_) * 5.0f : 0.0f;
         prevLevel_ = level;
@@ -116,11 +139,29 @@ const AudioControl& AudioController::update(float dt) {
 // ===== CONFIGURATION =====
 
 void AudioController::setDetectionMode(uint8_t mode) {
-    mic_.detectionMode = mode;
+    // Legacy mode switching - kept for backwards compatibility with serial commands
+    // The ensemble architecture always runs all detectors with weighted fusion
+    legacyDetectionMode_ = mode;
+
+    // In ensemble mode, all detectors remain enabled regardless of legacy mode
+    // The mode value is stored but doesn't change detector behavior
+    // Use setDetectorEnabled/setDetectorWeight for fine-grained control
 }
 
 uint8_t AudioController::getDetectionMode() const {
-    return mic_.getDetectionMode();
+    return legacyDetectionMode_;
+}
+
+void AudioController::setDetectorEnabled(DetectorType type, bool enabled) {
+    ensemble_.setDetectorEnabled(type, enabled);
+}
+
+void AudioController::setDetectorWeight(DetectorType type, float weight) {
+    ensemble_.setDetectorWeight(type, weight);
+}
+
+void AudioController::setDetectorThreshold(DetectorType type, float threshold) {
+    ensemble_.setDetectorThreshold(type, threshold);
 }
 
 void AudioController::setBpmRange(float minBpm, float maxBpm) {
@@ -346,7 +387,8 @@ void AudioController::synthesizeEnergy() {
 }
 
 void AudioController::synthesizePulse() {
-    float pulse = mic_.getTransient();
+    // Use ensemble transient strength instead of single-detector output
+    float pulse = lastEnsembleOutput_.transientStrength;
 
     // Apply beat-aligned modulation when rhythm is detected (visual effect only)
     if (pulse > 0.0f && periodicityStrength_ > activationThreshold) {

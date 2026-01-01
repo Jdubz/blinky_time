@@ -49,6 +49,15 @@
 #include "config/SettingsRegistry.cpp"  // Settings abstraction layer
 
 // Audio processing implementations
+#include "audio/SharedSpectralAnalysis.cpp"
+#include "audio/EnsembleFusion.cpp"
+#include "audio/EnsembleDetector.cpp"
+#include "audio/detectors/DrummerDetector.cpp"
+#include "audio/detectors/SpectralFluxDetector.cpp"
+#include "audio/detectors/HFCDetector.cpp"
+#include "audio/detectors/BassBandDetector.cpp"
+#include "audio/detectors/ComplexDomainDetector.cpp"
+#include "audio/detectors/MelFluxDetector.cpp"
 #include "audio/AudioController.cpp"
 
 // Test implementations (only when testing enabled)

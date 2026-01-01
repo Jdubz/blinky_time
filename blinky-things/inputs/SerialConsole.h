@@ -104,6 +104,7 @@ private:
     void registerAgcSettings();
     void registerTransientSettings();
     void registerDetectionSettings();
+    void registerEnsembleSettings();  // Ensemble detector configuration
     void registerRhythmSettings();
 
     // Command handlers (extracted from handleSpecialCommand for clarity)
