@@ -1,8 +1,12 @@
 /**
  * Test runner - executes patterns and measures detection performance
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * Legacy detection mode switching has been removed.
  */
 import { EventEmitter } from 'events';
-import type { TestResult, DetectionMode, TunerOptions } from './types.js';
+import type { TestResult, TunerOptions, DetectorType } from './types.js';
 export declare class TestRunner extends EventEmitter {
     private options;
     private port;
@@ -21,11 +25,7 @@ export declare class TestRunner extends EventEmitter {
     private stopStream;
     private handleLine;
     /**
-     * Set detection mode
-     */
-    setMode(mode: DetectionMode): Promise<void>;
-    /**
-     * Set a single parameter
+     * Set a single parameter using the new ensemble command format
      */
     setParameter(name: string, value: number): Promise<void>;
     /**
@@ -33,9 +33,33 @@ export declare class TestRunner extends EventEmitter {
      */
     setParameters(params: Record<string, number>): Promise<void>;
     /**
-     * Reset parameters to defaults for a mode
+     * Set detector enabled state
      */
-    resetDefaults(mode: DetectionMode): Promise<void>;
+    setDetectorEnabled(detector: DetectorType, enabled: boolean): Promise<void>;
+    /**
+     * Set detector weight
+     */
+    setDetectorWeight(detector: DetectorType, weight: number): Promise<void>;
+    /**
+     * Set detector threshold
+     */
+    setDetectorThreshold(detector: DetectorType, threshold: number): Promise<void>;
+    /**
+     * Set agreement boost value
+     */
+    setAgreementBoost(level: number, boost: number): Promise<void>;
+    /**
+     * Reset parameters to defaults for ensemble
+     */
+    resetDefaults(): Promise<void>;
+    /**
+     * Save current settings to device flash memory
+     */
+    saveToFlash(): Promise<void>;
+    /**
+     * Get current parameter value from device
+     */
+    getParameter(name: string): Promise<number>;
     /**
      * Run a single test pattern and return results
      */

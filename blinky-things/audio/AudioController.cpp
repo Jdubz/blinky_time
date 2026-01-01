@@ -138,20 +138,6 @@ const AudioControl& AudioController::update(float dt) {
 
 // ===== CONFIGURATION =====
 
-void AudioController::setDetectionMode(uint8_t mode) {
-    // Legacy mode switching - kept for backwards compatibility with serial commands
-    // The ensemble architecture always runs all detectors with weighted fusion
-    legacyDetectionMode_ = mode;
-
-    // In ensemble mode, all detectors remain enabled regardless of legacy mode
-    // The mode value is stored but doesn't change detector behavior
-    // Use setDetectorEnabled/setDetectorWeight for fine-grained control
-}
-
-uint8_t AudioController::getDetectionMode() const {
-    return legacyDetectionMode_;
-}
-
 void AudioController::setDetectorEnabled(DetectorType type, bool enabled) {
     ensemble_.setDetectorEnabled(type, enabled);
 }

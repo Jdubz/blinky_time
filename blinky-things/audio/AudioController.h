@@ -75,11 +75,6 @@ public:
 
     // === CONFIGURATION ===
 
-    // Detection mode (legacy - now controls which detectors are emphasized)
-    // For ensemble system, prefer using setDetectorEnabled/setDetectorWeight
-    void setDetectionMode(uint8_t mode);
-    uint8_t getDetectionMode() const;
-
     // Ensemble detector configuration
     void setDetectorEnabled(DetectorType type, bool enabled);
     void setDetectorWeight(DetectorType type, float weight);
@@ -143,7 +138,6 @@ private:
     // === ENSEMBLE DETECTOR ===
     EnsembleDetector ensemble_;
     EnsembleOutput lastEnsembleOutput_;
-    uint8_t legacyDetectionMode_ = 4;  // Default to hybrid (for backwards compatibility)
 
     // === RHYTHM TRACKING STATE ===
 

@@ -271,6 +271,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
     if (handleLogCommand(cmd)) return true;
+    if (handleEnsembleCommand(cmd)) return true;  // Ensemble detector commands
     return false;
 }
 
@@ -922,6 +923,208 @@ void SerialConsole::streamTick() {
         Serial.print(battery_->getPercent());
         Serial.println(F("}}"));
     }
+}
+
+// === ENSEMBLE DETECTOR COMMANDS ===
+bool SerialConsole::handleEnsembleCommand(const char* cmd) {
+    // Handle "show detectors" - list all detector states
+    if (strcmp(cmd, "show detectors") == 0 || strcmp(cmd, "detectors") == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        EnsembleDetector& ens = audioCtrl_->getEnsemble();
+        EnsembleFusion& fusion = ens.getFusion();
+
+        Serial.println(F("=== Ensemble Detectors ==="));
+        Serial.println(F("Name      Weight  Thresh  Enabled  LastStrength"));
+        Serial.println(F("--------  ------  ------  -------  ------------"));
+
+        const DetectionResult* lastResults = ens.getLastResults();
+        for (int i = 0; i < EnsembleDetector::NUM_DETECTORS; i++) {
+            DetectorType type = static_cast<DetectorType>(i);
+            const DetectorConfig& cfg = fusion.getConfig(type);
+            const char* name = getDetectorName(type);
+
+            // Pad name to 8 chars
+            Serial.print(name);
+            for (int j = strlen(name); j < 10; j++) Serial.print(' ');
+
+            Serial.print(cfg.weight, 2);
+            Serial.print(F("    "));
+            Serial.print(cfg.threshold, 1);
+            Serial.print(F("    "));
+            Serial.print(cfg.enabled ? F("yes") : F("no "));
+            Serial.print(F("      "));
+            Serial.println(lastResults[i].strength, 3);
+        }
+        return true;
+    }
+
+    // Handle "show ensemble" - show fusion configuration
+    if (strcmp(cmd, "show ensemble") == 0 || strcmp(cmd, "ensemble") == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
+
+        Serial.println(F("=== Ensemble Fusion Configuration ==="));
+        Serial.println(F("Agreement Boost Values:"));
+        for (int i = 0; i <= 6; i++) {
+            Serial.print(F("  "));
+            Serial.print(i);
+            Serial.print(F(" detector(s): "));
+            Serial.println(fusion.getAgreementBoost(i), 2);
+        }
+        Serial.print(F("\nTotal Weight: "));
+        Serial.println(fusion.getTotalWeight(), 3);
+
+        // Show last output
+        const EnsembleOutput& output = audioCtrl_->getLastEnsembleOutput();
+        Serial.println(F("\nLast Output:"));
+        Serial.print(F("  Strength: "));
+        Serial.println(output.transientStrength, 3);
+        Serial.print(F("  Confidence: "));
+        Serial.println(output.ensembleConfidence, 3);
+        Serial.print(F("  Agreement: "));
+        Serial.print(output.detectorAgreement);
+        Serial.println(F("/6"));
+        Serial.print(F("  Dominant: "));
+        Serial.println(getDetectorName(static_cast<DetectorType>(output.dominantDetector)));
+        return true;
+    }
+
+    // Handle "set detector_enable <type> <0|1>"
+    if (strncmp(cmd, "set detector_enable ", 20) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const char* args = cmd + 20;
+        char typeName[16];
+        int enabled = 0;
+        if (sscanf(args, "%15s %d", typeName, &enabled) == 2) {
+            DetectorType type;
+            if (parseDetectorType(typeName, type)) {
+                audioCtrl_->setDetectorEnabled(type, enabled != 0);
+                Serial.print(F("OK "));
+                Serial.print(getDetectorName(type));
+                Serial.print(F(" enabled="));
+                Serial.println(enabled);
+            } else {
+                Serial.print(F("ERROR: Unknown detector '"));
+                Serial.print(typeName);
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+            }
+        } else {
+            Serial.println(F("Usage: set detector_enable <type> <0|1>"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+        }
+        return true;
+    }
+
+    // Handle "set detector_weight <type> <value>"
+    if (strncmp(cmd, "set detector_weight ", 20) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const char* args = cmd + 20;
+        char typeName[16];
+        float weight = 0.0f;
+        if (sscanf(args, "%15s %f", typeName, &weight) == 2) {
+            DetectorType type;
+            if (parseDetectorType(typeName, type)) {
+                if (weight >= 0.0f && weight <= 1.0f) {
+                    audioCtrl_->setDetectorWeight(type, weight);
+                    Serial.print(F("OK "));
+                    Serial.print(getDetectorName(type));
+                    Serial.print(F(" weight="));
+                    Serial.println(weight, 3);
+                } else {
+                    Serial.println(F("ERROR: Weight must be 0.0-1.0"));
+                }
+            } else {
+                Serial.print(F("ERROR: Unknown detector '"));
+                Serial.print(typeName);
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+            }
+        } else {
+            Serial.println(F("Usage: set detector_weight <type> <value>"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+        }
+        return true;
+    }
+
+    // Handle "set detector_thresh <type> <value>"
+    if (strncmp(cmd, "set detector_thresh ", 20) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const char* args = cmd + 20;
+        char typeName[16];
+        float threshold = 0.0f;
+        if (sscanf(args, "%15s %f", typeName, &threshold) == 2) {
+            DetectorType type;
+            if (parseDetectorType(typeName, type)) {
+                if (threshold > 0.0f) {
+                    audioCtrl_->setDetectorThreshold(type, threshold);
+                    Serial.print(F("OK "));
+                    Serial.print(getDetectorName(type));
+                    Serial.print(F(" threshold="));
+                    Serial.println(threshold, 2);
+                } else {
+                    Serial.println(F("ERROR: Threshold must be > 0"));
+                }
+            } else {
+                Serial.print(F("ERROR: Unknown detector '"));
+                Serial.print(typeName);
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+            }
+        } else {
+            Serial.println(F("Usage: set detector_thresh <type> <value>"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+        }
+        return true;
+    }
+
+    // Handle "set agree_<n> <value>" for agreement boost values
+    if (strncmp(cmd, "set agree_", 10) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        int n = 0;
+        float value = 0.0f;
+        // Parse "set agree_N value" where N is 0-6
+        const char* args = cmd + 10;
+        if (sscanf(args, "%d %f", &n, &value) == 2) {
+            if (n >= 0 && n <= 6) {
+                // Get current boosts, modify one, set all
+                EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
+                float boosts[7];
+                for (int i = 0; i <= 6; i++) {
+                    boosts[i] = fusion.getAgreementBoost(i);
+                }
+                boosts[n] = value;
+                fusion.setAgreementBoosts(boosts);
+                Serial.print(F("OK agree_"));
+                Serial.print(n);
+                Serial.print(F("="));
+                Serial.println(value, 2);
+            } else {
+                Serial.println(F("ERROR: Agreement index must be 0-6"));
+            }
+        } else {
+            Serial.println(F("Usage: set agree_<0-6> <value>"));
+            Serial.println(F("Example: set agree_1 0.6"));
+        }
+        return true;
+    }
+
+    return false;
 }
 
 // === LOG LEVEL COMMANDS ===

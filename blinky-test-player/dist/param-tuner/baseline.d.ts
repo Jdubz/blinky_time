@@ -1,6 +1,10 @@
 /**
  * Phase 1: Baseline Testing
- * Establishes baseline performance for each algorithm with default parameters
+ * Establishes baseline performance for ensemble detection with default parameters
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * Legacy per-mode testing has been removed.
  */
 import type { TunerOptions } from './types.js';
 import { StateManager } from './state.js';

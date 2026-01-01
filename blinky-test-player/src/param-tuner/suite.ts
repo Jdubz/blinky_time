@@ -1,26 +1,28 @@
 /**
- * Test Suite Configuration System
+ * Calibration Test Suite
+ * Orchestrates the full calibration workflow
  *
- * Enables configurable test suites with:
- * - Baseline calibration before sweeps
- * - Targeted parameter sweeps with specific patterns
- * - Validation with optimal parameters
- * - Per-pattern result recording for interruptible tests
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * Single ensemble-based calibration workflow.
+ * Legacy per-mode testing has been removed.
  *
- * EXTENSIBILITY: Adding a new suite requires only creating a SuiteConfig object.
- * The system auto-discovers patterns based on category and parameter targeting.
+ * Workflow:
+ * 1. Baseline - Establish baseline performance with defaults
+ * 2. Sweep - Find optimal value for each parameter
+ * 3. Interact - Test parameter interactions
+ * 4. Validate - Validate optimal parameters on all patterns
+ * 5. Report - Generate summary report
  */
 
-import type { DetectionMode, ParameterMode, TunerOptions, ParameterDef } from './types.js';
-import { PARAMETERS, DETECTION_MODES } from './types.js';
+import type { TunerOptions, ParameterDef } from './types.js';
+import { PARAMETERS, REPRESENTATIVE_PATTERNS, ALL_PATTERNS } from './types.js';
 import { StateManager } from './state.js';
-import { TestRunner } from './runner.js';
-import { runBaseline } from './baseline.js';
-import { runSweeps } from './sweep.js';
-import { runValidation } from './validate.js';
-import { PATTERN_REGISTRY, getPatternsForParam, getPatternsByCategory } from '../patterns.js';
-import { analyzeBoundaries, printBoundaryReport } from './boundary-analyzer.js';
-import { saveOptimizedToDevice, printDeviceSaveReport } from './device-save.js';
+import { runBaseline, showBaselineSummary } from './baseline.js';
+import { runSweeps, showSweepSummary } from './sweep.js';
+import { runInteractions, showInteractionSummary } from './interact.js';
+import { runValidation, showValidationSummary } from './validate.js';
+import { generateReport } from './report.js';
+import { saveOptimalToDevice, showOptimalParams } from './device-save.js';
 
 // =============================================================================
 // SUITE CONFIGURATION TYPES
@@ -30,9 +32,7 @@ import { saveOptimizedToDevice, printDeviceSaveReport } from './device-save.js';
  * Baseline phase configuration
  */
 export interface BaselineConfig {
-  /** Detection modes to baseline (default: all) */
-  modes?: DetectionMode[];
-  /** Specific patterns to use (default: auto-select based on mode) */
+  /** Specific patterns to use (default: auto-select) */
   patterns?: string[];
   /** Number of repetitions per pattern (default: 3) */
   repetitions?: number;
@@ -41,76 +41,348 @@ export interface BaselineConfig {
 /**
  * Single parameter sweep configuration
  */
-export interface SweepConfig {
+export interface SweepConfigItem {
   /** Parameter name to sweep */
   parameter: string;
   /** Override default sweep values */
   values?: number[];
   /** Patterns to use for this sweep (default: auto-select by param) */
   patterns?: string[];
-  /** Modes to test (default: parameter's mode) */
-  modes?: DetectionMode[];
 }
 
 /**
  * Validation phase configuration
  */
 export interface ValidationConfig {
-  /** Detection modes to validate */
-  modes?: DetectionMode[];
-  /** Patterns to validate (default: all) */
+  /** Patterns to use (default: all) */
   patterns?: string[];
-  /** Use optimized parameters from sweeps (default: true) */
-  useOptimized?: boolean;
+  /** Number of repetitions per pattern (default: 3) */
+  repetitions?: number;
 }
 
 /**
- * Complete test suite configuration
+ * Suite progress tracking
  */
-export interface SuiteConfig {
-  /** Unique suite identifier (kebab-case) */
-  id: string;
-  /** Human-readable suite name */
-  name: string;
-  /** Suite description */
-  description: string;
-
-  /** Baseline phase configuration (optional) */
-  baseline?: BaselineConfig;
-
-  /** Parameter sweeps to run */
-  sweeps?: SweepConfig[];
-
-  /** Validation phase configuration (optional) */
-  validation?: ValidationConfig;
-
-  /** Result save interval */
-  saveInterval: 'per-pattern' | 'per-sweep-value' | 'per-phase';
-
-  /** Custom output directory (default: tuning-output/<suite-id>) */
-  outputDir?: string;
-
-  /** Save optimized values to device on completion */
-  saveToDevice?: boolean;
-
-  /** Analyze boundaries and warn if optimal values are at limits */
-  analyzeBoundaries?: boolean;
+export interface SuiteProgress {
+  /** Completed sweep parameters */
+  sweepsCompleted: string[];
+  /** Completed interactions */
+  interactionsCompleted: string[];
+  /** Current phase */
+  currentPhase: string;
 }
 
 /**
  * Suite execution status
  */
 export interface SuiteStatus {
-  suiteId: string;
-  startedAt: string;
-  phase: 'baseline' | 'sweep' | 'validation' | 'complete' | 'failed';
-  currentSweep?: string;
-  progress: {
-    baselineComplete: boolean;
-    sweepsCompleted: string[];
-    validationComplete: boolean;
-  };
+  /** Current phase: 'baseline' | 'sweep' | 'interact' | 'validate' | 'report' | 'complete' | 'failed' */
+  phase: string;
+  /** Progress tracking */
+  progress: SuiteProgress;
+  /** Error message if failed */
   error?: string;
+}
+
+/**
+ * Complete suite configuration
+ */
+export interface SuiteConfig {
+  /** Unique suite ID */
+  id: string;
+  /** Human-readable name */
+  name: string;
+  /** Description */
+  description?: string;
+  /** Phases to run (defaults to all) */
+  phases?: string[];
+  /** Specific parameters to tune (defaults to all ensemble params) */
+  params?: string[];
+  /** Test patterns to use (defaults to representative) */
+  patterns?: string[];
+  /** Sweep configurations */
+  sweeps?: SweepConfigItem[];
+  /** Whether to resume from previous state */
+  resume?: boolean;
+  /** Whether to save optimal params to device after tuning */
+  saveToDevice?: boolean;
+  /** Save interval: 'per-pattern' | 'per-sweep' | 'per-phase' */
+  saveInterval?: 'per-pattern' | 'per-sweep' | 'per-phase';
+  /** Whether to analyze parameter boundaries */
+  analyzeBoundaries?: boolean;
+}
+
+/**
+ * Partial suite configuration for runSuite function
+ */
+export interface PartialSuiteConfig {
+  /** Unique suite ID */
+  id?: string;
+  /** Human-readable name */
+  name?: string;
+  /** Description */
+  description?: string;
+  /** Phases to run (defaults to all) */
+  phases?: string[];
+  /** Specific parameters to tune (defaults to all ensemble params) */
+  params?: string[];
+  /** Test patterns to use (defaults to representative) */
+  patterns?: string[];
+  /** Sweep configurations */
+  sweeps?: SweepConfigItem[];
+  /** Whether to resume from previous state */
+  resume?: boolean;
+  /** Whether to save optimal params to device after tuning */
+  saveToDevice?: boolean;
+  /** Save interval: 'per-pattern' | 'per-sweep' | 'per-phase' */
+  saveInterval?: 'per-pattern' | 'per-sweep' | 'per-phase';
+  /** Whether to analyze parameter boundaries */
+  analyzeBoundaries?: boolean;
+}
+
+export interface SuitePhase {
+  name: string;
+  description: string;
+  run: (options: TunerOptions, stateManager: StateManager) => Promise<void>;
+}
+
+const SUITE_PHASES: SuitePhase[] = [
+  {
+    name: 'baseline',
+    description: 'Establish baseline performance with default parameters',
+    run: runBaseline,
+  },
+  {
+    name: 'sweep',
+    description: 'Sweep each parameter to find optimal values',
+    run: runSweeps,
+  },
+  {
+    name: 'interact',
+    description: 'Test parameter interactions',
+    run: runInteractions,
+  },
+  {
+    name: 'validate',
+    description: 'Validate optimal parameters on all patterns',
+    run: runValidation,
+  },
+  {
+    name: 'report',
+    description: 'Generate summary report',
+    run: generateReport,
+  },
+];
+
+// =============================================================================
+// MAIN SUITE FUNCTIONS
+// =============================================================================
+
+/**
+ * Run the full calibration suite
+ */
+export async function runSuite(
+  options: TunerOptions,
+  config: PartialSuiteConfig = {}
+): Promise<void> {
+  console.log('\n Ensemble Calibration Suite');
+  console.log('='.repeat(50));
+  console.log('Running full calibration workflow for ensemble detection.\n');
+
+  const outputDir = options.outputDir || 'tuning-results';
+  const stateManager = new StateManager(outputDir);
+
+  // Check for resumable state
+  if (config.resume && stateManager.hasResumableState()) {
+    console.log('Resuming from previous state...\n');
+  } else if (!config.resume && stateManager.hasResumableState()) {
+    console.log('Previous state found. Use --resume to continue or --reset to start fresh.\n');
+    console.log('Starting fresh...');
+    stateManager.reset();
+  }
+
+  // Determine which phases to run
+  const phasesToRun = config.phases
+    ? SUITE_PHASES.filter(p => config.phases!.includes(p.name))
+    : SUITE_PHASES;
+
+  // Apply config to options
+  const suiteOptions: TunerOptions = {
+    ...options,
+    params: config.params,
+    patterns: config.patterns,
+  };
+
+  // Run phases
+  for (const phase of phasesToRun) {
+    console.log(`\n${'='.repeat(50)}`);
+    console.log(`  ${phase.name.toUpperCase()}`);
+    console.log(`  ${phase.description}`);
+    console.log('='.repeat(50));
+
+    try {
+      await phase.run(suiteOptions, stateManager);
+    } catch (err) {
+      console.error(`\nError in ${phase.name} phase:`, err);
+      console.log('State has been saved. Re-run with --resume to continue.');
+      throw err;
+    }
+  }
+
+  // Save to device if requested
+  if (config.saveToDevice) {
+    await saveOptimalToDevice(options, stateManager);
+  }
+
+  console.log('\n Calibration Complete!');
+  console.log('='.repeat(50));
+}
+
+/**
+ * Show summary of current state
+ */
+export async function showSuiteSummary(outputDir: string): Promise<void> {
+  const stateManager = new StateManager(outputDir);
+  const state = stateManager.getState();
+
+  console.log('\n Calibration Status');
+  console.log('='.repeat(50));
+  console.log(`Last updated: ${state.lastUpdated}`);
+  console.log(`Current phase: ${state.currentPhase}`);
+  console.log(`Completed phases: ${state.phasesCompleted.join(', ') || 'none'}`);
+
+  if (state.baseline) {
+    await showBaselineSummary(stateManager);
+  }
+
+  if (state.sweeps?.completed?.length) {
+    await showSweepSummary(stateManager);
+  }
+
+  if (state.interactions?.completed?.length) {
+    await showInteractionSummary(stateManager);
+  }
+
+  if (state.validation) {
+    await showValidationSummary(stateManager);
+  }
+
+  if (state.optimalParams) {
+    await showOptimalParams(stateManager);
+  }
+}
+
+/**
+ * Quick sweep of a specific parameter
+ */
+export async function quickSweep(
+  options: TunerOptions,
+  paramName: string
+): Promise<void> {
+  const param = PARAMETERS[paramName];
+  if (!param) {
+    console.error(`Unknown parameter: ${paramName}`);
+    return;
+  }
+
+  console.log(`\n Quick Sweep: ${paramName}`);
+  console.log('='.repeat(50));
+
+  const tempOutputDir = `tuning-results/quick-${paramName}`;
+  const stateManager = new StateManager(tempOutputDir);
+
+  await runSweeps(
+    {
+      ...options,
+      params: [paramName],
+      patterns: [...REPRESENTATIVE_PATTERNS.slice(0, 4)],  // Quick: just 4 patterns
+      outputDir: tempOutputDir,
+    },
+    stateManager
+  );
+
+  await showSweepSummary(stateManager);
+}
+
+/**
+ * Validate current device settings
+ */
+export async function validateCurrentSettings(
+  options: TunerOptions
+): Promise<void> {
+  console.log('\n Validating Current Device Settings');
+  console.log('='.repeat(50));
+
+  const tempOutputDir = 'tuning-results/validate-current';
+  const stateManager = new StateManager(tempOutputDir);
+  stateManager.reset();
+
+  // Just run validation without baseline/sweep
+  await runValidation(
+    {
+      ...options,
+      patterns: [...REPRESENTATIVE_PATTERNS],
+      outputDir: tempOutputDir,
+    },
+    stateManager
+  );
+}
+
+/**
+ * Get parameter suggestions based on pattern performance
+ */
+export function getParameterSuggestions(patternId: string): ParameterDef[] {
+  const suggestions: ParameterDef[] = [];
+
+  for (const param of Object.values(PARAMETERS)) {
+    if (param.targetPatterns?.includes(patternId)) {
+      suggestions.push(param);
+    }
+  }
+
+  return suggestions;
+}
+
+/**
+ * List all available patterns
+ */
+export function listPatterns(): void {
+  console.log('\n Available Test Patterns');
+  console.log('='.repeat(50));
+
+  console.log('\nRepresentative Patterns (quick tests):');
+  for (const pattern of REPRESENTATIVE_PATTERNS) {
+    console.log(`  - ${pattern}`);
+  }
+
+  console.log('\nAll Patterns:');
+  for (const pattern of ALL_PATTERNS) {
+    console.log(`  - ${pattern}`);
+  }
+}
+
+/**
+ * List all tunable parameters
+ */
+export function listParameters(): void {
+  console.log('\n Tunable Parameters');
+  console.log('='.repeat(50));
+
+  const byMode = new Map<string, ParameterDef[]>();
+  for (const param of Object.values(PARAMETERS)) {
+    if (!byMode.has(param.mode)) {
+      byMode.set(param.mode, []);
+    }
+    byMode.get(param.mode)!.push(param);
+  }
+
+  for (const [mode, params] of byMode) {
+    console.log(`\n${mode.toUpperCase()}:`);
+    for (const param of params) {
+      console.log(`  ${param.name}: ${param.description}`);
+      console.log(`    Range: ${param.min} - ${param.max}, Default: ${param.default}`);
+    }
+  }
 }
 
 // =============================================================================
@@ -118,358 +390,157 @@ export interface SuiteStatus {
 // =============================================================================
 
 /**
- * Quick transient detection suite - fast optimization of key parameters
- */
-export const SUITE_QUICK_TRANSIENT: SuiteConfig = {
-  id: 'quick-transient',
-  name: 'Quick Transient Optimization',
-  description: 'Fast optimization of primary transient detection parameters',
-  baseline: {
-    modes: ['drummer', 'spectral', 'hybrid'],
-    repetitions: 2,
-  },
-  sweeps: [
-    { parameter: 'hitthresh' },
-    { parameter: 'attackmult' },
-    { parameter: 'cooldown' },
-    { parameter: 'fluxthresh' },
-  ],
-  validation: {
-    modes: ['drummer', 'spectral', 'hybrid'],
-    useOptimized: true,
-  },
-  saveInterval: 'per-pattern',
-  saveToDevice: true,
-  analyzeBoundaries: true,
-};
-
-/**
- * Cooldown optimization suite - for fast-tempo patterns
- */
-export const SUITE_COOLDOWN: SuiteConfig = {
-  id: 'cooldown-optimization',
-  name: 'Cooldown Optimization',
-  description: 'Optimize cooldown for fast-tempo and simultaneous patterns',
-  baseline: {
-    modes: ['drummer', 'hybrid'],
-    patterns: ['strong-beats', 'fast-tempo'],
-    repetitions: 2,
-  },
-  sweeps: [
-    {
-      parameter: 'cooldown',
-      values: [20, 30, 40, 50, 60, 80, 100],
-      patterns: ['fast-tempo', 'simultaneous', 'cooldown-stress-40ms'],
-    },
-  ],
-  validation: {
-    modes: ['drummer', 'hybrid'],
-    patterns: ['fast-tempo', 'simultaneous', 'strong-beats'],
-    useOptimized: true,
-  },
-  saveInterval: 'per-pattern',
-  saveToDevice: true,
-  analyzeBoundaries: true,
-};
-
-/**
- * Threshold optimization suite - for sensitivity tuning
- */
-export const SUITE_THRESHOLD: SuiteConfig = {
-  id: 'threshold-optimization',
-  name: 'Threshold Optimization',
-  description: 'Optimize detection thresholds for sensitivity/false-positive balance',
-  baseline: {
-    modes: ['drummer', 'spectral', 'hybrid'],
-    repetitions: 2,
-  },
-  sweeps: [
-    {
-      parameter: 'hitthresh',
-      patterns: ['strong-beats', 'soft-beats', 'sparse'],
-    },
-    {
-      parameter: 'fluxthresh',
-      patterns: ['strong-beats', 'pad-rejection', 'chord-rejection'],
-    },
-    {
-      parameter: 'attackmult',
-      patterns: ['strong-beats', 'synth-stabs'],
-    },
-  ],
-  validation: {
-    modes: ['drummer', 'spectral', 'hybrid'],
-    useOptimized: true,
-  },
-  saveInterval: 'per-pattern',
-  saveToDevice: true,
-  analyzeBoundaries: true,
-};
-
-/**
- * False positive reduction suite
- */
-export const SUITE_FALSE_POSITIVE: SuiteConfig = {
-  id: 'false-positive-reduction',
-  name: 'False Positive Reduction',
-  description: 'Reduce false positives on sustained sounds and sparse patterns',
-  sweeps: [
-    {
-      parameter: 'fluxthresh',
-      values: [1.4, 1.6, 1.8, 2.0, 2.2, 2.5],
-      patterns: ['pad-rejection', 'chord-rejection', 'sparse'],
-    },
-    {
-      parameter: 'hitthresh',
-      patterns: ['pad-rejection', 'soft-beats'],
-    },
-  ],
-  validation: {
-    modes: ['spectral', 'hybrid'],
-    patterns: ['pad-rejection', 'chord-rejection', 'sparse', 'strong-beats'],
-    useOptimized: true,
-  },
-  saveInterval: 'per-pattern',
-  analyzeBoundaries: true,
-};
-
-/**
- * Full calibration suite - comprehensive parameter optimization
- */
-export const SUITE_FULL_CALIBRATION: SuiteConfig = {
-  id: 'full-calibration',
-  name: 'Full Calibration Suite',
-  description: 'Comprehensive optimization of all transient detection parameters',
-  baseline: {
-    modes: ['drummer', 'spectral', 'hybrid'],
-    repetitions: 3,
-  },
-  sweeps: [
-    { parameter: 'hitthresh' },
-    { parameter: 'attackmult' },
-    { parameter: 'cooldown' },
-    { parameter: 'fluxthresh' },
-    { parameter: 'fluxbins' },
-    { parameter: 'onsetthresh' },
-    { parameter: 'risethresh' },
-  ],
-  validation: {
-    modes: ['drummer', 'spectral', 'hybrid'],
-    useOptimized: true,
-  },
-  saveInterval: 'per-pattern',
-  saveToDevice: true,
-  analyzeBoundaries: true,
-};
-
-/**
- * Registry of all predefined suites
+ * Predefined test suites for common calibration workflows
  */
 export const PREDEFINED_SUITES: Record<string, SuiteConfig> = {
-  'quick-transient': SUITE_QUICK_TRANSIENT,
-  'cooldown-optimization': SUITE_COOLDOWN,
-  'threshold-optimization': SUITE_THRESHOLD,
-  'false-positive-reduction': SUITE_FALSE_POSITIVE,
-  'full-calibration': SUITE_FULL_CALIBRATION,
+  'full': {
+    id: 'full',
+    name: 'Full Calibration',
+    description: 'Complete ensemble calibration with all phases',
+    phases: ['baseline', 'sweep', 'interact', 'validate', 'report'],
+  },
+  'quick': {
+    id: 'quick',
+    name: 'Quick Tune',
+    description: 'Fast calibration with representative patterns only',
+    phases: ['baseline', 'sweep', 'validate'],
+    patterns: [...REPRESENTATIVE_PATTERNS.slice(0, 4)],
+  },
+  'thresholds': {
+    id: 'thresholds',
+    name: 'Threshold Tuning',
+    description: 'Sweep detector thresholds only',
+    phases: ['sweep', 'validate'],
+    params: ['drummer_thresh', 'spectral_thresh', 'hfc_thresh', 'bass_thresh'],
+  },
+  'weights': {
+    id: 'weights',
+    name: 'Weight Tuning',
+    description: 'Sweep detector weights only',
+    phases: ['sweep', 'interact', 'validate'],
+    params: ['drummer_weight', 'spectral_weight', 'hfc_weight', 'bass_weight'],
+  },
+  'agreement': {
+    id: 'agreement',
+    name: 'Agreement Tuning',
+    description: 'Tune agreement boost values',
+    phases: ['sweep', 'interact', 'validate'],
+    params: ['agree_1', 'agree_2', 'agree_3'],
+  },
+  'validate-only': {
+    id: 'validate-only',
+    name: 'Validation Only',
+    description: 'Validate current settings without modification',
+    phases: ['validate'],
+  },
 };
 
 // =============================================================================
-// SUITE RUNNER
+// SUITE RUNNER CLASS
 // =============================================================================
 
 /**
- * Runs a complete test suite with baseline, sweeps, and validation
+ * Runs a suite configuration through its phases
  */
 export class SuiteRunner {
-  private config: SuiteConfig;
+  private suite: SuiteConfig;
   private options: TunerOptions;
   private stateManager: StateManager;
   private status: SuiteStatus;
 
-  constructor(config: SuiteConfig, options: TunerOptions) {
-    this.config = config;
+  constructor(suite: SuiteConfig, options: TunerOptions) {
+    this.suite = suite;
     this.options = {
       ...options,
-      outputDir: config.outputDir || `tuning-output/${config.id}`,
+      params: suite.params || options.params,
+      patterns: suite.patterns || options.patterns,
     };
-    this.stateManager = new StateManager(this.options.outputDir!);
+
+    const outputDir = options.outputDir || `tuning-results/${suite.id}`;
+    this.stateManager = new StateManager(outputDir);
+
     this.status = {
-      suiteId: config.id,
-      startedAt: new Date().toISOString(),
-      phase: 'baseline',
+      phase: 'pending',
       progress: {
-        baselineComplete: false,
         sweepsCompleted: [],
-        validationComplete: false,
+        interactionsCompleted: [],
+        currentPhase: 'pending',
       },
     };
   }
 
   /**
-   * Run the complete suite
+   * Run the suite
    */
   async run(): Promise<SuiteStatus> {
-    console.log('\n' + '═'.repeat(60));
-    console.log(`  TEST SUITE: ${this.config.name}`);
-    console.log('═'.repeat(60));
-    console.log(`  ${this.config.description}`);
-    console.log(`  Save interval: ${this.config.saveInterval}`);
-    if (this.config.saveToDevice) {
-      console.log('  Will save optimized values to device on completion');
+    console.log(`\n Running Suite: ${this.suite.name}`);
+    console.log('='.repeat(50));
+    if (this.suite.description) {
+      console.log(this.suite.description);
     }
-    console.log('═'.repeat(60) + '\n');
+    console.log('');
+
+    const phases = this.suite.phases || ['baseline', 'sweep', 'interact', 'validate', 'report'];
 
     try {
-      // Phase 1: Baseline (if configured)
-      if (this.config.baseline) {
-        await this.runBaselinePhase();
-      }
+      for (const phaseName of phases) {
+        this.status.phase = phaseName;
+        this.status.progress.currentPhase = phaseName;
 
-      // Phase 2: Parameter Sweeps
-      if (this.config.sweeps && this.config.sweeps.length > 0) {
-        await this.runSweepPhase();
-      }
-
-      // Phase 3: Validation (if configured)
-      if (this.config.validation) {
-        await this.runValidationPhase();
-      }
-
-      // Post-sweep: Boundary analysis (if configured)
-      if (this.config.analyzeBoundaries) {
-        const boundaryReport = analyzeBoundaries(this.stateManager);
-        printBoundaryReport(boundaryReport);
-      }
-
-      // Post-sweep: Save to device (if configured)
-      if (this.config.saveToDevice) {
-        const saveReport = await saveOptimizedToDevice(this.options, this.stateManager);
-        if (!saveReport.success) {
-          console.warn('\nWarning: Device save had issues. Check report above.');
+        const phase = SUITE_PHASES.find(p => p.name === phaseName);
+        if (!phase) {
+          console.warn(`Unknown phase: ${phaseName}, skipping`);
+          continue;
         }
+
+        console.log(`\n${'='.repeat(50)}`);
+        console.log(`  ${phase.name.toUpperCase()}`);
+        console.log(`  ${phase.description}`);
+        console.log('='.repeat(50));
+
+        await phase.run(this.options, this.stateManager);
+
+        // Track completed sweeps
+        if (phaseName === 'sweep') {
+          const state = this.stateManager.getState();
+          this.status.progress.sweepsCompleted = state.sweeps?.completed || [];
+        }
+        if (phaseName === 'interact') {
+          const state = this.stateManager.getState();
+          this.status.progress.interactionsCompleted = state.interactions?.completed || [];
+        }
+      }
+
+      // Save to device if configured
+      if (this.suite.saveToDevice) {
+        await saveOptimalToDevice(this.options, this.stateManager);
       }
 
       this.status.phase = 'complete';
-      console.log('\n' + '═'.repeat(60));
-      console.log('  SUITE COMPLETE');
-      console.log('═'.repeat(60) + '\n');
+      this.status.progress.currentPhase = 'complete';
+      console.log('\n Suite Complete!');
 
-      return this.status;
-
-    } catch (error) {
+    } catch (err) {
       this.status.phase = 'failed';
-      this.status.error = error instanceof Error ? error.message : String(error);
+      this.status.error = err instanceof Error ? err.message : String(err);
       console.error(`\nSuite failed: ${this.status.error}`);
-      return this.status;
-    }
-  }
-
-  /**
-   * Run baseline phase
-   */
-  private async runBaselinePhase(): Promise<void> {
-    this.status.phase = 'baseline';
-    const config = this.config.baseline!;
-
-    // Build options for baseline
-    const baselineOptions: TunerOptions = {
-      ...this.options,
-      modes: config.modes,
-      patterns: config.patterns,
-    };
-
-    await runBaseline(baselineOptions, this.stateManager);
-    this.status.progress.baselineComplete = true;
-  }
-
-  /**
-   * Run sweep phase
-   */
-  private async runSweepPhase(): Promise<void> {
-    this.status.phase = 'sweep';
-
-    for (const sweepConfig of this.config.sweeps!) {
-      this.status.currentSweep = sweepConfig.parameter;
-
-      // Get parameter definition
-      const paramDef = PARAMETERS[sweepConfig.parameter];
-      if (!paramDef) {
-        console.warn(`Unknown parameter: ${sweepConfig.parameter}, skipping`);
-        continue;
-      }
-
-      // Auto-select patterns if not specified
-      let patterns = sweepConfig.patterns;
-      if (!patterns || patterns.length === 0) {
-        const autoPatterns = getPatternsForParam(sweepConfig.parameter);
-        if (autoPatterns.length > 0) {
-          patterns = autoPatterns.map(p => p.id);
-          console.log(`Auto-selected patterns for ${sweepConfig.parameter}: ${patterns.join(', ')}`);
-        }
-      }
-
-      // Build sweep options
-      const sweepOptions: TunerOptions = {
-        ...this.options,
-        params: [sweepConfig.parameter],
-        patterns: patterns,
-        modes: sweepConfig.modes || (
-          DETECTION_MODES.includes(paramDef.mode as DetectionMode)
-            ? [paramDef.mode as DetectionMode]
-            : undefined
-        ),
-      };
-
-      // Custom sweep values are not yet supported
-      if (sweepConfig.values) {
-        throw new Error(
-          `Custom sweep values are not yet supported for parameter '${sweepConfig.parameter}'. ` +
-          `Remove 'values' from sweep config or modify PARAMETERS[${sweepConfig.parameter}].sweepValues instead.`
-        );
-      }
-
-      await runSweeps(sweepOptions, this.stateManager);
-      this.status.progress.sweepsCompleted.push(sweepConfig.parameter);
     }
 
-    delete this.status.currentSweep;
+    return this.status;
   }
 
   /**
-   * Run validation phase
-   */
-  private async runValidationPhase(): Promise<void> {
-    this.status.phase = 'validation';
-    const config = this.config.validation!;
-
-    // Apply optimized parameters if requested
-    if (config.useOptimized !== false) {
-      console.log('\nApplying optimized parameters for validation...');
-      // Optimal params are already stored in state, validation will use them
-    }
-
-    const validationOptions: TunerOptions = {
-      ...this.options,
-      modes: config.modes,
-      patterns: config.patterns,
-    };
-
-    await runValidation(validationOptions, this.stateManager);
-    this.status.progress.validationComplete = true;
-  }
-
-  /**
-   * Get current suite status
-   */
-  getStatus(): SuiteStatus {
-    return { ...this.status };
-  }
-
-  /**
-   * Get state manager for external access
+   * Get the state manager
    */
   getStateManager(): StateManager {
     return this.stateManager;
+  }
+
+  /**
+   * Get current status
+   */
+  getStatus(): SuiteStatus {
+    return { ...this.status };
   }
 }
 
@@ -478,29 +549,31 @@ export class SuiteRunner {
 // =============================================================================
 
 /**
- * List all available predefined suites
- */
-export function listSuites(): void {
-  console.log('\nAvailable Test Suites:');
-  console.log('═'.repeat(50));
-
-  for (const [id, suite] of Object.entries(PREDEFINED_SUITES)) {
-    console.log(`\n  ${id}`);
-    console.log(`    ${suite.name}`);
-    console.log(`    ${suite.description}`);
-    if (suite.sweeps) {
-      const params = suite.sweeps.map(s => s.parameter).join(', ');
-      console.log(`    Parameters: ${params}`);
-    }
-  }
-  console.log();
-}
-
-/**
- * Get a suite by ID (predefined or custom)
+ * Get a predefined suite by ID
  */
 export function getSuite(id: string): SuiteConfig | undefined {
   return PREDEFINED_SUITES[id];
+}
+
+/**
+ * List all available suites
+ */
+export function listSuites(): void {
+  console.log('\n Available Test Suites');
+  console.log('='.repeat(50));
+
+  for (const [id, suite] of Object.entries(PREDEFINED_SUITES)) {
+    console.log(`\n  ${id}: ${suite.name}`);
+    if (suite.description) {
+      console.log(`    ${suite.description}`);
+    }
+    if (suite.phases) {
+      console.log(`    Phases: ${suite.phases.join(', ')}`);
+    }
+    if (suite.params) {
+      console.log(`    Params: ${suite.params.join(', ')}`);
+    }
+  }
 }
 
 /**
@@ -509,86 +582,43 @@ export function getSuite(id: string): SuiteConfig | undefined {
 export function validateSuiteConfig(config: SuiteConfig): string[] {
   const errors: string[] = [];
 
-  if (!config.id || !/^[a-z0-9-]+$/.test(config.id)) {
-    errors.push('Suite ID must be kebab-case (lowercase with hyphens)');
+  if (!config.id) {
+    errors.push('Suite must have an id');
   }
 
   if (!config.name) {
-    errors.push('Suite name is required');
+    errors.push('Suite must have a name');
   }
 
+  // Validate phases
+  if (config.phases) {
+    const validPhases = ['baseline', 'sweep', 'interact', 'validate', 'report'];
+    for (const phase of config.phases) {
+      if (!validPhases.includes(phase)) {
+        errors.push(`Unknown phase: ${phase}`);
+      }
+    }
+  }
+
+  // Validate params
+  if (config.params) {
+    for (const param of config.params) {
+      if (!PARAMETERS[param]) {
+        errors.push(`Unknown parameter: ${param}`);
+      }
+    }
+  }
+
+  // Validate sweeps
   if (config.sweeps) {
     for (const sweep of config.sweeps) {
-      if (!PARAMETERS[sweep.parameter]) {
-        errors.push(`Unknown parameter: ${sweep.parameter}`);
-      }
-      if (sweep.patterns) {
-        for (const pattern of sweep.patterns) {
-          if (!PATTERN_REGISTRY[pattern]) {
-            errors.push(`Unknown pattern: ${pattern}`);
-          }
-        }
-      }
-    }
-  }
-
-  if (config.baseline?.patterns) {
-    for (const pattern of config.baseline.patterns) {
-      if (!PATTERN_REGISTRY[pattern]) {
-        errors.push(`Unknown baseline pattern: ${pattern}`);
-      }
-    }
-  }
-
-  if (config.validation?.patterns) {
-    for (const pattern of config.validation.patterns) {
-      if (!PATTERN_REGISTRY[pattern]) {
-        errors.push(`Unknown validation pattern: ${pattern}`);
+      if (!sweep.parameter) {
+        errors.push('Sweep must have a parameter');
+      } else if (!PARAMETERS[sweep.parameter]) {
+        errors.push(`Unknown sweep parameter: ${sweep.parameter}`);
       }
     }
   }
 
   return errors;
-}
-
-/**
- * Create a suite from command-line options
- */
-export function createSuiteFromOptions(options: TunerOptions): SuiteConfig {
-  const sweeps: SweepConfig[] = [];
-
-  // Filter to only detection modes (exclude 'music', 'rhythm' subsystem modes)
-  const detectionModes: DetectionMode[] | undefined = options.modes?.filter(
-    (m): m is DetectionMode => DETECTION_MODES.includes(m as DetectionMode)
-  );
-
-  // Add sweeps for each specified parameter
-  if (options.params) {
-    for (const param of options.params) {
-      sweeps.push({
-        parameter: param,
-        patterns: options.patterns,
-        modes: detectionModes,
-      });
-    }
-  }
-
-  return {
-    id: `custom-${Date.now()}`,
-    name: 'Custom Suite',
-    description: 'Suite created from command-line options',
-    baseline: {
-      modes: detectionModes,
-      patterns: options.patterns,
-    },
-    sweeps: sweeps.length > 0 ? sweeps : undefined,
-    validation: {
-      modes: detectionModes,
-      patterns: options.patterns,
-      useOptimized: true,
-    },
-    saveInterval: 'per-pattern',
-    saveToDevice: false,
-    analyzeBoundaries: true,
-  };
 }

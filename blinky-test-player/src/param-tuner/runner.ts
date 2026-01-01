@@ -1,5 +1,9 @@
 /**
  * Test runner - executes patterns and measures detection performance
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * Legacy detection mode switching has been removed.
  */
 
 import { spawn } from 'child_process';
@@ -8,8 +12,8 @@ import { ReadlineParser } from '@serialport/parser-readline';
 import { EventEmitter } from 'events';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import type { TestResult, DetectionMode, TunerOptions } from './types.js';
-import { MODE_IDS, PARAMETERS } from './types.js';
+import type { TestResult, TunerOptions, DetectorType, ParameterDef } from './types.js';
+import { PARAMETERS } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -195,17 +199,17 @@ export class TestRunner extends EventEmitter {
   }
 
   /**
-   * Set detection mode
-   */
-  async setMode(mode: DetectionMode): Promise<void> {
-    await this.sendCommand(`set detectmode ${MODE_IDS[mode]}`);
-  }
-
-  /**
-   * Set a single parameter
+   * Set a single parameter using the new ensemble command format
    */
   async setParameter(name: string, value: number): Promise<void> {
-    await this.sendCommand(`set ${name} ${value}`);
+    const param = PARAMETERS[name];
+    if (param && param.command) {
+      // Use the custom command format (e.g., "detector_thresh drummer")
+      await this.sendCommand(`set ${param.command} ${value}`);
+    } else {
+      // Fall back to direct parameter name (for non-ensemble params like musicthresh)
+      await this.sendCommand(`set ${name} ${value}`);
+    }
   }
 
   /**
@@ -218,11 +222,42 @@ export class TestRunner extends EventEmitter {
   }
 
   /**
-   * Reset parameters to defaults for a mode
+   * Set detector enabled state
    */
-  async resetDefaults(mode: DetectionMode): Promise<void> {
-    const modeParams = Object.values(PARAMETERS).filter(p => p.mode === mode);
-    for (const param of modeParams) {
+  async setDetectorEnabled(detector: DetectorType, enabled: boolean): Promise<void> {
+    await this.sendCommand(`set detector_enable ${detector} ${enabled ? 1 : 0}`);
+  }
+
+  /**
+   * Set detector weight
+   */
+  async setDetectorWeight(detector: DetectorType, weight: number): Promise<void> {
+    await this.sendCommand(`set detector_weight ${detector} ${weight}`);
+  }
+
+  /**
+   * Set detector threshold
+   */
+  async setDetectorThreshold(detector: DetectorType, threshold: number): Promise<void> {
+    await this.sendCommand(`set detector_thresh ${detector} ${threshold}`);
+  }
+
+  /**
+   * Set agreement boost value
+   */
+  async setAgreementBoost(level: number, boost: number): Promise<void> {
+    if (level < 0 || level > 6) {
+      throw new Error('Agreement level must be 0-6');
+    }
+    await this.sendCommand(`set agree_${level} ${boost}`);
+  }
+
+  /**
+   * Reset parameters to defaults for ensemble
+   */
+  async resetDefaults(): Promise<void> {
+    const ensembleParams = Object.values(PARAMETERS).filter(p => p.mode === 'ensemble');
+    for (const param of ensembleParams) {
       await this.setParameter(param.name, param.default);
     }
   }
@@ -255,7 +290,7 @@ export class TestRunner extends EventEmitter {
   async runPattern(patternId: string): Promise<TestResult> {
     // Lock gain if specified
     if (this.options.gain !== undefined) {
-      await this.sendCommand(`set hwgainlock ${this.options.gain}`);
+      await this.sendCommand(`test lock hwgain ${this.options.gain}`);
     }
 
     // Clear buffers and start streaming
@@ -314,7 +349,7 @@ export class TestRunner extends EventEmitter {
 
     // Unlock gain
     if (this.options.gain !== undefined) {
-      await this.sendCommand('set hwgainlock 255');
+      await this.sendCommand('test unlock hwgain');
     }
 
     if (!result.success) {
