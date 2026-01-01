@@ -169,14 +169,9 @@ protected:
         }
 
         // Copy to temporary for sorting
-        float sorted[THRESHOLD_BUFFER_SIZE];
+        float sorted[THRESHOLD_BUFFER_SIZE] = {0};  // Initialize to silence cppcheck
         int n = (thresholdBufferCount_ < THRESHOLD_BUFFER_SIZE)
                 ? thresholdBufferCount_ : THRESHOLD_BUFFER_SIZE;
-
-        // Handle empty buffer case
-        if (n == 0) {
-            return 0.0f;
-        }
 
         for (int i = 0; i < n; i++) {
             sorted[i] = thresholdBuffer_[i];
