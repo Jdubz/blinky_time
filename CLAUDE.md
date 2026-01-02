@@ -70,7 +70,8 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - 5 transient detection modes
+- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - 6 simultaneous detectors with weighted fusion
+- **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength
 
 ### Obsolete Documents (Removed)
@@ -83,7 +84,23 @@ The following were deleted as outdated (December 2025):
 
 ## Current Audio System (December 2025)
 
-- **Detection Mode 4 (Hybrid)** is recommended for general use
-- **Equal weights (0.5/0.5)** outperform the original 0.7/0.3 flux/drummer split
-- **Cooldown = 80ms** reduces false positives
-- **PLL tracking was removed** - replaced by autocorrelation-based phase tracking
+### Ensemble Detection Architecture
+The system uses 6 simultaneous detectors with weighted fusion:
+
+| Detector | Weight | Specialty |
+|----------|--------|-----------|
+| Drummer | 0.22 | Time-domain amplitude transients |
+| SpectralFlux | 0.20 | SuperFlux algorithm, robust recall |
+| BassBand | 0.18 | Low-frequency kick/bass detection |
+| HFC | 0.15 | High-frequency percussive attacks |
+| ComplexDomain | 0.13 | Phase-based soft onset detection |
+| MelFlux | 0.12 | Perceptually-scaled detection |
+
+### Key Features
+- **Agreement-based confidence**: Single-detector hits are suppressed (0.6x), multi-detector consensus is boosted (up to 1.2x)
+- **Cooldown = 80ms**: Reduces false positives from echo/reverb
+- **Autocorrelation rhythm tracking**: Replaced legacy PLL-based tracking
+- **Shared FFT**: All spectral detectors share a single FFT computation
+
+### Legacy Mode Switching (REMOVED)
+The old `detectionMode` parameter and mode-switching code has been removed. All 6 detectors now run simultaneously.

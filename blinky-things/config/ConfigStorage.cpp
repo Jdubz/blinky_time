@@ -107,32 +107,29 @@ void ConfigStorage::loadDefaults() {
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
-    // Shared transient detection defaults (tuned via fast-tune 2025-12-28)
-    data_.mic.transientThreshold = 2.813f;  // Hybrid-optimal (drummer: 1.688, hybrid: 2.813)
-    data_.mic.attackMultiplier = 1.1f;      // 10% sudden rise required (tuned from 1.2, was 1.3)
-    data_.mic.averageTau = 0.8f;            // Recent average tracking time
-    data_.mic.cooldownMs = 80;              // 80ms cooldown between hits (tuned 2025-12-30, was 40)
+    // Fast AGC parameters (accelerates calibration when signal is persistently low)
+    data_.mic.fastAgcEnabled = true;        // Enable fast AGC when gain is high
+    data_.mic.fastAgcThreshold = 0.15f;     // Raw level threshold to trigger fast mode
+    data_.mic.fastAgcPeriodMs = 5000;       // 5s calibration period in fast mode
+    data_.mic.fastAgcTrackingTau = 5.0f;    // 5s tracking tau in fast mode
 
-    // Detection mode (v20+): multi-algorithm support
-    data_.mic.detectionMode = 4;          // 4 = Hybrid (best F1: 0.705)
-
-    // Bass band filter defaults
-    data_.mic.bassFreq = 120.0f;          // 120 Hz cutoff (kick drum range)
-    data_.mic.bassQ = 1.0f;               // Butterworth Q
-    data_.mic.bassThresh = 3.0f;          // Same threshold as main
-
-    // HFC defaults
-    data_.mic.hfcWeight = 1.0f;           // No weighting adjustment
-    data_.mic.hfcThresh = 3.0f;           // Same threshold as main
-
-    // Spectral flux defaults (tuned via fast-tune 2025-12-28)
-    data_.mic.fluxThresh = 1.4f;          // Binary search optimal (tuned from 2.0, was 2.8, was 2.641, originally 3.0)
-    data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
-
-    // Hybrid mode defaults (mode 4) - tuned via fast-tune 2025-12-30 (F1: 0.598, equal weights best)
-    data_.mic.hybridFluxWeight = 0.5f;    // Weight when only flux detects (tuned from 0.7)
-    data_.mic.hybridDrumWeight = 0.5f;    // Weight when only drummer detects (tuned from 0.3)
-    data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
+    // LEGACY: Detection defaults (kept for backward compatibility with old configs)
+    // These parameters are now handled by EnsembleDetector, not AdaptiveMic
+    data_.mic.transientThreshold = 2.813f;
+    data_.mic.attackMultiplier = 1.1f;
+    data_.mic.averageTau = 0.8f;
+    data_.mic.cooldownMs = 80;
+    data_.mic.detectionMode = 4;
+    data_.mic.bassFreq = 120.0f;
+    data_.mic.bassQ = 1.0f;
+    data_.mic.bassThresh = 3.0f;
+    data_.mic.hfcWeight = 1.0f;
+    data_.mic.hfcThresh = 3.0f;
+    data_.mic.fluxThresh = 1.4f;
+    data_.mic.fluxBins = 64;
+    data_.mic.hybridFluxWeight = 0.5f;
+    data_.mic.hybridDrumWeight = 0.5f;
+    data_.mic.hybridBothBoost = 1.2f;
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
@@ -280,29 +277,24 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     // Validate hardware AGC parameters (expanded - allow full ADC range usage)
     validateFloat(data_.mic.hwTarget, 0.05f, 0.9f, F("hwTarget"));
 
-    // Validate shared transient detection parameters
+    // Validate fast AGC parameters
+    validateFloat(data_.mic.fastAgcThreshold, 0.01f, 0.5f, F("fastAgcThresh"));
+    validateFloat(data_.mic.fastAgcTrackingTau, 0.5f, 30.0f, F("fastAgcTau"));
+    validateUint32(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
+
+    // LEGACY: Validate detection parameters (still needed for backward compatibility)
     validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
     validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
     validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
     validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
-
-    // Validate detection mode and algorithm-specific parameters (v20+)
-    validateUint32(data_.mic.detectionMode, 0, 4, F("detectionMode"));  // 0-4: drummer, bass, hfc, flux, hybrid
-
-    // Bass band filter validation
+    validateUint32(data_.mic.detectionMode, 0, 4, F("detectionMode"));
     validateFloat(data_.mic.bassFreq, 40.0f, 200.0f, F("bassFreq"));
     validateFloat(data_.mic.bassQ, 0.5f, 3.0f, F("bassQ"));
     validateFloat(data_.mic.bassThresh, 1.5f, 10.0f, F("bassThresh"));
-
-    // HFC validation
     validateFloat(data_.mic.hfcWeight, 0.5f, 5.0f, F("hfcWeight"));
     validateFloat(data_.mic.hfcThresh, 1.5f, 10.0f, F("hfcThresh"));
-
-    // Spectral flux validation
     validateFloat(data_.mic.fluxThresh, 1.0f, 10.0f, F("fluxThresh"));
     validateUint32(data_.mic.fluxBins, 4, 128, F("fluxBins"));
-
-    // Hybrid mode validation (v21+)
     validateFloat(data_.mic.hybridFluxWeight, 0.1f, 1.0f, F("hybridFluxWeight"));
     validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
     validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
@@ -353,32 +345,16 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     // Hardware AGC parameters (primary - raw input tracking)
     mic.hwTarget = data_.mic.hwTarget;
 
-    // Shared transient detection parameters
-    mic.transientThreshold = data_.mic.transientThreshold;
-    mic.attackMultiplier = data_.mic.attackMultiplier;
-    mic.averageTau = data_.mic.averageTau;
-    mic.cooldownMs = data_.mic.cooldownMs;
+    // Fast AGC parameters
+    mic.fastAgcEnabled = data_.mic.fastAgcEnabled;
+    mic.fastAgcThreshold = data_.mic.fastAgcThreshold;
+    mic.fastAgcPeriodMs = data_.mic.fastAgcPeriodMs;
+    mic.fastAgcTrackingTau = data_.mic.fastAgcTrackingTau;
 
-    // Detection mode (v20+)
-    mic.detectionMode = data_.mic.detectionMode;
-
-    // Bass band filter parameters
-    mic.bassFreq = data_.mic.bassFreq;
-    mic.bassQ = data_.mic.bassQ;
-    mic.bassThresh = data_.mic.bassThresh;
-
-    // HFC parameters
-    mic.hfcWeight = data_.mic.hfcWeight;
-    mic.hfcThresh = data_.mic.hfcThresh;
-
-    // Spectral flux parameters
-    mic.fluxThresh = data_.mic.fluxThresh;
-    mic.fluxBins = data_.mic.fluxBins;
-
-    // Hybrid mode parameters (v21+)
-    mic.hybridFluxWeight = data_.mic.hybridFluxWeight;
-    mic.hybridDrumWeight = data_.mic.hybridDrumWeight;
-    mic.hybridBothBoost = data_.mic.hybridBothBoost;
+    // NOTE: Detection-specific parameters (transientThreshold, attackMultiplier, etc.)
+    // are now handled by EnsembleDetector. The data_.mic fields are kept for
+    // backward compatibility when reading old config files, but are not applied
+    // to AdaptiveMic which now only handles audio input normalization.
 
     // AudioController parameters (v23+)
     // All rhythm tracking params are now public tunable members
@@ -411,32 +387,16 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     // Hardware AGC parameters (primary - raw input tracking)
     data_.mic.hwTarget = mic.hwTarget;
 
-    // Simplified transient detection parameters
-    data_.mic.transientThreshold = mic.transientThreshold;
-    data_.mic.attackMultiplier = mic.attackMultiplier;
-    data_.mic.averageTau = mic.averageTau;
-    data_.mic.cooldownMs = mic.cooldownMs;
+    // Fast AGC parameters
+    data_.mic.fastAgcEnabled = mic.fastAgcEnabled;
+    data_.mic.fastAgcThreshold = mic.fastAgcThreshold;
+    data_.mic.fastAgcPeriodMs = mic.fastAgcPeriodMs;
+    data_.mic.fastAgcTrackingTau = mic.fastAgcTrackingTau;
 
-    // Detection mode and algorithm-specific parameters (v20+)
-    data_.mic.detectionMode = mic.detectionMode;
-
-    // Bass band filter parameters
-    data_.mic.bassFreq = mic.bassFreq;
-    data_.mic.bassQ = mic.bassQ;
-    data_.mic.bassThresh = mic.bassThresh;
-
-    // HFC parameters
-    data_.mic.hfcWeight = mic.hfcWeight;
-    data_.mic.hfcThresh = mic.hfcThresh;
-
-    // Spectral flux parameters
-    data_.mic.fluxThresh = mic.fluxThresh;
-    data_.mic.fluxBins = mic.fluxBins;
-
-    // Hybrid mode parameters (v21+)
-    data_.mic.hybridFluxWeight = mic.hybridFluxWeight;
-    data_.mic.hybridDrumWeight = mic.hybridDrumWeight;
-    data_.mic.hybridBothBoost = mic.hybridBothBoost;
+    // NOTE: Detection-specific parameters (transientThreshold, detectionMode, etc.)
+    // are now handled by EnsembleDetector. The data_.mic fields are kept for
+    // backward compatibility but are no longer saved from AdaptiveMic.
+    // Future versions may save EnsembleDetector configuration separately.
 
     // AudioController parameters (v23+)
     // All rhythm tracking params are now public tunable members

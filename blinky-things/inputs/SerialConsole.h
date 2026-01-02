@@ -104,6 +104,7 @@ private:
     void registerAgcSettings();
     void registerTransientSettings();
     void registerDetectionSettings();
+    void registerEnsembleSettings();  // Ensemble detector configuration
     void registerRhythmSettings();
 
     // Command handlers (extracted from handleSpecialCommand for clarity)
@@ -117,6 +118,7 @@ private:
     bool handleGeneratorCommand(const char* cmd);
     bool handleEffectCommand(const char* cmd);
     bool handleLogCommand(const char* cmd);
+    bool handleEnsembleCommand(const char* cmd);  // Ensemble detector configuration
 
     // Settings registration for other generators
     void registerWaterSettings(WaterParams* wp);

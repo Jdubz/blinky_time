@@ -37,7 +37,6 @@ constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of ful
 
 // ISR processing constants
 constexpr int ISR_BUFFER_SIZE = 512;              // PDM read buffer size (samples per ISR call)
-constexpr int SAMPLE_BATCH_SIZE = 64;             // Batch size for feeding samples to spectral flux
 
 // Alias for brevity (hardware gain limits are in PlatformConstants.h)
 using Platform::Microphone::HW_GAIN_MIN;
@@ -55,7 +54,7 @@ volatile int16_t AdaptiveMic::s_lastSample     = 0;
 // FFT sample ring buffer
 volatile int16_t AdaptiveMic::s_fftRing[AdaptiveMic::FFT_RING_SIZE] = {0};
 volatile uint32_t AdaptiveMic::s_fftWriteIdx = 0;
-uint32_t AdaptiveMic::s_fftReadIdx = 0;
+uint32_t AdaptiveMic::s_extFftReadIdx = 0;
 
 // ---------- Public ----------
 AdaptiveMic::AdaptiveMic(IPdmMic& pdm, ISystemTime& time)
@@ -78,38 +77,15 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   level = 0.0f;
   valleyLevel = VALLEY_FLOOR;  // Start valley very low for low-noise microphone (0.1% of full scale)
   peakLevel = 0.01f;  // Start peak at 1% of full scale
-  transient = 0.0f;
-  lastTransientMs = time_.millis();
   lastHwCalibMs = time_.millis();
   lastIsrMs = time_.millis();
   pdmAlive = false;
-  recentAverage = 0.0f;
-  previousLevel = 0.0f;
-  lastFluxValue_ = 0.0f;  // Initialize spectral flux value for AudioController
 
-  // Initialize spectral flux detector
-  spectralFlux_.begin();
+  // Initialize FFT ring buffer
   s_fftWriteIdx = 0;
-  s_fftReadIdx = 0;
+  s_extFftReadIdx = 0;
 
-  // Initialize threshold buffer for local median adaptive threshold
-  thresholdBufferIdx_ = 0;
-  thresholdBufferCount_ = 0;
-  for (int i = 0; i < THRESHOLD_BUFFER_SIZE; i++) {
-    thresholdBuffer_[i] = 0.0f;
-  }
-
-  // Initialize attack buffer for attack detection
-  for (int i = 0; i < ATTACK_BUFFER_SIZE; i++) {
-    attackBuffer[i] = 0.0f;
-  }
-  attackBufferIdx = 0;
-
-  // Initialize detection mode tracking for buffer clearing on mode change
-  lastDetectionMode_ = detectionMode;
-
-  // Initialize adaptive threshold and fast AGC state
-  adaptiveScale_ = 1.0f;
+  // Initialize fast AGC state
   inFastAgcMode_ = false;
 
   return true;
@@ -124,10 +100,6 @@ void AdaptiveMic::update(float dt) {
   // Clamp dt to reasonable range
   if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
   if (dt > MicConstants::MAX_DT_SECONDS) dt = MicConstants::MAX_DT_SECONDS;
-
-  // CRITICAL: Reset transient at start of EVERY update, not just when samples available
-  // This ensures transient is a single-frame pulse that doesn't persist across frames
-  transient = 0.0f;
 
   // Get raw audio samples from ISR
   float avgAbs = 0.0f;
@@ -149,16 +121,6 @@ void AdaptiveMic::update(float dt) {
 
     // Store instantaneous raw level for debugging
     rawInstantLevel = normalized;
-
-    // FIX BUG #1: Pre-fill attack buffer on first update to prevent false positives
-    // Without this, buffer starts at 0, making any audio appear as "attacking"
-    if (!attackBufferInitialized_) {
-      for (int i = 0; i < ATTACK_BUFFER_SIZE; i++) {
-        attackBuffer[i] = normalized;
-      }
-      recentAverage = normalized;  // Also initialize recent average
-      attackBufferInitialized_ = true;
-    }
 
     // Track raw input for hardware AGC (PRIMARY gain control)
     // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
@@ -200,13 +162,8 @@ void AdaptiveMic::update(float dt) {
     float mapped = (normalized - valleyLevel) / range;
     level = clamp01(mapped);
 
-    // Simplified amplitude spike detection
-    detectTransients(nowMs, dt);
-
-    // Clear spectral flux value if not in flux mode (prevent stale data)
-    if (detectionMode != 3 && detectionMode != 4) {
-      lastFluxValue_ = 0.0f;
-    }
+    // NOTE: Transient detection is now handled by EnsembleDetector
+    // AdaptiveMic only provides normalized audio levels
   }
 
   if (!pdmAlive) return;
@@ -233,79 +190,6 @@ void AdaptiveMic::unlockHwGain() {
 }
 
 // ---------- Private helpers ----------
-
-/**
- * Compute local median of threshold buffer using insertion sort
- * Fast for small buffers (N=16), O(n^2) but cache-friendly
- *
- * Cold-start handling: Returns a sensible minimum value when buffer not yet filled.
- * This prevents false positives from threshold=0 on startup.
- */
-float AdaptiveMic::computeLocalMedian() const {
-  // Cold-start: Return minimum sensible threshold to prevent false positives
-  // 0.01f = 1% of normalized range, enough to reject noise but not miss real signals
-  constexpr float COLD_START_MINIMUM = 0.01f;
-
-  if (thresholdBufferCount_ < 3) {
-    // Buffer not filled - use recentAverage if available, else minimum
-    return maxValue(recentAverage, COLD_START_MINIMUM);
-  }
-
-  // Copy to temporary array for sorting
-  // Initialize to zero to satisfy static analysis (cppcheck uninitvar warning)
-  float sorted[THRESHOLD_BUFFER_SIZE] = {0.0f};
-  int n = minValue(thresholdBufferCount_, THRESHOLD_BUFFER_SIZE);
-
-  // Note: n >= 3 is guaranteed by the thresholdBufferCount_ < 3 check above,
-  // but we keep this guard for defensive programming
-  if (n == 0) {
-    return 0.0f;
-  }
-
-  for (int i = 0; i < n; i++) {
-    sorted[i] = thresholdBuffer_[i];
-  }
-
-  // Insertion sort - efficient for small arrays
-  for (int i = 1; i < n; i++) {
-    float key = sorted[i];
-    int j = i - 1;
-    while (j >= 0 && sorted[j] > key) {
-      sorted[j + 1] = sorted[j];
-      j--;
-    }
-    sorted[j + 1] = key;
-  }
-
-  return sorted[n / 2];  // Median
-}
-
-/**
- * Compute local adaptive threshold from median
- * threshold = median * transientThreshold * adaptiveScale_
- * This adapts to local dynamics (quiet sections get lower thresholds)
- * When adaptive threshold is enabled, also scales based on signal level
- */
-float AdaptiveMic::computeLocalThreshold(float median) const {
-  // Ensure minimum threshold to prevent noise triggering
-  float minThreshold = 0.001f;
-  // Apply adaptive scale (1.0 when disabled, <1.0 for low-level audio)
-  float effectiveThreshold = transientThreshold * adaptiveScale_;
-  float threshold = median * effectiveThreshold;
-  return maxValue(threshold, minThreshold);
-}
-
-/**
- * Update threshold buffer with new detection function value
- * Circular buffer overwrites oldest entry
- */
-void AdaptiveMic::updateThresholdBuffer(float value) {
-  thresholdBuffer_[thresholdBufferIdx_] = value;
-  thresholdBufferIdx_ = (thresholdBufferIdx_ + 1) % THRESHOLD_BUFFER_SIZE;
-  if (thresholdBufferCount_ < THRESHOLD_BUFFER_SIZE) {
-    thresholdBufferCount_++;
-  }
-}
 
 /**
  * Consume accumulated ISR data atomically
@@ -465,94 +349,20 @@ void AdaptiveMic::onPDMdata() {
   s_instance->lastIsrMs = s_instance->time_.millis();
 }
 
-/**
- * TRANSIENT DETECTION DISPATCHER
- *
- * Routes to the appropriate detection algorithm based on detectionMode:
- * - 0 (DRUMMER): Original amplitude-based "Drummer's Algorithm"
- * - 1 (BASS_BAND): Biquad lowpass filter focusing on kick frequencies
- * - 2 (HFC): High Frequency Content for percussive transients
- * - 3 (SPECTRAL_FLUX): FFT-based spectral difference
- * - 4 (HYBRID): Combined drummer + spectral flux
- */
-void AdaptiveMic::detectTransients(uint32_t nowMs, float dt) {
-  // Note: transient is reset at the start of update(), not here
-  // This ensures it resets even when no audio samples are available (n==0)
-
-  // Clear threshold buffer on detection mode change
-  // Different algorithms produce different signal types, so shared buffer would contaminate thresholds
-  if (detectionMode != lastDetectionMode_) {
-    thresholdBufferIdx_ = 0;
-    thresholdBufferCount_ = 0;
-    for (int i = 0; i < THRESHOLD_BUFFER_SIZE; i++) {
-      thresholdBuffer_[i] = 0.0f;
-    }
-    lastDetectionMode_ = detectionMode;
-  }
-
-  // Update adaptive threshold scaling if enabled
-  // Scales down transientThreshold when hardware gain is near max and signal is still low
-  if (adaptiveThresholdEnabled) {
-    // Check if we're in a low-level situation (high gain, low signal)
-    bool isLowLevel = (currentHardwareGain >= 75) && (rawTrackedLevel < adaptiveMinRaw);
-
-    if (isLowLevel) {
-      // Calculate target scale based on raw level
-      // rawLevel 0 → scale=adaptiveMaxScale, rawLevel=adaptiveMinRaw → scale=1.0
-      float t = rawTrackedLevel / adaptiveMinRaw;
-      float targetScale = adaptiveMaxScale + t * (1.0f - adaptiveMaxScale);
-
-      // Smooth blend toward target
-      float alpha = dt / (adaptiveBlendTau + dt);
-      adaptiveScale_ = adaptiveScale_ + alpha * (targetScale - adaptiveScale_);
-    } else {
-      // Blend back to 1.0 when not in low-level mode
-      float alpha = dt / (adaptiveBlendTau + dt);
-      adaptiveScale_ = adaptiveScale_ + alpha * (1.0f - adaptiveScale_);
-    }
-
-    // Clamp scale to valid range
-    adaptiveScale_ = constrainValue(adaptiveScale_, adaptiveMaxScale, 1.0f);
-  } else {
-    // Adaptive threshold disabled - always use scale of 1.0
-    adaptiveScale_ = 1.0f;
-  }
-
-  float rawLevel = rawInstantLevel;
-
-  // Dispatch to appropriate algorithm
-  switch (static_cast<DetectionMode>(detectionMode)) {
-    case DetectionMode::BASS_BAND:
-      detectBassBand(nowMs, dt, rawLevel);
-      break;
-    case DetectionMode::HFC:
-      detectHFC(nowMs, dt, rawLevel);
-      break;
-    case DetectionMode::SPECTRAL_FLUX:
-      detectSpectralFlux(nowMs, dt, rawLevel);
-      break;
-    case DetectionMode::HYBRID:
-      detectHybrid(nowMs, dt, rawLevel);
-      break;
-    case DetectionMode::DRUMMER:
-    default:
-      detectDrummer(nowMs, dt, rawLevel);
-      break;
-  }
-
-  // Keep previousLevel updated for compatibility (all algorithms use this)
-  previousLevel = rawLevel;
-}
+// NOTE: All transient detection has been moved to EnsembleDetector
+// AdaptiveMic now only provides audio input with level normalization
 
 /**
- * Feed samples from ISR ring buffer to spectral flux processor
- * Handles wraparound and overflow conditions safely.
- *
- * @return Number of samples fed to the spectral flux processor
+ * Get samples for external FFT consumers (EnsembleDetector)
+ * Provides raw PCM samples from ISR ring buffer for spectral analysis
  */
-int AdaptiveMic::feedSamplesToSpectralFlux() {
+int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
+  if (!buffer || maxCount <= 0) {
+    return 0;
+  }
+
   uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
-  int32_t available = (int32_t)(writeIdx - s_fftReadIdx);  // Signed for wraparound safety
+  int32_t available = (int32_t)(writeIdx - s_extFftReadIdx);  // Signed for wraparound safety
 
   // Handle negative values (shouldn't happen, but be defensive)
   if (available < 0) {
@@ -561,387 +371,18 @@ int AdaptiveMic::feedSamplesToSpectralFlux() {
 
   // Limit to ring buffer size to prevent reading stale data if we fell behind
   if ((uint32_t)available > FFT_RING_SIZE) {
-    s_fftReadIdx = writeIdx - FFT_RING_SIZE;
+    s_extFftReadIdx = writeIdx - FFT_RING_SIZE;
     available = FFT_RING_SIZE;
   }
 
-  int totalFed = 0;
+  // Limit to requested count
+  int toRead = (available > maxCount) ? maxCount : available;
 
-  // Feed samples to spectral flux processor in batches
-  while (available > 0) {
-    int16_t batch[SAMPLE_BATCH_SIZE];
-    int batchSize = 0;
-
-    while (batchSize < SAMPLE_BATCH_SIZE && available > 0) {
-      batch[batchSize++] = s_fftRing[s_fftReadIdx & (FFT_RING_SIZE - 1)];
-      s_fftReadIdx++;
-      available--;
-    }
-
-    spectralFlux_.addSamples(batch, batchSize);
-    totalFed += batchSize;
+  // Copy samples to external buffer
+  for (int i = 0; i < toRead; i++) {
+    buffer[i] = s_fftRing[s_extFftReadIdx & (FFT_RING_SIZE - 1)];
+    s_extFftReadIdx++;
   }
 
-  return totalFed;
-}
-
-/**
- * Common detection finalization pattern
- * Checks if signal exceeds threshold with cooldown, calculates strength
- *
- * SIDE EFFECT: Updates lastTransientMs member variable when detection occurs.
- * This is intentional - it prevents re-detection during the cooldown period.
- * Callers should be aware that this function modifies class state.
- *
- * @param signal Current signal value (raw level or flux)
- * @param median Local median for threshold computation
- * @param threshold Multiplier for median to get detection threshold
- * @param nowMs Current timestamp
- * @return Detection strength 0-1, or 0 if no detection
- */
-float AdaptiveMic::finalizeDetection(float signal, float median, float threshold, uint32_t nowMs) {
-  float effectiveThreshold = maxValue(median * threshold, 0.001f);
-  bool isLoudEnough = signal > effectiveThreshold;
-  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-  if (isLoudEnough && cooldownElapsed) {
-    float ratio = signal / maxValue(median, 0.001f);
-    lastTransientMs = nowMs;
-    return clamp01((ratio - threshold) / threshold);
-  }
-  return 0.0f;
-}
-
-/**
- * DRUMMER'S ALGORITHM (Mode 0) - Original amplitude-based detection
- *
- * Detects MUSICAL hits (kicks, snares, bass drops) by looking for:
- * 1. LOUD: Significantly louder than local median (adaptive threshold)
- * 2. SUDDEN: Rapidly rising compared to ~50ms ago (ring buffer lookback)
- * 3. INFREQUENT: Cooldown prevents double-triggers
- *
- * Uses local median adaptive threshold instead of global exponential average
- * for better accuracy across dynamic range (quiet sections get lower thresholds).
- */
-void AdaptiveMic::detectDrummer(uint32_t nowMs, float dt, float rawLevel) {
-  // Track recent average with exponential moving average (for fallback and compatibility)
-  float alpha = 1.0f - expf(-dt / averageTau);
-  recentAverage += alpha * (rawLevel - recentAverage);
-
-  // Get baseline level from ~50-70ms ago (the oldest entry in ring buffer)
-  float baselineLevel = attackBuffer[attackBufferIdx];
-
-  // Compute local adaptive threshold using median of recent values
-  float localMedian = computeLocalMedian();
-  float localThreshold = computeLocalThreshold(localMedian);
-
-  // Detect transient: LOUD + SUDDEN + not in cooldown
-  bool isLoudEnough = rawLevel > localThreshold;
-  bool isAttacking = rawLevel > baselineLevel * attackMultiplier;
-  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-  if (isLoudEnough && isAttacking && cooldownElapsed) {
-    // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
-    float ratio = rawLevel / maxValue(localMedian, 0.001f);
-    transient = clamp01((ratio - transientThreshold) / transientThreshold);
-    lastTransientMs = nowMs;
-  }
-
-  // Update ring buffer with current level (overwrites oldest entry)
-  attackBuffer[attackBufferIdx] = rawLevel;
-  attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
-
-  // Update threshold buffer for adaptive threshold computation
-  updateThresholdBuffer(rawLevel);
-}
-
-/**
- * BASS BAND FILTER (Mode 1) - Focus on kick drum frequencies
- *
- * Uses a biquad lowpass filter to isolate bass frequencies (60-200Hz),
- * then applies the same LOUD + SUDDEN + COOLDOWN logic to the filtered signal.
- * This should improve kick detection while reducing hi-hat false positives.
- * Uses local median adaptive threshold for better accuracy.
- */
-void AdaptiveMic::detectBassBand(uint32_t nowMs, float dt, float rawLevel) {
-  // FIXED: Use SpectralFlux with bass frequency range instead of envelope filtering
-  // Bass range: bins 1-6 covers 62.5-375 Hz (kick drum + bass fundamentals)
-  // At 16kHz sample rate: bin 1 = 62.5 Hz, bin 6 = 375 Hz
-  spectralFlux_.setAnalysisRange(1, 6);  // Focus on bass frequencies
-
-  // Feed samples from ISR ring buffer to spectral flux processor
-  feedSamplesToSpectralFlux();
-
-  // Process FFT frame if ready
-  if (spectralFlux_.isFrameReady()) {
-    float bassFlux = spectralFlux_.process();
-
-    // SAFETY: Skip if flux is invalid
-    if (!isfinite(bassFlux)) {
-      bassFlux = 0.0f;
-    }
-
-    // Store as bassFilteredLevel for compatibility with debugging/telemetry
-    bassFilteredLevel = bassFlux;
-
-    // Track recent average of bass flux (for threshold comparison)
-    float alpha = 1.0f - expf(-dt / averageTau);
-    bassRecentAverage += alpha * (bassFlux - bassRecentAverage);
-
-    // SAFETY: Reset if average becomes corrupted
-    if (!isfinite(bassRecentAverage)) {
-      bassRecentAverage = 0.0f;
-    }
-
-    // Detect transient using LOUD + COOLDOWN logic
-    // Note: Bass flux is already a change measure, so we don't need "SUDDEN" check
-    float strength = finalizeDetection(bassFlux, bassRecentAverage, bassThresh, nowMs);
-    if (strength > 0.0f) {
-      transient = strength;
-    }
-  }
-
-  // Also update main recentAverage for compatibility (using raw level)
-  float alpha = 1.0f - expf(-dt / averageTau);
-  recentAverage += alpha * (rawLevel - recentAverage);
-}
-
-/**
- * HIGH FREQUENCY CONTENT (Mode 2) - Emphasizes percussive transients
- *
- * HFC weights high frequencies heavily, which emphasizes transients
- * (drums have bright attacks with lots of high frequency content).
- * We approximate HFC using the derivative of the signal (sample differences).
- * Uses local median adaptive threshold for better accuracy.
- */
-void AdaptiveMic::detectHFC(uint32_t nowMs, float dt, float rawLevel) {
-  // Approximate HFC using signal derivative (emphasizes changes)
-  // HFC = |current - previous|^2 weighted by hfcWeight
-  float diff = rawLevel - previousLevel;
-  float hfc = diff * diff * hfcWeight;
-
-  // FIX BUG #6: Initialize lastHfcValue on first call to prevent first-frame bias
-  // Without this, lastHfcValue = 0 makes first frame always pass attack test
-  if (lastHfcValue == 0.0f && hfc > 0.0f) {
-    lastHfcValue = hfc;
-    hfcRecentAverage = hfc;  // Also initialize average
-  }
-
-  // Track recent average of HFC
-  float alpha = 1.0f - expf(-dt / averageTau);
-  hfcRecentAverage += alpha * (hfc - hfcRecentAverage);
-
-  // Compute local adaptive threshold using median of recent values
-  float localMedian = computeLocalMedian();
-  float localThreshold = localMedian * hfcThresh;
-  localThreshold = maxValue(localThreshold, 0.0001f);
-
-  // Detect transient in HFC signal
-  bool isLoudEnough = hfc > localThreshold;
-  bool isAttacking = hfc > lastHfcValue * attackMultiplier;
-  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-  if (isLoudEnough && isAttacking && cooldownElapsed) {
-    float ratio = hfc / maxValue(localMedian, 0.0001f);
-    transient = clamp01((ratio - hfcThresh) / hfcThresh);
-    lastTransientMs = nowMs;
-  }
-
-  lastHfcValue = hfc;
-
-  // Update threshold buffer for adaptive threshold computation
-  updateThresholdBuffer(hfc);
-
-  // Also update main recentAverage for compatibility
-  recentAverage += alpha * (rawLevel - recentAverage);
-}
-
-/**
- * SPECTRAL FLUX (Mode 3) - FFT-based detection with SuperFlux max-filter
- *
- * Computes spectral flux by comparing magnitude spectra between frames.
- * Spectral flux spikes during transients (drums, bass drops) because
- * the frequency content changes rapidly.
- * Uses local median adaptive threshold for better accuracy.
- *
- * Algorithm:
- * 1. Read samples from ISR ring buffer
- * 2. Pass to SpectralFlux for FFT processing (with SuperFlux max-filter)
- * 3. Detect spikes in flux signal using local median threshold
- */
-void AdaptiveMic::detectSpectralFlux(uint32_t nowMs, float dt, float rawLevel) {
-  // Update analysis range based on fluxBins parameter
-  // fluxBins controls how many frequency bins to analyze (focus on bass-mid)
-  spectralFlux_.setAnalysisRange(1, fluxBins);  // Skip DC (bin 0)
-
-  // Feed samples from ISR ring buffer to spectral flux processor
-  feedSamplesToSpectralFlux();
-
-  // Process FFT frame if ready
-  if (spectralFlux_.isFrameReady()) {
-    float flux = spectralFlux_.process();
-
-    // SAFETY: Skip if flux is invalid
-    if (!isfinite(flux)) {
-      flux = 0.0f;
-    }
-
-    // Store for external access (AudioController uses for rhythm tracking)
-    lastFluxValue_ = flux;
-
-    // Update running average (for threshold comparison)
-    float alpha = 1.0f - expf(-dt / averageTau);
-    fluxRecentAverage_ += alpha * (flux - fluxRecentAverage_);
-
-    // SAFETY: Reset if average becomes corrupted
-    if (!isfinite(fluxRecentAverage_)) {
-      fluxRecentAverage_ = 0.0f;
-    }
-
-    // Detect transient using local adaptive threshold
-    float localMedian = computeLocalMedian();
-    float strength = finalizeDetection(flux, localMedian, fluxThresh, nowMs);
-    if (strength > 0.0f) {
-      transient = strength;
-    }
-
-    // Update threshold buffer with flux value for adaptive threshold
-    updateThresholdBuffer(flux);
-  }
-
-  // Also update main recentAverage for compatibility (using raw level)
-  float alpha = 1.0f - expf(-dt / averageTau);
-  recentAverage += alpha * (rawLevel - recentAverage);
-}
-
-/**
- * HYBRID DETECTION (Mode 4) - Combines drummer + spectral flux
- *
- * Runs both algorithms and combines their outputs for confidence scoring:
- * - Both detect: High confidence (1.0 strength)
- * - Flux only: Medium-high confidence (0.7 strength)
- * - Drummer only: Medium confidence (0.5 strength)
- * - Neither: No detection
- *
- * Uses local median adaptive threshold for better accuracy.
- * This leverages:
- * - Spectral flux's high recall (catches most beats)
- * - Drummer's precision on certain patterns (good hat rejection)
- */
-void AdaptiveMic::detectHybrid(uint32_t nowMs, float dt, float rawLevel) {
-  // Update tracking averages (needed by both algorithms)
-  float alpha = 1.0f - expf(-dt / averageTau);
-  recentAverage += alpha * (rawLevel - recentAverage);
-
-  // Process spectral flux (feed samples to FFT)
-  spectralFlux_.setAnalysisRange(1, fluxBins);
-  feedSamplesToSpectralFlux();
-
-  // FIXED: Process FFT frame ONCE and cache the result
-  // This prevents state corruption and makes eval functions pure
-  float currentFlux = 0.0f;
-  bool fluxFrameReady = false;
-
-  if (spectralFlux_.isFrameReady()) {
-    currentFlux = spectralFlux_.process();
-    fluxFrameReady = true;
-
-    // SAFETY: Skip if flux is invalid
-    if (!isfinite(currentFlux)) {
-      currentFlux = 0.0f;
-      fluxFrameReady = false;
-    } else {
-      // Update running average (side effect done here, not in eval function)
-      fluxRecentAverage_ += alpha * (currentFlux - fluxRecentAverage_);
-
-      // SAFETY: Reset if average becomes corrupted
-      if (!isfinite(fluxRecentAverage_)) {
-        fluxRecentAverage_ = 0.0f;
-      }
-
-      // Store for external access (AudioController uses for rhythm tracking)
-      lastFluxValue_ = currentFlux;
-    }
-  }
-
-  // Evaluate both algorithms (now pure functions without side effects)
-  float drummerStrength = evalDrummerStrength(rawLevel);
-  float fluxStrength = evalSpectralFluxStrength(currentFlux, fluxFrameReady);
-
-  // Combine detections with confidence weighting
-  bool cooldownElapsed = (int32_t)(nowMs - lastTransientMs) > cooldownMs;
-
-  if (cooldownElapsed) {
-    float confidence = 0.0f;
-
-    if (drummerStrength > 0.0f && fluxStrength > 0.0f) {
-      // Both algorithms agree - high confidence
-      // Use max strength, boosted by agreement
-      confidence = maxValue(drummerStrength, fluxStrength);
-      confidence = minValue(1.0f, confidence * hybridBothBoost);
-    } else if (fluxStrength > 0.0f) {
-      // Spectral flux only - medium-high confidence
-      confidence = fluxStrength * hybridFluxWeight;
-    } else if (drummerStrength > 0.0f) {
-      // Drummer only - medium confidence
-      confidence = drummerStrength * hybridDrumWeight;
-    }
-
-    if (confidence > 0.0f) {
-      transient = clamp01(confidence);
-      lastTransientMs = nowMs;
-    }
-  }
-
-  // Update attack buffer for drummer algorithm
-  attackBuffer[attackBufferIdx] = rawLevel;
-  attackBufferIdx = (attackBufferIdx + 1) % ATTACK_BUFFER_SIZE;
-
-  // Update threshold buffer for adaptive threshold computation
-  updateThresholdBuffer(rawLevel);
-}
-
-/**
- * Evaluate drummer algorithm strength without side effects
- * Uses local median adaptive threshold for better accuracy
- * Returns 0.0 if no detection, 0.0-1.0 for detection strength
- */
-float AdaptiveMic::evalDrummerStrength(float rawLevel) {
-  float baselineLevel = attackBuffer[attackBufferIdx];
-
-  // Use local median adaptive threshold
-  float localMedian = computeLocalMedian();
-  float localThreshold = computeLocalThreshold(localMedian);
-
-  bool isLoudEnough = rawLevel > localThreshold;
-  bool isAttacking = rawLevel > baselineLevel * attackMultiplier;
-
-  if (isLoudEnough && isAttacking) {
-    float ratio = rawLevel / maxValue(localMedian, 0.001f);
-    return clamp01((ratio - transientThreshold) / transientThreshold);
-  }
-  return 0.0f;
-}
-
-/**
- * Evaluate spectral flux strength from cached flux value (pure function)
- * FIXED: No longer processes FFT frame - caller must provide pre-computed flux
- * Returns 0.0 if no detection or frame not ready, 0.0-1.0 for detection strength
- */
-float AdaptiveMic::evalSpectralFluxStrength(float flux, bool frameReady) {
-  if (!frameReady) {
-    return 0.0f;
-  }
-
-  // Use local median adaptive threshold
-  float localMedian = computeLocalMedian();
-  float localThreshold = localMedian * fluxThresh;
-  localThreshold = maxValue(localThreshold, 0.001f);
-
-  // Check if loud enough using adaptive threshold
-  if (flux > localThreshold) {
-    float ratio = flux / maxValue(localMedian, 0.001f);
-    return clamp01((ratio - fluxThresh) / fluxThresh);
-  }
-  return 0.0f;
+  return toRead;
 }

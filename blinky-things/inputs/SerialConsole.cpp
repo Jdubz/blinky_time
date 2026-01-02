@@ -71,6 +71,7 @@ void SerialConsole::registerSettings() {
     registerAgcSettings();
     registerTransientSettings();
     registerDetectionSettings();
+    registerEnsembleSettings();  // New: Ensemble detector configuration
     registerRhythmSettings();
 }
 
@@ -163,64 +164,40 @@ void SerialConsole::registerAgcSettings() {
 }
 
 // === TRANSIENT DETECTION SETTINGS ===
+// NOTE: Transient detection has been moved to EnsembleDetector
+// These settings are now controlled via the ensemble configuration
 void SerialConsole::registerTransientSettings() {
-    if (!mic_) return;
-
-    settings_.registerFloat("hitthresh", &mic_->transientThreshold, "transient",
-        "Hit threshold (multiples of recent average)", 1.5f, 10.0f);
-    settings_.registerFloat("attackmult", &mic_->attackMultiplier, "transient",
-        "Attack multiplier (sudden rise ratio)", 1.1f, 2.0f);
-    settings_.registerFloat("avgtau", &mic_->averageTau, "transient",
-        "Recent average tracking time (s)", 0.1f, 5.0f);
-    settings_.registerUint16("cooldown", &mic_->cooldownMs, "transient",
-        "Cooldown between hits (ms)", 20, 500);
-
-    // Adaptive threshold for low-level audio
-    settings_.registerBool("adaptthresh", &mic_->adaptiveThresholdEnabled, "transient",
-        "Enable adaptive threshold scaling");
-    settings_.registerFloat("adaptminraw", &mic_->adaptiveMinRaw, "transient",
-        "Raw level to start threshold scaling", 0.01f, 0.5f);
-    settings_.registerFloat("adaptmaxscale", &mic_->adaptiveMaxScale, "transient",
-        "Minimum threshold scale factor", 0.3f, 1.0f);
-    settings_.registerFloat("adaptblend", &mic_->adaptiveBlendTau, "transient",
-        "Adaptive threshold blend time (s)", 1.0f, 15.0f);
+    // Settings moved to EnsembleDetector
+    // Use 'show detectors' command to view/configure detector settings
 }
 
 // === DETECTION MODE SETTINGS ===
-// Different onset detection algorithms
+// NOTE: Detection modes replaced by ensemble architecture
+// All 6 detectors run simultaneously with weighted fusion
 void SerialConsole::registerDetectionSettings() {
-    if (!mic_) return;
+    // Legacy detection mode settings removed
+    // Use ensemble configuration via:
+    //   set detector_enable <detector> <0|1>
+    //   set detector_weight <detector> <weight>
+    //   set detector_thresh <detector> <threshold>
+}
 
-    settings_.registerUint8("detectmode", &mic_->detectionMode, "detection",
-        "Algorithm (0=drummer,1=bass,2=hfc,3=flux,4=hybrid)", 0, 4);
+// === ENSEMBLE DETECTOR SETTINGS ===
+// New ensemble-based detection system with 6 concurrent detectors
+// Uses setDetectorEnabled/setDetectorWeight/setDetectorThreshold via AudioController
+void SerialConsole::registerEnsembleSettings() {
+    // Ensemble settings are configured via AudioController methods
+    // See AudioController::setDetectorEnabled(), setDetectorWeight(), setDetectorThreshold()
+    //
+    // Commands available via "show detectors" and direct method calls:
+    // - Detector types: drummer, spectral, hfc, bass, complex, mel
+    // - Each can be enabled/disabled and have weight/threshold adjusted
+    //
+    // For now, the legacy detectmode command continues to work
+    // Future: Add direct parameter bindings for ensemble weights
 
-    // Bass Band Filter parameters (mode 1)
-    settings_.registerFloat("bassfreq", &mic_->bassFreq, "detection",
-        "Bass filter cutoff freq (Hz)", 40.0f, 200.0f);
-    settings_.registerFloat("bassq", &mic_->bassQ, "detection",
-        "Bass filter Q factor", 0.5f, 3.0f);
-    settings_.registerFloat("bassthresh", &mic_->bassThresh, "detection",
-        "Bass detection threshold", 1.5f, 10.0f);
-
-    // HFC parameters (mode 2)
-    settings_.registerFloat("hfcweight", &mic_->hfcWeight, "detection",
-        "HFC weighting factor", 0.5f, 5.0f);
-    settings_.registerFloat("hfcthresh", &mic_->hfcThresh, "detection",
-        "HFC detection threshold", 1.5f, 10.0f);
-
-    // Spectral Flux parameters (mode 3)
-    settings_.registerFloat("fluxthresh", &mic_->fluxThresh, "detection",
-        "Spectral flux threshold", 1.0f, 10.0f);
-    settings_.registerUint8("fluxbins", &mic_->fluxBins, "detection",
-        "FFT bins to analyze", 4, 128);
-
-    // Hybrid parameters (mode 4) - confidence weights
-    settings_.registerFloat("hyfluxwt", &mic_->hybridFluxWeight, "detection",
-        "Hybrid: flux-only weight", 0.1f, 1.0f);
-    settings_.registerFloat("hydrumwt", &mic_->hybridDrumWeight, "detection",
-        "Hybrid: drummer-only weight", 0.1f, 1.0f);
-    settings_.registerFloat("hybothboost", &mic_->hybridBothBoost, "detection",
-        "Hybrid: both-agree boost", 1.0f, 2.0f);
+    // Note: When audioCtrl_ is available, ensemble configuration
+    // is accessible via audioCtrl_->getEnsemble()
 }
 
 // === RHYTHM TRACKING SETTINGS (AudioController) ===
@@ -294,6 +271,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
     if (handleLogCommand(cmd)) return true;
+    if (handleEnsembleCommand(cmd)) return true;  // Ensemble detector commands
     return false;
 }
 
@@ -519,33 +497,26 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
 // === DETECTION MODE STATUS ===
 bool SerialConsole::handleModeCommand(const char* cmd) {
     if (strcmp(cmd, "mode") == 0) {
-        if (mic_) {
-            uint8_t mode = mic_->getDetectionMode();
-            Serial.println(F("=== Detection Mode Status ==="));
-            Serial.print(F("Current Mode: "));
-            Serial.print(mode);
-            Serial.print(F(" - "));
-            switch(mode) {
-                case 0: Serial.println(F("DRUMMER")); break;
-                case 1: Serial.println(F("BASS_BAND")); break;
-                case 2: Serial.println(F("HFC")); break;
-                case 3: Serial.println(F("SPECTRAL_FLUX")); break;
-                case 4: Serial.println(F("HYBRID")); break;
-                default: Serial.println(F("UNKNOWN")); break;
-            }
-            if (mode == 1) {
-                Serial.print(F("Bass Level: "));
-                Serial.println(mic_->getBassLevel(), 3);
-            } else if (mode == 3 || mode == 4) {
-                Serial.print(F("Flux Value: "));
-                Serial.println(mic_->getLastFluxValue(), 3);
-            }
-            Serial.print(F("Transient Threshold: "));
-            Serial.println(mic_->transientThreshold, 2);
-            Serial.print(F("Recent Average: "));
-            Serial.println(mic_->getRecentAverage(), 3);
+        Serial.println(F("=== Ensemble Detection Status ==="));
+        if (audioCtrl_) {
+            const EnsembleOutput& output = audioCtrl_->getLastEnsembleOutput();
+            Serial.print(F("Transient Strength: "));
+            Serial.println(output.transientStrength, 3);
+            Serial.print(F("Ensemble Confidence: "));
+            Serial.println(output.ensembleConfidence, 3);
+            Serial.print(F("Detector Agreement: "));
+            Serial.print(output.detectorAgreement);
+            Serial.println(F("/6"));
+            Serial.print(F("Dominant Detector: "));
+            Serial.println(output.dominantDetector);
         } else {
-            Serial.println(F("Microphone not available"));
+            Serial.println(F("AudioController not available"));
+        }
+        if (mic_) {
+            Serial.print(F("Audio Level: "));
+            Serial.println(mic_->getLevel(), 3);
+            Serial.print(F("Hardware Gain: "));
+            Serial.println(mic_->getHwGain());
         }
         return true;
     }
@@ -601,27 +572,12 @@ void SerialConsole::restoreDefaults() {
         fireGenerator_->resetToDefaults();
     }
 
-    // Restore mic defaults (window/range normalization and simplified transient detection)
-    // All values tuned via param-tuner 2024-12
+    // Restore mic defaults (window/range normalization)
+    // Note: Transient detection settings moved to EnsembleDetector
     if (mic_) {
         mic_->peakTau = Defaults::PeakTau;              // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
         mic_->hwTarget = 0.35f;                         // Target raw input level (±0.01 dead zone)
-        mic_->transientThreshold = 2.0f;                // 2x louder than recent average
-        mic_->attackMultiplier = 1.2f;                  // 20% sudden rise required
-        mic_->averageTau = 0.8f;                        // Recent average tracking time
-        mic_->cooldownMs = 80;                          // 80ms cooldown (tuned 2025-12-30)
-        mic_->fluxThresh = 2.8f;                        // Spectral flux threshold
-        mic_->detectionMode = 4;                        // Hybrid mode (best F1: 0.705)
-        mic_->hybridFluxWeight = 0.5f;                  // Hybrid flux weight (tuned 2025-12-30)
-        mic_->hybridDrumWeight = 0.5f;                  // Hybrid drum weight (tuned 2025-12-30)
-        mic_->hybridBothBoost = 1.2f;                   // Hybrid both-agree boost
-
-        // Adaptive threshold defaults (disabled by default, enable via settings)
-        mic_->adaptiveThresholdEnabled = false;
-        mic_->adaptiveMinRaw = 0.1f;
-        mic_->adaptiveMaxScale = 0.6f;
-        mic_->adaptiveBlendTau = 5.0f;
 
         // Fast AGC defaults (enabled by default for better low-level response)
         mic_->fastAgcEnabled = true;
@@ -840,14 +796,11 @@ void SerialConsole::streamTick() {
         lastStatusMs = now;
         Serial.print(F("{\"type\":\"STATUS\",\"ts\":"));
         Serial.print(now);
-        Serial.print(F(",\"mode\":"));
-        Serial.print(mic_->getDetectionMode());
+        Serial.print(F(",\"mode\":\"ensemble\""));
         Serial.print(F(",\"hwGain\":"));
         Serial.print(mic_->getHwGain());
         Serial.print(F(",\"level\":"));
         Serial.print(mic_->getLevel(), 2);
-        Serial.print(F(",\"avgLevel\":"));
-        Serial.print(mic_->getRecentAverage(), 2);
         Serial.print(F(",\"peakLevel\":"));
         Serial.print(mic_->getPeakLevel(), 2);
         Serial.println(F("}"));
@@ -863,7 +816,7 @@ void SerialConsole::streamTick() {
         //
         // Field Mapping (abbreviated → full name : range):
         // l     → level            : 0-1 (post-range-mapping output, noise-gated)
-        // t     → transient        : 0-1 (simplified amplitude spike strength, LOUD + SUDDEN detection)
+        // t     → transient        : 0-1 (ensemble transient strength from all detectors)
         // pk    → peak             : 0-1 (current tracked peak for window normalization, raw range)
         // vl    → valley           : 0-1 (current tracked valley for window normalization, raw range)
         // raw   → raw ADC level    : 0-1 (what HW gain targets, pre-normalization)
@@ -872,12 +825,17 @@ void SerialConsole::streamTick() {
         // z     → zero-crossing    : 0-1 (zero-crossing rate, for frequency classification)
         //
         // Debug mode additional fields:
-        // avg   → recent average   : float (rolling average for transient threshold)
-        // prev  → previous level   : float (previous frame level for attack detection)
+        // agree → detector agreement : 0-6 (how many detectors fired)
+        // conf  → ensemble confidence: 0-1 (combined confidence score)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
         Serial.print(F(",\"t\":"));
-        Serial.print(mic_->getTransient(), 2);
+        // Transient now comes from ensemble detector
+        float transient = 0.0f;
+        if (audioCtrl_) {
+            transient = audioCtrl_->getLastEnsembleOutput().transientStrength;
+        }
+        Serial.print(transient, 2);
         Serial.print(F(",\"pk\":"));
         Serial.print(mic_->getPeakLevel(), 2);
         Serial.print(F(",\"vl\":"));
@@ -891,12 +849,13 @@ void SerialConsole::streamTick() {
         Serial.print(F(",\"z\":"));
         Serial.print(mic_->zeroCrossingRate, 2);
 
-        // Debug mode: add transient detection internal state
-        if (streamDebug_) {
-            Serial.print(F(",\"avg\":"));
-            Serial.print(mic_->getRecentAverage(), 4);
-            Serial.print(F(",\"prev\":"));
-            Serial.print(mic_->getPreviousLevel(), 4);
+        // Debug mode: add ensemble detection internal state
+        if (streamDebug_ && audioCtrl_) {
+            const EnsembleOutput& ens = audioCtrl_->getLastEnsembleOutput();
+            Serial.print(F(",\"agree\":"));
+            Serial.print(ens.detectorAgreement);
+            Serial.print(F(",\"conf\":"));
+            Serial.print(ens.ensembleConfidence, 3);
         }
 
         Serial.print(F("}"));
@@ -964,6 +923,208 @@ void SerialConsole::streamTick() {
         Serial.print(battery_->getPercent());
         Serial.println(F("}}"));
     }
+}
+
+// === ENSEMBLE DETECTOR COMMANDS ===
+bool SerialConsole::handleEnsembleCommand(const char* cmd) {
+    // Handle "show detectors" - list all detector states
+    if (strcmp(cmd, "show detectors") == 0 || strcmp(cmd, "detectors") == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const EnsembleDetector& ens = audioCtrl_->getEnsemble();
+        const EnsembleFusion& fusion = ens.getFusion();
+
+        Serial.println(F("=== Ensemble Detectors ==="));
+        Serial.println(F("Name      Weight  Thresh  Enabled  LastStrength"));
+        Serial.println(F("--------  ------  ------  -------  ------------"));
+
+        const DetectionResult* lastResults = ens.getLastResults();
+        for (int i = 0; i < EnsembleDetector::NUM_DETECTORS; i++) {
+            DetectorType type = static_cast<DetectorType>(i);
+            const DetectorConfig& cfg = fusion.getConfig(type);
+            const char* name = getDetectorName(type);
+
+            // Pad name to 8 chars
+            Serial.print(name);
+            for (int j = strlen(name); j < 10; j++) Serial.print(' ');
+
+            Serial.print(cfg.weight, 2);
+            Serial.print(F("    "));
+            Serial.print(cfg.threshold, 1);
+            Serial.print(F("    "));
+            Serial.print(cfg.enabled ? F("yes") : F("no "));
+            Serial.print(F("      "));
+            Serial.println(lastResults[i].strength, 3);
+        }
+        return true;
+    }
+
+    // Handle "show ensemble" - show fusion configuration
+    if (strcmp(cmd, "show ensemble") == 0 || strcmp(cmd, "ensemble") == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
+
+        Serial.println(F("=== Ensemble Fusion Configuration ==="));
+        Serial.println(F("Agreement Boost Values:"));
+        for (int i = 0; i <= 6; i++) {
+            Serial.print(F("  "));
+            Serial.print(i);
+            Serial.print(F(" detector(s): "));
+            Serial.println(fusion.getAgreementBoost(i), 2);
+        }
+        Serial.print(F("\nTotal Weight: "));
+        Serial.println(fusion.getTotalWeight(), 3);
+
+        // Show last output
+        const EnsembleOutput& output = audioCtrl_->getLastEnsembleOutput();
+        Serial.println(F("\nLast Output:"));
+        Serial.print(F("  Strength: "));
+        Serial.println(output.transientStrength, 3);
+        Serial.print(F("  Confidence: "));
+        Serial.println(output.ensembleConfidence, 3);
+        Serial.print(F("  Agreement: "));
+        Serial.print(output.detectorAgreement);
+        Serial.println(F("/6"));
+        Serial.print(F("  Dominant: "));
+        Serial.println(getDetectorName(static_cast<DetectorType>(output.dominantDetector)));
+        return true;
+    }
+
+    // Handle "set detector_enable <type> <0|1>"
+    if (strncmp(cmd, "set detector_enable ", 20) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const char* args = cmd + 20;
+        char typeName[16];
+        int enabled = 0;
+        if (sscanf(args, "%15s %d", typeName, &enabled) == 2) {
+            DetectorType type;
+            if (parseDetectorType(typeName, type)) {
+                audioCtrl_->setDetectorEnabled(type, enabled != 0);
+                Serial.print(F("OK "));
+                Serial.print(getDetectorName(type));
+                Serial.print(F(" enabled="));
+                Serial.println(enabled);
+            } else {
+                Serial.print(F("ERROR: Unknown detector '"));
+                Serial.print(typeName);
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+            }
+        } else {
+            Serial.println(F("Usage: set detector_enable <type> <0|1>"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+        }
+        return true;
+    }
+
+    // Handle "set detector_weight <type> <value>"
+    if (strncmp(cmd, "set detector_weight ", 20) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const char* args = cmd + 20;
+        char typeName[16];
+        float weight = 0.0f;
+        if (sscanf(args, "%15s %f", typeName, &weight) == 2) {
+            DetectorType type;
+            if (parseDetectorType(typeName, type)) {
+                if (weight >= 0.0f && weight <= 1.0f) {
+                    audioCtrl_->setDetectorWeight(type, weight);
+                    Serial.print(F("OK "));
+                    Serial.print(getDetectorName(type));
+                    Serial.print(F(" weight="));
+                    Serial.println(weight, 3);
+                } else {
+                    Serial.println(F("ERROR: Weight must be 0.0-1.0"));
+                }
+            } else {
+                Serial.print(F("ERROR: Unknown detector '"));
+                Serial.print(typeName);
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+            }
+        } else {
+            Serial.println(F("Usage: set detector_weight <type> <value>"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+        }
+        return true;
+    }
+
+    // Handle "set detector_thresh <type> <value>"
+    if (strncmp(cmd, "set detector_thresh ", 20) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        const char* args = cmd + 20;
+        char typeName[16];
+        float threshold = 0.0f;
+        if (sscanf(args, "%15s %f", typeName, &threshold) == 2) {
+            DetectorType type;
+            if (parseDetectorType(typeName, type)) {
+                if (threshold > 0.0f) {
+                    audioCtrl_->setDetectorThreshold(type, threshold);
+                    Serial.print(F("OK "));
+                    Serial.print(getDetectorName(type));
+                    Serial.print(F(" threshold="));
+                    Serial.println(threshold, 2);
+                } else {
+                    Serial.println(F("ERROR: Threshold must be > 0"));
+                }
+            } else {
+                Serial.print(F("ERROR: Unknown detector '"));
+                Serial.print(typeName);
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+            }
+        } else {
+            Serial.println(F("Usage: set detector_thresh <type> <value>"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+        }
+        return true;
+    }
+
+    // Handle "set agree_<n> <value>" for agreement boost values
+    if (strncmp(cmd, "set agree_", 10) == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        int n = 0;
+        float value = 0.0f;
+        // Parse "set agree_N value" where N is 0-6
+        const char* args = cmd + 10;
+        if (sscanf(args, "%d %f", &n, &value) == 2) {
+            if (n >= 0 && n <= 6) {
+                // Get current boosts, modify one, set all
+                EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
+                float boosts[7];
+                for (int i = 0; i <= 6; i++) {
+                    boosts[i] = fusion.getAgreementBoost(i);
+                }
+                boosts[n] = value;
+                fusion.setAgreementBoosts(boosts);
+                Serial.print(F("OK agree_"));
+                Serial.print(n);
+                Serial.print(F("="));
+                Serial.println(value, 2);
+            } else {
+                Serial.println(F("ERROR: Agreement index must be 0-6"));
+            }
+        } else {
+            Serial.println(F("Usage: set agree_<0-6> <value>"));
+            Serial.println(F("Example: set agree_1 0.6"));
+        }
+        return true;
+    }
+
+    return false;
 }
 
 // === LOG LEVEL COMMANDS ===

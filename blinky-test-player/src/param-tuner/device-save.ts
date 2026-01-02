@@ -1,19 +1,16 @@
 /**
- * Device Save Module
+ * Device Configuration Persistence
+ * Saves optimal parameters to device flash
  *
- * Saves optimized parameter values to the blinky device via serial.
- * Uses the blinky-serial MCP server for communication.
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * Saves ensemble detector configuration.
+ * Legacy per-mode saving has been removed.
  */
 
-import type { DetectionMode } from './types.js';
-import { DETECTION_MODES, PARAMETERS } from './types.js';
+import type { TunerOptions } from './types.js';
+import { PARAMETERS } from './types.js';
 import { StateManager } from './state.js';
 import { TestRunner } from './runner.js';
-import type { TunerOptions } from './types.js';
-
-// =============================================================================
-// TYPES
-// =============================================================================
 
 /**
  * Result of a parameter save operation
@@ -39,188 +36,157 @@ export interface DeviceSaveReport {
   summary: string;
 }
 
-// =============================================================================
-// DEVICE SAVE FUNCTIONS
-// =============================================================================
-
 /**
- * Save all optimized parameters to the device
+ * Save optimal parameters to device flash
  */
-export async function saveOptimizedToDevice(
+export async function saveOptimalToDevice(
   options: TunerOptions,
-  stateManager: StateManager,
-  modes?: DetectionMode[]
+  stateManager: StateManager
 ): Promise<DeviceSaveReport> {
-  const runner = new TestRunner(options);
+  console.log('\n Saving Optimal Parameters to Device');
+  console.log('='.repeat(50));
+
   const report: DeviceSaveReport = {
     timestamp: new Date().toISOString(),
-    success: false,
+    success: true,
     parametersUpdated: [],
     parametersFailed: [],
     flashSaved: false,
     summary: '',
   };
 
-  console.log('\n' + '='.repeat(60));
-  console.log('  SAVING OPTIMIZED VALUES TO DEVICE');
-  console.log('='.repeat(60));
+  const runner = new TestRunner(options);
+  await runner.connect();
 
   try {
-    await runner.connect();
+    const optimalParams = stateManager.getOptimalParams();
 
-    // Get all sweep results
-    const modesToSave = modes || [...DETECTION_MODES];
+    if (!optimalParams || Object.keys(optimalParams).length === 0) {
+      report.summary = 'No optimal parameters found to save.';
+      console.log(report.summary);
+      return report;
+    }
 
-    for (const mode of modesToSave) {
-      const optimalParams = stateManager.getOptimalParams(mode);
-      if (!optimalParams) {
-        console.log(`\n  No optimal params found for ${mode}, skipping`);
-        continue;
-      }
+    console.log('\nApplying optimal ensemble parameters...');
 
-      console.log(`\n  Setting ${mode} parameters...`);
-
-      // First set the mode
-      await runner.setMode(mode);
-
-      // Then set each parameter
-      for (const [paramName, newValue] of Object.entries(optimalParams)) {
-        const paramDef = PARAMETERS[paramName];
-        if (!paramDef) continue;
-
-        const oldValue = paramDef.default;
-
-        try {
-          await runner.setParameter(paramName, newValue);
-          report.parametersUpdated.push({
-            parameter: paramName,
-            oldValue,
-            newValue,
-            success: true,
-          });
-          console.log(`    ${paramName}: ${oldValue} -> ${newValue}`);
-        } catch (error) {
-          report.parametersFailed.push({
-            parameter: paramName,
-            oldValue,
-            newValue,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          console.error(`    ${paramName}: FAILED - ${error}`);
-        }
+    // Apply each parameter
+    for (const [param, value] of Object.entries(optimalParams)) {
+      try {
+        await runner.setParameter(param, value);
+        report.parametersUpdated.push({
+          parameter: param,
+          oldValue: PARAMETERS[param]?.default ?? 0,
+          newValue: value,
+          success: true,
+        });
+        console.log(`  set ${param} = ${value}`);
+      } catch (err) {
+        report.parametersFailed.push({
+          parameter: param,
+          oldValue: PARAMETERS[param]?.default ?? 0,
+          newValue: value,
+          success: false,
+          error: String(err),
+        });
+        console.error(`  FAILED: ${param} = ${value}: ${err}`);
       }
     }
 
     // Save to flash
-    console.log('\n  Saving to device flash memory...');
+    console.log('\nSaving to flash...');
     try {
       await runner.saveToFlash();
       report.flashSaved = true;
-      console.log('    Flash save: SUCCESS');
-    } catch (error) {
-      report.flashError = error instanceof Error ? error.message : String(error);
-      console.error(`    Flash save: FAILED - ${report.flashError}`);
+      console.log('Flash save complete.');
+    } catch (err) {
+      report.flashError = String(err);
+      report.success = false;
+      console.error(`Flash save failed: ${err}`);
     }
 
-    report.success = report.parametersFailed.length === 0 && report.flashSaved;
-
-    if (report.success) {
-      report.summary = `Successfully saved ${report.parametersUpdated.length} parameters to device flash.`;
-    } else {
-      const issues: string[] = [];
-      if (report.parametersFailed.length > 0) {
-        issues.push(`${report.parametersFailed.length} parameters failed`);
-      }
-      if (!report.flashSaved) {
-        issues.push('flash save failed');
-      }
-      report.summary = `Partial save: ${issues.join(', ')}`;
+    report.summary = `${report.parametersUpdated.length} parameters saved, ${report.parametersFailed.length} failed`;
+    if (report.flashSaved) {
+      report.summary += ', flash saved';
     }
 
-  } catch (error) {
-    report.summary = `Device connection failed: ${error instanceof Error ? error.message : String(error)}`;
-    console.error(`\n  Error: ${report.summary}`);
+    console.log(`\n${report.summary}`);
+
   } finally {
     await runner.disconnect();
   }
-
-  console.log('\n  ' + report.summary);
-  console.log('='.repeat(60) + '\n');
 
   return report;
 }
 
 /**
- * Get a summary of changes that would be saved
+ * Show what would be saved without actually saving
  */
-export function previewDeviceSave(
-  stateManager: StateManager,
-  modes?: DetectionMode[]
-): void {
-  console.log('\n' + '='.repeat(60));
-  console.log('  DEVICE SAVE PREVIEW (dry-run)');
-  console.log('='.repeat(60));
+export async function showOptimalParams(
+  stateManager: StateManager
+): Promise<void> {
+  console.log('\n Optimal Parameters');
+  console.log('='.repeat(50));
 
-  const modesToShow = modes || [...DETECTION_MODES];
-  let totalChanges = 0;
+  const optimalParams = stateManager.getOptimalParams();
 
-  for (const mode of modesToShow) {
-    const optimalParams = stateManager.getOptimalParams(mode);
-    if (!optimalParams) {
-      console.log(`\n  ${mode}: No optimal params found`);
-      continue;
-    }
-
-    console.log(`\n  ${mode.toUpperCase()}:`);
-
-    for (const [paramName, newValue] of Object.entries(optimalParams)) {
-      const paramDef = PARAMETERS[paramName];
-      if (!paramDef) continue;
-
-      const oldValue = paramDef.default;
-      const changed = oldValue !== newValue;
-
-      if (changed) {
-        console.log(`    ${paramName}: ${oldValue} -> ${newValue} (CHANGE)`);
-        totalChanges++;
-      } else {
-        console.log(`    ${paramName}: ${newValue} (unchanged)`);
-      }
-    }
+  if (!optimalParams || Object.keys(optimalParams).length === 0) {
+    console.log('No optimal parameters found.');
+    return;
   }
 
-  console.log('\n  Summary:');
-  console.log(`    Total parameters to update: ${totalChanges}`);
-  console.log('='.repeat(60) + '\n');
+  console.log('\nENSEMBLE:');
+  for (const [param, value] of Object.entries(optimalParams)) {
+    const def = PARAMETERS[param]?.default;
+    const change = value !== def ? ` (default: ${def})` : '';
+    console.log(`  ${param}: ${value}${change}`);
+  }
+
+  console.log('\nSerial commands to apply manually:');
+  for (const [param, value] of Object.entries(optimalParams)) {
+    const paramDef = PARAMETERS[param];
+    if (paramDef?.command) {
+      console.log(`  set ${paramDef.command} ${value}`);
+    } else {
+      console.log(`  set ${param} ${value}`);
+    }
+  }
+  console.log('  save');
+}
+
+/**
+ * Reset device to default parameters
+ */
+export async function resetDeviceToDefaults(
+  options: TunerOptions
+): Promise<void> {
+  console.log('\n Resetting Device to Defaults');
+  console.log('='.repeat(50));
+
+  const runner = new TestRunner(options);
+  await runner.connect();
+
+  try {
+    await runner.resetDefaults();
+    await runner.saveToFlash();
+    console.log('Device reset to default parameters and saved.');
+  } finally {
+    await runner.disconnect();
+  }
 }
 
 /**
  * Print device save report
  */
 export function printDeviceSaveReport(report: DeviceSaveReport): void {
-  console.log('\n' + '='.repeat(60));
-  console.log('  DEVICE SAVE REPORT');
-  console.log('='.repeat(60));
-
-  console.log(`\n  Status: ${report.success ? 'SUCCESS' : 'FAILED'}`);
-  console.log(`  Time: ${report.timestamp}`);
-
-  if (report.parametersUpdated.length > 0) {
-    console.log('\n  Updated Parameters:');
-    for (const p of report.parametersUpdated) {
-      console.log(`    ${p.parameter}: ${p.oldValue} -> ${p.newValue}`);
-    }
+  console.log('\n Device Save Report');
+  console.log('='.repeat(50));
+  console.log(`Timestamp: ${report.timestamp}`);
+  console.log(`Success: ${report.success}`);
+  console.log(`Parameters Updated: ${report.parametersUpdated.length}`);
+  console.log(`Parameters Failed: ${report.parametersFailed.length}`);
+  console.log(`Flash Saved: ${report.flashSaved}`);
+  if (report.flashError) {
+    console.log(`Flash Error: ${report.flashError}`);
   }
-
-  if (report.parametersFailed.length > 0) {
-    console.log('\n  Failed Parameters:');
-    for (const p of report.parametersFailed) {
-      console.log(`    ${p.parameter}: ${p.error}`);
-    }
-  }
-
-  console.log('\n  Flash Save:', report.flashSaved ? 'SUCCESS' : `FAILED - ${report.flashError}`);
-  console.log('\n  Summary:', report.summary);
-  console.log('='.repeat(60) + '\n');
+  console.log(`Summary: ${report.summary}`);
 }

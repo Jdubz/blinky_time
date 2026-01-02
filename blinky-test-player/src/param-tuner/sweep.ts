@@ -1,10 +1,14 @@
 /**
  * Phase 2: Parameter Sweeps
  * Sweeps each parameter independently to find optimal values
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * Legacy per-mode sweeping has been removed.
  */
 
 import cliProgress from 'cli-progress';
-import type { DetectionMode, ParameterMode, SweepResult, SweepPoint, TunerOptions, ParameterDef, TestResult } from './types.js';
+import type { ParameterMode, SweepResult, SweepPoint, TunerOptions, ParameterDef, TestResult } from './types.js';
 import { PARAMETERS, REPRESENTATIVE_PATTERNS } from './types.js';
 import { StateManager } from './state.js';
 import { TestRunner } from './runner.js';
@@ -32,8 +36,8 @@ export async function runSweeps(
   options: TunerOptions,
   stateManager: StateManager
 ): Promise<void> {
-  console.log('\n🔄 Phase 2: Parameter Sweeps');
-  console.log('═'.repeat(50));
+  console.log('\n Phase 2: Parameter Sweeps');
+  console.log('='.repeat(50));
   console.log('Sweeping each parameter to find optimal values.\n');
 
   const runner = new TestRunner(options);
@@ -60,7 +64,7 @@ export async function runSweeps(
       if (stateManager.isSweepComplete(param.name)) {
         const existing = stateManager.getSweepResult(param.name);
         if (existing) {
-          console.log(`✓ ${param.name}: Already complete (optimal: ${existing.optimal.value}, F1: ${existing.optimal.avgF1})`);
+          console.log(`${param.name}: Already complete (optimal: ${existing.optimal.value}, F1: ${existing.optimal.avgF1})`);
         }
         continue;
       }
@@ -68,12 +72,8 @@ export async function runSweeps(
       console.log(`\nSweeping ${param.name} (${param.mode})...`);
       console.log(`   Values: ${param.sweepValues.join(', ')}`);
 
-      // Set to the correct mode (only for detection modes, not subsystem modes like music/rhythm)
-      const isDetectionMode = ['drummer', 'bass', 'hfc', 'spectral', 'hybrid'].includes(param.mode);
-      if (isDetectionMode) {
-        await runner.setMode(param.mode as DetectionMode);
-        await runner.resetDefaults(param.mode as DetectionMode);
-      }
+      // Reset to defaults before sweeping
+      await runner.resetDefaults();
 
       // Load any partial results from previous interrupted run
       const existingProgress = stateManager.getIncrementalSweepProgress(param.name);
@@ -88,8 +88,8 @@ export async function runSweeps(
       // Progress bar
       const progress = new cliProgress.SingleBar({
         format: '   {bar} {percentage}% | {value}/{total} tests | {eta_formatted}',
-        barCompleteChar: '█',
-        barIncompleteChar: '░',
+        barCompleteChar: '\u2588',
+        barIncompleteChar: '\u2591',
         hideCursor: true,
       });
       progress.start(totalTests, completedTests);
@@ -199,11 +199,11 @@ export async function runSweeps(
       await runner.setParameter(param.name, param.default);
     }
 
-    // Calculate optimal params per mode
+    // Calculate optimal params for ensemble
     updateOptimalParams(stateManager);
 
     stateManager.markSweepPhaseComplete();
-    console.log('\n✅ Sweep phase complete.\n');
+    console.log('\n Sweep phase complete.\n');
 
   } finally {
     await runner.disconnect();
@@ -211,36 +211,28 @@ export async function runSweeps(
 }
 
 function updateOptimalParams(stateManager: StateManager): void {
-  const modes: DetectionMode[] = ['drummer', 'spectral', 'hybrid'];
+  const optimalParams: Record<string, number> = {};
 
-  for (const mode of modes) {
-    const modeParams: Record<string, number> = {};
-    const params = Object.values(PARAMETERS).filter(p => p.mode === mode);
-
-    for (const param of params) {
-      const sweepResult = stateManager.getSweepResult(param.name);
-      if (sweepResult) {
-        modeParams[param.name] = sweepResult.optimal.value;
-      } else {
-        modeParams[param.name] = param.default;
-      }
+  // Collect optimal values from all sweeps
+  for (const param of Object.values(PARAMETERS)) {
+    const sweepResult = stateManager.getSweepResult(param.name);
+    if (sweepResult) {
+      optimalParams[param.name] = sweepResult.optimal.value;
     }
+  }
 
-    stateManager.setOptimalParams(mode, modeParams);
+  if (Object.keys(optimalParams).length > 0) {
+    stateManager.setOptimalParams(optimalParams);
   }
 }
 
 export async function showSweepSummary(stateManager: StateManager): Promise<void> {
-  console.log('\n🔄 Sweep Summary');
-  console.log('═'.repeat(50));
+  console.log('\n Sweep Summary');
+  console.log('='.repeat(50));
 
   const params = Object.values(PARAMETERS);
   const byMode: Record<ParameterMode, Array<{ param: string; default: number; optimal: number; f1: number }>> = {
-    drummer: [],
-    bass: [],
-    hfc: [],
-    spectral: [],
-    hybrid: [],
+    ensemble: [],
     music: [],
     rhythm: [],
   };
@@ -264,7 +256,7 @@ export async function showSweepSummary(stateManager: StateManager): Promise<void
     } else {
       for (const r of results) {
         const change = r.optimal !== r.default ? ` (was ${r.default})` : '';
-        console.log(`  ${r.param}: ${r.optimal}${change} → F1: ${r.f1}`);
+        console.log(`  ${r.param}: ${r.optimal}${change} -> F1: ${r.f1}`);
       }
     }
   }

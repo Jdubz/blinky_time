@@ -1,9 +1,17 @@
 /**
- * Fast Parameter Tuning
- * Uses binary search and targeted validation instead of exhaustive sweeps
- * Completes in ~30 min instead of 4-6 hours
+ * Fast Parameter Tuning for Ensemble Detector
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * This tuner optimizes detector thresholds, weights, and agreement boosts.
+ *
+ * Tuning Strategy:
+ * Phase 1: Find optimal threshold for each detector
+ * Phase 2: Optimize detector weights
+ * Phase 3: Tune agreement boost values
+ * Phase 4: Final validation
  */
-import { PARAMETERS } from './types.js';
+import { PARAMETERS, DETECTOR_TYPES } from './types.js';
 import { TestRunner } from './runner.js';
 // Diagnostic patterns for each phase
 const THRESHOLD_PATTERN = 'strong-beats'; // Clear transients, 32 expected hits
@@ -24,38 +32,107 @@ const FINAL_VALIDATION_PATTERNS = [
     'full-mix',
 ];
 export async function runFastTune(options) {
-    console.log('\n Fast Parameter Tuning');
+    console.log('\n Ensemble Fast Parameter Tuning');
     console.log('='.repeat(50));
-    console.log('Using binary search + targeted validation (~30 min)\n');
+    console.log('Optimizing 6 detectors + agreement boosts (~30 min)\n');
     const runner = new TestRunner(options);
     await runner.connect();
     try {
-        const results = [];
-        // Tune each mode
-        for (const mode of ['drummer', 'spectral', 'hybrid']) {
-            console.log(`\n${'='.repeat(50)}`);
-            console.log(` Tuning ${mode.toUpperCase()} mode`);
-            console.log('='.repeat(50));
-            const result = await tuneMode(runner, mode);
-            results.push(result);
-            console.log(`\n Result: F1=${result.f1} | P=${result.precision} | R=${result.recall}`);
-            console.log(` Optimal params:`, result.params);
+        // Reset to defaults
+        await runner.resetDefaults();
+        // Phase 1: Tune each detector's threshold
+        console.log('\n' + '='.repeat(50));
+        console.log(' Phase 1: Tuning Detector Thresholds');
+        console.log('='.repeat(50));
+        const thresholds = {};
+        for (const detector of DETECTOR_TYPES) {
+            const paramName = `${detector}_thresh`;
+            const param = PARAMETERS[paramName];
+            if (!param) {
+                console.log(`  Skipping ${detector} (no threshold param)`);
+                continue;
+            }
+            console.log(`\n  Tuning ${detector} threshold...`);
+            const optimal = await binarySearchThreshold(runner, paramName, param.min, param.max, param.default);
+            thresholds[detector] = optimal;
+            console.log(`    -> Optimal ${detector}_thresh: ${optimal}`);
         }
+        // Phase 2: Optimize detector weights
+        console.log('\n' + '='.repeat(50));
+        console.log(' Phase 2: Optimizing Detector Weights');
+        console.log('='.repeat(50));
+        const weights = {};
+        for (const detector of DETECTOR_TYPES) {
+            const paramName = `${detector}_weight`;
+            const param = PARAMETERS[paramName];
+            if (!param) {
+                continue;
+            }
+            // Start with default, will adjust in grid search
+            weights[detector] = param.default;
+        }
+        // Quick weight sweep for top 3 detectors
+        for (const detector of ['drummer', 'spectral', 'bass']) {
+            console.log(`\n  Tuning ${detector} weight...`);
+            const paramName = `${detector}_weight`;
+            const param = PARAMETERS[paramName];
+            const bestWeight = await quickSweep(runner, paramName, param.sweepValues.slice(0, 5));
+            weights[detector] = bestWeight;
+            console.log(`    -> Optimal ${detector}_weight: ${bestWeight}`);
+        }
+        // Phase 3: Tune agreement boosts
+        console.log('\n' + '='.repeat(50));
+        console.log(' Phase 3: Tuning Agreement Boosts');
+        console.log('='.repeat(50));
+        const agreementBoosts = [0.0, 0.6, 0.85, 1.0, 1.1, 1.15, 1.2]; // Defaults
+        // Focus on agree_1 and agree_2 (most impactful for false positive suppression)
+        console.log('\n  Tuning agree_1 (single detector boost)...');
+        const bestAgree1 = await quickSweep(runner, 'agree_1', [0.4, 0.5, 0.6, 0.7, 0.8], ['hat-rejection', 'pad-rejection']);
+        agreementBoosts[1] = bestAgree1;
+        console.log(`    -> Optimal agree_1: ${bestAgree1}`);
+        console.log('\n  Tuning agree_2 (two detector boost)...');
+        const bestAgree2 = await quickSweep(runner, 'agree_2', [0.7, 0.8, 0.85, 0.9, 0.95], CROSS_VALIDATION_PATTERNS.slice(0, 2));
+        agreementBoosts[2] = bestAgree2;
+        console.log(`    -> Optimal agree_2: ${bestAgree2}`);
+        // Phase 4: Final validation
+        console.log('\n' + '='.repeat(50));
+        console.log(' Phase 4: Final Validation');
+        console.log('='.repeat(50));
+        console.log('\n  Running 8 validation patterns...');
+        const finalResults = await testPatterns(runner, FINAL_VALIDATION_PATTERNS);
+        const byPattern = {};
+        for (const r of finalResults) {
+            byPattern[r.pattern] = r;
+        }
+        const f1 = round(avg(finalResults.map(r => r.f1)));
+        const precision = round(avg(finalResults.map(r => r.precision)));
+        const recall = round(avg(finalResults.map(r => r.recall)));
+        // Build result
+        const result = {
+            thresholds: thresholds,
+            weights: weights,
+            agreementBoosts,
+            f1,
+            precision,
+            recall,
+            byPattern,
+        };
         // Summary
         console.log('\n' + '='.repeat(50));
         console.log(' TUNING COMPLETE');
         console.log('='.repeat(50));
-        const best = results.reduce((a, b) => a.f1 > b.f1 ? a : b);
-        console.log(`\nBest mode: ${best.mode.toUpperCase()} (F1: ${best.f1})`);
-        console.log('\nOptimal parameters by mode:');
-        for (const r of results) {
-            console.log(`\n${r.mode}:`);
-            for (const [param, value] of Object.entries(r.params)) {
-                const def = PARAMETERS[param]?.default;
-                const change = value !== def ? ` (default: ${def})` : '';
-                console.log(`  set ${param} ${value}${change}`);
-            }
-            console.log(`  -> F1: ${r.f1} | Precision: ${r.precision} | Recall: ${r.recall}`);
+        console.log(`\nOverall: F1=${f1} | Precision=${precision} | Recall=${recall}`);
+        console.log('\nOptimal Thresholds:');
+        for (const [det, val] of Object.entries(thresholds)) {
+            console.log(`  set detector_thresh ${det} ${val}`);
+        }
+        console.log('\nOptimal Weights:');
+        for (const [det, val] of Object.entries(weights)) {
+            console.log(`  set detector_weight ${det} ${val}`);
+        }
+        console.log('\nOptimal Agreement Boosts:');
+        for (let i = 1; i <= 6; i++) {
+            console.log(`  set agree_${i} ${agreementBoosts[i]}`);
         }
         // Save results
         const { writeFileSync, mkdirSync, existsSync } = await import('fs');
@@ -64,83 +141,12 @@ export async function runFastTune(options) {
         if (!existsSync(outputDir)) {
             mkdirSync(outputDir, { recursive: true });
         }
-        writeFileSync(join(outputDir, 'fast-tune-results.json'), JSON.stringify({ timestamp: new Date().toISOString(), results }, null, 2));
-        console.log(`\nResults saved to ${join(outputDir, 'fast-tune-results.json')}`);
+        writeFileSync(join(outputDir, 'ensemble-tune-results.json'), JSON.stringify({ timestamp: new Date().toISOString(), result }, null, 2));
+        console.log(`\nResults saved to ${join(outputDir, 'ensemble-tune-results.json')}`);
     }
     finally {
         await runner.disconnect();
     }
-}
-async function tuneMode(runner, mode) {
-    await runner.setMode(mode);
-    await runner.resetDefaults(mode);
-    // Get the primary threshold parameter for this mode
-    const threshParam = mode === 'drummer' ? 'hitthresh'
-        : mode === 'spectral' ? 'fluxthresh'
-            : 'hitthresh'; // hybrid uses drummer's hitthresh
-    const threshDef = PARAMETERS[threshParam];
-    // Phase 1: Binary search for optimal threshold
-    console.log(`\nPhase 1: Finding optimal ${threshParam}...`);
-    const optimalThresh = await binarySearchThreshold(runner, threshParam, threshDef.min, threshDef.max, threshDef.default);
-    console.log(`  -> Optimal ${threshParam}: ${optimalThresh}`);
-    // Apply optimal threshold
-    await runner.setParameter(threshParam, optimalThresh);
-    // Phase 2: Cross-validation
-    console.log('\nPhase 2: Cross-validation on 4 patterns...');
-    const crossResults = await testPatterns(runner, CROSS_VALIDATION_PATTERNS);
-    const crossF1 = avg(crossResults.map(r => r.f1));
-    const crossP = avg(crossResults.map(r => r.precision));
-    const crossR = avg(crossResults.map(r => r.recall));
-    console.log(`  -> F1: ${crossF1} | P: ${crossP} | R: ${crossR}`);
-    // Phase 3: Adjust secondary parameters if needed
-    let secondaryParams = {};
-    if (mode === 'drummer' && crossR < 0.5) {
-        // Low recall - try adjusting attackmult
-        console.log('\nPhase 3: Adjusting attackmult for better recall...');
-        const bestAttack = await quickSweep(runner, 'attackmult', [1.1, 1.2, 1.3, 1.5]);
-        secondaryParams.attackmult = bestAttack;
-        console.log(`  -> Best attackmult: ${bestAttack}`);
-    }
-    if (mode === 'drummer') {
-        // Quick cooldown check on fast-tempo
-        console.log('\nPhase 3: Checking cooldown on fast-tempo...');
-        const bestCooldown = await quickSweep(runner, 'cooldown', [40, 60, 80, 100], ['fast-tempo']);
-        secondaryParams.cooldown = bestCooldown;
-        console.log(`  -> Best cooldown: ${bestCooldown}`);
-    }
-    if (mode === 'hybrid') {
-        // Quick check of hybrid weights
-        console.log('\nPhase 3: Optimizing hybrid weights...');
-        const bestFluxWt = await quickSweep(runner, 'hyfluxwt', [0.3, 0.5, 0.7, 0.9]);
-        const bestDrumWt = await quickSweep(runner, 'hydrumwt', [0.3, 0.5, 0.7, 0.9]);
-        secondaryParams.hyfluxwt = bestFluxWt;
-        secondaryParams.hydrumwt = bestDrumWt;
-        console.log(`  -> Best weights: flux=${bestFluxWt}, drum=${bestDrumWt}`);
-    }
-    // Apply secondary params
-    for (const [param, value] of Object.entries(secondaryParams)) {
-        await runner.setParameter(param, value);
-    }
-    // Phase 4: Final validation
-    console.log('\nPhase 4: Final validation on 8 patterns...');
-    const finalResults = await testPatterns(runner, FINAL_VALIDATION_PATTERNS);
-    const byPattern = {};
-    for (const r of finalResults) {
-        byPattern[r.pattern] = r;
-    }
-    const f1 = round(avg(finalResults.map(r => r.f1)));
-    const precision = round(avg(finalResults.map(r => r.precision)));
-    const recall = round(avg(finalResults.map(r => r.recall)));
-    // Build final params
-    const params = { [threshParam]: optimalThresh, ...secondaryParams };
-    // Add defaults for params we didn't tune
-    const modeParams = Object.values(PARAMETERS).filter(p => p.mode === mode);
-    for (const p of modeParams) {
-        if (!(p.name in params)) {
-            params[p.name] = p.default;
-        }
-    }
-    return { mode, params, f1, precision, recall, byPattern };
 }
 async function binarySearchThreshold(runner, param, min, max, defaultVal, targetRecall = 0.7, targetPrecision = 0.8) {
     let low = min;
@@ -150,18 +156,18 @@ async function binarySearchThreshold(runner, param, min, max, defaultVal, target
     // First, test default
     await runner.setParameter(param, defaultVal);
     const defaultResult = await runner.runPattern(THRESHOLD_PATTERN);
-    console.log(`    ${param}=${defaultVal}: F1=${defaultResult.f1} P=${defaultResult.precision} R=${defaultResult.recall}`);
+    console.log(`      ${param}=${defaultVal}: F1=${defaultResult.f1} P=${defaultResult.precision} R=${defaultResult.recall}`);
     if (defaultResult.recall >= targetRecall && defaultResult.precision >= targetPrecision) {
         return defaultVal; // Default is good enough
     }
     // Binary search - prioritize recall while maintaining precision
     let iterations = 0;
-    const maxIterations = 6;
+    const maxIterations = 5;
     while (high - low > 0.2 && iterations < maxIterations) {
         const mid = round((low + high) / 2);
         await runner.setParameter(param, mid);
         const result = await runner.runPattern(THRESHOLD_PATTERN);
-        console.log(`    ${param}=${mid}: F1=${result.f1} P=${result.precision} R=${result.recall}`);
+        console.log(`      ${param}=${mid}: F1=${result.f1} P=${result.precision} R=${result.recall}`);
         const score = result.f1; // Optimize for F1
         if (score > bestScore) {
             bestScore = score;
@@ -185,6 +191,8 @@ async function binarySearchThreshold(runner, param, min, max, defaultVal, target
         }
         iterations++;
     }
+    // Apply best value
+    await runner.setParameter(param, best);
     return best;
 }
 async function quickSweep(runner, param, values, patterns = CROSS_VALIDATION_PATTERNS.slice(0, 2)) {

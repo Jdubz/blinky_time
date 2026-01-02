@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioControl.h"
+#include "EnsembleDetector.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -25,11 +26,13 @@
  * Architecture:
  *   PDM Microphone
  *        |
- *   AdaptiveMic (level, transient, spectral flux)
+ *   AdaptiveMic (level normalization, gain control)
+ *        |
+ *   EnsembleDetector (6 detectors + fusion)
  *        |
  *   OSS Buffer (6s) --> Autocorrelation --> Tempo + Phase
  *        |                                      |
- *   Transient -----> Pulse (visual only)        |
+ *   Ensemble Transient --> Pulse (visual only)  |
  *        |                                      |
  *   AudioControl { energy, pulse, phase, rhythmStrength }
  *        |
@@ -72,9 +75,10 @@ public:
 
     // === CONFIGURATION ===
 
-    // Detection mode (affects transient sensitivity)
-    void setDetectionMode(uint8_t mode);
-    uint8_t getDetectionMode() const;
+    // Ensemble detector configuration
+    void setDetectorEnabled(DetectorType type, bool enabled);
+    void setDetectorWeight(DetectorType type, float weight);
+    void setDetectorThreshold(DetectorType type, float threshold);
 
     // BPM range constraints
     void setBpmRange(float minBpm, float maxBpm);
@@ -115,6 +119,12 @@ public:
     AdaptiveMic& getMicForTuning() { return mic_; }
     const AdaptiveMic& getMic() const { return mic_; }
 
+    EnsembleDetector& getEnsemble() { return ensemble_; }
+    const EnsembleDetector& getEnsemble() const { return ensemble_; }
+
+    // Get last ensemble output for debugging
+    const EnsembleOutput& getLastEnsembleOutput() const { return ensemble_.getLastOutput(); }
+
     // Debug getters
     float getPeriodicityStrength() const { return periodicityStrength_; }
 
@@ -124,6 +134,10 @@ private:
 
     // === MICROPHONE ===
     AdaptiveMic mic_;
+
+    // === ENSEMBLE DETECTOR ===
+    EnsembleDetector ensemble_;
+    EnsembleOutput lastEnsembleOutput_;
 
     // === RHYTHM TRACKING STATE ===
 

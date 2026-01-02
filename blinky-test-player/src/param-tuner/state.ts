@@ -1,6 +1,10 @@
 /**
  * State management for resumable tuning sessions
  *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * Legacy per-mode state tracking has been removed.
+ *
  * EXTENSIBILITY: Supports per-pattern incremental saves for:
  * - Interruptible tests (Ctrl+C recovery)
  * - Progress tracking during long-running sweeps
@@ -9,7 +13,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import type { TuningState, BaselineResult, SweepResult, SweepPoint, InteractionResult, ValidationResult, DetectionMode, TestResult } from './types.js';
+import type { TuningState, BaselineResult, SweepResult, SweepPoint, InteractionResult, ValidationResult, TestResult } from './types.js';
 
 /**
  * Incremental sweep progress - tracks per-pattern results within a sweep
@@ -27,7 +31,6 @@ export interface IncrementalSweepProgress {
  * Incremental baseline progress - tracks per-pattern results within a baseline test
  */
 export interface IncrementalBaselineProgress {
-  mode: DetectionMode;
   patternIndex: number;
   completedPatterns: string[];
   partialResults: Record<string, TestResult>;
@@ -46,7 +49,7 @@ export class StateManager {
     this.ensureDir(outputDir);
     this.ensureDir(join(outputDir, 'baseline'));
     this.ensureDir(join(outputDir, 'sweeps'));
-    this.ensureDir(join(outputDir, 'incremental'));  // NEW: Per-pattern saves
+    this.ensureDir(join(outputDir, 'incremental'));  // Per-pattern saves
     this.ensureDir(join(outputDir, 'interactions'));
     this.ensureDir(join(outputDir, 'validation'));
     this.ensureDir(join(outputDir, 'reports'));
@@ -74,10 +77,6 @@ export class StateManager {
       lastUpdated: new Date().toISOString(),
       currentPhase: 'baseline',
       phasesCompleted: [],
-      baseline: {
-        completed: [],
-        results: {} as Record<DetectionMode, BaselineResult>,
-      },
       sweeps: {
         completed: [],
         results: {},
@@ -85,10 +84,6 @@ export class StateManager {
       interactions: {
         completed: [],
         results: {},
-      },
-      validation: {
-        completed: [],
-        results: {} as Record<DetectionMode, ValidationResult>,
       },
     };
   }
@@ -104,44 +99,36 @@ export class StateManager {
 
   hasResumableState(): boolean {
     return this.state.phasesCompleted.length > 0 ||
-      (this.state.baseline?.completed?.length ?? 0) > 0 ||
+      this.state.baseline !== undefined ||
       (this.state.sweeps?.completed?.length ?? 0) > 0;
   }
 
-  // Baseline methods
-  isBaselineComplete(mode: DetectionMode): boolean {
-    return this.state.baseline?.completed?.includes(mode) ?? false;
+  // =============================================================================
+  // BASELINE METHODS (Ensemble - single baseline, not per-mode)
+  // =============================================================================
+
+  isBaselineComplete(): boolean {
+    return this.state.phasesCompleted.includes('baseline');
   }
 
-  setBaselineInProgress(mode: DetectionMode): void {
-    if (!this.state.baseline) {
-      this.state.baseline = { completed: [], results: {} as Record<DetectionMode, BaselineResult> };
-    }
-    this.state.baseline.current = mode;
+  setBaselineInProgress(): void {
     this.state.currentPhase = 'baseline';
     this.save();
   }
 
-  saveBaselineResult(mode: DetectionMode, result: BaselineResult): void {
-    if (!this.state.baseline) {
-      this.state.baseline = { completed: [], results: {} as Record<DetectionMode, BaselineResult> };
-    }
-    this.state.baseline.results[mode] = result;
-    if (!this.state.baseline.completed.includes(mode)) {
-      this.state.baseline.completed.push(mode);
-    }
-    delete this.state.baseline.current;
+  saveBaselineResult(result: BaselineResult): void {
+    this.state.baseline = result;
 
     // Save to file
     writeFileSync(
-      join(this.outputDir, 'baseline', `${mode}.json`),
+      join(this.outputDir, 'baseline', 'ensemble.json'),
       JSON.stringify(result, null, 2)
     );
     this.save();
   }
 
-  getBaselineResult(mode: DetectionMode): BaselineResult | undefined {
-    return this.state.baseline?.results[mode];
+  getBaselineResult(): BaselineResult | undefined {
+    return this.state.baseline;
   }
 
   markBaselinePhaseComplete(): void {
@@ -151,7 +138,10 @@ export class StateManager {
     this.save();
   }
 
-  // Sweep methods
+  // =============================================================================
+  // SWEEP METHODS
+  // =============================================================================
+
   isSweepComplete(param: string): boolean {
     return this.state.sweeps?.completed?.includes(param) ?? false;
   }
@@ -204,7 +194,7 @@ export class StateManager {
   }
 
   // =============================================================================
-  // INCREMENTAL SAVE METHODS - Per-pattern saves for interruptible tests
+  // INCREMENTAL SWEEP METHODS - Per-pattern saves for interruptible tests
   // =============================================================================
 
   /**
@@ -348,15 +338,15 @@ export class StateManager {
   /**
    * Get path for incremental baseline file
    */
-  private getIncrementalBaselinePath(mode: DetectionMode): string {
-    return join(this.outputDir, 'incremental', `baseline-${mode}.json`);
+  private getIncrementalBaselinePath(): string {
+    return join(this.outputDir, 'incremental', 'baseline-ensemble.json');
   }
 
   /**
-   * Get incremental baseline progress for a mode
+   * Get incremental baseline progress
    */
-  getIncrementalBaselineProgress(mode: DetectionMode): IncrementalBaselineProgress | null {
-    const path = this.getIncrementalBaselinePath(mode);
+  getIncrementalBaselineProgress(): IncrementalBaselineProgress | null {
+    const path = this.getIncrementalBaselinePath();
     if (existsSync(path)) {
       try {
         return JSON.parse(readFileSync(path, 'utf-8'));
@@ -371,7 +361,7 @@ export class StateManager {
    * Save baseline progress after each pattern completes
    */
   saveIncrementalBaselineProgress(progress: IncrementalBaselineProgress): void {
-    const path = this.getIncrementalBaselinePath(progress.mode);
+    const path = this.getIncrementalBaselinePath();
     writeFileSync(path, JSON.stringify(progress, null, 2));
 
     // Update main state
@@ -382,12 +372,11 @@ export class StateManager {
   /**
    * Append a pattern result to baseline progress
    */
-  appendBaselinePatternResult(mode: DetectionMode, pattern: string, result: TestResult): void {
-    let progress = this.getIncrementalBaselineProgress(mode);
+  appendBaselinePatternResult(pattern: string, result: TestResult): void {
+    let progress = this.getIncrementalBaselineProgress();
 
     if (!progress) {
       progress = {
-        mode,
         patternIndex: 0,
         completedPatterns: [],
         partialResults: {},
@@ -402,26 +391,26 @@ export class StateManager {
   }
 
   /**
-   * Check if a pattern has been completed in baseline for a mode
+   * Check if a pattern has been completed in baseline
    */
-  isBaselinePatternCompleted(mode: DetectionMode, pattern: string): boolean {
-    const progress = this.getIncrementalBaselineProgress(mode);
+  isBaselinePatternCompleted(pattern: string): boolean {
+    const progress = this.getIncrementalBaselineProgress();
     return progress?.completedPatterns?.includes(pattern) ?? false;
   }
 
   /**
    * Get partial baseline results for resuming
    */
-  getPartialBaselineResults(mode: DetectionMode): Record<string, TestResult> {
-    const progress = this.getIncrementalBaselineProgress(mode);
+  getPartialBaselineResults(): Record<string, TestResult> {
+    const progress = this.getIncrementalBaselineProgress();
     return progress?.partialResults || {};
   }
 
   /**
-   * Clear incremental baseline progress after mode baseline completes
+   * Clear incremental baseline progress after baseline completes
    */
-  clearIncrementalBaselineProgress(mode: DetectionMode): void {
-    const path = this.getIncrementalBaselinePath(mode);
+  clearIncrementalBaselineProgress(): void {
+    const path = this.getIncrementalBaselinePath();
     if (existsSync(path)) {
       try {
         unlinkSync(path);
@@ -431,7 +420,10 @@ export class StateManager {
     }
   }
 
-  // Interaction methods
+  // =============================================================================
+  // INTERACTION METHODS
+  // =============================================================================
+
   isInteractionComplete(name: string): boolean {
     return this.state.interactions?.completed?.includes(name) ?? false;
   }
@@ -476,6 +468,55 @@ export class StateManager {
     return 0;
   }
 
+  /**
+   * Save an incremental interaction point result
+   * Used to resume interrupted interaction tests
+   */
+  saveInteractionPoint(name: string, point: any): void {
+    const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+    let partialResults: any[] = [];
+
+    try {
+      if (existsSync(partialPath)) {
+        partialResults = JSON.parse(readFileSync(partialPath, 'utf-8'));
+      }
+    } catch {
+      partialResults = [];
+    }
+
+    partialResults.push(point);
+    writeFileSync(partialPath, JSON.stringify(partialResults, null, 2));
+  }
+
+  /**
+   * Load partial interaction results for resumption
+   */
+  getPartialInteractionResults(name: string): any[] {
+    const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+    try {
+      if (existsSync(partialPath)) {
+        return JSON.parse(readFileSync(partialPath, 'utf-8'));
+      }
+    } catch {
+      // Ignore errors
+    }
+    return [];
+  }
+
+  /**
+   * Clear partial interaction results after completion
+   */
+  clearPartialInteractionResults(name: string): void {
+    const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+    try {
+      if (existsSync(partialPath)) {
+        unlinkSync(partialPath);
+      }
+    } catch {
+      // Ignore errors
+    }
+  }
+
   markInteractionPhaseComplete(): void {
     if (!this.state.phasesCompleted.includes('interact')) {
       this.state.phasesCompleted.push('interact');
@@ -483,40 +524,32 @@ export class StateManager {
     this.save();
   }
 
-  // Validation methods
-  isValidationComplete(mode: DetectionMode): boolean {
-    return this.state.validation?.completed?.includes(mode) ?? false;
+  // =============================================================================
+  // VALIDATION METHODS (Ensemble - single validation, not per-mode)
+  // =============================================================================
+
+  isValidationComplete(): boolean {
+    return this.state.phasesCompleted.includes('validate');
   }
 
-  setValidationInProgress(mode: DetectionMode): void {
-    if (!this.state.validation) {
-      this.state.validation = { completed: [], results: {} as Record<DetectionMode, ValidationResult> };
-    }
-    this.state.validation.current = mode;
+  setValidationInProgress(): void {
     this.state.currentPhase = 'validate';
     this.save();
   }
 
-  saveValidationResult(mode: DetectionMode, result: ValidationResult): void {
-    if (!this.state.validation) {
-      this.state.validation = { completed: [], results: {} as Record<DetectionMode, ValidationResult> };
-    }
-    this.state.validation.results[mode] = result;
-    if (!this.state.validation.completed.includes(mode)) {
-      this.state.validation.completed.push(mode);
-    }
-    delete this.state.validation.current;
+  saveValidationResult(result: ValidationResult): void {
+    this.state.validation = result;
 
     // Save to file
     writeFileSync(
-      join(this.outputDir, 'validation', `${mode}.json`),
+      join(this.outputDir, 'validation', 'ensemble.json'),
       JSON.stringify(result, null, 2)
     );
     this.save();
   }
 
-  getValidationResult(mode: DetectionMode): ValidationResult | undefined {
-    return this.state.validation?.results[mode];
+  getValidationResult(): ValidationResult | undefined {
+    return this.state.validation;
   }
 
   markValidationPhaseComplete(): void {
@@ -526,26 +559,31 @@ export class StateManager {
     this.save();
   }
 
-  // Optimal parameters
-  setOptimalParams(mode: DetectionMode, params: Record<string, number>): void {
-    if (!this.state.optimalParams) {
-      this.state.optimalParams = {
-        drummer: {},
-        bass: {},
-        hfc: {},
-        spectral: {},
-        hybrid: {},
-      };
-    }
-    this.state.optimalParams[mode] = params;
+  // =============================================================================
+  // OPTIMAL PARAMETERS
+  // =============================================================================
+
+  setOptimalParams(params: Record<string, number>): void {
+    this.state.optimalParams = params;
     this.save();
   }
 
-  getOptimalParams(mode: DetectionMode): Record<string, number> | undefined {
-    return this.state.optimalParams?.[mode];
+  setOptimalParam(param: string, value: number): void {
+    if (!this.state.optimalParams) {
+      this.state.optimalParams = {};
+    }
+    this.state.optimalParams[param] = value;
+    this.save();
   }
 
-  // Complete marking
+  getOptimalParams(): Record<string, number> {
+    return this.state.optimalParams || {};
+  }
+
+  // =============================================================================
+  // COMPLETE / RESET
+  // =============================================================================
+
   markDone(): void {
     this.state.currentPhase = 'done';
     if (!this.state.phasesCompleted.includes('report')) {
@@ -554,16 +592,11 @@ export class StateManager {
     this.save();
   }
 
-  // Reset
   reset(): void {
     this.state = {
       lastUpdated: new Date().toISOString(),
       currentPhase: 'baseline',
       phasesCompleted: [],
-      baseline: {
-        completed: [],
-        results: {} as Record<DetectionMode, BaselineResult>,
-      },
       sweeps: {
         completed: [],
         results: {},
@@ -571,10 +604,6 @@ export class StateManager {
       interactions: {
         completed: [],
         results: {},
-      },
-      validation: {
-        completed: [],
-        results: {} as Record<DetectionMode, ValidationResult>,
       },
     };
     this.save();

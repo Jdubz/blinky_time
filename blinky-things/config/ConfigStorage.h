@@ -23,7 +23,7 @@ class AudioController;
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 23;  // Config schema v23: simplified rhythm tracking (removed PLL)
+    static const uint8_t CONFIG_VERSION = 24;  // Config schema v24: ensemble detector architecture, fast AGC
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -48,29 +48,30 @@ public:
         float releaseTau;         // Peak release speed (release time, seconds)
         // Hardware AGC parameters
         float hwTarget;           // Target raw input level (±0.01 dead zone)
-        // Shared transient detection parameters
-        float transientThreshold; // Hit threshold (multiples of recent average)
-        float attackMultiplier;   // Attack multiplier (sudden rise ratio)
-        float averageTau;         // Recent average tracking time (seconds)
-        // Bass band filter parameters
-        float bassFreq;           // Filter cutoff frequency (Hz)
-        float bassQ;              // Filter Q factor
-        float bassThresh;         // Bass detection threshold
-        // HFC parameters
-        float hfcWeight;          // HFC weighting factor
-        float hfcThresh;          // HFC detection threshold
-        // Spectral flux parameters
-        float fluxThresh;         // Spectral flux threshold
-        // Hybrid mode parameters (mode 4) - tuned 2024-12
-        float hybridFluxWeight;   // Weight when only flux detects
-        float hybridDrumWeight;   // Weight when only drummer detects
-        float hybridBothBoost;    // Multiplier when both agree
-        // uint16_t members
-        uint16_t cooldownMs;      // Cooldown between hits (ms)
-        // uint8_t members
-        uint8_t detectionMode;    // 0=drummer, 1=bass, 2=hfc, 3=flux, 4=hybrid
-        uint8_t fluxBins;         // FFT bins to analyze
-        // Total: 15 floats (60) + 1 uint16 (2) + 2 uint8 (2) = 64 bytes
+
+        // Fast AGC parameters (new in v24+)
+        float fastAgcThreshold;   // Raw level threshold to trigger fast AGC
+        float fastAgcTrackingTau; // Tracking tau in fast mode (seconds)
+        uint16_t fastAgcPeriodMs; // Calibration period in fast mode (ms)
+        bool fastAgcEnabled;      // Enable fast AGC when signal is low
+
+        // LEGACY: Detection parameters (kept for backward compatibility)
+        // These are now handled by EnsembleDetector, not AdaptiveMic
+        float transientThreshold; // [LEGACY] Hit threshold
+        float attackMultiplier;   // [LEGACY] Attack multiplier
+        float averageTau;         // [LEGACY] Recent average tracking time
+        float bassFreq;           // [LEGACY] Filter cutoff frequency
+        float bassQ;              // [LEGACY] Filter Q factor
+        float bassThresh;         // [LEGACY] Bass detection threshold
+        float hfcWeight;          // [LEGACY] HFC weighting factor
+        float hfcThresh;          // [LEGACY] HFC detection threshold
+        float fluxThresh;         // [LEGACY] Spectral flux threshold
+        float hybridFluxWeight;   // [LEGACY] Weight when only flux detects
+        float hybridDrumWeight;   // [LEGACY] Weight when only drummer detects
+        float hybridBothBoost;    // [LEGACY] Multiplier when both agree
+        uint16_t cooldownMs;      // [LEGACY] Cooldown between hits (ms)
+        uint8_t detectionMode;    // [LEGACY] 0=drummer, 1=bass, 2=hfc, 3=flux, 4=hybrid
+        uint8_t fluxBins;         // [LEGACY] FFT bins to analyze
     };
 
     struct StoredMusicParams {
@@ -93,11 +94,11 @@ public:
     // Compile-time safety checks
     // These verify struct sizes match expected values to catch accidental changes
     // If these fail, you MUST increment CONFIG_VERSION!
-    static_assert(sizeof(StoredMicParams) == 64,
-        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (64 bytes = 15 floats + 1 uint16 + 2 uint8)");
+    static_assert(sizeof(StoredMicParams) == 76,
+        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 16,
         "StoredMusicParams size changed! Increment CONFIG_VERSION and update assertion. (16 bytes = 4 floats)");
-    static_assert(sizeof(ConfigData) <= 164,
+    static_assert(sizeof(ConfigData) <= 180,
         "ConfigData too large! May not fit in flash sector. Review struct padding.");
 
     ConfigStorage();
