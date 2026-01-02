@@ -60,6 +60,12 @@ export async function runInteractions(options, stateManager) {
             console.log(`   Grid size: ${gridPoints.length} combinations`);
             const patterns = test.patterns || [...REPRESENTATIVE_PATTERNS];
             const totalTests = gridPoints.length * patterns.length;
+            // Check for resume point
+            const resumeIndex = stateManager.getInteractionResumeIndex(test.name);
+            const partialResults = stateManager.getPartialInteractionResults(test.name);
+            if (resumeIndex > 0) {
+                console.log(`   Resuming from combination ${resumeIndex + 1}/${gridPoints.length}`);
+            }
             // Progress bar
             const progress = new cliProgress.SingleBar({
                 format: '   {bar} {percentage}% | {value}/{total} tests | {eta_formatted}',
@@ -67,9 +73,10 @@ export async function runInteractions(options, stateManager) {
                 barIncompleteChar: '\u2591',
                 hideCursor: true,
             });
-            progress.start(totalTests, 0);
-            const results = [];
-            for (let i = 0; i < gridPoints.length; i++) {
+            progress.start(totalTests, resumeIndex * patterns.length);
+            // Start with partial results if resuming
+            const results = [...partialResults];
+            for (let i = resumeIndex; i < gridPoints.length; i++) {
                 const params = gridPoints[i];
                 stateManager.setInteractionInProgress(test.name, i);
                 // Set parameters
@@ -96,16 +103,21 @@ export async function runInteractions(options, stateManager) {
                 }
                 const n = Object.keys(byPattern).length;
                 if (n > 0) {
-                    results.push({
+                    const point = {
                         params,
                         avgF1: Math.round((totalF1 / n) * 1000) / 1000,
                         avgPrecision: Math.round((totalPrecision / n) * 1000) / 1000,
                         avgRecall: Math.round((totalRecall / n) * 1000) / 1000,
                         byPattern,
-                    });
+                    };
+                    results.push(point);
+                    // Save incrementally for resume capability
+                    stateManager.saveInteractionPoint(test.name, point);
                 }
             }
             progress.stop();
+            // Clear partial results now that we're done
+            stateManager.clearPartialInteractionResults(test.name);
             // Find optimal
             if (results.length === 0) {
                 console.error(`   No data collected for ${test.name}, skipping`);
@@ -128,6 +140,8 @@ export async function runInteractions(options, stateManager) {
             };
             stateManager.saveInteractionResult(test.name, interactionResult);
             console.log(`   Optimal: ${JSON.stringify(optimal.params)} (F1: ${optimal.avgF1})`);
+            // Update optimal params based on interaction results
+            updateOptimalFromInteraction(stateManager, interactionResult);
         }
         stateManager.markInteractionPhaseComplete();
         console.log('\n Interaction phase complete.\n');
@@ -158,6 +172,27 @@ export async function showInteractionSummary(stateManager) {
         }
         else {
             console.log('  Not yet tested');
+        }
+    }
+}
+/**
+ * Update optimal parameters based on interaction test results.
+ * If an interaction test finds a better combination than individually
+ * swept values, update the main optimal parameter set.
+ */
+function updateOptimalFromInteraction(stateManager, result) {
+    const currentOptimal = stateManager.getOptimalParams();
+    // Get the current optimal params for comparison
+    // Check if the interaction result has a better F1 than we'd expect
+    // from the individual parameter sweeps
+    if (result.optimal && result.optimal.params) {
+        // Update optimal params with the interaction-found values
+        for (const [param, value] of Object.entries(result.optimal.params)) {
+            const currentValue = currentOptimal[param];
+            if (currentValue === undefined || currentValue !== value) {
+                console.log(`   Updating ${param}: ${currentValue} -> ${value} (from interaction)`);
+                stateManager.setOptimalParam(param, value);
+            }
         }
     }
 }

@@ -468,6 +468,55 @@ export class StateManager {
     return 0;
   }
 
+  /**
+   * Save an incremental interaction point result
+   * Used to resume interrupted interaction tests
+   */
+  saveInteractionPoint(name: string, point: any): void {
+    const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+    let partialResults: any[] = [];
+
+    try {
+      if (existsSync(partialPath)) {
+        partialResults = JSON.parse(readFileSync(partialPath, 'utf-8'));
+      }
+    } catch {
+      partialResults = [];
+    }
+
+    partialResults.push(point);
+    writeFileSync(partialPath, JSON.stringify(partialResults, null, 2));
+  }
+
+  /**
+   * Load partial interaction results for resumption
+   */
+  getPartialInteractionResults(name: string): any[] {
+    const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+    try {
+      if (existsSync(partialPath)) {
+        return JSON.parse(readFileSync(partialPath, 'utf-8'));
+      }
+    } catch {
+      // Ignore errors
+    }
+    return [];
+  }
+
+  /**
+   * Clear partial interaction results after completion
+   */
+  clearPartialInteractionResults(name: string): void {
+    const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+    try {
+      if (existsSync(partialPath)) {
+        unlinkSync(partialPath);
+      }
+    } catch {
+      // Ignore errors
+    }
+  }
+
   markInteractionPhaseComplete(): void {
     if (!this.state.phasesCompleted.includes('interact')) {
       this.state.phasesCompleted.push('interact');
@@ -519,8 +568,16 @@ export class StateManager {
     this.save();
   }
 
-  getOptimalParams(): Record<string, number> | undefined {
-    return this.state.optimalParams;
+  setOptimalParam(param: string, value: number): void {
+    if (!this.state.optimalParams) {
+      this.state.optimalParams = {};
+    }
+    this.state.optimalParams[param] = value;
+    this.save();
+  }
+
+  getOptimalParams(): Record<string, number> {
+    return this.state.optimalParams || {};
   }
 
   // =============================================================================

@@ -379,6 +379,53 @@ export class StateManager {
         }
         return 0;
     }
+    /**
+     * Save an incremental interaction point result
+     * Used to resume interrupted interaction tests
+     */
+    saveInteractionPoint(name, point) {
+        const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+        let partialResults = [];
+        try {
+            if (existsSync(partialPath)) {
+                partialResults = JSON.parse(readFileSync(partialPath, 'utf-8'));
+            }
+        }
+        catch {
+            partialResults = [];
+        }
+        partialResults.push(point);
+        writeFileSync(partialPath, JSON.stringify(partialResults, null, 2));
+    }
+    /**
+     * Load partial interaction results for resumption
+     */
+    getPartialInteractionResults(name) {
+        const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+        try {
+            if (existsSync(partialPath)) {
+                return JSON.parse(readFileSync(partialPath, 'utf-8'));
+            }
+        }
+        catch {
+            // Ignore errors
+        }
+        return [];
+    }
+    /**
+     * Clear partial interaction results after completion
+     */
+    clearPartialInteractionResults(name) {
+        const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+        try {
+            if (existsSync(partialPath)) {
+                unlinkSync(partialPath);
+            }
+        }
+        catch {
+            // Ignore errors
+        }
+    }
     markInteractionPhaseComplete() {
         if (!this.state.phasesCompleted.includes('interact')) {
             this.state.phasesCompleted.push('interact');
@@ -417,8 +464,15 @@ export class StateManager {
         this.state.optimalParams = params;
         this.save();
     }
+    setOptimalParam(param, value) {
+        if (!this.state.optimalParams) {
+            this.state.optimalParams = {};
+        }
+        this.state.optimalParams[param] = value;
+        this.save();
+    }
     getOptimalParams() {
-        return this.state.optimalParams;
+        return this.state.optimalParams || {};
     }
     // =============================================================================
     // COMPLETE / RESET

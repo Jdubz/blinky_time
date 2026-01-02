@@ -121,6 +121,19 @@ export declare class StateManager {
     saveInteractionResult(name: string, result: InteractionResult): void;
     getInteractionResult(name: string): InteractionResult | undefined;
     getInteractionResumeIndex(name: string): number;
+    /**
+     * Save an incremental interaction point result
+     * Used to resume interrupted interaction tests
+     */
+    saveInteractionPoint(name: string, point: any): void;
+    /**
+     * Load partial interaction results for resumption
+     */
+    getPartialInteractionResults(name: string): any[];
+    /**
+     * Clear partial interaction results after completion
+     */
+    clearPartialInteractionResults(name: string): void;
     markInteractionPhaseComplete(): void;
     isValidationComplete(): boolean;
     setValidationInProgress(): void;
@@ -128,7 +141,8 @@ export declare class StateManager {
     getValidationResult(): ValidationResult | undefined;
     markValidationPhaseComplete(): void;
     setOptimalParams(params: Record<string, number>): void;
-    getOptimalParams(): Record<string, number> | undefined;
+    setOptimalParam(param: string, value: number): void;
+    getOptimalParams(): Record<string, number>;
     markDone(): void;
     reset(): void;
 }

@@ -8,7 +8,7 @@
  */
 
 import type { TunerOptions, TestResult } from './types.js';
-import { PARAMETERS, REPRESENTATIVE_PATTERNS } from './types.js';
+import { PARAMETERS } from './types.js';
 import { TestRunner } from './runner.js';
 
 interface TestPoint {
