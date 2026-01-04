@@ -102,18 +102,26 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
 const categoryNames: Record<string, string> = {
   audio: 'Audio Processing',
   agc: 'Auto-Gain Control',
+  transient: 'Transient Detection',
+  detection: 'Detection Algorithms',
+  music: 'Music Mode (PLL)',
+  rhythm: 'Rhythm Analyzer',
   fire: 'Fire Generator',
 };
 
 // Category descriptions
 const categoryDescriptions: Record<string, string> = {
   audio: 'AdaptiveMic input processing → Produces: Level, Transient, Envelope, Gain',
-  agc: 'Auto-gain control (part of AdaptiveMic)',
-  fire: 'Fire pattern generation → Uses: Level, Transient from AdaptiveMic',
+  agc: 'Hardware gain control (optimizes ADC signal quality)',
+  transient: 'Core transient detection parameters (LOUD + SUDDEN + INFREQUENT)',
+  detection: 'Algorithm selection and mode-specific parameters (Drummer, Bass, HFC, Flux, Hybrid)',
+  music: 'Phase-locked loop beat tracking → Produces: BPM, Phase, Confidence, Beat Events',
+  rhythm: 'Autocorrelation-based tempo detection → Produces: BPM, Periodicity, Beat Likelihood',
+  fire: 'Fire pattern generation → Uses: Level, Transient from AdaptiveMic + Beat Events',
 };
 
-// Category order for display (input processing first, then generator)
-const categoryOrder = ['audio', 'agc', 'fire'];
+// Category order for display (input processing → detection → musical analysis → output)
+const categoryOrder = ['audio', 'agc', 'transient', 'detection', 'music', 'rhythm', 'fire'];
 
 export function SettingsPanel({
   settingsByCategory,
@@ -177,7 +185,7 @@ export function SettingsPanel({
               <p className="category-description">{categoryDescriptions[category]}</p>
             )}
             <div className="category-settings">
-              {settingsByCategory[category].map(setting => (
+              {settingsByCategory[category].map((setting: DeviceSetting) => (
                 <SettingControl
                   key={setting.name}
                   setting={setting}
