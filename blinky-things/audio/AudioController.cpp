@@ -341,8 +341,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             int neighborLag = lag + delta;
             if (neighborLag < minLag || neighborLag > maxLag) continue;
             int neighborIdx = neighborLag - minLag;
-            // Defensive: check both bounds explicitly (neighborIdx should never be < 0 due to line 340, but be safe)
-            if (neighborIdx < 0 || neighborIdx >= correlationSize) continue;
+            // Bounds check (neighborIdx >= 0 guaranteed by line 342 check)
+            if (neighborIdx >= correlationSize) continue;
 
             float neighborCorr = correlationAtLag[neighborIdx];
             if (neighborCorr > correlation) {
@@ -620,7 +620,6 @@ void AudioController::synthesizeRhythmStrength() {
 
 void TempoHypothesis::updatePhase(float dt) {
     float phaseIncrement = dt * 1000.0f / beatPeriodMs;
-    float oldPhase = phase;
     phase += phaseIncrement;
 
     // Accumulate fractional beats

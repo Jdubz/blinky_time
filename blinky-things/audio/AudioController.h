@@ -182,10 +182,7 @@ public:
 private:
     uint32_t lastDebugPrintMs_ = 0;
 
-    inline float clampf(float val, float minVal, float maxVal) const {
-        return val < minVal ? minVal : (val > maxVal ? maxVal : val);
-    }
-
+    // cppcheck-suppress unusedPrivateFunction ; False positive - used in findMatchingHypothesis()
     inline float absf(float val) const {
         return val < 0.0f ? -val : val;
     }
@@ -393,9 +390,5 @@ private:
     // Utilities
     inline float clampf(float val, float minVal, float maxVal) const {
         return val < minVal ? minVal : (val > maxVal ? maxVal : val);
-    }
-
-    inline float absf(float val) const {
-        return val < 0.0f ? -val : val;
     }
 };
