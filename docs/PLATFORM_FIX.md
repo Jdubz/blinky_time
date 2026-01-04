@@ -116,9 +116,9 @@ If you don't need mbed features, consider using the **Seeeduino nRF52** (non-mbe
 
 ## What We Reported
 
-Issue report filed: See [PLATFORM_BUG_REPORT.md](PLATFORM_BUG_REPORT.md)
+Issue report filed to Seeed Studio: https://github.com/Seeed-Studio/ArduinoCore-mbed/issues
 
-Target: https://github.com/Seeed-Studio/ArduinoCore-mbed/issues
+**Issue**: `pinDefinitions.h` lacks include guards, causing redefinition errors when both Adafruit_NeoPixel and PDM libraries are used together.
 
 Hopefully this will be fixed in a future platform release!
 
