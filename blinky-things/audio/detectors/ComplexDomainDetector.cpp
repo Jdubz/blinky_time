@@ -43,7 +43,6 @@ DetectionResult ComplexDomainDetector::detect(const AudioFrame& frame, float dt)
     const float* magnitudes = frame.magnitudes;
     const float* phases = frame.phases;
     int numBins = frame.numBins;
-    uint32_t nowMs = frame.timestampMs;
 
     // Need at least 2 previous frames for phase prediction
     if (frameCount_ < 2) {
@@ -105,7 +104,7 @@ DetectionResult ComplexDomainDetector::detect(const AudioFrame& frame, float dt)
 
 float ComplexDomainDetector::computeComplexDomain(const float* magnitudes,
                                                    const float* phases,
-                                                   int numBins) {
+                                                   int numBins) const {
     // Complex domain onset function:
     // CD = sum(magnitude[i] * |phase[i] - targetPhase[i]|) / numBins
     // where targetPhase = 2 * prevPhase - prevPrevPhase (linear prediction)

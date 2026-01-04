@@ -43,7 +43,6 @@ DetectionResult BassBandDetector::detect(const AudioFrame& frame, float dt) {
 
     const float* magnitudes = frame.magnitudes;
     int numBins = frame.numBins;
-    uint32_t nowMs = frame.timestampMs;
 
     // Need at least one previous frame for flux
     if (!hasPrevFrame_) {
@@ -104,7 +103,7 @@ DetectionResult BassBandDetector::detect(const AudioFrame& frame, float dt) {
     return result;
 }
 
-float BassBandDetector::computeBassFlux(const float* magnitudes, int numBins) {
+float BassBandDetector::computeBassFlux(const float* magnitudes, int numBins) const {
     // Half-wave rectified spectral flux on bass bins only
     float flux = 0.0f;
     int binsAnalyzed = 0;

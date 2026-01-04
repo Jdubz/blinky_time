@@ -64,7 +64,7 @@ private:
     float averageBassFlux_;
 
     // Compute bass flux
-    float computeBassFlux(const float* magnitudes, int numBins);
+    float computeBassFlux(const float* magnitudes, int numBins) const;
 
     // Compute confidence
     float computeConfidence(float flux, float median) const;

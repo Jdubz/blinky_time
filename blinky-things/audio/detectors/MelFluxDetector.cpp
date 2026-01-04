@@ -29,7 +29,6 @@ DetectionResult MelFluxDetector::detect(const AudioFrame& frame, float dt) {
 
     const float* melBands = frame.melBands;
     int numBands = frame.numMelBands;
-    uint32_t nowMs = frame.timestampMs;
 
     // Need at least one previous frame
     if (!hasPrevFrame_) {
@@ -87,7 +86,7 @@ DetectionResult MelFluxDetector::detect(const AudioFrame& frame, float dt) {
     return result;
 }
 
-float MelFluxDetector::computeMelFlux(const float* melBands, int numBands) {
+float MelFluxDetector::computeMelFlux(const float* melBands, int numBands) const {
     // Half-wave rectified flux on mel bands
     // Since mel bands are already log-compressed, this captures
     // perceptually significant changes

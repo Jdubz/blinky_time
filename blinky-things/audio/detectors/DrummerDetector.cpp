@@ -30,7 +30,6 @@ DetectionResult DrummerDetector::detect(const AudioFrame& frame, float dt) {
     }
 
     float rawLevel = frame.level;
-    uint32_t nowMs = frame.timestampMs;
 
     // Track recent average with exponential moving average
     float alpha = expFactor(dt, averageTau_);

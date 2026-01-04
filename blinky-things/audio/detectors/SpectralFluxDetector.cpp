@@ -40,7 +40,6 @@ DetectionResult SpectralFluxDetector::detect(const AudioFrame& frame, float dt) 
 
     const float* magnitudes = frame.magnitudes;
     int numBins = frame.numBins;
-    uint32_t nowMs = frame.timestampMs;
 
     // Need at least one previous frame for flux
     if (!hasPrevFrame_) {
@@ -98,7 +97,7 @@ DetectionResult SpectralFluxDetector::detect(const AudioFrame& frame, float dt) 
     return result;
 }
 
-float SpectralFluxDetector::computeFlux(const float* magnitudes, int numBins) {
+float SpectralFluxDetector::computeFlux(const float* magnitudes, int numBins) const {
     // SuperFlux algorithm: Half-wave rectified flux with max-filter
     // The max-filter on previous frame suppresses vibrato/pitch wobble
 

@@ -34,7 +34,6 @@ DetectionResult HFCDetector::detect(const AudioFrame& frame, float dt) {
 
     const float* magnitudes = frame.magnitudes;
     int numBins = frame.numBins;
-    uint32_t nowMs = frame.timestampMs;
 
     // Save previous HFC
     prevHfc_ = currentHfc_;
@@ -81,7 +80,7 @@ DetectionResult HFCDetector::detect(const AudioFrame& frame, float dt) {
     return result;
 }
 
-float HFCDetector::computeHFC(const float* magnitudes, int numBins) {
+float HFCDetector::computeHFC(const float* magnitudes, int numBins) const {
     // Weighted high-frequency content
     // HFC = sum(magnitude[i] * i^2) normalized
     // Quadratic weighting emphasizes higher frequencies

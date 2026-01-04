@@ -129,9 +129,6 @@ private:
 
     // Minimum confidence threshold (detectors below this are ignored)
     float minConfidence_ = 0.3f;  // Default 0.3 (30% confident)
-
-    // Find which detector contributed most to the detection
-    uint8_t findDominantDetector(const DetectionResult* results) const;
 };
 
 // --- Default calibrated values ---

@@ -44,8 +44,16 @@ static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
 };
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
-    : sampleCount_(0)
+    : sampleBuffer_{}
+    , sampleCount_(0)
     , writeIndex_(0)
+    , vReal_{}
+    , vImag_{}
+    , magnitudes_{}
+    , phases_{}
+    , prevMagnitudes_{}
+    , melBands_{}
+    , prevMelBands_{}
     , totalEnergy_(0.0f)
     , spectralCentroid_(0.0f)
     , frameReady_(false)

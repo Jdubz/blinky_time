@@ -158,23 +158,3 @@ float EnsembleFusion::getAgreementBoost(int detectorCount) const {
     if (detectorCount > MAX_DETECTORS) detectorCount = MAX_DETECTORS;
     return agreementBoosts_[detectorCount];
 }
-
-uint8_t EnsembleFusion::findDominantDetector(const DetectionResult* results) const {
-    float maxContribution = 0.0f;
-    uint8_t dominant = 0;
-
-    for (int i = 0; i < MAX_DETECTORS; i++) {
-        if (!configs_[i].enabled) continue;
-
-        const DetectionResult& result = results[i];
-        if (result.detected) {
-            float contribution = result.strength * configs_[i].weight;
-            if (contribution > maxContribution) {
-                maxContribution = contribution;
-                dominant = static_cast<uint8_t>(i);
-            }
-        }
-    }
-
-    return dominant;
-}

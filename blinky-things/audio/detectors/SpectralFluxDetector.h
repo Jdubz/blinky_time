@@ -65,7 +65,7 @@ private:
     float averageFlux_;
 
     // Compute SuperFlux with max-filter vibrato suppression
-    float computeFlux(const float* magnitudes, int numBins);
+    float computeFlux(const float* magnitudes, int numBins) const;
 
     // Compute confidence based on flux stability and magnitude
     float computeConfidence(float flux, float median) const;

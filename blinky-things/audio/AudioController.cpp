@@ -106,21 +106,25 @@ const AudioControl& AudioController::update(float dt) {
         float bassEnergy = 0.0f;
         float midEnergy = 0.0f;
         float highEnergy = 0.0f;
+        int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
 
         for (int i = 1; i < 11 && i < numBins; i++) {
             bassEnergy += magnitudes[i] * magnitudes[i];
+            bassBinCount++;
         }
         for (int i = 11; i < 41 && i < numBins; i++) {
             midEnergy += magnitudes[i] * magnitudes[i];
+            midBinCount++;
         }
         for (int i = 41; i < numBins; i++) {  // Extended to Nyquist for complete spectral coverage
             highEnergy += magnitudes[i] * magnitudes[i];
+            highBinCount++;
         }
 
-        // RMS (root mean square)
-        bassEnergy = sqrtf(bassEnergy / 10.0f);   // 10 bins
-        midEnergy = sqrtf(midEnergy / 30.0f);     // 30 bins
-        highEnergy = sqrtf(highEnergy / 87.0f);   // 87 bins (41-127)
+        // RMS (root mean square) - use actual bin count for accurate normalization
+        bassEnergy = bassBinCount > 0 ? sqrtf(bassEnergy / (float)bassBinCount) : 0.0f;
+        midEnergy = midBinCount > 0 ? sqrtf(midEnergy / (float)midBinCount) : 0.0f;
+        highEnergy = highBinCount > 0 ? sqrtf(highEnergy / (float)highBinCount) : 0.0f;
 
         // Weighted sum: emphasize bass and mid for rhythm (where most beats occur)
         onsetStrength = 0.5f * bassEnergy + 0.3f * midEnergy + 0.2f * highEnergy;

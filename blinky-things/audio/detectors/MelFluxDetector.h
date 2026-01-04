@@ -55,7 +55,7 @@ private:
     float averageMelFlux_;
 
     // Compute mel flux
-    float computeMelFlux(const float* melBands, int numBands);
+    float computeMelFlux(const float* melBands, int numBands) const;
 
     // Compute confidence
     float computeConfidence(float flux, float median) const;

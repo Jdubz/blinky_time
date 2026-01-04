@@ -11,7 +11,7 @@
 class NoOpEffect : public Effect {
 public:
     NoOpEffect() = default;
-    virtual ~NoOpEffect() = default;
+    virtual ~NoOpEffect() override = default;
 
     /**
      * Initialize effect (no-op has no initialization)

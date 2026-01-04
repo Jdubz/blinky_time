@@ -72,7 +72,7 @@ private:
     float attackMultiplier_;
 
     // Compute weighted HFC from magnitude spectrum
-    float computeHFC(const float* magnitudes, int numBins);
+    float computeHFC(const float* magnitudes, int numBins) const;
 
     // Compute confidence
     float computeConfidence(float hfc, float median) const;

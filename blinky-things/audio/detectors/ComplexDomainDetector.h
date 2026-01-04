@@ -71,7 +71,7 @@ private:
     float averageCD_;
 
     // Compute complex domain onset function
-    float computeComplexDomain(const float* magnitudes, const float* phases, int numBins);
+    float computeComplexDomain(const float* magnitudes, const float* phases, int numBins) const;
 
     // Wrap phase difference to [-pi, pi]
     static float wrapPhase(float phase);
