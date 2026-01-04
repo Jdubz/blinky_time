@@ -272,6 +272,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleConfigCommand(cmd)) return true;
     if (handleLogCommand(cmd)) return true;
     if (handleEnsembleCommand(cmd)) return true;  // Ensemble detector commands
+    if (handleHypothesisCommand(cmd)) return true;  // Multi-hypothesis tracking commands
     return false;
 }
 
@@ -1172,6 +1173,110 @@ bool SerialConsole::handleLogCommand(const char* cmd) {
     if (strcmp(cmd, "log debug") == 0) {
         logLevel_ = LogLevel::DEBUG;
         Serial.println(F("OK log debug"));
+        return true;
+    }
+
+    return false;
+}
+
+// === MULTI-HYPOTHESIS TRACKING COMMANDS ===
+bool SerialConsole::handleHypothesisCommand(const char* cmd) {
+    if (!audioCtrl_) {
+        Serial.println(F("Audio controller not available"));
+        return false;
+    }
+
+    MultiHypothesisTracker& tracker = audioCtrl_->getMultiHypothesis();
+
+    // "show hypotheses" or "show hypo" - print all active hypotheses
+    if (strcmp(cmd, "show hypotheses") == 0 || strcmp(cmd, "show hypo") == 0) {
+        Serial.println(F("=== Multi-Hypothesis Tracker ==="));
+
+        bool anyActive = false;
+        for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+            const TempoHypothesis& hypo = tracker.hypotheses[i];
+            if (hypo.active) {
+                anyActive = true;
+                Serial.print(F("Slot "));
+                Serial.print(i);
+                Serial.print(i == 0 ? F(" [PRIMARY]: ") :
+                           i == 1 ? F(" [SECONDARY]: ") :
+                           i == 2 ? F(" [TERTIARY]: ") : F(" [CANDIDATE]: "));
+                Serial.print(hypo.bpm, 1);
+                Serial.print(F(" BPM, phase="));
+                Serial.print(hypo.phase, 2);
+                Serial.print(F(", str="));
+                Serial.print(hypo.strength, 2);
+                Serial.print(F(", conf="));
+                Serial.print(hypo.confidence, 2);
+                Serial.print(F(", beats="));
+                Serial.println(hypo.beatCount);
+            }
+        }
+
+        if (!anyActive) {
+            Serial.println(F("No active hypotheses"));
+        }
+
+        Serial.println();
+        return true;
+    }
+
+    // "show primary" - print primary hypothesis only
+    if (strcmp(cmd, "show primary") == 0) {
+        const TempoHypothesis& primary = tracker.getPrimary();
+        Serial.println(F("=== Primary Hypothesis ==="));
+        if (primary.active) {
+            Serial.print(F("BPM: "));
+            Serial.println(primary.bpm, 1);
+            Serial.print(F("Phase: "));
+            Serial.println(primary.phase, 2);
+            Serial.print(F("Strength: "));
+            Serial.println(primary.strength, 2);
+            Serial.print(F("Confidence: "));
+            Serial.println(primary.confidence, 2);
+            Serial.print(F("Beat Count: "));
+            Serial.println(primary.beatCount);
+        } else {
+            Serial.println(F("No active primary hypothesis"));
+        }
+        Serial.println();
+        return true;
+    }
+
+    // "set hypodebug <0-3>" - set hypothesis debug level
+    if (strncmp(cmd, "set hypodebug ", 14) == 0) {
+        int level = atoi(cmd + 14);
+        if (level >= 0 && level <= 3) {
+            tracker.debugLevel = static_cast<HypothesisDebugLevel>(level);
+            Serial.print(F("OK hypodebug="));
+            Serial.print(level);
+            Serial.print(F(" ("));
+            switch (tracker.debugLevel) {
+                case HypothesisDebugLevel::OFF: Serial.print(F("OFF")); break;
+                case HypothesisDebugLevel::EVENTS: Serial.print(F("EVENTS")); break;
+                case HypothesisDebugLevel::SUMMARY: Serial.print(F("SUMMARY")); break;
+                case HypothesisDebugLevel::DETAILED: Serial.print(F("DETAILED")); break;
+            }
+            Serial.println(F(")"));
+        } else {
+            Serial.println(F("ERROR: hypodebug must be 0-3 (OFF/EVENTS/SUMMARY/DETAILED)"));
+        }
+        return true;
+    }
+
+    // "get hypodebug" - show current debug level
+    if (strcmp(cmd, "get hypodebug") == 0) {
+        Serial.print(F("hypodebug="));
+        Serial.print(static_cast<int>(tracker.debugLevel));
+        Serial.print(F(" ("));
+        switch (tracker.debugLevel) {
+            case HypothesisDebugLevel::OFF: Serial.print(F("OFF")); break;
+            case HypothesisDebugLevel::EVENTS: Serial.print(F("EVENTS")); break;
+            case HypothesisDebugLevel::SUMMARY: Serial.print(F("SUMMARY")); break;
+            case HypothesisDebugLevel::DETAILED: Serial.print(F("DETAILED")); break;
+        }
+        Serial.println(F(")"));
         return true;
     }
 
