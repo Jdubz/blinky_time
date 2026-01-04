@@ -280,7 +280,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
 
     // Autocorrelation: compute correlation for all lags
     // We'll store correlations to find multiple peaks
-    static float correlationAtLag[200];  // Max lag range (200 BPM @ 60Hz = 30 samples, 60 BPM @ 60Hz = 60 samples)
+    // NOTE: Static buffer assumes single-threaded execution (only one AudioController instance)
+    static float correlationAtLag[200];  // Max lag range (e.g., 200 BPM @ 60Hz = 18 samples, 60 BPM @ 60Hz = 60 samples)
     int correlationSize = maxLag - minLag + 1;
     if (correlationSize > 200) correlationSize = 200;
 
@@ -362,7 +363,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         }
     }
 
-    // Sort peaks by strength (descending) - simple bubble sort
+    // Sort peaks by strength (descending) - simple selection sort
     for (int i = 0; i < numPeaks - 1; i++) {
         for (int j = i + 1; j < numPeaks; j++) {
             if (peaks[j].normCorrelation > peaks[i].normCorrelation) {
@@ -394,6 +395,16 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         if (matchSlot >= 0) {
             // Update existing hypothesis
             TempoHypothesis& hypo = multiHypothesis_.hypotheses[matchSlot];
+
+            // Update phase error tracking:
+            // Autocorrelation peak indicates we're at phase 0.0 (beat start)
+            // Error is distance from current phase to 0.0 (shortest path around circle)
+            float phaseError = hypo.phase;
+            if (phaseError > 0.5f) phaseError = 1.0f - phaseError;  // Wrap: use shorter distance
+
+            // Exponential smoothing: avgPhaseError = 0.9 * old + 0.1 * new
+            hypo.avgPhaseError = 0.9f * hypo.avgPhaseError + 0.1f * phaseError;
+
             hypo.strength = peaks[i].normCorrelation;
             hypo.lastUpdateMs = nowMs;
             hypo.correlationPeak = peaks[i].correlation;
@@ -479,7 +490,7 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
     // === USE PRIMARY HYPOTHESIS FOR OUTPUT ===
     TempoHypothesis& primary = multiHypothesis_.getPrimary();
 
-    if (primary.active && primary.strength > 0.25f) {
+    if (primary.active && primary.strength > activationThreshold) {
         // Safety check for NaN/infinity in primary hypothesis
         if (!isfinite(primary.phase)) {
             primary.phase = 0.0f;
@@ -629,7 +640,7 @@ void TempoHypothesis::updatePhase(float dt) {
     if (phase < 0.0f) phase += 1.0f;
 }
 
-void TempoHypothesis::applyBeatDecay() {
+void TempoHypothesis::applyBeatDecay(float minStrengthToKeep) {
     if (beatsSinceUpdate < 0.01f) return;  // No decay needed yet
 
     // Phrase-aware decay: half-life = 32 beats
@@ -641,19 +652,19 @@ void TempoHypothesis::applyBeatDecay() {
     beatsSinceUpdate = 0.0f;
 
     // Deactivate if too weak
-    if (strength < 0.1f) {
+    if (strength < minStrengthToKeep) {
         active = false;
     }
 }
 
-void TempoHypothesis::applySilenceDecay(float dt) {
+void TempoHypothesis::applySilenceDecay(float dt, float minStrengthToKeep) {
     // Time-based decay: 5-second half-life
     // decay_factor = exp(-ln(2) * dt / 5.0) = exp(-0.138629 * dt)
     float decayFactor = expf(-0.138629f * dt);
     strength *= decayFactor;
 
     // Deactivate if too weak
-    if (strength < 0.1f) {
+    if (strength < minStrengthToKeep) {
         active = false;
     }
 }
@@ -746,8 +757,15 @@ int MultiHypothesisTracker::findBestSlot() {
 
     // Don't evict primary if it's still strong (>0.5 strength)
     if (oldestSlot == 0 && hypotheses[0].strength > 0.5f) {
-        // Evict tertiary (slot 2) instead
-        return 2;
+        // Find LRU among non-primary slots (1, 2, 3) instead
+        oldestSlot = 1;
+        oldestTime = hypotheses[1].lastUpdateMs;
+        for (int i = 2; i < MAX_HYPOTHESES; i++) {
+            if (hypotheses[i].lastUpdateMs < oldestTime) {
+                oldestTime = hypotheses[i].lastUpdateMs;
+                oldestSlot = i;
+            }
+        }
     }
 
     return oldestSlot;
@@ -768,19 +786,6 @@ int MultiHypothesisTracker::findMatchingHypothesis(float bpm) const {
     return -1;  // No match
 }
 
-void MultiHypothesisTracker::updateWithPeaks(const AutocorrPeak* peaks, int numPeaks, uint32_t nowMs) {
-    // For each peak, find matching hypothesis or create new one
-    for (int i = 0; i < numPeaks; i++) {
-        // Convert lag to BPM (this will be done by caller, peaks already have BPM)
-        // For now, assume peaks contain lag and we compute BPM here
-        // This will be refined in Phase 2 when we modify runAutocorrelation
-
-        // Find matching hypothesis
-        // TODO: This will be fully implemented in Phase 2
-        // For now, this is a placeholder
-    }
-}
-
 void MultiHypothesisTracker::updateHypothesis(int index, float dt, uint32_t nowMs, bool hasSignificantAudio) {
     if (index < 0 || index >= MAX_HYPOTHESES) return;
     if (!hypotheses[index].active) return;
@@ -796,7 +801,7 @@ void MultiHypothesisTracker::updateHypothesis(int index, float dt, uint32_t nowM
     if (hasSignificantAudio) {
         // Active music: apply beat-count decay if enough beats accumulated
         if (hypo.beatsSinceUpdate > 1.0f) {
-            hypo.applyBeatDecay();
+            hypo.applyBeatDecay(minStrengthToKeep);
         }
     } else {
         // Silence: apply time-based decay after grace period
@@ -804,7 +809,7 @@ void MultiHypothesisTracker::updateHypothesis(int index, float dt, uint32_t nowM
         if (silenceMs < 0) silenceMs = 0;  // Handle wraparound
 
         if (static_cast<uint32_t>(silenceMs) > silenceGracePeriodMs) {
-            hypo.applySilenceDecay(dt);
+            hypo.applySilenceDecay(dt, minStrengthToKeep);
         }
     }
 }
@@ -840,11 +845,13 @@ void MultiHypothesisTracker::promoteBestHypothesis(uint32_t nowMs) {
         }
 
         // Swap slots (not just pointers - actually swap data)
+        // NOTE: createdMs, lastUpdateMs, and beatCount retain their original values
+        // This preserves the hypothesis's full history (when it was born, not when promoted)
         TempoHypothesis temp = hypotheses[0];
         hypotheses[0] = hypotheses[bestSlot];
         hypotheses[bestSlot] = temp;
 
-        // Update priority values
+        // Update priority values to reflect new slot positions
         hypotheses[0].priority = 0;
         hypotheses[bestSlot].priority = static_cast<uint8_t>(bestSlot);
     }

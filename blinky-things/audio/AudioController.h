@@ -71,12 +71,12 @@ struct TempoHypothesis {
     /**
      * Apply phrase-aware decay (beat-count based)
      */
-    void applyBeatDecay();
+    void applyBeatDecay(float minStrengthToKeep);
 
     /**
      * Apply time-based decay during silence
      */
-    void applySilenceDecay(float dt);
+    void applySilenceDecay(float dt, float minStrengthToKeep);
 
     /**
      * Compute overall confidence from strength, consistency, and longevity
@@ -163,11 +163,6 @@ public:
      */
     TempoHypothesis& getPrimary() { return hypotheses[0]; }
     const TempoHypothesis& getPrimary() const { return hypotheses[0]; }
-
-    /**
-     * Update all active hypotheses with new autocorrelation peaks
-     */
-    void updateWithPeaks(const struct AutocorrPeak* peaks, int numPeaks, uint32_t nowMs);
 
     /**
      * Update phase, confidence, and decay for a single hypothesis
