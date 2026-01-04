@@ -234,7 +234,7 @@ Before merging config changes:
 
 - [SafetyTest Documentation](blinky-things/tests/SafetyTest.h)
 - [SerialConsole Commands](blinky-things/inputs/SerialConsole.cpp)
-- [Architecture Overview](blinky-things/README.md)
+- [Architecture Overview](../blinky-things/README.md)
 - [XIAO nRF52840 Recovery Guide](https://www.pavelp.cz/posts/eng-xiao-nrf52840-bootloader-recovery/)
 
 ---
