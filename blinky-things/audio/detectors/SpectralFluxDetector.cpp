@@ -7,7 +7,6 @@ SpectralFluxDetector::SpectralFluxDetector()
     , maxBin_(64)   // Up to 4kHz (captures most transient energy)
     , currentFlux_(0.0f)
     , averageFlux_(0.0f)
-    , cooldownMs_(80)
 {
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         prevMagnitudes_[i] = 0.0f;
@@ -72,12 +71,12 @@ DetectionResult SpectralFluxDetector::detect(const AudioFrame& frame, float dt) 
     updateThresholdBuffer(currentFlux_);
 
     // Detection: flux exceeds adaptive threshold
+    // NOTE: Cooldown now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = currentFlux_ > effectiveThreshold;
-    bool cooldownOk = cooldownElapsed(nowMs, cooldownMs_);
 
     DetectionResult result;
 
-    if (isLoudEnough && cooldownOk) {
+    if (isLoudEnough) {
         // Strength: 0 at threshold, 1 at 2x threshold
         float ratio = currentFlux_ / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);
@@ -86,7 +85,7 @@ DetectionResult SpectralFluxDetector::detect(const AudioFrame& frame, float dt) 
         float confidence = computeConfidence(currentFlux_, localMedian);
 
         result = DetectionResult::hit(strength, confidence);
-        markTransient(nowMs);
+        // NOTE: markTransient() removed - cooldown now at ensemble level
     } else {
         result = DetectionResult::none();
     }

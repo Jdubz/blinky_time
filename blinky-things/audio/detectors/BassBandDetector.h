@@ -42,9 +42,6 @@ public:
     int getMinBin() const { return minBin_; }
     int getMaxBin() const { return maxBin_; }
 
-    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
-    uint16_t getCooldownMs() const { return cooldownMs_; }
-
     // Debug access
     float getCurrentBassFlux() const { return currentBassFlux_; }
     float getAverageBassFlux() const { return averageBassFlux_; }
@@ -65,9 +62,6 @@ private:
     // Running stats
     float currentBassFlux_;
     float averageBassFlux_;
-
-    // Parameters
-    uint16_t cooldownMs_;
 
     // Compute bass flux
     float computeBassFlux(const float* magnitudes, int numBins);

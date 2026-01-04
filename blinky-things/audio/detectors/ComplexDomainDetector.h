@@ -49,9 +49,6 @@ public:
     int getMinBin() const { return minBin_; }
     int getMaxBin() const { return maxBin_; }
 
-    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
-    uint16_t getCooldownMs() const { return cooldownMs_; }
-
     // Debug access
     float getCurrentCD() const { return currentCD_; }
     float getAverageCD() const { return averageCD_; }
@@ -72,9 +69,6 @@ private:
     // Running stats
     float currentCD_;
     float averageCD_;
-
-    // Parameters
-    uint16_t cooldownMs_;
 
     // Compute complex domain onset function
     float computeComplexDomain(const float* magnitudes, const float* phases, int numBins);

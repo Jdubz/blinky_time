@@ -48,8 +48,6 @@ volatile uint32_t AdaptiveMic::s_isrCount   = 0;
 volatile uint64_t AdaptiveMic::s_sumAbs     = 0;
 volatile uint32_t AdaptiveMic::s_numSamples = 0;
 volatile uint16_t AdaptiveMic::s_maxAbs     = 0;
-volatile uint32_t AdaptiveMic::s_zeroCrossings = 0;
-volatile int16_t AdaptiveMic::s_lastSample     = 0;
 
 // FFT sample ring buffer
 volatile int16_t AdaptiveMic::s_fftRing[AdaptiveMic::FFT_RING_SIZE] = {0};
@@ -105,11 +103,7 @@ void AdaptiveMic::update(float dt) {
   float avgAbs = 0.0f;
   uint16_t maxAbsVal = 0;
   uint32_t n = 0;
-  uint32_t zc = 0;
-  consumeISR(avgAbs, maxAbsVal, n, zc);
-
-  // Calculate zero-crossing rate (proportion of zero crossings to total samples)
-  zeroCrossingRate = (n > 0) ? (float)zc / (float)n : 0.0f;
+  consumeISR(avgAbs, maxAbsVal, n);
 
   uint32_t nowMs = time_.millis();
   pdmAlive = !isMicDead(nowMs, 250);
@@ -196,21 +190,18 @@ void AdaptiveMic::unlockHwGain() {
  * Disables interrupts to prevent torn reads of multi-byte values (uint64_t, uint32_t).
  * The critical section is kept minimal (~20 cycles) to minimize interrupt latency.
  */
-void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings) {
+void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
   time_.noInterrupts();  // Begin critical section
   uint64_t sum = s_sumAbs;
   uint32_t cnt = s_numSamples;
   uint16_t m   = s_maxAbs;
-  uint32_t zc  = s_zeroCrossings;
   s_sumAbs = 0;
   s_numSamples = 0;
   s_maxAbs = 0;
-  s_zeroCrossings = 0;
   time_.interrupts();  // End critical section
 
   n = cnt;
   maxAbsVal = m;
-  zeroCrossings = zc;
   avgAbs = (cnt > 0) ? float(sum) / float(cnt) : 0.0f;
 }
 
@@ -321,13 +312,6 @@ void AdaptiveMic::onPDMdata() {
     uint16_t a = (uint16_t)((s < 0) ? -((int32_t)s) : s);
     localSumAbs += a;
     if (a > localMaxAbs) localMaxAbs = a;
-
-    // Count zero crossings for classification
-    // A zero crossing occurs when sign changes between consecutive samples
-    if ((s_lastSample >= 0 && s < 0) || (s_lastSample < 0 && s >= 0)) {
-      s_zeroCrossings++;
-    }
-    s_lastSample = s;
   }
 
   // Note: We're already in ISR context, so interrupts are disabled.
@@ -371,7 +355,14 @@ int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
 
   // Limit to ring buffer size to prevent reading stale data if we fell behind
   if ((uint32_t)available > FFT_RING_SIZE) {
-    s_extFftReadIdx = writeIdx - FFT_RING_SIZE;
+    // Catch-up: skip ahead to be FFT_RING_SIZE samples behind
+    // Handle early execution case where writeIdx < FFT_RING_SIZE
+    if (writeIdx >= FFT_RING_SIZE) {
+      s_extFftReadIdx = writeIdx - FFT_RING_SIZE;
+    } else {
+      // Early in execution, can't go back a full buffer - start from beginning
+      s_extFftReadIdx = 0;
+    }
     available = FFT_RING_SIZE;
   }
 

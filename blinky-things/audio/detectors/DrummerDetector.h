@@ -42,9 +42,6 @@ public:
     void setAverageTau(float tau) { averageTau_ = tau; }
     float getAverageTau() const { return averageTau_; }
 
-    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
-    uint16_t getCooldownMs() const { return cooldownMs_; }
-
     // Debug access
     float getRecentAverage() const { return recentAverage_; }
     float getBaselineLevel() const { return attackBuffer_[attackBufferIdx_]; }
@@ -65,7 +62,6 @@ private:
     // Parameters
     float attackMultiplier_;   // Required rise from baseline (1.1 = 10% rise)
     float averageTau_;         // EMA time constant in seconds
-    uint16_t cooldownMs_;      // Cooldown between detections
 
     // Helper: exponential factor
     static float expFactor(float dt, float tau) {

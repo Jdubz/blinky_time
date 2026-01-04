@@ -5,7 +5,6 @@ MelFluxDetector::MelFluxDetector()
     : hasPrevFrame_(false)
     , currentMelFlux_(0.0f)
     , averageMelFlux_(0.0f)
-    , cooldownMs_(80)
 {
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         prevMelBands_[i] = 0.0f;
@@ -61,12 +60,12 @@ DetectionResult MelFluxDetector::detect(const AudioFrame& frame, float dt) {
     updateThresholdBuffer(currentMelFlux_);
 
     // Detection
+    // NOTE: Cooldown now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = currentMelFlux_ > effectiveThreshold;
-    bool cooldownOk = cooldownElapsed(nowMs, cooldownMs_);
 
     DetectionResult result;
 
-    if (isLoudEnough && cooldownOk) {
+    if (isLoudEnough) {
         // Strength
         float ratio = currentMelFlux_ / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);
@@ -75,7 +74,7 @@ DetectionResult MelFluxDetector::detect(const AudioFrame& frame, float dt) {
         float confidence = computeConfidence(currentMelFlux_, localMedian);
 
         result = DetectionResult::hit(strength, confidence);
-        markTransient(nowMs);
+        // NOTE: markTransient() removed - cooldown now at ensemble level
     } else {
         result = DetectionResult::none();
     }

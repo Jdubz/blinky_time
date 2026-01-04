@@ -104,6 +104,14 @@ struct EnsembleOutput {
     bool hasConsensus() const {
         return detectorAgreement >= 3;
     }
+
+    // Debug accessors
+    float getAgreementBoost() const {
+        return ensembleConfidence;
+    }
+
+    // Defined after DetectorType enum (see below)
+    const char* getDominantDetectorName() const;
 };
 
 /**
@@ -188,4 +196,12 @@ inline bool parseDetectorType(const char* str, DetectorType& type) {
         case 'm': type = DetectorType::MEL_FLUX; return true;
         default: return false;
     }
+}
+
+/**
+ * EnsembleOutput method implementations
+ * (must be defined after DetectorType enum)
+ */
+inline const char* EnsembleOutput::getDominantDetectorName() const {
+    return getDetectorName(static_cast<DetectorType>(dominantDetector));
 }

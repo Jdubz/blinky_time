@@ -77,12 +77,13 @@ public:
     void setAgreementBoosts(const float* boosts);
 
     /**
-     * Fuse detection results from all detectors
+     * Fuse detection results from all detectors with unified cooldown
      * @param results Array of MAX_DETECTORS DetectionResult values
      *                Index corresponds to DetectorType enum value
+     * @param timestampMs Current timestamp in milliseconds (for cooldown tracking)
      * @return Combined EnsembleOutput with transientStrength, confidence, agreement
      */
-    EnsembleOutput fuse(const DetectionResult* results) const;
+    EnsembleOutput fuse(const DetectionResult* results, uint32_t timestampMs);
 
     /**
      * Get the weight sum for normalization (debug/tuning)
@@ -99,6 +100,21 @@ public:
      */
     void resetToDefaults();
 
+    /**
+     * Set unified ensemble cooldown period
+     * @param ms Cooldown period in milliseconds (default 80ms)
+     */
+    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
+    uint16_t getCooldownMs() const { return cooldownMs_; }
+
+    /**
+     * Set minimum confidence threshold for detections
+     * Detectors with confidence below this are ignored in fusion
+     * @param threshold Minimum confidence (0.0-1.0, default 0.3)
+     */
+    void setMinConfidence(float threshold) { minConfidence_ = threshold; }
+    float getMinConfidence() const { return minConfidence_; }
+
 private:
     // Per-detector configuration
     DetectorConfig configs_[MAX_DETECTORS];
@@ -106,6 +122,13 @@ private:
     // Agreement-based confidence scaling
     // Index = number of detectors that fired (0-6)
     float agreementBoosts_[MAX_DETECTORS + 1];
+
+    // Unified ensemble cooldown (applied after fusion, not per-detector)
+    uint32_t lastTransientMs_ = 0;
+    uint16_t cooldownMs_ = 80;  // Default 80ms cooldown for ensemble output
+
+    // Minimum confidence threshold (detectors below this are ignored)
+    float minConfidence_ = 0.3f;  // Default 0.3 (30% confident)
 
     // Find which detector contributed most to the detection
     uint8_t findDominantDetector(const DetectionResult* results) const;

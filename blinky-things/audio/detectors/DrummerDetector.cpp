@@ -7,7 +7,6 @@ DrummerDetector::DrummerDetector()
     , recentAverage_(0.0f)
     , attackMultiplier_(1.1f)   // 10% rise required
     , averageTau_(0.8f)         // ~1 second average tracking
-    , cooldownMs_(80)           // 80ms between detections
 {
     for (int i = 0; i < ATTACK_BUFFER_SIZE; i++) {
         attackBuffer_[i] = 0.0f;
@@ -58,14 +57,14 @@ DetectionResult DrummerDetector::detect(const AudioFrame& frame, float dt) {
     lastRawValue_ = rawLevel;
     currentThreshold_ = effectiveThreshold;
 
-    // Detection criteria: LOUD + SUDDEN + COOLDOWN
+    // Detection criteria: LOUD + SUDDEN
+    // NOTE: Cooldown is now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = rawLevel > effectiveThreshold;
     bool isAttacking = rawLevel > baselineLevel * attackMultiplier_;
-    bool cooldownOk = cooldownElapsed(nowMs, cooldownMs_);
 
     DetectionResult result;
 
-    if (isLoudEnough && isAttacking && cooldownOk) {
+    if (isLoudEnough && isAttacking) {
         // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
         float ratio = rawLevel / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);
@@ -74,7 +73,7 @@ DetectionResult DrummerDetector::detect(const AudioFrame& frame, float dt) {
         float confidence = computeConfidence(rawLevel, localMedian, ratio);
 
         result = DetectionResult::hit(strength, confidence);
-        markTransient(nowMs);
+        // NOTE: markTransient() removed - cooldown now at ensemble level
     } else {
         result = DetectionResult::none();
     }

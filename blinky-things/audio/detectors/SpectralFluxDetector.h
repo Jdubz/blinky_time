@@ -44,9 +44,6 @@ public:
     int getMinBin() const { return minBin_; }
     int getMaxBin() const { return maxBin_; }
 
-    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
-    uint16_t getCooldownMs() const { return cooldownMs_; }
-
     // Debug access
     float getCurrentFlux() const { return currentFlux_; }
     float getAverageFlux() const { return averageFlux_; }
@@ -66,9 +63,6 @@ private:
     // Running stats
     float currentFlux_;
     float averageFlux_;
-
-    // Parameters
-    uint16_t cooldownMs_;
 
     // Compute SuperFlux with max-filter vibrato suppression
     float computeFlux(const float* magnitudes, int numBins);

@@ -63,7 +63,7 @@ void EnsembleFusion::setAgreementBoosts(const float* boosts) {
     }
 }
 
-EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results) const {
+EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t timestampMs) {
     EnsembleOutput output;
 
     // Count how many enabled detectors fired and compute weighted strength
@@ -81,6 +81,11 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results) const {
         const DetectionResult& result = results[i];
 
         if (result.detected) {
+            // Apply confidence threshold - ignore low-confidence detections
+            if (result.confidence < minConfidence_) {
+                continue;  // Skip this detector, confidence too low
+            }
+
             agreementCount++;
 
             // Weighted contribution
@@ -106,16 +111,34 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results) const {
     int boostIdx = (agreementCount > MAX_DETECTORS) ? MAX_DETECTORS : agreementCount;
     float agreementBoost = agreementBoosts_[boostIdx];
 
-    // Final output
-    output.transientStrength = combinedStrength * agreementBoost;
+    // Compute fused strength BEFORE cooldown
+    float fusedStrength = combinedStrength * agreementBoost;
+
+    // Clamp to valid range
+    if (fusedStrength > 1.0f) {
+        fusedStrength = 1.0f;
+    }
+
+    // UNIFIED ENSEMBLE COOLDOWN: Apply cooldown AFTER fusion
+    // Cooldown prevents rapid-fire ensemble detections (not individual algorithms)
+    // Use unsigned arithmetic (wraps correctly within 49-day window)
+    uint32_t elapsedMs = timestampMs - lastTransientMs_;
+    bool cooldownElapsed = elapsedMs > (uint32_t)cooldownMs_;
+
+    if (fusedStrength > 0.01f && cooldownElapsed) {
+        // Detection passes cooldown - output it
+        output.transientStrength = fusedStrength;
+        lastTransientMs_ = timestampMs;  // Update cooldown timer
+    } else {
+        // Either no detection or suppressed by cooldown
+        output.transientStrength = 0.0f;
+    }
+
+    // Confidence and agreement always reported (even if suppressed by cooldown)
+    // This allows debugging of what fusion WOULD have output without cooldown
     output.ensembleConfidence = agreementBoost;
     output.detectorAgreement = static_cast<uint8_t>(agreementCount);
     output.dominantDetector = static_cast<uint8_t>(maxStrengthIdx);
-
-    // Clamp strength to valid range
-    if (output.transientStrength > 1.0f) {
-        output.transientStrength = 1.0f;
-    }
 
     return output;
 }

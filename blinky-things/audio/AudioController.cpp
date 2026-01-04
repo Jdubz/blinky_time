@@ -7,11 +7,8 @@
 // ============================================================================
 
 // Beat proximity thresholds for pulse modulation
-// When phase is near 0 or 1, we're "on beat"; near 0.5 we're "off beat"
-// distFromBeat ranges from 0 (on beat) to 0.5 (off beat)
-static constexpr float PULSE_NEAR_BEAT_THRESHOLD = 0.2f;   // Below this = boost transients
-static constexpr float PULSE_FAR_FROM_BEAT_THRESHOLD = 0.3f;  // Above this = suppress transients
-// Transition zone width (derived): 0.3 - 0.2 = 0.1
+// Beat proximity thresholds moved to AudioController class as tunable parameters
+// See pulseNearBeatThreshold and pulseFarFromBeatThreshold in AudioController.h
 
 // ===== CONSTRUCTION =====
 
@@ -55,9 +52,6 @@ bool AudioController::begin(uint32_t sampleRate) {
     lastAutocorrMs_ = 0;
     lastSignificantAudioMs_ = 0;
 
-    // Reset level tracking
-    prevLevel_ = 0.0f;
-
     // Reset output
     control_ = AudioControl();
     lastEnsembleOutput_ = EnsembleOutput();
@@ -95,19 +89,44 @@ const AudioControl& AudioController::update(float dt) {
         dt
     );
 
-    // 4. Get onset strength for rhythm analysis
-    //    Use spectral flux from ensemble when available, fallback to level derivative
+    // 4. Get onset strength for rhythm analysis using multi-band RMS energy
+    //    This is INDEPENDENT of transient detection - analyzes energy patterns
     float onsetStrength = 0.0f;
 
-    // Get spectral flux from ensemble's SpectralFluxDetector
-    const IDetector* fluxDetector = ensemble_.getDetector(DetectorType::SPECTRAL_FLUX);
-    if (fluxDetector && fluxDetector->getLastRawValue() > 0.0f) {
-        onsetStrength = fluxDetector->getLastRawValue();
+    // Get spectral data from ensemble
+    const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
+
+    if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
+        const float* magnitudes = spectral.getMagnitudes();
+        int numBins = spectral.getNumBins();
+
+        // Multi-band RMS energy calculation
+        // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
+        // Bass: bins 1-10 (62.5Hz-625Hz), Mid: bins 11-40 (687.5Hz-2.5kHz), High: bins 41-127 (2.56kHz-7.94kHz)
+        float bassEnergy = 0.0f;
+        float midEnergy = 0.0f;
+        float highEnergy = 0.0f;
+
+        for (int i = 1; i < 11 && i < numBins; i++) {
+            bassEnergy += magnitudes[i] * magnitudes[i];
+        }
+        for (int i = 11; i < 41 && i < numBins; i++) {
+            midEnergy += magnitudes[i] * magnitudes[i];
+        }
+        for (int i = 41; i < numBins; i++) {  // Extended to Nyquist for complete spectral coverage
+            highEnergy += magnitudes[i] * magnitudes[i];
+        }
+
+        // RMS (root mean square)
+        bassEnergy = sqrtf(bassEnergy / 10.0f);   // 10 bins
+        midEnergy = sqrtf(midEnergy / 30.0f);     // 30 bins
+        highEnergy = sqrtf(highEnergy / 87.0f);   // 87 bins (41-127)
+
+        // Weighted sum: emphasize bass and mid for rhythm (where most beats occur)
+        onsetStrength = 0.5f * bassEnergy + 0.3f * midEnergy + 0.2f * highEnergy;
     } else {
-        // Fallback: use level derivative as onset strength
-        float level = mic_.getLevel();
-        onsetStrength = (level > prevLevel_) ? (level - prevLevel_) * 5.0f : 0.0f;
-        prevLevel_ = level;
+        // Fallback when no spectral data: use normalized level
+        onsetStrength = mic_.getLevel();
     }
 
     // Track when we last had significant audio
@@ -115,8 +134,8 @@ const AudioControl& AudioController::update(float dt) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 3. Add sample to onset strength buffer
-    addOssSample(onsetStrength);
+    // 3. Add sample to onset strength buffer with timestamp
+    addOssSample(onsetStrength, nowMs);
 
     // 4. Run autocorrelation periodically (every 500ms)
     if (nowMs - lastAutocorrMs_ >= AUTOCORR_PERIOD_MS) {
@@ -178,8 +197,9 @@ int AudioController::getHwGain() const {
 
 // ===== RHYTHM TRACKING =====
 
-void AudioController::addOssSample(float onsetStrength) {
+void AudioController::addOssSample(float onsetStrength, uint32_t timestampMs) {
     ossBuffer_[ossWriteIdx_] = onsetStrength;
+    ossTimestamps_[ossWriteIdx_] = timestampMs;
     ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
     if (ossCount_ < OSS_BUFFER_SIZE) {
         ossCount_++;
@@ -192,13 +212,30 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         return;
     }
 
-    // Convert BPM range to lag range (in frames at ~60 Hz)
-    // Formula: lag = 60 / bpm * frameRate
-    // At 60 Hz: 200 BPM = 18 frames, 60 BPM = 60 frames
-    // NOTE: This assumes consistent 60 Hz frame rate. See header for implications.
-    constexpr float ASSUMED_FRAME_RATE = 60.0f;
-    int minLag = static_cast<int>(60.0f / bpmMax * ASSUMED_FRAME_RATE);
-    int maxLag = static_cast<int>(60.0f / bpmMin * ASSUMED_FRAME_RATE);
+    // Convert BPM range to time-based lag range using actual timestamps
+    // Formula: lagMs = 60000 / bpm (milliseconds per beat)
+    // 200 BPM = 300ms, 60 BPM = 1000ms
+    float minLagMs = 60000.0f / bpmMax;  // Minimum period in milliseconds
+    float maxLagMs = 60000.0f / bpmMin;  // Maximum period in milliseconds
+
+    // Convert to sample indices using actual elapsed time in buffer
+    int mostRecentIdx = (ossWriteIdx_ - 1 + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+    int oldestIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+
+    // Handle potential timestamp wraparound (after ~49 days)
+    int32_t bufferDurationMs = (int32_t)(ossTimestamps_[mostRecentIdx] - ossTimestamps_[oldestIdx]);
+    if (bufferDurationMs < 0 || bufferDurationMs > 10000) {
+        // Wraparound detected or invalid duration - use expected value for full buffer
+        bufferDurationMs = 6000;  // 6 seconds @ 60 Hz
+    }
+
+    // Estimate samples per millisecond from buffer
+    // Fallback should never be needed (ossCount_ >= 180 ensures bufferDurationMs > 0)
+    // but use defensive 60 Hz assumption if it somehow occurs
+    float samplesPerMs = bufferDurationMs > 0 ? (float)ossCount_ / (float)bufferDurationMs : 0.06f;
+
+    int minLag = static_cast<int>(minLagMs * samplesPerMs);
+    int maxLag = static_cast<int>(maxLagMs * samplesPerMs);
 
     if (minLag < 10) minLag = 10;
     if (maxLag > ossCount_ / 2) maxLag = ossCount_ / 2;
@@ -346,9 +383,17 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
     }
 
     // Decay periodicity during silence
-    uint32_t silenceMs = nowMs - lastSignificantAudioMs_;
+    // - First 3 seconds: No decay (allows brief pauses)
+    // - After 3 seconds: 5-second half-life decay
+    // decay_factor = exp(-ln(2) * dt / 5.0) = exp(-0.138629 * dt)
+
+    // Handle potential timestamp wraparound (after ~49 days)
+    int32_t silenceMs = (int32_t)(nowMs - lastSignificantAudioMs_);
+    if (silenceMs < 0) silenceMs = 0;  // Wraparound detected
+
     if (silenceMs > 3000) {
-        periodicityStrength_ *= 0.995f;
+        float decayFactor = expf(-0.138629f * dt);
+        periodicityStrength_ *= decayFactor;
     }
 }
 
@@ -381,16 +426,16 @@ void AudioController::synthesizePulse() {
         float distFromBeat = phase_ < 0.5f ? phase_ : (1.0f - phase_);
 
         float modulation;
-        if (distFromBeat < PULSE_NEAR_BEAT_THRESHOLD) {
+        if (distFromBeat < pulseNearBeatThreshold) {
             // Near beat: boost transient
             modulation = pulseBoostOnBeat;
-        } else if (distFromBeat > PULSE_FAR_FROM_BEAT_THRESHOLD) {
+        } else if (distFromBeat > pulseFarFromBeatThreshold) {
             // Away from beat: suppress transient
             modulation = pulseSuppressOffBeat;
         } else {
             // Transition zone: interpolate between boost and suppress
-            float transitionWidth = PULSE_FAR_FROM_BEAT_THRESHOLD - PULSE_NEAR_BEAT_THRESHOLD;
-            float t = (distFromBeat - PULSE_NEAR_BEAT_THRESHOLD) / transitionWidth;
+            float transitionWidth = pulseFarFromBeatThreshold - pulseNearBeatThreshold;
+            float t = (distFromBeat - pulseNearBeatThreshold) / transitionWidth;
             modulation = pulseBoostOnBeat * (1.0f - t) + pulseSuppressOffBeat * t;
         }
 

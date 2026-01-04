@@ -60,8 +60,6 @@ public:
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
 
-  // Zero-crossing rate (computed from raw audio, useful for audio classification)
-  float zeroCrossingRate = 0.0f;  // Current ZCR (0.0-1.0, typically 0.0-0.5)
 
   // Debug/health
   uint32_t lastIsrMs = 0;
@@ -130,8 +128,6 @@ private:
   volatile static uint64_t s_sumAbs;        // Sum of absolute sample values (uint64 prevents overflow)
   volatile static uint32_t s_numSamples;    // Count of samples processed (reset each frame)
   volatile static uint16_t s_maxAbs;
-  volatile static uint32_t s_zeroCrossings;  // Count of zero crossings
-  volatile static int16_t s_lastSample;       // Previous sample for ZCR
 
   // FFT sample ring buffer (ISR writes, main thread reads)
   // Size must be >= FFT_SIZE (256) to ensure we capture a full frame
@@ -158,7 +154,7 @@ private:
   bool inFastAgcMode_ = false;  // Currently in fast AGC mode
 
 private:
-  void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n, uint32_t& zeroCrossings);
+  void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);
   void hardwareCalibrate(uint32_t nowMs, float dt);
 
   inline float clamp01(float x) const { return x < 0.f ? 0.f : (x > 1.f ? 1.f : x); }

@@ -7,7 +7,6 @@ ComplexDomainDetector::ComplexDomainDetector()
     , maxBin_(64)
     , currentCD_(0.0f)
     , averageCD_(0.0f)
-    , cooldownMs_(80)
 {
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         prevPhases_[i] = 0.0f;
@@ -76,12 +75,12 @@ DetectionResult ComplexDomainDetector::detect(const AudioFrame& frame, float dt)
     updateThresholdBuffer(currentCD_);
 
     // Detection
+    // NOTE: Cooldown now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = currentCD_ > effectiveThreshold;
-    bool cooldownOk = cooldownElapsed(nowMs, cooldownMs_);
 
     DetectionResult result;
 
-    if (isLoudEnough && cooldownOk) {
+    if (isLoudEnough) {
         // Strength
         float ratio = currentCD_ / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);
@@ -90,7 +89,7 @@ DetectionResult ComplexDomainDetector::detect(const AudioFrame& frame, float dt)
         float confidence = computeConfidence(currentCD_, localMedian);
 
         result = DetectionResult::hit(strength, confidence);
-        markTransient(nowMs);
+        // NOTE: markTransient() removed - cooldown now at ensemble level
     } else {
         result = DetectionResult::none();
     }

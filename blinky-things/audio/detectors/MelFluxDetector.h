@@ -38,10 +38,6 @@ public:
     const char* name() const override { return "mel"; }
     bool requiresSpectralData() const override { return true; }
 
-    // Mel flux parameters
-    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
-    uint16_t getCooldownMs() const { return cooldownMs_; }
-
     // Debug access
     float getCurrentMelFlux() const { return currentMelFlux_; }
     float getAverageMelFlux() const { return averageMelFlux_; }
@@ -57,9 +53,6 @@ private:
     // Running stats
     float currentMelFlux_;
     float averageMelFlux_;
-
-    // Parameters
-    uint16_t cooldownMs_;
 
     // Compute mel flux
     float computeMelFlux(const float* melBands, int numBands);
