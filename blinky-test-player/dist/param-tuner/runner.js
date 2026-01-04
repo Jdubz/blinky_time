@@ -1,5 +1,9 @@
 /**
  * Test runner - executes patterns and measures detection performance
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * Legacy detection mode switching has been removed.
  */
 import { spawn } from 'child_process';
 import { SerialPort } from 'serialport';
@@ -7,7 +11,7 @@ import { ReadlineParser } from '@serialport/parser-readline';
 import { EventEmitter } from 'events';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { MODE_IDS, PARAMETERS } from './types.js';
+import { PARAMETERS } from './types.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // Path to test player CLI (use dist/index.js compiled version)
@@ -146,16 +150,18 @@ export class TestRunner extends EventEmitter {
         }
     }
     /**
-     * Set detection mode
-     */
-    async setMode(mode) {
-        await this.sendCommand(`set detectmode ${MODE_IDS[mode]}`);
-    }
-    /**
-     * Set a single parameter
+     * Set a single parameter using the new ensemble command format
      */
     async setParameter(name, value) {
-        await this.sendCommand(`set ${name} ${value}`);
+        const param = PARAMETERS[name];
+        if (param && param.command) {
+            // Use the custom command format (e.g., "detector_thresh drummer")
+            await this.sendCommand(`set ${param.command} ${value}`);
+        }
+        else {
+            // Fall back to direct parameter name (for non-ensemble params like musicthresh)
+            await this.sendCommand(`set ${name} ${value}`);
+        }
     }
     /**
      * Set multiple parameters
@@ -166,13 +172,60 @@ export class TestRunner extends EventEmitter {
         }
     }
     /**
-     * Reset parameters to defaults for a mode
+     * Set detector enabled state
      */
-    async resetDefaults(mode) {
-        const modeParams = Object.values(PARAMETERS).filter(p => p.mode === mode);
-        for (const param of modeParams) {
+    async setDetectorEnabled(detector, enabled) {
+        await this.sendCommand(`set detector_enable ${detector} ${enabled ? 1 : 0}`);
+    }
+    /**
+     * Set detector weight
+     */
+    async setDetectorWeight(detector, weight) {
+        await this.sendCommand(`set detector_weight ${detector} ${weight}`);
+    }
+    /**
+     * Set detector threshold
+     */
+    async setDetectorThreshold(detector, threshold) {
+        await this.sendCommand(`set detector_thresh ${detector} ${threshold}`);
+    }
+    /**
+     * Set agreement boost value
+     */
+    async setAgreementBoost(level, boost) {
+        if (level < 0 || level > 6) {
+            throw new Error('Agreement level must be 0-6');
+        }
+        await this.sendCommand(`set agree_${level} ${boost}`);
+    }
+    /**
+     * Reset parameters to defaults for ensemble
+     */
+    async resetDefaults() {
+        const ensembleParams = Object.values(PARAMETERS).filter(p => p.mode === 'ensemble');
+        for (const param of ensembleParams) {
             await this.setParameter(param.name, param.default);
         }
+    }
+    /**
+     * Save current settings to device flash memory
+     */
+    async saveToFlash() {
+        await this.sendCommand('save');
+        // Give the device time to complete the flash write
+        await new Promise(r => setTimeout(r, 500));
+    }
+    /**
+     * Get current parameter value from device
+     */
+    async getParameter(name) {
+        const response = await this.sendCommand(`show ${name}`);
+        // Parse response like "hitthresh: 2.0"
+        const match = response.match(/:\s*([\d.]+)/);
+        if (match) {
+            return parseFloat(match[1]);
+        }
+        throw new Error(`Failed to parse parameter value: ${response}`);
     }
     /**
      * Run a single test pattern and return results
@@ -180,7 +233,7 @@ export class TestRunner extends EventEmitter {
     async runPattern(patternId) {
         // Lock gain if specified
         if (this.options.gain !== undefined) {
-            await this.sendCommand(`set hwgainlock ${this.options.gain}`);
+            await this.sendCommand(`test lock hwgain ${this.options.gain}`);
         }
         // Clear buffers and start streaming
         this.transientBuffer = [];
@@ -230,7 +283,7 @@ export class TestRunner extends EventEmitter {
         await this.stopStream();
         // Unlock gain
         if (this.options.gain !== undefined) {
-            await this.sendCommand('set hwgainlock 255');
+            await this.sendCommand('test unlock hwgain');
         }
         if (!result.success) {
             throw new Error(result.error || 'Test failed');

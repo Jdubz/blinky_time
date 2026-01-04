@@ -1,6 +1,51 @@
 #include "Fire.h"
-#include "../music/MusicMode.h"
 #include <Arduino.h>
+#include "../inputs/SerialConsole.h"
+
+// ============================================================================
+// Named Constants (extracted from magic numbers per PR review feedback)
+// ============================================================================
+namespace FireConstants {
+    // Phase calculation: full cycle constant (2*PI already defined in Arduino.h as TWO_PI)
+    constexpr float PHASE_FULL_CYCLE = TWO_PI;
+
+    // Audio energy threshold for detecting "presence" of audio
+    constexpr float AUDIO_PRESENCE_THRESHOLD = 0.05f;
+
+    // Ember brightness base values
+    constexpr float MUSIC_EMBER_BASE_BRIGHTNESS = 0.4f;
+    constexpr float ORGANIC_EMBER_BASE_BRIGHTNESS = 0.3f;
+    constexpr float ORGANIC_EMBER_SCALE = 0.7f;
+
+    // Organic mode cooling adjustment scale factor
+    // Amplifies the audio effect on cooling for more visible response
+    constexpr float ORGANIC_COOLING_SCALE = 2.0f;
+
+    // Beat detection phase thresholds
+    // Beat is detected when phase wraps from near 1.0 back to near 0.0
+    constexpr float BEAT_PHASE_LOW_THRESHOLD = 0.2f;   // Current phase must be below this
+    constexpr float BEAT_PHASE_HIGH_THRESHOLD = 0.8f;  // Previous phase must be above this
+
+    // Frame timing
+    constexpr unsigned long MIN_UPDATE_INTERVAL_MS = 30;  // ~33 FPS max
+
+    // Ember noise parameters
+    constexpr float EMBER_NOISE_SCALE = 0.25f;      // Spatial frequency of ember patches
+    constexpr float EMBER_THRESHOLD = 0.55f;        // Noise must exceed this to glow
+    constexpr float EMBER_RANGE = 0.45f;            // 1.0 - EMBER_THRESHOLD (normalization)
+    constexpr int EMBER_UPDATE_SKIP = 2;            // Update embers every N frames (performance)
+
+    // Fire color palette breakpoints (kept separate from unified palette for visual consistency)
+    // Fire uses simple multiply (heat*3) rather than lerp for historical reasons
+    constexpr uint8_t COLOR_SEGMENT_1 = 85;         // End of black-to-red segment
+    constexpr uint8_t COLOR_SEGMENT_2 = 170;        // End of red-to-orange segment
+    constexpr uint8_t COLOR_MULTIPLIER = 3;         // Scale factor for RGB components
+}
+
+// Helper: Convert beat phase (0-1) to pulse intensity (0-1, max at phase=0)
+inline float beatPhaseToPulse(float phase) {
+    return 0.5f + 0.5f * cos(phase * FireConstants::PHASE_FULL_CYCLE);
+}
 
 // PROGMEM compatibility for non-AVR platforms (e.g., nRF52840)
 #if defined(ARDUINO_ARCH_AVR)
@@ -153,10 +198,10 @@ namespace {
 // ============================================================================
 
 Fire::Fire()
-    : heat_(nullptr), tempHeat_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f),
+    : heat_(nullptr), tempHeat_(nullptr),
       lastBurstMs_(0), inSuppression_(false),
-      emberNoisePhase_(0.0f), sparkPositions_(nullptr), numActivePositions_(0),
-      music_(nullptr) {
+      emberNoisePhase_(0.0f), emberFrameCounter_(0),
+      sparkPositions_(nullptr), numActivePositions_(0) {
 }
 
 Fire::~Fire() {
@@ -201,7 +246,7 @@ bool Fire::begin(const DeviceConfig& config) {
     if (heat_) delete[] heat_;
     heat_ = new uint8_t[this->numLeds_];
     if (!heat_) {
-        Serial.println(F("ERROR: Failed to allocate heat buffer"));
+        SerialConsole::logError(F("Failed to allocate heat buffer"));
         return false;
     }
     memset(heat_, 0, this->numLeds_);
@@ -210,7 +255,7 @@ bool Fire::begin(const DeviceConfig& config) {
     if (sparkPositions_) delete[] sparkPositions_;
     sparkPositions_ = new uint8_t[params_.maxSparkPositions];
     if (!sparkPositions_) {
-        Serial.println(F("ERROR: Failed to allocate spark positions"));
+        SerialConsole::logError(F("Failed to allocate spark positions"));
         delete[] heat_;
         heat_ = nullptr;
         return false;
@@ -222,7 +267,7 @@ bool Fire::begin(const DeviceConfig& config) {
     if (tempHeat_) delete[] tempHeat_;
     tempHeat_ = new uint8_t[this->numLeds_];
     if (!tempHeat_) {
-        Serial.println(F("ERROR: Failed to allocate temp heat buffer"));
+        SerialConsole::logError(F("Failed to allocate temp buffer"));
         delete[] heat_;
         delete[] sparkPositions_;
         heat_ = nullptr;
@@ -234,8 +279,8 @@ bool Fire::begin(const DeviceConfig& config) {
     return true;
 }
 
-void Fire::generate(PixelMatrix& matrix, float energy, float hit) {
-    setAudioInput(energy, hit);
+void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    audio_ = audio;
     update();
 
     // Convert heat array to PixelMatrix colors
@@ -253,7 +298,7 @@ void Fire::generate(PixelMatrix& matrix, float energy, float hit) {
 
 void Fire::update() {
     unsigned long currentMs = millis();
-    if (currentMs - this->lastUpdateMs_ < 30) {  // ~33 FPS max
+    if (currentMs - this->lastUpdateMs_ < FireConstants::MIN_UPDATE_INTERVAL_MS) {
         return;
     }
     float dtMs = (float)(currentMs - this->lastUpdateMs_);
@@ -277,15 +322,13 @@ void Fire::reset() {
         memset(heat_, 0, this->numLeds_);
     }
     numActivePositions_ = 0;
-    audioEnergy_ = 0.0f;
-    audioHit_ = 0.0f;
+    audio_ = AudioControl();
+    prevPhase_ = 1.0f;
+    beatCount_ = 0;
+    emberFrameCounter_ = 0;
     this->lastUpdateMs_ = millis();
 }
 
-void Fire::setAudioInput(const float energy, const float hit) {
-    audioEnergy_ = energy;
-    audioHit_ = hit;
-}
 
 void Fire::setLayoutType(LayoutType layoutType) {
     this->layout_ = layoutType;
@@ -314,9 +357,6 @@ void Fire::setOrientation(MatrixOrientation orientation) {
     orientation_ = orientation;
 }
 
-void Fire::setMusicMode(MusicMode* music) {
-    music_ = music;
-}
 
 void Fire::setParams(const FireParams& params) {
     params_ = params;
@@ -386,12 +426,24 @@ void Fire::updateMatrixFire() {
             }
         }
     } else {
-        // HORIZONTAL: Traditional upward heat propagation (low y to high y)
+        // HORIZONTAL: Fire rises from physical bottom (high y) to physical top (low y)
+        // Same direction as VERTICAL since both have y=0 at physical top
         for (int x = 0; x < this->width_; x++) {
-            for (int y = this->height_ - 1; y >= 2; y--) {
-                int currentIndex = coordsToIndex(x, y);
-                int belowIndex = coordsToIndex(x, y - 1);
-                int below2Index = coordsToIndex(x, y - 2);
+            // First handle the second-to-last row specially (only one row below)
+            int y = this->height_ - 2;
+            int currentIndex = coordsToIndex(x, y);
+            int belowIndex = coordsToIndex(x, y + 1);
+            if (currentIndex >= 0 && belowIndex >= 0) {
+                // Only one row below, use its heat directly with some decay
+                uint16_t newHeat = (uint16_t)heat_[belowIndex] * 2 / 3;
+                heat_[currentIndex] = min(255, newHeat);
+            }
+
+            // Then handle the rest of the rows
+            for (y = 0; y < this->height_ - 2; y++) {
+                currentIndex = coordsToIndex(x, y);
+                belowIndex = coordsToIndex(x, y + 1);
+                int below2Index = coordsToIndex(x, y + 2);
 
                 if (currentIndex >= 0 && belowIndex >= 0 && below2Index >= 0) {
                     // FIX: Use uint16_t arithmetic to prevent overflow
@@ -400,13 +452,13 @@ void Fire::updateMatrixFire() {
 
                     // Add horizontal spread (prevent overflow with uint16_t)
                     if (x > 0) {
-                        int leftIndex = coordsToIndex(x - 1, y - 1);
+                        int leftIndex = coordsToIndex(x - 1, y + 1);
                         if (leftIndex >= 0) {
                             newHeat = ((uint16_t)newHeat + (uint16_t)heat_[leftIndex]) / 2;
                         }
                     }
                     if (x < this->width_ - 1) {
-                        int rightIndex = coordsToIndex(x + 1, y - 1);
+                        int rightIndex = coordsToIndex(x + 1, y + 1);
                         if (rightIndex >= 0) {
                             newHeat = ((uint16_t)newHeat + (uint16_t)heat_[rightIndex]) / 2;
                         }
@@ -464,8 +516,14 @@ void Fire::updateRandomFire() {
     // Use pre-allocated tempHeat_ to avoid heap fragmentation
     memcpy(tempHeat_, heat_, this->numLeds_);
 
+    // Performance note: With spreadDistance=8, inner loop is (2*8+1)²=289 iterations.
+    // Optimization: Only spread from "hot" pixels (heat > threshold) to reduce iterations.
+    // Cold pixels (< threshold) still decay but don't spread, saving ~70% of iterations
+    // when fire is sparse.
+    static constexpr uint8_t SPREAD_HEAT_THRESHOLD = 30;  // Only spread from visibly hot pixels
+
     for (int i = 0; i < this->numLeds_; i++) {
-        if (heat_[i] > 0) {
+        if (heat_[i] > SPREAD_HEAT_THRESHOLD) {
             int x, y;
             indexToCoords(i, x, y);
             uint16_t spreadHeat = heat_[i] * params_.heatDecay;
@@ -480,7 +538,14 @@ void Fire::updateRandomFire() {
                     int targetIndex = coordsToIndex(targetX, targetY);
 
                     if (targetIndex >= 0) {
-                        float distance = sqrt(dx*dx + dy*dy);
+                        // Use fast integer approximation: avoid sqrt() in hot loop
+                        // Manhattan distance approximation: max(|dx|,|dy|) + 0.5*min(|dx|,|dy|)
+                        int absDx = dx < 0 ? -dx : dx;
+                        int absDy = dy < 0 ? -dy : dy;
+                        int maxD = absDx > absDy ? absDx : absDy;
+                        int minD = absDx < absDy ? absDx : absDy;
+                        float distance = maxD + 0.414f * minD;  // Octagonal approximation (sqrt(2)-1)
+
                         float falloff = 1.0f / (distance + 1);
                         uint8_t heatToSpread = spreadHeat * falloff;
 
@@ -504,39 +569,73 @@ void Fire::generateSparks() {
         inSuppression_ = false;
     }
 
-    // BASELINE: Generate sparks scaled by audio energy
-    // Higher energy = more sparks and hotter sparks
-    float energyBoost = audioEnergy_ * params_.audioSparkBoost;  // 0-1 scaled by boost
-    float effectiveChance = params_.sparkChance + energyBoost;
+    bool inMusicMode = audio_.hasRhythm();
 
-    if (random(100) < (int)(effectiveChance * 100)) {
-        numSparks = 1;
-        // Heat scales with energy: low energy = min heat, high energy = max heat
-        uint8_t energyHeat = params_.sparkHeatMin +
-            (uint8_t)(audioEnergy_ * (params_.sparkHeatMax - params_.sparkHeatMin));
-        sparkHeat = max(energyHeat, params_.sparkHeatMin);
-    }
+    if (inMusicMode) {
+        // ============================================================
+        // MUSIC MODE: Beat-synced behavior
+        // ============================================================
 
-    // MUSIC MODE: Beat-synced spark bursts (highest priority)
-    // Triggers on detected beats when music mode is active
-    if (music_ && music_->isActive() && music_->beatHappened && !inSuppression_) {
-        // Stronger bursts on downbeats (wholeNote = every 4 beats)
-        uint8_t beatSparks = music_->wholeNote ? params_.burstSparks * 2 : params_.burstSparks;
-        numSparks += beatSparks;
-        sparkHeat = 255;  // Max heat for music-driven beats
-        lastBurstMs_ = now;
-        inSuppression_ = true;
-    }
-    // BURST: Transient impulse triggers burst (only if music didn't trigger)
-    // audioHit_ is 0.0 normally, non-zero when transient detected (low/high band onset)
-    else if (audioHit_ > 0.0f && !inSuppression_) {
-        float strength = audioHit_;  // Use transient strength (0.0-1.0)
-        numSparks += params_.burstSparks;
-        // Scale heat by strength: weak transient = less intense, strong = max
-        sparkHeat = params_.sparkHeatMin +
-            (uint8_t)(strength * (255 - params_.sparkHeatMin));
-        lastBurstMs_ = now;
-        inSuppression_ = true;  // Suppress further bursts briefly
+        // Phase-modulated spark heat: brightest on beat (phase=0), dimmest off-beat
+        float phaseMod = beatPhaseToPulse(audio_.phase);  // 0-1, max at phase=0
+        float heatScale = 1.0f - params_.musicSparkPulse * (1.0f - phaseMod);  // 1.0 on beat, reduced off-beat
+
+        // Baseline sparks still occur, but heat scales with phase
+        float effectiveChance = params_.sparkChance;
+        if (random(100) < (int)(effectiveChance * 100)) {
+            numSparks = 1;
+            sparkHeat = (uint8_t)(params_.sparkHeatMax * heatScale);
+        }
+
+        // Beat detection via phase wraparound (phase went from near 1.0 back to near 0)
+        bool beatHappened = (audio_.phase < FireConstants::BEAT_PHASE_LOW_THRESHOLD &&
+                             prevPhase_ > FireConstants::BEAT_PHASE_HIGH_THRESHOLD);
+        if (beatHappened) {
+            beatCount_++;
+        }
+
+        // Beat-synced spark bursts (highest priority)
+        if (beatHappened && !inSuppression_) {
+            // Stronger bursts on downbeats (every 4 beats)
+            uint8_t beatSparks = (beatCount_ % 4 == 0) ? params_.burstSparks * 2 : params_.burstSparks;
+            numSparks += beatSparks;
+            sparkHeat = 255;  // Max heat for music-driven beats
+            lastBurstMs_ = now;
+            inSuppression_ = true;
+        }
+    } else {
+        // ============================================================
+        // ORGANIC MODE: Random, fire-like behavior with gentle audio
+        // ============================================================
+
+        // Higher baseline random spark rate for organic fire look
+        float organicChance = params_.organicSparkChance;
+
+        // Add gentle audio influence (scaled by organicAudioMix)
+        float audioBoost = audio_.energy * params_.audioSparkBoost * params_.organicAudioMix;
+        float effectiveChance = organicChance + audioBoost;
+
+        if (random(100) < (int)(effectiveChance * 100)) {
+            numSparks = 1;
+            // Random heat variation for organic look (not tied to audio)
+            // Arduino random(min, max) is exclusive of max, so +1 to include sparkHeatMax
+            sparkHeat = random(params_.sparkHeatMin, params_.sparkHeatMax + 1);
+        }
+
+        // Only react to STRONG transients in organic mode
+        // This prevents fire from being too reactive to every sound
+        bool shouldSuppress = params_.organicBurstSuppress && inSuppression_;
+        if (audio_.pulse >= params_.organicTransientMin && !shouldSuppress) {
+            float strength = audio_.pulse;
+            numSparks += params_.burstSparks;
+            sparkHeat = params_.sparkHeatMin +
+                (uint8_t)(strength * (255 - params_.sparkHeatMin));
+
+            if (params_.organicBurstSuppress) {
+                lastBurstMs_ = now;
+                inSuppression_ = true;
+            }
+        }
     }
 
     // Generate the sparks
@@ -551,8 +650,8 @@ void Fire::generateSparks() {
                     // VERTICAL: physical bottom is high y values
                     y = this->height_ - 1 - random(params_.bottomRowsForSparks);
                 } else {
-                    // HORIZONTAL: physical bottom is low y values
-                    y = random(params_.bottomRowsForSparks);
+                    // HORIZONTAL: physical bottom is high y values (same as VERTICAL for standard row-major layouts)
+                    y = this->height_ - 1 - random(params_.bottomRowsForSparks);
                 }
                 sparkPosition = coordsToIndex(x, y);
                 break;
@@ -582,23 +681,32 @@ void Fire::generateSparks() {
             }
         }
     }
+
+    // Update prevPhase_ for next frame beat detection
+    prevPhase_ = audio_.phase;
 }
 
 void Fire::applyCooling() {
     uint8_t cooling = params_.baseCooling;
 
-    // Reduce cooling when audio is present (flames persist longer with sound)
-    if (audioEnergy_ > 0.05f) {
-        int8_t reduction = (int8_t)(params_.coolingAudioBias * audioEnergy_ * 2.0f);
-        cooling = max(0, (int)cooling + reduction);
-    }
-
-    // MUSIC MODE: Phase-synced breathing effect
-    // Cooling oscillates with beat phase for rhythmic pulsing
-    if (music_ && music_->isActive()) {
-        float breathe = sin(music_->phase * 2.0f * PI);  // -1 to 1
-        int8_t coolingMod = (int8_t)(breathe * 15.0f);    // ±15 variation
+    if (audio_.hasRhythm()) {
+        // MUSIC MODE: Phase-synced breathing effect
+        // Cooling oscillates with beat phase for rhythmic pulsing
+        // Low cooling on beat (fire flares up), high cooling off-beat (fire dims)
+        // Use -cos() so minimum cooling occurs at phase=0 (on-beat)
+        float breathe = -cos(audio_.phase * FireConstants::PHASE_FULL_CYCLE);  // -1 to 1, min at phase=0
+        int8_t coolingMod = (int8_t)(breathe * params_.musicCoolingPulse);
         cooling = max(0, min(255, (int)cooling + coolingMod));
+    } else {
+        // ORGANIC MODE: Gentle audio-reactive cooling
+        // Reduce cooling when audio is present (flames persist longer with sound)
+        // Use organicAudioMix to control how much audio affects cooling
+        if (audio_.energy > FireConstants::AUDIO_PRESENCE_THRESHOLD) {
+            float audioEffect = audio_.energy * params_.organicAudioMix;
+            // coolingAudioBias is typically negative, so adding it reduces cooling
+            int8_t coolingAdjustment = (int8_t)(params_.coolingAudioBias * audioEffect * FireConstants::ORGANIC_COOLING_SCALE);
+            cooling = max(0, (int)cooling + coolingAdjustment);
+        }
     }
 
     for (int i = 0; i < this->numLeds_; i++) {
@@ -611,14 +719,37 @@ void Fire::applyEmbers(float dtMs) {
     // Advance noise phase very slowly (uses actual frame time for consistency)
     emberNoisePhase_ += params_.emberNoiseSpeed * dtMs;
 
-    // Ember brightness pulses directly with mic level (no transient influence)
-    // Base brightness + audio-reactive component
-    float micPulse = 0.3f + (audioEnergy_ * 2.0f);  // 0.3 base, scales up with mic
-    micPulse = min(1.0f, micPulse);
+    // Performance optimization: Update ember noise every N frames
+    // This reduces expensive FBM noise calculations significantly.
+    // Visual impact: Ember patterns shift at ~16 FPS instead of ~33 FPS.
+    // This is acceptable because embers are subtle, slow-moving background elements.
+    // Fast-changing sparks and heat propagation still update every frame.
+    emberFrameCounter_++;
+    if (emberFrameCounter_ < FireConstants::EMBER_UPDATE_SKIP) {
+        return;  // Skip this frame, keep previous ember pattern
+    }
+    emberFrameCounter_ = 0;
 
-    // Noise scale controls the "size" of ember patches
-    // Smaller values = larger patches, larger values = more detail
-    const float noiseScale = 0.25f;
+    // Calculate ember brightness multiplier based on mode
+    float emberBrightness;
+
+    if (audio_.hasRhythm()) {
+        // MUSIC MODE: Embers pulse with beat phase
+        // phase=0 is on-beat (brightest), phase=0.5 is off-beat (dimmest)
+        float beatPulse = beatPhaseToPulse(audio_.phase);  // 0-1, max at phase=0
+        float pulsedBrightness = FireConstants::MUSIC_EMBER_BASE_BRIGHTNESS +
+            (1.0f - FireConstants::MUSIC_EMBER_BASE_BRIGHTNESS) * beatPulse * params_.musicEmberPulse;
+        emberBrightness = pulsedBrightness;
+    } else {
+        // ORGANIC MODE: Embers pulse gently with mic level
+        // Less reactive than music mode - more ambient/organic
+        float audioInfluence = audio_.energy * params_.organicAudioMix;
+        emberBrightness = FireConstants::ORGANIC_EMBER_BASE_BRIGHTNESS +
+            audioInfluence * FireConstants::ORGANIC_EMBER_SCALE;
+    }
+
+    // Clamp to valid range [0.0, 1.0]
+    emberBrightness = max(0.0f, min(1.0f, emberBrightness));
 
     // Apply simplex noise-based ember glow to all LEDs
     for (int i = 0; i < this->numLeds_; i++) {
@@ -629,8 +760,8 @@ void Fire::applyEmbers(float dtMs) {
         // Use 2D simplex noise with time dimension for animation
         // FBM (Fractional Brownian Motion) with 2 octaves for organic look
         float noise = fbmSimplex2D(
-            x * noiseScale,
-            y * noiseScale + emberNoisePhase_,
+            x * FireConstants::EMBER_NOISE_SCALE,
+            y * FireConstants::EMBER_NOISE_SCALE + emberNoisePhase_,
             2,      // octaves
             0.5f    // persistence
         );
@@ -639,9 +770,9 @@ void Fire::applyEmbers(float dtMs) {
         noise = (noise + 1.0f) * 0.5f;
 
         // Apply threshold so only some areas glow (sparse embers)
-        if (noise > 0.55f) {
-            float intensity = (noise - 0.55f) / 0.45f;  // 0-1 above threshold
-            uint8_t emberHeat = (uint8_t)(intensity * micPulse * params_.emberHeatMax);
+        if (noise > FireConstants::EMBER_THRESHOLD) {
+            float intensity = (noise - FireConstants::EMBER_THRESHOLD) / FireConstants::EMBER_RANGE;
+            uint8_t emberHeat = (uint8_t)(intensity * emberBrightness * params_.emberHeatMax);
 
             // Only apply if ember is brighter than current heat
             if (emberHeat > heat_[i]) {
@@ -653,12 +784,20 @@ void Fire::applyEmbers(float dtMs) {
 
 uint32_t Fire::heatToColor(uint8_t heat) {
     // Fire color palette: black -> red -> orange -> yellow (NO white)
-    if (heat < 85) {
+    //
+    // NOTE: Fire uses a custom palette algorithm (heat*3 multiply) rather than
+    // the shared ColorPalette.h system. This is intentional:
+    // - The multiply produces warmer reds that look more like real fire
+    // - Water and Lightning generators use ColorPalette::WATER/LIGHTNING
+    // - See types/ColorPalette.h for the unified palette system
+    //
+    // Uses simple multiply (heat*3) rather than lerp for historical visual consistency
+    if (heat < FireConstants::COLOR_SEGMENT_1) {
         // Black to red
-        return ((uint32_t)(heat * 3) << 16);
-    } else if (heat < 170) {
+        return ((uint32_t)(heat * FireConstants::COLOR_MULTIPLIER) << 16);
+    } else if (heat < FireConstants::COLOR_SEGMENT_2) {
         // Red to orange
-        uint8_t green = (heat - 85) * 3;
+        uint8_t green = (heat - FireConstants::COLOR_SEGMENT_1) * FireConstants::COLOR_MULTIPLIER;
         return (0xFF0000 | ((uint32_t)green << 8));
     } else {
         // Orange to bright yellow (cap at full yellow, no blue/white)
@@ -666,55 +805,7 @@ uint32_t Fire::heatToColor(uint8_t heat) {
     }
 }
 
-int Fire::coordsToIndex(int x, int y) {
-    if (x < 0 || x >= this->width_ || y < 0 || y >= this->height_) {
-        return -1;
-    }
-
-    // Handle different orientations and wiring patterns
-    switch (orientation_) {
-        case VERTICAL:
-            // Zigzag pattern for vertical orientation
-            if (x % 2 == 0) {
-                // Even columns: top to bottom
-                return x * this->height_ + y;
-            } else {
-                // Odd columns: bottom to top
-                return x * this->height_ + (this->height_ - 1 - y);
-            }
-        case HORIZONTAL:
-        default:
-            // Standard row-major order
-            return y * this->width_ + x;
-    }
-}
-
-void Fire::indexToCoords(int index, int& x, int& y) {
-    if (index < 0 || index >= this->numLeds_) {
-        x = y = -1;
-        return;
-    }
-
-    switch (orientation_) {
-        case VERTICAL:
-            // Reverse of zigzag pattern
-            x = index / this->height_;
-            if (x % 2 == 0) {
-                // Even columns: top to bottom
-                y = index % this->height_;
-            } else {
-                // Odd columns: bottom to top
-                y = this->height_ - 1 - (index % this->height_);
-            }
-            break;
-        case HORIZONTAL:
-        default:
-            // Standard row-major order
-            x = index % this->width_;
-            y = index / this->width_;
-            break;
-    }
-}
+// Note: coordsToIndex and indexToCoords are now inherited from Generator base class
 
 // Implement parameter setters
 void Fire::setBaseCooling(const uint8_t cooling) {
@@ -732,11 +823,17 @@ void Fire::setAudioParams(const float sparkBoost, const int8_t coolingBias) {
     params_.coolingAudioBias = coolingBias;
 }
 
-// Factory function - Disabled until setLayoutType/setOrientation are added to header
-// Fire* createFireGenerator(const DeviceConfig& config) {
-//     Fire* generator = new Fire();
-//     // Configure layout type from device config
-//     generator->setLayoutType(config.matrix.layoutType);
-//     generator->setOrientation(config.matrix.orientation);
-//     return generator;
-// }
+uint32_t Fire::getTotalHeat() const {
+    if (!heat_ || numLeds_ == 0) return 0;
+    uint32_t total = 0;
+    for (int i = 0; i < numLeds_; i++) {
+        total += heat_[i];
+    }
+    return total;
+}
+
+float Fire::getBrightnessPercent() const {
+    if (!heat_ || numLeds_ == 0) return 0.0f;
+    uint32_t maxPossible = (uint32_t)numLeds_ * 255;
+    return (getTotalHeat() * 100.0f) / maxPossible;
+}

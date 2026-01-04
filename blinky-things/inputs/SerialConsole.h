@@ -2,15 +2,20 @@
 
 #include <Arduino.h>
 #include "../generators/Fire.h"
+#include "../generators/Water.h"
+#include "../generators/Lightning.h"
 #include "../config/SettingsRegistry.h"
 
 // Forward declarations
 class ConfigStorage;
 class Fire;
+class Water;
+class Lightning;
 class AdaptiveMic;
 class BatteryMonitor;
-class MusicMode;
-class RhythmAnalyzer;
+class AudioController;
+class RenderPipeline;
+class HueRotationEffect;
 
 /**
  * SerialConsole - JSON API for web app communication
@@ -34,21 +39,55 @@ class RhythmAnalyzer;
  *     load                - Load settings from flash
  *     defaults            - Restore default values
  *     reset / factory     - Factory reset (clear saved settings)
+ *
+ *   Generator/Effect Control:
+ *     gen list            - List available generators
+ *     gen <name>          - Switch to generator (fire, water, lightning)
+ *     effect list         - List available effects
+ *     effect <name>       - Switch to effect (none, hue)
+ *
+ *   Logging:
+ *     log                 - Show current log level
+ *     log off             - Disable all logging
+ *     log error           - Show errors only
+ *     log warn            - Show warnings and errors
+ *     log info            - Show info, warnings, and errors (default)
+ *     log debug           - Show all messages including debug
  */
+
+// Log levels (higher = more verbose)
+enum class LogLevel : uint8_t {
+    OFF = 0,
+    ERROR = 1,
+    WARN = 2,
+    INFO = 3,
+    DEBUG = 4
+};
 class SerialConsole {
 public:
-    SerialConsole(Fire* fireGen, AdaptiveMic* mic);
+    SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic);
 
     void begin();
     void update();
 
     // External access
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
+    void setRenderPipeline(RenderPipeline* pipeline) { pipeline_ = pipeline; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
-    void setMusicMode(MusicMode* music) { music_ = music; }
-    void setRhythmAnalyzer(RhythmAnalyzer* rhythm) { rhythm_ = rhythm; }
+    void setAudioController(AudioController* audioCtrl) { audioCtrl_ = audioCtrl; }
     SettingsRegistry& getSettings() { return settings_; }
+
+    // Logging control
+    void setLogLevel(LogLevel level) { logLevel_ = level; }
+    LogLevel getLogLevel() const { return logLevel_; }
+    static LogLevel getGlobalLogLevel() { return instance_ ? instance_->logLevel_ : LogLevel::INFO; }
+
+    // Logging helpers - use these instead of Serial.print for debug output
+    static void logDebug(const __FlashStringHelper* msg);
+    static void logInfo(const __FlashStringHelper* msg);
+    static void logWarn(const __FlashStringHelper* msg);
+    static void logError(const __FlashStringHelper* msg);
 
 private:
     void registerSettings();
@@ -57,12 +96,45 @@ private:
     void restoreDefaults();
     void streamTick();
 
+    // Settings registration helpers (extracted from registerSettings for clarity)
+    void registerFireSettings(FireParams* fp);
+    void registerFireMusicSettings(FireParams* fp);
+    void registerFireOrganicSettings(FireParams* fp);
+    void registerAudioSettings();
+    void registerAgcSettings();
+    void registerTransientSettings();
+    void registerDetectionSettings();
+    void registerEnsembleSettings();  // Ensemble detector configuration
+    void registerRhythmSettings();
+
+    // Command handlers (extracted from handleSpecialCommand for clarity)
+    bool handleJsonCommand(const char* cmd);
+    bool handleBatteryCommand(const char* cmd);
+    bool handleStreamCommand(const char* cmd);
+    bool handleTestCommand(const char* cmd);
+    bool handleAudioStatusCommand(const char* cmd);
+    bool handleModeCommand(const char* cmd);
+    bool handleConfigCommand(const char* cmd);
+    bool handleGeneratorCommand(const char* cmd);
+    bool handleEffectCommand(const char* cmd);
+    bool handleLogCommand(const char* cmd);
+    bool handleEnsembleCommand(const char* cmd);  // Ensemble detector configuration
+
+    // Settings registration for other generators
+    void registerWaterSettings(WaterParams* wp);
+    void registerLightningSettings(LightningParams* lp);
+    void registerEffectSettings();
+    void syncEffectSettings();  // Apply effect settings to actual effect
+
     // Members
+    RenderPipeline* pipeline_;
     Fire* fireGenerator_;
+    Water* waterGenerator_;
+    Lightning* lightningGenerator_;
+    HueRotationEffect* hueEffect_;
     AdaptiveMic* mic_;
     BatteryMonitor* battery_;
-    MusicMode* music_;
-    RhythmAnalyzer* rhythm_;
+    AudioController* audioCtrl_;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
 
@@ -75,6 +147,9 @@ private:
     static const uint16_t STREAM_PERIOD_MS = 50;        // Normal: ~20Hz for audio
     static const uint16_t STREAM_FAST_PERIOD_MS = 10;   // Fast: ~100Hz for testing
     static const uint16_t BATTERY_PERIOD_MS = 1000;     // 1Hz for battery
+
+    // Logging level (default: INFO)
+    LogLevel logLevel_ = LogLevel::INFO;
 
     // Static instance pointer for callbacks
     static SerialConsole* instance_;

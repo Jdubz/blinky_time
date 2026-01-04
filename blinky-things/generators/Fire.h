@@ -3,8 +3,6 @@
 #include "Generator.h"
 #include "../config/TotemDefaults.h"
 
-// Forward declaration
-class MusicMode;
 
 /**
  * Fire - Realistic fire simulation generator
@@ -45,6 +43,19 @@ struct FireParams {
     // Ember noise floor (subtle ambient glow using noise)
     uint8_t emberHeatMax        = Defaults::EmberHeatMax;
     float   emberNoiseSpeed     = Defaults::EmberNoiseSpeed;
+
+    // === RHYTHM MODE PARAMETERS ===
+    // When rhythm is detected (audio.hasRhythm()), fire pulses on beat
+    float   musicEmberPulse     = 0.6f;   // How much embers pulse with phase (0=none, 1=full)
+    float   musicSparkPulse     = 0.5f;   // How much spark heat scales with phase (0=none, 1=full)
+    float   musicCoolingPulse   = 15.0f;  // Cooling oscillation amplitude (±value)
+
+    // === ORGANIC MODE PARAMETERS ===
+    // When no rhythm detected (organic mode), fire behaves more organically
+    float   organicSparkChance  = 0.15f;  // Baseline random spark rate (independent of audio)
+    float   organicTransientMin = 0.5f;   // Minimum transient strength to trigger burst (0-1)
+    float   organicAudioMix     = 0.3f;   // How much audio affects organic mode (0=none, 1=full)
+    bool    organicBurstSuppress = false; // Whether to suppress after bursts in organic mode
 };
 
 class Fire : public Generator {
@@ -54,13 +65,13 @@ public:
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(PixelMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
+    virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Fire"; }
+    virtual GeneratorType getType() const override { return GeneratorType::FIRE; }
 
     // Fire specific methods
     void update();
-    void setAudioInput(const float energy, const float hit);
 
     // Parameter configuration
     void setParams(const FireParams& params);
@@ -77,11 +88,12 @@ public:
     void setLayoutType(LayoutType layoutType);
     void setOrientation(MatrixOrientation orientation);
 
-    // Music mode integration
-    void setMusicMode(MusicMode* music);
+
+    // Brightness telemetry
+    uint32_t getTotalHeat() const;
+    float getBrightnessPercent() const;
 
 private:
-    MatrixOrientation orientation_ = HORIZONTAL;
     // Layout-specific heat propagation algorithms
     void updateMatrixFire();     // Traditional 2D upward propagation
     void updateLinearFire();     // 1D lateral propagation
@@ -93,8 +105,7 @@ private:
     void applyCooling();
     void applyEmbers(float dtMs);    // Subtle ambient ember glow (dtMs = delta time in milliseconds)
     uint32_t heatToColor(uint8_t heat);
-    int coordsToIndex(int x, int y);
-    void indexToCoords(int index, int& x, int& y);
+    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
 
     // State variables
     uint8_t* heat_;
@@ -103,19 +114,19 @@ private:
     // Configuration
     FireParams params_;
 
-    // Audio input
-    float audioEnergy_;
-    float audioHit_;
+    // Audio control (from AudioController)
+    AudioControl audio_;  // Current frame audio control
+    float prevPhase_ = 1.0f;  // Previous phase for beat detection
+    uint32_t beatCount_ = 0;  // Beat counter for downbeat detection
     uint32_t lastBurstMs_;       // When last burst occurred
     bool inSuppression_;         // Currently suppressing sparks after burst
 
     // Ember noise state
     float emberNoisePhase_;      // Phase for noise animation
+    uint8_t emberFrameCounter_;  // Frame counter for update skipping (performance)
 
     // Layout-specific state
     uint8_t* sparkPositions_;   // For random layout spark tracking
     uint8_t numActivePositions_;
 
-    // Music mode integration
-    MusicMode* music_;          // Optional music mode for beat-synced effects
 };

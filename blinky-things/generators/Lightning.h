@@ -27,7 +27,6 @@ struct LightningParams {
     float   audioBoltBoost     = 0.5f; // Audio boost for bolts
     uint8_t audioIntensityBoostMax = 100; // Max intensity boost from audio
     int8_t  fadeAudioBias      = -30;  // Fade speed audio bias (negative = slower fade on audio)
-    uint8_t maxBoltPositions   = 8;    // For random layout tracking
     uint8_t branchChance       = 30;   // Percentage chance of branching
 };
 
@@ -38,9 +37,10 @@ public:
 
     // Generator interface implementation
     virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(PixelMatrix& matrix, float energy = 0.0f, float hit = 0.0f) override;
+    virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
     virtual void reset() override;
     virtual const char* getName() const override { return "Lightning"; }
+    virtual GeneratorType getType() const override { return GeneratorType::LIGHTNING; }
 
     // Lightning specific methods
     void update();
@@ -49,6 +49,8 @@ public:
     // Parameter configuration
     void setParams(const LightningParams& params);
     void resetToDefaults();
+    const LightningParams& getParams() const { return params_; }
+    LightningParams& getParamsMutable() { return params_; }
 
     // Individual parameter setters
     void setBaseFade(uint8_t fade);
@@ -66,9 +68,8 @@ private:
     void propagateBolts();
     void applyFade();
     uint32_t intensityToColor(uint8_t intensity);
-    int coordsToIndex(int x, int y);
-    void indexToCoords(int index, int& x, int& y);
     void createBranch(int startIndex, int direction, uint8_t intensity);
+    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
 
     // State variables
     uint8_t* intensity_;      // Lightning intensity instead of heat
@@ -81,7 +82,4 @@ private:
     float audioEnergy_;
     float audioHit_;
 
-    // Layout-specific state
-    uint8_t* boltPositions_;   // For random layout bolt tracking
-    uint8_t numActiveBolts_;
 };

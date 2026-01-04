@@ -8,14 +8,21 @@ import { TabView } from './components/TabView';
 import { OfflineBanner } from './components/OfflineBanner';
 import { SerialConsoleModal } from './components/SerialConsoleModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { GeneratorSelector } from './components/GeneratorSelector';
+import { EffectSelector } from './components/EffectSelector';
 import './styles.css';
 
 function App() {
   const {
     connectionState,
     isSupported,
+    errorMessage,
     deviceInfo,
     settingsByCategory,
+    currentGenerator,
+    currentEffect,
+    availableGenerators,
+    availableEffects,
     isStreaming,
     audioData,
     batteryData,
@@ -23,7 +30,7 @@ function App() {
     rhythmData,
     musicModeData,
     statusData,
-    onPercussionEvent,
+    onTransientEvent,
     consoleLines,
     sendCommand,
     connect,
@@ -35,6 +42,8 @@ function App() {
     resetDefaults,
     refreshSettings,
     requestBatteryStatus,
+    setGenerator,
+    setEffect,
   } = useSerial();
 
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
@@ -59,6 +68,7 @@ function App() {
         batteryData={batteryData}
         batteryStatusData={batteryStatusData}
         isSupported={isSupported}
+        errorMessage={errorMessage}
         onConnect={connect}
         onDisconnect={disconnect}
         onOpenConsole={() => setIsConsoleOpen(true)}
@@ -101,7 +111,7 @@ function App() {
                         isStreaming={isStreaming}
                         onToggleStreaming={toggleStreaming}
                         disabled={isDisabled}
-                        onPercussionEvent={onPercussionEvent}
+                        onTransientEvent={onTransientEvent}
                         connectionState={connectionState}
                       />
                     </ErrorBoundary>
@@ -125,10 +135,21 @@ function App() {
               content: (
                 <div className="tab-panel">
                   <div className="tab-panel-settings-full">
+                    <GeneratorSelector
+                      currentGenerator={currentGenerator}
+                      availableGenerators={availableGenerators}
+                      onGeneratorChange={setGenerator}
+                      disabled={isDisabled}
+                    />
                     <SettingsPanel
                       {...settingsPanelProps}
                       settingsByCategory={{
-                        fire: settingsByCategory.fire || [],
+                        [currentGenerator]: settingsByCategory[currentGenerator] || [],
+                        // Include related categories for fire generator
+                        ...(currentGenerator === 'fire' && {
+                          firemusic: settingsByCategory.firemusic || [],
+                          fireorganic: settingsByCategory.fireorganic || [],
+                        }),
                       }}
                     />
                   </div>
@@ -140,15 +161,27 @@ function App() {
               label: 'Effects',
               content: (
                 <div className="tab-panel">
-                  <div className="tab-panel-placeholder">
-                    <div className="placeholder-content">
-                      <span className="placeholder-icon">🎨</span>
-                      <h3>No Effect Settings</h3>
-                      <p>Effects are currently hardcoded (HueRotation)</p>
-                      <p className="placeholder-hint">
-                        Future: Configurable effect chains and parameters
-                      </p>
-                    </div>
+                  <div className="tab-panel-settings-full">
+                    <EffectSelector
+                      currentEffect={currentEffect}
+                      availableEffects={availableEffects}
+                      onEffectChange={setEffect}
+                      disabled={isDisabled}
+                    />
+                    {currentEffect === 'none' ? (
+                      <div className="effect-info">
+                        <p className="effect-description">
+                          No effect applied - using original generator colors.
+                        </p>
+                      </div>
+                    ) : (
+                      <SettingsPanel
+                        {...settingsPanelProps}
+                        settingsByCategory={{
+                          effect: settingsByCategory.effect || [],
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
               ),

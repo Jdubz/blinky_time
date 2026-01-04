@@ -38,6 +38,7 @@
 // Render
 #include "render/EffectRenderer.h"
 #include "render/LEDMapper.h"
+#include "render/RenderPipeline.h"
 
 // Input components
 // NOTE: Requires patched pinDefinitions.h with include guards (see docs/PLATFORM_FIX.md)
@@ -46,9 +47,9 @@
 #include "inputs/IMUHelper.h"     // Compiles without LSM6DS3; define IMU_ENABLED to activate
 #include "inputs/SerialConsole.h"
 
-// Music detection
-#include "music/MusicMode.h"
-#include "music/RhythmAnalyzer.h"
+// Audio processing
+#include "audio/AudioControl.h"
+#include "audio/AudioController.h"
 
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING

@@ -1,6 +1,22 @@
 # Parameter Tuning History
 
+> **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive documentation.
+
 This document tracks parameter optimization tests and findings. Raw test result files are excluded from git (see .gitignore) to avoid repo bloat.
+
+---
+
+## Architecture Change: December 2025
+
+**Major Refactor:** Replaced PLL-based MusicMode + RhythmAnalyzer with unified AudioController using autocorrelation-based rhythm tracking.
+
+**Impact on Tuning:**
+- PLL parameters (pllkp, pllki, confinc, confdec, etc.) no longer exist
+- Rhythm tracking now uses: `musicthresh`, `phaseadapt`, `bpmmin`, `bpmmax`
+- Previous MusicMode tuning results are obsolete
+- Transient detection parameters remain valid
+
+---
 
 ## Test Session: 2025-12-27
 
@@ -264,6 +280,103 @@ npm run tuner -- validate --port COM41 --gain 40
 
 ---
 
+## Test Session: 2025-12-30 (Fast-Tune Dual Run)
+
+**Environment:**
+- Hardware: Seeeduino XIAO nRF52840 Sense
+- Serial Port: COM11
+- Hardware Gain: Unlocked (AGC active)
+- Test Patterns: 8 representative patterns (strong-beats, sparse, bass-line, synth-stabs, pad-rejection, fast-tempo, simultaneous, full-mix)
+- Tool: param-tuner fast mode (two consecutive runs for verification)
+
+### Key Finding: Equal Hybrid Weights Outperform 0.7/0.3 Split
+
+**Comparison across two fast-tune runs:**
+
+| Mode | Run 1 F1 | Run 2 F1 | Best Params |
+|------|----------|----------|-------------|
+| HYBRID | 0.498 | **0.598** | hitthresh=2.341, hyfluxwt=0.5, hydrumwt=0.5 |
+| DRUMMER | 0.517 | 0.545 | hitthresh=1.192, cooldown=80 |
+| SPECTRAL | 0.316 | 0.43 | fluxthresh=1.7 |
+
+**Run 2 - Best Results (HYBRID mode, F1=0.598):**
+- **hitthresh:** 2.341 (vs current 2.813)
+- **hyfluxwt:** 0.5 (vs current 0.7) ⚠️ KEY CHANGE
+- **hydrumwt:** 0.5 (vs current 0.3) ⚠️ KEY CHANGE
+- **hybothboost:** 1.2 (unchanged)
+
+### Pattern-by-Pattern Performance (HYBRID, Run 2)
+
+| Pattern | F1 | Precision | Recall | False Positives |
+|---------|-----|-----------|--------|-----------------|
+| simultaneous | **0.886** | 81.6% | 96.9% | 7 |
+| fast-tempo | **0.774** | 63.2% | 100% | 21 |
+| full-mix | **0.727** | 57.1% | 100% | 24 |
+| strong-beats | 0.682 | 53.6% | 93.8% | 26 |
+| bass-line | 0.658 | 49.0% | 100% | 25 |
+| synth-stabs | 0.639 | 47.9% | 95.8% | 25 |
+| sparse | 0.267 | 15.4% | 100% | 44 |
+| **pad-rejection** | **0.148** | 8.2% | 75.0% | **67** |
+
+### Critical Issues Identified
+
+1. **Pad Rejection Broken:** All modes generate 50-229 false positives on sustained pad sounds
+   - DRUMMER: 46 FPs
+   - SPECTRAL: 143 FPs
+   - HYBRID: 67 FPs
+   - **Root cause:** Spectral flux triggers on gradual timbral changes in pads
+
+2. **Sparse Pattern FPs:** All modes over-trigger during quiet sections
+   - Need improved silence detection or adaptive thresholding
+
+3. **SPECTRAL Mode Unusable:** 100% recall but only 20-30% precision means severe over-triggering
+
+### Recommendations
+
+1. **Change hybrid weights to 0.5/0.5** (from 0.7/0.3) - provides +20% F1 improvement
+2. **Keep hitthresh at 2.813** for conservative false-positive control (vs tuned 2.341)
+3. **Increase cooldown to 80ms** for DRUMMER mode
+4. **Do NOT use SPECTRAL mode** as primary - severe over-triggering
+
+### Firmware Update Status
+
+**Changes applied (2025-12-30):**
+```cpp
+// In AdaptiveMic.h, ConfigStorage.cpp, SerialConsole.cpp, Presets.cpp
+float hybridFluxWeight = 0.5f;   // Changed from 0.7f
+float hybridDrumWeight = 0.5f;   // Changed from 0.3f
+uint16_t cooldownMs = 80;        // Changed from 40 (reduces false positives)
+```
+
+**NOT changed (kept conservative):**
+- hitthresh: Keep 2.813 (tuned value 2.341 has more false positives)
+- fluxthresh: Keep 1.4 (SPECTRAL mode is broken regardless)
+
+### ⚠️ Parameters Near Boundary - Requires Retesting
+
+The following parameters converged near their configured limits, suggesting the true optimal may be outside the tested range:
+
+| Parameter | Tuned Value | Old Min | New Min | Distance from Min |
+|-----------|-------------|---------|---------|-------------------|
+| hitthresh (DRUMMER) | 1.192 | 1.0 | **0.5** | Was only 0.192 from min |
+| attackmult | 1.1 | 1.0 | **0.9** | Was only 0.1 from min |
+
+**Ranges extended in `types.ts`:**
+```typescript
+hitthresh: min: 0.5,  // Extended from 1.0
+           sweepValues: [0.5, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, ...]
+
+attackmult: min: 0.9,  // Extended from 1.0
+            sweepValues: [0.9, 0.95, 1.0, 1.05, 1.1, ...]
+```
+
+**TODO:** Run targeted sweep on hitthresh and attackmult with extended ranges:
+```bash
+npm run tuner -- sweep --port COM11 --params hitthresh,attackmult --modes drummer
+```
+
+---
+
 ## Test Infrastructure Notes
 
 **Test Player:** blinky-test-player with MCP server integration
@@ -279,6 +392,6 @@ npm run tuner -- validate --port COM41 --gain 40
 - spectral (mode 3): FFT-based spectral flux
 - hybrid (mode 4): Combined drummer + spectral
 
-**Subsystems:**
-- music: PLL-based beat tracking
-- rhythm: Autocorrelation tempo detection
+**Subsystems (December 2025 Architecture):**
+- AudioController: Autocorrelation-based rhythm tracking (replaced MusicMode + RhythmAnalyzer)
+- AdaptiveMic: Transient detection (5 algorithms: drummer, bass, hfc, spectral, hybrid)

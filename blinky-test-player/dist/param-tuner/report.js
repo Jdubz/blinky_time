@@ -1,300 +1,184 @@
 /**
- * Phase 5: Report Generation
- * Generates comprehensive reports from tuning results
+ * Report Generation
+ * Generates summary reports from tuning results
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * Reports on ensemble detection performance.
+ * Legacy per-mode reporting has been removed.
  */
-import { writeFileSync } from 'fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { DETECTION_MODES, PARAMETERS, ALL_PATTERNS } from './types.js';
-export async function generateReport(outputDir, stateManager) {
-    console.log('\n📝 Phase 5: Report Generation');
-    console.log('═'.repeat(50));
+import { PARAMETERS, ALL_PATTERNS } from './types.js';
+export async function generateReport(optionsOrOutputDir, stateManager) {
+    console.log('\n Generating Report');
+    console.log('='.repeat(50));
+    const outputDir = typeof optionsOrOutputDir === 'string'
+        ? optionsOrOutputDir
+        : (optionsOrOutputDir.outputDir || 'tuning-results');
     const reportsDir = join(outputDir, 'reports');
-    // Generate summary report
-    const summary = generateSummary(stateManager);
-    writeFileSync(join(reportsDir, 'summary.md'), summary);
-    console.log('✓ Generated summary.md');
-    // Generate recommendations report
-    const recommendations = generateRecommendations(stateManager);
-    writeFileSync(join(reportsDir, 'recommendations.md'), recommendations);
-    console.log('✓ Generated recommendations.md');
-    // Generate detailed analysis
-    const analysis = generateAnalysis(stateManager);
-    writeFileSync(join(reportsDir, 'analysis.md'), analysis);
-    console.log('✓ Generated analysis.md');
-    stateManager.markDone();
-    console.log('\n✅ Report generation complete.\n');
-}
-function generateSummary(stateManager) {
+    if (!existsSync(reportsDir)) {
+        mkdirSync(reportsDir, { recursive: true });
+    }
+    // Generate markdown report
     const lines = [];
-    lines.push('# Parameter Tuning Results');
+    lines.push('# Ensemble Tuning Report');
     lines.push('');
     lines.push(`Generated: ${new Date().toISOString()}`);
     lines.push('');
-    // Executive summary
+    // Executive Summary
     lines.push('## Executive Summary');
     lines.push('');
-    // Find best algorithm
-    let bestMode = null;
-    let bestF1 = 0;
-    let bestBaseline = 0;
-    for (const mode of DETECTION_MODES) {
-        const result = stateManager.getValidationResult(mode);
-        const baseline = stateManager.getBaselineResult(mode);
-        if (result && result.overall.f1 > bestF1) {
-            bestF1 = result.overall.f1;
-            bestMode = mode;
-            bestBaseline = baseline?.overall.avgF1 ?? 0;
-        }
+    const baseline = stateManager.getBaselineResult();
+    const validation = stateManager.getValidationResult();
+    const optimalParams = stateManager.getOptimalParams();
+    if (baseline) {
+        lines.push(`**Baseline F1:** ${baseline.overall.avgF1}`);
     }
-    if (bestMode) {
-        const improvement = Math.round((bestF1 - bestBaseline) * 100);
-        lines.push(`- **Best overall algorithm:** ${bestMode.toUpperCase()} (F1: ${bestF1})`);
-        lines.push(`- **Improvement over defaults:** ${improvement > 0 ? '+' : ''}${improvement}% F1 score`);
+    if (validation) {
+        lines.push(`**Optimized F1:** ${validation.overall.f1}`);
+        lines.push(`**Improvement:** ${validation.vsBaseline.f1Delta > 0 ? '+' : ''}${validation.vsBaseline.f1Delta}`);
     }
     lines.push('');
-    // Optimal parameters table for each mode
-    lines.push('## Optimal Parameters');
-    lines.push('');
-    for (const mode of DETECTION_MODES) {
-        const validation = stateManager.getValidationResult(mode);
-        const baseline = stateManager.getBaselineResult(mode);
-        lines.push(`### ${mode.charAt(0).toUpperCase() + mode.slice(1)} Algorithm`);
+    // Optimal Parameters
+    if (optimalParams && Object.keys(optimalParams).length > 0) {
+        lines.push('## Optimal Parameters');
         lines.push('');
-        if (!validation) {
-            lines.push('*Not yet validated*');
-            lines.push('');
-            continue;
-        }
-        lines.push('| Parameter | Default | Optimal | Change |');
-        lines.push('|-----------|---------|---------|--------|');
-        const modeParams = Object.values(PARAMETERS).filter(p => p.mode === mode);
-        for (const param of modeParams) {
-            const def = param.default;
-            const opt = validation.params[param.name] ?? def;
-            const change = opt !== def
-                ? `${opt > def ? '+' : ''}${Math.round((opt - def) / def * 100)}%`
-                : '-';
-            lines.push(`| ${param.name} | ${def} | ${opt} | ${change} |`);
-        }
-        lines.push('');
-        if (baseline && validation) {
-            const delta = validation.vsBaseline.f1Delta;
-            lines.push(`**Performance:** F1 ${validation.overall.f1} (${delta > 0 ? '+' : ''}${delta} vs baseline)`);
-            lines.push('');
-        }
-    }
-    // Pattern-specific insights
-    lines.push('## Pattern-Specific Insights');
-    lines.push('');
-    const patternBest = {};
-    for (const mode of DETECTION_MODES) {
-        const validation = stateManager.getValidationResult(mode);
-        if (!validation)
-            continue;
-        for (const [pattern, result] of Object.entries(validation.patterns)) {
-            if (!patternBest[pattern] || result.f1 > patternBest[pattern].f1) {
-                patternBest[pattern] = { mode, f1: result.f1 };
-            }
-        }
-    }
-    // Group patterns by best mode
-    const byMode = {
-        drummer: [],
-        bass: [],
-        hfc: [],
-        spectral: [],
-        hybrid: [],
-    };
-    for (const [pattern, { mode }] of Object.entries(patternBest)) {
-        byMode[mode].push(pattern);
-    }
-    for (const mode of DETECTION_MODES) {
-        if (byMode[mode].length > 0) {
-            lines.push(`- **${mode.charAt(0).toUpperCase() + mode.slice(1)}** excels on: ${byMode[mode].join(', ')}`);
-        }
-    }
-    lines.push('');
-    return lines.join('\n');
-}
-function generateRecommendations(stateManager) {
-    const lines = [];
-    lines.push('# Recommended Settings by Use Case');
-    lines.push('');
-    lines.push(`Generated: ${new Date().toISOString()}`);
-    lines.push('');
-    // Find modes with best precision vs recall trade-off
-    let highPrecisionMode = null;
-    let highRecallMode = null;
-    let highPrecision = 0;
-    let highRecall = 0;
-    let bestOverall = null;
-    let bestF1 = 0;
-    for (const mode of DETECTION_MODES) {
-        const validation = stateManager.getValidationResult(mode);
-        if (!validation)
-            continue;
-        if (validation.overall.precision > highPrecision) {
-            highPrecision = validation.overall.precision;
-            highPrecisionMode = mode;
-        }
-        if (validation.overall.recall > highRecall) {
-            highRecall = validation.overall.recall;
-            highRecallMode = mode;
-        }
-        if (validation.overall.f1 > bestF1) {
-            bestF1 = validation.overall.f1;
-            bestOverall = mode;
-        }
-    }
-    // Live Performance (low false positives = high precision)
-    lines.push('## Live Performance (Low Latency, Few False Triggers)');
-    lines.push('');
-    if (highPrecisionMode) {
-        const validation = stateManager.getValidationResult(highPrecisionMode);
-        lines.push(`- **Mode:** ${highPrecisionMode}`);
-        lines.push(`- **Why:** Highest precision (${validation?.overall.precision}) = fewer false triggers`);
-        lines.push('- **Settings:**');
-        if (validation) {
-            for (const [param, value] of Object.entries(validation.params)) {
-                lines.push(`  - \`set ${param} ${value}\``);
-            }
-        }
-    }
-    lines.push('');
-    // Studio Monitoring (best overall accuracy)
-    lines.push('## Studio Monitoring (Best Overall Accuracy)');
-    lines.push('');
-    if (bestOverall) {
-        const validation = stateManager.getValidationResult(bestOverall);
-        lines.push(`- **Mode:** ${bestOverall}`);
-        lines.push(`- **Why:** Highest F1 score (${validation?.overall.f1}) = best balance`);
-        lines.push('- **Settings:**');
-        if (validation) {
-            for (const [param, value] of Object.entries(validation.params)) {
-                lines.push(`  - \`set ${param} ${value}\``);
-            }
-        }
-    }
-    lines.push('');
-    // Catch Everything (high recall)
-    lines.push('## Catch Everything (High Sensitivity)');
-    lines.push('');
-    if (highRecallMode) {
-        const validation = stateManager.getValidationResult(highRecallMode);
-        lines.push(`- **Mode:** ${highRecallMode}`);
-        lines.push(`- **Why:** Highest recall (${validation?.overall.recall}) = catches most transients`);
-        lines.push('- **Settings:**');
-        if (validation) {
-            for (const [param, value] of Object.entries(validation.params)) {
-                lines.push(`  - \`set ${param} ${value}\``);
-            }
-        }
-    }
-    lines.push('');
-    // Quick reference
-    lines.push('## Quick Reference Commands');
-    lines.push('');
-    for (const mode of DETECTION_MODES) {
-        const validation = stateManager.getValidationResult(mode);
-        if (!validation)
-            continue;
-        lines.push(`### ${mode.charAt(0).toUpperCase() + mode.slice(1)}`);
         lines.push('```');
-        lines.push(`set detectmode ${mode === 'drummer' ? 0 : mode === 'spectral' ? 3 : 4}`);
-        for (const [param, value] of Object.entries(validation.params)) {
-            lines.push(`set ${param} ${value}`);
+        for (const [param, value] of Object.entries(optimalParams)) {
+            const def = PARAMETERS[param]?.default;
+            const change = value !== def ? ` (default: ${def})` : '';
+            lines.push(`${param}: ${value}${change}`);
+        }
+        lines.push('```');
+        lines.push('');
+        // Serial commands to apply
+        lines.push('### Apply to Device');
+        lines.push('');
+        lines.push('```');
+        for (const [param, value] of Object.entries(optimalParams)) {
+            const paramDef = PARAMETERS[param];
+            if (paramDef?.command) {
+                lines.push(`set ${paramDef.command} ${value}`);
+            }
+            else {
+                lines.push(`set ${param} ${value}`);
+            }
         }
         lines.push('save');
         lines.push('```');
         lines.push('');
     }
-    return lines.join('\n');
-}
-function generateAnalysis(stateManager) {
-    const lines = [];
-    lines.push('# Detailed Analysis');
-    lines.push('');
-    lines.push(`Generated: ${new Date().toISOString()}`);
-    lines.push('');
-    // Sweep analysis
-    lines.push('## Parameter Sensitivity Analysis');
-    lines.push('');
-    for (const param of Object.values(PARAMETERS)) {
-        const sweep = stateManager.getSweepResult(param.name);
-        if (!sweep)
-            continue;
-        lines.push(`### ${param.name} (${param.mode})`);
+    // Per-Pattern Results
+    if (validation?.patterns) {
+        lines.push('## Per-Pattern Results');
         lines.push('');
-        lines.push(`*${param.description}*`);
-        lines.push('');
-        lines.push('| Value | F1 | Precision | Recall |');
-        lines.push('|-------|-----|-----------|--------|');
-        for (const point of sweep.sweep) {
-            const marker = point.value === sweep.optimal.value ? ' **⭐**' : '';
-            lines.push(`| ${point.value}${marker} | ${point.avgF1} | ${point.avgPrecision} | ${point.avgRecall} |`);
+        lines.push('| Pattern | F1 | Precision | Recall | vs Baseline |');
+        lines.push('|---------|-----|-----------|--------|-------------|');
+        for (const pattern of ALL_PATTERNS) {
+            const result = validation.patterns[pattern];
+            const baseResult = baseline?.patterns[pattern];
+            if (result) {
+                const delta = baseResult
+                    ? (result.f1 - baseResult.f1).toFixed(3)
+                    : 'N/A';
+                const deltaStr = baseResult
+                    ? (result.f1 > baseResult.f1 ? `+${delta}` : delta)
+                    : 'N/A';
+                lines.push(`| ${pattern} | ${result.f1} | ${result.precision} | ${result.recall} | ${deltaStr} |`);
+            }
         }
         lines.push('');
-        // Analysis notes
-        if (sweep.sweep.length > 1) {
-            const first = sweep.sweep[0];
-            const last = sweep.sweep[sweep.sweep.length - 1];
-            if (first.avgPrecision < last.avgPrecision && first.avgRecall > last.avgRecall) {
-                lines.push('*Trend: Higher values favor precision over recall.*');
+    }
+    // Improved and Regressed
+    if (validation?.vsBaseline) {
+        if (validation.vsBaseline.improved.length > 0) {
+            lines.push('### Improved Patterns');
+            lines.push('');
+            for (const pattern of validation.vsBaseline.improved) {
+                lines.push(`- ${pattern}`);
             }
-            else if (first.avgPrecision > last.avgPrecision && first.avgRecall < last.avgRecall) {
-                lines.push('*Trend: Higher values favor recall over precision.*');
+            lines.push('');
+        }
+        if (validation.vsBaseline.regressed.length > 0) {
+            lines.push('### Regressed Patterns');
+            lines.push('');
+            for (const pattern of validation.vsBaseline.regressed) {
+                lines.push(`- ${pattern}`);
             }
             lines.push('');
         }
     }
-    // Interaction analysis
-    lines.push('## Parameter Interactions');
-    lines.push('');
-    const hybridWeights = stateManager.getInteractionResult('hybrid-weights');
-    if (hybridWeights) {
-        lines.push('### Hybrid Weight Balance');
+    // Sweep Results
+    const state = stateManager.getState();
+    if (state.sweeps?.results && Object.keys(state.sweeps.results).length > 0) {
+        lines.push('## Sweep Results');
         lines.push('');
-        lines.push('Best combinations:');
-        lines.push('');
-        // Sort by F1 and show top 5
-        const sorted = [...hybridWeights.grid].sort((a, b) => b.avgF1 - a.avgF1).slice(0, 5);
-        for (const point of sorted) {
-            const params = Object.entries(point.params).map(([k, v]) => `${k}=${v}`).join(', ');
-            lines.push(`- ${params} → F1: ${point.avgF1}`);
+        for (const [param, sweep] of Object.entries(state.sweeps.results)) {
+            lines.push(`### ${param}`);
+            lines.push('');
+            lines.push(`- Optimal: ${sweep.optimal.value} (F1: ${sweep.optimal.avgF1})`);
+            lines.push(`- Sweep: ${sweep.sweep.map(p => `${p.value}=${p.avgF1}`).join(', ')}`);
+            lines.push('');
         }
-        lines.push('');
     }
-    // Pattern breakdown
-    lines.push('## Pattern Performance Breakdown');
-    lines.push('');
-    lines.push('| Pattern | Drummer | Spectral | Hybrid | Best |');
-    lines.push('|---------|---------|----------|--------|------|');
-    const patterns = ALL_PATTERNS;
-    for (const pattern of patterns) {
-        const drummerV = stateManager.getValidationResult('drummer');
-        const spectralV = stateManager.getValidationResult('spectral');
-        const hybridV = stateManager.getValidationResult('hybrid');
-        const d = drummerV?.patterns[pattern]?.f1 ?? '-';
-        const s = spectralV?.patterns[pattern]?.f1 ?? '-';
-        const h = hybridV?.patterns[pattern]?.f1 ?? '-';
-        const values = [
-            { mode: 'drummer', f1: typeof d === 'number' ? d : 0 },
-            { mode: 'spectral', f1: typeof s === 'number' ? s : 0 },
-            { mode: 'hybrid', f1: typeof h === 'number' ? h : 0 },
-        ].filter(v => v.f1 > 0);
-        const best = values.length > 0
-            ? values.reduce((a, b) => a.f1 > b.f1 ? a : b).mode
-            : '-';
-        lines.push(`| ${pattern} | ${d} | ${s} | ${h} | ${best} |`);
-    }
-    lines.push('');
-    return lines.join('\n');
+    // Save report
+    const report = lines.join('\n');
+    const reportPath = join(reportsDir, 'ensemble-tuning-report.md');
+    writeFileSync(reportPath, report);
+    console.log(`Report saved to: ${reportPath}`);
+    // Also save JSON summary
+    const jsonSummary = {
+        timestamp: new Date().toISOString(),
+        baseline: baseline?.overall,
+        validation: validation?.overall,
+        improvement: validation?.vsBaseline?.f1Delta,
+        optimalParams,
+        patternsImproved: validation?.vsBaseline?.improved?.length ?? 0,
+        patternsRegressed: validation?.vsBaseline?.regressed?.length ?? 0,
+    };
+    const jsonPath = join(reportsDir, 'ensemble-summary.json');
+    writeFileSync(jsonPath, JSON.stringify(jsonSummary, null, 2));
+    console.log(`JSON summary saved to: ${jsonPath}`);
+    stateManager.markDone();
+    console.log('\n Report generation complete.\n');
 }
+/**
+ * Show a summary of the generated report
+ */
 export function showReportSummary(outputDir) {
-    console.log('\n📝 Reports Generated');
-    console.log('═'.repeat(50));
-    console.log(`\nReports saved to: ${join(outputDir, 'reports')}`);
-    console.log('  - summary.md: Executive summary and optimal parameters');
-    console.log('  - recommendations.md: Use-case specific settings');
-    console.log('  - analysis.md: Detailed parameter sensitivity analysis');
+    const reportsDir = join(outputDir, 'reports');
+    const jsonPath = join(reportsDir, 'ensemble-summary.json');
+    console.log('\n Report Summary');
+    console.log('='.repeat(50));
+    if (!existsSync(jsonPath)) {
+        console.log('No report found. Run the report phase first.');
+        return;
+    }
+    try {
+        const summary = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+        console.log(`\nTimestamp: ${summary.timestamp}`);
+        if (summary.baseline) {
+            console.log(`Baseline F1: ${summary.baseline.avgF1}`);
+        }
+        if (summary.validation) {
+            console.log(`Optimized F1: ${summary.validation.f1}`);
+        }
+        if (summary.improvement !== undefined) {
+            const sign = summary.improvement > 0 ? '+' : '';
+            console.log(`Improvement: ${sign}${summary.improvement}`);
+        }
+        if (summary.optimalParams && Object.keys(summary.optimalParams).length > 0) {
+            console.log('\nOptimal Parameters:');
+            for (const [param, value] of Object.entries(summary.optimalParams)) {
+                console.log(`  ${param}: ${value}`);
+            }
+        }
+        console.log(`\nPatterns Improved: ${summary.patternsImproved}`);
+        console.log(`Patterns Regressed: ${summary.patternsRegressed}`);
+        const reportPath = join(reportsDir, 'ensemble-tuning-report.md');
+        console.log(`\nFull report: ${reportPath}`);
+    }
+    catch (err) {
+        console.error('Failed to read report summary:', err);
+    }
 }

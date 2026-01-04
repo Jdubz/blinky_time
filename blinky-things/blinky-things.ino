@@ -21,6 +21,7 @@
 #include <Adafruit_NeoPixel.h>
 #include "BlinkyArchitecture.h"     // Includes all architecture components and config
 #include "BlinkyImplementations.h"  // Includes all .cpp implementations for Arduino IDE
+#include "render/RenderPipeline.h"  // Generator/Effect/Renderer management
 #include "types/Version.h"           // Version information from repository
 #include "tests/SafeMode.h"          // Crash recovery system
 #include "hal/DefaultHal.h"          // HAL singleton instances
@@ -28,11 +29,11 @@
 
 // Device Configuration Selection
 // Define DEVICE_TYPE to select active configuration:
-// 1 = Hat (89 LEDs, STRING_FIRE mode)
-// 2 = Tube Light (4x15 matrix, MATRIX_FIRE mode)
-// 3 = Bucket Totem (16x8 matrix, MATRIX_FIRE mode)
+// 1 = Hat (89 LEDs, LINEAR_LAYOUT)
+// 2 = Tube Light (4x15 matrix, MATRIX_LAYOUT)
+// 3 = Bucket Totem (16x8 matrix, MATRIX_LAYOUT)
 #ifndef DEVICE_TYPE
-#define DEVICE_TYPE 2  // Tube Light (4x15 matrix)
+#define DEVICE_TYPE 3  // Bucket Totem (16x8 matrix)
 #endif
 
 #if DEVICE_TYPE == 1
@@ -64,20 +65,15 @@ NeoPixelLedStrip* leds = nullptr;
 // ✅ Effects: HueRotation for color cycling, NoOp for pass-through
 // ✅ Hardware: AdaptiveMic ready for audio input
 // ✅ Compilation: Ready for all device types (Hat, Tube Light, Bucket Totem)
-Generator* currentGenerator = nullptr;
-Effect* currentEffect = nullptr;
-EffectRenderer* renderer = nullptr;
-PixelMatrix* pixelMatrix = nullptr;
+RenderPipeline* pipeline = nullptr;  // Manages generators, effects, and rendering
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
-AdaptiveMic* mic = nullptr;
+AudioController* audioController = nullptr;  // Unified audio analysis (owns AdaptiveMic internally)
 BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
 SerialConsole* console = nullptr;  // Serial command interface
-MusicMode* music = nullptr;        // Beat detection and tempo tracking
-RhythmAnalyzer* rhythm = nullptr;  // Onset Strength Signal buffering for improved beat tracking
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
@@ -86,52 +82,19 @@ bool prevChargingState = false;
 FireParams fireParams;
 
 void updateFireParams() {
-  if (!currentGenerator) return;
-  // FIX: Add type safety - only cast if it's actually a Fire generator
-  if (strcmp(currentGenerator->getName(), "Fire") == 0) {
-    Fire* f = static_cast<Fire*>(currentGenerator);
+  if (!pipeline) return;
+  Fire* f = pipeline->getFireGenerator();
+  if (f) {
     f->setParams(fireParams);
   }
 }
 
-// Helper functions for new Generator-Effect-Renderer architecture
-void updateFireEffect(float energy, float hit) {
-  if (!currentGenerator) return;
-
-  // FIX: Add type safety - only cast if it's actually a Fire generator
-  if (strcmp(currentGenerator->getName(), "Fire") != 0) return;
-
-  // Update generator with audio energy and impact
-  Fire* fireGen = static_cast<Fire*>(currentGenerator);
-  fireGen->setAudioInput(energy, hit);
-  fireGen->update();
-}
-
-void showFireEffect() {
+// Helper function for Generator-Effect-Renderer pipeline
+void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
-  if (currentGenerator && currentEffect && renderer && pixelMatrix) {
-    // Get audio input for generation
-    float energy = mic ? mic->getLevel() : 0.0f;
-    float hit = mic ? mic->getTransient() : 0.0f;
-
-    // INTEGRATION: Modulate energy based on beat likelihood from RhythmAnalyzer
-    // Provides visual feedback that the system is "locked" to a beat pattern
-    if (rhythm && rhythm->periodicityStrength > 0.5f) {
-      float beatLikelihood = rhythm->beatLikelihood;
-      // High beat likelihood (near expected beat) → boost energy by up to 50%
-      // Low beat likelihood (between beats) → natural energy level
-      float energyBoost = 1.0f + (beatLikelihood * 0.5f);
-      energy *= energyBoost;
-      energy = constrain(energy, 0.0f, 1.0f);  // Keep in valid range
-    }
-
-    // Update generator with audio input (handled by updateFireEffect)
-    updateFireEffect(energy, hit);
-
-    // Generate effects and render
-    currentGenerator->generate(*pixelMatrix, energy, hit);
-    currentEffect->apply(pixelMatrix);
-    renderer->render(*pixelMatrix);
+  if (pipeline && audioController) {
+    const AudioControl& audio = audioController->getControl();
+    pipeline->render(audio);
     leds->show();
   }
 }
@@ -143,13 +106,9 @@ void showFireEffect() {
  */
 void cleanup() {
   delete console;    console = nullptr;
-  delete music;      music = nullptr;
-  delete renderer;   renderer = nullptr;
-  delete currentEffect; currentEffect = nullptr;
-  delete currentGenerator; currentGenerator = nullptr;
-  delete pixelMatrix; pixelMatrix = nullptr;
+  delete pipeline;   pipeline = nullptr;  // RenderPipeline cleans up generators/effects/renderer
   delete battery;    battery = nullptr;
-  delete mic;        mic = nullptr;
+  delete audioController; audioController = nullptr;
   delete leds;       leds = nullptr;
   delete neoPixelStrip; neoPixelStrip = nullptr;
 }
@@ -172,37 +131,35 @@ void setup() {
   Serial.begin(config.serial.baudRate);
   while (!Serial && millis() < config.serial.initTimeoutMs) {}
 
-  // Log boot count (from SafeMode crash detection)
-  Serial.print(F("[BOOT] Count: "));
-  Serial.print(SafeMode::getCrashCount());
-  Serial.print(F("/"));
-  Serial.println(SafeMode::CRASH_THRESHOLD);
-
-  // Display version and device information
+  // Display version and device information (always show on boot)
   Serial.println(F("=== BLINKY TIME STARTUP ==="));
   Serial.println(F(BLINKY_FULL_VERSION));
-  Serial.print(F("Build: ")); Serial.print(F(BLINKY_BUILD_DATE));
-  Serial.print(F(" ")); Serial.println(F(BLINKY_BUILD_TIME));
-  Serial.println();
-
-  // Display active device configuration
-  Serial.print(F("Starting device: "));
+  Serial.print(F("Device: "));
   Serial.println(config.deviceName);
-  Serial.print(F("Device Type: "));
+
+  // Debug: detailed boot info
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+    Serial.print(F("[DEBUG] Boot count: "));
+    Serial.print(SafeMode::getCrashCount());
+    Serial.print(F("/"));
+    Serial.println(SafeMode::CRASH_THRESHOLD);
+    Serial.print(F("[DEBUG] Build: ")); Serial.print(F(BLINKY_BUILD_DATE));
+    Serial.print(F(" ")); Serial.println(F(BLINKY_BUILD_TIME));
 #if DEVICE_TYPE == 1
-  Serial.println(F("Hat (Type 1)"));
+    Serial.println(F("[DEBUG] Device Type: Hat (Type 1)"));
 #elif DEVICE_TYPE == 2
-  Serial.println(F("Tube Light (Type 2)"));
+    Serial.println(F("[DEBUG] Device Type: Tube Light (Type 2)"));
 #elif DEVICE_TYPE == 3
-  Serial.println(F("Bucket Totem (Type 3)"));
+    Serial.println(F("[DEBUG] Device Type: Bucket Totem (Type 3)"));
 #endif
+  }
 
   // Validate critical configuration parameters
   if (config.matrix.width <= 0 || config.matrix.height <= 0) {
     haltWithError(F("ERROR: Invalid matrix dimensions"));
   }
   if (config.matrix.brightness > 255) {
-    Serial.println(F("WARNING: Brightness clamped to 255"));
+    SerialConsole::logWarn(F("Brightness clamped to 255"));
   }
 
   // Initialize LED strip (must be done in setup, not global scope)
@@ -223,8 +180,10 @@ void setup() {
   leds->show();
 
   // Basic LED test - light up first few LEDs to verify hardware
-  Serial.print(F("LED Test: Lighting first 3 LEDs at brightness "));
-  Serial.println(config.matrix.brightness);
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+    Serial.print(F("[DEBUG] LED Test at brightness "));
+    Serial.println(config.matrix.brightness);
+  }
   leds->setPixelColor(0, leds->Color(255, 0, 0));  // Should show RED
   leds->setPixelColor(1, leds->Color(0, 255, 0));  // Should show GREEN
   leds->setPixelColor(2, leds->Color(0, 0, 255));  // Should show BLUE
@@ -241,157 +200,89 @@ void setup() {
     haltWithError(F("ERROR: LED mapper initialization failed"));
   }
 
-  // Initialize new Generator-Effect-Renderer architecture
-  Serial.print(F("Config fire type: "));
-  Serial.println(config.matrix.fireType == STRING_FIRE ? F("STRING_FIRE") : F("MATRIX_FIRE"));
-  Serial.print(F("Matrix dimensions: "));
-  Serial.print(config.matrix.width);
-  Serial.print(F(" x "));
-  Serial.print(config.matrix.height);
-  Serial.print(F(" = "));
-  Serial.print(config.matrix.width * config.matrix.height);
-  Serial.println(F(" LEDs"));
-
-  // Create PixelMatrix for the visual pipeline
-  pixelMatrix = new(std::nothrow) PixelMatrix(config.matrix.width, config.matrix.height);
-  if (!pixelMatrix || !pixelMatrix->isValid()) {
-    haltWithError(F("ERROR: PixelMatrix allocation failed"));
+  // Debug: detailed config info
+  if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+    Serial.print(F("[DEBUG] Layout: "));
+    switch (config.matrix.layoutType) {
+      case MATRIX_LAYOUT:  Serial.print(F("MATRIX")); break;
+      case LINEAR_LAYOUT:  Serial.print(F("LINEAR")); break;
+      case RANDOM_LAYOUT:  Serial.print(F("RANDOM")); break;
+      default:             Serial.print(F("UNKNOWN")); break;
+    }
+    Serial.print(F(", Matrix: "));
+    Serial.print(config.matrix.width);
+    Serial.print(F("x"));
+    Serial.print(config.matrix.height);
+    Serial.print(F(" = "));
+    Serial.print(config.matrix.width * config.matrix.height);
+    Serial.println(F(" LEDs"));
   }
 
-  // Initialize appropriate generator based on layout type
-  Serial.print(F("Initializing fire generator for layout type: "));
-  switch (config.matrix.layoutType) {
-    case MATRIX_LAYOUT:
-      Serial.println(F("MATRIX"));
-      break;
-    case LINEAR_LAYOUT:
-      Serial.println(F("LINEAR"));
-      break;
-    case RANDOM_LAYOUT:
-      Serial.println(F("RANDOM"));
-      break;
-    default:
-      Serial.println(F("UNKNOWN"));
-      break;
+  // Initialize RenderPipeline (manages generators, effects, and rendering)
+  pipeline = new(std::nothrow) RenderPipeline();
+  if (!pipeline || !pipeline->begin(config, *leds, ledMapper)) {
+    haltWithError(F("ERROR: RenderPipeline initialization failed"));
   }
 
-  // Create fire generator instance
-  Fire* fireGen = new(std::nothrow) Fire();
-  currentGenerator = fireGen;
-
-  if (!currentGenerator) {
-    haltWithError(F("ERROR: Generator allocation failed"));
+  // Sync fireParams FROM the Fire generator (preserves layout-specific values set by Fire::begin)
+  Fire* fireGen = pipeline->getFireGenerator();
+  if (fireGen) {
+    fireParams = fireGen->getParams();  // Copy all params including layout-specific ones
   }
 
-  // Initialize the generator with device configuration
-  if (!fireGen->begin(config)) {
-    haltWithError(F("ERROR: Generator initialization failed"));
-  }
-
-  // Initialize live-tunable fire params from config
-  fireParams.baseCooling = config.fireDefaults.baseCooling;
-  fireParams.sparkHeatMin = config.fireDefaults.sparkHeatMin;
-  fireParams.sparkHeatMax = config.fireDefaults.sparkHeatMax;
-  fireParams.sparkChance = config.fireDefaults.sparkChance;
-  fireParams.audioSparkBoost = config.fireDefaults.audioSparkBoost;
-  fireParams.coolingAudioBias = config.fireDefaults.coolingAudioBias;
-  // Layout-specific params set by Fire::begin()
-  fireParams.spreadDistance = 3;
-  fireParams.heatDecay = 0.60f;
-
-  // Initialize effect (pass-through for pure fire colors)
-  currentEffect = new(std::nothrow) NoOpEffect();
-  if (!currentEffect) {
-    haltWithError(F("ERROR: Effect allocation failed"));
-  }
-  currentEffect->begin(config.matrix.width, config.matrix.height);
-
-  // Initialize renderer (leds must be valid at this point)
-  if (!leds) {
-    haltWithError(F("ERROR: LED strip not initialized before renderer"));
-  }
-  renderer = new(std::nothrow) EffectRenderer(*leds, ledMapper);
-  if (!renderer) {
-    haltWithError(F("ERROR: Renderer allocation failed"));
-  }
-
-  Serial.println(F("New architecture initialized successfully"));
+  SerialConsole::logDebug(F("RenderPipeline initialized"));
 
   // Initialize HAL-enabled components (must be done in setup(), not at global scope)
-  mic = new(std::nothrow) AdaptiveMic(DefaultHal::pdm(), DefaultHal::time());
+  audioController = new(std::nothrow) AudioController(DefaultHal::pdm(), DefaultHal::time());
   battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
-  if (!mic || !battery) {
+  if (!audioController || !battery) {
     haltWithError(F("ERROR: HAL component allocation failed"));
   }
 
-  // Initialize microphone with default gain from PlatformConstants.h
-  // Second parameter defaults to Platform::Microphone::DEFAULT_GAIN (60)
-  bool micOk = mic->begin(config.microphone.sampleRate);
-  if (!micOk) {
-    Serial.println(F("ERROR: Microphone failed to start"));
+  // Initialize audio controller (owns microphone internally)
+  bool audioOk = audioController->begin(config.microphone.sampleRate);
+  if (!audioOk) {
+    SerialConsole::logError(F("Audio controller failed to start"));
   } else {
-    Serial.println(F("Microphone initialized"));
+    SerialConsole::logDebug(F("Audio controller initialized"));
   }
-
-  // CRITICAL: Initialize rhythm and music BEFORE configStorage.begin()
-  // This ensures the objects exist when loadConfiguration() tries to populate their parameters.
-  // Initialization order matters: rhythm/music → config load → parameter apply
-
-  // Initialize music mode for beat detection and tempo tracking
-  music = new(std::nothrow) MusicMode(DefaultHal::time());
-  if (!music) {
-    haltWithError(F("ERROR: MusicMode allocation failed"));
-  }
-  Serial.println(F("Music mode initialized"));
-
-  // Initialize rhythm analyzer for OSS-based tempo detection
-  rhythm = new(std::nothrow) RhythmAnalyzer();
-  if (!rhythm) {
-    haltWithError(F("ERROR: RhythmAnalyzer allocation failed"));
-  }
-  Serial.println(F("Rhythm analyzer initialized"));
 
   // Initialize configuration storage and load saved settings
   configStorage.begin();
   if (configStorage.isValid()) {
-    configStorage.loadConfiguration(fireParams, *mic, rhythm, music);
+    configStorage.loadConfiguration(fireParams, audioController->getMicForTuning(), audioController);
     updateFireParams();
-    Serial.println(F("Loaded saved configuration from flash"));
+    SerialConsole::logDebug(F("Loaded config from flash"));
   } else {
-    Serial.println(F("Using default configuration"));
+    SerialConsole::logDebug(F("Using default config"));
   }
 
   // Initialize battery monitor
   if (!battery->begin()) {
-    Serial.println(F("WARNING: Battery monitor failed to start"));
+    SerialConsole::logWarn(F("Battery monitor failed to start"));
   } else {
     battery->setFastCharge(config.charging.fastChargeEnabled);
-    Serial.println(F("Battery monitor initialized"));
+    SerialConsole::logDebug(F("Battery monitor initialized"));
   }
 
-  // Connect music mode to fire generator for beat-synced effects
-  if (fireGen && music) {
-    fireGen->setMusicMode(music);
-    Serial.println(F("Fire generator connected to music mode"));
-  }
+  // Note: Rhythm tracking is now handled internally by AudioController
 
   // Initialize serial console for interactive settings management
-  // Uses fireGen created on line 240 for direct parameter access
-  console = new(std::nothrow) SerialConsole(fireGen, mic);
+  // Uses RenderPipeline for generator/effect switching
+  console = new(std::nothrow) SerialConsole(pipeline, &audioController->getMicForTuning());
   if (!console) {
     haltWithError(F("ERROR: SerialConsole allocation failed"));
   }
   console->setConfigStorage(&configStorage);
   console->setBatteryMonitor(battery);
-  console->setMusicMode(music);
-  console->setRhythmAnalyzer(rhythm);
+  console->setAudioController(audioController);
   console->begin();
-  Serial.println(F("Serial console initialized"));
+  SerialConsole::logDebug(F("Serial console initialized"));
 
   // FIX: Reset frame timing to prevent stale state from previous boot
   lastMs = 0;
 
-  Serial.println(F("Setup complete!"));
+  Serial.println(F("Ready."));
 
   // Mark boot as stable - we made it through setup without crashing
   // This resets the crash counter so future boots start fresh
@@ -404,92 +295,32 @@ void loop() {
 
   // FIX: Add diagnostics when frame time exceeds maximum (indicates performance issues)
   if (dt > Constants::MAX_FRAME_TIME) {
-    Serial.print(F("WARNING: Frame time exceeded: "));
-    Serial.print((now - lastMs));
-    Serial.println(F("ms - loop() running too slowly!"));
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+      Serial.print(F("[WARN] Frame time: "));
+      Serial.print((now - lastMs));
+      Serial.println(F("ms"));
+    }
   }
 
   dt = constrain(dt, Constants::MIN_FRAME_TIME, Constants::MAX_FRAME_TIME); // Clamp dt to reasonable range
   lastMs = now;
 
-  if (mic) mic->update(dt);
-
-  // Feed spectral flux to rhythm analyzer (only in spectral flux modes)
-  // Note: Only SPECTRAL_FLUX and HYBRID modes compute spectral flux values
-  if (mic && rhythm) {
-    uint8_t mode = mic->getDetectionMode();
-    if (mode == static_cast<uint8_t>(DetectionMode::SPECTRAL_FLUX) ||
-        mode == static_cast<uint8_t>(DetectionMode::HYBRID)) {
-      float flux = mic->getLastFluxValue();
-      rhythm->addSample(flux);
-    }
+  // Update unified audio controller (handles mic + rhythm tracking internally)
+  if (audioController) {
+    audioController->update(dt);
   }
 
-  // Update rhythm analyzer (autocorrelation - throttled to 1 Hz internally)
-  if (rhythm) {
-    rhythm->update(now, 60.0f);  // 60 Hz frame rate assumption
-  }
-
-  // INTEGRATION: Use RhythmAnalyzer's BPM to anchor MusicMode's PLL
-  // This prevents drift during quiet sections and improves long-term stability
-  if (rhythm && music && rhythm->periodicityStrength > 0.7f) {
-    float detectedBPM = rhythm->getDetectedBPM();
-    if (detectedBPM > 0.0f) {
-      music->applyExternalBPMGuidance(detectedBPM, rhythm->periodicityStrength);
-    }
-  }
-
-  if (music) music->update(dt);
-
-  float energy = mic ? mic->getLevel() : 0.0f;
-  float hit = mic ? mic->getTransient() : 0.0f;
-
-  // INTEGRATION: Context-aware transient filtering using rhythm data
-  // When rhythm is strong, boost hits near expected beats and suppress random hits
-  if (rhythm && hit > 0.0f && rhythm->periodicityStrength > 0.5f) {
-    float phase = rhythm->getCurrentPhase();
-
-    // Calculate distance from nearest beat (0 = on beat, 0.5 = anti-beat)
-    float distanceFromBeat = fabsf(phase - 0.5f);  // 0.0 at phase 0 or 1, 0.5 at phase 0.5
-    distanceFromBeat = 0.5f - distanceFromBeat;     // Invert: 0.5 at beat, 0.0 at anti-beat
-
-    // Modulate hit strength based on beat alignment and rhythm confidence
-    // Strong rhythm + on-beat = boost by up to 30%
-    // Strong rhythm + off-beat = reduce by up to 40%
-    float rhythmFactor = 1.0f + (distanceFromBeat - 0.25f) * rhythm->periodicityStrength;
-    rhythmFactor = constrain(rhythmFactor, 0.6f, 1.3f);  // Limit range
-
-    hit *= rhythmFactor;
-  }
+  // Get pulse from audio control signal for transient logging
+  const AudioControl& audio = audioController ? audioController->getControl() : AudioControl{};
+  float pulse = audio.pulse;
 
   // Send transient detection events for test analysis (always enabled)
-  // AND notify music mode of transients for beat tracking
-  if (mic && hit > 0.0f) {
-    // Notify music mode of transient (simplified - no band differentiation)
-    if (music) {
-      music->onOnsetDetected(now, true);  // isLowBand=true (not used in simplified detection)
-    }
-
-    // TRANSIENT message with mode-specific diagnostics
-    uint8_t mode = mic->getDetectionMode();
-    float energyValue = 0.0f;
-    // Get mode-specific energy value
-    if (mode == 1) {
-      energyValue = mic->getBassLevel();
-    } else if (mode == 3 || mode == 4) {
-      energyValue = mic->getLastFluxValue();
-    }
-
-    Serial.print(F("{\"type\":\"TRANSIENT\",\"ts\":"));
+  if (audioController && pulse > 0.0f) {
+    // TRANSIENT message: simplified single-band detection
+    Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
     Serial.print(now);
     Serial.print(F(",\"strength\":"));
-    Serial.print(hit, 2);
-    Serial.print(F(",\"mode\":"));
-    Serial.print(mode);
-    Serial.print(F(",\"level\":"));
-    Serial.print(energy, 2);
-    Serial.print(F(",\"energy\":"));
-    Serial.print(energyValue, 2);
+    Serial.print(pulse, 2);
     Serial.println(F("}"));
   }
 
@@ -497,38 +328,23 @@ void loop() {
   bool currentChargingState = battery ? battery->isCharging() : false;
   if (currentChargingState != prevChargingState) {
     if (currentChargingState) {
-      Serial.println(F("Charging started"));
+      SerialConsole::logInfo(F("Charging started"));
     } else {
-      Serial.println(F("Charging stopped"));
+      SerialConsole::logInfo(F("Charging stopped"));
     }
     prevChargingState = currentChargingState;
   }
 
-  // Simplified rendering for new architecture - just fire effect for now
-  showFireEffect();
+  // Render current generator through the effect pipeline
+  renderFrame();
 
   // Handle serial commands via SerialConsole
   if (console) {
     console->update();
   }
 
-  // Rhythm analyzer debug output (periodic, every 2 seconds when pattern detected)
-  static uint32_t lastRhythmDebug = 0;
-  if (rhythm && millis() - lastRhythmDebug > 2000) {
-    if (rhythm->detectedPeriodMs > 0.0f && rhythm->periodicityStrength > 0.5f) {
-      lastRhythmDebug = millis();
-      Serial.print(F("{\"type\":\"RHYTHM\",\"bpm\":"));
-      Serial.print(rhythm->getDetectedBPM(), 1);
-      Serial.print(F(",\"strength\":"));
-      Serial.print(rhythm->periodicityStrength, 2);
-      Serial.print(F(",\"periodMs\":"));
-      Serial.print(rhythm->detectedPeriodMs, 1);
-      Serial.println(F("}"));
-    }
-  }
-
   // Auto-save dirty settings to flash (debounced)
-  if (mic) configStorage.saveIfDirty(fireParams, *mic, rhythm, music);
+  if (audioController) configStorage.saveIfDirty(fireParams, audioController->getMicForTuning(), audioController);
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;
@@ -536,13 +352,17 @@ void loop() {
     lastBatteryCheck = millis();
     float voltage = battery->getVoltage();
     if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
-      Serial.print(F("CRITICAL BATTERY: "));
-      Serial.print(voltage);
-      Serial.println(F("V"));
+      if (SerialConsole::getGlobalLogLevel() >= LogLevel::ERROR) {
+        Serial.print(F("[ERROR] CRITICAL BATTERY: "));
+        Serial.print(voltage);
+        Serial.println(F("V"));
+      }
     } else if (voltage > 0 && voltage < config.charging.lowBatteryThreshold) {
-      Serial.print(F("Low battery: "));
-      Serial.print(voltage);
-      Serial.println(F("V"));
+      if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+        Serial.print(F("[WARN] Low battery: "));
+        Serial.print(voltage);
+        Serial.println(F("V"));
+      }
     }
   }
 }

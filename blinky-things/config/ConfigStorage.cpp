@@ -1,7 +1,7 @@
 #include "ConfigStorage.h"
 #include "../tests/SafetyTest.h"
-#include "../music/RhythmAnalyzer.h"
-#include "../music/MusicMode.h"
+#include "../audio/AudioController.h"
+#include "../inputs/SerialConsole.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -31,26 +31,24 @@ void ConfigStorage::begin() {
         flashOk = true;
         // Use last 4KB of flash
         flashAddr = flash.get_flash_start() + flash.get_flash_size() - 4096;
-        Serial.print(F("[CONFIG] Flash at 0x")); Serial.println(flashAddr, HEX);
 
-        // Runtime struct size validation (helps catch padding issues)
-        Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
-        Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
-        Serial.println(F(" bytes)"));
+        if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+            Serial.print(F("[DEBUG] Flash at 0x")); Serial.println(flashAddr, HEX);
+            Serial.print(F("[DEBUG] ConfigData: ")); Serial.print(sizeof(ConfigData));
+            Serial.print(F("B (MicParams: ")); Serial.print(sizeof(StoredMicParams));
+            Serial.println(F("B)"));
+        }
 
         // CRITICAL: Validate flash address before ANY operations
         // This prevents bootloader corruption
         if (!SafetyTest::isFlashAddressSafe(flashAddr, 4096)) {
-            Serial.println(F("[CONFIG] !!! UNSAFE FLASH ADDRESS DETECTED !!!"));
-            Serial.print(F("[CONFIG] Address 0x")); Serial.print(flashAddr, HEX);
-            Serial.println(F(" is in protected region"));
-            Serial.println(F("[CONFIG] Flash operations DISABLED for safety"));
+            SerialConsole::logError(F("UNSAFE FLASH ADDRESS - operations disabled"));
             flashOk = false;  // Disable all flash operations
         } else {
-            Serial.println(F("[CONFIG] Flash address validated OK"));
+            SerialConsole::logDebug(F("Flash address validated"));
 
             if (loadFromFlash()) {
-                Serial.println(F("[CONFIG] Loaded from flash"));
+                SerialConsole::logDebug(F("Config loaded from flash"));
                 valid_ = true;
                 return;
             }
@@ -66,18 +64,19 @@ void ConfigStorage::begin() {
     }
     flashOk = true;
 
-    // Runtime struct size validation
-    Serial.print(F("[CONFIG] ConfigData size: ")); Serial.print(sizeof(ConfigData));
-    Serial.print(F(" bytes (StoredMicParams: ")); Serial.print(sizeof(StoredMicParams));
-    Serial.println(F(" bytes)"));
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+        Serial.print(F("[DEBUG] ConfigData: ")); Serial.print(sizeof(ConfigData));
+        Serial.print(F("B (MicParams: ")); Serial.print(sizeof(StoredMicParams));
+        Serial.println(F("B)"));
+    }
 
     if (loadFromFlash()) {
-        Serial.println(F("[CONFIG] Loaded from flash"));
+        SerialConsole::logDebug(F("Config loaded from flash"));
         valid_ = true;
         return;
     }
 #endif
-    Serial.println(F("[CONFIG] Using defaults"));
+    SerialConsole::logDebug(F("Using default config"));
     loadDefaults();
     valid_ = true;
 }
@@ -108,48 +107,35 @@ void ConfigStorage::loadDefaults() {
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
-    // Shared transient detection defaults (tuned via fast-tune 2025-12-28)
-    data_.mic.transientThreshold = 2.813f;  // Hybrid-optimal (drummer: 1.688, hybrid: 2.813)
-    data_.mic.attackMultiplier = 1.1f;      // 10% sudden rise required (tuned from 1.2, was 1.3)
-    data_.mic.averageTau = 0.8f;            // Recent average tracking time
-    data_.mic.cooldownMs = 40;              // 40ms cooldown between hits (tuned from 30, was 80)
+    // Fast AGC parameters (accelerates calibration when signal is persistently low)
+    data_.mic.fastAgcEnabled = true;        // Enable fast AGC when gain is high
+    data_.mic.fastAgcThreshold = 0.15f;     // Raw level threshold to trigger fast mode
+    data_.mic.fastAgcPeriodMs = 5000;       // 5s calibration period in fast mode
+    data_.mic.fastAgcTrackingTau = 5.0f;    // 5s tracking tau in fast mode
 
-    // Detection mode (v20+): multi-algorithm support
-    data_.mic.detectionMode = 4;          // 4 = Hybrid (best F1: 0.705)
+    // LEGACY: Detection defaults (kept for backward compatibility with old configs)
+    // These parameters are now handled by EnsembleDetector, not AdaptiveMic
+    data_.mic.transientThreshold = 2.813f;
+    data_.mic.attackMultiplier = 1.1f;
+    data_.mic.averageTau = 0.8f;
+    data_.mic.cooldownMs = 80;
+    data_.mic.detectionMode = 4;
+    data_.mic.bassFreq = 120.0f;
+    data_.mic.bassQ = 1.0f;
+    data_.mic.bassThresh = 3.0f;
+    data_.mic.hfcWeight = 1.0f;
+    data_.mic.hfcThresh = 3.0f;
+    data_.mic.fluxThresh = 1.4f;
+    data_.mic.fluxBins = 64;
+    data_.mic.hybridFluxWeight = 0.5f;
+    data_.mic.hybridDrumWeight = 0.5f;
+    data_.mic.hybridBothBoost = 1.2f;
 
-    // Bass band filter defaults
-    data_.mic.bassFreq = 120.0f;          // 120 Hz cutoff (kick drum range)
-    data_.mic.bassQ = 1.0f;               // Butterworth Q
-    data_.mic.bassThresh = 3.0f;          // Same threshold as main
-
-    // HFC defaults
-    data_.mic.hfcWeight = 1.0f;           // No weighting adjustment
-    data_.mic.hfcThresh = 3.0f;           // Same threshold as main
-
-    // Spectral flux defaults (tuned via fast-tune 2025-12-28)
-    data_.mic.fluxThresh = 1.4f;          // Binary search optimal (tuned from 2.0, was 2.8, was 2.641, originally 3.0)
-    data_.mic.fluxBins = 64;              // Focus on bass-mid frequencies
-
-    // Hybrid mode defaults (mode 4) - tuned via fast-tune 2025-12-28 (F1: 0.669)
-    data_.mic.hybridFluxWeight = 0.7f;    // Weight when only flux detects (tuned from 0.3)
-    data_.mic.hybridDrumWeight = 0.3f;    // Weight when only drummer detects
-    data_.mic.hybridBothBoost = 1.2f;     // Multiplier when both agree
-
-    // RhythmAnalyzer defaults
-    data_.rhythm.minBPM = 60.0f;
-    data_.rhythm.maxBPM = 200.0f;
-    data_.rhythm.beatLikelihoodThreshold = 0.7f;
-    data_.rhythm.minPeriodicityStrength = 0.5f;
-    data_.rhythm.autocorrUpdateIntervalMs = 1000;
-
-    // MusicMode defaults
-    data_.music.activationThreshold = 0.6f;
-    data_.music.minBeatsToActivate = 4;
-    data_.music.maxMissedBeats = 8;
+    // AudioController rhythm tracking defaults
+    data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
-    data_.music.pllKp = 0.1f;
-    data_.music.pllKi = 0.01f;
+    data_.music.phaseAdaptRate = 0.15f;
 
     data_.brightness = 100;
 }
@@ -161,6 +147,8 @@ bool ConfigStorage::loadFromFlash() {
     ConfigData temp;
     if (flash.read(&temp, flashAddr, sizeof(ConfigData)) != 0) return false;
     if (temp.magic != MAGIC_NUMBER) return false;
+    // Version mismatch: intentionally discard old config and use defaults
+    // See ConfigStorage.h for migration policy rationale
     if (temp.version != CONFIG_VERSION) return false;
 
     memcpy(&data_, &temp, sizeof(ConfigData));
@@ -178,6 +166,8 @@ bool ConfigStorage::loadFromFlash() {
 
     if (bytesRead != sizeof(ConfigData)) return false;
     if (temp.magic != MAGIC_NUMBER) return false;
+    // Version mismatch: intentionally discard old config and use defaults
+    // See ConfigStorage.h for migration policy rationale
     if (temp.version != CONFIG_VERSION) return false;
 
     memcpy(&data_, &temp, sizeof(ConfigData));
@@ -190,7 +180,7 @@ bool ConfigStorage::loadFromFlash() {
 void ConfigStorage::saveToFlash() {
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     if (!flashOk) {
-        Serial.println(F("[CONFIG] Flash not available"));
+        SerialConsole::logWarn(F("Flash not available"));
         return;
     }
 
@@ -203,19 +193,19 @@ void ConfigStorage::saveToFlash() {
     data_.version = CONFIG_VERSION;
 
     if (flash.erase(flashAddr, sectorSize) != 0) {
-        Serial.println(F("[CONFIG] Erase failed"));
+        SerialConsole::logError(F("Flash erase failed"));
         return;
     }
 
     if (flash.program(&data_, flashAddr, sizeof(ConfigData)) != 0) {
-        Serial.println(F("[CONFIG] Write failed"));
+        SerialConsole::logError(F("Flash write failed"));
         return;
     }
 
-    Serial.println(F("[CONFIG] Saved to flash"));
+    SerialConsole::logDebug(F("Config saved to flash"));
 #elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
     if (!flashOk || configFile == nullptr) {
-        Serial.println(F("[CONFIG] Flash not available"));
+        SerialConsole::logWarn(F("Flash not available"));
         return;
     }
 
@@ -230,7 +220,7 @@ void ConfigStorage::saveToFlash() {
     // Write config to file
     configFile->open(CONFIG_FILENAME, FILE_O_WRITE);
     if (!(*configFile)) {
-        Serial.println(F("[CONFIG] Failed to open file for writing"));
+        SerialConsole::logError(F("Failed to open config file"));
         return;
     }
 
@@ -238,36 +228,40 @@ void ConfigStorage::saveToFlash() {
     configFile->close();
 
     if (bytesWritten != sizeof(ConfigData)) {
-        Serial.println(F("[CONFIG] Write failed"));
+        SerialConsole::logError(F("Config write failed"));
         return;
     }
 
-    Serial.println(F("[CONFIG] Saved to flash"));
+    SerialConsole::logDebug(F("Config saved to flash"));
 #else
-    Serial.println(F("[CONFIG] No flash on this platform"));
+    SerialConsole::logWarn(F("No flash on this platform"));
 #endif
 }
 
-void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, RhythmAnalyzer* rhythm, MusicMode* music) {
+void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, AudioController* audioCtrl) {
     // Validation helpers to reduce code duplication
     bool corrupt = false;
 
     auto validateFloat = [&](float value, float min, float max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
-            Serial.print(F("[CONFIG] BAD "));
-            Serial.print(name);
-            Serial.print(F(": "));
-            Serial.println(value);
+            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+                Serial.print(F("[WARN] Bad config "));
+                Serial.print(name);
+                Serial.print(F(": "));
+                Serial.println(value);
+            }
             corrupt = true;
         }
     };
 
     auto validateUint32 = [&](uint32_t value, uint32_t min, uint32_t max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
-            Serial.print(F("[CONFIG] BAD "));
-            Serial.print(name);
-            Serial.print(F(": "));
-            Serial.println(value);
+            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
+                Serial.print(F("[WARN] Bad config "));
+                Serial.print(name);
+                Serial.print(F(": "));
+                Serial.println(value);
+            }
             corrupt = true;
         }
     };
@@ -283,74 +277,53 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     // Validate hardware AGC parameters (expanded - allow full ADC range usage)
     validateFloat(data_.mic.hwTarget, 0.05f, 0.9f, F("hwTarget"));
 
-    // Validate shared transient detection parameters
+    // Validate fast AGC parameters
+    validateFloat(data_.mic.fastAgcThreshold, 0.01f, 0.5f, F("fastAgcThresh"));
+    validateFloat(data_.mic.fastAgcTrackingTau, 0.5f, 30.0f, F("fastAgcTau"));
+    validateUint32(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
+
+    // LEGACY: Validate detection parameters (still needed for backward compatibility)
     validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
     validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
     validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
     validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
-
-    // Validate detection mode and algorithm-specific parameters (v20+)
-    validateUint32(data_.mic.detectionMode, 0, 4, F("detectionMode"));  // 0-4: drummer, bass, hfc, flux, hybrid
-
-    // Bass band filter validation
+    validateUint32(data_.mic.detectionMode, 0, 4, F("detectionMode"));
     validateFloat(data_.mic.bassFreq, 40.0f, 200.0f, F("bassFreq"));
     validateFloat(data_.mic.bassQ, 0.5f, 3.0f, F("bassQ"));
     validateFloat(data_.mic.bassThresh, 1.5f, 10.0f, F("bassThresh"));
-
-    // HFC validation
     validateFloat(data_.mic.hfcWeight, 0.5f, 5.0f, F("hfcWeight"));
     validateFloat(data_.mic.hfcThresh, 1.5f, 10.0f, F("hfcThresh"));
-
-    // Spectral flux validation
     validateFloat(data_.mic.fluxThresh, 1.0f, 10.0f, F("fluxThresh"));
     validateUint32(data_.mic.fluxBins, 4, 128, F("fluxBins"));
-
-    // Hybrid mode validation (v21+)
     validateFloat(data_.mic.hybridFluxWeight, 0.1f, 1.0f, F("hybridFluxWeight"));
     validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
     validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
 
-    // RhythmAnalyzer validation (v22+)
-    validateFloat(data_.rhythm.minBPM, 60.0f, 120.0f, F("rhythmMinBPM"));
-    validateFloat(data_.rhythm.maxBPM, 120.0f, 240.0f, F("rhythmMaxBPM"));
-    validateFloat(data_.rhythm.beatLikelihoodThreshold, 0.5f, 0.9f, F("beatThreshold"));
-    validateFloat(data_.rhythm.minPeriodicityStrength, 0.3f, 0.8f, F("minPeriodicity"));
-    validateUint32(data_.rhythm.autocorrUpdateIntervalMs, 500, 2000, F("rhythmInterval"));
-
-    // Validate BPM range consistency for RhythmAnalyzer
-    if (data_.rhythm.minBPM >= data_.rhythm.maxBPM) {
-        Serial.println(F("[CONFIG] Invalid rhythm BPM range (minBPM >= maxBPM), using defaults"));
-        data_.rhythm.minBPM = 60.0f;
-        data_.rhythm.maxBPM = 200.0f;
-        corrupt = true;
-    }
-
-    // MusicMode validation (v22+)
+    // AudioController validation (v23+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
-    validateUint32(data_.music.minBeatsToActivate, 2, 16, F("musicBeats"));
-    validateUint32(data_.music.maxMissedBeats, 4, 16, F("musicMissed"));
     validateFloat(data_.music.bpmMin, 40.0f, 120.0f, F("bpmMin"));
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
-    validateFloat(data_.music.pllKp, 0.01f, 0.5f, F("pllKp"));
-    validateFloat(data_.music.pllKi, 0.001f, 0.1f, F("pllKi"));
+    validateFloat(data_.music.phaseAdaptRate, 0.01f, 1.0f, F("phaseAdaptRate"));
 
-    // Validate BPM range consistency for MusicMode
+    // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
-        Serial.println(F("[CONFIG] Invalid music BPM range (bpmMin >= bpmMax), using defaults"));
-        data_.music.bpmMin = 90.0f;
-        data_.music.bpmMax = 180.0f;
+        SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
+        data_.music.bpmMin = 60.0f;
+        data_.music.bpmMax = 200.0f;
         corrupt = true;
     }
 
     if (corrupt) {
-        Serial.println(F("[CONFIG] Corrupt data detected, using defaults"));
+        SerialConsole::logWarn(F("Corrupt config detected, using defaults"));
         loadDefaults();
     }
 
     // Debug: show loaded values
-    Serial.print(F("[CONFIG] heatDecay=")); Serial.print(data_.fire.heatDecay, 2);
-    Serial.print(F(" cooling=")); Serial.print(data_.fire.baseCooling);
-    Serial.print(F(" spread=")); Serial.println(data_.fire.spreadDistance);
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
+        Serial.print(F("[DEBUG] heatDecay=")); Serial.print(data_.fire.heatDecay, 2);
+        Serial.print(F(" cooling=")); Serial.print(data_.fire.baseCooling);
+        Serial.print(F(" spread=")); Serial.println(data_.fire.spreadDistance);
+    }
 
     fireParams.baseCooling = data_.fire.baseCooling;
     fireParams.sparkHeatMin = data_.fire.sparkHeatMin;
@@ -372,55 +345,28 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     // Hardware AGC parameters (primary - raw input tracking)
     mic.hwTarget = data_.mic.hwTarget;
 
-    // Shared transient detection parameters
-    mic.transientThreshold = data_.mic.transientThreshold;
-    mic.attackMultiplier = data_.mic.attackMultiplier;
-    mic.averageTau = data_.mic.averageTau;
-    mic.cooldownMs = data_.mic.cooldownMs;
+    // Fast AGC parameters
+    mic.fastAgcEnabled = data_.mic.fastAgcEnabled;
+    mic.fastAgcThreshold = data_.mic.fastAgcThreshold;
+    mic.fastAgcPeriodMs = data_.mic.fastAgcPeriodMs;
+    mic.fastAgcTrackingTau = data_.mic.fastAgcTrackingTau;
 
-    // Detection mode (v20+)
-    mic.detectionMode = data_.mic.detectionMode;
+    // NOTE: Detection-specific parameters (transientThreshold, attackMultiplier, etc.)
+    // are now handled by EnsembleDetector. The data_.mic fields are kept for
+    // backward compatibility when reading old config files, but are not applied
+    // to AdaptiveMic which now only handles audio input normalization.
 
-    // Bass band filter parameters
-    mic.bassFreq = data_.mic.bassFreq;
-    mic.bassQ = data_.mic.bassQ;
-    mic.bassThresh = data_.mic.bassThresh;
-
-    // HFC parameters
-    mic.hfcWeight = data_.mic.hfcWeight;
-    mic.hfcThresh = data_.mic.hfcThresh;
-
-    // Spectral flux parameters
-    mic.fluxThresh = data_.mic.fluxThresh;
-    mic.fluxBins = data_.mic.fluxBins;
-
-    // Hybrid mode parameters (v21+)
-    mic.hybridFluxWeight = data_.mic.hybridFluxWeight;
-    mic.hybridDrumWeight = data_.mic.hybridDrumWeight;
-    mic.hybridBothBoost = data_.mic.hybridBothBoost;
-
-    // RhythmAnalyzer parameters (v22+)
-    if (rhythm) {
-        rhythm->minBPM = data_.rhythm.minBPM;
-        rhythm->maxBPM = data_.rhythm.maxBPM;
-        rhythm->beatLikelihoodThreshold = data_.rhythm.beatLikelihoodThreshold;
-        rhythm->minPeriodicityStrength = data_.rhythm.minPeriodicityStrength;
-        rhythm->autocorrUpdateIntervalMs = data_.rhythm.autocorrUpdateIntervalMs;
-    }
-
-    // MusicMode parameters (v22+)
-    if (music) {
-        music->activationThreshold = data_.music.activationThreshold;
-        music->minBeatsToActivate = data_.music.minBeatsToActivate;
-        music->maxMissedBeats = data_.music.maxMissedBeats;
-        music->bpmMin = data_.music.bpmMin;
-        music->bpmMax = data_.music.bpmMax;
-        music->pllKp = data_.music.pllKp;
-        music->pllKi = data_.music.pllKi;
+    // AudioController parameters (v23+)
+    // All rhythm tracking params are now public tunable members
+    if (audioCtrl) {
+        audioCtrl->bpmMin = data_.music.bpmMin;
+        audioCtrl->bpmMax = data_.music.bpmMax;
+        audioCtrl->activationThreshold = data_.music.activationThreshold;
+        audioCtrl->phaseAdaptRate = data_.music.phaseAdaptRate;
     }
 }
 
-void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
+void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
     data_.fire.baseCooling = fireParams.baseCooling;
     data_.fire.sparkHeatMin = fireParams.sparkHeatMin;
     data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
@@ -441,51 +387,24 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     // Hardware AGC parameters (primary - raw input tracking)
     data_.mic.hwTarget = mic.hwTarget;
 
-    // Simplified transient detection parameters
-    data_.mic.transientThreshold = mic.transientThreshold;
-    data_.mic.attackMultiplier = mic.attackMultiplier;
-    data_.mic.averageTau = mic.averageTau;
-    data_.mic.cooldownMs = mic.cooldownMs;
+    // Fast AGC parameters
+    data_.mic.fastAgcEnabled = mic.fastAgcEnabled;
+    data_.mic.fastAgcThreshold = mic.fastAgcThreshold;
+    data_.mic.fastAgcPeriodMs = mic.fastAgcPeriodMs;
+    data_.mic.fastAgcTrackingTau = mic.fastAgcTrackingTau;
 
-    // Detection mode and algorithm-specific parameters (v20+)
-    data_.mic.detectionMode = mic.detectionMode;
+    // NOTE: Detection-specific parameters (transientThreshold, detectionMode, etc.)
+    // are now handled by EnsembleDetector. The data_.mic fields are kept for
+    // backward compatibility but are no longer saved from AdaptiveMic.
+    // Future versions may save EnsembleDetector configuration separately.
 
-    // Bass band filter parameters
-    data_.mic.bassFreq = mic.bassFreq;
-    data_.mic.bassQ = mic.bassQ;
-    data_.mic.bassThresh = mic.bassThresh;
-
-    // HFC parameters
-    data_.mic.hfcWeight = mic.hfcWeight;
-    data_.mic.hfcThresh = mic.hfcThresh;
-
-    // Spectral flux parameters
-    data_.mic.fluxThresh = mic.fluxThresh;
-    data_.mic.fluxBins = mic.fluxBins;
-
-    // Hybrid mode parameters (v21+)
-    data_.mic.hybridFluxWeight = mic.hybridFluxWeight;
-    data_.mic.hybridDrumWeight = mic.hybridDrumWeight;
-    data_.mic.hybridBothBoost = mic.hybridBothBoost;
-
-    // RhythmAnalyzer parameters (v22+)
-    if (rhythm) {
-        data_.rhythm.minBPM = rhythm->minBPM;
-        data_.rhythm.maxBPM = rhythm->maxBPM;
-        data_.rhythm.beatLikelihoodThreshold = rhythm->beatLikelihoodThreshold;
-        data_.rhythm.minPeriodicityStrength = rhythm->minPeriodicityStrength;
-        data_.rhythm.autocorrUpdateIntervalMs = rhythm->autocorrUpdateIntervalMs;
-    }
-
-    // MusicMode parameters (v22+)
-    if (music) {
-        data_.music.activationThreshold = music->activationThreshold;
-        data_.music.minBeatsToActivate = music->minBeatsToActivate;
-        data_.music.maxMissedBeats = music->maxMissedBeats;
-        data_.music.bpmMin = music->bpmMin;
-        data_.music.bpmMax = music->bpmMax;
-        data_.music.pllKp = music->pllKp;
-        data_.music.pllKi = music->pllKi;
+    // AudioController parameters (v23+)
+    // All rhythm tracking params are now public tunable members
+    if (audioCtrl) {
+        data_.music.bpmMin = audioCtrl->bpmMin;
+        data_.music.bpmMax = audioCtrl->bpmMax;
+        data_.music.activationThreshold = audioCtrl->activationThreshold;
+        data_.music.phaseAdaptRate = audioCtrl->phaseAdaptRate;
     }
 
     saveToFlash();
@@ -493,14 +412,14 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     lastSaveMs_ = millis();
 }
 
-void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const RhythmAnalyzer* rhythm, const MusicMode* music) {
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, mic, rhythm, music);
+        saveConfiguration(fireParams, mic, audioCtrl);
     }
 }
 
 void ConfigStorage::factoryReset() {
-    Serial.println(F("[CONFIG] Factory reset"));
+    SerialConsole::logInfo(F("Factory reset"));
     loadDefaults();
     saveToFlash();
 }

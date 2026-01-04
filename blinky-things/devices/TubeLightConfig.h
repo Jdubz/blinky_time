@@ -20,8 +20,7 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
     .brightness = 120,
     .ledType = NEO_GRB + NEO_KHZ800,  // CRITICAL: NEO_GRB for nRF52840 XIAO Sense
     .orientation = VERTICAL,
-    .layoutType = MATRIX_LAYOUT,      // New unified layout system
-    .fireType = MATRIX_FIRE           // Kept for backward compatibility
+    .layoutType = MATRIX_LAYOUT
   },
   // All XIAO BLE devices use single-cell LiPo batteries (3.0-4.2V range)
   .charging = {

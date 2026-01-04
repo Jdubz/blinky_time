@@ -8,7 +8,7 @@
  * - Low band (50-200 Hz): kick, tom, bass
  * - High band (2-8 kHz): snare, hat, clap, percussion
  */
-import type { TestPattern } from './types.js';
+import type { TestPattern, ExtendedTestPattern, PatternRegistry, PatternCategory } from './types.js';
 /**
  * Basic drum pattern (120 BPM, 8 bars)
  * Kick on 1 and 3, snare on 2 and 4, hats on 8th notes
@@ -117,6 +117,82 @@ export declare const CHORD_REJECTION: TestPattern;
  */
 export declare const FULL_MIX: TestPattern;
 /**
+ * Cooldown stress test - hits every 20ms
+ * Tests minimum cooldown capability
+ */
+export declare const COOLDOWN_STRESS_20MS: TestPattern;
+/**
+ * Cooldown stress test - hits every 40ms
+ * Tests moderate cooldown
+ */
+export declare const COOLDOWN_STRESS_40MS: TestPattern;
+/**
+ * Cooldown stress test - hits every 80ms
+ * Tests standard cooldown
+ */
+export declare const COOLDOWN_STRESS_80MS: TestPattern;
+/**
+ * Threshold gradient - hits with decreasing strength
+ * Tests hitthresh and fluxthresh sensitivity
+ */
+export declare const THRESHOLD_GRADIENT: TestPattern;
+/**
+ * Sharp attack patterns - tests attackmult sensitivity to fast transients
+ */
+export declare const ATTACK_SHARP: TestPattern;
+/**
+ * Gradual attack patterns - slower envelope swells (should NOT trigger)
+ */
+export declare const ATTACK_GRADUAL: TestPattern;
+/**
+ * Low frequency only - tests bass detection
+ */
+export declare const FREQ_LOW_ONLY: TestPattern;
+/**
+ * High frequency only - tests HFC detection
+ */
+export declare const FREQ_HIGH_ONLY: TestPattern;
+/**
+ * Steady 120 BPM - baseline for BPM tracking
+ */
+export declare const STEADY_120BPM: TestPattern;
+/**
+ * Steady 80 BPM - slow tempo tracking
+ */
+export declare const STEADY_80BPM: TestPattern;
+/**
+ * Steady 160 BPM - fast tempo tracking
+ */
+export declare const STEADY_160BPM: TestPattern;
+/**
+ * Tempo ramp - gradual BPM change from 80 to 160
+ */
+export declare const TEMPO_RAMP: TestPattern;
+/**
+ * Tempo sudden - abrupt BPM changes
+ */
+export declare const TEMPO_SUDDEN: TestPattern;
+/**
+ * Phase on-beat - hits exactly on expected beats
+ */
+export declare const PHASE_ON_BEAT: TestPattern;
+/**
+ * Phase off-beat - syncopated hits
+ */
+export declare const PHASE_OFF_BEAT: TestPattern;
+/**
+ * Non-musical random - random timing for music mode rejection
+ */
+export declare const NON_MUSICAL_RANDOM: TestPattern;
+/**
+ * Non-musical clustered - irregular clusters
+ */
+export declare const NON_MUSICAL_CLUSTERED: TestPattern;
+/**
+ * Silence gaps - tests music mode deactivation
+ */
+export declare const SILENCE_GAPS: TestPattern;
+/**
  * All available test patterns
  */
 export declare const TEST_PATTERNS: TestPattern[];
@@ -124,3 +200,24 @@ export declare const TEST_PATTERNS: TestPattern[];
  * Get pattern by ID
  */
 export declare function getPatternById(id: string): TestPattern | undefined;
+/**
+ * PATTERN REGISTRY - All patterns with metadata for extensibility
+ *
+ * EXTENSIBILITY: To add a new pattern:
+ * 1. Create the TestPattern
+ * 2. Add entry here with metadata
+ * 3. System auto-discovers and includes in relevant tests
+ */
+export declare const PATTERN_REGISTRY: PatternRegistry;
+/**
+ * Get extended pattern by ID (with metadata)
+ */
+export declare function getExtendedPatternById(id: string): ExtendedTestPattern | undefined;
+/**
+ * Get all patterns that target a specific parameter
+ */
+export declare function getPatternsForParam(param: string): ExtendedTestPattern[];
+/**
+ * Get all enabled patterns in a category
+ */
+export declare function getPatternsByCategory(category: PatternCategory): ExtendedTestPattern[];

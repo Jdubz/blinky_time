@@ -91,6 +91,97 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
 
+  // Water generator settings
+  waterflow: {
+    displayName: 'Base Flow Rate',
+    tooltip: 'Base speed of water flow animation. Higher values create faster flowing water.',
+    unit: '',
+  },
+  wavemin: {
+    displayName: 'Min Wave Height',
+    tooltip: 'Minimum height for generated waves. Lower values allow smaller, subtler ripples.',
+    unit: '',
+  },
+  wavemax: {
+    displayName: 'Max Wave Height',
+    tooltip:
+      'Maximum height for generated waves. Higher values create taller, more dramatic waves.',
+    unit: '',
+  },
+  wavechance: {
+    displayName: 'Wave Probability',
+    tooltip:
+      'Base probability of new waves appearing (0-100%). Higher values create more wave activity.',
+    unit: '%',
+  },
+  audiowaveboost: {
+    displayName: 'Audio Wave Boost',
+    tooltip:
+      'How much audio influences wave generation. Higher values make water more reactive to sound.',
+    unit: '%',
+  },
+  audioflowboostmax: {
+    displayName: 'Max Audio Flow Boost',
+    tooltip:
+      'Maximum flow speed increase from audio. Limits how much sound can accelerate the water.',
+    unit: '',
+  },
+  flowaudiobias: {
+    displayName: 'Flow Audio Bias',
+    tooltip:
+      'How audio affects flow rate. Positive values speed up flow with sound, negative slows it.',
+    unit: '',
+  },
+
+  // Lightning generator settings
+  lightningfade: {
+    displayName: 'Fade Speed',
+    tooltip:
+      'How quickly lightning bolts fade out. Higher values create shorter, snappier strikes.',
+    unit: '',
+  },
+  boltintensitymin: {
+    displayName: 'Min Bolt Intensity',
+    tooltip:
+      'Minimum brightness for lightning bolts. Lower values allow dimmer, distant-looking strikes.',
+    unit: '',
+  },
+  boltintensitymax: {
+    displayName: 'Max Bolt Intensity',
+    tooltip: 'Maximum brightness for lightning bolts. Higher values create more brilliant strikes.',
+    unit: '',
+  },
+  boltchance: {
+    displayName: 'Bolt Probability',
+    tooltip:
+      'Base probability of new lightning strikes (0-100%). Higher values create more frequent storms.',
+    unit: '%',
+  },
+  audioboltboost: {
+    displayName: 'Audio Bolt Boost',
+    tooltip:
+      'How much audio influences bolt generation. Higher values make lightning more reactive to sound.',
+    unit: '%',
+  },
+  audiointensityboostmax: {
+    displayName: 'Max Audio Intensity Boost',
+    tooltip:
+      'Maximum intensity increase from audio. Limits how bright audio-triggered bolts can get.',
+    unit: '',
+  },
+  fadeaudiobias: {
+    displayName: 'Fade Audio Bias',
+    tooltip:
+      'How audio affects fade rate. Negative values slow fade during loud audio (bolts persist longer).',
+    unit: '',
+  },
+  branchchance: {
+    displayName: 'Branch Probability',
+    tooltip:
+      'Chance of lightning bolts branching (0-100%). Higher values create more complex, forked lightning.',
+    unit: '%',
+  },
+
   // Audio settings (window/range normalization)
   peaktau: {
     displayName: 'Peak Adaptation',
@@ -139,7 +230,7 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '',
   },
 
-  // Legacy AGC settings (may be deprecated)
+  // Software AGC settings (envelope-based gain control)
   agenabled: {
     displayName: 'Auto-Gain Enabled',
     tooltip:

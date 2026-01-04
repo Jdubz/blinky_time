@@ -35,3 +35,6 @@ export const INSTRUMENT_SHOULD_TRIGGER = {
     pad: false, // Sustained pad - should NOT trigger
     chord: false, // Sustained chord - should NOT trigger (stabs are different)
 };
+// Pattern discovery utilities are in patterns.ts:
+// - getPatternsByCategory(category)
+// - getPatternsForParam(param)

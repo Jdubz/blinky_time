@@ -1,6 +1,10 @@
 /**
  * Phase 3: Parameter Interactions
- * Tests interactions between parameters, especially for Hybrid mode
+ * Tests interactions between ensemble parameters
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * Tests weight and threshold interactions for the ensemble detector.
+ * Legacy hybrid mode testing has been removed.
  */
 
 import cliProgress from 'cli-progress';
@@ -9,10 +13,9 @@ import { REPRESENTATIVE_PATTERNS } from './types.js';
 import { StateManager } from './state.js';
 import { TestRunner } from './runner.js';
 
-// Interaction test definitions
+// Interaction test definitions for ensemble
 interface InteractionTest {
   name: string;
-  mode: 'drummer' | 'spectral' | 'hybrid';
   params: string[];
   grid: number[][];  // Values for each param
   patterns?: string[];  // Override patterns if needed
@@ -20,65 +23,38 @@ interface InteractionTest {
 
 const INTERACTION_TESTS: InteractionTest[] = [
   {
-    name: 'hybrid-weights',
-    mode: 'hybrid',
-    params: ['hyfluxwt', 'hydrumwt'],
+    name: 'agree-1-2',
+    params: ['agree_1', 'agree_2'],
     grid: [
-      [0.3, 0.5, 0.7, 0.9],  // hyfluxwt values
-      [0.3, 0.5, 0.7, 0.9],  // hydrumwt values
+      [0.4, 0.5, 0.6, 0.7],  // agree_1 values
+      [0.7, 0.8, 0.85, 0.9],  // agree_2 values
     ],
   },
   {
-    name: 'hybrid-boost',
-    mode: 'hybrid',
-    params: ['hybothboost'],
+    name: 'drummer-spectral-weight',
+    params: ['drummer_weight', 'spectral_weight'],
     grid: [
-      [1.0, 1.2, 1.4, 1.6],  // hybothboost values
+      [0.15, 0.2, 0.25, 0.3],  // drummer_weight values
+      [0.15, 0.2, 0.25, 0.3],  // spectral_weight values
     ],
   },
   {
-    name: 'drummer-thresh-attack',
-    mode: 'drummer',
-    params: ['hitthresh', 'attackmult'],
+    name: 'drummer-thresh-weight',
+    params: ['drummer_thresh', 'drummer_weight'],
     grid: [
-      [2.0, 2.5, 3.0, 3.5],  // hitthresh values
-      [1.2, 1.3, 1.4, 1.5],  // attackmult values
+      [2.0, 2.5, 3.0],  // drummer_thresh values
+      [0.15, 0.2, 0.25],  // drummer_weight values
     ],
-  },
-  {
-    name: 'drummer-cooldown',
-    mode: 'drummer',
-    params: ['cooldown'],
-    grid: [
-      [20, 40, 60, 80, 100],  // cooldown values
-    ],
-    patterns: ['tempo-sweep', 'fast-tempo', 'simultaneous'],  // Fast patterns that stress cooldown
   },
 ];
-
-function generateGridCombinations(grid: number[][]): number[][] {
-  if (grid.length === 0) return [[]];
-  if (grid.length === 1) return grid[0].map(v => [v]);
-
-  const result: number[][] = [];
-  const restCombinations = generateGridCombinations(grid.slice(1));
-
-  for (const value of grid[0]) {
-    for (const rest of restCombinations) {
-      result.push([value, ...rest]);
-    }
-  }
-
-  return result;
-}
 
 export async function runInteractions(
   options: TunerOptions,
   stateManager: StateManager
 ): Promise<void> {
-  console.log('\n🔗 Phase 3: Parameter Interactions');
-  console.log('═'.repeat(50));
-  console.log('Testing parameter interactions and combinations.\n');
+  console.log('\n Phase 3: Parameter Interactions');
+  console.log('='.repeat(50));
+  console.log('Testing interactions between ensemble parameters.\n');
 
   const runner = new TestRunner(options);
   await runner.connect();
@@ -88,60 +64,53 @@ export async function runInteractions(
       if (stateManager.isInteractionComplete(test.name)) {
         const existing = stateManager.getInteractionResult(test.name);
         if (existing) {
-          const optParams = Object.entries(existing.optimal.params)
-            .map(([k, v]) => `${k}=${v}`)
-            .join(', ');
-          console.log(`✓ ${test.name}: Already complete (optimal: ${optParams}, F1: ${existing.optimal.avgF1})`);
+          console.log(`${test.name}: Already complete (optimal F1: ${existing.optimal.avgF1})`);
         }
         continue;
       }
 
-      console.log(`\nTesting ${test.name} (${test.mode})...`);
+      console.log(`\nRunning ${test.name} interaction test...`);
+      console.log(`   Params: ${test.params.join(', ')}`);
 
-      // Set mode
-      await runner.setMode(test.mode);
-      await runner.resetDefaults(test.mode);
+      // Reset to defaults
+      await runner.resetDefaults();
 
-      // For hybrid mode, use optimal base params from sweeps if available
-      if (test.mode === 'hybrid') {
-        const optimalHybrid = stateManager.getOptimalParams('hybrid');
-        if (optimalHybrid) {
-          for (const [param, value] of Object.entries(optimalHybrid)) {
-            // Skip params we're testing
-            if (!test.params.includes(param)) {
-              await runner.setParameter(param, value);
-            }
-          }
-        }
+      // Generate grid points
+      const gridPoints: Array<Record<string, number>> = [];
+      generateGrid(test.params, test.grid, 0, {}, gridPoints);
+
+      console.log(`   Grid size: ${gridPoints.length} combinations`);
+
+      const patterns = test.patterns || [...REPRESENTATIVE_PATTERNS];
+      const totalTests = gridPoints.length * patterns.length;
+
+      // Check for resume point
+      const resumeIndex = stateManager.getInteractionResumeIndex(test.name);
+      const partialResults = stateManager.getPartialInteractionResults(test.name);
+
+      if (resumeIndex > 0) {
+        console.log(`   Resuming from combination ${resumeIndex + 1}/${gridPoints.length}`);
       }
 
-      const patterns = test.patterns || (REPRESENTATIVE_PATTERNS as unknown as string[]);
-      const combinations = generateGridCombinations(test.grid);
-      const points: InteractionPoint[] = [];
-
-      console.log(`   Testing ${combinations.length} combinations × ${patterns.length} patterns`);
-
-      const resumeIndex = stateManager.getInteractionResumeIndex(test.name);
-
       // Progress bar
-      const totalTests = combinations.length * patterns.length;
       const progress = new cliProgress.SingleBar({
         format: '   {bar} {percentage}% | {value}/{total} tests | {eta_formatted}',
-        barCompleteChar: '█',
-        barIncompleteChar: '░',
+        barCompleteChar: '\u2588',
+        barIncompleteChar: '\u2591',
         hideCursor: true,
       });
       progress.start(totalTests, resumeIndex * patterns.length);
 
-      for (let i = resumeIndex; i < combinations.length; i++) {
-        const combo = combinations[i];
+      // Start with partial results if resuming
+      const results: InteractionPoint[] = [...partialResults];
+
+      for (let i = resumeIndex; i < gridPoints.length; i++) {
+        const params = gridPoints[i];
         stateManager.setInteractionInProgress(test.name, i);
 
-        // Set parameter values
-        const params: Record<string, number> = {};
-        for (let j = 0; j < test.params.length; j++) {
-          params[test.params[j]] = combo[j];
-          await runner.setParameter(test.params[j], combo[j]);
+        // Set parameters
+        for (const [param, value] of Object.entries(params)) {
+          await runner.setParameter(param, value);
         }
 
         // Run patterns
@@ -165,85 +134,120 @@ export async function runInteractions(
 
         const n = Object.keys(byPattern).length;
         if (n > 0) {
-          points.push({
+          const point: InteractionPoint = {
             params,
             avgF1: Math.round((totalF1 / n) * 1000) / 1000,
             avgPrecision: Math.round((totalPrecision / n) * 1000) / 1000,
             avgRecall: Math.round((totalRecall / n) * 1000) / 1000,
             byPattern,
-          });
+          };
+          results.push(point);
+
+          // Save incrementally for resume capability
+          stateManager.saveInteractionPoint(test.name, point);
         }
       }
 
       progress.stop();
 
+      // Clear partial results now that we're done
+      stateManager.clearPartialInteractionResults(test.name);
+
       // Find optimal
-      if (points.length === 0) {
+      if (results.length === 0) {
         console.error(`   No data collected for ${test.name}, skipping`);
         continue;
       }
 
-      let optimalPoint = points[0];
-      for (const point of points) {
-        if (point.avgF1 > optimalPoint.avgF1) {
-          optimalPoint = point;
+      let optimal = results[0];
+      for (const result of results) {
+        if (result.avgF1 > optimal.avgF1) {
+          optimal = result;
         }
       }
 
-      const result: InteractionResult = {
+      const interactionResult: InteractionResult = {
         name: test.name,
         timestamp: new Date().toISOString(),
-        grid: points,
+        grid: results,
         optimal: {
-          params: optimalPoint.params,
-          avgF1: optimalPoint.avgF1,
+          params: optimal.params,
+          avgF1: optimal.avgF1,
         },
       };
 
-      stateManager.saveInteractionResult(test.name, result);
+      stateManager.saveInteractionResult(test.name, interactionResult);
 
-      const optParams = Object.entries(optimalPoint.params)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(', ');
-      console.log(`   Optimal: ${optParams} (F1: ${optimalPoint.avgF1})`);
+      console.log(`   Optimal: ${JSON.stringify(optimal.params)} (F1: ${optimal.avgF1})`);
 
       // Update optimal params based on interaction results
-      updateOptimalFromInteraction(stateManager, test.mode, result);
+      updateOptimalFromInteraction(stateManager, interactionResult);
     }
 
     stateManager.markInteractionPhaseComplete();
-    console.log('\n✅ Interaction phase complete.\n');
+    console.log('\n Interaction phase complete.\n');
 
   } finally {
     await runner.disconnect();
   }
 }
 
-function updateOptimalFromInteraction(
-  stateManager: StateManager,
-  mode: 'drummer' | 'spectral' | 'hybrid',
-  result: InteractionResult
+function generateGrid(
+  params: string[],
+  grid: number[][],
+  depth: number,
+  current: Record<string, number>,
+  results: Array<Record<string, number>>
 ): void {
-  const current = stateManager.getOptimalParams(mode) || {};
-  const updated = { ...current, ...result.optimal.params };
-  stateManager.setOptimalParams(mode, updated);
+  if (depth === params.length) {
+    results.push({ ...current });
+    return;
+  }
+
+  for (const value of grid[depth]) {
+    current[params[depth]] = value;
+    generateGrid(params, grid, depth + 1, current, results);
+  }
 }
 
 export async function showInteractionSummary(stateManager: StateManager): Promise<void> {
-  console.log('\n🔗 Interaction Summary');
-  console.log('═'.repeat(50));
+  console.log('\n Interaction Summary');
+  console.log('='.repeat(50));
 
   for (const test of INTERACTION_TESTS) {
     const result = stateManager.getInteractionResult(test.name);
+    console.log(`\n${test.name}`);
     if (result) {
-      const optParams = Object.entries(result.optimal.params)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(', ');
-      console.log(`\n${test.name} (${test.mode})`);
-      console.log(`  Optimal: ${optParams}`);
+      console.log(`  Optimal: ${JSON.stringify(result.optimal.params)}`);
       console.log(`  F1: ${result.optimal.avgF1}`);
     } else {
-      console.log(`\n${test.name}: Not yet tested`);
+      console.log('  Not yet tested');
+    }
+  }
+}
+
+/**
+ * Update optimal parameters based on interaction test results.
+ * If an interaction test finds a better combination than individually
+ * swept values, update the main optimal parameter set.
+ */
+function updateOptimalFromInteraction(
+  stateManager: StateManager,
+  result: InteractionResult
+): void {
+  const currentOptimal = stateManager.getOptimalParams();
+
+  // Get the current optimal params for comparison
+  // Check if the interaction result has a better F1 than we'd expect
+  // from the individual parameter sweeps
+  if (result.optimal && result.optimal.params) {
+    // Update optimal params with the interaction-found values
+    for (const [param, value] of Object.entries(result.optimal.params)) {
+      const currentValue = currentOptimal[param];
+      if (currentValue === undefined || currentValue !== value) {
+        console.log(`   Updating ${param}: ${currentValue} -> ${value} (from interaction)`);
+        stateManager.setOptimalParam(param, value as number);
+      }
     }
   }
 }

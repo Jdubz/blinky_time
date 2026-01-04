@@ -32,6 +32,7 @@
 
 // Render implementations
 #include "render/EffectRenderer.cpp"
+#include "render/RenderPipeline.cpp"
 
 // HAL implementations
 #include "hal/hardware/NeoPixelLedStrip.cpp"  // LED strip wrapper
@@ -47,9 +48,17 @@
 #include "config/ConfigStorage.cpp"     // Persistent settings storage
 #include "config/SettingsRegistry.cpp"  // Settings abstraction layer
 
-// Music detection implementations
-#include "music/MusicMode.cpp"
-#include "music/RhythmAnalyzer.cpp"
+// Audio processing implementations
+#include "audio/SharedSpectralAnalysis.cpp"
+#include "audio/EnsembleFusion.cpp"
+#include "audio/EnsembleDetector.cpp"
+#include "audio/detectors/DrummerDetector.cpp"
+#include "audio/detectors/SpectralFluxDetector.cpp"
+#include "audio/detectors/HFCDetector.cpp"
+#include "audio/detectors/BassBandDetector.cpp"
+#include "audio/detectors/ComplexDomainDetector.cpp"
+#include "audio/detectors/MelFluxDetector.cpp"
+#include "audio/AudioController.cpp"
 
 // Test implementations (only when testing enabled)
 #ifdef ENABLE_TESTING

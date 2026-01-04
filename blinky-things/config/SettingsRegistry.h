@@ -24,7 +24,8 @@
  */
 
 // Maximum number of settings (adjust based on needs)
-#define MAX_SETTINGS 48
+// Current usage: ~53 settings (fire, firemusic, fireorganic, audio, agc, transient, detection, rhythm)
+#define MAX_SETTINGS 64
 
 // Setting value types
 enum class SettingType : uint8_t {
@@ -92,6 +93,7 @@ public:
     void printHelp();                          // Print help with all commands
     void printValue(const char* name);         // Print single value
     void printSettingsJson();                  // Print all settings as JSON (for UI)
+    void printSettingsCategoryJson(const char* category);  // Print category settings as JSON
 
     // Type name helper (for JSON output)
     static const char* typeString(SettingType t);
@@ -112,6 +114,7 @@ private:
     bool setValue(Setting* s, const char* valueStr);
     void printSettingValue(const Setting& s);
     void printSettingHelp(const Setting& s);
+    void printSettingJson(const Setting& s);  // Helper for JSON output (DRY)
 
     // Parse helpers
     static bool parseFloat(const char* str, float& out);

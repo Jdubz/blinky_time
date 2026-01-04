@@ -115,3 +115,88 @@ export interface PatternOutput {
     strength: number;
   }>;
 }
+
+// =============================================================================
+// EXTENSIBILITY TYPES - Pattern metadata for targeted testing
+// =============================================================================
+
+/**
+ * Pattern categories for organized testing
+ * - transient: General transient detection testing (existing patterns)
+ * - music-mode: BPM/rhythm/phase tracking testing
+ * - parameter-targeted: Patterns designed to test specific parameters
+ * - rejection: False positive rejection testing (sustained sounds, noise)
+ */
+export type PatternCategory =
+  | 'transient'
+  | 'music-mode'
+  | 'parameter-targeted'
+  | 'rejection';
+
+/**
+ * Metric types that can be optimized for
+ */
+export type OptimizationMetric =
+  | 'f1'
+  | 'precision'
+  | 'recall'
+  | 'bpm_accuracy'
+  | 'phase_stability'
+  | 'lock_time'
+  | 'rejection_rate';
+
+/**
+ * Extended metadata for patterns - enables auto-discovery and parameter targeting
+ *
+ * EXTENSIBILITY: Adding a new pattern requires only:
+ * 1. Create the pattern with this metadata
+ * 2. System auto-discovers and includes in relevant test runs
+ */
+export interface PatternMetadata {
+  /** Unique pattern identifier (kebab-case) */
+  id: string;
+
+  /** Human-readable name */
+  name: string;
+
+  /** Pattern category for organization */
+  category: PatternCategory;
+
+  /** Parameters this pattern is designed to test (for auto-selection) */
+  targetParams?: string[];
+
+  /** Expected metrics for this pattern */
+  expectedMetrics: {
+    /** Primary metric to optimize for */
+    primary: OptimizationMetric;
+    /** Additional metrics to track */
+    secondary?: OptimizationMetric[];
+  };
+
+  /** For music-mode patterns: expected BPM for accuracy testing */
+  expectedBpm?: number;
+
+  /** Enable/disable without removing the pattern */
+  enabled: boolean;
+
+  /** Priority for pattern selection (higher = selected first when filtering) */
+  priority?: number;
+}
+
+/**
+ * Extended TestPattern with metadata for extensibility
+ */
+export interface ExtendedTestPattern extends TestPattern {
+  /** Pattern metadata for auto-discovery and parameter targeting */
+  metadata: PatternMetadata;
+}
+
+/**
+ * Registry of all patterns with metadata
+ * Key: pattern ID
+ */
+export type PatternRegistry = Record<string, ExtendedTestPattern>;
+
+// Pattern discovery utilities are in patterns.ts:
+// - getPatternsByCategory(category)
+// - getPatternsForParam(param)

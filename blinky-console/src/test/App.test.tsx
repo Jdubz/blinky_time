@@ -7,9 +7,23 @@ import type { UseSerialReturn } from '../hooks/useSerial';
 const mockUseSerial: UseSerialReturn = {
   connectionState: 'disconnected',
   isSupported: true,
+  errorMessage: null,
+  errorCode: null,
+  loading: {
+    connecting: false,
+    settings: false,
+    streaming: false,
+    generator: false,
+    effect: false,
+    saving: false,
+  },
   deviceInfo: null,
   settings: [],
   settingsByCategory: {},
+  currentGenerator: 'fire',
+  currentEffect: 'none',
+  availableGenerators: ['fire', 'water', 'lightning'],
+  availableEffects: ['none', 'hue'],
   isStreaming: false,
   audioData: null,
   batteryData: null,
@@ -17,7 +31,7 @@ const mockUseSerial: UseSerialReturn = {
   rhythmData: null,
   musicModeData: null,
   statusData: null,
-  onPercussionEvent: vi.fn(() => () => {}),
+  onTransientEvent: vi.fn(() => () => {}),
   onRhythmEvent: vi.fn(() => () => {}),
   onStatusEvent: vi.fn(() => () => {}),
   consoleLines: [],
@@ -31,7 +45,10 @@ const mockUseSerial: UseSerialReturn = {
   loadSettings: vi.fn(),
   resetDefaults: vi.fn(),
   refreshSettings: vi.fn(),
+  loadSettingsByCategory: vi.fn(),
   requestBatteryStatus: vi.fn(),
+  setGenerator: vi.fn(),
+  setEffect: vi.fn(),
 };
 
 vi.mock('../hooks/useSerial', () => ({

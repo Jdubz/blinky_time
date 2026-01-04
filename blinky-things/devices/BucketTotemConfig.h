@@ -22,10 +22,9 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
     .height = 8,
     .ledPin = D10,
     .brightness = 80,
-    .ledType = NEO_RGB + NEO_KHZ800,
+    .ledType = NEO_GRB + NEO_KHZ800,  // Standard GRB for WS2812B
     .orientation = HORIZONTAL,
-    .layoutType = MATRIX_LAYOUT,      // New unified layout system
-    .fireType = MATRIX_FIRE           // Kept for backward compatibility
+    .layoutType = MATRIX_LAYOUT
   },
   // All XIAO BLE devices use single-cell LiPo batteries (3.0-4.2V range)
   .charging = {
@@ -54,13 +53,13 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
     .bufferSize = 32
   },
   .fireDefaults = {
-    // Bucket totem fire parameters - uses standard totem defaults
-    .baseCooling = 85,         // Standard cooling rate
-    .sparkHeatMin = 40,        // Standard spark heat range
-    .sparkHeatMax = 200,       // Standard maximum
-    .sparkChance = 0.32f,      // Standard spark probability
-    .audioSparkBoost = 0.3f,   // Standard audio boost
-    .coolingAudioBias = -20,   // Standard audio cooling bias
-    .bottomRowsForSparks = 1   // Single bottom row for sparks
+    // Bucket totem fire parameters - tuned for 16x8 horizontal matrix
+    .baseCooling = 25,         // Low cooling for tall flames
+    .sparkHeatMin = 120,       // Hot sparks even without audio
+    .sparkHeatMax = 255,       // Maximum heat on hits
+    .sparkChance = 0.45f,      // Frequent sparks
+    .audioSparkBoost = 0.5f,   // Strong audio reactivity
+    .coolingAudioBias = -30,   // Flames persist longer with sound
+    .bottomRowsForSparks = 2   // Two bottom rows for wider fire base
   }
 };

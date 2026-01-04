@@ -1,7 +1,16 @@
 /**
  * State management for resumable tuning sessions
+ *
+ * ENSEMBLE ARCHITECTURE (December 2025):
+ * All 6 detectors run simultaneously with weighted fusion.
+ * Legacy per-mode state tracking has been removed.
+ *
+ * EXTENSIBILITY: Supports per-pattern incremental saves for:
+ * - Interruptible tests (Ctrl+C recovery)
+ * - Progress tracking during long-running sweeps
+ * - Auto-save at configurable intervals
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 export class StateManager {
     outputDir;
@@ -14,6 +23,7 @@ export class StateManager {
         this.ensureDir(outputDir);
         this.ensureDir(join(outputDir, 'baseline'));
         this.ensureDir(join(outputDir, 'sweeps'));
+        this.ensureDir(join(outputDir, 'incremental')); // Per-pattern saves
         this.ensureDir(join(outputDir, 'interactions'));
         this.ensureDir(join(outputDir, 'validation'));
         this.ensureDir(join(outputDir, 'reports'));
@@ -38,19 +48,11 @@ export class StateManager {
             lastUpdated: new Date().toISOString(),
             currentPhase: 'baseline',
             phasesCompleted: [],
-            baseline: {
-                completed: [],
-                results: {},
-            },
             sweeps: {
                 completed: [],
                 results: {},
             },
             interactions: {
-                completed: [],
-                results: {},
-            },
-            validation: {
                 completed: [],
                 results: {},
             },
@@ -65,36 +67,27 @@ export class StateManager {
     }
     hasResumableState() {
         return this.state.phasesCompleted.length > 0 ||
-            (this.state.baseline?.completed?.length ?? 0) > 0 ||
+            this.state.baseline !== undefined ||
             (this.state.sweeps?.completed?.length ?? 0) > 0;
     }
-    // Baseline methods
-    isBaselineComplete(mode) {
-        return this.state.baseline?.completed?.includes(mode) ?? false;
+    // =============================================================================
+    // BASELINE METHODS (Ensemble - single baseline, not per-mode)
+    // =============================================================================
+    isBaselineComplete() {
+        return this.state.phasesCompleted.includes('baseline');
     }
-    setBaselineInProgress(mode) {
-        if (!this.state.baseline) {
-            this.state.baseline = { completed: [], results: {} };
-        }
-        this.state.baseline.current = mode;
+    setBaselineInProgress() {
         this.state.currentPhase = 'baseline';
         this.save();
     }
-    saveBaselineResult(mode, result) {
-        if (!this.state.baseline) {
-            this.state.baseline = { completed: [], results: {} };
-        }
-        this.state.baseline.results[mode] = result;
-        if (!this.state.baseline.completed.includes(mode)) {
-            this.state.baseline.completed.push(mode);
-        }
-        delete this.state.baseline.current;
+    saveBaselineResult(result) {
+        this.state.baseline = result;
         // Save to file
-        writeFileSync(join(this.outputDir, 'baseline', `${mode}.json`), JSON.stringify(result, null, 2));
+        writeFileSync(join(this.outputDir, 'baseline', 'ensemble.json'), JSON.stringify(result, null, 2));
         this.save();
     }
-    getBaselineResult(mode) {
-        return this.state.baseline?.results[mode];
+    getBaselineResult() {
+        return this.state.baseline;
     }
     markBaselinePhaseComplete() {
         if (!this.state.phasesCompleted.includes('baseline')) {
@@ -102,7 +95,9 @@ export class StateManager {
         }
         this.save();
     }
-    // Sweep methods
+    // =============================================================================
+    // SWEEP METHODS
+    // =============================================================================
     isSweepComplete(param) {
         return this.state.sweeps?.completed?.includes(param) ?? false;
     }
@@ -144,7 +139,211 @@ export class StateManager {
         }
         this.save();
     }
-    // Interaction methods
+    // =============================================================================
+    // INCREMENTAL SWEEP METHODS - Per-pattern saves for interruptible tests
+    // =============================================================================
+    /**
+     * Get path for incremental sweep file
+     */
+    getIncrementalPath(param) {
+        return join(this.outputDir, 'incremental', `${param}.json`);
+    }
+    /**
+     * Start or resume a sweep with incremental saves
+     * Returns the progress to resume from (or fresh start)
+     */
+    getIncrementalSweepProgress(param) {
+        const path = this.getIncrementalPath(param);
+        if (existsSync(path)) {
+            try {
+                return JSON.parse(readFileSync(path, 'utf-8'));
+            }
+            catch {
+                // Corrupted, start fresh
+            }
+        }
+        return null;
+    }
+    /**
+     * Save progress after each pattern test completes
+     * Called after each individual pattern in a sweep
+     */
+    saveIncrementalProgress(progress) {
+        const path = this.getIncrementalPath(progress.parameter);
+        writeFileSync(path, JSON.stringify(progress, null, 2));
+        // Also update the main state with current position
+        if (!this.state.sweeps) {
+            this.state.sweeps = { completed: [], results: {} };
+        }
+        this.state.sweeps.current = progress.parameter;
+        this.state.sweeps.currentIndex = progress.valueIndex;
+        this.state.currentPhase = 'sweep';
+        this.save();
+    }
+    /**
+     * Clear incremental progress after sweep completes
+     */
+    clearIncrementalProgress(param) {
+        const path = this.getIncrementalPath(param);
+        if (existsSync(path)) {
+            try {
+                unlinkSync(path);
+            }
+            catch {
+                // Ignore deletion errors
+            }
+        }
+    }
+    /**
+     * Save a single pattern result to the incremental file
+     * This allows recovery even if interrupted mid-pattern-set
+     */
+    appendPatternResult(param, valueIndex, value, patternResult) {
+        let progress = this.getIncrementalSweepProgress(param);
+        if (!progress || progress.valueIndex !== valueIndex) {
+            // Starting a new value, reset current value results
+            progress = {
+                parameter: param,
+                valueIndex,
+                patternIndex: 0,
+                currentValue: value,
+                partialResults: progress?.partialResults || [],
+                currentValueResults: [],
+            };
+        }
+        // Add the pattern result
+        progress.currentValueResults.push(patternResult);
+        progress.patternIndex++;
+        this.saveIncrementalProgress(progress);
+    }
+    /**
+     * Finalize a sweep value (all patterns tested for this value)
+     * Adds to partialResults and resets currentValueResults
+     */
+    finalizeSweepValue(param, sweepPoint) {
+        let progress = this.getIncrementalSweepProgress(param);
+        if (!progress) {
+            progress = {
+                parameter: param,
+                valueIndex: 0,
+                patternIndex: 0,
+                currentValue: sweepPoint.value,
+                partialResults: [],
+                currentValueResults: [],
+            };
+        }
+        progress.partialResults.push(sweepPoint);
+        progress.valueIndex++;
+        progress.patternIndex = 0;
+        progress.currentValueResults = [];
+        this.saveIncrementalProgress(progress);
+    }
+    /**
+     * Check if a specific pattern in a sweep has already been completed
+     * Used to skip already-tested patterns when resuming
+     */
+    isPatternCompletedInSweep(param, valueIndex, patternIndex) {
+        const progress = this.getIncrementalSweepProgress(param);
+        if (!progress)
+            return false;
+        // If we're past this value, it's completed
+        if (progress.valueIndex > valueIndex)
+            return true;
+        // If we're at this value, check pattern index
+        if (progress.valueIndex === valueIndex) {
+            return progress.patternIndex > patternIndex;
+        }
+        return false;
+    }
+    /**
+     * Get partial results for a param (for resuming)
+     */
+    getPartialSweepResults(param) {
+        const progress = this.getIncrementalSweepProgress(param);
+        return progress?.partialResults || [];
+    }
+    // =============================================================================
+    // INCREMENTAL BASELINE METHODS - Per-pattern saves for interruptible baseline tests
+    // =============================================================================
+    /**
+     * Get path for incremental baseline file
+     */
+    getIncrementalBaselinePath() {
+        return join(this.outputDir, 'incremental', 'baseline-ensemble.json');
+    }
+    /**
+     * Get incremental baseline progress
+     */
+    getIncrementalBaselineProgress() {
+        const path = this.getIncrementalBaselinePath();
+        if (existsSync(path)) {
+            try {
+                return JSON.parse(readFileSync(path, 'utf-8'));
+            }
+            catch {
+                // Corrupted, start fresh
+            }
+        }
+        return null;
+    }
+    /**
+     * Save baseline progress after each pattern completes
+     */
+    saveIncrementalBaselineProgress(progress) {
+        const path = this.getIncrementalBaselinePath();
+        writeFileSync(path, JSON.stringify(progress, null, 2));
+        // Update main state
+        this.state.currentPhase = 'baseline';
+        this.save();
+    }
+    /**
+     * Append a pattern result to baseline progress
+     */
+    appendBaselinePatternResult(pattern, result) {
+        let progress = this.getIncrementalBaselineProgress();
+        if (!progress) {
+            progress = {
+                patternIndex: 0,
+                completedPatterns: [],
+                partialResults: {},
+            };
+        }
+        progress.partialResults[pattern] = result;
+        progress.completedPatterns.push(pattern);
+        progress.patternIndex = progress.completedPatterns.length;
+        this.saveIncrementalBaselineProgress(progress);
+    }
+    /**
+     * Check if a pattern has been completed in baseline
+     */
+    isBaselinePatternCompleted(pattern) {
+        const progress = this.getIncrementalBaselineProgress();
+        return progress?.completedPatterns?.includes(pattern) ?? false;
+    }
+    /**
+     * Get partial baseline results for resuming
+     */
+    getPartialBaselineResults() {
+        const progress = this.getIncrementalBaselineProgress();
+        return progress?.partialResults || {};
+    }
+    /**
+     * Clear incremental baseline progress after baseline completes
+     */
+    clearIncrementalBaselineProgress() {
+        const path = this.getIncrementalBaselinePath();
+        if (existsSync(path)) {
+            try {
+                unlinkSync(path);
+            }
+            catch {
+                // Ignore deletion errors
+            }
+        }
+    }
+    // =============================================================================
+    // INTERACTION METHODS
+    // =============================================================================
     isInteractionComplete(name) {
         return this.state.interactions?.completed?.includes(name) ?? false;
     }
@@ -180,39 +379,77 @@ export class StateManager {
         }
         return 0;
     }
+    /**
+     * Save an incremental interaction point result
+     * Used to resume interrupted interaction tests
+     */
+    saveInteractionPoint(name, point) {
+        const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+        let partialResults = [];
+        try {
+            if (existsSync(partialPath)) {
+                partialResults = JSON.parse(readFileSync(partialPath, 'utf-8'));
+            }
+        }
+        catch {
+            partialResults = [];
+        }
+        partialResults.push(point);
+        writeFileSync(partialPath, JSON.stringify(partialResults, null, 2));
+    }
+    /**
+     * Load partial interaction results for resumption
+     */
+    getPartialInteractionResults(name) {
+        const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+        try {
+            if (existsSync(partialPath)) {
+                return JSON.parse(readFileSync(partialPath, 'utf-8'));
+            }
+        }
+        catch {
+            // Ignore errors
+        }
+        return [];
+    }
+    /**
+     * Clear partial interaction results after completion
+     */
+    clearPartialInteractionResults(name) {
+        const partialPath = join(this.outputDir, 'interactions', `${name}.partial.json`);
+        try {
+            if (existsSync(partialPath)) {
+                unlinkSync(partialPath);
+            }
+        }
+        catch {
+            // Ignore errors
+        }
+    }
     markInteractionPhaseComplete() {
         if (!this.state.phasesCompleted.includes('interact')) {
             this.state.phasesCompleted.push('interact');
         }
         this.save();
     }
-    // Validation methods
-    isValidationComplete(mode) {
-        return this.state.validation?.completed?.includes(mode) ?? false;
+    // =============================================================================
+    // VALIDATION METHODS (Ensemble - single validation, not per-mode)
+    // =============================================================================
+    isValidationComplete() {
+        return this.state.phasesCompleted.includes('validate');
     }
-    setValidationInProgress(mode) {
-        if (!this.state.validation) {
-            this.state.validation = { completed: [], results: {} };
-        }
-        this.state.validation.current = mode;
+    setValidationInProgress() {
         this.state.currentPhase = 'validate';
         this.save();
     }
-    saveValidationResult(mode, result) {
-        if (!this.state.validation) {
-            this.state.validation = { completed: [], results: {} };
-        }
-        this.state.validation.results[mode] = result;
-        if (!this.state.validation.completed.includes(mode)) {
-            this.state.validation.completed.push(mode);
-        }
-        delete this.state.validation.current;
+    saveValidationResult(result) {
+        this.state.validation = result;
         // Save to file
-        writeFileSync(join(this.outputDir, 'validation', `${mode}.json`), JSON.stringify(result, null, 2));
+        writeFileSync(join(this.outputDir, 'validation', 'ensemble.json'), JSON.stringify(result, null, 2));
         this.save();
     }
-    getValidationResult(mode) {
-        return this.state.validation?.results[mode];
+    getValidationResult() {
+        return this.state.validation;
     }
     markValidationPhaseComplete() {
         if (!this.state.phasesCompleted.includes('validate')) {
@@ -220,24 +457,26 @@ export class StateManager {
         }
         this.save();
     }
-    // Optimal parameters
-    setOptimalParams(mode, params) {
-        if (!this.state.optimalParams) {
-            this.state.optimalParams = {
-                drummer: {},
-                bass: {},
-                hfc: {},
-                spectral: {},
-                hybrid: {},
-            };
-        }
-        this.state.optimalParams[mode] = params;
+    // =============================================================================
+    // OPTIMAL PARAMETERS
+    // =============================================================================
+    setOptimalParams(params) {
+        this.state.optimalParams = params;
         this.save();
     }
-    getOptimalParams(mode) {
-        return this.state.optimalParams?.[mode];
+    setOptimalParam(param, value) {
+        if (!this.state.optimalParams) {
+            this.state.optimalParams = {};
+        }
+        this.state.optimalParams[param] = value;
+        this.save();
     }
-    // Complete marking
+    getOptimalParams() {
+        return this.state.optimalParams || {};
+    }
+    // =============================================================================
+    // COMPLETE / RESET
+    // =============================================================================
     markDone() {
         this.state.currentPhase = 'done';
         if (!this.state.phasesCompleted.includes('report')) {
@@ -245,25 +484,16 @@ export class StateManager {
         }
         this.save();
     }
-    // Reset
     reset() {
         this.state = {
             lastUpdated: new Date().toISOString(),
             currentPhase: 'baseline',
             phasesCompleted: [],
-            baseline: {
-                completed: [],
-                results: {},
-            },
             sweeps: {
                 completed: [],
                 results: {},
             },
             interactions: {
-                completed: [],
-                results: {},
-            },
-            validation: {
                 completed: [],
                 results: {},
             },

@@ -9,6 +9,7 @@ interface ConnectionBarProps {
   batteryData: BatterySample | null;
   batteryStatusData: BatteryStatusData | null;
   isSupported: boolean;
+  errorMessage: string | null;
   onConnect: () => void;
   onDisconnect: () => void;
   onOpenConsole: () => void;
@@ -21,6 +22,7 @@ export function ConnectionBar({
   batteryData,
   batteryStatusData,
   isSupported,
+  errorMessage,
   onConnect,
   onDisconnect,
   onOpenConsole,
@@ -47,7 +49,7 @@ export function ConnectionBar({
       case 'connecting':
         return 'Connecting...';
       case 'error':
-        return 'Error';
+        return errorMessage ? `Error: ${errorMessage}` : 'Connection Error';
       default:
         return 'Disconnected';
     }

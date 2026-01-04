@@ -89,7 +89,6 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 0.75rem 1rem;
-  background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -393,7 +392,6 @@ body {
   display: flex;
   gap: 0.5rem;
   padding: 0.75rem 1rem;
-  background-color: var(--bg-secondary);
   border-bottom: 2px solid var(--border-color);
 }
 
@@ -511,6 +509,89 @@ body {
   font-size: 0.8125rem !important;
   color: var(--text-muted);
   font-style: italic;
+}
+
+/* ===== Generator & Effect Selectors ===== */
+.generator-selector,
+.effect-selector {
+  background-color: var(--bg-card);
+  border-radius: var(--border-radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.selector-header {
+  margin-bottom: 0.75rem;
+}
+
+.selector-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.25rem;
+}
+
+.selector-hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
+.selector-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.selector-button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+  border: 2px solid var(--border-color);
+  border-radius: var(--border-radius);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.selector-button:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.selector-button.active {
+  border-color: var(--accent-primary);
+  background-color: rgba(249, 115, 22, 0.15);
+  color: var(--accent-primary);
+}
+
+.selector-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.selector-icon {
+  font-size: 1.25rem;
+}
+
+.selector-label {
+  font-weight: 500;
+}
+
+/* Effect info section */
+.effect-info {
+  background-color: var(--bg-card);
+  border-radius: var(--border-radius);
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.effect-description {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.5;
 }
 
 /* ===== Audio Visualizer ===== */
@@ -831,7 +912,6 @@ body {
   position: relative;
   width: 48px;
   height: 20px;
-  background-color: var(--bg-secondary);
   border: 2px solid var(--border-color);
   border-radius: 4px;
 }
