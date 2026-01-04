@@ -185,7 +185,7 @@ export function SettingsPanel({
               <p className="category-description">{categoryDescriptions[category]}</p>
             )}
             <div className="category-settings">
-              {settingsByCategory[category].map(setting => (
+              {settingsByCategory[category].map((setting: DeviceSetting) => (
                 <SettingControl
                   key={setting.name}
                   setting={setting}
