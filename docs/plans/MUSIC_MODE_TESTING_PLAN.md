@@ -1,8 +1,114 @@
 # Music Mode Testing Plan
 ## Comprehensive Testing for Transient Detection, Beat Prediction, and Music Mode
 
-**Last Updated**: 2025-12-27
-**Status**: Updated for RhythmAnalyzer Integration
+**Last Updated**: 2025-12-28
+**Status**: Gap Analysis Complete - Implementation In Progress
+
+---
+
+## Testing Infrastructure Gap Analysis
+
+**Reviewed**: 2025-12-28
+
+### Current State Summary
+
+**✅ Excellent Coverage:**
+- **param-tuner**: Automated sweep for 9 transient detection parameters
+- **blinky-serial-mcp**: Robust test execution with F1/precision/recall metrics
+- **Test patterns**: 20 patterns with deterministic samples and ground truth
+- **Fast mode**: Binary search completes in ~30 minutes
+
+**❌ Critical Gaps:**
+1. **MusicMode parameters** (10 params): Not in automated sweeps
+2. **RhythmAnalyzer parameters** (5 params): Not in automated sweeps
+3. **Bass/HFC mode parameters** (5 params): Not in automated sweeps
+4. **RhythmAnalyzer telemetry**: Not implemented (no dedicated stream)
+5. **Integration metrics**: Activation rate, lock duration, virtual beat % not auto-calculated
+6. **New features untested**: BPM feedback, context-aware filtering, beat likelihood
+
+### Parameters Requiring Automation
+
+#### MusicMode Parameters (10 total)
+```cpp
+activationThreshold      // 0.0-1.0, default 0.6
+minBeatsToActivate       // 2-16, default 4
+maxMissedBeats          // 4-16, default 8
+pllKp                   // 0.01-0.5, default 0.1
+pllKi                   // 0.001-0.1, default 0.01
+confidenceIncrement      // 0.05-0.2, default 0.1
+confidenceDecrement      // 0.05-0.2, default 0.1
+phaseErrorTolerance     // 0.1-0.5, default 0.2
+missedBeatTolerance     // 1.0-3.0, default 1.5
+bpmMin/bpmMax           // 40-300, defaults 60/200
+```
+
+#### RhythmAnalyzer Parameters (5 total)
+```cpp
+minBPM                  // 40-120, default 60
+maxBPM                  // 120-300, default 200
+autocorrUpdateIntervalMs // 500-2000, default 1000
+beatLikelihoodThreshold  // 0.5-0.9, default 0.7
+minPeriodicityStrength   // 0.3-0.8, default 0.5
+```
+
+#### Bass/HFC Mode Parameters (5 total)
+```cpp
+bassfreq, bassq, bassthresh      // Bass Band mode
+hfcweight, hfcthresh             // HFC mode
+```
+
+### Missing Telemetry Implementation
+
+**RhythmAnalyzer Telemetry** (proposed but not implemented):
+```json
+{
+  "type": "RHYTHM",
+  "bpm": 125.3,
+  "strength": 0.82,
+  "periodMs": 480.2,
+  "likelihood": 0.73,
+  "phase": 0.45,
+  "bufferFill": 256
+}
+```
+
+**Current State**: RhythmAnalyzer data embedded in music state, no dedicated stream.
+
+### Missing Integration Metrics
+
+Tests for PR #26 features not covered:
+1. **BPM Feedback Loop**: `applyExternalBPMGuidance()` effectiveness
+2. **Context-Aware Filtering**: Rhythm-based transient modulation measurement
+3. **Virtual Beat Synthesis**: Real vs synthesized beat percentage
+4. **Activation Reliability**: Auto-calculated success rate
+5. **Lock Duration**: Auto-calculated sustained lock time
+
+### Implementation Priorities
+
+**Priority 1: SerialConsole Extensions** (enables all testing)
+- Add RhythmAnalyzer telemetry stream
+- Register all MusicMode parameters (10 params)
+- Register all RhythmAnalyzer parameters (5 params)
+- Register Bass/HFC mode parameters (5 params)
+
+**Priority 2: param-tuner Extensions**
+- Add 20 new parameters to sweep automation
+- Implement integration metric calculation
+- Add multi-component interaction tests
+
+**Priority 3: Integration Test Patterns**
+- Breakdown recovery pattern (steady → silence → steady)
+- Tempo ramp pattern (100→140 BPM gradual)
+- Quiet section pattern (soft transients, virtual beats needed)
+- Polyrhythm pattern (multiple periodicities)
+
+### Time Estimates
+
+**Current Capability:**
+- Transient detection only: 30 min (fast) to 6 hrs (full)
+
+**With Full Implementation:**
+- Complete musical analysis: 2-3 hrs (fast) to 12-16 hrs (full)
 
 ---
 

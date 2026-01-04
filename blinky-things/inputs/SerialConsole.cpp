@@ -146,6 +146,14 @@ void SerialConsole::registerSettings() {
             "PLL proportional gain (responsiveness)", 0.01f, 0.5f);
         settings_.registerFloat("pllki", &music_->pllKi, "music",
             "PLL integral gain (stability)", 0.001f, 0.1f);
+        settings_.registerFloat("confinc", &music_->confidenceIncrement, "music",
+            "Confidence gain per good beat", 0.05f, 0.2f);
+        settings_.registerFloat("confdec", &music_->confidenceDecrement, "music",
+            "Confidence loss per bad/missed beat", 0.05f, 0.2f);
+        settings_.registerFloat("phasetol", &music_->phaseErrorTolerance, "music",
+            "Phase error tolerance for good beat", 0.1f, 0.5f);
+        settings_.registerFloat("missedtol", &music_->missedBeatTolerance, "music",
+            "Missed beat tolerance (period multiplier)", 1.0f, 3.0f);
     }
 
     // === RHYTHM ANALYZER SETTINGS ===

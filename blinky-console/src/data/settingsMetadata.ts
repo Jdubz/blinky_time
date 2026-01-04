@@ -120,6 +120,12 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
 
   // Hardware AGC settings (agc category)
+  hwtarget: {
+    displayName: 'HW Target Level',
+    tooltip:
+      'Target raw ADC level for hardware gain (0.05-0.9). Has ±0.01 dead zone. Hardware gain adapts to keep raw input near this target for optimal signal quality.',
+    unit: '',
+  },
   hwtargetlow: {
     displayName: 'HW Target Low',
     tooltip:
@@ -157,6 +163,208 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     tooltip:
       'How quickly gain adjusts to match the peak target (0.1-30s). Higher = smoother but slower adaptation. Lower = faster but more reactive. Default: 5s.',
     unit: 's',
+  },
+
+  // Transient detection settings (transient category)
+  hitthresh: {
+    displayName: 'Hit Threshold',
+    tooltip:
+      'Signal must be this many times louder than recent average to trigger (1.5-10x). Higher = fewer false positives, may miss soft hits. Tuned via param-tuner.',
+    unit: 'x',
+  },
+  attackmult: {
+    displayName: 'Attack Multiplier',
+    tooltip:
+      'Signal must rise by this factor from previous frame (1.1-2x). Detects "sudden" rises. Higher = only sharp attacks trigger. Default: 1.2 (20% rise required).',
+    unit: 'x',
+  },
+  avgtau: {
+    displayName: 'Average Tracking Time',
+    tooltip:
+      'Time constant for recent average level tracking (0.1-5s). Lower = more responsive to level changes, higher = smoother baseline. Default: 0.8s.',
+    unit: 's',
+  },
+  cooldown: {
+    displayName: 'Hit Cooldown',
+    tooltip:
+      'Minimum time between transient detections (20-500ms). Prevents double-triggering. Lower = can detect rapid hits, higher = filters drum rolls. Default: 30ms (~33 hits/sec max).',
+    unit: 'ms',
+  },
+
+  // Detection mode settings (detection category)
+  detectmode: {
+    displayName: 'Detection Algorithm',
+    tooltip:
+      'Transient detection algorithm: 0=Drummer (amplitude), 1=Bass Band (filtered), 2=HFC (high freq), 3=Spectral Flux (FFT), 4=Hybrid (drummer+flux). Hybrid recommended (best F1).',
+    unit: '',
+  },
+
+  // Bass Band mode parameters (mode 1)
+  bassfreq: {
+    displayName: 'Bass Cutoff Frequency',
+    tooltip:
+      'Bass filter cutoff frequency (40-200 Hz). Lower = only deep kicks, higher = includes bass + low toms. Default: 120 Hz for kick drums.',
+    unit: 'Hz',
+  },
+  bassq: {
+    displayName: 'Bass Filter Q',
+    tooltip:
+      'Bass filter Q factor (0.5-3.0). Lower = wider frequency response (Butterworth), higher = sharper filter. Default: 1.0.',
+    unit: '',
+  },
+  bassthresh: {
+    displayName: 'Bass Threshold',
+    tooltip:
+      'Bass energy detection threshold (1.5-10x). Similar to hitthresh but for bass-filtered signal. Higher = only strong kicks trigger. Default: 3.0.',
+    unit: 'x',
+  },
+
+  // HFC mode parameters (mode 2)
+  hfcweight: {
+    displayName: 'HFC Weighting',
+    tooltip:
+      'High-frequency content weighting factor (0.5-5.0). Higher = emphasizes sharp attacks (snares, claps). Lower = more balanced. Default: 1.0.',
+    unit: '',
+  },
+  hfcthresh: {
+    displayName: 'HFC Threshold',
+    tooltip:
+      'HFC detection threshold (1.5-10x). Higher = only very sharp attacks trigger. Good for rejecting sustained sounds. Default: 3.0.',
+    unit: 'x',
+  },
+
+  // Spectral Flux mode parameters (mode 3)
+  fluxthresh: {
+    displayName: 'Flux Threshold',
+    tooltip:
+      'Spectral flux detection threshold (1.0-10.0). Industry-standard FFT-based onset detection. Higher = fewer detections. Tuned to 2.8 via param-tuner.',
+    unit: '',
+  },
+  fluxbins: {
+    displayName: 'FFT Bins',
+    tooltip:
+      'Number of FFT bins to analyze (4-128). More bins = better frequency resolution but higher CPU. Default: 64 bins (bass-mid focus).',
+    unit: 'bins',
+  },
+
+  // Hybrid mode parameters (mode 4)
+  hyfluxwt: {
+    displayName: 'Hybrid: Flux Weight',
+    tooltip:
+      'Weight when only spectral flux detects (0.1-1.0). Higher = trust flux more when drummer disagrees. Tuned to 0.3 via param-tuner.',
+    unit: '',
+  },
+  hydrumwt: {
+    displayName: 'Hybrid: Drummer Weight',
+    tooltip:
+      'Weight when only drummer detects (0.1-1.0). Higher = trust amplitude detection more when flux disagrees. Tuned to 0.3 via param-tuner.',
+    unit: '',
+  },
+  hybothboost: {
+    displayName: 'Hybrid: Agreement Boost',
+    tooltip:
+      'Multiplier when both algorithms agree (1.0-2.0). Boosts confidence when drummer and flux both detect. Higher = stronger reactions. Default: 1.2.',
+    unit: 'x',
+  },
+
+  // MusicMode settings (music category)
+  musicthresh: {
+    displayName: 'Activation Threshold',
+    tooltip:
+      'Confidence required to activate music mode (0.0-1.0). Lower = activates faster but may false-trigger. Higher = more reliable but slower. Default: 0.6.',
+    unit: '',
+  },
+  musicbeats: {
+    displayName: 'Beats to Activate',
+    tooltip:
+      'Number of stable beats required before activation (2-16). More = more reliable lock-on but slower. Fewer = faster but may false-activate. Default: 4.',
+    unit: 'beats',
+  },
+  musicmissed: {
+    displayName: 'Max Missed Beats',
+    tooltip:
+      'Consecutive missed beats before deactivation (4-16). Higher = maintains lock through breakdowns, lower = fails faster when rhythm stops. Default: 8.',
+    unit: 'beats',
+  },
+  confinc: {
+    displayName: 'Confidence Gain',
+    tooltip:
+      'Confidence increase per good beat (0.05-0.2). Higher = faster lock-on but may overreact. Lower = more conservative. Default: 0.1.',
+    unit: '',
+  },
+  confdec: {
+    displayName: 'Confidence Loss',
+    tooltip:
+      'Confidence decrease per bad/missed beat (0.05-0.2). Higher = fails faster when rhythm unclear. Lower = maintains lock longer. Default: 0.1 (symmetric with gain).',
+    unit: '',
+  },
+  phasetol: {
+    displayName: 'Phase Tolerance',
+    tooltip:
+      'Maximum phase error for "good beat" (0.1-0.5). Phase 0-1 within beat cycle. Lower = stricter timing, higher = accepts looser rhythm. Default: 0.2 (20% of beat period).',
+    unit: '',
+  },
+  missedtol: {
+    displayName: 'Missed Beat Tolerance',
+    tooltip:
+      'Beat period multiplier for missed beat detection (1.0-3.0). Time without onset before counting as missed. Higher = more patient. Default: 1.5x beat period.',
+    unit: 'x',
+  },
+  bpmmin: {
+    displayName: 'Minimum BPM',
+    tooltip:
+      'Minimum tempo for music mode (40-120 BPM). Prevents false locks on slow ambient music. Lower = supports ballads, higher = rejects slow drifts. Default: 60 BPM.',
+    unit: 'BPM',
+  },
+  bpmmax: {
+    displayName: 'Maximum BPM',
+    tooltip:
+      'Maximum tempo for music mode (120-240 BPM). Prevents false locks on rapid noise. Higher = supports drum & bass, lower = rejects fast artifacts. Default: 200 BPM.',
+    unit: 'BPM',
+  },
+  pllkp: {
+    displayName: 'PLL Proportional Gain',
+    tooltip:
+      'Phase-locked loop proportional gain (0.01-0.5). Higher = more responsive to phase errors but may overshoot. Lower = smoother. Default: 0.1.',
+    unit: '',
+  },
+  pllki: {
+    displayName: 'PLL Integral Gain',
+    tooltip:
+      'Phase-locked loop integral gain (0.001-0.1). Corrects steady-state phase drift. Higher = faster convergence but may oscillate. Default: 0.01.',
+    unit: '',
+  },
+
+  // RhythmAnalyzer settings (rhythm category)
+  rhythmminbpm: {
+    displayName: 'Min BPM (Autocorr)',
+    tooltip:
+      'Minimum tempo for autocorrelation analysis (60-120 BPM). Lower bound of tempo detection range. Default: 60 BPM.',
+    unit: 'BPM',
+  },
+  rhythmmaxbpm: {
+    displayName: 'Max BPM (Autocorr)',
+    tooltip:
+      'Maximum tempo for autocorrelation analysis (120-240 BPM). Upper bound of tempo detection range. Default: 200 BPM.',
+    unit: 'BPM',
+  },
+  rhythminterval: {
+    displayName: 'Autocorr Update Interval',
+    tooltip:
+      'How often autocorrelation runs (500-2000ms). Lower = more responsive but higher CPU. Higher = smoother but slower. Default: 1000ms (1 second).',
+    unit: 'ms',
+  },
+  beatthresh: {
+    displayName: 'Beat Likelihood Threshold',
+    tooltip:
+      'Threshold for virtual beat synthesis (0.5-0.9). When beat likelihood exceeds this, synthesize beat even without transient. Higher = fewer virtual beats. Default: 0.7.',
+    unit: '',
+  },
+  minperiodicity: {
+    displayName: 'Min Periodicity Strength',
+    tooltip:
+      'Minimum periodicity to consider rhythm detected (0.3-0.8). Autocorrelation confidence threshold. Higher = stricter rhythm requirements. Default: 0.5.',
+    unit: '',
   },
 };
 
