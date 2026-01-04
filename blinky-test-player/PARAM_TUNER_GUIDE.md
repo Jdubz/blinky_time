@@ -387,8 +387,11 @@ The extended param-tuner provides:
 
 Param-tuner focuses on musical analysis parameters only. Fire generator aesthetics (cooling, sparks, heat) and basic audio processing (peaktau, releasetau, hwtarget) are configured separately via the UI or serial console.
 
-Start with the recommended scenarios above, tune in focused 30-50 minute sessions, and gradually optimize all aspects of musical analysis!
+---
+
 # Quick Tuning Scenarios - 30 Minute Chunks
+
+**Use the copy-paste ready commands below for focused tuning sessions.** Each scenario is designed for 30-50 minute sessions, making it easy to make progress in short bursts.
 
 ## Copy-Paste Ready Commands
 

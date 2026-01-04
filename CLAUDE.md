@@ -46,7 +46,7 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 
 | Document | Purpose |
 |----------|---------|
-| `docs/AUDIO_ARCHITECTURE.md` | AudioController architecture (autocorrelation-based rhythm tracking) |
+| `docs/AUDIO_ARCHITECTURE.md` | AudioController v3 architecture (multi-hypothesis tempo tracking) |
 | `docs/AUDIO-TUNING-GUIDE.md` | **Main testing guide** - 56 tunable parameters, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator/Effect/Renderer pattern |
