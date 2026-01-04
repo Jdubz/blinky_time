@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** December 2025
-**Architecture Version:** AudioController v2 (Autocorrelation-based rhythm tracking)
+**Last Updated:** January 2026
+**Architecture Version:** AudioController v3 (Multi-hypothesis tempo tracking)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -38,23 +38,34 @@ PDM Microphone (16kHz, mono)
    │   └── Mode 4: HYBRID (drummer + flux, RECOMMENDED)
    └── Spectral Flux output → AudioController
         |
+   EnsembleDetector (6 detectors + fusion) → Transient Hits
+        |
    AudioController
    ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
-   ├── Autocorrelation → tempo + periodicity
-   ├── Phase Tracking → beat phase prediction
+   ├── Autocorrelation (every 500ms) → Extract 4 Peaks
+   ├── Multi-Hypothesis Tracker (4 concurrent tempos)
+   │   ├── Primary (e.g., 120 BPM, conf=0.85)
+   │   ├── Secondary (e.g., 60 BPM, conf=0.52) [half-time]
+   │   ├── Tertiary (inactive)
+   │   └── Candidate (inactive)
+   ├── Promotion Logic (confidence-based, ≥8 beats)
+   ├── Phase Tracking (from primary hypothesis)
    └── Output Synthesis
         |
    AudioControl { energy, pulse, phase, rhythmStrength }
         |
-   Fire Generator (visual effects)
+   Fire/Water/Lightning Generators (visual effects)
 ```
 
 ### Key Design Decisions
 
-1. **Pattern-based rhythm tracking**: Uses 6-second autocorrelation buffer instead of event-based PLL
-2. **Transients → pulse only**: Transient detection affects visual pulse, NOT beat tracking
-3. **Phase from autocorrelation**: Phase is derived from pattern analysis, not individual hits
-4. **Unified 4-parameter output**: Generators receive simple `AudioControl` struct
+1. **Multi-hypothesis tempo tracking**: Maintains 4 concurrent tempo interpretations to handle tempo changes and ambiguity
+2. **Pattern-based rhythm**: Uses 6-second autocorrelation buffer instead of event-based PLL
+3. **Transients → pulse only**: Transient detection affects visual pulse, NOT beat tracking
+4. **Phase from primary hypothesis**: Phase is derived from the highest-confidence tempo interpretation
+5. **Confidence-based promotion**: Better hypotheses can replace the primary after accumulating evidence (≥8 beats)
+6. **Dual decay strategy**: Beat-count decay during music (phrase-aware), time-based decay during silence
+7. **Unified 4-parameter output**: Generators receive simple `AudioControl` struct
 
 ---
 
@@ -141,6 +152,53 @@ npm run tuner -- validate --port COM5 --gain 40
 | `bpmmin` | 60 | 40-120 | Minimum BPM to detect |
 | `bpmmax` | 200 | 80-240 | Maximum BPM to detect |
 
+### Category: `hypothesis` (14 parameters) - Multi-Hypothesis Tempo Tracking
+
+**Peak Detection:**
+| Parameter | Default | Range | Description | Access |
+|-----------|---------|-------|-------------|--------|
+| `minPeakStrength` | 0.3 | 0.1-0.8 | Min normalized correlation to create hypothesis | `audioCtrl.getMultiHypothesis().minPeakStrength` |
+| `minRelativePeakHeight` | 0.7 | 0.5-1.0 | Peak must be >N% of max peak | `audioCtrl.getMultiHypothesis().minRelativePeakHeight` |
+
+**Hypothesis Matching:**
+| Parameter | Default | Range | Description | Access |
+|-----------|---------|-------|-------------|--------|
+| `bpmMatchTolerance` | 0.05 | 0.01-0.2 | ±N% BPM tolerance for matching | `audioCtrl.getMultiHypothesis().bpmMatchTolerance` |
+
+**Promotion:**
+| Parameter | Default | Range | Description | Access |
+|-----------|---------|-------|-------------|--------|
+| `promotionThreshold` | 0.15 | 0.05-0.5 | Confidence advantage to promote | `audioCtrl.getMultiHypothesis().promotionThreshold` |
+| `minBeatsBeforePromotion` | 8 | 4-32 | Min beats before promoting | `audioCtrl.getMultiHypothesis().minBeatsBeforePromotion` |
+
+**Decay:**
+| Parameter | Default | Range | Description | Access |
+|-----------|---------|-------|-------------|--------|
+| `phraseHalfLifeBeats` | 32.0 | 8-64 | Half-life in beats (music) | `audioCtrl.getMultiHypothesis().phraseHalfLifeBeats` |
+| `minStrengthToKeep` | 0.1 | 0.05-0.3 | Deactivate threshold | `audioCtrl.getMultiHypothesis().minStrengthToKeep` |
+| `silenceGracePeriodMs` | 3000 | 1000-10000 | Grace before silence decay (ms) | `audioCtrl.getMultiHypothesis().silenceGracePeriodMs` |
+| `silenceDecayHalfLifeSec` | 5.0 | 2.0-15.0 | Half-life during silence (s) | `audioCtrl.getMultiHypothesis().silenceDecayHalfLifeSec` |
+
+**Confidence Weighting:**
+| Parameter | Default | Range | Description | Access |
+|-----------|---------|-------|-------------|--------|
+| `strengthWeight` | 0.5 | 0.0-1.0 | Weight of autocorr strength | `audioCtrl.getMultiHypothesis().strengthWeight` |
+| `consistencyWeight` | 0.3 | 0.0-1.0 | Weight of phase consistency | `audioCtrl.getMultiHypothesis().consistencyWeight` |
+| `longevityWeight` | 0.2 | 0.0-1.0 | Weight of beat count | `audioCtrl.getMultiHypothesis().longevityWeight` |
+
+**Debug:**
+| Command | Default | Values | Description |
+|---------|---------|--------|-------------|
+| `hypodebug` | 2 (SUMMARY) | 0-3 | Debug level: OFF/EVENTS/SUMMARY/DETAILED | `set hypodebug 2` |
+
+**Note:** Multi-hypothesis parameters are not yet accessible via SerialConsole `set` command. Use C++ code or future custom commands.
+
+**Serial Commands:**
+- `show hypotheses` - View all 4 hypothesis slots
+- `show primary` - View primary hypothesis only
+- `set hypodebug <0-3>` - Set debug output level
+- `get hypodebug` - Get current debug level
+
 ### Category: `agc` (5 parameters) - Hardware Gain Control
 
 | Command | Default | Range | Description |
@@ -193,7 +251,7 @@ npm run tuner -- validate --port COM5 --gain 40
 | `organicaudiomix` | 0.6 | 0.0-1.0 | Audio influence in organic mode |
 | `organicburstsuppress` | true | bool | Suppress after bursts |
 
-**Total: 56 tunable parameters**
+**Total: 70 tunable parameters** (56 original + 14 multi-hypothesis)
 
 ---
 

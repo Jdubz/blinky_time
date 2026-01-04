@@ -1,14 +1,25 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: December 30, 2025*
+*Last Updated: January 3, 2026*
 
 ## Current Status
+
+### Completed (January 2026)
+
+**Multi-Hypothesis Tempo Tracking (v3):**
+- Multi-hypothesis tracking (4 concurrent tempos) implemented
+- Handles tempo changes, ambiguity (half-time/double-time), and polyrhythmic patterns
+- Confidence-based promotion with ≥8 beat requirement
+- Dual decay strategy: beat-count (phrase-aware) + time-based (silence)
+- SerialConsole commands: `show hypotheses`, `show primary`, `set hypodebug`
+- Memory: +1 KB RAM, +4 KB program storage
+- CPU: +3-4% @ 64 MHz
 
 ### Completed (December 2025)
 
 **Architecture:**
 - Generator → Effect → Renderer pattern implemented
-- AudioController v2 with autocorrelation-based rhythm tracking
+- AudioController v2 with autocorrelation-based rhythm tracking (single-hypothesis)
 - PLL-based phase tracking replaced with pattern analysis
 - 5 transient detection algorithms: Drummer, Bass, HFC, Spectral, Hybrid
 

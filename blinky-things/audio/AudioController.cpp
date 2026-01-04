@@ -32,9 +32,10 @@ bool AudioController::begin(uint32_t sampleRate) {
     // Initialize ensemble detector
     ensemble_.begin();
 
-    // Reset OSS buffer
+    // Reset OSS buffer and timestamps
     for (int i = 0; i < OSS_BUFFER_SIZE; i++) {
         ossBuffer_[i] = 0.0f;
+        ossTimestamps_[i] = 0;
     }
     ossWriteIdx_ = 0;
     ossCount_ = 0;
@@ -277,11 +278,17 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         return;
     }
 
-    // Autocorrelation: find the lag with maximum correlation
+    // Autocorrelation: compute correlation for all lags
+    // We'll store correlations to find multiple peaks
+    // NOTE: Static buffer assumes single-threaded execution (only one AudioController instance)
+    static float correlationAtLag[200];  // Max lag range (e.g., 200 BPM @ 60Hz = 18 samples, 60 BPM @ 60Hz = 60 samples)
+    int correlationSize = maxLag - minLag + 1;
+    if (correlationSize > 200) correlationSize = 200;
+
     float maxCorrelation = 0.0f;
     int bestLag = 0;
 
-    for (int lag = minLag; lag <= maxLag; lag++) {
+    for (int lag = minLag; lag <= maxLag && (lag - minLag) < 200; lag++) {
         float correlation = 0.0f;
         int count = ossCount_ - lag;
 
@@ -292,6 +299,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         }
 
         correlation /= static_cast<float>(count);
+        correlationAtLag[lag - minLag] = correlation;
 
         if (correlation > maxCorrelation) {
             maxCorrelation = correlation;
@@ -307,9 +315,116 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
+    // === MULTI-PEAK EXTRACTION ===
+    // Find up to 4 peaks in autocorrelation function for multi-hypothesis tracking
+    AutocorrPeak peaks[4];
+    int numPeaks = 0;
+
+    // Find local maxima above threshold
+    for (int lag = minLag; lag <= maxLag && (lag - minLag) < correlationSize; lag++) {
+        int lagIdx = lag - minLag;
+        float correlation = correlationAtLag[lagIdx];
+        float normCorr = correlation / (avgEnergy + 0.001f);
+
+        // Skip if below minimum strength threshold
+        if (normCorr < multiHypothesis_.minPeakStrength) continue;
+
+        // Check if below minimum relative height (must be >70% of max peak)
+        if (normCorr < normCorrelation * multiHypothesis_.minRelativePeakHeight) continue;
+
+        // Check if this is a local maximum (±2 neighbors must be lower or equal)
+        bool isLocalMax = true;
+        bool hasStrictlyLowerNeighbor = false;
+
+        for (int delta = -2; delta <= 2; delta++) {
+            if (delta == 0) continue;
+            int neighborLag = lag + delta;
+            if (neighborLag < minLag || neighborLag > maxLag) continue;
+            int neighborIdx = neighborLag - minLag;
+            // Bounds check (neighborIdx >= 0 guaranteed by line 342 check)
+            if (neighborIdx >= correlationSize) continue;
+
+            float neighborCorr = correlationAtLag[neighborIdx];
+            if (neighborCorr > correlation) {
+                isLocalMax = false;
+                break;
+            }
+            if (neighborCorr < correlation) {
+                hasStrictlyLowerNeighbor = true;
+            }
+        }
+
+        // Accept as peak if local max with at least one strictly lower neighbor
+        if (isLocalMax && hasStrictlyLowerNeighbor && numPeaks < 4) {
+            peaks[numPeaks].lag = lag;
+            peaks[numPeaks].correlation = correlation;
+            peaks[numPeaks].normCorrelation = normCorr;
+            numPeaks++;
+        }
+    }
+
+    // Sort peaks by strength (descending) - simple selection sort
+    for (int i = 0; i < numPeaks - 1; i++) {
+        for (int j = i + 1; j < numPeaks; j++) {
+            if (peaks[j].normCorrelation > peaks[i].normCorrelation) {
+                AutocorrPeak temp = peaks[i];
+                peaks[i] = peaks[j];
+                peaks[j] = temp;
+            }
+        }
+    }
+
+    // === UPDATE MULTI-HYPOTHESIS TRACKER ===
+    // Check if any hypotheses are active
+    bool hasActiveHypothesis = false;
+    for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+        if (multiHypothesis_.hypotheses[i].active) {
+            hasActiveHypothesis = true;
+            break;
+        }
+    }
+
+    // For each peak, find matching hypothesis or create new one
+    for (int i = 0; i < numPeaks; i++) {
+        float bpm = 60000.0f / (static_cast<float>(peaks[i].lag) / samplesPerMs);
+        bpm = clampf(bpm, bpmMin, bpmMax);
+
+        // Find matching hypothesis
+        int matchSlot = multiHypothesis_.findMatchingHypothesis(bpm);
+
+        if (matchSlot >= 0) {
+            // Update existing hypothesis
+            TempoHypothesis& hypo = multiHypothesis_.hypotheses[matchSlot];
+
+            // Update phase error tracking:
+            // Autocorrelation peak indicates we're at phase 0.0 (beat start)
+            // Error is distance from current phase to 0.0 (shortest path around circle)
+            float phaseError = hypo.phase;
+            if (phaseError > 0.5f) phaseError = 1.0f - phaseError;  // Wrap: use shorter distance
+
+            // Exponential smoothing: avgPhaseError = 0.9 * old + 0.1 * new
+            hypo.avgPhaseError = 0.9f * hypo.avgPhaseError + 0.1f * phaseError;
+
+            hypo.strength = peaks[i].normCorrelation;
+            hypo.lastUpdateMs = nowMs;
+            hypo.correlationPeak = peaks[i].correlation;
+            hypo.lagSamples = peaks[i].lag;
+            hypo.bpm = bpm;  // Update BPM (may drift slightly)
+            hypo.beatPeriodMs = 60000.0f / bpm;
+        } else if (peaks[i].normCorrelation > multiHypothesis_.minPeakStrength ||
+                   (!hasActiveHypothesis && i == 0)) {
+            // Create new hypothesis if:
+            // 1. Peak meets strength threshold, OR
+            // 2. This is the first peak and NO hypotheses are active (ensures primary gets initialized)
+            multiHypothesis_.createHypothesis(bpm, peaks[i].normCorrelation, nowMs,
+                                              peaks[i].lag, peaks[i].correlation);
+        }
+    }
+
     // DEBUG: Print correlation results (only when debug enabled)
     if (shouldPrintDebug) {
-        float detectedBpm = (bestLag > 0) ? 60.0f / (static_cast<float>(bestLag) / 60.0f) : 0.0f;
+        // Use adaptive timing formula (not 60 Hz assumption)
+        float detectedBpm = (bestLag > 0) ? 60000.0f / (static_cast<float>(bestLag) / samplesPerMs) : 0.0f;
         Serial.print(F("{\"type\":\"RHYTHM_DEBUG2\",\"bestLag\":"));
         Serial.print(bestLag);
         Serial.print(F(",\"maxCorr\":"));
@@ -357,48 +472,81 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
 }
 
 void AudioController::updatePhase(float dt, uint32_t nowMs) {
-    // Advance phase based on current tempo estimate
-    float phaseIncrement = dt * 1000.0f / beatPeriodMs_;
-    phase_ += phaseIncrement;
+    // Determine if we have significant audio (for hypothesis decay strategy)
+    int32_t silenceMs = static_cast<int32_t>(nowMs - lastSignificantAudioMs_);
+    if (silenceMs < 0) silenceMs = 0;  // Handle wraparound
+    bool hasSignificantAudio = (silenceMs < 1000);  // Less than 1 second of silence
 
-    // Safety check: if phase becomes NaN or infinite, reset to 0
-    if (!isfinite(phase_)) {
-        phase_ = 0.0f;
+    // === UPDATE ALL ACTIVE HYPOTHESES ===
+    for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+        if (multiHypothesis_.hypotheses[i].active) {
+            multiHypothesis_.updateHypothesis(i, dt, nowMs, hasSignificantAudio);
+        }
     }
 
-    // Wrap phase at 1.0 using fmodf (safe for large jumps, prevents infinite loops)
-    phase_ = fmodf(phase_, 1.0f);
-    if (phase_ < 0.0f) phase_ += 1.0f;
+    // === PROMOTE BEST HYPOTHESIS IF NEEDED ===
+    multiHypothesis_.promoteBestHypothesis(nowMs);
 
-    // Gradually adapt phase toward target (derived from autocorrelation)
-    if (periodicityStrength_ > activationThreshold) {
-        float phaseDiff = targetPhase_ - phase_;
+    // === USE PRIMARY HYPOTHESIS FOR OUTPUT ===
+    TempoHypothesis& primary = multiHypothesis_.getPrimary();
 
-        // Handle wraparound
-        if (phaseDiff > 0.5f) phaseDiff -= 1.0f;
-        if (phaseDiff < -0.5f) phaseDiff += 1.0f;
+    if (primary.active && primary.strength > activationThreshold) {
+        // Safety check for NaN/infinity in primary hypothesis
+        if (!isfinite(primary.phase)) {
+            primary.phase = 0.0f;
+        }
+        if (!isfinite(primary.bpm) || primary.bpm < 1.0f) {
+            primary.bpm = 120.0f;  // Safe default
+        }
 
-        // Apply gradual correction
-        phase_ += phaseDiff * phaseAdaptRate * dt * 10.0f;
+        // Use primary hypothesis values
+        phase_ = primary.phase;
+        bpm_ = primary.bpm;
+        periodicityStrength_ = primary.strength;
 
-        // Re-wrap after correction (fmodf is safe for any phase value)
+        // Gradually adapt phase toward target (derived from autocorrelation)
+        // This provides additional smoothing on top of hypothesis tracking
+        if (periodicityStrength_ > activationThreshold) {
+            float phaseDiff = targetPhase_ - phase_;
+
+            // Handle wraparound
+            if (phaseDiff > 0.5f) phaseDiff -= 1.0f;
+            if (phaseDiff < -0.5f) phaseDiff += 1.0f;
+
+            // Apply gradual correction
+            phase_ += phaseDiff * phaseAdaptRate * dt * 10.0f;
+
+            // Re-wrap after correction
+            phase_ = fmodf(phase_, 1.0f);
+            if (phase_ < 0.0f) phase_ += 1.0f;
+
+            // Update primary hypothesis phase with corrected value
+            primary.phase = phase_;
+        }
+    } else {
+        // No active primary hypothesis - fall back to legacy behavior
+        // Advance phase based on current tempo estimate
+        float phaseIncrement = dt * 1000.0f / beatPeriodMs_;
+        phase_ += phaseIncrement;
+
+        // Safety check: if phase becomes NaN or infinite, reset to 0
+        if (!isfinite(phase_)) {
+            phase_ = 0.0f;
+        }
+
+        // Wrap phase at 1.0 using fmodf
         phase_ = fmodf(phase_, 1.0f);
         if (phase_ < 0.0f) phase_ += 1.0f;
+
+        // Decay periodicity during silence
+        if (silenceMs > 3000) {
+            float decayFactor = expf(-0.138629f * dt);
+            periodicityStrength_ *= decayFactor;
+        }
     }
 
-    // Decay periodicity during silence
-    // - First 3 seconds: No decay (allows brief pauses)
-    // - After 3 seconds: 5-second half-life decay
-    // decay_factor = exp(-ln(2) * dt / 5.0) = exp(-0.138629 * dt)
-
-    // Handle potential timestamp wraparound (after ~49 days)
-    int32_t silenceMs = (int32_t)(nowMs - lastSignificantAudioMs_);
-    if (silenceMs < 0) silenceMs = 0;  // Wraparound detected
-
-    if (silenceMs > 3000) {
-        float decayFactor = expf(-0.138629f * dt);
-        periodicityStrength_ *= decayFactor;
-    }
+    // === DEBUG OUTPUT ===
+    multiHypothesis_.printDebug(nowMs);
 }
 
 // ===== OUTPUT SYNTHESIS =====
@@ -464,4 +612,304 @@ void AudioController::synthesizeRhythmStrength() {
     }
 
     control_.rhythmStrength = clampf(strength, 0.0f, 1.0f);
+}
+
+// ============================================================================
+// TempoHypothesis Implementation
+// ============================================================================
+
+void TempoHypothesis::updatePhase(float dt) {
+    float phaseIncrement = dt * 1000.0f / beatPeriodMs;
+    phase += phaseIncrement;
+
+    // Accumulate fractional beats
+    beatsSinceUpdate += phaseIncrement;
+
+    // Detect phase wraparound to increment beat count
+    // This happens when phase crosses from <1.0 to >=1.0
+    if (phase >= 1.0f && beatCount < 65535) {
+        // Count how many complete beats occurred (usually 1, but could be >1 if dt is large)
+        uint16_t beatsElapsed = static_cast<uint16_t>(phase);  // Integer part
+        beatCount += beatsElapsed;
+        if (beatCount > 65535) beatCount = 65535;  // Clamp to max
+    }
+
+    // Wrap phase to [0, 1)
+    phase = fmodf(phase, 1.0f);
+    if (phase < 0.0f) phase += 1.0f;
+}
+
+void TempoHypothesis::applyBeatDecay(float minStrengthToKeep) {
+    if (beatsSinceUpdate < 0.01f) return;  // No decay needed yet
+
+    // Phrase-aware decay: half-life = 32 beats
+    // decay_factor = exp(-ln(2) * beats / 32) = exp(-0.02166 * beats)
+    float decayFactor = expf(-0.02166f * beatsSinceUpdate);
+    strength *= decayFactor;
+
+    // Reset accumulator
+    beatsSinceUpdate = 0.0f;
+
+    // Deactivate if too weak
+    if (strength < minStrengthToKeep) {
+        active = false;
+    }
+}
+
+void TempoHypothesis::applySilenceDecay(float dt, float minStrengthToKeep) {
+    // Time-based decay: 5-second half-life
+    // decay_factor = exp(-ln(2) * dt / 5.0) = exp(-0.138629 * dt)
+    float decayFactor = expf(-0.138629f * dt);
+    strength *= decayFactor;
+
+    // Deactivate if too weak
+    if (strength < minStrengthToKeep) {
+        active = false;
+    }
+}
+
+float TempoHypothesis::computeConfidence(float strengthWeight, float consistencyWeight, float longevityWeight) const {
+    // Normalize beat count to [0, 1] over 32 beats (8 bars)
+    float normalizedLongevity = (beatCount > 32) ? 1.0f : static_cast<float>(beatCount) / 32.0f;
+
+    // Phase consistency (1.0 = perfect, 0.0 = terrible)
+    // avgPhaseError is in range [0, 1], where 0 = perfect
+    float phaseConsistency = 1.0f - avgPhaseError;
+    if (phaseConsistency < 0.0f) phaseConsistency = 0.0f;
+    if (phaseConsistency > 1.0f) phaseConsistency = 1.0f;
+
+    // Weighted combination
+    return strengthWeight * strength +
+           consistencyWeight * phaseConsistency +
+           longevityWeight * normalizedLongevity;
+}
+
+// ============================================================================
+// MultiHypothesisTracker Implementation
+// ============================================================================
+
+int MultiHypothesisTracker::createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation) {
+    int slot = findBestSlot();
+    if (slot < 0) return -1;  // No slot available (shouldn't happen)
+
+    // Store old hypothesis info for debug
+    bool wasActive = hypotheses[slot].active;
+    float oldBpm = hypotheses[slot].bpm;
+
+    TempoHypothesis& hypo = hypotheses[slot];
+    hypo.bpm = bpm;
+    hypo.beatPeriodMs = 60000.0f / bpm;
+    hypo.phase = 0.0f;
+    hypo.strength = strength;
+    hypo.confidence = strength;  // Initial confidence = strength
+    hypo.avgPhaseError = 0.5f;  // Neutral value - prevents over-confidence in new hypotheses
+    hypo.lastUpdateMs = nowMs;
+    hypo.createdMs = nowMs;
+    hypo.beatCount = 0;
+    hypo.beatsSinceUpdate = 0.0f;
+    hypo.correlationPeak = correlation;
+    hypo.lagSamples = lagSamples;
+    hypo.active = true;
+    hypo.priority = static_cast<uint8_t>(slot);
+
+    // Debug output for creation/eviction
+    if (debugLevel >= HypothesisDebugLevel::EVENTS) {
+        if (wasActive) {
+            Serial.print(F("{\"type\":\"HYPO_EVICT\",\"slot\":"));
+            Serial.print(slot);
+            Serial.print(F(",\"oldBpm\":"));
+            Serial.print(oldBpm, 1);
+            Serial.print(F(",\"newBpm\":"));
+            Serial.print(bpm, 1);
+            Serial.println(F("}"));
+        }
+        Serial.print(F("{\"type\":\"HYPO_CREATE\",\"slot\":"));
+        Serial.print(slot);
+        Serial.print(F(",\"bpm\":"));
+        Serial.print(bpm, 1);
+        Serial.print(F(",\"strength\":"));
+        Serial.print(strength, 2);
+        Serial.println(F("}"));
+    }
+
+    return slot;
+}
+
+int MultiHypothesisTracker::findBestSlot() {
+    // First, check for inactive slots
+    for (int i = 0; i < MAX_HYPOTHESES; i++) {
+        if (!hypotheses[i].active) {
+            return i;
+        }
+    }
+
+    // All slots active - find LRU (least recently updated)
+    int oldestSlot = 0;
+    uint32_t oldestTime = hypotheses[0].lastUpdateMs;
+
+    for (int i = 1; i < MAX_HYPOTHESES; i++) {
+        if (hypotheses[i].lastUpdateMs < oldestTime) {
+            oldestTime = hypotheses[i].lastUpdateMs;
+            oldestSlot = i;
+        }
+    }
+
+    // Don't evict primary if it's still strong (>0.5 strength)
+    if (oldestSlot == 0 && hypotheses[0].strength > 0.5f) {
+        // Find LRU among non-primary slots (1, 2, 3) instead
+        oldestSlot = 1;
+        oldestTime = hypotheses[1].lastUpdateMs;
+        for (int i = 2; i < MAX_HYPOTHESES; i++) {
+            if (hypotheses[i].lastUpdateMs < oldestTime) {
+                oldestTime = hypotheses[i].lastUpdateMs;
+                oldestSlot = i;
+            }
+        }
+    }
+
+    return oldestSlot;
+}
+
+int MultiHypothesisTracker::findMatchingHypothesis(float bpm) const {
+    for (int i = 0; i < MAX_HYPOTHESES; i++) {
+        if (!hypotheses[i].active) continue;
+
+        // Guard against division by zero (hypotheses[i].bpm should never be 0, but be defensive)
+        if (hypotheses[i].bpm < 1.0f) continue;
+
+        float error = absf(bpm - hypotheses[i].bpm) / hypotheses[i].bpm;
+        if (error < bpmMatchTolerance) {
+            return i;
+        }
+    }
+    return -1;  // No match
+}
+
+void MultiHypothesisTracker::updateHypothesis(int index, float dt, uint32_t nowMs, bool hasSignificantAudio) {
+    if (index < 0 || index >= MAX_HYPOTHESES) return;
+    if (!hypotheses[index].active) return;
+
+    TempoHypothesis& hypo = hypotheses[index];
+
+    // Always advance phase (for prediction)
+    hypo.updatePhase(dt);
+
+    // Update confidence
+    hypo.confidence = hypo.computeConfidence(strengthWeight, consistencyWeight, longevityWeight);
+
+    if (hasSignificantAudio) {
+        // Active music: apply beat-count decay if enough beats accumulated
+        if (hypo.beatsSinceUpdate > 1.0f) {
+            hypo.applyBeatDecay(minStrengthToKeep);
+        }
+    } else {
+        // Silence: apply time-based decay after grace period
+        int32_t silenceMs = static_cast<int32_t>(nowMs - hypo.lastUpdateMs);
+        if (silenceMs < 0) silenceMs = 0;  // Handle wraparound
+
+        if (static_cast<uint32_t>(silenceMs) > silenceGracePeriodMs) {
+            hypo.applySilenceDecay(dt, minStrengthToKeep);
+        }
+    }
+}
+
+void MultiHypothesisTracker::promoteBestHypothesis(uint32_t nowMs) {
+    // Find best non-primary hypothesis
+    int bestSlot = 0;
+    float bestConfidence = hypotheses[0].confidence;
+
+    for (int i = 1; i < MAX_HYPOTHESES; i++) {
+        if (!hypotheses[i].active) continue;
+
+        if (hypotheses[i].confidence > bestConfidence) {
+            bestConfidence = hypotheses[i].confidence;
+            bestSlot = i;
+        }
+    }
+
+    // Promote if significantly better and has enough history
+    if (bestSlot != 0 &&
+        bestConfidence > hypotheses[0].confidence + promotionThreshold &&
+        hypotheses[bestSlot].beatCount >= minBeatsBeforePromotion) {
+
+        // Debug output
+        if (debugLevel >= HypothesisDebugLevel::EVENTS) {
+            Serial.print(F("{\"type\":\"HYPO_PROMOTE\",\"from\":"));
+            Serial.print(bestSlot);
+            Serial.print(F(",\"to\":0,\"bpm\":"));
+            Serial.print(hypotheses[bestSlot].bpm, 1);
+            Serial.print(F(",\"conf\":"));
+            Serial.print(bestConfidence, 2);
+            Serial.println(F("}"));
+        }
+
+        // Swap slots (not just pointers - actually swap data)
+        // NOTE: createdMs, lastUpdateMs, and beatCount retain their original values
+        // This preserves the hypothesis's full history (when it was born, not when promoted)
+        TempoHypothesis temp = hypotheses[0];
+        hypotheses[0] = hypotheses[bestSlot];
+        hypotheses[bestSlot] = temp;
+
+        // Update priority values to reflect new slot positions
+        hypotheses[0].priority = 0;
+        hypotheses[bestSlot].priority = static_cast<uint8_t>(bestSlot);
+    }
+}
+
+void MultiHypothesisTracker::printDebug(uint32_t nowMs, const char* eventType, int slotIndex) const {
+    if (debugLevel == HypothesisDebugLevel::OFF) return;
+
+    // EVENT-level messages are printed immediately by the calling functions
+    // (createHypothesis, promoteBestHypothesis)
+
+    // SUMMARY and DETAILED are rate-limited
+    if (debugLevel >= HypothesisDebugLevel::SUMMARY) {
+        // Rate limit to every 2 seconds
+        if (nowMs - lastDebugPrintMs_ < 2000) return;
+        const_cast<MultiHypothesisTracker*>(this)->lastDebugPrintMs_ = nowMs;
+
+        if (debugLevel == HypothesisDebugLevel::SUMMARY) {
+            // Print primary hypothesis only
+            const TempoHypothesis& primary = hypotheses[0];
+            if (primary.active) {
+                Serial.print(F("{\"type\":\"HYPO_PRIMARY\",\"bpm\":"));
+                Serial.print(primary.bpm, 1);
+                Serial.print(F(",\"phase\":"));
+                Serial.print(primary.phase, 2);
+                Serial.print(F(",\"strength\":"));
+                Serial.print(primary.strength, 2);
+                Serial.print(F(",\"conf\":"));
+                Serial.print(primary.confidence, 2);
+                Serial.print(F(",\"beats\":"));
+                Serial.print(primary.beatCount);
+                Serial.println(F("}"));
+            }
+        } else if (debugLevel == HypothesisDebugLevel::DETAILED) {
+            // Print all hypotheses
+            Serial.print(F("{\"type\":\"HYPO_ALL\",\"h\":["));
+            for (int i = 0; i < MAX_HYPOTHESES; i++) {
+                if (i > 0) Serial.print(F(","));
+                if (hypotheses[i].active) {
+                    Serial.print(F("{\"s\":"));
+                    Serial.print(i);
+                    Serial.print(F(",\"bpm\":"));
+                    Serial.print(hypotheses[i].bpm, 1);
+                    Serial.print(F(",\"ph\":"));
+                    Serial.print(hypotheses[i].phase, 2);
+                    Serial.print(F(",\"str\":"));
+                    Serial.print(hypotheses[i].strength, 2);
+                    Serial.print(F(",\"conf\":"));
+                    Serial.print(hypotheses[i].confidence, 2);
+                    Serial.print(F(",\"b\":"));
+                    Serial.print(hypotheses[i].beatCount);
+                    Serial.print(F("}"));
+                } else {
+                    Serial.print(F("{\"s\":"));
+                    Serial.print(i);
+                    Serial.print(F(",\"inactive\":true}"));
+                }
+            }
+            Serial.println(F("]}"));
+        }
+    }
 }

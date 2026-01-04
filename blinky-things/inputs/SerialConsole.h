@@ -119,6 +119,7 @@ private:
     bool handleEffectCommand(const char* cmd);
     bool handleLogCommand(const char* cmd);
     bool handleEnsembleCommand(const char* cmd);  // Ensemble detector configuration
+    bool handleHypothesisCommand(const char* cmd);  // Multi-hypothesis tracking commands
 
     // Settings registration for other generators
     void registerWaterSettings(WaterParams* wp);
