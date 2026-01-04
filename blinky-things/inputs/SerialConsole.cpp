@@ -1512,7 +1512,18 @@ bool SerialConsole::handleHypothesisCommand(const char* cmd) {
             Serial.print(h.priority);
             Serial.print(F("}"));
         }
-        Serial.print(F("],\"primaryIndex\":0"));
+
+        // Find primary hypothesis (priority == 0)
+        int primaryIndex = 0;
+        for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+            if (tracker.hypotheses[i].priority == 0) {
+                primaryIndex = i;
+                break;
+            }
+        }
+
+        Serial.print(F("],\"primaryIndex\":"));
+        Serial.print(primaryIndex);
         Serial.println(F("}"));
         return true;
     }

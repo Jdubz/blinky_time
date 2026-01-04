@@ -896,14 +896,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         // Format for MCP response
+        const primaryIdx = parsed.primaryIndex || 0;
         const formatted = {
           hypotheses: parsed.hypotheses || [],
-          primaryIndex: parsed.primaryIndex || 0,
+          primaryIndex: primaryIdx,
           summary: {
             activeCount: parsed.hypotheses.filter((h: { active: boolean }) => h.active).length,
-            primaryBpm: parsed.hypotheses[0]?.bpm || null,
-            primaryConfidence: parsed.hypotheses[0]?.confidence || null,
-            primaryBeats: parsed.hypotheses[0]?.beatCount || null,
+            primaryBpm: parsed.hypotheses[primaryIdx]?.bpm || null,
+            primaryConfidence: parsed.hypotheses[primaryIdx]?.confidence || null,
+            primaryBeats: parsed.hypotheses[primaryIdx]?.beatCount || null,
           },
         };
 

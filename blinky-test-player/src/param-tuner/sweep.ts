@@ -208,8 +208,7 @@ export async function runSweeps(
           result,
           patterns,
           refinementSteps,
-          runner,
-          stateManager
+          runner
         );
 
         // Update result with refined optimal
@@ -255,8 +254,7 @@ async function performAdaptiveRefinement(
   initialResult: SweepResult,
   patterns: string[],
   steps: number,
-  runner: TestRunner,
-  stateManager: StateManager
+  runner: TestRunner
 ): Promise<{
   optimal: { value: number; avgF1: number };
   refinementPoints: SweepPoint[];

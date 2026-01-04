@@ -164,7 +164,7 @@ export class HypothesisValidator {
   }
 
   /**
-   * Send command and get response
+   * Send command and get response with polling and timeout
    */
   private async sendCommand(cmd: string): Promise<string> {
     if (!this.port) {
@@ -174,10 +174,39 @@ export class HypothesisValidator {
     this.responseBuffer = [];
     this.port.write(cmd + '\n');
 
-    // Wait for response
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Poll for response with timeout
+    const startTime = Date.now();
+    const pollInterval = 50; // Check every 50ms
 
-    return this.responseBuffer.join('\n');
+    while (Date.now() - startTime < COMMAND_TIMEOUT_MS) {
+      if (this.responseBuffer.length > 0) {
+        // Response received, return it
+        return this.responseBuffer.join('\n');
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+
+    throw new Error(`Command timeout after ${COMMAND_TIMEOUT_MS}ms: ${cmd}`);
+  }
+
+  /**
+   * Extract JSON object from response using balanced brace counting
+   */
+  private extractJson(response: string): string | null {
+    const start = response.indexOf('{');
+    if (start === -1) return null;
+
+    let depth = 0;
+    for (let i = start; i < response.length; i++) {
+      if (response[i] === '{') depth++;
+      else if (response[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          return response.substring(start, i + 1);
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -186,13 +215,13 @@ export class HypothesisValidator {
   async getHypothesisState(): Promise<HypothesisState> {
     const response = await this.sendCommand('json hypotheses');
 
-    // Find JSON in response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error(`Failed to parse hypothesis state: ${response}`);
+    // Extract JSON using balanced brace counting
+    const jsonStr = this.extractJson(response);
+    if (!jsonStr) {
+      throw new Error(`Failed to extract JSON from response: ${response}`);
     }
 
-    const data = JSON.parse(jsonMatch[0]);
+    const data = JSON.parse(jsonStr);
 
     return {
       timestampMs: Date.now(),
@@ -207,54 +236,69 @@ export class HypothesisValidator {
   async runTest(pattern: string, expectedBpm: number | null = null, gain?: number): Promise<HypothesisValidationResult> {
     const states: HypothesisState[] = [];
     const startTime = Date.now();
+    let pollInterval: NodeJS.Timeout | null = null;
 
-    // Start audio streaming to enable hypothesis tracking
-    await this.sendCommand('stream start');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      // Start audio streaming to enable hypothesis tracking
+      await this.sendCommand('stream start');
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
-    // Lock hardware gain if specified
-    if (gain !== undefined) {
-      await this.sendCommand(`set hwgain ${gain}`);
-    }
-
-    // Start pattern playback
-    const player = spawn('node', [TEST_PLAYER_PATH, 'play', pattern], {
-      stdio: 'ignore',
-    });
-
-    // Poll hypothesis state every 500ms
-    const pollInterval = setInterval(async () => {
-      try {
-        const state = await this.getHypothesisState();
-        states.push(state);
-      } catch (err) {
-        console.error('Failed to poll hypothesis state:', err);
+      // Lock hardware gain if specified
+      if (gain !== undefined) {
+        await this.sendCommand(`set hwgain ${gain}`);
       }
-    }, 500);
 
-    // Wait for pattern to complete
-    await new Promise<void>((resolve) => {
-      player.on('exit', () => resolve());
-    });
+      // Start pattern playback
+      const player = spawn('node', [TEST_PLAYER_PATH, 'play', pattern], {
+        stdio: 'ignore',
+      });
 
-    clearInterval(pollInterval);
+      // Poll hypothesis state every 500ms
+      pollInterval = setInterval(async () => {
+        try {
+          const state = await this.getHypothesisState();
+          states.push(state);
+        } catch (err) {
+          console.error('Failed to poll hypothesis state:', err);
+        }
+      }, 500);
 
-    // Get final state
-    const finalState = await this.getHypothesisState();
-    states.push(finalState);
+      // Wait for pattern to complete
+      await new Promise<void>((resolve) => {
+        player.on('exit', () => resolve());
+      });
 
-    // Unlock hardware gain
-    if (gain !== undefined) {
-      await this.sendCommand('set hwgain 255');
+      // Get final state
+      const finalState = await this.getHypothesisState();
+      states.push(finalState);
+
+      const durationMs = Date.now() - startTime;
+
+      // Analyze results
+      return this.analyzeResults(pattern, states, durationMs, expectedBpm, startTime);
+
+    } finally {
+      // Ensure cleanup happens even on error
+      if (pollInterval !== null) {
+        clearInterval(pollInterval);
+      }
+
+      // Unlock hardware gain
+      if (gain !== undefined) {
+        try {
+          await this.sendCommand('set hwgain 255');
+        } catch (err) {
+          console.error('Failed to unlock hardware gain:', err);
+        }
+      }
+
+      // Stop streaming
+      try {
+        await this.sendCommand('stream stop');
+      } catch (err) {
+        console.error('Failed to stop streaming:', err);
+      }
     }
-
-    // Stop streaming
-    await this.sendCommand('stream stop');
-
-    const durationMs = Date.now() - startTime;
-
-    // Analyze results
-    return this.analyzeResults(pattern, states, durationMs, expectedBpm);
   }
 
   /**
@@ -264,10 +308,11 @@ export class HypothesisValidator {
     pattern: string,
     states: HypothesisState[],
     durationMs: number,
-    expectedBpm: number | null
+    expectedBpm: number | null,
+    startTime: number
   ): HypothesisValidationResult {
     // Track hypothesis creation/promotion
-    const seenHypotheses = new Set<number>();
+    const seenHypotheses = new Set<string>();
     let maxConcurrent = 0;
     let promotions = 0;
     let firstHypothesisTime: number | null = null;
@@ -288,20 +333,24 @@ export class HypothesisValidator {
         firstHypothesisTime = state.timestampMs;
       }
 
-      // Track hypothesis creation
+      // Track hypothesis creation (use string key to avoid collisions)
       for (const h of activeHypos) {
-        const key = h.slot * 1000 + Math.round(h.bpm);
+        const key = `${h.slot}-${Math.round(h.bpm)}`;
         if (!seenHypotheses.has(key)) {
           seenHypotheses.add(key);
         }
       }
 
-      // Track promotions (when a non-slot-0 hypothesis moves to slot 0)
+      // Track promotions (when primary hypothesis changes to a different slot)
       if (i > 0 && activeHypos.length > 0) {
-        const prevPrimary = states[i - 1].hypotheses[0];
-        const currPrimary = state.hypotheses[0];
-        if (prevPrimary.active && currPrimary.active &&
-            Math.abs(prevPrimary.bpm - currPrimary.bpm) > 5) {
+        const prevPrimaryIdx = states[i - 1].primaryIndex;
+        const currPrimaryIdx = state.primaryIndex;
+        const prevPrimary = states[i - 1].hypotheses[prevPrimaryIdx];
+        const currPrimary = state.hypotheses[currPrimaryIdx];
+
+        // Promotion occurs when primary slot changes and both are active
+        if (prevPrimary?.active && currPrimary?.active &&
+            prevPrimary.slot !== currPrimary.slot) {
           promotions++;
         }
       }
@@ -342,7 +391,7 @@ export class HypothesisValidator {
         maxConcurrent,
         totalCreated: seenHypotheses.size,
         promotions,
-        timeToFirstMs: firstHypothesisTime,
+        timeToFirstMs: firstHypothesisTime ? firstHypothesisTime - startTime : null,
       },
       primary: {
         avgBpm,

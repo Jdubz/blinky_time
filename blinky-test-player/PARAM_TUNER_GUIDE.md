@@ -5,13 +5,18 @@
 
 ## Overview
 
-The param-tuner supports **39 parameters** for audio analysis optimization with **selective tuning** capabilities for efficient parameter optimization.
+The param-tuner supports **37 parameters** for audio analysis optimization with **selective tuning** capabilities for efficient parameter optimization.
 
-**Total Testable Parameters**: 39
+**Total Testable Parameters**: 37
 - **Ensemble Detectors**: 18 (6 thresholds + 6 weights + 6 agreement boosts)
-- **Rhythm Tracking**: 7 (activation, phase, pulse modulation, BPM range)
-- **Multi-Hypothesis**: 12 (peak detection, promotion, decay, confidence weights)
-- **Audio/AGC**: 2 (window normalization)
+- **Rhythm Tracking**: 19 (includes activation, phase, pulse, BPM range, multi-hypothesis tracking)
+  - AudioController v3 parameters: 12 (peak detection, promotion, decay, confidence weights)
+  - Legacy rhythm parameters: 5 (musicthresh, phaseadapt, pulseboost, pulsesuppress, energyboost)
+  - BPM range: 2 (bpmmin, bpmmax)
+
+**Detector-Specific Parameters** (11 additional): These are exposed via SerialConsole for manual tuning but **not included in automated sweeps**:
+- Attack multipliers, min frequency bins, HFC power, band ranges
+- Use `set drummer_attackmult`, `set spectral_minbin`, etc. for manual adjustment
 
 **Testing Time**: ~10 minutes per parameter (8 values × 8 patterns × 10s)
 
@@ -113,16 +118,16 @@ Tune all parameters for a specific subsystem:
 # Tune all ensemble detector parameters (18 params, ~3 hours)
 param-tuner sweep --port COM5 --modes ensemble
 
-# Tune all rhythm tracking parameters (7 params, ~70 min)
+# Tune all rhythm tracking parameters (19 params, ~3.2 hours)
 param-tuner sweep --port COM5 --modes rhythm
 
-# Tune multiple modes (25 params, ~4 hours)
+# Tune all parameters (37 params, ~6.2 hours)
 param-tuner sweep --port COM5 --modes ensemble,rhythm
 ```
 
 **Estimated Time**:
 - `--modes ensemble`: 18 params × 10 min = **~3 hours**
-- `--modes rhythm`: 7 params × 10 min = **~70 minutes**
+- `--modes rhythm`: 19 params × 10 min = **~3.2 hours**
 
 ### 3. Combined Filtering
 
@@ -178,7 +183,7 @@ Tune all ensemble and rhythm parameters (comprehensive):
 param-tuner sweep --port COM5 --modes ensemble,rhythm
 ```
 
-**Warning:** This is a full optimization and will take ~6 hours (39 params × 10 min).
+**Warning:** This is a full optimization and will take ~6.2 hours (37 params × 10 min).
 
 ### Scenario 5: Bass-Heavy Music Optimization (~30 min)
 
@@ -392,11 +397,11 @@ After tuning with selective parameters:
 ## Summary
 
 The extended param-tuner provides:
-- ✅ **30 parameters** across all musical analysis subsystems (47 total firmware params)
+- ✅ **37 testable parameters** across ensemble and rhythm analysis (48 total firmware params including 11 detector-specific manual-only params)
 - ✅ **Selective tuning** via --params and --modes flags
 - ✅ **~30 minute chunks** for efficient parameter optimization
 - ✅ **Full resume support** for interrupted sessions
-- ✅ **Comprehensive coverage** of transient detection, MusicMode, and RhythmAnalyzer
+- ✅ **Comprehensive coverage** of ensemble detection and multi-hypothesis tempo tracking
 - ✅ **5 detection modes**: Drummer, Bass Band, HFC, Spectral Flux, Hybrid
 
 Param-tuner focuses on musical analysis parameters only. Fire generator aesthetics (cooling, sparks, heat) and basic audio processing (peaktau, releasetau, hwtarget) are configured separately via the UI or serial console.

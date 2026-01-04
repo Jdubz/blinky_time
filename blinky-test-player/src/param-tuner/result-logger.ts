@@ -123,7 +123,7 @@ export class ResultLogger {
     summary += `| Parameter | Mode | Optimal Value | F1 Score | Refined | Points Tested | Date |\n`;
     summary += `|-----------|------|---------------|----------|---------|---------------|------|\n`;
 
-    for (const entry of recent.reverse()) {
+    for (const entry of [...recent].reverse()) {
       const date = new Date(entry.timestamp).toLocaleDateString();
       const refined = entry.refinementUsed ? 'Yes' : 'No';
       summary += `| ${entry.parameter} | ${entry.mode} | ${entry.optimalValue} | ${entry.optimalF1.toFixed(3)} | ${refined} | ${entry.totalPointsTested} | ${date} |\n`;
