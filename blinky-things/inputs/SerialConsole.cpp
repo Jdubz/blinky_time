@@ -184,26 +184,18 @@ void SerialConsole::registerDetectionSettings() {
 
 // === ENSEMBLE DETECTOR SETTINGS ===
 // New ensemble-based detection system with 6 concurrent detectors
-// Uses setDetectorEnabled/setDetectorWeight/setDetectorThreshold via AudioController
+// Detector-specific parameters are accessed via "show" and "set" commands in handleEnsembleCommand()
+// Common parameters (weight, threshold, enabled) use setDetectorEnabled/Weight/Threshold
 void SerialConsole::registerEnsembleSettings() {
-    // Ensemble settings are configured via AudioController methods
-    // See AudioController::setDetectorEnabled(), setDetectorWeight(), setDetectorThreshold()
-    //
-    // Commands available via "show detectors" and direct method calls:
-    // - Detector types: drummer, spectral, hfc, bass, complex, mel
-    // - Each can be enabled/disabled and have weight/threshold adjusted
-    //
-    // For now, the legacy detectmode command continues to work
-    // Future: Add direct parameter bindings for ensemble weights
-
-    // Note: When audioCtrl_ is available, ensemble configuration
-    // is accessible via audioCtrl_->getEnsemble()
+    // Detector-specific parameters handled via handleEnsembleCommand()
+    // See: set drummer_attackmult, set spectral_minbin, etc.
 }
 
 // === RHYTHM TRACKING SETTINGS (AudioController) ===
 void SerialConsole::registerRhythmSettings() {
     if (!audioCtrl_) return;
 
+    // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
         "Rhythm activation threshold (0-1)", 0.0f, 1.0f);
     settings_.registerFloat("phaseadapt", &audioCtrl_->phaseAdaptRate, "rhythm",
@@ -218,6 +210,43 @@ void SerialConsole::registerRhythmSettings() {
         "Minimum BPM to detect", 40.0f, 120.0f);
     settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
         "Maximum BPM to detect", 80.0f, 240.0f);
+
+    // Multi-hypothesis tracker parameters
+    MultiHypothesisTracker& mh = audioCtrl_->getMultiHypothesis();
+
+    // Peak detection
+    settings_.registerFloat("minpeakstr", &mh.minPeakStrength, "hypothesis",
+        "Min autocorr peak strength", 0.1f, 0.8f);
+    settings_.registerFloat("minrelheight", &mh.minRelativePeakHeight, "hypothesis",
+        "Min relative peak height", 0.5f, 1.0f);
+
+    // Hypothesis matching
+    settings_.registerFloat("bpmmatchtol", &mh.bpmMatchTolerance, "hypothesis",
+        "BPM match tolerance (fraction)", 0.01f, 0.2f);
+
+    // Promotion
+    settings_.registerFloat("promothresh", &mh.promotionThreshold, "hypothesis",
+        "Confidence advantage for promotion", 0.05f, 0.5f);
+    settings_.registerUint16("minbeats", &mh.minBeatsBeforePromotion, "hypothesis",
+        "Min beats before promotion", 4, 32);
+
+    // Decay
+    settings_.registerFloat("phrasehalf", &mh.phraseHalfLifeBeats, "hypothesis",
+        "Phrase decay half-life (beats)", 8.0f, 64.0f);
+    settings_.registerFloat("minstr", &mh.minStrengthToKeep, "hypothesis",
+        "Min strength to keep hypothesis", 0.05f, 0.3f);
+    settings_.registerUint32("silencegrace", &mh.silenceGracePeriodMs, "hypothesis",
+        "Silence grace period (ms)", 1000, 10000);
+    settings_.registerFloat("silencehalf", &mh.silenceDecayHalfLifeSec, "hypothesis",
+        "Silence decay half-life (s)", 2.0f, 15.0f);
+
+    // Confidence weighting
+    settings_.registerFloat("strweight", &mh.strengthWeight, "hypothesis",
+        "Strength weight in confidence", 0.0f, 1.0f);
+    settings_.registerFloat("consweight", &mh.consistencyWeight, "hypothesis",
+        "Consistency weight in confidence", 0.0f, 1.0f);
+    settings_.registerFloat("longweight", &mh.longevityWeight, "hypothesis",
+        "Longevity weight in confidence", 0.0f, 1.0f);
 }
 
 void SerialConsole::update() {
@@ -1123,6 +1152,180 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
 
+    // === DETECTOR-SPECIFIC PARAMETERS ===
+
+    // Drummer: attackmult, avgtau
+    if (strncmp(cmd, "set drummer_attackmult ", 23) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 23);
+        audioCtrl_->getEnsemble().getDrummer().setAttackMultiplier(value);
+        Serial.print(F("OK drummer_attackmult="));
+        Serial.println(value, 3);
+        return true;
+    }
+    if (strncmp(cmd, "set drummer_avgtau ", 19) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 19);
+        audioCtrl_->getEnsemble().getDrummer().setAverageTau(value);
+        Serial.print(F("OK drummer_avgtau="));
+        Serial.println(value, 3);
+        return true;
+    }
+    if (strcmp(cmd, "show drummer_attackmult") == 0 || strcmp(cmd, "drummer_attackmult") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("drummer_attackmult="));
+        Serial.println(audioCtrl_->getEnsemble().getDrummer().getAttackMultiplier(), 3);
+        return true;
+    }
+    if (strcmp(cmd, "show drummer_avgtau") == 0 || strcmp(cmd, "drummer_avgtau") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("drummer_avgtau="));
+        Serial.println(audioCtrl_->getEnsemble().getDrummer().getAverageTau(), 3);
+        return true;
+    }
+
+    // SpectralFlux: minbin, maxbin
+    if (strncmp(cmd, "set spectral_minbin ", 20) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 20);
+        SpectralFluxDetector& d = audioCtrl_->getEnsemble().getSpectralFlux();
+        d.setAnalysisRange(value, d.getMaxBin());
+        Serial.print(F("OK spectral_minbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strncmp(cmd, "set spectral_maxbin ", 20) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 20);
+        SpectralFluxDetector& d = audioCtrl_->getEnsemble().getSpectralFlux();
+        d.setAnalysisRange(d.getMinBin(), value);
+        Serial.print(F("OK spectral_maxbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strcmp(cmd, "show spectral_minbin") == 0 || strcmp(cmd, "spectral_minbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("spectral_minbin="));
+        Serial.println(audioCtrl_->getEnsemble().getSpectralFlux().getMinBin());
+        return true;
+    }
+    if (strcmp(cmd, "show spectral_maxbin") == 0 || strcmp(cmd, "spectral_maxbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("spectral_maxbin="));
+        Serial.println(audioCtrl_->getEnsemble().getSpectralFlux().getMaxBin());
+        return true;
+    }
+
+    // HFC: minbin, maxbin, attackmult
+    if (strncmp(cmd, "set hfc_minbin ", 15) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 15);
+        HFCDetector& d = audioCtrl_->getEnsemble().getHFC();
+        d.setAnalysisRange(value, d.getMaxBin());
+        Serial.print(F("OK hfc_minbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strncmp(cmd, "set hfc_maxbin ", 15) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 15);
+        HFCDetector& d = audioCtrl_->getEnsemble().getHFC();
+        d.setAnalysisRange(d.getMinBin(), value);
+        Serial.print(F("OK hfc_maxbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strncmp(cmd, "set hfc_attackmult ", 19) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 19);
+        audioCtrl_->getEnsemble().getHFC().setAttackMultiplier(value);
+        Serial.print(F("OK hfc_attackmult="));
+        Serial.println(value, 3);
+        return true;
+    }
+    if (strcmp(cmd, "show hfc_minbin") == 0 || strcmp(cmd, "hfc_minbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("hfc_minbin="));
+        Serial.println(audioCtrl_->getEnsemble().getHFC().getMinBin());
+        return true;
+    }
+    if (strcmp(cmd, "show hfc_maxbin") == 0 || strcmp(cmd, "hfc_maxbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("hfc_maxbin="));
+        Serial.println(audioCtrl_->getEnsemble().getHFC().getMaxBin());
+        return true;
+    }
+    if (strcmp(cmd, "show hfc_attackmult") == 0 || strcmp(cmd, "hfc_attackmult") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("hfc_attackmult="));
+        Serial.println(audioCtrl_->getEnsemble().getHFC().getAttackMultiplier(), 3);
+        return true;
+    }
+
+    // BassBand: minbin, maxbin
+    if (strncmp(cmd, "set bass_minbin ", 16) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 16);
+        BassBandDetector& d = audioCtrl_->getEnsemble().getBassBand();
+        d.setAnalysisRange(value, d.getMaxBin());
+        Serial.print(F("OK bass_minbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strncmp(cmd, "set bass_maxbin ", 16) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 16);
+        BassBandDetector& d = audioCtrl_->getEnsemble().getBassBand();
+        d.setAnalysisRange(d.getMinBin(), value);
+        Serial.print(F("OK bass_maxbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strcmp(cmd, "show bass_minbin") == 0 || strcmp(cmd, "bass_minbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bass_minbin="));
+        Serial.println(audioCtrl_->getEnsemble().getBassBand().getMinBin());
+        return true;
+    }
+    if (strcmp(cmd, "show bass_maxbin") == 0 || strcmp(cmd, "bass_maxbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bass_maxbin="));
+        Serial.println(audioCtrl_->getEnsemble().getBassBand().getMaxBin());
+        return true;
+    }
+
+    // ComplexDomain: minbin, maxbin
+    if (strncmp(cmd, "set complex_minbin ", 19) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 19);
+        ComplexDomainDetector& d = audioCtrl_->getEnsemble().getComplexDomain();
+        d.setAnalysisRange(value, d.getMaxBin());
+        Serial.print(F("OK complex_minbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strncmp(cmd, "set complex_maxbin ", 19) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 19);
+        ComplexDomainDetector& d = audioCtrl_->getEnsemble().getComplexDomain();
+        d.setAnalysisRange(d.getMinBin(), value);
+        Serial.print(F("OK complex_maxbin="));
+        Serial.println(value);
+        return true;
+    }
+    if (strcmp(cmd, "show complex_minbin") == 0 || strcmp(cmd, "complex_minbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("complex_minbin="));
+        Serial.println(audioCtrl_->getEnsemble().getComplexDomain().getMinBin());
+        return true;
+    }
+    if (strcmp(cmd, "show complex_maxbin") == 0 || strcmp(cmd, "complex_maxbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("complex_maxbin="));
+        Serial.println(audioCtrl_->getEnsemble().getComplexDomain().getMaxBin());
+        return true;
+    }
+
     return false;
 }
 
@@ -1277,6 +1480,51 @@ bool SerialConsole::handleHypothesisCommand(const char* cmd) {
             case HypothesisDebugLevel::DETAILED: Serial.print(F("DETAILED")); break;
         }
         Serial.println(F(")"));
+        return true;
+    }
+
+    // "json hypotheses" - output all hypotheses as JSON
+    if (strcmp(cmd, "json hypotheses") == 0) {
+        Serial.print(F("{\"hypotheses\":["));
+        bool first = true;
+        for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+            if (!first) Serial.print(F(","));
+            first = false;
+
+            const TempoHypothesis& h = tracker.hypotheses[i];
+            Serial.print(F("{\"slot\":"));
+            Serial.print(i);
+            Serial.print(F(",\"active\":"));
+            Serial.print(h.active ? F("true") : F("false"));
+            Serial.print(F(",\"bpm\":"));
+            Serial.print(h.bpm, 1);
+            Serial.print(F(",\"phase\":"));
+            Serial.print(h.phase, 3);
+            Serial.print(F(",\"strength\":"));
+            Serial.print(h.strength, 3);
+            Serial.print(F(",\"confidence\":"));
+            Serial.print(h.confidence, 3);
+            Serial.print(F(",\"beatCount\":"));
+            Serial.print(h.beatCount);
+            Serial.print(F(",\"avgPhaseError\":"));
+            Serial.print(h.avgPhaseError, 4);
+            Serial.print(F(",\"priority\":"));
+            Serial.print(h.priority);
+            Serial.print(F("}"));
+        }
+
+        // Find primary hypothesis (priority == 0)
+        int primaryIndex = 0;
+        for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+            if (tracker.hypotheses[i].priority == 0) {
+                primaryIndex = i;
+                break;
+            }
+        }
+
+        Serial.print(F("],\"primaryIndex\":"));
+        Serial.print(primaryIndex);
+        Serial.println(F("}"));
         return true;
     }
 

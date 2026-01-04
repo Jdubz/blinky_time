@@ -352,6 +352,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: 'get_hypotheses',
+        description: 'Get multi-hypothesis tracker state including all 4 hypothesis slots (BPM, phase, confidence, strength, beatCount). Useful for validating tempo tracking behavior and hypothesis promotion.',
+        inputSchema: {
+          type: 'object',
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -866,6 +874,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: JSON.stringify(response, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'get_hypotheses': {
+        if (!serial.isConnected()) {
+          throw new Error('Not connected to a device');
+        }
+
+        // Send "json hypotheses" command and parse response
+        const response = await serial.sendCommand('json hypotheses');
+
+        // Parse JSON response
+        let parsed;
+        try {
+          parsed = JSON.parse(response);
+        } catch (e) {
+          throw new Error(`Failed to parse hypothesis data: ${response}`);
+        }
+
+        // Format for MCP response
+        const primaryIdx = parsed.primaryIndex || 0;
+        const formatted = {
+          hypotheses: parsed.hypotheses || [],
+          primaryIndex: primaryIdx,
+          summary: {
+            activeCount: parsed.hypotheses.filter((h: { active: boolean }) => h.active).length,
+            primaryBpm: parsed.hypotheses[primaryIdx]?.bpm || null,
+            primaryConfidence: parsed.hypotheses[primaryIdx]?.confidence || null,
+            primaryBeats: parsed.hypotheses[primaryIdx]?.beatCount || null,
+          },
+        };
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(formatted, null, 2),
             },
           ],
         };

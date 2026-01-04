@@ -1233,6 +1233,38 @@ export const SILENCE_GAPS: TestPattern = {
 };
 
 /**
+ * Half-time ambiguity - tests hypothesis tracking of tempos that could be 60 or 120 BPM
+ * Kicks only on beats 1 and 3 (of a 4/4 bar), creating ambiguity:
+ * - Could be interpreted as 120 BPM (half note kicks)
+ * - Could be interpreted as 60 BPM (quarter note kicks)
+ * Tests that the multi-hypothesis tracker creates both hypotheses and selects the correct one.
+ */
+export const HALF_TIME_AMBIGUITY: TestPattern = {
+  id: 'half-time-ambiguity',
+  name: 'Half-Time Ambiguity',
+  description: 'Kicks on 1 and 3 only - could be 60 or 120 BPM (tests multi-hypothesis tracking)',
+  durationMs: 32000, // 32 seconds
+  bpm: 120, // Actual BPM (but could be interpreted as 60 BPM)
+  hits: (() => {
+    const hits: GroundTruthHit[] = [];
+    const bpm = 120;
+    const bars = 16; // 16 bars at 120 BPM = 32 seconds
+
+    for (let bar = 0; bar < bars; bar++) {
+      const barOffset = bar * 4; // 4 beats per bar
+
+      // Kick ONLY on beats 1 and 3 (half notes at 120 BPM, or quarter notes at 60 BPM)
+      hits.push(hit(beatToTime(barOffset + 0, bpm), 'kick', 0.9));
+      hits.push(hit(beatToTime(barOffset + 2, bpm), 'kick', 0.9));
+
+      // No snare or hats - pure ambiguity
+    }
+
+    return hits.sort((a, b) => a.time - b.time);
+  })(),
+};
+
+/**
  * All available test patterns
  */
 export const TEST_PATTERNS: TestPattern[] = [
@@ -1279,6 +1311,7 @@ export const TEST_PATTERNS: TestPattern[] = [
   NON_MUSICAL_RANDOM,
   NON_MUSICAL_CLUSTERED,
   SILENCE_GAPS,
+  HALF_TIME_AMBIGUITY,
 ];
 
 /**
@@ -1540,11 +1573,11 @@ export const PATTERN_REGISTRY: PatternRegistry = {
   }),
 
   'tempo-ramp': extendPattern(TEMPO_RAMP, {
-    ...musicModeMeta(TEMPO_RAMP, ['pllkp', 'pllki', 'combdecay'], 7),
+    ...musicModeMeta(TEMPO_RAMP, ['minpeakstr', 'promothresh', 'minbeats', 'bpmmatchtol'], 9),
   }),
 
   'tempo-sudden': extendPattern(TEMPO_SUDDEN, {
-    ...musicModeMeta(TEMPO_SUDDEN, ['pllkp', 'combconf', 'confdec'], 8),
+    ...musicModeMeta(TEMPO_SUDDEN, ['promothresh', 'minbeats', 'phrasehalf', 'minpeakstr'], 10),
   }),
 
   'phase-on-beat': extendPattern(PHASE_ON_BEAT, {
@@ -1564,7 +1597,11 @@ export const PATTERN_REGISTRY: PatternRegistry = {
   }),
 
   'silence-gaps': extendPattern(SILENCE_GAPS, {
-    ...musicModeMeta(SILENCE_GAPS, ['musicmissed', 'misspenalty'], 8),
+    ...musicModeMeta(SILENCE_GAPS, ['silencegrace', 'silencehalf', 'phrasehalf'], 9),
+  }),
+
+  'half-time-ambiguity': extendPattern(HALF_TIME_AMBIGUITY, {
+    ...musicModeMeta(HALF_TIME_AMBIGUITY, ['minpeakstr', 'minrelheight', 'bpmmatchtol', 'promothresh'], 9),
   }),
 };
 
