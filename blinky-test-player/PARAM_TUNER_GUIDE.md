@@ -1,68 +1,88 @@
 # Parameter Tuner Guide - Selective Tuning
 
+**Last Updated:** January 2026
+**Architecture:** AudioController v3 (Multi-hypothesis tempo tracking)
+
 ## Overview
 
-The param-tuner supports **30 parameters** across all musical analysis subsystems with **selective tuning** capabilities for efficient parameter optimization in ~30 minute chunks.
+The param-tuner supports **39 parameters** for audio analysis optimization with **selective tuning** capabilities for efficient parameter optimization.
 
-**Total Firmware Parameters**: 47 (Fire: 13, Audio: 2, AGC: 1, Musical Analysis: 30, Mode Selection: 1)
-**Param-Tuner Focus**: 30 musical analysis parameters only
+**Total Testable Parameters**: 39
+- **Ensemble Detectors**: 18 (6 thresholds + 6 weights + 6 agreement boosts)
+- **Rhythm Tracking**: 7 (activation, phase, pulse modulation, BPM range)
+- **Multi-Hypothesis**: 12 (peak detection, promotion, decay, confidence weights)
+- **Audio/AGC**: 2 (window normalization)
+
+**Testing Time**: ~10 minutes per parameter (8 values × 8 patterns × 10s)
 
 ## Complete Parameter List
 
-### Transient Detection Parameters (14 total)
+### Ensemble Detector Parameters (18 total)
 
-**Drummer Mode (4 params)**:
-- `hitthresh` - Main detection threshold (1.5-10.0)
-- `attackmult` - Attack sensitivity multiplier (1.1-2.0)
-- `avgtau` - Envelope smoothing time constant (0.1-5.0s)
-- `cooldown` - Minimum ms between detections (20-500ms)
+**Detector Thresholds (6 params)** - Sensitivity per algorithm:
+- `drummer_thresh` - Amplitude ratio threshold (0.5-10.0, default 2.5)
+- `spectral_thresh` - Spectral flux threshold (0.5-10.0, default 1.4)
+- `hfc_thresh` - High-frequency content threshold (1.0-10.0, default 3.0)
+- `bass_thresh` - Bass band flux threshold (1.0-10.0, default 3.0)
+- `complex_thresh` - Phase deviation threshold (1.0-10.0, default 2.0)
+- `mel_thresh` - Mel-band flux threshold (1.0-10.0, default 2.5)
 
-**Spectral Flux Mode (2 params)**:
-- `fluxthresh` - Spectral flux threshold (1.0-10.0)
-- `fluxbins` - Number of FFT bins to analyze (4-128)
+**Detector Weights (6 params)** - Contribution to ensemble fusion:
+- `drummer_weight` - Drummer contribution (0.0-0.5, default 0.22)
+- `spectral_weight` - SpectralFlux contribution (0.0-0.5, default 0.20)
+- `hfc_weight` - HFC contribution (0.0-0.5, default 0.15)
+- `bass_weight` - BassBand contribution (0.0-0.5, default 0.18)
+- `complex_weight` - ComplexDomain contribution (0.0-0.5, default 0.13)
+- `mel_weight` - MelFlux contribution (0.0-0.5, default 0.12)
 
-**Hybrid Mode (3 params)**:
-- `hyfluxwt` - Weight for spectral flux component (0.1-1.0)
-- `hydrumwt` - Weight for drummer component (0.1-1.0)
-- `hybothboost` - Boost when both algorithms agree (1.0-2.0)
+**Agreement Boosts (6 params)** - Confidence scaling by detector count:
+- `agree_1` - Single detector boost (0.3-0.9, default 0.6) - suppresses false positives
+- `agree_2` - Two detectors boost (0.6-1.0, default 0.85)
+- `agree_3` - Three detectors boost (0.8-1.2, default 1.0)
+- `agree_4` - Four detectors boost (0.9-1.3, default 1.1)
+- `agree_5` - Five detectors boost (1.0-1.4, default 1.15)
+- `agree_6` - All six detectors boost (1.0-1.5, default 1.2)
 
-**Bass Band Mode (3 params)**:
-- `bassfreq` - Bass filter cutoff frequency Hz (40-200)
-- `bassq` - Bass filter Q factor (0.5-3.0)
-- `bassthresh` - Bass detection threshold (1.5-10.0)
+### Rhythm Tracking Parameters (7 total)
 
-**HFC Mode (2 params)**:
-- `hfcweight` - HFC weighting factor (0.5-5.0)
-- `hfcthresh` - HFC detection threshold (1.5-10.0)
+**AudioController - Basic Rhythm**:
+- `musicthresh` - Rhythm activation threshold / periodicity strength (0.0-1.0, default 0.4)
+- `phaseadapt` - Phase adaptation rate (0.01-1.0, default 0.15)
+- `pulseboost` - Pulse boost on beat (1.0-2.0, default 1.3)
+- `pulsesuppress` - Pulse suppress off beat (0.3-1.0, default 0.6)
+- `energyboost` - Energy boost on beat (0.0-1.0, default 0.3)
+- `bpmmin` - Minimum BPM to detect (40-120, default 60)
+- `bpmmax` - Maximum BPM to detect (80-240, default 200)
 
-### MusicMode Parameters (11 total)
+### Multi-Hypothesis Tracking Parameters (12 total)
 
-**Activation Control**:
-- `musicthresh` - Activation threshold (0.0-1.0)
-- `musicbeats` - Stable beats required to activate (2-16)
-- `musicmissed` - Missed beats before deactivation (4-16)
+**Peak Detection (2 params)**:
+- `minpeakstr` - Min autocorrelation peak strength (0.1-0.8, default 0.3)
+- `minrelheight` - Min relative peak height (0.5-1.0, default 0.7)
 
-**Confidence Tracking**:
-- `confinc` - Confidence gain per good beat (0.05-0.2)
-- `confdec` - Confidence loss per bad/missed beat (0.05-0.2)
-- `phasetol` - Phase error tolerance for good beat (0.1-0.5)
-- `missedtol` - Missed beat tolerance multiplier (1.0-3.0)
+**Hypothesis Matching (1 param)**:
+- `bpmmatchtol` - BPM match tolerance fraction (0.01-0.2, default 0.05)
 
-**BPM Range**:
-- `bpmmin` - Minimum BPM (40-120)
-- `bpmmax` - Maximum BPM (120-240)
+**Promotion (2 params)**:
+- `promothresh` - Confidence advantage for promotion (0.05-0.5, default 0.15)
+- `minbeats` - Min beats before promotion (4-32, default 8)
 
-**PLL Control**:
-- `pllkp` - PLL proportional gain (0.01-0.5)
-- `pllki` - PLL integral gain (0.001-0.1)
+**Decay (4 params)**:
+- `phrasehalf` - Phrase decay half-life in beats (8-64, default 32)
+- `minstr` - Min strength to keep hypothesis (0.05-0.3, default 0.1)
+- `silencegrace` - Grace period before silence decay ms (1000-10000, default 3000)
+- `silencehalf` - Silence decay half-life seconds (2-15, default 5)
 
-### RhythmAnalyzer Parameters (5 total)
+**Confidence Weighting (3 params)** - Must sum to meaningful values:
+- `strweight` - Weight of periodicity strength (0.0-1.0, default 0.5)
+- `consweight` - Weight of phase consistency (0.0-1.0, default 0.3)
+- `longweight` - Weight of beat longevity (0.0-1.0, default 0.2)
 
-- `rhythmminbpm` - Minimum BPM for autocorrelation (60-120)
-- `rhythmmaxbpm` - Maximum BPM for autocorrelation (120-240)
-- `rhythminterval` - Autocorrelation update interval ms (500-2000)
-- `beatthresh` - Beat likelihood threshold (0.5-0.9)
-- `minperiodicity` - Minimum periodicity strength (0.3-0.8)
+### Audio Processing Parameters (2 total)
+
+**Window/Range Normalization**:
+- `peaktau` - Peak adaptation speed seconds (0.5-10.0, default 2.0)
+- `releasetau` - Peak release speed seconds (1.0-30.0, default 5.0)
 
 ---
 
@@ -87,135 +107,129 @@ param-tuner sweep --port COM5 --params hitthresh --gain 40
 
 ### 2. Tune by Mode/Category
 
-Tune all parameters for a specific subsystem (~30-60 min):
+Tune all parameters for a specific subsystem:
 
 ```bash
-# Tune all MusicMode parameters (11 params)
-param-tuner sweep --port COM5 --modes music
+# Tune all ensemble detector parameters (18 params, ~3 hours)
+param-tuner sweep --port COM5 --modes ensemble
 
-# Tune all RhythmAnalyzer parameters (5 params)
+# Tune all rhythm tracking parameters (7 params, ~70 min)
 param-tuner sweep --port COM5 --modes rhythm
 
-# Tune multiple modes
-param-tuner sweep --port COM5 --modes music,rhythm
-
-# Tune only detection modes
-param-tuner sweep --port COM5 --modes drummer,spectral,hybrid
+# Tune multiple modes (25 params, ~4 hours)
+param-tuner sweep --port COM5 --modes ensemble,rhythm
 ```
 
 **Estimated Time**:
-- `--modes music`: 11 params × 10 min = **~110 minutes (1.8 hrs)**
-- `--modes rhythm`: 5 params × 10 min = **~50 minutes**
-- `--modes drummer`: 4 params × 10 min = **~40 minutes**
+- `--modes ensemble`: 18 params × 10 min = **~3 hours**
+- `--modes rhythm`: 7 params × 10 min = **~70 minutes**
 
 ### 3. Combined Filtering
 
 Combine mode and parameter filters for maximum control:
 
 ```bash
-# Tune specific music mode params only
-param-tuner sweep --port COM5 --modes music --params musicthresh,confinc,confdec
+# Tune specific ensemble detector thresholds only
+param-tuner sweep --port COM5 --modes ensemble --params drummer_thresh,spectral_thresh,bass_thresh
 
-# Tune activation params across modes
-param-tuner sweep --port COM5 --params musicthresh,beatthresh
+# Tune multi-hypothesis promotion parameters
+param-tuner sweep --port COM5 --params promothresh,minbeats,minpeakstr
 ```
 
 ---
 
 ## Common Tuning Scenarios
 
-### Scenario 1: Quick Transient Detection Tuning (~30 min)
+### Scenario 1: Quick Ensemble Detector Tuning (~45 min)
 
-Optimize the most impactful transient detection parameters:
-
-```bash
-param-tuner sweep --port COM5 --params hitthresh,fluxthresh,hyfluxwt,hydrumwt
-```
-
-### Scenario 2: Music Mode Activation Tuning (~30 min)
-
-Improve music mode lock-on speed and reliability:
+Optimize the most impactful ensemble detection parameters:
 
 ```bash
-param-tuner sweep --port COM5 --modes music --params musicthresh,musicbeats,confinc,confdec
+param-tuner sweep --port COM5 --params drummer_thresh,spectral_thresh,agree_1,agree_2
 ```
 
-### Scenario 3: Beat Tracking Accuracy (~45 min)
+**Focus:** Detector thresholds control sensitivity, agreement boosts control false positive rejection.
 
-Optimize phase-locked loop and confidence tracking:
+### Scenario 2: Rhythm Activation Tuning (~30 min)
+
+Improve rhythm lock-on speed and reliability:
 
 ```bash
-param-tuner sweep --port COM5 --modes music --params pllkp,pllki,phasetol,missedtol,confinc,confdec
+param-tuner sweep --port COM5 --params musicthresh,phaseadapt,bpmmin,bpmmax
 ```
 
-### Scenario 4: Rhythm Analyzer Tuning (~50 min)
+**Focus:** `musicthresh` controls when rhythm tracking activates based on periodicity strength.
 
-Tune autocorrelation parameters:
+### Scenario 3: Multi-Hypothesis Tracking (~50 min)
+
+Optimize tempo tracking and hypothesis promotion:
 
 ```bash
-param-tuner sweep --port COM5 --modes rhythm
+param-tuner sweep --port COM5 --params minpeakstr,promothresh,minbeats,phrasehalf,silencehalf
 ```
 
-### Scenario 5: Complete Musical Analysis (~3 hrs)
+**Focus:** Peak detection controls hypothesis creation, promotion controls when better tempos take over.
 
-Tune all music and rhythm parameters (comprehensive):
+### Scenario 4: Complete Audio Analysis (~6 hrs)
+
+Tune all ensemble and rhythm parameters (comprehensive):
 
 ```bash
-param-tuner sweep --port COM5 --modes music,rhythm
+param-tuner sweep --port COM5 --modes ensemble,rhythm
 ```
 
-### Scenario 6: Bass-Heavy Music Optimization (~25 min)
+**Warning:** This is a full optimization and will take ~6 hours (39 params × 10 min).
+
+### Scenario 5: Bass-Heavy Music Optimization (~30 min)
 
 Optimize for kick drums and bass drops:
 
 ```bash
-param-tuner sweep --port COM5 --modes bass --params bassfreq,bassthresh,hitthresh
+param-tuner sweep --port COM5 --params bass_thresh,bass_weight,drummer_thresh,agree_2
 ```
+
+**Focus:** Bass detector threshold + weight, drummer for kicks, agreement boost for consensus.
 
 ---
 
 ## Workflow Recommendations
 
-### Day 1: Transient Detection (30 min)
+### Day 1: Ensemble Detector Core (~1.5 hrs)
 ```bash
-# Morning: Optimize core detection
-param-tuner sweep --port COM5 --params hitthresh,attackmult,fluxthresh
+# Morning: Optimize detector thresholds
+param-tuner sweep --port COM5 --params drummer_thresh,spectral_thresh,hfc_thresh,bass_thresh
+
+# Afternoon: Optimize agreement boosts
+param-tuner sweep --port COM5 --params agree_1,agree_2,agree_3
 
 # Save results
 param-tuner status
 ```
 
-### Day 2: Music Mode Activation (45 min)
+### Day 2: Rhythm Tracking (~70 min)
 ```bash
-# Optimize activation speed and reliability
-param-tuner sweep --port COM5 --modes music --params musicthresh,musicbeats,musicmissed,confinc
-```
-
-### Day 3: Beat Tracking (45 min)
-```bash
-# Fine-tune PLL and confidence tracking
-param-tuner sweep --port COM5 --modes music --params pllkp,pllki,phasetol,missedtol,confdec
-```
-
-### Day 4: Rhythm Analysis (50 min)
-```bash
-# Tune autocorrelation
+# Optimize rhythm activation and phase tracking
 param-tuner sweep --port COM5 --modes rhythm
 ```
 
-### Day 5: BPM Range Tuning (30 min)
+### Day 3: Multi-Hypothesis Tuning (~2 hrs)
 ```bash
-# Optimize BPM detection range
-param-tuner sweep --port COM5 --params bpmmin,bpmmax,rhythmminbpm,rhythmmaxbpm
+# Fine-tune multi-hypothesis tempo tracking
+param-tuner sweep --port COM5 --params minpeakstr,minrelheight,promothresh,minbeats,phrasehalf,silencehalf,strweight,consweight,longweight
 ```
 
-### Day 6: Hybrid Mode (30 min)
+### Day 4: Detector Weights (~60 min)
 ```bash
-# Optimize hybrid detection weights
-param-tuner sweep --port COM5 --modes hybrid
+# Optimize detector contribution weights
+param-tuner sweep --port COM5 --params drummer_weight,spectral_weight,bass_weight,hfc_weight,complex_weight,mel_weight
 ```
 
-**Total Time**: ~4 hours spread across 6 days (~30-50 min sessions)
+**Total Time**: ~6 hours spread across 4 days (1.5-2 hour sessions)
+
+**Alternative: Quick 3-Day Plan (~3 hours total)**
+- Day 1: Ensemble detectors (~1.5 hrs)
+- Day 2: Rhythm tracking (~70 min)
+- Day 3: Skip multi-hypothesis (use defaults)
 
 ---
 

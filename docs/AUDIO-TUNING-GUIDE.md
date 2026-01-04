@@ -191,13 +191,23 @@ npm run tuner -- validate --port COM5 --gain 40
 |---------|---------|--------|-------------|
 | `hypodebug` | 2 (SUMMARY) | 0-3 | Debug level: OFF/EVENTS/SUMMARY/DETAILED | `set hypodebug 2` |
 
-**Note:** Multi-hypothesis parameters are not yet accessible via SerialConsole `set` command. Use C++ code or future custom commands.
-
 **Serial Commands:**
 - `show hypotheses` - View all 4 hypothesis slots
 - `show primary` - View primary hypothesis only
+- `json hypotheses` - Get hypothesis state as JSON (for automated testing)
 - `set hypodebug <0-3>` - Set debug output level
 - `get hypodebug` - Get current debug level
+- `set minpeakstr <0.1-0.8>` - Set minimum peak strength (and all other params above)
+
+**Parameter Tuning:**
+All multi-hypothesis parameters are now accessible via:
+1. **SerialConsole**: Use `set <param> <value>` commands (e.g., `set minpeakstr 0.4`)
+2. **param-tuner**: Automated binary search optimization (updated January 2026)
+3. **blinky-serial-mcp**: `set_setting` and `get_hypotheses` tools for AI integration
+
+**Testing Support:**
+- MCP `get_hypotheses` tool retrieves all 4 hypothesis slots with BPM, confidence, phase, strength
+- JSON output enables automated validation of tempo tracking and promotion logic
 
 ### Category: `agc` (5 parameters) - Hardware Gain Control
 
@@ -527,10 +537,12 @@ npm run tuner -- validate --port COM5 --gain 40
 
 ## Appendix: Removed Parameters
 
-The following parameters were **removed** in AudioController v2 (December 2025):
+The following parameters were **removed** in AudioController v2/v3 (December 2025):
 
 | Old Parameter | Old Component | Reason |
 |---------------|---------------|--------|
+| musicbeats | MusicMode PLL | Event-based activation replaced by autocorrelation strength |
+| musicmissed | MusicMode PLL | No beat event counting in new architecture |
 | phasesnap | MusicMode PLL | PLL replaced by autocorrelation |
 | snapconf | MusicMode PLL | No longer needed |
 | stablephase | MusicMode PLL | Phase derived from autocorrelation |
@@ -539,9 +551,14 @@ The following parameters were **removed** in AudioController v2 (December 2025):
 | misspenalty | MusicMode PLL | No beat event counting |
 | pllkp | MusicMode PLL | No PLL in new architecture |
 | pllki | MusicMode PLL | No PLL in new architecture |
-| combdecay | RhythmAnalyzer | Merged into AudioController |
-| combfb | RhythmAnalyzer | Merged into AudioController |
-| combconf | RhythmAnalyzer | Merged into AudioController |
-| histblend | RhythmAnalyzer | Merged into AudioController |
+| combdecay | RhythmAnalyzer (comb filter) | Merged into AudioController autocorrelation |
+| combfb | RhythmAnalyzer (comb filter) | Merged into AudioController autocorrelation |
+| combconf | RhythmAnalyzer (comb filter) | Merged into AudioController autocorrelation |
+| histblend | RhythmAnalyzer (comb filter) | Merged into AudioController autocorrelation |
+| rhythmminbpm | RhythmAnalyzer | Replaced by `bpmmin` in AudioController |
+| rhythmmaxbpm | RhythmAnalyzer | Replaced by `bpmmax` in AudioController |
+| rhythminterval | RhythmAnalyzer | Hardcoded to 500ms (AUTOCORR_PERIOD_MS) |
+| beatthresh | RhythmAnalyzer | Replaced by `musicthresh` (activation threshold) |
+| minperiodicity | RhythmAnalyzer | Merged into `musicthresh` logic |
 
-If you see these parameters in old documentation, ignore them.
+**If you see these parameters in old documentation or param-tuner code, ignore them. They have been removed from both firmware and testing tools (January 2026).**
