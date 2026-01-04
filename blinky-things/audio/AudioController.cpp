@@ -255,9 +255,10 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         if (ossBuffer_[idx] > maxOss) maxOss = ossBuffer_[idx];
     }
 
-    // DEBUG: Print autocorrelation diagnostics (only when debug enabled)
+    // DEBUG: Print autocorrelation diagnostics (only when rhythm debug channel enabled)
+    // Use: "debug rhythm on" to enable
     static uint32_t lastDebugMs = 0;
-    bool shouldPrintDebug = (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) &&
+    bool shouldPrintDebug = SerialConsole::isDebugChannelEnabled(DebugChannel::RHYTHM) &&
                             (nowMs - lastDebugMs > 2000);
     if (shouldPrintDebug) {
         lastDebugMs = nowMs;
@@ -713,7 +714,10 @@ int MultiHypothesisTracker::createHypothesis(float bpm, float strength, uint32_t
     hypo.priority = static_cast<uint8_t>(slot);
 
     // Debug output for creation/eviction
-    if (debugLevel >= HypothesisDebugLevel::EVENTS) {
+    // Requires both: debug channel enabled AND verbosity level >= EVENTS
+    // Use: "debug hypothesis on" to enable, "set hypodebug 1" for verbosity
+    if (debugLevel >= HypothesisDebugLevel::EVENTS &&
+        SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) {
         if (wasActive) {
             Serial.print(F("{\"type\":\"HYPO_EVICT\",\"slot\":"));
             Serial.print(slot);
@@ -832,8 +836,9 @@ void MultiHypothesisTracker::promoteBestHypothesis(uint32_t nowMs) {
         bestConfidence > hypotheses[0].confidence + promotionThreshold &&
         hypotheses[bestSlot].beatCount >= minBeatsBeforePromotion) {
 
-        // Debug output
-        if (debugLevel >= HypothesisDebugLevel::EVENTS) {
+        // Debug output (requires channel enabled AND verbosity level)
+        if (debugLevel >= HypothesisDebugLevel::EVENTS &&
+            SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) {
             Serial.print(F("{\"type\":\"HYPO_PROMOTE\",\"from\":"));
             Serial.print(bestSlot);
             Serial.print(F(",\"to\":0,\"bpm\":"));
@@ -857,7 +862,9 @@ void MultiHypothesisTracker::promoteBestHypothesis(uint32_t nowMs) {
 }
 
 void MultiHypothesisTracker::printDebug(uint32_t nowMs, const char* eventType, int slotIndex) const {
+    // Requires both: debug channel enabled AND verbosity level > OFF
     if (debugLevel == HypothesisDebugLevel::OFF) return;
+    if (!SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) return;
 
     // EVENT-level messages are printed immediately by the calling functions
     // (createHypothesis, promoteBestHypothesis)

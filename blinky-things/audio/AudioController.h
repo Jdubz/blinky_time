@@ -136,8 +136,8 @@ public:
     float consistencyWeight = 0.3f;         // Weight of phase consistency in confidence
     float longevityWeight = 0.2f;           // Weight of beat count in confidence
 
-    // Debug level
-    HypothesisDebugLevel debugLevel = HypothesisDebugLevel::SUMMARY;
+    // Debug level (OFF by default to avoid flooding serial with JSON events)
+    HypothesisDebugLevel debugLevel = HypothesisDebugLevel::OFF;
 
     // === METHODS ===
 

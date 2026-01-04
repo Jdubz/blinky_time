@@ -14,6 +14,9 @@ extern const DeviceConfig& config;
 // Static instance for callbacks
 SerialConsole* SerialConsole::instance_ = nullptr;
 
+// Static debug channels - default to NONE (no debug output)
+DebugChannel SerialConsole::debugChannels_ = DebugChannel::NONE;
+
 // File-scope storage for effect settings (accessible from both register and sync functions)
 static float effectHueShift_ = 0.0f;
 static float effectRotationSpeed_ = 0.0f;
@@ -300,6 +303,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
     if (handleLogCommand(cmd)) return true;
+    if (handleDebugCommand(cmd)) return true;     // Debug channel commands
     if (handleEnsembleCommand(cmd)) return true;  // Ensemble detector commands
     if (handleHypothesisCommand(cmd)) return true;  // Multi-hypothesis tracking commands
     return false;
@@ -1376,6 +1380,89 @@ bool SerialConsole::handleLogCommand(const char* cmd) {
     if (strcmp(cmd, "log debug") == 0) {
         logLevel_ = LogLevel::DEBUG;
         Serial.println(F("OK log debug"));
+        return true;
+    }
+
+    return false;
+}
+
+// === DEBUG CHANNEL COMMANDS ===
+// Controls per-subsystem JSON debug output independently from log levels
+bool SerialConsole::handleDebugCommand(const char* cmd) {
+    // "debug" - show enabled channels
+    if (strcmp(cmd, "debug") == 0) {
+        Serial.println(F("Debug channels:"));
+        Serial.print(F("  transient:  ")); Serial.println(isDebugChannelEnabled(DebugChannel::TRANSIENT) ? F("ON") : F("off"));
+        Serial.print(F("  rhythm:     ")); Serial.println(isDebugChannelEnabled(DebugChannel::RHYTHM) ? F("ON") : F("off"));
+        Serial.print(F("  hypothesis: ")); Serial.println(isDebugChannelEnabled(DebugChannel::HYPOTHESIS) ? F("ON") : F("off"));
+        Serial.print(F("  audio:      ")); Serial.println(isDebugChannelEnabled(DebugChannel::AUDIO) ? F("ON") : F("off"));
+        Serial.print(F("  generator:  ")); Serial.println(isDebugChannelEnabled(DebugChannel::GENERATOR) ? F("ON") : F("off"));
+        Serial.print(F("  ensemble:   ")); Serial.println(isDebugChannelEnabled(DebugChannel::ENSEMBLE) ? F("ON") : F("off"));
+        return true;
+    }
+
+    // Helper lambda to parse channel name
+    auto parseChannel = [](const char* name) -> DebugChannel {
+        if (strcmp(name, "transient") == 0)  return DebugChannel::TRANSIENT;
+        if (strcmp(name, "rhythm") == 0)     return DebugChannel::RHYTHM;
+        if (strcmp(name, "hypothesis") == 0) return DebugChannel::HYPOTHESIS;
+        if (strcmp(name, "audio") == 0)      return DebugChannel::AUDIO;
+        if (strcmp(name, "generator") == 0)  return DebugChannel::GENERATOR;
+        if (strcmp(name, "ensemble") == 0)   return DebugChannel::ENSEMBLE;
+        if (strcmp(name, "all") == 0)        return DebugChannel::ALL;
+        return DebugChannel::NONE;
+    };
+
+    // "debug all on" - enable all channels
+    if (strcmp(cmd, "debug all on") == 0) {
+        setDebugChannels(DebugChannel::ALL);
+        Serial.println(F("OK debug all on"));
+        return true;
+    }
+
+    // "debug all off" - disable all channels
+    if (strcmp(cmd, "debug all off") == 0) {
+        setDebugChannels(DebugChannel::NONE);
+        Serial.println(F("OK debug all off"));
+        return true;
+    }
+
+    // "debug <channel> on" or "debug <channel> off"
+    if (strncmp(cmd, "debug ", 6) == 0) {
+        const char* rest = cmd + 6;
+        char channelName[16] = {0};
+        const char* space = strchr(rest, ' ');
+
+        if (space && (space - rest) < 15) {
+            strncpy(channelName, rest, space - rest);
+            channelName[space - rest] = '\0';
+
+            DebugChannel channel = parseChannel(channelName);
+            if (channel == DebugChannel::NONE) {
+                Serial.print(F("Unknown channel: "));
+                Serial.println(channelName);
+                Serial.println(F("Valid: transient, rhythm, hypothesis, audio, generator, ensemble, all"));
+                return true;
+            }
+
+            const char* action = space + 1;
+            if (strcmp(action, "on") == 0) {
+                enableDebugChannel(channel);
+                Serial.print(F("OK debug "));
+                Serial.print(channelName);
+                Serial.println(F(" on"));
+                return true;
+            } else if (strcmp(action, "off") == 0) {
+                disableDebugChannel(channel);
+                Serial.print(F("OK debug "));
+                Serial.print(channelName);
+                Serial.println(F(" off"));
+                return true;
+            }
+        }
+
+        Serial.println(F("Usage: debug <channel> on|off"));
+        Serial.println(F("Channels: transient, rhythm, hypothesis, audio, generator, ensemble, all"));
         return true;
     }
 
