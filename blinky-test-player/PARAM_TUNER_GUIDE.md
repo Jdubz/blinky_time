@@ -9,7 +9,7 @@ The param-tuner supports **30 parameters** across all musical analysis subsystem
 
 ## Complete Parameter List
 
-### Transient Detection Parameters (9 total)
+### Transient Detection Parameters (14 total)
 
 **Drummer Mode (4 params)**:
 - `hitthresh` - Main detection threshold (1.5-10.0)

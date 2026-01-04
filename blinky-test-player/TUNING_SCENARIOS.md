@@ -42,12 +42,12 @@ param-tuner sweep --port COM5 --modes drummer
 
 ---
 
-### 🔊 Scenario 5: Bass-Heavy Music (30 min)
+### 🔊 Scenario 5: Bass-Heavy Music (25 min)
 **Goal**: Optimize for kicks and bass drops
 ```bash
 param-tuner sweep --port COM5 --modes bass --params bassthresh,hitthresh
 ```
-**Tunes**: 4 params total, but bassthresh + hitthresh prioritized = **30 minutes**
+**Tunes**: 2 params (`bassthresh`, `hitthresh`) = **~25 minutes**
 **Impact**: Better kick drum detection in EDM/dubstep
 
 ---
