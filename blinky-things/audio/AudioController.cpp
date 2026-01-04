@@ -135,12 +135,22 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // Track when we last had significant audio
-    if (onsetStrength > 0.1f || mic_.getLevel() > 0.1f) {
+    // Use a threshold above typical noise floor (~0.02) to avoid tracking silence
+    const float SIGNIFICANT_AUDIO_THRESHOLD = 0.05f;
+    bool hasSignificantAudio = (onsetStrength > SIGNIFICANT_AUDIO_THRESHOLD ||
+                                 mic_.getLevel() > SIGNIFICANT_AUDIO_THRESHOLD);
+    if (hasSignificantAudio) {
         lastSignificantAudioMs_ = nowMs;
     }
 
     // 3. Add sample to onset strength buffer with timestamp
-    addOssSample(onsetStrength, nowMs);
+    // Only add significant audio to avoid filling buffer with noise patterns
+    if (hasSignificantAudio) {
+        addOssSample(onsetStrength, nowMs);
+    } else {
+        // Add zero during silence to maintain buffer timing but not contribute to correlation
+        addOssSample(0.0f, nowMs);
+    }
 
     // 4. Run autocorrelation periodically (every 500ms)
     if (nowMs - lastAutocorrMs_ >= AUTOCORR_PERIOD_MS) {
@@ -273,25 +283,47 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         Serial.println(F("}"));
     }
 
-    if (signalEnergy < 0.001f) {
-        // No signal - decay periodicity
-        periodicityStrength_ *= 0.9f;
+    // Threshold for detecting meaningful signal vs noise
+    // With noise floor ~0.02 and 360 samples: 360 * 0.02^2 = 0.144
+    // With silence (zeros): signalEnergy approaches 0
+    // Require at least 10% of buffer to have significant values (signalEnergy > 0.01)
+    if (signalEnergy < 0.01f || maxOss < 0.05f) {
+        // No meaningful signal - decay periodicity faster
+        periodicityStrength_ *= 0.8f;
+        // Also decay all hypotheses during silence
+        for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+            if (multiHypothesis_.hypotheses[i].active) {
+                multiHypothesis_.hypotheses[i].strength *= 0.85f;
+                if (multiHypothesis_.hypotheses[i].strength < multiHypothesis_.minStrengthToKeep) {
+                    multiHypothesis_.hypotheses[i].active = false;
+                }
+            }
+        }
         return;
     }
 
     // Autocorrelation: compute correlation for all lags
     // We'll store correlations to find multiple peaks
     // NOTE: Static buffer assumes single-threaded execution (only one AudioController instance)
-    static float correlationAtLag[200];  // Max lag range (e.g., 200 BPM @ 60Hz = 18 samples, 60 BPM @ 60Hz = 60 samples)
+    // FIX: Initialize to zero to prevent garbage data from previous frames
+    static float correlationAtLag[200] = {0};
     int correlationSize = maxLag - minLag + 1;
     if (correlationSize > 200) correlationSize = 200;
 
+    // FIX: Clear the portion we'll use to prevent stale data
+    for (int i = 0; i < correlationSize; i++) {
+        correlationAtLag[i] = 0.0f;
+    }
+
     float maxCorrelation = 0.0f;
-    int bestLag = 0;
+    int bestLag = minLag;  // FIX: Initialize to valid lag, not 0
 
     for (int lag = minLag; lag <= maxLag && (lag - minLag) < 200; lag++) {
         float correlation = 0.0f;
         int count = ossCount_ - lag;
+
+        // FIX: Skip if count <= 0 to prevent division by zero
+        if (count <= 0) continue;
 
         for (int i = 0; i < count; i++) {
             int idx1 = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
@@ -342,8 +374,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             int neighborLag = lag + delta;
             if (neighborLag < minLag || neighborLag > maxLag) continue;
             int neighborIdx = neighborLag - minLag;
-            // Bounds check (neighborIdx >= 0 guaranteed by line 342 check)
-            if (neighborIdx >= correlationSize) continue;
+            // FIX: Explicit bounds check before array access
+            if (neighborIdx < 0 || neighborIdx >= correlationSize) continue;
 
             float neighborCorr = correlationAtLag[neighborIdx];
             if (neighborCorr > correlation) {
@@ -517,6 +549,11 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
             // Apply gradual correction
             phase_ += phaseDiff * phaseAdaptRate * dt * 10.0f;
 
+            // FIX: Check for NaN before fmodf (NaN persists through fmodf)
+            if (!isfinite(phase_)) {
+                phase_ = 0.0f;
+            }
+
             // Re-wrap after correction
             phase_ = fmodf(phase_, 1.0f);
             if (phase_ < 0.0f) phase_ += 1.0f;
@@ -541,7 +578,9 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
 
         // Decay periodicity during silence
         if (silenceMs > 3000) {
-            float decayFactor = expf(-0.138629f * dt);
+            // FIX: Clamp dt to prevent exp underflow on extreme frame drops
+            float clampedDt = (dt > 1.0f) ? 1.0f : dt;
+            float decayFactor = expf(-0.138629f * clampedDt);
             periodicityStrength_ *= decayFactor;
         }
     }
@@ -620,11 +659,20 @@ void AudioController::synthesizeRhythmStrength() {
 // ============================================================================
 
 void TempoHypothesis::updatePhase(float dt) {
+    // FIX: Guard against division by zero
+    if (beatPeriodMs < 1.0f) beatPeriodMs = 500.0f;  // Safe default: 120 BPM
+
     float phaseIncrement = dt * 1000.0f / beatPeriodMs;
     phase += phaseIncrement;
 
     // Accumulate fractional beats
     beatsSinceUpdate += phaseIncrement;
+
+    // FIX: Check for NaN/infinity before further processing
+    if (!isfinite(phase)) {
+        phase = 0.0f;
+        return;
+    }
 
     // Detect phase wraparound to increment beat count
     // This happens when phase crosses from <1.0 to >=1.0
@@ -658,6 +706,10 @@ void TempoHypothesis::applyBeatDecay(float minStrengthToKeep) {
 }
 
 void TempoHypothesis::applySilenceDecay(float dt, float minStrengthToKeep) {
+    // FIX: Clamp dt to reasonable range (prevent underflow on large dt, skip on dt<=0)
+    if (dt <= 0.0f) return;
+    if (dt > 1.0f) dt = 1.0f;  // Cap at 1 second per frame (prevents exp underflow)
+
     // Time-based decay: 5-second half-life
     // decay_factor = exp(-ln(2) * dt / 5.0) = exp(-0.138629 * dt)
     float decayFactor = expf(-0.138629f * dt);
@@ -680,9 +732,14 @@ float TempoHypothesis::computeConfidence(float strengthWeight, float consistency
     if (phaseConsistency > 1.0f) phaseConsistency = 1.0f;
 
     // Weighted combination
-    return strengthWeight * strength +
-           consistencyWeight * phaseConsistency +
-           longevityWeight * normalizedLongevity;
+    float confidence = strengthWeight * strength +
+                       consistencyWeight * phaseConsistency +
+                       longevityWeight * normalizedLongevity;
+
+    // FIX: Clamp to [0, 1] to maintain confidence contract
+    if (confidence < 0.0f) confidence = 0.0f;
+    if (confidence > 1.0f) confidence = 1.0f;
+    return confidence;
 }
 
 // ============================================================================
@@ -805,6 +862,8 @@ void MultiHypothesisTracker::updateHypothesis(int index, float dt, uint32_t nowM
         // Active music: apply beat-count decay if enough beats accumulated
         if (hypo.beatsSinceUpdate > 1.0f) {
             hypo.applyBeatDecay(minStrengthToKeep);
+            // FIX: Reset accumulator after decay to prevent runaway accumulation
+            hypo.beatsSinceUpdate = 0.0f;
         }
     } else {
         // Silence: apply time-based decay after grace period

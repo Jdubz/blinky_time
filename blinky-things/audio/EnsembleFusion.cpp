@@ -136,7 +136,8 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
 
     // Confidence and agreement always reported (even if suppressed by cooldown)
     // This allows debugging of what fusion WOULD have output without cooldown
-    output.ensembleConfidence = agreementBoost;
+    // FIX: Clamp ensembleConfidence to [0, 1] - agreementBoost can exceed 1.0 for strong consensus
+    output.ensembleConfidence = (agreementBoost > 1.0f) ? 1.0f : agreementBoost;
     output.detectorAgreement = static_cast<uint8_t>(agreementCount);
     output.dominantDetector = static_cast<uint8_t>(maxStrengthIdx);
 

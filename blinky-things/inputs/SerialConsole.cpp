@@ -276,7 +276,18 @@ void SerialConsole::update() {
 }
 
 void SerialConsole::handleCommand(const char* cmd) {
-    // Try settings registry first (handles set/get/show/list/categories/settings)
+    // Check for ensemble/detector commands FIRST (before settings registry)
+    // These use "set detector_*" and "set agree_*" which conflict with registry
+    if (handleEnsembleCommand(cmd)) {
+        return;
+    }
+
+    // Check for hypothesis debug command (uses "set hypodebug")
+    if (handleHypothesisCommand(cmd)) {
+        return;
+    }
+
+    // Try settings registry (handles set/get/show/list/categories/settings)
     if (settings_.handleCommand(cmd)) {
         // Sync effect settings to actual effect after any settings change
         syncEffectSettings();
@@ -293,6 +304,8 @@ void SerialConsole::handleCommand(const char* cmd) {
 
 bool SerialConsole::handleSpecialCommand(const char* cmd) {
     // Dispatch to specialized handlers (order matters for prefix matching)
+    // NOTE: handleEnsembleCommand and handleHypothesisCommand are called
+    // BEFORE settings registry in handleCommand() to avoid "set" conflicts
     if (handleJsonCommand(cmd)) return true;
     if (handleGeneratorCommand(cmd)) return true;
     if (handleEffectCommand(cmd)) return true;
@@ -304,8 +317,6 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleConfigCommand(cmd)) return true;
     if (handleLogCommand(cmd)) return true;
     if (handleDebugCommand(cmd)) return true;     // Debug channel commands
-    if (handleEnsembleCommand(cmd)) return true;  // Ensemble detector commands
-    if (handleHypothesisCommand(cmd)) return true;  // Multi-hypothesis tracking commands
     return false;
 }
 
@@ -1063,9 +1074,18 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             return true;
         }
         const char* args = cmd + 20;
+        // Parse type name (until space) and value (using atof, not sscanf %f)
         char typeName[16];
-        float weight = 0.0f;
-        if (sscanf(args, "%15s %f", typeName, &weight) == 2) {
+        int i = 0;
+        while (args[i] && args[i] != ' ' && i < 15) {
+            typeName[i] = args[i];
+            i++;
+        }
+        typeName[i] = '\0';
+        // Skip space and get value
+        while (args[i] == ' ') i++;
+        if (typeName[0] && args[i]) {
+            float weight = atof(args + i);
             DetectorType type;
             if (parseDetectorType(typeName, type)) {
                 if (weight >= 0.0f && weight <= 1.0f) {
@@ -1096,9 +1116,18 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             return true;
         }
         const char* args = cmd + 20;
+        // Parse type name (until space) and value (using atof, not sscanf %f)
         char typeName[16];
-        float threshold = 0.0f;
-        if (sscanf(args, "%15s %f", typeName, &threshold) == 2) {
+        int i = 0;
+        while (args[i] && args[i] != ' ' && i < 15) {
+            typeName[i] = args[i];
+            i++;
+        }
+        typeName[i] = '\0';
+        // Skip space and get value
+        while (args[i] == ' ') i++;
+        if (typeName[0] && args[i]) {
+            float threshold = atof(args + i);
             DetectorType type;
             if (parseDetectorType(typeName, type)) {
                 if (threshold > 0.0f) {
@@ -1128,27 +1157,24 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             Serial.println(F("ERROR: AudioController not available"));
             return true;
         }
-        int n = 0;
-        float value = 0.0f;
         // Parse "set agree_N value" where N is 0-6
+        // Format: "set agree_" (10 chars) + digit + space + value
         const char* args = cmd + 10;
-        if (sscanf(args, "%d %f", &n, &value) == 2) {
-            if (n >= 0 && n <= 6) {
-                // Get current boosts, modify one, set all
-                EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
-                float boosts[7];
-                for (int i = 0; i <= 6; i++) {
-                    boosts[i] = fusion.getAgreementBoost(i);
-                }
-                boosts[n] = value;
-                fusion.setAgreementBoosts(boosts);
-                Serial.print(F("OK agree_"));
-                Serial.print(n);
-                Serial.print(F("="));
-                Serial.println(value, 2);
-            } else {
-                Serial.println(F("ERROR: Agreement index must be 0-6"));
+        if (args[0] >= '0' && args[0] <= '6' && args[1] == ' ') {
+            int n = args[0] - '0';
+            float value = atof(args + 2);
+            // Get current boosts, modify one, set all
+            EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
+            float boosts[7];
+            for (int i = 0; i <= 6; i++) {
+                boosts[i] = fusion.getAgreementBoost(i);
             }
+            boosts[n] = value;
+            fusion.setAgreementBoosts(boosts);
+            Serial.print(F("OK agree_"));
+            Serial.print(n);
+            Serial.print(F("="));
+            Serial.println(value, 2);
         } else {
             Serial.println(F("Usage: set agree_<0-6> <value>"));
             Serial.println(F("Example: set agree_1 0.6"));

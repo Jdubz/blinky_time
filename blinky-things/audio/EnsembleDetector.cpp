@@ -112,6 +112,14 @@ const IDetector* EnsembleDetector::getDetector(DetectorType type) const {
 
 void EnsembleDetector::setDetectorWeight(DetectorType type, float weight) {
     fusion_.setWeight(type, weight);
+
+    // FIX: Also update detector's own config (matches setDetectorEnabled/setDetectorThreshold)
+    int idx = static_cast<int>(type);
+    if (idx >= 0 && idx < NUM_DETECTORS) {
+        DetectorConfig config = detectors_[idx]->getConfig();
+        config.weight = weight;
+        detectors_[idx]->configure(config);
+    }
 }
 
 void EnsembleDetector::setDetectorEnabled(DetectorType type, bool enabled) {
@@ -129,8 +137,14 @@ void EnsembleDetector::setDetectorEnabled(DetectorType type, bool enabled) {
 void EnsembleDetector::setDetectorThreshold(DetectorType type, float threshold) {
     int idx = static_cast<int>(type);
     if (idx >= 0 && idx < NUM_DETECTORS) {
+        // Update detector's own config
         DetectorConfig config = detectors_[idx]->getConfig();
         config.threshold = threshold;
         detectors_[idx]->configure(config);
+
+        // Also update fusion config (for display consistency)
+        DetectorConfig fusionConfig = fusion_.getConfig(type);
+        fusionConfig.threshold = threshold;
+        fusion_.configureDetector(type, fusionConfig);
     }
 }
