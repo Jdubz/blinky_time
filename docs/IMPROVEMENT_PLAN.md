@@ -19,9 +19,10 @@
 
 **Architecture:**
 - Generator → Effect → Renderer pattern implemented
-- AudioController v2 with autocorrelation-based rhythm tracking (single-hypothesis)
+- AudioController v2 with autocorrelation-based rhythm tracking (single-hypothesis) → UPGRADED to v3
 - PLL-based phase tracking replaced with pattern analysis
-- 5 transient detection algorithms: Drummer, Bass, HFC, Spectral, Hybrid
+- Ensemble detector with 6 algorithms: Drummer, SpectralFlux, BassBand, HFC, ComplexDomain, MelFlux
+- Agreement-based fusion with weighted confidence scaling
 
 **Testing Infrastructure:**
 - blinky-serial-mcp: MCP server for device communication (20+ tools)
@@ -35,11 +36,13 @@
 - Cooldown increased to 80ms for reduced false positives
 - Parameters documented in PARAMETER_TUNING_HISTORY.md
 
-**Documentation:**
-- Architecture docs updated for AudioController v2
-- Testing consolidated into AUDIO-TUNING-GUIDE.md
-- Obsolete plans removed
-- CLAUDE.md maintained for developer guidance
+**Documentation (January 2026 Consolidation):**
+- Architecture docs updated for AudioController v3
+- MUSIC_MODE_SIMPLIFIED.md → docs/AUDIO_ARCHITECTURE.md
+- DEVELOPMENT.md, SAFETY.md moved to docs/
+- Obsolete plans removed (AUDIO_IMPROVEMENTS_PLAN, RHYTHM_ANALYSIS_ENHANCEMENT_PLAN, etc.)
+- Redundant docs consolidated (Q&A merged into tracking plan, scenarios into tuner guide)
+- CLAUDE.md enhanced with comprehensive architecture overview
 
 ### In Progress
 
@@ -109,7 +112,7 @@ Test all device configurations on actual hardware:
 
 | Document | Purpose |
 |----------|---------|
-| [MUSIC_MODE_SIMPLIFIED.md](../MUSIC_MODE_SIMPLIFIED.md) | AudioController architecture |
+| [AUDIO_ARCHITECTURE.md](AUDIO_ARCHITECTURE.md) | AudioController architecture |
 | [docs/AUDIO-TUNING-GUIDE.md](AUDIO-TUNING-GUIDE.md) | Parameter reference + test procedures |
 | [docs/GENERATOR_EFFECT_ARCHITECTURE.md](GENERATOR_EFFECT_ARCHITECTURE.md) | Generator design patterns |
 | [blinky-test-player/PARAMETER_TUNING_HISTORY.md](../blinky-test-player/PARAMETER_TUNING_HISTORY.md) | Calibration history |

@@ -8,15 +8,29 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 
 ## ✨ Features
 
-- **Realistic Fire Simulation** - Advanced heat propagation algorithms create lifelike flame effects
-- **Multiple Device Support** - Hat installations, tube lights, and bucket totems
-- **Audio Reactive** - Microphone integration for sound-responsive effects with adaptive gain control
-- **Unified Architecture** - Single generator supporting matrix, linear, and custom LED layouts
-- **Battery Management** - Smart charging detection and low-battery warnings
-- **IMU Integration** - Motion-responsive effects using built-in accelerometer
-- **Web App Control** - [Blinky Console](blinky-console/) PWA for settings and audio visualization
-- **Zigzag Matrix Support** - Optimized for complex LED wiring patterns
-- **Production Ready** - Fully tested and documented with comprehensive build system
+### Visual Effects
+- **🔥 Realistic Fire Simulation** - Heat diffusion with audio-reactive sparks (13 tunable parameters)
+- **💧 Water Effects** - Wave simulation with ripple propagation
+- **⚡ Lightning Effects** - Branching electric bolt animations
+- **🌈 Post-Processing** - Hue rotation and effect chaining
+- **Multiple Device Support** - Hat installations (89 LEDs), tube lights (60 LEDs), bucket totems (128 LEDs)
+- **Unified Architecture** - Generator→Effect→Renderer pipeline supporting matrix, linear, and custom layouts
+
+### Audio Analysis (AudioController v3)
+- **🎵 Multi-Hypothesis Tempo Tracking** - 4 concurrent tempo hypotheses with confidence-based promotion
+- **🎧 6-Algorithm Ensemble Detector** - Drummer, SpectralFlux, BassBand, HFC, ComplexDomain, MelFlux
+- **🎤 Advanced AGC** - Hardware + software automatic gain control
+- **📊 Rhythm Tracking** - Autocorrelation-based pattern analysis (60-200 BPM range)
+- **🔊 Transient Detection** - Agreement-based fusion with 80ms cooldown
+- **56+ Tunable Parameters** - Comprehensive audio parameter system
+
+### System Features
+- **🌐 Web App Control** - [Blinky Console](blinky-console/) React PWA for real-time settings and visualization
+- **🔋 Battery Management** - Smart charging detection and low-battery warnings
+- **🏃 IMU Integration** - Motion-responsive effects using built-in accelerometer
+- **🧪 Testing Infrastructure** - Parameter tuning CLI, MCP server for AI integration, ground truth validation
+- **🛡️ Multi-Layer Safety** - Compile-time checks, runtime validation, flash protection, upload enforcement
+- **⚙️ Configuration Storage** - Flash persistence with validation (CONFIG_VERSION v19)
 
 ## 🛠 Hardware Compatibility
 
@@ -91,13 +105,14 @@ Comprehensive documentation is available in the [`docs/`](docs/) folder:
 
 **Quick Links:**
 - [📖 **Documentation Index**](docs/README.md) - Complete documentation overview
+- [🏗️ **Architecture Overview**](CLAUDE.md#system-architecture-overview) - **Complete system architecture** (firmware, web UI, testing)
 - [🔧 **Hardware Guide**](docs/HARDWARE.md) - Supported devices and wiring
-- [🏗️ **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions (includes platform patch)
+- [📦 **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions (includes platform patch)
 - [🛠️ **Platform Fix**](docs/PLATFORM_FIX.md) - Required patch for audio-reactive features
-- [🏛️ **Architecture Guide**](docs/GENERATOR_EFFECT_ARCHITECTURE.md) - Modern code architecture
+- [🏛️ **Generator Architecture**](docs/GENERATOR_EFFECT_ARCHITECTURE.md) - Generator→Effect→Renderer pattern
+- [🎵 **Audio Architecture**](docs/AUDIO_ARCHITECTURE.md) - AudioController v3 multi-hypothesis tracking
 - [🔥 **Fire Settings**](docs/OPTIMAL_FIRE_SETTINGS.md) - Optimal configuration parameters
 - [🧪 **Testing Guide**](docs/TESTING_SUMMARY.md) - Test framework and procedures
-- [✅ **Audit Summary**](AUDIT_SUMMARY.md) - Recent code audit and platform bug fix
 
 ## 🎛 Configuration
 
