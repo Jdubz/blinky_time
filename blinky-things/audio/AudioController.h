@@ -110,6 +110,10 @@ public:
     // Phase tracking smoothing
     float phaseAdaptRate = 0.15f;       // How quickly phase adapts to autocorrelation (0-1)
 
+    // Beat proximity thresholds for pulse modulation
+    float pulseNearBeatThreshold = 0.2f;    // Phase distance < this = boost transients
+    float pulseFarFromBeatThreshold = 0.3f; // Phase distance > this = suppress transients
+
     // BPM range for autocorrelation tempo detection
     float bpmMin = 60.0f;               // Minimum BPM to detect (affects autocorr lag range)
     float bpmMax = 200.0f;              // Maximum BPM to detect (affects autocorr lag range)
@@ -144,6 +148,7 @@ private:
     // Onset Strength Signal buffer (6 seconds at 60 Hz frame rate)
     static constexpr int OSS_BUFFER_SIZE = 360;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};
+    uint32_t ossTimestamps_[OSS_BUFFER_SIZE] = {0};  // Track actual timestamps for adaptive lag
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -163,16 +168,13 @@ private:
     // Silence detection
     uint32_t lastSignificantAudioMs_ = 0;
 
-    // Level tracking for non-FFT modes
-    float prevLevel_ = 0.0f;
-
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
 
     // === INTERNAL METHODS ===
 
     // Rhythm tracking
-    void addOssSample(float onsetStrength);
+    void addOssSample(float onsetStrength, uint32_t timestampMs);
     void runAutocorrelation(uint32_t nowMs);
     void updatePhase(float dt, uint32_t nowMs);
 

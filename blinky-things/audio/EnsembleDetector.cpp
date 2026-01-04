@@ -68,8 +68,8 @@ EnsembleOutput EnsembleDetector::update(float level, float rawLevel,
     // Clear spectral frame ready flag (detectors have consumed data)
     spectral_.resetFrameReady();
 
-    // Fuse results
-    lastOutput_ = fusion_.fuse(lastResults_);
+    // Fuse results with unified ensemble cooldown
+    lastOutput_ = fusion_.fuse(lastResults_, timestampMs);
 
     return lastOutput_;
 }

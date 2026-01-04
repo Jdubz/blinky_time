@@ -7,7 +7,6 @@ BassBandDetector::BassBandDetector()
     , maxBin_(6)    // 375 Hz
     , currentBassFlux_(0.0f)
     , averageBassFlux_(0.0f)
-    , cooldownMs_(80)
 {
     for (int i = 0; i < MAX_BASS_BINS; i++) {
         prevBassMagnitudes_[i] = 0.0f;
@@ -44,7 +43,6 @@ DetectionResult BassBandDetector::detect(const AudioFrame& frame, float dt) {
 
     const float* magnitudes = frame.magnitudes;
     int numBins = frame.numBins;
-    uint32_t nowMs = frame.timestampMs;
 
     // Need at least one previous frame for flux
     if (!hasPrevFrame_) {
@@ -76,13 +74,13 @@ DetectionResult BassBandDetector::detect(const AudioFrame& frame, float dt) {
     updateThresholdBuffer(currentBassFlux_);
 
     // Detection: bass flux exceeds threshold
+    // NOTE: Cooldown now applied at ensemble level (EnsembleFusion), not per-detector
     // Note: flux is already a change measure, so no "sudden" check needed
     bool isLoudEnough = currentBassFlux_ > effectiveThreshold;
-    bool cooldownOk = cooldownElapsed(nowMs, cooldownMs_);
 
     DetectionResult result;
 
-    if (isLoudEnough && cooldownOk) {
+    if (isLoudEnough) {
         // Strength
         float ratio = currentBassFlux_ / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);
@@ -91,7 +89,7 @@ DetectionResult BassBandDetector::detect(const AudioFrame& frame, float dt) {
         float confidence = computeConfidence(currentBassFlux_, localMedian);
 
         result = DetectionResult::hit(strength, confidence);
-        markTransient(nowMs);
+        // NOTE: markTransient() removed - cooldown now at ensemble level
     } else {
         result = DetectionResult::none();
     }
@@ -105,7 +103,7 @@ DetectionResult BassBandDetector::detect(const AudioFrame& frame, float dt) {
     return result;
 }
 
-float BassBandDetector::computeBassFlux(const float* magnitudes, int numBins) {
+float BassBandDetector::computeBassFlux(const float* magnitudes, int numBins) const {
     // Half-wave rectified spectral flux on bass bins only
     float flux = 0.0f;
     int binsAnalyzed = 0;

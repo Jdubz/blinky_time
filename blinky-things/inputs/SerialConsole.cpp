@@ -846,8 +846,6 @@ void SerialConsole::streamTick() {
         Serial.print(mic_->getHwGain());
         Serial.print(F(",\"alive\":"));
         Serial.print(mic_->isPdmAlive() ? 1 : 0);
-        Serial.print(F(",\"z\":"));
-        Serial.print(mic_->zeroCrossingRate, 2);
 
         // Debug mode: add ensemble detection internal state
         if (streamDebug_ && audioCtrl_) {

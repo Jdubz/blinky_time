@@ -50,9 +50,6 @@ public:
     void setAttackMultiplier(float mult) { attackMultiplier_ = mult; }
     float getAttackMultiplier() const { return attackMultiplier_; }
 
-    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
-    uint16_t getCooldownMs() const { return cooldownMs_; }
-
     // Debug access
     float getCurrentHFC() const { return currentHfc_; }
     float getPreviousHFC() const { return prevHfc_; }
@@ -73,10 +70,9 @@ private:
 
     // Parameters
     float attackMultiplier_;
-    uint16_t cooldownMs_;
 
     // Compute weighted HFC from magnitude spectrum
-    float computeHFC(const float* magnitudes, int numBins);
+    float computeHFC(const float* magnitudes, int numBins) const;
 
     // Compute confidence
     float computeConfidence(float hfc, float median) const;

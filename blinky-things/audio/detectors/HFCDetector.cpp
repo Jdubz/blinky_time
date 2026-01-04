@@ -8,7 +8,6 @@ HFCDetector::HFCDetector()
     , minBin_(32)    // 2 kHz @ 16kHz/256-point FFT
     , maxBin_(128)   // 8 kHz (Nyquist)
     , attackMultiplier_(1.2f)
-    , cooldownMs_(80)
 {
 }
 
@@ -35,7 +34,6 @@ DetectionResult HFCDetector::detect(const AudioFrame& frame, float dt) {
 
     const float* magnitudes = frame.magnitudes;
     int numBins = frame.numBins;
-    uint32_t nowMs = frame.timestampMs;
 
     // Save previous HFC
     prevHfc_ = currentHfc_;
@@ -59,13 +57,13 @@ DetectionResult HFCDetector::detect(const AudioFrame& frame, float dt) {
     updateThresholdBuffer(currentHfc_);
 
     // Detection: HFC exceeds threshold AND rising
+    // NOTE: Cooldown now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = currentHfc_ > effectiveThreshold;
     bool isRising = currentHfc_ > prevHfc_ * attackMultiplier_;
-    bool cooldownOk = cooldownElapsed(nowMs, cooldownMs_);
 
     DetectionResult result;
 
-    if (isLoudEnough && isRising && cooldownOk) {
+    if (isLoudEnough && isRising) {
         // Strength
         float ratio = currentHfc_ / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);
@@ -74,7 +72,7 @@ DetectionResult HFCDetector::detect(const AudioFrame& frame, float dt) {
         float confidence = computeConfidence(currentHfc_, localMedian);
 
         result = DetectionResult::hit(strength, confidence);
-        markTransient(nowMs);
+        // NOTE: markTransient() removed - cooldown now at ensemble level
     } else {
         result = DetectionResult::none();
     }
@@ -82,7 +80,7 @@ DetectionResult HFCDetector::detect(const AudioFrame& frame, float dt) {
     return result;
 }
 
-float HFCDetector::computeHFC(const float* magnitudes, int numBins) {
+float HFCDetector::computeHFC(const float* magnitudes, int numBins) const {
     // Weighted high-frequency content
     // HFC = sum(magnitude[i] * i^2) normalized
     // Quadratic weighting emphasizes higher frequencies

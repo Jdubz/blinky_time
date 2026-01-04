@@ -82,6 +82,22 @@ The following were deleted as outdated (December 2025):
 - `docs/plans/MUSIC_MODE_TESTING_PLAN.md` - Referenced old MusicMode/PLL
 - `docs/plans/TRANSIENT_DETECTION_TESTING.md` - Work completed, merged into AUDIO-TUNING-GUIDE.md
 
+## Documentation Guidelines
+
+**Only create documentation with future value:**
+- Architecture designs and technical specifications
+- Implementation plans and roadmaps
+- Todo lists and outstanding action items
+- Testing procedures and calibration guides
+
+**DO NOT create:**
+- Code review documents (delete after fixes are implemented)
+- Analysis reports of completed work (vanity documentation)
+- Historical "what we did" summaries (use git commit history instead)
+- Post-mortem reports (capture lessons in architecture docs or commit messages)
+
+**Reviews and analysis must focus on outstanding actions**, not documenting past work. Git history serves as the permanent record of changes and decisions.
+
 ## Current Audio System (December 2025)
 
 ### Ensemble Detection Architecture
