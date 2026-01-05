@@ -197,7 +197,7 @@ protected:
     ParticlePool<MAX_PARTICLES> pool_;
     AudioControl audio_;
     float prevPhase_;
-    uint32_t lastUpdateMs_;
+    // Note: lastUpdateMs_ is inherited from Generator base class
 
     // Forces
     GravityForce gravityForce_;

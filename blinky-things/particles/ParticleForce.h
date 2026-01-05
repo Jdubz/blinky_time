@@ -52,7 +52,7 @@ private:
  */
 class WindForce : public ParticleForce {
 public:
-    WindForce(float baseWind = 0.0f, float variation = 0.0f)
+    explicit WindForce(float baseWind = 0.0f, float variation = 0.0f)
         : baseWind_(baseWind), variation_(variation), noisePhase_(0.0f) {}
 
     void apply(Particle* p, float dt) override {
