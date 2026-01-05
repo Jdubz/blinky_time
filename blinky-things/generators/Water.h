@@ -1,81 +1,104 @@
 #pragma once
 
-#include "Generator.h"
-#include "../config/TotemDefaults.h"
+#include "../particles/ParticleGenerator.h"
+#include "../types/ColorPalette.h"
 
 /**
- * Water - Flowing water simulation generator
- *
- * Generates realistic water patterns using flow simulation
- * that adapts to different LED layout arrangements:
- * - MATRIX_LAYOUT: Downward flow with waves for 2D matrices
- * - LINEAR_LAYOUT: Wave propagation along strings/linear arrangements
- * - RANDOM_LAYOUT: Ripple effects for scattered layouts
- *
- * Key features:
- * - Layout-aware flow algorithms
- * - Audio-reactive wave generation
- * - Blue color palette (cyan/blue/deep blue)
- * - Realistic water movement patterns
+ * WaterParams - Water-specific particle parameters
  */
-
 struct WaterParams {
-    uint8_t baseFlow           = 120;  // Base flow speed
-    uint8_t waveHeightMin      = 30;   // Minimum wave height
-    uint8_t waveHeightMax      = 180;  // Maximum wave height
-    float   waveChance         = 0.25f; // Chance of new wave
-    float   audioWaveBoost     = 0.4f; // Audio boost for waves
-    uint8_t audioFlowBoostMax  = 80;   // Max flow boost from audio
-    int8_t  flowAudioBias      = 15;   // Flow speed audio bias
-    uint8_t maxWavePositions   = 12;   // For random layout tracking
+    // Spawn behavior
+    float baseSpawnChance;        // Baseline drop spawn probability (0-1)
+    float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
+
+    // Lifecycle
+    uint8_t maxParticles;         // Maximum active particles (1-64, default 64)
+    uint8_t defaultLifespan;      // Default particle age in frames
+    uint8_t intensityMin;         // Minimum spawn intensity (0-255)
+    uint8_t intensityMax;         // Maximum spawn intensity (0-255)
+
+    // Physics
+    float gravity;                // Gravity strength (positive = down, applied per frame)
+    float windBase;               // Base wind force (applied per frame)
+    float windVariation;          // Wind variation amount (applied per frame)
+    float drag;                   // Drag coefficient (0-1, per frame damping)
+
+    // Drop appearance
+    float dropVelocityMin;        // Minimum downward velocity (LEDs/frame@30FPS)
+    float dropVelocityMax;        // Maximum downward velocity (LEDs/frame@30FPS)
+    float dropSpread;             // Horizontal velocity variation (LEDs/frame@30FPS)
+
+    // Splash behavior
+    uint8_t splashParticles;      // Number of particles spawned on splash (0-10)
+    float splashVelocityMin;      // Minimum splash velocity (LEDs/frame@30FPS)
+    float splashVelocityMax;      // Maximum splash velocity (LEDs/frame@30FPS)
+    uint8_t splashIntensity;      // Splash particle intensity multiplier (0-255)
+
+    // Audio reactivity
+    float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
+    float organicTransientMin;    // Minimum transient to trigger burst (0-1)
+
+    WaterParams() {
+        baseSpawnChance = 0.25f;
+        audioSpawnBoost = 0.4f;
+        maxParticles = 64;  // Match template capacity
+        defaultLifespan = 90;  // ~3 seconds at 30 FPS
+        intensityMin = 80;
+        intensityMax = 200;
+        gravity = 5.0f;  // Positive = downward
+        windBase = 0.0f;
+        windVariation = 0.3f;
+        drag = 0.99f;  // Low drag (water flows smoothly)
+        musicSpawnPulse = 0.5f;
+        organicTransientMin = 0.3f;
+
+        dropVelocityMin = 0.5f;
+        dropVelocityMax = 1.5f;
+        dropSpread = 0.3f;
+
+        splashParticles = 6;
+        splashVelocityMin = 0.5f;
+        splashVelocityMax = 2.0f;
+        splashIntensity = 120;
+    }
 };
 
-class Water : public Generator {
+/**
+ * Water - Particle-based water generator
+ *
+ * Features:
+ * - Drops falling from top (primary behavior)
+ * - Radial splashes on impact (transient-triggered)
+ * - Beat-synced wave generation in music mode
+ * - Smooth physics-based motion
+ */
+class Water : public ParticleGenerator<64> {
 public:
     Water();
-    virtual ~Water() override;
+    virtual ~Water() override = default;
 
-    // Generator interface implementation
-    virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
-    virtual void reset() override;
-    virtual const char* getName() const override { return "Water"; }
-    virtual GeneratorType getType() const override { return GeneratorType::WATER; }
+    // Generator interface
+    bool begin(const DeviceConfig& config) override;
+    const char* getName() const override { return "Water"; }
+    GeneratorType getType() const override { return GeneratorType::WATER; }
 
-    // Water specific methods
-    void update();
-
-    // Parameter configuration
-    void setParams(const WaterParams& params);
-    void resetToDefaults();
+    // Parameter access
+    void setParams(const WaterParams& params) { params_ = params; }
     const WaterParams& getParams() const { return params_; }
     WaterParams& getParamsMutable() { return params_; }
 
-    // Individual parameter setters
-    void setBaseFlow(uint8_t flow);
-    void setWaveParams(uint8_t heightMin, uint8_t heightMax, float chance);
-    void setAudioParams(float waveBoost, uint8_t flowBoostMax, int8_t flowBias);
+protected:
+    // ParticleGenerator hooks
+    void spawnParticles(float dt) override;
+    void updateParticle(Particle* p, float dt) override;
+    void renderParticle(const Particle* p, PixelMatrix& matrix) override;
+    uint32_t particleColor(uint8_t intensity) const override;
 
 private:
-    // Layout-specific flow algorithms
-    void updateMatrixWater();     // Traditional 2D downward flow
-    void updateLinearWater();     // 1D wave propagation
-    void updateRandomWater();     // Ripple effects
+    /**
+     * Spawn radial splash at position
+     */
+    void spawnSplash(float x, float y, uint8_t parentIntensity);
 
-    // Helper functions
-    void generateWaves();
-    void propagateFlow();
-    void applyFlow();
-    uint32_t depthToColor(uint8_t depth);
-    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
-
-    // State variables
-    uint8_t* depth_;      // Water depth instead of heat
-    uint8_t* tempDepth_;  // Pre-allocated temp buffer for flow propagation
-
-    // Configuration
     WaterParams params_;
-
-    // Audio input
-    AudioControl audio_;
 };

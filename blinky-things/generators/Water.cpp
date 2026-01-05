@@ -1,298 +1,118 @@
 #include "Water.h"
-#include "../types/ColorPalette.h"
 #include <Arduino.h>
-#include "../inputs/SerialConsole.h"
 
-// Animation and behavior constants
-namespace WaterConstants {
-    constexpr uint32_t FRAME_INTERVAL_MS = 50;     // ~20 FPS update rate
-    constexpr float AUDIO_PRESENCE_THRESHOLD = 0.1f;  // Minimum audio energy to react
-    constexpr int PROBABILITY_SCALE = 1000;        // Scale for random probability checks
-
-    // Flow propagation rates (divisors for heat transfer)
-    constexpr uint8_t MATRIX_FLOW_DIVISOR = 4;     // Downward flow rate for matrix
-    constexpr uint8_t LINEAR_FLOW_DIVISOR = 6;     // Lateral flow rate for linear
-    constexpr uint8_t RANDOM_FLOW_DIVISOR = 12;    // Ripple flow rate for random
-    constexpr uint8_t BASE_FLOW_DIVISOR = 20;      // Base flow reduction rate
-}
-
-Water::Water()
-    : depth_(nullptr), tempDepth_(nullptr), audio_() {
-}
-
-Water::~Water() {
-    if (depth_) {
-        delete[] depth_;
-        depth_ = nullptr;
-    }
-    if (tempDepth_) {
-        delete[] tempDepth_;
-        tempDepth_ = nullptr;
-    }
-}
+Water::Water() : params_() {}
 
 bool Water::begin(const DeviceConfig& config) {
-    width_ = config.matrix.width;
-    height_ = config.matrix.height;
-    numLeds_ = width_ * height_;
-    layout_ = config.matrix.layoutType;
+    if (!ParticleGenerator::begin(config)) return false;
 
-    // Allocate depth array
-    if (depth_) delete[] depth_;
-    depth_ = new uint8_t[numLeds_];
-    if (!depth_) {
-        SerialConsole::logError(F("Failed to allocate depth buffer"));
-        return false;
-    }
-    memset(depth_, 0, numLeds_);
+    // Configure forces for water behavior
+    gravityForce_.setGravity(params_.gravity);
+    windForce_.setWind(params_.windBase, params_.windVariation);
+    dragForce_.setDrag(params_.drag);
 
-    // Allocate temp buffer for flow propagation (avoids heap fragmentation)
-    if (tempDepth_) delete[] tempDepth_;
-    tempDepth_ = new uint8_t[numLeds_];
-    if (!tempDepth_) {
-        SerialConsole::logError(F("Failed to allocate temp depth buffer"));
-        delete[] depth_;
-        depth_ = nullptr;
-        return false;
-    }
-
-    // Reset defaults
-    resetToDefaults();
-
-    lastUpdateMs_ = millis();
     return true;
 }
 
-void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    audio_ = audio;
-    update();
+void Water::spawnParticles(float dt) {
+    float spawnProb = params_.baseSpawnChance;
+    uint8_t dropCount = 0;
 
-    // Convert depth values to colors and fill matrix
-    for (int i = 0; i < numLeds_; i++) {
-        uint32_t color = depthToColor(depth_[i]);
+    if (audio_.hasRhythm()) {
+        // MUSIC MODE: Beat-synced wave generation
+        if (audio_.pulse > 0.3f) {
+            // Boost probability near on-beat moments (phase near 0 or 1)
+            float beatBoost = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
+            spawnProb += params_.audioSpawnBoost * audio_.pulse * beatBoost;
+        }
+
+        // Burst on beat
+        if (beatHappened()) {
+            dropCount = 4;  // Wave on beat
+        }
+    } else {
+        // ORGANIC MODE: Transient-reactive with threshold
+        if (audio_.pulse > params_.organicTransientMin) {
+            spawnProb += params_.audioSpawnBoost * audio_.pulse;
+            dropCount = 2;
+        }
+    }
+
+    // Random baseline spawning
+    if (random(1000) < spawnProb * 1000) {
+        dropCount++;
+    }
+
+    // Spawn drops from top (respect maxParticles limit)
+    for (uint8_t i = 0; i < dropCount && pool_.getActiveCount() < params_.maxParticles; i++) {
+        float x = random(width_ * 100) / 100.0f;
+        float y = 0;  // Top of screen
+
+        // Downward velocity with horizontal spread
+        float vy = params_.dropVelocityMin +
+                  random(100) * (params_.dropVelocityMax - params_.dropVelocityMin) / 100.0f;
+        float vx = (random(200) - 100) * params_.dropSpread / 100.0f;
+
+        uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
+
+        pool_.spawn(x, y, vx, vy, intensity, params_.defaultLifespan, 1.0f,
+                   ParticleFlags::GRAVITY | ParticleFlags::WIND |
+                   ParticleFlags::FADE | ParticleFlags::SPLASH);
+    }
+}
+
+void Water::updateParticle(Particle* p, float dt) {
+    // Check for splash on bottom collision
+    if (p->hasFlag(ParticleFlags::SPLASH) && p->y >= height_ - 1) {
+        spawnSplash(p->x, p->y, p->intensity);
+        pool_.kill(p);
+    }
+}
+
+void Water::renderParticle(const Particle* p, PixelMatrix& matrix) {
+    int x = (int)p->x;
+    int y = (int)p->y;
+
+    if (x >= 0 && x < width_ && y >= 0 && y < height_) {
+        uint32_t color = particleColor(p->intensity);
         uint8_t r = (color >> 16) & 0xFF;
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        int x, y;
-        indexToCoords(i, x, y);
-        matrix.setPixel(x, y, r, g, b);
+        // ADDITIVE BLENDING: Droplets and splashes add light (water shimmer effect)
+        // Saturates at 255 to prevent overflow
+        RGB existing = matrix.getPixel(x, y);
+        matrix.setPixel(x, y,
+                       min(255, (int)existing.r + r),
+                       min(255, (int)existing.g + g),
+                       min(255, (int)existing.b + b));
     }
 }
 
-void Water::reset() {
-    if (depth_) {
-        memset(depth_, 0, numLeds_);
-    }
-    audio_ = AudioControl();
+uint32_t Water::particleColor(uint8_t intensity) const {
+    // Use Water palette
+    return Palette::WATER.toColor(intensity);
 }
 
-void Water::update() {
-    uint32_t currentMs = millis();
-    if (currentMs - lastUpdateMs_ < WaterConstants::FRAME_INTERVAL_MS) return;
-    lastUpdateMs_ = currentMs;
+void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
+    // Calculate available slots (respect maxParticles limit)
+    uint8_t available = params_.maxParticles > pool_.getActiveCount()
+                        ? params_.maxParticles - pool_.getActiveCount()
+                        : 0;
+    uint8_t splashCount = min(params_.splashParticles, available);
 
-    // Choose algorithm based on layout
-    switch (layout_) {
-        case MATRIX_LAYOUT:
-            updateMatrixWater();
-            break;
-        case LINEAR_LAYOUT:
-            updateLinearWater();
-            break;
-        case RANDOM_LAYOUT:
-            updateRandomWater();
-            break;
-    }
-}
+    for (uint8_t i = 0; i < splashCount; i++) {
+        // Radial splash pattern
+        float angle = (i * TWO_PI / splashCount) + random(100) * 0.01f;
+        float speed = params_.splashVelocityMin +
+                     random(100) * (params_.splashVelocityMax - params_.splashVelocityMin) / 100.0f;
 
-void Water::updateMatrixWater() {
-    // Generate waves from audio
-    generateWaves();
+        float vx = cos(angle) * speed;
+        float vy = sin(angle) * speed - 1.0f;  // Slight upward component
 
-    // Apply downward flow
-    applyFlow();
+        uint8_t intensity = min(255, (uint32_t)parentIntensity * params_.splashIntensity / 255);
 
-    // Propagate flow patterns
-    propagateFlow();
-}
-
-void Water::updateLinearWater() {
-    // Similar to matrix but 1D wave propagation
-    generateWaves();
-    applyFlow();
-    propagateFlow();
-}
-
-void Water::updateRandomWater() {
-    // Ripple effects from wave centers
-    generateWaves();
-    applyFlow();
-    propagateFlow();
-}
-
-void Water::generateWaves() {
-    // Audio-reactive wave generation
-    float waveProb = params_.waveChance;
-
-    // Rhythm-aware transient handling
-    if (audio_.hasRhythm()) {
-        // MUSIC MODE: Beat-synced wave generation
-        // Only react to strong transients (>0.3 threshold) with beat-phase boosting
-        if (audio_.pulse > 0.3f) {
-            // Boost probability near on-beat moments (phase near 0 or 1)
-            float beatBoost = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
-            waveProb += params_.audioWaveBoost * audio_.pulse * beatBoost;
-        }
-    } else {
-        // ORGANIC MODE: Transient-reactive with threshold
-        // Only react to strong transients to avoid noise-floor false positives
-        if (audio_.pulse > 0.3f) {
-            waveProb += params_.audioWaveBoost * audio_.pulse;
-        }
-    }
-
-    if (random(WaterConstants::PROBABILITY_SCALE) / (float)WaterConstants::PROBABILITY_SCALE < waveProb) {
-        int wavePosition;
-        uint8_t waveHeight = random(params_.waveHeightMin, params_.waveHeightMax + 1);
-
-        // Add audio boost to wave height
-        if (audio_.energy > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
-            uint8_t audioBoost = (uint8_t)(audio_.energy * params_.audioFlowBoostMax);
-            waveHeight = min(255, waveHeight + audioBoost);
-        }
-
-        // Choose wave position based on layout
-        switch (layout_) {
-            case MATRIX_LAYOUT:
-                // Waves start from top
-                wavePosition = random(width_);
-                if (wavePosition < width_) {
-                    depth_[wavePosition] = waveHeight;
-                }
-                break;
-
-            case LINEAR_LAYOUT:
-                // Waves start from beginning or end
-                wavePosition = random(2) == 0 ? 0 : numLeds_ - 1;
-                depth_[wavePosition] = waveHeight;
-                break;
-
-            case RANDOM_LAYOUT:
-                // Random wave position
-                wavePosition = random(numLeds_);
-                depth_[wavePosition] = waveHeight;
-                break;
-        }
+        pool_.spawn(x, y, vx, vy, intensity, 30, 0.5f,  // Light, short-lived
+                   ParticleFlags::GRAVITY | ParticleFlags::FADE);
     }
 }
-
-void Water::propagateFlow() {
-    // Use pre-allocated tempDepth_ to avoid heap fragmentation
-    memcpy(tempDepth_, depth_, numLeds_);
-
-    for (int i = 0; i < numLeds_; i++) {
-        if (depth_[i] > 0) {
-            int x, y;
-            indexToCoords(i, x, y);
-
-            // Flow based on layout
-            switch (layout_) {
-                case MATRIX_LAYOUT:
-                    // Flow downward
-                    if (y < height_ - 1) {
-                        int belowIndex = coordsToIndex(x, y + 1);
-                        uint8_t flowAmount = depth_[i] / WaterConstants::MATRIX_FLOW_DIVISOR;
-                        tempDepth_[belowIndex] = min(255, tempDepth_[belowIndex] + flowAmount);
-                        tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
-                    }
-                    break;
-
-                case LINEAR_LAYOUT:
-                    // Flow in both directions
-                    if (i > 0) {
-                        uint8_t flowAmount = depth_[i] / WaterConstants::LINEAR_FLOW_DIVISOR;
-                        tempDepth_[i - 1] = min(255, tempDepth_[i - 1] + flowAmount);
-                        tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
-                    }
-                    if (i < numLeds_ - 1) {
-                        uint8_t flowAmount = depth_[i] / WaterConstants::LINEAR_FLOW_DIVISOR;
-                        tempDepth_[i + 1] = min(255, tempDepth_[i + 1] + flowAmount);
-                        tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
-                    }
-                    break;
-
-                case RANDOM_LAYOUT:
-                    // Ripple to nearby positions (simplified)
-                    for (int j = max(0, i - 3); j <= min(numLeds_ - 1, i + 3); j++) {
-                        if (j != i) {
-                            uint8_t flowAmount = depth_[i] / WaterConstants::RANDOM_FLOW_DIVISOR;
-                            tempDepth_[j] = min(255, tempDepth_[j] + flowAmount);
-                            tempDepth_[i] = max(0, tempDepth_[i] - flowAmount);
-                        }
-                    }
-                    break;
-            }
-        }
-    }
-
-    memcpy(depth_, tempDepth_, numLeds_);
-}
-
-void Water::applyFlow() {
-    // Apply base flow rate with audio influence
-    uint8_t flowRate = params_.baseFlow;
-
-    // Add audio energy bias
-    if (audio_.energy > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
-        int8_t audioBias = (int8_t)(audio_.energy * params_.flowAudioBias);
-        flowRate = constrain(flowRate + audioBias, 0, 255);
-    }
-
-    // Add phase-modulated pulsation when rhythm is detected
-    if (audio_.hasRhythm()) {
-        // Flow pulsates with beat: faster on-beat, slower off-beat
-        float phaseMod = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
-        // Scale flow rate by 0.7x to 1.0x (70% off-beat, 100% on-beat)
-        float flowScale = 0.7f + 0.3f * phaseMod;
-        flowRate = (uint8_t)(flowRate * flowScale);
-    }
-
-    // Reduce all depths by flow rate
-    for (int i = 0; i < numLeds_; i++) {
-        if (depth_[i] > 0) {
-            depth_[i] = max(0, depth_[i] - (flowRate / WaterConstants::BASE_FLOW_DIVISOR));
-        }
-    }
-}
-
-uint32_t Water::depthToColor(uint8_t depth) {
-    // Use shared palette system for consistent color handling
-    return Palette::WATER.toColor(depth);
-}
-
-void Water::setParams(const WaterParams& params) {
-    params_ = params;
-}
-
-void Water::resetToDefaults() {
-    params_ = WaterParams();
-}
-
-void Water::setBaseFlow(uint8_t flow) {
-    params_.baseFlow = flow;
-}
-
-void Water::setWaveParams(uint8_t heightMin, uint8_t heightMax, float chance) {
-    params_.waveHeightMin = heightMin;
-    params_.waveHeightMax = heightMax;
-    params_.waveChance = chance;
-}
-
-void Water::setAudioParams(float waveBoost, uint8_t flowBoostMax, int8_t flowBias) {
-    params_.audioWaveBoost = waveBoost;
-    params_.audioFlowBoostMax = flowBoostMax;
-    params_.flowAudioBias = flowBias;
-}
-
-// Note: coordsToIndex and indexToCoords are now inherited from Generator base class

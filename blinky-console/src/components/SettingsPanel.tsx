@@ -107,6 +107,11 @@ const categoryNames: Record<string, string> = {
   music: 'Music Mode (PLL)',
   rhythm: 'Rhythm Analyzer',
   fire: 'Fire Generator',
+  firemusic: 'Fire: Music Mode',
+  fireorganic: 'Fire: Organic Mode',
+  water: 'Water Generator',
+  lightning: 'Lightning Generator',
+  effect: 'Post-Processing Effects',
 };
 
 // Category descriptions
@@ -117,11 +122,29 @@ const categoryDescriptions: Record<string, string> = {
   detection: 'Algorithm selection and mode-specific parameters (Drummer, Bass, HFC, Flux, Hybrid)',
   music: 'Phase-locked loop beat tracking → Produces: BPM, Phase, Confidence, Beat Events',
   rhythm: 'Autocorrelation-based tempo detection → Produces: BPM, Periodicity, Beat Likelihood',
-  fire: 'Fire pattern generation → Uses: Level, Transient from AdaptiveMic + Beat Events',
+  fire: 'Particle-based fire simulation with sparks, heat diffusion, and gravity physics',
+  firemusic: 'Fire behavior when rhythm tracking is active (beat-synced bursts, downbeat emphasis)',
+  fireorganic: 'Fire behavior when no rhythm detected (transient-reactive, organic spawning)',
+  water: 'Particle-based water simulation with drops, splashes, and radial physics',
+  lightning: 'Particle-based lightning with fast bolts, branching patterns, and rapid fade',
+  effect: 'Color and post-processing effects applied after generator rendering',
 };
 
-// Category order for display (input processing → detection → musical analysis → output)
-const categoryOrder = ['audio', 'agc', 'transient', 'detection', 'music', 'rhythm', 'fire'];
+// Category order for display (input processing → detection → musical analysis → generators → effects)
+const categoryOrder = [
+  'audio',
+  'agc',
+  'transient',
+  'detection',
+  'music',
+  'rhythm',
+  'fire',
+  'firemusic',
+  'fireorganic',
+  'water',
+  'lightning',
+  'effect',
+];
 
 export function SettingsPanel({
   settingsByCategory,

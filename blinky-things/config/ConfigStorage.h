@@ -2,6 +2,8 @@
 
 #include <Arduino.h>
 #include "../generators/Fire.h"
+#include "../generators/Water.h"
+#include "../generators/Lightning.h"
 #include "../inputs/AdaptiveMic.h"
 
 // Forward declarations
@@ -23,23 +25,85 @@ class AudioController;
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 25;  // Config schema v25: tempo prior, stability, smoothing params
+    static const uint8_t CONFIG_VERSION = 27;  // Config schema v27: added Water/Lightning persistence + unified parameter storage
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
-        float sparkChance;
-        float audioSparkBoost;
-        float heatDecay;
-        float emberNoiseSpeed;
-        uint16_t suppressionMs;
-        uint8_t baseCooling;
-        uint8_t sparkHeatMin;
-        uint8_t sparkHeatMax;
-        int8_t coolingAudioBias;
-        uint8_t spreadDistance;
-        uint8_t emberHeatMax;
-        uint8_t bottomRowsForSparks;
+        // Spawn behavior
+        float baseSpawnChance;
+        float audioSpawnBoost;
+        // Physics
+        float gravity;
+        float windBase;
+        float windVariation;
+        float drag;
+        // Spark appearance
+        float sparkVelocityMin;
+        float sparkVelocityMax;
+        float sparkSpread;
+        // Audio reactivity
+        float musicSpawnPulse;
+        float organicTransientMin;
+        // Lifecycle
+        uint8_t maxParticles;
+        uint8_t defaultLifespan;
+        uint8_t intensityMin;
+        uint8_t intensityMax;
+        // Heat trail
+        uint8_t trailHeatFactor;
+        uint8_t trailDecay;
         uint8_t burstSparks;
+    };
+
+    struct StoredWaterParams {
+        // Spawn behavior
+        float baseSpawnChance;
+        float audioSpawnBoost;
+        // Physics
+        float gravity;
+        float windBase;
+        float windVariation;
+        float drag;
+        // Drop appearance
+        float dropVelocityMin;
+        float dropVelocityMax;
+        float dropSpread;
+        // Splash behavior
+        float splashVelocityMin;
+        float splashVelocityMax;
+        // Audio reactivity
+        float musicSpawnPulse;
+        float organicTransientMin;
+        // Lifecycle
+        uint8_t maxParticles;
+        uint8_t defaultLifespan;
+        uint8_t intensityMin;
+        uint8_t intensityMax;
+        uint8_t splashParticles;
+        uint8_t splashIntensity;
+    };
+
+    struct StoredLightningParams {
+        // Spawn behavior
+        float baseSpawnChance;
+        float audioSpawnBoost;
+        // Bolt appearance
+        float boltVelocityMin;
+        float boltVelocityMax;
+        // Branching
+        float branchAngleSpread;
+        // Audio reactivity
+        float musicSpawnPulse;
+        float organicTransientMin;
+        // Lifecycle
+        uint8_t maxParticles;
+        uint8_t defaultLifespan;
+        uint8_t intensityMin;
+        uint8_t intensityMax;
+        uint8_t fadeRate;
+        uint8_t branchChance;
+        uint8_t branchCount;
+        uint8_t branchIntensityLoss;
     };
 
     struct StoredMicParams {
@@ -105,6 +169,8 @@ public:
         uint16_t magic;
         uint8_t version;
         StoredFireParams fire;
+        StoredWaterParams water;
+        StoredLightningParams lightning;
         StoredMicParams mic;
         StoredMusicParams music;
         uint8_t brightness;
@@ -113,24 +179,44 @@ public:
     // Compile-time safety checks
     // These verify struct sizes match expected values to catch accidental changes
     // If these fail, you MUST increment CONFIG_VERSION!
+    // Note: Struct sizes depend on compiler padding. Sizes below are for ARM GCC.
+    static_assert(sizeof(StoredFireParams) == 52,
+        "StoredFireParams size changed! Increment CONFIG_VERSION and update assertion.");
+    static_assert(sizeof(StoredWaterParams) == 60,
+        "StoredWaterParams size changed! Increment CONFIG_VERSION and update assertion. (60 bytes = 13 floats + 6 uint8 + padding)");
+    static_assert(sizeof(StoredLightningParams) == 36,
+        "StoredLightningParams size changed! Increment CONFIG_VERSION and update assertion. (36 bytes = 7 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 60,
         "StoredMusicParams size changed! Increment CONFIG_VERSION and update assertion. (60 bytes = 14 floats + 1 bool + padding)");
-    static_assert(sizeof(ConfigData) <= 230,
+    static_assert(sizeof(ConfigData) <= 400,
         "ConfigData too large! May not fit in flash sector. Review struct padding.");
 
     ConfigStorage();
     void begin();
     bool isValid() const { return valid_; }
 
-    void loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, AudioController* audioCtrl = nullptr);
-    void saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
+    /**
+     * BREAKING CHANGE (v27): API now requires all 3 generator params
+     *
+     * Migration from v26:
+     *   OLD: loadConfiguration(fireParams, mic, audioCtrl)
+     *   NEW: loadConfiguration(fireParams, waterParams, lightningParams, mic, audioCtrl)
+     *
+     * Rationale: Unified particle system requires persisting all generators,
+     * not just Fire. This ensures Water and Lightning settings survive reboots.
+     */
+    void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
+                          AdaptiveMic& mic, AudioController* audioCtrl = nullptr);
+    void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+                          const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
     void factoryReset();
 
     // Auto-save support
     void markDirty() { dirty_ = true; }
-    void saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
+    void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+                     const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
 
 private:
     ConfigData data_;

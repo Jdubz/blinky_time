@@ -38,6 +38,9 @@ unusedPrivateFunction
 constVariablePointer
 constVariable
 
+# Explicit constructors - test utilities intentionally allow implicit conversion
+noExplicitConstructor
+
 # Scope reduction suggestions - embedded code often pre-declares for performance
 variableScope
 

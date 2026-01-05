@@ -78,17 +78,6 @@ SerialConsole* console = nullptr;  // Serial command interface
 uint32_t lastMs = 0;
 bool prevChargingState = false;
 
-// Live-tunable fire parameters
-FireParams fireParams;
-
-void updateFireParams() {
-  if (!pipeline) return;
-  Fire* f = pipeline->getFireGenerator();
-  if (f) {
-    f->setParams(fireParams);
-  }
-}
-
 // Helper function for Generator-Effect-Renderer pipeline
 void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
@@ -224,12 +213,6 @@ void setup() {
     haltWithError(F("ERROR: RenderPipeline initialization failed"));
   }
 
-  // Sync fireParams FROM the Fire generator (preserves layout-specific values set by Fire::begin)
-  Fire* fireGen = pipeline->getFireGenerator();
-  if (fireGen) {
-    fireParams = fireGen->getParams();  // Copy all params including layout-specific ones
-  }
-
   SerialConsole::logDebug(F("RenderPipeline initialized"));
 
   // Initialize HAL-enabled components (must be done in setup(), not at global scope)
@@ -250,9 +233,23 @@ void setup() {
   // Initialize configuration storage and load saved settings
   configStorage.begin();
   if (configStorage.isValid()) {
-    configStorage.loadConfiguration(fireParams, audioController->getMicForTuning(), audioController);
-    updateFireParams();
-    SerialConsole::logDebug(F("Loaded config from flash"));
+    // Load parameters directly into generators' internal storage
+    Fire* fireGen = pipeline->getFireGenerator();
+    Water* waterGen = pipeline->getWaterGenerator();
+    Lightning* lightningGen = pipeline->getLightningGenerator();
+
+    if (fireGen && waterGen && lightningGen) {
+      configStorage.loadConfiguration(
+        fireGen->getParamsMutable(),
+        waterGen->getParamsMutable(),
+        lightningGen->getParamsMutable(),
+        audioController->getMicForTuning(),
+        audioController
+      );
+      SerialConsole::logDebug(F("Loaded config from flash"));
+    } else {
+      SerialConsole::logWarn(F("Generator pointers invalid, using defaults"));
+    }
   } else {
     SerialConsole::logDebug(F("Using default config"));
   }
@@ -346,7 +343,21 @@ void loop() {
   }
 
   // Auto-save dirty settings to flash (debounced)
-  if (audioController) configStorage.saveIfDirty(fireParams, audioController->getMicForTuning(), audioController);
+  if (audioController && pipeline) {
+    Fire* fireGen = pipeline->getFireGenerator();
+    Water* waterGen = pipeline->getWaterGenerator();
+    Lightning* lightningGen = pipeline->getLightningGenerator();
+
+    if (fireGen && waterGen && lightningGen) {
+      configStorage.saveIfDirty(
+        fireGen->getParams(),
+        waterGen->getParams(),
+        lightningGen->getParams(),
+        audioController->getMicForTuning(),
+        audioController
+      );
+    }
+  }
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;

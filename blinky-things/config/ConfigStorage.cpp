@@ -85,20 +85,63 @@ void ConfigStorage::loadDefaults() {
     data_.magic = MAGIC_NUMBER;
     data_.version = CONFIG_VERSION;
 
-    // Fire defaults
-    data_.fire.baseCooling = 90;
-    data_.fire.sparkHeatMin = 200;
-    data_.fire.sparkHeatMax = 255;
-    data_.fire.sparkChance = 0.08f;
-    data_.fire.audioSparkBoost = 0.8f;
-    data_.fire.coolingAudioBias = -70;
-    data_.fire.spreadDistance = 3;
-    data_.fire.heatDecay = 0.60f;
-    data_.fire.suppressionMs = 300;
-    data_.fire.emberNoiseSpeed = 0.00033f;
-    data_.fire.emberHeatMax = 18;
-    data_.fire.bottomRowsForSparks = 1;
+    // Fire defaults (particle-based)
+    data_.fire.baseSpawnChance = 0.15f;
+    data_.fire.audioSpawnBoost = 0.6f;
+    data_.fire.gravity = -8.0f;
+    data_.fire.windBase = 0.0f;
+    data_.fire.windVariation = 0.5f;
+    data_.fire.drag = 0.96f;
+    data_.fire.sparkVelocityMin = 1.5f;
+    data_.fire.sparkVelocityMax = 3.5f;
+    data_.fire.sparkSpread = 0.8f;
+    data_.fire.musicSpawnPulse = 0.6f;
+    data_.fire.organicTransientMin = 0.5f;
+    data_.fire.maxParticles = 48;
+    data_.fire.defaultLifespan = 60;
+    data_.fire.intensityMin = 160;
+    data_.fire.intensityMax = 255;
+    data_.fire.trailHeatFactor = 60;
+    data_.fire.trailDecay = 40;
     data_.fire.burstSparks = 8;
+
+    // Water defaults (particle-based)
+    data_.water.baseSpawnChance = 0.25f;
+    data_.water.audioSpawnBoost = 0.4f;
+    data_.water.gravity = 5.0f;
+    data_.water.windBase = 0.0f;
+    data_.water.windVariation = 0.3f;
+    data_.water.drag = 0.99f;
+    data_.water.dropVelocityMin = 0.5f;
+    data_.water.dropVelocityMax = 1.5f;
+    data_.water.dropSpread = 0.3f;
+    data_.water.splashVelocityMin = 0.5f;
+    data_.water.splashVelocityMax = 2.0f;
+    data_.water.musicSpawnPulse = 0.5f;
+    data_.water.organicTransientMin = 0.3f;
+    data_.water.maxParticles = 64;
+    data_.water.defaultLifespan = 90;
+    data_.water.intensityMin = 80;
+    data_.water.intensityMax = 200;
+    data_.water.splashParticles = 6;
+    data_.water.splashIntensity = 120;
+
+    // Lightning defaults (particle-based)
+    data_.lightning.baseSpawnChance = 0.15f;
+    data_.lightning.audioSpawnBoost = 0.5f;
+    data_.lightning.boltVelocityMin = 4.0f;
+    data_.lightning.boltVelocityMax = 8.0f;
+    data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
+    data_.lightning.musicSpawnPulse = 0.6f;
+    data_.lightning.organicTransientMin = 0.3f;
+    data_.lightning.maxParticles = 32;
+    data_.lightning.defaultLifespan = 20;
+    data_.lightning.intensityMin = 180;
+    data_.lightning.intensityMax = 255;
+    data_.lightning.fadeRate = 160;
+    data_.lightning.branchChance = 30;
+    data_.lightning.branchCount = 2;
+    data_.lightning.branchIntensityLoss = 40;
 
     // Mic defaults (hardware-primary, window/range normalization)
     // Window/Range normalization parameters
@@ -255,7 +298,8 @@ void ConfigStorage::saveToFlash() {
 #endif
 }
 
-void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, AudioController* audioCtrl) {
+void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
+                                      AdaptiveMic& mic, AudioController* audioCtrl) {
     // Validation helpers to reduce code duplication
     bool corrupt = false;
 
@@ -284,8 +328,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     };
 
     // Validate critical parameters - if out of range, use defaults
-    validateFloat(data_.fire.heatDecay, 0.0f, 1.0f, F("heatDecay"));
-    validateFloat(data_.fire.sparkChance, 0.0f, 1.0f, F("sparkChance"));
+    validateFloat(data_.fire.baseSpawnChance, 0.0f, 1.0f, F("baseSpawnChance"));
+    validateFloat(data_.fire.audioSpawnBoost, 0.0f, 2.0f, F("audioSpawnBoost"));
 
     // Validate window/range normalization parameters
     validateFloat(data_.mic.peakTau, 0.5f, 10.0f, F("peakTau"));
@@ -353,24 +397,81 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
 
     // Debug: show loaded values
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
-        Serial.print(F("[DEBUG] heatDecay=")); Serial.print(data_.fire.heatDecay, 2);
-        Serial.print(F(" cooling=")); Serial.print(data_.fire.baseCooling);
-        Serial.print(F(" spread=")); Serial.println(data_.fire.spreadDistance);
+        Serial.print(F("[DEBUG] baseSpawnChance=")); Serial.print(data_.fire.baseSpawnChance, 2);
+        Serial.print(F(" trailDecay=")); Serial.print(data_.fire.trailDecay);
+        Serial.print(F(" gravity=")); Serial.println(data_.fire.gravity);
     }
 
-    fireParams.baseCooling = data_.fire.baseCooling;
-    fireParams.sparkHeatMin = data_.fire.sparkHeatMin;
-    fireParams.sparkHeatMax = data_.fire.sparkHeatMax;
-    fireParams.sparkChance = data_.fire.sparkChance;
-    fireParams.audioSparkBoost = data_.fire.audioSparkBoost;
-    fireParams.coolingAudioBias = data_.fire.coolingAudioBias;
-    fireParams.spreadDistance = data_.fire.spreadDistance;
-    fireParams.heatDecay = data_.fire.heatDecay;
-    fireParams.suppressionMs = data_.fire.suppressionMs;
-    fireParams.emberNoiseSpeed = data_.fire.emberNoiseSpeed;
-    fireParams.emberHeatMax = data_.fire.emberHeatMax;
-    fireParams.bottomRowsForSparks = data_.fire.bottomRowsForSparks;
+    // Spawn behavior
+    fireParams.baseSpawnChance = data_.fire.baseSpawnChance;
+    fireParams.audioSpawnBoost = data_.fire.audioSpawnBoost;
+    // Physics
+    fireParams.gravity = data_.fire.gravity;
+    fireParams.windBase = data_.fire.windBase;
+    fireParams.windVariation = data_.fire.windVariation;
+    fireParams.drag = data_.fire.drag;
+    // Spark appearance
+    fireParams.sparkVelocityMin = data_.fire.sparkVelocityMin;
+    fireParams.sparkVelocityMax = data_.fire.sparkVelocityMax;
+    fireParams.sparkSpread = data_.fire.sparkSpread;
+    // Audio reactivity
+    fireParams.musicSpawnPulse = data_.fire.musicSpawnPulse;
+    fireParams.organicTransientMin = data_.fire.organicTransientMin;
+    // Lifecycle
+    fireParams.defaultLifespan = data_.fire.defaultLifespan;
+    fireParams.intensityMin = data_.fire.intensityMin;
+    fireParams.intensityMax = data_.fire.intensityMax;
+    // Heat trail
+    fireParams.trailHeatFactor = data_.fire.trailHeatFactor;
+    fireParams.trailDecay = data_.fire.trailDecay;
     fireParams.burstSparks = data_.fire.burstSparks;
+
+    // === WATER PARAMETERS ===
+    // Spawn behavior
+    waterParams.baseSpawnChance = data_.water.baseSpawnChance;
+    waterParams.audioSpawnBoost = data_.water.audioSpawnBoost;
+    // Physics
+    waterParams.gravity = data_.water.gravity;
+    waterParams.windBase = data_.water.windBase;
+    waterParams.windVariation = data_.water.windVariation;
+    waterParams.drag = data_.water.drag;
+    // Drop appearance
+    waterParams.dropVelocityMin = data_.water.dropVelocityMin;
+    waterParams.dropVelocityMax = data_.water.dropVelocityMax;
+    waterParams.dropSpread = data_.water.dropSpread;
+    // Splash behavior
+    waterParams.splashVelocityMin = data_.water.splashVelocityMin;
+    waterParams.splashVelocityMax = data_.water.splashVelocityMax;
+    // Audio reactivity
+    waterParams.musicSpawnPulse = data_.water.musicSpawnPulse;
+    waterParams.organicTransientMin = data_.water.organicTransientMin;
+    // Lifecycle
+    waterParams.defaultLifespan = data_.water.defaultLifespan;
+    waterParams.intensityMin = data_.water.intensityMin;
+    waterParams.intensityMax = data_.water.intensityMax;
+    waterParams.splashParticles = data_.water.splashParticles;
+    waterParams.splashIntensity = data_.water.splashIntensity;
+
+    // === LIGHTNING PARAMETERS ===
+    // Spawn behavior
+    lightningParams.baseSpawnChance = data_.lightning.baseSpawnChance;
+    lightningParams.audioSpawnBoost = data_.lightning.audioSpawnBoost;
+    // Bolt appearance
+    lightningParams.boltVelocityMin = data_.lightning.boltVelocityMin;
+    lightningParams.boltVelocityMax = data_.lightning.boltVelocityMax;
+    // Branching
+    lightningParams.branchAngleSpread = data_.lightning.branchAngleSpread;
+    // Audio reactivity
+    lightningParams.musicSpawnPulse = data_.lightning.musicSpawnPulse;
+    lightningParams.organicTransientMin = data_.lightning.organicTransientMin;
+    // Lifecycle
+    lightningParams.defaultLifespan = data_.lightning.defaultLifespan;
+    lightningParams.intensityMin = data_.lightning.intensityMin;
+    lightningParams.intensityMax = data_.lightning.intensityMax;
+    lightningParams.fadeRate = data_.lightning.fadeRate;
+    lightningParams.branchChance = data_.lightning.branchChance;
+    lightningParams.branchCount = data_.lightning.branchCount;
+    lightningParams.branchIntensityLoss = data_.lightning.branchIntensityLoss;
 
     // Window/Range normalization parameters
     mic.peakTau = data_.mic.peakTau;
@@ -417,20 +518,78 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     }
 }
 
-void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
-    data_.fire.baseCooling = fireParams.baseCooling;
-    data_.fire.sparkHeatMin = fireParams.sparkHeatMin;
-    data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
-    data_.fire.sparkChance = fireParams.sparkChance;
-    data_.fire.audioSparkBoost = fireParams.audioSparkBoost;
-    data_.fire.coolingAudioBias = fireParams.coolingAudioBias;
-    data_.fire.spreadDistance = fireParams.spreadDistance;
-    data_.fire.heatDecay = fireParams.heatDecay;
-    data_.fire.suppressionMs = fireParams.suppressionMs;
-    data_.fire.emberNoiseSpeed = fireParams.emberNoiseSpeed;
-    data_.fire.emberHeatMax = fireParams.emberHeatMax;
-    data_.fire.bottomRowsForSparks = fireParams.bottomRowsForSparks;
+void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+                                      const AdaptiveMic& mic, const AudioController* audioCtrl) {
+    // Spawn behavior
+    data_.fire.baseSpawnChance = fireParams.baseSpawnChance;
+    data_.fire.audioSpawnBoost = fireParams.audioSpawnBoost;
+    // Physics
+    data_.fire.gravity = fireParams.gravity;
+    data_.fire.windBase = fireParams.windBase;
+    data_.fire.windVariation = fireParams.windVariation;
+    data_.fire.drag = fireParams.drag;
+    // Spark appearance
+    data_.fire.sparkVelocityMin = fireParams.sparkVelocityMin;
+    data_.fire.sparkVelocityMax = fireParams.sparkVelocityMax;
+    data_.fire.sparkSpread = fireParams.sparkSpread;
+    // Audio reactivity
+    data_.fire.musicSpawnPulse = fireParams.musicSpawnPulse;
+    data_.fire.organicTransientMin = fireParams.organicTransientMin;
+    // Lifecycle
+    data_.fire.defaultLifespan = fireParams.defaultLifespan;
+    data_.fire.intensityMin = fireParams.intensityMin;
+    data_.fire.intensityMax = fireParams.intensityMax;
+    // Heat trail
+    data_.fire.trailHeatFactor = fireParams.trailHeatFactor;
+    data_.fire.trailDecay = fireParams.trailDecay;
     data_.fire.burstSparks = fireParams.burstSparks;
+
+    // === WATER PARAMETERS ===
+    // Spawn behavior
+    data_.water.baseSpawnChance = waterParams.baseSpawnChance;
+    data_.water.audioSpawnBoost = waterParams.audioSpawnBoost;
+    // Physics
+    data_.water.gravity = waterParams.gravity;
+    data_.water.windBase = waterParams.windBase;
+    data_.water.windVariation = waterParams.windVariation;
+    data_.water.drag = waterParams.drag;
+    // Drop appearance
+    data_.water.dropVelocityMin = waterParams.dropVelocityMin;
+    data_.water.dropVelocityMax = waterParams.dropVelocityMax;
+    data_.water.dropSpread = waterParams.dropSpread;
+    // Splash behavior
+    data_.water.splashVelocityMin = waterParams.splashVelocityMin;
+    data_.water.splashVelocityMax = waterParams.splashVelocityMax;
+    // Audio reactivity
+    data_.water.musicSpawnPulse = waterParams.musicSpawnPulse;
+    data_.water.organicTransientMin = waterParams.organicTransientMin;
+    // Lifecycle
+    data_.water.defaultLifespan = waterParams.defaultLifespan;
+    data_.water.intensityMin = waterParams.intensityMin;
+    data_.water.intensityMax = waterParams.intensityMax;
+    data_.water.splashParticles = waterParams.splashParticles;
+    data_.water.splashIntensity = waterParams.splashIntensity;
+
+    // === LIGHTNING PARAMETERS ===
+    // Spawn behavior
+    data_.lightning.baseSpawnChance = lightningParams.baseSpawnChance;
+    data_.lightning.audioSpawnBoost = lightningParams.audioSpawnBoost;
+    // Bolt appearance
+    data_.lightning.boltVelocityMin = lightningParams.boltVelocityMin;
+    data_.lightning.boltVelocityMax = lightningParams.boltVelocityMax;
+    // Branching
+    data_.lightning.branchAngleSpread = lightningParams.branchAngleSpread;
+    // Audio reactivity
+    data_.lightning.musicSpawnPulse = lightningParams.musicSpawnPulse;
+    data_.lightning.organicTransientMin = lightningParams.organicTransientMin;
+    // Lifecycle
+    data_.lightning.defaultLifespan = lightningParams.defaultLifespan;
+    data_.lightning.intensityMin = lightningParams.intensityMin;
+    data_.lightning.intensityMax = lightningParams.intensityMax;
+    data_.lightning.fadeRate = lightningParams.fadeRate;
+    data_.lightning.branchChance = lightningParams.branchChance;
+    data_.lightning.branchCount = lightningParams.branchCount;
+    data_.lightning.branchIntensityLoss = lightningParams.branchIntensityLoss;
 
     // Window/Range normalization parameters
     data_.mic.peakTau = mic.peakTau;
@@ -481,9 +640,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     lastSaveMs_ = millis();
 }
 
-void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+                                const AdaptiveMic& mic, const AudioController* audioCtrl) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, mic, audioCtrl);
+        saveConfiguration(fireParams, waterParams, lightningParams, mic, audioCtrl);
     }
 }
 

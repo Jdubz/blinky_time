@@ -1,379 +1,185 @@
 #include "Lightning.h"
-#include "../types/ColorPalette.h"
 #include <Arduino.h>
-#include "../inputs/SerialConsole.h"
 
-// Animation and behavior constants
-namespace LightningConstants {
-    constexpr uint32_t FRAME_INTERVAL_MS = 30;     // ~33 FPS (faster for snappy lightning)
-    constexpr uint8_t BOLT_VISIBILITY_MIN = 50;    // Minimum intensity to render as visible
-    constexpr float AUDIO_PRESENCE_THRESHOLD = 0.1f;  // Minimum audio energy to react
-    constexpr int PROBABILITY_SCALE = 1000;        // Scale for random probability checks
-    constexpr int PERCENT_SCALE = 100;             // Scale for percentage checks
-
-    // Branching behavior
-    constexpr int NUM_DIRECTIONS = 4;              // Up, right, down, left
-    constexpr int BRANCH_DIRECTION_CHANCE = 50;    // 50% chance each direction
-    constexpr int BRANCH_LENGTH_MIN = 2;           // Min branch length
-    constexpr int BRANCH_LENGTH_MAX = 6;           // Max branch length (exclusive in random)
-    constexpr int ZIGZAG_CHANCE = 30;              // 30% chance to change direction
-
-    // Propagation chances
-    constexpr int MATRIX_PROPAGATE_CHANCE = 20;    // 20% propagation to adjacent pixels
-    constexpr int LINEAR_PROPAGATE_CHANCE = 30;    // 30% linear propagation
-    constexpr int RANDOM_ARC_CHANCE = 15;          // 15% arc chance for random layout
-
-    // Intensity propagation divisors
-    constexpr uint8_t MATRIX_INTENSITY_DIVISOR = 3;
-    constexpr uint8_t LINEAR_INTENSITY_DIVISOR = 2;
-    constexpr uint8_t RANDOM_INTENSITY_DIVISOR = 4;
-
-    // Fade constraints
-    constexpr uint8_t MIN_FADE_RATE = 50;
-    constexpr uint8_t MAX_FADE_RATE = 255;
-    constexpr uint8_t FADE_DIVISOR = 10;
-}
-
-Lightning::Lightning()
-    : intensity_(nullptr), tempIntensity_(nullptr), audio_() {
-}
-
-Lightning::~Lightning() {
-    if (intensity_) {
-        delete[] intensity_;
-        intensity_ = nullptr;
-    }
-    if (tempIntensity_) {
-        delete[] tempIntensity_;
-        tempIntensity_ = nullptr;
-    }
-}
+Lightning::Lightning() : params_() {}
 
 bool Lightning::begin(const DeviceConfig& config) {
-    width_ = config.matrix.width;
-    height_ = config.matrix.height;
-    numLeds_ = width_ * height_;
-    layout_ = config.matrix.layoutType;
+    if (!ParticleGenerator::begin(config)) return false;
 
-    // Allocate intensity array
-    if (intensity_) delete[] intensity_;
-    intensity_ = new uint8_t[numLeds_];
-    if (!intensity_) {
-        SerialConsole::logError(F("Failed to allocate intensity buffer"));
-        return false;
-    }
-    memset(intensity_, 0, numLeds_);
+    // Configure forces for lightning behavior (no forces - instant bolts)
+    gravityForce_.setGravity(0.0f);
+    dragForce_.setDrag(1.0f);  // No drag
 
-    // Allocate temp buffer for bolt propagation (avoids heap fragmentation)
-    if (tempIntensity_) delete[] tempIntensity_;
-    tempIntensity_ = new uint8_t[numLeds_];
-    if (!tempIntensity_) {
-        SerialConsole::logError(F("Failed to allocate temp buffer"));
-        delete[] intensity_;
-        intensity_ = nullptr;
-        return false;
-    }
-
-    // Reset defaults
-    resetToDefaults();
-
-    lastUpdateMs_ = millis();
     return true;
 }
 
-void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    audio_ = audio;
-    update();
+void Lightning::spawnParticles(float dt) {
+    float spawnProb = params_.baseSpawnChance;
+    uint8_t boltCount = 0;
 
-    // Convert intensity values to colors and fill matrix
-    for (int i = 0; i < numLeds_; i++) {
-        uint32_t color = intensityToColor(intensity_[i]);
+    if (audio_.hasRhythm()) {
+        // MUSIC MODE: Beat-synced bolt generation
+        if (audio_.pulse > 0.3f) {
+            float beatBoost = audio_.phaseToPulse();
+            spawnProb += params_.audioSpawnBoost * audio_.pulse * beatBoost;
+        }
+
+        // Burst on beat
+        if (beatHappened()) {
+            boltCount = 2;  // Reduced from 3 - spawn fewer but more coherent bolts
+        }
+    } else {
+        // ORGANIC MODE: Transient-reactive
+        if (audio_.pulse > params_.organicTransientMin) {
+            spawnProb += params_.audioSpawnBoost * audio_.pulse;
+            boltCount = 1;  // Reduced from 2
+        }
+    }
+
+    // Random baseline spawning
+    if (random(1000) < spawnProb * 1000) {
+        boltCount++;
+    }
+
+    // Spawn coherent lightning bolts as connected particle chains (respect maxParticles limit)
+    for (uint8_t i = 0; i < boltCount && pool_.getActiveCount() < params_.maxParticles; i++) {
+        spawnBolt();
+    }
+}
+
+/**
+ * Spawn a coherent lightning bolt as a connected chain of particles
+ * Uses Bresenham's line algorithm to create linear bolt structure
+ */
+void Lightning::spawnBolt() {
+    // Choose random start and end points
+    float x0 = random(width_ * 100) / 100.0f;
+    float y0 = random(height_ * 100) / 100.0f;
+    float x1 = random(width_ * 100) / 100.0f;
+    float y1 = random(height_ * 100) / 100.0f;
+
+    // Calculate bolt intensity (brightest on beat)
+    uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
+    if (audio_.hasRhythm()) {
+        float phaseMod = audio_.phaseToPulse();
+        float intensityScale = 0.6f + 0.4f * phaseMod;
+        intensity = (uint8_t)(intensity * intensityScale);
+    }
+
+    // Use Bresenham's line algorithm to create connected particle chain
+    int dx = abs((int)x1 - (int)x0);
+    int dy = abs((int)y1 - (int)y0);
+    int steps = max(dx, dy);
+
+    // Limit bolt length to prevent using entire pool
+    steps = min(steps, 12);  // Max 12 particles per bolt
+
+    if (steps == 0) return;  // Degenerate case
+
+    float xStep = (x1 - x0) / steps;
+    float yStep = (y1 - y0) / steps;
+
+    // Spawn particles along the line with slight random jitter for organic look
+    for (int step = 0; step <= steps && pool_.getActiveCount() < params_.maxParticles; step++) {
+        float x = x0 + xStep * step;
+        float y = y0 + yStep * step;
+
+        // Add small random jitter (±0.3 pixels) for organic lightning appearance
+        x += (random(60) - 30) / 100.0f;
+        y += (random(60) - 30) / 100.0f;
+
+        // All particles in bolt are stationary (vx=0, vy=0) and fade together
+        pool_.spawn(x, y, 0.0f, 0.0f, intensity, params_.defaultLifespan, 1.0f,
+                   ParticleFlags::BRANCH);  // Can still branch
+    }
+}
+
+void Lightning::updateParticle(Particle* p, float dt) {
+    // Branching logic (only branch once, when particle is young)
+    if (p->hasFlag(ParticleFlags::BRANCH) && p->age > 2 && p->age < 8) {
+        if (random(100) < params_.branchChance && pool_.getActiveCount() < params_.maxParticles) {
+            spawnBranch(p);
+            p->clearFlag(ParticleFlags::BRANCH);  // Only branch once
+        }
+    }
+
+    // Manual fast fade (faster than age-based fade)
+    if (p->intensity > params_.fadeRate) {
+        p->intensity -= params_.fadeRate;
+    } else {
+        p->intensity = 0;
+    }
+}
+
+void Lightning::renderParticle(const Particle* p, PixelMatrix& matrix) {
+    int x = (int)p->x;
+    int y = (int)p->y;
+
+    if (x >= 0 && x < width_ && y >= 0 && y < height_) {
+        uint32_t color = particleColor(p->intensity);
         uint8_t r = (color >> 16) & 0xFF;
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        int x, y;
-        indexToCoords(i, x, y);
-        matrix.setPixel(x, y, r, g, b);
+        // MAX BLENDING: Lightning bolts take brightest value (bolt dominance)
+        // Preserves the brightest part of overlapping bolts and branches
+        RGB existing = matrix.getPixel(x, y);
+        matrix.setPixel(x, y,
+                       max(existing.r, r),
+                       max(existing.g, g),
+                       max(existing.b, b));
     }
 }
 
-void Lightning::reset() {
-    if (intensity_) {
-        memset(intensity_, 0, numLeds_);
-    }
-    audio_ = AudioControl();
-}
-
-void Lightning::update() {
-    uint32_t currentMs = millis();
-    if (currentMs - lastUpdateMs_ < LightningConstants::FRAME_INTERVAL_MS) return;
-    lastUpdateMs_ = currentMs;
-
-    // Choose algorithm based on layout
-    switch (layout_) {
-        case MATRIX_LAYOUT:
-            updateMatrixLightning();
-            break;
-        case LINEAR_LAYOUT:
-            updateLinearLightning();
-            break;
-        case RANDOM_LAYOUT:
-            updateRandomLightning();
-            break;
-    }
-}
-
-void Lightning::updateMatrixLightning() {
-    // Generate bolts from audio
-    generateBolts();
-
-    // Propagate bolts with branching
-    propagateBolts();
-
-    // Apply fade
-    applyFade();
-}
-
-void Lightning::updateLinearLightning() {
-    // Similar to matrix but 1D bolt propagation
-    generateBolts();
-    propagateBolts();
-    applyFade();
-}
-
-void Lightning::updateRandomLightning() {
-    // Electric arcs between random points
-    generateBolts();
-    propagateBolts();
-    applyFade();
-}
-
-void Lightning::generateBolts() {
-    // Audio-reactive bolt generation
-    float boltProb = params_.boltChance;
-
-    // Rhythm-aware transient handling
-    if (audio_.hasRhythm()) {
-        // MUSIC MODE: Beat-synced bolt generation
-        // Only react to strong transients (>0.3 threshold) with beat-phase boosting
-        if (audio_.pulse > 0.3f) {
-            // Boost probability near on-beat moments (phase near 0 or 1)
-            float beatBoost = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
-            boltProb += params_.audioBoltBoost * audio_.pulse * beatBoost;
-        }
-    } else {
-        // ORGANIC MODE: Transient-reactive with threshold
-        // Only react to strong transients to avoid noise-floor false positives
-        if (audio_.pulse > 0.3f) {
-            boltProb += params_.audioBoltBoost * audio_.pulse;
-        }
-    }
-
-    if (random(LightningConstants::PROBABILITY_SCALE) / (float)LightningConstants::PROBABILITY_SCALE < boltProb) {
-        int boltPosition;
-        uint8_t boltIntensity = random(params_.boltIntensityMin, params_.boltIntensityMax + 1);
-
-        // Add audio boost to bolt intensity
-        if (audio_.energy > LightningConstants::AUDIO_PRESENCE_THRESHOLD) {
-            uint8_t audioBoost = (uint8_t)(audio_.energy * params_.audioIntensityBoostMax);
-            boltIntensity = min(255, boltIntensity + audioBoost);
-        }
-
-        // Add phase-modulated intensity boost when rhythm is detected
-        if (audio_.hasRhythm()) {
-            // Bolts are brightest on-beat, dimmer off-beat
-            float phaseMod = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
-            float intensityScale = 0.6f + 0.4f * phaseMod;  // 60% to 100%
-            boltIntensity = (uint8_t)(boltIntensity * intensityScale);
-        }
-
-        // Choose bolt position based on layout
-        switch (layout_) {
-            case MATRIX_LAYOUT: {
-                // Bolts can start anywhere
-                boltPosition = random(numLeds_);
-                intensity_[boltPosition] = boltIntensity;
-
-                // Create branches with rhythm-adaptive complexity
-                uint8_t effectiveBranchChance = params_.branchChance;
-                if (audio_.hasRhythm()) {
-                    // More branching during strong rhythm (up to 1.5x complexity)
-                    effectiveBranchChance = (uint8_t)(params_.branchChance * (1.0f + 0.5f * audio_.rhythmStrength));
-                }
-
-                if (random(LightningConstants::PERCENT_SCALE) < effectiveBranchChance) {
-                    int x, y;
-                    indexToCoords(boltPosition, x, y);
-
-                    // Branch in random directions
-                    for (int dir = 0; dir < LightningConstants::NUM_DIRECTIONS; dir++) {
-                        if (random(LightningConstants::PERCENT_SCALE) < LightningConstants::BRANCH_DIRECTION_CHANCE) {
-                            createBranch(boltPosition, dir, boltIntensity / 2);
-                        }
-                    }
-                }
-                break;
-            }
-
-            case LINEAR_LAYOUT:
-                // Bolts start from random position and propagate
-                boltPosition = random(numLeds_);
-                intensity_[boltPosition] = boltIntensity;
-                break;
-
-            case RANDOM_LAYOUT:
-                // Random bolt position
-                boltPosition = random(numLeds_);
-                intensity_[boltPosition] = boltIntensity;
-                break;
-        }
-    }
-}
-
-void Lightning::createBranch(int startIndex, int direction, uint8_t intensity) {
-    int x, y;
-    indexToCoords(startIndex, x, y);
-
-    // Direction: 0=up, 1=right, 2=down, 3=left
-    int dx = 0, dy = 0;
-    switch (direction) {
-        case 0: dy = -1; break; // up
-        case 1: dx = 1; break;  // right
-        case 2: dy = 1; break;  // down
-        case 3: dx = -1; break; // left
-    }
-
-    // Create branch of random length
-    int branchLength = random(LightningConstants::BRANCH_LENGTH_MIN, LightningConstants::BRANCH_LENGTH_MAX);
-    for (int i = 1; i <= branchLength; i++) {
-        int newX = x + dx * i;
-        int newY = y + dy * i;
-
-        if (newX >= 0 && newX < width_ && newY >= 0 && newY < height_) {
-            int newIndex = coordsToIndex(newX, newY);
-            if (newIndex >= 0) {
-                intensity_[newIndex] = max(intensity_[newIndex], intensity / i);
-            }
-        } else {
-            break; // Hit boundary
-        }
-
-        // Random chance to change direction (zigzag effect)
-        if (random(LightningConstants::PERCENT_SCALE) < LightningConstants::ZIGZAG_CHANCE) {
-            if (dx != 0) {
-                dy = random(2) == 0 ? -1 : 1;
-                dx = 0;
-            } else {
-                dx = random(2) == 0 ? -1 : 1;
-                dy = 0;
-            }
-        }
-    }
-}
-
-void Lightning::propagateBolts() {
-    // Use pre-allocated tempIntensity_ to avoid heap fragmentation
-    memcpy(tempIntensity_, intensity_, numLeds_);
-
-    for (int i = 0; i < numLeds_; i++) {
-        if (intensity_[i] > LightningConstants::BOLT_VISIBILITY_MIN) { // Only propagate strong bolts
-            int x, y;
-            indexToCoords(i, x, y);
-
-            // Propagate based on layout
-            switch (layout_) {
-                case MATRIX_LAYOUT:
-                    // Propagate to adjacent pixels
-                    for (int dx = -1; dx <= 1; dx++) {
-                        for (int dy = -1; dy <= 1; dy++) {
-                            if (dx == 0 && dy == 0) continue;
-
-                            int newX = x + dx;
-                            int newY = y + dy;
-
-                            if (newX >= 0 && newX < width_ && newY >= 0 && newY < height_) {
-                                int newIndex = coordsToIndex(newX, newY);
-                                if (newIndex >= 0 && random(LightningConstants::PERCENT_SCALE) < LightningConstants::MATRIX_PROPAGATE_CHANCE) {
-                                    uint8_t propagatedIntensity = intensity_[i] / LightningConstants::MATRIX_INTENSITY_DIVISOR;
-                                    tempIntensity_[newIndex] = max(tempIntensity_[newIndex], propagatedIntensity);
-                                }
-                            }
-                        }
-                    }
-                    break;
-
-                case LINEAR_LAYOUT:
-                    // Propagate along the line
-                    if (i > 0 && random(LightningConstants::PERCENT_SCALE) < LightningConstants::LINEAR_PROPAGATE_CHANCE) {
-                        uint8_t propagatedIntensity = intensity_[i] / LightningConstants::LINEAR_INTENSITY_DIVISOR;
-                        tempIntensity_[i - 1] = max(tempIntensity_[i - 1], propagatedIntensity);
-                    }
-                    if (i < numLeds_ - 1 && random(LightningConstants::PERCENT_SCALE) < LightningConstants::LINEAR_PROPAGATE_CHANCE) {
-                        uint8_t propagatedIntensity = intensity_[i] / LightningConstants::LINEAR_INTENSITY_DIVISOR;
-                        tempIntensity_[i + 1] = max(tempIntensity_[i + 1], propagatedIntensity);
-                    }
-                    break;
-
-                case RANDOM_LAYOUT:
-                    // Propagate to nearby positions (arc effect)
-                    for (int j = max(0, i - 5); j <= min(numLeds_ - 1, i + 5); j++) {
-                        if (j != i && random(LightningConstants::PERCENT_SCALE) < LightningConstants::RANDOM_ARC_CHANCE) {
-                            uint8_t propagatedIntensity = intensity_[i] / LightningConstants::RANDOM_INTENSITY_DIVISOR;
-                            tempIntensity_[j] = max(tempIntensity_[j], propagatedIntensity);
-                        }
-                    }
-                    break;
-            }
-        }
-    }
-
-    memcpy(intensity_, tempIntensity_, numLeds_);
-}
-
-void Lightning::applyFade() {
-    // Apply fade rate with audio influence
-    uint8_t fadeRate = params_.baseFade;
-    if (audio_.energy > LightningConstants::AUDIO_PRESENCE_THRESHOLD) {
-        int8_t audioBias = (int8_t)(audio_.energy * params_.fadeAudioBias);
-        fadeRate = constrain(fadeRate + audioBias, LightningConstants::MIN_FADE_RATE, LightningConstants::MAX_FADE_RATE);
-    }
-
-    // Fade all intensities
-    for (int i = 0; i < numLeds_; i++) {
-        if (intensity_[i] > 0) {
-            intensity_[i] = max(0, intensity_[i] - (fadeRate / LightningConstants::FADE_DIVISOR));
-        }
-    }
-}
-
-uint32_t Lightning::intensityToColor(uint8_t intensity) {
-    // Use shared palette system for consistent color handling
+uint32_t Lightning::particleColor(uint8_t intensity) const {
+    // Use Lightning palette
     return Palette::LIGHTNING.toColor(intensity);
 }
 
-void Lightning::setParams(const LightningParams& params) {
-    params_ = params;
-}
+void Lightning::spawnBranch(const Particle* parent) {
+    // Calculate available slots (respect maxParticles limit)
+    uint8_t available = params_.maxParticles > pool_.getActiveCount()
+                        ? params_.maxParticles - pool_.getActiveCount()
+                        : 0;
 
-void Lightning::resetToDefaults() {
-    params_ = LightningParams();
-}
+    // Spawn short branch lines (3-5 particles per branch)
+    uint8_t branchLength = 3 + random(3);  // 3-5 particles
+    uint8_t particlesNeeded = branchLength * params_.branchCount;
 
-void Lightning::setBaseFade(uint8_t fade) {
-    params_.baseFade = fade;
-}
+    if (particlesNeeded > available) {
+        return;  // Not enough space for coherent branches
+    }
 
-void Lightning::setBoltParams(uint8_t intensityMin, uint8_t intensityMax, float chance) {
-    params_.boltIntensityMin = intensityMin;
-    params_.boltIntensityMax = intensityMax;
-    params_.boltChance = chance;
-}
+    // Reduced intensity for branches
+    uint8_t intensity = parent->intensity * (100 - params_.branchIntensityLoss) / 100;
 
-void Lightning::setAudioParams(float boltBoost, uint8_t intensityBoostMax, int8_t fadeBias) {
-    params_.audioBoltBoost = boltBoost;
-    params_.audioIntensityBoostMax = intensityBoostMax;
-    params_.fadeAudioBias = fadeBias;
-}
+    for (uint8_t i = 0; i < params_.branchCount; i++) {
+        // Random branch direction (perpendicular-ish to main bolt)
+        float branchAngle = random(360) * DEG_TO_RAD;
 
-// Note: coordsToIndex and indexToCoords are now inherited from Generator base class
+        // Branch extends outward from parent position
+        float x0 = parent->x;
+        float y0 = parent->y;
+
+        // Calculate end point of branch
+        float branchDist = branchLength;
+        float x1 = x0 + cos(branchAngle) * branchDist;
+        float y1 = y0 + sin(branchAngle) * branchDist;
+
+        // Spawn connected particles along branch line
+        for (uint8_t step = 0; step < branchLength && pool_.getActiveCount() < params_.maxParticles; step++) {
+            float t = (float)step / branchLength;
+            float x = x0 + (x1 - x0) * t;
+            float y = y0 + (y1 - y0) * t;
+
+            // Small jitter for organic look
+            x += (random(40) - 20) / 100.0f;
+            y += (random(40) - 20) / 100.0f;
+
+            // Branches are stationary and fade quickly (no BRANCH flag)
+            pool_.spawn(x, y, 0.0f, 0.0f, intensity,
+                       params_.defaultLifespan / 2, 1.0f,
+                       0);  // No flags - branches don't branch again
+        }
+    }
+}

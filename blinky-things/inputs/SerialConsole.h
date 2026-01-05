@@ -114,6 +114,7 @@ public:
 
     // External access
     void setConfigStorage(ConfigStorage* storage) { configStorage_ = storage; }
+    ConfigStorage* getConfigStorage() { return configStorage_; }  // For static callbacks
     void setRenderPipeline(RenderPipeline* pipeline) { pipeline_ = pipeline; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
@@ -146,6 +147,9 @@ public:
     static void logError(const __FlashStringHelper* msg);
 
 private:
+    // Friend declaration for parameter change callback
+    friend void onParamChanged();
+
     void registerSettings();
     void handleCommand(const char* cmd);
     bool handleSpecialCommand(const char* cmd);

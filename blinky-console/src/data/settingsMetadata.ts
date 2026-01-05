@@ -13,172 +13,180 @@ export interface SettingMetadata {
  * Settings metadata - Enhanced labels and tooltips for device settings
  */
 export const settingsMetadata: Record<string, SettingMetadata> = {
-  // Fire settings
-  cooling: {
-    displayName: 'Base Cooling',
-    tooltip:
-      'How fast the fire cools down over time. Higher values create faster cooling and shorter flames.',
+  // ============================================================
+  // FIRE GENERATOR (Particle-based)
+  // ============================================================
+  basespawnchance: {
+    displayName: 'Base Spawn Chance',
+    tooltip: 'Baseline probability of spawning sparks per frame (0-1). Higher = more active fire.',
     unit: '',
   },
-  sparkchance: {
-    displayName: 'Spark Probability',
+  audiospawnboost: {
+    displayName: 'Audio Spawn Boost',
+    tooltip: 'Audio reactivity multiplier (0-2). Amplifies spawn rate based on energy level.',
+    unit: '',
+  },
+  maxparticles: {
+    displayName: 'Max Particles',
     tooltip:
-      'Base probability of new sparks appearing (0-100%). Higher values create more active fire.',
+      'Maximum number of particles in the pool (32-64). More particles = denser effects but higher CPU.',
+    unit: '',
+  },
+  defaultlifespan: {
+    displayName: 'Default Lifespan',
+    tooltip: 'Default particle age in frames (20-120). Higher = longer-lived particles.',
+    unit: 'frames',
+  },
+  intensitymin: {
+    displayName: 'Min Intensity',
+    tooltip: 'Minimum spawn intensity/brightness (0-255). Lower allows dimmer particles.',
+    unit: '',
+  },
+  intensitymax: {
+    displayName: 'Max Intensity',
+    tooltip: 'Maximum spawn intensity/brightness (0-255). Higher creates brighter particles.',
+    unit: '',
+  },
+  gravity: {
+    displayName: 'Gravity',
+    tooltip:
+      'Gravity strength applied per frame. Negative = upward (fire rises), positive = downward (water falls).',
+    unit: '',
+  },
+  windbase: {
+    displayName: 'Base Wind',
+    tooltip: 'Base horizontal wind force applied per frame. Creates lateral motion.',
+    unit: '',
+  },
+  windvariation: {
+    displayName: 'Wind Variation',
+    tooltip: 'Wind variation amount applied per frame. Adds turbulence to wind.',
+    unit: '',
+  },
+  drag: {
+    displayName: 'Drag',
+    tooltip:
+      'Drag coefficient for per-frame velocity damping (0-1). Closer to 1 = less drag, particles move freely.',
+    unit: '',
+  },
+  sparkvelmin: {
+    displayName: 'Min Spark Velocity',
+    tooltip: 'Minimum upward velocity for sparks (LEDs/frame@30FPS). Lower = slower rise.',
+    unit: 'LEDs/frame',
+  },
+  sparkvelmax: {
+    displayName: 'Max Spark Velocity',
+    tooltip: 'Maximum upward velocity for sparks (LEDs/frame@30FPS). Higher = faster rise.',
+    unit: 'LEDs/frame',
+  },
+  sparkspread: {
+    displayName: 'Spark Spread',
+    tooltip: 'Horizontal velocity variation for sparks (LEDs/frame@30FPS). Higher = wider spread.',
+    unit: 'LEDs/frame',
+  },
+  trailheatfactor: {
+    displayName: 'Trail Heat Factor',
+    tooltip:
+      'Heat multiplier for particle trails (0-100%). Percentage of particle intensity left as trail.',
     unit: '%',
   },
-  sparkheatmin: {
-    displayName: 'Min Spark Heat',
-    tooltip: 'Minimum heat value for new sparks. Lower values allow dimmer sparks.',
+  traildecay: {
+    displayName: 'Trail Decay',
+    tooltip: 'Heat decay rate per frame (0-255). Higher = faster cooling of heat trails.',
     unit: '',
-  },
-  sparkheatmax: {
-    displayName: 'Max Spark Heat',
-    tooltip:
-      'Maximum heat value for new sparks. Higher values create brighter, more intense sparks.',
-    unit: '',
-  },
-  audiosparkboost: {
-    displayName: 'Audio Spark Boost',
-    tooltip:
-      'How much audio influences spark generation (0-100%). Uses Level (orange area) from AdaptiveMic. Higher values make fire more reactive to music.',
-    unit: '%',
-  },
-  coolingaudiobias: {
-    displayName: 'Audio Cooling Bias',
-    tooltip:
-      'How audio affects cooling rate. Uses Level (orange area) from AdaptiveMic. Negative values slow cooling during loud audio, positive speeds it up.',
-    unit: '',
-  },
-  bottomrows: {
-    displayName: 'Spark Injection Rows',
-    tooltip:
-      'Number of bottom rows where sparks can appear. More rows create taller initial flames.',
-    unit: 'rows',
   },
   burstsparks: {
     displayName: 'Burst Spark Count',
-    tooltip:
-      'Number of sparks generated during a burst event. More sparks = bigger burst reactions.',
+    tooltip: 'Number of sparks generated per beat burst (1-20). More = bigger reactions.',
     unit: 'sparks',
   },
-  suppressionms: {
-    displayName: 'Burst Cooldown',
+
+  // Fire: Music Mode
+  musicspawnpulse: {
+    displayName: 'Music Spawn Pulse',
     tooltip:
-      'Time to wait after a burst before allowing another (milliseconds). Prevents excessive bursting.',
-    unit: 'ms',
-  },
-  heatdecay: {
-    displayName: 'Heat Decay Factor',
-    tooltip:
-      'Rate at which heat dissipates over distance. Lower values = faster decay, shorter flames.',
-    unit: '',
-  },
-  emberheatmax: {
-    displayName: 'Max Ember Heat',
-    tooltip:
-      'Maximum heat for ambient ember glow. Creates subtle background glow even without sparks.',
-    unit: '',
-  },
-  spreaddistance: {
-    displayName: 'Heat Spread Distance',
-    tooltip:
-      'How far heat propagates between pixels during each frame. Higher values create longer, more flowing flames.',
-    unit: 'pixels',
-  },
-  embernoisespeed: {
-    displayName: 'Ember Animation Speed',
-    tooltip: 'Speed of the ember glow animation. Higher values create faster flickering embers.',
+      'Phase modulation for spawn rate in music mode (0-1). Higher = stronger beat synchronization.',
     unit: '',
   },
 
-  // Water generator settings
-  waterflow: {
-    displayName: 'Base Flow Rate',
-    tooltip: 'Base speed of water flow animation. Higher values create faster flowing water.',
-    unit: '',
-  },
-  wavemin: {
-    displayName: 'Min Wave Height',
-    tooltip: 'Minimum height for generated waves. Lower values allow smaller, subtler ripples.',
-    unit: '',
-  },
-  wavemax: {
-    displayName: 'Max Wave Height',
+  // Fire: Organic Mode
+  organictransmin: {
+    displayName: 'Organic Transient Min',
     tooltip:
-      'Maximum height for generated waves. Higher values create taller, more dramatic waves.',
-    unit: '',
-  },
-  wavechance: {
-    displayName: 'Wave Probability',
-    tooltip:
-      'Base probability of new waves appearing (0-100%). Higher values create more wave activity.',
-    unit: '%',
-  },
-  audiowaveboost: {
-    displayName: 'Audio Wave Boost',
-    tooltip:
-      'How much audio influences wave generation. Higher values make water more reactive to sound.',
-    unit: '%',
-  },
-  audioflowboostmax: {
-    displayName: 'Max Audio Flow Boost',
-    tooltip:
-      'Maximum flow speed increase from audio. Limits how much sound can accelerate the water.',
-    unit: '',
-  },
-  flowaudiobias: {
-    displayName: 'Flow Audio Bias',
-    tooltip:
-      'How audio affects flow rate. Positive values speed up flow with sound, negative slows it.',
+      'Minimum transient level to trigger burst in organic mode (0-1). Higher = requires stronger hits.',
     unit: '',
   },
 
-  // Lightning generator settings
-  lightningfade: {
-    displayName: 'Fade Speed',
-    tooltip:
-      'How quickly lightning bolts fade out. Higher values create shorter, snappier strikes.',
+  // ============================================================
+  // WATER GENERATOR (Particle-based)
+  // ============================================================
+  dropvelmin: {
+    displayName: 'Min Drop Velocity',
+    tooltip: 'Minimum downward velocity for drops (LEDs/frame@30FPS). Lower = slower falling.',
+    unit: 'LEDs/frame',
+  },
+  dropvelmax: {
+    displayName: 'Max Drop Velocity',
+    tooltip: 'Maximum downward velocity for drops (LEDs/frame@30FPS). Higher = faster falling.',
+    unit: 'LEDs/frame',
+  },
+  dropspread: {
+    displayName: 'Drop Spread',
+    tooltip: 'Horizontal velocity variation for drops (LEDs/frame@30FPS). Higher = wider spray.',
+    unit: 'LEDs/frame',
+  },
+  splashparticles: {
+    displayName: 'Splash Particle Count',
+    tooltip: 'Number of particles spawned on splash impact (0-10). More = bigger splashes.',
+    unit: 'particles',
+  },
+  splashvelmin: {
+    displayName: 'Min Splash Velocity',
+    tooltip: 'Minimum splash velocity (LEDs/frame@30FPS). Lower = smaller splashes.',
+    unit: 'LEDs/frame',
+  },
+  splashvelmax: {
+    displayName: 'Max Splash Velocity',
+    tooltip: 'Maximum splash velocity (LEDs/frame@30FPS). Higher = bigger splashes.',
+    unit: 'LEDs/frame',
+  },
+  splashintensity: {
+    displayName: 'Splash Intensity',
+    tooltip: 'Splash particle intensity multiplier (0-255). Higher = brighter splashes.',
     unit: '',
   },
-  boltintensitymin: {
-    displayName: 'Min Bolt Intensity',
-    tooltip:
-      'Minimum brightness for lightning bolts. Lower values allow dimmer, distant-looking strikes.',
+
+  // ============================================================
+  // LIGHTNING GENERATOR (Particle-based)
+  // ============================================================
+  boltvelmin: {
+    displayName: 'Min Bolt Speed',
+    tooltip: 'Minimum bolt speed (LEDs/frame@30FPS). Lower = slower bolts.',
+    unit: 'LEDs/frame',
+  },
+  boltvelmax: {
+    displayName: 'Max Bolt Speed',
+    tooltip: 'Maximum bolt speed (LEDs/frame@30FPS). Higher = faster bolts.',
+    unit: 'LEDs/frame',
+  },
+  faderate: {
+    displayName: 'Fade Rate',
+    tooltip: 'Intensity decay per frame (0-255). Higher = faster fade, shorter bolts.',
     unit: '',
   },
-  boltintensitymax: {
-    displayName: 'Max Bolt Intensity',
-    tooltip: 'Maximum brightness for lightning bolts. Higher values create more brilliant strikes.',
-    unit: '',
+  branchcount: {
+    displayName: 'Branch Count',
+    tooltip: 'Number of branches spawned per trigger (1-4). More = bushier lightning.',
+    unit: 'branches',
   },
-  boltchance: {
-    displayName: 'Bolt Probability',
-    tooltip:
-      'Base probability of new lightning strikes (0-100%). Higher values create more frequent storms.',
-    unit: '%',
+  branchspread: {
+    displayName: 'Branch Angle Spread',
+    tooltip: 'Angle variation for branches (radians). Higher = wider forking.',
+    unit: 'rad',
   },
-  audioboltboost: {
-    displayName: 'Audio Bolt Boost',
-    tooltip:
-      'How much audio influences bolt generation. Higher values make lightning more reactive to sound.',
-    unit: '%',
-  },
-  audiointensityboostmax: {
-    displayName: 'Max Audio Intensity Boost',
-    tooltip:
-      'Maximum intensity increase from audio. Limits how bright audio-triggered bolts can get.',
-    unit: '',
-  },
-  fadeaudiobias: {
-    displayName: 'Fade Audio Bias',
-    tooltip:
-      'How audio affects fade rate. Negative values slow fade during loud audio (bolts persist longer).',
-    unit: '',
-  },
-  branchchance: {
-    displayName: 'Branch Probability',
-    tooltip:
-      'Chance of lightning bolts branching (0-100%). Higher values create more complex, forked lightning.',
+  branchintloss: {
+    displayName: 'Branch Intensity Loss',
+    tooltip: 'Intensity reduction for child branches (0-100%). Higher = dimmer branches.',
     unit: '%',
   },
 
