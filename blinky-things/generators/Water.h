@@ -18,20 +18,20 @@ struct WaterParams {
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
     // Physics
-    float gravity;                // Gravity strength (LEDs/sec^2, positive = down)
-    float windBase;               // Base wind force (LEDs/sec^2)
-    float windVariation;          // Wind variation amount (LEDs/sec^2)
-    float drag;                   // Drag coefficient (0-1)
+    float gravity;                // Gravity strength (positive = down, applied per frame)
+    float windBase;               // Base wind force (applied per frame)
+    float windVariation;          // Wind variation amount (applied per frame)
+    float drag;                   // Drag coefficient (0-1, per frame damping)
 
     // Drop appearance
-    float dropVelocityMin;        // Minimum downward velocity (LEDs/sec)
-    float dropVelocityMax;        // Maximum downward velocity (LEDs/sec)
-    float dropSpread;             // Horizontal velocity variation (LEDs/sec)
+    float dropVelocityMin;        // Minimum downward velocity (LEDs/frame@30FPS)
+    float dropVelocityMax;        // Maximum downward velocity (LEDs/frame@30FPS)
+    float dropSpread;             // Horizontal velocity variation (LEDs/frame@30FPS)
 
     // Splash behavior
     uint8_t splashParticles;      // Number of particles spawned on splash (0-10)
-    float splashVelocityMin;      // Minimum splash velocity (LEDs/sec)
-    float splashVelocityMax;      // Maximum splash velocity (LEDs/sec)
+    float splashVelocityMin;      // Minimum splash velocity (LEDs/frame@30FPS)
+    float splashVelocityMax;      // Maximum splash velocity (LEDs/frame@30FPS)
     uint8_t splashIntensity;      // Splash particle intensity multiplier (0-255)
 
     // Audio reactivity

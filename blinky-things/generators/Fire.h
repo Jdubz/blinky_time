@@ -18,15 +18,15 @@ struct FireParams {
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
     // Physics
-    float gravity;                // Gravity strength (negative = upward)
-    float windBase;               // Base wind force (LEDs/sec^2)
-    float windVariation;          // Wind variation amount (LEDs/sec^2)
-    float drag;                   // Drag coefficient (0-1)
+    float gravity;                // Gravity strength (negative = upward, applied per frame)
+    float windBase;               // Base wind force (applied per frame)
+    float windVariation;          // Wind variation amount (applied per frame)
+    float drag;                   // Drag coefficient (0-1, per frame damping)
 
     // Spark appearance
-    float sparkVelocityMin;       // Minimum upward velocity (LEDs/sec)
-    float sparkVelocityMax;       // Maximum upward velocity (LEDs/sec)
-    float sparkSpread;            // Horizontal velocity variation (LEDs/sec)
+    float sparkVelocityMin;       // Minimum upward velocity (LEDs/frame@30FPS)
+    float sparkVelocityMax;       // Maximum upward velocity (LEDs/frame@30FPS)
+    float sparkSpread;            // Horizontal velocity variation (LEDs/frame@30FPS)
 
     // Heat trail behavior
     uint8_t trailHeatFactor;      // Heat multiplier for trail (0-100%)

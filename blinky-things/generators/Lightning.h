@@ -18,8 +18,8 @@ struct LightningParams {
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
     // Bolt appearance
-    float boltVelocityMin;        // Minimum bolt speed (LEDs/sec)
-    float boltVelocityMax;        // Maximum bolt speed (LEDs/sec)
+    float boltVelocityMin;        // Minimum bolt speed (LEDs/frame@30FPS)
+    float boltVelocityMax;        // Maximum bolt speed (LEDs/frame@30FPS)
     uint8_t fadeRate;             // Intensity decay per frame (0-255)
 
     // Branching behavior
