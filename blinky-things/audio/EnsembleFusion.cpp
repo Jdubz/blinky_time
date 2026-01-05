@@ -63,8 +63,19 @@ void EnsembleFusion::setAgreementBoosts(const float* boosts) {
     }
 }
 
-EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t timestampMs) {
+EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t timestampMs, float audioLevel) {
     EnsembleOutput output;
+
+    // === NOISE GATE ===
+    // Suppress all detections when audio level is below threshold (silence)
+    // This prevents false positives from electrical noise in quiet environments
+    if (audioLevel < minAudioLevel_) {
+        output.transientStrength = 0.0f;
+        output.ensembleConfidence = 0.0f;
+        output.detectorAgreement = 0;
+        output.dominantDetector = 0;
+        return output;
+    }
 
     // Count how many enabled detectors fired and compute weighted strength
     int agreementCount = 0;

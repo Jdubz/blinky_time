@@ -1,6 +1,6 @@
 # Audio Tuning Guide
 
-**Last Updated:** January 2026
+**Last Updated:** January 4, 2026
 **Architecture Version:** AudioController v3 (Multi-hypothesis tempo tracking)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
@@ -152,6 +152,55 @@ npm run tuner -- validate --port COM5 --gain 40
 | `bpmmin` | 60 | 40-120 | Minimum BPM to detect |
 | `bpmmax` | 200 | 80-240 | Maximum BPM to detect |
 
+### Category: `tempoprior` (4 parameters) - Half-Time/Double-Time Disambiguation
+
+**CRITICAL:** Tempo prior MUST be enabled for correct BPM tracking. Without it, autocorrelation prefers half-time peaks and 120 BPM will be detected as ~60 BPM.
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `priorenabled` | **on** | on/off | Enable tempo prior weighting (MUST be on) |
+| `priorcenter` | 120 | 60-200 | Center of Gaussian prior (BPM) |
+| `priorwidth` | 60 | 10-100 | Width (sigma) of prior - larger = less bias |
+| `priorstrength` | 0.5 | 0.0-1.0 | Blend: 0=no prior, 1=full prior weight |
+
+**Tested BPM Accuracy (January 2026):**
+
+| Actual BPM | Prior OFF | Prior ON (120±60) | Notes |
+|------------|-----------|-------------------|-------|
+| 60 BPM     | 67        | ~80               | Pulled toward center |
+| 80 BPM     | -         | ~100              | Pulled toward center |
+| **120 BPM**| 68        | **~120**          | ✓ Works well |
+| 160 BPM    | 80        | ~85               | Half-time bias |
+| 180 BPM    | 104       | ~100              | Half-time bias |
+
+**Optimal Range:** 90-140 BPM works reliably. Outside this range, autocorrelation harmonics dominate.
+
+**Trade-offs:**
+- Narrow prior (width=40-50): Strongest bias toward center, may distort extreme tempos
+- Wide prior (width=60+): Better for 60 BPM, slightly less precise at 120 BPM
+- 160+ BPM: Fundamentally problematic - autocorrelation finds stronger peaks at half-time
+
+**Known Limitation:** Fast tempos (160+ BPM) tend to detect at half-time because autocorrelation naturally produces strong peaks at subharmonics (every other beat). Fixing this would require "double-time promotion" logic.
+
+### Category: `tempo` (2 parameters) - Continuous Tempo Estimation
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `temposmooth` | 0.85 | 0.5-0.99 | Tempo smoothing factor (higher = smoother) |
+| `tempochgthresh` | 0.1 | 0.01-0.5 | Min BPM change ratio to trigger update |
+
+### Category: `stability` (1 parameter) - Beat Stability Tracking
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `stabilitywin` | 8 | 4-16 | Number of beats to track for stability |
+
+### Category: `lookahead` (1 parameter) - Beat Prediction
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `lookahead` | 50 | 0-100 | How far ahead to predict beats (ms) |
+
 ### Category: `hypothesis` (14 parameters) - Multi-Hypothesis Tempo Tracking
 
 **Peak Detection:**
@@ -267,39 +316,100 @@ All multi-hypothesis parameters are now accessible via:
 
 ## Current Best Settings
 
-### Transient Detection (as of 2025-12-30)
+### Ensemble Detector Configuration (as of January 4, 2026)
 
-Best overall mode: **Hybrid (mode 4)** with F1 = 0.598
+**Optimized 2-detector ensemble** - Comprehensive testing across 16 patterns
 
+| Detector | Weight | Threshold | Enabled | Role |
+|----------|--------|-----------|---------|------|
+| **hfc**  | 0.60   | 3.0       | yes     | Primary - best rejection & overall accuracy |
+| **drummer** | 0.40 | 2.5      | yes     | Secondary - complements kicks/bass/fast-tempo |
+| complex  | 0.15   | 2.0       | **no**  | Disabled - too many false positives on rejection |
+| spectral | 0.20   | 1.4       | **no**  | Disabled - unusable, massive over-detection |
+| bass     | 0.18   | 3.0       | **no**  | Disabled - unusable, massive over-detection |
+| mel      | 0.12   | 2.5       | **no**  | Disabled - unusable, massive over-detection |
+
+**Configuration commands:**
 ```
-detectmode: 4
-hitthresh: 2.813
-attackmult: 1.1
-cooldown: 80
-fluxthresh: 1.4
-hyfluxwt: 0.5
-hydrumwt: 0.5
-hybothboost: 1.2
+set detector_enable spectral 0
+set detector_enable bass 0
+set detector_enable mel 0
+set detector_enable complex 0
+set detector_weight hfc 0.60
+set detector_weight drummer 0.40
+save
 ```
 
-**Note:** Equal hybrid weights (0.5/0.5) significantly outperformed the original 0.7/0.3 split.
+### Comprehensive Solo Detector Testing (16 patterns each)
 
-### Mode Performance Comparison
+| Detector | Avg F1 | Best Pattern | Worst Pattern | Usable? |
+|----------|--------|--------------|---------------|---------|
+| **HFC** | ~0.82 | pad-rejection (1.00) | bass-line (0.58) | ✅ Yes |
+| **Drummer** | ~0.72 | kick-focus (0.88) | snare-focus (0.50) | ✅ Yes |
+| Complex | ~0.60 | fast-tempo (0.80) | lead-melody (0.31) | ⚠️ Limited |
+| Spectral | ~0.42 | simultaneous (0.63) | bass-line (0.31) | ❌ No |
+| Bass | ~0.40 | fast-tempo (0.60) | pad-rejection (0.27) | ❌ No |
+| Mel | ~0.39 | simultaneous (0.56) | pad-rejection (0.29) | ❌ No |
 
-| Mode | F1 Score | Precision | Recall | Best For |
-|------|----------|-----------|--------|----------|
-| Hybrid (4) | 0.705 | 67.3% | 72.6% | General use (RECOMMENDED) |
-| Spectral (3) | 0.670 | 72.3% | 69.8% | Clean audio, fewer false positives |
-| Drummer (0) | 0.664 | 90.5% | 57.0% | Precision-critical, OK missing some hits |
+### Detailed HFC Performance (Best Detector)
 
-### Known Problem Patterns
+| Pattern | F1 | Precision | Recall | Notes |
+|---------|-----|-----------|--------|-------|
+| pad-rejection | 1.000 | 1.000 | 1.000 | ✅ Perfect |
+| sparse | 1.000 | 1.000 | 1.000 | ✅ Perfect |
+| tempo-sweep | 0.970 | 0.941 | 1.000 | ✅ Excellent |
+| chord-rejection | 0.968 | 1.000 | 0.938 | ✅ Excellent |
+| strong-beats | 0.918 | 0.966 | 0.875 | ✅ Good |
+| hat-rejection | 0.903 | 0.933 | 0.875 | ✅ Good |
+| full-mix | 0.881 | 0.963 | 0.813 | ✅ Good |
+| snare-focus | 0.842 | 0.889 | 0.800 | Good |
+| full-kit | 0.822 | 0.811 | 0.833 | Good |
+| mixed-dynamics | 0.815 | 0.733 | 0.917 | Moderate |
+| kick-focus | 0.783 | 0.783 | 0.783 | Moderate |
+| lead-melody | 0.667 | 0.500 | 1.000 | ⚠️ Over-detects |
+| simultaneous | 0.667 | 1.000 | 0.500 | ⚠️ Under-detects |
+| synth-stabs | 0.609 | 0.636 | 0.583 | ❌ Weak |
+| fast-tempo | 0.588 | 1.000 | 0.417 | ❌ Weak (cooldown) |
+| bass-line | 0.583 | 0.583 | 0.583 | ❌ Weak |
+
+### Drummer Complements HFC
+
+| Pattern | Drummer F1 | HFC F1 | Winner |
+|---------|------------|--------|--------|
+| kick-focus | **0.884** | 0.783 | Drummer (+13%) |
+| bass-line | **0.750** | 0.583 | Drummer (+29%) |
+| fast-tempo | **0.677** | 0.588 | Drummer (+15%) |
+| synth-stabs | **0.683** | 0.609 | Drummer (+12%) |
+
+### 2-Detector Ensemble Validation
+
+| Pattern | Ensemble F1 | HFC Solo | Drummer Solo | Notes |
+|---------|-------------|----------|--------------|-------|
+| strong-beats | **0.938** | 0.918 | 0.800 | ✅ Best of all |
+| pad-rejection | 0.941 | 1.000 | 0.727 | Slight loss |
+| full-mix | **0.918** | 0.881 | 0.780 | ✅ Best of all |
+| tempo-sweep | 0.933 | 0.970 | 0.714 | Good |
+| fast-tempo | **0.836** | 0.588 | 0.677 | ✅ +42% vs HFC |
+| sparse | 0.889 | 1.000 | 0.778 | Slight loss |
+| kick-focus | 0.783 | 0.783 | 0.884 | Equal to HFC |
+| simultaneous | 0.694 | 0.667 | 0.667 | ✅ Best of all |
+| bass-line | 0.627 | 0.583 | 0.750 | Between both |
+
+### Key Findings
+
+1. **HFC is the best standalone detector** - excellent rejection (pads, chords, sparse)
+2. **Drummer complements HFC** for kicks, bass, and fast-tempo content
+3. **Complex adds too many false positives** - solo F1=0.8 on fast-tempo but hurts rejection
+4. **Spectral/Bass/Mel are unusable** - all have ~20-30% precision due to threshold too low
+5. **2-detector ensemble outperforms 3-detector** - complex hurts more than helps
+
+### Known Limitations
 
 | Pattern | Best F1 | Issue | Potential Fix |
 |---------|---------|-------|---------------|
-| pad-rejection | 0.44 | 20 false positives | Increase fluxthresh for sustained tones |
-| full-mix | 0.65 | Low precision in complex audio | Fine-tune hybrid weights |
-| simultaneous | 0.64 | Overlapping sounds = single event | Algorithmic (not parameter-tunable) |
-| fast-tempo | 0.49 (drummer) | 67% missed at high speed | Reduce cooldown below 40ms |
+| bass-line | 0.63 | HFC weak on low frequencies | Drummer helps partially |
+| simultaneous | 0.69 | Both detectors merge overlapping hits | Cooldown limits |
+| fast-tempo | 0.84 | Cooldown (80ms) limits 150+ BPM | Reduce cooldown |
 
 ---
 
@@ -532,6 +642,20 @@ npm run tuner -- validate --port COM5 --gain 40
 1. Decrease `phaseadapt` (try 0.1)
 2. Increase `musicthresh` (require stronger periodicity)
 3. Check for tempo instability in source audio
+
+### BPM Detected at Half-Time (e.g., 120 BPM → 60 BPM)
+
+1. **FIRST:** Verify `priorenabled` is ON - this is the most common cause
+2. Check `priorcenter` is set appropriately (default: 120)
+3. Increase `priorwidth` if detecting extreme tempos (try 60-80)
+4. For fast tempos (160+ BPM): This is a known limitation - autocorrelation harmonics are stronger at half-time
+
+### BPM Pulled Toward Center (e.g., 60 BPM → 80 BPM)
+
+1. This is expected behavior with tempo prior enabled
+2. Increase `priorwidth` to reduce the pulling effect (try 70-80)
+3. Decrease `priorstrength` for less prior influence (try 0.3-0.4)
+4. Accept that extreme tempos will be biased toward the prior center
 
 ---
 

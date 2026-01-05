@@ -848,68 +848,85 @@ export const FREQ_HIGH_ONLY = {
 // =============================================================================
 /**
  * Steady 120 BPM - baseline for BPM tracking
+ * Alternates between sample variants for realistic phrase structure
  */
 export const STEADY_120BPM = {
     id: 'steady-120bpm',
     name: 'Steady 120 BPM',
-    description: 'Consistent 120 BPM for baseline BPM tracking test',
-    durationMs: 30000, // 30 seconds
+    description: 'Consistent 120 BPM with alternating samples for reliable BPM tracking',
+    durationMs: 30000,
     bpm: 120,
     hits: (() => {
         const hits = [];
         const bpm = 120;
-        // 60 beats at 120 BPM = 30 seconds
-        for (let beat = 0; beat < 60; beat++) {
-            hits.push(hit(beatToTime(beat, bpm), beat % 2 === 0 ? 'kick' : 'snare', 0.85));
+        const bars = 15;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Alternate sample variants like strong-beats pattern
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
         }
-        return hits;
+        return hits.sort((a, b) => a.time - b.time);
     })(),
 };
 /**
  * Steady 80 BPM - slow tempo tracking
+ * Alternates between sample variants for realistic phrase structure
  */
 export const STEADY_80BPM = {
     id: 'steady-80bpm',
     name: 'Steady 80 BPM',
-    description: 'Slow 80 BPM for testing slow tempo tracking',
+    description: 'Slow 80 BPM with alternating samples for reliable tracking',
     durationMs: 30000,
     bpm: 80,
     hits: (() => {
         const hits = [];
         const bpm = 80;
-        // 40 beats at 80 BPM = 30 seconds
-        for (let beat = 0; beat < 40; beat++) {
-            hits.push(hit(beatToTime(beat, bpm), beat % 2 === 0 ? 'kick' : 'snare', 0.85));
+        const bars = 10;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
         }
-        return hits;
+        return hits.sort((a, b) => a.time - b.time);
     })(),
 };
 /**
  * Steady 160 BPM - fast tempo tracking
+ * Uses CONSISTENT samples for reliable autocorrelation
  */
 export const STEADY_160BPM = {
     id: 'steady-160bpm',
     name: 'Steady 160 BPM',
-    description: 'Fast 160 BPM for testing fast tempo tracking',
+    description: 'Fast 160 BPM with consistent samples for reliable tracking',
     durationMs: 30000,
     bpm: 160,
     hits: (() => {
         const hits = [];
         const bpm = 160;
-        // 80 beats at 160 BPM = 30 seconds
-        for (let beat = 0; beat < 80; beat++) {
-            hits.push(hit(beatToTime(beat, bpm), beat % 2 === 0 ? 'kick' : 'snare', 0.85));
+        const bars = 20; // 20 bars at 160 BPM = 30 seconds
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_1', 1.0));
         }
-        return hits;
+        return hits.sort((a, b) => a.time - b.time);
     })(),
 };
 /**
  * Tempo ramp - gradual BPM change from 80 to 160
+ * Uses CONSISTENT samples for reliable autocorrelation
  */
 export const TEMPO_RAMP = {
     id: 'tempo-ramp',
     name: 'Tempo Ramp 80→160',
-    description: 'Gradual tempo increase from 80 to 160 BPM',
+    description: 'Gradual tempo increase from 80 to 160 BPM with consistent samples',
     durationMs: 30000,
     bpm: undefined, // Variable BPM
     hits: (() => {
@@ -918,11 +935,12 @@ export const TEMPO_RAMP = {
         const totalDuration = 30;
         let hitCount = 0;
         while (currentTime < totalDuration) {
-            // Linear BPM ramp from 80 to 160 over 30 seconds
             const progress = currentTime / totalDuration;
             const currentBpm = 80 + progress * 80;
             const beatInterval = 60 / currentBpm;
-            hits.push(hit(currentTime, hitCount % 2 === 0 ? 'kick' : 'snare', 0.85));
+            // Use consistent samples (kick on even beats, snare on odd)
+            const sampleId = hitCount % 2 === 0 ? 'kick_hard_2' : 'snare_hard_1';
+            hits.push(deterministicHit(currentTime, sampleId, 0.95));
             currentTime += beatInterval;
             hitCount++;
         }
@@ -1077,6 +1095,645 @@ export const SILENCE_GAPS = {
     })(),
 };
 /**
+ * Steady 60 BPM - tests tempo prior's subharmonic rejection
+ * Uses CONSISTENT samples for reliable autocorrelation
+ */
+export const STEADY_60BPM = {
+    id: 'steady-60bpm',
+    name: 'Steady 60 BPM',
+    description: 'Very slow tempo with consistent samples - tests double-time rejection',
+    durationMs: 32000,
+    bpm: 60,
+    hits: (() => {
+        const hits = [];
+        const bpm = 60;
+        const bars = 8; // 8 bars at 60 BPM = 32 seconds
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_1', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Steady 90 BPM - intermediate tempo
+ * Uses CONSISTENT samples for reliable autocorrelation
+ */
+export const STEADY_90BPM = {
+    id: 'steady-90bpm',
+    name: 'Steady 90 BPM',
+    description: 'Intermediate tempo with consistent samples',
+    durationMs: 26667,
+    bpm: 90,
+    hits: (() => {
+        const hits = [];
+        const bpm = 90;
+        const bars = 10; // 10 bars at 90 BPM ≈ 27 seconds
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_1', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Steady 180 BPM - fast tempo subharmonic test
+ * Uses CONSISTENT samples for reliable autocorrelation
+ */
+export const STEADY_180BPM = {
+    id: 'steady-180bpm',
+    name: 'Steady 180 BPM',
+    description: 'Very fast tempo with consistent samples - tests half-time rejection',
+    durationMs: 26667,
+    bpm: 180,
+    hits: (() => {
+        const hits = [];
+        const bpm = 180;
+        const bars = 20; // 20 bars at 180 BPM ≈ 27 seconds
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_1', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Humanized timing - slight tempo variations to test beat stability tracking
+ * Uses CONSISTENT samples with slight timing variations (±20ms)
+ */
+export const HUMANIZED_TIMING = {
+    id: 'humanized-timing',
+    name: 'Humanized Timing',
+    description: 'Slight timing variations (±20ms) with consistent samples',
+    durationMs: 20000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        let seed = 12345;
+        const random = () => {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            return (seed / 0x7fffffff) - 0.5;
+        };
+        for (let beat = 0; beat < 40; beat++) {
+            const baseTime = beatToTime(beat, bpm);
+            const offset = random() * 0.040; // ±20ms
+            const sampleId = beat % 2 === 0 ? 'kick_hard_2' : 'snare_hard_1';
+            hits.push(deterministicHit(baseTime + offset, sampleId, 0.95));
+        }
+        return hits;
+    })(),
+};
+/**
+ * Perfect timing - metronomic precision for beat stability reference
+ * Uses CONSISTENT samples with perfect timing
+ */
+export const PERFECT_TIMING = {
+    id: 'perfect-timing',
+    name: 'Perfect Timing',
+    description: 'Metronomic precision with consistent samples - maximum beat stability',
+    durationMs: 20000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 10; // 10 bars at 120 BPM = 20 seconds
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_1', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Unstable timing - large tempo variations to test stability rejection
+ * Uses CONSISTENT samples with large timing variations (±100ms)
+ */
+export const UNSTABLE_TIMING = {
+    id: 'unstable-timing',
+    name: 'Unstable Timing',
+    description: 'Large timing variations (±100ms) with consistent samples',
+    durationMs: 20000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        let seed = 54321;
+        const random = () => {
+            seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+            return (seed / 0x7fffffff) - 0.5;
+        };
+        for (let beat = 0; beat < 40; beat++) {
+            const baseTime = beatToTime(beat, bpm);
+            const offset = random() * 0.200; // ±100ms
+            const sampleId = beat % 2 === 0 ? 'kick_hard_2' : 'snare_hard_1';
+            hits.push(deterministicHit(baseTime + offset, sampleId, 0.95));
+        }
+        return hits;
+    })(),
+};
+/**
+ * Half-time ambiguity - tests hypothesis tracking of tempos that could be 60 or 120 BPM
+ * Kicks only on beats 1 and 3 (of a 4/4 bar), creating ambiguity:
+ * - Could be interpreted as 120 BPM (half note kicks)
+ * - Could be interpreted as 60 BPM (quarter note kicks)
+ * Tests that the multi-hypothesis tracker creates both hypotheses and selects the correct one.
+ */
+export const HALF_TIME_AMBIGUITY = {
+    id: 'half-time-ambiguity',
+    name: 'Half-Time Ambiguity',
+    description: 'Kicks on 1 and 3 only - could be 60 or 120 BPM (tests multi-hypothesis tracking)',
+    durationMs: 32000, // 32 seconds
+    bpm: 120, // Actual BPM (but could be interpreted as 60 BPM)
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 16; // 16 bars at 120 BPM = 32 seconds
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4; // 4 beats per bar
+            // Kick ONLY on beats 1 and 3 (half notes at 120 BPM, or quarter notes at 60 BPM)
+            hits.push(hit(beatToTime(barOffset + 0, bpm), 'kick', 0.9));
+            hits.push(hit(beatToTime(barOffset + 2, bpm), 'kick', 0.9));
+            // No snare or hats - pure ambiguity
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+// =============================================================================
+// EXTENDED BPM RANGE PATTERNS - Fill gaps at extreme tempos
+// =============================================================================
+/**
+ * Steady 40 BPM - very slow tempo (ballad/ambient)
+ * Tests minimum BPM detection capability
+ */
+export const STEADY_40BPM = {
+    id: 'steady-40bpm',
+    name: 'Steady 40 BPM',
+    description: 'Very slow tempo - tests minimum BPM detection',
+    durationMs: 36000, // 6 bars at 40 BPM = 36 seconds
+    bpm: 40,
+    hits: (() => {
+        const hits = [];
+        const bpm = 40;
+        const bars = 6;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Steady 50 BPM - slow tempo (slow ballad)
+ */
+export const STEADY_50BPM = {
+    id: 'steady-50bpm',
+    name: 'Steady 50 BPM',
+    description: 'Slow tempo - tests low BPM detection',
+    durationMs: 28800, // 6 bars at 50 BPM = 28.8 seconds
+    bpm: 50,
+    hits: (() => {
+        const hits = [];
+        const bpm = 50;
+        const bars = 6;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Steady 200 BPM - fast tempo (EDM/DnB)
+ */
+export const STEADY_200BPM = {
+    id: 'steady-200bpm',
+    name: 'Steady 200 BPM',
+    description: 'Fast tempo - EDM/drum-n-bass range',
+    durationMs: 24000, // 20 bars at 200 BPM = 24 seconds
+    bpm: 200,
+    hits: (() => {
+        const hits = [];
+        const bpm = 200;
+        const bars = 20;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_1', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Steady 220 BPM - very fast tempo (liquid funk)
+ */
+export const STEADY_220BPM = {
+    id: 'steady-220bpm',
+    name: 'Steady 220 BPM',
+    description: 'Very fast tempo - liquid funk range',
+    durationMs: 21818, // 20 bars at 220 BPM ≈ 22 seconds
+    bpm: 220,
+    hits: (() => {
+        const hits = [];
+        const bpm = 220;
+        const bars = 20;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_2', 0.95));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_1', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Steady 240 BPM - extreme tempo (breakcore)
+ */
+export const STEADY_240BPM = {
+    id: 'steady-240bpm',
+    name: 'Steady 240 BPM',
+    description: 'Extreme tempo - breakcore/speedcore range (maximum BPM test)',
+    durationMs: 20000, // 20 bars at 240 BPM = 20 seconds
+    bpm: 240,
+    hits: (() => {
+        const hits = [];
+        const bpm = 240;
+        const bars = 20;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Use half-note pattern at extreme BPM
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'snare_hard_1', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+// =============================================================================
+// POLYRHYTHM PATTERNS - Non-4/4 time signatures
+// =============================================================================
+/**
+ * 3/4 Waltz - tests 3-beat cycle detection
+ * Standard waltz pattern: kick on 1, snare on 2&3
+ */
+export const WALTZ_3_4 = {
+    id: 'waltz-3-4',
+    name: 'Waltz 3/4 Time',
+    description: '3/4 time signature - tests 3-beat cycle detection',
+    durationMs: 24000, // 16 bars of 3/4 at 120 BPM = 24 seconds
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 16;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 3; // 3 beats per bar in 3/4
+            // Kick on beat 1
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            // Snare on beats 2 and 3
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_medium_1', 0.7));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'snare_medium_2', 0.7));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * 5/4 Funk - tests 5-beat cycle (jazz/progressive)
+ * Pattern: kick on 1&3, snare on 2&4&5
+ */
+export const FUNK_5_4 = {
+    id: 'funk-5-4',
+    name: 'Funk 5/4 Time',
+    description: '5/4 time signature - tests 5-beat cycle detection',
+    durationMs: 25000, // 12 bars of 5/4 at 120 BPM = 25 seconds
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 12;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 5; // 5 beats per bar
+            // Kick on beats 1 and 3
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.9));
+            // Snare on beats 2, 4, and 5
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_medium_1', 0.75));
+            hits.push(deterministicHit(beatToTime(barOffset + 4, bpm), 'snare_hard_2', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * 7/8 Progressive - tests 7-beat cycle (prog rock/metal)
+ * Pattern: kick on 1&4, snare on 3&7
+ */
+export const PROG_7_8 = {
+    id: 'prog-7-8',
+    name: 'Progressive 7/8 Time',
+    description: '7/8 time signature - tests asymmetric meter detection',
+    durationMs: 28000, // 16 bars of 7/8 at 120 BPM ≈ 28 seconds
+    bpm: 120, // Each "beat" is an 8th note
+    hits: (() => {
+        const hits = [];
+        const bpm = 120; // 8th note = 120 BPM
+        const bars = 16;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 3.5; // 7 eighth-notes = 3.5 quarter notes
+            // Kick on 8ths 1 and 4
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 1.5, bpm), 'kick_hard_1', 0.9));
+            // Snare on 8ths 3 and 7
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+// =============================================================================
+// SWING/TRIPLET TIMING PATTERNS - Non-straight rhythmic feels
+// =============================================================================
+/**
+ * Swing timing - classic jazz/funk swing feel
+ * 8th notes are swung (66%/33% instead of 50%/50%)
+ */
+export const SWING_TIMING = {
+    id: 'swing-timing',
+    name: 'Swing Timing',
+    description: 'Swing 8th notes (66%/33%) - tests non-straight timing',
+    durationMs: 16000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 8;
+        const swingRatio = 0.66; // 66% for downbeat, 33% for upbeat
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Kick on 1 and 3
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.95));
+            // Snare on 2 and 4
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+            // Swung hi-hats: downbeats normal, upbeats shifted late
+            for (let beat = 0; beat < 4; beat++) {
+                const downbeatTime = beatToTime(barOffset + beat, bpm);
+                const upbeatTime = beatToTime(barOffset + beat + swingRatio * 0.5, bpm);
+                hits.push(deterministicHit(downbeatTime, 'hat_medium_1', 0.6));
+                hits.push(deterministicHit(upbeatTime, 'hat_soft_1', 0.4));
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Triplet timing - triplet subdivision (12/8 feel)
+ * 3 hits per beat instead of 2
+ */
+export const TRIPLET_TIMING = {
+    id: 'triplet-timing',
+    name: 'Triplet Timing',
+    description: 'Triplet subdivision (12/8 feel) - tests 3-per-beat detection',
+    durationMs: 16000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Kick on 1 and 3
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.95));
+            // Snare on 2 and 4
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+            // Triplet hi-hats: 3 hits per beat (at 0, 1/3, 2/3 of beat)
+            for (let beat = 0; beat < 4; beat++) {
+                for (let triplet = 0; triplet < 3; triplet++) {
+                    const tripletOffset = triplet / 3;
+                    const time = beatToTime(barOffset + beat + tripletOffset, bpm);
+                    const strength = triplet === 0 ? 0.7 : 0.4; // Accent on downbeat
+                    hits.push(deterministicHit(time, 'hat_medium_1', strength));
+                }
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Shuffle backbeat - straight kick/snare with swung hats
+ * Classic rock shuffle feel
+ */
+export const SHUFFLE_BACKBEAT = {
+    id: 'shuffle-backbeat',
+    name: 'Shuffle Backbeat',
+    description: 'Straight drums with shuffle hats - classic rock feel',
+    durationMs: 16000,
+    bpm: 100,
+    hits: (() => {
+        const hits = [];
+        const bpm = 100;
+        const bars = 8;
+        const shuffleRatio = 0.67; // Triplet-based shuffle
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Straight kick on 1 and 3
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.95));
+            // Straight snare on 2 and 4
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+            // Shuffled hi-hats
+            for (let beat = 0; beat < 4; beat++) {
+                const downbeatTime = beatToTime(barOffset + beat, bpm);
+                const shuffledUpbeat = beatToTime(barOffset + beat + shuffleRatio * 0.5, bpm);
+                hits.push(deterministicHit(downbeatTime, 'hat_hard_1', 0.7));
+                hits.push(deterministicHit(shuffledUpbeat, 'hat_soft_1', 0.45));
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+// =============================================================================
+// EXTREME TEMPO CHANGE PATTERNS
+// =============================================================================
+/**
+ * Tempo jump extreme - large BPM changes (>50 BPM jumps)
+ * Tests rapid tempo lock recovery
+ */
+export const TEMPO_JUMP_EXTREME = {
+    id: 'tempo-jump-extreme',
+    name: 'Tempo Jump Extreme',
+    description: 'Large BPM jumps (160→80→180→100) - tests rapid recovery',
+    durationMs: 24000,
+    bpm: undefined,
+    hits: (() => {
+        const hits = [];
+        const sections = [
+            { bpm: 160, startTime: 0, duration: 6 },
+            { bpm: 80, startTime: 6, duration: 6 }, // Drop to half
+            { bpm: 180, startTime: 12, duration: 6 }, // Jump to 180
+            { bpm: 100, startTime: 18, duration: 6 }, // Drop again
+        ];
+        for (const section of sections) {
+            const beatsPerSecond = section.bpm / 60;
+            const totalBeats = Math.floor(section.duration * beatsPerSecond);
+            for (let beat = 0; beat < totalBeats; beat++) {
+                const time = section.startTime + beat / beatsPerSecond;
+                const sampleId = beat % 2 === 0 ? 'kick_hard_2' : 'snare_hard_1';
+                hits.push(deterministicHit(time, sampleId, 0.95));
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Tempo freeze - complete stop and restart
+ * Tests deactivation and reactivation
+ */
+export const TEMPO_FREEZE = {
+    id: 'tempo-freeze',
+    name: 'Tempo Freeze',
+    description: 'Music stops for 15s then resumes - tests deactivation/reactivation',
+    durationMs: 40000,
+    bpm: 120,
+    hits: (() => {
+        const hits = [];
+        const bpm = 120;
+        // Section 1: 0-10s steady 120 BPM
+        for (let beat = 0; beat < 20; beat++) {
+            const sampleId = beat % 2 === 0 ? 'kick_hard_2' : 'snare_hard_1';
+            hits.push(deterministicHit(beatToTime(beat, bpm), sampleId, 0.95));
+        }
+        // Gap: 10-25s (15 seconds of silence)
+        // Section 2: 25-40s resume 120 BPM
+        for (let beat = 0; beat < 30; beat++) {
+            const sampleId = beat % 2 === 0 ? 'kick_hard_2' : 'snare_hard_1';
+            hits.push(deterministicHit(25 + beatToTime(beat, bpm), sampleId, 0.95));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+// =============================================================================
+// MELODIC/BASS-FOCUSED RHYTHM PATTERNS
+// =============================================================================
+/**
+ * Bass groove - prominent bass line with sparse drums
+ * Tests bass-driven rhythm detection
+ */
+export const BASS_GROOVE = {
+    id: 'bass-groove',
+    name: 'Bass Groove',
+    description: 'Prominent bass line with sparse drums - tests bass-driven BPM',
+    durationMs: 20000,
+    bpm: 95,
+    hits: (() => {
+        const hits = [];
+        const bpm = 95;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Sparse kick on 1 only
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            // Snare only on beat 3
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'snare_hard_1', 0.9));
+            // Prominent bass line - this should drive the rhythm
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'bass_hard_1', 0.85));
+            hits.push(deterministicHit(beatToTime(barOffset + 0.75, bpm), 'bass_medium_1', 0.65));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'bass_hard_2', 0.8));
+            hits.push(deterministicHit(beatToTime(barOffset + 1.5, bpm), 'bass_medium_2', 0.6));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'bass_hard_1', 0.85));
+            hits.push(deterministicHit(beatToTime(barOffset + 2.75, bpm), 'bass_medium_1', 0.55));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'bass_hard_2', 0.75));
+            hits.push(deterministicHit(beatToTime(barOffset + 3.5, bpm), 'bass_medium_2', 0.55));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Synth arpeggio rhythm - melodic arpeggios driving the rhythm
+ * Tests if melodic transients contribute to BPM detection
+ */
+export const SYNTH_ARPEGGIO = {
+    id: 'synth-arpeggio',
+    name: 'Synth Arpeggio Rhythm',
+    description: 'Melodic arpeggios driving rhythm - tests melodic BPM contribution',
+    durationMs: 16000,
+    bpm: 128,
+    hits: (() => {
+        const hits = [];
+        const bpm = 128;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Light drums (kick on 1, snare on 3)
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_medium_1', 0.75));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'snare_medium_1', 0.7));
+            // 16th note arpeggio - should contribute strongly to rhythm
+            for (let sixteenth = 0; sixteenth < 16; sixteenth++) {
+                const time = beatToTime(barOffset + sixteenth * 0.25, bpm);
+                const isAccent = sixteenth % 4 === 0;
+                const sampleId = isAccent ? 'synth_stab_hard_1' : 'synth_stab_medium_1';
+                const strength = isAccent ? 0.8 : 0.5;
+                hits.push(deterministicHit(time, sampleId, strength));
+            }
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
+ * Chord rhythm - sustained chords with rhythmic attacks
+ * Tests detection of chord attacks vs sustained portions
+ */
+export const CHORD_RHYTHM = {
+    id: 'chord-rhythm',
+    name: 'Chord Rhythm',
+    description: 'Rhythmic chord stabs - tests chord attack detection',
+    durationMs: 16000,
+    bpm: 110,
+    hits: (() => {
+        const hits = [];
+        const bpm = 110;
+        const bars = 8;
+        for (let bar = 0; bar < bars; bar++) {
+            const barOffset = bar * 4;
+            // Kick and snare
+            hits.push(deterministicHit(beatToTime(barOffset + 0, bpm), 'kick_hard_2', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 2, bpm), 'kick_hard_1', 0.9));
+            hits.push(deterministicHit(beatToTime(barOffset + 1, bpm), 'snare_hard_1', 1.0));
+            hits.push(deterministicHit(beatToTime(barOffset + 3, bpm), 'snare_hard_2', 1.0));
+            // Rhythmic chord stabs (offbeat accents)
+            hits.push(deterministicHit(beatToTime(barOffset + 0.5, bpm), 'synth_stab_hard_1', 0.8));
+            hits.push(deterministicHit(beatToTime(barOffset + 1.5, bpm), 'synth_stab_medium_1', 0.6));
+            hits.push(deterministicHit(beatToTime(barOffset + 2.5, bpm), 'synth_stab_hard_2', 0.8));
+            hits.push(deterministicHit(beatToTime(barOffset + 3.5, bpm), 'synth_stab_medium_2', 0.6));
+        }
+        return hits.sort((a, b) => a.time - b.time);
+    })(),
+};
+/**
  * All available test patterns
  */
 export const TEST_PATTERNS = [
@@ -1116,6 +1773,9 @@ export const TEST_PATTERNS = [
     STEADY_120BPM,
     STEADY_80BPM,
     STEADY_160BPM,
+    STEADY_60BPM,
+    STEADY_90BPM,
+    STEADY_180BPM,
     TEMPO_RAMP,
     TEMPO_SUDDEN,
     PHASE_ON_BEAT,
@@ -1123,6 +1783,32 @@ export const TEST_PATTERNS = [
     NON_MUSICAL_RANDOM,
     NON_MUSICAL_CLUSTERED,
     SILENCE_GAPS,
+    HALF_TIME_AMBIGUITY,
+    // Beat stability patterns
+    PERFECT_TIMING,
+    HUMANIZED_TIMING,
+    UNSTABLE_TIMING,
+    // Extended BPM range patterns
+    STEADY_40BPM,
+    STEADY_50BPM,
+    STEADY_200BPM,
+    STEADY_220BPM,
+    STEADY_240BPM,
+    // Polyrhythm patterns
+    WALTZ_3_4,
+    FUNK_5_4,
+    PROG_7_8,
+    // Swing/triplet timing patterns
+    SWING_TIMING,
+    TRIPLET_TIMING,
+    SHUFFLE_BACKBEAT,
+    // Extreme tempo change patterns
+    TEMPO_JUMP_EXTREME,
+    TEMPO_FREEZE,
+    // Melodic/bass-focused rhythm patterns
+    BASS_GROOVE,
+    SYNTH_ARPEGGIO,
+    CHORD_RHYTHM,
 ];
 /**
  * Get pattern by ID
@@ -1322,10 +2008,10 @@ export const PATTERN_REGISTRY = {
         ...musicModeMeta(STEADY_160BPM, ['bpmmax', 'cooldown'], 8),
     }),
     'tempo-ramp': extendPattern(TEMPO_RAMP, {
-        ...musicModeMeta(TEMPO_RAMP, ['pllkp', 'pllki', 'combdecay'], 7),
+        ...musicModeMeta(TEMPO_RAMP, ['minpeakstr', 'promothresh', 'minbeats', 'bpmmatchtol'], 9),
     }),
     'tempo-sudden': extendPattern(TEMPO_SUDDEN, {
-        ...musicModeMeta(TEMPO_SUDDEN, ['pllkp', 'combconf', 'confdec'], 8),
+        ...musicModeMeta(TEMPO_SUDDEN, ['promothresh', 'minbeats', 'phrasehalf', 'minpeakstr'], 10),
     }),
     'phase-on-beat': extendPattern(PHASE_ON_BEAT, {
         ...musicModeMeta(PHASE_ON_BEAT, ['phasesnap', 'stablephase', 'confinc'], 9),
@@ -1340,7 +2026,83 @@ export const PATTERN_REGISTRY = {
         ...musicModeMeta(NON_MUSICAL_CLUSTERED, ['musicthresh', 'beatthresh'], 8),
     }),
     'silence-gaps': extendPattern(SILENCE_GAPS, {
-        ...musicModeMeta(SILENCE_GAPS, ['musicmissed', 'misspenalty'], 8),
+        ...musicModeMeta(SILENCE_GAPS, ['silencegrace', 'silencehalf', 'phrasehalf'], 9),
+    }),
+    'half-time-ambiguity': extendPattern(HALF_TIME_AMBIGUITY, {
+        ...musicModeMeta(HALF_TIME_AMBIGUITY, ['minpeakstr', 'minrelheight', 'bpmmatchtol', 'promothresh'], 9),
+    }),
+    // === TEMPO PRIOR PATTERNS (new) ===
+    'steady-60bpm': extendPattern(STEADY_60BPM, {
+        ...musicModeMeta(STEADY_60BPM, ['priorenabled', 'priorcenter', 'priorwidth', 'priorstrength', 'bpmmin'], 9),
+    }),
+    'steady-90bpm': extendPattern(STEADY_90BPM, {
+        ...musicModeMeta(STEADY_90BPM, ['priorenabled', 'priorcenter', 'priorwidth', 'priorstrength'], 8),
+    }),
+    'steady-180bpm': extendPattern(STEADY_180BPM, {
+        ...musicModeMeta(STEADY_180BPM, ['priorenabled', 'priorcenter', 'priorwidth', 'priorstrength', 'bpmmax'], 9),
+    }),
+    // === BEAT STABILITY PATTERNS (new) ===
+    'perfect-timing': extendPattern(PERFECT_TIMING, {
+        ...musicModeMeta(PERFECT_TIMING, ['stabilitywin'], 10),
+    }),
+    'humanized-timing': extendPattern(HUMANIZED_TIMING, {
+        ...musicModeMeta(HUMANIZED_TIMING, ['stabilitywin', 'temposmooth'], 8),
+    }),
+    'unstable-timing': extendPattern(UNSTABLE_TIMING, {
+        ...musicModeMeta(UNSTABLE_TIMING, ['stabilitywin', 'temposmooth', 'tempochgthresh'], 9),
+    }),
+    // === EXTENDED BPM RANGE PATTERNS ===
+    'steady-40bpm': extendPattern(STEADY_40BPM, {
+        ...musicModeMeta(STEADY_40BPM, ['bpmmin', 'priorenabled', 'priorcenter', 'priorwidth'], 8),
+    }),
+    'steady-50bpm': extendPattern(STEADY_50BPM, {
+        ...musicModeMeta(STEADY_50BPM, ['bpmmin', 'priorenabled', 'priorcenter', 'priorwidth'], 7),
+    }),
+    'steady-200bpm': extendPattern(STEADY_200BPM, {
+        ...musicModeMeta(STEADY_200BPM, ['bpmmax', 'priorenabled', 'priorcenter', 'priorwidth', 'cooldown'], 8),
+    }),
+    'steady-220bpm': extendPattern(STEADY_220BPM, {
+        ...musicModeMeta(STEADY_220BPM, ['bpmmax', 'cooldown'], 7),
+    }),
+    'steady-240bpm': extendPattern(STEADY_240BPM, {
+        ...musicModeMeta(STEADY_240BPM, ['bpmmax', 'cooldown'], 7),
+    }),
+    // === POLYRHYTHM PATTERNS ===
+    'waltz-3-4': extendPattern(WALTZ_3_4, {
+        ...musicModeMeta(WALTZ_3_4, ['minpeakstr', 'promothresh'], 6),
+    }),
+    'funk-5-4': extendPattern(FUNK_5_4, {
+        ...musicModeMeta(FUNK_5_4, ['minpeakstr', 'promothresh'], 6),
+    }),
+    'prog-7-8': extendPattern(PROG_7_8, {
+        ...musicModeMeta(PROG_7_8, ['minpeakstr', 'promothresh'], 6),
+    }),
+    // === SWING/TRIPLET TIMING PATTERNS ===
+    'swing-timing': extendPattern(SWING_TIMING, {
+        ...musicModeMeta(SWING_TIMING, ['stabilitywin', 'temposmooth'], 7),
+    }),
+    'triplet-timing': extendPattern(TRIPLET_TIMING, {
+        ...musicModeMeta(TRIPLET_TIMING, ['stabilitywin', 'temposmooth'], 7),
+    }),
+    'shuffle-backbeat': extendPattern(SHUFFLE_BACKBEAT, {
+        ...musicModeMeta(SHUFFLE_BACKBEAT, ['stabilitywin', 'temposmooth'], 7),
+    }),
+    // === EXTREME TEMPO CHANGE PATTERNS ===
+    'tempo-jump-extreme': extendPattern(TEMPO_JUMP_EXTREME, {
+        ...musicModeMeta(TEMPO_JUMP_EXTREME, ['promothresh', 'minbeats', 'phrasehalf', 'temposmooth'], 9),
+    }),
+    'tempo-freeze': extendPattern(TEMPO_FREEZE, {
+        ...musicModeMeta(TEMPO_FREEZE, ['silencegrace', 'silencehalf', 'phrasehalf'], 8),
+    }),
+    // === MELODIC/BASS-FOCUSED RHYTHM PATTERNS ===
+    'bass-groove': extendPattern(BASS_GROOVE, {
+        ...musicModeMeta(BASS_GROOVE, ['bassfreq', 'bassthresh', 'minpeakstr'], 8),
+    }),
+    'synth-arpeggio': extendPattern(SYNTH_ARPEGGIO, {
+        ...musicModeMeta(SYNTH_ARPEGGIO, ['fluxthresh', 'hfcthresh', 'minpeakstr'], 7),
+    }),
+    'chord-rhythm': extendPattern(CHORD_RHYTHM, {
+        ...musicModeMeta(CHORD_RHYTHM, ['fluxthresh', 'minpeakstr'], 7),
     }),
 };
 /**

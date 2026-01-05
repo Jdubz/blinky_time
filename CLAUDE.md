@@ -134,8 +134,9 @@ RenderPipeline → LED Output
 
 2. **Transient Detection (Ensemble)**
    - `EnsembleDetector.h` - Weighted fusion of 6 detectors
-   - Detectors (weights): Drummer (0.22), SpectralFlux (0.20), BassBand (0.18), HFC (0.15), ComplexDomain (0.13), MelFlux (0.12)
-   - Agreement-based confidence scaling (1-6 detectors)
+   - **Optimized 2-detector config (Jan 2026):** HFC (0.60) + Drummer (0.40)
+   - Disabled: Spectral, Bass, Mel, Complex (too many false positives)
+   - Agreement-based confidence scaling
    - Cooldown: 80ms (prevents false positives)
 
 3. **Rhythm Tracking (AudioController v3)**
@@ -209,7 +210,7 @@ React Components
 - Ground truth comparison (expected vs detected transients)
 - Binary search optimization (~30 min per param)
 - Sweep mode (exhaustive parameter range testing)
-- 40+ test patterns (simple-beat, complex-rhythm, polyrhythmic, etc.)
+- 60+ test patterns (simple-beat, complex-rhythm, polyrhythmic, melodic, etc.)
 
 **blinky-serial-mcp (AI Integration)**
 - 20+ MCP tools for device interaction
@@ -218,6 +219,28 @@ React Components
 - Audio streaming (stream_start, get_audio, monitor_audio)
 - Testing (run_test, start_test, stop_test)
 - Pattern library (list_patterns)
+
+### MCP Testing Best Practices
+
+**ALWAYS use `run_test` for pattern testing** - it automatically:
+1. Connects to the device
+2. Locks gain (if specified)
+3. Plays the pattern and records detections
+4. Disconnects when complete
+
+```
+run_test(pattern: "steady-120bpm", port: "COM11", gain: 40)
+```
+
+**DO NOT manually connect/disconnect** - Using separate `connect`, `stream_start`, `start_test`, `stop_test`, `disconnect` calls:
+- Risks leaving the port locked if an error occurs
+- Prevents firmware flashing until manually disconnected
+- Is more error-prone and verbose
+
+**Exception**: Use manual connection only when:
+- Exploring settings interactively (`get_settings`, `set_setting`)
+- Monitoring audio continuously (`monitor_audio` with long duration)
+- Debugging device state (`status`, `send_command`)
 
 **Unit & Integration Tests**
 - `tests/unit/` - Device configs, LED mapping, parameter bounds

@@ -214,6 +214,30 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
         "Maximum BPM to detect", 80.0f, 240.0f);
 
+    // Tempo prior (reduces half-time/double-time confusion)
+    settings_.registerBool("priorenabled", &audioCtrl_->tempoPriorEnabled, "tempoprior",
+        "Enable tempo prior weighting");
+    settings_.registerFloat("priorcenter", &audioCtrl_->tempoPriorCenter, "tempoprior",
+        "Prior center BPM", 60.0f, 180.0f);
+    settings_.registerFloat("priorwidth", &audioCtrl_->tempoPriorWidth, "tempoprior",
+        "Prior width (sigma BPM)", 10.0f, 80.0f);
+    settings_.registerFloat("priorstrength", &audioCtrl_->tempoPriorStrength, "tempoprior",
+        "Prior blend strength", 0.0f, 1.0f);
+
+    // Beat stability tracking
+    settings_.registerFloat("stabilitywin", &audioCtrl_->stabilityWindowBeats, "stability",
+        "Stability window (beats)", 4.0f, 16.0f);
+
+    // Beat lookahead (anticipatory effects)
+    settings_.registerFloat("lookahead", &audioCtrl_->beatLookaheadMs, "lookahead",
+        "Beat lookahead (ms)", 0.0f, 200.0f);
+
+    // Continuous tempo estimation
+    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothingFactor, "tempo",
+        "Tempo smoothing factor", 0.5f, 0.99f);
+    settings_.registerFloat("tempochgthresh", &audioCtrl_->tempoChangeThreshold, "tempo",
+        "Tempo change threshold", 0.01f, 0.5f);
+
     // Multi-hypothesis tracker parameters
     MultiHypothesisTracker& mh = audioCtrl_->getMultiHypothesis();
 
@@ -530,6 +554,26 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             Serial.print(audioCtrl_->getBpmMin(), 0);
             Serial.print(F("-"));
             Serial.println(audioCtrl_->getBpmMax(), 0);
+
+            // New metrics from research-based improvements
+            Serial.println(F("--- Advanced Metrics ---"));
+            Serial.print(F("Beat Stability: "));
+            Serial.println(audioCtrl_->getBeatStability(), 2);
+            Serial.print(F("Tempo Velocity: "));
+            Serial.print(audioCtrl_->getTempoVelocity(), 1);
+            Serial.println(F(" BPM/s"));
+            Serial.print(F("Next Beat In: "));
+            uint32_t nowMs = millis();
+            uint32_t nextMs = audioCtrl_->getNextBeatMs();
+            Serial.print(nextMs > nowMs ? (nextMs - nowMs) : 0);
+            Serial.println(F(" ms"));
+            Serial.print(F("Tempo Prior: "));
+            Serial.print(audioCtrl_->tempoPriorEnabled ? F("ON") : F("OFF"));
+            Serial.print(F(" (center="));
+            Serial.print(audioCtrl_->tempoPriorCenter, 0);
+            Serial.print(F(", weight="));
+            Serial.print(audioCtrl_->getLastTempoPriorWeight(), 2);
+            Serial.println(F(")"));
         } else {
             Serial.println(F("Audio controller not available"));
         }
@@ -1035,6 +1079,117 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(F("/6"));
         Serial.print(F("  Dominant: "));
         Serial.println(getDetectorName(static_cast<DetectorType>(output.dominantDetector)));
+        Serial.println(F("\nFusion Parameters:"));
+        Serial.print(F("  cooldown: "));
+        Serial.print(fusion.getCooldownMs());
+        Serial.println(F(" ms"));
+        Serial.print(F("  minconf: "));
+        Serial.println(fusion.getMinConfidence(), 3);
+        Serial.print(F("  minlevel: "));
+        Serial.println(fusion.getMinAudioLevel(), 3);
+        return true;
+    }
+
+    // === ENSEMBLE FUSION PARAMETERS ===
+    // ensemble_cooldown: Unified cooldown between ensemble detections (ms)
+    if (strncmp(cmd, "set ensemble_cooldown ", 22) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 22);
+        if (value >= 20 && value <= 500) {
+            audioCtrl_->getEnsemble().getFusion().setCooldownMs(value);
+            Serial.print(F("OK ensemble_cooldown="));
+            Serial.println(value);
+        } else {
+            Serial.println(F("ERROR: Valid range 20-500 ms"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show ensemble_cooldown") == 0 || strcmp(cmd, "ensemble_cooldown") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("ensemble_cooldown="));
+        Serial.print(audioCtrl_->getEnsemble().getFusion().getCooldownMs());
+        Serial.println(F(" ms"));
+        return true;
+    }
+
+    // ensemble_minconf: Minimum confidence threshold for detection output
+    if (strncmp(cmd, "set ensemble_minconf ", 21) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 21);
+        if (value >= 0.0f && value <= 1.0f) {
+            audioCtrl_->getEnsemble().getFusion().setMinConfidence(value);
+            Serial.print(F("OK ensemble_minconf="));
+            Serial.println(value, 3);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-1.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show ensemble_minconf") == 0 || strcmp(cmd, "ensemble_minconf") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("ensemble_minconf="));
+        Serial.println(audioCtrl_->getEnsemble().getFusion().getMinConfidence(), 3);
+        return true;
+    }
+
+    // ensemble_minlevel: Noise gate - minimum audio level for detection
+    if (strncmp(cmd, "set ensemble_minlevel ", 22) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 22);
+        if (value >= 0.0f && value <= 1.0f) {
+            audioCtrl_->getEnsemble().getFusion().setMinAudioLevel(value);
+            Serial.print(F("OK ensemble_minlevel="));
+            Serial.println(value, 3);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-1.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show ensemble_minlevel") == 0 || strcmp(cmd, "ensemble_minlevel") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("ensemble_minlevel="));
+        Serial.println(audioCtrl_->getEnsemble().getFusion().getMinAudioLevel(), 3);
+        return true;
+    }
+
+    // === PULSE MODULATION THRESHOLDS (rhythm category) ===
+    // pulsenear: Phase distance threshold for near-beat detection (boost transients)
+    if (strncmp(cmd, "set pulsenear ", 14) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 14);
+        if (value >= 0.0f && value <= 0.5f) {
+            audioCtrl_->pulseNearBeatThreshold = value;
+            Serial.print(F("OK pulsenear="));
+            Serial.println(value, 3);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-0.5"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show pulsenear") == 0 || strcmp(cmd, "pulsenear") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("pulsenear="));
+        Serial.println(audioCtrl_->pulseNearBeatThreshold, 3);
+        return true;
+    }
+
+    // pulsefar: Phase distance threshold for off-beat detection (suppress transients)
+    if (strncmp(cmd, "set pulsefar ", 13) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 13);
+        if (value >= 0.2f && value <= 0.5f) {
+            audioCtrl_->pulseFarFromBeatThreshold = value;
+            Serial.print(F("OK pulsefar="));
+            Serial.println(value, 3);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.2-0.5"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show pulsefar") == 0 || strcmp(cmd, "pulsefar") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("pulsefar="));
+        Serial.println(audioCtrl_->pulseFarFromBeatThreshold, 3);
         return true;
     }
 
@@ -1593,6 +1748,28 @@ bool SerialConsole::handleHypothesisCommand(const char* cmd) {
             case HypothesisDebugLevel::DETAILED: Serial.print(F("DETAILED")); break;
         }
         Serial.println(F(")"));
+        return true;
+    }
+
+    // "json rhythm" - output rhythm tracking state as JSON (for test automation)
+    if (strcmp(cmd, "json rhythm") == 0) {
+        Serial.print(F("{\"bpm\":"));
+        Serial.print(audioCtrl_->getCurrentBpm(), 1);
+        Serial.print(F(",\"periodicityStrength\":"));
+        Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
+        Serial.print(F(",\"beatStability\":"));
+        Serial.print(audioCtrl_->getBeatStability(), 3);
+        Serial.print(F(",\"tempoVelocity\":"));
+        Serial.print(audioCtrl_->getTempoVelocity(), 2);
+        Serial.print(F(",\"nextBeatMs\":"));
+        Serial.print(audioCtrl_->getNextBeatMs());
+        Serial.print(F(",\"tempoPriorWeight\":"));
+        Serial.print(audioCtrl_->getLastTempoPriorWeight(), 3);
+        Serial.print(F(",\"phase\":"));
+        Serial.print(audioCtrl_->getControl().phase, 3);
+        Serial.print(F(",\"rhythmStrength\":"));
+        Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
+        Serial.println(F("}"));
         return true;
     }
 

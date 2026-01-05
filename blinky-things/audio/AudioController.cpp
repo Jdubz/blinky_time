@@ -49,6 +49,21 @@ bool AudioController::begin(uint32_t sampleRate) {
     phase_ = 0.0f;
     targetPhase_ = 0.0f;
 
+    // Reset beat stability tracking
+    for (int i = 0; i < STABILITY_BUFFER_SIZE; i++) {
+        interBeatIntervals_[i] = 0.0f;
+    }
+    ibiWriteIdx_ = 0;
+    ibiCount_ = 0;
+    lastBeatMs_ = 0;
+    beatStability_ = 0.0f;
+
+    // Reset continuous tempo estimation
+    tempoVelocity_ = 0.0f;
+    prevBpm_ = 120.0f;
+    nextBeatMs_ = 0;
+    lastTempoPriorWeight_ = 1.0f;
+
     // Reset timing
     lastAutocorrMs_ = 0;
     lastSignificantAudioMs_ = 0;
@@ -389,20 +404,101 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
 
         // Accept as peak if local max with at least one strictly lower neighbor
         if (isLocalMax && hasStrictlyLowerNeighbor && numPeaks < 4) {
+            // Convert lag to BPM for tempo prior calculation
+            float lagBpm = 60000.0f / (static_cast<float>(lag) / samplesPerMs);
+            lagBpm = clampf(lagBpm, bpmMin, bpmMax);
+
+            // Apply tempo prior weighting (reduces half-time/double-time confusion)
+            float priorWeight = computeTempoPrior(lagBpm);
+            float weightedCorr = normCorr * priorWeight;
+
+            // Store for debug (use last peak's prior weight)
+            lastTempoPriorWeight_ = priorWeight;
+
             peaks[numPeaks].lag = lag;
             peaks[numPeaks].correlation = correlation;
-            peaks[numPeaks].normCorrelation = normCorr;
+            peaks[numPeaks].normCorrelation = weightedCorr;  // Use prior-weighted correlation
             numPeaks++;
         }
     }
 
-    // Sort peaks by strength (descending) - simple selection sort
+    // Sort peaks by prior-weighted strength (descending) - simple selection sort
     for (int i = 0; i < numPeaks - 1; i++) {
         for (int j = i + 1; j < numPeaks; j++) {
             if (peaks[j].normCorrelation > peaks[i].normCorrelation) {
                 AutocorrPeak temp = peaks[i];
                 peaks[i] = peaks[j];
                 peaks[j] = temp;
+            }
+        }
+    }
+
+    // === HARMONIC DISAMBIGUATION ===
+    // Problem: Autocorrelation produces peaks at both fundamental and harmonics.
+    // At 60 BPM (lag L), there's also a peak at 120 BPM (lag L/2).
+    // At 180 BPM (lag L), there's also a peak at 90 BPM (lag 2L).
+    // Solution: Check if the strongest peak has a related peak at 2x lag (half BPM).
+    // CRITICAL: Only prefer slower tempo if tempo prior ALSO supports it.
+    // Otherwise, the tempo prior should be the deciding factor.
+    if (numPeaks >= 2 && tempoPriorEnabled) {
+        int strongestLag = peaks[0].lag;
+        float strongestCorr = peaks[0].normCorrelation;
+        float strongestBpm = 60000.0f / (static_cast<float>(strongestLag) / samplesPerMs);
+
+        // Look for a peak at approximately 2x lag (half tempo = fundamental)
+        int targetLag = strongestLag * 2;
+        constexpr float lagTolerance = 0.08f;  // Allow 8% tolerance for timing jitter
+
+        for (int i = 1; i < numPeaks; i++) {
+            float lagRatio = static_cast<float>(peaks[i].lag) / static_cast<float>(targetLag);
+
+            // Check if this peak is near 2x lag (half tempo)
+            if (lagRatio > (1.0f - lagTolerance) && lagRatio < (1.0f + lagTolerance)) {
+                // Found a candidate fundamental (slower tempo)
+                float candidateBpm = 60000.0f / (static_cast<float>(peaks[i].lag) / samplesPerMs);
+
+                // Only prefer slower tempo if:
+                // 1. It's strong enough (>60% of harmonic peak)
+                // 2. Tempo prior favors the slower tempo over the faster one
+                constexpr float fundamentalThreshold = 0.60f;
+                float priorFaster = computeTempoPrior(strongestBpm);
+                float priorSlower = computeTempoPrior(candidateBpm);
+
+                // Skip if tempo prior favors the faster tempo
+                if (priorFaster > priorSlower * 1.1f) {
+                    // Tempo prior strongly favors faster tempo - don't switch
+                    if (shouldPrintDebug) {
+                        Serial.print(F("{\"type\":\"HARMONIC_SKIP\",\"fast\":"));
+                        Serial.print(strongestBpm, 1);
+                        Serial.print(F(",\"slow\":"));
+                        Serial.print(candidateBpm, 1);
+                        Serial.print(F(",\"priorFast\":"));
+                        Serial.print(priorFaster, 3);
+                        Serial.print(F(",\"priorSlow\":"));
+                        Serial.print(priorSlower, 3);
+                        Serial.println(F("}"));
+                    }
+                    break;
+                }
+
+                if (peaks[i].normCorrelation > strongestCorr * fundamentalThreshold) {
+                    // Swap: promote the fundamental to position 0
+                    AutocorrPeak temp = peaks[0];
+                    peaks[0] = peaks[i];
+                    peaks[i] = temp;
+
+                    // Debug output for harmonic disambiguation
+                    if (shouldPrintDebug) {
+                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"from\":"));
+                        Serial.print(strongestBpm, 1);
+                        Serial.print(F(",\"to\":"));
+                        Serial.print(candidateBpm, 1);
+                        Serial.print(F(",\"ratio\":"));
+                        Serial.print(peaks[i].normCorrelation / strongestCorr, 3);
+                        Serial.println(F("}"));
+                    }
+                    break;  // Only consider first harmonic match
+                }
             }
         }
     }
@@ -474,7 +570,9 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Update tempo if periodicity is strong enough
     // Safety: bestLag > 0 check prevents division by zero in calculations below
     if (bestLag > 0 && periodicityStrength_ > 0.25f) {
-        float newBpm = 60.0f / (static_cast<float>(bestLag) / 60.0f);
+        // FIX: Use adaptive samplesPerMs instead of hardcoded 60 Hz assumption
+        // Formula: BPM = 60000ms/min / (lag_samples / samplesPerMs) = 60000 * samplesPerMs / lag
+        float newBpm = 60000.0f * samplesPerMs / static_cast<float>(bestLag);
         newBpm = clampf(newBpm, bpmMin, bpmMax);
 
         // Smooth BPM changes
@@ -523,6 +621,9 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
     // === USE PRIMARY HYPOTHESIS FOR OUTPUT ===
     TempoHypothesis& primary = multiHypothesis_.getPrimary();
 
+    // Track previous phase for beat detection
+    float prevPhase = phase_;
+
     if (primary.active && primary.strength > activationThreshold) {
         // Safety check for NaN/infinity in primary hypothesis
         if (!isfinite(primary.phase)) {
@@ -532,10 +633,19 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
             primary.bpm = 120.0f;  // Safe default
         }
 
+        // Track tempo changes for continuous estimation
+        float oldBpm = bpm_;
+
         // Use primary hypothesis values
         phase_ = primary.phase;
         bpm_ = primary.bpm;
         periodicityStrength_ = primary.strength;
+
+        // Update tempo velocity if BPM changed significantly
+        // FIX: Guard against division by zero (oldBpm should never be 0, but be defensive)
+        if (oldBpm > 1.0f && fabsf(bpm_ - oldBpm) / oldBpm > tempoChangeThreshold) {
+            updateTempoVelocity(bpm_, dt);
+        }
 
         // Gradually adapt phase toward target (derived from autocorrelation)
         // This provides additional smoothing on top of hypothesis tracking
@@ -585,6 +695,15 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
         }
     }
 
+    // === BEAT DETECTION (phase wrap) ===
+    // Detect when phase crosses from high (>0.8) to low (<0.2) = beat occurred
+    if (prevPhase > 0.8f && phase_ < 0.2f && periodicityStrength_ > activationThreshold) {
+        updateBeatStability(nowMs);
+    }
+
+    // === PREDICT NEXT BEAT ===
+    predictNextBeat(nowMs);
+
     // === DEBUG OUTPUT ===
     multiHypothesis_.printDebug(nowMs);
 }
@@ -627,8 +746,13 @@ void AudioController::synthesizePulse() {
         } else {
             // Transition zone: interpolate between boost and suppress
             float transitionWidth = pulseFarFromBeatThreshold - pulseNearBeatThreshold;
-            float t = (distFromBeat - pulseNearBeatThreshold) / transitionWidth;
-            modulation = pulseBoostOnBeat * (1.0f - t) + pulseSuppressOffBeat * t;
+            // FIX: Guard against division by zero if thresholds are equal
+            if (transitionWidth < 0.001f) {
+                modulation = pulseBoostOnBeat;  // Default to boost
+            } else {
+                float t = (distFromBeat - pulseNearBeatThreshold) / transitionWidth;
+                modulation = pulseBoostOnBeat * (1.0f - t) + pulseSuppressOffBeat * t;
+            }
         }
 
         // Blend modulation based on periodicity strength
@@ -977,5 +1101,130 @@ void MultiHypothesisTracker::printDebug(uint32_t nowMs, const char* eventType, i
             }
             Serial.println(F("]}"));
         }
+    }
+}
+
+// ============================================================================
+// Tempo Prior and Stability Methods
+// ============================================================================
+
+float AudioController::computeTempoPrior(float bpm) const {
+    if (!tempoPriorEnabled || tempoPriorWidth <= 0.0f) {
+        return 1.0f;  // No prior weighting
+    }
+
+    // Gaussian prior: exp(-0.5 * ((bpm - center) / width)^2)
+    float diff = bpm - tempoPriorCenter;
+    float normalized = diff / tempoPriorWidth;
+    float gaussianWeight = expf(-0.5f * normalized * normalized);
+
+    // Blend between no-prior (1.0) and full prior based on tempoPriorStrength
+    // At strength=0: return 1.0 (no prior effect)
+    // At strength=1: return gaussianWeight (full prior)
+    return 1.0f + tempoPriorStrength * (gaussianWeight - 1.0f);
+}
+
+void AudioController::updateBeatStability(uint32_t nowMs) {
+    // Only update when we detect a beat (phase crossing 0)
+    // Called from updatePhase when phase wraps around
+
+    if (lastBeatMs_ == 0) {
+        lastBeatMs_ = nowMs;
+        return;
+    }
+
+    // Calculate inter-beat interval
+    float ibiMs = static_cast<float>(nowMs - lastBeatMs_);
+    lastBeatMs_ = nowMs;
+
+    // Skip unreasonable intervals (< 200ms = > 300 BPM, > 2000ms = < 30 BPM)
+    if (ibiMs < 200.0f || ibiMs > 2000.0f) {
+        return;
+    }
+
+    // Add to circular buffer
+    interBeatIntervals_[ibiWriteIdx_] = ibiMs;
+    ibiWriteIdx_ = (ibiWriteIdx_ + 1) % STABILITY_BUFFER_SIZE;
+    if (ibiCount_ < STABILITY_BUFFER_SIZE) {
+        ibiCount_++;
+    }
+
+    // Need at least 4 intervals for meaningful stability
+    if (ibiCount_ < 4) {
+        beatStability_ = 0.0f;
+        return;
+    }
+
+    // Compute mean and variance of IBIs
+    float sum = 0.0f;
+    int count = (ibiCount_ < static_cast<int>(stabilityWindowBeats))
+                ? ibiCount_
+                : static_cast<int>(stabilityWindowBeats);
+
+    for (int i = 0; i < count; i++) {
+        int idx = (ibiWriteIdx_ - 1 - i + STABILITY_BUFFER_SIZE) % STABILITY_BUFFER_SIZE;
+        sum += interBeatIntervals_[idx];
+    }
+    float mean = sum / static_cast<float>(count);
+
+    float variance = 0.0f;
+    for (int i = 0; i < count; i++) {
+        int idx = (ibiWriteIdx_ - 1 - i + STABILITY_BUFFER_SIZE) % STABILITY_BUFFER_SIZE;
+        float diff = interBeatIntervals_[idx] - mean;
+        variance += diff * diff;
+    }
+    variance /= static_cast<float>(count);
+
+    // Coefficient of variation (normalized standard deviation)
+    // CV = stddev / mean, typical values 0.01 (very stable) to 0.2 (unstable)
+    float stddev = sqrtf(variance);
+    float cv = (mean > 0.0f) ? stddev / mean : 1.0f;
+
+    // Convert to stability: 1.0 = perfectly stable, 0.0 = very unstable
+    // Map CV of 0.05 -> stability 1.0, CV of 0.2 -> stability 0.0
+    beatStability_ = clampf(1.0f - (cv - 0.02f) / 0.15f, 0.0f, 1.0f);
+}
+
+void AudioController::updateTempoVelocity(float newBpm, float dt) {
+    if (dt <= 0.0f) return;
+
+    // Calculate rate of tempo change (BPM per second)
+    float bpmChange = newBpm - prevBpm_;
+    float instantVelocity = bpmChange / dt;
+
+    // Smooth the velocity estimate
+    tempoVelocity_ = tempoVelocity_ * 0.8f + instantVelocity * 0.2f;
+
+    // Clamp to reasonable range (±50 BPM/sec)
+    tempoVelocity_ = clampf(tempoVelocity_, -50.0f, 50.0f);
+
+    prevBpm_ = newBpm;
+}
+
+void AudioController::predictNextBeat(uint32_t nowMs) {
+    // Predict when next beat will occur based on current phase and tempo
+    if (beatPeriodMs_ <= 0.0f || !isfinite(phase_)) {
+        nextBeatMs_ = nowMs;
+        return;
+    }
+
+    // Time until next beat = (1.0 - phase) * beatPeriodMs
+    float timeToNextBeat = (1.0f - phase_) * beatPeriodMs_;
+
+    // Apply tempo velocity correction if significant rhythm detected
+    if (periodicityStrength_ > activationThreshold && fabsf(tempoVelocity_) > 0.5f) {
+        // Adjust prediction based on tempo trend
+        // If tempo is increasing (velocity > 0), next beat comes slightly sooner
+        float velocityCorrection = -tempoVelocity_ * 0.01f * timeToNextBeat;
+        timeToNextBeat += velocityCorrection;
+    }
+
+    // Add lookahead offset
+    // FIX: Compute signed offset first to prevent unsigned underflow
+    float offsetMs = timeToNextBeat - beatLookaheadMs;
+    if (offsetMs < 0.0f) {
+        nextBeatMs_ = nowMs;  // Beat is imminent or past
+    } else {
+        nextBeatMs_ = nowMs + static_cast<uint32_t>(offsetMs);
     }
 }

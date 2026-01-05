@@ -148,4 +148,7 @@ export interface TunerOptions {
     params?: string[];
     modes?: ParameterMode[];
     patterns?: string[];
+    refine?: boolean;
+    refinementSteps?: number;
+    recordAudio?: boolean;
 }

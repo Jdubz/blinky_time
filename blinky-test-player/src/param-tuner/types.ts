@@ -557,6 +557,115 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     description: 'Weight of beat longevity in confidence calculation',
     optimizeFor: 'f1',
   },
+
+  // ===== TEMPO PRIOR PARAMETERS =====
+  // Reduces half-time/double-time confusion using Gaussian prior
+  // Based on research: librosa uses log-normal prior centered on ~120 BPM
+
+  priorenabled: {
+    name: 'priorenabled',
+    mode: 'rhythm',
+    min: 0,
+    max: 1,
+    default: 1,
+    sweepValues: [0, 1],
+    description: 'Enable tempo prior weighting (0=off, 1=on)',
+    targetPatterns: ['steady-120bpm', 'steady-80bpm', 'tempo-sweep'],
+    optimizeFor: 'f1',
+  },
+
+  priorcenter: {
+    name: 'priorcenter',
+    mode: 'rhythm',
+    min: 60.0,
+    max: 180.0,
+    default: 120.0,
+    sweepValues: [80, 100, 110, 120, 130, 140, 160],
+    description: 'Tempo prior center BPM (Gaussian peak)',
+    targetPatterns: ['steady-120bpm', 'steady-80bpm', 'steady-160bpm'],
+    optimizeFor: 'f1',
+  },
+
+  priorwidth: {
+    name: 'priorwidth',
+    mode: 'rhythm',
+    min: 10.0,
+    max: 80.0,
+    default: 40.0,
+    sweepValues: [15, 25, 40, 50, 60, 80],
+    description: 'Tempo prior width (sigma BPM) - wider = less specific',
+    targetPatterns: ['tempo-sweep', 'tempo-ramp'],
+    optimizeFor: 'f1',
+  },
+
+  priorstrength: {
+    name: 'priorstrength',
+    mode: 'rhythm',
+    min: 0.0,
+    max: 1.0,
+    default: 0.5,
+    sweepValues: [0.0, 0.25, 0.5, 0.75, 1.0],
+    description: 'Tempo prior blend strength (0=disabled, 1=full)',
+    targetPatterns: ['steady-120bpm', 'tempo-sweep'],
+    optimizeFor: 'f1',
+  },
+
+  // ===== BEAT STABILITY PARAMETERS =====
+  // Tracks inter-beat interval consistency for confidence modulation
+
+  stabilitywin: {
+    name: 'stabilitywin',
+    mode: 'rhythm',
+    min: 4.0,
+    max: 16.0,
+    default: 8.0,
+    sweepValues: [4, 6, 8, 10, 12, 16],
+    description: 'Number of beats to track for stability calculation',
+    targetPatterns: ['steady-120bpm', 'tempo-ramp', 'tempo-sudden'],
+    optimizeFor: 'f1',
+  },
+
+  // ===== BEAT LOOKAHEAD PARAMETERS =====
+  // Predicts beats ahead for zero-latency visual sync
+
+  lookahead: {
+    name: 'lookahead',
+    mode: 'rhythm',
+    min: 0.0,
+    max: 200.0,
+    default: 50.0,
+    sweepValues: [0, 25, 50, 75, 100, 150, 200],
+    description: 'Beat lookahead time (ms) for anticipatory effects',
+    targetPatterns: ['phase-on-beat', 'phase-off-beat'],
+    optimizeFor: 'f1',
+  },
+
+  // ===== CONTINUOUS TEMPO ESTIMATION PARAMETERS =====
+  // Kalman-like smoothing for gradual tempo changes
+
+  temposmooth: {
+    name: 'temposmooth',
+    mode: 'rhythm',
+    min: 0.5,
+    max: 0.99,
+    default: 0.85,
+    sweepValues: [0.5, 0.7, 0.8, 0.85, 0.9, 0.95],
+    description: 'Tempo smoothing factor (higher = smoother, slower adaptation)',
+    targetPatterns: ['tempo-ramp', 'tempo-sudden'],
+    optimizeFor: 'f1',
+  },
+
+  tempochgthresh: {
+    name: 'tempochgthresh',
+    mode: 'rhythm',
+    min: 0.01,
+    max: 0.5,
+    default: 0.1,
+    sweepValues: [0.02, 0.05, 0.1, 0.15, 0.2, 0.3],
+    description: 'Minimum BPM change ratio to trigger tempo velocity update',
+    targetPatterns: ['tempo-ramp', 'tempo-sudden'],
+    optimizeFor: 'f1',
+  },
 };
 
 // Pattern categories for testing

@@ -313,6 +313,26 @@ public:
     float bpmMin = 60.0f;               // Minimum BPM to detect (affects autocorr lag range)
     float bpmMax = 200.0f;              // Maximum BPM to detect (affects autocorr lag range)
 
+    // === TEMPO PRIOR (reduces half-time/double-time confusion) ===
+    // Gaussian prior centered on typical music tempo, weights autocorrelation peaks
+    bool tempoPriorEnabled = true;      // Enable tempo prior weighting
+    float tempoPriorCenter = 120.0f;    // Center of Gaussian prior (BPM)
+    float tempoPriorWidth = 40.0f;      // Width (sigma) of Gaussian prior (BPM)
+    float tempoPriorStrength = 0.5f;    // Blend: 0=no prior, 1=full prior weight
+
+    // === BEAT STABILITY TRACKING ===
+    // Measures consistency of inter-beat intervals for confidence modulation
+    float stabilityWindowBeats = 8.0f;  // Number of beats to track for stability
+
+    // === BEAT LOOKAHEAD (anticipatory effects) ===
+    // Predicts next beat time for zero-latency visual sync
+    float beatLookaheadMs = 50.0f;      // How far ahead to predict beats (ms)
+
+    // === CONTINUOUS TEMPO ESTIMATION ===
+    // Kalman-like smoothing for gradual tempo changes
+    float tempoSmoothingFactor = 0.85f; // Higher = smoother, slower adaptation (0-1)
+    float tempoChangeThreshold = 0.1f;  // Min BPM change ratio to trigger update
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }
@@ -330,6 +350,10 @@ public:
 
     // Debug getters
     float getPeriodicityStrength() const { return periodicityStrength_; }
+    float getBeatStability() const { return beatStability_; }
+    float getTempoVelocity() const { return tempoVelocity_; }
+    uint32_t getNextBeatMs() const { return nextBeatMs_; }
+    float getLastTempoPriorWeight() const { return lastTempoPriorWeight_; }
 
 private:
     // === HAL REFERENCES ===
@@ -364,6 +388,24 @@ private:
     float phase_ = 0.0f;                // Current beat phase (0-1)
     float targetPhase_ = 0.0f;          // Phase derived from autocorrelation
 
+    // Beat stability tracking
+    static constexpr int STABILITY_BUFFER_SIZE = 16;
+    float interBeatIntervals_[STABILITY_BUFFER_SIZE] = {0};
+    int ibiWriteIdx_ = 0;
+    int ibiCount_ = 0;
+    uint32_t lastBeatMs_ = 0;           // Timestamp of last detected beat
+    float beatStability_ = 0.0f;        // Current stability (0-1, 1=perfectly stable)
+
+    // Continuous tempo estimation
+    float tempoVelocity_ = 0.0f;        // Rate of tempo change (BPM/second)
+    float prevBpm_ = 120.0f;            // Previous BPM for velocity calculation
+
+    // Beat lookahead
+    uint32_t nextBeatMs_ = 0;           // Predicted timestamp of next beat
+
+    // Debug: last tempo prior weight applied
+    float lastTempoPriorWeight_ = 1.0f;
+
     // Autocorrelation timing
     uint32_t lastAutocorrMs_ = 0;
     static constexpr uint32_t AUTOCORR_PERIOD_MS = 500;  // Run every 500ms
@@ -380,6 +422,12 @@ private:
     void addOssSample(float onsetStrength, uint32_t timestampMs);
     void runAutocorrelation(uint32_t nowMs);
     void updatePhase(float dt, uint32_t nowMs);
+
+    // Tempo prior and stability
+    float computeTempoPrior(float bpm) const;
+    void updateBeatStability(uint32_t nowMs);
+    void updateTempoVelocity(float newBpm, float dt);
+    void predictNextBeat(uint32_t nowMs);
 
     // Output synthesis
     void synthesizeEnergy();

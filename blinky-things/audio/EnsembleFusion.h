@@ -81,9 +81,10 @@ public:
      * @param results Array of MAX_DETECTORS DetectionResult values
      *                Index corresponds to DetectorType enum value
      * @param timestampMs Current timestamp in milliseconds (for cooldown tracking)
+     * @param audioLevel Current normalized audio level (0.0-1.0) for noise gate
      * @return Combined EnsembleOutput with transientStrength, confidence, agreement
      */
-    EnsembleOutput fuse(const DetectionResult* results, uint32_t timestampMs);
+    EnsembleOutput fuse(const DetectionResult* results, uint32_t timestampMs, float audioLevel = 1.0f);
 
     /**
      * Get the weight sum for normalization (debug/tuning)
@@ -115,6 +116,14 @@ public:
     void setMinConfidence(float threshold) { minConfidence_ = threshold; }
     float getMinConfidence() const { return minConfidence_; }
 
+    /**
+     * Set minimum audio level for noise gate
+     * Detections are suppressed when audio level is below this threshold
+     * @param level Minimum level (0.0-1.0, default 0.02 = 2%)
+     */
+    void setMinAudioLevel(float level) { minAudioLevel_ = level; }
+    float getMinAudioLevel() const { return minAudioLevel_; }
+
 private:
     // Per-detector configuration
     DetectorConfig configs_[MAX_DETECTORS];
@@ -129,6 +138,9 @@ private:
 
     // Minimum confidence threshold (detectors below this are ignored)
     float minConfidence_ = 0.3f;  // Default 0.3 (30% confident)
+
+    // Minimum audio level for noise gate (suppress detections in silence)
+    float minAudioLevel_ = 0.02f;  // Default 2% level (effectively silence)
 };
 
 // --- Default calibrated values ---
