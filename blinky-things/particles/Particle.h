@@ -21,8 +21,8 @@ struct Particle {
     // Position (in LED coordinate space)
     float x, y;           // 8 bytes - Fractional position for smooth subpixel movement
 
-    // Velocity (LEDs/frame@30FPS, normalized by dt*TARGET_FPS in update)
-    float vx, vy;         // 8 bytes - Velocity vector (see ParticleGenerator::updateParticles)
+    // Velocity (LEDs/sec, applied with dt in ParticleGenerator::updateParticles)
+    float vx, vy;         // 8 bytes - Velocity vector in LEDs per second
 
     // Lifecycle
     uint8_t intensity;    // 1 byte - Current brightness/heat (0-255)

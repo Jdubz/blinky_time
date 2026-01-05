@@ -10,7 +10,6 @@ struct WaterParams {
     // Spawn behavior
     float baseSpawnChance;        // Baseline drop spawn probability (0-1)
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
-    uint8_t maxParticles;         // Pool size (64 typical)
 
     // Lifecycle
     uint8_t defaultLifespan;      // Default particle age in frames
@@ -41,7 +40,6 @@ struct WaterParams {
     WaterParams() {
         baseSpawnChance = 0.25f;
         audioSpawnBoost = 0.4f;
-        maxParticles = 64;
         defaultLifespan = 90;  // ~3 seconds at 30 FPS
         intensityMin = 80;
         intensityMax = 200;

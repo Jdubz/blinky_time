@@ -10,7 +10,6 @@ struct LightningParams {
     // Spawn behavior
     float baseSpawnChance;        // Baseline bolt spawn probability (0-1)
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
-    uint8_t maxParticles;         // Pool size (32 typical)
 
     // Lifecycle
     uint8_t defaultLifespan;      // Default particle age in frames (short-lived)
@@ -35,7 +34,6 @@ struct LightningParams {
     LightningParams() {
         baseSpawnChance = 0.15f;
         audioSpawnBoost = 0.5f;
-        maxParticles = 32;
         defaultLifespan = 20;  // Short-lived (~0.6 seconds)
         intensityMin = 180;
         intensityMax = 255;

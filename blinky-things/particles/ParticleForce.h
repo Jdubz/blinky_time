@@ -33,8 +33,8 @@ public:
 
     void apply(Particle* p, float dt) override {
         if (p->hasFlag(ParticleFlags::GRAVITY)) {
-            // F = ma -> a = F/m -> dv = (F/m)*dt
-            p->vy += (gravity_ / p->mass) * dt;
+            // Gravity affects all objects equally: dv = a*dt
+            p->vy += gravity_ * dt;
         }
     }
 
@@ -100,11 +100,12 @@ public:
     explicit DragForce(float coefficient = 0.98f) : dragCoeff_(coefficient) {}
 
     void apply(Particle* p, float dt) override {
-        // Simple velocity damping: v *= dragCoeff^dt
-        // For dt ~= 0.03s (33 FPS), dragCoeff=0.98 means ~60% velocity after 1 sec
-        // Clamp dt to prevent overflow in pow() (e.g., from millis() wrap or hang)
+        // Simple velocity damping using first-order approximation (avoids pow())
+        // This approximates v_new = v_old * dragCoeff_^dt
+        // Clamp dt to prevent excessive damping (e.g., from millis() wrap or hang)
         float safeDt = min(dt, 1.0f);  // Cap at 1 second
-        float damping = pow(dragCoeff_, safeDt * TARGET_FPS);  // Normalize to target FPS
+        float k = 1.0f - dragCoeff_;
+        float damping = 1.0f - k * safeDt;
         p->vx *= damping;
         p->vy *= damping;
     }

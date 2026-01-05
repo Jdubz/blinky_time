@@ -119,8 +119,6 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
         "Horizontal velocity spread", 0.0f, 5.0f, onParamChanged);
 
     // Lifecycle
-    settings_.registerUint8("maxparticles", &fp->maxParticles, "fire",
-        "Particle pool size", 16, 64, onParamChanged);
     settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
         "Default particle lifespan (frames)", 20, 120, onParamChanged);
     settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
@@ -865,8 +863,6 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
         "Splash particle intensity", 0, 255, onParamChanged);
 
     // Lifecycle
-    settings_.registerUint8("maxparticles", &wp->maxParticles, "water",
-        "Particle pool size", 16, 128, onParamChanged);
     settings_.registerUint8("defaultlifespan", &wp->defaultLifespan, "water",
         "Default particle lifespan (frames)", 20, 180, onParamChanged);
     settings_.registerUint8("intensitymin", &wp->intensityMin, "water",
@@ -910,8 +906,6 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
         "Branch intensity reduction (%)", 0, 100, onParamChanged);
 
     // Lifecycle
-    settings_.registerUint8("maxparticles", &lp->maxParticles, "lightning",
-        "Particle pool size", 16, 64, onParamChanged);
     settings_.registerUint8("defaultlifespan", &lp->defaultLifespan, "lightning",
         "Default particle lifespan (frames)", 10, 60, onParamChanged);
     settings_.registerUint8("intensitymin", &lp->intensityMin, "lightning",

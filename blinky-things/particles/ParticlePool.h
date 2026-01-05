@@ -1,7 +1,6 @@
 #pragma once
 
 #include "Particle.h"
-#include <string.h>
 
 /**
  * ParticlePool - Fixed-size particle pool with zero heap allocation
@@ -86,22 +85,18 @@ public:
     void updateAll(UpdateFunc updateFunc) {
         for (uint8_t i = 0; i < MAX_PARTICLES; i++) {
             if (particles_[i].isAlive()) {
+                // Capture count before update to detect explicit kill() calls
+                uint8_t beforeCount = activeCount_;
                 updateFunc(&particles_[i]);
 
-                // Auto-kill if died naturally (not via explicit kill())
-                if (!particles_[i].isAlive()) {
-                    // kill() sets both intensity=0 AND age=255
-                    // Only decrement if this wasn't an explicit kill()
-                    bool wasExplicitlyKilled = (particles_[i].intensity == 0 && particles_[i].age == 255);
-
-                    if (!wasExplicitlyKilled) {
-                        // Natural death - decrement and mark as dead
-                        if (activeCount_ > 0) {
-                            activeCount_--;
-                        }
-                        particles_[i].intensity = 0;
-                        particles_[i].age = 255;
-                    }
+                // Auto-kill if died naturally, but only if the update didn't already change activeCount_
+                // (explicit kill() will have already decremented activeCount_)
+                if (!particles_[i].isAlive() &&
+                    activeCount_ == beforeCount &&
+                    activeCount_ > 0) {
+                    activeCount_--;
+                    particles_[i].intensity = 0;
+                    particles_[i].age = 255;
                 }
             }
         }

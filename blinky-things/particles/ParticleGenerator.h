@@ -143,8 +143,8 @@ protected:
         if (p->hasFlag(ParticleFlags::FADE) && p->maxAge > 0) {
             // Linear fade based on age
             float ageRatio = (float)p->age / p->maxAge;
-            uint8_t targetIntensity = p->intensity * (1.0f - ageRatio);
-            p->intensity = max(0, min(255, targetIntensity));
+            float newIntensity = (float)p->intensity * (1.0f - ageRatio);
+            p->intensity = (uint8_t)max(0.0f, newIntensity);
         }
     }
 
@@ -173,10 +173,9 @@ protected:
             if (p->vy < -MAX_VELOCITY) p->vy = -MAX_VELOCITY;
 
             // Update position based on velocity
-            // Velocity is in LEDs/sec, dt is in seconds, * TARGET_FPS normalizes frame rate
-            // This makes motion consistent: at 30 FPS (dt≈0.033s), factor ≈ 1.0
-            p->x += p->vx * dt * TARGET_FPS;
-            p->y += p->vy * dt * TARGET_FPS;
+            // Velocity is in LEDs/sec, dt is in seconds: displacement = velocity * time
+            p->x += p->vx * dt;
+            p->y += p->vy * dt;
 
             // Age particle
             ageParticle(p);

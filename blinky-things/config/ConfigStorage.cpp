@@ -418,7 +418,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     fireParams.musicSpawnPulse = data_.fire.musicSpawnPulse;
     fireParams.organicTransientMin = data_.fire.organicTransientMin;
     // Lifecycle
-    fireParams.maxParticles = data_.fire.maxParticles;
     fireParams.defaultLifespan = data_.fire.defaultLifespan;
     fireParams.intensityMin = data_.fire.intensityMin;
     fireParams.intensityMax = data_.fire.intensityMax;
@@ -447,7 +446,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     waterParams.musicSpawnPulse = data_.water.musicSpawnPulse;
     waterParams.organicTransientMin = data_.water.organicTransientMin;
     // Lifecycle
-    waterParams.maxParticles = data_.water.maxParticles;
     waterParams.defaultLifespan = data_.water.defaultLifespan;
     waterParams.intensityMin = data_.water.intensityMin;
     waterParams.intensityMax = data_.water.intensityMax;
@@ -467,7 +465,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     lightningParams.musicSpawnPulse = data_.lightning.musicSpawnPulse;
     lightningParams.organicTransientMin = data_.lightning.organicTransientMin;
     // Lifecycle
-    lightningParams.maxParticles = data_.lightning.maxParticles;
     lightningParams.defaultLifespan = data_.lightning.defaultLifespan;
     lightningParams.intensityMin = data_.lightning.intensityMin;
     lightningParams.intensityMax = data_.lightning.intensityMax;
@@ -539,7 +536,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.fire.musicSpawnPulse = fireParams.musicSpawnPulse;
     data_.fire.organicTransientMin = fireParams.organicTransientMin;
     // Lifecycle
-    data_.fire.maxParticles = fireParams.maxParticles;
     data_.fire.defaultLifespan = fireParams.defaultLifespan;
     data_.fire.intensityMin = fireParams.intensityMin;
     data_.fire.intensityMax = fireParams.intensityMax;
@@ -568,7 +564,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.water.musicSpawnPulse = waterParams.musicSpawnPulse;
     data_.water.organicTransientMin = waterParams.organicTransientMin;
     // Lifecycle
-    data_.water.maxParticles = waterParams.maxParticles;
     data_.water.defaultLifespan = waterParams.defaultLifespan;
     data_.water.intensityMin = waterParams.intensityMin;
     data_.water.intensityMax = waterParams.intensityMax;
@@ -588,7 +583,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.lightning.musicSpawnPulse = lightningParams.musicSpawnPulse;
     data_.lightning.organicTransientMin = lightningParams.organicTransientMin;
     // Lifecycle
-    data_.lightning.maxParticles = lightningParams.maxParticles;
     data_.lightning.defaultLifespan = lightningParams.defaultLifespan;
     data_.lightning.intensityMin = lightningParams.intensityMin;
     data_.lightning.intensityMax = lightningParams.intensityMax;

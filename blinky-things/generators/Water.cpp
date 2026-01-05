@@ -110,7 +110,7 @@ void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
         float vx = cos(angle) * speed;
         float vy = sin(angle) * speed - 1.0f;  // Slight upward component
 
-        uint8_t intensity = min(255, parentIntensity * params_.splashIntensity / 255);
+        uint8_t intensity = min(255, (uint32_t)parentIntensity * params_.splashIntensity / 255);
 
         pool_.spawn(x, y, vx, vy, intensity, 30, 0.5f,  // Light, short-lived
                    ParticleFlags::GRAVITY | ParticleFlags::FADE);
