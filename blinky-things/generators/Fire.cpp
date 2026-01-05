@@ -187,16 +187,15 @@ void Fire::diffuseHeat() {
                 uint8_t divisor = 3;
 
                 // Add horizontal spread from adjacent cells
-                int leftIndex = -1, rightIndex = -1;
                 if (x > 0) {
-                    leftIndex = coordsToIndex(x - 1, y + 1);
+                    int leftIndex = coordsToIndex(x - 1, y + 1);
                     if (leftIndex >= 0) {
                         totalHeat += (uint16_t)heat_[leftIndex];
                         divisor++;
                     }
                 }
                 if (x < width_ - 1) {
-                    rightIndex = coordsToIndex(x + 1, y + 1);
+                    int rightIndex = coordsToIndex(x + 1, y + 1);
                     if (rightIndex >= 0) {
                         totalHeat += (uint16_t)heat_[rightIndex];
                         divisor++;
