@@ -10,6 +10,11 @@ static const float TARGET_FPS = 30.0f;
 // At 30 FPS, this allows ~1.67 LEDs/frame max displacement
 static const float MAX_PARTICLE_VELOCITY = 50.0f;
 
+// Beat detection phase wrap thresholds
+// Detect beat when phase wraps from >0.8 to <0.2 (rhythmStrength-dependent)
+static const float BEAT_PHASE_MIN = 0.2f;  // Phase must drop below this
+static const float BEAT_PHASE_MAX = 0.8f;  // Phase must rise above this
+
 /**
  * Particle - Core particle data structure for unified generator system
  *

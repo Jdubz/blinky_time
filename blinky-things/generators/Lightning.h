@@ -12,6 +12,7 @@ struct LightningParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
+    uint8_t maxParticles;         // Maximum active particles (1-32, default 32)
     uint8_t defaultLifespan;      // Default particle age in frames (short-lived)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -34,6 +35,7 @@ struct LightningParams {
     LightningParams() {
         baseSpawnChance = 0.15f;
         audioSpawnBoost = 0.5f;
+        maxParticles = 32;  // Match template capacity
         defaultLifespan = 20;  // Short-lived (~0.6 seconds)
         intensityMin = 180;
         intensityMax = 255;

@@ -43,8 +43,8 @@ void Water::spawnParticles(float dt) {
         dropCount++;
     }
 
-    // Spawn drops from top
-    for (uint8_t i = 0; i < dropCount && !pool_.isFull(); i++) {
+    // Spawn drops from top (respect maxParticles limit)
+    for (uint8_t i = 0; i < dropCount && pool_.getActiveCount() < params_.maxParticles; i++) {
         float x = random(width_ * 100) / 100.0f;
         float y = 0;  // Top of screen
 
@@ -95,9 +95,9 @@ uint32_t Water::particleColor(uint8_t intensity) const {
 }
 
 void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
-    // Calculate available pool slots with underflow protection
-    uint8_t available = pool_.getCapacity() > pool_.getActiveCount()
-                        ? pool_.getCapacity() - pool_.getActiveCount()
+    // Calculate available slots (respect maxParticles limit)
+    uint8_t available = params_.maxParticles > pool_.getActiveCount()
+                        ? params_.maxParticles - pool_.getActiveCount()
                         : 0;
     uint8_t splashCount = min(params_.splashParticles, available);
 

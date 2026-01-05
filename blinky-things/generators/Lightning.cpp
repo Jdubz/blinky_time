@@ -41,8 +41,8 @@ void Lightning::spawnParticles(float dt) {
         boltCount++;
     }
 
-    // Spawn coherent lightning bolts as connected particle chains
-    for (uint8_t i = 0; i < boltCount && !pool_.isFull(); i++) {
+    // Spawn coherent lightning bolts as connected particle chains (respect maxParticles limit)
+    for (uint8_t i = 0; i < boltCount && pool_.getActiveCount() < params_.maxParticles; i++) {
         spawnBolt();
     }
 }
@@ -80,7 +80,7 @@ void Lightning::spawnBolt() {
     float yStep = (y1 - y0) / steps;
 
     // Spawn particles along the line with slight random jitter for organic look
-    for (int step = 0; step <= steps && !pool_.isFull(); step++) {
+    for (int step = 0; step <= steps && pool_.getActiveCount() < params_.maxParticles; step++) {
         float x = x0 + xStep * step;
         float y = y0 + yStep * step;
 
@@ -97,7 +97,7 @@ void Lightning::spawnBolt() {
 void Lightning::updateParticle(Particle* p, float dt) {
     // Branching logic (only branch once, when particle is young)
     if (p->hasFlag(ParticleFlags::BRANCH) && p->age > 2 && p->age < 8) {
-        if (random(100) < params_.branchChance && !pool_.isFull()) {
+        if (random(100) < params_.branchChance && pool_.getActiveCount() < params_.maxParticles) {
             spawnBranch(p);
             p->clearFlag(ParticleFlags::BRANCH);  // Only branch once
         }
@@ -137,9 +137,9 @@ uint32_t Lightning::particleColor(uint8_t intensity) const {
 }
 
 void Lightning::spawnBranch(const Particle* parent) {
-    // Calculate available pool slots with underflow protection
-    uint8_t available = pool_.getCapacity() > pool_.getActiveCount()
-                        ? pool_.getCapacity() - pool_.getActiveCount()
+    // Calculate available slots (respect maxParticles limit)
+    uint8_t available = params_.maxParticles > pool_.getActiveCount()
+                        ? params_.maxParticles - pool_.getActiveCount()
                         : 0;
 
     // Spawn short branch lines (3-5 particles per branch)
@@ -167,7 +167,7 @@ void Lightning::spawnBranch(const Particle* parent) {
         float y1 = y0 + sin(branchAngle) * branchDist;
 
         // Spawn connected particles along branch line
-        for (uint8_t step = 0; step < branchLength && !pool_.isFull(); step++) {
+        for (uint8_t step = 0; step < branchLength && pool_.getActiveCount() < params_.maxParticles; step++) {
             float t = (float)step / branchLength;
             float x = x0 + (x1 - x0) * t;
             float y = y0 + (y1 - y0) * t;

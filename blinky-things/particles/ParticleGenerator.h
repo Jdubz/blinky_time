@@ -109,10 +109,10 @@ protected:
     // ========================================
 
     /**
-     * Detect beat crossing (phase wraps from ~1.0 to ~0.0)
+     * Detect beat crossing (phase wraps from high to low)
      */
     bool beatHappened() const {
-        return audio_.phase < 0.2f && prevPhase_ > 0.8f;
+        return audio_.phase < BEAT_PHASE_MIN && prevPhase_ > BEAT_PHASE_MAX;
     }
 
     /**

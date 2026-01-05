@@ -12,6 +12,7 @@ struct WaterParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
+    uint8_t maxParticles;         // Maximum active particles (1-64, default 64)
     uint8_t defaultLifespan;      // Default particle age in frames
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -40,6 +41,7 @@ struct WaterParams {
     WaterParams() {
         baseSpawnChance = 0.25f;
         audioSpawnBoost = 0.4f;
+        maxParticles = 64;  // Match template capacity
         defaultLifespan = 90;  // ~3 seconds at 30 FPS
         intensityMin = 80;
         intensityMax = 200;

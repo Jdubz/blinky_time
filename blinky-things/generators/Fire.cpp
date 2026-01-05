@@ -80,8 +80,8 @@ void Fire::spawnParticles(float dt) {
         sparkCount++;
     }
 
-    // Spawn sparks from bottom row
-    for (uint8_t i = 0; i < sparkCount && !pool_.isFull(); i++) {
+    // Spawn sparks from bottom row (respect maxParticles limit)
+    for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < params_.maxParticles; i++) {
         float x = random(width_ * 100) / 100.0f;
         float y = height_ - 1;  // Bottom of screen
 

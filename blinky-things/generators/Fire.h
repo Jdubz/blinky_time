@@ -12,6 +12,7 @@ struct FireParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
+    uint8_t maxParticles;         // Maximum active particles (1-48, default 48)
     uint8_t defaultLifespan;      // Default particle age in frames
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -39,6 +40,7 @@ struct FireParams {
     FireParams() {
         baseSpawnChance = 0.08f;  // Baseline spark probability
         audioSpawnBoost = 0.6f;
+        maxParticles = 48;  // Match template capacity
         defaultLifespan = 60;  // ~2 seconds at 30 FPS
         intensityMin = 80;   // Start in red range (< 85)
         intensityMax = 180;  // Mostly orange with some yellow highlights
