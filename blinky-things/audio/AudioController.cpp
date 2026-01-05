@@ -154,13 +154,11 @@ const AudioControl& AudioController::update(float dt) {
     const float SIGNIFICANT_AUDIO_THRESHOLD = 0.05f;
     bool hasSignificantAudio = (onsetStrength > SIGNIFICANT_AUDIO_THRESHOLD ||
                                  mic_.getLevel() > SIGNIFICANT_AUDIO_THRESHOLD);
-    if (hasSignificantAudio) {
-        lastSignificantAudioMs_ = nowMs;
-    }
 
     // 3. Add sample to onset strength buffer with timestamp
     // Only add significant audio to avoid filling buffer with noise patterns
     if (hasSignificantAudio) {
+        lastSignificantAudioMs_ = nowMs;
         addOssSample(onsetStrength, nowMs);
     } else {
         // Add zero during silence to maintain buffer timing but not contribute to correlation
@@ -389,8 +387,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             int neighborLag = lag + delta;
             if (neighborLag < minLag || neighborLag > maxLag) continue;
             int neighborIdx = neighborLag - minLag;
-            // FIX: Explicit bounds check before array access
-            if (neighborIdx < 0 || neighborIdx >= correlationSize) continue;
+            // Upper bounds check (lower bound guaranteed by neighborLag >= minLag check above)
+            if (neighborIdx >= correlationSize) continue;
 
             float neighborCorr = correlationAtLag[neighborIdx];
             if (neighborCorr > correlation) {
@@ -856,14 +854,14 @@ float TempoHypothesis::computeConfidence(float strengthWeight, float consistency
     if (phaseConsistency > 1.0f) phaseConsistency = 1.0f;
 
     // Weighted combination
-    float confidence = strengthWeight * strength +
-                       consistencyWeight * phaseConsistency +
-                       longevityWeight * normalizedLongevity;
+    float result = strengthWeight * strength +
+                   consistencyWeight * phaseConsistency +
+                   longevityWeight * normalizedLongevity;
 
-    // FIX: Clamp to [0, 1] to maintain confidence contract
-    if (confidence < 0.0f) confidence = 0.0f;
-    if (confidence > 1.0f) confidence = 1.0f;
-    return confidence;
+    // Clamp to [0, 1] to maintain confidence contract
+    if (result < 0.0f) result = 0.0f;
+    if (result > 1.0f) result = 1.0f;
+    return result;
 }
 
 // ============================================================================
