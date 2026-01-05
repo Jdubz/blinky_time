@@ -112,8 +112,11 @@ uint32_t Lightning::particleColor(uint8_t intensity) const {
 }
 
 void Lightning::spawnBranch(const Particle* parent) {
-    uint8_t branches = min(params_.branchCount,
-                          (uint8_t)(pool_.getCapacity() - pool_.getActiveCount()));
+    // Calculate available pool slots with underflow protection
+    uint8_t available = pool_.getCapacity() > pool_.getActiveCount()
+                        ? pool_.getCapacity() - pool_.getActiveCount()
+                        : 0;
+    uint8_t branches = min(params_.branchCount, available);
 
     // Calculate parent angle
     float parentAngle = atan2(parent->vy, parent->vx);
