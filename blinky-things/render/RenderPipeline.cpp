@@ -80,6 +80,9 @@ void RenderPipeline::render(const AudioControl& audio) {
         return;
     }
 
+    // Clear matrix to prevent color accumulation between frames
+    pixelMatrix_->clear();
+
     // Generate -> Effect -> Render
     currentGenerator_->generate(*pixelMatrix_, audio);
 

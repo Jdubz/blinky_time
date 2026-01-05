@@ -38,7 +38,7 @@ struct FireParams {
     uint8_t burstSparks;          // Sparks per burst
 
     FireParams() {
-        baseSpawnChance = 0.08f;  // Reduced from 0.15 to prevent screen filling
+        baseSpawnChance = 0.08f;  // Baseline spark probability
         audioSpawnBoost = 0.6f;
         maxParticles = 48;
         defaultLifespan = 60;  // ~2 seconds at 30 FPS
@@ -52,8 +52,8 @@ struct FireParams {
         organicTransientMin = 0.5f;
         burstSparks = 8;
 
-        trailHeatFactor = 35;  // Reduced from 60 to prevent excessive heat buildup
-        trailDecay = 40;       // Moderate decay rate
+        trailHeatFactor = 35;  // Particle trail heat contribution
+        trailDecay = 40;       // Heat cooling rate per frame
 
         sparkVelocityMin = 1.5f;
         sparkVelocityMax = 3.5f;
