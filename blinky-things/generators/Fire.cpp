@@ -199,8 +199,8 @@ void Fire::diffuseHeat() {
                     }
                 }
 
-                // Only update if diffusion would increase heat (don't cool via diffusion)
-                heat_[currentIndex] = max(heat_[currentIndex], (uint8_t)min(255, newHeat));
+                // Replace heat value with diffused result (allows heat to decrease)
+                heat_[currentIndex] = min(255, newHeat);
             }
         }
     }
