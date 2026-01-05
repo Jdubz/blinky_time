@@ -17,7 +17,7 @@ namespace WaterConstants {
 }
 
 Water::Water()
-    : depth_(nullptr), tempDepth_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f) {
+    : depth_(nullptr), tempDepth_(nullptr), audio_() {
 }
 
 Water::~Water() {
@@ -64,7 +64,7 @@ bool Water::begin(const DeviceConfig& config) {
 }
 
 void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    setAudioInput(audio.energy, audio.pulse);
+    audio_ = audio;
     update();
 
     // Convert depth values to colors and fill matrix
@@ -84,8 +84,7 @@ void Water::reset() {
     if (depth_) {
         memset(depth_, 0, numLeds_);
     }
-    audioEnergy_ = 0.0f;
-    audioHit_ = 0.0f;
+    audio_ = AudioControl();
 }
 
 void Water::update() {
@@ -105,11 +104,6 @@ void Water::update() {
             updateRandomWater();
             break;
     }
-}
-
-void Water::setAudioInput(float energy, float hit) {
-    audioEnergy_ = energy;
-    audioHit_ = hit;
 }
 
 void Water::updateMatrixWater() {
@@ -140,9 +134,22 @@ void Water::updateRandomWater() {
 void Water::generateWaves() {
     // Audio-reactive wave generation
     float waveProb = params_.waveChance;
-    // Transient impulse boosts wave probability (audioHit_ is 0.0 or strength value)
-    if (audioHit_ > 0.0f) {
-        waveProb += params_.audioWaveBoost * audioHit_;  // Scale boost by transient strength
+
+    // Rhythm-aware transient handling
+    if (audio_.hasRhythm()) {
+        // MUSIC MODE: Beat-synced wave generation
+        // Only react to strong transients (>0.3 threshold) with beat-phase boosting
+        if (audio_.pulse > 0.3f) {
+            // Boost probability near on-beat moments (phase near 0 or 1)
+            float beatBoost = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
+            waveProb += params_.audioWaveBoost * audio_.pulse * beatBoost;
+        }
+    } else {
+        // ORGANIC MODE: Transient-reactive with threshold
+        // Only react to strong transients to avoid noise-floor false positives
+        if (audio_.pulse > 0.3f) {
+            waveProb += params_.audioWaveBoost * audio_.pulse;
+        }
     }
 
     if (random(WaterConstants::PROBABILITY_SCALE) / (float)WaterConstants::PROBABILITY_SCALE < waveProb) {
@@ -150,8 +157,8 @@ void Water::generateWaves() {
         uint8_t waveHeight = random(params_.waveHeightMin, params_.waveHeightMax + 1);
 
         // Add audio boost to wave height
-        if (audioEnergy_ > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
-            uint8_t audioBoost = (uint8_t)(audioEnergy_ * params_.audioFlowBoostMax);
+        if (audio_.energy > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
+            uint8_t audioBoost = (uint8_t)(audio_.energy * params_.audioFlowBoostMax);
             waveHeight = min(255, waveHeight + audioBoost);
         }
 
@@ -235,9 +242,20 @@ void Water::propagateFlow() {
 void Water::applyFlow() {
     // Apply base flow rate with audio influence
     uint8_t flowRate = params_.baseFlow;
-    if (audioEnergy_ > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
-        int8_t audioBias = (int8_t)(audioEnergy_ * params_.flowAudioBias);
+
+    // Add audio energy bias
+    if (audio_.energy > WaterConstants::AUDIO_PRESENCE_THRESHOLD) {
+        int8_t audioBias = (int8_t)(audio_.energy * params_.flowAudioBias);
         flowRate = constrain(flowRate + audioBias, 0, 255);
+    }
+
+    // Add phase-modulated pulsation when rhythm is detected
+    if (audio_.hasRhythm()) {
+        // Flow pulsates with beat: faster on-beat, slower off-beat
+        float phaseMod = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
+        // Scale flow rate by 0.7x to 1.0x (70% off-beat, 100% on-beat)
+        float flowScale = 0.7f + 0.3f * phaseMod;
+        flowRate = (uint8_t)(flowRate * flowScale);
     }
 
     // Reduce all depths by flow rate

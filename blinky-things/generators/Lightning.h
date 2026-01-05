@@ -44,7 +44,6 @@ public:
 
     // Lightning specific methods
     void update();
-    void setAudioInput(float energy, float hit);
 
     // Parameter configuration
     void setParams(const LightningParams& params);
@@ -79,7 +78,5 @@ private:
     LightningParams params_;
 
     // Audio input
-    float audioEnergy_;
-    float audioHit_;
-
+    AudioControl audio_;
 };
