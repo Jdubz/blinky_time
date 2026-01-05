@@ -73,4 +73,9 @@ export declare class TestRunner extends EventEmitter {
         avgPrecision: number;
         avgRecall: number;
     }>;
+    /**
+     * Save audio recording to file (debugging only)
+     * Saves raw audio samples as JSON for offline analysis
+     */
+    private saveAudioRecording;
 }

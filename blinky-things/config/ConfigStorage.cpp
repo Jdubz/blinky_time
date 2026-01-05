@@ -137,6 +137,23 @@ void ConfigStorage::loadDefaults() {
     data_.music.bpmMax = 200.0f;
     data_.music.phaseAdaptRate = 0.15f;
 
+    // Tempo prior (CRITICAL: must be enabled for correct BPM tracking)
+    data_.music.tempoPriorEnabled = true;    // MUST be true
+    data_.music.tempoPriorCenter = 120.0f;   // Typical music tempo
+    data_.music.tempoPriorWidth = 50.0f;     // Balanced width
+    data_.music.tempoPriorStrength = 0.5f;   // 50% blend
+
+    // Pulse modulation
+    data_.music.pulseBoostOnBeat = 1.3f;
+    data_.music.pulseSuppressOffBeat = 0.6f;
+    data_.music.energyBoostOnBeat = 0.3f;
+
+    // Stability and smoothing
+    data_.music.stabilityWindowBeats = 8.0f;
+    data_.music.beatLookaheadMs = 50.0f;
+    data_.music.tempoSmoothingFactor = 0.85f;
+    data_.music.tempoChangeThreshold = 0.1f;
+
     data_.brightness = 100;
 }
 
@@ -305,6 +322,22 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
     validateFloat(data_.music.phaseAdaptRate, 0.01f, 1.0f, F("phaseAdaptRate"));
 
+    // Tempo prior validation (v25+)
+    validateFloat(data_.music.tempoPriorCenter, 60.0f, 200.0f, F("priorcenter"));
+    validateFloat(data_.music.tempoPriorWidth, 10.0f, 100.0f, F("priorwidth"));
+    validateFloat(data_.music.tempoPriorStrength, 0.0f, 1.0f, F("priorstrength"));
+
+    // Pulse modulation validation (v25+)
+    validateFloat(data_.music.pulseBoostOnBeat, 1.0f, 3.0f, F("pulseboost"));
+    validateFloat(data_.music.pulseSuppressOffBeat, 0.1f, 1.0f, F("pulsesuppress"));
+    validateFloat(data_.music.energyBoostOnBeat, 0.0f, 1.0f, F("energyboost"));
+
+    // Stability and smoothing validation (v25+)
+    validateFloat(data_.music.stabilityWindowBeats, 2.0f, 32.0f, F("stabilitywin"));
+    validateFloat(data_.music.beatLookaheadMs, 0.0f, 200.0f, F("lookahead"));
+    validateFloat(data_.music.tempoSmoothingFactor, 0.5f, 0.99f, F("temposmooth"));
+    validateFloat(data_.music.tempoChangeThreshold, 0.01f, 0.5f, F("tempochgthresh"));
+
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
         SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
@@ -359,10 +392,28 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     // AudioController parameters (v23+)
     // All rhythm tracking params are now public tunable members
     if (audioCtrl) {
+        // Basic rhythm parameters
         audioCtrl->bpmMin = data_.music.bpmMin;
         audioCtrl->bpmMax = data_.music.bpmMax;
         audioCtrl->activationThreshold = data_.music.activationThreshold;
         audioCtrl->phaseAdaptRate = data_.music.phaseAdaptRate;
+
+        // Tempo prior (v25+) - CRITICAL for correct BPM tracking
+        audioCtrl->tempoPriorEnabled = data_.music.tempoPriorEnabled;
+        audioCtrl->tempoPriorCenter = data_.music.tempoPriorCenter;
+        audioCtrl->tempoPriorWidth = data_.music.tempoPriorWidth;
+        audioCtrl->tempoPriorStrength = data_.music.tempoPriorStrength;
+
+        // Pulse modulation (v25+)
+        audioCtrl->pulseBoostOnBeat = data_.music.pulseBoostOnBeat;
+        audioCtrl->pulseSuppressOffBeat = data_.music.pulseSuppressOffBeat;
+        audioCtrl->energyBoostOnBeat = data_.music.energyBoostOnBeat;
+
+        // Stability and smoothing (v25+)
+        audioCtrl->stabilityWindowBeats = data_.music.stabilityWindowBeats;
+        audioCtrl->beatLookaheadMs = data_.music.beatLookaheadMs;
+        audioCtrl->tempoSmoothingFactor = data_.music.tempoSmoothingFactor;
+        audioCtrl->tempoChangeThreshold = data_.music.tempoChangeThreshold;
     }
 }
 
@@ -401,10 +452,28 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     // AudioController parameters (v23+)
     // All rhythm tracking params are now public tunable members
     if (audioCtrl) {
+        // Basic rhythm parameters
         data_.music.bpmMin = audioCtrl->bpmMin;
         data_.music.bpmMax = audioCtrl->bpmMax;
         data_.music.activationThreshold = audioCtrl->activationThreshold;
         data_.music.phaseAdaptRate = audioCtrl->phaseAdaptRate;
+
+        // Tempo prior (v25+) - CRITICAL for correct BPM tracking
+        data_.music.tempoPriorEnabled = audioCtrl->tempoPriorEnabled;
+        data_.music.tempoPriorCenter = audioCtrl->tempoPriorCenter;
+        data_.music.tempoPriorWidth = audioCtrl->tempoPriorWidth;
+        data_.music.tempoPriorStrength = audioCtrl->tempoPriorStrength;
+
+        // Pulse modulation (v25+)
+        data_.music.pulseBoostOnBeat = audioCtrl->pulseBoostOnBeat;
+        data_.music.pulseSuppressOffBeat = audioCtrl->pulseSuppressOffBeat;
+        data_.music.energyBoostOnBeat = audioCtrl->energyBoostOnBeat;
+
+        // Stability and smoothing (v25+)
+        data_.music.stabilityWindowBeats = audioCtrl->stabilityWindowBeats;
+        data_.music.beatLookaheadMs = audioCtrl->beatLookaheadMs;
+        data_.music.tempoSmoothingFactor = audioCtrl->tempoSmoothingFactor;
+        data_.music.tempoChangeThreshold = audioCtrl->tempoChangeThreshold;
     }
 
     saveToFlash();

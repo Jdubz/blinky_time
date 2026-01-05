@@ -13,21 +13,187 @@
     // Sample categories and their detection band mapping
     // Note: band is used for ground truth classification, not detection behavior
     const SAMPLE_CONFIG = {
-      // Drums (all transient)
-      kick:       { band: 'low',  folder: 'kick' },
-      tom:        { band: 'low',  folder: 'tom' },
-      bass:       { band: 'low',  folder: 'bass' },
-      snare:      { band: 'high', folder: 'snare' },
-      hat:        { band: 'high', folder: 'hat' },
-      clap:       { band: 'high', folder: 'clap' },
-      percussion: { band: 'high', folder: 'percussion' },
-      // Melodic/harmonic (transient - sharp attack)
-      synth_stab: { band: 'high', folder: 'synth_stab' },
-      lead:       { band: 'high', folder: 'lead' },
-      // Sustained (should NOT trigger detection - slow attack)
-      pad:        { band: 'low',  folder: 'pad' },
-      chord:      { band: 'high', folder: 'chord' }
+      // Drums (all transient) - use WAV samples
+      kick:       { band: 'low',  folder: 'kick', useSynth: false },
+      tom:        { band: 'low',  folder: 'tom', useSynth: false },
+      snare:      { band: 'high', folder: 'snare', useSynth: false },
+      hat:        { band: 'high', folder: 'hat', useSynth: false },
+      clap:       { band: 'high', folder: 'clap', useSynth: false },
+      percussion: { band: 'high', folder: 'percussion', useSynth: false },
+      // Melodic/harmonic (transient - sharp attack) - use soft-synths
+      bass:       { band: 'low',  folder: 'bass', useSynth: true },
+      synth_stab: { band: 'high', folder: 'synth_stab', useSynth: true },
+      lead:       { band: 'high', folder: 'lead', useSynth: true },
+      // Sustained (should NOT trigger detection - slow attack) - use soft-synths
+      pad:        { band: 'low',  folder: 'pad', useSynth: true },
+      chord:      { band: 'high', folder: 'chord', useSynth: true }
     };
+
+    // ============================================================
+    // SOFT-SYNTH CONFIGURATION
+    // Melodic types use Tone.js synthesizers instead of WAV samples
+    // ============================================================
+
+    // Note mappings for variants (creates melodic variety)
+    const SYNTH_NOTES = {
+      bass: {
+        1: 'E1',   // 41 Hz
+        2: 'A1',   // 55 Hz
+        3: 'D2',   // 73 Hz
+        4: 'G1'    // 49 Hz
+      },
+      synth_stab: {
+        1: 'C4',   // 262 Hz
+        2: 'E4',   // 330 Hz
+        3: 'G4',   // 392 Hz
+        4: 'A4'    // 440 Hz
+      },
+      lead: {
+        1: 'E4',   // 330 Hz
+        2: 'G4',   // 392 Hz
+        3: 'C5',   // 523 Hz
+        4: 'D5'    // 587 Hz
+      },
+      pad: {
+        1: ['C3', 'E3', 'G3'],     // C major
+        2: ['A2', 'C3', 'E3'],     // A minor
+        3: ['F3', 'A3', 'C4'],     // F major
+        4: ['D3', 'F3', 'A3']      // D minor
+      },
+      chord: {
+        1: ['C4', 'E4', 'G4'],     // C major
+        2: ['A3', 'C4', 'E4'],     // A minor
+        3: ['G3', 'B3', 'D4'],     // G major
+        4: ['E3', 'G3', 'B3']      // E minor
+      }
+    };
+
+    // Envelope settings per type and loudness
+    const SYNTH_ENVELOPES = {
+      bass: {
+        hard:   { attack: 0.005, decay: 0.2, sustain: 0.3, release: 0.3 },
+        medium: { attack: 0.01,  decay: 0.25, sustain: 0.2, release: 0.4 },
+        soft:   { attack: 0.02,  decay: 0.3, sustain: 0.15, release: 0.5 }
+      },
+      synth_stab: {
+        hard:   { attack: 0.001, decay: 0.08, sustain: 0.0, release: 0.1 },
+        medium: { attack: 0.005, decay: 0.12, sustain: 0.0, release: 0.15 },
+        soft:   { attack: 0.01,  decay: 0.15, sustain: 0.0, release: 0.2 }
+      },
+      lead: {
+        hard:   { attack: 0.005, decay: 0.15, sustain: 0.4, release: 0.3 },
+        medium: { attack: 0.01,  decay: 0.2, sustain: 0.3, release: 0.4 },
+        soft:   { attack: 0.02,  decay: 0.25, sustain: 0.2, release: 0.5 }
+      },
+      pad: {
+        slow:   { attack: 0.5,  decay: 0.3, sustain: 0.7, release: 1.0 },
+        medium: { attack: 0.3,  decay: 0.2, sustain: 0.6, release: 0.8 },
+        soft:   { attack: 0.8,  decay: 0.4, sustain: 0.5, release: 1.5 }
+      },
+      chord: {
+        slow:   { attack: 0.2,  decay: 0.2, sustain: 0.6, release: 0.8 },
+        medium: { attack: 0.1,  decay: 0.15, sustain: 0.5, release: 0.6 },
+        hard:   { attack: 0.02, decay: 0.1, sustain: 0.4, release: 0.4 }
+      }
+    };
+
+    // Oscillator types per synth type
+    const SYNTH_OSCILLATORS = {
+      bass: 'sawtooth',
+      synth_stab: 'square',
+      lead: 'sawtooth',
+      pad: 'sine',
+      chord: 'triangle'
+    };
+
+    // Parse sample ID like "bass_hard_1" into {type, loudness, variant}
+    function parseSynthId(sampleId) {
+      // Format: <type>_<loudness>_<variant>
+      // Types can be compound like "synth_stab"
+      const parts = sampleId.split('_');
+
+      // Check for compound types
+      if (parts[0] === 'synth' && parts[1] === 'stab') {
+        return {
+          type: 'synth_stab',
+          loudness: parts[2] || 'medium',
+          variant: parseInt(parts[3]) || 1
+        };
+      }
+
+      return {
+        type: parts[0],
+        loudness: parts[1] || 'medium',
+        variant: parseInt(parts[2]) || 1
+      };
+    }
+
+    // Check if a type should use synth instead of sample
+    function shouldUseSynth(type) {
+      return SAMPLE_CONFIG[type]?.useSynth === true;
+    }
+
+    // Create and play a synth note at scheduled time
+    function playSynthNote(sampleId, scheduledTime, strength = 1.0) {
+      const { type, loudness, variant } = parseSynthId(sampleId);
+
+      const notes = SYNTH_NOTES[type];
+      const envelopes = SYNTH_ENVELOPES[type];
+      const oscillator = SYNTH_OSCILLATORS[type];
+
+      if (!notes || !envelopes) {
+        console.warn(`No synth config for type: ${type}`);
+        return null;
+      }
+
+      const note = notes[variant] || notes[1];
+      const envelope = envelopes[loudness] || envelopes['medium'] || Object.values(envelopes)[0];
+
+      // Calculate volume from strength (-24 to 0 dB range)
+      const volumeDb = (strength - 1) * 24;
+
+      // For chords/pads (array of notes), use PolySynth
+      if (Array.isArray(note)) {
+        const synth = new Tone.PolySynth(Tone.Synth, {
+          oscillator: { type: oscillator },
+          envelope: envelope
+        }).toDestination();
+        synth.volume.value = volumeDb;
+
+        // Calculate duration from envelope
+        const duration = envelope.attack + envelope.decay + 0.5;
+        synth.triggerAttackRelease(note, duration, scheduledTime);
+
+        // Schedule cleanup
+        setTimeout(() => synth.dispose(), (scheduledTime - Tone.now() + duration + envelope.release + 1) * 1000);
+
+        return synth;
+      }
+
+      // For single notes (bass, lead, synth_stab), use MonoSynth
+      const synth = new Tone.MonoSynth({
+        oscillator: { type: oscillator },
+        envelope: envelope,
+        filterEnvelope: {
+          attack: envelope.attack,
+          decay: envelope.decay * 2,
+          sustain: 0.3,
+          release: envelope.release,
+          baseFrequency: type === 'bass' ? 100 : 400,
+          octaves: type === 'bass' ? 2 : 3
+        }
+      }).toDestination();
+      synth.volume.value = volumeDb;
+
+      // Calculate duration from envelope
+      const duration = envelope.attack + envelope.decay + (envelope.sustain > 0 ? 0.2 : 0);
+      synth.triggerAttackRelease(note, duration, scheduledTime);
+
+      // Schedule cleanup
+      setTimeout(() => synth.dispose(), (scheduledTime - Tone.now() + duration + envelope.release + 1) * 1000);
+
+      return synth;
+    }
 
     // Loaded sample buffers organized by type
     let loadedSamples = {};        // { type: [{name, player}] }
@@ -177,7 +343,18 @@
     window.playPattern = async function(hits, durationMs) {
       const status = document.getElementById('status');
 
-      if (!samplesReady) {
+      // Note: Synth types (bass, synth_stab, lead, pad, chord) don't require samples
+      // Only throw if we have no samples AND no synth types in hits
+      const hasSynthHits = hits.some(hit => {
+        const sampleId = hit.sampleId || hit.sample;
+        if (typeof sampleId === 'string') {
+          const parsed = parseSynthId(sampleId);
+          return shouldUseSynth(parsed.type);
+        }
+        return false;
+      });
+
+      if (!samplesReady && !hasSynthHits) {
         throw new Error('Samples not loaded. Call loadSamples() first.');
       }
 
@@ -200,29 +377,59 @@
         // Support deterministic selection via hit.sampleId or hit.sample
         // Falls back to random selection by type
         const sampleSpec = hit.sampleId || hit.sample || hit.type;
-        const sample = getSample(sampleSpec);
-        if (!sample) {
-          console.warn(`Skipping hit - no sample for:`, sampleSpec);
-          continue;
-        }
+        const sampleId = typeof sampleSpec === 'string' ? sampleSpec : null;
 
         const hitTimeSec = hit.timeMs / 1000;
         const scheduledTime = now + startOffset + hitTimeSec;
 
-        // Clone the player for overlapping sounds
-        const player = new Tone.Player(sample.player.buffer).toDestination();
-        player.volume.value = hit.strength ? (hit.strength - 1) * 12 : 0; // Convert 0-1 strength to dB
-        player.start(scheduledTime);
-        createdPlayers.push(player);
+        // Check if this is a synth type (bass, synth_stab, lead, pad, chord)
+        let instrumentName = hit.type;
+        let usedSynth = false;
 
-        // Record ground truth
-        groundTruth.push({
-          timeMs: hit.timeMs,
-          type: getBandForType(hit.type),
-          instrument: hit.type,
-          sample: sample.name,
-          strength: hit.strength || 1.0
-        });
+        if (sampleId) {
+          const parsed = parseSynthId(sampleId);
+          instrumentName = parsed.type;
+
+          if (shouldUseSynth(parsed.type)) {
+            // Use soft-synth for melodic types
+            const synth = playSynthNote(sampleId, scheduledTime, hit.strength || 1.0);
+            if (synth) {
+              usedSynth = true;
+              // Record ground truth for synth
+              groundTruth.push({
+                timeMs: hit.timeMs,
+                type: getBandForType(parsed.type),
+                instrument: parsed.type,
+                sample: sampleId + ' (synth)',
+                strength: hit.strength || 1.0
+              });
+            }
+          }
+        }
+
+        // Fall back to sample-based playback for drums and other types
+        if (!usedSynth) {
+          const sample = getSample(sampleSpec);
+          if (!sample) {
+            console.warn(`Skipping hit - no sample for:`, sampleSpec);
+            continue;
+          }
+
+          // Clone the player for overlapping sounds
+          const player = new Tone.Player(sample.player.buffer).toDestination();
+          player.volume.value = hit.strength ? (hit.strength - 1) * 12 : 0; // Convert 0-1 strength to dB
+          player.start(scheduledTime);
+          createdPlayers.push(player);
+
+          // Record ground truth
+          groundTruth.push({
+            timeMs: hit.timeMs,
+            type: getBandForType(hit.type),
+            instrument: hit.type,
+            sample: sample.name,
+            strength: hit.strength || 1.0
+          });
+        }
       }
 
       // Log start time for synchronization
@@ -253,9 +460,11 @@
 
     // Expose utility to check sample status
     window.getSampleStatus = function() {
+      const synthTypes = Object.keys(SAMPLE_CONFIG).filter(k => SAMPLE_CONFIG[k].useSynth);
       return {
         ready: samplesReady,
         types: Object.keys(loadedSamples).filter(k => loadedSamples[k].length > 0),
+        synthTypes: synthTypes,
         counts: Object.fromEntries(
           Object.entries(loadedSamples).map(([k, v]) => [k, v.length])
         )

@@ -314,8 +314,10 @@ void loop() {
   const AudioControl& audio = audioController ? audioController->getControl() : AudioControl{};
   float pulse = audio.pulse;
 
-  // Send transient detection events for test analysis (always enabled)
-  if (audioController && pulse > 0.0f) {
+  // Send transient detection events when debug channel is enabled
+  // Use: "debug transient on" to enable, "debug transient off" to disable
+  if (audioController && pulse > 0.0f &&
+      SerialConsole::isDebugChannelEnabled(DebugChannel::TRANSIENT)) {
     // TRANSIENT message: simplified single-band detection
     Serial.print(F("{\"type\":\"TRANSIENT\",\"timestampMs\":"));
     Serial.print(now);

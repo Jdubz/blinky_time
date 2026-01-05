@@ -138,9 +138,13 @@ float ComplexDomainDetector::computeComplexDomain(const float* magnitudes,
 }
 
 float ComplexDomainDetector::wrapPhase(float phase) {
-    // Wrap phase to [-pi, pi] range
-    while (phase > CD_PI) phase -= 2.0f * CD_PI;
-    while (phase < -CD_PI) phase += 2.0f * CD_PI;
+    // Safety: Check for NaN/infinity to prevent infinite loop
+    if (!isfinite(phase)) return 0.0f;
+
+    // Wrap phase to [-pi, pi] range using fmodf (safe, no infinite loop risk)
+    phase = fmodf(phase, 2.0f * CD_PI);
+    if (phase > CD_PI) phase -= 2.0f * CD_PI;
+    if (phase < -CD_PI) phase += 2.0f * CD_PI;
     return phase;
 }
 

@@ -13,15 +13,30 @@ This project has a comprehensive testing and parameter tuning system for audio-r
 
 ## Quick Start
 
-### Run Transient Detection Tests
+### Run Transient Detection Tests via MCP
+
+**Always use `run_test`** - it automatically connects, runs the test, and disconnects:
+
+```
+# MCP tool call (from Claude Code or other MCP client)
+run_test(pattern: "steady-120bpm", port: "COM11", gain: 40)
+```
+
+The `run_test` tool:
+1. Connects to the device on the specified port
+2. Optionally locks hardware gain for consistent testing
+3. Plays the audio pattern via Playwright
+4. Records all detected transients
+5. **Automatically disconnects** when complete (frees port for flashing)
+
+**Do NOT use manual connect/disconnect** for pattern testing - this risks leaving the port locked.
+
+### Run Tests via CLI
 
 ```bash
 # List available test patterns
 cd blinky-test-player
 npx blinky-test-player list
-
-# Run a quick test via MCP
-run_test --pattern strong-beats --port COM5 --gain 40
 
 # Fast binary search tuning (~30 min)
 npm run tuner -- fast --port COM5 --gain 40

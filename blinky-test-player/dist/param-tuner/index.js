@@ -18,6 +18,7 @@ import { runFastTune } from './fast-tune.js';
 import { SuiteRunner, listSuites, getSuite, PREDEFINED_SUITES, validateSuiteConfig } from './suite.js';
 import { QueueManager, createQueue, listQueues } from './queue.js';
 import { getPatternsForParam } from '../patterns.js';
+import { runHypothesisValidationSuite } from './hypothesis-validator.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DEFAULT_OUTPUT_DIR = join(__dirname, '..', '..', 'tuning-results');
@@ -55,6 +56,21 @@ async function main() {
         type: 'string',
         description: 'Comma-separated test patterns to use (default: all representative patterns)',
         example: '--patterns strong-beats,simple-4-on-floor',
+    })
+        .option('refine', {
+        type: 'boolean',
+        default: false,
+        description: 'Enable adaptive refinement after initial sweep (tests finer-grained values)',
+    })
+        .option('refinement-steps', {
+        type: 'number',
+        default: 3,
+        description: 'Number of refinement iterations (default: 3)',
+    })
+        .option('record-audio', {
+        type: 'boolean',
+        default: false,
+        description: 'Record raw audio samples to file for debugging (increases disk usage)',
     })
         .command('fast', 'Fast tuning with binary search (~30 min)', {}, async (args) => {
         await runFast(args);
@@ -145,6 +161,10 @@ async function main() {
     }, async (args) => {
         await runTargetCommand(args);
     })
+        // NEW: Hypothesis validation test
+        .command('hypothesis-validate', 'Validate multi-hypothesis tempo tracking behavior', {}, async (args) => {
+        await runHypothesisValidate(args);
+    })
         .demandCommand(1, 'You must provide a command')
         .help()
         .alias('h', 'help')
@@ -165,6 +185,9 @@ function createOptions(args, requirePort = true) {
         params: args.params ? args.params.split(',').map(p => p.trim()) : undefined,
         modes: args.modes ? args.modes.split(',').map(m => m.trim()) : undefined,
         patterns: args.patterns ? args.patterns.split(',').map(p => p.trim()) : undefined,
+        refine: args.refine,
+        refinementSteps: args['refinement-steps'],
+        recordAudio: args['record-audio'],
     };
 }
 async function runFast(args) {
@@ -516,6 +539,41 @@ async function runTargetCommand(args) {
     }
     catch (err) {
         console.error('\nTarget test error:', err);
+        process.exit(1);
+    }
+}
+// =============================================================================
+// HYPOTHESIS VALIDATION
+// =============================================================================
+async function runHypothesisValidate(args) {
+    const port = validatePort(args);
+    console.log('\n🎯 Hypothesis Validation Test');
+    console.log('═'.repeat(50));
+    console.log('Testing multi-hypothesis tempo tracking behavior');
+    console.log(`Port: ${port}`);
+    if (args.gain !== undefined) {
+        console.log(`Hardware gain: ${args.gain} (locked)`);
+    }
+    console.log('');
+    try {
+        const results = await runHypothesisValidationSuite(port, args.gain);
+        console.log('\n📊 Validation Summary');
+        console.log('═'.repeat(50));
+        for (const result of results) {
+            console.log(`\n${result.pattern}:`);
+            console.log(`  Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
+            console.log(`  Hypotheses: ${result.hypotheses.totalCreated} created, ${result.hypotheses.maxConcurrent} concurrent max`);
+            console.log(`  Promotions: ${result.hypotheses.promotions}`);
+            console.log(`  Time to first: ${result.hypotheses.timeToFirstMs ? (result.hypotheses.timeToFirstMs / 1000).toFixed(1) + 's' : 'N/A'}`);
+            console.log(`  Primary BPM: ${result.primary.avgBpm.toFixed(1)} (error: ${result.primary.bpmError?.toFixed(1) || 'N/A'})`);
+            console.log(`  Confidence: ${result.primary.avgConfidence.toFixed(3)} (growth: ${result.primary.confidenceGrowth.toFixed(3)}/s)`);
+            console.log(`  Phase error: ${result.primary.avgPhaseError.toFixed(4)}`);
+        }
+        console.log('\n✅ Hypothesis validation complete!');
+        console.log(`Results saved to: ${args.output || DEFAULT_OUTPUT_DIR}`);
+    }
+    catch (err) {
+        console.error('\n❌ Hypothesis validation error:', err);
         process.exit(1);
     }
 }

@@ -23,7 +23,7 @@ class AudioController;
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 24;  // Config schema v24: ensemble detector architecture, fast AGC
+    static const uint8_t CONFIG_VERSION = 25;  // Config schema v25: tempo prior, stability, smoothing params
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -75,11 +75,30 @@ public:
     };
 
     struct StoredMusicParams {
+        // Basic rhythm parameters
         float activationThreshold;
         float bpmMin;
         float bpmMax;
         float phaseAdaptRate;  // How quickly phase adapts to autocorrelation
-        // Total: 4 floats = 16 bytes
+
+        // Tempo prior (CRITICAL for correct BPM tracking)
+        float tempoPriorCenter;    // Center of Gaussian prior (BPM)
+        float tempoPriorWidth;     // Width (sigma) of prior
+        float tempoPriorStrength;  // Blend: 0=no prior, 1=full prior
+        bool tempoPriorEnabled;    // Enable tempo prior weighting
+
+        // Pulse modulation
+        float pulseBoostOnBeat;      // Boost factor for on-beat transients
+        float pulseSuppressOffBeat;  // Suppress factor for off-beat transients
+        float energyBoostOnBeat;     // Energy boost near predicted beats
+
+        // Stability and smoothing
+        float stabilityWindowBeats;   // Number of beats for stability tracking
+        float beatLookaheadMs;        // How far ahead to predict beats (ms)
+        float tempoSmoothingFactor;   // Higher = smoother tempo changes
+        float tempoChangeThreshold;   // Min BPM change ratio to trigger update
+
+        // Total: 14 floats (56 bytes) + 1 bool (1 byte) + 3 padding = 60 bytes
     };
 
     struct ConfigData {
@@ -96,9 +115,9 @@ public:
     // If these fail, you MUST increment CONFIG_VERSION!
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 16,
-        "StoredMusicParams size changed! Increment CONFIG_VERSION and update assertion. (16 bytes = 4 floats)");
-    static_assert(sizeof(ConfigData) <= 180,
+    static_assert(sizeof(StoredMusicParams) == 60,
+        "StoredMusicParams size changed! Increment CONFIG_VERSION and update assertion. (60 bytes = 14 floats + 1 bool + padding)");
+    static_assert(sizeof(ConfigData) <= 230,
         "ConfigData too large! May not fit in flash sector. Review struct padding.");
 
     ConfigStorage();

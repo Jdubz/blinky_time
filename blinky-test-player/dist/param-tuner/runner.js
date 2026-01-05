@@ -11,6 +11,7 @@ import { ReadlineParser } from '@serialport/parser-readline';
 import { EventEmitter } from 'events';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { promises as fs } from 'fs';
 import { PARAMETERS } from './types.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,11 +29,17 @@ export class TestRunner extends EventEmitter {
     // Test recording state
     testStartTime = null;
     transientBuffer = [];
-    audioSampleBuffer = [];
+    // Audio sample recording (debugging only - disabled by default to save memory)
+    // Enable with --record-audio flag to capture raw audio samples for analysis
+    audioSampleBuffer = null;
     constructor(options) {
         super();
         this.options = options;
         this.portPath = options.port;
+        // Only allocate audio buffer if recording is enabled
+        if (options.recordAudio) {
+            this.audioSampleBuffer = [];
+        }
     }
     async connect() {
         if (this.port) {
@@ -122,12 +129,15 @@ export class TestRunner extends EventEmitter {
                 // If in test mode, record transients and audio samples
                 if (this.testStartTime !== null) {
                     const timestampMs = Date.now() - this.testStartTime;
-                    this.audioSampleBuffer.push({
-                        timestampMs,
-                        level: audio.l,
-                        raw: audio.raw,
-                        transient: audio.t || 0,
-                    });
+                    // Only record audio samples if debugging is enabled (saves memory)
+                    if (this.audioSampleBuffer) {
+                        this.audioSampleBuffer.push({
+                            timestampMs,
+                            level: audio.l,
+                            raw: audio.raw,
+                            transient: audio.t || 0,
+                        });
+                    }
                     if (audio.t > 0) {
                         this.transientBuffer.push({
                             timestampMs,
@@ -237,7 +247,9 @@ export class TestRunner extends EventEmitter {
         }
         // Clear buffers and start streaming
         this.transientBuffer = [];
-        this.audioSampleBuffer = [];
+        if (this.audioSampleBuffer) {
+            this.audioSampleBuffer = [];
+        }
         await this.startStream();
         // Run the test player CLI
         const result = await new Promise((resolve) => {
@@ -277,9 +289,15 @@ export class TestRunner extends EventEmitter {
         const rawDuration = recordStopTime - (this.testStartTime || recordStopTime);
         let detections = [...this.transientBuffer];
         const recordStartTime = this.testStartTime;
+        // Save audio recording if debugging was enabled
+        if (this.audioSampleBuffer && this.audioSampleBuffer.length > 0) {
+            await this.saveAudioRecording(patternId, this.audioSampleBuffer);
+        }
         this.testStartTime = null;
         this.transientBuffer = [];
-        this.audioSampleBuffer = [];
+        if (this.audioSampleBuffer) {
+            this.audioSampleBuffer = [];
+        }
         await this.stopStream();
         // Unlock gain
         if (this.options.gain !== undefined) {
@@ -407,5 +425,37 @@ export class TestRunner extends EventEmitter {
             avgPrecision: n > 0 ? Math.round((totalPrecision / n) * 1000) / 1000 : 0,
             avgRecall: n > 0 ? Math.round((totalRecall / n) * 1000) / 1000 : 0,
         };
+    }
+    /**
+     * Save audio recording to file (debugging only)
+     * Saves raw audio samples as JSON for offline analysis
+     */
+    async saveAudioRecording(patternId, samples) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `audio-${patternId}-${timestamp}.json`;
+        const outputDir = this.options.outputDir || join(__dirname, '..', '..', 'tuning-results');
+        const audioDir = join(outputDir, 'audio-recordings');
+        const filepath = join(audioDir, filename);
+        // Ensure directory exists
+        await fs.mkdir(audioDir, { recursive: true });
+        // Prepare data
+        const data = {
+            version: '1.0',
+            pattern: patternId,
+            timestamp: new Date().toISOString(),
+            sampleCount: samples.length,
+            durationMs: samples.length > 0 ? samples[samples.length - 1].timestampMs : 0,
+            sampleRate: samples.length > 1
+                ? Math.round(samples.length / (samples[samples.length - 1].timestampMs / 1000))
+                : 0,
+            samples: samples.map(s => ({
+                t: s.timestampMs,
+                l: Math.round(s.level * 1000) / 1000, // Round to 3 decimals
+                r: s.raw,
+                tr: Math.round(s.transient * 1000) / 1000,
+            })),
+        };
+        await fs.writeFile(filepath, JSON.stringify(data, null, 2), 'utf-8');
+        console.log(`   Audio recording saved: ${filename} (${samples.length} samples)`);
     }
 }

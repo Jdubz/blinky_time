@@ -1,0 +1,406 @@
+/**
+ * Hypothesis Validation Runner - Tests multi-hypothesis tempo tracking
+ *
+ * Validates:
+ * - Hypothesis creation from autocorrelation peaks
+ * - Promotion logic (confidence-based, min beats requirement)
+ * - Tempo change tracking (gradual and abrupt)
+ * - Half-time/double-time ambiguity resolution
+ * - Decay behavior during silence and phrases
+ */
+import { SerialPort } from 'serialport';
+import { ReadlineParser } from '@serialport/parser-readline';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'dist', 'index.js');
+const BAUD_RATE = 115200;
+const COMMAND_TIMEOUT_MS = 2000;
+// =============================================================================
+// HYPOTHESIS VALIDATOR
+// =============================================================================
+export class HypothesisValidator {
+    port = null;
+    parser = null;
+    responseBuffer = [];
+    /**
+     * Connect to device
+     */
+    async connect(portPath) {
+        this.port = new SerialPort({
+            path: portPath,
+            baudRate: BAUD_RATE,
+        });
+        this.parser = this.port.pipe(new ReadlineParser({ delimiter: '\n' }));
+        // Buffer responses
+        this.parser.on('data', (line) => {
+            this.responseBuffer.push(line.trim());
+        });
+        // Wait for connection
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    /**
+     * Disconnect from device
+     */
+    async disconnect() {
+        if (this.port) {
+            await new Promise((resolve, reject) => {
+                this.port.close((err) => {
+                    if (err)
+                        reject(err);
+                    else
+                        resolve();
+                });
+            });
+            this.port = null;
+            this.parser = null;
+        }
+    }
+    /**
+     * Send command and get response with polling and timeout
+     */
+    async sendCommand(cmd) {
+        if (!this.port) {
+            throw new Error('Not connected to device');
+        }
+        this.responseBuffer = [];
+        this.port.write(cmd + '\n');
+        // Poll for response with timeout
+        const startTime = Date.now();
+        const pollInterval = 50; // Check every 50ms
+        while (Date.now() - startTime < COMMAND_TIMEOUT_MS) {
+            if (this.responseBuffer.length > 0) {
+                // Response received, return it
+                return this.responseBuffer.join('\n');
+            }
+            await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        }
+        throw new Error(`Command timeout after ${COMMAND_TIMEOUT_MS}ms: ${cmd}`);
+    }
+    /**
+     * Extract JSON object from response using balanced brace counting
+     */
+    extractJson(response) {
+        const start = response.indexOf('{');
+        if (start === -1)
+            return null;
+        let depth = 0;
+        for (let i = start; i < response.length; i++) {
+            if (response[i] === '{')
+                depth++;
+            else if (response[i] === '}') {
+                depth--;
+                if (depth === 0) {
+                    return response.substring(start, i + 1);
+                }
+            }
+        }
+        return null;
+    }
+    /**
+     * Get current hypothesis state
+     */
+    async getHypothesisState() {
+        const response = await this.sendCommand('json hypotheses');
+        // Extract JSON using balanced brace counting
+        const jsonStr = this.extractJson(response);
+        if (!jsonStr) {
+            throw new Error(`Failed to extract JSON from response: ${response}`);
+        }
+        const data = JSON.parse(jsonStr);
+        return {
+            timestampMs: Date.now(),
+            hypotheses: data.hypotheses || [],
+            primaryIndex: data.primaryIndex || 0,
+        };
+    }
+    /**
+     * Get current rhythm state (includes beat stability, tempo prior, etc.)
+     */
+    async getRhythmState() {
+        const response = await this.sendCommand('json rhythm');
+        const jsonStr = this.extractJson(response);
+        if (!jsonStr) {
+            throw new Error(`Failed to extract JSON from rhythm response: ${response}`);
+        }
+        const data = JSON.parse(jsonStr);
+        return {
+            bpm: data.bpm || 120,
+            periodicityStrength: data.periodicityStrength || 0,
+            beatStability: data.beatStability || 0,
+            tempoVelocity: data.tempoVelocity || 0,
+            nextBeatMs: data.nextBeatMs || 0,
+            tempoPriorWeight: data.tempoPriorWeight || 1.0,
+        };
+    }
+    /**
+     * Get combined hypothesis and rhythm state
+     */
+    async getFullState() {
+        const hypoState = await this.getHypothesisState();
+        try {
+            const rhythmState = await this.getRhythmState();
+            hypoState.rhythm = rhythmState;
+        }
+        catch (err) {
+            // Rhythm state is optional - older firmware may not support it
+            console.warn('Could not fetch rhythm state:', err);
+        }
+        return hypoState;
+    }
+    /**
+     * Run hypothesis validation test
+     */
+    async runTest(pattern, expectedBpm = null, gain) {
+        const states = [];
+        const startTime = Date.now();
+        let pollInterval = null;
+        try {
+            // Start audio streaming to enable hypothesis tracking
+            await this.sendCommand('stream start');
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            // Lock hardware gain if specified
+            if (gain !== undefined) {
+                await this.sendCommand(`set hwgain ${gain}`);
+            }
+            // Start pattern playback
+            const player = spawn('node', [TEST_PLAYER_PATH, 'play', pattern], {
+                stdio: 'ignore',
+            });
+            // Poll hypothesis state every 500ms (use getFullState for rhythm metrics)
+            pollInterval = setInterval(async () => {
+                try {
+                    const state = await this.getFullState();
+                    states.push(state);
+                }
+                catch (err) {
+                    console.error('Failed to poll hypothesis state:', err);
+                }
+            }, 500);
+            // Wait for pattern to complete
+            await new Promise((resolve) => {
+                player.on('exit', () => resolve());
+            });
+            // Get final state
+            const finalState = await this.getFullState();
+            states.push(finalState);
+            const durationMs = Date.now() - startTime;
+            // Analyze results
+            return this.analyzeResults(pattern, states, durationMs, expectedBpm, startTime);
+        }
+        finally {
+            // Ensure cleanup happens even on error
+            if (pollInterval !== null) {
+                clearInterval(pollInterval);
+            }
+            // Unlock hardware gain
+            if (gain !== undefined) {
+                try {
+                    await this.sendCommand('set hwgain 255');
+                }
+                catch (err) {
+                    console.error('Failed to unlock hardware gain:', err);
+                }
+            }
+            // Stop streaming
+            try {
+                await this.sendCommand('stream stop');
+            }
+            catch (err) {
+                console.error('Failed to stop streaming:', err);
+            }
+        }
+    }
+    /**
+     * Analyze hypothesis validation results
+     */
+    analyzeResults(pattern, states, durationMs, expectedBpm, startTime) {
+        // Track hypothesis creation/promotion
+        const seenHypotheses = new Set();
+        let maxConcurrent = 0;
+        let promotions = 0;
+        let firstHypothesisTime = null;
+        // Track primary hypothesis metrics
+        const primaryBpms = [];
+        const primaryConfidences = [];
+        const primaryPhaseErrors = [];
+        for (let i = 0; i < states.length; i++) {
+            const state = states[i];
+            const activeHypos = state.hypotheses.filter(h => h.active);
+            maxConcurrent = Math.max(maxConcurrent, activeHypos.length);
+            // Track first hypothesis
+            if (firstHypothesisTime === null && activeHypos.length > 0) {
+                firstHypothesisTime = state.timestampMs;
+            }
+            // Track hypothesis creation (use string key to avoid collisions)
+            for (const h of activeHypos) {
+                const key = `${h.slot}-${Math.round(h.bpm)}`;
+                if (!seenHypotheses.has(key)) {
+                    seenHypotheses.add(key);
+                }
+            }
+            // Track promotions (when primary hypothesis changes to a different slot)
+            if (i > 0 && activeHypos.length > 0) {
+                const prevPrimaryIdx = states[i - 1].primaryIndex;
+                const currPrimaryIdx = state.primaryIndex;
+                const prevPrimary = states[i - 1].hypotheses[prevPrimaryIdx];
+                const currPrimary = state.hypotheses[currPrimaryIdx];
+                // Promotion occurs when primary slot changes and both are active
+                if (prevPrimary?.active && currPrimary?.active &&
+                    prevPrimary.slot !== currPrimary.slot) {
+                    promotions++;
+                }
+            }
+            // Track primary metrics
+            const primary = state.hypotheses[state.primaryIndex];
+            if (primary && primary.active) {
+                primaryBpms.push(primary.bpm);
+                primaryConfidences.push(primary.confidence);
+                primaryPhaseErrors.push(primary.avgPhaseError);
+            }
+        }
+        // Calculate averages
+        const avgBpm = primaryBpms.length > 0
+            ? primaryBpms.reduce((a, b) => a + b, 0) / primaryBpms.length
+            : 0;
+        const bpmError = expectedBpm !== null && avgBpm > 0
+            ? Math.abs(avgBpm - expectedBpm)
+            : null;
+        const avgConfidence = primaryConfidences.length > 0
+            ? primaryConfidences.reduce((a, b) => a + b, 0) / primaryConfidences.length
+            : 0;
+        const avgPhaseError = primaryPhaseErrors.length > 0
+            ? primaryPhaseErrors.reduce((a, b) => a + b, 0) / primaryPhaseErrors.length
+            : 0;
+        // Calculate confidence growth rate
+        const confidenceGrowth = primaryConfidences.length >= 2
+            ? (primaryConfidences[primaryConfidences.length - 1] - primaryConfidences[0]) / (durationMs / 1000)
+            : 0;
+        // Collect rhythm state metrics (new)
+        const stabilities = [];
+        const priorWeights = [];
+        const tempoVelocities = [];
+        for (const state of states) {
+            if (state.rhythm) {
+                stabilities.push(state.rhythm.beatStability);
+                priorWeights.push(state.rhythm.tempoPriorWeight);
+                tempoVelocities.push(state.rhythm.tempoVelocity);
+            }
+        }
+        // Compute stability metrics
+        const stabilityMetrics = stabilities.length > 0 ? {
+            avgStability: stabilities.reduce((a, b) => a + b, 0) / stabilities.length,
+            minStability: Math.min(...stabilities),
+            maxStability: Math.max(...stabilities),
+            variance: this.computeVariance(stabilities),
+        } : undefined;
+        // Compute tempo prior metrics
+        const avgPriorWeight = priorWeights.length > 0
+            ? priorWeights.reduce((a, b) => a + b, 0) / priorWeights.length
+            : 1.0;
+        const avgTempoVelocity = tempoVelocities.length > 0
+            ? tempoVelocities.reduce((a, b) => a + b, 0) / tempoVelocities.length
+            : 0;
+        // Check if tempo prior prevented octave error
+        // (If expected BPM is set and avg BPM is close to it, prior likely helped)
+        const preventedOctaveError = expectedBpm !== null &&
+            bpmError !== null &&
+            bpmError < 10 &&
+            (expectedBpm <= 80 || expectedBpm >= 150); // Edge tempos most affected
+        const tempoPriorMetrics = priorWeights.length > 0 ? {
+            avgWeight: avgPriorWeight,
+            preventedOctaveError,
+            avgTempoVelocity,
+        } : undefined;
+        return {
+            pattern,
+            durationMs,
+            expectedBpm,
+            hypotheses: {
+                maxConcurrent,
+                totalCreated: seenHypotheses.size,
+                promotions,
+                timeToFirstMs: firstHypothesisTime ? firstHypothesisTime - startTime : null,
+            },
+            primary: {
+                avgBpm,
+                bpmError,
+                avgConfidence,
+                confidenceGrowth,
+                avgPhaseError,
+            },
+            stability: stabilityMetrics,
+            tempoPrior: tempoPriorMetrics,
+            states,
+        };
+    }
+    /**
+     * Compute variance of an array of numbers
+     */
+    computeVariance(values) {
+        if (values.length === 0)
+            return 0;
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        const squaredDiffs = values.map(v => (v - mean) * (v - mean));
+        return squaredDiffs.reduce((a, b) => a + b, 0) / values.length;
+    }
+}
+/**
+ * Run hypothesis validation for a single pattern
+ */
+export async function validateHypothesis(portPath, pattern, expectedBpm = null, gain) {
+    const validator = new HypothesisValidator();
+    try {
+        await validator.connect(portPath);
+        return await validator.runTest(pattern, expectedBpm, gain);
+    }
+    finally {
+        await validator.disconnect();
+    }
+}
+/**
+ * Run hypothesis validation suite
+ */
+export async function runHypothesisValidationSuite(portPath, gain) {
+    const patterns = [
+        // Core tempo tracking
+        { id: 'steady-120bpm', expectedBpm: 120 },
+        { id: 'tempo-ramp', expectedBpm: null }, // Variable BPM
+        { id: 'tempo-sudden', expectedBpm: null }, // Multiple BPMs
+        { id: 'half-time-ambiguity', expectedBpm: 120 },
+        { id: 'silence-gaps', expectedBpm: 120 },
+        // Tempo prior validation (new)
+        { id: 'steady-60bpm', expectedBpm: 60 },
+        { id: 'steady-90bpm', expectedBpm: 90 },
+        { id: 'steady-180bpm', expectedBpm: 180 },
+        // Beat stability validation (new)
+        { id: 'perfect-timing', expectedBpm: 120 },
+        { id: 'humanized-timing', expectedBpm: 120 },
+        { id: 'unstable-timing', expectedBpm: 120 },
+    ];
+    const results = [];
+    for (const { id, expectedBpm } of patterns) {
+        console.log(`\nValidating hypothesis tracking: ${id}...`);
+        const result = await validateHypothesis(portPath, id, expectedBpm, gain);
+        results.push(result);
+        // Print summary
+        console.log(`  Hypotheses: ${result.hypotheses.totalCreated} created, ${result.hypotheses.maxConcurrent} concurrent`);
+        console.log(`  Primary BPM: ${result.primary.avgBpm.toFixed(1)} (error: ${result.primary.bpmError?.toFixed(1) || 'N/A'})`);
+        console.log(`  Confidence: ${result.primary.avgConfidence.toFixed(3)} (growth: ${result.primary.confidenceGrowth.toFixed(3)}/s)`);
+        console.log(`  Promotions: ${result.hypotheses.promotions}`);
+        // Print stability metrics if available
+        if (result.stability) {
+            console.log(`  Stability: avg=${result.stability.avgStability.toFixed(3)}, ` +
+                `min=${result.stability.minStability.toFixed(3)}, max=${result.stability.maxStability.toFixed(3)}`);
+        }
+        // Print tempo prior metrics if available
+        if (result.tempoPrior) {
+            console.log(`  TempoPrior: weight=${result.tempoPrior.avgWeight.toFixed(3)}, ` +
+                `velocity=${result.tempoPrior.avgTempoVelocity.toFixed(2)} BPM/s, ` +
+                `octavePrevent=${result.tempoPrior.preventedOctaveError}`);
+        }
+    }
+    return results;
+}

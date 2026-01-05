@@ -42,12 +42,25 @@ export interface HypothesisSnapshot {
 }
 
 /**
+ * Extended rhythm tracking state (from "json rhythm" command)
+ */
+export interface RhythmState {
+  bpm: number;
+  periodicityStrength: number;
+  beatStability: number;
+  tempoVelocity: number;
+  nextBeatMs: number;
+  tempoPriorWeight: number;
+}
+
+/**
  * Complete hypothesis tracker state at a point in time
  */
 export interface HypothesisState {
   timestampMs: number;
   hypotheses: HypothesisSnapshot[];
   primaryIndex: number;
+  rhythm?: RhythmState;
 }
 
 /**
@@ -112,6 +125,28 @@ export interface HypothesisValidationResult {
     decayRate: number;
     /** Grace period observed */
     gracePeriodMs: number | null;
+  };
+
+  // Beat stability metrics (new)
+  stability?: {
+    /** Average beat stability (0-1) */
+    avgStability: number;
+    /** Min stability observed */
+    minStability: number;
+    /** Max stability observed */
+    maxStability: number;
+    /** Stability variance */
+    variance: number;
+  };
+
+  // Tempo prior effectiveness (new)
+  tempoPrior?: {
+    /** Average tempo prior weight applied */
+    avgWeight: number;
+    /** Did tempo prior prevent octave error? */
+    preventedOctaveError: boolean;
+    /** Average tempo velocity (BPM/s) */
+    avgTempoVelocity: number;
   };
 
   // Raw state snapshots
@@ -231,6 +266,46 @@ export class HypothesisValidator {
   }
 
   /**
+   * Get current rhythm state (includes beat stability, tempo prior, etc.)
+   */
+  async getRhythmState(): Promise<RhythmState> {
+    const response = await this.sendCommand('json rhythm');
+
+    const jsonStr = this.extractJson(response);
+    if (!jsonStr) {
+      throw new Error(`Failed to extract JSON from rhythm response: ${response}`);
+    }
+
+    const data = JSON.parse(jsonStr);
+
+    return {
+      bpm: data.bpm || 120,
+      periodicityStrength: data.periodicityStrength || 0,
+      beatStability: data.beatStability || 0,
+      tempoVelocity: data.tempoVelocity || 0,
+      nextBeatMs: data.nextBeatMs || 0,
+      tempoPriorWeight: data.tempoPriorWeight || 1.0,
+    };
+  }
+
+  /**
+   * Get combined hypothesis and rhythm state
+   */
+  async getFullState(): Promise<HypothesisState> {
+    const hypoState = await this.getHypothesisState();
+
+    try {
+      const rhythmState = await this.getRhythmState();
+      hypoState.rhythm = rhythmState;
+    } catch (err) {
+      // Rhythm state is optional - older firmware may not support it
+      console.warn('Could not fetch rhythm state:', err);
+    }
+
+    return hypoState;
+  }
+
+  /**
    * Run hypothesis validation test
    */
   async runTest(pattern: string, expectedBpm: number | null = null, gain?: number): Promise<HypothesisValidationResult> {
@@ -253,10 +328,10 @@ export class HypothesisValidator {
         stdio: 'ignore',
       });
 
-      // Poll hypothesis state every 500ms
+      // Poll hypothesis state every 500ms (use getFullState for rhythm metrics)
       pollInterval = setInterval(async () => {
         try {
-          const state = await this.getHypothesisState();
+          const state = await this.getFullState();
           states.push(state);
         } catch (err) {
           console.error('Failed to poll hypothesis state:', err);
@@ -269,7 +344,7 @@ export class HypothesisValidator {
       });
 
       // Get final state
-      const finalState = await this.getHypothesisState();
+      const finalState = await this.getFullState();
       states.push(finalState);
 
       const durationMs = Date.now() - startTime;
@@ -383,6 +458,48 @@ export class HypothesisValidator {
       ? (primaryConfidences[primaryConfidences.length - 1] - primaryConfidences[0]) / (durationMs / 1000)
       : 0;
 
+    // Collect rhythm state metrics (new)
+    const stabilities: number[] = [];
+    const priorWeights: number[] = [];
+    const tempoVelocities: number[] = [];
+
+    for (const state of states) {
+      if (state.rhythm) {
+        stabilities.push(state.rhythm.beatStability);
+        priorWeights.push(state.rhythm.tempoPriorWeight);
+        tempoVelocities.push(state.rhythm.tempoVelocity);
+      }
+    }
+
+    // Compute stability metrics
+    const stabilityMetrics = stabilities.length > 0 ? {
+      avgStability: stabilities.reduce((a, b) => a + b, 0) / stabilities.length,
+      minStability: Math.min(...stabilities),
+      maxStability: Math.max(...stabilities),
+      variance: this.computeVariance(stabilities),
+    } : undefined;
+
+    // Compute tempo prior metrics
+    const avgPriorWeight = priorWeights.length > 0
+      ? priorWeights.reduce((a, b) => a + b, 0) / priorWeights.length
+      : 1.0;
+    const avgTempoVelocity = tempoVelocities.length > 0
+      ? tempoVelocities.reduce((a, b) => a + b, 0) / tempoVelocities.length
+      : 0;
+
+    // Check if tempo prior prevented octave error
+    // (If expected BPM is set and avg BPM is close to it, prior likely helped)
+    const preventedOctaveError = expectedBpm !== null &&
+      bpmError !== null &&
+      bpmError < 10 &&
+      (expectedBpm <= 80 || expectedBpm >= 150); // Edge tempos most affected
+
+    const tempoPriorMetrics = priorWeights.length > 0 ? {
+      avgWeight: avgPriorWeight,
+      preventedOctaveError,
+      avgTempoVelocity,
+    } : undefined;
+
     return {
       pattern,
       durationMs,
@@ -400,8 +517,20 @@ export class HypothesisValidator {
         confidenceGrowth,
         avgPhaseError,
       },
+      stability: stabilityMetrics,
+      tempoPrior: tempoPriorMetrics,
       states,
     };
+  }
+
+  /**
+   * Compute variance of an array of numbers
+   */
+  private computeVariance(values: number[]): number {
+    if (values.length === 0) return 0;
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    const squaredDiffs = values.map(v => (v - mean) * (v - mean));
+    return squaredDiffs.reduce((a, b) => a + b, 0) / values.length;
   }
 }
 
@@ -432,11 +561,20 @@ export async function runHypothesisValidationSuite(
   gain?: number
 ): Promise<HypothesisValidationResult[]> {
   const patterns = [
+    // Core tempo tracking
+    { id: 'steady-120bpm', expectedBpm: 120 },
     { id: 'tempo-ramp', expectedBpm: null }, // Variable BPM
     { id: 'tempo-sudden', expectedBpm: null }, // Multiple BPMs
     { id: 'half-time-ambiguity', expectedBpm: 120 },
     { id: 'silence-gaps', expectedBpm: 120 },
-    { id: 'steady-120bpm', expectedBpm: 120 },
+    // Tempo prior validation (new)
+    { id: 'steady-60bpm', expectedBpm: 60 },
+    { id: 'steady-90bpm', expectedBpm: 90 },
+    { id: 'steady-180bpm', expectedBpm: 180 },
+    // Beat stability validation (new)
+    { id: 'perfect-timing', expectedBpm: 120 },
+    { id: 'humanized-timing', expectedBpm: 120 },
+    { id: 'unstable-timing', expectedBpm: 120 },
   ];
 
   const results: HypothesisValidationResult[] = [];
@@ -451,6 +589,19 @@ export async function runHypothesisValidationSuite(
     console.log(`  Primary BPM: ${result.primary.avgBpm.toFixed(1)} (error: ${result.primary.bpmError?.toFixed(1) || 'N/A'})`);
     console.log(`  Confidence: ${result.primary.avgConfidence.toFixed(3)} (growth: ${result.primary.confidenceGrowth.toFixed(3)}/s)`);
     console.log(`  Promotions: ${result.hypotheses.promotions}`);
+
+    // Print stability metrics if available
+    if (result.stability) {
+      console.log(`  Stability: avg=${result.stability.avgStability.toFixed(3)}, ` +
+        `min=${result.stability.minStability.toFixed(3)}, max=${result.stability.maxStability.toFixed(3)}`);
+    }
+
+    // Print tempo prior metrics if available
+    if (result.tempoPrior) {
+      console.log(`  TempoPrior: weight=${result.tempoPrior.avgWeight.toFixed(3)}, ` +
+        `velocity=${result.tempoPrior.avgTempoVelocity.toFixed(2)} BPM/s, ` +
+        `octavePrevent=${result.tempoPrior.preventedOctaveError}`);
+    }
   }
 
   return results;

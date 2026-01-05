@@ -9,6 +9,7 @@
 import cliProgress from 'cli-progress';
 import { PARAMETERS, REPRESENTATIVE_PATTERNS } from './types.js';
 import { TestRunner } from './runner.js';
+import { ResultLogger } from './result-logger.js';
 /**
  * Filter parameters based on options.params and options.modes
  */
@@ -29,6 +30,7 @@ export async function runSweeps(options, stateManager) {
     console.log('='.repeat(50));
     console.log('Sweeping each parameter to find optimal values.\n');
     const runner = new TestRunner(options);
+    const resultLogger = new ResultLogger(options.outputDir);
     await runner.connect();
     try {
         const allParams = Object.values(PARAMETERS);
@@ -157,6 +159,21 @@ export async function runSweeps(options, stateManager) {
             // Clear incremental progress now that sweep is complete
             stateManager.clearIncrementalProgress(param.name);
             console.log(`   Optimal: ${optimalPoint.value} (F1: ${optimalPoint.avgF1})`);
+            // Perform adaptive refinement if requested
+            let refinementUsed = false;
+            if (options.refine) {
+                const refinementSteps = options.refinementSteps || 3;
+                console.log(`\n   Refining ${param.name} (${refinementSteps} steps)...`);
+                const refinedResult = await performAdaptiveRefinement(param, result, patterns, refinementSteps, runner);
+                // Update result with refined optimal
+                result.optimal = refinedResult.optimal;
+                result.sweep = [...result.sweep, ...refinedResult.refinementPoints];
+                stateManager.saveSweepResult(param.name, result);
+                console.log(`   Refined Optimal: ${refinedResult.optimal.value} (F1: ${refinedResult.optimal.avgF1})`);
+                refinementUsed = true;
+            }
+            // Log result to JSON log
+            await resultLogger.logSweepResult(result, refinementUsed);
             // Reset to default before next parameter
             await runner.setParameter(param.name, param.default);
         }
@@ -168,6 +185,102 @@ export async function runSweeps(options, stateManager) {
     finally {
         await runner.disconnect();
     }
+}
+/**
+ * Adaptive Refinement: Test finer-grained values around the optimal
+ *
+ * Algorithm:
+ * 1. Find the optimal value and its neighbors from the initial sweep
+ * 2. For each refinement step:
+ *    - Calculate the range between neighbors
+ *    - Test midpoints in that range
+ *    - Update optimal if a better value is found
+ *    - Narrow the search range for next iteration
+ */
+async function performAdaptiveRefinement(param, initialResult, patterns, steps, runner) {
+    const allPoints = [...initialResult.sweep];
+    let currentOptimal = initialResult.optimal;
+    for (let step = 0; step < steps; step++) {
+        // Find optimal and its neighbors
+        const optimalIdx = allPoints.findIndex(p => p.value === currentOptimal.value);
+        if (optimalIdx === -1)
+            break;
+        const leftNeighbor = optimalIdx > 0 ? allPoints[optimalIdx - 1] : null;
+        const rightNeighbor = optimalIdx < allPoints.length - 1 ? allPoints[optimalIdx + 1] : null;
+        // Generate test values between neighbors
+        const testValues = [];
+        if (leftNeighbor) {
+            const gap = currentOptimal.value - leftNeighbor.value;
+            const midpoint = leftNeighbor.value + gap / 2;
+            // Only test if midpoint is sufficiently different and within bounds
+            if (Math.abs(midpoint - currentOptimal.value) > 0.001 &&
+                midpoint >= param.min && midpoint <= param.max) {
+                testValues.push(midpoint);
+            }
+        }
+        if (rightNeighbor) {
+            const gap = rightNeighbor.value - currentOptimal.value;
+            const midpoint = currentOptimal.value + gap / 2;
+            // Only test if midpoint is sufficiently different and within bounds
+            if (Math.abs(midpoint - currentOptimal.value) > 0.001 &&
+                midpoint >= param.min && midpoint <= param.max) {
+                testValues.push(midpoint);
+            }
+        }
+        // If no values to test, we're done refining
+        if (testValues.length === 0) {
+            console.log(`      Step ${step + 1}/${steps}: No refinement values to test (converged)`);
+            break;
+        }
+        console.log(`      Step ${step + 1}/${steps}: Testing ${testValues.length} value(s): ${testValues.map(v => v.toFixed(3)).join(', ')}`);
+        // Test each value
+        for (const value of testValues) {
+            await runner.setParameter(param.name, value);
+            const byPattern = {};
+            let totalF1 = 0;
+            let totalPrecision = 0;
+            let totalRecall = 0;
+            for (const pattern of patterns) {
+                try {
+                    const result = await runner.runPattern(pattern);
+                    byPattern[pattern] = result;
+                    totalF1 += result.f1;
+                    totalPrecision += result.precision;
+                    totalRecall += result.recall;
+                }
+                catch (err) {
+                    console.error(`\n      Error on ${pattern}:`, err);
+                }
+            }
+            const n = Object.keys(byPattern).length;
+            if (n > 0) {
+                const sweepPoint = {
+                    value,
+                    avgF1: Math.round((totalF1 / n) * 1000) / 1000,
+                    avgPrecision: Math.round((totalPrecision / n) * 1000) / 1000,
+                    avgRecall: Math.round((totalRecall / n) * 1000) / 1000,
+                    byPattern,
+                };
+                allPoints.push(sweepPoint);
+                // Update optimal if this is better
+                if (sweepPoint.avgF1 > currentOptimal.avgF1) {
+                    currentOptimal = {
+                        value: sweepPoint.value,
+                        avgF1: sweepPoint.avgF1,
+                    };
+                    console.log(`      New optimal: ${value.toFixed(3)} (F1: ${sweepPoint.avgF1}, +${(sweepPoint.avgF1 - initialResult.optimal.avgF1).toFixed(3)})`);
+                }
+            }
+        }
+        // Sort points for next iteration
+        allPoints.sort((a, b) => a.value - b.value);
+    }
+    // Return refined optimal and new points tested
+    const refinementPoints = allPoints.filter(p => !initialResult.sweep.some(sp => sp.value === p.value));
+    return {
+        optimal: currentOptimal,
+        refinementPoints,
+    };
 }
 function updateOptimalParams(stateManager) {
     const optimalParams = {};

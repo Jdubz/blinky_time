@@ -53,6 +53,15 @@ class HueRotationEffect;
  *     log warn            - Show warnings and errors
  *     log info            - Show info, warnings, and errors (default)
  *     log debug           - Show all messages including debug
+ *
+ *   Debug Channels (independent per-subsystem control):
+ *     debug               - Show enabled debug channels
+ *     debug <ch> on/off   - Enable/disable channel (transient, rhythm, hypothesis, audio, generator, ensemble)
+ *     debug all on/off    - Enable/disable all channels
+ *
+ *   Note: Debug channels control JSON debug output independently from log levels.
+ *   Multiple channels can be enabled simultaneously (e.g., "debug transient on" then "debug rhythm on").
+ *   Use for testing specific subsystems without flooding serial with unrelated messages.
  */
 
 // Log levels (higher = more verbose)
@@ -63,6 +72,39 @@ enum class LogLevel : uint8_t {
     INFO = 3,
     DEBUG = 4
 };
+
+// Debug channels - bit flags for independent subsystem debug control
+// Each channel can be enabled/disabled separately to avoid serial flooding
+// Usage: debug transient on, debug rhythm off, debug all off
+enum class DebugChannel : uint16_t {
+    NONE       = 0x0000,
+    TRANSIENT  = 0x0001,  // Transient detection events (pulse > 0)
+    RHYTHM     = 0x0002,  // Rhythm/BPM tracking (RHYTHM_DEBUG, RHYTHM_DEBUG2)
+    HYPOTHESIS = 0x0004,  // Multi-hypothesis tracker (HYPO_* events)
+    AUDIO      = 0x0008,  // Audio level, AGC, mic debug
+    GENERATOR  = 0x0010,  // Generator-specific debug (fire, water, lightning)
+    ENSEMBLE   = 0x0020,  // Ensemble detector internals
+    ALL        = 0xFFFF
+};
+
+// Bitwise operators for DebugChannel
+inline DebugChannel operator|(DebugChannel a, DebugChannel b) {
+    return static_cast<DebugChannel>(static_cast<uint16_t>(a) | static_cast<uint16_t>(b));
+}
+inline DebugChannel operator&(DebugChannel a, DebugChannel b) {
+    return static_cast<DebugChannel>(static_cast<uint16_t>(a) & static_cast<uint16_t>(b));
+}
+inline DebugChannel operator~(DebugChannel a) {
+    return static_cast<DebugChannel>(~static_cast<uint16_t>(a));
+}
+inline DebugChannel& operator|=(DebugChannel& a, DebugChannel b) {
+    a = a | b;
+    return a;
+}
+inline DebugChannel& operator&=(DebugChannel& a, DebugChannel b) {
+    a = a & b;
+    return a;
+}
 class SerialConsole {
 public:
     SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic);
@@ -82,6 +124,20 @@ public:
     void setLogLevel(LogLevel level) { logLevel_ = level; }
     LogLevel getLogLevel() const { return logLevel_; }
     static LogLevel getGlobalLogLevel() { return instance_ ? instance_->logLevel_ : LogLevel::INFO; }
+
+    // Debug channel control - allows independent enable/disable of subsystem debug output
+    // Usage: debug transient on, debug rhythm off, debug hypothesis on, debug all off
+    static void enableDebugChannel(DebugChannel channel) {
+        debugChannels_ = debugChannels_ | channel;
+    }
+    static void disableDebugChannel(DebugChannel channel) {
+        debugChannels_ = debugChannels_ & ~channel;
+    }
+    static bool isDebugChannelEnabled(DebugChannel channel) {
+        return (debugChannels_ & channel) == channel;
+    }
+    static DebugChannel getDebugChannels() { return debugChannels_; }
+    static void setDebugChannels(DebugChannel channels) { debugChannels_ = channels; }
 
     // Logging helpers - use these instead of Serial.print for debug output
     static void logDebug(const __FlashStringHelper* msg);
@@ -118,6 +174,7 @@ private:
     bool handleGeneratorCommand(const char* cmd);
     bool handleEffectCommand(const char* cmd);
     bool handleLogCommand(const char* cmd);
+    bool handleDebugCommand(const char* cmd);     // Debug channel control
     bool handleEnsembleCommand(const char* cmd);  // Ensemble detector configuration
     bool handleHypothesisCommand(const char* cmd);  // Multi-hypothesis tracking commands
 
@@ -154,4 +211,8 @@ private:
 
     // Static instance pointer for callbacks
     static SerialConsole* instance_;
+
+    // Debug channels (default: NONE - all debug output disabled)
+    // Each channel can be enabled independently for targeted debugging
+    static DebugChannel debugChannels_;
 };

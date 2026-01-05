@@ -210,6 +210,14 @@ void SharedSpectralAnalysis::computeMelBands() {
         // Normalize and apply log compression
         float bandEnergy = (weightSum > 0) ? sum / weightSum : 0.0f;
 
+        // FIX: Special-case silence to ensure mel bands are truly zero
+        // Use threshold matching typical noise floor (~1e-6)
+        const float silenceThreshold = 1e-6f;
+        if (bandEnergy < silenceThreshold) {
+            melBands_[band] = 0.0f;
+            continue;
+        }
+
         // Log compression: 10 * log10(energy + epsilon)
         // This matches human perception (dB scale)
         const float epsilon = 1e-10f;
