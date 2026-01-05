@@ -35,7 +35,7 @@ namespace LightningConstants {
 }
 
 Lightning::Lightning()
-    : intensity_(nullptr), tempIntensity_(nullptr), audioEnergy_(0.0f), audioHit_(0.0f) {
+    : intensity_(nullptr), tempIntensity_(nullptr), audio_() {
 }
 
 Lightning::~Lightning() {
@@ -82,7 +82,7 @@ bool Lightning::begin(const DeviceConfig& config) {
 }
 
 void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    setAudioInput(audio.energy, audio.pulse);
+    audio_ = audio;
     update();
 
     // Convert intensity values to colors and fill matrix
@@ -102,8 +102,7 @@ void Lightning::reset() {
     if (intensity_) {
         memset(intensity_, 0, numLeds_);
     }
-    audioEnergy_ = 0.0f;
-    audioHit_ = 0.0f;
+    audio_ = AudioControl();
 }
 
 void Lightning::update() {
@@ -123,11 +122,6 @@ void Lightning::update() {
             updateRandomLightning();
             break;
     }
-}
-
-void Lightning::setAudioInput(float energy, float hit) {
-    audioEnergy_ = energy;
-    audioHit_ = hit;
 }
 
 void Lightning::updateMatrixLightning() {
@@ -158,9 +152,22 @@ void Lightning::updateRandomLightning() {
 void Lightning::generateBolts() {
     // Audio-reactive bolt generation
     float boltProb = params_.boltChance;
-    // Transient impulse boosts bolt probability (audioHit_ is 0.0 or strength value)
-    if (audioHit_ > 0.0f) {
-        boltProb += params_.audioBoltBoost * audioHit_;  // Scale boost by transient strength
+
+    // Rhythm-aware transient handling
+    if (audio_.hasRhythm()) {
+        // MUSIC MODE: Beat-synced bolt generation
+        // Only react to strong transients (>0.3 threshold) with beat-phase boosting
+        if (audio_.pulse > 0.3f) {
+            // Boost probability near on-beat moments (phase near 0 or 1)
+            float beatBoost = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
+            boltProb += params_.audioBoltBoost * audio_.pulse * beatBoost;
+        }
+    } else {
+        // ORGANIC MODE: Transient-reactive with threshold
+        // Only react to strong transients to avoid noise-floor false positives
+        if (audio_.pulse > 0.3f) {
+            boltProb += params_.audioBoltBoost * audio_.pulse;
+        }
     }
 
     if (random(LightningConstants::PROBABILITY_SCALE) / (float)LightningConstants::PROBABILITY_SCALE < boltProb) {
@@ -168,20 +175,34 @@ void Lightning::generateBolts() {
         uint8_t boltIntensity = random(params_.boltIntensityMin, params_.boltIntensityMax + 1);
 
         // Add audio boost to bolt intensity
-        if (audioEnergy_ > LightningConstants::AUDIO_PRESENCE_THRESHOLD) {
-            uint8_t audioBoost = (uint8_t)(audioEnergy_ * params_.audioIntensityBoostMax);
+        if (audio_.energy > LightningConstants::AUDIO_PRESENCE_THRESHOLD) {
+            uint8_t audioBoost = (uint8_t)(audio_.energy * params_.audioIntensityBoostMax);
             boltIntensity = min(255, boltIntensity + audioBoost);
+        }
+
+        // Add phase-modulated intensity boost when rhythm is detected
+        if (audio_.hasRhythm()) {
+            // Bolts are brightest on-beat, dimmer off-beat
+            float phaseMod = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
+            float intensityScale = 0.6f + 0.4f * phaseMod;  // 60% to 100%
+            boltIntensity = (uint8_t)(boltIntensity * intensityScale);
         }
 
         // Choose bolt position based on layout
         switch (layout_) {
-            case MATRIX_LAYOUT:
+            case MATRIX_LAYOUT: {
                 // Bolts can start anywhere
                 boltPosition = random(numLeds_);
                 intensity_[boltPosition] = boltIntensity;
 
-                // Create branches
-                if (random(LightningConstants::PERCENT_SCALE) < params_.branchChance) {
+                // Create branches with rhythm-adaptive complexity
+                uint8_t effectiveBranchChance = params_.branchChance;
+                if (audio_.hasRhythm()) {
+                    // More branching during strong rhythm (up to 1.5x complexity)
+                    effectiveBranchChance = (uint8_t)(params_.branchChance * (1.0f + 0.5f * audio_.rhythmStrength));
+                }
+
+                if (random(LightningConstants::PERCENT_SCALE) < effectiveBranchChance) {
                     int x, y;
                     indexToCoords(boltPosition, x, y);
 
@@ -193,6 +214,7 @@ void Lightning::generateBolts() {
                     }
                 }
                 break;
+            }
 
             case LINEAR_LAYOUT:
                 // Bolts start from random position and propagate
@@ -312,8 +334,8 @@ void Lightning::propagateBolts() {
 void Lightning::applyFade() {
     // Apply fade rate with audio influence
     uint8_t fadeRate = params_.baseFade;
-    if (audioEnergy_ > LightningConstants::AUDIO_PRESENCE_THRESHOLD) {
-        int8_t audioBias = (int8_t)(audioEnergy_ * params_.fadeAudioBias);
+    if (audio_.energy > LightningConstants::AUDIO_PRESENCE_THRESHOLD) {
+        int8_t audioBias = (int8_t)(audio_.energy * params_.fadeAudioBias);
         fadeRate = constrain(fadeRate + audioBias, LightningConstants::MIN_FADE_RATE, LightningConstants::MAX_FADE_RATE);
     }
 

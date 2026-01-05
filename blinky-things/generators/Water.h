@@ -44,7 +44,6 @@ public:
 
     // Water specific methods
     void update();
-    void setAudioInput(float energy, float hit);
 
     // Parameter configuration
     void setParams(const WaterParams& params);
@@ -78,6 +77,5 @@ private:
     WaterParams params_;
 
     // Audio input
-    float audioEnergy_;
-    float audioHit_;
+    AudioControl audio_;
 };

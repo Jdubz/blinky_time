@@ -596,8 +596,10 @@ void Fire::generateSparks() {
 
         // Beat-synced spark bursts (highest priority)
         if (beatHappened && !inSuppression_) {
-            // Stronger bursts on downbeats (every 4 beats)
-            uint8_t beatSparks = (beatCount_ % 4 == 0) ? params_.burstSparks * 2 : params_.burstSparks;
+            // Stronger bursts on downbeats (every 4 beats), scaled by rhythm confidence
+            uint8_t baseSparks = (beatCount_ % 4 == 0) ? params_.burstSparks * 2 : params_.burstSparks;
+            // Scale downbeat emphasis by rhythmStrength (0.5-1.0 multiplier)
+            uint8_t beatSparks = (uint8_t)(baseSparks * (0.5f + 0.5f * audio_.rhythmStrength));
             numSparks += beatSparks;
             sparkHeat = 255;  // Max heat for music-driven beats
             lastBurstMs_ = now;
@@ -741,11 +743,13 @@ void Fire::applyEmbers(float dtMs) {
             (1.0f - FireConstants::MUSIC_EMBER_BASE_BRIGHTNESS) * beatPulse * params_.musicEmberPulse;
         emberBrightness = pulsedBrightness;
     } else {
-        // ORGANIC MODE: Embers pulse gently with mic level
+        // ORGANIC MODE: Embers pulse gently with mic level and transients
         // Less reactive than music mode - more ambient/organic
         float audioInfluence = audio_.energy * params_.organicAudioMix;
+        float transientBoost = audio_.pulse * params_.organicAudioMix * 0.3f;  // 30% influence from transients
         emberBrightness = FireConstants::ORGANIC_EMBER_BASE_BRIGHTNESS +
-            audioInfluence * FireConstants::ORGANIC_EMBER_SCALE;
+            audioInfluence * FireConstants::ORGANIC_EMBER_SCALE +
+            transientBoost;
     }
 
     // Clamp to valid range [0.0, 1.0]
