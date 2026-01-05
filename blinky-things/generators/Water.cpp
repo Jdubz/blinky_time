@@ -95,8 +95,11 @@ uint32_t Water::particleColor(uint8_t intensity) const {
 }
 
 void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
-    uint8_t splashCount = min(params_.splashParticles,
-                             (uint8_t)(pool_.getCapacity() - pool_.getActiveCount()));
+    // Calculate available pool slots with underflow protection
+    uint8_t available = pool_.getCapacity() > pool_.getActiveCount()
+                        ? pool_.getCapacity() - pool_.getActiveCount()
+                        : 0;
+    uint8_t splashCount = min(params_.splashParticles, available);
 
     for (uint8_t i = 0; i < splashCount; i++) {
         // Radial splash pattern
