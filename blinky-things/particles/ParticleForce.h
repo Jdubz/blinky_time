@@ -42,7 +42,7 @@ public:
     float getGravity() const { return gravity_; }
 
 private:
-    float gravity_;  // Acceleration in LEDs/sec^2
+    float gravity_;  // Acceleration in LEDs/sec² (applied with dt normalization)
 };
 
 /**

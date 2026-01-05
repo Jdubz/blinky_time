@@ -42,7 +42,8 @@ public:
                 particles_[i].intensity = intensity;
                 particles_[i].age = 0;
                 particles_[i].maxAge = maxAge;
-                particles_[i].mass = mass;
+                // Clamp mass to prevent division by zero in force calculations
+                particles_[i].mass = (mass < 0.01f) ? 0.01f : mass;
                 particles_[i].flags = flags;
                 activeCount_++;
                 return &particles_[i];
@@ -75,9 +76,20 @@ public:
             if (particles_[i].isAlive()) {
                 updateFunc(&particles_[i]);
 
-                // Auto-kill if intensity drops to 0 or age exceeds maxAge
-                if (!particles_[i].isAlive() && activeCount_ > 0) {
-                    activeCount_--;
+                // Auto-kill if died naturally (not via explicit kill())
+                if (!particles_[i].isAlive()) {
+                    // kill() sets both intensity=0 AND age=255
+                    // Only decrement if this wasn't an explicit kill()
+                    bool wasExplicitlyKilled = (particles_[i].intensity == 0 && particles_[i].age == 255);
+
+                    if (!wasExplicitlyKilled) {
+                        // Natural death - decrement and mark as dead
+                        if (activeCount_ > 0) {
+                            activeCount_--;
+                        }
+                        particles_[i].intensity = 0;
+                        particles_[i].age = 255;
+                    }
                 }
             }
         }

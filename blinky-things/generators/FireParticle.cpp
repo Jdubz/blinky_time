@@ -120,23 +120,23 @@ void FireParticle::renderParticle(const Particle* p, PixelMatrix& matrix) {
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        // Additive blending with existing heat
+        // Additive blending with existing heat (cast to int to prevent overflow)
         RGB existing = matrix.getPixel(x, y);
         matrix.setPixel(x, y,
-                       min(255, existing.r + r),
-                       min(255, existing.g + g),
-                       min(255, existing.b + b));
+                       min(255, (int)existing.r + r),
+                       min(255, (int)existing.g + g),
+                       min(255, (int)existing.b + b));
     }
 }
 
 uint32_t FireParticle::particleColor(uint8_t intensity) const {
     // Fire palette: black -> red -> orange -> yellow
     if (intensity < 85) {
-        // Black to red
-        return ((uint32_t)(intensity * 3) << 16);
+        // Black to red (cast before multiply to prevent overflow)
+        return (((uint32_t)intensity * 3) << 16);
     } else if (intensity < 170) {
-        // Red to orange
-        uint8_t green = (intensity - 85) * 3;
+        // Red to orange (cast before multiply to prevent overflow)
+        uint8_t green = (uint8_t)(((uint32_t)(intensity - 85)) * 3);
         return (0xFF0000 | ((uint32_t)green << 8));
     } else {
         // Orange to yellow

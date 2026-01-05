@@ -79,12 +79,12 @@ void WaterParticle::renderParticle(const Particle* p, PixelMatrix& matrix) {
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        // Additive blending
+        // Additive blending (cast to int to prevent overflow)
         RGB existing = matrix.getPixel(x, y);
         matrix.setPixel(x, y,
-                       min(255, existing.r + r),
-                       min(255, existing.g + g),
-                       min(255, existing.b + b));
+                       min(255, (int)existing.r + r),
+                       min(255, (int)existing.g + g),
+                       min(255, (int)existing.b + b));
     }
 }
 

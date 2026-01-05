@@ -162,7 +162,9 @@ protected:
             applyForces(p, dt);
 
             // Update position based on velocity
-            p->x += p->vx * dt * 30.0f;  // Normalize to ~30 FPS
+            // Velocity is in LEDs/sec, dt is in seconds, * 30.0f normalizes frame rate
+            // This makes motion consistent: at 30 FPS (dt≈0.033s), factor ≈ 1.0
+            p->x += p->vx * dt * 30.0f;
             p->y += p->vy * dt * 30.0f;
 
             // Age particle

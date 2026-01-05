@@ -65,7 +65,7 @@ void LightningParticle::spawnParticles(float dt) {
         }
 
         pool_.spawn(x, y, vx, vy, intensity, params_.defaultLifespan, 1.0f,
-                   ParticleFlags::BRANCH | ParticleFlags::FADE);
+                   ParticleFlags::BRANCH);  // Manual fade in updateParticle(), not auto-fade
     }
 }
 
@@ -130,9 +130,9 @@ void LightningParticle::spawnBranch(const Particle* parent) {
         // Reduced intensity
         uint8_t intensity = parent->intensity * (100 - params_.branchIntensityLoss) / 100;
 
-        // Branches don't branch (no BRANCH flag)
+        // Branches don't branch (no BRANCH flag) and use manual fade
         pool_.spawn(parent->x, parent->y, vx, vy, intensity,
                    params_.defaultLifespan / 2, 1.0f,
-                   ParticleFlags::FADE);
+                   0);  // No flags - manual fade in updateParticle()
     }
 }
