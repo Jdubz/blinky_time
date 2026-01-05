@@ -6,6 +6,10 @@
 // Used to make physics consistent across varying frame rates
 static const float TARGET_FPS = 30.0f;
 
+// Maximum particle velocity to prevent tunneling through walls
+// At 30 FPS, this allows ~1.67 LEDs/frame max displacement
+static const float MAX_PARTICLE_VELOCITY = 50.0f;
+
 /**
  * Particle - Core particle data structure for unified generator system
  *

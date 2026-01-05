@@ -197,6 +197,16 @@ public:
     void begin();
     bool isValid() const { return valid_; }
 
+    /**
+     * BREAKING CHANGE (v27): API now requires all 3 generator params
+     *
+     * Migration from v26:
+     *   OLD: loadConfiguration(fireParams, mic, audioCtrl)
+     *   NEW: loadConfiguration(fireParams, waterParams, lightningParams, mic, audioCtrl)
+     *
+     * Rationale: Unified particle system requires persisting all generators,
+     * not just Fire. This ensures Water and Lightning settings survive reboots.
+     */
     void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
                           AdaptiveMic& mic, AudioController* audioCtrl = nullptr);
     void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,

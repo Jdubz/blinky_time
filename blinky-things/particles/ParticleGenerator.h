@@ -135,7 +135,8 @@ protected:
      * Age particle and apply fade if flagged
      */
     void ageParticle(Particle* p) {
-        // Increment age, capping at 255 to prevent wraparound (zombie particles)
+        // Increment age, capping at 255 to prevent uint8_t wraparound
+        // (maxAge=0 particles intentionally live forever, this is not a bug)
         if (p->age < 255) {
             p->age++;
         }
@@ -164,15 +165,13 @@ protected:
             // Apply forces
             applyForces(p, dt);
 
-            // Clamp velocity to prevent tunneling (max 50 LEDs/sec ≈ 1.65 LEDs/frame at 30 FPS)
-            // This prevents particles from skipping through walls in a single frame
-            const float MAX_VELOCITY = 50.0f;
-            if (p->vx > MAX_VELOCITY) p->vx = MAX_VELOCITY;
-            if (p->vx < -MAX_VELOCITY) p->vx = -MAX_VELOCITY;
-            if (p->vy > MAX_VELOCITY) p->vy = MAX_VELOCITY;
-            if (p->vy < -MAX_VELOCITY) p->vy = -MAX_VELOCITY;
+            // CRITICAL: Clamp velocity BEFORE position update to prevent tunneling
+            // MAX_PARTICLE_VELOCITY (50 LEDs/sec) prevents particles from skipping through walls
+            // (at 30 FPS, this is ~1.67 LEDs/frame max displacement)
+            p->vx = constrain(p->vx, -MAX_PARTICLE_VELOCITY, MAX_PARTICLE_VELOCITY);
+            p->vy = constrain(p->vy, -MAX_PARTICLE_VELOCITY, MAX_PARTICLE_VELOCITY);
 
-            // Update position based on velocity
+            // Update position based on clamped velocity
             // Velocity is in LEDs/sec, dt is in seconds: displacement = velocity * time
             p->x += p->vx * dt;
             p->y += p->vy * dt;

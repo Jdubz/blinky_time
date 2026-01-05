@@ -31,6 +31,14 @@ public:
     Particle* spawn(float x, float y, float vx, float vy,
                     uint8_t intensity, uint8_t maxAge,
                     float mass, uint8_t flags) {
+        // Validate inputs to prevent NaN, infinity, and extreme values
+        if (!isfinite(x) || !isfinite(y) || !isfinite(vx) || !isfinite(vy) || !isfinite(mass)) {
+            return nullptr;  // Reject invalid floating-point values
+        }
+        if (intensity == 0) {
+            return nullptr;  // Don't spawn invisible particles
+        }
+
         // Find first dead particle
         for (uint8_t i = 0; i < MAX_PARTICLES; i++) {
             if (!particles_[i].isAlive()) {

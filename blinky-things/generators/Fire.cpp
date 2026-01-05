@@ -182,22 +182,29 @@ void Fire::diffuseHeat() {
             int below2Index = coordsToIndex(x, y + 2);
 
             if (currentIndex >= 0 && belowIndex >= 0 && below2Index >= 0) {
-                // Weighted average: closer cell has more influence
-                uint16_t newHeat = ((uint16_t)heat_[belowIndex] + (uint16_t)heat_[below2Index] * 2) / 3;
+                // Accumulate heat from all contributing cells to minimize rounding errors
+                uint16_t totalHeat = (uint16_t)heat_[belowIndex] + (uint16_t)heat_[below2Index] * 2;
+                uint8_t divisor = 3;
 
                 // Add horizontal spread from adjacent cells
+                int leftIndex = -1, rightIndex = -1;
                 if (x > 0) {
-                    int leftIndex = coordsToIndex(x - 1, y + 1);
+                    leftIndex = coordsToIndex(x - 1, y + 1);
                     if (leftIndex >= 0) {
-                        newHeat = ((uint16_t)newHeat + (uint16_t)heat_[leftIndex]) / 2;
+                        totalHeat += (uint16_t)heat_[leftIndex];
+                        divisor++;
                     }
                 }
                 if (x < width_ - 1) {
-                    int rightIndex = coordsToIndex(x + 1, y + 1);
+                    rightIndex = coordsToIndex(x + 1, y + 1);
                     if (rightIndex >= 0) {
-                        newHeat = ((uint16_t)newHeat + (uint16_t)heat_[rightIndex]) / 2;
+                        totalHeat += (uint16_t)heat_[rightIndex];
+                        divisor++;
                     }
                 }
+
+                // Single division to avoid cumulative rounding errors
+                uint16_t newHeat = totalHeat / divisor;
 
                 // Replace heat value with diffused result (allows heat to decrease)
                 heat_[currentIndex] = min(255, newHeat);
