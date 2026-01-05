@@ -35,6 +35,9 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // Run particle system (spawns, updates, renders particles)
     ParticleGenerator::generate(matrix, audio);
 
+    // Diffuse heat upward to create smooth gradients
+    diffuseHeat();
+
     // Blend heat buffer with particle rendering
     blendHeatToMatrix(matrix);
 }
@@ -165,6 +168,40 @@ void Fire::applyCooling() {
             heat_[i] -= coolAmount;
         } else {
             heat_[i] = 0;
+        }
+    }
+}
+
+void Fire::diffuseHeat() {
+    // Heat propagation: spread heat upward with weighted averaging
+    // Process from top to bottom to avoid feedback loops
+    for (int y = 0; y < height_ - 2; y++) {
+        for (int x = 0; x < width_; x++) {
+            int currentIndex = coordsToIndex(x, y);
+            int belowIndex = coordsToIndex(x, y + 1);
+            int below2Index = coordsToIndex(x, y + 2);
+
+            if (currentIndex >= 0 && belowIndex >= 0 && below2Index >= 0) {
+                // Weighted average: closer cell has more influence
+                uint16_t newHeat = ((uint16_t)heat_[belowIndex] + (uint16_t)heat_[below2Index] * 2) / 3;
+
+                // Add horizontal spread from adjacent cells
+                if (x > 0) {
+                    int leftIndex = coordsToIndex(x - 1, y + 1);
+                    if (leftIndex >= 0) {
+                        newHeat = ((uint16_t)newHeat + (uint16_t)heat_[leftIndex]) / 2;
+                    }
+                }
+                if (x < width_ - 1) {
+                    int rightIndex = coordsToIndex(x + 1, y + 1);
+                    if (rightIndex >= 0) {
+                        newHeat = ((uint16_t)newHeat + (uint16_t)heat_[rightIndex]) / 2;
+                    }
+                }
+
+                // Only update if diffusion would increase heat (don't cool via diffusion)
+                heat_[currentIndex] = max(heat_[currentIndex], (uint8_t)min(255, newHeat));
+            }
         }
     }
 }

@@ -42,8 +42,8 @@ struct FireParams {
         audioSpawnBoost = 0.6f;
         maxParticles = 48;
         defaultLifespan = 60;  // ~2 seconds at 30 FPS
-        intensityMin = 160;
-        intensityMax = 255;
+        intensityMin = 80;   // Start in red range (< 85)
+        intensityMax = 180;  // Mostly orange with some yellow highlights
         gravity = -8.0f;  // Negative = upward (fire rises)
         windBase = 0.0f;
         windVariation = 0.5f;
@@ -104,6 +104,11 @@ private:
      * Apply cooling to heat buffer
      */
     void applyCooling();
+
+    /**
+     * Diffuse heat upward to create smooth gradients
+     */
+    void diffuseHeat();
 
     /**
      * Blend heat buffer with particle rendering
