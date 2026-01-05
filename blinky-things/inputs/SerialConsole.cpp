@@ -1594,27 +1594,14 @@ bool SerialConsole::handleDebugCommand(const char* cmd) {
         return DebugChannel::NONE;
     };
 
-    // "debug all on" - enable all channels
-    if (strcmp(cmd, "debug all on") == 0) {
-        setDebugChannels(DebugChannel::ALL);
-        Serial.println(F("OK debug all on"));
-        return true;
-    }
-
-    // "debug all off" - disable all channels
-    if (strcmp(cmd, "debug all off") == 0) {
-        setDebugChannels(DebugChannel::NONE);
-        Serial.println(F("OK debug all off"));
-        return true;
-    }
-
     // "debug <channel> on" or "debug <channel> off"
+    // Also handles "debug all on/off" via parseChannel returning ALL
     if (strncmp(cmd, "debug ", 6) == 0) {
         const char* rest = cmd + 6;
         char channelName[16] = {0};
         const char* space = strchr(rest, ' ');
 
-        if (space && (space - rest) < 15) {
+        if (space && static_cast<size_t>(space - rest) < sizeof(channelName)) {
             strncpy(channelName, rest, space - rest);
             channelName[space - rest] = '\0';
 

@@ -133,7 +133,7 @@ public:
         debugChannels_ = debugChannels_ & ~channel;
     }
     static bool isDebugChannelEnabled(DebugChannel channel) {
-        return (debugChannels_ & channel) != DebugChannel::NONE;
+        return (debugChannels_ & channel) == channel;
     }
     static DebugChannel getDebugChannels() { return debugChannels_; }
     static void setDebugChannels(DebugChannel channels) { debugChannels_ = channels; }

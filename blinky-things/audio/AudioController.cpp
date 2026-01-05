@@ -1044,8 +1044,7 @@ void MultiHypothesisTracker::promoteBestHypothesis(uint32_t nowMs) {
 
 void MultiHypothesisTracker::printDebug(uint32_t nowMs, const char* eventType, int slotIndex) const {
     // Requires both: debug channel enabled AND verbosity level > OFF
-    if (debugLevel == HypothesisDebugLevel::OFF) return;
-    if (!SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) return;
+    if (debugLevel == HypothesisDebugLevel::OFF || !SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) return;
 
     // EVENT-level messages are printed immediately by the calling functions
     // (createHypothesis, promoteBestHypothesis)
