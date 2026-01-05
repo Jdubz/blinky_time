@@ -96,7 +96,8 @@ void Lightning::renderParticle(const Particle* p, PixelMatrix& matrix) {
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        // Max blending (lightning overwrites)
+        // MAX BLENDING: Lightning bolts take brightest value (bolt dominance)
+        // Preserves the brightest part of overlapping bolts and branches
         RGB existing = matrix.getPixel(x, y);
         matrix.setPixel(x, y,
                        max(existing.r, r),

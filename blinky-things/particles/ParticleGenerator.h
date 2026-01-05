@@ -135,7 +135,10 @@ protected:
      * Age particle and apply fade if flagged
      */
     void ageParticle(Particle* p) {
-        p->age++;
+        // Increment age, capping at 255 to prevent wraparound (zombie particles)
+        if (p->age < 255) {
+            p->age++;
+        }
 
         if (p->hasFlag(ParticleFlags::FADE) && p->maxAge > 0) {
             // Linear fade based on age
@@ -161,11 +164,19 @@ protected:
             // Apply forces
             applyForces(p, dt);
 
+            // Clamp velocity to prevent tunneling (max 50 LEDs/sec ≈ 1.65 LEDs/frame at 30 FPS)
+            // This prevents particles from skipping through walls in a single frame
+            const float MAX_VELOCITY = 50.0f;
+            if (p->vx > MAX_VELOCITY) p->vx = MAX_VELOCITY;
+            if (p->vx < -MAX_VELOCITY) p->vx = -MAX_VELOCITY;
+            if (p->vy > MAX_VELOCITY) p->vy = MAX_VELOCITY;
+            if (p->vy < -MAX_VELOCITY) p->vy = -MAX_VELOCITY;
+
             // Update position based on velocity
-            // Velocity is in LEDs/sec, dt is in seconds, * 30.0f normalizes frame rate
+            // Velocity is in LEDs/sec, dt is in seconds, * TARGET_FPS normalizes frame rate
             // This makes motion consistent: at 30 FPS (dt≈0.033s), factor ≈ 1.0
-            p->x += p->vx * dt * 30.0f;
-            p->y += p->vy * dt * 30.0f;
+            p->x += p->vx * dt * TARGET_FPS;
+            p->y += p->vy * dt * TARGET_FPS;
 
             // Age particle
             ageParticle(p);

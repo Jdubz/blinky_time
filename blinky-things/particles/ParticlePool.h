@@ -42,10 +42,17 @@ public:
                 particles_[i].intensity = intensity;
                 particles_[i].age = 0;
                 particles_[i].maxAge = maxAge;
-                // Clamp mass to prevent division by zero in force calculations
-                particles_[i].mass = (mass < 0.01f) ? 0.01f : mass;
+                // Clamp mass to prevent division by zero and numerical issues
+                // Min 0.01 prevents /0, max 10.0 prevents particles becoming too sluggish
+                float clampedMass = mass;
+                if (clampedMass < 0.01f) clampedMass = 0.01f;
+                if (clampedMass > 10.0f) clampedMass = 10.0f;
+                particles_[i].mass = clampedMass;
                 particles_[i].flags = flags;
-                activeCount_++;
+                // Increment count with overflow protection
+                if (activeCount_ < MAX_PARTICLES) {
+                    activeCount_++;
+                }
                 return &particles_[i];
             }
         }
@@ -56,7 +63,12 @@ public:
      * Kill a particle (returns it to pool)
      */
     void kill(Particle* p) {
-        if (p && p->isAlive()) {
+        // Validate pointer is within pool bounds
+        if (!p || p < particles_ || p >= particles_ + MAX_PARTICLES) {
+            return;  // Invalid pointer, ignore
+        }
+
+        if (p->isAlive()) {
             p->intensity = 0;
             p->age = 255;
             if (activeCount_ > 0) {

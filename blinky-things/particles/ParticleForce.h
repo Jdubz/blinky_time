@@ -71,6 +71,11 @@ public:
      */
     void update(float dt) {
         noisePhase_ += dt * 0.5f;  // Slow phase evolution
+        // Wrap phase to prevent unbounded growth (numerical precision)
+        // TWO_PI is defined in Arduino.h
+        if (noisePhase_ > TWO_PI) {
+            noisePhase_ -= TWO_PI;
+        }
     }
 
     void setWind(float base, float var) {
@@ -97,7 +102,9 @@ public:
     void apply(Particle* p, float dt) override {
         // Simple velocity damping: v *= dragCoeff^dt
         // For dt ~= 0.03s (33 FPS), dragCoeff=0.98 means ~60% velocity after 1 sec
-        float damping = pow(dragCoeff_, dt * 30.0f);  // Normalize to 30 FPS
+        // Clamp dt to prevent overflow in pow() (e.g., from millis() wrap or hang)
+        float safeDt = min(dt, 1.0f);  // Cap at 1 second
+        float damping = pow(dragCoeff_, safeDt * TARGET_FPS);  // Normalize to target FPS
         p->vx *= damping;
         p->vy *= damping;
     }
@@ -107,42 +114,4 @@ public:
 
 private:
     float dragCoeff_;  // Drag coefficient (0-1, closer to 1 = less drag)
-};
-
-/**
- * RadialForce - Radial expansion from center point
- *
- * Used for splash effects - particles pushed outward from impact point
- */
-class RadialForce : public ParticleForce {
-public:
-    RadialForce(float centerX, float centerY, float strength)
-        : centerX_(centerX), centerY_(centerY), strength_(strength) {}
-
-    void apply(Particle* p, float dt) override {
-        if (p->hasFlag(ParticleFlags::RADIAL)) {
-            float dx = p->x - centerX_;
-            float dy = p->y - centerY_;
-            float dist = sqrt(dx*dx + dy*dy);
-
-            if (dist > 0.01f) {  // Avoid division by zero
-                // Normalize direction and apply force
-                float forceX = (dx / dist) * strength_ / p->mass;
-                float forceY = (dy / dist) * strength_ / p->mass;
-                p->vx += forceX * dt;
-                p->vy += forceY * dt;
-            }
-        }
-    }
-
-    void setCenter(float x, float y) {
-        centerX_ = x;
-        centerY_ = y;
-    }
-
-    void setStrength(float s) { strength_ = s; }
-
-private:
-    float centerX_, centerY_;
-    float strength_;
 };

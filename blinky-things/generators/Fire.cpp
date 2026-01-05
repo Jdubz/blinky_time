@@ -104,7 +104,8 @@ void Fire::updateParticle(Particle* p, float dt) {
 
         if (index >= 0 && index < numLeds_) {
             uint8_t trailHeat = p->intensity * params_.trailHeatFactor / 100;
-            heat_[index] = min(255, heat_[index] + trailHeat);
+            // Cast to int to prevent overflow before min() is applied
+            heat_[index] = min(255, (int)heat_[index] + trailHeat);
         }
     }
 }
@@ -120,7 +121,8 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        // Additive blending with existing heat (cast to int to prevent overflow)
+        // ADDITIVE BLENDING: Particles add to existing colors (bright spark highlights)
+        // Saturates at 255 to prevent overflow
         RGB existing = matrix.getPixel(x, y);
         matrix.setPixel(x, y,
                        min(255, (int)existing.r + r),
@@ -133,11 +135,12 @@ uint32_t Fire::particleColor(uint8_t intensity) const {
     // Fire palette: black -> red -> orange -> yellow
     if (intensity < 85) {
         // Black to red (cast before multiply to prevent overflow)
-        return (((uint32_t)intensity * 3) << 16);
+        uint32_t red = min(255u, (uint32_t)intensity * 3);
+        return (red << 16);
     } else if (intensity < 170) {
-        // Red to orange (cast before multiply to prevent overflow)
-        uint8_t green = (uint8_t)(((uint32_t)(intensity - 85)) * 3);
-        return (0xFF0000 | ((uint32_t)green << 8));
+        // Red to orange (saturate green to prevent overflow)
+        uint32_t green = min(255u, (uint32_t)(intensity - 85) * 3);
+        return (0xFF0000 | (green << 8));
     } else {
         // Orange to yellow
         return 0xFFFF00;
@@ -157,7 +160,12 @@ void Fire::applyCooling() {
     // Apply cooling to all heat values
     for (int i = 0; i < numLeds_; i++) {
         uint8_t coolAmount = random(0, cooling + 1);
-        heat_[i] = (heat_[i] > coolAmount) ? heat_[i] - coolAmount : 0;
+        // Saturating subtraction to prevent underflow
+        if (heat_[i] > coolAmount) {
+            heat_[i] -= coolAmount;
+        } else {
+            heat_[i] = 0;
+        }
     }
 }
 
@@ -165,13 +173,15 @@ void Fire::blendHeatToMatrix(PixelMatrix& matrix) {
     for (int y = 0; y < height_; y++) {
         for (int x = 0; x < width_; x++) {
             int index = coordsToIndex(x, y);
-            if (index >= 0) {
+            // Check both lower and upper bounds
+            if (index >= 0 && index < numLeds_) {
                 uint32_t color = particleColor(heat_[index]);
                 uint8_t r = (color >> 16) & 0xFF;
                 uint8_t g = (color >> 8) & 0xFF;
                 uint8_t b = color & 0xFF;
 
-                // Max blend with particle rendering
+                // MAX BLENDING: Heat field takes brightest value (preserves particle highlights)
+                // Prevents heat field from darkening bright spark particles
                 RGB existing = matrix.getPixel(x, y);
                 matrix.setPixel(x, y,
                                max(existing.r, r),
