@@ -60,6 +60,7 @@ class HueRotationEffect;
  *     debug all on/off    - Enable/disable all channels
  *
  *   Note: Debug channels control JSON debug output independently from log levels.
+ *   Multiple channels can be enabled simultaneously (e.g., "debug transient on" then "debug rhythm on").
  *   Use for testing specific subsystems without flooding serial with unrelated messages.
  */
 

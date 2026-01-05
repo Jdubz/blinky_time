@@ -1626,6 +1626,11 @@ bool SerialConsole::handleDebugCommand(const char* cmd) {
                 Serial.print(channelName);
                 Serial.println(F(" off"));
                 return true;
+            } else {
+                Serial.print(F("Invalid action: "));
+                Serial.println(action);
+                Serial.println(F("Use 'on' or 'off'"));
+                return true;
             }
         }
 
