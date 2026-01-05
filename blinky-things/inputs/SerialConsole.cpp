@@ -78,36 +78,51 @@ void SerialConsole::registerSettings() {
     registerRhythmSettings();
 }
 
-// === FIRE SETTINGS ===
+// === FIRE SETTINGS (Particle-based) ===
 void SerialConsole::registerFireSettings(FireParams* fp) {
     if (!fp) return;
 
-    settings_.registerUint8("cooling", &fp->baseCooling, "fire",
-        "Base cooling rate", 0, 255);
-    settings_.registerFloat("sparkchance", &fp->sparkChance, "fire",
-        "Probability of sparks", 0.0f, 1.0f);
-    settings_.registerUint8("sparkheatmin", &fp->sparkHeatMin, "fire",
-        "Min spark heat", 0, 255);
-    settings_.registerUint8("sparkheatmax", &fp->sparkHeatMax, "fire",
-        "Max spark heat", 0, 255);
-    settings_.registerFloat("audiosparkboost", &fp->audioSparkBoost, "fire",
-        "Audio influence on sparks", 0.0f, 1.0f);
-    settings_.registerInt8("coolingaudiobias", &fp->coolingAudioBias, "fire",
-        "Audio cooling bias", -128, 127);
-    settings_.registerUint8("bottomrows", &fp->bottomRowsForSparks, "fire",
-        "Spark injection rows", 1, 8);
+    // Spawn behavior
+    settings_.registerFloat("basespawnchance", &fp->baseSpawnChance, "fire",
+        "Baseline spark spawn probability", 0.0f, 1.0f);
+    settings_.registerFloat("audiospawnboost", &fp->audioSpawnBoost, "fire",
+        "Audio reactivity multiplier", 0.0f, 2.0f);
     settings_.registerUint8("burstsparks", &fp->burstSparks, "fire",
-        "Sparks per burst", 1, 20);
-    settings_.registerUint16("suppressionms", &fp->suppressionMs, "fire",
-        "Burst suppression time", 50, 1000);
-    settings_.registerFloat("heatdecay", &fp->heatDecay, "fire",
-        "Heat decay rate", 0.5f, 0.99f);
-    settings_.registerUint8("emberheatmax", &fp->emberHeatMax, "fire",
-        "Max ember heat", 0, 50);
-    settings_.registerUint8("spreaddistance", &fp->spreadDistance, "fire",
-        "Heat spread distance", 1, 24);
-    settings_.registerFloat("embernoisespeed", &fp->emberNoiseSpeed, "fire",
-        "Ember animation speed", 0.0001f, 0.002f);
+        "Sparks per beat burst", 1, 20);
+
+    // Physics
+    settings_.registerFloat("gravity", &fp->gravity, "fire",
+        "Gravity strength (negative=upward)", -20.0f, 20.0f);
+    settings_.registerFloat("windbase", &fp->windBase, "fire",
+        "Base wind force", -5.0f, 5.0f);
+    settings_.registerFloat("windvariation", &fp->windVariation, "fire",
+        "Wind variation amount", 0.0f, 2.0f);
+    settings_.registerFloat("drag", &fp->drag, "fire",
+        "Drag coefficient", 0.9f, 1.0f);
+
+    // Spark appearance
+    settings_.registerFloat("sparkvelmin", &fp->sparkVelocityMin, "fire",
+        "Minimum upward velocity", 0.0f, 10.0f);
+    settings_.registerFloat("sparkvelmax", &fp->sparkVelocityMax, "fire",
+        "Maximum upward velocity", 0.0f, 10.0f);
+    settings_.registerFloat("sparkspread", &fp->sparkSpread, "fire",
+        "Horizontal velocity spread", 0.0f, 5.0f);
+
+    // Lifecycle
+    settings_.registerUint8("maxparticles", &fp->maxParticles, "fire",
+        "Particle pool size", 16, 64);
+    settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
+        "Default particle lifespan (frames)", 20, 120);
+    settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
+        "Minimum spawn intensity", 0, 255);
+    settings_.registerUint8("intensitymax", &fp->intensityMax, "fire",
+        "Maximum spawn intensity", 0, 255);
+
+    // Heat trail
+    settings_.registerUint8("trailheatfactor", &fp->trailHeatFactor, "fire",
+        "Heat trail intensity (%)", 0, 100);
+    settings_.registerUint8("traildecay", &fp->trailDecay, "fire",
+        "Heat decay rate per frame", 0, 255);
 }
 
 // === MUSIC MODE FIRE SETTINGS ===
@@ -115,12 +130,8 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 void SerialConsole::registerFireMusicSettings(FireParams* fp) {
     if (!fp) return;
 
-    settings_.registerFloat("musicemberpulse", &fp->musicEmberPulse, "firemusic",
-        "Ember pulse intensity on beat", 0.0f, 1.0f);
-    settings_.registerFloat("musicsparkpulse", &fp->musicSparkPulse, "firemusic",
-        "Spark heat pulse on beat", 0.0f, 1.0f);
-    settings_.registerFloat("musiccoolpulse", &fp->musicCoolingPulse, "firemusic",
-        "Cooling oscillation amplitude", 0.0f, 30.0f);
+    settings_.registerFloat("musicspawnpulse", &fp->musicSpawnPulse, "firemusic",
+        "Phase modulation for spawn rate", 0.0f, 1.0f);
 }
 
 // === ORGANIC MODE FIRE SETTINGS ===
@@ -128,14 +139,8 @@ void SerialConsole::registerFireMusicSettings(FireParams* fp) {
 void SerialConsole::registerFireOrganicSettings(FireParams* fp) {
     if (!fp) return;
 
-    settings_.registerFloat("organicsparkchance", &fp->organicSparkChance, "fireorganic",
-        "Baseline random spark rate", 0.0f, 0.5f);
     settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fireorganic",
         "Min transient to trigger burst", 0.0f, 1.0f);
-    settings_.registerFloat("organicaudiomix", &fp->organicAudioMix, "fireorganic",
-        "Audio influence in organic mode", 0.0f, 1.0f);
-    settings_.registerBool("organicburstsuppress", &fp->organicBurstSuppress, "fireorganic",
-        "Suppress after bursts in organic mode");
 }
 
 // === AUDIO SETTINGS ===
@@ -656,10 +661,9 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
 }
 
 void SerialConsole::restoreDefaults() {
-    // Restore fire defaults
-    if (fireGenerator_) {
-        fireGenerator_->resetToDefaults();
-    }
+    // NOTE: Particle-based generators get defaults from their constructors
+    // Generator parameter reset is handled by ConfigStorage::loadDefaults()
+    // which will be applied on next load/save cycle
 
     // Restore mic defaults (window/range normalization)
     // Note: Transient detection settings moved to EnsembleDetector
@@ -684,16 +688,6 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->energyBoostOnBeat = 0.3f;
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
-    }
-
-    // Restore water defaults (settings now point directly to generator's params)
-    if (waterGenerator_) {
-        waterGenerator_->resetToDefaults();
-    }
-
-    // Restore lightning defaults (settings now point directly to generator's params)
-    if (lightningGenerator_) {
-        lightningGenerator_->resetToDefaults();
     }
 
     // Restore effect defaults
@@ -810,46 +804,104 @@ bool SerialConsole::handleEffectCommand(const char* cmd) {
     return false;
 }
 
-// === WATER SETTINGS ===
+// === WATER SETTINGS (Particle-based) ===
 void SerialConsole::registerWaterSettings(WaterParams* wp) {
     if (!wp) return;
 
-    settings_.registerUint8("waterflow", &wp->baseFlow, "water",
-        "Base flow speed", 0, 255);
-    settings_.registerUint8("wavemin", &wp->waveHeightMin, "water",
-        "Min wave height", 0, 255);
-    settings_.registerUint8("wavemax", &wp->waveHeightMax, "water",
-        "Max wave height", 0, 255);
-    settings_.registerFloat("wavechance", &wp->waveChance, "water",
-        "Probability of new wave", 0.0f, 1.0f);
-    settings_.registerFloat("audiowaveboost", &wp->audioWaveBoost, "water",
-        "Audio boost for waves", 0.0f, 1.0f);
-    settings_.registerUint8("audioflowmax", &wp->audioFlowBoostMax, "water",
-        "Max flow boost from audio", 0, 255);
-    settings_.registerInt8("flowaudiobias", &wp->flowAudioBias, "water",
-        "Flow speed audio bias", -128, 127);
+    // Spawn behavior
+    settings_.registerFloat("basespawnchance", &wp->baseSpawnChance, "water",
+        "Baseline drop spawn probability", 0.0f, 1.0f);
+    settings_.registerFloat("audiospawnboost", &wp->audioSpawnBoost, "water",
+        "Audio reactivity multiplier", 0.0f, 2.0f);
+
+    // Physics
+    settings_.registerFloat("gravity", &wp->gravity, "water",
+        "Gravity strength (positive=downward)", 0.0f, 20.0f);
+    settings_.registerFloat("windbase", &wp->windBase, "water",
+        "Base wind force", -5.0f, 5.0f);
+    settings_.registerFloat("windvariation", &wp->windVariation, "water",
+        "Wind variation amount", 0.0f, 2.0f);
+    settings_.registerFloat("drag", &wp->drag, "water",
+        "Drag coefficient", 0.9f, 1.0f);
+
+    // Drop appearance
+    settings_.registerFloat("dropvelmin", &wp->dropVelocityMin, "water",
+        "Minimum downward velocity", 0.0f, 10.0f);
+    settings_.registerFloat("dropvelmax", &wp->dropVelocityMax, "water",
+        "Maximum downward velocity", 0.0f, 10.0f);
+    settings_.registerFloat("dropspread", &wp->dropSpread, "water",
+        "Horizontal velocity spread", 0.0f, 5.0f);
+
+    // Splash behavior
+    settings_.registerUint8("splashparticles", &wp->splashParticles, "water",
+        "Particles spawned per splash", 0, 10);
+    settings_.registerFloat("splashvelmin", &wp->splashVelocityMin, "water",
+        "Minimum splash velocity", 0.0f, 10.0f);
+    settings_.registerFloat("splashvelmax", &wp->splashVelocityMax, "water",
+        "Maximum splash velocity", 0.0f, 10.0f);
+    settings_.registerUint8("splashintensity", &wp->splashIntensity, "water",
+        "Splash particle intensity", 0, 255);
+
+    // Lifecycle
+    settings_.registerUint8("maxparticles", &wp->maxParticles, "water",
+        "Particle pool size", 16, 128);
+    settings_.registerUint8("defaultlifespan", &wp->defaultLifespan, "water",
+        "Default particle lifespan (frames)", 20, 180);
+    settings_.registerUint8("intensitymin", &wp->intensityMin, "water",
+        "Minimum spawn intensity", 0, 255);
+    settings_.registerUint8("intensitymax", &wp->intensityMax, "water",
+        "Maximum spawn intensity", 0, 255);
+
+    // Audio reactivity
+    settings_.registerFloat("musicspawnpulse", &wp->musicSpawnPulse, "water",
+        "Phase modulation for spawn rate", 0.0f, 1.0f);
+    settings_.registerFloat("organictransmin", &wp->organicTransientMin, "water",
+        "Min transient to trigger burst", 0.0f, 1.0f);
 }
 
-// === LIGHTNING SETTINGS ===
+// === LIGHTNING SETTINGS (Particle-based) ===
 void SerialConsole::registerLightningSettings(LightningParams* lp) {
     if (!lp) return;
 
-    settings_.registerUint8("lightfade", &lp->baseFade, "lightning",
-        "Base fade speed", 0, 255);
-    settings_.registerUint8("boltmin", &lp->boltIntensityMin, "lightning",
-        "Min bolt intensity", 0, 255);
-    settings_.registerUint8("boltmax", &lp->boltIntensityMax, "lightning",
-        "Max bolt intensity", 0, 255);
-    settings_.registerFloat("boltchance", &lp->boltChance, "lightning",
-        "Probability of new bolt", 0.0f, 1.0f);
-    settings_.registerFloat("audioboltboost", &lp->audioBoltBoost, "lightning",
-        "Audio boost for bolts", 0.0f, 1.0f);
-    settings_.registerUint8("audiointensitymax", &lp->audioIntensityBoostMax, "lightning",
-        "Max intensity boost from audio", 0, 255);
-    settings_.registerInt8("fadeaudiobias", &lp->fadeAudioBias, "lightning",
-        "Fade speed audio bias", -128, 127);
+    // Spawn behavior
+    settings_.registerFloat("basespawnchance", &lp->baseSpawnChance, "lightning",
+        "Baseline bolt spawn probability", 0.0f, 1.0f);
+    settings_.registerFloat("audiospawnboost", &lp->audioSpawnBoost, "lightning",
+        "Audio reactivity multiplier", 0.0f, 2.0f);
+
+    // Bolt appearance
+    settings_.registerFloat("boltvelmin", &lp->boltVelocityMin, "lightning",
+        "Minimum bolt speed", 0.0f, 20.0f);
+    settings_.registerFloat("boltvelmax", &lp->boltVelocityMax, "lightning",
+        "Maximum bolt speed", 0.0f, 20.0f);
+    settings_.registerUint8("faderate", &lp->fadeRate, "lightning",
+        "Intensity decay per frame", 0, 255);
+
+    // Branching behavior
     settings_.registerUint8("branchchance", &lp->branchChance, "lightning",
         "Branch probability (%)", 0, 100);
+    settings_.registerUint8("branchcount", &lp->branchCount, "lightning",
+        "Branches per trigger", 1, 4);
+    settings_.registerFloat("branchspread", &lp->branchAngleSpread, "lightning",
+        "Branch angle spread (radians)", 0.0f, 3.14159f);
+    settings_.registerUint8("branchintloss", &lp->branchIntensityLoss, "lightning",
+        "Branch intensity reduction (%)", 0, 100);
+
+    // Lifecycle
+    settings_.registerUint8("maxparticles", &lp->maxParticles, "lightning",
+        "Particle pool size", 16, 64);
+    settings_.registerUint8("defaultlifespan", &lp->defaultLifespan, "lightning",
+        "Default particle lifespan (frames)", 10, 60);
+    settings_.registerUint8("intensitymin", &lp->intensityMin, "lightning",
+        "Minimum spawn intensity", 0, 255);
+    settings_.registerUint8("intensitymax", &lp->intensityMax, "lightning",
+        "Maximum spawn intensity", 0, 255);
+
+    // Audio reactivity
+    settings_.registerFloat("musicspawnpulse", &lp->musicSpawnPulse, "lightning",
+        "Phase modulation for spawn rate", 0.0f, 1.0f);
+    settings_.registerFloat("organictransmin", &lp->organicTransientMin, "lightning",
+        "Min transient to trigger burst", 0.0f, 1.0f);
 }
 
 // === EFFECT SETTINGS ===
@@ -976,16 +1028,9 @@ void SerialConsole::streamTick() {
         }
 
         // LED brightness telemetry
-        // Format: "led":{"tot":12345,"pct":37.5}
-        // tot = total heat (sum of all heat values)
-        // pct = brightness percent (0-100)
-        if (fireGenerator_) {
-            Serial.print(F(",\"led\":{\"tot\":"));
-            Serial.print(fireGenerator_->getTotalHeat());
-            Serial.print(F(",\"pct\":"));
-            Serial.print(fireGenerator_->getBrightnessPercent(), 1);
-            Serial.print(F("}"));
-        }
+        // NOTE: Particle-based generators don't track total heat/brightness
+        // in the same way, so these stats are not available
+        // TODO: Add particle pool statistics (active count, etc.)
 
         Serial.println(F("}"));
     }

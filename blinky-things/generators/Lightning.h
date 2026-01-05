@@ -1,82 +1,94 @@
 #pragma once
 
-#include "Generator.h"
-#include "../config/TotemDefaults.h"
+#include "../particles/ParticleGenerator.h"
+#include "../types/ColorPalette.h"
 
 /**
- * Lightning - Electric lightning simulation generator
- *
- * Generates realistic lightning patterns using branching algorithms
- * that adapts to different LED layout arrangements:
- * - MATRIX_LAYOUT: Branching lightning bolts across 2D matrices
- * - LINEAR_LAYOUT: Lightning bolts along strings/linear arrangements
- * - RANDOM_LAYOUT: Electric arcs between scattered points
- *
- * Key features:
- * - Layout-aware lightning algorithms
- * - Audio-reactive bolt generation
- * - Yellow/white color palette (yellow/white/electric blue)
- * - Realistic branching and fading patterns
+ * LightningParams - Lightning-specific particle parameters
  */
-
 struct LightningParams {
-    uint8_t baseFade           = 160;  // Base fade speed
-    uint8_t boltIntensityMin   = 100;  // Minimum bolt intensity
-    uint8_t boltIntensityMax   = 255;  // Maximum bolt intensity
-    float   boltChance         = 0.15f; // Chance of new bolt
-    float   audioBoltBoost     = 0.5f; // Audio boost for bolts
-    uint8_t audioIntensityBoostMax = 100; // Max intensity boost from audio
-    int8_t  fadeAudioBias      = -30;  // Fade speed audio bias (negative = slower fade on audio)
-    uint8_t branchChance       = 30;   // Percentage chance of branching
+    // Spawn behavior
+    float baseSpawnChance;        // Baseline bolt spawn probability (0-1)
+    float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
+    uint8_t maxParticles;         // Pool size (32 typical)
+
+    // Lifecycle
+    uint8_t defaultLifespan;      // Default particle age in frames (short-lived)
+    uint8_t intensityMin;         // Minimum spawn intensity (0-255)
+    uint8_t intensityMax;         // Maximum spawn intensity (0-255)
+
+    // Bolt appearance
+    float boltVelocityMin;        // Minimum bolt speed (LEDs/sec)
+    float boltVelocityMax;        // Maximum bolt speed (LEDs/sec)
+    uint8_t fadeRate;             // Intensity decay per frame (0-255)
+
+    // Branching behavior
+    uint8_t branchChance;         // Probability of branching per frame (0-100)
+    uint8_t branchCount;          // Number of branches per trigger (1-4)
+    float branchAngleSpread;      // Angle variation for branches (radians)
+    uint8_t branchIntensityLoss;  // Intensity reduction for branches (0-100%)
+
+    // Audio reactivity
+    float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
+    float organicTransientMin;    // Minimum transient to trigger burst (0-1)
+
+    LightningParams() {
+        baseSpawnChance = 0.15f;
+        audioSpawnBoost = 0.5f;
+        maxParticles = 32;
+        defaultLifespan = 20;  // Short-lived (~0.6 seconds)
+        intensityMin = 180;
+        intensityMax = 255;
+        musicSpawnPulse = 0.6f;
+        organicTransientMin = 0.3f;
+
+        boltVelocityMin = 4.0f;
+        boltVelocityMax = 8.0f;
+        fadeRate = 160;  // Fast fade
+
+        branchChance = 30;
+        branchCount = 2;
+        branchAngleSpread = PI / 4.0f;  // 45 degree spread
+        branchIntensityLoss = 40;  // Branches 40% dimmer
+    }
 };
 
-class Lightning : public Generator {
+/**
+ * Lightning - Particle-based lightning generator
+ *
+ * Features:
+ * - Fast-moving bolts with random directions
+ * - Branching behavior (particles spawn child particles)
+ * - Fast fade for snappy lightning effect
+ * - Beat-synced bolt generation in music mode
+ */
+class Lightning : public ParticleGenerator<32> {
 public:
     Lightning();
-    virtual ~Lightning() override;
+    virtual ~Lightning() override = default;
 
-    // Generator interface implementation
-    virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
-    virtual void reset() override;
-    virtual const char* getName() const override { return "Lightning"; }
-    virtual GeneratorType getType() const override { return GeneratorType::LIGHTNING; }
+    // Generator interface
+    bool begin(const DeviceConfig& config) override;
+    const char* getName() const override { return "Lightning"; }
+    GeneratorType getType() const override { return GeneratorType::LIGHTNING; }
 
-    // Lightning specific methods
-    void update();
-
-    // Parameter configuration
-    void setParams(const LightningParams& params);
-    void resetToDefaults();
+    // Parameter access
+    void setParams(const LightningParams& params) { params_ = params; }
     const LightningParams& getParams() const { return params_; }
     LightningParams& getParamsMutable() { return params_; }
 
-    // Individual parameter setters
-    void setBaseFade(uint8_t fade);
-    void setBoltParams(uint8_t intensityMin, uint8_t intensityMax, float chance);
-    void setAudioParams(float boltBoost, uint8_t intensityBoostMax, int8_t fadeBias);
+protected:
+    // ParticleGenerator hooks
+    void spawnParticles(float dt) override;
+    void updateParticle(Particle* p, float dt) override;
+    void renderParticle(const Particle* p, PixelMatrix& matrix) override;
+    uint32_t particleColor(uint8_t intensity) const override;
 
 private:
-    // Layout-specific lightning algorithms
-    void updateMatrixLightning();     // 2D branching bolts
-    void updateLinearLightning();     // 1D lightning along string
-    void updateRandomLightning();     // Electric arcs between points
+    /**
+     * Spawn branch particles from parent bolt
+     */
+    void spawnBranch(const Particle* parent);
 
-    // Helper functions
-    void generateBolts();
-    void propagateBolts();
-    void applyFade();
-    uint32_t intensityToColor(uint8_t intensity);
-    void createBranch(int startIndex, int direction, uint8_t intensity);
-    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
-
-    // State variables
-    uint8_t* intensity_;      // Lightning intensity instead of heat
-    uint8_t* tempIntensity_;  // Pre-allocated temp buffer for bolt propagation
-
-    // Configuration
     LightningParams params_;
-
-    // Audio input
-    AudioControl audio_;
 };

@@ -1,132 +1,116 @@
 #pragma once
 
-#include "Generator.h"
-#include "../config/TotemDefaults.h"
-
+#include "../particles/ParticleGenerator.h"
+#include "../types/ColorPalette.h"
 
 /**
- * Fire - Realistic fire simulation generator
- *
- * Generates realistic fire patterns using heat diffusion simulation
- * that adapts to different LED layout arrangements:
- * - MATRIX_LAYOUT: Traditional upward heat propagation for 2D matrices
- * - LINEAR_LAYOUT: Lateral heat propagation for strings/linear arrangements
- * - RANDOM_LAYOUT: Omnidirectional heat propagation for scattered layouts
- *
- * Key features:
- * - Layout-aware heat propagation algorithms
- * - Audio-reactive spark generation
- * - Configurable cooling and spark parameters
- * - Realistic fire color palette (red/orange/yellow)
- * - Automatic algorithm selection based on layout type
+ * FireParams - Fire-specific particle parameters
  */
-
 struct FireParams {
-    uint8_t baseCooling         = Defaults::BaseCooling;
-    uint8_t sparkHeatMin        = Defaults::SparkHeatMin;
-    uint8_t sparkHeatMax        = Defaults::SparkHeatMax;
-    float   sparkChance         = Defaults::SparkChance;
-    float   audioSparkBoost     = Defaults::AudioSparkBoost;
-    int8_t  coolingAudioBias    = Defaults::CoolingAudioBias;
-    uint8_t bottomRowsForSparks = Defaults::BottomRowsForSparks;
+    // Spawn behavior
+    float baseSpawnChance;        // Baseline spark spawn probability (0-1)
+    float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
+    uint8_t maxParticles;         // Pool size (48 typical)
 
-    // Layout-specific parameters
-    uint8_t spreadDistance      = Defaults::SpreadDistance;
-    float   heatDecay           = Defaults::HeatDecay;
-    uint8_t maxSparkPositions   = 16;     // Max simultaneous spark positions
-    bool    useMaxHeatOnly      = false;  // Use max heat instead of additive (linear layouts)
+    // Lifecycle
+    uint8_t defaultLifespan;      // Default particle age in frames
+    uint8_t intensityMin;         // Minimum spawn intensity (0-255)
+    uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
-    // Burst mode parameters
-    uint8_t burstSparks         = 8;      // Sparks generated on burst
-    uint16_t suppressionMs      = 300;    // Suppress sparks for this long after burst
+    // Physics
+    float gravity;                // Gravity strength (negative = upward)
+    float windBase;               // Base wind force (LEDs/sec^2)
+    float windVariation;          // Wind variation amount (LEDs/sec^2)
+    float drag;                   // Drag coefficient (0-1)
 
-    // Ember noise floor (subtle ambient glow using noise)
-    uint8_t emberHeatMax        = Defaults::EmberHeatMax;
-    float   emberNoiseSpeed     = Defaults::EmberNoiseSpeed;
+    // Spark appearance
+    float sparkVelocityMin;       // Minimum upward velocity (LEDs/sec)
+    float sparkVelocityMax;       // Maximum upward velocity (LEDs/sec)
+    float sparkSpread;            // Horizontal velocity variation (LEDs/sec)
 
-    // === RHYTHM MODE PARAMETERS ===
-    // When rhythm is detected (audio.hasRhythm()), fire pulses on beat
-    float   musicEmberPulse     = 0.6f;   // How much embers pulse with phase (0=none, 1=full)
-    float   musicSparkPulse     = 0.5f;   // How much spark heat scales with phase (0=none, 1=full)
-    float   musicCoolingPulse   = 15.0f;  // Cooling oscillation amplitude (±value)
+    // Heat trail behavior
+    uint8_t trailHeatFactor;      // Heat multiplier for trail (0-100%)
+    uint8_t trailDecay;           // Heat decay rate per frame (0-255)
 
-    // === ORGANIC MODE PARAMETERS ===
-    // When no rhythm detected (organic mode), fire behaves more organically
-    float   organicSparkChance  = 0.15f;  // Baseline random spark rate (independent of audio)
-    float   organicTransientMin = 0.5f;   // Minimum transient strength to trigger burst (0-1)
-    float   organicAudioMix     = 0.3f;   // How much audio affects organic mode (0=none, 1=full)
-    bool    organicBurstSuppress = false; // Whether to suppress after bursts in organic mode
+    // Audio reactivity
+    float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
+    float organicTransientMin;    // Minimum transient to trigger burst (0-1)
+    uint8_t burstSparks;          // Sparks per burst
+
+    FireParams() {
+        baseSpawnChance = 0.15f;
+        audioSpawnBoost = 0.6f;
+        maxParticles = 48;
+        defaultLifespan = 60;  // ~2 seconds at 30 FPS
+        intensityMin = 160;
+        intensityMax = 255;
+        gravity = -8.0f;  // Negative = upward (fire rises)
+        windBase = 0.0f;
+        windVariation = 0.5f;
+        drag = 0.96f;
+        musicSpawnPulse = 0.6f;
+        organicTransientMin = 0.5f;
+        burstSparks = 8;
+
+        trailHeatFactor = 60;  // 60% of particle intensity left as trail
+        trailDecay = 40;       // Moderate decay rate
+
+        sparkVelocityMin = 1.5f;
+        sparkVelocityMax = 3.5f;
+        sparkSpread = 0.8f;
+    }
 };
 
-class Fire : public Generator {
+/**
+ * Fire - Hybrid particle-based fire generator
+ *
+ * Uses particles for bright sparks and heat field for diffusion.
+ * This combines the best of both approaches:
+ * - Particles: Dynamic, physics-based sparks
+ * - Heat field: Smooth diffusion and glow
+ *
+ * Features:
+ * - Sparks rise from bottom with upward velocity
+ * - Heat trails left behind particles
+ * - Heat diffusion for smooth ember glow
+ * - Beat-synced burst spawning in music mode
+ */
+class Fire : public ParticleGenerator<48> {
 public:
     Fire();
     virtual ~Fire() override;
 
-    // Generator interface implementation
-    virtual bool begin(const DeviceConfig& config) override;
-    virtual void generate(PixelMatrix& matrix, const AudioControl& audio) override;
-    virtual void reset() override;
-    virtual const char* getName() const override { return "Fire"; }
-    virtual GeneratorType getType() const override { return GeneratorType::FIRE; }
+    // Generator interface
+    bool begin(const DeviceConfig& config) override;
+    void generate(PixelMatrix& matrix, const AudioControl& audio) override;
+    void reset() override;
+    const char* getName() const override { return "Fire"; }
+    GeneratorType getType() const override { return GeneratorType::FIRE; }
 
-    // Fire specific methods
-    void update();
-
-    // Parameter configuration
-    void setParams(const FireParams& params);
-    void resetToDefaults();
+    // Parameter access
+    void setParams(const FireParams& params) { params_ = params; }
     const FireParams& getParams() const { return params_; }
-    FireParams& getParamsMutable() { return params_; }  // For SerialConsole and config loading
+    FireParams& getParamsMutable() { return params_; }
 
-    // Individual parameter setters
-    void setBaseCooling(const uint8_t cooling);
-    void setSparkParams(const uint8_t heatMin, const uint8_t heatMax, const float chance);
-    void setAudioParams(const float sparkBoost, const int8_t coolingBias);
-
-    // Layout configuration (post-begin adjustments)
-    void setLayoutType(LayoutType layoutType);
-    void setOrientation(MatrixOrientation orientation);
-
-
-    // Brightness telemetry
-    uint32_t getTotalHeat() const;
-    float getBrightnessPercent() const;
+protected:
+    // ParticleGenerator hooks
+    void spawnParticles(float dt) override;
+    void updateParticle(Particle* p, float dt) override;
+    void renderParticle(const Particle* p, PixelMatrix& matrix) override;
+    uint32_t particleColor(uint8_t intensity) const override;
 
 private:
-    // Layout-specific heat propagation algorithms
-    void updateMatrixFire();     // Traditional 2D upward propagation
-    void updateLinearFire();     // 1D lateral propagation
-    void updateRandomFire();     // Omnidirectional propagation
-
-    // Helper functions
-    void generateSparks();
-    void propagateHeat();
+    /**
+     * Apply cooling to heat buffer
+     */
     void applyCooling();
-    void applyEmbers(float dtMs);    // Subtle ambient ember glow (dtMs = delta time in milliseconds)
-    uint32_t heatToColor(uint8_t heat);
-    // Note: coordsToIndex/indexToCoords are inherited from Generator base class
 
-    // State variables
-    uint8_t* heat_;
-    uint8_t* tempHeat_;  // Pre-allocated temp buffer for heat propagation
+    /**
+     * Blend heat buffer with particle rendering
+     */
+    void blendHeatToMatrix(PixelMatrix& matrix);
 
-    // Configuration
+    uint8_t* heat_;               // Heat field buffer
     FireParams params_;
-
-    // Audio control (from AudioController)
-    AudioControl audio_;  // Current frame audio control
-    float prevPhase_ = 1.0f;  // Previous phase for beat detection
-    uint32_t beatCount_ = 0;  // Beat counter for downbeat detection
-    uint32_t lastBurstMs_;       // When last burst occurred
-    bool inSuppression_;         // Currently suppressing sparks after burst
-
-    // Ember noise state
-    float emberNoisePhase_;      // Phase for noise animation
-    uint8_t emberFrameCounter_;  // Frame counter for update skipping (performance)
-
-    // Layout-specific state
-    uint8_t* sparkPositions_;   // For random layout spark tracking
-    uint8_t numActivePositions_;
-
+    uint8_t beatCount_;           // Beat counter for downbeat detection
 };

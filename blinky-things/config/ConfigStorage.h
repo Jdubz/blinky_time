@@ -23,22 +23,33 @@ class AudioController;
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 25;  // Config schema v25: tempo prior, stability, smoothing params
+    static const uint8_t CONFIG_VERSION = 26;  // Config schema v26: particle-based generators
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
-        float sparkChance;
-        float audioSparkBoost;
-        float heatDecay;
-        float emberNoiseSpeed;
-        uint16_t suppressionMs;
-        uint8_t baseCooling;
-        uint8_t sparkHeatMin;
-        uint8_t sparkHeatMax;
-        int8_t coolingAudioBias;
-        uint8_t spreadDistance;
-        uint8_t emberHeatMax;
-        uint8_t bottomRowsForSparks;
+        // Spawn behavior
+        float baseSpawnChance;
+        float audioSpawnBoost;
+        // Physics
+        float gravity;
+        float windBase;
+        float windVariation;
+        float drag;
+        // Spark appearance
+        float sparkVelocityMin;
+        float sparkVelocityMax;
+        float sparkSpread;
+        // Audio reactivity
+        float musicSpawnPulse;
+        float organicTransientMin;
+        // Lifecycle
+        uint8_t maxParticles;
+        uint8_t defaultLifespan;
+        uint8_t intensityMin;
+        uint8_t intensityMax;
+        // Heat trail
+        uint8_t trailHeatFactor;
+        uint8_t trailDecay;
         uint8_t burstSparks;
     };
 

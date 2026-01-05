@@ -28,7 +28,7 @@ class ParticleGenerator : public Generator {
 public:
     ParticleGenerator()
         : pool_(), gravityForce_(0.0f), windForce_(0.0f, 0.0f),
-          dragForce_(0.98f), prevPhase_(1.0f), lastUpdateMs_(0) {}
+          dragForce_(0.98f), prevPhase_(1.0f) {}
 
     virtual ~ParticleGenerator() override = default;
 

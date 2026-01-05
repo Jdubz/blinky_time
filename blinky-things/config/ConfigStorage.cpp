@@ -85,19 +85,24 @@ void ConfigStorage::loadDefaults() {
     data_.magic = MAGIC_NUMBER;
     data_.version = CONFIG_VERSION;
 
-    // Fire defaults
-    data_.fire.baseCooling = 90;
-    data_.fire.sparkHeatMin = 200;
-    data_.fire.sparkHeatMax = 255;
-    data_.fire.sparkChance = 0.08f;
-    data_.fire.audioSparkBoost = 0.8f;
-    data_.fire.coolingAudioBias = -70;
-    data_.fire.spreadDistance = 3;
-    data_.fire.heatDecay = 0.60f;
-    data_.fire.suppressionMs = 300;
-    data_.fire.emberNoiseSpeed = 0.00033f;
-    data_.fire.emberHeatMax = 18;
-    data_.fire.bottomRowsForSparks = 1;
+    // Fire defaults (particle-based)
+    data_.fire.baseSpawnChance = 0.15f;
+    data_.fire.audioSpawnBoost = 0.6f;
+    data_.fire.gravity = -8.0f;
+    data_.fire.windBase = 0.0f;
+    data_.fire.windVariation = 0.5f;
+    data_.fire.drag = 0.96f;
+    data_.fire.sparkVelocityMin = 1.5f;
+    data_.fire.sparkVelocityMax = 3.5f;
+    data_.fire.sparkSpread = 0.8f;
+    data_.fire.musicSpawnPulse = 0.6f;
+    data_.fire.organicTransientMin = 0.5f;
+    data_.fire.maxParticles = 48;
+    data_.fire.defaultLifespan = 60;
+    data_.fire.intensityMin = 160;
+    data_.fire.intensityMax = 255;
+    data_.fire.trailHeatFactor = 60;
+    data_.fire.trailDecay = 40;
     data_.fire.burstSparks = 8;
 
     // Mic defaults (hardware-primary, window/range normalization)
@@ -284,8 +289,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     };
 
     // Validate critical parameters - if out of range, use defaults
-    validateFloat(data_.fire.heatDecay, 0.0f, 1.0f, F("heatDecay"));
-    validateFloat(data_.fire.sparkChance, 0.0f, 1.0f, F("sparkChance"));
+    validateFloat(data_.fire.baseSpawnChance, 0.0f, 1.0f, F("baseSpawnChance"));
+    validateFloat(data_.fire.audioSpawnBoost, 0.0f, 2.0f, F("audioSpawnBoost"));
 
     // Validate window/range normalization parameters
     validateFloat(data_.mic.peakTau, 0.5f, 10.0f, F("peakTau"));
@@ -353,23 +358,34 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
 
     // Debug: show loaded values
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
-        Serial.print(F("[DEBUG] heatDecay=")); Serial.print(data_.fire.heatDecay, 2);
-        Serial.print(F(" cooling=")); Serial.print(data_.fire.baseCooling);
-        Serial.print(F(" spread=")); Serial.println(data_.fire.spreadDistance);
+        Serial.print(F("[DEBUG] baseSpawnChance=")); Serial.print(data_.fire.baseSpawnChance, 2);
+        Serial.print(F(" trailDecay=")); Serial.print(data_.fire.trailDecay);
+        Serial.print(F(" gravity=")); Serial.println(data_.fire.gravity);
     }
 
-    fireParams.baseCooling = data_.fire.baseCooling;
-    fireParams.sparkHeatMin = data_.fire.sparkHeatMin;
-    fireParams.sparkHeatMax = data_.fire.sparkHeatMax;
-    fireParams.sparkChance = data_.fire.sparkChance;
-    fireParams.audioSparkBoost = data_.fire.audioSparkBoost;
-    fireParams.coolingAudioBias = data_.fire.coolingAudioBias;
-    fireParams.spreadDistance = data_.fire.spreadDistance;
-    fireParams.heatDecay = data_.fire.heatDecay;
-    fireParams.suppressionMs = data_.fire.suppressionMs;
-    fireParams.emberNoiseSpeed = data_.fire.emberNoiseSpeed;
-    fireParams.emberHeatMax = data_.fire.emberHeatMax;
-    fireParams.bottomRowsForSparks = data_.fire.bottomRowsForSparks;
+    // Spawn behavior
+    fireParams.baseSpawnChance = data_.fire.baseSpawnChance;
+    fireParams.audioSpawnBoost = data_.fire.audioSpawnBoost;
+    // Physics
+    fireParams.gravity = data_.fire.gravity;
+    fireParams.windBase = data_.fire.windBase;
+    fireParams.windVariation = data_.fire.windVariation;
+    fireParams.drag = data_.fire.drag;
+    // Spark appearance
+    fireParams.sparkVelocityMin = data_.fire.sparkVelocityMin;
+    fireParams.sparkVelocityMax = data_.fire.sparkVelocityMax;
+    fireParams.sparkSpread = data_.fire.sparkSpread;
+    // Audio reactivity
+    fireParams.musicSpawnPulse = data_.fire.musicSpawnPulse;
+    fireParams.organicTransientMin = data_.fire.organicTransientMin;
+    // Lifecycle
+    fireParams.maxParticles = data_.fire.maxParticles;
+    fireParams.defaultLifespan = data_.fire.defaultLifespan;
+    fireParams.intensityMin = data_.fire.intensityMin;
+    fireParams.intensityMax = data_.fire.intensityMax;
+    // Heat trail
+    fireParams.trailHeatFactor = data_.fire.trailHeatFactor;
+    fireParams.trailDecay = data_.fire.trailDecay;
     fireParams.burstSparks = data_.fire.burstSparks;
 
     // Window/Range normalization parameters
@@ -418,18 +434,29 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
-    data_.fire.baseCooling = fireParams.baseCooling;
-    data_.fire.sparkHeatMin = fireParams.sparkHeatMin;
-    data_.fire.sparkHeatMax = fireParams.sparkHeatMax;
-    data_.fire.sparkChance = fireParams.sparkChance;
-    data_.fire.audioSparkBoost = fireParams.audioSparkBoost;
-    data_.fire.coolingAudioBias = fireParams.coolingAudioBias;
-    data_.fire.spreadDistance = fireParams.spreadDistance;
-    data_.fire.heatDecay = fireParams.heatDecay;
-    data_.fire.suppressionMs = fireParams.suppressionMs;
-    data_.fire.emberNoiseSpeed = fireParams.emberNoiseSpeed;
-    data_.fire.emberHeatMax = fireParams.emberHeatMax;
-    data_.fire.bottomRowsForSparks = fireParams.bottomRowsForSparks;
+    // Spawn behavior
+    data_.fire.baseSpawnChance = fireParams.baseSpawnChance;
+    data_.fire.audioSpawnBoost = fireParams.audioSpawnBoost;
+    // Physics
+    data_.fire.gravity = fireParams.gravity;
+    data_.fire.windBase = fireParams.windBase;
+    data_.fire.windVariation = fireParams.windVariation;
+    data_.fire.drag = fireParams.drag;
+    // Spark appearance
+    data_.fire.sparkVelocityMin = fireParams.sparkVelocityMin;
+    data_.fire.sparkVelocityMax = fireParams.sparkVelocityMax;
+    data_.fire.sparkSpread = fireParams.sparkSpread;
+    // Audio reactivity
+    data_.fire.musicSpawnPulse = fireParams.musicSpawnPulse;
+    data_.fire.organicTransientMin = fireParams.organicTransientMin;
+    // Lifecycle
+    data_.fire.maxParticles = fireParams.maxParticles;
+    data_.fire.defaultLifespan = fireParams.defaultLifespan;
+    data_.fire.intensityMin = fireParams.intensityMin;
+    data_.fire.intensityMax = fireParams.intensityMax;
+    // Heat trail
+    data_.fire.trailHeatFactor = fireParams.trailHeatFactor;
+    data_.fire.trailDecay = fireParams.trailDecay;
     data_.fire.burstSparks = fireParams.burstSparks;
 
     // Window/Range normalization parameters
