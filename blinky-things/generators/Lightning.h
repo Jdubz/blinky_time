@@ -86,6 +86,11 @@ protected:
 
 private:
     /**
+     * Spawn a coherent lightning bolt (connected particle chain)
+     */
+    void spawnBolt();
+
+    /**
      * Spawn branch particles from parent bolt
      */
     void spawnBranch(const Particle* parent);

@@ -26,13 +26,13 @@ void Lightning::spawnParticles(float dt) {
 
         // Burst on beat
         if (beatHappened()) {
-            boltCount = 3;
+            boltCount = 2;  // Reduced from 3 - spawn fewer but more coherent bolts
         }
     } else {
         // ORGANIC MODE: Transient-reactive
         if (audio_.pulse > params_.organicTransientMin) {
             spawnProb += params_.audioSpawnBoost * audio_.pulse;
-            boltCount = 2;
+            boltCount = 1;  // Reduced from 2
         }
     }
 
@@ -41,31 +41,56 @@ void Lightning::spawnParticles(float dt) {
         boltCount++;
     }
 
-    // Spawn bolts from random positions with random directions
+    // Spawn coherent lightning bolts as connected particle chains
     for (uint8_t i = 0; i < boltCount && !pool_.isFull(); i++) {
-        float x = random(width_ * 100) / 100.0f;
-        float y = random(height_ * 100) / 100.0f;
+        spawnBolt();
+    }
+}
 
-        // Random direction
-        float angle = random(360) * DEG_TO_RAD;
-        float speed = params_.boltVelocityMin +
-                     random(100) * (params_.boltVelocityMax - params_.boltVelocityMin) / 100.0f;
+/**
+ * Spawn a coherent lightning bolt as a connected chain of particles
+ * Uses Bresenham's line algorithm to create linear bolt structure
+ */
+void Lightning::spawnBolt() {
+    // Choose random start and end points
+    float x0 = random(width_ * 100) / 100.0f;
+    float y0 = random(height_ * 100) / 100.0f;
+    float x1 = random(width_ * 100) / 100.0f;
+    float y1 = random(height_ * 100) / 100.0f;
 
-        float vx = cos(angle) * speed;
-        float vy = sin(angle) * speed;
+    // Calculate bolt intensity (brightest on beat)
+    uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
+    if (audio_.hasRhythm()) {
+        float phaseMod = audio_.phaseToPulse();
+        float intensityScale = 0.6f + 0.4f * phaseMod;
+        intensity = (uint8_t)(intensity * intensityScale);
+    }
 
-        uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
+    // Use Bresenham's line algorithm to create connected particle chain
+    int dx = abs((int)x1 - (int)x0);
+    int dy = abs((int)y1 - (int)y0);
+    int steps = max(dx, dy);
 
-        // Add phase-modulated intensity boost when rhythm is detected
-        if (audio_.hasRhythm()) {
-            // Bolts are brightest on-beat, dimmer off-beat
-            float phaseMod = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
-            float intensityScale = 0.6f + 0.4f * phaseMod;  // 60% to 100%
-            intensity = (uint8_t)(intensity * intensityScale);
-        }
+    // Limit bolt length to prevent using entire pool
+    steps = min(steps, 12);  // Max 12 particles per bolt
 
-        pool_.spawn(x, y, vx, vy, intensity, params_.defaultLifespan, 1.0f,
-                   ParticleFlags::BRANCH);  // Manual fade in updateParticle(), not auto-fade
+    if (steps == 0) return;  // Degenerate case
+
+    float xStep = (x1 - x0) / steps;
+    float yStep = (y1 - y0) / steps;
+
+    // Spawn particles along the line with slight random jitter for organic look
+    for (int step = 0; step <= steps && !pool_.isFull(); step++) {
+        float x = x0 + xStep * step;
+        float y = y0 + yStep * step;
+
+        // Add small random jitter (±0.3 pixels) for organic lightning appearance
+        x += (random(60) - 30) / 100.0f;
+        y += (random(60) - 30) / 100.0f;
+
+        // All particles in bolt are stationary (vx=0, vy=0) and fade together
+        pool_.spawn(x, y, 0.0f, 0.0f, intensity, params_.defaultLifespan, 1.0f,
+                   ParticleFlags::BRANCH);  // Can still branch
     }
 }
 
@@ -116,27 +141,45 @@ void Lightning::spawnBranch(const Particle* parent) {
     uint8_t available = pool_.getCapacity() > pool_.getActiveCount()
                         ? pool_.getCapacity() - pool_.getActiveCount()
                         : 0;
-    uint8_t branches = min(params_.branchCount, available);
 
-    // Calculate parent angle
-    float parentAngle = atan2(parent->vy, parent->vx);
+    // Spawn short branch lines (3-5 particles per branch)
+    uint8_t branchLength = 3 + random(3);  // 3-5 particles
+    uint8_t particlesNeeded = branchLength * params_.branchCount;
 
-    for (uint8_t i = 0; i < branches; i++) {
-        // Calculate branch angle (perpendicular to parent with variation)
-        float branchAngle = parentAngle +
-                           (random(200) - 100) * params_.branchAngleSpread / 100.0f;
+    if (particlesNeeded > available) {
+        return;  // Not enough space for coherent branches
+    }
 
-        // Branch velocity (70% of parent speed)
-        float speed = sqrt(parent->vx * parent->vx + parent->vy * parent->vy) * 0.7f;
-        float vx = cos(branchAngle) * speed;
-        float vy = sin(branchAngle) * speed;
+    // Reduced intensity for branches
+    uint8_t intensity = parent->intensity * (100 - params_.branchIntensityLoss) / 100;
 
-        // Reduced intensity
-        uint8_t intensity = parent->intensity * (100 - params_.branchIntensityLoss) / 100;
+    for (uint8_t i = 0; i < params_.branchCount; i++) {
+        // Random branch direction (perpendicular-ish to main bolt)
+        float branchAngle = random(360) * DEG_TO_RAD;
 
-        // Branches don't branch (no BRANCH flag) and use manual fade
-        pool_.spawn(parent->x, parent->y, vx, vy, intensity,
-                   params_.defaultLifespan / 2, 1.0f,
-                   0);  // No flags - manual fade in updateParticle()
+        // Branch extends outward from parent position
+        float x0 = parent->x;
+        float y0 = parent->y;
+
+        // Calculate end point of branch
+        float branchDist = branchLength;
+        float x1 = x0 + cos(branchAngle) * branchDist;
+        float y1 = y0 + sin(branchAngle) * branchDist;
+
+        // Spawn connected particles along branch line
+        for (uint8_t step = 0; step < branchLength && !pool_.isFull(); step++) {
+            float t = (float)step / branchLength;
+            float x = x0 + (x1 - x0) * t;
+            float y = y0 + (y1 - y0) * t;
+
+            // Small jitter for organic look
+            x += (random(40) - 20) / 100.0f;
+            y += (random(40) - 20) / 100.0f;
+
+            // Branches are stationary and fade quickly (no BRANCH flag)
+            pool_.spawn(x, y, 0.0f, 0.0f, intensity,
+                       params_.defaultLifespan / 2, 1.0f,
+                       0);  // No flags - branches don't branch again
+        }
     }
 }

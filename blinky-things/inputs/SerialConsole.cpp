@@ -17,6 +17,16 @@ SerialConsole* SerialConsole::instance_ = nullptr;
 // Static debug channels - default to NONE (no debug output)
 DebugChannel SerialConsole::debugChannels_ = DebugChannel::NONE;
 
+// Callback for marking config dirty when parameters change
+void onParamChanged() {
+    if (SerialConsole::instance_) {
+        ConfigStorage* storage = SerialConsole::instance_->getConfigStorage();
+        if (storage) {
+            storage->markDirty();
+        }
+    }
+}
+
 // File-scope storage for effect settings (accessible from both register and sync functions)
 static float effectHueShift_ = 0.0f;
 static float effectRotationSpeed_ = 0.0f;
@@ -84,45 +94,45 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 
     // Spawn behavior
     settings_.registerFloat("basespawnchance", &fp->baseSpawnChance, "fire",
-        "Baseline spark spawn probability", 0.0f, 1.0f);
+        "Baseline spark spawn probability", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("audiospawnboost", &fp->audioSpawnBoost, "fire",
-        "Audio reactivity multiplier", 0.0f, 2.0f);
+        "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
     settings_.registerUint8("burstsparks", &fp->burstSparks, "fire",
-        "Sparks per beat burst", 1, 20);
+        "Sparks per beat burst", 1, 20, onParamChanged);
 
     // Physics
     settings_.registerFloat("gravity", &fp->gravity, "fire",
-        "Gravity strength (negative=upward)", -20.0f, 20.0f);
+        "Gravity strength (negative=upward)", -20.0f, 20.0f, onParamChanged);
     settings_.registerFloat("windbase", &fp->windBase, "fire",
-        "Base wind force", -5.0f, 5.0f);
+        "Base wind force", -5.0f, 5.0f, onParamChanged);
     settings_.registerFloat("windvariation", &fp->windVariation, "fire",
-        "Wind variation amount", 0.0f, 2.0f);
+        "Wind variation amount", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("drag", &fp->drag, "fire",
-        "Drag coefficient", 0.9f, 1.0f);
+        "Drag coefficient", 0.9f, 1.0f, onParamChanged);
 
     // Spark appearance
     settings_.registerFloat("sparkvelmin", &fp->sparkVelocityMin, "fire",
-        "Minimum upward velocity", 0.0f, 10.0f);
+        "Minimum upward velocity", 0.0f, 10.0f, onParamChanged);
     settings_.registerFloat("sparkvelmax", &fp->sparkVelocityMax, "fire",
-        "Maximum upward velocity", 0.0f, 10.0f);
+        "Maximum upward velocity", 0.0f, 10.0f, onParamChanged);
     settings_.registerFloat("sparkspread", &fp->sparkSpread, "fire",
-        "Horizontal velocity spread", 0.0f, 5.0f);
+        "Horizontal velocity spread", 0.0f, 5.0f, onParamChanged);
 
     // Lifecycle
     settings_.registerUint8("maxparticles", &fp->maxParticles, "fire",
-        "Particle pool size", 16, 64);
+        "Particle pool size", 16, 64, onParamChanged);
     settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
-        "Default particle lifespan (frames)", 20, 120);
+        "Default particle lifespan (frames)", 20, 120, onParamChanged);
     settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
-        "Minimum spawn intensity", 0, 255);
+        "Minimum spawn intensity", 0, 255, onParamChanged);
     settings_.registerUint8("intensitymax", &fp->intensityMax, "fire",
-        "Maximum spawn intensity", 0, 255);
+        "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Heat trail
     settings_.registerUint8("trailheatfactor", &fp->trailHeatFactor, "fire",
-        "Heat trail intensity (%)", 0, 100);
+        "Heat trail intensity (%)", 0, 100, onParamChanged);
     settings_.registerUint8("traildecay", &fp->trailDecay, "fire",
-        "Heat decay rate per frame", 0, 255);
+        "Heat decay rate per frame", 0, 255, onParamChanged);
 }
 
 // === MUSIC MODE FIRE SETTINGS ===
@@ -131,7 +141,7 @@ void SerialConsole::registerFireMusicSettings(FireParams* fp) {
     if (!fp) return;
 
     settings_.registerFloat("musicspawnpulse", &fp->musicSpawnPulse, "firemusic",
-        "Phase modulation for spawn rate", 0.0f, 1.0f);
+        "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
 }
 
 // === ORGANIC MODE FIRE SETTINGS ===
@@ -140,7 +150,7 @@ void SerialConsole::registerFireOrganicSettings(FireParams* fp) {
     if (!fp) return;
 
     settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fireorganic",
-        "Min transient to trigger burst", 0.0f, 1.0f);
+        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 }
 
 // === AUDIO SETTINGS ===
@@ -621,8 +631,14 @@ bool SerialConsole::handleModeCommand(const char* cmd) {
 // === CONFIGURATION COMMANDS ===
 bool SerialConsole::handleConfigCommand(const char* cmd) {
     if (strcmp(cmd, "save") == 0) {
-        if (configStorage_ && fireGenerator_ && mic_) {
-            configStorage_->saveConfiguration(fireGenerator_->getParams(), *mic_, audioCtrl_);
+        if (configStorage_ && fireGenerator_ && waterGenerator_ && lightningGenerator_ && mic_) {
+            configStorage_->saveConfiguration(
+                fireGenerator_->getParams(),
+                waterGenerator_->getParams(),
+                lightningGenerator_->getParams(),
+                *mic_,
+                audioCtrl_
+            );
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -631,8 +647,14 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     }
 
     if (strcmp(cmd, "load") == 0) {
-        if (configStorage_ && fireGenerator_ && mic_) {
-            configStorage_->loadConfiguration(fireGenerator_->getParamsMutable(), *mic_, audioCtrl_);
+        if (configStorage_ && fireGenerator_ && waterGenerator_ && lightningGenerator_ && mic_) {
+            configStorage_->loadConfiguration(
+                fireGenerator_->getParamsMutable(),
+                waterGenerator_->getParamsMutable(),
+                lightningGenerator_->getParamsMutable(),
+                *mic_,
+                audioCtrl_
+            );
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -810,53 +832,53 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
 
     // Spawn behavior
     settings_.registerFloat("basespawnchance", &wp->baseSpawnChance, "water",
-        "Baseline drop spawn probability", 0.0f, 1.0f);
+        "Baseline drop spawn probability", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("audiospawnboost", &wp->audioSpawnBoost, "water",
-        "Audio reactivity multiplier", 0.0f, 2.0f);
+        "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
 
     // Physics
     settings_.registerFloat("gravity", &wp->gravity, "water",
-        "Gravity strength (positive=downward)", 0.0f, 20.0f);
+        "Gravity strength (positive=downward)", 0.0f, 20.0f, onParamChanged);
     settings_.registerFloat("windbase", &wp->windBase, "water",
-        "Base wind force", -5.0f, 5.0f);
+        "Base wind force", -5.0f, 5.0f, onParamChanged);
     settings_.registerFloat("windvariation", &wp->windVariation, "water",
-        "Wind variation amount", 0.0f, 2.0f);
+        "Wind variation amount", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("drag", &wp->drag, "water",
-        "Drag coefficient", 0.9f, 1.0f);
+        "Drag coefficient", 0.9f, 1.0f, onParamChanged);
 
     // Drop appearance
     settings_.registerFloat("dropvelmin", &wp->dropVelocityMin, "water",
-        "Minimum downward velocity", 0.0f, 10.0f);
+        "Minimum downward velocity", 0.0f, 10.0f, onParamChanged);
     settings_.registerFloat("dropvelmax", &wp->dropVelocityMax, "water",
-        "Maximum downward velocity", 0.0f, 10.0f);
+        "Maximum downward velocity", 0.0f, 10.0f, onParamChanged);
     settings_.registerFloat("dropspread", &wp->dropSpread, "water",
-        "Horizontal velocity spread", 0.0f, 5.0f);
+        "Horizontal velocity spread", 0.0f, 5.0f, onParamChanged);
 
     // Splash behavior
     settings_.registerUint8("splashparticles", &wp->splashParticles, "water",
-        "Particles spawned per splash", 0, 10);
+        "Particles spawned per splash", 0, 10, onParamChanged);
     settings_.registerFloat("splashvelmin", &wp->splashVelocityMin, "water",
-        "Minimum splash velocity", 0.0f, 10.0f);
+        "Minimum splash velocity", 0.0f, 10.0f, onParamChanged);
     settings_.registerFloat("splashvelmax", &wp->splashVelocityMax, "water",
-        "Maximum splash velocity", 0.0f, 10.0f);
+        "Maximum splash velocity", 0.0f, 10.0f, onParamChanged);
     settings_.registerUint8("splashintensity", &wp->splashIntensity, "water",
-        "Splash particle intensity", 0, 255);
+        "Splash particle intensity", 0, 255, onParamChanged);
 
     // Lifecycle
     settings_.registerUint8("maxparticles", &wp->maxParticles, "water",
-        "Particle pool size", 16, 128);
+        "Particle pool size", 16, 128, onParamChanged);
     settings_.registerUint8("defaultlifespan", &wp->defaultLifespan, "water",
-        "Default particle lifespan (frames)", 20, 180);
+        "Default particle lifespan (frames)", 20, 180, onParamChanged);
     settings_.registerUint8("intensitymin", &wp->intensityMin, "water",
-        "Minimum spawn intensity", 0, 255);
+        "Minimum spawn intensity", 0, 255, onParamChanged);
     settings_.registerUint8("intensitymax", &wp->intensityMax, "water",
-        "Maximum spawn intensity", 0, 255);
+        "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Audio reactivity
     settings_.registerFloat("musicspawnpulse", &wp->musicSpawnPulse, "water",
-        "Phase modulation for spawn rate", 0.0f, 1.0f);
+        "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("organictransmin", &wp->organicTransientMin, "water",
-        "Min transient to trigger burst", 0.0f, 1.0f);
+        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 }
 
 // === LIGHTNING SETTINGS (Particle-based) ===
@@ -865,43 +887,43 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
 
     // Spawn behavior
     settings_.registerFloat("basespawnchance", &lp->baseSpawnChance, "lightning",
-        "Baseline bolt spawn probability", 0.0f, 1.0f);
+        "Baseline bolt spawn probability", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("audiospawnboost", &lp->audioSpawnBoost, "lightning",
-        "Audio reactivity multiplier", 0.0f, 2.0f);
+        "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
 
     // Bolt appearance
     settings_.registerFloat("boltvelmin", &lp->boltVelocityMin, "lightning",
-        "Minimum bolt speed", 0.0f, 20.0f);
+        "Minimum bolt speed", 0.0f, 20.0f, onParamChanged);
     settings_.registerFloat("boltvelmax", &lp->boltVelocityMax, "lightning",
-        "Maximum bolt speed", 0.0f, 20.0f);
+        "Maximum bolt speed", 0.0f, 20.0f, onParamChanged);
     settings_.registerUint8("faderate", &lp->fadeRate, "lightning",
-        "Intensity decay per frame", 0, 255);
+        "Intensity decay per frame", 0, 255, onParamChanged);
 
     // Branching behavior
     settings_.registerUint8("branchchance", &lp->branchChance, "lightning",
-        "Branch probability (%)", 0, 100);
+        "Branch probability (%)", 0, 100, onParamChanged);
     settings_.registerUint8("branchcount", &lp->branchCount, "lightning",
-        "Branches per trigger", 1, 4);
+        "Branches per trigger", 1, 4, onParamChanged);
     settings_.registerFloat("branchspread", &lp->branchAngleSpread, "lightning",
-        "Branch angle spread (radians)", 0.0f, 3.14159f);
+        "Branch angle spread (radians)", 0.0f, 3.14159f, onParamChanged);
     settings_.registerUint8("branchintloss", &lp->branchIntensityLoss, "lightning",
-        "Branch intensity reduction (%)", 0, 100);
+        "Branch intensity reduction (%)", 0, 100, onParamChanged);
 
     // Lifecycle
     settings_.registerUint8("maxparticles", &lp->maxParticles, "lightning",
-        "Particle pool size", 16, 64);
+        "Particle pool size", 16, 64, onParamChanged);
     settings_.registerUint8("defaultlifespan", &lp->defaultLifespan, "lightning",
-        "Default particle lifespan (frames)", 10, 60);
+        "Default particle lifespan (frames)", 10, 60, onParamChanged);
     settings_.registerUint8("intensitymin", &lp->intensityMin, "lightning",
-        "Minimum spawn intensity", 0, 255);
+        "Minimum spawn intensity", 0, 255, onParamChanged);
     settings_.registerUint8("intensitymax", &lp->intensityMax, "lightning",
-        "Maximum spawn intensity", 0, 255);
+        "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Audio reactivity
     settings_.registerFloat("musicspawnpulse", &lp->musicSpawnPulse, "lightning",
-        "Phase modulation for spawn rate", 0.0f, 1.0f);
+        "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("organictransmin", &lp->organicTransientMin, "lightning",
-        "Min transient to trigger burst", 0.0f, 1.0f);
+        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 }
 
 // === EFFECT SETTINGS ===

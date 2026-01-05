@@ -105,6 +105,44 @@ void ConfigStorage::loadDefaults() {
     data_.fire.trailDecay = 40;
     data_.fire.burstSparks = 8;
 
+    // Water defaults (particle-based)
+    data_.water.baseSpawnChance = 0.25f;
+    data_.water.audioSpawnBoost = 0.4f;
+    data_.water.gravity = 5.0f;
+    data_.water.windBase = 0.0f;
+    data_.water.windVariation = 0.3f;
+    data_.water.drag = 0.99f;
+    data_.water.dropVelocityMin = 0.5f;
+    data_.water.dropVelocityMax = 1.5f;
+    data_.water.dropSpread = 0.3f;
+    data_.water.splashVelocityMin = 0.5f;
+    data_.water.splashVelocityMax = 2.0f;
+    data_.water.musicSpawnPulse = 0.5f;
+    data_.water.organicTransientMin = 0.3f;
+    data_.water.maxParticles = 64;
+    data_.water.defaultLifespan = 90;
+    data_.water.intensityMin = 80;
+    data_.water.intensityMax = 200;
+    data_.water.splashParticles = 6;
+    data_.water.splashIntensity = 120;
+
+    // Lightning defaults (particle-based)
+    data_.lightning.baseSpawnChance = 0.15f;
+    data_.lightning.audioSpawnBoost = 0.5f;
+    data_.lightning.boltVelocityMin = 4.0f;
+    data_.lightning.boltVelocityMax = 8.0f;
+    data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
+    data_.lightning.musicSpawnPulse = 0.6f;
+    data_.lightning.organicTransientMin = 0.3f;
+    data_.lightning.maxParticles = 32;
+    data_.lightning.defaultLifespan = 20;
+    data_.lightning.intensityMin = 180;
+    data_.lightning.intensityMax = 255;
+    data_.lightning.fadeRate = 160;
+    data_.lightning.branchChance = 30;
+    data_.lightning.branchCount = 2;
+    data_.lightning.branchIntensityLoss = 40;
+
     // Mic defaults (hardware-primary, window/range normalization)
     // Window/Range normalization parameters
     data_.mic.peakTau = 2.0f;        // 2s peak adaptation
@@ -260,7 +298,8 @@ void ConfigStorage::saveToFlash() {
 #endif
 }
 
-void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, AudioController* audioCtrl) {
+void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
+                                      AdaptiveMic& mic, AudioController* audioCtrl) {
     // Validation helpers to reduce code duplication
     bool corrupt = false;
 
@@ -388,6 +427,55 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     fireParams.trailDecay = data_.fire.trailDecay;
     fireParams.burstSparks = data_.fire.burstSparks;
 
+    // === WATER PARAMETERS ===
+    // Spawn behavior
+    waterParams.baseSpawnChance = data_.water.baseSpawnChance;
+    waterParams.audioSpawnBoost = data_.water.audioSpawnBoost;
+    // Physics
+    waterParams.gravity = data_.water.gravity;
+    waterParams.windBase = data_.water.windBase;
+    waterParams.windVariation = data_.water.windVariation;
+    waterParams.drag = data_.water.drag;
+    // Drop appearance
+    waterParams.dropVelocityMin = data_.water.dropVelocityMin;
+    waterParams.dropVelocityMax = data_.water.dropVelocityMax;
+    waterParams.dropSpread = data_.water.dropSpread;
+    // Splash behavior
+    waterParams.splashVelocityMin = data_.water.splashVelocityMin;
+    waterParams.splashVelocityMax = data_.water.splashVelocityMax;
+    // Audio reactivity
+    waterParams.musicSpawnPulse = data_.water.musicSpawnPulse;
+    waterParams.organicTransientMin = data_.water.organicTransientMin;
+    // Lifecycle
+    waterParams.maxParticles = data_.water.maxParticles;
+    waterParams.defaultLifespan = data_.water.defaultLifespan;
+    waterParams.intensityMin = data_.water.intensityMin;
+    waterParams.intensityMax = data_.water.intensityMax;
+    waterParams.splashParticles = data_.water.splashParticles;
+    waterParams.splashIntensity = data_.water.splashIntensity;
+
+    // === LIGHTNING PARAMETERS ===
+    // Spawn behavior
+    lightningParams.baseSpawnChance = data_.lightning.baseSpawnChance;
+    lightningParams.audioSpawnBoost = data_.lightning.audioSpawnBoost;
+    // Bolt appearance
+    lightningParams.boltVelocityMin = data_.lightning.boltVelocityMin;
+    lightningParams.boltVelocityMax = data_.lightning.boltVelocityMax;
+    // Branching
+    lightningParams.branchAngleSpread = data_.lightning.branchAngleSpread;
+    // Audio reactivity
+    lightningParams.musicSpawnPulse = data_.lightning.musicSpawnPulse;
+    lightningParams.organicTransientMin = data_.lightning.organicTransientMin;
+    // Lifecycle
+    lightningParams.maxParticles = data_.lightning.maxParticles;
+    lightningParams.defaultLifespan = data_.lightning.defaultLifespan;
+    lightningParams.intensityMin = data_.lightning.intensityMin;
+    lightningParams.intensityMax = data_.lightning.intensityMax;
+    lightningParams.fadeRate = data_.lightning.fadeRate;
+    lightningParams.branchChance = data_.lightning.branchChance;
+    lightningParams.branchCount = data_.lightning.branchCount;
+    lightningParams.branchIntensityLoss = data_.lightning.branchIntensityLoss;
+
     // Window/Range normalization parameters
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
@@ -433,7 +521,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, AdaptiveMic& mic, 
     }
 }
 
-void ConfigStorage::saveConfiguration(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
+void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+                                      const AdaptiveMic& mic, const AudioController* audioCtrl) {
     // Spawn behavior
     data_.fire.baseSpawnChance = fireParams.baseSpawnChance;
     data_.fire.audioSpawnBoost = fireParams.audioSpawnBoost;
@@ -458,6 +547,55 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     data_.fire.trailHeatFactor = fireParams.trailHeatFactor;
     data_.fire.trailDecay = fireParams.trailDecay;
     data_.fire.burstSparks = fireParams.burstSparks;
+
+    // === WATER PARAMETERS ===
+    // Spawn behavior
+    data_.water.baseSpawnChance = waterParams.baseSpawnChance;
+    data_.water.audioSpawnBoost = waterParams.audioSpawnBoost;
+    // Physics
+    data_.water.gravity = waterParams.gravity;
+    data_.water.windBase = waterParams.windBase;
+    data_.water.windVariation = waterParams.windVariation;
+    data_.water.drag = waterParams.drag;
+    // Drop appearance
+    data_.water.dropVelocityMin = waterParams.dropVelocityMin;
+    data_.water.dropVelocityMax = waterParams.dropVelocityMax;
+    data_.water.dropSpread = waterParams.dropSpread;
+    // Splash behavior
+    data_.water.splashVelocityMin = waterParams.splashVelocityMin;
+    data_.water.splashVelocityMax = waterParams.splashVelocityMax;
+    // Audio reactivity
+    data_.water.musicSpawnPulse = waterParams.musicSpawnPulse;
+    data_.water.organicTransientMin = waterParams.organicTransientMin;
+    // Lifecycle
+    data_.water.maxParticles = waterParams.maxParticles;
+    data_.water.defaultLifespan = waterParams.defaultLifespan;
+    data_.water.intensityMin = waterParams.intensityMin;
+    data_.water.intensityMax = waterParams.intensityMax;
+    data_.water.splashParticles = waterParams.splashParticles;
+    data_.water.splashIntensity = waterParams.splashIntensity;
+
+    // === LIGHTNING PARAMETERS ===
+    // Spawn behavior
+    data_.lightning.baseSpawnChance = lightningParams.baseSpawnChance;
+    data_.lightning.audioSpawnBoost = lightningParams.audioSpawnBoost;
+    // Bolt appearance
+    data_.lightning.boltVelocityMin = lightningParams.boltVelocityMin;
+    data_.lightning.boltVelocityMax = lightningParams.boltVelocityMax;
+    // Branching
+    data_.lightning.branchAngleSpread = lightningParams.branchAngleSpread;
+    // Audio reactivity
+    data_.lightning.musicSpawnPulse = lightningParams.musicSpawnPulse;
+    data_.lightning.organicTransientMin = lightningParams.organicTransientMin;
+    // Lifecycle
+    data_.lightning.maxParticles = lightningParams.maxParticles;
+    data_.lightning.defaultLifespan = lightningParams.defaultLifespan;
+    data_.lightning.intensityMin = lightningParams.intensityMin;
+    data_.lightning.intensityMax = lightningParams.intensityMax;
+    data_.lightning.fadeRate = lightningParams.fadeRate;
+    data_.lightning.branchChance = lightningParams.branchChance;
+    data_.lightning.branchCount = lightningParams.branchCount;
+    data_.lightning.branchIntensityLoss = lightningParams.branchIntensityLoss;
 
     // Window/Range normalization parameters
     data_.mic.peakTau = mic.peakTau;
@@ -508,9 +646,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const Adapti
     lastSaveMs_ = millis();
 }
 
-void ConfigStorage::saveIfDirty(const FireParams& fireParams, const AdaptiveMic& mic, const AudioController* audioCtrl) {
+void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
+                                const AdaptiveMic& mic, const AudioController* audioCtrl) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, mic, audioCtrl);
+        saveConfiguration(fireParams, waterParams, lightningParams, mic, audioCtrl);
     }
 }
 
