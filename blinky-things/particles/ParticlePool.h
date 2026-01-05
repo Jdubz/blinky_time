@@ -92,6 +92,7 @@ public:
                 // Auto-kill if died naturally, but only if the update didn't already change activeCount_
                 // (explicit kill() will have already decremented activeCount_)
                 if (!particles_[i].isAlive() &&
+                    // cppcheck-suppress knownConditionTrueFalse
                     activeCount_ == beforeCount &&
                     activeCount_ > 0) {
                     activeCount_--;
