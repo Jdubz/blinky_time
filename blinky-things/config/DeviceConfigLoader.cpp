@@ -1,14 +1,9 @@
 #include "DeviceConfigLoader.h"
 #include "../inputs/SerialConsole.h"
 
-// Static storage for deviceName strings (since DeviceConfig uses const char*)
+// Static storage for deviceName string only (since DeviceConfig.deviceName is const char*)
+// Other fields are copied by value, so they can be local variables
 static char deviceNameBuffer[32];
-static MatrixConfig matrixConfigBuffer;
-static ChargingConfig chargingConfigBuffer;
-static IMUConfig imuConfigBuffer;
-static SerialConfig serialConfigBuffer;
-static MicConfig micConfigBuffer;
-static FireDefaults fireDefaultsBuffer;
 
 bool DeviceConfigLoader::loadFromFlash(ConfigStorage& storage, DeviceConfig& outConfig) {
     if (!storage.isDeviceConfigValid()) {
@@ -24,61 +19,62 @@ bool DeviceConfigLoader::loadFromFlash(ConfigStorage& storage, DeviceConfig& out
         return false;
     }
 
-    // Convert string fields (copy to static buffers since DeviceConfig uses pointers)
+    // Convert string fields (copy to static buffer since DeviceConfig.deviceName is const char*)
     strncpy(deviceNameBuffer, stored.deviceName, sizeof(deviceNameBuffer) - 1);
     deviceNameBuffer[sizeof(deviceNameBuffer) - 1] = '\0';
 
-    // Convert MatrixConfig
-    matrixConfigBuffer.width = stored.ledWidth;
-    matrixConfigBuffer.height = stored.ledHeight;
-    matrixConfigBuffer.ledPin = stored.ledPin;
-    matrixConfigBuffer.brightness = stored.brightness;
-    matrixConfigBuffer.ledType = stored.ledType;
-    matrixConfigBuffer.orientation = (MatrixOrientation)stored.orientation;
-    matrixConfigBuffer.layoutType = (LayoutType)stored.layoutType;
+    // Convert to local structs (copied by value into outConfig)
+    MatrixConfig matrix;
+    matrix.width = stored.ledWidth;
+    matrix.height = stored.ledHeight;
+    matrix.ledPin = stored.ledPin;
+    matrix.brightness = stored.brightness;
+    matrix.ledType = stored.ledType;
+    matrix.orientation = (MatrixOrientation)stored.orientation;
+    matrix.layoutType = (LayoutType)stored.layoutType;
 
-    // Convert ChargingConfig
-    chargingConfigBuffer.fastChargeEnabled = stored.fastChargeEnabled;
-    chargingConfigBuffer.lowBatteryThreshold = stored.lowBatteryThreshold;
-    chargingConfigBuffer.criticalBatteryThreshold = stored.criticalBatteryThreshold;
-    chargingConfigBuffer.minVoltage = stored.minVoltage;
-    chargingConfigBuffer.maxVoltage = stored.maxVoltage;
+    ChargingConfig charging;
+    charging.fastChargeEnabled = stored.fastChargeEnabled;
+    charging.lowBatteryThreshold = stored.lowBatteryThreshold;
+    charging.criticalBatteryThreshold = stored.criticalBatteryThreshold;
+    charging.minVoltage = stored.minVoltage;
+    charging.maxVoltage = stored.maxVoltage;
 
-    // Convert IMUConfig
-    imuConfigBuffer.upVectorX = stored.upVectorX;
-    imuConfigBuffer.upVectorY = stored.upVectorY;
-    imuConfigBuffer.upVectorZ = stored.upVectorZ;
-    imuConfigBuffer.rotationDegrees = stored.rotationDegrees;
-    imuConfigBuffer.invertZ = stored.invertZ;
-    imuConfigBuffer.swapXY = stored.swapXY;
-    imuConfigBuffer.invertX = stored.invertX;
-    imuConfigBuffer.invertY = stored.invertY;
+    IMUConfig imu;
+    imu.upVectorX = stored.upVectorX;
+    imu.upVectorY = stored.upVectorY;
+    imu.upVectorZ = stored.upVectorZ;
+    imu.rotationDegrees = stored.rotationDegrees;
+    imu.invertZ = stored.invertZ;
+    imu.swapXY = stored.swapXY;
+    imu.invertX = stored.invertX;
+    imu.invertY = stored.invertY;
 
-    // Convert SerialConfig
-    serialConfigBuffer.baudRate = stored.baudRate;
-    serialConfigBuffer.initTimeoutMs = stored.initTimeoutMs;
+    SerialConfig serial;
+    serial.baudRate = stored.baudRate;
+    serial.initTimeoutMs = stored.initTimeoutMs;
 
-    // Convert MicConfig
-    micConfigBuffer.sampleRate = stored.sampleRate;
-    micConfigBuffer.bufferSize = stored.bufferSize;
+    MicConfig mic;
+    mic.sampleRate = stored.sampleRate;
+    mic.bufferSize = stored.bufferSize;
 
-    // Convert FireDefaults
-    fireDefaultsBuffer.baseCooling = stored.baseCooling;
-    fireDefaultsBuffer.sparkHeatMin = stored.sparkHeatMin;
-    fireDefaultsBuffer.sparkHeatMax = stored.sparkHeatMax;
-    fireDefaultsBuffer.sparkChance = stored.sparkChance;
-    fireDefaultsBuffer.audioSparkBoost = stored.audioSparkBoost;
-    fireDefaultsBuffer.coolingAudioBias = stored.coolingAudioBias;
-    fireDefaultsBuffer.bottomRowsForSparks = stored.bottomRowsForSparks;
+    FireDefaults fire;
+    fire.baseCooling = stored.baseCooling;
+    fire.sparkHeatMin = stored.sparkHeatMin;
+    fire.sparkHeatMax = stored.sparkHeatMax;
+    fire.sparkChance = stored.sparkChance;
+    fire.audioSparkBoost = stored.audioSparkBoost;
+    fire.coolingAudioBias = stored.coolingAudioBias;
+    fire.bottomRowsForSparks = stored.bottomRowsForSparks;
 
-    // Populate output DeviceConfig with pointers to static buffers
+    // Populate output DeviceConfig (structs copied by value, deviceName by pointer)
     outConfig.deviceName = deviceNameBuffer;
-    outConfig.matrix = matrixConfigBuffer;
-    outConfig.charging = chargingConfigBuffer;
-    outConfig.imu = imuConfigBuffer;
-    outConfig.serial = serialConfigBuffer;
-    outConfig.microphone = micConfigBuffer;
-    outConfig.fireDefaults = fireDefaultsBuffer;
+    outConfig.matrix = matrix;
+    outConfig.charging = charging;
+    outConfig.imu = imu;
+    outConfig.serial = serial;
+    outConfig.microphone = mic;
+    outConfig.fireDefaults = fire;
 
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
         Serial.print(F("[INFO] Loaded device: "));
@@ -214,19 +210,25 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
     }
 
     // Validate sample rate (common PDM rates: 8000, 16000, 32000, 44100, 48000)
+    // Intentionally warn-only (not hard error) to allow flexibility for:
+    // - Custom PDM configurations
+    // - Testing non-standard rates
+    // - Future hardware that supports different rates
     if (stored.sampleRate != 8000 && stored.sampleRate != 16000 &&
         stored.sampleRate != 32000 && stored.sampleRate != 44100 &&
         stored.sampleRate != 48000) {
-        SerialConsole::logWarn(F("Non-standard sample rate"));
-        // Not a hard error - allow it but warn
+        SerialConsole::logWarn(F("Non-standard sample rate (may fail at runtime)"));
     }
 
-    // Validate baud rate (common values)
+    // Validate baud rate (common values: 9600-230400)
+    // Intentionally warn-only to allow:
+    // - Custom serial configurations
+    // - Non-standard terminal setups
+    // - Future use cases
     if (stored.baudRate != 9600 && stored.baudRate != 19200 &&
         stored.baudRate != 38400 && stored.baudRate != 57600 &&
         stored.baudRate != 115200 && stored.baudRate != 230400) {
-        SerialConsole::logWarn(F("Non-standard baud rate"));
-        // Not a hard error - allow it but warn
+        SerialConsole::logWarn(F("Non-standard baud rate (ensure terminal matches)"));
     }
 
     return true;

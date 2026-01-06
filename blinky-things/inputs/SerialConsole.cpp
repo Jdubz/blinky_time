@@ -729,42 +729,59 @@ void SerialConsole::showDeviceConfig() {
 
     const ConfigStorage::StoredDeviceConfig& cfg = configStorage_->getDeviceConfig();
 
-    // Output complete device config as JSON
-    Serial.println(F("{"));
-    Serial.print(F("  \"deviceId\": \"")); Serial.print(cfg.deviceId); Serial.println(F("\","));
-    Serial.print(F("  \"deviceName\": \"")); Serial.print(cfg.deviceName); Serial.println(F("\","));
-    Serial.print(F("  \"ledWidth\": ")); Serial.print(cfg.ledWidth); Serial.println(F(","));
-    Serial.print(F("  \"ledHeight\": ")); Serial.print(cfg.ledHeight); Serial.println(F(","));
-    Serial.print(F("  \"ledPin\": ")); Serial.print(cfg.ledPin); Serial.println(F(","));
-    Serial.print(F("  \"brightness\": ")); Serial.print(cfg.brightness); Serial.println(F(","));
-    Serial.print(F("  \"ledType\": ")); Serial.print(cfg.ledType); Serial.println(F(","));
-    Serial.print(F("  \"orientation\": ")); Serial.print(cfg.orientation); Serial.println(F(","));
-    Serial.print(F("  \"layoutType\": ")); Serial.print(cfg.layoutType); Serial.println(F(","));
-    Serial.print(F("  \"fastChargeEnabled\": ")); Serial.print(cfg.fastChargeEnabled ? F("true") : F("false")); Serial.println(F(","));
-    Serial.print(F("  \"lowBatteryThreshold\": ")); Serial.print(cfg.lowBatteryThreshold, 2); Serial.println(F(","));
-    Serial.print(F("  \"criticalBatteryThreshold\": ")); Serial.print(cfg.criticalBatteryThreshold, 2); Serial.println(F(","));
-    Serial.print(F("  \"minVoltage\": ")); Serial.print(cfg.minVoltage, 2); Serial.println(F(","));
-    Serial.print(F("  \"maxVoltage\": ")); Serial.print(cfg.maxVoltage, 2); Serial.println(F(","));
-    Serial.print(F("  \"upVectorX\": ")); Serial.print(cfg.upVectorX, 2); Serial.println(F(","));
-    Serial.print(F("  \"upVectorY\": ")); Serial.print(cfg.upVectorY, 2); Serial.println(F(","));
-    Serial.print(F("  \"upVectorZ\": ")); Serial.print(cfg.upVectorZ, 2); Serial.println(F(","));
-    Serial.print(F("  \"rotationDegrees\": ")); Serial.print(cfg.rotationDegrees, 2); Serial.println(F(","));
-    Serial.print(F("  \"invertZ\": ")); Serial.print(cfg.invertZ ? F("true") : F("false")); Serial.println(F(","));
-    Serial.print(F("  \"swapXY\": ")); Serial.print(cfg.swapXY ? F("true") : F("false")); Serial.println(F(","));
-    Serial.print(F("  \"invertX\": ")); Serial.print(cfg.invertX ? F("true") : F("false")); Serial.println(F(","));
-    Serial.print(F("  \"invertY\": ")); Serial.print(cfg.invertY ? F("true") : F("false")); Serial.println(F(","));
-    Serial.print(F("  \"baudRate\": ")); Serial.print(cfg.baudRate); Serial.println(F(","));
-    Serial.print(F("  \"initTimeoutMs\": ")); Serial.print(cfg.initTimeoutMs); Serial.println(F(","));
-    Serial.print(F("  \"sampleRate\": ")); Serial.print(cfg.sampleRate); Serial.println(F(","));
-    Serial.print(F("  \"bufferSize\": ")); Serial.print(cfg.bufferSize); Serial.println(F(","));
-    Serial.print(F("  \"baseCooling\": ")); Serial.print(cfg.baseCooling); Serial.println(F(","));
-    Serial.print(F("  \"sparkHeatMin\": ")); Serial.print(cfg.sparkHeatMin); Serial.println(F(","));
-    Serial.print(F("  \"sparkHeatMax\": ")); Serial.print(cfg.sparkHeatMax); Serial.println(F(","));
-    Serial.print(F("  \"sparkChance\": ")); Serial.print(cfg.sparkChance, 2); Serial.println(F(","));
-    Serial.print(F("  \"audioSparkBoost\": ")); Serial.print(cfg.audioSparkBoost, 2); Serial.println(F(","));
-    Serial.print(F("  \"coolingAudioBias\": ")); Serial.print(cfg.coolingAudioBias); Serial.println(F(","));
-    Serial.print(F("  \"bottomRowsForSparks\": ")); Serial.print(cfg.bottomRowsForSparks); Serial.println();
-    Serial.println(F("}"));
+    // Use ArduinoJson for clean, maintainable JSON serialization
+    StaticJsonDocument<1024> doc;
+
+    // Device identification
+    doc["deviceId"] = cfg.deviceId;
+    doc["deviceName"] = cfg.deviceName;
+
+    // Matrix/LED configuration
+    doc["ledWidth"] = cfg.ledWidth;
+    doc["ledHeight"] = cfg.ledHeight;
+    doc["ledPin"] = cfg.ledPin;
+    doc["brightness"] = cfg.brightness;
+    doc["ledType"] = cfg.ledType;
+    doc["orientation"] = cfg.orientation;
+    doc["layoutType"] = cfg.layoutType;
+
+    // Charging configuration
+    doc["fastChargeEnabled"] = cfg.fastChargeEnabled;
+    doc["lowBatteryThreshold"] = serialized(String(cfg.lowBatteryThreshold, 2));
+    doc["criticalBatteryThreshold"] = serialized(String(cfg.criticalBatteryThreshold, 2));
+    doc["minVoltage"] = serialized(String(cfg.minVoltage, 2));
+    doc["maxVoltage"] = serialized(String(cfg.maxVoltage, 2));
+
+    // IMU configuration
+    doc["upVectorX"] = serialized(String(cfg.upVectorX, 2));
+    doc["upVectorY"] = serialized(String(cfg.upVectorY, 2));
+    doc["upVectorZ"] = serialized(String(cfg.upVectorZ, 2));
+    doc["rotationDegrees"] = serialized(String(cfg.rotationDegrees, 2));
+    doc["invertZ"] = cfg.invertZ;
+    doc["swapXY"] = cfg.swapXY;
+    doc["invertX"] = cfg.invertX;
+    doc["invertY"] = cfg.invertY;
+
+    // Serial configuration
+    doc["baudRate"] = cfg.baudRate;
+    doc["initTimeoutMs"] = cfg.initTimeoutMs;
+
+    // Microphone configuration
+    doc["sampleRate"] = cfg.sampleRate;
+    doc["bufferSize"] = cfg.bufferSize;
+
+    // Fire effect defaults
+    doc["baseCooling"] = cfg.baseCooling;
+    doc["sparkHeatMin"] = cfg.sparkHeatMin;
+    doc["sparkHeatMax"] = cfg.sparkHeatMax;
+    doc["sparkChance"] = serialized(String(cfg.sparkChance, 2));
+    doc["audioSparkBoost"] = serialized(String(cfg.audioSparkBoost, 2));
+    doc["coolingAudioBias"] = cfg.coolingAudioBias;
+    doc["bottomRowsForSparks"] = cfg.bottomRowsForSparks;
+
+    // Serialize with pretty printing for readability
+    serializeJsonPretty(doc, Serial);
+    Serial.println();
 }
 
 void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
@@ -773,8 +790,8 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
         return;
     }
 
-    // Parse JSON using ArduinoJson
-    StaticJsonDocument<512> doc;
+    // Parse JSON using ArduinoJson (1024 bytes to accommodate full device configs ~600 bytes)
+    StaticJsonDocument<1024> doc;
     DeserializationError error = deserializeJson(doc, jsonStr);
 
     if (error) {

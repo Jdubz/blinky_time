@@ -6,7 +6,7 @@
 
 #### 1. Core Flash Storage ✅
 - **ConfigStorage** expanded to store device configuration
-  - Added `StoredDeviceConfig` struct (~120 bytes)
+  - Added `StoredDeviceConfig` struct (~160 bytes)
   - Bumped CONFIG_VERSION to 28
   - Size limit increased to 512 bytes
   - Accessor methods: `getDeviceConfig()`, `setDeviceConfig()`, `isDeviceConfigValid()`

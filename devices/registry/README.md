@@ -91,12 +91,12 @@ All device configuration files must follow this schema:
 
 ### Via Serial Console
 ```
-upload config {"deviceId":"hat_v1","deviceName":"Festival Hat v1",...}
+device upload {"deviceId":"hat_v1","deviceName":"Festival Hat v1","ledWidth":89,"ledHeight":1,...}
 ```
 
-Or use a file:
+Or paste the entire JSON:
 ```
-upload config <paste entire JSON here>
+device upload <paste entire JSON here>
 ```
 
 Then reboot the device to apply the configuration.
@@ -150,7 +150,7 @@ Invalid configurations will be rejected with an error message.
 
 ## Notes
 
-- The firmware stores ONE device config in flash (~120 bytes)
+- The firmware stores ONE device config in flash (~160 bytes)
 - Config persists across reboots and power cycles
 - Uploading a new config overwrites the previous one
 - First boot with no config enters safe mode (LED output disabled)

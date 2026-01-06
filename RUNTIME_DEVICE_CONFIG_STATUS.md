@@ -7,7 +7,7 @@ Converting the Blinky firmware from compile-time device selection to runtime con
 
 ### 1. ConfigStorage Expansion ✅
 - **File**: `blinky-things/config/ConfigStorage.h`
-- Added `StoredDeviceConfig` struct (~120 bytes)
+- Added `StoredDeviceConfig` struct (~160 bytes)
   - Device identification (name, ID)
   - Matrix/LED configuration (width, height, pin, type, layout)
   - Charging configuration (voltage thresholds, fast charge)

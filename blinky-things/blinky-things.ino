@@ -134,6 +134,18 @@ void setup() {
   configStorage.begin();
   validDeviceConfig = DeviceConfigLoader::loadFromFlash(configStorage, config);
 
+  // Reinitialize serial if configured baud rate differs from default
+  if (validDeviceConfig && config.serial.baudRate != 115200) {
+    Serial.print(F("[INFO] Switching serial baud rate to: "));
+    Serial.println(config.serial.baudRate);
+    Serial.println(F("Reinitializing serial port in 2 seconds..."));
+    delay(2000);  // Give user time to see message before baud rate changes
+    Serial.end();
+    Serial.begin(config.serial.baudRate);
+    delay(500);   // Let serial stabilize
+    Serial.println(F("\n[INFO] Serial port reinitialized"));
+  }
+
   if (!validDeviceConfig) {
     // SAFE MODE: No valid device configuration
     Serial.println(F("\n!!! SAFE MODE - NO DEVICE CONFIG !!!"));
@@ -141,8 +153,8 @@ void setup() {
     Serial.println(F("Audio analysis ENABLED"));
     Serial.println(F("Serial console ENABLED"));
     Serial.println(F("\nUpload device config via serial:"));
-    Serial.println(F("  upload config <JSON>"));
-    Serial.println(F("  Example: upload config {\"deviceId\":\"hat_v1\",\"ledCount\":89,...}"));
+    Serial.println(F("  device upload <JSON>"));
+    Serial.println(F("  Example: device upload {\"deviceId\":\"hat_v1\",\"ledWidth\":89,\"ledHeight\":1,...}"));
     Serial.println(F("\nOr use the web console to select a device type."));
     Serial.println(F(""));
   } else {

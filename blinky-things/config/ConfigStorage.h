@@ -227,7 +227,7 @@ public:
         // Reserved for future expansion
         uint8_t reserved[8];
 
-        // Total: ~120 bytes
+        // Total: ~160 bytes (see static_assert enforcing sizeof(StoredDeviceConfig) <= 160)
     };
 
     struct ConfigData {
