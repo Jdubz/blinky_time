@@ -5,11 +5,13 @@
 #include "../audio/AudioController.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
+#include "../config/DeviceConfigLoader.h"  // v28: Runtime device config loading
 #include "../types/Version.h"
 #include "../render/RenderPipeline.h"
 #include "../effects/HueRotationEffect.h"
+#include <ArduinoJson.h>  // v28: JSON parsing for device config upload
 
-extern const DeviceConfig& config;
+extern DeviceConfig config;  // v28: Changed to non-const for runtime loading
 
 // Static instance for callbacks
 SerialConsole* SerialConsole::instance_ = nullptr;
@@ -354,6 +356,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleAudioStatusCommand(cmd)) return true;
     if (handleModeCommand(cmd)) return true;
     if (handleConfigCommand(cmd)) return true;
+    if (handleDeviceConfigCommand(cmd)) return true;  // Device config commands (v28+)
     if (handleLogCommand(cmd)) return true;
     if (handleDebugCommand(cmd)) return true;     // Debug channel commands
     return false;
@@ -375,16 +378,28 @@ bool SerialConsole::handleJsonCommand(const char* cmd) {
     }
 
     if (strcmp(cmd, "json info") == 0) {
-        Serial.print(F("{\"device\":\""));
-        Serial.print(config.deviceName);
-        Serial.print(F("\",\"version\":\""));
+        Serial.print(F("{\"version\":\""));
         Serial.print(F(BLINKY_VERSION_STRING));
-        Serial.print(F("\",\"width\":"));
-        Serial.print(config.matrix.width);
-        Serial.print(F(",\"height\":"));
-        Serial.print(config.matrix.height);
-        Serial.print(F(",\"leds\":"));
-        Serial.print(config.matrix.width * config.matrix.height);
+        Serial.print(F("\""));
+
+        // Device configuration status (v28+)
+        if (configStorage_ && configStorage_->isDeviceConfigValid()) {
+            const ConfigStorage::StoredDeviceConfig& cfg = configStorage_->getDeviceConfig();
+            Serial.print(F(",\"device\":{\"id\":\""));
+            Serial.print(cfg.deviceId);
+            Serial.print(F("\",\"name\":\""));
+            Serial.print(cfg.deviceName);
+            Serial.print(F("\",\"width\":"));
+            Serial.print(cfg.ledWidth);
+            Serial.print(F(",\"height\":"));
+            Serial.print(cfg.ledHeight);
+            Serial.print(F(",\"leds\":"));
+            Serial.print(cfg.ledWidth * cfg.ledHeight);
+            Serial.print(F(",\"configured\":true}"));
+        } else {
+            Serial.print(F(",\"device\":{\"configured\":false,\"safeMode\":true}"));
+        }
+
         Serial.println(F("}"));
         return true;
     }
@@ -680,6 +695,212 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     }
 
     return false;
+}
+
+// === DEVICE CONFIGURATION COMMANDS (v28+) ===
+bool SerialConsole::handleDeviceConfigCommand(const char* cmd) {
+    if (strcmp(cmd, "device show") == 0 || strcmp(cmd, "device") == 0) {
+        showDeviceConfig();
+        return true;
+    }
+
+    if (strncmp(cmd, "device upload ", 14) == 0) {
+        uploadDeviceConfig(cmd + 14);
+        return true;
+    }
+
+    Serial.println(F("Device configuration commands:"));
+    Serial.println(F("  device show          - Display current device config"));
+    Serial.println(F("  device upload <JSON> - Upload device config from JSON"));
+    Serial.println(F("\nExample JSON at: devices/registry/README.md"));
+    return false;
+}
+
+void SerialConsole::showDeviceConfig() {
+    if (!configStorage_) {
+        Serial.println(F("{\"error\":\"ConfigStorage not available\"}"));
+        return;
+    }
+
+    if (!configStorage_->isDeviceConfigValid()) {
+        Serial.println(F("{\"error\":\"No device config\",\"status\":\"unconfigured\",\"safeMode\":true}"));
+        return;
+    }
+
+    const ConfigStorage::StoredDeviceConfig& cfg = configStorage_->getDeviceConfig();
+
+    // Use ArduinoJson for clean, maintainable JSON serialization
+    StaticJsonDocument<1024> doc;
+
+    // Device identification
+    doc["deviceId"] = cfg.deviceId;
+    doc["deviceName"] = cfg.deviceName;
+
+    // Matrix/LED configuration
+    doc["ledWidth"] = cfg.ledWidth;
+    doc["ledHeight"] = cfg.ledHeight;
+    doc["ledPin"] = cfg.ledPin;
+    doc["brightness"] = cfg.brightness;
+    doc["ledType"] = cfg.ledType;
+    doc["orientation"] = cfg.orientation;
+    doc["layoutType"] = cfg.layoutType;
+
+    // Charging configuration
+    doc["fastChargeEnabled"] = cfg.fastChargeEnabled;
+    doc["lowBatteryThreshold"] = serialized(String(cfg.lowBatteryThreshold, 2));
+    doc["criticalBatteryThreshold"] = serialized(String(cfg.criticalBatteryThreshold, 2));
+    doc["minVoltage"] = serialized(String(cfg.minVoltage, 2));
+    doc["maxVoltage"] = serialized(String(cfg.maxVoltage, 2));
+
+    // IMU configuration
+    doc["upVectorX"] = serialized(String(cfg.upVectorX, 2));
+    doc["upVectorY"] = serialized(String(cfg.upVectorY, 2));
+    doc["upVectorZ"] = serialized(String(cfg.upVectorZ, 2));
+    doc["rotationDegrees"] = serialized(String(cfg.rotationDegrees, 2));
+    doc["invertZ"] = cfg.invertZ;
+    doc["swapXY"] = cfg.swapXY;
+    doc["invertX"] = cfg.invertX;
+    doc["invertY"] = cfg.invertY;
+
+    // Serial configuration
+    doc["baudRate"] = cfg.baudRate;
+    doc["initTimeoutMs"] = cfg.initTimeoutMs;
+
+    // Microphone configuration
+    doc["sampleRate"] = cfg.sampleRate;
+    doc["bufferSize"] = cfg.bufferSize;
+
+    // Fire effect defaults
+    doc["baseCooling"] = cfg.baseCooling;
+    doc["sparkHeatMin"] = cfg.sparkHeatMin;
+    doc["sparkHeatMax"] = cfg.sparkHeatMax;
+    doc["sparkChance"] = serialized(String(cfg.sparkChance, 2));
+    doc["audioSparkBoost"] = serialized(String(cfg.audioSparkBoost, 2));
+    doc["coolingAudioBias"] = cfg.coolingAudioBias;
+    doc["bottomRowsForSparks"] = cfg.bottomRowsForSparks;
+
+    // Serialize with pretty printing for readability
+    serializeJsonPretty(doc, Serial);
+    Serial.println();
+}
+
+void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
+    if (!configStorage_) {
+        Serial.println(F("ERROR: ConfigStorage not available"));
+        return;
+    }
+
+    // Parse JSON using ArduinoJson (1024 bytes to accommodate full device configs ~600 bytes)
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, jsonStr);
+
+    if (error) {
+        Serial.print(F("ERROR: JSON parse failed - "));
+        Serial.println(error.c_str());
+        Serial.println(F("Example: device upload {\"deviceId\":\"hat_v1\",\"ledWidth\":89,...}"));
+        return;
+    }
+
+    // Build StoredDeviceConfig from JSON
+    ConfigStorage::StoredDeviceConfig newConfig = {};
+
+    // Device identification
+    strncpy(newConfig.deviceId, doc["deviceId"] | "unknown", sizeof(newConfig.deviceId) - 1);
+    strncpy(newConfig.deviceName, doc["deviceName"] | "Unnamed Device", sizeof(newConfig.deviceName) - 1);
+
+    // Matrix/LED configuration
+    newConfig.ledWidth = doc["ledWidth"] | 0;
+    newConfig.ledHeight = doc["ledHeight"] | 1;
+    newConfig.ledPin = doc["ledPin"] | 10;
+    newConfig.brightness = doc["brightness"] | 100;
+    newConfig.ledType = doc["ledType"] | 12390;  // Default: NEO_GRB + NEO_KHZ800
+    newConfig.orientation = doc["orientation"] | 0;
+    newConfig.layoutType = doc["layoutType"] | 0;
+
+    // Charging configuration
+    newConfig.fastChargeEnabled = doc["fastChargeEnabled"] | false;
+    newConfig.lowBatteryThreshold = doc["lowBatteryThreshold"] | 3.5f;
+    newConfig.criticalBatteryThreshold = doc["criticalBatteryThreshold"] | 3.3f;
+    newConfig.minVoltage = doc["minVoltage"] | 3.0f;
+    newConfig.maxVoltage = doc["maxVoltage"] | 4.2f;
+
+    // IMU configuration
+    newConfig.upVectorX = doc["upVectorX"] | 0.0f;
+    newConfig.upVectorY = doc["upVectorY"] | 0.0f;
+    newConfig.upVectorZ = doc["upVectorZ"] | 1.0f;
+    newConfig.rotationDegrees = doc["rotationDegrees"] | 0.0f;
+    newConfig.invertZ = doc["invertZ"] | false;
+    newConfig.swapXY = doc["swapXY"] | false;
+    newConfig.invertX = doc["invertX"] | false;
+    newConfig.invertY = doc["invertY"] | false;
+
+    // Serial configuration
+    newConfig.baudRate = doc["baudRate"] | 115200;
+    newConfig.initTimeoutMs = doc["initTimeoutMs"] | 2000;
+
+    // Microphone configuration
+    newConfig.sampleRate = doc["sampleRate"] | 16000;
+    newConfig.bufferSize = doc["bufferSize"] | 32;
+
+    // Fire effect defaults
+    newConfig.baseCooling = doc["baseCooling"] | 40;
+    newConfig.sparkHeatMin = doc["sparkHeatMin"] | 120;
+    newConfig.sparkHeatMax = doc["sparkHeatMax"] | 255;
+    newConfig.sparkChance = doc["sparkChance"] | 0.2f;
+    newConfig.audioSparkBoost = doc["audioSparkBoost"] | 0.5f;
+    newConfig.coolingAudioBias = doc["coolingAudioBias"] | -30;
+    newConfig.bottomRowsForSparks = doc["bottomRowsForSparks"] | 1;
+
+    // Mark as valid
+    newConfig.isValid = true;
+
+    // Validate configuration
+    if (!DeviceConfigLoader::validate(newConfig)) {
+        Serial.println(F("ERROR: Device config validation failed"));
+        Serial.println(F("Check LED count, pin numbers, and voltage ranges"));
+        return;
+    }
+
+    // Save to flash
+    configStorage_->setDeviceConfig(newConfig);
+
+    // Trigger flash write by saving full configuration
+    // Note: mic_ should always be available (audio initialized even in safe mode)
+    // but generators may be null in safe mode
+    if (fireGenerator_ && waterGenerator_ && lightningGenerator_ && mic_) {
+        // Normal mode: save with actual generator params
+        configStorage_->saveConfiguration(
+            fireGenerator_->getParams(),
+            waterGenerator_->getParams(),
+            lightningGenerator_->getParams(),
+            *mic_,
+            audioCtrl_
+        );
+    } else if (mic_) {
+        // Safe mode: generators null, but mic available
+        // Save with default generator params (only device config matters)
+        FireParams defaultFire;
+        WaterParams defaultWater;
+        LightningParams defaultLightning;
+        configStorage_->saveConfiguration(
+            defaultFire,
+            defaultWater,
+            defaultLightning,
+            *mic_,
+            audioCtrl_
+        );
+    } else {
+        Serial.println(F("ERROR: Cannot save config - mic not initialized"));
+        return;
+    }
+
+    Serial.println(F("✓ Device config saved to flash"));
+    Serial.print(F("Device: "));
+    Serial.print(newConfig.deviceName);
+    Serial.print(F(" ("));
+    Serial.print(newConfig.ledWidth * newConfig.ledHeight);
+    Serial.println(F(" LEDs)"));
+    Serial.println(F("\n**REBOOT DEVICE TO APPLY CONFIGURATION**"));
 }
 
 void SerialConsole::restoreDefaults() {

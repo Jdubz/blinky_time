@@ -46,16 +46,13 @@ jobs:
         arduino-cli core install Seeeduino:mbed
         arduino-cli lib install "Adafruit NeoPixel"
         arduino-cli lib install "arduinoFFT"
+        arduino-cli lib install "ArduinoJson"
         echo "Installed libraries:"
         arduino-cli lib list
 
-    - name: Set device type
-      run: |
-        sed -i 's/#define DEVICE_TYPE [0-9]/#define DEVICE_TYPE ${{ matrix.device-type }}/' blinky-things/blinky-things.ino
-        echo "Building for ${{ matrix.device-name }} (DEVICE_TYPE=${{ matrix.device-type }})"
-
     - name: Compile sketch
       run: |
+        echo "Building for ${{ matrix.device-name }} (runtime device configuration)"
         arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things/
 
   cppcheck:

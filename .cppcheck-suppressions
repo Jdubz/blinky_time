@@ -56,6 +56,14 @@ uninitMemberVarPrivate
 knownConditionTrueFalse:*IMUHelper*
 
 # ============================================
+# ArduinoJson library patterns
+# ============================================
+
+# ArduinoJson uses operator| for default values (not bitwise operation)
+# This is intentional library design, not a redundant bitmask check
+badBitmaskCheck:blinky-things/inputs/SerialConsole.cpp
+
+# ============================================
 # Directories to skip
 # ============================================
 

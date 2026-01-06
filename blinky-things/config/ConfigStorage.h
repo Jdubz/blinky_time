@@ -25,7 +25,7 @@ class AudioController;
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 27;  // Config schema v27: added Water/Lightning persistence + unified parameter storage
+    static const uint8_t CONFIG_VERSION = 28;  // Config schema v28: added device config storage for runtime device selection
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -165,9 +165,75 @@ public:
         // Total: 14 floats (56 bytes) + 1 bool (1 byte) + 3 padding = 60 bytes
     };
 
+    /**
+     * StoredDeviceConfig - Serializable device configuration for flash storage
+     *
+     * This structure enables runtime device selection without recompilation.
+     * The entire device config (LED layout, pins, battery settings, etc.) is
+     * stored in flash and loaded at boot time.
+     *
+     * Note: Uses fixed-size fields (no pointers) for reliable flash serialization.
+     */
+    struct StoredDeviceConfig {
+        char deviceName[32];        // Human-readable device name
+        char deviceId[16];          // Unique device identifier (e.g., "hat_v1")
+
+        // Matrix/LED configuration
+        uint8_t ledWidth;           // LED matrix width (or total count for linear)
+        uint8_t ledHeight;          // LED matrix height (1 for linear)
+        uint8_t ledPin;             // GPIO pin for LED data
+        uint8_t brightness;         // Default brightness (0-255)
+        uint32_t ledType;           // NeoPixel type (e.g., NEO_GRB + NEO_KHZ800)
+        uint8_t orientation;        // 0=HORIZONTAL, 1=VERTICAL
+        uint8_t layoutType;         // 0=MATRIX, 1=LINEAR, 2=RANDOM
+
+        // Charging configuration
+        bool fastChargeEnabled;
+        float lowBatteryThreshold;
+        float criticalBatteryThreshold;
+        float minVoltage;
+        float maxVoltage;
+
+        // IMU configuration
+        float upVectorX;
+        float upVectorY;
+        float upVectorZ;
+        float rotationDegrees;
+        bool invertZ;
+        bool swapXY;
+        bool invertX;
+        bool invertY;
+
+        // Serial configuration
+        uint32_t baudRate;
+        uint16_t initTimeoutMs;
+
+        // Microphone configuration
+        uint16_t sampleRate;
+        uint8_t bufferSize;
+
+        // Fire effect defaults (legacy - may be deprecated in future)
+        uint8_t baseCooling;
+        uint8_t sparkHeatMin;
+        uint8_t sparkHeatMax;
+        uint8_t bottomRowsForSparks;
+        float sparkChance;
+        float audioSparkBoost;
+        int8_t coolingAudioBias;
+
+        // Validity flag
+        bool isValid;               // Is this config populated and ready to use?
+
+        // Reserved for future expansion
+        uint8_t reserved[8];
+
+        // Total: ~160 bytes (see static_assert enforcing sizeof(StoredDeviceConfig) <= 160)
+    };
+
     struct ConfigData {
         uint16_t magic;
         uint8_t version;
+        StoredDeviceConfig device;      // NEW in v28: runtime device configuration
         StoredFireParams fire;
         StoredWaterParams water;
         StoredLightningParams lightning;
@@ -190,12 +256,22 @@ public:
         "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 60,
         "StoredMusicParams size changed! Increment CONFIG_VERSION and update assertion. (60 bytes = 14 floats + 1 bool + padding)");
-    static_assert(sizeof(ConfigData) <= 400,
-        "ConfigData too large! May not fit in flash sector. Review struct padding.");
+    static_assert(sizeof(StoredDeviceConfig) <= 160,
+        "StoredDeviceConfig size changed! Increment CONFIG_VERSION and update assertion. (Limit: 160 bytes)");
+    static_assert(sizeof(ConfigData) <= 512,
+        "ConfigData too large! May not fit in flash sector. Review struct padding. (v28 limit: 512 bytes)");
 
     ConfigStorage();
     void begin();
     bool isValid() const { return valid_; }
+
+    // Device configuration accessors (v28+)
+    const StoredDeviceConfig& getDeviceConfig() const { return data_.device; }
+    void setDeviceConfig(const StoredDeviceConfig& config) {
+        data_.device = config;
+        markDirty();
+    }
+    bool isDeviceConfigValid() const { return data_.device.isValid; }
 
     /**
      * BREAKING CHANGE (v27): API now requires all 3 generator params
