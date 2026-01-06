@@ -5,7 +5,7 @@
 // Other fields are copied by value, so they can be local variables
 static char deviceNameBuffer[32];
 
-bool DeviceConfigLoader::loadFromFlash(ConfigStorage& storage, DeviceConfig& outConfig) {
+bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfig& outConfig) {
     if (!storage.isDeviceConfigValid()) {
         SerialConsole::logDebug(F("No valid device config in flash"));
         return false;

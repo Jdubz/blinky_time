@@ -22,11 +22,11 @@ public:
     /**
      * Load device config from flash storage and convert to runtime format
      *
-     * @param storage ConfigStorage instance to load from
+     * @param storage ConfigStorage instance to load from (const - read-only)
      * @param outConfig Output DeviceConfig structure (will be populated)
      * @return true if valid config loaded, false if unconfigured/invalid
      */
-    static bool loadFromFlash(ConfigStorage& storage, DeviceConfig& outConfig);
+    static bool loadFromFlash(const ConfigStorage& storage, DeviceConfig& outConfig);
 
     /**
      * Convert runtime DeviceConfig to flash-storable format
