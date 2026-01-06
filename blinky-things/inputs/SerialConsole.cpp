@@ -848,8 +848,10 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     configStorage_->setDeviceConfig(newConfig);
 
     // Trigger flash write by saving full configuration
-    // This ensures device config is persisted along with effect params
+    // Note: mic_ should always be available (audio initialized even in safe mode)
+    // but generators may be null in safe mode
     if (fireGenerator_ && waterGenerator_ && lightningGenerator_ && mic_) {
+        // Normal mode: save with actual generator params
         configStorage_->saveConfiguration(
             fireGenerator_->getParams(),
             waterGenerator_->getParams(),
@@ -857,6 +859,22 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             *mic_,
             audioCtrl_
         );
+    } else if (mic_) {
+        // Safe mode: generators null, but mic available
+        // Save with default generator params (only device config matters)
+        FireParams defaultFire;
+        WaterParams defaultWater;
+        LightningParams defaultLightning;
+        configStorage_->saveConfiguration(
+            defaultFire,
+            defaultWater,
+            defaultLightning,
+            *mic_,
+            audioCtrl_
+        );
+    } else {
+        Serial.println(F("ERROR: Cannot save config - mic not initialized"));
+        return;
     }
 
     Serial.println(F("✓ Device config saved to flash"));

@@ -184,8 +184,12 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         return false;
     }
 
-    // Validate brightness
-    // Note: 0 is valid (LEDs off), so we don't check lower bound
+    // Validate brightness (0-255)
+    // Note: 0 is valid (LEDs off)
+    if (stored.brightness > 255) {
+        SerialConsole::logWarn(F("Brightness > 255"));
+        return false;
+    }
 
     // Validate orientation
     if (stored.orientation > 1) {  // 0=HORIZONTAL, 1=VERTICAL

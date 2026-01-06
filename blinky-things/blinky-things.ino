@@ -156,6 +156,7 @@ void setup() {
     }
     if (config.matrix.brightness > 255) {
       SerialConsole::logWarn(F("Brightness clamped to 255"));
+      config.matrix.brightness = 255;
     }
   }
 
@@ -388,7 +389,7 @@ void loop() {
 
   // Battery monitoring - periodic voltage check
   static uint32_t lastBatteryCheck = 0;
-  if (battery && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
+  if (battery && validDeviceConfig && millis() - lastBatteryCheck > Constants::BATTERY_CHECK_INTERVAL_MS) {
     lastBatteryCheck = millis();
     float voltage = battery->getVoltage();
     if (voltage > 0 && voltage < config.charging.criticalBatteryThreshold) {
