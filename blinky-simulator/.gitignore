@@ -1,0 +1,8 @@
+# Build output
+dist/
+
+# Generated preview files (test results)
+previews/
+
+# Node
+node_modules/

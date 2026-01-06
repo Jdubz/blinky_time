@@ -11,7 +11,7 @@ import { BlinkySerial } from './serial.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, statSync } from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // Path to test player CLI
@@ -305,6 +305,58 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                         expected_bpm: {
                             type: 'number',
                             description: 'Expected BPM for accuracy calculation (optional)',
+                        },
+                    },
+                },
+            },
+            {
+                name: 'get_hypotheses',
+                description: 'Get multi-hypothesis tracker state including all 4 hypothesis slots (BPM, phase, confidence, strength, beatCount). Useful for validating tempo tracking behavior and hypothesis promotion.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {},
+                },
+            },
+            {
+                name: 'render_preview',
+                description: 'Render a visual preview of an LED effect to an animated GIF. Runs the actual firmware generator code in simulation. Useful for previewing effects before flashing and for AI-assisted parameter tuning.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        generator: {
+                            type: 'string',
+                            description: 'Generator to use: fire, water, lightning (default: fire)',
+                            enum: ['fire', 'water', 'lightning'],
+                        },
+                        effect: {
+                            type: 'string',
+                            description: 'Effect to apply: none, hue (default: none)',
+                            enum: ['none', 'hue'],
+                        },
+                        pattern: {
+                            type: 'string',
+                            description: 'Audio pattern: steady-120bpm, steady-90bpm, steady-140bpm, silence, burst, complex (default: steady-120bpm)',
+                        },
+                        device: {
+                            type: 'string',
+                            description: 'Device config: tube (4x15), hat (89 string), bucket (16x8) (default: tube)',
+                            enum: ['tube', 'hat', 'bucket'],
+                        },
+                        duration_ms: {
+                            type: 'number',
+                            description: 'Duration in milliseconds (default: 3000)',
+                        },
+                        fps: {
+                            type: 'number',
+                            description: 'Frames per second (default: 30)',
+                        },
+                        hue_shift: {
+                            type: 'number',
+                            description: 'Hue shift for hue effect (0.0-1.0, default: 0.0)',
+                        },
+                        output_path: {
+                            type: 'string',
+                            description: 'Output GIF path (default: preview.gif in test-results)',
                         },
                     },
                 },
@@ -780,6 +832,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     ],
                 };
             }
+            case 'get_hypotheses': {
+                if (!serial.getState().connected) {
+                    throw new Error('Not connected to a device');
+                }
+                // Send "json hypotheses" command and parse response
+                const response = await serial.sendCommand('json hypotheses');
+                // Parse JSON response
+                let parsed;
+                try {
+                    parsed = JSON.parse(response);
+                }
+                catch (e) {
+                    throw new Error(`Failed to parse hypothesis data: ${response}`);
+                }
+                // Format for MCP response
+                const primaryIdx = parsed.primaryIndex || 0;
+                const formatted = {
+                    hypotheses: parsed.hypotheses || [],
+                    primaryIndex: primaryIdx,
+                    summary: {
+                        activeCount: parsed.hypotheses.filter((h) => h.active).length,
+                        primaryBpm: parsed.hypotheses[primaryIdx]?.bpm || null,
+                        primaryConfidence: parsed.hypotheses[primaryIdx]?.confidence || null,
+                        primaryBeats: parsed.hypotheses[primaryIdx]?.beatCount || null,
+                    },
+                };
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(formatted, null, 2),
+                        },
+                    ],
+                };
+            }
             case 'list_patterns': {
                 // Available patterns (must match blinky-test-player)
                 const patterns = [
@@ -1117,6 +1204,107 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
                     await serial.disconnect();
                 }
+            }
+            case 'render_preview': {
+                const { generator = 'fire', effect = 'none', pattern = 'steady-120bpm', device = 'tube', duration_ms = 3000, fps = 30, hue_shift = 0.0, output_path, } = args;
+                // Determine output path
+                ensureTestResultsDir();
+                const timestamp = Date.now();
+                const outputFile = output_path || join(TEST_RESULTS_DIR, `preview-${generator}-${timestamp}.gif`);
+                // Path to Node.js simulator
+                const SIMULATOR_CLI_PATH = join(__dirname, '..', '..', 'blinky-simulator', 'dist', 'cli.js');
+                // Check if simulator is built
+                if (!existsSync(SIMULATOR_CLI_PATH)) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: 'Simulator not built',
+                                    hint: 'Build the simulator first: cd blinky-simulator && npm install && npm run build',
+                                    simulatorPath: SIMULATOR_CLI_PATH,
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                // Build CLI arguments
+                const cliArgs = [
+                    SIMULATOR_CLI_PATH,
+                    '-g', generator,
+                    '-e', effect,
+                    '-p', pattern,
+                    '-d', device,
+                    '-t', duration_ms.toString(),
+                    '-f', fps.toString(),
+                    '-o', outputFile,
+                ];
+                if (effect === 'hue' && hue_shift > 0) {
+                    cliArgs.push('--hue', hue_shift.toString());
+                }
+                // Run simulator using Node.js
+                const result = await new Promise((resolve) => {
+                    const child = spawn('node', cliArgs, {
+                        stdio: ['ignore', 'pipe', 'pipe'],
+                    });
+                    let stdout = '';
+                    let stderr = '';
+                    child.stdout.on('data', (data) => {
+                        stdout += data.toString();
+                    });
+                    child.stderr.on('data', (data) => {
+                        stderr += data.toString();
+                    });
+                    child.on('close', (code) => {
+                        if (code === 0) {
+                            resolve({ success: true, output: stdout.trim() });
+                        }
+                        else {
+                            resolve({ success: false, error: stderr || stdout || `Process exited with code ${code}` });
+                        }
+                    });
+                    child.on('error', (err) => {
+                        resolve({ success: false, error: err.message });
+                    });
+                });
+                if (!result.success) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: 'Simulation failed',
+                                    details: result.error,
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                // Get file size
+                const stats = existsSync(outputFile) ? statSync(outputFile) : null;
+                const fileSizeBytes = stats ? stats.size : 0;
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: true,
+                                outputPath: outputFile,
+                                fileSizeBytes,
+                                config: {
+                                    generator,
+                                    effect,
+                                    pattern,
+                                    device,
+                                    durationMs: duration_ms,
+                                    fps,
+                                    hueShift: hue_shift,
+                                },
+                                message: result.output,
+                            }, null, 2),
+                        },
+                    ],
+                };
             }
             default:
                 return {
