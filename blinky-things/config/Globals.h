@@ -4,4 +4,4 @@
 
 // Global LED mapper instance
 extern LEDMapper ledMapper;
-extern const DeviceConfig& config;
+extern DeviceConfig config;  // v28: Changed to non-const for runtime loading

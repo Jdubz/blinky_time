@@ -40,6 +40,10 @@ class HueRotationEffect;
  *     defaults            - Restore default values
  *     reset / factory     - Factory reset (clear saved settings)
  *
+ *   Device Configuration (v28+):
+ *     device show         - Display current device config as JSON
+ *     device upload <JSON> - Upload device config from JSON string
+ *
  *   Generator/Effect Control:
  *     gen list            - List available generators
  *     gen <name>          - Switch to generator (fire, water, lightning)
@@ -181,6 +185,9 @@ private:
     bool handleDebugCommand(const char* cmd);     // Debug channel control
     bool handleEnsembleCommand(const char* cmd);  // Ensemble detector configuration
     bool handleHypothesisCommand(const char* cmd);  // Multi-hypothesis tracking commands
+    bool handleDeviceConfigCommand(const char* cmd);  // Device configuration commands (v28+)
+    void showDeviceConfig();                          // Display current device config as JSON
+    void uploadDeviceConfig(const char* jsonStr);     // Parse and save device config from JSON
 
     // Settings registration for other generators
     void registerWaterSettings(WaterParams* wp);

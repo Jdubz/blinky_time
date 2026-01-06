@@ -85,6 +85,12 @@ void ConfigStorage::loadDefaults() {
     data_.magic = MAGIC_NUMBER;
     data_.version = CONFIG_VERSION;
 
+    // Device config defaults (v28+) - UNCONFIGURED state
+    memset(&data_.device, 0, sizeof(StoredDeviceConfig));
+    data_.device.isValid = false;  // No device configured - triggers safe mode
+    strncpy(data_.device.deviceName, "UNCONFIGURED", sizeof(data_.device.deviceName) - 1);
+    strncpy(data_.device.deviceId, "none", sizeof(data_.device.deviceId) - 1);
+
     // Fire defaults (particle-based)
     data_.fire.baseSpawnChance = 0.15f;
     data_.fire.audioSpawnBoost = 0.6f;

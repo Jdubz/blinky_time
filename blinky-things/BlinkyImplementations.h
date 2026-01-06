@@ -46,6 +46,7 @@
 
 // Configuration implementations
 #include "config/ConfigStorage.cpp"     // Persistent settings storage
+#include "config/DeviceConfigLoader.cpp"  // v28: Runtime device config loading
 #include "config/SettingsRegistry.cpp"  // Settings abstraction layer
 
 // Audio processing implementations
