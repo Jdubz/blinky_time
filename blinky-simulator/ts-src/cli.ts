@@ -158,7 +158,7 @@ program
 program
   .option('-g, --generator <type>', 'Generator: fire, water, lightning', 'fire')
   .option('-e, --effect <type>', 'Effect: none, hue', 'none')
-  .option('-p, --pattern <type>', 'Audio pattern: steady-120bpm, silence, burst, complex', 'steady-120bpm')
+  .option('-p, --pattern <type>', 'Audio pattern: steady-120bpm, ambient, silence, burst, complex', 'steady-120bpm')
   .option('-o, --output <file>', 'Output GIF filename (saved to previews/)', 'preview.gif')
   .option('-d, --device <type>', 'Device: tube, hat, bucket', 'bucket')
   .option('-t, --duration <ms>', 'Duration in milliseconds', '3000')

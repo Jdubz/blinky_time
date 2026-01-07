@@ -6,6 +6,7 @@
  */
 
 import { Generator, AudioControl, PixelMatrix, RGB, createPixelMatrix, AudioControlHelpers } from '../types';
+import { simplex3 } from '../noise';
 
 /**
  * Fire color palette (matches firmware Fire::particleColor)
@@ -40,6 +41,7 @@ export interface FireParams {
   bottomRowsForSparks: number; // Rows for spark spawning (default: 2)
   trailHeatFactor: number;   // Heat trail intensity (default: 35)
   burstSparks: number;       // Sparks per audio burst (default: 8)
+  organicTransientMin: number; // Min transient to trigger in organic mode (default: 0.5)
 }
 
 export class FireGenerator implements Generator {
@@ -61,7 +63,8 @@ export class FireGenerator implements Generator {
     audioSpawnBoost: 0.6,
     bottomRowsForSparks: 2,
     trailHeatFactor: 35,
-    burstSparks: 8
+    burstSparks: 8,
+    organicTransientMin: 0.5  // Higher threshold = more subtle in organic mode
   };
 
   begin(width: number, height: number): void {
@@ -154,10 +157,15 @@ export class FireGenerator implements Generator {
         sparkCount = Math.floor(baseSparks * (0.5 + 0.5 * audio.rhythmStrength));
       }
     } else {
-      // Organic mode: transient-reactive
-      if (audio.pulse > 0.5) {
-        spawnProb += audioSpawnBoost * audio.pulse;
-        sparkCount = Math.floor(burstSparks / 2);
+      // Organic mode: steady ambient fire with subtle transient response
+      // Always spawn some sparks to keep fire burning
+      spawnProb += 0.15;  // Baseline activity for continuous flame
+      sparkCount = 1;     // Steady trickle of sparks
+
+      if (audio.pulse > this.params.organicTransientMin) {
+        // Boost on transients, but don't burst
+        spawnProb += audioSpawnBoost * audio.pulse * 0.4;
+        sparkCount += 1;
       }
     }
 
@@ -177,11 +185,32 @@ export class FireGenerator implements Generator {
       }
     }
 
-    // 4. Convert heat map to colors
+    // 4. Convert heat map to colors with noise background
+    const timeScale = hasRhythm ? 0.003 : 0.001;  // Faster in music mode
+    const noiseTime = timeMs * timeScale;
+
+    // In music mode, add rapid shape changes on transients
+    const transientOffset = hasRhythm && audio.pulse > 0.5 ? audio.pulse * 2 : 0;
+
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
         const heat = this.heatMap[y * this.width + x];
-        const color = heatToColor(heat);
+
+        // Noise background with vertical gradient (bottom brighter)
+        const gradientFactor = (y + 1) / this.height;  // 0 at top, 1 at bottom
+        const noiseVal = simplex3(
+          x * 0.3 + transientOffset,
+          y * 0.3,
+          noiseTime
+        );
+        // Map noise [-1,1] to [0,1], apply gradient
+        const noiseIntensity = ((noiseVal + 1) * 0.5) * gradientFactor;
+
+        // Blend: noise provides ambient glow, heat map adds particle effects
+        const baseHeat = noiseIntensity * 60;  // Subtle ambient (0-60)
+        const totalHeat = Math.min(255, heat + baseHeat);
+
+        const color = heatToColor(totalHeat);
         this.matrix.setPixel(x, y, color);
       }
     }

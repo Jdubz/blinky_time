@@ -6,6 +6,7 @@
  */
 
 import { Generator, AudioControl, PixelMatrix, RGB, createPixelMatrix, AudioControlHelpers } from '../types';
+import { simplex3 } from '../noise';
 
 /**
  * Water color palette (matches firmware Palette::WATER)
@@ -72,6 +73,7 @@ export interface WaterParams {
   gravity: number;           // Gravity strength (default: 0.3)
   splashParticles: number;   // Particles per splash (default: 4)
   maxParticles: number;      // Maximum concurrent particles (default: 24)
+  organicTransientMin: number; // Min transient to trigger in organic mode (default: 0.3)
 }
 
 export class WaterGenerator implements Generator {
@@ -94,7 +96,8 @@ export class WaterGenerator implements Generator {
     dropSpread: 0.3,
     gravity: 0.3,
     splashParticles: 4,
-    maxParticles: 24
+    maxParticles: 24,
+    organicTransientMin: 0.3
   };
 
   begin(width: number, height: number): void {
@@ -175,10 +178,14 @@ export class WaterGenerator implements Generator {
         dropCount = 4;  // Wave on beat
       }
     } else {
-      // Organic mode: transient-reactive
-      if (audio.pulse > 0.5) {
-        spawnProb += audioSpawnBoost * audio.pulse;
-        dropCount = 2;
+      // Organic mode: steady rain with subtle transient response
+      // Always have some drops falling
+      spawnProb += 0.12;  // Baseline for continuous gentle rain
+      dropCount = 1;      // Steady drip
+
+      if (audio.pulse > this.params.organicTransientMin) {
+        spawnProb += audioSpawnBoost * audio.pulse * 0.4;
+        dropCount += 1;
       }
     }
 
@@ -271,15 +278,35 @@ export class WaterGenerator implements Generator {
       }
     }
 
-    // 6. Add base water ambient (subtle wave)
+    // 6. Add simplex noise ambient background (even across display)
+    const timeScale = hasRhythm ? 0.002 : 0.0008;  // Faster in music mode
+    const noiseTime = timeMs * timeScale;
+
+    // Rapid shape changes on transients in music mode
+    const transientOffset = hasRhythm && audio.pulse > 0.5 ? audio.pulse * 3 : 0;
+
     for (let y = 0; y < this.height; y++) {
       for (let x = 0; x < this.width; x++) {
         const existing = this.matrix.getPixel(x, y);
-        if (existing.r === 0 && existing.g === 0 && existing.b === 0) {
-          const wave = Math.sin((x + y * 0.5 + timeMs / 500) * 0.8) * 0.05 + 0.08;
-          const color = intensityToColor(wave * (1 + audio.energy * 0.3));
-          this.matrix.setPixel(x, y, color);
-        }
+
+        // Even noise background (no gradient for water)
+        const noiseVal = simplex3(
+          x * 0.25 + transientOffset,
+          y * 0.25,
+          noiseTime
+        );
+        // Map noise [-1,1] to ambient intensity
+        const noiseIntensity = (noiseVal + 1) * 0.5 * 0.15;  // 0-0.15 range
+        const energyBoost = 1 + audio.energy * 0.3;
+
+        const ambientColor = intensityToColor(noiseIntensity * energyBoost);
+
+        // Additive blend with existing particles
+        this.matrix.setPixel(x, y, {
+          r: Math.min(255, existing.r + ambientColor.r),
+          g: Math.min(255, existing.g + ambientColor.g),
+          b: Math.min(255, existing.b + ambientColor.b)
+        });
       }
     }
 

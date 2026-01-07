@@ -6,6 +6,34 @@
  */
 
 import { Generator, AudioControl, PixelMatrix, RGB, createPixelMatrix, AudioControlHelpers } from '../types';
+import { simplex3 } from '../noise';
+
+/**
+ * Night sky / sunset background palette
+ * Subtle dark reds and purples for ambient glow behind lightning
+ */
+function nightSkyColor(intensity: number): RGB {
+  // Clamp to 0-1
+  intensity = Math.max(0, Math.min(1, intensity));
+
+  if (intensity < 0.5) {
+    // Dark to deep sunset red
+    const t = intensity / 0.5;
+    return {
+      r: Math.round(40 * t),
+      g: Math.round(8 * t),
+      b: Math.round(15 * t)
+    };
+  } else {
+    // Deep red to muted purple
+    const t = (intensity - 0.5) / 0.5;
+    return {
+      r: Math.round(40 + 20 * t),
+      g: Math.round(8 + 8 * t),
+      b: Math.round(15 + 25 * t)
+    };
+  }
+}
 
 /**
  * Lightning color palette (matches firmware Palette::LIGHTNING)
@@ -65,6 +93,7 @@ export interface LightningParams {
   branchCount: number;       // Branches per spawn point (default: 2)
   maxParticles: number;      // Maximum particles (default: 48)
   defaultLifespan: number;   // Bolt lifespan in frames (default: 15)
+  organicTransientMin: number; // Min transient to trigger in organic mode (default: 0.3)
 }
 
 export class LightningGenerator implements Generator {
@@ -85,7 +114,8 @@ export class LightningGenerator implements Generator {
     branchChance: 20,
     branchCount: 2,
     maxParticles: 48,
-    defaultLifespan: 15
+    defaultLifespan: 15,
+    organicTransientMin: 0.3
   };
 
   begin(width: number, height: number): void {
@@ -214,10 +244,63 @@ export class LightningGenerator implements Generator {
     const { baseSpawnChance, audioSpawnBoost, fadeRate, branchChance, maxParticles } = this.params;
     const hasRhythm = AudioControlHelpers.hasRhythm(audio);
 
-    // Clear matrix
+    // Clear matrix and add noise background
     this.matrix.clear();
 
-    // 1. Spawn new bolts
+    // Add simplex noise ambient background (even across display)
+    const timeScale = hasRhythm ? 0.002 : 0.0006;  // Faster in music mode
+    const noiseTime = timeMs * timeScale;
+
+    // Rapid shape changes on transients in music mode
+    const transientOffset = hasRhythm && audio.pulse > 0.5 ? audio.pulse * 4 : 0;
+
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        // Base night sky noise
+        const noiseVal = simplex3(
+          x * 0.35 + transientOffset,
+          y * 0.35,
+          noiseTime
+        );
+        const baseIntensity = (noiseVal + 1) * 0.5;
+
+        if (hasRhythm) {
+          // Music mode: simple night sky background
+          const energyBoost = 0.4 + audio.energy * 0.4;
+          const ambientColor = nightSkyColor(baseIntensity * energyBoost);
+          this.matrix.setPixel(x, y, ambientColor);
+        } else {
+          // Organic mode: crawling electric tendrils
+          // Layer 1: slow-moving base glow
+          const slowNoise = simplex3(x * 0.2, y * 0.2, noiseTime * 0.3);
+
+          // Layer 2: faster crawling tendrils (higher frequency, thresholded)
+          const tendrilNoise = simplex3(
+            x * 0.5 + noiseTime * 0.5,
+            y * 0.5,
+            noiseTime * 0.8
+          );
+
+          // Threshold tendrils to create distinct bright lines
+          const tendrilIntensity = tendrilNoise > 0.3
+            ? (tendrilNoise - 0.3) / 0.7  // 0-1 for values above threshold
+            : 0;
+
+          // Combine: base glow + crawling tendrils
+          const baseGlow = (slowNoise + 1) * 0.5 * 0.4;
+          const tendril = tendrilIntensity * 0.6;
+          const combined = Math.min(1, baseGlow + tendril);
+
+          // Boost on transients (tendrils brighten)
+          const transientBoost = audio.pulse > 0.3 ? audio.pulse * 0.3 : 0;
+
+          const ambientColor = nightSkyColor(combined + transientBoost);
+          this.matrix.setPixel(x, y, ambientColor);
+        }
+      }
+    }
+
+    // 1. Spawn new bolts (music mode only, organic uses crawling tendrils)
     let boltCount = 0;
     let spawnProb = baseSpawnChance;
 
@@ -231,17 +314,12 @@ export class LightningGenerator implements Generator {
       if (this.beatHappened(audio)) {
         boltCount = 2;
       }
-    } else {
-      // Organic mode: transient-reactive
-      if (audio.pulse > 0.5) {
-        spawnProb += audioSpawnBoost * audio.pulse;
-        boltCount = 1;
+
+      if (Math.random() < spawnProb) {
+        boltCount++;
       }
     }
-
-    if (Math.random() < spawnProb) {
-      boltCount++;
-    }
+    // Organic mode: no bolts, just crawling tendrils from noise above
 
     // Calculate bolt intensity based on audio
     let intensity = 0.6 + Math.random() * 0.4;

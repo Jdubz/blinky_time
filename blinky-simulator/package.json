@@ -10,7 +10,7 @@
     "build": "tsc",
     "start": "node dist/cli.js",
     "dev": "ts-node src/cli.ts",
-    "test": "node dist/cli.js --help"
+    "test": "node dist/generators/generators.test.js"
   },
   "keywords": ["led", "simulator", "arduino", "visualization", "gif"],
   "author": "",

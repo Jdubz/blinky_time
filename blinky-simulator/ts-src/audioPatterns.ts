@@ -10,7 +10,7 @@ export interface AudioPattern {
   getAudioAt(timeMs: number): AudioControl;
 }
 
-// Silent pattern - no audio
+// Silent pattern - no audio at all
 function createSilencePattern(durationMs: number): AudioPattern {
   return {
     name: 'silence',
@@ -21,6 +21,48 @@ function createSilencePattern(durationMs: number): AudioPattern {
         pulse: 0,
         phase: 0,
         rhythmStrength: 0
+      };
+    }
+  };
+}
+
+// Ambient pattern - subtle environmental sounds, no music
+// Simulates background noise with occasional subtle transients
+function createAmbientPattern(durationMs: number): AudioPattern {
+  // Pre-generate occasional subtle transients
+  const transients: { time: number; strength: number }[] = [];
+  let t = 0;
+  while (t < durationMs) {
+    t += 500 + Math.random() * 2000;  // 0.5-2.5 seconds between events
+    if (t < durationMs) {
+      transients.push({
+        time: t,
+        strength: 0.2 + Math.random() * 0.3  // Weak transients (0.2-0.5)
+      });
+    }
+  }
+
+  return {
+    name: 'ambient',
+    duration: durationMs,
+    getAudioAt(timeMs: number): AudioControl {
+      // Slow-varying background energy
+      const baseEnergy = 0.15 + Math.sin(timeMs / 3000) * 0.05;
+
+      // Check for nearby transients
+      let pulse = 0;
+      for (const t of transients) {
+        const diff = Math.abs(timeMs - t.time);
+        if (diff < 80) {
+          pulse = Math.max(pulse, t.strength * (1 - diff / 80));
+        }
+      }
+
+      return {
+        energy: baseEnergy + pulse * 0.2,
+        pulse,
+        phase: (timeMs / 2000) % 1,  // Slow drift, no real rhythm
+        rhythmStrength: 0.1  // Very low - definitely organic mode
       };
     }
   };
@@ -114,13 +156,16 @@ function createComplexPattern(durationMs: number): AudioPattern {
   };
 }
 
-export type PatternType = 'silence' | 'steady-90bpm' | 'steady-120bpm' | 'steady-140bpm' | 'fast' | 'burst' | 'bursts' | 'complex' | 'silent';
+export type PatternType = 'silence' | 'silent' | 'ambient' | 'steady-90bpm' | 'steady-120bpm' | 'steady-140bpm' | 'fast' | 'burst' | 'bursts' | 'complex';
 
 export function createPattern(type: PatternType | string, durationMs: number): AudioPattern {
   switch (type) {
     case 'silence':
     case 'silent':
       return createSilencePattern(durationMs);
+
+    case 'ambient':
+      return createAmbientPattern(durationMs);
 
     case 'steady-90bpm':
       return createBpmPattern(90, durationMs);
