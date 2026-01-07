@@ -1211,18 +1211,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 ensureTestResultsDir();
                 const timestamp = Date.now();
                 const outputFile = output_path || join(TEST_RESULTS_DIR, `preview-${generator}-${timestamp}.gif`);
-                // Path to Node.js simulator
-                const SIMULATOR_CLI_PATH = join(__dirname, '..', '..', 'blinky-simulator', 'dist', 'cli.js');
+                // Path to C++ simulator executable (runs actual firmware code)
+                const isWindows = process.platform === 'win32';
+                const SIMULATOR_EXE = isWindows ? 'blinky-simulator.exe' : 'blinky-simulator';
+                const SIMULATOR_PATH = join(__dirname, '..', '..', 'blinky-simulator', 'build', SIMULATOR_EXE);
                 // Check if simulator is built
-                if (!existsSync(SIMULATOR_CLI_PATH)) {
+                if (!existsSync(SIMULATOR_PATH)) {
                     return {
                         content: [
                             {
                                 type: 'text',
                                 text: JSON.stringify({
                                     error: 'Simulator not built',
-                                    hint: 'Build the simulator first: cd blinky-simulator && npm install && npm run build',
-                                    simulatorPath: SIMULATOR_CLI_PATH,
+                                    hint: isWindows
+                                        ? 'Build the simulator first: cd blinky-simulator && build.bat'
+                                        : 'Build the simulator first: cd blinky-simulator && ./build.sh',
+                                    simulatorPath: SIMULATOR_PATH,
+                                    note: 'The simulator compiles actual firmware C++ code. Requires a C++ compiler (Visual Studio, g++, or clang++).',
                                 }, null, 2),
                             },
                         ],
@@ -1230,7 +1235,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 }
                 // Build CLI arguments
                 const cliArgs = [
-                    SIMULATOR_CLI_PATH,
                     '-g', generator,
                     '-e', effect,
                     '-p', pattern,
@@ -1242,9 +1246,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 if (effect === 'hue' && hue_shift > 0) {
                     cliArgs.push('--hue', hue_shift.toString());
                 }
-                // Run simulator using Node.js
+                // Run C++ simulator (runs actual firmware code)
                 const result = await new Promise((resolve) => {
-                    const child = spawn('node', cliArgs, {
+                    const child = spawn(SIMULATOR_PATH, cliArgs, {
                         stdio: ['ignore', 'pipe', 'pipe'],
                     });
                     let stdout = '';
