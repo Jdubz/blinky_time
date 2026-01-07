@@ -130,16 +130,25 @@ inline T constrain(T val, T minVal, T maxVal) {
     return val;
 }
 
-// Use std::min and std::max, but provide Arduino-style macros for compatibility
-#ifndef min
-template<typename T>
-inline T min(T a, T b) { return (a < b) ? a : b; }
+// Prevent Windows.h from defining min/max macros
+#ifndef NOMINMAX
+#define NOMINMAX
 #endif
 
-#ifndef max
-template<typename T>
-inline T max(T a, T b) { return (a > b) ? a : b; }
-#endif
+// Arduino-style min/max that work with mixed types
+// Using function templates to avoid macro conflicts with std::min/std::max
+using std::min;
+using std::max;
+
+// Provide mixed-type overloads that Arduino code might use
+inline int min(int a, uint16_t b) { return a < static_cast<int>(b) ? a : static_cast<int>(b); }
+inline int min(uint16_t a, int b) { return static_cast<int>(a) < b ? static_cast<int>(a) : b; }
+inline uint32_t min(uint32_t a, int b) { return a < static_cast<uint32_t>(b) ? a : static_cast<uint32_t>(b); }
+inline uint32_t min(int a, uint32_t b) { return static_cast<uint32_t>(a) < b ? static_cast<uint32_t>(a) : b; }
+inline int max(int a, uint16_t b) { return a > static_cast<int>(b) ? a : static_cast<int>(b); }
+inline int max(uint16_t a, int b) { return static_cast<int>(a) > b ? static_cast<int>(a) : b; }
+inline uint32_t max(uint32_t a, int b) { return a > static_cast<uint32_t>(b) ? a : static_cast<uint32_t>(b); }
+inline uint32_t max(int a, uint32_t b) { return static_cast<uint32_t>(a) > b ? static_cast<uint32_t>(a) : b; }
 
 inline long map(long x, long in_min, long in_max, long out_min, long out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
