@@ -2,6 +2,7 @@
 
 #include "../particles/ParticleGenerator.h"
 #include "../types/ColorPalette.h"
+#include "../math/SimplexNoise.h"
 
 /**
  * FireParams - Fire-specific particle parameters
@@ -115,7 +116,14 @@ private:
      */
     void blendHeatToMatrix(PixelMatrix& matrix);
 
+    /**
+     * Render simplex noise background with fire gradient
+     * Creates organic, animated ember glow beneath particles
+     */
+    void renderNoiseBackground(PixelMatrix& matrix);
+
     uint8_t* heat_;               // Heat field buffer
     FireParams params_;
     uint8_t beatCount_;           // Beat counter for downbeat detection
+    float noiseTime_;             // Animation time for noise field
 };

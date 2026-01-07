@@ -28,6 +28,7 @@ cl /EHsc /std:c++17 /O2 /Fe:build\blinky-simulator.exe ^
     /I ..\blinky-things ^
     src\main.cpp ^
     ..\blinky-things\types\PixelMatrix.cpp ^
+    ..\blinky-things\math\SimplexNoise.cpp ^
     ..\blinky-things\generators\Fire.cpp ^
     ..\blinky-things\generators\Water.cpp ^
     ..\blinky-things\generators\Lightning.cpp ^
@@ -55,6 +56,7 @@ g++ -std=c++17 -O2 -Wall -Wextra ^
     -o build/blinky-simulator.exe ^
     src/main.cpp ^
     ../blinky-things/types/PixelMatrix.cpp ^
+    ../blinky-things/math/SimplexNoise.cpp ^
     ../blinky-things/generators/Fire.cpp ^
     ../blinky-things/generators/Water.cpp ^
     ../blinky-things/generators/Lightning.cpp ^

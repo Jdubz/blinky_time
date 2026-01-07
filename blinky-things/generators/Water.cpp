@@ -1,7 +1,7 @@
 #include "Water.h"
 #include <Arduino.h>
 
-Water::Water() : params_() {}
+Water::Water() : params_(), noiseTime_(0.0f) {}
 
 bool Water::begin(const DeviceConfig& config) {
     if (!ParticleGenerator::begin(config)) return false;
@@ -11,7 +11,30 @@ bool Water::begin(const DeviceConfig& config) {
     windForce_.setWind(params_.windBase, params_.windVariation);
     dragForce_.setDrag(params_.drag);
 
+    noiseTime_ = 0.0f;
+
     return true;
+}
+
+void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
+    // Advance noise animation time
+    // Music mode: wave-like pulsing synced to beat
+    // Ambient mode: slow, gentle ocean swell
+    float timeSpeed = audio.hasRhythm() ?
+        0.03f + 0.02f * audio.energy :   // Music: 0.03-0.05 (wave-like)
+        0.012f + 0.008f * audio.energy;  // Ambient: 0.012-0.02 (gentle swell)
+    noiseTime_ += timeSpeed;
+
+    // Render noise background first (tropical sea underlayer)
+    renderNoiseBackground(matrix);
+
+    // Run particle system (spawns, updates, renders particles)
+    ParticleGenerator::generate(matrix, audio);
+}
+
+void Water::reset() {
+    ParticleGenerator::reset();
+    noiseTime_ = 0.0f;
 }
 
 void Water::spawnParticles(float dt) {
@@ -19,26 +42,36 @@ void Water::spawnParticles(float dt) {
     uint8_t dropCount = 0;
 
     if (audio_.hasRhythm()) {
-        // MUSIC MODE: Beat-synced wave generation
-        if (audio_.pulse > 0.3f) {
-            // Boost probability near on-beat moments (phase near 0 or 1)
-            float beatBoost = audio_.phaseToPulse();  // 1.0 at phase=0, 0.0 at phase=0.5
-            spawnProb += params_.audioSpawnBoost * audio_.pulse * beatBoost;
-        }
+        // MUSIC MODE: Dancey, wave-like spawning synced to beat
+        // Creates rhythmic "rain" that pulses with the music
+        float phasePulse = audio_.phaseToPulse();  // 1.0 at beat, fades to 0
+        float phaseWave = 0.4f + 0.6f * phasePulse;  // Range 0.4-1.0
 
-        // Burst on beat
+        // Modulate spawn rate with beat phase for wave effect
+        spawnProb *= phaseWave;
+        spawnProb += params_.audioSpawnBoost * audio_.pulse * phasePulse;
+
+        // Wave burst on beat
         if (beatHappened()) {
-            dropCount = 4;  // Wave on beat
+            // Spawn a "wave" of drops across the width
+            uint8_t waveDrops = 3 + (uint8_t)(5 * audio_.rhythmStrength);
+            dropCount = (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy));
         }
     } else {
-        // ORGANIC MODE: Transient-reactive with threshold
+        // AMBIENT MODE: Gentle, steady rainfall with subtle variations
+        // Calm, meditative water flow
+        float smoothEnergy = 0.4f + 0.3f * audio_.energy;  // Range 0.4-0.7
+        spawnProb *= smoothEnergy;
+
+        // Occasional gentle bursts on transients (like a gust of wind)
         if (audio_.pulse > params_.organicTransientMin) {
-            spawnProb += params_.audioSpawnBoost * audio_.pulse;
-            dropCount = 2;
+            float transientStrength = (audio_.pulse - params_.organicTransientMin) /
+                                     (1.0f - params_.organicTransientMin);
+            dropCount = (uint8_t)(2 * transientStrength);
         }
     }
 
-    // Random baseline spawning
+    // Random baseline spawning (always some gentle rain)
     if (random(1000) < spawnProb * 1000) {
         dropCount++;
     }
@@ -49,8 +82,11 @@ void Water::spawnParticles(float dt) {
         float y = 0;  // Top of screen
 
         // Downward velocity with horizontal spread
-        float vy = params_.dropVelocityMin +
-                  random(100) * (params_.dropVelocityMax - params_.dropVelocityMin) / 100.0f;
+        // Music mode: faster drops for more energy
+        // Ambient mode: slower, more peaceful
+        float velocityMult = audio_.hasRhythm() ? (1.0f + 0.2f * audio_.pulse) : 0.7f;
+        float vy = (params_.dropVelocityMin +
+                   random(100) * (params_.dropVelocityMax - params_.dropVelocityMin) / 100.0f) * velocityMult;
         float vx = (random(200) - 100) * params_.dropSpread / 100.0f;
 
         uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
@@ -114,5 +150,74 @@ void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
 
         pool_.spawn(x, y, vx, vy, intensity, 30, 0.5f,  // Light, short-lived
                    ParticleFlags::GRAVITY | ParticleFlags::FADE);
+    }
+}
+
+void Water::renderNoiseBackground(PixelMatrix& matrix) {
+    // Tropical sea noise background - blue/green/cyan gradients
+    // Simulates shallow tropical water with light playing on the surface
+
+    // Noise scales for wave-like movement
+    const float noiseScale = 0.12f;     // Spatial frequency
+    const float timeScale = noiseTime_; // Animated movement
+
+    // In music mode, add wave-like brightness pulsing
+    float waveBrightness = 1.0f;
+    if (audio_.hasRhythm()) {
+        // Gentle wave pulse on beat (range 0.7-1.0)
+        float phasePulse = audio_.phaseToPulse();
+        waveBrightness = 0.7f + 0.3f * phasePulse;
+    }
+
+    for (int y = 0; y < height_; y++) {
+        for (int x = 0; x < width_; x++) {
+            // Sample multiple noise layers for complex water surface
+            float nx = x * noiseScale;
+            float ny = y * noiseScale;
+
+            // Primary wave layer (slow, large waves)
+            float wave1 = SimplexNoise::noise3D_01(nx, ny, timeScale);
+
+            // Secondary ripple layer (faster, smaller)
+            float wave2 = SimplexNoise::noise3D_01(nx * 2.5f, ny * 2.5f, timeScale * 1.5f);
+
+            // Combine waves with different weights
+            float noiseVal = wave1 * 0.6f + wave2 * 0.4f;
+
+            // Apply wave brightness modulation
+            float intensity = noiseVal * waveBrightness;
+
+            // Keep background subtle to let particles pop
+            intensity *= 0.4f;
+
+            // Clamp and convert to 0-255 range
+            intensity = constrain(intensity, 0.0f, 1.0f);
+            uint8_t level = (uint8_t)(intensity * 255.0f);
+
+            // Tropical sea color palette: deep blue -> turquoise -> cyan
+            // Use second noise sample for color variation
+            float colorNoise = SimplexNoise::noise3D_01(nx * 0.5f, ny * 0.5f, timeScale * 0.3f);
+
+            uint8_t r, g, b;
+            if (colorNoise < 0.4f) {
+                // Deep blue-green (40% of surface)
+                r = (uint8_t)(level * 0.05f);
+                g = (uint8_t)(level * 0.4f);
+                b = level;
+            } else if (colorNoise < 0.7f) {
+                // Turquoise/teal (30% of surface)
+                r = (uint8_t)(level * 0.1f);
+                g = (uint8_t)(level * 0.6f);
+                b = (uint8_t)(level * 0.8f);
+            } else {
+                // Bright cyan highlights (30% of surface)
+                r = (uint8_t)(level * 0.15f);
+                g = (uint8_t)(level * 0.7f);
+                b = (uint8_t)(level * 0.65f);
+            }
+
+            // Set pixel (first layer, direct set)
+            matrix.setPixel(x, y, r, g, b);
+        }
     }
 }

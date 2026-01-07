@@ -21,6 +21,9 @@
 // Core data types
 #include "types/PixelMatrix.cpp"
 
+// Math implementations
+#include "math/SimplexNoise.cpp"
+
 // Generator implementations
 #include "generators/Fire.cpp"
 #include "generators/Water.cpp"

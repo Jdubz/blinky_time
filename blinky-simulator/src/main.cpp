@@ -14,6 +14,10 @@
 #include <string>
 #include <cstdlib>
 #include <cstring>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 // Arduino compatibility (must be first)
 #include "Arduino.h"
@@ -45,15 +49,23 @@ struct SimulatorConfig {
     std::string generator = "fire";
     std::string effect = "none";
     std::string pattern = "steady-120bpm";
-    std::string output = "preview.gif";
+    std::string outputDir = "previews";
     std::string device = "tube";  // tube, hat, bucket
     int durationMs = 3000;
     int fps = 30;
-    int ledSize = 16;
     float hueShift = 0.0f;
     bool verbose = false;
     bool showHelp = false;
 };
+
+// Create directory (cross-platform)
+void createDir(const std::string& path) {
+#ifdef _WIN32
+    _mkdir(path.c_str());
+#else
+    mkdir(path.c_str(), 0755);
+#endif
+}
 
 void printHelp() {
     std::cout << R"(
@@ -67,31 +79,31 @@ OPTIONS:
     --effect, -e <name>      Effect to apply: none, hue (default: none)
     --pattern, -p <name>     Audio pattern: steady-120bpm, steady-90bpm, steady-140bpm,
                              silence, burst, complex, or path to pattern file
-    --output, -o <file>      Output GIF filename (default: preview.gif)
+    --output, -o <dir>       Output directory (default: previews)
     --device, -d <name>      Device config: tube (4x15), hat (89 string), bucket (16x8)
     --duration, -t <ms>      Duration in milliseconds (default: 3000)
     --fps, -f <num>          Frames per second (default: 30)
-    --led-size <pixels>      LED circle size in pixels (default: 16)
     --hue <0.0-1.0>          Hue shift for hue effect (default: 0.0)
     --verbose, -v            Verbose output
     --help, -h               Show this help message
 
 EXAMPLES:
-    # Generate 3-second fire preview at 30 FPS
-    blinky-simulator -g fire -o fire.gif
+    # Generate fire preview (outputs to previews/low-res/ and previews/high-res/)
+    blinky-simulator -g fire
 
     # Generate water effect with complex audio pattern
-    blinky-simulator -g water -p complex -t 5000 -o water.gif
+    blinky-simulator -g water -p complex -t 5000
 
-    # Generate lightning with hue shift (blue lightning)
-    blinky-simulator -g lightning -e hue --hue 0.6 -o blue-lightning.gif
+    # Generate lightning with hue shift
+    blinky-simulator -g lightning -e hue --hue 0.6
 
     # Use bucket totem device (16x8 matrix)
-    blinky-simulator -g fire -d bucket -o bucket-fire.gif
+    blinky-simulator -g fire -d bucket
 
 OUTPUT:
-    Creates an animated GIF file showing the LED visualization.
-    The GIF can be used for preview or AI-assisted parameter tuning.
+    Creates TWO animated GIFs in the output directory:
+      <dir>/low-res/<generator>.gif   - Exact LED pixels (for AI analysis)
+      <dir>/high-res/<generator>.gif  - Human-readable preview
 
 )" << std::endl;
 }
@@ -112,15 +124,13 @@ bool parseArgs(int argc, char* argv[], SimulatorConfig& config) {
         } else if ((arg == "--pattern" || arg == "-p") && i + 1 < argc) {
             config.pattern = argv[++i];
         } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
-            config.output = argv[++i];
+            config.outputDir = argv[++i];
         } else if ((arg == "--device" || arg == "-d") && i + 1 < argc) {
             config.device = argv[++i];
         } else if ((arg == "--duration" || arg == "-t") && i + 1 < argc) {
             config.durationMs = std::atoi(argv[++i]);
         } else if ((arg == "--fps" || arg == "-f") && i + 1 < argc) {
             config.fps = std::atoi(argv[++i]);
-        } else if (arg == "--led-size" && i + 1 < argc) {
-            config.ledSize = std::atoi(argv[++i]);
         } else if (arg == "--hue" && i + 1 < argc) {
             config.hueShift = std::atof(argv[++i]);
         } else {
@@ -209,7 +219,7 @@ int main(int argc, char* argv[]) {
         std::cout << "  Device: " << config.device << std::endl;
         std::cout << "  Duration: " << config.durationMs << " ms" << std::endl;
         std::cout << "  FPS: " << config.fps << std::endl;
-        std::cout << "  Output: " << config.output << std::endl;
+        std::cout << "  Output dir: " << config.outputDir << std::endl;
     }
 
     // Initialize random seed for reproducibility
@@ -277,34 +287,62 @@ int main(int argc, char* argv[]) {
                   << " (" << audioPattern.getDuration() << " ms)" << std::endl;
     }
 
-    // Configure LED image renderer
-    LEDRenderConfig renderConfig;
-    renderConfig.ledWidth = deviceConfig.matrix.width;
-    renderConfig.ledHeight = deviceConfig.matrix.height;
-    renderConfig.ledSize = config.ledSize;
-    renderConfig.ledSpacing = 4;
-    renderConfig.padding = 10;
-    renderConfig.drawGlow = true;
+    // Create output directories
+    std::string lowResDir = config.outputDir + "/low-res";
+    std::string highResDir = config.outputDir + "/high-res";
+    createDir(config.outputDir);
+    createDir(lowResDir);
+    createDir(highResDir);
 
-    // Choose layout style based on device
-    if (config.device == "hat") {
-        renderConfig.style = LEDLayoutStyle::STRIP;
-    } else {
-        renderConfig.style = LEDLayoutStyle::GRID;
-    }
+    // Generate output filenames
+    std::string filename = config.generator + ".gif";
+    std::string lowResPath = lowResDir + "/" + filename;
+    std::string highResPath = highResDir + "/" + filename;
 
-    LEDImageRenderer imageRenderer;
-    imageRenderer.configure(renderConfig);
+    // Layout style based on device
+    LEDLayoutStyle layoutStyle = (config.device == "hat") ? LEDLayoutStyle::STRIP : LEDLayoutStyle::GRID;
+
+    // Configure LOW-RES renderer (exact pixels for AI)
+    LEDRenderConfig lowResConfig;
+    lowResConfig.ledWidth = deviceConfig.matrix.width;
+    lowResConfig.ledHeight = deviceConfig.matrix.height;
+    lowResConfig.ledSize = 1;
+    lowResConfig.ledSpacing = 0;
+    lowResConfig.padding = 0;
+    lowResConfig.drawGlow = false;
+    lowResConfig.style = layoutStyle;
+
+    LEDImageRenderer lowResRenderer;
+    lowResRenderer.configure(lowResConfig);
+
+    // Configure HIGH-RES renderer (human readable)
+    LEDRenderConfig highResConfig;
+    highResConfig.ledWidth = deviceConfig.matrix.width;
+    highResConfig.ledHeight = deviceConfig.matrix.height;
+    highResConfig.ledSize = 8;
+    highResConfig.ledSpacing = 2;
+    highResConfig.padding = 4;
+    highResConfig.drawGlow = false;
+    highResConfig.style = layoutStyle;
+
+    LEDImageRenderer highResRenderer;
+    highResRenderer.configure(highResConfig);
 
     if (config.verbose) {
-        std::cout << "  Image size: " << imageRenderer.getWidth() << "x"
-                  << imageRenderer.getHeight() << std::endl;
+        std::cout << "  Low-res: " << lowResRenderer.getWidth() << "x"
+                  << lowResRenderer.getHeight() << " -> " << lowResPath << std::endl;
+        std::cout << "  High-res: " << highResRenderer.getWidth() << "x"
+                  << highResRenderer.getHeight() << " -> " << highResPath << std::endl;
     }
 
-    // Create GIF encoder
-    GifEncoder gif;
-    if (!gif.begin(config.output, imageRenderer.getWidth(), imageRenderer.getHeight(), config.fps)) {
-        std::cerr << "Failed to create output file: " << config.output << std::endl;
+    // Create GIF encoders
+    GifEncoder lowResGif, highResGif;
+    if (!lowResGif.begin(lowResPath, lowResRenderer.getWidth(), lowResRenderer.getHeight(), config.fps)) {
+        std::cerr << "Failed to create: " << lowResPath << std::endl;
+        return 1;
+    }
+    if (!highResGif.begin(highResPath, highResRenderer.getWidth(), highResRenderer.getHeight(), config.fps)) {
+        std::cerr << "Failed to create: " << highResPath << std::endl;
         return 1;
     }
 
@@ -316,7 +354,7 @@ int main(int argc, char* argv[]) {
         std::cout << "  Rendering " << totalFrames << " frames..." << std::endl;
     }
 
-    // Render frames
+    // Render frames to both outputs
     for (int frame = 0; frame < totalFrames; frame++) {
         uint32_t timeMs = frame * frameIntervalMs;
 
@@ -330,11 +368,13 @@ int main(int argc, char* argv[]) {
         pipeline.render(audio);
         leds.show();
 
-        // Render LEDs to image
-        imageRenderer.render(leds);
+        // Render to both image buffers
+        lowResRenderer.render(leds);
+        highResRenderer.render(leds);
 
-        // Add frame to GIF
-        gif.addFrame(imageRenderer.getBuffer());
+        // Add frames to both GIFs
+        lowResGif.addFrame(lowResRenderer.getBuffer());
+        highResGif.addFrame(highResRenderer.getBuffer());
 
         // Progress indicator
         if (config.verbose && frame % 30 == 0) {
@@ -343,12 +383,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Finish GIF
-    gif.close();
+    // Finish both GIFs
+    lowResGif.close();
+    highResGif.close();
 
-    size_t fileSize = GifEncoder::getFileSize(config.output);
-    std::cout << "Created " << config.output << " (" << fileSize << " bytes, "
-              << totalFrames << " frames)" << std::endl;
+    std::cout << "Created:" << std::endl;
+    std::cout << "  " << lowResPath << " (" << GifEncoder::getFileSize(lowResPath) << " bytes)" << std::endl;
+    std::cout << "  " << highResPath << " (" << GifEncoder::getFileSize(highResPath) << " bytes)" << std::endl;
 
     return 0;
 }

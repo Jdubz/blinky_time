@@ -35,6 +35,7 @@ $CXX -std=c++17 -O2 -Wall -Wextra \
     -o build/blinky-simulator \
     src/main.cpp \
     ../blinky-things/types/PixelMatrix.cpp \
+    ../blinky-things/math/SimplexNoise.cpp \
     ../blinky-things/generators/Fire.cpp \
     ../blinky-things/generators/Water.cpp \
     ../blinky-things/generators/Lightning.cpp \

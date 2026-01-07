@@ -18,6 +18,7 @@ include_directories(
 # Blinky-things source files (only what we need for rendering)
 set(BLINKY_SOURCES
     ../blinky-things/types/PixelMatrix.cpp
+    ../blinky-things/math/SimplexNoise.cpp
     ../blinky-things/generators/Fire.cpp
     ../blinky-things/generators/Water.cpp
     ../blinky-things/generators/Lightning.cpp

@@ -2,6 +2,7 @@
 
 #include "../particles/ParticleGenerator.h"
 #include "../types/ColorPalette.h"
+#include "../math/SimplexNoise.h"
 
 /**
  * LightningParams - Lightning-specific particle parameters
@@ -69,6 +70,8 @@ public:
 
     // Generator interface
     bool begin(const DeviceConfig& config) override;
+    void generate(PixelMatrix& matrix, const AudioControl& audio) override;
+    void reset() override;
     const char* getName() const override { return "Lightning"; }
     GeneratorType getType() const override { return GeneratorType::LIGHTNING; }
 
@@ -95,5 +98,12 @@ private:
      */
     void spawnBranch(const Particle* parent);
 
+    /**
+     * Render simplex noise background with sunset/night sky colors
+     * Deep purples, oranges, and dark blues for dramatic storm sky
+     */
+    void renderNoiseBackground(PixelMatrix& matrix);
+
     LightningParams params_;
+    float noiseTime_;             // Animation time for noise field
 };

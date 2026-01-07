@@ -2,6 +2,7 @@
 
 #include "../particles/ParticleGenerator.h"
 #include "../types/ColorPalette.h"
+#include "../math/SimplexNoise.h"
 
 /**
  * WaterParams - Water-specific particle parameters
@@ -79,6 +80,8 @@ public:
 
     // Generator interface
     bool begin(const DeviceConfig& config) override;
+    void generate(PixelMatrix& matrix, const AudioControl& audio) override;
+    void reset() override;
     const char* getName() const override { return "Water"; }
     GeneratorType getType() const override { return GeneratorType::WATER; }
 
@@ -100,5 +103,12 @@ private:
      */
     void spawnSplash(float x, float y, uint8_t parentIntensity);
 
+    /**
+     * Render simplex noise background with tropical sea colors
+     * Blue/green/cyan gradient simulating tropical water
+     */
+    void renderNoiseBackground(PixelMatrix& matrix);
+
     WaterParams params_;
+    float noiseTime_;             // Animation time for noise field
 };
