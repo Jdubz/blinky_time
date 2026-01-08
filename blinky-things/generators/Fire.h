@@ -39,27 +39,28 @@ struct FireParams {
     uint8_t burstSparks;          // Sparks per burst
 
     FireParams() {
-        baseSpawnChance = 0.35f;  // Higher spawn rate for visible flames
-        audioSpawnBoost = 0.5f;   // Music boost
-        maxParticles = 40;        // More particles
-        defaultLifespan = 60;     // 2 seconds at 30 FPS
-        intensityMin = 70;        // Red range (visible)
-        intensityMax = 150;       // Orange (no yellow/white)
-        gravity = -50.0f;         // LEDs/sec² upward (gentle rise)
+        // FIRE EFFECT: Bright sparks rising from bottom
+        baseSpawnChance = 0.7f;   // HIGH spawn rate - constant sparks
+        audioSpawnBoost = 0.4f;   // Music boost
+        maxParticles = 35;        // Good spark coverage
+        defaultLifespan = 50;     // ~1.7 seconds to rise
+        intensityMin = 150;       // BRIGHT red/orange
+        intensityMax = 220;       // Very bright (orange range)
+        gravity = -40.0f;         // LEDs/sec² upward (sparks rise)
         windBase = 0.0f;
-        windVariation = 8.0f;     // LEDs/sec² wind sway
-        drag = 0.96f;             // Light drag
+        windVariation = 6.0f;     // Slight flickering sway
+        drag = 0.97f;             // Light drag
         musicSpawnPulse = 0.5f;
-        organicTransientMin = 0.35f;
-        burstSparks = 5;          // Sparks per burst
+        organicTransientMin = 0.4f;
+        burstSparks = 4;          // Sparks per burst
 
-        trailHeatFactor = 20;     // Moderate trails for warmth
-        trailDecay = 50;          // Moderate cooling
+        trailHeatFactor = 5;      // MINIMAL trails - discrete sparks
+        trailDecay = 100;         // FAST cooling - no blob
 
-        // Velocities in LEDs/sec (physics uses dt in seconds!)
-        sparkVelocityMin = 4.0f;  // ~4 LEDs/sec upward (slower = visible longer)
-        sparkVelocityMax = 10.0f; // ~10 LEDs/sec upward
-        sparkSpread = 5.0f;       // Horizontal spread in LEDs/sec
+        // Velocities: sparks should rise ~8 pixels in 1-1.5 seconds
+        sparkVelocityMin = 5.0f;  // LEDs/sec upward
+        sparkVelocityMax = 10.0f; // LEDs/sec upward
+        sparkSpread = 4.0f;       // Some horizontal spread
     }
 };
 
@@ -77,7 +78,7 @@ struct FireParams {
  * - Heat diffusion for smooth ember glow
  * - Beat-synced burst spawning in music mode
  */
-class Fire : public ParticleGenerator<40> {
+class Fire : public ParticleGenerator<35> {
 public:
     Fire();
     virtual ~Fire() override;

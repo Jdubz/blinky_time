@@ -191,8 +191,8 @@ void Water::renderNoiseBackground(PixelMatrix& matrix) {
             // Apply wave brightness modulation
             float intensity = noiseVal * waveBrightness;
 
-            // Moderate sea background - visible but drops pop against it
-            intensity *= 0.18f;
+            // VERY DARK background - drops must be the star
+            intensity *= 0.03f;
 
             // Clamp and convert to 0-255 range
             intensity = constrain(intensity, 0.0f, 1.0f);

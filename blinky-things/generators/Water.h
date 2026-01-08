@@ -40,28 +40,29 @@ struct WaterParams {
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
     WaterParams() {
-        baseSpawnChance = 0.20f;  // Good drop rate
-        audioSpawnBoost = 0.5f;   // Music response
-        maxParticles = 40;        // Good particle count
-        defaultLifespan = 75;     // 2.5 seconds at 30 FPS
-        intensityMin = 80;        // Visible drops
-        intensityMax = 140;       // Bright cyan (not white)
-        gravity = 40.0f;          // LEDs/sec² - gentle rain fall
+        // RAIN EFFECT: Bright drops falling against dark background
+        baseSpawnChance = 0.8f;   // HIGH spawn rate - always raining
+        audioSpawnBoost = 0.3f;   // Some music response
+        maxParticles = 30;        // Enough for visible rain
+        defaultLifespan = 60;     // 2 seconds - time to fall
+        intensityMin = 180;       // BRIGHT drops
+        intensityMax = 255;       // Maximum brightness
+        gravity = 25.0f;          // LEDs/sec² - accelerates fall
         windBase = 0.0f;
-        windVariation = 5.0f;     // LEDs/sec² wind variation
-        drag = 0.99f;             // Light drag
-        musicSpawnPulse = 0.5f;   // Moderate phase modulation
-        organicTransientMin = 0.45f;
+        windVariation = 3.0f;     // Slight wind sway
+        drag = 0.995f;            // Almost no drag
+        musicSpawnPulse = 0.4f;
+        organicTransientMin = 0.5f;
 
-        // Velocities in LEDs/sec (physics uses dt in seconds!)
-        dropVelocityMin = 4.0f;   // ~4 LEDs/sec (slow rain)
-        dropVelocityMax = 8.0f;   // ~8 LEDs/sec (traverse in 1s)
-        dropSpread = 2.0f;        // Horizontal spread in LEDs/sec
+        // Velocities: drops should traverse 8-pixel height in ~1 second
+        dropVelocityMin = 6.0f;   // LEDs/sec starting velocity
+        dropVelocityMax = 10.0f;  // LEDs/sec
+        dropSpread = 1.5f;        // Slight horizontal drift
 
-        splashParticles = 5;      // Splash particles
-        splashVelocityMin = 6.0f; // LEDs/sec
-        splashVelocityMax = 12.0f;
-        splashIntensity = 80;     // Visible splashes
+        splashParticles = 3;      // Small splash
+        splashVelocityMin = 4.0f;
+        splashVelocityMax = 8.0f;
+        splashIntensity = 150;    // Bright splash
     }
 };
 
@@ -74,7 +75,7 @@ struct WaterParams {
  * - Beat-synced wave generation in music mode
  * - Smooth physics-based motion
  */
-class Water : public ParticleGenerator<40> {
+class Water : public ParticleGenerator<30> {
 public:
     Water();
     virtual ~Water() override = default;

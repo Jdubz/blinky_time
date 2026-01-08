@@ -258,8 +258,8 @@ void Lightning::renderNoiseBackground(PixelMatrix& matrix) {
             // Apply storm intensity modulation
             float intensity = noiseVal * stormIntensity;
 
-            // Moderate storm sky - visible atmosphere, bolts pop against it
-            intensity *= 0.12f;
+            // VERY DARK background - bolts must be dramatic
+            intensity *= 0.02f;
 
             // Clamp and convert to 0-255 range
             intensity = constrain(intensity, 0.0f, 1.0f);

@@ -306,8 +306,8 @@ void Fire::renderNoiseBackground(PixelMatrix& matrix) {
             // Combine noise with height falloff
             float intensity = noiseVal * heightFalloff * beatBrightness;
 
-            // Moderate ember glow - visible but sparks pop against it
-            intensity *= 0.15f;
+            // VERY DARK background - sparks must be the star
+            intensity *= 0.02f;
 
             // Clamp and convert to 0-255 range
             intensity = constrain(intensity, 0.0f, 1.0f);
