@@ -11,7 +11,7 @@ import { BlinkySerial } from './serial.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, statSync } from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // Path to test player CLI
@@ -305,6 +305,62 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                         expected_bpm: {
                             type: 'number',
                             description: 'Expected BPM for accuracy calculation (optional)',
+                        },
+                    },
+                },
+            },
+            {
+                name: 'get_hypotheses',
+                description: 'Get multi-hypothesis tracker state including all 4 hypothesis slots (BPM, phase, confidence, strength, beatCount). Useful for validating tempo tracking behavior and hypothesis promotion.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {},
+                },
+            },
+            {
+                name: 'render_preview',
+                description: 'Render a visual preview of an LED effect to animated GIFs. Runs the actual firmware generator code in simulation. Outputs both low-res (for AI analysis) and high-res (for human viewing) GIFs, plus params.json and metrics.json for agent-assisted optimization.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        generator: {
+                            type: 'string',
+                            description: 'Generator to use: fire, water, lightning (default: fire)',
+                            enum: ['fire', 'water', 'lightning'],
+                        },
+                        effect: {
+                            type: 'string',
+                            description: 'Effect to apply: none, hue (default: none)',
+                            enum: ['none', 'hue'],
+                        },
+                        pattern: {
+                            type: 'string',
+                            description: 'Audio pattern: steady-120bpm, steady-90bpm, steady-140bpm, silence, burst, complex (default: steady-120bpm)',
+                        },
+                        device: {
+                            type: 'string',
+                            description: 'Device config: bucket (16x8), tube (4x15), hat (89 string) (default: bucket)',
+                            enum: ['bucket', 'tube', 'hat'],
+                        },
+                        duration_ms: {
+                            type: 'number',
+                            description: 'Duration in milliseconds (default: 3000)',
+                        },
+                        fps: {
+                            type: 'number',
+                            description: 'Frames per second (default: 30)',
+                        },
+                        hue_shift: {
+                            type: 'number',
+                            description: 'Hue shift for hue effect (0.0-1.0, default: 0.0)',
+                        },
+                        params: {
+                            type: 'string',
+                            description: 'Parameter overrides for generator tuning (e.g., "baseSpawnChance=0.15,gravity=-12,burstSparks=10")',
+                        },
+                        output_dir: {
+                            type: 'string',
+                            description: 'Output directory (default: previews in blinky-simulator)',
                         },
                     },
                 },
@@ -780,6 +836,41 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     ],
                 };
             }
+            case 'get_hypotheses': {
+                if (!serial.getState().connected) {
+                    throw new Error('Not connected to a device');
+                }
+                // Send "json hypotheses" command and parse response
+                const response = await serial.sendCommand('json hypotheses');
+                // Parse JSON response
+                let parsed;
+                try {
+                    parsed = JSON.parse(response);
+                }
+                catch (e) {
+                    throw new Error(`Failed to parse hypothesis data: ${response}`);
+                }
+                // Format for MCP response
+                const primaryIdx = parsed.primaryIndex || 0;
+                const formatted = {
+                    hypotheses: parsed.hypotheses || [],
+                    primaryIndex: primaryIdx,
+                    summary: {
+                        activeCount: parsed.hypotheses.filter((h) => h.active).length,
+                        primaryBpm: parsed.hypotheses[primaryIdx]?.bpm || null,
+                        primaryConfidence: parsed.hypotheses[primaryIdx]?.confidence || null,
+                        primaryBeats: parsed.hypotheses[primaryIdx]?.beatCount || null,
+                    },
+                };
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify(formatted, null, 2),
+                        },
+                    ],
+                };
+            }
             case 'list_patterns': {
                 // Available patterns (must match blinky-test-player)
                 const patterns = [
@@ -1117,6 +1208,195 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
                     await serial.disconnect();
                 }
+            }
+            case 'render_preview': {
+                const { generator = 'fire', effect = 'none', pattern = 'steady-120bpm', device = 'bucket', duration_ms = 3000, fps = 30, hue_shift = 0.0, params = '', output_dir, } = args;
+                // Path to C++ simulator executable (runs actual firmware code)
+                const isWindows = process.platform === 'win32';
+                const SIMULATOR_EXE = isWindows ? 'blinky-simulator.exe' : 'blinky-simulator';
+                const SIMULATOR_DIR = join(__dirname, '..', '..', 'blinky-simulator');
+                const SIMULATOR_PATH = join(SIMULATOR_DIR, 'build', SIMULATOR_EXE);
+                // Determine output directory (relative to simulator dir)
+                const outputBaseDir = output_dir || join(SIMULATOR_DIR, 'previews');
+                // Check if simulator is built
+                if (!existsSync(SIMULATOR_PATH)) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: 'Simulator not built',
+                                    hint: isWindows
+                                        ? 'Build the simulator first: cd blinky-simulator && build_vs.cmd'
+                                        : 'Build the simulator first: cd blinky-simulator && ./build.sh',
+                                    simulatorPath: SIMULATOR_PATH,
+                                    note: 'The simulator compiles actual firmware C++ code. Requires a C++ compiler (Visual Studio, g++, or clang++).',
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                // Build CLI arguments
+                const cliArgs = [
+                    '-g', generator,
+                    '-e', effect,
+                    '-p', pattern,
+                    '-d', device,
+                    '-t', duration_ms.toString(),
+                    '-f', fps.toString(),
+                    '-o', outputBaseDir,
+                ];
+                if (effect === 'hue' && hue_shift > 0) {
+                    cliArgs.push('--hue', hue_shift.toString());
+                }
+                if (params) {
+                    cliArgs.push('--params', params);
+                }
+                // Run C++ simulator (runs actual firmware code)
+                const result = await new Promise((resolve) => {
+                    const child = spawn(SIMULATOR_PATH, cliArgs, {
+                        stdio: ['ignore', 'pipe', 'pipe'],
+                        cwd: SIMULATOR_DIR, // Run from simulator directory
+                    });
+                    let stdout = '';
+                    let stderr = '';
+                    child.stdout.on('data', (data) => {
+                        stdout += data.toString();
+                    });
+                    child.stderr.on('data', (data) => {
+                        stderr += data.toString();
+                    });
+                    child.on('close', (code) => {
+                        if (code === 0) {
+                            resolve({ success: true, output: stdout.trim() });
+                        }
+                        else {
+                            resolve({ success: false, error: stderr || stdout || `Process exited with code ${code}` });
+                        }
+                    });
+                    child.on('error', (err) => {
+                        resolve({ success: false, error: err.message });
+                    });
+                });
+                if (!result.success) {
+                    return {
+                        content: [
+                            {
+                                type: 'text',
+                                text: JSON.stringify({
+                                    error: 'Simulation failed',
+                                    details: result.error,
+                                }, null, 2),
+                            },
+                        ],
+                    };
+                }
+                // Parse simulator output to extract file paths and metrics
+                // Output format includes "Created:" followed by file paths, then "Metrics summary:"
+                const output = result.output || '';
+                const lines = output.split('\n');
+                // Extract file paths from output
+                let lowResPath = '';
+                let highResPath = '';
+                let paramsJsonPath = '';
+                let metricsJsonPath = '';
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (trimmed.includes('/low-res/') && trimmed.endsWith('.gif')) {
+                        lowResPath = trimmed;
+                    }
+                    else if (trimmed.includes('/high-res/') && trimmed.endsWith('.gif')) {
+                        highResPath = trimmed;
+                    }
+                    else if (trimmed.endsWith('-params.json')) {
+                        paramsJsonPath = trimmed;
+                    }
+                    else if (trimmed.endsWith('-metrics.json')) {
+                        metricsJsonPath = trimmed;
+                    }
+                }
+                // Extract metrics from output
+                const metricsMatch = output.match(/Metrics summary:\s*\n([\s\S]*?)$/);
+                let metrics = {};
+                if (metricsMatch) {
+                    const metricsLines = metricsMatch[1].split('\n');
+                    for (const line of metricsLines) {
+                        const match = line.match(/^\s*(\w+):\s*(.+)$/);
+                        if (match) {
+                            const key = match[1].toLowerCase();
+                            const valueStr = match[2];
+                            // Parse key=value pairs from line
+                            const values = {};
+                            const pairs = valueStr.split(',');
+                            for (const pair of pairs) {
+                                const [k, v] = pair.trim().split('=');
+                                if (k && v) {
+                                    values[k.trim()] = parseFloat(v) || v;
+                                }
+                            }
+                            if (Object.keys(values).length > 0) {
+                                metrics = { ...metrics, [key]: values };
+                            }
+                            else {
+                                // Single value (like "Lit pixels: 59%")
+                                metrics = { ...metrics, [key]: valueStr.trim() };
+                            }
+                        }
+                    }
+                }
+                // Get file sizes (handle race condition if file deleted between check and stat)
+                let lowResSize = 0;
+                let highResSize = 0;
+                try {
+                    if (lowResPath && existsSync(lowResPath)) {
+                        lowResSize = statSync(lowResPath).size;
+                    }
+                }
+                catch (e) {
+                    if (e.code !== 'ENOENT')
+                        throw e;
+                }
+                try {
+                    if (highResPath && existsSync(highResPath)) {
+                        highResSize = statSync(highResPath).size;
+                    }
+                }
+                catch (e) {
+                    if (e.code !== 'ENOENT')
+                        throw e;
+                }
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                success: true,
+                                outputs: {
+                                    lowResGif: lowResPath,
+                                    highResGif: highResPath,
+                                    paramsJson: paramsJsonPath,
+                                    metricsJson: metricsJsonPath,
+                                },
+                                sizes: {
+                                    lowResBytes: lowResSize,
+                                    highResBytes: highResSize,
+                                },
+                                metrics,
+                                config: {
+                                    generator,
+                                    effect,
+                                    pattern,
+                                    device,
+                                    durationMs: duration_ms,
+                                    fps,
+                                    hueShift: hue_shift,
+                                    params: params || null,
+                                },
+                                rawOutput: output,
+                            }, null, 2),
+                        },
+                    ],
+                };
             }
             default:
                 return {

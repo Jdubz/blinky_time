@@ -1,0 +1,17 @@
+{
+  "name": "blinky-simulator",
+  "version": "1.0.0",
+  "description": "LED effect visualization simulator - compiles actual blinky-things C++ firmware for desktop preview",
+  "private": true,
+  "scripts": {
+    "build:cpp": "cmake -B build -S . && cmake --build build",
+    "build:win": "build.bat",
+    "build:unix": "./build.sh"
+  },
+  "keywords": ["led", "simulator", "arduino", "visualization", "gif", "firmware"],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "note": "This package requires a C++ compiler. See README.md for setup instructions."
+  }
+}

@@ -2,6 +2,7 @@
 
 #include "../particles/ParticleGenerator.h"
 #include "../types/ColorPalette.h"
+#include "../math/SimplexNoise.h"
 
 /**
  * FireParams - Fire-specific particle parameters
@@ -38,26 +39,28 @@ struct FireParams {
     uint8_t burstSparks;          // Sparks per burst
 
     FireParams() {
-        baseSpawnChance = 0.08f;  // Baseline spark probability
-        audioSpawnBoost = 0.6f;
-        maxParticles = 48;  // Match template capacity
-        defaultLifespan = 60;  // ~2 seconds at 30 FPS
-        intensityMin = 80;   // Start in red range (< 85)
-        intensityMax = 180;  // Mostly orange with some yellow highlights
-        gravity = -8.0f;  // Negative = upward (fire rises)
+        // FIRE EFFECT: Bright sparks rising from bottom
+        baseSpawnChance = 0.7f;   // HIGH spawn rate - constant sparks
+        audioSpawnBoost = 0.4f;   // Music boost
+        maxParticles = 35;        // Good spark coverage
+        defaultLifespan = 50;     // ~1.7 seconds to rise
+        intensityMin = 150;       // BRIGHT red/orange
+        intensityMax = 220;       // Very bright (orange range)
+        gravity = -40.0f;         // LEDs/sec² upward (sparks rise)
         windBase = 0.0f;
-        windVariation = 0.5f;
-        drag = 0.96f;
-        musicSpawnPulse = 0.6f;
-        organicTransientMin = 0.5f;
-        burstSparks = 8;
+        windVariation = 6.0f;     // Slight flickering sway
+        drag = 0.97f;             // Light drag
+        musicSpawnPulse = 0.5f;
+        organicTransientMin = 0.4f;
+        burstSparks = 4;          // Sparks per burst
 
-        trailHeatFactor = 35;  // Particle trail heat contribution
-        trailDecay = 40;       // Heat cooling rate per frame
+        trailHeatFactor = 5;      // MINIMAL trails - discrete sparks
+        trailDecay = 100;         // FAST cooling - no blob
 
-        sparkVelocityMin = 1.5f;
-        sparkVelocityMax = 3.5f;
-        sparkSpread = 0.8f;
+        // Velocities: sparks should rise ~8 pixels in 1-1.5 seconds
+        sparkVelocityMin = 5.0f;  // LEDs/sec upward
+        sparkVelocityMax = 10.0f; // LEDs/sec upward
+        sparkSpread = 4.0f;       // Some horizontal spread
     }
 };
 
@@ -75,7 +78,7 @@ struct FireParams {
  * - Heat diffusion for smooth ember glow
  * - Beat-synced burst spawning in music mode
  */
-class Fire : public ParticleGenerator<48> {
+class Fire : public ParticleGenerator<35> {
 public:
     Fire();
     virtual ~Fire() override;
@@ -115,7 +118,14 @@ private:
      */
     void blendHeatToMatrix(PixelMatrix& matrix);
 
+    /**
+     * Render simplex noise background with fire gradient
+     * Creates organic, animated ember glow beneath particles
+     */
+    void renderNoiseBackground(PixelMatrix& matrix);
+
     uint8_t* heat_;               // Heat field buffer
     FireParams params_;
     uint8_t beatCount_;           // Beat counter for downbeat detection
+    float noiseTime_;             // Animation time for noise field
 };

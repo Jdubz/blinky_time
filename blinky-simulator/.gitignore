@@ -1,0 +1,12 @@
+# C++ build output
+build/
+*.obj
+*.o
+*.exe
+
+# Generated preview files (test results)
+previews/
+
+# Node (no longer used - simulator is C++ only)
+node_modules/
+dist/

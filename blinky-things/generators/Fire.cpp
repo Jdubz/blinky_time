@@ -1,7 +1,7 @@
 #include "Fire.h"
 #include <Arduino.h>
 
-Fire::Fire() : heat_(nullptr), params_(), beatCount_(0) {}
+Fire::Fire() : heat_(nullptr), params_(), beatCount_(0), noiseTime_(0.0f) {}
 
 Fire::~Fire() {
     if (heat_) {
@@ -29,7 +29,18 @@ bool Fire::begin(const DeviceConfig& config) {
 }
 
 void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    // First, apply cooling to heat buffer
+    // Advance noise animation time
+    // Music mode: faster, pulsating animation synced to beat
+    // Ambient mode: slow, smooth animation
+    float timeSpeed = audio.hasRhythm() ?
+        0.04f + 0.03f * audio.energy :  // Music: 0.04-0.07 (faster, reactive)
+        0.015f + 0.005f * audio.energy;  // Ambient: 0.015-0.02 (slow, subtle)
+    noiseTime_ += timeSpeed;
+
+    // Render noise background first (underlayer)
+    renderNoiseBackground(matrix);
+
+    // Apply cooling to heat buffer
     applyCooling();
 
     // Run particle system (spawns, updates, renders particles)
@@ -48,6 +59,7 @@ void Fire::reset() {
         memset(heat_, 0, numLeds_);
     }
     beatCount_ = 0;
+    noiseTime_ = 0.0f;
 }
 
 void Fire::spawnParticles(float dt) {
@@ -55,27 +67,44 @@ void Fire::spawnParticles(float dt) {
     uint8_t sparkCount = 0;
 
     if (audio_.hasRhythm()) {
-        // MUSIC MODE: Beat-synced spawning
-        float phaseMod = audio_.phaseToPulse();
-        spawnProb += params_.audioSpawnBoost * audio_.pulse * phaseMod;
+        // MUSIC MODE: Dancey, pulsating spawning synced to beat
+        // Use phase for pumping effect - fire breathes with the music
+        float phasePulse = audio_.phaseToPulse();  // 1.0 at beat, fades to 0
+        float phasePump = 0.5f + 0.5f * phasePulse;  // Range 0.5-1.0, peaks on beat
+
+        // Base spawn rate modulated by phase for pulsing effect
+        spawnProb *= phasePump;
+        spawnProb += params_.audioSpawnBoost * audio_.pulse * phasePulse;
 
         // Detect beat and track count
         if (beatHappened()) {
             beatCount_++;
-            // Stronger bursts on downbeats (every 4 beats)
-            uint8_t baseSparks = (beatCount_ % 4 == 0) ? params_.burstSparks * 2 : params_.burstSparks;
-            // Scale by rhythm confidence
-            sparkCount = (uint8_t)(baseSparks * (0.5f + 0.5f * audio_.rhythmStrength));
+            // Strong bursts on every beat, extra strong on downbeats (every 4)
+            uint8_t baseSparks = params_.burstSparks;
+            if (beatCount_ % 4 == 0) {
+                baseSparks = params_.burstSparks * 3;  // Downbeat: triple burst
+            } else if (beatCount_ % 2 == 0) {
+                baseSparks = params_.burstSparks * 2;  // Backbeat: double burst
+            }
+            // Scale by rhythm confidence and energy
+            sparkCount = (uint8_t)(baseSparks * (0.4f + 0.6f * audio_.rhythmStrength) *
+                                   (0.5f + 0.5f * audio_.energy));
         }
     } else {
-        // ORGANIC MODE: Transient-reactive
+        // AMBIENT MODE: Smooth, steady output with subtle shifts
+        // Gentle, continuous spawning with slow energy-based modulation
+        float smoothEnergy = 0.3f + 0.4f * audio_.energy;  // Range 0.3-0.7
+        spawnProb *= smoothEnergy;
+
+        // Occasional small bursts on transients (subtle, not jarring)
         if (audio_.pulse > params_.organicTransientMin) {
-            spawnProb += params_.audioSpawnBoost * audio_.pulse;
-            sparkCount = params_.burstSparks / 2;
+            float transientStrength = (audio_.pulse - params_.organicTransientMin) /
+                                     (1.0f - params_.organicTransientMin);
+            sparkCount = (uint8_t)(params_.burstSparks * 0.3f * transientStrength);
         }
     }
 
-    // Random baseline spawning
+    // Random baseline spawning (always some activity)
     if (random(1000) < spawnProb * 1000) {
         sparkCount++;
     }
@@ -86,8 +115,11 @@ void Fire::spawnParticles(float dt) {
         float y = height_ - 1;  // Bottom of screen
 
         // Upward velocity with horizontal spread
+        // Music mode: higher velocity for more dynamic feel
+        // Ambient mode: slower, more languid movement
+        float velocityMult = audio_.hasRhythm() ? (1.0f + 0.3f * audio_.pulse) : 0.8f;
         float vy = -(params_.sparkVelocityMin +
-                    random(100) * (params_.sparkVelocityMax - params_.sparkVelocityMin) / 100.0f);
+                    random(100) * (params_.sparkVelocityMax - params_.sparkVelocityMin) / 100.0f) * velocityMult;
         float vx = (random(200) - 100) * params_.sparkSpread / 100.0f;
 
         uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
@@ -205,6 +237,10 @@ void Fire::diffuseHeat() {
                 // Single division to avoid cumulative rounding errors
                 uint16_t newHeat = totalHeat / divisor;
 
+                // Apply decay during diffusion to prevent solid glow
+                // Heat should fade as it rises, not just spread everywhere
+                newHeat = (newHeat * 7) / 10;  // 70% retention per diffusion step
+
                 // Replace heat value with diffused result (allows heat to decrease)
                 heat_[currentIndex] = min(255, newHeat);
             }
@@ -231,6 +267,69 @@ void Fire::blendHeatToMatrix(PixelMatrix& matrix) {
                                max(existing.g, g),
                                max(existing.b, b));
             }
+        }
+    }
+}
+
+void Fire::renderNoiseBackground(PixelMatrix& matrix) {
+    // Fire gradient noise background - red/orange embers that glow beneath particles
+    // Bottom is brighter (closer to fire source), top fades out
+
+    // Noise scales for organic movement
+    const float noiseScale = 0.15f;     // Spatial frequency (larger = more detail)
+    const float timeScale = noiseTime_; // Animated movement
+
+    // In music mode, add pulsing brightness from beat phase
+    float beatBrightness = 1.0f;
+    if (audio_.hasRhythm()) {
+        // Pulse brightness on beat (range 0.6-1.0)
+        float phasePulse = audio_.phaseToPulse();
+        beatBrightness = 0.6f + 0.4f * phasePulse;
+    }
+
+    for (int y = 0; y < height_; y++) {
+        for (int x = 0; x < width_; x++) {
+            // Height-based intensity: brighter at bottom, darker at top
+            // Normalized y: 0 at bottom, 1 at top
+            float normalizedY = (float)y / (height_ - 1);
+            float heightFalloff = 1.0f - normalizedY * 0.7f;  // Range 0.3-1.0
+
+            // Sample 3D noise (x, y, time) for organic movement
+            float nx = x * noiseScale;
+            float ny = y * noiseScale;
+            float noiseVal = SimplexNoise::noise3D_01(nx, ny, timeScale);
+
+            // Add second octave for more organic detail
+            float noiseVal2 = SimplexNoise::noise3D_01(nx * 2.0f, ny * 2.0f, timeScale * 1.3f);
+            noiseVal = noiseVal * 0.7f + noiseVal2 * 0.3f;
+
+            // Combine noise with height falloff
+            float intensity = noiseVal * heightFalloff * beatBrightness;
+
+            // VERY DARK background - sparks must be the star
+            intensity *= 0.02f;
+
+            // Clamp and convert to 0-255 range
+            intensity = constrain(intensity, 0.0f, 1.0f);
+            uint8_t level = (uint8_t)(intensity * 255.0f);
+
+            // Fire color palette: deep red -> orange -> dark red based on intensity
+            // Bottom pixels get more orange, top pixels stay deep red
+            uint8_t r, g, b;
+            if (normalizedY < 0.4f) {
+                // Bottom 40%: orange-red embers
+                r = level;
+                g = (uint8_t)(level * 0.3f * (1.0f - normalizedY));
+                b = 0;
+            } else {
+                // Upper 60%: deep red only
+                r = level;
+                g = (uint8_t)(level * 0.1f);
+                b = 0;
+            }
+
+            // Set pixel (this is the first layer, so direct set)
+            matrix.setPixel(x, y, r, g, b);
         }
     }
 }

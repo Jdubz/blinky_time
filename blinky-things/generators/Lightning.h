@@ -2,6 +2,7 @@
 
 #include "../particles/ParticleGenerator.h"
 #include "../types/ColorPalette.h"
+#include "../math/SimplexNoise.h"
 
 /**
  * LightningParams - Lightning-specific particle parameters
@@ -33,23 +34,24 @@ struct LightningParams {
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
     LightningParams() {
-        baseSpawnChance = 0.15f;
-        audioSpawnBoost = 0.5f;
-        maxParticles = 32;  // Match template capacity
-        defaultLifespan = 20;  // Short-lived (~0.6 seconds)
-        intensityMin = 180;
-        intensityMax = 255;
-        musicSpawnPulse = 0.6f;
-        organicTransientMin = 0.3f;
+        // LIGHTNING EFFECT: Dramatic bright flashing bolts
+        baseSpawnChance = 0.15f;  // Regular strikes
+        audioSpawnBoost = 0.8f;   // Strong music response
+        maxParticles = 40;        // Enough for bolts + branches
+        defaultLifespan = 10;     // Quick flash (lightning is fast!)
+        intensityMin = 220;       // VERY BRIGHT
+        intensityMax = 255;       // MAXIMUM brightness
+        musicSpawnPulse = 0.7f;   // Phase modulation
+        organicTransientMin = 0.35f;
 
-        boltVelocityMin = 4.0f;
-        boltVelocityMax = 8.0f;
-        fadeRate = 160;  // Fast fade
+        boltVelocityMin = 4.0f;   // Not used (bolts are stationary)
+        boltVelocityMax = 8.0f;   // Not used (bolts are stationary)
+        fadeRate = 30;            // Fast fade - lightning is quick
 
-        branchChance = 30;
-        branchCount = 2;
-        branchAngleSpread = PI / 4.0f;  // 45 degree spread
-        branchIntensityLoss = 40;  // Branches 40% dimmer
+        branchChance = 35;        // More branching for realism
+        branchCount = 2;          // Branches per bolt
+        branchAngleSpread = PI / 3.0f;  // 60 degree spread
+        branchIntensityLoss = 25;       // Branches 25% dimmer (still bright)
     }
 };
 
@@ -62,13 +64,15 @@ struct LightningParams {
  * - Fast fade for snappy lightning effect
  * - Beat-synced bolt generation in music mode
  */
-class Lightning : public ParticleGenerator<32> {
+class Lightning : public ParticleGenerator<40> {
 public:
     Lightning();
     virtual ~Lightning() override = default;
 
     // Generator interface
     bool begin(const DeviceConfig& config) override;
+    void generate(PixelMatrix& matrix, const AudioControl& audio) override;
+    void reset() override;
     const char* getName() const override { return "Lightning"; }
     GeneratorType getType() const override { return GeneratorType::LIGHTNING; }
 
@@ -95,5 +99,12 @@ private:
      */
     void spawnBranch(const Particle* parent);
 
+    /**
+     * Render simplex noise background with sunset/night sky colors
+     * Deep purples, oranges, and dark blues for dramatic storm sky
+     */
+    void renderNoiseBackground(PixelMatrix& matrix);
+
     LightningParams params_;
+    float noiseTime_;             // Animation time for noise field
 };
