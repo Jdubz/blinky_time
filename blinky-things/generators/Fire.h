@@ -39,25 +39,25 @@ struct FireParams {
     uint8_t burstSparks;          // Sparks per burst
 
     FireParams() {
-        baseSpawnChance = 0.08f;  // Baseline spark probability
-        audioSpawnBoost = 0.6f;
-        maxParticles = 48;  // Match template capacity
-        defaultLifespan = 60;  // ~2 seconds at 30 FPS
-        intensityMin = 80;   // Start in red range (< 85)
-        intensityMax = 180;  // Mostly orange with some yellow highlights
-        gravity = -8.0f;  // Negative = upward (fire rises)
+        baseSpawnChance = 0.18f;  // Baseline spark probability (tuned for ambient activity)
+        audioSpawnBoost = 0.5f;   // Music mode boost
+        maxParticles = 72;        // Tuned for 16x8 matrix coverage
+        defaultLifespan = 75;     // ~2.5 seconds at 30 FPS
+        intensityMin = 80;        // Start in red range (< 85)
+        intensityMax = 180;       // Mostly orange with some yellow highlights
+        gravity = -8.0f;          // Negative = upward (fire rises)
         windBase = 0.0f;
-        windVariation = 0.5f;
+        windVariation = 0.6f;     // Gentle sway for organic feel
         drag = 0.96f;
         musicSpawnPulse = 0.6f;
-        organicTransientMin = 0.5f;
+        organicTransientMin = 0.28f;  // Lower threshold for ambient transients
         burstSparks = 8;
 
-        trailHeatFactor = 35;  // Particle trail heat contribution
-        trailDecay = 40;       // Heat cooling rate per frame
+        trailHeatFactor = 50;     // Stronger particle trails
+        trailDecay = 32;          // Slower cooling for persistent glow
 
-        sparkVelocityMin = 1.5f;
-        sparkVelocityMax = 3.5f;
+        sparkVelocityMin = 1.0f;  // Slower sparks for matrix coverage
+        sparkVelocityMax = 3.0f;
         sparkSpread = 0.8f;
     }
 };
@@ -76,7 +76,7 @@ struct FireParams {
  * - Heat diffusion for smooth ember glow
  * - Beat-synced burst spawning in music mode
  */
-class Fire : public ParticleGenerator<48> {
+class Fire : public ParticleGenerator<72> {
 public:
     Fire();
     virtual ~Fire() override;

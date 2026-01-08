@@ -40,24 +40,24 @@ struct WaterParams {
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
     WaterParams() {
-        baseSpawnChance = 0.25f;
-        audioSpawnBoost = 0.4f;
-        maxParticles = 64;  // Match template capacity
-        defaultLifespan = 90;  // ~3 seconds at 30 FPS
+        baseSpawnChance = 0.05f;  // Low baseline (let music boost dominate)
+        audioSpawnBoost = 1.0f;   // Strong music response
+        maxParticles = 40;        // Tuned to avoid overloading matrix
+        defaultLifespan = 90;     // ~3 seconds at 30 FPS
         intensityMin = 80;
         intensityMax = 200;
-        gravity = 5.0f;  // Positive = downward
+        gravity = 5.0f;           // Positive = downward
         windBase = 0.0f;
         windVariation = 0.3f;
-        drag = 0.99f;  // Low drag (water flows smoothly)
-        musicSpawnPulse = 0.5f;
-        organicTransientMin = 0.3f;
+        drag = 0.99f;             // Low drag (water flows smoothly)
+        musicSpawnPulse = 0.7f;   // Stronger phase modulation
+        organicTransientMin = 0.4f;  // Higher threshold for ambient
 
         dropVelocityMin = 0.5f;
         dropVelocityMax = 1.5f;
-        dropSpread = 0.3f;
+        dropSpread = 0.4f;        // Wider spread for coverage
 
-        splashParticles = 6;
+        splashParticles = 10;     // More splash particles for impact
         splashVelocityMin = 0.5f;
         splashVelocityMax = 2.0f;
         splashIntensity = 120;

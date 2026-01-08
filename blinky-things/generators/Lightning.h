@@ -34,23 +34,23 @@ struct LightningParams {
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
     LightningParams() {
-        baseSpawnChance = 0.15f;
-        audioSpawnBoost = 0.5f;
-        maxParticles = 32;  // Match template capacity
-        defaultLifespan = 20;  // Short-lived (~0.6 seconds)
+        baseSpawnChance = 0.1f;   // Lower baseline (more ambient contrast)
+        audioSpawnBoost = 0.95f;  // Strong music response
+        maxParticles = 40;        // More particles for bigger bursts
+        defaultLifespan = 22;     // Slightly longer for visibility
         intensityMin = 180;
         intensityMax = 255;
-        musicSpawnPulse = 0.6f;
-        organicTransientMin = 0.3f;
+        musicSpawnPulse = 0.72f;  // Tuned phase modulation
+        organicTransientMin = 0.28f;  // Lower threshold for ambient strikes
 
         boltVelocityMin = 4.0f;
         boltVelocityMax = 8.0f;
-        fadeRate = 160;  // Fast fade
+        fadeRate = 135;           // Slower fade for more presence
 
-        branchChance = 30;
-        branchCount = 2;
+        branchChance = 32;        // More branching
+        branchCount = 3;          // More branches per bolt
         branchAngleSpread = PI / 4.0f;  // 45 degree spread
-        branchIntensityLoss = 40;  // Branches 40% dimmer
+        branchIntensityLoss = 40;       // Branches 40% dimmer
     }
 };
 
@@ -63,7 +63,7 @@ struct LightningParams {
  * - Fast fade for snappy lightning effect
  * - Beat-synced bolt generation in music mode
  */
-class Lightning : public ParticleGenerator<32> {
+class Lightning : public ParticleGenerator<40> {
 public:
     Lightning();
     virtual ~Lightning() override = default;
