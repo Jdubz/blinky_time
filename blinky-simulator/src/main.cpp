@@ -56,7 +56,6 @@ struct SimulatorConfig {
     std::string generator = "fire";
     std::string effect = "none";
     std::string pattern = "steady-120bpm";
-    std::string outputDir = "previews";
     std::string device = "bucket";  // bucket, tube, hat
     std::string params = "";        // Runtime param overrides: key=val,key=val
     int durationMs = 3000;
@@ -65,6 +64,9 @@ struct SimulatorConfig {
     bool verbose = false;
     bool showHelp = false;
 };
+
+// Fixed output directory (gitignored)
+const std::string OUTPUT_DIR = "previews";
 
 // Create directory (cross-platform)
 void createDir(const std::string& path) {
@@ -96,7 +98,6 @@ OPTIONS:
     --effect, -e <name>      Effect to apply: none, hue (default: none)
     --pattern, -p <name>     Audio pattern: steady-120bpm, steady-90bpm, steady-140bpm,
                              silence, burst, complex, or path to pattern file
-    --output, -o <dir>       Output directory (default: previews)
     --device, -d <name>      Device config: bucket (16x8), tube (4x15), hat (89 string) [default: bucket]
     --duration, -t <ms>      Duration in milliseconds (default: 3000)
     --fps, -f <num>          Frames per second (default: 30)
@@ -119,9 +120,9 @@ EXAMPLES:
     blinky-simulator -g fire -d tube
 
 OUTPUT:
-    Creates TWO animated GIFs with timestamp (new files each run):
-      <dir>/low-res/<generator>-<timestamp>.gif   - Exact LED pixels (for AI)
-      <dir>/high-res/<generator>-<timestamp>.gif  - Human-readable preview
+    Creates TWO animated GIFs with timestamp in previews/ (gitignored):
+      previews/low-res/<generator>-<timestamp>.gif   - Exact LED pixels (for AI)
+      previews/high-res/<generator>-<timestamp>.gif  - Human-readable preview
 
 )" << std::endl;
 }
@@ -141,8 +142,6 @@ bool parseArgs(int argc, char* argv[], SimulatorConfig& config) {
             config.effect = argv[++i];
         } else if ((arg == "--pattern" || arg == "-p") && i + 1 < argc) {
             config.pattern = argv[++i];
-        } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
-            config.outputDir = argv[++i];
         } else if ((arg == "--device" || arg == "-d") && i + 1 < argc) {
             config.device = argv[++i];
         } else if ((arg == "--duration" || arg == "-t") && i + 1 < argc) {
@@ -239,11 +238,11 @@ int main(int argc, char* argv[]) {
         std::cout << "  Device: " << config.device << std::endl;
         std::cout << "  Duration: " << config.durationMs << " ms" << std::endl;
         std::cout << "  FPS: " << config.fps << std::endl;
-        std::cout << "  Output dir: " << config.outputDir << std::endl;
     }
 
-    // Initialize random seed for reproducibility
-    randomSeed(42);
+    // Initialize random seed with time for varied output each run
+    // This prevents particle clustering from deterministic sequences
+    randomSeed((unsigned long)time(nullptr));
 
     // Set up simulated time
     SimulatorTime::setSimulatedTime(0);
@@ -326,10 +325,10 @@ int main(int argc, char* argv[]) {
                   << " (" << audioPattern.getDuration() << " ms)" << std::endl;
     }
 
-    // Create output directories
-    std::string lowResDir = config.outputDir + "/low-res";
-    std::string highResDir = config.outputDir + "/high-res";
-    createDir(config.outputDir);
+    // Create output directories (fixed to previews/, which is gitignored)
+    std::string lowResDir = OUTPUT_DIR + "/low-res";
+    std::string highResDir = OUTPUT_DIR + "/high-res";
+    createDir(OUTPUT_DIR);
     createDir(lowResDir);
     createDir(highResDir);
 
