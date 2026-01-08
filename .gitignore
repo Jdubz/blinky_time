@@ -129,6 +129,10 @@ audio_timeline.png
 recommended_params.json
 serial_log.txt
 
+# Simulator preview outputs
+blinky-simulator/previews/
+previews/
+
 # Windows artifacts
 nul
 

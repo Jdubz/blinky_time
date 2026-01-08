@@ -48,12 +48,17 @@
 #include "../../blinky-things/effects/Effect.h"
 #include "../../blinky-things/effects/HueRotationEffect.h"
 
+// Parameter injection for agent-assisted optimization
+#include "ParamParser.h"
+#include "MetricsCalculator.h"
+
 struct SimulatorConfig {
     std::string generator = "fire";
     std::string effect = "none";
     std::string pattern = "steady-120bpm";
     std::string outputDir = "previews";
     std::string device = "bucket";  // bucket, tube, hat
+    std::string params = "";        // Runtime param overrides: key=val,key=val
     int durationMs = 3000;
     int fps = 30;
     float hueShift = 0.0f;
@@ -96,6 +101,7 @@ OPTIONS:
     --duration, -t <ms>      Duration in milliseconds (default: 3000)
     --fps, -f <num>          Frames per second (default: 30)
     --hue <0.0-1.0>          Hue shift for hue effect (default: 0.0)
+    --params <key=val,...>   Override generator params (e.g., "baseSpawnChance=0.15,gravity=-12")
     --verbose, -v            Verbose output
     --help, -h               Show this help message
 
@@ -145,6 +151,8 @@ bool parseArgs(int argc, char* argv[], SimulatorConfig& config) {
             config.fps = std::atoi(argv[++i]);
         } else if (arg == "--hue" && i + 1 < argc) {
             config.hueShift = std::atof(argv[++i]);
+        } else if (arg == "--params" && i + 1 < argc) {
+            config.params = argv[++i];
         } else {
             std::cerr << "Unknown option: " << arg << std::endl;
             return false;
@@ -291,6 +299,25 @@ int main(int argc, char* argv[]) {
         std::cout << "  Active effect: " << pipeline.getEffectName() << std::endl;
     }
 
+    // Parse and apply parameter overrides
+    ParamMap paramOverrides = ParamParser::parse(config.params);
+    ParamMap allParams;
+
+    if (genType == GeneratorType::FIRE && pipeline.getFireGenerator()) {
+        applyParams(pipeline.getFireGenerator()->getParamsMutable(), paramOverrides);
+        allParams = getParamMap(pipeline.getFireGenerator()->getParams());
+    } else if (genType == GeneratorType::WATER && pipeline.getWaterGenerator()) {
+        applyParams(pipeline.getWaterGenerator()->getParamsMutable(), paramOverrides);
+        allParams = getParamMap(pipeline.getWaterGenerator()->getParams());
+    } else if (genType == GeneratorType::LIGHTNING && pipeline.getLightningGenerator()) {
+        applyParams(pipeline.getLightningGenerator()->getParamsMutable(), paramOverrides);
+        allParams = getParamMap(pipeline.getLightningGenerator()->getParams());
+    }
+
+    if (config.verbose && !paramOverrides.empty()) {
+        std::cout << "  Param overrides: " << paramOverrides.size() << " values" << std::endl;
+    }
+
     // Load audio pattern
     AudioPattern audioPattern = AudioPatternLoader::getPattern(config.pattern, config.durationMs);
 
@@ -367,6 +394,11 @@ int main(int argc, char* argv[]) {
         std::cout << "  Rendering " << totalFrames << " frames..." << std::endl;
     }
 
+    // Initialize metrics calculator
+    MetricsCalculator metrics;
+    metrics.reset();
+    std::vector<uint8_t> ledBuffer(numLeds * 3);
+
     // Render frames to both outputs
     for (int frame = 0; frame < totalFrames; frame++) {
         uint32_t timeMs = frame * frameIntervalMs;
@@ -389,6 +421,15 @@ int main(int argc, char* argv[]) {
         lowResGif.addFrame(lowResRenderer.getBuffer());
         highResGif.addFrame(highResRenderer.getBuffer());
 
+        // Collect metrics from raw LED data
+        for (int i = 0; i < numLeds; i++) {
+            uint32_t color = leds.getPixelColor(i);
+            ledBuffer[i * 3] = (color >> 16) & 0xFF;     // R
+            ledBuffer[i * 3 + 1] = (color >> 8) & 0xFF;  // G
+            ledBuffer[i * 3 + 2] = color & 0xFF;         // B
+        }
+        metrics.processFrame(ledBuffer.data(), numLeds);
+
         // Progress indicator
         if (config.verbose && frame % 30 == 0) {
             std::cout << "  Frame " << frame << "/" << totalFrames
@@ -400,9 +441,30 @@ int main(int argc, char* argv[]) {
     lowResGif.close();
     highResGif.close();
 
+    // Write params.json (for agent-assisted iteration)
+    std::string paramsJsonPath = lowResDir + "/" + config.generator + "-" + timestamp + "-params.json";
+    ParamParser::writeJson(paramsJsonPath, config.generator, paramOverrides, allParams);
+
+    // Write metrics.json (quantitative feedback for optimization)
+    std::string metricsJsonPath = lowResDir + "/" + config.generator + "-" + timestamp + "-metrics.json";
+    VisualMetrics visualMetrics = metrics.compute();
+    MetricsCalculator::writeJson(metricsJsonPath, visualMetrics);
+
     std::cout << "Created:" << std::endl;
     std::cout << "  " << lowResPath << " (" << GifEncoder::getFileSize(lowResPath) << " bytes)" << std::endl;
     std::cout << "  " << highResPath << " (" << GifEncoder::getFileSize(highResPath) << " bytes)" << std::endl;
+    std::cout << "  " << paramsJsonPath << std::endl;
+    std::cout << "  " << metricsJsonPath << std::endl;
+
+    // Print key metrics summary
+    std::cout << "\nMetrics summary:" << std::endl;
+    std::cout << "  Brightness: avg=" << visualMetrics.avgBrightness
+              << ", range=" << visualMetrics.dynamicRange << std::endl;
+    std::cout << "  Activity: avg=" << visualMetrics.avgActivity
+              << ", peak=" << visualMetrics.peakActivity << std::endl;
+    std::cout << "  Color: saturation=" << visualMetrics.avgSaturation
+              << ", hueSpread=" << visualMetrics.hueSpread << std::endl;
+    std::cout << "  Lit pixels: " << visualMetrics.litPixelPercent << "%" << std::endl;
 
     return 0;
 }

@@ -319,7 +319,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             {
                 name: 'render_preview',
-                description: 'Render a visual preview of an LED effect to an animated GIF. Runs the actual firmware generator code in simulation. Useful for previewing effects before flashing and for AI-assisted parameter tuning.',
+                description: 'Render a visual preview of an LED effect to animated GIFs. Runs the actual firmware generator code in simulation. Outputs both low-res (for AI analysis) and high-res (for human viewing) GIFs, plus params.json and metrics.json for agent-assisted optimization.',
                 inputSchema: {
                     type: 'object',
                     properties: {
@@ -339,8 +339,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                         },
                         device: {
                             type: 'string',
-                            description: 'Device config: tube (4x15), hat (89 string), bucket (16x8) (default: tube)',
-                            enum: ['tube', 'hat', 'bucket'],
+                            description: 'Device config: bucket (16x8), tube (4x15), hat (89 string) (default: bucket)',
+                            enum: ['bucket', 'tube', 'hat'],
                         },
                         duration_ms: {
                             type: 'number',
@@ -354,9 +354,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                             type: 'number',
                             description: 'Hue shift for hue effect (0.0-1.0, default: 0.0)',
                         },
-                        output_path: {
+                        params: {
                             type: 'string',
-                            description: 'Output GIF path (default: preview.gif in test-results)',
+                            description: 'Parameter overrides for generator tuning (e.g., "baseSpawnChance=0.15,gravity=-12,burstSparks=10")',
+                        },
+                        output_dir: {
+                            type: 'string',
+                            description: 'Output directory (default: previews in blinky-simulator)',
                         },
                     },
                 },
@@ -1206,15 +1210,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 }
             }
             case 'render_preview': {
-                const { generator = 'fire', effect = 'none', pattern = 'steady-120bpm', device = 'tube', duration_ms = 3000, fps = 30, hue_shift = 0.0, output_path, } = args;
-                // Determine output path
-                ensureTestResultsDir();
-                const timestamp = Date.now();
-                const outputFile = output_path || join(TEST_RESULTS_DIR, `preview-${generator}-${timestamp}.gif`);
+                const { generator = 'fire', effect = 'none', pattern = 'steady-120bpm', device = 'bucket', duration_ms = 3000, fps = 30, hue_shift = 0.0, params = '', output_dir, } = args;
                 // Path to C++ simulator executable (runs actual firmware code)
                 const isWindows = process.platform === 'win32';
                 const SIMULATOR_EXE = isWindows ? 'blinky-simulator.exe' : 'blinky-simulator';
-                const SIMULATOR_PATH = join(__dirname, '..', '..', 'blinky-simulator', 'build', SIMULATOR_EXE);
+                const SIMULATOR_DIR = join(__dirname, '..', '..', 'blinky-simulator');
+                const SIMULATOR_PATH = join(SIMULATOR_DIR, 'build', SIMULATOR_EXE);
+                // Determine output directory (relative to simulator dir)
+                const outputBaseDir = output_dir || join(SIMULATOR_DIR, 'previews');
                 // Check if simulator is built
                 if (!existsSync(SIMULATOR_PATH)) {
                     return {
@@ -1224,7 +1227,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                                 text: JSON.stringify({
                                     error: 'Simulator not built',
                                     hint: isWindows
-                                        ? 'Build the simulator first: cd blinky-simulator && build.bat'
+                                        ? 'Build the simulator first: cd blinky-simulator && build_vs.cmd'
                                         : 'Build the simulator first: cd blinky-simulator && ./build.sh',
                                     simulatorPath: SIMULATOR_PATH,
                                     note: 'The simulator compiles actual firmware C++ code. Requires a C++ compiler (Visual Studio, g++, or clang++).',
@@ -1241,15 +1244,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     '-d', device,
                     '-t', duration_ms.toString(),
                     '-f', fps.toString(),
-                    '-o', outputFile,
+                    '-o', outputBaseDir,
                 ];
                 if (effect === 'hue' && hue_shift > 0) {
                     cliArgs.push('--hue', hue_shift.toString());
+                }
+                if (params) {
+                    cliArgs.push('--params', params);
                 }
                 // Run C++ simulator (runs actual firmware code)
                 const result = await new Promise((resolve) => {
                     const child = spawn(SIMULATOR_PATH, cliArgs, {
                         stdio: ['ignore', 'pipe', 'pipe'],
+                        cwd: SIMULATOR_DIR, // Run from simulator directory
                     });
                     let stdout = '';
                     let stderr = '';
@@ -1284,17 +1291,79 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         ],
                     };
                 }
-                // Get file size
-                const stats = existsSync(outputFile) ? statSync(outputFile) : null;
-                const fileSizeBytes = stats ? stats.size : 0;
+                // Parse simulator output to extract file paths and metrics
+                // Output format includes "Created:" followed by file paths, then "Metrics summary:"
+                const output = result.output || '';
+                const lines = output.split('\n');
+                // Extract file paths from output
+                let lowResPath = '';
+                let highResPath = '';
+                let paramsJsonPath = '';
+                let metricsJsonPath = '';
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (trimmed.includes('/low-res/') && trimmed.endsWith('.gif')) {
+                        lowResPath = trimmed;
+                    }
+                    else if (trimmed.includes('/high-res/') && trimmed.endsWith('.gif')) {
+                        highResPath = trimmed;
+                    }
+                    else if (trimmed.endsWith('-params.json')) {
+                        paramsJsonPath = trimmed;
+                    }
+                    else if (trimmed.endsWith('-metrics.json')) {
+                        metricsJsonPath = trimmed;
+                    }
+                }
+                // Extract metrics from output
+                const metricsMatch = output.match(/Metrics summary:\s*\n([\s\S]*?)$/);
+                let metrics = {};
+                if (metricsMatch) {
+                    const metricsLines = metricsMatch[1].split('\n');
+                    for (const line of metricsLines) {
+                        const match = line.match(/^\s*(\w+):\s*(.+)$/);
+                        if (match) {
+                            const key = match[1].toLowerCase();
+                            const valueStr = match[2];
+                            // Parse key=value pairs from line
+                            const values = {};
+                            const pairs = valueStr.split(',');
+                            for (const pair of pairs) {
+                                const [k, v] = pair.trim().split('=');
+                                if (k && v) {
+                                    values[k.trim()] = parseFloat(v) || v;
+                                }
+                            }
+                            if (Object.keys(values).length > 0) {
+                                metrics = { ...metrics, [key]: values };
+                            }
+                            else {
+                                // Single value (like "Lit pixels: 59%")
+                                metrics = { ...metrics, [key]: valueStr.trim() };
+                            }
+                        }
+                    }
+                }
+                // Get file sizes
+                const lowResStats = lowResPath && existsSync(lowResPath) ? statSync(lowResPath) : null;
+                const highResStats = highResPath && existsSync(highResPath) ? statSync(highResPath) : null;
                 return {
                     content: [
                         {
                             type: 'text',
                             text: JSON.stringify({
                                 success: true,
-                                outputPath: outputFile,
-                                fileSizeBytes,
+                                outputs: {
+                                    lowResGif: lowResPath,
+                                    highResGif: highResPath,
+                                    paramsJson: paramsJsonPath,
+                                    metricsJson: metricsJsonPath,
+                                },
+                                sizes: {
+                                    lowResBytes: lowResStats?.size || 0,
+                                    highResBytes: highResStats?.size || 0,
+                                },
+                                metrics,
                                 config: {
                                     generator,
                                     effect,
@@ -1303,8 +1372,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                                     durationMs: duration_ms,
                                     fps,
                                     hueShift: hue_shift,
+                                    params: params || null,
                                 },
-                                message: result.output,
+                                rawOutput: output,
                             }, null, 2),
                         },
                     ],
