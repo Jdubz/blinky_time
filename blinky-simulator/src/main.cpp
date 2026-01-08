@@ -15,6 +15,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <sys/stat.h>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
 #ifdef _WIN32
 #include <direct.h>
 #endif
@@ -67,6 +70,15 @@ void createDir(const std::string& path) {
 #endif
 }
 
+// Get timestamp string for unique filenames (YYYYMMDD-HHMMSS)
+std::string getTimestamp() {
+    std::time_t now = std::time(nullptr);
+    std::tm* tm = std::localtime(&now);
+    std::ostringstream oss;
+    oss << std::put_time(tm, "%Y%m%d-%H%M%S");
+    return oss.str();
+}
+
 void printHelp() {
     std::cout << R"(
 blinky-simulator - LED effect visualization tool
@@ -101,9 +113,9 @@ EXAMPLES:
     blinky-simulator -g fire -d tube
 
 OUTPUT:
-    Creates TWO animated GIFs in the output directory:
-      <dir>/low-res/<generator>.gif   - Exact LED pixels (for AI analysis)
-      <dir>/high-res/<generator>.gif  - Human-readable preview
+    Creates TWO animated GIFs with timestamp (new files each run):
+      <dir>/low-res/<generator>-<timestamp>.gif   - Exact LED pixels (for AI)
+      <dir>/high-res/<generator>-<timestamp>.gif  - Human-readable preview
 
 )" << std::endl;
 }
@@ -294,8 +306,9 @@ int main(int argc, char* argv[]) {
     createDir(lowResDir);
     createDir(highResDir);
 
-    // Generate output filenames
-    std::string filename = config.generator + ".gif";
+    // Generate output filenames with timestamp for unique runs
+    std::string timestamp = getTimestamp();
+    std::string filename = config.generator + "-" + timestamp + ".gif";
     std::string lowResPath = lowResDir + "/" + filename;
     std::string highResPath = highResDir + "/" + filename;
 
