@@ -237,6 +237,10 @@ void Fire::diffuseHeat() {
                 // Single division to avoid cumulative rounding errors
                 uint16_t newHeat = totalHeat / divisor;
 
+                // Apply decay during diffusion to prevent solid glow
+                // Heat should fade as it rises, not just spread everywhere
+                newHeat = (newHeat * 7) / 10;  // 70% retention per diffusion step
+
                 // Replace heat value with diffused result (allows heat to decrease)
                 heat_[currentIndex] = min(255, newHeat);
             }
@@ -302,8 +306,8 @@ void Fire::renderNoiseBackground(PixelMatrix& matrix) {
             // Combine noise with height falloff
             float intensity = noiseVal * heightFalloff * beatBrightness;
 
-            // Apply overall ambient brightness (keep it subtle - this is a background)
-            intensity *= 0.35f;
+            // Moderate ember glow - visible but sparks pop against it
+            intensity *= 0.15f;
 
             // Clamp and convert to 0-255 range
             intensity = constrain(intensity, 0.0f, 1.0f);

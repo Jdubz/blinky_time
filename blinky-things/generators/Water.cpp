@@ -115,19 +115,23 @@ void Water::renderParticle(const Particle* p, PixelMatrix& matrix) {
         uint8_t g = (color >> 8) & 0xFF;
         uint8_t b = color & 0xFF;
 
-        // ADDITIVE BLENDING: Droplets and splashes add light (water shimmer effect)
-        // Saturates at 255 to prevent overflow
+        // MAX BLENDING: Drops take brightest value to pop against dark background
+        // Creates distinct, visible droplets on the sea surface
         RGB existing = matrix.getPixel(x, y);
         matrix.setPixel(x, y,
-                       min(255, (int)existing.r + r),
-                       min(255, (int)existing.g + g),
-                       min(255, (int)existing.b + b));
+                       max(existing.r, r),
+                       max(existing.g, g),
+                       max(existing.b, b));
     }
 }
 
 uint32_t Water::particleColor(uint8_t intensity) const {
-    // Use Water palette
-    return Palette::WATER.toColor(intensity);
+    // White/light cyan drops for visibility against blue background
+    // Higher intensity = whiter (like foam/light reflection on water)
+    uint8_t white = intensity;  // Base brightness
+    uint8_t blue = min(255, intensity + 40);  // Slight blue tint
+    uint8_t green = intensity * 3 / 4;  // Less green than blue
+    return ((uint32_t)white << 16) | ((uint32_t)green << 8) | blue;
 }
 
 void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
@@ -187,8 +191,8 @@ void Water::renderNoiseBackground(PixelMatrix& matrix) {
             // Apply wave brightness modulation
             float intensity = noiseVal * waveBrightness;
 
-            // Keep background subtle to let particles pop
-            intensity *= 0.4f;
+            // Moderate sea background - visible but drops pop against it
+            intensity *= 0.18f;
 
             // Clamp and convert to 0-255 range
             intensity = constrain(intensity, 0.0f, 1.0f);

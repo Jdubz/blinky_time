@@ -34,21 +34,21 @@ struct LightningParams {
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
     LightningParams() {
-        baseSpawnChance = 0.1f;   // Lower baseline (more ambient contrast)
-        audioSpawnBoost = 0.95f;  // Strong music response
-        maxParticles = 40;        // More particles for bigger bursts
-        defaultLifespan = 22;     // Slightly longer for visibility
-        intensityMin = 180;
-        intensityMax = 255;
-        musicSpawnPulse = 0.72f;  // Tuned phase modulation
-        organicTransientMin = 0.28f;  // Lower threshold for ambient strikes
+        baseSpawnChance = 0.08f;  // Occasional strikes
+        audioSpawnBoost = 0.7f;   // Music response
+        maxParticles = 32;        // Good particle count
+        defaultLifespan = 15;     // Quick flash
+        intensityMin = 100;       // Bright bolts
+        intensityMax = 180;       // Bright but not pure white
+        musicSpawnPulse = 0.6f;   // Phase modulation
+        organicTransientMin = 0.4f;
 
-        boltVelocityMin = 4.0f;
-        boltVelocityMax = 8.0f;
-        fadeRate = 135;           // Slower fade for more presence
+        boltVelocityMin = 4.0f;   // Not used (bolts are stationary)
+        boltVelocityMax = 8.0f;   // Not used (bolts are stationary)
+        fadeRate = 15;            // Fast fade per frame
 
-        branchChance = 32;        // More branching
-        branchCount = 3;          // More branches per bolt
+        branchChance = 25;        // Some branching
+        branchCount = 2;          // Branches per bolt
         branchAngleSpread = PI / 4.0f;  // 45 degree spread
         branchIntensityLoss = 40;       // Branches 40% dimmer
     }
@@ -63,7 +63,7 @@ struct LightningParams {
  * - Fast fade for snappy lightning effect
  * - Beat-synced bolt generation in music mode
  */
-class Lightning : public ParticleGenerator<40> {
+class Lightning : public ParticleGenerator<32> {
 public:
     Lightning();
     virtual ~Lightning() override = default;

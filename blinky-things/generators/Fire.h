@@ -39,26 +39,27 @@ struct FireParams {
     uint8_t burstSparks;          // Sparks per burst
 
     FireParams() {
-        baseSpawnChance = 0.18f;  // Baseline spark probability (tuned for ambient activity)
-        audioSpawnBoost = 0.5f;   // Music mode boost
-        maxParticles = 72;        // Tuned for 16x8 matrix coverage
-        defaultLifespan = 75;     // ~2.5 seconds at 30 FPS
-        intensityMin = 80;        // Start in red range (< 85)
-        intensityMax = 180;       // Mostly orange with some yellow highlights
-        gravity = -8.0f;          // Negative = upward (fire rises)
+        baseSpawnChance = 0.35f;  // Higher spawn rate for visible flames
+        audioSpawnBoost = 0.5f;   // Music boost
+        maxParticles = 40;        // More particles
+        defaultLifespan = 60;     // 2 seconds at 30 FPS
+        intensityMin = 70;        // Red range (visible)
+        intensityMax = 150;       // Orange (no yellow/white)
+        gravity = -50.0f;         // LEDs/sec² upward (gentle rise)
         windBase = 0.0f;
-        windVariation = 0.6f;     // Gentle sway for organic feel
-        drag = 0.96f;
-        musicSpawnPulse = 0.6f;
-        organicTransientMin = 0.28f;  // Lower threshold for ambient transients
-        burstSparks = 8;
+        windVariation = 8.0f;     // LEDs/sec² wind sway
+        drag = 0.96f;             // Light drag
+        musicSpawnPulse = 0.5f;
+        organicTransientMin = 0.35f;
+        burstSparks = 5;          // Sparks per burst
 
-        trailHeatFactor = 50;     // Stronger particle trails
-        trailDecay = 32;          // Slower cooling for persistent glow
+        trailHeatFactor = 20;     // Moderate trails for warmth
+        trailDecay = 50;          // Moderate cooling
 
-        sparkVelocityMin = 1.0f;  // Slower sparks for matrix coverage
-        sparkVelocityMax = 3.0f;
-        sparkSpread = 0.8f;
+        // Velocities in LEDs/sec (physics uses dt in seconds!)
+        sparkVelocityMin = 4.0f;  // ~4 LEDs/sec upward (slower = visible longer)
+        sparkVelocityMax = 10.0f; // ~10 LEDs/sec upward
+        sparkSpread = 5.0f;       // Horizontal spread in LEDs/sec
     }
 };
 
@@ -76,7 +77,7 @@ struct FireParams {
  * - Heat diffusion for smooth ember glow
  * - Beat-synced burst spawning in music mode
  */
-class Fire : public ParticleGenerator<72> {
+class Fire : public ParticleGenerator<40> {
 public:
     Fire();
     virtual ~Fire() override;
