@@ -1344,9 +1344,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         }
                     }
                 }
-                // Get file sizes
-                const lowResStats = lowResPath && existsSync(lowResPath) ? statSync(lowResPath) : null;
-                const highResStats = highResPath && existsSync(highResPath) ? statSync(highResPath) : null;
+                // Get file sizes (handle race condition if file deleted between check and stat)
+                let lowResSize = 0;
+                let highResSize = 0;
+                try {
+                    if (lowResPath && existsSync(lowResPath)) {
+                        lowResSize = statSync(lowResPath).size;
+                    }
+                }
+                catch (e) {
+                    if (e.code !== 'ENOENT')
+                        throw e;
+                }
+                try {
+                    if (highResPath && existsSync(highResPath)) {
+                        highResSize = statSync(highResPath).size;
+                    }
+                }
+                catch (e) {
+                    if (e.code !== 'ENOENT')
+                        throw e;
+                }
                 return {
                     content: [
                         {
@@ -1360,8 +1378,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                                     metricsJson: metricsJsonPath,
                                 },
                                 sizes: {
-                                    lowResBytes: lowResStats?.size || 0,
-                                    highResBytes: highResStats?.size || 0,
+                                    lowResBytes: lowResSize,
+                                    highResBytes: highResSize,
                                 },
                                 metrics,
                                 config: {
