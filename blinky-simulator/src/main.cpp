@@ -120,9 +120,13 @@ EXAMPLES:
     blinky-simulator -g fire -d tube
 
 OUTPUT:
-    Creates TWO animated GIFs with timestamp in previews/ (gitignored):
-      previews/low-res/<generator>-<timestamp>.gif   - Exact LED pixels (for AI)
-      previews/high-res/<generator>-<timestamp>.gif  - Human-readable preview
+    Creates a timestamped folder in previews/ (gitignored) containing:
+      previews/<generator>-<timestamp>/
+        low-res.gif    - Exact LED pixels (for AI analysis)
+        high-res.gif   - Human-readable scaled preview
+        params.json    - Generator parameters used
+        metrics.json   - Visual metrics (brightness, activity, etc.)
+        meta.json      - Run configuration (generator, device, duration, etc.)
 
 )" << std::endl;
 }
@@ -325,18 +329,15 @@ int main(int argc, char* argv[]) {
                   << " (" << audioPattern.getDuration() << " ms)" << std::endl;
     }
 
-    // Create output directories (fixed to previews/, which is gitignored)
-    std::string lowResDir = OUTPUT_DIR + "/low-res";
-    std::string highResDir = OUTPUT_DIR + "/high-res";
-    createDir(OUTPUT_DIR);
-    createDir(lowResDir);
-    createDir(highResDir);
-
-    // Generate output filenames with timestamp for unique runs
+    // Create timestamped output folder (previews/<timestamp>/)
     std::string timestamp = getTimestamp();
-    std::string filename = config.generator + "-" + timestamp + ".gif";
-    std::string lowResPath = lowResDir + "/" + filename;
-    std::string highResPath = highResDir + "/" + filename;
+    std::string runDir = OUTPUT_DIR + "/" + config.generator + "-" + timestamp;
+    createDir(OUTPUT_DIR);
+    createDir(runDir);
+
+    // Simple, friendly filenames within the run folder
+    std::string lowResPath = runDir + "/low-res.gif";
+    std::string highResPath = runDir + "/high-res.gif";
 
     // Layout style based on device
     LEDLayoutStyle layoutStyle = (config.device == "hat") ? LEDLayoutStyle::STRIP : LEDLayoutStyle::GRID;
@@ -440,20 +441,39 @@ int main(int argc, char* argv[]) {
     lowResGif.close();
     highResGif.close();
 
-    // Write params.json (for agent-assisted iteration)
-    std::string paramsJsonPath = lowResDir + "/" + config.generator + "-" + timestamp + "-params.json";
+    // Write params.json (generator parameters used)
+    std::string paramsJsonPath = runDir + "/params.json";
     ParamParser::writeJson(paramsJsonPath, config.generator, paramOverrides, allParams);
 
-    // Write metrics.json (quantitative feedback for optimization)
-    std::string metricsJsonPath = lowResDir + "/" + config.generator + "-" + timestamp + "-metrics.json";
+    // Write metrics.json (quantitative visual metrics)
+    std::string metricsJsonPath = runDir + "/metrics.json";
     VisualMetrics visualMetrics = metrics.compute();
     MetricsCalculator::writeJson(metricsJsonPath, visualMetrics);
 
-    std::cout << "Created:" << std::endl;
-    std::cout << "  " << lowResPath << " (" << GifEncoder::getFileSize(lowResPath) << " bytes)" << std::endl;
-    std::cout << "  " << highResPath << " (" << GifEncoder::getFileSize(highResPath) << " bytes)" << std::endl;
-    std::cout << "  " << paramsJsonPath << std::endl;
-    std::cout << "  " << metricsJsonPath << std::endl;
+    // Write meta.json (run configuration info)
+    std::string metaJsonPath = runDir + "/meta.json";
+    std::ofstream metaFile(metaJsonPath);
+    if (metaFile.is_open()) {
+        metaFile << "{\n";
+        metaFile << "  \"generator\": \"" << config.generator << "\",\n";
+        metaFile << "  \"effect\": \"" << config.effect << "\",\n";
+        metaFile << "  \"device\": \"" << config.device << "\",\n";
+        metaFile << "  \"pattern\": \"" << config.pattern << "\",\n";
+        metaFile << "  \"duration_ms\": " << config.durationMs << ",\n";
+        metaFile << "  \"fps\": " << config.fps << ",\n";
+        metaFile << "  \"width\": " << (int)deviceConfig.matrix.width << ",\n";
+        metaFile << "  \"height\": " << (int)deviceConfig.matrix.height << ",\n";
+        metaFile << "  \"timestamp\": \"" << timestamp << "\"\n";
+        metaFile << "}\n";
+        metaFile.close();
+    }
+
+    std::cout << "Created: " << runDir << "/" << std::endl;
+    std::cout << "  low-res.gif (" << GifEncoder::getFileSize(lowResPath) << " bytes)" << std::endl;
+    std::cout << "  high-res.gif (" << GifEncoder::getFileSize(highResPath) << " bytes)" << std::endl;
+    std::cout << "  params.json" << std::endl;
+    std::cout << "  metrics.json" << std::endl;
+    std::cout << "  meta.json" << std::endl;
 
     // Print key metrics summary
     std::cout << "\nMetrics summary:" << std::endl;
