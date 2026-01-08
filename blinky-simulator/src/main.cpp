@@ -50,7 +50,7 @@ struct SimulatorConfig {
     std::string effect = "none";
     std::string pattern = "steady-120bpm";
     std::string outputDir = "previews";
-    std::string device = "tube";  // tube, hat, bucket
+    std::string device = "bucket";  // bucket, tube, hat
     int durationMs = 3000;
     int fps = 30;
     float hueShift = 0.0f;
@@ -80,7 +80,7 @@ OPTIONS:
     --pattern, -p <name>     Audio pattern: steady-120bpm, steady-90bpm, steady-140bpm,
                              silence, burst, complex, or path to pattern file
     --output, -o <dir>       Output directory (default: previews)
-    --device, -d <name>      Device config: tube (4x15), hat (89 string), bucket (16x8)
+    --device, -d <name>      Device config: bucket (16x8), tube (4x15), hat (89 string) [default: bucket]
     --duration, -t <ms>      Duration in milliseconds (default: 3000)
     --fps, -f <num>          Frames per second (default: 30)
     --hue <0.0-1.0>          Hue shift for hue effect (default: 0.0)
@@ -88,7 +88,7 @@ OPTIONS:
     --help, -h               Show this help message
 
 EXAMPLES:
-    # Generate fire preview (outputs to previews/low-res/ and previews/high-res/)
+    # Generate fire preview (16x8 bucket, outputs both resolutions)
     blinky-simulator -g fire
 
     # Generate water effect with complex audio pattern
@@ -97,8 +97,8 @@ EXAMPLES:
     # Generate lightning with hue shift
     blinky-simulator -g lightning -e hue --hue 0.6
 
-    # Use bucket totem device (16x8 matrix)
-    blinky-simulator -g fire -d bucket
+    # Use tube device (4x15 matrix)
+    blinky-simulator -g fire -d tube
 
 OUTPUT:
     Creates TWO animated GIFs in the output directory:
