@@ -78,7 +78,6 @@ private:
 
     float sampleNoise(int x, int y, uint16_t width, uint16_t height,
                      float scale, float time, float brightness) {
-        float normalizedY = (float)y / max(1, height - 1);
         float heightFalloff = getIntensityAt(x, y, width, height);
 
         // Sample 3D noise

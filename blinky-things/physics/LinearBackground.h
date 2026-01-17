@@ -18,9 +18,6 @@ public:
 
     void render(PixelMatrix& matrix, uint16_t width, uint16_t height,
                float noiseTime, const AudioControl& audio) override {
-        // Noise scale for organic movement
-        const float noiseScale = 0.1f;
-
         // Beat-reactive brightness modulation
         float beatBrightness = 1.0f;
         if (audio.hasRhythm()) {
