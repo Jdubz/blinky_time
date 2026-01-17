@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../devices/DeviceConfig.h"
+#include "../generators/Generator.h"  // For GeneratorType enum
 #include "PropagationModel.h"
 #include "SpawnRegion.h"
 #include "BoundaryBehavior.h"
@@ -21,17 +22,6 @@ class LinearBackground;
 
 // Forward declare BackgroundStyle (defined in MatrixBackground.h)
 enum class BackgroundStyle;
-
-/**
- * GeneratorType - What kind of particle generator is being used
- * Used by PhysicsContext to choose appropriate spawn/boundary behavior
- * Note: Named GeneratorType to avoid collision with EffectType in RenderPipeline
- */
-enum class GeneratorType {
-    FIRE,       // Rises from source, killed at opposite end
-    WATER,      // Falls from source, splashes at opposite end
-    LIGHTNING   // Random positions, bounces
-};
 
 /**
  * PhysicsContext - Factory for layout-aware physics components
