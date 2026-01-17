@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../particles/ParticleGenerator.h"
+#include "../physics/PropagationModel.h"
+#include "../physics/BackgroundModel.h"
 #include "../types/ColorPalette.h"
 #include "../math/SimplexNoise.h"
 
@@ -39,7 +41,7 @@ struct FireParams {
     uint8_t burstSparks;          // Sparks per burst
 
     FireParams() {
-        // FIRE EFFECT: Bright sparks rising from bottom
+        // FIRE EFFECT: Bright sparks rising from source
         baseSpawnChance = 0.7f;   // HIGH spawn rate - constant sparks
         audioSpawnBoost = 0.4f;   // Music boost
         maxParticles = 35;        // Good spark coverage
@@ -68,14 +70,12 @@ struct FireParams {
  * Fire - Hybrid particle-based fire generator
  *
  * Uses particles for bright sparks and heat field for diffusion.
- * This combines the best of both approaches:
- * - Particles: Dynamic, physics-based sparks
- * - Heat field: Smooth diffusion and glow
+ * Layout-aware: works on both matrix (2D) and linear (1D) layouts.
  *
  * Features:
- * - Sparks rise from bottom with upward velocity
+ * - Sparks spawn from layout-appropriate source region
  * - Heat trails left behind particles
- * - Heat diffusion for smooth ember glow
+ * - Layout-aware heat diffusion (upward for matrix, lateral for linear)
  * - Beat-synced burst spawning in music mode
  */
 class Fire : public ParticleGenerator<35> {
@@ -96,6 +96,9 @@ public:
     FireParams& getParamsMutable() { return params_; }
 
 protected:
+    // Physics context initialization
+    void initPhysicsContext() override;
+
     // ParticleGenerator hooks
     void spawnParticles(float dt) override;
     void updateParticle(Particle* p, float dt) override;
@@ -109,23 +112,20 @@ private:
     void applyCooling();
 
     /**
-     * Diffuse heat upward to create smooth gradients
-     */
-    void diffuseHeat();
-
-    /**
      * Blend heat buffer with particle rendering
      */
     void blendHeatToMatrix(PixelMatrix& matrix);
-
-    /**
-     * Render simplex noise background with fire gradient
-     * Creates organic, animated ember glow beneath particles
-     */
-    void renderNoiseBackground(PixelMatrix& matrix);
 
     uint8_t* heat_;               // Heat field buffer
     FireParams params_;
     uint8_t beatCount_;           // Beat counter for downbeat detection
     float noiseTime_;             // Animation time for noise field
+
+    // Fire-specific physics components
+    PropagationModel* propagation_;
+    BackgroundModel* background_;
+
+    // Static buffers for placement new
+    uint8_t propagationBuffer_[64];
+    uint8_t backgroundBuffer_[64];
 };

@@ -1,18 +1,49 @@
 #include "Lightning.h"
+#include "../physics/PhysicsContext.h"
+#include "../physics/MatrixBackground.h"
+#include "../physics/LinearBackground.h"
+#include "../physics/RandomSpawnRegion.h"
+#include "../physics/KillBoundary.h"
+#include "../physics/WrapBoundary.h"
+#include "../physics/MatrixForceAdapter.h"
+#include "../physics/LinearForceAdapter.h"
 #include <Arduino.h>
 
-Lightning::Lightning() : params_(), noiseTime_(0.0f) {}
+Lightning::Lightning() : params_(), noiseTime_(0.0f), background_(nullptr) {}
 
 bool Lightning::begin(const DeviceConfig& config) {
     if (!ParticleGenerator::begin(config)) return false;
 
-    // Configure forces for lightning behavior (no forces - instant bolts)
-    gravityForce_.setGravity(0.0f);
-    dragForce_.setDrag(1.0f);  // No drag
-
     noiseTime_ = 0.0f;
 
     return true;
+}
+
+void Lightning::initPhysicsContext() {
+    // Lightning uses no gravity/drag - bolts are stationary
+    gravity_ = 0.0f;
+    drag_ = 1.0f;
+
+    // Create layout-appropriate physics components
+    bool wrap = PhysicsContext::shouldWrapByDefault(layout_);
+
+    // Spawn region: random positions for lightning (works both layouts)
+    spawnRegion_ = PhysicsContext::createSpawnRegion(
+        layout_, EffectType::LIGHTNING, width_, height_, spawnBuffer_);
+
+    // Boundary: kill for matrix, wrap for linear
+    boundary_ = PhysicsContext::createBoundary(
+        layout_, EffectType::LIGHTNING, wrap, boundaryBuffer_);
+
+    // Force adapter: lightning doesn't use forces, but still need adapter for interface
+    forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);
+
+    // Background model: storm sky with height-based coloring for matrix, uniform for linear
+    if (layout_ == LINEAR_LAYOUT) {
+        background_ = new (backgroundBuffer_) LinearBackground(BackgroundStyle::LIGHTNING);
+    } else {
+        background_ = new (backgroundBuffer_) MatrixBackground(BackgroundStyle::LIGHTNING);
+    }
 }
 
 void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {
@@ -24,8 +55,10 @@ void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {
         0.01f + 0.005f * audio.energy;   // Ambient: 0.01-0.015 (ominous)
     noiseTime_ += timeSpeed;
 
-    // Render storm sky noise background first
-    renderNoiseBackground(matrix);
+    // Render storm sky noise background first (layout-aware)
+    if (background_) {
+        background_->render(matrix, width_, height_, noiseTime_, audio);
+    }
 
     // Run particle system (spawns, updates, renders particles)
     ParticleGenerator::generate(matrix, audio);
@@ -220,76 +253,3 @@ void Lightning::spawnBranch(const Particle* parent) {
     }
 }
 
-void Lightning::renderNoiseBackground(PixelMatrix& matrix) {
-    // Storm sky noise background - sunset/night sky colors
-    // Deep purples, dark oranges, and blues for dramatic atmosphere
-
-    // Noise scales for rolling cloud movement
-    const float noiseScale = 0.1f;      // Spatial frequency
-    const float timeScale = noiseTime_; // Animated movement
-
-    // In music mode, add dramatic pulsing (clouds darken before lightning)
-    float stormIntensity = 1.0f;
-    if (audio_.hasRhythm()) {
-        // Inverse pulse - darken BETWEEN beats, brighten slightly on beat
-        // Creates tension-release cycle
-        float phasePulse = audio_.phaseToPulse();
-        stormIntensity = 0.5f + 0.5f * phasePulse;  // Range 0.5-1.0
-    }
-
-    for (int y = 0; y < height_; y++) {
-        for (int x = 0; x < width_; x++) {
-            // Height-based color: sunset colors at bottom, night sky at top
-            float normalizedY = (float)y / (height_ - 1);
-
-            // Sample multiple noise layers for complex cloud structure
-            float nx = x * noiseScale;
-            float ny = y * noiseScale;
-
-            // Primary cloud layer (large, slow-moving)
-            float cloud1 = SimplexNoise::noise3D_01(nx, ny, timeScale);
-
-            // Secondary detail layer (smaller, faster)
-            float cloud2 = SimplexNoise::noise3D_01(nx * 2.0f, ny * 2.0f, timeScale * 1.2f);
-
-            // Combine clouds
-            float noiseVal = cloud1 * 0.7f + cloud2 * 0.3f;
-
-            // Apply storm intensity modulation
-            float intensity = noiseVal * stormIntensity;
-
-            // VERY DARK background - bolts must be dramatic
-            intensity *= 0.02f;
-
-            // Clamp and convert to 0-255 range
-            intensity = constrain(intensity, 0.0f, 1.0f);
-            uint8_t level = (uint8_t)(intensity * 255.0f);
-
-            // Storm sky color palette:
-            // Bottom: sunset orange/red glow (horizon)
-            // Middle: deep purple storm clouds
-            // Top: dark blue night sky
-            uint8_t r, g, b;
-            if (normalizedY > 0.7f) {
-                // Bottom 30%: sunset/horizon glow (orange-red)
-                float horizonFade = (normalizedY - 0.7f) / 0.3f;  // 0 to 1
-                r = (uint8_t)(level * (0.6f + 0.4f * horizonFade));
-                g = (uint8_t)(level * (0.2f + 0.2f * horizonFade));
-                b = (uint8_t)(level * 0.3f);
-            } else if (normalizedY > 0.3f) {
-                // Middle 40%: deep purple storm clouds
-                r = (uint8_t)(level * 0.4f);
-                g = (uint8_t)(level * 0.1f);
-                b = (uint8_t)(level * 0.5f);
-            } else {
-                // Top 30%: dark blue night sky
-                r = (uint8_t)(level * 0.15f);
-                g = (uint8_t)(level * 0.1f);
-                b = (uint8_t)(level * 0.4f);
-            }
-
-            // Set pixel (first layer, direct set)
-            matrix.setPixel(x, y, r, g, b);
-        }
-    }
-}
