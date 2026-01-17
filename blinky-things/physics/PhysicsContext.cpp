@@ -27,7 +27,7 @@ PropagationModel* PhysicsContext::createPropagation(
 }
 
 SpawnRegion* PhysicsContext::createSpawnRegion(
-    LayoutType layout, EffectType effect,
+    LayoutType layout, GeneratorType generator,
     uint16_t width, uint16_t height, void* buffer) {
 
     switch (layout) {
@@ -39,16 +39,16 @@ SpawnRegion* PhysicsContext::createSpawnRegion(
         case RANDOM_LAYOUT:
         default:
             // Matrix layouts use edge spawning based on effect type
-            switch (effect) {
-                case EffectType::FIRE:
+            switch (generator) {
+                case GeneratorType::FIRE:
                     // Fire spawns from bottom, rises up
                     return new (buffer) EdgeSpawnRegion(Edge::BOTTOM, width, height);
 
-                case EffectType::WATER:
+                case GeneratorType::WATER:
                     // Water spawns from top, falls down
                     return new (buffer) EdgeSpawnRegion(Edge::TOP, width, height);
 
-                case EffectType::LIGHTNING:
+                case GeneratorType::LIGHTNING:
                 default:
                     // Lightning spawns randomly
                     return new (buffer) RandomSpawnRegion(width, height);
@@ -57,7 +57,7 @@ SpawnRegion* PhysicsContext::createSpawnRegion(
 }
 
 BoundaryBehavior* PhysicsContext::createBoundary(
-    LayoutType layout, EffectType effect,
+    LayoutType layout, GeneratorType generator,
     bool wrap, void* buffer) {
 
     switch (layout) {
@@ -74,13 +74,13 @@ BoundaryBehavior* PhysicsContext::createBoundary(
         case RANDOM_LAYOUT:
         default:
             // Matrix behavior depends on effect type
-            switch (effect) {
-                case EffectType::FIRE:
-                case EffectType::WATER:
+            switch (generator) {
+                case GeneratorType::FIRE:
+                case GeneratorType::WATER:
                     // Fire/water particles die when leaving bounds
                     return new (buffer) KillBoundary();
 
-                case EffectType::LIGHTNING:
+                case GeneratorType::LIGHTNING:
                 default:
                     // Lightning bolts bounce
                     return new (buffer) BounceBoundary(0.8f);

@@ -29,11 +29,11 @@ void Lightning::initPhysicsContext() {
 
     // Spawn region: random positions for lightning (works both layouts)
     spawnRegion_ = PhysicsContext::createSpawnRegion(
-        layout_, EffectType::LIGHTNING, width_, height_, spawnBuffer_);
+        layout_, GeneratorType::LIGHTNING, width_, height_, spawnBuffer_);
 
     // Boundary: kill for matrix, wrap for linear
     boundary_ = PhysicsContext::createBoundary(
-        layout_, EffectType::LIGHTNING, wrap, boundaryBuffer_);
+        layout_, GeneratorType::LIGHTNING, wrap, boundaryBuffer_);
 
     // Force adapter: lightning doesn't use forces, but still need adapter for interface
     forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);

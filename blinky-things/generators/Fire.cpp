@@ -47,11 +47,11 @@ void Fire::initPhysicsContext() {
 
     // Spawn region: bottom edge for matrix, random for linear
     spawnRegion_ = PhysicsContext::createSpawnRegion(
-        layout_, EffectType::FIRE, width_, height_, spawnBuffer_);
+        layout_, GeneratorType::FIRE, width_, height_, spawnBuffer_);
 
     // Boundary: kill for matrix, wrap for linear
     boundary_ = PhysicsContext::createBoundary(
-        layout_, EffectType::FIRE, wrap, boundaryBuffer_);
+        layout_, GeneratorType::FIRE, wrap, boundaryBuffer_);
 
     // Force adapter: 2D for matrix, 1D for linear
     forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);

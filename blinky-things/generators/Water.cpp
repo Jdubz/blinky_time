@@ -30,11 +30,11 @@ void Water::initPhysicsContext() {
 
     // Spawn region: top edge for matrix, random for linear
     spawnRegion_ = PhysicsContext::createSpawnRegion(
-        layout_, EffectType::WATER, width_, height_, spawnBuffer_);
+        layout_, GeneratorType::WATER, width_, height_, spawnBuffer_);
 
     // Boundary: kill for matrix (splash handled separately), wrap for linear
     boundary_ = PhysicsContext::createBoundary(
-        layout_, EffectType::WATER, wrap, boundaryBuffer_);
+        layout_, GeneratorType::WATER, wrap, boundaryBuffer_);
 
     // Force adapter: 2D for matrix, 1D for linear
     forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);

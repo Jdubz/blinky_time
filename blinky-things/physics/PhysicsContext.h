@@ -23,10 +23,11 @@ class LinearBackground;
 enum class BackgroundStyle;
 
 /**
- * EffectType - What kind of effect is being rendered
+ * GeneratorType - What kind of particle generator is being used
  * Used by PhysicsContext to choose appropriate spawn/boundary behavior
+ * Note: Named GeneratorType to avoid collision with EffectType in RenderPipeline
  */
-enum class EffectType {
+enum class GeneratorType {
     FIRE,       // Rises from source, killed at opposite end
     WATER,      // Falls from source, splashes at opposite end
     LIGHTNING   // Random positions, bounces
@@ -67,7 +68,7 @@ public:
      * @return Pointer to created region
      */
     static SpawnRegion* createSpawnRegion(
-        LayoutType layout, EffectType effect,
+        LayoutType layout, GeneratorType generator,
         uint16_t width, uint16_t height, void* buffer);
 
     /**
@@ -79,7 +80,7 @@ public:
      * @return Pointer to created behavior
      */
     static BoundaryBehavior* createBoundary(
-        LayoutType layout, EffectType effect,
+        LayoutType layout, GeneratorType generator,
         bool wrap, void* buffer);
 
     /**
