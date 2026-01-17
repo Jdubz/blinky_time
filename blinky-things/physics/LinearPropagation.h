@@ -25,8 +25,10 @@ public:
                   float decayFactor) override {
         uint16_t numLeds = width * height;
 
-        // Use static buffer to avoid allocation
+        // Static buffer for intermediate calculation
         // LIMITATION: Max 256 LEDs supported for linear propagation
+        // THREAD SAFETY: Uses static buffer - assumes single-threaded execution
+        // (standard for embedded systems, multiple generators don't run concurrently)
         static uint8_t tempHeat[256];
         if (numLeds > 256 || numLeds == 0) {
             // Cannot propagate: buffer too small or no LEDs

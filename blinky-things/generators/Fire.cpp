@@ -163,6 +163,8 @@ void Fire::spawnParticles(float dt) {
             vx += spreadAmount;
         } else {
             // Linear: spread is vertical (minimal effect on 1D)
+            // 0.3 multiplier: vertical spread is less important on 1D layouts
+            // since height=1, so we reduce it to avoid excessive velocity
             vy += spreadAmount * 0.3f;
         }
 

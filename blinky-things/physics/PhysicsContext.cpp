@@ -3,6 +3,7 @@
 #include "LinearPropagation.h"
 #include "EdgeSpawnRegion.h"
 #include "RandomSpawnRegion.h"
+#include "CenterSpawnRegion.h"
 #include "KillBoundary.h"
 #include "BounceBoundary.h"
 #include "WrapBoundary.h"
@@ -10,6 +11,32 @@
 #include "LinearForceAdapter.h"
 #include "MatrixBackground.h"
 #include "LinearBackground.h"
+
+// Compile-time buffer size validation
+// These assertions ensure physics components fit in their allocated buffers.
+// Buffer sizes are defined in ParticleGenerator.h and generator headers.
+
+// Propagation models: propagationBuffer_[64]
+static_assert(sizeof(MatrixPropagation) <= 64, "MatrixPropagation exceeds 64-byte buffer");
+static_assert(sizeof(LinearPropagation) <= 64, "LinearPropagation exceeds 64-byte buffer");
+
+// Spawn regions: spawnBuffer_[32]
+static_assert(sizeof(EdgeSpawnRegion) <= 32, "EdgeSpawnRegion exceeds 32-byte buffer");
+static_assert(sizeof(RandomSpawnRegion) <= 32, "RandomSpawnRegion exceeds 32-byte buffer");
+static_assert(sizeof(CenterSpawnRegion) <= 32, "CenterSpawnRegion exceeds 32-byte buffer");
+
+// Boundary behaviors: boundaryBuffer_[32]
+static_assert(sizeof(KillBoundary) <= 32, "KillBoundary exceeds 32-byte buffer");
+static_assert(sizeof(BounceBoundary) <= 32, "BounceBoundary exceeds 32-byte buffer");
+static_assert(sizeof(WrapBoundary) <= 32, "WrapBoundary exceeds 32-byte buffer");
+
+// Force adapters: forceBuffer_[48]
+static_assert(sizeof(MatrixForceAdapter) <= 48, "MatrixForceAdapter exceeds 48-byte buffer");
+static_assert(sizeof(LinearForceAdapter) <= 48, "LinearForceAdapter exceeds 48-byte buffer");
+
+// Background models: backgroundBuffer_[64]
+static_assert(sizeof(MatrixBackground) <= 64, "MatrixBackground exceeds 64-byte buffer");
+static_assert(sizeof(LinearBackground) <= 64, "LinearBackground exceeds 64-byte buffer");
 
 PropagationModel* PhysicsContext::createPropagation(
     LayoutType layout, uint16_t width, uint16_t height,

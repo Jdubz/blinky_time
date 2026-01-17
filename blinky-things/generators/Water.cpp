@@ -189,6 +189,9 @@ void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
                         : 0;
     uint8_t splashCount = min(params_.splashParticles, available);
 
+    // Guard against division by zero in angle calculation
+    if (splashCount == 0) return;
+
     for (uint8_t i = 0; i < splashCount; i++) {
         // Radial splash pattern
         float angle = (i * TWO_PI / splashCount) + random(100) * 0.01f;

@@ -38,8 +38,8 @@ public:
     bool isInRegion(float x, float y) const override {
         float centerX = width_ / 2.0f;
         float centerY = height_ / 2.0f;
-        float dx = abs(x - centerX) / width_;
-        float dy = abs(y - centerY) / max(1, height_);
+        float dx = abs(x - centerX) / max(1, (int)width_);
+        float dy = abs(y - centerY) / max(1, (int)height_);
         return dx <= spread_ && dy <= spread_;
     }
 
