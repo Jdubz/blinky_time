@@ -57,7 +57,8 @@ public:
         switch (style_) {
             case BackgroundStyle::FIRE:
                 // Brighter at bottom (y = height-1), darker at top (y = 0)
-                return 1.0f - normalizedY * 0.7f;  // Range 0.3-1.0
+                // normalizedY=0 at top, normalizedY=1 at bottom
+                return 0.3f + normalizedY * 0.7f;  // Range 0.3-1.0
 
             case BackgroundStyle::WATER:
                 // Uniform intensity

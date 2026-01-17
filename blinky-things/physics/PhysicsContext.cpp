@@ -8,6 +8,8 @@
 #include "WrapBoundary.h"
 #include "MatrixForceAdapter.h"
 #include "LinearForceAdapter.h"
+#include "MatrixBackground.h"
+#include "LinearBackground.h"
 
 PropagationModel* PhysicsContext::createPropagation(
     LayoutType layout, uint16_t width, uint16_t height,
@@ -97,5 +99,19 @@ ForceAdapter* PhysicsContext::createForceAdapter(
         case RANDOM_LAYOUT:
         default:
             return new (buffer) MatrixForceAdapter();
+    }
+}
+
+BackgroundModel* PhysicsContext::createBackground(
+    LayoutType layout, BackgroundStyle style, void* buffer) {
+
+    switch (layout) {
+        case LINEAR_LAYOUT:
+            return new (buffer) LinearBackground(style);
+
+        case MATRIX_LAYOUT:
+        case RANDOM_LAYOUT:
+        default:
+            return new (buffer) MatrixBackground(style);
     }
 }

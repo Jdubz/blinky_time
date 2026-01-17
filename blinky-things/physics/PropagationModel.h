@@ -8,8 +8,10 @@
  *
  * Defines how heat spreads across the LED grid. Different layouts
  * require different propagation patterns:
- * - MATRIX: Heat rises upward (y decreases)
- * - LINEAR: Heat spreads laterally (both x directions)
+ * - MATRIX: Heat rises upward (toward y=0; y decreases in screen coordinates)
+ * - LINEAR: Heat spreads laterally (both x directions, optional wrap)
+ *
+ * Coordinate system: y=0 is top, y increases downward (standard screen coords)
  */
 class PropagationModel {
 public:

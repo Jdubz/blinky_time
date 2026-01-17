@@ -39,11 +39,8 @@ void Lightning::initPhysicsContext() {
     forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);
 
     // Background model: storm sky with height-based coloring for matrix, uniform for linear
-    if (layout_ == LINEAR_LAYOUT) {
-        background_ = new (backgroundBuffer_) LinearBackground(BackgroundStyle::LIGHTNING);
-    } else {
-        background_ = new (backgroundBuffer_) MatrixBackground(BackgroundStyle::LIGHTNING);
-    }
+    background_ = PhysicsContext::createBackground(
+        layout_, BackgroundStyle::LIGHTNING, backgroundBuffer_);
 }
 
 void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {

@@ -43,11 +43,8 @@ void Water::initPhysicsContext() {
     }
 
     // Background model: water surface with height variation for matrix, uniform for linear
-    if (layout_ == LINEAR_LAYOUT) {
-        background_ = new (backgroundBuffer_) LinearBackground(BackgroundStyle::WATER);
-    } else {
-        background_ = new (backgroundBuffer_) MatrixBackground(BackgroundStyle::WATER);
-    }
+    background_ = PhysicsContext::createBackground(
+        layout_, BackgroundStyle::WATER, backgroundBuffer_);
 }
 
 void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {

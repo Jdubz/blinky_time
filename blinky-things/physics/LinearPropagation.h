@@ -26,9 +26,13 @@ public:
         uint16_t numLeds = width * height;
 
         // Use static buffer to avoid allocation
-        // Max 256 LEDs supported for temp buffer
+        // LIMITATION: Max 256 LEDs supported for linear propagation
         static uint8_t tempHeat[256];
-        if (numLeds > 256) numLeds = 256;
+        if (numLeds > 256 || numLeds == 0) {
+            // Cannot propagate: buffer too small or no LEDs
+            // Skip propagation rather than corrupt memory or produce incorrect results
+            return;
+        }
 
         for (int i = 0; i < numLeds; i++) {
             uint16_t totalHeat = (uint16_t)heat[i] * 2;  // Self weight 2
@@ -91,19 +95,19 @@ public:
             count++;
         }
 
-        // Two left
+        // Two left (same weight as propagate uses)
         int left2Idx = wrapIndex(index - 2, numLeds);
         if (left2Idx >= 0) {
             neighbors[count] = left2Idx;
-            weights[count] = 0.5f;
+            weights[count] = 1.0f;
             count++;
         }
 
-        // Two right
+        // Two right (same weight as propagate uses)
         int right2Idx = wrapIndex(index + 2, numLeds);
         if (right2Idx >= 0) {
             neighbors[count] = right2Idx;
-            weights[count] = 0.5f;
+            weights[count] = 1.0f;
             count++;
         }
 

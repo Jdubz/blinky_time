@@ -64,11 +64,8 @@ void Fire::initPhysicsContext() {
         layout_, width_, height_, wrap, propagationBuffer_);
 
     // Background model: height-falloff for matrix, uniform for linear
-    if (layout_ == LINEAR_LAYOUT) {
-        background_ = new (backgroundBuffer_) LinearBackground(BackgroundStyle::FIRE);
-    } else {
-        background_ = new (backgroundBuffer_) MatrixBackground(BackgroundStyle::FIRE);
-    }
+    background_ = PhysicsContext::createBackground(
+        layout_, BackgroundStyle::FIRE, backgroundBuffer_);
 }
 
 void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {

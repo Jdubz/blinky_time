@@ -53,6 +53,22 @@ public:
         // Initialize physics context - subclasses implement this
         initPhysicsContext();
 
+        // DEBUG: Verify subclass properly initialized physics components
+        // These are required for the particle system to function correctly.
+        // Null pointers are handled gracefully at runtime, but indicate
+        // a bug in the subclass initPhysicsContext() implementation.
+        #ifdef BLINKY_DEBUG
+        if (!spawnRegion_) {
+            Serial.println(F("WARN: spawnRegion_ null after initPhysicsContext"));
+        }
+        if (!boundary_) {
+            Serial.println(F("WARN: boundary_ null after initPhysicsContext"));
+        }
+        if (!forceAdapter_) {
+            Serial.println(F("WARN: forceAdapter_ null after initPhysicsContext"));
+        }
+        #endif
+
         return true;
     }
 

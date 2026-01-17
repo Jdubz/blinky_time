@@ -16,6 +16,11 @@ class KillBoundary;
 class WrapBoundary;
 class MatrixForceAdapter;
 class LinearForceAdapter;
+class MatrixBackground;
+class LinearBackground;
+
+// Forward declare BackgroundStyle (defined in MatrixBackground.h)
+enum class BackgroundStyle;
 
 /**
  * EffectType - What kind of effect is being rendered
@@ -85,6 +90,16 @@ public:
      */
     static ForceAdapter* createForceAdapter(
         LayoutType layout, void* buffer);
+
+    /**
+     * Create background model for this layout and effect style
+     * @param layout The device layout type
+     * @param style The background style (FIRE, WATER, LIGHTNING)
+     * @param buffer Memory buffer for placement new (minimum 64 bytes)
+     * @return Pointer to created background model
+     */
+    static BackgroundModel* createBackground(
+        LayoutType layout, BackgroundStyle style, void* buffer);
 
     /**
      * Check if primary axis is vertical for this layout
