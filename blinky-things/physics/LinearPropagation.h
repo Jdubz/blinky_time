@@ -118,10 +118,13 @@ private:
      * Returns -1 if index is out of bounds and wrap is disabled
      */
     int wrapIndex(int idx, uint16_t numLeds) const {
+        // CRITICAL: Guard against zero numLeds to prevent infinite loop
+        if (numLeds == 0) return -1;
+
         if (wrap_) {
-            // Wrap around
-            while (idx < 0) idx += numLeds;
-            while (idx >= numLeds) idx -= numLeds;
+            // Wrap around using modulo (safe, no infinite loop)
+            idx = idx % (int)numLeds;
+            if (idx < 0) idx += numLeds;
             return idx;
         } else {
             // Clamp to bounds, return -1 if out

@@ -34,13 +34,15 @@ public:
     }
 
     void applyCorrection(Particle* p, uint16_t width, uint16_t height) override {
-        if (wrapX_) {
-            while (p->x < 0) p->x += width;
-            while (p->x >= width) p->x -= width;
+        // CRITICAL: Guard against zero dimensions to prevent infinite loop
+        if (wrapX_ && width > 0) {
+            // Use fmod for safe wrapping (no infinite loop)
+            p->x = fmod(p->x, (float)width);
+            if (p->x < 0) p->x += width;
         }
-        if (wrapY_) {
-            while (p->y < 0) p->y += height;
-            while (p->y >= height) p->y -= height;
+        if (wrapY_ && height > 0) {
+            p->y = fmod(p->y, (float)height);
+            if (p->y < 0) p->y += height;
         }
     }
 

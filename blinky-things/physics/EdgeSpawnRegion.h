@@ -40,6 +40,7 @@ public:
                 y = random(height_ * 100) / 100.0f;
                 break;
             case Edge::RIGHT:
+            default:  // Default to right edge if edge_ is corrupted
                 x = width_ - 1;
                 y = random(height_ * 100) / 100.0f;
                 break;
@@ -95,6 +96,7 @@ public:
                 vy = 0;
                 break;
             case Edge::RIGHT:
+            default:  // Default to right edge behavior if edge_ is corrupted
                 // Spawn from right, move left
                 vx = -speed;
                 vy = 0;
