@@ -2,20 +2,28 @@
 
 #include "../generators/Generator.h"
 #include "ParticlePool.h"
-#include "ParticleForce.h"
+#include "Particle.h"
+#include "../physics/PhysicsContext.h"
+#include "../physics/PropagationModel.h"
+#include "../physics/SpawnRegion.h"
+#include "../physics/BoundaryBehavior.h"
+#include "../physics/ForceAdapter.h"
+#include "../physics/BackgroundModel.h"
 #include <Arduino.h>
 
 /**
  * ParticleGenerator - Base class for particle-based generators
  *
- * Provides unified particle lifecycle management:
- * 1. Spawn particles based on audio
- * 2. Apply forces (gravity, wind, drag)
- * 3. Update positions
- * 4. Age and kill particles
- * 5. Render to matrix
+ * Provides unified particle lifecycle management with layout-aware physics:
+ * 1. Initialize physics context based on layout type
+ * 2. Spawn particles using SpawnRegion abstraction
+ * 3. Apply forces using ForceAdapter abstraction
+ * 4. Update positions with velocity clamping
+ * 5. Handle boundaries using BoundaryBehavior abstraction
+ * 6. Render particles to matrix
  *
  * Subclasses customize behavior by implementing:
+ * - initPhysicsContext(): Set up layout-appropriate physics
  * - spawnParticles(): When and how to create particles
  * - updateParticle(): Per-particle custom logic
  * - renderParticle(): How to draw each particle
@@ -27,8 +35,8 @@ template<uint8_t MAX_PARTICLES>
 class ParticleGenerator : public Generator {
 public:
     ParticleGenerator()
-        : pool_(), gravityForce_(0.0f), windForce_(0.0f, 0.0f),
-          dragForce_(0.98f), prevPhase_(1.0f) {}
+        : pool_(), prevPhase_(1.0f), gravity_(0.0f), drag_(0.98f),
+          spawnRegion_(nullptr), boundary_(nullptr), forceAdapter_(nullptr) {}
 
     virtual ~ParticleGenerator() override = default;
 
@@ -42,6 +50,25 @@ public:
         pool_.reset();
         lastUpdateMs_ = millis();
 
+        // Initialize physics context - subclasses implement this
+        initPhysicsContext();
+
+        // DEBUG: Verify subclass properly initialized physics components
+        // These are required for the particle system to function correctly.
+        // Null pointers are handled gracefully at runtime, but indicate
+        // a bug in the subclass initPhysicsContext() implementation.
+        #ifdef BLINKY_DEBUG
+        if (!spawnRegion_) {
+            Serial.println(F("WARN: spawnRegion_ null after initPhysicsContext"));
+        }
+        if (!boundary_) {
+            Serial.println(F("WARN: boundary_ null after initPhysicsContext"));
+        }
+        if (!forceAdapter_) {
+            Serial.println(F("WARN: forceAdapter_ null after initPhysicsContext"));
+        }
+        #endif
+
         return true;
     }
 
@@ -54,7 +81,9 @@ public:
         lastUpdateMs_ = currentMs;
 
         // Update physics forces
-        updateForces(dt);
+        if (forceAdapter_) {
+            forceAdapter_->update(dt);
+        }
 
         // Spawn new particles based on audio
         spawnParticles(dt);
@@ -77,18 +106,34 @@ public:
 
 protected:
     // ========================================
+    // Physics context initialization
+    // ========================================
+
+    /**
+     * Initialize physics context for this generator
+     * Subclasses MUST override this to set up:
+     * - spawnRegion_
+     * - boundary_
+     * - forceAdapter_
+     * - (optionally) propagation_ and background_ if needed
+     *
+     * Use PhysicsContext factory methods with placement new.
+     */
+    virtual void initPhysicsContext() = 0;
+
+    // ========================================
     // Subclass hooks (must implement)
     // ========================================
 
     /**
      * Spawn particles based on current audio state
-     * Called once per frame before particle updates
+     * Use spawnRegion_->getSpawnPosition() for layout-aware spawning
      */
     virtual void spawnParticles(float dt) = 0;
 
     /**
      * Update a single particle (physics, aging, visual effects)
-     * Called for each alive particle
+     * Called for each alive particle before forces/boundaries
      */
     virtual void updateParticle(Particle* p, float dt) = 0;
 
@@ -116,19 +161,31 @@ protected:
     }
 
     /**
-     * Check if particle is out of bounds
+     * Get spawn position from spawn region
+     * Returns layout-appropriate spawn coordinates
      */
-    bool outOfBounds(const Particle* p) const {
-        return p->x < 0 || p->x >= width_ || p->y < 0 || p->y >= height_;
+    void getSpawnPosition(float& x, float& y) {
+        if (spawnRegion_) {
+            spawnRegion_->getSpawnPosition(x, y);
+        } else {
+            // Fallback: random position
+            x = random(width_ * 100) / 100.0f;
+            y = random(height_ * 100) / 100.0f;
+        }
     }
 
     /**
-     * Apply standard physics forces to particle
+     * Get initial velocity for spawned particles
+     * Returns layout-appropriate velocity direction
      */
-    void applyForces(Particle* p, float dt) {
-        gravityForce_.apply(p, dt);
-        windForce_.apply(p, dt);
-        dragForce_.apply(p, dt);
+    void getInitialVelocity(float speed, float& vx, float& vy) {
+        if (spawnRegion_) {
+            spawnRegion_->getInitialVelocity(speed, vx, vy);
+        } else {
+            // Fallback: upward for fire-like behavior
+            vx = 0;
+            vy = -speed;
+        }
     }
 
     /**
@@ -136,7 +193,6 @@ protected:
      */
     void ageParticle(Particle* p) {
         // Increment age, capping at 255 to prevent uint8_t wraparound
-        // (maxAge=0 particles intentionally live forever, this is not a bug)
         if (p->age < 255) {
             p->age++;
         }
@@ -153,43 +209,42 @@ protected:
     // Update loop
     // ========================================
 
-    void updateForces(float dt) {
-        windForce_.update(dt);
-    }
-
     void updateParticles(float dt) {
         pool_.updateAll([this, dt](Particle* p) {
             // Subclass-specific update
             updateParticle(p, dt);
 
-            // Apply forces
-            applyForces(p, dt);
+            // Apply forces through adapter
+            if (forceAdapter_) {
+                forceAdapter_->applyGravity(p, dt, gravity_);
+                forceAdapter_->applyWind(p, dt);
+                forceAdapter_->applyDrag(p, dt, drag_);
+            }
 
             // CRITICAL: Clamp velocity BEFORE position update to prevent tunneling
-            // MAX_PARTICLE_VELOCITY (50 LEDs/sec) prevents particles from skipping through walls
-            // (at 30 FPS, this is ~1.67 LEDs/frame max displacement)
             p->vx = constrain(p->vx, -MAX_PARTICLE_VELOCITY, MAX_PARTICLE_VELOCITY);
             p->vy = constrain(p->vy, -MAX_PARTICLE_VELOCITY, MAX_PARTICLE_VELOCITY);
 
-            // Update position based on clamped velocity
-            // Velocity is in LEDs/sec, dt is in seconds: displacement = velocity * time
+            // Update position
             p->x += p->vx * dt;
             p->y += p->vy * dt;
 
             // Age particle
             ageParticle(p);
 
-            // Handle bounds
-            if (outOfBounds(p)) {
-                if (p->hasFlag(ParticleFlags::BOUNCE)) {
-                    // Bounce off walls
-                    if (p->x < 0) { p->x = 0; p->vx = -p->vx * 0.8f; }
-                    if (p->x >= width_) { p->x = width_ - 1; p->vx = -p->vx * 0.8f; }
-                    if (p->y < 0) { p->y = 0; p->vy = -p->vy * 0.8f; }
-                    if (p->y >= height_) { p->y = height_ - 1; p->vy = -p->vy * 0.8f; }
-                } else {
-                    // Kill particle
-                    pool_.kill(p);
+            // Handle boundaries through abstraction
+            if (boundary_) {
+                BoundaryAction action = boundary_->checkBounds(p, width_, height_);
+                switch (action) {
+                    case BoundaryAction::KILL:
+                        pool_.kill(p);
+                        break;
+                    case BoundaryAction::BOUNCE:
+                    case BoundaryAction::WRAP:
+                        boundary_->applyCorrection(p, width_, height_);
+                        break;
+                    case BoundaryAction::NONE:
+                        break;
                 }
             }
         });
@@ -208,10 +263,18 @@ protected:
     ParticlePool<MAX_PARTICLES> pool_;
     AudioControl audio_;
     float prevPhase_;
-    // Note: lastUpdateMs_ is inherited from Generator base class
 
-    // Forces
-    GravityForce gravityForce_;
-    WindForce windForce_;
-    DragForce dragForce_;
+    // Physics parameters (set by subclasses)
+    float gravity_;
+    float drag_;
+
+    // Physics components (created by initPhysicsContext)
+    SpawnRegion* spawnRegion_;
+    BoundaryBehavior* boundary_;
+    ForceAdapter* forceAdapter_;
+
+    // Static buffers for placement new (avoid heap allocation)
+    uint8_t spawnBuffer_[32];
+    uint8_t boundaryBuffer_[32];
+    uint8_t forceBuffer_[48];
 };

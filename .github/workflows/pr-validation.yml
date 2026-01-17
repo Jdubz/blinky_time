@@ -5,20 +5,9 @@ on:
     branches: [ master, main ]
 
 jobs:
-  compilation-tests:
-    name: Compile (${{ matrix.device-name }})
+  compile:
+    name: Compile Firmware
     runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - device-type: 1
-            device-name: "Hat"
-          - device-type: 2
-            device-name: "Tube Light"
-          - device-type: 3
-            device-name: "Bucket Totem"
 
     steps:
     - name: Checkout repository
@@ -52,7 +41,7 @@ jobs:
 
     - name: Compile sketch
       run: |
-        echo "Building for ${{ matrix.device-name }} (runtime device configuration)"
+        echo "Building unified firmware (device config is runtime-selected)"
         arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things/
 
   cppcheck:

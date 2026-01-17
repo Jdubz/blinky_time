@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../particles/ParticleGenerator.h"
+#include "../physics/BackgroundModel.h"
 #include "../types/ColorPalette.h"
 #include "../math/SimplexNoise.h"
 
@@ -82,6 +83,9 @@ public:
     LightningParams& getParamsMutable() { return params_; }
 
 protected:
+    // Physics context initialization
+    void initPhysicsContext() override;
+
     // ParticleGenerator hooks
     void spawnParticles(float dt) override;
     void updateParticle(Particle* p, float dt) override;
@@ -99,12 +103,12 @@ private:
      */
     void spawnBranch(const Particle* parent);
 
-    /**
-     * Render simplex noise background with sunset/night sky colors
-     * Deep purples, oranges, and dark blues for dramatic storm sky
-     */
-    void renderNoiseBackground(PixelMatrix& matrix);
-
     LightningParams params_;
     float noiseTime_;             // Animation time for noise field
+
+    // Lightning-specific physics components
+    BackgroundModel* background_;
+
+    // Static buffer for placement new
+    uint8_t backgroundBuffer_[64];
 };

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../particles/ParticleGenerator.h"
+#include "../physics/BackgroundModel.h"
 #include "../types/ColorPalette.h"
 #include "../math/SimplexNoise.h"
 
@@ -69,8 +70,10 @@ struct WaterParams {
 /**
  * Water - Particle-based water generator
  *
+ * Layout-aware: works on both matrix (2D) and linear (1D) layouts.
+ *
  * Features:
- * - Drops falling from top (primary behavior)
+ * - Drops spawn from layout-appropriate source region
  * - Radial splashes on impact (transient-triggered)
  * - Beat-synced wave generation in music mode
  * - Smooth physics-based motion
@@ -93,6 +96,9 @@ public:
     WaterParams& getParamsMutable() { return params_; }
 
 protected:
+    // Physics context initialization
+    void initPhysicsContext() override;
+
     // ParticleGenerator hooks
     void spawnParticles(float dt) override;
     void updateParticle(Particle* p, float dt) override;
@@ -105,12 +111,12 @@ private:
      */
     void spawnSplash(float x, float y, uint8_t parentIntensity);
 
-    /**
-     * Render simplex noise background with tropical sea colors
-     * Blue/green/cyan gradient simulating tropical water
-     */
-    void renderNoiseBackground(PixelMatrix& matrix);
-
     WaterParams params_;
     float noiseTime_;             // Animation time for noise field
+
+    // Water-specific physics components
+    BackgroundModel* background_;
+
+    // Static buffer for placement new
+    uint8_t backgroundBuffer_[64];
 };

@@ -24,6 +24,9 @@
 // Math implementations
 #include "math/SimplexNoise.cpp"
 
+// Physics implementations
+#include "physics/PhysicsContext.cpp"
+
 // Generator implementations
 #include "generators/Fire.cpp"
 #include "generators/Water.cpp"
