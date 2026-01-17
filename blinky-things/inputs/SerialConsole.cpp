@@ -730,7 +730,7 @@ void SerialConsole::showDeviceConfig() {
     const ConfigStorage::StoredDeviceConfig& cfg = configStorage_->getDeviceConfig();
 
     // Use ArduinoJson for clean, maintainable JSON serialization
-    StaticJsonDocument<1024> doc;
+    JsonDocument doc;
 
     // Device identification
     doc["deviceId"] = cfg.deviceId;
@@ -791,7 +791,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     }
 
     // Parse JSON using ArduinoJson (1024 bytes to accommodate full device configs ~600 bytes)
-    StaticJsonDocument<1024> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, jsonStr);
 
     if (error) {
