@@ -81,15 +81,17 @@ void ConfigStorage::begin() {
     valid_ = true;
 }
 
-void ConfigStorage::loadDefaults() {
-    data_.magic = MAGIC_NUMBER;
-    data_.version = CONFIG_VERSION;
-
-    // Device config defaults (v28+) - UNCONFIGURED state
+void ConfigStorage::loadDeviceDefaults() {
+    // Device config defaults - UNCONFIGURED state
     memset(&data_.device, 0, sizeof(StoredDeviceConfig));
     data_.device.isValid = false;  // No device configured - triggers safe mode
     strncpy(data_.device.deviceName, "UNCONFIGURED", sizeof(data_.device.deviceName) - 1);
     strncpy(data_.device.deviceId, "none", sizeof(data_.device.deviceId) - 1);
+}
+
+void ConfigStorage::loadSettingsDefaults() {
+    // Settings defaults - called when SETTINGS_VERSION changes
+    // Device config is preserved separately
 
     // Fire defaults (particle-based)
     data_.fire.baseSpawnChance = 0.15f;
@@ -209,41 +211,75 @@ void ConfigStorage::loadDefaults() {
     data_.brightness = 100;
 }
 
+void ConfigStorage::loadDefaults() {
+    data_.magic = MAGIC_NUMBER;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
+
+    loadDeviceDefaults();
+    loadSettingsDefaults();
+}
+
 bool ConfigStorage::loadFromFlash() {
+    ConfigData temp;
+    bool readOk = false;
+
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     if (!flashOk) return false;
-
-    ConfigData temp;
     if (flash.read(&temp, flashAddr, sizeof(ConfigData)) != 0) return false;
-    if (temp.magic != MAGIC_NUMBER) return false;
-    // Version mismatch: intentionally discard old config and use defaults
-    // See ConfigStorage.h for migration policy rationale
-    if (temp.version != CONFIG_VERSION) return false;
-
-    memcpy(&data_, &temp, sizeof(ConfigData));
-    return true;
+    readOk = true;
 #elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
     if (!flashOk || configFile == nullptr) return false;
 
     // Open config file for reading
     configFile->open(CONFIG_FILENAME, FILE_O_READ);
-    if (!(*configFile)) return false;  // Check if file opened successfully
+    if (!(*configFile)) return false;
 
-    ConfigData temp;
     uint32_t bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
     configFile->close();
 
     if (bytesRead != sizeof(ConfigData)) return false;
-    if (temp.magic != MAGIC_NUMBER) return false;
-    // Version mismatch: intentionally discard old config and use defaults
-    // See ConfigStorage.h for migration policy rationale
-    if (temp.version != CONFIG_VERSION) return false;
-
-    memcpy(&data_, &temp, sizeof(ConfigData));
-    return true;
-#else
-    return false;
+    readOk = true;
 #endif
+
+    if (!readOk) return false;
+
+    // Magic number mismatch: complete corruption, reset everything
+    if (temp.magic != MAGIC_NUMBER) return false;
+
+    // Start with defaults for both sections
+    data_.magic = MAGIC_NUMBER;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
+
+    // Handle device config version
+    if (temp.deviceVersion == DEVICE_VERSION) {
+        // Device config version matches - preserve it
+        memcpy(&data_.device, &temp.device, sizeof(StoredDeviceConfig));
+        SerialConsole::logDebug(F("Device config loaded from flash"));
+    } else {
+        // Device config version mismatch - use defaults (rare)
+        loadDeviceDefaults();
+        SerialConsole::logWarn(F("Device config version mismatch, using defaults"));
+    }
+
+    // Handle settings version
+    if (temp.settingsVersion == SETTINGS_VERSION) {
+        // Settings version matches - preserve all settings
+        memcpy(&data_.fire, &temp.fire, sizeof(StoredFireParams));
+        memcpy(&data_.water, &temp.water, sizeof(StoredWaterParams));
+        memcpy(&data_.lightning, &temp.lightning, sizeof(StoredLightningParams));
+        memcpy(&data_.mic, &temp.mic, sizeof(StoredMicParams));
+        memcpy(&data_.music, &temp.music, sizeof(StoredMusicParams));
+        data_.brightness = temp.brightness;
+        SerialConsole::logDebug(F("Settings loaded from flash"));
+    } else {
+        // Settings version mismatch - use defaults (common during development)
+        loadSettingsDefaults();
+        SerialConsole::logWarn(F("Settings version mismatch, using defaults (device config preserved)"));
+    }
+
+    return true;
 }
 
 void ConfigStorage::saveToFlash() {
@@ -259,7 +295,8 @@ void ConfigStorage::saveToFlash() {
     SafetyTest::assertFlashSafe(flashAddr, sectorSize);
 
     data_.magic = MAGIC_NUMBER;
-    data_.version = CONFIG_VERSION;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
 
     if (flash.erase(flashAddr, sectorSize) != 0) {
         SerialConsole::logError(F("Flash erase failed"));
@@ -279,7 +316,8 @@ void ConfigStorage::saveToFlash() {
     }
 
     data_.magic = MAGIC_NUMBER;
-    data_.version = CONFIG_VERSION;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
 
     // Delete existing file if present
     if (InternalFS.exists(CONFIG_FILENAME)) {
