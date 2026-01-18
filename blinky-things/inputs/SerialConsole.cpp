@@ -135,6 +135,10 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
         "Heat trail intensity (%)", 0, 100, onParamChanged);
     settings_.registerUint8("traildecay", &fp->trailDecay, "fire",
         "Heat decay rate per frame", 0, 255, onParamChanged);
+
+    // Background
+    settings_.registerFloat("bgintensity", &fp->backgroundIntensity, "fire",
+        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
 }
 
 // === MUSIC MODE FIRE SETTINGS ===
@@ -296,7 +300,8 @@ void SerialConsole::registerRhythmSettings() {
 void SerialConsole::update() {
     // Handle incoming commands
     if (Serial.available()) {
-        static char buf[128];
+        // Buffer must accommodate full device config JSON (~550 bytes)
+        static char buf[768];
         size_t len = Serial.readBytesUntil('\n', buf, sizeof(buf) - 1);
         // Explicit bounds check for safety
         if (len >= sizeof(buf)) {
@@ -692,6 +697,14 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             Serial.println(F("ERROR"));
         }
         return true;
+    }
+
+    if (strcmp(cmd, "reboot") == 0) {
+        Serial.println(F("Rebooting..."));
+        Serial.flush();  // Ensure message is sent before reset
+        delay(100);      // Brief delay for serial transmission
+        NVIC_SystemReset();
+        return true;  // Never reached
     }
 
     return false;
@@ -1100,6 +1113,10 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
         "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("organictransmin", &wp->organicTransientMin, "water",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+
+    // Background
+    settings_.registerFloat("bgintensity", &wp->backgroundIntensity, "water",
+        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
 }
 
 // === LIGHTNING SETTINGS (Particle-based) ===
@@ -1145,6 +1162,10 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
         "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("organictransmin", &lp->organicTransientMin, "lightning",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+
+    // Background
+    settings_.registerFloat("bgintensity", &lp->backgroundIntensity, "lightning",
+        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
 }
 
 // === EFFECT SETTINGS ===

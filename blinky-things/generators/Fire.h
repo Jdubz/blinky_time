@@ -40,6 +40,9 @@ struct FireParams {
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
     uint8_t burstSparks;          // Sparks per burst
 
+    // Background
+    float backgroundIntensity;    // Noise background brightness (0-1)
+
     FireParams() {
         // FIRE EFFECT: Bright sparks rising from source
         baseSpawnChance = 0.7f;   // HIGH spawn rate - constant sparks
@@ -55,6 +58,7 @@ struct FireParams {
         musicSpawnPulse = 0.5f;
         organicTransientMin = 0.4f;
         burstSparks = 4;          // Sparks per burst
+        backgroundIntensity = 0.15f;  // Visible but subtle background
 
         trailHeatFactor = 5;      // MINIMAL trails - discrete sparks
         trailDecay = 100;         // FAST cooling - no blob

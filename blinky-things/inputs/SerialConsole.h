@@ -39,6 +39,7 @@ class HueRotationEffect;
  *     load                - Load settings from flash
  *     defaults            - Restore default values
  *     reset / factory     - Factory reset (clear saved settings)
+ *     reboot              - Soft reboot (applies device config changes)
  *
  *   Device Configuration (v28+):
  *     device show         - Display current device config as JSON

@@ -40,6 +40,9 @@ struct WaterParams {
     float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
+    // Background
+    float backgroundIntensity;    // Noise background brightness (0-1)
+
     WaterParams() {
         // RAIN EFFECT: Bright drops falling against dark background
         baseSpawnChance = 0.8f;   // HIGH spawn rate - always raining
@@ -54,6 +57,7 @@ struct WaterParams {
         drag = 0.995f;            // Almost no drag
         musicSpawnPulse = 0.4f;
         organicTransientMin = 0.5f;
+        backgroundIntensity = 0.15f;  // Visible but subtle background
 
         // Velocities: drops should traverse 8-pixel height in ~1 second
         dropVelocityMin = 6.0f;   // LEDs/sec starting velocity

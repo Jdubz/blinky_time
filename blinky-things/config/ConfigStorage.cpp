@@ -103,6 +103,7 @@ void ConfigStorage::loadDefaults() {
     data_.fire.sparkSpread = 0.8f;
     data_.fire.musicSpawnPulse = 0.6f;
     data_.fire.organicTransientMin = 0.5f;
+    data_.fire.backgroundIntensity = 0.15f;
     data_.fire.maxParticles = 48;
     data_.fire.defaultLifespan = 60;
     data_.fire.intensityMin = 160;
@@ -125,6 +126,7 @@ void ConfigStorage::loadDefaults() {
     data_.water.splashVelocityMax = 2.0f;
     data_.water.musicSpawnPulse = 0.5f;
     data_.water.organicTransientMin = 0.3f;
+    data_.water.backgroundIntensity = 0.15f;
     data_.water.maxParticles = 64;
     data_.water.defaultLifespan = 90;
     data_.water.intensityMin = 80;
@@ -140,6 +142,7 @@ void ConfigStorage::loadDefaults() {
     data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
     data_.lightning.musicSpawnPulse = 0.6f;
     data_.lightning.organicTransientMin = 0.3f;
+    data_.lightning.backgroundIntensity = 0.15f;
     data_.lightning.maxParticles = 32;
     data_.lightning.defaultLifespan = 20;
     data_.lightning.intensityMin = 180;
@@ -423,6 +426,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Audio reactivity
     fireParams.musicSpawnPulse = data_.fire.musicSpawnPulse;
     fireParams.organicTransientMin = data_.fire.organicTransientMin;
+    // Background
+    fireParams.backgroundIntensity = data_.fire.backgroundIntensity;
     // Lifecycle
     fireParams.defaultLifespan = data_.fire.defaultLifespan;
     fireParams.intensityMin = data_.fire.intensityMin;
@@ -451,6 +456,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Audio reactivity
     waterParams.musicSpawnPulse = data_.water.musicSpawnPulse;
     waterParams.organicTransientMin = data_.water.organicTransientMin;
+    // Background
+    waterParams.backgroundIntensity = data_.water.backgroundIntensity;
     // Lifecycle
     waterParams.defaultLifespan = data_.water.defaultLifespan;
     waterParams.intensityMin = data_.water.intensityMin;
@@ -470,6 +477,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Audio reactivity
     lightningParams.musicSpawnPulse = data_.lightning.musicSpawnPulse;
     lightningParams.organicTransientMin = data_.lightning.organicTransientMin;
+    // Background
+    lightningParams.backgroundIntensity = data_.lightning.backgroundIntensity;
     // Lifecycle
     lightningParams.defaultLifespan = data_.lightning.defaultLifespan;
     lightningParams.intensityMin = data_.lightning.intensityMin;
@@ -541,6 +550,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Audio reactivity
     data_.fire.musicSpawnPulse = fireParams.musicSpawnPulse;
     data_.fire.organicTransientMin = fireParams.organicTransientMin;
+    // Background
+    data_.fire.backgroundIntensity = fireParams.backgroundIntensity;
     // Lifecycle
     data_.fire.defaultLifespan = fireParams.defaultLifespan;
     data_.fire.intensityMin = fireParams.intensityMin;
@@ -569,6 +580,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Audio reactivity
     data_.water.musicSpawnPulse = waterParams.musicSpawnPulse;
     data_.water.organicTransientMin = waterParams.organicTransientMin;
+    // Background
+    data_.water.backgroundIntensity = waterParams.backgroundIntensity;
     // Lifecycle
     data_.water.defaultLifespan = waterParams.defaultLifespan;
     data_.water.intensityMin = waterParams.intensityMin;
@@ -588,6 +601,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Audio reactivity
     data_.lightning.musicSpawnPulse = lightningParams.musicSpawnPulse;
     data_.lightning.organicTransientMin = lightningParams.organicTransientMin;
+    // Background
+    data_.lightning.backgroundIntensity = lightningParams.backgroundIntensity;
     // Lifecycle
     data_.lightning.defaultLifespan = lightningParams.defaultLifespan;
     data_.lightning.intensityMin = lightningParams.intensityMin;

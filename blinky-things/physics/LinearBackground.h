@@ -14,7 +14,11 @@
  */
 class LinearBackground : public BackgroundModel {
 public:
-    explicit LinearBackground(BackgroundStyle style) : style_(style) {}
+    explicit LinearBackground(BackgroundStyle style) : style_(style), intensity_(0.15f) {}
+
+    void setIntensity(float intensity) override {
+        intensity_ = constrain(intensity, 0.0f, 1.0f);
+    }
 
     void render(PixelMatrix& matrix, uint16_t width, uint16_t height,
                float noiseTime, const AudioControl& audio) override {
@@ -48,6 +52,7 @@ public:
 
 private:
     BackgroundStyle style_;
+    float intensity_;
 
     float sampleNoise(int x, int y, uint16_t width, float time, float brightness) {
         // Position-based noise without height dependency
@@ -64,8 +69,8 @@ private:
         // Apply beat brightness
         float intensity = noiseVal * brightness;
 
-        // Very dark background - particles must be the star
-        intensity *= 0.025f;
+        // Apply configurable intensity multiplier
+        intensity *= intensity_;
 
         return constrain(intensity, 0.0f, 1.0f);
     }

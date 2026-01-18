@@ -23,7 +23,11 @@ enum class BackgroundStyle {
  */
 class MatrixBackground : public BackgroundModel {
 public:
-    explicit MatrixBackground(BackgroundStyle style) : style_(style) {}
+    explicit MatrixBackground(BackgroundStyle style) : style_(style), intensity_(0.02f) {}
+
+    void setIntensity(float intensity) override {
+        intensity_ = constrain(intensity, 0.0f, 1.0f);
+    }
 
     void render(PixelMatrix& matrix, uint16_t width, uint16_t height,
                float noiseTime, const AudioControl& audio) override {
@@ -75,6 +79,7 @@ public:
 
 private:
     BackgroundStyle style_;
+    float intensity_;
 
     float sampleNoise(int x, int y, uint16_t width, uint16_t height,
                      float scale, float time, float brightness) {
@@ -92,8 +97,8 @@ private:
         // Combine noise with height falloff and beat brightness
         float intensity = noiseVal * heightFalloff * brightness;
 
-        // Very dark background - particles must be the star
-        intensity *= 0.02f;
+        // Apply configurable intensity multiplier
+        intensity *= intensity_;
 
         return constrain(intensity, 0.0f, 1.0f);
     }

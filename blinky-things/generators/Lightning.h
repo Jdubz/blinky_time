@@ -34,6 +34,9 @@ struct LightningParams {
     float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
+    // Background
+    float backgroundIntensity;    // Noise background brightness (0-1)
+
     LightningParams() {
         // LIGHTNING EFFECT: Dramatic bright flashing bolts
         baseSpawnChance = 0.15f;  // Regular strikes
@@ -44,6 +47,7 @@ struct LightningParams {
         intensityMax = 255;       // MAXIMUM brightness
         musicSpawnPulse = 0.7f;   // Phase modulation
         organicTransientMin = 0.35f;
+        backgroundIntensity = 0.15f;  // Visible but subtle background
 
         boltVelocityMin = 4.0f;   // Not used (bolts are stationary)
         boltVelocityMax = 8.0f;   // Not used (bolts are stationary)

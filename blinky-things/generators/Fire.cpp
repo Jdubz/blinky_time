@@ -77,6 +77,7 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
 
     // Render noise background first (underlayer)
     if (background_) {
+        background_->setIntensity(params_.backgroundIntensity);
         background_->render(matrix, width_, height_, noiseTime_, audio);
     }
 

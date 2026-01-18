@@ -25,7 +25,7 @@ class AudioController;
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 28;  // Config schema v28: added device config storage for runtime device selection
+    static const uint8_t CONFIG_VERSION = 29;  // Config schema v29: added backgroundIntensity to all generator params
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -44,6 +44,8 @@ public:
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
+        // Background
+        float backgroundIntensity;
         // Lifecycle
         uint8_t maxParticles;
         uint8_t defaultLifespan;
@@ -74,6 +76,8 @@ public:
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
+        // Background
+        float backgroundIntensity;
         // Lifecycle
         uint8_t maxParticles;
         uint8_t defaultLifespan;
@@ -95,6 +99,8 @@ public:
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
+        // Background
+        float backgroundIntensity;
         // Lifecycle
         uint8_t maxParticles;
         uint8_t defaultLifespan;
@@ -246,12 +252,12 @@ public:
     // These verify struct sizes match expected values to catch accidental changes
     // If these fail, you MUST increment CONFIG_VERSION!
     // Note: Struct sizes depend on compiler padding. Sizes below are for ARM GCC.
-    static_assert(sizeof(StoredFireParams) == 52,
-        "StoredFireParams size changed! Increment CONFIG_VERSION and update assertion.");
-    static_assert(sizeof(StoredWaterParams) == 60,
-        "StoredWaterParams size changed! Increment CONFIG_VERSION and update assertion. (60 bytes = 13 floats + 6 uint8 + padding)");
-    static_assert(sizeof(StoredLightningParams) == 36,
-        "StoredLightningParams size changed! Increment CONFIG_VERSION and update assertion. (36 bytes = 7 floats + 8 uint8)");
+    static_assert(sizeof(StoredFireParams) == 56,
+        "StoredFireParams size changed! Increment CONFIG_VERSION and update assertion. (56 bytes = 12 floats + 7 uint8 + padding)");
+    static_assert(sizeof(StoredWaterParams) == 64,
+        "StoredWaterParams size changed! Increment CONFIG_VERSION and update assertion. (64 bytes = 14 floats + 6 uint8 + padding)");
+    static_assert(sizeof(StoredLightningParams) == 40,
+        "StoredLightningParams size changed! Increment CONFIG_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 60,

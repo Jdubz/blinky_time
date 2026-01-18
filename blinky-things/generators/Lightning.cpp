@@ -54,6 +54,7 @@ void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {
 
     // Render storm sky noise background first (layout-aware)
     if (background_) {
+        background_->setIntensity(params_.backgroundIntensity);
         background_->render(matrix, width_, height_, noiseTime_, audio);
     }
 
