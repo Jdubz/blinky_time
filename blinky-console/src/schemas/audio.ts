@@ -17,7 +17,7 @@ export const AudioSampleSchema = z.object({
   raw: z.number().min(0).max(1), // raw ADC level (0-1)
   h: z.number().int().min(0).max(80), // hardware gain (0-80)
   alive: z.union([z.literal(0), z.literal(1)]), // PDM status
-  z: z.number().min(0).max(1), // zero-crossing rate (0-1)
+  z: z.number().min(0).max(1).optional(), // zero-crossing rate (0-1) - optional, not always sent
 });
 
 export type AudioSample = z.infer<typeof AudioSampleSchema>;

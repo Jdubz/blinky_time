@@ -24,7 +24,7 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
         z: 0.15,
       };
 
-      // Verify all fields are present
+      // Verify all required fields are present
       expect(sample.l).toBeDefined();
       expect(sample.t).toBeDefined();
       expect(sample.pk).toBeDefined();
@@ -32,7 +32,24 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
       expect(sample.raw).toBeDefined();
       expect(sample.h).toBeDefined();
       expect(sample.alive).toBeDefined();
-      expect(sample.z).toBeDefined();
+      // z is optional (not always sent by firmware)
+    });
+
+    it('accepts samples without optional z field', () => {
+      // Firmware doesn't always send z (zero-crossing rate)
+      const sample: AudioSample = {
+        l: 0.5,
+        t: 0.3,
+        pk: 0.4,
+        vl: 0.05,
+        raw: 0.2,
+        h: 32,
+        alive: 1,
+      };
+
+      // Sample without z should still be valid
+      expect(sample.l).toBeDefined();
+      expect(sample.z).toBeUndefined();
     });
 
     it('uses correct types for all fields', () => {
@@ -54,7 +71,10 @@ describe('AudioVisualizer - Range Normalization Regression Tests', () => {
       expect(typeof sample.vl).toBe('number');
       expect(typeof sample.raw).toBe('number');
       expect(typeof sample.h).toBe('number');
-      expect(typeof sample.z).toBe('number');
+      // z is optional, but when present should be a number
+      if (sample.z !== undefined) {
+        expect(typeof sample.z).toBe('number');
+      }
 
       // Boolean flags (0 or 1)
       expect([0, 1]).toContain(sample.alive);

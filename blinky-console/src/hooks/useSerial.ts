@@ -100,8 +100,9 @@ const MAX_CONSOLE_LINES = 500;
  * Checks for NaN, Infinity, and out-of-range values
  */
 function validateAudioSample(sample: AudioSample): boolean {
-  // Check all numeric fields are finite numbers
-  const numericFields = [sample.l, sample.t, sample.pk, sample.vl, sample.raw, sample.h, sample.z];
+  // Check all required numeric fields are finite numbers
+  // Note: sample.z is optional (not always sent by firmware)
+  const numericFields = [sample.l, sample.t, sample.pk, sample.vl, sample.raw, sample.h];
   if (numericFields.some(v => !Number.isFinite(v))) {
     console.warn('Invalid audio sample: non-finite value detected', sample);
     return false;
