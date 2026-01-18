@@ -23,13 +23,26 @@ import {
  * Update these when firmware JSON format changes.
  */
 const FIRMWARE_SAMPLES = {
-  // Response from `json info` command
+  // Response from `json info` command (v28+ format with nested device object)
   deviceInfo: {
-    device: 'Bucket Totem',
     version: 'v1.2.0-dev',
-    width: 16,
-    height: 8,
-    leds: 128,
+    device: {
+      id: 'bucket_v1',
+      name: 'Bucket Totem',
+      width: 16,
+      height: 8,
+      leds: 128,
+      configured: true as const,
+    },
+  },
+
+  // Response from `json info` when device is not configured (safe mode)
+  deviceInfoUnconfigured: {
+    version: 'v1.2.0-dev',
+    device: {
+      configured: false as const,
+      safeMode: true as const,
+    },
   },
 
   // Response from `json settings` command (subset for testing)
@@ -185,28 +198,41 @@ const FIRMWARE_SAMPLES = {
 };
 
 describe('DeviceInfoSchema', () => {
-  it('validates correct device info', () => {
+  it('validates configured device info', () => {
     const result = DeviceInfoSchema.safeParse(FIRMWARE_SAMPLES.deviceInfo);
     expect(result.success).toBe(true);
+    if (result.success && result.data.device.configured) {
+      expect(result.data.device.name).toBe('Bucket Totem');
+      expect(result.data.device.leds).toBe(128);
+    }
+  });
+
+  it('validates unconfigured device info (safe mode)', () => {
+    const result = DeviceInfoSchema.safeParse(FIRMWARE_SAMPLES.deviceInfoUnconfigured);
+    expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.device).toBe('Bucket Totem');
-      expect(result.data.leds).toBe(128);
+      expect(result.data.device.configured).toBe(false);
     }
   });
 
   it('rejects missing required fields', () => {
     const result = DeviceInfoSchema.safeParse({
-      device: 'Test',
       version: '1.0',
-      // missing width, height, leds
+      device: {
+        // missing required fields for configured device
+        configured: true,
+      },
     });
     expect(result.success).toBe(false);
   });
 
   it('rejects invalid LED count', () => {
     const result = DeviceInfoSchema.safeParse({
-      ...FIRMWARE_SAMPLES.deviceInfo,
-      leds: -1,
+      version: 'v1.0',
+      device: {
+        ...FIRMWARE_SAMPLES.deviceInfo.device,
+        leds: -1,
+      },
     });
     expect(result.success).toBe(false);
   });
@@ -413,6 +439,7 @@ describe('Contract validation', () => {
   it('all firmware samples are valid', () => {
     // This test ensures we have comprehensive coverage
     expect(DeviceInfoSchema.safeParse(FIRMWARE_SAMPLES.deviceInfo).success).toBe(true);
+    expect(DeviceInfoSchema.safeParse(FIRMWARE_SAMPLES.deviceInfoUnconfigured).success).toBe(true);
     expect(SettingsResponseSchema.safeParse(FIRMWARE_SAMPLES.settings).success).toBe(true);
     expect(AudioMessageSchema.safeParse(FIRMWARE_SAMPLES.audioMessage).success).toBe(true);
     expect(AudioMessageSchema.safeParse(FIRMWARE_SAMPLES.audioMessageWithRhythm).success).toBe(

@@ -48,11 +48,15 @@ vi.mock('../services/serial', () => {
       send: vi.fn(() => Promise.resolve()),
       getDeviceInfo: vi.fn(() =>
         Promise.resolve({
-          device: 'Blinky Time',
           version: '1.0.0',
-          width: 16,
-          height: 16,
-          leds: 256,
+          device: {
+            id: 'blinky_v1',
+            name: 'Blinky Time',
+            width: 16,
+            height: 16,
+            leds: 256,
+            configured: true as const,
+          },
         })
       ),
       getSettings: vi.fn(() =>
@@ -134,11 +138,15 @@ describe('useSerial', () => {
       expect(serialService.getDeviceInfo).toHaveBeenCalled();
       expect(serialService.getSettings).toHaveBeenCalled();
       expect(result.current.deviceInfo).toEqual({
-        device: 'Blinky Time',
         version: '1.0.0',
-        width: 16,
-        height: 16,
-        leds: 256,
+        device: {
+          id: 'blinky_v1',
+          name: 'Blinky Time',
+          width: 16,
+          height: 16,
+          leds: 256,
+          configured: true,
+        },
       });
       expect(result.current.settings).toHaveLength(2);
     });

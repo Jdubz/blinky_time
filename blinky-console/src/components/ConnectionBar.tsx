@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DeviceInfo, ConnectionState, BatterySample } from '../types';
+import { DeviceInfo, ConnectionState, BatterySample, isDeviceConfigured } from '../types';
 import { BatteryModal } from './BatteryModal';
 import type { BatteryStatusData } from '../services/serial';
 
@@ -71,7 +71,9 @@ export function ConnectionBar({
           <span className="app-title">Blinky Console</span>
           {deviceInfo && (
             <span className="device-info">
-              {deviceInfo.device} v{deviceInfo.version} &bull; {deviceInfo.leds} LEDs
+              {isDeviceConfigured(deviceInfo.device)
+                ? `${deviceInfo.device.name} v${deviceInfo.version} • ${deviceInfo.device.leds} LEDs`
+                : `Safe Mode v${deviceInfo.version}`}
             </span>
           )}
         </div>

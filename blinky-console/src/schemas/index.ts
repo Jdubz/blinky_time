@@ -16,7 +16,12 @@
  */
 
 // Device information
-export { DeviceInfoSchema, type DeviceInfo } from './device';
+export {
+  DeviceInfoSchema,
+  type DeviceInfo,
+  type ConfiguredDevice,
+  isDeviceConfigured,
+} from './device';
 
 // Settings
 export {
