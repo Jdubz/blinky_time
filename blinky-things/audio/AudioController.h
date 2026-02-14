@@ -305,6 +305,11 @@ public:
     // Phase tracking smoothing
     float phaseAdaptRate = 0.15f;       // How quickly phase adapts to autocorrelation (0-1)
 
+    // === TRANSIENT-BASED PHASE CORRECTION (PLL-style) ===
+    // Uses detected transients to nudge phase toward actual beat timing
+    float transientCorrectionRate = 0.3f;   // How fast to apply transient-based correction (0-1)
+    float transientCorrectionMin = 0.3f;    // Minimum transient strength to trigger correction
+
     // Beat proximity thresholds for pulse modulation
     float pulseNearBeatThreshold = 0.2f;    // Phase distance < this = boost transients
     float pulseFarFromBeatThreshold = 0.3f; // Phase distance > this = suppress transients
@@ -388,6 +393,10 @@ private:
     float phase_ = 0.0f;                // Current beat phase (0-1)
     float targetPhase_ = 0.0f;          // Phase derived from autocorrelation
 
+    // Transient-based phase correction (PLL)
+    float transientPhaseError_ = 0.0f;  // Running average of phase error when transients detected
+    uint32_t lastTransientCorrectionMs_ = 0; // Timestamp of last transient correction
+
     // Beat stability tracking
     static constexpr int STABILITY_BUFFER_SIZE = 16;
     float interBeatIntervals_[STABILITY_BUFFER_SIZE] = {0};
@@ -422,6 +431,7 @@ private:
     void addOssSample(float onsetStrength, uint32_t timestampMs);
     void runAutocorrelation(uint32_t nowMs);
     void updatePhase(float dt, uint32_t nowMs);
+    void updateTransientPhaseCorrection(float transientStrength, uint32_t nowMs);
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

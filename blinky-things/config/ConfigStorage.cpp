@@ -93,26 +93,26 @@ void ConfigStorage::loadSettingsDefaults() {
     // Settings defaults - called when SETTINGS_VERSION changes
     // Device config is preserved separately
 
-    // Fire defaults (particle-based)
-    data_.fire.baseSpawnChance = 0.15f;
-    data_.fire.audioSpawnBoost = 0.6f;
-    data_.fire.gravity = -8.0f;
+    // Fire defaults (particle-based) - tuned for Hat music reactivity Jan 2026
+    data_.fire.baseSpawnChance = 0.1f;      // Low baseline, let music drive spawns
+    data_.fire.audioSpawnBoost = 1.5f;      // Strong audio response
+    data_.fire.gravity = -40.0f;            // Strong upward force (linear layout)
     data_.fire.windBase = 0.0f;
-    data_.fire.windVariation = 0.5f;
-    data_.fire.drag = 0.96f;
-    data_.fire.sparkVelocityMin = 1.5f;
-    data_.fire.sparkVelocityMax = 3.5f;
-    data_.fire.sparkSpread = 0.8f;
-    data_.fire.musicSpawnPulse = 0.6f;
-    data_.fire.organicTransientMin = 0.5f;
-    data_.fire.backgroundIntensity = 0.15f;
+    data_.fire.windVariation = 6.0f;        // Flickering sway
+    data_.fire.drag = 0.985f;               // Smoother flow
+    data_.fire.sparkVelocityMin = 8.0f;     // Fast sparks
+    data_.fire.sparkVelocityMax = 10.0f;    // Fast sparks
+    data_.fire.sparkSpread = 4.0f;          // Good spread
+    data_.fire.musicSpawnPulse = 0.95f;     // Tight beat sync
+    data_.fire.organicTransientMin = 0.25f; // Responsive to softer transients
+    data_.fire.backgroundIntensity = 0.2f;  // Visible lava lamp background
     data_.fire.maxParticles = 48;
-    data_.fire.defaultLifespan = 60;
-    data_.fire.intensityMin = 160;
-    data_.fire.intensityMax = 255;
-    data_.fire.trailHeatFactor = 60;
-    data_.fire.trailDecay = 40;
-    data_.fire.burstSparks = 8;
+    data_.fire.defaultLifespan = 120;       // 4 seconds at 30fps
+    data_.fire.intensityMin = 150;
+    data_.fire.intensityMax = 220;
+    data_.fire.trailHeatFactor = 70;        // Strong heat trails
+    data_.fire.trailDecay = 20;             // Slow decay for diffusion
+    data_.fire.burstSparks = 15;            // Big transient bursts
 
     // Water defaults (particle-based)
     data_.water.baseSpawnChance = 0.25f;
@@ -156,8 +156,8 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // Mic defaults (hardware-primary, window/range normalization)
     // Window/Range normalization parameters
-    data_.mic.peakTau = 2.0f;        // 2s peak adaptation
-    data_.mic.releaseTau = 5.0f;     // 5s peak release
+    data_.mic.peakTau = 1.0f;        // 1s peak adaptation (fast response)
+    data_.mic.releaseTau = 3.0f;     // 3s peak release (quick recovery)
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
@@ -189,7 +189,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
-    data_.music.phaseAdaptRate = 0.15f;
+    data_.music.phaseAdaptRate = 0.7f;   // Fast phase adaptation for tight beat sync
 
     // Tempo prior (CRITICAL: must be enabled for correct BPM tracking)
     data_.music.tempoPriorEnabled = true;    // MUST be true
@@ -204,9 +204,13 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // Stability and smoothing
     data_.music.stabilityWindowBeats = 8.0f;
-    data_.music.beatLookaheadMs = 50.0f;
+    data_.music.beatLookaheadMs = 120.0f;  // Predict beats 120ms ahead to reduce perceived latency
     data_.music.tempoSmoothingFactor = 0.85f;
     data_.music.tempoChangeThreshold = 0.1f;
+
+    // Transient-based phase correction (PLL) - Jan 2026
+    data_.music.transientCorrectionRate = 0.3f;  // How fast to nudge phase toward transients
+    data_.music.transientCorrectionMin = 0.3f;   // Min transient strength to trigger correction
 
     data_.brightness = 100;
 }
@@ -429,6 +433,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.tempoSmoothingFactor, 0.5f, 0.99f, F("temposmooth"));
     validateFloat(data_.music.tempoChangeThreshold, 0.01f, 0.5f, F("tempochgthresh"));
 
+    // Transient-based phase correction validation (v26+)
+    validateFloat(data_.music.transientCorrectionRate, 0.0f, 1.0f, F("transcorrrate"));
+    validateFloat(data_.music.transientCorrectionMin, 0.0f, 1.0f, F("transcorrmin"));
+
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
         SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
@@ -568,6 +576,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->beatLookaheadMs = data_.music.beatLookaheadMs;
         audioCtrl->tempoSmoothingFactor = data_.music.tempoSmoothingFactor;
         audioCtrl->tempoChangeThreshold = data_.music.tempoChangeThreshold;
+
+        // Transient-based phase correction (v26+)
+        audioCtrl->transientCorrectionRate = data_.music.transientCorrectionRate;
+        audioCtrl->transientCorrectionMin = data_.music.transientCorrectionMin;
     }
 }
 
@@ -692,6 +704,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.beatLookaheadMs = audioCtrl->beatLookaheadMs;
         data_.music.tempoSmoothingFactor = audioCtrl->tempoSmoothingFactor;
         data_.music.tempoChangeThreshold = audioCtrl->tempoChangeThreshold;
+
+        // Transient-based phase correction (v26+)
+        data_.music.transientCorrectionRate = audioCtrl->transientCorrectionRate;
+        data_.music.transientCorrectionMin = audioCtrl->transientCorrectionMin;
     }
 
     saveToFlash();

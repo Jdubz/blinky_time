@@ -48,6 +48,8 @@ bool AudioController::begin(uint32_t sampleRate) {
     // Reset phase tracking
     phase_ = 0.0f;
     targetPhase_ = 0.0f;
+    transientPhaseError_ = 0.0f;
+    lastTransientCorrectionMs_ = 0;
 
     // Reset beat stability tracking
     for (int i = 0; i < STABILITY_BUFFER_SIZE; i++) {
@@ -171,10 +173,14 @@ const AudioControl& AudioController::update(float dt) {
         lastAutocorrMs_ = nowMs;
     }
 
-    // 5. Update phase tracking
+    // 5. Update transient-based phase correction (PLL)
+    //    When transients are detected, use them to nudge phase toward actual beat timing
+    updateTransientPhaseCorrection(lastEnsembleOutput_.transientStrength, nowMs);
+
+    // 6. Update phase tracking
     updatePhase(dt, nowMs);
 
-    // 6. Synthesize output
+    // 7. Synthesize output
     synthesizeEnergy();
     synthesizePulse();
     synthesizePhase();
@@ -600,6 +606,49 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 }
 
+void AudioController::updateTransientPhaseCorrection(float transientStrength, uint32_t nowMs) {
+    // Only apply correction when rhythm is established
+    if (periodicityStrength_ < activationThreshold) {
+        return;
+    }
+
+    // Only correct on strong transients (above threshold)
+    if (transientStrength < transientCorrectionMin) {
+        return;
+    }
+
+    // Rate limit corrections to prevent overcorrection (min 80ms between corrections)
+    if (nowMs - lastTransientCorrectionMs_ < 80) {
+        return;
+    }
+    lastTransientCorrectionMs_ = nowMs;
+
+    // Calculate phase error: how far is current phase from 0.0 (beat position)?
+    // Phase 0.0 = on the beat, 0.5 = halfway between beats
+    //
+    // If phase is near 0.0 (e.g., 0.1): transient is slightly late, error = +0.1
+    // If phase is near 1.0 (e.g., 0.9): transient is early, error = -0.1 (wrap around)
+    //
+    // We want to nudge phase so that transients land at phase 0.0
+    float phaseError = phase_;
+    if (phaseError > 0.5f) {
+        // Wrap: treat phase 0.9 as -0.1 (transient came early)
+        phaseError = phase_ - 1.0f;
+    }
+
+    // Weight error by transient strength (stronger transients = more confident correction)
+    float weightedError = phaseError * transientStrength;
+
+    // Exponential moving average of phase error
+    // This filters out random false positives and converges on systematic timing offset
+    const float alpha = 0.3f;  // Smoothing factor (higher = faster adaptation)
+    transientPhaseError_ = (1.0f - alpha) * transientPhaseError_ + alpha * weightedError;
+
+    // Clamp error to reasonable range
+    if (transientPhaseError_ > 0.25f) transientPhaseError_ = 0.25f;
+    if (transientPhaseError_ < -0.25f) transientPhaseError_ = -0.25f;
+}
+
 void AudioController::updatePhase(float dt, uint32_t nowMs) {
     // Determine if we have significant audio (for hypothesis decay strategy)
     int32_t silenceMs = static_cast<int32_t>(nowMs - lastSignificantAudioMs_);
@@ -654,8 +703,18 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
             if (phaseDiff > 0.5f) phaseDiff -= 1.0f;
             if (phaseDiff < -0.5f) phaseDiff += 1.0f;
 
-            // Apply gradual correction
+            // Apply gradual correction from autocorrelation
             phase_ += phaseDiff * phaseAdaptRate * dt * 10.0f;
+
+            // === TRANSIENT-BASED PHASE CORRECTION (PLL) ===
+            // Apply correction based on running average of transient timing errors
+            // This nudges phase so that transients land closer to phase 0.0
+            // transientPhaseError_ > 0 means transients arrive late (phase is ahead)
+            // transientPhaseError_ < 0 means transients arrive early (phase is behind)
+            // Correction: subtract error to align phase with actual transients
+            if (fabsf(transientPhaseError_) > 0.01f) {
+                phase_ -= transientPhaseError_ * transientCorrectionRate * dt * 10.0f;
+            }
 
             // FIX: Check for NaN before fmodf (NaN persists through fmodf)
             if (!isfinite(phase_)) {

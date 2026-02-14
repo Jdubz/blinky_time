@@ -24,8 +24,8 @@
  */
 
 // Maximum number of settings (adjust based on needs)
-// Current usage: ~53 settings (fire, firemusic, fireorganic, audio, agc, transient, detection, rhythm)
-#define MAX_SETTINGS 64
+// Current usage: ~90 settings (fire, water, lightning, effect, audio, agc, rhythm, hypothesis, phasecorr)
+#define MAX_SETTINGS 100
 
 // Setting value types
 enum class SettingType : uint8_t {

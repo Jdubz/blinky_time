@@ -259,6 +259,12 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("tempochgthresh", &audioCtrl_->tempoChangeThreshold, "tempo",
         "Tempo change threshold", 0.01f, 0.5f);
 
+    // Transient-based phase correction (PLL)
+    settings_.registerFloat("transcorrrate", &audioCtrl_->transientCorrectionRate, "phasecorr",
+        "Transient phase correction rate", 0.0f, 1.0f);
+    settings_.registerFloat("transcorrmin", &audioCtrl_->transientCorrectionMin, "phasecorr",
+        "Min transient strength for correction", 0.0f, 1.0f);
+
     // Multi-hypothesis tracker parameters
     MultiHypothesisTracker& mh = audioCtrl_->getMultiHypothesis();
 

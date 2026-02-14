@@ -30,7 +30,7 @@ public:
     // Bumping SETTINGS_VERSION preserves device config (LED layout, device name, etc.)
     // Bumping DEVICE_VERSION only needed when StoredDeviceConfig struct changes
     static const uint8_t DEVICE_VERSION = 1;    // Device config schema (LED layout, pins, etc.)
-    static const uint8_t SETTINGS_VERSION = 2;  // Settings schema (fire, water, lightning, mic, music params)
+    static const uint8_t SETTINGS_VERSION = 3;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -173,7 +173,11 @@ public:
         float tempoSmoothingFactor;   // Higher = smoother tempo changes
         float tempoChangeThreshold;   // Min BPM change ratio to trigger update
 
-        // Total: 14 floats (56 bytes) + 1 bool (1 byte) + 3 padding = 60 bytes
+        // Transient-based phase correction (PLL)
+        float transientCorrectionRate;  // How fast to apply transient correction (0-1)
+        float transientCorrectionMin;   // Minimum transient strength to trigger correction
+
+        // Total: 16 floats (64 bytes) + 1 bool (1 byte) + 3 padding = 68 bytes
     };
 
     /**
@@ -269,8 +273,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 60,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (60 bytes = 14 floats + 1 bool + padding)");
+    static_assert(sizeof(StoredMusicParams) == 68,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 1 bool + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     static_assert(sizeof(ConfigData) <= 512,

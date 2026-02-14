@@ -28,8 +28,8 @@
   "baseCooling": 50,
   "sparkHeatMin": 150,
   "sparkHeatMax": 255,
-  "sparkChance": 0.12,
-  "audioSparkBoost": 0.4,
+  "sparkChance": 0.1,
+  "audioSparkBoost": 1.5,
   "coolingAudioBias": -25,
   "bottomRowsForSparks": 1
 }

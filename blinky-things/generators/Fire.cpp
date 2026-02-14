@@ -110,33 +110,40 @@ void Fire::spawnParticles(float dt) {
     uint8_t sparkCount = 0;
 
     if (audio_.hasRhythm()) {
-        // MUSIC MODE: Dancey, pulsating spawning synced to beat
+        // MUSIC MODE: Immediate transient response + phase-modulated baseline
         float phasePulse = audio_.phaseToPulse();
         float phasePump = 0.5f + 0.5f * phasePulse;
 
         spawnProb *= phasePump;
-        spawnProb += params_.audioSpawnBoost * audio_.pulse * phasePulse;
+        spawnProb += params_.audioSpawnBoost * audio_.energy;  // Energy baseline
 
-        if (beatHappened()) {
-            beatCount_++;
-            uint8_t baseSparks = params_.burstSparks;
-            if (beatCount_ % 4 == 0) {
-                baseSparks = params_.burstSparks * 3;  // Downbeat: triple burst
-            } else if (beatCount_ % 2 == 0) {
-                baseSparks = params_.burstSparks * 2;  // Backbeat: double burst
-            }
-            sparkCount = (uint8_t)(baseSparks * (0.4f + 0.6f * audio_.rhythmStrength) *
-                                   (0.5f + 0.5f * audio_.energy));
-        }
-    } else {
-        // AMBIENT MODE: Smooth, steady output with subtle shifts
-        float smoothEnergy = 0.3f + 0.4f * audio_.energy;
-        spawnProb *= smoothEnergy;
-
+        // IMMEDIATE transient response (no phase gating!)
         if (audio_.pulse > params_.organicTransientMin) {
             float transientStrength = (audio_.pulse - params_.organicTransientMin) /
                                      (1.0f - params_.organicTransientMin);
-            sparkCount = (uint8_t)(params_.burstSparks * 0.3f * transientStrength);
+            sparkCount = (uint8_t)(params_.burstSparks * transientStrength *
+                                   (0.5f + 0.5f * audio_.energy));
+        }
+
+        // Extra burst on predicted downbeats
+        if (beatHappened()) {
+            beatCount_++;
+            if (beatCount_ % 4 == 0) {
+                sparkCount += params_.burstSparks / 2;  // Bonus on downbeat
+            }
+        }
+    } else {
+        // ORGANIC MODE: Driven by raw audio energy, not beat prediction
+        spawnProb += params_.audioSpawnBoost * audio_.energy;  // Energy drives spawning
+
+        // Continuous spark rate proportional to energy
+        if (audio_.energy > 0.2f) {
+            sparkCount = (uint8_t)((audio_.energy - 0.2f) * params_.burstSparks * 0.5f);
+        }
+
+        // Small boost on strong transients
+        if (audio_.pulse > params_.organicTransientMin) {
+            sparkCount += 2;
         }
     }
 
