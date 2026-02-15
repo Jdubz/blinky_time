@@ -1,244 +1,87 @@
 # Next Testing Priorities
 
-> **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive 2-3 hour test plan.
+> **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
+> **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-Based on fast-tune analysis (2025-12-28), this document outlines the next testing priorities to address performance gaps and boundary conditions.
+**Last Updated:** February 14, 2026
 
-## Critical Findings from Fast-Tune
+## Current Performance (Feb 2026 Baseline)
 
-### ✅ Well-Performing Modes
-- **Spectral Mode:** F1=0.670 (best overall, balanced)
-- **Hybrid Mode:** F1=0.669 (nearly equal, robust)
-- **Drummer Mode:** F1=0.664 (high precision, lower recall)
+**Config:** HFC (0.60) + Drummer (0.40), agree_1=0.2, cooldown=250ms, minconf=0.55
 
-### ⚠️ Problem Patterns Identified
+| Pattern | F1 | Precision | Recall | Issue |
+|---------|-----|-----------|--------|-------|
+| strong-beats | 1.000 | 1.0 | 1.0 | None |
+| synth-stabs | 1.000 | 1.0 | 1.0 | None |
+| full-mix | 0.901 | 0.82 | 1.0 | 7 FPs |
+| sparse | 0.889 | 0.80 | 1.0 | 2 FPs, high variance |
+| pad-rejection | 0.696 | 0.53 | 1.0 | 7 FPs (varies 0.64-0.80) |
+| chord-rejection | 0.698 | 0.56 | 0.94 | 12 FPs |
+| lead-melody | 0.286 | 0.17 | 1.0 | 38-40 FPs |
 
-| Pattern | Mode | F1 | Issue |
-|---------|------|-----|-------|
-| simultaneous | Drummer | 0.400 | 75% missed - overlapping sounds |
-| simultaneous | Spectral | 0.578 | 59% missed - overlapping sounds |
-| fast-tempo | Drummer | 0.490 | 67% missed - rapid hits |
-| sparse | Spectral | 0.526 | 54% precision - false positives |
-| sparse | Hybrid | 0.500 | 35% precision - false positives |
-| pad-rejection | Spectral | 0.516 | 35% precision - sustained tones |
+**Average F1: 0.781**
 
-### 🔴 Parameters at Boundaries
+## Completed Work (Feb 2026)
 
-Three parameters hit or approached their minimum bounds during fast-tune:
+- Algorithm improvements: spectral whitening, mel-band SuperFlux, cosine distance NoveltyDetector, ComplexDomain phase fix
+- Drummer minRiseRate and HFC sustained-signal rejection
+- Phase correction hardening (agreement gate, EMA alpha reduction)
+- Comprehensive detector tuning: ComplexDomain, SpectralFlux, Novelty all tested and kept disabled
+- Agreement boost optimization: agree_1=0.2 confirmed optimal
 
-1. **attackmult: 1.1** (AT minimum 1.1) ⚠️ CRITICAL
-   - Optimal value is exactly at the boundary
-   - May perform better below 1.1 (1.0, 1.05)
+## Priority 1: lead-melody False Positive Reduction
 
-2. **hitthresh: 1.688** (near minimum 1.5) ⚠️ HIGH PRIORITY
-   - Only 0.188 away from boundary
-   - Binary search stopped here, may improve below
+**Problem:** HFC fires on every melody note (38-40 FPs, F1=0.286). This is the worst pattern by far.
 
-3. **fluxthresh: 1.4** (0.4 above minimum 1.0) ⚠️ MEDIUM PRIORITY
-   - Reasonably far from boundary
-   - But lower values might improve recall
+**Root cause:** Melody notes have high-frequency harmonic content that HFC correctly identifies as sharp spectral changes. The system cannot distinguish "new note in melody" from "percussive transient."
 
-**Action Taken:** Extended all three parameter ranges to allow testing below previous minimums.
+**Potential approaches:**
+1. **Pitch continuity gate** — Track if high-frequency content follows a pitched pattern (harmonically related bins across frames). Suppress detection when spectral content is pitched rather than noisy/broadband.
+2. **Harmonic ratio check** — Percussive transients have flat/noisy spectra; pitched notes have peaked harmonic spectra. Compute harmonic-to-noise ratio and gate detection.
+3. **Temporal envelope** — Melody notes sustain; percussive hits decay rapidly. Track post-onset energy decay and suppress if signal sustains >50ms.
 
-## Priority 1: Extended Boundary Testing (15 min)
+**Estimated difficulty:** High — requires new algorithm development, not just parameter tuning.
 
-**Goal:** Confirm optimal values aren't below previous minimums
+## Priority 2: chord-rejection Improvement
 
-**Parameters to Test:**
-```bash
-npm run tuner -- fast --port COM41 --gain 40 \
-  --params attackmult,hitthresh,fluxthresh \
-  --patterns strong-beats,bass-line,synth-stabs
-```
+**Problem:** 12 FPs on chord changes (F1=0.698). Chord transitions produce genuine amplitude spikes that trigger both HFC and Drummer.
 
-**New Ranges (already updated in types.ts):**
-- attackmult: 1.0, 1.05, 1.1, 1.2 (was min: 1.1, now: 1.0)
-- hitthresh: 1.0, 1.2, 1.4, 1.5, 1.688 (was min: 1.5, now: 1.0)
-- fluxthresh: 0.5, 0.8, 1.0, 1.2, 1.4 (was min: 1.0, now: 0.5)
+**Potential approaches:**
+1. **Spectral continuity** — Chord changes preserve harmonic structure while transients are broadband. Could add a harmonic preservation check.
+2. **Rise time analysis** — Chord transitions have slower rise times than percussive attacks. The Drummer minRiseRate (0.02) already helps but could be more aggressive.
+3. **Higher thresholds** — Raising HFC/Drummer thresholds would reduce chord FPs but risk missing real transients.
 
-**Expected Outcome:**
-- If current values are optimal: No change, ranges confirmed
-- If lower values are better: Update firmware and retest
-- If we hit new boundaries: Extend ranges further
+**Quick test:** Try `set detector_thresh drummer 4.0` and `set detector_thresh hfc 5.0` on chord-rejection pattern.
 
-**Success Criteria:**
-- Optimal values are 0.2+ away from boundaries (not at edges)
+## Priority 3: Test Variance Reduction
 
-## Priority 2: Fast-Tempo Optimization (20 min)
+**Problem:** Results vary significantly across runs (pad-rejection: 0.64-0.80, sparse: 0.64-0.94). This makes it hard to confidently evaluate parameter changes.
 
-**Goal:** Improve drummer mode recall on fast-tempo patterns (currently 33%)
+**Potential approaches:**
+1. **Run each pattern 3x and average** — More reliable but 3x slower
+2. **Higher gain lock** — Try gain=50 or 60 for stronger SNR
+3. **Environment control** — Close doors, reduce ambient noise during tests
+4. **Longer cooldown between tests** — Allow AGC to fully settle
 
-**Problem:** Drummer misses 67% of fast hits (24 FN out of 36 expected)
+## Priority 4: Rhythm Tracking at Extreme Tempos
 
-**Hypotheses:**
-1. Cooldown too long (40ms = max 25 hits/sec, fast-tempo may exceed this)
-2. hitthresh too high for quieter fast hits
-3. Attack detection not fast enough
+**Problem:** BPM tracking biased toward prior center (120 BPM). 60 BPM and 180 BPM show 30-45% error.
 
-**Test 1: Cooldown Sweep**
-```bash
-npm run tuner -- sweep --port COM41 --gain 40 \
-  --params cooldown \
-  --modes drummer \
-  --patterns fast-tempo
-```
+**Root cause:** Autocorrelation naturally produces stronger peaks at subharmonics. The tempo prior helps but can't fully disambiguate.
 
-Test values: 20, 25, 30, 35, 40, 50ms
+**Potential approaches:**
+1. **Harmonic relationship detection** — When candidate BPM is ~2x or 0.5x the primary, check which is more consistent with transient timing
+2. **Double-time promotion** — If detected BPM is half of a hypothesis with stronger transient alignment, promote the faster tempo
+3. **Wider prior** — Increase priorwidth to reduce center bias (trade-off: less precise at 120 BPM)
 
-**Test 2: Threshold for Fast Patterns**
+## Known Algorithmic Limitations
 
-If cooldown doesn't help, test lower thresholds specifically for fast-tempo:
-```bash
-npm run tuner -- sweep --port COM41 --gain 40 \
-  --params hitthresh \
-  --modes drummer \
-  --patterns fast-tempo,simultaneous
-```
+These issues are unlikely to be fixed by parameter tuning alone:
 
-**Success Criteria:**
-- Drummer mode fast-tempo: F1 > 0.6 (currently 0.490)
-- Maintain precision > 80%
-
-## Priority 3: Simultaneous Detection (30 min)
-
-**Goal:** Improve all modes on simultaneous overlapping sounds
-
-**Current Performance:**
-- Drummer: F1=0.400 (75% missed)
-- Spectral: F1=0.578 (59% missed)
-- Hybrid: F1=0.640 (50% missed) - BEST
-
-**Problem:** When kick + snare + hat hit simultaneously, system detects as single event
-
-**Test Strategy:**
-
-1. **Hybrid Mode Optimization** (best baseline):
-```bash
-npm run tuner -- fast --port COM41 --gain 40 \
-  --modes hybrid \
-  --patterns simultaneous
-```
-
-2. **Spectral Bins Test** - More bins = better frequency resolution:
-```bash
-npm run tuner -- sweep --port COM41 --gain 40 \
-  --params fluxbins \
-  --modes spectral \
-  --patterns simultaneous
-```
-
-Test values: 32, 64, 96, 128 (hypothesis: more bins helps separate overlapping frequencies)
-
-**Success Criteria:**
-- Any mode: F1 > 0.7 on simultaneous pattern
-- Or: Identify as algorithmic limitation requiring code changes
-
-**If Parameter Tuning Doesn't Help:**
-- May need algorithm enhancement (multi-band detection, peak picking in FFT)
-- Document as known limitation
-
-## Priority 4: False Positive Reduction (15 min)
-
-**Goal:** Reduce false positives on sparse and pad-rejection patterns
-
-**Problem:**
-- Spectral on sparse: 54% precision (6 FP on 5 TP)
-- Hybrid on sparse: 35% precision (13 FP on 7 TP)
-- Spectral on pad-rejection: 35% precision (15 FP on 8 TP)
-
-**Hypothesis:** Sustained pad sounds create spectral flux that triggers detection
-
-**Test:** Increase fluxthresh to reduce sensitivity:
-```bash
-npm run tuner -- sweep --port COM41 --gain 40 \
-  --params fluxthresh \
-  --modes spectral,hybrid \
-  --patterns sparse,pad-rejection,chord-rejection
-```
-
-Test values: 1.4, 1.6, 1.8, 2.0, 2.2, 2.5
-
-**Success Criteria:**
-- Spectral/Hybrid on pad-rejection: Precision > 70% (currently 35-47%)
-- Maintain recall > 80% on transient-heavy patterns
-
-**Trade-off Analysis:**
-- Higher threshold = fewer false positives on sustained tones
-- But may reduce recall on weak transients
-- Need to find balance
-
-## Priority 5: Rhythm Tracking Parameters (Background)
-
-> **Note:** Architecture changed in December 2025. MusicMode PLL and RhythmAnalyzer
-> were replaced by AudioController with autocorrelation-based rhythm tracking.
-
-**AudioController Parameters** (new architecture) - Not yet tuned:
-- `musicthresh` (0.0-1.0): Rhythm activation threshold
-- `phaseadapt` (0.01-1.0): Phase adaptation rate
-- `bpmmin` (40-120): Minimum BPM to detect
-- `bpmmax` (80-240): Maximum BPM to detect
-- `pulseboost` (1.0-2.0): On-beat pulse enhancement
-- `pulsesuppress` (0.3-1.0): Off-beat pulse suppression
-- `energyboost` (0.0-1.0): On-beat energy enhancement
-
-**REMOVED Parameters** (no longer exist):
-- ~~pllkp, pllki~~ (PLL removed)
-- ~~confinc, confdec, misspenalty~~ (PLL removed)
-- ~~combdecay, combfb, combconf~~ (merged into autocorrelation)
-
-**Bass/HFC Modes** - Not included in fast-tune:
-- bassfreq, bassq, bassthresh
-- hfcweight, hfcthresh
-
-**Recommendation:** See [AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) Phase 3 for rhythm tracking tests
-
-## Priority 6: Cross-Pattern Validation
-
-**Goal:** Ensure optimized parameters work across ALL patterns, not just test subset
-
-**Full Test Suite:**
-```bash
-npm run tuner -- validate --port COM41 --gain 40
-```
-
-This will run all modes on all 18 patterns and generate comprehensive report.
-
-**Success Criteria:**
-- No pattern has F1 < 0.5 in its best-suited mode
-- Average F1 across all patterns > 0.65
-- No significant regressions from fast-tune results
-
-## Testing Schedule Recommendation
-
-**Session 1: Boundary + Fast-Tempo (35 min)**
-1. Extended boundary testing (15 min)
-2. Fast-tempo optimization (20 min)
-
-**Session 2: Simultaneous + False Positives (45 min)**
-3. Simultaneous detection (30 min)
-4. False positive reduction (15 min)
-
-**Session 3: Full Validation (30 min)**
-5. Run complete validation suite
-6. Update firmware with final optimal values
-7. Document final results in PARAMETER_TUNING_HISTORY.md
-
-**Total Time: ~2 hours**
-
-## Known Limitations (Algorithmic, Not Parameter-Tunable)
-
-Some issues may not be fixable via parameter tuning:
-
-1. **Simultaneous overlapping sounds** - May need multi-band or peak-picking algorithms
-2. **Sustained tones vs transients** - May need temporal envelope analysis
-3. **Very fast patterns** - Limited by cooldown minimum and ADC sampling rate
-
-If parameter tuning doesn't resolve these, document as architectural limitations
-and consider algorithm enhancements in future development.
-
-## Updates Applied (2025-12-28)
-
-✅ Updated test parameter defaults to match fast-tune optimal values
-✅ Extended boundaries: attackmult (1.0), hitthresh (1.0), fluxthresh (0.5)
-✅ Added boundary values to sweepValues arrays
-✅ Created analyze-fast-tune.cjs for detailed performance analysis
+| Issue | Root Cause | Fix Requires |
+|-------|-----------|-------------|
+| Melody note false positives | Pitched harmonics trigger HFC | Pitch/harmonic analysis algorithm |
+| Chord change false positives | Amplitude spikes on transitions | Rise-time or spectral continuity gate |
+| Half-time BPM detection | Autocorrelation subharmonics | Harmonic tempo relationship logic |
+| Simultaneous overlapping sounds | Single detection per cooldown window | Multi-band peak picking |
+| Test variance | Room acoustics, ambient noise | Controlled test environment |
