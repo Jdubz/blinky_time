@@ -2,33 +2,24 @@
 #include <math.h>
 
 SpectralFluxDetector::SpectralFluxDetector()
-    : hasPrevFrame_(false)
-    , minBin_(1)    // Skip DC
-    , maxBin_(64)   // Up to 4kHz (captures most transient energy)
+    : frameCount_(0)
     , currentFlux_(0.0f)
     , averageFlux_(0.0f)
 {
-    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
-        prevMagnitudes_[i] = 0.0f;
+    for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
+        melLag1_[i] = 0.0f;
+        melLag2_[i] = 0.0f;
     }
 }
 
 void SpectralFluxDetector::resetImpl() {
-    hasPrevFrame_ = false;
+    frameCount_ = 0;
     currentFlux_ = 0.0f;
     averageFlux_ = 0.0f;
 
-    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
-        prevMagnitudes_[i] = 0.0f;
-    }
-}
-
-void SpectralFluxDetector::setAnalysisRange(int minBin, int maxBin) {
-    minBin_ = (minBin < 0) ? 0 : minBin;
-    maxBin_ = (maxBin > SpectralConstants::NUM_BINS) ? SpectralConstants::NUM_BINS : maxBin;
-    if (minBin_ >= maxBin_) {
-        minBin_ = 1;
-        maxBin_ = 64;
+    for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
+        melLag1_[i] = 0.0f;
+        melLag2_[i] = 0.0f;
     }
 }
 
@@ -38,24 +29,25 @@ DetectionResult SpectralFluxDetector::detect(const AudioFrame& frame, float dt) 
         return DetectionResult::none();
     }
 
-    const float* magnitudes = frame.magnitudes;
-    int numBins = frame.numBins;
+    const float* melBands = frame.melBands;
+    int numBands = frame.numMelBands;
 
-    // Need at least one previous frame for flux
-    if (!hasPrevFrame_) {
-        // Save current frame for next iteration
-        for (int i = 0; i < numBins && i < SpectralConstants::NUM_BINS; i++) {
-            prevMagnitudes_[i] = magnitudes[i];
+    // Need at least 2 previous frames for lag-2 comparison
+    if (frameCount_ < 2) {
+        // Shift history: lag2 = lag1, lag1 = current
+        for (int i = 0; i < numBands && i < SpectralConstants::NUM_MEL_BANDS; i++) {
+            melLag2_[i] = melLag1_[i];
+            melLag1_[i] = melBands[i];
         }
-        hasPrevFrame_ = true;
+        frameCount_++;
         return DetectionResult::none();
     }
 
-    // Compute spectral flux
-    currentFlux_ = computeFlux(magnitudes, numBins);
+    // Compute SuperFlux on mel bands (current vs lag-2 with max filter)
+    currentFlux_ = computeMelSuperFlux(melBands, numBands);
 
-    // Update running average (EMA, ~0.5s time constant at 60fps)
-    const float alpha = 0.03f;
+    // Update running average (EMA, ~0.5s time constant at ~30 FFT fps)
+    const float alpha = 0.05f;
     averageFlux_ += alpha * (currentFlux_ - averageFlux_);
 
     // Store for debugging
@@ -70,7 +62,6 @@ DetectionResult SpectralFluxDetector::detect(const AudioFrame& frame, float dt) 
     updateThresholdBuffer(currentFlux_);
 
     // Detection: flux exceeds adaptive threshold
-    // NOTE: Cooldown now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = currentFlux_ > effectiveThreshold;
 
     DetectionResult result;
@@ -84,62 +75,60 @@ DetectionResult SpectralFluxDetector::detect(const AudioFrame& frame, float dt) 
         float confidence = computeConfidence(currentFlux_, localMedian);
 
         result = DetectionResult::hit(strength, confidence);
-        // NOTE: markTransient() removed - cooldown now at ensemble level
     } else {
         result = DetectionResult::none();
     }
 
-    // Save current magnitudes for next frame
-    for (int i = 0; i < numBins && i < SpectralConstants::NUM_BINS; i++) {
-        prevMagnitudes_[i] = magnitudes[i];
+    // Shift mel band history: lag2 = lag1, lag1 = current
+    for (int i = 0; i < numBands && i < SpectralConstants::NUM_MEL_BANDS; i++) {
+        melLag2_[i] = melLag1_[i];
+        melLag1_[i] = melBands[i];
     }
 
     return result;
 }
 
-float SpectralFluxDetector::computeFlux(const float* magnitudes, int numBins) const {
-    // SuperFlux algorithm: Half-wave rectified flux with max-filter
-    // The max-filter on previous frame suppresses vibrato/pitch wobble
+float SpectralFluxDetector::computeMelSuperFlux(const float* melBands, int numBands) const {
+    // SuperFlux on mel bands with lag-2 reference and 3-band max filter
+    //
+    // Comparing against 2 frames ago (instead of 1) gives onsets more time
+    // to develop, reducing premature triggering on slow attacks.
+    // The 3-band max filter on the reference frame suppresses vibrato/pitch wobble.
 
     float flux = 0.0f;
-    int actualMax = (maxBin_ > numBins) ? numBins : maxBin_;
+    int actualBands = (numBands > SpectralConstants::NUM_MEL_BANDS)
+                     ? SpectralConstants::NUM_MEL_BANDS : numBands;
 
-    for (int i = minBin_; i < actualMax; i++) {
-        // Apply 3-bin max-filter to previous frame magnitudes
-        // This smooths pitch variations while preserving onset edges
-        float left = (i > 0) ? prevMagnitudes_[i - 1] : prevMagnitudes_[i];
-        float center = prevMagnitudes_[i];
-        float right = (i < numBins - 1) ? prevMagnitudes_[i + 1] : prevMagnitudes_[i];
+    for (int i = 0; i < actualBands; i++) {
+        // Apply 3-band max-filter to lag-2 reference (vibrato suppression)
+        float left  = (i > 0) ? melLag2_[i - 1] : melLag2_[i];
+        float center = melLag2_[i];
+        float right = (i < actualBands - 1) ? melLag2_[i + 1] : melLag2_[i];
 
-        float maxPrev = max3(left, center, right);
+        float maxRef = max3(left, center, right);
 
-        // Half-wave rectified difference
-        float diff = magnitudes[i] - maxPrev;
+        // Half-wave rectified difference (only positive = energy increase)
+        float diff = melBands[i] - maxRef;
         if (diff > 0.0f) {
             flux += diff;
         }
     }
 
-    // Normalize by number of bins analyzed
-    int binsAnalyzed = actualMax - minBin_;
-    if (binsAnalyzed > 0) {
-        flux /= binsAnalyzed;
+    // Normalize by number of bands
+    if (actualBands > 0) {
+        flux /= actualBands;
     }
 
     return flux;
 }
 
 float SpectralFluxDetector::computeConfidence(float flux, float median) const {
-    // Confidence based on:
-    // 1. How far above threshold we are
-    // 2. How stable the average flux is
-
     // Ratio-based confidence
     float ratio = flux / maxf(median, 0.001f);
     float ratioConfidence = clamp01((ratio - 1.0f) / 3.0f);
 
     // Stability: if average is low and flux is high, more confident
-    float stabilityConfidence = 0.7f;  // Default moderate confidence
+    float stabilityConfidence = 0.7f;
     if (averageFlux_ > 0.001f) {
         float avgRatio = flux / averageFlux_;
         stabilityConfidence = clamp01(avgRatio / 4.0f);
@@ -148,6 +137,6 @@ float SpectralFluxDetector::computeConfidence(float flux, float median) const {
     // Combine
     float confidence = (ratioConfidence + stabilityConfidence) * 0.5f;
 
-    // Spectral flux is generally reliable - base confidence is higher
+    // Mel-band SuperFlux is generally reliable
     return clamp01(confidence * 0.85f + 0.15f);
 }

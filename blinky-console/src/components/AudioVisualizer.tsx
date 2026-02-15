@@ -11,14 +11,7 @@ import {
   Filler,
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
-import {
-  AudioSample,
-  TransientMessage,
-  ConnectionState,
-  RhythmData,
-  MusicModeData,
-  StatusMessage,
-} from '../types';
+import { AudioSample, TransientMessage, ConnectionState, MusicModeData } from '../types';
 import { audioMetricsMetadata } from '../data/settingsMetadata';
 import type {
   GroundTruthHit,
@@ -49,9 +42,7 @@ const FINAL_METRICS_DELAY_MS = 500;
 
 interface AudioVisualizerProps {
   audioData: AudioSample | null;
-  rhythmData?: RhythmData | null;
   musicModeData?: MusicModeData | null;
-  statusData?: StatusMessage | null;
   isStreaming: boolean;
   onToggleStreaming: () => void;
   disabled: boolean;
@@ -80,9 +71,7 @@ const SAMPLES_PER_SECOND = 20; // Approximate sample rate for timing calculation
 
 export function AudioVisualizer({
   audioData,
-  rhythmData,
   musicModeData,
-  statusData,
   isStreaming,
   onToggleStreaming,
   disabled,
@@ -92,12 +81,10 @@ export function AudioVisualizer({
   const levelDataRef = useRef<number[]>([]);
   const peakDataRef = useRef<number[]>([]);
   const valleyDataRef = useRef<number[]>([]);
+  const phaseDataRef = useRef<(number | null)[]>([]);
   const labelsRef = useRef<string[]>([]);
   const chartRef = useRef<ChartJS<'line'>>(null);
   const transientEventsRef = useRef<TransientEvent[]>([]);
-  const beatEventsRef = useRef<
-    { index: number; type: 'quarter' | 'half' | 'whole'; icon: string; color: string }[]
-  >([]);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [, setRenderTrigger] = useState(0);
 
@@ -137,6 +124,8 @@ export function AudioVisualizer({
     levelDataRef.current.push(audioData.l);
     peakDataRef.current.push(audioData.pk);
     valleyDataRef.current.push(audioData.vl);
+    // Phase from music mode (null when inactive or unavailable)
+    phaseDataRef.current.push(musicModeData && musicModeData.a === 1 ? musicModeData.ph : null);
     labelsRef.current.push('');
 
     // Trim to max length
@@ -144,6 +133,7 @@ export function AudioVisualizer({
       levelDataRef.current.shift();
       peakDataRef.current.shift();
       valleyDataRef.current.shift();
+      phaseDataRef.current.shift();
       labelsRef.current.shift();
 
       // Shift transient events and remove those that are off the chart
@@ -158,49 +148,10 @@ export function AudioVisualizer({
       chartRef.current.data.datasets[0].data = levelDataRef.current;
       chartRef.current.data.datasets[1].data = peakDataRef.current;
       chartRef.current.data.datasets[2].data = valleyDataRef.current;
+      chartRef.current.data.datasets[3].data = phaseDataRef.current;
       chartRef.current.update('none'); // 'none' mode skips animations for performance
     }
-  }, [audioData, isStreaming]);
-
-  // Track beat events from music mode
-  useEffect(() => {
-    if (!musicModeData || !isStreaming || !musicModeData.a) return;
-
-    const currentIndex = levelDataRef.current.length - 1; // Current data point
-    if (currentIndex < 0) return;
-
-    // Check for beat events
-    if (musicModeData.w === 1) {
-      beatEventsRef.current.push({
-        index: currentIndex,
-        type: 'whole',
-        icon: '𝅝',
-        color: '#8b5cf6', // Purple for whole notes
-      });
-      setRenderTrigger(n => n + 1);
-    } else if (musicModeData.h === 1) {
-      beatEventsRef.current.push({
-        index: currentIndex,
-        type: 'half',
-        icon: '♪',
-        color: '#3b82f6', // Blue for half notes
-      });
-      setRenderTrigger(n => n + 1);
-    } else if (musicModeData.q === 1) {
-      beatEventsRef.current.push({
-        index: currentIndex,
-        type: 'quarter',
-        icon: '♩',
-        color: '#10b981', // Green for quarter notes
-      });
-      setRenderTrigger(n => n + 1);
-    }
-
-    // Shift beat events when data shifts
-    beatEventsRef.current = beatEventsRef.current
-      .map(event => ({ ...event, index: event.index }))
-      .filter(event => event.index >= 0 && event.index < MAX_DATA_POINTS);
-  }, [musicModeData, isStreaming]);
+  }, [audioData, musicModeData, isStreaming]);
 
   // Initialize synthesizer for test mode
   useEffect(() => {
@@ -350,15 +301,16 @@ export function AudioVisualizer({
     levelDataRef.current = [];
     peakDataRef.current = [];
     valleyDataRef.current = [];
+    phaseDataRef.current = [];
     labelsRef.current = [];
     transientEventsRef.current = [];
-    beatEventsRef.current = [];
     groundTruthMarkersRef.current = [];
     if (chartRef.current) {
       chartRef.current.data.labels = [];
       chartRef.current.data.datasets[0].data = [];
       chartRef.current.data.datasets[1].data = [];
       chartRef.current.data.datasets[2].data = [];
+      chartRef.current.data.datasets[3].data = [];
       chartRef.current.update();
     }
   }, []);
@@ -397,6 +349,17 @@ export function AudioVisualizer({
         borderDash: [5, 5],
         fill: false,
         tension: 0.3,
+      },
+      {
+        label: 'Phase',
+        data: phaseDataRef.current,
+        borderColor: 'rgba(168, 85, 247, 0.7)',
+        backgroundColor: 'rgba(168, 85, 247, 0.08)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        fill: true,
+        tension: 0,
+        spanGaps: false,
       },
     ],
   };
@@ -497,42 +460,6 @@ export function AudioVisualizer({
   };
 
   // Calculate beat event marker positions (musical notes at top)
-  const getBeatMarkers = () => {
-    if (!chartRef.current || beatEventsRef.current.length === 0) return null;
-
-    const chart = chartRef.current;
-    const xScale = chart.scales.x;
-    const yScale = chart.scales.y;
-
-    if (!xScale || !yScale) return null;
-
-    const topPixel = yScale.getPixelForValue(1);
-
-    return beatEventsRef.current.map((event, i) => {
-      const xPixel = xScale.getPixelForValue(event.index);
-
-      return (
-        <div key={`beat-${event.type}-${event.index}-${i}`} className="beat-marker">
-          <div
-            className="beat-marker-icon"
-            style={{
-              position: 'absolute',
-              left: xPixel - 10,
-              top: topPixel - 30,
-              fontSize: '20px',
-              pointerEvents: 'none',
-              color: event.color,
-              textShadow: `0 0 4px ${event.color}`,
-              fontWeight: 'bold',
-            }}
-          >
-            {event.icon}
-          </div>
-        </div>
-      );
-    });
-  };
-
   // Calculate ground truth marker positions (triangles at top, pointing down)
   const getGroundTruthMarkers = () => {
     if (!chartRef.current || !isTestPlaying || groundTruthMarkersRef.current.length === 0)
@@ -668,74 +595,40 @@ export function AudioVisualizer({
         {disabled && <div className="audio-placeholder">Connect to device to monitor audio</div>}
         <Line ref={chartRef} data={chartData} options={chartOptions} />
         {getTransientMarkers()}
-        {getBeatMarkers()}
         {getGroundTruthMarkers()}
       </div>
 
-      {/* Rhythm & Music Mode Indicators */}
-      {isStreaming && (rhythmData || musicModeData || statusData) && (
+      {/* Music Mode Indicators */}
+      {isStreaming && musicModeData && (
         <div className="telemetry-indicators">
-          {statusData && (
-            <div className="telemetry-group">
-              <span className="telemetry-label">Mode</span>
-              <span className="telemetry-value">
-                {['Drummer', 'Bass', 'HFC', 'Flux', 'Hybrid'][statusData.mode] || statusData.mode}
-              </span>
-            </div>
-          )}
-          {rhythmData && (
+          <div className="telemetry-group">
+            <span className="telemetry-label">Music</span>
+            <span className={`telemetry-value ${musicModeData.a ? 'good' : ''}`}>
+              {musicModeData.a ? 'ACTIVE' : 'Inactive'}
+            </span>
+          </div>
+          {musicModeData.a === 1 && (
             <>
               <div className="telemetry-group">
                 <span className="telemetry-label">BPM</span>
-                <span className="telemetry-value">{rhythmData.bpm.toFixed(1)}</span>
-              </div>
-              <div className="telemetry-group">
-                <span className="telemetry-label">Periodicity</span>
-                <span
-                  className={`telemetry-value ${rhythmData.str > 0.7 ? 'good' : rhythmData.str > 0.4 ? 'warn' : ''}`}
-                >
-                  {(rhythmData.str * 100).toFixed(0)}%
-                </span>
+                <span className="telemetry-value">{musicModeData.bpm.toFixed(1)}</span>
               </div>
               <div className="telemetry-group">
                 <span className="telemetry-label">Phase</span>
-                <span className="telemetry-value">{rhythmData.ph.toFixed(2)}</span>
+                <span className="telemetry-value">{musicModeData.ph.toFixed(2)}</span>
               </div>
               <div className="telemetry-group">
-                <span className="telemetry-label">Buffer</span>
-                <span className="telemetry-value">{rhythmData.buf}/256</span>
-              </div>
-            </>
-          )}
-          {musicModeData && (
-            <>
-              <div className="telemetry-group">
-                <span className="telemetry-label">Music</span>
-                <span className={`telemetry-value ${musicModeData.a ? 'good' : ''}`}>
-                  {musicModeData.a ? 'ACTIVE' : 'Inactive'}
+                <span className="telemetry-label">Confidence</span>
+                <span
+                  className={`telemetry-value ${musicModeData.conf > 0.7 ? 'good' : musicModeData.conf > 0.4 ? 'warn' : ''}`}
+                >
+                  {(musicModeData.conf * 100).toFixed(0)}%
                 </span>
               </div>
-              {musicModeData.a === 1 && (
-                <>
-                  <div className="telemetry-group">
-                    <span className="telemetry-label">Confidence</span>
-                    <span
-                      className={`telemetry-value ${musicModeData.conf > 0.7 ? 'good' : musicModeData.conf > 0.4 ? 'warn' : ''}`}
-                    >
-                      {(musicModeData.conf * 100).toFixed(0)}%
-                    </span>
-                  </div>
-                  <div className="telemetry-group">
-                    <span className="telemetry-label">Beats</span>
-                    <span className="telemetry-value">
-                      {musicModeData.q ? '♩' : ''}
-                      {musicModeData.h ? '♪' : ''}
-                      {musicModeData.w ? '𝅝' : ''}
-                      {!musicModeData.q && !musicModeData.h && !musicModeData.w ? '—' : ''}
-                    </span>
-                  </div>
-                </>
-              )}
+              <div className="telemetry-group">
+                <span className="telemetry-label">Beats</span>
+                <span className="telemetry-value">{musicModeData.bc}</span>
+              </div>
             </>
           )}
         </div>

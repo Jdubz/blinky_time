@@ -91,28 +91,6 @@ const FIRMWARE_SAMPLES = {
     },
   },
 
-  // Streaming audio message with rhythm data
-  audioMessageWithRhythm: {
-    a: {
-      l: 0.55,
-      t: 0.8,
-      pk: 0.72,
-      vl: 0.15,
-      raw: 0.48,
-      h: 45,
-      alive: 1,
-      z: 0.31,
-    },
-    r: {
-      bpm: 120,
-      str: 0.85,
-      per: 500,
-      lik: 0.72,
-      ph: 0.35,
-      buf: 128,
-    },
-  },
-
   // Streaming audio message with music mode data
   audioMessageWithMusic: {
     a: {
@@ -129,10 +107,12 @@ const FIRMWARE_SAMPLES = {
       a: 1,
       bpm: 128,
       ph: 0.5,
+      str: 0.82,
       conf: 0.9,
+      bc: 42,
       q: 1,
-      h: 0,
-      w: 0,
+      e: 0.5,
+      p: 0.8,
     },
   },
 
@@ -189,10 +169,9 @@ const FIRMWARE_SAMPLES = {
   statusMessage: {
     type: 'STATUS',
     ts: 12345900,
-    mode: 4,
+    mode: 'ensemble',
     hwGain: 45,
     level: 0.55,
-    avgLevel: 0.48,
     peakLevel: 0.82,
   },
 };
@@ -280,15 +259,6 @@ describe('AudioMessageSchema', () => {
     if (result.success) {
       expect(result.data.a.l).toBe(0.42);
       expect(result.data.a.alive).toBe(1);
-    }
-  });
-
-  it('validates audio message with rhythm data', () => {
-    const result = AudioMessageSchema.safeParse(FIRMWARE_SAMPLES.audioMessageWithRhythm);
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.r?.bpm).toBe(120);
-      expect(result.data.r?.str).toBe(0.85);
     }
   });
 
@@ -422,7 +392,7 @@ describe('StatusMessageSchema', () => {
     if (result.success) {
       expect(result.data.type).toBe('STATUS');
       expect(result.data.hwGain).toBe(45);
-      expect(result.data.avgLevel).toBe(0.48);
+      expect(result.data.mode).toBe('ensemble');
     }
   });
 
@@ -442,9 +412,6 @@ describe('Contract validation', () => {
     expect(DeviceInfoSchema.safeParse(FIRMWARE_SAMPLES.deviceInfoUnconfigured).success).toBe(true);
     expect(SettingsResponseSchema.safeParse(FIRMWARE_SAMPLES.settings).success).toBe(true);
     expect(AudioMessageSchema.safeParse(FIRMWARE_SAMPLES.audioMessage).success).toBe(true);
-    expect(AudioMessageSchema.safeParse(FIRMWARE_SAMPLES.audioMessageWithRhythm).success).toBe(
-      true
-    );
     expect(AudioMessageSchema.safeParse(FIRMWARE_SAMPLES.audioMessageWithMusic).success).toBe(true);
     expect(BatteryMessageSchema.safeParse(FIRMWARE_SAMPLES.batteryMessage).success).toBe(true);
     expect(BatteryStatusResponseSchema.safeParse(FIRMWARE_SAMPLES.batteryStatus).success).toBe(

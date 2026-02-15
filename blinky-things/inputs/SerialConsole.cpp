@@ -1270,19 +1270,34 @@ void SerialConsole::streamTick() {
         Serial.print(F("}"));
 
         // AudioController telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"e":0.5,"p":0.8}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"e":0.5,"p":0.8}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
+        // conf = hypothesis confidence, bc = beat count, q = beat event (phase wrap)
         // e = energy, p = pulse
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
+            const TempoHypothesis& primary = audioCtrl_->getMultiHypothesis().getPrimary();
+
+            // Detect beat events via phase wrapping (>0.8 → <0.2)
+            static float lastStreamPhase = 0.0f;
+            float currentPhase = audio.phase;
+            int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.hasRhythm()) ? 1 : 0;
+            lastStreamPhase = currentPhase;
+
             Serial.print(F(",\"m\":{\"a\":"));
             Serial.print(audio.hasRhythm() ? 1 : 0);
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"ph\":"));
-            Serial.print(audio.phase, 2);
+            Serial.print(currentPhase, 2);
             Serial.print(F(",\"str\":"));
             Serial.print(audio.rhythmStrength, 2);
+            Serial.print(F(",\"conf\":"));
+            Serial.print(primary.confidence, 2);
+            Serial.print(F(",\"bc\":"));
+            Serial.print(primary.beatCount);
+            Serial.print(F(",\"q\":"));
+            Serial.print(beatEvent);
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
@@ -1528,11 +1543,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
             }
         } else {
             Serial.println(F("Usage: set detector_enable <type> <0|1>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
         }
         return true;
     }
@@ -1570,11 +1585,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
             }
         } else {
             Serial.println(F("Usage: set detector_weight <type> <value>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
         }
         return true;
     }
@@ -1612,11 +1627,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
             }
         } else {
             Serial.println(F("Usage: set detector_thresh <type> <value>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
         }
         return true;
     }
@@ -1683,38 +1698,22 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(audioCtrl_->getEnsemble().getDrummer().getAverageTau(), 3);
         return true;
     }
+    if (strncmp(cmd, "set drummer_minriserate ", 24) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 24);
+        audioCtrl_->getEnsemble().getDrummer().setMinRiseRate(value);
+        Serial.print(F("OK drummer_minriserate="));
+        Serial.println(value, 3);
+        return true;
+    }
+    if (strcmp(cmd, "show drummer_minriserate") == 0 || strcmp(cmd, "drummer_minriserate") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("drummer_minriserate="));
+        Serial.println(audioCtrl_->getEnsemble().getDrummer().getMinRiseRate(), 3);
+        return true;
+    }
 
-    // SpectralFlux: minbin, maxbin
-    if (strncmp(cmd, "set spectral_minbin ", 20) == 0) {
-        if (!audioCtrl_) return true;
-        int value = atoi(cmd + 20);
-        SpectralFluxDetector& d = audioCtrl_->getEnsemble().getSpectralFlux();
-        d.setAnalysisRange(value, d.getMaxBin());
-        Serial.print(F("OK spectral_minbin="));
-        Serial.println(value);
-        return true;
-    }
-    if (strncmp(cmd, "set spectral_maxbin ", 20) == 0) {
-        if (!audioCtrl_) return true;
-        int value = atoi(cmd + 20);
-        SpectralFluxDetector& d = audioCtrl_->getEnsemble().getSpectralFlux();
-        d.setAnalysisRange(d.getMinBin(), value);
-        Serial.print(F("OK spectral_maxbin="));
-        Serial.println(value);
-        return true;
-    }
-    if (strcmp(cmd, "show spectral_minbin") == 0 || strcmp(cmd, "spectral_minbin") == 0) {
-        if (!audioCtrl_) return true;
-        Serial.print(F("spectral_minbin="));
-        Serial.println(audioCtrl_->getEnsemble().getSpectralFlux().getMinBin());
-        return true;
-    }
-    if (strcmp(cmd, "show spectral_maxbin") == 0 || strcmp(cmd, "spectral_maxbin") == 0) {
-        if (!audioCtrl_) return true;
-        Serial.print(F("spectral_maxbin="));
-        Serial.println(audioCtrl_->getEnsemble().getSpectralFlux().getMaxBin());
-        return true;
-    }
+    // SpectralFlux: now operates on 26 mel bands (no configurable bin range)
 
     // HFC: minbin, maxbin, attackmult
     if (strncmp(cmd, "set hfc_minbin ", 15) == 0) {
@@ -1759,6 +1758,20 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         if (!audioCtrl_) return true;
         Serial.print(F("hfc_attackmult="));
         Serial.println(audioCtrl_->getEnsemble().getHFC().getAttackMultiplier(), 3);
+        return true;
+    }
+    if (strncmp(cmd, "set hfc_sustainreject ", 22) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 22);
+        audioCtrl_->getEnsemble().getHFC().setSustainRejectFrames(value);
+        Serial.print(F("OK hfc_sustainreject="));
+        Serial.println(value);
+        return true;
+    }
+    if (strcmp(cmd, "show hfc_sustainreject") == 0 || strcmp(cmd, "hfc_sustainreject") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("hfc_sustainreject="));
+        Serial.println(audioCtrl_->getEnsemble().getHFC().getSustainRejectFrames());
         return true;
     }
 

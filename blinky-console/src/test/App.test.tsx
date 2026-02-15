@@ -28,7 +28,6 @@ const mockUseSerial: UseSerialReturn = {
   audioData: null,
   batteryData: null,
   batteryStatusData: null,
-  rhythmData: null,
   musicModeData: null,
   statusData: null,
   onTransientEvent: vi.fn(() => () => {}),

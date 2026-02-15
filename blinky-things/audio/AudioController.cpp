@@ -617,6 +617,12 @@ void AudioController::updateTransientPhaseCorrection(float transientStrength, ui
         return;
     }
 
+    // Require 2+ detector agreement to prevent single-detector false positives
+    // from gradually drifting the phase estimate
+    if (lastEnsembleOutput_.detectorAgreement < 2) {
+        return;
+    }
+
     // Rate limit corrections to prevent overcorrection (min 80ms between corrections)
     if (nowMs - lastTransientCorrectionMs_ < 80) {
         return;
@@ -640,8 +646,9 @@ void AudioController::updateTransientPhaseCorrection(float transientStrength, ui
     float weightedError = phaseError * transientStrength;
 
     // Exponential moving average of phase error
-    // This filters out random false positives and converges on systematic timing offset
-    const float alpha = 0.3f;  // Smoothing factor (higher = faster adaptation)
+    // Lower alpha (0.15) means slower convergence, which filters out random
+    // false positives while still converging on consistent beat patterns
+    const float alpha = 0.15f;
     transientPhaseError_ = (1.0f - alpha) * transientPhaseError_ + alpha * weightedError;
 
     // Clamp error to reasonable range

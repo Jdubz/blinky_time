@@ -307,8 +307,9 @@ public:
 
     // === TRANSIENT-BASED PHASE CORRECTION (PLL-style) ===
     // Uses detected transients to nudge phase toward actual beat timing
-    float transientCorrectionRate = 0.3f;   // How fast to apply transient-based correction (0-1)
-    float transientCorrectionMin = 0.3f;    // Minimum transient strength to trigger correction
+    // Requires 2+ detector agreement to prevent single-detector false positives from drifting phase
+    float transientCorrectionRate = 0.15f;  // How fast to apply transient-based correction (0-1)
+    float transientCorrectionMin = 0.45f;   // Minimum transient strength to trigger correction
 
     // Beat proximity thresholds for pulse modulation
     float pulseNearBeatThreshold = 0.2f;    // Phase distance < this = boost transients

@@ -5,11 +5,11 @@ EnsembleFusion::EnsembleFusion() {
 }
 
 void EnsembleFusion::resetToDefaults() {
-    // Initialize detector configs with calibrated defaults
+    // Initialize detector configs with calibrated defaults (Jan 2026)
     for (int i = 0; i < MAX_DETECTORS; i++) {
         configs_[i].weight = FusionDefaults::WEIGHTS[i];
         configs_[i].threshold = FusionDefaults::THRESHOLDS[i];
-        configs_[i].enabled = true;
+        configs_[i].enabled = FusionDefaults::ENABLED[i];
     }
 
     // Initialize agreement boosts

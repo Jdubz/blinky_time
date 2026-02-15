@@ -11,7 +11,7 @@ vi.mock('react-chartjs-2', () => ({
       ref.current = {
         data: {
           labels: [],
-          datasets: [{ data: [] }, { data: [] }, { data: [] }],
+          datasets: [{ data: [] }, { data: [] }, { data: [] }, { data: [] }],
         },
         update: vi.fn(),
       };

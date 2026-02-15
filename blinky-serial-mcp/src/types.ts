@@ -28,15 +28,18 @@ export interface MusicModeState {
   a: number;      // Active (0 or 1)
   bpm: number;    // Tempo (BPM)
   ph: number;     // Phase (0-1)
-  conf: number;   // Confidence (0-1)
-  q: number;      // Quarter note event (0 or 1)
-  h: number;      // Half note event (0 or 1)
-  w: number;      // Whole note event (0 or 1)
+  str: number;    // Rhythm strength (0-1)
+  conf: number;   // Hypothesis confidence (0-1)
+  bc: number;     // Beat count (tracked beats)
+  q: number;      // Beat event (0 or 1, phase wrap)
+  e: number;      // Energy (0-1)
+  p: number;      // Pulse (0-1)
   // Debug fields (only present in debug stream mode)
+  ps?: number;    // Periodicity strength (raw autocorrelation peak)
   sb?: number;    // Stable beats count
   mb?: number;    // Missed beats count
-  pe?: number;    // Peak tempo energy (comb filter confidence)
-  ei?: number;    // PLL error integral
+  pe?: number;    // Peak energy
+  ei?: number;    // Error integral
 }
 
 export interface LedTelemetry {
@@ -47,7 +50,7 @@ export interface LedTelemetry {
 export interface BeatEvent {
   timestampMs: number;
   bpm: number;
-  type: 'quarter' | 'half' | 'whole';
+  type: 'quarter';
 }
 
 export interface MusicModeMetrics {

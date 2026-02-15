@@ -175,13 +175,20 @@ private:
     float vImag_[SpectralConstants::FFT_SIZE];
 
     // Output buffers
-    float magnitudes_[SpectralConstants::NUM_BINS];
+    float magnitudes_[SpectralConstants::NUM_BINS];      // Raw magnitudes (HFC, ComplexDomain use these)
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
-    float melBands_[SpectralConstants::NUM_MEL_BANDS];
+    float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
     float prevMelBands_[SpectralConstants::NUM_MEL_BANDS];
 
-    // Derived features
+    // Mel-band whitening: per-band running maximum for adaptive normalization
+    // Applied to mel bands (not raw magnitudes) because:
+    // - HFC/ComplexDomain need raw magnitudes for absolute energy metrics
+    // - SpectralFlux/Novelty compute change metrics that benefit from normalization
+    // - 26 bands vs 128 bins = less memory, more perceptually meaningful
+    float melRunningMax_[SpectralConstants::NUM_MEL_BANDS];
+
+    // Derived features (computed from raw magnitudes)
     float totalEnergy_;
     float spectralCentroid_;
 
@@ -194,6 +201,7 @@ private:
     void computeFFT();
     void computeMagnitudesAndPhases();
     void computeMelBands();
+    void whitenMelBands();
     void computeDerivedFeatures();
     void savePreviousFrame();
 

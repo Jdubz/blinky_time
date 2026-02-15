@@ -14,7 +14,6 @@ import {
   ConnectionState,
   SettingsByCategory,
   TransientMessage,
-  RhythmData,
   MusicModeData,
   RhythmMessage,
   StatusMessage,
@@ -60,7 +59,6 @@ export interface UseSerialReturn {
   audioData: AudioSample | null;
   batteryData: BatterySample | null;
   batteryStatusData: BatteryStatusData | null;
-  rhythmData: RhythmData | null;
   musicModeData: MusicModeData | null;
   statusData: StatusMessage | null;
 
@@ -158,7 +156,6 @@ export function useSerial(): UseSerialReturn {
   const [audioData, setAudioData] = useState<AudioSample | null>(null);
   const [batteryData, setBatteryData] = useState<BatterySample | null>(null);
   const [batteryStatusData, setBatteryStatusData] = useState<BatteryStatusData | null>(null);
-  const [rhythmData, setRhythmData] = useState<RhythmData | null>(null);
   const [musicModeData, setMusicModeData] = useState<MusicModeData | null>(null);
   const [statusData, setStatusData] = useState<StatusMessage | null>(null);
   const [consoleLines, setConsoleLines] = useState<string[]>([]);
@@ -253,10 +250,7 @@ export function useSerial(): UseSerialReturn {
         case 'audio':
           if (event.audio && validateAudioSample(event.audio.a)) {
             setAudioData(event.audio.a);
-            // Update rhythm and music mode data if present in audio stream
-            if (event.audio.r) {
-              setRhythmData(event.audio.r);
-            }
+            // Update music mode data if present in audio stream
             if (event.audio.m) {
               setMusicModeData(event.audio.m);
             }
@@ -623,7 +617,6 @@ export function useSerial(): UseSerialReturn {
     audioData,
     batteryData,
     batteryStatusData,
-    rhythmData,
     musicModeData,
     statusData,
     onTransientEvent,

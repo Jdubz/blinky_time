@@ -63,6 +63,7 @@ export interface SampleManifest {
 export interface PatternOutput {
     pattern: string;
     durationMs: number;
+    bpm?: number;
     startedAt: string;
     hits: Array<{
         timeMs: number;

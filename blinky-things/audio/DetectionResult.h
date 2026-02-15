@@ -54,7 +54,7 @@ struct DetectionResult {
 struct DetectorConfig {
     float weight;        // 0.0-1.0: Base contribution weight (sum across all should = 1.0)
     float threshold;     // Detection threshold (meaning varies by detector)
-    bool enabled;        // If false, detector runs but result is ignored
+    bool enabled;        // If false, detector is skipped entirely (no CPU usage)
 
     DetectorConfig()
         : weight(0.0f)
@@ -154,11 +154,11 @@ struct AudioFrame {
  */
 enum class DetectorType : uint8_t {
     DRUMMER = 0,        // Time-domain amplitude spikes
-    SPECTRAL_FLUX = 1,  // SuperFlux algorithm
+    SPECTRAL_FLUX = 1,  // SuperFlux on mel bands
     HFC = 2,            // High-frequency content (FFT-based)
-    BASS_BAND = 3,      // Low-frequency flux
+    BASS_BAND = 3,      // Low-frequency flux (disabled: environmental noise)
     COMPLEX_DOMAIN = 4, // Phase deviation
-    MEL_FLUX = 5,       // Mel-scaled spectral flux
+    NOVELTY = 5,        // Cosine distance spectral novelty
     COUNT = 6           // Total number of detectors
 };
 
@@ -172,7 +172,7 @@ inline const char* getDetectorName(DetectorType type) {
         case DetectorType::HFC:            return "hfc";
         case DetectorType::BASS_BAND:      return "bass";
         case DetectorType::COMPLEX_DOMAIN: return "complex";
-        case DetectorType::MEL_FLUX:       return "mel";
+        case DetectorType::NOVELTY:        return "novelty";
         default:                           return "unknown";
     }
 }
@@ -193,7 +193,7 @@ inline bool parseDetectorType(const char* str, DetectorType& type) {
         case 'h': type = DetectorType::HFC; return true;
         case 'b': type = DetectorType::BASS_BAND; return true;
         case 'c': type = DetectorType::COMPLEX_DOMAIN; return true;
-        case 'm': type = DetectorType::MEL_FLUX; return true;
+        case 'n': type = DetectorType::NOVELTY; return true;
         default: return false;
     }
 }

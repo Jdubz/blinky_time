@@ -24,10 +24,13 @@ export interface MusicModeState {
     a: number;
     bpm: number;
     ph: number;
+    str: number;
     conf: number;
+    bc: number;
     q: number;
-    h: number;
-    w: number;
+    e: number;
+    p: number;
+    ps?: number;
     sb?: number;
     mb?: number;
     pe?: number;
@@ -40,7 +43,7 @@ export interface LedTelemetry {
 export interface BeatEvent {
     timestampMs: number;
     bpm: number;
-    type: 'quarter' | 'half' | 'whole';
+    type: 'quarter';
 }
 export interface MusicModeMetrics {
     bpmAccuracy: number;

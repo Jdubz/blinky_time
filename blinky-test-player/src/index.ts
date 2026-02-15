@@ -341,6 +341,7 @@ program
     const output: PatternOutput = {
       pattern: pattern.id,
       durationMs: pattern.durationMs,
+      bpm: pattern.bpm,
       startedAt: startedAt || new Date().toISOString(),
       hits: groundTruth || pattern.hits.map(h => ({
         timeMs: Math.round(h.time * 1000),

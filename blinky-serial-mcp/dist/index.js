@@ -720,17 +720,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                                 active: lastMusicState.a === 1,
                                 bpm: lastMusicState.bpm,
                                 phase: lastMusicState.ph,
+                                rhythmStrength: lastMusicState.str,
                                 confidence: lastMusicState.conf,
-                                beats: {
-                                    quarter: lastMusicState.q === 1,
-                                    half: lastMusicState.h === 1,
-                                    whole: lastMusicState.w === 1,
-                                },
+                                beatCount: lastMusicState.bc,
+                                beat: lastMusicState.q === 1,
+                                energy: lastMusicState.e,
+                                pulse: lastMusicState.p,
                                 debug: {
-                                    stableBeats: lastMusicState.sb,
-                                    missedBeats: lastMusicState.mb,
-                                    peakEnergy: lastMusicState.pe,
-                                    errorIntegral: lastMusicState.ei,
+                                    periodicityStrength: lastMusicState.ps,
                                 },
                             }, null, 2),
                         },
@@ -754,10 +751,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     samples.push({ ...musicState, timestampMs });
                     if (musicState.q === 1)
                         beats.push({ type: 'quarter', timestampMs, bpm: musicState.bpm });
-                    if (musicState.h === 1)
-                        beats.push({ type: 'half', timestampMs, bpm: musicState.bpm });
-                    if (musicState.w === 1)
-                        beats.push({ type: 'whole', timestampMs, bpm: musicState.bpm });
                 };
                 serial.on('music', onMusic);
                 await new Promise(resolve => setTimeout(resolve, durationMs));
@@ -1014,8 +1007,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     const highCount = detections.filter(d => d.type === 'high').length;
                     const duration = groundTruth.durationMs || rawDuration;
                     // Calculate F1/precision/recall metrics
-                    // Match detections to expected hits within a timing tolerance
-                    const TIMING_TOLERANCE_MS = 350; // Allow 350ms timing variance (accounts for audio output latency)
+                    // Match detections to expected hits within a BPM-aware timing tolerance
+                    // Tighter tolerance at faster tempos prevents matching the wrong beat
+                    // When BPM is unknown, use the maximum tolerance (200ms) as a safe default
+                    const TIMING_TOLERANCE_MS = groundTruth.bpm
+                        ? Math.min(200, Math.round(60000 / groundTruth.bpm * 0.25))
+                        : 200;
                     const STRONG_BEAT_THRESHOLD = 0.8; // Only count strong beats (kicks, snares) not hi-hats
                     const allHits = groundTruth.hits || [];
                     // Filter to expected transients only:
@@ -1052,9 +1049,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     });
                     // Calculate median offset as systematic latency estimate
                     let audioLatencyMs = 0;
+                    let latencyStdDev = null;
+                    let latencyWarning = null;
                     if (offsets.length > 0) {
                         offsets.sort((a, b) => a - b);
                         audioLatencyMs = offsets[Math.floor(offsets.length / 2)];
+                        // Check latency estimate quality via standard deviation
+                        // High variance suggests mixed true/false positive detections
+                        if (offsets.length >= 3) {
+                            const mean = offsets.reduce((s, v) => s + v, 0) / offsets.length;
+                            const variance = offsets.reduce((s, v) => s + (v - mean) ** 2, 0) / offsets.length;
+                            latencyStdDev = Math.round(Math.sqrt(variance));
+                            if (latencyStdDev > 100) {
+                                latencyWarning = `High offset variance (stddev=${latencyStdDev}ms) — latency estimate may be unreliable due to false positives`;
+                            }
+                        }
                     }
                     // Track which expected hits were matched and the mapping
                     const matchedExpected = new Set();
@@ -1109,6 +1118,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         expectedTotal: expectedHits.length,
                         avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
                         audioLatencyMs: Math.round(audioLatencyMs),
+                        latencyStdDev,
+                        latencyWarning,
+                        timingToleranceMs: TIMING_TOLERANCE_MS,
                     };
                     // Calculate music mode metrics
                     const activeStates = musicStates.filter(s => s.active);

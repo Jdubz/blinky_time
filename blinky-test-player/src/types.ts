@@ -106,6 +106,7 @@ export interface SampleManifest {
 export interface PatternOutput {
   pattern: string;
   durationMs: number;
+  bpm?: number; // Pattern BPM (for BPM-aware scoring tolerance)
   startedAt: string; // ISO timestamp
   hits: Array<{
     timeMs: number;

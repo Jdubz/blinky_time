@@ -17,7 +17,6 @@ export type {
   SettingsByCategory,
   // Audio
   AudioSample,
-  RhythmData,
   MusicModeData,
   AudioMessage,
   // Battery
@@ -47,7 +46,6 @@ export {
   SettingsResponseSchema,
   SettingsByCategorySchema,
   AudioSampleSchema,
-  RhythmDataSchema,
   MusicModeDataSchema,
   AudioMessageSchema,
   BatterySampleSchema,
