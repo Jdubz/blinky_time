@@ -141,7 +141,9 @@ void AdaptiveMic::update(float dt) {
       valleyTau = peakTau;
     } else {
       // Very slow release upward (valley can rise if noise floor increases)
-      valleyTau = releaseTau * VALLEY_RELEASE_MULTIPLIER;
+      // Faster valley tracking in loud mode to prevent compression
+      float releaseMultiplier = inLoudAgcMode_ ? valleyFastTrackRatio : VALLEY_RELEASE_MULTIPLIER;
+      valleyTau = releaseTau * releaseMultiplier;
     }
     float valleyAlpha = 1.0f - expf(-dt / maxValue(valleyTau, MIN_TAU_RANGE));
 
@@ -216,6 +218,11 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
                    currentHardwareGain >= 70 &&
                    rawTrackedLevel < fastAgcThreshold;
 
+  // Determine if we're in loud AGC mode (symmetric to fast AGC)
+  // Loud mode: when gain is at/near minimum and signal is persistently high
+  inLoudAgcMode_ = currentHardwareGain <= hwGainMinHeadroom &&
+                   rawTrackedLevel > hwLoudThreshold;
+
   // Select calibration period and tracking tau based on mode
   uint32_t calibPeriod = inFastAgcMode_ ? fastAgcPeriodMs : MicConstants::HW_CALIB_PERIOD_MS;
   float trackingTau = inFastAgcMode_ ? fastAgcTrackingTau : MicConstants::HW_TRACKING_TAU;
@@ -269,7 +276,10 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
 
   int delta = direction * stepSize;
   int oldGain = currentHardwareGain;
-  currentHardwareGain = constrainValue(currentHardwareGain + delta, HW_GAIN_MIN, HW_GAIN_MAX);
+  // Use full gain range (0-80) in loud mode to handle extreme SPL
+  // Otherwise enforce headroom minimum (10-80) to preserve dynamic range
+  int effectiveMinGain = inLoudAgcMode_ ? HW_GAIN_MIN : hwGainMinHeadroom;
+  currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, HW_GAIN_MAX);
 
   if (currentHardwareGain != oldGain) {
     pdm_.setGain(currentHardwareGain);

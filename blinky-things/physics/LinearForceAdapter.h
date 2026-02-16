@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ForceAdapter.h"
+#include "../math/SimplexNoise.h"
 #include <Arduino.h>
 
 /**
@@ -31,8 +32,18 @@ public:
         if (p->hasFlag(ParticleFlags::WIND)) {
             float wind = baseWind_;
             if (windVariation_ > 0.0f) {
-                // Use X position for spatial variation (instead of Y)
-                wind += windVariation_ * sin(noisePhase_ + p->x * 0.1f);
+                // Multi-octave turbulence using built-in FBM (Fractal Brownian Motion)
+                // fbm3D(x, y, z, octaves, persistence)
+                // persistence=0.5 means each octave is half the amplitude of previous
+                float turbulence = SimplexNoise::fbm3D(
+                    p->x * 0.15f,           // Spatial frequency
+                    noisePhase_ * 0.6f,     // Fast time variation
+                    0.0f,                    // Z seed
+                    2,                       // 2 octaves
+                    0.5f                     // Half amplitude per octave
+                );
+
+                wind += windVariation_ * turbulence;
             }
             // Mass affects wind response
             p->vx += (wind / p->mass) * dt;
@@ -49,7 +60,7 @@ public:
     }
 
     void update(float dt) override {
-        noisePhase_ += dt * 0.5f;
+        noisePhase_ += dt * 3.0f;  // Increased from 0.5 to 3.0 for faster variation
         if (noisePhase_ > TWO_PI) {
             noisePhase_ -= TWO_PI;
         }

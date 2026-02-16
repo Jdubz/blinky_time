@@ -96,9 +96,9 @@ void ConfigStorage::loadSettingsDefaults() {
     // Fire defaults (particle-based) - tuned for Hat music reactivity Jan 2026
     data_.fire.baseSpawnChance = 0.1f;      // Low baseline, let music drive spawns
     data_.fire.audioSpawnBoost = 1.5f;      // Strong audio response
-    data_.fire.gravity = -40.0f;            // Strong upward force (linear layout)
+    data_.fire.gravity = 0.0f;              // No lateral drift (linear layout - gravity disabled)
     data_.fire.windBase = 0.0f;
-    data_.fire.windVariation = 6.0f;        // Flickering sway
+    data_.fire.windVariation = 25.0f;       // Strong turbulence (increased for visibility over spawn velocity)
     data_.fire.drag = 0.985f;               // Smoother flow
     data_.fire.sparkVelocityMin = 8.0f;     // Fast sparks
     data_.fire.sparkVelocityMax = 10.0f;    // Fast sparks
@@ -106,8 +106,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.fire.musicSpawnPulse = 0.95f;     // Tight beat sync
     data_.fire.organicTransientMin = 0.25f; // Responsive to softer transients
     data_.fire.backgroundIntensity = 0.2f;  // Visible lava lamp background
+    data_.fire.fastSparkRatio = 0.7f;       // 70% fast sparks, 30% embers
     data_.fire.maxParticles = 48;
-    data_.fire.defaultLifespan = 120;       // 4 seconds at 30fps
+    data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds, was 120)
     data_.fire.intensityMin = 150;
     data_.fire.intensityMax = 220;
     data_.fire.trailHeatFactor = 70;        // Strong heat trails
@@ -474,6 +475,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     fireParams.organicTransientMin = data_.fire.organicTransientMin;
     // Background
     fireParams.backgroundIntensity = data_.fire.backgroundIntensity;
+    // Particle variety
+    fireParams.fastSparkRatio = data_.fire.fastSparkRatio;
     // Lifecycle
     fireParams.defaultLifespan = data_.fire.defaultLifespan;
     fireParams.intensityMin = data_.fire.intensityMin;
@@ -602,6 +605,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.fire.organicTransientMin = fireParams.organicTransientMin;
     // Background
     data_.fire.backgroundIntensity = fireParams.backgroundIntensity;
+    // Particle variety
+    data_.fire.fastSparkRatio = fireParams.fastSparkRatio;
     // Lifecycle
     data_.fire.defaultLifespan = fireParams.defaultLifespan;
     data_.fire.intensityMin = fireParams.intensityMin;

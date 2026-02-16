@@ -65,6 +65,7 @@
 #include "audio/detectors/BassBandDetector.cpp"
 #include "audio/detectors/ComplexDomainDetector.cpp"
 #include "audio/detectors/NoveltyDetector.cpp"
+#include "audio/PerceptualScaling.cpp"
 #include "audio/AudioController.cpp"
 
 // Test implementations (only when testing enabled)

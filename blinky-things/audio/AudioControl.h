@@ -12,7 +12,7 @@
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 16 bytes (4 floats)
+ * Memory: 20 bytes (4 floats + 1 bool + 3 bytes padding)
  */
 struct AudioControl {
     // === ENERGY ===
@@ -42,13 +42,12 @@ struct AudioControl {
     // Use for: Choosing between music mode vs organic mode behavior
     float rhythmStrength = 0.0f;
 
-    // === CONVENIENCE METHODS ===
+    // === LOUD MODE ===
+    // True when hardware gain is at minimum and signal is saturated
+    // Generators use this to enable adaptive particle budgets and non-linear mappings
+    bool loudMode = false;
 
-    /**
-     * Is rhythm strong enough to trust phase?
-     * Use this to switch between beat-synced and organic behavior.
-     */
-    inline bool hasRhythm() const { return rhythmStrength > 0.5f; }
+    // === CONVENIENCE METHODS ===
 
     /**
      * Convert phase to pulse intensity.

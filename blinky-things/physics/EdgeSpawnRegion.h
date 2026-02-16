@@ -29,19 +29,19 @@ public:
         switch (edge_) {
             case Edge::TOP:
                 x = random(width_ * 100) / 100.0f;
-                y = 0;
+                y = 0.5f;  // Center of top row (truncates to 0)
                 break;
             case Edge::BOTTOM:
                 x = random(width_ * 100) / 100.0f;
-                y = height_ - 1;
+                y = height_ - 0.5f;  // Center of bottom row (e.g., 7.5 truncates to 7)
                 break;
             case Edge::LEFT:
-                x = 0;
+                x = 0.5f;  // Center of left column (truncates to 0)
                 y = random(height_ * 100) / 100.0f;
                 break;
             case Edge::RIGHT:
             default:  // Default to right edge if edge_ is corrupted
-                x = width_ - 1;
+                x = width_ - 0.5f;  // Center of right column
                 y = random(height_ * 100) / 100.0f;
                 break;
         }

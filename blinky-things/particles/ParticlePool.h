@@ -5,10 +5,11 @@
 /**
  * ParticlePool - Fixed-size particle pool with zero heap allocation
  *
- * Memory: 24 bytes/particle * N particles + overhead
- * - 32 particles = 776 bytes
- * - 64 particles = 1544 bytes
- * - 128 particles = 3080 bytes
+ * Memory: 28 bytes/particle * N particles + overhead (aligned)
+ * - 32 particles = 896 bytes
+ * - 35 particles = 980 bytes (Fire default)
+ * - 64 particles = 1792 bytes
+ * - 128 particles = 3584 bytes
  *
  * Uses compile-time fixed size to eliminate heap fragmentation.
  * Particles are reused from a static pool when they die.
@@ -30,7 +31,8 @@ public:
      */
     Particle* spawn(float x, float y, float vx, float vy,
                     uint8_t intensity, uint8_t maxAge,
-                    float mass, uint8_t flags) {
+                    float mass, uint8_t flags,
+                    uint8_t trailHeatFactor = 0) {
         // Validate inputs to prevent NaN, infinity, and extreme values
         if (!isfinite(x) || !isfinite(y) || !isfinite(vx) || !isfinite(vy) || !isfinite(mass)) {
             return nullptr;  // Reject invalid floating-point values
@@ -56,6 +58,7 @@ public:
                 if (clampedMass > 10.0f) clampedMass = 10.0f;
                 particles_[i].mass = clampedMass;
                 particles_[i].flags = flags;
+                particles_[i].trailHeatFactor = trailHeatFactor;
                 // Increment count with overflow protection
                 if (activeCount_ < MAX_PARTICLES) {
                     activeCount_++;

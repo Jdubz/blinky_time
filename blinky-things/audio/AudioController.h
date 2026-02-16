@@ -2,6 +2,7 @@
 
 #include "AudioControl.h"
 #include "EnsembleDetector.h"
+#include "PerceptualScaling.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -367,6 +368,9 @@ private:
 
     // === MICROPHONE ===
     AdaptiveMic mic_;
+
+    // === PERCEPTUAL SCALING ===
+    PerceptualScaling perceptual_;  // Public for ConfigStorage access
 
     // === ENSEMBLE DETECTOR ===
     EnsembleDetector ensemble_;

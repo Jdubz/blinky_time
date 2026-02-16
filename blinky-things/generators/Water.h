@@ -15,7 +15,7 @@ struct WaterParams {
 
     // Lifecycle
     uint8_t maxParticles;         // Maximum active particles (1-64, default 64)
-    uint8_t defaultLifespan;      // Default particle age in frames
+    uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
@@ -26,14 +26,14 @@ struct WaterParams {
     float drag;                   // Drag coefficient (0-1, per frame damping)
 
     // Drop appearance
-    float dropVelocityMin;        // Minimum downward velocity (LEDs/frame@30FPS)
-    float dropVelocityMax;        // Maximum downward velocity (LEDs/frame@30FPS)
-    float dropSpread;             // Horizontal velocity variation (LEDs/frame@30FPS)
+    float dropVelocityMin;        // Minimum downward velocity (LEDs/sec)
+    float dropVelocityMax;        // Maximum downward velocity (LEDs/sec)
+    float dropSpread;             // Horizontal velocity variation (LEDs/sec)
 
     // Splash behavior
     uint8_t splashParticles;      // Number of particles spawned on splash (0-10)
-    float splashVelocityMin;      // Minimum splash velocity (LEDs/frame@30FPS)
-    float splashVelocityMax;      // Maximum splash velocity (LEDs/frame@30FPS)
+    float splashVelocityMin;      // Minimum splash velocity (LEDs/sec)
+    float splashVelocityMax;      // Maximum splash velocity (LEDs/sec)
     uint8_t splashIntensity;      // Splash particle intensity multiplier (0-255)
 
     // Audio reactivity
@@ -48,7 +48,7 @@ struct WaterParams {
         baseSpawnChance = 0.8f;   // HIGH spawn rate - always raining
         audioSpawnBoost = 0.3f;   // Some music response
         maxParticles = 30;        // Enough for visible rain
-        defaultLifespan = 60;     // 2 seconds - time to fall
+        defaultLifespan = 200;    // 2.0 seconds - time to fall (200 centiseconds)
         intensityMin = 180;       // BRIGHT drops
         intensityMax = 255;       // Maximum brightness
         gravity = 25.0f;          // LEDs/sec² - accelerates fall
@@ -59,7 +59,7 @@ struct WaterParams {
         organicTransientMin = 0.5f;
         backgroundIntensity = 0.15f;  // Visible but subtle background
 
-        // Velocities: drops should traverse 8-pixel height in ~1 second
+        // Velocities: drops traverse 8-10 LEDs in ~2 seconds with acceleration
         dropVelocityMin = 6.0f;   // LEDs/sec starting velocity
         dropVelocityMax = 10.0f;  // LEDs/sec
         dropSpread = 1.5f;        // Slight horizontal drift
@@ -98,6 +98,15 @@ public:
     void setParams(const WaterParams& params) { params_ = params; }
     const WaterParams& getParams() const { return params_; }
     WaterParams& getParamsMutable() { return params_; }
+
+    // Sync physics parameters to force adapter (call after params change at runtime)
+    void syncPhysicsParams() {
+        gravity_ = params_.gravity;
+        drag_ = params_.drag;
+        if (forceAdapter_) {
+            forceAdapter_->setWind(params_.windBase, params_.windVariation);
+        }
+    }
 
 protected:
     // Physics context initialization

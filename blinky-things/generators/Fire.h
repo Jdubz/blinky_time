@@ -7,6 +7,15 @@
 #include "../math/SimplexNoise.h"
 
 /**
+ * SparkType - Defines different visual behaviors for fire particles
+ */
+enum class SparkType : uint8_t {
+    FAST_SPARK = 0,    // Short-lived, fast, minimal trail (primary sparks)
+    SLOW_EMBER = 1,    // Long-lived, slow, heavy trail (glowing embers)
+    BURST_SPARK = 2    // Medium speed, high intensity (transient bursts)
+};
+
+/**
  * FireParams - Fire-specific particle parameters
  */
 struct FireParams {
@@ -16,7 +25,7 @@ struct FireParams {
 
     // Lifecycle
     uint8_t maxParticles;         // Maximum active particles (1-48, default 48)
-    uint8_t defaultLifespan;      // Default particle age in frames
+    uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
@@ -27,9 +36,9 @@ struct FireParams {
     float drag;                   // Drag coefficient (0-1, per frame damping)
 
     // Spark appearance
-    float sparkVelocityMin;       // Minimum upward velocity (LEDs/frame@30FPS)
-    float sparkVelocityMax;       // Maximum upward velocity (LEDs/frame@30FPS)
-    float sparkSpread;            // Horizontal velocity variation (LEDs/frame@30FPS)
+    float sparkVelocityMin;       // Minimum upward velocity (LEDs/sec)
+    float sparkVelocityMax;       // Maximum upward velocity (LEDs/sec)
+    float sparkSpread;            // Horizontal velocity variation (LEDs/sec)
 
     // Heat trail behavior
     uint8_t trailHeatFactor;      // Heat multiplier for trail (0-100%)
@@ -43,17 +52,20 @@ struct FireParams {
     // Background
     float backgroundIntensity;    // Noise background brightness (0-1)
 
+    // Particle variety
+    float fastSparkRatio;         // Ratio of fast sparks (0-1, rest are embers)
+
     FireParams() {
         // FIRE EFFECT: Bright sparks rising from source
         baseSpawnChance = 0.7f;   // HIGH spawn rate - constant sparks
         audioSpawnBoost = 0.4f;   // Music boost
         maxParticles = 35;        // Good spark coverage
-        defaultLifespan = 50;     // ~1.7 seconds to rise
+        defaultLifespan = 170;    // 1.7 seconds to rise (170 centiseconds)
         intensityMin = 150;       // BRIGHT red/orange
         intensityMax = 220;       // Very bright (orange range)
-        gravity = -40.0f;         // LEDs/sec² upward (sparks rise)
+        gravity = 0.0f;           // No gravity (disabled for linear layouts, confusing horizontal drift)
         windBase = 0.0f;
-        windVariation = 6.0f;     // Slight flickering sway
+        windVariation = 25.0f;    // Strong turbulence (increased for visibility over spawn velocity)
         drag = 0.97f;             // Light drag
         musicSpawnPulse = 0.5f;
         organicTransientMin = 0.4f;
@@ -63,10 +75,13 @@ struct FireParams {
         trailHeatFactor = 5;      // MINIMAL trails - discrete sparks
         trailDecay = 100;         // FAST cooling - no blob
 
-        // Velocities: sparks should rise ~8 pixels in 1-1.5 seconds
+        // Velocities: sparks rise ~8-10 LEDs in 1.7 seconds
         sparkVelocityMin = 5.0f;  // LEDs/sec upward
         sparkVelocityMax = 10.0f; // LEDs/sec upward
         sparkSpread = 4.0f;       // Some horizontal spread
+
+        // Particle variety: 70% fast sparks, 30% slow embers
+        fastSparkRatio = 0.7f;
     }
 };
 
@@ -99,6 +114,15 @@ public:
     const FireParams& getParams() const { return params_; }
     FireParams& getParamsMutable() { return params_; }
 
+    // Sync physics parameters to force adapter (call after params change at runtime)
+    void syncPhysicsParams() {
+        gravity_ = params_.gravity;
+        drag_ = params_.drag;
+        if (forceAdapter_) {
+            forceAdapter_->setWind(params_.windBase, params_.windVariation);
+        }
+    }
+
 protected:
     // Physics context initialization
     void initPhysicsContext() override;
@@ -110,6 +134,11 @@ protected:
     uint32_t particleColor(uint8_t intensity) const override;
 
 private:
+    /**
+     * Spawn a particle with specific type characteristics
+     */
+    void spawnTypedParticle(SparkType type, float x, float y, float baseSpeed);
+
     /**
      * Apply cooling to heat buffer
      */

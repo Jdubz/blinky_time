@@ -26,6 +26,18 @@ void onParamChanged() {
         if (storage) {
             storage->markDirty();
         }
+
+        // CRITICAL: Update force adapters when wind/gravity/drag params change
+        // The force adapter caches wind values via setWind(), so we must re-sync them
+        Fire* fireGen = SerialConsole::instance_->fireGenerator_;
+        Water* waterGen = SerialConsole::instance_->waterGenerator_;
+
+        if (fireGen) {
+            fireGen->syncPhysicsParams();
+        }
+        if (waterGen) {
+            waterGen->syncPhysicsParams();
+        }
     }
 }
 
@@ -104,27 +116,27 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 
     // Physics
     settings_.registerFloat("gravity", &fp->gravity, "fire",
-        "Gravity strength (negative=upward)", -20.0f, 20.0f, onParamChanged);
+        "Gravity strength (negative=upward)", -200.0f, 200.0f, onParamChanged);
     settings_.registerFloat("windbase", &fp->windBase, "fire",
-        "Base wind force", -5.0f, 5.0f, onParamChanged);
+        "Base wind force", -50.0f, 50.0f, onParamChanged);
     settings_.registerFloat("windvariation", &fp->windVariation, "fire",
-        "Wind variation amount", 0.0f, 2.0f, onParamChanged);
+        "Wind variation amount", 0.0f, 100.0f, onParamChanged);
     settings_.registerFloat("drag", &fp->drag, "fire",
-        "Drag coefficient", 0.9f, 1.0f, onParamChanged);
+        "Drag coefficient", 0.0f, 1.0f, onParamChanged);
 
     // Spark appearance
     settings_.registerFloat("sparkvelmin", &fp->sparkVelocityMin, "fire",
-        "Minimum upward velocity", 0.0f, 10.0f, onParamChanged);
+        "Minimum upward velocity", 0.0f, 100.0f, onParamChanged);
     settings_.registerFloat("sparkvelmax", &fp->sparkVelocityMax, "fire",
-        "Maximum upward velocity", 0.0f, 10.0f, onParamChanged);
+        "Maximum upward velocity", 0.0f, 100.0f, onParamChanged);
     settings_.registerFloat("sparkspread", &fp->sparkSpread, "fire",
-        "Horizontal velocity spread", 0.0f, 5.0f, onParamChanged);
+        "Horizontal velocity spread", 0.0f, 50.0f, onParamChanged);
 
     // Lifecycle
     settings_.registerUint8("maxparticles", &fp->maxParticles, "fire",
-        "Maximum active particles", 1, 48, onParamChanged);
+        "Maximum active particles", 1, 255, onParamChanged);
     settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
-        "Default particle lifespan (frames)", 20, 120, onParamChanged);
+        "Default particle lifespan (frames)", 1, 255, onParamChanged);
     settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
         "Minimum spawn intensity", 0, 255, onParamChanged);
     settings_.registerUint8("intensitymax", &fp->intensityMax, "fire",
@@ -578,7 +590,7 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             const AudioControl& audio = audioCtrl_->getControl();
             Serial.println(F("=== Audio Controller Status ==="));
             Serial.print(F("Rhythm Active: "));
-            Serial.println(audio.hasRhythm() ? F("YES") : F("NO"));
+            Serial.println(audio.rhythmStrength > 0.5f ? F("YES") : F("NO"));
             Serial.print(F("BPM: "));
             Serial.println(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F("Phase: "));
@@ -1281,11 +1293,11 @@ void SerialConsole::streamTick() {
             // Detect beat events via phase wrapping (>0.8 → <0.2)
             static float lastStreamPhase = 0.0f;
             float currentPhase = audio.phase;
-            int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.hasRhythm()) ? 1 : 0;
+            int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > 0.5f) ? 1 : 0;
             lastStreamPhase = currentPhase;
 
             Serial.print(F(",\"m\":{\"a\":"));
-            Serial.print(audio.hasRhythm() ? 1 : 0);
+            Serial.print(audio.rhythmStrength > 0.5f ? 1 : 0);
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"ph\":"));

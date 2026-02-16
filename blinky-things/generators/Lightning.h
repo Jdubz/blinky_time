@@ -15,13 +15,13 @@ struct LightningParams {
 
     // Lifecycle
     uint8_t maxParticles;         // Maximum active particles (1-32, default 32)
-    uint8_t defaultLifespan;      // Default particle age in frames (short-lived)
+    uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range, short-lived)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
     // Bolt appearance
-    float boltVelocityMin;        // Minimum bolt speed (LEDs/frame@30FPS)
-    float boltVelocityMax;        // Maximum bolt speed (LEDs/frame@30FPS)
+    float boltVelocityMin;        // Minimum bolt speed (LEDs/sec, not used - bolts are stationary)
+    float boltVelocityMax;        // Maximum bolt speed (LEDs/sec, not used - bolts are stationary)
     uint8_t fadeRate;             // Intensity decay per frame (0-255)
 
     // Branching behavior
@@ -42,7 +42,7 @@ struct LightningParams {
         baseSpawnChance = 0.15f;  // Regular strikes
         audioSpawnBoost = 0.8f;   // Strong music response
         maxParticles = 40;        // Enough for bolts + branches
-        defaultLifespan = 10;     // Quick flash (lightning is fast!)
+        defaultLifespan = 30;     // 0.3 seconds - quick flash (30 centiseconds)
         intensityMin = 220;       // VERY BRIGHT
         intensityMax = 255;       // MAXIMUM brightness
         musicSpawnPulse = 0.7f;   // Phase modulation

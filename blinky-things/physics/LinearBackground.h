@@ -22,12 +22,12 @@ public:
 
     void render(PixelMatrix& matrix, uint16_t width, uint16_t height,
                float noiseTime, const AudioControl& audio) override {
-        // Beat-reactive brightness modulation
-        float beatBrightness = 1.0f;
-        if (audio.hasRhythm()) {
-            float phasePulse = audio.phaseToPulse();
-            beatBrightness = 0.6f + 0.4f * phasePulse;
-        }
+        // Beat-reactive brightness modulation (blended by rhythmStrength)
+        float phasePulse = audio.phaseToPulse();
+        float musicBrightness = 0.6f + 0.4f * phasePulse;
+        float organicBrightness = 1.0f;
+        float beatBrightness = organicBrightness * (1.0f - audio.rhythmStrength) +
+                              musicBrightness * audio.rhythmStrength;
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
