@@ -234,6 +234,8 @@ void SerialConsole::registerRhythmSettings() {
     // Onset strength signal (OSS) generation
     settings_.registerFloat("ossfluxweight", &audioCtrl_->ossFluxWeight, "rhythm",
         "OSS flux weight (1=flux, 0=RMS)", 0.0f, 1.0f);
+    settings_.registerBool("adaptivebandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
+        "Enable adaptive band weighting");
 
     // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",

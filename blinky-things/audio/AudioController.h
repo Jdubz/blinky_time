@@ -345,6 +345,13 @@ public:
     // Spectral flux captures energy CHANGES, RMS captures absolute levels
     float ossFluxWeight = 1.0f;  // 1.0 = pure spectral flux, 0.0 = pure RMS (legacy)
 
+    // === ADAPTIVE BAND WEIGHTING ===
+    // Dynamically adjusts band weights based on which frequency bands show strongest periodicity
+    // When enabled, bands with stronger rhythmic content get higher weights
+    // NOTE: Disabled by default - testing shows it adds noise on sustained content without
+    // consistent benefit. The fixed band weights (0.5 bass, 0.3 mid, 0.2 high) work well.
+    bool adaptiveBandWeightEnabled = false;  // Enable/disable adaptive weighting
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }
@@ -366,6 +373,10 @@ public:
     float getTempoVelocity() const { return tempoVelocity_; }
     uint32_t getNextBeatMs() const { return nextBeatMs_; }
     float getLastTempoPriorWeight() const { return lastTempoPriorWeight_; }
+
+    // Adaptive band weight debug getters
+    const float* getAdaptiveBandWeights() const { return adaptiveBandWeights_; }
+    const float* getBandPeriodicityStrength() const { return bandPeriodicityStrength_; }
 
 private:
     // === HAL REFERENCES ===
@@ -394,6 +405,18 @@ private:
     static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
     float prevMagnitudes_[SPECTRAL_BINS] = {0};
     bool prevMagnitudesValid_ = false;  // First frame has no previous
+
+    // Per-band OSS tracking for adaptive weighting
+    // Tracks periodicity strength in bass, mid, high bands independently
+    static constexpr int BAND_COUNT = 3;  // bass, mid, high
+    static constexpr int BAND_OSS_BUFFER_SIZE = 240;  // 4 seconds at 60 Hz (captures 4+ beats at 60 BPM)
+    float bandOssBuffers_[BAND_COUNT][BAND_OSS_BUFFER_SIZE] = {{0}};
+    int bandOssWriteIdx_ = 0;
+    int bandOssCount_ = 0;
+    float bandPeriodicityStrength_[BAND_COUNT] = {0};
+    float adaptiveBandWeights_[BAND_COUNT] = {0.5f, 0.3f, 0.2f};  // Default weights
+    uint32_t lastBandAutocorrMs_ = 0;
+    static constexpr uint32_t BAND_AUTOCORR_PERIOD_MS = 500;  // Run every 500ms (faster response)
 
     // Multi-hypothesis tempo tracking
     MultiHypothesisTracker multiHypothesis_;
@@ -450,7 +473,14 @@ private:
 
     // Onset strength computation
     float computeSpectralFlux(const float* magnitudes, int numBins);
+    float computeSpectralFluxBands(const float* magnitudes, int numBins,
+                                    float& bassFlux, float& midFlux, float& highFlux);
     float computeMultiBandRms(const float* magnitudes, int numBins);
+
+    // Adaptive band weighting
+    void addBandOssSamples(float bassFlux, float midFlux, float highFlux);
+    void updateBandPeriodicities(uint32_t nowMs);
+    float computeBandAutocorrelation(int band);
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

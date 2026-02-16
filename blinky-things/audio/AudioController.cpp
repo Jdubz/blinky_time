@@ -46,6 +46,20 @@ bool AudioController::begin(uint32_t sampleRate) {
     }
     prevMagnitudesValid_ = false;
 
+    // Reset per-band OSS tracking for adaptive weighting
+    for (int band = 0; band < BAND_COUNT; band++) {
+        for (int i = 0; i < BAND_OSS_BUFFER_SIZE; i++) {
+            bandOssBuffers_[band][i] = 0.0f;
+        }
+        bandPeriodicityStrength_[band] = 0.0f;
+    }
+    bandOssWriteIdx_ = 0;
+    bandOssCount_ = 0;
+    adaptiveBandWeights_[0] = 0.5f;  // Bass default
+    adaptiveBandWeights_[1] = 0.3f;  // Mid default
+    adaptiveBandWeights_[2] = 0.2f;  // High default
+    lastBandAutocorrMs_ = 0;
+
     // Reset tempo estimation
     bpm_ = 120.0f;
     beatPeriodMs_ = 500.0f;
@@ -120,6 +134,7 @@ const AudioControl& AudioController::update(float dt) {
     //    - Multi-band RMS: captures absolute levels (legacy behavior)
     //    Controlled by ossFluxWeight parameter (1.0 = pure flux, 0.0 = pure RMS)
     float onsetStrength = 0.0f;
+    float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
 
     // Get spectral data from ensemble
     const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
@@ -128,19 +143,30 @@ const AudioControl& AudioController::update(float dt) {
         const float* magnitudes = spectral.getMagnitudes();
         int numBins = spectral.getNumBins();
 
-        // Compute both methods
-        float fluxOss = computeSpectralFlux(magnitudes, numBins);
+        // Compute spectral flux with per-band outputs for adaptive weighting
+        float fluxOss = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
         float rmsOss = computeMultiBandRms(magnitudes, numBins);
 
         // Blend based on ossFluxWeight
         // ossFluxWeight = 1.0: pure spectral flux (recommended)
         // ossFluxWeight = 0.0: pure RMS (legacy behavior)
         onsetStrength = ossFluxWeight * fluxOss + (1.0f - ossFluxWeight) * rmsOss;
+
+        // Store per-band samples for adaptive weight calculation
+        if (adaptiveBandWeightEnabled) {
+            addBandOssSamples(bassFlux, midFlux, highFlux);
+        }
     } else {
         // Fallback when no spectral data: use normalized level
         onsetStrength = mic_.getLevel();
         // Reset prev magnitudes since we have no spectral data this frame
         prevMagnitudesValid_ = false;
+    }
+
+    // Update per-band periodicities periodically (every 1000ms)
+    if (adaptiveBandWeightEnabled && nowMs - lastBandAutocorrMs_ >= BAND_AUTOCORR_PERIOD_MS) {
+        updateBandPeriodicities(nowMs);
+        lastBandAutocorrMs_ = nowMs;
     }
 
     // Track when we last had significant audio
@@ -1289,6 +1315,13 @@ void AudioController::predictNextBeat(uint32_t nowMs) {
 // ============================================================================
 
 float AudioController::computeSpectralFlux(const float* magnitudes, int numBins) {
+    // Wrapper for backward compatibility - discards per-band outputs
+    float bassFlux, midFlux, highFlux;
+    return computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
+}
+
+float AudioController::computeSpectralFluxBands(const float* magnitudes, int numBins,
+                                                 float& outBassFlux, float& outMidFlux, float& outHighFlux) {
     // Band-weighted half-wave rectified spectral flux
     // Captures frame-to-frame energy INCREASES only (onsets, not decays)
     //
@@ -1298,11 +1331,11 @@ float AudioController::computeSpectralFlux(const float* magnitudes, int numBins)
     // - Transient hits have high flux at onset, then low flux during decay
     // - Beat timing correlates with flux peaks, not energy peaks
     //
-    // Band weighting matches RMS approach: emphasize bass/mid where rhythm occurs
+    // Band weighting: use adaptive weights if enabled, otherwise fixed defaults
     // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
-    // Bass: bins 1-10 (62.5Hz-625Hz) - weight 0.5
-    // Mid: bins 11-40 (687.5Hz-2.5kHz) - weight 0.3
-    // High: bins 41-127 (2.56kHz-7.94kHz) - weight 0.2
+    // Bass: bins 1-10 (62.5Hz-625Hz)
+    // Mid: bins 11-40 (687.5Hz-2.5kHz)
+    // High: bins 41-127 (2.56kHz-7.94kHz)
 
     float bassFlux = 0.0f;
     float midFlux = 0.0f;
@@ -1352,8 +1385,21 @@ float AudioController::computeSpectralFlux(const float* magnitudes, int numBins)
     }
     prevMagnitudesValid_ = true;
 
-    // Weighted sum: emphasize bass and mid for rhythm (matches RMS weighting)
-    float flux = 0.5f * bassFlux + 0.3f * midFlux + 0.2f * highFlux;
+    // Output individual band fluxes (pre-compression) for adaptive weighting
+    outBassFlux = bassFlux;
+    outMidFlux = midFlux;
+    outHighFlux = highFlux;
+
+    // Weighted sum: use adaptive weights if enabled, otherwise fixed defaults
+    float flux;
+    if (adaptiveBandWeightEnabled) {
+        flux = adaptiveBandWeights_[0] * bassFlux +
+               adaptiveBandWeights_[1] * midFlux +
+               adaptiveBandWeights_[2] * highFlux;
+    } else {
+        // Fixed default weights
+        flux = 0.5f * bassFlux + 0.3f * midFlux + 0.2f * highFlux;
+    }
 
     // Apply log compression for dynamic range
     // Maps flux to 0-1 range with soft knee at low values
@@ -1397,4 +1443,163 @@ float AudioController::computeMultiBandRms(const float* magnitudes, int numBins)
 
     // Weighted sum: emphasize bass and mid for rhythm (where most beats occur)
     return 0.5f * bassEnergy + 0.3f * midEnergy + 0.2f * highEnergy;
+}
+
+// ============================================================================
+// Adaptive Band Weighting Methods
+// ============================================================================
+
+void AudioController::addBandOssSamples(float bassFlux, float midFlux, float highFlux) {
+    // Store per-band flux values in circular buffers
+    bandOssBuffers_[0][bandOssWriteIdx_] = bassFlux;
+    bandOssBuffers_[1][bandOssWriteIdx_] = midFlux;
+    bandOssBuffers_[2][bandOssWriteIdx_] = highFlux;
+
+    bandOssWriteIdx_ = (bandOssWriteIdx_ + 1) % BAND_OSS_BUFFER_SIZE;
+    if (bandOssCount_ < BAND_OSS_BUFFER_SIZE) {
+        bandOssCount_++;
+    }
+}
+
+float AudioController::computeBandAutocorrelation(int band) {
+    // Simplified autocorrelation for a single band
+    // Returns the maximum correlation strength in the valid BPM range
+    //
+    // We use the user's bpmMin/bpmMax settings for the lag range
+
+    // Bounds check
+    if (band < 0 || band >= BAND_COUNT) {
+        return 0.0f;
+    }
+
+    // Need at least 2 seconds of data for meaningful autocorrelation
+    if (bandOssCount_ < 120) {
+        return 0.0f;  // Not enough data
+    }
+
+    const float* buffer = bandOssBuffers_[band];
+
+    // Number of valid samples to use
+    int validCount = bandOssCount_;
+
+    // Estimate frame rate from buffer timing (assume ~60 Hz)
+    const float frameRate = 60.0f;
+
+    // Use user's BPM range settings for lag calculation
+    // At 60 Hz: 60 BPM = 60 frames/beat, 200 BPM = 18 frames/beat
+    int minLag = static_cast<int>(frameRate * 60.0f / bpmMax);  // Faster tempo = shorter lag
+    int maxLag = static_cast<int>(frameRate * 60.0f / bpmMin);  // Slower tempo = longer lag
+
+    // Clamp to buffer size (need at least lag samples for correlation)
+    if (maxLag > validCount / 2) maxLag = validCount / 2;
+    if (minLag < 1) minLag = 1;
+    if (maxLag <= minLag) {
+        return 0.0f;  // Invalid range
+    }
+
+    float maxCorr = 0.0f;
+
+    // Compute mean for normalization using circular buffer indexing
+    float mean = 0.0f;
+    for (int i = 0; i < validCount; i++) {
+        int idx = (bandOssWriteIdx_ - 1 - i + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+        mean += buffer[idx];
+    }
+    mean /= static_cast<float>(validCount);
+
+    // Compute variance for normalization
+    float variance = 0.0f;
+    for (int i = 0; i < validCount; i++) {
+        int idx = (bandOssWriteIdx_ - 1 - i + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+        float diff = buffer[idx] - mean;
+        variance += diff * diff;
+    }
+    if (variance < 0.0001f) {
+        return 0.0f;  // No signal variation
+    }
+
+    // Test lags in BPM range
+    for (int lag = minLag; lag <= maxLag; lag++) {
+        float correlation = 0.0f;
+        int count = 0;
+
+        for (int i = 0; i < validCount - lag; i++) {
+            int idx1 = (bandOssWriteIdx_ - 1 - i + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+            int idx2 = (idx1 - lag + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+            correlation += (buffer[idx1] - mean) * (buffer[idx2] - mean);
+            count++;
+        }
+
+        if (count > 0) {
+            correlation /= variance;  // Normalize
+            if (correlation > maxCorr) {
+                maxCorr = correlation;
+            }
+        }
+    }
+
+    return maxCorr;
+}
+
+void AudioController::updateBandPeriodicities(uint32_t nowMs) {
+    (void)nowMs;  // Unused for now
+
+    // Run simplified autocorrelation on each band
+    for (int band = 0; band < BAND_COUNT; band++) {
+        float maxCorr = computeBandAutocorrelation(band);
+
+        // Faster EMA convergence (0.5/0.5) - responds in ~2 updates
+        bandPeriodicityStrength_[band] =
+            0.5f * bandPeriodicityStrength_[band] + 0.5f * maxCorr;
+    }
+
+    // Normalize weights based on periodicity strength
+    float totalStrength = 0.0f;
+    float maxStrength = 0.0f;
+    for (int i = 0; i < BAND_COUNT; i++) {
+        totalStrength += bandPeriodicityStrength_[i];
+        if (bandPeriodicityStrength_[i] > maxStrength) {
+            maxStrength = bandPeriodicityStrength_[i];
+        }
+    }
+
+    // Default weights (used when no clear periodicity)
+    const float defaultWeights[BAND_COUNT] = {0.5f, 0.3f, 0.2f};
+
+    // Only use adaptive weighting when there's STRONG periodicity
+    // Weak periodicity = noise, so stick to defaults
+    // Average strength > 0.3 indicates clear rhythm in at least one band
+    float avgStrength = totalStrength / BAND_COUNT;
+
+    if (totalStrength > 0.1f && avgStrength > 0.25f) {
+        // Calculate how "differentiated" the bands are
+        // If one band dominates, use more adaptive weighting
+        // If all bands are similar, stick closer to defaults
+        float dominance = (maxStrength / totalStrength) * BAND_COUNT;  // 1.0 = equal, 3.0 = one dominates
+
+        // Scale adaptive blend by both dominance AND absolute strength
+        // Strong periodicity + clear dominance = high adaptive blend
+        float strengthFactor = clampf((avgStrength - 0.25f) / 0.5f, 0.0f, 1.0f);  // 0-1 based on strength
+        float dominanceFactor = clampf((dominance - 1.0f) / 2.0f, 0.0f, 1.0f);    // 0-1 based on dominance
+        float adaptiveBlend = strengthFactor * dominanceFactor * 0.8f;  // Max 80% adaptive
+
+        // Blend: more adaptive when rhythm is strong AND one band dominates
+        for (int i = 0; i < BAND_COUNT; i++) {
+            float adaptiveWeight = bandPeriodicityStrength_[i] / totalStrength;
+            adaptiveBandWeights_[i] = adaptiveBlend * adaptiveWeight + (1.0f - adaptiveBlend) * defaultWeights[i];
+        }
+
+        // Ensure weights sum to 1.0
+        float weightSum = adaptiveBandWeights_[0] + adaptiveBandWeights_[1] + adaptiveBandWeights_[2];
+        if (weightSum > 0.0f) {
+            for (int i = 0; i < BAND_COUNT; i++) {
+                adaptiveBandWeights_[i] /= weightSum;
+            }
+        }
+    } else {
+        // Not enough periodicity detected - use defaults
+        for (int i = 0; i < BAND_COUNT; i++) {
+            adaptiveBandWeights_[i] = defaultWeights[i];
+        }
+    }
 }
