@@ -348,9 +348,9 @@ public:
     // === ADAPTIVE BAND WEIGHTING ===
     // Dynamically adjusts band weights based on which frequency bands show strongest periodicity
     // When enabled, bands with stronger rhythmic content get higher weights
-    // NOTE: Disabled by default - testing shows it adds noise on sustained content without
-    // consistent benefit. The fixed band weights (0.5 bass, 0.3 mid, 0.2 high) work well.
-    bool adaptiveBandWeightEnabled = false;  // Enable/disable adaptive weighting
+    // Uses SuperFlux-style max filtering, cross-band correlation, and peakiness detection
+    // to distinguish real beats from vibrato/tremolo in sustained content
+    bool adaptiveBandWeightEnabled = true;  // Enable/disable adaptive weighting
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -418,6 +418,19 @@ private:
     uint32_t lastBandAutocorrMs_ = 0;
     static constexpr uint32_t BAND_AUTOCORR_PERIOD_MS = 500;  // Run every 500ms (faster response)
 
+    // Cross-band correlation tracking (SuperFlux-inspired)
+    // Measures how synchronized the bands are - real beats correlate across bands
+    float crossBandCorrelation_[BAND_COUNT] = {0};  // Correlation of each band with others
+    float bandSynchrony_ = 0.0f;  // Overall synchrony metric (0-1)
+
+    // Peakiness tracking - distinguishes transient bursts from continuous vibrato
+    // Transients: sparse, high peaks (high peakiness)
+    // Vibrato: continuous, low-level fluctuations (low peakiness)
+    float bandPeakiness_[BAND_COUNT] = {0};
+
+    // Maximum-filtered previous magnitudes for vibrato suppression (SuperFlux style)
+    float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};
+
     // Multi-hypothesis tempo tracking
     MultiHypothesisTracker multiHypothesis_;
 
@@ -481,6 +494,9 @@ private:
     void addBandOssSamples(float bassFlux, float midFlux, float highFlux);
     void updateBandPeriodicities(uint32_t nowMs);
     float computeBandAutocorrelation(int band);
+    void computeCrossBandCorrelation();
+    void computeBandPeakiness();
+    void applyMaxFilter(float* magnitudes, int numBins);
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

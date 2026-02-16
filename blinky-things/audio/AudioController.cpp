@@ -52,6 +52,8 @@ bool AudioController::begin(uint32_t sampleRate) {
             bandOssBuffers_[band][i] = 0.0f;
         }
         bandPeriodicityStrength_[band] = 0.0f;
+        crossBandCorrelation_[band] = 0.0f;
+        bandPeakiness_[band] = 0.0f;
     }
     bandOssWriteIdx_ = 0;
     bandOssCount_ = 0;
@@ -59,6 +61,12 @@ bool AudioController::begin(uint32_t sampleRate) {
     adaptiveBandWeights_[1] = 0.3f;  // Mid default
     adaptiveBandWeights_[2] = 0.2f;  // High default
     lastBandAutocorrMs_ = 0;
+    bandSynchrony_ = 0.0f;
+
+    // Reset max-filtered previous magnitudes (SuperFlux vibrato suppression)
+    for (int i = 0; i < SPECTRAL_BINS; i++) {
+        maxFilteredPrevMags_[i] = 0.0f;
+    }
 
     // Reset tempo estimation
     bpm_ = 120.0f;
@@ -1322,14 +1330,13 @@ float AudioController::computeSpectralFlux(const float* magnitudes, int numBins)
 
 float AudioController::computeSpectralFluxBands(const float* magnitudes, int numBins,
                                                  float& outBassFlux, float& outMidFlux, float& outHighFlux) {
-    // Band-weighted half-wave rectified spectral flux
+    // Band-weighted half-wave rectified spectral flux with SuperFlux-style vibrato suppression
     // Captures frame-to-frame energy INCREASES only (onsets, not decays)
     //
-    // Unlike RMS which measures absolute energy levels, spectral flux measures
-    // the rate of spectral change. This is more useful for beat tracking because:
-    // - Sustained pads have high RMS but low flux (no change)
-    // - Transient hits have high flux at onset, then low flux during decay
-    // - Beat timing correlates with flux peaks, not energy peaks
+    // Key insight from SuperFlux (Böck & Widmer, DAFx 2013):
+    // - Vibrato causes narrow-band periodic fluctuations
+    // - Maximum filtering across adjacent bins smooths these out
+    // - Broadband transients (real beats) are preserved
     //
     // Band weighting: use adaptive weights if enabled, otherwise fixed defaults
     // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
@@ -1348,25 +1355,30 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
     int binsUsed = numBins < SPECTRAL_BINS ? numBins : SPECTRAL_BINS;
 
     if (prevMagnitudesValid_) {
-        // Bass band: bins 1-10
+        // SuperFlux-style vibrato suppression:
+        // Compare current magnitude against MAX of previous neighboring bins
+        // This suppresses narrow-band fluctuations (vibrato) while preserving broadband transients
+
+        // Bass band: bins 1-10 (use max_size=1 for bass, less vibrato there)
         for (int i = 1; i < 11 && i < binsUsed; i++) {
-            float diff = magnitudes[i] - prevMagnitudes_[i];
+            // Use max-filtered previous value (vibrato suppression)
+            float diff = magnitudes[i] - maxFilteredPrevMags_[i];
             if (diff > FLUX_NOISE_FLOOR) {  // Half-wave rectify with noise gate
                 bassFlux += diff;
             }
             bassBinCount++;
         }
-        // Mid band: bins 11-40
+        // Mid band: bins 11-40 (primary vibrato region, use max filter)
         for (int i = 11; i < 41 && i < binsUsed; i++) {
-            float diff = magnitudes[i] - prevMagnitudes_[i];
+            float diff = magnitudes[i] - maxFilteredPrevMags_[i];
             if (diff > FLUX_NOISE_FLOOR) {
                 midFlux += diff;
             }
             midBinCount++;
         }
-        // High band: bins 41+
+        // High band: bins 41+ (tremolo/vibrato common here too)
         for (int i = 41; i < binsUsed; i++) {
-            float diff = magnitudes[i] - prevMagnitudes_[i];
+            float diff = magnitudes[i] - maxFilteredPrevMags_[i];
             if (diff > FLUX_NOISE_FLOOR) {
                 highFlux += diff;
             }
@@ -1379,9 +1391,23 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
         if (highBinCount > 0) highFlux /= static_cast<float>(highBinCount);
     }
 
-    // Store current frame for next comparison
+    // Store current frame for next comparison (with max filtering for vibrato suppression)
     for (int i = 0; i < binsUsed; i++) {
         prevMagnitudes_[i] = magnitudes[i];
+    }
+    // Apply max filter: each bin becomes max of itself and neighbors
+    // This is the key SuperFlux insight - vibrato affects single bins,
+    // but real onsets affect multiple adjacent bins
+    for (int i = 1; i < binsUsed - 1; i++) {
+        float maxVal = prevMagnitudes_[i];
+        if (prevMagnitudes_[i - 1] > maxVal) maxVal = prevMagnitudes_[i - 1];
+        if (prevMagnitudes_[i + 1] > maxVal) maxVal = prevMagnitudes_[i + 1];
+        maxFilteredPrevMags_[i] = maxVal;
+    }
+    // Edge bins: just copy
+    maxFilteredPrevMags_[0] = prevMagnitudes_[0];
+    if (binsUsed > 1) {
+        maxFilteredPrevMags_[binsUsed - 1] = prevMagnitudes_[binsUsed - 1];
     }
     prevMagnitudesValid_ = true;
 
@@ -1541,10 +1567,130 @@ float AudioController::computeBandAutocorrelation(int band) {
     return maxCorr;
 }
 
+void AudioController::computeCrossBandCorrelation() {
+    // Cross-band correlation: measure how synchronized the bands are
+    // Real beats cause correlated peaks across multiple bands
+    // Vibrato/tremolo affects individual bands independently
+    //
+    // For each band, compute correlation with the sum of other bands
+    // High correlation = this band's periodicity is synchronized with others
+
+    if (bandOssCount_ < 60) {
+        // Not enough data
+        for (int i = 0; i < BAND_COUNT; i++) {
+            crossBandCorrelation_[i] = 0.0f;
+        }
+        bandSynchrony_ = 0.0f;
+        return;
+    }
+
+    // Compute mean of each band
+    float bandMeans[BAND_COUNT] = {0};
+    for (int band = 0; band < BAND_COUNT; band++) {
+        for (int i = 0; i < bandOssCount_; i++) {
+            int idx = (bandOssWriteIdx_ - 1 - i + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+            bandMeans[band] += bandOssBuffers_[band][idx];
+        }
+        bandMeans[band] /= static_cast<float>(bandOssCount_);
+    }
+
+    // Compute variance of each band
+    float bandVariances[BAND_COUNT] = {0};
+    for (int band = 0; band < BAND_COUNT; band++) {
+        for (int i = 0; i < bandOssCount_; i++) {
+            int idx = (bandOssWriteIdx_ - 1 - i + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+            float diff = bandOssBuffers_[band][idx] - bandMeans[band];
+            bandVariances[band] += diff * diff;
+        }
+    }
+
+    // Compute correlation of each band with sum of others
+    float totalCorr = 0.0f;
+    for (int band = 0; band < BAND_COUNT; band++) {
+        if (bandVariances[band] < 0.0001f) {
+            crossBandCorrelation_[band] = 0.0f;
+            continue;
+        }
+
+        // Sum of other bands
+        float otherVariance = 0.0f;
+        float covariance = 0.0f;
+
+        for (int i = 0; i < bandOssCount_; i++) {
+            int idx = (bandOssWriteIdx_ - 1 - i + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+            float thisVal = bandOssBuffers_[band][idx] - bandMeans[band];
+
+            // Sum of other bands at this sample
+            float otherSum = 0.0f;
+            float otherMeanSum = 0.0f;
+            for (int other = 0; other < BAND_COUNT; other++) {
+                if (other != band) {
+                    otherSum += bandOssBuffers_[other][idx];
+                    otherMeanSum += bandMeans[other];
+                }
+            }
+            float otherVal = otherSum - otherMeanSum;
+            covariance += thisVal * otherVal;
+            otherVariance += otherVal * otherVal;
+        }
+
+        if (otherVariance > 0.0001f) {
+            float correlation = covariance / sqrtf(bandVariances[band] * otherVariance);
+            crossBandCorrelation_[band] = clampf(correlation, 0.0f, 1.0f);
+        } else {
+            crossBandCorrelation_[band] = 0.0f;
+        }
+
+        totalCorr += crossBandCorrelation_[band];
+    }
+
+    // Overall synchrony = average cross-band correlation
+    bandSynchrony_ = totalCorr / BAND_COUNT;
+}
+
+void AudioController::computeBandPeakiness() {
+    // Peakiness: ratio of peak values to RMS
+    // Transients: sparse, high peaks (high peakiness)
+    // Vibrato: continuous, low-level fluctuations (low peakiness)
+    //
+    // Crest factor = peak / RMS
+    // High crest factor indicates impulsive/transient signals
+
+    if (bandOssCount_ < 60) {
+        for (int i = 0; i < BAND_COUNT; i++) {
+            bandPeakiness_[i] = 0.0f;
+        }
+        return;
+    }
+
+    for (int band = 0; band < BAND_COUNT; band++) {
+        float sumSquares = 0.0f;
+        float maxVal = 0.0f;
+
+        for (int i = 0; i < bandOssCount_; i++) {
+            int idx = (bandOssWriteIdx_ - 1 - i + BAND_OSS_BUFFER_SIZE) % BAND_OSS_BUFFER_SIZE;
+            float val = bandOssBuffers_[band][idx];
+            sumSquares += val * val;
+            if (val > maxVal) maxVal = val;
+        }
+
+        float rms = sqrtf(sumSquares / static_cast<float>(bandOssCount_));
+        if (rms > 0.001f) {
+            // Crest factor, normalized to 0-1 range
+            // Typical crest factor: 1.4 (sine) to 10+ (impulsive)
+            // Map: 1.5 -> 0, 5.0 -> 1
+            float crestFactor = maxVal / rms;
+            bandPeakiness_[band] = clampf((crestFactor - 1.5f) / 3.5f, 0.0f, 1.0f);
+        } else {
+            bandPeakiness_[band] = 0.0f;
+        }
+    }
+}
+
 void AudioController::updateBandPeriodicities(uint32_t nowMs) {
     (void)nowMs;  // Unused for now
 
-    // Run simplified autocorrelation on each band
+    // Step 1: Run autocorrelation on each band
     for (int band = 0; band < BAND_COUNT; band++) {
         float maxCorr = computeBandAutocorrelation(band);
 
@@ -1553,39 +1699,64 @@ void AudioController::updateBandPeriodicities(uint32_t nowMs) {
             0.5f * bandPeriodicityStrength_[band] + 0.5f * maxCorr;
     }
 
-    // Normalize weights based on periodicity strength
-    float totalStrength = 0.0f;
-    float maxStrength = 0.0f;
+    // Step 2: Compute cross-band correlation (sustained sound rejection)
+    computeCrossBandCorrelation();
+
+    // Step 3: Compute peakiness (transient vs sustained classification)
+    computeBandPeakiness();
+
+    // Step 4: Combine metrics for final weight calculation
+    // Key insight: Only trust periodicity when:
+    // - Bands are synchronized (real beats hit multiple bands)
+    // - Signal is peaky (transients, not vibrato)
+
+    // Default weights (used when no clear rhythmic periodicity)
+    const float defaultWeights[BAND_COUNT] = {0.5f, 0.3f, 0.2f};
+
+    // Calculate effective strength: periodicity × cross-band-correlation × peakiness
+    // This suppresses vibrato (low cross-band-corr) and tremolo (low peakiness)
+    float effectiveStrength[BAND_COUNT];
+    float totalEffective = 0.0f;
+    float maxEffective = 0.0f;
+
     for (int i = 0; i < BAND_COUNT; i++) {
-        totalStrength += bandPeriodicityStrength_[i];
-        if (bandPeriodicityStrength_[i] > maxStrength) {
-            maxStrength = bandPeriodicityStrength_[i];
+        // Multiplicative combination:
+        // - High periodicity alone is NOT enough (could be vibrato)
+        // - Need cross-band correlation (real beats hit multiple bands)
+        // - Prefer peaky signals (transients, not continuous)
+        float syncFactor = 0.3f + 0.7f * crossBandCorrelation_[i];  // 0.3-1.0
+        float peakFactor = 0.5f + 0.5f * bandPeakiness_[i];         // 0.5-1.0
+
+        effectiveStrength[i] = bandPeriodicityStrength_[i] * syncFactor * peakFactor;
+        totalEffective += effectiveStrength[i];
+
+        if (effectiveStrength[i] > maxEffective) {
+            maxEffective = effectiveStrength[i];
         }
     }
 
-    // Default weights (used when no clear periodicity)
-    const float defaultWeights[BAND_COUNT] = {0.5f, 0.3f, 0.2f};
+    // Only use adaptive weighting when there's STRONG effective periodicity
+    // AND good band synchrony (indicates real beat, not vibrato)
+    float avgEffective = totalEffective / BAND_COUNT;
 
-    // Only use adaptive weighting when there's STRONG periodicity
-    // Weak periodicity = noise, so stick to defaults
-    // Average strength > 0.3 indicates clear rhythm in at least one band
-    float avgStrength = totalStrength / BAND_COUNT;
+    if (totalEffective > 0.1f && avgEffective > 0.15f && bandSynchrony_ > 0.3f) {
+        // Calculate dominance factor
+        float dominance = (maxEffective / totalEffective) * BAND_COUNT;  // 1.0 = equal, 3.0 = one dominates
 
-    if (totalStrength > 0.1f && avgStrength > 0.25f) {
-        // Calculate how "differentiated" the bands are
-        // If one band dominates, use more adaptive weighting
-        // If all bands are similar, stick closer to defaults
-        float dominance = (maxStrength / totalStrength) * BAND_COUNT;  // 1.0 = equal, 3.0 = one dominates
+        // Scale adaptive blend by:
+        // - Effective strength (periodicity × sync × peakiness)
+        // - Dominance (one band clearly leads)
+        // - Overall synchrony (bands correlate)
+        float strengthFactor = clampf((avgEffective - 0.15f) / 0.35f, 0.0f, 1.0f);
+        float dominanceFactor = clampf((dominance - 1.0f) / 2.0f, 0.0f, 1.0f);
+        float syncFactor = clampf((bandSynchrony_ - 0.3f) / 0.4f, 0.0f, 1.0f);
 
-        // Scale adaptive blend by both dominance AND absolute strength
-        // Strong periodicity + clear dominance = high adaptive blend
-        float strengthFactor = clampf((avgStrength - 0.25f) / 0.5f, 0.0f, 1.0f);  // 0-1 based on strength
-        float dominanceFactor = clampf((dominance - 1.0f) / 2.0f, 0.0f, 1.0f);    // 0-1 based on dominance
-        float adaptiveBlend = strengthFactor * dominanceFactor * 0.8f;  // Max 80% adaptive
+        // Require all three factors to be good for full adaptive weighting
+        float adaptiveBlend = strengthFactor * dominanceFactor * syncFactor * 0.7f;  // Max 70% adaptive
 
-        // Blend: more adaptive when rhythm is strong AND one band dominates
+        // Blend: more adaptive when all conditions are met
         for (int i = 0; i < BAND_COUNT; i++) {
-            float adaptiveWeight = bandPeriodicityStrength_[i] / totalStrength;
+            float adaptiveWeight = effectiveStrength[i] / totalEffective;
             adaptiveBandWeights_[i] = adaptiveBlend * adaptiveWeight + (1.0f - adaptiveBlend) * defaultWeights[i];
         }
 
@@ -1597,7 +1768,8 @@ void AudioController::updateBandPeriodicities(uint32_t nowMs) {
             }
         }
     } else {
-        // Not enough periodicity detected - use defaults
+        // Conditions not met (low sync, low peakiness, etc.) - use defaults
+        // This is the key improvement: sustained content fails these checks
         for (int i = 0; i < BAND_COUNT; i++) {
             adaptiveBandWeights_[i] = defaultWeights[i];
         }
