@@ -224,13 +224,14 @@ React Components
 
 **ALWAYS use `run_test` for pattern testing** - it automatically:
 1. Connects to the device
-2. Locks gain (if specified)
-3. Plays the pattern and records detections
-4. Disconnects when complete
+2. Plays the pattern and records detections
+3. Disconnects when complete
 
 ```
-run_test(pattern: "steady-120bpm", port: "COM11", gain: 40)
+run_test(pattern: "steady-120bpm", port: "COM11")
 ```
+
+**DO NOT lock gain** - Let the AGC auto-adapt for realistic testing conditions. Only use the `gain` parameter in rare cases where you need to isolate AGC behavior specifically.
 
 **DO NOT manually connect/disconnect** - Using separate `connect`, `stream_start`, `start_test`, `stop_test`, `disconnect` calls:
 - Risks leaving the port locked if an error occurs

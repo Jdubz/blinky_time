@@ -340,6 +340,11 @@ public:
     float tempoSmoothingFactor = 0.85f; // Higher = smoother, slower adaptation (0-1)
     float tempoChangeThreshold = 0.1f;  // Min BPM change ratio to trigger update
 
+    // === ONSET STRENGTH SIGNAL (OSS) GENERATION ===
+    // Controls how the onset strength signal is computed for autocorrelation
+    // Spectral flux captures energy CHANGES, RMS captures absolute levels
+    float ossFluxWeight = 1.0f;  // 1.0 = pure spectral flux, 0.0 = pure RMS (legacy)
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }
@@ -384,6 +389,11 @@ private:
     uint32_t ossTimestamps_[OSS_BUFFER_SIZE] = {0};  // Track actual timestamps for adaptive lag
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
+
+    // Spectral flux: previous frame magnitudes for frame-to-frame comparison
+    static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
+    float prevMagnitudes_[SPECTRAL_BINS] = {0};
+    bool prevMagnitudesValid_ = false;  // First frame has no previous
 
     // Multi-hypothesis tempo tracking
     MultiHypothesisTracker multiHypothesis_;
@@ -437,6 +447,10 @@ private:
     void runAutocorrelation(uint32_t nowMs);
     void updatePhase(float dt, uint32_t nowMs);
     void updateTransientPhaseCorrection(float transientStrength, uint32_t nowMs);
+
+    // Onset strength computation
+    float computeSpectralFlux(const float* magnitudes, int numBins);
+    float computeMultiBandRms(const float* magnitudes, int numBins);
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

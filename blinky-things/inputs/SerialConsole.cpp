@@ -231,6 +231,10 @@ void SerialConsole::registerEnsembleSettings() {
 void SerialConsole::registerRhythmSettings() {
     if (!audioCtrl_) return;
 
+    // Onset strength signal (OSS) generation
+    settings_.registerFloat("ossfluxweight", &audioCtrl_->ossFluxWeight, "rhythm",
+        "OSS flux weight (1=flux, 0=RMS)", 0.0f, 1.0f);
+
     // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
         "Rhythm activation threshold (0-1)", 0.0f, 1.0f);

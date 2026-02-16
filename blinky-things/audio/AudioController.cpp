@@ -40,6 +40,12 @@ bool AudioController::begin(uint32_t sampleRate) {
     ossWriteIdx_ = 0;
     ossCount_ = 0;
 
+    // Reset spectral flux state
+    for (int i = 0; i < SPECTRAL_BINS; i++) {
+        prevMagnitudes_[i] = 0.0f;
+    }
+    prevMagnitudesValid_ = false;
+
     // Reset tempo estimation
     bpm_ = 120.0f;
     beatPeriodMs_ = 500.0f;
@@ -107,8 +113,12 @@ const AudioControl& AudioController::update(float dt) {
         dt
     );
 
-    // 4. Get onset strength for rhythm analysis using multi-band RMS energy
+    // 4. Get onset strength for rhythm analysis
     //    This is INDEPENDENT of transient detection - analyzes energy patterns
+    //    Two methods available:
+    //    - Spectral flux: captures energy CHANGES (better for beat timing)
+    //    - Multi-band RMS: captures absolute levels (legacy behavior)
+    //    Controlled by ossFluxWeight parameter (1.0 = pure flux, 0.0 = pure RMS)
     float onsetStrength = 0.0f;
 
     // Get spectral data from ensemble
@@ -118,37 +128,19 @@ const AudioControl& AudioController::update(float dt) {
         const float* magnitudes = spectral.getMagnitudes();
         int numBins = spectral.getNumBins();
 
-        // Multi-band RMS energy calculation
-        // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
-        // Bass: bins 1-10 (62.5Hz-625Hz), Mid: bins 11-40 (687.5Hz-2.5kHz), High: bins 41-127 (2.56kHz-7.94kHz)
-        float bassEnergy = 0.0f;
-        float midEnergy = 0.0f;
-        float highEnergy = 0.0f;
-        int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
+        // Compute both methods
+        float fluxOss = computeSpectralFlux(magnitudes, numBins);
+        float rmsOss = computeMultiBandRms(magnitudes, numBins);
 
-        for (int i = 1; i < 11 && i < numBins; i++) {
-            bassEnergy += magnitudes[i] * magnitudes[i];
-            bassBinCount++;
-        }
-        for (int i = 11; i < 41 && i < numBins; i++) {
-            midEnergy += magnitudes[i] * magnitudes[i];
-            midBinCount++;
-        }
-        for (int i = 41; i < numBins; i++) {  // Extended to Nyquist for complete spectral coverage
-            highEnergy += magnitudes[i] * magnitudes[i];
-            highBinCount++;
-        }
-
-        // RMS (root mean square) - use actual bin count for accurate normalization
-        bassEnergy = bassBinCount > 0 ? sqrtf(bassEnergy / (float)bassBinCount) : 0.0f;
-        midEnergy = midBinCount > 0 ? sqrtf(midEnergy / (float)midBinCount) : 0.0f;
-        highEnergy = highBinCount > 0 ? sqrtf(highEnergy / (float)highBinCount) : 0.0f;
-
-        // Weighted sum: emphasize bass and mid for rhythm (where most beats occur)
-        onsetStrength = 0.5f * bassEnergy + 0.3f * midEnergy + 0.2f * highEnergy;
+        // Blend based on ossFluxWeight
+        // ossFluxWeight = 1.0: pure spectral flux (recommended)
+        // ossFluxWeight = 0.0: pure RMS (legacy behavior)
+        onsetStrength = ossFluxWeight * fluxOss + (1.0f - ossFluxWeight) * rmsOss;
     } else {
         // Fallback when no spectral data: use normalized level
         onsetStrength = mic_.getLevel();
+        // Reset prev magnitudes since we have no spectral data this frame
+        prevMagnitudesValid_ = false;
     }
 
     // Track when we last had significant audio
@@ -1290,4 +1282,119 @@ void AudioController::predictNextBeat(uint32_t nowMs) {
     } else {
         nextBeatMs_ = nowMs + static_cast<uint32_t>(offsetMs);
     }
+}
+
+// ============================================================================
+// Onset Strength Computation Methods
+// ============================================================================
+
+float AudioController::computeSpectralFlux(const float* magnitudes, int numBins) {
+    // Band-weighted half-wave rectified spectral flux
+    // Captures frame-to-frame energy INCREASES only (onsets, not decays)
+    //
+    // Unlike RMS which measures absolute energy levels, spectral flux measures
+    // the rate of spectral change. This is more useful for beat tracking because:
+    // - Sustained pads have high RMS but low flux (no change)
+    // - Transient hits have high flux at onset, then low flux during decay
+    // - Beat timing correlates with flux peaks, not energy peaks
+    //
+    // Band weighting matches RMS approach: emphasize bass/mid where rhythm occurs
+    // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
+    // Bass: bins 1-10 (62.5Hz-625Hz) - weight 0.5
+    // Mid: bins 11-40 (687.5Hz-2.5kHz) - weight 0.3
+    // High: bins 41-127 (2.56kHz-7.94kHz) - weight 0.2
+
+    float bassFlux = 0.0f;
+    float midFlux = 0.0f;
+    float highFlux = 0.0f;
+    int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
+
+    // Noise floor threshold - ignore tiny fluctuations in sustained content
+    const float FLUX_NOISE_FLOOR = 0.005f;
+
+    int binsUsed = numBins < SPECTRAL_BINS ? numBins : SPECTRAL_BINS;
+
+    if (prevMagnitudesValid_) {
+        // Bass band: bins 1-10
+        for (int i = 1; i < 11 && i < binsUsed; i++) {
+            float diff = magnitudes[i] - prevMagnitudes_[i];
+            if (diff > FLUX_NOISE_FLOOR) {  // Half-wave rectify with noise gate
+                bassFlux += diff;
+            }
+            bassBinCount++;
+        }
+        // Mid band: bins 11-40
+        for (int i = 11; i < 41 && i < binsUsed; i++) {
+            float diff = magnitudes[i] - prevMagnitudes_[i];
+            if (diff > FLUX_NOISE_FLOOR) {
+                midFlux += diff;
+            }
+            midBinCount++;
+        }
+        // High band: bins 41+
+        for (int i = 41; i < binsUsed; i++) {
+            float diff = magnitudes[i] - prevMagnitudes_[i];
+            if (diff > FLUX_NOISE_FLOOR) {
+                highFlux += diff;
+            }
+            highBinCount++;
+        }
+
+        // Normalize each band by bin count
+        if (bassBinCount > 0) bassFlux /= static_cast<float>(bassBinCount);
+        if (midBinCount > 0) midFlux /= static_cast<float>(midBinCount);
+        if (highBinCount > 0) highFlux /= static_cast<float>(highBinCount);
+    }
+
+    // Store current frame for next comparison
+    for (int i = 0; i < binsUsed; i++) {
+        prevMagnitudes_[i] = magnitudes[i];
+    }
+    prevMagnitudesValid_ = true;
+
+    // Weighted sum: emphasize bass and mid for rhythm (matches RMS weighting)
+    float flux = 0.5f * bassFlux + 0.3f * midFlux + 0.2f * highFlux;
+
+    // Apply log compression for dynamic range
+    // Maps flux to 0-1 range with soft knee at low values
+    // log(1 + x*10) / log(11) maps [0, 1] -> [0, 1] with compression
+    float compressed = logf(1.0f + flux * 10.0f) / logf(11.0f);
+
+    return compressed;
+}
+
+float AudioController::computeMultiBandRms(const float* magnitudes, int numBins) {
+    // Legacy multi-band RMS energy calculation
+    // Kept for comparison and fallback
+    //
+    // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
+    // Bass: bins 1-10 (62.5Hz-625Hz)
+    // Mid: bins 11-40 (687.5Hz-2.5kHz)
+    // High: bins 41-127 (2.56kHz-7.94kHz)
+
+    float bassEnergy = 0.0f;
+    float midEnergy = 0.0f;
+    float highEnergy = 0.0f;
+    int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
+
+    for (int i = 1; i < 11 && i < numBins; i++) {
+        bassEnergy += magnitudes[i] * magnitudes[i];
+        bassBinCount++;
+    }
+    for (int i = 11; i < 41 && i < numBins; i++) {
+        midEnergy += magnitudes[i] * magnitudes[i];
+        midBinCount++;
+    }
+    for (int i = 41; i < numBins; i++) {
+        highEnergy += magnitudes[i] * magnitudes[i];
+        highBinCount++;
+    }
+
+    // RMS (root mean square) - use actual bin count for accurate normalization
+    bassEnergy = bassBinCount > 0 ? sqrtf(bassEnergy / static_cast<float>(bassBinCount)) : 0.0f;
+    midEnergy = midBinCount > 0 ? sqrtf(midEnergy / static_cast<float>(midBinCount)) : 0.0f;
+    highEnergy = highBinCount > 0 ? sqrtf(highEnergy / static_cast<float>(highBinCount)) : 0.0f;
+
+    // Weighted sum: emphasize bass and mid for rhythm (where most beats occur)
+    return 0.5f * bassEnergy + 0.3f * midEnergy + 0.2f * highEnergy;
 }
