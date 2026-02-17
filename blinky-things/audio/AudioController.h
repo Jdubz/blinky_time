@@ -451,6 +451,14 @@ public:
     float combFilterWeight = 0.0f;  // 0.0 = disabled (default), 1.0 = full weight in fusion
     float combFeedback = 0.92f;     // Resonance strength (0.85-0.98)
 
+    // === RHYTHM FUSION (Phase 5) ===
+    // Combines phase estimates from multiple systems with confidence weighting
+    // System 0: Autocorrelation (peak-finding or Fourier phase)
+    // System 1: Comb filter resonator
+    // Transient hints provide small nudges (max ±10%)
+    bool fusionEnabled = true;              // Enable fusion (when multiple systems active)
+    float transientHintWeight = 0.1f;       // Max influence of transient hints (0-0.2)
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }
@@ -485,6 +493,11 @@ public:
     float getCombFilterPhase() const { return combFilter_.getPhase(); }
     float getCombFilterConfidence() const { return combFilter_.getConfidence(); }
     const CombFilterPhaseTracker& getCombFilter() const { return combFilter_; }
+
+    // Fusion debug getters
+    float getFusedPhase() const { return fusedPhase_; }
+    float getFusedConfidence() const { return fusedConfidence_; }
+    float getConsensusMetric() const { return consensusMetric_; }
 
 private:
     // === HAL REFERENCES ===
@@ -559,6 +572,12 @@ private:
     float pulseTrainPhase_ = 0.0f;      // Phase from pulse train cross-correlation
     float pulseTrainConfidence_ = 0.0f; // Confidence of pulse train phase (correlation strength)
 
+    // Rhythm fusion state (Phase 5)
+    float fusedPhase_ = 0.0f;           // Final fused phase estimate
+    float fusedConfidence_ = 0.0f;      // Overall confidence in fused estimate
+    float consensusMetric_ = 0.0f;      // How much systems agree (0-1)
+    float transientHint_ = 0.0f;        // Current transient-based phase hint
+
     // Transient-based phase correction (PLL)
     float transientPhaseError_ = 0.0f;  // Running average of phase error when transients detected
     uint32_t lastTransientCorrectionMs_ = 0; // Timestamp of last transient correction
@@ -616,6 +635,9 @@ private:
     // Pulse train phase estimation (Phase 3)
     float computePulseTrainPhase(int beatPeriodSamples);
     float generateAndCorrelate(int phaseOffset, int beatPeriod);
+
+    // Rhythm fusion (Phase 5)
+    void fuseRhythmEstimates();
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

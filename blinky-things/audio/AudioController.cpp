@@ -103,6 +103,12 @@ bool AudioController::begin(uint32_t sampleRate) {
     // Reset comb filter phase tracker
     combFilter_.reset();
 
+    // Reset fusion state
+    fusedPhase_ = 0.0f;
+    fusedConfidence_ = 0.0f;
+    consensusMetric_ = 0.0f;
+    transientHint_ = 0.0f;
+
     // Reset output
     control_ = AudioControl();
     lastEnsembleOutput_ = EnsembleOutput();
@@ -219,6 +225,12 @@ const AudioControl& AudioController::update(float dt) {
 
     // 6. Update phase tracking
     updatePhase(dt, nowMs);
+
+    // 6b. Fuse rhythm estimates from multiple systems
+    //     Combines autocorrelation, Fourier phase, and comb filter with confidence weighting
+    if (fusionEnabled) {
+        fuseRhythmEstimates();
+    }
 
     // 7. Synthesize output
     synthesizeEnergy();
@@ -2126,4 +2138,112 @@ void CombFilterPhaseTracker::process(float input) {
     }
 
     prevResonatorOutput_ = resonatorOutput_;
+}
+
+// ============================================================================
+// Rhythm Fusion Implementation (Phase 5)
+// ============================================================================
+
+void AudioController::fuseRhythmEstimates() {
+    // Collect phase estimates and confidences from available systems
+    // System 0: Autocorrelation (already in targetPhase_ and periodicityStrength_)
+    // System 1: Comb filter (if enabled)
+
+    // Count active systems and collect their estimates
+    static constexpr int MAX_SYSTEMS = 2;
+    float phases[MAX_SYSTEMS] = {0};
+    float confidences[MAX_SYSTEMS] = {0};
+    int numActive = 0;
+
+    // System 0: Autocorrelation phase (always active)
+    // Uses blended Fourier/peak-finding phase from runAutocorrelation
+    phases[numActive] = targetPhase_;
+    confidences[numActive] = periodicityStrength_;
+    numActive++;
+
+    // System 1: Comb filter (if enabled and has confidence)
+    if (combFilterWeight > 0.0f && combFilter_.getConfidence() > 0.1f) {
+        phases[numActive] = combFilter_.getPhase();
+        // Scale confidence by combFilterWeight
+        confidences[numActive] = combFilter_.getConfidence() * combFilterWeight;
+        numActive++;
+    }
+
+    // If only one system active, use it directly
+    if (numActive <= 1) {
+        fusedPhase_ = phases[0];
+        fusedConfidence_ = confidences[0];
+        consensusMetric_ = 1.0f;  // Perfect consensus with one system
+        return;
+    }
+
+    // Normalize confidences
+    float totalConf = 0.0f;
+    for (int i = 0; i < numActive; i++) {
+        totalConf += confidences[i];
+    }
+
+    if (totalConf < 0.01f) {
+        // No confident estimate - keep current phase
+        fusedConfidence_ = 0.0f;
+        consensusMetric_ = 0.0f;
+        return;
+    }
+
+    // Weighted circular mean for phase fusion
+    // Convert to unit vectors, weight, sum, convert back
+    float sinSum = 0.0f;
+    float cosSum = 0.0f;
+
+    for (int i = 0; i < numActive; i++) {
+        float weight = confidences[i] / totalConf;
+        float angle = phases[i] * 2.0f * 3.14159265f;
+        sinSum += weight * sinf(angle);
+        cosSum += weight * cosf(angle);
+    }
+
+    // Convert back to phase
+    fusedPhase_ = atan2f(sinSum, cosSum) / (2.0f * 3.14159265f);
+    if (fusedPhase_ < 0.0f) fusedPhase_ += 1.0f;
+
+    // Apply transient hint (small nudge based on detected transients)
+    // transientPhaseError_ is updated in updateTransientPhaseCorrection
+    if (transientHintWeight > 0.0f) {
+        float hint = transientPhaseError_ * transientHintWeight;
+        // Clamp hint to prevent large jumps
+        if (hint > 0.1f) hint = 0.1f;
+        if (hint < -0.1f) hint = -0.1f;
+
+        fusedPhase_ += hint;
+        // Normalize
+        if (fusedPhase_ >= 1.0f) fusedPhase_ -= 1.0f;
+        if (fusedPhase_ < 0.0f) fusedPhase_ += 1.0f;
+
+        transientHint_ = hint;  // Store for debugging
+    }
+
+    // Compute consensus metric (how much do systems agree?)
+    // Based on maximum phase difference between any two systems
+    float maxDiff = 0.0f;
+    for (int i = 0; i < numActive; i++) {
+        for (int j = i + 1; j < numActive; j++) {
+            float diff = phases[i] - phases[j];
+            // Handle wraparound
+            if (diff < 0.0f) diff = -diff;
+            if (diff > 0.5f) diff = 1.0f - diff;
+            if (diff > maxDiff) maxDiff = diff;
+        }
+    }
+
+    // Consensus: 1.0 when all agree, 0.0 when maximally different (0.5 apart)
+    consensusMetric_ = 1.0f - (maxDiff * 2.0f);
+    if (consensusMetric_ < 0.0f) consensusMetric_ = 0.0f;
+
+    // Fused confidence = average confidence × consensus
+    // High confidence only when systems agree
+    fusedConfidence_ = (totalConf / static_cast<float>(numActive)) * consensusMetric_;
+
+    // Update targetPhase_ with fused result
+    // This allows downstream systems to use the improved estimate
+    targetPhase_ = fusedPhase_;
 }
