@@ -209,9 +209,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tempoSmoothingFactor = 0.85f;
     data_.music.tempoChangeThreshold = 0.1f;
 
-    // Transient-based phase correction (PLL) - Jan 2026
-    data_.music.transientCorrectionRate = 0.3f;  // How fast to nudge phase toward transients
-    data_.music.transientCorrectionMin = 0.3f;   // Min transient strength to trigger correction
+    // Transient-based phase correction (PLL) - calibrated Feb 2026
+    data_.music.transientCorrectionRate = 0.15f;  // How fast to nudge phase toward transients
+    data_.music.transientCorrectionMin = 0.42f;   // Min transient strength to trigger correction
 
     data_.brightness = 100;
 }

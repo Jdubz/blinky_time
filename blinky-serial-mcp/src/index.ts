@@ -588,6 +588,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'start_test': {
+        // Switch to audio visualization generator for testing
+        await serial.sendCommand('gen audio');
+
         // Clear buffers and start recording
         transientBuffer = [];
         audioSampleBuffer = [];
@@ -658,6 +661,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'monitor_audio': {
         const durationMs = (args as { duration_ms?: number }).duration_ms || 1000;
+
+        // Switch to audio visualization generator for monitoring
+        await serial.sendCommand('gen audio');
 
         const state = serial.getState();
         if (!state.streaming) {
@@ -1011,6 +1017,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (gain !== undefined) {
             await serial.sendCommand(`set hwgainlock ${gain}`);
           }
+
+          // Switch to audio visualization generator for testing
+          // This provides visual feedback of audio data during tests
+          await serial.sendCommand('gen audio');
 
           // Clear buffers and start recording
           transientBuffer = [];

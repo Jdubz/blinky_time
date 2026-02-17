@@ -4,6 +4,7 @@
 #include "../generators/Fire.h"
 #include "../generators/Water.h"
 #include "../generators/Lightning.h"
+#include "../generators/Audio.h"
 #include "../config/SettingsRegistry.h"
 
 // Forward declarations
@@ -11,6 +12,7 @@ class ConfigStorage;
 class Fire;
 class Water;
 class Lightning;
+class Audio;
 class AdaptiveMic;
 class BatteryMonitor;
 class AudioController;
@@ -122,6 +124,7 @@ public:
     ConfigStorage* getConfigStorage() { return configStorage_; }  // For static callbacks
     void setRenderPipeline(RenderPipeline* pipeline) { pipeline_ = pipeline; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
+    void setAudioVisGenerator(Audio* audioVisGen) { audioVisGenerator_ = audioVisGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     void setAudioController(AudioController* audioCtrl) { audioCtrl_ = audioCtrl; }
     SettingsRegistry& getSettings() { return settings_; }
@@ -193,6 +196,7 @@ private:
     // Settings registration for other generators
     void registerWaterSettings(WaterParams* wp);
     void registerLightningSettings(LightningParams* lp);
+    void registerAudioVisSettings(AudioParams* ap);
     void registerEffectSettings();
     void syncEffectSettings();  // Apply effect settings to actual effect
 
@@ -201,6 +205,7 @@ private:
     Fire* fireGenerator_;
     Water* waterGenerator_;
     Lightning* lightningGenerator_;
+    Audio* audioVisGenerator_;
     HueRotationEffect* hueEffect_;
     AdaptiveMic* mic_;
     BatteryMonitor* battery_;

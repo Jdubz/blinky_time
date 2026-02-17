@@ -29,6 +29,7 @@
 #include "generators/Fire.h"          // Fire simulation generator
 #include "generators/Water.h"         // Water flow generator
 #include "generators/Lightning.h"     // Lightning bolt generator
+#include "generators/Audio.h"         // Audio visualization generator
 
 // Effects
 #include "effects/Effect.h"              // Base effect interface

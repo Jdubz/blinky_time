@@ -2,7 +2,7 @@
 #include <new>
 
 RenderPipeline::RenderPipeline()
-    : fire_(nullptr), water_(nullptr), lightning_(nullptr),
+    : fire_(nullptr), water_(nullptr), lightning_(nullptr), audioVis_(nullptr),
       currentGenerator_(nullptr), generatorType_(GeneratorType::FIRE),
       noOp_(nullptr), hueRotation_(nullptr),
       currentEffect_(nullptr), effectType_(EffectType::NONE),
@@ -15,6 +15,7 @@ RenderPipeline::~RenderPipeline() {
     delete pixelMatrix_;
     delete hueRotation_;
     delete noOp_;
+    delete audioVis_;
     delete lightning_;
     delete water_;
     delete fire_;
@@ -43,6 +44,11 @@ bool RenderPipeline::begin(const DeviceConfig& config, ILedStrip& leds, LEDMappe
 
     lightning_ = new(std::nothrow) Lightning();
     if (!lightning_ || !lightning_->begin(config)) {
+        return false;
+    }
+
+    audioVis_ = new(std::nothrow) Audio();
+    if (!audioVis_ || !audioVis_->begin(config)) {
         return false;
     }
 
@@ -106,6 +112,9 @@ bool RenderPipeline::setGenerator(GeneratorType type) {
             break;
         case GeneratorType::LIGHTNING:
             newGen = lightning_;
+            break;
+        case GeneratorType::AUDIO:
+            newGen = audioVis_;
             break;
         default:
             return false;
@@ -179,6 +188,10 @@ LightningParams* RenderPipeline::getLightningParams() {
     return lightning_ ? &lightning_->getParamsMutable() : nullptr;
 }
 
+AudioParams* RenderPipeline::getAudioVisParams() {
+    return audioVis_ ? &audioVis_->getParamsMutable() : nullptr;
+}
+
 // Apply methods - params are modified in-place, so these are no-ops
 // Kept for API consistency if future implementations need explicit apply
 void RenderPipeline::applyFireParams() {
@@ -193,12 +206,17 @@ void RenderPipeline::applyLightningParams() {
     // Parameters modified via getLightningParams() take effect immediately
 }
 
+void RenderPipeline::applyAudioVisParams() {
+    // Parameters modified via getAudioVisParams() take effect immediately
+}
+
 // Static helpers for listing options
 const char* RenderPipeline::getGeneratorNameByIndex(int index) {
     switch (index) {
         case 0: return "fire";
         case 1: return "water";
         case 2: return "lightning";
+        case 3: return "audio";
         default: return nullptr;
     }
 }
@@ -216,6 +234,7 @@ GeneratorType RenderPipeline::getGeneratorTypeByIndex(int index) {
         case 0: return GeneratorType::FIRE;
         case 1: return GeneratorType::WATER;
         case 2: return GeneratorType::LIGHTNING;
+        case 3: return GeneratorType::AUDIO;
         default: return GeneratorType::FIRE;
     }
 }

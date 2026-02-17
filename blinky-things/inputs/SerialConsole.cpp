@@ -48,7 +48,7 @@ static float effectRotationSpeed_ = 0.0f;
 // New constructor with RenderPipeline
 SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
     : pipeline_(pipeline), fireGenerator_(nullptr), waterGenerator_(nullptr),
-      lightningGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
+      lightningGenerator_(nullptr), audioVisGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
       battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
     // Get generator pointers from pipeline
@@ -56,6 +56,7 @@ SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
         fireGenerator_ = pipeline_->getFireGenerator();
         waterGenerator_ = pipeline_->getWaterGenerator();
         lightningGenerator_ = pipeline_->getLightningGenerator();
+        audioVisGenerator_ = pipeline_->getAudioVisGenerator();
         hueEffect_ = pipeline_->getHueRotationEffect();
     }
 }
@@ -88,6 +89,11 @@ void SerialConsole::registerSettings() {
     // Register Lightning generator settings (use mutable ref so changes apply directly)
     if (lightningGenerator_) {
         registerLightningSettings(&lightningGenerator_->getParamsMutable());
+    }
+
+    // Register Audio visualization generator settings
+    if (audioVisGenerator_) {
+        registerAudioVisSettings(&audioVisGenerator_->getParamsMutable());
     }
 
     // Register effect settings (HueRotation)
@@ -242,10 +248,22 @@ void SerialConsole::registerRhythmSettings() {
         "Comb filter phase weight (0=off, 1=full)", 0.0f, 1.0f);
     settings_.registerFloat("combfeedback", &audioCtrl_->combFeedback, "rhythm",
         "Comb filter resonance (0.85-0.98)", 0.85f, 0.98f);
+    settings_.registerBool("combbankenabled", &audioCtrl_->combBankEnabled, "rhythm",
+        "Enable comb filter bank for tempo validation");
+    settings_.registerFloat("combbankfeedback", &audioCtrl_->combBankFeedback, "rhythm",
+        "Comb bank resonance (0.85-0.98)", 0.85f, 0.98f);
     settings_.registerBool("fusionenabled", &audioCtrl_->fusionEnabled, "rhythm",
         "Enable multi-system phase fusion");
     settings_.registerFloat("transienthint", &audioCtrl_->transientHintWeight, "rhythm",
         "Transient hint weight (0-0.2)", 0.0f, 0.2f);
+
+    // Ensemble fusion parameters (detection gating)
+    settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
+        "Ensemble cooldown (ms)", 20, 500);
+    settings_.registerFloat("ensminconf", &audioCtrl_->getEnsemble().getFusion().minConfidence, "ensemble",
+        "Minimum detector confidence", 0.0f, 1.0f);
+    settings_.registerFloat("ensminlevel", &audioCtrl_->getEnsemble().getFusion().minAudioLevel, "ensemble",
+        "Noise gate audio level", 0.0f, 0.5f);
 
     // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
@@ -262,6 +280,20 @@ void SerialConsole::registerRhythmSettings() {
         "Minimum BPM to detect", 40.0f, 120.0f);
     settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
         "Maximum BPM to detect", 80.0f, 240.0f);
+
+    // Autocorrelation timing
+    settings_.registerUint16("autocorrperiod", &audioCtrl_->autocorrPeriodMs, "rhythm",
+        "Autocorr period (ms)", 100, 1000);
+
+    // Band weights (used when adaptive weighting disabled)
+    settings_.registerBool("adaptbandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
+        "Enable adaptive band weighting");
+    settings_.registerFloat("bassbandweight", &audioCtrl_->bassBandWeight, "rhythm",
+        "Bass band weight", 0.0f, 1.0f);
+    settings_.registerFloat("midbandweight", &audioCtrl_->midBandWeight, "rhythm",
+        "Mid band weight", 0.0f, 1.0f);
+    settings_.registerFloat("highbandweight", &audioCtrl_->highBandWeight, "rhythm",
+        "High band weight", 0.0f, 1.0f);
 
     // Tempo prior (reduces half-time/double-time confusion)
     settings_.registerBool("priorenabled", &audioCtrl_->tempoPriorEnabled, "tempoprior",
@@ -1022,6 +1054,9 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
         } else if (strcmp(name, "lightning") == 0) {
             type = GeneratorType::LIGHTNING;
             found = true;
+        } else if (strcmp(name, "audio") == 0) {
+            type = GeneratorType::AUDIO;
+            found = true;
         }
 
         if (found) {
@@ -1034,7 +1069,7 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
         } else {
             Serial.print(F("Unknown generator: "));
             Serial.println(name);
-            Serial.println(F("Use: fire, water, lightning"));
+            Serial.println(F("Use: fire, water, lightning, audio"));
         }
         return true;
     }
@@ -1200,6 +1235,35 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
     // Background
     settings_.registerFloat("bgintensity", &lp->backgroundIntensity, "lightning",
         "Noise background brightness", 0.0f, 1.0f, onParamChanged);
+}
+
+// === AUDIO VISUALIZATION GENERATOR SETTINGS ===
+void SerialConsole::registerAudioVisSettings(AudioParams* ap) {
+    if (!ap) return;
+
+    // Transient visualization (green gradient from top)
+    settings_.registerFloat("transientrowfrac", &ap->transientRowFraction, "audiovis",
+        "Fraction of height for transient indicator", 0.1f, 0.5f, onParamChanged);
+    settings_.registerFloat("transientdecay", &ap->transientDecayRate, "audiovis",
+        "Transient decay rate per frame", 0.01f, 0.5f, onParamChanged);
+    settings_.registerUint8("transientbright", &ap->transientBrightness, "audiovis",
+        "Maximum transient brightness", 0, 255, onParamChanged);
+
+    // Energy level visualization (yellow row)
+    settings_.registerUint8("levelbright", &ap->levelBrightness, "audiovis",
+        "Energy level row brightness", 0, 255, onParamChanged);
+    settings_.registerFloat("levelsmooth", &ap->levelSmoothing, "audiovis",
+        "Energy level smoothing factor", 0.0f, 0.99f, onParamChanged);
+
+    // Phase visualization (blue row)
+    settings_.registerUint8("phasebright", &ap->phaseBrightness, "audiovis",
+        "Phase row maximum brightness", 0, 255, onParamChanged);
+    settings_.registerFloat("musicmodethresh", &ap->musicModeThreshold, "audiovis",
+        "Rhythm confidence threshold for phase display", 0.0f, 1.0f, onParamChanged);
+
+    // Background
+    settings_.registerUint8("bgbright", &ap->backgroundBrightness, "audiovis",
+        "Background brightness", 0, 255, onParamChanged);
 }
 
 // === EFFECT SETTINGS ===

@@ -57,9 +57,9 @@ bool AudioController::begin(uint32_t sampleRate) {
     }
     bandOssWriteIdx_ = 0;
     bandOssCount_ = 0;
-    adaptiveBandWeights_[0] = 0.5f;  // Bass default
-    adaptiveBandWeights_[1] = 0.3f;  // Mid default
-    adaptiveBandWeights_[2] = 0.2f;  // High default
+    adaptiveBandWeights_[0] = bassBandWeight;   // Use tunable defaults
+    adaptiveBandWeights_[1] = midBandWeight;
+    adaptiveBandWeights_[2] = highBandWeight;
     lastBandAutocorrMs_ = 0;
     bandSynchrony_ = 0.0f;
 
@@ -102,6 +102,10 @@ bool AudioController::begin(uint32_t sampleRate) {
 
     // Reset comb filter phase tracker
     combFilter_.reset();
+
+    // Initialize and reset comb filter bank
+    // Uses 60 Hz frame rate assumption (same as OSS buffer)
+    combFilterBank_.init(60.0f);
 
     // Reset fusion state
     fusedPhase_ = 0.0f;
@@ -182,8 +186,8 @@ const AudioControl& AudioController::update(float dt) {
         prevMagnitudesValid_ = false;
     }
 
-    // Update per-band periodicities periodically (every 1000ms)
-    if (adaptiveBandWeightEnabled && nowMs - lastBandAutocorrMs_ >= BAND_AUTOCORR_PERIOD_MS) {
+    // Update per-band periodicities periodically (same rate as main autocorr)
+    if (adaptiveBandWeightEnabled && nowMs - lastBandAutocorrMs_ >= autocorrPeriodMs) {
         updateBandPeriodicities(nowMs);
         lastBandAutocorrMs_ = nowMs;
     }
@@ -204,8 +208,8 @@ const AudioControl& AudioController::update(float dt) {
         addOssSample(0.0f, nowMs);
     }
 
-    // 4. Run autocorrelation periodically (every 500ms)
-    if (nowMs - lastAutocorrMs_ >= AUTOCORR_PERIOD_MS) {
+    // 4. Run autocorrelation periodically (tunable period, default 500ms)
+    if (nowMs - lastAutocorrMs_ >= autocorrPeriodMs) {
         runAutocorrelation(nowMs);
         lastAutocorrMs_ = nowMs;
     }
@@ -217,6 +221,41 @@ const AudioControl& AudioController::update(float dt) {
         combFilter_.feedbackGain = combFeedback;
         combFilter_.setTempo(bpm_);
         combFilter_.process(onsetStrength);
+    }
+
+    // 4c. Update comb filter bank (independent tempo validation)
+    //     Provides tempo validation without depending on autocorrelation
+    //     Does NOT use tempo prior - that's applied in autocorrelation only
+    if (combBankEnabled) {
+        // Update bank parameters
+        combFilterBank_.feedbackGain = combBankFeedback;
+
+        // Process onset strength through the bank
+        combFilterBank_.process(onsetStrength);
+
+        // Boost confidence for matching hypotheses
+        float combBPM = combFilterBank_.getPeakBPM();
+        float combConf = combFilterBank_.getPeakConfidence();
+
+        // Only apply boost if comb filter has meaningful confidence
+        if (combConf > 0.1f) {
+            for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
+                TempoHypothesis& hyp = multiHypothesis_.hypotheses[i];
+                if (!hyp.active) continue;
+
+                // Check if hypothesis BPM matches comb filter BPM (within 5%)
+                float bpmDiff = hyp.bpm > combBPM ?
+                    (hyp.bpm - combBPM) / hyp.bpm :
+                    (combBPM - hyp.bpm) / combBPM;
+
+                if (bpmDiff < 0.05f) {
+                    // Boost confidence by up to 20%, scaled by match quality
+                    float boost = combConf * 0.2f * (1.0f - bpmDiff / 0.05f);
+                    hyp.confidence += boost;
+                    if (hyp.confidence > 1.0f) hyp.confidence = 1.0f;
+                }
+            }
+        }
     }
 
     // 5. Update transient-based phase correction (PLL)
@@ -582,13 +621,19 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             TempoHypothesis& hypo = multiHypothesis_.hypotheses[matchSlot];
 
             // Update phase error tracking:
-            // Autocorrelation peak indicates we're at phase 0.0 (beat start)
-            // Error is distance from current phase to 0.0 (shortest path around circle)
-            float phaseError = hypo.phase;
-            if (phaseError > 0.5f) phaseError = 1.0f - phaseError;  // Wrap: use shorter distance
+            // Compare hypothesis phase to Fourier-extracted phase (independent measurement)
+            // This avoids circular logic of assuming autocorrelation peak = phase 0
+            float phaseError = hypo.phase - pulseTrainPhase_;
+            // Wrap to shortest distance around circle [-0.5, 0.5]
+            if (phaseError > 0.5f) phaseError -= 1.0f;
+            if (phaseError < -0.5f) phaseError += 1.0f;
+            phaseError = phaseError < 0.0f ? -phaseError : phaseError;  // Absolute value
 
             // Exponential smoothing: avgPhaseError = 0.9 * old + 0.1 * new
-            hypo.avgPhaseError = 0.9f * hypo.avgPhaseError + 0.1f * phaseError;
+            // Only update if we have confidence in the Fourier phase
+            if (pulseTrainConfidence_ > 0.2f) {
+                hypo.avgPhaseError = 0.9f * hypo.avgPhaseError + 0.1f * phaseError;
+            }
 
             hypo.strength = peaks[i].normCorrelation;
             hypo.lastUpdateMs = nowMs;
@@ -649,7 +694,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         bool pulsePhaseValid = false;
 
         // Method 1: Peak-finding (legacy)
-        {
+        // Skip if pulsePhaseWeight >= 1.0 - result won't be used
+        if (pulsePhaseWeight < 1.0f) {
             int recentWindow = bestLag;  // Look at one beat period
             float maxRecent = 0.0f;
             int maxRecentIdx = 0;
@@ -1515,8 +1561,8 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
                adaptiveBandWeights_[1] * midFlux +
                adaptiveBandWeights_[2] * highFlux;
     } else {
-        // Fixed default weights
-        flux = 0.5f * bassFlux + 0.3f * midFlux + 0.2f * highFlux;
+        // Fixed tunable weights
+        flux = bassBandWeight * bassFlux + midBandWeight * midFlux + highBandWeight * highFlux;
     }
 
     // Apply log compression for dynamic range
@@ -1803,7 +1849,8 @@ void AudioController::updateBandPeriodicities(uint32_t nowMs) {
     // - Signal is peaky (transients, not vibrato)
 
     // Default weights (used when no clear rhythmic periodicity)
-    const float defaultWeights[BAND_COUNT] = {0.5f, 0.3f, 0.2f};
+    // Uses tunable public variables for real-time calibration
+    const float defaultWeights[BAND_COUNT] = {bassBandWeight, midBandWeight, highBandWeight};
 
     // Calculate effective strength: periodicity × cross-band-correlation × peakiness
     // This suppresses vibrato (low cross-band-corr) and tremolo (low peakiness)
@@ -2149,16 +2196,170 @@ void CombFilterPhaseTracker::process(float input) {
 }
 
 // ============================================================================
+// Comb Filter Bank Implementation (Independent Tempo Validation)
+// ============================================================================
+
+void CombFilterBank::init(float frameRate) {
+    frameRate_ = frameRate;
+
+    // Compute lag and BPM for each filter
+    // Distribute filters evenly from MIN_LAG (180 BPM) to MAX_LAG (60 BPM)
+    // At 60 Hz: lag 20 = 180 BPM, lag 60 = 60 BPM
+    for (int i = 0; i < NUM_FILTERS; i++) {
+        // Linear interpolation of lag values
+        float t = static_cast<float>(i) / static_cast<float>(NUM_FILTERS - 1);
+        int lag = MIN_LAG + static_cast<int>(t * (MAX_LAG - MIN_LAG) + 0.5f);
+        filterLags_[i] = lag;
+
+        // Convert lag to BPM: BPM = frameRate * 60 / lag
+        filterBPMs_[i] = (frameRate_ * 60.0f) / static_cast<float>(lag);
+    }
+
+    reset();
+    initialized_ = true;
+}
+
+void CombFilterBank::reset() {
+    // Clear delay line
+    for (int i = 0; i < MAX_LAG; i++) {
+        delayLine_[i] = 0.0f;
+        resonatorHistory_[i] = 0.0f;
+    }
+    writeIdx_ = 0;
+    historyIdx_ = 0;
+
+    // Clear resonator state
+    for (int i = 0; i < NUM_FILTERS; i++) {
+        resonatorOutput_[i] = 0.0f;
+        resonatorEnergy_[i] = 0.0f;
+    }
+
+    // Reset results
+    peakBPM_ = 120.0f;
+    peakConfidence_ = 0.0f;
+    peakPhase_ = 0.0f;
+    peakFilterIdx_ = NUM_FILTERS / 2;  // Start near middle (120 BPM)
+    frameCount_ = 0;
+}
+
+void CombFilterBank::process(float input) {
+    if (!initialized_) {
+        init(60.0f);  // Default to 60 Hz
+    }
+
+    // 1. Write input to shared delay line
+    delayLine_[writeIdx_] = input;
+
+    // 2. Update all resonators using proper Scheirer (1998) equation:
+    //    y[n] = (1-α)·x[n] + α·y[n-L]
+    //    where α = feedbackGain
+    float oneMinusAlpha = 1.0f - feedbackGain;
+
+    for (int i = 0; i < NUM_FILTERS; i++) {
+        int lag = filterLags_[i];
+
+        // Read delayed output (y[n-L])
+        int readIdx = (writeIdx_ - lag + MAX_LAG) % MAX_LAG;
+        float delayed = delayLine_[readIdx];
+
+        // Proper comb filter equation
+        resonatorOutput_[i] = oneMinusAlpha * input + feedbackGain * delayed;
+
+        // Smooth energy tracking (exponential moving average)
+        float absOut = resonatorOutput_[i] > 0.0f ? resonatorOutput_[i] : -resonatorOutput_[i];
+        resonatorEnergy_[i] = 0.95f * resonatorEnergy_[i] + 0.05f * absOut;
+    }
+
+    // 3. Advance delay line write index
+    writeIdx_ = (writeIdx_ + 1) % MAX_LAG;
+
+    // 4. Find peak energy (NO tempo prior - this provides independent validation)
+    //    Autocorrelation already applies tempo prior, so comb bank uses raw energy
+    //    to provide truly independent confirmation of tempo
+    float maxEnergy = 0.0f;
+    int bestIdx = peakFilterIdx_;  // Sticky to previous (hysteresis)
+
+    for (int i = 0; i < NUM_FILTERS; i++) {
+        // Use raw resonator energy without tempo prior bias
+        float energy = resonatorEnergy_[i];
+
+        // 10% hysteresis to prevent jitter
+        if (energy > maxEnergy * 1.1f) {
+            maxEnergy = energy;
+            bestIdx = i;
+        }
+    }
+
+    peakFilterIdx_ = bestIdx;
+    peakBPM_ = filterBPMs_[bestIdx];
+
+    // 5. Track resonator history at peak filter for phase extraction
+    resonatorHistory_[historyIdx_] = resonatorOutput_[bestIdx];
+    historyIdx_ = (historyIdx_ + 1) % filterLags_[bestIdx];
+
+    // 6. Compute confidence (peak-to-mean energy ratio)
+    float totalEnergy = 0.0f;
+    for (int i = 0; i < NUM_FILTERS; i++) {
+        totalEnergy += resonatorEnergy_[i];
+    }
+    float meanEnergy = totalEnergy / NUM_FILTERS;
+    float ratio = resonatorEnergy_[bestIdx] / (meanEnergy + 0.001f) - 1.0f;
+    peakConfidence_ = ratio > 0.0f ? (ratio > 1.0f ? 1.0f : ratio) : 0.0f;
+
+    // 7. Extract phase every 4 frames to save CPU
+    frameCount_++;
+    if (frameCount_ >= 4) {
+        frameCount_ = 0;
+        extractPhase();
+    }
+}
+
+void CombFilterBank::extractPhase() {
+    int lag = filterLags_[peakFilterIdx_];
+    float omega = 1.0f / static_cast<float>(lag);  // Normalized frequency
+
+    // Complex exponential correlation to extract phase
+    // c = Σ resonator[t] · e^(-j·2π·ω·t)
+    // phase = -angle(c) / 2π
+    float realSum = 0.0f;
+    float imagSum = 0.0f;
+    static constexpr float COMB_TWO_PI = 6.283185307f;
+
+    for (int i = 0; i < lag; i++) {
+        int idx = (historyIdx_ - 1 - i + MAX_LAG) % MAX_LAG;
+        float t = static_cast<float>(i);
+        float angle = -COMB_TWO_PI * omega * t;
+
+        // Use fast approximations for sin/cos if available
+        float c = cosf(angle);
+        float s = sinf(angle);
+
+        realSum += resonatorHistory_[idx] * c;
+        imagSum += resonatorHistory_[idx] * s;
+    }
+
+    // Compute phase from complex sum
+    float phase = -atan2f(imagSum, realSum) / COMB_TWO_PI;
+
+    // Normalize to [0, 1)
+    if (phase < 0.0f) phase += 1.0f;
+    if (phase >= 1.0f) phase -= 1.0f;
+
+    peakPhase_ = phase;
+}
+
+// ============================================================================
 // Rhythm Fusion Implementation (Phase 5)
 // ============================================================================
 
 void AudioController::fuseRhythmEstimates() {
     // Collect phase estimates and confidences from available systems
-    // System 0: Autocorrelation (already in targetPhase_ and periodicityStrength_)
-    // System 1: Comb filter (if enabled)
+    // System 0: Autocorrelation (Fourier phase from OSS buffer)
+    // System 1: Single comb filter (if combFilterWeight > 0)
+    // System 2: Comb filter bank (if combBankEnabled)
 
     // Count active systems and collect their estimates
-    static constexpr int MAX_SYSTEMS = 2;
+    static constexpr int MAX_SYSTEMS = 3;
     float phases[MAX_SYSTEMS] = {0};
     float confidences[MAX_SYSTEMS] = {0};
     int numActive = 0;
@@ -2169,7 +2370,7 @@ void AudioController::fuseRhythmEstimates() {
     confidences[numActive] = periodicityStrength_;
     numActive++;
 
-    // System 1: Comb filter (if enabled and has confidence)
+    // System 1: Single comb filter (if enabled and has confidence)
     if (combFilterWeight > 0.0f && combFilter_.getConfidence() > 0.1f) {
         phases[numActive] = combFilter_.getPhase();
         // Scale confidence by combFilterWeight
@@ -2177,11 +2378,20 @@ void AudioController::fuseRhythmEstimates() {
         numActive++;
     }
 
+    // System 2: Comb filter bank (if enabled and has confidence)
+    if (combBankEnabled && combFilterBank_.getPeakConfidence() > 0.1f) {
+        phases[numActive] = combFilterBank_.getPhaseAtPeak();
+        // Use bank confidence directly (already independent validation)
+        confidences[numActive] = combFilterBank_.getPeakConfidence();
+        numActive++;
+    }
+
     // If only one system active, use it directly
+    // Note: consensusMetric_ reflects actual confidence, not fake "perfect consensus"
     if (numActive <= 1) {
         fusedPhase_ = phases[0];
         fusedConfidence_ = confidences[0];
-        consensusMetric_ = 1.0f;  // Perfect consensus with one system
+        consensusMetric_ = confidences[0];  // Single system = use its confidence
         return;
     }
 

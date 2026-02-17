@@ -124,6 +124,18 @@ public:
     void setMinAudioLevel(float level) { minAudioLevel_ = level; }
     float getMinAudioLevel() const { return minAudioLevel_; }
 
+    // === PUBLIC TUNING PARAMETERS (for SettingsRegistry) ===
+    // These are exposed for real-time serial tuning via unified set/get interface
+
+    // Unified ensemble cooldown (applied after fusion, not per-detector)
+    uint16_t cooldownMs = 250;  // Calibrated Feb 2026: 250ms reduces rapid-fire false positives
+
+    // Minimum confidence threshold (detectors below this are ignored)
+    float minConfidence = 0.55f;  // Calibrated Feb 2026: 0.55 filters weak detections
+
+    // Minimum audio level for noise gate (suppress detections in silence)
+    float minAudioLevel = 0.025f;  // Calibrated Feb 2026: 2.5% level (noise gate)
+
 private:
     // Per-detector configuration
     DetectorConfig configs_[MAX_DETECTORS];
@@ -132,15 +144,13 @@ private:
     // Index = number of detectors that fired (0-6)
     float agreementBoosts_[MAX_DETECTORS + 1];
 
-    // Unified ensemble cooldown (applied after fusion, not per-detector)
+    // Internal state
     uint32_t lastTransientMs_ = 0;
-    uint16_t cooldownMs_ = 250;  // Calibrated Feb 2026: 250ms reduces rapid-fire false positives
 
-    // Minimum confidence threshold (detectors below this are ignored)
-    float minConfidence_ = 0.55f;  // Calibrated Feb 2026: 0.55 filters weak detections
-
-    // Minimum audio level for noise gate (suppress detections in silence)
-    float minAudioLevel_ = 0.02f;  // Default 2% level (effectively silence)
+    // Legacy private aliases (for backward compatibility with setter methods)
+    uint16_t& cooldownMs_ = cooldownMs;
+    float& minConfidence_ = minConfidence;
+    float& minAudioLevel_ = minAudioLevel;
 };
 
 // --- Default calibrated values (January 2026) ---
