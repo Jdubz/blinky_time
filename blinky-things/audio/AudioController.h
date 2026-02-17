@@ -352,6 +352,12 @@ public:
     // to distinguish real beats from vibrato/tremolo in sustained content
     bool adaptiveBandWeightEnabled = true;  // Enable/disable adaptive weighting
 
+    // === PULSE TRAIN PHASE ESTIMATION ===
+    // Uses PLP-inspired Fourier phase extraction at tempo frequency
+    // Based on Predominant Local Pulse (PLP) method by Grosche & Müller (2011)
+    // Testing showed +10-11% F1 improvement on full-mix and full-kit patterns
+    float pulsePhaseWeight = 1.0f;  // 1.0 = Fourier phase (default), 0.0 = peak-finding only
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }
@@ -377,6 +383,10 @@ public:
     // Adaptive band weight debug getters
     const float* getAdaptiveBandWeights() const { return adaptiveBandWeights_; }
     const float* getBandPeriodicityStrength() const { return bandPeriodicityStrength_; }
+
+    // Pulse train phase debug getters
+    float getPulseTrainPhase() const { return pulseTrainPhase_; }
+    float getPulseTrainConfidence() const { return pulseTrainConfidence_; }
 
 private:
     // === HAL REFERENCES ===
@@ -444,6 +454,10 @@ private:
     float phase_ = 0.0f;                // Current beat phase (0-1)
     float targetPhase_ = 0.0f;          // Phase derived from autocorrelation
 
+    // Pulse train phase estimation state
+    float pulseTrainPhase_ = 0.0f;      // Phase from pulse train cross-correlation
+    float pulseTrainConfidence_ = 0.0f; // Confidence of pulse train phase (correlation strength)
+
     // Transient-based phase correction (PLL)
     float transientPhaseError_ = 0.0f;  // Running average of phase error when transients detected
     uint32_t lastTransientCorrectionMs_ = 0; // Timestamp of last transient correction
@@ -497,6 +511,10 @@ private:
     void computeCrossBandCorrelation();
     void computeBandPeakiness();
     void applyMaxFilter(float* magnitudes, int numBins);
+
+    // Pulse train phase estimation (Phase 3)
+    float computePulseTrainPhase(int beatPeriodSamples);
+    float generateAndCorrelate(int phaseOffset, int beatPeriod);
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

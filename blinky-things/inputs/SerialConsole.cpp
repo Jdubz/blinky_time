@@ -236,6 +236,8 @@ void SerialConsole::registerRhythmSettings() {
         "OSS flux weight (1=flux, 0=RMS)", 0.0f, 1.0f);
     settings_.registerBool("adaptivebandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
         "Enable adaptive band weighting");
+    settings_.registerFloat("pulsephaseweight", &audioCtrl_->pulsePhaseWeight, "rhythm",
+        "Pulse train phase weight (1=pulse, 0=peak)", 0.0f, 1.0f);
 
     // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",

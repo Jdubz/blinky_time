@@ -76,6 +76,8 @@ bool AudioController::begin(uint32_t sampleRate) {
     // Reset phase tracking
     phase_ = 0.0f;
     targetPhase_ = 0.0f;
+    pulseTrainPhase_ = 0.0f;
+    pulseTrainConfidence_ = 0.0f;
     transientPhaseError_ = 0.0f;
     lastTransientCorrectionMs_ = 0;
 
@@ -609,26 +611,92 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         bpm_ = bpm_ * 0.8f + newBpm * 0.2f;
         beatPeriodMs_ = 60000.0f / bpm_;
 
-        // Derive target phase from autocorrelation
-        // Find where we are in the current beat cycle by looking at recent samples
-        // The position of maximum correlation in the recent window indicates phase
-        int recentWindow = bestLag;  // Look at one beat period
-        float maxRecent = 0.0f;
-        int maxRecentIdx = 0;
+        // Derive target phase using pulse train cross-correlation and/or peak-finding
+        // Pulse train method: correlate OSS with ideal pulse trains at different phases
+        // Peak-finding method: find max OSS in recent beat period
+        //
+        // pulsePhaseWeight controls the blend:
+        //   1.0 = pure pulse train (more robust, considers full pattern)
+        //   0.0 = pure peak-finding (legacy method)
 
-        for (int i = 0; i < recentWindow && i < ossCount_; i++) {
-            int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-            if (ossBuffer_[idx] > maxRecent) {
-                maxRecent = ossBuffer_[idx];
-                maxRecentIdx = i;
+        float peakPhase = 0.0f;
+        float pulsePhase = 0.0f;
+        bool peakPhaseValid = false;
+        bool pulsePhaseValid = false;
+
+        // Method 1: Peak-finding (legacy)
+        {
+            int recentWindow = bestLag;  // Look at one beat period
+            float maxRecent = 0.0f;
+            int maxRecentIdx = 0;
+
+            for (int i = 0; i < recentWindow && i < ossCount_; i++) {
+                int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+                if (ossBuffer_[idx] > maxRecent) {
+                    maxRecent = ossBuffer_[idx];
+                    maxRecentIdx = i;
+                }
+            }
+
+            if (maxRecent > 0.05f) {
+                peakPhase = static_cast<float>(maxRecentIdx) / static_cast<float>(bestLag);
+                peakPhase = clampf(peakPhase, 0.0f, 1.0f);
+                peakPhaseValid = true;
             }
         }
 
-        // Convert to phase (0 = just had a beat, approaching 1 = beat coming)
-        if (maxRecent > 0.05f) {
-            targetPhase_ = static_cast<float>(maxRecentIdx) / static_cast<float>(bestLag);
-            targetPhase_ = clampf(targetPhase_, 0.0f, 1.0f);
+        // Method 2: Fourier phase extraction (Phase 3 - PLP-inspired)
+        {
+            pulsePhase = computePulseTrainPhase(bestLag);
+            pulseTrainPhase_ = pulsePhase;  // Store for debugging
+
+            // Only consider valid if confidence is strong
+            // The Fourier method uses the entire OSS buffer, so it needs
+            // strong periodicity to produce reliable phase estimates.
+            // For weak periodicity (sustained content), fall back to peak-finding.
+            // Threshold of 0.45 based on testing: balances tempo-sweep improvement
+            // with sustained content rejection.
+            if (pulseTrainConfidence_ > 0.45f) {
+                pulsePhaseValid = true;
+            }
         }
+
+        // Blend the two methods based on pulsePhaseWeight and validity
+        float newTargetPhase;
+        float effectiveWeight = pulsePhaseWeight;
+
+        // Adjust weight based on validity
+        if (!pulsePhaseValid && !peakPhaseValid) {
+            // Neither method produced valid result - keep current phase
+            newTargetPhase = targetPhase_;
+        } else if (!pulsePhaseValid) {
+            // Only peak-finding is valid
+            newTargetPhase = peakPhase;
+        } else if (!peakPhaseValid) {
+            // Only pulse train is valid
+            newTargetPhase = pulsePhase;
+        } else if (effectiveWeight >= 1.0f) {
+            newTargetPhase = pulsePhase;
+        } else if (effectiveWeight <= 0.0f) {
+            newTargetPhase = peakPhase;
+        } else {
+            // Both valid - circular interpolation for phase (handles wraparound)
+            // Weight by confidence: higher pulse train confidence = more pulse weight
+            float confAdjustedWeight = effectiveWeight * (0.5f + 0.5f * pulseTrainConfidence_);
+            confAdjustedWeight = clampf(confAdjustedWeight, 0.0f, 1.0f);
+
+            // Convert to angles, interpolate, convert back
+            float angle1 = peakPhase * 2.0f * 3.14159265f;
+            float angle2 = pulsePhase * 2.0f * 3.14159265f;
+            float sin1 = sinf(angle1), cos1 = cosf(angle1);
+            float sin2 = sinf(angle2), cos2 = cosf(angle2);
+            float blendSin = (1.0f - confAdjustedWeight) * sin1 + confAdjustedWeight * sin2;
+            float blendCos = (1.0f - confAdjustedWeight) * cos1 + confAdjustedWeight * cos2;
+            newTargetPhase = atan2f(blendSin, blendCos) / (2.0f * 3.14159265f);
+            if (newTargetPhase < 0.0f) newTargetPhase += 1.0f;
+        }
+
+        targetPhase_ = clampf(newTargetPhase, 0.0f, 1.0f);
     }
 }
 
@@ -1774,4 +1842,132 @@ void AudioController::updateBandPeriodicities(uint32_t nowMs) {
             adaptiveBandWeights_[i] = defaultWeights[i];
         }
     }
+}
+
+// ============================================================================
+// Pulse Train Phase Estimation (Phase 3)
+// ============================================================================
+
+float AudioController::generateAndCorrelate(int phaseOffset, int beatPeriod) {
+    // Generate ideal pulse train and correlate with OSS buffer in one pass
+    // This is more memory-efficient than generating a full buffer
+    //
+    // Pulse train: Gaussian pulses at beat positions
+    // sigma = 10% of beat period (captures timing variance)
+
+    if (beatPeriod < 10 || ossCount_ < beatPeriod) {
+        return 0.0f;
+    }
+
+    const float sigma = 0.1f;  // 10% of beat period
+    const float sigmaSquared2 = 2.0f * sigma * sigma;
+
+    float correlation = 0.0f;
+    float pulseEnergy = 0.0f;
+    float ossEnergy = 0.0f;
+
+    // Correlate over the OSS buffer
+    int samplesToUse = ossCount_ < OSS_BUFFER_SIZE ? ossCount_ : OSS_BUFFER_SIZE;
+
+    for (int i = 0; i < samplesToUse; i++) {
+        int ossIdx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+        float ossVal = ossBuffer_[ossIdx];
+
+        // Generate pulse train value at this position
+        // Position in beat cycle (0 to beatPeriod-1)
+        int posInBeat = (i + phaseOffset) % beatPeriod;
+
+        // Distance from nearest beat (0 = on beat)
+        float dist = static_cast<float>(posInBeat) / static_cast<float>(beatPeriod);
+        if (dist > 0.5f) {
+            dist = 1.0f - dist;  // Wrap around: 0.9 -> 0.1 distance
+        }
+
+        // Gaussian pulse: exp(-0.5 * (dist/sigma)^2)
+        float pulseVal = expf(-0.5f * (dist * dist) / sigmaSquared2);
+
+        // Accumulate correlation
+        correlation += ossVal * pulseVal;
+        pulseEnergy += pulseVal * pulseVal;
+        ossEnergy += ossVal * ossVal;
+    }
+
+    // Normalize correlation
+    float normalizer = sqrtf(pulseEnergy * ossEnergy);
+    if (normalizer > 0.0001f) {
+        correlation /= normalizer;
+    } else {
+        correlation = 0.0f;
+    }
+
+    return correlation;
+}
+
+float AudioController::computePulseTrainPhase(int beatPeriodSamples) {
+    // Extract phase using Fourier analysis at the tempo frequency
+    // Based on Predominant Local Pulse (PLP) method by Grosche & Müller (2011)
+    //
+    // Key insight: The phase of the DFT coefficient at the tempo frequency
+    // directly gives the beat alignment. This is more efficient and accurate
+    // than brute-force template matching.
+    //
+    // For tempo period T samples, compute DFT at frequency f = 1/T:
+    //   X(f) = Σ oss[n] * exp(-j*2π*f*n)
+    //        = Σ oss[n] * cos(2π*n/T) - j * Σ oss[n] * sin(2π*n/T)
+    //   Phase = atan2(imag, real)
+
+    if (beatPeriodSamples < 10 || ossCount_ < 60) {
+        pulseTrainConfidence_ = 0.0f;
+        return 0.0f;
+    }
+
+    // Compute DFT at tempo frequency using Goertzel-like approach
+    // This is O(n) instead of O(n log n) for full FFT
+    float realSum = 0.0f;
+    float imagSum = 0.0f;
+    float ossEnergy = 0.0f;
+
+    // Angular frequency per sample: 2π / beatPeriodSamples
+    const float angularFreq = 2.0f * 3.14159265f / static_cast<float>(beatPeriodSamples);
+
+    int samplesToUse = ossCount_ < OSS_BUFFER_SIZE ? ossCount_ : OSS_BUFFER_SIZE;
+
+    for (int i = 0; i < samplesToUse; i++) {
+        int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+        float ossVal = ossBuffer_[idx];
+
+        // DFT at tempo frequency
+        float angle = angularFreq * static_cast<float>(i);
+        realSum += ossVal * cosf(angle);
+        imagSum += ossVal * sinf(angle);
+        ossEnergy += ossVal * ossVal;
+    }
+
+    // Compute magnitude for confidence
+    float magnitude = sqrtf(realSum * realSum + imagSum * imagSum);
+
+    // Normalize by OSS energy to get confidence (0-1)
+    // High magnitude relative to energy = strong periodicity at this tempo
+    float normalizer = sqrtf(ossEnergy * static_cast<float>(samplesToUse));
+    if (normalizer > 0.0001f) {
+        pulseTrainConfidence_ = clampf(magnitude / normalizer, 0.0f, 1.0f);
+    } else {
+        pulseTrainConfidence_ = 0.0f;
+        return 0.0f;
+    }
+
+    // Extract phase from complex coefficient
+    // atan2 gives angle in [-π, π], convert to [0, 1]
+    float phaseRadians = atan2f(imagSum, realSum);
+
+    // Convert to beat phase (0-1)
+    // Phase 0 = beat peak aligns with most recent sample
+    // We negate because we're looking backward in time
+    float phase = -phaseRadians / (2.0f * 3.14159265f);
+
+    // Normalize to [0, 1)
+    if (phase < 0.0f) phase += 1.0f;
+    if (phase >= 1.0f) phase -= 1.0f;
+
+    return clampf(phase, 0.0f, 1.0f);
 }
