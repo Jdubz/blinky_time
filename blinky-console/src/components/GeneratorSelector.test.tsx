@@ -157,4 +157,48 @@ describe('GeneratorSelector', () => {
       expect(lightningButton).toHaveAttribute('title', 'Electric bolts with branching patterns');
     });
   });
+
+  describe('audio generator', () => {
+    it('renders audio generator when included in available generators', () => {
+      render(
+        <GeneratorSelector
+          {...defaultProps}
+          availableGenerators={['fire', 'water', 'lightning', 'audio'] as GeneratorType[]}
+        />
+      );
+
+      expect(screen.getByRole('button', { name: /audio/i })).toBeInTheDocument();
+      expect(screen.getByText('📊')).toBeInTheDocument();
+    });
+
+    it('has correct tooltip for audio generator', () => {
+      render(
+        <GeneratorSelector
+          {...defaultProps}
+          availableGenerators={['fire', 'water', 'lightning', 'audio'] as GeneratorType[]}
+        />
+      );
+
+      const audioButton = screen.getByRole('button', { name: /audio/i });
+      expect(audioButton).toHaveAttribute(
+        'title',
+        'Diagnostic audio visualization: transients, level, and beat phase'
+      );
+    });
+
+    it('calls onGeneratorChange with audio when clicked', () => {
+      const mockOnChange = vi.fn();
+      render(
+        <GeneratorSelector
+          {...defaultProps}
+          availableGenerators={['fire', 'water', 'lightning', 'audio'] as GeneratorType[]}
+          onGeneratorChange={mockOnChange}
+        />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /audio/i }));
+
+      expect(mockOnChange).toHaveBeenCalledWith('audio');
+    });
+  });
 });

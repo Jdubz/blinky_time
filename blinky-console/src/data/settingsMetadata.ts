@@ -190,6 +190,55 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: '%',
   },
 
+  // ============================================================
+  // AUDIO VISUALIZATION GENERATOR (Diagnostic display)
+  // ============================================================
+  transientrowfrac: {
+    displayName: 'Transient Row Fraction',
+    tooltip:
+      'Fraction of display height for transient indicator (0.1-0.5). Green gradient from top showing pulse/transient intensity.',
+    unit: '',
+  },
+  transientdecay: {
+    displayName: 'Transient Decay Rate',
+    tooltip:
+      'How fast transient indicator fades per frame (0.01-0.5). Higher = faster fade after transient.',
+    unit: '',
+  },
+  transientbright: {
+    displayName: 'Transient Brightness',
+    tooltip: 'Maximum brightness of transient indicator (0-255). Green gradient intensity.',
+    unit: '',
+  },
+  levelbright: {
+    displayName: 'Level Brightness',
+    tooltip: 'Brightness of audio level row (0-255). Yellow row whose Y position indicates energy.',
+    unit: '',
+  },
+  levelsmooth: {
+    displayName: 'Level Smoothing',
+    tooltip:
+      'Smoothing factor for energy level changes (0-0.99). Higher = smoother but slower response.',
+    unit: '',
+  },
+  phasebright: {
+    displayName: 'Phase Brightness',
+    tooltip:
+      'Maximum brightness of phase row (0-255). Blue row showing beat phase, modulated by rhythm confidence.',
+    unit: '',
+  },
+  musicmodethresh: {
+    displayName: 'Music Mode Threshold',
+    tooltip:
+      'Minimum rhythm confidence to show phase indicator (0-1). Phase row hidden when rhythm not detected.',
+    unit: '',
+  },
+  bgbright: {
+    displayName: 'Background Brightness',
+    tooltip: 'Dim background brightness (0-255). Subtle background for contrast.',
+    unit: '',
+  },
+
   // Audio settings (window/range normalization)
   peaktau: {
     displayName: 'Peak Adaptation',

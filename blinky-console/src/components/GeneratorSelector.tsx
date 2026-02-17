@@ -24,6 +24,11 @@ const GENERATOR_INFO: Record<GeneratorType, { label: string; icon: string; descr
       icon: '⚡',
       description: 'Electric bolts with branching patterns',
     },
+    audio: {
+      label: 'Audio',
+      icon: '📊',
+      description: 'Diagnostic audio visualization: transients, level, and beat phase',
+    },
   };
 
 export function GeneratorSelector({

@@ -16,7 +16,7 @@ export type ConnectionState = z.infer<typeof ConnectionStateSchema>;
 /**
  * Generator types supported by RenderPipeline
  */
-export const GeneratorTypeSchema = z.enum(['fire', 'water', 'lightning']);
+export const GeneratorTypeSchema = z.enum(['fire', 'water', 'lightning', 'audio']);
 
 export type GeneratorType = z.infer<typeof GeneratorTypeSchema>;
 
