@@ -238,6 +238,10 @@ void SerialConsole::registerRhythmSettings() {
         "Enable adaptive band weighting");
     settings_.registerFloat("pulsephaseweight", &audioCtrl_->pulsePhaseWeight, "rhythm",
         "Pulse train phase weight (1=pulse, 0=peak)", 0.0f, 1.0f);
+    settings_.registerFloat("combweight", &audioCtrl_->combFilterWeight, "rhythm",
+        "Comb filter phase weight (0=off, 1=full)", 0.0f, 1.0f);
+    settings_.registerFloat("combfeedback", &audioCtrl_->combFeedback, "rhythm",
+        "Comb filter resonance (0.85-0.98)", 0.85f, 0.98f);
 
     // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",

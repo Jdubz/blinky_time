@@ -199,6 +199,93 @@ struct AutocorrPeak {
 };
 
 // ============================================================================
+// Comb Filter Phase Tracker (Phase 4)
+// ============================================================================
+
+/**
+ * CombFilterPhaseTracker - Independent phase tracking using comb filter resonance
+ *
+ * Theory: A comb filter at lag L accumulates energy when the input has
+ * periodicity at L samples. The phase of the accumulated signal indicates
+ * beat alignment. This provides an independent phase estimate that can be
+ * fused with autocorrelation and Fourier phase methods.
+ *
+ * Memory: ~500 bytes (delay line + state)
+ * CPU: < 1% (simple IIR filter)
+ */
+class CombFilterPhaseTracker {
+public:
+    static constexpr int MAX_LAG = 120;  // ~2s at 60Hz = 30 BPM min
+
+    // === TUNING PARAMETERS ===
+    float feedbackGain = 0.92f;   // Resonance strength (0.85-0.98)
+
+    // === METHODS ===
+
+    /**
+     * Reset all state
+     */
+    void reset();
+
+    /**
+     * Set tempo (updates lag from BPM)
+     */
+    void setTempo(float bpm, float frameRate = 60.0f);
+
+    /**
+     * Process one sample of onset strength
+     */
+    void process(float input);
+
+    /**
+     * Get current phase estimate (0-1)
+     */
+    float getPhase() const { return phase_; }
+
+    /**
+     * Get confidence in phase estimate (0-1)
+     * Based on resonator amplitude stability
+     */
+    float getConfidence() const { return confidence_; }
+
+    /**
+     * Get current lag in samples
+     */
+    int getCurrentLag() const { return currentLag_; }
+
+    /**
+     * Get resonator output (for debugging)
+     */
+    float getResonatorOutput() const { return resonatorOutput_; }
+
+private:
+    // Delay line
+    float delayLine_[MAX_LAG] = {0};
+    int writeIdx_ = 0;
+
+    // Current lag (beat period in samples)
+    int currentLag_ = 30;  // Default ~120 BPM at 60 Hz
+
+    // Resonator state
+    float resonatorOutput_ = 0.0f;
+    float prevResonatorOutput_ = 0.0f;
+
+    // Phase tracking via zero-crossing/peak detection
+    float phase_ = 0.0f;
+    int samplesSincePeak_ = 0;
+
+    // Confidence from amplitude stability
+    float confidence_ = 0.0f;
+    float peakAmplitude_ = 0.0f;
+    float amplitudeVariance_ = 0.0f;
+
+    // Running stats for confidence
+    float runningMax_ = 0.0f;
+    float runningMean_ = 0.0f;
+    int sampleCount_ = 0;
+};
+
+// ============================================================================
 // AudioController
 // ============================================================================
 
@@ -358,6 +445,12 @@ public:
     // Testing showed +10-11% F1 improvement on full-mix and full-kit patterns
     float pulsePhaseWeight = 1.0f;  // 1.0 = Fourier phase (default), 0.0 = peak-finding only
 
+    // === COMB FILTER PHASE TRACKER (Phase 4) ===
+    // Independent phase tracking using comb filter resonance
+    // Provides complementary phase estimate to autocorrelation and Fourier methods
+    float combFilterWeight = 0.0f;  // 0.0 = disabled (default), 1.0 = full weight in fusion
+    float combFeedback = 0.92f;     // Resonance strength (0.85-0.98)
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }
@@ -387,6 +480,11 @@ public:
     // Pulse train phase debug getters
     float getPulseTrainPhase() const { return pulseTrainPhase_; }
     float getPulseTrainConfidence() const { return pulseTrainConfidence_; }
+
+    // Comb filter phase debug getters
+    float getCombFilterPhase() const { return combFilter_.getPhase(); }
+    float getCombFilterConfidence() const { return combFilter_.getConfidence(); }
+    const CombFilterPhaseTracker& getCombFilter() const { return combFilter_; }
 
 private:
     // === HAL REFERENCES ===
@@ -443,6 +541,9 @@ private:
 
     // Multi-hypothesis tempo tracking
     MultiHypothesisTracker multiHypothesis_;
+
+    // Comb filter phase tracker (Phase 4)
+    CombFilterPhaseTracker combFilter_;
 
     // Current tempo estimate (for backward compatibility during transition)
     // TODO: These will be replaced by multiHypothesis_.getPrimary() values

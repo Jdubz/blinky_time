@@ -100,6 +100,9 @@ bool AudioController::begin(uint32_t sampleRate) {
     lastAutocorrMs_ = 0;
     lastSignificantAudioMs_ = 0;
 
+    // Reset comb filter phase tracker
+    combFilter_.reset();
+
     // Reset output
     control_ = AudioControl();
     lastEnsembleOutput_ = EnsembleOutput();
@@ -199,6 +202,15 @@ const AudioControl& AudioController::update(float dt) {
     if (nowMs - lastAutocorrMs_ >= AUTOCORR_PERIOD_MS) {
         runAutocorrelation(nowMs);
         lastAutocorrMs_ = nowMs;
+    }
+
+    // 4b. Update comb filter phase tracker (runs every frame)
+    //     Provides independent phase estimate that can be fused with autocorrelation
+    if (combFilterWeight > 0.0f) {
+        // Update comb filter parameters
+        combFilter_.feedbackGain = combFeedback;
+        combFilter_.setTempo(bpm_);
+        combFilter_.process(onsetStrength);
     }
 
     // 5. Update transient-based phase correction (PLL)
@@ -1970,4 +1982,148 @@ float AudioController::computePulseTrainPhase(int beatPeriodSamples) {
     if (phase >= 1.0f) phase -= 1.0f;
 
     return clampf(phase, 0.0f, 1.0f);
+}
+
+// ============================================================================
+// Comb Filter Phase Tracker Implementation (Phase 4)
+// ============================================================================
+
+void CombFilterPhaseTracker::reset() {
+    // Clear delay line
+    for (int i = 0; i < MAX_LAG; i++) {
+        delayLine_[i] = 0.0f;
+    }
+    writeIdx_ = 0;
+
+    // Reset state
+    currentLag_ = 30;  // Default ~120 BPM at 60 Hz
+    resonatorOutput_ = 0.0f;
+    prevResonatorOutput_ = 0.0f;
+    phase_ = 0.0f;
+    samplesSincePeak_ = 0;
+    confidence_ = 0.0f;
+    peakAmplitude_ = 0.0f;
+    amplitudeVariance_ = 0.0f;
+    runningMax_ = 0.0f;
+    runningMean_ = 0.0f;
+    sampleCount_ = 0;
+}
+
+void CombFilterPhaseTracker::setTempo(float bpm, float frameRate) {
+    // Convert BPM to lag in samples
+    // beatPeriodSeconds = 60 / bpm
+    // lagSamples = beatPeriodSeconds * frameRate
+    if (bpm < 30.0f) bpm = 30.0f;
+    if (bpm > 300.0f) bpm = 300.0f;
+
+    int newLag = static_cast<int>((60.0f / bpm) * frameRate + 0.5f);
+
+    // Clamp to valid range
+    if (newLag < 1) newLag = 1;
+    if (newLag > MAX_LAG) newLag = MAX_LAG;
+
+    // Only update if significantly different (avoid jitter)
+    if (newLag != currentLag_) {
+        // Check if change is significant (>5%)
+        float ratio = static_cast<float>(newLag) / static_cast<float>(currentLag_);
+        if (ratio < 0.95f || ratio > 1.05f) {
+            currentLag_ = newLag;
+        }
+    }
+}
+
+void CombFilterPhaseTracker::process(float input) {
+    // Read from delay line at current lag
+    int readIdx = (writeIdx_ - currentLag_ + MAX_LAG) % MAX_LAG;
+    float delayed = delayLine_[readIdx];
+
+    // Comb filter resonator: y[n] = x[n] + feedback * y[n-L]
+    // This accumulates energy at the beat period
+    resonatorOutput_ = input + feedbackGain * delayed;
+
+    // Write to delay line
+    delayLine_[writeIdx_] = resonatorOutput_;
+    writeIdx_ = (writeIdx_ + 1) % MAX_LAG;
+
+    // Update running statistics for confidence calculation
+    sampleCount_++;
+    float absOutput = resonatorOutput_ > 0 ? resonatorOutput_ : -resonatorOutput_;
+
+    // Exponential moving average for mean
+    const float alpha = 0.01f;  // Slow adaptation
+    runningMean_ = (1.0f - alpha) * runningMean_ + alpha * absOutput;
+
+    // Track maximum for normalization
+    if (absOutput > runningMax_) {
+        runningMax_ = absOutput;
+    } else {
+        // Slow decay of max
+        runningMax_ *= 0.999f;
+    }
+
+    // Phase tracking: detect peaks in resonator output
+    // A peak indicates a beat position
+    samplesSincePeak_++;
+
+    // Detect positive peak (local maximum)
+    if (prevResonatorOutput_ > 0.0f &&
+        resonatorOutput_ < prevResonatorOutput_ &&
+        prevResonatorOutput_ > runningMean_ * 1.5f) {
+        // Found a peak - update phase estimate
+
+        // Phase = how far through the beat cycle we are
+        // samplesSincePeak / currentLag gives fractional position
+        float rawPhase = static_cast<float>(samplesSincePeak_) / static_cast<float>(currentLag_);
+
+        // Wrap to [0, 1)
+        while (rawPhase >= 1.0f) rawPhase -= 1.0f;
+        while (rawPhase < 0.0f) rawPhase += 1.0f;
+
+        // Smooth phase update (avoid jumps)
+        // Use circular interpolation to handle wraparound
+        float phaseDiff = rawPhase - phase_;
+        if (phaseDiff > 0.5f) phaseDiff -= 1.0f;
+        if (phaseDiff < -0.5f) phaseDiff += 1.0f;
+
+        phase_ += phaseDiff * 0.3f;  // Smooth adaptation
+
+        // Normalize phase
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+        if (phase_ < 0.0f) phase_ += 1.0f;
+
+        // Update peak amplitude for confidence
+        peakAmplitude_ = 0.8f * peakAmplitude_ + 0.2f * prevResonatorOutput_;
+
+        // Reset counter
+        samplesSincePeak_ = 0;
+    }
+
+    // Update phase even without peaks (it advances with time)
+    // Phase advances by 1/currentLag per sample
+    phase_ += 1.0f / static_cast<float>(currentLag_);
+    if (phase_ >= 1.0f) phase_ -= 1.0f;
+
+    // Compute confidence based on resonator stability
+    // High confidence when:
+    // 1. Peak amplitude is significantly above mean
+    // 2. Peaks occur regularly at expected interval
+    if (runningMax_ > 0.001f && peakAmplitude_ > 0.0f) {
+        // Peak-to-mean ratio indicates periodicity strength
+        float peakRatio = peakAmplitude_ / (runningMean_ + 0.001f);
+        // Confidence scales with how much peaks stand out
+        confidence_ = 1.0f - 1.0f / (1.0f + peakRatio * 0.5f);
+
+        // Clamp to [0, 1]
+        if (confidence_ < 0.0f) confidence_ = 0.0f;
+        if (confidence_ > 1.0f) confidence_ = 1.0f;
+
+        // Reduce confidence during startup
+        if (sampleCount_ < currentLag_ * 4) {
+            confidence_ *= static_cast<float>(sampleCount_) / static_cast<float>(currentLag_ * 4);
+        }
+    } else {
+        confidence_ = 0.0f;
+    }
+
+    prevResonatorOutput_ = resonatorOutput_;
 }
