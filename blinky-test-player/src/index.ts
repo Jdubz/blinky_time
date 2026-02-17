@@ -239,6 +239,7 @@ program
       instrument: string;
       sample: string;
       strength: number;
+      expectTrigger?: boolean;
     }> | null = null;
     let patternComplete = false;
 
@@ -310,6 +311,7 @@ program
       type: h.instrument || (h.type === 'low' ? 'kick' : 'snare'), // Fallback for old patterns
       sampleId: (h as { sampleId?: string }).sampleId, // Deterministic sample selection
       strength: h.strength,
+      expectTrigger: h.expectTrigger, // Pass through for ground truth
     }));
 
     // Play the pattern
@@ -348,6 +350,7 @@ program
         type: h.type,
         instrument: h.instrument,
         strength: h.strength,
+        expectTrigger: h.expectTrigger,
       })),
     };
 

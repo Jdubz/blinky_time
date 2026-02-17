@@ -78,6 +78,8 @@ test_report.html
 test-results/
 coverage/
 blinky-test-player/tuning-results/
+blinky-test-player/dist/
+blinky-serial-mcp/dist/
 
 # Scratch and Experimental Code
 scratch/

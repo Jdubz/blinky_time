@@ -401,7 +401,8 @@
                 type: getBandForType(parsed.type),
                 instrument: parsed.type,
                 sample: sampleId + ' (synth)',
-                strength: hit.strength || 1.0
+                strength: hit.strength || 1.0,
+                expectTrigger: hit.expectTrigger
               });
             }
           }
@@ -427,7 +428,8 @@
             type: getBandForType(hit.type),
             instrument: hit.type,
             sample: sample.name,
-            strength: hit.strength || 1.0
+            strength: hit.strength || 1.0,
+            expectTrigger: hit.expectTrigger
           });
         }
       }

@@ -1105,7 +1105,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           durationMs: number;
           bpm?: number;
           startedAt: string;
-          hits: Array<{ timeMs: number; type: string; strength: number }>;
+          hits: Array<{ timeMs: number; type: string; strength: number; expectTrigger?: boolean }>;
         };
 
         let timingOffsetMs = 0;
