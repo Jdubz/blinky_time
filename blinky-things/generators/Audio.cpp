@@ -61,19 +61,29 @@ void Audio::drawBackground(PixelMatrix& matrix) {
 
 void Audio::drawTransientRows(PixelMatrix& matrix, float intensity) {
     if (intensity < 0.01f) return;
+    if (height_ < 1) return;  // Guard against zero height
 
     // Calculate how many rows for transient indicator
-    int transientRows = (int)(params_.transientRowFraction * height_);
-    if (transientRows < 1) transientRows = 1;
+    // Clamp transientRowFraction to valid range
+    float fraction = params_.transientRowFraction;
+    if (fraction < 0.0f) fraction = 0.0f;
+    if (fraction > 1.0f) fraction = 1.0f;
 
-    // Calculate green brightness based on intensity
-    uint8_t maxGreen = (uint8_t)(params_.transientBrightness * intensity);
+    int transientRows = (int)(fraction * height_);
+    if (transientRows < 1) transientRows = 1;
+    if (transientRows > height_) transientRows = height_;
+
+    // Calculate green brightness based on intensity (clamp intensity to 0-1)
+    float clampedIntensity = intensity;
+    if (clampedIntensity > 1.0f) clampedIntensity = 1.0f;
+    uint8_t maxGreen = (uint8_t)(params_.transientBrightness * clampedIntensity);
 
     // Draw gradient from top: brightest at top, fading down
     for (int i = 0; i < transientRows; i++) {
         int y = i;  // Start from top (y=0)
 
         // Gradient: full brightness at top, fading to 0 at bottom of transient region
+        // transientRows is guaranteed >= 1, so no division by zero
         float gradientFactor = 1.0f - ((float)i / (float)transientRows);
         uint8_t green = (uint8_t)(maxGreen * gradientFactor);
 
@@ -83,7 +93,7 @@ void Audio::drawTransientRows(PixelMatrix& matrix, float intensity) {
                 RGB existing = matrix.getPixel(x, y);
                 matrix.setPixel(x, y,
                                existing.r,
-                               min(255, existing.g + green),
+                               (uint8_t)min(255, (int)existing.g + (int)green),
                                existing.b);
             }
         }
@@ -91,15 +101,23 @@ void Audio::drawTransientRows(PixelMatrix& matrix, float intensity) {
 }
 
 void Audio::drawEnergyRow(PixelMatrix& matrix, float energy) {
+    if (height_ < 1) return;  // Guard against zero height
+
     // Clamp energy to 0-1
     if (energy < 0.0f) energy = 0.0f;
     if (energy > 1.0f) energy = 1.0f;
 
     // Map energy to Y position: high energy = near top (low Y), low energy = near bottom (high Y)
     // Reserve top rows for transient indicator
-    int transientRows = (int)(params_.transientRowFraction * height_);
-    int usableHeight = height_ - transientRows;
+    // Clamp transientRowFraction to valid range
+    float fraction = params_.transientRowFraction;
+    if (fraction < 0.0f) fraction = 0.0f;
+    if (fraction > 1.0f) fraction = 1.0f;
 
+    int transientRows = (int)(fraction * height_);
+    if (transientRows > height_) transientRows = height_;
+
+    int usableHeight = height_ - transientRows;
     if (usableHeight < 1) return;
 
     // Y position: bottom of usable area (highest Y) to just below transient area
@@ -115,15 +133,22 @@ void Audio::drawEnergyRow(PixelMatrix& matrix, float energy) {
 void Audio::drawPhaseRow(PixelMatrix& matrix, float phase, float rhythmStrength) {
     // Only show phase when music mode is active
     if (rhythmStrength < params_.musicModeThreshold) return;
+    if (height_ < 1) return;  // Guard against zero height
 
     // Clamp phase to 0-1
     if (phase < 0.0f) phase = 0.0f;
     if (phase > 1.0f) phase = 1.0f;
 
     // Reserve top rows for transient indicator
-    int transientRows = (int)(params_.transientRowFraction * height_);
-    int usableHeight = height_ - transientRows;
+    // Clamp transientRowFraction to valid range
+    float fraction = params_.transientRowFraction;
+    if (fraction < 0.0f) fraction = 0.0f;
+    if (fraction > 1.0f) fraction = 1.0f;
 
+    int transientRows = (int)(fraction * height_);
+    if (transientRows > height_) transientRows = height_;
+
+    int usableHeight = height_ - transientRows;
     if (usableHeight < 1) return;
 
     // Phase 0 (on-beat) = bottom, phase approaching 1 = top
@@ -134,8 +159,20 @@ void Audio::drawPhaseRow(PixelMatrix& matrix, float phase, float rhythmStrength)
 
     // Brightness modulated by rhythm confidence
     // Map rhythmStrength from [threshold, 1] to [0.3, 1.0] for brightness
-    float confidenceScale = (rhythmStrength - params_.musicModeThreshold) /
-                           (1.0f - params_.musicModeThreshold);
+    // Guard against division by zero when musicModeThreshold >= 1.0
+    float confidenceScale;
+    float denominator = 1.0f - params_.musicModeThreshold;
+    if (denominator <= 0.0f) {
+        // musicModeThreshold is 1.0 or higher - use full brightness
+        confidenceScale = 1.0f;
+    } else {
+        confidenceScale = (rhythmStrength - params_.musicModeThreshold) / denominator;
+    }
+
+    // Clamp confidenceScale to valid range before applying
+    if (confidenceScale < 0.0f) confidenceScale = 0.0f;
+    if (confidenceScale > 1.0f) confidenceScale = 1.0f;
+
     confidenceScale = 0.3f + 0.7f * confidenceScale;  // 30% to 100%
 
     uint8_t brightness = (uint8_t)(params_.phaseBrightness * confidenceScale);
