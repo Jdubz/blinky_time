@@ -447,7 +447,9 @@ public:
     // === COMB FILTER PHASE TRACKER (Phase 4) ===
     // Independent phase tracking using comb filter resonance
     // Provides complementary phase estimate to autocorrelation and Fourier methods
-    float combFilterWeight = 0.0f;  // 0.0 = disabled (default), 1.0 = full weight in fusion
+    // DISABLED BY DEFAULT: Testing showed -15-21% F1 regression on complex patterns
+    // The comb filter phase estimates pollute the fusion - needs refinement
+    float combFilterWeight = 0.0f;  // Weight in fusion (0.0 = disabled, 1.0 = full weight)
     float combFeedback = 0.92f;     // Resonance strength (0.85-0.98)
 
     // === RHYTHM FUSION (Phase 5) ===
