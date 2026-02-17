@@ -277,7 +277,6 @@ private:
     // Confidence from amplitude stability
     float confidence_ = 0.0f;
     float peakAmplitude_ = 0.0f;
-    float amplitudeVariance_ = 0.0f;
 
     // Running stats for confidence
     float runningMax_ = 0.0f;

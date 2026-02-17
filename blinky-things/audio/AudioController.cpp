@@ -2015,7 +2015,6 @@ void CombFilterPhaseTracker::reset() {
     samplesSincePeak_ = 0;
     confidence_ = 0.0f;
     peakAmplitude_ = 0.0f;
-    amplitudeVariance_ = 0.0f;
     runningMax_ = 0.0f;
     runningMean_ = 0.0f;
     sampleCount_ = 0;
@@ -2077,29 +2076,35 @@ void CombFilterPhaseTracker::process(float input) {
     // A peak indicates a beat position
     samplesSincePeak_++;
 
+    // Cap samplesSincePeak to prevent overflow and handle missed peaks
+    // If we've gone 4 beat periods without a peak, something is wrong
+    if (samplesSincePeak_ > currentLag_ * 4) {
+        samplesSincePeak_ = currentLag_ * 4;
+    }
+
     // Detect positive peak (local maximum)
+    bool peakDetected = false;
     if (prevResonatorOutput_ > 0.0f &&
         resonatorOutput_ < prevResonatorOutput_ &&
         prevResonatorOutput_ > runningMean_ * 1.5f) {
         // Found a peak - update phase estimate
+        peakDetected = true;
 
-        // Phase = how far through the beat cycle we are
-        // samplesSincePeak / currentLag gives fractional position
-        float rawPhase = static_cast<float>(samplesSincePeak_) / static_cast<float>(currentLag_);
+        // When a peak is detected, we know we're at phase ~0 (on the beat)
+        // The phase error is how far our predicted phase was from 0
+        // Use this to correct our phase tracking
 
-        // Wrap to [0, 1)
-        while (rawPhase >= 1.0f) rawPhase -= 1.0f;
-        while (rawPhase < 0.0f) rawPhase += 1.0f;
+        // Current predicted phase should be near 0 or 1 at a peak
+        float phaseError = phase_;
+        if (phaseError > 0.5f) {
+            phaseError = phaseError - 1.0f;  // Convert 0.9 to -0.1
+        }
 
-        // Smooth phase update (avoid jumps)
-        // Use circular interpolation to handle wraparound
-        float phaseDiff = rawPhase - phase_;
-        if (phaseDiff > 0.5f) phaseDiff -= 1.0f;
-        if (phaseDiff < -0.5f) phaseDiff += 1.0f;
+        // Apply correction with smoothing
+        // Negative error means we're ahead, positive means behind
+        phase_ -= phaseError * 0.3f;
 
-        phase_ += phaseDiff * 0.3f;  // Smooth adaptation
-
-        // Normalize phase
+        // Normalize phase to [0, 1)
         if (phase_ >= 1.0f) phase_ -= 1.0f;
         if (phase_ < 0.0f) phase_ += 1.0f;
 
@@ -2110,10 +2115,13 @@ void CombFilterPhaseTracker::process(float input) {
         samplesSincePeak_ = 0;
     }
 
-    // Update phase even without peaks (it advances with time)
+    // Update phase (it advances with time)
     // Phase advances by 1/currentLag per sample
-    phase_ += 1.0f / static_cast<float>(currentLag_);
-    if (phase_ >= 1.0f) phase_ -= 1.0f;
+    // Skip the increment on peak detection frames to avoid double-update
+    if (!peakDetected) {
+        phase_ += 1.0f / static_cast<float>(currentLag_);
+        if (phase_ >= 1.0f) phase_ -= 1.0f;
+    }
 
     // Compute confidence based on resonator stability
     // High confidence when:
