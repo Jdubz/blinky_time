@@ -29,13 +29,14 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   maxparticles: {
     displayName: 'Max Particles',
     tooltip:
-      'Maximum number of particles in the pool (32-64). More particles = denser effects but higher CPU.',
+      'Maximum number of particles in the pool (1-64). More particles = denser effects but higher CPU. Pool capacity is 64.',
     unit: '',
   },
   defaultlifespan: {
     displayName: 'Default Lifespan',
-    tooltip: 'Default particle age in frames (20-120). Higher = longer-lived particles.',
-    unit: 'frames',
+    tooltip:
+      'Default particle lifespan in centiseconds (1-255, where 100 = 1 second). Higher = longer-lived particles that rise further.',
+    unit: 'cs',
   },
   intensitymin: {
     displayName: 'Min Intensity',
@@ -55,13 +56,15 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   windbase: {
     displayName: 'Base Wind',
-    tooltip: 'Base horizontal wind force applied per frame. Creates lateral motion.',
-    unit: '',
+    tooltip:
+      'Sustained directional drift force (LEDs/sec²). Positive = rightward lean, negative = leftward. Applied as acceleration so effect builds over particle lifetime.',
+    unit: 'LEDs/sec²',
   },
   windvariation: {
-    displayName: 'Wind Variation',
-    tooltip: 'Wind variation amount applied per frame. Adds turbulence to wind.',
-    unit: '',
+    displayName: 'Wind Turbulence',
+    tooltip:
+      'Curl-noise turbulence intensity (LEDs/sec). Directly displaces particles laterally each frame — windVariation=10 moves a particle ~0.17 LEDs/frame sideways. Set to 5-15 for subtle sway, 20-40 for strong swirling.',
+    unit: 'LEDs/sec',
   },
   drag: {
     displayName: 'Drag',
@@ -71,34 +74,38 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   sparkvelmin: {
     displayName: 'Min Spark Velocity',
-    tooltip: 'Minimum upward velocity for sparks (LEDs/frame@30FPS). Lower = slower rise.',
-    unit: 'LEDs/frame',
+    tooltip:
+      'Minimum upward velocity for sparks (LEDs/sec). Lower = slower rise. At 60fps a value of 10 moves ~0.17 LEDs per frame.',
+    unit: 'LEDs/sec',
   },
   sparkvelmax: {
     displayName: 'Max Spark Velocity',
-    tooltip: 'Maximum upward velocity for sparks (LEDs/frame@30FPS). Higher = faster rise.',
-    unit: 'LEDs/frame',
+    tooltip:
+      'Maximum upward velocity for sparks (LEDs/sec). Higher = faster rise and greater height reached.',
+    unit: 'LEDs/sec',
   },
   sparkspread: {
     displayName: 'Spark Spread',
-    tooltip: 'Horizontal velocity variation for sparks (LEDs/frame@30FPS). Higher = wider spread.',
-    unit: 'LEDs/frame',
-  },
-  trailheatfactor: {
-    displayName: 'Trail Heat Factor',
-    tooltip:
-      'Heat multiplier for particle trails (0-100%). Percentage of particle intensity left as trail.',
-    unit: '%',
-  },
-  traildecay: {
-    displayName: 'Trail Decay',
-    tooltip: 'Heat decay rate per frame (0-255). Higher = faster cooling of heat trails.',
-    unit: '',
+    tooltip: 'Horizontal velocity variation for sparks (LEDs/sec). Higher = wider lateral spread.',
+    unit: 'LEDs/sec',
   },
   burstsparks: {
     displayName: 'Burst Spark Count',
     tooltip: 'Number of sparks generated per beat burst (1-20). More = bigger reactions.',
     unit: 'sparks',
+  },
+
+  fastsparks: {
+    displayName: 'Fast Spark Ratio',
+    tooltip:
+      'Fraction of spawned particles that are fast sparks (0-1). Remainder are slow embers with heavier trails and longer lifespan. 0 = all embers, 1 = all sparks.',
+    unit: '',
+  },
+  thermalforce: {
+    displayName: 'Thermal Force',
+    tooltip:
+      'Thermal buoyancy strength in LEDs/sec². Particles over hot regions are pushed upward by this force scaled by local heat (0 = no buoyancy, 30 = default, 100 = strong).',
+    unit: 'LEDs/sec²',
   },
 
   // Fire: Music Mode
@@ -122,18 +129,18 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   // ============================================================
   dropvelmin: {
     displayName: 'Min Drop Velocity',
-    tooltip: 'Minimum downward velocity for drops (LEDs/frame@30FPS). Lower = slower falling.',
-    unit: 'LEDs/frame',
+    tooltip: 'Minimum downward velocity for drops (LEDs/sec). Lower = slower falling.',
+    unit: 'LEDs/sec',
   },
   dropvelmax: {
     displayName: 'Max Drop Velocity',
-    tooltip: 'Maximum downward velocity for drops (LEDs/frame@30FPS). Higher = faster falling.',
-    unit: 'LEDs/frame',
+    tooltip: 'Maximum downward velocity for drops (LEDs/sec). Higher = faster falling.',
+    unit: 'LEDs/sec',
   },
   dropspread: {
     displayName: 'Drop Spread',
-    tooltip: 'Horizontal velocity variation for drops (LEDs/frame@30FPS). Higher = wider spray.',
-    unit: 'LEDs/frame',
+    tooltip: 'Horizontal velocity variation for drops (LEDs/sec). Higher = wider spray.',
+    unit: 'LEDs/sec',
   },
   splashparticles: {
     displayName: 'Splash Particle Count',
@@ -142,13 +149,13 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   splashvelmin: {
     displayName: 'Min Splash Velocity',
-    tooltip: 'Minimum splash velocity (LEDs/frame@30FPS). Lower = smaller splashes.',
-    unit: 'LEDs/frame',
+    tooltip: 'Minimum splash velocity (LEDs/sec). Lower = smaller splashes.',
+    unit: 'LEDs/sec',
   },
   splashvelmax: {
     displayName: 'Max Splash Velocity',
-    tooltip: 'Maximum splash velocity (LEDs/frame@30FPS). Higher = bigger splashes.',
-    unit: 'LEDs/frame',
+    tooltip: 'Maximum splash velocity (LEDs/sec). Higher = bigger splashes.',
+    unit: 'LEDs/sec',
   },
   splashintensity: {
     displayName: 'Splash Intensity',
@@ -161,13 +168,13 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   // ============================================================
   boltvelmin: {
     displayName: 'Min Bolt Speed',
-    tooltip: 'Minimum bolt speed (LEDs/frame@30FPS). Lower = slower bolts.',
-    unit: 'LEDs/frame',
+    tooltip: 'Minimum bolt speed (LEDs/sec). Lower = slower bolts.',
+    unit: 'LEDs/sec',
   },
   boltvelmax: {
     displayName: 'Max Bolt Speed',
-    tooltip: 'Maximum bolt speed (LEDs/frame@30FPS). Higher = faster bolts.',
-    unit: 'LEDs/frame',
+    tooltip: 'Maximum bolt speed (LEDs/sec). Higher = faster bolts.',
+    unit: 'LEDs/sec',
   },
   faderate: {
     displayName: 'Fade Rate',

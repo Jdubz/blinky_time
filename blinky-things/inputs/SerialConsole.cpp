@@ -140,23 +140,25 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 
     // Lifecycle
     settings_.registerUint8("maxparticles", &fp->maxParticles, "fire",
-        "Maximum active particles", 1, 255, onParamChanged);
+        "Maximum active particles", 1, 64, onParamChanged);
     settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
-        "Default particle lifespan (frames)", 1, 255, onParamChanged);
+        "Default particle lifespan (centiseconds, 100=1s)", 1, 255, onParamChanged);
     settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
         "Minimum spawn intensity", 0, 255, onParamChanged);
     settings_.registerUint8("intensitymax", &fp->intensityMax, "fire",
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
-    // Heat trail
-    settings_.registerUint8("trailheatfactor", &fp->trailHeatFactor, "fire",
-        "Heat trail intensity (%)", 0, 100, onParamChanged);
-    settings_.registerUint8("traildecay", &fp->trailDecay, "fire",
-        "Heat decay rate per frame", 0, 255, onParamChanged);
-
     // Background
     settings_.registerFloat("bgintensity", &fp->backgroundIntensity, "fire",
         "Noise background brightness", 0.0f, 1.0f, onParamChanged);
+
+    // Particle variety
+    settings_.registerFloat("fastsparks", &fp->fastSparkRatio, "fire",
+        "Fast spark ratio (0=all embers, 1=all sparks)", 0.0f, 1.0f, onParamChanged);
+
+    // Thermal physics
+    settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
+        "Thermal buoyancy strength (LEDs/sec^2)", 0.0f, 200.0f, onParamChanged);
 }
 
 // === MUSIC MODE FIRE SETTINGS ===

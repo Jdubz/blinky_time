@@ -93,27 +93,27 @@ void ConfigStorage::loadSettingsDefaults() {
     // Settings defaults - called when SETTINGS_VERSION changes
     // Device config is preserved separately
 
-    // Fire defaults (particle-based) - tuned for Hat music reactivity Jan 2026
-    data_.fire.baseSpawnChance = 0.1f;      // Low baseline, let music drive spawns
+    // Fire defaults (particle-based) - matrix-appropriate defaults Feb 2026
+    // These allow wind turbulence to be visibly effective (discrete sparks, fast heat decay)
+    data_.fire.baseSpawnChance = 0.5f;      // Continuous sparks for constant fire
     data_.fire.audioSpawnBoost = 1.5f;      // Strong audio response
-    data_.fire.gravity = 0.0f;              // No lateral drift (linear layout - gravity disabled)
+    data_.fire.gravity = 0.0f;              // No gravity (thermal force provides upward push)
     data_.fire.windBase = 0.0f;
-    data_.fire.windVariation = 25.0f;       // Strong turbulence (increased for visibility over spawn velocity)
+    data_.fire.windVariation = 25.0f;       // Turbulence as LEDs/sec advection (visible swirl)
     data_.fire.drag = 0.985f;               // Smoother flow
-    data_.fire.sparkVelocityMin = 8.0f;     // Fast sparks
-    data_.fire.sparkVelocityMax = 10.0f;    // Fast sparks
+    data_.fire.sparkVelocityMin = 5.0f;     // Slower sparks = more time in frame = wind has more effect
+    data_.fire.sparkVelocityMax = 10.0f;    // Varied speeds
     data_.fire.sparkSpread = 4.0f;          // Good spread
     data_.fire.musicSpawnPulse = 0.95f;     // Tight beat sync
     data_.fire.organicTransientMin = 0.25f; // Responsive to softer transients
-    data_.fire.backgroundIntensity = 0.2f;  // Visible lava lamp background
+    data_.fire.backgroundIntensity = 0.15f; // Subtle noise background
     data_.fire.fastSparkRatio = 0.7f;       // 70% fast sparks, 30% embers
+    data_.fire.thermalForce = 30.0f;        // Thermal buoyancy strength (LEDs/sec^2)
     data_.fire.maxParticles = 48;
-    data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds, was 120)
+    data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds)
     data_.fire.intensityMin = 150;
     data_.fire.intensityMax = 220;
-    data_.fire.trailHeatFactor = 70;        // Strong heat trails
-    data_.fire.trailDecay = 20;             // Slow decay for diffusion
-    data_.fire.burstSparks = 15;            // Big transient bursts
+    data_.fire.burstSparks = 10;            // Moderate transient bursts
 
     // Water defaults (particle-based)
     data_.water.baseSpawnChance = 0.25f;
@@ -226,13 +226,26 @@ void ConfigStorage::loadDefaults() {
 }
 
 bool ConfigStorage::loadFromFlash() {
+    // Zero-initialize so unread bytes (when file is smaller than current struct)
+    // are deterministic rather than garbage stack values.
     ConfigData temp;
-    bool readOk = false;
+    memset(&temp, 0, sizeof(temp));
+
+    // Minimum bytes required to read magic + both version fields + device config.
+    // Device config lives immediately after the 4-byte header and must be fully
+    // present for recovery to make sense.
+    static const uint32_t MIN_DEVICE_BYTES =
+        sizeof(uint16_t) +              // magic
+        sizeof(uint8_t) +               // deviceVersion
+        sizeof(uint8_t) +               // settingsVersion
+        sizeof(StoredDeviceConfig);     // device config block
+
+    uint32_t bytesRead = 0;
 
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     if (!flashOk) return false;
     if (flash.read(&temp, flashAddr, sizeof(ConfigData)) != 0) return false;
-    readOk = true;
+    bytesRead = sizeof(ConfigData);  // FlashIAP reads exactly what is asked
 #elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
     if (!flashOk || configFile == nullptr) return false;
 
@@ -240,24 +253,26 @@ bool ConfigStorage::loadFromFlash() {
     configFile->open(CONFIG_FILENAME, FILE_O_READ);
     if (!(*configFile)) return false;
 
-    uint32_t bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
+    // Read however many bytes are stored (may be less than sizeof(ConfigData)
+    // when the struct grew due to a settings version bump).
+    bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
     configFile->close();
 
-    if (bytesRead != sizeof(ConfigData)) return false;
-    readOk = true;
+    // Nothing useful was read
+    if (bytesRead < MIN_DEVICE_BYTES) return false;
 #endif
-
-    if (!readOk) return false;
 
     // Magic number mismatch: complete corruption, reset everything
     if (temp.magic != MAGIC_NUMBER) return false;
 
-    // Start with defaults for both sections
+    // Start fresh with current defaults for both sections
     data_.magic = MAGIC_NUMBER;
     data_.deviceVersion = DEVICE_VERSION;
     data_.settingsVersion = SETTINGS_VERSION;
 
-    // Handle device config version
+    // Handle device config version.
+    // Device config bytes are always present as long as bytesRead >= MIN_DEVICE_BYTES
+    // (checked above), so we only gate on version match, not on total file size.
     if (temp.deviceVersion == DEVICE_VERSION) {
         // Device config version matches - preserve it
         memcpy(&data_.device, &temp.device, sizeof(StoredDeviceConfig));
@@ -268,9 +283,12 @@ bool ConfigStorage::loadFromFlash() {
         SerialConsole::logWarn(F("Device config version mismatch, using defaults"));
     }
 
-    // Handle settings version
-    if (temp.settingsVersion == SETTINGS_VERSION) {
-        // Settings version matches - preserve all settings
+    // Handle settings version.
+    // Settings are only valid if both the version matches AND the file was large
+    // enough to contain the full settings structs (i.e. not written by an older
+    // firmware with a smaller ConfigData).
+    if (temp.settingsVersion == SETTINGS_VERSION && bytesRead >= sizeof(ConfigData)) {
+        // Settings version matches and file is the right size - preserve all settings
         memcpy(&data_.fire, &temp.fire, sizeof(StoredFireParams));
         memcpy(&data_.water, &temp.water, sizeof(StoredWaterParams));
         memcpy(&data_.lightning, &temp.lightning, sizeof(StoredLightningParams));
@@ -279,7 +297,8 @@ bool ConfigStorage::loadFromFlash() {
         data_.brightness = temp.brightness;
         SerialConsole::logDebug(F("Settings loaded from flash"));
     } else {
-        // Settings version mismatch - use defaults (common during development)
+        // Settings version mismatch or struct grew - use defaults.
+        // Device config was already recovered above.
         loadSettingsDefaults();
         SerialConsole::logWarn(F("Settings version mismatch, using defaults (device config preserved)"));
     }
@@ -454,7 +473,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Debug: show loaded values
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
         Serial.print(F("[DEBUG] baseSpawnChance=")); Serial.print(data_.fire.baseSpawnChance, 2);
-        Serial.print(F(" trailDecay=")); Serial.print(data_.fire.trailDecay);
         Serial.print(F(" gravity=")); Serial.println(data_.fire.gravity);
     }
 
@@ -477,13 +495,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     fireParams.backgroundIntensity = data_.fire.backgroundIntensity;
     // Particle variety
     fireParams.fastSparkRatio = data_.fire.fastSparkRatio;
+    fireParams.thermalForce = data_.fire.thermalForce;
     // Lifecycle
+    fireParams.maxParticles = data_.fire.maxParticles;
     fireParams.defaultLifespan = data_.fire.defaultLifespan;
     fireParams.intensityMin = data_.fire.intensityMin;
     fireParams.intensityMax = data_.fire.intensityMax;
-    // Heat trail
-    fireParams.trailHeatFactor = data_.fire.trailHeatFactor;
-    fireParams.trailDecay = data_.fire.trailDecay;
     fireParams.burstSparks = data_.fire.burstSparks;
 
     // === WATER PARAMETERS ===
@@ -607,13 +624,12 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.fire.backgroundIntensity = fireParams.backgroundIntensity;
     // Particle variety
     data_.fire.fastSparkRatio = fireParams.fastSparkRatio;
+    data_.fire.thermalForce = fireParams.thermalForce;
     // Lifecycle
+    data_.fire.maxParticles = fireParams.maxParticles;
     data_.fire.defaultLifespan = fireParams.defaultLifespan;
     data_.fire.intensityMin = fireParams.intensityMin;
     data_.fire.intensityMax = fireParams.intensityMax;
-    // Heat trail
-    data_.fire.trailHeatFactor = fireParams.trailHeatFactor;
-    data_.fire.trailDecay = fireParams.trailDecay;
     data_.fire.burstSparks = fireParams.burstSparks;
 
     // === WATER PARAMETERS ===

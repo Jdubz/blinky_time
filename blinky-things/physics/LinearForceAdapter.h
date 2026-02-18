@@ -30,23 +30,22 @@ public:
 
     void applyWind(Particle* p, float dt) override {
         if (p->hasFlag(ParticleFlags::WIND)) {
-            float wind = baseWind_;
+            // Base wind: force/acceleration for sustained directional drift
+            p->vx += (baseWind_ / p->mass) * dt;
+
             if (windVariation_ > 0.0f) {
-                // Multi-octave turbulence using built-in FBM (Fractal Brownian Motion)
-                // fbm3D(x, y, z, octaves, persistence)
-                // persistence=0.5 means each octave is half the amplitude of previous
+                // Turbulence as flow-field advection (same reasoning as MatrixForceAdapter)
                 float turbulence = SimplexNoise::fbm3D(
-                    p->x * 0.15f,           // Spatial frequency
-                    noisePhase_ * 0.6f,     // Fast time variation
-                    0.0f,                    // Z seed
-                    2,                       // 2 octaves
-                    0.5f                     // Half amplitude per octave
+                    p->x * 0.15f,       // Spatial frequency along strip
+                    noisePhase_ * 0.6f, // Time variation
+                    0.0f,
+                    2,
+                    0.5f
                 );
 
-                wind += windVariation_ * turbulence;
+                // Direct position advection: windVariation is LEDs/sec of displacement
+                p->x += windVariation_ * turbulence * dt;
             }
-            // Mass affects wind response
-            p->vx += (wind / p->mass) * dt;
         }
     }
 

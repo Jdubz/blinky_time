@@ -7,7 +7,9 @@
 
 ## Current Performance (Feb 2026 Baseline)
 
-**Config:** HFC (0.60) + Drummer (0.40), agree_1=0.2, cooldown=250ms, minconf=0.55
+**Config:** HFC (0.60) + Drummer (0.40) + BassBand (0.18), cooldown=250ms (adaptive), minconf=0.55
+
+> ⚠️ **Scores below were recorded with the 2-detector config (HFC + Drummer only).** BassBand has since been re-enabled. Re-run suite to establish updated baseline.
 
 | Pattern | F1 | Precision | Recall | Issue |
 |---------|-----|-----------|--------|-------|
@@ -19,7 +21,7 @@
 | chord-rejection | 0.698 | 0.56 | 0.94 | 12 FPs |
 | lead-melody | 0.286 | 0.17 | 1.0 | 38-40 FPs |
 
-**Average F1: 0.781**
+**Average F1: 0.781** (stale — re-run needed)
 
 ## Completed Work (Feb 2026)
 
@@ -28,6 +30,9 @@
 - Phase correction hardening (agreement gate, EMA alpha reduction)
 - Comprehensive detector tuning: ComplexDomain, SpectralFlux, Novelty all tested and kept disabled
 - Agreement boost optimization: agree_1=0.2 confirmed optimal
+- BassBand re-enabled with noise rejection (40Hz highpass + agreement gate)
+- Tempo prior + all rhythm params persisted to flash
+- Pulse train Fourier phase (Phase 3) + comb filter phase tracker (Phase 4)
 
 ## Priority 1: lead-melody False Positive Reduction
 
@@ -63,17 +68,6 @@
 3. **Environment control** — Close doors, reduce ambient noise during tests
 4. **Longer cooldown between tests** — Allow AGC to fully settle
 
-## Priority 4: Rhythm Tracking at Extreme Tempos
-
-**Problem:** BPM tracking biased toward prior center (120 BPM). 60 BPM and 180 BPM show 30-45% error.
-
-**Root cause:** Autocorrelation naturally produces stronger peaks at subharmonics. The tempo prior helps but can't fully disambiguate.
-
-**Potential approaches:**
-1. **Harmonic relationship detection** — When candidate BPM is ~2x or 0.5x the primary, check which is more consistent with transient timing
-2. **Double-time promotion** — If detected BPM is half of a hypothesis with stronger transient alignment, promote the faster tempo
-3. **Wider prior** — Increase priorwidth to reduce center bias (trade-off: less precise at 120 BPM)
-
 ## Known Algorithmic Limitations
 
 These issues are unlikely to be fixed by parameter tuning alone:
@@ -82,6 +76,5 @@ These issues are unlikely to be fixed by parameter tuning alone:
 |-------|-----------|-------------|
 | Melody note false positives | Pitched harmonics trigger HFC | Pitch/harmonic analysis algorithm |
 | Chord change false positives | Amplitude spikes on transitions | Rise-time or spectral continuity gate |
-| Half-time BPM detection | Autocorrelation subharmonics | Harmonic tempo relationship logic |
 | Simultaneous overlapping sounds | Single detection per cooldown window | Multi-band peak picking |
 | Test variance | Room acoustics, ambient noise | Controlled test environment |

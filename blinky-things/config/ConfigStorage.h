@@ -30,7 +30,7 @@ public:
     // Bumping SETTINGS_VERSION preserves device config (LED layout, device name, etc.)
     // Bumping DEVICE_VERSION only needed when StoredDeviceConfig struct changes
     static const uint8_t DEVICE_VERSION = 1;    // Device config schema (LED layout, pins, etc.)
-    static const uint8_t SETTINGS_VERSION = 4;  // Settings schema (fire, water, lightning, mic, music params)
+    static const uint8_t SETTINGS_VERSION = 7;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -53,14 +53,12 @@ public:
         float backgroundIntensity;
         // Particle variety
         float fastSparkRatio;
+        float thermalForce;       // Thermal buoyancy strength (LEDs/sec^2)
         // Lifecycle
         uint8_t maxParticles;
         uint8_t defaultLifespan;
         uint8_t intensityMin;
         uint8_t intensityMax;
-        // Heat trail
-        uint8_t trailHeatFactor;
-        uint8_t trailDecay;
         uint8_t burstSparks;
     };
 
@@ -267,8 +265,8 @@ public:
     // VERSION BUMPING RULES:
     // - StoredDeviceConfig changes -> bump DEVICE_VERSION (rare, wipes device identity)
     // - Any other struct changes -> bump SETTINGS_VERSION (preserves device config)
-    static_assert(sizeof(StoredFireParams) == 60,
-        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (60 bytes = 13 floats + 7 uint8 + padding)");
+    static_assert(sizeof(StoredFireParams) == 64,
+        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 5 uint8 + padding)");
     static_assert(sizeof(StoredWaterParams) == 64,
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 6 uint8 + padding)");
     static_assert(sizeof(StoredLightningParams) == 40,

@@ -1,110 +1,85 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: January 3, 2026*
+*Last Updated: February 2026*
 
 ## Current Status
+
+### Completed (February 2026)
+
+**Rhythm Tracking (greatly improved):**
+- Tempo prior with Gaussian weighting (120 BPM center, 50 width, 0.5 blend) — persisted to flash
+- Pulse train Fourier phase (PLP-inspired, Phase 3) — 10-11% F1 improvement
+- Comb filter phase tracker (Phase 4) — multi-system phase fusion framework
+- All rhythm params now persisted to flash (`StoredMusicParams`, 68 bytes)
+- Adaptive cooldown — 250ms base, scales with tempo via `beatPeriod / 6`
+- BassBand detector re-enabled with noise rejection (3-detector config: Drummer 0.40 + HFC 0.60 + BassBand 0.18)
+
+**Particle System & Visuals:**
+- Frame-rate independent physics (centiseconds, not frames)
+- Continuous mode blending (replaced binary `hasRhythm()` threshold)
+- Particle variety system (FAST_SPARK, SLOW_EMBER, BURST_SPARK types)
+- Smooth 6-stop color gradient for fire (eliminated banding)
+- Hardware AGC full range in loud mode (0-80, was 10-80)
+- Multi-octave SimplexNoise turbulence wind (replaced sine wave)
+- Runtime device configuration (safe mode, JSON registry, serial upload)
 
 ### Completed (January 2026)
 
 **Multi-Hypothesis Tempo Tracking (v3):**
-- Multi-hypothesis tracking (4 concurrent tempos) implemented
-- Handles tempo changes, ambiguity (half-time/double-time), and polyrhythmic patterns
+- 4 concurrent tempo hypotheses with LRU eviction
+- Handles tempo changes, ambiguity, and polyrhythmic patterns
 - Confidence-based promotion with ≥8 beat requirement
-- Dual decay strategy: beat-count (phrase-aware) + time-based (silence)
-- SerialConsole commands: `show hypotheses`, `show primary`, `set hypodebug`
-- Memory: +1 KB RAM, +4 KB program storage
-- CPU: +3-4% @ 64 MHz
+- Dual decay: phrase-aware (32-beat half-life) + silence (5s half-life)
 
 ### Completed (December 2025)
 
-**Architecture:**
-- Generator → Effect → Renderer pattern implemented
-- AudioController v2 with autocorrelation-based rhythm tracking (single-hypothesis) → UPGRADED to v3
-- PLL-based phase tracking replaced with pattern analysis
-- Ensemble detector with 6 algorithms: Drummer, SpectralFlux, BassBand, HFC, ComplexDomain, MelFlux
-- Agreement-based fusion with weighted confidence scaling
-
-**Testing Infrastructure:**
-- blinky-serial-mcp: MCP server for device communication (20+ tools)
-- blinky-test-player: Audio pattern playback + ground truth generation
-- param-tuner: Binary search + sweep optimization
-- Comprehensive parameter tuning guide (56 tunable parameters)
-
-**Calibration:**
-- Fast-tune sessions completed
-- Hybrid mode with equal weights (0.5/0.5) optimal
-- Cooldown increased to 80ms for reduced false positives
-- Parameters documented in PARAMETER_TUNING_HISTORY.md
-
-**Documentation (January 2026 Consolidation):**
-- Architecture docs updated for AudioController v3
-- MUSIC_MODE_SIMPLIFIED.md → docs/AUDIO_ARCHITECTURE.md
-- DEVELOPMENT.md, SAFETY.md moved to docs/
-- Obsolete plans removed (AUDIO_IMPROVEMENTS_PLAN, RHYTHM_ANALYSIS_ENHANCEMENT_PLAN, etc.)
-- Redundant docs consolidated (Q&A merged into tracking plan, scenarios into tuner guide)
-- CLAUDE.md enhanced with comprehensive architecture overview
-
-### In Progress
-
-**Tuning Refinement:**
-- [ ] Extended range testing (hitthresh, attackmult hit boundaries)
-- [ ] Pad rejection improvement (high false positive rate)
-- [ ] Fast-tempo optimization (drummer mode recall issues)
-
-**Portfolio:**
-- [ ] Demo video/GIFs for README
-- [ ] Hardware photos of installations
+**Architecture:** Generator → Effect → Renderer, AudioController v3, ensemble detection (6 algorithms), agreement-based fusion, comprehensive testing infrastructure (MCP + param-tuner), calibration completed.
 
 ---
 
-## Technical Improvements
+## Outstanding Issues
 
-### Priority 1: Transient Detection (Short-term)
+### Priority 1: False Positive Reduction
 
-**Parameter Boundaries:**
-Some parameters hit minimum bounds during fast-tune, suggesting optimal values may be outside tested range:
+Current detector config: **Drummer (0.40) + HFC (0.60) + BassBand (0.18)**, cooldown=250ms, minconf=0.55
 
-| Parameter | Tested Min | Optimal | Status |
-|-----------|------------|---------|--------|
-| hitthresh | 1.0 | 1.192 | Near boundary, needs retest with 0.5 min |
-| attackmult | 1.0 | 1.1 | Near boundary, needs retest with 0.9 min |
+| Pattern | F1 | Issue |
+|---------|-----|-------|
+| lead-melody | 0.286 | 38-40 FPs — HFC fires on every melody note |
+| chord-rejection | 0.698 | 12 FPs — amplitude spikes on chord changes |
+| pad-rejection | 0.696 | 7 FPs, high variance (0.64–0.80) |
 
-**Known Issues:**
-- pad-rejection: 50-229 false positives across modes
-- simultaneous: Overlapping sounds detected as single event
-- fast-tempo: 67% missed at high speed with drummer mode
+**lead-melody** (hardest, algorithmic): HFC correctly detects high-frequency spectral change; can't distinguish melody note from percussive transient. Potential approaches:
+- Temporal envelope gate: melody notes sustain >50ms, percussive hits decay rapidly
+- Harmonic-to-noise ratio: percussive = broadband, pitched = harmonic peaks
 
-### Priority 2: Hardware Validation (Medium-term)
+**chord-rejection**: Chord transitions produce genuine amplitude spikes.
+- Quick test: raise `drummer` and `hfc` thresholds, check trade-off against strong-beats recall
+- Rise-time analysis: chord transitions have slower attack than percussive hits
 
-Test all device configurations on actual hardware:
+**pad-rejection**: High variance suggests AGC-related instability.
+- Run 3x and average for stable baseline before tuning
 
-- [ ] **Tube Light (4x15 matrix)** - Primary test platform
-- [ ] **Hat (89 LEDs, string)** - Sideways fire effect
-- [ ] **Bucket Totem (16x8 matrix)** - Horizontal fire
+### Priority 2: Rhythm Fusion (Phase 5)
 
-### Priority 3: Runtime Configuration (Long-term)
+Framework exists but needs tuning — the multi-system phase fusion (pulse train + comb filter + autocorrelation) has the code in place but weighting hasn't been calibrated. Serial params: `ossfluxweight`, `pulsephaseweight`, `combweight`, `fusionenabled`.
 
-- [ ] Dynamic device switching via serial
-- [ ] EEPROM configuration persistence
+### Priority 3: Startup Latency
+
+AudioController requires ~3s of OSS buffer before first beat detection (180 samples @ 60Hz). Progressive approach: start autocorrelation at 60 samples (1s), limit max lag to `ossCount_ / 3`.
+
+### Priority 4: Environment Adaptability (Long-term)
+
+System tuned for studio conditions. Real-world environments (club, festival, ambient) may benefit from different detector profiles. An environment classifier (based on signal level + spectral centroid + beat stability) could switch detector weights automatically every 2-5 seconds with hysteresis.
 
 ---
 
 ## Next Actions
 
-### Immediate (This Week)
-1. Complete extended boundary testing with new parameter ranges
-2. Run full validation suite and document results
-3. Update PARAMETER_TUNING_HISTORY.md with findings
-
-### Short-term (2-4 Weeks)
-1. Hardware testing on actual LED strips
-2. Demo video creation
-3. Investigate algorithmic solutions for pad/simultaneous issues
-
-### Long-term (1-2 Months)
-1. Runtime configuration system
-2. Mobile/web configuration app
-3. Additional generator effects
+1. Re-run full pattern suite with current 3-detector config to establish fresh F1 baseline
+2. Tune chord-rejection threshold trade-off (threshold vs. recall on strong-beats)
+3. Calibrate rhythm fusion weights (Phase 5 — `fusionenabled`, `ossfluxweight`, `pulsephaseweight`, `combweight`)
+4. Investigate temporal envelope gate for lead-melody false positives
 
 ---
 
@@ -112,7 +87,9 @@ Test all device configurations on actual hardware:
 
 | Document | Purpose |
 |----------|---------|
-| [AUDIO_ARCHITECTURE.md](AUDIO_ARCHITECTURE.md) | AudioController architecture |
-| [docs/AUDIO-TUNING-GUIDE.md](AUDIO-TUNING-GUIDE.md) | Parameter reference + test procedures |
-| [docs/GENERATOR_EFFECT_ARCHITECTURE.md](GENERATOR_EFFECT_ARCHITECTURE.md) | Generator design patterns |
-| [blinky-test-player/PARAMETER_TUNING_HISTORY.md](../blinky-test-player/PARAMETER_TUNING_HISTORY.md) | Calibration history |
+| `docs/AUDIO_ARCHITECTURE.md` | AudioController architecture |
+| `docs/AUDIO-TUNING-GUIDE.md` | Parameter reference + test procedures |
+| `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator design patterns |
+| `docs/AUDIO_IMPROVEMENT_ANALYSIS.md` | Detailed improvement approaches |
+| `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Calibration history |
+| `blinky-test-player/NEXT_TESTS.md` | Current testing priorities |
