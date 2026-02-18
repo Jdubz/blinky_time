@@ -51,7 +51,7 @@ export const INSTRUMENT_SHOULD_TRIGGER: Record<InstrumentType, boolean> = {
   tom: true,
   bass: true,          // Bass notes have attack - should trigger
   snare: true,
-  hat: true,           // Hats are transient but often quiet
+  hat: false,          // Hi-hats excluded - detecting every 16th note would require oversensitive detection
   clap: true,
   percussion: true,
   synth_stab: true,    // Sharp synth attack - should trigger

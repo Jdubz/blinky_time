@@ -1161,17 +1161,64 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           return h.strength >= STRONG_BEAT_THRESHOLD;
         });
 
+        // Group expected hits into "onset events" - multiple instruments hitting
+        // at the same time should count as ONE expected detection, not multiple.
+        // This fixes the architectural issue where kick+hat+bass at t=0 was counted
+        // as 3 expected hits but only 1 detection is physically possible.
+        const ONSET_WINDOW_MS = 30; // Hits within 30ms are considered simultaneous
+        interface OnsetEvent {
+          timeMs: number;  // Representative time (average of hits in event)
+          hitIndices: number[];  // Indices into expectedHits
+        }
+
+        // Sort hits by time and group into onset events
+        const sortedHitData = expectedHits
+          .map((h: { timeMs: number }, i: number) => ({ timeMs: h.timeMs, idx: i }))
+          .sort((a: { timeMs: number }, b: { timeMs: number }) => a.timeMs - b.timeMs);
+
+        const onsetEvents: OnsetEvent[] = [];
+        let currentEvent: OnsetEvent | null = null;
+
+        for (const { timeMs, idx } of sortedHitData) {
+          if (!currentEvent || timeMs - currentEvent.timeMs > ONSET_WINDOW_MS) {
+            // Start new onset event
+            currentEvent = { timeMs, hitIndices: [idx] };
+            onsetEvents.push(currentEvent);
+          } else {
+            // Add to current onset event (simultaneous hit)
+            currentEvent.hitIndices.push(idx);
+          }
+        }
+
+        // Also create onset events for ALL hits (including expectTrigger: false like hi-hats)
+        // Used for FP calculation - detecting a hi-hat shouldn't count as false positive
+        // Use wider grouping window for FP calculation since detector can only fire once per cooldown
+        const FP_ONSET_WINDOW_MS = 100; // Detector cooldown is ~80-100ms, group hits accordingly
+        const allHitsSorted = allHits
+          .map((h: { timeMs: number }, i: number) => ({ timeMs: h.timeMs, idx: i }))
+          .sort((a: { timeMs: number }, b: { timeMs: number }) => a.timeMs - b.timeMs);
+
+        const allOnsetEvents: OnsetEvent[] = [];
+        let currentAllEvent: OnsetEvent | null = null;
+
+        for (const { timeMs, idx } of allHitsSorted) {
+          if (!currentAllEvent || timeMs - currentAllEvent.timeMs > FP_ONSET_WINDOW_MS) {
+            currentAllEvent = { timeMs, hitIndices: [idx] };
+            allOnsetEvents.push(currentAllEvent);
+          } else {
+            currentAllEvent.hitIndices.push(idx);
+          }
+        }
+
         // First pass: estimate systematic audio latency by finding median offset
         // This helps compensate for consistent delays (speaker output, air travel, mic processing)
         const offsets: number[] = [];
         detections.forEach((detection) => {
-          // Find closest expected hit ('unified' type matches any expected type)
+          // Find closest onset event
           let minDist = Infinity;
           let closestOffset = 0;
-          expectedHits.forEach((expected) => {
-            // 'unified' type matches any expected type (we no longer have dual-band detection)
-            if (detection.type !== 'unified' && expected.type !== detection.type) return;
-            const offset = detection.timestampMs - expected.timeMs;
+          onsetEvents.forEach((event) => {
+            const offset = detection.timestampMs - event.timeMs;
             if (Math.abs(offset) < Math.abs(minDist)) {
               minDist = offset;
               closestOffset = offset;
@@ -1202,25 +1249,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         }
 
-        // Track which expected hits were matched and the mapping
-        const matchedExpected = new Set<number>();
+        // Track which onset events were matched
+        const matchedOnsetEvents = new Set<number>();
         const matchedDetections = new Set<number>();
-        // Store actual match pairs: detection index -> { expectedIdx, timingError }
+        // Store actual match pairs: detection index -> { eventIdx, timingError }
         const matchPairs = new Map<number, { expectedIdx: number; timingError: number }>();
 
-        // Match each detection to nearest expected hit (if within tolerance)
+        // Match each detection to nearest onset event (if within tolerance)
         // Apply latency correction to detection timestamps
         detections.forEach((detection, dIdx) => {
           let bestMatchIdx = -1;
           let bestMatchDist = Infinity;
           const correctedTime = detection.timestampMs - audioLatencyMs;
 
-          expectedHits.forEach((expected, eIdx) => {
-            if (matchedExpected.has(eIdx)) return; // Already matched
-            // 'unified' type matches any expected type (we no longer have dual-band detection)
-            if (detection.type !== 'unified' && expected.type !== detection.type) return;
+          onsetEvents.forEach((event, eIdx) => {
+            if (matchedOnsetEvents.has(eIdx)) return; // Already matched
 
-            const dist = Math.abs(correctedTime - expected.timeMs);
+            const dist = Math.abs(correctedTime - event.timeMs);
             if (dist < bestMatchDist && dist <= TIMING_TOLERANCE_MS) {
               bestMatchDist = dist;
               bestMatchIdx = eIdx;
@@ -1228,18 +1273,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
 
           if (bestMatchIdx >= 0) {
-            matchedExpected.add(bestMatchIdx);
+            matchedOnsetEvents.add(bestMatchIdx);
             matchedDetections.add(dIdx);
             matchPairs.set(dIdx, { expectedIdx: bestMatchIdx, timingError: bestMatchDist });
           }
         });
 
-        const truePositives = matchedDetections.size;
-        const falsePositives = detections.length - truePositives;
-        const falseNegatives = expectedHits.length - truePositives;
+        // Count detections that match ANY hit (including expectTrigger: false like hi-hats)
+        // These are "acceptable detections" - not false positives
+        // Each detection can match any onset event (no exclusivity for FP calculation)
+        let acceptableDetectionCount = 0;
+        detections.forEach((detection) => {
+          const correctedTime = detection.timestampMs - audioLatencyMs;
+          let foundMatch = false;
+          for (const event of allOnsetEvents) {
+            const dist = Math.abs(correctedTime - event.timeMs);
+            if (dist <= TIMING_TOLERANCE_MS) {
+              foundMatch = true;
+              break;
+            }
+          }
+          if (foundMatch) {
+            acceptableDetectionCount++;
+          }
+        });
+
+        // Metrics are now based on onset events, not individual hits
+        // This correctly reflects that one detection satisfies one musical moment
+        const truePositives = matchedOnsetEvents.size;
+        // FP = detections that don't match ANY hit (expected or acceptable like hi-hats)
+        const falsePositives = Math.max(0, detections.length - acceptableDetectionCount);
+        const falseNegatives = onsetEvents.length - truePositives;
 
         const precision = detections.length > 0 ? truePositives / detections.length : 0;
-        const recall = expectedHits.length > 0 ? truePositives / expectedHits.length : 0;
+        const recall = onsetEvents.length > 0 ? truePositives / onsetEvents.length : 0;
         const f1Score = (precision + recall) > 0
           ? 2 * (precision * recall) / (precision + recall)
           : 0;
@@ -1258,12 +1325,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           truePositives,
           falsePositives,
           falseNegatives,
-          expectedTotal: expectedHits.length,
+          // Expected is now onset events (distinct musical moments), not raw instrument hits
+          expectedTotal: onsetEvents.length,
+          // Also report raw hits for context (how many instruments were grouped)
+          rawHitCount: expectedHits.length,
           avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
           audioLatencyMs: Math.round(audioLatencyMs),
           latencyStdDev,
           latencyWarning,
           timingToleranceMs: TIMING_TOLERANCE_MS,
+          onsetWindowMs: ONSET_WINDOW_MS,
         };
 
         // Calculate music mode metrics
@@ -1341,7 +1412,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             latencyMs: metrics.audioLatencyMs,
           },
           counts: {
-            expected: expectedHits.length,
+            expected: onsetEvents.length,  // Distinct onset events (grouped simultaneous hits)
+            rawHits: expectedHits.length,  // Raw instrument hits before grouping
             detected: detections.length,
             low: lowCount,
             high: highCount,

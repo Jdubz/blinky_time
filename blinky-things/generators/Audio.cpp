@@ -69,7 +69,8 @@ void Audio::drawTransientRows(PixelMatrix& matrix, float intensity) {
     if (fraction < 0.0f) fraction = 0.0f;
     if (fraction > 1.0f) fraction = 1.0f;
 
-    int transientRows = (int)(fraction * height_);
+    // Use +0.5f for rounding to get proper row count (0.2 * 8 = 1.6 -> 2 rows, not 1)
+    int transientRows = (int)(fraction * height_ + 0.5f);
     if (transientRows < 1) transientRows = 1;
     if (transientRows > height_) transientRows = height_;
 
@@ -114,14 +115,16 @@ void Audio::drawEnergyRow(PixelMatrix& matrix, float energy) {
     if (fraction < 0.0f) fraction = 0.0f;
     if (fraction > 1.0f) fraction = 1.0f;
 
-    int transientRows = (int)(fraction * height_);
+    // Use +0.5f for rounding to match transient row calculation
+    int transientRows = (int)(fraction * height_ + 0.5f);
     if (transientRows > height_) transientRows = height_;
 
     int usableHeight = height_ - transientRows;
     if (usableHeight < 1) return;
 
     // Y position: bottom of usable area (highest Y) to just below transient area
-    int y = transientRows + (int)((1.0f - energy) * (usableHeight - 1));
+    // Use +0.5f for rounding to avoid off-by-1 from truncation
+    int y = transientRows + (int)((1.0f - energy) * (usableHeight - 1) + 0.5f);
     if (y < transientRows) y = transientRows;
     if (y >= height_) y = height_ - 1;
 
@@ -145,7 +148,8 @@ void Audio::drawPhaseRow(PixelMatrix& matrix, float phase, float rhythmStrength)
     if (fraction < 0.0f) fraction = 0.0f;
     if (fraction > 1.0f) fraction = 1.0f;
 
-    int transientRows = (int)(fraction * height_);
+    // Use +0.5f for rounding to match transient row calculation
+    int transientRows = (int)(fraction * height_ + 0.5f);
     if (transientRows > height_) transientRows = height_;
 
     int usableHeight = height_ - transientRows;
@@ -153,7 +157,8 @@ void Audio::drawPhaseRow(PixelMatrix& matrix, float phase, float rhythmStrength)
 
     // Phase 0 (on-beat) = bottom, phase approaching 1 = top
     // Y position: bottom of usable area to top of usable area
-    int y = transientRows + (int)((1.0f - phase) * (usableHeight - 1));
+    // Use +0.5f for rounding to avoid off-by-1 from truncation
+    int y = transientRows + (int)((1.0f - phase) * (usableHeight - 1) + 0.5f);
     if (y < transientRows) y = transientRows;
     if (y >= height_) y = height_ - 1;
 

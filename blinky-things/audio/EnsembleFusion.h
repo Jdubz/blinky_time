@@ -109,6 +109,31 @@ public:
     uint16_t getCooldownMs() const { return cooldownMs_; }
 
     /**
+     * Set tempo hint for adaptive cooldown (called by AudioController)
+     * Adapts cooldown to detected tempo:
+     *   - At 120 BPM: cooldown = baseCooldownMs (unchanged)
+     *   - At 150 BPM: cooldown = ~67ms (faster tempo = shorter cooldown)
+     *   - At 180 BPM: cooldown = ~55ms
+     * Formula: effectiveCooldown = max(minCooldown, min(baseCooldown, beatPeriod / 6))
+     * @param bpm Current detected tempo (0 = disabled, use fixed cooldown)
+     */
+    void setTempoHint(float bpm);
+    float getTempoHint() const { return tempoHintBpm_; }
+
+    /**
+     * Enable/disable adaptive cooldown based on tempo
+     * When enabled, cooldown adjusts to detected tempo
+     * When disabled, uses fixed cooldownMs value
+     */
+    void setAdaptiveCooldown(bool enabled) { adaptiveCooldownEnabled_ = enabled; }
+    bool isAdaptiveCooldownEnabled() const { return adaptiveCooldownEnabled_; }
+
+    /**
+     * Get the current effective cooldown (may differ from base if adaptive)
+     */
+    uint16_t getEffectiveCooldownMs() const;
+
+    /**
      * Set minimum confidence threshold for detections
      * Detectors with confidence below this are ignored in fusion
      * @param threshold Minimum confidence (0.0-1.0, default 0.55)
@@ -147,6 +172,12 @@ private:
     // Internal state
     uint32_t lastTransientMs_ = 0;
 
+    // Adaptive cooldown state
+    float tempoHintBpm_ = 0.0f;           // Current tempo hint (0 = unknown)
+    bool adaptiveCooldownEnabled_ = true; // Enable tempo-adaptive cooldown
+    static constexpr uint16_t MIN_COOLDOWN_MS = 40;   // Absolute minimum cooldown
+    static constexpr uint16_t MAX_COOLDOWN_MS = 150;  // Maximum cooldown (slower tempos)
+
     // Legacy private aliases (for backward compatibility with setter methods)
     uint16_t& cooldownMs_ = cooldownMs;
     float& minConfidence_ = minConfidence;
@@ -176,29 +207,30 @@ namespace FusionDefaults {
         true,   // DRUMMER - time-domain amplitude detection
         false,  // SPECTRAL_FLUX - disabled: fires on pad chord changes at all thresholds
         true,   // HFC - high-frequency percussive attacks
-        false,  // BASS_BAND - disabled: susceptible to room rumble/HVAC
+        true,   // BASS_BAND - re-enabled with noise rejection (Feb 2026)
         false,  // COMPLEX_DOMAIN - disabled: adds FPs on sparse patterns (tested Feb 2026)
         false   // NOVELTY - disabled: net negative avg F1, hurts sparse/full-mix (tested Feb 2026)
     };
 
-    // Agreement boost values
+    // Agreement boost values (updated Feb 2026 for 3-detector config)
     // [0] = 0 detectors, [1] = 1 detector, ..., [6] = 6 detectors
     constexpr float AGREEMENT_BOOSTS[] = {
         0.0f,   // 0: No detection
-        0.2f,   // 1: Single detector - strongly suppress (calibrated Feb 2026)
-        0.85f,  // 2: Two detectors - some agreement
-        1.0f,   // 3: Three detectors - good consensus
+        0.3f,   // 1: Single detector - suppress but allow strong hits
+        0.75f,  // 2: Two detectors - moderate agreement (Drummer+HFC or Drummer+Bass)
+        1.0f,   // 3: Three detectors - full consensus (all three agree)
         1.1f,   // 4: Four detectors - strong consensus
         1.15f,  // 5: Five detectors - very strong
         1.2f    // 6: All detectors - maximum boost
     };
 
     // Default detector thresholds (Feb 2026 calibration)
+    // Tune at runtime via: set detector_thresh <type> <value>
     constexpr float THRESHOLDS[] = {
         3.5f,   // DRUMMER: amplitude ratio vs average (calibrated Feb 2026)
         1.4f,   // SPECTRAL_FLUX: flux vs local median
         4.0f,   // HFC: high-freq content vs average (calibrated Feb 2026)
-        3.0f,   // BASS_BAND: bass flux vs average
+        4.0f,   // BASS_BAND: bass flux vs average (tunable via serial)
         2.0f,   // COMPLEX_DOMAIN: phase deviation threshold
         2.5f    // NOVELTY: cosine distance vs local median
     };

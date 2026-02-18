@@ -259,11 +259,13 @@ void SerialConsole::registerRhythmSettings() {
 
     // Ensemble fusion parameters (detection gating)
     settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
-        "Ensemble cooldown (ms)", 20, 500);
+        "Base ensemble cooldown (ms)", 20, 500);
     settings_.registerFloat("ensminconf", &audioCtrl_->getEnsemble().getFusion().minConfidence, "ensemble",
         "Minimum detector confidence", 0.0f, 1.0f);
     settings_.registerFloat("ensminlevel", &audioCtrl_->getEnsemble().getFusion().minAudioLevel, "ensemble",
         "Noise gate audio level", 0.0f, 0.5f);
+    // Note: Adaptive cooldown enable/disable handled via "set ens_adaptcool 0|1" command
+    // Effective cooldown (tempo-adjusted) shown via "show ens_effcool" command
 
     // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
@@ -1504,11 +1506,26 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(F("\nFusion Parameters:"));
         Serial.print(F("  cooldown: "));
         Serial.print(fusion.getCooldownMs());
-        Serial.println(F(" ms"));
+        Serial.println(F(" ms (base)"));
+        Serial.print(F("  adaptcool: "));
+        Serial.println(fusion.isAdaptiveCooldownEnabled() ? F("on") : F("off"));
+        Serial.print(F("  effcool: "));
+        Serial.print(fusion.getEffectiveCooldownMs());
+        Serial.print(F(" ms (tempo="));
+        Serial.print(fusion.getTempoHint(), 1);
+        Serial.println(F(" bpm)"));
         Serial.print(F("  minconf: "));
         Serial.println(fusion.getMinConfidence(), 3);
         Serial.print(F("  minlevel: "));
         Serial.println(fusion.getMinAudioLevel(), 3);
+
+        // BassBand-specific parameters
+        const BassBandDetector& bass = audioCtrl_->getEnsemble().getBassBand();
+        Serial.println(F("\nBassBand Noise Rejection:"));
+        Serial.print(F("  minflux: "));
+        Serial.println(bass.getMinAbsoluteFlux(), 3);
+        Serial.print(F("  sharpness: "));
+        Serial.println(bass.getSharpnessThreshold(), 2);
         return true;
     }
 
@@ -1571,6 +1588,35 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         if (!audioCtrl_) return true;
         Serial.print(F("ensemble_minlevel="));
         Serial.println(audioCtrl_->getEnsemble().getFusion().getMinAudioLevel(), 3);
+        return true;
+    }
+
+    // ens_adaptcool: Enable/disable tempo-adaptive cooldown
+    if (strncmp(cmd, "set ens_adaptcool ", 18) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 18);
+        audioCtrl_->getEnsemble().getFusion().setAdaptiveCooldown(value != 0);
+        Serial.print(F("OK ens_adaptcool="));
+        Serial.println(value != 0 ? "on" : "off");
+        return true;
+    }
+    if (strcmp(cmd, "show ens_adaptcool") == 0 || strcmp(cmd, "ens_adaptcool") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("ens_adaptcool="));
+        Serial.println(audioCtrl_->getEnsemble().getFusion().isAdaptiveCooldownEnabled() ? "on" : "off");
+        return true;
+    }
+
+    // ens_effcool: Show effective cooldown (read-only, affected by tempo)
+    if (strcmp(cmd, "show ens_effcool") == 0 || strcmp(cmd, "ens_effcool") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("ens_effcool="));
+        Serial.print(audioCtrl_->getEnsemble().getFusion().getEffectiveCooldownMs());
+        Serial.print(F("ms (base="));
+        Serial.print(audioCtrl_->getEnsemble().getFusion().getCooldownMs());
+        Serial.print(F("ms, tempo="));
+        Serial.print(audioCtrl_->getEnsemble().getFusion().getTempoHint(), 1);
+        Serial.println(F("bpm)"));
         return true;
     }
 
@@ -1896,6 +1942,38 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         if (!audioCtrl_) return true;
         Serial.print(F("bass_maxbin="));
         Serial.println(audioCtrl_->getEnsemble().getBassBand().getMaxBin());
+        return true;
+    }
+
+    // BassBand: minflux (minimum absolute flux threshold)
+    if (strncmp(cmd, "set bass_minflux ", 17) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 17);
+        audioCtrl_->getEnsemble().getBassBand().setMinAbsoluteFlux(value);
+        Serial.print(F("OK bass_minflux="));
+        Serial.println(value, 3);
+        return true;
+    }
+    if (strcmp(cmd, "show bass_minflux") == 0 || strcmp(cmd, "bass_minflux") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bass_minflux="));
+        Serial.println(audioCtrl_->getEnsemble().getBassBand().getMinAbsoluteFlux(), 3);
+        return true;
+    }
+
+    // BassBand: sharpness (minimum transient sharpness ratio)
+    if (strncmp(cmd, "set bass_sharpness ", 19) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 19);
+        audioCtrl_->getEnsemble().getBassBand().setSharpnessThreshold(value);
+        Serial.print(F("OK bass_sharpness="));
+        Serial.println(value, 2);
+        return true;
+    }
+    if (strcmp(cmd, "show bass_sharpness") == 0 || strcmp(cmd, "bass_sharpness") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bass_sharpness="));
+        Serial.println(audioCtrl_->getEnsemble().getBassBand().getSharpnessThreshold(), 2);
         return true;
     }
 

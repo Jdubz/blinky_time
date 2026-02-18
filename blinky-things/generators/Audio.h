@@ -36,8 +36,8 @@ struct AudioParams {
         phaseBrightness = 200;
         musicModeThreshold = 0.3f;  // Show phase when rhythm confidence > 30%
 
-        // Background: very dim
-        backgroundBrightness = 8;
+        // Background: off (no ambient glow)
+        backgroundBrightness = 0;
     }
 };
 

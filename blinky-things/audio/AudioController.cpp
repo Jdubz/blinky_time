@@ -859,6 +859,10 @@ void AudioController::updatePhase(float dt, uint32_t nowMs) {
         bpm_ = primary.bpm;
         periodicityStrength_ = primary.strength;
 
+        // Update ensemble detector with tempo hint for adaptive cooldown
+        // This allows faster detection at higher tempos
+        ensemble_.getFusion().setTempoHint(bpm_);
+
         // Update tempo velocity if BPM changed significantly
         // FIX: Guard against division by zero (oldBpm should never be 0, but be defensive)
         if (oldBpm > 1.0f && fabsf(bpm_ - oldBpm) / oldBpm > tempoChangeThreshold) {

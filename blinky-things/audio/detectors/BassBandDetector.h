@@ -45,6 +45,13 @@ public:
     // Debug access
     float getCurrentBassFlux() const { return currentBassFlux_; }
     float getAverageBassFlux() const { return averageBassFlux_; }
+    float getTransientSharpness() const { return transientSharpness_; }
+
+    // Noise rejection parameters
+    void setMinAbsoluteFlux(float minFlux) { minAbsoluteFlux_ = minFlux; }
+    float getMinAbsoluteFlux() const { return minAbsoluteFlux_; }
+    void setSharpnessThreshold(float threshold) { sharpnessThreshold_ = threshold; }
+    float getSharpnessThreshold() const { return sharpnessThreshold_; }
 
 protected:
     void resetImpl() override;
@@ -63,9 +70,21 @@ private:
     float currentBassFlux_;
     float averageBassFlux_;
 
+    // Transient sharpness (how quickly energy changed)
+    // High = sudden spike (real bass hit), Low = gradual change (HVAC/rumble)
+    float transientSharpness_;
+    float prevBassEnergy_;
+
+    // Noise rejection parameters (tunable via serial: bass_minflux, bass_sharpness)
+    float minAbsoluteFlux_ = 0.03f;       // Minimum flux to detect (floor for quiet noise)
+    float sharpnessThreshold_ = 3.0f;     // Min sharpness ratio (calibrated Feb 2026)
+
     // Compute bass flux
     float computeBassFlux(const float* magnitudes, int numBins) const;
 
+    // Compute total bass energy (for sharpness calculation)
+    float computeBassEnergy(const float* magnitudes, int numBins) const;
+
     // Compute confidence
-    float computeConfidence(float flux, float median) const;
+    float computeConfidence(float flux, float median, float sharpness) const;
 };

@@ -133,8 +133,10 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
     // UNIFIED ENSEMBLE COOLDOWN: Apply cooldown AFTER fusion
     // Cooldown prevents rapid-fire ensemble detections (not individual algorithms)
     // Use unsigned arithmetic (wraps correctly within 49-day window)
+    // Uses adaptive cooldown based on detected tempo (shorter at faster tempos)
     uint32_t elapsedMs = timestampMs - lastTransientMs_;
-    bool cooldownElapsed = elapsedMs > (uint32_t)cooldownMs_;
+    uint16_t effectiveCooldown = getEffectiveCooldownMs();
+    bool cooldownElapsed = elapsedMs > (uint32_t)effectiveCooldown;
 
     if (fusedStrength > 0.01f && cooldownElapsed) {
         // Detection passes cooldown - output it
@@ -169,4 +171,35 @@ float EnsembleFusion::getAgreementBoost(int detectorCount) const {
     if (detectorCount < 0) return 0.0f;
     if (detectorCount > MAX_DETECTORS) detectorCount = MAX_DETECTORS;
     return agreementBoosts_[detectorCount];
+}
+
+void EnsembleFusion::setTempoHint(float bpm) {
+    tempoHintBpm_ = bpm;
+}
+
+uint16_t EnsembleFusion::getEffectiveCooldownMs() const {
+    // If adaptive cooldown disabled or no tempo hint, use fixed cooldown
+    if (!adaptiveCooldownEnabled_ || tempoHintBpm_ < 30.0f) {
+        return cooldownMs_;
+    }
+
+    // Calculate beat period in ms
+    float beatPeriodMs = 60000.0f / tempoHintBpm_;
+
+    // Adaptive cooldown: allow ~6 detections per beat
+    // This enables detection of 16th notes at moderate tempos
+    // while still preventing rapid-fire false positives
+    uint16_t adaptiveCooldown = static_cast<uint16_t>(beatPeriodMs / 6.0f);
+
+    // Clamp to safe range
+    if (adaptiveCooldown < MIN_COOLDOWN_MS) {
+        adaptiveCooldown = MIN_COOLDOWN_MS;
+    }
+    if (adaptiveCooldown > MAX_COOLDOWN_MS) {
+        adaptiveCooldown = MAX_COOLDOWN_MS;
+    }
+
+    // Use the smaller of base cooldown and adaptive cooldown
+    // (never make cooldown longer than configured base)
+    return (adaptiveCooldown < cooldownMs_) ? adaptiveCooldown : cooldownMs_;
 }

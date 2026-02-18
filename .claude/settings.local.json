@@ -4,7 +4,15 @@
       "Bash(git push:*)",
       "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaonRF52840Sense \"d:\\Development\\Arduino\\blinky_time\\blinky-things\")",
       "Bash(git commit -m \"$(cat <<''EOF''\nFix include order and temporarily disable AdaptiveMic due to platform bug\n\n## Changes\n- Move Adafruit_NeoPixel.h include to top of main .ino file\n- Use forward declaration in EffectRenderer.h (reverted - didn''t help)\n- Temporarily disable AdaptiveMic to work around pinDefinitions.h bug\n- Temporarily disable mic audio input (default to 0.0f energy/hit)\n\n## Platform Bug\nSeeeduino mbed platform''s pinDefinitions.h lacks include guards, causing\nredefinition errors when both Adafruit_NeoPixel and PDM libraries are used.\nThis affects lines 46 and 63 of Adafruit_NeoPixel.cpp.\n\n## Workaround Applied\n- Commented out AdaptiveMic includes in BlinkyArchitecture.h and BlinkyImplementations.h\n- Commented out mic usage in blinky-things.ino\n- Fire effects now run without audio reactivity (energy=0.0, hit=0.0)\n\n## TODO\n- Report pinDefinitions.h missing include guards to Seeeduino platform maintainers\n- Re-enable AdaptiveMic once platform is fixed or alternative workaround found\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
-      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" core uninstall Seeeduino:mbed)"
+      "Bash(\"D:\\Development\\Arduino\\arduino-cli.exe\" core uninstall Seeeduino:mbed)",
+      "Bash(arduino-cli compile:*)",
+      "Bash(npm run build:*)",
+      "Bash(\"/c/Development/Arduino/arduino-cli.exe\" compile --fqbn Seeeduino:mbed:xiaonRF52840Sense /c/Development/blinky_time/blinky-things)",
+      "Bash(npm test:*)",
+      "mcp__blinky-serial__run_test",
+      "mcp__blinky-serial__send_command",
+      "mcp__blinky-serial__disconnect",
+      "mcp__blinky-serial__connect"
     ],
     "deny": [],
     "ask": []
