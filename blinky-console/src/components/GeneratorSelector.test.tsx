@@ -6,7 +6,7 @@ import type { GeneratorType } from '../types';
 describe('GeneratorSelector', () => {
   const defaultProps = {
     currentGenerator: 'fire' as GeneratorType,
-    availableGenerators: ['fire', 'water', 'lightning'] as GeneratorType[],
+    availableGenerators: ['fire', 'water', 'lightning', 'audio'] as GeneratorType[],
     onGeneratorChange: vi.fn(),
   };
 

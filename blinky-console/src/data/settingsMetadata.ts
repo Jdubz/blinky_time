@@ -240,6 +240,23 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
       'Minimum rhythm confidence to show phase indicator (0-1). Phase row hidden when rhythm not detected.',
     unit: '',
   },
+  beatpulsebright: {
+    displayName: 'Beat Pulse Brightness',
+    tooltip:
+      'Maximum brightness of center beat pulse band (0-255). Blue flash on each detected beat.',
+    unit: '',
+  },
+  beatpulsedecay: {
+    displayName: 'Beat Pulse Decay',
+    tooltip: 'How fast beat pulse fades per frame (0.01-0.5). Higher = faster fade after beat.',
+    unit: '',
+  },
+  beatpulsewidth: {
+    displayName: 'Beat Pulse Width',
+    tooltip:
+      'Fraction of display height for beat pulse band (0.05-0.5). Centered vertically with soft edges.',
+    unit: '',
+  },
   bgbright: {
     displayName: 'Background Brightness',
     tooltip: 'Dim background brightness (0-255). Subtle background for contrast.',

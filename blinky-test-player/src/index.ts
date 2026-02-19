@@ -378,4 +378,153 @@ program
     }
   });
 
+program
+  .command('play-file <audioFile>')
+  .description('Play an audio file through speakers (for real-music testing)')
+  .option('-g, --ground-truth <file>', 'Pre-generated beat annotations JSON file')
+  .option('-o, --output <file>', 'Output ground truth to file (default: stdout)')
+  .option('-d, --delay <ms>', 'Delay before starting in milliseconds', '500')
+  .option('-q, --quiet', 'Suppress progress messages')
+  .option('--headless', 'Run browser in headless mode (no visible window)')
+  .option('--duration <ms>', 'Override playback duration in milliseconds')
+  .action(async (audioFile: string, options) => {
+    const { resolve: resolvePath } = await import('path');
+    const audioPath = resolvePath(audioFile);
+
+    if (!existsSync(audioPath)) {
+      console.error(`Error: Audio file not found: ${audioPath}`);
+      process.exit(1);
+    }
+
+    // Load ground truth if provided
+    let groundTruthData: {
+      pattern: string;
+      durationMs: number;
+      bpm?: number;
+      hits: Array<{
+        time: number;
+        type: string;
+        instrument?: string;
+        strength: number;
+        expectTrigger?: boolean;
+      }>;
+    } | null = null;
+
+    if (options.groundTruth) {
+      const gtPath = resolvePath(options.groundTruth);
+      if (!existsSync(gtPath)) {
+        console.error(`Error: Ground truth file not found: ${gtPath}`);
+        process.exit(1);
+      }
+      groundTruthData = JSON.parse(readFileSync(gtPath, 'utf-8'));
+    }
+
+    const quiet = options.quiet;
+    const delay = parseInt(options.delay, 10);
+
+    if (!quiet) {
+      console.error(`\nPlaying audio file: ${audioPath}`);
+      if (groundTruthData) {
+        console.error(`Ground truth: ${groundTruthData.hits.length} beats, BPM: ${groundTruthData.bpm || 'unknown'}`);
+      }
+    }
+
+    // Launch browser
+    if (!quiet) console.error('Launching browser...');
+    const browser = await chromium.launch({
+      headless: options.headless ?? false,
+      args: [
+        '--autoplay-policy=no-user-gesture-required',
+        '--allow-file-access-from-files',
+        '--disable-web-security',
+      ],
+    });
+
+    const context = await browser.newContext();
+    const page = await context.newPage();
+
+    // Track playback state via console messages
+    let startedAt: string | null = null;
+    let playbackComplete = false;
+    let reportedDurationMs: number | null = null;
+
+    page.on('console', msg => {
+      const text = msg.text();
+      if (text.startsWith('FILE_STARTED:')) {
+        startedAt = text.replace('FILE_STARTED:', '');
+      } else if (text.startsWith('FILE_DURATION:')) {
+        reportedDurationMs = parseInt(text.replace('FILE_DURATION:', ''), 10);
+      } else if (text === 'FILE_COMPLETE') {
+        playbackComplete = true;
+      } else if (text.startsWith('FILE_ERROR:')) {
+        if (!quiet) console.error(`Playback error: ${text.replace('FILE_ERROR:', '')}`);
+      }
+    });
+
+    // Load the player HTML
+    const playerHtmlPath = join(__dirname, 'player.html');
+    const playerUrl = pathToFileUrl(playerHtmlPath);
+    await page.goto(playerUrl);
+
+    // Wait for page to be ready
+    await page.waitForFunction(() => (window as unknown as { playAudioFile: unknown }).playAudioFile !== undefined);
+
+    if (!quiet) console.error(`Starting in ${delay}ms...`);
+    await new Promise(res => setTimeout(res, delay));
+
+    // Play the audio file
+    if (!quiet) console.error('Playing...');
+    const audioUrl = pathToFileUrl(audioPath);
+    const overrideDuration = options.duration ? parseInt(options.duration, 10) : undefined;
+
+    await page.evaluate(
+      ({ url, durationMs }) => {
+        return (window as unknown as { playAudioFile: (url: string, durationMs?: number) => Promise<unknown> }).playAudioFile(url, durationMs);
+      },
+      { url: audioUrl, durationMs: overrideDuration }
+    );
+
+    // Wait for completion
+    const estDuration = overrideDuration || reportedDurationMs || (groundTruthData?.durationMs) || 60000;
+    const maxWaitMs = estDuration + 15000;
+    const startWait = Date.now();
+    while (!playbackComplete) {
+      if (Date.now() - startWait > maxWaitMs) {
+        if (!quiet) console.error('Warning: Playback timed out');
+        break;
+      }
+      await new Promise(res => setTimeout(res, 100));
+    }
+
+    await browser.close();
+    if (!quiet) console.error('Playback complete.');
+
+    // Build output
+    const actualDurationMs = overrideDuration || reportedDurationMs || (groundTruthData?.durationMs) || 0;
+
+    const output: PatternOutput = {
+      pattern: groundTruthData?.pattern || audioFile.replace(/\\/g, '/').split('/').pop()?.replace(/\.[^.]+$/, '') || 'unknown',
+      durationMs: actualDurationMs,
+      bpm: groundTruthData?.bpm,
+      startedAt: startedAt || new Date().toISOString(),
+      hits: groundTruthData?.hits.map(h => ({
+        timeMs: Math.round(h.time * 1000),
+        type: (h.type as 'low' | 'high') || 'low',
+        instrument: h.instrument as InstrumentType | undefined,
+        strength: h.strength,
+        expectTrigger: h.expectTrigger,
+      })) || [],
+    };
+
+    // Format output
+    const outputStr = JSON.stringify(output, null, 2);
+
+    if (options.output) {
+      writeFileSync(options.output, outputStr);
+      if (!quiet) console.error(`Output written to: ${options.output}`);
+    } else {
+      console.log(outputStr);
+    }
+  });
+
 program.parse();

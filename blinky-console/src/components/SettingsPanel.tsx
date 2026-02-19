@@ -110,6 +110,7 @@ const categoryNames: Record<string, string> = {
   fireorganic: 'Fire: Organic Mode',
   water: 'Water Generator',
   lightning: 'Lightning Generator',
+  audiovis: 'Audio Visualization',
   effect: 'Post-Processing Effects',
 };
 
@@ -126,6 +127,8 @@ const categoryDescriptions: Record<string, string> = {
   fireorganic: 'Fire behavior when no rhythm detected (transient-reactive, organic spawning)',
   water: 'Particle-based water simulation with drops, splashes, and radial physics',
   lightning: 'Particle-based lightning with fast bolts, branching patterns, and rapid fade',
+  audiovis:
+    'Diagnostic visualization of transients (green), energy level (yellow), and beat phase (blue)',
   effect: 'Color and post-processing effects applied after generator rendering',
 };
 
@@ -142,6 +145,7 @@ const categoryOrder = [
   'fireorganic',
   'water',
   'lightning',
+  'audiovis',
   'effect',
 ];
 

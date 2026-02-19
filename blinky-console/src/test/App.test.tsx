@@ -22,7 +22,7 @@ const mockUseSerial: UseSerialReturn = {
   settingsByCategory: {},
   currentGenerator: 'fire',
   currentEffect: 'none',
-  availableGenerators: ['fire', 'water', 'lightning'],
+  availableGenerators: ['fire', 'water', 'lightning', 'audio'],
   availableEffects: ['none', 'hue'],
   isStreaming: false,
   audioData: null,

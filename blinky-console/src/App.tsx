@@ -140,7 +140,10 @@ function App() {
                     <SettingsPanel
                       {...settingsPanelProps}
                       settingsByCategory={{
-                        [currentGenerator]: settingsByCategory[currentGenerator] || [],
+                        // Audio generator settings are in the 'audiovis' category
+                        ...(currentGenerator === 'audio'
+                          ? { audiovis: settingsByCategory.audiovis || [] }
+                          : { [currentGenerator]: settingsByCategory[currentGenerator] || [] }),
                         // Include related categories for fire generator
                         ...(currentGenerator === 'fire' && {
                           firemusic: settingsByCategory.firemusic || [],

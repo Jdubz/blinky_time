@@ -146,6 +146,7 @@ const VALID_CATEGORIES = [
   'water',
   'lightning',
   'audio',
+  'audiovis',
   'agc',
   'transient',
   'detection',

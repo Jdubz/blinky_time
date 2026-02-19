@@ -131,7 +131,7 @@ function validateAudioSample(sample: AudioSample): boolean {
 }
 
 // Available generators and effects (matching firmware RenderPipeline)
-const AVAILABLE_GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning'];
+const AVAILABLE_GENERATORS: GeneratorType[] = ['fire', 'water', 'lightning', 'audio'];
 const AVAILABLE_EFFECTS: EffectType[] = ['none', 'hue'];
 
 const initialLoadingState: LoadingState = {
