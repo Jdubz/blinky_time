@@ -401,7 +401,8 @@
                 type: getBandForType(parsed.type),
                 instrument: parsed.type,
                 sample: sampleId + ' (synth)',
-                strength: hit.strength || 1.0
+                strength: hit.strength || 1.0,
+                expectTrigger: hit.expectTrigger
               });
             }
           }
@@ -427,7 +428,8 @@
             type: getBandForType(hit.type),
             instrument: hit.type,
             sample: sample.name,
-            strength: hit.strength || 1.0
+            strength: hit.strength || 1.0,
+            expectTrigger: hit.expectTrigger
           });
         }
       }
@@ -469,6 +471,56 @@
           Object.entries(loadedSamples).map(([k, v]) => [k, v.length])
         )
       };
+    };
+
+    // ============================================================
+    // AUDIO FILE PLAYBACK (for real-music testing)
+    // Plays a WAV/MP3 file through system audio output
+    // ============================================================
+
+    window.playAudioFile = async function(fileUrl, overrideDurationMs) {
+      const status = document.getElementById('status');
+      status.textContent = 'Loading audio file...';
+
+      await Tone.start();
+
+      return new Promise((resolve, reject) => {
+        const player = new Tone.Player({
+          url: fileUrl,
+          onload: () => {
+            const durationSec = player.buffer.duration;
+            const durationMs = Math.round(durationSec * 1000);
+            const playDurationMs = overrideDurationMs || durationMs;
+
+            console.log('FILE_DURATION:' + durationMs);
+            status.textContent = 'Playing audio file...';
+
+            // Start playback
+            player.toDestination();
+            const startOffset = 0.1;
+            player.start(Tone.now() + startOffset);
+
+            // Log start time (matching pattern player's approach)
+            const startedAt = new Date(Date.now() + Math.round(startOffset * 1000)).toISOString();
+            console.log('FILE_STARTED:' + startedAt);
+
+            // Stop after duration (handles override for shorter clips)
+            const waitMs = playDurationMs + 1000;
+            setTimeout(() => {
+              try { player.stop(); } catch(e) { /* already stopped */ }
+              player.dispose();
+              status.textContent = 'Complete';
+              console.log('FILE_COMPLETE');
+              resolve({ startedAt, durationMs: playDurationMs });
+            }, waitMs);
+          },
+          onerror: (err) => {
+            console.log('FILE_ERROR:' + (err.message || err));
+            status.textContent = 'Error loading file';
+            reject(err);
+          }
+        });
+      });
     };
 
     // Signal that page is ready

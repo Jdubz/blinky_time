@@ -50,6 +50,9 @@ public:
     void setAttackMultiplier(float mult) { attackMultiplier_ = mult; }
     float getAttackMultiplier() const { return attackMultiplier_; }
 
+    void setSustainRejectFrames(int frames) { sustainRejectFrames_ = frames; }
+    int getSustainRejectFrames() const { return sustainRejectFrames_; }
+
     // Debug access
     float getCurrentHFC() const { return currentHfc_; }
     float getPreviousHFC() const { return prevHfc_; }
@@ -70,6 +73,8 @@ private:
 
     // Parameters
     float attackMultiplier_;
+    int sustainRejectFrames_;   // Reject if HFC elevated for this many consecutive frames
+    int elevatedFrameCount_;    // How many frames HFC has been continuously elevated
 
     // Compute weighted HFC from magnitude spectrum
     float computeHFC(const float* magnitudes, int numBins) const;

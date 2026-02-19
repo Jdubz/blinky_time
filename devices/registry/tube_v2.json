@@ -5,7 +5,7 @@
   "ledHeight": 15,
   "ledPin": 10,
   "brightness": 120,
-  "ledType": 12390,
+  "ledType": 82,
   "orientation": 1,
   "layoutType": 0,
   "fastChargeEnabled": true,

@@ -27,9 +27,7 @@ function App() {
     audioData,
     batteryData,
     batteryStatusData,
-    rhythmData,
     musicModeData,
-    statusData,
     onTransientEvent,
     consoleLines,
     sendCommand,
@@ -105,9 +103,7 @@ function App() {
                     >
                       <AudioVisualizer
                         audioData={audioData}
-                        rhythmData={rhythmData}
                         musicModeData={musicModeData}
-                        statusData={statusData}
                         isStreaming={isStreaming}
                         onToggleStreaming={toggleStreaming}
                         disabled={isDisabled}
@@ -144,7 +140,10 @@ function App() {
                     <SettingsPanel
                       {...settingsPanelProps}
                       settingsByCategory={{
-                        [currentGenerator]: settingsByCategory[currentGenerator] || [],
+                        // Audio generator settings are in the 'audiovis' category
+                        ...(currentGenerator === 'audio'
+                          ? { audiovis: settingsByCategory.audiovis || [] }
+                          : { [currentGenerator]: settingsByCategory[currentGenerator] || [] }),
                         // Include related categories for fire generator
                         ...(currentGenerator === 'fire' && {
                           firemusic: settingsByCategory.firemusic || [],

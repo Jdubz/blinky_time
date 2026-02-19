@@ -190,11 +190,22 @@ protected:
 
     /**
      * Age particle and apply fade if flagged
+     * @param dt Delta time in seconds
+     *
+     * NOTE: age and maxAge are stored in centiseconds (0.01s units) to support
+     * frame-rate-independent timing while maintaining uint8_t range (0-2.55s)
+     * At 60fps (dt=0.0167s): age increments by 1-2 per frame
+     * At 30fps (dt=0.033s): age increments by 3 per frame
      */
-    void ageParticle(Particle* p) {
-        // Increment age, capping at 255 to prevent uint8_t wraparound
-        if (p->age < 255) {
-            p->age++;
+    void ageParticle(Particle* p, float dt) {
+        // Increment age by dt in centiseconds (dt * 100)
+        // Cap at 255 to prevent uint8_t wraparound
+        float ageIncrement = dt * 100.0f;  // Convert seconds to centiseconds (0.01s units)
+        float newAge = p->age + ageIncrement;  // Add in float space to preserve fractional values
+        if (newAge < 255) {
+            p->age = (uint8_t)newAge;  // Convert after addition to avoid truncation
+        } else {
+            p->age = 255;
         }
 
         if (p->hasFlag(ParticleFlags::FADE) && p->maxAge > 0) {
@@ -229,8 +240,8 @@ protected:
             p->x += p->vx * dt;
             p->y += p->vy * dt;
 
-            // Age particle
-            ageParticle(p);
+            // Age particle (pass dt for time-based aging)
+            ageParticle(p, dt);
 
             // Handle boundaries through abstraction
             if (boundary_) {

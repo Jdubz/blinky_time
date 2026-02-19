@@ -15,13 +15,13 @@ struct LightningParams {
 
     // Lifecycle
     uint8_t maxParticles;         // Maximum active particles (1-32, default 32)
-    uint8_t defaultLifespan;      // Default particle age in frames (short-lived)
+    uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range, short-lived)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
     // Bolt appearance
-    float boltVelocityMin;        // Minimum bolt speed (LEDs/frame@30FPS)
-    float boltVelocityMax;        // Maximum bolt speed (LEDs/frame@30FPS)
+    float boltVelocityMin;        // Minimum bolt speed (LEDs/sec, not used - bolts are stationary)
+    float boltVelocityMax;        // Maximum bolt speed (LEDs/sec, not used - bolts are stationary)
     uint8_t fadeRate;             // Intensity decay per frame (0-255)
 
     // Branching behavior
@@ -34,16 +34,20 @@ struct LightningParams {
     float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
 
+    // Background
+    float backgroundIntensity;    // Noise background brightness (0-1)
+
     LightningParams() {
         // LIGHTNING EFFECT: Dramatic bright flashing bolts
         baseSpawnChance = 0.15f;  // Regular strikes
         audioSpawnBoost = 0.8f;   // Strong music response
         maxParticles = 40;        // Enough for bolts + branches
-        defaultLifespan = 10;     // Quick flash (lightning is fast!)
+        defaultLifespan = 30;     // 0.3 seconds - quick flash (30 centiseconds)
         intensityMin = 220;       // VERY BRIGHT
         intensityMax = 255;       // MAXIMUM brightness
         musicSpawnPulse = 0.7f;   // Phase modulation
         organicTransientMin = 0.35f;
+        backgroundIntensity = 0.15f;  // Visible but subtle background
 
         boltVelocityMin = 4.0f;   // Not used (bolts are stationary)
         boltVelocityMax = 8.0f;   // Not used (bolts are stationary)

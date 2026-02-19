@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ForceAdapter.h"
+#include "../math/SimplexNoise.h"
 #include <Arduino.h>
 
 /**
@@ -29,13 +30,22 @@ public:
 
     void applyWind(Particle* p, float dt) override {
         if (p->hasFlag(ParticleFlags::WIND)) {
-            float wind = baseWind_;
+            // Base wind: force/acceleration for sustained directional drift
+            p->vx += (baseWind_ / p->mass) * dt;
+
             if (windVariation_ > 0.0f) {
-                // Use X position for spatial variation (instead of Y)
-                wind += windVariation_ * sin(noisePhase_ + p->x * 0.1f);
+                // Turbulence as flow-field advection (same reasoning as MatrixForceAdapter)
+                float turbulence = SimplexNoise::fbm3D(
+                    p->x * 0.15f,       // Spatial frequency along strip
+                    noisePhase_ * 0.6f, // Time variation
+                    0.0f,
+                    2,
+                    0.5f
+                );
+
+                // Direct position advection: windVariation is LEDs/sec of displacement
+                p->x += windVariation_ * turbulence * dt;
             }
-            // Mass affects wind response
-            p->vx += (wind / p->mass) * dt;
         }
     }
 
@@ -49,7 +59,7 @@ public:
     }
 
     void update(float dt) override {
-        noisePhase_ += dt * 0.5f;
+        noisePhase_ += dt * 3.0f;  // Increased from 0.5 to 3.0 for faster variation
         if (noisePhase_ > TWO_PI) {
             noisePhase_ -= TWO_PI;
         }

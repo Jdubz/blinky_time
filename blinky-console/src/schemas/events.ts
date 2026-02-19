@@ -59,10 +59,9 @@ export type RhythmMessage = z.infer<typeof RhythmMessageSchema>;
 export const StatusMessageSchema = z.object({
   type: z.literal('STATUS'),
   ts: z.number().int().nonnegative(), // Timestamp in milliseconds
-  mode: DetectionModeSchema, // Detection mode (0-4)
+  mode: z.string(), // Detection mode (e.g., "ensemble")
   hwGain: z.number().int().min(0).max(80), // Hardware gain (0-80)
   level: z.number().min(0).max(1), // Current level (0-1)
-  avgLevel: z.number().min(0).max(1), // Recent average level (0-1)
   peakLevel: z.number().min(0).max(1), // Peak level (0-1)
 });
 

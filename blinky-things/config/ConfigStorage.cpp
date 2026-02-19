@@ -81,35 +81,39 @@ void ConfigStorage::begin() {
     valid_ = true;
 }
 
-void ConfigStorage::loadDefaults() {
-    data_.magic = MAGIC_NUMBER;
-    data_.version = CONFIG_VERSION;
-
-    // Device config defaults (v28+) - UNCONFIGURED state
+void ConfigStorage::loadDeviceDefaults() {
+    // Device config defaults - UNCONFIGURED state
     memset(&data_.device, 0, sizeof(StoredDeviceConfig));
     data_.device.isValid = false;  // No device configured - triggers safe mode
     strncpy(data_.device.deviceName, "UNCONFIGURED", sizeof(data_.device.deviceName) - 1);
     strncpy(data_.device.deviceId, "none", sizeof(data_.device.deviceId) - 1);
+}
 
-    // Fire defaults (particle-based)
-    data_.fire.baseSpawnChance = 0.15f;
-    data_.fire.audioSpawnBoost = 0.6f;
-    data_.fire.gravity = -8.0f;
+void ConfigStorage::loadSettingsDefaults() {
+    // Settings defaults - called when SETTINGS_VERSION changes
+    // Device config is preserved separately
+
+    // Fire defaults (particle-based) - matrix-appropriate defaults Feb 2026
+    // These allow wind turbulence to be visibly effective (discrete sparks, fast heat decay)
+    data_.fire.baseSpawnChance = 0.5f;      // Continuous sparks for constant fire
+    data_.fire.audioSpawnBoost = 1.5f;      // Strong audio response
+    data_.fire.gravity = 0.0f;              // No gravity (thermal force provides upward push)
     data_.fire.windBase = 0.0f;
-    data_.fire.windVariation = 0.5f;
-    data_.fire.drag = 0.96f;
-    data_.fire.sparkVelocityMin = 1.5f;
-    data_.fire.sparkVelocityMax = 3.5f;
-    data_.fire.sparkSpread = 0.8f;
-    data_.fire.musicSpawnPulse = 0.6f;
-    data_.fire.organicTransientMin = 0.5f;
+    data_.fire.windVariation = 25.0f;       // Turbulence as LEDs/sec advection (visible swirl)
+    data_.fire.drag = 0.985f;               // Smoother flow
+    data_.fire.sparkVelocityMin = 5.0f;     // Slower sparks = more time in frame = wind has more effect
+    data_.fire.sparkVelocityMax = 10.0f;    // Varied speeds
+    data_.fire.sparkSpread = 4.0f;          // Good spread
+    data_.fire.musicSpawnPulse = 0.95f;     // Tight beat sync
+    data_.fire.organicTransientMin = 0.25f; // Responsive to softer transients
+    data_.fire.backgroundIntensity = 0.15f; // Subtle noise background
+    data_.fire.fastSparkRatio = 0.7f;       // 70% fast sparks, 30% embers
+    data_.fire.thermalForce = 30.0f;        // Thermal buoyancy strength (LEDs/sec^2)
     data_.fire.maxParticles = 48;
-    data_.fire.defaultLifespan = 60;
-    data_.fire.intensityMin = 160;
-    data_.fire.intensityMax = 255;
-    data_.fire.trailHeatFactor = 60;
-    data_.fire.trailDecay = 40;
-    data_.fire.burstSparks = 8;
+    data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds)
+    data_.fire.intensityMin = 150;
+    data_.fire.intensityMax = 220;
+    data_.fire.burstSparks = 10;            // Moderate transient bursts
 
     // Water defaults (particle-based)
     data_.water.baseSpawnChance = 0.25f;
@@ -125,6 +129,7 @@ void ConfigStorage::loadDefaults() {
     data_.water.splashVelocityMax = 2.0f;
     data_.water.musicSpawnPulse = 0.5f;
     data_.water.organicTransientMin = 0.3f;
+    data_.water.backgroundIntensity = 0.15f;
     data_.water.maxParticles = 64;
     data_.water.defaultLifespan = 90;
     data_.water.intensityMin = 80;
@@ -140,6 +145,7 @@ void ConfigStorage::loadDefaults() {
     data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
     data_.lightning.musicSpawnPulse = 0.6f;
     data_.lightning.organicTransientMin = 0.3f;
+    data_.lightning.backgroundIntensity = 0.15f;
     data_.lightning.maxParticles = 32;
     data_.lightning.defaultLifespan = 20;
     data_.lightning.intensityMin = 180;
@@ -151,8 +157,8 @@ void ConfigStorage::loadDefaults() {
 
     // Mic defaults (hardware-primary, window/range normalization)
     // Window/Range normalization parameters
-    data_.mic.peakTau = 2.0f;        // 2s peak adaptation
-    data_.mic.releaseTau = 5.0f;     // 5s peak release
+    data_.mic.peakTau = 1.0f;        // 1s peak adaptation (fast response)
+    data_.mic.releaseTau = 3.0f;     // 3s peak release (quick recovery)
     // Hardware AGC parameters (primary - optimizes raw ADC input)
     data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
 
@@ -184,7 +190,7 @@ void ConfigStorage::loadDefaults() {
     data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
-    data_.music.phaseAdaptRate = 0.15f;
+    data_.music.phaseAdaptRate = 0.7f;   // Fast phase adaptation for tight beat sync
 
     // Tempo prior (CRITICAL: must be enabled for correct BPM tracking)
     data_.music.tempoPriorEnabled = true;    // MUST be true
@@ -199,48 +205,107 @@ void ConfigStorage::loadDefaults() {
 
     // Stability and smoothing
     data_.music.stabilityWindowBeats = 8.0f;
-    data_.music.beatLookaheadMs = 50.0f;
+    data_.music.beatLookaheadMs = 120.0f;  // Predict beats 120ms ahead to reduce perceived latency
     data_.music.tempoSmoothingFactor = 0.85f;
     data_.music.tempoChangeThreshold = 0.1f;
+
+    // Transient-based phase correction (PLL) - calibrated Feb 2026
+    data_.music.transientCorrectionRate = 0.15f;  // How fast to nudge phase toward transients
+    data_.music.transientCorrectionMin = 0.42f;   // Min transient strength to trigger correction
 
     data_.brightness = 100;
 }
 
+void ConfigStorage::loadDefaults() {
+    data_.magic = MAGIC_NUMBER;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
+
+    loadDeviceDefaults();
+    loadSettingsDefaults();
+}
+
 bool ConfigStorage::loadFromFlash() {
+    // Zero-initialize so unread bytes (when file is smaller than current struct)
+    // are deterministic rather than garbage stack values.
+    ConfigData temp;
+    memset(&temp, 0, sizeof(temp));
+
+    // Minimum bytes required to read magic + both version fields + device config.
+    // Device config lives immediately after the 4-byte header and must be fully
+    // present for recovery to make sense.
+    // cppcheck-suppress unreadVariable
+    static const uint32_t MIN_DEVICE_BYTES =
+        sizeof(uint16_t) +              // magic
+        sizeof(uint8_t) +               // deviceVersion
+        sizeof(uint8_t) +               // settingsVersion
+        sizeof(StoredDeviceConfig);     // device config block
+
+    uint32_t bytesRead = 0;
+
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
     if (!flashOk) return false;
-
-    ConfigData temp;
     if (flash.read(&temp, flashAddr, sizeof(ConfigData)) != 0) return false;
-    if (temp.magic != MAGIC_NUMBER) return false;
-    // Version mismatch: intentionally discard old config and use defaults
-    // See ConfigStorage.h for migration policy rationale
-    if (temp.version != CONFIG_VERSION) return false;
-
-    memcpy(&data_, &temp, sizeof(ConfigData));
-    return true;
+    bytesRead = sizeof(ConfigData);  // FlashIAP reads exactly what is asked
 #elif defined(ARDUINO_ARCH_NRF52) || defined(NRF52) || defined(NRF52840_XXAA)
     if (!flashOk || configFile == nullptr) return false;
 
     // Open config file for reading
     configFile->open(CONFIG_FILENAME, FILE_O_READ);
-    if (!(*configFile)) return false;  // Check if file opened successfully
+    if (!(*configFile)) return false;
 
-    ConfigData temp;
-    uint32_t bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
+    // Read however many bytes are stored (may be less than sizeof(ConfigData)
+    // when the struct grew due to a settings version bump).
+    bytesRead = configFile->read((uint8_t*)&temp, sizeof(ConfigData));
     configFile->close();
 
-    if (bytesRead != sizeof(ConfigData)) return false;
-    if (temp.magic != MAGIC_NUMBER) return false;
-    // Version mismatch: intentionally discard old config and use defaults
-    // See ConfigStorage.h for migration policy rationale
-    if (temp.version != CONFIG_VERSION) return false;
-
-    memcpy(&data_, &temp, sizeof(ConfigData));
-    return true;
-#else
-    return false;
+    // Nothing useful was read
+    if (bytesRead < MIN_DEVICE_BYTES) return false;
 #endif
+
+    // Magic number mismatch: complete corruption, reset everything
+    if (temp.magic != MAGIC_NUMBER) return false;
+
+    // Start fresh with current defaults for both sections
+    data_.magic = MAGIC_NUMBER;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
+
+    // Handle device config version.
+    // Device config bytes are always present as long as bytesRead >= MIN_DEVICE_BYTES
+    // (checked above), so we only gate on version match, not on total file size.
+    if (temp.deviceVersion == DEVICE_VERSION) {
+        // Device config version matches - preserve it
+        memcpy(&data_.device, &temp.device, sizeof(StoredDeviceConfig));
+        SerialConsole::logDebug(F("Device config loaded from flash"));
+    } else {
+        // Device config version mismatch - use defaults (rare)
+        loadDeviceDefaults();
+        SerialConsole::logWarn(F("Device config version mismatch, using defaults"));
+    }
+
+    // Handle settings version.
+    // Settings are only valid if both the version matches AND the file was large
+    // enough to contain the full settings structs (i.e. not written by an older
+    // firmware with a smaller ConfigData).
+    // cppcheck-suppress unsignedLessThanZero
+    if (temp.settingsVersion == SETTINGS_VERSION && bytesRead >= sizeof(ConfigData)) {
+        // Settings version matches and file is the right size - preserve all settings
+        memcpy(&data_.fire, &temp.fire, sizeof(StoredFireParams));
+        memcpy(&data_.water, &temp.water, sizeof(StoredWaterParams));
+        memcpy(&data_.lightning, &temp.lightning, sizeof(StoredLightningParams));
+        memcpy(&data_.mic, &temp.mic, sizeof(StoredMicParams));
+        memcpy(&data_.music, &temp.music, sizeof(StoredMusicParams));
+        data_.brightness = temp.brightness;
+        SerialConsole::logDebug(F("Settings loaded from flash"));
+    } else {
+        // Settings version mismatch or struct grew - use defaults.
+        // Device config was already recovered above.
+        loadSettingsDefaults();
+        SerialConsole::logWarn(F("Settings version mismatch, using defaults (device config preserved)"));
+    }
+
+    return true;
 }
 
 void ConfigStorage::saveToFlash() {
@@ -256,7 +321,8 @@ void ConfigStorage::saveToFlash() {
     SafetyTest::assertFlashSafe(flashAddr, sectorSize);
 
     data_.magic = MAGIC_NUMBER;
-    data_.version = CONFIG_VERSION;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
 
     if (flash.erase(flashAddr, sectorSize) != 0) {
         SerialConsole::logError(F("Flash erase failed"));
@@ -276,7 +342,8 @@ void ConfigStorage::saveToFlash() {
     }
 
     data_.magic = MAGIC_NUMBER;
-    data_.version = CONFIG_VERSION;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
 
     // Delete existing file if present
     if (InternalFS.exists(CONFIG_FILENAME)) {
@@ -388,6 +455,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.tempoSmoothingFactor, 0.5f, 0.99f, F("temposmooth"));
     validateFloat(data_.music.tempoChangeThreshold, 0.01f, 0.5f, F("tempochgthresh"));
 
+    // Transient-based phase correction validation (v26+)
+    validateFloat(data_.music.transientCorrectionRate, 0.0f, 1.0f, F("transcorrrate"));
+    validateFloat(data_.music.transientCorrectionMin, 0.0f, 1.0f, F("transcorrmin"));
+
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
         SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
@@ -404,7 +475,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Debug: show loaded values
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::DEBUG) {
         Serial.print(F("[DEBUG] baseSpawnChance=")); Serial.print(data_.fire.baseSpawnChance, 2);
-        Serial.print(F(" trailDecay=")); Serial.print(data_.fire.trailDecay);
         Serial.print(F(" gravity=")); Serial.println(data_.fire.gravity);
     }
 
@@ -423,13 +493,16 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Audio reactivity
     fireParams.musicSpawnPulse = data_.fire.musicSpawnPulse;
     fireParams.organicTransientMin = data_.fire.organicTransientMin;
+    // Background
+    fireParams.backgroundIntensity = data_.fire.backgroundIntensity;
+    // Particle variety
+    fireParams.fastSparkRatio = data_.fire.fastSparkRatio;
+    fireParams.thermalForce = data_.fire.thermalForce;
     // Lifecycle
+    fireParams.maxParticles = data_.fire.maxParticles;
     fireParams.defaultLifespan = data_.fire.defaultLifespan;
     fireParams.intensityMin = data_.fire.intensityMin;
     fireParams.intensityMax = data_.fire.intensityMax;
-    // Heat trail
-    fireParams.trailHeatFactor = data_.fire.trailHeatFactor;
-    fireParams.trailDecay = data_.fire.trailDecay;
     fireParams.burstSparks = data_.fire.burstSparks;
 
     // === WATER PARAMETERS ===
@@ -451,6 +524,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Audio reactivity
     waterParams.musicSpawnPulse = data_.water.musicSpawnPulse;
     waterParams.organicTransientMin = data_.water.organicTransientMin;
+    // Background
+    waterParams.backgroundIntensity = data_.water.backgroundIntensity;
     // Lifecycle
     waterParams.defaultLifespan = data_.water.defaultLifespan;
     waterParams.intensityMin = data_.water.intensityMin;
@@ -470,6 +545,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Audio reactivity
     lightningParams.musicSpawnPulse = data_.lightning.musicSpawnPulse;
     lightningParams.organicTransientMin = data_.lightning.organicTransientMin;
+    // Background
+    lightningParams.backgroundIntensity = data_.lightning.backgroundIntensity;
     // Lifecycle
     lightningParams.defaultLifespan = data_.lightning.defaultLifespan;
     lightningParams.intensityMin = data_.lightning.intensityMin;
@@ -521,6 +598,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->beatLookaheadMs = data_.music.beatLookaheadMs;
         audioCtrl->tempoSmoothingFactor = data_.music.tempoSmoothingFactor;
         audioCtrl->tempoChangeThreshold = data_.music.tempoChangeThreshold;
+
+        // Transient-based phase correction (v26+)
+        audioCtrl->transientCorrectionRate = data_.music.transientCorrectionRate;
+        audioCtrl->transientCorrectionMin = data_.music.transientCorrectionMin;
     }
 }
 
@@ -541,13 +622,16 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Audio reactivity
     data_.fire.musicSpawnPulse = fireParams.musicSpawnPulse;
     data_.fire.organicTransientMin = fireParams.organicTransientMin;
+    // Background
+    data_.fire.backgroundIntensity = fireParams.backgroundIntensity;
+    // Particle variety
+    data_.fire.fastSparkRatio = fireParams.fastSparkRatio;
+    data_.fire.thermalForce = fireParams.thermalForce;
     // Lifecycle
+    data_.fire.maxParticles = fireParams.maxParticles;
     data_.fire.defaultLifespan = fireParams.defaultLifespan;
     data_.fire.intensityMin = fireParams.intensityMin;
     data_.fire.intensityMax = fireParams.intensityMax;
-    // Heat trail
-    data_.fire.trailHeatFactor = fireParams.trailHeatFactor;
-    data_.fire.trailDecay = fireParams.trailDecay;
     data_.fire.burstSparks = fireParams.burstSparks;
 
     // === WATER PARAMETERS ===
@@ -569,6 +653,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Audio reactivity
     data_.water.musicSpawnPulse = waterParams.musicSpawnPulse;
     data_.water.organicTransientMin = waterParams.organicTransientMin;
+    // Background
+    data_.water.backgroundIntensity = waterParams.backgroundIntensity;
     // Lifecycle
     data_.water.defaultLifespan = waterParams.defaultLifespan;
     data_.water.intensityMin = waterParams.intensityMin;
@@ -588,6 +674,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Audio reactivity
     data_.lightning.musicSpawnPulse = lightningParams.musicSpawnPulse;
     data_.lightning.organicTransientMin = lightningParams.organicTransientMin;
+    // Background
+    data_.lightning.backgroundIntensity = lightningParams.backgroundIntensity;
     // Lifecycle
     data_.lightning.defaultLifespan = lightningParams.defaultLifespan;
     data_.lightning.intensityMin = lightningParams.intensityMin;
@@ -639,6 +727,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.beatLookaheadMs = audioCtrl->beatLookaheadMs;
         data_.music.tempoSmoothingFactor = audioCtrl->tempoSmoothingFactor;
         data_.music.tempoChangeThreshold = audioCtrl->tempoChangeThreshold;
+
+        // Transient-based phase correction (v26+)
+        data_.music.transientCorrectionRate = audioCtrl->transientCorrectionRate;
+        data_.music.transientCorrectionMin = audioCtrl->transientCorrectionMin;
     }
 
     saveToFlash();

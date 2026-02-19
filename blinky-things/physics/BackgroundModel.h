@@ -39,4 +39,10 @@ public:
      * @return Intensity modifier (0.0 to 1.0)
      */
     virtual float getIntensityAt(int x, int y, uint16_t width, uint16_t height) const = 0;
+
+    /**
+     * Set overall background intensity multiplier
+     * @param intensity Intensity multiplier (0.0 to 1.0, default varies by layout)
+     */
+    virtual void setIntensity(float intensity) = 0;
 };

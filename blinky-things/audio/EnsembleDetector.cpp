@@ -7,7 +7,7 @@ EnsembleDetector::EnsembleDetector() {
     detectors_[static_cast<int>(DetectorType::HFC)] = &hfc_;
     detectors_[static_cast<int>(DetectorType::BASS_BAND)] = &bassBand_;
     detectors_[static_cast<int>(DetectorType::COMPLEX_DOMAIN)] = &complexDomain_;
-    detectors_[static_cast<int>(DetectorType::MEL_FLUX)] = &melFlux_;
+    detectors_[static_cast<int>(DetectorType::NOVELTY)] = &novelty_;
 
     // Initialize last results
     for (int i = 0; i < NUM_DETECTORS; i++) {
@@ -60,9 +60,13 @@ EnsembleOutput EnsembleDetector::update(float level, float rawLevel,
     // Build frame structure for detectors
     AudioFrame frame = buildFrame(level, rawLevel, timestampMs);
 
-    // Run all detectors
+    // Run only enabled detectors (disabled ones are skipped to save CPU)
     for (int i = 0; i < NUM_DETECTORS; i++) {
-        lastResults_[i] = detectors_[i]->detect(frame, dt);
+        if (fusion_.getConfig(static_cast<DetectorType>(i)).enabled) {
+            lastResults_[i] = detectors_[i]->detect(frame, dt);
+        } else {
+            lastResults_[i] = DetectionResult::none();
+        }
     }
 
     // Clear spectral frame ready flag (detectors have consumed data)

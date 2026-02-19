@@ -26,6 +26,18 @@ void onParamChanged() {
         if (storage) {
             storage->markDirty();
         }
+
+        // CRITICAL: Update force adapters when wind/gravity/drag params change
+        // The force adapter caches wind values via setWind(), so we must re-sync them
+        Fire* fireGen = SerialConsole::instance_->fireGenerator_;
+        Water* waterGen = SerialConsole::instance_->waterGenerator_;
+
+        if (fireGen) {
+            fireGen->syncPhysicsParams();
+        }
+        if (waterGen) {
+            waterGen->syncPhysicsParams();
+        }
     }
 }
 
@@ -36,7 +48,7 @@ static float effectRotationSpeed_ = 0.0f;
 // New constructor with RenderPipeline
 SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
     : pipeline_(pipeline), fireGenerator_(nullptr), waterGenerator_(nullptr),
-      lightningGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
+      lightningGenerator_(nullptr), audioVisGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
       battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
     // Get generator pointers from pipeline
@@ -44,6 +56,7 @@ SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
         fireGenerator_ = pipeline_->getFireGenerator();
         waterGenerator_ = pipeline_->getWaterGenerator();
         lightningGenerator_ = pipeline_->getLightningGenerator();
+        audioVisGenerator_ = pipeline_->getAudioVisGenerator();
         hueEffect_ = pipeline_->getHueRotationEffect();
     }
 }
@@ -78,6 +91,11 @@ void SerialConsole::registerSettings() {
         registerLightningSettings(&lightningGenerator_->getParamsMutable());
     }
 
+    // Register Audio visualization generator settings
+    if (audioVisGenerator_) {
+        registerAudioVisSettings(&audioVisGenerator_->getParamsMutable());
+    }
+
     // Register effect settings (HueRotation)
     registerEffectSettings();
 
@@ -104,37 +122,43 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 
     // Physics
     settings_.registerFloat("gravity", &fp->gravity, "fire",
-        "Gravity strength (negative=upward)", -20.0f, 20.0f, onParamChanged);
+        "Gravity strength (negative=upward)", -200.0f, 200.0f, onParamChanged);
     settings_.registerFloat("windbase", &fp->windBase, "fire",
-        "Base wind force", -5.0f, 5.0f, onParamChanged);
+        "Base wind force", -50.0f, 50.0f, onParamChanged);
     settings_.registerFloat("windvariation", &fp->windVariation, "fire",
-        "Wind variation amount", 0.0f, 2.0f, onParamChanged);
+        "Wind variation amount", 0.0f, 100.0f, onParamChanged);
     settings_.registerFloat("drag", &fp->drag, "fire",
-        "Drag coefficient", 0.9f, 1.0f, onParamChanged);
+        "Drag coefficient", 0.0f, 1.0f, onParamChanged);
 
     // Spark appearance
     settings_.registerFloat("sparkvelmin", &fp->sparkVelocityMin, "fire",
-        "Minimum upward velocity", 0.0f, 10.0f, onParamChanged);
+        "Minimum upward velocity", 0.0f, 100.0f, onParamChanged);
     settings_.registerFloat("sparkvelmax", &fp->sparkVelocityMax, "fire",
-        "Maximum upward velocity", 0.0f, 10.0f, onParamChanged);
+        "Maximum upward velocity", 0.0f, 100.0f, onParamChanged);
     settings_.registerFloat("sparkspread", &fp->sparkSpread, "fire",
-        "Horizontal velocity spread", 0.0f, 5.0f, onParamChanged);
+        "Horizontal velocity spread", 0.0f, 50.0f, onParamChanged);
 
     // Lifecycle
     settings_.registerUint8("maxparticles", &fp->maxParticles, "fire",
-        "Maximum active particles", 1, 48, onParamChanged);
+        "Maximum active particles", 1, 64, onParamChanged);
     settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
-        "Default particle lifespan (frames)", 20, 120, onParamChanged);
+        "Default particle lifespan (centiseconds, 100=1s)", 1, 255, onParamChanged);
     settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
         "Minimum spawn intensity", 0, 255, onParamChanged);
     settings_.registerUint8("intensitymax", &fp->intensityMax, "fire",
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
-    // Heat trail
-    settings_.registerUint8("trailheatfactor", &fp->trailHeatFactor, "fire",
-        "Heat trail intensity (%)", 0, 100, onParamChanged);
-    settings_.registerUint8("traildecay", &fp->trailDecay, "fire",
-        "Heat decay rate per frame", 0, 255, onParamChanged);
+    // Background
+    settings_.registerFloat("bgintensity", &fp->backgroundIntensity, "fire",
+        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
+
+    // Particle variety
+    settings_.registerFloat("fastsparks", &fp->fastSparkRatio, "fire",
+        "Fast spark ratio (0=all embers, 1=all sparks)", 0.0f, 1.0f, onParamChanged);
+
+    // Thermal physics
+    settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
+        "Thermal buoyancy strength (LEDs/sec^2)", 0.0f, 200.0f, onParamChanged);
 }
 
 // === MUSIC MODE FIRE SETTINGS ===
@@ -215,6 +239,36 @@ void SerialConsole::registerEnsembleSettings() {
 void SerialConsole::registerRhythmSettings() {
     if (!audioCtrl_) return;
 
+    // Onset strength signal (OSS) generation
+    settings_.registerFloat("ossfluxweight", &audioCtrl_->ossFluxWeight, "rhythm",
+        "OSS flux weight (1=flux, 0=RMS)", 0.0f, 1.0f);
+    settings_.registerBool("adaptivebandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
+        "Enable adaptive band weighting");
+    settings_.registerFloat("pulsephaseweight", &audioCtrl_->pulsePhaseWeight, "rhythm",
+        "Pulse train phase weight (1=pulse, 0=peak)", 0.0f, 1.0f);
+    settings_.registerFloat("combweight", &audioCtrl_->combFilterWeight, "rhythm",
+        "Comb filter phase weight (0=off, 1=full)", 0.0f, 1.0f);
+    settings_.registerFloat("combfeedback", &audioCtrl_->combFeedback, "rhythm",
+        "Comb filter resonance (0.85-0.98)", 0.85f, 0.98f);
+    settings_.registerBool("combbankenabled", &audioCtrl_->combBankEnabled, "rhythm",
+        "Enable comb filter bank for tempo validation");
+    settings_.registerFloat("combbankfeedback", &audioCtrl_->combBankFeedback, "rhythm",
+        "Comb bank resonance (0.85-0.98)", 0.85f, 0.98f);
+    settings_.registerBool("fusionenabled", &audioCtrl_->fusionEnabled, "rhythm",
+        "Enable multi-system phase fusion");
+    settings_.registerFloat("transienthint", &audioCtrl_->transientHintWeight, "rhythm",
+        "Transient hint weight (0-0.2)", 0.0f, 0.2f);
+
+    // Ensemble fusion parameters (detection gating)
+    settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
+        "Base ensemble cooldown (ms)", 20, 500);
+    settings_.registerFloat("ensminconf", &audioCtrl_->getEnsemble().getFusion().minConfidence, "ensemble",
+        "Minimum detector confidence", 0.0f, 1.0f);
+    settings_.registerFloat("ensminlevel", &audioCtrl_->getEnsemble().getFusion().minAudioLevel, "ensemble",
+        "Noise gate audio level", 0.0f, 0.5f);
+    // Note: Adaptive cooldown enable/disable handled via "set ens_adaptcool 0|1" command
+    // Effective cooldown (tempo-adjusted) shown via "show ens_effcool" command
+
     // Basic rhythm activation and output modulation
     settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
         "Rhythm activation threshold (0-1)", 0.0f, 1.0f);
@@ -230,6 +284,20 @@ void SerialConsole::registerRhythmSettings() {
         "Minimum BPM to detect", 40.0f, 120.0f);
     settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
         "Maximum BPM to detect", 80.0f, 240.0f);
+
+    // Autocorrelation timing
+    settings_.registerUint16("autocorrperiod", &audioCtrl_->autocorrPeriodMs, "rhythm",
+        "Autocorr period (ms)", 100, 1000);
+
+    // Band weights (used when adaptive weighting disabled)
+    settings_.registerBool("adaptbandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
+        "Enable adaptive band weighting");
+    settings_.registerFloat("bassbandweight", &audioCtrl_->bassBandWeight, "rhythm",
+        "Bass band weight", 0.0f, 1.0f);
+    settings_.registerFloat("midbandweight", &audioCtrl_->midBandWeight, "rhythm",
+        "Mid band weight", 0.0f, 1.0f);
+    settings_.registerFloat("highbandweight", &audioCtrl_->highBandWeight, "rhythm",
+        "High band weight", 0.0f, 1.0f);
 
     // Tempo prior (reduces half-time/double-time confusion)
     settings_.registerBool("priorenabled", &audioCtrl_->tempoPriorEnabled, "tempoprior",
@@ -254,6 +322,20 @@ void SerialConsole::registerRhythmSettings() {
         "Tempo smoothing factor", 0.5f, 0.99f);
     settings_.registerFloat("tempochgthresh", &audioCtrl_->tempoChangeThreshold, "tempo",
         "Tempo change threshold", 0.01f, 0.5f);
+
+    // Tempo rate limiting
+    settings_.registerFloat("maxbpmchg", &audioCtrl_->maxBpmChangePerSec, "tempo",
+        "Max BPM change per sec (%)", 1.0f, 20.0f);
+
+    // Transient-based phase correction (PLL)
+    settings_.registerFloat("transcorrrate", &audioCtrl_->transientCorrectionRate, "phasecorr",
+        "Transient phase correction rate", 0.0f, 1.0f);
+    settings_.registerFloat("transcorrmin", &audioCtrl_->transientCorrectionMin, "phasecorr",
+        "Min transient strength for correction", 0.0f, 1.0f);
+
+    // Phase stability
+    settings_.registerFloat("phasehold", &audioCtrl_->phaseHoldStrength, "phasecorr",
+        "Strength threshold to hold phase", 0.1f, 0.6f);
 
     // Multi-hypothesis tracker parameters
     MultiHypothesisTracker& mh = audioCtrl_->getMultiHypothesis();
@@ -296,7 +378,8 @@ void SerialConsole::registerRhythmSettings() {
 void SerialConsole::update() {
     // Handle incoming commands
     if (Serial.available()) {
-        static char buf[128];
+        // Buffer must accommodate full device config JSON (~550 bytes)
+        static char buf[768];
         size_t len = Serial.readBytesUntil('\n', buf, sizeof(buf) - 1);
         // Explicit bounds check for safety
         if (len >= sizeof(buf)) {
@@ -567,7 +650,7 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             const AudioControl& audio = audioCtrl_->getControl();
             Serial.println(F("=== Audio Controller Status ==="));
             Serial.print(F("Rhythm Active: "));
-            Serial.println(audio.hasRhythm() ? F("YES") : F("NO"));
+            Serial.println(audio.rhythmStrength > audioCtrl_->activationThreshold ? F("YES") : F("NO"));
             Serial.print(F("BPM: "));
             Serial.println(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F("Phase: "));
@@ -694,6 +777,14 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         return true;
     }
 
+    if (strcmp(cmd, "reboot") == 0) {
+        Serial.println(F("Rebooting..."));
+        Serial.flush();  // Ensure message is sent before reset
+        delay(100);      // Brief delay for serial transmission
+        NVIC_SystemReset();
+        return true;  // Never reached
+    }
+
     return false;
 }
 
@@ -730,7 +821,7 @@ void SerialConsole::showDeviceConfig() {
     const ConfigStorage::StoredDeviceConfig& cfg = configStorage_->getDeviceConfig();
 
     // Use ArduinoJson for clean, maintainable JSON serialization
-    StaticJsonDocument<1024> doc;
+    JsonDocument doc;
 
     // Device identification
     doc["deviceId"] = cfg.deviceId;
@@ -791,7 +882,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     }
 
     // Parse JSON using ArduinoJson (1024 bytes to accommodate full device configs ~600 bytes)
-    StaticJsonDocument<1024> doc;
+    JsonDocument doc;
     DeserializationError error = deserializeJson(doc, jsonStr);
 
     if (error) {
@@ -975,6 +1066,9 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
         } else if (strcmp(name, "lightning") == 0) {
             type = GeneratorType::LIGHTNING;
             found = true;
+        } else if (strcmp(name, "audio") == 0) {
+            type = GeneratorType::AUDIO;
+            found = true;
         }
 
         if (found) {
@@ -987,7 +1081,7 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
         } else {
             Serial.print(F("Unknown generator: "));
             Serial.println(name);
-            Serial.println(F("Use: fire, water, lightning"));
+            Serial.println(F("Use: fire, water, lightning, audio"));
         }
         return true;
     }
@@ -1100,6 +1194,10 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
         "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("organictransmin", &wp->organicTransientMin, "water",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+
+    // Background
+    settings_.registerFloat("bgintensity", &wp->backgroundIntensity, "water",
+        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
 }
 
 // === LIGHTNING SETTINGS (Particle-based) ===
@@ -1145,6 +1243,47 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
         "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("organictransmin", &lp->organicTransientMin, "lightning",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+
+    // Background
+    settings_.registerFloat("bgintensity", &lp->backgroundIntensity, "lightning",
+        "Noise background brightness", 0.0f, 1.0f, onParamChanged);
+}
+
+// === AUDIO VISUALIZATION GENERATOR SETTINGS ===
+void SerialConsole::registerAudioVisSettings(AudioParams* ap) {
+    if (!ap) return;
+
+    // Transient visualization (green gradient from top)
+    settings_.registerFloat("transientrowfrac", &ap->transientRowFraction, "audiovis",
+        "Fraction of height for transient indicator", 0.1f, 0.5f, onParamChanged);
+    settings_.registerFloat("transientdecay", &ap->transientDecayRate, "audiovis",
+        "Transient decay rate per frame", 0.01f, 0.5f, onParamChanged);
+    settings_.registerUint8("transientbright", &ap->transientBrightness, "audiovis",
+        "Maximum transient brightness", 0, 255, onParamChanged);
+
+    // Energy level visualization (yellow row)
+    settings_.registerUint8("levelbright", &ap->levelBrightness, "audiovis",
+        "Energy level row brightness", 0, 255, onParamChanged);
+    settings_.registerFloat("levelsmooth", &ap->levelSmoothing, "audiovis",
+        "Energy level smoothing factor", 0.0f, 0.99f, onParamChanged);
+
+    // Phase visualization (blue row, full height)
+    settings_.registerUint8("phasebright", &ap->phaseBrightness, "audiovis",
+        "Phase row maximum brightness", 0, 255, onParamChanged);
+    settings_.registerFloat("musicmodethresh", &ap->musicModeThreshold, "audiovis",
+        "Rhythm confidence threshold for phase display", 0.0f, 1.0f, onParamChanged);
+
+    // Beat pulse (blue center band on beat)
+    settings_.registerUint8("beatpulsebright", &ap->beatPulseBrightness, "audiovis",
+        "Beat pulse band max brightness", 0, 255, onParamChanged);
+    settings_.registerFloat("beatpulsedecay", &ap->beatPulseDecay, "audiovis",
+        "Beat pulse decay rate per frame", 0.01f, 0.5f, onParamChanged);
+    settings_.registerFloat("beatpulsewidth", &ap->beatPulseWidth, "audiovis",
+        "Beat pulse band width as fraction of height", 0.05f, 0.5f, onParamChanged);
+
+    // Background
+    settings_.registerUint8("bgbright", &ap->backgroundBrightness, "audiovis",
+        "Background brightness", 0, 255, onParamChanged);
 }
 
 // === EFFECT SETTINGS ===
@@ -1243,19 +1382,34 @@ void SerialConsole::streamTick() {
         Serial.print(F("}"));
 
         // AudioController telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"e":0.5,"p":0.8}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"e":0.5,"p":0.8}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
+        // conf = hypothesis confidence, bc = beat count, q = beat event (phase wrap)
         // e = energy, p = pulse
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
+            const TempoHypothesis& primary = audioCtrl_->getMultiHypothesis().getPrimary();
+
+            // Detect beat events via phase wrapping (>0.8 → <0.2)
+            static float lastStreamPhase = 0.0f;
+            float currentPhase = audio.phase;
+            int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > audioCtrl_->activationThreshold) ? 1 : 0;
+            lastStreamPhase = currentPhase;
+
             Serial.print(F(",\"m\":{\"a\":"));
-            Serial.print(audio.hasRhythm() ? 1 : 0);
+            Serial.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"ph\":"));
-            Serial.print(audio.phase, 2);
+            Serial.print(currentPhase, 2);
             Serial.print(F(",\"str\":"));
             Serial.print(audio.rhythmStrength, 2);
+            Serial.print(F(",\"conf\":"));
+            Serial.print(primary.confidence, 2);
+            Serial.print(F(",\"bc\":"));
+            Serial.print(primary.beatCount);
+            Serial.print(F(",\"q\":"));
+            Serial.print(beatEvent);
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
@@ -1370,11 +1524,26 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(F("\nFusion Parameters:"));
         Serial.print(F("  cooldown: "));
         Serial.print(fusion.getCooldownMs());
-        Serial.println(F(" ms"));
+        Serial.println(F(" ms (base)"));
+        Serial.print(F("  adaptcool: "));
+        Serial.println(fusion.isAdaptiveCooldownEnabled() ? F("on") : F("off"));
+        Serial.print(F("  effcool: "));
+        Serial.print(fusion.getEffectiveCooldownMs());
+        Serial.print(F(" ms (tempo="));
+        Serial.print(fusion.getTempoHint(), 1);
+        Serial.println(F(" bpm)"));
         Serial.print(F("  minconf: "));
         Serial.println(fusion.getMinConfidence(), 3);
         Serial.print(F("  minlevel: "));
         Serial.println(fusion.getMinAudioLevel(), 3);
+
+        // BassBand-specific parameters
+        const BassBandDetector& bass = audioCtrl_->getEnsemble().getBassBand();
+        Serial.println(F("\nBassBand Noise Rejection:"));
+        Serial.print(F("  minflux: "));
+        Serial.println(bass.getMinAbsoluteFlux(), 3);
+        Serial.print(F("  sharpness: "));
+        Serial.println(bass.getSharpnessThreshold(), 2);
         return true;
     }
 
@@ -1440,6 +1609,35 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
 
+    // ens_adaptcool: Enable/disable tempo-adaptive cooldown
+    if (strncmp(cmd, "set ens_adaptcool ", 18) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 18);
+        audioCtrl_->getEnsemble().getFusion().setAdaptiveCooldown(value != 0);
+        Serial.print(F("OK ens_adaptcool="));
+        Serial.println(value != 0 ? "on" : "off");
+        return true;
+    }
+    if (strcmp(cmd, "show ens_adaptcool") == 0 || strcmp(cmd, "ens_adaptcool") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("ens_adaptcool="));
+        Serial.println(audioCtrl_->getEnsemble().getFusion().isAdaptiveCooldownEnabled() ? "on" : "off");
+        return true;
+    }
+
+    // ens_effcool: Show effective cooldown (read-only, affected by tempo)
+    if (strcmp(cmd, "show ens_effcool") == 0 || strcmp(cmd, "ens_effcool") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("ens_effcool="));
+        Serial.print(audioCtrl_->getEnsemble().getFusion().getEffectiveCooldownMs());
+        Serial.print(F("ms (base="));
+        Serial.print(audioCtrl_->getEnsemble().getFusion().getCooldownMs());
+        Serial.print(F("ms, tempo="));
+        Serial.print(audioCtrl_->getEnsemble().getFusion().getTempoHint(), 1);
+        Serial.println(F("bpm)"));
+        return true;
+    }
+
     // === PULSE MODULATION THRESHOLDS (rhythm category) ===
     // pulsenear: Phase distance threshold for near-beat detection (boost transients)
     if (strncmp(cmd, "set pulsenear ", 14) == 0) {
@@ -1501,11 +1699,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
             }
         } else {
             Serial.println(F("Usage: set detector_enable <type> <0|1>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
         }
         return true;
     }
@@ -1543,11 +1741,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
             }
         } else {
             Serial.println(F("Usage: set detector_weight <type> <value>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
         }
         return true;
     }
@@ -1585,11 +1783,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, mel"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
             }
         } else {
             Serial.println(F("Usage: set detector_thresh <type> <value>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, mel"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
         }
         return true;
     }
@@ -1656,38 +1854,22 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(audioCtrl_->getEnsemble().getDrummer().getAverageTau(), 3);
         return true;
     }
+    if (strncmp(cmd, "set drummer_minriserate ", 24) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 24);
+        audioCtrl_->getEnsemble().getDrummer().setMinRiseRate(value);
+        Serial.print(F("OK drummer_minriserate="));
+        Serial.println(value, 3);
+        return true;
+    }
+    if (strcmp(cmd, "show drummer_minriserate") == 0 || strcmp(cmd, "drummer_minriserate") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("drummer_minriserate="));
+        Serial.println(audioCtrl_->getEnsemble().getDrummer().getMinRiseRate(), 3);
+        return true;
+    }
 
-    // SpectralFlux: minbin, maxbin
-    if (strncmp(cmd, "set spectral_minbin ", 20) == 0) {
-        if (!audioCtrl_) return true;
-        int value = atoi(cmd + 20);
-        SpectralFluxDetector& d = audioCtrl_->getEnsemble().getSpectralFlux();
-        d.setAnalysisRange(value, d.getMaxBin());
-        Serial.print(F("OK spectral_minbin="));
-        Serial.println(value);
-        return true;
-    }
-    if (strncmp(cmd, "set spectral_maxbin ", 20) == 0) {
-        if (!audioCtrl_) return true;
-        int value = atoi(cmd + 20);
-        SpectralFluxDetector& d = audioCtrl_->getEnsemble().getSpectralFlux();
-        d.setAnalysisRange(d.getMinBin(), value);
-        Serial.print(F("OK spectral_maxbin="));
-        Serial.println(value);
-        return true;
-    }
-    if (strcmp(cmd, "show spectral_minbin") == 0 || strcmp(cmd, "spectral_minbin") == 0) {
-        if (!audioCtrl_) return true;
-        Serial.print(F("spectral_minbin="));
-        Serial.println(audioCtrl_->getEnsemble().getSpectralFlux().getMinBin());
-        return true;
-    }
-    if (strcmp(cmd, "show spectral_maxbin") == 0 || strcmp(cmd, "spectral_maxbin") == 0) {
-        if (!audioCtrl_) return true;
-        Serial.print(F("spectral_maxbin="));
-        Serial.println(audioCtrl_->getEnsemble().getSpectralFlux().getMaxBin());
-        return true;
-    }
+    // SpectralFlux: now operates on 26 mel bands (no configurable bin range)
 
     // HFC: minbin, maxbin, attackmult
     if (strncmp(cmd, "set hfc_minbin ", 15) == 0) {
@@ -1734,6 +1916,20 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(audioCtrl_->getEnsemble().getHFC().getAttackMultiplier(), 3);
         return true;
     }
+    if (strncmp(cmd, "set hfc_sustainreject ", 22) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 22);
+        audioCtrl_->getEnsemble().getHFC().setSustainRejectFrames(value);
+        Serial.print(F("OK hfc_sustainreject="));
+        Serial.println(value);
+        return true;
+    }
+    if (strcmp(cmd, "show hfc_sustainreject") == 0 || strcmp(cmd, "hfc_sustainreject") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("hfc_sustainreject="));
+        Serial.println(audioCtrl_->getEnsemble().getHFC().getSustainRejectFrames());
+        return true;
+    }
 
     // BassBand: minbin, maxbin
     if (strncmp(cmd, "set bass_minbin ", 16) == 0) {
@@ -1764,6 +1960,38 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         if (!audioCtrl_) return true;
         Serial.print(F("bass_maxbin="));
         Serial.println(audioCtrl_->getEnsemble().getBassBand().getMaxBin());
+        return true;
+    }
+
+    // BassBand: minflux (minimum absolute flux threshold)
+    if (strncmp(cmd, "set bass_minflux ", 17) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 17);
+        audioCtrl_->getEnsemble().getBassBand().setMinAbsoluteFlux(value);
+        Serial.print(F("OK bass_minflux="));
+        Serial.println(value, 3);
+        return true;
+    }
+    if (strcmp(cmd, "show bass_minflux") == 0 || strcmp(cmd, "bass_minflux") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bass_minflux="));
+        Serial.println(audioCtrl_->getEnsemble().getBassBand().getMinAbsoluteFlux(), 3);
+        return true;
+    }
+
+    // BassBand: sharpness (minimum transient sharpness ratio)
+    if (strncmp(cmd, "set bass_sharpness ", 19) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 19);
+        audioCtrl_->getEnsemble().getBassBand().setSharpnessThreshold(value);
+        Serial.print(F("OK bass_sharpness="));
+        Serial.println(value, 2);
+        return true;
+    }
+    if (strcmp(cmd, "show bass_sharpness") == 0 || strcmp(cmd, "bass_sharpness") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bass_sharpness="));
+        Serial.println(audioCtrl_->getEnsemble().getBassBand().getSharpnessThreshold(), 2);
         return true;
     }
 

@@ -31,6 +31,7 @@
 #include "generators/Fire.cpp"
 #include "generators/Water.cpp"
 #include "generators/Lightning.cpp"
+#include "generators/Audio.cpp"
 
 // Effect implementations
 #include "effects/HueRotationEffect.cpp"
@@ -64,7 +65,8 @@
 #include "audio/detectors/HFCDetector.cpp"
 #include "audio/detectors/BassBandDetector.cpp"
 #include "audio/detectors/ComplexDomainDetector.cpp"
-#include "audio/detectors/MelFluxDetector.cpp"
+#include "audio/detectors/NoveltyDetector.cpp"
+#include "audio/PerceptualScaling.cpp"
 #include "audio/AudioController.cpp"
 
 // Test implementations (only when testing enabled)

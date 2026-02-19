@@ -22,13 +22,12 @@ const mockUseSerial: UseSerialReturn = {
   settingsByCategory: {},
   currentGenerator: 'fire',
   currentEffect: 'none',
-  availableGenerators: ['fire', 'water', 'lightning'],
+  availableGenerators: ['fire', 'water', 'lightning', 'audio'],
   availableEffects: ['none', 'hue'],
   isStreaming: false,
   audioData: null,
   batteryData: null,
   batteryStatusData: null,
-  rhythmData: null,
   musicModeData: null,
   statusData: null,
   onTransientEvent: vi.fn(() => () => {}),
@@ -163,11 +162,15 @@ describe('App', () => {
     it('shows device info when connected', () => {
       mockUseSerial.connectionState = 'connected';
       mockUseSerial.deviceInfo = {
-        device: 'Blinky Time',
         version: '2.0.0',
-        width: 16,
-        height: 16,
-        leds: 256,
+        device: {
+          id: 'blinky_v1',
+          name: 'Blinky Time',
+          width: 16,
+          height: 16,
+          leds: 256,
+          configured: true as const,
+        },
       };
 
       render(<App />);

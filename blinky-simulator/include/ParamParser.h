@@ -242,3 +242,35 @@ inline ParamMap getParamMap(const LightningParams& p) {
     m["organicTransientMin"] = std::to_string(p.organicTransientMin);
     return m;
 }
+
+// === AUDIO VISUALIZATION PARAMS ===
+#include "../../blinky-things/generators/Audio.h"
+inline void applyParams(AudioParams& p, const ParamMap& params) {
+    p.transientRowFraction = ParamParser::getFloat(params, "transientRowFraction", p.transientRowFraction);
+    p.transientDecayRate = ParamParser::getFloat(params, "transientDecayRate", p.transientDecayRate);
+    p.transientBrightness = ParamParser::getInt(params, "transientBrightness", p.transientBrightness);
+    p.levelBrightness = ParamParser::getInt(params, "levelBrightness", p.levelBrightness);
+    p.levelSmoothing = ParamParser::getFloat(params, "levelSmoothing", p.levelSmoothing);
+    p.phaseBrightness = ParamParser::getInt(params, "phaseBrightness", p.phaseBrightness);
+    p.musicModeThreshold = ParamParser::getFloat(params, "musicModeThreshold", p.musicModeThreshold);
+    p.beatPulseBrightness = ParamParser::getInt(params, "beatPulseBrightness", p.beatPulseBrightness);
+    p.beatPulseDecay = ParamParser::getFloat(params, "beatPulseDecay", p.beatPulseDecay);
+    p.beatPulseWidth = ParamParser::getFloat(params, "beatPulseWidth", p.beatPulseWidth);
+    p.backgroundBrightness = ParamParser::getInt(params, "backgroundBrightness", p.backgroundBrightness);
+}
+
+inline ParamMap getParamMap(const AudioParams& p) {
+    ParamMap m;
+    m["transientRowFraction"] = std::to_string(p.transientRowFraction);
+    m["transientDecayRate"] = std::to_string(p.transientDecayRate);
+    m["transientBrightness"] = std::to_string(p.transientBrightness);
+    m["levelBrightness"] = std::to_string(p.levelBrightness);
+    m["levelSmoothing"] = std::to_string(p.levelSmoothing);
+    m["phaseBrightness"] = std::to_string(p.phaseBrightness);
+    m["musicModeThreshold"] = std::to_string(p.musicModeThreshold);
+    m["beatPulseBrightness"] = std::to_string(p.beatPulseBrightness);
+    m["beatPulseDecay"] = std::to_string(p.beatPulseDecay);
+    m["beatPulseWidth"] = std::to_string(p.beatPulseWidth);
+    m["backgroundBrightness"] = std::to_string(p.backgroundBrightness);
+    return m;
+}

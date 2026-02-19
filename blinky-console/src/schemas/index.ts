@@ -16,7 +16,12 @@
  */
 
 // Device information
-export { DeviceInfoSchema, type DeviceInfo } from './device';
+export {
+  DeviceInfoSchema,
+  type DeviceInfo,
+  type ConfiguredDevice,
+  isDeviceConfigured,
+} from './device';
 
 // Settings
 export {
@@ -33,11 +38,9 @@ export {
 // Audio streaming
 export {
   AudioSampleSchema,
-  RhythmDataSchema,
   MusicModeDataSchema,
   AudioMessageSchema,
   type AudioSample,
-  type RhythmData,
   type MusicModeData,
   type AudioMessage,
 } from './audio';

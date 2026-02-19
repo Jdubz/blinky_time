@@ -4,30 +4,24 @@
 #include "../SharedSpectralAnalysis.h"
 
 /**
- * SpectralFluxDetector - SuperFlux spectral onset detection
+ * SpectralFluxDetector - SuperFlux on mel bands
  *
- * Implements the SuperFlux algorithm with max-filter vibrato suppression.
- * Computes half-wave rectified spectral flux between consecutive FFT frames.
+ * Computes half-wave rectified spectral flux on 26 mel bands with:
+ * - Lag-2 comparison (current vs 2 frames ago, not 1)
+ * - 3-band max-filter on reference frame for vibrato suppression
  *
- * Algorithm:
- * 1. Receive magnitude spectrum from SharedSpectralAnalysis
- * 2. Apply 3-bin max-filter to previous frame magnitudes
- *    maxPrev[i] = max(prev[i-1], prev[i], prev[i+1])
- * 3. Compute half-wave rectified flux:
- *    flux = sum(max(current[i] - maxPrev[i], 0)) / numBins
- * 4. Detect when flux > localMedian * threshold
+ * Operating on mel bands instead of raw FFT bins provides:
+ * - Perceptual frequency grouping (matches human hearing)
+ * - Reduced dimensionality (26 bands vs 128 bins = less noise)
+ * - Log-compressed dynamic range (from SharedSpectralAnalysis)
  *
  * Reference: Böck & Widmer, "Maximum Filter Vibrato Suppression for Onset Detection"
  *
- * Ported from SpectralFlux.h with adaptations for shared FFT architecture.
- *
  * Parameters:
  * - threshold: Detection threshold as ratio (default 1.4)
- * - minBin/maxBin: Frequency range to analyze (default 1-64 = 62.5-4kHz)
- * - cooldownMs: Minimum time between detections (default 80ms)
  *
- * Memory: ~600 bytes (previous magnitude buffer + state)
- * CPU: <0.2ms per frame (uses shared FFT, just computes flux)
+ * Memory: ~260 bytes (2 frames × 26 mel bands + state)
+ * CPU: <0.1ms per frame (26 multiply-adds)
  */
 class SpectralFluxDetector : public BaseDetector {
 public:
@@ -39,11 +33,6 @@ public:
     const char* name() const override { return "spectral"; }
     bool requiresSpectralData() const override { return true; }
 
-    // Spectral flux parameters
-    void setAnalysisRange(int minBin, int maxBin);
-    int getMinBin() const { return minBin_; }
-    int getMaxBin() const { return maxBin_; }
-
     // Debug access
     float getCurrentFlux() const { return currentFlux_; }
     float getAverageFlux() const { return averageFlux_; }
@@ -52,22 +41,20 @@ protected:
     void resetImpl() override;
 
 private:
-    // Previous frame magnitudes (local copy for flux computation)
-    float prevMagnitudes_[SpectralConstants::NUM_BINS];
-    bool hasPrevFrame_;
-
-    // Analysis range
-    int minBin_;
-    int maxBin_;
+    // Mel band history for lag-2 SuperFlux
+    // lag1 = previous frame (t-1), lag2 = two frames ago (t-2)
+    float melLag1_[SpectralConstants::NUM_MEL_BANDS];
+    float melLag2_[SpectralConstants::NUM_MEL_BANDS];
+    int frameCount_;
 
     // Running stats
     float currentFlux_;
     float averageFlux_;
 
-    // Compute SuperFlux with max-filter vibrato suppression
-    float computeFlux(const float* magnitudes, int numBins) const;
+    // Compute SuperFlux on mel bands with lag-2 max-filtered reference
+    float computeMelSuperFlux(const float* melBands, int numBands) const;
 
-    // Compute confidence based on flux stability and magnitude
+    // Compute confidence based on flux magnitude
     float computeConfidence(float flux, float median) const;
 
     // Helper: max of 3 values

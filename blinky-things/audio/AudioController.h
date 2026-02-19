@@ -2,6 +2,7 @@
 
 #include "AudioControl.h"
 #include "EnsembleDetector.h"
+#include "PerceptualScaling.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -122,8 +123,8 @@ public:
     float bpmMatchTolerance = 0.05f;        // ±5% BPM tolerance for matching peaks to hypotheses
 
     // Promotion
-    float promotionThreshold = 0.15f;       // Confidence advantage needed to promote (0-1)
-    uint16_t minBeatsBeforePromotion = 8;   // Minimum beats before promoting a new hypothesis
+    float promotionThreshold = 0.20f;       // Confidence advantage needed to promote (slightly easier correction)
+    uint16_t minBeatsBeforePromotion = 8;   // Minimum beats before promoting (faster adaptation)
 
     // Decay
     float phraseHalfLifeBeats = 32.0f;      // Half-life in beats (8 bars of 4/4)
@@ -145,7 +146,7 @@ public:
      * Create a new hypothesis in the best available slot
      * Returns slot index, or -1 if creation failed
      */
-    int createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation);
+    int createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation, float initialPhase = 0.0f);
 
     /**
      * Find best slot for new hypothesis (LRU eviction with primary protection)
@@ -195,6 +196,221 @@ struct AutocorrPeak {
     int lag;
     float correlation;
     float normCorrelation;
+};
+
+// ============================================================================
+// Comb Filter Phase Tracker (Phase 4)
+// ============================================================================
+
+/**
+ * CombFilterPhaseTracker - Independent phase tracking using comb filter resonance
+ *
+ * Theory: A comb filter at lag L accumulates energy when the input has
+ * periodicity at L samples. The phase of the accumulated signal indicates
+ * beat alignment. This provides an independent phase estimate that can be
+ * fused with autocorrelation and Fourier phase methods.
+ *
+ * Memory: ~500 bytes (delay line + state)
+ * CPU: < 1% (simple IIR filter)
+ */
+class CombFilterPhaseTracker {
+public:
+    static constexpr int MAX_LAG = 120;  // ~2s at 60Hz = 30 BPM min
+
+    // === TUNING PARAMETERS ===
+    float feedbackGain = 0.92f;   // Resonance strength (0.85-0.98)
+
+    // === METHODS ===
+
+    /**
+     * Reset all state
+     */
+    void reset();
+
+    /**
+     * Set tempo (updates lag from BPM)
+     */
+    void setTempo(float bpm, float frameRate = 60.0f);
+
+    /**
+     * Process one sample of onset strength
+     */
+    void process(float input);
+
+    /**
+     * Get current phase estimate (0-1)
+     */
+    float getPhase() const { return phase_; }
+
+    /**
+     * Get confidence in phase estimate (0-1)
+     * Based on resonator amplitude stability
+     */
+    float getConfidence() const { return confidence_; }
+
+    /**
+     * Get current lag in samples
+     */
+    int getCurrentLag() const { return currentLag_; }
+
+    /**
+     * Get resonator output (for debugging)
+     */
+    float getResonatorOutput() const { return resonatorOutput_; }
+
+private:
+    // Delay line
+    float delayLine_[MAX_LAG] = {0};
+    int writeIdx_ = 0;
+
+    // Current lag (beat period in samples)
+    int currentLag_ = 30;  // Default ~120 BPM at 60 Hz
+
+    // Resonator state
+    float resonatorOutput_ = 0.0f;
+    float prevResonatorOutput_ = 0.0f;
+
+    // Phase tracking via zero-crossing/peak detection
+    float phase_ = 0.0f;
+    int samplesSincePeak_ = 0;
+
+    // Confidence from amplitude stability
+    float confidence_ = 0.0f;
+    float peakAmplitude_ = 0.0f;
+
+    // Running stats for confidence
+    float runningMax_ = 0.0f;
+    float runningMean_ = 0.0f;
+    int sampleCount_ = 0;
+};
+
+// ============================================================================
+// Comb Filter Bank (Independent Tempo Validation)
+// ============================================================================
+
+/**
+ * CombFilterBank - Independent tempo validation using parallel comb filter resonators
+ *
+ * Theory: A bank of comb filters at different tempos (60-180 BPM) provides
+ * independent tempo validation without depending on autocorrelation being correct.
+ * Each filter accumulates energy when the input has periodicity at its tempo.
+ * The filter with maximum energy indicates the most likely tempo.
+ *
+ * Key improvements over single comb filter:
+ * - Independent tempo detection (doesn't follow autocorrelation)
+ * - Proper Scheirer (1998) equation: y[n] = (1-α)·x[n] + α·y[n-L]
+ * - Complex phase extraction (not peak detection)
+ * - Tempo prior weighting to reduce half-time/double-time confusion
+ *
+ * Memory: ~800 bytes total
+ * CPU: ~2% (20 filters × simple math, phase every 4 frames)
+ */
+class CombFilterBank {
+public:
+    // 20 filters: 60-180 BPM at ~6 BPM resolution
+    // At 60 Hz: lag range = 20-60 samples
+    static constexpr int NUM_FILTERS = 20;
+    static constexpr int MAX_LAG = 60;  // 60 BPM at 60 Hz
+    static constexpr int MIN_LAG = 20;  // 180 BPM at 60 Hz
+
+    // === TUNING PARAMETERS ===
+    float feedbackGain = 0.92f;       // Resonance strength (0.85-0.98)
+    // NOTE: No tempo prior - comb bank uses raw resonator energy
+    // This provides independent tempo validation (autocorr applies prior separately)
+
+    // === METHODS ===
+
+    /**
+     * Initialize the filter bank (compute filter lags/BPMs)
+     */
+    void init(float frameRate = 60.0f);
+
+    /**
+     * Reset all state (delay line, resonators, energy)
+     */
+    void reset();
+
+    /**
+     * Process one sample of onset strength
+     * Updates all 20 resonators and finds peak tempo
+     */
+    void process(float input);
+
+    /**
+     * Get detected tempo in BPM
+     */
+    float getPeakBPM() const { return peakBPM_; }
+
+    /**
+     * Get confidence in tempo estimate (0-1)
+     * Based on peak-to-mean energy ratio
+     */
+    float getPeakConfidence() const { return peakConfidence_; }
+
+    /**
+     * Get phase at detected tempo (0-1)
+     * Extracted via complex exponential (Fourier method)
+     */
+    float getPhaseAtPeak() const { return peakPhase_; }
+
+    /**
+     * Get peak filter index (for debugging)
+     */
+    int getPeakFilterIndex() const { return peakFilterIdx_; }
+
+    /**
+     * Get resonator energy for a specific filter (for debugging)
+     */
+    float getFilterEnergy(int idx) const {
+        if (idx >= 0 && idx < NUM_FILTERS) return resonatorEnergy_[idx];
+        return 0.0f;
+    }
+
+    /**
+     * Get BPM for a specific filter (for debugging)
+     */
+    float getFilterBPM(int idx) const {
+        if (idx >= 0 && idx < NUM_FILTERS) return filterBPMs_[idx];
+        return 0.0f;
+    }
+
+private:
+    // Shared delay line (all filters read from same buffer)
+    float delayLine_[MAX_LAG] = {0};
+    int writeIdx_ = 0;
+
+    // Per-filter resonator state
+    float resonatorOutput_[NUM_FILTERS] = {0};
+    float resonatorEnergy_[NUM_FILTERS] = {0};  // Smoothed energy
+
+    // Lag and BPM for each filter (pre-computed in init())
+    int filterLags_[NUM_FILTERS] = {0};
+    float filterBPMs_[NUM_FILTERS] = {0};
+
+    // Results
+    float peakBPM_ = 120.0f;
+    float peakConfidence_ = 0.0f;
+    float peakPhase_ = 0.0f;
+    int peakFilterIdx_ = 10;  // Middle filter (approx 120 BPM)
+
+    // Resonator history at peak filter for phase extraction
+    float resonatorHistory_[MAX_LAG] = {0};
+    int historyIdx_ = 0;
+
+    // Frame counter for phase extraction throttling
+    int frameCount_ = 0;
+
+    // Frame rate for BPM calculations
+    float frameRate_ = 60.0f;
+
+    // Initialization flag
+    bool initialized_ = false;
+
+    /**
+     * Extract phase using complex exponential (Fourier method)
+     * Called every 4 frames to save CPU
+     */
+    void extractPhase();
 };
 
 // ============================================================================
@@ -304,6 +520,17 @@ public:
 
     // Phase tracking smoothing
     float phaseAdaptRate = 0.15f;       // How quickly phase adapts to autocorrelation (0-1)
+    float phaseHoldStrength = 0.3f;     // Below this strength, maintain phase from prediction instead of resetting
+
+    // === TEMPO RATE LIMITING ===
+    // Prevents rapid tempo jumps during active tracking
+    float maxBpmChangePerSec = 5.0f;        // Max BPM change per second during active tracking (% of current)
+
+    // === TRANSIENT-BASED PHASE CORRECTION (PLL-style) ===
+    // Uses detected transients to nudge phase toward actual beat timing
+    // Requires 2+ detector agreement to prevent single-detector false positives from drifting phase
+    float transientCorrectionRate = 0.12f;  // How fast to apply transient-based correction (0-1), increased for faster convergence
+    float transientCorrectionMin = 0.30f;   // Minimum transient strength to trigger correction (lowered for EDM)
 
     // Beat proximity thresholds for pulse modulation
     float pulseNearBeatThreshold = 0.2f;    // Phase distance < this = boost transients
@@ -315,9 +542,10 @@ public:
 
     // === TEMPO PRIOR (reduces half-time/double-time confusion) ===
     // Gaussian prior centered on typical music tempo, weights autocorrelation peaks
+    // Shifted up for EDM: center=128 covers 110-150 BPM range, wider sigma reduces penalty on fast tempos
     bool tempoPriorEnabled = true;      // Enable tempo prior weighting
-    float tempoPriorCenter = 120.0f;    // Center of Gaussian prior (BPM)
-    float tempoPriorWidth = 40.0f;      // Width (sigma) of Gaussian prior (BPM)
+    float tempoPriorCenter = 128.0f;    // Center of Gaussian prior (BPM) - midpoint of EDM range
+    float tempoPriorWidth = 50.0f;      // Width (sigma) of Gaussian prior (BPM) - wider for less aggressive penalty
     float tempoPriorStrength = 0.5f;    // Blend: 0=no prior, 1=full prior weight
 
     // === BEAT STABILITY TRACKING ===
@@ -332,6 +560,52 @@ public:
     // Kalman-like smoothing for gradual tempo changes
     float tempoSmoothingFactor = 0.85f; // Higher = smoother, slower adaptation (0-1)
     float tempoChangeThreshold = 0.1f;  // Min BPM change ratio to trigger update
+
+    // === ONSET STRENGTH SIGNAL (OSS) GENERATION ===
+    // Controls how the onset strength signal is computed for autocorrelation
+    // Spectral flux captures energy CHANGES, RMS captures absolute levels
+    float ossFluxWeight = 1.0f;  // 1.0 = pure spectral flux, 0.0 = pure RMS (legacy)
+
+    // === ADAPTIVE BAND WEIGHTING ===
+    // Dynamically adjusts band weights based on which frequency bands show strongest periodicity
+    // When enabled, bands with stronger rhythmic content get higher weights
+    // Uses SuperFlux-style max filtering, cross-band correlation, and peakiness detection
+    // to distinguish real beats from vibrato/tremolo in sustained content
+    bool adaptiveBandWeightEnabled = true;  // Enable/disable adaptive weighting
+    float bassBandWeight = 0.5f;    // Bass band weight (when adaptive disabled)
+    float midBandWeight = 0.3f;     // Mid band weight (when adaptive disabled)
+    float highBandWeight = 0.2f;    // High band weight (when adaptive disabled)
+
+    // === AUTOCORRELATION TIMING ===
+    // Controls how often BPM is re-estimated via autocorrelation
+    uint16_t autocorrPeriodMs = 250;  // Run autocorr every N ms (default 250ms for faster adaptation)
+
+    // === PULSE TRAIN PHASE ESTIMATION ===
+    // Uses PLP-inspired Fourier phase extraction at tempo frequency
+    // Based on Predominant Local Pulse (PLP) method by Grosche & Müller (2011)
+    // Testing showed +10-11% F1 improvement on full-mix and full-kit patterns
+    float pulsePhaseWeight = 1.0f;  // 1.0 = Fourier phase (default), 0.0 = peak-finding only
+
+    // === COMB FILTER PHASE TRACKER (Phase 4) ===
+    // Independent phase tracking using comb filter resonance
+    // Provides complementary phase estimate to autocorrelation and Fourier methods
+    // Now enabled: fixed implementation with proper Scheirer equation
+    float combFilterWeight = 0.5f;  // Weight in fusion (0.0 = disabled, 1.0 = full weight)
+    float combFeedback = 0.92f;     // Resonance strength (0.85-0.98)
+
+    // === COMB FILTER BANK (Independent Tempo Validation) ===
+    // Bank of 20 comb filters at 60-180 BPM for independent tempo detection
+    // Provides validation/boosting for multi-hypothesis tracker
+    bool combBankEnabled = true;    // Enable comb filter bank
+    float combBankFeedback = 0.92f; // Bank resonance strength (0.85-0.98)
+
+    // === RHYTHM FUSION (Phase 5) ===
+    // Combines phase estimates from multiple systems with confidence weighting
+    // System 0: Autocorrelation (peak-finding or Fourier phase)
+    // System 1: Comb filter resonator
+    // Transient hints provide small nudges (max ±10%)
+    bool fusionEnabled = true;              // Enable fusion (when multiple systems active)
+    float transientHintWeight = 0.1f;       // Max influence of transient hints (0-0.2)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -355,12 +629,39 @@ public:
     uint32_t getNextBeatMs() const { return nextBeatMs_; }
     float getLastTempoPriorWeight() const { return lastTempoPriorWeight_; }
 
+    // Adaptive band weight debug getters
+    const float* getAdaptiveBandWeights() const { return adaptiveBandWeights_; }
+    const float* getBandPeriodicityStrength() const { return bandPeriodicityStrength_; }
+
+    // Pulse train phase debug getters
+    float getPulseTrainPhase() const { return pulseTrainPhase_; }
+    float getPulseTrainConfidence() const { return pulseTrainConfidence_; }
+
+    // Comb filter phase debug getters
+    float getCombFilterPhase() const { return combFilter_.getPhase(); }
+    float getCombFilterConfidence() const { return combFilter_.getConfidence(); }
+    const CombFilterPhaseTracker& getCombFilter() const { return combFilter_; }
+
+    // Comb filter bank debug getters
+    float getCombBankBPM() const { return combFilterBank_.getPeakBPM(); }
+    float getCombBankConfidence() const { return combFilterBank_.getPeakConfidence(); }
+    float getCombBankPhase() const { return combFilterBank_.getPhaseAtPeak(); }
+    const CombFilterBank& getCombFilterBank() const { return combFilterBank_; }
+
+    // Fusion debug getters
+    float getFusedPhase() const { return fusedPhase_; }
+    float getFusedConfidence() const { return fusedConfidence_; }
+    float getConsensusMetric() const { return consensusMetric_; }
+
 private:
     // === HAL REFERENCES ===
     ISystemTime& time_;
 
     // === MICROPHONE ===
     AdaptiveMic mic_;
+
+    // === PERCEPTUAL SCALING ===
+    PerceptualScaling perceptual_;  // Public for ConfigStorage access
 
     // === ENSEMBLE DETECTOR ===
     EnsembleDetector ensemble_;
@@ -375,8 +676,44 @@ private:
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
+    // Spectral flux: previous frame magnitudes for frame-to-frame comparison
+    static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
+    float prevMagnitudes_[SPECTRAL_BINS] = {0};
+    bool prevMagnitudesValid_ = false;  // First frame has no previous
+
+    // Per-band OSS tracking for adaptive weighting
+    // Tracks periodicity strength in bass, mid, high bands independently
+    static constexpr int BAND_COUNT = 3;  // bass, mid, high
+    static constexpr int BAND_OSS_BUFFER_SIZE = 240;  // 4 seconds at 60 Hz (captures 4+ beats at 60 BPM)
+    float bandOssBuffers_[BAND_COUNT][BAND_OSS_BUFFER_SIZE] = {{0}};
+    int bandOssWriteIdx_ = 0;
+    int bandOssCount_ = 0;
+    float bandPeriodicityStrength_[BAND_COUNT] = {0};
+    float adaptiveBandWeights_[BAND_COUNT] = {0.5f, 0.3f, 0.2f};  // Default weights
+    uint32_t lastBandAutocorrMs_ = 0;
+    static constexpr uint32_t BAND_AUTOCORR_PERIOD_MS = 250;  // Run every 250ms (faster response)
+
+    // Cross-band correlation tracking (SuperFlux-inspired)
+    // Measures how synchronized the bands are - real beats correlate across bands
+    float crossBandCorrelation_[BAND_COUNT] = {0};  // Correlation of each band with others
+    float bandSynchrony_ = 0.0f;  // Overall synchrony metric (0-1)
+
+    // Peakiness tracking - distinguishes transient bursts from continuous vibrato
+    // Transients: sparse, high peaks (high peakiness)
+    // Vibrato: continuous, low-level fluctuations (low peakiness)
+    float bandPeakiness_[BAND_COUNT] = {0};
+
+    // Maximum-filtered previous magnitudes for vibrato suppression (SuperFlux style)
+    float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};
+
     // Multi-hypothesis tempo tracking
     MultiHypothesisTracker multiHypothesis_;
+
+    // Comb filter phase tracker (Phase 4)
+    CombFilterPhaseTracker combFilter_;
+
+    // Comb filter bank (independent tempo validation)
+    CombFilterBank combFilterBank_;
 
     // Current tempo estimate (for backward compatibility during transition)
     // TODO: These will be replaced by multiHypothesis_.getPrimary() values
@@ -387,6 +724,20 @@ private:
     // Phase tracking (derived from autocorrelation, not from transients)
     float phase_ = 0.0f;                // Current beat phase (0-1)
     float targetPhase_ = 0.0f;          // Phase derived from autocorrelation
+
+    // Pulse train phase estimation state
+    float pulseTrainPhase_ = 0.0f;      // Phase from pulse train cross-correlation
+    float pulseTrainConfidence_ = 0.0f; // Confidence of pulse train phase (correlation strength)
+
+    // Rhythm fusion state (Phase 5)
+    float fusedPhase_ = 0.0f;           // Final fused phase estimate
+    float fusedConfidence_ = 0.0f;      // Overall confidence in fused estimate
+    float consensusMetric_ = 0.0f;      // How much systems agree (0-1)
+    float transientHint_ = 0.0f;        // Current transient-based phase hint
+
+    // Transient-based phase correction (PLL)
+    float transientPhaseError_ = 0.0f;  // Running average of phase error when transients detected
+    uint32_t lastTransientCorrectionMs_ = 0; // Timestamp of last transient correction
 
     // Beat stability tracking
     static constexpr int STABILITY_BUFFER_SIZE = 16;
@@ -408,7 +759,7 @@ private:
 
     // Autocorrelation timing
     uint32_t lastAutocorrMs_ = 0;
-    static constexpr uint32_t AUTOCORR_PERIOD_MS = 500;  // Run every 500ms
+    static constexpr uint32_t AUTOCORR_PERIOD_MS = 250;  // Run every 250ms (faster adaptation)
 
     // Silence detection
     uint32_t lastSignificantAudioMs_ = 0;
@@ -422,6 +773,28 @@ private:
     void addOssSample(float onsetStrength, uint32_t timestampMs);
     void runAutocorrelation(uint32_t nowMs);
     void updatePhase(float dt, uint32_t nowMs);
+    void updateTransientPhaseCorrection(float transientStrength, uint32_t nowMs);
+
+    // Onset strength computation
+    float computeSpectralFlux(const float* magnitudes, int numBins);
+    float computeSpectralFluxBands(const float* magnitudes, int numBins,
+                                    float& bassFlux, float& midFlux, float& highFlux);
+    float computeMultiBandRms(const float* magnitudes, int numBins);
+
+    // Adaptive band weighting
+    void addBandOssSamples(float bassFlux, float midFlux, float highFlux);
+    void updateBandPeriodicities(uint32_t nowMs);
+    float computeBandAutocorrelation(int band);
+    void computeCrossBandCorrelation();
+    void computeBandPeakiness();
+    void applyMaxFilter(float* magnitudes, int numBins);
+
+    // Pulse train phase estimation (Phase 3)
+    float computePulseTrainPhase(int beatPeriodSamples);
+    float generateAndCorrelate(int phaseOffset, int beatPeriod);
+
+    // Rhythm fusion (Phase 5)
+    void fuseRhythmEstimates();
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

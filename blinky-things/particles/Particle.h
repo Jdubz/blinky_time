@@ -2,12 +2,8 @@
 
 #include <stdint.h>
 
-// Frame rate normalization constant (target 30 FPS)
-// Used to make physics consistent across varying frame rates
-static const float TARGET_FPS = 30.0f;
-
 // Maximum particle velocity to prevent tunneling through walls
-// At 30 FPS, this allows ~1.67 LEDs/frame max displacement
+// 50 LEDs/sec = ~0.83 LEDs/frame @ 60 Hz
 static const float MAX_PARTICLE_VELOCITY = 50.0f;
 
 // Beat detection phase wrap thresholds
@@ -18,10 +14,11 @@ static const float BEAT_PHASE_MAX = 0.8f;  // Phase must rise above this
 /**
  * Particle - Core particle data structure for unified generator system
  *
- * Memory: 24 bytes per particle
+ * Memory: 28 bytes per particle (aligned)
  * - Position: 8 bytes (float x, y)
  * - Velocity: 8 bytes (float vx, vy)
- * - State: 8 bytes (uint8_t intensity, age, maxAge, flags; float mass)
+ * - State: 8 bytes (uint8_t intensity, age, maxAge, flags, trailHeatFactor; padding)
+ * - Physics: 4 bytes (float mass)
  *
  * Supports sparks (Fire), drops/splashes (Water), and bolts (Lightning)
  * through configurable behavior flags and physics properties.
@@ -35,14 +32,17 @@ struct Particle {
 
     // Lifecycle
     uint8_t intensity;    // 1 byte - Current brightness/heat (0-255)
-    uint8_t age;          // 1 byte - Frames since spawn (0-255, wraps)
-    uint8_t maxAge;       // 1 byte - Death age (0=infinite, 1-255=lifespan frames)
+    uint8_t age;          // 1 byte - Age in centiseconds (0.01s units, 0-2.55s range)
+    uint8_t maxAge;       // 1 byte - Death age in centiseconds (0=infinite, 1-255=0.01-2.55s)
     uint8_t flags;        // 1 byte - Behavior flags (see ParticleFlags)
+
+    // Fire-specific (used by generators that emit heat trails)
+    uint8_t trailHeatFactor; // 1 byte - Heat emission percentage (0-100, 0=no trail)
 
     // Physics
     float mass;           // 4 bytes - Mass for force calculations (0.1-2.0 typical)
 
-    // === TOTAL: 24 bytes ===
+    // === TOTAL: 28 bytes (with padding) ===
 
     /**
      * Check if particle is alive

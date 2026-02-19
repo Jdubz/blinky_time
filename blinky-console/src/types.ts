@@ -9,6 +9,7 @@
 export type {
   // Device
   DeviceInfo,
+  ConfiguredDevice,
   // Settings
   SettingType,
   DeviceSetting,
@@ -16,7 +17,6 @@ export type {
   SettingsByCategory,
   // Audio
   AudioSample,
-  RhythmData,
   MusicModeData,
   AudioMessage,
   // Battery
@@ -37,15 +37,15 @@ export type {
   EffectState,
 } from './schemas';
 
-// Re-export schemas for runtime validation
+// Re-export schemas for runtime validation and type guards
 export {
   DeviceInfoSchema,
+  isDeviceConfigured,
   SettingTypeSchema,
   DeviceSettingSchema,
   SettingsResponseSchema,
   SettingsByCategorySchema,
   AudioSampleSchema,
-  RhythmDataSchema,
   MusicModeDataSchema,
   AudioMessageSchema,
   BatterySampleSchema,

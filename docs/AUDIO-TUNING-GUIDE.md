@@ -1,6 +1,6 @@
 # Audio Tuning Guide
 
-**Last Updated:** January 4, 2026
+**Last Updated:** February 14, 2026
 **Architecture Version:** AudioController v3 (Multi-hypothesis tempo tracking)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
@@ -28,17 +28,19 @@ PDM Microphone (16kHz, mono)
         |
    Hardware AGC (0-80 gain, targets hwTarget level)
         |
-   AdaptiveMic
-   ├── Window/Range normalization (peak/valley tracking)
-   ├── Transient Detection (5 algorithms)
-   │   ├── Mode 0: DRUMMER (amplitude spikes)
-   │   ├── Mode 1: BASS_BAND (low-pass filtered)
-   │   ├── Mode 2: HFC (high frequency content)
-   │   ├── Mode 3: SPECTRAL_FLUX (FFT-based)
-   │   └── Mode 4: HYBRID (drummer + flux, RECOMMENDED)
-   └── Spectral Flux output → AudioController
+   AdaptiveMic (Window/Range normalization)
         |
-   EnsembleDetector (6 detectors + fusion) → Transient Hits
+   SharedSpectralAnalysis (FFT-256, mel bands, whitening)
+        |
+   EnsembleDetector (6 detectors, weighted fusion)
+   ├── HFC (0.60) ─────── enabled  ← percussive attacks
+   ├── Drummer (0.40) ─── enabled  ← amplitude transients
+   ├── SpectralFlux ───── disabled (fires on chord changes)
+   ├── BassBand ────────── disabled (room noise issues)
+   ├── ComplexDomain ───── disabled (adds sparse FPs)
+   └── Novelty ─────────── disabled (net negative F1)
+        |
+   Fusion: agree_1=0.2, cooldown=250ms, minconf=0.55
         |
    AudioController
    ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
@@ -49,7 +51,7 @@ PDM Microphone (16kHz, mono)
    │   ├── Tertiary (inactive)
    │   └── Candidate (inactive)
    ├── Promotion Logic (confidence-based, ≥8 beats)
-   ├── Phase Tracking (from primary hypothesis)
+   ├── Transient Phase Correction (agreement≥2 gate)
    └── Output Synthesis
         |
    AudioControl { energy, pulse, phase, rhythmStrength }
@@ -124,21 +126,33 @@ npm run tuner -- validate --port COM5 --gain 40
 | `adaptmaxscale` | 0.6 | 0.3-1.0 | Minimum threshold scale factor |
 | `adaptblend` | 5.0 | 1.0-15.0 | Adaptive threshold blend time (s) |
 
-### Category: `detection` (11 parameters) - Algorithm Selection
+### Category: `ensemble` (10+ parameters) - Ensemble Detection
 
+**Detector enable/disable:**
+| Command | Default | Description |
+|---------|---------|-------------|
+| `set detector_enable <type> <0\|1>` | varies | Enable/disable detector (drummer, spectral, hfc, bass, complex, novelty) |
+| `set detector_weight <type> <val>` | varies | Set detector weight in fusion |
+| `set detector_thresh <type> <val>` | varies | Set detector threshold |
+
+**Fusion parameters:**
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `detectmode` | 4 | 0-4 | Algorithm (0=drummer, 1=bass, 2=hfc, 3=flux, 4=hybrid) |
-| `bassfreq` | 120 | 40-200 | Bass filter cutoff (Hz) [Mode 1] |
-| `bassq` | 1.0 | 0.5-3.0 | Bass filter Q [Mode 1] |
-| `bassthresh` | 3.0 | 1.5-10.0 | Bass detection threshold [Mode 1] |
-| `hfcweight` | 1.0 | 0.5-5.0 | HFC weighting [Mode 2] |
-| `hfcthresh` | 3.0 | 1.5-10.0 | HFC threshold [Mode 2] |
-| `fluxthresh` | 1.4 | 0.5-10.0 | Spectral flux threshold [Mode 3,4] |
-| `fluxbins` | 64 | 4-128 | FFT bins to analyze [Mode 3,4] |
-| `hyfluxwt` | 0.5 | 0.1-1.0 | Hybrid: flux-only weight [Mode 4] |
-| `hydrumwt` | 0.5 | 0.1-1.0 | Hybrid: drummer-only weight [Mode 4] |
-| `hybothboost` | 1.2 | 1.0-2.0 | Hybrid: both-agree boost [Mode 4] |
+| `ensemble_cooldown` | 250 | 20-500 | Cooldown between detections (ms) |
+| `ensemble_minconf` | 0.55 | 0.1-1.0 | Minimum confidence for detection output |
+| `agree_<N>` | varies | 0.0-1.5 | Agreement boost for N detectors firing (0-6) |
+
+**Per-detector defaults:**
+| Detector | Weight | Threshold | Enabled |
+|----------|--------|-----------|---------|
+| drummer | 0.40 | 3.5 | yes |
+| hfc | 0.60 | 4.0 | yes |
+| spectral | 0.20 | 1.4 | no |
+| bass | 0.18 | 3.0 | no |
+| complex | 0.13 | 2.0 | no |
+| novelty | 0.12 | 2.5 | no |
+
+**Note:** The old `detectmode` parameter and mode-based detection (Mode 0-4) were removed in December 2025. All detection now uses the ensemble architecture with individually-enabled detectors.
 
 ### Category: `rhythm` (7 parameters) - Beat Tracking
 
@@ -316,40 +330,49 @@ All multi-hypothesis parameters are now accessible via:
 
 ## Current Best Settings
 
-### Ensemble Detector Configuration (as of January 4, 2026)
+### Ensemble Detector Configuration (as of February 14, 2026)
 
-**Optimized 2-detector ensemble** - Comprehensive testing across 16 patterns
+**Optimized 2-detector ensemble** — HFC + Drummer with tuned fusion parameters.
 
-| Detector | Weight | Threshold | Enabled | Role |
-|----------|--------|-----------|---------|------|
-| **hfc**  | 0.60   | 3.0       | yes     | Primary - best rejection & overall accuracy |
-| **drummer** | 0.40 | 2.5      | yes     | Secondary - complements kicks/bass/fast-tempo |
-| complex  | 0.15   | 2.0       | **no**  | Disabled - too many false positives on rejection |
-| spectral | 0.20   | 1.4       | **no**  | Disabled - unusable, massive over-detection |
-| bass     | 0.18   | 3.0       | **no**  | Disabled - unusable, massive over-detection |
-| mel      | 0.12   | 2.5       | **no**  | Disabled - unusable, massive over-detection |
+| Detector | Weight | Threshold | Enabled | Reason |
+|----------|--------|-----------|---------|--------|
+| **HFC**  | 0.60   | 4.0       | yes     | Primary - best rejection & overall accuracy |
+| **Drummer** | 0.40 | 3.5      | yes     | Secondary - complements kicks/bass/fast-tempo |
+| SpectralFlux | 0.20 | 1.4    | **no**  | Fires on pad chord changes at all thresholds |
+| BassBand | 0.18   | 3.0       | **no**  | Susceptible to room rumble/HVAC |
+| ComplexDomain | 0.13 | 2.0    | **no**  | Adds FPs on sparse patterns |
+| Novelty  | 0.12   | 2.5       | **no**  | Net negative avg F1, hurts sparse/full-mix |
 
-**Configuration commands:**
+**Fusion parameters:**
 ```
-set detector_enable spectral 0
-set detector_enable bass 0
-set detector_enable mel 0
-set detector_enable complex 0
-set detector_weight hfc 0.60
-set detector_weight drummer 0.40
-save
+agree_1 = 0.2           # Single-detector suppression (calibrated Feb 2026)
+ensemble_cooldown = 250  # ms between detections
+ensemble_minconf = 0.55  # Minimum confidence for output
 ```
 
-### Comprehensive Solo Detector Testing (16 patterns each)
+**Detector algorithm enhancements (Feb 2026):**
+- Drummer: minRiseRate=0.02 (rejects gradual swells)
+- HFC: sustainRejectFrames=10 (suppresses sustained HF content)
+- Disabled detectors skip `detect()` entirely (zero CPU usage)
+
+**Spectral pipeline:**
+- SharedSpectralAnalysis runs FFT-256 once per frame
+- Raw magnitudes → HFC, ComplexDomain (absolute energy metrics)
+- Whitened mel bands → SpectralFlux, Novelty (change-based metrics)
+- Whitening: per-band running max, decay=0.97, floor=0.01
+
+### Comprehensive Solo Detector Testing (16 patterns each, Jan 2026)
 
 | Detector | Avg F1 | Best Pattern | Worst Pattern | Usable? |
 |----------|--------|--------------|---------------|---------|
 | **HFC** | ~0.82 | pad-rejection (1.00) | bass-line (0.58) | ✅ Yes |
 | **Drummer** | ~0.72 | kick-focus (0.88) | snare-focus (0.50) | ✅ Yes |
-| Complex | ~0.60 | fast-tempo (0.80) | lead-melody (0.31) | ⚠️ Limited |
-| Spectral | ~0.42 | simultaneous (0.63) | bass-line (0.31) | ❌ No |
-| Bass | ~0.40 | fast-tempo (0.60) | pad-rejection (0.27) | ❌ No |
-| Mel | ~0.39 | simultaneous (0.56) | pad-rejection (0.29) | ❌ No |
+| ComplexDomain | ~0.60 | fast-tempo (0.80) | lead-melody (0.31) | ⚠️ Limited |
+| SpectralFlux | ~0.42 | simultaneous (0.63) | bass-line (0.31) | ❌ No |
+| BassBand | ~0.40 | fast-tempo (0.60) | pad-rejection (0.27) | ❌ No |
+| Novelty* | ~0.39 | simultaneous (0.56) | pad-rejection (0.29) | ❌ No |
+
+*Novelty replaced MelFlux in Feb 2026 (cosine distance algorithm). Solo performance similar.
 
 ### Detailed HFC Performance (Best Detector)
 
@@ -397,19 +420,22 @@ save
 
 ### Key Findings
 
-1. **HFC is the best standalone detector** - excellent rejection (pads, chords, sparse)
+1. **HFC is the best standalone detector** — excellent rejection (pads, chords, sparse)
 2. **Drummer complements HFC** for kicks, bass, and fast-tempo content
-3. **Complex adds too many false positives** - solo F1=0.8 on fast-tempo but hurts rejection
-4. **Spectral/Bass/Mel are unusable** - all have ~20-30% precision due to threshold too low
-5. **2-detector ensemble outperforms 3-detector** - complex hurts more than helps
+3. **agree_1=0.2 is the most impactful tuning parameter** — stronger single-detector suppression reduces FPs without hurting 2-detector consensus (Feb 2026)
+4. **Additional detectors don't help the 2-detector config** — ComplexDomain, SpectralFlux, and Novelty all tested neutral or negative when added to HFC+Drummer (Feb 2026)
+5. **SpectralFlux is fundamentally incompatible with pad rejection** — it fires on chord changes, which IS spectral flux. Whitening amplifies this by normalizing sustained content (Feb 2026)
+6. **2-detector ensemble outperforms 3+ detector configs** — adding detectors increases false positive rate through agreement promotion
 
 ### Known Limitations
 
 | Pattern | Best F1 | Issue | Potential Fix |
 |---------|---------|-------|---------------|
+| lead-melody | 0.29 | HFC fires on every melody note (38+ FPs) | Pitch-tracking gate or harmonic analysis |
 | bass-line | 0.63 | HFC weak on low frequencies | Drummer helps partially |
 | simultaneous | 0.69 | Both detectors merge overlapping hits | Cooldown limits |
-| fast-tempo | 0.84 | Cooldown (80ms) limits 150+ BPM | Reduce cooldown |
+| pad-rejection | 0.70-0.80 | Pad transitions still trigger HFC+Drummer | agree_1=0.2 helps; varies with environment |
+| chord-rejection | 0.70 | Chord changes produce amplitude spikes | 12 FPs typical |
 
 ---
 
@@ -618,17 +644,19 @@ npm run tuner -- validate --port COM5 --gain 40
 
 ### Too Many False Positives
 
-1. Increase `hitthresh` (try 3.0-4.0)
-2. Increase `fluxthresh` (try 2.0-3.0)
-3. For pads: Switch to drummer mode (lower false positive rate)
-4. Increase `cooldown` to reduce rapid triggers
+1. Lower `agree_1` (try 0.15-0.20) to suppress single-detector hits
+2. Raise `ensemble_minconf` (try 0.55-0.65)
+3. Raise detector thresholds: `set detector_thresh hfc 5.0`
+4. Increase `ensemble_cooldown` to reduce rapid triggers (try 250-350ms)
+5. Disable problematic detectors: `set detector_enable <type> 0`
 
 ### Missing Transients
 
-1. Decrease `hitthresh` (try 1.5-2.0)
-2. Decrease `attackmult` (try 1.05-1.1)
-3. Ensure `cooldown` isn't too long for fast patterns
-4. Check AGC is tracking properly
+1. Lower detector thresholds: `set detector_thresh drummer 2.5`
+2. Raise `agree_1` (try 0.25-0.30) to let single-detector hits through
+3. Lower `ensemble_minconf` (try 0.4-0.5)
+4. Ensure `ensemble_cooldown` isn't too long for fast patterns
+5. Check AGC is tracking properly
 
 ### Rhythm Not Locking
 

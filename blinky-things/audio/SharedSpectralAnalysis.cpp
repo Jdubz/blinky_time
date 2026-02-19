@@ -54,6 +54,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , prevMagnitudes_{}
     , melBands_{}
     , prevMelBands_{}
+    , melRunningMax_{}
     , totalEnergy_(0.0f)
     , spectralCentroid_(0.0f)
     , frameReady_(false)
@@ -87,6 +88,7 @@ void SharedSpectralAnalysis::reset() {
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         melBands_[i] = 0.0f;
         prevMelBands_[i] = 0.0f;
+        melRunningMax_[i] = 0.0f;
     }
 }
 
@@ -121,14 +123,20 @@ void SharedSpectralAnalysis::process() {
     // Compute FFT
     computeFFT();
 
-    // Extract magnitudes and phases
+    // Extract magnitudes and phases from FFT output
     computeMagnitudesAndPhases();
 
-    // Compute mel bands
+    // Compute derived features (energy, centroid) from raw magnitudes
+    computeDerivedFeatures();
+
+    // Compute mel bands from raw magnitudes
     computeMelBands();
 
-    // Compute derived features (energy, centroid)
-    computeDerivedFeatures();
+    // Apply whitening to mel bands (not raw magnitudes)
+    // HFC/ComplexDomain need raw magnitudes for absolute energy metrics.
+    // SpectralFlux/Novelty compute change-based metrics on mel bands
+    // and benefit from normalization against sustained spectral content.
+    whitenMelBands();
 
     // Mark frame as ready
     frameReady_ = true;
@@ -228,6 +236,35 @@ void SharedSpectralAnalysis::computeMelBands() {
         logEnergy = (logEnergy + 60.0f) / 60.0f;  // Map [-60, 0] to [0, 1]
 
         melBands_[band] = safeIsFinite(logEnergy) ? clamp01(logEnergy) : 0.0f;
+    }
+}
+
+void SharedSpectralAnalysis::whitenMelBands() {
+    // Adaptive whitening on mel bands (Stowell & Plumbley 2007 adapted)
+    //
+    // Each mel band is normalized by its recent running maximum.
+    // This makes change-based detectors (SpectralFlux, Novelty) invariant
+    // to sustained spectral content: a pad holding a chord will have
+    // whitened mel bands near 1.0, and only NEW spectral changes will spike.
+    //
+    // Applied to mel bands (not raw magnitudes) because:
+    // - HFC/ComplexDomain need raw magnitudes for absolute energy metrics
+    // - Mel bands are perceptually meaningful (26 bands vs 128 bins)
+    // - Log-compression is already applied, so whitening operates in dB space
+
+    const float decay = 0.97f;   // Running max decay per FFT frame (~1s at 30 fps)
+    const float floor = 0.01f;   // Floor at -54dB normalized (avoids amplifying noise)
+
+    for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
+        float current = melBands_[i];
+
+        // Update running max: max(decayed previous, current)
+        float decayedMax = melRunningMax_[i] * decay;
+        melRunningMax_[i] = (current > decayedMax) ? current : decayedMax;
+
+        // Whiten: normalize by running max
+        float maxVal = (melRunningMax_[i] > floor) ? melRunningMax_[i] : floor;
+        melBands_[i] = current / maxVal;
     }
 }
 

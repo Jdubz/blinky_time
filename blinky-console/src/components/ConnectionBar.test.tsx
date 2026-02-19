@@ -5,11 +5,15 @@ import { DeviceInfo, ConnectionState } from '../types';
 
 describe('ConnectionBar', () => {
   const mockDeviceInfo: DeviceInfo = {
-    device: 'Blinky Time',
     version: '1.0.0',
-    width: 16,
-    height: 16,
-    leds: 256,
+    device: {
+      id: 'blinky_v1',
+      name: 'Blinky Time',
+      width: 16,
+      height: 16,
+      leds: 256,
+      configured: true as const,
+    },
   };
 
   const defaultProps = {

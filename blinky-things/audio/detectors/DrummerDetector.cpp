@@ -5,8 +5,10 @@ DrummerDetector::DrummerDetector()
     : attackBufferIdx_(0)
     , attackBufferInitialized_(false)
     , recentAverage_(0.0f)
+    , prevRawLevel_(0.0f)
     , attackMultiplier_(1.1f)   // 10% rise required
     , averageTau_(0.8f)         // ~1 second average tracking
+    , minRiseRate_(0.04f)       // Minimum frame-over-frame rise (calibrated Feb 2026)
 {
     for (int i = 0; i < ATTACK_BUFFER_SIZE; i++) {
         attackBuffer_[i] = 0.0f;
@@ -17,6 +19,7 @@ void DrummerDetector::resetImpl() {
     attackBufferIdx_ = 0;
     attackBufferInitialized_ = false;
     recentAverage_ = 0.0f;
+    prevRawLevel_ = 0.0f;
 
     for (int i = 0; i < ATTACK_BUFFER_SIZE; i++) {
         attackBuffer_[i] = 0.0f;
@@ -56,14 +59,16 @@ DetectionResult DrummerDetector::detect(const AudioFrame& frame, float dt) {
     lastRawValue_ = rawLevel;
     currentThreshold_ = effectiveThreshold;
 
-    // Detection criteria: LOUD + SUDDEN
+    // Detection criteria: LOUD + SUDDEN + SHARP RISE
     // NOTE: Cooldown is now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = rawLevel > effectiveThreshold;
     bool isAttacking = rawLevel > baselineLevel * attackMultiplier_;
+    // Require minimum frame-over-frame rise to reject slow swells/crescendos
+    bool isSharpRise = (rawLevel - prevRawLevel_) > minRiseRate_;
 
     DetectionResult result;
 
-    if (isLoudEnough && isAttacking) {
+    if (isLoudEnough && isAttacking && isSharpRise) {
         // Calculate strength: 0.0 at threshold, 1.0 at 2x threshold
         float ratio = rawLevel / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);
@@ -80,6 +85,9 @@ DetectionResult DrummerDetector::detect(const AudioFrame& frame, float dt) {
     // Update ring buffer with current level (overwrites oldest entry)
     attackBuffer_[attackBufferIdx_] = rawLevel;
     attackBufferIdx_ = (attackBufferIdx_ + 1) % ATTACK_BUFFER_SIZE;
+
+    // Track previous level for rise rate check
+    prevRawLevel_ = rawLevel;
 
     // Update threshold buffer for adaptive threshold computation
     updateThresholdBuffer(rawLevel);

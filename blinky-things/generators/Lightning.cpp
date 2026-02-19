@@ -44,16 +44,15 @@ void Lightning::initPhysicsContext() {
 }
 
 void Lightning::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    // Advance noise animation time
-    // Music mode: dramatic, pulsing storm clouds synced to beat
-    // Ambient mode: slow, ominous rolling clouds
-    float timeSpeed = audio.hasRhythm() ?
-        0.025f + 0.02f * audio.energy :  // Music: 0.025-0.045 (dramatic)
-        0.01f + 0.005f * audio.energy;   // Ambient: 0.01-0.015 (ominous)
+    // Advance noise animation time (blend between organic and music-driven)
+    float organicSpeed = 0.01f + 0.005f * audio.energy;   // Ambient: 0.01-0.015 (ominous)
+    float musicSpeed = 0.025f + 0.02f * audio.energy;     // Music: 0.025-0.045 (dramatic)
+    float timeSpeed = organicSpeed * (1.0f - audio.rhythmStrength) + musicSpeed * audio.rhythmStrength;
     noiseTime_ += timeSpeed;
 
     // Render storm sky noise background first (layout-aware)
     if (background_) {
+        background_->setIntensity(params_.backgroundIntensity);
         background_->render(matrix, width_, height_, noiseTime_, audio);
     }
 
@@ -67,40 +66,36 @@ void Lightning::reset() {
 }
 
 void Lightning::spawnParticles(float dt) {
-    float spawnProb = params_.baseSpawnChance;
+    float spawnProb;
     uint8_t boltCount = 0;
 
-    if (audio_.hasRhythm()) {
-        // MUSIC MODE: Dramatic, pulsating lightning synced to beat
-        // Lightning strikes on beats with intensity variation
-        float phasePulse = audio_.phaseToPulse();  // 1.0 at beat, fades to 0
+    // MUSIC-DRIVEN behavior (rhythmStrength weighted)
+    float phasePulse = audio_.phaseToPulse();
+    float musicSpawnProb = params_.baseSpawnChance * (0.3f + 0.7f * phasePulse) +
+                           params_.audioSpawnBoost * audio_.pulse * phasePulse;
 
-        // Build tension between beats (reduce random spawns)
-        // Then release with powerful strikes on beat
-        spawnProb *= (0.3f + 0.7f * phasePulse);
-        spawnProb += params_.audioSpawnBoost * audio_.pulse * phasePulse;
+    // Dramatic bolt burst on beat (scales with rhythmStrength)
+    if (beatHappened() && audio_.rhythmStrength > 0.3f) {
+        uint8_t baseBolts = 2 + (uint8_t)(2 * audio_.rhythmStrength);
+        boltCount += (uint8_t)(baseBolts * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
+    }
 
-        // Dramatic bolt burst on beat
-        if (beatHappened()) {
-            // More bolts with higher rhythm confidence
-            uint8_t baseBolts = 2 + (uint8_t)(2 * audio_.rhythmStrength);
-            boltCount = (uint8_t)(baseBolts * (0.5f + 0.5f * audio_.energy));
-        }
-    } else {
-        // AMBIENT MODE: Slow, ominous storm with occasional strikes
-        // Creates atmosphere with long pauses between strikes
-        float smoothEnergy = 0.2f + 0.3f * audio_.energy;  // Range 0.2-0.5 (less frequent)
-        spawnProb *= smoothEnergy;
+    // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
+    float smoothEnergy = 0.2f + 0.3f * audio_.energy;
+    float organicSpawnProb = params_.baseSpawnChance * smoothEnergy;
 
-        // Occasional strikes on transients (dramatic but rare)
-        if (audio_.pulse > params_.organicTransientMin) {
-            float transientStrength = (audio_.pulse - params_.organicTransientMin) /
-                                     (1.0f - params_.organicTransientMin);
-            if (transientStrength > 0.5f) {
-                boltCount = 1;  // Single dramatic strike
-            }
+    // Occasional strikes on transients (only in organic mode to avoid double-triggering with beats)
+    if (audio_.pulse > params_.organicTransientMin && audio_.rhythmStrength < 0.5f) {
+        float transientStrength = (audio_.pulse - params_.organicTransientMin) /
+                                 (1.0f - params_.organicTransientMin);
+        if (transientStrength > 0.5f) {
+            boltCount += 1;  // Single dramatic strike
         }
     }
+
+    // BLEND spawn probability between modes
+    spawnProb = organicSpawnProb * (1.0f - audio_.rhythmStrength) +
+                musicSpawnProb * audio_.rhythmStrength;
 
     // Random baseline spawning (occasional random strikes)
     if (random(1000) < spawnProb * 1000) {
@@ -124,13 +119,14 @@ void Lightning::spawnBolt() {
     float x1 = random(width_ * 100) / 100.0f;
     float y1 = random(height_ * 100) / 100.0f;
 
-    // Calculate bolt intensity (brightest on beat)
+    // Calculate bolt intensity (blend between organic and beat-synced)
     uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
-    if (audio_.hasRhythm()) {
-        float phaseMod = audio_.phaseToPulse();
-        float intensityScale = 0.6f + 0.4f * phaseMod;
-        intensity = (uint8_t)(intensity * intensityScale);
-    }
+    float phaseMod = audio_.phaseToPulse();
+    float musicIntensityScale = 0.6f + 0.4f * phaseMod;
+    float organicIntensityScale = 1.0f;  // Full intensity in organic mode
+    float intensityScale = organicIntensityScale * (1.0f - audio_.rhythmStrength) +
+                          musicIntensityScale * audio_.rhythmStrength;
+    intensity = (uint8_t)(intensity * intensityScale);
 
     // Use Bresenham's line algorithm to create connected particle chain
     int dx = abs((int)x1 - (int)x0);

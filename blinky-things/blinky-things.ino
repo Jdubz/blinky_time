@@ -273,6 +273,12 @@ void setup() {
           audioController
         );
         SerialConsole::logDebug(F("Loaded effect params from flash"));
+
+        // CRITICAL: Sync physics params to force adapters after loading from flash
+        // The force adapters were initialized with default params before we loaded
+        // the saved values, so we must explicitly update them now
+        fireGen->syncPhysicsParams();
+        waterGen->syncPhysicsParams();
       } else {
         SerialConsole::logWarn(F("Generator pointers invalid, using defaults"));
       }

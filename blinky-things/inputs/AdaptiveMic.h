@@ -56,6 +56,12 @@ public:
   uint16_t fastAgcPeriodMs = 5000;      // Calibration period in fast mode (5s vs 30s)
   float    fastAgcTrackingTau = 5.0f;   // Tracking tau in fast mode (5s vs 30s)
 
+  // Loud AGC mode for high-SPL environments (symmetric to fast AGC for low-SPL)
+  // Automatically triggered when hardware gain bottoms out
+  uint8_t hwGainMinHeadroom = 10;       // Min hardware gain (headroom floor)
+  float   hwLoudThreshold = 0.60f;      // Trigger loud mode when rawLevel > this at low gain
+  float   valleyFastTrackRatio = 2.0f;  // Faster valley tracking in loud mode (vs 4.0 normal)
+
   // ---- Public state ----
   float  level         = 0.0f;  // Final output level (0-1, normalized via adaptive peak/valley tracking)
   int    currentHardwareGain = Platform::Microphone::DEFAULT_GAIN;    // PDM hardware gain
@@ -79,6 +85,7 @@ public:
   inline bool isPdmAlive() const { return pdmAlive; }
   inline bool isHwGainLocked() const { return hwGainLocked_; }     // Check if hardware gain is locked for testing
   inline bool isInFastAgcMode() const { return inFastAgcMode_; }   // Check if fast AGC is active
+  inline bool isInLoudAgcMode() const { return inLoudAgcMode_; }   // Check if loud AGC is active
 
 public:
   /**
@@ -152,6 +159,9 @@ private:
 
   // Fast AGC state
   bool inFastAgcMode_ = false;  // Currently in fast AGC mode
+
+  // Loud AGC state
+  bool inLoudAgcMode_ = false;  // Currently in loud AGC mode (symmetric to inFastAgcMode_)
 
 private:
   void consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n);

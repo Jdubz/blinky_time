@@ -67,10 +67,9 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
     );
   }
 
-  // Numeric slider
+  // Numeric input (no slider - allows any value within technical limits)
   const numValue = setting.value as number;
   const step = setting.type === 'float' ? 0.01 : 1;
-  const displayValue = setting.type === 'float' ? numValue.toFixed(2) : numValue;
 
   const metadata = settingsMetadata[setting.name];
   const displayName = metadata?.displayName || setting.desc || setting.name;
@@ -83,8 +82,8 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
       </label>
       <div className="setting-slider-group">
         <input
-          type="range"
-          className="setting-slider"
+          type="number"
+          className="setting-input"
           min={setting.min}
           max={setting.max}
           step={step}
@@ -92,7 +91,7 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
           onChange={e => handleChange(parseFloat(e.target.value))}
           disabled={disabled}
         />
-        <span className="setting-value">{displayValue}</span>
+        {metadata?.unit && <span className="setting-unit">{metadata.unit}</span>}
       </div>
     </div>
   );
@@ -111,6 +110,7 @@ const categoryNames: Record<string, string> = {
   fireorganic: 'Fire: Organic Mode',
   water: 'Water Generator',
   lightning: 'Lightning Generator',
+  audiovis: 'Audio Visualization',
   effect: 'Post-Processing Effects',
 };
 
@@ -127,6 +127,8 @@ const categoryDescriptions: Record<string, string> = {
   fireorganic: 'Fire behavior when no rhythm detected (transient-reactive, organic spawning)',
   water: 'Particle-based water simulation with drops, splashes, and radial physics',
   lightning: 'Particle-based lightning with fast bolts, branching patterns, and rapid fade',
+  audiovis:
+    'Diagnostic visualization of transients (green), energy level (yellow), and beat phase (blue)',
   effect: 'Color and post-processing effects applied after generator rendering',
 };
 
@@ -143,6 +145,7 @@ const categoryOrder = [
   'fireorganic',
   'water',
   'lightning',
+  'audiovis',
   'effect',
 ];
 

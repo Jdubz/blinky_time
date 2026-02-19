@@ -8,6 +8,8 @@ HFCDetector::HFCDetector()
     , minBin_(32)    // 2 kHz @ 16kHz/256-point FFT
     , maxBin_(128)   // 8 kHz (Nyquist)
     , attackMultiplier_(1.2f)
+    , sustainRejectFrames_(10)  // ~167ms @ 60Hz — reject sustained HF content
+    , elevatedFrameCount_(0)
 {
 }
 
@@ -15,6 +17,7 @@ void HFCDetector::resetImpl() {
     currentHfc_ = 0.0f;
     prevHfc_ = 0.0f;
     averageHfc_ = 0.0f;
+    elevatedFrameCount_ = 0;
 }
 
 void HFCDetector::setAnalysisRange(int minBin, int maxBin) {
@@ -56,14 +59,26 @@ DetectionResult HFCDetector::detect(const AudioFrame& frame, float dt) {
     // Update threshold buffer
     updateThresholdBuffer(currentHfc_);
 
-    // Detection: HFC exceeds threshold AND rising
+    // Track sustained HF content: count consecutive frames where HFC is elevated
+    // This distinguishes percussive attacks (sharp spike then decay) from
+    // sustained HF content like cymbal wash, sibilance, or noise
+    // Guard: skip when averageHfc_ hasn't stabilized (starts at 0, so any
+    // signal would look "elevated" and block detection for the first ~167ms)
+    if (averageHfc_ > 0.001f && currentHfc_ > averageHfc_ * 1.5f) {
+        elevatedFrameCount_++;
+    } else {
+        elevatedFrameCount_ = 0;
+    }
+
+    // Detection: HFC exceeds threshold AND rising AND not sustained
     // NOTE: Cooldown now applied at ensemble level (EnsembleFusion), not per-detector
     bool isLoudEnough = currentHfc_ > effectiveThreshold;
     bool isRising = currentHfc_ > prevHfc_ * attackMultiplier_;
+    bool isNotSustained = elevatedFrameCount_ < sustainRejectFrames_;
 
     DetectionResult result;
 
-    if (isLoudEnough && isRising) {
+    if (isLoudEnough && isRising && isNotSustained) {
         // Strength
         float ratio = currentHfc_ / maxf(localMedian, 0.001f);
         float strength = clamp01((ratio - config_.threshold) / config_.threshold);

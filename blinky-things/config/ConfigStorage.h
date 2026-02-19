@@ -25,7 +25,12 @@ class AudioController;
 class ConfigStorage {
 public:
     static const uint16_t MAGIC_NUMBER = 0x8F1E;
-    static const uint8_t CONFIG_VERSION = 28;  // Config schema v28: added device config storage for runtime device selection
+
+    // Separate versioning: device config changes rarely, settings change often
+    // Bumping SETTINGS_VERSION preserves device config (LED layout, device name, etc.)
+    // Bumping DEVICE_VERSION only needed when StoredDeviceConfig struct changes
+    static const uint8_t DEVICE_VERSION = 1;    // Device config schema (LED layout, pins, etc.)
+    static const uint8_t SETTINGS_VERSION = 7;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -44,14 +49,16 @@ public:
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
+        // Background
+        float backgroundIntensity;
+        // Particle variety
+        float fastSparkRatio;
+        float thermalForce;       // Thermal buoyancy strength (LEDs/sec^2)
         // Lifecycle
         uint8_t maxParticles;
         uint8_t defaultLifespan;
         uint8_t intensityMin;
         uint8_t intensityMax;
-        // Heat trail
-        uint8_t trailHeatFactor;
-        uint8_t trailDecay;
         uint8_t burstSparks;
     };
 
@@ -74,6 +81,8 @@ public:
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
+        // Background
+        float backgroundIntensity;
         // Lifecycle
         uint8_t maxParticles;
         uint8_t defaultLifespan;
@@ -95,6 +104,8 @@ public:
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
+        // Background
+        float backgroundIntensity;
         // Lifecycle
         uint8_t maxParticles;
         uint8_t defaultLifespan;
@@ -162,7 +173,11 @@ public:
         float tempoSmoothingFactor;   // Higher = smoother tempo changes
         float tempoChangeThreshold;   // Min BPM change ratio to trigger update
 
-        // Total: 14 floats (56 bytes) + 1 bool (1 byte) + 3 padding = 60 bytes
+        // Transient-based phase correction (PLL)
+        float transientCorrectionRate;  // How fast to apply transient correction (0-1)
+        float transientCorrectionMin;   // Minimum transient strength to trigger correction
+
+        // Total: 16 floats (64 bytes) + 1 bool (1 byte) + 3 padding = 68 bytes
     };
 
     /**
@@ -232,8 +247,9 @@ public:
 
     struct ConfigData {
         uint16_t magic;
-        uint8_t version;
-        StoredDeviceConfig device;      // NEW in v28: runtime device configuration
+        uint8_t deviceVersion;          // Version for device config (rarely changes)
+        uint8_t settingsVersion;        // Version for settings (changes more often)
+        StoredDeviceConfig device;      // Device identity, LED layout, pins
         StoredFireParams fire;
         StoredWaterParams water;
         StoredLightningParams lightning;
@@ -244,22 +260,25 @@ public:
 
     // Compile-time safety checks
     // These verify struct sizes match expected values to catch accidental changes
-    // If these fail, you MUST increment CONFIG_VERSION!
     // Note: Struct sizes depend on compiler padding. Sizes below are for ARM GCC.
-    static_assert(sizeof(StoredFireParams) == 52,
-        "StoredFireParams size changed! Increment CONFIG_VERSION and update assertion.");
-    static_assert(sizeof(StoredWaterParams) == 60,
-        "StoredWaterParams size changed! Increment CONFIG_VERSION and update assertion. (60 bytes = 13 floats + 6 uint8 + padding)");
-    static_assert(sizeof(StoredLightningParams) == 36,
-        "StoredLightningParams size changed! Increment CONFIG_VERSION and update assertion. (36 bytes = 7 floats + 8 uint8)");
+    //
+    // VERSION BUMPING RULES:
+    // - StoredDeviceConfig changes -> bump DEVICE_VERSION (rare, wipes device identity)
+    // - Any other struct changes -> bump SETTINGS_VERSION (preserves device config)
+    static_assert(sizeof(StoredFireParams) == 64,
+        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 5 uint8 + padding)");
+    static_assert(sizeof(StoredWaterParams) == 64,
+        "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 6 uint8 + padding)");
+    static_assert(sizeof(StoredLightningParams) == 40,
+        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
-        "StoredMicParams size changed! Increment CONFIG_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 60,
-        "StoredMusicParams size changed! Increment CONFIG_VERSION and update assertion. (60 bytes = 14 floats + 1 bool + padding)");
+        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
+    static_assert(sizeof(StoredMusicParams) == 68,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 1 bool + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
-        "StoredDeviceConfig size changed! Increment CONFIG_VERSION and update assertion. (Limit: 160 bytes)");
+        "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     static_assert(sizeof(ConfigData) <= 512,
-        "ConfigData too large! May not fit in flash sector. Review struct padding. (v28 limit: 512 bytes)");
+        "ConfigData too large! May not fit in flash sector. Review struct padding. (Limit: 512 bytes)");
 
     ConfigStorage();
     void begin();
@@ -303,4 +322,6 @@ private:
     bool loadFromFlash();
     void saveToFlash();
     void loadDefaults();
+    void loadDeviceDefaults();    // Reset only device config (LED layout, pins)
+    void loadSettingsDefaults();  // Reset only settings (fire, water, lightning, mic, music)
 };

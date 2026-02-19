@@ -1,7 +1,5 @@
 #include "Fire.h"
 #include "../physics/PhysicsContext.h"
-#include "../physics/MatrixPropagation.h"
-#include "../physics/LinearPropagation.h"
 #include "../physics/MatrixBackground.h"
 #include "../physics/LinearBackground.h"
 #include "../physics/EdgeSpawnRegion.h"
@@ -13,24 +11,15 @@
 #include <Arduino.h>
 
 Fire::Fire()
-    : heat_(nullptr), params_(), beatCount_(0), noiseTime_(0.0f),
-      propagation_(nullptr), background_(nullptr) {}
+    : params_(), beatCount_(0), noiseTime_(0.0f),
+      background_(nullptr) {}
 
 Fire::~Fire() {
-    if (heat_) {
-        delete[] heat_;
-        heat_ = nullptr;
-    }
     // Physics components use placement new, no delete needed
 }
 
 bool Fire::begin(const DeviceConfig& config) {
     if (!ParticleGenerator::begin(config)) return false;
-
-    // Allocate heat buffer
-    heat_ = new uint8_t[numLeds_];
-    if (!heat_) return false;
-    memset(heat_, 0, numLeds_);
 
     beatCount_ = 0;
 
@@ -59,139 +48,190 @@ void Fire::initPhysicsContext() {
         forceAdapter_->setWind(params_.windBase, params_.windVariation);
     }
 
-    // Propagation model: upward for matrix, lateral for linear
-    propagation_ = PhysicsContext::createPropagation(
-        layout_, width_, height_, wrap, propagationBuffer_);
-
     // Background model: height-falloff for matrix, uniform for linear
     background_ = PhysicsContext::createBackground(
         layout_, BackgroundStyle::FIRE, backgroundBuffer_);
 }
 
 void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    // Advance noise animation time
-    float timeSpeed = audio.hasRhythm() ?
-        0.04f + 0.03f * audio.energy :
-        0.015f + 0.005f * audio.energy;
-    noiseTime_ += timeSpeed;
+    // Advance noise animation time (blend between organic and music-driven)
+    float organicSpeed = 0.015f + 0.005f * audio.energy;
+    float musicSpeed = 0.04f + 0.03f * audio.energy;
+    noiseTime_ += organicSpeed * (1.0f - audio.rhythmStrength) + musicSpeed * audio.rhythmStrength;
 
     // Render noise background first (underlayer)
     if (background_) {
+        background_->setIntensity(params_.backgroundIntensity);
         background_->render(matrix, width_, height_, noiseTime_, audio);
     }
 
-    // Apply cooling to heat buffer
-    applyCooling();
-
-    // Run particle system (spawns, updates, renders particles)
+    // Run particle system (spawn → physics → render)
+    // Particles are the only visual primitive; no heat buffer, no secondary layer
     ParticleGenerator::generate(matrix, audio);
-
-    // Diffuse heat using layout-appropriate propagation
-    if (propagation_) {
-        propagation_->propagate(heat_, width_, height_, 0.7f);
-    }
-
-    // Blend heat buffer with particle rendering
-    blendHeatToMatrix(matrix);
 }
 
 void Fire::reset() {
     ParticleGenerator::reset();
-    if (heat_) {
-        memset(heat_, 0, numLeds_);
-    }
     beatCount_ = 0;
     noiseTime_ = 0.0f;
 }
 
 void Fire::spawnParticles(float dt) {
-    float spawnProb = params_.baseSpawnChance;
+    float spawnProb;
     uint8_t sparkCount = 0;
 
-    if (audio_.hasRhythm()) {
-        // MUSIC MODE: Dancey, pulsating spawning synced to beat
-        float phasePulse = audio_.phaseToPulse();
-        float phasePump = 0.5f + 0.5f * phasePulse;
+    // MUSIC-DRIVEN behavior (rhythmStrength weighted)
+    float phasePulse = audio_.phaseToPulse();
+    float phasePump = 0.5f + 0.5f * phasePulse;
 
-        spawnProb *= phasePump;
-        spawnProb += params_.audioSpawnBoost * audio_.pulse * phasePulse;
+    float musicSpawnProb = params_.baseSpawnChance * phasePump + params_.audioSpawnBoost * audio_.energy;
 
-        if (beatHappened()) {
-            beatCount_++;
-            uint8_t baseSparks = params_.burstSparks;
-            if (beatCount_ % 4 == 0) {
-                baseSparks = params_.burstSparks * 3;  // Downbeat: triple burst
-            } else if (beatCount_ % 2 == 0) {
-                baseSparks = params_.burstSparks * 2;  // Backbeat: double burst
-            }
-            sparkCount = (uint8_t)(baseSparks * (0.4f + 0.6f * audio_.rhythmStrength) *
-                                   (0.5f + 0.5f * audio_.energy));
-        }
-    } else {
-        // AMBIENT MODE: Smooth, steady output with subtle shifts
-        float smoothEnergy = 0.3f + 0.4f * audio_.energy;
-        spawnProb *= smoothEnergy;
+    // Transient response (stronger in music mode)
+    if (audio_.pulse > params_.organicTransientMin) {
+        float transientStrength = (audio_.pulse - params_.organicTransientMin) /
+                                 (1.0f - params_.organicTransientMin);
+        uint8_t musicSparks = (uint8_t)(params_.burstSparks * transientStrength *
+                               (0.5f + 0.5f * audio_.energy));
+        uint8_t organicSparks = 2;  // Small boost in organic mode
+        sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength) +
+                                musicSparks * audio_.rhythmStrength);
+    }
 
-        if (audio_.pulse > params_.organicTransientMin) {
-            float transientStrength = (audio_.pulse - params_.organicTransientMin) /
-                                     (1.0f - params_.organicTransientMin);
-            sparkCount = (uint8_t)(params_.burstSparks * 0.3f * transientStrength);
+    // Extra burst on predicted downbeats (only when rhythm is strong)
+    if (beatHappened() && audio_.rhythmStrength > 0.3f) {
+        beatCount_++;
+        if (beatCount_ % 4 == 0) {
+            sparkCount += (uint8_t)(params_.burstSparks * 0.5f * audio_.rhythmStrength);
         }
     }
+
+    // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
+    float organicSpawnProb = params_.baseSpawnChance + params_.audioSpawnBoost * audio_.energy;
+
+    // Continuous spark rate proportional to energy (organic mode)
+    if (audio_.energy > 0.2f) {
+        uint8_t organicSparks = (uint8_t)((audio_.energy - 0.2f) * params_.burstSparks * 0.5f);
+        sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength));
+    }
+
+    // BLEND spawn probability between modes
+    spawnProb = organicSpawnProb * (1.0f - audio_.rhythmStrength) +
+                musicSpawnProb * audio_.rhythmStrength;
 
     // Random baseline spawning
     if (random(1000) < spawnProb * 1000) {
         sparkCount++;
     }
 
-    // Spawn sparks using layout-aware spawn region
+    // Spawn sparks using layout-aware spawn region with variety
     for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < params_.maxParticles; i++) {
         float x, y;
         getSpawnPosition(x, y);
 
-        // Get initial velocity from spawn region
-        float speed = params_.sparkVelocityMin +
-                     random(100) * (params_.sparkVelocityMax - params_.sparkVelocityMin) / 100.0f;
+        // Base speed for this spark
+        float baseSpeed = params_.sparkVelocityMin +
+                         random(100) * (params_.sparkVelocityMax - params_.sparkVelocityMin) / 100.0f;
 
-        float vx, vy;
-        getInitialVelocity(speed, vx, vy);
+        // Determine spark type (more variety during music mode)
+        SparkType type;
+        float varietyRoll = random(1000) / 1000.0f;
 
-        // Add spread perpendicular to main direction
-        float spreadAmount = (random(200) - 100) * params_.sparkSpread / 100.0f;
-        if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
-            // Matrix: spread is horizontal
-            vx += spreadAmount;
+        // Music mode: favor burst sparks on transients, fast sparks otherwise
+        // Organic mode: mix of fast sparks and slow embers
+        if (audio_.rhythmStrength > 0.5f && audio_.pulse > 0.3f) {
+            type = SparkType::BURST_SPARK;  // High-energy transient
+        } else if (varietyRoll < params_.fastSparkRatio) {
+            type = SparkType::FAST_SPARK;   // Primary sparks
         } else {
-            // Linear: spread is vertical (minimal effect on 1D)
-            // 0.3 multiplier: vertical spread is less important on 1D layouts
-            // since height=1, so we reduce it to avoid excessive velocity
-            vy += spreadAmount * 0.3f;
+            type = SparkType::SLOW_EMBER;   // Glowing embers
         }
 
-        // Music mode: higher velocity
-        float velocityMult = audio_.hasRhythm() ? (1.0f + 0.3f * audio_.pulse) : 0.8f;
-        vx *= velocityMult;
-        vy *= velocityMult;
-
-        uint8_t intensity = random(params_.intensityMin, params_.intensityMax + 1);
-
-        pool_.spawn(x, y, vx, vy, intensity, params_.defaultLifespan, 1.0f,
-                   ParticleFlags::GRAVITY | ParticleFlags::WIND |
-                   ParticleFlags::FADE | ParticleFlags::EMIT_TRAIL);
+        spawnTypedParticle(type, x, y, baseSpeed);
     }
 }
 
-void Fire::updateParticle(Particle* p, float dt) {
-    // Emit heat trail if flagged
-    if (p->hasFlag(ParticleFlags::EMIT_TRAIL)) {
-        int x = (int)p->x;
-        int y = (int)p->y;
-        int index = coordsToIndex(x, y);
+void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed) {
+    float vx, vy;
+    getInitialVelocity(baseSpeed, vx, vy);
 
-        if (index >= 0 && index < numLeds_) {
-            uint8_t trailHeat = p->intensity * params_.trailHeatFactor / 100;
-            heat_[index] = min(255, (int)heat_[index] + trailHeat);
-        }
+    // Add spread perpendicular to main direction
+    float spreadAmount = (random(200) - 100) * params_.sparkSpread / 100.0f;
+    if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
+        vx += spreadAmount;  // Matrix: horizontal spread
+    } else {
+        vy += spreadAmount * 0.3f;  // Linear: minimal vertical spread
+    }
+
+    // Blend velocity multiplier between organic and music modes
+    float organicVelMult = 0.8f;
+    float musicVelMult = 1.0f + 0.3f * audio_.pulse;
+    float velocityMult = organicVelMult * (1.0f - audio_.rhythmStrength) +
+                        musicVelMult * audio_.rhythmStrength;
+
+    // Type-specific characteristics
+    uint8_t intensity, lifespan;
+    float speedMult;
+
+    switch (type) {
+    case SparkType::FAST_SPARK: {
+        // Sort min/max so random() always gets valid (lo, hi) even if misconfigured via serial
+        int lo = min((int)params_.intensityMin, (int)params_.intensityMax);
+        int hi = max((int)params_.intensityMin, (int)params_.intensityMax) + 1;
+        intensity = (uint8_t)random(lo, hi);
+        lifespan = params_.defaultLifespan;  // 1.7s (170 centiseconds)
+        speedMult = 1.0f;
+        break;
+    }
+
+    case SparkType::SLOW_EMBER: {
+        // Embers are dimmer than sparks; guard bounds to prevent inverted/zero range
+        // which would cause UB (random() requires max > min)
+        int lo = max(0, (int)params_.intensityMin - 30);
+        int hi = max(0, (int)params_.intensityMax - 50);
+        if (hi <= lo) hi = lo + 1;              // Prevent random(x, x) or inverted range
+        intensity = (uint8_t)max(1, random(lo, hi));  // max(1,...) ensures spawn succeeds
+        lifespan = (uint8_t)min(255, params_.defaultLifespan * 1.5f);  // 2.55s max, clamped
+        speedMult = 0.6f;  // 40% slower
+        break;
+    }
+
+    case SparkType::BURST_SPARK:
+        // Maximum brightness on transient
+        intensity = params_.intensityMax;
+        lifespan = (uint8_t)(params_.defaultLifespan * 0.8f);  // 1.36s (136 centiseconds)
+        speedMult = 1.0f;
+        break;
+
+    default:
+        intensity = params_.intensityMax;
+        lifespan = params_.defaultLifespan;
+        speedMult = 1.0f;
+        break;
+    }
+
+    // Apply speed and velocity multipliers
+    vx *= velocityMult * speedMult;
+    vy *= velocityMult * speedMult;
+
+    // Spawn the particle (trailHeatFactor=0: heat is per-particle intensity, not heat buffer)
+    pool_.spawn(x, y, vx, vy, intensity, lifespan, 1.0f,
+               ParticleFlags::GRAVITY | ParticleFlags::WIND | ParticleFlags::FADE,
+               0);
+}
+
+void Fire::updateParticle(Particle* p, float dt) {
+    if (params_.thermalForce <= 0.0f) return;
+
+    // Thermal buoyancy: hotter particles rise faster.
+    // As FADE flag reduces intensity over lifetime, buoyancy decreases naturally.
+    float heat = p->intensity / 255.0f;
+
+    // At full intensity (1.0): applies params_.thermalForce LEDs/sec^2 upward.
+    // p->mass is clamped to 0.01 minimum by ParticlePool::spawn, no div-by-zero risk.
+    if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
+        p->vy -= (heat * params_.thermalForce / p->mass) * dt;  // Matrix: upward = negative Y
+    } else {
+        p->vx += (heat * params_.thermalForce / p->mass) * dt;  // Linear: forward = positive X
     }
 }
 
@@ -215,56 +255,46 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
 }
 
 uint32_t Fire::particleColor(uint8_t intensity) const {
-    // Fire palette: black -> red -> orange -> yellow
-    if (intensity < 85) {
-        uint32_t red = min(255u, (uint32_t)intensity * 3);
-        return (red << 16);
-    } else if (intensity < 170) {
-        uint32_t green = min(255u, (uint32_t)(intensity - 85) * 3);
-        return (0xFF0000 | (green << 8));
-    } else {
-        return 0xFFFF00;
-    }
-}
+    // Smooth fire palette with 6 color stops (black → deep red → red → orange → yellow-orange → bright yellow)
+    // Each stop is at a specific intensity value with RGB color
+    struct ColorStop {
+        uint8_t position;
+        uint8_t r, g, b;
+    };
 
-void Fire::applyCooling() {
-    uint8_t cooling = params_.trailDecay;
+    const ColorStop palette[] = {
+        {0,   0,   0,   0},     // Black
+        {51,  64,  0,   0},     // Deep red (20%)
+        {102, 255, 0,   0},     // Red (40%)
+        {153, 255, 128, 0},     // Orange (60%)
+        {204, 255, 200, 0},     // Yellow-orange (80%)
+        {255, 255, 255, 64}     // Bright yellow (100%)
+    };
+    const int paletteSize = 6;
 
-    // Audio-reactive cooling (breathing effect in music mode)
-    if (audio_.hasRhythm()) {
-        float breathe = -cos(audio_.phase * TWO_PI);
-        int8_t coolingMod = (int8_t)(breathe * 15.0f);
-        cooling = max(0, min(255, (int)cooling + coolingMod));
-    }
+    // Find surrounding color stops
+    int lowerIdx = 0;
+    int upperIdx = 1;
 
-    // Apply cooling to all heat values
-    for (int i = 0; i < numLeds_; i++) {
-        uint8_t coolAmount = random(0, cooling + 1);
-        if (heat_[i] > coolAmount) {
-            heat_[i] -= coolAmount;
-        } else {
-            heat_[i] = 0;
+    for (int i = 0; i < paletteSize - 1; i++) {
+        if (intensity >= palette[i].position && intensity <= palette[i+1].position) {
+            lowerIdx = i;
+            upperIdx = i + 1;
+            break;
         }
     }
+
+    // Interpolate between stops
+    const ColorStop& lower = palette[lowerIdx];
+    const ColorStop& upper = palette[upperIdx];
+
+    float range = upper.position - lower.position;
+    float t = (range > 0) ? (float)(intensity - lower.position) / range : 0.0f;
+
+    uint8_t r = (uint8_t)(lower.r + t * (upper.r - lower.r));
+    uint8_t g = (uint8_t)(lower.g + t * (upper.g - lower.g));
+    uint8_t b = (uint8_t)(lower.b + t * (upper.b - lower.b));
+
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }
 
-void Fire::blendHeatToMatrix(PixelMatrix& matrix) {
-    for (int y = 0; y < height_; y++) {
-        for (int x = 0; x < width_; x++) {
-            int index = coordsToIndex(x, y);
-            if (index >= 0 && index < numLeds_) {
-                uint32_t color = particleColor(heat_[index]);
-                uint8_t r = (color >> 16) & 0xFF;
-                uint8_t g = (color >> 8) & 0xFF;
-                uint8_t b = color & 0xFF;
-
-                // MAX BLENDING: Heat field takes brightest value
-                RGB existing = matrix.getPixel(x, y);
-                matrix.setPixel(x, y,
-                               max(existing.r, r),
-                               max(existing.g, g),
-                               max(existing.b, b));
-            }
-        }
-    }
-}

@@ -48,14 +48,15 @@ void Water::initPhysicsContext() {
 }
 
 void Water::generate(PixelMatrix& matrix, const AudioControl& audio) {
-    // Advance noise animation time
-    float timeSpeed = audio.hasRhythm() ?
-        0.03f + 0.02f * audio.energy :
-        0.012f + 0.008f * audio.energy;
+    // Advance noise animation time (blend between organic and music-driven)
+    float organicSpeed = 0.012f + 0.008f * audio.energy;
+    float musicSpeed = 0.03f + 0.02f * audio.energy;
+    float timeSpeed = organicSpeed * (1.0f - audio.rhythmStrength) + musicSpeed * audio.rhythmStrength;
     noiseTime_ += timeSpeed;
 
     // Render noise background first (tropical sea underlayer)
     if (background_) {
+        background_->setIntensity(params_.backgroundIntensity);
         background_->render(matrix, width_, height_, noiseTime_, audio);
     }
 
@@ -69,33 +70,34 @@ void Water::reset() {
 }
 
 void Water::spawnParticles(float dt) {
-    float spawnProb = params_.baseSpawnChance;
+    float spawnProb;
     uint8_t dropCount = 0;
 
-    if (audio_.hasRhythm()) {
-        // MUSIC MODE: Dancey, wave-like spawning synced to beat
-        float phasePulse = audio_.phaseToPulse();
-        float phaseWave = 0.4f + 0.6f * phasePulse;
+    // MUSIC-DRIVEN behavior (rhythmStrength weighted)
+    float phasePulse = audio_.phaseToPulse();
+    float phaseWave = 0.4f + 0.6f * phasePulse;
+    float musicSpawnProb = params_.baseSpawnChance * phaseWave + params_.audioSpawnBoost * audio_.pulse * phasePulse;
 
-        spawnProb *= phaseWave;
-        spawnProb += params_.audioSpawnBoost * audio_.pulse * phasePulse;
-
-        // Wave burst on beat
-        if (beatHappened()) {
-            uint8_t waveDrops = 3 + (uint8_t)(5 * audio_.rhythmStrength);
-            dropCount = (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy));
-        }
-    } else {
-        // AMBIENT MODE: Gentle, steady rainfall with subtle variations
-        float smoothEnergy = 0.4f + 0.3f * audio_.energy;
-        spawnProb *= smoothEnergy;
-
-        if (audio_.pulse > params_.organicTransientMin) {
-            float transientStrength = (audio_.pulse - params_.organicTransientMin) /
-                                     (1.0f - params_.organicTransientMin);
-            dropCount = (uint8_t)(2 * transientStrength);
-        }
+    // Wave burst on beat (scales with rhythmStrength)
+    if (beatHappened() && audio_.rhythmStrength > 0.3f) {
+        uint8_t waveDrops = 3 + (uint8_t)(5 * audio_.rhythmStrength);
+        dropCount += (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
     }
+
+    // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
+    float smoothEnergy = 0.4f + 0.3f * audio_.energy;
+    float organicSpawnProb = params_.baseSpawnChance * smoothEnergy;
+
+    // Gentle transient response (only in organic mode to avoid double-triggering with beats)
+    if (audio_.pulse > params_.organicTransientMin && audio_.rhythmStrength < 0.5f) {
+        float transientStrength = (audio_.pulse - params_.organicTransientMin) /
+                                 (1.0f - params_.organicTransientMin);
+        dropCount += (uint8_t)(2 * transientStrength);  // 0-2 drops based on transient strength
+    }
+
+    // BLEND spawn probability between modes
+    spawnProb = organicSpawnProb * (1.0f - audio_.rhythmStrength) +
+                musicSpawnProb * audio_.rhythmStrength;
 
     // Random baseline spawning
     if (random(1000) < spawnProb * 1000) {
@@ -122,8 +124,11 @@ void Water::spawnParticles(float dt) {
             vy += spreadAmount * 0.3f;
         }
 
-        // Music mode: faster drops
-        float velocityMult = audio_.hasRhythm() ? (1.0f + 0.2f * audio_.pulse) : 0.7f;
+        // Blend velocity multiplier between organic (0.7x) and music (1.0-1.2x)
+        float organicVelMult = 0.7f;
+        float musicVelMult = 1.0f + 0.2f * audio_.pulse;
+        float velocityMult = organicVelMult * (1.0f - audio_.rhythmStrength) +
+                            musicVelMult * audio_.rhythmStrength;
         vx *= velocityMult;
         vy *= velocityMult;
 

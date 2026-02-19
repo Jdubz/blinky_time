@@ -107,7 +107,11 @@ float ComplexDomainDetector::computeComplexDomain(const float* magnitudes,
                                                    int numBins) const {
     // Complex domain onset function:
     // CD = sum(magnitude[i] * |phase[i] - targetPhase[i]|) / numBins
-    // where targetPhase = 2 * prevPhase - prevPrevPhase (linear prediction)
+    //
+    // Phase prediction uses circular difference to avoid false positives
+    // at ±pi wrap boundaries. Instead of linear 2*prev - prevPrev (which
+    // breaks when phase wraps from +pi to -pi), we compute the wrapped
+    // delta and extrapolate from the most recent phase.
 
     float cd = 0.0f;
     int binsAnalyzed = 0;
@@ -115,8 +119,9 @@ float ComplexDomainDetector::computeComplexDomain(const float* magnitudes,
     int actualMax = (maxBin_ > numBins) ? numBins : maxBin_;
 
     for (int i = minBin_; i < actualMax; i++) {
-        // Predict phase based on linear extrapolation from previous frames
-        float targetPhase = 2.0f * prevPhases_[i] - prevPrevPhases_[i];
+        // Circular phase prediction: wrap the delta, then extrapolate
+        float phaseDelta = wrapPhase(prevPhases_[i] - prevPrevPhases_[i]);
+        float targetPhase = prevPhases_[i] + phaseDelta;
 
         // Compute phase deviation (wrapped to [-pi, pi])
         float phaseDev = wrapPhase(phases[i] - targetPhase);

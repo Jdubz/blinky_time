@@ -42,6 +42,9 @@ public:
     void setAverageTau(float tau) { averageTau_ = tau; }
     float getAverageTau() const { return averageTau_; }
 
+    void setMinRiseRate(float rate) { minRiseRate_ = rate; }
+    float getMinRiseRate() const { return minRiseRate_; }
+
     // Debug access
     float getRecentAverage() const { return recentAverage_; }
     float getBaselineLevel() const { return attackBuffer_[attackBufferIdx_]; }
@@ -59,9 +62,13 @@ private:
     // Recent average level (EMA)
     float recentAverage_;
 
+    // Previous frame level (for rise rate check)
+    float prevRawLevel_;
+
     // Parameters
     float attackMultiplier_;   // Required rise from baseline (1.1 = 10% rise)
     float averageTau_;         // EMA time constant in seconds
+    float minRiseRate_;        // Minimum frame-over-frame rise to qualify as attack
 
     // Helper: exponential factor
     static float expFactor(float dt, float tau) {

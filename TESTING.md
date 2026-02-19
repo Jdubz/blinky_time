@@ -19,15 +19,16 @@ This project has a comprehensive testing and parameter tuning system for audio-r
 
 ```
 # MCP tool call (from Claude Code or other MCP client)
-run_test(pattern: "steady-120bpm", port: "COM11", gain: 40)
+run_test(pattern: "steady-120bpm", port: "COM11")
 ```
 
 The `run_test` tool:
 1. Connects to the device on the specified port
-2. Optionally locks hardware gain for consistent testing
-3. Plays the audio pattern via Playwright
-4. Records all detected transients
-5. **Automatically disconnects** when complete (frees port for flashing)
+2. Plays the audio pattern via Playwright
+3. Records all detected transients
+4. **Automatically disconnects** when complete (frees port for flashing)
+
+**Let AGC auto-adapt** - Do not lock gain unless specifically testing AGC behavior.
 
 **Do NOT use manual connect/disconnect** for pattern testing - this risks leaving the port locked.
 
@@ -38,11 +39,11 @@ The `run_test` tool:
 cd blinky-test-player
 npx blinky-test-player list
 
-# Fast binary search tuning (~30 min)
-npm run tuner -- fast --port COM5 --gain 40
+# Fast binary search tuning
+npm run tuner -- fast --port COM5
 
 # Full validation suite
-npm run tuner -- validate --port COM5 --gain 40
+npm run tuner -- validate --port COM5
 ```
 
 ### Run Unit Tests

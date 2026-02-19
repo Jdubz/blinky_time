@@ -45,6 +45,7 @@
 #include "../../blinky-things/generators/Fire.h"
 #include "../../blinky-things/generators/Water.h"
 #include "../../blinky-things/generators/Lightning.h"
+#include "../../blinky-things/generators/Audio.h"
 #include "../../blinky-things/effects/Effect.h"
 #include "../../blinky-things/effects/HueRotationEffect.h"
 
@@ -58,15 +59,13 @@ struct SimulatorConfig {
     std::string pattern = "steady-120bpm";
     std::string device = "bucket";  // bucket, tube, hat
     std::string params = "";        // Runtime param overrides: key=val,key=val
+    std::string outputDir = "previews";  // Output directory (gitignored)
     int durationMs = 3000;
     int fps = 30;
     float hueShift = 0.0f;
     bool verbose = false;
     bool showHelp = false;
 };
-
-// Fixed output directory (gitignored)
-const std::string OUTPUT_DIR = "previews";
 
 // Create directory (cross-platform)
 void createDir(const std::string& path) {
@@ -94,7 +93,7 @@ USAGE:
     blinky-simulator [OPTIONS]
 
 OPTIONS:
-    --generator, -g <name>   Generator to use: fire, water, lightning (default: fire)
+    --generator, -g <name>   Generator to use: fire, water, lightning, audio (default: fire)
     --effect, -e <name>      Effect to apply: none, hue (default: none)
     --pattern, -p <name>     Audio pattern: steady-120bpm, steady-90bpm, steady-140bpm,
                              silence, burst, complex, or path to pattern file
@@ -103,6 +102,7 @@ OPTIONS:
     --fps, -f <num>          Frames per second (default: 30)
     --hue <0.0-1.0>          Hue shift for hue effect (default: 0.0)
     --params <key=val,...>   Override generator params (e.g., "baseSpawnChance=0.15,gravity=-12")
+    --output, -o <dir>       Output directory (default: previews)
     --verbose, -v            Verbose output
     --help, -h               Show this help message
 
@@ -156,6 +156,8 @@ bool parseArgs(int argc, char* argv[], SimulatorConfig& config) {
             config.hueShift = std::atof(argv[++i]);
         } else if (arg == "--params" && i + 1 < argc) {
             config.params = argv[++i];
+        } else if ((arg == "--output" || arg == "-o") && i + 1 < argc) {
+            config.outputDir = argv[++i];
         } else {
             std::cerr << "Unknown option: " << arg << std::endl;
             return false;
@@ -284,6 +286,8 @@ int main(int argc, char* argv[]) {
         genType = GeneratorType::WATER;
     } else if (config.generator == "lightning") {
         genType = GeneratorType::LIGHTNING;
+    } else if (config.generator == "audio") {
+        genType = GeneratorType::AUDIO;
     }
     pipeline.setGenerator(genType);
 
@@ -315,6 +319,9 @@ int main(int argc, char* argv[]) {
     } else if (genType == GeneratorType::LIGHTNING && pipeline.getLightningGenerator()) {
         applyParams(pipeline.getLightningGenerator()->getParamsMutable(), paramOverrides);
         allParams = getParamMap(pipeline.getLightningGenerator()->getParams());
+    } else if (genType == GeneratorType::AUDIO && pipeline.getAudioVisGenerator()) {
+        applyParams(pipeline.getAudioVisGenerator()->getParamsMutable(), paramOverrides);
+        allParams = getParamMap(pipeline.getAudioVisGenerator()->getParams());
     }
 
     if (config.verbose && !paramOverrides.empty()) {
@@ -329,10 +336,10 @@ int main(int argc, char* argv[]) {
                   << " (" << audioPattern.getDuration() << " ms)" << std::endl;
     }
 
-    // Create timestamped output folder (previews/<timestamp>/)
+    // Create timestamped output folder (<outputDir>/<generator>-<timestamp>/)
     std::string timestamp = getTimestamp();
-    std::string runDir = OUTPUT_DIR + "/" + config.generator + "-" + timestamp;
-    createDir(OUTPUT_DIR);
+    std::string runDir = config.outputDir + "/" + config.generator + "-" + timestamp;
+    createDir(config.outputDir);
     createDir(runDir);
 
     // Simple, friendly filenames within the run folder

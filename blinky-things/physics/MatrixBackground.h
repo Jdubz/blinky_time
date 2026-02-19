@@ -23,19 +23,23 @@ enum class BackgroundStyle {
  */
 class MatrixBackground : public BackgroundModel {
 public:
-    explicit MatrixBackground(BackgroundStyle style) : style_(style) {}
+    explicit MatrixBackground(BackgroundStyle style) : style_(style), intensity_(0.02f) {}
+
+    void setIntensity(float intensity) override {
+        intensity_ = constrain(intensity, 0.0f, 1.0f);
+    }
 
     void render(PixelMatrix& matrix, uint16_t width, uint16_t height,
                float noiseTime, const AudioControl& audio) override {
         // Noise scales for organic movement
         const float noiseScale = (style_ == BackgroundStyle::WATER) ? 0.12f : 0.15f;
 
-        // Beat-reactive brightness modulation
-        float beatBrightness = 1.0f;
-        if (audio.hasRhythm()) {
-            float phasePulse = audio.phaseToPulse();
-            beatBrightness = 0.6f + 0.4f * phasePulse;
-        }
+        // Beat-reactive brightness modulation (blended by rhythmStrength)
+        float phasePulse = audio.phaseToPulse();
+        float musicBrightness = 0.6f + 0.4f * phasePulse;
+        float organicBrightness = 1.0f;
+        float beatBrightness = organicBrightness * (1.0f - audio.rhythmStrength) +
+                              musicBrightness * audio.rhythmStrength;
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
@@ -75,25 +79,39 @@ public:
 
 private:
     BackgroundStyle style_;
+    float intensity_;
 
     float sampleNoise(int x, int y, uint16_t width, uint16_t height,
                      float scale, float time, float brightness) {
         float heightFalloff = getIntensityAt(x, y, width, height);
 
-        // Sample 3D noise
-        float nx = x * scale;
-        float ny = y * scale;
-        float noiseVal = SimplexNoise::noise3D_01(nx, ny, time);
+        // Sample 3D noise for lava lamp effect
+        // Increased scale from 0.08 to 0.35 for smaller blobs (1/5 size)
+        float lavaScale = (style_ == BackgroundStyle::FIRE) ? 0.35f : scale;
+        float nx = x * lavaScale;
+        float ny = y * lavaScale;
+        float noiseVal = SimplexNoise::noise3D_01(nx, ny, time * 0.03f);  // VERY slow drift like real lava lamp
 
-        // Add second octave for more organic detail
-        float noiseVal2 = SimplexNoise::noise3D_01(nx * 2.0f, ny * 2.0f, time * 1.3f);
-        noiseVal = noiseVal * 0.7f + noiseVal2 * 0.3f;
+        // Add second octave for more organic detail (less influence for lava lamp)
+        float noiseVal2 = SimplexNoise::noise3D_01(nx * 2.0f, ny * 2.0f, time * 0.05f);
+        noiseVal = noiseVal * 0.8f + noiseVal2 * 0.2f;  // Primary octave dominates
+
+        // LAVA LAMP EFFECT: Apply threshold and contrast boost
+        // Only show noise above threshold (0.4), then boost brightness
+        const float threshold = 0.4f;
+        if (noiseVal < threshold) {
+            noiseVal = 0.0f;  // Dark areas stay completely dark
+        } else {
+            // Remap 0.4-1.0 range to 0.0-1.0 and apply power curve for contrast
+            noiseVal = (noiseVal - threshold) / (1.0f - threshold);
+            noiseVal = noiseVal * noiseVal;  // Square for higher contrast (bright blobs)
+        }
 
         // Combine noise with height falloff and beat brightness
         float intensity = noiseVal * heightFalloff * brightness;
 
-        // Very dark background - particles must be the star
-        intensity *= 0.02f;
+        // Apply configurable intensity multiplier
+        intensity *= intensity_;
 
         return constrain(intensity, 0.0f, 1.0f);
     }

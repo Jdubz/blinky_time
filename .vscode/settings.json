@@ -15,5 +15,6 @@
     "files.eol": "\n",
     "files.trimTrailingWhitespace": true,
     "files.insertFinalNewline": true,
-    "files.trimFinalNewlines": true
+    "files.trimFinalNewlines": true,
+    "cmake.sourceDirectory": "C:/Development/blinky_time/blinky-simulator"
 }

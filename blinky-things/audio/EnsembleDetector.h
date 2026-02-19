@@ -9,7 +9,7 @@
 #include "detectors/HFCDetector.h"
 #include "detectors/BassBandDetector.h"
 #include "detectors/ComplexDomainDetector.h"
-#include "detectors/MelFluxDetector.h"
+#include "detectors/NoveltyDetector.h"
 
 /**
  * EnsembleDetector - Main orchestrator for ensemble onset detection
@@ -22,7 +22,7 @@
  * Architecture:
  * 1. Receive audio samples from AdaptiveMic
  * 2. Run SharedSpectralAnalysis once (FFT, magnitudes, phases, mel bands)
- * 3. Run all 6 detectors in parallel (each receives spectral data)
+ * 3. Run enabled detectors (disabled ones are skipped to save CPU)
  * 4. Fuse results using EnsembleFusion
  * 5. Return unified EnsembleOutput
  *
@@ -89,7 +89,7 @@ public:
     HFCDetector& getHFC() { return hfc_; }
     BassBandDetector& getBassBand() { return bassBand_; }
     ComplexDomainDetector& getComplexDomain() { return complexDomain_; }
-    MelFluxDetector& getMelFlux() { return melFlux_; }
+    NoveltyDetector& getNovelty() { return novelty_; }
 
     // --- Last results (for debugging/streaming) ---
     const DetectionResult* getLastResults() const { return lastResults_; }
@@ -115,7 +115,7 @@ private:
     HFCDetector hfc_;
     BassBandDetector bassBand_;
     ComplexDomainDetector complexDomain_;
-    MelFluxDetector melFlux_;
+    NoveltyDetector novelty_;
 
     // Detector array for iteration
     IDetector* detectors_[NUM_DETECTORS];

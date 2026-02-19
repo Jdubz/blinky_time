@@ -17,36 +17,26 @@ export const AudioSampleSchema = z.object({
   raw: z.number().min(0).max(1), // raw ADC level (0-1)
   h: z.number().int().min(0).max(80), // hardware gain (0-80)
   alive: z.union([z.literal(0), z.literal(1)]), // PDM status
-  z: z.number().min(0).max(1), // zero-crossing rate (0-1)
+  z: z.number().min(0).max(1).optional(), // zero-crossing rate (0-1) - optional, not always sent
 });
 
 export type AudioSample = z.infer<typeof AudioSampleSchema>;
 
 /**
- * Rhythm analyzer data from streaming `{"r":{...}}` messages
- */
-export const RhythmDataSchema = z.object({
-  bpm: z.number().positive(), // Detected BPM
-  str: z.number().min(0).max(1), // Periodicity strength (0-1)
-  per: z.number().positive(), // Detected period in milliseconds
-  lik: z.number().min(0).max(1), // Beat likelihood (0-1)
-  ph: z.number().min(0).max(1), // Phase (0-1)
-  buf: z.number().int().min(0).max(256), // Buffer fill level
-});
-
-export type RhythmData = z.infer<typeof RhythmDataSchema>;
-
-/**
  * Music mode data from streaming `{"m":{...}}` messages
+ *
+ * Sent by AudioController v3 with multi-hypothesis tracking.
  */
 export const MusicModeDataSchema = z.object({
-  a: z.union([z.literal(0), z.literal(1)]), // Active flag
-  bpm: z.number().positive(), // Tempo in BPM
-  ph: z.number().min(0).max(1), // Phase (0-1)
-  conf: z.number().min(0).max(1), // Confidence (0-1)
-  q: z.union([z.literal(0), z.literal(1)]), // Quarter note event
-  h: z.union([z.literal(0), z.literal(1)]), // Half note event
-  w: z.union([z.literal(0), z.literal(1)]), // Whole note event
+  a: z.union([z.literal(0), z.literal(1)]), // Active flag (rhythm detected)
+  bpm: z.number().nonnegative(), // Tempo in BPM (0 when inactive)
+  ph: z.number().min(0).max(1), // Phase (0-1, 0=on-beat)
+  str: z.number().min(0).max(1), // Rhythm strength (0-1)
+  conf: z.number().min(0).max(1), // Hypothesis confidence (0-1)
+  bc: z.number().int().nonnegative(), // Beat count (tracked beats)
+  q: z.union([z.literal(0), z.literal(1)]), // Beat event (phase wrap)
+  e: z.number().min(0).max(1), // Energy (0-1)
+  p: z.number().min(0).max(1), // Pulse (0-1)
 });
 
 export type MusicModeData = z.infer<typeof MusicModeDataSchema>;
@@ -56,7 +46,6 @@ export type MusicModeData = z.infer<typeof MusicModeDataSchema>;
  */
 export const AudioMessageSchema = z.object({
   a: AudioSampleSchema,
-  r: RhythmDataSchema.optional(), // Optional rhythm data
   m: MusicModeDataSchema.optional(), // Optional music mode data
 });
 

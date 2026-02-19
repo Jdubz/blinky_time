@@ -224,13 +224,14 @@ React Components
 
 **ALWAYS use `run_test` for pattern testing** - it automatically:
 1. Connects to the device
-2. Locks gain (if specified)
-3. Plays the pattern and records detections
-4. Disconnects when complete
+2. Plays the pattern and records detections
+3. Disconnects when complete
 
 ```
-run_test(pattern: "steady-120bpm", port: "COM11", gain: 40)
+run_test(pattern: "steady-120bpm", port: "COM11")
 ```
+
+**DO NOT lock gain** - Let the AGC auto-adapt for realistic testing conditions. Only use the `gain` parameter in rare cases where you need to isolate AGC behavior specifically.
 
 **DO NOT manually connect/disconnect** - Using separate `connect`, `stream_start`, `start_test`, `stop_test`, `disconnect` calls:
 - Risks leaving the port locked if an error occurs
@@ -271,8 +272,8 @@ run_test(pattern: "steady-120bpm", port: "COM11", gain: 40)
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~11 KB total (baseline 10 KB + multi-hypothesis 1 KB)
-- Flash: ~172 KB firmware, ~30 KB settings storage
+- RAM: ~16 KB total (baseline 10 KB + multi-hypothesis 1 KB + band OSS/comb filters ~5 KB)
+- Flash: ~222 KB firmware, ~30 KB settings storage
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -352,25 +353,23 @@ run_test(pattern: "steady-120bpm", port: "COM11", gain: 40)
 
 **Reviews and analysis must focus on outstanding actions**, not documenting past work. Git history serves as the permanent record of changes and decisions.
 
-## Current Audio System (December 2025)
+## Current Audio System (February 2026)
 
 ### Ensemble Detection Architecture
-The system uses 6 simultaneous detectors with weighted fusion:
+The system uses 6 detectors with weighted fusion (3 enabled, 3 disabled):
 
-| Detector | Weight | Specialty |
-|----------|--------|-----------|
-| Drummer | 0.22 | Time-domain amplitude transients |
-| SpectralFlux | 0.20 | SuperFlux algorithm, robust recall |
-| BassBand | 0.18 | Low-frequency kick/bass detection |
-| HFC | 0.15 | High-frequency percussive attacks |
-| ComplexDomain | 0.13 | Phase-based soft onset detection |
-| MelFlux | 0.12 | Perceptually-scaled detection |
+| Detector | Weight | Enabled | Specialty |
+|----------|--------|---------|-----------|
+| Drummer | 0.35 | Yes | Time-domain amplitude transients |
+| SpectralFlux | 0.20 | No | Mel-band SuperFlux (fires on pad chords) |
+| HFC | 0.20 | Yes | High-frequency percussive attacks |
+| BassBand | 0.45 | Yes | Sub-bass kick detection (primary EDM detector) |
+| ComplexDomain | 0.13 | No | Phase-based soft onset detection |
+| Novelty | 0.12 | No | Cosine distance spectral novelty |
 
 ### Key Features
-- **Agreement-based confidence**: Single-detector hits are suppressed (0.6x), multi-detector consensus is boosted (up to 1.2x)
-- **Cooldown = 80ms**: Reduces false positives from echo/reverb
-- **Autocorrelation rhythm tracking**: Replaced legacy PLL-based tracking
+- **Agreement-based confidence**: Single-detector hits suppressed (0.5x), 2-detector near full (0.9x), 3+ boosted (up to 1.2x)
+- **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
+- **Multi-hypothesis rhythm tracking**: 4 concurrent tempo hypotheses with autocorrelation + comb filter validation
 - **Shared FFT**: All spectral detectors share a single FFT computation
-
-### Legacy Mode Switching (REMOVED)
-The old `detectionMode` parameter and mode-switching code has been removed. All 6 detectors now run simultaneously.
+- **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame
