@@ -15,9 +15,14 @@ struct AudioParams {
     uint8_t levelBrightness;      // Brightness of energy level row (0-255)
     float levelSmoothing;         // Smoothing factor for level changes (0-1, higher = smoother)
 
-    // Phase visualization (blue row moving bottom to top)
+    // Phase visualization (blue row moving bottom to top, full height)
     uint8_t phaseBrightness;      // Maximum brightness of phase row (0-255)
     float musicModeThreshold;     // Minimum rhythmStrength to show phase indicator (0-1)
+
+    // Beat pulse (blue band in center on beat)
+    uint8_t beatPulseBrightness;  // Maximum brightness of beat pulse band (0-255)
+    float beatPulseDecay;         // How fast beat pulse fades (0-1 per frame, higher = faster)
+    float beatPulseWidth;         // Fraction of height for beat pulse band (0-1)
 
     // Background
     uint8_t backgroundBrightness; // Dim background level (0-255)
@@ -32,9 +37,14 @@ struct AudioParams {
         levelBrightness = 220;
         levelSmoothing = 0.3f;  // Moderate smoothing
 
-        // Phase: bright blue row when music mode active
+        // Phase: bright blue row when music mode active (full height range)
         phaseBrightness = 200;
         musicModeThreshold = 0.3f;  // Show phase when rhythm confidence > 30%
+
+        // Beat pulse: bright blue center band on each beat
+        beatPulseBrightness = 255;
+        beatPulseDecay = 0.08f;     // Fades over ~12 frames
+        beatPulseWidth = 0.2f;      // 20% of display height
 
         // Background: off (no ambient glow)
         backgroundBrightness = 0;
@@ -87,11 +97,14 @@ private:
     // Smoothed state for visualization
     float smoothedEnergy_;        // Smoothed energy level (0-1)
     float transientIntensity_;    // Current transient intensity (0-1), decays over time
+    float beatPulseIntensity_;    // Current beat pulse intensity (0-1), decays over time
+    float prevPhase_;             // Previous frame's phase for wrap detection
 
     // Helper methods
     void drawTransientRows(PixelMatrix& matrix, float pulse);
     void drawEnergyRow(PixelMatrix& matrix, float energy);
     void drawPhaseRow(PixelMatrix& matrix, float phase, float rhythmStrength);
+    void drawBeatPulse(PixelMatrix& matrix, float rhythmStrength);
     void drawBackground(PixelMatrix& matrix);
 
     // Utility: set a full horizontal row to a color
