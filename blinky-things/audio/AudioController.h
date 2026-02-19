@@ -123,8 +123,8 @@ public:
     float bpmMatchTolerance = 0.05f;        // ±5% BPM tolerance for matching peaks to hypotheses
 
     // Promotion
-    float promotionThreshold = 0.15f;       // Confidence advantage needed to promote (0-1)
-    uint16_t minBeatsBeforePromotion = 8;   // Minimum beats before promoting a new hypothesis
+    float promotionThreshold = 0.20f;       // Confidence advantage needed to promote (slightly easier correction)
+    uint16_t minBeatsBeforePromotion = 8;   // Minimum beats before promoting (faster adaptation)
 
     // Decay
     float phraseHalfLifeBeats = 32.0f;      // Half-life in beats (8 bars of 4/4)
@@ -146,7 +146,7 @@ public:
      * Create a new hypothesis in the best available slot
      * Returns slot index, or -1 if creation failed
      */
-    int createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation);
+    int createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation, float initialPhase = 0.0f);
 
     /**
      * Find best slot for new hypothesis (LRU eviction with primary protection)
@@ -520,12 +520,17 @@ public:
 
     // Phase tracking smoothing
     float phaseAdaptRate = 0.15f;       // How quickly phase adapts to autocorrelation (0-1)
+    float phaseHoldStrength = 0.3f;     // Below this strength, maintain phase from prediction instead of resetting
+
+    // === TEMPO RATE LIMITING ===
+    // Prevents rapid tempo jumps during active tracking
+    float maxBpmChangePerSec = 5.0f;        // Max BPM change per second during active tracking (% of current)
 
     // === TRANSIENT-BASED PHASE CORRECTION (PLL-style) ===
     // Uses detected transients to nudge phase toward actual beat timing
     // Requires 2+ detector agreement to prevent single-detector false positives from drifting phase
-    float transientCorrectionRate = 0.15f;  // How fast to apply transient-based correction (0-1)
-    float transientCorrectionMin = 0.42f;   // Minimum transient strength to trigger correction (calibrated Feb 2026)
+    float transientCorrectionRate = 0.12f;  // How fast to apply transient-based correction (0-1), increased for faster convergence
+    float transientCorrectionMin = 0.30f;   // Minimum transient strength to trigger correction (lowered for EDM)
 
     // Beat proximity thresholds for pulse modulation
     float pulseNearBeatThreshold = 0.2f;    // Phase distance < this = boost transients
@@ -537,9 +542,10 @@ public:
 
     // === TEMPO PRIOR (reduces half-time/double-time confusion) ===
     // Gaussian prior centered on typical music tempo, weights autocorrelation peaks
+    // Shifted up for EDM: center=128 covers 110-150 BPM range, wider sigma reduces penalty on fast tempos
     bool tempoPriorEnabled = true;      // Enable tempo prior weighting
-    float tempoPriorCenter = 120.0f;    // Center of Gaussian prior (BPM)
-    float tempoPriorWidth = 40.0f;      // Width (sigma) of Gaussian prior (BPM)
+    float tempoPriorCenter = 128.0f;    // Center of Gaussian prior (BPM) - midpoint of EDM range
+    float tempoPriorWidth = 50.0f;      // Width (sigma) of Gaussian prior (BPM) - wider for less aggressive penalty
     float tempoPriorStrength = 0.5f;    // Blend: 0=no prior, 1=full prior weight
 
     // === BEAT STABILITY TRACKING ===
@@ -572,7 +578,7 @@ public:
 
     // === AUTOCORRELATION TIMING ===
     // Controls how often BPM is re-estimated via autocorrelation
-    uint16_t autocorrPeriodMs = 500;  // Run autocorr every N ms (default 500ms)
+    uint16_t autocorrPeriodMs = 250;  // Run autocorr every N ms (default 250ms for faster adaptation)
 
     // === PULSE TRAIN PHASE ESTIMATION ===
     // Uses PLP-inspired Fourier phase extraction at tempo frequency
@@ -685,7 +691,7 @@ private:
     float bandPeriodicityStrength_[BAND_COUNT] = {0};
     float adaptiveBandWeights_[BAND_COUNT] = {0.5f, 0.3f, 0.2f};  // Default weights
     uint32_t lastBandAutocorrMs_ = 0;
-    static constexpr uint32_t BAND_AUTOCORR_PERIOD_MS = 500;  // Run every 500ms (faster response)
+    static constexpr uint32_t BAND_AUTOCORR_PERIOD_MS = 250;  // Run every 250ms (faster response)
 
     // Cross-band correlation tracking (SuperFlux-inspired)
     // Measures how synchronized the bands are - real beats correlate across bands
@@ -753,7 +759,7 @@ private:
 
     // Autocorrelation timing
     uint32_t lastAutocorrMs_ = 0;
-    static constexpr uint32_t AUTOCORR_PERIOD_MS = 500;  // Run every 500ms
+    static constexpr uint32_t AUTOCORR_PERIOD_MS = 250;  // Run every 250ms (faster adaptation)
 
     // Silence detection
     uint32_t lastSignificantAudioMs_ = 0;

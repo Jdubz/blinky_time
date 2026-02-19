@@ -16,7 +16,7 @@ import type { AudioSample, TransientEvent, MusicModeState, BeatEvent, LedTelemet
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, mkdirSync, existsSync, statSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, statSync, readFileSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -328,6 +328,19 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
+        name: 'monitor_transients',
+        description: 'Monitor transient detections in isolation from rhythm tracking. Reports raw transient count, rate, strength distribution, and detector agreement stats. Uses debug stream mode for per-detection agreement data. Useful for evaluating ensemble detector performance on specific audio content.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            duration_ms: {
+              type: 'number',
+              description: 'Duration to monitor in milliseconds (default: 3000)',
+            },
+          },
+        },
+      },
+      {
         name: 'get_music_status',
         description: 'Get current music mode status (BPM, confidence, phase, beat counts). Requires streaming to be active.',
         inputSchema: {
@@ -406,6 +419,36 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Output directory (default: previews in blinky-simulator)',
             },
           },
+        },
+      },
+      {
+        name: 'run_music_test',
+        description: 'Run a real-music beat tracking test. Plays an audio file through speakers, records device detections (transients + music mode BPM/phase/confidence), compares against ground truth beat annotations using standard beat tracking metrics (F-measure@70ms, CMLt continuity, AMLt allowed metrical levels, BPM accuracy). Automatically connects and disconnects.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            audio_file: {
+              type: 'string',
+              description: 'Path to audio file to play (WAV, MP3, etc.)',
+            },
+            ground_truth: {
+              type: 'string',
+              description: 'Path to ground truth beat annotations JSON file (from annotate-beats.py)',
+            },
+            port: {
+              type: 'string',
+              description: 'Serial port to connect to (e.g., "COM5")',
+            },
+            gain: {
+              type: 'number',
+              description: 'Optional hardware gain to lock during test (0-80)',
+            },
+            duration_ms: {
+              type: 'number',
+              description: 'Override playback duration in milliseconds (default: full file)',
+            },
+          },
+          required: ['audio_file', 'ground_truth', 'port'],
         },
       },
     ],
@@ -755,6 +798,99 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
           response.currentMusic = lastMusicState;
         }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(response, null, 2),
+            },
+          ],
+        };
+      }
+
+      case 'monitor_transients': {
+        const durationMs = (args as { duration_ms?: number }).duration_ms || 3000;
+
+        // Switch to audio visualization generator for monitoring
+        await serial.sendCommand('gen audio');
+
+        // Enable debug stream mode for agree/conf fields
+        await serial.sendCommand('stream debug');
+
+        const state = serial.getState();
+        if (!state.streaming) {
+          await serial.startStream();
+        }
+
+        // Statistics collectors
+        let transientCount = 0;
+        let totalSamples = 0;
+        let strengthSum = 0;
+        let strengthMin = Infinity;
+        let strengthMax = 0;
+        const strengthBuckets = [0, 0, 0, 0, 0]; // [0-0.2, 0.2-0.4, 0.4-0.6, 0.6-0.8, 0.8-1.0]
+        const agreementCounts = [0, 0, 0, 0, 0, 0, 0]; // [0-det, 1-det, ..., 6-det]
+        let confSum = 0;
+        let confSamples = 0;
+
+        const onAudio = (sample: AudioSample) => {
+          totalSamples++;
+          if (sample.t > 0) {
+            transientCount++;
+            strengthSum += sample.t;
+            strengthMin = Math.min(strengthMin, sample.t);
+            strengthMax = Math.max(strengthMax, sample.t);
+            const bucket = Math.min(4, Math.floor(sample.t * 5));
+            strengthBuckets[bucket]++;
+          }
+          // Debug fields from debug stream mode
+          if (sample.agree !== undefined) {
+            const agreeIdx = Math.min(6, Math.max(0, sample.agree));
+            if (sample.t > 0) agreementCounts[agreeIdx]++;
+          }
+          if (sample.conf !== undefined && sample.t > 0) {
+            confSum += sample.conf;
+            confSamples++;
+          }
+        };
+
+        serial.on('audio', onAudio);
+        await new Promise(resolve => setTimeout(resolve, durationMs));
+        serial.off('audio', onAudio);
+
+        // Restore normal stream mode
+        await serial.sendCommand('stream normal');
+
+        const durationSec = durationMs / 1000;
+        const response = {
+          durationMs,
+          totalSamples,
+          sampleRate: (totalSamples / durationSec).toFixed(1) + ' Hz',
+          transients: {
+            count: transientCount,
+            rate: (transientCount / durationSec).toFixed(2) + ' /sec',
+            avgStrength: transientCount > 0 ? parseFloat((strengthSum / transientCount).toFixed(3)) : null,
+            minStrength: transientCount > 0 ? parseFloat(strengthMin.toFixed(3)) : null,
+            maxStrength: transientCount > 0 ? parseFloat(strengthMax.toFixed(3)) : null,
+            strengthDistribution: {
+              '0.0-0.2': strengthBuckets[0],
+              '0.2-0.4': strengthBuckets[1],
+              '0.4-0.6': strengthBuckets[2],
+              '0.6-0.8': strengthBuckets[3],
+              '0.8-1.0': strengthBuckets[4],
+            },
+          },
+          agreement: {
+            distribution: {
+              '1-detector': agreementCounts[1],
+              '2-detectors': agreementCounts[2],
+              '3-detectors': agreementCounts[3],
+              '4+-detectors': agreementCounts[4] + agreementCounts[5] + agreementCounts[6],
+            },
+            avgConfidence: confSamples > 0 ? parseFloat((confSum / confSamples).toFixed(3)) : null,
+          },
+        };
 
         return {
           content: [
@@ -1504,8 +1640,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           '-d', device,
           '-t', duration_ms.toString(),
           '-f', fps.toString(),
-          '-o', outputBaseDir,
         ];
+
+        if (output_dir) {
+          cliArgs.push('-o', output_dir);
+        }
 
         if (effect === 'hue' && hue_shift > 0) {
           cliArgs.push('--hue', hue_shift.toString());
@@ -1565,7 +1704,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const output = result.output || '';
         const lines = output.split('\n');
 
-        // Extract file paths from output
+        // Extract run directory and file paths from output
+        // Simulator outputs: "Created: <runDir>/" followed by file listings
+        let runDir = '';
         let lowResPath = '';
         let highResPath = '';
         let paramsJsonPath = '';
@@ -1573,14 +1714,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (trimmed.includes('/low-res/') && trimmed.endsWith('.gif')) {
-            lowResPath = trimmed;
-          } else if (trimmed.includes('/high-res/') && trimmed.endsWith('.gif')) {
-            highResPath = trimmed;
-          } else if (trimmed.endsWith('-params.json')) {
-            paramsJsonPath = trimmed;
-          } else if (trimmed.endsWith('-metrics.json')) {
-            metricsJsonPath = trimmed;
+          const createdMatch = trimmed.match(/^Created:\s*(.+?)\/?\s*$/);
+          if (createdMatch) {
+            runDir = createdMatch[1];
+          } else if (trimmed === 'low-res.gif' || trimmed.includes('low-res.gif')) {
+            lowResPath = runDir ? join(SIMULATOR_DIR, runDir, 'low-res.gif') : '';
+          } else if (trimmed === 'high-res.gif' || trimmed.includes('high-res.gif')) {
+            highResPath = runDir ? join(SIMULATOR_DIR, runDir, 'high-res.gif') : '';
+          } else if (trimmed === 'params.json' || trimmed.includes('params.json')) {
+            paramsJsonPath = runDir ? join(SIMULATOR_DIR, runDir, 'params.json') : '';
+          } else if (trimmed === 'metrics.json' || trimmed.includes('metrics.json')) {
+            metricsJsonPath = runDir ? join(SIMULATOR_DIR, runDir, 'metrics.json') : '';
           }
         }
 
@@ -1663,6 +1807,390 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             },
           ],
         };
+      }
+
+      case 'run_music_test': {
+        const {
+          audio_file: audioFile,
+          ground_truth: groundTruthFile,
+          port,
+          gain,
+          duration_ms: overrideDurationMs,
+        } = args as {
+          audio_file: string;
+          ground_truth: string;
+          port: string;
+          gain?: number;
+          duration_ms?: number;
+        };
+
+        // Validate files exist
+        if (!existsSync(audioFile)) {
+          throw new Error(`Audio file not found: ${audioFile}`);
+        }
+        if (!existsSync(groundTruthFile)) {
+          throw new Error(`Ground truth file not found: ${groundTruthFile}`);
+        }
+
+        // Load ground truth
+        const gtData = JSON.parse(readFileSync(groundTruthFile, 'utf-8')) as {
+          pattern: string;
+          durationMs: number;
+          bpm?: number;
+          hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
+        };
+
+        try {
+          // Connect to device
+          if (!serial.getState().connected) {
+            await serial.connect(port);
+          }
+
+          // Lock hardware gain if specified
+          if (gain !== undefined) {
+            await serial.sendCommand(`set hwgainlock ${gain}`);
+          }
+
+          // Switch to audio generator and enable fast streaming
+          await serial.sendCommand('gen audio');
+
+          // Clear buffers and start recording
+          transientBuffer = [];
+          audioSampleBuffer = [];
+          musicStateBuffer = [];
+          beatEventBuffer = [];
+
+          await serial.sendCommand('stream fast');
+
+          // Run the test player CLI with play-file command
+          const playArgs = ['play-file', audioFile, '--quiet'];
+          if (overrideDurationMs) {
+            playArgs.push('--duration', overrideDurationMs.toString());
+          }
+
+          const result = await new Promise<{ success: boolean; output?: string; error?: string }>((resolve) => {
+            const child = spawn('node', [TEST_PLAYER_PATH, ...playArgs], {
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+
+            let stdout = '';
+            let stderr = '';
+
+            // Start recording when the process starts
+            testStartTime = Date.now();
+
+            child.stdout.on('data', (data) => {
+              stdout += data.toString();
+            });
+
+            child.stderr.on('data', (data) => {
+              stderr += data.toString();
+            });
+
+            child.on('close', (code) => {
+              if (code === 0) {
+                resolve({ success: true, output: stdout });
+              } else {
+                resolve({ success: false, error: stderr || `Process exited with code ${code}` });
+              }
+            });
+
+            child.on('error', (err) => {
+              resolve({ success: false, error: err.message });
+            });
+          });
+
+          // Stop recording
+          const recordStopTime = Date.now();
+          const rawDuration = recordStopTime - (testStartTime || recordStopTime);
+          let detections = [...transientBuffer];
+          let musicStates = [...musicStateBuffer];
+          let beatEvents = [...beatEventBuffer];
+
+          const recordStartTime = testStartTime;
+          testStartTime = null;
+          transientBuffer = [];
+          audioSampleBuffer = [];
+          musicStateBuffer = [];
+          beatEventBuffer = [];
+
+          if (!result.success) {
+            return {
+              content: [{ type: 'text', text: JSON.stringify({ error: result.error }, null, 2) }],
+            };
+          }
+
+          // Parse output to get startedAt for timing alignment
+          let timingOffsetMs = 0;
+          try {
+            const playOutput = JSON.parse(result.output || '{}');
+            if (playOutput.startedAt && recordStartTime) {
+              const audioStartTime = new Date(playOutput.startedAt).getTime();
+              timingOffsetMs = audioStartTime - recordStartTime;
+
+              detections = detections.map(d => ({
+                ...d,
+                timestampMs: d.timestampMs - timingOffsetMs,
+              })).filter(d => d.timestampMs >= 0);
+
+              musicStates = musicStates.map(s => ({
+                ...s,
+                timestampMs: s.timestampMs - timingOffsetMs,
+              })).filter(s => s.timestampMs >= 0);
+
+              beatEvents = beatEvents.map(b => ({
+                ...b,
+                timestampMs: b.timestampMs - timingOffsetMs,
+              })).filter(b => b.timestampMs >= 0);
+            }
+          } catch { /* ignore parse errors */ }
+
+          // Calculate audio latency from onset detections vs ground truth
+          const expectedHits = gtData.hits.filter(h => h.expectTrigger !== false);
+          const offsets: number[] = [];
+          detections.forEach((detection) => {
+            let minDist = Infinity;
+            let closestOffset = 0;
+            expectedHits.forEach((hit) => {
+              const hitMs = hit.time * 1000;
+              const offset = detection.timestampMs - hitMs;
+              if (Math.abs(offset) < Math.abs(minDist)) {
+                minDist = offset;
+                closestOffset = offset;
+              }
+            });
+            if (Math.abs(minDist) < 1000) {
+              offsets.push(closestOffset);
+            }
+          });
+
+          let audioLatencyMs = 0;
+          if (offsets.length > 0) {
+            offsets.sort((a, b) => a - b);
+            audioLatencyMs = offsets[Math.floor(offsets.length / 2)];
+          }
+
+          // Beat tracking evaluation
+          // Reference beats from ground truth (in seconds)
+          const refBeats = gtData.hits
+            .filter(h => h.expectTrigger !== false)
+            .map(h => h.time);
+
+          // Estimated beats from device beat events (phase wrapping)
+          const estBeatsFromDevice = beatEvents.map(b => (b.timestampMs - audioLatencyMs) / 1000);
+
+          // F-measure with 70ms tolerance (standard beat tracking)
+          const BEAT_TOLERANCE_SEC = 0.07;
+          const matchedRef = new Set<number>();
+          let tp = 0;
+          for (const est of estBeatsFromDevice) {
+            let bestIdx = -1;
+            let bestDist = Infinity;
+            for (let i = 0; i < refBeats.length; i++) {
+              if (matchedRef.has(i)) continue;
+              const dist = Math.abs(est - refBeats[i]);
+              if (dist < bestDist && dist <= BEAT_TOLERANCE_SEC) {
+                bestDist = dist;
+                bestIdx = i;
+              }
+            }
+            if (bestIdx >= 0) {
+              matchedRef.add(bestIdx);
+              tp++;
+            }
+          }
+
+          const beatPrecision = estBeatsFromDevice.length > 0 ? tp / estBeatsFromDevice.length : 0;
+          const beatRecall = refBeats.length > 0 ? tp / refBeats.length : 0;
+          const beatF1 = (beatPrecision + beatRecall) > 0
+            ? 2 * (beatPrecision * beatRecall) / (beatPrecision + beatRecall)
+            : 0;
+
+          // CMLt: Continuity metric
+          // Check each reference beat for a matching device beat
+          const correct: boolean[] = refBeats.map(ref => {
+            return estBeatsFromDevice.some(est => Math.abs(est - ref) <= BEAT_TOLERANCE_SEC);
+          });
+
+          let totalCorrectInSegments = 0;
+          let longestSegment = 0;
+          let currentSegment = 0;
+          for (const c of correct) {
+            if (c) {
+              currentSegment++;
+            } else {
+              if (currentSegment > 0) {
+                totalCorrectInSegments += currentSegment;
+                longestSegment = Math.max(longestSegment, currentSegment);
+                currentSegment = 0;
+              }
+            }
+          }
+          if (currentSegment > 0) {
+            totalCorrectInSegments += currentSegment;
+            longestSegment = Math.max(longestSegment, currentSegment);
+          }
+
+          const cmlt = refBeats.length > 0 ? totalCorrectInSegments / refBeats.length : 0;
+          const cmlc = refBeats.length > 0 ? longestSegment / refBeats.length : 0;
+
+          // AMLt: Also check half-time and double-time
+          // Generate double-time beats (insert between each pair)
+          const doubleTimeBeats: number[] = [];
+          for (let i = 0; i < estBeatsFromDevice.length; i++) {
+            doubleTimeBeats.push(estBeatsFromDevice[i]);
+            if (i < estBeatsFromDevice.length - 1) {
+              doubleTimeBeats.push((estBeatsFromDevice[i] + estBeatsFromDevice[i + 1]) / 2);
+            }
+          }
+
+          // Generate half-time beats (every other beat)
+          const halfTimeBeats = estBeatsFromDevice.filter((_, i) => i % 2 === 0);
+
+          // Find best AML match
+          let bestAmlCorrect = correct;
+          for (const altEst of [doubleTimeBeats, halfTimeBeats]) {
+            const altCorrect = refBeats.map(ref => {
+              return altEst.some(est => Math.abs(est - ref) <= BEAT_TOLERANCE_SEC);
+            });
+            if (altCorrect.filter(Boolean).length > bestAmlCorrect.filter(Boolean).length) {
+              bestAmlCorrect = altCorrect;
+            }
+          }
+
+          let amlTotal = 0;
+          let amlLongest = 0;
+          let amlCurrent = 0;
+          for (const c of bestAmlCorrect) {
+            if (c) {
+              amlCurrent++;
+            } else {
+              if (amlCurrent > 0) {
+                amlTotal += amlCurrent;
+                amlLongest = Math.max(amlLongest, amlCurrent);
+                amlCurrent = 0;
+              }
+            }
+          }
+          if (amlCurrent > 0) {
+            amlTotal += amlCurrent;
+            amlLongest = Math.max(amlLongest, amlCurrent);
+          }
+
+          const amlt = refBeats.length > 0 ? amlTotal / refBeats.length : 0;
+
+          // Music mode metrics
+          const activeStates = musicStates.filter(s => s.active);
+          const avgBpm = activeStates.length > 0
+            ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
+          const avgConf = activeStates.length > 0
+            ? activeStates.reduce((sum, s) => sum + s.confidence, 0) / activeStates.length : 0;
+
+          // BPM accuracy
+          const expectedBPM = gtData.bpm || 0;
+          const bpmError = expectedBPM > 0 && avgBpm > 0
+            ? Math.abs(avgBpm - expectedBPM) / expectedBPM * 100 : null;
+          const bpmAccuracy = bpmError !== null ? Math.max(0, 1 - bpmError / 100) : null;
+
+          // Phase stability: standard deviation of phase during active tracking
+          let phaseStability = 0;
+          if (activeStates.length > 1) {
+            // Measure how consistently phase advances
+            // In a perfect tracker, consecutive phase differences should be nearly constant
+            const phaseDiffs: number[] = [];
+            for (let i = 1; i < activeStates.length; i++) {
+              let diff = activeStates[i].phase - activeStates[i - 1].phase;
+              // Handle wrapping
+              if (diff < -0.5) diff += 1.0;
+              if (diff > 0.5) diff -= 1.0;
+              phaseDiffs.push(diff);
+            }
+            if (phaseDiffs.length > 0) {
+              const meanDiff = phaseDiffs.reduce((s, d) => s + d, 0) / phaseDiffs.length;
+              const variance = phaseDiffs.reduce((s, d) => s + (d - meanDiff) ** 2, 0) / phaseDiffs.length;
+              // Convert to 0-1 stability score (lower variance = higher stability)
+              phaseStability = Math.max(0, 1 - Math.sqrt(variance) * 10);
+            }
+          }
+
+          const duration = overrideDurationMs || gtData.durationMs || rawDuration;
+
+          // Save detailed results
+          ensureTestResultsDir();
+          const timestamp = Date.now();
+          const detailsFilename = `music-${gtData.pattern}-${timestamp}.json`;
+          const detailsPath = join(TEST_RESULTS_DIR, detailsFilename);
+
+          const fullResults = {
+            type: 'music_test',
+            pattern: gtData.pattern,
+            audioFile,
+            timestamp: new Date(timestamp).toISOString(),
+            durationMs: duration,
+            timingOffsetMs,
+            audioLatencyMs: Math.round(audioLatencyMs),
+            beatTracking: {
+              f1: Math.round(beatF1 * 1000) / 1000,
+              precision: Math.round(beatPrecision * 1000) / 1000,
+              recall: Math.round(beatRecall * 1000) / 1000,
+              cmlt: Math.round(cmlt * 1000) / 1000,
+              cmlc: Math.round(cmlc * 1000) / 1000,
+              amlt: Math.round(amlt * 1000) / 1000,
+              toleranceSec: BEAT_TOLERANCE_SEC,
+              refBeats: refBeats.length,
+              estBeats: estBeatsFromDevice.length,
+            },
+            musicMode: {
+              avgBpm: Math.round(avgBpm * 10) / 10,
+              expectedBpm: expectedBPM,
+              bpmError: bpmError !== null ? Math.round(bpmError * 10) / 10 : null,
+              bpmAccuracy: bpmAccuracy !== null ? Math.round(bpmAccuracy * 1000) / 1000 : null,
+              avgConfidence: Math.round(avgConf * 100) / 100,
+              phaseStability: Math.round(phaseStability * 1000) / 1000,
+              activationMs: activeStates.length > 0 ? activeStates[0].timestampMs : null,
+            },
+            groundTruth: gtData,
+            detections,
+            musicStates,
+            beatEvents,
+          };
+
+          writeFileSync(detailsPath, JSON.stringify(fullResults, null, 2));
+          writeFileSync(join(TEST_RESULTS_DIR, 'latest-music.json'), JSON.stringify(fullResults, null, 2));
+
+          // Return compact summary
+          const summary = {
+            pattern: gtData.pattern,
+            durationMs: duration,
+            beatTracking: {
+              f1: fullResults.beatTracking.f1,
+              precision: fullResults.beatTracking.precision,
+              recall: fullResults.beatTracking.recall,
+              cmlt: fullResults.beatTracking.cmlt,
+              amlt: fullResults.beatTracking.amlt,
+              refBeats: refBeats.length,
+              estBeats: estBeatsFromDevice.length,
+            },
+            musicMode: fullResults.musicMode,
+            timing: {
+              latencyMs: Math.round(audioLatencyMs),
+            },
+            detailsFile: detailsFilename,
+          };
+
+          return {
+            content: [{ type: 'text', text: JSON.stringify(summary) }],
+          };
+        } finally {
+          if (gain !== undefined && serial.getState().connected) {
+            try {
+              await serial.sendCommand('set hwgainlock 255');
+            } catch (err) {
+              console.error('Failed to unlock hardware gain:', err);
+            }
+          }
+          await serial.disconnect();
+        }
       }
 
       default:

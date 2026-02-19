@@ -77,7 +77,7 @@ private:
 
     // Noise rejection parameters (tunable via serial: bass_minflux, bass_sharpness)
     float minAbsoluteFlux_ = 0.03f;       // Minimum flux to detect (floor for quiet noise)
-    float sharpnessThreshold_ = 3.0f;     // Min sharpness ratio (calibrated Feb 2026)
+    float sharpnessThreshold_ = 2.0f;     // Min sharpness ratio (lowered for EDM: room acoustics smear bass)
 
     // Compute bass flux
     float computeBassFlux(const float* magnitudes, int numBins) const;

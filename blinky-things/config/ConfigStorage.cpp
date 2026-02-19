@@ -234,6 +234,7 @@ bool ConfigStorage::loadFromFlash() {
     // Minimum bytes required to read magic + both version fields + device config.
     // Device config lives immediately after the 4-byte header and must be fully
     // present for recovery to make sense.
+    // cppcheck-suppress unreadVariable
     static const uint32_t MIN_DEVICE_BYTES =
         sizeof(uint16_t) +              // magic
         sizeof(uint8_t) +               // deviceVersion
@@ -287,6 +288,7 @@ bool ConfigStorage::loadFromFlash() {
     // Settings are only valid if both the version matches AND the file was large
     // enough to contain the full settings structs (i.e. not written by an older
     // firmware with a smaller ConfigData).
+    // cppcheck-suppress unsignedLessThanZero
     if (temp.settingsVersion == SETTINGS_VERSION && bytesRead >= sizeof(ConfigData)) {
         // Settings version matches and file is the right size - preserve all settings
         memcpy(&data_.fire, &temp.fire, sizeof(StoredFireParams));

@@ -22,6 +22,8 @@ export interface AudioSample {
   // Debug fields (only present in debug stream mode)
   avg?: number;   // Recent average level (for threshold calculation)
   prev?: number;  // Previous frame level (for attack detection)
+  agree?: number; // Detector agreement count (0-6, how many detectors fired)
+  conf?: number;  // Ensemble confidence (0-1, combined confidence score)
 }
 
 export interface MusicModeState {

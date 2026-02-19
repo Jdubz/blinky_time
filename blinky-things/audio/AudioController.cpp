@@ -532,7 +532,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Problem: Autocorrelation produces peaks at both fundamental and harmonics.
     // At 60 BPM (lag L), there's also a peak at 120 BPM (lag L/2).
     // At 180 BPM (lag L), there's also a peak at 90 BPM (lag 2L).
-    // Solution: Check if the strongest peak has a related peak at 2x lag (half BPM).
+    // Solution: Check if the strongest peak has a related peak at 2x, 3x, or 4x lag.
     // CRITICAL: Only prefer slower tempo if tempo prior ALSO supports it.
     // Otherwise, the tempo prior should be the deciding factor.
     if (numPeaks >= 2 && tempoPriorEnabled) {
@@ -540,59 +540,59 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         float strongestCorr = peaks[0].normCorrelation;
         float strongestBpm = 60000.0f / (static_cast<float>(strongestLag) / samplesPerMs);
 
-        // Look for a peak at approximately 2x lag (half tempo = fundamental)
-        int targetLag = strongestLag * 2;
         constexpr float lagTolerance = 0.08f;  // Allow 8% tolerance for timing jitter
+        constexpr float fundamentalThreshold = 0.60f;
+        bool disambiguated = false;
 
-        for (int i = 1; i < numPeaks; i++) {
-            float lagRatio = static_cast<float>(peaks[i].lag) / static_cast<float>(targetLag);
+        // Check 2x, 3x, and 4x lag multiples (half, third, quarter tempo)
+        for (int mult = 2; mult <= 4 && !disambiguated; mult++) {
+            int targetLag = strongestLag * mult;
 
-            // Check if this peak is near 2x lag (half tempo)
-            if (lagRatio > (1.0f - lagTolerance) && lagRatio < (1.0f + lagTolerance)) {
-                // Found a candidate fundamental (slower tempo)
-                float candidateBpm = 60000.0f / (static_cast<float>(peaks[i].lag) / samplesPerMs);
+            for (int i = 1; i < numPeaks; i++) {
+                float lagRatio = static_cast<float>(peaks[i].lag) / static_cast<float>(targetLag);
 
-                // Only prefer slower tempo if:
-                // 1. It's strong enough (>60% of harmonic peak)
-                // 2. Tempo prior favors the slower tempo over the faster one
-                constexpr float fundamentalThreshold = 0.60f;
-                float priorFaster = computeTempoPrior(strongestBpm);
-                float priorSlower = computeTempoPrior(candidateBpm);
+                // Check if this peak is near Nx lag (1/N tempo = potential fundamental)
+                if (lagRatio > (1.0f - lagTolerance) && lagRatio < (1.0f + lagTolerance)) {
+                    // Found a candidate fundamental (slower tempo)
+                    float candidateBpm = 60000.0f / (static_cast<float>(peaks[i].lag) / samplesPerMs);
 
-                // Skip if tempo prior favors the faster tempo
-                if (priorFaster > priorSlower * 1.1f) {
-                    // Tempo prior strongly favors faster tempo - don't switch
-                    if (shouldPrintDebug) {
-                        Serial.print(F("{\"type\":\"HARMONIC_SKIP\",\"fast\":"));
-                        Serial.print(strongestBpm, 1);
-                        Serial.print(F(",\"slow\":"));
-                        Serial.print(candidateBpm, 1);
-                        Serial.print(F(",\"priorFast\":"));
-                        Serial.print(priorFaster, 3);
-                        Serial.print(F(",\"priorSlow\":"));
-                        Serial.print(priorSlower, 3);
-                        Serial.println(F("}"));
+                    // Only promote slower tempo if tempo prior actually favors it
+                    float priorFaster = computeTempoPrior(strongestBpm);
+                    float priorSlower = computeTempoPrior(candidateBpm);
+
+                    // Skip promoting slower tempo unless prior supports it
+                    // This prevents half-time locking (e.g. 160→80 BPM) when prior is neutral
+                    if (priorSlower < priorFaster * 0.95f) {
+                        if (shouldPrintDebug) {
+                            Serial.print(F("{\"type\":\"HARMONIC_SKIP\",\"fast\":"));
+                            Serial.print(strongestBpm, 1);
+                            Serial.print(F(",\"slow\":"));
+                            Serial.print(candidateBpm, 1);
+                            Serial.print(F(",\"mult\":"));
+                            Serial.print(mult);
+                            Serial.println(F("}"));
+                        }
+                        break;
                     }
-                    break;
-                }
 
-                if (peaks[i].normCorrelation > strongestCorr * fundamentalThreshold) {
-                    // Swap: promote the fundamental to position 0
-                    AutocorrPeak temp = peaks[0];
-                    peaks[0] = peaks[i];
-                    peaks[i] = temp;
+                    if (peaks[i].normCorrelation > strongestCorr * fundamentalThreshold) {
+                        // Swap: promote the fundamental to position 0
+                        AutocorrPeak temp = peaks[0];
+                        peaks[0] = peaks[i];
+                        peaks[i] = temp;
 
-                    // Debug output for harmonic disambiguation
-                    if (shouldPrintDebug) {
-                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"from\":"));
-                        Serial.print(strongestBpm, 1);
-                        Serial.print(F(",\"to\":"));
-                        Serial.print(candidateBpm, 1);
-                        Serial.print(F(",\"ratio\":"));
-                        Serial.print(peaks[i].normCorrelation / strongestCorr, 3);
-                        Serial.println(F("}"));
+                        if (shouldPrintDebug) {
+                            Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"from\":"));
+                            Serial.print(strongestBpm, 1);
+                            Serial.print(F(",\"to\":"));
+                            Serial.print(candidateBpm, 1);
+                            Serial.print(F(",\"mult\":"));
+                            Serial.print(mult);
+                            Serial.println(F("}"));
+                        }
+                        disambiguated = true;
+                        break;
                     }
-                    break;  // Only consider first harmonic match
                 }
             }
         }
@@ -646,8 +646,10 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             // Create new hypothesis if:
             // 1. Peak meets strength threshold, OR
             // 2. This is the first peak and NO hypotheses are active (ensures primary gets initialized)
+            // Initialize phase from Fourier measurement if confidence is sufficient
+            float initPhase = (pulseTrainConfidence_ > 0.3f) ? pulseTrainPhase_ : 0.0f;
             multiHypothesis_.createHypothesis(bpm, peaks[i].normCorrelation, nowMs,
-                                              peaks[i].lag, peaks[i].correlation);
+                                              peaks[i].lag, peaks[i].correlation, initPhase);
         }
     }
 
@@ -675,6 +677,16 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         // Formula: BPM = 60000ms/min / (lag_samples / samplesPerMs) = 60000 * samplesPerMs / lag
         float newBpm = 60000.0f * samplesPerMs / static_cast<float>(bestLag);
         newBpm = clampf(newBpm, bpmMin, bpmMax);
+
+        // Tempo rate limiting: prevent rapid jumps during active tracking
+        // Only apply rate limiting when we have established tracking (strength > activation)
+        if (periodicityStrength_ > activationThreshold && bpm_ > 1.0f) {
+            float maxChange = bpm_ * (maxBpmChangePerSec / 100.0f) * (autocorrPeriodMs / 1000.0f);
+            if (maxChange < 1.0f) maxChange = 1.0f;  // Minimum 1 BPM change allowed
+            float bpmDiff = newBpm - bpm_;
+            if (bpmDiff > maxChange) newBpm = bpm_ + maxChange;
+            else if (bpmDiff < -maxChange) newBpm = bpm_ - maxChange;
+        }
 
         // Smooth BPM changes
         bpm_ = bpm_ * 0.8f + newBpm * 0.2f;
@@ -723,11 +735,18 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             // Only consider valid if confidence is strong
             // The Fourier method uses the entire OSS buffer, so it needs
             // strong periodicity to produce reliable phase estimates.
-            // For weak periodicity (sustained content), fall back to peak-finding.
-            // Threshold of 0.45 based on testing: balances tempo-sweep improvement
-            // with sustained content rejection.
+            // For weak periodicity (sustained content), fall back to peak-finding
+            // UNLESS we're in active tracking mode (phaseHoldStrength), where
+            // we maintain the current phase by prediction rather than resetting.
             if (pulseTrainConfidence_ > 0.45f) {
                 pulsePhaseValid = true;
+            } else if (periodicityStrength_ > phaseHoldStrength) {
+                // During active tracking with low Fourier confidence,
+                // maintain current phase from prediction rather than
+                // resetting. This prevents phase jumps during breakdowns
+                // and non-percussive sections.
+                pulsePhaseValid = false;  // Don't use unreliable Fourier phase
+                // peakPhaseValid may still be set - that's fine
             }
         }
 
@@ -737,7 +756,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
 
         // Adjust weight based on validity
         if (!pulsePhaseValid && !peakPhaseValid) {
-            // Neither method produced valid result - keep current phase
+            // Neither method produced valid result - maintain current phase
+            // During active tracking, this allows phase to continue from prediction
             newTargetPhase = targetPhase_;
         } else if (!pulsePhaseValid) {
             // Only peak-finding is valid
@@ -1102,7 +1122,7 @@ float TempoHypothesis::computeConfidence(float strengthWeight, float consistency
 // MultiHypothesisTracker Implementation
 // ============================================================================
 
-int MultiHypothesisTracker::createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation) {
+int MultiHypothesisTracker::createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation, float initialPhase) {
     int slot = findBestSlot();
     if (slot < 0) return -1;  // No slot available (shouldn't happen)
 
@@ -1113,7 +1133,7 @@ int MultiHypothesisTracker::createHypothesis(float bpm, float strength, uint32_t
     TempoHypothesis& hypo = hypotheses[slot];
     hypo.bpm = bpm;
     hypo.beatPeriodMs = 60000.0f / bpm;
-    hypo.phase = 0.0f;
+    hypo.phase = initialPhase;  // Initialize from Fourier phase when available
     hypo.strength = strength;
     hypo.confidence = strength;  // Initial confidence = strength
     hypo.avgPhaseError = 0.5f;  // Neutral value - prevents over-confidence in new hypotheses

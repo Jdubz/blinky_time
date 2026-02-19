@@ -77,7 +77,7 @@ void Fire::reset() {
 }
 
 void Fire::spawnParticles(float dt) {
-    float spawnProb = params_.baseSpawnChance;
+    float spawnProb;
     uint8_t sparkCount = 0;
 
     // MUSIC-DRIVEN behavior (rhythmStrength weighted)

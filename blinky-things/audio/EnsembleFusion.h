@@ -156,7 +156,7 @@ public:
     uint16_t cooldownMs = 250;  // Calibrated Feb 2026: 250ms reduces rapid-fire false positives
 
     // Minimum confidence threshold (detectors below this are ignored)
-    float minConfidence = 0.55f;  // Calibrated Feb 2026: 0.55 filters weak detections
+    float minConfidence = 0.40f;  // Lowered for EDM: bass detections often have lower confidence
 
     // Minimum audio level for noise gate (suppress detections in silence)
     float minAudioLevel = 0.025f;  // Calibrated Feb 2026: 2.5% level (noise gate)
@@ -192,11 +192,12 @@ private:
 namespace FusionDefaults {
     // Detector weights (Feb 2026)
     // Only enabled detectors are called; disabled ones use zero CPU.
+    // Rebalanced for EDM: BassBand promoted (sub-bass kicks), HFC demoted (hi-hats only)
     constexpr float WEIGHTS[] = {
-        0.40f,  // DRUMMER - amplitude transients (calibrated Feb 2026)
+        0.35f,  // DRUMMER - amplitude transients (time-domain, catches all frequencies)
         0.20f,  // SPECTRAL_FLUX - mel-band SuperFlux (disabled, needs tuning)
-        0.60f,  // HFC - percussive attack detection (calibrated Feb 2026)
-        0.18f,  // BASS_BAND - disabled, environmental noise issues
+        0.20f,  // HFC - percussive attack detection (demoted: 2-8kHz misses EDM kicks)
+        0.45f,  // BASS_BAND - sub-bass kick detection (promoted: primary EDM detector)
         0.13f,  // COMPLEX_DOMAIN - disabled, needs tuning after phase fix
         0.12f   // NOVELTY - cosine distance spectral novelty (disabled, needs tuning)
     };
@@ -213,11 +214,12 @@ namespace FusionDefaults {
     };
 
     // Agreement boost values (updated Feb 2026 for 3-detector config)
+    // Relaxed for EDM: single-detector hits less suppressed, 2-detector near full strength
     // [0] = 0 detectors, [1] = 1 detector, ..., [6] = 6 detectors
     constexpr float AGREEMENT_BOOSTS[] = {
         0.0f,   // 0: No detection
-        0.3f,   // 1: Single detector - suppress but allow strong hits
-        0.75f,  // 2: Two detectors - moderate agreement (Drummer+HFC or Drummer+Bass)
+        0.5f,   // 1: Single detector - less suppression (EDM kicks may only hit BassBand)
+        0.9f,   // 2: Two detectors - near full strength (BassBand+Drummer typical for EDM)
         1.0f,   // 3: Three detectors - full consensus (all three agree)
         1.1f,   // 4: Four detectors - strong consensus
         1.15f,  // 5: Five detectors - very strong
@@ -230,7 +232,7 @@ namespace FusionDefaults {
         3.5f,   // DRUMMER: amplitude ratio vs average (calibrated Feb 2026)
         1.4f,   // SPECTRAL_FLUX: flux vs local median
         4.0f,   // HFC: high-freq content vs average (calibrated Feb 2026)
-        4.0f,   // BASS_BAND: bass flux vs average (tunable via serial)
+        3.0f,   // BASS_BAND: bass flux vs average (lowered: room acoustics smear bass)
         2.0f,   // COMPLEX_DOMAIN: phase deviation threshold
         2.5f    // NOVELTY: cosine distance vs local median
     };

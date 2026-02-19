@@ -323,11 +323,19 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("tempochgthresh", &audioCtrl_->tempoChangeThreshold, "tempo",
         "Tempo change threshold", 0.01f, 0.5f);
 
+    // Tempo rate limiting
+    settings_.registerFloat("maxbpmchg", &audioCtrl_->maxBpmChangePerSec, "tempo",
+        "Max BPM change per sec (%)", 1.0f, 20.0f);
+
     // Transient-based phase correction (PLL)
     settings_.registerFloat("transcorrrate", &audioCtrl_->transientCorrectionRate, "phasecorr",
         "Transient phase correction rate", 0.0f, 1.0f);
     settings_.registerFloat("transcorrmin", &audioCtrl_->transientCorrectionMin, "phasecorr",
         "Min transient strength for correction", 0.0f, 1.0f);
+
+    // Phase stability
+    settings_.registerFloat("phasehold", &audioCtrl_->phaseHoldStrength, "phasecorr",
+        "Strength threshold to hold phase", 0.1f, 0.6f);
 
     // Multi-hypothesis tracker parameters
     MultiHypothesisTracker& mh = audioCtrl_->getMultiHypothesis();
@@ -642,7 +650,7 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             const AudioControl& audio = audioCtrl_->getControl();
             Serial.println(F("=== Audio Controller Status ==="));
             Serial.print(F("Rhythm Active: "));
-            Serial.println(audio.rhythmStrength > 0.5f ? F("YES") : F("NO"));
+            Serial.println(audio.rhythmStrength > audioCtrl_->activationThreshold ? F("YES") : F("NO"));
             Serial.print(F("BPM: "));
             Serial.println(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F("Phase: "));
@@ -1259,11 +1267,19 @@ void SerialConsole::registerAudioVisSettings(AudioParams* ap) {
     settings_.registerFloat("levelsmooth", &ap->levelSmoothing, "audiovis",
         "Energy level smoothing factor", 0.0f, 0.99f, onParamChanged);
 
-    // Phase visualization (blue row)
+    // Phase visualization (blue row, full height)
     settings_.registerUint8("phasebright", &ap->phaseBrightness, "audiovis",
         "Phase row maximum brightness", 0, 255, onParamChanged);
     settings_.registerFloat("musicmodethresh", &ap->musicModeThreshold, "audiovis",
         "Rhythm confidence threshold for phase display", 0.0f, 1.0f, onParamChanged);
+
+    // Beat pulse (blue center band on beat)
+    settings_.registerUint8("beatpulsebright", &ap->beatPulseBrightness, "audiovis",
+        "Beat pulse band max brightness", 0, 255, onParamChanged);
+    settings_.registerFloat("beatpulsedecay", &ap->beatPulseDecay, "audiovis",
+        "Beat pulse decay rate per frame", 0.01f, 0.5f, onParamChanged);
+    settings_.registerFloat("beatpulsewidth", &ap->beatPulseWidth, "audiovis",
+        "Beat pulse band width as fraction of height", 0.05f, 0.5f, onParamChanged);
 
     // Background
     settings_.registerUint8("bgbright", &ap->backgroundBrightness, "audiovis",
@@ -1377,11 +1393,11 @@ void SerialConsole::streamTick() {
             // Detect beat events via phase wrapping (>0.8 → <0.2)
             static float lastStreamPhase = 0.0f;
             float currentPhase = audio.phase;
-            int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > 0.5f) ? 1 : 0;
+            int beatEvent = (lastStreamPhase > 0.8f && currentPhase < 0.2f && audio.rhythmStrength > audioCtrl_->activationThreshold) ? 1 : 0;
             lastStreamPhase = currentPhase;
 
             Serial.print(F(",\"m\":{\"a\":"));
-            Serial.print(audio.rhythmStrength > 0.5f ? 1 : 0);
+            Serial.print(audio.rhythmStrength > audioCtrl_->activationThreshold ? 1 : 0);
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"ph\":"));

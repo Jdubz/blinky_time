@@ -70,7 +70,7 @@ void Water::reset() {
 }
 
 void Water::spawnParticles(float dt) {
-    float spawnProb = params_.baseSpawnChance;
+    float spawnProb;
     uint8_t dropCount = 0;
 
     // MUSIC-DRIVEN behavior (rhythmStrength weighted)

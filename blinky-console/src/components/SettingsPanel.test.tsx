@@ -124,10 +124,10 @@ describe('SettingsPanel', () => {
       expect(checkboxes.length).toBe(1); // enabled
     });
 
-    it('renders numeric settings as sliders', () => {
+    it('renders numeric settings as number inputs', () => {
       render(<SettingsPanel {...defaultProps} />);
-      const sliders = screen.getAllByRole('slider');
-      expect(sliders.length).toBe(3); // intensity, speed, agcattack
+      const inputs = screen.getAllByRole('spinbutton');
+      expect(inputs.length).toBe(3); // intensity, speed, agcattack
     });
 
     it('displays setting names', () => {
@@ -141,13 +141,13 @@ describe('SettingsPanel', () => {
 
     it('displays current values for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
-      expect(screen.getByText('0.75')).toBeInTheDocument();
-      expect(screen.getByText('0.10')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('0.75')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('0.1')).toBeInTheDocument();
     });
 
     it('displays current values for integer settings', () => {
       render(<SettingsPanel {...defaultProps} />);
-      expect(screen.getByText('100')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('100')).toBeInTheDocument();
     });
   });
 
@@ -166,40 +166,40 @@ describe('SettingsPanel', () => {
       expect(onSettingChange).toHaveBeenCalledWith('enabled', false);
     });
 
-    it('calls onSettingChange when slider is changed', async () => {
+    it('calls onSettingChange when number input is changed', async () => {
       vi.useFakeTimers();
       const onSettingChange = vi.fn();
       render(<SettingsPanel {...defaultProps} onSettingChange={onSettingChange} />);
 
-      const sliders = screen.getAllByRole('slider');
-      fireEvent.change(sliders[0], { target: { value: '0.5' } });
+      const inputs = screen.getAllByRole('spinbutton');
+      fireEvent.change(inputs[0], { target: { value: '0.5' } });
 
       // Advance timers for debounce
       await vi.advanceTimersByTimeAsync(150);
 
-      // sliders[0] is now agcattack due to category reordering (audio → agc → fire)
+      // inputs[0] is now agcattack due to category reordering (audio → agc → fire)
       expect(onSettingChange).toHaveBeenCalledWith('agcattack', 0.5);
     });
 
-    it('debounces rapid slider changes', async () => {
+    it('debounces rapid input changes', async () => {
       vi.useFakeTimers();
       const onSettingChange = vi.fn();
       render(<SettingsPanel {...defaultProps} onSettingChange={onSettingChange} />);
 
-      const sliders = screen.getAllByRole('slider');
+      const inputs = screen.getAllByRole('spinbutton');
 
       // Rapid changes
-      fireEvent.change(sliders[0], { target: { value: '0.1' } });
-      fireEvent.change(sliders[0], { target: { value: '0.2' } });
-      fireEvent.change(sliders[0], { target: { value: '0.3' } });
-      fireEvent.change(sliders[0], { target: { value: '0.4' } });
+      fireEvent.change(inputs[0], { target: { value: '0.1' } });
+      fireEvent.change(inputs[0], { target: { value: '0.2' } });
+      fireEvent.change(inputs[0], { target: { value: '0.3' } });
+      fireEvent.change(inputs[0], { target: { value: '0.4' } });
 
       // Advance timers for debounce
       await vi.advanceTimersByTimeAsync(150);
 
       // Should only call once with the final value
       expect(onSettingChange).toHaveBeenCalledTimes(1);
-      // sliders[0] is now agcattack due to category reordering (audio → agc → fire)
+      // inputs[0] is now agcattack due to category reordering (audio → agc → fire)
       expect(onSettingChange).toHaveBeenCalledWith('agcattack', 0.4);
     });
 
@@ -207,48 +207,48 @@ describe('SettingsPanel', () => {
       render(<SettingsPanel {...defaultProps} disabled={true} />);
 
       const checkboxes = screen.getAllByRole('checkbox');
-      const sliders = screen.getAllByRole('slider');
+      const inputs = screen.getAllByRole('spinbutton');
 
       checkboxes.forEach(checkbox => {
         expect(checkbox).toBeDisabled();
       });
 
-      sliders.forEach(slider => {
-        expect(slider).toBeDisabled();
+      inputs.forEach(input => {
+        expect(input).toBeDisabled();
       });
     });
   });
 
-  describe('slider configuration', () => {
-    it('sets correct min/max for sliders', () => {
+  describe('number input configuration', () => {
+    it('sets correct min/max for number inputs', () => {
       render(<SettingsPanel {...defaultProps} />);
 
-      const sliders = screen.getAllByRole('slider');
-      // sliders[0] is now agcattack due to category reordering (audio → agc → fire)
-      const agcattackSlider = sliders[0];
+      const inputs = screen.getAllByRole('spinbutton');
+      // inputs[0] is agcattack due to category reordering (audio → agc → fire)
+      const agcattackInput = inputs[0];
 
-      expect(agcattackSlider).toHaveAttribute('min', '0.01');
-      expect(agcattackSlider).toHaveAttribute('max', '5');
+      expect(agcattackInput).toHaveAttribute('min', '0.01');
+      expect(agcattackInput).toHaveAttribute('max', '5');
     });
 
     it('uses correct step for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
-      const sliders = screen.getAllByRole('slider');
-      // sliders[0] is agcattack (float type)
-      const agcattackSlider = sliders[0];
+      const inputs = screen.getAllByRole('spinbutton');
+      // inputs[0] is agcattack (float type)
+      const agcattackInput = inputs[0];
 
-      expect(agcattackSlider).toHaveAttribute('step', '0.01');
+      expect(agcattackInput).toHaveAttribute('step', '0.01');
     });
 
     it('uses correct step for integer settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
-      const sliders = screen.getAllByRole('slider');
-      // sliders[2] is speed (uint8 type) due to category reordering (audio → agc → fire)
-      const speedSlider = sliders[2];
+      const inputs = screen.getAllByRole('spinbutton');
+      // inputs[2] is speed (uint8 type) due to category reordering (audio → agc → fire)
+      const speedInput = inputs[2];
 
-      expect(speedSlider).toHaveAttribute('step', '1');
+      expect(speedInput).toHaveAttribute('step', '1');
     });
   });
 });
