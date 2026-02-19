@@ -151,3 +151,9 @@ local-config/
 *.db
 *.sqlite
 *.sqlite3
+
+# Ballroom dataset (1.4GB raw audio - download via scripts/download-ballroom.py)
+blinky-test-player/music/*.tar.gz
+blinky-test-player/music/ballroom/
+blinky-test-player/music/BallroomAnnotations/
+blinky-test-player/music/mirdata/

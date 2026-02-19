@@ -1,0 +1,210 @@
+{
+  "pattern": "synthetic-120bpm",
+  "durationMs": 15000,
+  "bpm": 117.5,
+  "hits": [
+    {
+      "time": 0.5108,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.9,
+      "expectTrigger": true
+    },
+    {
+      "time": 1.0217,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.787,
+      "expectTrigger": true
+    },
+    {
+      "time": 1.5325,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.5,
+      "expectTrigger": true
+    },
+    {
+      "time": 2.0201,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.788,
+      "expectTrigger": true
+    },
+    {
+      "time": 2.531,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.9,
+      "expectTrigger": true
+    },
+    {
+      "time": 3.0186,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.73,
+      "expectTrigger": true
+    },
+    {
+      "time": 3.5294,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.593,
+      "expectTrigger": true
+    },
+    {
+      "time": 4.0171,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.698,
+      "expectTrigger": true
+    },
+    {
+      "time": 4.5279,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.9,
+      "expectTrigger": true
+    },
+    {
+      "time": 5.0155,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.668,
+      "expectTrigger": true
+    },
+    {
+      "time": 5.5263,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.839,
+      "expectTrigger": true
+    },
+    {
+      "time": 6.014,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.655,
+      "expectTrigger": true
+    },
+    {
+      "time": 6.5248,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 1.0,
+      "expectTrigger": true
+    },
+    {
+      "time": 7.0124,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.597,
+      "expectTrigger": true
+    },
+    {
+      "time": 7.5233,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.813,
+      "expectTrigger": true
+    },
+    {
+      "time": 8.0109,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.519,
+      "expectTrigger": true
+    },
+    {
+      "time": 8.5217,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.946,
+      "expectTrigger": true
+    },
+    {
+      "time": 9.0326,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.5,
+      "expectTrigger": true
+    },
+    {
+      "time": 9.5202,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.785,
+      "expectTrigger": true
+    },
+    {
+      "time": 10.031,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.562,
+      "expectTrigger": true
+    },
+    {
+      "time": 10.5186,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.903,
+      "expectTrigger": true
+    },
+    {
+      "time": 11.0295,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.611,
+      "expectTrigger": true
+    },
+    {
+      "time": 11.5171,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.73,
+      "expectTrigger": true
+    },
+    {
+      "time": 12.0279,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.745,
+      "expectTrigger": true
+    },
+    {
+      "time": 12.5156,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.9,
+      "expectTrigger": true
+    },
+    {
+      "time": 13.0264,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.827,
+      "expectTrigger": true
+    },
+    {
+      "time": 13.514,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.646,
+      "expectTrigger": true
+    },
+    {
+      "time": 14.0249,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.849,
+      "expectTrigger": true
+    },
+    {
+      "time": 14.5125,
+      "type": "low",
+      "instrument": "beat",
+      "strength": 0.9,
+      "expectTrigger": true
+    }
+  ]
+}
