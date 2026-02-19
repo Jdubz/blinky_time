@@ -105,8 +105,8 @@ public:
      * Set unified ensemble cooldown period
      * @param ms Cooldown period in milliseconds (default 250ms)
      */
-    void setCooldownMs(uint16_t ms) { cooldownMs_ = ms; }
-    uint16_t getCooldownMs() const { return cooldownMs_; }
+    void setCooldownMs(uint16_t ms) { cooldownMs = ms; }
+    uint16_t getCooldownMs() const { return cooldownMs; }
 
     /**
      * Set tempo hint for adaptive cooldown (called by AudioController)
@@ -138,16 +138,16 @@ public:
      * Detectors with confidence below this are ignored in fusion
      * @param threshold Minimum confidence (0.0-1.0, default 0.55)
      */
-    void setMinConfidence(float threshold) { minConfidence_ = threshold; }
-    float getMinConfidence() const { return minConfidence_; }
+    void setMinConfidence(float threshold) { minConfidence = threshold; }
+    float getMinConfidence() const { return minConfidence; }
 
     /**
      * Set minimum audio level for noise gate
      * Detections are suppressed when audio level is below this threshold
      * @param level Minimum level (0.0-1.0, default 0.02 = 2%)
      */
-    void setMinAudioLevel(float level) { minAudioLevel_ = level; }
-    float getMinAudioLevel() const { return minAudioLevel_; }
+    void setMinAudioLevel(float level) { minAudioLevel = level; }
+    float getMinAudioLevel() const { return minAudioLevel; }
 
     // === PUBLIC TUNING PARAMETERS (for SettingsRegistry) ===
     // These are exposed for real-time serial tuning via unified set/get interface
@@ -178,10 +178,6 @@ private:
     static constexpr uint16_t MIN_COOLDOWN_MS = 40;   // Absolute minimum cooldown
     static constexpr uint16_t MAX_COOLDOWN_MS = 150;  // Maximum cooldown (slower tempos)
 
-    // Legacy private aliases (for backward compatibility with setter methods)
-    uint16_t& cooldownMs_ = cooldownMs;
-    float& minConfidence_ = minConfidence;
-    float& minAudioLevel_ = minAudioLevel;
 };
 
 // --- Default calibrated values (January 2026) ---

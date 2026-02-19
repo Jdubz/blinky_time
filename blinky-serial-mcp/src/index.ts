@@ -680,10 +680,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         transientBuffer = [];
         audioSampleBuffer = [];
 
-        // Calculate basic stats
-        const lowCount = detections.filter(d => d.type === 'low').length;
-        const highCount = detections.filter(d => d.type === 'high').length;
-
         return {
           content: [
             {
@@ -692,8 +688,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 success: true,
                 durationMs: duration,
                 totalDetections: detections.length,
-                lowDetections: lowCount,
-                highDetections: highCount,
                 detections,
                 audioSamples,
               }, null, 2),
@@ -1271,9 +1265,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           })).filter(b => b.timestampMs >= 0);
         }
 
-        // Calculate stats
-        const lowCount = detections.filter(d => d.type === 'low').length;
-        const highCount = detections.filter(d => d.type === 'high').length;
         const duration = groundTruth.durationMs || rawDuration;
 
         // Calculate F1/precision/recall metrics
@@ -1551,8 +1542,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             expected: onsetEvents.length,  // Distinct onset events (grouped simultaneous hits)
             rawHits: expectedHits.length,  // Raw instrument hits before grouping
             detected: detections.length,
-            low: lowCount,
-            high: highCount,
           },
           detailsFile: detailsFilename,
         };

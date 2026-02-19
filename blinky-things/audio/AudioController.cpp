@@ -198,7 +198,7 @@ const AudioControl& AudioController::update(float dt) {
     bool hasSignificantAudio = (onsetStrength > SIGNIFICANT_AUDIO_THRESHOLD ||
                                  mic_.getLevel() > SIGNIFICANT_AUDIO_THRESHOLD);
 
-    // 3. Add sample to onset strength buffer with timestamp
+    // 5. Add sample to onset strength buffer with timestamp
     // Only add significant audio to avoid filling buffer with noise patterns
     if (hasSignificantAudio) {
         lastSignificantAudioMs_ = nowMs;
@@ -208,13 +208,13 @@ const AudioControl& AudioController::update(float dt) {
         addOssSample(0.0f, nowMs);
     }
 
-    // 4. Run autocorrelation periodically (tunable period, default 500ms)
+    // 6. Run autocorrelation periodically (tunable period, default 500ms)
     if (nowMs - lastAutocorrMs_ >= autocorrPeriodMs) {
         runAutocorrelation(nowMs);
         lastAutocorrMs_ = nowMs;
     }
 
-    // 4b. Update comb filter phase tracker (runs every frame)
+    // 6b. Update comb filter phase tracker (runs every frame)
     //     Provides independent phase estimate that can be fused with autocorrelation
     if (combFilterWeight > 0.0f) {
         // Update comb filter parameters
@@ -223,7 +223,7 @@ const AudioControl& AudioController::update(float dt) {
         combFilter_.process(onsetStrength);
     }
 
-    // 4c. Update comb filter bank (independent tempo validation)
+    // 6c. Update comb filter bank (independent tempo validation)
     //     Provides tempo validation without depending on autocorrelation
     //     Does NOT use tempo prior - that's applied in autocorrelation only
     if (combBankEnabled) {
@@ -258,20 +258,20 @@ const AudioControl& AudioController::update(float dt) {
         }
     }
 
-    // 5. Update transient-based phase correction (PLL)
+    // 7. Update transient-based phase correction (PLL)
     //    When transients are detected, use them to nudge phase toward actual beat timing
     updateTransientPhaseCorrection(lastEnsembleOutput_.transientStrength, nowMs);
 
-    // 6. Update phase tracking
+    // 8. Update phase tracking
     updatePhase(dt, nowMs);
 
-    // 6b. Fuse rhythm estimates from multiple systems
+    // 8b. Fuse rhythm estimates from multiple systems
     //     Combines autocorrelation, Fourier phase, and comb filter with confidence weighting
     if (fusionEnabled) {
         fuseRhythmEstimates();
     }
 
-    // 7. Synthesize output
+    // 9. Synthesize output
     synthesizeEnergy();
     synthesizePulse();
     synthesizePhase();
@@ -1055,8 +1055,8 @@ void TempoHypothesis::updatePhase(float dt) {
     if (phase >= 1.0f && beatCount < 65535) {
         // Count how many complete beats occurred (usually 1, but could be >1 if dt is large)
         uint16_t beatsElapsed = static_cast<uint16_t>(phase);  // Integer part
-        beatCount += beatsElapsed;
-        if (beatCount > 65535) beatCount = 65535;  // Clamp to max
+        uint32_t newCount = static_cast<uint32_t>(beatCount) + beatsElapsed;
+        beatCount = (newCount > 65535u) ? static_cast<uint16_t>(65535u) : static_cast<uint16_t>(newCount);
     }
 
     // Wrap phase to [0, 1)
@@ -1592,7 +1592,8 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
     // Apply log compression for dynamic range
     // Maps flux to 0-1 range with soft knee at low values
     // log(1 + x*10) / log(11) maps [0, 1] -> [0, 1] with compression
-    float compressed = logf(1.0f + flux * 10.0f) / logf(11.0f);
+    static const float invLog11 = 1.0f / logf(11.0f);
+    float compressed = logf(1.0f + flux * 10.0f) * invLog11;
 
     return compressed;
 }
@@ -2349,17 +2350,26 @@ void CombFilterBank::extractPhase() {
     float imagSum = 0.0f;
     static constexpr float COMB_TWO_PI = 6.283185307f;
 
+    // Use phasor rotation to avoid per-sample cosf/sinf calls
+    // Initialize phasor at angle=0 (cos=1, sin=0) and rotate by -2π·ω each step
+    float phaseStep = -COMB_TWO_PI * omega;
+    float phasorReal = 1.0f;  // cos(0)
+    float phasorImag = 0.0f;  // sin(0)
+    float rotReal = cosf(phaseStep);
+    float rotImag = sinf(phaseStep);
+
     for (int i = 0; i < lag; i++) {
         int idx = (historyIdx_ - 1 - i + MAX_LAG) % MAX_LAG;
-        float t = static_cast<float>(i);
-        float angle = -COMB_TWO_PI * omega * t;
+        float sample = resonatorHistory_[idx];
 
-        // Use fast approximations for sin/cos if available
-        float c = cosf(angle);
-        float s = sinf(angle);
+        realSum += sample * phasorReal;
+        imagSum += sample * phasorImag;
 
-        realSum += resonatorHistory_[idx] * c;
-        imagSum += resonatorHistory_[idx] * s;
+        // Rotate phasor: (pR + j·pI) * (rR + j·rI)
+        float newReal = phasorReal * rotReal - phasorImag * rotImag;
+        float newImag = phasorReal * rotImag + phasorImag * rotReal;
+        phasorReal = newReal;
+        phasorImag = newImag;
     }
 
     // Compute phase from complex sum

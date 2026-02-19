@@ -69,7 +69,7 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
     // === NOISE GATE ===
     // Suppress all detections when audio level is below threshold (silence)
     // This prevents false positives from electrical noise in quiet environments
-    if (audioLevel < minAudioLevel_) {
+    if (audioLevel < minAudioLevel) {
         output.transientStrength = 0.0f;
         output.ensembleConfidence = 0.0f;
         output.detectorAgreement = 0;
@@ -93,7 +93,7 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
 
         if (result.detected) {
             // Apply confidence threshold - ignore low-confidence detections
-            if (result.confidence < minConfidence_) {
+            if (result.confidence < minConfidence) {
                 continue;  // Skip this detector, confidence too low
             }
 
@@ -180,7 +180,7 @@ void EnsembleFusion::setTempoHint(float bpm) {
 uint16_t EnsembleFusion::getEffectiveCooldownMs() const {
     // If adaptive cooldown disabled or no tempo hint, use fixed cooldown
     if (!adaptiveCooldownEnabled_ || tempoHintBpm_ < 30.0f) {
-        return cooldownMs_;
+        return cooldownMs;
     }
 
     // Calculate beat period in ms
@@ -201,5 +201,5 @@ uint16_t EnsembleFusion::getEffectiveCooldownMs() const {
 
     // Use the smaller of base cooldown and adaptive cooldown
     // (never make cooldown longer than configured base)
-    return (adaptiveCooldown < cooldownMs_) ? adaptiveCooldown : cooldownMs_;
+    return (adaptiveCooldown < cooldownMs) ? adaptiveCooldown : cooldownMs;
 }
