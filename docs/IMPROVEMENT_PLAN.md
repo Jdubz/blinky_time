@@ -38,30 +38,31 @@
 
 ## Outstanding Issues
 
-### Priority 1: False Positive Reduction
+### Priority 1: CBSS Beat Detection Overhaul
 
-Current detector config: **Drummer (0.40) + HFC (0.60) + BassBand (0.18)**, cooldown=250ms, minconf=0.55
+CBSS beat tracking is fundamentally broken on real music (Beat F1 = 0.10–0.32 across EDM tracks) despite excellent BPM estimation (97–99% accuracy). See detailed findings in `blinky-test-player/PARAMETER_TUNING_HISTORY.md` (Feb 2026 session).
+
+**Root cause:** The "first declining CBSS frame" peak detector within the beat window is too fragile — spectral flux has many micro-fluctuations, so the first local max is often a noise peak early in the window. This places beats consistently early (~83ms offset) and misses the real beat peak later.
+
+**What works:** BPM estimation via autocorrelation is solid. Transient detection on synthetic patterns is strong (F1 0.80–0.94).
+
+**What doesn't work:** Translating correct BPM into correct beat positions on real music. The CBSS signal processing layer between autocorrelation and beat detection adds noise rather than clarity.
+
+**Approaches to investigate:**
+- Better peak selection in beat window (find maximum, not first decline)
+- Adaptive window sizing based on confidence
+- Alternative beat tracking architectures (BTrack, particle filtering)
+- Must test on diverse genres (hip hop, DnB, funk) not just 4-on-the-floor EDM
+
+### Priority 2: False Positive Reduction
+
+Current detector config: **Drummer (0.50) + ComplexDomain (0.50)**, cooldown=tempo-adaptive, minconf=0.55
 
 | Pattern | F1 | Issue |
 |---------|-----|-------|
-| lead-melody | 0.286 | 38-40 FPs — HFC fires on every melody note |
+| lead-melody | 0.286 | 38-40 FPs — fires on every melody note |
 | chord-rejection | 0.698 | 12 FPs — amplitude spikes on chord changes |
 | pad-rejection | 0.696 | 7 FPs, high variance (0.64–0.80) |
-
-**lead-melody** (hardest, algorithmic): HFC correctly detects high-frequency spectral change; can't distinguish melody note from percussive transient. Potential approaches:
-- Temporal envelope gate: melody notes sustain >50ms, percussive hits decay rapidly
-- Harmonic-to-noise ratio: percussive = broadband, pitched = harmonic peaks
-
-**chord-rejection**: Chord transitions produce genuine amplitude spikes.
-- Quick test: raise `drummer` and `hfc` thresholds, check trade-off against strong-beats recall
-- Rise-time analysis: chord transitions have slower attack than percussive hits
-
-**pad-rejection**: High variance suggests AGC-related instability.
-- Run 3x and average for stable baseline before tuning
-
-### Priority 2: CBSS Tuning
-
-New CBSS beat tracker needs real-music validation. Key params: `cbssalpha`, `beatwindow`, `beatconfdecay`, `temposnap`.
 
 ### Priority 3: Startup Latency
 
@@ -75,9 +76,9 @@ System tuned for studio conditions. Real-world environments (club, festival, amb
 
 ## Next Actions
 
-1. Re-run full pattern suite with current 3-detector config to establish fresh F1 baseline
-2. Tune chord-rejection threshold trade-off (threshold vs. recall on strong-beats)
-3. Tune CBSS beat tracking params on real music (`cbssalpha`, `beatwindow`, `beatconfdecay`)
+1. Fix CBSS beat detection — the peak selection algorithm within the beat window needs a fundamentally better approach
+2. Build diverse test music library (hip hop, DnB, funk, pop) with ground truth annotations
+3. Tune chord-rejection threshold trade-off (threshold vs. recall on strong-beats)
 4. Investigate temporal envelope gate for lead-melody false positives
 
 ---
@@ -89,6 +90,6 @@ System tuned for studio conditions. Real-world environments (club, festival, amb
 | `docs/AUDIO_ARCHITECTURE.md` | AudioController architecture |
 | `docs/AUDIO-TUNING-GUIDE.md` | Parameter reference + test procedures |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator design patterns |
-| `docs/AUDIO_IMPROVEMENT_ANALYSIS.md` | Detailed improvement approaches |
+| `docs/AUDIO_ARCHITECTURE.md` | CBSS architecture details |
 | `blinky-test-player/PARAMETER_TUNING_HISTORY.md` | Calibration history |
 | `blinky-test-player/NEXT_TESTS.md` | Current testing priorities |

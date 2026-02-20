@@ -704,3 +704,113 @@ All other detectors remain disabled with updated comments explaining why:
 - BassBand: susceptible to room rumble/HVAC
 - ComplexDomain: adds FPs on sparse patterns
 - Novelty: net negative avg F1, hurts sparse/full-mix
+
+---
+
+## Test Session: 2026-02-19 (CBSS Beat Tracking Evaluation)
+
+**Environment:**
+- Hardware: Seeeduino XIAO nRF52840 Sense
+- Serial Port: COM3
+- Hardware Gain: AGC active (unlocked)
+- Detector config: Drummer (0.50, thresh 4.5) + ComplexDomain (0.50, thresh 3.5)
+- Tool: MCP `run_test` and `run_music_test`
+
+### Architecture: CBSS Beat Tracking
+
+Replaced multi-hypothesis phase accumulator (4 concurrent TempoHypotheses + PLL + phase fusion) with CBSS (Cumulative Beat Strength Signal) and counter-based beat detection. See `docs/AUDIO_ARCHITECTURE.md`.
+
+Key properties:
+- `CBSS[n] = (1-alpha)*OSS[n] + alpha*max(CBSS[n-2T : n-T/2])` — combines current onset with predicted beat
+- Beat detection: search for local max in CBSS within prediction window `[T*(1-scale), T*(1+scale)]`
+- Phase derived deterministically: `phase = (sampleCounter - lastBeatSample) / beatPeriodSamples`
+- Default params: `cbssAlpha=0.9`, `beatWindowScale=0.5`, threshold multiplier `1.05x`
+
+### Synthetic Pattern Results (Transient Detection)
+
+| Pattern | Trans F1 | Prec | Recall | BPM | BPM Err | Conf | Beats |
+|---------|----------|------|--------|-----|---------|------|-------|
+| steady-120bpm | 0.864 | 0.792 | 0.950 | 121.6 | 1.3% | 0.18 | 42 |
+| steady-90bpm | 0.940 | 0.907 | 0.975 | 90.5 | 0.6% | 0.11 | 35 |
+| basic-drums | 0.800 | 0.737 | 0.875 | 121.7 | 1.4% | 0.21 | 12 |
+| full-mix | 0.817 | 0.980 | 0.700 | 121.6 | 1.3% | 0.25 | 5 |
+
+**Transient detection is solid.** BPM estimation is excellent (< 1.5% error).
+
+### Real Music Results (Beat Tracking — Full-Length Tracks)
+
+| Track | Duration | Trans F1 | Beat F1 | BPM Acc | Conf | Beat Rate | Expected |
+|-------|----------|----------|---------|---------|------|-----------|----------|
+| techno-minimal-emotion | 120s | 0.274 | 0.103 | 98.9% | 0.18 | 1.3/s | 1.9/s |
+| trance-party | 108s | 0.675 | 0.323 | 99.3% | 0.23 | 0.8/s | 2.0/s |
+| trance-infected-vibes | 91s | 0.445 | 0.103 | 97.9% | 0.28 | 0.4/s | 1.9/s |
+
+**Beat tracking is fundamentally broken on real music** — F1 ranges 0.10–0.32 despite excellent BPM accuracy.
+
+### Approaches Tested and Results
+
+#### 1. Threshold Fix (1.5x → 1.05x) — Partial Improvement
+
+Original threshold multiplier 1.5x was above the CBSS peak-to-mean ratio (~1.46x due to alpha blending), so no real beats were ever detected — all beats were forced at the late bound.
+
+Lowering to 1.05x produced the best single-track result (techno-minimal-emotion Beat F1=0.757 on a ~30s segment) but full-length tracks still showed poor results.
+
+#### 2. Ensemble Transient Input — Mixed Results
+
+Fed ensemble-filtered `transientStrength` into CBSS instead of raw spectral flux. Rationale: cleaner signal at confirmed kick/snare positions.
+
+| Track | Flux Input F1 | Ensemble Input F1 | Change |
+|-------|--------------|-------------------|--------|
+| trance-party | 0.292 | **0.457** | +56% |
+| trance-infected-vibes | 0.099 | **0.527** | +432% |
+| techno-dub-groove | 0.053 | 0.153 | +189% |
+| techno-minimal-01 | 0.212 | 0.228 | +8% |
+| techno-minimal-emotion | **0.757** | 0.236 | -69% |
+
+Improved trance tracks but regressed techno-minimal-emotion. Sparse ensemble input creates sharp peaks but loses the continuous signal CBSS needs for propagation. Also, only works when transients land on every beat — fails for genres with syncopated or sparse beat patterns.
+
+#### 3. Blend Input (flux + transient boost) — No Improvement
+
+Combined `onsetStrength + 3.0 * transientStrength` to get continuous flux plus dominant peaks at ensemble detections. Also changed to "window peak" detection requiring 20% decline before declaring a beat.
+
+Result: Beat F1=0.162 on techno-minimal-emotion. The 20% decline requirement added ~81ms latency, placing beats consistently late.
+
+#### 4. Transient-Gated Detection — Wrong Approach
+
+Abandoned CBSS peak detection entirely; accepted first ensemble transient within beat window as a beat. Simpler, zero latency.
+
+**Rejected:** Only works for 4-on-the-floor EDM where every beat has a kick/snare. Fails for hip hop, DnB, funk, and any genre with syncopated beats.
+
+### Root Cause Analysis
+
+**BPM estimation works. Beat placement doesn't.** The disconnect is in the CBSS peak detection within the beat window:
+
+1. **First-declining-frame detector is fragile** — Spectral flux has many micro-fluctuations, so the first local max in the beat window is often a noise peak early in the window. The real beat peak later in the window is missed.
+
+2. **Consistent early placement** — 83ms median phase offset across tracks confirms beats are triggered by early noise peaks, not actual beat positions.
+
+3. **Low beat event rate** — 0.4–1.3 beats/s detected vs 1.9–2.0/s expected. Many beat windows produce no detection above threshold, resulting in forced beats at wrong positions.
+
+4. **CBSS peak-to-mean ratio is inherently small** — With alpha=0.9 blending, peaks are only ~5–15% above the running mean, making threshold-based detection unreliable.
+
+### Confidence Never Builds
+
+Across all tests, CBSS confidence stays 0.04–0.28 (target: >0.6). The +0.15 boost per beat is constantly eroded by 0.98x per-frame decay and 0.9x forced-beat penalty. With only ~50% of beats correctly detected, confidence can't accumulate.
+
+### Conclusions
+
+1. **CBSS with "first declining frame" detection is not viable** for real music beat tracking
+2. **BPM estimation via autocorrelation is excellent** and should be preserved
+3. **The peak selection algorithm needs a fundamentally different approach** — finding the window maximum, particle filtering, or a different architecture entirely
+4. **Testing must include diverse genres** (hip hop, DnB, funk) not just 4-on-the-floor EDM
+5. **Full-length tracks are essential** — short segments can give misleadingly good results
+
+### Parameters Unchanged
+
+CBSS defaults remain as-is pending architecture rework:
+```
+cbssalpha = 0.9
+beatwindow = 0.5
+beatconfdecay = 0.98
+temposnap = 0.15
+```

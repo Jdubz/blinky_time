@@ -221,6 +221,8 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 7. Update CBSS and detect beats
+    //    Uses spectral flux (continuous onset strength signal) so CBSS tracks
+    //    the audio energy pattern regardless of whether transients are detected.
     updateCBSS(onsetStrength);
     detectBeat();
 
@@ -591,9 +593,10 @@ void AudioController::detectBeat() {
         float prevCBSS = cbssBuffer_[prevIdx];
 
         // Beat detected: CBSS started declining (was rising, now falling)
-        // AND value is above adaptive threshold (with minimum floor to prevent
-        // spurious beats during startup when beatThreshold_ is near zero)
-        float threshold = beatThreshold_ * 1.5f;
+        // AND value is above noise floor. The CBSS signal has inherently small
+        // peak-to-mean ratios due to alpha blending, so the threshold is kept
+        // close to the mean (1.05x) — the local max condition is the real detector.
+        float threshold = beatThreshold_ * 1.05f;
         if (threshold < 0.01f) threshold = 0.01f;
 
         if (prevCBSS > currentCBSS && prevCBSS > threshold) {
