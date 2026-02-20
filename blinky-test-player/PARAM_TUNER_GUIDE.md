@@ -1,7 +1,7 @@
 # Parameter Tuner Guide - Selective Tuning
 
 **Last Updated:** January 2026
-**Architecture:** AudioController v3 (Multi-hypothesis tempo tracking)
+**Architecture:** AudioController with CBSS Beat Tracking
 
 ## Overview
 
@@ -9,9 +9,9 @@ The param-tuner supports **37 parameters** for audio analysis optimization with 
 
 **Total Testable Parameters**: 37
 - **Ensemble Detectors**: 18 (6 thresholds + 6 weights + 6 agreement boosts)
-- **Rhythm Tracking**: 19 (includes activation, phase, pulse, BPM range, multi-hypothesis tracking)
-  - AudioController v3 parameters: 12 (peak detection, promotion, decay, confidence weights)
-  - Legacy rhythm parameters: 5 (musicthresh, phaseadapt, pulseboost, pulsesuppress, energyboost)
+- **Rhythm Tracking**: 11 (activation, pulse, BPM range, CBSS beat tracking, tempo prior)
+  - CBSS parameters: 4 (cbssalpha, beatwindow, beatconfdecay, temposnap)
+  - Core rhythm: 5 (musicthresh, pulseboost, pulsesuppress, energyboost, lookahead)
   - BPM range: 2 (bpmmin, bpmmax)
 
 **Detector-Specific Parameters** (11 additional): These are exposed via SerialConsole for manual tuning but **not included in automated sweeps**:
@@ -52,36 +52,19 @@ The param-tuner supports **37 parameters** for audio analysis optimization with 
 
 **AudioController - Basic Rhythm**:
 - `musicthresh` - Rhythm activation threshold / periodicity strength (0.0-1.0, default 0.4)
-- `phaseadapt` - Phase adaptation rate (0.01-1.0, default 0.15)
 - `pulseboost` - Pulse boost on beat (1.0-2.0, default 1.3)
 - `pulsesuppress` - Pulse suppress off beat (0.3-1.0, default 0.6)
 - `energyboost` - Energy boost on beat (0.0-1.0, default 0.3)
+- `lookahead` - How far ahead to predict beats ms (0-100, default 50)
 - `bpmmin` - Minimum BPM to detect (40-120, default 60)
 - `bpmmax` - Maximum BPM to detect (80-240, default 200)
 
-### Multi-Hypothesis Tracking Parameters (12 total)
+### CBSS Beat Tracking Parameters (4 total)
 
-**Peak Detection (2 params)**:
-- `minpeakstr` - Min autocorrelation peak strength (0.1-0.8, default 0.3)
-- `minrelheight` - Min relative peak height (0.5-1.0, default 0.7)
-
-**Hypothesis Matching (1 param)**:
-- `bpmmatchtol` - BPM match tolerance fraction (0.01-0.2, default 0.05)
-
-**Promotion (2 params)**:
-- `promothresh` - Confidence advantage for promotion (0.05-0.5, default 0.15)
-- `minbeats` - Min beats before promotion (4-32, default 8)
-
-**Decay (4 params)**:
-- `phrasehalf` - Phrase decay half-life in beats (8-64, default 32)
-- `minstr` - Min strength to keep hypothesis (0.05-0.3, default 0.1)
-- `silencegrace` - Grace period before silence decay ms (1000-10000, default 3000)
-- `silencehalf` - Silence decay half-life seconds (2-15, default 5)
-
-**Confidence Weighting (3 params)** - Must sum to meaningful values:
-- `strweight` - Weight of periodicity strength (0.0-1.0, default 0.5)
-- `consweight` - Weight of phase consistency (0.0-1.0, default 0.3)
-- `longweight` - Weight of beat longevity (0.0-1.0, default 0.2)
+- `cbssalpha` - CBSS weighting, higher = more predictive (0.5-0.99, default 0.9)
+- `beatwindow` - Beat search window as fraction of period (0.1-1.0, default 0.5)
+- `beatconfdecay` - Per-frame confidence decay when no beat (0.9-0.999, default 0.98)
+- `temposnap` - BPM change ratio to snap vs smooth (0.05-0.5, default 0.15)
 
 ### Audio Processing Parameters (2 total)
 
@@ -137,8 +120,8 @@ Combine mode and parameter filters for maximum control:
 # Tune specific ensemble detector thresholds only
 param-tuner sweep --port COM5 --modes ensemble --params drummer_thresh,spectral_thresh,bass_thresh
 
-# Tune multi-hypothesis promotion parameters
-param-tuner sweep --port COM5 --params promothresh,minbeats,minpeakstr
+# Tune CBSS beat tracking parameters
+param-tuner sweep --port COM5 --params cbssalpha,beatwindow,beatconfdecay
 ```
 
 ---
@@ -160,17 +143,17 @@ param-tuner sweep --port COM5 --params drummer_thresh,spectral_thresh,agree_1,ag
 Improve rhythm lock-on speed and reliability:
 
 ```bash
-param-tuner sweep --port COM5 --params musicthresh,phaseadapt,bpmmin,bpmmax
+param-tuner sweep --port COM5 --params musicthresh,bpmmin,bpmmax,lookahead
 ```
 
 **Focus:** `musicthresh` controls when rhythm tracking activates based on periodicity strength.
 
-### Scenario 3: Multi-Hypothesis Tracking (~50 min)
+### Scenario 3: CBSS Beat Tracking (~30 min)
 
-Optimize tempo tracking and hypothesis promotion:
+Optimize beat tracking parameters:
 
 ```bash
-param-tuner sweep --port COM5 --params minpeakstr,promothresh,minbeats,phrasehalf,silencehalf
+param-tuner sweep --port COM5 --params cbssalpha,beatwindow,beatconfdecay,temposnap
 ```
 
 **Focus:** Peak detection controls hypothesis creation, promotion controls when better tempos take over.
@@ -217,10 +200,10 @@ param-tuner status
 param-tuner sweep --port COM5 --modes rhythm
 ```
 
-### Day 3: Multi-Hypothesis Tuning (~2 hrs)
+### Day 3: CBSS Beat Tracking Tuning (~1 hr)
 ```bash
-# Fine-tune multi-hypothesis tempo tracking
-param-tuner sweep --port COM5 --params minpeakstr,minrelheight,promothresh,minbeats,phrasehalf,silencehalf,strweight,consweight,longweight
+# Fine-tune CBSS beat tracking
+param-tuner sweep --port COM5 --params cbssalpha,beatwindow,beatconfdecay,temposnap
 ```
 
 ### Day 4: Detector Weights (~60 min)
@@ -234,7 +217,7 @@ param-tuner sweep --port COM5 --params drummer_weight,spectral_weight,bass_weigh
 **Alternative: Quick 3-Day Plan (~3 hours total)**
 - Day 1: Ensemble detectors (~1.5 hrs)
 - Day 2: Rhythm tracking (~70 min)
-- Day 3: Skip multi-hypothesis (use defaults)
+- Day 3: Skip CBSS tuning (use defaults)
 
 ---
 
@@ -401,8 +384,8 @@ The extended param-tuner provides:
 - ✅ **Selective tuning** via --params and --modes flags
 - ✅ **~30 minute chunks** for efficient parameter optimization
 - ✅ **Full resume support** for interrupted sessions
-- ✅ **Comprehensive coverage** of ensemble detection and multi-hypothesis tempo tracking
-- ✅ **5 detection modes**: Drummer, Bass Band, HFC, Spectral Flux, Hybrid
+- ✅ **Comprehensive coverage** of ensemble detection and CBSS beat tracking
+- ✅ **2-detector ensemble**: Drummer + ComplexDomain
 
 Param-tuner focuses on musical analysis parameters only. Fire generator aesthetics (cooling, sparks, heat) and basic audio processing (peaktau, releasetau, hwtarget) are configured separately via the UI or serial console.
 

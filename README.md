@@ -16,13 +16,13 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 - **Multiple Device Support** - Hat installations (89 LEDs), tube lights (60 LEDs), bucket totems (128 LEDs)
 - **Unified Architecture** - Generator→Effect→Renderer pipeline supporting matrix, linear, and custom layouts
 
-### Audio Analysis (AudioController v3)
-- **🎵 Multi-Hypothesis Tempo Tracking** - 4 concurrent tempo hypotheses with confidence-based promotion
-- **🎧 6-Algorithm Ensemble Detector** - Drummer, SpectralFlux, BassBand, HFC, ComplexDomain, MelFlux
+### Audio Analysis
+- **🎵 CBSS Beat Tracking** - Counter-based beat prediction with deterministic phase
+- **🎧 2-Detector Ensemble** - Drummer + ComplexDomain for kicks and snares
 - **🎤 Advanced AGC** - Hardware + software automatic gain control
-- **📊 Rhythm Tracking** - Autocorrelation-based pattern analysis (60-200 BPM range)
-- **🔊 Transient Detection** - Agreement-based fusion with 80ms cooldown
-- **56+ Tunable Parameters** - Comprehensive audio parameter system
+- **📊 Rhythm Tracking** - Autocorrelation with tempo prior (60-200 BPM range)
+- **🔊 Transient Detection** - Agreement-based fusion with adaptive cooldown
+- **50+ Tunable Parameters** - Comprehensive audio parameter system
 
 ### System Features
 - **🌐 Web App Control** - [Blinky Console](blinky-console/) React PWA for real-time settings and visualization
@@ -110,7 +110,7 @@ Comprehensive documentation is available in the [`docs/`](docs/) folder:
 - [📦 **Build Guide**](docs/BUILD_GUIDE.md) - Step-by-step setup instructions (includes platform patch)
 - [🛠️ **Platform Fix**](docs/PLATFORM_FIX.md) - Required patch for audio-reactive features
 - [🏛️ **Generator Architecture**](docs/GENERATOR_EFFECT_ARCHITECTURE.md) - Generator→Effect→Renderer pattern
-- [🎵 **Audio Architecture**](docs/AUDIO_ARCHITECTURE.md) - AudioController v3 multi-hypothesis tracking
+- [🎵 **Audio Architecture**](docs/AUDIO_ARCHITECTURE.md) - AudioController with CBSS beat tracking
 - [🔥 **Fire Settings**](docs/OPTIMAL_FIRE_SETTINGS.md) - Optimal configuration parameters
 - [🧪 **Testing Guide**](docs/TESTING_SUMMARY.md) - Test framework and procedures
 

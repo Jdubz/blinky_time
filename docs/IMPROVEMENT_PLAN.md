@@ -25,11 +25,10 @@
 
 ### Completed (January 2026)
 
-**Multi-Hypothesis Tempo Tracking (v3):**
-- 4 concurrent tempo hypotheses with LRU eviction
-- Handles tempo changes, ambiguity, and polyrhythmic patterns
-- Confidence-based promotion with ≥8 beat requirement
-- Dual decay: phrase-aware (32-beat half-life) + silence (5s half-life)
+**Beat Tracking:**
+- CBSS beat tracking with counter-based beat detection (replaced multi-hypothesis v3)
+- Deterministic phase derivation from beat counter
+- Tempo prior for half-time/double-time disambiguation
 
 ### Completed (December 2025)
 
@@ -60,9 +59,9 @@ Current detector config: **Drummer (0.40) + HFC (0.60) + BassBand (0.18)**, cool
 **pad-rejection**: High variance suggests AGC-related instability.
 - Run 3x and average for stable baseline before tuning
 
-### Priority 2: Rhythm Fusion (Phase 5)
+### Priority 2: CBSS Tuning
 
-Framework exists but needs tuning — the multi-system phase fusion (pulse train + comb filter + autocorrelation) has the code in place but weighting hasn't been calibrated. Serial params: `ossfluxweight`, `pulsephaseweight`, `combweight`, `fusionenabled`.
+New CBSS beat tracker needs real-music validation. Key params: `cbssalpha`, `beatwindow`, `beatconfdecay`, `temposnap`.
 
 ### Priority 3: Startup Latency
 
@@ -78,7 +77,7 @@ System tuned for studio conditions. Real-world environments (club, festival, amb
 
 1. Re-run full pattern suite with current 3-detector config to establish fresh F1 baseline
 2. Tune chord-rejection threshold trade-off (threshold vs. recall on strong-beats)
-3. Calibrate rhythm fusion weights (Phase 5 — `fusionenabled`, `ossfluxweight`, `pulsephaseweight`, `combweight`)
+3. Tune CBSS beat tracking params on real music (`cbssalpha`, `beatwindow`, `beatconfdecay`)
 4. Investigate temporal envelope gate for lead-melody false positives
 
 ---

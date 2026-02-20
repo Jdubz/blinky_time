@@ -25,7 +25,7 @@ export type AudioSample = z.infer<typeof AudioSampleSchema>;
 /**
  * Music mode data from streaming `{"m":{...}}` messages
  *
- * Sent by AudioController v3 with multi-hypothesis tracking.
+ * Sent by AudioController with CBSS beat tracking.
  */
 export const MusicModeDataSchema = z.object({
   a: z.union([z.literal(0), z.literal(1)]), // Active flag (rhythm detected)

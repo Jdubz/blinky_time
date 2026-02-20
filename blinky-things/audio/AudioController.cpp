@@ -75,11 +75,8 @@ bool AudioController::begin(uint32_t sampleRate) {
 
     // Reset phase tracking
     phase_ = 0.0f;
-    targetPhase_ = 0.0f;
     pulseTrainPhase_ = 0.0f;
     pulseTrainConfidence_ = 0.0f;
-    transientPhaseError_ = 0.0f;
-    lastTransientCorrectionMs_ = 0;
 
     // Reset beat stability tracking
     for (int i = 0; i < STABILITY_BUFFER_SIZE; i++) {
@@ -100,18 +97,20 @@ bool AudioController::begin(uint32_t sampleRate) {
     lastAutocorrMs_ = 0;
     lastSignificantAudioMs_ = 0;
 
-    // Reset comb filter phase tracker
-    combFilter_.reset();
-
     // Initialize and reset comb filter bank
     // Uses 60 Hz frame rate assumption (same as OSS buffer)
     combFilterBank_.init(60.0f);
 
-    // Reset fusion state
-    fusedPhase_ = 0.0f;
-    fusedConfidence_ = 0.0f;
-    consensusMetric_ = 0.0f;
-    transientHint_ = 0.0f;
+    // Reset CBSS state
+    for (int i = 0; i < OSS_BUFFER_SIZE; i++) {
+        cbssBuffer_[i] = 0.0f;
+    }
+    lastBeatSample_ = 0;
+    beatPeriodSamples_ = 30;  // ~120 BPM at 60Hz
+    sampleCounter_ = 0;
+    beatThreshold_ = 0.0f;
+    beatCount_ = 0;
+    cbssConfidence_ = 0.0f;
 
     // Reset output
     control_ = AudioControl();
@@ -214,62 +213,16 @@ const AudioControl& AudioController::update(float dt) {
         lastAutocorrMs_ = nowMs;
     }
 
-    // 6b. Update comb filter phase tracker (runs every frame)
-    //     Provides independent phase estimate that can be fused with autocorrelation
-    if (combFilterWeight > 0.0f) {
-        // Update comb filter parameters
-        combFilter_.feedbackGain = combFeedback;
-        combFilter_.setTempo(bpm_);
-        combFilter_.process(onsetStrength);
-    }
-
-    // 6c. Update comb filter bank (independent tempo validation)
+    // 6b. Update comb filter bank (independent tempo validation)
     //     Provides tempo validation without depending on autocorrelation
-    //     Does NOT use tempo prior - that's applied in autocorrelation only
     if (combBankEnabled) {
-        // Update bank parameters
         combFilterBank_.feedbackGain = combBankFeedback;
-
-        // Process onset strength through the bank
         combFilterBank_.process(onsetStrength);
-
-        // Boost confidence for matching hypotheses
-        float combBPM = combFilterBank_.getPeakBPM();
-        float combConf = combFilterBank_.getPeakConfidence();
-
-        // Only apply boost if comb filter has meaningful confidence
-        if (combConf > 0.1f) {
-            for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
-                TempoHypothesis& hyp = multiHypothesis_.hypotheses[i];
-                if (!hyp.active) continue;
-
-                // Check if hypothesis BPM matches comb filter BPM (within 5%)
-                float bpmDiff = hyp.bpm > combBPM ?
-                    (hyp.bpm - combBPM) / hyp.bpm :
-                    (combBPM - hyp.bpm) / combBPM;
-
-                if (bpmDiff < 0.05f) {
-                    // Boost confidence by up to 20%, scaled by match quality
-                    float boost = combConf * 0.2f * (1.0f - bpmDiff / 0.05f);
-                    hyp.confidence += boost;
-                    if (hyp.confidence > 1.0f) hyp.confidence = 1.0f;
-                }
-            }
-        }
     }
 
-    // 7. Update transient-based phase correction (PLL)
-    //    When transients are detected, use them to nudge phase toward actual beat timing
-    updateTransientPhaseCorrection(lastEnsembleOutput_.transientStrength, nowMs);
-
-    // 8. Update phase tracking
-    updatePhase(dt, nowMs);
-
-    // 8b. Fuse rhythm estimates from multiple systems
-    //     Combines autocorrelation, Fourier phase, and comb filter with confidence weighting
-    if (fusionEnabled) {
-        fuseRhythmEstimates();
-    }
+    // 7. Update CBSS and detect beats
+    updateCBSS(onsetStrength);
+    detectBeat();
 
     // 9. Synthesize output
     synthesizeEnergy();
@@ -400,15 +353,6 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     if (signalEnergy < 0.01f || maxOss < 0.05f) {
         // No meaningful signal - decay periodicity faster
         periodicityStrength_ *= 0.8f;
-        // Also decay all hypotheses during silence
-        for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
-            if (multiHypothesis_.hypotheses[i].active) {
-                multiHypothesis_.hypotheses[i].strength *= 0.85f;
-                if (multiHypothesis_.hypotheses[i].strength < multiHypothesis_.minStrengthToKeep) {
-                    multiHypothesis_.hypotheses[i].active = false;
-                }
-            }
-        }
         return;
     }
 
@@ -458,207 +402,66 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
-    // === MULTI-PEAK EXTRACTION ===
-    // Find up to 4 peaks in autocorrelation function for multi-hypothesis tracking
-    AutocorrPeak peaks[4];
-    int numPeaks = 0;
+    // === PEAK EXTRACTION (find best tempo peak) ===
+    // Apply tempo prior to find the strongest prior-weighted peak
+    float bestWeightedCorr = 0.0f;
+    int bestWeightedLag = bestLag;
 
-    // Find local maxima above threshold
     for (int lag = minLag; lag <= maxLag && (lag - minLag) < correlationSize; lag++) {
         int lagIdx = lag - minLag;
         float correlation = correlationAtLag[lagIdx];
         float normCorr = correlation / (avgEnergy + 0.001f);
 
-        // Skip if below minimum strength threshold
-        if (normCorr < multiHypothesis_.minPeakStrength) continue;
+        // Skip weak peaks
+        if (normCorr < 0.3f) continue;
 
-        // Check if below minimum relative height (must be >70% of max peak)
-        if (normCorr < normCorrelation * multiHypothesis_.minRelativePeakHeight) continue;
+        // Apply tempo prior
+        float lagBpm = 60000.0f / (static_cast<float>(lag) / samplesPerMs);
+        lagBpm = clampf(lagBpm, bpmMin, bpmMax);
+        float priorWeight = computeTempoPrior(lagBpm);
+        float weightedCorr = normCorr * priorWeight;
 
-        // Check if this is a local maximum (±2 neighbors must be lower or equal)
-        bool isLocalMax = true;
-        bool hasStrictlyLowerNeighbor = false;
-
-        for (int delta = -2; delta <= 2; delta++) {
-            if (delta == 0) continue;
-            int neighborLag = lag + delta;
-            if (neighborLag < minLag || neighborLag > maxLag) continue;
-            int neighborIdx = neighborLag - minLag;
-            // Upper bounds check (lower bound guaranteed by neighborLag >= minLag check above)
-            if (neighborIdx >= correlationSize) continue;
-
-            float neighborCorr = correlationAtLag[neighborIdx];
-            if (neighborCorr > correlation) {
-                isLocalMax = false;
-                break;
-            }
-            if (neighborCorr < correlation) {
-                hasStrictlyLowerNeighbor = true;
-            }
-        }
-
-        // Accept as peak if local max with at least one strictly lower neighbor
-        if (isLocalMax && hasStrictlyLowerNeighbor && numPeaks < 4) {
-            // Convert lag to BPM for tempo prior calculation
-            float lagBpm = 60000.0f / (static_cast<float>(lag) / samplesPerMs);
-            lagBpm = clampf(lagBpm, bpmMin, bpmMax);
-
-            // Apply tempo prior weighting (reduces half-time/double-time confusion)
-            float priorWeight = computeTempoPrior(lagBpm);
-            float weightedCorr = normCorr * priorWeight;
-
-            // Store for debug (use last peak's prior weight)
+        if (weightedCorr > bestWeightedCorr) {
+            bestWeightedCorr = weightedCorr;
+            bestWeightedLag = lag;
             lastTempoPriorWeight_ = priorWeight;
-
-            peaks[numPeaks].lag = lag;
-            peaks[numPeaks].correlation = correlation;
-            peaks[numPeaks].normCorrelation = weightedCorr;  // Use prior-weighted correlation
-            numPeaks++;
-        }
-    }
-
-    // Sort peaks by prior-weighted strength (descending) - simple selection sort
-    for (int i = 0; i < numPeaks - 1; i++) {
-        for (int j = i + 1; j < numPeaks; j++) {
-            if (peaks[j].normCorrelation > peaks[i].normCorrelation) {
-                AutocorrPeak temp = peaks[i];
-                peaks[i] = peaks[j];
-                peaks[j] = temp;
-            }
         }
     }
 
     // === HARMONIC DISAMBIGUATION ===
-    // Problem: Autocorrelation produces peaks at both fundamental and harmonics.
-    // At 60 BPM (lag L), there's also a peak at 120 BPM (lag L/2).
-    // At 180 BPM (lag L), there's also a peak at 90 BPM (lag 2L).
-    // Solution: Check if the strongest peak has a related peak at 2x, 3x, or 4x lag.
-    // CRITICAL: Only prefer slower tempo if tempo prior ALSO supports it.
-    // Otherwise, the tempo prior should be the deciding factor.
-    if (numPeaks >= 2 && tempoPriorEnabled) {
-        int strongestLag = peaks[0].lag;
-        float strongestCorr = peaks[0].normCorrelation;
-        float strongestBpm = 60000.0f / (static_cast<float>(strongestLag) / samplesPerMs);
+    // Check if a peak at 2x lag (half tempo) is also strong — prefer fundamental
+    if (tempoPriorEnabled) {
+        int doubleLag = bestWeightedLag * 2;
+        if (doubleLag <= maxLag) {
+            int dblIdx = doubleLag - minLag;
+            if (dblIdx >= 0 && dblIdx < correlationSize) {
+                float dblCorr = correlationAtLag[dblIdx] / (avgEnergy + 0.001f);
+                float dblBpm = 60000.0f / (static_cast<float>(doubleLag) / samplesPerMs);
+                float fastBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
 
-        constexpr float lagTolerance = 0.08f;  // Allow 8% tolerance for timing jitter
-        constexpr float fundamentalThreshold = 0.60f;
-        bool disambiguated = false;
+                // Only prefer slower tempo if prior supports it
+                float priorFast = computeTempoPrior(fastBpm);
+                float priorSlow = computeTempoPrior(dblBpm);
 
-        // Check 2x, 3x, and 4x lag multiples (half, third, quarter tempo)
-        for (int mult = 2; mult <= 4 && !disambiguated; mult++) {
-            int targetLag = strongestLag * mult;
-
-            for (int i = 1; i < numPeaks; i++) {
-                float lagRatio = static_cast<float>(peaks[i].lag) / static_cast<float>(targetLag);
-
-                // Check if this peak is near Nx lag (1/N tempo = potential fundamental)
-                if (lagRatio > (1.0f - lagTolerance) && lagRatio < (1.0f + lagTolerance)) {
-                    // Found a candidate fundamental (slower tempo)
-                    float candidateBpm = 60000.0f / (static_cast<float>(peaks[i].lag) / samplesPerMs);
-
-                    // Only promote slower tempo if tempo prior actually favors it
-                    float priorFaster = computeTempoPrior(strongestBpm);
-                    float priorSlower = computeTempoPrior(candidateBpm);
-
-                    // Skip promoting slower tempo unless prior supports it
-                    // This prevents half-time locking (e.g. 160→80 BPM) when prior is neutral
-                    if (priorSlower < priorFaster * 0.95f) {
-                        if (shouldPrintDebug) {
-                            Serial.print(F("{\"type\":\"HARMONIC_SKIP\",\"fast\":"));
-                            Serial.print(strongestBpm, 1);
-                            Serial.print(F(",\"slow\":"));
-                            Serial.print(candidateBpm, 1);
-                            Serial.print(F(",\"mult\":"));
-                            Serial.print(mult);
-                            Serial.println(F("}"));
-                        }
-                        break;
-                    }
-
-                    if (peaks[i].normCorrelation > strongestCorr * fundamentalThreshold) {
-                        // Swap: promote the fundamental to position 0
-                        AutocorrPeak temp = peaks[0];
-                        peaks[0] = peaks[i];
-                        peaks[i] = temp;
-
-                        if (shouldPrintDebug) {
-                            Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"from\":"));
-                            Serial.print(strongestBpm, 1);
-                            Serial.print(F(",\"to\":"));
-                            Serial.print(candidateBpm, 1);
-                            Serial.print(F(",\"mult\":"));
-                            Serial.print(mult);
-                            Serial.println(F("}"));
-                        }
-                        disambiguated = true;
-                        break;
+                if (dblCorr > bestWeightedCorr * 0.6f && priorSlow >= priorFast * 0.95f) {
+                    bestWeightedLag = doubleLag;
+                    if (shouldPrintDebug) {
+                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"from\":"));
+                        Serial.print(fastBpm, 1);
+                        Serial.print(F(",\"to\":"));
+                        Serial.print(dblBpm, 1);
+                        Serial.println(F("}"));
                     }
                 }
             }
         }
     }
 
-    // === UPDATE MULTI-HYPOTHESIS TRACKER ===
-    // Check if any hypotheses are active
-    bool hasActiveHypothesis = false;
-    for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
-        if (multiHypothesis_.hypotheses[i].active) {
-            hasActiveHypothesis = true;
-            break;
-        }
-    }
-
-    // For each peak, find matching hypothesis or create new one
-    for (int i = 0; i < numPeaks; i++) {
-        float bpm = 60000.0f / (static_cast<float>(peaks[i].lag) / samplesPerMs);
-        bpm = clampf(bpm, bpmMin, bpmMax);
-
-        // Find matching hypothesis
-        int matchSlot = multiHypothesis_.findMatchingHypothesis(bpm);
-
-        if (matchSlot >= 0) {
-            // Update existing hypothesis
-            TempoHypothesis& hypo = multiHypothesis_.hypotheses[matchSlot];
-
-            // Update phase error tracking:
-            // Compare hypothesis phase to Fourier-extracted phase (independent measurement)
-            // This avoids circular logic of assuming autocorrelation peak = phase 0
-            float phaseError = hypo.phase - pulseTrainPhase_;
-            // Wrap to shortest distance around circle [-0.5, 0.5]
-            if (phaseError > 0.5f) phaseError -= 1.0f;
-            if (phaseError < -0.5f) phaseError += 1.0f;
-            phaseError = phaseError < 0.0f ? -phaseError : phaseError;  // Absolute value
-
-            // Exponential smoothing: avgPhaseError = 0.9 * old + 0.1 * new
-            // Only update if we have confidence in the Fourier phase
-            if (pulseTrainConfidence_ > 0.2f) {
-                hypo.avgPhaseError = 0.9f * hypo.avgPhaseError + 0.1f * phaseError;
-            }
-
-            hypo.strength = peaks[i].normCorrelation;
-            hypo.lastUpdateMs = nowMs;
-            hypo.correlationPeak = peaks[i].correlation;
-            hypo.lagSamples = peaks[i].lag;
-            hypo.bpm = bpm;  // Update BPM (may drift slightly)
-            hypo.beatPeriodMs = 60000.0f / bpm;
-        } else if (peaks[i].normCorrelation > multiHypothesis_.minPeakStrength ||
-                   (!hasActiveHypothesis && i == 0)) {
-            // Create new hypothesis if:
-            // 1. Peak meets strength threshold, OR
-            // 2. This is the first peak and NO hypotheses are active (ensures primary gets initialized)
-            // Initialize phase from Fourier measurement if confidence is sufficient
-            float initPhase = (pulseTrainConfidence_ > 0.3f) ? pulseTrainPhase_ : 0.0f;
-            multiHypothesis_.createHypothesis(bpm, peaks[i].normCorrelation, nowMs,
-                                              peaks[i].lag, peaks[i].correlation, initPhase);
-        }
-    }
-
     // DEBUG: Print correlation results (only when debug enabled)
     if (shouldPrintDebug) {
-        // Use adaptive timing formula (not 60 Hz assumption)
-        float detectedBpm = (bestLag > 0) ? 60000.0f / (static_cast<float>(bestLag) / samplesPerMs) : 0.0f;
+        float detectedBpm = (bestWeightedLag > 0) ? 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs) : 0.0f;
         Serial.print(F("{\"type\":\"RHYTHM_DEBUG2\",\"bestLag\":"));
-        Serial.print(bestLag);
+        Serial.print(bestWeightedLag);
         Serial.print(F(",\"maxCorr\":"));
         Serial.print(maxCorrelation, 6);
         Serial.print(F(",\"normCorr\":"));
@@ -670,294 +473,171 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         Serial.println(F("}"));
     }
 
-    // Update tempo if periodicity is strong enough
-    // Safety: bestLag > 0 check prevents division by zero in calculations below
-    if (bestLag > 0 && periodicityStrength_ > 0.25f) {
-        // FIX: Use adaptive samplesPerMs instead of hardcoded 60 Hz assumption
-        // Formula: BPM = 60000ms/min / (lag_samples / samplesPerMs) = 60000 * samplesPerMs / lag
-        float newBpm = 60000.0f * samplesPerMs / static_cast<float>(bestLag);
+    // === UPDATE TEMPO ===
+    if (bestWeightedLag > 0 && periodicityStrength_ > 0.25f) {
+        float newBpm = 60000.0f * samplesPerMs / static_cast<float>(bestWeightedLag);
         newBpm = clampf(newBpm, bpmMin, bpmMax);
 
-        // Tempo rate limiting: prevent rapid jumps during active tracking
-        // Only apply rate limiting when we have established tracking (strength > activation)
+        // Tempo rate limiting during active tracking
         if (periodicityStrength_ > activationThreshold && bpm_ > 1.0f) {
             float maxChange = bpm_ * (maxBpmChangePerSec / 100.0f) * (autocorrPeriodMs / 1000.0f);
-            if (maxChange < 1.0f) maxChange = 1.0f;  // Minimum 1 BPM change allowed
+            if (maxChange < 1.0f) maxChange = 1.0f;
             float bpmDiff = newBpm - bpm_;
             if (bpmDiff > maxChange) newBpm = bpm_ + maxChange;
             else if (bpmDiff < -maxChange) newBpm = bpm_ - maxChange;
         }
 
-        // Smooth BPM changes
-        bpm_ = bpm_ * 0.8f + newBpm * 0.2f;
+        // Check if tempo change is large enough to snap vs smooth
+        float changeRatio = (bpm_ > 1.0f) ? fabsf(newBpm - bpm_) / bpm_ : 1.0f;
+
+        if (changeRatio > tempoSnapThreshold) {
+            // Large change: snap to new tempo
+            bpm_ = newBpm;
+        } else {
+            // Small change: smooth
+            bpm_ = bpm_ * 0.8f + newBpm * 0.2f;
+        }
+
         beatPeriodMs_ = 60000.0f / bpm_;
 
-        // Derive target phase using pulse train cross-correlation and/or peak-finding
-        // Pulse train method: correlate OSS with ideal pulse trains at different phases
-        // Peak-finding method: find max OSS in recent beat period
-        //
-        // pulsePhaseWeight controls the blend:
-        //   1.0 = pure pulse train (more robust, considers full pattern)
-        //   0.0 = pure peak-finding (legacy method)
-
-        float peakPhase = 0.0f;
-        float pulsePhase = 0.0f;
-        bool peakPhaseValid = false;
-        bool pulsePhaseValid = false;
-
-        // Method 1: Peak-finding (legacy)
-        // Skip if pulsePhaseWeight >= 1.0 - result won't be used
-        if (pulsePhaseWeight < 1.0f) {
-            int recentWindow = bestLag;  // Look at one beat period
-            float maxRecent = 0.0f;
-            int maxRecentIdx = 0;
-
-            for (int i = 0; i < recentWindow && i < ossCount_; i++) {
-                int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-                if (ossBuffer_[idx] > maxRecent) {
-                    maxRecent = ossBuffer_[idx];
-                    maxRecentIdx = i;
-                }
-            }
-
-            if (maxRecent > 0.05f) {
-                peakPhase = static_cast<float>(maxRecentIdx) / static_cast<float>(bestLag);
-                peakPhase = clampf(peakPhase, 0.0f, 1.0f);
-                peakPhaseValid = true;
-            }
-        }
-
-        // Method 2: Fourier phase extraction (Phase 3 - PLP-inspired)
-        {
-            pulsePhase = computePulseTrainPhase(bestLag);
-            pulseTrainPhase_ = pulsePhase;  // Store for debugging
-
-            // Only consider valid if confidence is strong
-            // The Fourier method uses the entire OSS buffer, so it needs
-            // strong periodicity to produce reliable phase estimates.
-            // For weak periodicity (sustained content), fall back to peak-finding
-            // UNLESS we're in active tracking mode (phaseHoldStrength), where
-            // we maintain the current phase by prediction rather than resetting.
-            if (pulseTrainConfidence_ > 0.45f) {
-                pulsePhaseValid = true;
-            } else if (periodicityStrength_ > phaseHoldStrength) {
-                // During active tracking with low Fourier confidence,
-                // maintain current phase from prediction rather than
-                // resetting. This prevents phase jumps during breakdowns
-                // and non-percussive sections.
-                pulsePhaseValid = false;  // Don't use unreliable Fourier phase
-                // peakPhaseValid may still be set - that's fine
-            }
-        }
-
-        // Blend the two methods based on pulsePhaseWeight and validity
-        float newTargetPhase;
-        float effectiveWeight = pulsePhaseWeight;
-
-        // Adjust weight based on validity
-        if (!pulsePhaseValid && !peakPhaseValid) {
-            // Neither method produced valid result - maintain current phase
-            // During active tracking, this allows phase to continue from prediction
-            newTargetPhase = targetPhase_;
-        } else if (!pulsePhaseValid) {
-            // Only peak-finding is valid
-            newTargetPhase = peakPhase;
-        } else if (!peakPhaseValid) {
-            // Only pulse train is valid
-            newTargetPhase = pulsePhase;
-        } else if (effectiveWeight >= 1.0f) {
-            newTargetPhase = pulsePhase;
-        } else if (effectiveWeight <= 0.0f) {
-            newTargetPhase = peakPhase;
-        } else {
-            // Both valid - circular interpolation for phase (handles wraparound)
-            // Weight by confidence: higher pulse train confidence = more pulse weight
-            float confAdjustedWeight = effectiveWeight * (0.5f + 0.5f * pulseTrainConfidence_);
-            confAdjustedWeight = clampf(confAdjustedWeight, 0.0f, 1.0f);
-
-            // Convert to angles, interpolate, convert back
-            float angle1 = peakPhase * 2.0f * 3.14159265f;
-            float angle2 = pulsePhase * 2.0f * 3.14159265f;
-            float sin1 = sinf(angle1), cos1 = cosf(angle1);
-            float sin2 = sinf(angle2), cos2 = cosf(angle2);
-            float blendSin = (1.0f - confAdjustedWeight) * sin1 + confAdjustedWeight * sin2;
-            float blendCos = (1.0f - confAdjustedWeight) * cos1 + confAdjustedWeight * cos2;
-            newTargetPhase = atan2f(blendSin, blendCos) / (2.0f * 3.14159265f);
-            if (newTargetPhase < 0.0f) newTargetPhase += 1.0f;
-        }
-
-        targetPhase_ = clampf(newTargetPhase, 0.0f, 1.0f);
-    }
-}
-
-void AudioController::updateTransientPhaseCorrection(float transientStrength, uint32_t nowMs) {
-    // Only apply correction when rhythm is established
-    if (periodicityStrength_ < activationThreshold) {
-        return;
-    }
-
-    // Only correct on strong transients (above threshold)
-    if (transientStrength < transientCorrectionMin) {
-        return;
-    }
-
-    // Require 2+ detector agreement to prevent single-detector false positives
-    // from gradually drifting the phase estimate
-    if (lastEnsembleOutput_.detectorAgreement < 2) {
-        return;
-    }
-
-    // Rate limit corrections to prevent overcorrection (min 80ms between corrections)
-    if (nowMs - lastTransientCorrectionMs_ < 80) {
-        return;
-    }
-    lastTransientCorrectionMs_ = nowMs;
-
-    // Calculate phase error: how far is current phase from 0.0 (beat position)?
-    // Phase 0.0 = on the beat, 0.5 = halfway between beats
-    //
-    // If phase is near 0.0 (e.g., 0.1): transient is slightly late, error = +0.1
-    // If phase is near 1.0 (e.g., 0.9): transient is early, error = -0.1 (wrap around)
-    //
-    // We want to nudge phase so that transients land at phase 0.0
-    float phaseError = phase_;
-    if (phaseError > 0.5f) {
-        // Wrap: treat phase 0.9 as -0.1 (transient came early)
-        phaseError = phase_ - 1.0f;
-    }
-
-    // Weight error by transient strength (stronger transients = more confident correction)
-    float weightedError = phaseError * transientStrength;
-
-    // Exponential moving average of phase error
-    // Lower alpha (0.15) means slower convergence, which filters out random
-    // false positives while still converging on consistent beat patterns
-    const float alpha = 0.15f;
-    transientPhaseError_ = (1.0f - alpha) * transientPhaseError_ + alpha * weightedError;
-
-    // Clamp error to reasonable range
-    if (transientPhaseError_ > 0.25f) transientPhaseError_ = 0.25f;
-    if (transientPhaseError_ < -0.25f) transientPhaseError_ = -0.25f;
-}
-
-void AudioController::updatePhase(float dt, uint32_t nowMs) {
-    // Determine if we have significant audio (for hypothesis decay strategy)
-    int32_t silenceMs = static_cast<int32_t>(nowMs - lastSignificantAudioMs_);
-    if (silenceMs < 0) silenceMs = 0;  // Handle wraparound
-    bool hasSignificantAudio = (silenceMs < 1000);  // Less than 1 second of silence
-
-    // === UPDATE ALL ACTIVE HYPOTHESES ===
-    for (int i = 0; i < MultiHypothesisTracker::MAX_HYPOTHESES; i++) {
-        if (multiHypothesis_.hypotheses[i].active) {
-            multiHypothesis_.updateHypothesis(i, dt, nowMs, hasSignificantAudio);
-        }
-    }
-
-    // === PROMOTE BEST HYPOTHESIS IF NEEDED ===
-    multiHypothesis_.promoteBestHypothesis(nowMs);
-
-    // === USE PRIMARY HYPOTHESIS FOR OUTPUT ===
-    TempoHypothesis& primary = multiHypothesis_.getPrimary();
-
-    // Track previous phase for beat detection
-    float prevPhase = phase_;
-
-    if (primary.active && primary.strength > activationThreshold) {
-        // Safety check for NaN/infinity in primary hypothesis
-        if (!isfinite(primary.phase)) {
-            primary.phase = 0.0f;
-        }
-        if (!isfinite(primary.bpm) || primary.bpm < 1.0f) {
-            primary.bpm = 120.0f;  // Safe default
-        }
-
-        // Track tempo changes for continuous estimation
-        float oldBpm = bpm_;
-
-        // Use primary hypothesis values
-        phase_ = primary.phase;
-        bpm_ = primary.bpm;
-        periodicityStrength_ = primary.strength;
+        // Update beat period in samples for CBSS
+        // Uses adaptive samplesPerMs for accurate conversion
+        int newPeriodSamples = static_cast<int>(beatPeriodMs_ * samplesPerMs + 0.5f);
+        if (newPeriodSamples < 10) newPeriodSamples = 10;
+        if (newPeriodSamples > OSS_BUFFER_SIZE / 2) newPeriodSamples = OSS_BUFFER_SIZE / 2;
+        beatPeriodSamples_ = newPeriodSamples;
 
         // Update ensemble detector with tempo hint for adaptive cooldown
-        // This allows faster detection at higher tempos
         ensemble_.getFusion().setTempoHint(bpm_);
 
         // Update tempo velocity if BPM changed significantly
-        // FIX: Guard against division by zero (oldBpm should never be 0, but be defensive)
-        if (oldBpm > 1.0f && fabsf(bpm_ - oldBpm) / oldBpm > tempoChangeThreshold) {
+        if (fabsf(bpm_ - prevBpm_) / (prevBpm_ > 1.0f ? prevBpm_ : 1.0f) > tempoChangeThreshold) {
+            float dt = autocorrPeriodMs / 1000.0f;
             updateTempoVelocity(bpm_, dt);
         }
 
-        // Gradually adapt phase toward target (derived from autocorrelation)
-        // This provides additional smoothing on top of hypothesis tracking
-        if (periodicityStrength_ > activationThreshold) {
-            float phaseDiff = targetPhase_ - phase_;
+        // Compute Fourier phase for debug (not used for tracking — CBSS handles phase)
+        pulseTrainPhase_ = computePulseTrainPhase(bestWeightedLag);
+    }
+}
 
-            // Handle wraparound
-            if (phaseDiff > 0.5f) phaseDiff -= 1.0f;
-            if (phaseDiff < -0.5f) phaseDiff += 1.0f;
+// ===== CBSS BEAT TRACKING =====
 
-            // Apply gradual correction from autocorrelation
-            phase_ += phaseDiff * phaseAdaptRate * dt * 10.0f;
+void AudioController::updateCBSS(float onsetStrength) {
+    // CBSS[n] = (1-alpha)*OSS[n] + alpha*max(CBSS[n-2T : n-T/2])
+    // Combines current onset strength with predicted beat strength from history
+    int T = beatPeriodSamples_;
+    if (T < 10) T = 10;
 
-            // === TRANSIENT-BASED PHASE CORRECTION (PLL) ===
-            // Apply correction based on running average of transient timing errors
-            // This nudges phase so that transients land closer to phase 0.0
-            // transientPhaseError_ > 0 means transients arrive late (phase is ahead)
-            // transientPhaseError_ < 0 means transients arrive early (phase is behind)
-            // Correction: subtract error to align phase with actual transients
-            if (fabsf(transientPhaseError_) > 0.01f) {
-                phase_ -= transientPhaseError_ * transientCorrectionRate * dt * 10.0f;
-            }
+    float maxPrevCBSS = 0.0f;
 
-            // FIX: Check for NaN before fmodf (NaN persists through fmodf)
-            if (!isfinite(phase_)) {
-                phase_ = 0.0f;
-            }
+    // Search backward in CBSS buffer for previous beat peak
+    // Range: T/2 to 2*T samples ago (half-period to double-period)
+    int searchMin = T / 2;
+    int searchMax = T * 2;
 
-            // Re-wrap after correction
-            phase_ = fmodf(phase_, 1.0f);
-            if (phase_ < 0.0f) phase_ += 1.0f;
+    for (int offset = searchMin; offset <= searchMax; offset++) {
+        int idx = sampleCounter_ - offset;
+        if (idx < 0) continue;
+        float val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
+        if (val > maxPrevCBSS) maxPrevCBSS = val;
+    }
 
-            // Update primary hypothesis phase with corrected value
-            primary.phase = phase_;
-        }
-    } else {
-        // No active primary hypothesis - fall back to legacy behavior
-        // Advance phase based on current tempo estimate
-        float phaseIncrement = dt * 1000.0f / beatPeriodMs_;
-        phase_ += phaseIncrement;
+    float cbssVal = (1.0f - cbssAlpha) * onsetStrength + cbssAlpha * maxPrevCBSS;
+    cbssBuffer_[sampleCounter_ % OSS_BUFFER_SIZE] = cbssVal;
 
-        // Safety check: if phase becomes NaN or infinite, reset to 0
-        if (!isfinite(phase_)) {
-            phase_ = 0.0f;
-        }
+    // Update adaptive threshold (smoothed CBSS mean)
+    beatThreshold_ = beatThreshold_ * 0.99f + cbssVal * 0.01f;
 
-        // Wrap phase at 1.0 using fmodf
-        phase_ = fmodf(phase_, 1.0f);
-        if (phase_ < 0.0f) phase_ += 1.0f;
+    sampleCounter_++;
 
-        // Decay periodicity during silence
-        if (silenceMs > 3000) {
-            // FIX: Clamp dt to prevent exp underflow on extreme frame drops
-            float clampedDt = (dt > 1.0f) ? 1.0f : dt;
-            float decayFactor = expf(-0.138629f * clampedDt);
-            periodicityStrength_ *= decayFactor;
+    // Prevent signed integer overflow (UB in C++).
+    // At 60 Hz, sampleCounter_ reaches 1M after ~4.6 hours.
+    // Renormalize both counters to keep values small while preserving
+    // their difference (which is all the CBSS logic depends on).
+    // The CBSS circular buffer uses modular indexing, so absolute values don't matter.
+    if (sampleCounter_ > 1000000) {
+        int shift = sampleCounter_ - OSS_BUFFER_SIZE;
+        sampleCounter_ -= shift;
+        lastBeatSample_ -= shift;
+        // Clamp lastBeatSample_ to prevent it going negative
+        if (lastBeatSample_ < 0) lastBeatSample_ = 0;
+    }
+}
+
+void AudioController::detectBeat() {
+    uint32_t nowMs = time_.millis();
+    int T = beatPeriodSamples_;
+    if (T < 10) T = 10;
+
+    // How many samples since last beat?
+    int samplesSinceBeat = sampleCounter_ - lastBeatSample_;
+    // Guard against negative values (shouldn't happen, but defensive)
+    if (samplesSinceBeat < 0) samplesSinceBeat = T;
+
+    // Beat search window boundaries
+    int earlyBound = static_cast<int>(T * (1.0f - beatWindowScale));
+    int lateBound = static_cast<int>(T * (1.0f + beatWindowScale));
+    if (earlyBound < T / 2) earlyBound = T / 2;
+
+    bool beatDetected = false;
+
+    // Are we within the search window?
+    if (samplesSinceBeat >= earlyBound && samplesSinceBeat <= lateBound) {
+        // Look for a local maximum in recent CBSS
+        int currentIdx = (sampleCounter_ - 1) % OSS_BUFFER_SIZE;
+        int prevIdx = (sampleCounter_ - 2 + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+        float currentCBSS = cbssBuffer_[currentIdx];
+        float prevCBSS = cbssBuffer_[prevIdx];
+
+        // Beat detected: CBSS started declining (was rising, now falling)
+        // AND value is above adaptive threshold (with minimum floor to prevent
+        // spurious beats during startup when beatThreshold_ is near zero)
+        float threshold = beatThreshold_ * 1.5f;
+        if (threshold < 0.01f) threshold = 0.01f;
+
+        if (prevCBSS > currentCBSS && prevCBSS > threshold) {
+            // Beat!
+            lastBeatSample_ = sampleCounter_ - 1;
+            if (beatCount_ < 65535) beatCount_++;
+            beatDetected = true;
+
+            // Boost confidence on each beat
+            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+
+            // Update beat stability
+            updateBeatStability(nowMs);
         }
     }
 
-    // === BEAT DETECTION (phase wrap) ===
-    // Detect when phase crosses from high (>0.8) to low (<0.2) = beat occurred
-    if (prevPhase > 0.8f && phase_ < 0.2f && periodicityStrength_ > activationThreshold) {
-        updateBeatStability(nowMs);
+    // Past late bound: force a beat to maintain phase during dropouts
+    // Only if we didn't already detect a real beat this frame
+    if (!beatDetected && samplesSinceBeat > lateBound) {
+        lastBeatSample_ = sampleCounter_;
+        if (beatCount_ < 65535) beatCount_++;
+        beatDetected = true;
+
+        // Lower confidence for forced beats
+        cbssConfidence_ *= 0.9f;
     }
 
-    // === PREDICT NEXT BEAT ===
+    // Decay confidence when no beat detected this frame
+    if (!beatDetected) {
+        cbssConfidence_ *= beatConfidenceDecay;
+    }
+
+    // Derive phase deterministically from beat counter
+    // Phase = (samples since last beat) / beat period
+    float newPhase = static_cast<float>(sampleCounter_ - lastBeatSample_) / static_cast<float>(T);
+    newPhase = fmodf(newPhase, 1.0f);
+    if (newPhase < 0.0f) newPhase += 1.0f;
+
+    // Safety check
+    if (!isfinite(newPhase)) newPhase = 0.0f;
+    phase_ = newPhase;
+
+    // Predict next beat
     predictNextBeat(nowMs);
-
-    // === DEBUG OUTPUT ===
-    multiHypothesis_.printDebug(nowMs);
 }
 
 // ===== OUTPUT SYNTHESIS =====
@@ -1015,12 +695,13 @@ void AudioController::synthesizePulse() {
 }
 
 void AudioController::synthesizePhase() {
+    // Phase is derived deterministically from CBSS beat counter
     control_.phase = phase_;
 }
 
 void AudioController::synthesizeRhythmStrength() {
-    // Single metric: autocorrelation periodicity strength
-    float strength = periodicityStrength_;
+    // Blend autocorrelation periodicity with CBSS beat tracking confidence
+    float strength = periodicityStrength_ * 0.6f + cbssConfidence_ * 0.4f;
 
     // Apply activation threshold with soft knee
     if (strength < activationThreshold) {
@@ -1028,331 +709,6 @@ void AudioController::synthesizeRhythmStrength() {
     }
 
     control_.rhythmStrength = clampf(strength, 0.0f, 1.0f);
-}
-
-// ============================================================================
-// TempoHypothesis Implementation
-// ============================================================================
-
-void TempoHypothesis::updatePhase(float dt) {
-    // FIX: Guard against division by zero
-    if (beatPeriodMs < 1.0f) beatPeriodMs = 500.0f;  // Safe default: 120 BPM
-
-    float phaseIncrement = dt * 1000.0f / beatPeriodMs;
-    phase += phaseIncrement;
-
-    // Accumulate fractional beats
-    beatsSinceUpdate += phaseIncrement;
-
-    // FIX: Check for NaN/infinity before further processing
-    if (!isfinite(phase)) {
-        phase = 0.0f;
-        return;
-    }
-
-    // Detect phase wraparound to increment beat count
-    // This happens when phase crosses from <1.0 to >=1.0
-    if (phase >= 1.0f && beatCount < 65535) {
-        // Count how many complete beats occurred (usually 1, but could be >1 if dt is large)
-        uint16_t beatsElapsed = static_cast<uint16_t>(phase);  // Integer part
-        uint32_t newCount = static_cast<uint32_t>(beatCount) + beatsElapsed;
-        beatCount = (newCount > 65535u) ? static_cast<uint16_t>(65535u) : static_cast<uint16_t>(newCount);
-    }
-
-    // Wrap phase to [0, 1)
-    phase = fmodf(phase, 1.0f);
-    if (phase < 0.0f) phase += 1.0f;
-}
-
-void TempoHypothesis::applyBeatDecay(float minStrengthToKeep) {
-    if (beatsSinceUpdate < 0.01f) return;  // No decay needed yet
-
-    // Phrase-aware decay: half-life = 32 beats
-    // decay_factor = exp(-ln(2) * beats / 32) = exp(-0.02166 * beats)
-    float decayFactor = expf(-0.02166f * beatsSinceUpdate);
-    strength *= decayFactor;
-
-    // Reset accumulator
-    beatsSinceUpdate = 0.0f;
-
-    // Deactivate if too weak
-    if (strength < minStrengthToKeep) {
-        active = false;
-    }
-}
-
-void TempoHypothesis::applySilenceDecay(float dt, float minStrengthToKeep) {
-    // FIX: Clamp dt to reasonable range (prevent underflow on large dt, skip on dt<=0)
-    if (dt <= 0.0f) return;
-    if (dt > 1.0f) dt = 1.0f;  // Cap at 1 second per frame (prevents exp underflow)
-
-    // Time-based decay: 5-second half-life
-    // decay_factor = exp(-ln(2) * dt / 5.0) = exp(-0.138629 * dt)
-    float decayFactor = expf(-0.138629f * dt);
-    strength *= decayFactor;
-
-    // Deactivate if too weak
-    if (strength < minStrengthToKeep) {
-        active = false;
-    }
-}
-
-float TempoHypothesis::computeConfidence(float strengthWeight, float consistencyWeight, float longevityWeight) const {
-    // Normalize beat count to [0, 1] over 32 beats (8 bars)
-    float normalizedLongevity = (beatCount > 32) ? 1.0f : static_cast<float>(beatCount) / 32.0f;
-
-    // Phase consistency (1.0 = perfect, 0.0 = terrible)
-    // avgPhaseError is in range [0, 1], where 0 = perfect
-    float phaseConsistency = 1.0f - avgPhaseError;
-    if (phaseConsistency < 0.0f) phaseConsistency = 0.0f;
-    if (phaseConsistency > 1.0f) phaseConsistency = 1.0f;
-
-    // Weighted combination
-    float result = strengthWeight * strength +
-                   consistencyWeight * phaseConsistency +
-                   longevityWeight * normalizedLongevity;
-
-    // Clamp to [0, 1] to maintain confidence contract
-    if (result < 0.0f) result = 0.0f;
-    if (result > 1.0f) result = 1.0f;
-    return result;
-}
-
-// ============================================================================
-// MultiHypothesisTracker Implementation
-// ============================================================================
-
-int MultiHypothesisTracker::createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation, float initialPhase) {
-    int slot = findBestSlot();
-    if (slot < 0) return -1;  // No slot available (shouldn't happen)
-
-    // Store old hypothesis info for debug
-    bool wasActive = hypotheses[slot].active;
-    float oldBpm = hypotheses[slot].bpm;
-
-    TempoHypothesis& hypo = hypotheses[slot];
-    hypo.bpm = bpm;
-    hypo.beatPeriodMs = 60000.0f / bpm;
-    hypo.phase = initialPhase;  // Initialize from Fourier phase when available
-    hypo.strength = strength;
-    hypo.confidence = strength;  // Initial confidence = strength
-    hypo.avgPhaseError = 0.5f;  // Neutral value - prevents over-confidence in new hypotheses
-    hypo.lastUpdateMs = nowMs;
-    hypo.createdMs = nowMs;
-    hypo.beatCount = 0;
-    hypo.beatsSinceUpdate = 0.0f;
-    hypo.correlationPeak = correlation;
-    hypo.lagSamples = lagSamples;
-    hypo.active = true;
-    hypo.priority = static_cast<uint8_t>(slot);
-
-    // Debug output for creation/eviction
-    // Requires both: debug channel enabled AND verbosity level >= EVENTS
-    // Use: "debug hypothesis on" to enable, "set hypodebug 1" for verbosity
-    if (debugLevel >= HypothesisDebugLevel::EVENTS &&
-        SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) {
-        if (wasActive) {
-            Serial.print(F("{\"type\":\"HYPO_EVICT\",\"slot\":"));
-            Serial.print(slot);
-            Serial.print(F(",\"oldBpm\":"));
-            Serial.print(oldBpm, 1);
-            Serial.print(F(",\"newBpm\":"));
-            Serial.print(bpm, 1);
-            Serial.println(F("}"));
-        }
-        Serial.print(F("{\"type\":\"HYPO_CREATE\",\"slot\":"));
-        Serial.print(slot);
-        Serial.print(F(",\"bpm\":"));
-        Serial.print(bpm, 1);
-        Serial.print(F(",\"strength\":"));
-        Serial.print(strength, 2);
-        Serial.println(F("}"));
-    }
-
-    return slot;
-}
-
-int MultiHypothesisTracker::findBestSlot() {
-    // First, check for inactive slots
-    for (int i = 0; i < MAX_HYPOTHESES; i++) {
-        if (!hypotheses[i].active) {
-            return i;
-        }
-    }
-
-    // All slots active - find LRU (least recently updated)
-    int oldestSlot = 0;
-    uint32_t oldestTime = hypotheses[0].lastUpdateMs;
-
-    for (int i = 1; i < MAX_HYPOTHESES; i++) {
-        if (hypotheses[i].lastUpdateMs < oldestTime) {
-            oldestTime = hypotheses[i].lastUpdateMs;
-            oldestSlot = i;
-        }
-    }
-
-    // Don't evict primary if it's still strong (>0.5 strength)
-    if (oldestSlot == 0 && hypotheses[0].strength > 0.5f) {
-        // Find LRU among non-primary slots (1, 2, 3) instead
-        oldestSlot = 1;
-        oldestTime = hypotheses[1].lastUpdateMs;
-        for (int i = 2; i < MAX_HYPOTHESES; i++) {
-            if (hypotheses[i].lastUpdateMs < oldestTime) {
-                oldestTime = hypotheses[i].lastUpdateMs;
-                oldestSlot = i;
-            }
-        }
-    }
-
-    return oldestSlot;
-}
-
-int MultiHypothesisTracker::findMatchingHypothesis(float bpm) const {
-    for (int i = 0; i < MAX_HYPOTHESES; i++) {
-        if (!hypotheses[i].active) continue;
-
-        // Guard against division by zero (hypotheses[i].bpm should never be 0, but be defensive)
-        if (hypotheses[i].bpm < 1.0f) continue;
-
-        float error = absf(bpm - hypotheses[i].bpm) / hypotheses[i].bpm;
-        if (error < bpmMatchTolerance) {
-            return i;
-        }
-    }
-    return -1;  // No match
-}
-
-void MultiHypothesisTracker::updateHypothesis(int index, float dt, uint32_t nowMs, bool hasSignificantAudio) {
-    if (index < 0 || index >= MAX_HYPOTHESES) return;
-    if (!hypotheses[index].active) return;
-
-    TempoHypothesis& hypo = hypotheses[index];
-
-    // Always advance phase (for prediction)
-    hypo.updatePhase(dt);
-
-    // Update confidence
-    hypo.confidence = hypo.computeConfidence(strengthWeight, consistencyWeight, longevityWeight);
-
-    if (hasSignificantAudio) {
-        // Active music: apply beat-count decay if enough beats accumulated
-        if (hypo.beatsSinceUpdate > 1.0f) {
-            hypo.applyBeatDecay(minStrengthToKeep);
-            // FIX: Reset accumulator after decay to prevent runaway accumulation
-            hypo.beatsSinceUpdate = 0.0f;
-        }
-    } else {
-        // Silence: apply time-based decay after grace period
-        int32_t silenceMs = static_cast<int32_t>(nowMs - hypo.lastUpdateMs);
-        if (silenceMs < 0) silenceMs = 0;  // Handle wraparound
-
-        if (static_cast<uint32_t>(silenceMs) > silenceGracePeriodMs) {
-            hypo.applySilenceDecay(dt, minStrengthToKeep);
-        }
-    }
-}
-
-void MultiHypothesisTracker::promoteBestHypothesis(uint32_t nowMs) {
-    // Find best non-primary hypothesis
-    int bestSlot = 0;
-    float bestConfidence = hypotheses[0].confidence;
-
-    for (int i = 1; i < MAX_HYPOTHESES; i++) {
-        if (!hypotheses[i].active) continue;
-
-        if (hypotheses[i].confidence > bestConfidence) {
-            bestConfidence = hypotheses[i].confidence;
-            bestSlot = i;
-        }
-    }
-
-    // Promote if significantly better and has enough history
-    if (bestSlot != 0 &&
-        bestConfidence > hypotheses[0].confidence + promotionThreshold &&
-        hypotheses[bestSlot].beatCount >= minBeatsBeforePromotion) {
-
-        // Debug output (requires channel enabled AND verbosity level)
-        if (debugLevel >= HypothesisDebugLevel::EVENTS &&
-            SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) {
-            Serial.print(F("{\"type\":\"HYPO_PROMOTE\",\"from\":"));
-            Serial.print(bestSlot);
-            Serial.print(F(",\"to\":0,\"bpm\":"));
-            Serial.print(hypotheses[bestSlot].bpm, 1);
-            Serial.print(F(",\"conf\":"));
-            Serial.print(bestConfidence, 2);
-            Serial.println(F("}"));
-        }
-
-        // Swap slots (not just pointers - actually swap data)
-        // NOTE: createdMs, lastUpdateMs, and beatCount retain their original values
-        // This preserves the hypothesis's full history (when it was born, not when promoted)
-        TempoHypothesis temp = hypotheses[0];
-        hypotheses[0] = hypotheses[bestSlot];
-        hypotheses[bestSlot] = temp;
-
-        // Update priority values to reflect new slot positions
-        hypotheses[0].priority = 0;
-        hypotheses[bestSlot].priority = static_cast<uint8_t>(bestSlot);
-    }
-}
-
-void MultiHypothesisTracker::printDebug(uint32_t nowMs, const char* eventType, int slotIndex) const {
-    // Requires both: debug channel enabled AND verbosity level > OFF
-    if (debugLevel == HypothesisDebugLevel::OFF || !SerialConsole::isDebugChannelEnabled(DebugChannel::HYPOTHESIS)) return;
-
-    // EVENT-level messages are printed immediately by the calling functions
-    // (createHypothesis, promoteBestHypothesis)
-
-    // SUMMARY and DETAILED are rate-limited
-    if (debugLevel >= HypothesisDebugLevel::SUMMARY) {
-        // Rate limit to every 2 seconds
-        if (nowMs - lastDebugPrintMs_ < 2000) return;
-        const_cast<MultiHypothesisTracker*>(this)->lastDebugPrintMs_ = nowMs;
-
-        if (debugLevel == HypothesisDebugLevel::SUMMARY) {
-            // Print primary hypothesis only
-            const TempoHypothesis& primary = hypotheses[0];
-            if (primary.active) {
-                Serial.print(F("{\"type\":\"HYPO_PRIMARY\",\"bpm\":"));
-                Serial.print(primary.bpm, 1);
-                Serial.print(F(",\"phase\":"));
-                Serial.print(primary.phase, 2);
-                Serial.print(F(",\"strength\":"));
-                Serial.print(primary.strength, 2);
-                Serial.print(F(",\"conf\":"));
-                Serial.print(primary.confidence, 2);
-                Serial.print(F(",\"beats\":"));
-                Serial.print(primary.beatCount);
-                Serial.println(F("}"));
-            }
-        } else if (debugLevel == HypothesisDebugLevel::DETAILED) {
-            // Print all hypotheses
-            Serial.print(F("{\"type\":\"HYPO_ALL\",\"h\":["));
-            for (int i = 0; i < MAX_HYPOTHESES; i++) {
-                if (i > 0) Serial.print(F(","));
-                if (hypotheses[i].active) {
-                    Serial.print(F("{\"s\":"));
-                    Serial.print(i);
-                    Serial.print(F(",\"bpm\":"));
-                    Serial.print(hypotheses[i].bpm, 1);
-                    Serial.print(F(",\"ph\":"));
-                    Serial.print(hypotheses[i].phase, 2);
-                    Serial.print(F(",\"str\":"));
-                    Serial.print(hypotheses[i].strength, 2);
-                    Serial.print(F(",\"conf\":"));
-                    Serial.print(hypotheses[i].confidence, 2);
-                    Serial.print(F(",\"b\":"));
-                    Serial.print(hypotheses[i].beatCount);
-                    Serial.print(F("}"));
-                } else {
-                    Serial.print(F("{\"s\":"));
-                    Serial.print(i);
-                    Serial.print(F(",\"inactive\":true}"));
-                }
-            }
-            Serial.println(F("]}"));
-        }
-    }
 }
 
 // ============================================================================
@@ -1376,8 +732,8 @@ float AudioController::computeTempoPrior(float bpm) const {
 }
 
 void AudioController::updateBeatStability(uint32_t nowMs) {
-    // Only update when we detect a beat (phase crossing 0)
-    // Called from updatePhase when phase wraps around
+    // Only update when we detect a beat
+    // Called from detectBeat() when a real beat is found
 
     if (lastBeatMs_ == 0) {
         lastBeatMs_ = nowMs;
@@ -2069,158 +1425,6 @@ float AudioController::computePulseTrainPhase(int beatPeriodSamples) {
 }
 
 // ============================================================================
-// Comb Filter Phase Tracker Implementation (Phase 4)
-// ============================================================================
-
-void CombFilterPhaseTracker::reset() {
-    // Clear delay line
-    for (int i = 0; i < MAX_LAG; i++) {
-        delayLine_[i] = 0.0f;
-    }
-    writeIdx_ = 0;
-
-    // Reset state
-    currentLag_ = 30;  // Default ~120 BPM at 60 Hz
-    resonatorOutput_ = 0.0f;
-    prevResonatorOutput_ = 0.0f;
-    phase_ = 0.0f;
-    samplesSincePeak_ = 0;
-    confidence_ = 0.0f;
-    peakAmplitude_ = 0.0f;
-    runningMax_ = 0.0f;
-    runningMean_ = 0.0f;
-    sampleCount_ = 0;
-}
-
-void CombFilterPhaseTracker::setTempo(float bpm, float frameRate) {
-    // Convert BPM to lag in samples
-    // beatPeriodSeconds = 60 / bpm
-    // lagSamples = beatPeriodSeconds * frameRate
-    if (bpm < 30.0f) bpm = 30.0f;
-    if (bpm > 300.0f) bpm = 300.0f;
-
-    int newLag = static_cast<int>((60.0f / bpm) * frameRate + 0.5f);
-
-    // Clamp to valid range
-    if (newLag < 1) newLag = 1;
-    if (newLag > MAX_LAG) newLag = MAX_LAG;
-
-    // Only update if significantly different (avoid jitter)
-    if (newLag != currentLag_) {
-        // Check if change is significant (>5%)
-        float ratio = static_cast<float>(newLag) / static_cast<float>(currentLag_);
-        if (ratio < 0.95f || ratio > 1.05f) {
-            currentLag_ = newLag;
-        }
-    }
-}
-
-void CombFilterPhaseTracker::process(float input) {
-    // Read from delay line at current lag
-    int readIdx = (writeIdx_ - currentLag_ + MAX_LAG) % MAX_LAG;
-    float delayed = delayLine_[readIdx];
-
-    // Comb filter resonator: y[n] = x[n] + feedback * y[n-L]
-    // This accumulates energy at the beat period
-    resonatorOutput_ = input + feedbackGain * delayed;
-
-    // Write to delay line
-    delayLine_[writeIdx_] = resonatorOutput_;
-    writeIdx_ = (writeIdx_ + 1) % MAX_LAG;
-
-    // Update running statistics for confidence calculation
-    sampleCount_++;
-    float absOutput = resonatorOutput_ > 0 ? resonatorOutput_ : -resonatorOutput_;
-
-    // Exponential moving average for mean
-    const float alpha = 0.01f;  // Slow adaptation
-    runningMean_ = (1.0f - alpha) * runningMean_ + alpha * absOutput;
-
-    // Track maximum for normalization
-    if (absOutput > runningMax_) {
-        runningMax_ = absOutput;
-    } else {
-        // Slow decay of max
-        runningMax_ *= 0.999f;
-    }
-
-    // Phase tracking: detect peaks in resonator output
-    // A peak indicates a beat position
-    samplesSincePeak_++;
-
-    // Cap samplesSincePeak to prevent overflow and handle missed peaks
-    // If we've gone 4 beat periods without a peak, something is wrong
-    if (samplesSincePeak_ > currentLag_ * 4) {
-        samplesSincePeak_ = currentLag_ * 4;
-    }
-
-    // Detect positive peak (local maximum)
-    bool peakDetected = false;
-    if (prevResonatorOutput_ > 0.0f &&
-        resonatorOutput_ < prevResonatorOutput_ &&
-        prevResonatorOutput_ > runningMean_ * 1.5f) {
-        // Found a peak - update phase estimate
-        peakDetected = true;
-
-        // When a peak is detected, we know we're at phase ~0 (on the beat)
-        // The phase error is how far our predicted phase was from 0
-        // Use this to correct our phase tracking
-
-        // Current predicted phase should be near 0 or 1 at a peak
-        float phaseError = phase_;
-        if (phaseError > 0.5f) {
-            phaseError = phaseError - 1.0f;  // Convert 0.9 to -0.1
-        }
-
-        // Apply correction with smoothing
-        // Negative error means we're ahead, positive means behind
-        phase_ -= phaseError * 0.3f;
-
-        // Normalize phase to [0, 1)
-        if (phase_ >= 1.0f) phase_ -= 1.0f;
-        if (phase_ < 0.0f) phase_ += 1.0f;
-
-        // Update peak amplitude for confidence
-        peakAmplitude_ = 0.8f * peakAmplitude_ + 0.2f * prevResonatorOutput_;
-
-        // Reset counter
-        samplesSincePeak_ = 0;
-    }
-
-    // Update phase (it advances with time)
-    // Phase advances by 1/currentLag per sample
-    // Skip the increment on peak detection frames to avoid double-update
-    if (!peakDetected) {
-        phase_ += 1.0f / static_cast<float>(currentLag_);
-        if (phase_ >= 1.0f) phase_ -= 1.0f;
-    }
-
-    // Compute confidence based on resonator stability
-    // High confidence when:
-    // 1. Peak amplitude is significantly above mean
-    // 2. Peaks occur regularly at expected interval
-    if (runningMax_ > 0.001f && peakAmplitude_ > 0.0f) {
-        // Peak-to-mean ratio indicates periodicity strength
-        float peakRatio = peakAmplitude_ / (runningMean_ + 0.001f);
-        // Confidence scales with how much peaks stand out
-        confidence_ = 1.0f - 1.0f / (1.0f + peakRatio * 0.5f);
-
-        // Clamp to [0, 1]
-        if (confidence_ < 0.0f) confidence_ = 0.0f;
-        if (confidence_ > 1.0f) confidence_ = 1.0f;
-
-        // Reduce confidence during startup
-        if (sampleCount_ < currentLag_ * 4) {
-            confidence_ *= static_cast<float>(sampleCount_) / static_cast<float>(currentLag_ * 4);
-        }
-    } else {
-        confidence_ = 0.0f;
-    }
-
-    prevResonatorOutput_ = resonatorOutput_;
-}
-
-// ============================================================================
 // Comb Filter Bank Implementation (Independent Tempo Validation)
 // ============================================================================
 
@@ -2382,120 +1586,3 @@ void CombFilterBank::extractPhase() {
     peakPhase_ = phase;
 }
 
-// ============================================================================
-// Rhythm Fusion Implementation (Phase 5)
-// ============================================================================
-
-void AudioController::fuseRhythmEstimates() {
-    // Collect phase estimates and confidences from available systems
-    // System 0: Autocorrelation (Fourier phase from OSS buffer)
-    // System 1: Single comb filter (if combFilterWeight > 0)
-    // System 2: Comb filter bank (if combBankEnabled)
-
-    // Count active systems and collect their estimates
-    static constexpr int MAX_SYSTEMS = 3;
-    float phases[MAX_SYSTEMS] = {0};
-    float confidences[MAX_SYSTEMS] = {0};
-    int numActive = 0;
-
-    // System 0: Autocorrelation phase (always active)
-    // Uses blended Fourier/peak-finding phase from runAutocorrelation
-    phases[numActive] = targetPhase_;
-    confidences[numActive] = periodicityStrength_;
-    numActive++;
-
-    // System 1: Single comb filter (if enabled and has confidence)
-    if (combFilterWeight > 0.0f && combFilter_.getConfidence() > 0.1f) {
-        phases[numActive] = combFilter_.getPhase();
-        // Scale confidence by combFilterWeight
-        confidences[numActive] = combFilter_.getConfidence() * combFilterWeight;
-        numActive++;
-    }
-
-    // System 2: Comb filter bank (if enabled and has confidence)
-    if (combBankEnabled && combFilterBank_.getPeakConfidence() > 0.1f) {
-        phases[numActive] = combFilterBank_.getPhaseAtPeak();
-        // Use bank confidence directly (already independent validation)
-        confidences[numActive] = combFilterBank_.getPeakConfidence();
-        numActive++;
-    }
-
-    // If only one system active, use it directly
-    // Note: consensusMetric_ reflects actual confidence, not fake "perfect consensus"
-    if (numActive <= 1) {
-        fusedPhase_ = phases[0];
-        fusedConfidence_ = confidences[0];
-        consensusMetric_ = confidences[0];  // Single system = use its confidence
-        return;
-    }
-
-    // Normalize confidences
-    float totalConf = 0.0f;
-    for (int i = 0; i < numActive; i++) {
-        totalConf += confidences[i];
-    }
-
-    if (totalConf < 0.01f) {
-        // No confident estimate - keep current phase
-        fusedConfidence_ = 0.0f;
-        consensusMetric_ = 0.0f;
-        return;
-    }
-
-    // Weighted circular mean for phase fusion
-    // Convert to unit vectors, weight, sum, convert back
-    float sinSum = 0.0f;
-    float cosSum = 0.0f;
-
-    for (int i = 0; i < numActive; i++) {
-        float weight = confidences[i] / totalConf;
-        float angle = phases[i] * 2.0f * 3.14159265f;
-        sinSum += weight * sinf(angle);
-        cosSum += weight * cosf(angle);
-    }
-
-    // Convert back to phase
-    fusedPhase_ = atan2f(sinSum, cosSum) / (2.0f * 3.14159265f);
-    if (fusedPhase_ < 0.0f) fusedPhase_ += 1.0f;
-
-    // Apply transient hint (small nudge based on detected transients)
-    // transientPhaseError_ is updated in updateTransientPhaseCorrection
-    if (transientHintWeight > 0.0f) {
-        float hint = transientPhaseError_ * transientHintWeight;
-        // Clamp hint to prevent large jumps
-        if (hint > 0.1f) hint = 0.1f;
-        if (hint < -0.1f) hint = -0.1f;
-
-        fusedPhase_ += hint;
-        // Normalize
-        if (fusedPhase_ >= 1.0f) fusedPhase_ -= 1.0f;
-        if (fusedPhase_ < 0.0f) fusedPhase_ += 1.0f;
-
-        transientHint_ = hint;  // Store for debugging
-    }
-
-    // Compute consensus metric (how much do systems agree?)
-    // Based on maximum phase difference between any two systems
-    float maxDiff = 0.0f;
-    for (int i = 0; i < numActive; i++) {
-        for (int j = i + 1; j < numActive; j++) {
-            float diff = phases[i] - phases[j];
-            // Handle wraparound
-            if (diff < 0.0f) diff = -diff;
-            if (diff > 0.5f) diff = 1.0f - diff;
-            if (diff > maxDiff) maxDiff = diff;
-        }
-    }
-
-    // Consensus: 1.0 when all agree, 0.0 when maximally different (0.5 apart)
-    consensusMetric_ = 1.0f - (maxDiff * 2.0f);
-    if (consensusMetric_ < 0.0f) consensusMetric_ = 0.0f;
-
-    // Fused confidence = average confidence × consensus
-    // High confidence only when systems agree
-    fusedConfidence_ = (totalConf / static_cast<float>(numActive)) * consensusMetric_;
-
-    // Update targetPhase_ with fused result
-    // This allows downstream systems to use the improved estimate
-    targetPhase_ = fusedPhase_;
-}

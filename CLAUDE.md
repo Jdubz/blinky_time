@@ -46,7 +46,7 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 
 | Document | Purpose |
 |----------|---------|
-| `docs/AUDIO_ARCHITECTURE.md` | AudioController v3 architecture (multi-hypothesis tempo tracking) |
+| `docs/AUDIO_ARCHITECTURE.md` | AudioController architecture (CBSS beat tracking) |
 | `docs/AUDIO-TUNING-GUIDE.md` | **Main testing guide** - 56 tunable parameters, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator/Effect/Renderer pattern |
@@ -86,7 +86,14 @@ The following were deleted as outdated:
 - `docs/RHYTHM_ANALYSIS_ENHANCEMENT_PLAN.md` - Replaced by AUDIO_ARCHITECTURE.md (Jan 2026)
 - `docs/ENSEMBLE_CALIBRATION_ASSESSMENT.md` - Completed assessment (Jan 2026)
 - `blinky-serial-mcp/TOOLING-ASSESSMENT.md` - Completed assessment (Jan 2026)
-- `docs/MULTI_HYPOTHESIS_OPEN_QUESTIONS_ANSWERED.md` - Merged into MULTI_HYPOTHESIS_TRACKING_PLAN.md (Jan 2026)
+- `docs/MULTI_HYPOTHESIS_OPEN_QUESTIONS_ANSWERED.md` - Obsolete (Jan 2026)
+- `docs/MULTI_HYPOTHESIS_TRACKING_PLAN.md` - Replaced by CBSS beat tracking (Feb 2026)
+- `docs/RHYTHM_ANALYSIS_IMPROVEMENTS.md` - Obsolete, referenced deleted params (Feb 2026)
+- `docs/RHYTHM_ANALYSIS_TEST_PLAN.md` - Referenced old hypothesis system (Feb 2026)
+- `docs/RHYTHM_ANALYSIS_IMPROVEMENT_PLAN.md` - Referenced CombFilterPhaseTracker/fusion (Feb 2026)
+- `docs/COMB_FILTER_IMPROVEMENT_PLAN.md` - Old comb filter plan, system replaced (Feb 2026)
+- `docs/AUDIO_IMPROVEMENT_ANALYSIS.md` - Completed analysis (Feb 2026)
+- `blinky-test-player/src/param-tuner/hypothesis-validator.ts` - Old hypothesis test (Feb 2026)
 - `blinky-test-player/TUNING_SCENARIOS.md` - Merged into PARAM_TUNER_GUIDE.md (Jan 2026)
 
 ## System Architecture Overview
@@ -112,9 +119,9 @@ PDM Microphone (16 kHz)
     ↓
 AdaptiveMic (AGC + normalization)
     ↓
-EnsembleDetector (6 algorithms + fusion)
+EnsembleDetector (2 detectors: Drummer + Complex)
     ↓
-AudioController v3 (multi-hypothesis tracking)
+AudioController (CBSS beat tracking)
     ↓
 AudioControl {energy, pulse, phase, rhythmStrength}
     ↓
@@ -134,18 +141,18 @@ RenderPipeline → LED Output
 
 2. **Transient Detection (Ensemble)**
    - `EnsembleDetector.h` - Weighted fusion of 6 detectors
-   - **Optimized 2-detector config (Jan 2026):** HFC (0.60) + Drummer (0.40)
-   - Disabled: Spectral, Bass, Mel, Complex (too many false positives)
-   - Agreement-based confidence scaling
-   - Cooldown: 80ms (prevents false positives)
+   - **Optimized 2-detector config (Feb 2026):** Drummer (0.50, thresh 4.5) + Complex (0.50, thresh 3.5)
+   - Disabled: Spectral, HFC, Bass, Novelty (tested on real music: noisy or miss kicks)
+   - Agreement-based confidence scaling (single-detector boost 0.7 for 2-detector config)
+   - Adaptive cooldown (tempo-aware)
 
-3. **Rhythm Tracking (AudioController v3)**
-   - `AudioController.h/cpp` - Multi-hypothesis tempo tracking
+3. **Rhythm Tracking (AudioController)**
+   - `AudioController.h/cpp` - CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - Autocorrelation every 500ms
-   - 4 concurrent tempo hypotheses (LRU eviction)
-   - Confidence-based promotion (≥8 beat requirement)
-   - Dual decay: phrase-aware (32-beat half-life) + silence (5s half-life)
+   - Autocorrelation every 500ms with tempo prior
+   - CBSS: cumulative beat strength signal for beat prediction
+   - Counter-based beat detection with deterministic phase
+   - Comb filter bank (20 filters) for tempo validation
 
 4. **Generators (Visual Effects)**
    - `Fire.cpp/h` - Heat diffusion with sparks (13 params)
@@ -272,7 +279,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~16 KB total (baseline 10 KB + multi-hypothesis 1 KB + band OSS/comb filters ~5 KB)
+- RAM: ~16 KB total (baseline 10 KB + CBSS/OSS buffers ~3 KB + comb filters ~5 KB)
 - Flash: ~222 KB firmware, ~30 KB settings storage
 - Available: 256 KB RAM, 1 MB Flash
 
@@ -280,7 +287,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Microphone + FFT: ~4%
 - Ensemble detector: ~1%
 - Autocorrelation (500ms): ~3% amortized
-- Hypothesis updates: ~1%
+- CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
 - LED rendering: ~2%
 - **Total: ~15-20%** (ample headroom)
@@ -316,11 +323,11 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Arduino IDE only (NO arduino-cli)
 - Device bricking prevention
 
-### Current Status (January 2026)
+### Current Status (February 2026)
 
 **Production Ready:**
-- ✅ AudioController v3 (multi-hypothesis tracking)
-- ✅ 6-detector ensemble (calibrated weights)
+- ✅ AudioController with CBSS beat tracking
+- ✅ 2-detector ensemble (Drummer + Complex, calibrated weights)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner)
@@ -356,20 +363,22 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (February 2026)
 
 ### Ensemble Detection Architecture
-The system uses 6 detectors with weighted fusion (3 enabled, 3 disabled):
+The system uses 6 detectors with weighted fusion (2 enabled, 4 disabled).
+Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals.
 
-| Detector | Weight | Enabled | Specialty |
-|----------|--------|---------|-----------|
-| Drummer | 0.35 | Yes | Time-domain amplitude transients |
-| SpectralFlux | 0.20 | No | Mel-band SuperFlux (fires on pad chords) |
-| HFC | 0.20 | Yes | High-frequency percussive attacks |
-| BassBand | 0.45 | Yes | Sub-bass kick detection (primary EDM detector) |
-| ComplexDomain | 0.13 | No | Phase-based soft onset detection |
-| Novelty | 0.12 | No | Cosine distance spectral novelty |
+| Detector | Weight | Thresh | Enabled | Transient F1 | Notes |
+|----------|--------|--------|---------|-------------|-------|
+| Drummer | 0.50 | 4.5 | Yes | 0.901 | Best recall on kicks/snares |
+| ComplexDomain | 0.50 | 3.5 | Yes | 0.929 | Best precision, near-zero false positives |
+| SpectralFlux | 0.20 | 1.4 | No | 0.164 | Fires on pad chords |
+| HFC | 0.20 | 4.0 | No | 0.620 | Hi-hat detector, misses kicks |
+| BassBand | 0.45 | 3.0 | No | 0.187 | Too noisy (100+ detections/30s) |
+| Novelty | 0.12 | 2.5 | No | 0.029 | Near-zero detections on real music |
 
 ### Key Features
-- **Agreement-based confidence**: Single-detector hits suppressed (0.5x), 2-detector near full (0.9x), 3+ boosted (up to 1.2x)
+- **Agreement-based confidence**: Single-detector boost 0.7 (common with 2-detector config), 2-detector full (1.0x)
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
-- **Multi-hypothesis rhythm tracking**: 4 concurrent tempo hypotheses with autocorrelation + comb filter validation
+- **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
+- **Comb filter bank**: 20 parallel filters for tempo validation
 - **Shared FFT**: All spectral detectors share a single FFT computation
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

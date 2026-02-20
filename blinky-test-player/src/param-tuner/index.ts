@@ -20,7 +20,6 @@ import { runFastTune } from './fast-tune.js';
 import { SuiteRunner, listSuites, getSuite, PREDEFINED_SUITES, validateSuiteConfig } from './suite.js';
 import { QueueManager, createQueue, listQueues } from './queue.js';
 import { getPatternsForParam } from '../patterns.js';
-import { runHypothesisValidationSuite } from './hypothesis-validator.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -183,10 +182,6 @@ async function main() {
         });
     }, async (args) => {
       await runTargetCommand(args as GlobalArgs & { param: string; 'save-to-device'?: boolean });
-    })
-    // NEW: Hypothesis validation test
-    .command('hypothesis-validate', 'Validate multi-hypothesis tempo tracking behavior', {}, async (args) => {
-      await runHypothesisValidate(args as GlobalArgs);
     })
     .demandCommand(1, 'You must provide a command')
     .help()
@@ -622,48 +617,6 @@ async function runTargetCommand(args: GlobalArgs & { param: string; 'save-to-dev
 
   } catch (err) {
     console.error('\nTarget test error:', err);
-    process.exit(1);
-  }
-}
-
-// =============================================================================
-// HYPOTHESIS VALIDATION
-// =============================================================================
-
-async function runHypothesisValidate(args: GlobalArgs): Promise<void> {
-  const port = validatePort(args);
-
-  console.log('\n🎯 Hypothesis Validation Test');
-  console.log('═'.repeat(50));
-  console.log('Testing multi-hypothesis tempo tracking behavior');
-  console.log(`Port: ${port}`);
-  if (args.gain !== undefined) {
-    console.log(`Hardware gain: ${args.gain} (locked)`);
-  }
-  console.log('');
-
-  try {
-    const results = await runHypothesisValidationSuite(port, args.gain);
-
-    console.log('\n📊 Validation Summary');
-    console.log('═'.repeat(50));
-
-    for (const result of results) {
-      console.log(`\n${result.pattern}:`);
-      console.log(`  Duration: ${(result.durationMs / 1000).toFixed(1)}s`);
-      console.log(`  Hypotheses: ${result.hypotheses.totalCreated} created, ${result.hypotheses.maxConcurrent} concurrent max`);
-      console.log(`  Promotions: ${result.hypotheses.promotions}`);
-      console.log(`  Time to first: ${result.hypotheses.timeToFirstMs ? (result.hypotheses.timeToFirstMs / 1000).toFixed(1) + 's' : 'N/A'}`);
-      console.log(`  Primary BPM: ${result.primary.avgBpm.toFixed(1)} (error: ${result.primary.bpmError?.toFixed(1) || 'N/A'})`);
-      console.log(`  Confidence: ${result.primary.avgConfidence.toFixed(3)} (growth: ${result.primary.confidenceGrowth.toFixed(3)}/s)`);
-      console.log(`  Phase error: ${result.primary.avgPhaseError.toFixed(4)}`);
-    }
-
-    console.log('\n✅ Hypothesis validation complete!');
-    console.log(`Results saved to: ${args.output || DEFAULT_OUTPUT_DIR}`);
-
-  } catch (err) {
-    console.error('\n❌ Hypothesis validation error:', err);
     process.exit(1);
   }
 }

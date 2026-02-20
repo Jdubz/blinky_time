@@ -311,8 +311,8 @@ get_settings()
 // Monitor BPM tracking
 monitor_music(duration_ms: 10000, expected_bpm: 120)
 
-// Get multi-hypothesis state
-get_hypotheses()
+// Get beat tracker state
+get_beat_state()
 
 // Disconnect when done
 disconnect()

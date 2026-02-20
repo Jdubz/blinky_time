@@ -366,8 +366,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         },
       },
       {
-        name: 'get_hypotheses',
-        description: 'Get multi-hypothesis tracker state including all 4 hypothesis slots (BPM, phase, confidence, strength, beatCount). Useful for validating tempo tracking behavior and hypothesis promotion.',
+        name: 'get_beat_state',
+        description: 'Get CBSS beat tracker state (BPM, phase, confidence, periodicity, beatCount, stability). Useful for validating tempo tracking behavior.',
         inputSchema: {
           type: 'object',
           properties: {},
@@ -446,6 +446,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             duration_ms: {
               type: 'number',
               description: 'Override playback duration in milliseconds (default: full file)',
+            },
+            commands: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Serial commands to send before test (e.g., "set detector_enable drummer 0")',
             },
           },
           required: ['audio_file', 'ground_truth', 'port'],
@@ -1058,33 +1063,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
-      case 'get_hypotheses': {
+      case 'get_beat_state': {
         if (!serial.getState().connected) {
           throw new Error('Not connected to a device');
         }
 
-        // Send "json hypotheses" command and parse response
-        const response = await serial.sendCommand('json hypotheses');
+        // Send "json beat" command and parse response
+        const response = await serial.sendCommand('json beat');
 
         // Parse JSON response
         let parsed;
         try {
           parsed = JSON.parse(response);
         } catch (e) {
-          throw new Error(`Failed to parse hypothesis data: ${response}`);
+          throw new Error(`Failed to parse beat state data: ${response}`);
         }
 
-        // Format for MCP response
-        const primaryIdx = parsed.primaryIndex || 0;
         const formatted = {
-          hypotheses: parsed.hypotheses || [],
-          primaryIndex: primaryIdx,
-          summary: {
-            activeCount: parsed.hypotheses.filter((h: { active: boolean }) => h.active).length,
-            primaryBpm: parsed.hypotheses[primaryIdx]?.bpm || null,
-            primaryConfidence: parsed.hypotheses[primaryIdx]?.confidence || null,
-            primaryBeats: parsed.hypotheses[primaryIdx]?.beatCount || null,
-          },
+          bpm: parsed.bpm,
+          phase: parsed.phase,
+          periodicity: parsed.periodicity,
+          confidence: parsed.confidence,
+          beatCount: parsed.beatCount,
+          beatPeriod: parsed.beatPeriod,
+          stability: parsed.stability,
         };
 
         return {
@@ -1805,12 +1807,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           port,
           gain,
           duration_ms: overrideDurationMs,
+          commands: preTestCommands,
         } = args as {
           audio_file: string;
           ground_truth: string;
           port: string;
           gain?: number;
           duration_ms?: number;
+          commands?: string[];
         };
 
         // Validate files exist
@@ -1842,6 +1846,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // Switch to audio generator and enable fast streaming
           await serial.sendCommand('gen audio');
+
+          // Send pre-test commands (e.g., detector isolation)
+          if (preTestCommands && preTestCommands.length > 0) {
+            for (const cmd of preTestCommands) {
+              await serial.sendCommand(cmd);
+            }
+          }
 
           // Clear buffers and start recording
           transientBuffer = [];
@@ -1935,7 +1946,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           } catch { /* ignore parse errors */ }
 
           // Calculate audio latency from onset detections vs ground truth
-          const expectedHits = gtData.hits.filter(h => h.expectTrigger !== false);
+          // Only consider hits within the recording window for latency estimation
+          const audioDurationMs = rawDuration - timingOffsetMs;
+          const expectedHits = gtData.hits.filter(h =>
+            h.expectTrigger !== false && h.time * 1000 <= audioDurationMs
+          );
           const offsets: number[] = [];
           detections.forEach((detection) => {
             let minDist = Infinity;
@@ -1960,9 +1975,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
 
           // Beat tracking evaluation
-          // Reference beats from ground truth (in seconds)
+          // Determine the actual audio playback window (in seconds)
+          const audioDurationSec = (rawDuration - timingOffsetMs) / 1000;
+
+          // Reference beats from ground truth, filtered to recording window
           const refBeats = gtData.hits
             .filter(h => h.expectTrigger !== false)
+            .filter(h => h.time <= audioDurationSec)
             .map(h => h.time);
 
           // Estimated beats from device beat events (phase wrapping)
@@ -1993,6 +2012,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const beatRecall = refBeats.length > 0 ? tp / refBeats.length : 0;
           const beatF1 = (beatPrecision + beatRecall) > 0
             ? 2 * (beatPrecision * beatRecall) / (beatPrecision + beatRecall)
+            : 0;
+
+          // Transient F1: raw transient timestamps vs ground truth beats
+          // This measures detector quality independent of rhythm tracking
+          const estTransients = detections.map(d => (d.timestampMs - audioLatencyMs) / 1000);
+          const transientMatchedRef = new Set<number>();
+          let transientTp = 0;
+          for (const est of estTransients) {
+            let bestIdx = -1;
+            let bestDist = Infinity;
+            for (let i = 0; i < refBeats.length; i++) {
+              if (transientMatchedRef.has(i)) continue;
+              const dist = Math.abs(est - refBeats[i]);
+              if (dist < bestDist && dist <= BEAT_TOLERANCE_SEC) {
+                bestDist = dist;
+                bestIdx = i;
+              }
+            }
+            if (bestIdx >= 0) {
+              transientMatchedRef.add(bestIdx);
+              transientTp++;
+            }
+          }
+
+          const transientPrecision = estTransients.length > 0 ? transientTp / estTransients.length : 0;
+          const transientRecall = refBeats.length > 0 ? transientTp / refBeats.length : 0;
+          const transientF1 = (transientPrecision + transientRecall) > 0
+            ? 2 * (transientPrecision * transientRecall) / (transientPrecision + transientRecall)
             : 0;
 
           // CMLt: Continuity metric
@@ -2104,6 +2151,60 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           const duration = overrideDurationMs || gtData.durationMs || rawDuration;
 
+          // Diagnostics: analyze beat alignment and detection patterns
+          const diagnostics: {
+            transientRate: number;
+            expectedBeatRate: number;
+            beatEventRate: number;
+            phaseOffsetStats: { median: number; stdDev: number; iqr: number } | null;
+            detectionVsBeat: { matched: number; extra: number; missed: number };
+            transientBeatOffsets: number[];
+          } = {
+            // Transient detections per second vs expected beats per second
+            transientRate: audioDurationSec > 0 ? detections.length / audioDurationSec : 0,
+            expectedBeatRate: audioDurationSec > 0 ? refBeats.length / audioDurationSec : 0,
+            beatEventRate: audioDurationSec > 0 ? estBeatsFromDevice.length / audioDurationSec : 0,
+            phaseOffsetStats: null,
+            detectionVsBeat: {
+              matched: tp,
+              extra: estBeatsFromDevice.length - tp,
+              missed: refBeats.length - tp,
+            },
+            transientBeatOffsets: [],
+          };
+
+          // Compute offset of each transient detection from nearest reference beat
+          // This reveals systematic latency or phase misalignment
+          const transientBeatOffsets: number[] = [];
+          detections.forEach((det) => {
+            const detSec = (det.timestampMs - audioLatencyMs) / 1000;
+            let bestOffset = Infinity;
+            for (const ref of refBeats) {
+              const offset = detSec - ref;
+              if (Math.abs(offset) < Math.abs(bestOffset)) {
+                bestOffset = offset;
+              }
+            }
+            if (Math.abs(bestOffset) < 0.5) {
+              transientBeatOffsets.push(Math.round(bestOffset * 1000));
+            }
+          });
+          diagnostics.transientBeatOffsets = transientBeatOffsets;
+
+          if (transientBeatOffsets.length >= 3) {
+            const sorted = [...transientBeatOffsets].sort((a, b) => a - b);
+            const median = sorted[Math.floor(sorted.length / 2)];
+            const mean = sorted.reduce((s, v) => s + v, 0) / sorted.length;
+            const stdDev = Math.sqrt(sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / sorted.length);
+            const q1 = sorted[Math.floor(sorted.length * 0.25)];
+            const q3 = sorted[Math.floor(sorted.length * 0.75)];
+            diagnostics.phaseOffsetStats = {
+              median: Math.round(median),
+              stdDev: Math.round(stdDev),
+              iqr: Math.round(q3 - q1),
+            };
+          }
+
           // Save detailed results
           ensureTestResultsDir();
           const timestamp = Date.now();
@@ -2129,6 +2230,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               refBeats: refBeats.length,
               estBeats: estBeatsFromDevice.length,
             },
+            transientTracking: {
+              f1: Math.round(transientF1 * 1000) / 1000,
+              precision: Math.round(transientPrecision * 1000) / 1000,
+              recall: Math.round(transientRecall * 1000) / 1000,
+              count: detections.length,
+            },
             musicMode: {
               avgBpm: Math.round(avgBpm * 10) / 10,
               expectedBpm: expectedBPM,
@@ -2138,6 +2245,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               phaseStability: Math.round(phaseStability * 1000) / 1000,
               activationMs: activeStates.length > 0 ? activeStates[0].timestampMs : null,
             },
+            diagnostics,
             groundTruth: gtData,
             detections,
             musicStates,
@@ -2151,6 +2259,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const summary = {
             pattern: gtData.pattern,
             durationMs: duration,
+            audioDurationSec: Math.round(audioDurationSec * 10) / 10,
             beatTracking: {
               f1: fullResults.beatTracking.f1,
               precision: fullResults.beatTracking.precision,
@@ -2160,7 +2269,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               refBeats: refBeats.length,
               estBeats: estBeatsFromDevice.length,
             },
+            transientTracking: fullResults.transientTracking,
             musicMode: fullResults.musicMode,
+            diagnostics: {
+              transientRate: Math.round(diagnostics.transientRate * 10) / 10,
+              expectedBeatRate: Math.round(diagnostics.expectedBeatRate * 10) / 10,
+              beatEventRate: Math.round(diagnostics.beatEventRate * 10) / 10,
+              phaseOffsetMs: diagnostics.phaseOffsetStats,
+              matched: diagnostics.detectionVsBeat.matched,
+              extra: diagnostics.detectionVsBeat.extra,
+              missed: diagnostics.detectionVsBeat.missed,
+            },
             timing: {
               latencyMs: Math.round(audioLatencyMs),
             },

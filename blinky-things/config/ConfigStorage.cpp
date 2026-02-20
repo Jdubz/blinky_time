@@ -190,7 +190,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
-    data_.music.phaseAdaptRate = 0.7f;   // Fast phase adaptation for tight beat sync
+    data_.music.cbssAlpha = 0.9f;         // CBSS weighting (high = more predictive)
 
     // Tempo prior (CRITICAL: must be enabled for correct BPM tracking)
     data_.music.tempoPriorEnabled = true;    // MUST be true
@@ -209,9 +209,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tempoSmoothingFactor = 0.85f;
     data_.music.tempoChangeThreshold = 0.1f;
 
-    // Transient-based phase correction (PLL) - calibrated Feb 2026
-    data_.music.transientCorrectionRate = 0.15f;  // How fast to nudge phase toward transients
-    data_.music.transientCorrectionMin = 0.42f;   // Min transient strength to trigger correction
+    // CBSS beat tracking
+    data_.music.beatWindowScale = 0.5f;        // Beat search window as fraction of period
+    data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
 
     data_.brightness = 100;
 }
@@ -437,7 +437,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
     validateFloat(data_.music.bpmMin, 40.0f, 120.0f, F("bpmMin"));
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
-    validateFloat(data_.music.phaseAdaptRate, 0.01f, 1.0f, F("phaseAdaptRate"));
+    validateFloat(data_.music.cbssAlpha, 0.5f, 0.99f, F("cbssAlpha"));
 
     // Tempo prior validation (v25+)
     validateFloat(data_.music.tempoPriorCenter, 60.0f, 200.0f, F("priorcenter"));
@@ -455,9 +455,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.tempoSmoothingFactor, 0.5f, 0.99f, F("temposmooth"));
     validateFloat(data_.music.tempoChangeThreshold, 0.01f, 0.5f, F("tempochgthresh"));
 
-    // Transient-based phase correction validation (v26+)
-    validateFloat(data_.music.transientCorrectionRate, 0.0f, 1.0f, F("transcorrrate"));
-    validateFloat(data_.music.transientCorrectionMin, 0.0f, 1.0f, F("transcorrmin"));
+    // CBSS beat tracking validation
+    validateFloat(data_.music.beatWindowScale, 0.1f, 0.9f, F("beatWindowScale"));
+    validateFloat(data_.music.beatConfidenceDecay, 0.9f, 0.999f, F("beatConfDecay"));
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
@@ -580,28 +580,28 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->bpmMin = data_.music.bpmMin;
         audioCtrl->bpmMax = data_.music.bpmMax;
         audioCtrl->activationThreshold = data_.music.activationThreshold;
-        audioCtrl->phaseAdaptRate = data_.music.phaseAdaptRate;
+        audioCtrl->cbssAlpha = data_.music.cbssAlpha;
 
-        // Tempo prior (v25+) - CRITICAL for correct BPM tracking
+        // Tempo prior - CRITICAL for correct BPM tracking
         audioCtrl->tempoPriorEnabled = data_.music.tempoPriorEnabled;
         audioCtrl->tempoPriorCenter = data_.music.tempoPriorCenter;
         audioCtrl->tempoPriorWidth = data_.music.tempoPriorWidth;
         audioCtrl->tempoPriorStrength = data_.music.tempoPriorStrength;
 
-        // Pulse modulation (v25+)
+        // Pulse modulation
         audioCtrl->pulseBoostOnBeat = data_.music.pulseBoostOnBeat;
         audioCtrl->pulseSuppressOffBeat = data_.music.pulseSuppressOffBeat;
         audioCtrl->energyBoostOnBeat = data_.music.energyBoostOnBeat;
 
-        // Stability and smoothing (v25+)
+        // Stability and smoothing
         audioCtrl->stabilityWindowBeats = data_.music.stabilityWindowBeats;
         audioCtrl->beatLookaheadMs = data_.music.beatLookaheadMs;
         audioCtrl->tempoSmoothingFactor = data_.music.tempoSmoothingFactor;
         audioCtrl->tempoChangeThreshold = data_.music.tempoChangeThreshold;
 
-        // Transient-based phase correction (v26+)
-        audioCtrl->transientCorrectionRate = data_.music.transientCorrectionRate;
-        audioCtrl->transientCorrectionMin = data_.music.transientCorrectionMin;
+        // CBSS beat tracking
+        audioCtrl->beatWindowScale = data_.music.beatWindowScale;
+        audioCtrl->beatConfidenceDecay = data_.music.beatConfidenceDecay;
     }
 }
 
@@ -709,28 +709,28 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.bpmMin = audioCtrl->bpmMin;
         data_.music.bpmMax = audioCtrl->bpmMax;
         data_.music.activationThreshold = audioCtrl->activationThreshold;
-        data_.music.phaseAdaptRate = audioCtrl->phaseAdaptRate;
+        data_.music.cbssAlpha = audioCtrl->cbssAlpha;
 
-        // Tempo prior (v25+) - CRITICAL for correct BPM tracking
+        // Tempo prior - CRITICAL for correct BPM tracking
         data_.music.tempoPriorEnabled = audioCtrl->tempoPriorEnabled;
         data_.music.tempoPriorCenter = audioCtrl->tempoPriorCenter;
         data_.music.tempoPriorWidth = audioCtrl->tempoPriorWidth;
         data_.music.tempoPriorStrength = audioCtrl->tempoPriorStrength;
 
-        // Pulse modulation (v25+)
+        // Pulse modulation
         data_.music.pulseBoostOnBeat = audioCtrl->pulseBoostOnBeat;
         data_.music.pulseSuppressOffBeat = audioCtrl->pulseSuppressOffBeat;
         data_.music.energyBoostOnBeat = audioCtrl->energyBoostOnBeat;
 
-        // Stability and smoothing (v25+)
+        // Stability and smoothing
         data_.music.stabilityWindowBeats = audioCtrl->stabilityWindowBeats;
         data_.music.beatLookaheadMs = audioCtrl->beatLookaheadMs;
         data_.music.tempoSmoothingFactor = audioCtrl->tempoSmoothingFactor;
         data_.music.tempoChangeThreshold = audioCtrl->tempoChangeThreshold;
 
-        // Transient-based phase correction (v26+)
-        data_.music.transientCorrectionRate = audioCtrl->transientCorrectionRate;
-        data_.music.transientCorrectionMin = audioCtrl->transientCorrectionMin;
+        // CBSS beat tracking
+        data_.music.beatWindowScale = audioCtrl->beatWindowScale;
+        data_.music.beatConfidenceDecay = audioCtrl->beatConfidenceDecay;
     }
 
     saveToFlash();
