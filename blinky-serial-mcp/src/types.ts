@@ -22,7 +22,7 @@ export interface AudioSample {
   // Debug fields (only present in debug stream mode)
   avg?: number;   // Recent average level (for threshold calculation)
   prev?: number;  // Previous frame level (for attack detection)
-  agree?: number; // Detector agreement count (0-6, how many detectors fired)
+  agree?: number; // Detector agreement count (0-7, how many detectors fired)
   conf?: number;  // Ensemble confidence (0-1, combined confidence score)
 }
 
@@ -31,11 +31,16 @@ export interface MusicModeState {
   bpm: number;    // Tempo (BPM)
   ph: number;     // Phase (0-1)
   str: number;    // Rhythm strength (0-1)
-  conf: number;   // Hypothesis confidence (0-1)
+  conf: number;   // CBSS beat tracking confidence (0-1)
   bc: number;     // Beat count (tracked beats)
   q: number;      // Beat event (0 or 1, phase wrap)
   e: number;      // Energy (0-1)
   p: number;      // Pulse (0-1)
+  // Observability fields (always present in stream)
+  cb?: number;    // Current CBSS value
+  oss?: number;   // Smoothed onset strength
+  ttb?: number;   // Time to next beat (frames countdown)
+  bp?: number;    // Beat was predicted (0=fallback, 1=predicted)
   // Debug fields (only present in debug stream mode)
   ps?: number;    // Periodicity strength (raw autocorrelation peak)
   sb?: number;    // Stable beats count
@@ -53,6 +58,7 @@ export interface BeatEvent {
   timestampMs: number;
   bpm: number;
   type: 'quarter';
+  predicted?: boolean;  // Whether beat came from CBSS prediction vs fallback
 }
 
 export interface MusicModeMetrics {

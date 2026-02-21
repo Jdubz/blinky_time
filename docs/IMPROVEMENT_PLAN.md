@@ -30,121 +30,132 @@
 
 ## Outstanding Issues
 
-### Priority 1: CBSS Beat Detection Overhaul
+### Priority 1: CBSS Beat Tracking — Remaining Improvements
 
-Beat tracking produces F1 = 0.10–0.32 on real music despite excellent BPM estimation (97–99%). See test results in `blinky-test-player/PARAMETER_TUNING_HISTORY.md` (Feb 2026 session).
+BTrack-style predict+countdown CBSS beat detection is implemented and working. Beat F1 improved from 0.10–0.32 to **average 0.47, best 0.84** on real music. BPM estimation remains excellent (96–100%).
 
-**What works:** BPM via autocorrelation (97–99%), transient detection on synthetic patterns (F1 0.80–0.94).
+**What's implemented (Feb 20):**
+- ODF pre-smoothing (5-point causal moving average)
+- Log-Gaussian transition weighting in CBSS backward search
+- BTrack-style predict+countdown beat detection (replaces "first declining frame")
+- Beat timing offset compensation (`beatoffset=9`)
+- Harmonic disambiguation (half-lag + 2/3-lag checks)
+- 7 runtime-tunable parameters via serial console
 
-**What's broken:** Translating correct BPM into correct beat positions. Two root causes identified:
+**Current performance (9 real music tracks):**
 
-1. **No ODF pre-smoothing.** Production beat trackers universally low-pass filter the onset detection function before CBSS. Our raw spectral flux goes straight into CBSS with all its micro-fluctuations, creating many false local maxima. This is the most basic missing step.
+| Category | Tracks | Avg F1 | Notes |
+|----------|--------|--------|-------|
+| Working well (F1 > 0.6) | 4 | 0.724 | Strong kick patterns |
+| Moderate (F1 0.3-0.6) | 2 | 0.447 | Lighter kicks, syncopation |
+| Failing (F1 < 0.2) | 3 | 0.150 | Wrong BPM or ambient |
 
-2. **Wrong peak selection architecture.** Our `detectBeat()` triggers on the "first declining CBSS frame" within the beat window. BTrack (the reference real-time CBSS implementation by Adam Stark) does NOT do this. BTrack uses a **predict-then-countdown** mechanism that is fundamentally more robust.
+**Remaining issues to address:**
 
-#### Research Findings
+#### 1a. Sub-Harmonic BPM Locking (techno-machine-drum)
+BPM locks to 114.9 vs expected 143.6 (ratio 0.80x). Not a clean harmonic — current half-lag/2/3-lag/double-lag checks don't catch it. Tempo prior at 128 BPM center actively pulls toward the sub-harmonic.
 
-Studied BTrack (Stark 2011), Ellis DP beat tracker (2007, used by librosa), Davies & Plumbley context-dependent tracker (2007), particle filtering (Hainsworth 2004, BeatNet 2021), OBTAIN (Mottaghi 2017), and multi-resolution ODF aggregation (McFee & Ellis 2014).
+**Possible fixes:**
+- Widen tempo prior (increase `priorwidth` from 50)
+- Raise prior center toward 130-135 BPM
+- Add more harmonic ratio checks (4/5x, 5/4x)
+- Dynamic prior that shifts based on detected content
 
-**Key insight from BTrack:** At the midpoint between beats, BTrack synthesizes future CBSS values by extrapolating with zero onset strength, multiplies by a Gaussian window centered at the expected next beat time, and takes the argmax. This argmax becomes a countdown timer — when it reaches zero, a beat is declared. The Gaussian window strongly suppresses early noise peaks (they get near-zero weight) while the countdown locks in the prediction so subsequent fluctuations can't change it.
+#### 1b. Ambient/Sparse Track Failure (techno-deep-ambience)
++100ms systematic late offset, F1=0.134. Ambient sections with low onset energy delay CBSS accumulation. The `beatoffset=9` is tuned for tracks with strong transients.
 
-**Key insight from Ellis DP:** Inter-beat intervals that deviate from the expected tempo are penalized with a log-Gaussian cost: `penalty = -(log2(interval / expected))^2`. This means an early noise peak at 417ms (when expecting 500ms at 120 BPM) must have significantly higher onset strength to outweigh the timing penalty.
+**Possible fixes:**
+- Adaptive beat offset based on onset strength or confidence
+- Minimum CBSS threshold below which beats should not be declared
+- Confidence-gated beat output (only emit beats when confidence > threshold)
 
-**Key insight from ODF literature:** A causal 5-point moving average on the onset signal eliminates the micro-fluctuations our detector is triggering on. Every production beat tracker applies this. We don't.
+#### 1c. Trap/Syncopated Failure (edm-trap-electro)
+IQR=318ms (essentially random beat placement). Trap-style half-time feel with syncopated kicks fundamentally challenges our 4-on-the-floor assumptions.
 
-#### Implementation Plan (Incremental, Build-Compile-Test Each Step)
+**Possible fixes:**
+- May be an inherent limitation for real-time causal beat tracking
+- Ground truth may use different metrical level than device expects
+- Consider if AMLt (allowed metrical levels) score is more relevant than F1
 
-**Step 1: ODF Pre-Smoothing** (~30 min, no architecture change)
+#### 1d. Per-Track Offset Variation
+Beat offsets vary from -79ms (dub-groove) to +100ms (deep-ambience). A single `beatoffset` value can't compensate for all tracks.
 
-Apply causal 5-point moving average to `onsetStrength` before `updateCBSS()`:
-```
-smoothed[n] = (oss[n] + oss[n-1] + oss[n-2] + oss[n-3] + oss[n-4]) / 5
-```
-Introduces ~33ms latency (2 frames at 60Hz). Cost: 20 bytes RAM, ~10 ops/frame. This directly removes the noise peaks that cause early triggering.
+**Possible fixes:**
+- Adaptive offset: track running median of transient-to-beat offsets
+- Content-adaptive: use onset strength variance to adjust offset
+- Accept this as a ~50ms limitation of the causal approach
 
-Files: `AudioController.h` (add 5-float ring buffer), `AudioController.cpp` (add smoothing before CBSS call)
+**What NOT to do (tested and rejected):**
+- Phase correction (phasecorr): Destroys BPM on syncopated tracks
+- ODF width > 5: Variable delay destroys beatoffset calibration
+- Ensemble transient input to CBSS: Only works for 4-on-the-floor
+- Multi-resolution ODF: Not needed given current ODF=5 stability
 
-**Step 2: Gaussian Beat Window Weighting** (~2 hours, small change to detectBeat)
+### Priority 2: BandWeightedFluxDetector — IMPLEMENTED & TESTED (Feb 20, 2026)
 
-Replace flat beat window with Gaussian-weighted scoring. Instead of accepting the first declining frame, weight each candidate peak by proximity to the expected beat time:
-```
-score = CBSS_value * exp(-(offset_from_center)^2 / (2 * sigma^2))
-```
-Track the highest-scoring peak within the window; declare beat at late bound or after clear decline from best.
+**Status:** Implemented, compiled, tested on 9 real music tracks. Available via serial but NOT yet default.
 
-Files: `AudioController.h` (precomputed Gaussian LUT, ~240 bytes), `AudioController.cpp` (rewrite inner loop of `detectBeat()`)
+**Implementation:** `BandWeightedFluxDetector` added as 7th detector (`BAND_FLUX = 6`, `COUNT = 7`). Files: `audio/detectors/BandWeightedFluxDetector.h/.cpp`. Disabled by default to preserve existing behavior.
 
-**Step 3: BTrack-Style Predict+Countdown** (~4-6 hours, rewrite detectBeat)
+**Algorithm:** Log-compress FFT magnitudes (`log(1 + 20 * mag[k])`), 3-bin max-filter (SuperFlux vibrato suppression), band-weighted half-wave rectified flux (bass 2.0x, mid 1.5x, high 0.1x), additive threshold (`mean + delta`), asymmetric threshold update, hi-hat rejection gate.
 
-Replace the continuous peak scan with BTrack's two-phase approach:
-1. At beat midpoint (`samplesSinceBeat >= T/2`), synthesize future CBSS for T/2 frames (feed zero onset into CBSS recursion)
-2. Multiply future CBSS by Gaussian expectation window centered at T/2
-3. `timeToNextBeat = argmax(weighted_future_CBSS)`
-4. Countdown each frame; declare beat at zero
+**Test Results (4 configs, 9 tracks):**
 
-The prediction runs once per beat (~2Hz), not every frame. Future synthesis is O(T/2) ≈ 15 iterations at 120 BPM.
+| Config | Avg Beat F1 | Best For |
+|--------|:-:|:--|
+| Baseline (Drummer+Complex) | 0.411 | techno-minimal-emotion (0.700), machine-drum (0.245) |
+| **BandFlux Solo** | **0.468** | trance-party (0.836), infected-vibes (0.764), deep-ambience (0.571) |
+| BandFlux+Drummer | 0.458 | goa-mantra (0.637), minimal-01 (0.627) |
+| All Three (B+D+C) | 0.476* | goa-mantra (0.649) |
 
-Cost: ~2.4 KB RAM (temporary stack buffer for future synthesis + Gaussian LUT), ~200 ops/frame + ~1000 ops per prediction. Easily feasible at 60Hz on Cortex-M4.
+*8 tracks only (1 missing due to serial timeout)
 
-Files: `AudioController.h` (add countdown state, Gaussian LUT), `AudioController.cpp` (rewrite `detectBeat()`, keep `updateCBSS()` as-is)
+**Key findings:**
+1. BandFlux Solo is the best overall config (+14% avg Beat F1 vs baseline)
+2. Additive threshold solves the low-signal problem where Drummer's multiplicative threshold fails
+3. Multi-detector combos are worse than BandFlux Solo — ensemble fusion dilutes the cleaner signal
+4. Low threshold (0.5) is critical — CBSS needs high-recall onset signal
+5. BandFlux hurts techno-minimal-emotion (-0.249) where Drummer already works well
 
-**Step 4: Multi-Resolution ODF** (~1 hour, complementary)
+**Remaining tuning work:**
+- Gamma sweep (10, 15, 20, 30, 50)
+- Bass weight sweep (1.5, 2.0, 2.5, 3.0)
+- Threshold fine-tuning (0.3, 0.4, 0.5, 0.6)
+- Update firmware defaults after optimization (flip BandFlux on, Drummer off)
 
-Compute onset strength at 3 smoothing levels (raw, 3-frame avg, 7-frame avg) and take the geometric mean. Noise peaks at one scale that don't appear at others get suppressed. Inspired by McFee & Ellis 2014.
+See `PARAMETER_TUNING_HISTORY.md` for full per-track results.
 
-Cost: 40 bytes RAM, ~20 ops/frame.
+### Priority 2b: False Positive Reduction
 
-**Step 5: Ellis-Style Temporal Penalty** (~2 hours, complementary)
+With BandFlux Solo config, transient F1 is lower (more false positives, higher recall) but Beat F1 improves. The CBSS beat tracker benefits from high-recall onset signal. False positive reduction on synthetic patterns (pad-rejection, lead-melody) needs re-evaluation with BandFlux enabled.
 
-When scoring candidate peaks in the beat window, add a log-Gaussian penalty for inter-beat intervals deviating from expected tempo:
-```
-penalty = tightness * (log2(candidate_interval / expected_interval))^2
-```
-Precompute as lookup table (~480 bytes). This creates a strong basin of attraction around the correct beat time.
+| Pattern | Baseline F1 | Notes |
+|---------|:-:|:--|
+| lead-melody | 0.286 | Untested with BandFlux — hi-hat gate may help |
+| chord-rejection | 0.698 | Untested with BandFlux — max-filter should help |
+| pad-rejection | 0.696 | Untested with BandFlux — asymmetric threshold may help |
 
-#### What NOT To Do
+### Priority 3: Microphone Sensitivity
 
-- **Particle filters**: Too complex for marginal benefit. Our autocorrelation already handles tempo uncertainty well.
-- **Neural networks / TCN**: Not feasible on Cortex-M4 without FPU.
-- **Full offline DP**: Requires backtracking, not suitable for real-time. The causal adaptation is essentially BTrack.
-- **OBTAIN in full**: Requires DNN inference.
+**Problem:** Raw ADC level is 0.01-0.02 at maximum hardware gain (80 = +20 dB) with music playing from speakers. This is ~60 dB SPL at the mic — conversation level, not music level.
 
-#### Resource Budget
+**Hardware findings:**
+- Mic: MSM261D3526H1CPM, -26 dBFS sensitivity, 64 dB SNR — industry standard, equivalent to Arduino Nano 33 BLE Sense's MP34DT05
+- PDM clock: nRF52840 uses 1.28 MHz; mic's optimal is 2.4 MHz. Operating below optimal but within spec (768 kHz–3.072 MHz). May cost 1-2 dB SNR.
+- Hardware gain: 0-80 range (±20 dB in 0.5 dB steps), firmware already uses full range with AGC
 
-| Component | RAM | CPU (per frame) | Notes |
-|-----------|-----|-----------------|-------|
-| ODF smoothing | 20 B | ~10 ops | 5-point ring buffer |
-| Gaussian LUT | 240 B | 0 (precomputed) | Beat expectation window |
-| Future CBSS synthesis | 1.68 KB | ~1000 ops (per beat only) | Stack-allocated, temporary |
-| Multi-res ODF | 40 B | ~20 ops | 2 additional moving averages |
-| Penalty LUT | 480 B | ~100 ops (per candidate) | Log-Gaussian precomputed |
-| **Total** | **~2.5 KB** | **~230 ops/frame** | Well within headroom |
+**Possible improvements:**
+1. **Software pre-amplification** — Multiply raw int16 samples by a gain factor (2x-4x) before normalization. Amplifies noise too, but for transient detection the SNR penalty may be acceptable. Simple: `sample = constrain((int32_t)sample * gain, -32768, 32767)` in the ISR.
+2. **Faster AGC convergence** — Current normal AGC calibrates every 30s. For speaker-based music, the signal level is relatively stable. Reduce to 10-15s for quicker adaptation.
+3. **Lower hwTarget** — Current target is 0.35 (35% of ADC range). At max gain the signal only reaches 0.01-0.02. The AGC is already maxed out, so lowering the target won't help. The issue is the acoustic signal is genuinely quiet at the mic.
+4. **Physical mic placement** — The hat-mounted device may have the mic facing away from speakers, or covered by fabric/enclosure. Ensuring direct line-of-sight to audio source is the single highest-impact change.
 
-#### Evaluation Criteria
+**What NOT to do:**
+- External microphone (impractical for wearable hat)
+- Change PDM clock/ratio registers (marginal benefit, risks destabilizing PDM driver)
+- Increase FFT size for better sensitivity (latency tradeoff, won't help with raw level)
 
-Must test on diverse genres, not just 4-on-the-floor EDM:
-- Build test library: hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills)
-- Use `annotate-beats.py` to generate ground truth from librosa
-- Target: Beat F1 > 0.5 on diverse genres, Beat F1 > 0.7 on steady-tempo tracks
-
-#### References
-
-- Stark 2011: [BTrack — Real-time beat tracking](https://github.com/adamstark/BTrack)
-- Ellis 2007: [Beat Tracking by Dynamic Programming](https://www.ee.columbia.edu/~dpwe/pubs/Ellis07-beattrack.pdf)
-- Davies & Plumbley 2007: [Context-Dependent Beat Tracking](https://ieeexplore.ieee.org/document/4317507)
-- McFee & Ellis 2014: [Better Beat Tracking Through Robust Onset Aggregation](https://www.ee.columbia.edu/~dpwe/pubs/McFeeE14-beats.pdf)
-
-### Priority 2: False Positive Reduction
-
-Current detector config: **Drummer (0.50) + ComplexDomain (0.50)**, cooldown=tempo-adaptive, minconf=0.55
-
-| Pattern | F1 | Issue |
-|---------|-----|-------|
-| lead-melody | 0.286 | 38-40 FPs — fires on every melody note |
-| chord-rejection | 0.698 | 12 FPs — amplitude spikes on chord changes |
-| pad-rejection | 0.696 | 7 FPs, high variance (0.64–0.80) |
-
-### Priority 3: Startup Latency
+### Priority 4: Startup Latency
 
 AudioController requires ~3s of OSS buffer before first beat detection (180 samples @ 60Hz). Progressive approach: start autocorrelation at 60 samples (1s), limit max lag to `ossCount_ / 3`.
 
@@ -156,12 +167,14 @@ System tuned for studio conditions. Real-world environments (club, festival, amb
 
 ## Next Actions
 
-1. **ODF pre-smoothing** — 5-point causal moving average on onset strength (quick win, directly addresses noise peaks)
-2. **BTrack-style predict+countdown** — Replace `detectBeat()` with Gaussian-weighted future synthesis (the real fix)
-3. **Build diverse test music library** — hip hop, DnB, funk, pop with ground truth annotations
-4. **Multi-resolution ODF + Ellis temporal penalty** — complementary improvements after core fix
-5. Tune chord-rejection threshold trade-off
-6. Investigate temporal envelope gate for lead-melody false positives
+1. **Tune BandFlux parameters** — Sweep gamma (10-50), bass weight (1.5-3.0), and threshold (0.3-0.6) on full 9-track suite. Current defaults are theoretical, not optimized.
+2. **Update firmware defaults** — After BandFlux parameter optimization, flip defaults: BandFlux enabled, Drummer disabled. Requires incrementing SETTINGS_VERSION.
+3. **Re-evaluate false positives with BandFlux** — Test pad-rejection, chord-rejection, lead-melody patterns with BandFlux Solo to assess hi-hat gate and max-filter effectiveness.
+4. **Persist runtime-tunable params** — `temposmooth`, `odfsmooth`, `harmup2x`, `harmup32`, `peakmincorr` are serial-only; add to `StoredMusicParams` and `ConfigStorage` for flash persistence
+5. **Sub-harmonic disambiguation for non-standard ratios** — techno-machine-drum locks at 0.80x (not half/2/3). Investigate broader harmonic search or adaptive prior
+6. **Adaptive beat timing offset** — Per-track offsets vary -79ms to +100ms. Explore runtime adaptation based on onset strength variance
+7. **Build diverse test music library** — hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills) with ground truth annotations
+8. **Confidence-gated beat output** — Only output beats when confidence exceeds threshold, to suppress random placement on ambient tracks
 
 ---
 

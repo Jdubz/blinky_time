@@ -167,7 +167,7 @@ void SerialConsole::registerFireMusicSettings(FireParams* fp) {
     if (!fp) return;
 
     settings_.registerFloat("musicspawnpulse", &fp->musicSpawnPulse, "firemusic",
-        "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
+        "Beat spawn depth (0=flat, 1=full breathing)", 0.0f, 1.0f, onParamChanged);
 }
 
 // === ORGANIC MODE FIRE SETTINGS ===
@@ -252,12 +252,26 @@ void SerialConsole::registerRhythmSettings() {
     // CBSS beat tracking parameters
     settings_.registerFloat("cbssalpha", &audioCtrl_->cbssAlpha, "rhythm",
         "CBSS weighting (0.8-0.95, higher=more predictive)", 0.5f, 0.99f);
-    settings_.registerFloat("beatwindow", &audioCtrl_->beatWindowScale, "rhythm",
-        "Beat search window (fraction of period)", 0.1f, 0.9f);
+    settings_.registerFloat("cbsstight", &audioCtrl_->cbssTightness, "rhythm",
+        "CBSS log-Gaussian tightness (higher=stricter tempo)", 1.0f, 20.0f);
     settings_.registerFloat("beatconfdecay", &audioCtrl_->beatConfidenceDecay, "rhythm",
         "Beat confidence decay per frame", 0.9f, 0.999f);
     settings_.registerFloat("temposnap", &audioCtrl_->tempoSnapThreshold, "rhythm",
         "BPM change ratio to snap vs smooth", 0.05f, 0.5f);
+    settings_.registerFloat("beatoffset", &audioCtrl_->beatTimingOffset, "rhythm",
+        "Beat prediction advance in frames (ODF+CBSS delay compensation)", 0.0f, 15.0f);
+    settings_.registerFloat("phasecorr", &audioCtrl_->phaseCorrectionStrength, "rhythm",
+        "Phase correction toward transients (0=off, 1=full snap)", 0.0f, 1.0f);
+    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothFactor, "rhythm",
+        "BPM smoothing blend (0=instant, 1=frozen, 0.7=default)", 0.0f, 0.99f);
+    settings_.registerUint8("odfsmooth", &audioCtrl_->odfSmoothWidth, "rhythm",
+        "ODF smooth window (3-11, odd)", 3, 11);
+    settings_.registerFloat("harmup2x", &audioCtrl_->harmonicUp2xThresh, "rhythm",
+        "Half-lag harmonic fix threshold (0.3-0.9)", 0.1f, 0.95f);
+    settings_.registerFloat("harmup32", &audioCtrl_->harmonicUp32Thresh, "rhythm",
+        "2/3-lag harmonic fix threshold (0.3-0.9)", 0.1f, 0.95f);
+    settings_.registerFloat("peakmincorr", &audioCtrl_->peakMinCorrelation, "rhythm",
+        "Min normalized correlation for peak (0.1-0.8)", 0.05f, 0.8f);
 
     // Ensemble fusion parameters (detection gating)
     settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
@@ -660,7 +674,7 @@ bool SerialConsole::handleModeCommand(const char* cmd) {
             Serial.println(output.ensembleConfidence, 3);
             Serial.print(F("Detector Agreement: "));
             Serial.print(output.detectorAgreement);
-            Serial.println(F("/6"));
+            Serial.println(F("/7"));
             Serial.print(F("Dominant Detector: "));
             Serial.println(output.dominantDetector);
         } else {
@@ -969,7 +983,7 @@ void SerialConsole::restoreDefaults() {
     if (audioCtrl_) {
         audioCtrl_->activationThreshold = 0.4f;
         audioCtrl_->cbssAlpha = 0.9f;
-        audioCtrl_->beatWindowScale = 0.5f;
+        audioCtrl_->cbssTightness = 5.0f;
         audioCtrl_->beatConfidenceDecay = 0.98f;
         audioCtrl_->tempoSnapThreshold = 0.15f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
@@ -1303,7 +1317,7 @@ void SerialConsole::streamTick() {
         // z     → zero-crossing    : 0-1 (zero-crossing rate, for frequency classification)
         //
         // Debug mode additional fields:
-        // agree → detector agreement : 0-6 (how many detectors fired)
+        // agree → detector agreement : 0-7 (how many detectors fired)
         // conf  → ensemble confidence: 0-1 (combined confidence score)
         Serial.print(F("{\"a\":{\"l\":"));
         Serial.print(mic_->getLevel(), 2);
@@ -1337,10 +1351,11 @@ void SerialConsole::streamTick() {
         Serial.print(F("}"));
 
         // AudioController telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"e":0.5,"p":0.8}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
         // conf = CBSS confidence, bc = beat count, q = beat event (phase wrap)
-        // e = energy, p = pulse
+        // e = energy, p = pulse, cb = CBSS value, oss = onset strength
+        // ttb = frames until next beat, bp = last beat was predicted (1) vs fallback (0)
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
 
@@ -1368,6 +1383,14 @@ void SerialConsole::streamTick() {
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
             Serial.print(audio.pulse, 2);
+            Serial.print(F(",\"cb\":"));
+            Serial.print(audioCtrl_->getCurrentCBSS(), 3);
+            Serial.print(F(",\"oss\":"));
+            Serial.print(audioCtrl_->getLastOnsetStrength(), 3);
+            Serial.print(F(",\"ttb\":"));
+            Serial.print(audioCtrl_->getTimeToNextBeat());
+            Serial.print(F(",\"bp\":"));
+            Serial.print(audioCtrl_->wasLastBeatPredicted() ? 1 : 0);
 
             // Debug mode: add internal state for tuning
             if (streamDebug_) {
@@ -1454,7 +1477,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
         Serial.println(F("=== Ensemble Fusion Configuration ==="));
         Serial.println(F("Agreement Boost Values:"));
-        for (int i = 0; i <= 6; i++) {
+        for (int i = 0; i <= EnsembleDetector::NUM_DETECTORS; i++) {
             Serial.print(F("  "));
             Serial.print(i);
             Serial.print(F(" detector(s): "));
@@ -1472,7 +1495,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(output.ensembleConfidence, 3);
         Serial.print(F("  Agreement: "));
         Serial.print(output.detectorAgreement);
-        Serial.println(F("/6"));
+        Serial.println(F("/7"));
         Serial.print(F("  Dominant: "));
         Serial.println(getDetectorName(static_cast<DetectorType>(output.dominantDetector)));
         Serial.println(F("\nFusion Parameters:"));
@@ -1498,6 +1521,20 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(bass.getMinAbsoluteFlux(), 3);
         Serial.print(F("  sharpness: "));
         Serial.println(bass.getSharpnessThreshold(), 2);
+
+        // BandFlux-specific parameters
+        const BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
+        Serial.println(F("\nBandFlux Parameters:"));
+        Serial.print(F("  gamma: "));
+        Serial.println(bf.getGamma(), 1);
+        Serial.print(F("  bassweight: "));
+        Serial.println(bf.getBassWeight(), 2);
+        Serial.print(F("  midweight: "));
+        Serial.println(bf.getMidWeight(), 2);
+        Serial.print(F("  highweight: "));
+        Serial.println(bf.getHighWeight(), 2);
+        Serial.print(F("  maxbin: "));
+        Serial.println(bf.getMaxBin());
         return true;
     }
 
@@ -1653,11 +1690,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty, bandflux"));
             }
         } else {
             Serial.println(F("Usage: set detector_enable <type> <0|1>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty, bandflux"));
         }
         return true;
     }
@@ -1695,11 +1732,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty, bandflux"));
             }
         } else {
             Serial.println(F("Usage: set detector_weight <type> <value>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty, bandflux"));
         }
         return true;
     }
@@ -1737,11 +1774,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             } else {
                 Serial.print(F("ERROR: Unknown detector '"));
                 Serial.print(typeName);
-                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty"));
+                Serial.println(F("'. Use: drummer, spectral, hfc, bass, complex, novelty, bandflux"));
             }
         } else {
             Serial.println(F("Usage: set detector_thresh <type> <value>"));
-            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty"));
+            Serial.println(F("Types: drummer, spectral, hfc, bass, complex, novelty, bandflux"));
         }
         return true;
     }
@@ -1752,16 +1789,16 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             Serial.println(F("ERROR: AudioController not available"));
             return true;
         }
-        // Parse "set agree_N value" where N is 0-6
+        // Parse "set agree_N value" where N is 0-7
         // Format: "set agree_" (10 chars) + digit + space + value
         const char* args = cmd + 10;
-        if (args[0] >= '0' && args[0] <= '6' && args[1] == ' ') {
+        if (args[0] >= '0' && args[0] <= '7' && args[1] == ' ') {
             int n = args[0] - '0';
             float value = atof(args + 2);
             // Get current boosts, modify one, set all
             EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
-            float boosts[7];
-            for (int i = 0; i <= 6; i++) {
+            float boosts[EnsembleDetector::NUM_DETECTORS + 1];
+            for (int i = 0; i <= EnsembleDetector::NUM_DETECTORS; i++) {
                 boosts[i] = fusion.getAgreementBoost(i);
             }
             boosts[n] = value;
@@ -1771,7 +1808,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             Serial.print(F("="));
             Serial.println(value, 2);
         } else {
-            Serial.println(F("Usage: set agree_<0-6> <value>"));
+            Serial.println(F("Usage: set agree_<0-7> <value>"));
             Serial.println(F("Example: set agree_1 0.6"));
         }
         return true;
@@ -1946,6 +1983,107 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         if (!audioCtrl_) return true;
         Serial.print(F("bass_sharpness="));
         Serial.println(audioCtrl_->getEnsemble().getBassBand().getSharpnessThreshold(), 2);
+        return true;
+    }
+
+    // === BAND FLUX PARAMETERS ===
+    // bandflux_gamma: Log compression strength
+    if (strncmp(cmd, "set bandflux_gamma ", 19) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 19);
+        if (value >= 1.0f && value <= 100.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setGamma(value);
+            Serial.print(F("OK bandflux_gamma="));
+            Serial.println(value, 1);
+        } else {
+            Serial.println(F("ERROR: Valid range 1.0-100.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_gamma") == 0 || strcmp(cmd, "bandflux_gamma") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_gamma="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getGamma(), 1);
+        return true;
+    }
+
+    // bandflux_bassweight: Bass band weight
+    if (strncmp(cmd, "set bandflux_bassweight ", 24) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 24);
+        if (value >= 0.0f && value <= 5.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setBassWeight(value);
+            Serial.print(F("OK bandflux_bassweight="));
+            Serial.println(value, 2);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-5.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_bassweight") == 0 || strcmp(cmd, "bandflux_bassweight") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_bassweight="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBassWeight(), 2);
+        return true;
+    }
+
+    // bandflux_midweight: Mid band weight
+    if (strncmp(cmd, "set bandflux_midweight ", 23) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 23);
+        if (value >= 0.0f && value <= 5.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setMidWeight(value);
+            Serial.print(F("OK bandflux_midweight="));
+            Serial.println(value, 2);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-5.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_midweight") == 0 || strcmp(cmd, "bandflux_midweight") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_midweight="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMidWeight(), 2);
+        return true;
+    }
+
+    // bandflux_highweight: High band weight (suppression)
+    if (strncmp(cmd, "set bandflux_highweight ", 24) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 24);
+        if (value >= 0.0f && value <= 2.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setHighWeight(value);
+            Serial.print(F("OK bandflux_highweight="));
+            Serial.println(value, 2);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-2.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_highweight") == 0 || strcmp(cmd, "bandflux_highweight") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_highweight="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getHighWeight(), 2);
+        return true;
+    }
+
+    // bandflux_maxbin: Max FFT bin to analyze
+    if (strncmp(cmd, "set bandflux_maxbin ", 20) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 20);
+        if (value >= 16 && value <= 128) {
+            audioCtrl_->getEnsemble().getBandFlux().setMaxBin(value);
+            Serial.print(F("OK bandflux_maxbin="));
+            Serial.println(value);
+        } else {
+            Serial.println(F("ERROR: Valid range 16-128"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_maxbin") == 0 || strcmp(cmd, "bandflux_maxbin") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_maxbin="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMaxBin());
         return true;
     }
 

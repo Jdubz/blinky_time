@@ -214,7 +214,7 @@ npm run tuner -- validate --port COM5 --gain 40
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
 | `cbssalpha` | 0.9 | 0.5-0.99 | CBSS weighting (higher = more predictive) |
-| `beatwindow` | 0.5 | 0.1-1.0 | Beat search window as fraction of period |
+| `cbsstight` | 5.0 | 1.0-20.0 | Log-Gaussian tightness (higher = stricter tempo) |
 | `beatconfdecay` | 0.98 | 0.9-0.999 | Per-frame confidence decay when no beat |
 | `temposnap` | 0.15 | 0.05-0.5 | BPM change ratio to snap vs smooth |
 

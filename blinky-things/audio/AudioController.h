@@ -315,9 +315,18 @@ public:
     // Cumulative Beat Strength Signal with counter-based beat prediction
     // Phase is derived deterministically from beat counter — no drift, no jitter
     float cbssAlpha = 0.9f;              // CBSS weighting (0.8-0.95, higher = more predictive)
-    float beatWindowScale = 0.5f;        // Beat search window as fraction of period
+    float cbssTightness = 5.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence)
     float beatConfidenceDecay = 0.98f;   // Per-frame confidence decay when no beat detected
     float tempoSnapThreshold = 0.15f;    // BPM change ratio to snap vs smooth
+    float beatTimingOffset = 9.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
+    float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
+
+    // === AUTOCORRELATION TUNING ===
+    float tempoSmoothFactor = 0.75f;     // BPM smoothing blend (0=instant, 1=no change). 0.75 best compromise across tracks
+    uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
+    float harmonicUp2xThresh = 0.5f;     // Half-lag (2x BPM) correlation threshold for upward harmonic fix
+    float harmonicUp32Thresh = 0.6f;     // 2/3-lag (3/2x BPM) correlation threshold
+    float peakMinCorrelation = 0.3f;     // Minimum normalized correlation to consider a peak
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -355,6 +364,10 @@ public:
     float getCbssConfidence() const { return cbssConfidence_; }
     uint16_t getBeatCount() const { return beatCount_; }
     int getBeatPeriodSamples() const { return beatPeriodSamples_; }
+    float getCurrentCBSS() const { return cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE]; }
+    float getLastOnsetStrength() const { return lastSmoothedOnset_; }
+    int getTimeToNextBeat() const { return timeToNextBeat_; }
+    bool wasLastBeatPredicted() const { return lastFiredBeatPredicted_; }
 
 private:
     // === HAL REFERENCES ===
@@ -429,9 +442,33 @@ private:
     int lastBeatSample_ = 0;            // Sample index of last detected beat
     int beatPeriodSamples_ = 30;        // Beat period in samples (~120 BPM at 60Hz)
     int sampleCounter_ = 0;             // Total samples processed
-    float beatThreshold_ = 0.0f;        // Adaptive threshold for beat detection
     uint16_t beatCount_ = 0;            // Total beats detected
     float cbssConfidence_ = 0.0f;       // Beat tracking confidence (0-1)
+    float lastSmoothedOnset_ = 0.0f;    // Last smoothed onset strength (for observability)
+    bool lastBeatWasPredicted_ = false; // Whether predictBeat() ran since last beat (working flag)
+    bool lastFiredBeatPredicted_ = false; // Whether the most recently fired beat was predicted (stable for streaming)
+    int lastTransientSample_ = -1;      // Sample index of most recent strong transient (-1 = none)
+
+    // ODF smoothing (causal moving average, runtime-tunable width)
+    static constexpr int ODF_SMOOTH_MAX = 11;  // Max buffer size (allocated once)
+    float odfSmoothBuffer_[ODF_SMOOTH_MAX] = {0};
+    int odfSmoothIdx_ = 0;
+
+    // Log-Gaussian transition weights (precomputed for current beat period)
+    static constexpr int MAX_BEAT_PERIOD = 90; // ~40 BPM at 60Hz (covers full range)
+    float logGaussianWeights_[MAX_BEAT_PERIOD * 2] = {0}; // Covers T/2 to 2T range
+    int logGaussianWeightsSize_ = 0;
+    int logGaussianLastT_ = 0;       // Last T used to compute weights
+    float logGaussianLastTight_ = 0;  // Last cbssTightness used (invalidate on change)
+
+    // Predict+countdown state (BTrack-style)
+    int timeToNextBeat_ = 15;          // Countdown frames until next beat
+    int timeToNextPrediction_ = 10;    // Countdown frames until next prediction
+
+    // Beat expectation Gaussian (precomputed for current beat period)
+    float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
+    int beatExpectationSize_ = 0;
+    int beatExpectationLastT_ = 0;
 
     // Beat stability tracking
     static constexpr int STABILITY_BUFFER_SIZE = 16;
@@ -470,6 +507,13 @@ private:
     // CBSS beat tracking
     void updateCBSS(float onsetStrength);
     void detectBeat();
+    void predictBeat();
+
+    // ODF smoothing
+    float smoothOnsetStrength(float raw);
+
+    // Log-Gaussian weight computation
+    void recomputeLogGaussianWeights(int T);
 
     // Onset strength computation
     float computeSpectralFlux(const float* magnitudes, int numBins);

@@ -10,7 +10,7 @@ The param-tuner supports **37 parameters** for audio analysis optimization with 
 **Total Testable Parameters**: 37
 - **Ensemble Detectors**: 18 (6 thresholds + 6 weights + 6 agreement boosts)
 - **Rhythm Tracking**: 11 (activation, pulse, BPM range, CBSS beat tracking, tempo prior)
-  - CBSS parameters: 4 (cbssalpha, beatwindow, beatconfdecay, temposnap)
+  - CBSS parameters: 4 (cbssalpha, cbsstight, beatconfdecay, temposnap)
   - Core rhythm: 5 (musicthresh, pulseboost, pulsesuppress, energyboost, lookahead)
   - BPM range: 2 (bpmmin, bpmmax)
 
@@ -62,7 +62,7 @@ The param-tuner supports **37 parameters** for audio analysis optimization with 
 ### CBSS Beat Tracking Parameters (4 total)
 
 - `cbssalpha` - CBSS weighting, higher = more predictive (0.5-0.99, default 0.9)
-- `beatwindow` - Beat search window as fraction of period (0.1-1.0, default 0.5)
+- `cbsstight` - CBSS log-Gaussian tightness (1.0-20.0, default 5.0)
 - `beatconfdecay` - Per-frame confidence decay when no beat (0.9-0.999, default 0.98)
 - `temposnap` - BPM change ratio to snap vs smooth (0.05-0.5, default 0.15)
 
@@ -121,7 +121,7 @@ Combine mode and parameter filters for maximum control:
 param-tuner sweep --port COM5 --modes ensemble --params drummer_thresh,spectral_thresh,bass_thresh
 
 # Tune CBSS beat tracking parameters
-param-tuner sweep --port COM5 --params cbssalpha,beatwindow,beatconfdecay
+param-tuner sweep --port COM5 --params cbssalpha,cbsstight,beatconfdecay
 ```
 
 ---
@@ -153,7 +153,7 @@ param-tuner sweep --port COM5 --params musicthresh,bpmmin,bpmmax,lookahead
 Optimize beat tracking parameters:
 
 ```bash
-param-tuner sweep --port COM5 --params cbssalpha,beatwindow,beatconfdecay,temposnap
+param-tuner sweep --port COM5 --params cbssalpha,cbsstight,beatconfdecay,temposnap
 ```
 
 **Focus:** Peak detection controls hypothesis creation, promotion controls when better tempos take over.
@@ -203,7 +203,7 @@ param-tuner sweep --port COM5 --modes rhythm
 ### Day 3: CBSS Beat Tracking Tuning (~1 hr)
 ```bash
 # Fine-tune CBSS beat tracking
-param-tuner sweep --port COM5 --params cbssalpha,beatwindow,beatconfdecay,temposnap
+param-tuner sweep --port COM5 --params cbssalpha,cbsstight,beatconfdecay,temposnap
 ```
 
 ### Day 4: Detector Weights (~60 min)

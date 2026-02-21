@@ -258,8 +258,8 @@ export class TestRunner extends EventEmitter {
    * Set agreement boost value
    */
   async setAgreementBoost(level: number, boost: number): Promise<void> {
-    if (level < 0 || level > 6) {
-      throw new Error('Agreement level must be 0-6');
+    if (level < 0 || level > 7) {
+      throw new Error('Agreement level must be 0-7');
     }
     await this.sendCommand(`set agree_${level} ${boost}`);
   }

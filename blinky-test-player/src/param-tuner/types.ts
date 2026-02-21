@@ -332,7 +332,19 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     max: 1.5,
     default: 1.2,
     sweepValues: [1.0, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5],
-    description: 'Boost when all six detectors agree',
+    description: 'Boost when six detectors agree',
+    optimizeFor: 'recall',
+  },
+
+  agree_7: {
+    name: 'agree_7',
+    mode: 'ensemble',
+    command: 'agree_7',
+    min: 1.0,
+    max: 1.5,
+    default: 1.2,
+    sweepValues: [1.0, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5],
+    description: 'Boost when all seven detectors agree',
     optimizeFor: 'recall',
   },
 
@@ -431,14 +443,14 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     optimizeFor: 'f1',
   },
 
-  beatwindow: {
-    name: 'beatwindow',
+  cbsstight: {
+    name: 'cbsstight',
     mode: 'rhythm',
-    min: 0.1,
-    max: 1.0,
-    default: 0.5,
-    sweepValues: [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8],
-    description: 'Beat search window as fraction of period',
+    min: 1.0,
+    max: 20.0,
+    default: 5.0,
+    sweepValues: [2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 15.0],
+    description: 'CBSS log-Gaussian tightness (higher = stricter tempo)',
     optimizeFor: 'f1',
   },
 

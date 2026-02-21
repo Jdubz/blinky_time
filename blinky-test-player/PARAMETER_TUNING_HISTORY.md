@@ -814,3 +814,317 @@ beatwindow = 0.5
 beatconfdecay = 0.98
 temposnap = 0.15
 ```
+
+---
+
+## Test Session: 2026-02-20 (BTrack-Style Predict+Countdown + Runtime Tuning)
+
+**Environment:**
+- Hardware: Seeeduino XIAO nRF52840 Sense (bucket_v3, 128 LEDs)
+- Serial Port: COM3
+- Hardware Gain: AGC active (unlocked)
+- Detector config: Drummer (0.50, thresh 4.5) + ComplexDomain (0.50, thresh 3.5)
+- Tool: MCP `run_music_test`
+
+### Architecture Changes Implemented
+
+1. **ODF Pre-Smoothing** — Causal 5-point moving average on `onsetStrength` before CBSS/OSS buffer. Eliminates micro-fluctuations that caused early false triggers.
+
+2. **Log-Gaussian Transition Weighting in CBSS** — Replaced flat `max()` backward search with BTrack-style log-Gaussian weighting centered at one beat period back. Tightness parameter `cbssTightness=5.0`.
+
+3. **BTrack-Style Predict+Countdown Beat Detection** — Replaced "first declining CBSS frame" with:
+   - At beat midpoint: synthesize future CBSS with zero onset, weight by Gaussian expectation
+   - `timeToNextBeat = argmax(weighted_future_CBSS)` becomes countdown timer
+   - Beat declared when countdown reaches zero (no threshold needed)
+
+4. **Beat Timing Offset** — `beatTimingOffset=9` compensates for ODF smoothing delay + CBSS propagation delay by subtracting frames from prediction result.
+
+5. **Harmonic Disambiguation** — Added half-lag (2x BPM) and 2/3-lag (3/2x BPM) checks to escape sub-harmonic locking.
+
+6. **Runtime-Tunable Parameters** — 7 new parameters exposed via serial for faster tuning without reflash:
+   - `temposmooth` (default 0.75) — BPM EMA blend factor
+   - `odfsmooth` (default 5) — ODF window width (3-11)
+   - `harmup2x` (default 0.5) — Half-lag harmonic fix threshold
+   - `harmup32` (default 0.6) — 2/3-lag harmonic fix threshold
+   - `peakmincorr` (default 0.3) — Min autocorrelation for peak acceptance
+   - `beatoffset` (default 9.0) — Beat prediction advance (frames)
+   - `phasecorr` (default 0.0) — Phase correction strength (DISABLED)
+
+7. **Streaming Observability** — Added `cb` (CBSS value), `oss` (smoothed onset), `ttb` (time to next beat), `bp` (predicted flag) to music mode JSON.
+
+### Phase Correction: Tested and Disabled
+
+Phase correction (`phasecorr=0.3`) nudges `lastBeatSample_` toward nearby transients to correct BPM drift. **Net negative on real music:**
+
+| Track | F1 without | F1 with phasecorr=0.3 | Delta |
+|-------|-----------|----------------------|-------|
+| trance-infected-vibes | 0.878 | 0.075 | -0.803 |
+| techno-dub-groove | 0.352 | 0.191 | -0.161 |
+| Average (6 tracks) | 0.496 | 0.396 | -0.100 |
+
+**Root cause:** On syncopated tracks, transients near beat boundaries (but not on beats) nudge phase in wrong direction, causing BPM to drift to sub-harmonics. Default set to 0.0 (disabled).
+
+### ODF Width: 5 Confirmed, 7 Rejected
+
+ODF smooth width 7 caused major regression:
+
+| Track | F1@ODF=5 | F1@ODF=7 | Delta |
+|-------|----------|----------|-------|
+| trance-infected-vibes | 0.878 | 0.021 | -0.857 |
+| Average (6 tracks) | 0.496 | 0.372 | -0.124 |
+
+**Root cause:** ODF=7 adds variable delay per track (17-150ms extra), destroying the calibrated `beatoffset=9`. Width 5 is the proven optimum.
+
+### Tempo Smooth Factor: 0.75 Optimal
+
+Tested `temposmooth` at 0.7, 0.75, and 0.8 via runtime serial tuning:
+
+| Track | F1@0.7 | F1@0.75 | F1@0.8 |
+|-------|--------|---------|--------|
+| trance-party | **0.870** | 0.842 | 0.717 |
+| trance-infected-vibes | 0.219 | **0.681** | 0.685 |
+| Net delta vs 0.75 | -0.434 | baseline | -0.121 |
+
+**Winner: temposmooth=0.75** — Only -0.028 loss on trance-party vs 0.7, but +0.462 gain on infected-vibes. Best compromise across all tracks.
+
+### Harmonic Disambiguation: Confirmed Helpful
+
+Tested with harmonic thresholds at 0.95 (effectively disabled) vs 0.5/0.6:
+
+| Track | F1 (harmonics ON) | F1 (harmonics OFF) | Delta |
+|-------|-------------------|-------------------|-------|
+| trance-infected-vibes | 0.685 | 0.499 | -0.186 |
+
+Harmonic checks prevent sub-harmonic locking on this track. Keep enabled.
+
+### Full Suite Results (temposmooth=0.75, all other defaults)
+
+| Track | Beat F1 | BPM Acc | Offset | CMLt | AMLt | Notes |
+|-------|---------|---------|--------|------|------|-------|
+| trance-party | **0.842** | 97.4% | +32ms | 0.836 | 0.882 | Excellent |
+| techno-minimal-01 | **0.726** | 98.6% | -15ms | 0.726 | 0.730 | Good |
+| trance-infected-vibes | **0.681** | 97.0% | +50ms | 0.700 | 0.733 | Good (was 0.103) |
+| trance-goa-mantra | 0.647 | 99.5% | +31ms | — | — | Decent |
+| techno-minimal-emotion | 0.526 | 98.5% | +42ms | — | — | Improved (was 0.103) |
+| techno-dub-groove | 0.368 | 99.5% | -79ms | 0.367 | 0.612 | Early beats |
+| edm-trap-electro | 0.189 | 95.9% | +12ms | 0.168 | 0.453 | Scattered |
+| techno-deep-ambience | 0.134 | 99.9% | +100ms | — | — | Late, low conf |
+| techno-machine-drum | 0.126 | 83.9% | +25ms | — | — | Wrong BPM |
+| **Average** | **0.471** | **96.7%** | | | | **Was 0.10-0.32** |
+
+### Improvement vs Previous CBSS (Feb 19)
+
+| Metric | Before (Feb 19) | After (Feb 20) | Change |
+|--------|-----------------|----------------|--------|
+| Best Beat F1 | 0.323 | **0.842** | +161% |
+| Avg Beat F1 (3 common tracks) | 0.176 | **0.683** | +288% |
+| Worst Beat F1 | 0.103 | 0.126 | +22% |
+| BPM Accuracy | 97-99% | 96-100% | Maintained |
+
+### Track Categories
+
+**Working well (F1 > 0.6):**
+- trance-party, techno-minimal-01, trance-infected-vibes, trance-goa-mantra
+- Common trait: strong kick drums, clear 4-on-the-floor or regular beat patterns
+
+**Moderate (F1 0.3-0.6):**
+- techno-minimal-emotion, techno-dub-groove
+- Common trait: lighter kicks, more syncopation, beat offsets suggest timing calibration issue
+
+**Failing (F1 < 0.2):**
+- edm-trap-electro: scattered beat histogram (high IQR=318ms), BPM 4% off
+- techno-deep-ambience: very late (+100ms), ambient sections confuse detection
+- techno-machine-drum: BPM locked to 114.9 vs 143.6 expected (sub-harmonic)
+
+### Remaining Issues
+
+1. **techno-machine-drum sub-harmonic lock** — BPM 114.9 vs 143.6 (ratio 0.80x, not a clean harmonic). Tempo prior at 128 BPM center pulls toward the sub-harmonic. May need wider prior or specialized handling for >140 BPM tracks.
+
+2. **techno-deep-ambience systematic late offset** — +100ms median suggests ambient/sparse sections with low onset energy delay the CBSS accumulation. The current `beatoffset=9` is tuned for tracks with strong transients.
+
+3. **edm-trap-electro scattered histogram** — IQR=318ms means beats are essentially random placement. BPM slightly off (116.9 vs 112.3). Trap-style syncopation may fundamentally challenge 4-on-the-floor assumptions.
+
+4. **techno-dub-groove early beats** — -79ms median offset suggests this track's beat character causes CBSS to peak early. Opposite problem from deep-ambience.
+
+### Optimal Defaults (to be committed)
+
+```
+temposmooth = 0.75    (was 0.8, new parameter)
+odfsmooth = 5         (new parameter, confirmed optimal)
+harmup2x = 0.5        (new parameter)
+harmup32 = 0.6        (new parameter)
+peakmincorr = 0.3     (new parameter)
+beatoffset = 9.0      (was 5.0, retuned)
+phasecorr = 0.0       (disabled — hurts syncopated tracks)
+cbsstight = 5.0       (new parameter)
+cbssalpha = 0.9       (unchanged)
+beatconfdecay = 0.98  (unchanged)
+temposnap = 0.15      (unchanged)
+```
+
+---
+
+## Test Session: 2026-02-20 (BandWeightedFluxDetector Evaluation)
+
+**Environment:**
+- Hardware: Seeeduino XIAO nRF52840 Sense (hat_v1, 89 LEDs)
+- Serial Port: COM14
+- Hardware Gain: AGC active (unlocked)
+- Tool: MCP `run_music_test`
+- Firmware: 220,128 bytes flash, 51,128 bytes RAM (with new detector compiled in)
+
+### New Detector: BandWeightedFluxDetector
+
+Added as 7th detector in the ensemble (`BAND_FLUX = 6`, `DetectorType::COUNT = 7`). Disabled by default to preserve existing behavior.
+
+**Algorithm:**
+1. Log-compress FFT magnitudes: `log(1 + 20 * mag[k])` — equalizes quiet/loud events
+2. 3-bin max-filter on reference frame (SuperFlux vibrato suppression)
+3. Band-weighted half-wave rectified flux:
+   - Bass bins 1-6 (62-375 Hz): weight 2.0 (kicks)
+   - Mid bins 7-32 (437-2000 Hz): weight 1.5 (snares)
+   - High bins 33-63 (2-4 kHz): weight 0.1 (suppress hi-hats)
+4. **Additive threshold**: `mean + delta` (not `median * factor`) — works at low signal levels
+5. Asymmetric threshold update: skip buffer update on detection frames
+6. Hi-hat rejection gate: suppress when ONLY high band has flux
+
+**Key design difference from Drummer:** Drummer uses multiplicative thresholds (`median * 4.5`), which at low signal levels (level=0.04) means threshold=0.18 — kicks at 0.10-0.15 never cross. BandFlux uses additive thresholds that work regardless of signal level.
+
+### Configurations Tested
+
+4 detector configurations tested across 9 real-music tracks (full-length, 90-132s each):
+
+| Config | Detectors Enabled | Weights |
+|--------|------------------|---------|
+| **Baseline** | Drummer (0.50) + Complex (0.50) | agree_1=0.7 |
+| **BandFlux Solo** | BandFlux only (thresh 0.5) | Single detector |
+| **BandFlux+Drummer** | BandFlux + Drummer | Both 0.50, agree_1=0.7 |
+| **All Three** | BandFlux + Drummer + Complex | All 0.50 |
+
+### Full Results: Beat F1 Scores
+
+| Track | Baseline (D+C) | BandFlux Solo | BandFlux+Drummer | All Three | Best |
+|-------|:-:|:-:|:-:|:-:|:--|
+| trance-party | 0.668 | **0.836** | 0.789 | 0.795 | BF Solo (+0.168) |
+| trance-infected-vibes | 0.393 | **0.764** | 0.745 | 0.695 | BF Solo (+0.371) |
+| techno-minimal-emotion | **0.700** | 0.451 | 0.512 | 0.522 | Baseline |
+| trance-goa-mantra | 0.590 | 0.573 | 0.637 | **0.649** | All Three (+0.059) |
+| techno-deep-ambience | 0.171 | **0.571** | 0.330 | 0.355 | BF Solo (+0.400) |
+| techno-minimal-01 | 0.611 | 0.549 | **0.627** | 0.546 | BF+Drummer (+0.016) |
+| techno-dub-groove | 0.170 | **0.188** | 0.180 | 0.111 | BF Solo (+0.018) |
+| techno-machine-drum | **0.245** | 0.136 | 0.101 | 0.132 | Baseline |
+| edm-trap-electro | 0.151 | 0.140 | **0.198** | *missing* | BF+Drummer (+0.047) |
+| **Average** | **0.411** | **0.468** | **0.458** | **0.476*** | |
+
+*All Three average is over 8 tracks (edm-trap-electro missing due to serial timeout). For fair comparison, 8-track averages: Baseline=0.444, BF Solo=0.509, BF+Drummer=0.490, All Three=0.476.
+
+### Full Results: Transient F1 Scores
+
+| Track | Baseline (D+C) | BandFlux Solo | BandFlux+Drummer | All Three |
+|-------|:-:|:-:|:-:|:-:|
+| trance-party | **0.569** | 0.352 | 0.546 | 0.467 |
+| trance-infected-vibes | **0.552** | 0.327 | 0.276 | 0.311 |
+| techno-minimal-emotion | **0.583** | 0.240 | 0.263 | 0.269 |
+| trance-goa-mantra | 0.287 | **0.525** | 0.338 | 0.318 |
+| techno-deep-ambience | **0.506** | 0.226 | 0.431 | 0.417 |
+| techno-minimal-01 | 0.529 | 0.545 | **0.557** | 0.558 |
+| techno-dub-groove | **0.330** | 0.289 | 0.338 | 0.333 |
+| techno-machine-drum | 0.315 | 0.263 | **0.341** | 0.317 |
+| edm-trap-electro | 0.231 | 0.249 | **0.270** | *missing* |
+
+**Note:** Transient F1 is lower for BandFlux Solo because it generates more detections (higher recall, lower precision). However, Beat F1 improves because the CBSS beat tracker benefits from more onset signal — even imprecise detections feed the autocorrelation.
+
+### BandFlux Threshold Tuning (trance-party only)
+
+| Threshold | Beat F1 | Trans F1 | Notes |
+|-----------|---------|----------|-------|
+| **0.5** | **0.836** | 0.352 | Optimal for beat tracking |
+| 0.7 | 0.405 | 0.670 | Higher precision but kills beat tracker input |
+| 1.0 | 0.467 | 0.577 | Compromise, worse at both |
+
+**Finding:** Low threshold (0.5) is critical. The CBSS beat tracker needs continuous onset signal for accumulation — precision matters less than having detections near beat positions. Higher thresholds reduce recall too much for beat tracking.
+
+### BandFlux + Complex (3 tracks, from initial testing)
+
+| Track | Beat F1 | Notes |
+|-------|---------|-------|
+| trance-party | 0.775 | Worse than BF Solo (0.836) |
+| techno-minimal-01 | 0.412 | Worse than BF Solo (0.549) |
+| techno-deep-ambience | 0.422 | Worse than BF Solo (0.571) |
+
+**Verdict:** BandFlux+Complex is consistently worse than BandFlux Solo. Complex adds noise that degrades beat tracking.
+
+### Key Findings
+
+1. **BandFlux Solo is the best overall config** — Highest 8-track average Beat F1 (0.509 vs Baseline 0.444), with dramatic improvements on the tracks that were most broken (+0.400 deep-ambience, +0.371 infected-vibes, +0.168 trance-party).
+
+2. **BandFlux's additive threshold solves the low-signal problem** — At speaker volumes where Drummer's multiplicative threshold (`median * 4.5`) produces thresholds above the signal level, BandFlux's `mean + delta` still detects kicks reliably.
+
+3. **Log compression is the key innovation** — `log(1 + 20 * mag)` compresses the dynamic range so that quiet kicks in ambient tracks produce similar onset magnitudes to loud kicks in heavy techno. This is why deep-ambience improved by +0.400.
+
+4. **Multi-detector configs don't help BandFlux** — Adding Drummer or Complex alongside BandFlux consistently degrades Beat F1. The ensemble fusion dilutes BandFlux's cleaner signal with noisier multiplicative-threshold detections.
+
+5. **BandFlux hurts techno-minimal-emotion** (-0.249) — This track has strong, clear transients where Drummer already works well. BandFlux's higher sensitivity generates more false positives that confuse the CBSS phase prediction. The Baseline's 0.700 is the best F1 across all configs for this track.
+
+6. **machine-drum remains broken across all configs** — Beat F1 0.10-0.25 regardless of detector. Root cause: BPM locked to ~114-121 vs 143.6 expected (sub-harmonic). This is a tempo estimation problem, not a detection problem.
+
+7. **Transient F1 and Beat F1 are inversely correlated for BandFlux** — BandFlux Solo has the lowest transient F1 (more false positives) but the highest beat F1. This confirms that CBSS beat tracking benefits from high-recall onset signals even at the cost of precision.
+
+### Track Category Analysis
+
+**BandFlux dramatically improves (Beat F1 gain > 0.15):**
+- trance-party: +0.168 (0.668 → 0.836)
+- trance-infected-vibes: +0.371 (0.393 → 0.764)
+- techno-deep-ambience: +0.400 (0.171 → 0.571)
+- Common trait: moderate dynamics, complex timbres, Drummer's multiplicative threshold too high
+
+**BandFlux roughly equivalent (|delta| < 0.1):**
+- trance-goa-mantra: -0.017 (0.590 → 0.573)
+- techno-minimal-01: -0.062 (0.611 → 0.549)
+- techno-dub-groove: +0.018 (0.170 → 0.188)
+- edm-trap-electro: -0.011 (0.151 → 0.140)
+
+**BandFlux regresses (Beat F1 loss > 0.1):**
+- techno-minimal-emotion: -0.249 (0.700 → 0.451)
+- techno-machine-drum: -0.109 (0.245 → 0.136)
+- Common trait: louder dynamics where Drummer already provides good onset signal; BandFlux's extra detections add noise
+
+### Recommendations
+
+1. **Enable BandFlux as default, disable Drummer** — Net +14% average Beat F1 improvement. The tracks that improve are the ones that were most broken before (ambient, trance). The regression on techno-minimal-emotion is real but it was already the best-performing track.
+
+2. **Keep Complex disabled** — Adding Complex to BandFlux hurts in all tested configurations.
+
+3. **BandFlux threshold 0.5 is optimal** — Do not raise above 0.5; higher thresholds kill recall needed for CBSS.
+
+4. **Default gamma=20 is untested at other values** — Future work should sweep gamma (log compression strength) to see if the default is optimal.
+
+5. **Band weights are untested** — Default bass=2.0, mid=1.5, high=0.1 are theoretical values from the design. Sweeping these (especially increasing bass weight for machine-drum-style tracks) may improve results.
+
+### Parameters (Not Yet Changed in Firmware Defaults)
+
+The BandFlux detector is compiled in and available via serial, but defaults remain unchanged (BandFlux disabled, Drummer+Complex enabled). To test BandFlux Solo:
+
+```
+set detector_enable drummer 0
+set detector_enable complex 0
+set detector_enable bandflux 1
+```
+
+BandFlux-specific parameters (all at design defaults):
+```
+bandflux_gamma = 20.0      (log compression strength)
+bandflux_bassweight = 2.0  (bass band weight, bins 1-6)
+bandflux_midweight = 1.5   (mid band weight, bins 7-32)
+bandflux_highweight = 0.1  (high band weight, bins 33-63)
+bandflux_maxbin = 64       (max FFT bin to analyze)
+bandflux threshold = 0.5   (set via: set detector_thresh bandflux 0.5)
+```
+
+### Next Steps
+
+1. **Gamma sweep** — Test gamma at 10, 15, 20, 30, 50 on full suite
+2. **Bass weight sweep** — Test bassWeight at 1.5, 2.0, 2.5, 3.0 for machine-drum improvement
+3. **Threshold fine-tuning** — Test 0.3, 0.4, 0.5, 0.6 on full suite
+4. **Update firmware defaults** — After parameter optimization, flip ENABLED defaults (BandFlux on, Drummer off)
+5. **Agreement boost tuning** — If BandFlux + another detector proves useful, tune agree_1/agree_2 for that combo

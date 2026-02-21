@@ -108,9 +108,25 @@ bool AudioController::begin(uint32_t sampleRate) {
     lastBeatSample_ = 0;
     beatPeriodSamples_ = 30;  // ~120 BPM at 60Hz
     sampleCounter_ = 0;
-    beatThreshold_ = 0.0f;
     beatCount_ = 0;
     cbssConfidence_ = 0.0f;
+    lastSmoothedOnset_ = 0.0f;
+    lastBeatWasPredicted_ = false;
+    lastFiredBeatPredicted_ = false;
+    lastTransientSample_ = -1;
+
+    // Reset ODF smoothing
+    for (int i = 0; i < ODF_SMOOTH_MAX; i++) odfSmoothBuffer_[i] = 0.0f;
+    odfSmoothIdx_ = 0;
+
+    // Reset prediction state
+    timeToNextBeat_ = 15;  // ~250ms at 60Hz
+    timeToNextPrediction_ = 10;
+    logGaussianLastT_ = 0;
+    logGaussianLastTight_ = 0;
+    logGaussianWeightsSize_ = 0;
+    beatExpectationLastT_ = 0;
+    beatExpectationSize_ = 0;
 
     // Reset output
     control_ = AudioControl();
@@ -149,6 +165,28 @@ const AudioControl& AudioController::update(float dt) {
         dt
     );
 
+    // 3b. Phase correction: when a transient occurs near a predicted beat
+    //     boundary, nudge lastBeatSample_ to align phase with the transient.
+    //     This corrects cumulative drift from small BPM errors.
+    if (lastEnsembleOutput_.transientStrength > 0.0f) {
+        lastTransientSample_ = sampleCounter_;
+
+        if (phaseCorrectionStrength > 0.0f && beatCount_ > 2 && beatPeriodSamples_ >= 10) {
+            int T = beatPeriodSamples_;
+            int elapsed = sampleCounter_ - lastBeatSample_;
+            int phaseError = elapsed % T;
+            if (phaseError > T / 2) phaseError -= T;  // Center: -T/2 to +T/2
+
+            int window = T / 4;  // Correction window: ±25% of beat period
+            if (phaseError != 0 && phaseError > -window && phaseError < window) {
+                int correction = static_cast<int>(phaseError * phaseCorrectionStrength);
+                if (correction != 0) {
+                    lastBeatSample_ += correction;
+                }
+            }
+        }
+    }
+
     // 4. Get onset strength for rhythm analysis
     //    This is INDEPENDENT of transient detection - analyzes energy patterns
     //    Two methods available:
@@ -184,6 +222,10 @@ const AudioControl& AudioController::update(float dt) {
         // Reset prev magnitudes since we have no spectral data this frame
         prevMagnitudesValid_ = false;
     }
+
+    // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS)
+    onsetStrength = smoothOnsetStrength(onsetStrength);
+    lastSmoothedOnset_ = onsetStrength;
 
     // Update per-band periodicities periodically (same rate as main autocorr)
     if (adaptiveBandWeightEnabled && nowMs - lastBandAutocorrMs_ >= autocorrPeriodMs) {
@@ -414,8 +456,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         float correlation = correlationAtLag[lagIdx];
         float normCorr = correlation / (avgEnergy + 0.001f);
 
-        // Skip weak peaks
-        if (normCorr < 0.3f) continue;
+        // Skip weak peaks (tunable threshold)
+        if (normCorr < peakMinCorrelation) continue;
 
         // Apply tempo prior
         float lagBpm = 60000.0f / (static_cast<float>(lag) / samplesPerMs);
@@ -431,29 +473,83 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 
     // === HARMONIC DISAMBIGUATION ===
-    // Check if a peak at 2x lag (half tempo) is also strong — prefer fundamental
+    // Check multiple harmonic ratios to avoid sub-harmonic locking.
+    // Beat trackers should prefer FASTER tempos when correlation is strong,
+    // because sub-harmonics always exist (beats repeat at T, 2T, 3T...)
+    // but the fundamental is unique.
     if (tempoPriorEnabled) {
+        float currentBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
+
+        // Check half-lag (2x BPM) — prefer faster tempo if strong
+        int halfLag = bestWeightedLag / 2;
+        if (halfLag >= minLag) {
+            int halfIdx = halfLag - minLag;
+            if (halfIdx >= 0 && halfIdx < correlationSize) {
+                float halfCorr = correlationAtLag[halfIdx] / (avgEnergy + 0.001f);
+                float halfBpm = 60000.0f / (static_cast<float>(halfLag) / samplesPerMs);
+                float priorCurrent = computeTempoPrior(currentBpm);
+                float priorHalf = computeTempoPrior(halfBpm);
+
+                // Prefer faster tempo if correlation exceeds threshold
+                // and prior doesn't strongly oppose it
+                if (halfCorr > bestWeightedCorr * harmonicUp2xThresh && priorHalf >= priorCurrent * 0.85f) {
+                    if (shouldPrintDebug) {
+                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"up\",\"from\":"));
+                        Serial.print(currentBpm, 1);
+                        Serial.print(F(",\"to\":"));
+                        Serial.print(halfBpm, 1);
+                        Serial.println(F("}"));
+                    }
+                    bestWeightedLag = halfLag;
+                    currentBpm = halfBpm;
+                }
+            }
+        }
+
+        // Check 2/3-lag (3/2x BPM) — common metrical relationship
+        int twoThirdLag = bestWeightedLag * 2 / 3;
+        if (twoThirdLag >= minLag) {
+            int ttIdx = twoThirdLag - minLag;
+            if (ttIdx >= 0 && ttIdx < correlationSize) {
+                float ttCorr = correlationAtLag[ttIdx] / (avgEnergy + 0.001f);
+                float ttBpm = 60000.0f / (static_cast<float>(twoThirdLag) / samplesPerMs);
+                float priorCurrent = computeTempoPrior(currentBpm);
+                float priorTT = computeTempoPrior(ttBpm);
+
+                // Prefer 3/2x tempo if correlation exceeds threshold and prior supports it
+                if (ttCorr > bestWeightedCorr * harmonicUp32Thresh && priorTT >= priorCurrent * 0.90f) {
+                    if (shouldPrintDebug) {
+                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"up3/2\",\"from\":"));
+                        Serial.print(currentBpm, 1);
+                        Serial.print(F(",\"to\":"));
+                        Serial.print(ttBpm, 1);
+                        Serial.println(F("}"));
+                    }
+                    bestWeightedLag = twoThirdLag;
+                    currentBpm = ttBpm;
+                }
+            }
+        }
+
+        // Check double-lag (half BPM) — original disambiguation (prefer fundamental)
         int doubleLag = bestWeightedLag * 2;
         if (doubleLag <= maxLag) {
             int dblIdx = doubleLag - minLag;
             if (dblIdx >= 0 && dblIdx < correlationSize) {
                 float dblCorr = correlationAtLag[dblIdx] / (avgEnergy + 0.001f);
                 float dblBpm = 60000.0f / (static_cast<float>(doubleLag) / samplesPerMs);
-                float fastBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
-
-                // Only prefer slower tempo if prior supports it
-                float priorFast = computeTempoPrior(fastBpm);
+                float priorCurrent = computeTempoPrior(currentBpm);
                 float priorSlow = computeTempoPrior(dblBpm);
 
-                if (dblCorr > bestWeightedCorr * 0.6f && priorSlow >= priorFast * 0.95f) {
-                    bestWeightedLag = doubleLag;
+                if (dblCorr > bestWeightedCorr * 0.6f && priorSlow >= priorCurrent * 0.95f) {
                     if (shouldPrintDebug) {
-                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"from\":"));
-                        Serial.print(fastBpm, 1);
+                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"down\",\"from\":"));
+                        Serial.print(currentBpm, 1);
                         Serial.print(F(",\"to\":"));
                         Serial.print(dblBpm, 1);
                         Serial.println(F("}"));
                     }
+                    bestWeightedLag = doubleLag;
                 }
             }
         }
@@ -496,8 +592,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             // Large change: snap to new tempo
             bpm_ = newBpm;
         } else {
-            // Small change: smooth
-            bpm_ = bpm_ * 0.8f + newBpm * 0.2f;
+            // Small change: smooth (tunable blend for convergence speed)
+            bpm_ = bpm_ * tempoSmoothFactor + newBpm * (1.0f - tempoSmoothFactor);
         }
 
         beatPeriodMs_ = 60000.0f / bpm_;
@@ -523,33 +619,63 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 }
 
+// ===== ODF SMOOTHING =====
+
+float AudioController::smoothOnsetStrength(float raw) {
+    int width = odfSmoothWidth;
+    if (width < 3) width = 3;
+    if (width > ODF_SMOOTH_MAX) width = ODF_SMOOTH_MAX;
+    odfSmoothBuffer_[odfSmoothIdx_] = raw;
+    odfSmoothIdx_ = (odfSmoothIdx_ + 1) % width;
+    float sum = 0.0f;
+    for (int i = 0; i < width; i++) sum += odfSmoothBuffer_[i];
+    return sum / width;
+}
+
+// ===== LOG-GAUSSIAN WEIGHT COMPUTATION =====
+
+void AudioController::recomputeLogGaussianWeights(int T) {
+    if (T == logGaussianLastT_ && cbssTightness == logGaussianLastTight_) return;
+    logGaussianLastT_ = T;
+    logGaussianLastTight_ = cbssTightness;
+    int searchMin = T / 2;
+    int searchMax = T * 2;
+    logGaussianWeightsSize_ = searchMax - searchMin + 1;
+    if (logGaussianWeightsSize_ > MAX_BEAT_PERIOD * 2) {
+        logGaussianWeightsSize_ = MAX_BEAT_PERIOD * 2;
+    }
+    for (int i = 0; i < logGaussianWeightsSize_; i++) {
+        int offset = searchMin + i;
+        // Log-Gaussian: peak at offset==T, decay for offsets away from T
+        float logRatio = logf((float)offset / (float)T);
+        float a = cbssTightness * logRatio;
+        logGaussianWeights_[i] = expf(-0.5f * a * a);
+    }
+}
+
 // ===== CBSS BEAT TRACKING =====
 
 void AudioController::updateCBSS(float onsetStrength) {
-    // CBSS[n] = (1-alpha)*OSS[n] + alpha*max(CBSS[n-2T : n-T/2])
-    // Combines current onset strength with predicted beat strength from history
+    // CBSS[n] = (1-alpha)*OSS[n] + alpha*max_weighted(CBSS[n-2T : n-T/2])
+    // Uses log-Gaussian transition weighting (BTrack-style) instead of flat max
     int T = beatPeriodSamples_;
     if (T < 10) T = 10;
 
-    float maxPrevCBSS = 0.0f;
+    recomputeLogGaussianWeights(T);
 
-    // Search backward in CBSS buffer for previous beat peak
-    // Range: T/2 to 2*T samples ago (half-period to double-period)
+    float maxWeightedCBSS = 0.0f;
     int searchMin = T / 2;
-    int searchMax = T * 2;
 
-    for (int offset = searchMin; offset <= searchMax; offset++) {
+    for (int i = 0; i < logGaussianWeightsSize_; i++) {
+        int offset = searchMin + i;
         int idx = sampleCounter_ - offset;
         if (idx < 0) continue;
-        float val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
-        if (val > maxPrevCBSS) maxPrevCBSS = val;
+        float val = cbssBuffer_[idx % OSS_BUFFER_SIZE] * logGaussianWeights_[i];
+        if (val > maxWeightedCBSS) maxWeightedCBSS = val;
     }
 
-    float cbssVal = (1.0f - cbssAlpha) * onsetStrength + cbssAlpha * maxPrevCBSS;
+    float cbssVal = (1.0f - cbssAlpha) * onsetStrength + cbssAlpha * maxWeightedCBSS;
     cbssBuffer_[sampleCounter_ % OSS_BUFFER_SIZE] = cbssVal;
-
-    // Update adaptive threshold (smoothed CBSS mean)
-    beatThreshold_ = beatThreshold_ * 0.99f + cbssVal * 0.01f;
 
     sampleCounter_++;
 
@@ -567,79 +693,121 @@ void AudioController::updateCBSS(float onsetStrength) {
     }
 }
 
-void AudioController::detectBeat() {
-    uint32_t nowMs = time_.millis();
+void AudioController::predictBeat() {
     int T = beatPeriodSamples_;
     if (T < 10) T = 10;
+    if (T > MAX_BEAT_PERIOD) T = MAX_BEAT_PERIOD;
 
-    // How many samples since last beat?
-    int samplesSinceBeat = sampleCounter_ - lastBeatSample_;
-    // Guard against negative values (shouldn't happen, but defensive)
-    if (samplesSinceBeat < 0) samplesSinceBeat = T;
-
-    // Beat search window boundaries
-    int earlyBound = static_cast<int>(T * (1.0f - beatWindowScale));
-    int lateBound = static_cast<int>(T * (1.0f + beatWindowScale));
-    if (earlyBound < T / 2) earlyBound = T / 2;
-
-    bool beatDetected = false;
-
-    // Are we within the search window?
-    if (samplesSinceBeat >= earlyBound && samplesSinceBeat <= lateBound) {
-        // Look for a local maximum in recent CBSS
-        int currentIdx = (sampleCounter_ - 1) % OSS_BUFFER_SIZE;
-        int prevIdx = (sampleCounter_ - 2 + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-        float currentCBSS = cbssBuffer_[currentIdx];
-        float prevCBSS = cbssBuffer_[prevIdx];
-
-        // Beat detected: CBSS started declining (was rising, now falling)
-        // AND value is above noise floor. The CBSS signal has inherently small
-        // peak-to-mean ratios due to alpha blending, so the threshold is kept
-        // close to the mean (1.05x) — the local max condition is the real detector.
-        float threshold = beatThreshold_ * 1.05f;
-        if (threshold < 0.01f) threshold = 0.01f;
-
-        if (prevCBSS > currentCBSS && prevCBSS > threshold) {
-            // Beat!
-            lastBeatSample_ = sampleCounter_ - 1;
-            if (beatCount_ < 65535) beatCount_++;
-            beatDetected = true;
-
-            // Boost confidence on each beat
-            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
-
-            // Update beat stability
-            updateBeatStability(nowMs);
+    // Precompute beat expectation Gaussian if T changed
+    if (T != beatExpectationLastT_) {
+        beatExpectationLastT_ = T;
+        beatExpectationSize_ = T;  // Window covers one full beat period ahead
+        float halfT = T / 2.0f;
+        float sigma = halfT;  // Gaussian sigma = half beat period
+        for (int i = 0; i < beatExpectationSize_; i++) {
+            float diff = (i + 1) - halfT;  // Center at T/2
+            beatExpectationWindow_[i] = expf(-diff * diff / (2.0f * sigma * sigma));
         }
     }
 
-    // Past late bound: force a beat to maintain phase during dropouts
-    // Only if we didn't already detect a real beat this frame
-    if (!beatDetected && samplesSinceBeat > lateBound) {
+    // Synthesize future CBSS values by feeding zero onset strength
+    // into the CBSS recursion for beatExpectationSize_ frames ahead
+    float futureCBSS[MAX_BEAT_PERIOD];
+
+    recomputeLogGaussianWeights(T);
+
+    int simCounter = sampleCounter_;
+    for (int i = 0; i < beatExpectationSize_; i++) {
+        // Same CBSS formula but with zero onset
+        float maxWeightedCBSS = 0.0f;
+        int searchMin = T / 2;
+        for (int j = 0; j < logGaussianWeightsSize_; j++) {
+            int offset = searchMin + j;
+            int idx = simCounter - offset;
+            if (idx < 0) continue;
+            float val;
+            if (idx >= sampleCounter_) {
+                // Read from our synthesized future
+                int futureIdx = idx - sampleCounter_;
+                val = (futureIdx < i) ? futureCBSS[futureIdx] : 0.0f;
+            } else {
+                val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
+            }
+            val *= logGaussianWeights_[j];
+            if (val > maxWeightedCBSS) maxWeightedCBSS = val;
+        }
+        // alpha=1.0 for future synthesis (pure momentum, no new onset)
+        futureCBSS[i] = cbssAlpha * maxWeightedCBSS;
+        simCounter++;
+    }
+
+    // Find argmax of Gaussian-weighted future CBSS
+    float maxScore = 0.0f;
+    int bestOffset = beatExpectationSize_ / 2;  // Default to center
+    for (int i = 0; i < beatExpectationSize_; i++) {
+        float score = futureCBSS[i] * beatExpectationWindow_[i];
+        if (score > maxScore) {
+            maxScore = score;
+            bestOffset = i;
+        }
+    }
+
+    // Apply timing offset to compensate for ODF smoothing + CBSS propagation delay
+    int adjusted = bestOffset + 1 - static_cast<int>(beatTimingOffset);
+    if (adjusted < 1) adjusted = 1;  // Never schedule in the past
+    timeToNextBeat_ = adjusted;
+    timeToNextPrediction_ = timeToNextBeat_ + T / 2;  // Next prediction at midpoint
+    lastBeatWasPredicted_ = true;  // Mark that prediction refined the next beat time
+}
+
+void AudioController::detectBeat() {
+    uint32_t nowMs = time_.millis();
+
+    timeToNextBeat_--;
+    timeToNextPrediction_--;
+
+    bool beatDetected = false;
+
+    // Run prediction at beat midpoint
+    if (timeToNextPrediction_ <= 0) {
+        predictBeat();
+    }
+
+    // Beat declared when countdown reaches zero
+    if (timeToNextBeat_ <= 0) {
         lastBeatSample_ = sampleCounter_;
         if (beatCount_ < 65535) beatCount_++;
         beatDetected = true;
+        cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+        updateBeatStability(nowMs);
 
-        // Lower confidence for forced beats
-        cbssConfidence_ *= 0.9f;
+        // Capture whether prediction refined this beat's timing (for streaming)
+        // Must happen before reset so streaming reads the correct value
+        lastFiredBeatPredicted_ = lastBeatWasPredicted_;
+
+        // Reset timers to prevent re-firing on subsequent frames.
+        // Use current beat period as fallback; next prediction will refine.
+        int T = beatPeriodSamples_;
+        if (T < 10) T = 10;
+        timeToNextBeat_ = T;
+        timeToNextPrediction_ = T / 2;
+        lastBeatWasPredicted_ = false;  // Reset; prediction will set true when it runs
     }
 
-    // Decay confidence when no beat detected this frame
+    // Decay confidence when no beat
     if (!beatDetected) {
         cbssConfidence_ *= beatConfidenceDecay;
     }
 
-    // Derive phase deterministically from beat counter
-    // Phase = (samples since last beat) / beat period
+    // Derive phase deterministically
+    int T = beatPeriodSamples_;
+    if (T < 10) T = 10;
     float newPhase = static_cast<float>(sampleCounter_ - lastBeatSample_) / static_cast<float>(T);
     newPhase = fmodf(newPhase, 1.0f);
     if (newPhase < 0.0f) newPhase += 1.0f;
-
-    // Safety check
     if (!isfinite(newPhase)) newPhase = 0.0f;
     phase_ = newPhase;
 
-    // Predict next beat
     predictNextBeat(nowMs);
 }
 

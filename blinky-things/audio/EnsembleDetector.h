@@ -10,6 +10,7 @@
 #include "detectors/BassBandDetector.h"
 #include "detectors/ComplexDomainDetector.h"
 #include "detectors/NoveltyDetector.h"
+#include "detectors/BandWeightedFluxDetector.h"
 
 /**
  * EnsembleDetector - Main orchestrator for ensemble onset detection
@@ -90,6 +91,7 @@ public:
     BassBandDetector& getBassBand() { return bassBand_; }
     ComplexDomainDetector& getComplexDomain() { return complexDomain_; }
     NoveltyDetector& getNovelty() { return novelty_; }
+    BandWeightedFluxDetector& getBandFlux() { return bandFlux_; }
 
     // --- Last results (for debugging/streaming) ---
     const DetectionResult* getLastResults() const { return lastResults_; }
@@ -116,6 +118,7 @@ private:
     BassBandDetector bassBand_;
     ComplexDomainDetector complexDomain_;
     NoveltyDetector novelty_;
+    BandWeightedFluxDetector bandFlux_;
 
     // Detector array for iteration
     IDetector* detectors_[NUM_DETECTORS];

@@ -32,11 +32,15 @@ export const MusicModeDataSchema = z.object({
   bpm: z.number().nonnegative(), // Tempo in BPM (0 when inactive)
   ph: z.number().min(0).max(1), // Phase (0-1, 0=on-beat)
   str: z.number().min(0).max(1), // Rhythm strength (0-1)
-  conf: z.number().min(0).max(1), // Hypothesis confidence (0-1)
+  conf: z.number().min(0).max(1), // CBSS beat tracking confidence (0-1)
   bc: z.number().int().nonnegative(), // Beat count (tracked beats)
   q: z.union([z.literal(0), z.literal(1)]), // Beat event (phase wrap)
   e: z.number().min(0).max(1), // Energy (0-1)
   p: z.number().min(0).max(1), // Pulse (0-1)
+  cb: z.number().nonnegative().optional(), // Current CBSS value
+  oss: z.number().nonnegative().optional(), // Smoothed onset strength
+  ttb: z.number().int().optional(), // Frames until next beat
+  bp: z.union([z.literal(0), z.literal(1)]).optional(), // Last beat predicted (1) vs fallback (0)
 });
 
 export type MusicModeData = z.infer<typeof MusicModeDataSchema>;

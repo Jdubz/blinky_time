@@ -170,7 +170,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
 | `cbssAlpha` | 0.9 | CBSS weighting (0.8-0.95, higher = more predictive) | `set cbssalpha 0.9` |
-| `beatWindowScale` | 0.5 | Beat search window as fraction of period | `set beatwindow 0.5` |
+| `cbssTightness` | 5.0 | Log-Gaussian tightness (higher = stricter tempo) | `set cbsstight 5.0` |
 | `beatConfidenceDecay` | 0.98 | Per-frame confidence decay when no beat | `set beatconfdecay 0.98` |
 | `tempoSnapThreshold` | 0.15 | BPM change ratio to snap vs smooth | `set temposnap 0.15` |
 

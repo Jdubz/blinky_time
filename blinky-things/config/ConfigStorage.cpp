@@ -113,7 +113,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds)
     data_.fire.intensityMin = 150;
     data_.fire.intensityMax = 220;
-    data_.fire.burstSparks = 10;            // Moderate transient bursts
+    data_.fire.burstSparks = 8;             // Visible burst on hits
 
     // Water defaults (particle-based)
     data_.water.baseSpawnChance = 0.25f;
@@ -210,8 +210,10 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tempoChangeThreshold = 0.1f;
 
     // CBSS beat tracking
-    data_.music.beatWindowScale = 0.5f;        // Beat search window as fraction of period
+    data_.music.cbssTightness = 5.0f;         // Log-Gaussian tightness (higher=stricter tempo)
     data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
+    data_.music.beatTimingOffset = 9.0f;       // Beat prediction advance (frames, ~150ms at 60Hz)
+    data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
 
     data_.brightness = 100;
 }
@@ -456,8 +458,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.tempoChangeThreshold, 0.01f, 0.5f, F("tempochgthresh"));
 
     // CBSS beat tracking validation
-    validateFloat(data_.music.beatWindowScale, 0.1f, 0.9f, F("beatWindowScale"));
+    validateFloat(data_.music.cbssTightness, 1.0f, 20.0f, F("cbssTightness"));
     validateFloat(data_.music.beatConfidenceDecay, 0.9f, 0.999f, F("beatConfDecay"));
+    validateFloat(data_.music.beatTimingOffset, 0.0f, 15.0f, F("beatTimingOffset"));
+    validateFloat(data_.music.phaseCorrectionStrength, 0.0f, 1.0f, F("phaseCorrStrength"));
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
@@ -600,8 +604,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->tempoChangeThreshold = data_.music.tempoChangeThreshold;
 
         // CBSS beat tracking
-        audioCtrl->beatWindowScale = data_.music.beatWindowScale;
+        audioCtrl->cbssTightness = data_.music.cbssTightness;
         audioCtrl->beatConfidenceDecay = data_.music.beatConfidenceDecay;
+        audioCtrl->beatTimingOffset = data_.music.beatTimingOffset;
+        audioCtrl->phaseCorrectionStrength = data_.music.phaseCorrectionStrength;
     }
 }
 
@@ -729,8 +735,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.tempoChangeThreshold = audioCtrl->tempoChangeThreshold;
 
         // CBSS beat tracking
-        data_.music.beatWindowScale = audioCtrl->beatWindowScale;
+        data_.music.cbssTightness = audioCtrl->cbssTightness;
         data_.music.beatConfidenceDecay = audioCtrl->beatConfidenceDecay;
+        data_.music.beatTimingOffset = audioCtrl->beatTimingOffset;
+        data_.music.phaseCorrectionStrength = audioCtrl->phaseCorrectionStrength;
     }
 
     saveToFlash();

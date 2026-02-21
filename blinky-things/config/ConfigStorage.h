@@ -30,7 +30,7 @@ public:
     // Bumping SETTINGS_VERSION preserves device config (LED layout, device name, etc.)
     // Bumping DEVICE_VERSION only needed when StoredDeviceConfig struct changes
     static const uint8_t DEVICE_VERSION = 1;    // Device config schema (LED layout, pins, etc.)
-    static const uint8_t SETTINGS_VERSION = 8;  // Settings schema (fire, water, lightning, mic, music params)
+    static const uint8_t SETTINGS_VERSION = 11;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -174,10 +174,12 @@ public:
         float tempoChangeThreshold;   // Min BPM change ratio to trigger update
 
         // CBSS beat tracking
-        float beatWindowScale;          // Beat search window as fraction of period
+        float cbssTightness;            // Log-Gaussian tightness (higher=stricter tempo)
         float beatConfidenceDecay;      // Per-frame confidence decay when no beat detected
+        float beatTimingOffset;         // Beat prediction advance in frames (ODF+CBSS delay compensation)
+        float phaseCorrectionStrength;  // Phase correction toward transients (0=off, 1=full snap)
 
-        // Total: 16 floats (64 bytes) + 1 bool (1 byte) + 3 padding = 68 bytes
+        // Total: 18 floats (72 bytes) + 1 bool (1 byte) + 3 padding = 76 bytes
     };
 
     /**
@@ -273,8 +275,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 68,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 1 bool + padding)");
+    static_assert(sizeof(StoredMusicParams) == 76,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 18 floats + 1 bool + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     static_assert(sizeof(ConfigData) <= 512,
