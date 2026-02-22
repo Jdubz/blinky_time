@@ -67,7 +67,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     }
 
     // Step 2: Build 3-bin max-filtered reference (SuperFlux vibrato suppression)
-    float maxRef[MAX_STORED_BINS];
+    float maxRef[MAX_STORED_BINS] = {0};
     for (int k = 0; k < effectiveMax; k++) {
         float left  = (k > 0) ? prevLogMag_[k - 1] : prevLogMag_[k];
         float center = prevLogMag_[k];

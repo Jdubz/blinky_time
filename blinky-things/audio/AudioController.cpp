@@ -484,7 +484,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         int halfLag = bestWeightedLag / 2;
         if (halfLag >= minLag) {
             int halfIdx = halfLag - minLag;
-            if (halfIdx >= 0 && halfIdx < correlationSize) {
+            if (halfIdx < correlationSize) {
                 float halfCorr = correlationAtLag[halfIdx] / (avgEnergy + 0.001f);
                 float halfBpm = 60000.0f / (static_cast<float>(halfLag) / samplesPerMs);
                 float priorCurrent = computeTempoPrior(currentBpm);
@@ -510,7 +510,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         int twoThirdLag = bestWeightedLag * 2 / 3;
         if (twoThirdLag >= minLag) {
             int ttIdx = twoThirdLag - minLag;
-            if (ttIdx >= 0 && ttIdx < correlationSize) {
+            if (ttIdx < correlationSize) {
                 float ttCorr = correlationAtLag[ttIdx] / (avgEnergy + 0.001f);
                 float ttBpm = 60000.0f / (static_cast<float>(twoThirdLag) / samplesPerMs);
                 float priorCurrent = computeTempoPrior(currentBpm);
