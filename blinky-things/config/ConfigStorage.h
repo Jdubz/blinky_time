@@ -30,7 +30,8 @@ public:
     // Bumping SETTINGS_VERSION preserves device config (LED layout, device name, etc.)
     // Bumping DEVICE_VERSION only needed when StoredDeviceConfig struct changes
     static const uint8_t DEVICE_VERSION = 1;    // Device config schema (LED layout, pins, etc.)
-    static const uint8_t SETTINGS_VERSION = 7;  // Settings schema (fire, water, lightning, mic, music params)
+    // Versions 8-11 were intermediate experimental builds during CBSS development (never released)
+    static const uint8_t SETTINGS_VERSION = 12;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -154,7 +155,7 @@ public:
         float activationThreshold;
         float bpmMin;
         float bpmMax;
-        float phaseAdaptRate;  // How quickly phase adapts to autocorrelation
+        float cbssAlpha;       // CBSS weighting (0.8-0.95, higher = more predictive)
 
         // Tempo prior (CRITICAL for correct BPM tracking)
         float tempoPriorCenter;    // Center of Gaussian prior (BPM)
@@ -173,11 +174,20 @@ public:
         float tempoSmoothingFactor;   // Higher = smoother tempo changes
         float tempoChangeThreshold;   // Min BPM change ratio to trigger update
 
-        // Transient-based phase correction (PLL)
-        float transientCorrectionRate;  // How fast to apply transient correction (0-1)
-        float transientCorrectionMin;   // Minimum transient strength to trigger correction
+        // CBSS beat tracking
+        float cbssTightness;            // Log-Gaussian tightness (higher=stricter tempo)
+        float beatConfidenceDecay;      // Per-frame confidence decay when no beat detected
+        float beatTimingOffset;         // Beat prediction advance in frames (ODF+CBSS delay compensation)
+        float phaseCorrectionStrength;  // Phase correction toward transients (0=off, 1=full snap)
 
-        // Total: 16 floats (64 bytes) + 1 bool (1 byte) + 3 padding = 68 bytes
+        // Autocorrelation tuning
+        float tempoSmoothFactor;        // BPM EMA blend (0=instant, 1=frozen, 0.75=default)
+        float harmonicUp2xThresh;       // Half-lag harmonic fix threshold (0.1-0.95)
+        float harmonicUp32Thresh;       // 2/3-lag harmonic fix threshold (0.1-0.95)
+        float peakMinCorrelation;       // Min normalized correlation for peak (0.05-0.8)
+        uint8_t odfSmoothWidth;         // ODF smooth window (3-11, odd)
+
+        // Total: 22 floats (88 bytes) + 1 bool (1 byte) + 1 uint8 (1 byte) + 6 padding = 96 bytes
     };
 
     /**
@@ -273,8 +283,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 68,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 1 bool + padding)");
+    static_assert(sizeof(StoredMusicParams) == 96,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (96 bytes = 22 floats + 1 bool + 1 uint8 + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     static_assert(sizeof(ConfigData) <= 512,

@@ -332,7 +332,19 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     max: 1.5,
     default: 1.2,
     sweepValues: [1.0, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5],
-    description: 'Boost when all six detectors agree',
+    description: 'Boost when six detectors agree',
+    optimizeFor: 'recall',
+  },
+
+  agree_7: {
+    name: 'agree_7',
+    mode: 'ensemble',
+    command: 'agree_7',
+    min: 1.0,
+    max: 1.5,
+    default: 1.2,
+    sweepValues: [1.0, 1.1, 1.15, 1.2, 1.3, 1.4, 1.5],
+    description: 'Boost when all seven detectors agree',
     optimizeFor: 'recall',
   },
 
@@ -417,144 +429,50 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     description: 'Maximum BPM to detect',
   },
 
-  // ===== MULTI-HYPOTHESIS TRACKING PARAMETERS =====
-  // AudioController v3 multi-hypothesis tempo tracking (December 2025)
-  // Manages 4 concurrent tempo hypotheses for handling tempo changes and ambiguity
+  // ===== CBSS BEAT TRACKING PARAMETERS =====
+  // AudioController CBSS beat tracking (February 2026)
 
-  // Peak detection
-  minpeakstr: {
-    name: 'minpeakstr',
-    mode: 'rhythm',
-    min: 0.1,
-    max: 0.8,
-    default: 0.3,
-    sweepValues: [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6],
-    description: 'Minimum autocorrelation peak strength to create hypothesis',
-    optimizeFor: 'f1',
-  },
-
-  minrelheight: {
-    name: 'minrelheight',
+  cbssalpha: {
+    name: 'cbssalpha',
     mode: 'rhythm',
     min: 0.5,
-    max: 1.0,
-    default: 0.7,
-    sweepValues: [0.5, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9],
-    description: 'Minimum peak height relative to max peak (rejects weak secondaries)',
+    max: 0.99,
+    default: 0.9,
+    sweepValues: [0.7, 0.8, 0.85, 0.9, 0.92, 0.95, 0.98],
+    description: 'CBSS weighting (higher = more predictive)',
     optimizeFor: 'f1',
   },
 
-  // Hypothesis matching
-  bpmmatchtol: {
-    name: 'bpmmatchtol',
+  cbsstight: {
+    name: 'cbsstight',
     mode: 'rhythm',
-    min: 0.01,
-    max: 0.2,
-    default: 0.05,
-    sweepValues: [0.02, 0.03, 0.05, 0.07, 0.1, 0.15, 0.2],
-    description: 'BPM match tolerance (fraction, e.g., 0.05 = ±5%)',
+    min: 1.0,
+    max: 20.0,
+    default: 5.0,
+    sweepValues: [2.0, 3.0, 4.0, 5.0, 7.0, 10.0, 15.0],
+    description: 'CBSS log-Gaussian tightness (higher = stricter tempo)',
     optimizeFor: 'f1',
   },
 
-  // Promotion
-  promothresh: {
-    name: 'promothresh',
+  beatconfdecay: {
+    name: 'beatconfdecay',
+    mode: 'rhythm',
+    min: 0.9,
+    max: 0.999,
+    default: 0.98,
+    sweepValues: [0.95, 0.96, 0.97, 0.98, 0.99, 0.995],
+    description: 'Per-frame confidence decay when no beat detected',
+    optimizeFor: 'f1',
+  },
+
+  temposnap: {
+    name: 'temposnap',
     mode: 'rhythm',
     min: 0.05,
     max: 0.5,
     default: 0.15,
-    sweepValues: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4],
-    description: 'Confidence advantage needed to promote hypothesis',
-    optimizeFor: 'f1',
-  },
-
-  minbeats: {
-    name: 'minbeats',
-    mode: 'rhythm',
-    min: 4,
-    max: 32,
-    default: 8,
-    sweepValues: [4, 6, 8, 10, 12, 16, 20, 24],
-    description: 'Minimum beats before hypothesis can be promoted',
-    optimizeFor: 'f1',
-  },
-
-  // Decay
-  phrasehalf: {
-    name: 'phrasehalf',
-    mode: 'rhythm',
-    min: 8.0,
-    max: 64.0,
-    default: 32.0,
-    sweepValues: [8, 16, 24, 32, 40, 48, 64],
-    description: 'Phrase decay half-life in beats (8 bars = 32 beats)',
-    optimizeFor: 'f1',
-  },
-
-  minstr: {
-    name: 'minstr',
-    mode: 'rhythm',
-    min: 0.05,
-    max: 0.3,
-    default: 0.1,
-    sweepValues: [0.05, 0.08, 0.1, 0.12, 0.15, 0.2, 0.25],
-    description: 'Minimum strength to keep hypothesis active',
-    optimizeFor: 'f1',
-  },
-
-  silencegrace: {
-    name: 'silencegrace',
-    mode: 'rhythm',
-    min: 1000,
-    max: 10000,
-    default: 3000,
-    sweepValues: [1000, 2000, 3000, 4000, 5000, 7000, 10000],
-    description: 'Grace period before silence decay (ms)',
-    optimizeFor: 'f1',
-  },
-
-  silencehalf: {
-    name: 'silencehalf',
-    mode: 'rhythm',
-    min: 2.0,
-    max: 15.0,
-    default: 5.0,
-    sweepValues: [2, 3, 5, 7, 10, 12, 15],
-    description: 'Silence decay half-life (seconds)',
-    optimizeFor: 'f1',
-  },
-
-  // Confidence weighting (must sum to meaningful values)
-  strweight: {
-    name: 'strweight',
-    mode: 'rhythm',
-    min: 0.0,
-    max: 1.0,
-    default: 0.5,
-    sweepValues: [0.3, 0.4, 0.5, 0.6, 0.7],
-    description: 'Weight of periodicity strength in confidence calculation',
-    optimizeFor: 'f1',
-  },
-
-  consweight: {
-    name: 'consweight',
-    mode: 'rhythm',
-    min: 0.0,
-    max: 1.0,
-    default: 0.3,
-    sweepValues: [0.1, 0.2, 0.3, 0.4, 0.5],
-    description: 'Weight of phase consistency in confidence calculation',
-    optimizeFor: 'f1',
-  },
-
-  longweight: {
-    name: 'longweight',
-    mode: 'rhythm',
-    min: 0.0,
-    max: 1.0,
-    default: 0.2,
-    sweepValues: [0.1, 0.15, 0.2, 0.25, 0.3],
-    description: 'Weight of beat longevity in confidence calculation',
+    sweepValues: [0.05, 0.1, 0.15, 0.2, 0.25, 0.3],
+    description: 'BPM change ratio to snap vs smooth',
     optimizeFor: 'f1',
   },
 

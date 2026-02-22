@@ -113,7 +113,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds)
     data_.fire.intensityMin = 150;
     data_.fire.intensityMax = 220;
-    data_.fire.burstSparks = 10;            // Moderate transient bursts
+    data_.fire.burstSparks = 8;             // Visible burst on hits
 
     // Water defaults (particle-based)
     data_.water.baseSpawnChance = 0.25f;
@@ -190,7 +190,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
-    data_.music.phaseAdaptRate = 0.7f;   // Fast phase adaptation for tight beat sync
+    data_.music.cbssAlpha = 0.9f;         // CBSS weighting (high = more predictive)
 
     // Tempo prior (CRITICAL: must be enabled for correct BPM tracking)
     data_.music.tempoPriorEnabled = true;    // MUST be true
@@ -209,9 +209,18 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tempoSmoothingFactor = 0.85f;
     data_.music.tempoChangeThreshold = 0.1f;
 
-    // Transient-based phase correction (PLL) - calibrated Feb 2026
-    data_.music.transientCorrectionRate = 0.15f;  // How fast to nudge phase toward transients
-    data_.music.transientCorrectionMin = 0.42f;   // Min transient strength to trigger correction
+    // CBSS beat tracking
+    data_.music.cbssTightness = 5.0f;         // Log-Gaussian tightness (higher=stricter tempo)
+    data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
+    data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
+    data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
+
+    // Autocorrelation tuning
+    data_.music.tempoSmoothFactor = 0.75f;      // BPM EMA blend (0.75 best compromise across tracks)
+    data_.music.harmonicUp2xThresh = 0.5f;      // Half-lag harmonic fix threshold
+    data_.music.harmonicUp32Thresh = 0.6f;      // 2/3-lag harmonic fix threshold
+    data_.music.peakMinCorrelation = 0.3f;      // Min normalized correlation for peak
+    data_.music.odfSmoothWidth = 5;             // ODF smooth window (odd, 3-11)
 
     data_.brightness = 100;
 }
@@ -437,7 +446,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
     validateFloat(data_.music.bpmMin, 40.0f, 120.0f, F("bpmMin"));
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
-    validateFloat(data_.music.phaseAdaptRate, 0.01f, 1.0f, F("phaseAdaptRate"));
+    validateFloat(data_.music.cbssAlpha, 0.5f, 0.99f, F("cbssAlpha"));
 
     // Tempo prior validation (v25+)
     validateFloat(data_.music.tempoPriorCenter, 60.0f, 200.0f, F("priorcenter"));
@@ -455,9 +464,22 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.tempoSmoothingFactor, 0.5f, 0.99f, F("temposmooth"));
     validateFloat(data_.music.tempoChangeThreshold, 0.01f, 0.5f, F("tempochgthresh"));
 
-    // Transient-based phase correction validation (v26+)
-    validateFloat(data_.music.transientCorrectionRate, 0.0f, 1.0f, F("transcorrrate"));
-    validateFloat(data_.music.transientCorrectionMin, 0.0f, 1.0f, F("transcorrmin"));
+    // CBSS beat tracking validation
+    validateFloat(data_.music.cbssTightness, 1.0f, 20.0f, F("cbssTightness"));
+    validateFloat(data_.music.beatConfidenceDecay, 0.9f, 0.999f, F("beatConfDecay"));
+    validateFloat(data_.music.beatTimingOffset, 0.0f, 15.0f, F("beatTimingOffset"));
+    validateFloat(data_.music.phaseCorrectionStrength, 0.0f, 1.0f, F("phaseCorrStrength"));
+
+    // Autocorrelation tuning validation
+    validateFloat(data_.music.tempoSmoothFactor, 0.0f, 0.99f, F("tempoSmoothFactor"));
+    validateFloat(data_.music.harmonicUp2xThresh, 0.1f, 0.95f, F("harmonicUp2xThresh"));
+    validateFloat(data_.music.harmonicUp32Thresh, 0.1f, 0.95f, F("harmonicUp32Thresh"));
+    validateFloat(data_.music.peakMinCorrelation, 0.05f, 0.8f, F("peakMinCorrelation"));
+    if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
+        SerialConsole::logWarn(F("Invalid odfSmoothWidth, using default"));
+        data_.music.odfSmoothWidth = 5;
+        corrupt = true;
+    }
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
@@ -580,28 +602,37 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->bpmMin = data_.music.bpmMin;
         audioCtrl->bpmMax = data_.music.bpmMax;
         audioCtrl->activationThreshold = data_.music.activationThreshold;
-        audioCtrl->phaseAdaptRate = data_.music.phaseAdaptRate;
+        audioCtrl->cbssAlpha = data_.music.cbssAlpha;
 
-        // Tempo prior (v25+) - CRITICAL for correct BPM tracking
+        // Tempo prior - CRITICAL for correct BPM tracking
         audioCtrl->tempoPriorEnabled = data_.music.tempoPriorEnabled;
         audioCtrl->tempoPriorCenter = data_.music.tempoPriorCenter;
         audioCtrl->tempoPriorWidth = data_.music.tempoPriorWidth;
         audioCtrl->tempoPriorStrength = data_.music.tempoPriorStrength;
 
-        // Pulse modulation (v25+)
+        // Pulse modulation
         audioCtrl->pulseBoostOnBeat = data_.music.pulseBoostOnBeat;
         audioCtrl->pulseSuppressOffBeat = data_.music.pulseSuppressOffBeat;
         audioCtrl->energyBoostOnBeat = data_.music.energyBoostOnBeat;
 
-        // Stability and smoothing (v25+)
+        // Stability and smoothing
         audioCtrl->stabilityWindowBeats = data_.music.stabilityWindowBeats;
         audioCtrl->beatLookaheadMs = data_.music.beatLookaheadMs;
         audioCtrl->tempoSmoothingFactor = data_.music.tempoSmoothingFactor;
         audioCtrl->tempoChangeThreshold = data_.music.tempoChangeThreshold;
 
-        // Transient-based phase correction (v26+)
-        audioCtrl->transientCorrectionRate = data_.music.transientCorrectionRate;
-        audioCtrl->transientCorrectionMin = data_.music.transientCorrectionMin;
+        // CBSS beat tracking
+        audioCtrl->cbssTightness = data_.music.cbssTightness;
+        audioCtrl->beatConfidenceDecay = data_.music.beatConfidenceDecay;
+        audioCtrl->beatTimingOffset = data_.music.beatTimingOffset;
+        audioCtrl->phaseCorrectionStrength = data_.music.phaseCorrectionStrength;
+
+        // Autocorrelation tuning
+        audioCtrl->tempoSmoothFactor = data_.music.tempoSmoothFactor;
+        audioCtrl->harmonicUp2xThresh = data_.music.harmonicUp2xThresh;
+        audioCtrl->harmonicUp32Thresh = data_.music.harmonicUp32Thresh;
+        audioCtrl->peakMinCorrelation = data_.music.peakMinCorrelation;
+        audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
     }
 }
 
@@ -709,28 +740,37 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.bpmMin = audioCtrl->bpmMin;
         data_.music.bpmMax = audioCtrl->bpmMax;
         data_.music.activationThreshold = audioCtrl->activationThreshold;
-        data_.music.phaseAdaptRate = audioCtrl->phaseAdaptRate;
+        data_.music.cbssAlpha = audioCtrl->cbssAlpha;
 
-        // Tempo prior (v25+) - CRITICAL for correct BPM tracking
+        // Tempo prior - CRITICAL for correct BPM tracking
         data_.music.tempoPriorEnabled = audioCtrl->tempoPriorEnabled;
         data_.music.tempoPriorCenter = audioCtrl->tempoPriorCenter;
         data_.music.tempoPriorWidth = audioCtrl->tempoPriorWidth;
         data_.music.tempoPriorStrength = audioCtrl->tempoPriorStrength;
 
-        // Pulse modulation (v25+)
+        // Pulse modulation
         data_.music.pulseBoostOnBeat = audioCtrl->pulseBoostOnBeat;
         data_.music.pulseSuppressOffBeat = audioCtrl->pulseSuppressOffBeat;
         data_.music.energyBoostOnBeat = audioCtrl->energyBoostOnBeat;
 
-        // Stability and smoothing (v25+)
+        // Stability and smoothing
         data_.music.stabilityWindowBeats = audioCtrl->stabilityWindowBeats;
         data_.music.beatLookaheadMs = audioCtrl->beatLookaheadMs;
         data_.music.tempoSmoothingFactor = audioCtrl->tempoSmoothingFactor;
         data_.music.tempoChangeThreshold = audioCtrl->tempoChangeThreshold;
 
-        // Transient-based phase correction (v26+)
-        data_.music.transientCorrectionRate = audioCtrl->transientCorrectionRate;
-        data_.music.transientCorrectionMin = audioCtrl->transientCorrectionMin;
+        // CBSS beat tracking
+        data_.music.cbssTightness = audioCtrl->cbssTightness;
+        data_.music.beatConfidenceDecay = audioCtrl->beatConfidenceDecay;
+        data_.music.beatTimingOffset = audioCtrl->beatTimingOffset;
+        data_.music.phaseCorrectionStrength = audioCtrl->phaseCorrectionStrength;
+
+        // Autocorrelation tuning
+        data_.music.tempoSmoothFactor = audioCtrl->tempoSmoothFactor;
+        data_.music.harmonicUp2xThresh = audioCtrl->harmonicUp2xThresh;
+        data_.music.harmonicUp32Thresh = audioCtrl->harmonicUp32Thresh;
+        data_.music.peakMinCorrelation = audioCtrl->peakMinCorrelation;
+        data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
     }
 
     saveToFlash();

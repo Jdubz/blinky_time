@@ -108,11 +108,18 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
     unit: 'LEDs/sec²',
   },
 
+  bgintensity: {
+    displayName: 'Background Intensity',
+    tooltip:
+      'Noise background brightness (0-1). Sets the underlayer glow beneath particles. 0 = pitch black, 0.15 = subtle, 0.5 = bright ambient.',
+    unit: '',
+  },
+
   // Fire: Music Mode
   musicspawnpulse: {
-    displayName: 'Music Spawn Pulse',
+    displayName: 'Beat Spawn Depth',
     tooltip:
-      'Phase modulation for spawn rate in music mode (0-1). Higher = stronger beat synchronization.',
+      'How deeply spawn rate breathes with the beat (0-1). 0 = no modulation (constant spawning), 0.5 = gentle pulsing, 0.95 = near-silent off-beat with strong on-beat bursts. Controls pool drain between beats to make burst sparks visible.',
     unit: '',
   },
 

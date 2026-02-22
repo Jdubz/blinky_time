@@ -80,7 +80,7 @@ struct DetectorConfig {
 struct EnsembleOutput {
     float transientStrength;   // 0.0-1.0: Weighted combination of detector strengths
     float ensembleConfidence;  // 0.0-1.2: Agreement-scaled confidence
-    uint8_t detectorAgreement; // Count of detectors that fired (0-6)
+    uint8_t detectorAgreement; // Count of detectors that fired (0-7)
     uint8_t dominantDetector;  // Index of detector with highest contribution
 
     EnsembleOutput()
@@ -159,7 +159,8 @@ enum class DetectorType : uint8_t {
     BASS_BAND = 3,      // Low-frequency flux (disabled: environmental noise)
     COMPLEX_DOMAIN = 4, // Phase deviation
     NOVELTY = 5,        // Cosine distance spectral novelty
-    COUNT = 6           // Total number of detectors
+    BAND_FLUX = 6,      // Log-compressed band-weighted spectral flux
+    COUNT = 7           // Total number of detectors
 };
 
 /**
@@ -173,6 +174,7 @@ inline const char* getDetectorName(DetectorType type) {
         case DetectorType::BASS_BAND:      return "bass";
         case DetectorType::COMPLEX_DOMAIN: return "complex";
         case DetectorType::NOVELTY:        return "novelty";
+        case DetectorType::BAND_FLUX:      return "bandflux";
         default:                           return "unknown";
     }
 }
@@ -191,9 +193,22 @@ inline bool parseDetectorType(const char* str, DetectorType& type) {
         case 'd': type = DetectorType::DRUMMER; return true;
         case 's': type = DetectorType::SPECTRAL_FLUX; return true;
         case 'h': type = DetectorType::HFC; return true;
-        case 'b': type = DetectorType::BASS_BAND; return true;
+        case 'b': {
+            // Disambiguate: "ba*" → BASS_BAND, "bf*"/"bl*" → BAND_FLUX, bare "b" → BASS_BAND
+            char c2 = str[1];
+            if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
+            if (c2 == 'f' || c2 == 'l' || (c2 == 'a' && str[2] == 'n')) {
+                // "bf*", "bl*" (bandflux/bflux), "ban*" (bandflux)
+                type = DetectorType::BAND_FLUX;
+            } else {
+                // "b", "ba*" (bass), or anything else starting with b
+                type = DetectorType::BASS_BAND;
+            }
+            return true;
+        }
         case 'c': type = DetectorType::COMPLEX_DOMAIN; return true;
         case 'n': type = DetectorType::NOVELTY; return true;
+        case 'f': type = DetectorType::BAND_FLUX; return true;  // "f"/"flux" shorthand
         default: return false;
     }
 }

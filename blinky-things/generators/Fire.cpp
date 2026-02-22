@@ -65,6 +65,19 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
         background_->render(matrix, width_, height_, noiseTime_, audio);
     }
 
+    // Modulate wind turbulence by audio (phase breathing + transient gusts)
+    if (forceAdapter_) {
+        float phasePulse = audio.phaseToPulse();  // 1.0 on beat, 0.0 off-beat
+        // Wind breathes: 30% base + 70% phase modulation (dramatic calming between beats)
+        float phaseWind = 0.3f + 0.7f * phasePulse;
+        // Transient gusts: spike to 3x on strong hits
+        float transientGust = 1.0f + 2.0f * audio.pulse;
+        // Blend modulation by rhythmStrength (no modulation when no rhythm detected)
+        float mod = 1.0f * (1.0f - audio.rhythmStrength) +
+                    phaseWind * transientGust * audio.rhythmStrength;
+        forceAdapter_->setWind(params_.windBase, params_.windVariation * mod);
+    }
+
     // Run particle system (spawn → physics → render)
     // Particles are the only visual primitive; no heat buffer, no secondary layer
     ParticleGenerator::generate(matrix, audio);
@@ -82,7 +95,8 @@ void Fire::spawnParticles(float dt) {
 
     // MUSIC-DRIVEN behavior (rhythmStrength weighted)
     float phasePulse = audio_.phaseToPulse();
-    float phasePump = 0.5f + 0.5f * phasePulse;
+    // musicSpawnPulse controls phase depth: 0=flat (no modulation), 1=full range (silent off-beat)
+    float phasePump = (1.0f - params_.musicSpawnPulse) + params_.musicSpawnPulse * phasePulse;
 
     float musicSpawnProb = params_.baseSpawnChance * phasePump + params_.audioSpawnBoost * audio_.energy;
 
@@ -90,27 +104,24 @@ void Fire::spawnParticles(float dt) {
     if (audio_.pulse > params_.organicTransientMin) {
         float transientStrength = (audio_.pulse - params_.organicTransientMin) /
                                  (1.0f - params_.organicTransientMin);
-        uint8_t musicSparks = (uint8_t)(params_.burstSparks * transientStrength *
-                               (0.5f + 0.5f * audio_.energy));
+        uint8_t musicSparks = (uint8_t)(params_.burstSparks * transientStrength);
         uint8_t organicSparks = 2;  // Small boost in organic mode
         sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength) +
                                 musicSparks * audio_.rhythmStrength);
     }
 
-    // Extra burst on predicted downbeats (only when rhythm is strong)
+    // Extra burst on predicted beats (only when rhythm is strong)
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
         beatCount_++;
-        if (beatCount_ % 4 == 0) {
-            sparkCount += (uint8_t)(params_.burstSparks * 0.5f * audio_.rhythmStrength);
-        }
+        sparkCount += (uint8_t)(params_.burstSparks * audio_.rhythmStrength);
     }
 
     // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
     float organicSpawnProb = params_.baseSpawnChance + params_.audioSpawnBoost * audio_.energy;
 
     // Continuous spark rate proportional to energy (organic mode)
-    if (audio_.energy > 0.2f) {
-        uint8_t organicSparks = (uint8_t)((audio_.energy - 0.2f) * params_.burstSparks * 0.5f);
+    if (audio_.energy > 0.05f) {
+        uint8_t organicSparks = (uint8_t)((audio_.energy - 0.05f) * params_.burstSparks * 0.5f);
         sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength));
     }
 
@@ -164,7 +175,8 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
 
     // Blend velocity multiplier between organic and music modes
     float organicVelMult = 0.8f;
-    float musicVelMult = 1.0f + 0.3f * audio_.pulse;
+    float phasePulse = audio_.phaseToPulse();
+    float musicVelMult = 0.8f + 0.4f * phasePulse + 0.3f * audio_.pulse;  // Faster on-beat + transient boost
     float velocityMult = organicVelMult * (1.0f - audio_.rhythmStrength) +
                         musicVelMult * audio_.rhythmStrength;
 
@@ -207,6 +219,12 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
         lifespan = params_.defaultLifespan;
         speedMult = 1.0f;
         break;
+    }
+
+    // Phase-driven intensity boost: brighter on-beat, dimmer off-beat
+    if (audio_.rhythmStrength > 0.3f) {
+        int boost = (int)(phasePulse * 35 * audio_.rhythmStrength);
+        intensity = (uint8_t)min(255, (int)intensity + boost);
     }
 
     // Apply speed and velocity multipliers

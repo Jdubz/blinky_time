@@ -8,6 +8,7 @@ EnsembleDetector::EnsembleDetector() {
     detectors_[static_cast<int>(DetectorType::BASS_BAND)] = &bassBand_;
     detectors_[static_cast<int>(DetectorType::COMPLEX_DOMAIN)] = &complexDomain_;
     detectors_[static_cast<int>(DetectorType::NOVELTY)] = &novelty_;
+    detectors_[static_cast<int>(DetectorType::BAND_FLUX)] = &bandFlux_;
 
     // Initialize last results
     for (int i = 0; i < NUM_DETECTORS; i++) {

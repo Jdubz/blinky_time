@@ -1427,12 +1427,12 @@ export const UNSTABLE_TIMING: TestPattern = {
  * Kicks only on beats 1 and 3 (of a 4/4 bar), creating ambiguity:
  * - Could be interpreted as 120 BPM (half note kicks)
  * - Could be interpreted as 60 BPM (quarter note kicks)
- * Tests that the multi-hypothesis tracker creates both hypotheses and selects the correct one.
+ * Tests that the tempo tracker with tempo prior resolves the ambiguity correctly.
  */
 export const HALF_TIME_AMBIGUITY: TestPattern = {
   id: 'half-time-ambiguity',
   name: 'Half-Time Ambiguity',
-  description: 'Kicks on 1 and 3 only - could be 60 or 120 BPM (tests multi-hypothesis tracking)',
+  description: 'Kicks on 1 and 3 only - could be 60 or 120 BPM (tests tempo prior disambiguation)',
   durationMs: 32000, // 32 seconds
   bpm: 120, // Actual BPM (but could be interpreted as 60 BPM)
   hits: (() => {

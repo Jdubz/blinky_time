@@ -247,7 +247,7 @@ export class BlinkySerial extends EventEmitter {
 
           // Emit beat event (phase wrap detection)
           if (music.q === 1) {
-            this.emit('beat', { type: 'quarter', bpm: music.bpm });
+            this.emit('beat', { type: 'quarter', bpm: music.bpm, predicted: music.bp === 1 });
           }
         }
 

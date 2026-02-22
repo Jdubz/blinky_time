@@ -19,7 +19,6 @@ Complete documentation for the Blinky Time LED Fire Effect Controller.
 
 ### Planning & Next Steps
 - [**IMPROVEMENT_PLAN.md**](IMPROVEMENT_PLAN.md) - Roadmap and action items
-- [**MULTI_HYPOTHESIS_TRACKING_PLAN.md**](MULTI_HYPOTHESIS_TRACKING_PLAN.md) - Multi-hypothesis tempo tracking design
 - [**BLUETOOTH_IMPLEMENTATION_PLAN.md**](BLUETOOTH_IMPLEMENTATION_PLAN.md) - Bluetooth/BLE support plan
 
 ### Audio Analysis & Testing
@@ -41,7 +40,6 @@ Complete documentation for the Blinky Time LED Fire Effect Controller.
 | [AUDIO-TUNING-GUIDE.md](AUDIO-TUNING-GUIDE.md) | Audio parameter tuning guide | Developers |
 | [PLATFORM_FIX.md](PLATFORM_FIX.md) | Platform bug analysis | Developers |
 | [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) | Roadmap and action items | Contributors |
-| [MULTI_HYPOTHESIS_TRACKING_PLAN.md](MULTI_HYPOTHESIS_TRACKING_PLAN.md) | Multi-hypothesis tempo tracking | Developers |
 | [BLUETOOTH_IMPLEMENTATION_PLAN.md](BLUETOOTH_IMPLEMENTATION_PLAN.md) | Bluetooth/BLE support plan | Developers |
 
 ## 🚀 Getting Started

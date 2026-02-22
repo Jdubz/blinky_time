@@ -63,7 +63,7 @@ class HueRotationEffect;
  *
  *   Debug Channels (independent per-subsystem control):
  *     debug               - Show enabled debug channels
- *     debug <ch> on/off   - Enable/disable channel (transient, rhythm, hypothesis, audio, generator, ensemble)
+ *     debug <ch> on/off   - Enable/disable channel (transient, rhythm, audio, generator, ensemble)
  *     debug all on/off    - Enable/disable all channels
  *
  *   Note: Debug channels control JSON debug output independently from log levels.
@@ -87,7 +87,6 @@ enum class DebugChannel : uint16_t {
     NONE       = 0x0000,
     TRANSIENT  = 0x0001,  // Transient detection events (pulse > 0)
     RHYTHM     = 0x0002,  // Rhythm/BPM tracking (RHYTHM_DEBUG, RHYTHM_DEBUG2)
-    HYPOTHESIS = 0x0004,  // Multi-hypothesis tracker (HYPO_* events)
     AUDIO      = 0x0008,  // Audio level, AGC, mic debug
     GENERATOR  = 0x0010,  // Generator-specific debug (fire, water, lightning)
     ENSEMBLE   = 0x0020,  // Ensemble detector internals
@@ -135,7 +134,7 @@ public:
     static LogLevel getGlobalLogLevel() { return instance_ ? instance_->logLevel_ : LogLevel::INFO; }
 
     // Debug channel control - allows independent enable/disable of subsystem debug output
-    // Usage: debug transient on, debug rhythm off, debug hypothesis on, debug all off
+    // Usage: debug transient on, debug rhythm off, debug all off
     static void enableDebugChannel(DebugChannel channel) {
         debugChannels_ = debugChannels_ | channel;
     }
@@ -188,7 +187,7 @@ private:
     bool handleLogCommand(const char* cmd);
     bool handleDebugCommand(const char* cmd);     // Debug channel control
     bool handleEnsembleCommand(const char* cmd);  // Ensemble detector configuration
-    bool handleHypothesisCommand(const char* cmd);  // Multi-hypothesis tracking commands
+    bool handleBeatTrackingCommand(const char* cmd);  // CBSS beat tracking commands
     bool handleDeviceConfigCommand(const char* cmd);  // Device configuration commands (v28+)
     void showDeviceConfig();                          // Display current device config as JSON
     void uploadDeviceConfig(const char* jsonStr);     // Parse and save device config from JSON

@@ -24,7 +24,7 @@
  */
 
 // Maximum number of settings (adjust based on needs)
-// Current usage: ~102 settings (fire, water, lightning, effect, audio, agc, rhythm, hypothesis, phasecorr, ensemble)
+// Current usage: ~70 settings (fire, water, lightning, effect, audio, agc, rhythm, cbss, ensemble)
 // Increased to 128 to allow for detector-specific tuning parameters
 #define MAX_SETTINGS 128
 

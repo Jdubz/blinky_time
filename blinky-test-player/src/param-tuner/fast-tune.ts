@@ -116,7 +116,7 @@ export async function runFastTune(options: TunerOptions): Promise<void> {
     console.log(' Phase 3: Tuning Agreement Boosts');
     console.log('='.repeat(50));
 
-    const agreementBoosts = [0.0, 0.6, 0.85, 1.0, 1.1, 1.15, 1.2];  // Defaults
+    const agreementBoosts = [0.0, 1.0, 1.0, 1.1, 1.1, 1.15, 1.2, 1.2];  // Match firmware FusionDefaults (8 entries for 0-7 detectors)
 
     // Focus on agree_1 and agree_2 (most impactful for false positive suppression)
     console.log('\n  Tuning agree_1 (single detector boost)...');

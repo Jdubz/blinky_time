@@ -46,7 +46,7 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 
 | Document | Purpose |
 |----------|---------|
-| `docs/AUDIO_ARCHITECTURE.md` | AudioController v3 architecture (multi-hypothesis tempo tracking) |
+| `docs/AUDIO_ARCHITECTURE.md` | AudioController architecture (CBSS beat tracking) |
 | `docs/AUDIO-TUNING-GUIDE.md` | **Main testing guide** - 56 tunable parameters, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator/Effect/Renderer pattern |
@@ -71,7 +71,7 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - 6 simultaneous detectors with weighted fusion
+- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - 7 detectors with weighted fusion (BandFlux Solo default)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength
 
@@ -86,7 +86,14 @@ The following were deleted as outdated:
 - `docs/RHYTHM_ANALYSIS_ENHANCEMENT_PLAN.md` - Replaced by AUDIO_ARCHITECTURE.md (Jan 2026)
 - `docs/ENSEMBLE_CALIBRATION_ASSESSMENT.md` - Completed assessment (Jan 2026)
 - `blinky-serial-mcp/TOOLING-ASSESSMENT.md` - Completed assessment (Jan 2026)
-- `docs/MULTI_HYPOTHESIS_OPEN_QUESTIONS_ANSWERED.md` - Merged into MULTI_HYPOTHESIS_TRACKING_PLAN.md (Jan 2026)
+- `docs/MULTI_HYPOTHESIS_OPEN_QUESTIONS_ANSWERED.md` - Obsolete (Jan 2026)
+- `docs/MULTI_HYPOTHESIS_TRACKING_PLAN.md` - Replaced by CBSS beat tracking (Feb 2026)
+- `docs/RHYTHM_ANALYSIS_IMPROVEMENTS.md` - Obsolete, referenced deleted params (Feb 2026)
+- `docs/RHYTHM_ANALYSIS_TEST_PLAN.md` - Referenced old hypothesis system (Feb 2026)
+- `docs/RHYTHM_ANALYSIS_IMPROVEMENT_PLAN.md` - Referenced CombFilterPhaseTracker/fusion (Feb 2026)
+- `docs/COMB_FILTER_IMPROVEMENT_PLAN.md` - Old comb filter plan, system replaced (Feb 2026)
+- `docs/AUDIO_IMPROVEMENT_ANALYSIS.md` - Completed analysis (Feb 2026)
+- `blinky-test-player/src/param-tuner/hypothesis-validator.ts` - Old hypothesis test (Feb 2026)
 - `blinky-test-player/TUNING_SCENARIOS.md` - Merged into PARAM_TUNER_GUIDE.md (Jan 2026)
 
 ## System Architecture Overview
@@ -112,9 +119,9 @@ PDM Microphone (16 kHz)
     ↓
 AdaptiveMic (AGC + normalization)
     ↓
-EnsembleDetector (6 algorithms + fusion)
+EnsembleDetector (BandWeightedFlux Solo)
     ↓
-AudioController v3 (multi-hypothesis tracking)
+AudioController (CBSS beat tracking)
     ↓
 AudioControl {energy, pulse, phase, rhythmStrength}
     ↓
@@ -133,19 +140,19 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output)
 
 2. **Transient Detection (Ensemble)**
-   - `EnsembleDetector.h` - Weighted fusion of 6 detectors
-   - **Optimized 2-detector config (Jan 2026):** HFC (0.60) + Drummer (0.40)
-   - Disabled: Spectral, Bass, Mel, Complex (too many false positives)
-   - Agreement-based confidence scaling
-   - Cooldown: 80ms (prevents false positives)
+   - `EnsembleDetector.h` - Weighted fusion of 7 detectors (1 enabled, 6 disabled)
+   - **BandFlux Solo config (Feb 2026):** BandWeightedFlux (1.0, thresh 0.5) — all others disabled
+   - BandFlux: log-compressed band-weighted spectral flux with additive threshold and onset delta filter
+   - Agreement-based confidence scaling (single-detector boost 1.0 for solo config)
+   - Adaptive cooldown (tempo-aware)
 
-3. **Rhythm Tracking (AudioController v3)**
-   - `AudioController.h/cpp` - Multi-hypothesis tempo tracking
+3. **Rhythm Tracking (AudioController)**
+   - `AudioController.h/cpp` - CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - Autocorrelation every 500ms
-   - 4 concurrent tempo hypotheses (LRU eviction)
-   - Confidence-based promotion (≥8 beat requirement)
-   - Dual decay: phrase-aware (32-beat half-life) + silence (5s half-life)
+   - Autocorrelation every 500ms with Gaussian tempo prior
+   - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
+   - BTrack-style predict+countdown beat detection with deterministic phase
+   - ODF pre-smoothing (5-point causal moving average)
 
 4. **Generators (Visual Effects)**
    - `Fire.cpp/h` - Heat diffusion with sparks (13 params)
@@ -252,12 +259,12 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
-2. AdaptiveMic → EnsembleDetector (6 parallel algorithms)
+2. AdaptiveMic → EnsembleDetector (BandFlux Solo)
 3. EnsembleDetector → fusion → transient strength (0-1)
 4. Transient → AudioController OSS buffer (6s history)
-5. AudioController → autocorrelation every 500ms
-6. Extract 4 tempo peaks → 4 hypothesis slots
-7. Update confidence, promote if >0.15 advantage + ≥8 beats
+5. AudioController → autocorrelation every 500ms → tempo estimation
+6. CBSS backward search → cumulative beat strength signal
+7. Predict+countdown beat detection → deterministic phase
 8. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75}
 9. Fire generator:
    - energy → baseline flame height
@@ -272,7 +279,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~16 KB total (baseline 10 KB + multi-hypothesis 1 KB + band OSS/comb filters ~5 KB)
+- RAM: ~16 KB total (baseline 10 KB + CBSS/OSS buffers ~3 KB + comb filters ~5 KB)
 - Flash: ~222 KB firmware, ~30 KB settings storage
 - Available: 256 KB RAM, 1 MB Flash
 
@@ -280,7 +287,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Microphone + FFT: ~4%
 - Ensemble detector: ~1%
 - Autocorrelation (500ms): ~3% amortized
-- Hypothesis updates: ~1%
+- CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
 - LED rendering: ~2%
 - **Total: ~15-20%** (ample headroom)
@@ -316,11 +323,11 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Arduino IDE only (NO arduino-cli)
 - Device bricking prevention
 
-### Current Status (January 2026)
+### Current Status (February 2026)
 
 **Production Ready:**
-- ✅ AudioController v3 (multi-hypothesis tracking)
-- ✅ 6-detector ensemble (calibrated weights)
+- ✅ AudioController with CBSS beat tracking
+- ✅ BandFlux Solo detector (log-compressed band-weighted spectral flux)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner)
@@ -356,20 +363,24 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (February 2026)
 
 ### Ensemble Detection Architecture
-The system uses 6 detectors with weighted fusion (3 enabled, 3 disabled):
+The system uses 7 detectors with weighted fusion (1 enabled, 6 disabled).
+Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals.
 
-| Detector | Weight | Enabled | Specialty |
-|----------|--------|---------|-----------|
-| Drummer | 0.35 | Yes | Time-domain amplitude transients |
-| SpectralFlux | 0.20 | No | Mel-band SuperFlux (fires on pad chords) |
-| HFC | 0.20 | Yes | High-frequency percussive attacks |
-| BassBand | 0.45 | Yes | Sub-bass kick detection (primary EDM detector) |
-| ComplexDomain | 0.13 | No | Phase-based soft onset detection |
-| Novelty | 0.12 | No | Cosine distance spectral novelty |
+| Detector | Weight | Thresh | Enabled | Notes |
+|----------|--------|--------|---------|-------|
+| **BandWeightedFlux** | 1.00 | 0.5 | **Yes** | Log-compressed band-weighted spectral flux, additive threshold, onset delta filter |
+| Drummer | 0.50 | 4.5 | No | Good kick/snare recall, but BandFlux Solo outperforms (+14% avg Beat F1) |
+| ComplexDomain | 0.50 | 3.5 | No | Good precision, but adds noise when combined with BandFlux |
+| SpectralFlux | 0.20 | 1.4 | No | Fires on pad chords |
+| HFC | 0.20 | 4.0 | No | Hi-hat detector, misses kicks |
+| BassBand | 0.45 | 3.0 | No | Too noisy (100+ detections/30s) |
+| Novelty | 0.12 | 2.5 | No | Near-zero detections on real music |
 
 ### Key Features
-- **Agreement-based confidence**: Single-detector hits suppressed (0.5x), 2-detector near full (0.9x), 3+ boosted (up to 1.2x)
+- **BandFlux Solo**: Single detector outperforms multi-detector combos (avg Beat F1 0.472 across 9 tracks)
+- **Agreement-based confidence**: Single-detector boost 1.0 (full pass-through for solo config)
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
-- **Multi-hypothesis rhythm tracking**: 4 concurrent tempo hypotheses with autocorrelation + comb filter validation
+- **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
+- **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Shared FFT**: All spectral detectors share a single FFT computation
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

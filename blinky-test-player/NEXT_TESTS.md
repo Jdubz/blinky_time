@@ -3,78 +3,89 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** February 14, 2026
+**Last Updated:** February 21, 2026
 
-## Current Performance (Feb 2026 Baseline)
+## Current Config
 
-**Config:** HFC (0.60) + Drummer (0.40) + BassBand (0.18), cooldown=250ms (adaptive), minconf=0.55
+**Detector:** BandWeightedFlux Solo (all others disabled)
+- gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5
+- minOnsetDelta=0.3 (onset sharpness gate — rejects slow-rising pads/echoes)
+- All defaults confirmed near-optimal via sweep testing (Feb 21, 2026)
 
-> ⚠️ **Scores below were recorded with the 2-detector config (HFC + Drummer only).** BassBand has since been re-enabled. Re-run suite to establish updated baseline.
+**Beat tracking:** CBSS, beatoffset=5 (changed from 9, +109% avg beat F1)
 
-| Pattern | F1 | Precision | Recall | Issue |
-|---------|-----|-----------|--------|-------|
-| strong-beats | 1.000 | 1.0 | 1.0 | None |
-| synth-stabs | 1.000 | 1.0 | 1.0 | None |
-| full-mix | 0.901 | 0.82 | 1.0 | 7 FPs |
-| sparse | 0.889 | 0.80 | 1.0 | 2 FPs, high variance |
-| pad-rejection | 0.696 | 0.53 | 1.0 | 7 FPs (varies 0.64-0.80) |
-| chord-rejection | 0.698 | 0.56 | 0.94 | 12 FPs |
-| lead-melody | 0.286 | 0.17 | 1.0 | 38-40 FPs |
+## Synthetic Pattern Performance (BandFlux Solo + onsetDelta=0.3)
 
-**Average F1: 0.781** (stale — re-run needed)
+| Pattern | F1 | Precision | Recall | FPs | Notes |
+|---------|:---:|:---------:|:------:|:---:|-------|
+| strong-beats | 1.000 | 1.00 | 1.00 | 0 | Perfect |
+| hat-rejection | 1.000 | 1.00 | 1.00 | 0 | Perfect |
+| synth-stabs | 1.000 | 1.00 | 1.00 | 0 | **Fixed** (was 0.600, 16 FPs) |
+| medium-beats | 0.985 | 0.97 | 1.00 | 1 | Near-perfect |
+| tempo-sweep | 0.914 | 0.84 | 1.00 | 3 | +0.05 vs no filter |
+| bass-line | 0.869 | 1.00 | 0.77 | 0 | |
+| full-mix | 0.843 | 1.00 | 0.73 | 0 | |
+| sparse | 0.800 | 0.67 | 1.00 | 1 | |
+| lead-melody | 0.720 | 1.00 | 0.56 | 0 | |
+| chord-rejection | 0.688 | 0.69 | 0.69 | 1 | |
+| pad-rejection | 0.421 | 0.27 | 1.00 | 16 | **+0.11** (was 0.314, 25 FPs) |
 
-## Completed Work (Feb 2026)
+## Real Music Beat Tracking (9 tracks, beatoffset=5, onsetDelta=0.3)
 
-- Algorithm improvements: spectral whitening, mel-band SuperFlux, cosine distance NoveltyDetector, ComplexDomain phase fix
-- Drummer minRiseRate and HFC sustained-signal rejection
-- Phase correction hardening (agreement gate, EMA alpha reduction)
-- Comprehensive detector tuning: ComplexDomain, SpectralFlux, Novelty all tested and kept disabled
-- Agreement boost optimization: agree_1=0.2 confirmed optimal
-- BassBand re-enabled with noise rejection (40Hz highpass + agreement gate)
-- Tempo prior + all rhythm params persisted to flash
-- Pulse train Fourier phase (Phase 3) + comb filter phase tracker (Phase 4)
+| Track | Beat F1 | BPM Acc | Beat Offset | Transient F1 |
+|-------|:-------:|:-------:|:-----------:|:------------:|
+| trance-party | 0.775 | 0.993 | -54ms | 0.774 |
+| minimal-01 | 0.695 | 0.959 | -47ms | 0.544 |
+| infected-vibes | 0.691 | 0.973 | -58ms | 0.721 |
+| goa-mantra | 0.605 | 0.993 | +45ms | 0.294 |
+| minimal-emotion | 0.486 | 0.998 | +57ms | 0.154 |
+| deep-ambience | 0.404 | 0.949 | -18ms | 0.187 |
+| machine-drum | 0.224 | 0.825 | -42ms | 0.312 |
+| trap-electro | 0.190 | 0.924 | -23ms | 0.298 |
+| dub-groove | 0.176 | 0.830 | +56ms | 0.374 |
+| **Average** | **0.472** | **0.938** | | **0.406** |
 
-## Priority 1: lead-melody False Positive Reduction
+## Completed Work (Feb 21, 2026)
 
-**Problem:** HFC fires on every melody note (38-40 FPs, F1=0.286). This is the worst pattern by far.
+- **Onset delta filter** (minOnsetDelta=0.3): Rejects slow-rising signals (pads, echoes)
+  - Fixed synth-stabs regression: 0.600 → 1.000
+  - Improved pad-rejection: 0.314 → 0.421 (35 FPs → 16 FPs)
+  - Improved real music avg Beat F1: 0.452 → 0.472
+  - Best track improvements: trance-party +0.098, minimal-emotion +0.104, goa-mantra +0.055
+- BandWeightedFluxDetector: log-compressed FFT, band-weighted half-wave flux, additive threshold
+- beatoffset recalibration: 9→5 (doubled avg beat F1 from 0.216 to 0.452)
+- BandFlux parameter sweep: gamma (10-30), bassWeight (1.5-3.0), threshold (0.3-0.7) all at defaults
+- Sub-harmonic investigation: machine-drum locks at ~120 BPM, fundamental autocorrelation limitation
+- Runtime params persisted: tempoSmoothFactor, odfSmoothWidth, harmup2x, harmup32, peakMinCorrelation → flash (SETTINGS_VERSION 12)
+- Confidence gating analysis: existing activationThreshold is sufficient
+- Per-track offset investigation: varies -58ms to +57ms, adaptive offset risks oscillation, accepted as limitation
 
-**Root cause:** Melody notes have high-frequency harmonic content that HFC correctly identifies as sharp spectral changes. The system cannot distinguish "new note in melody" from "percussive transient."
+## Onset Delta Sweep Results (Feb 21)
 
-**Potential approaches:**
-1. **Pitch continuity gate** — Track if high-frequency content follows a pitched pattern (harmonically related bins across frames). Suppress detection when spectral content is pitched rather than noisy/broadband.
-2. **Harmonic ratio check** — Percussive transients have flat/noisy spectra; pitched notes have peaked harmonic spectra. Compute harmonic-to-noise ratio and gate detection.
-3. **Temporal envelope** — Melody notes sustain; percussive hits decay rapidly. Track post-onset energy decay and suppress if signal sustains >50ms.
+| onsetDelta | pad-rejection FPs | medium-beats recall | trance-party Beat F1 | deep-ambience Beat F1 |
+|:----------:|:-----------------:|:-------------------:|:--------------------:|:---------------------:|
+| 0.0 (off) | 35 | 1.00 | 0.677 | 0.499 |
+| 0.2 | ~22 | 1.00 | 0.637 | 0.618 |
+| **0.3** | **16** | **1.00** | **0.775** | **0.404** |
+| 0.5 | 16 | 1.00 | — | — |
+| 0.7 | 15 | 0.97 | — | — |
+| 1.0 | 5 | 0.88 | — | — |
 
-**Estimated difficulty:** High — requires new algorithm development, not just parameter tuning.
+0.3 chosen as default: best overall average, preserves all medium-strength kicks, fixes synth-stabs.
 
-## Priority 2: chord-rejection Improvement
+## Next Priorities
 
-**Problem:** 12 FPs on chord changes (F1=0.698). Chord transitions produce genuine amplitude spikes that trigger both HFC and Drummer.
+1. **Pad rejection further improvement** — Still 16 FPs at onsetDelta=0.3. Possible band-ratio gate (pads have significant midFlux vs kicks which are bass-only) or sustain envelope check.
+2. **Build diverse test music library** — hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills) with ground truth annotations.
+3. **deep-ambience regression** — F1 dropped from 0.499 to 0.404 with onset delta filter. Investigate if onsetDelta=0.2 could be auto-selected for ambient content based on signal characteristics.
+4. **Environment adaptability** — Auto-switch detector profiles based on signal characteristics (club vs ambient vs festival).
 
-**Potential approaches:**
-1. **Spectral continuity** — Chord changes preserve harmonic structure while transients are broadband. Could add a harmonic preservation check.
-2. **Rise time analysis** — Chord transitions have slower rise times than percussive attacks. The Drummer minRiseRate (0.02) already helps but could be more aggressive.
-3. **Higher thresholds** — Raising HFC/Drummer thresholds would reduce chord FPs but risk missing real transients.
+## Known Limitations (Not Fixable by Tuning)
 
-**Quick test:** Try `set detector_thresh drummer 4.0` and `set detector_thresh hfc 5.0` on chord-rejection pattern.
-
-## Priority 3: Test Variance Reduction
-
-**Problem:** Results vary significantly across runs (pad-rejection: 0.64-0.80, sparse: 0.64-0.94). This makes it hard to confidently evaluate parameter changes.
-
-**Potential approaches:**
-1. **Run each pattern 3x and average** — More reliable but 3x slower
-2. **Higher gain lock** — Try gain=50 or 60 for stronger SNR
-3. **Environment control** — Close doors, reduce ambient noise during tests
-4. **Longer cooldown between tests** — Allow AGC to fully settle
-
-## Known Algorithmic Limitations
-
-These issues are unlikely to be fixed by parameter tuning alone:
-
-| Issue | Root Cause | Fix Requires |
-|-------|-----------|-------------|
-| Melody note false positives | Pitched harmonics trigger HFC | Pitch/harmonic analysis algorithm |
-| Chord change false positives | Amplitude spikes on transitions | Rise-time or spectral continuity gate |
-| Simultaneous overlapping sounds | Single detection per cooldown window | Multi-band peak picking |
-| Test variance | Room acoustics, ambient noise | Controlled test environment |
+| Issue | Root Cause | Status |
+|-------|-----------|--------|
+| Machine-drum sub-harmonic lock | Autocorrelation finds ~120 BPM peak, prior reinforces it | Investigated — fundamental limitation |
+| Per-track beat offset variation | ODF latency varies with audio content (-58 to +57ms) | beatoffset=5 is best compromise |
+| Pad false positives (16 remaining) | Pad chord transitions create sharp spectral changes | onsetDelta=0.3 removes 54%, rest need band-ratio gating |
+| deep-ambience sensitive to onset filter | Soft ambient onsets get filtered | onsetDelta=0.2 helps but hurts trance |
+| Test run variance | Room acoustics, ambient noise | Accept or use 3-run averaging |

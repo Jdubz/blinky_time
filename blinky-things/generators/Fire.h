@@ -52,26 +52,26 @@ struct FireParams {
     float thermalForce;           // Thermal buoyancy strength in LEDs/sec^2 (0-200)
 
     FireParams() {
-        // FIRE EFFECT: Bright sparks rising from source
-        baseSpawnChance = 0.7f;   // HIGH spawn rate - constant sparks
-        audioSpawnBoost = 0.4f;   // Music boost
+        // Defaults must match ConfigStorage::loadSettingsDefaults()
+        baseSpawnChance = 0.5f;   // Continuous sparks for constant fire
+        audioSpawnBoost = 1.5f;   // Strong audio response
         maxParticles = 48;        // Good spark coverage (pool capacity = 64)
         defaultLifespan = 170;    // 1.7 seconds to rise (170 centiseconds)
         intensityMin = 150;       // BRIGHT red/orange
         intensityMax = 220;       // Very bright (orange range)
-        gravity = 0.0f;           // No gravity (disabled for linear layouts, confusing horizontal drift)
+        gravity = 0.0f;           // No gravity (thermal force provides upward push)
         windBase = 0.0f;
-        windVariation = 25.0f;    // Strong turbulence (increased for visibility over spawn velocity)
-        drag = 0.97f;             // Light drag
-        musicSpawnPulse = 0.5f;
-        organicTransientMin = 0.4f;
-        burstSparks = 4;          // Sparks per burst
-        backgroundIntensity = 0.15f;  // Visible but subtle background
+        windVariation = 25.0f;    // Turbulence as LEDs/sec advection (visible swirl)
+        drag = 0.985f;            // Smoother flow
+        musicSpawnPulse = 0.95f;  // Deep phase breathing (0=flat, 1=full off-beat silence)
+        organicTransientMin = 0.25f;  // Responsive to softer transients
+        burstSparks = 8;          // Visible burst on hits
+        backgroundIntensity = 0.15f;  // Subtle noise background
 
         // Velocities: sparks rise ~8-10 LEDs in 1.7 seconds
         sparkVelocityMin = 5.0f;  // LEDs/sec upward
         sparkVelocityMax = 10.0f; // LEDs/sec upward
-        sparkSpread = 4.0f;       // Some horizontal spread
+        sparkSpread = 4.0f;       // Good spread
 
         // Particle variety: 70% fast sparks, 30% slow embers
         fastSparkRatio = 0.7f;

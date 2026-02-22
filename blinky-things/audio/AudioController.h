@@ -8,280 +8,13 @@
 #include "../hal/interfaces/ISystemTime.h"
 
 // ============================================================================
-// Multi-Hypothesis Tempo Tracking
+// Autocorrelation Peak (used for multi-peak extraction in runAutocorrelation)
 // ============================================================================
 
-/**
- * TempoHypothesis - A single tempo tracking hypothesis
- *
- * Represents one possible tempo interpretation of the music.
- * Multiple hypotheses run concurrently to handle tempo ambiguity,
- * tempo changes, and polyrhythmic patterns.
- *
- * Memory: 56 bytes per hypothesis
- */
-struct TempoHypothesis {
-    // Tempo estimate
-    float bpm;                      // BPM estimate (60-200)
-    float beatPeriodMs;             // Beat period in milliseconds
-
-    // Phase tracking
-    float phase;                    // Current beat phase (0-1)
-
-    // Confidence and evidence
-    float strength;                 // Periodicity strength (0-1, from autocorrelation)
-    float confidence;               // Overall confidence (0-1, weighted combination)
-    float avgPhaseError;            // Running average of phase prediction error
-
-    // Timing and history
-    uint32_t lastUpdateMs;          // Last update timestamp
-    uint16_t beatCount;             // Number of beats tracked
-    uint32_t createdMs;             // Creation timestamp
-    float beatsSinceUpdate;         // Fractional beats since last autocorr update (for decay)
-
-    // Autocorrelation evidence
-    float correlationPeak;          // Peak autocorrelation value
-    int lagSamples;                 // Lag in samples (for verification)
-
-    // State
-    bool active;                    // Is this slot in use?
-    uint8_t priority;               // 0=primary, 1=secondary, 2=tertiary, 3=candidate
-
-    TempoHypothesis()
-        : bpm(120.0f)
-        , beatPeriodMs(500.0f)
-        , phase(0.0f)
-        , strength(0.0f)
-        , confidence(0.0f)
-        , avgPhaseError(0.0f)
-        , lastUpdateMs(0)
-        , beatCount(0)
-        , createdMs(0)
-        , beatsSinceUpdate(0.0f)
-        , correlationPeak(0.0f)
-        , lagSamples(0)
-        , active(false)
-        , priority(3)
-    {}
-
-    /**
-     * Update phase and beat count based on elapsed time
-     */
-    void updatePhase(float dt);
-
-    /**
-     * Apply phrase-aware decay (beat-count based)
-     */
-    void applyBeatDecay(float minStrengthToKeep);
-
-    /**
-     * Apply time-based decay during silence
-     */
-    void applySilenceDecay(float dt, float minStrengthToKeep);
-
-    /**
-     * Compute overall confidence from strength, consistency, and longevity
-     */
-    float computeConfidence(float strengthWeight, float consistencyWeight, float longevityWeight) const;
-};
-
-/**
- * Debug verbosity levels for hypothesis tracking
- */
-enum class HypothesisDebugLevel {
-    OFF = 0,        // No debug output
-    EVENTS = 1,     // Hypothesis creation, promotion, eviction only
-    SUMMARY = 2,    // Primary hypothesis status every 2s
-    DETAILED = 3    // All hypotheses every 2s
-};
-
-/**
- * MultiHypothesisTracker - Manages 4 concurrent tempo hypotheses
- *
- * Tracks multiple tempo interpretations simultaneously, allowing the system
- * to handle tempo changes, ambiguity (half-time vs double-time), and
- * polyrhythmic patterns.
- *
- * Uses LRU eviction strategy with primary-hypothesis protection.
- *
- * Memory: ~240 bytes total
- */
-class MultiHypothesisTracker {
-public:
-    static constexpr int MAX_HYPOTHESES = 4;
-
-    // Hypothesis slots: [0]=primary, [1]=secondary, [2]=tertiary, [3]=candidate
-    TempoHypothesis hypotheses[MAX_HYPOTHESES];
-
-    // === TUNING PARAMETERS ===
-
-    // Peak detection
-    float minPeakStrength = 0.3f;           // Minimum normalized correlation to create hypothesis
-    float minRelativePeakHeight = 0.7f;     // Peak must be >70% of max peak (reject weak secondaries)
-
-    // Hypothesis matching
-    float bpmMatchTolerance = 0.05f;        // ±5% BPM tolerance for matching peaks to hypotheses
-
-    // Promotion
-    float promotionThreshold = 0.20f;       // Confidence advantage needed to promote (slightly easier correction)
-    uint16_t minBeatsBeforePromotion = 8;   // Minimum beats before promoting (faster adaptation)
-
-    // Decay
-    float phraseHalfLifeBeats = 32.0f;      // Half-life in beats (8 bars of 4/4)
-    float minStrengthToKeep = 0.1f;         // Deactivate hypotheses below this strength
-    uint32_t silenceGracePeriodMs = 3000;   // Grace period before silence decay (ms)
-    float silenceDecayHalfLifeSec = 5.0f;   // Half-life during silence (seconds)
-
-    // Confidence weighting
-    float strengthWeight = 0.5f;            // Weight of periodicity strength in confidence
-    float consistencyWeight = 0.3f;         // Weight of phase consistency in confidence
-    float longevityWeight = 0.2f;           // Weight of beat count in confidence
-
-    // Debug level (OFF by default to avoid flooding serial with JSON events)
-    HypothesisDebugLevel debugLevel = HypothesisDebugLevel::OFF;
-
-    // === METHODS ===
-
-    /**
-     * Create a new hypothesis in the best available slot
-     * Returns slot index, or -1 if creation failed
-     */
-    int createHypothesis(float bpm, float strength, uint32_t nowMs, int lagSamples, float correlation, float initialPhase = 0.0f);
-
-    /**
-     * Find best slot for new hypothesis (LRU eviction with primary protection)
-     */
-    int findBestSlot();
-
-    /**
-     * Find hypothesis matching a given BPM (within tolerance)
-     * Returns slot index, or -1 if no match
-     */
-    int findMatchingHypothesis(float bpm) const;
-
-    /**
-     * Get primary hypothesis (always slot 0)
-     */
-    TempoHypothesis& getPrimary() { return hypotheses[0]; }
-    const TempoHypothesis& getPrimary() const { return hypotheses[0]; }
-
-    /**
-     * Update phase, confidence, and decay for a single hypothesis
-     */
-    void updateHypothesis(int index, float dt, uint32_t nowMs, bool hasSignificantAudio);
-
-    /**
-     * Promote best non-primary hypothesis if significantly better
-     */
-    void promoteBestHypothesis(uint32_t nowMs);
-
-    /**
-     * Print debug information based on current debug level
-     */
-    void printDebug(uint32_t nowMs, const char* eventType = nullptr, int slotIndex = -1) const;
-
-private:
-    uint32_t lastDebugPrintMs_ = 0;
-
-    // cppcheck-suppress unusedPrivateFunction ; False positive - used in findMatchingHypothesis()
-    inline float absf(float val) const {
-        return val < 0.0f ? -val : val;
-    }
-};
-
-/**
- * Autocorrelation peak structure (used for multi-peak extraction)
- */
 struct AutocorrPeak {
     int lag;
     float correlation;
     float normCorrelation;
-};
-
-// ============================================================================
-// Comb Filter Phase Tracker (Phase 4)
-// ============================================================================
-
-/**
- * CombFilterPhaseTracker - Independent phase tracking using comb filter resonance
- *
- * Theory: A comb filter at lag L accumulates energy when the input has
- * periodicity at L samples. The phase of the accumulated signal indicates
- * beat alignment. This provides an independent phase estimate that can be
- * fused with autocorrelation and Fourier phase methods.
- *
- * Memory: ~500 bytes (delay line + state)
- * CPU: < 1% (simple IIR filter)
- */
-class CombFilterPhaseTracker {
-public:
-    static constexpr int MAX_LAG = 120;  // ~2s at 60Hz = 30 BPM min
-
-    // === TUNING PARAMETERS ===
-    float feedbackGain = 0.92f;   // Resonance strength (0.85-0.98)
-
-    // === METHODS ===
-
-    /**
-     * Reset all state
-     */
-    void reset();
-
-    /**
-     * Set tempo (updates lag from BPM)
-     */
-    void setTempo(float bpm, float frameRate = 60.0f);
-
-    /**
-     * Process one sample of onset strength
-     */
-    void process(float input);
-
-    /**
-     * Get current phase estimate (0-1)
-     */
-    float getPhase() const { return phase_; }
-
-    /**
-     * Get confidence in phase estimate (0-1)
-     * Based on resonator amplitude stability
-     */
-    float getConfidence() const { return confidence_; }
-
-    /**
-     * Get current lag in samples
-     */
-    int getCurrentLag() const { return currentLag_; }
-
-    /**
-     * Get resonator output (for debugging)
-     */
-    float getResonatorOutput() const { return resonatorOutput_; }
-
-private:
-    // Delay line
-    float delayLine_[MAX_LAG] = {0};
-    int writeIdx_ = 0;
-
-    // Current lag (beat period in samples)
-    int currentLag_ = 30;  // Default ~120 BPM at 60 Hz
-
-    // Resonator state
-    float resonatorOutput_ = 0.0f;
-    float prevResonatorOutput_ = 0.0f;
-
-    // Phase tracking via zero-crossing/peak detection
-    float phase_ = 0.0f;
-    int samplesSincePeak_ = 0;
-
-    // Confidence from amplitude stability
-    float confidence_ = 0.0f;
-    float peakAmplitude_ = 0.0f;
-
-    // Running stats for confidence
-    float runningMax_ = 0.0f;
-    float runningMean_ = 0.0f;
-    int sampleCount_ = 0;
 };
 
 // ============================================================================
@@ -423,28 +156,31 @@ private:
  * Combines microphone input processing and rhythm analysis into a single
  * interface that outputs a simple 4-parameter AudioControl struct.
  *
- * Rhythm Tracking Approach (pattern-based, not event-based):
+ * Rhythm Tracking (CBSS beat tracking):
  *   1. Buffer 6 seconds of onset strength (spectral flux)
- *   2. Run autocorrelation to find periodicity and tempo
- *   3. Derive phase from autocorrelation pattern
- *   4. Predict beats ahead of time
+ *   2. Run autocorrelation to find periodicity and tempo (BPM)
+ *   3. Build CBSS (Cumulative Beat Strength Signal) from OSS + tempo
+ *   4. Counter-based beat detection: expect beat at lastBeat + period
+ *   5. Phase derived deterministically: (now - lastBeat) / period
  *
  * Key Design Decision:
+ *   Phase is DERIVED from the beat counter, not accumulated with corrections.
+ *   No drift, no jitter, no fighting correction systems.
  *   Transient detection drives VISUAL PULSE output only.
- *   Beat tracking is derived from buffered pattern analysis.
- *   This prevents unreliable transients from disrupting beat sync.
  *
  * Architecture:
  *   PDM Microphone
  *        |
  *   AdaptiveMic (level normalization, gain control)
  *        |
- *   EnsembleDetector (6 detectors + fusion)
+ *   EnsembleDetector (detectors + fusion)
  *        |
- *   OSS Buffer (6s) --> Autocorrelation --> Tempo + Phase
- *        |                                      |
- *   Ensemble Transient --> Pulse (visual only)  |
- *        |                                      |
+ *   OSS Buffer (6s) --> Autocorrelation --> BPM(T)
+ *        |                                    |
+ *        +-----> CBSS Buffer ----> Beat Counter --> Phase = (now-lastBeat)/T
+ *        |                                            |
+ *   Ensemble Transient --> Pulse (visual only)        |
+ *        |                                            |
  *   AudioControl { energy, pulse, phase, rhythmStrength }
  *        |
  *   Generators
@@ -518,19 +254,9 @@ public:
     // Energy boost during rhythm lock
     float energyBoostOnBeat = 0.3f;     // Energy boost near predicted beats
 
-    // Phase tracking smoothing
-    float phaseAdaptRate = 0.15f;       // How quickly phase adapts to autocorrelation (0-1)
-    float phaseHoldStrength = 0.3f;     // Below this strength, maintain phase from prediction instead of resetting
-
     // === TEMPO RATE LIMITING ===
     // Prevents rapid tempo jumps during active tracking
     float maxBpmChangePerSec = 5.0f;        // Max BPM change per second during active tracking (% of current)
-
-    // === TRANSIENT-BASED PHASE CORRECTION (PLL-style) ===
-    // Uses detected transients to nudge phase toward actual beat timing
-    // Requires 2+ detector agreement to prevent single-detector false positives from drifting phase
-    float transientCorrectionRate = 0.12f;  // How fast to apply transient-based correction (0-1), increased for faster convergence
-    float transientCorrectionMin = 0.30f;   // Minimum transient strength to trigger correction (lowered for EDM)
 
     // Beat proximity thresholds for pulse modulation
     float pulseNearBeatThreshold = 0.2f;    // Phase distance < this = boost transients
@@ -580,32 +306,27 @@ public:
     // Controls how often BPM is re-estimated via autocorrelation
     uint16_t autocorrPeriodMs = 250;  // Run autocorr every N ms (default 250ms for faster adaptation)
 
-    // === PULSE TRAIN PHASE ESTIMATION ===
-    // Uses PLP-inspired Fourier phase extraction at tempo frequency
-    // Based on Predominant Local Pulse (PLP) method by Grosche & Müller (2011)
-    // Testing showed +10-11% F1 improvement on full-mix and full-kit patterns
-    float pulsePhaseWeight = 1.0f;  // 1.0 = Fourier phase (default), 0.0 = peak-finding only
-
-    // === COMB FILTER PHASE TRACKER (Phase 4) ===
-    // Independent phase tracking using comb filter resonance
-    // Provides complementary phase estimate to autocorrelation and Fourier methods
-    // Now enabled: fixed implementation with proper Scheirer equation
-    float combFilterWeight = 0.5f;  // Weight in fusion (0.0 = disabled, 1.0 = full weight)
-    float combFeedback = 0.92f;     // Resonance strength (0.85-0.98)
-
     // === COMB FILTER BANK (Independent Tempo Validation) ===
     // Bank of 20 comb filters at 60-180 BPM for independent tempo detection
-    // Provides validation/boosting for multi-hypothesis tracker
     bool combBankEnabled = true;    // Enable comb filter bank
     float combBankFeedback = 0.92f; // Bank resonance strength (0.85-0.98)
 
-    // === RHYTHM FUSION (Phase 5) ===
-    // Combines phase estimates from multiple systems with confidence weighting
-    // System 0: Autocorrelation (peak-finding or Fourier phase)
-    // System 1: Comb filter resonator
-    // Transient hints provide small nudges (max ±10%)
-    bool fusionEnabled = true;              // Enable fusion (when multiple systems active)
-    float transientHintWeight = 0.1f;       // Max influence of transient hints (0-0.2)
+    // === CBSS BEAT TRACKING ===
+    // Cumulative Beat Strength Signal with counter-based beat prediction
+    // Phase is derived deterministically from beat counter — no drift, no jitter
+    float cbssAlpha = 0.9f;              // CBSS weighting (0.8-0.95, higher = more predictive)
+    float cbssTightness = 5.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence)
+    float beatConfidenceDecay = 0.98f;   // Per-frame confidence decay when no beat detected
+    float tempoSnapThreshold = 0.15f;    // BPM change ratio to snap vs smooth
+    float beatTimingOffset = 5.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
+    float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
+
+    // === AUTOCORRELATION TUNING ===
+    float tempoSmoothFactor = 0.75f;     // BPM smoothing blend (0=instant, 1=no change). 0.75 best compromise across tracks
+    uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
+    float harmonicUp2xThresh = 0.5f;     // Half-lag (2x BPM) correlation threshold for upward harmonic fix
+    float harmonicUp32Thresh = 0.6f;     // 2/3-lag (3/2x BPM) correlation threshold
+    float peakMinCorrelation = 0.3f;     // Minimum normalized correlation to consider a peak
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -617,10 +338,6 @@ public:
 
     // Get last ensemble output for debugging
     const EnsembleOutput& getLastEnsembleOutput() const { return ensemble_.getLastOutput(); }
-
-    // Multi-hypothesis tracker access
-    MultiHypothesisTracker& getMultiHypothesis() { return multiHypothesis_; }
-    const MultiHypothesisTracker& getMultiHypothesis() const { return multiHypothesis_; }
 
     // Debug getters
     float getPeriodicityStrength() const { return periodicityStrength_; }
@@ -637,21 +354,20 @@ public:
     float getPulseTrainPhase() const { return pulseTrainPhase_; }
     float getPulseTrainConfidence() const { return pulseTrainConfidence_; }
 
-    // Comb filter phase debug getters
-    float getCombFilterPhase() const { return combFilter_.getPhase(); }
-    float getCombFilterConfidence() const { return combFilter_.getConfidence(); }
-    const CombFilterPhaseTracker& getCombFilter() const { return combFilter_; }
-
     // Comb filter bank debug getters
     float getCombBankBPM() const { return combFilterBank_.getPeakBPM(); }
     float getCombBankConfidence() const { return combFilterBank_.getPeakConfidence(); }
     float getCombBankPhase() const { return combFilterBank_.getPhaseAtPeak(); }
     const CombFilterBank& getCombFilterBank() const { return combFilterBank_; }
 
-    // Fusion debug getters
-    float getFusedPhase() const { return fusedPhase_; }
-    float getFusedConfidence() const { return fusedConfidence_; }
-    float getConsensusMetric() const { return consensusMetric_; }
+    // CBSS beat tracking debug getters
+    float getCbssConfidence() const { return cbssConfidence_; }
+    uint16_t getBeatCount() const { return beatCount_; }
+    int getBeatPeriodSamples() const { return beatPeriodSamples_; }
+    float getCurrentCBSS() const { return cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE]; }
+    float getLastOnsetStrength() const { return lastSmoothedOnset_; }
+    int getTimeToNextBeat() const { return timeToNextBeat_; }
+    bool wasLastBeatPredicted() const { return lastFiredBeatPredicted_; }
 
 private:
     // === HAL REFERENCES ===
@@ -706,38 +422,53 @@ private:
     // Maximum-filtered previous magnitudes for vibrato suppression (SuperFlux style)
     float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};
 
-    // Multi-hypothesis tempo tracking
-    MultiHypothesisTracker multiHypothesis_;
-
-    // Comb filter phase tracker (Phase 4)
-    CombFilterPhaseTracker combFilter_;
-
     // Comb filter bank (independent tempo validation)
     CombFilterBank combFilterBank_;
 
-    // Current tempo estimate (for backward compatibility during transition)
-    // TODO: These will be replaced by multiHypothesis_.getPrimary() values
+    // Current tempo estimate
     float bpm_ = 120.0f;
     float beatPeriodMs_ = 500.0f;
     float periodicityStrength_ = 0.0f;
 
-    // Phase tracking (derived from autocorrelation, not from transients)
-    float phase_ = 0.0f;                // Current beat phase (0-1)
-    float targetPhase_ = 0.0f;          // Phase derived from autocorrelation
+    // Phase tracking
+    float phase_ = 0.0f;                // Current beat phase (0-1, derived from CBSS beat counter)
 
-    // Pulse train phase estimation state
-    float pulseTrainPhase_ = 0.0f;      // Phase from pulse train cross-correlation
-    float pulseTrainConfidence_ = 0.0f; // Confidence of pulse train phase (correlation strength)
+    // Pulse train phase estimation state (used by autocorrelation)
+    float pulseTrainPhase_ = 0.0f;      // Phase from Fourier extraction
+    float pulseTrainConfidence_ = 0.0f; // Confidence of Fourier phase
 
-    // Rhythm fusion state (Phase 5)
-    float fusedPhase_ = 0.0f;           // Final fused phase estimate
-    float fusedConfidence_ = 0.0f;      // Overall confidence in fused estimate
-    float consensusMetric_ = 0.0f;      // How much systems agree (0-1)
-    float transientHint_ = 0.0f;        // Current transient-based phase hint
+    // CBSS (Cumulative Beat Strength Signal) state
+    float cbssBuffer_[OSS_BUFFER_SIZE] = {0};  // Same size as OSS buffer
+    int lastBeatSample_ = 0;            // Sample index of last detected beat
+    int beatPeriodSamples_ = 30;        // Beat period in samples (~120 BPM at 60Hz)
+    int sampleCounter_ = 0;             // Total samples processed
+    uint16_t beatCount_ = 0;            // Total beats detected
+    float cbssConfidence_ = 0.0f;       // Beat tracking confidence (0-1)
+    float lastSmoothedOnset_ = 0.0f;    // Last smoothed onset strength (for observability)
+    bool lastBeatWasPredicted_ = false; // Whether predictBeat() ran since last beat (working flag)
+    bool lastFiredBeatPredicted_ = false; // Whether the most recently fired beat was predicted (stable for streaming)
+    int lastTransientSample_ = -1;      // Sample index of most recent strong transient (-1 = none)
 
-    // Transient-based phase correction (PLL)
-    float transientPhaseError_ = 0.0f;  // Running average of phase error when transients detected
-    uint32_t lastTransientCorrectionMs_ = 0; // Timestamp of last transient correction
+    // ODF smoothing (causal moving average, runtime-tunable width)
+    static constexpr int ODF_SMOOTH_MAX = 11;  // Max buffer size (allocated once)
+    float odfSmoothBuffer_[ODF_SMOOTH_MAX] = {0};
+    int odfSmoothIdx_ = 0;
+
+    // Log-Gaussian transition weights (precomputed for current beat period)
+    static constexpr int MAX_BEAT_PERIOD = 90; // ~40 BPM at 60Hz (covers full range)
+    float logGaussianWeights_[MAX_BEAT_PERIOD * 2] = {0}; // Covers T/2 to 2T range
+    int logGaussianWeightsSize_ = 0;
+    int logGaussianLastT_ = 0;       // Last T used to compute weights
+    float logGaussianLastTight_ = 0.0f;  // Last cbssTightness used (invalidate on change)
+
+    // Predict+countdown state (BTrack-style)
+    int timeToNextBeat_ = 15;          // Countdown frames until next beat
+    int timeToNextPrediction_ = 10;    // Countdown frames until next prediction
+
+    // Beat expectation Gaussian (precomputed for current beat period)
+    float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
+    int beatExpectationSize_ = 0;
+    int beatExpectationLastT_ = 0;
 
     // Beat stability tracking
     static constexpr int STABILITY_BUFFER_SIZE = 16;
@@ -772,8 +503,17 @@ private:
     // Rhythm tracking
     void addOssSample(float onsetStrength, uint32_t timestampMs);
     void runAutocorrelation(uint32_t nowMs);
-    void updatePhase(float dt, uint32_t nowMs);
-    void updateTransientPhaseCorrection(float transientStrength, uint32_t nowMs);
+
+    // CBSS beat tracking
+    void updateCBSS(float onsetStrength);
+    void detectBeat();
+    void predictBeat();
+
+    // ODF smoothing
+    float smoothOnsetStrength(float raw);
+
+    // Log-Gaussian weight computation
+    void recomputeLogGaussianWeights(int T);
 
     // Onset strength computation
     float computeSpectralFlux(const float* magnitudes, int numBins);
@@ -789,12 +529,9 @@ private:
     void computeBandPeakiness();
     void applyMaxFilter(float* magnitudes, int numBins);
 
-    // Pulse train phase estimation (Phase 3)
+    // Pulse train phase estimation
     float computePulseTrainPhase(int beatPeriodSamples);
     float generateAndCorrelate(int phaseOffset, int beatPeriod);
-
-    // Rhythm fusion (Phase 5)
-    void fuseRhythmEstimates();
 
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;

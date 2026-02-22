@@ -13,8 +13,8 @@ void EnsembleFusion::resetToDefaults() {
     }
 
     // Initialize agreement boosts
-    // Note: agreementBoosts_[MAX_DETECTORS + 1] has 7 elements (indices 0-6)
-    // for 0 through 6 detectors firing, so <= is intentional
+    // agreementBoosts_ has MAX_DETECTORS+1 elements (indices 0..MAX_DETECTORS)
+    // for 0 through MAX_DETECTORS detectors firing, so <= is intentional
     for (int i = 0; i <= MAX_DETECTORS; i++) {
         agreementBoosts_[i] = FusionDefaults::AGREEMENT_BOOSTS[i];
     }

@@ -72,7 +72,7 @@ public:
 
     /**
      * Set agreement boost values
-     * @param boosts Array of 7 values for 0-6 detectors firing
+     * @param boosts Array of MAX_DETECTORS+1 values for 0-N detectors firing
      */
     void setAgreementBoosts(const float* boosts);
 
@@ -166,7 +166,7 @@ private:
     DetectorConfig configs_[MAX_DETECTORS];
 
     // Agreement-based confidence scaling
-    // Index = number of detectors that fired (0-6)
+    // Index = number of detectors that fired (0-7)
     float agreementBoosts_[MAX_DETECTORS + 1];
 
     // Internal state
@@ -190,47 +190,53 @@ namespace FusionDefaults {
     // Only enabled detectors are called; disabled ones use zero CPU.
     // Rebalanced for EDM: BassBand promoted (sub-bass kicks), HFC demoted (hi-hats only)
     constexpr float WEIGHTS[] = {
-        0.35f,  // DRUMMER - amplitude transients (time-domain, catches all frequencies)
-        0.20f,  // SPECTRAL_FLUX - mel-band SuperFlux (disabled, needs tuning)
-        0.20f,  // HFC - percussive attack detection (demoted: 2-8kHz misses EDM kicks)
-        0.45f,  // BASS_BAND - sub-bass kick detection (promoted: primary EDM detector)
-        0.13f,  // COMPLEX_DOMAIN - disabled, needs tuning after phase fix
-        0.12f   // NOVELTY - cosine distance spectral novelty (disabled, needs tuning)
+        0.50f,  // DRUMMER - amplitude transients, best recall (tuned Feb 2026)
+        0.20f,  // SPECTRAL_FLUX - disabled
+        0.20f,  // HFC - disabled
+        0.45f,  // BASS_BAND - disabled
+        0.50f,  // COMPLEX_DOMAIN - phase onsets, best precision (tuned Feb 2026)
+        0.12f,  // NOVELTY - disabled
+        0.50f   // BAND_FLUX - log-compressed band-weighted flux
     };
 
     // Detector enabled flags (Feb 2026)
     // Only enabled detectors run; disabled ones are skipped entirely.
+    // BandFlux Solo: best avg Beat F1 (0.468 vs 0.411 baseline) across 9 real music tracks.
+    // Multi-detector combos tested worse — ensemble fusion dilutes BandFlux's cleaner signal.
     constexpr bool ENABLED[] = {
-        true,   // DRUMMER - time-domain amplitude detection
-        false,  // SPECTRAL_FLUX - disabled: fires on pad chord changes at all thresholds
-        true,   // HFC - high-frequency percussive attacks
-        true,   // BASS_BAND - re-enabled with noise rejection (Feb 2026)
-        false,  // COMPLEX_DOMAIN - disabled: adds FPs on sparse patterns (tested Feb 2026)
-        false   // NOVELTY - disabled: net negative avg F1, hurts sparse/full-mix (tested Feb 2026)
+        false,  // DRUMMER - disabled: multiplicative threshold fails at low signal levels
+        false,  // SPECTRAL_FLUX - disabled: fires on pad chord changes
+        false,  // HFC - disabled: hi-hat detector, max F1=0.620, creates busy visuals
+        false,  // BASS_BAND - disabled: too noisy (100+ detections/30s even at thresh 60)
+        false,  // COMPLEX_DOMAIN - disabled: adds noise when combined with BandFlux
+        false,  // NOVELTY - disabled: near-zero detections on real music
+        true    // BAND_FLUX - log-compressed band-weighted flux, best solo Beat F1
     };
 
-    // Agreement boost values (updated Feb 2026 for 3-detector config)
-    // Relaxed for EDM: single-detector hits less suppressed, 2-detector near full strength
-    // [0] = 0 detectors, [1] = 1 detector, ..., [6] = 6 detectors
+    // Agreement boost values (updated Feb 2026 for BandFlux Solo config)
+    // With only 1 detector enabled, every detection is single-detector — must pass through at full strength.
+    // [0] = 0 detectors, [1] = 1 detector, ..., [7] = 7 detectors
     constexpr float AGREEMENT_BOOSTS[] = {
         0.0f,   // 0: No detection
-        0.5f,   // 1: Single detector - less suppression (EDM kicks may only hit BassBand)
-        0.9f,   // 2: Two detectors - near full strength (BassBand+Drummer typical for EDM)
-        1.0f,   // 3: Three detectors - full consensus (all three agree)
-        1.1f,   // 4: Four detectors - strong consensus
-        1.15f,  // 5: Five detectors - very strong
-        1.2f    // 6: All detectors - maximum boost
+        1.0f,   // 1: Single detector - BandFlux Solo: pass through at full strength
+        1.0f,   // 2: Two detectors
+        1.1f,   // 3: Three detectors
+        1.1f,   // 4: Four detectors
+        1.15f,  // 5: Five detectors
+        1.2f,   // 6: Six detectors
+        1.2f    // 7: All detectors
     };
 
     // Default detector thresholds (Feb 2026 calibration)
     // Tune at runtime via: set detector_thresh <type> <value>
     constexpr float THRESHOLDS[] = {
-        3.5f,   // DRUMMER: amplitude ratio vs average (calibrated Feb 2026)
+        4.5f,   // DRUMMER: amplitude ratio vs average (tuned Feb 2026: F1=0.901 @ 4.5)
         1.4f,   // SPECTRAL_FLUX: flux vs local median
-        4.0f,   // HFC: high-freq content vs average (calibrated Feb 2026)
-        3.0f,   // BASS_BAND: bass flux vs average (lowered: room acoustics smear bass)
-        2.0f,   // COMPLEX_DOMAIN: phase deviation threshold
-        2.5f    // NOVELTY: cosine distance vs local median
+        4.0f,   // HFC: high-freq content vs average
+        3.0f,   // BASS_BAND: bass flux vs average
+        3.5f,   // COMPLEX_DOMAIN: phase deviation (tuned Feb 2026: F1=0.929 @ 3.5)
+        2.5f,   // NOVELTY: cosine distance vs local median
+        0.5f    // BAND_FLUX: additive delta above mean (NOT multiplicative)
     };
 
     // Compile-time validation: ensure arrays match detector count
