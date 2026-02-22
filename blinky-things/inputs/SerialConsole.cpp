@@ -2103,23 +2103,23 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
 
-    // bandflux_bassratio: Bass-ratio gate for pad rejection (0.0 = disabled)
-    if (strncmp(cmd, "set bandflux_bassratio ", 23) == 0) {
+    // bandflux_dominance: Band-dominance gate — max(bass,mid,high)/total (0.0 = disabled)
+    if (strncmp(cmd, "set bandflux_dominance ", 23) == 0) {
         if (!audioCtrl_) return true;
         float value = atof(cmd + 23);
         if (value >= 0.0f && value <= 1.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setBassRatioGate(value);
-            Serial.print(F("OK bandflux_bassratio="));
+            audioCtrl_->getEnsemble().getBandFlux().setBandDominanceGate(value);
+            Serial.print(F("OK bandflux_dominance="));
             Serial.println(value, 3);
         } else {
             Serial.println(F("ERROR: Valid range 0.0-1.0"));
         }
         return true;
     }
-    if (strcmp(cmd, "show bandflux_bassratio") == 0 || strcmp(cmd, "bandflux_bassratio") == 0) {
+    if (strcmp(cmd, "show bandflux_dominance") == 0 || strcmp(cmd, "bandflux_dominance") == 0) {
         if (!audioCtrl_) return true;
-        Serial.print(F("bandflux_bassratio="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBassRatioGate(), 3);
+        Serial.print(F("bandflux_dominance="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBandDominanceGate(), 3);
         return true;
     }
 

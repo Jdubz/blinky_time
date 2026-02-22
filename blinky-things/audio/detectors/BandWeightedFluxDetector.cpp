@@ -15,7 +15,7 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , midWeight_(1.5f)
     , highWeight_(0.1f)
     , minOnsetDelta_(0.3f)
-    , bassRatioGate_(0.0f)
+    , bandDominanceGate_(0.0f)
     , decayRatioThreshold_(0.0f)
     , crestGate_(0.0f)
     , confirmFrames_(3)
@@ -122,19 +122,13 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
             float minRatio = minFluxDuringWindow_ / maxf(candidateFlux_, 0.001f);
             if (minRatio <= decayRatioThreshold_) {
                 // Flux dipped — confirmed percussive onset
-                prevCombinedFlux_ = combinedFlux_;
-                for (int k = 0; k < effectiveMax; k++) {
-                    prevLogMag_[k] = logMag[k];
-                }
+                updatePrevFrameState(logMag, effectiveMax);
                 return cachedResult_;
             }
             // Flux never dipped — sustained sound (pad/chord), reject
         }
         // Still waiting or rejected — update reference and return none
-        prevCombinedFlux_ = combinedFlux_;
-        for (int k = 0; k < effectiveMax; k++) {
-            prevLogMag_[k] = logMag[k];
-        }
+        updatePrevFrameState(logMag, effectiveMax);
         updateThresholdBuffer(combinedFlux_);
         return DetectionResult::none();
     }
@@ -156,14 +150,12 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     }
 
     // Step 8: Band-dominance gate (disabled by default, kept for experimentation)
-    if (detected && bassRatioGate_ > 0.0f) {
+    if (detected && bandDominanceGate_ > 0.0f) {
         float totalBandFlux = bassFlux_ + midFlux_ + highFlux_;
         if (totalBandFlux > 0.01f) {
-            float maxBand = bassFlux_;
-            if (midFlux_ > maxBand) maxBand = midFlux_;
-            if (highFlux_ > maxBand) maxBand = highFlux_;
+            float maxBand = maxf(maxf(bassFlux_, midFlux_), highFlux_);
             float dominance = maxBand / totalBandFlux;
-            if (dominance < bassRatioGate_) {
+            if (dominance < bandDominanceGate_) {
                 detected = false;
             }
         }
@@ -222,12 +214,16 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     }
 
     // Store current as reference for next frame
+    updatePrevFrameState(logMag, effectiveMax);
+
+    return result;
+}
+
+void BandWeightedFluxDetector::updatePrevFrameState(const float* logMag, int effectiveMax) {
     prevCombinedFlux_ = combinedFlux_;
     for (int k = 0; k < effectiveMax; k++) {
         prevLogMag_[k] = logMag[k];
     }
-
-    return result;
 }
 
 void BandWeightedFluxDetector::computeBandFlux(const float* logMag, const float* maxRef, int numBins) {

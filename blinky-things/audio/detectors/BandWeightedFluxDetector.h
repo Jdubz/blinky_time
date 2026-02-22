@@ -54,8 +54,8 @@ public:
     void setMinOnsetDelta(float d) { minOnsetDelta_ = d; }
     float getMinOnsetDelta() const { return minOnsetDelta_; }
 
-    void setBassRatioGate(float r) { bassRatioGate_ = r; }
-    float getBassRatioGate() const { return bassRatioGate_; }
+    void setBandDominanceGate(float r) { bandDominanceGate_ = r; }
+    float getBandDominanceGate() const { return bandDominanceGate_; }
 
     void setDecayRatio(float r) { decayRatioThreshold_ = r; }
     float getDecayRatio() const { return decayRatioThreshold_; }
@@ -109,7 +109,7 @@ private:
     float midWeight_;       // Mid band weight (default 1.5)
     float highWeight_;      // High band weight (default 0.1)
     float minOnsetDelta_;   // Min flux jump from prev frame to confirm onset (default 0.3)
-    float bassRatioGate_;   // Min band-dominance ratio (max band / total) to confirm onset (default 0.0 = disabled)
+    float bandDominanceGate_; // Min band-dominance ratio (max band / total) to confirm onset (default 0.0 = disabled)
     float decayRatioThreshold_; // Max flux ratio after N frames to confirm percussive onset (default 0.0 = disabled)
     float crestGate_;       // Max spectral crest factor to confirm onset (default 0.0 = disabled)
     int confirmFrames_;     // Frames to wait for decay check (default 3)
@@ -131,6 +131,9 @@ private:
         }
         return logf(1.0f + x);
     }
+
+    // Store current frame as reference for next frame's flux computation
+    void updatePrevFrameState(const float* logMag, int effectiveMax);
 
     // Compute per-band flux from current and max-filtered reference
     void computeBandFlux(const float* logMag, const float* maxRef, int numBins);

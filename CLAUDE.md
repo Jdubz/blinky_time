@@ -385,6 +385,6 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Post-onset decay gate**: Defers confirmation N frames, rejects if flux stays elevated (pads sustain, kicks decay). decayRatio+decayFrames, default 0.0=disabled
 - **Spectral crest factor gate**: Rejects tonal onsets with high spectral peakiness (crestGate, default 0.0=disabled)
-- **Band-dominance gate**: Rejects broadband onsets (bassRatioGate, default 0.0=disabled, tested ineffective)
+- **Band-dominance gate**: Rejects broadband onsets (bandDominanceGate, default 0.0=disabled, tested ineffective)
 - **Shared FFT**: All spectral detectors share a single FFT computation
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

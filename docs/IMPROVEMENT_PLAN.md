@@ -76,7 +76,7 @@ Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
 2. Onset delta filter (minOnsetDelta=0.3, rejects slow-rising signals)
 
 **Available but disabled gates** (for future experimentation):
-- `bandflux_bassratio` — band-dominance gate (0.0=disabled)
+- `bandflux_dominance` — band-dominance gate (0.0=disabled)
 - `bandflux_decayratio` + `bandflux_decayframes` — post-onset decay gate (0.0=disabled)
 - `bandflux_crestgate` — spectral crest factor gate (0.0=disabled)
 
