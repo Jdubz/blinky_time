@@ -729,7 +729,8 @@ void AudioController::predictBeat() {
             if (idx >= sampleCounter_) {
                 // Read from our synthesized future
                 int futureIdx = idx - sampleCounter_;
-                val = (futureIdx < i) ? futureCBSS[futureIdx] : 0.0f;
+                // cppcheck-suppress knownConditionTrueFalse  ; defensive guard for clarity
+                val = (futureIdx >= 0 && futureIdx < i) ? futureCBSS[futureIdx] : 0.0f;
             } else {
                 val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
             }
