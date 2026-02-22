@@ -212,8 +212,15 @@ void ConfigStorage::loadSettingsDefaults() {
     // CBSS beat tracking
     data_.music.cbssTightness = 5.0f;         // Log-Gaussian tightness (higher=stricter tempo)
     data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
-    data_.music.beatTimingOffset = 9.0f;       // Beat prediction advance (frames, ~150ms at 60Hz)
+    data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
+
+    // Autocorrelation tuning
+    data_.music.tempoSmoothFactor = 0.75f;      // BPM EMA blend (0.75 best compromise across tracks)
+    data_.music.harmonicUp2xThresh = 0.5f;      // Half-lag harmonic fix threshold
+    data_.music.harmonicUp32Thresh = 0.6f;      // 2/3-lag harmonic fix threshold
+    data_.music.peakMinCorrelation = 0.3f;      // Min normalized correlation for peak
+    data_.music.odfSmoothWidth = 5;             // ODF smooth window (odd, 3-11)
 
     data_.brightness = 100;
 }
@@ -463,6 +470,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.beatTimingOffset, 0.0f, 15.0f, F("beatTimingOffset"));
     validateFloat(data_.music.phaseCorrectionStrength, 0.0f, 1.0f, F("phaseCorrStrength"));
 
+    // Autocorrelation tuning validation
+    validateFloat(data_.music.tempoSmoothFactor, 0.0f, 0.99f, F("tempoSmoothFactor"));
+    validateFloat(data_.music.harmonicUp2xThresh, 0.1f, 0.95f, F("harmonicUp2xThresh"));
+    validateFloat(data_.music.harmonicUp32Thresh, 0.1f, 0.95f, F("harmonicUp32Thresh"));
+    validateFloat(data_.music.peakMinCorrelation, 0.05f, 0.8f, F("peakMinCorrelation"));
+    if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
+        SerialConsole::logWarn(F("Invalid odfSmoothWidth, using default"));
+        data_.music.odfSmoothWidth = 5;
+        corrupt = true;
+    }
+
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
         SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
@@ -608,6 +626,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->beatConfidenceDecay = data_.music.beatConfidenceDecay;
         audioCtrl->beatTimingOffset = data_.music.beatTimingOffset;
         audioCtrl->phaseCorrectionStrength = data_.music.phaseCorrectionStrength;
+
+        // Autocorrelation tuning
+        audioCtrl->tempoSmoothFactor = data_.music.tempoSmoothFactor;
+        audioCtrl->harmonicUp2xThresh = data_.music.harmonicUp2xThresh;
+        audioCtrl->harmonicUp32Thresh = data_.music.harmonicUp32Thresh;
+        audioCtrl->peakMinCorrelation = data_.music.peakMinCorrelation;
+        audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
     }
 }
 
@@ -739,6 +764,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.beatConfidenceDecay = audioCtrl->beatConfidenceDecay;
         data_.music.beatTimingOffset = audioCtrl->beatTimingOffset;
         data_.music.phaseCorrectionStrength = audioCtrl->phaseCorrectionStrength;
+
+        // Autocorrelation tuning
+        data_.music.tempoSmoothFactor = audioCtrl->tempoSmoothFactor;
+        data_.music.harmonicUp2xThresh = audioCtrl->harmonicUp2xThresh;
+        data_.music.harmonicUp32Thresh = audioCtrl->harmonicUp32Thresh;
+        data_.music.peakMinCorrelation = audioCtrl->peakMinCorrelation;
+        data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
     }
 
     saveToFlash();

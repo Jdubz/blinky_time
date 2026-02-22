@@ -318,7 +318,7 @@ public:
     float cbssTightness = 5.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence)
     float beatConfidenceDecay = 0.98f;   // Per-frame confidence decay when no beat detected
     float tempoSnapThreshold = 0.15f;    // BPM change ratio to snap vs smooth
-    float beatTimingOffset = 9.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
+    float beatTimingOffset = 5.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
 
     // === AUTOCORRELATION TUNING ===

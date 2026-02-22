@@ -2,7 +2,8 @@
 #include <math.h>
 
 BandWeightedFluxDetector::BandWeightedFluxDetector()
-    : hasPrevFrame_(false)
+    : prevCombinedFlux_(0.0f)
+    , hasPrevFrame_(false)
     , bassFlux_(0.0f)
     , midFlux_(0.0f)
     , highFlux_(0.0f)
@@ -13,6 +14,7 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , bassWeight_(2.0f)
     , midWeight_(1.5f)
     , highWeight_(0.1f)
+    , minOnsetDelta_(0.3f)
     , maxBin_(64)
 {
     for (int i = 0; i < MAX_STORED_BINS; i++) {
@@ -22,6 +24,7 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
 
 void BandWeightedFluxDetector::resetImpl() {
     hasPrevFrame_ = false;
+    prevCombinedFlux_ = 0.0f;
     bassFlux_ = 0.0f;
     midFlux_ = 0.0f;
     highFlux_ = 0.0f;
@@ -102,6 +105,15 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     // Detection
     bool detected = (combinedFlux_ > effectiveThreshold) && !hiHatOnly;
 
+    // Step 7: Onset sharpness gate — reject slow-rising signals (pads, swells)
+    // Kicks jump from ~0 to 2+ in one frame; pads rise 0.01-0.1 per frame
+    if (detected && minOnsetDelta_ > 0.0f) {
+        float fluxDelta = combinedFlux_ - prevCombinedFlux_;
+        if (fluxDelta < minOnsetDelta_) {
+            detected = false;
+        }
+    }
+
     DetectionResult result;
 
     if (detected) {
@@ -124,6 +136,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     }
 
     // Store current as reference for next frame
+    prevCombinedFlux_ = combinedFlux_;
     for (int k = 0; k < effectiveMax; k++) {
         prevLogMag_[k] = logMag[k];
     }

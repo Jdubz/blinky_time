@@ -51,6 +51,9 @@ public:
     void setMaxBin(int bin) { maxBin_ = bin; }
     int getMaxBin() const { return maxBin_; }
 
+    void setMinOnsetDelta(float d) { minOnsetDelta_ = d; }
+    float getMinOnsetDelta() const { return minOnsetDelta_; }
+
     // Debug access
     float getBassFlux() const { return bassFlux_; }
     float getMidFlux() const { return midFlux_; }
@@ -75,6 +78,7 @@ private:
 
     // Previous frame log-compressed magnitudes
     float prevLogMag_[MAX_STORED_BINS];
+    float prevCombinedFlux_;  // Previous frame's combined flux (for onset delta check)
     bool hasPrevFrame_;
 
     // Per-band flux values (for debug/streaming)
@@ -88,11 +92,12 @@ private:
     int frameCount_;
 
     // Tunable parameters
-    float gamma_;       // Log compression strength (default 20.0)
-    float bassWeight_;  // Bass band weight (default 2.0)
-    float midWeight_;   // Mid band weight (default 1.5)
-    float highWeight_;  // High band weight (default 0.1)
-    int maxBin_;        // Max FFT bin to analyze (default 64)
+    float gamma_;           // Log compression strength (default 20.0)
+    float bassWeight_;      // Bass band weight (default 2.0)
+    float midWeight_;       // Mid band weight (default 1.5)
+    float highWeight_;      // High band weight (default 0.1)
+    float minOnsetDelta_;   // Min flux jump from prev frame to confirm onset (default 0.3)
+    int maxBin_;            // Max FFT bin to analyze (default 64)
 
     // Fast log(1+x) approximation for small x
     static float fastLog1p(float x) {

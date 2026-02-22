@@ -2087,6 +2087,24 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
 
+    // bandflux_onsetdelta: Min flux jump for onset confirmation (pad rejection)
+    if (strncmp(cmd, "set bandflux_onsetdelta ", 24) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 24);
+        if (value >= 0.0f && value <= 2.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setMinOnsetDelta(value);
+            Serial.print(F("OK bandflux_onsetdelta="));
+            Serial.println(value, 3);
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_onsetdelta") == 0 || strcmp(cmd, "bandflux_onsetdelta") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_onsetdelta="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMinOnsetDelta(), 3);
+        return true;
+    }
+
     // ComplexDomain: minbin, maxbin
     if (strncmp(cmd, "set complex_minbin ", 19) == 0) {
         if (!audioCtrl_) return true;
