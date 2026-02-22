@@ -54,6 +54,18 @@ public:
     void setMinOnsetDelta(float d) { minOnsetDelta_ = d; }
     float getMinOnsetDelta() const { return minOnsetDelta_; }
 
+    void setBassRatioGate(float r) { bassRatioGate_ = r; }
+    float getBassRatioGate() const { return bassRatioGate_; }
+
+    void setDecayRatio(float r) { decayRatioThreshold_ = r; }
+    float getDecayRatio() const { return decayRatioThreshold_; }
+
+    void setDecayFrames(int f) { if (f >= 0 && f <= MAX_CONFIRM_FRAMES) confirmFrames_ = f; }
+    int getDecayFrames() const { return confirmFrames_; }
+
+    void setCrestGate(float c) { crestGate_ = c; }
+    float getCrestGate() const { return crestGate_; }
+
     // Debug access
     float getBassFlux() const { return bassFlux_; }
     float getMidFlux() const { return midFlux_; }
@@ -97,7 +109,18 @@ private:
     float midWeight_;       // Mid band weight (default 1.5)
     float highWeight_;      // High band weight (default 0.1)
     float minOnsetDelta_;   // Min flux jump from prev frame to confirm onset (default 0.3)
+    float bassRatioGate_;   // Min band-dominance ratio (max band / total) to confirm onset (default 0.0 = disabled)
+    float decayRatioThreshold_; // Max flux ratio after N frames to confirm percussive onset (default 0.0 = disabled)
+    float crestGate_;       // Max spectral crest factor to confirm onset (default 0.0 = disabled)
+    int confirmFrames_;     // Frames to wait for decay check (default 3)
     int maxBin_;            // Max FFT bin to analyze (default 64)
+
+    // Post-onset decay confirmation state
+    static constexpr int MAX_CONFIRM_FRAMES = 6;
+    int confirmCountdown_;      // Frames remaining until confirmation check
+    float candidateFlux_;       // Combined flux at candidate onset frame
+    float minFluxDuringWindow_; // Minimum flux seen during confirmation window
+    DetectionResult cachedResult_; // Cached result to return on confirmation
 
     // Fast log(1+x) approximation for small x
     // ~8% error at boundary (x=0.5: returns 0.375, true value 0.405).

@@ -46,6 +46,7 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 
 | Document | Purpose |
 |----------|---------|
+| `docs/VISUALIZER_GOALS.md` | **Design philosophy** - visual quality over metrics |
 | `docs/AUDIO_ARCHITECTURE.md` | AudioController architecture (CBSS beat tracking) |
 | `docs/AUDIO-TUNING-GUIDE.md` | **Main testing guide** - 56 tunable parameters, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
@@ -364,7 +365,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ### Ensemble Detection Architecture
 The system uses 7 detectors with weighted fusion (1 enabled, 6 disabled).
-Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals.
+Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 
 | Detector | Weight | Thresh | Enabled | Notes |
 |----------|--------|--------|---------|-------|
@@ -382,5 +383,8 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
+- **Post-onset decay gate**: Defers confirmation N frames, rejects if flux stays elevated (pads sustain, kicks decay). decayRatio+decayFrames, default 0.0=disabled
+- **Spectral crest factor gate**: Rejects tonal onsets with high spectral peakiness (crestGate, default 0.0=disabled)
+- **Band-dominance gate**: Rejects broadband onsets (bassRatioGate, default 0.0=disabled, tested ineffective)
 - **Shared FFT**: All spectral detectors share a single FFT computation
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

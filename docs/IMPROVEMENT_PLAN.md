@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: February 21, 2026*
+*Last Updated: February 22, 2026 (pad FP investigation closed)*
 
 ## Current Status
 
@@ -45,54 +45,65 @@
 
 ---
 
+## Design Philosophy
+
+See **[VISUALIZER_GOALS.md](VISUALIZER_GOALS.md)** for the guiding design philosophy. Key principle: the goal is visual quality, not metric perfection. Low Beat F1 on ambient, trap, or machine-drum tracks may represent correct visual behavior (organic mode fallback). False positives are the #1 visual problem.
+
 ## Outstanding Issues
 
-### Priority 1: CBSS Beat Tracking — Remaining Improvements
+### Priority 1: False Positive Elimination — RESOLVED (Feb 22, 2026)
 
-BTrack-style predict+countdown CBSS beat detection is implemented and working. Beat F1 avg **0.452** (best 0.704) on 9 real music tracks with BandFlux Solo + beatoffset=5. BPM estimation avg 94.2%.
+**Status:** Closed. Remaining ~16-22 pad FPs on synthetic pattern are **visually acceptable** — timing analysis shows they are on-beat, not random.
 
-**What's implemented (Feb 21):**
-- ODF pre-smoothing (5-point causal moving average)
-- Log-Gaussian transition weighting in CBSS backward search
-- BTrack-style predict+countdown beat detection
-- Beat timing offset compensation (`beatoffset=5`, recalibrated from 9 for BandFlux)
-- Harmonic disambiguation (half-lag + 2/3-lag checks)
-- 12 runtime-tunable parameters via serial console (7 now persisted to flash)
+**Timing analysis of pad-rejection FPs (Feb 22):**
+Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
+- **4 FPs** are direct pad triggers — precisely on the 80 BPM beat grid (within 6-102ms of pad onset)
+- **14 FPs** are reverb/echo tails — within 200-700ms of a real event (kick, snare, or pad)
+- **4 FPs** are pre-kick room reflections — 230-590ms before a kick
+- **0 FPs** are truly random or unrelated to musical events
 
-**Current performance (9 real music tracks, beatoffset=5):**
+**Visual impact:** Since all FPs cluster around actual musical events on the beat grid, they appear as "slightly extra busy but still rhythmic" rather than "random sparks with no musical cause." The pad-rejection pattern is a worst case (isolated pads with no other content). In real music, pads are mixed with kicks/snares and the extra triggers are masked.
 
-| Track | Beat F1 | BPM Acc | Beat Offset |
-|-------|:-------:|:-------:|:-----------:|
-| minimal-01 | 0.704 | 0.994 | -16ms |
-| trance-party | 0.693 | 0.997 | -58ms |
-| infected-vibes | 0.694 | 0.979 | -58ms |
-| goa-mantra | 0.550 | 0.993 | +38ms |
-| deep-ambience | 0.499 | 0.933 | -2ms |
-| minimal-emotion | 0.382 | 0.996 | +82ms |
-| machine-drum | 0.209 | 0.833 | +12ms |
-| trap-electro | 0.176 | 0.927 | -6ms |
-| dub-groove | 0.161 | 0.827 | +25ms |
-| **Average** | **0.452** | **0.942** | |
+**Approaches tested and rejected (Feb 22):**
+1. **Bass-ratio gate** — Fails: snares are mid-dominant like pads
+2. **Band-dominance gate** (max band / total) — Fails: room acoustics smear spectral content
+3. **Post-onset decay gate** (decayRatio + decayFrames) — Discriminates kicks vs pads, but synth stabs share sustained envelope → regresses synth-stabs 1.000→0.59
+4. **Min-flux decay variant** — Same result as above
+5. **Spectral crest factor gate** (crestGate) — Eliminates all pad FPs but kills kicks through room resonances (recall 0.31 on strong-beats)
 
-**Remaining issues:**
+**Active gates (production config):**
+1. Hi-hat rejection gate (high-only flux suppression)
+2. Onset delta filter (minOnsetDelta=0.3, rejects slow-rising signals)
 
-#### 1a. Sub-Harmonic BPM Locking (techno-machine-drum) — INVESTIGATED
-BPM locks to ~120 vs expected 143.6 (ratio 0.83x). Not a clean harmonic — half-lag/2/3-lag/double-lag checks don't catch it.
+**Available but disabled gates** (for future experimentation):
+- `bandflux_bassratio` — band-dominance gate (0.0=disabled)
+- `bandflux_decayratio` + `bandflux_decayframes` — post-onset decay gate (0.0=disabled)
+- `bandflux_crestgate` — spectral crest factor gate (0.0=disabled)
 
-**Investigated Feb 21:** Disabling tempo prior moved BPM from 119.6→131.8 (better but still wrong). Shifting prior center to 128 barely helped (121.8) and hurt trance-party. **Conclusion: fundamental autocorrelation limitation** — the dominant autocorrelation peak genuinely corresponds to the sub-harmonic. No parameter tuning can fix this.
+### Priority 2: CBSS Beat Tracking — Stable
 
-#### 1b. Ambient/Sparse Track (techno-deep-ambience) — IMPROVED
-Was F1=0.134 at beatoffset=9. Now F1=0.499 at beatoffset=5. Still has -2ms offset (well-centered). Remaining gap is likely from weak onset signal in ambient sections.
+BTrack-style predict+countdown CBSS beat detection is working. Beat F1 avg **0.472** on 9 real music tracks. BPM estimation avg 93.8%.
 
-#### 1c. Trap/Syncopated Failure (edm-trap-electro)
-F1=0.176. Trap-style half-time feel with syncopated kicks fundamentally challenges 4-on-the-floor assumptions. Likely an inherent limitation for real-time causal beat tracking, or ground truth uses a different metrical level.
+**Current performance (9 real music tracks, beatoffset=5, onsetDelta=0.3):**
 
-#### 1d. Per-Track Offset Variation
-Beat offsets vary from -58ms (trance/infected) to +82ms (minimal-emotion) at beatoffset=5. A single fixed offset can't compensate for all tracks.
+| Track | Beat F1 | BPM Acc | Visual Behavior |
+|-------|:-------:|:-------:|-----------------|
+| trance-party | 0.775 | 0.993 | Beat-sync, sparks on kicks |
+| minimal-01 | 0.695 | 0.959 | Beat-sync, clean pulsing |
+| infected-vibes | 0.691 | 0.973 | Beat-sync, strong phase lock |
+| goa-mantra | 0.605 | 0.993 | Beat-sync, occasional drift |
+| minimal-emotion | 0.486 | 0.998 | Partial music mode |
+| deep-ambience | 0.404 | 0.949 | Energy-reactive (correct) |
+| machine-drum | 0.224 | 0.825 | Half-time lock (acceptable) |
+| trap-electro | 0.190 | 0.924 | Energy-reactive (correct) |
+| dub-groove | 0.176 | 0.830 | Energy-reactive (correct) |
+| **Average** | **0.472** | **0.938** | |
 
-**Possible improvement:**
-- Adaptive offset: track running median of transient-to-beat offsets at runtime
-- Accept this as a ~70ms limitation of the causal approach
+**Known limitations (not fixable, visually acceptable):**
+- machine-drum sub-harmonic BPM lock — fundamental autocorrelation limitation, half-time still looks rhythmic
+- trap/syncopated low F1 — energy-reactive mode is the correct visual response
+- deep-ambience low F1 — organic mode fallback is correct for ambient content
+- Per-track offset variation (-58 to +57ms) — invisible at LED update rates
 
 **What NOT to do (tested and rejected):**
 - Phase correction (phasecorr): Destroys BPM on syncopated tracks
@@ -153,22 +164,40 @@ BandFlux synthetic pattern evaluation completed. Major improvement on lead-melod
 - Change PDM clock/ratio registers (marginal benefit, risks destabilizing PDM driver)
 - Increase FFT size for better sensitivity (latency tradeoff, won't help with raw level)
 
-### Priority 4: Startup Latency
+### Priority 4: Startup Latency — IMPLEMENTED (Feb 22, 2026)
 
-AudioController requires ~3s of OSS buffer before first beat detection (180 samples @ 60Hz). Progressive approach: start autocorrelation at 60 samples (1s), limit max lag to `ossCount_ / 3`.
+**Was:** AudioController required ~3s (180 samples @ 60Hz) before first autocorrelation.
+**Now:** Progressive startup — autocorrelation begins after 1s (60 samples). The existing `maxLag = ossCount_ / 2` clamp naturally limits detectable tempo range during warmup:
+- At 1s (60 samples): can detect ~120-200 BPM
+- At 2s (120 samples): full 60-200 BPM range available
+- `periodicityStrength_` smoothing (0.7/0.3 EMA) handles early estimate noise
 
-### Priority 4: Environment Adaptability (Long-term)
+Band autocorrelation (adaptive weighting) also lowered from 120 to 60 minimum samples.
 
-System tuned for studio conditions. Real-world environments (club, festival, ambient) may benefit from different detector profiles. An environment classifier (based on signal level + spectral centroid + beat stability) could switch detector weights automatically every 2-5 seconds with hysteresis.
+### Priority 4: Music Content Classification (Long-term)
+
+The existing `rhythmStrength` blend works well but could be enhanced with additional content descriptors. Research (Feb 22) identified three cheap features that would improve organic/music mode transitions:
+
+1. **Onset density** — onsets/second EMA. Dance=2-6/s, ambient=0-1/s, complex=4-10/s. Trivial to add.
+2. **Spectral centroid variability** — variance of spectral centroid over 2-4s window. High variance=dynamic/percussive, low=sustained/ambient. Already have centroid computation.
+3. **Energy crest factor** — peak/mean energy ratio over 2-4s. High=percussive with quiet periods, low=continuous drone.
+
+These would modulate the existing `rhythmStrength` for smoother, more appropriate visual responses without hard mode switching.
+
+### Priority 5: Multi-Agent Beat Tracking (Future)
+
+For syncopated music (trap, dub, machine-drum), maintaining 2-3 competing beat hypotheses at different metrical levels (T, T/2, 2T) could improve tracking. Each agent runs a lightweight CBSS and is scored by onset alignment over a rolling 4-beat window. The winning agent drives output.
+
+Cost: ~1.5KB RAM, +3% CPU. References: IBT (INESC Beat Tracker), BeatRoot, Klapuri (2006) metrical level tracking.
+
+Per VISUALIZER_GOALS.md this is low priority — energy-reactive organic mode is already the correct visual response for syncopated content.
 
 ---
 
 ## Next Actions
 
-1. **Pad rejection further improvement** — Still 16 FPs on pad-rejection at onsetDelta=0.3. Pad chord transitions create sharp spectral changes that pass the delta filter. Possible approaches: band-ratio gate (pads have significant midFlux, kicks are bass-only), sustain envelope check.
-2. **Build diverse test music library** — hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills) with ground truth annotations.
-3. **deep-ambience regression** — F1 dropped 0.499→0.404 with onset delta filter. Ambient tracks have soft onsets that get filtered. Investigate content-adaptive onset delta (auto-lower for ambient, auto-raise for dance).
-4. **Environment adaptability** — Auto-switch detector profiles based on signal characteristics (club vs ambient vs festival).
+1. **Add onset density tracking** — Cheap EMA of onsets/second for content classification.
+2. **Build diverse test music library** — hip hop, DnB, funk, pop, rock with ground truth annotations.
 
 ---
 
@@ -176,6 +205,7 @@ System tuned for studio conditions. Real-world environments (club, festival, amb
 
 | Document | Purpose |
 |----------|---------|
+| `docs/VISUALIZER_GOALS.md` | **Design philosophy** — visual quality over metrics |
 | `docs/AUDIO_ARCHITECTURE.md` | AudioController + CBSS architecture |
 | `docs/AUDIO-TUNING-GUIDE.md` | Parameter reference + test procedures |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator design patterns |

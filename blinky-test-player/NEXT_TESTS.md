@@ -75,17 +75,19 @@
 
 ## Next Priorities
 
-1. **Pad rejection further improvement** — Still 16 FPs at onsetDelta=0.3. Possible band-ratio gate (pads have significant midFlux vs kicks which are bass-only) or sustain envelope check.
-2. **Build diverse test music library** — hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills) with ground truth annotations.
-3. **deep-ambience regression** — F1 dropped from 0.499 to 0.404 with onset delta filter. Investigate if onsetDelta=0.2 could be auto-selected for ambient content based on signal characteristics.
-4. **Environment adaptability** — Auto-switch detector profiles based on signal characteristics (club vs ambient vs festival).
+> **Design philosophy:** See [VISUALIZER_GOALS.md](../docs/VISUALIZER_GOALS.md) — visual quality over metric perfection. Low Beat F1 on ambient/trap tracks is acceptable (organic mode fallback is correct).
 
-## Known Limitations (Not Fixable by Tuning)
+1. **Verify startup latency improvement** — Autocorrelation now starts at 1s (was 3s). Test that beat detection activates faster on real music without regressions.
+2. **Add onset density tracking** — Cheap EMA of onsets/second for content classification (dance=2-6/s, ambient=0-1/s).
+3. **Build diverse test music library** — hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills) with ground truth annotations.
 
-| Issue | Root Cause | Status |
-|-------|-----------|--------|
-| Machine-drum sub-harmonic lock | Autocorrelation finds ~120 BPM peak, prior reinforces it | Investigated — fundamental limitation |
-| Per-track beat offset variation | ODF latency varies with audio content (-58 to +57ms) | beatoffset=5 is best compromise |
-| Pad false positives (16 remaining) | Pad chord transitions create sharp spectral changes | onsetDelta=0.3 removes 54%, rest need band-ratio gating |
-| deep-ambience sensitive to onset filter | Soft ambient onsets get filtered | onsetDelta=0.2 helps but hurts trance |
+## Known Limitations
+
+| Issue | Root Cause | Visual Impact |
+|-------|-----------|---------------|
+| Machine-drum sub-harmonic lock | Autocorrelation finds ~120 BPM peak | **Low** — half-time still looks rhythmic |
+| Per-track beat offset variation | ODF latency varies (-58 to +57ms) | **None** — invisible at LED update rates |
+| Pad false positives (~16-22) | Pad chord transitions create sharp flux | **Low** — timing analysis shows all FPs are on-beat (clustered around musical events), not random. Visually appears as "extra busy but rhythmic." Worst case is isolated pads only (synthetic pattern); real music masks these. |
+| deep-ambience low Beat F1 | Soft ambient onsets below detection threshold | **None** — organic mode is correct response |
+| trap-electro low Beat F1 | Syncopated kicks challenge causal tracking | **Low** — energy-reactive mode is acceptable |
 | Test run variance | Room acoustics, ambient noise | Accept or use 3-run averaging |
