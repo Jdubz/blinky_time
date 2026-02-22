@@ -71,7 +71,7 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - 6 simultaneous detectors with weighted fusion
+- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - 7 detectors with weighted fusion (BandFlux Solo default)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength
 
@@ -119,7 +119,7 @@ PDM Microphone (16 kHz)
     ↓
 AdaptiveMic (AGC + normalization)
     ↓
-EnsembleDetector (2 detectors: Drummer + Complex)
+EnsembleDetector (BandWeightedFlux Solo)
     ↓
 AudioController (CBSS beat tracking)
     ↓
@@ -140,19 +140,19 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output)
 
 2. **Transient Detection (Ensemble)**
-   - `EnsembleDetector.h` - Weighted fusion of 6 detectors
-   - **Optimized 2-detector config (Feb 2026):** Drummer (0.50, thresh 4.5) + Complex (0.50, thresh 3.5)
-   - Disabled: Spectral, HFC, Bass, Novelty (tested on real music: noisy or miss kicks)
-   - Agreement-based confidence scaling (single-detector boost 0.7 for 2-detector config)
+   - `EnsembleDetector.h` - Weighted fusion of 7 detectors (1 enabled, 6 disabled)
+   - **BandFlux Solo config (Feb 2026):** BandWeightedFlux (1.0, thresh 0.5) — all others disabled
+   - BandFlux: log-compressed band-weighted spectral flux with additive threshold and onset delta filter
+   - Agreement-based confidence scaling (single-detector boost 1.0 for solo config)
    - Adaptive cooldown (tempo-aware)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - Autocorrelation every 500ms with tempo prior
-   - CBSS: cumulative beat strength signal for beat prediction
-   - Counter-based beat detection with deterministic phase
-   - Comb filter bank (20 filters) for tempo validation
+   - Autocorrelation every 500ms with Gaussian tempo prior
+   - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
+   - BTrack-style predict+countdown beat detection with deterministic phase
+   - ODF pre-smoothing (5-point causal moving average)
 
 4. **Generators (Visual Effects)**
    - `Fire.cpp/h` - Heat diffusion with sparks (13 params)
@@ -259,12 +259,12 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
-2. AdaptiveMic → EnsembleDetector (6 parallel algorithms)
+2. AdaptiveMic → EnsembleDetector (BandFlux Solo)
 3. EnsembleDetector → fusion → transient strength (0-1)
 4. Transient → AudioController OSS buffer (6s history)
-5. AudioController → autocorrelation every 500ms
-6. Extract 4 tempo peaks → 4 hypothesis slots
-7. Update confidence, promote if >0.15 advantage + ≥8 beats
+5. AudioController → autocorrelation every 500ms → tempo estimation
+6. CBSS backward search → cumulative beat strength signal
+7. Predict+countdown beat detection → deterministic phase
 8. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75}
 9. Fire generator:
    - energy → baseline flame height
@@ -327,7 +327,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
-- ✅ 2-detector ensemble (Drummer + Complex, calibrated weights)
+- ✅ BandFlux Solo detector (log-compressed band-weighted spectral flux)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner)
@@ -363,22 +363,24 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (February 2026)
 
 ### Ensemble Detection Architecture
-The system uses 6 detectors with weighted fusion (2 enabled, 4 disabled).
+The system uses 7 detectors with weighted fusion (1 enabled, 6 disabled).
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals.
 
-| Detector | Weight | Thresh | Enabled | Transient F1 | Notes |
-|----------|--------|--------|---------|-------------|-------|
-| Drummer | 0.50 | 4.5 | Yes | 0.901 | Best recall on kicks/snares |
-| ComplexDomain | 0.50 | 3.5 | Yes | 0.929 | Best precision, near-zero false positives |
-| SpectralFlux | 0.20 | 1.4 | No | 0.164 | Fires on pad chords |
-| HFC | 0.20 | 4.0 | No | 0.620 | Hi-hat detector, misses kicks |
-| BassBand | 0.45 | 3.0 | No | 0.187 | Too noisy (100+ detections/30s) |
-| Novelty | 0.12 | 2.5 | No | 0.029 | Near-zero detections on real music |
+| Detector | Weight | Thresh | Enabled | Notes |
+|----------|--------|--------|---------|-------|
+| **BandWeightedFlux** | 1.00 | 0.5 | **Yes** | Log-compressed band-weighted spectral flux, additive threshold, onset delta filter |
+| Drummer | 0.50 | 4.5 | No | Good kick/snare recall, but BandFlux Solo outperforms (+14% avg Beat F1) |
+| ComplexDomain | 0.50 | 3.5 | No | Good precision, but adds noise when combined with BandFlux |
+| SpectralFlux | 0.20 | 1.4 | No | Fires on pad chords |
+| HFC | 0.20 | 4.0 | No | Hi-hat detector, misses kicks |
+| BassBand | 0.45 | 3.0 | No | Too noisy (100+ detections/30s) |
+| Novelty | 0.12 | 2.5 | No | Near-zero detections on real music |
 
 ### Key Features
-- **Agreement-based confidence**: Single-detector boost 0.7 (common with 2-detector config), 2-detector full (1.0x)
+- **BandFlux Solo**: Single detector outperforms multi-detector combos (avg Beat F1 0.472 across 9 tracks)
+- **Agreement-based confidence**: Single-detector boost 1.0 (full pass-through for solo config)
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
-- **Comb filter bank**: 20 parallel filters for tempo validation
+- **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Shared FFT**: All spectral detectors share a single FFT computation
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

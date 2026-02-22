@@ -30,6 +30,7 @@ public:
     // Bumping SETTINGS_VERSION preserves device config (LED layout, device name, etc.)
     // Bumping DEVICE_VERSION only needed when StoredDeviceConfig struct changes
     static const uint8_t DEVICE_VERSION = 1;    // Device config schema (LED layout, pins, etc.)
+    // Versions 8-11 were intermediate experimental builds during CBSS development (never released)
     static const uint8_t SETTINGS_VERSION = 12;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)

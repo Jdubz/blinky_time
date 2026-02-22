@@ -2148,7 +2148,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             phaseOffsetStats: { median: number; stdDev: number; iqr: number } | null;
             beatOffsetStats: { median: number; stdDev: number; iqr: number } | null;
             beatOffsetHistogram: Record<string, number>;
-            detectionVsBeat: { matched: number; extra: number; missed: number };
+            beatVsReference: { matched: number; extra: number; missed: number };
             predictionRatio: { predicted: number; fallback: number; total: number } | null;
             transientBeatOffsets: number[];
             beatEventOffsets: number[];
@@ -2160,7 +2160,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             phaseOffsetStats: null,
             beatOffsetStats: null,
             beatOffsetHistogram: {},
-            detectionVsBeat: {
+            beatVsReference: {
               matched: tp,
               extra: estBeatsFromDevice.length - tp,
               missed: refBeats.length - tp,
@@ -2328,9 +2328,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               beatOffsetMs: diagnostics.beatOffsetStats,
               beatOffsetHistogram: diagnostics.beatOffsetHistogram,
               predictionRatio: diagnostics.predictionRatio,
-              matched: diagnostics.detectionVsBeat.matched,
-              extra: diagnostics.detectionVsBeat.extra,
-              missed: diagnostics.detectionVsBeat.missed,
+              matched: diagnostics.beatVsReference.matched,
+              extra: diagnostics.beatVsReference.extra,
+              missed: diagnostics.beatVsReference.missed,
             },
             timing: {
               latencyMs: Math.round(audioLatencyMs),

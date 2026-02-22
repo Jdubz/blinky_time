@@ -459,7 +459,7 @@ private:
     float logGaussianWeights_[MAX_BEAT_PERIOD * 2] = {0}; // Covers T/2 to 2T range
     int logGaussianWeightsSize_ = 0;
     int logGaussianLastT_ = 0;       // Last T used to compute weights
-    float logGaussianLastTight_ = 0;  // Last cbssTightness used (invalidate on change)
+    float logGaussianLastTight_ = 0.0f;  // Last cbssTightness used (invalidate on change)
 
     // Predict+countdown state (BTrack-style)
     int timeToNextBeat_ = 15;          // Countdown frames until next beat

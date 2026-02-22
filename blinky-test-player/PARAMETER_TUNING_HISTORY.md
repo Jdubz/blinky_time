@@ -1123,8 +1123,95 @@ bandflux threshold = 0.5   (set via: set detector_thresh bandflux 0.5)
 
 ### Next Steps
 
-1. **Gamma sweep** — Test gamma at 10, 15, 20, 30, 50 on full suite
-2. **Bass weight sweep** — Test bassWeight at 1.5, 2.0, 2.5, 3.0 for machine-drum improvement
-3. **Threshold fine-tuning** — Test 0.3, 0.4, 0.5, 0.6 on full suite
-4. **Update firmware defaults** — After parameter optimization, flip ENABLED defaults (BandFlux on, Drummer off)
+1. ~~**Gamma sweep**~~ Done (Feb 21) — 20 confirmed optimal
+2. ~~**Bass weight sweep**~~ Done (Feb 21) — 2.0 confirmed optimal
+3. ~~**Threshold fine-tuning**~~ Done (Feb 21) — 0.5 confirmed optimal
+4. ~~**Update firmware defaults**~~ Done (Feb 21) — BandFlux Solo enabled, all others disabled
 5. **Agreement boost tuning** — If BandFlux + another detector proves useful, tune agree_1/agree_2 for that combo
+
+---
+
+## Test Session: 2026-02-21 (BandFlux Default + beatoffset Recalibration + Onset Delta Filter)
+
+**Environment:**
+- Hardware: Seeeduino XIAO nRF52840 Sense (hat_v1, 89 LEDs)
+- Serial Port: COM14
+- Hardware Gain: AGC active (unlocked)
+- Tool: MCP `run_music_test`
+
+### Changes Made
+
+1. **BandFlux set as firmware default** — All EnsembleFusion defaults updated: BandFlux enabled, all others disabled, agree_1=1.0
+2. **beatoffset recalibrated 9 → 5** — With BandFlux (lower ODF latency than Drummer), the optimal offset shifted
+3. **Parameter persistence** — 5 new params persisted to flash: tempoSmoothFactor, odfSmoothWidth, harmonicUp2xThresh, harmonicUp32Thresh, peakMinCorrelation (SETTINGS_VERSION 12)
+4. **Onset delta filter** — New `minOnsetDelta` parameter (default 0.3) rejects slow-rising signals
+
+### beatoffset Recalibration
+
+With BandFlux Solo as default, the original beatoffset=9 (tuned for Drummer+Complex) was too large. BandFlux's log-compressed spectral flux has less processing latency than Drummer's broadband energy derivative.
+
+| beatoffset | Avg Beat F1 | Notes |
+|:----------:|:-----------:|-------|
+| 9 (old) | 0.216 | Tuned for Drummer, way too large for BandFlux |
+| **5** | **0.452** | +109% improvement, new default |
+
+### BandFlux Parameter Sweep
+
+Confirmed all defaults are optimal. Each parameter tested at 3 values on 9 real music tracks:
+
+| Parameter | Tested Values | Optimal | Delta from Optimal |
+|-----------|:------------:|:-------:|:------------------:|
+| gamma | 10, **20**, 30 | 20 | 10: -0.06, 30: -0.01 |
+| bassWeight | 1.5, **2.0**, 3.0 | 2.0 | 1.5: worse, 3.0: -0.02 |
+| threshold | 0.3, **0.5**, 0.7 | 0.5 | 0.3: -0.03, 0.7: -0.15 |
+
+### Onset Delta Filter (minOnsetDelta)
+
+New post-detection filter requiring minimum frame-to-frame flux jump. Pads/swells rise slowly (0.01-0.1/frame), kicks spike instantly (1-3+/frame).
+
+**Sweep results:**
+
+| onsetDelta | pad-rejection FPs | medium-beats recall | trance-party Beat F1 | deep-ambience Beat F1 |
+|:----------:|:-----------------:|:-------------------:|:--------------------:|:---------------------:|
+| 0.0 (off) | 35 | 1.00 | 0.677 | 0.499 |
+| 0.2 | ~22 | 1.00 | 0.637 | 0.618 |
+| **0.3** | **16** | **1.00** | **0.775** | **0.404** |
+| 0.5 | 16 | 1.00 | — | — |
+| 0.7 | 15 | 0.97 | — | — |
+| 1.0 | 5 | 0.88 | — | — |
+
+**Decision:** 0.3 chosen as default — best overall average, preserves all medium-strength kicks, fixes synth-stabs regression (0.600→1.000).
+
+### Final Results (BandFlux Solo, beatoffset=5, onsetDelta=0.3)
+
+**Synthetic patterns:**
+
+| Pattern | F1 | Notes |
+|---------|:---:|-------|
+| strong-beats | 1.000 | Perfect |
+| hat-rejection | 1.000 | Perfect |
+| synth-stabs | 1.000 | Fixed (was 0.600 before onset delta) |
+| medium-beats | 0.985 | Near-perfect |
+| pad-rejection | 0.421 | Improved (was 0.314, 35→16 FPs) |
+
+**Real music (9 tracks):**
+
+| Track | Beat F1 | BPM Acc | Beat Offset |
+|-------|:-------:|:-------:|:-----------:|
+| trance-party | 0.775 | 0.993 | -54ms |
+| minimal-01 | 0.695 | 0.959 | -47ms |
+| infected-vibes | 0.691 | 0.973 | -58ms |
+| goa-mantra | 0.605 | 0.993 | +45ms |
+| minimal-emotion | 0.486 | 0.998 | +57ms |
+| deep-ambience | 0.404 | 0.949 | -18ms |
+| machine-drum | 0.224 | 0.825 | -42ms |
+| trap-electro | 0.190 | 0.924 | -23ms |
+| dub-groove | 0.176 | 0.830 | +56ms |
+| **Average** | **0.472** | **0.938** | |
+
+### Key Findings
+
+1. **beatoffset=5 is correct for BandFlux** — Different from the 9 tuned for Drummer. BandFlux's log-compressed spectral flux has ~4 fewer frames of latency.
+2. **Onset delta filter at 0.3 is net positive** — Avg Beat F1 improved 0.452→0.472. Best improvements: trance-party +0.098, minimal-emotion +0.104. One regression: deep-ambience (0.499→0.404) from soft ambient onsets being filtered.
+3. **Per-track beat offsets vary -58ms to +57ms** — A single fixed offset can't compensate for all tracks. Adaptive offset investigated but risks oscillation for marginal benefit. Accepted as ~70ms limitation.
+4. **Sub-harmonic lock on machine-drum is unfixable by tuning** — Tested disabling tempo prior (BPM: 119.6→131.8, still wrong), shifting prior center to 128 (barely helped, hurt trance). Fundamental autocorrelation limitation.

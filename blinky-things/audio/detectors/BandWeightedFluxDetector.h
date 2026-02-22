@@ -100,9 +100,9 @@ private:
     int maxBin_;            // Max FFT bin to analyze (default 64)
 
     // Fast log(1+x) approximation for small x
+    // ~8% error at boundary (x=0.5: returns 0.375, true value 0.405).
+    // With gamma=20, crossover is at mag=0.025 (very quiet), so rarely matters.
     static float fastLog1p(float x) {
-        // For small x, log(1+x) ~ x - x^2/2 (good for x < 0.5)
-        // For larger x, fall back to logf
         if (x < 0.5f) {
             return x * (1.0f - x * 0.5f);
         }

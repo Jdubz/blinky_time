@@ -329,9 +329,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("lookahead", &audioCtrl_->beatLookaheadMs, "lookahead",
         "Beat lookahead (ms)", 0.0f, 200.0f);
 
-    // Continuous tempo estimation
-    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothingFactor, "tempo",
-        "Tempo smoothing factor", 0.5f, 0.99f);
+    // Continuous tempo estimation (tempoSmoothingFactor is legacy — actual smoothing uses tempoSmoothFactor registered above)
     settings_.registerFloat("tempochgthresh", &audioCtrl_->tempoChangeThreshold, "tempo",
         "Tempo change threshold", 0.01f, 0.5f);
 

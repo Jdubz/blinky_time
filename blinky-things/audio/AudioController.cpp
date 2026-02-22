@@ -123,7 +123,7 @@ bool AudioController::begin(uint32_t sampleRate) {
     timeToNextBeat_ = 15;  // ~250ms at 60Hz
     timeToNextPrediction_ = 10;
     logGaussianLastT_ = 0;
-    logGaussianLastTight_ = 0;
+    logGaussianLastTight_ = 0.0f;
     logGaussianWeightsSize_ = 0;
     beatExpectationLastT_ = 0;
     beatExpectationSize_ = 0;
@@ -688,8 +688,9 @@ void AudioController::updateCBSS(float onsetStrength) {
         int shift = sampleCounter_ - OSS_BUFFER_SIZE;
         sampleCounter_ -= shift;
         lastBeatSample_ -= shift;
-        // Clamp lastBeatSample_ to prevent it going negative
+        lastTransientSample_ -= shift;
         if (lastBeatSample_ < 0) lastBeatSample_ = 0;
+        if (lastTransientSample_ < 0) lastTransientSample_ = -1;
     }
 }
 
