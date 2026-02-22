@@ -329,8 +329,14 @@ void AudioController::addOssSample(float onsetStrength, uint32_t timestampMs) {
 }
 
 void AudioController::runAutocorrelation(uint32_t nowMs) {
-    // Need at least 3 seconds of data for reliable tempo estimation
-    if (ossCount_ < 180) {
+    // Progressive startup: start autocorrelation after 1 second (60 samples @ 60Hz)
+    // instead of waiting 3 seconds. Early estimates have limited tempo range
+    // (maxLag = ossCount_/2 restricts minimum detectable BPM) but periodicityStrength_
+    // smoothing handles the lower reliability. At 60 samples: minimum detectable BPM
+    // is ~120 (maxLag=30); upper bound is bpmMax (200). Full 60-200 BPM range
+    // available after ~2 seconds (120 samples). Note: brief wrong-tempo estimates
+    // are possible during warmup but rhythmStrength blending limits visual impact.
+    if (ossCount_ < 60) {
         return;
     }
 
@@ -352,7 +358,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 
     // Estimate samples per millisecond from buffer
-    // Fallback should never be needed (ossCount_ >= 180 ensures bufferDurationMs > 0)
+    // Fallback should never be needed (ossCount_ >= 60 with valid timestamps ensures bufferDurationMs > 0)
     // but use defensive 60 Hz assumption if it somehow occurs
     float samplesPerMs = bufferDurationMs > 0 ? (float)ossCount_ / (float)bufferDurationMs : 0.06f;
 
@@ -1190,8 +1196,8 @@ float AudioController::computeBandAutocorrelation(int band) {
         return 0.0f;
     }
 
-    // Need at least 2 seconds of data for meaningful autocorrelation
-    if (bandOssCount_ < 120) {
+    // Need at least 1 second of data for meaningful autocorrelation
+    if (bandOssCount_ < 60) {
         return 0.0f;  // Not enough data
     }
 

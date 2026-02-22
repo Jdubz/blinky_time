@@ -15,7 +15,15 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , midWeight_(1.5f)
     , highWeight_(0.1f)
     , minOnsetDelta_(0.3f)
+    , bandDominanceGate_(0.0f)
+    , decayRatioThreshold_(0.0f)
+    , crestGate_(0.0f)
+    , confirmFrames_(3)
     , maxBin_(64)
+    , confirmCountdown_(0)
+    , candidateFlux_(0.0f)
+    , minFluxDuringWindow_(0.0f)
+    , cachedResult_(DetectionResult::none())
 {
     for (int i = 0; i < MAX_STORED_BINS; i++) {
         prevLogMag_[i] = 0.0f;
@@ -31,6 +39,9 @@ void BandWeightedFluxDetector::resetImpl() {
     combinedFlux_ = 0.0f;
     averageFlux_ = 0.0f;
     frameCount_ = 0;
+    confirmCountdown_ = 0;
+    candidateFlux_ = 0.0f;
+    minFluxDuringWindow_ = 0.0f;
 
     for (int i = 0; i < MAX_STORED_BINS; i++) {
         prevLogMag_[i] = 0.0f;
@@ -98,6 +109,37 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     float effectiveThreshold = averageFlux_ + config_.threshold;
     currentThreshold_ = effectiveThreshold;
 
+    // === Post-onset decay confirmation (disabled by default, decayRatioThreshold_=0) ===
+    // If we're waiting to confirm a previous candidate, track minimum flux.
+    // Note: Any new onset during the confirmation window is silently dropped —
+    // the early return bypasses all detection logic. At confirmFrames_=3 (~50ms)
+    // this is acceptable; at higher values rapid onsets could be missed.
+    // Also introduces ~50ms latency on confirmed detections (confirmFrames_ × 16.7ms).
+    if (confirmCountdown_ > 0) {
+        if (combinedFlux_ < minFluxDuringWindow_) {
+            minFluxDuringWindow_ = combinedFlux_;
+        }
+        confirmCountdown_--;
+        if (confirmCountdown_ == 0) {
+            // Check if flux dipped at ANY point during the window (percussive = brief dip)
+            // Pads never dip — they sustain or rise throughout the window
+            float minRatio = minFluxDuringWindow_ / maxf(candidateFlux_, 0.001f);
+            if (minRatio <= decayRatioThreshold_) {
+                // Flux dipped — confirmed percussive onset
+                updatePrevFrameState(logMag, effectiveMax);
+                return cachedResult_;
+            }
+            // Flux never dipped — sustained sound (pad/chord), reject
+        }
+        // Still waiting or rejected — update reference and return none.
+        // Note: updateThresholdBuffer is called here (during window frames) but NOT on
+        // the original onset frame (asymmetric design) — this is intentional to prevent
+        // loud onsets from inflating the running average while still adapting to post-onset flux.
+        updatePrevFrameState(logMag, effectiveMax);
+        updateThresholdBuffer(combinedFlux_);
+        return DetectionResult::none();
+    }
+
     // Step 6: Hi-hat rejection gate
     // Suppress if ONLY the high band has flux (no bass or mid energy)
     bool hiHatOnly = (highFlux_ > 0.01f) && (bassFlux_ < 0.005f) && (midFlux_ < 0.005f);
@@ -114,6 +156,37 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         }
     }
 
+    // Step 8: Band-dominance gate (disabled by default, kept for experimentation)
+    if (detected && bandDominanceGate_ > 0.0f) {
+        float totalBandFlux = bassFlux_ + midFlux_ + highFlux_;
+        if (totalBandFlux > 0.01f) {
+            float maxBand = maxf(maxf(bassFlux_, midFlux_), highFlux_);
+            float dominance = maxBand / totalBandFlux;
+            if (dominance < bandDominanceGate_) {
+                detected = false;
+            }
+        }
+    }
+
+    // Step 9: Spectral crest factor gate — reject tonal onsets (pads, chords)
+    // Percussive hits are broadband noise (low crest ~2-3), pads are tonal (high crest ~5+)
+    if (detected && crestGate_ > 0.0f) {
+        float maxMag = 0.0f;
+        float sumMag = 0.0f;
+        int crestMax = (MID_MAX < effectiveMax) ? MID_MAX : effectiveMax;
+        for (int k = BASS_MIN; k < crestMax; k++) {
+            if (magnitudes[k] > maxMag) maxMag = magnitudes[k];
+            sumMag += magnitudes[k];
+        }
+        int crestBins = crestMax - BASS_MIN;
+        if (crestBins > 0 && sumMag > 1e-10f) {
+            float crest = maxMag / (sumMag / crestBins);
+            if (crest > crestGate_) {
+                detected = false;
+            }
+        }
+    }
+
     DetectionResult result;
 
     if (detected) {
@@ -126,6 +199,18 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
         result = DetectionResult::hit(strength, confidence);
 
+        // Step 10: Post-onset decay gate — defer confirmation to check temporal envelope
+        // Percussive hits decay rapidly (ratio drops below threshold in N frames)
+        // Pads/chords sustain (ratio stays near 1.0)
+        if (decayRatioThreshold_ > 0.0f && confirmFrames_ > 0) {
+            confirmCountdown_ = confirmFrames_;
+            candidateFlux_ = combinedFlux_;
+            minFluxDuringWindow_ = combinedFlux_;  // Will track minimum during window
+            cachedResult_ = result;
+            // Don't return hit yet — wait for decay confirmation
+            result = DetectionResult::none();
+        }
+
         // Asymmetric threshold update: do NOT update threshold buffer on detection
         // This prevents loud onsets from inflating the threshold
     } else {
@@ -136,12 +221,16 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     }
 
     // Store current as reference for next frame
+    updatePrevFrameState(logMag, effectiveMax);
+
+    return result;
+}
+
+void BandWeightedFluxDetector::updatePrevFrameState(const float* logMag, int effectiveMax) {
     prevCombinedFlux_ = combinedFlux_;
     for (int k = 0; k < effectiveMax; k++) {
         prevLogMag_[k] = logMag[k];
     }
-
-    return result;
 }
 
 void BandWeightedFluxDetector::computeBandFlux(const float* logMag, const float* maxRef, int numBins) {

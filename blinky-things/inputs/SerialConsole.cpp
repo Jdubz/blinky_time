@@ -2103,6 +2103,91 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
 
+    // === Experimental BandFlux gates (all disabled by default, runtime-only — NOT persisted to flash) ===
+    // These reset to defaults on power cycle. To persist, add to SettingsRegistry.
+
+    // bandflux_dominance: Band-dominance gate — max(bass,mid,high)/total (0.0 = disabled)
+    if (strncmp(cmd, "set bandflux_dominance ", 23) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 23);
+        if (value >= 0.0f && value <= 1.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setBandDominanceGate(value);
+            Serial.print(F("OK bandflux_dominance="));
+            Serial.println(value, 3);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-1.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_dominance") == 0 || strcmp(cmd, "bandflux_dominance") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_dominance="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBandDominanceGate(), 3);
+        return true;
+    }
+
+    // bandflux_decayratio: Post-onset decay ratio threshold (0.0 = disabled)
+    // Flux must drop to this fraction of onset flux within N frames to confirm percussive
+    if (strncmp(cmd, "set bandflux_decayratio ", 24) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 24);
+        if (value >= 0.0f && value <= 1.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setDecayRatio(value);
+            Serial.print(F("OK bandflux_decayratio="));
+            Serial.println(value, 3);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-1.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_decayratio") == 0 || strcmp(cmd, "bandflux_decayratio") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_decayratio="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDecayRatio(), 3);
+        return true;
+    }
+
+    // bandflux_decayframes: Frames to wait for decay confirmation (0-6)
+    if (strncmp(cmd, "set bandflux_decayframes ", 25) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 25);
+        if (value >= 0 && value <= 6) {
+            audioCtrl_->getEnsemble().getBandFlux().setDecayFrames(value);
+            Serial.print(F("OK bandflux_decayframes="));
+            Serial.println(value);
+        } else {
+            Serial.println(F("ERROR: Valid range 0-6"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_decayframes") == 0 || strcmp(cmd, "bandflux_decayframes") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_decayframes="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDecayFrames());
+        return true;
+    }
+
+    // bandflux_crestgate: Spectral crest factor gate (0.0 = disabled)
+    // Reject tonal onsets (pads/chords) with crest above this threshold
+    if (strncmp(cmd, "set bandflux_crestgate ", 23) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 23);
+        if (value >= 0.0f && value <= 20.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setCrestGate(value);
+            Serial.print(F("OK bandflux_crestgate="));
+            Serial.println(value, 2);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.0-20.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_crestgate") == 0 || strcmp(cmd, "bandflux_crestgate") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_crestgate="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getCrestGate(), 2);
+        return true;
+    }
+
     // ComplexDomain: minbin, maxbin
     if (strncmp(cmd, "set complex_minbin ", 19) == 0) {
         if (!audioCtrl_) return true;

@@ -157,8 +157,9 @@ private:
  * interface that outputs a simple 4-parameter AudioControl struct.
  *
  * Rhythm Tracking (CBSS beat tracking):
- *   1. Buffer 6 seconds of onset strength (spectral flux)
+ *   1. Buffer up to 6 seconds of onset strength (spectral flux)
  *   2. Run autocorrelation to find periodicity and tempo (BPM)
+ *      Progressive startup: begins after 1s (60 samples), full range after 2s
  *   3. Build CBSS (Cumulative Beat Strength Signal) from OSS + tempo
  *   4. Counter-based beat detection: expect beat at lastBeat + period
  *   5. Phase derived deterministically: (now - lastBeat) / period
