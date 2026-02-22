@@ -168,13 +168,13 @@ BandFlux synthetic pattern evaluation completed. Major improvement on lead-melod
 
 **Was:** AudioController required ~3s (180 samples @ 60Hz) before first autocorrelation.
 **Now:** Progressive startup — autocorrelation begins after 1s (60 samples). The existing `maxLag = ossCount_ / 2` clamp naturally limits detectable tempo range during warmup:
-- At 1s (60 samples): can detect ~120-200 BPM
+- At 1s (60 samples): minimum detectable BPM is ~120 (maxLag=30); upper bound is bpmMax (200)
 - At 2s (120 samples): full 60-200 BPM range available
 - `periodicityStrength_` smoothing (0.7/0.3 EMA) handles early estimate noise
 
 Band autocorrelation (adaptive weighting) also lowered from 120 to 60 minimum samples.
 
-### Priority 4: Music Content Classification (Long-term)
+### Priority 5: Music Content Classification (Long-term)
 
 The existing `rhythmStrength` blend works well but could be enhanced with additional content descriptors. Research (Feb 22) identified three cheap features that would improve organic/music mode transitions:
 
@@ -184,7 +184,7 @@ The existing `rhythmStrength` blend works well but could be enhanced with additi
 
 These would modulate the existing `rhythmStrength` for smoother, more appropriate visual responses without hard mode switching.
 
-### Priority 5: Multi-Agent Beat Tracking (Future)
+### Priority 6: Multi-Agent Beat Tracking (Future)
 
 For syncopated music (trap, dub, machine-drum), maintaining 2-3 competing beat hypotheses at different metrical levels (T, T/2, 2T) could improve tracking. Each agent runs a lightweight CBSS and is scored by onset alignment over a rolling 4-beat window. The winning agent drives output.
 

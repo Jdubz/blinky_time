@@ -331,9 +331,11 @@ void AudioController::addOssSample(float onsetStrength, uint32_t timestampMs) {
 void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Progressive startup: start autocorrelation after 1 second (60 samples @ 60Hz)
     // instead of waiting 3 seconds. Early estimates have limited tempo range
-    // (maxLag = ossCount_/2 restricts detectable tempos) but periodicityStrength_
-    // smoothing handles the lower reliability. At 60 samples: can detect ~120-200 BPM.
-    // Full 60-200 BPM range available after ~2 seconds (120 samples).
+    // (maxLag = ossCount_/2 restricts minimum detectable BPM) but periodicityStrength_
+    // smoothing handles the lower reliability. At 60 samples: minimum detectable BPM
+    // is ~120 (maxLag=30); upper bound is bpmMax (200). Full 60-200 BPM range
+    // available after ~2 seconds (120 samples). Note: brief wrong-tempo estimates
+    // are possible during warmup but rhythmStrength blending limits visual impact.
     if (ossCount_ < 60) {
         return;
     }

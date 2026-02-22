@@ -2103,6 +2103,9 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
 
+    // === Experimental BandFlux gates (all disabled by default, runtime-only — NOT persisted to flash) ===
+    // These reset to defaults on power cycle. To persist, add to SettingsRegistry.
+
     // bandflux_dominance: Band-dominance gate — max(bass,mid,high)/total (0.0 = disabled)
     if (strncmp(cmd, "set bandflux_dominance ", 23) == 0) {
         if (!audioCtrl_) return true;

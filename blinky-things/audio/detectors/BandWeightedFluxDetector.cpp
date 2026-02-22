@@ -109,8 +109,12 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     float effectiveThreshold = averageFlux_ + config_.threshold;
     currentThreshold_ = effectiveThreshold;
 
-    // === Post-onset decay confirmation ===
-    // If we're waiting to confirm a previous candidate, track minimum flux
+    // === Post-onset decay confirmation (disabled by default, decayRatioThreshold_=0) ===
+    // If we're waiting to confirm a previous candidate, track minimum flux.
+    // Note: Any new onset during the confirmation window is silently dropped —
+    // the early return bypasses all detection logic. At confirmFrames_=3 (~50ms)
+    // this is acceptable; at higher values rapid onsets could be missed.
+    // Also introduces ~50ms latency on confirmed detections (confirmFrames_ × 16.7ms).
     if (confirmCountdown_ > 0) {
         if (combinedFlux_ < minFluxDuringWindow_) {
             minFluxDuringWindow_ = combinedFlux_;
@@ -127,7 +131,10 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
             }
             // Flux never dipped — sustained sound (pad/chord), reject
         }
-        // Still waiting or rejected — update reference and return none
+        // Still waiting or rejected — update reference and return none.
+        // Note: updateThresholdBuffer is called here (during window frames) but NOT on
+        // the original onset frame (asymmetric design) — this is intentional to prevent
+        // loud onsets from inflating the running average while still adapting to post-onset flux.
         updatePrevFrameState(logMag, effectiveMax);
         updateThresholdBuffer(combinedFlux_);
         return DetectionResult::none();
