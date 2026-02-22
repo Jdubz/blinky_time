@@ -361,6 +361,9 @@ public:
     float getCombBankPhase() const { return combFilterBank_.getPhaseAtPeak(); }
     const CombFilterBank& getCombFilterBank() const { return combFilterBank_; }
 
+    // Onset density debug getter
+    float getOnsetDensity() const { return onsetDensity_; }
+
     // CBSS beat tracking debug getters
     float getCbssConfidence() const { return cbssConfidence_; }
     uint16_t getBeatCount() const { return beatCount_; }
@@ -496,6 +499,11 @@ private:
     // Silence detection
     uint32_t lastSignificantAudioMs_ = 0;
 
+    // Onset density tracking
+    float onsetDensity_ = 0.0f;            // Smoothed onsets/second (EMA)
+    int onsetCountInWindow_ = 0;           // Onsets detected in current 1s window
+    uint32_t onsetDensityWindowStart_ = 0; // Window start timestamp (ms)
+
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
 
@@ -545,6 +553,7 @@ private:
     void synthesizePulse();
     void synthesizePhase();
     void synthesizeRhythmStrength();
+    void updateOnsetDensity(uint32_t nowMs);
 
     // Utilities
     inline float clampf(float val, float minVal, float maxVal) const {

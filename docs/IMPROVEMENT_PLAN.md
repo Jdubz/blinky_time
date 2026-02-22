@@ -178,7 +178,7 @@ Band autocorrelation (adaptive weighting) also lowered from 120 to 60 minimum sa
 
 The existing `rhythmStrength` blend works well but could be enhanced with additional content descriptors. Research (Feb 22) identified three cheap features that would improve organic/music mode transitions:
 
-1. **Onset density** — onsets/second EMA. Dance=2-6/s, ambient=0-1/s, complex=4-10/s. Trivial to add.
+1. **Onset density** — ✅ Implemented (Feb 2026). Windowed counter with EMA smoothing, exposed as `AudioControl::onsetDensity` and `"od"` in streaming JSON. Modulates `rhythmStrength` by ±0.1 centered at 3 onsets/s.
 2. **Spectral centroid variability** — variance of spectral centroid over 2-4s window. High variance=dynamic/percussive, low=sustained/ambient. Already have centroid computation.
 3. **Energy crest factor** — peak/mean energy ratio over 2-4s. High=percussive with quiet periods, low=continuous drone.
 
@@ -196,7 +196,7 @@ Per VISUALIZER_GOALS.md this is low priority — energy-reactive organic mode is
 
 ## Next Actions
 
-1. **Add onset density tracking** — Cheap EMA of onsets/second for content classification.
+1. ~~**Add onset density tracking**~~ — ✅ Done. See Priority 5.
 2. **Build diverse test music library** — hip hop, DnB, funk, pop, rock with ground truth annotations.
 
 ---

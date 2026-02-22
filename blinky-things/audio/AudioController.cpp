@@ -97,6 +97,11 @@ bool AudioController::begin(uint32_t sampleRate) {
     lastAutocorrMs_ = 0;
     lastSignificantAudioMs_ = 0;
 
+    // Reset onset density tracking
+    onsetDensity_ = 0.0f;
+    onsetCountInWindow_ = 0;
+    onsetDensityWindowStart_ = 0;
+
     // Initialize and reset comb filter bank
     // Uses 60 Hz frame rate assumption (same as OSS buffer)
     combFilterBank_.init(60.0f);
@@ -165,7 +170,12 @@ const AudioControl& AudioController::update(float dt) {
         dt
     );
 
-    // 3b. Phase correction: when a transient occurs near a predicted beat
+    // 3b. Count onsets for density tracking
+    if (lastEnsembleOutput_.transientStrength > 0.0f) {
+        onsetCountInWindow_++;
+    }
+
+    // 3c. Phase correction: when a transient occurs near a predicted beat
     //     boundary, nudge lastBeatSample_ to align phase with the transient.
     //     This corrects cumulative drift from small BPM errors.
     if (lastEnsembleOutput_.transientStrength > 0.0f) {
@@ -273,6 +283,7 @@ const AudioControl& AudioController::update(float dt) {
     synthesizePulse();
     synthesizePhase();
     synthesizeRhythmStrength();
+    updateOnsetDensity(nowMs);
 
     return control_;
 }
@@ -882,12 +893,31 @@ void AudioController::synthesizeRhythmStrength() {
     // Blend autocorrelation periodicity with CBSS beat tracking confidence
     float strength = periodicityStrength_ * 0.6f + cbssConfidence_ * 0.4f;
 
+    // Onset density nudge: high density slightly boosts rhythm confidence
+    // Low density (ambient) slightly reduces it
+    // Range: ±0.1 modulation, centered at 3 onsets/s
+    float densityNudge = clampf((onsetDensity_ - 3.0f) * 0.05f, -0.1f, 0.1f);
+    strength += densityNudge;
+
     // Apply activation threshold with soft knee
     if (strength < activationThreshold) {
         strength *= strength / activationThreshold;  // Quadratic falloff below threshold
     }
 
     control_.rhythmStrength = clampf(strength, 0.0f, 1.0f);
+}
+
+void AudioController::updateOnsetDensity(uint32_t nowMs) {
+    // Update every 1 second
+    uint32_t elapsed = nowMs - onsetDensityWindowStart_;
+    if (elapsed >= 1000) {
+        float rawDensity = (float)onsetCountInWindow_ * (1000.0f / (float)elapsed);
+        // EMA: 70/30 blend (matches periodicityStrength_ pattern)
+        onsetDensity_ = onsetDensity_ * 0.7f + rawDensity * 0.3f;
+        onsetCountInWindow_ = 0;
+        onsetDensityWindowStart_ = nowMs;
+    }
+    control_.onsetDensity = onsetDensity_;
 }
 
 // ============================================================================

@@ -627,6 +627,9 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             Serial.println(audio.energy, 2);
             Serial.print(F("Pulse: "));
             Serial.println(audio.pulse, 2);
+            Serial.print(F("Onset Density: "));
+            Serial.print(audio.onsetDensity, 1);
+            Serial.println(F(" /s"));
             Serial.print(F("BPM Range: "));
             Serial.print(audioCtrl_->getBpmMin(), 0);
             Serial.print(F("-"));
@@ -1349,11 +1352,12 @@ void SerialConsole::streamTick() {
         Serial.print(F("}"));
 
         // AudioController telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
         // conf = CBSS confidence, bc = beat count, q = beat event (phase wrap)
         // e = energy, p = pulse, cb = CBSS value, oss = onset strength
         // ttb = frames until next beat, bp = last beat was predicted (1) vs fallback (0)
+        // od = onset density (onsets/second, EMA smoothed)
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
 
@@ -1389,6 +1393,8 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getTimeToNextBeat());
             Serial.print(F(",\"bp\":"));
             Serial.print(audioCtrl_->wasLastBeatPredicted() ? 1 : 0);
+            Serial.print(F(",\"od\":"));
+            Serial.print(audioCtrl_->getOnsetDensity(), 1);
 
             // Debug mode: add internal state for tuning
             if (streamDebug_) {
@@ -2373,6 +2379,9 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.println(audioCtrl_->getPeriodicityStrength(), 3);
         Serial.print(F("Stability: "));
         Serial.println(audioCtrl_->getBeatStability(), 3);
+        Serial.print(F("Onset Density: "));
+        Serial.print(audioCtrl_->getOnsetDensity(), 1);
+        Serial.println(F(" /s"));
         Serial.println();
         return true;
     }
@@ -2399,6 +2408,8 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getCbssConfidence(), 3);
         Serial.print(F(",\"beatCount\":"));
         Serial.print(audioCtrl_->getBeatCount());
+        Serial.print(F(",\"onsetDensity\":"));
+        Serial.print(audioCtrl_->getOnsetDensity(), 1);
         Serial.println(F("}"));
         return true;
     }

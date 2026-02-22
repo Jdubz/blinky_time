@@ -5,14 +5,14 @@
 /**
  * AudioControl - Unified audio control signal for visual generators
  *
- * Synthesizes all audio analysis into 4 simple parameters.
+ * Synthesizes all audio analysis into 5 simple parameters.
  * Generators receive this struct and don't need to know about:
  * - Microphone processing
  * - FFT/spectral analysis
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 20 bytes (4 floats + 1 bool + 3 bytes padding)
+ * Memory: 24 bytes (5 floats + 1 bool + 3 bytes padding)
  */
 struct AudioControl {
     // === ENERGY ===
@@ -41,6 +41,12 @@ struct AudioControl {
     // 1.0 = strong rhythm locked (use beat-synced behavior)
     // Use for: Choosing between music mode vs organic mode behavior
     float rhythmStrength = 0.0f;
+
+    // === ONSET DENSITY ===
+    // Smoothed onsets per second (EMA, typical range 0-10+)
+    // Dance music: 2-6/s, ambient: 0-1/s, complex: 4-10/s
+    // Use for: Content classification, organic/music mode blending
+    float onsetDensity = 0.0f;
 
     // === LOUD MODE ===
     // True when hardware gain is at minimum and signal is saturated
