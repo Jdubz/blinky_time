@@ -220,7 +220,19 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.harmonicUp2xThresh = 0.5f;      // Half-lag harmonic fix threshold
     data_.music.harmonicUp32Thresh = 0.6f;      // 2/3-lag harmonic fix threshold
     data_.music.peakMinCorrelation = 0.3f;      // Min normalized correlation for peak
+    data_.music.combCrossValMinConf = 0.3f;    // Comb cross-val min confidence
+    data_.music.combCrossValMinCorr = 0.5f;    // Comb cross-val min autocorr fraction
     data_.music.odfSmoothWidth = 5;             // ODF smooth window (odd, 3-11)
+    data_.music.hpsEnabled = false;              // HPS additive enhancement (disabled: hurts goa-mantra)
+    data_.music.pulseTrainEnabled = false;       // Pulse train evaluation (disabled: hurts trance/goa)
+    data_.music.pulseTrainCandidates = 5;        // 5 candidates (2-10)
+    data_.music.ioiEnabled = true;               // IOI histogram cross-validation (enabled by default)
+    data_.music.ioiMinPeakRatio = 2.0f;          // Peak must be 2x mean to be "clear"
+    data_.music.ioiMinAutocorr = 0.15f;          // Min autocorr at IOI lag as fraction of best
+    data_.music.odfMeanSubEnabled = true;        // ODF mean subtraction (BTrack-style detrending)
+    data_.music.ftEnabled = true;                // Fourier tempogram cross-validation
+    data_.music.ftMinMagnitudeRatio = 1.5f;      // FT peak must be 1.5x mean magnitude
+    data_.music.ftMinAutocorr = 0.15f;           // Min autocorr at FT lag as fraction of best
 
     data_.brightness = 100;
 }
@@ -475,11 +487,24 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.harmonicUp2xThresh, 0.1f, 0.95f, F("harmonicUp2xThresh"));
     validateFloat(data_.music.harmonicUp32Thresh, 0.1f, 0.95f, F("harmonicUp32Thresh"));
     validateFloat(data_.music.peakMinCorrelation, 0.05f, 0.8f, F("peakMinCorrelation"));
+    validateFloat(data_.music.combCrossValMinConf, 0.1f, 0.8f, F("combCrossValMinConf"));
+    validateFloat(data_.music.combCrossValMinCorr, 0.05f, 0.5f, F("combCrossValMinCorr"));
     if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
         SerialConsole::logWarn(F("Invalid odfSmoothWidth, using default"));
         data_.music.odfSmoothWidth = 5;
         corrupt = true;
     }
+    // hpsEnabled, pulseTrainEnabled, ioiEnabled are bools — no range validation needed
+    if (data_.music.pulseTrainCandidates < 2 || data_.music.pulseTrainCandidates > 10) {
+        SerialConsole::logWarn(F("Invalid pulseTrainCandidates, using default"));
+        data_.music.pulseTrainCandidates = 5;
+        corrupt = true;
+    }
+    validateFloat(data_.music.ioiMinPeakRatio, 1.5f, 5.0f, F("ioiMinPeakRatio"));
+    validateFloat(data_.music.ioiMinAutocorr, 0.05f, 0.5f, F("ioiMinAutocorr"));
+    // odfMeanSubEnabled, ftEnabled are bools — no range validation needed
+    validateFloat(data_.music.ftMinMagnitudeRatio, 1.2f, 5.0f, F("ftMinMagnitudeRatio"));
+    validateFloat(data_.music.ftMinAutocorr, 0.05f, 0.5f, F("ftMinAutocorr"));
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
@@ -632,7 +657,19 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->harmonicUp2xThresh = data_.music.harmonicUp2xThresh;
         audioCtrl->harmonicUp32Thresh = data_.music.harmonicUp32Thresh;
         audioCtrl->peakMinCorrelation = data_.music.peakMinCorrelation;
+        audioCtrl->combCrossValMinConf = data_.music.combCrossValMinConf;
+        audioCtrl->combCrossValMinCorr = data_.music.combCrossValMinCorr;
         audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
+        audioCtrl->hpsEnabled = data_.music.hpsEnabled;
+        audioCtrl->pulseTrainEnabled = data_.music.pulseTrainEnabled;
+        audioCtrl->pulseTrainCandidates = data_.music.pulseTrainCandidates;
+        audioCtrl->ioiEnabled = data_.music.ioiEnabled;
+        audioCtrl->ioiMinPeakRatio = data_.music.ioiMinPeakRatio;
+        audioCtrl->ioiMinAutocorr = data_.music.ioiMinAutocorr;
+        audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
+        audioCtrl->ftEnabled = data_.music.ftEnabled;
+        audioCtrl->ftMinMagnitudeRatio = data_.music.ftMinMagnitudeRatio;
+        audioCtrl->ftMinAutocorr = data_.music.ftMinAutocorr;
     }
 }
 
@@ -770,7 +807,19 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.harmonicUp2xThresh = audioCtrl->harmonicUp2xThresh;
         data_.music.harmonicUp32Thresh = audioCtrl->harmonicUp32Thresh;
         data_.music.peakMinCorrelation = audioCtrl->peakMinCorrelation;
+        data_.music.combCrossValMinConf = audioCtrl->combCrossValMinConf;
+        data_.music.combCrossValMinCorr = audioCtrl->combCrossValMinCorr;
         data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
+        data_.music.hpsEnabled = audioCtrl->hpsEnabled;
+        data_.music.pulseTrainEnabled = audioCtrl->pulseTrainEnabled;
+        data_.music.pulseTrainCandidates = audioCtrl->pulseTrainCandidates;
+        data_.music.ioiEnabled = audioCtrl->ioiEnabled;
+        data_.music.ioiMinPeakRatio = audioCtrl->ioiMinPeakRatio;
+        data_.music.ioiMinAutocorr = audioCtrl->ioiMinAutocorr;
+        data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
+        data_.music.ftEnabled = audioCtrl->ftEnabled;
+        data_.music.ftMinMagnitudeRatio = audioCtrl->ftMinMagnitudeRatio;
+        data_.music.ftMinAutocorr = audioCtrl->ftMinAutocorr;
     }
 
     saveToFlash();

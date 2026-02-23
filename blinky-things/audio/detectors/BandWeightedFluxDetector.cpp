@@ -2,8 +2,9 @@
 #include <math.h>
 
 BandWeightedFluxDetector::BandWeightedFluxDetector()
-    : prevCombinedFlux_(0.0f)
-    , hasPrevFrame_(false)
+    : historyCount_(0)
+    , diffFrames_(1)
+    , prevCombinedFlux_(0.0f)
     , bassFlux_(0.0f)
     , midFlux_(0.0f)
     , highFlux_(0.0f)
@@ -20,18 +21,19 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , crestGate_(0.0f)
     , confirmFrames_(3)
     , maxBin_(64)
+    , perBandThreshEnabled_(false)
+    , perBandBassThreshMult_(1.5f)
     , confirmCountdown_(0)
     , candidateFlux_(0.0f)
     , minFluxDuringWindow_(0.0f)
     , cachedResult_(DetectionResult::none())
+    , averageBassFlux_(0.0f)
+    , averageMidFlux_(0.0f)
 {
-    for (int i = 0; i < MAX_STORED_BINS; i++) {
-        prevLogMag_[i] = 0.0f;
-    }
+    memset(historyLogMag_, 0, sizeof(historyLogMag_));
 }
 
 void BandWeightedFluxDetector::resetImpl() {
-    hasPrevFrame_ = false;
     prevCombinedFlux_ = 0.0f;
     bassFlux_ = 0.0f;
     midFlux_ = 0.0f;
@@ -42,10 +44,11 @@ void BandWeightedFluxDetector::resetImpl() {
     confirmCountdown_ = 0;
     candidateFlux_ = 0.0f;
     minFluxDuringWindow_ = 0.0f;
+    averageBassFlux_ = 0.0f;
+    averageMidFlux_ = 0.0f;
+    historyCount_ = 0;
 
-    for (int i = 0; i < MAX_STORED_BINS; i++) {
-        prevLogMag_[i] = 0.0f;
-    }
+    memset(historyLogMag_, 0, sizeof(historyLogMag_));
 }
 
 DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float dt) {
@@ -68,21 +71,20 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         logMag[k] = fastLog1p(gamma_ * magnitudes[k]);
     }
 
-    // If no previous frame, store as reference and return
-    if (!hasPrevFrame_) {
-        for (int k = 0; k < effectiveMax; k++) {
-            prevLogMag_[k] = logMag[k];
-        }
-        hasPrevFrame_ = true;
+    // If no history frames yet, store and return
+    if (historyCount_ == 0) {
+        updatePrevFrameState(logMag, effectiveMax);
         return DetectionResult::none();
     }
 
     // Step 2: Build 3-bin max-filtered reference (SuperFlux vibrato suppression)
+    // Uses diffFrames_ to look back N frames (default 1 = previous frame)
+    const float* refFrame = getReferenceFrame();
     float maxRef[MAX_STORED_BINS] = {0};
     for (int k = 0; k < effectiveMax; k++) {
-        float left  = (k > 0) ? prevLogMag_[k - 1] : prevLogMag_[k];
-        float center = prevLogMag_[k];
-        float right = (k < effectiveMax - 1) ? prevLogMag_[k + 1] : prevLogMag_[k];
+        float left  = (k > 0) ? refFrame[k - 1] : refFrame[k];
+        float center = refFrame[k];
+        float right = (k < effectiveMax - 1) ? refFrame[k + 1] : refFrame[k];
         maxRef[k] = maxf(maxf(left, center), right);
     }
 
@@ -100,8 +102,16 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     if (frameCount_ < 10) {
         // Cold start: fast adaptation
         averageFlux_ += 0.2f * (combinedFlux_ - averageFlux_);
+        if (perBandThreshEnabled_) {
+            averageBassFlux_ += 0.2f * (bassFlux_ - averageBassFlux_);
+            averageMidFlux_ += 0.2f * (midFlux_ - averageMidFlux_);
+        }
     } else {
         averageFlux_ += 0.02f * (combinedFlux_ - averageFlux_);
+        if (perBandThreshEnabled_) {
+            averageBassFlux_ += 0.02f * (bassFlux_ - averageBassFlux_);
+            averageMidFlux_ += 0.02f * (midFlux_ - averageMidFlux_);
+        }
     }
 
     // Step 5: Additive threshold = mean + delta
@@ -144,8 +154,18 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     // Suppress if ONLY the high band has flux (no bass or mid energy)
     bool hiHatOnly = (highFlux_ > 0.01f) && (bassFlux_ < 0.005f) && (midFlux_ < 0.005f);
 
-    // Detection
+    // Detection: combined flux exceeds threshold
     bool detected = (combinedFlux_ > effectiveThreshold) && !hiHatOnly;
+
+    // Per-band independent detection: bass or mid alone exceeds its own threshold
+    // Catches kicks hidden in combined flux when mid/high are quiet
+    if (!detected && perBandThreshEnabled_ && !hiHatOnly) {
+        float bassThresh = averageBassFlux_ + config_.threshold * perBandBassThreshMult_;
+        float midThresh = averageMidFlux_ + config_.threshold * perBandBassThreshMult_;
+        if (bassFlux_ > bassThresh || midFlux_ > midThresh) {
+            detected = true;
+        }
+    }
 
     // Step 7: Onset sharpness gate — reject slow-rising signals (pads, swells)
     // Kicks jump from ~0 to 2+ in one frame; pads rise 0.01-0.1 per frame
@@ -228,9 +248,36 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
 void BandWeightedFluxDetector::updatePrevFrameState(const float* logMag, int effectiveMax) {
     prevCombinedFlux_ = combinedFlux_;
-    for (int k = 0; k < effectiveMax; k++) {
-        prevLogMag_[k] = logMag[k];
+
+    // Shift history: move each frame back one slot (newest→oldest)
+    // Frame 0 = most recent, frame 1 = one before, etc.
+    for (int f = MAX_HISTORY_FRAMES - 1; f > 0; f--) {
+        memcpy(historyLogMag_[f], historyLogMag_[f - 1], sizeof(float) * MAX_STORED_BINS);
     }
+
+    // Store current frame as most recent history
+    for (int k = 0; k < effectiveMax; k++) {
+        historyLogMag_[0][k] = logMag[k];
+    }
+    // Zero remaining bins
+    for (int k = effectiveMax; k < MAX_STORED_BINS; k++) {
+        historyLogMag_[0][k] = 0.0f;
+    }
+
+    if (historyCount_ < MAX_HISTORY_FRAMES) {
+        historyCount_++;
+    }
+}
+
+const float* BandWeightedFluxDetector::getReferenceFrame() const {
+    // diffFrames_=1 means previous frame (index 0), =2 means two ago (index 1), etc.
+    // Clamp to available history
+    int idx = diffFrames_ - 1;
+    if (idx >= historyCount_) {
+        idx = historyCount_ - 1;
+    }
+    if (idx < 0) idx = 0;
+    return historyLogMag_[idx];
 }
 
 void BandWeightedFluxDetector::computeBandFlux(const float* logMag, const float* maxRef, int numBins) {

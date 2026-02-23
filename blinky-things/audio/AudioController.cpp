@@ -102,6 +102,12 @@ bool AudioController::begin(uint32_t sampleRate) {
     onsetCountInWindow_ = 0;
     onsetDensityWindowStart_ = 0;
 
+    // Reset IOI onset buffer
+    for (int i = 0; i < IOI_ONSET_BUFFER_SIZE; i++) ioiOnsetSamples_[i] = 0;
+    ioiOnsetWriteIdx_ = 0;
+    ioiOnsetCount_ = 0;
+    lastFtMagRatio_ = 0.0f;
+
     // Initialize and reset comb filter bank
     // Uses 60 Hz frame rate assumption (same as OSS buffer)
     combFilterBank_.init(60.0f);
@@ -180,6 +186,13 @@ const AudioControl& AudioController::update(float dt) {
     //     This corrects cumulative drift from small BPM errors.
     if (lastEnsembleOutput_.transientStrength > 0.0f) {
         lastTransientSample_ = sampleCounter_;
+
+        // Record onset in IOI ring buffer for inter-onset interval analysis
+        if (ioiEnabled) {
+            ioiOnsetSamples_[ioiOnsetWriteIdx_] = sampleCounter_;
+            ioiOnsetWriteIdx_ = (ioiOnsetWriteIdx_ + 1) % IOI_ONSET_BUFFER_SIZE;
+            if (ioiOnsetCount_ < IOI_ONSET_BUFFER_SIZE) ioiOnsetCount_++;
+        }
 
         if (phaseCorrectionStrength > 0.0f && beatCount_ > 2 && beatPeriodSamples_ >= 10) {
             int T = beatPeriodSamples_;
@@ -433,6 +446,22 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float maxCorrelation = 0.0f;
     int bestLag = minLag;  // FIX: Initialize to valid lag, not 0
 
+    // ODF mean subtraction (BTrack-style detrending)
+    // Removes DC bias from autocorrelation — without this, all lags appear
+    // somewhat correlated due to the non-zero mean of the OSS buffer.
+    float ossMean = 0.0f;
+    if (odfMeanSubEnabled) {
+        for (int i = 0; i < ossCount_; i++) {
+            int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+            ossMean += ossBuffer_[idx];
+        }
+        ossMean /= static_cast<float>(ossCount_);
+        // Adjust signalEnergy to variance: sum((x-mean)^2) = sum(x^2) - N*mean^2
+        // This keeps normalization consistent with the mean-subtracted autocorrelation.
+        signalEnergy -= static_cast<float>(ossCount_) * ossMean * ossMean;
+        if (signalEnergy < 0.001f) signalEnergy = 0.001f;  // Guard against floating-point undershoot
+    }
+
     for (int lag = minLag; lag <= maxLag && (lag - minLag) < 200; lag++) {
         float correlation = 0.0f;
         int count = ossCount_ - lag;
@@ -443,7 +472,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         for (int i = 0; i < count; i++) {
             int idx1 = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
             int idx2 = (ossWriteIdx_ - 1 - i - lag + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-            correlation += ossBuffer_[idx1] * ossBuffer_[idx2];
+            correlation += (ossBuffer_[idx1] - ossMean) * (ossBuffer_[idx2] - ossMean);
         }
 
         correlation /= static_cast<float>(count);
@@ -463,10 +492,32 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
+    // === HARMONIC PRODUCT SPECTRUM (additive enhancement) ===
+    // Percival-style: add sub-harmonic energy to each lag BEFORE peak extraction.
+    // Peaks at the true beat period have strong autocorrelation at 2x their lag
+    // (every 2 beats), so additive enhancement boosts them. False harmonic peaks
+    // lack this support and are NOT boosted (but never penalized).
+    // Process forward (i=0..half): safe because we read from i*2 > i.
+    if (hpsEnabled) {
+        int halfSize = correlationSize / 2;
+        for (int i = 0; i < halfSize; i++) {
+            correlationAtLag[i] += correlationAtLag[i * 2];
+        }
+    }
+
     // === PEAK EXTRACTION (find best tempo peak) ===
-    // Apply tempo prior to find the strongest prior-weighted peak
+    // Apply tempo prior to find the strongest peak (HPS already applied above)
+    // Also collect top N candidates for pulse train evaluation
     float bestWeightedCorr = 0.0f;
     int bestWeightedLag = bestLag;
+
+    // Candidate collection for pulse train evaluation
+    static constexpr int MAX_PT_SLOTS = 10;
+    static constexpr int MIN_PT_LAG_SEP = 3;  // Prevent clustering of nearby lags
+    struct { int lag; float score; } ptCandidates[MAX_PT_SLOTS];
+    int numPtCandidates = 0;
+    int maxPtCandidates = (pulseTrainEnabled && pulseTrainCandidates >= 2) ?
+        (pulseTrainCandidates < MAX_PT_SLOTS ? pulseTrainCandidates : MAX_PT_SLOTS) : 0;
 
     for (int lag = minLag; lag <= maxLag && (lag - minLag) < correlationSize; lag++) {
         int lagIdx = lag - minLag;
@@ -480,21 +531,83 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         float lagBpm = 60000.0f / (static_cast<float>(lag) / samplesPerMs);
         lagBpm = clampf(lagBpm, bpmMin, bpmMax);
         float priorWeight = computeTempoPrior(lagBpm);
+
         float weightedCorr = normCorr * priorWeight;
 
+        // Track overall best
         if (weightedCorr > bestWeightedCorr) {
             bestWeightedCorr = weightedCorr;
             bestWeightedLag = lag;
             lastTempoPriorWeight_ = priorWeight;
         }
+
+        // Collect diverse candidates for pulse train evaluation
+        if (maxPtCandidates > 0) {
+            // Check if too close to an existing candidate
+            bool merged = false;
+            for (int c = 0; c < numPtCandidates; c++) {
+                int dist = lag - ptCandidates[c].lag;
+                if (dist < 0) dist = -dist;
+                if (dist <= MIN_PT_LAG_SEP) {
+                    if (weightedCorr > ptCandidates[c].score) {
+                        ptCandidates[c].lag = lag;
+                        ptCandidates[c].score = weightedCorr;
+                    }
+                    merged = true;
+                    break;
+                }
+            }
+            if (!merged) {
+                if (numPtCandidates < maxPtCandidates) {
+                    ptCandidates[numPtCandidates].lag = lag;
+                    ptCandidates[numPtCandidates].score = weightedCorr;
+                    numPtCandidates++;
+                } else {
+                    // Replace weakest candidate if current is stronger
+                    int weakest = 0;
+                    for (int c = 1; c < numPtCandidates; c++) {
+                        if (ptCandidates[c].score < ptCandidates[weakest].score)
+                            weakest = c;
+                    }
+                    if (weightedCorr > ptCandidates[weakest].score) {
+                        ptCandidates[weakest].lag = lag;
+                        ptCandidates[weakest].score = weightedCorr;
+                    }
+                }
+            }
+        }
     }
 
-    // === HARMONIC DISAMBIGUATION ===
-    // Check multiple harmonic ratios to avoid sub-harmonic locking.
-    // Beat trackers should prefer FASTER tempos when correlation is strong,
-    // because sub-harmonics always exist (beats repeat at T, 2T, 3T...)
-    // but the fundamental is unique.
-    if (tempoPriorEnabled) {
+    // === PULSE TRAIN EVALUATION (Percival & Tzanetakis 2014) ===
+    // When enabled with enough candidates, re-ranks by actual onset alignment.
+    // Replaces harmonic disambiguation because the pulse train template already
+    // incorporates 2x and 3/2x harmonic support in its scoring.
+    // Guard: require enough data to evaluate the autocorrelation winner (4 beat cycles).
+    // Without this, startup with limited data skips slow candidates and falsely picks fast tempos.
+    bool pulseTrainActive = pulseTrainEnabled && numPtCandidates > 1 && ossCount_ >= bestWeightedLag * 4;
+    if (pulseTrainActive) {
+        int ptLags[MAX_PT_SLOTS];
+        float ptScores[MAX_PT_SLOTS];
+        for (int c = 0; c < numPtCandidates; c++) {
+            ptLags[c] = ptCandidates[c].lag;
+            ptScores[c] = ptCandidates[c].score;
+        }
+
+        int ptWinner = evaluatePulseTrains(ptLags, ptScores, numPtCandidates, samplesPerMs, shouldPrintDebug);
+        if (ptWinner > 0) {
+            bestWeightedLag = ptWinner;
+            // Update bestWeightedCorr for the new winner so downstream
+            // checks (comb bank cross-validation) use the correct threshold
+            int winIdx = ptWinner - minLag;
+            if (winIdx >= 0 && winIdx < correlationSize) {
+                float winCorr = correlationAtLag[winIdx] / (avgEnergy + 0.001f);
+                float winBpm = 60000.0f / (static_cast<float>(ptWinner) / samplesPerMs);
+                bestWeightedCorr = winCorr * computeTempoPrior(clampf(winBpm, bpmMin, bpmMax));
+            }
+        }
+    } else if (tempoPriorEnabled) {
+        // === HARMONIC DISAMBIGUATION (fallback when pulse train disabled) ===
+        // Check multiple harmonic ratios to avoid sub-harmonic locking.
         float currentBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
 
         // Check half-lag (2x BPM) — prefer faster tempo if strong
@@ -507,8 +620,6 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
                 float priorCurrent = computeTempoPrior(currentBpm);
                 float priorHalf = computeTempoPrior(halfBpm);
 
-                // Prefer faster tempo if correlation exceeds threshold
-                // and prior doesn't strongly oppose it
                 if (halfCorr > bestWeightedCorr * harmonicUp2xThresh && priorHalf >= priorCurrent * 0.85f) {
                     if (shouldPrintDebug) {
                         Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"up\",\"from\":"));
@@ -533,7 +644,6 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
                 float priorCurrent = computeTempoPrior(currentBpm);
                 float priorTT = computeTempoPrior(ttBpm);
 
-                // Prefer 3/2x tempo if correlation exceeds threshold and prior supports it
                 if (ttCorr > bestWeightedCorr * harmonicUp32Thresh && priorTT >= priorCurrent * 0.90f) {
                     if (shouldPrintDebug) {
                         Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"up3/2\",\"from\":"));
@@ -572,6 +682,140 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         }
     }
 
+    // === COMB BANK CROSS-VALIDATION ===
+    // If the comb bank (independent, no prior) disagrees with autocorrelation,
+    // check if autocorrelation has evidence at the comb bank's suggested tempo.
+    // This catches non-harmonic locking where autocorr picks a spurious peak.
+    if (combBankEnabled && combFilterBank_.getPeakConfidence() > combCrossValMinConf) {
+        float combBpm = combFilterBank_.getPeakBPM();
+        float autoBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
+
+        // Only intervene when they disagree by >10%
+        float disagreement = fabsf(combBpm - autoBpm) / autoBpm;
+        if (disagreement > 0.1f) {
+            // Convert comb BPM to autocorrelation lag
+            int combLag = static_cast<int>(60000.0f / combBpm * samplesPerMs + 0.5f);
+
+            // Check if autocorrelation has evidence at this lag
+            if (combLag >= minLag && combLag <= maxLag) {
+                int combIdx = combLag - minLag;
+                if (combIdx >= 0 && combIdx < correlationSize) {
+                    float combCorr = correlationAtLag[combIdx] / (avgEnergy + 0.001f);
+
+                    // Accept if autocorr at comb lag exceeds threshold of best
+                    if (combCorr > bestWeightedCorr * combCrossValMinCorr) {
+                        if (shouldPrintDebug) {
+                            Serial.print(F("{\"type\":\"COMB_XVAL\",\"from\":"));
+                            Serial.print(autoBpm, 1);
+                            Serial.print(F(",\"to\":"));
+                            Serial.print(combBpm, 1);
+                            Serial.print(F(",\"combConf\":"));
+                            Serial.print(combFilterBank_.getPeakConfidence(), 2);
+                            Serial.print(F(",\"combCorr\":"));
+                            Serial.print(combCorr, 3);
+                            Serial.println(F("}"));
+                        }
+                        bestWeightedLag = combLag;
+                    }
+                }
+            }
+        }
+    }
+
+    // === IOI HISTOGRAM CROSS-VALIDATION ===
+    // Measures actual time intervals between detected onset events (kicks/snares).
+    // If IOI histogram has a clear peak at a FASTER tempo AND autocorrelation
+    // has some evidence at that lag, switch to it.
+    // UPWARD ONLY: Sub-harmonic locking (BPM too low) is the primary failure mode.
+    // Allowing downward correction caused regressions (machine-drum 118→96 BPM)
+    // because noisy transient intervals cluster at slower tempos.
+    float ioiPeakBpm = 0.0f;  // For debug output
+    if (ioiEnabled && ioiOnsetCount_ >= 8) {
+        int ioiLag = computeIOIPeakLag(minLag, maxLag);
+        if (ioiLag > 0) {
+            ioiPeakBpm = 60000.0f / (static_cast<float>(ioiLag) / samplesPerMs);
+            float autoBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
+
+            // Only intervene when IOI suggests FASTER tempo (shorter lag) by >10%
+            // Blocks downward corrections which amplify sub-harmonic locking
+            if (ioiPeakBpm > autoBpm * 1.1f) {
+                int ioiIdx = ioiLag - minLag;
+                if (ioiIdx >= 0 && ioiIdx < correlationSize) {
+                    float ioiCorr = correlationAtLag[ioiIdx] / (avgEnergy + 0.001f);
+
+                    // Accept if autocorr at IOI lag exceeds threshold of best
+                    if (ioiCorr > bestWeightedCorr * ioiMinAutocorr) {
+                        if (shouldPrintDebug) {
+                            Serial.print(F("{\"type\":\"IOI_XVAL\",\"from\":"));
+                            Serial.print(autoBpm, 1);
+                            Serial.print(F(",\"to\":"));
+                            Serial.print(ioiPeakBpm, 1);
+                            Serial.print(F(",\"ioiCorr\":"));
+                            Serial.print(ioiCorr, 3);
+                            Serial.print(F(",\"onsets\":"));
+                            Serial.print(ioiOnsetCount_);
+                            Serial.println(F("}"));
+                        }
+                        bestWeightedLag = ioiLag;
+                    } else if (shouldPrintDebug) {
+                        // Near-miss: IOI had a candidate but autocorr evidence too weak
+                        Serial.print(F("{\"type\":\"IOI_MISS\",\"bpm\":"));
+                        Serial.print(ioiPeakBpm, 1);
+                        Serial.print(F(",\"corr\":"));
+                        Serial.print(ioiCorr, 3);
+                        Serial.print(F(",\"need\":"));
+                        Serial.print(bestWeightedCorr * ioiMinAutocorr, 3);
+                        Serial.println(F("}"));
+                    }
+                }
+            }
+        }
+    }
+
+    // === FOURIER TEMPOGRAM CROSS-VALIDATION ===
+    // DFT of OSS buffer suppresses sub-harmonics (unlike autocorrelation which creates them).
+    // A 143 BPM signal shows peaks at 143, 286 BPM but NEVER at 72 BPM.
+    // Uses Goertzel algorithm for efficient single-frequency magnitude computation.
+    float ftPeakBpm = 0.0f;  // For debug output
+    if (ftEnabled && ossCount_ >= 60) {
+        int ftLag = computeFourierTempogramPeakLag(minLag, maxLag);
+        if (ftLag > 0) {
+            ftPeakBpm = 60000.0f / (static_cast<float>(ftLag) / samplesPerMs);
+            float autoBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
+
+            // Only intervene when FT disagrees with autocorrelation by >10%
+            if (fabsf(ftPeakBpm - autoBpm) / autoBpm > 0.1f) {
+                int ftIdx = ftLag - minLag;
+                if (ftIdx >= 0 && ftIdx < correlationSize) {
+                    float ftCorr = correlationAtLag[ftIdx] / (avgEnergy + 0.001f);
+
+                    // Accept if autocorrelation has some evidence at FT lag
+                    if (ftCorr > bestWeightedCorr * ftMinAutocorr) {
+                        if (shouldPrintDebug) {
+                            Serial.print(F("{\"type\":\"FT_XVAL\",\"from\":"));
+                            Serial.print(autoBpm, 1);
+                            Serial.print(F(",\"to\":"));
+                            Serial.print(ftPeakBpm, 1);
+                            Serial.print(F(",\"ftCorr\":"));
+                            Serial.print(ftCorr, 3);
+                            Serial.println(F("}"));
+                        }
+                        bestWeightedLag = ftLag;
+                    } else if (shouldPrintDebug) {
+                        // Near-miss: FT had a candidate but autocorr evidence too weak
+                        Serial.print(F("{\"type\":\"FT_MISS\",\"bpm\":"));
+                        Serial.print(ftPeakBpm, 1);
+                        Serial.print(F(",\"corr\":"));
+                        Serial.print(ftCorr, 3);
+                        Serial.print(F(",\"need\":"));
+                        Serial.print(bestWeightedCorr * ftMinAutocorr, 3);
+                        Serial.println(F("}"));
+                    }
+                }
+            }
+        }
+    }
+
     // DEBUG: Print correlation results (only when debug enabled)
     if (shouldPrintDebug) {
         float detectedBpm = (bestWeightedLag > 0) ? 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs) : 0.0f;
@@ -585,6 +829,20 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         Serial.print(newStrength, 3);
         Serial.print(F(",\"bpm\":"));
         Serial.print(detectedBpm, 1);
+        Serial.print(F(",\"hps\":"));
+        Serial.print(hpsEnabled ? 1 : 0);
+        Serial.print(F(",\"pt\":"));
+        Serial.print(pulseTrainActive ? 1 : 0);
+        Serial.print(F(",\"ioi\":"));
+        Serial.print(ioiPeakBpm, 1);
+        Serial.print(F(",\"ic\":"));
+        Serial.print(ioiOnsetCount_);
+        Serial.print(F(",\"ft\":"));
+        Serial.print(ftPeakBpm, 1);
+        Serial.print(F(",\"ftr\":"));
+        Serial.print(lastFtMagRatio_, 2);
+        Serial.print(F(",\"ms\":"));
+        Serial.print(odfMeanSubEnabled ? 1 : 0);
         Serial.println(F("}"));
     }
 
@@ -647,6 +905,147 @@ float AudioController::smoothOnsetStrength(float raw) {
     float sum = 0.0f;
     for (int i = 0; i < width; i++) sum += odfSmoothBuffer_[i];
     return sum / width;
+}
+
+// ===== FOURIER TEMPOGRAM CROSS-VALIDATION =====
+
+int AudioController::computeFourierTempogramPeakLag(int minLag, int maxLag) {
+    if (ossCount_ < 60) return 0;  // Need at least 1s of data
+
+    int bestLag = 0;
+    float bestMagSq = 0.0f;
+    float sumMagSq = 0.0f;
+    int numEvals = 0;
+
+    // Compute OSS mean for detrending (removes DC from DFT)
+    float mean = 0.0f;
+    for (int i = 0; i < ossCount_; i++) {
+        int idx = (ossWriteIdx_ - ossCount_ + i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+        mean += ossBuffer_[idx];
+    }
+    mean /= static_cast<float>(ossCount_);
+
+    // Evaluate Goertzel at each candidate lag
+    // For lag L: frequency = 1/L cycles per sample, coeff = 2*cos(2*pi/L)
+    for (int lag = minLag; lag <= maxLag; lag++) {
+        float omega = 2.0f * 3.14159265f / static_cast<float>(lag);
+        float coeff = 2.0f * cosf(omega);
+
+        float s1 = 0.0f, s2 = 0.0f;
+
+        // Process OSS buffer in chronological order (mean-subtracted)
+        for (int i = 0; i < ossCount_; i++) {
+            int idx = (ossWriteIdx_ - ossCount_ + i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+            float s0 = (ossBuffer_[idx] - mean) + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+
+        // Goertzel magnitude squared: |X(k)|^2 = s1^2 + s2^2 - coeff*s1*s2
+        float magSq = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+
+        sumMagSq += magSq;
+        numEvals++;
+
+        if (magSq > bestMagSq) {
+            bestMagSq = magSq;
+            bestLag = lag;
+        }
+    }
+
+    // Require peak to be significantly above mean
+    if (numEvals < 5) { lastFtMagRatio_ = 0.0f; return 0; }
+    float meanMagSq = sumMagSq / static_cast<float>(numEvals);
+    if (meanMagSq < 1e-10f) { lastFtMagRatio_ = 0.0f; return 0; }
+
+    // Store magnitude ratio for debug: sqrt(bestMagSq/meanMagSq)
+    lastFtMagRatio_ = sqrtf(bestMagSq / meanMagSq);
+
+    // Compare magnitude (not squared): peak_mag > ratio * mean_mag
+    // Equivalent: peak_magSq > ratio^2 * mean_magSq
+    float ratioSq = ftMinMagnitudeRatio * ftMinMagnitudeRatio;
+    if (bestMagSq < ratioSq * meanMagSq) return 0;
+
+    return bestLag;
+}
+
+// ===== IOI HISTOGRAM CROSS-VALIDATION =====
+
+int AudioController::computeIOIPeakLag(int minLag, int maxLag) {
+    if (ioiOnsetCount_ < 8) return 0;
+
+    // Stack histogram matching autocorrelation range
+    int histSize = maxLag - minLag + 1;
+    if (histSize > 200) histSize = 200;
+    int histogram[200] = {0};
+
+    // Iterate over all onset pairs to compute inter-onset intervals
+    // Onsets are stored in a ring buffer; read them newest-first
+    int n = ioiOnsetCount_;
+    for (int i = 0; i < n; i++) {
+        int idxI = (ioiOnsetWriteIdx_ - 1 - i + IOI_ONSET_BUFFER_SIZE) % IOI_ONSET_BUFFER_SIZE;
+        int sampleI = ioiOnsetSamples_[idxI];
+
+        for (int j = i + 1; j < n; j++) {
+            int idxJ = (ioiOnsetWriteIdx_ - 1 - j + IOI_ONSET_BUFFER_SIZE) % IOI_ONSET_BUFFER_SIZE;
+            int sampleJ = ioiOnsetSamples_[idxJ];
+
+            int interval = sampleI - sampleJ;  // Always positive (i is newer)
+            if (interval <= 0) continue;  // Safety check
+
+            // Early exit: if interval exceeds 2x max range, no more useful pairs
+            if (interval > 2 * maxLag) break;
+
+            // Direct match: interval falls in [minLag, maxLag]
+            if (interval >= minLag && interval <= maxLag) {
+                int bin = interval - minLag;
+                if (bin < histSize) histogram[bin]++;
+            }
+
+            // Folded match: interval is ~2x a beat period (skipped beat)
+            // Map to half-interval
+            if (interval >= 2 * minLag && interval <= 2 * maxLag) {
+                int halfInterval = interval / 2;
+                if (halfInterval >= minLag && halfInterval <= maxLag) {
+                    int bin = halfInterval - minLag;
+                    if (bin < histSize) histogram[bin]++;
+                }
+            }
+        }
+    }
+
+    // In-place 3-bin smoothing to cluster jittered intervals (±1 sample tolerance)
+    // Avoids splitting a clear peak across adjacent bins.
+    // Uses lookback variable to avoid a second 800-byte stack array.
+    // Safe because we read histogram[i+1] before overwriting histogram[i].
+    int prev = 0;
+    for (int i = 0; i < histSize; i++) {
+        int curr = histogram[i];
+        int next = (i < histSize - 1) ? histogram[i + 1] : 0;
+        histogram[i] = prev + curr + next;
+        prev = curr;
+    }
+
+    // Find peak and compute mean on smoothed histogram
+    int peakBin = 0;
+    int peakCount = 0;
+    int totalCount = 0;
+    for (int i = 0; i < histSize; i++) {
+        totalCount += histogram[i];
+        if (histogram[i] > peakCount) {
+            peakCount = histogram[i];
+            peakBin = i;
+        }
+    }
+
+    if (totalCount == 0 || peakCount == 0) return 0;
+
+    float mean = static_cast<float>(totalCount) / static_cast<float>(histSize);
+
+    // Peak must be significantly above mean
+    if (mean < 0.001f || static_cast<float>(peakCount) < ioiMinPeakRatio * mean) return 0;
+
+    return peakBin + minLag;
 }
 
 // ===== LOG-GAUSSIAN WEIGHT COMPUTATION =====
@@ -918,6 +1317,120 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
         onsetDensityWindowStart_ = nowMs;
     }
     control_.onsetDensity = onsetDensity_;
+}
+
+// ============================================================================
+// Pulse Train Evaluation (Percival & Tzanetakis 2014)
+// ============================================================================
+
+int AudioController::evaluatePulseTrains(const int* candidateLags, const float* candidateScores,
+                                          int numCandidates, float samplesPerMs, bool debugPrint) {
+    if (numCandidates <= 0) return 0;
+    if (numCandidates == 1) return candidateLags[0];
+
+    static constexpr int MAX_CANDIDATES = 10;
+    if (numCandidates > MAX_CANDIDATES) numCandidates = MAX_CANDIDATES;
+
+    float magScores[MAX_CANDIDATES];
+    float varScores[MAX_CANDIDATES];
+
+    for (int c = 0; c < numCandidates; c++) {
+        int lag = candidateLags[c];
+        magScores[c] = 0.0f;
+        varScores[c] = 0.0f;
+
+        // Need at least 4 beats at fundamental to evaluate
+        if (lag <= 0 || ossCount_ < lag * 4) continue;
+
+        float maxMag = 0.0f;
+        float sumMag = 0.0f;
+        float sumMagSq = 0.0f;
+
+        for (int phase = 0; phase < lag; phase++) {
+            float score = 0.0f;
+
+            for (int b = 0; b < 4; b++) {
+                // Fundamental (weight 1.0)
+                int idx = phase + b * lag;
+                if (idx < ossCount_) {
+                    int bufIdx = (ossWriteIdx_ - ossCount_ + idx + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+                    score += ossBuffer_[bufIdx];
+                }
+
+                // Double period (weight 0.5) — every 2 beats
+                idx = phase + b * lag * 2;
+                if (idx < ossCount_) {
+                    int bufIdx = (ossWriteIdx_ - ossCount_ + idx + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+                    score += 0.5f * ossBuffer_[bufIdx];
+                }
+
+                // 3/2 period (weight 0.5) — compound meter support
+                idx = phase + b * (lag * 3 / 2);
+                if (idx < ossCount_) {
+                    int bufIdx = (ossWriteIdx_ - ossCount_ + idx + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+                    score += 0.5f * ossBuffer_[bufIdx];
+                }
+            }
+
+            if (score > maxMag) maxMag = score;
+            sumMag += score;
+            sumMagSq += score * score;
+        }
+
+        magScores[c] = maxMag;
+
+        // Variance = E[x^2] - E[x]^2 (online, no per-phase allocation needed)
+        float mean = sumMag / static_cast<float>(lag);
+        varScores[c] = (sumMagSq / static_cast<float>(lag)) - (mean * mean);
+        if (varScores[c] < 0.0f) varScores[c] = 0.0f;  // numerical safety
+    }
+
+    // Normalize each score type to sum to 1, then combine (rank-level fusion)
+    // Three signals: onset alignment (mag), phase selectivity (var), autocorrelation+prior (acf)
+    // The autocorrelation score anchors the fusion to the tempo prior, preventing
+    // the pulse train from overriding to sub-harmonics that happen to align with onsets.
+    float sumMag = 0.0f, sumVar = 0.0f, sumAcf = 0.0f;
+    for (int c = 0; c < numCandidates; c++) {
+        sumMag += magScores[c];
+        sumVar += varScores[c];
+        sumAcf += candidateScores[c];
+    }
+    if (sumMag < 1e-9f) sumMag = 1e-9f;
+    if (sumVar < 1e-9f) sumVar = 1e-9f;
+    if (sumAcf < 1e-9f) sumAcf = 1e-9f;
+
+    float bestCombo = -1.0f;
+    int bestIdx = 0;
+    for (int c = 0; c < numCandidates; c++) {
+        float combo = magScores[c] / sumMag + varScores[c] / sumVar + candidateScores[c] / sumAcf;
+        if (combo > bestCombo) {
+            bestCombo = combo;
+            bestIdx = c;
+        }
+    }
+
+    if (debugPrint) {
+        float winBpm = 60000.0f / (static_cast<float>(candidateLags[bestIdx]) / samplesPerMs);
+        Serial.print(F("{\"type\":\"PULSE_TRAIN\",\"winner\":"));
+        Serial.print(winBpm, 1);
+        Serial.print(F(",\"n\":"));
+        Serial.print(numCandidates);
+        Serial.print(F(",\"mag\":"));
+        Serial.print(magScores[bestIdx], 2);
+        Serial.print(F(",\"var\":"));
+        Serial.print(varScores[bestIdx], 3);
+        Serial.print(F(",\"acf\":"));
+        Serial.print(candidateScores[bestIdx], 3);
+        Serial.print(F(",\"cands\":["));
+        for (int c = 0; c < numCandidates; c++) {
+            if (c > 0) Serial.print(',');
+            float bpm = 60000.0f / (static_cast<float>(candidateLags[c]) / samplesPerMs);
+            Serial.print(bpm, 0);
+        }
+        Serial.println(F("]}"));
+    }
+
+    return candidateLags[bestIdx];
 }
 
 // ============================================================================

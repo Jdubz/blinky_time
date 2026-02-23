@@ -248,6 +248,10 @@ void SerialConsole::registerRhythmSettings() {
         "Enable comb filter bank for tempo validation");
     settings_.registerFloat("combbankfeedback", &audioCtrl_->combBankFeedback, "rhythm",
         "Comb bank resonance (0.85-0.98)", 0.85f, 0.98f);
+    settings_.registerFloat("combxvalconf", &audioCtrl_->combCrossValMinConf, "rhythm",
+        "Comb cross-val min confidence (0.1-0.8)", 0.1f, 0.8f);
+    settings_.registerFloat("combxvalcorr", &audioCtrl_->combCrossValMinCorr, "rhythm",
+        "Comb cross-val min autocorr fraction (0.05-0.5)", 0.05f, 0.5f);
 
     // CBSS beat tracking parameters
     settings_.registerFloat("cbssalpha", &audioCtrl_->cbssAlpha, "rhythm",
@@ -272,6 +276,26 @@ void SerialConsole::registerRhythmSettings() {
         "2/3-lag harmonic fix threshold (0.3-0.9)", 0.1f, 0.95f);
     settings_.registerFloat("peakmincorr", &audioCtrl_->peakMinCorrelation, "rhythm",
         "Min normalized correlation for peak (0.1-0.8)", 0.05f, 0.8f);
+    settings_.registerBool("hps", &audioCtrl_->hpsEnabled, "rhythm",
+        "Harmonic Product Spectrum weighting (sub-harmonic support at 2x lag)");
+    settings_.registerBool("pulsetrain", &audioCtrl_->pulseTrainEnabled, "rhythm",
+        "Pulse train evaluation (re-rank autocorr candidates by onset alignment)");
+    settings_.registerUint8("ptcandidates", &audioCtrl_->pulseTrainCandidates, "rhythm",
+        "Pulse train candidates to evaluate (2-10)", 2, 10);
+    settings_.registerBool("ioi", &audioCtrl_->ioiEnabled, "rhythm",
+        "IOI histogram cross-validation (onset interval analysis)");
+    settings_.registerFloat("ioipeakratio", &audioCtrl_->ioiMinPeakRatio, "rhythm",
+        "IOI peak-to-mean ratio threshold (1.5-5.0)", 1.5f, 5.0f);
+    settings_.registerFloat("ioicorr", &audioCtrl_->ioiMinAutocorr, "rhythm",
+        "IOI min autocorr fraction at IOI lag (0.05-0.5)", 0.05f, 0.5f);
+    settings_.registerBool("odfmeansub", &audioCtrl_->odfMeanSubEnabled, "rhythm",
+        "ODF mean subtraction before autocorrelation (BTrack-style detrending)");
+    settings_.registerBool("ft", &audioCtrl_->ftEnabled, "rhythm",
+        "Fourier tempogram cross-validation (sub-harmonic suppression)");
+    settings_.registerFloat("ftmagratio", &audioCtrl_->ftMinMagnitudeRatio, "rhythm",
+        "FT peak-to-mean magnitude ratio (1.2-5.0)", 1.2f, 5.0f);
+    settings_.registerFloat("ftcorr", &audioCtrl_->ftMinAutocorr, "rhythm",
+        "FT min autocorr fraction at FT lag (0.05-0.5)", 0.05f, 0.5f);
 
     // Ensemble fusion parameters (detection gating)
     settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
@@ -1347,6 +1371,19 @@ void SerialConsole::streamTick() {
             Serial.print(ens.detectorAgreement);
             Serial.print(F(",\"conf\":"));
             Serial.print(ens.ensembleConfidence, 3);
+
+            // Per-band flux from BandWeightedFlux detector
+            const BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
+            Serial.print(F(",\"bf\":"));
+            Serial.print(bf.getBassFlux(), 3);
+            Serial.print(F(",\"mf\":"));
+            Serial.print(bf.getMidFlux(), 3);
+            Serial.print(F(",\"hf\":"));
+            Serial.print(bf.getHighFlux(), 3);
+            Serial.print(F(",\"cf\":"));
+            Serial.print(bf.getCombinedFlux(), 3);
+            Serial.print(F(",\"af\":"));
+            Serial.print(bf.getAverageFlux(), 3);
         }
 
         Serial.print(F("}"));
@@ -1400,6 +1437,10 @@ void SerialConsole::streamTick() {
             if (streamDebug_) {
                 Serial.print(F(",\"ps\":"));
                 Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
+                Serial.print(F(",\"cbpm\":"));
+                Serial.print(audioCtrl_->getCombBankBPM(), 1);
+                Serial.print(F(",\"cconf\":"));
+                Serial.print(audioCtrl_->getCombBankConfidence(), 2);
             }
 
             Serial.print(F("}"));
@@ -1539,6 +1580,14 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(bf.getHighWeight(), 2);
         Serial.print(F("  maxbin: "));
         Serial.println(bf.getMaxBin());
+        Serial.print(F("  onsetdelta: "));
+        Serial.println(bf.getMinOnsetDelta(), 2);
+        Serial.print(F("  perbandthresh: "));
+        Serial.println(bf.getPerBandThresh() ? "on" : "off");
+        Serial.print(F("  perbandmult: "));
+        Serial.println(bf.getPerBandBassThreshMult(), 2);
+        Serial.print(F("  diffframes: "));
+        Serial.println(bf.getDiffFrames());
         return true;
     }
 
@@ -2191,6 +2240,62 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         if (!audioCtrl_) return true;
         Serial.print(F("bandflux_crestgate="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getCrestGate(), 2);
+        return true;
+    }
+
+    // bandflux_perbandthresh: Per-band independent detection (0=off, 1=on)
+    if (strncmp(cmd, "set bandflux_perbandthresh ", 27) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 27);
+        audioCtrl_->getEnsemble().getBandFlux().setPerBandThresh(value != 0);
+        Serial.print(F("OK bandflux_perbandthresh="));
+        Serial.println(value != 0 ? "on" : "off");
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_perbandthresh") == 0 || strcmp(cmd, "bandflux_perbandthresh") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_perbandthresh="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandThresh() ? "on" : "off");
+        return true;
+    }
+
+    // bandflux_perbandmult: Per-band threshold multiplier (0.5-5.0)
+    if (strncmp(cmd, "set bandflux_perbandmult ", 25) == 0) {
+        if (!audioCtrl_) return true;
+        float value = atof(cmd + 25);
+        if (value >= 0.5f && value <= 5.0f) {
+            audioCtrl_->getEnsemble().getBandFlux().setPerBandBassThreshMult(value);
+            Serial.print(F("OK bandflux_perbandmult="));
+            Serial.println(value, 2);
+        } else {
+            Serial.println(F("ERROR: Valid range 0.5-5.0"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_perbandmult") == 0 || strcmp(cmd, "bandflux_perbandmult") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_perbandmult="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandBassThreshMult(), 2);
+        return true;
+    }
+
+    // bandflux_diffframes: Temporal reference depth (1-3, SuperFlux diff_frames)
+    if (strncmp(cmd, "set bandflux_diffframes ", 24) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 24);
+        if (value >= 1 && value <= 3) {
+            audioCtrl_->getEnsemble().getBandFlux().setDiffFrames(value);
+            Serial.print(F("OK bandflux_diffframes="));
+            Serial.println(value);
+        } else {
+            Serial.println(F("ERROR: Valid range 1-3"));
+        }
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_diffframes") == 0 || strcmp(cmd, "bandflux_diffframes") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_diffframes="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDiffFrames());
         return true;
     }
 
