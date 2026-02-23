@@ -55,7 +55,7 @@ bool EffectRendererTest::testMatrixRendering() {
     PixelMatrix matrix(3, 3);
 
     // Fill matrix with known pattern
-    uint32_t testColors[] = {
+    const uint32_t testColors[] = {
         createColor(255, 0, 0),    // Red
         createColor(0, 255, 0),    // Green
         createColor(0, 0, 255),    // Blue
@@ -210,16 +210,6 @@ bool EffectRendererTest::testEdgeCases() {
     }
 
     return true;
-}
-
-bool EffectRendererTest::compareColors(uint32_t color1, uint32_t color2, uint8_t tolerance) {
-    uint8_t r1, g1, b1, r2, g2, b2;
-    extractRGB(color1, r1, g1, b1);
-    extractRGB(color2, r2, g2, b2);
-
-    return (abs(r1 - r2) <= tolerance) &&
-           (abs(g1 - g2) <= tolerance) &&
-           (abs(b1 - b2) <= tolerance);
 }
 
 uint32_t EffectRendererTest::createColor(uint8_t r, uint8_t g, uint8_t b) {

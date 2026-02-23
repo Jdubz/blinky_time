@@ -217,7 +217,6 @@ const AudioControl& AudioController::update(float dt) {
     //    - Multi-band RMS: captures absolute levels (legacy behavior)
     //    Controlled by ossFluxWeight parameter (1.0 = pure flux, 0.0 = pure RMS)
     float onsetStrength = 0.0f;
-    float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
 
     // Get spectral data from ensemble
     const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
@@ -227,6 +226,7 @@ const AudioControl& AudioController::update(float dt) {
         int numBins = spectral.getNumBins();
 
         // Compute spectral flux with per-band outputs for adaptive weighting
+        float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
         float fluxOss = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
         float rmsOss = computeMultiBandRms(magnitudes, numBins);
 
@@ -586,8 +586,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Without this, startup with limited data skips slow candidates and falsely picks fast tempos.
     bool pulseTrainActive = pulseTrainEnabled && numPtCandidates > 1 && ossCount_ >= bestWeightedLag * 4;
     if (pulseTrainActive) {
-        int ptLags[MAX_PT_SLOTS];
-        float ptScores[MAX_PT_SLOTS];
+        int ptLags[MAX_PT_SLOTS] = {0};
+        float ptScores[MAX_PT_SLOTS] = {0};
         for (int c = 0; c < numPtCandidates; c++) {
             ptLags[c] = ptCandidates[c].lag;
             ptScores[c] = ptCandidates[c].score;
@@ -699,7 +699,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
             // Check if autocorrelation has evidence at this lag
             if (combLag >= minLag && combLag <= maxLag) {
                 int combIdx = combLag - minLag;
-                if (combIdx >= 0 && combIdx < correlationSize) {
+                if (combIdx < correlationSize) {
                     float combCorr = correlationAtLag[combIdx] / (avgEnergy + 0.001f);
 
                     // Accept if autocorr at comb lag exceeds threshold of best
@@ -1004,7 +1004,7 @@ int AudioController::computeIOIPeakLag(int minLag, int maxLag) {
 
             // Folded match: interval is ~2x a beat period (skipped beat)
             // Map to half-interval
-            if (interval >= 2 * minLag && interval <= 2 * maxLag) {
+            if (interval >= 2 * minLag) {
                 int halfInterval = interval / 2;
                 if (halfInterval >= minLag && halfInterval <= maxLag) {
                     int bin = halfInterval - minLag;
@@ -1587,7 +1587,7 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
     float bassFlux = 0.0f;
     float midFlux = 0.0f;
     float highFlux = 0.0f;
-    int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
+    int bassBinCount = 0, midBinCount = 0, highBinCount = 0; // cppcheck-suppress variableScope
 
     // Noise floor threshold - ignore tiny fluctuations in sustained content
     const float FLUX_NOISE_FLOOR = 0.005f;
@@ -2117,13 +2117,11 @@ float AudioController::computePulseTrainPhase(int beatPeriodSamples) {
         ossEnergy += ossVal * ossVal;
     }
 
-    // Compute magnitude for confidence
-    float magnitude = sqrtf(realSum * realSum + imagSum * imagSum);
-
     // Normalize by OSS energy to get confidence (0-1)
     // High magnitude relative to energy = strong periodicity at this tempo
     float normalizer = sqrtf(ossEnergy * static_cast<float>(samplesToUse));
     if (normalizer > 0.0001f) {
+        float magnitude = sqrtf(realSum * realSum + imagSum * imagSum);
         pulseTrainConfidence_ = clampf(magnitude / normalizer, 0.0f, 1.0f);
     } else {
         pulseTrainConfidence_ = 0.0f;
