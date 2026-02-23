@@ -1585,7 +1585,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.print(F("  perbandthresh: "));
         Serial.println(bf.getPerBandThresh() ? "on" : "off");
         Serial.print(F("  perbandmult: "));
-        Serial.println(bf.getPerBandBassThreshMult(), 2);
+        Serial.println(bf.getPerBandThreshMult(), 2);
         Serial.print(F("  diffframes: "));
         Serial.println(bf.getDiffFrames());
         return true;
@@ -2264,7 +2264,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         if (!audioCtrl_) return true;
         float value = atof(cmd + 25);
         if (value >= 0.5f && value <= 5.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setPerBandBassThreshMult(value);
+            audioCtrl_->getEnsemble().getBandFlux().setPerBandThreshMult(value);
             Serial.print(F("OK bandflux_perbandmult="));
             Serial.println(value, 2);
         } else {
@@ -2275,7 +2275,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     if (strcmp(cmd, "show bandflux_perbandmult") == 0 || strcmp(cmd, "bandflux_perbandmult") == 0) {
         if (!audioCtrl_) return true;
         Serial.print(F("bandflux_perbandmult="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandBassThreshMult(), 2);
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandThreshMult(), 2);
         return true;
     }
 

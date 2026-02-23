@@ -23,7 +23,7 @@
  * 6. Hi-hat rejection gate: suppress when ONLY high band has flux
  *
  * Memory: ~1200 bytes (768 for 3-frame history + ~400 for state/params)
- * CPU: ~27us per frame at 64MHz
+ * CPU: ~35us per frame at 64MHz (includes history shift memcpy)
  */
 class BandWeightedFluxDetector : public BaseDetector {
 public:
@@ -69,8 +69,8 @@ public:
     void setPerBandThresh(bool e) { perBandThreshEnabled_ = e; }
     bool getPerBandThresh() const { return perBandThreshEnabled_; }
 
-    void setPerBandBassThreshMult(float m) { perBandBassThreshMult_ = m; }
-    float getPerBandBassThreshMult() const { return perBandBassThreshMult_; }
+    void setPerBandThreshMult(float m) { perBandThreshMult_ = m; }
+    float getPerBandThreshMult() const { return perBandThreshMult_; }
 
     void setDiffFrames(int f) { if (f >= 1 && f <= MAX_HISTORY_FRAMES) diffFrames_ = f; }
     int getDiffFrames() const { return diffFrames_; }
@@ -127,7 +127,7 @@ private:
     int confirmFrames_;     // Frames to wait for decay check (default 3)
     int maxBin_;            // Max FFT bin to analyze (default 64)
     bool perBandThreshEnabled_; // Per-band independent detection (default false)
-    float perBandBassThreshMult_; // Bass threshold multiplier for independent detection (default 1.5)
+    float perBandThreshMult_; // Per-band threshold multiplier for bass+mid independent detection (default 1.5)
 
     // Post-onset decay confirmation state
     static constexpr int MAX_CONFIRM_FRAMES = 6;

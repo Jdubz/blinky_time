@@ -100,7 +100,7 @@ bool AudioController::begin(uint32_t sampleRate) {
     // Reset onset density tracking
     onsetDensity_ = 0.0f;
     onsetCountInWindow_ = 0;
-    onsetDensityWindowStart_ = 0;
+    onsetDensityWindowStart_ = time_.millis();
 
     // Reset IOI onset buffer
     for (int i = 0; i < IOI_ONSET_BUFFER_SIZE; i++) ioiOnsetSamples_[i] = 0;
@@ -295,8 +295,8 @@ const AudioControl& AudioController::update(float dt) {
     synthesizeEnergy();
     synthesizePulse();
     synthesizePhase();
+    updateOnsetDensity(nowMs);       // Update density before rhythmStrength uses it
     synthesizeRhythmStrength();
-    updateOnsetDensity(nowMs);
 
     return control_;
 }
@@ -1016,8 +1016,8 @@ int AudioController::computeIOIPeakLag(int minLag, int maxLag) {
 
     // In-place 3-bin smoothing to cluster jittered intervals (±1 sample tolerance)
     // Avoids splitting a clear peak across adjacent bins.
-    // Uses lookback variable to avoid a second 800-byte stack array.
-    // Safe because we read histogram[i+1] before overwriting histogram[i].
+    // Uses lookback variable (`prev`) to avoid a second 800-byte stack array.
+    // Each bin reads raw `next` (not yet overwritten) and saved raw `prev` (from before overwrite).
     int prev = 0;
     for (int i = 0; i < histSize; i++) {
         int curr = histogram[i];
@@ -1292,16 +1292,16 @@ void AudioController::synthesizeRhythmStrength() {
     // Blend autocorrelation periodicity with CBSS beat tracking confidence
     float strength = periodicityStrength_ * 0.6f + cbssConfidence_ * 0.4f;
 
-    // Onset density nudge: high density slightly boosts rhythm confidence
-    // Low density (ambient) slightly reduces it
-    // Range: ±0.1 modulation, centered at 3 onsets/s
-    float densityNudge = clampf((onsetDensity_ - 3.0f) * 0.05f, -0.1f, 0.1f);
-    strength += densityNudge;
-
     // Apply activation threshold with soft knee
     if (strength < activationThreshold) {
         strength *= strength / activationThreshold;  // Quadratic falloff below threshold
     }
+
+    // Onset density nudge applied AFTER soft knee to avoid squaring negative values.
+    // High density slightly boosts rhythm confidence, low density (ambient) reduces it.
+    // Range: ±0.1 modulation, centered at 3 onsets/s
+    float densityNudge = clampf((onsetDensity_ - 3.0f) * 0.05f, -0.1f, 0.1f);
+    strength += densityNudge;
 
     control_.rhythmStrength = clampf(strength, 0.0f, 1.0f);
 }
@@ -1587,7 +1587,7 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
     float bassFlux = 0.0f;
     float midFlux = 0.0f;
     float highFlux = 0.0f;
-    int bassBinCount = 0, midBinCount = 0, highBinCount = 0; // cppcheck-suppress variableScope
+    int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
 
     // Noise floor threshold - ignore tiny fluctuations in sustained content
     const float FLUX_NOISE_FLOOR = 0.005f;

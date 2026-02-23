@@ -257,8 +257,8 @@ Autocorrelation of a periodic signal at period T inherently produces peaks at T,
 
 **Implementation:** Take existing 360-sample OSS buffer → Hanning window → zero-pad to 512 → FFT → magnitude spectrum → convert bins to BPM (`bpm = bin * frameRate * 60 / fftSize`) → find peak in 60-200 BPM range → cross-validate with autocorrelation result.
 
-- **CPU:** One 512-point FFT every 500ms (~1ms on nRF52840). FFT infrastructure already exists.
-- **Memory:** ~2KB temporary (512 floats for FFT, reusable)
+- **CPU:** Implemented as per-lag Goertzel (not FFT). O(~190 lags × 360 samples) = ~68K multiply-adds every 500ms. Amortized cost is well within headroom.
+- **Memory:** ~800 bytes stack (200 histogram bins for IOI, reusable)
 - **Complexity:** ~40-60 lines C++
 - **Risk:** Low — cross-validation pattern (same as comb bank, IOI). If Fourier peak agrees with autocorrelation, no change. If it disagrees and autocorrelation has evidence at the Fourier lag, switch.
 - **References:** Grosche & Muller 2011 ("What Makes Beat Tracking Difficult?"), AudioLabs Erlangen Fourier Tempogram tutorial

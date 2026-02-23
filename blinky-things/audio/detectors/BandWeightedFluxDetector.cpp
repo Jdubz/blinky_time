@@ -22,7 +22,7 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , confirmFrames_(3)
     , maxBin_(64)
     , perBandThreshEnabled_(false)
-    , perBandBassThreshMult_(1.5f)
+    , perBandThreshMult_(1.5f)
     , confirmCountdown_(0)
     , candidateFlux_(0.0f)
     , minFluxDuringWindow_(0.0f)
@@ -160,8 +160,8 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     // Per-band independent detection: bass or mid alone exceeds its own threshold
     // Catches kicks hidden in combined flux when mid/high are quiet
     if (!detected && perBandThreshEnabled_ && !hiHatOnly) {
-        float bassThresh = averageBassFlux_ + config_.threshold * perBandBassThreshMult_;
-        float midThresh = averageMidFlux_ + config_.threshold * perBandBassThreshMult_;
+        float bassThresh = averageBassFlux_ + config_.threshold * perBandThreshMult_;
+        float midThresh = averageMidFlux_ + config_.threshold * perBandThreshMult_;
         if (bassFlux_ > bassThresh || midFlux_ > midThresh) {
             detected = true;
         }

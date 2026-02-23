@@ -538,7 +538,7 @@ private:
 
     // Onset density tracking
     float onsetDensity_ = 0.0f;            // Smoothed onsets/second (EMA)
-    int onsetCountInWindow_ = 0;           // Onsets detected in current 1s window
+    uint16_t onsetCountInWindow_ = 0;      // Onsets detected in current 1s window
     uint32_t onsetDensityWindowStart_ = 0; // Window start timestamp (ms)
 
     // IOI histogram onset ring buffer (records sample indices of detected onsets)
