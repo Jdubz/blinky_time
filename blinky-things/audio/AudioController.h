@@ -312,6 +312,10 @@ public:
     bool combBankEnabled = true;    // Enable comb filter bank
     float combBankFeedback = 0.92f; // Bank resonance strength (0.85-0.98)
 
+    // Comb bank cross-validation (corrects autocorrelation when comb bank disagrees)
+    float combCrossValMinConf = 0.3f;    // Min comb confidence to trigger cross-validation (0.1-0.8)
+    float combCrossValMinCorr = 0.5f;    // Min autocorr at comb lag as fraction of best (0.05-0.5)
+
     // === CBSS BEAT TRACKING ===
     // Cumulative Beat Strength Signal with counter-based beat prediction
     // Phase is derived deterministically from beat counter — no drift, no jitter
@@ -328,6 +332,33 @@ public:
     float harmonicUp2xThresh = 0.5f;     // Half-lag (2x BPM) correlation threshold for upward harmonic fix
     float harmonicUp32Thresh = 0.6f;     // 2/3-lag (3/2x BPM) correlation threshold
     float peakMinCorrelation = 0.3f;     // Minimum normalized correlation to consider a peak
+    bool hpsEnabled = false;             // Harmonic Product Spectrum: additive boost from sub-harmonic at 2x lag (disabled: hurts goa-mantra)
+
+    // === PULSE TRAIN EVALUATION (Percival & Tzanetakis 2014) ===
+    bool pulseTrainEnabled = false;      // Re-rank autocorr candidates by onset alignment (disabled: hurts trance/goa tracks)
+    uint8_t pulseTrainCandidates = 5;    // Number of autocorr peaks to evaluate (2-10)
+
+    // === IOI HISTOGRAM (Inter-Onset Interval cross-validation) ===
+    // Measures actual time intervals between detected onset events (kicks/snares).
+    // Even if continuous OSS signal has ambiguous periodicity, the kick intervals
+    // should reveal the true tempo. Used as cross-validation hint for autocorrelation.
+    bool ioiEnabled = true;              // Enable IOI histogram cross-validation
+    float ioiMinPeakRatio = 2.0f;       // Peak must be Nx mean to be "clear" (1.5-5.0)
+    float ioiMinAutocorr = 0.15f;       // Min autocorr at IOI lag, fraction of best (0.05-0.5)
+
+    // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
+    // Subtracts the local mean from OSS buffer before autocorrelation.
+    // Removes DC bias that makes all lags appear somewhat correlated,
+    // helping the true tempo peak stand out vs sub-harmonics.
+    bool odfMeanSubEnabled = true;       // Enable ODF mean subtraction before autocorrelation
+
+    // === FOURIER TEMPOGRAM CROSS-VALIDATION ===
+    // Computes DFT magnitude at candidate tempos using Goertzel algorithm.
+    // Unlike autocorrelation, the DFT suppresses sub-harmonics — a 143 BPM signal
+    // shows peaks at 143, 286 BPM but NEVER at 72 BPM. Cross-validates autocorrelation.
+    bool ftEnabled = true;               // Enable Fourier tempogram cross-validation
+    float ftMinMagnitudeRatio = 1.5f;    // Peak must be Nx mean magnitude to be clear (1.2-5.0)
+    float ftMinAutocorr = 0.15f;         // Min autocorr at FT lag, fraction of best (0.05-0.5)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -360,6 +391,15 @@ public:
     float getCombBankConfidence() const { return combFilterBank_.getPeakConfidence(); }
     float getCombBankPhase() const { return combFilterBank_.getPhaseAtPeak(); }
     const CombFilterBank& getCombFilterBank() const { return combFilterBank_; }
+
+    // Onset density debug getter
+    float getOnsetDensity() const { return onsetDensity_; }
+
+    // IOI histogram debug getter
+    int getIOIOnsetCount() const { return ioiOnsetCount_; }
+
+    // Fourier tempogram debug getter
+    float getLastFtMagRatio() const { return lastFtMagRatio_; }
 
     // CBSS beat tracking debug getters
     float getCbssConfidence() const { return cbssConfidence_; }
@@ -496,6 +536,20 @@ private:
     // Silence detection
     uint32_t lastSignificantAudioMs_ = 0;
 
+    // Onset density tracking
+    float onsetDensity_ = 0.0f;            // Smoothed onsets/second (EMA)
+    uint16_t onsetCountInWindow_ = 0;      // Onsets detected in current 1s window
+    uint32_t onsetDensityWindowStart_ = 0; // Window start timestamp (ms)
+
+    // IOI histogram onset ring buffer (records sample indices of detected onsets)
+    static constexpr int IOI_ONSET_BUFFER_SIZE = 48;
+    int ioiOnsetSamples_[IOI_ONSET_BUFFER_SIZE] = {0};
+    int ioiOnsetWriteIdx_ = 0;
+    int ioiOnsetCount_ = 0;
+
+    // Debug state from last autocorrelation for streaming/tuning
+    float lastFtMagRatio_ = 0.0f;  // FT peak/mean magnitude ratio (0 = not computed)
+
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
 
@@ -534,6 +588,9 @@ private:
     float computePulseTrainPhase(int beatPeriodSamples);
     float generateAndCorrelate(int phaseOffset, int beatPeriod);
 
+    // Pulse train tempo evaluation (Percival-style with autocorrelation fusion)
+    int evaluatePulseTrains(const int* candidateLags, const float* candidateScores, int numCandidates, float samplesPerMs, bool debugPrint);
+
     // Tempo prior and stability
     float computeTempoPrior(float bpm) const;
     void updateBeatStability(uint32_t nowMs);
@@ -545,6 +602,13 @@ private:
     void synthesizePulse();
     void synthesizePhase();
     void synthesizeRhythmStrength();
+    void updateOnsetDensity(uint32_t nowMs);
+
+    // IOI histogram cross-validation
+    int computeIOIPeakLag(int minLag, int maxLag);
+
+    // Fourier tempogram cross-validation (Goertzel algorithm)
+    int computeFourierTempogramPeakLag(int minLag, int maxLag);
 
     // Utilities
     inline float clampf(float val, float minVal, float maxVal) const {

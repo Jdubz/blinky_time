@@ -78,7 +78,7 @@
 > **Design philosophy:** See [VISUALIZER_GOALS.md](../docs/VISUALIZER_GOALS.md) — visual quality over metric perfection. Low Beat F1 on ambient/trap tracks is acceptable (organic mode fallback is correct).
 
 1. **Verify startup latency improvement** — Autocorrelation now starts at 1s (was 3s). Test that beat detection activates faster on real music without regressions.
-2. **Add onset density tracking** — Cheap EMA of onsets/second for content classification (dance=2-6/s, ambient=0-1/s).
+2. **Validate onset density values** — Stream audio with dance music (expect od=2-6), ambient (expect od=0-1), and silence (expect od=0). Verify `"od"` field in streaming JSON.
 3. **Build diverse test music library** — hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills) with ground truth annotations.
 
 ## Known Limitations

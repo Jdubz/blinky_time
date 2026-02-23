@@ -285,7 +285,7 @@ protected:
     ForceAdapter* forceAdapter_;
 
     // Static buffers for placement new (avoid heap allocation)
-    uint8_t spawnBuffer_[32];
-    uint8_t boundaryBuffer_[32];
-    uint8_t forceBuffer_[48];
+    uint8_t spawnBuffer_[32] = {0};
+    uint8_t boundaryBuffer_[32] = {0};
+    uint8_t forceBuffer_[48] = {0};
 };

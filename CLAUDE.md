@@ -74,7 +74,7 @@ arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
 - **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - 7 detectors with weighted fusion (BandFlux Solo default)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
-- **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength
+- **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
 
 ### Obsolete Documents (Removed)
 
@@ -124,7 +124,7 @@ EnsembleDetector (BandWeightedFlux Solo)
     ↓
 AudioController (CBSS beat tracking)
     ↓
-AudioControl {energy, pulse, phase, rhythmStrength}
+AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity}
     ↓
 Generator (Fire/Water/Lightning)
     ↓
@@ -266,12 +266,13 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 5. AudioController → autocorrelation every 500ms → tempo estimation
 6. CBSS backward search → cumulative beat strength signal
 7. Predict+countdown beat detection → deterministic phase
-8. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75}
+8. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75, onsetDensity=3.2}
 9. Fire generator:
    - energy → baseline flame height
    - pulse → spark burst intensity
    - phase → breathing effect (0=on-beat)
    - rhythmStrength → blend music/organic mode
+   - onsetDensity → content classification (dance=2-6/s, ambient=0-1/s)
 10. Fire heat diffusion (matrix propagation)
 11. HueRotationEffect (optional color shift)
 12. RenderPipeline → LED strip output

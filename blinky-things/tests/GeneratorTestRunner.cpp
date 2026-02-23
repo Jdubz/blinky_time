@@ -91,7 +91,7 @@ bool GeneratorTestRunner::handleCommand(const char* command) {
 
     // Handle generator-specific commands
     if (strncmp(cmd, "gen ", 4) == 0) {
-        char* genType = cmd + 4;
+        const char* genType = cmd + 4;
         while (*genType == ' ') genType++; // Skip spaces
 
         runGeneratorTests(genType);

@@ -46,8 +46,8 @@ void EffectRenderer::renderTestPattern(int pattern) {
     switch (pattern) {
         case 0: // Corners - Red, Green, Blue, Yellow
             {
-                int corners[4][2] = {{0, 0}, {width-1, 0}, {0, height-1}, {width-1, height-1}};
-                uint32_t colors[4] = {
+                const int corners[4][2] = {{0, 0}, {width-1, 0}, {0, height-1}, {width-1, height-1}};
+                const uint32_t colors[4] = {
                     leds_.Color(255, 0, 0),   // Red
                     leds_.Color(0, 255, 0),   // Green
                     leds_.Color(0, 0, 255),   // Blue

@@ -17,7 +17,7 @@ private:
     int matrixHeight_;
 
 public:
-    GeneratorTestRunner(int width = 4, int height = 15);
+    explicit GeneratorTestRunner(int width = 4, int height = 15);
     ~GeneratorTestRunner();
 
     // Test execution

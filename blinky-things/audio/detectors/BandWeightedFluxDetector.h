@@ -22,8 +22,8 @@
  * 5. Asymmetric threshold update: skip buffer update on detection frames
  * 6. Hi-hat rejection gate: suppress when ONLY high band has flux
  *
- * Memory: ~400 bytes
- * CPU: ~27us per frame at 64MHz
+ * Memory: ~1200 bytes (768 for 3-frame history + ~400 for state/params)
+ * CPU: ~35us per frame at 64MHz (includes history shift memcpy)
  */
 class BandWeightedFluxDetector : public BaseDetector {
 public:
@@ -66,6 +66,15 @@ public:
     void setCrestGate(float c) { crestGate_ = c; }
     float getCrestGate() const { return crestGate_; }
 
+    void setPerBandThresh(bool e) { perBandThreshEnabled_ = e; }
+    bool getPerBandThresh() const { return perBandThreshEnabled_; }
+
+    void setPerBandThreshMult(float m) { perBandThreshMult_ = m; }
+    float getPerBandThreshMult() const { return perBandThreshMult_; }
+
+    void setDiffFrames(int f) { if (f >= 1 && f <= MAX_HISTORY_FRAMES) diffFrames_ = f; }
+    int getDiffFrames() const { return diffFrames_; }
+
     // Debug access
     float getBassFlux() const { return bassFlux_; }
     float getMidFlux() const { return midFlux_; }
@@ -88,10 +97,13 @@ private:
     // Max bins we store (64 bins = up to 4kHz, sufficient for onset detection)
     static constexpr int MAX_STORED_BINS = 64;
 
-    // Previous frame log-compressed magnitudes
-    float prevLogMag_[MAX_STORED_BINS];
+    // Multi-frame history for temporal max-filter (SuperFlux diff_frames)
+    // Frame 0 = most recent previous, frame 1 = 2 frames ago, etc.
+    static constexpr int MAX_HISTORY_FRAMES = 3;
+    float historyLogMag_[MAX_HISTORY_FRAMES][MAX_STORED_BINS];
+    int historyCount_;   // How many valid history frames we have (0..MAX_HISTORY_FRAMES)
+    int diffFrames_;     // Which frame to compare against (1=prev, 2=two-ago, 3=three-ago)
     float prevCombinedFlux_;  // Previous frame's combined flux (for onset delta check)
-    bool hasPrevFrame_;
 
     // Per-band flux values (for debug/streaming)
     float bassFlux_;
@@ -114,6 +126,8 @@ private:
     float crestGate_;       // Max spectral crest factor to confirm onset (default 0.0 = disabled)
     int confirmFrames_;     // Frames to wait for decay check (default 3)
     int maxBin_;            // Max FFT bin to analyze (default 64)
+    bool perBandThreshEnabled_; // Per-band independent detection (default false)
+    float perBandThreshMult_; // Per-band threshold multiplier for bass+mid independent detection (default 1.5)
 
     // Post-onset decay confirmation state
     static constexpr int MAX_CONFIRM_FRAMES = 6;
@@ -121,6 +135,10 @@ private:
     float candidateFlux_;       // Combined flux at candidate onset frame
     float minFluxDuringWindow_; // Minimum flux seen during confirmation window
     DetectionResult cachedResult_; // Cached result to return on confirmation
+
+    // Per-band running means for independent thresholds
+    float averageBassFlux_;
+    float averageMidFlux_;
 
     // Fast log(1+x) approximation for small x
     // ~8% error at boundary (x=0.5: returns 0.375, true value 0.405).
@@ -132,8 +150,11 @@ private:
         return logf(1.0f + x);
     }
 
-    // Store current frame as reference for next frame's flux computation
+    // Store current frame in history ring and update reference state
     void updatePrevFrameState(const float* logMag, int effectiveMax);
+
+    // Get the reference frame for flux computation (respects diffFrames_)
+    const float* getReferenceFrame() const;
 
     // Compute per-band flux from current and max-filtered reference
     void computeBandFlux(const float* logMag, const float* maxRef, int numBins);
