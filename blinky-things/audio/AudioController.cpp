@@ -549,6 +549,18 @@ void AudioController::initTempoState() {
         if (tempoStaticPrior_[i] < 0.01f) tempoStaticPrior_[i] = 0.01f;  // Floor
     }
 
+    // Pre-compute Gaussian transition matrix (only depends on bin BPMs and bayesLambda)
+    // Avoids 400 expf() calls per autocorrelation cycle at runtime.
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        for (int j = 0; j < TEMPO_BINS; j++) {
+            float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
+            float sigma = bayesLambda * tempoBinBpms_[j];
+            if (sigma < 1.0f) sigma = 1.0f;
+            transMatrix_[i][j] = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
+        }
+    }
+    transMatrixLambda_ = bayesLambda;
+
     // Clear posterior and debug arrays
     for (int i = 0; i < TEMPO_BINS; i++) {
         tempoStatePost_[i] = tempoStatePrior_[i];
@@ -602,18 +614,27 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     if (!tempoStateInitialized_) return;
 
     // === 1. BAYESIAN PREDICTION STEP: Spread prior through Gaussian transition ===
+    // Uses precomputed transition matrix (built in initTempoState, rebuilt if bayesLambda changes).
+    if (bayesLambda != transMatrixLambda_) {
+        // Rebuild transition matrix if lambda changed at runtime
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            for (int j = 0; j < TEMPO_BINS; j++) {
+                float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
+                float sigma = bayesLambda * tempoBinBpms_[j];
+                if (sigma < 1.0f) sigma = 1.0f;
+                transMatrix_[i][j] = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
+            }
+        }
+        transMatrixLambda_ = bayesLambda;
+    }
+
     float prediction[TEMPO_BINS];
     float predSum = 0.0f;
 
     for (int i = 0; i < TEMPO_BINS; i++) {
         prediction[i] = 0.0f;
         for (int j = 0; j < TEMPO_BINS; j++) {
-            // Gaussian transition: probability of moving from bin j to bin i
-            float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
-            float sigma = bayesLambda * tempoBinBpms_[j];  // Scale-relative transition
-            if (sigma < 1.0f) sigma = 1.0f;
-            float transProb = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
-            prediction[i] += tempoStatePrior_[j] * transProb;
+            prediction[i] += tempoStatePrior_[j] * transMatrix_[i][j];
         }
         predSum += prediction[i];
     }
@@ -728,11 +749,13 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // Check if the raw autocorrelation at half-lag (2x BPM) or 2/3-lag (1.5x BPM)
     // is strong relative to the MAP bin's lag. If so, switch to the higher tempo.
     // Uses per-sample ACF values for full resolution (not the coarse 20-bin observations).
-    // Thresholds 0.5 and 0.6 were empirically calibrated (Feb 2026) from the old
-    // harmonicUp2xThresh/harmonicUp32Thresh params; 2/3-lag needs higher threshold
-    // because 1.5x corrections are riskier (less common harmonic error).
+    // Thresholds calibrated empirically (Feb 2026) from the old harmonicUp2xThresh/
+    // harmonicUp32Thresh params; 2/3-lag needs higher threshold because 1.5x
+    // corrections are riskier (less common harmonic error).
     // Uses else-if: only one correction per cycle to prevent cascading changes
     // (e.g., 60→120 BPM then 120→180 BPM in the same update).
+    static constexpr float HARMONIC_2X_THRESH = 0.5f;   // Half-lag ACF ratio for 2x BPM correction
+    static constexpr float HARMONIC_1_5X_THRESH = 0.6f; // 2/3-lag ACF ratio for 1.5x BPM correction
     {
         int bestLag = tempoBinLags_[bestBin];
         int halfLag = bestLag / 2;          // 2x BPM
@@ -749,7 +772,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             int halfIdx = halfLag - minLag;
             if (halfIdx >= 0 && halfIdx < correlationSize) {
                 float halfAcf = correlationAtLag[halfIdx];
-                if (halfAcf > 0.5f * bestAcf) {
+                if (halfAcf > HARMONIC_2X_THRESH * bestAcf) {
                     float halfBpm = 60.0f * 60.0f / static_cast<float>(halfLag);  // 60Hz * 60s
                     int closest = findClosestTempoBin(halfBpm);
                     if (closest >= 0 && fabsf(tempoBinBpms_[closest] - halfBpm) < halfBpm * 0.1f) {
@@ -765,7 +788,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                 int twoThirdIdx = twoThirdLag - minLag;
                 if (twoThirdIdx >= 0 && twoThirdIdx < correlationSize) {
                     float twoThirdAcf = correlationAtLag[twoThirdIdx];
-                    if (twoThirdAcf > 0.6f * bestAcf) {
+                    if (twoThirdAcf > HARMONIC_1_5X_THRESH * bestAcf) {
                         float twoThirdBpm = 60.0f * 60.0f / static_cast<float>(twoThirdLag);
                         int closest = findClosestTempoBin(twoThirdBpm);
                         if (closest >= 0 && fabsf(tempoBinBpms_[closest] - twoThirdBpm) < twoThirdBpm * 0.1f) {
@@ -884,13 +907,24 @@ void AudioController::computeFTObservations(float* ftObs, int numBins) {
         float magSq = s1 * s1 + s2 * s2 - coeff * s1 * s2;
         ftObs[b] = (magSq > 0.01f) ? magSq : 0.01f;  // Floor
     }
+
+    // Normalize by mean magnitude across bins so that bayesFtWeight
+    // behaves consistently regardless of signal amplitude.
+    // Without this, powf(ftObs, weight) would give FT disproportionate
+    // influence during loud sections (magSq scales with amplitude squared).
+    float ftMean = 0.0f;
+    for (int b = 0; b < numBins; b++) ftMean += ftObs[b];
+    ftMean /= static_cast<float>(numBins);
+    if (ftMean > 0.01f) {
+        for (int b = 0; b < numBins; b++) ftObs[b] /= ftMean;
+    }
 }
 
 // ===== IOI HISTOGRAM PER-BIN OBSERVATIONS =====
 
 void AudioController::computeIOIObservations(float* ioiObs, int numBins) {
     // Accumulate IOI histogram counts at each of the 20 tempo bin lags
-    // with ±1 sample tolerance for timing jitter (frame-level resolution)
+    // with ±2 sample tolerance (~33ms at 60Hz) for onset timing jitter
 
     // Initialize to 1.0 (multiplicative neutral). Unlike ACF which uses 0.01 floor
     // (representing actual correlation strength), IOI bins with zero onset matches
@@ -915,17 +949,17 @@ void AudioController::computeIOIObservations(float* ioiObs, int numBins) {
             // orders filters from low to high BPM.
             if (interval > tempoBinLags_[0] * 3) break;
 
-            // Check interval against each tempo bin lag (with ±1 tolerance)
+            // Check interval against each tempo bin lag (with ±2 sample tolerance)
             for (int b = 0; b < numBins; b++) {
                 int lag = tempoBinLags_[b];
                 // Direct match
                 int diff = interval - lag;
                 if (diff < 0) diff = -diff;
-                if (diff <= 1) {
+                if (diff <= 2) {
                     ioiObs[b] += 1.0f;
                 }
                 // Folded match (2x interval = skipped beat)
-                if (interval >= lag * 2 - 1 && interval <= lag * 2 + 1) {
+                if (interval >= lag * 2 - 2 && interval <= lag * 2 + 2) {
                     ioiObs[b] += 0.5f;  // Half weight for skipped-beat matches
                 }
             }
@@ -997,7 +1031,10 @@ void AudioController::updateCBSS(float onsetStrength) {
         lastTransientSample_ -= shift;
         if (lastBeatSample_ < 0) lastBeatSample_ = 0;
         if (lastTransientSample_ < 0) lastTransientSample_ = -1;
-        // Also shift IOI onset ring buffer to keep intervals valid
+        // Shift IOI onset ring buffer to keep intervals valid.
+        // Linear indexing is correct here: we must subtract from every physical
+        // slot in the backing array. When full (count == SIZE), this covers all
+        // slots 0..SIZE-1. Before first wrap, entries are sequential at 0..count-1.
         for (int i = 0; i < ioiOnsetCount_; i++) {
             ioiOnsetSamples_[i] -= shift;
             if (ioiOnsetSamples_[i] < 0) ioiOnsetSamples_[i] = 0;

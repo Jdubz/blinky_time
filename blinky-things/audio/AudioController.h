@@ -468,6 +468,8 @@ private:
     uint16_t beatCount_ = 0;            // Total beats detected
     float cbssConfidence_ = 0.0f;       // Beat tracking confidence (0-1)
     float cbssMean_ = 0.0f;             // Running EMA of CBSS values for adaptive threshold
+                                         // Starts at 0 — threshold is intentionally inactive during
+                                         // warmup (~2s) so LEDs respond immediately to music onset
     float lastSmoothedOnset_ = 0.0f;    // Last smoothed onset strength (for observability)
     bool lastBeatWasPredicted_ = false; // Whether predictBeat() ran since last beat (working flag)
     bool lastFiredBeatPredicted_ = false; // Whether the most recently fired beat was predicted (stable for streaming)
@@ -537,6 +539,8 @@ private:
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
     int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
+    float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
+    float transMatrixLambda_ = -1.0f;             // bayesLambda used to compute transMatrix_ (-1 = uninitialized)
     bool tempoStateInitialized_ = false;
     int bayesBestBin_ = TEMPO_BINS / 2;              // Best bin from last fusion (for debug)
     float lastFtObs_[TEMPO_BINS] = {0};           // Last FT observations (for debug)
