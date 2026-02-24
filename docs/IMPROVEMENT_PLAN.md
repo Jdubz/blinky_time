@@ -1,32 +1,35 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: February 22, 2026 (Comprehensive research survey + IOI histogram implementation)*
+*Last Updated: February 24, 2026 (Feature testing complete: ODF mean sub, diffframes, per-band thresholds — defaults are optimal)*
 
 ## Current Status
 
-### Completed (February 21, 2026)
+### Completed (February 23-24, 2026)
+
+**Bayesian Tempo Fusion + CBSS Adaptive Threshold (SETTINGS_VERSION 20):**
+- Replaced sequential override chain (~400 lines) with unified Bayesian posterior estimation over 20 tempo bins (60-180 BPM)
+- Four observation signals (autocorrelation, Fourier tempogram, comb filter bank, IOI histogram) contribute per-bin likelihoods multiplied with Viterbi transition prior
+- Removed 17 old parameters (HPS, pulse train, harmonic thresholds, cross-validation thresholds), added 9 Bayesian/beat params
+- Per-sample ACF harmonic disambiguation: after MAP extraction, checks raw autocorrelation at lag/2 (2x BPM, >50% thresh) and lag*2/3 (1.5x BPM, >60% thresh) — fixes sub-harmonic lock on minimal-01 (BPM 70→124)
+- CBSS adaptive threshold (`cbssthresh=0.4`): beat fires only if CBSS > factor * running mean (EMA tau ~2s). Prevents phantom beats during silence/breakdowns
+- Optional ongoing static prior (`bayespriorw`, default off) — tested but static prior hurts tracks far from center
+- Removed dead code: `evaluatePulseTrains()`, `generateAndCorrelate()`, old sequential override chain
+- Fixed pre-existing bug: IOI onset ring buffer not shifted during sampleCounter_ wrap (~4.6 hour edge case)
+
+### Completed (February 21-22, 2026)
 
 **Detector & Beat Tracking Optimization:**
 - BandWeightedFluxDetector set as sole default detector (all others disabled)
 - BandFlux parameters confirmed near-optimal via sweep: gamma=20, bassWeight=2.0, threshold=0.5
 - beatoffset recalibrated 9→5, doubling avg Beat F1 (0.216→0.452 across 9 tracks)
-- Runtime params persisted to flash: tempoSmoothFactor, odfSmoothWidth, harmup2x, harmup32, peakMinCorrelation (SETTINGS_VERSION 12)
-- Sub-harmonic investigation: machine-drum lock is fundamental autocorrelation limitation, not fixable by tuning
-- Confidence gating analysis: existing activationThreshold sufficient; cbssConfidence doesn't discriminate
-
-**Onset Delta Filter (minOnsetDelta=0.3):**
-- Rejects slow-rising signals (pad swells, stab echoes) by requiring minimum frame-to-frame flux jump
-- Fixed synth-stabs regression: F1 0.600→1.000 (16 FPs eliminated)
-- Improved pad-rejection: F1 0.314→0.421 (35 FPs→16 FPs, 54% reduction)
-- Improved real music avg Beat F1: 0.452→0.472 (best: trance-party +0.098, minimal-emotion +0.104)
-- Per-track offset investigation: -58ms to +57ms variation, adaptive offset deferred (oscillation risk)
+- Onset delta filter (minOnsetDelta=0.3): rejects slow-rising pads/swells, improved avg Beat F1 0.452→0.472
+- IOI histogram, Fourier tempogram, ODF mean subtraction implemented as independent features (later unified into Bayesian fusion)
 
 ### Completed (February 2026)
 
 **Rhythm Tracking:**
 - CBSS beat tracking with counter-based beat detection (replaced multi-hypothesis v3)
 - Deterministic phase derivation from beat counter
-- Tempo prior with Gaussian weighting (120 BPM center, 50 width, 0.5 blend)
 - Adaptive cooldown — tempo-aware, scales with beat period
 - BandWeightedFluxDetector Solo (replaced Drummer+Complex ensemble)
 
@@ -80,57 +83,59 @@ Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
 - `bandflux_decayratio` + `bandflux_decayframes` — post-onset decay gate (0.0=disabled)
 - `bandflux_crestgate` — spectral crest factor gate (0.0=disabled)
 
-### Priority 2: CBSS Beat Tracking — Stable
+### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — Active Tuning
 
-BTrack-style predict+countdown CBSS beat detection is working. Beat F1 avg **0.472** on original 9 tracks, **0.221** on 9 new syncopated tracks.
+BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. Tempo estimated via unified posterior over 20 bins (60-180 BPM) fusing autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram. Per-sample ACF harmonic disambiguation after MAP extraction. CBSS adaptive threshold prevents phantom beats.
 
-**Current performance — Original tracks (4-on-the-floor, beatoffset=5, onsetDelta=0.3):**
+**Pre-Bayesian baseline (sequential override chain, Feb 21):** avg Beat F1 **0.459** on 9 tracks.
 
-| Track | Beat F1 | BPM Acc | Detected BPM | Visual Behavior |
-|-------|:-------:|:-------:|:------------:|-----------------|
-| trance-party | 0.775 | 0.993 | ~138 | Beat-sync, sparks on kicks |
-| minimal-01 | 0.695 | 0.959 | ~125 | Beat-sync, clean pulsing |
-| infected-vibes | 0.691 | 0.973 | ~141 | Beat-sync, strong phase lock |
-| goa-mantra | 0.605 | 0.993 | ~138 | Beat-sync, occasional drift |
-| minimal-emotion | 0.486 | 0.998 | ~125 | Partial music mode |
-| deep-ambience | 0.404 | 0.949 | ~118 | Energy-reactive (correct) |
-| machine-drum | 0.224 | 0.825 | ~118 | Half-time lock (see Priority 6) |
-| trap-electro | 0.190 | 0.924 | ~130 | Energy-reactive (correct) |
-| dub-groove | 0.176 | 0.830 | ~121 | Energy-reactive (correct) |
-| **Average** | **0.472** | **0.938** | | |
+**Bayesian v20 performance — tested Feb 24 (CBSS thresh=0.4, per-sample ACF disambig):**
 
-**Current performance — New syncopated tracks (Feb 22, 2026):**
+| Track | Old F1 | Bayes F1 | BPM | Expected | Notes |
+|-------|:------:|:--------:|:---:|:--------:|-------|
+| trance-party | 0.775 | **0.813** | 130.2 | 136 | Stable improvement |
+| infected-vibes | 0.691 | **0.841** | 137.5 | 143.6 | Big improvement |
+| minimal-01 | 0.695 | **0.721** | 124.0 | 129.2 | Sub-harmonic fixed by ACF disambig |
+| goa-mantra | 0.571 | 0.461 | 138.5 | 136 | Phase drift, high run-to-run variance |
+| minimal-emotion | 0.372 | 0.307 | 129.1 | 129.2 | Phase offset (~80ms) |
+| deep-ambience | 0.435 | 0.378 | 122.0 | 123 | Slight regression |
+| dub-groove | 0.176 | 0.208 | 163.8 | 123 | Double-time lock |
+| machine-drum | 0.224 | 0.089 | 123.8 | 143.6 | Sub-harmonic BPM lock |
+| trap-electro | 0.190 | 0.036 | 131.5 | 112.3 | Very few beat events |
+| **Average** | **0.459** | **0.421** | | | Structural gap: 20-bin resolution |
 
-| Track | Beat F1 | BPM Acc | Detected BPM | Expected BPM | Issue |
-|-------|:-------:|:-------:|:------------:|:------------:|-------|
-| garage-uk-2step | 0.443 | 0.993 | 128.3 | 129.2 | BPM correct, good F1 |
-| dubstep-edm-halftime | 0.273 | 0.942 | 124.3 | 117.5 | Slightly high BPM |
-| amapiano-vibez | 0.257 | 0.861 | 127.9 | 112.3 | BPM pulled to prior center |
-| breakbeat-drive | 0.216 | 0.654 | 128.8 | 95.7 | **Harmonic lock** (4/3x) |
-| breakbeat-background | 0.186 | 0.503 | 128.9 | 86.1 | **Harmonic lock** (3/2x) |
-| reggaeton-fuego-lento | 0.186 | 0.626 | 126.8 | 92.3 | **Harmonic lock** (4/3x) |
-| dnb-energetic-breakbeat | 0.173 | 0.959 | 122.3 | 117.5 | Librosa half-time too |
-| dnb-liquid-jungle | 0.161 | 0.902 | 123.3 | 112.3 | Librosa half-time too |
-| afrobeat-feelgood-groove | 0.087 | 0.950 | 123.3 | 117.5 | Phase misalignment |
-| **Average** | **0.220** | **0.821** | | | |
+**Bayesian tunable parameters (9 total):**
 
-**Key finding:** Almost every syncopated track gets pulled to ~123-129 BPM regardless of true tempo. The tempo prior (center=120) dominates when autocorrelation can't find a clean peak. Breakbeat and reggaeton are most affected — true tempos (86-96 BPM) are far from prior center and get overridden by harmonic peaks near 128.
+| Param | Serial cmd | Default | Controls |
+|-------|-----------|---------|----------|
+| Lambda | `bayeslambda` | 0.1 | Transition tightness (how fast tempo can change) |
+| Prior center | `bayesprior` | 128 | Static prior Gaussian center BPM |
+| Prior width | `priorwidth` | 50 | Static prior Gaussian sigma |
+| Prior weight | `bayespriorw` | 0.0 | Ongoing static prior strength (off by default) |
+| ACF weight | `bayesacf` | 1.0 | Autocorrelation observation weight |
+| FT weight | `bayesft` | 0.8 | Fourier tempogram observation weight |
+| Comb weight | `bayescomb` | 0.7 | Comb filter bank observation weight |
+| IOI weight | `bayesioi` | 0.5 | IOI histogram observation weight |
+| CBSS threshold | `cbssthresh` | 0.4 | Adaptive beat threshold (CBSS > factor * mean, 0=off) |
 
-**Known limitations (visually acceptable, potential improvements identified):**
-- machine-drum non-harmonic BPM lock (143.6→118 BPM, ratio 6/5) — autocorrelation picks spurious peak. See Priority 6 for correction approaches
-- breakbeat/reggaeton harmonic lock — prior favors ~128 BPM harmonic over true ~86-96 BPM fundamental. HPS (Priority 6a) targets this
+**Ongoing static prior — tested and disabled (Feb 23):**
+Static Gaussian prior (centered at `bayesprior`, sigma `priorwidth`) multiplied into posterior each frame. Helps tracks near 128 BPM (minimal-01: 69.8→97.3 BPM) but actively hurts tracks far from center (trap-electro: 112→131 BPM, machine-drum: 144→124 BPM). Fundamental limitation — can't distinguish correct off-center tempo from sub-harmonic. Per-sample ACF harmonic disambiguation is the proper fix.
+
+**Known limitations:**
 - DnB half-time detection — both librosa and firmware detect ~117 BPM instead of ~170 BPM. Acceptable for visual purposes
 - trap/syncopated low F1 — energy-reactive mode is the correct visual response
 - deep-ambience low F1 — organic mode fallback is correct for ambient content
-- Per-track offset variation (-58 to +57ms) — invisible at LED update rates
 
 **What NOT to do (tested and rejected):**
 - Phase correction (phasecorr): Destroys BPM on syncopated tracks
 - ODF width > 5: Variable delay destroys beatoffset calibration
 - Ensemble transient input to CBSS: Only works for 4-on-the-floor
-- Disabling tempo prior to fix machine-drum: Doesn't fix it, destabilizes other tracks
-- Shifting tempo prior center to 128+: Marginal effect on machine-drum, hurts trance
-- Comb bank cross-validation (Feb 22): Both autocorrelation AND comb bank lock to the same wrong tempo (~118 BPM) because the audio genuinely has stronger periodicity there. Low correlation threshold (0.15) overcorrects on good tracks (infected-vibes BPM destroyed). Infrastructure remains in code (SETTINGS_VERSION 13, `combxvalconf`/`combxvalcorr` settings, `cbpm`/`cconf` debug streaming) with safe defaults (0.3/0.5)
+- Ongoing static prior as sole sub-harmonic fix: Helps near 128 BPM, hurts far from it (Feb 23)
+- Posterior-based harmonic disambig: Posterior already sub-harmonic dominated, check never triggers (Feb 24)
+- Soft bin-level ACF penalty: Helped trance-party (0.856) but destroyed goa-mantra (0.246), collateral damage (Feb 24)
+- HPS (both ratio-based and additive): Penalizes correct peaks or boosts wrong sub-harmonics (Feb 22)
+- Pulse train cross-correlation: Sub-harmonics produce similar onset alignment (Feb 22)
+- Sequential override chain: Features interact negatively, combined avg F1 dropped 0.472→0.381 (Feb 23)
 
 ### Priority 2: BandWeightedFluxDetector — COMPLETE (Feb 21, 2026)
 
@@ -204,159 +209,95 @@ The existing `rhythmStrength` blend works well but could be enhanced with additi
 
 These would modulate the existing `rhythmStrength` for smoother, more appropriate visual responses without hard mode switching.
 
-### Priority 6: Non-Harmonic BPM Correction (Research Complete, Feb 22)
+### Priority 6: Tempo Estimation — Bayesian Fusion (Feb 23, 2026)
 
-**Problem:** machine-drum (143.6 BPM) locks to ~118 BPM. The ratio 143.6/118 = 1.22 (close to 6/5) is a polyrhythmic relationship — not a clean harmonic. Both autocorrelation and the independent comb filter bank agree on the wrong tempo because the audio genuinely has stronger periodicity at ~118 BPM. Existing harmonic disambiguation (2:1, 3:2, 2:3) and comb bank cross-validation cannot fix this.
+**Architecture:** Replaced sequential override chain with Bayesian posterior estimation. All tempo signals (autocorrelation, Fourier tempogram, comb filter bank, IOI histogram) contribute per-bin observation likelihoods multiplied together with a Viterbi transition prior. MAP estimate with quadratic interpolation becomes the tempo. Post-posterior harmonic disambiguation checks 2x and 1.5x BPM bins.
 
-**Root cause:** Autocorrelation measures self-similarity at a lag, but does NOT measure whether onsets actually occur at regular intervals of that lag. Every 5th beat at 143.6 BPM coincides with every 6th beat at ~118 BPM, creating spurious autocorrelation energy at the lower frequency.
+**What the Bayesian refactor eliminated:**
+- Sequential override chain (~400 lines of cascading cross-validation)
+- HPS code (ratio-based and additive, both rejected Feb 22)
+- Pulse train cross-correlation (Percival 2014, rejected Feb 22)
+- 17 old tuning parameters (harmonic thresholds, cross-validation thresholds, etc.)
+- Negative feature interactions (combined features scored 0.381, worse than 0.472 baseline)
 
-**Candidate approaches (ranked by feasibility and impact):**
+**What it preserved:**
+- Autocorrelation computation (core signal, unchanged)
+- CBSS beat tracking (receives tempo from Bayesian state)
+- Comb filter bank, Fourier tempogram, IOI histogram (now per-bin observations)
+- ODF smoothing, beat timing offset (unchanged)
 
-#### 6a. Harmonic Product Spectrum — REJECTED (Feb 22, 2026)
+#### 6a. ODF Mean Subtraction — TESTED, KEEP ON (Feb 24, 2026)
 
-**Both ratio-based and additive (Percival-style) HPS tested and rejected:**
-- **Ratio-based** (`hpsFactor = 0.5 + ACF[2i]/ACF[i]`): Penalizes correct peaks whose sub-harmonics are naturally weaker. Destroyed trance-party (F1 0.775→0.383) and goa-mantra (F1 0.605→0.121).
-- **Additive** (`ACF[i] += ACF[2i]`): Boosts wrong sub-harmonic for goa-mantra (BPM 137→124, F1 0.571→0.070). Machine-drum unchanged with either approach.
-- **Root cause:** The problem is NOT that the correct peak lacks sub-harmonic support — it's that autocorrelation genuinely measures stronger periodicity at the wrong tempo. HPS operates on autocorrelation output, which is the wrong place to intervene.
-- **Code kept but disabled** (`hps` bool, default false, persisted to flash)
+**Status:** Tested with Bayesian fusion. Turning OFF causes major regressions:
+- minimal-01: 0.610→0.266 (BPM collapses to 89, sub-harmonic lock)
+- goa-mantra: 0.565→0.286
+- trance-party: 0.836→0.857 (marginal improvement)
 
-#### 6b. Pulse Train Cross-Correlation — REJECTED
+ODF mean subtraction is **essential** for Bayesian fusion — without it, DC bias in autocorrelation makes all lags look correlated and the Bayesian posterior can't discriminate. Keep enabled (default).
 
-Implemented Percival & Tzanetakis 2014 algorithm: sparse pulse train template (fundamental=1.0, double=0.5, 3/2=0.5), 4 beat cycles, magScore + varScore rank-level fusion. Also tried three-signal fusion (adding autocorrelation+prior score as third term).
+#### 6b. CBSS Adaptive Threshold — IMPLEMENTED (Feb 24, 2026)
 
-**Results:** Both two-signal and three-signal fusion cause regressions on trance/goa tracks:
-- trance-party: BPM 135.7→130.4, F1 0.650→0.500 (three-signal) or BPM→113.9 (two-signal)
-- goa-mantra: BPM 137→122.5, F1 0.571→0.155
-- machine-drum: BPM improved to 86 (still wrong, was 118 baseline)
+**Status:** Implemented as `cbssThresholdFactor` (default 0.4). Beat fires only if `CBSS > factor * cbssMean_` where cbssMean_ is an EMA with tau ~120 frames (~2s). Setting to 0 disables the threshold (countdown-only, old behavior).
 
-**Root cause:** In 4-on-the-floor trance with room acoustics, sub-harmonics produce similar onset alignment scores because every other beat still aligns. The onset-based signals (mag+var) outvote autocorrelation even with three-signal fusion. The approach fundamentally cannot distinguish octave-related tempos reliably.
+**Impact:** Prevents phantom beats during silence/breakdowns. With thresh=0.4, avg F1 0.421 across 9 tracks. Setting thresh=0.2 helped some tracks (minimal-01 0.460→0.546) but thresh=0.4 is the best overall default.
 
-- **Code kept but disabled** (`pulsetrain` bool, default false, persisted to flash)
+#### 6c. Lightweight Particle Filter — Future Alternative (Research, Feb 22)
 
-#### 6c. IOI Histogram Analysis — IMPLEMENTED, LIMITED EFFECT (Feb 22, 2026)
-
-Implemented: 48-entry onset timestamp ring buffer, pairwise interval histogram with skipped-beat folding (2x→1x), 3-bin smoothing, upward-only guard. Cross-validates autocorrelation — if IOI peak suggests faster tempo AND autocorrelation has evidence at that lag, switch.
-
-**Results (A/B testing on device):**
-- machine-drum: IOI makes BPM **worse** (118→96) because BandFlux transients don't fire at 143.6 BPM intervals — measured IOIs are 600-850ms (~70-100 BPM), not the expected 418ms
-- infected-vibes: No meaningful change (F1 0.850 with or without IOI)
-- trance-party: Neutral (F1 ~0.44 both ways)
-
-**Root cause:** IOI repackages transient timing data. If BandFlux only detects ~60% of kicks with highly variable intervals, the IOI histogram reflects that same bad data. The approach is fundamentally limited by onset detection quality.
-
-**Upward-only guard added** to prevent regressions (only allows IOI to push BPM higher, never lower). This makes IOI inert on machine-drum but prevents the 118→96 regression.
-
-- **Code live in firmware** (SETTINGS_VERSION 16, `ioi`/`ioipeakratio`/`ioicorr` settings, `ioi`/`ic` debug streaming)
-- **Verdict:** Safe to leave enabled (upward-only guard), but does not solve the core problem
-
-#### 6d. Fourier Tempogram Cross-Validation — HIGH PRIORITY (Research, Feb 22)
-
-**This is the single most promising untried approach for sub-harmonic locking.**
-
-Autocorrelation of a periodic signal at period T inherently produces peaks at T, 2T, 3T... (sub-harmonics). The Fourier tempogram (DFT of the ODF buffer) has the **opposite** property — it shows the fundamental and harmonics (T, T/2, T/3) but **suppresses sub-harmonics**. A 143 BPM signal would show peaks at 143, 286 BPM but NEVER at 72 BPM in the Fourier domain.
-
-**Implementation:** Take existing 360-sample OSS buffer → Hanning window → zero-pad to 512 → FFT → magnitude spectrum → convert bins to BPM (`bpm = bin * frameRate * 60 / fftSize`) → find peak in 60-200 BPM range → cross-validate with autocorrelation result.
-
-- **CPU:** Implemented as per-lag Goertzel (not FFT). O(~190 lags × 360 samples) = ~68K multiply-adds every 500ms. Amortized cost is well within headroom.
-- **Memory:** ~800 bytes stack (200 histogram bins for IOI, reusable)
-- **Complexity:** ~40-60 lines C++
-- **Risk:** Low — cross-validation pattern (same as comb bank, IOI). If Fourier peak agrees with autocorrelation, no change. If it disagrees and autocorrelation has evidence at the Fourier lag, switch.
-- **References:** Grosche & Muller 2011 ("What Makes Beat Tracking Difficult?"), AudioLabs Erlangen Fourier Tempogram tutorial
-
-#### 6e. ODF Mean Subtraction — HIGH PRIORITY (Research, Feb 22)
-
-**Gap vs BTrack reference implementation.** Our autocorrelation computes raw cross-products on the OSS buffer without detrending. BTrack subtracts the local mean first:
-
-```
-// BTrack: correlation += (odf[i] - mean) * (odf[i+lag] - mean)
-// Ours:   correlation += odf[i] * odf[i+lag]   (no mean subtraction)
-```
-
-Without mean subtraction, the autocorrelation has a DC component that creates baseline correlation at ALL lags — every lag looks somewhat correlated. This DC floor can bury the true tempo peak and make sub-harmonic peaks appear competitive.
-
-- **CPU:** Near-zero (compute mean once, subtract in inner loop — 2 extra multiplications per iteration)
-- **Memory:** 1 float
-- **Complexity:** ~10 lines
-- **Risk:** Very low — mathematically more correct than current approach
-- **References:** BTrack source code (Adam Stark), standard autocorrelation normalization
-
-#### 6f. Lightweight Particle Filter with Octave Investigator — MEDIUM PRIORITY (Research, Feb 22)
-
-Inspired by BeatNet (Heydari et al., ISMIR 2021). Run 100-200 particles, each tracking (beat_period, beat_position). Per frame: advance position, weight by ODF match at predicted beat times. Every ~1 second: resample (kill low-weight, copy high-weight). **Key innovation:** At resampling, inject 10-20 particles at 2x and 0.5x the current median tempo. This explicitly explores tempo octave alternatives and self-corrects.
+Inspired by BeatNet (Heydari et al., ISMIR 2021). 100-200 particles tracking (beat_period, beat_position). Octave investigator injects particles at 2x/0.5x median tempo at resampling. Could replace or complement Bayesian fusion if it proves insufficient.
 
 - **CPU:** ~1% (100 particles × weight update per frame + periodic resampling)
-- **Memory:** ~2KB (200 particles × 12 bytes each)
+- **Memory:** ~2KB
 - **Complexity:** ~100-150 lines C++
-- **Risk:** Medium — resampling and observation model need tuning
-- **References:** BeatNet (Heydari 2021, ISMIR), Cemgil 2004 (Particle Filtering for Tempo), Hainsworth 2004
 
-#### 6g. Multi-Agent Beat Tracking (IBT-style) — MEDIUM PRIORITY (Research, Feb 22)
+#### 6d. Multi-Agent Beat Tracking — Future Alternative (Research, Feb 22)
 
-Maintain 5-10 competing tempo/phase agents. Each independently predicts beats and scores against ODF. Best-scoring agent determines output. When music changes character, a different agent can take over. Agents at different metrical levels compete naturally.
+5-10 competing tempo/phase agents. Each scores onset events against predicted beats. Best-scoring agent determines output. Agents at different metrical levels compete naturally.
 
-- **CPU:** <1% (10 agents × score update per frame)
-- **Memory:** ~500 bytes (10 agents × 50 bytes)
-- **Complexity:** ~150-250 lines C++
-- **Risk:** Medium — agent lifecycle management (spawn/kill/score) needs tuning
-- **References:** IBT (Oliveira et al., ISMIR 2010), BeatRoot (Dixon 2007), Klapuri 2006
+- **CPU:** <1% | **Memory:** ~500 bytes | **Complexity:** ~150-250 lines
 
-#### 6h. CBSS Adaptive Threshold — LOW PRIORITY (Research, Feb 22)
-
-**Gap vs BTrack reference implementation.** Our beat detection fires purely on countdown (`timeToNextBeat_ <= 0`). BTrack adds: `AND CBSS[n] > adaptiveThreshold`. Without this, beats fire during silence and breakdowns where there's no rhythmic content.
-
-- **CPU:** ~5 ops/frame (running mean of CBSS)
-- **Memory:** 1 float
-- **Complexity:** ~15 lines
-- **Risk:** Low — improves beat quality but won't fix sub-harmonic locking
-- **References:** BTrack source code (Adam Stark), Davies & Plumbley 2007
-
-#### Approaches evaluated and not recommended
+#### Approaches tested and rejected
 
 | Approach | Why Not | Tested |
 |----------|---------|--------|
-| HPS ratio-based | Penalizes correct peaks, severe regressions | Feb 22 |
-| HPS additive (Percival) | Boosts wrong sub-harmonic, no help for machine-drum | Feb 22 |
-| Pulse train 2-signal (Percival) | Onset alignment overrides autocorrelation to sub-harmonics | Feb 22 |
-| Pulse train 3-signal (+ autocorr fusion) | Autocorrelation anchor too weak, still regresses trance/goa | Feb 22 |
-| Comb bank cross-validation | Both autocorrelation AND comb bank lock to same wrong tempo | Feb 22 |
-| IOI histogram (bidirectional) | Repackages bad transient data; made machine-drum worse (118→96 BPM) | Feb 22 |
-| Extended ratio checks (5/6, 5/4) | Fragile, threshold tuning causes regressions on other tracks | Feb 22 |
-| Style-aware prior shift | Shifting prior center — marginal effect, hurts other tracks | Feb 22 |
-| Deep learning (TCN/CRNN/Transformer) | Not feasible on nRF52840 (64 MHz, no matrix acceleration) | Research |
-| Full Boeck CNN (3 FFT sizes) | Needs ~60KB RAM for multi-resolution spectrograms | Research |
-| Full 192-band SuperFlux filterbank | Impractical at FFT-256 (only 128 input bins) | Research |
-| HMM/Bayesian onset detection | Smoothing layer can't create peaks that don't exist | Research |
-| Cyclic tempogram | Only handles octave (2:1) ambiguity, not 6/5 | Research |
-| Kalman filter beat tracking | Unimodal Gaussian can't represent multi-modal tempo ambiguity | Research |
-| ~~PLP / Fourier tempogram~~ | ~~Moderate CPU cost, similar effect to pulse train~~ **WRONG — see 6d** | Corrected |
-
-**Recommended implementation order:**
-1. **ODF mean subtraction (6e)** — ~10 lines, removes DC bias from autocorrelation. Lowest risk, addresses root cause.
-2. **Fourier tempogram (6d)** — ~50 lines, mathematically suppresses sub-harmonics. Complementary to autocorrelation.
-3. **Particle filter (6f)** — if 6d+6e insufficient. Explicit tempo octave exploration.
-4. **Multi-agent (6g)** — alternative to particle filter if competing-hypothesis model preferred.
+| Sequential override chain | Features interact negatively, combined F1 0.381 < 0.472 baseline | Feb 23 |
+| Ongoing static prior (Bayesian) | Helps near 128 BPM, hurts tracks at 112/144 BPM | Feb 23 |
+| HPS (ratio-based + additive) | Penalizes correct peaks or boosts wrong sub-harmonics | Feb 22 |
+| Pulse train (Percival 2014) | Sub-harmonics produce similar onset alignment | Feb 22 |
+| Comb bank cross-validation | Both ACF and comb lock to same wrong tempo | Feb 22 |
+| IOI bidirectional override | Repackages bad transient data | Feb 22 |
+| ODF mean subtraction OFF | Destroys BPM on sparse tracks (minimal-01 BPM→89) | Feb 24 |
+| Per-band thresholds ON | Helps strong tracks, destroys weak ones (avg 0.421→0.354) | Feb 24 |
+| Multi-frame diffframes=2 | Too many transients, hurts phase (avg -0.098) | Feb 24 |
+| Deep learning/CNN/Transformer | Not feasible on nRF52840 (64 MHz, no matrix acceleration) | Research |
 
 ### Priority 7: Onset Detection Improvements (Research, Feb 22)
 
 Comprehensive research survey identified several untried improvements to BandWeightedFlux that could improve kick detection rate (currently ~60% recall on some tracks). Better onset detection feeds better data to all BPM tracking systems.
 
-#### 7a. Per-Band Independent Thresholds — HIGH PRIORITY
+#### 7a. Per-Band Independent Thresholds — TESTED, KEEP OFF (Feb 24, 2026)
 
-Currently one combined flux threshold gates detection. A kick might produce `combinedFlux = 1.2` when threshold is ~1.2, causing a miss. But the bass band alone might show a clear spike that gets diluted by low mid/high flux. Independent bass-band threshold detection would catch these masked kicks.
+Independent adaptive thresholds per band (bass/mid/high). Detection fires if ANY band exceeds its own threshold × multiplier. **Disabled by default** (`bandflux_perbandthresh=0`).
 
-- **Memory:** ~20 bytes (3 separate running means)
-- **CPU:** Negligible
-- **Complexity:** ~30 lines
-- **References:** Multi-band onset detection (Bello et al. 2005), SuperFlux per-band variant
+- **Settings:** `bandflux_perbandthresh` (bool), `bandflux_perbandmult` (default 1.5)
+- **3-track subset results:** avg F1 0.670→0.715 (+0.045) — improved goa-mantra (+0.064) and minimal-01 (+0.074)
+- **Full 9-track regression:** avg F1 0.421→0.354 (**-0.067**) — **major regressions** on quiet/sparse tracks:
+  - deep-ambience: 0.378→0.097 (-0.281)
+  - minimal-emotion: 0.307→0.140 (-0.167)
+  - machine-drum: 0.089→0.014 (-0.075)
+- **Root cause:** Per-band detection generates more transients which overwhelms beat tracker on sparse tracks. Helps strong rhythmic tracks but destroys weak ones.
+- **Verdict:** Keep disabled. The 3-track subset was misleading.
 
-#### 7b. Multi-Frame Temporal Reference — MEDIUM PRIORITY
+#### 7b. Multi-Frame Temporal Reference — TESTED, KEEP AT 1 (Feb 24, 2026)
 
-Current BandFlux compares to only 1 previous frame (`prevLogMag_`). SuperFlux paper uses comparison to frame N-2 or N-3 (`diff_frames` parameter), which is more robust to gradual bass buildup and better detects kicks during bass sweeps.
+Configurable `diffframes` (1-3) for BandFlux reference frame. Default remains 1 (compare to previous frame). Higher values skip intermediate frames for more robust flux measurement during bass sweeps.
 
-- **Memory:** ~256 bytes per extra frame (64 bins × 4 bytes)
-- **CPU:** Negligible
-- **Complexity:** ~20 lines
-- **References:** SuperFlux (Bock & Widmer, DAFx 2013), librosa `superflux` implementation
+- **Settings:** `bandflux_diffframes` (default 1, range 1-3)
+- **diffframes=2 results:** avg F1 0.670→0.572 (**-0.098**) on 3-track subset:
+  - trance-party: 0.836→0.783 (-0.053)
+  - goa-mantra: 0.565→0.252 (-0.313) — too many transients (349→460)
+  - minimal-01: 0.610→0.681 (+0.071) — more transients helped BPM
+- **Root cause:** diffframes=2 detects more transients overall (larger flux from skipping a frame), which overwhelms phase alignment on tracks with complex textures.
+- **Verdict:** Keep at 1 (default).
 
 #### 7c. FFT-512 Bass-Focused Analysis — HIGH IMPACT, MODERATE EFFORT
 
@@ -390,17 +331,61 @@ Train a CNN on desktop with labeled EDM onset data, distill to tiny student mode
 
 ---
 
+## Calibration Status (Feb 24, 2026)
+
+**Bayesian fusion replaced the old calibration gap.** The sequential override chain's 17 independent parameters (each requiring per-feature sweeps) have been replaced by 9 Bayesian/beat weights that interact cooperatively. The old problem of negative feature interactions is solved architecturally.
+
+| Feature | Parameters | Status |
+|---------|:----------:|--------|
+| **Bayesian weights** | bayesacf, bayesft, bayescomb, bayesioi, bayespriorw, bayeslambda, bayesprior, priorwidth | Defaults set, tuning tested (avg F1 0.421) |
+| **CBSS adaptive threshold** | cbssthresh | **Calibrated** (0.4 default, Feb 24) |
+| ODF Mean Subtraction | odfmeansub (toggle) | **Essential** — keep ON. OFF destroys BPM (Feb 24) |
+| Per-band thresholds | bandflux_perbandthresh, perbandmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
+| Multi-frame diffframes | bandflux_diffframes | **Tested, keep at 1** — diffframes=2 too many transients (Feb 24) |
+| BandFlux core params | gamma, bassWeight, threshold, onsetDelta | **Calibrated** (Feb 21) |
+
 ## Next Actions
 
-1. ~~**Add onset density tracking**~~ — ✅ Done. See Priority 5.
-2. ~~**Build diverse test music library**~~ — ✅ Done. 9 syncopated tracks added.
-3. ~~**Implement HPS tempo correction**~~ — ❌ Rejected. See Priority 6a.
-4. ~~**Implement pulse train cross-correlation**~~ — ❌ Rejected. See Priority 6b.
-5. ~~**Implement IOI histogram analysis**~~ — ✅ Implemented, limited effect. See Priority 6c.
-6. **Implement ODF mean subtraction** (Priority 6e) — ~10 lines, removes autocorrelation DC bias. Highest priority.
-7. **Implement Fourier tempogram cross-validation** (Priority 6d) — ~50 lines, sub-harmonic suppression. Highest priority.
-8. **Implement per-band independent thresholds** (Priority 7a) — ~30 lines, unmasks bass kicks.
-9. **Implement multi-frame temporal reference** (Priority 7b) — ~20 lines, better kick detection during bass sweeps.
+### Active
+1. **FFT-512 bass-focused analysis** (Priority 7c) — Better kick detection to feed better data upstream. ~200 lines, ~5KB RAM.
+2. **Particle filter beat tracking** (Priority 6c) — Fundamentally different approach that handles multi-modal tempo distributions. ~100-150 lines, ~2KB RAM.
+3. **Weighted phase deviation fusion** (Priority 7d) — Catches kicks during sustained bass notes. ~50 lines, ~512 bytes.
+
+### Completed
+- ~~**Feature testing sweep**~~ — ✅ ODF mean sub OFF, diffframes=2, per-band thresholds ON all tested (Feb 24). None improve overall avg. Current defaults are optimal.
+- ~~**CBSS Adaptive Threshold**~~ — ✅ Implemented (SETTINGS_VERSION 20). Prevents phantom beats during silence.
+- ~~**Per-sample ACF Harmonic Disambiguation**~~ — ✅ Fixed minimal-01 sub-harmonic (BPM 70→124).
+- ~~**Bayesian Tempo Fusion**~~ — ✅ Implemented (SETTINGS_VERSION 18-20). Replaced sequential override chain.
+- ~~**Design unified feature cooperation framework**~~ — ✅ Done (Bayesian fusion is the framework).
+- ~~**Onset density tracking**~~ — ✅ Done.
+- ~~**Diverse test music library**~~ — ✅ 18 tracks (9 original + 9 syncopated).
+- ~~**HPS, Pulse train, IOI, FT, ODF mean sub**~~ — ✅ All implemented; IOI/FT/comb now feed Bayesian fusion. HPS/pulse train removed.
+
+---
+
+## Bayesian Tempo Fusion — IMPLEMENTED (Feb 23, 2026)
+
+**Status:** Implemented in SETTINGS_VERSION 18-20. Sequential override chain replaced with unified Bayesian posterior estimation. CBSS adaptive threshold added in v20.
+
+**Architecture summary:**
+```
+Every 250ms:
+  1. Compute autocorrelation of OSS buffer (unchanged)
+  2. FOR EACH of 20 tempo bins (60-180 BPM from CombFilterBank):
+       - ACF observation: normalized correlation at bin's lag, raised to bayesAcfWeight
+       - FT observation: Goertzel magnitude at bin's lag, raised to bayesFtWeight
+       - Comb observation: comb filter energy at bin, raised to bayesCombWeight
+       - IOI observation: pairwise interval count at bin's lag, raised to bayesIoiWeight
+  3. Viterbi transition: spread prior through Gaussian (sigma = bayesLambda * BPM)
+  4. Posterior = prediction × [static prior] × ACF × FT × comb × IOI
+  5. MAP estimate with quadratic interpolation → BPM
+  6. Per-sample ACF harmonic disambiguation: check raw ACF at lag/2 (>50%) and lag*2/3 (>60%)
+  7. EMA smoothing (tempoSmoothingFactor) → CBSS beat period update
+```
+
+**Key finding from implementation:** Bayesian fusion alone cannot prevent sub-harmonic locking. All four observation signals see sub-harmonics (every-other-beat alignment is real signal at half-tempo). Per-sample ACF harmonic disambiguation (step 6) was required — this is consistent with BTrack/madmom which also include explicit octave correction. Posterior-based disambiguation failed because the posterior is already sub-harmonic dominated.
+
+**Resources:** 228KB flash (28%), 51KB RAM (21%). Net ~25% CPU reduction vs old chain (20 Goertzel evaluations vs ~40, no sequential override cascade).
 
 ---
 

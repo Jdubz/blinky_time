@@ -36,7 +36,10 @@ public:
     // Version 15: Added pulseTrainEnabled, pulseTrainCandidates
     // Version 16: Added IOI histogram cross-validation (ioiEnabled, ioiMinPeakRatio, ioiMinAutocorr)
     // Version 17: Added ODF mean subtraction + Fourier tempogram (odfMeanSubEnabled, ftEnabled, ftMinMagnitudeRatio, ftMinAutocorr)
-    static const uint8_t SETTINGS_VERSION = 17;  // Settings schema (fire, water, lightning, mic, music params)
+    // Version 18: Bayesian tempo fusion (replaced 17 sequential-override params with 6 Bayesian weights)
+    // Version 19: Added bayesPriorWeight (ongoing static prior strength)
+    // Version 20: Added cbssThresholdFactor (CBSS adaptive threshold)
+    static const uint8_t SETTINGS_VERSION = 20;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -162,11 +165,8 @@ public:
         float bpmMax;
         float cbssAlpha;       // CBSS weighting (0.8-0.95, higher = more predictive)
 
-        // Tempo prior (CRITICAL for correct BPM tracking)
-        float tempoPriorCenter;    // Center of Gaussian prior (BPM)
+        // Tempo prior width (used by Bayesian static prior)
         float tempoPriorWidth;     // Width (sigma) of prior
-        float tempoPriorStrength;  // Blend: 0=no prior, 1=full prior
-        bool tempoPriorEnabled;    // Enable tempo prior weighting
 
         // Pulse modulation
         float pulseBoostOnBeat;      // Boost factor for on-beat transients
@@ -184,32 +184,21 @@ public:
         float beatConfidenceDecay;      // Per-frame confidence decay when no beat detected
         float beatTimingOffset;         // Beat prediction advance in frames (ODF+CBSS delay compensation)
         float phaseCorrectionStrength;  // Phase correction toward transients (0=off, 1=full snap)
+        float cbssThresholdFactor;      // CBSS adaptive threshold: beat fires only if CBSS > factor * mean (0=off)
 
-        // Autocorrelation tuning
-        float tempoSmoothFactor;        // BPM EMA blend (0=instant, 1=frozen, 0.75=default)
-        float harmonicUp2xThresh;       // Half-lag harmonic fix threshold (0.1-0.95)
-        float harmonicUp32Thresh;       // 2/3-lag harmonic fix threshold (0.1-0.95)
-        float peakMinCorrelation;       // Min normalized correlation for peak (0.05-0.8)
-
-        // Comb bank cross-validation
-        float combCrossValMinConf;      // Min comb confidence to trigger cross-val (0.1-0.8)
-        float combCrossValMinCorr;      // Min autocorr fraction at comb lag (0.05-0.5)
+        // Bayesian tempo fusion (v18)
+        float bayesLambda;              // Transition tightness (0.01=rigid, 1.0=loose)
+        float bayesPriorCenter;         // Static prior center BPM (Gaussian)
+        float bayesPriorWeight;         // Ongoing static prior strength (0=off, 1=standard, 2=strong)
+        float bayesAcfWeight;           // Autocorrelation observation weight
+        float bayesFtWeight;            // Fourier tempogram observation weight
+        float bayesCombWeight;          // Comb filter bank observation weight
+        float bayesIoiWeight;           // IOI histogram observation weight
 
         uint8_t odfSmoothWidth;         // ODF smooth window (3-11, odd)
-        bool hpsEnabled;                // Harmonic Product Spectrum additive enhancement
-        bool pulseTrainEnabled;         // Pulse train evaluation (Percival-style)
-        uint8_t pulseTrainCandidates;   // Number of candidates to evaluate (2-10)
-
-        // IOI histogram cross-validation
-        float ioiMinPeakRatio;          // Peak must be Nx mean to be "clear" (1.5-5.0)
-        float ioiMinAutocorr;           // Min autocorr at IOI lag, fraction of best (0.05-0.5)
-        bool ioiEnabled;                // Enable IOI histogram cross-validation
-
-        // ODF mean subtraction + Fourier tempogram (Feb 23, 2026)
+        bool ioiEnabled;                // Enable IOI histogram observation
         bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
-        bool ftEnabled;                 // Enable Fourier tempogram cross-validation
-        float ftMinMagnitudeRatio;      // FT peak must be Nx mean magnitude (1.2-5.0)
-        float ftMinAutocorr;            // Min autocorr at FT lag, fraction of best (0.05-0.5)
+        bool ftEnabled;                 // Enable Fourier tempogram observation
     };
 
     /**
@@ -305,8 +294,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 124,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (124 bytes = 28 floats + 5 bools + 2 uint8 + padding)");
+    static_assert(sizeof(StoredMusicParams) == 100,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (100 bytes = 24 floats + 1 uint8 + 3 bools)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     static_assert(sizeof(ConfigData) <= 512,

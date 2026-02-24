@@ -1215,3 +1215,123 @@ New post-detection filter requiring minimum frame-to-frame flux jump. Pads/swell
 2. **Onset delta filter at 0.3 is net positive** — Avg Beat F1 improved 0.452→0.472. Best improvements: trance-party +0.098, minimal-emotion +0.104. One regression: deep-ambience (0.499→0.404) from soft ambient onsets being filtered.
 3. **Per-track beat offsets vary -58ms to +57ms** — A single fixed offset can't compensate for all tracks. Adaptive offset investigated but risks oscillation for marginal benefit. Accepted as ~70ms limitation.
 4. **Sub-harmonic lock on machine-drum is unfixable by tuning** — Tested disabling tempo prior (BPM: 119.6→131.8, still wrong), shifting prior center to 128 (barely helped, hurt trance). Fundamental autocorrelation limitation.
+
+---
+
+## Test Session: 2026-02-23 (Feature Isolation Testing — IOI, FT, ODF Mean Sub)
+
+**Environment:**
+- Hardware: Seeeduino XIAO nRF52840 Sense
+- Serial Port: COM3
+- Hardware Gain: AGC active (unlocked)
+- Detector config: BandFlux Solo (thresh 0.5, onsetDelta 0.3)
+- Firmware: SETTINGS_VERSION 17 (IOI + Fourier Tempogram + ODF Mean Sub)
+- Tool: MCP `run_music_test`
+
+### Context
+
+Three new tempo-estimation features implemented (SETTINGS_VERSION 17):
+1. **IOI Histogram** (`ioi=1`) — onset inter-onset interval cross-validation, upward-only guard
+2. **Fourier Tempogram** (`ft=1`) — Goertzel DFT of OSS buffer, sub-harmonic suppression
+3. **ODF Mean Subtraction** (`odfmeansub=1`) — BTrack-style DC removal before autocorrelation
+
+All enabled by default. Previous baseline (Feb 21, BandFlux Solo): avg Beat F1 = 0.472.
+
+### Phase 1: All Features ON — 9 Tracks
+
+**Result: REGRESSION — avg Beat F1 dropped 0.472 → 0.381 (hit abort condition < 0.40)**
+
+| Track | Prev F1 | All ON F1 | Delta | Prev BPM | All ON BPM |
+|-------|:-------:|:---------:|:-----:|:--------:|:----------:|
+| trance-party | 0.775 | 0.432 | **-0.343** | 138 | 138.2 |
+| minimal-01 | 0.695 | 0.658 | -0.037 | 125 | 125 |
+| infected-vibes | 0.691 | 0.758 | +0.067 | 141 | 141 |
+| goa-mantra | 0.571 | 0.577 | +0.006 | 138 | 137 |
+| minimal-emotion | 0.550 | 0.472 | -0.078 | 125 | 125 |
+| deep-ambience | 0.267 | 0.216 | -0.051 | 118 | 118 |
+| machine-drum | 0.224 | 0.066 | **-0.158** | 118 | 161.7 |
+| trap-electro | 0.190 | 0.034 | **-0.156** | 130 | 177.3 |
+| dub-groove | 0.176 | 0.214 | +0.038 | 121 | 121 |
+| **Average** | **0.472** | **0.381** | **-0.091** | | |
+
+### Phase 2: Additive Isolation — 5 Diagnostic Tracks
+
+Methodology: All features OFF as baseline, then enable ONE feature at a time.
+
+**All OFF Baseline (ioi=0, ft=0, odfmeansub=0):**
+
+| Track | Beat F1 | BPM | Notes |
+|-------|:-------:|:---:|-------|
+| trance-party | 0.753 | ~136 | Strong baseline |
+| infected-vibes | 0.800 | ~143 | Best track |
+| goa-mantra | 0.338 | ~136 | Phase drift |
+| machine-drum | 0.178 | ~118 | Sub-harmonic lock |
+| trap-electro | 0.238 | ~112 | Syncopated |
+
+**Isolation Matrix (each feature tested alone):**
+
+| Track | All OFF | IOI Only | FT Only | MeanSub Only | All ON |
+|-------|:-------:|:--------:|:-------:|:------------:|:------:|
+| trance-party | 0.753 | 0.794 (+) | 0.624 (**-**) | 0.741 (=) | 0.432 |
+| machine-drum | 0.178 | 0.181 (=) | 0.343 (**+**) | 0.020 (**-**) | 0.066 |
+| infected-vibes | 0.800 | 0.805 (=) | 0.876 (+) | 0.633 (**-**) | 0.758 |
+| goa-mantra | 0.338 | 0.380 (+) | 0.181 (**-**) | 0.513 (**+**) | 0.577 |
+| trap-electro | 0.238 | 0.172 (-) | 0.269 (+) | 0.009 (**-**) | 0.034 |
+
+**Feature scorecard:**
+- **IOI:** +4 tracks, -1 track. Improvements within variance (~±0.04). Safe but marginal.
+- **FT:** +3 tracks, -2 tracks. Strong on machine-drum (+0.165) but destroys trance-party (-0.129) and goa-mantra (-0.157).
+- **ODF Mean Sub:** +1 track, -3 tracks. Catastrophic on sparse tracks (machine-drum -0.158, trap-electro -0.229).
+
+### Phase 3: FT Threshold Calibration Attempts
+
+Tested 4 threshold combinations (all features OFF except FT):
+
+| ftmagratio | ftcorr | machine-drum F1 | trance-party F1 | goa-mantra F1 |
+|:----------:|:------:|:---------------:|:---------------:|:-------------:|
+| 1.5 (default) | 0.15 (default) | 0.343 | 0.624 | 0.181 |
+| 2.5 | 0.30 | — (too conservative, no FT corrections) | — | — |
+| 2.0 | 0.20 | — (still too conservative) | — | — |
+| 1.7 | 0.15 | ~0.30 (BPM 150) | — | worse |
+| 1.5 | 0.30 | — | — | still bad |
+
+**Conclusion:** No threshold combination fixes both machine-drum AND preserves trance-party/goa-mantra. FT corrects when autocorrelation is wrong AND when it's right — threshold can't distinguish these cases.
+
+### Phase 4: FT Upward-Only Architectural Fix
+
+Changed AudioController.cpp line 787: FT now only pushes BPM **upward** (>10% higher than autocorrelation). Rationale: sub-harmonic lock = BPM too low is the primary failure mode.
+
+**Code change:**
+```cpp
+// Before: if (fabsf(ftPeakBpm - autoBpm) / autoBpm > 0.1f)
+// After:  if (ftPeakBpm > autoBpm * 1.1f)
+```
+
+**Results (new firmware, FT upward-only, all other features OFF):**
+
+| Track | All OFF Baseline | FT Upward-Only | Delta |
+|-------|:----------------:|:--------------:|:-----:|
+| trance-party | 0.652* | 0.611 | -0.041 |
+| machine-drum | 0.178 | **0.300** | +0.122 |
+| infected-vibes | 0.800 | 0.814 | +0.014 |
+| goa-mantra | 0.338 | 0.151** | -0.187 |
+| trap-electro | 0.238 | **0.300** | +0.062 |
+
+*All-OFF baseline shifted with new firmware (0.753→0.652 for trance-party — run-to-run variance).
+**goa-mantra: BPM correct at 136.0 but severe phase drift causing low F1. Needs investigation.
+
+### Key Findings
+
+1. **Features interact negatively** — Combined effect (0.381 avg) is worse than any individual feature or the baseline (0.472). This is not additive — features compete for BPM control.
+
+2. **ODF Mean Subtraction is net destructive** — Helps only goa-mantra (+0.175), catastrophic on machine-drum (-0.158) and trap-electro (-0.229). Should be disabled or gated by onset density.
+
+3. **FT upward-only is the best single change** — Preserves machine-drum improvement (+0.122) while eliminating most downward-correction regressions. goa-mantra phase drift remains an issue.
+
+4. **IOI is noise-level** — All improvements within ±0.04, which is below run-to-run variance. Safe but contributes essentially nothing.
+
+5. **Run-to-run variance is ~±0.1 F1** — Room acoustics in speaker-based tests create significant measurement noise. Small improvements (<0.05) cannot be reliably measured.
+
+6. **No feature has been properly calibrated** — All tested at implementation defaults. No parameter sweeps performed for any feature.
+
+7. **The system lacks a coordination mechanism** — Each feature independently modifies BPM. When they disagree, the result is worse than having none of them. Need a framework for feature cooperation rather than independent stacking.

@@ -248,10 +248,7 @@ void SerialConsole::registerRhythmSettings() {
         "Enable comb filter bank for tempo validation");
     settings_.registerFloat("combbankfeedback", &audioCtrl_->combBankFeedback, "rhythm",
         "Comb bank resonance (0.85-0.98)", 0.85f, 0.98f);
-    settings_.registerFloat("combxvalconf", &audioCtrl_->combCrossValMinConf, "rhythm",
-        "Comb cross-val min confidence (0.1-0.8)", 0.1f, 0.8f);
-    settings_.registerFloat("combxvalcorr", &audioCtrl_->combCrossValMinCorr, "rhythm",
-        "Comb cross-val min autocorr fraction (0.05-0.5)", 0.05f, 0.5f);
+    // (combxvalconf/combxvalcorr removed — comb bank feeds Bayesian fusion directly)
 
     // CBSS beat tracking parameters
     settings_.registerFloat("cbssalpha", &audioCtrl_->cbssAlpha, "rhythm",
@@ -260,42 +257,39 @@ void SerialConsole::registerRhythmSettings() {
         "CBSS log-Gaussian tightness (higher=stricter tempo)", 1.0f, 20.0f);
     settings_.registerFloat("beatconfdecay", &audioCtrl_->beatConfidenceDecay, "rhythm",
         "Beat confidence decay per frame", 0.9f, 0.999f);
-    settings_.registerFloat("temposnap", &audioCtrl_->tempoSnapThreshold, "rhythm",
-        "BPM change ratio to snap vs smooth", 0.05f, 0.5f);
+    // (temposnap removed — Bayesian fusion handles tempo transitions)
     settings_.registerFloat("beatoffset", &audioCtrl_->beatTimingOffset, "rhythm",
         "Beat prediction advance in frames (ODF+CBSS delay compensation)", 0.0f, 15.0f);
     settings_.registerFloat("phasecorr", &audioCtrl_->phaseCorrectionStrength, "rhythm",
         "Phase correction toward transients (0=off, 1=full snap)", 0.0f, 1.0f);
-    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothFactor, "rhythm",
-        "BPM smoothing blend (0=instant, 1=frozen, 0.7=default)", 0.0f, 0.99f);
+    settings_.registerFloat("cbssthresh", &audioCtrl_->cbssThresholdFactor, "rhythm",
+        "CBSS adaptive threshold factor (0=off, beat fires only if CBSS > factor*mean)", 0.0f, 2.0f);
+    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothingFactor, "rhythm",
+        "Tempo EMA smoothing (0.5=fast, 0.99=slow)", 0.5f, 0.99f);
     settings_.registerUint8("odfsmooth", &audioCtrl_->odfSmoothWidth, "rhythm",
         "ODF smooth window (3-11, odd)", 3, 11);
-    settings_.registerFloat("harmup2x", &audioCtrl_->harmonicUp2xThresh, "rhythm",
-        "Half-lag harmonic fix threshold (0.3-0.9)", 0.1f, 0.95f);
-    settings_.registerFloat("harmup32", &audioCtrl_->harmonicUp32Thresh, "rhythm",
-        "2/3-lag harmonic fix threshold (0.3-0.9)", 0.1f, 0.95f);
-    settings_.registerFloat("peakmincorr", &audioCtrl_->peakMinCorrelation, "rhythm",
-        "Min normalized correlation for peak (0.1-0.8)", 0.05f, 0.8f);
-    settings_.registerBool("hps", &audioCtrl_->hpsEnabled, "rhythm",
-        "Harmonic Product Spectrum weighting (sub-harmonic support at 2x lag)");
-    settings_.registerBool("pulsetrain", &audioCtrl_->pulseTrainEnabled, "rhythm",
-        "Pulse train evaluation (re-rank autocorr candidates by onset alignment)");
-    settings_.registerUint8("ptcandidates", &audioCtrl_->pulseTrainCandidates, "rhythm",
-        "Pulse train candidates to evaluate (2-10)", 2, 10);
     settings_.registerBool("ioi", &audioCtrl_->ioiEnabled, "rhythm",
-        "IOI histogram cross-validation (onset interval analysis)");
-    settings_.registerFloat("ioipeakratio", &audioCtrl_->ioiMinPeakRatio, "rhythm",
-        "IOI peak-to-mean ratio threshold (1.5-5.0)", 1.5f, 5.0f);
-    settings_.registerFloat("ioicorr", &audioCtrl_->ioiMinAutocorr, "rhythm",
-        "IOI min autocorr fraction at IOI lag (0.05-0.5)", 0.05f, 0.5f);
+        "IOI histogram observation in Bayesian fusion");
     settings_.registerBool("odfmeansub", &audioCtrl_->odfMeanSubEnabled, "rhythm",
         "ODF mean subtraction before autocorrelation (BTrack-style detrending)");
     settings_.registerBool("ft", &audioCtrl_->ftEnabled, "rhythm",
-        "Fourier tempogram cross-validation (sub-harmonic suppression)");
-    settings_.registerFloat("ftmagratio", &audioCtrl_->ftMinMagnitudeRatio, "rhythm",
-        "FT peak-to-mean magnitude ratio (1.2-5.0)", 1.2f, 5.0f);
-    settings_.registerFloat("ftcorr", &audioCtrl_->ftMinAutocorr, "rhythm",
-        "FT min autocorr fraction at FT lag (0.05-0.5)", 0.05f, 0.5f);
+        "Fourier tempogram observation in Bayesian fusion");
+
+    // Bayesian tempo fusion weights (v18+)
+    settings_.registerFloat("bayeslambda", &audioCtrl_->bayesLambda, "bayesian",
+        "Transition tightness (0.01=rigid, 1.0=loose)", 0.01f, 1.0f);
+    settings_.registerFloat("bayesprior", &audioCtrl_->bayesPriorCenter, "bayesian",
+        "Static prior center BPM", 60.0f, 200.0f);
+    settings_.registerFloat("bayespriorw", &audioCtrl_->bayesPriorWeight, "bayesian",
+        "Ongoing static prior strength (0=off, 1=std, 2=strong)", 0.0f, 3.0f);
+    settings_.registerFloat("bayesacf", &audioCtrl_->bayesAcfWeight, "bayesian",
+        "Autocorrelation observation weight", 0.0f, 2.0f);
+    settings_.registerFloat("bayesft", &audioCtrl_->bayesFtWeight, "bayesian",
+        "Fourier tempogram observation weight", 0.0f, 2.0f);
+    settings_.registerFloat("bayescomb", &audioCtrl_->bayesCombWeight, "bayesian",
+        "Comb filter bank observation weight", 0.0f, 2.0f);
+    settings_.registerFloat("bayesioi", &audioCtrl_->bayesIoiWeight, "bayesian",
+        "IOI histogram observation weight", 0.0f, 2.0f);
 
     // Ensemble fusion parameters (detection gating)
     settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
@@ -335,15 +329,9 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("highbandweight", &audioCtrl_->highBandWeight, "rhythm",
         "High band weight", 0.0f, 1.0f);
 
-    // Tempo prior (reduces half-time/double-time confusion)
-    settings_.registerBool("priorenabled", &audioCtrl_->tempoPriorEnabled, "tempoprior",
-        "Enable tempo prior weighting");
-    settings_.registerFloat("priorcenter", &audioCtrl_->tempoPriorCenter, "tempoprior",
-        "Prior center BPM", 60.0f, 180.0f);
-    settings_.registerFloat("priorwidth", &audioCtrl_->tempoPriorWidth, "tempoprior",
+    // Tempo prior width (used by Bayesian static prior initialization)
+    settings_.registerFloat("priorwidth", &audioCtrl_->tempoPriorWidth, "bayesian",
         "Prior width (sigma BPM)", 10.0f, 80.0f);
-    settings_.registerFloat("priorstrength", &audioCtrl_->tempoPriorStrength, "tempoprior",
-        "Prior blend strength", 0.0f, 1.0f);
 
     // Beat stability tracking
     settings_.registerFloat("stabilitywin", &audioCtrl_->stabilityWindowBeats, "stability",
@@ -353,13 +341,10 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("lookahead", &audioCtrl_->beatLookaheadMs, "lookahead",
         "Beat lookahead (ms)", 0.0f, 200.0f);
 
-    // Continuous tempo estimation (tempoSmoothingFactor is legacy — actual smoothing uses tempoSmoothFactor registered above)
+    // Continuous tempo estimation
     settings_.registerFloat("tempochgthresh", &audioCtrl_->tempoChangeThreshold, "tempo",
         "Tempo change threshold", 0.01f, 0.5f);
-
-    // Tempo rate limiting
-    settings_.registerFloat("maxbpmchg", &audioCtrl_->maxBpmChangePerSec, "tempo",
-        "Max BPM change per sec (%)", 1.0f, 20.0f);
+    // (maxbpmchg removed — Bayesian fusion handles tempo stability)
 
 }
 
@@ -671,12 +656,10 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             uint32_t nextMs = audioCtrl_->getNextBeatMs();
             Serial.print(nextMs > nowMs ? (nextMs - nowMs) : 0);
             Serial.println(F(" ms"));
-            Serial.print(F("Tempo Prior: "));
-            Serial.print(audioCtrl_->tempoPriorEnabled ? F("ON") : F("OFF"));
-            Serial.print(F(" (center="));
-            Serial.print(audioCtrl_->tempoPriorCenter, 0);
-            Serial.print(F(", weight="));
-            Serial.print(audioCtrl_->getLastTempoPriorWeight(), 2);
+            Serial.print(F("Bayesian Prior Center: "));
+            Serial.print(audioCtrl_->bayesPriorCenter, 0);
+            Serial.print(F(" BPM (best bin conf="));
+            Serial.print(audioCtrl_->getBayesBestConf(), 2);
             Serial.println(F(")"));
         } else {
             Serial.println(F("Audio controller not available"));
@@ -1010,7 +993,15 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->cbssAlpha = 0.9f;
         audioCtrl_->cbssTightness = 5.0f;
         audioCtrl_->beatConfidenceDecay = 0.98f;
-        audioCtrl_->tempoSnapThreshold = 0.15f;
+        audioCtrl_->bayesLambda = 0.1f;
+        audioCtrl_->bayesPriorCenter = 128.0f;
+        audioCtrl_->bayesPriorWeight = 0.0f;
+        audioCtrl_->bayesAcfWeight = 1.0f;
+        audioCtrl_->bayesFtWeight = 0.8f;
+        audioCtrl_->bayesCombWeight = 0.7f;
+        audioCtrl_->bayesIoiWeight = 0.5f;
+        audioCtrl_->cbssThresholdFactor = 0.4f;
+        audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
@@ -1433,14 +1424,20 @@ void SerialConsole::streamTick() {
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
 
-            // Debug mode: add internal state for tuning
+            // Debug mode: add Bayesian tempo state for tuning
             if (streamDebug_) {
                 Serial.print(F(",\"ps\":"));
                 Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-                Serial.print(F(",\"cbpm\":"));
-                Serial.print(audioCtrl_->getCombBankBPM(), 1);
-                Serial.print(F(",\"cconf\":"));
-                Serial.print(audioCtrl_->getCombBankConfidence(), 2);
+                Serial.print(F(",\"bb\":"));
+                Serial.print(audioCtrl_->getBayesBestBin());
+                Serial.print(F(",\"bbc\":"));
+                Serial.print(audioCtrl_->getBayesBestConf(), 4);
+                Serial.print(F(",\"bft\":"));
+                Serial.print(audioCtrl_->getBayesFtObs(), 3);
+                Serial.print(F(",\"bcb\":"));
+                Serial.print(audioCtrl_->getBayesCombObs(), 3);
+                Serial.print(F(",\"bio\":"));
+                Serial.print(audioCtrl_->getBayesIoiObs(), 3);
             }
 
             Serial.print(F("}"));
@@ -2503,8 +2500,8 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getTempoVelocity(), 2);
         Serial.print(F(",\"nextBeatMs\":"));
         Serial.print(audioCtrl_->getNextBeatMs());
-        Serial.print(F(",\"tempoPriorWeight\":"));
-        Serial.print(audioCtrl_->getLastTempoPriorWeight(), 3);
+        Serial.print(F(",\"bayesBestConf\":"));
+        Serial.print(audioCtrl_->getBayesBestConf(), 3);
         Serial.print(F(",\"phase\":"));
         Serial.print(audioCtrl_->getControl().phase, 3);
         Serial.print(F(",\"rhythmStrength\":"));
