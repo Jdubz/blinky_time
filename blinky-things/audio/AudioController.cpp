@@ -561,6 +561,19 @@ void AudioController::initTempoState() {
     tempoStateInitialized_ = true;
 }
 
+int AudioController::findClosestTempoBin(float targetBpm) const {
+    int closest = -1;
+    float closestDist = 999.0f;
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        float dist = fabsf(tempoBinBpms_[i] - targetBpm);
+        if (dist < closestDist) {
+            closestDist = dist;
+            closest = i;
+        }
+    }
+    return closest;
+}
+
 // Bayesian debug getters
 float AudioController::getBayesBestConf() const {
     if (bayesBestBin_ >= 0 && bayesBestBin_ < TEMPO_BINS)
@@ -588,7 +601,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                                               float samplesPerMs, bool debugPrint) {
     if (!tempoStateInitialized_) return;
 
-    // === 1. VITERBI TRANSITION: Spread prior through Gaussian transition ===
+    // === 1. BAYESIAN PREDICTION STEP: Spread prior through Gaussian transition ===
     float prediction[TEMPO_BINS];
     float predSum = 0.0f;
 
@@ -715,6 +728,11 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // Check if the raw autocorrelation at half-lag (2x BPM) or 2/3-lag (1.5x BPM)
     // is strong relative to the MAP bin's lag. If so, switch to the higher tempo.
     // Uses per-sample ACF values for full resolution (not the coarse 20-bin observations).
+    // Thresholds 0.5 and 0.6 were empirically calibrated (Feb 2026) from the old
+    // harmonicUp2xThresh/harmonicUp32Thresh params; 2/3-lag needs higher threshold
+    // because 1.5x corrections are riskier (less common harmonic error).
+    // Uses else-if: only one correction per cycle to prevent cascading changes
+    // (e.g., 60→120 BPM then 120→180 BPM in the same update).
     {
         int bestLag = tempoBinLags_[bestBin];
         int halfLag = bestLag / 2;          // 2x BPM
@@ -727,44 +745,32 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
         if (bestAcf > 0.001f) {
             // Check half-lag (2x BPM): if strong, prefer double tempo
+            bool corrected = false;
             int halfIdx = halfLag - minLag;
             if (halfIdx >= 0 && halfIdx < correlationSize) {
                 float halfAcf = correlationAtLag[halfIdx];
                 if (halfAcf > 0.5f * bestAcf) {
-                    // Find the bin closest to the half-lag BPM
                     float halfBpm = 60.0f * 60.0f / static_cast<float>(halfLag);  // 60Hz * 60s
-                    int closestBin = -1;
-                    float closestDist = 999.0f;
-                    for (int i = 0; i < TEMPO_BINS; i++) {
-                        float dist = fabsf(tempoBinBpms_[i] - halfBpm);
-                        if (dist < closestDist) {
-                            closestDist = dist;
-                            closestBin = i;
-                        }
-                    }
-                    if (closestBin >= 0 && closestDist < halfBpm * 0.1f) {
-                        bestBin = closestBin;
+                    int closest = findClosestTempoBin(halfBpm);
+                    if (closest >= 0 && fabsf(tempoBinBpms_[closest] - halfBpm) < halfBpm * 0.1f) {
+                        bestBin = closest;
+                        corrected = true;
                     }
                 }
             }
 
             // Check 2/3-lag (1.5x BPM): if strong, prefer 3/2 tempo
-            int twoThirdIdx = twoThirdLag - minLag;
-            if (twoThirdIdx >= 0 && twoThirdIdx < correlationSize) {
-                float twoThirdAcf = correlationAtLag[twoThirdIdx];
-                if (twoThirdAcf > 0.6f * bestAcf) {
-                    float twoThirdBpm = 60.0f * 60.0f / static_cast<float>(twoThirdLag);
-                    int closestBin = -1;
-                    float closestDist = 999.0f;
-                    for (int i = 0; i < TEMPO_BINS; i++) {
-                        float dist = fabsf(tempoBinBpms_[i] - twoThirdBpm);
-                        if (dist < closestDist) {
-                            closestDist = dist;
-                            closestBin = i;
+            // Only if half-lag didn't already correct (prevent double-correction)
+            if (!corrected) {
+                int twoThirdIdx = twoThirdLag - minLag;
+                if (twoThirdIdx >= 0 && twoThirdIdx < correlationSize) {
+                    float twoThirdAcf = correlationAtLag[twoThirdIdx];
+                    if (twoThirdAcf > 0.6f * bestAcf) {
+                        float twoThirdBpm = 60.0f * 60.0f / static_cast<float>(twoThirdLag);
+                        int closest = findClosestTempoBin(twoThirdBpm);
+                        if (closest >= 0 && fabsf(tempoBinBpms_[closest] - twoThirdBpm) < twoThirdBpm * 0.1f) {
+                            bestBin = closest;
                         }
-                    }
-                    if (closestBin >= 0 && closestDist < twoThirdBpm * 0.1f) {
-                        bestBin = closestBin;
                     }
                 }
             }
@@ -884,9 +890,11 @@ void AudioController::computeFTObservations(float* ftObs, int numBins) {
 
 void AudioController::computeIOIObservations(float* ioiObs, int numBins) {
     // Accumulate IOI histogram counts at each of the 20 tempo bin lags
-    // with ±1 bin tolerance for timing jitter
+    // with ±1 sample tolerance for timing jitter (frame-level resolution)
 
-    // Initialize to small floor
+    // Initialize to 1.0 (multiplicative neutral). Unlike ACF which uses 0.01 floor
+    // (representing actual correlation strength), IOI bins with zero onset matches
+    // should not penalize the posterior — absence of evidence is not evidence of absence.
     for (int b = 0; b < numBins; b++) ioiObs[b] = 1.0f;
 
     int n = ioiOnsetCount_;
@@ -902,6 +910,11 @@ void AudioController::computeIOIObservations(float* ioiObs, int numBins) {
             int interval = sampleI - sampleJ;
             if (interval <= 0) continue;
 
+            // Early exit: interval too long for any bin.
+            // Bin 0 has the longest lag (lowest BPM ~60) since CombFilterBank
+            // orders filters from low to high BPM.
+            if (interval > tempoBinLags_[0] * 3) break;
+
             // Check interval against each tempo bin lag (with ±1 tolerance)
             for (int b = 0; b < numBins; b++) {
                 int lag = tempoBinLags_[b];
@@ -916,9 +929,6 @@ void AudioController::computeIOIObservations(float* ioiObs, int numBins) {
                     ioiObs[b] += 0.5f;  // Half weight for skipped-beat matches
                 }
             }
-
-            // Early exit: interval too long for any bin
-            if (interval > tempoBinLags_[0] * 3) break;  // Bin 0 has longest lag
         }
     }
 }
@@ -968,8 +978,10 @@ void AudioController::updateCBSS(float onsetStrength) {
     float cbssVal = (1.0f - cbssAlpha) * onsetStrength + cbssAlpha * maxWeightedCBSS;
     cbssBuffer_[sampleCounter_ % OSS_BUFFER_SIZE] = cbssVal;
 
-    // Update running mean of CBSS for adaptive threshold (EMA, tau ~120 frames = 2s)
-    cbssMean_ = cbssMean_ * 0.992f + cbssVal * 0.008f;
+    // Update running mean of CBSS for adaptive threshold
+    // EMA alpha ≈ 1/120 ≈ 0.008 → tau ~120 frames (~2 seconds at 60 Hz)
+    static constexpr float CBSS_MEAN_ALPHA = 0.008f;
+    cbssMean_ = cbssMean_ * (1.0f - CBSS_MEAN_ALPHA) + cbssVal * CBSS_MEAN_ALPHA;
 
     sampleCounter_++;
 

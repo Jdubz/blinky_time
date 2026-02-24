@@ -38,6 +38,7 @@ public:
     // Version 17: Added ODF mean subtraction + Fourier tempogram (odfMeanSubEnabled, ftEnabled, ftMinMagnitudeRatio, ftMinAutocorr)
     // Version 18: Bayesian tempo fusion (replaced 17 sequential-override params with 6 Bayesian weights)
     // Version 19: Added bayesPriorWeight (ongoing static prior strength)
+    // Version 20: Added cbssThresholdFactor (CBSS adaptive threshold)
     static const uint8_t SETTINGS_VERSION = 20;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)

@@ -538,7 +538,7 @@ private:
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
     int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
     bool tempoStateInitialized_ = false;
-    int bayesBestBin_ = 10;                       // Best bin from last fusion (for debug)
+    int bayesBestBin_ = TEMPO_BINS / 2;              // Best bin from last fusion (for debug)
     float lastFtObs_[TEMPO_BINS] = {0};           // Last FT observations (for debug)
     float lastCombObs_[TEMPO_BINS] = {0};         // Last comb observations (for debug)
     float lastIoiObs_[TEMPO_BINS] = {0};          // Last IOI observations (for debug)
@@ -578,12 +578,16 @@ private:
     void applyMaxFilter(float* magnitudes, int numBins);
 
     // Bayesian tempo fusion
+    // Note: initTempoState() uses bayesPriorCenter and tempoPriorWidth to build
+    // the static prior. If these params change at runtime, call initTempoState()
+    // again (or reboot) for the new values to take effect.
     void initTempoState();
     void runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
                                 int minLag, int maxLag, float avgEnergy,
                                 float samplesPerMs, bool debugPrint);
     void computeFTObservations(float* ftObs, int numBins);
     void computeIOIObservations(float* ioiObs, int numBins);
+    int findClosestTempoBin(float targetBpm) const;
 
     // Tempo prior and stability
     void updateBeatStability(uint32_t nowMs);
