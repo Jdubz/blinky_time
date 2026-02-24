@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: February 24, 2026 (CBSS adaptive threshold, per-sample ACF harmonic disambiguation)*
+*Last Updated: February 24, 2026 (Feature testing complete: ODF mean sub, diffframes, per-band thresholds — defaults are optimal)*
 
 ## Current Status
 
@@ -226,9 +226,14 @@ These would modulate the existing `rhythmStrength` for smoother, more appropriat
 - Comb filter bank, Fourier tempogram, IOI histogram (now per-bin observations)
 - ODF smoothing, beat timing offset (unchanged)
 
-#### 6a. ODF Mean Subtraction — Needs Retesting with Bayesian (Feb 23)
+#### 6a. ODF Mean Subtraction — TESTED, KEEP ON (Feb 24, 2026)
 
-Still in code (`odfmeansub` toggle, enabled by default). Was "destructive on sparse tracks" under sequential overrides because noisy autocorrelation had no safety net. With Bayesian fusion, FT/comb/IOI observations may stabilize noisy autocorrelation. Worth retesting.
+**Status:** Tested with Bayesian fusion. Turning OFF causes major regressions:
+- minimal-01: 0.610→0.266 (BPM collapses to 89, sub-harmonic lock)
+- goa-mantra: 0.565→0.286
+- trance-party: 0.836→0.857 (marginal improvement)
+
+ODF mean subtraction is **essential** for Bayesian fusion — without it, DC bias in autocorrelation makes all lags look correlated and the Bayesian posterior can't discriminate. Keep enabled (default).
 
 #### 6b. CBSS Adaptive Threshold — IMPLEMENTED (Feb 24, 2026)
 
@@ -260,29 +265,39 @@ Inspired by BeatNet (Heydari et al., ISMIR 2021). 100-200 particles tracking (be
 | Pulse train (Percival 2014) | Sub-harmonics produce similar onset alignment | Feb 22 |
 | Comb bank cross-validation | Both ACF and comb lock to same wrong tempo | Feb 22 |
 | IOI bidirectional override | Repackages bad transient data | Feb 22 |
+| ODF mean subtraction OFF | Destroys BPM on sparse tracks (minimal-01 BPM→89) | Feb 24 |
+| Per-band thresholds ON | Helps strong tracks, destroys weak ones (avg 0.421→0.354) | Feb 24 |
+| Multi-frame diffframes=2 | Too many transients, hurts phase (avg -0.098) | Feb 24 |
 | Deep learning/CNN/Transformer | Not feasible on nRF52840 (64 MHz, no matrix acceleration) | Research |
 
 ### Priority 7: Onset Detection Improvements (Research, Feb 22)
 
 Comprehensive research survey identified several untried improvements to BandWeightedFlux that could improve kick detection rate (currently ~60% recall on some tracks). Better onset detection feeds better data to all BPM tracking systems.
 
-#### 7a. Per-Band Independent Thresholds — IMPLEMENTED, NOT TESTED (Feb 22, 2026)
+#### 7a. Per-Band Independent Thresholds — TESTED, KEEP OFF (Feb 24, 2026)
 
-Implemented: independent adaptive thresholds per band (bass/mid/high). Detection fires if ANY band exceeds its own threshold × multiplier. Currently **disabled by default** (`bandflux_perbandthresh=0`).
+Independent adaptive thresholds per band (bass/mid/high). Detection fires if ANY band exceeds its own threshold × multiplier. **Disabled by default** (`bandflux_perbandthresh=0`).
 
-- **Memory:** ~20 bytes (3 separate running means)
-- **CPU:** Negligible
 - **Settings:** `bandflux_perbandthresh` (bool), `bandflux_perbandmult` (default 1.5)
-- **Status:** Code complete, zero calibration testing performed. Unknown whether it helps or hurts.
+- **3-track subset results:** avg F1 0.670→0.715 (+0.045) — improved goa-mantra (+0.064) and minimal-01 (+0.074)
+- **Full 9-track regression:** avg F1 0.421→0.354 (**-0.067**) — **major regressions** on quiet/sparse tracks:
+  - deep-ambience: 0.378→0.097 (-0.281)
+  - minimal-emotion: 0.307→0.140 (-0.167)
+  - machine-drum: 0.089→0.014 (-0.075)
+- **Root cause:** Per-band detection generates more transients which overwhelms beat tracker on sparse tracks. Helps strong rhythmic tracks but destroys weak ones.
+- **Verdict:** Keep disabled. The 3-track subset was misleading.
 
-#### 7b. Multi-Frame Temporal Reference — IMPLEMENTED, NOT TESTED (Feb 22, 2026)
+#### 7b. Multi-Frame Temporal Reference — TESTED, KEEP AT 1 (Feb 24, 2026)
 
-Implemented: configurable `diffframes` (1-3) for BandFlux reference frame. Default remains 1 (compare to previous frame). Higher values skip intermediate frames for more robust flux measurement during bass sweeps.
+Configurable `diffframes` (1-3) for BandFlux reference frame. Default remains 1 (compare to previous frame). Higher values skip intermediate frames for more robust flux measurement during bass sweeps.
 
-- **Memory:** ~256 bytes per extra frame (64 bins × 4 bytes)
-- **CPU:** Negligible
 - **Settings:** `bandflux_diffframes` (default 1, range 1-3)
-- **Status:** Code complete, zero calibration testing performed. Unknown whether diffframes=2 or 3 helps.
+- **diffframes=2 results:** avg F1 0.670→0.572 (**-0.098**) on 3-track subset:
+  - trance-party: 0.836→0.783 (-0.053)
+  - goa-mantra: 0.565→0.252 (-0.313) — too many transients (349→460)
+  - minimal-01: 0.610→0.681 (+0.071) — more transients helped BPM
+- **Root cause:** diffframes=2 detects more transients overall (larger flux from skipping a frame), which overwhelms phase alignment on tracks with complex textures.
+- **Verdict:** Keep at 1 (default).
 
 #### 7c. FFT-512 Bass-Focused Analysis — HIGH IMPACT, MODERATE EFFORT
 
@@ -324,22 +339,20 @@ Train a CNN on desktop with labeled EDM onset data, distill to tiny student mode
 |---------|:----------:|--------|
 | **Bayesian weights** | bayesacf, bayesft, bayescomb, bayesioi, bayespriorw, bayeslambda, bayesprior, priorwidth | Defaults set, tuning tested (avg F1 0.421) |
 | **CBSS adaptive threshold** | cbssthresh | **Calibrated** (0.4 default, Feb 24) |
-| ODF Mean Subtraction | odfmeansub (toggle) | Enabled by default, needs retesting with Bayesian |
-| Per-band thresholds | bandflux_perbandthresh, perbandmult | Code complete, **never tested** |
-| Multi-frame diffframes | bandflux_diffframes | Code complete, **never tested** |
+| ODF Mean Subtraction | odfmeansub (toggle) | **Essential** — keep ON. OFF destroys BPM (Feb 24) |
+| Per-band thresholds | bandflux_perbandthresh, perbandmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
+| Multi-frame diffframes | bandflux_diffframes | **Tested, keep at 1** — diffframes=2 too many transients (Feb 24) |
 | BandFlux core params | gamma, bassWeight, threshold, onsetDelta | **Calibrated** (Feb 21) |
 
 ## Next Actions
 
 ### Active
-1. **Tune Bayesian weights** — Systematic testing of 9 Bayesian/beat parameters on 9 original tracks. Current avg F1 0.421 vs old 0.459 baseline. The 0.04 gap is structural (20-bin resolution).
-2. **Retest ODF mean subtraction** — May work better with Bayesian fusion than sequential overrides. Toggle on/off and compare.
-
-### Untested onset detection features
-4. **Test multi-frame diffframes** — Sweep bandflux_diffframes=1,2,3 on diagnostic tracks.
-5. **Test per-band thresholds** — Sweep bandflux_perbandmult on diagnostic tracks.
+1. **FFT-512 bass-focused analysis** (Priority 7c) — Better kick detection to feed better data upstream. ~200 lines, ~5KB RAM.
+2. **Particle filter beat tracking** (Priority 6c) — Fundamentally different approach that handles multi-modal tempo distributions. ~100-150 lines, ~2KB RAM.
+3. **Weighted phase deviation fusion** (Priority 7d) — Catches kicks during sustained bass notes. ~50 lines, ~512 bytes.
 
 ### Completed
+- ~~**Feature testing sweep**~~ — ✅ ODF mean sub OFF, diffframes=2, per-band thresholds ON all tested (Feb 24). None improve overall avg. Current defaults are optimal.
 - ~~**CBSS Adaptive Threshold**~~ — ✅ Implemented (SETTINGS_VERSION 20). Prevents phantom beats during silence.
 - ~~**Per-sample ACF Harmonic Disambiguation**~~ — ✅ Fixed minimal-01 sub-harmonic (BPM 70→124).
 - ~~**Bayesian Tempo Fusion**~~ — ✅ Implemented (SETTINGS_VERSION 18-20). Replaced sequential override chain.
