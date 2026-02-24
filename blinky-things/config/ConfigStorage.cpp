@@ -192,11 +192,8 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.bpmMax = 200.0f;
     data_.music.cbssAlpha = 0.9f;         // CBSS weighting (high = more predictive)
 
-    // Tempo prior (CRITICAL: must be enabled for correct BPM tracking)
-    data_.music.tempoPriorEnabled = true;    // MUST be true
-    data_.music.tempoPriorCenter = 120.0f;   // Typical music tempo
+    // Tempo prior width (used by Bayesian static prior)
     data_.music.tempoPriorWidth = 50.0f;     // Balanced width
-    data_.music.tempoPriorStrength = 0.5f;   // 50% blend
 
     // Pulse modulation
     data_.music.pulseBoostOnBeat = 1.3f;
@@ -214,25 +211,21 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
     data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
+    data_.music.cbssThresholdFactor = 0.4f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
 
-    // Autocorrelation tuning
-    data_.music.tempoSmoothFactor = 0.75f;      // BPM EMA blend (0.75 best compromise across tracks)
-    data_.music.harmonicUp2xThresh = 0.5f;      // Half-lag harmonic fix threshold
-    data_.music.harmonicUp32Thresh = 0.6f;      // 2/3-lag harmonic fix threshold
-    data_.music.peakMinCorrelation = 0.3f;      // Min normalized correlation for peak
-    data_.music.combCrossValMinConf = 0.3f;    // Comb cross-val min confidence
-    data_.music.combCrossValMinCorr = 0.5f;    // Comb cross-val min autocorr fraction
-    data_.music.odfSmoothWidth = 5;             // ODF smooth window (odd, 3-11)
-    data_.music.hpsEnabled = false;              // HPS additive enhancement (disabled: hurts goa-mantra)
-    data_.music.pulseTrainEnabled = false;       // Pulse train evaluation (disabled: hurts trance/goa)
-    data_.music.pulseTrainCandidates = 5;        // 5 candidates (2-10)
-    data_.music.ioiEnabled = true;               // IOI histogram cross-validation (enabled by default)
-    data_.music.ioiMinPeakRatio = 2.0f;          // Peak must be 2x mean to be "clear"
-    data_.music.ioiMinAutocorr = 0.15f;          // Min autocorr at IOI lag as fraction of best
-    data_.music.odfMeanSubEnabled = true;        // ODF mean subtraction (BTrack-style detrending)
-    data_.music.ftEnabled = true;                // Fourier tempogram cross-validation
-    data_.music.ftMinMagnitudeRatio = 1.5f;      // FT peak must be 1.5x mean magnitude
-    data_.music.ftMinAutocorr = 0.15f;           // Min autocorr at FT lag as fraction of best
+    // Bayesian tempo fusion (v18+)
+    data_.music.bayesLambda = 0.1f;          // Transition tightness
+    data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
+    data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
+    data_.music.bayesAcfWeight = 1.0f;       // Autocorrelation observation weight
+    data_.music.bayesFtWeight = 0.8f;        // Fourier tempogram observation weight
+    data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
+    data_.music.bayesIoiWeight = 0.5f;       // IOI histogram observation weight
+
+    data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
+    data_.music.ioiEnabled = true;           // IOI histogram observation
+    data_.music.odfMeanSubEnabled = true;    // ODF mean subtraction (BTrack-style detrending)
+    data_.music.ftEnabled = true;            // Fourier tempogram observation
 
     data_.brightness = 100;
 }
@@ -460,10 +453,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
     validateFloat(data_.music.cbssAlpha, 0.5f, 0.99f, F("cbssAlpha"));
 
-    // Tempo prior validation (v25+)
-    validateFloat(data_.music.tempoPriorCenter, 60.0f, 200.0f, F("priorcenter"));
+    // Tempo prior width validation
     validateFloat(data_.music.tempoPriorWidth, 10.0f, 100.0f, F("priorwidth"));
-    validateFloat(data_.music.tempoPriorStrength, 0.0f, 1.0f, F("priorstrength"));
 
     // Pulse modulation validation (v25+)
     validateFloat(data_.music.pulseBoostOnBeat, 1.0f, 3.0f, F("pulseboost"));
@@ -481,30 +472,22 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.beatConfidenceDecay, 0.9f, 0.999f, F("beatConfDecay"));
     validateFloat(data_.music.beatTimingOffset, 0.0f, 15.0f, F("beatTimingOffset"));
     validateFloat(data_.music.phaseCorrectionStrength, 0.0f, 1.0f, F("phaseCorrStrength"));
+    validateFloat(data_.music.cbssThresholdFactor, 0.0f, 2.0f, F("cbssThreshFactor"));
 
-    // Autocorrelation tuning validation
-    validateFloat(data_.music.tempoSmoothFactor, 0.0f, 0.99f, F("tempoSmoothFactor"));
-    validateFloat(data_.music.harmonicUp2xThresh, 0.1f, 0.95f, F("harmonicUp2xThresh"));
-    validateFloat(data_.music.harmonicUp32Thresh, 0.1f, 0.95f, F("harmonicUp32Thresh"));
-    validateFloat(data_.music.peakMinCorrelation, 0.05f, 0.8f, F("peakMinCorrelation"));
-    validateFloat(data_.music.combCrossValMinConf, 0.1f, 0.8f, F("combCrossValMinConf"));
-    validateFloat(data_.music.combCrossValMinCorr, 0.05f, 0.5f, F("combCrossValMinCorr"));
+    // Bayesian tempo fusion validation (v18+)
+    validateFloat(data_.music.bayesLambda, 0.01f, 1.0f, F("bayesLambda"));
+    validateFloat(data_.music.bayesPriorCenter, 60.0f, 200.0f, F("bayesPriorCenter"));
+    validateFloat(data_.music.bayesPriorWeight, 0.0f, 3.0f, F("bayesPriorWeight"));
+    validateFloat(data_.music.bayesAcfWeight, 0.0f, 2.0f, F("bayesAcfWeight"));
+    validateFloat(data_.music.bayesFtWeight, 0.0f, 2.0f, F("bayesFtWeight"));
+    validateFloat(data_.music.bayesCombWeight, 0.0f, 2.0f, F("bayesCombWeight"));
+    validateFloat(data_.music.bayesIoiWeight, 0.0f, 2.0f, F("bayesIoiWeight"));
     if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
         SerialConsole::logWarn(F("Invalid odfSmoothWidth, using default"));
         data_.music.odfSmoothWidth = 5;
         corrupt = true;
     }
-    // hpsEnabled, pulseTrainEnabled, ioiEnabled are bools — no range validation needed
-    if (data_.music.pulseTrainCandidates < 2 || data_.music.pulseTrainCandidates > 10) {
-        SerialConsole::logWarn(F("Invalid pulseTrainCandidates, using default"));
-        data_.music.pulseTrainCandidates = 5;
-        corrupt = true;
-    }
-    validateFloat(data_.music.ioiMinPeakRatio, 1.5f, 5.0f, F("ioiMinPeakRatio"));
-    validateFloat(data_.music.ioiMinAutocorr, 0.05f, 0.5f, F("ioiMinAutocorr"));
-    // odfMeanSubEnabled, ftEnabled are bools — no range validation needed
-    validateFloat(data_.music.ftMinMagnitudeRatio, 1.2f, 5.0f, F("ftMinMagnitudeRatio"));
-    validateFloat(data_.music.ftMinAutocorr, 0.05f, 0.5f, F("ftMinAutocorr"));
+    // ioiEnabled, odfMeanSubEnabled, ftEnabled are bools — no range validation needed
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
@@ -629,11 +612,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->activationThreshold = data_.music.activationThreshold;
         audioCtrl->cbssAlpha = data_.music.cbssAlpha;
 
-        // Tempo prior - CRITICAL for correct BPM tracking
-        audioCtrl->tempoPriorEnabled = data_.music.tempoPriorEnabled;
-        audioCtrl->tempoPriorCenter = data_.music.tempoPriorCenter;
+        // Tempo prior width (used by Bayesian static prior)
         audioCtrl->tempoPriorWidth = data_.music.tempoPriorWidth;
-        audioCtrl->tempoPriorStrength = data_.music.tempoPriorStrength;
 
         // Pulse modulation
         audioCtrl->pulseBoostOnBeat = data_.music.pulseBoostOnBeat;
@@ -651,25 +631,21 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->beatConfidenceDecay = data_.music.beatConfidenceDecay;
         audioCtrl->beatTimingOffset = data_.music.beatTimingOffset;
         audioCtrl->phaseCorrectionStrength = data_.music.phaseCorrectionStrength;
+        audioCtrl->cbssThresholdFactor = data_.music.cbssThresholdFactor;
 
-        // Autocorrelation tuning
-        audioCtrl->tempoSmoothFactor = data_.music.tempoSmoothFactor;
-        audioCtrl->harmonicUp2xThresh = data_.music.harmonicUp2xThresh;
-        audioCtrl->harmonicUp32Thresh = data_.music.harmonicUp32Thresh;
-        audioCtrl->peakMinCorrelation = data_.music.peakMinCorrelation;
-        audioCtrl->combCrossValMinConf = data_.music.combCrossValMinConf;
-        audioCtrl->combCrossValMinCorr = data_.music.combCrossValMinCorr;
+        // Bayesian tempo fusion (v18+)
+        audioCtrl->bayesLambda = data_.music.bayesLambda;
+        audioCtrl->bayesPriorCenter = data_.music.bayesPriorCenter;
+        audioCtrl->bayesPriorWeight = data_.music.bayesPriorWeight;
+        audioCtrl->bayesAcfWeight = data_.music.bayesAcfWeight;
+        audioCtrl->bayesFtWeight = data_.music.bayesFtWeight;
+        audioCtrl->bayesCombWeight = data_.music.bayesCombWeight;
+        audioCtrl->bayesIoiWeight = data_.music.bayesIoiWeight;
+
         audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
-        audioCtrl->hpsEnabled = data_.music.hpsEnabled;
-        audioCtrl->pulseTrainEnabled = data_.music.pulseTrainEnabled;
-        audioCtrl->pulseTrainCandidates = data_.music.pulseTrainCandidates;
         audioCtrl->ioiEnabled = data_.music.ioiEnabled;
-        audioCtrl->ioiMinPeakRatio = data_.music.ioiMinPeakRatio;
-        audioCtrl->ioiMinAutocorr = data_.music.ioiMinAutocorr;
         audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
         audioCtrl->ftEnabled = data_.music.ftEnabled;
-        audioCtrl->ftMinMagnitudeRatio = data_.music.ftMinMagnitudeRatio;
-        audioCtrl->ftMinAutocorr = data_.music.ftMinAutocorr;
     }
 }
 
@@ -779,11 +755,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.activationThreshold = audioCtrl->activationThreshold;
         data_.music.cbssAlpha = audioCtrl->cbssAlpha;
 
-        // Tempo prior - CRITICAL for correct BPM tracking
-        data_.music.tempoPriorEnabled = audioCtrl->tempoPriorEnabled;
-        data_.music.tempoPriorCenter = audioCtrl->tempoPriorCenter;
+        // Tempo prior width
         data_.music.tempoPriorWidth = audioCtrl->tempoPriorWidth;
-        data_.music.tempoPriorStrength = audioCtrl->tempoPriorStrength;
 
         // Pulse modulation
         data_.music.pulseBoostOnBeat = audioCtrl->pulseBoostOnBeat;
@@ -801,25 +774,21 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.beatConfidenceDecay = audioCtrl->beatConfidenceDecay;
         data_.music.beatTimingOffset = audioCtrl->beatTimingOffset;
         data_.music.phaseCorrectionStrength = audioCtrl->phaseCorrectionStrength;
+        data_.music.cbssThresholdFactor = audioCtrl->cbssThresholdFactor;
 
-        // Autocorrelation tuning
-        data_.music.tempoSmoothFactor = audioCtrl->tempoSmoothFactor;
-        data_.music.harmonicUp2xThresh = audioCtrl->harmonicUp2xThresh;
-        data_.music.harmonicUp32Thresh = audioCtrl->harmonicUp32Thresh;
-        data_.music.peakMinCorrelation = audioCtrl->peakMinCorrelation;
-        data_.music.combCrossValMinConf = audioCtrl->combCrossValMinConf;
-        data_.music.combCrossValMinCorr = audioCtrl->combCrossValMinCorr;
+        // Bayesian tempo fusion (v18+)
+        data_.music.bayesLambda = audioCtrl->bayesLambda;
+        data_.music.bayesPriorCenter = audioCtrl->bayesPriorCenter;
+        data_.music.bayesPriorWeight = audioCtrl->bayesPriorWeight;
+        data_.music.bayesAcfWeight = audioCtrl->bayesAcfWeight;
+        data_.music.bayesFtWeight = audioCtrl->bayesFtWeight;
+        data_.music.bayesCombWeight = audioCtrl->bayesCombWeight;
+        data_.music.bayesIoiWeight = audioCtrl->bayesIoiWeight;
+
         data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
-        data_.music.hpsEnabled = audioCtrl->hpsEnabled;
-        data_.music.pulseTrainEnabled = audioCtrl->pulseTrainEnabled;
-        data_.music.pulseTrainCandidates = audioCtrl->pulseTrainCandidates;
         data_.music.ioiEnabled = audioCtrl->ioiEnabled;
-        data_.music.ioiMinPeakRatio = audioCtrl->ioiMinPeakRatio;
-        data_.music.ioiMinAutocorr = audioCtrl->ioiMinAutocorr;
         data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
         data_.music.ftEnabled = audioCtrl->ftEnabled;
-        data_.music.ftMinMagnitudeRatio = audioCtrl->ftMinMagnitudeRatio;
-        data_.music.ftMinAutocorr = audioCtrl->ftMinAutocorr;
     }
 
     saveToFlash();

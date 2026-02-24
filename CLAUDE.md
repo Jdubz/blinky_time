@@ -148,11 +148,13 @@ RenderPipeline → LED Output
    - Adaptive cooldown (tempo-aware)
 
 3. **Rhythm Tracking (AudioController)**
-   - `AudioController.h/cpp` - CBSS beat tracking
+   - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - Autocorrelation every 500ms with Gaussian tempo prior
+   - Bayesian tempo fusion: 20-bin posterior (60-180 BPM) fusing ACF, Fourier tempogram, comb filter bank, IOI histogram
+   - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
-   - BTrack-style predict+countdown beat detection with deterministic phase
+   - BTrack-style predict+countdown beat detection with CBSS adaptive threshold (cbssthresh=0.4)
+   - Deterministic phase derivation
    - ODF pre-smoothing (5-point causal moving average)
 
 4. **Generators (Visual Effects)**
@@ -167,7 +169,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (CONFIG_VERSION: v19)
+   - `ConfigStorage.h/cpp` - Flash-based storage (CONFIG_VERSION: v20)
    - `SettingsRegistry.h/cpp` - 56+ tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -263,7 +265,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 2. AdaptiveMic → EnsembleDetector (BandFlux Solo)
 3. EnsembleDetector → fusion → transient strength (0-1)
 4. Transient → AudioController OSS buffer (6s history)
-5. AudioController → autocorrelation every 500ms → tempo estimation
+5. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
+   (ACF + Fourier tempogram + comb filter bank + IOI → 20-bin posterior → harmonic disambig → MAP → BPM)
 6. CBSS backward search → cumulative beat strength signal
 7. Predict+countdown beat detection → deterministic phase
 8. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75, onsetDensity=3.2}
@@ -337,8 +340,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ 3 device configurations (Hat, Tube, Bucket)
 
 **In Progress:**
-- Parameter boundary refinement (extended range testing)
-- Pad rejection optimization (50-229 false positives)
+- Bayesian tempo fusion weight tuning (current avg F1 0.421 vs old 0.459)
 - Full hardware installation validation
 
 **Planned (Not Started):**
@@ -379,13 +381,12 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 | Novelty | 0.12 | 2.5 | No | Near-zero detections on real music |
 
 ### Key Features
-- **BandFlux Solo**: Single detector outperforms multi-detector combos (avg Beat F1 0.472 across 9 tracks)
-- **Agreement-based confidence**: Single-detector boost 1.0 (full pass-through for solo config)
+- **BandFlux Solo**: Single detector outperforms multi-detector combos
+- **Bayesian tempo fusion**: 20-bin posterior over 60-180 BPM, fusing ACF + Fourier tempogram + comb filter bank + IOI histogram (SETTINGS_VERSION 20)
+- **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
+- **CBSS adaptive threshold**: Beat fires only if CBSS > cbssthresh * running mean (prevents phantom beats during silence)
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
-- **Post-onset decay gate**: Defers confirmation N frames, rejects if flux stays elevated (pads sustain, kicks decay). decayRatio+decayFrames, default 0.0=disabled
-- **Spectral crest factor gate**: Rejects tonal onsets with high spectral peakiness (crestGate, default 0.0=disabled)
-- **Band-dominance gate**: Rejects broadband onsets (bandDominanceGate, default 0.0=disabled, tested ineffective)
 - **Shared FFT**: All spectral detectors share a single FFT computation
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

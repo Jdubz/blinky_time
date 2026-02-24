@@ -255,9 +255,7 @@ public:
     // Energy boost during rhythm lock
     float energyBoostOnBeat = 0.3f;     // Energy boost near predicted beats
 
-    // === TEMPO RATE LIMITING ===
-    // Prevents rapid tempo jumps during active tracking
-    float maxBpmChangePerSec = 5.0f;        // Max BPM change per second during active tracking (% of current)
+    // (maxBpmChangePerSec removed — Bayesian fusion handles tempo stability)
 
     // Beat proximity thresholds for pulse modulation
     float pulseNearBeatThreshold = 0.2f;    // Phase distance < this = boost transients
@@ -267,13 +265,8 @@ public:
     float bpmMin = 60.0f;               // Minimum BPM to detect (affects autocorr lag range)
     float bpmMax = 200.0f;              // Maximum BPM to detect (affects autocorr lag range)
 
-    // === TEMPO PRIOR (reduces half-time/double-time confusion) ===
-    // Gaussian prior centered on typical music tempo, weights autocorrelation peaks
-    // Shifted up for EDM: center=128 covers 110-150 BPM range, wider sigma reduces penalty on fast tempos
-    bool tempoPriorEnabled = true;      // Enable tempo prior weighting
-    float tempoPriorCenter = 128.0f;    // Center of Gaussian prior (BPM) - midpoint of EDM range
-    float tempoPriorWidth = 50.0f;      // Width (sigma) of Gaussian prior (BPM) - wider for less aggressive penalty
-    float tempoPriorStrength = 0.5f;    // Blend: 0=no prior, 1=full prior weight
+    // (Tempo prior params removed — replaced by bayesPriorCenter in Bayesian fusion)
+    float tempoPriorWidth = 50.0f;      // Width (sigma) of Gaussian prior (BPM) — used by Bayesian static prior
 
     // === BEAT STABILITY TRACKING ===
     // Measures consistency of inter-beat intervals for confidence modulation
@@ -312,9 +305,7 @@ public:
     bool combBankEnabled = true;    // Enable comb filter bank
     float combBankFeedback = 0.92f; // Bank resonance strength (0.85-0.98)
 
-    // Comb bank cross-validation (corrects autocorrelation when comb bank disagrees)
-    float combCrossValMinConf = 0.3f;    // Min comb confidence to trigger cross-validation (0.1-0.8)
-    float combCrossValMinCorr = 0.5f;    // Min autocorr at comb lag as fraction of best (0.05-0.5)
+    // (combCrossValMinConf/MinCorr removed — comb bank feeds Bayesian fusion directly)
 
     // === CBSS BEAT TRACKING ===
     // Cumulative Beat Strength Signal with counter-based beat prediction
@@ -322,29 +313,15 @@ public:
     float cbssAlpha = 0.9f;              // CBSS weighting (0.8-0.95, higher = more predictive)
     float cbssTightness = 5.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence)
     float beatConfidenceDecay = 0.98f;   // Per-frame confidence decay when no beat detected
-    float tempoSnapThreshold = 0.15f;    // BPM change ratio to snap vs smooth
     float beatTimingOffset = 5.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
+    float cbssThresholdFactor = 0.4f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
 
     // === AUTOCORRELATION TUNING ===
-    float tempoSmoothFactor = 0.75f;     // BPM smoothing blend (0=instant, 1=no change). 0.75 best compromise across tracks
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
-    float harmonicUp2xThresh = 0.5f;     // Half-lag (2x BPM) correlation threshold for upward harmonic fix
-    float harmonicUp32Thresh = 0.6f;     // 2/3-lag (3/2x BPM) correlation threshold
-    float peakMinCorrelation = 0.3f;     // Minimum normalized correlation to consider a peak
-    bool hpsEnabled = false;             // Harmonic Product Spectrum: additive boost from sub-harmonic at 2x lag (disabled: hurts goa-mantra)
 
-    // === PULSE TRAIN EVALUATION (Percival & Tzanetakis 2014) ===
-    bool pulseTrainEnabled = false;      // Re-rank autocorr candidates by onset alignment (disabled: hurts trance/goa tracks)
-    uint8_t pulseTrainCandidates = 5;    // Number of autocorr peaks to evaluate (2-10)
-
-    // === IOI HISTOGRAM (Inter-Onset Interval cross-validation) ===
-    // Measures actual time intervals between detected onset events (kicks/snares).
-    // Even if continuous OSS signal has ambiguous periodicity, the kick intervals
-    // should reveal the true tempo. Used as cross-validation hint for autocorrelation.
-    bool ioiEnabled = true;              // Enable IOI histogram cross-validation
-    float ioiMinPeakRatio = 2.0f;       // Peak must be Nx mean to be "clear" (1.5-5.0)
-    float ioiMinAutocorr = 0.15f;       // Min autocorr at IOI lag, fraction of best (0.05-0.5)
+    // === IOI HISTOGRAM (enables per-bin observation in Bayesian fusion) ===
+    bool ioiEnabled = true;              // Enable IOI histogram observation
 
     // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
     // Subtracts the local mean from OSS buffer before autocorrelation.
@@ -352,13 +329,20 @@ public:
     // helping the true tempo peak stand out vs sub-harmonics.
     bool odfMeanSubEnabled = true;       // Enable ODF mean subtraction before autocorrelation
 
-    // === FOURIER TEMPOGRAM CROSS-VALIDATION ===
-    // Computes DFT magnitude at candidate tempos using Goertzel algorithm.
-    // Unlike autocorrelation, the DFT suppresses sub-harmonics — a 143 BPM signal
-    // shows peaks at 143, 286 BPM but NEVER at 72 BPM. Cross-validates autocorrelation.
-    bool ftEnabled = true;               // Enable Fourier tempogram cross-validation
-    float ftMinMagnitudeRatio = 1.5f;    // Peak must be Nx mean magnitude to be clear (1.2-5.0)
-    float ftMinAutocorr = 0.15f;         // Min autocorr at FT lag, fraction of best (0.05-0.5)
+    // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
+    bool ftEnabled = true;               // Enable Fourier tempogram observation
+
+    // === BAYESIAN TEMPO FUSION ===
+    // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
+    // into a unified posterior distribution over 20 tempo bins (60-180 BPM).
+    // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
+    float bayesLambda = 0.1f;            // Transition tightness (0.01=rigid, 1.0=loose)
+    float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
+    float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
+    float bayesAcfWeight = 1.0f;         // Autocorrelation observation weight
+    float bayesFtWeight = 0.8f;          // Fourier tempogram observation weight
+    float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
+    float bayesIoiWeight = 0.5f;         // IOI histogram observation weight
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -376,15 +360,18 @@ public:
     float getBeatStability() const { return beatStability_; }
     float getTempoVelocity() const { return tempoVelocity_; }
     uint32_t getNextBeatMs() const { return nextBeatMs_; }
-    float getLastTempoPriorWeight() const { return lastTempoPriorWeight_; }
+    // (getLastTempoPriorWeight removed — Bayesian fusion replaces tempo prior)
 
     // Adaptive band weight debug getters
     const float* getAdaptiveBandWeights() const { return adaptiveBandWeights_; }
     const float* getBandPeriodicityStrength() const { return bandPeriodicityStrength_; }
 
-    // Pulse train phase debug getters
-    float getPulseTrainPhase() const { return pulseTrainPhase_; }
-    float getPulseTrainConfidence() const { return pulseTrainConfidence_; }
+    // Bayesian tempo state debug getters
+    int getBayesBestBin() const { return bayesBestBin_; }
+    float getBayesBestConf() const;
+    float getBayesFtObs() const;
+    float getBayesCombObs() const;
+    float getBayesIoiObs() const;
 
     // Comb filter bank debug getters
     float getCombBankBPM() const { return combFilterBank_.getPeakBPM(); }
@@ -398,8 +385,7 @@ public:
     // IOI histogram debug getter
     int getIOIOnsetCount() const { return ioiOnsetCount_; }
 
-    // Fourier tempogram debug getter
-    float getLastFtMagRatio() const { return lastFtMagRatio_; }
+    // (lastFtMagRatio_ removed — Bayesian fusion exposes per-bin observations)
 
     // CBSS beat tracking debug getters
     float getCbssConfidence() const { return cbssConfidence_; }
@@ -474,10 +460,6 @@ private:
     // Phase tracking
     float phase_ = 0.0f;                // Current beat phase (0-1, derived from CBSS beat counter)
 
-    // Pulse train phase estimation state (used by autocorrelation)
-    float pulseTrainPhase_ = 0.0f;      // Phase from Fourier extraction
-    float pulseTrainConfidence_ = 0.0f; // Confidence of Fourier phase
-
     // CBSS (Cumulative Beat Strength Signal) state
     float cbssBuffer_[OSS_BUFFER_SIZE] = {0};  // Same size as OSS buffer
     int lastBeatSample_ = 0;            // Sample index of last detected beat
@@ -485,6 +467,7 @@ private:
     int sampleCounter_ = 0;             // Total samples processed
     uint16_t beatCount_ = 0;            // Total beats detected
     float cbssConfidence_ = 0.0f;       // Beat tracking confidence (0-1)
+    float cbssMean_ = 0.0f;             // Running EMA of CBSS values for adaptive threshold
     float lastSmoothedOnset_ = 0.0f;    // Last smoothed onset strength (for observability)
     bool lastBeatWasPredicted_ = false; // Whether predictBeat() ran since last beat (working flag)
     bool lastFiredBeatPredicted_ = false; // Whether the most recently fired beat was predicted (stable for streaming)
@@ -526,8 +509,7 @@ private:
     // Beat lookahead
     uint32_t nextBeatMs_ = 0;           // Predicted timestamp of next beat
 
-    // Debug: last tempo prior weight applied
-    float lastTempoPriorWeight_ = 1.0f;
+    // (lastTempoPriorWeight_ removed — Bayesian fusion replaces tempo prior)
 
     // Autocorrelation timing
     uint32_t lastAutocorrMs_ = 0;
@@ -547,8 +529,19 @@ private:
     int ioiOnsetWriteIdx_ = 0;
     int ioiOnsetCount_ = 0;
 
-    // Debug state from last autocorrelation for streaming/tuning
-    float lastFtMagRatio_ = 0.0f;  // FT peak/mean magnitude ratio (0 = not computed)
+    // === BAYESIAN TEMPO STATE ===
+    // 20 bins matching CombFilterBank resolution (60-180 BPM)
+    static constexpr int TEMPO_BINS = CombFilterBank::NUM_FILTERS;  // 20
+    float tempoStatePrior_[TEMPO_BINS] = {0};     // Previous posterior (becomes prior)
+    float tempoStatePost_[TEMPO_BINS] = {0};      // Current posterior after update
+    float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
+    float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
+    int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
+    bool tempoStateInitialized_ = false;
+    int bayesBestBin_ = 10;                       // Best bin from last fusion (for debug)
+    float lastFtObs_[TEMPO_BINS] = {0};           // Last FT observations (for debug)
+    float lastCombObs_[TEMPO_BINS] = {0};         // Last comb observations (for debug)
+    float lastIoiObs_[TEMPO_BINS] = {0};          // Last IOI observations (for debug)
 
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
@@ -584,15 +577,15 @@ private:
     void computeBandPeakiness();
     void applyMaxFilter(float* magnitudes, int numBins);
 
-    // Pulse train phase estimation
-    float computePulseTrainPhase(int beatPeriodSamples);
-    float generateAndCorrelate(int phaseOffset, int beatPeriod);
-
-    // Pulse train tempo evaluation (Percival-style with autocorrelation fusion)
-    int evaluatePulseTrains(const int* candidateLags, const float* candidateScores, int numCandidates, float samplesPerMs, bool debugPrint);
+    // Bayesian tempo fusion
+    void initTempoState();
+    void runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
+                                int minLag, int maxLag, float avgEnergy,
+                                float samplesPerMs, bool debugPrint);
+    void computeFTObservations(float* ftObs, int numBins);
+    void computeIOIObservations(float* ioiObs, int numBins);
 
     // Tempo prior and stability
-    float computeTempoPrior(float bpm) const;
     void updateBeatStability(uint32_t nowMs);
     void updateTempoVelocity(float newBpm, float dt);
     void predictNextBeat(uint32_t nowMs);
@@ -604,11 +597,7 @@ private:
     void synthesizeRhythmStrength();
     void updateOnsetDensity(uint32_t nowMs);
 
-    // IOI histogram cross-validation
-    int computeIOIPeakLag(int minLag, int maxLag);
-
-    // Fourier tempogram cross-validation (Goertzel algorithm)
-    int computeFourierTempogramPeakLag(int minLag, int maxLag);
+    // (Old IOI/FT single-peak functions removed — replaced by per-bin observation functions)
 
     // Utilities
     inline float clampf(float val, float minVal, float maxVal) const {

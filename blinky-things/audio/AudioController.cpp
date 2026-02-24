@@ -75,8 +75,6 @@ bool AudioController::begin(uint32_t sampleRate) {
 
     // Reset phase tracking
     phase_ = 0.0f;
-    pulseTrainPhase_ = 0.0f;
-    pulseTrainConfidence_ = 0.0f;
 
     // Reset beat stability tracking
     for (int i = 0; i < STABILITY_BUFFER_SIZE; i++) {
@@ -91,7 +89,6 @@ bool AudioController::begin(uint32_t sampleRate) {
     tempoVelocity_ = 0.0f;
     prevBpm_ = 120.0f;
     nextBeatMs_ = 0;
-    lastTempoPriorWeight_ = 1.0f;
 
     // Reset timing
     lastAutocorrMs_ = 0;
@@ -106,11 +103,13 @@ bool AudioController::begin(uint32_t sampleRate) {
     for (int i = 0; i < IOI_ONSET_BUFFER_SIZE; i++) ioiOnsetSamples_[i] = 0;
     ioiOnsetWriteIdx_ = 0;
     ioiOnsetCount_ = 0;
-    lastFtMagRatio_ = 0.0f;
 
     // Initialize and reset comb filter bank
     // Uses 60 Hz frame rate assumption (same as OSS buffer)
     combFilterBank_.init(60.0f);
+
+    // Initialize Bayesian tempo state (after comb bank, which sets up BPM/lag arrays)
+    initTempoState();
 
     // Reset CBSS state
     for (int i = 0; i < OSS_BUFFER_SIZE; i++) {
@@ -492,406 +491,13 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
-    // === HARMONIC PRODUCT SPECTRUM (additive enhancement) ===
-    // Percival-style: add sub-harmonic energy to each lag BEFORE peak extraction.
-    // Peaks at the true beat period have strong autocorrelation at 2x their lag
-    // (every 2 beats), so additive enhancement boosts them. False harmonic peaks
-    // lack this support and are NOT boosted (but never penalized).
-    // Process forward (i=0..half): safe because we read from i*2 > i.
-    if (hpsEnabled) {
-        int halfSize = correlationSize / 2;
-        for (int i = 0; i < halfSize; i++) {
-            correlationAtLag[i] += correlationAtLag[i * 2];
-        }
-    }
-
-    // === PEAK EXTRACTION (find best tempo peak) ===
-    // Apply tempo prior to find the strongest peak (HPS already applied above)
-    // Also collect top N candidates for pulse train evaluation
-    float bestWeightedCorr = 0.0f;
-    int bestWeightedLag = bestLag;
-
-    // Candidate collection for pulse train evaluation
-    static constexpr int MAX_PT_SLOTS = 10;
-    static constexpr int MIN_PT_LAG_SEP = 3;  // Prevent clustering of nearby lags
-    struct { int lag; float score; } ptCandidates[MAX_PT_SLOTS];
-    int numPtCandidates = 0;
-    int maxPtCandidates = (pulseTrainEnabled && pulseTrainCandidates >= 2) ?
-        (pulseTrainCandidates < MAX_PT_SLOTS ? pulseTrainCandidates : MAX_PT_SLOTS) : 0;
-
-    for (int lag = minLag; lag <= maxLag && (lag - minLag) < correlationSize; lag++) {
-        int lagIdx = lag - minLag;
-        float correlation = correlationAtLag[lagIdx];
-        float normCorr = correlation / (avgEnergy + 0.001f);
-
-        // Skip weak peaks (tunable threshold)
-        if (normCorr < peakMinCorrelation) continue;
-
-        // Apply tempo prior
-        float lagBpm = 60000.0f / (static_cast<float>(lag) / samplesPerMs);
-        lagBpm = clampf(lagBpm, bpmMin, bpmMax);
-        float priorWeight = computeTempoPrior(lagBpm);
-
-        float weightedCorr = normCorr * priorWeight;
-
-        // Track overall best
-        if (weightedCorr > bestWeightedCorr) {
-            bestWeightedCorr = weightedCorr;
-            bestWeightedLag = lag;
-            lastTempoPriorWeight_ = priorWeight;
-        }
-
-        // Collect diverse candidates for pulse train evaluation
-        if (maxPtCandidates > 0) {
-            // Check if too close to an existing candidate
-            bool merged = false;
-            for (int c = 0; c < numPtCandidates; c++) {
-                int dist = lag - ptCandidates[c].lag;
-                if (dist < 0) dist = -dist;
-                if (dist <= MIN_PT_LAG_SEP) {
-                    if (weightedCorr > ptCandidates[c].score) {
-                        ptCandidates[c].lag = lag;
-                        ptCandidates[c].score = weightedCorr;
-                    }
-                    merged = true;
-                    break;
-                }
-            }
-            if (!merged) {
-                if (numPtCandidates < maxPtCandidates) {
-                    ptCandidates[numPtCandidates].lag = lag;
-                    ptCandidates[numPtCandidates].score = weightedCorr;
-                    numPtCandidates++;
-                } else {
-                    // Replace weakest candidate if current is stronger
-                    int weakest = 0;
-                    for (int c = 1; c < numPtCandidates; c++) {
-                        if (ptCandidates[c].score < ptCandidates[weakest].score)
-                            weakest = c;
-                    }
-                    if (weightedCorr > ptCandidates[weakest].score) {
-                        ptCandidates[weakest].lag = lag;
-                        ptCandidates[weakest].score = weightedCorr;
-                    }
-                }
-            }
-        }
-    }
-
-    // === PULSE TRAIN EVALUATION (Percival & Tzanetakis 2014) ===
-    // When enabled with enough candidates, re-ranks by actual onset alignment.
-    // Replaces harmonic disambiguation because the pulse train template already
-    // incorporates 2x and 3/2x harmonic support in its scoring.
-    // Guard: require enough data to evaluate the autocorrelation winner (4 beat cycles).
-    // Without this, startup with limited data skips slow candidates and falsely picks fast tempos.
-    bool pulseTrainActive = pulseTrainEnabled && numPtCandidates > 1 && ossCount_ >= bestWeightedLag * 4;
-    if (pulseTrainActive) {
-        int ptLags[MAX_PT_SLOTS] = {0};
-        float ptScores[MAX_PT_SLOTS] = {0};
-        for (int c = 0; c < numPtCandidates; c++) {
-            ptLags[c] = ptCandidates[c].lag;
-            ptScores[c] = ptCandidates[c].score;
-        }
-
-        int ptWinner = evaluatePulseTrains(ptLags, ptScores, numPtCandidates, samplesPerMs, shouldPrintDebug);
-        if (ptWinner > 0) {
-            bestWeightedLag = ptWinner;
-            // Update bestWeightedCorr for the new winner so downstream
-            // checks (comb bank cross-validation) use the correct threshold
-            int winIdx = ptWinner - minLag;
-            if (winIdx >= 0 && winIdx < correlationSize) {
-                float winCorr = correlationAtLag[winIdx] / (avgEnergy + 0.001f);
-                float winBpm = 60000.0f / (static_cast<float>(ptWinner) / samplesPerMs);
-                bestWeightedCorr = winCorr * computeTempoPrior(clampf(winBpm, bpmMin, bpmMax));
-            }
-        }
-    } else if (tempoPriorEnabled) {
-        // === HARMONIC DISAMBIGUATION (fallback when pulse train disabled) ===
-        // Check multiple harmonic ratios to avoid sub-harmonic locking.
-        float currentBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
-
-        // Check half-lag (2x BPM) — prefer faster tempo if strong
-        int halfLag = bestWeightedLag / 2;
-        if (halfLag >= minLag) {
-            int halfIdx = halfLag - minLag;
-            if (halfIdx < correlationSize) {
-                float halfCorr = correlationAtLag[halfIdx] / (avgEnergy + 0.001f);
-                float halfBpm = 60000.0f / (static_cast<float>(halfLag) / samplesPerMs);
-                float priorCurrent = computeTempoPrior(currentBpm);
-                float priorHalf = computeTempoPrior(halfBpm);
-
-                if (halfCorr > bestWeightedCorr * harmonicUp2xThresh && priorHalf >= priorCurrent * 0.85f) {
-                    if (shouldPrintDebug) {
-                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"up\",\"from\":"));
-                        Serial.print(currentBpm, 1);
-                        Serial.print(F(",\"to\":"));
-                        Serial.print(halfBpm, 1);
-                        Serial.println(F("}"));
-                    }
-                    bestWeightedLag = halfLag;
-                    currentBpm = halfBpm;
-                }
-            }
-        }
-
-        // Check 2/3-lag (3/2x BPM) — common metrical relationship
-        int twoThirdLag = bestWeightedLag * 2 / 3;
-        if (twoThirdLag >= minLag) {
-            int ttIdx = twoThirdLag - minLag;
-            if (ttIdx < correlationSize) {
-                float ttCorr = correlationAtLag[ttIdx] / (avgEnergy + 0.001f);
-                float ttBpm = 60000.0f / (static_cast<float>(twoThirdLag) / samplesPerMs);
-                float priorCurrent = computeTempoPrior(currentBpm);
-                float priorTT = computeTempoPrior(ttBpm);
-
-                if (ttCorr > bestWeightedCorr * harmonicUp32Thresh && priorTT >= priorCurrent * 0.90f) {
-                    if (shouldPrintDebug) {
-                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"up3/2\",\"from\":"));
-                        Serial.print(currentBpm, 1);
-                        Serial.print(F(",\"to\":"));
-                        Serial.print(ttBpm, 1);
-                        Serial.println(F("}"));
-                    }
-                    bestWeightedLag = twoThirdLag;
-                    currentBpm = ttBpm;
-                }
-            }
-        }
-
-        // Check double-lag (half BPM) — original disambiguation (prefer fundamental)
-        int doubleLag = bestWeightedLag * 2;
-        if (doubleLag <= maxLag) {
-            int dblIdx = doubleLag - minLag;
-            if (dblIdx >= 0 && dblIdx < correlationSize) {
-                float dblCorr = correlationAtLag[dblIdx] / (avgEnergy + 0.001f);
-                float dblBpm = 60000.0f / (static_cast<float>(doubleLag) / samplesPerMs);
-                float priorCurrent = computeTempoPrior(currentBpm);
-                float priorSlow = computeTempoPrior(dblBpm);
-
-                if (dblCorr > bestWeightedCorr * 0.6f && priorSlow >= priorCurrent * 0.95f) {
-                    if (shouldPrintDebug) {
-                        Serial.print(F("{\"type\":\"HARMONIC_FIX\",\"dir\":\"down\",\"from\":"));
-                        Serial.print(currentBpm, 1);
-                        Serial.print(F(",\"to\":"));
-                        Serial.print(dblBpm, 1);
-                        Serial.println(F("}"));
-                    }
-                    bestWeightedLag = doubleLag;
-                }
-            }
-        }
-    }
-
-    // === COMB BANK CROSS-VALIDATION ===
-    // If the comb bank (independent, no prior) disagrees with autocorrelation,
-    // check if autocorrelation has evidence at the comb bank's suggested tempo.
-    // This catches non-harmonic locking where autocorr picks a spurious peak.
-    if (combBankEnabled && combFilterBank_.getPeakConfidence() > combCrossValMinConf) {
-        float combBpm = combFilterBank_.getPeakBPM();
-        float autoBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
-
-        // Only intervene when they disagree by >10%
-        float disagreement = fabsf(combBpm - autoBpm) / autoBpm;
-        if (disagreement > 0.1f) {
-            // Convert comb BPM to autocorrelation lag
-            int combLag = static_cast<int>(60000.0f / combBpm * samplesPerMs + 0.5f);
-
-            // Check if autocorrelation has evidence at this lag
-            if (combLag >= minLag && combLag <= maxLag) {
-                int combIdx = combLag - minLag;
-                if (combIdx < correlationSize) {
-                    float combCorr = correlationAtLag[combIdx] / (avgEnergy + 0.001f);
-
-                    // Accept if autocorr at comb lag exceeds threshold of best
-                    if (combCorr > bestWeightedCorr * combCrossValMinCorr) {
-                        if (shouldPrintDebug) {
-                            Serial.print(F("{\"type\":\"COMB_XVAL\",\"from\":"));
-                            Serial.print(autoBpm, 1);
-                            Serial.print(F(",\"to\":"));
-                            Serial.print(combBpm, 1);
-                            Serial.print(F(",\"combConf\":"));
-                            Serial.print(combFilterBank_.getPeakConfidence(), 2);
-                            Serial.print(F(",\"combCorr\":"));
-                            Serial.print(combCorr, 3);
-                            Serial.println(F("}"));
-                        }
-                        bestWeightedLag = combLag;
-                    }
-                }
-            }
-        }
-    }
-
-    // === IOI HISTOGRAM CROSS-VALIDATION ===
-    // Measures actual time intervals between detected onset events (kicks/snares).
-    // If IOI histogram has a clear peak at a FASTER tempo AND autocorrelation
-    // has some evidence at that lag, switch to it.
-    // UPWARD ONLY: Sub-harmonic locking (BPM too low) is the primary failure mode.
-    // Allowing downward correction caused regressions (machine-drum 118→96 BPM)
-    // because noisy transient intervals cluster at slower tempos.
-    float ioiPeakBpm = 0.0f;  // For debug output
-    if (ioiEnabled && ioiOnsetCount_ >= 8) {
-        int ioiLag = computeIOIPeakLag(minLag, maxLag);
-        if (ioiLag > 0) {
-            ioiPeakBpm = 60000.0f / (static_cast<float>(ioiLag) / samplesPerMs);
-            float autoBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
-
-            // Only intervene when IOI suggests FASTER tempo (shorter lag) by >10%
-            // Blocks downward corrections which amplify sub-harmonic locking
-            if (ioiPeakBpm > autoBpm * 1.1f) {
-                int ioiIdx = ioiLag - minLag;
-                if (ioiIdx >= 0 && ioiIdx < correlationSize) {
-                    float ioiCorr = correlationAtLag[ioiIdx] / (avgEnergy + 0.001f);
-
-                    // Accept if autocorr at IOI lag exceeds threshold of best
-                    if (ioiCorr > bestWeightedCorr * ioiMinAutocorr) {
-                        if (shouldPrintDebug) {
-                            Serial.print(F("{\"type\":\"IOI_XVAL\",\"from\":"));
-                            Serial.print(autoBpm, 1);
-                            Serial.print(F(",\"to\":"));
-                            Serial.print(ioiPeakBpm, 1);
-                            Serial.print(F(",\"ioiCorr\":"));
-                            Serial.print(ioiCorr, 3);
-                            Serial.print(F(",\"onsets\":"));
-                            Serial.print(ioiOnsetCount_);
-                            Serial.println(F("}"));
-                        }
-                        bestWeightedLag = ioiLag;
-                    } else if (shouldPrintDebug) {
-                        // Near-miss: IOI had a candidate but autocorr evidence too weak
-                        Serial.print(F("{\"type\":\"IOI_MISS\",\"bpm\":"));
-                        Serial.print(ioiPeakBpm, 1);
-                        Serial.print(F(",\"corr\":"));
-                        Serial.print(ioiCorr, 3);
-                        Serial.print(F(",\"need\":"));
-                        Serial.print(bestWeightedCorr * ioiMinAutocorr, 3);
-                        Serial.println(F("}"));
-                    }
-                }
-            }
-        }
-    }
-
-    // === FOURIER TEMPOGRAM CROSS-VALIDATION ===
-    // DFT of OSS buffer suppresses sub-harmonics (unlike autocorrelation which creates them).
-    // A 143 BPM signal shows peaks at 143, 286 BPM but NEVER at 72 BPM.
-    // Uses Goertzel algorithm for efficient single-frequency magnitude computation.
-    float ftPeakBpm = 0.0f;  // For debug output
-    if (ftEnabled && ossCount_ >= 60) {
-        int ftLag = computeFourierTempogramPeakLag(minLag, maxLag);
-        if (ftLag > 0) {
-            ftPeakBpm = 60000.0f / (static_cast<float>(ftLag) / samplesPerMs);
-            float autoBpm = 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs);
-
-            // Only intervene when FT disagrees with autocorrelation by >10%
-            if (fabsf(ftPeakBpm - autoBpm) / autoBpm > 0.1f) {
-                int ftIdx = ftLag - minLag;
-                if (ftIdx >= 0 && ftIdx < correlationSize) {
-                    float ftCorr = correlationAtLag[ftIdx] / (avgEnergy + 0.001f);
-
-                    // Accept if autocorrelation has some evidence at FT lag
-                    if (ftCorr > bestWeightedCorr * ftMinAutocorr) {
-                        if (shouldPrintDebug) {
-                            Serial.print(F("{\"type\":\"FT_XVAL\",\"from\":"));
-                            Serial.print(autoBpm, 1);
-                            Serial.print(F(",\"to\":"));
-                            Serial.print(ftPeakBpm, 1);
-                            Serial.print(F(",\"ftCorr\":"));
-                            Serial.print(ftCorr, 3);
-                            Serial.println(F("}"));
-                        }
-                        bestWeightedLag = ftLag;
-                    } else if (shouldPrintDebug) {
-                        // Near-miss: FT had a candidate but autocorr evidence too weak
-                        Serial.print(F("{\"type\":\"FT_MISS\",\"bpm\":"));
-                        Serial.print(ftPeakBpm, 1);
-                        Serial.print(F(",\"corr\":"));
-                        Serial.print(ftCorr, 3);
-                        Serial.print(F(",\"need\":"));
-                        Serial.print(bestWeightedCorr * ftMinAutocorr, 3);
-                        Serial.println(F("}"));
-                    }
-                }
-            }
-        }
-    }
-
-    // DEBUG: Print correlation results (only when debug enabled)
-    if (shouldPrintDebug) {
-        float detectedBpm = (bestWeightedLag > 0) ? 60000.0f / (static_cast<float>(bestWeightedLag) / samplesPerMs) : 0.0f;
-        Serial.print(F("{\"type\":\"RHYTHM_DEBUG2\",\"bestLag\":"));
-        Serial.print(bestWeightedLag);
-        Serial.print(F(",\"maxCorr\":"));
-        Serial.print(maxCorrelation, 6);
-        Serial.print(F(",\"normCorr\":"));
-        Serial.print(normCorrelation, 4);
-        Serial.print(F(",\"newStr\":"));
-        Serial.print(newStrength, 3);
-        Serial.print(F(",\"bpm\":"));
-        Serial.print(detectedBpm, 1);
-        Serial.print(F(",\"hps\":"));
-        Serial.print(hpsEnabled ? 1 : 0);
-        Serial.print(F(",\"pt\":"));
-        Serial.print(pulseTrainActive ? 1 : 0);
-        Serial.print(F(",\"ioi\":"));
-        Serial.print(ioiPeakBpm, 1);
-        Serial.print(F(",\"ic\":"));
-        Serial.print(ioiOnsetCount_);
-        Serial.print(F(",\"ft\":"));
-        Serial.print(ftPeakBpm, 1);
-        Serial.print(F(",\"ftr\":"));
-        Serial.print(lastFtMagRatio_, 2);
-        Serial.print(F(",\"ms\":"));
-        Serial.print(odfMeanSubEnabled ? 1 : 0);
-        Serial.println(F("}"));
-    }
-
-    // === UPDATE TEMPO ===
-    if (bestWeightedLag > 0 && periodicityStrength_ > 0.25f) {
-        float newBpm = 60000.0f * samplesPerMs / static_cast<float>(bestWeightedLag);
-        newBpm = clampf(newBpm, bpmMin, bpmMax);
-
-        // Tempo rate limiting during active tracking
-        if (periodicityStrength_ > activationThreshold && bpm_ > 1.0f) {
-            float maxChange = bpm_ * (maxBpmChangePerSec / 100.0f) * (autocorrPeriodMs / 1000.0f);
-            if (maxChange < 1.0f) maxChange = 1.0f;
-            float bpmDiff = newBpm - bpm_;
-            if (bpmDiff > maxChange) newBpm = bpm_ + maxChange;
-            else if (bpmDiff < -maxChange) newBpm = bpm_ - maxChange;
-        }
-
-        // Check if tempo change is large enough to snap vs smooth
-        float changeRatio = (bpm_ > 1.0f) ? fabsf(newBpm - bpm_) / bpm_ : 1.0f;
-
-        if (changeRatio > tempoSnapThreshold) {
-            // Large change: snap to new tempo
-            bpm_ = newBpm;
-        } else {
-            // Small change: smooth (tunable blend for convergence speed)
-            bpm_ = bpm_ * tempoSmoothFactor + newBpm * (1.0f - tempoSmoothFactor);
-        }
-
-        beatPeriodMs_ = 60000.0f / bpm_;
-
-        // Update beat period in samples for CBSS
-        // Uses adaptive samplesPerMs for accurate conversion
-        int newPeriodSamples = static_cast<int>(beatPeriodMs_ * samplesPerMs + 0.5f);
-        if (newPeriodSamples < 10) newPeriodSamples = 10;
-        if (newPeriodSamples > OSS_BUFFER_SIZE / 2) newPeriodSamples = OSS_BUFFER_SIZE / 2;
-        beatPeriodSamples_ = newPeriodSamples;
-
-        // Update ensemble detector with tempo hint for adaptive cooldown
-        ensemble_.getFusion().setTempoHint(bpm_);
-
-        // Update tempo velocity if BPM changed significantly
-        if (fabsf(bpm_ - prevBpm_) / (prevBpm_ > 1.0f ? prevBpm_ : 1.0f) > tempoChangeThreshold) {
-            float dt = autocorrPeriodMs / 1000.0f;
-            updateTempoVelocity(bpm_, dt);
-        }
-
-        // Compute Fourier phase for debug (not used for tracking — CBSS handles phase)
-        pulseTrainPhase_ = computePulseTrainPhase(bestWeightedLag);
-    }
+    // === BAYESIAN TEMPO FUSION ===
+    // Replaces sequential override chain (HPS → pulse train → harmonic disambiguation
+    // → comb bank → IOI → FT) with unified multi-signal posterior estimation.
+    // Each signal provides a per-bin observation likelihood; the MAP estimate
+    // of the posterior becomes the tempo.
+    runBayesianTempoFusion(correlationAtLag, correlationSize, minLag, maxLag,
+                           avgEnergy, samplesPerMs, shouldPrintDebug);
 }
 
 // ===== ODF SMOOTHING =====
@@ -907,15 +513,341 @@ float AudioController::smoothOnsetStrength(float raw) {
     return sum / width;
 }
 
-// ===== FOURIER TEMPOGRAM CROSS-VALIDATION =====
+// ===== BAYESIAN TEMPO STATE =====
 
-int AudioController::computeFourierTempogramPeakLag(int minLag, int maxLag) {
-    if (ossCount_ < 60) return 0;  // Need at least 1s of data
+void AudioController::initTempoState() {
+    // Copy bin BPMs and lags from CombFilterBank
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        tempoBinBpms_[i] = combFilterBank_.getFilterBPM(i);
+        // Compute lag from BPM: lag = frameRate / (bpm / 60) = 60 * frameRate / bpm
+        // At 60 Hz: lag = 3600 / bpm
+        tempoBinLags_[i] = static_cast<int>(3600.0f / tempoBinBpms_[i] + 0.5f);
+    }
 
-    int bestLag = 0;
-    float bestMagSq = 0.0f;
-    float sumMagSq = 0.0f;
-    int numEvals = 0;
+    // Initialize prior as Gaussian centered on bayesPriorCenter
+    float sum = 0.0f;
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        float diff = tempoBinBpms_[i] - bayesPriorCenter;
+        float sigma = tempoPriorWidth;
+        tempoStatePrior_[i] = expf(-0.5f * (diff * diff) / (sigma * sigma));
+        sum += tempoStatePrior_[i];
+    }
+    // Normalize to sum=1
+    if (sum > 1e-9f) {
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            tempoStatePrior_[i] /= sum;
+        }
+    }
+
+    // Pre-compute static prior (ongoing Gaussian pull toward bayesPriorCenter)
+    // This is multiplied into the posterior at every step to prevent sub-harmonic drift.
+    // Uses the same Gaussian shape as the initial prior but stored separately.
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        float diff = tempoBinBpms_[i] - bayesPriorCenter;
+        float sigma = tempoPriorWidth;
+        tempoStaticPrior_[i] = expf(-0.5f * (diff * diff) / (sigma * sigma));
+        if (tempoStaticPrior_[i] < 0.01f) tempoStaticPrior_[i] = 0.01f;  // Floor
+    }
+
+    // Clear posterior and debug arrays
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        tempoStatePost_[i] = tempoStatePrior_[i];
+        lastFtObs_[i] = 0.0f;
+        lastCombObs_[i] = 0.0f;
+        lastIoiObs_[i] = 0.0f;
+    }
+
+    bayesBestBin_ = TEMPO_BINS / 2;
+    tempoStateInitialized_ = true;
+}
+
+// Bayesian debug getters
+float AudioController::getBayesBestConf() const {
+    if (bayesBestBin_ >= 0 && bayesBestBin_ < TEMPO_BINS)
+        return tempoStatePost_[bayesBestBin_];
+    return 0.0f;
+}
+float AudioController::getBayesFtObs() const {
+    if (bayesBestBin_ >= 0 && bayesBestBin_ < TEMPO_BINS)
+        return lastFtObs_[bayesBestBin_];
+    return 0.0f;
+}
+float AudioController::getBayesCombObs() const {
+    if (bayesBestBin_ >= 0 && bayesBestBin_ < TEMPO_BINS)
+        return lastCombObs_[bayesBestBin_];
+    return 0.0f;
+}
+float AudioController::getBayesIoiObs() const {
+    if (bayesBestBin_ >= 0 && bayesBestBin_ < TEMPO_BINS)
+        return lastIoiObs_[bayesBestBin_];
+    return 0.0f;
+}
+
+void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
+                                              int minLag, int maxLag, float avgEnergy,
+                                              float samplesPerMs, bool debugPrint) {
+    if (!tempoStateInitialized_) return;
+
+    // === 1. VITERBI TRANSITION: Spread prior through Gaussian transition ===
+    float prediction[TEMPO_BINS];
+    float predSum = 0.0f;
+
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        prediction[i] = 0.0f;
+        for (int j = 0; j < TEMPO_BINS; j++) {
+            // Gaussian transition: probability of moving from bin j to bin i
+            float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
+            float sigma = bayesLambda * tempoBinBpms_[j];  // Scale-relative transition
+            if (sigma < 1.0f) sigma = 1.0f;
+            float transProb = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
+            prediction[i] += tempoStatePrior_[j] * transProb;
+        }
+        predSum += prediction[i];
+    }
+    // Normalize prediction
+    if (predSum > 1e-9f) {
+        for (int i = 0; i < TEMPO_BINS; i++) prediction[i] /= predSum;
+    }
+
+    // === 2. AUTOCORRELATION OBSERVATION ===
+    float acfObs[TEMPO_BINS];
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        int lag = tempoBinLags_[i];
+        int lagIdx = lag - minLag;
+        if (lagIdx >= 0 && lagIdx < correlationSize) {
+            acfObs[i] = correlationAtLag[lagIdx] / (avgEnergy + 0.001f);
+            if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;  // Floor
+        } else {
+            acfObs[i] = 0.01f;  // Out of range — small floor
+        }
+    }
+    // (Anti-sub-harmonic penalty removed — per-sample ACF check used in MAP extraction instead)
+    // Exponentiate by weight
+    if (bayesAcfWeight != 1.0f) {
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            acfObs[i] = powf(acfObs[i], bayesAcfWeight);
+        }
+    }
+
+    // === 3. FOURIER TEMPOGRAM OBSERVATION ===
+    float ftObs[TEMPO_BINS];
+    if (ftEnabled && ossCount_ >= 60) {
+        computeFTObservations(ftObs, TEMPO_BINS);
+        if (bayesFtWeight != 1.0f) {
+            for (int i = 0; i < TEMPO_BINS; i++) {
+                ftObs[i] = powf(ftObs[i], bayesFtWeight);
+            }
+        }
+    } else {
+        for (int i = 0; i < TEMPO_BINS; i++) ftObs[i] = 1.0f;  // Uniform (no info)
+    }
+    // Save for debug
+    for (int i = 0; i < TEMPO_BINS; i++) lastFtObs_[i] = ftObs[i];
+
+    // === 4. COMB FILTER BANK OBSERVATION ===
+    float combObs[TEMPO_BINS];
+    if (combBankEnabled) {
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            combObs[i] = combFilterBank_.getFilterEnergy(i);
+            if (combObs[i] < 0.01f) combObs[i] = 0.01f;  // Floor
+        }
+        if (bayesCombWeight != 1.0f) {
+            for (int i = 0; i < TEMPO_BINS; i++) {
+                combObs[i] = powf(combObs[i], bayesCombWeight);
+            }
+        }
+    } else {
+        for (int i = 0; i < TEMPO_BINS; i++) combObs[i] = 1.0f;
+    }
+    for (int i = 0; i < TEMPO_BINS; i++) lastCombObs_[i] = combObs[i];
+
+    // === 5. IOI HISTOGRAM OBSERVATION ===
+    float ioiObs[TEMPO_BINS];
+    if (ioiEnabled && ioiOnsetCount_ >= 8) {
+        computeIOIObservations(ioiObs, TEMPO_BINS);
+        if (bayesIoiWeight != 1.0f) {
+            for (int i = 0; i < TEMPO_BINS; i++) {
+                ioiObs[i] = powf(ioiObs[i], bayesIoiWeight);
+            }
+        }
+    } else {
+        for (int i = 0; i < TEMPO_BINS; i++) ioiObs[i] = 1.0f;
+    }
+    for (int i = 0; i < TEMPO_BINS; i++) lastIoiObs_[i] = ioiObs[i];
+
+    // === 6. MULTIPLY ALL OBSERVATIONS WITH PREDICTION AND STATIC PRIOR ===
+    // Apply weight exponent to static prior (0=off, 1=standard, >1=stronger pull)
+    float weightedPrior[TEMPO_BINS];
+    if (bayesPriorWeight != 0.0f) {
+        if (bayesPriorWeight == 1.0f) {
+            for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = tempoStaticPrior_[i];
+        } else {
+            for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = powf(tempoStaticPrior_[i], bayesPriorWeight);
+        }
+    } else {
+        for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = 1.0f;  // Disabled
+    }
+
+    float postSum = 0.0f;
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        tempoStatePost_[i] = prediction[i] * weightedPrior[i] * acfObs[i] * ftObs[i] * combObs[i] * ioiObs[i];
+        postSum += tempoStatePost_[i];
+    }
+    // Normalize posterior
+    if (postSum > 1e-9f) {
+        for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] /= postSum;
+    } else {
+        // Degenerate — reset to uniform
+        for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] = 1.0f / TEMPO_BINS;
+    }
+
+    // === 7. EXTRACT MAP ESTIMATE with per-sample ACF harmonic disambiguation ===
+    int bestBin = 0;
+    float bestPost = tempoStatePost_[0];
+    for (int i = 1; i < TEMPO_BINS; i++) {
+        if (tempoStatePost_[i] > bestPost) {
+            bestPost = tempoStatePost_[i];
+            bestBin = i;
+        }
+    }
+
+    // Per-sample ACF harmonic disambiguation (like old system):
+    // Check if the raw autocorrelation at half-lag (2x BPM) or 2/3-lag (1.5x BPM)
+    // is strong relative to the MAP bin's lag. If so, switch to the higher tempo.
+    // Uses per-sample ACF values for full resolution (not the coarse 20-bin observations).
+    {
+        int bestLag = tempoBinLags_[bestBin];
+        int halfLag = bestLag / 2;          // 2x BPM
+        int twoThirdLag = bestLag * 2 / 3;  // 1.5x BPM
+
+        // Get raw ACF at the MAP bin's lag
+        int bestLagIdx = bestLag - minLag;
+        float bestAcf = (bestLagIdx >= 0 && bestLagIdx < correlationSize)
+                        ? correlationAtLag[bestLagIdx] : 0.0f;
+
+        if (bestAcf > 0.001f) {
+            // Check half-lag (2x BPM): if strong, prefer double tempo
+            int halfIdx = halfLag - minLag;
+            if (halfIdx >= 0 && halfIdx < correlationSize) {
+                float halfAcf = correlationAtLag[halfIdx];
+                if (halfAcf > 0.5f * bestAcf) {
+                    // Find the bin closest to the half-lag BPM
+                    float halfBpm = 60.0f * 60.0f / static_cast<float>(halfLag);  // 60Hz * 60s
+                    int closestBin = -1;
+                    float closestDist = 999.0f;
+                    for (int i = 0; i < TEMPO_BINS; i++) {
+                        float dist = fabsf(tempoBinBpms_[i] - halfBpm);
+                        if (dist < closestDist) {
+                            closestDist = dist;
+                            closestBin = i;
+                        }
+                    }
+                    if (closestBin >= 0 && closestDist < halfBpm * 0.1f) {
+                        bestBin = closestBin;
+                    }
+                }
+            }
+
+            // Check 2/3-lag (1.5x BPM): if strong, prefer 3/2 tempo
+            int twoThirdIdx = twoThirdLag - minLag;
+            if (twoThirdIdx >= 0 && twoThirdIdx < correlationSize) {
+                float twoThirdAcf = correlationAtLag[twoThirdIdx];
+                if (twoThirdAcf > 0.6f * bestAcf) {
+                    float twoThirdBpm = 60.0f * 60.0f / static_cast<float>(twoThirdLag);
+                    int closestBin = -1;
+                    float closestDist = 999.0f;
+                    for (int i = 0; i < TEMPO_BINS; i++) {
+                        float dist = fabsf(tempoBinBpms_[i] - twoThirdBpm);
+                        if (dist < closestDist) {
+                            closestDist = dist;
+                            closestBin = i;
+                        }
+                    }
+                    if (closestBin >= 0 && closestDist < twoThirdBpm * 0.1f) {
+                        bestBin = closestBin;
+                    }
+                }
+            }
+        }
+    }
+    bayesBestBin_ = bestBin;
+
+    // Quadratic interpolation for sub-bin precision
+    float interpolatedBpm = tempoBinBpms_[bestBin];
+    if (bestBin > 0 && bestBin < TEMPO_BINS - 1) {
+        float y0 = tempoStatePost_[bestBin - 1];
+        float y1 = tempoStatePost_[bestBin];
+        float y2 = tempoStatePost_[bestBin + 1];
+        float denom = 2.0f * (2.0f * y1 - y0 - y2);
+        if (fabsf(denom) > 1e-9f) {
+            float delta = (y0 - y2) / denom;  // Fractional bin offset (-0.5 to +0.5)
+            delta = clampf(delta, -0.5f, 0.5f);
+            // Linearly interpolate BPM between adjacent bin centers
+            if (delta > 0.0f) {
+                interpolatedBpm = tempoBinBpms_[bestBin] + delta * (tempoBinBpms_[bestBin + 1] - tempoBinBpms_[bestBin]);
+            } else {
+                interpolatedBpm = tempoBinBpms_[bestBin] + delta * (tempoBinBpms_[bestBin] - tempoBinBpms_[bestBin - 1]);
+            }
+        }
+    }
+
+    // === 8. DEBUG OUTPUT ===
+    if (debugPrint) {
+        Serial.print(F("{\"type\":\"RHYTHM_DEBUG2\",\"bpm\":"));
+        Serial.print(interpolatedBpm, 1);
+        Serial.print(F(",\"bb\":"));
+        Serial.print(bestBin);
+        Serial.print(F(",\"bc\":"));
+        Serial.print(bestPost, 4);
+        Serial.print(F(",\"acf\":"));
+        Serial.print(acfObs[bestBin], 3);
+        Serial.print(F(",\"ft\":"));
+        Serial.print(ftObs[bestBin], 3);
+        Serial.print(F(",\"cb\":"));
+        Serial.print(combObs[bestBin], 3);
+        Serial.print(F(",\"io\":"));
+        Serial.print(ioiObs[bestBin], 3);
+        Serial.print(F(",\"ms\":"));
+        Serial.print(odfMeanSubEnabled ? 1 : 0);
+        Serial.println(F("}"));
+    }
+
+    // === 9. UPDATE TEMPO ===
+    if (periodicityStrength_ > 0.25f) {
+        float newBpm = clampf(interpolatedBpm, bpmMin, bpmMax);
+
+        // Smooth tempo update (EMA)
+        bpm_ = bpm_ * tempoSmoothingFactor + newBpm * (1.0f - tempoSmoothingFactor);
+
+        beatPeriodMs_ = 60000.0f / bpm_;
+
+        // Update beat period in samples for CBSS
+        int newPeriodSamples = static_cast<int>(beatPeriodMs_ * samplesPerMs + 0.5f);
+        if (newPeriodSamples < 10) newPeriodSamples = 10;
+        if (newPeriodSamples > OSS_BUFFER_SIZE / 2) newPeriodSamples = OSS_BUFFER_SIZE / 2;
+        beatPeriodSamples_ = newPeriodSamples;
+
+        // Update ensemble detector with tempo hint for adaptive cooldown
+        ensemble_.getFusion().setTempoHint(bpm_);
+
+        // Update tempo velocity if BPM changed significantly
+        if (fabsf(bpm_ - prevBpm_) / (prevBpm_ > 1.0f ? prevBpm_ : 1.0f) > tempoChangeThreshold) {
+            float dt = autocorrPeriodMs / 1000.0f;
+            updateTempoVelocity(bpm_, dt);
+        }
+    }
+
+    // === 10. SAVE POSTERIOR AS NEXT PRIOR ===
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        tempoStatePrior_[i] = tempoStatePost_[i];
+    }
+}
+
+// ===== FOURIER TEMPOGRAM PER-BIN OBSERVATIONS =====
+
+void AudioController::computeFTObservations(float* ftObs, int numBins) {
+    // Compute Goertzel magnitude at each of the 20 tempo bin lags
+    // This is faster than the old full-range scan (20 evals vs ~40)
 
     // Compute OSS mean for detrending (removes DC from DFT)
     float mean = 0.0f;
@@ -925,9 +857,10 @@ int AudioController::computeFourierTempogramPeakLag(int minLag, int maxLag) {
     }
     mean /= static_cast<float>(ossCount_);
 
-    // Evaluate Goertzel at each candidate lag
-    // For lag L: frequency = 1/L cycles per sample, coeff = 2*cos(2*pi/L)
-    for (int lag = minLag; lag <= maxLag; lag++) {
+    for (int b = 0; b < numBins; b++) {
+        int lag = tempoBinLags_[b];
+        if (lag < 5) { ftObs[b] = 0.01f; continue; }
+
         float omega = 2.0f * 3.14159265f / static_cast<float>(lag);
         float coeff = 2.0f * cosf(omega);
 
@@ -943,45 +876,21 @@ int AudioController::computeFourierTempogramPeakLag(int minLag, int maxLag) {
 
         // Goertzel magnitude squared: |X(k)|^2 = s1^2 + s2^2 - coeff*s1*s2
         float magSq = s1 * s1 + s2 * s2 - coeff * s1 * s2;
-
-        sumMagSq += magSq;
-        numEvals++;
-
-        if (magSq > bestMagSq) {
-            bestMagSq = magSq;
-            bestLag = lag;
-        }
+        ftObs[b] = (magSq > 0.01f) ? magSq : 0.01f;  // Floor
     }
-
-    // Require peak to be significantly above mean
-    if (numEvals < 5) { lastFtMagRatio_ = 0.0f; return 0; }
-    float meanMagSq = sumMagSq / static_cast<float>(numEvals);
-    if (meanMagSq < 1e-10f) { lastFtMagRatio_ = 0.0f; return 0; }
-
-    // Store magnitude ratio for debug: sqrt(bestMagSq/meanMagSq)
-    lastFtMagRatio_ = sqrtf(bestMagSq / meanMagSq);
-
-    // Compare magnitude (not squared): peak_mag > ratio * mean_mag
-    // Equivalent: peak_magSq > ratio^2 * mean_magSq
-    float ratioSq = ftMinMagnitudeRatio * ftMinMagnitudeRatio;
-    if (bestMagSq < ratioSq * meanMagSq) return 0;
-
-    return bestLag;
 }
 
-// ===== IOI HISTOGRAM CROSS-VALIDATION =====
+// ===== IOI HISTOGRAM PER-BIN OBSERVATIONS =====
 
-int AudioController::computeIOIPeakLag(int minLag, int maxLag) {
-    if (ioiOnsetCount_ < 8) return 0;
+void AudioController::computeIOIObservations(float* ioiObs, int numBins) {
+    // Accumulate IOI histogram counts at each of the 20 tempo bin lags
+    // with ±1 bin tolerance for timing jitter
 
-    // Stack histogram matching autocorrelation range
-    int histSize = maxLag - minLag + 1;
-    if (histSize > 200) histSize = 200;
-    int histogram[200] = {0};
+    // Initialize to small floor
+    for (int b = 0; b < numBins; b++) ioiObs[b] = 1.0f;
 
-    // Iterate over all onset pairs to compute inter-onset intervals
-    // Onsets are stored in a ring buffer; read them newest-first
     int n = ioiOnsetCount_;
+
     for (int i = 0; i < n; i++) {
         int idxI = (ioiOnsetWriteIdx_ - 1 - i + IOI_ONSET_BUFFER_SIZE) % IOI_ONSET_BUFFER_SIZE;
         int sampleI = ioiOnsetSamples_[idxI];
@@ -990,62 +899,28 @@ int AudioController::computeIOIPeakLag(int minLag, int maxLag) {
             int idxJ = (ioiOnsetWriteIdx_ - 1 - j + IOI_ONSET_BUFFER_SIZE) % IOI_ONSET_BUFFER_SIZE;
             int sampleJ = ioiOnsetSamples_[idxJ];
 
-            int interval = sampleI - sampleJ;  // Always positive (i is newer)
-            if (interval <= 0) continue;  // Safety check
+            int interval = sampleI - sampleJ;
+            if (interval <= 0) continue;
 
-            // Early exit: if interval exceeds 2x max range, no more useful pairs
-            if (interval > 2 * maxLag) break;
-
-            // Direct match: interval falls in [minLag, maxLag]
-            if (interval >= minLag && interval <= maxLag) {
-                int bin = interval - minLag;
-                if (bin < histSize) histogram[bin]++;
-            }
-
-            // Folded match: interval is ~2x a beat period (skipped beat)
-            // Map to half-interval
-            if (interval >= 2 * minLag) {
-                int halfInterval = interval / 2;
-                if (halfInterval >= minLag && halfInterval <= maxLag) {
-                    int bin = halfInterval - minLag;
-                    if (bin < histSize) histogram[bin]++;
+            // Check interval against each tempo bin lag (with ±1 tolerance)
+            for (int b = 0; b < numBins; b++) {
+                int lag = tempoBinLags_[b];
+                // Direct match
+                int diff = interval - lag;
+                if (diff < 0) diff = -diff;
+                if (diff <= 1) {
+                    ioiObs[b] += 1.0f;
+                }
+                // Folded match (2x interval = skipped beat)
+                if (interval >= lag * 2 - 1 && interval <= lag * 2 + 1) {
+                    ioiObs[b] += 0.5f;  // Half weight for skipped-beat matches
                 }
             }
+
+            // Early exit: interval too long for any bin
+            if (interval > tempoBinLags_[0] * 3) break;  // Bin 0 has longest lag
         }
     }
-
-    // In-place 3-bin smoothing to cluster jittered intervals (±1 sample tolerance)
-    // Avoids splitting a clear peak across adjacent bins.
-    // Uses lookback variable (`prev`) to avoid a second 800-byte stack array.
-    // Each bin reads raw `next` (not yet overwritten) and saved raw `prev` (from before overwrite).
-    int prev = 0;
-    for (int i = 0; i < histSize; i++) {
-        int curr = histogram[i];
-        int next = (i < histSize - 1) ? histogram[i + 1] : 0;
-        histogram[i] = prev + curr + next;
-        prev = curr;
-    }
-
-    // Find peak and compute mean on smoothed histogram
-    int peakBin = 0;
-    int peakCount = 0;
-    int totalCount = 0;
-    for (int i = 0; i < histSize; i++) {
-        totalCount += histogram[i];
-        if (histogram[i] > peakCount) {
-            peakCount = histogram[i];
-            peakBin = i;
-        }
-    }
-
-    if (totalCount == 0 || peakCount == 0) return 0;
-
-    float mean = static_cast<float>(totalCount) / static_cast<float>(histSize);
-
-    // Peak must be significantly above mean
-    if (mean < 0.001f || static_cast<float>(peakCount) < ioiMinPeakRatio * mean) return 0;
-
-    return peakBin + minLag;
 }
 
 // ===== LOG-GAUSSIAN WEIGHT COMPUTATION =====
@@ -1093,6 +968,9 @@ void AudioController::updateCBSS(float onsetStrength) {
     float cbssVal = (1.0f - cbssAlpha) * onsetStrength + cbssAlpha * maxWeightedCBSS;
     cbssBuffer_[sampleCounter_ % OSS_BUFFER_SIZE] = cbssVal;
 
+    // Update running mean of CBSS for adaptive threshold (EMA, tau ~120 frames = 2s)
+    cbssMean_ = cbssMean_ * 0.992f + cbssVal * 0.008f;
+
     sampleCounter_++;
 
     // Prevent signed integer overflow (UB in C++).
@@ -1107,6 +985,11 @@ void AudioController::updateCBSS(float onsetStrength) {
         lastTransientSample_ -= shift;
         if (lastBeatSample_ < 0) lastBeatSample_ = 0;
         if (lastTransientSample_ < 0) lastTransientSample_ = -1;
+        // Also shift IOI onset ring buffer to keep intervals valid
+        for (int i = 0; i < ioiOnsetCount_; i++) {
+            ioiOnsetSamples_[i] -= shift;
+            if (ioiOnsetSamples_[i] < 0) ioiOnsetSamples_[i] = 0;
+        }
     }
 }
 
@@ -1191,20 +1074,27 @@ void AudioController::detectBeat() {
         predictBeat();
     }
 
-    // Beat declared when countdown reaches zero
+    // Beat declared when countdown reaches zero AND CBSS is above adaptive threshold
     if (timeToNextBeat_ <= 0) {
-        lastBeatSample_ = sampleCounter_;
-        if (beatCount_ < 65535) beatCount_++;
-        beatDetected = true;
-        cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
-        updateBeatStability(nowMs);
+        // Adaptive threshold: suppress beats during silence/breakdowns
+        // When cbssThresholdFactor > 0, require current CBSS > factor * running mean
+        float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];
+        bool cbssAboveThreshold = (cbssThresholdFactor <= 0.0f) ||
+                                   (currentCBSS > cbssThresholdFactor * cbssMean_);
 
-        // Capture whether prediction refined this beat's timing (for streaming)
-        // Must happen before reset so streaming reads the correct value
-        lastFiredBeatPredicted_ = lastBeatWasPredicted_;
+        if (cbssAboveThreshold) {
+            lastBeatSample_ = sampleCounter_;
+            if (beatCount_ < 65535) beatCount_++;
+            beatDetected = true;
+            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+            updateBeatStability(nowMs);
 
-        // Reset timers to prevent re-firing on subsequent frames.
-        // Use current beat period as fallback; next prediction will refine.
+            // Capture whether prediction refined this beat's timing (for streaming)
+            // Must happen before reset so streaming reads the correct value
+            lastFiredBeatPredicted_ = lastBeatWasPredicted_;
+        }
+
+        // Always reset timers (even if suppressed) to prevent re-firing stale countdown
         int T = beatPeriodSamples_;
         if (T < 10) T = 10;
         timeToNextBeat_ = T;
@@ -1320,138 +1210,10 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
 }
 
 // ============================================================================
-// Pulse Train Evaluation (Percival & Tzanetakis 2014)
-// ============================================================================
-
-int AudioController::evaluatePulseTrains(const int* candidateLags, const float* candidateScores,
-                                          int numCandidates, float samplesPerMs, bool debugPrint) {
-    if (numCandidates <= 0) return 0;
-    if (numCandidates == 1) return candidateLags[0];
-
-    static constexpr int MAX_CANDIDATES = 10;
-    if (numCandidates > MAX_CANDIDATES) numCandidates = MAX_CANDIDATES;
-
-    float magScores[MAX_CANDIDATES];
-    float varScores[MAX_CANDIDATES];
-
-    for (int c = 0; c < numCandidates; c++) {
-        int lag = candidateLags[c];
-        magScores[c] = 0.0f;
-        varScores[c] = 0.0f;
-
-        // Need at least 4 beats at fundamental to evaluate
-        if (lag <= 0 || ossCount_ < lag * 4) continue;
-
-        float maxMag = 0.0f;
-        float sumMag = 0.0f;
-        float sumMagSq = 0.0f;
-
-        for (int phase = 0; phase < lag; phase++) {
-            float score = 0.0f;
-
-            for (int b = 0; b < 4; b++) {
-                // Fundamental (weight 1.0)
-                int idx = phase + b * lag;
-                if (idx < ossCount_) {
-                    int bufIdx = (ossWriteIdx_ - ossCount_ + idx + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-                    score += ossBuffer_[bufIdx];
-                }
-
-                // Double period (weight 0.5) — every 2 beats
-                idx = phase + b * lag * 2;
-                if (idx < ossCount_) {
-                    int bufIdx = (ossWriteIdx_ - ossCount_ + idx + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-                    score += 0.5f * ossBuffer_[bufIdx];
-                }
-
-                // 3/2 period (weight 0.5) — compound meter support
-                idx = phase + b * (lag * 3 / 2);
-                if (idx < ossCount_) {
-                    int bufIdx = (ossWriteIdx_ - ossCount_ + idx + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-                    score += 0.5f * ossBuffer_[bufIdx];
-                }
-            }
-
-            if (score > maxMag) maxMag = score;
-            sumMag += score;
-            sumMagSq += score * score;
-        }
-
-        magScores[c] = maxMag;
-
-        // Variance = E[x^2] - E[x]^2 (online, no per-phase allocation needed)
-        float mean = sumMag / static_cast<float>(lag);
-        varScores[c] = (sumMagSq / static_cast<float>(lag)) - (mean * mean);
-        if (varScores[c] < 0.0f) varScores[c] = 0.0f;  // numerical safety
-    }
-
-    // Normalize each score type to sum to 1, then combine (rank-level fusion)
-    // Three signals: onset alignment (mag), phase selectivity (var), autocorrelation+prior (acf)
-    // The autocorrelation score anchors the fusion to the tempo prior, preventing
-    // the pulse train from overriding to sub-harmonics that happen to align with onsets.
-    float sumMag = 0.0f, sumVar = 0.0f, sumAcf = 0.0f;
-    for (int c = 0; c < numCandidates; c++) {
-        sumMag += magScores[c];
-        sumVar += varScores[c];
-        sumAcf += candidateScores[c];
-    }
-    if (sumMag < 1e-9f) sumMag = 1e-9f;
-    if (sumVar < 1e-9f) sumVar = 1e-9f;
-    if (sumAcf < 1e-9f) sumAcf = 1e-9f;
-
-    float bestCombo = -1.0f;
-    int bestIdx = 0;
-    for (int c = 0; c < numCandidates; c++) {
-        float combo = magScores[c] / sumMag + varScores[c] / sumVar + candidateScores[c] / sumAcf;
-        if (combo > bestCombo) {
-            bestCombo = combo;
-            bestIdx = c;
-        }
-    }
-
-    if (debugPrint) {
-        float winBpm = 60000.0f / (static_cast<float>(candidateLags[bestIdx]) / samplesPerMs);
-        Serial.print(F("{\"type\":\"PULSE_TRAIN\",\"winner\":"));
-        Serial.print(winBpm, 1);
-        Serial.print(F(",\"n\":"));
-        Serial.print(numCandidates);
-        Serial.print(F(",\"mag\":"));
-        Serial.print(magScores[bestIdx], 2);
-        Serial.print(F(",\"var\":"));
-        Serial.print(varScores[bestIdx], 3);
-        Serial.print(F(",\"acf\":"));
-        Serial.print(candidateScores[bestIdx], 3);
-        Serial.print(F(",\"cands\":["));
-        for (int c = 0; c < numCandidates; c++) {
-            if (c > 0) Serial.print(',');
-            float bpm = 60000.0f / (static_cast<float>(candidateLags[c]) / samplesPerMs);
-            Serial.print(bpm, 0);
-        }
-        Serial.println(F("]}"));
-    }
-
-    return candidateLags[bestIdx];
-}
-
-// ============================================================================
 // Tempo Prior and Stability Methods
 // ============================================================================
 
-float AudioController::computeTempoPrior(float bpm) const {
-    if (!tempoPriorEnabled || tempoPriorWidth <= 0.0f) {
-        return 1.0f;  // No prior weighting
-    }
-
-    // Gaussian prior: exp(-0.5 * ((bpm - center) / width)^2)
-    float diff = bpm - tempoPriorCenter;
-    float normalized = diff / tempoPriorWidth;
-    float gaussianWeight = expf(-0.5f * normalized * normalized);
-
-    // Blend between no-prior (1.0) and full prior based on tempoPriorStrength
-    // At strength=0: return 1.0 (no prior effect)
-    // At strength=1: return gaussianWeight (full prior)
-    return 1.0f + tempoPriorStrength * (gaussianWeight - 1.0f);
-}
+// (computeTempoPrior removed — Bayesian fusion applies prior directly in initTempoState)
 
 void AudioController::updateBeatStability(uint32_t nowMs) {
     // Only update when we detect a beat
@@ -2016,132 +1778,6 @@ void AudioController::updateBandPeriodicities(uint32_t nowMs) {
             adaptiveBandWeights_[i] = defaultWeights[i];
         }
     }
-}
-
-// ============================================================================
-// Pulse Train Phase Estimation (Phase 3)
-// ============================================================================
-
-float AudioController::generateAndCorrelate(int phaseOffset, int beatPeriod) {
-    // Generate ideal pulse train and correlate with OSS buffer in one pass
-    // This is more memory-efficient than generating a full buffer
-    //
-    // Pulse train: Gaussian pulses at beat positions
-    // sigma = 10% of beat period (captures timing variance)
-
-    if (beatPeriod < 10 || ossCount_ < beatPeriod) {
-        return 0.0f;
-    }
-
-    const float sigma = 0.1f;  // 10% of beat period
-    const float sigmaSquared2 = 2.0f * sigma * sigma;
-
-    float correlation = 0.0f;
-    float pulseEnergy = 0.0f;
-    float ossEnergy = 0.0f;
-
-    // Correlate over the OSS buffer
-    int samplesToUse = ossCount_ < OSS_BUFFER_SIZE ? ossCount_ : OSS_BUFFER_SIZE;
-
-    for (int i = 0; i < samplesToUse; i++) {
-        int ossIdx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-        float ossVal = ossBuffer_[ossIdx];
-
-        // Generate pulse train value at this position
-        // Position in beat cycle (0 to beatPeriod-1)
-        int posInBeat = (i + phaseOffset) % beatPeriod;
-
-        // Distance from nearest beat (0 = on beat)
-        float dist = static_cast<float>(posInBeat) / static_cast<float>(beatPeriod);
-        if (dist > 0.5f) {
-            dist = 1.0f - dist;  // Wrap around: 0.9 -> 0.1 distance
-        }
-
-        // Gaussian pulse: exp(-0.5 * (dist/sigma)^2)
-        float pulseVal = expf(-0.5f * (dist * dist) / sigmaSquared2);
-
-        // Accumulate correlation
-        correlation += ossVal * pulseVal;
-        pulseEnergy += pulseVal * pulseVal;
-        ossEnergy += ossVal * ossVal;
-    }
-
-    // Normalize correlation
-    float normalizer = sqrtf(pulseEnergy * ossEnergy);
-    if (normalizer > 0.0001f) {
-        correlation /= normalizer;
-    } else {
-        correlation = 0.0f;
-    }
-
-    return correlation;
-}
-
-float AudioController::computePulseTrainPhase(int beatPeriodSamples) {
-    // Extract phase using Fourier analysis at the tempo frequency
-    // Based on Predominant Local Pulse (PLP) method by Grosche & Müller (2011)
-    //
-    // Key insight: The phase of the DFT coefficient at the tempo frequency
-    // directly gives the beat alignment. This is more efficient and accurate
-    // than brute-force template matching.
-    //
-    // For tempo period T samples, compute DFT at frequency f = 1/T:
-    //   X(f) = Σ oss[n] * exp(-j*2π*f*n)
-    //        = Σ oss[n] * cos(2π*n/T) - j * Σ oss[n] * sin(2π*n/T)
-    //   Phase = atan2(imag, real)
-
-    if (beatPeriodSamples < 10 || ossCount_ < 60) {
-        pulseTrainConfidence_ = 0.0f;
-        return 0.0f;
-    }
-
-    // Compute DFT at tempo frequency using Goertzel-like approach
-    // This is O(n) instead of O(n log n) for full FFT
-    float realSum = 0.0f;
-    float imagSum = 0.0f;
-    float ossEnergy = 0.0f;
-
-    // Angular frequency per sample: 2π / beatPeriodSamples
-    const float angularFreq = 2.0f * 3.14159265f / static_cast<float>(beatPeriodSamples);
-
-    int samplesToUse = ossCount_ < OSS_BUFFER_SIZE ? ossCount_ : OSS_BUFFER_SIZE;
-
-    for (int i = 0; i < samplesToUse; i++) {
-        int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-        float ossVal = ossBuffer_[idx];
-
-        // DFT at tempo frequency
-        float angle = angularFreq * static_cast<float>(i);
-        realSum += ossVal * cosf(angle);
-        imagSum += ossVal * sinf(angle);
-        ossEnergy += ossVal * ossVal;
-    }
-
-    // Normalize by OSS energy to get confidence (0-1)
-    // High magnitude relative to energy = strong periodicity at this tempo
-    float normalizer = sqrtf(ossEnergy * static_cast<float>(samplesToUse));
-    if (normalizer > 0.0001f) {
-        float magnitude = sqrtf(realSum * realSum + imagSum * imagSum);
-        pulseTrainConfidence_ = clampf(magnitude / normalizer, 0.0f, 1.0f);
-    } else {
-        pulseTrainConfidence_ = 0.0f;
-        return 0.0f;
-    }
-
-    // Extract phase from complex coefficient
-    // atan2 gives angle in [-π, π], convert to [0, 1]
-    float phaseRadians = atan2f(imagSum, realSum);
-
-    // Convert to beat phase (0-1)
-    // Phase 0 = beat peak aligns with most recent sample
-    // We negate because we're looking backward in time
-    float phase = -phaseRadians / (2.0f * 3.14159265f);
-
-    // Normalize to [0, 1)
-    if (phase < 0.0f) phase += 1.0f;
-    if (phase >= 1.0f) phase -= 1.0f;
-
-    return clampf(phase, 0.0f, 1.0f);
 }
 
 // ============================================================================
