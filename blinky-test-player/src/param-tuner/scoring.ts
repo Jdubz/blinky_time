@@ -177,12 +177,14 @@ export function scoreBeatEvents(
 
   if (groundTruth.startedAt && recordStartTime) {
     const audioStartTime = new Date(groundTruth.startedAt).getTime();
-    timingOffsetMs = audioStartTime - recordStartTime;
+    if (!Number.isNaN(audioStartTime)) {
+      timingOffsetMs = audioStartTime - recordStartTime;
 
-    correctedEvents = beatEvents.map(e => ({
-      ...e,
-      timestampMs: e.timestampMs - timingOffsetMs,
-    })).filter(e => e.timestampMs >= 0);
+      correctedEvents = beatEvents.map(e => ({
+        ...e,
+        timestampMs: e.timestampMs - timingOffsetMs,
+      })).filter(e => e.timestampMs >= 0);
+    }
   }
 
   // Filter ground truth to only beats within the played duration.

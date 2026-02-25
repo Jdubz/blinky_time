@@ -64,6 +64,7 @@ export class DeviceManager {
 
   /** Get the number of connected devices */
   get connectedCount(): number {
+    this.pruneStale();
     return this.sessions.size;
   }
 

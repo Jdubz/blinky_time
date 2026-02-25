@@ -59,7 +59,6 @@ export class DeviceConnection extends EventEmitter {
   private testStartTime: number | null = null;
   private transientBuffer: TransientEvent[] = [];
   private beatEventBuffer: BeatEvent[] = [];
-  private lastBeatCount: number = -1;
 
   // Audio sample recording (debugging only)
   private audioSampleBuffer: Array<{
@@ -191,7 +190,6 @@ export class DeviceConnection extends EventEmitter {
   startRecording(): number {
     this.transientBuffer = [];
     this.beatEventBuffer = [];
-    this.lastBeatCount = -1;
     if (this.recordAudio) {
       this.audioSampleBuffer = [];
     }

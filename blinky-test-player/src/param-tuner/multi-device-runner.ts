@@ -155,8 +155,7 @@ export class MultiDeviceRunner extends EventEmitter {
       }
     }
 
-    let recordings: Map<string, ReturnType<DeviceConnection['stopRecording']>>;
-    const recordStartTimes = new Map<string, number>();
+    const recordings = new Map<string, ReturnType<DeviceConnection['stopRecording']>>();
     const audioStartTime = new Date();
 
     try {
@@ -166,15 +165,14 @@ export class MultiDeviceRunner extends EventEmitter {
       }
 
       // Start recording on all devices (synchronized timestamp)
-      for (const [port, conn] of this.connections) {
-        recordStartTimes.set(port, conn.startRecording());
+      for (const conn of this.connections.values()) {
+        conn.startRecording();
       }
 
       // Play audio file with ffplay
       await this.playAudioFile(musicTest.audioFile, durationMs);
 
       // Stop recording on all devices
-      recordings = new Map();
       for (const [port, conn] of this.connections) {
         recordings.set(port, conn.stopRecording());
       }
@@ -196,20 +194,19 @@ export class MultiDeviceRunner extends EventEmitter {
     // Score each device independently
     const perDevice: PerDeviceTestResult[] = [];
     for (const [port, recording] of recordings) {
-      const startTime = recordStartTimes.get(port)!;
       const rawDuration = recording.stopTime - recording.startTime;
 
       const testResult = scoringMode === 'beat'
         ? scoreBeatEvents(
             recording.beatEvents,
-            startTime,
+            recording.startTime,
             groundTruth,
             musicTest.id,
             rawDuration,
           )
         : scoreDetections(
             recording.transients,
-            startTime,
+            recording.startTime,
             groundTruth,
             musicTest.id,
             rawDuration,
