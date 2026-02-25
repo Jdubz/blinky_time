@@ -26,8 +26,15 @@ export interface TransientEvent {
   strength: number;
 }
 
+export interface BeatEvent {
+  timestampMs: number;
+  bpm: number;
+  predicted: boolean;
+}
+
 export interface RecordingResult {
   transients: TransientEvent[];
+  beatEvents: BeatEvent[];
   audioSamples: Array<{
     timestampMs: number;
     level: number;
@@ -51,6 +58,8 @@ export class DeviceConnection extends EventEmitter {
   // Test recording state
   private testStartTime: number | null = null;
   private transientBuffer: TransientEvent[] = [];
+  private beatEventBuffer: BeatEvent[] = [];
+  private lastBeatCount: number = -1;
 
   // Audio sample recording (debugging only)
   private audioSampleBuffer: Array<{
@@ -88,6 +97,8 @@ export class DeviceConnection extends EventEmitter {
       this.parser = this.port.pipe(new ReadlineParser({ delimiter: '\n' }));
 
       this.port.on('error', (err) => {
+        this.port = null;
+        this.parser = null;
         this.emit('error', err);
         reject(err);
       });
@@ -136,20 +147,23 @@ export class DeviceConnection extends EventEmitter {
       await this.stopStream();
     }
 
-    return new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingCommand = null;
-        reject(new Error(`Command timeout: ${command}`));
-      }, COMMAND_TIMEOUT_MS);
+    let result: string;
+    try {
+      result = await new Promise<string>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          this.pendingCommand = null;
+          reject(new Error(`Command timeout: ${command}`));
+        }, COMMAND_TIMEOUT_MS);
 
-      this.pendingCommand = { resolve, reject, timeout };
-      this.port!.write(command + '\n');
-    }).then(async (result) => {
+        this.pendingCommand = { resolve, reject, timeout };
+        this.port!.write(command + '\n');
+      });
+    } finally {
       if (wasStreaming) {
         await this.startStream();
       }
-      return result;
-    });
+    }
+    return result;
   }
 
   async startStream(): Promise<void> {
@@ -176,6 +190,8 @@ export class DeviceConnection extends EventEmitter {
    */
   startRecording(): number {
     this.transientBuffer = [];
+    this.beatEventBuffer = [];
+    this.lastBeatCount = -1;
     if (this.recordAudio) {
       this.audioSampleBuffer = [];
     }
@@ -190,6 +206,7 @@ export class DeviceConnection extends EventEmitter {
     const stopTime = Date.now();
     const result: RecordingResult = {
       transients: [...this.transientBuffer],
+      beatEvents: [...this.beatEventBuffer],
       audioSamples: this.audioSampleBuffer ? [...this.audioSampleBuffer] : null,
       startTime: this.testStartTime || stopTime,
       stopTime,
@@ -197,6 +214,7 @@ export class DeviceConnection extends EventEmitter {
 
     this.testStartTime = null;
     this.transientBuffer = [];
+    this.beatEventBuffer = [];
     if (this.audioSampleBuffer) {
       this.audioSampleBuffer = [];
     }
@@ -282,7 +300,7 @@ export class DeviceConnection extends EventEmitter {
         const parsed = JSON.parse(line);
         const audio: AudioSample = parsed.a;
 
-        // If in test mode, record transients and audio samples
+        // If in test mode, record transients, beat events, and audio samples
         if (this.testStartTime !== null) {
           const timestampMs = Date.now() - this.testStartTime;
 
@@ -301,6 +319,19 @@ export class DeviceConnection extends EventEmitter {
               type: 'unified',
               strength: audio.t,
             });
+          }
+
+          // Capture beat events from music mode data
+          if (parsed.m) {
+            const music = parsed.m;
+            // Detect beat event: q=1 means a beat fired this frame
+            if (music.q === 1) {
+              this.beatEventBuffer.push({
+                timestampMs,
+                bpm: music.bpm || 0,
+                predicted: music.bp === 1,
+              });
+            }
           }
         }
       } catch {

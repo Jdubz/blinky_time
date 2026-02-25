@@ -20,11 +20,11 @@ export class DeviceSession {
   lastMusicState: MusicModeState | null = null;
 
   // Test recording buffers
-  transientBuffer: TransientEvent[] = [];
-  audioSampleBuffer: TimestampedSample[] = [];
-  musicStateBuffer: TimestampedMusicState[] = [];
-  beatEventBuffer: BeatEvent[] = [];
-  testStartTime: number | null = null;
+  private transientBuffer: TransientEvent[] = [];
+  private audioSampleBuffer: TimestampedSample[] = [];
+  private musicStateBuffer: TimestampedMusicState[] = [];
+  private beatEventBuffer: BeatEvent[] = [];
+  private _testStartTime: number | null = null;
 
   constructor(port: string) {
     this.port = port;
@@ -37,8 +37,8 @@ export class DeviceSession {
       this.lastAudioSample = sample;
       this.audioSampleCount++;
 
-      if (this.testStartTime !== null) {
-        const timestampMs = Date.now() - this.testStartTime;
+      if (this._testStartTime !== null) {
+        const timestampMs = Date.now() - this._testStartTime;
 
         this.audioSampleBuffer.push({
           timestampMs,
@@ -64,8 +64,8 @@ export class DeviceSession {
     this.serial.on('music', (state: MusicModeState) => {
       this.lastMusicState = state;
 
-      if (this.testStartTime !== null) {
-        const timestampMs = Date.now() - this.testStartTime;
+      if (this._testStartTime !== null) {
+        const timestampMs = Date.now() - this._testStartTime;
         this.musicStateBuffer.push({
           timestampMs,
           active: state.a === 1,
@@ -79,8 +79,8 @@ export class DeviceSession {
     });
 
     this.serial.on('beat', (beat: { type: string; bpm: number; predicted?: boolean }) => {
-      if (this.testStartTime !== null) {
-        const timestampMs = Date.now() - this.testStartTime;
+      if (this._testStartTime !== null) {
+        const timestampMs = Date.now() - this._testStartTime;
         this.beatEventBuffer.push({
           timestampMs,
           bpm: beat.bpm,
@@ -107,10 +107,21 @@ export class DeviceSession {
     return this.serial.getState();
   }
 
+  /** Whether a test recording is in progress */
+  get isRecording(): boolean {
+    return this._testStartTime !== null;
+  }
+
+  /** Timestamp when test recording started (null if not recording) */
+  get testStartTime(): number | null {
+    return this._testStartTime;
+  }
+
   /** Reset streaming-related counters (called by stream_start) */
   resetStreamState(): void {
     this.lastAudioSample = null;
     this.lastLedSample = null;
+    this.lastMusicState = null;
     this.audioSampleCount = 0;
   }
 
@@ -120,7 +131,7 @@ export class DeviceSession {
     this.audioSampleBuffer = [];
     this.musicStateBuffer = [];
     this.beatEventBuffer = [];
-    this.testStartTime = Date.now();
+    this._testStartTime = Date.now();
   }
 
   /** Stop test recording and return captured data */
@@ -132,8 +143,8 @@ export class DeviceSession {
     musicStates: TimestampedMusicState[];
     beatEvents: BeatEvent[];
   } {
-    const duration = this.testStartTime !== null ? Date.now() - this.testStartTime : 0;
-    const startTime = this.testStartTime || Date.now();
+    const duration = this._testStartTime !== null ? Date.now() - this._testStartTime : 0;
+    const startTime = this._testStartTime || Date.now();
     const result = {
       duration,
       startTime,
@@ -142,7 +153,7 @@ export class DeviceSession {
       musicStates: [...this.musicStateBuffer],
       beatEvents: [...this.beatEventBuffer],
     };
-    this.testStartTime = null;
+    this._testStartTime = null;
     this.transientBuffer = [];
     this.audioSampleBuffer = [];
     this.musicStateBuffer = [];

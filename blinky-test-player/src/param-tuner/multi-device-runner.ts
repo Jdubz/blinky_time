@@ -13,8 +13,10 @@ import { readFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import type { TestResult, MultiDeviceTestResult, PerDeviceTestResult } from './types.js';
 import { DeviceConnection } from './device-connection.js';
-import { scoreDetections } from './scoring.js';
+import { scoreDetections, scoreBeatEvents } from './scoring.js';
 import type { GroundTruthData } from './scoring.js';
+
+export type ScoringMode = 'transient' | 'beat';
 
 export interface MusicTestFile {
   audioFile: string;
@@ -87,7 +89,7 @@ export class MultiDeviceRunner extends EventEmitter {
   async connectAll(): Promise<void> {
     const connected: DeviceConnection[] = [];
     try {
-      for (const [port, conn] of this.connections) {
+      for (const [, conn] of this.connections) {
         await conn.connect();
         connected.push(conn);
       }
@@ -142,8 +144,10 @@ export class MultiDeviceRunner extends EventEmitter {
   /**
    * Run a music file with all devices recording simultaneously from one audio playback.
    * Returns per-device results with variation stats.
+   *
+   * @param scoringMode - 'transient' scores onset detections, 'beat' scores beat tracking events
    */
-  async runMusicTestAllDevices(musicTest: MusicTestFile, durationMs?: number): Promise<MultiDeviceTestResult> {
+  async runMusicTestAllDevices(musicTest: MusicTestFile, durationMs?: number, scoringMode: ScoringMode = 'transient'): Promise<MultiDeviceTestResult> {
     // Lock gain on all devices if specified
     if (this.gain !== undefined) {
       for (const conn of this.connections.values()) {
@@ -151,36 +155,38 @@ export class MultiDeviceRunner extends EventEmitter {
       }
     }
 
-    // Start streaming on all devices
-    for (const conn of this.connections.values()) {
-      await conn.startStream();
-    }
-
-    // Start recording on all devices (synchronized timestamp)
+    let recordings: Map<string, ReturnType<DeviceConnection['stopRecording']>>;
     const recordStartTimes = new Map<string, number>();
-    for (const [port, conn] of this.connections) {
-      recordStartTimes.set(port, conn.startRecording());
-    }
-
-    // Play audio file with ffplay
     const audioStartTime = new Date();
-    await this.playAudioFile(musicTest.audioFile, durationMs);
 
-    // Stop recording on all devices
-    const recordings = new Map<string, ReturnType<DeviceConnection['stopRecording']>>();
-    for (const [port, conn] of this.connections) {
-      recordings.set(port, conn.stopRecording());
-    }
-
-    // Stop streaming on all devices
-    for (const conn of this.connections.values()) {
-      await conn.stopStream();
-    }
-
-    // Unlock gain on all devices
-    if (this.gain !== undefined) {
+    try {
+      // Start streaming on all devices
       for (const conn of this.connections.values()) {
-        await conn.sendCommand('set hwgainlock 255');
+        await conn.startStream();
+      }
+
+      // Start recording on all devices (synchronized timestamp)
+      for (const [port, conn] of this.connections) {
+        recordStartTimes.set(port, conn.startRecording());
+      }
+
+      // Play audio file with ffplay
+      await this.playAudioFile(musicTest.audioFile, durationMs);
+
+      // Stop recording on all devices
+      recordings = new Map();
+      for (const [port, conn] of this.connections) {
+        recordings.set(port, conn.stopRecording());
+      }
+    } finally {
+      // Always stop streaming and unlock gain, even on error
+      for (const conn of this.connections.values()) {
+        await conn.stopStream().catch(() => {});
+      }
+      if (this.gain !== undefined) {
+        for (const conn of this.connections.values()) {
+          await conn.sendCommand('set hwgainlock 255').catch(() => {});
+        }
       }
     }
 
@@ -193,13 +199,21 @@ export class MultiDeviceRunner extends EventEmitter {
       const startTime = recordStartTimes.get(port)!;
       const rawDuration = recording.stopTime - recording.startTime;
 
-      const testResult = scoreDetections(
-        recording.transients,
-        startTime,
-        groundTruth,
-        musicTest.id,
-        rawDuration,
-      );
+      const testResult = scoringMode === 'beat'
+        ? scoreBeatEvents(
+            recording.beatEvents,
+            startTime,
+            groundTruth,
+            musicTest.id,
+            rawDuration,
+          )
+        : scoreDetections(
+            recording.transients,
+            startTime,
+            groundTruth,
+            musicTest.id,
+            rawDuration,
+          );
 
       perDevice.push({
         port,
@@ -227,12 +241,13 @@ export class MultiDeviceRunner extends EventEmitter {
     paramName: string,
     portToValue: Map<string, number>,
     durationMs?: number,
+    scoringMode: ScoringMode = 'transient',
   ): Promise<Map<number, TestResult>> {
     // Set per-device parameter values
     await this.setParameterPerDevice(paramName, portToValue);
 
     // Run the test on all devices
-    const multiResult = await this.runMusicTestAllDevices(musicTest, durationMs);
+    const multiResult = await this.runMusicTestAllDevices(musicTest, durationMs, scoringMode);
 
     // Key results by parameter value
     const resultByValue = new Map<number, TestResult>();

@@ -8,7 +8,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import type { TunerOptions, MultiDeviceTunerOptions } from './types.js';
+import type { TunerOptions, MultiDeviceTunerOptions, ParameterMode } from './types.js';
 import { PARAMETERS } from './types.js';
 import { StateManager } from './state.js';
 import { runBaseline, showBaselineSummary } from './baseline.js';
@@ -222,7 +222,7 @@ function createOptions(args: GlobalArgs, requirePort = true): TunerOptions {
     gain: args.gain,
     outputDir: args.output || DEFAULT_OUTPUT_DIR,
     params: args.params ? args.params.split(',').map(p => p.trim()) : undefined,
-    modes: args.modes ? args.modes.split(',').map(m => m.trim() as any) : undefined,
+    modes: args.modes ? args.modes.split(',').map(m => m.trim() as ParameterMode) : undefined,
     patterns: args.patterns ? args.patterns.split(',').map(p => p.trim()) : undefined,
     refine: args.refine,
     refinementSteps: args['refinement-steps'],
@@ -249,7 +249,7 @@ function createMultiDeviceOptions(args: GlobalArgs): MultiDeviceTunerOptions {
     gain: args.gain,
     outputDir: args.output || DEFAULT_OUTPUT_DIR,
     params: args.params ? args.params.split(',').map(p => p.trim()) : undefined,
-    modes: args.modes ? args.modes.split(',').map(m => m.trim() as any) : undefined,
+    modes: args.modes ? args.modes.split(',').map(m => m.trim() as ParameterMode) : undefined,
     patterns: args.patterns ? args.patterns.split(',').map(p => p.trim()) : undefined,
     recordAudio: args['record-audio'],
     durationMs: args.duration ? args.duration * 1000 : undefined,

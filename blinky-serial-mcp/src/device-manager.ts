@@ -22,6 +22,9 @@ export class DeviceManager {
     if (existing && existing.getState().connected) {
       const info = existing.getState().deviceInfo;
       if (info) return { session: existing, deviceInfo: info };
+      // Session exists but has no deviceInfo — clean up the orphaned session
+      await existing.disconnect().catch(() => {});
+      this.sessions.delete(port);
     }
 
     const session = new DeviceSession(port);
@@ -49,11 +52,13 @@ export class DeviceManager {
 
   /** Get session by port path */
   getSession(port: string): DeviceSession | undefined {
+    this.pruneStale();
     return this.sessions.get(port);
   }
 
   /** Get all connected sessions */
-  getAllSessions(): Map<string, DeviceSession> {
+  getAllSessions(): ReadonlyMap<string, DeviceSession> {
+    this.pruneStale();
     return this.sessions;
   }
 

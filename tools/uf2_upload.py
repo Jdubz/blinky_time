@@ -45,11 +45,20 @@ BOOTLOADER_PID = 0x0045
 
 # --- UF2 conversion ---
 UF2_FAMILY_ID = "0xADA52840"
-UF2CONV_PATH = (
-    Path.home()
-    / ".arduino15/packages/Seeeduino/hardware/nrf52/1.1.12"
-    / "tools/uf2conv/uf2conv.py"
-)
+def _find_uf2conv():
+    """Find uf2conv.py in the installed Seeeduino nRF52 board package."""
+    base = Path.home() / ".arduino15/packages/Seeeduino/hardware/nrf52"
+    if base.exists():
+        # Find the latest installed version
+        versions = sorted(base.iterdir(), reverse=True)
+        for v in versions:
+            candidate = v / "tools/uf2conv/uf2conv.py"
+            if candidate.exists():
+                return candidate
+    # Fallback to a fixed path for error messaging
+    return base / "unknown_version" / "tools/uf2conv/uf2conv.py"
+
+UF2CONV_PATH = _find_uf2conv()
 
 # --- Timeouts (seconds) ---
 BOOTLOADER_TIMEOUT = 15
@@ -335,7 +344,8 @@ def trigger_bootloader(port, verbose=False):
         )
 
     # Wait for UF2 drive after 1200-baud touch
-    _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose)
+    if not _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+        print(f"  Warning: UF2 drive not detected after 1200-baud touch")
     return device_serial
 
 
@@ -850,7 +860,7 @@ Examples:
     )
     parser.add_argument(
         "--skip-validation", action="store_true",
-        help="Skip pre-upload safety checks (NOT recommended)",
+        help="[DANGEROUS] Skip pre-upload safety checks — risk of bricking device",
     )
     parser.add_argument(
         "--mount-point", dest="mount_point",
