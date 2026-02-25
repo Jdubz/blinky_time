@@ -1,44 +1,61 @@
 # Claude Code Instructions for Blinky Project
 
-## CRITICAL: NEVER FLASH FIRMWARE VIA CLI
+## CRITICAL: Upload Safety
 
-**DO NOT use arduino-cli, Bash, or any command-line tool to upload/flash firmware!**
+**NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial`!**
 
-- `arduino-cli upload` WILL BRICK THE DEVICE
-- The device CANNOT be recovered without SWD hardware (J-Link, etc.)
-- This is due to a Seeeduino mbed platform bug
+- `arduino-cli upload` has race conditions in USB port re-enumeration
+- `adafruit-nrfutil dfu serial` uses single-bank DFU that can leave firmware partially written
+- Both methods can brick the device, requiring SWD hardware to recover
+
+### Safe Upload Method: UF2
+
+Use the UF2 upload script for safe CLI-based firmware upload:
+```bash
+make uf2-upload UPLOAD_PORT=/dev/ttyACM0
+```
+
+**Why UF2 is safe:**
+- Invalid/corrupt UF2 files are silently rejected (cannot brick)
+- Simple file copy to mass storage (no serial protocol race conditions)
+- Bootloader protects itself (hardware-enforced)
+- If interrupted, old firmware stays intact
+
+See `tools/uf2_upload.py --help` for all options.
 
 ### Safe Operations
 
 **ALLOWED via CLI:**
 - `arduino-cli compile` - Compiling is safe
+- `make uf2-upload` - UF2 upload is safe (uses mass storage, not DFU serial)
+- `make uf2-check` - Dry run (compile + validate + convert, no upload)
 - `arduino-cli core list/install` - Core management is safe
 - Reading serial ports is safe
 
 **NEVER DO via CLI:**
-- `arduino-cli upload` - WILL CORRUPT BOOTLOADER
-- Any command that writes to the device
+- `arduino-cli upload` - Uses fragile DFU serial protocol
+- `adafruit-nrfutil dfu serial` - Same protocol, same risk
+- Any direct invocation of the DFU serial upload method
 
 ### If the Device Becomes Unresponsive
 
 1. Double-tap the reset button quickly (like double-click)
-2. A drive letter should appear (e.g., "XIAO-SENSE")
-3. The user can then flash via Arduino IDE
-
-### Why This Happens
-
-The Seeeduino mbed platform's arduino-cli upload routine starts writing
-firmware before properly verifying the bootloader state, causing partial
-writes that corrupt the bootloader region.
+2. A drive called "XIAO-SENSE" should appear
+3. Re-run: `python3 tools/uf2_upload.py --already-in-bootloader --build-dir /tmp/blinky-build`
+4. Or flash via Arduino IDE
 
 ## Compilation Commands
 
-Use the arduino-cli for compilation only:
 ```bash
-arduino-cli compile --fqbn Seeeduino:mbed:xiaonRF52840Sense blinky-things
-```
+# Compile only (in-tree build)
+arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things
 
-**User must flash via Arduino IDE after compilation.**
+# Compile + validate + upload via UF2 (recommended)
+make uf2-upload UPLOAD_PORT=/dev/ttyACM0
+
+# Compile + validate only (dry run)
+make uf2-check UPLOAD_PORT=/dev/ttyACM0
+```
 
 ## Documentation Structure
 
@@ -150,10 +167,10 @@ RenderPipeline → LED Output
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - Bayesian tempo fusion: 20-bin posterior (60-180 BPM) fusing ACF, Fourier tempogram, comb filter bank, IOI histogram
+   - Bayesian tempo fusion: 20-bin posterior (60-180 BPM), comb filter bank only (ACF/FT/IOI disabled in v21)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
-   - BTrack-style predict+countdown beat detection with CBSS adaptive threshold (cbssthresh=0.4)
+   - BTrack-style predict+countdown beat detection with CBSS adaptive threshold (cbssthresh=1.0)
    - Deterministic phase derivation
    - ODF pre-smoothing (5-point causal moving average)
 
@@ -382,7 +399,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
-- **Bayesian tempo fusion**: 20-bin posterior over 60-180 BPM, fusing ACF + Fourier tempogram + comb filter bank + IOI histogram (SETTINGS_VERSION 20)
+- **Bayesian tempo fusion**: 20-bin posterior over 60-180 BPM, comb filter bank only (ACF/FT/IOI disabled — sub-harmonic bias, mean-norm, unnormalized counts). SETTINGS_VERSION 21
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **CBSS adaptive threshold**: Beat fires only if CBSS > cbssthresh * running mean (prevents phantom beats during silence)
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)

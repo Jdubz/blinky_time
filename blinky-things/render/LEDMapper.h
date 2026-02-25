@@ -157,33 +157,34 @@ public:
 
 private:
     void generateMapping() {
-        if (orientation == VERTICAL && width == 4 && height == 15) {
-            // Tube light: 4x15 zigzag pattern
-            // Col 0: LEDs 0-14 (top to bottom)
-            // Col 1: LEDs 29-15 (bottom to top)
-            // Col 2: LEDs 30-44 (top to bottom)
-            // Col 3: LEDs 59-45 (bottom to top)
+        if (orientation == VERTICAL) {
+            // Vertical column-major zigzag pattern (tube lights)
+            // Each column is a continuous strip of `height` LEDs.
+            // Even columns (0,2,...): top to bottom
+            // Odd columns (1,3,...): bottom to top (zigzag wiring)
+            //
+            // 4x15 example:  Col 0: LEDs 0-14, Col 1: LEDs 29-15, ...
+            // 4x60 example:  Col 0: LEDs 0-59, Col 1: LEDs 119-60, ...
 
             for (int x = 0; x < width; x++) {
                 for (int y = 0; y < height; y++) {
                     int ledIndex;
 
                     if (x % 2 == 0) {
-                        // Even columns (0,2): normal top-to-bottom
+                        // Even columns: top to bottom
                         ledIndex = x * height + y;
                     } else {
-                        // Odd columns (1,3): bottom-to-top (reversed)
+                        // Odd columns: bottom to top (reversed)
                         ledIndex = x * height + (height - 1 - y);
                     }
 
-                    // Store both mappings
                     positionToIndex[y * width + x] = ledIndex;
                     indexToX[ledIndex] = x;
                     indexToY[ledIndex] = y;
                 }
             }
         } else {
-            // Standard row-major mapping (fire totem style)
+            // Standard row-major mapping (horizontal layouts like bucket totem)
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
                     int ledIndex = y * width + x;

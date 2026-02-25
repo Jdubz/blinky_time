@@ -41,7 +41,7 @@ def check_file_syntax(filepath):
                 not stripped.endswith(',') and
                 not stripped.endswith(';') and
                 not stripped.endswith('*/') and
-                not '(' in stripped and ')' in stripped and
+                not ('(' in stripped and ')' in stripped) and
                 len(stripped) > 0):
                 # This might be missing a semicolon
                 if not any(keyword in stripped for keyword in ['if', 'for', 'while', 'switch', 'class', 'struct', 'enum']):
@@ -112,6 +112,15 @@ if __name__ == "__main__":
             for issue in file_issues:
                 print(f"  - {issue}")
     
+    # Exit non-zero only for structural errors (unbalanced braces/parens),
+    # not for heuristic warnings (possible missing semicolons, undefined calls)
+    has_structural_errors = any(
+        any("Unbalanced" in issue for issue in file_issues)
+        for file_issues in issues.values()
+    )
+    if has_structural_errors:
+        sys.exit(1)
+
     print("\nNote: This is a basic syntax check. Compilation may still fail due to:")
     print("- Missing library dependencies")
     print("- Platform-specific issues")

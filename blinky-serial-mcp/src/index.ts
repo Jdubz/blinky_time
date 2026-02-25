@@ -11,8 +11,8 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { BlinkySerial } from './serial.js';
-import type { AudioSample, TransientEvent, MusicModeState, BeatEvent, LedTelemetry } from './types.js';
+import { DeviceManager } from './device-manager.js';
+import type { AudioSample, MusicModeState } from './types.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -34,109 +34,8 @@ function ensureTestResultsDir(): void {
   }
 }
 
-// Global serial connection
-const serial = new BlinkySerial();
-
-// Audio sample buffer for monitoring
-let lastAudioSample: AudioSample | null = null;
-let lastLedSample: LedTelemetry | null = null;
-let audioSampleCount = 0;
-
-// Transient event buffer for test mode
-let transientBuffer: TransientEvent[] = [];
-let testStartTime: number | null = null;
-
-// Audio sample buffer for test mode (with timestamps)
-interface TimestampedSample {
-  timestampMs: number;
-  level: number;
-  raw: number;
-  transient: number;  // Unified transient strength from "Drummer's Algorithm"
-}
-let audioSampleBuffer: TimestampedSample[] = [];
-
-// Music mode buffers for test mode
-interface TimestampedMusicState {
-  timestampMs: number;
-  active: boolean;
-  bpm: number;
-  phase: number;
-  confidence: number;
-  oss?: number;     // Smoothed onset strength
-  cbss?: number;    // Current CBSS value
-}
-let musicStateBuffer: TimestampedMusicState[] = [];
-let beatEventBuffer: BeatEvent[] = [];
-let lastMusicState: MusicModeState | null = null;
-
-// Set up event listeners
-serial.on('audio', (sample: AudioSample) => {
-  lastAudioSample = sample;
-  audioSampleCount++;
-
-  // If in test mode, record transients and audio samples
-  if (testStartTime !== null) {
-    const timestampMs = Date.now() - testStartTime;
-
-    // Record audio sample
-    audioSampleBuffer.push({
-      timestampMs,
-      level: sample.l,
-      raw: sample.raw,
-      transient: sample.t || 0,  // Record transient for debugging
-    });
-
-    // Record transients (unified detection using 't' field)
-    // The simplified "Drummer's Algorithm" outputs a single transient strength
-    if (sample.t > 0) {
-      transientBuffer.push({
-        timestampMs,
-        type: 'unified',
-        strength: sample.t,
-      });
-    }
-  }
-});
-
-serial.on('error', (err: Error) => {
-  console.error('Serial error:', err.message);
-});
-
-// Music mode event listeners
-serial.on('music', (state: MusicModeState) => {
-  lastMusicState = state;
-
-  // If in test mode, record music state
-  if (testStartTime !== null) {
-    const timestampMs = Date.now() - testStartTime;
-    musicStateBuffer.push({
-      timestampMs,
-      active: state.a === 1,
-      bpm: state.bpm,
-      phase: state.ph,
-      confidence: state.conf,
-      oss: state.oss,
-      cbss: state.cb,
-    });
-  }
-});
-
-serial.on('beat', (beat: { type: string; bpm: number; predicted?: boolean }) => {
-  // If in test mode, record beat events
-  if (testStartTime !== null) {
-    const timestampMs = Date.now() - testStartTime;
-    beatEventBuffer.push({
-      timestampMs,
-      bpm: beat.bpm,
-      type: beat.type as 'quarter',
-      predicted: beat.predicted,
-    });
-  }
-});
-
-serial.on('led', (led: LedTelemetry) => {
-  lastLedSample = led;
-});
+// Multi-device connection manager
+const manager = new DeviceManager();
 
 // Create MCP server
 const server = new Server(
@@ -179,18 +78,28 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: 'disconnect',
-        description: 'Disconnect from the current device',
+        description: 'Disconnect from a device',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port to disconnect (optional if only one device connected)',
+            },
+          },
         },
       },
       {
         name: 'status',
-        description: 'Get current connection status and device info',
+        description: 'Get connection status. Shows all connected devices if no port specified.',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port to query (optional — omit to show all devices)',
+            },
+          },
         },
       },
       {
@@ -203,6 +112,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'string',
               description: 'Command to send (e.g., "show onsetthresh", "set onsetthresh 3.0")',
             },
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
           },
           required: ['command'],
         },
@@ -212,7 +125,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Start audio streaming from the device',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -220,7 +138,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Stop audio streaming',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -228,7 +151,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Get the most recent audio sample data (requires streaming)',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -236,7 +164,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Get all device settings as JSON',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -253,6 +186,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'number',
               description: 'New value for the setting',
             },
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
           },
           required: ['name', 'value'],
         },
@@ -262,7 +199,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Save current settings to device flash memory',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -270,7 +212,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Reset all settings to factory defaults',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -278,7 +225,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Start recording transient detections for a test',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -286,7 +238,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Stop recording and get all detected transients',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -329,6 +286,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'number',
               description: 'Duration to monitor in milliseconds (default: 1000)',
             },
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
           },
         },
       },
@@ -342,6 +303,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'number',
               description: 'Duration to monitor in milliseconds (default: 3000)',
             },
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
           },
         },
       },
@@ -350,7 +315,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Get current music mode status (BPM, confidence, phase, beat counts). Requires streaming to be active.',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -367,6 +337,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'number',
               description: 'Expected BPM for accuracy calculation (optional)',
             },
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
           },
         },
       },
@@ -375,7 +349,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
         description: 'Get CBSS beat tracker state (BPM, phase, confidence, periodicity, beatCount, stability). Useful for validating tempo tracking behavior.',
         inputSchema: {
           type: 'object',
-          properties: {},
+          properties: {
+            port: {
+              type: 'string',
+              description: 'Serial port of target device (optional if only one device connected)',
+            },
+          },
         },
       },
       {
@@ -472,7 +451,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'list_ports': {
-        const ports = await serial.listPorts();
+        const ports = await manager.listPorts();
         return {
           content: [
             {
@@ -485,7 +464,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'connect': {
         const port = (args as { port: string }).port;
-        const deviceInfo = await serial.connect(port);
+        const { deviceInfo } = await manager.connect(port);
         return {
           content: [
             {
@@ -497,32 +476,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'disconnect': {
-        await serial.disconnect();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        await manager.disconnect(session.port);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ success: true, message: 'Disconnected' }, null, 2),
+              text: JSON.stringify({ success: true, message: `Disconnected from ${session.port}` }, null, 2),
             },
           ],
         };
       }
 
       case 'status': {
-        const state = serial.getState();
+        const statusPort = (args as { port?: string }).port;
+        if (statusPort) {
+          const session = manager.resolveSession(statusPort);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(session.getState(), null, 2),
+              },
+            ],
+          };
+        }
+        const devices = manager.listConnectedDevices();
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(state, null, 2),
+              text: JSON.stringify({ connectedDevices: devices.length, devices }, null, 2),
             },
           ],
         };
       }
 
       case 'send_command': {
-        const command = (args as { command: string }).command;
-        const response = await serial.sendCommand(command);
+        const { command, port: cmdPort } = args as { command: string; port?: string };
+        const session = manager.resolveSession(cmdPort);
+        const response = await session.serial.sendCommand(command);
         return {
           content: [
             {
@@ -534,30 +527,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'stream_start': {
-        await serial.startStream();
-        lastAudioSample = null;
-        lastLedSample = null;
-        audioSampleCount = 0;
+        const session = manager.resolveSession((args as { port?: string }).port);
+        await session.serial.startStream();
+        session.resetStreamState();
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ success: true, message: 'Streaming started' }, null, 2),
+              text: JSON.stringify({ success: true, message: `Streaming started on ${session.port}` }, null, 2),
             },
           ],
         };
       }
 
       case 'stream_stop': {
-        await serial.stopStream();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        await session.serial.stopStream();
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify({
                 success: true,
-                message: 'Streaming stopped',
-                samplesReceived: audioSampleCount,
+                message: `Streaming stopped on ${session.port}`,
+                samplesReceived: session.audioSampleCount,
               }, null, 2),
             },
           ],
@@ -565,7 +558,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_audio': {
-        const state = serial.getState();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        const state = session.getState();
         if (!state.streaming) {
           return {
             content: [
@@ -581,10 +575,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             {
               type: 'text',
               text: JSON.stringify({
-                sample: lastAudioSample,
-                music: lastMusicState,
-                led: lastLedSample,
-                sampleCount: audioSampleCount,
+                sample: session.lastAudioSample,
+                music: session.lastMusicState,
+                led: session.lastLedSample,
+                sampleCount: session.audioSampleCount,
               }, null, 2),
             },
           ],
@@ -592,7 +586,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_settings': {
-        const settings = await serial.getSettings();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        const settings = await session.serial.getSettings();
         return {
           content: [
             {
@@ -604,8 +599,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'set_setting': {
-        const { name: settingName, value } = args as { name: string; value: number };
-        const response = await serial.setSetting(settingName, value);
+        const { name: settingName, value, port: setPort } = args as { name: string; value: number; port?: string };
+        const session = manager.resolveSession(setPort);
+        const response = await session.serial.setSetting(settingName, value);
         return {
           content: [
             {
@@ -617,7 +613,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'save_settings': {
-        const response = await serial.saveSettings();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        const response = await session.serial.saveSettings();
         return {
           content: [
             {
@@ -629,7 +626,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'reset_defaults': {
-        const response = await serial.resetDefaults();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        const response = await session.serial.resetDefaults();
         return {
           content: [
             {
@@ -641,15 +639,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'start_test': {
-        // Clear buffers and start recording
-        transientBuffer = [];
-        audioSampleBuffer = [];
-        testStartTime = Date.now();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        session.startTestRecording();
 
         // Ensure streaming is on
-        const state = serial.getState();
+        const state = session.getState();
         if (!state.streaming) {
-          await serial.startStream();
+          await session.serial.startStream();
         }
 
         return {
@@ -658,8 +654,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify({
                 success: true,
-                message: 'Test started. Transients are being recorded.',
-                startTime: testStartTime,
+                message: `Test started on ${session.port}. Transients are being recorded.`,
+                startTime: session.testStartTime,
               }, null, 2),
             },
           ],
@@ -667,7 +663,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'stop_test': {
-        if (testStartTime === null) {
+        const session = manager.resolveSession((args as { port?: string }).port);
+        if (session.testStartTime === null) {
           return {
             content: [
               {
@@ -678,14 +675,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        const duration = Date.now() - testStartTime;
-        const detections = [...transientBuffer];
-        const audioSamples = [...audioSampleBuffer];
-
-        // Reset test state
-        testStartTime = null;
-        transientBuffer = [];
-        audioSampleBuffer = [];
+        const testData = session.stopTestRecording();
 
         return {
           content: [
@@ -693,10 +683,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify({
                 success: true,
-                durationMs: duration,
-                totalDetections: detections.length,
-                detections,
-                audioSamples,
+                durationMs: testData.duration,
+                totalDetections: testData.transients.length,
+                detections: testData.transients,
+                audioSamples: testData.audioSamples,
               }, null, 2),
             },
           ],
@@ -704,11 +694,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'monitor_audio': {
-        const durationMs = (args as { duration_ms?: number }).duration_ms || 1000;
+        const { duration_ms: monAudioDuration, port: monAudioPort } = args as { duration_ms?: number; port?: string };
+        const durationMs = monAudioDuration || 1000;
+        const session = manager.resolveSession(monAudioPort);
 
-        const state = serial.getState();
+        const state = session.getState();
         if (!state.streaming) {
-          await serial.startStream();
+          await session.serial.startStream();
         }
 
         // Initialize statistics collectors
@@ -726,7 +718,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let beatCount = 0;
         let samplesDuringMonitor = 0;
 
-        const startCount = audioSampleCount;
+        const startCount = session.audioSampleCount;
 
         // Set up temporary listeners for statistics
         const onAudio = (sample: AudioSample) => {
@@ -750,15 +742,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (musicState.q === 1) beatCount++;
         };
 
-        serial.on('audio', onAudio);
-        serial.on('music', onMusic);
+        session.serial.on('audio', onAudio);
+        session.serial.on('music', onMusic);
 
         await new Promise(resolve => setTimeout(resolve, durationMs));
 
-        serial.off('audio', onAudio);
-        serial.off('music', onMusic);
+        session.serial.off('audio', onAudio);
+        session.serial.off('music', onMusic);
 
-        const endCount = audioSampleCount;
+        const endCount = session.audioSampleCount;
         const samplesReceived = endCount - startCount;
         const sampleRate = samplesReceived / (durationMs / 1000);
 
@@ -781,7 +773,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               avg: samplesDuringMonitor > 0 ? parseFloat((rawSum / samplesDuringMonitor).toFixed(3)) : null,
             },
           },
-          currentSample: lastAudioSample,
+          currentSample: session.lastAudioSample,
         };
 
         // Add music mode statistics if we received any music data
@@ -794,7 +786,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             beatCount,
             beatRate: (beatCount / (durationMs / 1000)).toFixed(2) + ' /sec',
           };
-          response.currentMusic = lastMusicState;
+          response.currentMusic = session.lastMusicState;
         }
 
         return {
@@ -808,14 +800,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'monitor_transients': {
-        const durationMs = (args as { duration_ms?: number }).duration_ms || 3000;
+        const { duration_ms: monTransDuration, port: monTransPort } = args as { duration_ms?: number; port?: string };
+        const durationMs = monTransDuration || 3000;
+        const session = manager.resolveSession(monTransPort);
 
         // Enable debug stream mode for agree/conf fields
-        await serial.sendCommand('stream debug');
+        await session.serial.sendCommand('stream debug');
 
-        const state = serial.getState();
+        const state = session.getState();
         if (!state.streaming) {
-          await serial.startStream();
+          await session.serial.startStream();
         }
 
         // Statistics collectors
@@ -850,12 +844,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         };
 
-        serial.on('audio', onAudio);
+        session.serial.on('audio', onAudio);
         await new Promise(resolve => setTimeout(resolve, durationMs));
-        serial.off('audio', onAudio);
+        session.serial.off('audio', onAudio);
 
         // Restore normal stream mode
-        await serial.sendCommand('stream normal');
+        await session.serial.sendCommand('stream normal');
 
         const durationSec = durationMs / 1000;
         const response = {
@@ -898,7 +892,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_music_status': {
-        const state = serial.getState();
+        const session = manager.resolveSession((args as { port?: string }).port);
+        const state = session.getState();
         if (!state.streaming) {
           return {
             content: [
@@ -913,7 +908,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
-        if (!lastMusicState) {
+        if (!session.lastMusicState) {
           return {
             content: [
               {
@@ -927,22 +922,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
 
+        const ms = session.lastMusicState;
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify({
-                active: lastMusicState.a === 1,
-                bpm: lastMusicState.bpm,
-                phase: lastMusicState.ph,
-                rhythmStrength: lastMusicState.str,
-                confidence: lastMusicState.conf,
-                beatCount: lastMusicState.bc,
-                beat: lastMusicState.q === 1,
-                energy: lastMusicState.e,
-                pulse: lastMusicState.p,
+                active: ms.a === 1,
+                bpm: ms.bpm,
+                phase: ms.ph,
+                rhythmStrength: ms.str,
+                confidence: ms.conf,
+                beatCount: ms.bc,
+                beat: ms.q === 1,
+                energy: ms.e,
+                pulse: ms.p,
                 debug: {
-                  periodicityStrength: lastMusicState.ps,
+                  periodicityStrength: ms.ps,
                 },
               }, null, 2),
             },
@@ -951,16 +947,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'monitor_music': {
-        const durationMs = (args as { duration_ms?: number; expected_bpm?: number }).duration_ms || 5000;
-        const expectedBpm = (args as { duration_ms?: number; expected_bpm?: number }).expected_bpm;
+        const { duration_ms: monMusicDuration, expected_bpm: expectedBpm, port: monMusicPort } = args as { duration_ms?: number; expected_bpm?: number; port?: string };
+        const durationMs = monMusicDuration || 5000;
+        const session = manager.resolveSession(monMusicPort);
 
-        const state = serial.getState();
+        const state = session.getState();
         if (!state.streaming) {
-          await serial.startStream();
+          await session.serial.startStream();
         }
 
         // Enable debug mode for detailed music tracking
-        await serial.sendCommand('stream debug');
+        await session.serial.sendCommand('stream debug');
 
         // Collect music mode samples over time
         interface TimestampedMusic extends MusicModeState {
@@ -976,9 +973,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (musicState.q === 1) beats.push({ type: 'quarter', timestampMs, bpm: musicState.bpm });
         };
 
-        serial.on('music', onMusic);
+        session.serial.on('music', onMusic);
         await new Promise(resolve => setTimeout(resolve, durationMs));
-        serial.off('music', onMusic);
+        session.serial.off('music', onMusic);
 
         // Calculate metrics
         const activeStates = samples.filter(s => s.a === 1);
@@ -1060,12 +1057,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_beat_state': {
-        if (!serial.getState().connected) {
+        const session = manager.resolveSession((args as { port?: string }).port);
+        if (!session.getState().connected) {
           throw new Error('Not connected to a device');
         }
 
         // Send "json beat" command and parse response
-        const response = await serial.sendCommand('json beat');
+        const response = await session.serial.sendCommand('json beat');
 
         // Parse JSON response
         let parsed;
@@ -1136,38 +1134,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const { pattern: patternId, port, gain } = args as { pattern: string; port: string; gain?: number };
 
         // Connect to device (will disconnect at end)
+        const { session } = await manager.connect(port);
         try {
-          if (!serial.getState().connected) {
-            await serial.connect(port);
-          }
-
           // Lock hardware gain if specified
           if (gain !== undefined) {
-            await serial.sendCommand(`set hwgainlock ${gain}`);
+            await session.serial.sendCommand(`set hwgainlock ${gain}`);
           }
-
-          // Clear buffers and start recording
-          transientBuffer = [];
-          audioSampleBuffer = [];
-          musicStateBuffer = [];
-          beatEventBuffer = [];
 
           // Use fast streaming (100Hz) for tests to catch transient pulses
           // Transients are single-frame pulses that last ~16ms at 60Hz update rate
           // Normal streaming at 20Hz (50ms) would miss most of them
-          await serial.sendCommand('stream fast');
+          await session.serial.sendCommand('stream fast');
+
+          // Start recording AFTER stream fast — avoid capturing events during command response
+          session.startTestRecording();
 
         // Run the test player CLI and capture output
         const result = await new Promise<{ success: boolean; groundTruth?: unknown; error?: string }>((resolve) => {
-          const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
+          const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet', '--headless'], {
             stdio: ['ignore', 'pipe', 'pipe'],
           });
 
           let stdout = '';
           let stderr = '';
-
-          // Start recording when the process starts
-          testStartTime = Date.now();
 
           child.stdout.on('data', (data) => {
             stdout += data.toString();
@@ -1196,19 +1185,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
 
         // Stop recording
-        const recordStopTime = Date.now();
-        const rawDuration = recordStopTime - (testStartTime || recordStopTime);
-        let detections = [...transientBuffer];
-        let audioSamples = [...audioSampleBuffer];
-        let musicStates = [...musicStateBuffer];
-        let beatEvents = [...beatEventBuffer];
+        const testData = session.stopTestRecording();
+        const rawDuration = testData.duration;
+        let detections = [...testData.transients];
+        let audioSamples = [...testData.audioSamples];
+        let musicStates = [...testData.musicStates];
+        let beatEvents = [...testData.beatEvents];
 
-        const recordStartTime = testStartTime;
-        testStartTime = null;
-        transientBuffer = [];
-        audioSampleBuffer = [];
-        musicStateBuffer = [];
-        beatEventBuffer = [];
+        const recordStartTime = testData.startTime;
 
         if (!result.success) {
           return {
@@ -1550,9 +1534,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
         } finally {
           // Unlock hardware gain if it was locked
-          if (gain !== undefined && serial.getState().connected) {
+          if (gain !== undefined && session.getState().connected) {
             try {
-              await serial.sendCommand('set hwgainlock 255');
+              await session.serial.sendCommand('set hwgainlock 255');
             } catch (err) {
               // Log error but don't throw - we still want to disconnect
               console.error('Failed to unlock hardware gain:', err);
@@ -1560,7 +1544,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
 
           // Always disconnect to release serial port for other tools (e.g., Arduino IDE)
-          await serial.disconnect();
+          await manager.disconnect(port);
         }
       }
 
@@ -1825,52 +1809,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
         };
 
+        const { session: musicTestSession } = await manager.connect(port);
         try {
-          // Connect to device
-          if (!serial.getState().connected) {
-            await serial.connect(port);
-          }
-
           // Lock hardware gain if specified
           if (gain !== undefined) {
-            await serial.sendCommand(`set hwgainlock ${gain}`);
+            await musicTestSession.serial.sendCommand(`set hwgainlock ${gain}`);
           }
 
           // Send pre-test commands (e.g., detector isolation)
           if (preTestCommands && preTestCommands.length > 0) {
             for (const cmd of preTestCommands) {
-              await serial.sendCommand(cmd);
+              await musicTestSession.serial.sendCommand(cmd);
             }
           }
 
-          // Clear buffers and start recording
-          transientBuffer = [];
-          audioSampleBuffer = [];
-          musicStateBuffer = [];
-          beatEventBuffer = [];
+          await musicTestSession.serial.sendCommand('stream fast');
 
-          await serial.sendCommand('stream fast');
+          // Start recording AFTER stream fast — avoid capturing events during command response
+          musicTestSession.startTestRecording();
 
-          // Run the test player CLI with play-file command
-          const playArgs = ['play-file', audioFile, '--quiet'];
+          // Play audio file directly with ffplay (no browser needed)
+          const ffplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', audioFile];
           if (overrideDurationMs) {
-            playArgs.push('--duration', overrideDurationMs.toString());
+            ffplayArgs.push('-t', (overrideDurationMs / 1000).toString());
           }
 
-          const result = await new Promise<{ success: boolean; output?: string; error?: string }>((resolve) => {
-            const child = spawn('node', [TEST_PLAYER_PATH, ...playArgs], {
+          const audioStartTime = Date.now();
+          const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+            const child = spawn('ffplay', ffplayArgs, {
               stdio: ['ignore', 'pipe', 'pipe'],
             });
 
-            let stdout = '';
             let stderr = '';
-
-            // Start recording when the process starts
-            testStartTime = Date.now();
-
-            child.stdout.on('data', (data) => {
-              stdout += data.toString();
-            });
 
             child.stderr.on('data', (data) => {
               stderr += data.toString();
@@ -1878,9 +1848,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             child.on('close', (code) => {
               if (code === 0) {
-                resolve({ success: true, output: stdout });
+                resolve({ success: true });
               } else {
-                resolve({ success: false, error: stderr || `Process exited with code ${code}` });
+                resolve({ success: false, error: stderr || `ffplay exited with code ${code}` });
               }
             });
 
@@ -1890,18 +1860,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           });
 
           // Stop recording
-          const recordStopTime = Date.now();
-          const rawDuration = recordStopTime - (testStartTime || recordStopTime);
-          let detections = [...transientBuffer];
-          let musicStates = [...musicStateBuffer];
-          let beatEvents = [...beatEventBuffer];
+          const musicTestData = musicTestSession.stopTestRecording();
+          const rawDuration = musicTestData.duration;
+          let detections = [...musicTestData.transients];
+          let musicStates = [...musicTestData.musicStates];
+          let beatEvents = [...musicTestData.beatEvents];
 
-          const recordStartTime = testStartTime;
-          testStartTime = null;
-          transientBuffer = [];
-          audioSampleBuffer = [];
-          musicStateBuffer = [];
-          beatEventBuffer = [];
+          const recordStartTime = musicTestData.startTime;
 
           if (!result.success) {
             return {
@@ -1909,30 +1874,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             };
           }
 
-          // Parse output to get startedAt for timing alignment
-          let timingOffsetMs = 0;
-          try {
-            const playOutput = JSON.parse(result.output || '{}');
-            if (playOutput.startedAt && recordStartTime) {
-              const audioStartTime = new Date(playOutput.startedAt).getTime();
-              timingOffsetMs = audioStartTime - recordStartTime;
+          // Timing alignment: adjust detections relative to audio start
+          const timingOffsetMs = audioStartTime - recordStartTime;
 
-              detections = detections.map(d => ({
-                ...d,
-                timestampMs: d.timestampMs - timingOffsetMs,
-              })).filter(d => d.timestampMs >= 0);
+          detections = detections.map(d => ({
+            ...d,
+            timestampMs: d.timestampMs - timingOffsetMs,
+          })).filter(d => d.timestampMs >= 0);
 
-              musicStates = musicStates.map(s => ({
-                ...s,
-                timestampMs: s.timestampMs - timingOffsetMs,
-              })).filter(s => s.timestampMs >= 0);
+          musicStates = musicStates.map(s => ({
+            ...s,
+            timestampMs: s.timestampMs - timingOffsetMs,
+          })).filter(s => s.timestampMs >= 0);
 
-              beatEvents = beatEvents.map(b => ({
-                ...b,
-                timestampMs: b.timestampMs - timingOffsetMs,
-              })).filter(b => b.timestampMs >= 0);
-            }
-          } catch { /* ignore parse errors */ }
+          beatEvents = beatEvents.map(b => ({
+            ...b,
+            timestampMs: b.timestampMs - timingOffsetMs,
+          })).filter(b => b.timestampMs >= 0);
 
           // Calculate audio latency from onset detections vs ground truth
           // Only consider hits within the recording window for latency estimation
@@ -2342,14 +2300,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             content: [{ type: 'text', text: JSON.stringify(summary) }],
           };
         } finally {
-          if (gain !== undefined && serial.getState().connected) {
+          if (gain !== undefined && musicTestSession.getState().connected) {
             try {
-              await serial.sendCommand('set hwgainlock 255');
+              await musicTestSession.serial.sendCommand('set hwgainlock 255');
             } catch (err) {
               console.error('Failed to unlock hardware gain:', err);
             }
           }
-          await serial.disconnect();
+          await manager.disconnect(port);
         }
       }
 

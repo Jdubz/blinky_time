@@ -122,7 +122,40 @@ python scripts/check_config_safety.py
 3. DEVELOPMENT.md - Documented in 3 places
 4. Safety script output - Displayed on EVERY check
 
-**Policy:** ZERO tolerance for arduino-cli usage
+**Policy:** NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial`
+
+### Layer 6b: Safe UF2 Upload (Linux/Headless)
+
+**UF2 Upload Script** - `tools/uf2_upload.py`
+
+The UF2 upload workflow provides safe CLI-based firmware upload by
+using the board's UF2 mass storage bootloader instead of the fragile
+`adafruit-nrfutil` DFU serial protocol.
+
+**Upload workflow:**
+1. Validates hex file using `pre_upload_check.py` (address safety)
+2. Converts hex to UF2 format (family `0xADA52840`)
+3. Enters bootloader via 1200 baud serial touch
+4. Mounts UF2 mass storage drive (udisksctl)
+5. Copies `firmware.uf2` to drive
+6. Verifies reboot (drive disappears, serial port returns)
+
+**Usage:**
+```bash
+make uf2-upload UPLOAD_PORT=/dev/ttyACM0   # Full workflow
+make uf2-check UPLOAD_PORT=/dev/ttyACM0    # Dry run (no upload)
+make uf2-test                               # Verify infrastructure
+```
+
+**Why UF2 is safer than DFU serial:**
+- UF2 bootloader validates files before writing (cannot brick)
+- Simple file copy (no serial protocol race conditions)
+- Bootloader region is hardware-protected
+- Interrupted transfers leave old firmware intact
+- Invalid/corrupt files are silently rejected
+
+**Policy update:** UF2 upload via `tools/uf2_upload.py` is the approved
+CLI upload method. `arduino-cli upload` and `adafruit-nrfutil` remain BANNED.
 
 ---
 
@@ -173,7 +206,8 @@ python scripts/check_config_safety.py
 
 | Risk | Prevention | Detection | Recovery |
 |------|-----------|-----------|----------|
-| **arduino-cli usage** | .clinerules, docs, hooks | N/A | SWD hardware |
+| **arduino-cli upload** | .clinerules, docs, hooks | N/A | SWD hardware |
+| **DFU serial upload** | UF2 upload script, docs | uf2_upload.py validation | Old firmware intact |
 | **CONFIG_VERSION not incremented** | Static assert, safety script | Compile error | Fix code, recompile |
 | **Missing validation** | Safety script | Runtime corruption | Auto-load defaults |
 | **Corrupt flash data** | Validation checks | Runtime checks | Auto-load defaults |

@@ -4,296 +4,108 @@
  * ENSEMBLE ARCHITECTURE (December 2025):
  * All 6 detectors run simultaneously with weighted fusion.
  * Legacy detection mode switching has been removed.
+ *
+ * Delegates serial I/O to DeviceConnection and scoring to scoreDetections().
  */
 
 import { spawn } from 'child_process';
-import { SerialPort } from 'serialport';
-import { ReadlineParser } from '@serialport/parser-readline';
 import { EventEmitter } from 'events';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { promises as fs } from 'fs';
-import type { TestResult, TunerOptions, DetectorType, ParameterDef } from './types.js';
-import { PARAMETERS } from './types.js';
+import type { TestResult, TunerOptions, DetectorType } from './types.js';
+import { DeviceConnection } from './device-connection.js';
+import { scoreDetections } from './scoring.js';
+import type { GroundTruthData } from './scoring.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // Path to test player CLI (use dist/index.js compiled version)
-const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'dist', 'index.js');
-
-const BAUD_RATE = 115200;
-const COMMAND_TIMEOUT_MS = 2000;
-
-interface AudioSample {
-  l: number;
-  raw: number;
-  t: number;
-}
-
-interface TransientEvent {
-  timestampMs: number;
-  type: string;
-  strength: number;
-}
+export const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'dist', 'index.js');
 
 export class TestRunner extends EventEmitter {
-  private port: SerialPort | null = null;
-  private parser: ReadlineParser | null = null;
-  private portPath: string;
-  private streaming = false;
-  private pendingCommand: {
-    resolve: (value: string) => void;
-    reject: (error: Error) => void;
-    timeout: NodeJS.Timeout;
-  } | null = null;
-
-  // Test recording state
-  private testStartTime: number | null = null;
-  private transientBuffer: TransientEvent[] = [];
-
-  // Audio sample recording (debugging only - disabled by default to save memory)
-  // Enable with --record-audio flag to capture raw audio samples for analysis
-  private audioSampleBuffer: Array<{
-    timestampMs: number;
-    level: number;
-    raw: number;
-    transient: number;
-  }> | null = null;
+  private connection: DeviceConnection;
 
   constructor(private options: TunerOptions) {
     super();
-    this.portPath = options.port;
+    this.connection = new DeviceConnection(options.port, {
+      recordAudio: options.recordAudio,
+    });
 
-    // Only allocate audio buffer if recording is enabled
-    if (options.recordAudio) {
-      this.audioSampleBuffer = [];
-    }
+    // Forward errors from connection
+    this.connection.on('error', (err) => this.emit('error', err));
   }
 
   async connect(): Promise<void> {
-    if (this.port) {
-      return;
-    }
-
-    return new Promise((resolve, reject) => {
-      this.port = new SerialPort({
-        path: this.portPath,
-        baudRate: BAUD_RATE,
-      });
-
-      this.parser = this.port.pipe(new ReadlineParser({ delimiter: '\n' }));
-
-      this.port.on('error', (err) => {
-        this.emit('error', err);
-        reject(err);
-      });
-
-      this.port.on('close', () => {
-        this.port = null;
-        this.parser = null;
-        this.streaming = false;
-      });
-
-      this.parser.on('data', (line: string) => {
-        this.handleLine(line.trim());
-      });
-
-      this.port.on('open', async () => {
-        // Small delay for device to be ready
-        await new Promise(r => setTimeout(r, 500));
-        resolve();
-      });
-    });
+    await this.connection.connect();
   }
 
   async disconnect(): Promise<void> {
-    if (this.streaming) {
-      await this.stopStream();
-    }
-
-    if (this.port && this.port.isOpen) {
-      return new Promise((resolve) => {
-        this.port!.close(() => {
-          this.port = null;
-          this.parser = null;
-          resolve();
-        });
-      });
-    }
-  }
-
-  private async sendCommand(command: string): Promise<string> {
-    if (!this.port || !this.port.isOpen) {
-      throw new Error('Not connected');
-    }
-
-    const wasStreaming = this.streaming;
-    if (wasStreaming) {
-      await this.stopStream();
-    }
-
-    return new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.pendingCommand = null;
-        reject(new Error(`Command timeout: ${command}`));
-      }, COMMAND_TIMEOUT_MS);
-
-      this.pendingCommand = { resolve, reject, timeout };
-      this.port!.write(command + '\n');
-    }).then(async (result) => {
-      if (wasStreaming) {
-        await this.startStream();
-      }
-      return result;
-    });
-  }
-
-  private async startStream(): Promise<void> {
-    if (!this.port || !this.port.isOpen) {
-      throw new Error('Not connected');
-    }
-
-    this.port.write('stream fast\n');
-    this.streaming = true;
-  }
-
-  private async stopStream(): Promise<void> {
-    if (!this.port || !this.port.isOpen) {
-      return;
-    }
-
-    this.port.write('stream off\n');
-    this.streaming = false;
-  }
-
-  private handleLine(line: string): void {
-    // Check for JSON audio data
-    if (line.startsWith('{"a":')) {
-      try {
-        const parsed = JSON.parse(line);
-        const audio: AudioSample = parsed.a;
-
-        // If in test mode, record transients and audio samples
-        if (this.testStartTime !== null) {
-          const timestampMs = Date.now() - this.testStartTime;
-
-          // Only record audio samples if debugging is enabled (saves memory)
-          if (this.audioSampleBuffer) {
-            this.audioSampleBuffer.push({
-              timestampMs,
-              level: audio.l,
-              raw: audio.raw,
-              transient: audio.t || 0,
-            });
-          }
-
-          if (audio.t > 0) {
-            this.transientBuffer.push({
-              timestampMs,
-              type: 'unified',
-              strength: audio.t,
-            });
-          }
-        }
-      } catch {
-        // Ignore parse errors
-      }
-      return;
-    }
-
-    // Check for pending command response
-    if (this.pendingCommand) {
-      clearTimeout(this.pendingCommand.timeout);
-      this.pendingCommand.resolve(line);
-      this.pendingCommand = null;
-    }
+    await this.connection.disconnect();
   }
 
   /**
    * Set a single parameter using the new ensemble command format
    */
   async setParameter(name: string, value: number): Promise<void> {
-    const param = PARAMETERS[name];
-    if (param && param.command) {
-      // Use the custom command format (e.g., "detector_thresh drummer")
-      await this.sendCommand(`set ${param.command} ${value}`);
-    } else {
-      // Fall back to direct parameter name (for non-ensemble params like musicthresh)
-      await this.sendCommand(`set ${name} ${value}`);
-    }
+    await this.connection.setParameter(name, value);
   }
 
   /**
    * Set multiple parameters
    */
   async setParameters(params: Record<string, number>): Promise<void> {
-    for (const [name, value] of Object.entries(params)) {
-      await this.setParameter(name, value);
-    }
+    await this.connection.setParameters(params);
   }
 
   /**
    * Set detector enabled state
    */
   async setDetectorEnabled(detector: DetectorType, enabled: boolean): Promise<void> {
-    await this.sendCommand(`set detector_enable ${detector} ${enabled ? 1 : 0}`);
+    await this.connection.setDetectorEnabled(detector, enabled);
   }
 
   /**
    * Set detector weight
    */
   async setDetectorWeight(detector: DetectorType, weight: number): Promise<void> {
-    await this.sendCommand(`set detector_weight ${detector} ${weight}`);
+    await this.connection.setDetectorWeight(detector, weight);
   }
 
   /**
    * Set detector threshold
    */
   async setDetectorThreshold(detector: DetectorType, threshold: number): Promise<void> {
-    await this.sendCommand(`set detector_thresh ${detector} ${threshold}`);
+    await this.connection.setDetectorThreshold(detector, threshold);
   }
 
   /**
    * Set agreement boost value
    */
   async setAgreementBoost(level: number, boost: number): Promise<void> {
-    if (level < 0 || level > 7) {
-      throw new Error('Agreement level must be 0-7');
-    }
-    await this.sendCommand(`set agree_${level} ${boost}`);
+    await this.connection.setAgreementBoost(level, boost);
   }
 
   /**
    * Reset parameters to defaults for ensemble
    */
   async resetDefaults(): Promise<void> {
-    const ensembleParams = Object.values(PARAMETERS).filter(p => p.mode === 'ensemble');
-    for (const param of ensembleParams) {
-      await this.setParameter(param.name, param.default);
-    }
+    await this.connection.resetDefaults();
   }
 
   /**
    * Save current settings to device flash memory
    */
   async saveToFlash(): Promise<void> {
-    await this.sendCommand('save');
-    // Give the device time to complete the flash write
-    await new Promise(r => setTimeout(r, 500));
+    await this.connection.saveToFlash();
   }
 
   /**
    * Get current parameter value from device
    */
   async getParameter(name: string): Promise<number> {
-    const response = await this.sendCommand(`show ${name}`);
-    // Parse response like "hitthresh: 2.0"
-    const match = response.match(/:\s*([\d.]+)/);
-    if (match) {
-      return parseFloat(match[1]);
-    }
-    throw new Error(`Failed to parse parameter value: ${response}`);
+    return this.connection.getParameter(name);
   }
 
   /**
@@ -302,27 +114,21 @@ export class TestRunner extends EventEmitter {
   async runPattern(patternId: string): Promise<TestResult> {
     // Lock gain if specified
     if (this.options.gain !== undefined) {
-      await this.sendCommand(`test lock hwgain ${this.options.gain}`);
+      await this.connection.sendCommand(`test lock hwgain ${this.options.gain}`);
     }
 
-    // Clear buffers and start streaming
-    this.transientBuffer = [];
-    if (this.audioSampleBuffer) {
-      this.audioSampleBuffer = [];
-    }
-    await this.startStream();
+    // Start streaming and recording
+    await this.connection.startStream();
+    const recordStartTime = this.connection.startRecording();
 
     // Run the test player CLI
-    const result = await new Promise<{ success: boolean; groundTruth?: unknown; error?: string }>((resolve) => {
-      const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
+    const result = await new Promise<{ success: boolean; groundTruth?: GroundTruthData; error?: string }>((resolve) => {
+      const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet', '--headless'], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
       let stdout = '';
       let stderr = '';
-
-      // Start recording when the process starts
-      this.testStartTime = Date.now();
 
       child.stdout.on('data', (data) => {
         stdout += data.toString();
@@ -351,146 +157,33 @@ export class TestRunner extends EventEmitter {
     });
 
     // Stop recording
-    const recordStopTime = Date.now();
-    const rawDuration = recordStopTime - (this.testStartTime || recordStopTime);
-    let detections = [...this.transientBuffer];
-    const recordStartTime = this.testStartTime;
+    const recording = this.connection.stopRecording();
+    const rawDuration = recording.stopTime - recording.startTime;
 
     // Save audio recording if debugging was enabled
-    if (this.audioSampleBuffer && this.audioSampleBuffer.length > 0) {
-      await this.saveAudioRecording(patternId, this.audioSampleBuffer);
+    if (recording.audioSamples && recording.audioSamples.length > 0) {
+      await this.saveAudioRecording(patternId, recording.audioSamples);
     }
 
-    this.testStartTime = null;
-    this.transientBuffer = [];
-    if (this.audioSampleBuffer) {
-      this.audioSampleBuffer = [];
-    }
-
-    await this.stopStream();
+    await this.connection.stopStream();
 
     // Unlock gain
     if (this.options.gain !== undefined) {
-      await this.sendCommand('test unlock hwgain');
+      await this.connection.sendCommand('test unlock hwgain');
     }
 
-    if (!result.success) {
+    if (!result.success || !result.groundTruth) {
       throw new Error(result.error || 'Test failed');
     }
 
-    // Calculate metrics
-    const groundTruth = result.groundTruth as {
-      pattern: string;
-      durationMs: number;
-      startedAt: string;
-      hits: Array<{ timeMs: number; type: string; strength: number; expectTrigger?: boolean }>;
-    };
-
-    // Calculate timing offset
-    let timingOffsetMs = 0;
-    if (groundTruth.startedAt && recordStartTime) {
-      const audioStartTime = new Date(groundTruth.startedAt).getTime();
-      timingOffsetMs = audioStartTime - recordStartTime;
-
-      detections = detections.map(d => ({
-        ...d,
-        timestampMs: d.timestampMs - timingOffsetMs,
-      })).filter(d => d.timestampMs >= 0);
-    }
-
-    // Calculate F1/precision/recall
-    const TIMING_TOLERANCE_MS = 350;
-    const STRONG_BEAT_THRESHOLD = 0.8;
-    const allHits = groundTruth.hits || [];
-
-    const expectedHits = allHits.filter((h) => {
-      if (typeof h.expectTrigger === 'boolean') {
-        return h.expectTrigger;
-      }
-      return h.strength >= STRONG_BEAT_THRESHOLD;
-    });
-
-    // Estimate audio latency
-    const offsets: number[] = [];
-    detections.forEach((detection) => {
-      let minDist = Infinity;
-      let closestOffset = 0;
-      expectedHits.forEach((expected) => {
-        if (detection.type !== 'unified' && expected.type !== detection.type) return;
-        const offset = detection.timestampMs - expected.timeMs;
-        if (Math.abs(offset) < Math.abs(minDist)) {
-          minDist = offset;
-          closestOffset = offset;
-        }
-      });
-      if (Math.abs(minDist) < 1000) {
-        offsets.push(closestOffset);
-      }
-    });
-
-    let audioLatencyMs = 0;
-    if (offsets.length > 0) {
-      offsets.sort((a, b) => a - b);
-      audioLatencyMs = offsets[Math.floor(offsets.length / 2)];
-    }
-
-    // Match detections to expected hits
-    const matchedExpected = new Set<number>();
-    const matchedDetections = new Set<number>();
-    const matchPairs = new Map<number, { expectedIdx: number; timingError: number }>();
-
-    detections.forEach((detection, dIdx) => {
-      let bestMatchIdx = -1;
-      let bestMatchDist = Infinity;
-      const correctedTime = detection.timestampMs - audioLatencyMs;
-
-      expectedHits.forEach((expected, eIdx) => {
-        if (matchedExpected.has(eIdx)) return;
-        if (detection.type !== 'unified' && expected.type !== detection.type) return;
-
-        const dist = Math.abs(correctedTime - expected.timeMs);
-        if (dist < bestMatchDist && dist <= TIMING_TOLERANCE_MS) {
-          bestMatchDist = dist;
-          bestMatchIdx = eIdx;
-        }
-      });
-
-      if (bestMatchIdx >= 0) {
-        matchedExpected.add(bestMatchIdx);
-        matchedDetections.add(dIdx);
-        matchPairs.set(dIdx, { expectedIdx: bestMatchIdx, timingError: bestMatchDist });
-      }
-    });
-
-    const truePositives = matchedDetections.size;
-    const falsePositives = detections.length - truePositives;
-    const falseNegatives = expectedHits.length - truePositives;
-
-    const precision = detections.length > 0 ? truePositives / detections.length : 0;
-    const recall = expectedHits.length > 0 ? truePositives / expectedHits.length : 0;
-    const f1 = (precision + recall) > 0
-      ? 2 * (precision * recall) / (precision + recall)
-      : 0;
-
-    let totalTimingError = 0;
-    matchPairs.forEach(({ timingError }) => {
-      totalTimingError += timingError;
-    });
-    const avgTimingErrorMs = matchPairs.size > 0 ? totalTimingError / matchPairs.size : null;
-
-    return {
-      pattern: patternId,
-      durationMs: groundTruth.durationMs || rawDuration,
-      f1: Math.round(f1 * 1000) / 1000,
-      precision: Math.round(precision * 1000) / 1000,
-      recall: Math.round(recall * 1000) / 1000,
-      truePositives,
-      falsePositives,
-      falseNegatives,
-      expectedTotal: expectedHits.length,
-      avgTimingErrorMs: avgTimingErrorMs !== null ? Math.round(avgTimingErrorMs) : null,
-      audioLatencyMs: Math.round(audioLatencyMs),
-    };
+    // Score detections against ground truth
+    return scoreDetections(
+      recording.transients,
+      recordStartTime,
+      result.groundTruth,
+      patternId,
+      rawDuration,
+    );
   }
 
   /**
