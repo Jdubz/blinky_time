@@ -112,7 +112,13 @@ if __name__ == "__main__":
             for issue in file_issues:
                 print(f"  - {issue}")
     
-    if issues:
+    # Exit non-zero only for structural errors (unbalanced braces/parens),
+    # not for heuristic warnings (possible missing semicolons, undefined calls)
+    has_structural_errors = any(
+        any("Unbalanced" in issue for issue in file_issues)
+        for file_issues in issues.values()
+    )
+    if has_structural_errors:
         sys.exit(1)
 
     print("\nNote: This is a basic syntax check. Compilation may still fail due to:")
