@@ -222,6 +222,17 @@ def convert_to_uf2(hex_path, output_dir=None):
 #  Phase 3: Bootloader entry (1200 baud touch)
 # ============================================================
 
+def find_all_xiao_ports():
+    """Auto-detect all connected XIAO nRF52840 devices in application mode.
+
+    Returns sorted list of serial port paths (e.g., ['/dev/ttyACM0', '/dev/ttyACM1']).
+    """
+    return sorted([
+        p.device for p in serial.tools.list_ports.comports()
+        if p.vid == NORMAL_VID and p.pid == NORMAL_PID
+    ])
+
+
 def get_serial_number(port):
     """Get the USB serial number for a port to track device identity."""
     for p in serial.tools.list_ports.comports():
@@ -798,7 +809,9 @@ Upload workflow:
   6. Verify reboot (drive disappears, port returns)
 
 Examples:
-  %(prog)s /dev/ttyACM0
+  %(prog)s /dev/ttyACM0                          # Single device
+  %(prog)s /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2  # Multiple devices
+  %(prog)s --all                                  # Auto-detect all XIAO devices
   %(prog)s /dev/ttyACM0 --hex firmware.hex
   %(prog)s /dev/ttyACM0 --dry-run
   %(prog)s --already-in-bootloader
@@ -806,9 +819,14 @@ Examples:
         """,
     )
     parser.add_argument(
-        "port", nargs="?",
-        help="Serial port (e.g., /dev/ttyACM0). "
-             "Not required with --already-in-bootloader or --self-test",
+        "ports", nargs="*", metavar="PORT",
+        help="Serial port(s) (e.g., /dev/ttyACM0). "
+             "Specify multiple ports to upload to several devices sequentially. "
+             "Not required with --all, --already-in-bootloader, or --self-test",
+    )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Auto-detect and upload to all connected XIAO devices",
     )
     parser.add_argument(
         "--hex", dest="hex_file",
@@ -850,6 +868,44 @@ Examples:
 
 
 # ============================================================
+#  Single-device upload (phases 3-6)
+# ============================================================
+
+def upload_to_device(port, uf2_path, verbose=False):
+    """Upload firmware to a single device.
+
+    Runs phases 3-6: bootloader entry, drive mount, firmware copy, reboot verify.
+    Returns (success: bool, message: str).
+    """
+    try:
+        # Phase 3: Enter bootloader
+        device_serial = trigger_bootloader(port, verbose=verbose)
+
+        # Phase 4: Mount UF2 drive
+        mount_point = mount_uf2_drive(
+            device_serial=device_serial,
+            timeout=BOOTLOADER_TIMEOUT,
+        )
+
+        # Phase 5: Copy firmware
+        if not copy_firmware(uf2_path, mount_point):
+            return False, "firmware copy failed"
+
+        # Phase 6: Verify reboot
+        if verify_reboot(mount_point, port, device_serial, verbose=verbose):
+            new_port = find_port_by_serial(device_serial, NORMAL_PID) if device_serial else None
+            msg = f"OK (now on {new_port})" if new_port else "OK"
+            return True, msg
+        else:
+            return False, "reboot verification failed"
+
+    except TimeoutError as e:
+        return False, f"timeout: {e}"
+    except RuntimeError as e:
+        return False, f"error: {e}"
+
+
+# ============================================================
 #  Main
 # ============================================================
 
@@ -859,13 +915,32 @@ def main():
     if args.self_test:
         return 0 if run_self_test() else 1
 
-    if not args.already_in_bootloader and not args.port:
-        print("ERROR: Serial port required unless --already-in-bootloader")
+    # --- Resolve port list ---
+    ports = list(args.ports)  # copy so we can modify
+
+    if args.all:
+        if ports:
+            print("ERROR: Cannot specify both --all and explicit ports")
+            return 1
+        ports = find_all_xiao_ports()
+        if not ports:
+            print("ERROR: No XIAO devices detected (--all)")
+            print("  Check USB connections and verify devices are powered on.")
+            return 1
+        print(f"  Auto-detected {len(ports)} device(s): {', '.join(ports)}")
+
+    if not ports and not args.already_in_bootloader and not args.dry_run:
+        print("ERROR: Serial port required. Specify port(s), use --all, or --already-in-bootloader")
         print("Usage: python3 uf2_upload.py /dev/ttyACM0")
+        print("       python3 uf2_upload.py --all")
+        return 1
+
+    if args.already_in_bootloader and len(ports) > 1:
+        print("ERROR: --already-in-bootloader only works with a single device")
         return 1
 
     try:
-        # --- Phase 1 & 2: Locate, validate, convert ---
+        # --- Phase 1 & 2: Locate, validate, convert (once for all devices) ---
         if args.uf2_file:
             uf2_path = Path(args.uf2_file)
             if not uf2_path.exists():
@@ -888,48 +963,69 @@ def main():
         if args.dry_run:
             print_success("DRY RUN COMPLETE - Firmware validated and converted")
             print(f"  UF2 file: {uf2_path}")
+            if ports:
+                print(f"  Target device(s): {', '.join(ports)}")
             return 0
 
-        # --- Phase 3: Enter bootloader ---
-        device_serial = None
+        # --- Single device: already-in-bootloader (special path) ---
         if args.already_in_bootloader:
             print("\n  Board already in bootloader mode")
-        else:
-            device_serial = trigger_bootloader(args.port, verbose=args.verbose)
+            if args.mount_point:
+                mount_point = Path(args.mount_point)
+                if not (mount_point / UF2_INFO_FILE).exists():
+                    print(f"ERROR: {UF2_INFO_FILE} not found at {mount_point}")
+                    return 1
+            else:
+                mount_point = mount_uf2_drive(timeout=BOOTLOADER_TIMEOUT)
 
-        # --- Phase 4: Mount UF2 drive ---
-        if args.mount_point:
-            mount_point = Path(args.mount_point)
-            if not (mount_point / UF2_INFO_FILE).exists():
-                print(f"ERROR: {UF2_INFO_FILE} not found at {mount_point}")
+            if not copy_firmware(uf2_path, mount_point):
+                print_failure("FIRMWARE COPY FAILED")
                 return 1
-        else:
-            mount_point = mount_uf2_drive(
-                device_serial=device_serial,
-                timeout=BOOTLOADER_TIMEOUT,
-            )
 
-        # --- Phase 5: Copy firmware ---
-        if not copy_firmware(uf2_path, mount_point):
-            print_failure("FIRMWARE COPY FAILED")
-            return 1
+            port = ports[0] if ports else None
+            if verify_reboot(mount_point, port, None, verbose=args.verbose):
+                print_success("UPLOAD SUCCESSFUL")
+                return 0
+            else:
+                print_failure("REBOOT VERIFICATION FAILED")
+                return 1
 
-        # --- Phase 6: Verify reboot ---
-        if verify_reboot(
-            mount_point, args.port, device_serial, verbose=args.verbose
-        ):
-            print_success("UPLOAD SUCCESSFUL")
-            if device_serial:
-                new_port = find_port_by_serial(device_serial, NORMAL_PID)
-                if new_port:
-                    print(f"  Device on {new_port}")
-                    print(f"  Monitor: make monitor UPLOAD_PORT={new_port}")
-            return 0
-        else:
-            print_failure("REBOOT VERIFICATION FAILED")
-            print("  The firmware may still have been uploaded.")
-            print("  Check the device manually.")
-            return 1
+        # --- Multi-device upload loop (phases 3-6 per device) ---
+        results = []  # list of (port, success, message)
+
+        for i, port in enumerate(ports):
+            if len(ports) > 1:
+                print_section(f"DEVICE {i + 1}/{len(ports)}: {port}")
+
+            success, message = upload_to_device(port, uf2_path, verbose=args.verbose)
+            results.append((port, success, message))
+
+            if success and len(ports) == 1:
+                print_success("UPLOAD SUCCESSFUL")
+                print(f"  {message}")
+            elif not success and len(ports) == 1:
+                print_failure("UPLOAD FAILED")
+                print(f"  {message}")
+
+        # --- Summary (multi-device only) ---
+        if len(ports) > 1:
+            succeeded = sum(1 for _, ok, _ in results if ok)
+            total = len(results)
+
+            print_section(f"UPLOAD SUMMARY: {succeeded}/{total} devices")
+            for port, success, message in results:
+                status = "OK" if success else "FAILED"
+                print(f"  {port:20s}  {status:8s}  {message}")
+
+            if succeeded == total:
+                print(f"\n  All {total} devices uploaded successfully")
+                return 0
+            else:
+                print(f"\n  {total - succeeded} device(s) failed")
+                return 1
+
+        # Single device exit code
+        return 0 if results[0][1] else 1
 
     except FileNotFoundError as e:
         print(f"\nERROR: {e}")

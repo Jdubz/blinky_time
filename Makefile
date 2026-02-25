@@ -9,7 +9,8 @@
 #   make list-boards                # List connected boards
 #
 # UF2 Upload (Linux/headless - safe CLI upload):
-#   make uf2-upload UPLOAD_PORT=/dev/ttyACM0   # Compile + upload via UF2
+#   make uf2-upload UPLOAD_PORT=/dev/ttyACM0   # Compile + upload single device
+#   make uf2-upload-all                         # Compile + upload ALL connected devices
 #   make uf2-check UPLOAD_PORT=/dev/ttyACM0    # Compile + validate (dry run)
 #   make uf2-test                               # Verify upload infrastructure
 #
@@ -53,20 +54,23 @@ help:
 	@echo "  version      - Update version from VERSION file"
 	@echo ""
 	@echo "UF2 Upload (Linux/headless - SAFE):"
-	@echo "  uf2-upload   - Compile + validate + upload via UF2 bootloader"
-	@echo "  uf2-check    - Compile + validate + convert (dry run, no upload)"
-	@echo "  uf2-test     - Verify upload infrastructure is ready"
-	@echo "  safety-check - Run pre-compile safety checks only"
+	@echo "  uf2-upload     - Compile + upload to single device"
+	@echo "  uf2-upload-all - Compile + upload to ALL connected devices"
+	@echo "  uf2-check      - Compile + validate + convert (dry run)"
+	@echo "  uf2-test       - Verify upload infrastructure is ready"
+	@echo "  safety-check   - Run pre-compile safety checks only"
 	@echo ""
 	@echo "Parameters:"
 	@echo "  DEVICE       - Device type (1=Hat, 2=TubeLight, 3=BucketTotem)"
 	@echo "  PORT         - Serial port for Windows (default: COM3)"
-	@echo "  UPLOAD_PORT  - Serial port for UF2 upload (default: /dev/ttyACM0)"
+	@echo "  UPLOAD_PORT  - Serial port for single UF2 upload (default: /dev/ttyACM0)"
+	@echo "  UPLOAD_PORTS - Space-separated ports for uf2-upload-all"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make compile DEVICE=3"
 	@echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM0"
-	@echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM1 DEVICE=1"
+	@echo "  make uf2-upload-all"
+	@echo "  make uf2-upload-all UPLOAD_PORTS=\"/dev/ttyACM0 /dev/ttyACM1\""
 	@echo "  make monitor PORT=/dev/ttyACM0"
 
 # Check if Arduino CLI is installed
@@ -198,6 +202,15 @@ uf2-upload: compile-out
 	@echo "UF2 Upload to $(UPLOAD_PORT)"
 	@echo "========================================"
 	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --build-dir $(BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
+
+# UF2 upload all: compile + upload to all connected XIAO devices
+.PHONY: uf2-upload-all
+uf2-upload-all: compile-out
+	@echo ""
+	@echo "========================================"
+	@echo "UF2 Upload to ALL connected devices"
+	@echo "========================================"
+	python3 $(UF2_UPLOAD_TOOL) $(if $(UPLOAD_PORTS),$(UPLOAD_PORTS),--all) --build-dir $(BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
 
 # UF2 dry run: compile + validate + convert only
 .PHONY: uf2-check
