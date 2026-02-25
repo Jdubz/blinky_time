@@ -36,6 +36,7 @@ interface GlobalArgs {
   params?: string;
   modes?: string;
   patterns?: string;
+  duration?: number;
   refine?: boolean;
   'refinement-steps'?: number;
   'record-audio'?: boolean;
@@ -94,6 +95,10 @@ async function main() {
       type: 'boolean',
       default: false,
       description: 'Record raw audio samples to file for debugging (increases disk usage)',
+    })
+    .option('duration', {
+      type: 'number',
+      description: 'Limit playback duration per track in seconds (multi-device commands)',
     })
     .command('fast', 'Fast tuning with binary search (~30 min)', {}, async (args) => {
       await runFast(args as GlobalArgs);
@@ -247,6 +252,7 @@ function createMultiDeviceOptions(args: GlobalArgs): MultiDeviceTunerOptions {
     modes: args.modes ? args.modes.split(',').map(m => m.trim() as any) : undefined,
     patterns: args.patterns ? args.patterns.split(',').map(p => p.trim()) : undefined,
     recordAudio: args['record-audio'],
+    durationMs: args.duration ? args.duration * 1000 : undefined,
   };
 }
 

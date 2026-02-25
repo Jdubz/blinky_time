@@ -1,27 +1,28 @@
 /**
  * Multi-device variation testing
  *
- * Runs all patterns with identical settings on multiple devices simultaneously.
+ * Runs music files with identical settings on multiple devices simultaneously.
  * Produces per-device comparison to measure inter-device variation:
- * - Per-device F1/precision/recall per pattern
+ * - Per-device F1/precision/recall per track
  * - Cross-device stddev, min, max, spread
- * - Identifies consistent vs divergent patterns
+ * - Identifies consistent vs divergent tracks
  */
 
 import cliProgress from 'cli-progress';
 import type { MultiDeviceTunerOptions, MultiDeviceTestResult } from './types.js';
-import { REPRESENTATIVE_PATTERNS } from './types.js';
 import { MultiDeviceRunner } from './multi-device-runner.js';
+import type { MusicTestFile } from './multi-device-runner.js';
+import { discoverMusicTests } from './music-tests.js';
 
 export interface VariationReport {
   timestamp: string;
   ports: string[];
-  patterns: MultiDeviceTestResult[];
+  tracks: MultiDeviceTestResult[];
   summary: {
     avgF1PerDevice: Record<string, number>;
     avgF1Spread: number;
-    consistentPatterns: string[];
-    divergentPatterns: string[];
+    consistentTracks: string[];
+    divergentTracks: string[];
   };
 }
 
@@ -45,30 +46,42 @@ export async function runVariation(options: MultiDeviceTunerOptions): Promise<Va
     // Reset all devices to defaults
     await runner.resetDefaultsAll();
 
-    const patterns = (options.patterns && options.patterns.length > 0)
-      ? options.patterns
-      : [...REPRESENTATIVE_PATTERNS];
+    // Discover music test files
+    const allTests = discoverMusicTests();
+    let tests: MusicTestFile[];
+    if (options.patterns && options.patterns.length > 0) {
+      tests = allTests.filter(t => options.patterns!.includes(t.id));
+    } else {
+      tests = allTests;
+    }
 
-    console.log(`Patterns: ${patterns.length}`);
+    if (tests.length === 0) {
+      throw new Error('No music test files found. Add .mp3 files with matching .beats.json to music/edm/');
+    }
+
+    console.log(`Tracks: ${tests.length}`);
+    if (options.durationMs) {
+      console.log(`Duration per track: ${options.durationMs / 1000}s`);
+    }
     console.log('');
 
     const progress = new cliProgress.SingleBar({
-      format: '   {bar} {percentage}% | {value}/{total} patterns | {eta_formatted}',
+      format: '   {bar} {percentage}% | {value}/{total} tracks | {eta_formatted}',
       barCompleteChar: '\u2588',
       barIncompleteChar: '\u2591',
       hideCursor: true,
     });
 
-    progress.start(patterns.length, 0);
+    progress.start(tests.length, 0);
 
     const results: MultiDeviceTestResult[] = [];
 
-    for (const pattern of patterns) {
+    for (const test of tests) {
       try {
-        const result = await runner.runPatternAllDevices(pattern);
+        const result = await runner.runMusicTestAllDevices(test, options.durationMs);
         results.push(result);
       } catch (err) {
-        console.error(`\n   Error on ${pattern}:`, err);
+        console.error(`\n   Error on ${test.id}:`, err);
       }
       progress.increment();
     }
@@ -92,17 +105,17 @@ export async function runVariation(options: MultiDeviceTunerOptions): Promise<Va
       ? Math.round((Math.max(...f1Values) - Math.min(...f1Values)) * 1000) / 1000
       : 0;
 
-    // Categorize patterns by consistency
+    // Categorize tracks by consistency
     const DIVERGENCE_THRESHOLD = 0.15;
-    const consistentPatterns: string[] = [];
-    const divergentPatterns: string[] = [];
+    const consistentTracks: string[] = [];
+    const divergentTracks: string[] = [];
 
     for (const result of results) {
       if (result.variation) {
         if (result.variation.f1.spread <= DIVERGENCE_THRESHOLD) {
-          consistentPatterns.push(result.pattern);
+          consistentTracks.push(result.pattern);
         } else {
-          divergentPatterns.push(result.pattern);
+          divergentTracks.push(result.pattern);
         }
       }
     }
@@ -110,12 +123,12 @@ export async function runVariation(options: MultiDeviceTunerOptions): Promise<Va
     const report: VariationReport = {
       timestamp: new Date().toISOString(),
       ports: options.ports,
-      patterns: results,
+      tracks: results,
       summary: {
         avgF1PerDevice,
         avgF1Spread,
-        consistentPatterns,
-        divergentPatterns,
+        consistentTracks,
+        divergentTracks,
       },
     };
 
@@ -131,9 +144,9 @@ export async function runVariation(options: MultiDeviceTunerOptions): Promise<Va
     }
     console.log(`  Spread: ${avgF1Spread}`);
 
-    // Per-pattern breakdown
-    console.log('\nPer-Pattern Breakdown:');
-    const header = ['Pattern', ...options.ports.map((_, i) => `D${i + 1} F1`), 'Spread'].join(' | ');
+    // Per-track breakdown
+    console.log('\nPer-Track Breakdown:');
+    const header = ['Track', ...options.ports.map((_, i) => `D${i + 1} F1`), 'Spread'].join(' | ');
     console.log(`  ${header}`);
     console.log(`  ${'-'.repeat(header.length)}`);
 
@@ -144,15 +157,15 @@ export async function runVariation(options: MultiDeviceTunerOptions): Promise<Va
       console.log(`  ${row}`);
     }
 
-    if (divergentPatterns.length > 0) {
-      console.log(`\nDivergent patterns (spread > ${DIVERGENCE_THRESHOLD}):`);
-      for (const p of divergentPatterns) {
+    if (divergentTracks.length > 0) {
+      console.log(`\nDivergent tracks (spread > ${DIVERGENCE_THRESHOLD}):`);
+      for (const p of divergentTracks) {
         console.log(`  - ${p}`);
       }
     }
 
-    if (consistentPatterns.length > 0) {
-      console.log(`\nConsistent patterns (spread <= ${DIVERGENCE_THRESHOLD}): ${consistentPatterns.length}/${results.length}`);
+    if (consistentTracks.length > 0) {
+      console.log(`\nConsistent tracks (spread <= ${DIVERGENCE_THRESHOLD}): ${consistentTracks.length}/${results.length}`);
     }
 
     return report;

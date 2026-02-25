@@ -4,15 +4,23 @@
  * Key insight: audio plays through speakers, so ALL devices hear the same audio
  * from a single playback. We only need ONE audio player subprocess while N devices
  * record concurrently.
+ *
+ * Uses ffplay for audio playback (no browser/Playwright needed).
  */
 
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
 import { EventEmitter } from 'events';
 import type { TestResult, MultiDeviceTestResult, PerDeviceTestResult } from './types.js';
 import { DeviceConnection } from './device-connection.js';
 import { scoreDetections } from './scoring.js';
 import type { GroundTruthData } from './scoring.js';
-import { TEST_PLAYER_PATH } from './runner.js';
+
+export interface MusicTestFile {
+  audioFile: string;
+  groundTruthFile: string;
+  id: string;  // Short identifier (e.g., "techno-minimal-01")
+}
 
 function computeVariationStats(values: number[]): { mean: number; stddev: number; min: number; max: number; spread: number } {
   const n = values.length;
@@ -27,6 +35,24 @@ function computeVariationStats(values: number[]): { mean: number; stddev: number
     min: Math.round(min * 1000) / 1000,
     max: Math.round(max * 1000) / 1000,
     spread: Math.round((max - min) * 1000) / 1000,
+  };
+}
+
+/**
+ * Load a .beats.json ground truth file and convert to GroundTruthData format.
+ */
+function loadGroundTruth(gtFile: string, audioStartTime: Date): GroundTruthData {
+  const raw = JSON.parse(readFileSync(gtFile, 'utf-8'));
+  return {
+    pattern: raw.pattern || 'unknown',
+    durationMs: raw.durationMs || 0,
+    startedAt: audioStartTime.toISOString(),
+    hits: (raw.hits || []).map((h: { time: number; type?: string; strength?: number; expectTrigger?: boolean }) => ({
+      timeMs: Math.round(h.time * 1000),
+      type: h.type || 'low',
+      strength: h.strength ?? 1.0,
+      expectTrigger: h.expectTrigger,
+    })),
   };
 }
 
@@ -114,14 +140,14 @@ export class MultiDeviceRunner extends EventEmitter {
   }
 
   /**
-   * Run a pattern with all devices recording simultaneously from one audio playback.
+   * Run a music file with all devices recording simultaneously from one audio playback.
    * Returns per-device results with variation stats.
    */
-  async runPatternAllDevices(patternId: string): Promise<MultiDeviceTestResult> {
+  async runMusicTestAllDevices(musicTest: MusicTestFile, durationMs?: number): Promise<MultiDeviceTestResult> {
     // Lock gain on all devices if specified
     if (this.gain !== undefined) {
       for (const conn of this.connections.values()) {
-        await conn.sendCommand(`test lock hwgain ${this.gain}`);
+        await conn.sendCommand(`set hwgainlock ${this.gain}`);
       }
     }
 
@@ -136,8 +162,9 @@ export class MultiDeviceRunner extends EventEmitter {
       recordStartTimes.set(port, conn.startRecording());
     }
 
-    // Spawn ONE audio player subprocess
-    const result = await this.playPattern(patternId);
+    // Play audio file with ffplay
+    const audioStartTime = new Date();
+    await this.playAudioFile(musicTest.audioFile, durationMs);
 
     // Stop recording on all devices
     const recordings = new Map<string, ReturnType<DeviceConnection['stopRecording']>>();
@@ -153,13 +180,12 @@ export class MultiDeviceRunner extends EventEmitter {
     // Unlock gain on all devices
     if (this.gain !== undefined) {
       for (const conn of this.connections.values()) {
-        await conn.sendCommand('test unlock hwgain');
+        await conn.sendCommand('set hwgainlock 255');
       }
     }
 
-    if (!result.success || !result.groundTruth) {
-      throw new Error(result.error || 'Test failed');
-    }
+    // Load ground truth
+    const groundTruth = loadGroundTruth(musicTest.groundTruthFile, audioStartTime);
 
     // Score each device independently
     const perDevice: PerDeviceTestResult[] = [];
@@ -170,8 +196,8 @@ export class MultiDeviceRunner extends EventEmitter {
       const testResult = scoreDetections(
         recording.transients,
         startTime,
-        result.groundTruth,
-        patternId,
+        groundTruth,
+        musicTest.id,
         rawDuration,
       );
 
@@ -189,23 +215,24 @@ export class MultiDeviceRunner extends EventEmitter {
       recall: computeVariationStats(perDevice.map(d => d.result.recall)),
     } : undefined;
 
-    return { pattern: patternId, perDevice, variation };
+    return { pattern: musicTest.id, perDevice, variation };
   }
 
   /**
-   * Run a pattern with different parameter values assigned per device.
+   * Run a music file with different parameter values assigned per device.
    * Returns results keyed by the parameter value each device was assigned.
    */
-  async runPatternWithAssignments(
-    patternId: string,
+  async runMusicTestWithAssignments(
+    musicTest: MusicTestFile,
     paramName: string,
     portToValue: Map<string, number>,
+    durationMs?: number,
   ): Promise<Map<number, TestResult>> {
     // Set per-device parameter values
     await this.setParameterPerDevice(paramName, portToValue);
 
-    // Run the pattern on all devices
-    const multiResult = await this.runPatternAllDevices(patternId);
+    // Run the test on all devices
+    const multiResult = await this.runMusicTestAllDevices(musicTest, durationMs);
 
     // Key results by parameter value
     const resultByValue = new Map<number, TestResult>();
@@ -224,38 +251,32 @@ export class MultiDeviceRunner extends EventEmitter {
     return `D${idx + 1}`;
   }
 
-  private playPattern(patternId: string): Promise<{ success: boolean; groundTruth?: GroundTruthData; error?: string }> {
-    return new Promise((resolve) => {
-      const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
+  private playAudioFile(audioFile: string, durationMs?: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const args = ['-nodisp', '-autoexit', '-loglevel', 'error', audioFile];
+      if (durationMs) {
+        args.push('-t', (durationMs / 1000).toString());
+      }
+
+      const child = spawn('ffplay', args, {
+        stdio: ['ignore', 'ignore', 'pipe'],
       });
 
-      let stdout = '';
       let stderr = '';
-
-      child.stdout.on('data', (data) => {
-        stdout += data.toString();
-      });
-
       child.stderr.on('data', (data) => {
         stderr += data.toString();
       });
 
       child.on('close', (code) => {
         if (code === 0) {
-          try {
-            const groundTruth = JSON.parse(stdout);
-            resolve({ success: true, groundTruth });
-          } catch {
-            resolve({ success: false, error: 'Failed to parse ground truth: ' + stdout });
-          }
+          resolve();
         } else {
-          resolve({ success: false, error: stderr || `Process exited with code ${code}` });
+          reject(new Error(stderr || `ffplay exited with code ${code}`));
         }
       });
 
       child.on('error', (err) => {
-        resolve({ success: false, error: err.message });
+        reject(err);
       });
     });
   }

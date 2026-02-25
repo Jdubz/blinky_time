@@ -123,7 +123,7 @@ export class TestRunner extends EventEmitter {
 
     // Run the test player CLI
     const result = await new Promise<{ success: boolean; groundTruth?: GroundTruthData; error?: string }>((resolve) => {
-      const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
+      const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet', '--headless'], {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 

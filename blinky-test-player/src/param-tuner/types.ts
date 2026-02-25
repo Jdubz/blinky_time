@@ -783,8 +783,9 @@ export interface MultiDeviceTunerOptions {
   outputDir?: string;
   params?: string[];
   modes?: ParameterMode[];
-  patterns?: string[];
+  patterns?: string[];  // Filter by track ID (e.g., "techno-minimal-01")
   recordAudio?: boolean;
+  durationMs?: number;  // Limit playback duration per track
 }
 
 // Per-device test result

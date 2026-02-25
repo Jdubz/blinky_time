@@ -1151,7 +1151,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // Run the test player CLI and capture output
         const result = await new Promise<{ success: boolean; groundTruth?: unknown; error?: string }>((resolve) => {
-          const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet'], {
+          const child = spawn('node', [TEST_PLAYER_PATH, 'play', patternId, '--quiet', '--headless'], {
             stdio: ['ignore', 'pipe', 'pipe'],
           });
 
@@ -1828,23 +1828,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           // Start recording AFTER stream fast — avoid capturing events during command response
           musicTestSession.startTestRecording();
 
-          // Run the test player CLI with play-file command
-          const playArgs = ['play-file', audioFile, '--quiet'];
+          // Play audio file directly with ffplay (no browser needed)
+          const ffplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', audioFile];
           if (overrideDurationMs) {
-            playArgs.push('--duration', overrideDurationMs.toString());
+            ffplayArgs.push('-t', (overrideDurationMs / 1000).toString());
           }
 
-          const result = await new Promise<{ success: boolean; output?: string; error?: string }>((resolve) => {
-            const child = spawn('node', [TEST_PLAYER_PATH, ...playArgs], {
+          const audioStartTime = Date.now();
+          const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+            const child = spawn('ffplay', ffplayArgs, {
               stdio: ['ignore', 'pipe', 'pipe'],
             });
 
-            let stdout = '';
             let stderr = '';
-
-            child.stdout.on('data', (data) => {
-              stdout += data.toString();
-            });
 
             child.stderr.on('data', (data) => {
               stderr += data.toString();
@@ -1852,9 +1848,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             child.on('close', (code) => {
               if (code === 0) {
-                resolve({ success: true, output: stdout });
+                resolve({ success: true });
               } else {
-                resolve({ success: false, error: stderr || `Process exited with code ${code}` });
+                resolve({ success: false, error: stderr || `ffplay exited with code ${code}` });
               }
             });
 
@@ -1878,30 +1874,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             };
           }
 
-          // Parse output to get startedAt for timing alignment
-          let timingOffsetMs = 0;
-          try {
-            const playOutput = JSON.parse(result.output || '{}');
-            if (playOutput.startedAt && recordStartTime) {
-              const audioStartTime = new Date(playOutput.startedAt).getTime();
-              timingOffsetMs = audioStartTime - recordStartTime;
+          // Timing alignment: adjust detections relative to audio start
+          const timingOffsetMs = audioStartTime - recordStartTime;
 
-              detections = detections.map(d => ({
-                ...d,
-                timestampMs: d.timestampMs - timingOffsetMs,
-              })).filter(d => d.timestampMs >= 0);
+          detections = detections.map(d => ({
+            ...d,
+            timestampMs: d.timestampMs - timingOffsetMs,
+          })).filter(d => d.timestampMs >= 0);
 
-              musicStates = musicStates.map(s => ({
-                ...s,
-                timestampMs: s.timestampMs - timingOffsetMs,
-              })).filter(s => s.timestampMs >= 0);
+          musicStates = musicStates.map(s => ({
+            ...s,
+            timestampMs: s.timestampMs - timingOffsetMs,
+          })).filter(s => s.timestampMs >= 0);
 
-              beatEvents = beatEvents.map(b => ({
-                ...b,
-                timestampMs: b.timestampMs - timingOffsetMs,
-              })).filter(b => b.timestampMs >= 0);
-            }
-          } catch { /* ignore parse errors */ }
+          beatEvents = beatEvents.map(b => ({
+            ...b,
+            timestampMs: b.timestampMs - timingOffsetMs,
+          })).filter(b => b.timestampMs >= 0);
 
           // Calculate audio latency from onset detections vs ground truth
           // Only consider hits within the recording window for latency estimation

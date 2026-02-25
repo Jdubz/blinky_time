@@ -93,8 +93,18 @@ export class BlinkySerial extends EventEmitter {
    * Disconnect from serial port
    */
   async disconnect(): Promise<void> {
-    if (this.streaming) {
-      await this.stopStream();
+    // Always send stream off before closing, regardless of tracked state.
+    // This prevents port lock if streaming was enabled via sendCommand('stream fast')
+    // without going through startStream().
+    if (this.port && this.port.isOpen) {
+      try {
+        this.port.write('stream off\n');
+        this.streaming = false;
+        // Brief pause to let the device process the command before port close
+        await new Promise(r => setTimeout(r, 50));
+      } catch {
+        // Ignore write errors - port may already be closing
+      }
     }
 
     // Clear any pending response state
@@ -137,9 +147,13 @@ export class BlinkySerial extends EventEmitter {
       throw new Error('Not connected');
     }
 
-    // If streaming, temporarily stop to send command
+    // Track streaming commands so this.streaming stays in sync with firmware
+    const isStreamEnable = /^stream\s+(on|fast|debug|normal)$/i.test(command.trim());
+    const isStreamDisable = /^stream\s+off$/i.test(command.trim());
+
+    // If streaming, temporarily stop to send command (unless this command enables streaming)
     const wasStreaming = this.streaming;
-    if (wasStreaming) {
+    if (wasStreaming && !isStreamEnable) {
       await this.stopStream();
     }
 
@@ -152,8 +166,13 @@ export class BlinkySerial extends EventEmitter {
       this.pendingCommand = { resolve, reject, timeout };
       this.port!.write(command + '\n');
     }).then(async (result) => {
-      // Resume streaming if it was active
-      if (wasStreaming) {
+      // Update streaming state to match what we just told the firmware
+      if (isStreamEnable) {
+        this.streaming = true;
+      } else if (isStreamDisable) {
+        this.streaming = false;
+      } else if (wasStreaming) {
+        // Resume streaming if it was active before a non-stream command
         await this.startStream();
       }
       return result as string;

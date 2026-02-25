@@ -12,8 +12,10 @@
 
 import cliProgress from 'cli-progress';
 import type { MultiDeviceTunerOptions, TestResult, SweepPoint } from './types.js';
-import { PARAMETERS, REPRESENTATIVE_PATTERNS, generateSweepValues } from './types.js';
+import { PARAMETERS, generateSweepValues } from './types.js';
 import { MultiDeviceRunner } from './multi-device-runner.js';
+import type { MusicTestFile } from './multi-device-runner.js';
+import { discoverMusicTests } from './music-tests.js';
 
 export interface MultiSweepResult {
   parameter: string;
@@ -52,12 +54,24 @@ export async function runMultiSweep(options: MultiDeviceTunerOptions): Promise<M
       paramsToSweep = paramsToSweep.filter(p => options.modes!.includes(p.mode));
     }
 
-    const patterns = (options.patterns && options.patterns.length > 0)
-      ? options.patterns
-      : [...REPRESENTATIVE_PATTERNS];
+    // Discover music test files
+    const allTests = discoverMusicTests();
+    let tests: MusicTestFile[];
+    if (options.patterns && options.patterns.length > 0) {
+      tests = allTests.filter(t => options.patterns!.includes(t.id));
+    } else {
+      tests = allTests;
+    }
+
+    if (tests.length === 0) {
+      throw new Error('No music test files found. Add .mp3 files with matching .beats.json to music/edm/');
+    }
 
     console.log(`Parameters: ${paramsToSweep.length}`);
-    console.log(`Patterns per value: ${patterns.length}`);
+    console.log(`Tracks per value: ${tests.length}`);
+    if (options.durationMs) {
+      console.log(`Duration per track: ${options.durationMs / 1000}s`);
+    }
     console.log('');
 
     const results: MultiSweepResult[] = [];
@@ -82,8 +96,8 @@ export async function runMultiSweep(options: MultiDeviceTunerOptions): Promise<M
         batches.push(batch);
       }
 
-      const playbackCount = batches.length * patterns.length;
-      const singleDeviceCount = sweepValues.length * patterns.length;
+      const playbackCount = batches.length * tests.length;
+      const singleDeviceCount = sweepValues.length * tests.length;
       const speedup = singleDeviceCount > 0
         ? (singleDeviceCount / playbackCount).toFixed(1)
         : '1.0';
@@ -108,26 +122,26 @@ export async function runMultiSweep(options: MultiDeviceTunerOptions): Promise<M
       }
 
       for (const batch of batches) {
-        // Run each pattern (runPatternWithAssignments sets per-device values internally)
-        for (const pattern of patterns) {
+        for (const test of tests) {
           try {
-            const valueResults = await runner.runPatternWithAssignments(
-              pattern,
+            const valueResults = await runner.runMusicTestWithAssignments(
+              test,
               param.name,
               batch,
+              options.durationMs,
             );
 
             // Store results keyed by value
             for (const [value, testResult] of valueResults) {
               const acc = resultsByValue.get(value)!;
-              acc.byPattern[pattern] = testResult;
+              acc.byPattern[test.id] = testResult;
               acc.totalF1 += testResult.f1;
               acc.totalP += testResult.precision;
               acc.totalR += testResult.recall;
               acc.count++;
             }
           } catch (err) {
-            console.error(`\n   Error on ${pattern}:`, err);
+            console.error(`\n   Error on ${test.id}:`, err);
           }
           progress.increment();
         }
