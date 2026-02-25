@@ -8,7 +8,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import type { TunerOptions } from './types.js';
+import type { TunerOptions, MultiDeviceTunerOptions } from './types.js';
 import { PARAMETERS } from './types.js';
 import { StateManager } from './state.js';
 import { runBaseline, showBaselineSummary } from './baseline.js';
@@ -20,6 +20,8 @@ import { runFastTune } from './fast-tune.js';
 import { SuiteRunner, listSuites, getSuite, PREDEFINED_SUITES, validateSuiteConfig } from './suite.js';
 import { QueueManager, createQueue, listQueues } from './queue.js';
 import { getPatternsForParam } from '../patterns.js';
+import { runVariation } from './multi-variation.js';
+import { runMultiSweep } from './multi-sweep.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,6 +30,7 @@ const DEFAULT_OUTPUT_DIR = join(__dirname, '..', '..', 'tuning-results');
 
 interface GlobalArgs {
   port?: string;
+  ports?: string;
   gain?: number;
   output?: string;
   params?: string;
@@ -45,7 +48,11 @@ async function main() {
     .option('port', {
       alias: 'p',
       type: 'string',
-      description: 'Serial port (e.g., COM5)',
+      description: 'Serial port for single-device commands (e.g., /dev/ttyACM0)',
+    })
+    .option('ports', {
+      type: 'string',
+      description: 'Comma-separated serial ports for multi-device commands (e.g., /dev/ttyACM0,/dev/ttyACM1)',
     })
     .option('gain', {
       alias: 'g',
@@ -183,6 +190,13 @@ async function main() {
     }, async (args) => {
       await runTargetCommand(args as GlobalArgs & { param: string; 'save-to-device'?: boolean });
     })
+    // Multi-device commands
+    .command('variation', 'Run multi-device variation test (identical settings, compare results)', {}, async (args) => {
+      await runVariationCommand(args as GlobalArgs);
+    })
+    .command('multi-sweep', 'Run parallel parameter sweep across multiple devices', {}, async (args) => {
+      await runMultiSweepCommand(args as GlobalArgs);
+    })
     .demandCommand(1, 'You must provide a command')
     .help()
     .alias('h', 'help')
@@ -207,6 +221,31 @@ function createOptions(args: GlobalArgs, requirePort = true): TunerOptions {
     patterns: args.patterns ? args.patterns.split(',').map(p => p.trim()) : undefined,
     refine: args.refine,
     refinementSteps: args['refinement-steps'],
+    recordAudio: args['record-audio'],
+  };
+}
+
+function validatePorts(args: GlobalArgs): string[] {
+  if (!args.ports) {
+    console.error('Error: --ports is required for this command (comma-separated, e.g., --ports /dev/ttyACM0,/dev/ttyACM1)');
+    process.exit(1);
+  }
+  const ports = args.ports.split(',').map(p => p.trim()).filter(p => p.length > 0);
+  if (ports.length < 2) {
+    console.error('Error: --ports requires at least 2 ports');
+    process.exit(1);
+  }
+  return ports;
+}
+
+function createMultiDeviceOptions(args: GlobalArgs): MultiDeviceTunerOptions {
+  return {
+    ports: validatePorts(args),
+    gain: args.gain,
+    outputDir: args.output || DEFAULT_OUTPUT_DIR,
+    params: args.params ? args.params.split(',').map(p => p.trim()) : undefined,
+    modes: args.modes ? args.modes.split(',').map(m => m.trim() as any) : undefined,
+    patterns: args.patterns ? args.patterns.split(',').map(p => p.trim()) : undefined,
     recordAudio: args['record-audio'],
   };
 }
@@ -617,6 +656,62 @@ async function runTargetCommand(args: GlobalArgs & { param: string; 'save-to-dev
 
   } catch (err) {
     console.error('\nTarget test error:', err);
+    process.exit(1);
+  }
+}
+
+// =============================================================================
+// MULTI-DEVICE COMMANDS
+// =============================================================================
+
+async function runVariationCommand(args: GlobalArgs): Promise<void> {
+  const options = createMultiDeviceOptions(args);
+
+  try {
+    const report = await runVariation(options);
+
+    // Save report
+    const { writeFileSync, mkdirSync, existsSync } = await import('fs');
+    const { join } = await import('path');
+
+    const outputDir = options.outputDir || DEFAULT_OUTPUT_DIR;
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
+
+    writeFileSync(
+      join(outputDir, 'variation-report.json'),
+      JSON.stringify(report, null, 2)
+    );
+    console.log(`\nReport saved to ${join(outputDir, 'variation-report.json')}`);
+  } catch (err) {
+    console.error('\nVariation test error:', err);
+    process.exit(1);
+  }
+}
+
+async function runMultiSweepCommand(args: GlobalArgs): Promise<void> {
+  const options = createMultiDeviceOptions(args);
+
+  try {
+    const results = await runMultiSweep(options);
+
+    // Save results
+    const { writeFileSync, mkdirSync, existsSync } = await import('fs');
+    const { join } = await import('path');
+
+    const outputDir = options.outputDir || DEFAULT_OUTPUT_DIR;
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
+
+    writeFileSync(
+      join(outputDir, 'multi-sweep-results.json'),
+      JSON.stringify({ timestamp: new Date().toISOString(), results }, null, 2)
+    );
+    console.log(`\nResults saved to ${join(outputDir, 'multi-sweep-results.json')}`);
+  } catch (err) {
+    console.error('\nMulti-sweep error:', err);
     process.exit(1);
   }
 }

@@ -775,3 +775,32 @@ export interface TunerOptions {
   refinementSteps?: number;  // Optional: number of refinement iterations (default: 3)
   recordAudio?: boolean;  // Optional: record raw audio samples for debugging (default: false)
 }
+
+// Multi-device CLI options
+export interface MultiDeviceTunerOptions {
+  ports: string[];
+  gain?: number;
+  outputDir?: string;
+  params?: string[];
+  modes?: ParameterMode[];
+  patterns?: string[];
+  recordAudio?: boolean;
+}
+
+// Per-device test result
+export interface PerDeviceTestResult {
+  port: string;
+  label: string;
+  result: TestResult;
+}
+
+// Multi-device test result for a single pattern
+export interface MultiDeviceTestResult {
+  pattern: string;
+  perDevice: PerDeviceTestResult[];
+  variation?: {
+    f1: { mean: number; stddev: number; min: number; max: number; spread: number };
+    precision: { mean: number; stddev: number; min: number; max: number; spread: number };
+    recall: { mean: number; stddev: number; min: number; max: number; spread: number };
+  };
+}
