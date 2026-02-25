@@ -118,3 +118,20 @@ export interface TestMetrics {
   avgTimingErrorMs: number | null;
   audioLatencyMs: number; // Estimated systematic audio latency (median offset)
 }
+
+export interface TimestampedSample {
+  timestampMs: number;
+  level: number;
+  raw: number;
+  transient: number;  // Unified transient strength from "Drummer's Algorithm"
+}
+
+export interface TimestampedMusicState {
+  timestampMs: number;
+  active: boolean;
+  bpm: number;
+  phase: number;
+  confidence: number;
+  oss?: number;     // Smoothed onset strength
+  cbss?: number;    // Current CBSS value
+}
