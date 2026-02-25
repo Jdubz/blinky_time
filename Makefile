@@ -2,11 +2,16 @@
 # Cross-platform Arduino build automation
 #
 # Usage:
-#   make upload DEVICE=2            # Upload device type 2 (Tube Light) 
+#   make upload DEVICE=2            # Upload device type 2 (Tube Light)
 #   make compile DEVICE=1           # Compile device type 1 (Hat)
 #   make monitor PORT=COM3          # Open serial monitor
 #   make clean                      # Clean build artifacts
 #   make list-boards                # List connected boards
+#
+# UF2 Upload (Linux/headless - safe CLI upload):
+#   make uf2-upload UPLOAD_PORT=/dev/ttyACM0   # Compile + upload via UF2
+#   make uf2-check UPLOAD_PORT=/dev/ttyACM0    # Compile + validate (dry run)
+#   make uf2-test                               # Verify upload infrastructure
 #
 # Author: Blinky Time Project Contributors
 
@@ -18,6 +23,11 @@ BAUD_RATE = 115200
 # Default values
 DEVICE ?= 2
 PORT ?= COM3
+
+# UF2 upload settings (Linux)
+UPLOAD_PORT ?= /dev/ttyACM0
+BUILD_OUTPUT_DIR ?= /tmp/blinky-build
+UF2_UPLOAD_TOOL = tools/uf2_upload.py
 
 # Arduino CLI detection
 ifeq ($(OS),Windows_NT)
@@ -35,22 +45,28 @@ help:
 	@echo "========================================"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  upload       - Compile and upload sketch"
-	@echo "  compile      - Compile sketch only" 
+	@echo "  upload       - Compile and upload sketch (Windows/Arduino IDE)"
+	@echo "  compile      - Compile sketch only"
 	@echo "  monitor      - Open serial monitor"
 	@echo "  clean        - Clean build artifacts"
 	@echo "  list-boards  - List connected Arduino boards"
 	@echo "  version      - Update version from VERSION file"
 	@echo ""
+	@echo "UF2 Upload (Linux/headless - SAFE):"
+	@echo "  uf2-upload   - Compile + validate + upload via UF2 bootloader"
+	@echo "  uf2-check    - Compile + validate + convert (dry run, no upload)"
+	@echo "  uf2-test     - Verify upload infrastructure is ready"
+	@echo ""
 	@echo "Parameters:"
 	@echo "  DEVICE       - Device type (1=Hat, 2=TubeLight, 3=BucketTotem)"
-	@echo "  PORT         - Serial port (default: COM3)"
+	@echo "  PORT         - Serial port for Windows (default: COM3)"
+	@echo "  UPLOAD_PORT  - Serial port for UF2 upload (default: /dev/ttyACM0)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make upload DEVICE=2"
-	@echo "  make upload DEVICE=1 PORT=COM4"
 	@echo "  make compile DEVICE=3"
-	@echo "  make monitor PORT=COM3"
+	@echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM0"
+	@echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM1 DEVICE=1"
+	@echo "  make monitor PORT=/dev/ttyACM0"
 
 # Check if Arduino CLI is installed
 .PHONY: check-arduino-cli
@@ -147,12 +163,45 @@ else
 	MAJOR=$$(echo $$VERSION | cut -d. -f1); \
 	MINOR=$$(echo $$VERSION | cut -d. -f2); \
 	PATCH=$$(echo $$VERSION | cut -d. -f3); \
-	sed -i "s/#define BLINKY_VERSION_MAJOR [0-9]\+/#define BLINKY_VERSION_MAJOR $$MAJOR/" $(SKETCH_DIR)/core/Version.h; \
-	sed -i "s/#define BLINKY_VERSION_MINOR [0-9]\+/#define BLINKY_VERSION_MINOR $$MINOR/" $(SKETCH_DIR)/core/Version.h; \
-	sed -i "s/#define BLINKY_VERSION_PATCH [0-9]\+/#define BLINKY_VERSION_PATCH $$PATCH/" $(SKETCH_DIR)/core/Version.h; \
-	sed -i "s/#define BLINKY_VERSION_STRING \"[^\"]*\"/#define BLINKY_VERSION_STRING \"$$VERSION\"/" $(SKETCH_DIR)/core/Version.h
+	sed -i "s/#define BLINKY_VERSION_MAJOR [0-9]\+/#define BLINKY_VERSION_MAJOR $$MAJOR/" $(SKETCH_DIR)/types/Version.h; \
+	sed -i "s/#define BLINKY_VERSION_MINOR [0-9]\+/#define BLINKY_VERSION_MINOR $$MINOR/" $(SKETCH_DIR)/types/Version.h; \
+	sed -i "s/#define BLINKY_VERSION_PATCH [0-9]\+/#define BLINKY_VERSION_PATCH $$PATCH/" $(SKETCH_DIR)/types/Version.h; \
+	sed -i "s/#define BLINKY_VERSION_STRING \"[^\"]*\"/#define BLINKY_VERSION_STRING \"$$VERSION\"/" $(SKETCH_DIR)/types/Version.h
 endif
 	@echo "Version updated to $$(cat VERSION)"
+
+# --- UF2 Upload (Linux/headless - safe CLI upload) ---
+
+# Compile to external output directory
+.PHONY: compile-out
+compile-out: check-arduino-cli update-device-type version
+	@echo ""
+	@echo "========================================"
+	@echo "Compiling Device Type $(DEVICE) to $(BUILD_OUTPUT_DIR)"
+	@echo "========================================"
+	@echo "Sketch: $(SKETCH_DIR)"
+	@echo "Board: $(FQBN)"
+	@$(ARDUINO_CLI) compile --fqbn $(FQBN) --output-dir $(BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
+	@echo "Compilation successful!"
+
+# UF2 upload: compile + validate + convert + upload
+.PHONY: uf2-upload
+uf2-upload: compile-out
+	@echo ""
+	@echo "========================================"
+	@echo "UF2 Upload to $(UPLOAD_PORT)"
+	@echo "========================================"
+	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --build-dir $(BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
+
+# UF2 dry run: compile + validate + convert only
+.PHONY: uf2-check
+uf2-check: compile-out
+	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --build-dir $(BUILD_OUTPUT_DIR) --dry-run
+
+# Upload self-test: verify infrastructure
+.PHONY: uf2-test
+uf2-test:
+	python3 $(UF2_UPLOAD_TOOL) --self-test
 
 # Quick aliases
 .PHONY: build flash serial boards

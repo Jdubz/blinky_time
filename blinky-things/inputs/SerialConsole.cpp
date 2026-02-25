@@ -759,6 +759,16 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         return true;  // Never reached
     }
 
+    if (strcmp(cmd, "bootloader") == 0) {
+        Serial.println(F("Entering UF2 bootloader..."));
+        Serial.flush();  // Ensure message is sent before reset
+        delay(100);      // Brief delay for serial transmission
+        // enterUf2Dfu() sets GPREGRET = 0x57 and calls NVIC_SystemReset()
+        // The bootloader reads this and enters UF2 mass storage mode
+        enterUf2Dfu();
+        return true;  // Never reached
+    }
+
     return false;
 }
 

@@ -42,6 +42,7 @@ class HueRotationEffect;
  *     defaults            - Restore default values
  *     reset / factory     - Factory reset (clear saved settings)
  *     reboot              - Soft reboot (applies device config changes)
+ *     bootloader          - Enter UF2 bootloader mode (for firmware upload)
  *
  *   Device Configuration (v28+):
  *     device show         - Display current device config as JSON
