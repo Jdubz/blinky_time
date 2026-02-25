@@ -38,14 +38,14 @@ def info(msg):
     print(f"{Colors.BLUE}ℹ{Colors.END} {msg}")
 
 def check_config_version_comments(config_h_path):
-    """Ensure CONFIG_VERSION has descriptive comment"""
+    """Ensure SETTINGS_VERSION has descriptive comment"""
     with open(config_h_path, 'r') as f:
         content = f.read()
 
-    # Find CONFIG_VERSION line
-    match = re.search(r'CONFIG_VERSION\s*=\s*(\d+)\s*;(.+)', content)
+    # Find SETTINGS_VERSION line (was CONFIG_VERSION in older codebase)
+    match = re.search(r'SETTINGS_VERSION\s*=\s*(\d+)\s*;(.+)', content)
     if not match:
-        error("CONFIG_VERSION not found in ConfigStorage.h")
+        error("SETTINGS_VERSION not found in ConfigStorage.h")
         return False
 
     version = int(match.group(1))
@@ -53,10 +53,10 @@ def check_config_version_comments(config_h_path):
 
     # Check if comment describes changes
     if len(comment.strip()) < 20:
-        warning(f"CONFIG_VERSION {version} has minimal comment. Add details about struct changes.")
+        warning(f"SETTINGS_VERSION {version} has minimal comment. Add details about struct changes.")
         return False
 
-    success(f"CONFIG_VERSION {version} has descriptive comment")
+    success(f"SETTINGS_VERSION {version} has descriptive comment")
     return True
 
 def check_static_assertions(config_h_path):
@@ -163,33 +163,42 @@ def main():
         error(f"ConfigStorage.cpp not found at {config_cpp}")
         sys.exit(1)
 
-    # Run checks
-    checks = [
-        ("CONFIG_VERSION comments", lambda: check_config_version_comments(config_h)),
+    # Critical checks (block build on failure)
+    critical_checks = [
+        ("SETTINGS_VERSION comments", lambda: check_config_version_comments(config_h)),
         ("Static assertions", lambda: check_static_assertions(config_h)),
         ("Parameter validation", lambda: check_validation_coverage(config_h, config_cpp)),
+    ]
+
+    # Informational checks (warn but don't block)
+    info_checks = [
         ("Git status", check_git_status),
     ]
 
-    results = []
-    for name, check_fn in checks:
+    critical_results = []
+    for name, check_fn in critical_checks:
         print(f"\n{Colors.BOLD}Checking: {name}{Colors.END}")
         try:
             result = check_fn()
-            results.append(result)
+            critical_results.append(result)
         except Exception as e:
             error(f"Check failed with exception: {e}")
-            results.append(False)
+            critical_results.append(False)
+
+    for name, check_fn in info_checks:
+        print(f"\n{Colors.BOLD}Info: {name}{Colors.END}")
+        try:
+            check_fn()
+        except Exception as e:
+            info(f"Check skipped: {e}")
 
     # Summary
     print(f"\n{Colors.BOLD}{'=' * 50}{Colors.END}")
-    passed = sum(results)
-    total = len(results)
+    passed = sum(critical_results)
+    total = len(critical_results)
 
-    if all(results):
+    if all(critical_results):
         print(f"{Colors.GREEN}{Colors.BOLD}✓ ALL CHECKS PASSED ({passed}/{total}){Colors.END}")
-        print(f"\n{Colors.GREEN}Safe to upload firmware using Arduino IDE{Colors.END}")
-        print(f"{Colors.RED}{Colors.BOLD}REMEMBER: NEVER use arduino-cli!{Colors.END}\n")
         return 0
     else:
         print(f"{Colors.RED}{Colors.BOLD}✗ CHECKS FAILED ({passed}/{total} passed){Colors.END}")

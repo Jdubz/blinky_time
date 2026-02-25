@@ -56,6 +56,7 @@ help:
 	@echo "  uf2-upload   - Compile + validate + upload via UF2 bootloader"
 	@echo "  uf2-check    - Compile + validate + convert (dry run, no upload)"
 	@echo "  uf2-test     - Verify upload infrastructure is ready"
+	@echo "  safety-check - Run pre-compile safety checks only"
 	@echo ""
 	@echo "Parameters:"
 	@echo "  DEVICE       - Device type (1=Hat, 2=TubeLight, 3=BucketTotem)"
@@ -172,9 +173,14 @@ endif
 
 # --- UF2 Upload (Linux/headless - safe CLI upload) ---
 
+# Pre-compile safety checks (blocks build on critical failures)
+.PHONY: safety-check
+safety-check:
+	@python3 scripts/pre_compile_safety.py
+
 # Compile to external output directory
 .PHONY: compile-out
-compile-out: check-arduino-cli update-device-type version
+compile-out: safety-check check-arduino-cli update-device-type version
 	@echo ""
 	@echo "========================================"
 	@echo "Compiling Device Type $(DEVICE) to $(BUILD_OUTPUT_DIR)"
