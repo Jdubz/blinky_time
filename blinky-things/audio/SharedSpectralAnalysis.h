@@ -126,7 +126,9 @@ public:
     // --- Accessors for spectral data ---
 
     /**
-     * Get magnitude spectrum (128 bins)
+     * Get magnitude spectrum (128 bins) — compressed + whitened
+     * After process(): magnitudes are soft-knee compressed then per-bin whitened.
+     * totalEnergy_ and spectralCentroid_ reflect the pre-whitened (compressed-only) state.
      * Valid after process() returns, until next process() call
      */
     const float* getMagnitudes() const { return magnitudes_; }
@@ -206,7 +208,7 @@ private:
     float vImag_[SpectralConstants::FFT_SIZE];
 
     // Output buffers
-    float magnitudes_[SpectralConstants::NUM_BINS];      // Raw magnitudes (HFC, ComplexDomain use these)
+    float magnitudes_[SpectralConstants::NUM_BINS];      // Compressed + whitened magnitudes (all detectors see this state)
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)

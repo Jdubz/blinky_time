@@ -315,8 +315,9 @@ public:
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     // ConfigData: ~545 bytes (4+160+64+64+40+76+136+1 + padding). Allocated in last 4KB flash page.
-    static_assert(sizeof(ConfigData) <= 4096,
-        "ConfigData too large for flash page! nRF52840 uses 4KB pages, struct must fit in one page.");
+    // Tight bound (1024) catches accidental struct bloat early. Raise only when genuinely needed.
+    static_assert(sizeof(ConfigData) <= 1024,
+        "ConfigData exceeds 1024 bytes! Current estimate ~545B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

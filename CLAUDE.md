@@ -137,6 +137,8 @@ PDM Microphone (16 kHz)
     ↓
 AdaptiveMic (AGC + normalization)
     ↓
+SharedSpectralAnalysis (FFT-256 → compressor → whitening)
+    ↓
 EnsembleDetector (BandWeightedFlux Solo)
     ↓
 AudioController (CBSS beat tracking)
@@ -154,7 +156,7 @@ RenderPipeline → LED Output
 
 1. **Audio Input & Processing**
    - `AdaptiveMic.h` - PDM microphone with hardware/software AGC
-   - `SharedSpectralAnalysis.h` - FFT-256 (128 freq bins @ 62.5 Hz)
+   - `SharedSpectralAnalysis.h` - FFT-256 (128 freq bins @ 62.5 Hz), soft-knee compressor → per-bin whitening (v23+)
    - Window/range normalization (0-1 output)
 
 2. **Transient Detection (Ensemble)**
@@ -186,7 +188,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (CONFIG_VERSION: v20)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v24)
    - `SettingsRegistry.h/cpp` - 56+ tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -279,23 +281,24 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
-2. AdaptiveMic → EnsembleDetector (BandFlux Solo)
-3. EnsembleDetector → fusion → transient strength (0-1)
-4. Transient → AudioController OSS buffer (6s history)
-5. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
+2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening)
+3. SharedSpectralAnalysis → EnsembleDetector (BandFlux Solo, sees whitened magnitudes)
+4. EnsembleDetector → fusion → transient strength (0-1)
+5. Transient → AudioController OSS buffer (6s history)
+6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
    (ACF + Fourier tempogram + comb filter bank + IOI → 20-bin posterior → harmonic disambig → MAP → BPM)
-6. CBSS backward search → cumulative beat strength signal
-7. Predict+countdown beat detection → deterministic phase
-8. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75, onsetDensity=3.2}
-9. Fire generator:
-   - energy → baseline flame height
-   - pulse → spark burst intensity
-   - phase → breathing effect (0=on-beat)
-   - rhythmStrength → blend music/organic mode
-   - onsetDensity → content classification (dance=2-6/s, ambient=0-1/s)
-10. Fire heat diffusion (matrix propagation)
-11. HueRotationEffect (optional color shift)
-12. RenderPipeline → LED strip output
+7. CBSS backward search → cumulative beat strength signal
+8. Predict+countdown beat detection → deterministic phase
+9. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75, onsetDensity=3.2}
+10. Fire generator:
+    - energy → baseline flame height
+    - pulse → spark burst intensity
+    - phase → breathing effect (0=on-beat)
+    - rhythmStrength → blend music/organic mode
+    - onsetDensity → content classification (dance=2-6/s, ambient=0-1/s)
+11. Fire heat diffusion (matrix propagation)
+12. HueRotationEffect (optional color shift)
+13. RenderPipeline → LED strip output
 ```
 
 ### Resource Usage (nRF52840)
@@ -399,11 +402,12 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
-- **Bayesian tempo fusion**: 20-bin posterior over 60-180 BPM, comb filter bank only (ACF/FT/IOI disabled — sub-harmonic bias, mean-norm, unnormalized counts). SETTINGS_VERSION 21
+- **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
+- **Bayesian tempo fusion**: 20-bin posterior over 60-180 BPM, comb filter bank + re-enabled FT/IOI (v24). SETTINGS_VERSION 24
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **CBSS adaptive threshold**: Beat fires only if CBSS > cbssthresh * running mean (prevents phantom beats during silence)
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
-- **Shared FFT**: All spectral detectors share a single FFT computation
+- **Shared FFT + spectral pipeline**: All detectors share a single FFT → compressor → whitening chain
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame
