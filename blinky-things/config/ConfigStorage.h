@@ -39,7 +39,7 @@ public:
     // Version 18: Bayesian tempo fusion (replaced 17 sequential-override params with 6 Bayesian weights)
     // Version 19: Added bayesPriorWeight (ongoing static prior strength)
     // Version 20: Added cbssThresholdFactor (CBSS adaptive threshold)
-    // Version 21: Bayesian weight tuning (ACF/FT/IOI disabled, cbssThresh 0.4→1.0, lambda 0.1→0.15)
+    // Version 21: Bayesian weight tuning (FT/IOI disabled, ACF 1.0→0.3, cbssThresh 0.4→1.0, lambda 0.1→0.15)
     // Version 22: Combined Bayesian validation (bayesacf=0.3, cbssthresh=1.0 — 4-device validated defaults)
     // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)
     // Version 24: Post-spectral Bayesian re-tuning (bayesft=2.0, bayesioi=2.0 — re-enabled by spectral processing)
@@ -314,6 +314,7 @@ public:
         "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 32 floats + 1 uint8 + 5 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
+    // ConfigData: ~545 bytes (4+160+64+64+40+76+136+1 + padding). Allocated in last 4KB flash page.
     static_assert(sizeof(ConfigData) <= 4096,
         "ConfigData too large for flash page! nRF52840 uses 4KB pages, struct must fit in one page.");
 

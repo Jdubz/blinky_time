@@ -138,6 +138,8 @@ void SharedSpectralAnalysis::process() {
     applyCompressor();
 
     // Compute derived features (energy, centroid) from compressed magnitudes
+    // NOTE: totalEnergy_ and spectralCentroid_ reflect compressed-but-not-whitened
+    // magnitudes. getMagnitudes() returns whitened values after whitenMagnitudes() below.
     computeDerivedFeatures();
 
     // Compute mel bands from compressed (not whitened) magnitudes

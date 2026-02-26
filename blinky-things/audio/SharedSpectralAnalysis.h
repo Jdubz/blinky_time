@@ -89,7 +89,7 @@ public:
     float compRatio = 3.0f;          // 3:1 compression ratio
     float compKneeDb = 15.0f;        // Soft knee width in dB
     float compMakeupDb = 6.0f;       // Makeup gain in dB
-    float compAttackTau = 0.001f;    // Attack time constant (seconds)
+    float compAttackTau = 0.001f;    // Attack time constant (seconds). Values below ~16ms are instantaneous at 62.5 fps
     float compReleaseTau = 2.0f;     // Release time constant (seconds)
 
     /**
