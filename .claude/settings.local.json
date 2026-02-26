@@ -16,5 +16,10 @@
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "enabledMcpjsonServers": [
+    "playwright",
+    "blinky-serial"
+  ],
+  "enableAllProjectMcpServers": true
 }

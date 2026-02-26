@@ -388,8 +388,14 @@ void BandWeightedFluxDetector::computeHiResBassFlux(const float* bassLogMag, int
 
     float flux = 0.0f;
     for (int b = 0; b < n; b++) {
-        // Direct comparison against reference (no max-filter for bass)
-        float diff = bassLogMag[b] - bassRef[b];
+        // 3-bin max-filter on reference. At 31.25 Hz/bin this covers ±31 Hz,
+        // inherently narrower than the FFT path's 3-bin filter (±62 Hz).
+        // Suppresses spectral wobble in sustained bass.
+        float refVal = bassRef[b];
+        if (b > 0) refVal = fmaxf(refVal, bassRef[b - 1]);
+        if (b < n - 1) refVal = fmaxf(refVal, bassRef[b + 1]);
+
+        float diff = bassLogMag[b] - refVal;
         if (diff > 0.0f) flux += diff;
     }
 
