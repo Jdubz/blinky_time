@@ -1335,3 +1335,97 @@ Changed AudioController.cpp line 787: FT now only pushes BPM **upward** (>10% hi
 6. **No feature has been properly calibrated** — All tested at implementation defaults. No parameter sweeps performed for any feature.
 
 7. **The system lacks a coordination mechanism** — Each feature independently modifies BPM. When they disagree, the result is worse than having none of them. Need a framework for feature cooperation rather than independent stacking.
+
+---
+
+## Multi-Device Bayesian Weight Sweep: 2026-02-25
+
+**Environment:**
+- Hardware: 3× Seeeduino XIAO nRF52840 Sense (Long Tube config)
+- Serial Ports: /dev/ttyACM0, /dev/ttyACM1, /dev/ttyACM2
+- Audio: USB speakers (JBL Pebbles) via ffplay, headless Raspberry Pi
+- Tool: `param-tuner multi-sweep` (parallel sweep across 3 devices)
+- Duration: 30 seconds per track
+- Tracks: 9 real music files with ground truth beat annotations
+- Scoring: Beat events (music.q=1), 200ms tolerance, ground truth filtered to played duration
+
+### Methodology
+
+Multi-device parallel sweep: 3 devices hear the same audio simultaneously, each configured with a different parameter value. This provides 3× speedup over single-device sweeps. Each parameter is swept independently while others remain at their defaults.
+
+Scoring uses `scoreBeatEvents()` (not transient scoring): ground truth beat positions matched against firmware beat events (q=1) with 200ms tolerance. Audio latency estimated via median offset and corrected before matching.
+
+### Parameters Tested
+
+#### bayesacf (Autocorrelation observation weight)
+- **Range Tested:** 0, 0.3, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 1.0
+- **Optimal Value:** 0 (disabled)
+- **Best F1:** 0.265
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+#### bayesft (Fourier tempogram observation weight)
+- **Range Tested:** 0, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 0.8
+- **Optimal Value:** 0 (disabled)
+- **Best F1:** 0.196
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+#### bayescomb (Comb filter bank observation weight)
+- **Range Tested:** 0, 0.3, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 0.7
+- **Optimal Value:** 0.7 (unchanged)
+- **Best F1:** 0.203
+- **Applied to Firmware:** ✅ (default unchanged)
+
+#### bayesioi (IOI histogram observation weight)
+- **Range Tested:** 0, 0.2, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 0.5
+- **Optimal Value:** 0 (disabled)
+- **Best F1:** 0.166
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+#### bayeslambda (Transition tightness)
+- **Range Tested:** 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5
+- **Previous Default:** 0.1
+- **Optimal Value:** 0.15
+- **Best F1:** 0.186
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+#### cbssthresh (CBSS adaptive threshold factor)
+- **Range Tested:** 0, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0
+- **Previous Default:** 0.4
+- **Optimal Value:** 1.0
+- **Best F1:** 0.590
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+### Summary of Default Changes (SETTINGS_VERSION 20 → 21)
+
+| Parameter | Old Default | New Default | Change |
+|-----------|:-----------:|:-----------:|--------|
+| bayesacf | 1.0 | **0** | Disabled — sub-harmonic bias |
+| bayesft | 0.8 | **0** | Disabled — mean-norm kills discriminability |
+| bayesioi | 0.5 | **0** | Disabled — unnormalized counts dominate posterior |
+| bayescomb | 0.7 | 0.7 | Unchanged |
+| bayeslambda | 0.1 | **0.15** | Slightly wider tempo transitions |
+| cbssthresh | 0.4 | **1.0** | Higher threshold = fewer false beats = more stable BPM |
+
+### Key Findings
+
+1. **CBSS threshold is the biggest single improvement** — F1 jumps from 0.209 (at default 0.4) to 0.590 (at 1.0). Higher threshold prevents phantom beats during low-energy sections, keeping BPM stable, which paradoxically improves recall (0.509 vs ~0.08).
+
+2. **Three of four observation signals hurt beat tracking** — ACF, FT, and IOI all score optimal at 0 (disabled). Only the comb filter bank contributes positively.
+
+3. **Root cause analysis (compared to BTrack, madmom, librosa):**
+   - **ACF:** Missing inverse-lag normalization (BTrack divides `acf[i]/lag`). Sub-harmonic peaks dominate. BTrack processes ACF through a 4-harmonic comb filter bank before Bayesian inference — our raw ACF is too noisy.
+   - **FT:** Mean normalization across bins makes all observations ≈1.0 (near-flat). Uses magnitude-squared (amplifies noise). No reference implementation uses Fourier tempogram for real-time beat tracking.
+   - **IOI:** Raw integer counts (1-10+ range) dominate the multiplicative posterior. 2x folding biases toward fast tempos. No reference implementation uses IOI histograms for polyphonic beat tracking.
+   - **Comb:** Works because it's closest to BTrack/Scheirer — continuous resonance, phase-sensitive, self-normalizing.
+
+4. **Architectural mismatch:** Our multiplicative fusion (`posterior = prediction × ACF × FT × comb × IOI`) assumes independent, comparably-scaled signals. They are neither — they share the same input (OSS buffer) and have different scales and biases. BTrack uses a pipeline (ACF → comb → Rayleigh → Viterbi), not multiplicative fusion.
+
+5. **These are independent sweeps** — interaction effects between parameters were not tested. The combined effect of all new defaults together should be validated.
+
+### Raw Results
+
+Full per-track, per-value results saved to: `tuning-results/multi-sweep-results.json`

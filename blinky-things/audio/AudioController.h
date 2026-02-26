@@ -315,7 +315,7 @@ public:
     float beatConfidenceDecay = 0.98f;   // Per-frame confidence decay when no beat detected
     float beatTimingOffset = 5.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
-    float cbssThresholdFactor = 0.4f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
+    float cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
 
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
@@ -336,13 +336,13 @@ public:
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
     // into a unified posterior distribution over 20 tempo bins (60-180 BPM).
     // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
-    float bayesLambda = 0.1f;            // Transition tightness (0.01=rigid, 1.0=loose)
+    float bayesLambda = 0.15f;           // Transition tightness (0.01=rigid, 1.0=loose)
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
     float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
-    float bayesAcfWeight = 1.0f;         // Autocorrelation observation weight
-    float bayesFtWeight = 0.8f;          // Fourier tempogram observation weight
+    float bayesAcfWeight = 0.3f;         // Autocorrelation observation weight (low weight prevents sub-harmonic lock)
+    float bayesFtWeight = 0.0f;          // Fourier tempogram observation weight (0=disabled; mean-norm destroys discriminability)
     float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
-    float bayesIoiWeight = 0.5f;         // IOI histogram observation weight
+    float bayesIoiWeight = 0.0f;         // IOI histogram observation weight (0=disabled; unnormalized counts dominate posterior)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
