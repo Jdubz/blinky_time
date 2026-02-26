@@ -346,6 +346,28 @@ void SerialConsole::registerRhythmSettings() {
         "Tempo change threshold", 0.01f, 0.5f);
     // (maxbpmchg removed — Bayesian fusion handles tempo stability)
 
+    // Spectral processing (whitening + compressor)
+    SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+    settings_.registerBool("whitenenabled", &spectral.whitenEnabled, "spectral",
+        "Per-bin spectral whitening");
+    settings_.registerFloat("whitendecay", &spectral.whitenDecay, "spectral",
+        "Whitening peak decay per frame (0.99-0.999)", 0.9f, 0.9999f);
+    settings_.registerFloat("whitenfloor", &spectral.whitenFloor, "spectral",
+        "Whitening noise floor", 0.0001f, 0.1f);
+    settings_.registerBool("compenabled", &spectral.compressorEnabled, "spectral",
+        "Soft-knee compressor");
+    settings_.registerFloat("compthresh", &spectral.compThresholdDb, "spectral",
+        "Compressor threshold (dB)", -60.0f, 0.0f);
+    settings_.registerFloat("compratio", &spectral.compRatio, "spectral",
+        "Compression ratio", 1.0f, 20.0f);
+    settings_.registerFloat("compknee", &spectral.compKneeDb, "spectral",
+        "Soft knee width (dB)", 0.0f, 30.0f);
+    settings_.registerFloat("compmakeup", &spectral.compMakeupDb, "spectral",
+        "Makeup gain (dB)", -10.0f, 30.0f);
+    settings_.registerFloat("compattack", &spectral.compAttackTau, "spectral",
+        "Attack time constant (s)", 0.0001f, 0.1f);
+    settings_.registerFloat("comprelease", &spectral.compReleaseTau, "spectral",
+        "Release time constant (s)", 0.01f, 10.0f);
 }
 
 void SerialConsole::update() {
@@ -1007,14 +1029,14 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->cbssAlpha = 0.9f;
         audioCtrl_->cbssTightness = 5.0f;
         audioCtrl_->beatConfidenceDecay = 0.98f;
-        audioCtrl_->bayesLambda = 0.1f;
+        audioCtrl_->bayesLambda = 0.15f;
         audioCtrl_->bayesPriorCenter = 128.0f;
         audioCtrl_->bayesPriorWeight = 0.0f;
-        audioCtrl_->bayesAcfWeight = 1.0f;
-        audioCtrl_->bayesFtWeight = 0.8f;
+        audioCtrl_->bayesAcfWeight = 0.3f;
+        audioCtrl_->bayesFtWeight = 0.0f;
         audioCtrl_->bayesCombWeight = 0.7f;
-        audioCtrl_->bayesIoiWeight = 0.5f;
-        audioCtrl_->cbssThresholdFactor = 0.4f;
+        audioCtrl_->bayesIoiWeight = 0.0f;
+        audioCtrl_->cbssThresholdFactor = 1.0f;
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
@@ -1389,6 +1411,13 @@ void SerialConsole::streamTick() {
             Serial.print(bf.getCombinedFlux(), 3);
             Serial.print(F(",\"af\":"));
             Serial.print(bf.getAverageFlux(), 3);
+
+            // Spectral processing state (compressor + whitening)
+            const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+            Serial.print(F(",\"rms\":"));
+            Serial.print(spectral.getFrameRmsDb(), 1);
+            Serial.print(F(",\"cg\":"));
+            Serial.print(spectral.getSmoothedGainDb(), 2);
         }
 
         Serial.print(F("}"));
@@ -2546,6 +2575,59 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getBeatPeriodSamples());
         Serial.print(F(",\"stability\":"));
         Serial.print(audioCtrl_->getBeatStability(), 3);
+        Serial.println(F("}"));
+        return true;
+    }
+
+    // "show spectral" - show spectral processing (compressor + whitening) state
+    if (strcmp(cmd, "show spectral") == 0) {
+        const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+        Serial.println(F("=== Spectral Processing ==="));
+        Serial.println(F("-- Compressor --"));
+        Serial.print(F("  Enabled: ")); Serial.println(spectral.compressorEnabled ? "yes" : "no");
+        Serial.print(F("  Threshold: ")); Serial.print(spectral.compThresholdDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Ratio: ")); Serial.print(spectral.compRatio, 1); Serial.println(F(":1"));
+        Serial.print(F("  Knee: ")); Serial.print(spectral.compKneeDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Makeup: ")); Serial.print(spectral.compMakeupDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Attack: ")); Serial.print(spectral.compAttackTau * 1000.0f, 1); Serial.println(F(" ms"));
+        Serial.print(F("  Release: ")); Serial.print(spectral.compReleaseTau, 2); Serial.println(F(" s"));
+        Serial.print(F("  Frame RMS: ")); Serial.print(spectral.getFrameRmsDb(), 1); Serial.println(F(" dB"));
+        Serial.print(F("  Smoothed Gain: ")); Serial.print(spectral.getSmoothedGainDb(), 2); Serial.println(F(" dB"));
+        Serial.println(F("-- Whitening --"));
+        Serial.print(F("  Enabled: ")); Serial.println(spectral.whitenEnabled ? "yes" : "no");
+        Serial.print(F("  Decay: ")); Serial.println(spectral.whitenDecay, 4);
+        Serial.print(F("  Floor: ")); Serial.println(spectral.whitenFloor, 4);
+        Serial.println();
+        return true;
+    }
+
+    // "json spectral" - spectral processing state as JSON (for test automation)
+    if (strcmp(cmd, "json spectral") == 0) {
+        const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+        Serial.print(F("{\"compEnabled\":"));
+        Serial.print(spectral.compressorEnabled ? 1 : 0);
+        Serial.print(F(",\"compThreshDb\":"));
+        Serial.print(spectral.compThresholdDb, 1);
+        Serial.print(F(",\"compRatio\":"));
+        Serial.print(spectral.compRatio, 1);
+        Serial.print(F(",\"compKneeDb\":"));
+        Serial.print(spectral.compKneeDb, 1);
+        Serial.print(F(",\"compMakeupDb\":"));
+        Serial.print(spectral.compMakeupDb, 1);
+        Serial.print(F(",\"compAttackMs\":"));
+        Serial.print(spectral.compAttackTau * 1000.0f, 2);
+        Serial.print(F(",\"compReleaseS\":"));
+        Serial.print(spectral.compReleaseTau, 2);
+        Serial.print(F(",\"rmsDb\":"));
+        Serial.print(spectral.getFrameRmsDb(), 1);
+        Serial.print(F(",\"gainDb\":"));
+        Serial.print(spectral.getSmoothedGainDb(), 2);
+        Serial.print(F(",\"whitenEnabled\":"));
+        Serial.print(spectral.whitenEnabled ? 1 : 0);
+        Serial.print(F(",\"whitenDecay\":"));
+        Serial.print(spectral.whitenDecay, 4);
+        Serial.print(F(",\"whitenFloor\":"));
+        Serial.print(spectral.whitenFloor, 4);
         Serial.println(F("}"));
         return true;
     }

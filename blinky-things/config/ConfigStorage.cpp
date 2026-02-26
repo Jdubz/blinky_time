@@ -211,21 +211,33 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
     data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
-    data_.music.cbssThresholdFactor = 0.4f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
+    data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
 
-    // Bayesian tempo fusion (v18+)
-    data_.music.bayesLambda = 0.1f;          // Transition tightness
+    // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via multi-device sweep)
+    data_.music.bayesLambda = 0.15f;         // Transition tightness
     data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
     data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
-    data_.music.bayesAcfWeight = 1.0f;       // Autocorrelation observation weight
-    data_.music.bayesFtWeight = 0.8f;        // Fourier tempogram observation weight
+    data_.music.bayesAcfWeight = 0.3f;       // Low ACF weight prevents sub-harmonic lock without overwhelming comb filter (validated Feb 25 multi-device sweep)
+    data_.music.bayesFtWeight = 0.0f;        // FT disabled: mean normalization destroys discriminability
     data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
-    data_.music.bayesIoiWeight = 0.5f;       // IOI histogram observation weight
+    data_.music.bayesIoiWeight = 0.0f;       // IOI disabled: unnormalized counts dominate posterior
 
     data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
     data_.music.ioiEnabled = true;           // IOI histogram observation
     data_.music.odfMeanSubEnabled = true;    // ODF mean subtraction (BTrack-style detrending)
     data_.music.ftEnabled = true;            // Fourier tempogram observation
+
+    // Spectral processing defaults (v23+)
+    data_.music.whitenEnabled = true;
+    data_.music.compressorEnabled = true;
+    data_.music.whitenDecay = 0.997f;        // ~5s memory at 60fps
+    data_.music.whitenFloor = 0.001f;        // Noise floor
+    data_.music.compThresholdDb = -30.0f;    // dB threshold
+    data_.music.compRatio = 3.0f;            // 3:1 compression
+    data_.music.compKneeDb = 15.0f;          // Soft knee width
+    data_.music.compMakeupDb = 6.0f;         // Makeup gain
+    data_.music.compAttackTau = 0.001f;      // 1ms attack
+    data_.music.compReleaseTau = 2.0f;       // 2s release
 
     data_.brightness = 100;
 }
@@ -489,6 +501,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     }
     // ioiEnabled, odfMeanSubEnabled, ftEnabled are bools — no range validation needed
 
+    // Spectral processing validation (v23+)
+    validateFloat(data_.music.whitenDecay, 0.9f, 0.9999f, F("whitenDecay"));
+    validateFloat(data_.music.whitenFloor, 0.0001f, 0.1f, F("whitenFloor"));
+    validateFloat(data_.music.compThresholdDb, -60.0f, 0.0f, F("compThreshDb"));
+    validateFloat(data_.music.compRatio, 1.0f, 20.0f, F("compRatio"));
+    validateFloat(data_.music.compKneeDb, 0.0f, 30.0f, F("compKneeDb"));
+    validateFloat(data_.music.compMakeupDb, -10.0f, 30.0f, F("compMakeupDb"));
+    validateFloat(data_.music.compAttackTau, 0.0001f, 0.1f, F("compAttackTau"));
+    validateFloat(data_.music.compReleaseTau, 0.01f, 10.0f, F("compReleaseTau"));
+    // whitenEnabled, compressorEnabled are bools — no range validation needed
+
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
         SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
@@ -646,6 +669,19 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->ioiEnabled = data_.music.ioiEnabled;
         audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
         audioCtrl->ftEnabled = data_.music.ftEnabled;
+
+        // Spectral processing (v23+)
+        SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
+        spectral.whitenEnabled = data_.music.whitenEnabled;
+        spectral.compressorEnabled = data_.music.compressorEnabled;
+        spectral.whitenDecay = data_.music.whitenDecay;
+        spectral.whitenFloor = data_.music.whitenFloor;
+        spectral.compThresholdDb = data_.music.compThresholdDb;
+        spectral.compRatio = data_.music.compRatio;
+        spectral.compKneeDb = data_.music.compKneeDb;
+        spectral.compMakeupDb = data_.music.compMakeupDb;
+        spectral.compAttackTau = data_.music.compAttackTau;
+        spectral.compReleaseTau = data_.music.compReleaseTau;
     }
 }
 
@@ -789,6 +825,19 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.ioiEnabled = audioCtrl->ioiEnabled;
         data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
         data_.music.ftEnabled = audioCtrl->ftEnabled;
+
+        // Spectral processing (v23+)
+        const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
+        data_.music.whitenEnabled = spectral.whitenEnabled;
+        data_.music.compressorEnabled = spectral.compressorEnabled;
+        data_.music.whitenDecay = spectral.whitenDecay;
+        data_.music.whitenFloor = spectral.whitenFloor;
+        data_.music.compThresholdDb = spectral.compThresholdDb;
+        data_.music.compRatio = spectral.compRatio;
+        data_.music.compKneeDb = spectral.compKneeDb;
+        data_.music.compMakeupDb = spectral.compMakeupDb;
+        data_.music.compAttackTau = spectral.compAttackTau;
+        data_.music.compReleaseTau = spectral.compReleaseTau;
     }
 
     saveToFlash();

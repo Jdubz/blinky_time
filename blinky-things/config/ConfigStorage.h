@@ -39,7 +39,10 @@ public:
     // Version 18: Bayesian tempo fusion (replaced 17 sequential-override params with 6 Bayesian weights)
     // Version 19: Added bayesPriorWeight (ongoing static prior strength)
     // Version 20: Added cbssThresholdFactor (CBSS adaptive threshold)
-    static const uint8_t SETTINGS_VERSION = 20;  // Settings schema (fire, water, lightning, mic, music params)
+    // Version 21: Bayesian weight tuning (ACF/FT/IOI disabled, cbssThresh 0.4→1.0, lambda 0.1→0.15)
+    // Version 22: (intermediate)
+    // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)
+    static const uint8_t SETTINGS_VERSION = 23;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -199,6 +202,18 @@ public:
         bool ioiEnabled;                // Enable IOI histogram observation
         bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
         bool ftEnabled;                 // Enable Fourier tempogram observation
+
+        // Spectral processing (v23+)
+        bool whitenEnabled;             // Per-bin spectral whitening
+        bool compressorEnabled;         // Soft-knee compressor
+        float whitenDecay;              // Peak decay per frame (~5s at 0.997)
+        float whitenFloor;              // Noise floor for whitening
+        float compThresholdDb;          // Compressor threshold (dB)
+        float compRatio;                // Compression ratio (e.g., 3:1)
+        float compKneeDb;              // Soft knee width (dB)
+        float compMakeupDb;            // Makeup gain (dB)
+        float compAttackTau;           // Attack time constant (seconds)
+        float compReleaseTau;          // Release time constant (seconds)
     };
 
     /**
@@ -294,12 +309,12 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 100,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (100 bytes = 24 floats + 1 uint8 + 3 bools)");
+    static_assert(sizeof(StoredMusicParams) == 136,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 32 floats + 1 uint8 + 5 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    static_assert(sizeof(ConfigData) <= 512,
-        "ConfigData too large! May not fit in flash sector. Review struct padding. (Limit: 512 bytes)");
+    static_assert(sizeof(ConfigData) <= 640,
+        "ConfigData too large! May not fit in flash sector. Review struct padding. (Limit: 640 bytes)");
 
     ConfigStorage();
     void begin();
