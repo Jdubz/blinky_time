@@ -1055,6 +1055,19 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->energyBoostOnBeat = 0.3f;
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
+
+        // Restore spectral processing defaults
+        SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+        spectral.whitenEnabled = true;
+        spectral.compressorEnabled = true;
+        spectral.whitenDecay = 0.997f;
+        spectral.whitenFloor = 0.001f;
+        spectral.compThresholdDb = -30.0f;
+        spectral.compRatio = 3.0f;
+        spectral.compKneeDb = 15.0f;
+        spectral.compMakeupDb = 6.0f;
+        spectral.compAttackTau = 0.001f;
+        spectral.compReleaseTau = 2.0f;
     }
 
     // Restore effect defaults

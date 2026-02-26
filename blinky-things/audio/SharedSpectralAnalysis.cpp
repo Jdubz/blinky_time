@@ -295,7 +295,9 @@ void SharedSpectralAnalysis::applyCompressor() {
     frameRmsDb_ = rmsDb;  // Store for debug access
 
     if (!compressorEnabled) {
-        smoothedGainDb_ = 0.0f;
+        // Fade smoothed gain toward 0 rather than hard-reset, so toggling
+        // mid-session doesn't cause an abrupt level jump
+        smoothedGainDb_ *= 0.9f;
         return;
     }
 
@@ -323,7 +325,8 @@ void SharedSpectralAnalysis::applyCompressor() {
     gainDb += compMakeupDb;
 
     // Asymmetric EMA smoothing (fast attack, slow release)
-    // Convert tau to per-frame alpha (assuming ~60 fps, 16ms/frame)
+    // Frame period = FFT_SIZE / SAMPLE_RATE = 256/16000 = 16ms (~62.5 fps)
+    // This is correct because hop size = FFT_SIZE (no overlap)
     const float framePeriod = (float)SpectralConstants::FFT_SIZE / SpectralConstants::SAMPLE_RATE;
     float attackAlpha = (compAttackTau > 0.0f) ? (1.0f - expf(-framePeriod / compAttackTau)) : 1.0f;
     float releaseAlpha = (compReleaseTau > 0.0f) ? (1.0f - expf(-framePeriod / compReleaseTau)) : 1.0f;
