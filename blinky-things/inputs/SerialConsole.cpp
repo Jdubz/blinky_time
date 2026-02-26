@@ -786,9 +786,21 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         Serial.println(F("Entering UF2 bootloader..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
-        // enterUf2Dfu() sets GPREGRET = 0x57 and calls NVIC_SystemReset()
-        // The bootloader reads this and enters UF2 mass storage mode
-        enterUf2Dfu();
+        // Use SoftDevice API for GPREGRET when SoftDevice is enabled.
+        // Direct NRF_POWER->GPREGRET writes are unreliable when SoftDevice
+        // owns the POWER peripheral (register gets cleared during reset).
+        {
+            const uint8_t DFU_MAGIC_UF2 = 0x57;
+            uint8_t sd_en = 0;
+            sd_softdevice_is_enabled(&sd_en);
+            if (sd_en) {
+                sd_power_gpregret_clr(0, 0xFF);
+                sd_power_gpregret_set(0, DFU_MAGIC_UF2);
+            } else {
+                NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+            }
+        }
+        NVIC_SystemReset();
 #else
         Serial.println(F("UF2 bootloader not available on this platform"));
 #endif
