@@ -396,10 +396,9 @@ Train a CNN on desktop with labeled EDM onset data, distill to tiny student mode
 1. **Microphone sensitivity investigation** (Priority 3) — Transient F1 scores on real music are low (0.19-0.21 on techno-minimal-01 via multi-device test, Feb 25). Software pre-amplification (2x-4x gain on raw samples) is the simplest experiment.
 2. **FFT-512 bass-focused analysis** (Priority 7c) — Better kick detection to feed better data upstream. ~200 lines, ~5KB RAM.
 3. **Particle filter beat tracking** (Priority 6c) — Fundamentally different approach that handles multi-modal tempo distributions. ~100-150 lines, ~2KB RAM.
-4. **Post-spectral Bayesian re-calibration** — Compressor and whitening modify spectral magnitudes upstream of BandFlux and all Bayesian observations. Re-sweep bayesacf/bayesft/bayesioi/cbssthresh with spectral processing active to validate current defaults.
-
 ### Completed
-- ~~**ACF inverse-lag normalization**~~ — ✅ Added `acf[i] /= lag` (BTrack-style sub-harmonic penalty) after periodicity strength, before Bayesian fusion. Bayesian re-tuning with spectral processing active found bayesft=2.0 and bayesioi=2.0 optimal (SETTINGS_VERSION 24).
+- ~~**Post-spectral Bayesian re-calibration**~~ — ✅ 4-device sweep + combined validation with spectral processing active (Feb 26). FT and IOI re-enabled at 2.0 (spectral whitening/compression fixed their normalization issues). cbssthresh=1.0 confirmed essential. Avg Beat F1 +49% vs control. Applied as SETTINGS_VERSION 24.
+- ~~**ACF inverse-lag normalization**~~ — ✅ Added `acf[i] /= lag` (BTrack-style sub-harmonic penalty) after periodicity strength, before Bayesian fusion.
 - ~~**Combined defaults validation**~~ — ✅ 4-device sweep of bayesacf (0, 0.3, 0.7, 1.0) with v21 base params (Feb 25). Found bayesacf=0 causes half-time lock; 0.3 optimal (F1 0.519). Independent sweep results were misleading — interaction between bayesacf=0 and cbssthresh=1.0 caused regression. Updated to SETTINGS_VERSION 22.
 - ~~**Bayesian weight sweep + firmware defaults**~~ — ✅ Swept all 6 Bayesian params via multi-device parallel sweep (Feb 25). Root cause analysis via BTrack/madmom/librosa comparison identified sub-harmonic bias (ACF), mean-norm (FT), and unnormalized counts (IOI).
 - ~~**Multi-device testing infrastructure**~~ — ✅ 4-device parallel capture with ffplay audio, variation + sweep commands (Feb 25). Inter-device F1 spread 0.014.

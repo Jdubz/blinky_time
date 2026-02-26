@@ -607,9 +607,9 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     mode: 'bayesian',
     min: 0.0,
     max: 2.0,
-    default: 0.0,
+    default: 2.0,
     sweepValues: [0.0, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0],
-    description: 'Fourier tempogram observation weight in Bayesian fusion (disabled: mean-norm destroys discriminability)',
+    description: 'Fourier tempogram observation weight in Bayesian fusion (re-enabled by spectral processing v24)',
     optimizeFor: 'f1',
   },
 
@@ -631,9 +631,9 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     mode: 'bayesian',
     min: 0.0,
     max: 2.0,
-    default: 0.0,
+    default: 2.0,
     sweepValues: [0.0, 0.2, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0],
-    description: 'IOI histogram observation weight in Bayesian fusion (disabled: unnormalized counts)',
+    description: 'IOI histogram observation weight in Bayesian fusion (re-enabled by spectral processing v24)',
     optimizeFor: 'f1',
   },
 

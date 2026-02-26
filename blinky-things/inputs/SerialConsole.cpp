@@ -1045,9 +1045,9 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->bayesPriorCenter = 128.0f;
         audioCtrl_->bayesPriorWeight = 0.0f;
         audioCtrl_->bayesAcfWeight = 0.3f;
-        audioCtrl_->bayesFtWeight = 0.0f;
+        audioCtrl_->bayesFtWeight = 2.0f;
         audioCtrl_->bayesCombWeight = 0.7f;
-        audioCtrl_->bayesIoiWeight = 0.0f;
+        audioCtrl_->bayesIoiWeight = 2.0f;
         audioCtrl_->cbssThresholdFactor = 1.0f;
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;

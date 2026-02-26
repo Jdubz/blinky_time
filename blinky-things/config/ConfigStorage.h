@@ -314,8 +314,8 @@ public:
         "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 32 floats + 1 uint8 + 5 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    static_assert(sizeof(ConfigData) <= 640,
-        "ConfigData too large! May not fit in flash sector. Review struct padding. (Limit: 640 bytes)");
+    static_assert(sizeof(ConfigData) <= 4096,
+        "ConfigData too large for flash page! nRF52840 uses 4KB pages, struct must fit in one page.");
 
     ConfigStorage();
     void begin();
