@@ -40,7 +40,7 @@ public:
     // Version 19: Added bayesPriorWeight (ongoing static prior strength)
     // Version 20: Added cbssThresholdFactor (CBSS adaptive threshold)
     // Version 21: Bayesian weight tuning (ACF/FT/IOI disabled, cbssThresh 0.4→1.0, lambda 0.1→0.15)
-    // Version 22: (intermediate)
+    // Version 22: Combined Bayesian validation (bayesacf=0.3, cbssthresh=1.0 — 4-device validated defaults)
     // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)
     static const uint8_t SETTINGS_VERSION = 23;  // Settings schema (fire, water, lightning, mic, music params)
 

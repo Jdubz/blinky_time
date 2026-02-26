@@ -1360,9 +1360,9 @@ Scoring uses `scoreBeatEvents()` (not transient scoring): ground truth beat posi
 #### bayesacf (Autocorrelation observation weight)
 - **Range Tested:** 0, 0.3, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0
 - **Previous Default:** 1.0
-- **Optimal Value:** 0 (disabled)
-- **Best F1:** 0.265
-- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+- **Independent Sweep Optimal:** 0 (disabled), F1 0.265
+- **Final Validated Value:** 0.3 — independent sweep found 0 optimal, but combined 4-device validation showed bayesacf=0 causes half-time lock (F1 0.410). bayesacf=0.3 is optimal when combined with cbssthresh=1.0 (F1 0.519).
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 22
 
 #### bayesft (Fourier tempogram observation weight)
 - **Range Tested:** 0, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0

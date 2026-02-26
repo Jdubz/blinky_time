@@ -100,7 +100,7 @@ Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
 - `bandflux_decayratio` + `bandflux_decayframes` — post-onset decay gate (0.0=disabled)
 - `bandflux_crestgate` — spectral crest factor gate (0.0=disabled)
 
-### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — Validated (SETTINGS_VERSION 22)
+### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — Validated (SETTINGS_VERSION 22, spectral in 23)
 
 BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. Tempo estimated via unified posterior over 20 bins (60-180 BPM). Comb filter bank is primary observation; ACF contributes at low weight (0.3) to prevent sub-harmonic lock. FT and IOI disabled (weight=0). CBSS adaptive threshold (1.0) prevents phantom beats.
 

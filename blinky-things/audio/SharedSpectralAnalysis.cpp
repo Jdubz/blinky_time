@@ -146,7 +146,7 @@ void SharedSpectralAnalysis::process() {
     // Apply whitening to mel bands
     whitenMelBands();
 
-    // Per-bin spectral whitening on raw magnitudes (after mel bands computed)
+    // Per-bin spectral whitening on compressed magnitudes (after mel bands computed)
     // All consumers via getMagnitudes() get whitened data automatically
     whitenMagnitudes();
 
@@ -310,10 +310,13 @@ void SharedSpectralAnalysis::applyCompressor() {
     } else if (diff >= halfKnee) {
         // Above knee: full ratio compression
         gainDb = (1.0f - 1.0f / compRatio) * (compThresholdDb - rmsDb);
-    } else {
+    } else if (compKneeDb > 0.0f) {
         // Within knee: quadratic interpolation
         float x = diff + halfKnee;
         gainDb = (1.0f / compRatio - 1.0f) * x * x / (2.0f * compKneeDb);
+    } else {
+        // Zero knee width: hard knee (above threshold)
+        gainDb = (1.0f - 1.0f / compRatio) * (compThresholdDb - rmsDb);
     }
 
     // Add makeup gain
