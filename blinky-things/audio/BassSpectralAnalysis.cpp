@@ -1,0 +1,184 @@
+#include "BassSpectralAnalysis.h"
+#include <string.h>
+
+BassSpectralAnalysis::BassSpectralAnalysis()
+    : sampleBuffer_{}
+    , writeIndex_(0)
+    , totalSamplesWritten_(0)
+    , newSampleCount_(0)
+    , magnitudes_{}
+    , prevMagnitudes_{}
+    , binRunningMax_{}
+    , smoothedGainDb_(0.0f)
+    , frameReady_(false)
+    , hasPrevFrame_(false)
+{
+}
+
+void BassSpectralAnalysis::begin() {
+    reset();
+}
+
+void BassSpectralAnalysis::reset() {
+    writeIndex_ = 0;
+    totalSamplesWritten_ = 0;
+    newSampleCount_ = 0;
+    frameReady_ = false;
+    hasPrevFrame_ = false;
+    smoothedGainDb_ = 0.0f;
+
+    memset(sampleBuffer_, 0, sizeof(sampleBuffer_));
+    memset(magnitudes_, 0, sizeof(magnitudes_));
+    memset(prevMagnitudes_, 0, sizeof(prevMagnitudes_));
+    memset(binRunningMax_, 0, sizeof(binRunningMax_));
+}
+
+bool BassSpectralAnalysis::addSamples(const int16_t* samples, int count) {
+    if (!enabled) return false;
+
+    for (int i = 0; i < count; i++) {
+        sampleBuffer_[writeIndex_] = samples[i];
+        writeIndex_ = (writeIndex_ + 1) % BassConstants::WINDOW_SIZE;
+        newSampleCount_++;
+        if (totalSamplesWritten_ < BassConstants::WINDOW_SIZE) {
+            totalSamplesWritten_++;
+        }
+    }
+
+    return newSampleCount_ >= BassConstants::HOP_SIZE;
+}
+
+void BassSpectralAnalysis::process() {
+    if (!enabled) return;
+    if (newSampleCount_ < BassConstants::HOP_SIZE) return;
+
+    // Need at least a full window of samples before first valid frame
+    if (totalSamplesWritten_ < BassConstants::WINDOW_SIZE) {
+        newSampleCount_ = 0;
+        return;
+    }
+
+    // Save previous magnitudes before overwriting
+    savePreviousFrame();
+
+    // Step 1: Extract 512 samples from ring buffer into windowed float buffer (stack)
+    // Read oldest-first: writeIndex_ points to the oldest sample in the ring
+    float windowed[BassConstants::WINDOW_SIZE];
+    const float alpha = 0.54f;
+    const float beta = 0.46f;
+    const float twoPiOverN = 2.0f * 3.14159265f / (BassConstants::WINDOW_SIZE - 1);
+
+    for (int i = 0; i < BassConstants::WINDOW_SIZE; i++) {
+        int idx = (writeIndex_ + i) % BassConstants::WINDOW_SIZE;
+        float sample = sampleBuffer_[idx] / 32768.0f;
+        float window = alpha - beta * cosf(twoPiOverN * i);
+        windowed[i] = sample * window;
+    }
+
+    // Step 2: Goertzel for bins 1-12
+    for (int b = 0; b < BassConstants::NUM_BASS_BINS; b++) {
+        int k = b + BassConstants::FIRST_BIN;  // DFT bin index (1-12)
+        float mag = goertzelMagnitude(windowed, BassConstants::WINDOW_SIZE, k);
+        magnitudes_[b] = safeIsFinite(mag) ? mag : 0.0f;
+    }
+
+    // Step 3: Compressor
+    applyCompressor();
+
+    // Step 4: Whitening
+    whitenMagnitudes();
+
+    // Mark frame ready
+    frameReady_ = true;
+    hasPrevFrame_ = true;
+
+    // Reset hop counter for next frame
+    newSampleCount_ = 0;
+}
+
+float BassSpectralAnalysis::goertzelMagnitude(const float* windowedSamples, int N, int k) {
+    // Goertzel algorithm: computes |DFT[k]| for a single bin
+    // Equivalent to extracting bin k from a full N-point FFT
+    float coeff = 2.0f * cosf(2.0f * 3.14159265f * k / N);
+    float s1 = 0.0f, s2 = 0.0f;
+
+    for (int i = 0; i < N; i++) {
+        float s0 = windowedSamples[i] + coeff * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+
+    // |X[k]|^2 = s1^2 + s2^2 - coeff*s1*s2
+    float magSq = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+    return sqrtf(magSq > 0.0f ? magSq : 0.0f);
+}
+
+void BassSpectralAnalysis::savePreviousFrame() {
+    for (int i = 0; i < BassConstants::NUM_BASS_BINS; i++) {
+        prevMagnitudes_[i] = magnitudes_[i];
+    }
+}
+
+void BassSpectralAnalysis::applyCompressor() {
+    if (!compressorEnabled) {
+        smoothedGainDb_ *= 0.9f;
+        return;
+    }
+
+    // Compute RMS over bass bins
+    float sumSq = 0.0f;
+    for (int i = 0; i < BassConstants::NUM_BASS_BINS; i++) {
+        sumSq += magnitudes_[i] * magnitudes_[i];
+    }
+    float rms = sqrtf(sumSq / BassConstants::NUM_BASS_BINS);
+
+    const float floorLin = 1e-10f;
+    if (rms < floorLin) rms = floorLin;
+    float rmsDb = 20.0f * log10f(rms);
+
+    // Soft-knee gain computation (same as SharedSpectralAnalysis)
+    float gainDb = 0.0f;
+    float halfKnee = compKneeDb * 0.5f;
+    float diff = rmsDb - compThresholdDb;
+
+    if (diff <= -halfKnee) {
+        gainDb = 0.0f;
+    } else if (diff >= halfKnee) {
+        gainDb = (1.0f - 1.0f / compRatio) * (compThresholdDb - rmsDb);
+    } else {
+        float x = diff + halfKnee;
+        gainDb = (1.0f / compRatio - 1.0f) * x * x / (2.0f * compKneeDb);
+    }
+
+    gainDb += compMakeupDb;
+
+    // Asymmetric EMA smoothing
+    // Frame period = HOP_SIZE / SAMPLE_RATE = 256/16000 = 16ms
+    static constexpr float framePeriod = (float)BassConstants::HOP_SIZE / BassConstants::SAMPLE_RATE;
+    float attackAlpha = (compAttackTau > 0.0f) ? (1.0f - expf(-framePeriod / compAttackTau)) : 1.0f;
+    float releaseAlpha = (compReleaseTau > 0.0f) ? (1.0f - expf(-framePeriod / compReleaseTau)) : 1.0f;
+
+    float alpha = (gainDb < smoothedGainDb_) ? attackAlpha : releaseAlpha;
+    smoothedGainDb_ += alpha * (gainDb - smoothedGainDb_);
+
+    float linearGain = powf(10.0f, smoothedGainDb_ / 20.0f);
+    if (!safeIsFinite(linearGain)) linearGain = 1.0f;
+
+    for (int i = 0; i < BassConstants::NUM_BASS_BINS; i++) {
+        magnitudes_[i] *= linearGain;
+    }
+}
+
+void BassSpectralAnalysis::whitenMagnitudes() {
+    if (!whitenEnabled) return;
+
+    for (int i = 0; i < BassConstants::NUM_BASS_BINS; i++) {
+        float current = magnitudes_[i];
+
+        float decayedMax = binRunningMax_[i] * whitenDecay;
+        binRunningMax_[i] = (current > decayedMax) ? current : decayedMax;
+
+        float maxVal = (binRunningMax_[i] > whitenFloor) ? binRunningMax_[i] : whitenFloor;
+        magnitudes_[i] = current / maxVal;
+    }
+}

@@ -58,6 +58,7 @@
 
 // Audio processing implementations
 #include "audio/SharedSpectralAnalysis.cpp"
+#include "audio/BassSpectralAnalysis.cpp"
 #include "audio/EnsembleFusion.cpp"
 #include "audio/EnsembleDetector.cpp"
 #include "audio/detectors/DrummerDetector.cpp"

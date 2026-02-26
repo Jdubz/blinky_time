@@ -28,9 +28,17 @@ export class DeviceManager {
     }
 
     const session = new DeviceSession(port);
-    const deviceInfo = await session.connect();
-    this.sessions.set(port, session);
-    return { session, deviceInfo };
+    try {
+      const deviceInfo = await session.connect();
+      this.sessions.set(port, session);
+      return { session, deviceInfo };
+    } catch (err) {
+      // Clean up the session's serial port to prevent file descriptor leak.
+      // Without this, a timed-out connect leaves an orphaned DeviceSession
+      // with an open port that can never be reached by disconnect().
+      await session.disconnect().catch(() => {});
+      throw err;
+    }
   }
 
   /** Disconnect a specific device and remove its session */

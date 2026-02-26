@@ -134,6 +134,11 @@ struct AudioFrame {
     int numMelBands;          // Number of mel bands (26)
     bool spectralValid;       // True if spectral data is valid this frame
 
+    // High-resolution bass data (from BassSpectralAnalysis, Goertzel 512-sample window)
+    const float* bassMagnitudes;  // 12 bins at 31.25 Hz/bin (nullptr if disabled)
+    int numBassBins;              // 12 when available, 0 when disabled
+    bool bassSpectralValid;       // True when high-res bass data is valid
+
     AudioFrame()
         : level(0.0f)
         , rawLevel(0.0f)
@@ -144,6 +149,9 @@ struct AudioFrame {
         , numBins(0)
         , numMelBands(0)
         , spectralValid(false)
+        , bassMagnitudes(nullptr)
+        , numBassBins(0)
+        , bassSpectralValid(false)
     {}
 };
 

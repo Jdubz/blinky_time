@@ -75,12 +75,16 @@ public:
     void setDiffFrames(int f) { if (f >= 1 && f <= MAX_HISTORY_FRAMES) diffFrames_ = f; }
     int getDiffFrames() const { return diffFrames_; }
 
+    void setHiResBass(bool e);
+    bool getHiResBass() const { return hiResBassEnabled_; }
+
     // Debug access
     float getBassFlux() const { return bassFlux_; }
     float getMidFlux() const { return midFlux_; }
     float getHighFlux() const { return highFlux_; }
     float getCombinedFlux() const { return combinedFlux_; }
     float getAverageFlux() const { return averageFlux_; }
+    float getHiResBassFlux() const { return hiResBassFlux_; }
 
 protected:
     void resetImpl() override;
@@ -140,6 +144,13 @@ private:
     float averageBassFlux_;
     float averageMidFlux_;
 
+    // Hi-res bass (Goertzel 512-sample, 12 bins at 31.25 Hz/bin)
+    static constexpr int MAX_BASS_BINS = 12;
+    float historyBassLogMag_[MAX_HISTORY_FRAMES][MAX_BASS_BINS];
+    int bassHistoryCount_;
+    float hiResBassFlux_;
+    bool hiResBassEnabled_;  // Runtime toggle (default false)
+
     // Fast log(1+x) approximation for small x
     // ~8% error at boundary (x=0.5: returns 0.375, true value 0.405).
     // With gamma=20, crossover is at mag=0.025 (very quiet), so rarely matters.
@@ -161,4 +172,9 @@ private:
 
     // Compute confidence based on flux ratio
     float computeConfidence(float flux, float mean) const;
+
+    // Hi-res bass helpers
+    void computeHiResBassFlux(const float* bassLogMag, int numBins);
+    void updateBassPrevFrameState(const float* bassLogMag, int numBins);
+    const float* getBassReferenceFrame() const;
 };

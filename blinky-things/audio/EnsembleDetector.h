@@ -3,6 +3,7 @@
 #include "DetectionResult.h"
 #include "IDetector.h"
 #include "SharedSpectralAnalysis.h"
+#include "BassSpectralAnalysis.h"
 #include "EnsembleFusion.h"
 #include "detectors/DrummerDetector.h"
 #include "detectors/SpectralFluxDetector.h"
@@ -80,6 +81,10 @@ public:
     SharedSpectralAnalysis& getSpectral() { return spectral_; }
     const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
 
+    // --- Accessor for bass spectral analysis ---
+    BassSpectralAnalysis& getBassSpectral() { return bassSpectral_; }
+    const BassSpectralAnalysis& getBassSpectral() const { return bassSpectral_; }
+
     // --- Accessor for individual detectors ---
     IDetector* getDetector(DetectorType type);
     const IDetector* getDetector(DetectorType type) const;
@@ -110,6 +115,9 @@ public:
 private:
     // Shared spectral analysis (runs FFT once per frame)
     SharedSpectralAnalysis spectral_;
+
+    // High-resolution bass analysis (Goertzel 512-sample, 12 bins)
+    BassSpectralAnalysis bassSpectral_;
 
     // Individual detectors
     DrummerDetector drummer_;

@@ -83,6 +83,15 @@ export class BlinkySerial extends EventEmitter {
           this.emit('connected', deviceInfo);
           resolve(deviceInfo);
         } catch (err) {
+          // Close the port to release the OS file descriptor on failed connect.
+          // Without this, the port stays locked by the node process even though
+          // the session is never registered in DeviceManager.
+          if (this.port && this.port.isOpen) {
+            this.port.close(() => {});
+          }
+          this.port = null;
+          this.parser = null;
+          this.portPath = null;
           reject(err);
         }
       });

@@ -2385,6 +2385,27 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
 
+    // bandflux_hiresbass: Hi-res bass via Goertzel 512-sample window (0=off, 1=on)
+    if (strncmp(cmd, "set bandflux_hiresbass ", 23) == 0) {
+        if (!audioCtrl_) return true;
+        int value = atoi(cmd + 23);
+        audioCtrl_->getEnsemble().getBandFlux().setHiResBass(value != 0);
+        BassSpectralAnalysis& bass = audioCtrl_->getEnsemble().getBassSpectral();
+        if (value != 0 && !bass.enabled) {
+            bass.reset();  // Clear stale ring buffer and whitening state
+        }
+        bass.enabled = (value != 0);
+        Serial.print(F("OK bandflux_hiresbass="));
+        Serial.println(value != 0 ? "on" : "off");
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_hiresbass") == 0 || strcmp(cmd, "bandflux_hiresbass") == 0) {
+        if (!audioCtrl_) return true;
+        Serial.print(F("bandflux_hiresbass="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getHiResBass() ? "on" : "off");
+        return true;
+    }
+
     // ComplexDomain: minbin, maxbin
     if (strncmp(cmd, "set complex_minbin ", 19) == 0) {
         if (!audioCtrl_) return true;
