@@ -256,7 +256,7 @@ npm run tuner -- validate --port COM5 --gain 40
 | `compthreshold` | -30 | -60-0 | Compressor threshold (dB) |
 | `compratio` | 3.0 | 1.0-20.0 | Compression ratio (e.g., 3:1) |
 | `compknee` | 15.0 | 0.0-30.0 | Soft knee width (dB) |
-| `compmakeup` | 6.0 | 0.0-20.0 | Makeup gain (dB) |
+| `compmakeup` | 6.0 | -10.0-30.0 | Makeup gain (dB) |
 | `compattack` | 0.001 | 0.0-0.1 | Attack time constant (seconds) |
 | `comprelease` | 2.0 | 0.1-10.0 | Release time constant (seconds) |
 

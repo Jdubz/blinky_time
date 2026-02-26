@@ -312,7 +312,14 @@ def trigger_bootloader(port, verbose=False):
             if verbose:
                 print(f"  Serial error: {e}")
 
-        # On first attempt only, also try 1200-baud touch as fallback
+        # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
+        # touch forces a full USB disconnect/reconnect cycle. If it fails on
+        # attempt 1, the port may have re-enumerated to a different address
+        # (e.g., /dev/ttyACM0 → /dev/ttyACM1), making the original port path
+        # stale. Retrying the serial 'bootloader' command is safer since it
+        # only triggers a soft reboot and the device re-enumerates to the same
+        # port. If the serial command also fails, the caller should re-discover
+        # ports rather than blindly retrying on a potentially stale path.
         if attempt == 1:
             pre_existing_blocks = _get_usb_block_devices()
             print(f"  Trying 1200 baud touch on {port}...")
@@ -481,10 +488,14 @@ def cleanup_stale_mounts():
 
     print(f"  Cleaning {len(stale)} stale UF2 mount(s)...")
     for mp in stale:
-        subprocess.run(
-            ["sudo", "umount", "-l", mp],
-            capture_output=True, timeout=10,
-        )
+        try:
+            subprocess.run(
+                ["sudo", "umount", "-l", mp],
+                capture_output=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"  Warning: umount timed out for {mp}, skipping")
+            continue
         # Remove empty directory
         mp_path = Path(mp)
         try:
@@ -493,7 +504,7 @@ def cleanup_stale_mounts():
                     ["sudo", "rmdir", mp],
                     capture_output=True, timeout=5,
                 )
-        except (OSError, PermissionError):
+        except (OSError, PermissionError, subprocess.TimeoutExpired):
             pass
     print(f"  Stale mounts cleaned")
 
@@ -1130,7 +1141,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     break
                 else:
                     print(f"    No UF2 drive appeared (attempt {attempt})")
-                    # On first attempt, also try 1200-baud touch
+                    # 1200-baud touch first-attempt only (see single-device path comment)
                     if attempt == 1:
                         pre_blocks = _get_usb_block_devices()
                         print(f"    Trying 1200 baud touch...")

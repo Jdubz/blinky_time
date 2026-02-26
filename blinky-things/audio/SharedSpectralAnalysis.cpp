@@ -392,7 +392,11 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
 }
 
 void SharedSpectralAnalysis::savePreviousFrame() {
-    // Copy current magnitudes and mel bands to previous buffers
+    // Called at the TOP of process(), before new FFT overwrites magnitudes_.
+    // At this point magnitudes_ still holds the PREVIOUS frame's final state
+    // (compressed + whitened), so prevMagnitudes_ gets the same processing
+    // state as the upcoming frame's magnitudes_ will have after whitenMagnitudes().
+    // This keeps spectral flux computations consistent (both frames whitened).
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         prevMagnitudes_[i] = magnitudes_[i];
     }
