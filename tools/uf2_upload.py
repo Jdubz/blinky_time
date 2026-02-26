@@ -1104,6 +1104,10 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     pass
 
                 # Wait for a new block device (this specific device)
+                # TODO: Assignment takes the lexicographically first new block device.
+                # If a slow device from a previous step appears late, it could be
+                # mis-assigned. The 2s stagger makes this unlikely. A robust fix would
+                # match by USB serial number via /sys/block/sdX/device/../../serial.
                 print(f"    Waiting for UF2 drive...")
                 deadline = time.monotonic() + 8
                 new_dev = None
@@ -1398,14 +1402,17 @@ def main():
 
     except FileNotFoundError as e:
         print(f"\nERROR: {e}")
+        cleanup_stale_mounts()
         return 2
     except TimeoutError as e:
         print_failure("TIMEOUT")
         print(f"  {e}")
+        cleanup_stale_mounts()
         return 3
     except RuntimeError as e:
         print_failure("ERROR")
         print(f"  {e}")
+        cleanup_stale_mounts()
         return 1
     except KeyboardInterrupt:
         print("\n\nUpload cancelled.")
