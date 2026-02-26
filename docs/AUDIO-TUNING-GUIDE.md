@@ -311,9 +311,11 @@ ensemble_minconf = 0.55  # Minimum confidence for output
 
 **Spectral pipeline:**
 - SharedSpectralAnalysis runs FFT-256 once per frame
-- Raw magnitudes → HFC, ComplexDomain (absolute energy metrics)
+- Soft-knee compressor → per-bin whitening → magnitudes (all detectors see whitened data)
 - Whitened mel bands → SpectralFlux, Novelty (change-based metrics)
-- Whitening: per-band running max, decay=0.97, floor=0.01
+- Whitening: per-bin running max, decay=0.997, floor=0.001
+
+**Re-enabling disabled detectors:** Per-bin magnitude whitening (v23+) modifies `magnitudes_[]` in-place. Detectors that rely on absolute energy levels (HFC, ComplexDomain) will need threshold retuning if re-enabled, since their thresholds were calibrated against un-whitened magnitudes.
 
 ### Comprehensive Solo Detector Testing (16 patterns each, Jan 2026)
 

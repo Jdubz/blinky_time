@@ -312,15 +312,12 @@ void SharedSpectralAnalysis::applyCompressor() {
         // Below knee: no compression
         gainDb = 0.0f;
     } else if (diff >= halfKnee) {
-        // Above knee: full ratio compression
+        // Above knee: full ratio compression (also handles hard knee when compKneeDb == 0)
         gainDb = (1.0f - 1.0f / compRatio) * (compThresholdDb - rmsDb);
-    } else if (compKneeDb > 0.0f) {
-        // Within knee: quadratic interpolation
+    } else {
+        // Within soft knee: quadratic interpolation (only reachable when compKneeDb > 0)
         float x = diff + halfKnee;
         gainDb = (1.0f / compRatio - 1.0f) * x * x / (2.0f * compKneeDb);
-    } else {
-        // Zero knee width: hard knee (above threshold)
-        gainDb = (1.0f - 1.0f / compRatio) * (compThresholdDb - rmsDb);
     }
 
     // Add makeup gain
