@@ -340,9 +340,9 @@ public:
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
     float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
     float bayesAcfWeight = 0.3f;         // Autocorrelation observation weight (low weight prevents sub-harmonic lock)
-    float bayesFtWeight = 0.0f;          // Fourier tempogram observation weight (0=disabled; mean-norm destroys discriminability)
+    float bayesFtWeight = 2.0f;          // Fourier tempogram observation weight (re-enabled by spectral processing v24)
     float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
-    float bayesIoiWeight = 0.0f;         // IOI histogram observation weight (0=disabled; unnormalized counts dominate posterior)
+    float bayesIoiWeight = 2.0f;         // IOI histogram observation weight (re-enabled by spectral processing v24)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 

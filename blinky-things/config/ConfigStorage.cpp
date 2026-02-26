@@ -213,14 +213,15 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
     data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
 
-    // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via multi-device sweep)
+    // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via 4-device sweep)
+    // Post-spectral re-tuning (v24): whitening+compressor fixed FT and IOI signals
     data_.music.bayesLambda = 0.15f;         // Transition tightness
     data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
     data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
-    data_.music.bayesAcfWeight = 0.3f;       // Low ACF weight prevents sub-harmonic lock without overwhelming comb filter (validated Feb 25 multi-device sweep)
-    data_.music.bayesFtWeight = 0.0f;        // FT disabled: mean normalization destroys discriminability
+    data_.music.bayesAcfWeight = 0.3f;       // Low ACF weight prevents sub-harmonic lock (validated Feb 25)
+    data_.music.bayesFtWeight = 2.0f;        // Fourier tempogram — re-enabled by spectral processing (v24, +49% Beat F1)
     data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
-    data_.music.bayesIoiWeight = 0.0f;       // IOI disabled: unnormalized counts dominate posterior
+    data_.music.bayesIoiWeight = 2.0f;       // IOI histogram — re-enabled by spectral processing (v24, +49% Beat F1)
 
     data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
     data_.music.ioiEnabled = true;           // IOI histogram observation

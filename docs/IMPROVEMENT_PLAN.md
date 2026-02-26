@@ -6,11 +6,12 @@
 
 ### Completed (February 25, 2026)
 
-**Bayesian Weight Tuning (SETTINGS_VERSION 21):**
+**Bayesian Weight Tuning (SETTINGS_VERSION 21-22, refined in 24):**
 - Multi-device parallel sweep of all 6 Bayesian parameters using beat event scoring
 - Root cause analysis: ACF/FT/IOI observations have fundamental implementation issues (compared to BTrack, madmom, librosa)
-- Applied new defaults: ACF/FT/IOI=0 (disabled), comb=0.7, lambda=0.15, cbssthresh=1.0
-- Best F1 0.590 (up from 0.421 at v20 defaults, 0.209 at cbssthresh=0.4)
+- v21: ACF/FT/IOI=0 (disabled), comb=0.7, lambda=0.15, cbssthresh=1.0 → F1 0.590
+- v22: Combined validation found bayesacf=0.3 needed to prevent half-time lock → F1 0.519
+- v24: Post-spectral re-tuning re-enabled FT=2.0 and IOI=2.0 (spectral processing fixes normalization issues)
 
 **Multi-Device Testing Infrastructure:**
 - 3 devices (Long Tube) connected simultaneously via `/dev/ttyACM0,1,2`
@@ -100,9 +101,9 @@ Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
 - `bandflux_decayratio` + `bandflux_decayframes` — post-onset decay gate (0.0=disabled)
 - `bandflux_crestgate` — spectral crest factor gate (0.0=disabled)
 
-### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — Validated (SETTINGS_VERSION 22, spectral in 23)
+### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — Validated (SETTINGS_VERSION 24)
 
-BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. Tempo estimated via unified posterior over 20 bins (60-180 BPM). Comb filter bank is primary observation; ACF contributes at low weight (0.3) to prevent sub-harmonic lock. FT and IOI disabled (weight=0). CBSS adaptive threshold (1.0) prevents phantom beats.
+BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. Tempo estimated via unified posterior over 20 bins (60-180 BPM). Comb filter bank is primary observation; ACF contributes at low weight (0.3) to prevent sub-harmonic lock. FT and IOI re-enabled at weight 2.0 after spectral processing (v24). CBSS adaptive threshold (1.0) prevents phantom beats.
 
 **Pre-Bayesian baseline (sequential override chain, Feb 21):** avg Beat F1 **0.472** on 9 tracks.
 **Bayesian v20 (all observations on, cbssthresh=0.4, Feb 24):** avg Beat F1 **0.421**.
@@ -111,7 +112,7 @@ BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. T
 
 **Why v21 independent sweep was misleading:** Each parameter was swept independently against device-saved defaults (which had bayesacf=1). The cbssthresh=1.0 result (F1 0.590) was achieved WITH ACF at weight 1.0, not 0. When all v21 changes were applied together (ACF=0), half-time lock occurred on most tracks (avg F1 0.410). A 4-device bayesacf sweep with v21 base params found 0.3 optimal.
 
-**Bayesian tunable parameters (9 total, SETTINGS_VERSION 22 defaults):**
+**Bayesian tunable parameters (9 total, SETTINGS_VERSION 24 defaults):**
 
 | Param | Serial cmd | Default | Controls |
 |-------|-----------|---------|----------|
@@ -120,9 +121,9 @@ BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. T
 | Prior width | `priorwidth` | 50 | Static prior Gaussian sigma |
 | Prior weight | `bayespriorw` | 0.0 | Ongoing static prior strength (off by default) |
 | ACF weight | `bayesacf` | **0.3** | Autocorrelation observation (low weight prevents sub-harmonic lock) |
-| FT weight | `bayesft` | **0** | Fourier tempogram observation (disabled — mean-norm kills discriminability) |
+| FT weight | `bayesft` | **2.0** | Fourier tempogram observation (re-enabled by spectral processing, v24) |
 | Comb weight | `bayescomb` | 0.7 | Comb filter bank observation weight |
-| IOI weight | `bayesioi` | **0** | IOI histogram observation (disabled — unnormalized counts dominate posterior) |
+| IOI weight | `bayesioi` | **2.0** | IOI histogram observation (re-enabled by spectral processing, v24) |
 | CBSS threshold | `cbssthresh` | **1.0** | Adaptive beat threshold (CBSS > factor * mean, 0=off) |
 
 **4-device validation results (Feb 25, bayesacf sweep with v21 base params):**
@@ -382,7 +383,7 @@ Train a CNN on desktop with labeled EDM onset data, distill to tiny student mode
 
 | Feature | Parameters | Status |
 |---------|:----------:|--------|
-| **Bayesian weights** | bayesacf=0.3, bayesft=0, bayescomb=0.7, bayesioi=0, bayeslambda=0.15, bayespriorw=0 | **Validated** (SETTINGS_VERSION 22) — comb+low ACF, FT/IOI disabled |
+| **Bayesian weights** | bayesacf=0.3, bayesft=2.0, bayescomb=0.7, bayesioi=2.0, bayeslambda=0.15, bayespriorw=0 | **Validated** (SETTINGS_VERSION 24) — comb+low ACF, FT/IOI re-enabled by spectral processing |
 | **CBSS adaptive threshold** | cbssthresh=1.0 | **Validated** (SETTINGS_VERSION 22) — prevents phantom beats |
 | ODF Mean Subtraction | odfmeansub (toggle) | **Essential** — keep ON. OFF destroys BPM (Feb 24) |
 | Per-band thresholds | bandflux_perbandthresh, perbandmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
@@ -395,9 +396,10 @@ Train a CNN on desktop with labeled EDM onset data, distill to tiny student mode
 1. **Microphone sensitivity investigation** (Priority 3) — Transient F1 scores on real music are low (0.19-0.21 on techno-minimal-01 via multi-device test, Feb 25). Software pre-amplification (2x-4x gain on raw samples) is the simplest experiment.
 2. **FFT-512 bass-focused analysis** (Priority 7c) — Better kick detection to feed better data upstream. ~200 lines, ~5KB RAM.
 3. **Particle filter beat tracking** (Priority 6c) — Fundamentally different approach that handles multi-modal tempo distributions. ~100-150 lines, ~2KB RAM.
-4. **ACF inverse-lag normalization** — Add `acf[i] /= lag` and L-inf normalization, then re-sweep bayesacf. May allow higher ACF weight for better sub-harmonic disambiguation.
+4. **Post-spectral Bayesian re-calibration** — Compressor and whitening modify spectral magnitudes upstream of BandFlux and all Bayesian observations. Re-sweep bayesacf/bayesft/bayesioi/cbssthresh with spectral processing active to validate current defaults.
 
 ### Completed
+- ~~**ACF inverse-lag normalization**~~ — ✅ Added `acf[i] /= lag` (BTrack-style sub-harmonic penalty) after periodicity strength, before Bayesian fusion. Bayesian re-tuning with spectral processing active found bayesft=2.0 and bayesioi=2.0 optimal (SETTINGS_VERSION 24).
 - ~~**Combined defaults validation**~~ — ✅ 4-device sweep of bayesacf (0, 0.3, 0.7, 1.0) with v21 base params (Feb 25). Found bayesacf=0 causes half-time lock; 0.3 optimal (F1 0.519). Independent sweep results were misleading — interaction between bayesacf=0 and cbssthresh=1.0 caused regression. Updated to SETTINGS_VERSION 22.
 - ~~**Bayesian weight sweep + firmware defaults**~~ — ✅ Swept all 6 Bayesian params via multi-device parallel sweep (Feb 25). Root cause analysis via BTrack/madmom/librosa comparison identified sub-harmonic bias (ACF), mean-norm (FT), and unnormalized counts (IOI).
 - ~~**Multi-device testing infrastructure**~~ — ✅ 4-device parallel capture with ffplay audio, variation + sweep commands (Feb 25). Inter-device F1 spread 0.014.
@@ -414,7 +416,7 @@ Train a CNN on desktop with labeled EDM onset data, distill to tiny student mode
 
 ## Bayesian Tempo Fusion — IMPLEMENTED + TUNED (Feb 23-25, 2026)
 
-**Status:** Implemented in SETTINGS_VERSION 18-21. Sequential override chain replaced with Bayesian posterior estimation. Weights tuned via multi-device sweep (Feb 25): ACF/FT/IOI disabled, comb-only, cbssthresh=1.0.
+**Status:** Implemented in SETTINGS_VERSION 18-24. Sequential override chain replaced with Bayesian posterior estimation. Weights tuned via multi-device sweep (Feb 25): comb primary, ACF low (0.3), FT/IOI re-enabled at 2.0 after spectral processing (v24), cbssthresh=1.0.
 
 **Architecture summary (v21 — comb-only):**
 ```

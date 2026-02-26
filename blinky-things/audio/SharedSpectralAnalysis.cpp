@@ -341,6 +341,9 @@ void SharedSpectralAnalysis::applyCompressor() {
 }
 
 void SharedSpectralAnalysis::whitenMagnitudes() {
+    // NOTE: Whitening modifies magnitudes_ in-place. Detectors requiring
+    // absolute energy levels (HFC, ComplexDomain) must retune thresholds
+    // if re-enabled after whitening is active.
     if (!whitenEnabled) return;
 
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
