@@ -332,7 +332,7 @@ void SharedSpectralAnalysis::applyCompressor() {
     // Asymmetric EMA smoothing (fast attack, slow release)
     // Frame period = FFT_SIZE / SAMPLE_RATE = 256/16000 = 16ms (~62.5 fps)
     // This is correct because hop size = FFT_SIZE (no overlap)
-    const float framePeriod = (float)SpectralConstants::FFT_SIZE / SpectralConstants::SAMPLE_RATE;
+    static constexpr float framePeriod = (float)SpectralConstants::FFT_SIZE / SpectralConstants::SAMPLE_RATE;
     float attackAlpha = (compAttackTau > 0.0f) ? (1.0f - expf(-framePeriod / compAttackTau)) : 1.0f;
     float releaseAlpha = (compReleaseTau > 0.0f) ? (1.0f - expf(-framePeriod / compReleaseTau)) : 1.0f;
 
