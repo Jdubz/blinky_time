@@ -483,13 +483,25 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         }
     }
 
-    // Compute periodicity strength (normalized correlation)
+    // Compute periodicity strength (normalized correlation) from raw ACF
     float avgEnergy = signalEnergy / static_cast<float>(ossCount_);
     float normCorrelation = maxCorrelation / (avgEnergy + 0.001f);
 
     // Smooth periodicity strength updates
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
+
+    // Apply inverse-lag normalization to ACF (BTrack-style sub-harmonic penalty).
+    // For a periodic signal, acf(2T) ≈ acf(T), so sub-harmonics score equally.
+    // Dividing by lag penalizes longer periods: acf(2T)/(2T) ≈ 0.5 * acf(T)/T,
+    // giving the true period a 2x advantage over its first sub-harmonic.
+    // This must happen AFTER periodicity strength (which uses raw ACF magnitude)
+    // but BEFORE Bayesian fusion and harmonic disambiguation (which need
+    // discriminative lag-weighted values).
+    for (int i = 0; i < correlationSize; i++) {
+        int lag = minLag + i;
+        correlationAtLag[i] /= static_cast<float>(lag);
+    }
 
     // === BAYESIAN TEMPO FUSION ===
     // Replaces sequential override chain (HPS → pulse train → harmonic disambiguation
@@ -644,6 +656,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     }
 
     // === 2. AUTOCORRELATION OBSERVATION ===
+    // correlationAtLag is inverse-lag weighted: acf(τ)/τ penalizes sub-harmonics.
+    // Energy normalization makes it amplitude-independent.
     float acfObs[TEMPO_BINS];
     for (int i = 0; i < TEMPO_BINS; i++) {
         int lag = tempoBinLags_[i];

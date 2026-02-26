@@ -10,14 +10,14 @@
 export type DetectorType = 'drummer' | 'spectral' | 'hfc' | 'bass' | 'complex' | 'mel';
 
 // Subsystem modes for rhythm tracking
-export type SubsystemMode = 'music' | 'rhythm';
+export type SubsystemMode = 'music' | 'rhythm' | 'bayesian';
 
 // Parameter modes (ensemble replaces old detection modes)
 export type ParameterMode = 'ensemble' | SubsystemMode;
 
 // All detector types
 export const DETECTOR_TYPES: DetectorType[] = ['drummer', 'spectral', 'hfc', 'bass', 'complex', 'mel'];
-export const SUBSYSTEM_MODES: SubsystemMode[] = ['music', 'rhythm'];
+export const SUBSYSTEM_MODES: SubsystemMode[] = ['music', 'rhythm', 'bayesian'];
 export const ALL_MODES: ParameterMode[] = ['ensemble', ...SUBSYSTEM_MODES];
 
 // Import pattern types for extensibility
@@ -582,6 +582,82 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     sweepValues: [0.02, 0.05, 0.1, 0.15, 0.2, 0.3],
     description: 'Minimum BPM change ratio to trigger tempo velocity update',
     targetPatterns: ['tempo-ramp', 'tempo-sudden'],
+    optimizeFor: 'f1',
+  },
+
+  // ===== BAYESIAN TEMPO FUSION PARAMETERS =====
+  // Observation weights for the 4-signal Bayesian posterior (SETTINGS_VERSION 18+)
+  // Higher weight = more influence on posterior. 0 = disabled.
+
+  bayesacf: {
+    name: 'bayesacf',
+    command: 'bayesacf',
+    mode: 'bayesian',
+    min: 0.0,
+    max: 5.0,
+    default: 0.3,
+    sweepValues: [0.0, 0.1, 0.2, 0.3, 0.5, 0.7, 1.0],
+    description: 'Autocorrelation observation weight in Bayesian fusion',
+    optimizeFor: 'f1',
+  },
+
+  bayesft: {
+    name: 'bayesft',
+    command: 'bayesft',
+    mode: 'bayesian',
+    min: 0.0,
+    max: 5.0,
+    default: 2.0,
+    sweepValues: [0.0, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0, 3.0],
+    description: 'Fourier tempogram observation weight in Bayesian fusion (re-enabled by spectral processing v24)',
+    optimizeFor: 'f1',
+  },
+
+  bayescomb: {
+    name: 'bayescomb',
+    command: 'bayescomb',
+    mode: 'bayesian',
+    min: 0.0,
+    max: 5.0,
+    default: 0.7,
+    sweepValues: [0.0, 0.3, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0, 3.0],
+    description: 'Comb filter bank observation weight in Bayesian fusion',
+    optimizeFor: 'f1',
+  },
+
+  bayesioi: {
+    name: 'bayesioi',
+    command: 'bayesioi',
+    mode: 'bayesian',
+    min: 0.0,
+    max: 5.0,
+    default: 2.0,
+    sweepValues: [0.0, 0.2, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0, 3.0],
+    description: 'IOI histogram observation weight in Bayesian fusion (re-enabled by spectral processing v24)',
+    optimizeFor: 'f1',
+  },
+
+  bayeslambda: {
+    name: 'bayeslambda',
+    command: 'bayeslambda',
+    mode: 'bayesian',
+    min: 0.01,
+    max: 1.0,
+    default: 0.15,
+    sweepValues: [0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5],
+    description: 'Gaussian transition tightness (lower = more rigid tempo)',
+    optimizeFor: 'f1',
+  },
+
+  cbssthresh: {
+    name: 'cbssthresh',
+    command: 'cbssthresh',
+    mode: 'bayesian',
+    min: 0.0,
+    max: 2.0,
+    default: 1.0,
+    sweepValues: [0.0, 0.3, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0],
+    description: 'CBSS adaptive threshold (beat fires only if CBSS > factor * mean)',
     optimizeFor: 'f1',
   },
 };

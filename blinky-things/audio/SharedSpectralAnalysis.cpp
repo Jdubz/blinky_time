@@ -55,6 +55,9 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , melBands_{}
     , prevMelBands_{}
     , melRunningMax_{}
+    , binRunningMax_{}
+    , smoothedGainDb_(0.0f)
+    , frameRmsDb_(-200.0f)
     , totalEnergy_(0.0f)
     , spectralCentroid_(0.0f)
     , frameReady_(false)
@@ -90,6 +93,11 @@ void SharedSpectralAnalysis::reset() {
         prevMelBands_[i] = 0.0f;
         melRunningMax_[i] = 0.0f;
     }
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        binRunningMax_[i] = 0.0f;
+    }
+    smoothedGainDb_ = 0.0f;
+    frameRmsDb_ = -200.0f;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -126,17 +134,29 @@ void SharedSpectralAnalysis::process() {
     // Extract magnitudes and phases from FFT output
     computeMagnitudesAndPhases();
 
-    // Compute derived features (energy, centroid) from raw magnitudes
+    // Frame-level soft-knee compression (normalizes gross signal level)
+    applyCompressor();
+
+    // Compute derived features (energy, centroid) from compressed magnitudes
+    // NOTE: totalEnergy_ and spectralCentroid_ reflect compressed-but-not-whitened
+    // magnitudes. getMagnitudes() returns whitened values after whitenMagnitudes() below.
     computeDerivedFeatures();
 
-    // Compute mel bands from raw magnitudes
+    // --- Pipeline ordering rationale ---
+    // Mel bands are computed BEFORE per-bin whitening, intentionally:
+    //   1. Mel bands use compressed-but-not-whitened magnitudes as input
+    //   2. Mel bands then get their own whitening (whitenMelBands)
+    //   3. Per-bin whitening runs last, modifying magnitudes_ in-place
+    //
+    // Why: Mel bands aggregate multiple FFT bins into perceptual bands.
+    // Whitening the 128 bins first, then computing mel bands from whitened values,
+    // would lose the relative energy information between bins within a band.
+    // Instead, each domain gets its own whitening tuned to its resolution:
+    //   - 26 mel bands: per-band running max (coarse, perceptual)
+    //   - 128 FFT bins: per-bin running max (fine, for BandFlux transient detection)
     computeMelBands();
-
-    // Apply whitening to mel bands (not raw magnitudes)
-    // HFC/ComplexDomain need raw magnitudes for absolute energy metrics.
-    // SpectralFlux/Novelty compute change-based metrics on mel bands
-    // and benefit from normalization against sustained spectral content.
     whitenMelBands();
+    whitenMagnitudes();
 
     // Mark frame as ready
     frameReady_ = true;
@@ -268,6 +288,85 @@ void SharedSpectralAnalysis::whitenMelBands() {
     }
 }
 
+void SharedSpectralAnalysis::applyCompressor() {
+    // Always compute frame RMS for debug monitoring
+    float sumSq = 0.0f;
+    for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {
+        sumSq += magnitudes_[i] * magnitudes_[i];
+    }
+    float rms = sqrtf(sumSq / (SpectralConstants::NUM_BINS - 1));
+
+    // Convert to dB (with floor to avoid log(0))
+    const float floorLin = 1e-10f;
+    if (rms < floorLin) rms = floorLin;
+    float rmsDb = 20.0f * log10f(rms);
+    frameRmsDb_ = rmsDb;  // Store for debug access
+
+    if (!compressorEnabled) {
+        // Fade smoothed gain toward 0 rather than hard-reset, so toggling
+        // mid-session doesn't cause an abrupt level jump
+        smoothedGainDb_ *= 0.9f;
+        return;
+    }
+
+    // Soft-knee gain computation (Giannoulis/Massberg/Reiss 2012)
+    float gainDb = 0.0f;
+    float halfKnee = compKneeDb * 0.5f;
+    float diff = rmsDb - compThresholdDb;
+
+    if (diff <= -halfKnee) {
+        // Below knee: no compression
+        gainDb = 0.0f;
+    } else if (diff >= halfKnee) {
+        // Above knee: full ratio compression (also handles hard knee when compKneeDb == 0)
+        gainDb = (1.0f - 1.0f / compRatio) * (compThresholdDb - rmsDb);
+    } else {
+        // Within soft knee: quadratic interpolation (only reachable when compKneeDb > 0)
+        float x = diff + halfKnee;
+        gainDb = (1.0f / compRatio - 1.0f) * x * x / (2.0f * compKneeDb);
+    }
+
+    // Add makeup gain
+    gainDb += compMakeupDb;
+
+    // Asymmetric EMA smoothing (fast attack, slow release)
+    // Frame period = FFT_SIZE / SAMPLE_RATE = 256/16000 = 16ms (~62.5 fps)
+    // This is correct because hop size = FFT_SIZE (no overlap)
+    static constexpr float framePeriod = (float)SpectralConstants::FFT_SIZE / SpectralConstants::SAMPLE_RATE;
+    float attackAlpha = (compAttackTau > 0.0f) ? (1.0f - expf(-framePeriod / compAttackTau)) : 1.0f;
+    float releaseAlpha = (compReleaseTau > 0.0f) ? (1.0f - expf(-framePeriod / compReleaseTau)) : 1.0f;
+
+    float alpha = (gainDb < smoothedGainDb_) ? attackAlpha : releaseAlpha;
+    smoothedGainDb_ += alpha * (gainDb - smoothedGainDb_);
+
+    // Apply linear gain to all magnitudes
+    float linearGain = powf(10.0f, smoothedGainDb_ / 20.0f);
+    if (!safeIsFinite(linearGain)) linearGain = 1.0f;
+
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        magnitudes_[i] *= linearGain;
+    }
+}
+
+void SharedSpectralAnalysis::whitenMagnitudes() {
+    // NOTE: Whitening modifies magnitudes_ in-place. Detectors requiring
+    // absolute energy levels (HFC, ComplexDomain) must retune thresholds
+    // if re-enabled after whitening is active.
+    if (!whitenEnabled) return;
+
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        float current = magnitudes_[i];
+
+        // Update running max: max(current, decayed previous)
+        float decayedMax = binRunningMax_[i] * whitenDecay;
+        binRunningMax_[i] = (current > decayedMax) ? current : decayedMax;
+
+        // Normalize by running max (with floor to avoid amplifying noise)
+        float maxVal = (binRunningMax_[i] > whitenFloor) ? binRunningMax_[i] : whitenFloor;
+        magnitudes_[i] = current / maxVal;
+    }
+}
+
 void SharedSpectralAnalysis::computeDerivedFeatures() {
     // Total spectral energy
     float energy = 0.0f;
@@ -293,7 +392,11 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
 }
 
 void SharedSpectralAnalysis::savePreviousFrame() {
-    // Copy current magnitudes and mel bands to previous buffers
+    // Called at the TOP of process(), before new FFT overwrites magnitudes_.
+    // At this point magnitudes_ still holds the PREVIOUS frame's final state
+    // (compressed + whitened), so prevMagnitudes_ gets the same processing
+    // state as the upcoming frame's magnitudes_ will have after whitenMagnitudes().
+    // This keeps spectral flux computations consistent (both frames whitened).
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         prevMagnitudes_[i] = magnitudes_[i];
     }

@@ -261,15 +261,16 @@ def find_port_by_serial(serial_number, target_pid=None):
     return None
 
 
+MAX_BOOTLOADER_RETRIES = 5
+
 def trigger_bootloader(port, verbose=False):
-    """Enter UF2 bootloader mode.
+    """Enter UF2 bootloader mode with automatic retry.
 
-    First tries sending the 'bootloader' serial command (new firmware).
-    Falls back to 1200-baud touch (standard Arduino method) if that fails.
-
-    The nRF52 UF2 bootloader exposes BOTH mass storage AND CDC serial,
-    so the ttyACM port may not disappear. We detect success by checking
-    for the appearance of a USB mass storage device instead.
+    The nRF52 SoftDevice can intermittently clear the GPREGRET register
+    during reset, causing the bootloader to skip UF2 mode and boot the
+    application instead. The BSP fix (SoftDevice API for GPREGRET) makes
+    this reliable, but older firmware may still have the race condition.
+    Retrying resolves the intermittent failure.
 
     Returns the USB serial number for tracking the device across
     the mode switch.
@@ -282,70 +283,77 @@ def trigger_bootloader(port, verbose=False):
     else:
         print(f"  Warning: Could not read serial number from {port}")
 
-    # Snapshot existing USB block devices before triggering
-    pre_existing_blocks = _get_usb_block_devices()
+    for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
+        if attempt > 1:
+            print(f"  Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
+            time.sleep(2)  # Let device settle between retries
 
-    # Method 1: Send 'bootloader' command via serial console
-    # This calls enterUf2Dfu() which sets GPREGRET=0x57 for UF2 mode
-    print(f"  Trying serial command: bootloader")
-    try:
-        ser = serial.Serial(port, 115200, timeout=1)
-        time.sleep(0.1)
-        ser.reset_input_buffer()
-        ser.write(b'bootloader\n')
-        ser.flush()
-        time.sleep(0.5)
+        pre_existing_blocks = _get_usb_block_devices()
+
+        # Send 'bootloader' serial command
+        if attempt == 1:
+            print(f"  Trying serial command: bootloader")
         try:
-            ser.close()
-        except (BrokenPipeError, OSError):
-            pass
+            ser = serial.Serial(port, 115200, timeout=1)
+            time.sleep(0.3)
+            ser.reset_input_buffer()
+            ser.write(b'bootloader\n')
+            ser.flush()
+            time.sleep(0.3)
+            try:
+                ser.close()
+            except (BrokenPipeError, OSError):
+                pass
 
-        # Wait for UF2 drive to appear (the real indicator of success)
-        if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
-            return device_serial
+            if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+                return device_serial
 
-        if verbose:
-            print(f"  Serial command did not produce UF2 drive, trying 1200 baud touch...")
-    except (serial.SerialException, OSError) as e:
-        if verbose:
-            print(f"  Serial command failed ({e}), trying 1200 baud touch...")
-
-    # Method 2: 1200 baud touch (standard Arduino method)
-    # With patched BSP, this also enters UF2 mode (enterUf2Dfu).
-    print(f"  Trying 1200 baud touch on {port}...")
-    try:
-        ser = serial.Serial()
-        ser.port = port
-        ser.baudrate = 1200
-        ser.dtr = True
-        ser.open()
-
-        time.sleep(0.1)
-
-        try:
-            ser.dtr = False
-            time.sleep(0.05)
-            ser.dtr = True
-            time.sleep(0.1)
-        except (BrokenPipeError, OSError):
+        except (serial.SerialException, OSError) as e:
             if verbose:
-                print(f"  Device reset during DTR toggle (expected)")
+                print(f"  Serial error: {e}")
 
-        try:
-            ser.close()
-        except (BrokenPipeError, OSError):
-            pass
-        print(f"  1200 baud touch complete")
+        # 1200-baud touch is first-attempt only. On the nRF52, the 1200-baud
+        # touch forces a full USB disconnect/reconnect cycle. If it fails on
+        # attempt 1, the port may have re-enumerated to a different address
+        # (e.g., /dev/ttyACM0 → /dev/ttyACM1), making the original port path
+        # stale. Retrying the serial 'bootloader' command is safer since it
+        # only triggers a soft reboot and the device re-enumerates to the same
+        # port. If the serial command also fails, the caller should re-discover
+        # ports rather than blindly retrying on a potentially stale path.
+        if attempt == 1:
+            pre_existing_blocks = _get_usb_block_devices()
+            print(f"  Trying 1200 baud touch on {port}...")
+            try:
+                ser = serial.Serial()
+                ser.port = port
+                ser.baudrate = 1200
+                ser.dtr = True
+                ser.open()
+                time.sleep(0.1)
+                try:
+                    ser.dtr = False
+                    time.sleep(0.05)
+                    ser.dtr = True
+                    time.sleep(0.1)
+                except (BrokenPipeError, OSError):
+                    if verbose:
+                        print(f"  Device reset during DTR toggle (expected)")
+                try:
+                    ser.close()
+                except (BrokenPipeError, OSError):
+                    pass
+                print(f"  1200 baud touch complete")
 
-    except serial.SerialException as e:
-        raise RuntimeError(
-            f"Failed to open {port}: {e}\n"
-            "Is the device connected? Is another program using the port?"
-        )
+                if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+                    return device_serial
 
-    # Wait for UF2 drive after 1200-baud touch
-    if not _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
-        print(f"  Warning: UF2 drive not detected after 1200-baud touch")
+            except serial.SerialException as e:
+                if verbose:
+                    print(f"  1200 baud touch failed: {e}")
+
+        print(f"  UF2 drive not detected (attempt {attempt})")
+
+    print(f"  Warning: UF2 drive not detected after {MAX_BOOTLOADER_RETRIES} attempts")
     return device_serial
 
 
@@ -453,6 +461,73 @@ def _get_usb_block_devices():
     return devices
 
 
+def _get_block_device_serial(block_dev):
+    """Get USB serial number for a block device via sysfs.
+
+    Reads /sys/block/<dev>/device/../../serial to find the USB device
+    serial number. Returns None if not available.
+    """
+    # Extract device name from path (e.g., /dev/sda1 -> sda1, /dev/sda -> sda)
+    dev_name = Path(block_dev).name
+    # Strip partition number to get parent disk (sda1 -> sda)
+    import re
+    disk_name = re.sub(r'\d+$', '', dev_name)
+
+    serial_path = Path(f"/sys/block/{disk_name}/device/../../serial")
+    try:
+        return serial_path.read_text().strip()
+    except (OSError, FileNotFoundError):
+        return None
+
+
+def cleanup_stale_mounts():
+    """Remove stale UF2 mounts from previous failed runs.
+
+    Parses /proc/mounts for /mnt/uf2-* entries (and legacy /mnt/uf2-upload),
+    unmounts them with lazy unmount, and removes empty mount directories.
+
+    Note: This will also unmount any manually-mounted UF2 drives at /mnt/uf2-*.
+    This is acceptable for the automation use case — manual mounts should use
+    a different path (e.g., /mnt/manual-uf2) to avoid conflicts.
+    """
+    stale = []
+    try:
+        with open("/proc/mounts") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 2:
+                    mount_point = parts[1]
+                    if mount_point.startswith("/mnt/uf2-"):
+                        stale.append(mount_point)
+    except OSError:
+        return
+
+    if not stale:
+        return
+
+    print(f"  Cleaning {len(stale)} stale UF2 mount(s)...")
+    for mp in stale:
+        try:
+            subprocess.run(
+                ["sudo", "umount", "-l", mp],
+                capture_output=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired:
+            print(f"  Warning: umount timed out for {mp}, skipping")
+            continue
+        # Remove empty directory
+        mp_path = Path(mp)
+        try:
+            if mp_path.exists() and mp_path.is_dir() and not any(mp_path.iterdir()):
+                subprocess.run(
+                    ["sudo", "rmdir", mp],
+                    capture_output=True, timeout=5,
+                )
+        except (OSError, PermissionError, subprocess.TimeoutExpired):
+            pass
+    print(f"  Stale mounts cleaned")
+
+
 def find_existing_uf2_mount():
     """Check common mount locations for an already-mounted UF2 drive."""
     user = os.environ.get("USER", "blinkytime")
@@ -512,9 +587,12 @@ def mount_with_udisksctl(block_device):
     return None
 
 
-def mount_manually(block_device):
+def mount_manually(block_device, mount_point=None):
     """Fallback: mount using sudo mount. Returns mount point Path or None."""
-    mount_point = Path("/mnt/uf2-upload")
+    if mount_point is None:
+        mount_point = Path("/mnt/uf2-upload")
+    else:
+        mount_point = Path(mount_point)
     print(f"  Manual mount {block_device} -> {mount_point}...")
 
     subprocess.run(
@@ -543,6 +621,48 @@ def mount_manually(block_device):
             )
     else:
         print(f"  Mount failed: {result.stderr.strip()}")
+
+    return None
+
+
+def mount_device(block_device, index):
+    """Mount a block device to /mnt/uf2-{index}. Returns mount point Path or None.
+
+    Used by parallel upload to give each device its own mount point.
+    """
+    mount_point = Path(f"/mnt/uf2-{index}")
+
+    subprocess.run(
+        ["sudo", "mkdir", "-p", str(mount_point)],
+        capture_output=True, timeout=5,
+    )
+
+    uid = os.getuid()
+    gid = os.getgid()
+    result = subprocess.run(
+        ["sudo", "mount", "-t", "vfat", "-o",
+         f"uid={uid},gid={gid},umask=022",
+         block_device, str(mount_point)],
+        capture_output=True, text=True, timeout=10,
+    )
+
+    if result.returncode == 0:
+        if (mount_point / UF2_INFO_FILE).exists():
+            print(f"  Mounted {block_device} at {mount_point}")
+            return mount_point
+        else:
+            print(f"  Mounted {block_device} but {UF2_INFO_FILE} not found (wrong device?)")
+            subprocess.run(
+                ["sudo", "umount", str(mount_point)],
+                capture_output=True, timeout=10,
+            )
+    else:
+        stderr = result.stderr.strip()
+        if "already mounted" in stderr.lower():
+            if (mount_point / UF2_INFO_FILE).exists():
+                print(f"  {block_device} already mounted at {mount_point}")
+                return mount_point
+        print(f"  Mount {block_device} failed: {stderr}")
 
     return None
 
@@ -871,6 +991,10 @@ Examples:
         help="Verify upload infrastructure",
     )
     parser.add_argument(
+        "--parallel", action="store_true",
+        help="Upload to multiple devices with staggered bootloader entry (2s apart)",
+    )
+    parser.add_argument(
         "-v", "--verbose", action="store_true",
         help="Verbose output",
     )
@@ -913,6 +1037,280 @@ def upload_to_device(port, uf2_path, verbose=False):
         return False, f"timeout: {e}"
     except RuntimeError as e:
         return False, f"error: {e}"
+
+
+# ============================================================
+#  Parallel multi-device upload
+# ============================================================
+
+def _cleanup_parallel_mounts(mount_map):
+    """Unmount and clean up all parallel mount points. Called on any exit path."""
+    for port, info in mount_map.items():
+        mp = info.get("mount_point")
+        if mp and Path(mp).exists():
+            subprocess.run(
+                ["sudo", "umount", "-l", str(mp)],
+                capture_output=True, timeout=10,
+            )
+            try:
+                mp_path = Path(mp)
+                if mp_path.exists() and mp_path.is_dir() and not any(mp_path.iterdir()):
+                    subprocess.run(
+                        ["sudo", "rmdir", str(mp)],
+                        capture_output=True, timeout=5,
+                    )
+            except (OSError, PermissionError):
+                pass
+
+
+def upload_parallel(ports, uf2_path, verbose=False):
+    """Upload firmware to multiple devices via staggered bootloader entry.
+
+    True parallel USB re-enumeration (all devices at once) overwhelms the
+    Pi's shared USB controller. Instead, we stagger bootloader entries with
+    a 2-second delay between devices, giving the USB bus time to settle.
+
+    Flow:
+      Phase 0: Clean stale mounts from previous failed runs
+      Phase 1: Record device serial numbers
+      Phase 2: Staggered bootloader entry + per-device mount
+      Phase 3: Copy firmware to each mounted drive
+      Phase 4: Unmount all drives (triggers reboot)
+      Phase 5: Verify reboots (serial ports return)
+
+    Returns list of (port, success, message).
+    """
+    print_section(f"PARALLEL UPLOAD TO {len(ports)} DEVICES")
+
+    # Per-device tracking: port -> {serial, block_dev, mount_point, copied}
+    mount_map = {}
+
+    try:
+        # --- Phase 0: Clean stale mounts ---
+        cleanup_stale_mounts()
+
+        # --- Phase 1: Record device serial numbers ---
+        device_serials = {}
+        for port in ports:
+            sn = get_serial_number(port)
+            if sn:
+                device_serials[port] = sn
+                print(f"  {port}: serial={sn}")
+            mount_map[port] = {"serial": sn, "block_dev": None,
+                               "mount_point": None, "copied": False}
+
+        # --- Phase 2: Staggered bootloader entry + per-device mount ---
+        print_section("STAGGERED BOOTLOADER ENTRY")
+
+        for i, port in enumerate(ports):
+            if i > 0:
+                print(f"\n  Waiting 2s for USB bus to settle...")
+                time.sleep(2)
+
+            print(f"  Device {i + 1}/{len(ports)}: {port}")
+
+            # Snapshot block devices before bootloader command
+            pre_blocks = _get_usb_block_devices()
+
+            # Send bootloader command (with retries)
+            entered = False
+            for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
+                if attempt > 1:
+                    print(f"    Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
+                    time.sleep(2)
+
+                try:
+                    ser = serial.Serial(port, 115200, timeout=1)
+                    time.sleep(0.3)
+                    ser.reset_input_buffer()
+                    ser.write(b'bootloader\n')
+                    ser.flush()
+                    time.sleep(0.3)
+                    try:
+                        ser.close()
+                    except (BrokenPipeError, OSError):
+                        pass
+                    if attempt == 1:
+                        print(f"    Bootloader command sent")
+                except (serial.SerialException, OSError) as e:
+                    print(f"    Serial error: {e}")
+                    # Port may already be gone (device resetting) — check for new block dev
+                    pass
+
+                # Wait for a new block device (this specific device)
+                print(f"    Waiting for UF2 drive...")
+                deadline = time.monotonic() + 8
+                new_dev = None
+                while time.monotonic() < deadline:
+                    current = _get_usb_block_devices()
+                    new_devices = current - pre_blocks
+                    if new_devices:
+                        new_dev = sorted(new_devices)[0]
+                        break
+                    time.sleep(0.3)
+
+                if new_dev:
+                    # Verify block device belongs to this port's device via USB serial number
+                    expected_sn = mount_map[port]["serial"]
+                    if expected_sn:
+                        block_sn = _get_block_device_serial(new_dev)
+                        if block_sn and block_sn != expected_sn:
+                            print(f"    WARNING: Block device {new_dev} serial '{block_sn}' "
+                                  f"does not match expected '{expected_sn}' — possible mis-assignment")
+                        elif block_sn:
+                            print(f"    Serial number verified: {block_sn}")
+                    print(f"    UF2 drive detected: {new_dev}")
+                    mount_map[port]["block_dev"] = new_dev
+                    entered = True
+                    break
+                else:
+                    print(f"    No UF2 drive appeared (attempt {attempt})")
+                    # 1200-baud touch first-attempt only (see single-device path comment)
+                    if attempt == 1:
+                        pre_blocks = _get_usb_block_devices()
+                        print(f"    Trying 1200 baud touch...")
+                        try:
+                            ser = serial.Serial()
+                            ser.port = port
+                            ser.baudrate = 1200
+                            ser.dtr = True
+                            ser.open()
+                            time.sleep(0.1)
+                            try:
+                                ser.dtr = False
+                                time.sleep(0.05)
+                                ser.dtr = True
+                                time.sleep(0.1)
+                            except (BrokenPipeError, OSError):
+                                pass
+                            try:
+                                ser.close()
+                            except (BrokenPipeError, OSError):
+                                pass
+
+                            deadline = time.monotonic() + 8
+                            while time.monotonic() < deadline:
+                                current = _get_usb_block_devices()
+                                new_devices = current - pre_blocks
+                                if new_devices:
+                                    new_dev = sorted(new_devices)[0]
+                                    break
+                                time.sleep(0.3)
+
+                            if new_dev:
+                                print(f"    UF2 drive detected: {new_dev}")
+                                mount_map[port]["block_dev"] = new_dev
+                                entered = True
+                                break
+                        except serial.SerialException as e:
+                            if verbose:
+                                print(f"    1200 baud touch failed: {e}")
+
+            if not entered:
+                print(f"    FAILED: {port} did not enter bootloader")
+                continue
+
+            # Mount this device's block device to /mnt/uf2-{i}
+            time.sleep(1)  # Let device settle after mode switch
+            mp = mount_device(mount_map[port]["block_dev"], i)
+            if mp:
+                mount_map[port]["mount_point"] = str(mp)
+            else:
+                print(f"    FAILED: Could not mount {mount_map[port]['block_dev']}")
+
+        # --- Phase 3: Copy firmware to each mounted drive ---
+        mounted = {p: info for p, info in mount_map.items() if info["mount_point"]}
+        if not mounted:
+            print_failure("No UF2 drives mounted — nothing to flash")
+            return [(p, False, "mount failed") for p in ports]
+
+        print_section(f"COPYING FIRMWARE TO {len(mounted)} DRIVE(S)")
+        for port, info in mounted.items():
+            mp = Path(info["mount_point"])
+            if copy_firmware(uf2_path, mp):
+                info["copied"] = True
+            else:
+                print(f"  Warning: copy failed to {mp} ({port})")
+
+        copy_count = sum(1 for info in mount_map.values() if info["copied"])
+        print(f"\n  Firmware copied to {copy_count}/{len(ports)} device(s)")
+
+        # --- Phase 4: Unmount all drives (triggers reboot) ---
+        print_section("UNMOUNTING DRIVES")
+        for port, info in mount_map.items():
+            mp = info.get("mount_point")
+            if mp:
+                result = subprocess.run(
+                    ["sudo", "umount", str(mp)],
+                    capture_output=True, text=True, timeout=10,
+                )
+                if result.returncode == 0:
+                    print(f"  Unmounted {mp}")
+                else:
+                    # Lazy unmount as fallback
+                    subprocess.run(
+                        ["sudo", "umount", "-l", str(mp)],
+                        capture_output=True, timeout=10,
+                    )
+                    print(f"  Lazy-unmounted {mp}")
+                # Clean up mount directory
+                try:
+                    mp_path = Path(mp)
+                    if mp_path.exists() and mp_path.is_dir() and not any(mp_path.iterdir()):
+                        subprocess.run(
+                            ["sudo", "rmdir", str(mp)],
+                            capture_output=True, timeout=5,
+                        )
+                except (OSError, PermissionError):
+                    pass
+
+        # --- Phase 5: Verify reboots ---
+        print_section("VERIFYING REBOOTS")
+        print(f"  Waiting for devices to reboot...")
+        time.sleep(3)
+
+        # Poll for serial ports to return
+        deadline = time.monotonic() + PORT_REAPPEAR_TIMEOUT
+        found = {}
+        while time.monotonic() < deadline:
+            all_found = True
+            for port in ports:
+                if port in found:
+                    continue
+                sn = device_serials.get(port)
+                if sn:
+                    new_port = find_port_by_serial(sn, NORMAL_PID)
+                    if new_port:
+                        found[port] = new_port
+                        print(f"  {port}: back on {new_port}")
+                        continue
+                all_found = False
+            if all_found or len(found) == len(device_serials):
+                break
+            time.sleep(0.5)
+
+        # Build results
+        results = []
+        for port in ports:
+            info = mount_map[port]
+            if not info["block_dev"]:
+                results.append((port, False, "failed to enter bootloader"))
+            elif not info["mount_point"]:
+                results.append((port, False, "mount failed"))
+            elif not info["copied"]:
+                results.append((port, False, "firmware copy failed"))
+            elif port in found:
+                results.append((port, True, f"OK (now on {found[port]})"))
+            elif device_serials.get(port):
+                results.append((port, False, "serial port not found after reboot"))
+            else:
+                results.append((port, True, "OK (no serial tracking)"))
+
+        return results
+
+    finally:
+        # Always clean up mounts on any exit (success, error, or Ctrl+C)
+        _cleanup_parallel_mounts(mount_map)
 
 
 # ============================================================
@@ -1000,15 +1398,19 @@ def main():
                 print_failure("REBOOT VERIFICATION FAILED")
                 return 1
 
-        # --- Multi-device upload loop (phases 3-6 per device) ---
-        results = []  # list of (port, success, message)
+        # --- Multi-device upload ---
+        if args.parallel and len(ports) > 1:
+            results = upload_parallel(ports, uf2_path, verbose=args.verbose)
+        else:
+            # Sequential upload (phases 3-6 per device)
+            results = []  # list of (port, success, message)
 
-        for i, port in enumerate(ports):
-            if len(ports) > 1:
-                print_section(f"DEVICE {i + 1}/{len(ports)}: {port}")
+            for i, port in enumerate(ports):
+                if len(ports) > 1:
+                    print_section(f"DEVICE {i + 1}/{len(ports)}: {port}")
 
-            success, message = upload_to_device(port, uf2_path, verbose=args.verbose)
-            results.append((port, success, message))
+                success, message = upload_to_device(port, uf2_path, verbose=args.verbose)
+                results.append((port, success, message))
 
             if success and len(ports) == 1:
                 print_success("UPLOAD SUCCESSFUL")
@@ -1039,17 +1441,21 @@ def main():
 
     except FileNotFoundError as e:
         print(f"\nERROR: {e}")
+        cleanup_stale_mounts()
         return 2
     except TimeoutError as e:
         print_failure("TIMEOUT")
         print(f"  {e}")
+        cleanup_stale_mounts()
         return 3
     except RuntimeError as e:
         print_failure("ERROR")
         print(f"  {e}")
+        cleanup_stale_mounts()
         return 1
     except KeyboardInterrupt:
         print("\n\nUpload cancelled.")
+        cleanup_stale_mounts()
         return 130
 
 

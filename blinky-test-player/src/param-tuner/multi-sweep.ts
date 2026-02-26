@@ -14,7 +14,7 @@ import cliProgress from 'cli-progress';
 import type { MultiDeviceTunerOptions, TestResult, SweepPoint } from './types.js';
 import { PARAMETERS, generateSweepValues } from './types.js';
 import { MultiDeviceRunner } from './multi-device-runner.js';
-import type { MusicTestFile } from './multi-device-runner.js';
+import type { MusicTestFile, ScoringMode } from './multi-device-runner.js';
 import { discoverMusicTests } from './music-tests.js';
 
 export interface MultiSweepResult {
@@ -102,7 +102,11 @@ export async function runMultiSweep(options: MultiDeviceTunerOptions): Promise<M
         ? (singleDeviceCount / playbackCount).toFixed(1)
         : '1.0';
 
+      // Use beat scoring for parameters that affect beat tracking (not transient detection)
+      const scoringMode: ScoringMode = param.mode === 'bayesian' ? 'beat' : 'transient';
+
       console.log(`   Values: ${sweepValues.join(', ')}`);
+      console.log(`   Scoring: ${scoringMode} events`);
       console.log(`   Batches: ${batches.length} (${speedup}x speedup vs single-device)`);
 
       // Progress bar
@@ -129,6 +133,7 @@ export async function runMultiSweep(options: MultiDeviceTunerOptions): Promise<M
               param.name,
               batch,
               options.durationMs,
+              scoringMode,
             );
 
             // Store results keyed by value

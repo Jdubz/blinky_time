@@ -283,13 +283,13 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("bayespriorw", &audioCtrl_->bayesPriorWeight, "bayesian",
         "Ongoing static prior strength (0=off, 1=std, 2=strong)", 0.0f, 3.0f);
     settings_.registerFloat("bayesacf", &audioCtrl_->bayesAcfWeight, "bayesian",
-        "Autocorrelation observation weight", 0.0f, 2.0f);
+        "Autocorrelation observation weight", 0.0f, 5.0f);
     settings_.registerFloat("bayesft", &audioCtrl_->bayesFtWeight, "bayesian",
-        "Fourier tempogram observation weight", 0.0f, 2.0f);
+        "Fourier tempogram observation weight", 0.0f, 5.0f);
     settings_.registerFloat("bayescomb", &audioCtrl_->bayesCombWeight, "bayesian",
-        "Comb filter bank observation weight", 0.0f, 2.0f);
+        "Comb filter bank observation weight", 0.0f, 5.0f);
     settings_.registerFloat("bayesioi", &audioCtrl_->bayesIoiWeight, "bayesian",
-        "IOI histogram observation weight", 0.0f, 2.0f);
+        "IOI histogram observation weight", 0.0f, 5.0f);
 
     // Ensemble fusion parameters (detection gating)
     settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
@@ -346,6 +346,28 @@ void SerialConsole::registerRhythmSettings() {
         "Tempo change threshold", 0.01f, 0.5f);
     // (maxbpmchg removed — Bayesian fusion handles tempo stability)
 
+    // Spectral processing (whitening + compressor)
+    SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+    settings_.registerBool("whitenenabled", &spectral.whitenEnabled, "spectral",
+        "Per-bin spectral whitening");
+    settings_.registerFloat("whitendecay", &spectral.whitenDecay, "spectral",
+        "Whitening peak decay per frame (0.99-0.999)", 0.9f, 0.9999f);
+    settings_.registerFloat("whitenfloor", &spectral.whitenFloor, "spectral",
+        "Whitening noise floor", 0.0001f, 0.1f);
+    settings_.registerBool("compenabled", &spectral.compressorEnabled, "spectral",
+        "Soft-knee compressor");
+    settings_.registerFloat("compthresh", &spectral.compThresholdDb, "spectral",
+        "Compressor threshold (dB)", -60.0f, 0.0f);
+    settings_.registerFloat("compratio", &spectral.compRatio, "spectral",
+        "Compression ratio", 1.0f, 20.0f);
+    settings_.registerFloat("compknee", &spectral.compKneeDb, "spectral",
+        "Soft knee width (dB)", 0.0f, 30.0f);
+    settings_.registerFloat("compmakeup", &spectral.compMakeupDb, "spectral",
+        "Makeup gain (dB)", -10.0f, 30.0f);
+    settings_.registerFloat("compattack", &spectral.compAttackTau, "spectral",
+        "Attack time constant (s)", 0.0001f, 0.1f);
+    settings_.registerFloat("comprelease", &spectral.compReleaseTau, "spectral",
+        "Release time constant (s)", 0.01f, 10.0f);
 }
 
 void SerialConsole::update() {
@@ -388,6 +410,8 @@ void SerialConsole::handleCommand(const char* cmd) {
     if (settings_.handleCommand(cmd)) {
         // Sync effect settings to actual effect after any settings change
         syncEffectSettings();
+        // Warn about dangerous parameter interactions
+        checkBayesianInteractions();
         return;
     }
 
@@ -727,6 +751,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 *mic_,
                 audioCtrl_
             );
+            checkBayesianInteractions();
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -736,6 +761,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
 
     if (strcmp(cmd, "defaults") == 0) {
         restoreDefaults();
+        checkBayesianInteractions();
         Serial.println(F("OK"));
         return true;
     }
@@ -764,9 +790,21 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         Serial.println(F("Entering UF2 bootloader..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
-        // enterUf2Dfu() sets GPREGRET = 0x57 and calls NVIC_SystemReset()
-        // The bootloader reads this and enters UF2 mass storage mode
-        enterUf2Dfu();
+        // Use SoftDevice API for GPREGRET when SoftDevice is enabled.
+        // Direct NRF_POWER->GPREGRET writes are unreliable when SoftDevice
+        // owns the POWER peripheral (register gets cleared during reset).
+        {
+            const uint8_t DFU_MAGIC_UF2 = 0x57;
+            uint8_t sd_en = 0;
+            sd_softdevice_is_enabled(&sd_en);
+            if (sd_en) {
+                sd_power_gpregret_clr(0, 0xFF);
+                sd_power_gpregret_set(0, DFU_MAGIC_UF2);
+            } else {
+                NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+            }
+        }
+        NVIC_SystemReset();
 #else
         Serial.println(F("UF2 bootloader not available on this platform"));
 #endif
@@ -1007,20 +1045,33 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->cbssAlpha = 0.9f;
         audioCtrl_->cbssTightness = 5.0f;
         audioCtrl_->beatConfidenceDecay = 0.98f;
-        audioCtrl_->bayesLambda = 0.1f;
+        audioCtrl_->bayesLambda = 0.15f;
         audioCtrl_->bayesPriorCenter = 128.0f;
         audioCtrl_->bayesPriorWeight = 0.0f;
-        audioCtrl_->bayesAcfWeight = 1.0f;
-        audioCtrl_->bayesFtWeight = 0.8f;
+        audioCtrl_->bayesAcfWeight = 0.3f;
+        audioCtrl_->bayesFtWeight = 2.0f;
         audioCtrl_->bayesCombWeight = 0.7f;
-        audioCtrl_->bayesIoiWeight = 0.5f;
-        audioCtrl_->cbssThresholdFactor = 0.4f;
+        audioCtrl_->bayesIoiWeight = 2.0f;
+        audioCtrl_->cbssThresholdFactor = 1.0f;
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
+
+        // Restore spectral processing defaults
+        SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+        spectral.whitenEnabled = true;
+        spectral.compressorEnabled = true;
+        spectral.whitenDecay = 0.997f;
+        spectral.whitenFloor = 0.001f;
+        spectral.compThresholdDb = -30.0f;
+        spectral.compRatio = 3.0f;
+        spectral.compKneeDb = 15.0f;
+        spectral.compMakeupDb = 6.0f;
+        spectral.compAttackTau = 0.001f;
+        spectral.compReleaseTau = 2.0f;
     }
 
     // Restore effect defaults
@@ -1307,6 +1358,23 @@ void SerialConsole::syncEffectSettings() {
     hueEffect_->setRotationSpeed(effectRotationSpeed_);
 }
 
+void SerialConsole::checkBayesianInteractions() {
+    if (!audioCtrl_) return;
+
+    // WARN: cbssthresh < 0.8 + bayesft > 0.5 causes catastrophic F1 collapse (0.049)
+    // because FT sub-harmonic bias floods CBSS with phantom beats at low threshold.
+    // See PARAMETER_TUNING_HISTORY.md "Combined Bayesian validation" for details.
+    float cbss = audioCtrl_->cbssThresholdFactor;
+    float ft = audioCtrl_->bayesFtWeight;
+    float ioi = audioCtrl_->bayesIoiWeight;
+
+    if (cbss < 0.8f && (ft > 0.5f || ioi > 0.5f)) {
+        Serial.println(F("WARNING: cbssthresh < 0.8 with bayesft or bayesioi > 0.5 causes"));
+        Serial.println(F("  catastrophic beat tracking failure. Raise cbssthresh >= 1.0"));
+        Serial.println(F("  or lower bayesft/bayesioi <= 0.5. See PARAMETER_TUNING_HISTORY.md"));
+    }
+}
+
 void SerialConsole::streamTick() {
     if (!streamEnabled_) return;
 
@@ -1389,6 +1457,13 @@ void SerialConsole::streamTick() {
             Serial.print(bf.getCombinedFlux(), 3);
             Serial.print(F(",\"af\":"));
             Serial.print(bf.getAverageFlux(), 3);
+
+            // Spectral processing state (compressor + whitening)
+            const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+            Serial.print(F(",\"rms\":"));
+            Serial.print(spectral.getFrameRmsDb(), 1);
+            Serial.print(F(",\"cg\":"));
+            Serial.print(spectral.getSmoothedGainDb(), 2);
         }
 
         Serial.print(F("}"));
@@ -2546,6 +2621,59 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getBeatPeriodSamples());
         Serial.print(F(",\"stability\":"));
         Serial.print(audioCtrl_->getBeatStability(), 3);
+        Serial.println(F("}"));
+        return true;
+    }
+
+    // "show spectral" - show spectral processing (compressor + whitening) state
+    if (strcmp(cmd, "show spectral") == 0) {
+        const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+        Serial.println(F("=== Spectral Processing ==="));
+        Serial.println(F("-- Compressor --"));
+        Serial.print(F("  Enabled: ")); Serial.println(spectral.compressorEnabled ? "yes" : "no");
+        Serial.print(F("  Threshold: ")); Serial.print(spectral.compThresholdDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Ratio: ")); Serial.print(spectral.compRatio, 1); Serial.println(F(":1"));
+        Serial.print(F("  Knee: ")); Serial.print(spectral.compKneeDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Makeup: ")); Serial.print(spectral.compMakeupDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Attack: ")); Serial.print(spectral.compAttackTau * 1000.0f, 1); Serial.println(F(" ms"));
+        Serial.print(F("  Release: ")); Serial.print(spectral.compReleaseTau, 2); Serial.println(F(" s"));
+        Serial.print(F("  Frame RMS: ")); Serial.print(spectral.getFrameRmsDb(), 1); Serial.println(F(" dB"));
+        Serial.print(F("  Smoothed Gain: ")); Serial.print(spectral.getSmoothedGainDb(), 2); Serial.println(F(" dB"));
+        Serial.println(F("-- Whitening --"));
+        Serial.print(F("  Enabled: ")); Serial.println(spectral.whitenEnabled ? "yes" : "no");
+        Serial.print(F("  Decay: ")); Serial.println(spectral.whitenDecay, 4);
+        Serial.print(F("  Floor: ")); Serial.println(spectral.whitenFloor, 4);
+        Serial.println();
+        return true;
+    }
+
+    // "json spectral" - spectral processing state as JSON (for test automation)
+    if (strcmp(cmd, "json spectral") == 0) {
+        const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+        Serial.print(F("{\"compEnabled\":"));
+        Serial.print(spectral.compressorEnabled ? 1 : 0);
+        Serial.print(F(",\"compThreshDb\":"));
+        Serial.print(spectral.compThresholdDb, 1);
+        Serial.print(F(",\"compRatio\":"));
+        Serial.print(spectral.compRatio, 1);
+        Serial.print(F(",\"compKneeDb\":"));
+        Serial.print(spectral.compKneeDb, 1);
+        Serial.print(F(",\"compMakeupDb\":"));
+        Serial.print(spectral.compMakeupDb, 1);
+        Serial.print(F(",\"compAttackMs\":"));
+        Serial.print(spectral.compAttackTau * 1000.0f, 2);
+        Serial.print(F(",\"compReleaseS\":"));
+        Serial.print(spectral.compReleaseTau, 2);
+        Serial.print(F(",\"rmsDb\":"));
+        Serial.print(spectral.getFrameRmsDb(), 1);
+        Serial.print(F(",\"gainDb\":"));
+        Serial.print(spectral.getSmoothedGainDb(), 2);
+        Serial.print(F(",\"whitenEnabled\":"));
+        Serial.print(spectral.whitenEnabled ? 1 : 0);
+        Serial.print(F(",\"whitenDecay\":"));
+        Serial.print(spectral.whitenDecay, 4);
+        Serial.print(F(",\"whitenFloor\":"));
+        Serial.print(spectral.whitenFloor, 4);
         Serial.println(F("}"));
         return true;
     }

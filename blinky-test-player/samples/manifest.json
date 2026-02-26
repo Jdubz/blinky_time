@@ -3,8 +3,8 @@
   "samples": [
     {
       "id": "kick_hard_1",
-      "originalPath": "E:AbletonDrumsprime loops d&bKicksTemple_Kick15.wav",
-      "newPath": "samples\\kick\\kick_hard_1.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Temple_Kick15.wav",
+      "newPath": "samples/kick/kick_hard_1.wav",
       "type": "kick",
       "loudness": "hard",
       "rms": 0.486,
@@ -14,7 +14,7 @@
     {
       "id": "kick_hard_2",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Liquid_Kick04.wav",
-      "newPath": "samples\\kick\\kick_hard_2.wav",
+      "newPath": "samples/kick/kick_hard_2.wav",
       "type": "kick",
       "loudness": "hard",
       "rms": 0.473,
@@ -24,7 +24,7 @@
     {
       "id": "kick_hard_3",
       "originalPath": "E:\\Ableton\\Drums\\MK05\\Analogued\\Kick Analogued 1.wav",
-      "newPath": "samples\\kick\\kick_hard_3.wav",
+      "newPath": "samples/kick/kick_hard_3.wav",
       "type": "kick",
       "loudness": "hard",
       "rms": 0.407,
@@ -34,7 +34,7 @@
     {
       "id": "kick_medium_1",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Temple_Kick08.wav",
-      "newPath": "samples\\kick\\kick_medium_1.wav",
+      "newPath": "samples/kick/kick_medium_1.wav",
       "type": "kick",
       "loudness": "medium",
       "rms": 0.349,
@@ -44,7 +44,7 @@
     {
       "id": "kick_medium_2",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Liquid_Kick21.wav",
-      "newPath": "samples\\kick\\kick_medium_2.wav",
+      "newPath": "samples/kick/kick_medium_2.wav",
       "type": "kick",
       "loudness": "medium",
       "rms": 0.295,
@@ -54,7 +54,7 @@
     {
       "id": "kick_medium_3",
       "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Kicks\\Monarchy_Kick02.wav",
-      "newPath": "samples\\kick\\kick_medium_3.wav",
+      "newPath": "samples/kick/kick_medium_3.wav",
       "type": "kick",
       "loudness": "medium",
       "rms": 0.219,
@@ -64,7 +64,7 @@
     {
       "id": "kick_soft_1",
       "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Kick w_Cym7.wav",
-      "newPath": "samples\\kick\\kick_soft_1.wav",
+      "newPath": "samples/kick/kick_soft_1.wav",
       "type": "kick",
       "loudness": "soft",
       "rms": 0.15,
@@ -74,7 +74,7 @@
     {
       "id": "kick_soft_2",
       "originalPath": "E:\\Ableton\\Drums\\Chamber\\Chamber Kick 02.wav",
-      "newPath": "samples\\kick\\kick_soft_2.wav",
+      "newPath": "samples/kick/kick_soft_2.wav",
       "type": "kick",
       "loudness": "soft",
       "rms": 0.111,
@@ -84,7 +84,7 @@
     {
       "id": "kick_soft_3",
       "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Drum Kicks\\LR_Drumkick_08.wav",
-      "newPath": "samples\\kick\\kick_soft_3.wav",
+      "newPath": "samples/kick/kick_soft_3.wav",
       "type": "kick",
       "loudness": "soft",
       "rms": 0.081,
@@ -94,7 +94,7 @@
     {
       "id": "snare_hard_1",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare01.wav",
-      "newPath": "samples\\snare\\snare_hard_1.wav",
+      "newPath": "samples/snare/snare_hard_1.wav",
       "type": "snare",
       "loudness": "hard",
       "rms": 0.458,
@@ -104,7 +104,7 @@
     {
       "id": "snare_hard_2",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare14.wav",
-      "newPath": "samples\\snare\\snare_hard_2.wav",
+      "newPath": "samples/snare/snare_hard_2.wav",
       "type": "snare",
       "loudness": "hard",
       "rms": 0.318,
@@ -114,7 +114,7 @@
     {
       "id": "snare_hard_3",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Temple_Snare12.wav",
-      "newPath": "samples\\snare\\snare_hard_3.wav",
+      "newPath": "samples/snare/snare_hard_3.wav",
       "type": "snare",
       "loudness": "hard",
       "rms": 0.276,
@@ -124,7 +124,7 @@
     {
       "id": "snare_medium_1",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Dark_Snare21.wav",
-      "newPath": "samples\\snare\\snare_medium_1.wav",
+      "newPath": "samples/snare/snare_medium_1.wav",
       "type": "snare",
       "loudness": "medium",
       "rms": 0.248,
@@ -134,7 +134,7 @@
     {
       "id": "snare_medium_2",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Snares\\Liquid_Snare03.wav",
-      "newPath": "samples\\snare\\snare_medium_2.wav",
+      "newPath": "samples/snare/snare_medium_2.wav",
       "type": "snare",
       "loudness": "medium",
       "rms": 0.198,
@@ -144,7 +144,7 @@
     {
       "id": "snare_medium_3",
       "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Snares\\Monarchy_Snare06.wav",
-      "newPath": "samples\\snare\\snare_medium_3.wav",
+      "newPath": "samples/snare/snare_medium_3.wav",
       "type": "snare",
       "loudness": "medium",
       "rms": 0.145,
@@ -154,7 +154,7 @@
     {
       "id": "snare_soft_1",
       "originalPath": "E:\\Ableton\\Drums\\hip hop monarchy\\Snares\\Monarchy_Snare07.wav",
-      "newPath": "samples\\snare\\snare_soft_1.wav",
+      "newPath": "samples/snare/snare_soft_1.wav",
       "type": "snare",
       "loudness": "soft",
       "rms": 0.099,
@@ -164,7 +164,7 @@
     {
       "id": "snare_soft_2",
       "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Snare Warlord ghost1.wav",
-      "newPath": "samples\\snare\\snare_soft_2.wav",
+      "newPath": "samples/snare/snare_soft_2.wav",
       "type": "snare",
       "loudness": "soft",
       "rms": 0.085,
@@ -174,7 +174,7 @@
     {
       "id": "snare_soft_3",
       "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Snares\\LR_Snare_10.wav",
-      "newPath": "samples\\snare\\snare_soft_3.wav",
+      "newPath": "samples/snare/snare_soft_3.wav",
       "type": "snare",
       "loudness": "soft",
       "rms": 0.067,
@@ -184,7 +184,7 @@
     {
       "id": "hat_hard_1",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat08.wav",
-      "newPath": "samples\\hat\\hat_hard_1.wav",
+      "newPath": "samples/hat/hat_hard_1.wav",
       "type": "hat",
       "loudness": "hard",
       "rms": 0.352,
@@ -194,7 +194,7 @@
     {
       "id": "hat_hard_2",
       "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (8).wav",
-      "newPath": "samples\\hat\\hat_hard_2.wav",
+      "newPath": "samples/hat/hat_hard_2.wav",
       "type": "hat",
       "loudness": "hard",
       "rms": 0.185,
@@ -204,7 +204,7 @@
     {
       "id": "hat_hard_3",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat18.wav",
-      "newPath": "samples\\hat\\hat_hard_3.wav",
+      "newPath": "samples/hat/hat_hard_3.wav",
       "type": "hat",
       "loudness": "hard",
       "rms": 0.168,
@@ -214,7 +214,7 @@
     {
       "id": "hat_medium_1",
       "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (45).wav",
-      "newPath": "samples\\hat\\hat_medium_1.wav",
+      "newPath": "samples/hat/hat_medium_1.wav",
       "type": "hat",
       "loudness": "medium",
       "rms": 0.15,
@@ -224,7 +224,7 @@
     {
       "id": "hat_medium_2",
       "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (25).wav",
-      "newPath": "samples\\hat\\hat_medium_2.wav",
+      "newPath": "samples/hat/hat_medium_2.wav",
       "type": "hat",
       "loudness": "medium",
       "rms": 0.115,
@@ -234,7 +234,7 @@
     {
       "id": "hat_medium_3",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Hats\\Liquid_Hat28.wav",
-      "newPath": "samples\\hat\\hat_medium_3.wav",
+      "newPath": "samples/hat/hat_medium_3.wav",
       "type": "hat",
       "loudness": "medium",
       "rms": 0.086,
@@ -244,7 +244,7 @@
     {
       "id": "hat_soft_1",
       "originalPath": "E:\\Ableton\\Drums\\ISR_One Shots\\Hi hats\\DD_HiHat (40).wav",
-      "newPath": "samples\\hat\\hat_soft_1.wav",
+      "newPath": "samples/hat/hat_soft_1.wav",
       "type": "hat",
       "loudness": "soft",
       "rms": 0.05,
@@ -254,7 +254,7 @@
     {
       "id": "hat_soft_2",
       "originalPath": "E:\\Ableton\\Drums\\Flutter\\Flutter HiHat 02.wav",
-      "newPath": "samples\\hat\\hat_soft_2.wav",
+      "newPath": "samples/hat/hat_soft_2.wav",
       "type": "hat",
       "loudness": "soft",
       "rms": 0.031,
@@ -264,7 +264,7 @@
     {
       "id": "hat_soft_3",
       "originalPath": "E:\\Ableton\\Drums\\Ballistic Drum & SFX Shots\\HiHat Shots\\Hat07.wav",
-      "newPath": "samples\\hat\\hat_soft_3.wav",
+      "newPath": "samples/hat/hat_soft_3.wav",
       "type": "hat",
       "loudness": "soft",
       "rms": 0.022,
@@ -274,7 +274,7 @@
     {
       "id": "tom_hard_1",
       "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Tom Tama3.wav",
-      "newPath": "samples\\tom\\tom_hard_1.wav",
+      "newPath": "samples/tom/tom_hard_1.wav",
       "type": "tom",
       "loudness": "hard",
       "rms": 0.323,
@@ -284,7 +284,7 @@
     {
       "id": "tom_hard_2",
       "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Floor Tom Tama5.wav",
-      "newPath": "samples\\tom\\tom_hard_2.wav",
+      "newPath": "samples/tom/tom_hard_2.wav",
       "type": "tom",
       "loudness": "hard",
       "rms": 0.237,
@@ -294,7 +294,7 @@
     {
       "id": "tom_medium_1",
       "originalPath": "E:\\Ableton\\Drums\\KJ\\80x\\KJ SAWKA Tom Tama1.wav",
-      "newPath": "samples\\tom\\tom_medium_1.wav",
+      "newPath": "samples/tom/tom_medium_1.wav",
       "type": "tom",
       "loudness": "medium",
       "rms": 0.199,
@@ -304,7 +304,7 @@
     {
       "id": "tom_medium_2",
       "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Toms\\LR_Tom_3.wav",
-      "newPath": "samples\\tom\\tom_medium_2.wav",
+      "newPath": "samples/tom/tom_medium_2.wav",
       "type": "tom",
       "loudness": "medium",
       "rms": 0.153,
@@ -314,7 +314,7 @@
     {
       "id": "tom_soft_1",
       "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Toms\\LR_Tom_7.wav",
-      "newPath": "samples\\tom\\tom_soft_1.wav",
+      "newPath": "samples/tom/tom_soft_1.wav",
       "type": "tom",
       "loudness": "soft",
       "rms": 0.091,
@@ -324,7 +324,7 @@
     {
       "id": "clap_hard_1",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap01.wav",
-      "newPath": "samples\\clap\\clap_hard_1.wav",
+      "newPath": "samples/clap/clap_hard_1.wav",
       "type": "clap",
       "loudness": "hard",
       "rms": 0.251,
@@ -334,7 +334,7 @@
     {
       "id": "clap_hard_2",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap09.wav",
-      "newPath": "samples\\clap\\clap_hard_2.wav",
+      "newPath": "samples/clap/clap_hard_2.wav",
       "type": "clap",
       "loudness": "hard",
       "rms": 0.184,
@@ -344,7 +344,7 @@
     {
       "id": "clap_medium_1",
       "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Claps\\Liquid_Clap02.wav",
-      "newPath": "samples\\clap\\clap_medium_1.wav",
+      "newPath": "samples/clap/clap_medium_1.wav",
       "type": "clap",
       "loudness": "medium",
       "rms": 0.141,
@@ -354,7 +354,7 @@
     {
       "id": "clap_medium_2",
       "originalPath": "E:\\Ableton\\Drums\\LR_One Shots\\LR_Claps\\LR_Clap_4.wav",
-      "newPath": "samples\\clap\\clap_medium_2.wav",
+      "newPath": "samples/clap/clap_medium_2.wav",
       "type": "clap",
       "loudness": "medium",
       "rms": 0.089,
@@ -367,8 +367,8 @@
       "hard": [
         {
           "id": "kick_hard_1",
-          "originalPath": "E:AbletonDrumsprime loops d&bKicksTemple_Kick15.wav",
-          "newPath": "samples\\kick\\kick_hard_1.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Temple_Kick15.wav",
+          "newPath": "samples/kick/kick_hard_1.wav",
           "type": "kick",
           "loudness": "hard",
           "rms": 0.486,

@@ -199,6 +199,7 @@ private:
     void registerAudioVisSettings(AudioParams* ap);
     void registerEffectSettings();
     void syncEffectSettings();  // Apply effect settings to actual effect
+    void checkBayesianInteractions();  // Warn about dangerous param combinations
 
     // Members
     RenderPipeline* pipeline_;

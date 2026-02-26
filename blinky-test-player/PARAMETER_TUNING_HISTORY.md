@@ -1335,3 +1335,176 @@ Changed AudioController.cpp line 787: FT now only pushes BPM **upward** (>10% hi
 6. **No feature has been properly calibrated** — All tested at implementation defaults. No parameter sweeps performed for any feature.
 
 7. **The system lacks a coordination mechanism** — Each feature independently modifies BPM. When they disagree, the result is worse than having none of them. Need a framework for feature cooperation rather than independent stacking.
+
+---
+
+## Multi-Device Bayesian Weight Sweep: 2026-02-25
+
+**Environment:**
+- Hardware: 3× Seeeduino XIAO nRF52840 Sense (Long Tube config)
+- Serial Ports: /dev/ttyACM0, /dev/ttyACM1, /dev/ttyACM2
+- Audio: USB speakers (JBL Pebbles) via ffplay, headless Raspberry Pi
+- Tool: `param-tuner multi-sweep` (parallel sweep across 3 devices)
+- Duration: 30 seconds per track
+- Tracks: 9 real music files with ground truth beat annotations
+- Scoring: Beat events (music.q=1), 200ms tolerance, ground truth filtered to played duration
+
+### Methodology
+
+Multi-device parallel sweep: 3 devices hear the same audio simultaneously, each configured with a different parameter value. This provides 3× speedup over single-device sweeps. Each parameter is swept independently while others remain at their defaults.
+
+Scoring uses `scoreBeatEvents()` (not transient scoring): ground truth beat positions matched against firmware beat events (q=1) with 200ms tolerance. Audio latency estimated via median offset and corrected before matching.
+
+### Parameters Tested
+
+#### bayesacf (Autocorrelation observation weight)
+- **Range Tested:** 0, 0.3, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 1.0
+- **Independent Sweep Optimal:** 0 (disabled), F1 0.265
+- **Final Validated Value:** 0.3 — independent sweep found 0 optimal, but combined 4-device validation showed bayesacf=0 causes half-time lock (F1 0.410). bayesacf=0.3 is optimal when combined with cbssthresh=1.0 (F1 0.519).
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 22
+
+#### bayesft (Fourier tempogram observation weight)
+- **Range Tested:** 0, 0.3, 0.5, 0.8, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 0.8
+- **Optimal Value:** 0 (disabled)
+- **Best F1:** 0.196
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+#### bayescomb (Comb filter bank observation weight)
+- **Range Tested:** 0, 0.3, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 0.7
+- **Optimal Value:** 0.7 (unchanged)
+- **Best F1:** 0.203
+- **Applied to Firmware:** ✅ (default unchanged)
+
+#### bayesioi (IOI histogram observation weight)
+- **Range Tested:** 0, 0.2, 0.5, 0.7, 1.0, 1.3, 1.5, 2.0
+- **Previous Default:** 0.5
+- **Optimal Value:** 0 (disabled)
+- **Best F1:** 0.166
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+#### bayeslambda (Transition tightness)
+- **Range Tested:** 0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5
+- **Previous Default:** 0.1
+- **Optimal Value:** 0.15
+- **Best F1:** 0.186
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+#### cbssthresh (CBSS adaptive threshold factor)
+- **Range Tested:** 0, 0.2, 0.3, 0.4, 0.5, 0.7, 1.0
+- **Previous Default:** 0.4
+- **Optimal Value:** 1.0
+- **Best F1:** 0.590
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 21
+
+### Summary of Default Changes (SETTINGS_VERSION 20 → 22)
+
+| Parameter | Old Default | New Default | Change |
+|-----------|:-----------:|:-----------:|--------|
+| bayesacf | 1.0 | **0.3** | Reduced — independent sweep found 0 optimal but combined validation showed half-time lock; 0.3 optimal with cbssthresh=1.0 (v22) |
+| bayesft | 0.8 | **0** | Disabled — mean-norm kills discriminability |
+| bayesioi | 0.5 | **0** | Disabled — unnormalized counts dominate posterior |
+| bayescomb | 0.7 | 0.7 | Unchanged |
+| bayeslambda | 0.1 | **0.15** | Slightly wider tempo transitions |
+| cbssthresh | 0.4 | **1.0** | Higher threshold = fewer false beats = more stable BPM |
+
+### Key Findings
+
+1. **CBSS threshold is the biggest single improvement** — F1 jumps from 0.209 (at default 0.4) to 0.590 (at 1.0). Higher threshold prevents phantom beats during low-energy sections, keeping BPM stable, which paradoxically improves recall (0.509 vs ~0.08).
+
+2. **Three of four observation signals hurt beat tracking** — ACF, FT, and IOI all score optimal at 0 (disabled). Only the comb filter bank contributes positively.
+
+3. **Root cause analysis (compared to BTrack, madmom, librosa):**
+   - **ACF:** Missing inverse-lag normalization (BTrack divides `acf[i]/lag`). Sub-harmonic peaks dominate. BTrack processes ACF through a 4-harmonic comb filter bank before Bayesian inference — our raw ACF is too noisy.
+   - **FT:** Mean normalization across bins makes all observations ≈1.0 (near-flat). Uses magnitude-squared (amplifies noise). No reference implementation uses Fourier tempogram for real-time beat tracking.
+   - **IOI:** Raw integer counts (1-10+ range) dominate the multiplicative posterior. 2x folding biases toward fast tempos. No reference implementation uses IOI histograms for polyphonic beat tracking.
+   - **Comb:** Works because it's closest to BTrack/Scheirer — continuous resonance, phase-sensitive, self-normalizing.
+
+4. **Architectural mismatch:** Our multiplicative fusion (`posterior = prediction × ACF × FT × comb × IOI`) assumes independent, comparably-scaled signals. They are neither — they share the same input (OSS buffer) and have different scales and biases. BTrack uses a pipeline (ACF → comb → Rayleigh → Viterbi), not multiplicative fusion.
+
+5. **These are independent sweeps** — interaction effects between parameters were not tested. The combined effect of all new defaults together should be validated.
+
+### Raw Results
+
+Full per-track, per-value results saved to: `tuning-results/multi-sweep-results.json`
+
+---
+
+## Test Session: 2026-02-26 (Post-Spectral Bayesian Re-Tuning)
+
+**Environment:**
+- Hardware: 4x Seeeduino XIAO nRF52840 Sense (ACM0-3)
+- Firmware: v23 (spectral processing: adaptive whitening + soft-knee compressor)
+- Test Tracks: 9 EDM tracks (full duration, ~100-130s each)
+- Tool: multi-sweep (independent parameter sweeps) + run_music_test (combined validation)
+
+**Context:** Spectral processing (v23) normalizes FFT magnitudes, potentially fixing previously-broken Bayesian observation signals (FT and IOI were disabled in v21 due to scale/normalization issues).
+
+### Independent Sweep Results (4-device, 30s/track)
+
+| Parameter | Optimal | Previous | F1 at Optimal |
+|-----------|:-------:|:--------:|:-------------:|
+| bayesacf | 0.3 | 0.3 | 0.349 |
+| bayesft | **2.0** | 0 (disabled) | **0.544** |
+| bayescomb | 0.7 | 0.7 | 0.366 |
+| bayesioi | **2.0** | 0 (disabled) | **0.597** |
+| bayeslambda | 0.15 | 0.15 | 0.350 |
+| cbssthresh | 0.7 | 1.0 | 0.412 |
+
+**Key finding:** Spectral processing FIXED the FT and IOI signals. Both now score optimal at 2.0 (strong weight) instead of 0 (disabled).
+
+### Combined Validation (4-device, full duration, 2 samples per config)
+
+Tested 4 configurations to isolate interaction effects:
+
+| Config | bayesft | bayesioi | cbssthresh | Avg Beat F1 |
+|--------|:-------:|:--------:|:----------:|:-----------:|
+| A (all proposed) | 2.0 | 2.0 | 0.7 | 0.049 |
+| **C (FT+IOI only)** | **2.0** | **2.0** | **1.0** | **0.158** |
+| D (thresh only) | 0.0 | 0.0 | 0.7 | 0.140 |
+| B (control) | 0.0 | 0.0 | 1.0 | 0.106 |
+
+**Critical interaction effect:** cbssthresh=0.7 + FT/IOI = disaster (F1=0.049). The lower threshold allows too many phantom beats that overwhelm the improved tempo estimation. cbssthresh must stay at 1.0.
+
+### Per-Track Results (Config C vs Control, full duration, averaged over 2 devices)
+
+| Track | Config C (F1) | Control (F1) | Delta |
+|-------|:-------------:|:------------:|:-----:|
+| edm-trap-electro | 0.005 | 0.005 | 0.000 |
+| techno-deep-ambience | 0.141 | 0.059 | +0.082 |
+| techno-dub-groove | 0.051 | 0.005 | +0.046 |
+| techno-machine-drum | 0.000 | 0.025 | -0.025 |
+| techno-minimal-01 | 0.225 | 0.209 | +0.016 |
+| techno-minimal-emotion | 0.185 | 0.117 | +0.068 |
+| trance-goa-mantra | 0.286 | 0.220 | +0.066 |
+| trance-infected-vibes | 0.387 | 0.310 | +0.077 |
+| trance-party | 0.142 | 0.007 | +0.135 |
+| **Average** | **0.158** | **0.106** | **+0.052 (+49%)** |
+
+### Summary of Default Changes (SETTINGS_VERSION 23 → 24)
+
+| Parameter | Old Default | New Default | Change |
+|-----------|:-----------:|:-----------:|--------|
+| bayesft | 0 | **2.0** | Re-enabled — spectral whitening fixes discriminability |
+| bayesioi | 0 | **2.0** | Re-enabled — compressor normalizes count scale |
+| cbssthresh | 1.0 | 1.0 | Unchanged — lower values cause phantom beats |
+
+- **Applied to Firmware:** ✅ SETTINGS_VERSION 24
+
+### Key Findings
+
+1. **Spectral processing fixed two broken signals** — FT and IOI were disabled in v21 because raw FFT magnitudes had scale/normalization problems. Adaptive whitening (per-bin peak normalization) and soft-knee compression (frame-level gain normalization) fixed both issues.
+
+2. **FT was broken by mean normalization** — mean-normalizing across Fourier tempogram bins made all values ≈1.0. After spectral whitening, the magnitudes entering the tempogram are already normalized, so the existing mean-norm produces meaningful variation.
+
+3. **IOI was broken by raw counts** — IOI histogram counts (1-10+) had wildly different scales from other observations (0-1 range). The compressor normalizes the ODF that feeds IOI, producing more consistent count distributions.
+
+4. **cbssthresh=1.0 is essential** — even with better tempo estimation, lowering the beat threshold causes phantom beats during quiet sections. The interaction between threshold and FT/IOI is strongly negative.
+
+5. **Independent sweeps miss interactions** — cbssthresh swept to 0.7 optimal independently, but combined with FT/IOI it's catastrophic (F1 drops from 0.158 to 0.049). Always validate combined defaults.
+
+### Raw Results
+
+Full sweep results: `tuning-results/post-spectral/multi-sweep-results.json`

@@ -39,7 +39,14 @@ public:
     // Version 18: Bayesian tempo fusion (replaced 17 sequential-override params with 6 Bayesian weights)
     // Version 19: Added bayesPriorWeight (ongoing static prior strength)
     // Version 20: Added cbssThresholdFactor (CBSS adaptive threshold)
-    static const uint8_t SETTINGS_VERSION = 20;  // Settings schema (fire, water, lightning, mic, music params)
+    // Versions 21-24 were development iterations on the staging branch (Feb 2026).
+    // No field devices ever persisted v21-23 settings — they existed only during
+    // active tuning sessions and were reset between firmware uploads.
+    // Version 21: Bayesian weight tuning (FT/IOI disabled, ACF 1.0→0.3, cbssThresh 0.4→1.0, lambda 0.1→0.15)
+    // Version 22: Combined Bayesian validation (bayesacf=0.3, cbssthresh=1.0 — 4-device validated defaults)
+    // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)
+    // Version 24: Post-spectral Bayesian re-tuning (bayesft=2.0, bayesioi=2.0 — re-enabled by spectral processing)
+    static const uint8_t SETTINGS_VERSION = 24;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -199,6 +206,18 @@ public:
         bool ioiEnabled;                // Enable IOI histogram observation
         bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
         bool ftEnabled;                 // Enable Fourier tempogram observation
+
+        // Spectral processing (v23+)
+        bool whitenEnabled;             // Per-bin spectral whitening
+        bool compressorEnabled;         // Soft-knee compressor
+        float whitenDecay;              // Peak decay per frame (~5s at 0.997)
+        float whitenFloor;              // Noise floor for whitening
+        float compThresholdDb;          // Compressor threshold (dB)
+        float compRatio;                // Compression ratio (e.g., 3:1)
+        float compKneeDb;              // Soft knee width (dB)
+        float compMakeupDb;            // Makeup gain (dB)
+        float compAttackTau;           // Attack time constant (seconds)
+        float compReleaseTau;          // Release time constant (seconds)
     };
 
     /**
@@ -294,12 +313,14 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 100,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (100 bytes = 24 floats + 1 uint8 + 3 bools)");
+    static_assert(sizeof(StoredMusicParams) == 136,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 32 floats + 1 uint8 + 5 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    static_assert(sizeof(ConfigData) <= 512,
-        "ConfigData too large! May not fit in flash sector. Review struct padding. (Limit: 512 bytes)");
+    // ConfigData: ~545 bytes (4+160+64+64+40+76+136+1 + padding). Allocated in last 4KB flash page.
+    // Tight bound (640) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
+    static_assert(sizeof(ConfigData) <= 640,
+        "ConfigData exceeds 640 bytes! Current estimate ~545B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

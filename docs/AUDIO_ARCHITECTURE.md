@@ -86,7 +86,7 @@ Generators (Fire, Water, Lightning)
 4. **Derive Phase**: `phase = (sampleCounter - lastBeatSample) / beatPeriodSamples`
 
 **Every 500ms:**
-5. **Run Autocorrelation**: Compute correlation across all lags (60-200 BPM range)
+5. **Run Autocorrelation**: Compute correlation across all lags (60-200 BPM range), with inverse-lag normalization (`acf[i] /= lag`) to penalize sub-harmonics
 6. **Apply Tempo Prior**: Weight autocorrelation by Gaussian prior to disambiguate harmonics
 7. **Update Beat Period**: Convert best BPM to `beatPeriodSamples`
 

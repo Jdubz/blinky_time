@@ -76,6 +76,24 @@ public:
      */
     void reset();
 
+    // --- Tuning parameters (public, persisted via ConfigStorage) ---
+
+    // Per-bin spectral whitening (Stowell & Plumbley, ICMC 2007)
+    bool whitenEnabled = true;
+    float whitenDecay = 0.997f;    // Per-frame peak decay (~5s memory at 60fps)
+    float whitenFloor = 0.001f;    // Floor to avoid amplifying noise
+
+    // Soft-knee compressor (Giannoulis/Massberg/Reiss, JAES 2012)
+    bool compressorEnabled = true;
+    float compThresholdDb = -30.0f;  // dB threshold
+    float compRatio = 3.0f;          // 3:1 compression ratio
+    float compKneeDb = 15.0f;        // Soft knee width in dB
+    float compMakeupDb = 6.0f;       // Makeup gain in dB
+    float compAttackTau = 0.001f;    // Attack time constant (seconds). Values below ~16ms are instantaneous at 62.5 fps
+    float compReleaseTau = 2.0f;     // Release time constant (seconds). Intentionally slow: this is a
+                                     // spectral normalizer (not audio output). Slow release preserves
+                                     // transient dynamics while compressing sustained level differences.
+
     /**
      * Add samples to the analysis buffer
      * @param samples Pointer to int16_t sample buffer
@@ -110,7 +128,9 @@ public:
     // --- Accessors for spectral data ---
 
     /**
-     * Get magnitude spectrum (128 bins)
+     * Get magnitude spectrum (128 bins) — compressed + whitened
+     * After process(): magnitudes are soft-knee compressed then per-bin whitened.
+     * totalEnergy_ and spectralCentroid_ reflect the pre-whitened (compressed-only) state.
      * Valid after process() returns, until next process() call
      */
     const float* getMagnitudes() const { return magnitudes_; }
@@ -164,6 +184,21 @@ public:
      */
     float getSpectralCentroid() const { return spectralCentroid_; }
 
+    // --- Compressor/whitening debug accessors ---
+
+    /**
+     * Get current smoothed compressor gain in dB
+     * Positive = boosting, negative = attenuating
+     * Includes makeup gain. 0 when compressor disabled.
+     */
+    float getSmoothedGainDb() const { return smoothedGainDb_; }
+
+    /**
+     * Get frame RMS level in dB (pre-compression)
+     * Useful for seeing what the compressor is responding to
+     */
+    float getFrameRmsDb() const { return frameRmsDb_; }
+
 private:
     // Sample ring buffer
     int16_t sampleBuffer_[SpectralConstants::FFT_SIZE];
@@ -175,7 +210,7 @@ private:
     float vImag_[SpectralConstants::FFT_SIZE];
 
     // Output buffers
-    float magnitudes_[SpectralConstants::NUM_BINS];      // Raw magnitudes (HFC, ComplexDomain use these)
+    float magnitudes_[SpectralConstants::NUM_BINS];      // Compressed + whitened magnitudes (all detectors see this state)
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
@@ -187,6 +222,13 @@ private:
     // - SpectralFlux/Novelty compute change metrics that benefit from normalization
     // - 26 bands vs 128 bins = less memory, more perceptually meaningful
     float melRunningMax_[SpectralConstants::NUM_MEL_BANDS];
+
+    // Per-bin spectral whitening state (128 bins)
+    float binRunningMax_[SpectralConstants::NUM_BINS];
+
+    // Compressor state
+    float smoothedGainDb_;
+    float frameRmsDb_;
 
     // Derived features (computed from raw magnitudes)
     float totalEnergy_;
@@ -200,6 +242,8 @@ private:
     void applyHammingWindow();
     void computeFFT();
     void computeMagnitudesAndPhases();
+    void applyCompressor();
+    void whitenMagnitudes();
     void computeMelBands();
     void whitenMelBands();
     void computeDerivedFeatures();

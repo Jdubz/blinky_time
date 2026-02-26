@@ -386,6 +386,7 @@ export async function showSweepSummary(stateManager: StateManager): Promise<void
     ensemble: [],
     music: [],
     rhythm: [],
+    bayesian: [],
   };
 
   for (const param of params) {

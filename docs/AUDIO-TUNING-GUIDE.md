@@ -226,6 +226,8 @@ npm run tuner -- validate --port COM5 --gain 40
 **MCP Tool:**
 - `get_beat_state` - Retrieves BPM, phase, confidence, periodicity, beatCount, stability
 
+**CRITICAL interaction warning:** Setting `cbssthresh` below 0.8 while `bayesft` or `bayesioi` are above 0.5 causes catastrophic beat tracking failure (F1 drops to 0.049). The FT/IOI sub-harmonic bias floods CBSS with phantom beats that the low threshold can't reject. The firmware warns on serial when this combination is detected. Safe combinations: `cbssthresh >= 1.0` with any FT/IOI weight, or `bayesft/bayesioi <= 0.5` with any cbssthresh.
+
 ### Category: `agc` (5 parameters) - Hardware Gain Control
 
 | Command | Default | Range | Description |
@@ -242,6 +244,23 @@ npm run tuner -- validate --port COM5 --gain 40
 |---------|---------|-------|-------------|
 | `peaktau` | 2.0 | 0.5-10.0 | Peak adaptation speed (s) |
 | `releasetau` | 5.0 | 1.0-30.0 | Peak release speed (s) |
+
+### Category: `spectral` (10 parameters) - Spectral Processing (v23+)
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `whitenenabled` | true | bool | Per-bin spectral whitening (adaptive normalization) |
+| `whitendecay` | 0.997 | 0.99-1.0 | Per-frame peak decay (~5s memory at 0.997) |
+| `whitenfloor` | 0.001 | 0.0001-0.01 | Noise floor for whitening (avoids amplifying silence) |
+| `compressorenabled` | true | bool | Soft-knee compressor before whitening |
+| `compthreshold` | -30 | -60-0 | Compressor threshold (dB) |
+| `compratio` | 3.0 | 1.0-20.0 | Compression ratio (e.g., 3:1) |
+| `compknee` | 15.0 | 0.0-30.0 | Soft knee width (dB) |
+| `compmakeup` | 6.0 | -10.0-30.0 | Makeup gain (dB) |
+| `compattack` | 0.001 | 0.0-0.1 | Attack time constant (seconds) |
+| `comprelease` | 2.0 | 0.1-10.0 | Release time constant (seconds) |
+
+**Note on compAttackTau:** At 62.5 fps (16ms frame period), any attack time below ~16ms is effectively instantaneous — the smoothing filter converges in a single frame. The 1ms default means the compressor responds to level increases within one frame. Values above 16ms introduce meaningful smoothing across multiple frames.
 
 ### Category: `fire` (13 parameters) - Fire Visual Effect
 
@@ -311,9 +330,11 @@ ensemble_minconf = 0.55  # Minimum confidence for output
 
 **Spectral pipeline:**
 - SharedSpectralAnalysis runs FFT-256 once per frame
-- Raw magnitudes → HFC, ComplexDomain (absolute energy metrics)
+- Soft-knee compressor → per-bin whitening → magnitudes (all detectors see whitened data)
 - Whitened mel bands → SpectralFlux, Novelty (change-based metrics)
-- Whitening: per-band running max, decay=0.97, floor=0.01
+- Whitening: per-bin running max, decay=0.997, floor=0.001
+
+**Re-enabling disabled detectors:** Per-bin magnitude whitening (v23+) modifies `magnitudes_[]` in-place. Detectors that rely on absolute energy levels (HFC, ComplexDomain) will need threshold retuning if re-enabled, since their thresholds were calibrated against un-whitened magnitudes.
 
 ### Comprehensive Solo Detector Testing (16 patterns each, Jan 2026)
 

@@ -210,7 +210,7 @@ uf2-upload-all: compile-out
 	@echo "========================================"
 	@echo "UF2 Upload to ALL connected devices"
 	@echo "========================================"
-	python3 $(UF2_UPLOAD_TOOL) $(if $(UPLOAD_PORTS),$(UPLOAD_PORTS),--all) --build-dir $(BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
+	python3 $(UF2_UPLOAD_TOOL) $(if $(UPLOAD_PORTS),$(UPLOAD_PORTS),--all) --parallel --build-dir $(BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
 
 # UF2 dry run: compile + validate + convert only
 .PHONY: uf2-check
