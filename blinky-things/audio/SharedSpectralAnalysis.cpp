@@ -142,14 +142,20 @@ void SharedSpectralAnalysis::process() {
     // magnitudes. getMagnitudes() returns whitened values after whitenMagnitudes() below.
     computeDerivedFeatures();
 
-    // Compute mel bands from compressed (not whitened) magnitudes
+    // --- Pipeline ordering rationale ---
+    // Mel bands are computed BEFORE per-bin whitening, intentionally:
+    //   1. Mel bands use compressed-but-not-whitened magnitudes as input
+    //   2. Mel bands then get their own whitening (whitenMelBands)
+    //   3. Per-bin whitening runs last, modifying magnitudes_ in-place
+    //
+    // Why: Mel bands aggregate multiple FFT bins into perceptual bands.
+    // Whitening the 128 bins first, then computing mel bands from whitened values,
+    // would lose the relative energy information between bins within a band.
+    // Instead, each domain gets its own whitening tuned to its resolution:
+    //   - 26 mel bands: per-band running max (coarse, perceptual)
+    //   - 128 FFT bins: per-bin running max (fine, for BandFlux transient detection)
     computeMelBands();
-
-    // Apply whitening to mel bands
     whitenMelBands();
-
-    // Per-bin spectral whitening on compressed magnitudes (after mel bands computed)
-    // All consumers via getMagnitudes() get whitened data automatically
     whitenMagnitudes();
 
     // Mark frame as ready

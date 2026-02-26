@@ -39,6 +39,9 @@ public:
     // Version 18: Bayesian tempo fusion (replaced 17 sequential-override params with 6 Bayesian weights)
     // Version 19: Added bayesPriorWeight (ongoing static prior strength)
     // Version 20: Added cbssThresholdFactor (CBSS adaptive threshold)
+    // Versions 21-24 were development iterations on the staging branch (Feb 2026).
+    // No field devices ever persisted v21-23 settings — they existed only during
+    // active tuning sessions and were reset between firmware uploads.
     // Version 21: Bayesian weight tuning (FT/IOI disabled, ACF 1.0→0.3, cbssThresh 0.4→1.0, lambda 0.1→0.15)
     // Version 22: Combined Bayesian validation (bayesacf=0.3, cbssthresh=1.0 — 4-device validated defaults)
     // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)

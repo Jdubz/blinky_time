@@ -459,6 +459,10 @@ def cleanup_stale_mounts():
 
     Parses /proc/mounts for /mnt/uf2-* entries (and legacy /mnt/uf2-upload),
     unmounts them with lazy unmount, and removes empty mount directories.
+
+    Note: This will also unmount any manually-mounted UF2 drives at /mnt/uf2-*.
+    This is acceptable for the automation use case — manual mounts should use
+    a different path (e.g., /mnt/manual-uf2) to avoid conflicts.
     """
     stale = []
     try:

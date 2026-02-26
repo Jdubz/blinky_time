@@ -283,13 +283,13 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("bayespriorw", &audioCtrl_->bayesPriorWeight, "bayesian",
         "Ongoing static prior strength (0=off, 1=std, 2=strong)", 0.0f, 3.0f);
     settings_.registerFloat("bayesacf", &audioCtrl_->bayesAcfWeight, "bayesian",
-        "Autocorrelation observation weight", 0.0f, 2.0f);
+        "Autocorrelation observation weight", 0.0f, 5.0f);
     settings_.registerFloat("bayesft", &audioCtrl_->bayesFtWeight, "bayesian",
-        "Fourier tempogram observation weight", 0.0f, 2.0f);
+        "Fourier tempogram observation weight", 0.0f, 5.0f);
     settings_.registerFloat("bayescomb", &audioCtrl_->bayesCombWeight, "bayesian",
-        "Comb filter bank observation weight", 0.0f, 2.0f);
+        "Comb filter bank observation weight", 0.0f, 5.0f);
     settings_.registerFloat("bayesioi", &audioCtrl_->bayesIoiWeight, "bayesian",
-        "IOI histogram observation weight", 0.0f, 2.0f);
+        "IOI histogram observation weight", 0.0f, 5.0f);
 
     // Ensemble fusion parameters (detection gating)
     settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
@@ -410,6 +410,8 @@ void SerialConsole::handleCommand(const char* cmd) {
     if (settings_.handleCommand(cmd)) {
         // Sync effect settings to actual effect after any settings change
         syncEffectSettings();
+        // Warn about dangerous parameter interactions
+        checkBayesianInteractions();
         return;
     }
 
@@ -1352,6 +1354,23 @@ void SerialConsole::syncEffectSettings() {
     // Apply file-scope statics (modified by SettingsRegistry) to the actual effect
     hueEffect_->setHueShift(effectHueShift_);
     hueEffect_->setRotationSpeed(effectRotationSpeed_);
+}
+
+void SerialConsole::checkBayesianInteractions() {
+    if (!audioCtrl_) return;
+
+    // WARN: cbssthresh < 0.8 + bayesft > 0.5 causes catastrophic F1 collapse (0.049)
+    // because FT sub-harmonic bias floods CBSS with phantom beats at low threshold.
+    // See PARAMETER_TUNING_HISTORY.md "Combined Bayesian validation" for details.
+    float cbss = audioCtrl_->cbssThresholdFactor;
+    float ft = audioCtrl_->bayesFtWeight;
+    float ioi = audioCtrl_->bayesIoiWeight;
+
+    if (cbss < 0.8f && (ft > 0.5f || ioi > 0.5f)) {
+        Serial.println(F("WARNING: cbssthresh < 0.8 with bayesft or bayesioi > 0.5 causes"));
+        Serial.println(F("  catastrophic beat tracking failure. Raise cbssthresh >= 1.0"));
+        Serial.println(F("  or lower bayesft/bayesioi <= 0.5. See PARAMETER_TUNING_HISTORY.md"));
+    }
 }
 
 void SerialConsole::streamTick() {

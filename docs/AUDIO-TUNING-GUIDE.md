@@ -226,6 +226,8 @@ npm run tuner -- validate --port COM5 --gain 40
 **MCP Tool:**
 - `get_beat_state` - Retrieves BPM, phase, confidence, periodicity, beatCount, stability
 
+**CRITICAL interaction warning:** Setting `cbssthresh` below 0.8 while `bayesft` or `bayesioi` are above 0.5 causes catastrophic beat tracking failure (F1 drops to 0.049). The FT/IOI sub-harmonic bias floods CBSS with phantom beats that the low threshold can't reject. The firmware warns on serial when this combination is detected. Safe combinations: `cbssthresh >= 1.0` with any FT/IOI weight, or `bayesft/bayesioi <= 0.5` with any cbssthresh.
+
 ### Category: `agc` (5 parameters) - Hardware Gain Control
 
 | Command | Default | Range | Description |
