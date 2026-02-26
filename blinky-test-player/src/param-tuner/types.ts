@@ -645,7 +645,7 @@ export const PARAMETERS: Record<string, ParameterDef> = {
     max: 1.0,
     default: 0.15,
     sweepValues: [0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5],
-    description: 'Viterbi transition tightness (lower = more rigid tempo)',
+    description: 'Gaussian transition tightness (lower = more rigid tempo)',
     optimizeFor: 'f1',
   },
 

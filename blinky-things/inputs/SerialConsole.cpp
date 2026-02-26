@@ -751,6 +751,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 *mic_,
                 audioCtrl_
             );
+            checkBayesianInteractions();
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -760,6 +761,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
 
     if (strcmp(cmd, "defaults") == 0) {
         restoreDefaults();
+        checkBayesianInteractions();
         Serial.println(F("OK"));
         return true;
     }

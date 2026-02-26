@@ -461,6 +461,25 @@ def _get_usb_block_devices():
     return devices
 
 
+def _get_block_device_serial(block_dev):
+    """Get USB serial number for a block device via sysfs.
+
+    Reads /sys/block/<dev>/device/../../serial to find the USB device
+    serial number. Returns None if not available.
+    """
+    # Extract device name from path (e.g., /dev/sda1 -> sda1, /dev/sda -> sda)
+    dev_name = Path(block_dev).name
+    # Strip partition number to get parent disk (sda1 -> sda)
+    import re
+    disk_name = re.sub(r'\d+$', '', dev_name)
+
+    serial_path = Path(f"/sys/block/{disk_name}/device/../../serial")
+    try:
+        return serial_path.read_text().strip()
+    except (OSError, FileNotFoundError):
+        return None
+
+
 def cleanup_stale_mounts():
     """Remove stale UF2 mounts from previous failed runs.
 
@@ -1119,10 +1138,6 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     pass
 
                 # Wait for a new block device (this specific device)
-                # TODO: Assignment takes the lexicographically first new block device.
-                # If a slow device from a previous step appears late, it could be
-                # mis-assigned. The 2s stagger makes this unlikely. A robust fix would
-                # match by USB serial number via /sys/block/sdX/device/../../serial.
                 print(f"    Waiting for UF2 drive...")
                 deadline = time.monotonic() + 8
                 new_dev = None
@@ -1135,6 +1150,15 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     time.sleep(0.3)
 
                 if new_dev:
+                    # Verify block device belongs to this port's device via USB serial number
+                    expected_sn = mount_map[port]["serial"]
+                    if expected_sn:
+                        block_sn = _get_block_device_serial(new_dev)
+                        if block_sn and block_sn != expected_sn:
+                            print(f"    WARNING: Block device {new_dev} serial '{block_sn}' "
+                                  f"does not match expected '{expected_sn}' — possible mis-assignment")
+                        elif block_sn:
+                            print(f"    Serial number verified: {block_sn}")
                     print(f"    UF2 drive detected: {new_dev}")
                     mount_map[port]["block_dev"] = new_dev
                     entered = True

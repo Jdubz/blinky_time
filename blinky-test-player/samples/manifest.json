@@ -3,7 +3,7 @@
   "samples": [
     {
       "id": "kick_hard_1",
-      "originalPath": "E:AbletonDrumsprime loops d&bKicksTemple_Kick15.wav",
+      "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Temple_Kick15.wav",
       "newPath": "samples/kick/kick_hard_1.wav",
       "type": "kick",
       "loudness": "hard",
@@ -367,8 +367,8 @@
       "hard": [
         {
           "id": "kick_hard_1",
-          "originalPath": "E:AbletonDrumsprime loops d&bKicksTemple_Kick15.wav",
-          "newPath": "samples\\kick\\kick_hard_1.wav",
+          "originalPath": "E:\\Ableton\\Drums\\prime loops d&b\\Kicks\\Temple_Kick15.wav",
+          "newPath": "samples/kick/kick_hard_1.wav",
           "type": "kick",
           "loudness": "hard",
           "rms": 0.486,
