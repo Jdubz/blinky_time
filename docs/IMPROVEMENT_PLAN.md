@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: February 26, 2026*
+*Last Updated: February 27, 2026*
 
 ## Current Status
 
@@ -331,64 +331,158 @@ Inspired by BeatNet (Heydari et al., ISMIR 2021). 100-200 particles tracking (be
 | Multi-frame diffframes=2 | Too many transients, hurts phase (avg -0.098) | Feb 24 |
 | Deep learning/CNN/Transformer | Not feasible on nRF52840 (64 MHz, no matrix acceleration) | Research |
 
-### Priority 7: Onset Detection Improvements (Research, Feb 22)
+### Priority 7: Onset Detection — Gap Analysis vs State of the Art (Feb 27, 2026)
 
-Comprehensive research survey identified several untried improvements to BandWeightedFlux that could improve kick detection rate (currently ~60% recall on some tracks). Better onset detection feeds better data to all BPM tracking systems.
+Comprehensive comparison against SuperFlux, BTrack (ComplexSpectralDifferenceHWR), madmom, aubio, and CNN-based detectors. Our BandWeightedFlux detector is well-aligned with established best practices but has specific gaps in peak picking, frequency resolution, and ODF design.
+
+#### Onset Detection Performance Context
+
+| Method | F1 (50ms) | F1 (25ms) | Type | Embedded |
+|--------|-----------|-----------|------|----------|
+| CNN ensemble (Schluter 2014) | ~0.90 | ~0.87 | Offline neural | No |
+| SuperFlux (Böck 2013) | ~0.85-0.88 | ~0.84-0.85 | Offline DSP | Yes |
+| ComplexFlux | ~0.86-0.89 | — | Offline DSP | Yes |
+| Complex domain (Duxbury 2003) | ~0.78-0.82 | — | DSP | Yes |
+| Standard spectral flux | ~0.80-0.83 | ~0.78-0.80 | DSP | Yes |
+| **BandWeightedFlux (ours)** | **~0.44** | — | **Real-time DSP** | **Yes** |
+
+Our lower scores vs literature benchmarks are primarily due to: (1) room acoustics via microphone vs studio recordings, (2) 16 kHz / FFT-256 vs 44.1 kHz / FFT-2048, (3) single-threshold peak picking without local-max confirmation. Percussion onset detection on clean recordings is considered "solved" (F1 > 0.85) — our challenge is the degraded real-world acoustic environment.
+
+#### What BandWeightedFlux Does Right (Validated by Literature)
+
+1. **Log-compressed spectral flux** — Standard in SuperFlux, madmom, librosa. Any compression improves F1 by 5-10+ points.
+2. **Per-bin adaptive whitening** (Stowell & Plumbley 2007) — Exactly the aubio algorithm. 10+ F1 point improvement in literature.
+3. **Soft-knee spectral compressor** (Giannoulis 2012) — More sophisticated than most onset detectors (typically just log compression).
+4. **SuperFlux 3-bin max filter** — Reduces false positives up to 60% on vibrato-heavy material (Böck & Widmer 2013).
+5. **Half-wave rectified spectral flux** — Standard in all top non-neural systems.
+6. **Additive threshold** (`mean + delta`) — BTrack, SuperFlux, and madmom all use additive/subtractive thresholds.
+7. **Asymmetric threshold update** (skip update on detection frames) — Prevents loud onsets from inflating noise floor. Novel but sound engineering.
+8. **Band weighting** (bass=2.0, mid=1.5, high=0.1) — Aligned with literature on drum-focused onset detection (Scheirer 1998).
+9. **Onset delta filter** (minOnsetDelta=0.3) — Addresses the "gradual onset" failure mode identified in the literature as a key challenge.
 
 #### 7a. Per-Band Independent Thresholds — TESTED, KEEP OFF (Feb 24, 2026)
 
 Independent adaptive thresholds per band (bass/mid/high). Detection fires if ANY band exceeds its own threshold × multiplier. **Disabled by default** (`bandflux_perbandthresh=0`).
 
-- **Settings:** `bandflux_perbandthresh` (bool), `bandflux_perbandmult` (default 1.5)
-- **3-track subset results:** avg F1 0.670→0.715 (+0.045) — improved goa-mantra (+0.064) and minimal-01 (+0.074)
-- **Full 9-track regression:** avg F1 0.421→0.354 (**-0.067**) — **major regressions** on quiet/sparse tracks:
-  - deep-ambience: 0.378→0.097 (-0.281)
-  - minimal-emotion: 0.307→0.140 (-0.167)
-  - machine-drum: 0.089→0.014 (-0.075)
-- **Root cause:** Per-band detection generates more transients which overwhelms beat tracker on sparse tracks. Helps strong rhythmic tracks but destroys weak ones.
-- **Verdict:** Keep disabled. The 3-track subset was misleading.
+- **Full 9-track regression:** avg F1 0.421→0.354 (**-0.067**) — major regressions on quiet/sparse tracks
+- **Verdict:** Keep disabled. Literature supports this finding — splitting detection by band without per-band calibration increases false positives.
 
 #### 7b. Multi-Frame Temporal Reference — TESTED, KEEP AT 1 (Feb 24, 2026)
 
-Configurable `diffframes` (1-3) for BandFlux reference frame. Default remains 1 (compare to previous frame). Higher values skip intermediate frames for more robust flux measurement during bass sweeps.
+Configurable `diffframes` (1-3). Default remains 1. diffframes=2 generates too many transients (avg -0.098 F1).
 
-- **Settings:** `bandflux_diffframes` (default 1, range 1-3)
-- **diffframes=2 results:** avg F1 0.670→0.572 (**-0.098**) on 3-track subset:
-  - trance-party: 0.836→0.783 (-0.053)
-  - goa-mantra: 0.565→0.252 (-0.313) — too many transients (349→460)
-  - minimal-01: 0.610→0.681 (+0.071) — more transients helped BPM
-- **Root cause:** diffframes=2 detects more transients overall (larger flux from skipping a frame), which overwhelms phase alignment on tracks with complex textures.
-- **Verdict:** Keep at 1 (default).
+#### 7c. Dual-Threshold Peak Picking — NEW, HIGH PRIORITY
 
-#### 7c. FFT-512 Bass-Focused Analysis — HIGH IMPACT, MODERATE EFFORT
+**The biggest gap in our onset detection.** SuperFlux, madmom, and librosa all use dual-threshold peak picking requiring BOTH:
+1. ODF sample is a **local maximum** within a window
+2. ODF sample **exceeds local mean + delta**
 
-The core onset detection problem: at FFT-256/16kHz, kick drum energy (40-80Hz) occupies only **1-2 FFT bins** (bin 1 = 62.5Hz). A sustained bass note fills the same bins, suppressing kick flux. FFT-512 doubles bass resolution (31.25Hz/bin), giving 2-4 bins for kick discrimination.
+We use threshold-only (`combinedFlux > averageFlux + threshold`). No local maximum check. This means:
+- We fire on the **rising edge** of flux peaks rather than the true peak (imprecise timing)
+- Consecutive frames above threshold all fire (suppressed only by cooldown, not peak detection)
+- The cooldown does double duty: rate-limiting AND peak-selecting
 
-- **Memory:** ~5KB (FFT buffers + bass magnitude history)
-- **CPU:** ~3-4ms every other frame (~1.5ms average)
-- **Complexity:** ~200 lines (second FFT path, bass-only flux computation)
-- **Risk:** Medium — need to manage two FFT paths, timing, and fusion
-- **References:** Multi-resolution spectral flux (Bello 2005), Bock CNN multi-scale input (ICASSP 2014)
+**SuperFlux default parameters:**
+```
+pre_max=10ms, post_max=50ms   // local max window (post_max provides look-ahead)
+pre_avg=150ms, post_avg=0ms   // local mean window (causal)
+combine=30ms                   // minimum inter-onset interval
+delta=1.1                      // threshold above local mean
+```
 
-#### 7d. Weighted Phase Deviation Fusion — MEDIUM PRIORITY
+**Causal adaptation for our system:**
+- Local max: `ODF[t] >= ODF[t-1] && ODF[t] >= ODF[t+1]` with 1-frame look-ahead (16ms)
+- Local mean: existing `averageFlux` EMA (causal, no look-ahead needed)
+- Combine: existing adaptive cooldown
+- Even 1-frame look-ahead (16ms) is imperceptible for visualization
 
-Phase deviation catches kicks during sustained notes where magnitude flux is suppressed. At an onset, new frequency components appear with unpredictable phases, causing large deviation from the linear phase prediction. We already compute and store phase data in `SharedSpectralAnalysis`.
+**Implementation:** Buffer 1-2 frames of ODF output. Only report detection when the buffered frame is confirmed as a local maximum. The current detection fires at frame N; the new logic would fire at frame N+1 after confirming N is a peak.
 
-- **Memory:** ~512 bytes (one extra frame of phase history for prediction)
-- **CPU:** ~50us/frame (~128 multiplies + wraps)
-- **Complexity:** ~50 lines
-- **References:** Dixon 2006 (Onset Detection Revisited), Duxbury 2003 (Complex Domain)
+- **Effort:** Low (~40 lines). 1-2 frame ring buffer + local max check before emitting detection.
+- **Expected impact:** Medium-High. Literature shows dual-threshold adds ~2-5% F1 over threshold-only. Improves timing precision of every detection.
+- **References:** SuperFlux (Böck & Widmer 2013), madmom `peak_picking`, librosa `peak_pick`
 
-#### 7e. Knowledge-Distilled TinyML Onset Detector — LONG TERM
+#### 7d. Hi-Res Bass via Goertzel — ALREADY IMPLEMENTED, TEST ENABLING
 
-Train a CNN on desktop with labeled EDM onset data, distill to tiny student model (~1K-5K parameters), quantize to INT8, deploy via TensorFlow Lite Micro. Input: existing 64 log-compressed FFT bins. Output: onset probability per frame. Only approach that can truly learn complex spectral patterns of kicks vs bass vs pads.
+The hi-res bass path (`hiResBassEnabled`) is already coded in BandWeightedFluxDetector. It uses 512-sample Goertzel for 12 bass bins at 31.25 Hz/bin (vs 6 FFT bins at 62.5 Hz/bin). This doubles bass frequency resolution, giving 2-4 bins for kick drum fundamental (40-80 Hz) vs 1-2 bins currently.
+
+At FFT-256/16kHz, kick drum fundamental (40-80 Hz) and bass guitar (80-250 Hz) can share the same 1-2 bins. The kick's attack is masked by the bass's sustain. Hi-res bass separates them.
+
+- **Effort:** Trivial (set `hiResBassEnabled=true`, run 9-track sweep)
+- **Expected impact:** Medium for kick-specific detection
+- **References:** Multi-resolution spectral flux (Bello 2005), Böck CNN multi-scale input (ICASSP 2014)
+
+#### 7e. Complex Spectral Difference for Rhythm ODF — MEDIUM PRIORITY
+
+BTrack's default ODF is ComplexSpectralDifferenceHWR, which uses both magnitude AND phase:
+```
+phaseDeviation[k] = phase[k] - 2*prevPhase[k] + prevPhase2[k]
+CSD[k] = sqrt(mag[k]² + prevMag[k]² - 2*mag[k]*prevMag[k]*cos(phaseDeviation[k]))
+ODF = Σ max(0, CSD[k])  // half-wave rectified
+```
+
+This catches pitched onsets at constant energy (chord changes, bass note changes) that magnitude flux misses. We already compute and store phase data in SharedSpectralAnalysis.
+
+**Caveat:** Phase is extremely sensitive to noise. Through a microphone in a reverberant room, phase coherence degrades rapidly. Dixon (2006) found CSD only slightly outperforms spectral flux on clean recordings and performs worse on noisy signals. **Recommended for CBSS rhythm ODF only, not for visual transient detection.**
+
+- **Memory:** ~512 bytes (one extra frame of phase history)
+- **CPU:** ~0.5% (128 trig ops per frame)
+- **Effort:** Medium (~80 lines)
+- **Expected impact:** Uncertain for mic-in-room. Test as CBSS ODF only.
+- **References:** Duxbury 2003, Dixon 2006 (Onset Detection Revisited), Bello 2005
+
+#### 7f. Log-Spaced Sub-Band Filterbank — MEDIUM PRIORITY
+
+SuperFlux uses 24 bands/octave (~216 total). madmom CNN uses 80 mel bands. We use 3 bands (bass/mid/high) with raw FFT bins averaged per band. This is very coarse — a kick at 60 Hz and a bass note at 300 Hz share the same "bass" band.
+
+With 128 FFT bins at 62.5 Hz/bin, we could create 12-24 log-spaced bands. At low frequencies, each band maps to 1-2 FFT bins (limited by resolution); at high frequencies, bands span many bins. The finer grouping would:
+- Separate kick fundamental from bass guitar
+- Separate snare crack from vocal energy
+- Give per-band flux more discriminative power
+
+**However:** Our 3-band approach works well for the specific kick/snare visual use case. The coarse grouping is a deliberate simplification. The literature filterbanks are for general-purpose onset detection across all instrument types.
+
+- **Effort:** Medium (~80 lines, new band definition table + per-band flux loop)
+- **Expected impact:** Low-Medium for kick/snare use case. Higher for general onset detection.
+- **Risk:** Requires per-band threshold calibration. May interact with existing `bassWeight/midWeight/highWeight`.
+
+#### 7g. Knowledge-Distilled TinyML Onset Detector — LONG TERM
+
+Train CNN on desktop with labeled EDM onset data, distill to tiny student model (~1K-5K params), quantize to INT8, deploy via TensorFlow Lite Micro. The only approach that can learn complex spectral patterns (kicks vs bass vs pads vs room modes).
+
+Performance gap between DSP and neural onset detection: ~10-15 F1 points on standard benchmarks. CNN F1 ~0.90 vs SuperFlux ~0.85-0.88. This gap is the performance ceiling that DSP improvements cannot cross.
 
 - **Memory:** ~5-15KB (model + activations)
-- **CPU:** ~200-500us/frame (with CMSIS-NN acceleration on Cortex-M4F)
+- **CPU:** ~200-500us/frame (with CMSIS-NN on Cortex-M4F)
 - **Flash:** ~5-20KB model weights
 - **Risk:** High — requires training data, model development, TFLM integration
-- **Expected improvement:** Potentially 0.85+ onset F-measure (vs current ~0.60 on difficult tracks)
-- **References:** Bock & Schlueter (ICASSP 2014), Knowledge distillation (Nature 2025, 1282-parameter student), TensorFlow Lite Micro
+- **References:** Böck & Schlüter (ICASSP 2014), efficient CNN (81K params, 2018), TinyML distillation (Nature 2025)
+
+#### Onset Detection: Approaches Tested and Rejected
+
+| Approach | Why Not | Tested |
+|----------|---------|--------|
+| Per-band independent thresholds | Increases FPs on sparse tracks (-0.067 avg F1) | Feb 24 |
+| Multi-frame diffframes=2 | Too many transients, hurts phase (-0.098 avg F1) | Feb 24 |
+| Post-onset decay confirmation | Adds latency, rejects synth stabs | Feb 22 |
+| Band-dominance gate | Redundant with high-weight suppression | Feb 22 |
+| Spectral crest factor gate | Kills kicks through room resonances | Feb 22 |
+| CNN/RNN on nRF52840 | Not feasible (64 MHz, no matrix acceleration) | Research |
+| Complex domain for visual transients | Phase too noisy via microphone in room | Research |
+| Overlapping FFT windows (125 fps) | Doubles FFT CPU cost for marginal timing gain | Research |
+
+#### Onset Detection: What NOT to Change (Validated)
+
+| Feature | Rationale |
+|---------|-----------|
+| BandFlux Solo | Single detector outperforms ensemble (+14% Beat F1). Literature confirms cleaner signal > multi-detector voting |
+| Additive threshold | Correct for low-signal environments. Used by BTrack, SuperFlux, madmom |
+| High-band suppression (0.1) | Correct for kick/snare visual use case |
+| Onset delta filter (0.3) | Valid solution for gradual onset rejection |
+| Asymmetric threshold update | Prevents onset self-inflation. Sound engineering |
+| Adaptive cooldown | Maps to SuperFlux's `combine` parameter. Tempo-awareness correct for visualization |
+| Log compression (gamma=20) | Aggressive but appropriate for low-SNR mic input |
+| Per-bin whitening (decay=0.997) | Faster than aubio default (250s) but appropriate for live music |
 
 ---
 
@@ -408,26 +502,379 @@ Train a CNN on desktop with labeled EDM onset data, distill to tiny student mode
 | Multi-frame diffframes | bandflux_diffframes | **Tested, keep at 1** — diffframes=2 too many transients (Feb 24) |
 | BandFlux core params | gamma, bassWeight, threshold, onsetDelta | **Calibrated** (Feb 21) |
 
+## State-of-the-Art Gap Analysis (Feb 27, 2026)
+
+Comprehensive comparison against BTrack, madmom DBN, BeatNet, Essentia, and published academic systems. Current avg Beat F1: **0.519**. BTrack (nearest comparable DSP-only system): **~65-75%**. The ~15-20 point gap is explained by architectural differences documented below.
+
+### Performance Context
+
+| System | Type | Beat F1 | Hardware |
+|--------|------|---------|----------|
+| Beat This! (2024) | Offline transformer | ~89% | GPU |
+| madmom DBN (offline) | Offline RNN+DBN | ~88% | CPU |
+| BeatNet+ (2024) | Online CRNN+PF | ~81% | CPU |
+| madmom forward (online) | Online RNN+HMM | ~74% | CPU |
+| BTrack (online) | Online DSP | ~65-75% | Embedded OK |
+| **Blinky (online)** | **Online DSP** | **~52%** | **nRF52840 64MHz** |
+
+### What We're Doing Right (Validated by Literature)
+
+These are confirmed best practices — keep them:
+
+1. **Continuous ODF → CBSS** — CBSS is fed by `computeSpectralFluxBands()` (continuous spectral flux), not binary transient events. Matches BTrack architecture.
+2. **Adaptive spectral whitening** (Stowell & Plumbley 2007) — Per-bin normalization. Literature shows 10+ F1 point improvement.
+3. **Soft-knee spectral compression** (Giannoulis 2012) — Standard in all top systems.
+4. **Inverse-lag ACF normalization** — Already implemented (line 491-494). Corrects sub-harmonic bias. BTrack does the same.
+5. **SuperFlux-style max filtering** — In both BandWeightedFlux and computeSpectralFluxBands. Exactly the Böck & Widmer 2013 technique.
+6. **Comb filter bank** (Scheirer 1998) — Best single non-neural tempo estimator.
+7. **BTrack-style predict+countdown CBSS** — Standard non-neural real-time beat tracking.
+8. **Band-weighted spectral flux** — Emphasizing bass/mid over high is well-supported.
+9. **ODF mean subtraction** — Essential for ACF discriminability (tested Feb 24, OFF destroys BPM).
+10. **CBSS adaptive threshold** — Prevents phantom beats. Standard in BTrack (adaptive threshold on cumulative score).
+
+---
+
 ## Next Actions
 
-### Active
-1. **FFT-512 bass-focused analysis** (Priority 7c) — Better kick detection to feed better data upstream. ~200 lines, ~5KB RAM.
-2. **Particle filter beat tracking** (Priority 6c) — Fundamentally different approach that handles multi-modal tempo distributions. ~100-150 lines, ~2KB RAM.
+### Phase 1: Simplify — Remove Wasteful/Detrimental Features
+
+Each removal must be tested with a 9-track sweep before/after to confirm no regression.
+
+#### 1a. Test Disabling FT and IOI Observations — NEEDS VALIDATION
+
+**Problem:** FT and IOI have documented algorithmic issues (MEMORY.md root cause analysis). No reference implementation (BTrack, madmom, librosa) uses Fourier tempogram or IOI histograms in real-time beat tracking. The +49% improvement attributed to their v24 re-enablement may be from simultaneous changes (spectral processing, cbssthresh tuning) rather than FT/IOI themselves.
+
+**Evidence against FT:**
+- Mean normalization in Goertzel produces near-flat observation vectors (all bins ≈ 1.0)
+- Independent sweep found bayesft=0 optimal
+- BTrack does not use Fourier tempogram — uses comb filter on ACF instead
+- madmom uses RNN activations, not Fourier tempogram, for real-time
+
+**Evidence against IOI:**
+- Unnormalized counts (1-10+ range) can dominate multiplicative posterior
+- O(n²) complexity with onset count (up to 48×48×20 operations)
+- 2x folding biases toward fast tempos
+- No reference implementation uses IOI histograms for polyphonic beat tracking
+
+**Test plan:**
+1. Set `bayesft=0, bayesioi=0` (disable observations)
+2. Run 9-track beat F1 sweep vs current defaults (`bayesft=2.0, bayesioi=2.0`)
+3. If F1 is equal or better: make the removal permanent, delete the code
+4. If F1 is worse: keep enabled but document which tracks benefit and why
+
+**Effort:** Trivial (parameter change). **Impact:** Removes 2 fragile signals from multiplicative fusion + ~1-2% CPU.
+
+#### 1b. Simplify Ensemble Infrastructure for Solo Detector
+
+**Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead. The agreementBoosts array, minConfidence filtering, and dominant detector tracking serve no purpose.
+
+**Action:** Simplify EnsembleFusion to pass BandFlux output directly when only 1 detector is enabled. Keep the multi-detector path as dead code for future experimentation, but bypass it at runtime.
+
+**Test plan:** Before/after 9-track sweep to confirm no regression from simplification.
+
+**Effort:** Low (~30 lines). **Impact:** Cleaner code, marginally less CPU.
+
+#### 1c. Evaluate Adaptive Band Weighting Cost/Benefit
+
+**Problem:** ~1600 lines of code for adaptive band weighting (per-band OSS buffers, cross-band correlation, peakiness crest factor, per-band autocorrelation). Consumes 2.9 KB RAM for per-band OSS buffers + ~1% CPU. The conditions for adaptive weights to activate (periodicity > 0.1, avgEffective > 0.15, bandSynchrony > 0.3) may rarely be met, causing the system to fall back to fixed defaults most of the time.
+
+**Test plan:**
+1. Set `adaptiveBandWeightEnabled=false`
+2. Run 9-track beat F1 sweep vs enabled
+3. If F1 is equal: remove the feature (reclaim 2.9 KB RAM + 1% CPU + ~1600 lines)
+4. If F1 is worse on specific tracks: document which tracks and evaluate if the complexity is justified
+
+**Effort:** Trivial (parameter toggle). **Impact:** Potentially major simplification.
+
+#### 1d. Remove Dual ODF Computation (Consolidate with Phase 2.4)
+
+**Problem:** Two parallel spectral flux computations on the same data:
+- `computeSpectralFluxBands()` in AudioController — raw band-weighted flux for CBSS
+- `BandWeightedFluxDetector::computeBandFlux()` — log-compressed flux with thresholding for transients
+
+These run independently on the same spectral magnitudes, producing different views of "what just happened." This is wasteful AND architecturally harmful (see Phase 2.4).
+
+**Action:** Defer to Phase 2.4 (Unify ODF). The fix for waste and the fix for the architectural gap are the same change.
+
+---
+
+### Phase 2: Improve — Close Gaps with State of the Art
+
+Each improvement must be tested and calibrated independently before combining. Use 9-track (or 18-track) beat F1 sweep with 4-device parallel testing.
+
+#### 2.1. Only Update beatPeriodSamples at Beat Boundaries
+
+**Gap:** Tempo changes can happen at arbitrary times (every 250ms during autocorrelation), causing CBSS to use a beat period that changed mid-prediction. BTrack only calls `calculateTempo()` when a beat fires — tempo and beat timing are synchronized.
+
+**What BTrack does:** `calculateTempo()` runs inside the `if (timeToNextBeat == 0)` block. The beat period used by CBSS stays constant between beats.
+
+**What we do:** `runAutocorrelation()` runs every 250ms regardless of beat phase. The resulting BPM immediately updates `beatPeriodSamples_`, which CBSS uses for its log-Gaussian window. A mid-beat tempo change shifts the window while a prediction is in flight.
+
+**Fix:** Continue running autocorrelation every 250ms (the Bayesian posterior needs frequent updates to track changes). But defer applying the new `beatPeriodSamples_` to CBSS until the next beat fires. Store the pending value in `pendingBeatPeriod_` and apply it in `detectBeat()` when `timeToNextBeat <= 0`.
+
+**Test plan:**
+1. Implement pending beat period
+2. Run 9-track beat F1 sweep before/after
+3. Expect improvement on tracks with stable tempo (fewer mid-beat period discontinuities)
+4. Watch for regression on tracks with rapid tempo changes (deferred update = slower adaptation)
+
+**Effort:** Low (~20 lines). **Impact:** High — synchronizes tempo and beat tracking.
+
+#### 2.2. Increase Tempo Resolution (20 → 40+ Bins)
+
+**Gap:** 20 bins over 60-180 BPM = 6 BPM per bin. At 120 BPM, 1 BPM error = 4.2ms per beat — after 10 beats, 42ms cumulative drift. BTrack uses 41 bins (80-160 BPM, 2 BPM steps). madmom uses frame-level resolution (~80 distinct periods at 100fps).
+
+**Fix:** Increase `NUM_TEMPO_BINS` from 20 to 40 (3 BPM steps) or 60 (2 BPM steps).
+
+**Cost analysis:**
+- Transition matrix: 40×40×4 = 6.4 KB (vs current 20×20×4 = 1.6 KB). Precomputed once.
+- Per-update: O(N²) = 1600 multiplies at 40 bins vs 400 at 20 bins. At 250ms intervals on 64 MHz, negligible.
+- Comb filter bank: 40 filters × 60 samples × 4 bytes = 9.6 KB (vs current 4.8 KB). This is the main memory cost.
+- Total: ~+8 KB RAM. Within budget (14 KB used of 256 KB available).
+
+**Test plan:**
+1. Implement 40 bins, re-run 9-track sweep
+2. If better: try 60 bins
+3. Check memory usage stays under 25 KB total
+4. Re-calibrate Bayesian weights if needed (more bins may change optimal exponents)
+
+**Effort:** Low-Medium (~50 lines, mainly constants and array sizes). **Impact:** High — finer tempo resolution reduces cumulative phase drift.
+
+#### 2.3. Adaptive ODF Threshold Before ACF (BTrack-style)
+
+**Gap:** BTrack applies a sliding window adaptive threshold to the ODF before computing the ACF. This removes slowly-varying energy envelopes (verse/chorus dynamics, crescendos), leaving only impulsive onsets for the ACF to find periodicity in. Our ODF goes into the ACF with only 5-point causal smoothing — the ACF can find periodicity in arrangement-level dynamics rather than beat-level dynamics.
+
+**BTrack algorithm:**
+```
+For each ODF sample:
+    localMean = mean(ODF[i-8 : i+7])  // 16-sample window (pre=8, post=7)
+    thresholded[i] = max(0, ODF[i] - localMean)
+```
+
+**Adaptation for causal (real-time) operation:** BTrack's threshold uses a post-window (looks 7 samples ahead), which isn't possible in real-time at frame rate. Options:
+- Use fully causal window (pre=15, post=0) — trades look-ahead for latency
+- Apply threshold only to the OSS buffer retrospectively before ACF — the buffer contains 6s of history, so a centered window is fine for the ACF computation
+
+**Test plan:**
+1. Implement local-mean subtraction on OSS buffer before autocorrelation (centered window, applied to buffer not real-time stream)
+2. Run 9-track beat F1 sweep before/after
+3. Expect improvement on tracks with dynamic energy (verse/chorus, breakdowns)
+4. Check periodicity strength stability (should be more consistent)
+
+**Effort:** Low (~30 lines). **Impact:** Medium — cleaner ACF input = more reliable tempo estimation.
+
+#### 2.4. Unify ODF — Feed BandFlux Pre-Threshold Activation to Beat Tracker
+
+**Gap:** The transient detector (BandWeightedFlux) and beat tracker (computeSpectralFluxBands) compute spectral flux independently with different preprocessing. The transient detector has log compression, onset delta filtering, hi-hat rejection — all tuned for visual aesthetics. The beat tracker's ODF has none of these. This means the beat tracker might lock onto energy patterns that the transient detector suppresses (or vice versa).
+
+**What BTrack does:** Single ODF (ComplexSpectralDifferenceHWR) feeds BOTH onset detection (peak picking) and beat tracking (CBSS). One representation, two consumers.
+
+**Fix:** Extract the continuous (pre-threshold) activation value from BandWeightedFlux and use it as the ODF for CBSS. Apply thresholding/cooldown only for the visual pulse output. This:
+- Eliminates the duplicate `computeSpectralFluxBands()` computation (~100 lines)
+- Unifies what the system "hears" — transient detection and beat tracking see the same signal
+- The log compression in BandFlux may actually help the ACF (compresses dynamic range, standard in the literature)
+- Keeps BandFlux's vibrato suppression and band weighting for the shared ODF
+
+**Test plan:**
+1. Add a `getPreThresholdFlux()` accessor to BandWeightedFluxDetector
+2. Replace `computeSpectralFluxBands()` call with pre-threshold BandFlux value
+3. Run 9-track beat F1 sweep
+4. If BandFlux's log compression hurts ACF: add a configurable compression bypass for the CBSS path
+5. Re-calibrate `beatoffset` (timing may shift due to different ODF characteristics)
+
+**Effort:** Medium (~50 lines of plumbing, ~100 lines removed). **Impact:** High — eliminates ODF disagreement between transient detection and beat tracking.
+
+#### 2.5. Simplify Bayesian Fusion (Conditional on 1a Results)
+
+**Gap:** Multiplicative fusion of 4 independent estimators is fragile. If any estimator produces near-zero for the correct bin, the posterior collapses. BTrack uses a sequential pipeline (ACF → comb filter on ACF → Rayleigh → Viterbi). madmom uses a single observation model into a DBN. No reference system uses multiplicative fusion of 4 independent estimators.
+
+**Options (evaluate after Phase 1a):**
+
+**Option A — Reduce to Comb + ACF only:**
+If Phase 1a confirms FT/IOI don't help, simplify to `posterior = prediction × combObs × acfObs`. Two well-understood signals. Removes ~150 lines of FT/IOI observation code.
+
+**Option B — Switch to log-domain additive fusion:**
+`logPosterior[i] = w_comb * log(combObs[i]) + w_acf * log(acfObs[i]) + ...`
+Numerically more stable. Individual estimators contribute proportionally rather than multiplicatively vetoing. Equivalent to weighted geometric mean.
+
+**Option C — BTrack-style pipeline:**
+Apply comb filter to ACF values (not to raw ODF), then Rayleigh weight, then Viterbi-like DP. Each stage refines the previous one's output. More robust because failure in one stage doesn't multiply through.
+
+**Test plan:** Implement the option that aligns with Phase 1a results. 9-track sweep. Compare stability (F1 variance across tracks) not just average.
+
+**Effort:** Medium. **Impact:** Medium — reduces fragile interaction effects.
+
+#### 2.6. Dual-Threshold Peak Picking for BandFlux (Priority 7c)
+
+**Gap:** The biggest gap in our onset detection. SuperFlux, madmom, and librosa all use dual-threshold peak picking requiring BOTH a local maximum AND exceeding the threshold. We use threshold-only, which fires on rising edges rather than true peaks, with cooldown doing double-duty as rate limiter and peak selector.
+
+**Fix:** Buffer 1-2 frames of ODF output. Only report detection when the buffered frame is confirmed as a local maximum. Add 1-frame look-ahead (16ms latency, imperceptible for visualization).
+
+```
+Detection requires ALL of:
+1. combinedFlux[t] > averageFlux + threshold        (existing threshold check)
+2. combinedFlux[t] >= combinedFlux[t-1]              (rising or peak)
+3. combinedFlux[t] >= combinedFlux[t+1]              (confirmed peak, 1-frame delay)
+4. Cooldown elapsed                                   (existing adaptive cooldown)
+```
+
+**Test plan:**
+1. Implement 1-frame look-ahead ring buffer in BandWeightedFluxDetector
+2. Add local max condition: detection deferred 1 frame, emitted only if confirmed as peak
+3. Run 9-track transient F1 sweep (timing precision should improve)
+4. Run 9-track beat F1 sweep (better timing → better beat tracking)
+5. Re-calibrate `beatoffset` if timing shifts
+
+**Effort:** Low (~40 lines). **Impact:** Medium-High — improves timing precision of every detection, reduces double-fires.
+
+#### 2.7. Enable Hi-Res Bass (Priority 7d)
+
+**Already implemented** in BandWeightedFluxDetector (`hiResBassEnabled`). 512-sample Goertzel for 12 bass bins at 31.25 Hz/bin. Doubles bass resolution vs 6 FFT bins at 62.5 Hz/bin.
+
+**Test plan:**
+1. Set `hiResBassEnabled=true`
+2. Run 9-track transient F1 sweep (focus on kick-heavy tracks)
+3. Run 9-track beat F1 sweep
+4. If improvement: make default, update SETTINGS_VERSION
+
+**Effort:** Trivial (parameter toggle). **Impact:** Medium for kick discrimination.
+
+#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking (Priority 7e)
+
+BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phase. We already have phase data in SharedSpectralAnalysis. CSD catches pitched onsets at constant energy that magnitude flux misses. **For CBSS rhythm ODF only** — phase is too noisy via microphone for visual transient detection.
+
+**Test plan:**
+1. Implement CSD in AudioController (or SharedSpectralAnalysis)
+2. Test as standalone ODF for CBSS (replace spectral flux)
+3. Test as weighted blend: `ODF = α*flux + (1-α)*CSD`
+4. 9-track beat F1 sweep for each variant
+
+**Effort:** Medium (~80 lines + 512 bytes). **Impact:** Uncertain — phase noisy via mic in room.
+
+#### 2.9. Tempo Transition Constraints (Apply at Beat Boundaries Only)
+
+**Gap:** madmom's DBN allows tempo changes ONLY at beat boundaries (lambda=100). BTrack runs `calculateTempo()` only at beat time. Our system applies tempo changes every 250ms regardless of beat phase.
+
+**This is a generalization of 2.1** — not just deferring the beat period update, but constraining the entire Bayesian posterior to only transition at beat boundaries. Between beats, the posterior should be frozen (carry forward the previous posterior as-is without prediction spreading).
+
+**Test plan:** After implementing 2.1, evaluate whether further constraining posterior updates to beat boundaries helps. If 2.1 already addresses the phase discontinuity issue, this may be unnecessary overhead.
+
+**Effort:** Low (conditional on 2.1). **Impact:** Medium.
+
+---
+
+### Phase 3: Architecture — Major Changes (Future)
+
+These require significant design work and should only be attempted after Phase 1+2 gains are realized and calibrated.
+
+#### 3.1. Joint Tempo-Phase HMM (Bar Pointer Model)
+
+**The biggest architectural gap.** madmom's DBN jointly tracks `(position_within_beat, beat_period)`. Position advances deterministically by 1 each frame. Tempo can only change at beat boundaries. Phase and tempo are structurally coupled. This is fundamentally different from our decoupled approach (Bayesian tempo every 250ms + CBSS phase independently).
+
+**Feasibility on nRF52840:**
+- 40 tempo bins × 15 position steps = 600 states
+- Forward algorithm: 600 × 600 = 360K multiplies per frame (but transition matrix is sparse — only ~10 states reachable per step → ~6K multiplies)
+- At 60 Hz: 6K × 60 = 360K ops/second = ~0.5% CPU at 64 MHz
+- Memory: 600 × 4 bytes (forward vector) + sparse transition matrix (~2 KB) = ~5 KB
+
+**What it provides:**
+- Frame-by-frame beat probability (not just countdown)
+- Structural enforcement of even beat spacing
+- Implicit tempo smoothing through transition probabilities
+- Beat and tempo locked together — no phase discontinuities
+
+**Would replace:** Bayesian tempo fusion + CBSS + predict-and-countdown. Essentially the entire rhythm tracking backend.
+
+**Risk:** High — complete rewrite of core beat tracking. Must prove improvement before committing.
+
+**Approach:** Prototype in Python first (offline, against ground truth). Compare to current system on 18-track test set. Only port to firmware if clearly better.
+
+#### 3.2. Log-Spaced Sub-Band Filterbank (Previously Priority 7f)
+
+Replace 3-band grouping (bass/mid/high) with 12-24 log-spaced bands for finer frequency discrimination. SuperFlux uses 24 bands/octave. With 128 FFT bins at 62.5 Hz/bin, 12-16 log-spaced bands is realistic. Separates kick from bass guitar, snare crack from vocal energy.
+
+- **Effort:** Medium (~80 lines)
+- **Risk:** Medium — requires per-band threshold calibration, may interact with band weights
+
+**Deferred:** Phase 2.7 (hi-res bass Goertzel, already implemented) addresses the most critical bass resolution gap. Sub-band filterbank is a further refinement if bass resolution alone is insufficient.
+
+#### 3.3. Particle Filter Beat Tracking (Previously Priority 6c)
+
+100-200 particles tracking `(beat_period, beat_position)`. Naturally handles multi-modal tempo distributions. Octave investigator injects particles at 2x/0.5x median tempo.
+
+- **CPU:** ~1% (100 particles × weight update per frame + periodic resampling)
+- **Memory:** ~2 KB
+- **Complexity:** ~100-150 lines
+
+**Deferred:** Evaluate after Phase 3.1 (joint HMM) prototyping. If the HMM achieves BTrack-level performance, a particle filter adds diminishing returns. If the HMM is too rigid, particles offer more flexibility.
+
+#### 3.4. Knowledge-Distilled TinyML Onset Detector (Previously Priority 7e)
+
+The only approach that can learn complex spectral patterns (kicks vs bass vs pads vs room modes). Performance gap between DSP and neural onset detection is ~10-15 F1 points.
+
+- **Memory:** ~5-15 KB (model + activations)
+- **CPU:** ~200-500us/frame (with CMSIS-NN on Cortex-M4F)
+- **Risk:** High — requires training data, model development, TFLM integration
+
+**Deferred:** Long-term research project. Phase 2 improvements may close enough of the gap.
+
+---
+
+### Features Identified for Removal/Simplification
+
+| Feature | Status | Action | Rationale |
+|---------|--------|--------|-----------|
+| **FT observation** | Enabled (bayesft=2.0) | **Test disabling (Phase 1a)** | Broken algorithm per research; no reference system uses FT for real-time beat tracking |
+| **IOI observation** | Enabled (bayesioi=2.0) | **Test disabling (Phase 1a)** | Broken algorithm per research; O(n²) complexity; no reference system uses IOI for polyphonic beat tracking |
+| **Adaptive band weighting** | Enabled | **Test disabling (Phase 1c)** | ~1600 lines + 2.9 KB RAM for potentially minimal benefit |
+| **computeSpectralFluxBands()** | Active | **Replace with unified ODF (Phase 2.4)** | Duplicate computation; disagrees with BandFlux transient detector |
+| **6 disabled detectors** | Code present, disabled | **Keep as-is** | Zero runtime cost; useful for future experimentation |
+| **Phase correction** | Disabled (phasecorr=0) | **Keep disabled** | Documented failure on syncopated tracks |
+| **Static Bayesian prior** | Disabled (bayespriorw=0) | **Keep disabled** | Hurts tracks far from 128 BPM center |
+| **Ensemble fusion complexity** | Active | **Simplify for solo detector (Phase 1b)** | Agreement scaling, weighted averaging unnecessary with 1 detector |
+| **ODF smooth width=5** | Active | **Re-evaluate after Phase 2.4** | 83ms latency; may be unnecessary once ODF is unified |
+| **Disabled BandFlux gates** | Code present, disabled | **Keep as-is** | Zero runtime cost; available for future testing |
+| **Per-band thresholds** | Disabled | **Keep disabled** | Tested, -0.067 avg F1 regression |
+| **diffframes > 1** | Set to 1 | **Keep at 1** | Tested, -0.098 avg F1 regression |
+
+---
+
+## Next Actions (Priority Order)
+
+### Active — Phase 1: Simplify
+1. **Test disable FT+IOI** (Phase 1a) — 9-track sweep with bayesft=0, bayesioi=0 vs current
+2. **Test disable adaptive band weighting** (Phase 1c) — 9-track sweep with adaptiveBandWeightEnabled=false
+3. **Simplify ensemble fusion** (Phase 1b) — bypass multi-detector logic for solo mode
+
+### Next — Phase 2: Improve (after Phase 1 validated)
+4. **Beat-boundary tempo updates** (Phase 2.1) — defer beatPeriodSamples_ changes to beat fire
+5. **Increase tempo bins** (Phase 2.2) — 20 → 40 bins, +~5 KB RAM
+6. **Adaptive ODF threshold** (Phase 2.3) — local-mean subtraction on OSS buffer before ACF
+7. **Unify ODF** (Phase 2.4) — replace computeSpectralFluxBands with BandFlux pre-threshold value
+8. **Simplify Bayesian fusion** (Phase 2.5) — reduce to Comb+ACF or switch to log-domain
+9. **Dual-threshold peak picking** (Phase 2.6) — add local-max confirmation to BandFlux with 1-frame look-ahead
+10. **Enable hi-res bass** (Phase 2.7) — test `hiResBassEnabled=true` (already implemented)
+11. **Complex spectral difference** (Phase 2.8) — phase-based ODF for CBSS rhythm tracking only
+
+### Future — Phase 3: Architecture
+12. **Joint tempo-phase HMM** (Phase 3.1) — prototype in Python, port if clearly better
+13. **Log-spaced sub-band filterbank** (Phase 3.2) — 12-24 bands, evaluate after Phase 2.7 hi-res bass
+14. **Particle filter** (Phase 3.3) — evaluate after Phase 3.1 HMM prototyping
+15. **TinyML onset detector** (Phase 3.4) — long-term research
+
 ### Completed
-- ~~**Microphone sensitivity**~~ — ✅ Addressed by spectral compressor + per-bin adaptive whitening (v23+, Feb 2026). Soft-knee compressor with 6dB makeup gain normalizes weak mic signals in the spectral domain. Per-bin whitening makes detectors invariant to absolute signal level. Enabled FT/IOI re-activation in v24 (+49% Beat F1).
-- ~~**Post-spectral Bayesian re-calibration**~~ — ✅ 4-device sweep + combined validation with spectral processing active (Feb 26). FT and IOI re-enabled at 2.0 (spectral whitening/compression fixed their normalization issues). cbssthresh=1.0 confirmed essential. Avg Beat F1 +49% vs control. Applied as SETTINGS_VERSION 24.
-- ~~**ACF inverse-lag normalization**~~ — ✅ Added `acf[i] /= lag` (BTrack-style sub-harmonic penalty) after periodicity strength, before Bayesian fusion. Note: bayesacf=0.3 was originally validated against un-normalized ACF (v22), but the v24 post-spectral re-sweep ran with normalization active and confirmed bayesacf=0.3 still optimal.
-- ~~**Combined defaults validation**~~ — ✅ 4-device sweep of bayesacf (0, 0.3, 0.7, 1.0) with v21 base params (Feb 25). Found bayesacf=0 causes half-time lock; 0.3 optimal (F1 0.519). Independent sweep results were misleading — interaction between bayesacf=0 and cbssthresh=1.0 caused regression. Updated to SETTINGS_VERSION 22.
-- ~~**Bayesian weight sweep + firmware defaults**~~ — ✅ Swept all 6 Bayesian params via multi-device parallel sweep (Feb 25). Root cause analysis via BTrack/madmom/librosa comparison identified sub-harmonic bias (ACF), mean-norm (FT), and unnormalized counts (IOI).
-- ~~**Multi-device testing infrastructure**~~ — ✅ 4-device parallel capture with ffplay audio, variation + sweep commands (Feb 25). Inter-device F1 spread 0.014.
-- ~~**Feature testing sweep**~~ — ✅ ODF mean sub OFF, diffframes=2, per-band thresholds ON all tested (Feb 24). None improve overall avg. Current defaults are optimal.
-- ~~**CBSS Adaptive Threshold**~~ — ✅ Implemented (SETTINGS_VERSION 20). Prevents phantom beats during silence.
-- ~~**Per-sample ACF Harmonic Disambiguation**~~ — ✅ Fixed minimal-01 sub-harmonic (BPM 70→124).
-- ~~**Bayesian Tempo Fusion**~~ — ✅ Implemented (SETTINGS_VERSION 18-21). Replaced sequential override chain.
-- ~~**Design unified feature cooperation framework**~~ — ✅ Done (Bayesian fusion is the framework).
-- ~~**Onset density tracking**~~ — ✅ Done.
-- ~~**Diverse test music library**~~ — ✅ 18 tracks (9 original + 9 syncopated).
-- ~~**HPS, Pulse train, IOI, FT, ODF mean sub**~~ — ✅ All implemented; IOI/FT/comb now feed Bayesian fusion. HPS/pulse train removed.
+- ~~**Microphone sensitivity**~~ — ✅ Spectral compressor + per-bin adaptive whitening (v23+)
+- ~~**Post-spectral Bayesian re-calibration**~~ — ✅ FT/IOI re-enabled at 2.0, cbssthresh=1.0 confirmed (v24)
+- ~~**ACF inverse-lag normalization**~~ — ✅ `acf[i] /= lag` (BTrack-style, confirmed)
+- ~~**Combined defaults validation**~~ — ✅ bayesacf=0.3 prevents half-time lock (4-device validated, v22)
+- ~~**Bayesian weight sweep**~~ — ✅ All 6 params swept (Feb 25)
+- ~~**Multi-device testing infrastructure**~~ — ✅ 4-device parallel capture (Feb 25)
+- ~~**Feature testing sweep**~~ — ✅ ODF mean sub, diffframes, per-band thresholds tested (Feb 24)
+- ~~**CBSS Adaptive Threshold**~~ — ✅ Implemented (v20), tuned to 1.0 (v22)
+- ~~**Per-sample ACF Harmonic Disambiguation**~~ — ✅ Fixed minimal-01 sub-harmonic
+- ~~**Bayesian Tempo Fusion**~~ — ✅ Implemented (v18-21), replaced sequential override chain
+- ~~**Onset density tracking**~~ — ✅ Done
+- ~~**Diverse test music library**~~ — ✅ 18 tracks
 
 ---
 
