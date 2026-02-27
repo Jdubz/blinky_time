@@ -132,76 +132,181 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
 
   // ============================================================
-  // WATER GENERATOR (Particle-based)
+  // WATER GENERATOR (Particle-based, w_ prefix)
   // ============================================================
-  dropvelmin: {
+  w_spawnchance: {
+    displayName: 'Spawn Chance',
+    tooltip: 'Baseline probability of spawning drops per frame (0-1). Higher = more active rain.',
+    unit: '',
+  },
+  w_audioboost: {
+    displayName: 'Audio Boost',
+    tooltip: 'Audio reactivity multiplier (0-2). Amplifies spawn rate based on energy level.',
+    unit: '',
+  },
+  w_gravity: {
+    displayName: 'Gravity',
+    tooltip: 'Gravity strength (positive=downward, LEDs/sec²). Higher = faster falling drops.',
+    unit: 'LEDs/sec²',
+  },
+  w_windbase: {
+    displayName: 'Base Wind',
+    tooltip: 'Sustained directional drift force (LEDs/sec²).',
+    unit: 'LEDs/sec²',
+  },
+  w_windvar: {
+    displayName: 'Wind Variation',
+    tooltip: 'Wind variation amount (LEDs/sec). Higher = more chaotic movement.',
+    unit: 'LEDs/sec',
+  },
+  w_drag: {
+    displayName: 'Drag',
+    tooltip: 'Drag coefficient (0.9-1.0). Closer to 1 = less drag.',
+    unit: '',
+  },
+  w_dropvelmin: {
     displayName: 'Min Drop Velocity',
     tooltip: 'Minimum downward velocity for drops (LEDs/sec). Lower = slower falling.',
     unit: 'LEDs/sec',
   },
-  dropvelmax: {
+  w_dropvelmax: {
     displayName: 'Max Drop Velocity',
     tooltip: 'Maximum downward velocity for drops (LEDs/sec). Higher = faster falling.',
     unit: 'LEDs/sec',
   },
-  dropspread: {
+  w_dropspread: {
     displayName: 'Drop Spread',
     tooltip: 'Horizontal velocity variation for drops (LEDs/sec). Higher = wider spray.',
     unit: 'LEDs/sec',
   },
-  splashparticles: {
+  w_splashparts: {
     displayName: 'Splash Particle Count',
     tooltip: 'Number of particles spawned on splash impact (0-10). More = bigger splashes.',
     unit: 'particles',
   },
-  splashvelmin: {
+  w_splashvelmin: {
     displayName: 'Min Splash Velocity',
     tooltip: 'Minimum splash velocity (LEDs/sec). Lower = smaller splashes.',
     unit: 'LEDs/sec',
   },
-  splashvelmax: {
+  w_splashvelmax: {
     displayName: 'Max Splash Velocity',
     tooltip: 'Maximum splash velocity (LEDs/sec). Higher = bigger splashes.',
     unit: 'LEDs/sec',
   },
-  splashintensity: {
+  w_splashint: {
     displayName: 'Splash Intensity',
     tooltip: 'Splash particle intensity multiplier (0-255). Higher = brighter splashes.',
     unit: '',
   },
+  w_maxparts: {
+    displayName: 'Max Particles',
+    tooltip: 'Maximum active particles (1-30). Pool capacity is 30.',
+    unit: '',
+  },
+  w_lifespan: {
+    displayName: 'Lifespan',
+    tooltip: 'Default particle lifespan in centiseconds (20-180).',
+    unit: 'cs',
+  },
+  w_intmin: {
+    displayName: 'Min Intensity',
+    tooltip: 'Minimum spawn intensity/brightness (0-255).',
+    unit: '',
+  },
+  w_intmax: {
+    displayName: 'Max Intensity',
+    tooltip: 'Maximum spawn intensity/brightness (0-255).',
+    unit: '',
+  },
+  w_musicpulse: {
+    displayName: 'Music Pulse',
+    tooltip: 'Phase modulation for spawn rate (0-1). Higher = stronger beat sync.',
+    unit: '',
+  },
+  w_transmin: {
+    displayName: 'Transient Min',
+    tooltip: 'Min transient level to trigger burst (0-1). Higher = requires stronger hits.',
+    unit: '',
+  },
+  w_bgintensity: {
+    displayName: 'Background Intensity',
+    tooltip: 'Noise background brightness (0-1).',
+    unit: '',
+  },
 
   // ============================================================
-  // LIGHTNING GENERATOR (Particle-based)
+  // LIGHTNING GENERATOR (Particle-based, l_ prefix)
   // ============================================================
-  boltvelmin: {
-    displayName: 'Min Bolt Speed',
-    tooltip: 'Minimum bolt speed (LEDs/sec). Lower = slower bolts.',
-    unit: 'LEDs/sec',
+  l_spawnchance: {
+    displayName: 'Spawn Chance',
+    tooltip: 'Baseline probability of spawning bolts per frame (0-1).',
+    unit: '',
   },
-  boltvelmax: {
-    displayName: 'Max Bolt Speed',
-    tooltip: 'Maximum bolt speed (LEDs/sec). Higher = faster bolts.',
-    unit: 'LEDs/sec',
+  l_audioboost: {
+    displayName: 'Audio Boost',
+    tooltip: 'Audio reactivity multiplier (0-2).',
+    unit: '',
   },
-  faderate: {
+  l_faderate: {
     displayName: 'Fade Rate',
     tooltip: 'Intensity decay per frame (0-255). Higher = faster fade, shorter bolts.',
     unit: '',
   },
-  branchcount: {
+  l_branchchance: {
+    displayName: 'Branch Chance',
+    tooltip: 'Branch probability per step (0-100%).',
+    unit: '%',
+  },
+  l_branchcount: {
     displayName: 'Branch Count',
     tooltip: 'Number of branches spawned per trigger (1-4). More = bushier lightning.',
     unit: 'branches',
   },
-  branchspread: {
+  l_branchspread: {
     displayName: 'Branch Angle Spread',
     tooltip: 'Angle variation for branches (radians). Higher = wider forking.',
     unit: 'rad',
   },
-  branchintloss: {
+  l_branchintloss: {
     displayName: 'Branch Intensity Loss',
     tooltip: 'Intensity reduction for child branches (0-100%). Higher = dimmer branches.',
     unit: '%',
+  },
+  l_maxparts: {
+    displayName: 'Max Particles',
+    tooltip: 'Maximum active particles (1-40). Pool capacity is 40.',
+    unit: '',
+  },
+  l_lifespan: {
+    displayName: 'Lifespan',
+    tooltip: 'Default particle lifespan in centiseconds (10-60).',
+    unit: 'cs',
+  },
+  l_intmin: {
+    displayName: 'Min Intensity',
+    tooltip: 'Minimum spawn intensity/brightness (0-255).',
+    unit: '',
+  },
+  l_intmax: {
+    displayName: 'Max Intensity',
+    tooltip: 'Maximum spawn intensity/brightness (0-255).',
+    unit: '',
+  },
+  l_musicpulse: {
+    displayName: 'Music Pulse',
+    tooltip: 'Phase modulation for spawn rate (0-1). Higher = stronger beat sync.',
+    unit: '',
+  },
+  l_transmin: {
+    displayName: 'Transient Min',
+    tooltip: 'Min transient level to trigger burst (0-1). Higher = requires stronger hits.',
+    unit: '',
+  },
+  l_bgintensity: {
+    displayName: 'Background Intensity',
+    tooltip: 'Noise background brightness (0-1).',
+    unit: '',
   },
 
   // ============================================================

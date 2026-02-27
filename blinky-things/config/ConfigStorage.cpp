@@ -130,7 +130,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.water.musicSpawnPulse = 0.5f;
     data_.water.organicTransientMin = 0.3f;
     data_.water.backgroundIntensity = 0.15f;
-    data_.water.maxParticles = 64;
+    data_.water.maxParticles = 30;   // Pool size is ParticleGenerator<30>
     data_.water.defaultLifespan = 90;
     data_.water.intensityMin = 80;
     data_.water.intensityMax = 200;
@@ -165,24 +165,6 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.mic.fastAgcThreshold = 0.15f;     // Raw level threshold to trigger fast mode
     data_.mic.fastAgcPeriodMs = 5000;       // 5s calibration period in fast mode
     data_.mic.fastAgcTrackingTau = 5.0f;    // 5s tracking tau in fast mode
-
-    // LEGACY: Detection defaults (kept for backward compatibility with old configs)
-    // These parameters are now handled by EnsembleDetector, not AdaptiveMic
-    data_.mic.transientThreshold = 2.813f;
-    data_.mic.attackMultiplier = 1.1f;
-    data_.mic.averageTau = 0.8f;
-    data_.mic.cooldownMs = 80;
-    data_.mic.detectionMode = 4;
-    data_.mic.bassFreq = 120.0f;
-    data_.mic.bassQ = 1.0f;
-    data_.mic.bassThresh = 3.0f;
-    data_.mic.hfcWeight = 1.0f;
-    data_.mic.hfcThresh = 3.0f;
-    data_.mic.fluxThresh = 1.4f;
-    data_.mic.fluxBins = 64;
-    data_.mic.hybridFluxWeight = 0.5f;
-    data_.mic.hybridDrumWeight = 0.5f;
-    data_.mic.hybridBothBoost = 1.2f;
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
@@ -451,23 +433,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.mic.fastAgcThreshold, 0.01f, 0.5f, F("fastAgcThresh"));
     validateFloat(data_.mic.fastAgcTrackingTau, 0.5f, 30.0f, F("fastAgcTau"));
     VALIDATE_INT(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
-
-    // LEGACY: Validate detection parameters (still needed for backward compatibility)
-    validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
-    validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
-    validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
-    VALIDATE_INT(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
-    VALIDATE_INT(data_.mic.detectionMode, 0, 4, F("detectionMode"));
-    validateFloat(data_.mic.bassFreq, 40.0f, 200.0f, F("bassFreq"));
-    validateFloat(data_.mic.bassQ, 0.5f, 3.0f, F("bassQ"));
-    validateFloat(data_.mic.bassThresh, 1.5f, 10.0f, F("bassThresh"));
-    validateFloat(data_.mic.hfcWeight, 0.5f, 5.0f, F("hfcWeight"));
-    validateFloat(data_.mic.hfcThresh, 1.5f, 10.0f, F("hfcThresh"));
-    validateFloat(data_.mic.fluxThresh, 1.0f, 10.0f, F("fluxThresh"));
-    VALIDATE_INT(data_.mic.fluxBins, 4, 128, F("fluxBins"));
-    validateFloat(data_.mic.hybridFluxWeight, 0.1f, 1.0f, F("hybridFluxWeight"));
-    validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
-    validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
 
     // AudioController validation (v23+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
