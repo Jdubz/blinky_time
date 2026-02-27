@@ -49,9 +49,9 @@ public:
         bool wrap, void* buffer);
 
     /**
-     * Create spawn region appropriate for this layout and effect
+     * Create spawn region appropriate for this layout and generator
      * @param layout The device layout type
-     * @param effect What kind of effect (fire, water, lightning)
+     * @param generator What kind of generator (fire, water, lightning)
      * @param width Grid width
      * @param height Grid height
      * @param buffer Memory buffer for placement new (minimum 32 bytes)
@@ -62,9 +62,9 @@ public:
         uint16_t width, uint16_t height, void* buffer);
 
     /**
-     * Create boundary behavior for this layout and effect
+     * Create boundary behavior for this layout and generator
      * @param layout The device layout type
-     * @param effect What kind of effect
+     * @param generator What kind of generator
      * @param wrap Whether to wrap edges
      * @param buffer Memory buffer for placement new (minimum 32 bytes)
      * @return Pointer to created behavior

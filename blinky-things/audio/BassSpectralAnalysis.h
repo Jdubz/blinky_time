@@ -149,6 +149,6 @@ private:
     static float goertzelMagnitude(const float* windowedSamples, int N, float coeff);
 
     static bool safeIsFinite(float x) {
-        return isfinite(x);
+        return (x == x) && (x >= -3.4e38f) && (x <= 3.4e38f);
     }
 };

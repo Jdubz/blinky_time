@@ -154,11 +154,6 @@ public:
     const float* getMelBands() const { return melBands_; }
 
     /**
-     * Get previous frame mel bands (for mel flux computation)
-     */
-    const float* getPrevMelBands() const { return prevMelBands_; }
-
-    /**
      * Get number of FFT bins
      */
     int getNumBins() const { return SpectralConstants::NUM_BINS; }
@@ -248,11 +243,6 @@ private:
     void whitenMelBands();
     void computeDerivedFeatures();
     void savePreviousFrame();
-
-    // Mel filterbank helpers
-    static float hzToMel(float hz);
-    static float melToHz(float mel);
-    static int hzToBin(float hz);
 
     // Portable isfinite check
     static bool safeIsFinite(float x) {

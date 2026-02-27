@@ -33,11 +33,6 @@ public:
     void clear();
 
     /**
-     * Show the rendered frame (calls leds.show())
-     */
-    void show();
-
-    /**
      * Test pattern for verifying LED mapping
      * @param pattern Test pattern type (0=corners, 1=gradient, 2=checkerboard)
      */

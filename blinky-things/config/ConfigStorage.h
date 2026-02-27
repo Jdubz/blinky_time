@@ -47,7 +47,7 @@ public:
     // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)
     // Version 24: Post-spectral Bayesian re-tuning (bayesft=2.0, bayesioi=2.0 — re-enabled by spectral processing)
     // Version 25: BTrack-style octave error fixes (harmonic comb ACF, Rayleigh prior, tighter lambda, bidirectional disambig)
-    static const uint8_t SETTINGS_VERSION = 25;  // Settings schema (fire, water, lightning, mic, music params)
+    static const uint8_t SETTINGS_VERSION = 26;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -113,9 +113,6 @@ public:
         // Spawn behavior
         float baseSpawnChance;
         float audioSpawnBoost;
-        // Bolt appearance
-        float boltVelocityMin;
-        float boltVelocityMax;
         // Branching
         float branchAngleSpread;
         // Audio reactivity
@@ -310,8 +307,8 @@ public:
         "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 5 uint8 + padding)");
     static_assert(sizeof(StoredWaterParams) == 64,
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 6 uint8 + padding)");
-    static_assert(sizeof(StoredLightningParams) == 40,
-        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
+    static_assert(sizeof(StoredLightningParams) == 32,
+        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 76,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 136,

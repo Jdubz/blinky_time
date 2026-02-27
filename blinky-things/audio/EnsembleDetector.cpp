@@ -138,7 +138,7 @@ const IDetector* EnsembleDetector::getDetector(DetectorType type) const {
 void EnsembleDetector::setDetectorWeight(DetectorType type, float weight) {
     fusion_.setWeight(type, weight);
 
-    // FIX: Also update detector's own config (matches setDetectorEnabled/setDetectorThreshold)
+    // Also update detector's own config (matches setDetectorEnabled/setDetectorThreshold)
     int idx = static_cast<int>(type);
     if (idx >= 0 && idx < NUM_DETECTORS) {
         DetectorConfig config = detectors_[idx]->getConfig();

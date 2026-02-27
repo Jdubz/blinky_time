@@ -140,8 +140,6 @@ void ConfigStorage::loadSettingsDefaults() {
     // Lightning defaults (particle-based)
     data_.lightning.baseSpawnChance = 0.15f;
     data_.lightning.audioSpawnBoost = 0.5f;
-    data_.lightning.boltVelocityMin = 4.0f;
-    data_.lightning.boltVelocityMax = 8.0f;
     data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
     data_.lightning.musicSpawnPulse = 0.6f;
     data_.lightning.organicTransientMin = 0.3f;
@@ -491,10 +489,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.bayesLambda, 0.01f, 1.0f, F("bayesLambda"));
     validateFloat(data_.music.bayesPriorCenter, 60.0f, 200.0f, F("bayesPriorCenter"));
     validateFloat(data_.music.bayesPriorWeight, 0.0f, 3.0f, F("bayesPriorWeight"));
-    validateFloat(data_.music.bayesAcfWeight, 0.0f, 2.0f, F("bayesAcfWeight"));
-    validateFloat(data_.music.bayesFtWeight, 0.0f, 2.0f, F("bayesFtWeight"));
-    validateFloat(data_.music.bayesCombWeight, 0.0f, 2.0f, F("bayesCombWeight"));
-    validateFloat(data_.music.bayesIoiWeight, 0.0f, 2.0f, F("bayesIoiWeight"));
+    validateFloat(data_.music.bayesAcfWeight, 0.0f, 5.0f, F("bayesAcfWeight"));
+    validateFloat(data_.music.bayesFtWeight, 0.0f, 5.0f, F("bayesFtWeight"));
+    validateFloat(data_.music.bayesCombWeight, 0.0f, 5.0f, F("bayesCombWeight"));
+    validateFloat(data_.music.bayesIoiWeight, 0.0f, 5.0f, F("bayesIoiWeight"));
     if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
         SerialConsole::logWarn(F("Invalid odfSmoothWidth, using default"));
         data_.music.odfSmoothWidth = 5;
@@ -591,9 +589,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Spawn behavior
     lightningParams.baseSpawnChance = data_.lightning.baseSpawnChance;
     lightningParams.audioSpawnBoost = data_.lightning.audioSpawnBoost;
-    // Bolt appearance
-    lightningParams.boltVelocityMin = data_.lightning.boltVelocityMin;
-    lightningParams.boltVelocityMax = data_.lightning.boltVelocityMax;
     // Branching
     lightningParams.branchAngleSpread = data_.lightning.branchAngleSpread;
     // Audio reactivity
@@ -747,9 +742,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Spawn behavior
     data_.lightning.baseSpawnChance = lightningParams.baseSpawnChance;
     data_.lightning.audioSpawnBoost = lightningParams.audioSpawnBoost;
-    // Bolt appearance
-    data_.lightning.boltVelocityMin = lightningParams.boltVelocityMin;
-    data_.lightning.boltVelocityMax = lightningParams.boltVelocityMax;
     // Branching
     data_.lightning.branchAngleSpread = lightningParams.branchAngleSpread;
     // Audio reactivity

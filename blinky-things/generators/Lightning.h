@@ -20,8 +20,6 @@ struct LightningParams {
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
     // Bolt appearance
-    float boltVelocityMin;        // Minimum bolt speed (LEDs/sec, not used - bolts are stationary)
-    float boltVelocityMax;        // Maximum bolt speed (LEDs/sec, not used - bolts are stationary)
     uint8_t fadeRate;             // Intensity decay per frame (0-255)
 
     // Branching behavior
@@ -49,8 +47,6 @@ struct LightningParams {
         organicTransientMin = 0.35f;
         backgroundIntensity = 0.15f;  // Visible but subtle background
 
-        boltVelocityMin = 4.0f;   // Not used (bolts are stationary)
-        boltVelocityMax = 8.0f;   // Not used (bolts are stationary)
         fadeRate = 30;            // Fast fade - lightning is quick
 
         branchChance = 35;        // More branching for realism

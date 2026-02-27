@@ -318,8 +318,6 @@ void SerialConsole::registerRhythmSettings() {
         "Autocorr period (ms)", 100, 1000);
 
     // Band weights (used when adaptive weighting disabled)
-    settings_.registerBool("adaptbandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
-        "Enable adaptive band weighting");
     settings_.registerFloat("bassbandweight", &audioCtrl_->bassBandWeight, "rhythm",
         "Bass band weight", 0.0f, 1.0f);
     settings_.registerFloat("midbandweight", &audioCtrl_->midBandWeight, "rhythm",
@@ -1259,10 +1257,6 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
         "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
 
     // Bolt appearance
-    settings_.registerFloat("boltvelmin", &lp->boltVelocityMin, "lightning",
-        "Minimum bolt speed", 0.0f, 20.0f, onParamChanged);
-    settings_.registerFloat("boltvelmax", &lp->boltVelocityMax, "lightning",
-        "Maximum bolt speed", 0.0f, 20.0f, onParamChanged);
     settings_.registerUint8("faderate", &lp->fadeRate, "lightning",
         "Intensity decay per frame", 0, 255, onParamChanged);
 
