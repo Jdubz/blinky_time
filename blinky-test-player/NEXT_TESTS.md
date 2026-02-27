@@ -99,6 +99,9 @@ compare avg Beat F1, BPM accuracy, and per-track results against v27 baseline.
 | **Beat-boundary tempo** | `set beatboundary 0/1` | **on** | Defers `beatPeriodSamples_` update to next beat fire. Debug: `BEAT_TEMPO_DEFER` JSON when deferring |
 | **Unified ODF** | `set unifiedodf 0/1` | **on** | Replaces `computeSpectralFluxBands()` with BandFlux pre-threshold value for CBSS |
 
+**Breaking change:** All `bandflux_*` serial commands renamed to `bf*` (e.g., `bandflux_gamma` → `bfgamma`).
+Any stored scripts using old names will silently fail. No test scripts in blinky-test-player or blinky-serial-mcp use hardcoded bandflux_* commands (verified), but check any local automation.
+
 ### Validation Plan
 
 1. Flash all 4 devices with v29 firmware

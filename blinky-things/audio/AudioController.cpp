@@ -222,15 +222,22 @@ const AudioControl& AudioController::update(float dt) {
         // Phase 2.4: Use BandFlux continuous pre-threshold activation
         // This is the combined weighted flux BEFORE thresholding/cooldown/peak-picking
         // Log-compressed, band-weighted, vibrato-suppressed — same signal driving transients
-        onsetStrength = ensemble_.getBandFlux().getPreThresholdFlux();
+        // Guard: if BandFlux didn't run this frame (no spectral data), combinedFlux_ is stale.
+        // Fall back to mic level, matching the legacy path behavior.
+        const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
+        if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
+            onsetStrength = ensemble_.getBandFlux().getPreThresholdFlux();
 
-        // Still feed adaptive band weighting from BandFlux per-band values
-        if (adaptiveBandWeightEnabled) {
-            addBandOssSamples(
-                ensemble_.getBandFlux().getBassFlux(),
-                ensemble_.getBandFlux().getMidFlux(),
-                ensemble_.getBandFlux().getHighFlux()
-            );
+            // Feed adaptive band weighting from BandFlux per-band values
+            if (adaptiveBandWeightEnabled) {
+                addBandOssSamples(
+                    ensemble_.getBandFlux().getBassFlux(),
+                    ensemble_.getBandFlux().getMidFlux(),
+                    ensemble_.getBandFlux().getHighFlux()
+                );
+            }
+        } else {
+            onsetStrength = mic_.getLevel();
         }
     } else {
         // Legacy path: independent spectral flux computation for CBSS

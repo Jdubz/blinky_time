@@ -152,7 +152,10 @@ private:
     float hiResBassFlux_;
 
     // Peak picking internal state (Phase 2.6)
-    float ppPrevFlux_;           // Previous frame's combined flux (for local max check)
+    // Note: ppPrevFlux_ is NOT the same as prevCombinedFlux_. prevCombinedFlux_ is updated
+    // every frame for onset-delta checks; ppPrevFlux_ tracks flux at the pending-detection
+    // frame and is only updated within the peak picking state machine.
+    float ppPrevFlux_;           // Flux at pending detection frame (for local max check)
     DetectionResult ppPendingResult_; // Buffered detection result from previous frame
     bool ppHasPending_;          // Whether there's a pending detection to confirm/reject
 
