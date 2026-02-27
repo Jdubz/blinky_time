@@ -1,5 +1,6 @@
 #include "AudioController.h"
 #include "../inputs/SerialConsole.h"
+#include "../types/BlinkyAssert.h"
 #include <math.h>
 
 // ============================================================================
@@ -305,16 +306,6 @@ void AudioController::setDetectorThreshold(DetectorType type, float threshold) {
     ensemble_.setDetectorThreshold(type, threshold);
 }
 
-void AudioController::setBpmRange(float minBpm, float maxBpm) {
-    bpmMin = clampf(minBpm, 30.0f, 120.0f);
-    bpmMax = clampf(maxBpm, 80.0f, 300.0f);
-
-    if (bpmMin >= bpmMax) {
-        bpmMin = 60.0f;
-        bpmMax = 200.0f;
-    }
-}
-
 void AudioController::lockHwGain(int gain) {
     mic_.lockHwGain(gain);
 }
@@ -372,8 +363,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 
     // Estimate samples per millisecond from buffer
-    // Fallback should never be needed (ossCount_ >= 60 with valid timestamps ensures bufferDurationMs > 0)
-    // but use defensive 60 Hz assumption if it somehow occurs
+    BLINKY_ASSERT(bufferDurationMs > 0, "AudioController: bufferDurationMs <= 0 in autocorrelation");
     float samplesPerMs = bufferDurationMs > 0 ? (float)ossCount_ / (float)bufferDurationMs : 0.06f;
 
     int minLag = static_cast<int>(minLagMs * samplesPerMs);
@@ -938,6 +928,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
         // Update beat period in samples for CBSS
         int newPeriodSamples = static_cast<int>(beatPeriodMs_ * samplesPerMs + 0.5f);
+        BLINKY_ASSERT(newPeriodSamples >= 10 && newPeriodSamples <= OSS_BUFFER_SIZE / 2,
+                       "AudioController: beat period out of range");
         if (newPeriodSamples < 10) newPeriodSamples = 10;
         if (newPeriodSamples > OSS_BUFFER_SIZE / 2) newPeriodSamples = OSS_BUFFER_SIZE / 2;
         beatPeriodSamples_ = newPeriodSamples;
@@ -1107,20 +1099,16 @@ void AudioController::updateCBSS(float onsetStrength) {
 
     // Prevent signed integer overflow (UB in C++).
     // At 60 Hz, sampleCounter_ reaches 1M after ~4.6 hours.
-    // Renormalize both counters to keep values small while preserving
-    // their difference (which is all the CBSS logic depends on).
-    // The CBSS circular buffer uses modular indexing, so absolute values don't matter.
+    // Renormalize counters to keep values small while preserving their
+    // differences (which is all the CBSS/IOI logic depends on).
     if (sampleCounter_ > 1000000) {
+        BLINKY_ASSERT(false, "AudioController: sampleCounter_ renormalization triggered");
         int shift = sampleCounter_ - OSS_BUFFER_SIZE;
         sampleCounter_ -= shift;
         lastBeatSample_ -= shift;
         lastTransientSample_ -= shift;
         if (lastBeatSample_ < 0) lastBeatSample_ = 0;
         if (lastTransientSample_ < 0) lastTransientSample_ = -1;
-        // Shift IOI onset ring buffer to keep intervals valid.
-        // Linear indexing is correct here: we must subtract from every physical
-        // slot in the backing array. When full (count == SIZE), this covers all
-        // slots 0..SIZE-1. Before first wrap, entries are sequential at 0..count-1.
         for (int i = 0; i < ioiOnsetCount_; i++) {
             ioiOnsetSamples_[i] -= shift;
             if (ioiOnsetSamples_[i] < 0) ioiOnsetSamples_[i] = 0;

@@ -19,6 +19,7 @@
  */
 
 // Core data types
+#include "types/BlinkyAssert.cpp"
 #include "types/PixelMatrix.cpp"
 
 // Math implementations

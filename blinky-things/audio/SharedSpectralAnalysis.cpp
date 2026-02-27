@@ -1,4 +1,5 @@
 #include "SharedSpectralAnalysis.h"
+#include "../types/BlinkyAssert.h"
 #include <arduinoFFT.h>
 #include <math.h>
 
@@ -296,7 +297,7 @@ void SharedSpectralAnalysis::applyCompressor() {
     }
     float rms = sqrtf(sumSq / (SpectralConstants::NUM_BINS - 1));
 
-    // Convert to dB (with floor to avoid log(0))
+    // Floor to avoid log10f(0). Triggers during true silence (all-zero FFT).
     const float floorLin = 1e-10f;
     if (rms < floorLin) rms = floorLin;
     float rmsDb = 20.0f * log10f(rms);

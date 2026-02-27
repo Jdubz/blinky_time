@@ -1,4 +1,5 @@
 #include "Audio.h"
+#include "../types/BlinkyAssert.h"
 #include <Arduino.h>
 
 Audio::Audio()
@@ -80,22 +81,17 @@ void Audio::drawBackground(PixelMatrix& matrix) {
 
 void Audio::drawTransientRows(PixelMatrix& matrix, float intensity) {
     if (intensity < 0.01f) return;
-    if (height_ < 1) return;  // Guard against zero height
+    BLINKY_ASSERT(height_ >= 1, "Audio::drawTransientRows: height_ < 1");
 
-    // Calculate how many rows for transient indicator
-    // Clamp transientRowFraction to valid range
+    // transientRowFraction bounded by SettingsRegistry [0.1, 0.5]
     float fraction = params_.transientRowFraction;
-    if (fraction < 0.0f) fraction = 0.0f;
-    if (fraction > 1.0f) fraction = 1.0f;
-
-    // Use +0.5f for rounding to get proper row count (0.2 * 8 = 1.6 -> 2 rows, not 1)
     int transientRows = (int)(fraction * height_ + 0.5f);
     if (transientRows < 1) transientRows = 1;
     if (transientRows > height_) transientRows = height_;
 
-    // Calculate green brightness based on intensity (clamp intensity to 0-1)
+    // intensity comes from AudioControl (0-1 range)
+    BLINKY_ASSERT(intensity >= 0.0f && intensity <= 1.0f, "Audio: intensity out of 0-1");
     float clampedIntensity = intensity;
-    if (clampedIntensity > 1.0f) clampedIntensity = 1.0f;
     uint8_t maxGreen = (uint8_t)(params_.transientBrightness * clampedIntensity);
 
     // Draw gradient from top: brightest at top, fading down
@@ -121,28 +117,19 @@ void Audio::drawTransientRows(PixelMatrix& matrix, float intensity) {
 }
 
 void Audio::drawEnergyRow(PixelMatrix& matrix, float energy) {
-    if (height_ < 1) return;  // Guard against zero height
+    BLINKY_ASSERT(height_ >= 1, "Audio::drawEnergyRow: height_ < 1");
 
-    // Clamp energy to 0-1
-    if (energy < 0.0f) energy = 0.0f;
-    if (energy > 1.0f) energy = 1.0f;
+    // energy comes from AudioControl (0-1 range)
+    BLINKY_ASSERT(energy >= 0.0f && energy <= 1.0f, "Audio: energy out of 0-1");
 
-    // Map energy to Y position: high energy = near top (low Y), low energy = near bottom (high Y)
-    // Reserve top rows for transient indicator
-    // Clamp transientRowFraction to valid range
+    // transientRowFraction bounded by SettingsRegistry [0.1, 0.5]
     float fraction = params_.transientRowFraction;
-    if (fraction < 0.0f) fraction = 0.0f;
-    if (fraction > 1.0f) fraction = 1.0f;
-
-    // Use +0.5f for rounding to match transient row calculation
     int transientRows = (int)(fraction * height_ + 0.5f);
     if (transientRows > height_) transientRows = height_;
 
     int usableHeight = height_ - transientRows;
     if (usableHeight < 1) return;
 
-    // Y position: bottom of usable area (highest Y) to just below transient area
-    // Use +0.5f for rounding to avoid off-by-1 from truncation
     int y = transientRows + (int)((1.0f - energy) * (usableHeight - 1) + 0.5f);
     if (y < transientRows) y = transientRows;
     if (y >= height_) y = height_ - 1;

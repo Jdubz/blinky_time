@@ -1,4 +1,5 @@
 #include "PixelMatrix.h"
+#include "BlinkyAssert.h"
 #include <Arduino.h>
 #include <string.h>  // For memcpy
 
@@ -67,17 +68,17 @@ PixelMatrix& PixelMatrix::operator=(const PixelMatrix& other) {
 }
 
 RGB& PixelMatrix::getPixel(int x, int y) {
-    // Static fallback for invalid access - prevents undefined behavior
+    BLINKY_ASSERT(pixels_ && isValidCoordinate(x, y), "PixelMatrix::getPixel OOB");
     static RGB fallback;
     if (!pixels_ || !isValidCoordinate(x, y)) {
-        fallback = RGB(0, 0, 0);  // Reset to black on each invalid access
+        fallback = RGB(0, 0, 0);
         return fallback;
     }
     return pixels_[y * width_ + x];
 }
 
 const RGB& PixelMatrix::getPixel(int x, int y) const {
-    // Static fallback for invalid access - prevents undefined behavior
+    BLINKY_ASSERT(pixels_ && isValidCoordinate(x, y), "PixelMatrix::getPixel const OOB");
     static RGB fallback;
     if (!pixels_ || !isValidCoordinate(x, y)) {
         return fallback;
@@ -86,6 +87,7 @@ const RGB& PixelMatrix::getPixel(int x, int y) const {
 }
 
 void PixelMatrix::setPixel(int x, int y, const RGB& color) {
+    BLINKY_ASSERT(pixels_ && isValidCoordinate(x, y), "PixelMatrix::setPixel OOB");
     if (pixels_ && isValidCoordinate(x, y)) {
         pixels_[y * width_ + x] = color;
     }

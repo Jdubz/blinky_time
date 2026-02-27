@@ -229,8 +229,7 @@ public:
     void setDetectorWeight(DetectorType type, float weight);
     void setDetectorThreshold(DetectorType type, float threshold);
 
-    // BPM range constraints
-    void setBpmRange(float minBpm, float maxBpm);
+    // BPM range constraints (set directly via bpmMin/bpmMax members + SettingsRegistry)
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
 

@@ -97,6 +97,12 @@ def main():
         critical=False,
     ))
 
+    warning_results.append(run_check(
+        "Silent fallback anti-pattern detection",
+        [sys.executable, "scripts/check_silent_fallbacks.py"],
+        critical=False,
+    ))
+
     # cppcheck is optional — skip silently if not installed
     warning_results.append(run_check(
         "cppcheck static analysis",

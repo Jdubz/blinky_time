@@ -11,7 +11,7 @@ void HueRotationEffect::begin(int width, int height) {
 }
 
 void HueRotationEffect::apply(PixelMatrix* matrix) {
-    if (!matrix) return;
+    // matrix guaranteed non-null by RenderPipeline (initialized_ check)
 
     // Update hue shift if auto-rotating
     if (rotationSpeed_ != 0.0f) {

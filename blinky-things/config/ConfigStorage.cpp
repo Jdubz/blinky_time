@@ -398,32 +398,43 @@ void ConfigStorage::saveToFlash() {
 
 void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
                                       AdaptiveMic& mic, AudioController* audioCtrl) {
-    // Validation helpers to reduce code duplication
-    bool corrupt = false;
+    // Validation helpers — clamp individual bad params to nearest bound.
+    // Preserves all other settings instead of wiping everything.
+    int fixedCount = 0;
 
-    auto validateFloat = [&](float value, float min, float max, const __FlashStringHelper* name) {
+    auto validateFloat = [&](float& value, float min, float max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
+            float clamped = value < min ? min : max;
             if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
                 Serial.print(F("[WARN] Bad config "));
                 Serial.print(name);
                 Serial.print(F(": "));
-                Serial.println(value);
+                Serial.print(value);
+                Serial.print(F(" -> "));
+                Serial.println(clamped);
             }
-            corrupt = true;
+            value = clamped;
+            fixedCount++;
         }
     };
 
-    auto validateUint32 = [&](uint32_t value, uint32_t min, uint32_t max, const __FlashStringHelper* name) {
-        if (value < min || value > max) {
-            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
-                Serial.print(F("[WARN] Bad config "));
-                Serial.print(name);
-                Serial.print(F(": "));
-                Serial.println(value);
-            }
-            corrupt = true;
-        }
-    };
+    // Macro-based integer validator — works with uint8_t, uint16_t, uint32_t
+    // (lambdas can't be templated in C++11)
+    #define VALIDATE_INT(value, lo, hi, name) do { \
+        if ((value) < (lo) || (value) > (hi)) { \
+            auto _clamped = (value) < (lo) ? (lo) : (hi); \
+            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) { \
+                Serial.print(F("[WARN] Bad config ")); \
+                Serial.print(name); \
+                Serial.print(F(": ")); \
+                Serial.print(value); \
+                Serial.print(F(" -> ")); \
+                Serial.println(_clamped); \
+            } \
+            (value) = _clamped; \
+            fixedCount++; \
+        } \
+    } while(0)
 
     // Validate critical parameters - if out of range, use defaults
     validateFloat(data_.fire.baseSpawnChance, 0.0f, 1.0f, F("baseSpawnChance"));
@@ -439,21 +450,21 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Validate fast AGC parameters
     validateFloat(data_.mic.fastAgcThreshold, 0.01f, 0.5f, F("fastAgcThresh"));
     validateFloat(data_.mic.fastAgcTrackingTau, 0.5f, 30.0f, F("fastAgcTau"));
-    validateUint32(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
+    VALIDATE_INT(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
 
     // LEGACY: Validate detection parameters (still needed for backward compatibility)
     validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
     validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
     validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
-    validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
-    validateUint32(data_.mic.detectionMode, 0, 4, F("detectionMode"));
+    VALIDATE_INT(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
+    VALIDATE_INT(data_.mic.detectionMode, 0, 4, F("detectionMode"));
     validateFloat(data_.mic.bassFreq, 40.0f, 200.0f, F("bassFreq"));
     validateFloat(data_.mic.bassQ, 0.5f, 3.0f, F("bassQ"));
     validateFloat(data_.mic.bassThresh, 1.5f, 10.0f, F("bassThresh"));
     validateFloat(data_.mic.hfcWeight, 0.5f, 5.0f, F("hfcWeight"));
     validateFloat(data_.mic.hfcThresh, 1.5f, 10.0f, F("hfcThresh"));
     validateFloat(data_.mic.fluxThresh, 1.0f, 10.0f, F("fluxThresh"));
-    validateUint32(data_.mic.fluxBins, 4, 128, F("fluxBins"));
+    VALIDATE_INT(data_.mic.fluxBins, 4, 128, F("fluxBins"));
     validateFloat(data_.mic.hybridFluxWeight, 0.1f, 1.0f, F("hybridFluxWeight"));
     validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
     validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
@@ -494,9 +505,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.bayesCombWeight, 0.0f, 5.0f, F("bayesCombWeight"));
     validateFloat(data_.music.bayesIoiWeight, 0.0f, 5.0f, F("bayesIoiWeight"));
     if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
-        SerialConsole::logWarn(F("Invalid odfSmoothWidth, using default"));
-        data_.music.odfSmoothWidth = 5;
-        corrupt = true;
+        SerialConsole::logWarn(F("Invalid odfSmoothWidth, clamping"));
+        data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
+        fixedCount++;
     }
     // ioiEnabled, odfMeanSubEnabled, ftEnabled are bools — no range validation needed
 
@@ -513,15 +524,19 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
-        SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
-        data_.music.bpmMin = 60.0f;
-        data_.music.bpmMax = 200.0f;
-        corrupt = true;
+        SerialConsole::logWarn(F("Invalid BPM range, swapping"));
+        float tmp = data_.music.bpmMin;
+        data_.music.bpmMin = data_.music.bpmMax;
+        data_.music.bpmMax = tmp;
+        fixedCount++;
     }
 
-    if (corrupt) {
-        SerialConsole::logWarn(F("Corrupt config detected, using defaults"));
-        loadDefaults();
+    #undef VALIDATE_INT
+
+    if (fixedCount > 0) {
+        Serial.print(F("[WARN] Fixed "));
+        Serial.print(fixedCount);
+        Serial.println(F(" bad config param(s) (other settings preserved)"));
     }
 
     // Debug: show loaded values
