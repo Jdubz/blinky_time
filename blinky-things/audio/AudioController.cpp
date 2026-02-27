@@ -433,12 +433,18 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // We'll store correlations to find multiple peaks
     // NOTE: Static buffer assumes single-threaded execution (only one AudioController instance)
     // FIX: Initialize to zero to prevent garbage data from previous frames
-    static float correlationAtLag[200] = {0};
+    // Extended to 256 to accommodate 4-harmonic comb lookups (BTrack-style)
+    static float correlationAtLag[256] = {0};
+    // Extend range for harmonic lookups: need ACF at 2T, 3T, 4T for comb filter
+    int harmonicMaxLag = 4 * maxLag;
+    if (harmonicMaxLag > ossCount_ / 2) harmonicMaxLag = ossCount_ / 2;
+    int harmonicCorrelationSize = harmonicMaxLag - minLag + 1;
+    if (harmonicCorrelationSize > 256) harmonicCorrelationSize = 256;
     int correlationSize = maxLag - minLag + 1;
-    if (correlationSize > 200) correlationSize = 200;
+    if (correlationSize > harmonicCorrelationSize) correlationSize = harmonicCorrelationSize;
 
-    // FIX: Clear the portion we'll use to prevent stale data
-    for (int i = 0; i < correlationSize; i++) {
+    // FIX: Clear the portion we'll use to prevent stale data (full harmonic range)
+    for (int i = 0; i < harmonicCorrelationSize; i++) {
         correlationAtLag[i] = 0.0f;
     }
 
@@ -461,7 +467,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         if (signalEnergy < 0.001f) signalEnergy = 0.001f;  // Guard against floating-point undershoot
     }
 
-    for (int lag = minLag; lag <= maxLag && (lag - minLag) < 200; lag++) {
+    for (int lag = minLag; lag <= harmonicMaxLag && (lag - minLag) < 256; lag++) {
         float correlation = 0.0f;
         int count = ossCount_ - lag;
 
@@ -477,7 +483,9 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         correlation /= static_cast<float>(count);
         correlationAtLag[lag - minLag] = correlation;
 
-        if (correlation > maxCorrelation) {
+        // Only track max within fundamental range (not extended harmonic range)
+        // to avoid sub-harmonics inflating periodicityStrength_
+        if (lag <= maxLag && correlation > maxCorrelation) {
             maxCorrelation = correlation;
             bestLag = lag;
         }
@@ -498,7 +506,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // This must happen AFTER periodicity strength (which uses raw ACF magnitude)
     // but BEFORE Bayesian fusion and harmonic disambiguation (which need
     // discriminative lag-weighted values).
-    for (int i = 0; i < correlationSize; i++) {
+    for (int i = 0; i < harmonicCorrelationSize; i++) {
         int lag = minLag + i;
         correlationAtLag[i] /= static_cast<float>(lag);
     }
@@ -509,7 +517,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Each signal provides a per-bin observation likelihood; the MAP estimate
     // of the posterior becomes the tempo.
     runBayesianTempoFusion(correlationAtLag, correlationSize, minLag, maxLag,
-                           avgEnergy, samplesPerMs, shouldPrintDebug);
+                           avgEnergy, samplesPerMs, shouldPrintDebug,
+                           harmonicCorrelationSize);
 }
 
 // ===== ODF SMOOTHING =====
@@ -573,6 +582,24 @@ void AudioController::initTempoState() {
     }
     transMatrixLambda_ = bayesLambda;
 
+    // Rayleigh prior peaked at ~120 BPM (BTrack-style perceptual weighting)
+    // For candidate period T (lag), Rayleigh(T; sigma) = T/sigma^2 * exp(-T^2 / (2*sigma^2))
+    // Peaked at sigma = lag corresponding to 120 BPM = 3600/120 = 30 at 60 Hz
+    {
+        float rayleighSigma = 3600.0f / 120.0f;  // = 30 (lag for 120 BPM)
+        float maxR = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float lag = static_cast<float>(tempoBinLags_[i]);
+            rayleighWeight_[i] = (lag / (rayleighSigma * rayleighSigma))
+                                * expf(-lag * lag / (2.0f * rayleighSigma * rayleighSigma));
+            if (rayleighWeight_[i] > maxR) maxR = rayleighWeight_[i];
+        }
+        // Normalize to max=1.0
+        if (maxR > 0.0f) {
+            for (int i = 0; i < TEMPO_BINS; i++) rayleighWeight_[i] /= maxR;
+        }
+    }
+
     // Clear posterior and debug arrays
     for (int i = 0; i < TEMPO_BINS; i++) {
         tempoStatePost_[i] = tempoStatePrior_[i];
@@ -622,7 +649,8 @@ float AudioController::getBayesIoiObs() const {
 
 void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
                                               int minLag, int maxLag, float avgEnergy,
-                                              float samplesPerMs, bool debugPrint) {
+                                              float samplesPerMs, bool debugPrint,
+                                              int harmonicCorrelationSize) {
     if (!tempoStateInitialized_) return;
 
     // === 1. BAYESIAN PREDICTION STEP: Spread prior through Gaussian transition ===
@@ -655,21 +683,43 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         for (int i = 0; i < TEMPO_BINS; i++) prediction[i] /= predSum;
     }
 
-    // === 2. AUTOCORRELATION OBSERVATION ===
-    // correlationAtLag is inverse-lag weighted: acf(τ)/τ penalizes sub-harmonics.
-    // Energy normalization makes it amplitude-independent.
+    // === 2. AUTOCORRELATION OBSERVATION (BTrack-style 4-harmonic comb) ===
+    // For each candidate period T, sum ACF at 1T, 2T, 3T, 4T with spread windows.
+    // The true period matches all 4 harmonics; a sub-harmonic at 2T only matches 2.
+    // This gives the fundamental a ~4x advantage over sub-harmonics.
+    // Multiplied by Rayleigh prior peaked at ~120 BPM for perceptual weighting.
     float acfObs[TEMPO_BINS];
     for (int i = 0; i < TEMPO_BINS; i++) {
         int lag = tempoBinLags_[i];
-        int lagIdx = lag - minLag;
-        if (lagIdx >= 0 && lagIdx < correlationSize) {
-            acfObs[i] = correlationAtLag[lagIdx] / (avgEnergy + 0.001f);
-            if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;  // Floor
+        float combAcf = 0.0f;
+        int harmonicsUsed = 0;
+        for (int a = 1; a <= 4; a++) {
+            int harmLag = a * lag;
+            int harmIdx = harmLag - minLag;
+            if (harmIdx >= 0 && harmIdx < harmonicCorrelationSize) {
+                // Spread window: sum (2a-1) bins centered at harmIdx
+                float sum = 0.0f;
+                int count = 0;
+                for (int b = 1 - a; b <= a - 1; b++) {
+                    int idx = harmIdx + b;
+                    if (idx >= 0 && idx < harmonicCorrelationSize) {
+                        sum += correlationAtLag[idx];
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    combAcf += sum / static_cast<float>(2 * a - 1);
+                    harmonicsUsed++;
+                }
+            }
+        }
+        if (harmonicsUsed > 0) {
+            acfObs[i] = combAcf * rayleighWeight_[i] / (avgEnergy + 0.001f);
+            if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;
         } else {
             acfObs[i] = 0.01f;  // Out of range — small floor
         }
     }
-    // (Anti-sub-harmonic penalty removed — per-sample ACF check used in MAP extraction instead)
     // Exponentiate by weight
     if (bayesAcfWeight != 1.0f) {
         for (int i = 0; i < TEMPO_BINS; i++) {
@@ -807,6 +857,28 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                         int closest = findClosestTempoBin(twoThirdBpm);
                         if (closest >= 0 && fabsf(tempoBinBpms_[closest] - twoThirdBpm) < twoThirdBpm * 0.1f) {
                             bestBin = closest;
+                            corrected = true;
+                        }
+                    }
+                }
+            }
+
+            // Check double-lag (0.5x BPM): if MAP is too fast, demote to half tempo
+            // When FT/IOI push BPM to double-time, this provides a mechanism to
+            // correct back down. Uses harmonicCorrelationSize for extended range.
+            if (!corrected) {
+                int doubleLag = bestLag * 2;
+                int doubleIdx = doubleLag - minLag;
+                if (doubleIdx >= 0 && doubleIdx < harmonicCorrelationSize) {
+                    float doubleAcf = correlationAtLag[doubleIdx];
+                    if (doubleAcf > HARMONIC_2X_THRESH * bestAcf) {
+                        float halfBpm = 3600.0f / static_cast<float>(doubleLag);
+                        if (halfBpm >= bpmMin) {
+                            int closest = findClosestTempoBin(halfBpm);
+                            if (closest >= 0 && fabsf(tempoBinBpms_[closest] - halfBpm) < halfBpm * 0.1f) {
+                                bestBin = closest;
+                                corrected = true;
+                            }
                         }
                     }
                 }

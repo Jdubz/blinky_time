@@ -336,10 +336,10 @@ public:
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
     // into a unified posterior distribution over 20 tempo bins (60-180 BPM).
     // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
-    float bayesLambda = 0.15f;           // Transition tightness (0.01=rigid, 1.0=loose)
+    float bayesLambda = 0.07f;           // Transition tightness (0.01=rigid, 1.0=loose)
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
     float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
-    float bayesAcfWeight = 0.3f;         // Autocorrelation observation weight (low weight prevents sub-harmonic lock)
+    float bayesAcfWeight = 0.8f;         // Autocorrelation observation weight (high: harmonic comb makes ACF reliable)
     float bayesFtWeight = 2.0f;          // Fourier tempogram observation weight (re-enabled by spectral processing v24)
     float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
     float bayesIoiWeight = 2.0f;         // IOI histogram observation weight (re-enabled by spectral processing v24)
@@ -537,6 +537,7 @@ private:
     float tempoStatePrior_[TEMPO_BINS] = {0};     // Previous posterior (becomes prior)
     float tempoStatePost_[TEMPO_BINS] = {0};      // Current posterior after update
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
+    float rayleighWeight_[TEMPO_BINS] = {0};      // Rayleigh tempo prior peaked at ~120 BPM (BTrack-style)
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
     int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
     float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
@@ -588,7 +589,8 @@ private:
     void initTempoState();
     void runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
                                 int minLag, int maxLag, float avgEnergy,
-                                float samplesPerMs, bool debugPrint);
+                                float samplesPerMs, bool debugPrint,
+                                int harmonicCorrelationSize);
     void computeFTObservations(float* ftObs, int numBins);
     void computeIOIObservations(float* ioiObs, int numBins);
     int findClosestTempoBin(float targetBpm) const;

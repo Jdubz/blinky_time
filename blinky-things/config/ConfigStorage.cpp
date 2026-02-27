@@ -214,11 +214,11 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
 
     // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via 4-device sweep)
-    // Post-spectral re-tuning (v24): whitening+compressor fixed FT and IOI signals
-    data_.music.bayesLambda = 0.15f;         // Transition tightness
+    // v25: BTrack-style harmonic comb ACF + Rayleigh prior + tighter lambda
+    data_.music.bayesLambda = 0.07f;         // Tighter transition (prevents octave jumps accumulating)
     data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
     data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
-    data_.music.bayesAcfWeight = 0.3f;       // Low ACF weight prevents sub-harmonic lock (validated Feb 25)
+    data_.music.bayesAcfWeight = 0.8f;       // High weight: harmonic comb makes ACF reliable (v25)
     data_.music.bayesFtWeight = 2.0f;        // Fourier tempogram — re-enabled by spectral processing (v24, +49% Beat F1)
     data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
     data_.music.bayesIoiWeight = 2.0f;       // IOI histogram — re-enabled by spectral processing (v24, +49% Beat F1)

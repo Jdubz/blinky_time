@@ -46,7 +46,8 @@ public:
     // Version 22: Combined Bayesian validation (bayesacf=0.3, cbssthresh=1.0 — 4-device validated defaults)
     // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)
     // Version 24: Post-spectral Bayesian re-tuning (bayesft=2.0, bayesioi=2.0 — re-enabled by spectral processing)
-    static const uint8_t SETTINGS_VERSION = 24;  // Settings schema (fire, water, lightning, mic, music params)
+    // Version 25: BTrack-style octave error fixes (harmonic comb ACF, Rayleigh prior, tighter lambda, bidirectional disambig)
+    static const uint8_t SETTINGS_VERSION = 25;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
