@@ -55,7 +55,7 @@ public:
     //             Phase 2.4 — Unified ODF (BandFlux pre-threshold feeds CBSS)
     //             Phase 2.2 — Increased tempo bins (20→40)
     // Version 29: All BandFlux detector params persisted (StoredBandFluxParams added to ConfigData)
-    //             peakPickEnabled moved from StoredMusicParams to StoredBandFluxParams
+    //             peakPickEnabled first persisted (in StoredBandFluxParams)
     static const uint8_t SETTINGS_VERSION = 29;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)

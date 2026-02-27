@@ -74,7 +74,7 @@ public:
     float getBandDominanceGate() const { return bandDominanceGate; }
     void setDecayRatio(float r) { decayRatioThreshold = r; }
     float getDecayRatio() const { return decayRatioThreshold; }
-    void setDecayFrames(int f) { if (f >= 0 && f <= MAX_CONFIRM_FRAMES) confirmFrames = f; }
+    void setDecayFrames(int f) { if (f >= 0 && f <= MAX_CONFIRM_FRAMES) confirmFrames = static_cast<uint8_t>(f); }
     int getDecayFrames() const { return confirmFrames; }
     void setCrestGate(float c) { crestGate = c; }
     float getCrestGate() const { return crestGate; }
@@ -82,7 +82,7 @@ public:
     bool getPerBandThresh() const { return perBandThreshEnabled; }
     void setPerBandThreshMult(float m) { perBandThreshMult = m; }
     float getPerBandThreshMult() const { return perBandThreshMult; }
-    void setDiffFrames(int f) { if (f >= 1 && f <= MAX_HISTORY_FRAMES) diffFrames = f; }
+    void setDiffFrames(int f) { if (f >= 1 && f <= MAX_HISTORY_FRAMES) diffFrames = static_cast<uint8_t>(f); }
     int getDiffFrames() const { return diffFrames; }
     void setHiResBass(bool e);  // Has side effects (resets bass history)
     bool getHiResBass() const { return hiResBassEnabled; }
