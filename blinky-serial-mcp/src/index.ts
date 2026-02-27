@@ -707,9 +707,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify({
                 success: true,
                 durationMs: testData.duration,
+                startTime: testData.startTime,
                 totalDetections: testData.transients.length,
                 detections: testData.transients,
                 audioSamples: testData.audioSamples,
+                musicStates: testData.musicStates,
+                beatEvents: testData.beatEvents,
               }, null, 2),
             },
           ],
