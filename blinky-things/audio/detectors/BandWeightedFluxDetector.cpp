@@ -403,6 +403,7 @@ void BandWeightedFluxDetector::computeHiResBassFlux(const float* bassLogMag, int
     // The 12 hi-res bins cover the same frequency range as 6 FFT bins;
     // dividing by 12 would halve the flux for the same physical kick.
     static constexpr int FFT_BASS_BIN_COUNT = BASS_MAX - BASS_MIN;  // 6
+    static_assert(FFT_BASS_BIN_COUNT == 6, "Hi-res bass normalization assumes 6 FFT bass bins");
     hiResBassFlux_ = flux / FFT_BASS_BIN_COUNT;
 }
 

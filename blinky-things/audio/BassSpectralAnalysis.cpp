@@ -4,7 +4,7 @@
 BassSpectralAnalysis::BassSpectralAnalysis()
     : sampleBuffer_{}
     , writeIndex_(0)
-    , totalSamplesWritten_(0)
+    , bufferPrimed_(false)
     , newSampleCount_(0)
     , magnitudes_{}
     , prevMagnitudes_{}
@@ -27,7 +27,7 @@ void BassSpectralAnalysis::begin() {
 
 void BassSpectralAnalysis::reset() {
     writeIndex_ = 0;
-    totalSamplesWritten_ = 0;
+    bufferPrimed_ = false;
     newSampleCount_ = 0;
     frameReady_ = false;
     hasPrevFrame_ = false;
@@ -67,9 +67,9 @@ bool BassSpectralAnalysis::addSamples(const int16_t* samples, int count) {
         sampleBuffer_[writeIndex_] = samples[i];
         writeIndex_ = (writeIndex_ + 1) % BassConstants::WINDOW_SIZE;
         newSampleCount_++;
-        if (totalSamplesWritten_ < BassConstants::WINDOW_SIZE) {
-            totalSamplesWritten_++;
-        }
+    }
+    if (!bufferPrimed_ && (newSampleCount_ >= BassConstants::WINDOW_SIZE)) {
+        bufferPrimed_ = true;
     }
 
     return newSampleCount_ >= BassConstants::HOP_SIZE;
@@ -80,7 +80,7 @@ void BassSpectralAnalysis::process() {
     if (newSampleCount_ < BassConstants::HOP_SIZE) return;
 
     // Need at least a full window of samples before first valid frame
-    if (totalSamplesWritten_ < BassConstants::WINDOW_SIZE) {
+    if (!bufferPrimed_) {
         newSampleCount_ = 0;
         return;
     }

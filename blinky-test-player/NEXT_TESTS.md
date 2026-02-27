@@ -73,6 +73,27 @@
 
 0.3 chosen as default: best overall average, preserves all medium-strength kicks, fixes synth-stabs.
 
+## v25 Parameter Changes — Needs Validation
+
+The following defaults changed in SETTINGS_VERSION 25 (BTrack-style improvements).
+Run full 18-track validation after flashing to confirm no regressions.
+
+| Parameter | Old (v24) | New (v25) | Rationale |
+|-----------|:---------:|:---------:|-----------|
+| bayesLambda | 0.15 | 0.07 | Tighter transition variance to prevent octave jumps |
+| bayesAcfWeight | 0.3 | 0.8 | Harmonic-enhanced ACF is now a stronger signal |
+
+Additional structural changes (not parameter-tunable):
+- **Harmonic comb ACF**: 4-harmonic summation with spread windows replaces single-point ACF observation
+- **Rayleigh tempo prior**: Perceptual weighting peaked at ~120 BPM, applied within ACF observation
+- **Bidirectional disambiguation**: Added 0.5x downward check (was only 2x/1.5x upward)
+
+**Validation plan:**
+1. Flash all 4 devices with v25 firmware
+2. Run `./scripts/run-all-tracks.sh` (18 tracks × 4 devices)
+3. Compare avg Beat F1, BPM accuracy, and per-track results against v24 baseline
+4. Check specifically for octave errors (BPM at half or double expected)
+
 ## Next Priorities
 
 > **Design philosophy:** See [VISUALIZER_GOALS.md](../docs/VISUALIZER_GOALS.md) — visual quality over metric perfection. Low Beat F1 on ambient/trap tracks is acceptable (organic mode fallback is correct).

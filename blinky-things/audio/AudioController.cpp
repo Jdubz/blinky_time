@@ -877,6 +877,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                             int closest = findClosestTempoBin(halfBpm);
                             if (closest >= 0 && fabsf(tempoBinBpms_[closest] - halfBpm) < halfBpm * 0.1f) {
                                 bestBin = closest;
+                                // cppcheck-suppress unreadVariable
+                                corrected = true;
                             }
                         }
                     }

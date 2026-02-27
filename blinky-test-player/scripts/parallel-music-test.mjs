@@ -12,9 +12,13 @@ import { spawn } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { DeviceSession } from '../../blinky-serial-mcp/dist/device-session.js';
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const mcpDist = path.resolve(__dirname, '../../blinky-serial-mcp/dist/device-session.js');
+if (!existsSync(mcpDist)) {
+  console.error('blinky-serial-mcp not built. Run: cd blinky-serial-mcp && npm run build');
+  process.exit(1);
+}
+const { DeviceSession } = await import(mcpDist);
 const BEAT_TOLERANCE_SEC = 0.07;
 
 const args = process.argv.slice(2);

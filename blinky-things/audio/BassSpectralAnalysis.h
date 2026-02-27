@@ -45,6 +45,10 @@ namespace BassConstants {
     constexpr float BIN_FREQ_HZ = SAMPLE_RATE / WINDOW_SIZE;  // 31.25 Hz/bin
 }
 
+/**
+ * NOTE: Only one instance may exist — process() uses a static scratch buffer.
+ * Currently owned by EnsembleDetector (single AudioController per device).
+ */
 class BassSpectralAnalysis {
 public:
     BassSpectralAnalysis();
@@ -106,7 +110,7 @@ private:
     // 512-sample ring buffer
     int16_t sampleBuffer_[BassConstants::WINDOW_SIZE];
     int writeIndex_;
-    int totalSamplesWritten_;  // Total samples written (for initial fill)
+    bool bufferPrimed_;        // True once WINDOW_SIZE samples have been written
     int newSampleCount_;       // Samples accumulated since last process()
 
     // Output: 12 bass bins
