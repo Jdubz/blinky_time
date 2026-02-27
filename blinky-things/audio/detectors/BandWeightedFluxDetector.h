@@ -2,6 +2,7 @@
 
 #include "../IDetector.h"
 #include "../SharedSpectralAnalysis.h"
+#include "../BassSpectralAnalysis.h"
 #include <math.h>
 
 /**
@@ -145,7 +146,7 @@ private:
     float averageMidFlux_;
 
     // Hi-res bass (Goertzel 512-sample, 12 bins at 31.25 Hz/bin)
-    static constexpr int MAX_BASS_BINS = 12;
+    static constexpr int MAX_BASS_BINS = BassConstants::NUM_BASS_BINS;
     float historyBassLogMag_[MAX_HISTORY_FRAMES][MAX_BASS_BINS];
     int bassHistoryCount_;
     float hiResBassFlux_;

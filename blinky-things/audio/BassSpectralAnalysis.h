@@ -30,8 +30,10 @@
  * - float magnitudes_[12] + prevMagnitudes_[12] = 96 bytes
  * - float binRunningMax_[12] = 48 bytes
  * - Compressor + scalar state ~50 bytes
+ * - Precomputed Goertzel coefficients + window = 96 bytes
  *
  * CPU: ~0.7 ms per frame on Cortex-M4 @ 64 MHz
+ * Stack: ~2 KB peak during process() (512-sample Hamming window buffer, static)
  */
 
 namespace BassConstants {
@@ -116,6 +118,16 @@ private:
 
     // Compressor state
     float smoothedGainDb_;
+    float cachedAttackAlpha_;      // Precomputed from compAttackTau
+    float cachedReleaseAlpha_;     // Precomputed from compReleaseTau
+    float lastAttackTau_;          // Track changes for recomputation
+    float lastReleaseTau_;         // Track changes for recomputation
+
+    // Precomputed Goertzel coefficients: 2*cos(2*pi*k/N) for each bin
+    float goertzelCoeff_[BassConstants::NUM_BASS_BINS];
+
+    // Precomputed Hamming window
+    float hammingWindow_[BassConstants::WINDOW_SIZE];
 
     // State flags
     bool frameReady_;
@@ -127,10 +139,10 @@ private:
     void whitenMagnitudes();
 
     /**
-     * Goertzel magnitude for a single DFT bin k of N-point window.
+     * Goertzel magnitude for a single DFT bin using precomputed coefficient.
      * Mathematically equivalent to |DFT[k]| from a full FFT.
      */
-    static float goertzelMagnitude(const float* windowedSamples, int N, int k);
+    static float goertzelMagnitude(const float* windowedSamples, int N, float coeff);
 
     static bool safeIsFinite(float x) {
         return isfinite(x);

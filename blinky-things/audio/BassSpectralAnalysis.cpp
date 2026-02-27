@@ -10,6 +10,12 @@ BassSpectralAnalysis::BassSpectralAnalysis()
     , prevMagnitudes_{}
     , binRunningMax_{}
     , smoothedGainDb_(0.0f)
+    , cachedAttackAlpha_(1.0f)
+    , cachedReleaseAlpha_(1.0f)
+    , lastAttackTau_(0.0f)
+    , lastReleaseTau_(0.0f)
+    , goertzelCoeff_{}
+    , hammingWindow_{}
     , frameReady_(false)
     , hasPrevFrame_(false)
 {
@@ -31,6 +37,27 @@ void BassSpectralAnalysis::reset() {
     memset(magnitudes_, 0, sizeof(magnitudes_));
     memset(prevMagnitudes_, 0, sizeof(prevMagnitudes_));
     memset(binRunningMax_, 0, sizeof(binRunningMax_));
+
+    // Precompute Goertzel coefficients: 2*cos(2*pi*k/N) for bins 1-12
+    for (int b = 0; b < BassConstants::NUM_BASS_BINS; b++) {
+        int k = b + BassConstants::FIRST_BIN;
+        goertzelCoeff_[b] = 2.0f * cosf(2.0f * 3.14159265f * k / BassConstants::WINDOW_SIZE);
+    }
+
+    // Precompute Hamming window
+    const float alpha = 0.54f;
+    const float beta = 0.46f;
+    const float twoPiOverN = 2.0f * 3.14159265f / (BassConstants::WINDOW_SIZE - 1);
+    for (int i = 0; i < BassConstants::WINDOW_SIZE; i++) {
+        hammingWindow_[i] = alpha - beta * cosf(twoPiOverN * i);
+    }
+
+    // Precompute compressor EMA alphas
+    static constexpr float framePeriod = (float)BassConstants::HOP_SIZE / BassConstants::SAMPLE_RATE;
+    cachedAttackAlpha_ = (compAttackTau > 0.0f) ? (1.0f - expf(-framePeriod / compAttackTau)) : 1.0f;
+    cachedReleaseAlpha_ = (compReleaseTau > 0.0f) ? (1.0f - expf(-framePeriod / compReleaseTau)) : 1.0f;
+    lastAttackTau_ = compAttackTau;
+    lastReleaseTau_ = compReleaseTau;
 }
 
 bool BassSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -65,21 +92,15 @@ void BassSpectralAnalysis::process() {
     // Read oldest-first: writeIndex_ points to the oldest sample in the ring
     // Static to avoid 2KB stack allocation on every call (embedded target)
     static float windowed[BassConstants::WINDOW_SIZE];
-    const float alpha = 0.54f;
-    const float beta = 0.46f;
-    const float twoPiOverN = 2.0f * 3.14159265f / (BassConstants::WINDOW_SIZE - 1);
 
     for (int i = 0; i < BassConstants::WINDOW_SIZE; i++) {
         int idx = (writeIndex_ + i) % BassConstants::WINDOW_SIZE;
-        float sample = sampleBuffer_[idx] / 32768.0f;
-        float window = alpha - beta * cosf(twoPiOverN * i);
-        windowed[i] = sample * window;
+        windowed[i] = (sampleBuffer_[idx] / 32768.0f) * hammingWindow_[i];
     }
 
-    // Step 2: Goertzel for bins 1-12
+    // Step 2: Goertzel for bins 1-12 (using precomputed coefficients)
     for (int b = 0; b < BassConstants::NUM_BASS_BINS; b++) {
-        int k = b + BassConstants::FIRST_BIN;  // DFT bin index (1-12)
-        float mag = goertzelMagnitude(windowed, BassConstants::WINDOW_SIZE, k);
+        float mag = goertzelMagnitude(windowed, BassConstants::WINDOW_SIZE, goertzelCoeff_[b]);
         magnitudes_[b] = safeIsFinite(mag) ? mag : 0.0f;
     }
 
@@ -97,10 +118,9 @@ void BassSpectralAnalysis::process() {
     newSampleCount_ = 0;
 }
 
-float BassSpectralAnalysis::goertzelMagnitude(const float* windowedSamples, int N, int k) {
+float BassSpectralAnalysis::goertzelMagnitude(const float* windowedSamples, int N, float coeff) {
     // Goertzel algorithm: computes |DFT[k]| for a single bin
-    // Equivalent to extracting bin k from a full N-point FFT
-    float coeff = 2.0f * cosf(2.0f * 3.14159265f * k / N);
+    // coeff = 2*cos(2*pi*k/N), precomputed in reset()
     float s1 = 0.0f, s2 = 0.0f;
 
     for (int i = 0; i < N; i++) {
@@ -153,13 +173,16 @@ void BassSpectralAnalysis::applyCompressor() {
 
     gainDb += compMakeupDb;
 
-    // Asymmetric EMA smoothing
-    // Frame period = HOP_SIZE / SAMPLE_RATE = 256/16000 = 16ms
-    static constexpr float framePeriod = (float)BassConstants::HOP_SIZE / BassConstants::SAMPLE_RATE;
-    float attackAlpha = (compAttackTau > 0.0f) ? (1.0f - expf(-framePeriod / compAttackTau)) : 1.0f;
-    float releaseAlpha = (compReleaseTau > 0.0f) ? (1.0f - expf(-framePeriod / compReleaseTau)) : 1.0f;
+    // Asymmetric EMA smoothing (alphas precomputed in reset(), recomputed if tau changed)
+    if (compAttackTau != lastAttackTau_ || compReleaseTau != lastReleaseTau_) {
+        static constexpr float framePeriod = (float)BassConstants::HOP_SIZE / BassConstants::SAMPLE_RATE;
+        cachedAttackAlpha_ = (compAttackTau > 0.0f) ? (1.0f - expf(-framePeriod / compAttackTau)) : 1.0f;
+        cachedReleaseAlpha_ = (compReleaseTau > 0.0f) ? (1.0f - expf(-framePeriod / compReleaseTau)) : 1.0f;
+        lastAttackTau_ = compAttackTau;
+        lastReleaseTau_ = compReleaseTau;
+    }
 
-    float alpha = (gainDb < smoothedGainDb_) ? attackAlpha : releaseAlpha;
+    float alpha = (gainDb < smoothedGainDb_) ? cachedAttackAlpha_ : cachedReleaseAlpha_;
     smoothedGainDb_ += alpha * (gainDb - smoothedGainDb_);
 
     float linearGain = powf(10.0f, smoothedGainDb_ / 20.0f);

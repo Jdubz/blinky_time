@@ -154,3 +154,6 @@ local-config/
 
 # Large audio files (keep MP3s under version control, exclude bulk downloads)
 blinky-test-player/music/*.tar.gz
+
+# Playwright MCP workspace scratch files
+.playwright-mcp/

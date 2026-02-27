@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
 **Last Updated:** February 27, 2026
-**Firmware Version:** SETTINGS_VERSION 24 (BandFlux Solo + Bayesian Tempo Fusion)
+**Firmware Version:** SETTINGS_VERSION 25 (BandFlux Solo + Bayesian Tempo Fusion)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -151,7 +151,7 @@ monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
 | `set detector_weight <type> <val>` | Set detector weight in fusion |
 | `set detector_thresh <type> <val>` | Set detector threshold |
 
-**Per-detector defaults (SETTINGS_VERSION 24):**
+**Per-detector defaults (SETTINGS_VERSION 25):**
 
 | Detector | Weight | Threshold | Enabled | Notes |
 |----------|--------|-----------|---------|-------|
@@ -328,7 +328,7 @@ monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
 
 ## Current Best Settings
 
-### BandFlux Solo Configuration (SETTINGS_VERSION 24)
+### BandFlux Solo Configuration (SETTINGS_VERSION 25)
 
 **Single detector outperforms all multi-detector ensembles** — BandFlux Solo achieves avg Beat F1 0.468 vs 0.411 baseline (HFC+Drummer). Multi-detector combos tested worse; ensemble fusion dilutes BandFlux's cleaner signal.
 

@@ -80,7 +80,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
     // Hi-res bass: log-compress Goertzel magnitudes (when available)
     bool useHiResBass = hiResBassEnabled_ && frame.bassSpectralValid && bassHistoryCount_ > 0;
-    float bassLogMag[MAX_BASS_BINS];
+    float bassLogMag[MAX_BASS_BINS] = {};
     if (hiResBassEnabled_ && frame.bassSpectralValid) {
         for (int b = 0; b < frame.numBassBins && b < MAX_BASS_BINS; b++) {
             bassLogMag[b] = fastLog1p(gamma_ * frame.bassMagnitudes[b]);

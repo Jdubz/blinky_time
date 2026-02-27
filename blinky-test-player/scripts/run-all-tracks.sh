@@ -29,11 +29,11 @@ TRACKS=(
   reggaeton-fuego-lento
 )
 
-RESULTS_FILE="$SCRIPT_DIR/../test-results/v24-all-tracks-summary.json"
+RESULTS_FILE="$SCRIPT_DIR/../test-results/v25-all-tracks-summary.json"
 ALL_RESULTS="["
 
 echo "=========================================="
-echo "  v24 Full Track Library Validation"
+echo "  v25 Full Track Library Validation"
 echo "  $(date)"
 echo "  ${#TRACKS[@]} tracks × 4 devices"
 echo "=========================================="
