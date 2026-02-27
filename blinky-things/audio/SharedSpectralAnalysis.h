@@ -244,9 +244,8 @@ private:
     void computeDerivedFeatures();
     void savePreviousFrame();
 
-    // Portable isfinite check
     static bool safeIsFinite(float x) {
-        return (x == x) && (x >= -3.4e38f) && (x <= 3.4e38f);
+        return isfinite(x);
     }
 
     // Clamp to 0-1 range

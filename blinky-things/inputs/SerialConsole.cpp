@@ -2377,9 +2377,9 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     }
 
     // bandflux_hiresbass: Hi-res bass via Goertzel 512-sample window (0=off, 1=on)
-    if (strncmp(cmd, "set bandflux_hiresbass ", 22) == 0) {
+    if (strncmp(cmd, "set bandflux_hiresbass ", 23) == 0) {
 
-        int value = atoi(cmd + 22);
+        int value = atoi(cmd + 23);
         audioCtrl_->getEnsemble().getBandFlux().setHiResBass(value != 0);
         BassSpectralAnalysis& bass = audioCtrl_->getEnsemble().getBassSpectral();
         if (value != 0 && !bass.enabled) {
