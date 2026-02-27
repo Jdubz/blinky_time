@@ -339,7 +339,7 @@ Comprehensive comparison against SuperFlux, BTrack (ComplexSpectralDifferenceHWR
 
 | Method | F1 (50ms) | F1 (25ms) | Type | Embedded |
 |--------|-----------|-----------|------|----------|
-| CNN ensemble (Schluter 2014) | ~0.90 | ~0.87 | Offline neural | No |
+| CNN ensemble (Schlüter 2014) | ~0.90 | ~0.87 | Offline neural | No |
 | SuperFlux (Böck 2013) | ~0.85-0.88 | ~0.84-0.85 | Offline DSP | Yes |
 | ComplexFlux | ~0.86-0.89 | — | Offline DSP | Yes |
 | Complex domain (Duxbury 2003) | ~0.78-0.82 | — | DSP | Yes |
@@ -524,7 +524,7 @@ These are confirmed best practices — keep them:
 1. **Continuous ODF → CBSS** — CBSS is fed by `computeSpectralFluxBands()` (continuous spectral flux), not binary transient events. Matches BTrack architecture.
 2. **Adaptive spectral whitening** (Stowell & Plumbley 2007) — Per-bin normalization. Literature shows 10+ F1 point improvement.
 3. **Soft-knee spectral compression** (Giannoulis 2012) — Standard in all top systems.
-4. **Inverse-lag ACF normalization** — Already implemented (line 491-494). Corrects sub-harmonic bias. BTrack does the same.
+4. **Inverse-lag ACF normalization** — Already implemented (`AudioController.cpp:491-494`). Corrects sub-harmonic bias. BTrack does the same.
 5. **SuperFlux-style max filtering** — In both BandWeightedFlux and computeSpectralFluxBands. Exactly the Böck & Widmer 2013 technique.
 6. **Comb filter bank** (Scheirer 1998) — Best single non-neural tempo estimator.
 7. **BTrack-style predict+countdown CBSS** — Standard non-neural real-time beat tracking.
@@ -542,7 +542,7 @@ Each removal must be tested with a 9-track sweep before/after to confirm no regr
 
 #### 1a. Test Disabling FT and IOI Observations — NEEDS VALIDATION
 
-**Problem:** FT and IOI have documented algorithmic issues (MEMORY.md root cause analysis). No reference implementation (BTrack, madmom, librosa) uses Fourier tempogram or IOI histograms in real-time beat tracking. The +49% improvement attributed to their v24 re-enablement may be from simultaneous changes (spectral processing, cbssthresh tuning) rather than FT/IOI themselves.
+**Problem:** FT and IOI have documented algorithmic issues (see root cause analysis in `blinky-test-player/PARAMETER_TUNING_HISTORY.md`). No reference implementation (BTrack, madmom, librosa) uses Fourier tempogram or IOI histograms in real-time beat tracking. The +49% improvement attributed to their v24 re-enablement may be confounded by simultaneous changes (spectral processing, cbssthresh tuning) rather than FT/IOI themselves.
 
 **Evidence against FT:**
 - Mean normalization in Goertzel produces near-flat observation vectors (all bins ≈ 1.0)
@@ -824,8 +824,8 @@ The only approach that can learn complex spectral patterns (kicks vs bass vs pad
 
 | Feature | Status | Action | Rationale |
 |---------|--------|--------|-----------|
-| **FT observation** | Enabled (bayesft=2.0) | **Test disabling (Phase 1a)** | Broken algorithm per research; no reference system uses FT for real-time beat tracking |
-| **IOI observation** | Enabled (bayesioi=2.0) | **Test disabling (Phase 1a)** | Broken algorithm per research; O(n²) complexity; no reference system uses IOI for polyphonic beat tracking |
+| **FT observation** | Enabled (bayesft=2.0) | **Test disabling (Phase 1a)** | Suspected algorithmic issues; v24 improvement needs validation; no reference system uses FT for real-time beat tracking |
+| **IOI observation** | Enabled (bayesioi=2.0) | **Test disabling (Phase 1a)** | Suspected algorithmic issues; O(n²) complexity; v24 improvement needs validation; no reference system uses IOI for polyphonic beat tracking |
 | **Adaptive band weighting** | Enabled | **Test disabling (Phase 1c)** | ~1600 lines + 2.9 KB RAM for potentially minimal benefit |
 | **computeSpectralFluxBands()** | Active | **Replace with unified ODF (Phase 2.4)** | Duplicate computation; disagrees with BandFlux transient detector |
 | **6 disabled detectors** | Code present, disabled | **Keep as-is** | Zero runtime cost; useful for future experimentation |
@@ -932,7 +932,7 @@ Every 250ms:
 | [BeatNet](https://github.com/mjhydri/BeatNet) | Heydari et al. | 2021 | CRNN + particle filter with octave investigator | Particle filter only |
 | [BeatNet+](https://transactions.ismir.net/articles/10.5334/tismir.198) | Heydari et al. | 2024 | Percussion-invariant representations | No |
 | [Real-Time PLP](https://github.com/groupmm/real_time_plp) | Meier, Chiu, Muller | 2024 | Sinusoidal kernel beat prediction | Possible |
-| [Beat This!](https://github.com/CPJKU/beat_this) | Foscarin, Schluter, Widmer | 2024 | 20M param transformer (SOTA) | No |
+| [Beat This!](https://github.com/CPJKU/beat_this) | Foscarin, Schlüter, Widmer | 2024 | 20M param transformer (SOTA) | No |
 | [IBT](https://archives.ismir.net/ismir2010/paper/000050.pdf) | Oliveira, Gouyon, Martins | 2010 | Real-time multi-agent beat tracking | Yes |
 | [BeatRoot](https://courses.cs.washington.edu/courses/cse590m/08wi/Dixon%20-%20Evaluation%20of%20BeatRoot%20(2007).pdf) | Dixon | 2007 | Multiple competing agents | Offline only |
 | [Particle Filter Tempo](https://www.researchgate.net/publication/26532312_Particle_Filtering_Applied_to_Musical_Tempo_Tracking) | Hainsworth | 2004 | Sequential Monte Carlo beat tracking | Yes |
