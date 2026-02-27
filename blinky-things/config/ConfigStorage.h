@@ -49,7 +49,7 @@ public:
     // Version 25: BTrack-style octave error fixes (harmonic comb ACF, Rayleigh prior, tighter lambda, bidirectional disambig)
     // Version 26: BlinkyAssert visible errors, per-param validation, VALIDATE_INT macro
     // Version 27: Removed legacy detection params from StoredMicParams, prefixed water/lightning settings
-    // Version 28: Phase 1a — FT+IOI disabled by default (bayesft=0, bayesioi=0, ftEnabled=false, ioiEnabled=false)
+    // Version 28 (shipped as 29): Phase 1a — FT+IOI disabled by default (bayesft=0, bayesioi=0, ftEnabled=false, ioiEnabled=false)
     //             Phase 2.1 — Beat-boundary tempo updates (pendingBeatPeriod_)
     //             Phase 2.6 — Dual-threshold peak picking (local-max confirmation)
     //             Phase 2.4 — Unified ODF (BandFlux pre-threshold feeds CBSS)

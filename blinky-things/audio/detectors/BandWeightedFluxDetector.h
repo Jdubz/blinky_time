@@ -97,7 +97,9 @@ public:
     float getAverageFlux() const { return averageFlux_; }
     float getHiResBassFlux() const { return hiResBassFlux_; }
 
-    // Pre-threshold continuous ODF value (Phase 2.4: unified ODF for beat tracker)
+    // Pre-threshold continuous ODF value (Phase 2.4: unified ODF for beat tracker).
+    // Returns the band-weighted combination (bass*w + mid*w + high*w), NOT raw per-bin flux.
+    // Post-log-compression, pre-additive-threshold, pre-cooldown, pre-peak-picking.
     float getPreThresholdFlux() const { return combinedFlux_; }
 
 protected:

@@ -149,6 +149,8 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     // the early return bypasses all detection logic. At confirmFrames=3 (~50ms)
     // this is acceptable; at higher values rapid onsets could be missed.
     // Also introduces ~50ms latency on confirmed detections (confirmFrames × 16.7ms).
+    // Note: decay confirmation and peak picking do not compose — the early return here
+    // bypasses the peak picking block, so decay-confirmed detections skip local-max check.
     if (confirmCountdown_ > 0) {
         if (combinedFlux_ < minFluxDuringWindow_) {
             minFluxDuringWindow_ = combinedFlux_;
@@ -266,7 +268,8 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         updateThresholdBuffer(combinedFlux_);
     }
 
-    // Store current as reference for next frame
+    // Store current as reference for next frame (must run before peak picking —
+    // early returns in the peak picking block rely on prevCombinedFlux_ being current)
     updatePrevFrameState(logMag, effectiveMax);
     if (useHiResBass) updateBassPrevFrameState(bassLogMag, frame.numBassBins);
 
