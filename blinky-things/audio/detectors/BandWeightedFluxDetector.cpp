@@ -275,6 +275,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     // We buffer 1 frame: the pending result from frame N is emitted at frame N+1 only if
     // combinedFlux[N] >= combinedFlux[N+1] (flux is no longer rising).
     // This adds ~16ms latency (imperceptible for visualization).
+    // Note: toggling peakPickEnabled while ppHasPending_ discards the pending detection.
     if (peakPickEnabled) {
         DetectionResult emitResult = DetectionResult::none();
 

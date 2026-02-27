@@ -50,7 +50,7 @@ public:
     float perBandThreshMult = 1.5f;      // Per-band threshold multiplier (0.5-5)
     uint8_t maxBin = 64;                 // Max FFT bin to analyze (16-128)
     uint8_t confirmFrames = 3;           // Frames to wait for decay check (0-6)
-    uint8_t diffFrames = 1;             // Temporal reference depth (1-3, SuperFlux diff_frames)
+    uint8_t diffFrames = 1;              // Temporal reference depth (1-3, SuperFlux diff_frames)
     bool perBandThreshEnabled = false;   // Per-band independent detection
     bool hiResBassEnabled = false;       // Hi-res bass via Goertzel (runtime toggle)
     bool peakPickEnabled = true;         // Local-max peak picking (Phase 2.6, SuperFlux-style)

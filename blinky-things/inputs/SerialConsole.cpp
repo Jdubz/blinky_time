@@ -46,7 +46,7 @@ void onParamChanged() {
 void SerialConsole::onHiResBassChanged() {
     if (!instance_ || !instance_->audioCtrl_) return;
     BandWeightedFluxDetector& bf = instance_->audioCtrl_->getEnsemble().getBandFlux();
-    bf.setHiResBass(bf.hiResBassEnabled);  // Resets internal bass history
+    bf.setHiResBass(bf.hiResBassEnabled);  // Side effect: resets bassHistoryCount_ to 0
     BassSpectralAnalysis& bass = instance_->audioCtrl_->getEnsemble().getBassSpectral();
     if (bf.hiResBassEnabled && !bass.enabled) {
         bass.reset();  // Clear stale ring buffer and whitening state

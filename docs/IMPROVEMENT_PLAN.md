@@ -495,7 +495,7 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 | Feature | Parameters | Status |
 |---------|:----------:|--------|
 | **Spectral pipeline** | compenabled, compthresh=-30, compratio=3, compknee=15, compmakeup=6, whitenenabled, whitendecay=0.997 | **Validated** (SETTINGS_VERSION 23-24) — resolves mic sensitivity, enables FT/IOI |
-| **Bayesian weights** | bayesacf=0.8, bayesft=2.0, bayescomb=0.7, bayesioi=2.0, bayeslambda=0.07, bayespriorw=0 | **v25** — harmonic comb ACF + Rayleigh prior, tighter lambda. Needs 18-track validation |
+| **Bayesian weights** | bayesacf=0.8, bayesft=0.0, bayescomb=0.7, bayesioi=0.0, bayeslambda=0.07, bayespriorw=0 | **v29** — FT+IOI disabled (v28), harmonic comb ACF + Rayleigh prior (v25). Needs 18-track validation |
 | **CBSS adaptive threshold** | cbssthresh=1.0 | **Validated** (SETTINGS_VERSION 22) — prevents phantom beats |
 | ODF Mean Subtraction | odfmeansub (toggle) | **Essential** — keep ON. OFF destroys BPM (Feb 24) |
 | Per-band thresholds | bfperbandthresh, bfpbmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
