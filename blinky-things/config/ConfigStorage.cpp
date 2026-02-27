@@ -130,7 +130,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.water.musicSpawnPulse = 0.5f;
     data_.water.organicTransientMin = 0.3f;
     data_.water.backgroundIntensity = 0.15f;
-    data_.water.maxParticles = 64;
+    data_.water.maxParticles = 30;   // Pool size is ParticleGenerator<30>
     data_.water.defaultLifespan = 90;
     data_.water.intensityMin = 80;
     data_.water.intensityMax = 200;
@@ -140,8 +140,6 @@ void ConfigStorage::loadSettingsDefaults() {
     // Lightning defaults (particle-based)
     data_.lightning.baseSpawnChance = 0.15f;
     data_.lightning.audioSpawnBoost = 0.5f;
-    data_.lightning.boltVelocityMin = 4.0f;
-    data_.lightning.boltVelocityMax = 8.0f;
     data_.lightning.branchAngleSpread = PI / 4.0f;  // 45 degree spread
     data_.lightning.musicSpawnPulse = 0.6f;
     data_.lightning.organicTransientMin = 0.3f;
@@ -167,24 +165,6 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.mic.fastAgcThreshold = 0.15f;     // Raw level threshold to trigger fast mode
     data_.mic.fastAgcPeriodMs = 5000;       // 5s calibration period in fast mode
     data_.mic.fastAgcTrackingTau = 5.0f;    // 5s tracking tau in fast mode
-
-    // LEGACY: Detection defaults (kept for backward compatibility with old configs)
-    // These parameters are now handled by EnsembleDetector, not AdaptiveMic
-    data_.mic.transientThreshold = 2.813f;
-    data_.mic.attackMultiplier = 1.1f;
-    data_.mic.averageTau = 0.8f;
-    data_.mic.cooldownMs = 80;
-    data_.mic.detectionMode = 4;
-    data_.mic.bassFreq = 120.0f;
-    data_.mic.bassQ = 1.0f;
-    data_.mic.bassThresh = 3.0f;
-    data_.mic.hfcWeight = 1.0f;
-    data_.mic.hfcThresh = 3.0f;
-    data_.mic.fluxThresh = 1.4f;
-    data_.mic.fluxBins = 64;
-    data_.mic.hybridFluxWeight = 0.5f;
-    data_.mic.hybridDrumWeight = 0.5f;
-    data_.mic.hybridBothBoost = 1.2f;
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
@@ -214,11 +194,11 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
 
     // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via 4-device sweep)
-    // Post-spectral re-tuning (v24): whitening+compressor fixed FT and IOI signals
-    data_.music.bayesLambda = 0.15f;         // Transition tightness
+    // v25: BTrack-style harmonic comb ACF + Rayleigh prior + tighter lambda
+    data_.music.bayesLambda = 0.07f;         // Tighter transition (prevents octave jumps accumulating)
     data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
     data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
-    data_.music.bayesAcfWeight = 0.3f;       // Low ACF weight prevents sub-harmonic lock (validated Feb 25)
+    data_.music.bayesAcfWeight = 0.8f;       // High weight: harmonic comb makes ACF reliable (v25)
     data_.music.bayesFtWeight = 2.0f;        // Fourier tempogram — re-enabled by spectral processing (v24, +49% Beat F1)
     data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
     data_.music.bayesIoiWeight = 2.0f;       // IOI histogram — re-enabled by spectral processing (v24, +49% Beat F1)
@@ -400,32 +380,43 @@ void ConfigStorage::saveToFlash() {
 
 void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
                                       AdaptiveMic& mic, AudioController* audioCtrl) {
-    // Validation helpers to reduce code duplication
-    bool corrupt = false;
+    // Validation helpers — clamp individual bad params to nearest bound.
+    // Preserves all other settings instead of wiping everything.
+    int fixedCount = 0;
 
-    auto validateFloat = [&](float value, float min, float max, const __FlashStringHelper* name) {
+    auto validateFloat = [&](float& value, float min, float max, const __FlashStringHelper* name) {
         if (value < min || value > max) {
+            float clamped = value < min ? min : max;
             if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
                 Serial.print(F("[WARN] Bad config "));
                 Serial.print(name);
                 Serial.print(F(": "));
-                Serial.println(value);
+                Serial.print(value);
+                Serial.print(F(" -> "));
+                Serial.println(clamped);
             }
-            corrupt = true;
+            value = clamped;
+            fixedCount++;
         }
     };
 
-    auto validateUint32 = [&](uint32_t value, uint32_t min, uint32_t max, const __FlashStringHelper* name) {
-        if (value < min || value > max) {
-            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
-                Serial.print(F("[WARN] Bad config "));
-                Serial.print(name);
-                Serial.print(F(": "));
-                Serial.println(value);
-            }
-            corrupt = true;
-        }
-    };
+    // Macro-based integer validator — works with uint8_t, uint16_t, uint32_t
+    // (lambdas can't be templated in C++11)
+    #define VALIDATE_INT(value, lo, hi, name) do { \
+        if ((value) < (lo) || (value) > (hi)) { \
+            auto _clamped = (value) < (lo) ? (lo) : (hi); \
+            if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) { \
+                Serial.print(F("[WARN] Bad config ")); \
+                Serial.print(name); \
+                Serial.print(F(": ")); \
+                Serial.print(value); \
+                Serial.print(F(" -> ")); \
+                Serial.println(_clamped); \
+            } \
+            (value) = _clamped; \
+            fixedCount++; \
+        } \
+    } while(0)
 
     // Validate critical parameters - if out of range, use defaults
     validateFloat(data_.fire.baseSpawnChance, 0.0f, 1.0f, F("baseSpawnChance"));
@@ -441,24 +432,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Validate fast AGC parameters
     validateFloat(data_.mic.fastAgcThreshold, 0.01f, 0.5f, F("fastAgcThresh"));
     validateFloat(data_.mic.fastAgcTrackingTau, 0.5f, 30.0f, F("fastAgcTau"));
-    validateUint32(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
-
-    // LEGACY: Validate detection parameters (still needed for backward compatibility)
-    validateFloat(data_.mic.transientThreshold, 1.5f, 10.0f, F("transientThreshold"));
-    validateFloat(data_.mic.attackMultiplier, 1.1f, 2.0f, F("attackMultiplier"));
-    validateFloat(data_.mic.averageTau, 0.1f, 5.0f, F("averageTau"));
-    validateUint32(data_.mic.cooldownMs, 20, 500, F("cooldownMs"));
-    validateUint32(data_.mic.detectionMode, 0, 4, F("detectionMode"));
-    validateFloat(data_.mic.bassFreq, 40.0f, 200.0f, F("bassFreq"));
-    validateFloat(data_.mic.bassQ, 0.5f, 3.0f, F("bassQ"));
-    validateFloat(data_.mic.bassThresh, 1.5f, 10.0f, F("bassThresh"));
-    validateFloat(data_.mic.hfcWeight, 0.5f, 5.0f, F("hfcWeight"));
-    validateFloat(data_.mic.hfcThresh, 1.5f, 10.0f, F("hfcThresh"));
-    validateFloat(data_.mic.fluxThresh, 1.0f, 10.0f, F("fluxThresh"));
-    validateUint32(data_.mic.fluxBins, 4, 128, F("fluxBins"));
-    validateFloat(data_.mic.hybridFluxWeight, 0.1f, 1.0f, F("hybridFluxWeight"));
-    validateFloat(data_.mic.hybridDrumWeight, 0.1f, 1.0f, F("hybridDrumWeight"));
-    validateFloat(data_.mic.hybridBothBoost, 1.0f, 2.0f, F("hybridBothBoost"));
+    VALIDATE_INT(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
 
     // AudioController validation (v23+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
@@ -491,14 +465,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.bayesLambda, 0.01f, 1.0f, F("bayesLambda"));
     validateFloat(data_.music.bayesPriorCenter, 60.0f, 200.0f, F("bayesPriorCenter"));
     validateFloat(data_.music.bayesPriorWeight, 0.0f, 3.0f, F("bayesPriorWeight"));
-    validateFloat(data_.music.bayesAcfWeight, 0.0f, 2.0f, F("bayesAcfWeight"));
-    validateFloat(data_.music.bayesFtWeight, 0.0f, 2.0f, F("bayesFtWeight"));
-    validateFloat(data_.music.bayesCombWeight, 0.0f, 2.0f, F("bayesCombWeight"));
-    validateFloat(data_.music.bayesIoiWeight, 0.0f, 2.0f, F("bayesIoiWeight"));
+    validateFloat(data_.music.bayesAcfWeight, 0.0f, 5.0f, F("bayesAcfWeight"));
+    validateFloat(data_.music.bayesFtWeight, 0.0f, 5.0f, F("bayesFtWeight"));
+    validateFloat(data_.music.bayesCombWeight, 0.0f, 5.0f, F("bayesCombWeight"));
+    validateFloat(data_.music.bayesIoiWeight, 0.0f, 5.0f, F("bayesIoiWeight"));
     if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
-        SerialConsole::logWarn(F("Invalid odfSmoothWidth, using default"));
-        data_.music.odfSmoothWidth = 5;
-        corrupt = true;
+        SerialConsole::logWarn(F("Invalid odfSmoothWidth, clamping"));
+        data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
+        fixedCount++;
     }
     // ioiEnabled, odfMeanSubEnabled, ftEnabled are bools — no range validation needed
 
@@ -515,15 +489,19 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
-        SerialConsole::logWarn(F("Invalid BPM range, using defaults"));
-        data_.music.bpmMin = 60.0f;
-        data_.music.bpmMax = 200.0f;
-        corrupt = true;
+        SerialConsole::logWarn(F("Invalid BPM range, swapping"));
+        float tmp = data_.music.bpmMin;
+        data_.music.bpmMin = data_.music.bpmMax;
+        data_.music.bpmMax = tmp;
+        fixedCount++;
     }
 
-    if (corrupt) {
-        SerialConsole::logWarn(F("Corrupt config detected, using defaults"));
-        loadDefaults();
+    #undef VALIDATE_INT
+
+    if (fixedCount > 0) {
+        Serial.print(F("[WARN] Fixed "));
+        Serial.print(fixedCount);
+        Serial.println(F(" bad config param(s) (other settings preserved)"));
     }
 
     // Debug: show loaded values
@@ -591,9 +569,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Spawn behavior
     lightningParams.baseSpawnChance = data_.lightning.baseSpawnChance;
     lightningParams.audioSpawnBoost = data_.lightning.audioSpawnBoost;
-    // Bolt appearance
-    lightningParams.boltVelocityMin = data_.lightning.boltVelocityMin;
-    lightningParams.boltVelocityMax = data_.lightning.boltVelocityMax;
     // Branching
     lightningParams.branchAngleSpread = data_.lightning.branchAngleSpread;
     // Audio reactivity
@@ -747,9 +722,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     // Spawn behavior
     data_.lightning.baseSpawnChance = lightningParams.baseSpawnChance;
     data_.lightning.audioSpawnBoost = lightningParams.audioSpawnBoost;
-    // Bolt appearance
-    data_.lightning.boltVelocityMin = lightningParams.boltVelocityMin;
-    data_.lightning.boltVelocityMax = lightningParams.boltVelocityMax;
     // Branching
     data_.lightning.branchAngleSpread = lightningParams.branchAngleSpread;
     // Audio reactivity

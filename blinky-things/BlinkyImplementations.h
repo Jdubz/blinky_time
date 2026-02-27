@@ -19,6 +19,7 @@
  */
 
 // Core data types
+#include "types/BlinkyAssert.cpp"
 #include "types/PixelMatrix.cpp"
 
 // Math implementations
@@ -58,6 +59,7 @@
 
 // Audio processing implementations
 #include "audio/SharedSpectralAnalysis.cpp"
+#include "audio/BassSpectralAnalysis.cpp"
 #include "audio/EnsembleFusion.cpp"
 #include "audio/EnsembleDetector.cpp"
 #include "audio/detectors/DrummerDetector.cpp"
@@ -67,7 +69,6 @@
 #include "audio/detectors/ComplexDomainDetector.cpp"
 #include "audio/detectors/NoveltyDetector.cpp"
 #include "audio/detectors/BandWeightedFluxDetector.cpp"
-#include "audio/PerceptualScaling.cpp"
 #include "audio/AudioController.cpp"
 
 // Test implementations (only when testing enabled)

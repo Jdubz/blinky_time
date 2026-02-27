@@ -19,6 +19,7 @@ EnsembleDetector::EnsembleDetector() {
 void EnsembleDetector::begin() {
     // Initialize spectral analysis
     spectral_.begin();
+    bassSpectral_.begin();
 
     // Configure each detector with fusion defaults
     for (int i = 0; i < NUM_DETECTORS; i++) {
@@ -31,6 +32,7 @@ void EnsembleDetector::begin() {
 void EnsembleDetector::reset() {
     // Reset spectral analysis
     spectral_.reset();
+    bassSpectral_.reset();
 
     // Reset all detectors
     for (int i = 0; i < NUM_DETECTORS; i++) {
@@ -48,6 +50,8 @@ void EnsembleDetector::reset() {
 }
 
 bool EnsembleDetector::addSamples(const int16_t* samples, int count) {
+    // Feed both spectral analyzers
+    bassSpectral_.addSamples(samples, count);
     return spectral_.addSamples(samples, count);
 }
 
@@ -56,6 +60,11 @@ EnsembleOutput EnsembleDetector::update(float level, float rawLevel,
     // Process FFT if samples are ready
     if (spectral_.hasSamples()) {
         spectral_.process();
+    }
+
+    // Process bass Goertzel if samples are ready
+    if (bassSpectral_.hasSamples()) {
+        bassSpectral_.process();
     }
 
     // Build frame structure for detectors
@@ -70,8 +79,9 @@ EnsembleOutput EnsembleDetector::update(float level, float rawLevel,
         }
     }
 
-    // Clear spectral frame ready flag (detectors have consumed data)
+    // Clear spectral frame ready flags (detectors have consumed data)
     spectral_.resetFrameReady();
+    bassSpectral_.resetFrameReady();
 
     // Fuse results with unified ensemble cooldown and noise gate
     lastOutput_ = fusion_.fuse(lastResults_, timestampMs, level);
@@ -96,6 +106,16 @@ AudioFrame EnsembleDetector::buildFrame(float level, float rawLevel,
     frame.numBins = spectral_.getNumBins();
     frame.numMelBands = spectral_.getNumMelBands();
 
+    // High-resolution bass data (Goertzel 512-sample window).
+    // Uses most recent completed frame — may be from a previous update cycle
+    // when new samples haven't accumulated to HOP_SIZE yet. This is expected
+    // given the 50% overlap (256-sample hop vs 128-sample FFT frames).
+    if (bassSpectral_.enabled && bassSpectral_.hasPreviousFrame()) {
+        frame.bassMagnitudes = bassSpectral_.getMagnitudes();
+        frame.numBassBins = bassSpectral_.getNumBins();
+        frame.bassSpectralValid = true;
+    }
+
     return frame;
 }
 
@@ -118,7 +138,7 @@ const IDetector* EnsembleDetector::getDetector(DetectorType type) const {
 void EnsembleDetector::setDetectorWeight(DetectorType type, float weight) {
     fusion_.setWeight(type, weight);
 
-    // FIX: Also update detector's own config (matches setDetectorEnabled/setDetectorThreshold)
+    // Also update detector's own config (matches setDetectorEnabled/setDetectorThreshold)
     int idx = static_cast<int>(type);
     if (idx >= 0 && idx < NUM_DETECTORS) {
         DetectorConfig config = detectors_[idx]->getConfig();

@@ -33,10 +33,6 @@ void EffectRenderer::clear() {
     }
 }
 
-void EffectRenderer::show() {
-    leds_.show();
-}
-
 void EffectRenderer::renderTestPattern(int pattern) {
     clear();
 

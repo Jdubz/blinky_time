@@ -1,4 +1,5 @@
 #include "SharedSpectralAnalysis.h"
+#include "../types/BlinkyAssert.h"
 #include <arduinoFFT.h>
 #include <math.h>
 
@@ -30,17 +31,17 @@ static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
     {39, 46, 54},  // 16: 2875 Hz center
     {46, 54, 63},  // 17: 3375 Hz center
 
-    // Band 18-23: High-mid frequencies (4-6 kHz)
+    // Band 18-21: High-mid frequencies (3.9-6.2 kHz)
     {54, 63, 74},  // 18: 3937 Hz center
     {63, 74, 86},  // 19: 4625 Hz center
     {74, 86, 100}, // 20: 5375 Hz center
     {86, 100, 116},// 21: 6250 Hz center
 
-    // Band 24-25: High frequencies (7-8 kHz)
-    {100, 116, 128},// 22: 7250 Hz center
-    {116, 128, 128},// 23: 8000 Hz center (at Nyquist)
-    {116, 128, 128},// 24: (extended)
-    {116, 128, 128} // 25: (extended)
+    // Band 22-25: High frequencies (7-8 kHz)
+    {100, 116, 127},// 22: 7250 Hz center
+    {116, 127, 127},// 23: 8000 Hz center (at Nyquist)
+    {116, 127, 127},// 24: (extended)
+    {116, 127, 127} // 25: (extended)
 };
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
@@ -296,7 +297,7 @@ void SharedSpectralAnalysis::applyCompressor() {
     }
     float rms = sqrtf(sumSq / (SpectralConstants::NUM_BINS - 1));
 
-    // Convert to dB (with floor to avoid log(0))
+    // Floor to avoid log10f(0). Triggers during true silence (all-zero FFT).
     const float floorLin = 1e-10f;
     if (rms < floorLin) rms = floorLin;
     float rmsDb = 20.0f * log10f(rms);
@@ -405,17 +406,4 @@ void SharedSpectralAnalysis::savePreviousFrame() {
     }
 }
 
-// --- Mel scale helpers ---
 
-float SharedSpectralAnalysis::hzToMel(float hz) {
-    // O'Shaughnessy formula
-    return 2595.0f * log10f(1.0f + hz / 700.0f);
-}
-
-float SharedSpectralAnalysis::melToHz(float mel) {
-    return 700.0f * (powf(10.0f, mel / 2595.0f) - 1.0f);
-}
-
-int SharedSpectralAnalysis::hzToBin(float hz) {
-    return (int)(hz / SpectralConstants::BIN_FREQ_HZ + 0.5f);
-}

@@ -46,7 +46,10 @@ public:
     // Version 22: Combined Bayesian validation (bayesacf=0.3, cbssthresh=1.0 — 4-device validated defaults)
     // Version 23: Spectral processing (adaptive whitening + soft-knee compressor)
     // Version 24: Post-spectral Bayesian re-tuning (bayesft=2.0, bayesioi=2.0 — re-enabled by spectral processing)
-    static const uint8_t SETTINGS_VERSION = 24;  // Settings schema (fire, water, lightning, mic, music params)
+    // Version 25: BTrack-style octave error fixes (harmonic comb ACF, Rayleigh prior, tighter lambda, bidirectional disambig)
+    // Version 26: BlinkyAssert visible errors, per-param validation, VALIDATE_INT macro
+    // Version 27: Removed legacy detection params from StoredMicParams, prefixed water/lightning settings
+    static const uint8_t SETTINGS_VERSION = 27;  // Settings schema (fire, water, lightning, mic, music params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -112,9 +115,6 @@ public:
         // Spawn behavior
         float baseSpawnChance;
         float audioSpawnBoost;
-        // Bolt appearance
-        float boltVelocityMin;
-        float boltVelocityMax;
         // Branching
         float branchAngleSpread;
         // Audio reactivity
@@ -140,29 +140,11 @@ public:
         // Hardware AGC parameters
         float hwTarget;           // Target raw input level (±0.01 dead zone)
 
-        // Fast AGC parameters (new in v24+)
+        // Fast AGC parameters
         float fastAgcThreshold;   // Raw level threshold to trigger fast AGC
         float fastAgcTrackingTau; // Tracking tau in fast mode (seconds)
         uint16_t fastAgcPeriodMs; // Calibration period in fast mode (ms)
         bool fastAgcEnabled;      // Enable fast AGC when signal is low
-
-        // LEGACY: Detection parameters (kept for backward compatibility)
-        // These are now handled by EnsembleDetector, not AdaptiveMic
-        float transientThreshold; // [LEGACY] Hit threshold
-        float attackMultiplier;   // [LEGACY] Attack multiplier
-        float averageTau;         // [LEGACY] Recent average tracking time
-        float bassFreq;           // [LEGACY] Filter cutoff frequency
-        float bassQ;              // [LEGACY] Filter Q factor
-        float bassThresh;         // [LEGACY] Bass detection threshold
-        float hfcWeight;          // [LEGACY] HFC weighting factor
-        float hfcThresh;          // [LEGACY] HFC detection threshold
-        float fluxThresh;         // [LEGACY] Spectral flux threshold
-        float hybridFluxWeight;   // [LEGACY] Weight when only flux detects
-        float hybridDrumWeight;   // [LEGACY] Weight when only drummer detects
-        float hybridBothBoost;    // [LEGACY] Multiplier when both agree
-        uint16_t cooldownMs;      // [LEGACY] Cooldown between hits (ms)
-        uint8_t detectionMode;    // [LEGACY] 0=drummer, 1=bass, 2=hfc, 3=flux, 4=hybrid
-        uint8_t fluxBins;         // [LEGACY] FFT bins to analyze
     };
 
     struct StoredMusicParams {
@@ -309,18 +291,18 @@ public:
         "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 5 uint8 + padding)");
     static_assert(sizeof(StoredWaterParams) == 64,
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 6 uint8 + padding)");
-    static_assert(sizeof(StoredLightningParams) == 40,
-        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (40 bytes = 8 floats + 8 uint8)");
-    static_assert(sizeof(StoredMicParams) == 76,
-        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (76 bytes = 17 floats + 2 uint16 + 2 uint8 + 1 bool + padding)");
+    static_assert(sizeof(StoredLightningParams) == 32,
+        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
+    static_assert(sizeof(StoredMicParams) == 24,
+        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 136,
         "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 32 floats + 1 uint8 + 5 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    // ConfigData: ~545 bytes (4+160+64+64+40+76+136+1 + padding). Allocated in last 4KB flash page.
+    // ConfigData: ~493 bytes (4+160+64+64+32+24+136+1 + padding). Allocated in last 4KB flash page.
     // Tight bound (640) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
     static_assert(sizeof(ConfigData) <= 640,
-        "ConfigData exceeds 640 bytes! Current estimate ~545B. Check for unintended struct growth.");
+        "ConfigData exceeds 640 bytes! Current estimate ~493B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

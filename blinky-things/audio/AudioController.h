@@ -2,7 +2,6 @@
 
 #include "AudioControl.h"
 #include "EnsembleDetector.h"
-#include "PerceptualScaling.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -35,7 +34,7 @@ struct AutocorrPeak {
  * - Complex phase extraction (not peak detection)
  * - Tempo prior weighting to reduce half-time/double-time confusion
  *
- * Memory: ~800 bytes total
+ * Memory: ~5.4 KB total (4.8 KB per-filter delay lines + 0.6 KB state)
  * CPU: ~2% (20 filters × simple math, phase every 4 frames)
  */
 class CombFilterBank {
@@ -108,8 +107,10 @@ public:
     }
 
 private:
-    // Shared delay line (all filters read from same buffer)
-    float delayLine_[MAX_LAG] = {0};
+    // Per-filter output delay lines for IIR feedback
+    // Each filter stores its own output history so y[n-L] feeds back correctly.
+    // Memory: 20 filters × 60 samples × 4 bytes = 4800 bytes
+    float resonatorDelay_[NUM_FILTERS][MAX_LAG] = {{0}};
     int writeIdx_ = 0;
 
     // Per-filter resonator state
@@ -228,8 +229,7 @@ public:
     void setDetectorWeight(DetectorType type, float weight);
     void setDetectorThreshold(DetectorType type, float threshold);
 
-    // BPM range constraints
-    void setBpmRange(float minBpm, float maxBpm);
+    // BPM range constraints (set directly via bpmMin/bpmMax members + SettingsRegistry)
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
 
@@ -281,11 +281,6 @@ public:
     float tempoSmoothingFactor = 0.85f; // Higher = smoother, slower adaptation (0-1)
     float tempoChangeThreshold = 0.1f;  // Min BPM change ratio to trigger update
 
-    // === ONSET STRENGTH SIGNAL (OSS) GENERATION ===
-    // Controls how the onset strength signal is computed for autocorrelation
-    // Spectral flux captures energy CHANGES, RMS captures absolute levels
-    float ossFluxWeight = 1.0f;  // 1.0 = pure spectral flux, 0.0 = pure RMS (legacy)
-
     // === ADAPTIVE BAND WEIGHTING ===
     // Dynamically adjusts band weights based on which frequency bands show strongest periodicity
     // When enabled, bands with stronger rhythmic content get higher weights
@@ -336,10 +331,10 @@ public:
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
     // into a unified posterior distribution over 20 tempo bins (60-180 BPM).
     // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
-    float bayesLambda = 0.15f;           // Transition tightness (0.01=rigid, 1.0=loose)
+    float bayesLambda = 0.07f;           // Transition tightness (0.01=rigid, 1.0=loose)
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
     float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
-    float bayesAcfWeight = 0.3f;         // Autocorrelation observation weight (low weight prevents sub-harmonic lock)
+    float bayesAcfWeight = 0.8f;         // Autocorrelation observation weight (high: harmonic comb makes ACF reliable)
     float bayesFtWeight = 2.0f;          // Fourier tempogram observation weight (re-enabled by spectral processing v24)
     float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
     float bayesIoiWeight = 2.0f;         // IOI histogram observation weight (re-enabled by spectral processing v24)
@@ -403,9 +398,6 @@ private:
     // === MICROPHONE ===
     AdaptiveMic mic_;
 
-    // === PERCEPTUAL SCALING ===
-    PerceptualScaling perceptual_;  // Public for ConfigStorage access
-
     // === ENSEMBLE DETECTOR ===
     EnsembleDetector ensemble_;
     EnsembleOutput lastEnsembleOutput_;
@@ -434,8 +426,6 @@ private:
     float bandPeriodicityStrength_[BAND_COUNT] = {0};
     float adaptiveBandWeights_[BAND_COUNT] = {0.5f, 0.3f, 0.2f};  // Default weights
     uint32_t lastBandAutocorrMs_ = 0;
-    static constexpr uint32_t BAND_AUTOCORR_PERIOD_MS = 250;  // Run every 250ms (faster response)
-
     // Cross-band correlation tracking (SuperFlux-inspired)
     // Measures how synchronized the bands are - real beats correlate across bands
     float crossBandCorrelation_[BAND_COUNT] = {0};  // Correlation of each band with others
@@ -515,7 +505,6 @@ private:
 
     // Autocorrelation timing
     uint32_t lastAutocorrMs_ = 0;
-    static constexpr uint32_t AUTOCORR_PERIOD_MS = 250;  // Run every 250ms (faster adaptation)
 
     // Silence detection
     uint32_t lastSignificantAudioMs_ = 0;
@@ -537,6 +526,7 @@ private:
     float tempoStatePrior_[TEMPO_BINS] = {0};     // Previous posterior (becomes prior)
     float tempoStatePost_[TEMPO_BINS] = {0};      // Current posterior after update
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
+    float rayleighWeight_[TEMPO_BINS] = {0};      // Rayleigh tempo prior peaked at ~120 BPM (BTrack-style)
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
     int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
     float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
@@ -568,10 +558,8 @@ private:
     void recomputeLogGaussianWeights(int T);
 
     // Onset strength computation
-    float computeSpectralFlux(const float* magnitudes, int numBins);
     float computeSpectralFluxBands(const float* magnitudes, int numBins,
                                     float& bassFlux, float& midFlux, float& highFlux);
-    float computeMultiBandRms(const float* magnitudes, int numBins);
 
     // Adaptive band weighting
     void addBandOssSamples(float bassFlux, float midFlux, float highFlux);
@@ -579,7 +567,6 @@ private:
     float computeBandAutocorrelation(int band);
     void computeCrossBandCorrelation();
     void computeBandPeakiness();
-    void applyMaxFilter(float* magnitudes, int numBins);
 
     // Bayesian tempo fusion
     // Note: initTempoState() uses bayesPriorCenter and tempoPriorWidth to build
@@ -588,7 +575,8 @@ private:
     void initTempoState();
     void runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
                                 int minLag, int maxLag, float avgEnergy,
-                                float samplesPerMs, bool debugPrint);
+                                float samplesPerMs, bool debugPrint,
+                                int harmonicCorrelationSize);
     void computeFTObservations(float* ftObs, int numBins);
     void computeIOIObservations(float* ioiObs, int numBins);
     int findClosestTempoBin(float targetBpm) const;

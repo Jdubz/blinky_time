@@ -1,4 +1,5 @@
 #include "EnsembleFusion.h"
+#include "../types/BlinkyAssert.h"
 
 EnsembleFusion::EnsembleFusion() {
     resetToDefaults();
@@ -29,11 +30,11 @@ void EnsembleFusion::configureDetector(DetectorType type, const DetectorConfig& 
 
 const DetectorConfig& EnsembleFusion::getConfig(DetectorType type) const {
     int idx = static_cast<int>(type);
-    if (idx >= 0 && idx < MAX_DETECTORS) {
-        return configs_[idx];
+    BLINKY_ASSERT(idx >= 0 && idx < MAX_DETECTORS, "EnsembleFusion::getConfig bad DetectorType");
+    if (idx < 0 || idx >= MAX_DETECTORS) {
+        return configs_[0];
     }
-    // Return first config as fallback (shouldn't happen)
-    return configs_[0];
+    return configs_[idx];
 }
 
 void EnsembleFusion::setWeight(DetectorType type, float weight) {

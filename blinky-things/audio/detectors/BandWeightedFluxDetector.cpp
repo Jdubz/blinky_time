@@ -29,8 +29,12 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , cachedResult_(DetectionResult::none())
     , averageBassFlux_(0.0f)
     , averageMidFlux_(0.0f)
+    , bassHistoryCount_(0)
+    , hiResBassFlux_(0.0f)
+    , hiResBassEnabled_(false)
 {
     memset(historyLogMag_, 0, sizeof(historyLogMag_));
+    memset(historyBassLogMag_, 0, sizeof(historyBassLogMag_));
 }
 
 void BandWeightedFluxDetector::resetImpl() {
@@ -47,8 +51,11 @@ void BandWeightedFluxDetector::resetImpl() {
     averageBassFlux_ = 0.0f;
     averageMidFlux_ = 0.0f;
     historyCount_ = 0;
+    bassHistoryCount_ = 0;
+    hiResBassFlux_ = 0.0f;
 
     memset(historyLogMag_, 0, sizeof(historyLogMag_));
+    memset(historyBassLogMag_, 0, sizeof(historyBassLogMag_));
 }
 
 DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float dt) {
@@ -71,9 +78,24 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         logMag[k] = fastLog1p(gamma_ * magnitudes[k]);
     }
 
+    // Hi-res bass: log-compress Goertzel magnitudes (when available).
+    // On the first frame with bass data, bassHistoryCount_==0 so useHiResBass is false
+    // (no reference frame to diff against). We seed history below and use it next frame.
+    bool useHiResBass = hiResBassEnabled_ && frame.bassSpectralValid && bassHistoryCount_ > 0;
+    float bassLogMag[MAX_BASS_BINS] = {};
+    if (hiResBassEnabled_ && frame.bassSpectralValid) {
+        for (int b = 0; b < frame.numBassBins && b < MAX_BASS_BINS; b++) {
+            bassLogMag[b] = fastLog1p(gamma_ * frame.bassMagnitudes[b]);
+        }
+        if (bassHistoryCount_ == 0) {
+            updateBassPrevFrameState(bassLogMag, frame.numBassBins);
+        }
+    }
+
     // If no history frames yet, store and return
     if (historyCount_ == 0) {
         updatePrevFrameState(logMag, effectiveMax);
+        if (useHiResBass) updateBassPrevFrameState(bassLogMag, frame.numBassBins);
         return DetectionResult::none();
     }
 
@@ -90,6 +112,16 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
     // Step 3: Compute per-band flux (half-wave rectified)
     computeBandFlux(logMag, maxRef, effectiveMax);
+
+    // Step 3b: Hi-res bass flux override (when Goertzel data available)
+    // Uses 12 bins at 31.25 Hz/bin instead of 6 bins at 62.5 Hz/bin
+    if (useHiResBass) {
+        computeHiResBassFlux(bassLogMag, frame.numBassBins);
+        // Replace bass flux from FFT-256 with hi-res Goertzel bass flux
+        bassFlux_ = hiResBassFlux_;
+    } else {
+        hiResBassFlux_ = 0.0f;
+    }
 
     // Step 4: Combined weighted ODF
     combinedFlux_ = bassWeight_ * bassFlux_ + midWeight_ * midFlux_ + highWeight_ * highFlux_;
@@ -137,6 +169,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
             if (minRatio <= decayRatioThreshold_) {
                 // Flux dipped — confirmed percussive onset
                 updatePrevFrameState(logMag, effectiveMax);
+                if (useHiResBass) updateBassPrevFrameState(bassLogMag, frame.numBassBins);
                 return cachedResult_;
             }
             // Flux never dipped — sustained sound (pad/chord), reject
@@ -146,6 +179,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         // the original onset frame (asymmetric design) — this is intentional to prevent
         // loud onsets from inflating the running average while still adapting to post-onset flux.
         updatePrevFrameState(logMag, effectiveMax);
+        if (useHiResBass) updateBassPrevFrameState(bassLogMag, frame.numBassBins);
         updateThresholdBuffer(combinedFlux_);
         return DetectionResult::none();
     }
@@ -242,6 +276,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
     // Store current as reference for next frame
     updatePrevFrameState(logMag, effectiveMax);
+    if (useHiResBass) updateBassPrevFrameState(bassLogMag, frame.numBassBins);
 
     return result;
 }
@@ -329,4 +364,78 @@ float BandWeightedFluxDetector::computeConfidence(float flux, float mean) const 
 
     // Floor at 0.2 when detected (always some confidence)
     return clamp01(confidence * 0.8f + 0.2f);
+}
+
+void BandWeightedFluxDetector::setHiResBass(bool e) {
+    hiResBassEnabled_ = e;
+    // Reset bass history to avoid computing flux against stale data
+    // from a previous session when re-enabling
+    bassHistoryCount_ = 0;
+    hiResBassFlux_ = 0.0f;
+    memset(historyBassLogMag_, 0, sizeof(historyBassLogMag_));
+}
+
+// --- Hi-res bass helpers ---
+
+void BandWeightedFluxDetector::computeHiResBassFlux(const float* bassLogMag, int numBins) {
+    // Compute bass flux from 12 Goertzel bins (31.25 Hz/bin)
+    // Uses 3-bin max-filter on reference (±31 Hz spread) to suppress spectral
+    // wobble in sustained bass. Narrower than FFT path's ±62 Hz filter.
+    // Normalizes by FFT-256 bass bin count (BASS_MAX - BASS_MIN = 6) so the
+    // hi-res flux is scaled to match the FFT path for threshold compatibility.
+
+    int n = (numBins < MAX_BASS_BINS) ? numBins : MAX_BASS_BINS;
+
+    const float* bassRef = getBassReferenceFrame();
+
+    float flux = 0.0f;
+    for (int b = 0; b < n; b++) {
+        // 3-bin max-filter on reference. At 31.25 Hz/bin this covers ±31 Hz,
+        // inherently narrower than the FFT path's 3-bin filter (±62 Hz).
+        // Suppresses spectral wobble in sustained bass.
+        float refVal = bassRef[b];
+        if (b > 0) refVal = fmaxf(refVal, bassRef[b - 1]);
+        if (b < n - 1) refVal = fmaxf(refVal, bassRef[b + 1]);
+
+        float diff = bassLogMag[b] - refVal;
+        if (diff > 0.0f) flux += diff;
+    }
+
+    // Normalize by FFT-256 bass bin count (6), not actual bin count (12).
+    // The 12 hi-res bins cover the same frequency range as 6 FFT bins;
+    // dividing by 12 would halve the flux for the same physical kick.
+    static constexpr int FFT_BASS_BIN_COUNT = BASS_MAX - BASS_MIN;  // 6
+    static_assert(FFT_BASS_BIN_COUNT == 6, "Hi-res bass normalization assumes 6 FFT bass bins");
+    hiResBassFlux_ = flux / FFT_BASS_BIN_COUNT;
+}
+
+void BandWeightedFluxDetector::updateBassPrevFrameState(const float* bassLogMag, int numBins) {
+    int n = (numBins < MAX_BASS_BINS) ? numBins : MAX_BASS_BINS;
+
+    // Shift history: move each frame back one slot
+    for (int f = MAX_HISTORY_FRAMES - 1; f > 0; f--) {
+        memcpy(historyBassLogMag_[f], historyBassLogMag_[f - 1], sizeof(float) * MAX_BASS_BINS);
+    }
+
+    // Store current frame as most recent
+    for (int b = 0; b < n; b++) {
+        historyBassLogMag_[0][b] = bassLogMag[b];
+    }
+    for (int b = n; b < MAX_BASS_BINS; b++) {
+        historyBassLogMag_[0][b] = 0.0f;
+    }
+
+    if (bassHistoryCount_ < MAX_HISTORY_FRAMES) {
+        bassHistoryCount_++;
+    }
+}
+
+const float* BandWeightedFluxDetector::getBassReferenceFrame() const {
+    // Same logic as getReferenceFrame() but for bass history
+    int idx = diffFrames_ - 1;
+    if (idx >= bassHistoryCount_) {
+        idx = bassHistoryCount_ - 1;
+    }
+    if (idx < 0) idx = 0;
+    return historyBassLogMag_[idx];
 }

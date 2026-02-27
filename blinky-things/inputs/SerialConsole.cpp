@@ -1,4 +1,5 @@
 #include "SerialConsole.h"
+#include "../types/BlinkyAssert.h"
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
@@ -78,8 +79,6 @@ void SerialConsole::registerSettings() {
 
     // Register all settings by category
     registerFireSettings(fp);
-    registerFireMusicSettings(fp);
-    registerFireOrganicSettings(fp);
 
     // Register Water generator settings (use mutable ref so changes apply directly)
     if (waterGenerator_) {
@@ -148,6 +147,12 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
     settings_.registerUint8("intensitymax", &fp->intensityMax, "fire",
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
+    // Audio reactivity
+    settings_.registerFloat("musicspawnpulse", &fp->musicSpawnPulse, "fire",
+        "Beat spawn depth (0=flat, 1=full breathing)", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fire",
+        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+
     // Background
     settings_.registerFloat("bgintensity", &fp->backgroundIntensity, "fire",
         "Noise background brightness", 0.0f, 1.0f, onParamChanged);
@@ -159,24 +164,6 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
     // Thermal physics
     settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
         "Thermal buoyancy strength (LEDs/sec^2)", 0.0f, 200.0f, onParamChanged);
-}
-
-// === MUSIC MODE FIRE SETTINGS ===
-// Controls fire behavior when music mode is active (beat-synced)
-void SerialConsole::registerFireMusicSettings(FireParams* fp) {
-    if (!fp) return;
-
-    settings_.registerFloat("musicspawnpulse", &fp->musicSpawnPulse, "firemusic",
-        "Beat spawn depth (0=flat, 1=full breathing)", 0.0f, 1.0f, onParamChanged);
-}
-
-// === ORGANIC MODE FIRE SETTINGS ===
-// Controls fire behavior when music mode is NOT active
-void SerialConsole::registerFireOrganicSettings(FireParams* fp) {
-    if (!fp) return;
-
-    settings_.registerFloat("organictransmin", &fp->organicTransientMin, "fireorganic",
-        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 }
 
 // === AUDIO SETTINGS ===
@@ -237,11 +224,9 @@ void SerialConsole::registerEnsembleSettings() {
 
 // === RHYTHM TRACKING SETTINGS (AudioController) ===
 void SerialConsole::registerRhythmSettings() {
-    if (!audioCtrl_) return;
+    // audioCtrl_ guaranteed valid — allocated in setup() before registerSettings()
 
     // Onset strength signal (OSS) generation
-    settings_.registerFloat("ossfluxweight", &audioCtrl_->ossFluxWeight, "rhythm",
-        "OSS flux weight (1=flux, 0=RMS)", 0.0f, 1.0f);
     settings_.registerBool("adaptivebandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
         "Enable adaptive band weighting");
     settings_.registerBool("combbankenabled", &audioCtrl_->combBankEnabled, "rhythm",
@@ -320,8 +305,6 @@ void SerialConsole::registerRhythmSettings() {
         "Autocorr period (ms)", 100, 1000);
 
     // Band weights (used when adaptive weighting disabled)
-    settings_.registerBool("adaptbandweight", &audioCtrl_->adaptiveBandWeightEnabled, "rhythm",
-        "Enable adaptive band weighting");
     settings_.registerFloat("bassbandweight", &audioCtrl_->bassBandWeight, "rhythm",
         "Bass band weight", 0.0f, 1.0f);
     settings_.registerFloat("midbandweight", &audioCtrl_->midBandWeight, "rhythm",
@@ -424,6 +407,14 @@ void SerialConsole::handleCommand(const char* cmd) {
 }
 
 bool SerialConsole::handleSpecialCommand(const char* cmd) {
+    // Assert error counter
+    if (strcmp(cmd, "show errors") == 0) {
+        Serial.print(F("{\"assertFails\":"));
+        Serial.print(BlinkyAssert::failCount);
+        Serial.println(F("}"));
+        return true;
+    }
+
     // Dispatch to specialized handlers (order matters for prefix matching)
     // NOTE: handleEnsembleCommand and handleBeatTrackingCommand are called
     // BEFORE settings registry in handleCommand() to avoid "set" conflicts
@@ -1083,7 +1074,7 @@ void SerialConsole::restoreDefaults() {
 
 // === GENERATOR COMMANDS ===
 bool SerialConsole::handleGeneratorCommand(const char* cmd) {
-    if (!pipeline_) return false;
+    if (!pipeline_) return false;  // Legitimately null in safe mode (no device config)
 
     // "gen list" - list available generators
     if (strcmp(cmd, "gen list") == 0 || strcmp(cmd, "gen") == 0) {
@@ -1192,110 +1183,110 @@ bool SerialConsole::handleEffectCommand(const char* cmd) {
 }
 
 // === WATER SETTINGS (Particle-based) ===
+// Prefixed with "w_" to avoid name collisions with fire settings.
+// Pool size is 30 (ParticleGenerator<30>), so maxparticles capped at 30.
 void SerialConsole::registerWaterSettings(WaterParams* wp) {
     if (!wp) return;
 
     // Spawn behavior
-    settings_.registerFloat("basespawnchance", &wp->baseSpawnChance, "water",
+    settings_.registerFloat("w_spawnchance", &wp->baseSpawnChance, "water",
         "Baseline drop spawn probability", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("audiospawnboost", &wp->audioSpawnBoost, "water",
+    settings_.registerFloat("w_audioboost", &wp->audioSpawnBoost, "water",
         "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
 
     // Physics
-    settings_.registerFloat("gravity", &wp->gravity, "water",
+    settings_.registerFloat("w_gravity", &wp->gravity, "water",
         "Gravity strength (positive=downward)", 0.0f, 20.0f, onParamChanged);
-    settings_.registerFloat("windbase", &wp->windBase, "water",
+    settings_.registerFloat("w_windbase", &wp->windBase, "water",
         "Base wind force", -5.0f, 5.0f, onParamChanged);
-    settings_.registerFloat("windvariation", &wp->windVariation, "water",
+    settings_.registerFloat("w_windvar", &wp->windVariation, "water",
         "Wind variation amount", 0.0f, 2.0f, onParamChanged);
-    settings_.registerFloat("drag", &wp->drag, "water",
+    settings_.registerFloat("w_drag", &wp->drag, "water",
         "Drag coefficient", 0.9f, 1.0f, onParamChanged);
 
     // Drop appearance
-    settings_.registerFloat("dropvelmin", &wp->dropVelocityMin, "water",
+    settings_.registerFloat("w_dropvelmin", &wp->dropVelocityMin, "water",
         "Minimum downward velocity", 0.0f, 10.0f, onParamChanged);
-    settings_.registerFloat("dropvelmax", &wp->dropVelocityMax, "water",
+    settings_.registerFloat("w_dropvelmax", &wp->dropVelocityMax, "water",
         "Maximum downward velocity", 0.0f, 10.0f, onParamChanged);
-    settings_.registerFloat("dropspread", &wp->dropSpread, "water",
+    settings_.registerFloat("w_dropspread", &wp->dropSpread, "water",
         "Horizontal velocity spread", 0.0f, 5.0f, onParamChanged);
 
     // Splash behavior
-    settings_.registerUint8("splashparticles", &wp->splashParticles, "water",
+    settings_.registerUint8("w_splashparts", &wp->splashParticles, "water",
         "Particles spawned per splash", 0, 10, onParamChanged);
-    settings_.registerFloat("splashvelmin", &wp->splashVelocityMin, "water",
+    settings_.registerFloat("w_splashvelmin", &wp->splashVelocityMin, "water",
         "Minimum splash velocity", 0.0f, 10.0f, onParamChanged);
-    settings_.registerFloat("splashvelmax", &wp->splashVelocityMax, "water",
+    settings_.registerFloat("w_splashvelmax", &wp->splashVelocityMax, "water",
         "Maximum splash velocity", 0.0f, 10.0f, onParamChanged);
-    settings_.registerUint8("splashintensity", &wp->splashIntensity, "water",
+    settings_.registerUint8("w_splashint", &wp->splashIntensity, "water",
         "Splash particle intensity", 0, 255, onParamChanged);
 
-    // Lifecycle
-    settings_.registerUint8("maxparticles", &wp->maxParticles, "water",
-        "Maximum active particles", 1, 64, onParamChanged);
-    settings_.registerUint8("defaultlifespan", &wp->defaultLifespan, "water",
+    // Lifecycle (pool size = 30, so maxparticles capped at 30)
+    settings_.registerUint8("w_maxparts", &wp->maxParticles, "water",
+        "Maximum active particles", 1, 30, onParamChanged);
+    settings_.registerUint8("w_lifespan", &wp->defaultLifespan, "water",
         "Default particle lifespan (frames)", 20, 180, onParamChanged);
-    settings_.registerUint8("intensitymin", &wp->intensityMin, "water",
+    settings_.registerUint8("w_intmin", &wp->intensityMin, "water",
         "Minimum spawn intensity", 0, 255, onParamChanged);
-    settings_.registerUint8("intensitymax", &wp->intensityMax, "water",
+    settings_.registerUint8("w_intmax", &wp->intensityMax, "water",
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Audio reactivity
-    settings_.registerFloat("musicspawnpulse", &wp->musicSpawnPulse, "water",
+    settings_.registerFloat("w_musicpulse", &wp->musicSpawnPulse, "water",
         "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("organictransmin", &wp->organicTransientMin, "water",
+    settings_.registerFloat("w_transmin", &wp->organicTransientMin, "water",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 
     // Background
-    settings_.registerFloat("bgintensity", &wp->backgroundIntensity, "water",
+    settings_.registerFloat("w_bgintensity", &wp->backgroundIntensity, "water",
         "Noise background brightness", 0.0f, 1.0f, onParamChanged);
 }
 
 // === LIGHTNING SETTINGS (Particle-based) ===
+// Prefixed with "l_" to avoid name collisions with fire settings.
+// Pool size is 40 (ParticleGenerator<40>), so maxparticles capped at 40.
 void SerialConsole::registerLightningSettings(LightningParams* lp) {
     if (!lp) return;
 
     // Spawn behavior
-    settings_.registerFloat("basespawnchance", &lp->baseSpawnChance, "lightning",
+    settings_.registerFloat("l_spawnchance", &lp->baseSpawnChance, "lightning",
         "Baseline bolt spawn probability", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("audiospawnboost", &lp->audioSpawnBoost, "lightning",
+    settings_.registerFloat("l_audioboost", &lp->audioSpawnBoost, "lightning",
         "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
 
     // Bolt appearance
-    settings_.registerFloat("boltvelmin", &lp->boltVelocityMin, "lightning",
-        "Minimum bolt speed", 0.0f, 20.0f, onParamChanged);
-    settings_.registerFloat("boltvelmax", &lp->boltVelocityMax, "lightning",
-        "Maximum bolt speed", 0.0f, 20.0f, onParamChanged);
-    settings_.registerUint8("faderate", &lp->fadeRate, "lightning",
+    settings_.registerUint8("l_faderate", &lp->fadeRate, "lightning",
         "Intensity decay per frame", 0, 255, onParamChanged);
 
     // Branching behavior
-    settings_.registerUint8("branchchance", &lp->branchChance, "lightning",
+    settings_.registerUint8("l_branchchance", &lp->branchChance, "lightning",
         "Branch probability (%)", 0, 100, onParamChanged);
-    settings_.registerUint8("branchcount", &lp->branchCount, "lightning",
+    settings_.registerUint8("l_branchcount", &lp->branchCount, "lightning",
         "Branches per trigger", 1, 4, onParamChanged);
-    settings_.registerFloat("branchspread", &lp->branchAngleSpread, "lightning",
+    settings_.registerFloat("l_branchspread", &lp->branchAngleSpread, "lightning",
         "Branch angle spread (radians)", 0.0f, 3.14159f, onParamChanged);
-    settings_.registerUint8("branchintloss", &lp->branchIntensityLoss, "lightning",
+    settings_.registerUint8("l_branchintloss", &lp->branchIntensityLoss, "lightning",
         "Branch intensity reduction (%)", 0, 100, onParamChanged);
 
-    // Lifecycle
-    settings_.registerUint8("maxparticles", &lp->maxParticles, "lightning",
-        "Maximum active particles", 1, 32, onParamChanged);
-    settings_.registerUint8("defaultlifespan", &lp->defaultLifespan, "lightning",
+    // Lifecycle (pool size = 40, so maxparticles capped at 40)
+    settings_.registerUint8("l_maxparts", &lp->maxParticles, "lightning",
+        "Maximum active particles", 1, 40, onParamChanged);
+    settings_.registerUint8("l_lifespan", &lp->defaultLifespan, "lightning",
         "Default particle lifespan (frames)", 10, 60, onParamChanged);
-    settings_.registerUint8("intensitymin", &lp->intensityMin, "lightning",
+    settings_.registerUint8("l_intmin", &lp->intensityMin, "lightning",
         "Minimum spawn intensity", 0, 255, onParamChanged);
-    settings_.registerUint8("intensitymax", &lp->intensityMax, "lightning",
+    settings_.registerUint8("l_intmax", &lp->intensityMax, "lightning",
         "Maximum spawn intensity", 0, 255, onParamChanged);
 
     // Audio reactivity
-    settings_.registerFloat("musicspawnpulse", &lp->musicSpawnPulse, "lightning",
+    settings_.registerFloat("l_musicpulse", &lp->musicSpawnPulse, "lightning",
         "Phase modulation for spawn rate", 0.0f, 1.0f, onParamChanged);
-    settings_.registerFloat("organictransmin", &lp->organicTransientMin, "lightning",
+    settings_.registerFloat("l_transmin", &lp->organicTransientMin, "lightning",
         "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
 
     // Background
-    settings_.registerFloat("bgintensity", &lp->backgroundIntensity, "lightning",
+    settings_.registerFloat("l_bgintensity", &lp->backgroundIntensity, "lightning",
         "Noise background brightness", 0.0f, 1.0f, onParamChanged);
 }
 
@@ -1359,7 +1350,7 @@ void SerialConsole::syncEffectSettings() {
 }
 
 void SerialConsole::checkBayesianInteractions() {
-    if (!audioCtrl_) return;
+    // audioCtrl_ guaranteed valid — allocated in setup() before any commands
 
     // WARN: cbssthresh < 0.8 + bayesft > 0.5 causes catastrophic F1 collapse (0.049)
     // because FT sub-harmonic bias floods CBSS with phantom beats at low threshold.
@@ -1680,7 +1671,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     // === ENSEMBLE FUSION PARAMETERS ===
     // ensemble_cooldown: Unified cooldown between ensemble detections (ms)
     if (strncmp(cmd, "set ensemble_cooldown ", 22) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 22);
         if (value >= 20 && value <= 500) {
             audioCtrl_->getEnsemble().getFusion().setCooldownMs(value);
@@ -1692,7 +1683,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show ensemble_cooldown") == 0 || strcmp(cmd, "ensemble_cooldown") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("ensemble_cooldown="));
         Serial.print(audioCtrl_->getEnsemble().getFusion().getCooldownMs());
         Serial.println(F(" ms"));
@@ -1701,7 +1692,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // ensemble_minconf: Minimum confidence threshold for detection output
     if (strncmp(cmd, "set ensemble_minconf ", 21) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 21);
         if (value >= 0.0f && value <= 1.0f) {
             audioCtrl_->getEnsemble().getFusion().setMinConfidence(value);
@@ -1713,7 +1704,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show ensemble_minconf") == 0 || strcmp(cmd, "ensemble_minconf") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("ensemble_minconf="));
         Serial.println(audioCtrl_->getEnsemble().getFusion().getMinConfidence(), 3);
         return true;
@@ -1721,7 +1712,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // ensemble_minlevel: Noise gate - minimum audio level for detection
     if (strncmp(cmd, "set ensemble_minlevel ", 22) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 22);
         if (value >= 0.0f && value <= 1.0f) {
             audioCtrl_->getEnsemble().getFusion().setMinAudioLevel(value);
@@ -1733,7 +1724,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show ensemble_minlevel") == 0 || strcmp(cmd, "ensemble_minlevel") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("ensemble_minlevel="));
         Serial.println(audioCtrl_->getEnsemble().getFusion().getMinAudioLevel(), 3);
         return true;
@@ -1741,7 +1732,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // ens_adaptcool: Enable/disable tempo-adaptive cooldown
     if (strncmp(cmd, "set ens_adaptcool ", 18) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 18);
         audioCtrl_->getEnsemble().getFusion().setAdaptiveCooldown(value != 0);
         Serial.print(F("OK ens_adaptcool="));
@@ -1749,7 +1740,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show ens_adaptcool") == 0 || strcmp(cmd, "ens_adaptcool") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("ens_adaptcool="));
         Serial.println(audioCtrl_->getEnsemble().getFusion().isAdaptiveCooldownEnabled() ? "on" : "off");
         return true;
@@ -1757,7 +1748,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // ens_effcool: Show effective cooldown (read-only, affected by tempo)
     if (strcmp(cmd, "show ens_effcool") == 0 || strcmp(cmd, "ens_effcool") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("ens_effcool="));
         Serial.print(audioCtrl_->getEnsemble().getFusion().getEffectiveCooldownMs());
         Serial.print(F("ms (base="));
@@ -1771,7 +1762,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     // === PULSE MODULATION THRESHOLDS (rhythm category) ===
     // pulsenear: Phase distance threshold for near-beat detection (boost transients)
     if (strncmp(cmd, "set pulsenear ", 14) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 14);
         if (value >= 0.0f && value <= 0.5f) {
             audioCtrl_->pulseNearBeatThreshold = value;
@@ -1783,7 +1774,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show pulsenear") == 0 || strcmp(cmd, "pulsenear") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("pulsenear="));
         Serial.println(audioCtrl_->pulseNearBeatThreshold, 3);
         return true;
@@ -1791,7 +1782,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // pulsefar: Phase distance threshold for off-beat detection (suppress transients)
     if (strncmp(cmd, "set pulsefar ", 13) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 13);
         if (value >= 0.2f && value <= 0.5f) {
             audioCtrl_->pulseFarFromBeatThreshold = value;
@@ -1803,7 +1794,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show pulsefar") == 0 || strcmp(cmd, "pulsefar") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("pulsefar="));
         Serial.println(audioCtrl_->pulseFarFromBeatThreshold, 3);
         return true;
@@ -1957,7 +1948,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // Drummer: attackmult, avgtau
     if (strncmp(cmd, "set drummer_attackmult ", 23) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 23);
         audioCtrl_->getEnsemble().getDrummer().setAttackMultiplier(value);
         Serial.print(F("OK drummer_attackmult="));
@@ -1965,7 +1956,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strncmp(cmd, "set drummer_avgtau ", 19) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 19);
         audioCtrl_->getEnsemble().getDrummer().setAverageTau(value);
         Serial.print(F("OK drummer_avgtau="));
@@ -1973,19 +1964,19 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show drummer_attackmult") == 0 || strcmp(cmd, "drummer_attackmult") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("drummer_attackmult="));
         Serial.println(audioCtrl_->getEnsemble().getDrummer().getAttackMultiplier(), 3);
         return true;
     }
     if (strcmp(cmd, "show drummer_avgtau") == 0 || strcmp(cmd, "drummer_avgtau") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("drummer_avgtau="));
         Serial.println(audioCtrl_->getEnsemble().getDrummer().getAverageTau(), 3);
         return true;
     }
     if (strncmp(cmd, "set drummer_minriserate ", 24) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 24);
         audioCtrl_->getEnsemble().getDrummer().setMinRiseRate(value);
         Serial.print(F("OK drummer_minriserate="));
@@ -1993,7 +1984,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show drummer_minriserate") == 0 || strcmp(cmd, "drummer_minriserate") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("drummer_minriserate="));
         Serial.println(audioCtrl_->getEnsemble().getDrummer().getMinRiseRate(), 3);
         return true;
@@ -2003,7 +1994,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // HFC: minbin, maxbin, attackmult
     if (strncmp(cmd, "set hfc_minbin ", 15) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 15);
         HFCDetector& d = audioCtrl_->getEnsemble().getHFC();
         d.setAnalysisRange(value, d.getMaxBin());
@@ -2012,7 +2003,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strncmp(cmd, "set hfc_maxbin ", 15) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 15);
         HFCDetector& d = audioCtrl_->getEnsemble().getHFC();
         d.setAnalysisRange(d.getMinBin(), value);
@@ -2021,7 +2012,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strncmp(cmd, "set hfc_attackmult ", 19) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 19);
         audioCtrl_->getEnsemble().getHFC().setAttackMultiplier(value);
         Serial.print(F("OK hfc_attackmult="));
@@ -2029,25 +2020,25 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show hfc_minbin") == 0 || strcmp(cmd, "hfc_minbin") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("hfc_minbin="));
         Serial.println(audioCtrl_->getEnsemble().getHFC().getMinBin());
         return true;
     }
     if (strcmp(cmd, "show hfc_maxbin") == 0 || strcmp(cmd, "hfc_maxbin") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("hfc_maxbin="));
         Serial.println(audioCtrl_->getEnsemble().getHFC().getMaxBin());
         return true;
     }
     if (strcmp(cmd, "show hfc_attackmult") == 0 || strcmp(cmd, "hfc_attackmult") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("hfc_attackmult="));
         Serial.println(audioCtrl_->getEnsemble().getHFC().getAttackMultiplier(), 3);
         return true;
     }
     if (strncmp(cmd, "set hfc_sustainreject ", 22) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 22);
         audioCtrl_->getEnsemble().getHFC().setSustainRejectFrames(value);
         Serial.print(F("OK hfc_sustainreject="));
@@ -2055,7 +2046,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show hfc_sustainreject") == 0 || strcmp(cmd, "hfc_sustainreject") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("hfc_sustainreject="));
         Serial.println(audioCtrl_->getEnsemble().getHFC().getSustainRejectFrames());
         return true;
@@ -2063,7 +2054,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // BassBand: minbin, maxbin
     if (strncmp(cmd, "set bass_minbin ", 16) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 16);
         BassBandDetector& d = audioCtrl_->getEnsemble().getBassBand();
         d.setAnalysisRange(value, d.getMaxBin());
@@ -2072,7 +2063,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strncmp(cmd, "set bass_maxbin ", 16) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 16);
         BassBandDetector& d = audioCtrl_->getEnsemble().getBassBand();
         d.setAnalysisRange(d.getMinBin(), value);
@@ -2081,13 +2072,13 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bass_minbin") == 0 || strcmp(cmd, "bass_minbin") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bass_minbin="));
         Serial.println(audioCtrl_->getEnsemble().getBassBand().getMinBin());
         return true;
     }
     if (strcmp(cmd, "show bass_maxbin") == 0 || strcmp(cmd, "bass_maxbin") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bass_maxbin="));
         Serial.println(audioCtrl_->getEnsemble().getBassBand().getMaxBin());
         return true;
@@ -2095,7 +2086,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // BassBand: minflux (minimum absolute flux threshold)
     if (strncmp(cmd, "set bass_minflux ", 17) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 17);
         audioCtrl_->getEnsemble().getBassBand().setMinAbsoluteFlux(value);
         Serial.print(F("OK bass_minflux="));
@@ -2103,7 +2094,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bass_minflux") == 0 || strcmp(cmd, "bass_minflux") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bass_minflux="));
         Serial.println(audioCtrl_->getEnsemble().getBassBand().getMinAbsoluteFlux(), 3);
         return true;
@@ -2111,7 +2102,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // BassBand: sharpness (minimum transient sharpness ratio)
     if (strncmp(cmd, "set bass_sharpness ", 19) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 19);
         audioCtrl_->getEnsemble().getBassBand().setSharpnessThreshold(value);
         Serial.print(F("OK bass_sharpness="));
@@ -2119,7 +2110,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bass_sharpness") == 0 || strcmp(cmd, "bass_sharpness") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bass_sharpness="));
         Serial.println(audioCtrl_->getEnsemble().getBassBand().getSharpnessThreshold(), 2);
         return true;
@@ -2128,7 +2119,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     // === BAND FLUX PARAMETERS ===
     // bandflux_gamma: Log compression strength
     if (strncmp(cmd, "set bandflux_gamma ", 19) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 19);
         if (value >= 1.0f && value <= 100.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setGamma(value);
@@ -2140,7 +2131,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_gamma") == 0 || strcmp(cmd, "bandflux_gamma") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_gamma="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getGamma(), 1);
         return true;
@@ -2148,7 +2139,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_bassweight: Bass band weight
     if (strncmp(cmd, "set bandflux_bassweight ", 24) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 24);
         if (value >= 0.0f && value <= 5.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setBassWeight(value);
@@ -2160,7 +2151,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_bassweight") == 0 || strcmp(cmd, "bandflux_bassweight") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_bassweight="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBassWeight(), 2);
         return true;
@@ -2168,7 +2159,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_midweight: Mid band weight
     if (strncmp(cmd, "set bandflux_midweight ", 23) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 23);
         if (value >= 0.0f && value <= 5.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setMidWeight(value);
@@ -2180,7 +2171,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_midweight") == 0 || strcmp(cmd, "bandflux_midweight") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_midweight="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMidWeight(), 2);
         return true;
@@ -2188,7 +2179,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_highweight: High band weight (suppression)
     if (strncmp(cmd, "set bandflux_highweight ", 24) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 24);
         if (value >= 0.0f && value <= 2.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setHighWeight(value);
@@ -2200,7 +2191,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_highweight") == 0 || strcmp(cmd, "bandflux_highweight") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_highweight="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getHighWeight(), 2);
         return true;
@@ -2208,7 +2199,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_maxbin: Max FFT bin to analyze
     if (strncmp(cmd, "set bandflux_maxbin ", 20) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 20);
         if (value >= 16 && value <= 128) {
             audioCtrl_->getEnsemble().getBandFlux().setMaxBin(value);
@@ -2220,7 +2211,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_maxbin") == 0 || strcmp(cmd, "bandflux_maxbin") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_maxbin="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMaxBin());
         return true;
@@ -2228,7 +2219,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_onsetdelta: Min flux jump for onset confirmation (pad rejection)
     if (strncmp(cmd, "set bandflux_onsetdelta ", 24) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 24);
         if (value >= 0.0f && value <= 2.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setMinOnsetDelta(value);
@@ -2238,7 +2229,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_onsetdelta") == 0 || strcmp(cmd, "bandflux_onsetdelta") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_onsetdelta="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMinOnsetDelta(), 3);
         return true;
@@ -2249,7 +2240,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_dominance: Band-dominance gate — max(bass,mid,high)/total (0.0 = disabled)
     if (strncmp(cmd, "set bandflux_dominance ", 23) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 23);
         if (value >= 0.0f && value <= 1.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setBandDominanceGate(value);
@@ -2261,7 +2252,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_dominance") == 0 || strcmp(cmd, "bandflux_dominance") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_dominance="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBandDominanceGate(), 3);
         return true;
@@ -2270,7 +2261,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     // bandflux_decayratio: Post-onset decay ratio threshold (0.0 = disabled)
     // Flux must drop to this fraction of onset flux within N frames to confirm percussive
     if (strncmp(cmd, "set bandflux_decayratio ", 24) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 24);
         if (value >= 0.0f && value <= 1.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setDecayRatio(value);
@@ -2282,7 +2273,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_decayratio") == 0 || strcmp(cmd, "bandflux_decayratio") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_decayratio="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDecayRatio(), 3);
         return true;
@@ -2290,7 +2281,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_decayframes: Frames to wait for decay confirmation (0-6)
     if (strncmp(cmd, "set bandflux_decayframes ", 25) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 25);
         if (value >= 0 && value <= 6) {
             audioCtrl_->getEnsemble().getBandFlux().setDecayFrames(value);
@@ -2302,7 +2293,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_decayframes") == 0 || strcmp(cmd, "bandflux_decayframes") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_decayframes="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDecayFrames());
         return true;
@@ -2311,7 +2302,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     // bandflux_crestgate: Spectral crest factor gate (0.0 = disabled)
     // Reject tonal onsets (pads/chords) with crest above this threshold
     if (strncmp(cmd, "set bandflux_crestgate ", 23) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 23);
         if (value >= 0.0f && value <= 20.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setCrestGate(value);
@@ -2323,7 +2314,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_crestgate") == 0 || strcmp(cmd, "bandflux_crestgate") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_crestgate="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getCrestGate(), 2);
         return true;
@@ -2331,7 +2322,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_perbandthresh: Per-band independent detection (0=off, 1=on)
     if (strncmp(cmd, "set bandflux_perbandthresh ", 27) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 27);
         audioCtrl_->getEnsemble().getBandFlux().setPerBandThresh(value != 0);
         Serial.print(F("OK bandflux_perbandthresh="));
@@ -2339,7 +2330,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_perbandthresh") == 0 || strcmp(cmd, "bandflux_perbandthresh") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_perbandthresh="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandThresh() ? "on" : "off");
         return true;
@@ -2347,7 +2338,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_perbandmult: Per-band threshold multiplier (0.5-5.0)
     if (strncmp(cmd, "set bandflux_perbandmult ", 25) == 0) {
-        if (!audioCtrl_) return true;
+
         float value = atof(cmd + 25);
         if (value >= 0.5f && value <= 5.0f) {
             audioCtrl_->getEnsemble().getBandFlux().setPerBandThreshMult(value);
@@ -2359,7 +2350,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_perbandmult") == 0 || strcmp(cmd, "bandflux_perbandmult") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_perbandmult="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandThreshMult(), 2);
         return true;
@@ -2367,7 +2358,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
 
     // bandflux_diffframes: Temporal reference depth (1-3, SuperFlux diff_frames)
     if (strncmp(cmd, "set bandflux_diffframes ", 24) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 24);
         if (value >= 1 && value <= 3) {
             audioCtrl_->getEnsemble().getBandFlux().setDiffFrames(value);
@@ -2379,15 +2370,36 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show bandflux_diffframes") == 0 || strcmp(cmd, "bandflux_diffframes") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("bandflux_diffframes="));
         Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDiffFrames());
         return true;
     }
 
+    // bandflux_hiresbass: Hi-res bass via Goertzel 512-sample window (0=off, 1=on)
+    if (strncmp(cmd, "set bandflux_hiresbass ", 23) == 0) {
+
+        int value = atoi(cmd + 23);
+        audioCtrl_->getEnsemble().getBandFlux().setHiResBass(value != 0);
+        BassSpectralAnalysis& bass = audioCtrl_->getEnsemble().getBassSpectral();
+        if (value != 0 && !bass.enabled) {
+            bass.reset();  // Clear stale ring buffer and whitening state
+        }
+        bass.enabled = (value != 0);
+        Serial.print(F("OK bandflux_hiresbass="));
+        Serial.println(value != 0 ? "on" : "off");
+        return true;
+    }
+    if (strcmp(cmd, "show bandflux_hiresbass") == 0 || strcmp(cmd, "bandflux_hiresbass") == 0) {
+
+        Serial.print(F("bandflux_hiresbass="));
+        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getHiResBass() ? "on" : "off");
+        return true;
+    }
+
     // ComplexDomain: minbin, maxbin
     if (strncmp(cmd, "set complex_minbin ", 19) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 19);
         ComplexDomainDetector& d = audioCtrl_->getEnsemble().getComplexDomain();
         d.setAnalysisRange(value, d.getMaxBin());
@@ -2396,7 +2408,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strncmp(cmd, "set complex_maxbin ", 19) == 0) {
-        if (!audioCtrl_) return true;
+
         int value = atoi(cmd + 19);
         ComplexDomainDetector& d = audioCtrl_->getEnsemble().getComplexDomain();
         d.setAnalysisRange(d.getMinBin(), value);
@@ -2405,13 +2417,13 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         return true;
     }
     if (strcmp(cmd, "show complex_minbin") == 0 || strcmp(cmd, "complex_minbin") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("complex_minbin="));
         Serial.println(audioCtrl_->getEnsemble().getComplexDomain().getMinBin());
         return true;
     }
     if (strcmp(cmd, "show complex_maxbin") == 0 || strcmp(cmd, "complex_maxbin") == 0) {
-        if (!audioCtrl_) return true;
+
         Serial.print(F("complex_maxbin="));
         Serial.println(audioCtrl_->getEnsemble().getComplexDomain().getMaxBin());
         return true;

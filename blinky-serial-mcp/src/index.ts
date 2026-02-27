@@ -37,6 +37,14 @@ function ensureTestResultsDir(): void {
 // Multi-device connection manager
 const manager = new DeviceManager();
 
+// Clean up all serial connections on process exit to prevent stale port locks
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, async () => {
+    await manager.disconnectAll().catch(() => {});
+    process.exit(0);
+  });
+}
+
 // Create MCP server
 const server = new Server(
   {
@@ -476,7 +484,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'disconnect': {
-        const session = manager.resolveSession((args as { port?: string }).port);
+        const disconnectPort = (args as { port?: string }).port;
+        if (disconnectPort) {
+          // Direct disconnect by port — avoids resolveSession which can't find
+          // orphaned sessions from failed connects
+          await manager.disconnect(disconnectPort);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({ success: true, message: `Disconnected from ${disconnectPort}` }, null, 2),
+              },
+            ],
+          };
+        }
+        // No port specified — resolve single connected device
+        const session = manager.resolveSession();
         await manager.disconnect(session.port);
         return {
           content: [
@@ -684,9 +707,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: JSON.stringify({
                 success: true,
                 durationMs: testData.duration,
+                startTime: testData.startTime,
                 totalDetections: testData.transients.length,
                 detections: testData.transients,
                 audioSamples: testData.audioSamples,
+                musicStates: testData.musicStates,
+                beatEvents: testData.beatEvents,
               }, null, 2),
             },
           ],

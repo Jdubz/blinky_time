@@ -166,8 +166,6 @@ private:
 
     // Settings registration helpers (extracted from registerSettings for clarity)
     void registerFireSettings(FireParams* fp);
-    void registerFireMusicSettings(FireParams* fp);
-    void registerFireOrganicSettings(FireParams* fp);
     void registerAudioSettings();
     void registerAgcSettings();
     void registerTransientSettings();

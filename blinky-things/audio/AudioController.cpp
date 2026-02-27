@@ -1,5 +1,6 @@
 #include "AudioController.h"
 #include "../inputs/SerialConsole.h"
+#include "../types/BlinkyAssert.h"
 #include <math.h>
 
 // ============================================================================
@@ -211,10 +212,7 @@ const AudioControl& AudioController::update(float dt) {
 
     // 4. Get onset strength for rhythm analysis
     //    This is INDEPENDENT of transient detection - analyzes energy patterns
-    //    Two methods available:
-    //    - Spectral flux: captures energy CHANGES (better for beat timing)
-    //    - Multi-band RMS: captures absolute levels (legacy behavior)
-    //    Controlled by ossFluxWeight parameter (1.0 = pure flux, 0.0 = pure RMS)
+    //    Uses band-weighted spectral flux (captures energy CHANGES, good for beat timing)
     float onsetStrength = 0.0f;
 
     // Get spectral data from ensemble
@@ -226,13 +224,7 @@ const AudioControl& AudioController::update(float dt) {
 
         // Compute spectral flux with per-band outputs for adaptive weighting
         float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
-        float fluxOss = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
-        float rmsOss = computeMultiBandRms(magnitudes, numBins);
-
-        // Blend based on ossFluxWeight
-        // ossFluxWeight = 1.0: pure spectral flux (recommended)
-        // ossFluxWeight = 0.0: pure RMS (legacy behavior)
-        onsetStrength = ossFluxWeight * fluxOss + (1.0f - ossFluxWeight) * rmsOss;
+        onsetStrength = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
 
         // Store per-band samples for adaptive weight calculation
         if (adaptiveBandWeightEnabled) {
@@ -314,16 +306,6 @@ void AudioController::setDetectorThreshold(DetectorType type, float threshold) {
     ensemble_.setDetectorThreshold(type, threshold);
 }
 
-void AudioController::setBpmRange(float minBpm, float maxBpm) {
-    bpmMin = clampf(minBpm, 30.0f, 120.0f);
-    bpmMax = clampf(maxBpm, 80.0f, 300.0f);
-
-    if (bpmMin >= bpmMax) {
-        bpmMin = 60.0f;
-        bpmMax = 200.0f;
-    }
-}
-
 void AudioController::lockHwGain(int gain) {
     mic_.lockHwGain(gain);
 }
@@ -381,8 +363,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 
     // Estimate samples per millisecond from buffer
-    // Fallback should never be needed (ossCount_ >= 60 with valid timestamps ensures bufferDurationMs > 0)
-    // but use defensive 60 Hz assumption if it somehow occurs
+    BLINKY_ASSERT(bufferDurationMs > 0, "AudioController: bufferDurationMs <= 0 in autocorrelation");
     float samplesPerMs = bufferDurationMs > 0 ? (float)ossCount_ / (float)bufferDurationMs : 0.06f;
 
     int minLag = static_cast<int>(minLagMs * samplesPerMs);
@@ -433,12 +414,19 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // We'll store correlations to find multiple peaks
     // NOTE: Static buffer assumes single-threaded execution (only one AudioController instance)
     // FIX: Initialize to zero to prevent garbage data from previous frames
-    static float correlationAtLag[200] = {0};
+    // Extended to 256 to accommodate 4-harmonic comb lookups (BTrack-style)
+    static float correlationAtLag[256] = {0};
+    // Extend range for harmonic lookups: need ACF at 2T, 3T, 4T for comb filter
+    int harmonicMaxLag = 4 * maxLag;
+    if (harmonicMaxLag > ossCount_ / 2) harmonicMaxLag = ossCount_ / 2;
+    int harmonicCorrelationSize = harmonicMaxLag - minLag + 1;
+    if (harmonicCorrelationSize > 256) harmonicCorrelationSize = 256;
     int correlationSize = maxLag - minLag + 1;
-    if (correlationSize > 200) correlationSize = 200;
+    // Clamp fundamental range to harmonic range (fires when OSS buffer < one full period)
+    if (correlationSize > harmonicCorrelationSize) correlationSize = harmonicCorrelationSize;
 
-    // FIX: Clear the portion we'll use to prevent stale data
-    for (int i = 0; i < correlationSize; i++) {
+    // FIX: Clear the portion we'll use to prevent stale data (full harmonic range)
+    for (int i = 0; i < harmonicCorrelationSize; i++) {
         correlationAtLag[i] = 0.0f;
     }
 
@@ -461,7 +449,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         if (signalEnergy < 0.001f) signalEnergy = 0.001f;  // Guard against floating-point undershoot
     }
 
-    for (int lag = minLag; lag <= maxLag && (lag - minLag) < 200; lag++) {
+    for (int lag = minLag; lag <= harmonicMaxLag && (lag - minLag) < 256; lag++) {
         float correlation = 0.0f;
         int count = ossCount_ - lag;
 
@@ -477,7 +465,9 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         correlation /= static_cast<float>(count);
         correlationAtLag[lag - minLag] = correlation;
 
-        if (correlation > maxCorrelation) {
+        // Only track max within fundamental range (not extended harmonic range)
+        // to avoid sub-harmonics inflating periodicityStrength_
+        if (lag <= maxLag && correlation > maxCorrelation) {
             maxCorrelation = correlation;
             bestLag = lag;
         }
@@ -498,7 +488,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // This must happen AFTER periodicity strength (which uses raw ACF magnitude)
     // but BEFORE Bayesian fusion and harmonic disambiguation (which need
     // discriminative lag-weighted values).
-    for (int i = 0; i < correlationSize; i++) {
+    for (int i = 0; i < harmonicCorrelationSize; i++) {
         int lag = minLag + i;
         correlationAtLag[i] /= static_cast<float>(lag);
     }
@@ -509,7 +499,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Each signal provides a per-bin observation likelihood; the MAP estimate
     // of the posterior becomes the tempo.
     runBayesianTempoFusion(correlationAtLag, correlationSize, minLag, maxLag,
-                           avgEnergy, samplesPerMs, shouldPrintDebug);
+                           avgEnergy, samplesPerMs, shouldPrintDebug,
+                           harmonicCorrelationSize);
 }
 
 // ===== ODF SMOOTHING =====
@@ -518,6 +509,13 @@ float AudioController::smoothOnsetStrength(float raw) {
     int width = odfSmoothWidth;
     if (width < 3) width = 3;
     if (width > ODF_SMOOTH_MAX) width = ODF_SMOOTH_MAX;
+
+    // Reset buffer if width changed (prevents stale data from old width)
+    if (odfSmoothIdx_ >= width) {
+        for (int i = 0; i < ODF_SMOOTH_MAX; i++) odfSmoothBuffer_[i] = raw;
+        odfSmoothIdx_ = 0;
+    }
+
     odfSmoothBuffer_[odfSmoothIdx_] = raw;
     odfSmoothIdx_ = (odfSmoothIdx_ + 1) % width;
     float sum = 0.0f;
@@ -573,6 +571,24 @@ void AudioController::initTempoState() {
     }
     transMatrixLambda_ = bayesLambda;
 
+    // Rayleigh prior peaked at ~120 BPM (BTrack-style perceptual weighting)
+    // For candidate period T (lag), Rayleigh(T; sigma) = T/sigma^2 * exp(-T^2 / (2*sigma^2))
+    // Peaked at sigma = lag corresponding to 120 BPM = 3600/120 = 30 at 60 Hz
+    {
+        float rayleighSigma = 3600.0f / 120.0f;  // = 30 (lag for 120 BPM)
+        float maxR = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float lag = static_cast<float>(tempoBinLags_[i]);
+            rayleighWeight_[i] = (lag / (rayleighSigma * rayleighSigma))
+                                * expf(-lag * lag / (2.0f * rayleighSigma * rayleighSigma));
+            if (rayleighWeight_[i] > maxR) maxR = rayleighWeight_[i];
+        }
+        // Normalize to max=1.0
+        if (maxR > 0.0f) {
+            for (int i = 0; i < TEMPO_BINS; i++) rayleighWeight_[i] /= maxR;
+        }
+    }
+
     // Clear posterior and debug arrays
     for (int i = 0; i < TEMPO_BINS; i++) {
         tempoStatePost_[i] = tempoStatePrior_[i];
@@ -622,7 +638,8 @@ float AudioController::getBayesIoiObs() const {
 
 void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
                                               int minLag, int maxLag, float avgEnergy,
-                                              float samplesPerMs, bool debugPrint) {
+                                              float samplesPerMs, bool debugPrint,
+                                              int harmonicCorrelationSize) {
     if (!tempoStateInitialized_) return;
 
     // === 1. BAYESIAN PREDICTION STEP: Spread prior through Gaussian transition ===
@@ -655,21 +672,43 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         for (int i = 0; i < TEMPO_BINS; i++) prediction[i] /= predSum;
     }
 
-    // === 2. AUTOCORRELATION OBSERVATION ===
-    // correlationAtLag is inverse-lag weighted: acf(τ)/τ penalizes sub-harmonics.
-    // Energy normalization makes it amplitude-independent.
+    // === 2. AUTOCORRELATION OBSERVATION (BTrack-style 4-harmonic comb) ===
+    // For each candidate period T, sum ACF at 1T, 2T, 3T, 4T with spread windows.
+    // The true period matches all 4 harmonics; a sub-harmonic at 2T only matches 2.
+    // This gives the fundamental a ~4x advantage over sub-harmonics.
+    // Multiplied by Rayleigh prior peaked at ~120 BPM for perceptual weighting.
     float acfObs[TEMPO_BINS];
     for (int i = 0; i < TEMPO_BINS; i++) {
         int lag = tempoBinLags_[i];
-        int lagIdx = lag - minLag;
-        if (lagIdx >= 0 && lagIdx < correlationSize) {
-            acfObs[i] = correlationAtLag[lagIdx] / (avgEnergy + 0.001f);
-            if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;  // Floor
+        float combAcf = 0.0f;
+        int harmonicsUsed = 0;
+        for (int a = 1; a <= 4; a++) {
+            int harmLag = a * lag;
+            int harmIdx = harmLag - minLag;
+            if (harmIdx >= 0 && harmIdx < harmonicCorrelationSize) {
+                // Spread window: sum (2a-1) bins centered at harmIdx
+                float sum = 0.0f;
+                int count = 0;
+                for (int b = 1 - a; b <= a - 1; b++) {
+                    int idx = harmIdx + b;
+                    if (idx >= 0 && idx < harmonicCorrelationSize) {
+                        sum += correlationAtLag[idx];
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    combAcf += sum / static_cast<float>(2 * a - 1);
+                    harmonicsUsed++;
+                }
+            }
+        }
+        if (harmonicsUsed > 0) {
+            acfObs[i] = combAcf * rayleighWeight_[i] / (avgEnergy + 0.001f);
+            if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;
         } else {
             acfObs[i] = 0.01f;  // Out of range — small floor
         }
     }
-    // (Anti-sub-harmonic penalty removed — per-sample ACF check used in MAP extraction instead)
     // Exponentiate by weight
     if (bayesAcfWeight != 1.0f) {
         for (int i = 0; i < TEMPO_BINS; i++) {
@@ -807,6 +846,29 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                         int closest = findClosestTempoBin(twoThirdBpm);
                         if (closest >= 0 && fabsf(tempoBinBpms_[closest] - twoThirdBpm) < twoThirdBpm * 0.1f) {
                             bestBin = closest;
+                            corrected = true;
+                        }
+                    }
+                }
+            }
+
+            // Check double-lag (0.5x BPM): if MAP is too fast, demote to half tempo
+            // When FT/IOI push BPM to double-time, this provides a mechanism to
+            // correct back down. Uses harmonicCorrelationSize for extended range.
+            if (!corrected) {
+                int doubleLag = bestLag * 2;
+                int doubleIdx = doubleLag - minLag;
+                if (doubleIdx >= 0 && doubleIdx < harmonicCorrelationSize) {
+                    float doubleAcf = correlationAtLag[doubleIdx];
+                    if (doubleAcf > HARMONIC_2X_THRESH * bestAcf) {
+                        float halfBpm = 3600.0f / static_cast<float>(doubleLag);
+                        if (halfBpm >= bpmMin) {
+                            int closest = findClosestTempoBin(halfBpm);
+                            if (closest >= 0 && fabsf(tempoBinBpms_[closest] - halfBpm) < halfBpm * 0.1f) {
+                                bestBin = closest;
+                                // cppcheck-suppress unreadVariable
+                                corrected = true;
+                            }
                         }
                     }
                 }
@@ -866,6 +928,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
         // Update beat period in samples for CBSS
         int newPeriodSamples = static_cast<int>(beatPeriodMs_ * samplesPerMs + 0.5f);
+        BLINKY_ASSERT(newPeriodSamples >= 10 && newPeriodSamples <= OSS_BUFFER_SIZE / 2,
+                       "AudioController: beat period out of range");
         if (newPeriodSamples < 10) newPeriodSamples = 10;
         if (newPeriodSamples > OSS_BUFFER_SIZE / 2) newPeriodSamples = OSS_BUFFER_SIZE / 2;
         beatPeriodSamples_ = newPeriodSamples;
@@ -1035,20 +1099,16 @@ void AudioController::updateCBSS(float onsetStrength) {
 
     // Prevent signed integer overflow (UB in C++).
     // At 60 Hz, sampleCounter_ reaches 1M after ~4.6 hours.
-    // Renormalize both counters to keep values small while preserving
-    // their difference (which is all the CBSS logic depends on).
-    // The CBSS circular buffer uses modular indexing, so absolute values don't matter.
+    // Renormalize counters to keep values small while preserving their
+    // differences (which is all the CBSS/IOI logic depends on).
     if (sampleCounter_ > 1000000) {
+        BLINKY_ASSERT(false, "AudioController: sampleCounter_ renormalization triggered");
         int shift = sampleCounter_ - OSS_BUFFER_SIZE;
         sampleCounter_ -= shift;
         lastBeatSample_ -= shift;
         lastTransientSample_ -= shift;
         if (lastBeatSample_ < 0) lastBeatSample_ = 0;
         if (lastTransientSample_ < 0) lastTransientSample_ = -1;
-        // Shift IOI onset ring buffer to keep intervals valid.
-        // Linear indexing is correct here: we must subtract from every physical
-        // slot in the backing array. When full (count == SIZE), this covers all
-        // slots 0..SIZE-1. Before first wrap, entries are sequential at 0..count-1.
         for (int i = 0; i < ioiOnsetCount_; i++) {
             ioiOnsetSamples_[i] -= shift;
             if (ioiOnsetSamples_[i] < 0) ioiOnsetSamples_[i] = 0;
@@ -1387,12 +1447,6 @@ void AudioController::predictNextBeat(uint32_t nowMs) {
 // Onset Strength Computation Methods
 // ============================================================================
 
-float AudioController::computeSpectralFlux(const float* magnitudes, int numBins) {
-    // Wrapper for backward compatibility - discards per-band outputs
-    float bassFlux, midFlux, highFlux;
-    return computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
-}
-
 float AudioController::computeSpectralFluxBands(const float* magnitudes, int numBins,
                                                  float& outBassFlux, float& outMidFlux, float& outHighFlux) {
     // Band-weighted half-wave rectified spectral flux with SuperFlux-style vibrato suppression
@@ -1499,42 +1553,6 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
     float compressed = logf(1.0f + flux * 10.0f) * invLog11;
 
     return compressed;
-}
-
-float AudioController::computeMultiBandRms(const float* magnitudes, int numBins) {
-    // Legacy multi-band RMS energy calculation
-    // Kept for comparison and fallback
-    //
-    // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
-    // Bass: bins 1-10 (62.5Hz-625Hz)
-    // Mid: bins 11-40 (687.5Hz-2.5kHz)
-    // High: bins 41-127 (2.56kHz-7.94kHz)
-
-    float bassEnergy = 0.0f;
-    float midEnergy = 0.0f;
-    float highEnergy = 0.0f;
-    int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
-
-    for (int i = 1; i < 11 && i < numBins; i++) {
-        bassEnergy += magnitudes[i] * magnitudes[i];
-        bassBinCount++;
-    }
-    for (int i = 11; i < 41 && i < numBins; i++) {
-        midEnergy += magnitudes[i] * magnitudes[i];
-        midBinCount++;
-    }
-    for (int i = 41; i < numBins; i++) {
-        highEnergy += magnitudes[i] * magnitudes[i];
-        highBinCount++;
-    }
-
-    // RMS (root mean square) - use actual bin count for accurate normalization
-    bassEnergy = bassBinCount > 0 ? sqrtf(bassEnergy / static_cast<float>(bassBinCount)) : 0.0f;
-    midEnergy = midBinCount > 0 ? sqrtf(midEnergy / static_cast<float>(midBinCount)) : 0.0f;
-    highEnergy = highBinCount > 0 ? sqrtf(highEnergy / static_cast<float>(highBinCount)) : 0.0f;
-
-    // Weighted sum: emphasize bass and mid for rhythm (where most beats occur)
-    return 0.5f * bassEnergy + 0.3f * midEnergy + 0.2f * highEnergy;
 }
 
 // ============================================================================
@@ -1868,9 +1886,13 @@ void CombFilterBank::init(float frameRate) {
 }
 
 void CombFilterBank::reset() {
-    // Clear delay line
+    // Clear per-filter output delay lines
+    for (int i = 0; i < NUM_FILTERS; i++) {
+        for (int j = 0; j < MAX_LAG; j++) {
+            resonatorDelay_[i][j] = 0.0f;
+        }
+    }
     for (int i = 0; i < MAX_LAG; i++) {
-        delayLine_[i] = 0.0f;
         resonatorHistory_[i] = 0.0f;
     }
     writeIdx_ = 0;
@@ -1895,30 +1917,31 @@ void CombFilterBank::process(float input) {
         init(60.0f);  // Default to 60 Hz
     }
 
-    // 1. Write input to shared delay line
-    delayLine_[writeIdx_] = input;
-
-    // 2. Update all resonators using proper Scheirer (1998) equation:
+    // 1. Update all resonators using Scheirer (1998) IIR comb filter:
     //    y[n] = (1-α)·x[n] + α·y[n-L]
-    //    where α = feedbackGain
+    //    Each filter reads its OWN delayed output (not the shared input).
     float oneMinusAlpha = 1.0f - feedbackGain;
 
     for (int i = 0; i < NUM_FILTERS; i++) {
         int lag = filterLags_[i];
 
-        // Read delayed output (y[n-L])
+        // Read this filter's own delayed output: y[n-L]
         int readIdx = (writeIdx_ - lag + MAX_LAG) % MAX_LAG;
-        float delayed = delayLine_[readIdx];
+        float delayedOutput = resonatorDelay_[i][readIdx];
 
-        // Proper comb filter equation
-        resonatorOutput_[i] = oneMinusAlpha * input + feedbackGain * delayed;
+        // IIR comb filter equation
+        float y = oneMinusAlpha * input + feedbackGain * delayedOutput;
+        resonatorOutput_[i] = y;
+
+        // Store output in this filter's delay line
+        resonatorDelay_[i][writeIdx_] = y;
 
         // Smooth energy tracking (exponential moving average)
-        float absOut = resonatorOutput_[i] > 0.0f ? resonatorOutput_[i] : -resonatorOutput_[i];
+        float absOut = y > 0.0f ? y : -y;
         resonatorEnergy_[i] = 0.95f * resonatorEnergy_[i] + 0.05f * absOut;
     }
 
-    // 3. Advance delay line write index
+    // 2. Advance shared write index
     writeIdx_ = (writeIdx_ + 1) % MAX_LAG;
 
     // 4. Find peak energy (NO tempo prior - this provides independent validation)

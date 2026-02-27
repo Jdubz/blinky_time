@@ -82,20 +82,12 @@ bool RenderPipeline::begin(const DeviceConfig& config, ILedStrip& leds, LEDMappe
 }
 
 void RenderPipeline::render(const AudioControl& audio) {
-    if (!initialized_ || !currentGenerator_ || !pixelMatrix_ || !renderer_) {
-        return;
-    }
+    if (!initialized_) return;
 
-    // Clear matrix to prevent color accumulation between frames
+    // initialized_ guarantees all pointers are valid (set in begin())
     pixelMatrix_->clear();
-
-    // Generate -> Effect -> Render
     currentGenerator_->generate(*pixelMatrix_, audio);
-
-    if (currentEffect_) {
-        currentEffect_->apply(pixelMatrix_);
-    }
-
+    currentEffect_->apply(pixelMatrix_);
     renderer_->render(*pixelMatrix_);
 }
 
@@ -120,14 +112,11 @@ bool RenderPipeline::setGenerator(GeneratorType type) {
             return false;
     }
 
-    if (newGen) {
-        // Reset new generator to clean state
-        newGen->reset();
-        currentGenerator_ = newGen;
-        generatorType_ = type;
-        return true;
-    }
-    return false;
+    // All generator pointers are guaranteed valid after begin()
+    newGen->reset();
+    currentGenerator_ = newGen;
+    generatorType_ = type;
+    return true;
 }
 
 GeneratorType RenderPipeline::getGeneratorType() const {
@@ -135,10 +124,7 @@ GeneratorType RenderPipeline::getGeneratorType() const {
 }
 
 const char* RenderPipeline::getGeneratorName() const {
-    if (currentGenerator_) {
-        return currentGenerator_->getName();
-    }
-    return "None";
+    return currentGenerator_->getName();
 }
 
 bool RenderPipeline::setEffect(EffectType type) {

@@ -3,7 +3,7 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** February 21, 2026
+**Last Updated:** February 26, 2026
 
 ## Current Config
 
@@ -73,13 +73,39 @@
 
 0.3 chosen as default: best overall average, preserves all medium-strength kicks, fixes synth-stabs.
 
+## v25 Parameter Changes — Needs Validation
+
+The following defaults changed in SETTINGS_VERSION 25 (BTrack-style improvements).
+Run full 18-track validation after flashing to confirm no regressions.
+
+| Parameter | Old (v24) | New (v25) | Rationale |
+|-----------|:---------:|:---------:|-----------|
+| bayesLambda | 0.15 | 0.07 | Tighter transition variance to prevent octave jumps |
+| bayesAcfWeight | 0.3 | 0.8 | Harmonic-enhanced ACF is now a stronger signal |
+
+Additional structural changes (not parameter-tunable):
+- **Harmonic comb ACF**: 4-harmonic summation with spread windows replaces single-point ACF observation
+- **Rayleigh tempo prior**: Perceptual weighting peaked at ~120 BPM, applied within ACF observation
+- **Bidirectional disambiguation**: Added 0.5x downward check (was only 2x/1.5x upward)
+
+**Validation plan:**
+1. Flash all 4 devices with v25 firmware
+2. Run `./scripts/run-all-tracks.sh` (18 tracks × 4 devices)
+3. Compare avg Beat F1, BPM accuracy, and per-track results against v24 baseline
+4. Check specifically for octave errors (BPM at half or double expected)
+
 ## Next Priorities
 
 > **Design philosophy:** See [VISUALIZER_GOALS.md](../docs/VISUALIZER_GOALS.md) — visual quality over metric perfection. Low Beat F1 on ambient/trap tracks is acceptable (organic mode fallback is correct).
 
-1. **Verify startup latency improvement** — Autocorrelation now starts at 1s (was 3s). Test that beat detection activates faster on real music without regressions.
-2. **Validate onset density values** — Stream audio with dance music (expect od=2-6), ambient (expect od=0-1), and silence (expect od=0). Verify `"od"` field in streaming JSON.
-3. **Build diverse test music library** — hip hop (syncopated), DnB (broken beats, 170+ BPM), funk (swing), pop (sparse), rock (fills) with ground truth annotations.
+1. **FFT-512 bass-focused analysis** — Kick drum energy (40-80Hz) occupies 1-2 FFT bins at current FFT-256. FFT-512 doubles bass resolution for better kick/bass discrimination. ~200 lines, ~5KB RAM.
+2. **Particle filter beat tracking** — Fundamentally different approach that handles multi-modal tempo distributions (e.g., half-time ambiguity). ~100-150 lines, ~2KB RAM.
+
+### Completed (Feb 2026)
+- ~~**Verify startup latency improvement**~~ — ✅ Progressive startup implemented (autocorrelation at 1s). Validated through multi-device testing.
+- ~~**Validate onset density values**~~ — ✅ Implemented as `AudioControl::onsetDensity` and `"od"` in streaming JSON. Modulates rhythmStrength.
+- ~~**Build diverse test music library**~~ — ✅ 18 tracks (9 original + 9 syncopated) with ground truth annotations.
+- ~~**Microphone sensitivity**~~ — ✅ Addressed by spectral compressor (6dB makeup gain) + per-bin adaptive whitening (v23+). Enabled FT/IOI re-activation in v24.
 
 ## Known Limitations
 

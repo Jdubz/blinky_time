@@ -75,14 +75,50 @@ export class BlinkySerial extends EventEmitter {
           // Small delay for device to be ready
           await new Promise(r => setTimeout(r, 500));
 
+          // Ensure firmware isn't streaming from a previous session.
+          // A fresh BlinkySerial has this.streaming=false, so sendCommand()
+          // won't auto-stop streaming. But the firmware might still be
+          // streaming if the previous connection didn't clean up properly.
+          this.port!.write('stream off\n');
+          await new Promise(r => setTimeout(r, 200));
+
+          // Drain any stale data that arrived before our command
+          this.responseBuffer = [];
+
           // Get device info
           const infoJson = await this.sendCommand('json info');
-          const deviceInfo: DeviceInfo = JSON.parse(infoJson);
+          // Parse robustly: response may contain multiple lines if stale
+          // data leaked through. Try the full response first, then each line.
+          let deviceInfo: DeviceInfo;
+          try {
+            deviceInfo = JSON.parse(infoJson);
+          } catch {
+            // Try each line individually — find the first valid JSON
+            const lines = infoJson.split('\n');
+            let parsed: DeviceInfo | null = null;
+            for (const line of lines) {
+              try {
+                parsed = JSON.parse(line.trim());
+                break;
+              } catch { /* try next line */ }
+            }
+            if (!parsed) throw new Error(`Invalid device info response: ${infoJson.substring(0, 200)}`);
+            deviceInfo = parsed;
+          }
           this.deviceInfo = deviceInfo;
 
           this.emit('connected', deviceInfo);
           resolve(deviceInfo);
         } catch (err) {
+          // Close the port to release the OS file descriptor on failed connect.
+          // Without this, the port stays locked by the node process even though
+          // the session is never registered in DeviceManager.
+          if (this.port && this.port.isOpen) {
+            this.port.close(() => {});
+          }
+          this.port = null;
+          this.parser = null;
+          this.portPath = null;
           reject(err);
         }
       });

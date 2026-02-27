@@ -169,7 +169,7 @@ RenderPipeline → LED Output
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - Bayesian tempo fusion: 20-bin posterior (60-180 BPM), comb filter bank only (ACF/FT/IOI disabled in v21)
+   - Bayesian tempo fusion: 20-bin posterior (60-180 BPM), comb filter bank + FT/IOI (re-enabled v24) + harmonic-enhanced ACF (0.8, v25)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
    - BTrack-style predict+countdown beat detection with CBSS adaptive threshold (cbssthresh=1.0)
