@@ -97,6 +97,7 @@ public:
     ComplexDomainDetector& getComplexDomain() { return complexDomain_; }
     NoveltyDetector& getNovelty() { return novelty_; }
     BandWeightedFluxDetector& getBandFlux() { return bandFlux_; }
+    const BandWeightedFluxDetector& getBandFlux() const { return bandFlux_; }
 
     // --- Last results (for debugging/streaming) ---
     const DetectionResult* getLastResults() const { return lastResults_; }

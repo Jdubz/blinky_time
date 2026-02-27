@@ -36,56 +36,69 @@ public:
     const char* name() const override { return "bandflux"; }
     bool requiresSpectralData() const override { return true; }
 
-    // Tunable parameters
-    void setGamma(float g) { gamma_ = g; }
-    float getGamma() const { return gamma_; }
+    // === TUNING PARAMETERS ===
+    // Public for SettingsRegistry registration and ConfigStorage persistence.
+    // All params are safe to modify at runtime between frames.
+    float gamma = 20.0f;                 // Log compression strength (1-100)
+    float bassWeight = 2.0f;             // Bass band weight (0-5)
+    float midWeight = 1.5f;              // Mid band weight (0-5)
+    float highWeight = 0.1f;             // High band weight (0-2, low = suppress hi-hats)
+    float minOnsetDelta = 0.3f;          // Min flux jump from prev frame (0-2, pad rejection)
+    float bandDominanceGate = 0.0f;      // Min band-dominance ratio (0=disabled, 0-1)
+    float decayRatioThreshold = 0.0f;    // Post-onset decay confirmation (0=disabled, 0-1)
+    float crestGate = 0.0f;              // Spectral crest factor gate (0=disabled, 0-20)
+    float perBandThreshMult = 1.5f;      // Per-band threshold multiplier (0.5-5)
+    uint8_t maxBin = 64;                 // Max FFT bin to analyze (16-128)
+    uint8_t confirmFrames = 3;           // Frames to wait for decay check (0-6)
+    uint8_t diffFrames = 1;             // Temporal reference depth (1-3, SuperFlux diff_frames)
+    bool perBandThreshEnabled = false;   // Per-band independent detection
+    bool hiResBassEnabled = false;       // Hi-res bass via Goertzel (runtime toggle)
+    bool peakPickEnabled = true;         // Local-max peak picking (Phase 2.6, SuperFlux-style)
 
-    void setBassWeight(float w) { bassWeight_ = w; }
-    float getBassWeight() const { return bassWeight_; }
+    // === LEGACY GETTER/SETTER API ===
+    // Kept for backward compatibility with existing serial console manual handlers.
+    // New code should access the public members directly.
+    void setGamma(float g) { gamma = g; }
+    float getGamma() const { return gamma; }
+    void setBassWeight(float w) { bassWeight = w; }
+    float getBassWeight() const { return bassWeight; }
+    void setMidWeight(float w) { midWeight = w; }
+    float getMidWeight() const { return midWeight; }
+    void setHighWeight(float w) { highWeight = w; }
+    float getHighWeight() const { return highWeight; }
+    void setMaxBin(int bin) { maxBin = bin; }
+    int getMaxBin() const { return maxBin; }
+    void setMinOnsetDelta(float d) { minOnsetDelta = d; }
+    float getMinOnsetDelta() const { return minOnsetDelta; }
+    void setBandDominanceGate(float r) { bandDominanceGate = r; }
+    float getBandDominanceGate() const { return bandDominanceGate; }
+    void setDecayRatio(float r) { decayRatioThreshold = r; }
+    float getDecayRatio() const { return decayRatioThreshold; }
+    void setDecayFrames(int f) { if (f >= 0 && f <= MAX_CONFIRM_FRAMES) confirmFrames = f; }
+    int getDecayFrames() const { return confirmFrames; }
+    void setCrestGate(float c) { crestGate = c; }
+    float getCrestGate() const { return crestGate; }
+    void setPerBandThresh(bool e) { perBandThreshEnabled = e; }
+    bool getPerBandThresh() const { return perBandThreshEnabled; }
+    void setPerBandThreshMult(float m) { perBandThreshMult = m; }
+    float getPerBandThreshMult() const { return perBandThreshMult; }
+    void setDiffFrames(int f) { if (f >= 1 && f <= MAX_HISTORY_FRAMES) diffFrames = f; }
+    int getDiffFrames() const { return diffFrames; }
+    void setHiResBass(bool e);  // Has side effects (resets bass history)
+    bool getHiResBass() const { return hiResBassEnabled; }
+    void setPeakPickEnabled(bool e) { peakPickEnabled = e; }
+    bool getPeakPickEnabled() const { return peakPickEnabled; }
 
-    void setMidWeight(float w) { midWeight_ = w; }
-    float getMidWeight() const { return midWeight_; }
-
-    void setHighWeight(float w) { highWeight_ = w; }
-    float getHighWeight() const { return highWeight_; }
-
-    void setMaxBin(int bin) { maxBin_ = bin; }
-    int getMaxBin() const { return maxBin_; }
-
-    void setMinOnsetDelta(float d) { minOnsetDelta_ = d; }
-    float getMinOnsetDelta() const { return minOnsetDelta_; }
-
-    void setBandDominanceGate(float r) { bandDominanceGate_ = r; }
-    float getBandDominanceGate() const { return bandDominanceGate_; }
-
-    void setDecayRatio(float r) { decayRatioThreshold_ = r; }
-    float getDecayRatio() const { return decayRatioThreshold_; }
-
-    void setDecayFrames(int f) { if (f >= 0 && f <= MAX_CONFIRM_FRAMES) confirmFrames_ = f; }
-    int getDecayFrames() const { return confirmFrames_; }
-
-    void setCrestGate(float c) { crestGate_ = c; }
-    float getCrestGate() const { return crestGate_; }
-
-    void setPerBandThresh(bool e) { perBandThreshEnabled_ = e; }
-    bool getPerBandThresh() const { return perBandThreshEnabled_; }
-
-    void setPerBandThreshMult(float m) { perBandThreshMult_ = m; }
-    float getPerBandThreshMult() const { return perBandThreshMult_; }
-
-    void setDiffFrames(int f) { if (f >= 1 && f <= MAX_HISTORY_FRAMES) diffFrames_ = f; }
-    int getDiffFrames() const { return diffFrames_; }
-
-    void setHiResBass(bool e);
-    bool getHiResBass() const { return hiResBassEnabled_; }
-
-    // Debug access
+    // Debug access (read-only runtime state)
     float getBassFlux() const { return bassFlux_; }
     float getMidFlux() const { return midFlux_; }
     float getHighFlux() const { return highFlux_; }
     float getCombinedFlux() const { return combinedFlux_; }
     float getAverageFlux() const { return averageFlux_; }
     float getHiResBassFlux() const { return hiResBassFlux_; }
+
+    // Pre-threshold continuous ODF value (Phase 2.4: unified ODF for beat tracker)
+    float getPreThresholdFlux() const { return combinedFlux_; }
 
 protected:
     void resetImpl() override;
@@ -97,7 +110,7 @@ private:
     static constexpr int MID_MIN = 7;    // 437 Hz
     static constexpr int MID_MAX = 33;   // 2000 Hz (exclusive: bins 7-32)
     static constexpr int HIGH_MIN = 33;  // 2062 Hz
-    // HIGH_MAX = maxBin_
+    // HIGH_MAX = maxBin
 
     // Max bins we store (64 bins = up to 4kHz, sufficient for onset detection)
     static constexpr int MAX_STORED_BINS = 64;
@@ -107,7 +120,6 @@ private:
     static constexpr int MAX_HISTORY_FRAMES = 3;
     float historyLogMag_[MAX_HISTORY_FRAMES][MAX_STORED_BINS];
     int historyCount_;   // How many valid history frames we have (0..MAX_HISTORY_FRAMES)
-    int diffFrames_;     // Which frame to compare against (1=prev, 2=two-ago, 3=three-ago)
     float prevCombinedFlux_;  // Previous frame's combined flux (for onset delta check)
 
     // Per-band flux values (for debug/streaming)
@@ -119,20 +131,6 @@ private:
     // Running mean for additive threshold
     float averageFlux_;
     int frameCount_;
-
-    // Tunable parameters
-    float gamma_;           // Log compression strength (default 20.0)
-    float bassWeight_;      // Bass band weight (default 2.0)
-    float midWeight_;       // Mid band weight (default 1.5)
-    float highWeight_;      // High band weight (default 0.1)
-    float minOnsetDelta_;   // Min flux jump from prev frame to confirm onset (default 0.3)
-    float bandDominanceGate_; // Min band-dominance ratio (max band / total) to confirm onset (default 0.0 = disabled)
-    float decayRatioThreshold_; // Max flux ratio after N frames to confirm percussive onset (default 0.0 = disabled)
-    float crestGate_;       // Max spectral crest factor to confirm onset (default 0.0 = disabled)
-    int confirmFrames_;     // Frames to wait for decay check (default 3)
-    int maxBin_;            // Max FFT bin to analyze (default 64)
-    bool perBandThreshEnabled_; // Per-band independent detection (default false)
-    float perBandThreshMult_; // Per-band threshold multiplier for bass+mid independent detection (default 1.5)
 
     // Post-onset decay confirmation state
     static constexpr int MAX_CONFIRM_FRAMES = 6;
@@ -150,7 +148,11 @@ private:
     float historyBassLogMag_[MAX_HISTORY_FRAMES][MAX_BASS_BINS];
     int bassHistoryCount_;
     float hiResBassFlux_;
-    bool hiResBassEnabled_;  // Runtime toggle (default false)
+
+    // Peak picking internal state (Phase 2.6)
+    float ppPrevFlux_;           // Previous frame's combined flux (for local max check)
+    DetectionResult ppPendingResult_; // Buffered detection result from previous frame
+    bool ppHasPending_;          // Whether there's a pending detection to confirm/reject
 
     // Fast log(1+x) approximation for small x
     // ~8% error at boundary (x=0.5: returns 0.375, true value 0.405).
@@ -165,7 +167,7 @@ private:
     // Store current frame in history ring and update reference state
     void updatePrevFrameState(const float* logMag, int effectiveMax);
 
-    // Get the reference frame for flux computation (respects diffFrames_)
+    // Get the reference frame for flux computation (respects diffFrames)
     const float* getReferenceFrame() const;
 
     // Compute per-band flux from current and max-filtered reference

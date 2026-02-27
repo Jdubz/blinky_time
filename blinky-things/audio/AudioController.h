@@ -34,14 +34,15 @@ struct AutocorrPeak {
  * - Complex phase extraction (not peak detection)
  * - Tempo prior weighting to reduce half-time/double-time confusion
  *
- * Memory: ~5.4 KB total (4.8 KB per-filter delay lines + 0.6 KB state)
- * CPU: ~2% (20 filters × simple math, phase every 4 frames)
+ * Memory: ~10.2 KB total (9.6 KB per-filter delay lines + 0.6 KB state)
+ * CPU: ~3% (40 filters × simple math, phase every 4 frames)
  */
 class CombFilterBank {
 public:
-    // 20 filters: 60-180 BPM at ~6 BPM resolution
+    // 40 filters: 60-180 BPM at ~3 BPM resolution (Phase 2.2, was 20 @ ~6 BPM)
     // At 60 Hz: lag range = 20-60 samples
-    static constexpr int NUM_FILTERS = 20;
+    // Finer bins reduce cumulative phase drift (6 BPM/bin caused ~42ms drift over 10 beats)
+    static constexpr int NUM_FILTERS = 40;
     static constexpr int MAX_LAG = 60;  // 60 BPM at 60 Hz
     static constexpr int MIN_LAG = 20;  // 180 BPM at 60 Hz
 
@@ -64,7 +65,7 @@ public:
 
     /**
      * Process one sample of onset strength
-     * Updates all 20 resonators and finds peak tempo
+     * Updates all 40 resonators and finds peak tempo
      */
     void process(float input);
 
@@ -109,7 +110,7 @@ public:
 private:
     // Per-filter output delay lines for IIR feedback
     // Each filter stores its own output history so y[n-L] feeds back correctly.
-    // Memory: 20 filters × 60 samples × 4 bytes = 4800 bytes
+    // Memory: 40 filters × 60 samples × 4 bytes = 9600 bytes
     float resonatorDelay_[NUM_FILTERS][MAX_LAG] = {{0}};
     int writeIdx_ = 0;
 
@@ -125,7 +126,7 @@ private:
     float peakBPM_ = 120.0f;
     float peakConfidence_ = 0.0f;
     float peakPhase_ = 0.0f;
-    int peakFilterIdx_ = 10;  // Middle filter (approx 120 BPM)
+    int peakFilterIdx_ = NUM_FILTERS / 2;  // Middle filter (approx 120 BPM)
 
     // Resonator history at peak filter for phase extraction
     float resonatorHistory_[MAX_LAG] = {0};
@@ -296,7 +297,7 @@ public:
     uint16_t autocorrPeriodMs = 250;  // Run autocorr every N ms (default 250ms for faster adaptation)
 
     // === COMB FILTER BANK (Independent Tempo Validation) ===
-    // Bank of 20 comb filters at 60-180 BPM for independent tempo detection
+    // Bank of 40 comb filters at 60-180 BPM for independent tempo detection
     bool combBankEnabled = true;    // Enable comb filter bank
     float combBankFeedback = 0.92f; // Bank resonance strength (0.85-0.98)
 
@@ -312,11 +313,22 @@ public:
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
     float cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
 
+    // === BEAT-BOUNDARY TEMPO UPDATES (Phase 2.1) ===
+    // Defers beatPeriodSamples_ changes to the next beat fire, synchronizing
+    // tempo and beat timing like BTrack. Prevents mid-beat period discontinuities.
+    bool beatBoundaryTempo = true;       // Defer tempo changes to beat boundaries (BTrack-style)
+
+    // === UNIFIED ODF (Phase 2.4) ===
+    // Uses BandFlux pre-threshold continuous activation as the ODF for CBSS beat tracking,
+    // instead of the separate computeSpectralFluxBands(). Ensures transient detection and
+    // beat tracking see the same signal. BTrack uses a single ODF for both.
+    bool unifiedOdf = true;              // Use BandFlux pre-threshold as CBSS ODF (BTrack-style)
+
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
 
     // === IOI HISTOGRAM (enables per-bin observation in Bayesian fusion) ===
-    bool ioiEnabled = true;              // Enable IOI histogram observation
+    bool ioiEnabled = false;             // IOI histogram observation (disabled: O(n²), unnormalized counts)
 
     // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
     // Subtracts the local mean from OSS buffer before autocorrelation.
@@ -325,19 +337,19 @@ public:
     bool odfMeanSubEnabled = true;       // Enable ODF mean subtraction before autocorrelation
 
     // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
-    bool ftEnabled = true;               // Enable Fourier tempogram observation
+    bool ftEnabled = false;              // Fourier tempogram observation (disabled: no ref system uses FT for real-time beat tracking)
 
     // === BAYESIAN TEMPO FUSION ===
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
-    // into a unified posterior distribution over 20 tempo bins (60-180 BPM).
+    // into a unified posterior distribution over 40 tempo bins (60-180 BPM).
     // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
     float bayesLambda = 0.07f;           // Transition tightness (0.01=rigid, 1.0=loose)
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
     float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
     float bayesAcfWeight = 0.8f;         // Autocorrelation observation weight (high: harmonic comb makes ACF reliable)
-    float bayesFtWeight = 2.0f;          // Fourier tempogram observation weight (re-enabled by spectral processing v24)
+    float bayesFtWeight = 0.0f;          // Fourier tempogram observation weight (disabled: suspected flat observation vectors)
     float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
-    float bayesIoiWeight = 2.0f;         // IOI histogram observation weight (re-enabled by spectral processing v24)
+    float bayesIoiWeight = 0.0f;         // IOI histogram observation weight (disabled: O(n²) complexity, unnormalized counts)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -481,6 +493,9 @@ private:
     int timeToNextBeat_ = 15;          // Countdown frames until next beat
     int timeToNextPrediction_ = 10;    // Countdown frames until next prediction
 
+    // Beat-boundary tempo update state (Phase 2.1)
+    int pendingBeatPeriod_ = -1;       // Pending beat period (applied at next beat fire, -1=none)
+
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
     int beatExpectationSize_ = 0;
@@ -521,8 +536,8 @@ private:
     int ioiOnsetCount_ = 0;
 
     // === BAYESIAN TEMPO STATE ===
-    // 20 bins matching CombFilterBank resolution (60-180 BPM)
-    static constexpr int TEMPO_BINS = CombFilterBank::NUM_FILTERS;  // 20
+    // 40 bins matching CombFilterBank resolution (60-180 BPM, ~3 BPM/bin)
+    static constexpr int TEMPO_BINS = CombFilterBank::NUM_FILTERS;  // 40
     float tempoStatePrior_[TEMPO_BINS] = {0};     // Previous posterior (becomes prior)
     float tempoStatePost_[TEMPO_BINS] = {0};      // Current posterior after update
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)

@@ -228,6 +228,9 @@ private:
     // Static instance pointer for callbacks
     static SerialConsole* instance_;
 
+    // SettingsRegistry change callbacks (need static access to instance_)
+    static void onHiResBassChanged();
+
     // Debug channels (default: NONE - all debug output disabled)
     // Each channel can be enabled independently for targeted debugging
     static DebugChannel debugChannels_;
