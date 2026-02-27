@@ -518,6 +518,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.bandflux.decayRatioThreshold, 0.0f, 1.0f, F("bfDecayRatio"));
     validateFloat(data_.bandflux.crestGate, 0.0f, 20.0f, F("bfCrestGate"));
     VALIDATE_INT(data_.bandflux.maxBin, 16, 128, F("bfMaxBin"));
+    // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.bandflux.confirmFrames, 0, 6, F("bfConfirmFrames"));
     VALIDATE_INT(data_.bandflux.diffFrames, 1, 3, F("bfDiffFrames"));
     // perBandThreshEnabled, hiResBassEnabled, peakPickEnabled are bools — no range validation needed
