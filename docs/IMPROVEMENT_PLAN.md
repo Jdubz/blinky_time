@@ -235,7 +235,7 @@ Instead of the originally proposed raw-sample pre-amplification, a spectral-doma
 - Hardware gain: 0-80 range (±20 dB in 0.5 dB steps), firmware uses full range with AGC
 - Physical mic placement remains the single highest-impact variable for raw signal level
 
-**Spectral pipeline parameters (9 total, all tunable via serial):**
+**Spectral pipeline parameters (10 total, all tunable via serial):**
 
 | Param | Serial cmd | Default | Controls |
 |-------|-----------|---------|----------|

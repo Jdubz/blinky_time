@@ -61,9 +61,10 @@ void BassSpectralAnalysis::process() {
     // Save previous magnitudes before overwriting
     savePreviousFrame();
 
-    // Step 1: Extract 512 samples from ring buffer into windowed float buffer (stack)
+    // Step 1: Extract 512 samples from ring buffer into windowed float buffer
     // Read oldest-first: writeIndex_ points to the oldest sample in the ring
-    float windowed[BassConstants::WINDOW_SIZE];
+    // Static to avoid 2KB stack allocation on every call (embedded target)
+    static float windowed[BassConstants::WINDOW_SIZE];
     const float alpha = 0.54f;
     const float beta = 0.46f;
     const float twoPiOverN = 2.0f * 3.14159265f / (BassConstants::WINDOW_SIZE - 1);

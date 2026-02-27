@@ -377,8 +377,8 @@ void BandWeightedFluxDetector::setHiResBass(bool e) {
 
 void BandWeightedFluxDetector::computeHiResBassFlux(const float* bassLogMag, int numBins) {
     // Compute bass flux from 12 Goertzel bins (31.25 Hz/bin)
-    // Uses direct bin comparison (no max-filter) because kick drums don't
-    // exhibit vibrato — the SuperFlux max-filter suppresses genuine kick onsets.
+    // Uses 3-bin max-filter on reference (±31 Hz spread) to suppress spectral
+    // wobble in sustained bass. Narrower than FFT path's ±62 Hz filter.
     // Normalizes by FFT-256 bass bin count (BASS_MAX - BASS_MIN = 6) so the
     // hi-res flux is scaled to match the FFT path for threshold compatibility.
 
