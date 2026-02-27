@@ -3,7 +3,7 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** February 26, 2026
+**Last Updated:** February 27, 2026
 
 ## Current Config
 
@@ -73,33 +73,94 @@
 
 0.3 chosen as default: best overall average, preserves all medium-strength kicks, fixes synth-stabs.
 
-## v25 Parameter Changes — Needs Validation
+## v29 Changes — Needs Validation
 
-The following defaults changed in SETTINGS_VERSION 25 (BTrack-style improvements).
-Run full 18-track validation after flashing to confirm no regressions.
+SETTINGS_VERSION 29 bundles 5 beat tracking improvements + BandFlux param persistence.
+Flash all devices, run 18-track validation,
+compare avg Beat F1, BPM accuracy, and per-track results against v27 baseline.
 
-| Parameter | Old (v24) | New (v25) | Rationale |
-|-----------|:---------:|:---------:|-----------|
-| bayesLambda | 0.15 | 0.07 | Tighter transition variance to prevent octave jumps |
-| bayesAcfWeight | 0.3 | 0.8 | Harmonic-enhanced ACF is now a stronger signal |
+### Parameter Changes
 
-Additional structural changes (not parameter-tunable):
-- **Harmonic comb ACF**: 4-harmonic summation with spread windows replaces single-point ACF observation
-- **Rayleigh tempo prior**: Perceptual weighting peaked at ~120 BPM, applied within ACF observation
-- **Bidirectional disambiguation**: Added 0.5x downward check (was only 2x/1.5x upward)
+| Parameter | Old (v27) | New (v29) | Serial cmd | Rationale |
+|-----------|:---------:|:---------:|:----------:|-----------|
+| bayesFtWeight | 2.0 | **0.0** | `bayesft` | No ref system uses FT for real-time beat tracking; near-flat observation vectors |
+| bayesIoiWeight | 2.0 | **0.0** | `bayesioi` | O(n²), unnormalized counts dominate multiplicative posterior |
+| ftEnabled | true | **false** | `ft` | Disables FT computation (CPU savings) |
+| ioiEnabled | true | **false** | `ioi` | Disables IOI ring buffer writes (CPU savings) |
+| beatBoundaryTempo | — | **true** | `beatboundary` | **NEW:** Defer tempo changes to beat fire (BTrack-style, prevents mid-beat period discontinuities) |
+| unifiedOdf | — | **true** | `unifiedodf` | **NEW:** BandFlux pre-threshold feeds CBSS (eliminates duplicate ODF computation) |
+| NUM_TEMPO_BINS | 20 | **40** | (compile-time) | ~3 BPM/bin vs ~6 BPM/bin (reduces cumulative phase drift) |
 
-**Validation plan:**
-1. Flash all 4 devices with v25 firmware
-2. Run `./scripts/run-all-tracks.sh` (18 tracks × 4 devices)
-3. Compare avg Beat F1, BPM accuracy, and per-track results against v24 baseline
-4. Check specifically for octave errors (BPM at half or double expected)
+### Structural Changes (not parameter-tunable, but toggleable)
+
+| Feature | Serial toggle | Default | Rationale |
+|---------|:------------:|:-------:|-----------|
+| **Dual-threshold peak picking** | `set bfpeakpick 0/1` | **on** | Local-max confirmation with 1-frame look-ahead (~16ms). SuperFlux/madmom/librosa standard. Fires on true peaks instead of rising edges. Persisted via ConfigStorage. |
+| **Beat-boundary tempo** | `set beatboundary 0/1` | **on** | Defers `beatPeriodSamples_` update to next beat fire. Debug: `BEAT_TEMPO_DEFER` JSON when deferring |
+| **Unified ODF** | `set unifiedodf 0/1` | **on** | Replaces `computeSpectralFluxBands()` with BandFlux pre-threshold value for CBSS |
+
+**Breaking change:** All `bandflux_*` serial commands renamed to `bf*` (e.g., `bandflux_gamma` → `bfgamma`).
+Any stored scripts using old names will silently fail. No test scripts in blinky-test-player or blinky-serial-mcp use hardcoded bandflux_* commands (verified), but check any local automation.
+
+### Validation Plan
+
+1. Flash all 4 devices with v29 firmware
+2. Run 18-track beat F1 sweep (all new features ON = default)
+3. Compare against v27 baseline — expect improvement on stable-tempo tracks from beat-boundary tempo + finer bins
+4. **A/B individual features:** If F1 regresses, disable features one at a time to isolate:
+   - `set beatboundary 0` — isolates beat-boundary tempo effect
+   - `set unifiedodf 0` — isolates unified ODF effect
+   - `set bfpeakpick 0` — isolates peak picking effect
+   - `set bayesft 2.0` + `set ft 1` — re-enables FT to test if its removal hurts
+   - `set bayesioi 2.0` + `set ioi 1` — re-enables IOI similarly
+5. **Re-calibrate beatoffset** — unified ODF + peak picking change timing characteristics:
+   - Sweep `set beatoffset 1..8` across 4 devices on 4 representative tracks
+   - Expect optimal shift from current 5 (peak picking adds ~1 frame delay)
+6. Check for octave errors (BPM at half or double expected) — 40 bins should reduce these
+7. Monitor memory: expect ~19KB RAM (8%), ~268KB flash (33%)
+
+### Feature-Specific Test Checklist
+
+**Phase 1a (FT+IOI disabled):**
+- [ ] 9-track beat F1 vs v27 defaults (bayesft=2.0, bayesioi=2.0, ft=1, ioi=1)
+- [ ] If F1 drops on specific tracks, identify which observation helps and why
+- [ ] Test with `set bayesft 2.0` + `set ft 1` to re-enable FT only
+- [ ] Test with `set bayesioi 2.0` + `set ioi 1` to re-enable IOI only
+
+**Phase 2.1 (beat-boundary tempo):**
+- [ ] Enable `debug rhythm on` and verify `BEAT_TEMPO_DEFER` messages during tempo changes
+- [ ] Compare BPM stability (fewer mid-beat jumps) on tracks with gradual tempo drift
+- [ ] Test `set beatboundary 0` to disable and compare
+
+**Phase 2.4 (unified ODF):**
+- [ ] Compare transient timing with `set unifiedodf 0` vs `set unifiedodf 1`
+- [ ] Verify beat tracker and transient detector agree on strong beats
+- [ ] Check if adaptive band weighting still functions correctly
+
+**Phase 2.6 (peak picking):**
+- [ ] Compare transient F1 with `set bfpeakpick 0` vs `set bfpeakpick 1`
+- [ ] Expect fewer double-fires (consecutive frame detections)
+- [ ] Check timing precision improvement (detections should cluster tighter around ground truth)
+
+**Phase 2.2 (40 tempo bins):**
+- [ ] Verify BPM accuracy improves (finer bins = less quantization error)
+- [ ] Check memory usage: `show info` should report ~19KB RAM
+- [ ] Monitor for any tempo oscillation (more bins = more choices, could increase jitter if prior is too loose)
+
+**BandFlux persistence (v29):**
+- [ ] Round-trip test: `set bfgamma 30` → `save` → power cycle → `show bandflux` — confirm gamma=30.0
+- [ ] Repeat for a bool (`set bfhiresbass 1`) and uint8 (`set bfmaxbin 48`) to cover all storage types
+- [ ] `defaults` → `show bandflux` — confirm all 15 params reset to factory values
 
 ## Next Priorities
 
 > **Design philosophy:** See [VISUALIZER_GOALS.md](../docs/VISUALIZER_GOALS.md) — visual quality over metric perfection. Low Beat F1 on ambient/trap tracks is acceptable (organic mode fallback is correct).
 
-1. **FFT-512 bass-focused analysis** — Kick drum energy (40-80Hz) occupies 1-2 FFT bins at current FFT-256. FFT-512 doubles bass resolution for better kick/bass discrimination. ~200 lines, ~5KB RAM.
-2. **Particle filter beat tracking** — Fundamentally different approach that handles multi-modal tempo distributions (e.g., half-time ambiguity). ~100-150 lines, ~2KB RAM.
+1. **Adaptive ODF threshold before ACF** (Phase 2.3) — Local-mean subtraction on OSS buffer removes energy envelopes. Low effort (~30 lines).
+2. **Simplify Bayesian fusion** (Phase 2.5) — Reduce to Comb+ACF only if Phase 1a confirms FT/IOI don't help.
+3. **Enable hi-res bass** (Phase 2.7) — Test `set bfhiresbass 1` (already implemented).
+4. **Complex spectral difference ODF** (Phase 2.8) — Phase-based ODF for CBSS rhythm only.
+5. **Particle filter beat tracking** (Phase 3.3) — Multi-modal tempo distributions. ~100-150 lines, ~2KB RAM.
 
 ### Completed (Feb 2026)
 - ~~**Verify startup latency improvement**~~ — ✅ Progressive startup implemented (autocorrelation at 1s). Validated through multi-device testing.

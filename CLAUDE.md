@@ -188,8 +188,8 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v24)
-   - `SettingsRegistry.h/cpp` - 56+ tunable parameters
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v29)
+   - `SettingsRegistry.h/cpp` - 70+ tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
 
@@ -304,8 +304,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~16 KB total (baseline 10 KB + CBSS/OSS buffers ~3 KB + comb filters ~5 KB)
-- Flash: ~222 KB firmware, ~30 KB settings storage
+- RAM: ~20 KB total (19,408B measured; CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB)
+- Flash: ~266 KB firmware, ~30 KB settings storage
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -403,7 +403,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over 60-180 BPM, comb filter bank + re-enabled FT/IOI (v24). SETTINGS_VERSION 24
+- **Bayesian tempo fusion**: 40-bin posterior over 60-180 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 29
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **CBSS adaptive threshold**: Beat fires only if CBSS > cbssthresh * running mean (prevents phantom beats during silence)
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)

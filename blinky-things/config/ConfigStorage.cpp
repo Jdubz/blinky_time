@@ -199,14 +199,16 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
     data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
     data_.music.bayesAcfWeight = 0.8f;       // High weight: harmonic comb makes ACF reliable (v25)
-    data_.music.bayesFtWeight = 2.0f;        // Fourier tempogram — re-enabled by spectral processing (v24, +49% Beat F1)
+    data_.music.bayesFtWeight = 0.0f;        // Fourier tempogram — disabled (v28: no ref system uses FT for real-time beat tracking)
     data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
-    data_.music.bayesIoiWeight = 2.0f;       // IOI histogram — re-enabled by spectral processing (v24, +49% Beat F1)
+    data_.music.bayesIoiWeight = 0.0f;       // IOI histogram — disabled (v28: O(n²), unnormalized counts dominate posterior)
 
     data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
-    data_.music.ioiEnabled = true;           // IOI histogram observation
+    data_.music.ioiEnabled = false;          // IOI histogram observation (disabled v28)
     data_.music.odfMeanSubEnabled = true;    // ODF mean subtraction (BTrack-style detrending)
-    data_.music.ftEnabled = true;            // Fourier tempogram observation
+    data_.music.ftEnabled = false;           // Fourier tempogram observation (disabled v28)
+    data_.music.beatBoundaryTempo = true;    // Defer tempo to beat boundaries (v28, BTrack-style)
+    data_.music.unifiedOdf = true;           // BandFlux pre-threshold as CBSS ODF (v28, BTrack-style)
 
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
@@ -219,6 +221,23 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.compMakeupDb = 6.0f;         // Makeup gain
     data_.music.compAttackTau = 0.001f;      // 1ms attack
     data_.music.compReleaseTau = 2.0f;       // 2s release
+
+    // BandFlux detector defaults (v29+)
+    data_.bandflux.gamma = 20.0f;
+    data_.bandflux.bassWeight = 2.0f;
+    data_.bandflux.midWeight = 1.5f;
+    data_.bandflux.highWeight = 0.1f;
+    data_.bandflux.minOnsetDelta = 0.3f;
+    data_.bandflux.perBandThreshMult = 1.5f;
+    data_.bandflux.bandDominanceGate = 0.0f;
+    data_.bandflux.decayRatioThreshold = 0.0f;
+    data_.bandflux.crestGate = 0.0f;
+    data_.bandflux.maxBin = 64;
+    data_.bandflux.confirmFrames = 3;
+    data_.bandflux.diffFrames = 1;
+    data_.bandflux.perBandThreshEnabled = false;
+    data_.bandflux.hiResBassEnabled = false;
+    data_.bandflux.peakPickEnabled = true;
 
     data_.brightness = 100;
 }
@@ -303,6 +322,7 @@ bool ConfigStorage::loadFromFlash() {
         memcpy(&data_.lightning, &temp.lightning, sizeof(StoredLightningParams));
         memcpy(&data_.mic, &temp.mic, sizeof(StoredMicParams));
         memcpy(&data_.music, &temp.music, sizeof(StoredMusicParams));
+        memcpy(&data_.bandflux, &temp.bandflux, sizeof(StoredBandFluxParams));
         data_.brightness = temp.brightness;
         SerialConsole::logDebug(F("Settings loaded from flash"));
     } else {
@@ -487,6 +507,22 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.compReleaseTau, 0.01f, 10.0f, F("compReleaseTau"));
     // whitenEnabled, compressorEnabled are bools — no range validation needed
 
+    // BandFlux detector validation (v29+)
+    validateFloat(data_.bandflux.gamma, 1.0f, 100.0f, F("bfGamma"));
+    validateFloat(data_.bandflux.bassWeight, 0.0f, 5.0f, F("bfBassWeight"));
+    validateFloat(data_.bandflux.midWeight, 0.0f, 5.0f, F("bfMidWeight"));
+    validateFloat(data_.bandflux.highWeight, 0.0f, 2.0f, F("bfHighWeight"));
+    validateFloat(data_.bandflux.minOnsetDelta, 0.0f, 2.0f, F("bfOnsetDelta"));
+    validateFloat(data_.bandflux.perBandThreshMult, 0.5f, 5.0f, F("bfPBThreshMult"));
+    validateFloat(data_.bandflux.bandDominanceGate, 0.0f, 1.0f, F("bfDominance"));
+    validateFloat(data_.bandflux.decayRatioThreshold, 0.0f, 1.0f, F("bfDecayRatio"));
+    validateFloat(data_.bandflux.crestGate, 0.0f, 20.0f, F("bfCrestGate"));
+    VALIDATE_INT(data_.bandflux.maxBin, 16, 128, F("bfMaxBin"));
+    // cppcheck-suppress unsignedLessThanZero
+    VALIDATE_INT(data_.bandflux.confirmFrames, 0, 6, F("bfConfirmFrames"));
+    VALIDATE_INT(data_.bandflux.diffFrames, 1, 3, F("bfDiffFrames"));
+    // perBandThreshEnabled, hiResBassEnabled, peakPickEnabled are bools — no range validation needed
+
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
         SerialConsole::logWarn(F("Invalid BPM range, swapping"));
@@ -645,6 +681,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->ioiEnabled = data_.music.ioiEnabled;
         audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
         audioCtrl->ftEnabled = data_.music.ftEnabled;
+        audioCtrl->beatBoundaryTempo = data_.music.beatBoundaryTempo;
+        audioCtrl->unifiedOdf = data_.music.unifiedOdf;
 
         // Spectral processing (v23+)
         SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
@@ -658,6 +696,28 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         spectral.compMakeupDb = data_.music.compMakeupDb;
         spectral.compAttackTau = data_.music.compAttackTau;
         spectral.compReleaseTau = data_.music.compReleaseTau;
+
+        // BandFlux detector parameters (v29+)
+        BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();
+        bf.gamma = data_.bandflux.gamma;
+        bf.bassWeight = data_.bandflux.bassWeight;
+        bf.midWeight = data_.bandflux.midWeight;
+        bf.highWeight = data_.bandflux.highWeight;
+        bf.minOnsetDelta = data_.bandflux.minOnsetDelta;
+        bf.perBandThreshMult = data_.bandflux.perBandThreshMult;
+        bf.bandDominanceGate = data_.bandflux.bandDominanceGate;
+        bf.decayRatioThreshold = data_.bandflux.decayRatioThreshold;
+        bf.crestGate = data_.bandflux.crestGate;
+        bf.maxBin = data_.bandflux.maxBin;
+        bf.confirmFrames = data_.bandflux.confirmFrames;
+        bf.diffFrames = data_.bandflux.diffFrames;
+        bf.perBandThreshEnabled = data_.bandflux.perBandThreshEnabled;
+        bf.setHiResBass(data_.bandflux.hiResBassEnabled);  // Side effect: resets bass history
+        bf.peakPickEnabled = data_.bandflux.peakPickEnabled;
+
+        // Sync BassSpectralAnalysis enabled state with hi-res bass setting
+        BassSpectralAnalysis& bass = audioCtrl->getEnsemble().getBassSpectral();
+        bass.enabled = data_.bandflux.hiResBassEnabled;
     }
 }
 
@@ -798,6 +858,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.ioiEnabled = audioCtrl->ioiEnabled;
         data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
         data_.music.ftEnabled = audioCtrl->ftEnabled;
+        data_.music.beatBoundaryTempo = audioCtrl->beatBoundaryTempo;
+        data_.music.unifiedOdf = audioCtrl->unifiedOdf;
 
         // Spectral processing (v23+)
         const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
@@ -811,6 +873,24 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.compMakeupDb = spectral.compMakeupDb;
         data_.music.compAttackTau = spectral.compAttackTau;
         data_.music.compReleaseTau = spectral.compReleaseTau;
+
+        // BandFlux detector parameters (v29+)
+        const BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();
+        data_.bandflux.gamma = bf.gamma;
+        data_.bandflux.bassWeight = bf.bassWeight;
+        data_.bandflux.midWeight = bf.midWeight;
+        data_.bandflux.highWeight = bf.highWeight;
+        data_.bandflux.minOnsetDelta = bf.minOnsetDelta;
+        data_.bandflux.perBandThreshMult = bf.perBandThreshMult;
+        data_.bandflux.bandDominanceGate = bf.bandDominanceGate;
+        data_.bandflux.decayRatioThreshold = bf.decayRatioThreshold;
+        data_.bandflux.crestGate = bf.crestGate;
+        data_.bandflux.maxBin = bf.maxBin;
+        data_.bandflux.confirmFrames = bf.confirmFrames;
+        data_.bandflux.diffFrames = bf.diffFrames;
+        data_.bandflux.perBandThreshEnabled = bf.perBandThreshEnabled;
+        data_.bandflux.hiResBassEnabled = bf.hiResBassEnabled;
+        data_.bandflux.peakPickEnabled = bf.peakPickEnabled;
     }
 
     saveToFlash();

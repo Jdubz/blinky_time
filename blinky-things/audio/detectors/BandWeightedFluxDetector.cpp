@@ -3,7 +3,6 @@
 
 BandWeightedFluxDetector::BandWeightedFluxDetector()
     : historyCount_(0)
-    , diffFrames_(1)
     , prevCombinedFlux_(0.0f)
     , bassFlux_(0.0f)
     , midFlux_(0.0f)
@@ -11,18 +10,6 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , combinedFlux_(0.0f)
     , averageFlux_(0.0f)
     , frameCount_(0)
-    , gamma_(20.0f)
-    , bassWeight_(2.0f)
-    , midWeight_(1.5f)
-    , highWeight_(0.1f)
-    , minOnsetDelta_(0.3f)
-    , bandDominanceGate_(0.0f)
-    , decayRatioThreshold_(0.0f)
-    , crestGate_(0.0f)
-    , confirmFrames_(3)
-    , maxBin_(64)
-    , perBandThreshEnabled_(false)
-    , perBandThreshMult_(1.5f)
     , confirmCountdown_(0)
     , candidateFlux_(0.0f)
     , minFluxDuringWindow_(0.0f)
@@ -31,7 +18,9 @@ BandWeightedFluxDetector::BandWeightedFluxDetector()
     , averageMidFlux_(0.0f)
     , bassHistoryCount_(0)
     , hiResBassFlux_(0.0f)
-    , hiResBassEnabled_(false)
+    , ppPrevFlux_(0.0f)
+    , ppPendingResult_(DetectionResult::none())
+    , ppHasPending_(false)
 {
     memset(historyLogMag_, 0, sizeof(historyLogMag_));
     memset(historyBassLogMag_, 0, sizeof(historyBassLogMag_));
@@ -53,6 +42,9 @@ void BandWeightedFluxDetector::resetImpl() {
     historyCount_ = 0;
     bassHistoryCount_ = 0;
     hiResBassFlux_ = 0.0f;
+    ppPrevFlux_ = 0.0f;
+    ppPendingResult_ = DetectionResult::none();
+    ppHasPending_ = false;
 
     memset(historyLogMag_, 0, sizeof(historyLogMag_));
     memset(historyBassLogMag_, 0, sizeof(historyBassLogMag_));
@@ -68,24 +60,24 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     int numBins = frame.numBins;
 
     // Clamp analysis range
-    int effectiveMax = maxBin_;
+    int effectiveMax = maxBin;
     if (effectiveMax > numBins) effectiveMax = numBins;
     if (effectiveMax > MAX_STORED_BINS) effectiveMax = MAX_STORED_BINS;
 
     // Step 1: Log-compress current magnitudes
     float logMag[MAX_STORED_BINS];
     for (int k = 0; k < effectiveMax; k++) {
-        logMag[k] = fastLog1p(gamma_ * magnitudes[k]);
+        logMag[k] = fastLog1p(gamma * magnitudes[k]);
     }
 
     // Hi-res bass: log-compress Goertzel magnitudes (when available).
     // On the first frame with bass data, bassHistoryCount_==0 so useHiResBass is false
     // (no reference frame to diff against). We seed history below and use it next frame.
-    bool useHiResBass = hiResBassEnabled_ && frame.bassSpectralValid && bassHistoryCount_ > 0;
+    bool useHiResBass = hiResBassEnabled && frame.bassSpectralValid && bassHistoryCount_ > 0;
     float bassLogMag[MAX_BASS_BINS] = {};
-    if (hiResBassEnabled_ && frame.bassSpectralValid) {
+    if (hiResBassEnabled && frame.bassSpectralValid) {
         for (int b = 0; b < frame.numBassBins && b < MAX_BASS_BINS; b++) {
-            bassLogMag[b] = fastLog1p(gamma_ * frame.bassMagnitudes[b]);
+            bassLogMag[b] = fastLog1p(gamma * frame.bassMagnitudes[b]);
         }
         if (bassHistoryCount_ == 0) {
             updateBassPrevFrameState(bassLogMag, frame.numBassBins);
@@ -100,7 +92,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     }
 
     // Step 2: Build 3-bin max-filtered reference (SuperFlux vibrato suppression)
-    // Uses diffFrames_ to look back N frames (default 1 = previous frame)
+    // Uses diffFrames to look back N frames (default 1 = previous frame)
     const float* refFrame = getReferenceFrame();
     float maxRef[MAX_STORED_BINS] = {0};
     for (int k = 0; k < effectiveMax; k++) {
@@ -124,7 +116,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     }
 
     // Step 4: Combined weighted ODF
-    combinedFlux_ = bassWeight_ * bassFlux_ + midWeight_ * midFlux_ + highWeight_ * highFlux_;
+    combinedFlux_ = bassWeight * bassFlux_ + midWeight * midFlux_ + highWeight * highFlux_;
 
     // Store for debug
     lastRawValue_ = combinedFlux_;
@@ -134,13 +126,13 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     if (frameCount_ < 10) {
         // Cold start: fast adaptation
         averageFlux_ += 0.2f * (combinedFlux_ - averageFlux_);
-        if (perBandThreshEnabled_) {
+        if (perBandThreshEnabled) {
             averageBassFlux_ += 0.2f * (bassFlux_ - averageBassFlux_);
             averageMidFlux_ += 0.2f * (midFlux_ - averageMidFlux_);
         }
     } else {
         averageFlux_ += 0.02f * (combinedFlux_ - averageFlux_);
-        if (perBandThreshEnabled_) {
+        if (perBandThreshEnabled) {
             averageBassFlux_ += 0.02f * (bassFlux_ - averageBassFlux_);
             averageMidFlux_ += 0.02f * (midFlux_ - averageMidFlux_);
         }
@@ -151,12 +143,14 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
     float effectiveThreshold = averageFlux_ + config_.threshold;
     currentThreshold_ = effectiveThreshold;
 
-    // === Post-onset decay confirmation (disabled by default, decayRatioThreshold_=0) ===
+    // === Post-onset decay confirmation (disabled by default, decayRatioThreshold=0) ===
     // If we're waiting to confirm a previous candidate, track minimum flux.
     // Note: Any new onset during the confirmation window is silently dropped —
-    // the early return bypasses all detection logic. At confirmFrames_=3 (~50ms)
+    // the early return bypasses all detection logic. At confirmFrames=3 (~50ms)
     // this is acceptable; at higher values rapid onsets could be missed.
-    // Also introduces ~50ms latency on confirmed detections (confirmFrames_ × 16.7ms).
+    // Also introduces ~50ms latency on confirmed detections (confirmFrames × 16.7ms).
+    // Note: decay confirmation and peak picking do not compose — the early return here
+    // bypasses the peak picking block, so decay-confirmed detections skip local-max check.
     if (confirmCountdown_ > 0) {
         if (combinedFlux_ < minFluxDuringWindow_) {
             minFluxDuringWindow_ = combinedFlux_;
@@ -166,7 +160,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
             // Check if flux dipped at ANY point during the window (percussive = brief dip)
             // Pads never dip — they sustain or rise throughout the window
             float minRatio = minFluxDuringWindow_ / maxf(candidateFlux_, 0.001f);
-            if (minRatio <= decayRatioThreshold_) {
+            if (minRatio <= decayRatioThreshold) {
                 // Flux dipped — confirmed percussive onset
                 updatePrevFrameState(logMag, effectiveMax);
                 if (useHiResBass) updateBassPrevFrameState(bassLogMag, frame.numBassBins);
@@ -193,9 +187,9 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
     // Per-band independent detection: bass or mid alone exceeds its own threshold
     // Catches kicks hidden in combined flux when mid/high are quiet
-    if (!detected && perBandThreshEnabled_ && !hiHatOnly) {
-        float bassThresh = averageBassFlux_ + config_.threshold * perBandThreshMult_;
-        float midThresh = averageMidFlux_ + config_.threshold * perBandThreshMult_;
+    if (!detected && perBandThreshEnabled && !hiHatOnly) {
+        float bassThresh = averageBassFlux_ + config_.threshold * perBandThreshMult;
+        float midThresh = averageMidFlux_ + config_.threshold * perBandThreshMult;
         if (bassFlux_ > bassThresh || midFlux_ > midThresh) {
             detected = true;
         }
@@ -203,20 +197,20 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
     // Step 7: Onset sharpness gate — reject slow-rising signals (pads, swells)
     // Kicks jump from ~0 to 2+ in one frame; pads rise 0.01-0.1 per frame
-    if (detected && minOnsetDelta_ > 0.0f) {
+    if (detected && minOnsetDelta > 0.0f) {
         float fluxDelta = combinedFlux_ - prevCombinedFlux_;
-        if (fluxDelta < minOnsetDelta_) {
+        if (fluxDelta < minOnsetDelta) {
             detected = false;
         }
     }
 
     // Step 8: Band-dominance gate (disabled by default, kept for experimentation)
-    if (detected && bandDominanceGate_ > 0.0f) {
+    if (detected && bandDominanceGate > 0.0f) {
         float totalBandFlux = bassFlux_ + midFlux_ + highFlux_;
         if (totalBandFlux > 0.01f) {
             float maxBand = maxf(maxf(bassFlux_, midFlux_), highFlux_);
             float dominance = maxBand / totalBandFlux;
-            if (dominance < bandDominanceGate_) {
+            if (dominance < bandDominanceGate) {
                 detected = false;
             }
         }
@@ -224,7 +218,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
 
     // Step 9: Spectral crest factor gate — reject tonal onsets (pads, chords)
     // Percussive hits are broadband noise (low crest ~2-3), pads are tonal (high crest ~5+)
-    if (detected && crestGate_ > 0.0f) {
+    if (detected && crestGate > 0.0f) {
         float maxMag = 0.0f;
         float sumMag = 0.0f;
         int crestMax = (MID_MAX < effectiveMax) ? MID_MAX : effectiveMax;
@@ -235,7 +229,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         int crestBins = crestMax - BASS_MIN;
         if (crestBins > 0 && sumMag > 1e-10f) {
             float crest = maxMag / (sumMag / crestBins);
-            if (crest > crestGate_) {
+            if (crest > crestGate) {
                 detected = false;
             }
         }
@@ -256,8 +250,8 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         // Step 10: Post-onset decay gate — defer confirmation to check temporal envelope
         // Percussive hits decay rapidly (ratio drops below threshold in N frames)
         // Pads/chords sustain (ratio stays near 1.0)
-        if (decayRatioThreshold_ > 0.0f && confirmFrames_ > 0) {
-            confirmCountdown_ = confirmFrames_;
+        if (decayRatioThreshold > 0.0f && confirmFrames > 0) {
+            confirmCountdown_ = confirmFrames;
             candidateFlux_ = combinedFlux_;
             minFluxDuringWindow_ = combinedFlux_;  // Will track minimum during window
             cachedResult_ = result;
@@ -274,9 +268,56 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         updateThresholdBuffer(combinedFlux_);
     }
 
-    // Store current as reference for next frame
+    // Store current as reference for next frame (must run before peak picking —
+    // early returns in the peak picking block rely on prevCombinedFlux_ being current)
     updatePrevFrameState(logMag, effectiveMax);
     if (useHiResBass) updateBassPrevFrameState(bassLogMag, frame.numBassBins);
+
+    // Phase 2.6: Dual-threshold peak picking — local-max confirmation with 1-frame look-ahead
+    // SuperFlux/madmom/librosa all require ODF to be a local maximum before emitting detection.
+    // We buffer 1 frame: the pending result from frame N is emitted at frame N+1 only if
+    // combinedFlux[N] >= combinedFlux[N+1] (flux is no longer rising).
+    // This adds ~16ms latency (imperceptible for visualization).
+    // Note: toggling peakPickEnabled while ppHasPending_ discards the pending detection.
+    if (peakPickEnabled) {
+        DetectionResult emitResult = DetectionResult::none();
+
+        if (ppHasPending_) {
+            if (result.detected && combinedFlux_ > ppPrevFlux_) {
+                // New detection at higher flux supersedes the pending one
+                ppPendingResult_ = result;
+                ppPrevFlux_ = combinedFlux_;
+                // ppHasPending_ stays true — new pending replaces old
+                return emitResult;  // Don't emit yet; wait for next frame to confirm
+            }
+
+            // Current frame is not a stronger detection — check if pending is a local max
+            if (ppPrevFlux_ >= combinedFlux_) {
+                // Confirmed local max — emit the pending detection
+                emitResult = ppPendingResult_;
+            }
+            // else: flux is still rising on a non-detection frame (e.g., cooldown).
+            // Hold the pending — it was the detection peak, the rising flux is just
+            // the onset tail during cooldown. Will be emitted when flux finally drops.
+            // Bounded by max cooldown (150ms ≈ 9 frames at 60Hz), so starvation can't occur.
+            else {
+                // Update ppPrevFlux_ to track the rising flux so we confirm
+                // local max relative to the true peak of the tail
+                ppPrevFlux_ = combinedFlux_;
+                return emitResult;  // Still pending, don't clear
+            }
+            ppHasPending_ = false;
+        }
+
+        // Buffer current frame's result if it's a detection (and nothing pending)
+        if (result.detected) {
+            ppPendingResult_ = result;
+            ppPrevFlux_ = combinedFlux_;
+            ppHasPending_ = true;
+        }
+
+        return emitResult;
+    }
 
     return result;
 }
@@ -305,9 +346,9 @@ void BandWeightedFluxDetector::updatePrevFrameState(const float* logMag, int eff
 }
 
 const float* BandWeightedFluxDetector::getReferenceFrame() const {
-    // diffFrames_=1 means previous frame (index 0), =2 means two ago (index 1), etc.
+    // diffFrames=1 means previous frame (index 0), =2 means two ago (index 1), etc.
     // Clamp to available history
-    int idx = diffFrames_ - 1;
+    int idx = diffFrames - 1;
     if (idx >= historyCount_) {
         idx = historyCount_ - 1;
     }
@@ -367,7 +408,7 @@ float BandWeightedFluxDetector::computeConfidence(float flux, float mean) const 
 }
 
 void BandWeightedFluxDetector::setHiResBass(bool e) {
-    hiResBassEnabled_ = e;
+    hiResBassEnabled = e;
     // Reset bass history to avoid computing flux against stale data
     // from a previous session when re-enabling
     bassHistoryCount_ = 0;
@@ -432,7 +473,7 @@ void BandWeightedFluxDetector::updateBassPrevFrameState(const float* bassLogMag,
 
 const float* BandWeightedFluxDetector::getBassReferenceFrame() const {
     // Same logic as getReferenceFrame() but for bass history
-    int idx = diffFrames_ - 1;
+    int idx = diffFrames - 1;
     if (idx >= bassHistoryCount_) {
         idx = bassHistoryCount_ - 1;
     }

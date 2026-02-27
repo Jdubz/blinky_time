@@ -133,6 +133,7 @@ bool AudioController::begin(uint32_t sampleRate) {
     // Reset prediction state
     timeToNextBeat_ = 15;  // ~250ms at 60Hz
     timeToNextPrediction_ = 10;
+    pendingBeatPeriod_ = -1;  // No pending tempo change
     logGaussianLastT_ = 0;
     logGaussianLastTight_ = 0.0f;
     logGaussianWeightsSize_ = 0;
@@ -211,30 +212,55 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 4. Get onset strength for rhythm analysis
-    //    This is INDEPENDENT of transient detection - analyzes energy patterns
-    //    Uses band-weighted spectral flux (captures energy CHANGES, good for beat timing)
+    //    BTrack uses a single ODF for both transient detection and beat tracking.
+    //    Phase 2.4: When unifiedOdf is on, use BandFlux pre-threshold value (already computed
+    //    in step 3) instead of the separate computeSpectralFluxBands(). This ensures the beat
+    //    tracker and transient detector "hear" the same signal.
     float onsetStrength = 0.0f;
 
-    // Get spectral data from ensemble
-    const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
+    if (unifiedOdf) {
+        // Phase 2.4: Use BandFlux continuous pre-threshold activation
+        // This is the combined weighted flux BEFORE thresholding/cooldown/peak-picking
+        // Log-compressed, band-weighted, vibrato-suppressed — same signal driving transients
+        // Guard: if BandFlux didn't run this frame (no spectral data), combinedFlux_ is stale.
+        // Fall back to mic level, matching the legacy path behavior.
+        const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
+        if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
+            onsetStrength = ensemble_.getBandFlux().getPreThresholdFlux();
 
-    if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
-        const float* magnitudes = spectral.getMagnitudes();
-        int numBins = spectral.getNumBins();
-
-        // Compute spectral flux with per-band outputs for adaptive weighting
-        float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
-        onsetStrength = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
-
-        // Store per-band samples for adaptive weight calculation
-        if (adaptiveBandWeightEnabled) {
-            addBandOssSamples(bassFlux, midFlux, highFlux);
+            // Feed adaptive band weighting from BandFlux per-band values
+            if (adaptiveBandWeightEnabled) {
+                addBandOssSamples(
+                    ensemble_.getBandFlux().getBassFlux(),
+                    ensemble_.getBandFlux().getMidFlux(),
+                    ensemble_.getBandFlux().getHighFlux()
+                );
+            }
+        } else {
+            onsetStrength = mic_.getLevel();
         }
     } else {
-        // Fallback when no spectral data: use normalized level
-        onsetStrength = mic_.getLevel();
-        // Reset prev magnitudes since we have no spectral data this frame
-        prevMagnitudesValid_ = false;
+        // Legacy path: independent spectral flux computation for CBSS
+        const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
+
+        if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
+            const float* magnitudes = spectral.getMagnitudes();
+            int numBins = spectral.getNumBins();
+
+            // Compute spectral flux with per-band outputs for adaptive weighting
+            float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
+            onsetStrength = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
+
+            // Store per-band samples for adaptive weight calculation
+            if (adaptiveBandWeightEnabled) {
+                addBandOssSamples(bassFlux, midFlux, highFlux);
+            }
+        } else {
+            // Fallback when no spectral data: use normalized level
+            onsetStrength = mic_.getLevel();
+            // Reset prev magnitudes since we have no spectral data this frame
+            prevMagnitudesValid_ = false;
+        }
     }
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS)
@@ -560,7 +586,7 @@ void AudioController::initTempoState() {
     }
 
     // Pre-compute Gaussian transition matrix (only depends on bin BPMs and bayesLambda)
-    // Avoids 400 expf() calls per autocorrelation cycle at runtime.
+    // Avoids 1600 expf() calls per autocorrelation cycle at runtime.
     for (int i = 0; i < TEMPO_BINS; i++) {
         for (int j = 0; j < TEMPO_BINS; j++) {
             float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
@@ -801,7 +827,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // Per-sample ACF harmonic disambiguation (like old system):
     // Check if the raw autocorrelation at half-lag (2x BPM) or 2/3-lag (1.5x BPM)
     // is strong relative to the MAP bin's lag. If so, switch to the higher tempo.
-    // Uses per-sample ACF values for full resolution (not the coarse 20-bin observations).
+    // Uses per-sample ACF values for full resolution (not the coarse 40-bin observations).
     // Thresholds calibrated empirically (Feb 2026) from the old harmonicUp2xThresh/
     // harmonicUp32Thresh params; 2/3-lag needs higher threshold because 1.5x
     // corrections are riskier (less common harmonic error).
@@ -932,7 +958,21 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                        "AudioController: beat period out of range");
         if (newPeriodSamples < 10) newPeriodSamples = 10;
         if (newPeriodSamples > OSS_BUFFER_SIZE / 2) newPeriodSamples = OSS_BUFFER_SIZE / 2;
-        beatPeriodSamples_ = newPeriodSamples;
+
+        // Phase 2.1: Beat-boundary tempo — defer period update to next beat fire
+        // BTrack only updates tempo at beat time, preventing mid-beat period discontinuities
+        if (beatBoundaryTempo && beatCount_ > 0) {
+            pendingBeatPeriod_ = newPeriodSamples;
+            if (debugPrint && newPeriodSamples != beatPeriodSamples_) {
+                Serial.print(F("{\"type\":\"BEAT_TEMPO_DEFER\",\"cur\":"));
+                Serial.print(beatPeriodSamples_);
+                Serial.print(F(",\"pend\":"));
+                Serial.print(newPeriodSamples);
+                Serial.println(F("}"));
+            }
+        } else {
+            beatPeriodSamples_ = newPeriodSamples;
+        }
 
         // Update ensemble detector with tempo hint for adaptive cooldown
         ensemble_.getFusion().setTempoHint(bpm_);
@@ -953,8 +993,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 // ===== FOURIER TEMPOGRAM PER-BIN OBSERVATIONS =====
 
 void AudioController::computeFTObservations(float* ftObs, int numBins) {
-    // Compute Goertzel magnitude at each of the 20 tempo bin lags
-    // This is faster than the old full-range scan (20 evals vs ~40)
+    // Compute Goertzel magnitude at each of the 40 tempo bin lags
+    // Goertzel is O(N) per bin vs O(N log N) for full FFT — faster for sparse evaluation
 
     // Compute OSS mean for detrending (removes DC from DFT)
     float mean = 0.0f;
@@ -1001,7 +1041,7 @@ void AudioController::computeFTObservations(float* ftObs, int numBins) {
 // ===== IOI HISTOGRAM PER-BIN OBSERVATIONS =====
 
 void AudioController::computeIOIObservations(float* ioiObs, int numBins) {
-    // Accumulate IOI histogram counts at each of the 20 tempo bin lags
+    // Accumulate IOI histogram counts at each of the 40 tempo bin lags
     // with ±2 sample tolerance (~33ms at 60Hz) for onset timing jitter
 
     // Initialize to 1.0 (multiplicative neutral). Unlike ACF which uses 0.01 floor
@@ -1215,6 +1255,12 @@ void AudioController::detectBeat() {
             // Capture whether prediction refined this beat's timing (for streaming)
             // Must happen before reset so streaming reads the correct value
             lastFiredBeatPredicted_ = lastBeatWasPredicted_;
+
+            // Phase 2.1: Apply pending tempo at beat boundary
+            if (pendingBeatPeriod_ > 0) {
+                beatPeriodSamples_ = pendingBeatPeriod_;
+                pendingBeatPeriod_ = -1;
+            }
         }
 
         // Always reset timers (even if suppressed) to prevent re-firing stale countdown

@@ -49,7 +49,14 @@ public:
     // Version 25: BTrack-style octave error fixes (harmonic comb ACF, Rayleigh prior, tighter lambda, bidirectional disambig)
     // Version 26: BlinkyAssert visible errors, per-param validation, VALIDATE_INT macro
     // Version 27: Removed legacy detection params from StoredMicParams, prefixed water/lightning settings
-    static const uint8_t SETTINGS_VERSION = 27;  // Settings schema (fire, water, lightning, mic, music params)
+    // Version 28 (shipped as 29): Phase 1a — FT+IOI disabled by default (bayesft=0, bayesioi=0, ftEnabled=false, ioiEnabled=false)
+    //             Phase 2.1 — Beat-boundary tempo updates (pendingBeatPeriod_)
+    //             Phase 2.6 — Dual-threshold peak picking (local-max confirmation)
+    //             Phase 2.4 — Unified ODF (BandFlux pre-threshold feeds CBSS)
+    //             Phase 2.2 — Increased tempo bins (20→40)
+    // Version 29: All BandFlux detector params persisted (StoredBandFluxParams added to ConfigData)
+    //             peakPickEnabled first persisted (in StoredBandFluxParams)
+    static const uint8_t SETTINGS_VERSION = 29;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -188,6 +195,8 @@ public:
         bool ioiEnabled;                // Enable IOI histogram observation
         bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
         bool ftEnabled;                 // Enable Fourier tempogram observation
+        bool beatBoundaryTempo;         // Defer tempo changes to beat boundaries (v28)
+        bool unifiedOdf;                // Use BandFlux pre-threshold as CBSS ODF (v28)
 
         // Spectral processing (v23+)
         bool whitenEnabled;             // Per-bin spectral whitening
@@ -200,6 +209,28 @@ public:
         float compMakeupDb;            // Makeup gain (dB)
         float compAttackTau;           // Attack time constant (seconds)
         float compReleaseTau;          // Release time constant (seconds)
+    };
+
+    struct StoredBandFluxParams {
+        // Core ODF parameters
+        float gamma;                // Log compression strength (1-100)
+        float bassWeight;           // Bass band weight (0-5)
+        float midWeight;            // Mid band weight (0-5)
+        float highWeight;           // High band weight (0-2)
+        float minOnsetDelta;        // Min flux jump for onset (0-2, pad rejection)
+        float perBandThreshMult;    // Per-band threshold multiplier (0.5-5)
+        // Experimental gates (all 0.0 = disabled)
+        float bandDominanceGate;    // Band-dominance ratio gate (0-1)
+        float decayRatioThreshold;  // Post-onset decay confirmation (0-1)
+        float crestGate;            // Spectral crest factor gate (0-20)
+        // Integer params
+        uint8_t maxBin;             // Max FFT bin to analyze (16-128)
+        uint8_t confirmFrames;      // Decay check frames (0-6)
+        uint8_t diffFrames;         // Temporal reference depth (1-3)
+        // Feature toggles
+        bool perBandThreshEnabled;  // Per-band independent detection
+        bool hiResBassEnabled;      // Hi-res bass via Goertzel
+        bool peakPickEnabled;       // Local-max peak picking (Phase 2.6)
     };
 
     /**
@@ -277,6 +308,7 @@ public:
         StoredLightningParams lightning;
         StoredMicParams mic;
         StoredMusicParams music;
+        StoredBandFluxParams bandflux;
         uint8_t brightness;
     };
 
@@ -296,13 +328,15 @@ public:
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 136,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 32 floats + 1 uint8 + 5 bools + padding)");
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 32 floats + 1 uint8 + 7 bools + padding)");
+    static_assert(sizeof(StoredBandFluxParams) == 44,
+        "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    // ConfigData: ~493 bytes (4+160+64+64+32+24+136+1 + padding). Allocated in last 4KB flash page.
+    // ConfigData: ~541 bytes (4+160+64+64+32+24+136+44+1 + padding). Allocated in last 4KB flash page.
     // Tight bound (640) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
     static_assert(sizeof(ConfigData) <= 640,
-        "ConfigData exceeds 640 bytes! Current estimate ~493B. Check for unintended struct growth.");
+        "ConfigData exceeds 640 bytes! Current estimate ~541B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

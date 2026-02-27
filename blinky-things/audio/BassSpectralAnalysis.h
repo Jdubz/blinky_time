@@ -64,7 +64,7 @@ public:
     void reset();
 
     // --- Master toggle ---
-    bool enabled = false;  // Default off; enable via "set bandflux_hiresbass 1"
+    bool enabled = false;  // Default off; enable via "set bfhiresbass 1"
 
     // --- Compressor parameters (mirrors SharedSpectralAnalysis defaults) ---
     bool compressorEnabled = true;

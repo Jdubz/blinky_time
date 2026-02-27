@@ -42,6 +42,18 @@ void onParamChanged() {
     }
 }
 
+// Callback for hi-res bass toggle — resets bass history and syncs BassSpectralAnalysis
+void SerialConsole::onHiResBassChanged() {
+    if (!instance_ || !instance_->audioCtrl_) return;
+    BandWeightedFluxDetector& bf = instance_->audioCtrl_->getEnsemble().getBandFlux();
+    bf.setHiResBass(bf.hiResBassEnabled);  // Side effect: always resets bassHistoryCount_ (even on disable)
+    BassSpectralAnalysis& bass = instance_->audioCtrl_->getEnsemble().getBassSpectral();
+    if (bf.hiResBassEnabled && !bass.enabled) {
+        bass.reset();  // Clear stale ring buffer and whitening state
+    }
+    bass.enabled = bf.hiResBassEnabled;
+}
+
 // File-scope storage for effect settings (accessible from both register and sync functions)
 static float effectHueShift_ = 0.0f;
 static float effectRotationSpeed_ = 0.0f;
@@ -259,6 +271,43 @@ void SerialConsole::registerRhythmSettings() {
         "ODF mean subtraction before autocorrelation (BTrack-style detrending)");
     settings_.registerBool("ft", &audioCtrl_->ftEnabled, "rhythm",
         "Fourier tempogram observation in Bayesian fusion");
+    settings_.registerBool("beatboundary", &audioCtrl_->beatBoundaryTempo, "rhythm",
+        "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
+    settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",
+        "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
+
+    // BandFlux detector parameters (v29+)
+    BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
+    settings_.registerFloat("bfgamma", &bf.gamma, "bandflux",
+        "Log compression strength", 1.0f, 100.0f);
+    settings_.registerFloat("bfbassweight", &bf.bassWeight, "bandflux",
+        "Bass band weight (kicks)", 0.0f, 5.0f);
+    settings_.registerFloat("bfmidweight", &bf.midWeight, "bandflux",
+        "Mid band weight (snares)", 0.0f, 5.0f);
+    settings_.registerFloat("bfhighweight", &bf.highWeight, "bandflux",
+        "High band weight (hi-hats, low=suppress)", 0.0f, 2.0f);
+    settings_.registerFloat("bfonsetdelta", &bf.minOnsetDelta, "bandflux",
+        "Min flux jump for onset (pad rejection)", 0.0f, 2.0f);
+    settings_.registerFloat("bfpbmult", &bf.perBandThreshMult, "bandflux",
+        "Per-band threshold multiplier", 0.5f, 5.0f);
+    settings_.registerFloat("bfdominance", &bf.bandDominanceGate, "bandflux",
+        "Band-dominance ratio gate (0=disabled)", 0.0f, 1.0f);
+    settings_.registerFloat("bfdecayratio", &bf.decayRatioThreshold, "bandflux",
+        "Post-onset decay confirmation (0=disabled)", 0.0f, 1.0f);
+    settings_.registerFloat("bfcrestgate", &bf.crestGate, "bandflux",
+        "Spectral crest factor gate (0=disabled)", 0.0f, 20.0f);
+    settings_.registerUint8("bfmaxbin", &bf.maxBin, "bandflux",
+        "Max FFT bin to analyze", 16, 128);
+    settings_.registerUint8("bfconfirmframes", &bf.confirmFrames, "bandflux",
+        "Decay check frames", 0, 6);
+    settings_.registerUint8("bfdiffframes", &bf.diffFrames, "bandflux",
+        "Temporal reference depth (SuperFlux diff_frames)", 1, 3);
+    settings_.registerBool("bfperbandthresh", &bf.perBandThreshEnabled, "bandflux",
+        "Per-band independent detection");
+    settings_.registerBool("bfhiresbass", &bf.hiResBassEnabled, "bandflux",
+        "Hi-res bass via Goertzel", onHiResBassChanged);
+    settings_.registerBool("bfpeakpick", &bf.peakPickEnabled, "bandflux",
+        "Local-max peak picking (SuperFlux-style, Phase 2.6)");
 
     // Bayesian tempo fusion weights (v18+)
     settings_.registerFloat("bayeslambda", &audioCtrl_->bayesLambda, "bayesian",
@@ -1036,14 +1085,18 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->cbssAlpha = 0.9f;
         audioCtrl_->cbssTightness = 5.0f;
         audioCtrl_->beatConfidenceDecay = 0.98f;
-        audioCtrl_->bayesLambda = 0.15f;
+        audioCtrl_->bayesLambda = 0.07f;
         audioCtrl_->bayesPriorCenter = 128.0f;
         audioCtrl_->bayesPriorWeight = 0.0f;
-        audioCtrl_->bayesAcfWeight = 0.3f;
-        audioCtrl_->bayesFtWeight = 2.0f;
+        audioCtrl_->bayesAcfWeight = 0.8f;
+        audioCtrl_->bayesFtWeight = 0.0f;
         audioCtrl_->bayesCombWeight = 0.7f;
-        audioCtrl_->bayesIoiWeight = 2.0f;
+        audioCtrl_->bayesIoiWeight = 0.0f;
         audioCtrl_->cbssThresholdFactor = 1.0f;
+        audioCtrl_->ioiEnabled = false;
+        audioCtrl_->ftEnabled = false;
+        audioCtrl_->beatBoundaryTempo = true;
+        audioCtrl_->unifiedOdf = true;
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
@@ -1063,6 +1116,25 @@ void SerialConsole::restoreDefaults() {
         spectral.compMakeupDb = 6.0f;
         spectral.compAttackTau = 0.001f;
         spectral.compReleaseTau = 2.0f;
+
+        // Restore BandFlux detector defaults
+        BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
+        bf.gamma = 20.0f;
+        bf.bassWeight = 2.0f;
+        bf.midWeight = 1.5f;
+        bf.highWeight = 0.1f;
+        bf.minOnsetDelta = 0.3f;
+        bf.perBandThreshMult = 1.5f;
+        bf.bandDominanceGate = 0.0f;
+        bf.decayRatioThreshold = 0.0f;
+        bf.crestGate = 0.0f;
+        bf.maxBin = 64;
+        bf.confirmFrames = 3;
+        bf.diffFrames = 1;
+        bf.perBandThreshEnabled = false;
+        bf.setHiResBass(false);
+        bf.peakPickEnabled = true;
+        audioCtrl_->getEnsemble().getBassSpectral().enabled = false;
     }
 
     // Restore effect defaults
@@ -1647,24 +1719,21 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         // BandFlux-specific parameters
         const BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
         Serial.println(F("\nBandFlux Parameters:"));
-        Serial.print(F("  gamma: "));
-        Serial.println(bf.getGamma(), 1);
-        Serial.print(F("  bassweight: "));
-        Serial.println(bf.getBassWeight(), 2);
-        Serial.print(F("  midweight: "));
-        Serial.println(bf.getMidWeight(), 2);
-        Serial.print(F("  highweight: "));
-        Serial.println(bf.getHighWeight(), 2);
-        Serial.print(F("  maxbin: "));
-        Serial.println(bf.getMaxBin());
-        Serial.print(F("  onsetdelta: "));
-        Serial.println(bf.getMinOnsetDelta(), 2);
-        Serial.print(F("  perbandthresh: "));
-        Serial.println(bf.getPerBandThresh() ? "on" : "off");
-        Serial.print(F("  perbandmult: "));
-        Serial.println(bf.getPerBandThreshMult(), 2);
-        Serial.print(F("  diffframes: "));
-        Serial.println(bf.getDiffFrames());
+        Serial.print(F("  gamma: ")); Serial.println(bf.gamma, 1);
+        Serial.print(F("  bassweight: ")); Serial.println(bf.bassWeight, 2);
+        Serial.print(F("  midweight: ")); Serial.println(bf.midWeight, 2);
+        Serial.print(F("  highweight: ")); Serial.println(bf.highWeight, 2);
+        Serial.print(F("  maxbin: ")); Serial.println(bf.maxBin);
+        Serial.print(F("  onsetdelta: ")); Serial.println(bf.minOnsetDelta, 3);
+        Serial.print(F("  dominance: ")); Serial.println(bf.bandDominanceGate, 3);
+        Serial.print(F("  decayratio: ")); Serial.println(bf.decayRatioThreshold, 3);
+        Serial.print(F("  crestgate: ")); Serial.println(bf.crestGate, 2);
+        Serial.print(F("  confirmframes: ")); Serial.println(bf.confirmFrames);
+        Serial.print(F("  diffframes: ")); Serial.println(bf.diffFrames);
+        Serial.print(F("  pbmult: ")); Serial.println(bf.perBandThreshMult, 2);
+        Serial.print(F("  perbandthresh: ")); Serial.println(bf.perBandThreshEnabled ? "on" : "off");
+        Serial.print(F("  hiresbass: ")); Serial.println(bf.hiResBassEnabled ? "on" : "off");
+        Serial.print(F("  peakpick: ")); Serial.println(bf.peakPickEnabled ? "on" : "off");
         return true;
     }
 
@@ -2117,285 +2186,11 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     }
 
     // === BAND FLUX PARAMETERS ===
-    // bandflux_gamma: Log compression strength
-    if (strncmp(cmd, "set bandflux_gamma ", 19) == 0) {
-
-        float value = atof(cmd + 19);
-        if (value >= 1.0f && value <= 100.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setGamma(value);
-            Serial.print(F("OK bandflux_gamma="));
-            Serial.println(value, 1);
-        } else {
-            Serial.println(F("ERROR: Valid range 1.0-100.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_gamma") == 0 || strcmp(cmd, "bandflux_gamma") == 0) {
-
-        Serial.print(F("bandflux_gamma="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getGamma(), 1);
-        return true;
-    }
-
-    // bandflux_bassweight: Bass band weight
-    if (strncmp(cmd, "set bandflux_bassweight ", 24) == 0) {
-
-        float value = atof(cmd + 24);
-        if (value >= 0.0f && value <= 5.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setBassWeight(value);
-            Serial.print(F("OK bandflux_bassweight="));
-            Serial.println(value, 2);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.0-5.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_bassweight") == 0 || strcmp(cmd, "bandflux_bassweight") == 0) {
-
-        Serial.print(F("bandflux_bassweight="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBassWeight(), 2);
-        return true;
-    }
-
-    // bandflux_midweight: Mid band weight
-    if (strncmp(cmd, "set bandflux_midweight ", 23) == 0) {
-
-        float value = atof(cmd + 23);
-        if (value >= 0.0f && value <= 5.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setMidWeight(value);
-            Serial.print(F("OK bandflux_midweight="));
-            Serial.println(value, 2);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.0-5.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_midweight") == 0 || strcmp(cmd, "bandflux_midweight") == 0) {
-
-        Serial.print(F("bandflux_midweight="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMidWeight(), 2);
-        return true;
-    }
-
-    // bandflux_highweight: High band weight (suppression)
-    if (strncmp(cmd, "set bandflux_highweight ", 24) == 0) {
-
-        float value = atof(cmd + 24);
-        if (value >= 0.0f && value <= 2.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setHighWeight(value);
-            Serial.print(F("OK bandflux_highweight="));
-            Serial.println(value, 2);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.0-2.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_highweight") == 0 || strcmp(cmd, "bandflux_highweight") == 0) {
-
-        Serial.print(F("bandflux_highweight="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getHighWeight(), 2);
-        return true;
-    }
-
-    // bandflux_maxbin: Max FFT bin to analyze
-    if (strncmp(cmd, "set bandflux_maxbin ", 20) == 0) {
-
-        int value = atoi(cmd + 20);
-        if (value >= 16 && value <= 128) {
-            audioCtrl_->getEnsemble().getBandFlux().setMaxBin(value);
-            Serial.print(F("OK bandflux_maxbin="));
-            Serial.println(value);
-        } else {
-            Serial.println(F("ERROR: Valid range 16-128"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_maxbin") == 0 || strcmp(cmd, "bandflux_maxbin") == 0) {
-
-        Serial.print(F("bandflux_maxbin="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMaxBin());
-        return true;
-    }
-
-    // bandflux_onsetdelta: Min flux jump for onset confirmation (pad rejection)
-    if (strncmp(cmd, "set bandflux_onsetdelta ", 24) == 0) {
-
-        float value = atof(cmd + 24);
-        if (value >= 0.0f && value <= 2.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setMinOnsetDelta(value);
-            Serial.print(F("OK bandflux_onsetdelta="));
-            Serial.println(value, 3);
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_onsetdelta") == 0 || strcmp(cmd, "bandflux_onsetdelta") == 0) {
-
-        Serial.print(F("bandflux_onsetdelta="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getMinOnsetDelta(), 3);
-        return true;
-    }
-
-    // === Experimental BandFlux gates (all disabled by default, runtime-only — NOT persisted to flash) ===
-    // These reset to defaults on power cycle. To persist, add to SettingsRegistry.
-
-    // bandflux_dominance: Band-dominance gate — max(bass,mid,high)/total (0.0 = disabled)
-    if (strncmp(cmd, "set bandflux_dominance ", 23) == 0) {
-
-        float value = atof(cmd + 23);
-        if (value >= 0.0f && value <= 1.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setBandDominanceGate(value);
-            Serial.print(F("OK bandflux_dominance="));
-            Serial.println(value, 3);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.0-1.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_dominance") == 0 || strcmp(cmd, "bandflux_dominance") == 0) {
-
-        Serial.print(F("bandflux_dominance="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getBandDominanceGate(), 3);
-        return true;
-    }
-
-    // bandflux_decayratio: Post-onset decay ratio threshold (0.0 = disabled)
-    // Flux must drop to this fraction of onset flux within N frames to confirm percussive
-    if (strncmp(cmd, "set bandflux_decayratio ", 24) == 0) {
-
-        float value = atof(cmd + 24);
-        if (value >= 0.0f && value <= 1.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setDecayRatio(value);
-            Serial.print(F("OK bandflux_decayratio="));
-            Serial.println(value, 3);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.0-1.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_decayratio") == 0 || strcmp(cmd, "bandflux_decayratio") == 0) {
-
-        Serial.print(F("bandflux_decayratio="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDecayRatio(), 3);
-        return true;
-    }
-
-    // bandflux_decayframes: Frames to wait for decay confirmation (0-6)
-    if (strncmp(cmd, "set bandflux_decayframes ", 25) == 0) {
-
-        int value = atoi(cmd + 25);
-        if (value >= 0 && value <= 6) {
-            audioCtrl_->getEnsemble().getBandFlux().setDecayFrames(value);
-            Serial.print(F("OK bandflux_decayframes="));
-            Serial.println(value);
-        } else {
-            Serial.println(F("ERROR: Valid range 0-6"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_decayframes") == 0 || strcmp(cmd, "bandflux_decayframes") == 0) {
-
-        Serial.print(F("bandflux_decayframes="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDecayFrames());
-        return true;
-    }
-
-    // bandflux_crestgate: Spectral crest factor gate (0.0 = disabled)
-    // Reject tonal onsets (pads/chords) with crest above this threshold
-    if (strncmp(cmd, "set bandflux_crestgate ", 23) == 0) {
-
-        float value = atof(cmd + 23);
-        if (value >= 0.0f && value <= 20.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setCrestGate(value);
-            Serial.print(F("OK bandflux_crestgate="));
-            Serial.println(value, 2);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.0-20.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_crestgate") == 0 || strcmp(cmd, "bandflux_crestgate") == 0) {
-
-        Serial.print(F("bandflux_crestgate="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getCrestGate(), 2);
-        return true;
-    }
-
-    // bandflux_perbandthresh: Per-band independent detection (0=off, 1=on)
-    if (strncmp(cmd, "set bandflux_perbandthresh ", 27) == 0) {
-
-        int value = atoi(cmd + 27);
-        audioCtrl_->getEnsemble().getBandFlux().setPerBandThresh(value != 0);
-        Serial.print(F("OK bandflux_perbandthresh="));
-        Serial.println(value != 0 ? "on" : "off");
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_perbandthresh") == 0 || strcmp(cmd, "bandflux_perbandthresh") == 0) {
-
-        Serial.print(F("bandflux_perbandthresh="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandThresh() ? "on" : "off");
-        return true;
-    }
-
-    // bandflux_perbandmult: Per-band threshold multiplier (0.5-5.0)
-    if (strncmp(cmd, "set bandflux_perbandmult ", 25) == 0) {
-
-        float value = atof(cmd + 25);
-        if (value >= 0.5f && value <= 5.0f) {
-            audioCtrl_->getEnsemble().getBandFlux().setPerBandThreshMult(value);
-            Serial.print(F("OK bandflux_perbandmult="));
-            Serial.println(value, 2);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.5-5.0"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_perbandmult") == 0 || strcmp(cmd, "bandflux_perbandmult") == 0) {
-
-        Serial.print(F("bandflux_perbandmult="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getPerBandThreshMult(), 2);
-        return true;
-    }
-
-    // bandflux_diffframes: Temporal reference depth (1-3, SuperFlux diff_frames)
-    if (strncmp(cmd, "set bandflux_diffframes ", 24) == 0) {
-
-        int value = atoi(cmd + 24);
-        if (value >= 1 && value <= 3) {
-            audioCtrl_->getEnsemble().getBandFlux().setDiffFrames(value);
-            Serial.print(F("OK bandflux_diffframes="));
-            Serial.println(value);
-        } else {
-            Serial.println(F("ERROR: Valid range 1-3"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_diffframes") == 0 || strcmp(cmd, "bandflux_diffframes") == 0) {
-
-        Serial.print(F("bandflux_diffframes="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getDiffFrames());
-        return true;
-    }
-
-    // bandflux_hiresbass: Hi-res bass via Goertzel 512-sample window (0=off, 1=on)
-    if (strncmp(cmd, "set bandflux_hiresbass ", 23) == 0) {
-
-        int value = atoi(cmd + 23);
-        audioCtrl_->getEnsemble().getBandFlux().setHiResBass(value != 0);
-        BassSpectralAnalysis& bass = audioCtrl_->getEnsemble().getBassSpectral();
-        if (value != 0 && !bass.enabled) {
-            bass.reset();  // Clear stale ring buffer and whitening state
-        }
-        bass.enabled = (value != 0);
-        Serial.print(F("OK bandflux_hiresbass="));
-        Serial.println(value != 0 ? "on" : "off");
-        return true;
-    }
-    if (strcmp(cmd, "show bandflux_hiresbass") == 0 || strcmp(cmd, "bandflux_hiresbass") == 0) {
-
-        Serial.print(F("bandflux_hiresbass="));
-        Serial.println(audioCtrl_->getEnsemble().getBandFlux().getHiResBass() ? "on" : "off");
-        return true;
-    }
+    // All BandFlux params migrated to SettingsRegistry (v29):
+    //   bfgamma, bfbassweight, bfmidweight, bfhighweight, bfonsetdelta, bfpbmult,
+    //   bfdominance, bfdecayratio, bfcrestgate, bfmaxbin, bfconfirmframes, bfdiffframes,
+    //   bfperbandthresh, bfhiresbass, bfpeakpick
+    // Use: set bfgamma 20.0, show bandflux, get_settings (MCP)
 
     // ComplexDomain: minbin, maxbin
     if (strncmp(cmd, "set complex_minbin ", 19) == 0) {
