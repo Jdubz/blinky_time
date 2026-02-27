@@ -147,6 +147,11 @@ Any stored scripts using old names will silently fail. No test scripts in blinky
 - [ ] Check memory usage: `show info` should report ~19KB RAM
 - [ ] Monitor for any tempo oscillation (more bins = more choices, could increase jitter if prior is too loose)
 
+**BandFlux persistence (v29):**
+- [ ] Round-trip test: `set bfgamma 30` → `save` → power cycle → `show bandflux` — confirm gamma=30.0
+- [ ] Repeat for a bool (`set bfhiresbass 1`) and uint8 (`set bfmaxbin 48`) to cover all storage types
+- [ ] `defaults` → `show bandflux` — confirm all 15 params reset to factory values
+
 ## Next Priorities
 
 > **Design philosophy:** See [VISUALIZER_GOALS.md](../docs/VISUALIZER_GOALS.md) — visual quality over metric perfection. Low Beat F1 on ambient/trap tracks is acceptable (organic mode fallback is correct).
