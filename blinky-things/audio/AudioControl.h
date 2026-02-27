@@ -12,7 +12,7 @@
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 24 bytes (5 floats + 1 bool + 3 bytes padding)
+ * Memory: 20 bytes (5 floats)
  */
 struct AudioControl {
     // === ENERGY ===
@@ -47,11 +47,6 @@ struct AudioControl {
     // Dance music: 2-6/s, ambient: 0-1/s, complex: 4-10/s
     // Use for: Content classification, organic/music mode blending
     float onsetDensity = 0.0f;
-
-    // === LOUD MODE ===
-    // True when hardware gain is at minimum and signal is saturated
-    // Generators use this to enable adaptive particle budgets and non-linear mappings
-    bool loudMode = false;
 
     // === CONVENIENCE METHODS ===
 

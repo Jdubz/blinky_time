@@ -79,7 +79,7 @@ struct DetectorConfig {
  */
 struct EnsembleOutput {
     float transientStrength;   // 0.0-1.0: Weighted combination of detector strengths
-    float ensembleConfidence;  // 0.0-1.2: Agreement-scaled confidence
+    float ensembleConfidence;  // 0.0-1.0: Agreement-scaled confidence
     uint8_t detectorAgreement; // Count of detectors that fired (0-7)
     uint8_t dominantDetector;  // Index of detector with highest contribution
 

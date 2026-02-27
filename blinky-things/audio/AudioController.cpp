@@ -211,10 +211,7 @@ const AudioControl& AudioController::update(float dt) {
 
     // 4. Get onset strength for rhythm analysis
     //    This is INDEPENDENT of transient detection - analyzes energy patterns
-    //    Two methods available:
-    //    - Spectral flux: captures energy CHANGES (better for beat timing)
-    //    - Multi-band RMS: captures absolute levels (legacy behavior)
-    //    Controlled by ossFluxWeight parameter (1.0 = pure flux, 0.0 = pure RMS)
+    //    Uses band-weighted spectral flux (captures energy CHANGES, good for beat timing)
     float onsetStrength = 0.0f;
 
     // Get spectral data from ensemble
@@ -226,13 +223,7 @@ const AudioControl& AudioController::update(float dt) {
 
         // Compute spectral flux with per-band outputs for adaptive weighting
         float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
-        float fluxOss = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
-        float rmsOss = computeMultiBandRms(magnitudes, numBins);
-
-        // Blend based on ossFluxWeight
-        // ossFluxWeight = 1.0: pure spectral flux (recommended)
-        // ossFluxWeight = 0.0: pure RMS (legacy behavior)
-        onsetStrength = ossFluxWeight * fluxOss + (1.0f - ossFluxWeight) * rmsOss;
+        onsetStrength = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
 
         // Store per-band samples for adaptive weight calculation
         if (adaptiveBandWeightEnabled) {
@@ -528,6 +519,13 @@ float AudioController::smoothOnsetStrength(float raw) {
     int width = odfSmoothWidth;
     if (width < 3) width = 3;
     if (width > ODF_SMOOTH_MAX) width = ODF_SMOOTH_MAX;
+
+    // Reset buffer if width changed (prevents stale data from old width)
+    if (odfSmoothIdx_ >= width) {
+        for (int i = 0; i < ODF_SMOOTH_MAX; i++) odfSmoothBuffer_[i] = raw;
+        odfSmoothIdx_ = 0;
+    }
+
     odfSmoothBuffer_[odfSmoothIdx_] = raw;
     odfSmoothIdx_ = (odfSmoothIdx_ + 1) % width;
     float sum = 0.0f;
@@ -1461,12 +1459,6 @@ void AudioController::predictNextBeat(uint32_t nowMs) {
 // Onset Strength Computation Methods
 // ============================================================================
 
-float AudioController::computeSpectralFlux(const float* magnitudes, int numBins) {
-    // Wrapper for backward compatibility - discards per-band outputs
-    float bassFlux, midFlux, highFlux;
-    return computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
-}
-
 float AudioController::computeSpectralFluxBands(const float* magnitudes, int numBins,
                                                  float& outBassFlux, float& outMidFlux, float& outHighFlux) {
     // Band-weighted half-wave rectified spectral flux with SuperFlux-style vibrato suppression
@@ -1573,42 +1565,6 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
     float compressed = logf(1.0f + flux * 10.0f) * invLog11;
 
     return compressed;
-}
-
-float AudioController::computeMultiBandRms(const float* magnitudes, int numBins) {
-    // Legacy multi-band RMS energy calculation
-    // Kept for comparison and fallback
-    //
-    // Sample rate: 16kHz, FFT size: 256, bin resolution: 62.5 Hz/bin
-    // Bass: bins 1-10 (62.5Hz-625Hz)
-    // Mid: bins 11-40 (687.5Hz-2.5kHz)
-    // High: bins 41-127 (2.56kHz-7.94kHz)
-
-    float bassEnergy = 0.0f;
-    float midEnergy = 0.0f;
-    float highEnergy = 0.0f;
-    int bassBinCount = 0, midBinCount = 0, highBinCount = 0;
-
-    for (int i = 1; i < 11 && i < numBins; i++) {
-        bassEnergy += magnitudes[i] * magnitudes[i];
-        bassBinCount++;
-    }
-    for (int i = 11; i < 41 && i < numBins; i++) {
-        midEnergy += magnitudes[i] * magnitudes[i];
-        midBinCount++;
-    }
-    for (int i = 41; i < numBins; i++) {
-        highEnergy += magnitudes[i] * magnitudes[i];
-        highBinCount++;
-    }
-
-    // RMS (root mean square) - use actual bin count for accurate normalization
-    bassEnergy = bassBinCount > 0 ? sqrtf(bassEnergy / static_cast<float>(bassBinCount)) : 0.0f;
-    midEnergy = midBinCount > 0 ? sqrtf(midEnergy / static_cast<float>(midBinCount)) : 0.0f;
-    highEnergy = highBinCount > 0 ? sqrtf(highEnergy / static_cast<float>(highBinCount)) : 0.0f;
-
-    // Weighted sum: emphasize bass and mid for rhythm (where most beats occur)
-    return 0.5f * bassEnergy + 0.3f * midEnergy + 0.2f * highEnergy;
 }
 
 // ============================================================================
@@ -1942,9 +1898,13 @@ void CombFilterBank::init(float frameRate) {
 }
 
 void CombFilterBank::reset() {
-    // Clear delay line
+    // Clear per-filter output delay lines
+    for (int i = 0; i < NUM_FILTERS; i++) {
+        for (int j = 0; j < MAX_LAG; j++) {
+            resonatorDelay_[i][j] = 0.0f;
+        }
+    }
     for (int i = 0; i < MAX_LAG; i++) {
-        delayLine_[i] = 0.0f;
         resonatorHistory_[i] = 0.0f;
     }
     writeIdx_ = 0;
@@ -1969,30 +1929,31 @@ void CombFilterBank::process(float input) {
         init(60.0f);  // Default to 60 Hz
     }
 
-    // 1. Write input to shared delay line
-    delayLine_[writeIdx_] = input;
-
-    // 2. Update all resonators using proper Scheirer (1998) equation:
+    // 1. Update all resonators using Scheirer (1998) IIR comb filter:
     //    y[n] = (1-α)·x[n] + α·y[n-L]
-    //    where α = feedbackGain
+    //    Each filter reads its OWN delayed output (not the shared input).
     float oneMinusAlpha = 1.0f - feedbackGain;
 
     for (int i = 0; i < NUM_FILTERS; i++) {
         int lag = filterLags_[i];
 
-        // Read delayed output (y[n-L])
+        // Read this filter's own delayed output: y[n-L]
         int readIdx = (writeIdx_ - lag + MAX_LAG) % MAX_LAG;
-        float delayed = delayLine_[readIdx];
+        float delayedOutput = resonatorDelay_[i][readIdx];
 
-        // Proper comb filter equation
-        resonatorOutput_[i] = oneMinusAlpha * input + feedbackGain * delayed;
+        // IIR comb filter equation
+        float y = oneMinusAlpha * input + feedbackGain * delayedOutput;
+        resonatorOutput_[i] = y;
+
+        // Store output in this filter's delay line
+        resonatorDelay_[i][writeIdx_] = y;
 
         // Smooth energy tracking (exponential moving average)
-        float absOut = resonatorOutput_[i] > 0.0f ? resonatorOutput_[i] : -resonatorOutput_[i];
+        float absOut = y > 0.0f ? y : -y;
         resonatorEnergy_[i] = 0.95f * resonatorEnergy_[i] + 0.05f * absOut;
     }
 
-    // 3. Advance delay line write index
+    // 2. Advance shared write index
     writeIdx_ = (writeIdx_ + 1) % MAX_LAG;
 
     // 4. Find peak energy (NO tempo prior - this provides independent validation)
