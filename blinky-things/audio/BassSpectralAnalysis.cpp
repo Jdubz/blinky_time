@@ -90,7 +90,8 @@ void BassSpectralAnalysis::process() {
 
     // Step 1: Extract 512 samples from ring buffer into windowed float buffer
     // Read oldest-first: writeIndex_ points to the oldest sample in the ring
-    // Static to avoid 2KB stack allocation on every call (embedded target)
+    // Static to avoid 2KB stack allocation on every call (embedded target).
+    // WARNING: Only one BassSpectralAnalysis instance may call process() — see header.
     static float windowed[BassConstants::WINDOW_SIZE];
 
     for (int i = 0; i < BassConstants::WINDOW_SIZE; i++) {

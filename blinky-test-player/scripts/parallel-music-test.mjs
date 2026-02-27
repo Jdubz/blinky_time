@@ -21,6 +21,13 @@ if (!existsSync(mcpDist)) {
 const { DeviceSession } = await import(mcpDist);
 const BEAT_TOLERANCE_SEC = 0.07;
 
+// Check ffplay is available
+import { execSync } from 'child_process';
+try { execSync('which ffplay', { stdio: 'ignore' }); } catch {
+  console.error('ffplay not found. Install ffmpeg: sudo apt install ffmpeg');
+  process.exit(1);
+}
+
 const args = process.argv.slice(2);
 if (args.length < 3) {
   console.error('Usage: node parallel-music-test.mjs <audio_file> <ground_truth> <port1> [port2] ...');
@@ -106,7 +113,7 @@ async function main() {
 
     for (const s of sessions) {
       const testData = s.session.stopTestRecording();
-      const timingOffsetMs = audioStartTime - testData.startTime;
+      const timingOffsetMs = Math.max(0, audioStartTime - testData.startTime);
       const audioDurationSec = (testData.duration - timingOffsetMs) / 1000;
       const windowedRefBeats = refBeats.filter(t => t <= audioDurationSec);
 

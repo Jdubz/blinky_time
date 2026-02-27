@@ -106,7 +106,10 @@ AudioFrame EnsembleDetector::buildFrame(float level, float rawLevel,
     frame.numBins = spectral_.getNumBins();
     frame.numMelBands = spectral_.getNumMelBands();
 
-    // High-resolution bass data (Goertzel 512-sample window)
+    // High-resolution bass data (Goertzel 512-sample window).
+    // Uses most recent completed frame — may be from a previous update cycle
+    // when new samples haven't accumulated to HOP_SIZE yet. This is expected
+    // given the 50% overlap (256-sample hop vs 128-sample FFT frames).
     if (bassSpectral_.enabled && bassSpectral_.hasPreviousFrame()) {
         frame.bassMagnitudes = bassSpectral_.getMagnitudes();
         frame.numBassBins = bassSpectral_.getNumBins();

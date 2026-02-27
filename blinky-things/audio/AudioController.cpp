@@ -441,6 +441,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     int harmonicCorrelationSize = harmonicMaxLag - minLag + 1;
     if (harmonicCorrelationSize > 256) harmonicCorrelationSize = 256;
     int correlationSize = maxLag - minLag + 1;
+    // Clamp fundamental range to harmonic range (fires when OSS buffer < one full period)
     if (correlationSize > harmonicCorrelationSize) correlationSize = harmonicCorrelationSize;
 
     // FIX: Clear the portion we'll use to prevent stale data (full harmonic range)

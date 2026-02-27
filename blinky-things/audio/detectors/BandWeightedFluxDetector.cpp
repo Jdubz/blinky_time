@@ -78,7 +78,9 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         logMag[k] = fastLog1p(gamma_ * magnitudes[k]);
     }
 
-    // Hi-res bass: log-compress Goertzel magnitudes (when available)
+    // Hi-res bass: log-compress Goertzel magnitudes (when available).
+    // On the first frame with bass data, bassHistoryCount_==0 so useHiResBass is false
+    // (no reference frame to diff against). We seed history below and use it next frame.
     bool useHiResBass = hiResBassEnabled_ && frame.bassSpectralValid && bassHistoryCount_ > 0;
     float bassLogMag[MAX_BASS_BINS] = {};
     if (hiResBassEnabled_ && frame.bassSpectralValid) {

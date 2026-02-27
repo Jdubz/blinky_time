@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MUSIC_DIR="$SCRIPT_DIR/../music/edm"
-PORTS="/dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3"
+PORTS="${BLINKY_PORTS:-/dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 /dev/ttyACM3}"
 
 TRACKS=(
   trance-party

@@ -52,11 +52,11 @@ PDM Microphone (16kHz, mono)
    ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
    ├── Autocorrelation (every 250ms) with inverse-lag normalization
    ├── Bayesian Tempo Fusion (20 bins, 60-180 BPM)
-   │   ├── ACF observation (weight 0.3)
+   │   ├── ACF observation (weight 0.8, harmonic-enhanced v25)
    │   ├── Fourier tempogram (weight 2.0, re-enabled v24)
    │   ├── Comb filter bank (weight 0.7, primary)
    │   └── IOI histogram (weight 2.0, re-enabled v24)
-   ├── Per-sample ACF harmonic disambiguation (2x + 1.5x checks)
+   ├── Per-sample ACF harmonic disambiguation (2x + 1.5x + 0.5x checks)
    ├── CBSS beat tracking (adaptive threshold = 1.0 × running mean)
    ├── Counter-based beat detection (deterministic phase)
    └── ODF pre-smoothing (5-point causal moving average)
@@ -70,7 +70,7 @@ PDM Microphone (16kHz, mono)
 
 1. **BandFlux Solo**: Single detector outperforms multi-detector ensembles (+14% avg Beat F1). Ensemble fusion dilutes BandFlux's cleaner signal.
 2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening makes detectors invariant to sustained spectral content. Enables FT/IOI re-activation.
-3. **Bayesian tempo fusion**: Unified posterior estimation over 20 tempo bins. Comb filter bank is the primary observation; ACF at low weight (0.3) prevents sub-harmonic lock.
+3. **Bayesian tempo fusion**: Unified posterior estimation over 20 tempo bins. Comb filter bank is the primary observation; harmonic-enhanced ACF (weight 0.8, v25) with 4-harmonic comb and Rayleigh prior prevents sub-harmonic lock.
 4. **CBSS beat tracking**: Cumulative Beat Strength Signal with adaptive threshold prevents phantom beats during silence/breakdowns.
 5. **Deterministic phase**: Phase derived from counter: `(now - lastBeat) / period` — no drift or jitter.
 6. **5-parameter output**: Generators receive `AudioControl` struct with energy, pulse, phase, rhythmStrength, onsetDensity.
@@ -229,11 +229,11 @@ monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `bayeslambda` | 0.15 | 0.01-1.0 | Transition tightness (lower = more rigid tempo) |
+| `bayeslambda` | 0.07 | 0.01-1.0 | Transition tightness (lower = more rigid tempo, tightened v25) |
 | `bayesprior` | 128.0 | 60-200 | Static prior center BPM |
 | `bayespriorw` | 0.0 | 0.0-3.0 | Ongoing static prior strength (0 = off, default) |
 | `priorwidth` | 50.0 | 10-80 | Prior width (sigma BPM) |
-| `bayesacf` | 0.3 | 0.0-5.0 | ACF observation weight (low prevents sub-harmonic lock) |
+| `bayesacf` | 0.8 | 0.0-5.0 | ACF observation weight (raised in v25 — harmonic comb makes ACF reliable) |
 | `bayesft` | 2.0 | 0.0-5.0 | Fourier tempogram weight (re-enabled v24) |
 | `bayescomb` | 0.7 | 0.0-5.0 | Comb filter bank weight (primary observation) |
 | `bayesioi` | 2.0 | 0.0-5.0 | IOI histogram weight (re-enabled v24) |
@@ -360,15 +360,15 @@ ensminlevel = 0.0      # Noise gate (disabled)
 5. Onset delta filter: reject if `fluxDelta < 0.3` (pad/echo rejection)
 6. Hi-hat rejection gate (high-only flux suppression)
 
-### Bayesian Tempo Fusion Defaults (v24)
+### Bayesian Tempo Fusion Defaults (v25)
 
 | Parameter | Command | Default | Role |
 |-----------|---------|---------|------|
 | Comb weight | `bayescomb` | 0.7 | **Primary** observation — Scheirer-style resonators |
 | FT weight | `bayesft` | 2.0 | Re-enabled v24 (spectral processing fixed normalization) |
 | IOI weight | `bayesioi` | 2.0 | Re-enabled v24 (spectral whitening stabilized onsets) |
-| ACF weight | `bayesacf` | 0.3 | Low weight prevents sub-harmonic lock |
-| Lambda | `bayeslambda` | 0.15 | Transition tightness |
+| ACF weight | `bayesacf` | 0.8 | Harmonic-enhanced ACF (4-harmonic comb + Rayleigh prior, v25) |
+| Lambda | `bayeslambda` | 0.07 | Tighter transitions prevent octave jumps (v25) |
 | Prior weight | `bayespriorw` | 0.0 | Static prior OFF (hurts off-center tempos) |
 | CBSS threshold | `cbssthresh` | 1.0 | Prevents phantom beats during silence |
 
@@ -410,15 +410,26 @@ ensminlevel = 0.0      # Noise gate (disabled)
 
 ### Bayesian v22 Combined Validation (Feb 25, 2026) — 4-device validated
 
-Defaults: bayesacf=0.3, bayescomb=0.7, bayesft=0, bayesioi=0, bayeslambda=0.15, cbssthresh=1.0
+Defaults (v22): bayesacf=0.3, bayescomb=0.7, bayesft=0, bayesioi=0, bayeslambda=0.15, cbssthresh=1.0
 
 **Average Beat F1: 0.519** (+10% vs pre-Bayesian 0.472)
 
 ### Bayesian v24 (Feb 26, 2026) — FT/IOI re-enabled after spectral processing
 
-Defaults: bayesacf=0.3, bayescomb=0.7, bayesft=2.0, bayesioi=2.0, bayeslambda=0.15, cbssthresh=1.0
+Defaults (v24): bayesacf=0.3, bayescomb=0.7, bayesft=2.0, bayesioi=2.0, bayeslambda=0.15, cbssthresh=1.0
 
 FT and IOI re-enabled at weight 2.0 — spectral compressor + whitening (v23) fixed normalization issues that made them unreliable in v22.
+
+### Bayesian v25 (Feb 27, 2026) — BTrack-style harmonic comb ACF + Rayleigh prior
+
+Defaults (v25): bayesacf=0.8, bayescomb=0.7, bayesft=2.0, bayesioi=2.0, bayeslambda=0.07, cbssthresh=1.0
+
+Key changes from v24:
+- **Harmonic comb ACF**: 4-harmonic summation with spread windows replaces single-point ACF observation. Fundamental gets 4x advantage over sub-harmonics.
+- **Rayleigh tempo prior**: Perceptual weighting peaked at ~120 BPM, applied within ACF observation.
+- **ACF weight raised**: 0.3→0.8 — harmonic enhancement makes ACF a reliable signal.
+- **Lambda tightened**: 0.15→0.07 — prevents octave jumps accumulating over hundreds of frames.
+- **Bidirectional disambiguation**: Added 0.5x downward check (was only 2x/1.5x upward).
 
 ---
 
@@ -536,9 +547,9 @@ Visual inspection of fire effect with beat-synced music:
 
 ### BPM Detected at Half-Time (e.g., 170 BPM → 85 BPM)
 
-1. This is a known limitation — autocorrelation harmonics are stronger at sub-harmonics
-2. Per-sample ACF harmonic disambiguation handles most cases (2x and 1.5x checks)
-3. Increase `bayesacf` weight slightly (try 0.5) — provides more periodicity signal
+1. v25 added BTrack-style harmonic comb ACF + Rayleigh prior to prevent this
+2. Per-sample ACF harmonic disambiguation handles most cases (2x, 1.5x, and 0.5x checks)
+3. Tighter lambda (0.07) makes octave jumps near-impossible once locked
 4. For DnB (170+ BPM): Half-time detection is expected and visually acceptable
 5. **DO NOT** enable ongoing static prior (`bayespriorw`) as a fix — it hurts tracks far from the prior center
 
