@@ -222,7 +222,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.compAttackTau = 0.001f;      // 1ms attack
     data_.music.compReleaseTau = 2.0f;       // 2s release
 
-    // BandFlux detector defaults (v28+)
+    // BandFlux detector defaults (v29+)
     data_.bandflux.gamma = 20.0f;
     data_.bandflux.bassWeight = 2.0f;
     data_.bandflux.midWeight = 1.5f;
@@ -507,7 +507,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.compReleaseTau, 0.01f, 10.0f, F("compReleaseTau"));
     // whitenEnabled, compressorEnabled are bools — no range validation needed
 
-    // BandFlux detector validation (v28+)
+    // BandFlux detector validation (v29+)
     validateFloat(data_.bandflux.gamma, 1.0f, 100.0f, F("bfGamma"));
     validateFloat(data_.bandflux.bassWeight, 0.0f, 5.0f, F("bfBassWeight"));
     validateFloat(data_.bandflux.midWeight, 0.0f, 5.0f, F("bfMidWeight"));
@@ -696,7 +696,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         spectral.compAttackTau = data_.music.compAttackTau;
         spectral.compReleaseTau = data_.music.compReleaseTau;
 
-        // BandFlux detector parameters (v28+)
+        // BandFlux detector parameters (v29+)
         BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();
         bf.gamma = data_.bandflux.gamma;
         bf.bassWeight = data_.bandflux.bassWeight;
@@ -873,7 +873,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.compAttackTau = spectral.compAttackTau;
         data_.music.compReleaseTau = spectral.compReleaseTau;
 
-        // BandFlux detector parameters (v28+)
+        // BandFlux detector parameters (v29+)
         const BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();
         data_.bandflux.gamma = bf.gamma;
         data_.bandflux.bassWeight = bf.bassWeight;

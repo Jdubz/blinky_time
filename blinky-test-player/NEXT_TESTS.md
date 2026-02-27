@@ -3,7 +3,7 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** February 26, 2026
+**Last Updated:** February 27, 2026
 
 ## Current Config
 
@@ -73,14 +73,15 @@
 
 0.3 chosen as default: best overall average, preserves all medium-strength kicks, fixes synth-stabs.
 
-## v28 Changes — Needs Validation
+## v29 Changes — Needs Validation
 
-SETTINGS_VERSION 28 bundles 5 improvements. Flash all devices, run 18-track validation,
+SETTINGS_VERSION 29 bundles 5 beat tracking improvements + BandFlux param persistence.
+Flash all devices, run 18-track validation,
 compare avg Beat F1, BPM accuracy, and per-track results against v27 baseline.
 
 ### Parameter Changes
 
-| Parameter | Old (v27) | New (v28) | Serial cmd | Rationale |
+| Parameter | Old (v27) | New (v29) | Serial cmd | Rationale |
 |-----------|:---------:|:---------:|:----------:|-----------|
 | bayesFtWeight | 2.0 | **0.0** | `bayesft` | No ref system uses FT for real-time beat tracking; near-flat observation vectors |
 | bayesIoiWeight | 2.0 | **0.0** | `bayesioi` | O(n²), unnormalized counts dominate multiplicative posterior |

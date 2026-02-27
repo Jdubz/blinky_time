@@ -987,6 +987,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
 void AudioController::computeFTObservations(float* ftObs, int numBins) {
     // Compute Goertzel magnitude at each of the 40 tempo bin lags
+    // Goertzel is O(N) per bin vs O(N log N) for full FFT — faster for sparse evaluation
 
     // Compute OSS mean for detrending (removes DC from DFT)
     float mean = 0.0f;

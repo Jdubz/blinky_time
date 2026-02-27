@@ -163,24 +163,25 @@ monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
 | HFC | 0.20 | 4.0 | no | Hi-hat detector, creates busy visuals |
 | Novelty | 0.12 | 2.5 | no | Near-zero detections on real music |
 
-### BandFlux Parameters (via `set`/`show` commands, not persisted to flash)
+### BandFlux Parameters (via `set`/`show` commands, persisted to flash since v29)
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `bandflux_gamma` | 20.0 | 1-100 | Log compression strength: `log(1 + gamma * mag)` |
-| `bandflux_bassweight` | 2.0 | 0-5 | Bass band flux weight (promotes kick detection) |
-| `bandflux_midweight` | 1.5 | 0-5 | Mid band flux weight |
-| `bandflux_highweight` | 0.1 | 0-2 | High band flux weight (low = hi-hat rejection) |
-| `bandflux_maxbin` | 64 | 16-128 | Max FFT bin to analyze |
-| `bandflux_onsetdelta` | 0.3 | 0-2 | Min flux jump from previous frame (pad/echo rejection) |
-| `bandflux_hiresbass` | off | bool | Enable Goertzel-12 hi-res bass analysis |
-| `bandflux_diffframes` | 1 | 1-3 | Temporal reference depth (keep at 1) |
-| `bandflux_perbandthresh` | off | bool | Per-band independent thresholds (keep off) |
-| `bandflux_perbandmult` | 1.5 | 0.5-5 | Per-band threshold multiplier |
-| `bandflux_dominance` | 0.0 | 0-1 | Band-dominance gate (disabled, experimental) |
-| `bandflux_decayratio` | 0.0 | 0-1 | Post-onset decay gate (disabled, experimental) |
-| `bandflux_decayframes` | 3 | 0-6 | Decay confirmation frames |
-| `bandflux_crestgate` | 0.0 | 0-20 | Spectral crest factor gate (disabled, experimental) |
+| `bfgamma` | 20.0 | 1-100 | Log compression strength: `log(1 + gamma * mag)` |
+| `bfbassweight` | 2.0 | 0-5 | Bass band flux weight (promotes kick detection) |
+| `bfmidweight` | 1.5 | 0-5 | Mid band flux weight |
+| `bfhighweight` | 0.1 | 0-2 | High band flux weight (low = hi-hat rejection) |
+| `bfmaxbin` | 64 | 16-128 | Max FFT bin to analyze |
+| `bfonsetdelta` | 0.3 | 0-2 | Min flux jump from previous frame (pad/echo rejection) |
+| `bfhiresbass` | off | bool | Enable Goertzel-12 hi-res bass analysis |
+| `bfdiffframes` | 1 | 1-3 | Temporal reference depth (keep at 1) |
+| `bfperbandthresh` | off | bool | Per-band independent thresholds (keep off) |
+| `bfpbmult` | 1.5 | 0.5-5 | Per-band threshold multiplier |
+| `bfdominance` | 0.0 | 0-1 | Band-dominance gate (disabled, experimental) |
+| `bfdecayratio` | 0.0 | 0-1 | Post-onset decay gate (disabled, experimental) |
+| `bfconfirmframes` | 3 | 0-6 | Decay confirmation frames |
+| `bfcrestgate` | 0.0 | 0-20 | Spectral crest factor gate (disabled, experimental) |
+| `bfpeakpick` | on | bool | Local-max peak picking (SuperFlux-style, Phase 2.6) |
 
 ### Category: `rhythm` (21 parameters) - Beat Tracking (AudioController)
 
@@ -485,9 +486,9 @@ npm run tuner -- multi-sweep \
 ### Phase 3: Transient Detection Tuning (if needed)
 
 **BandFlux parameters to test:**
-1. `bandflux_onsetdelta` — Pad rejection vs kick sensitivity (0.2, 0.3, 0.5)
-2. `bandflux_bassweight` — Kick detection weight (1.5, 2.0, 3.0)
-3. `bandflux_gamma` — Log compression (10, 20, 30)
+1. `bfonsetdelta` — Pad rejection vs kick sensitivity (0.2, 0.3, 0.5)
+2. `bfbassweight` — Kick detection weight (1.5, 2.0, 3.0)
+3. `bfgamma` — Log compression (10, 20, 30)
 
 **Use synthetic patterns** for transient tuning:
 ```
@@ -524,15 +525,15 @@ Visual inspection of fire effect with beat-synced music:
 ### Too Many False Positives
 
 1. Raise BandFlux threshold: `set detector_thresh bandflux 0.7`
-2. Increase onset delta: `set bandflux_onsetdelta 0.5` (rejects more pads/echoes)
+2. Increase onset delta: `set bfonsetdelta 0.5` (rejects more pads/echoes)
 3. Raise `ensminconf` (try 0.50-0.60)
 4. Increase `enscooldown` to reduce rapid triggers (try 300-400ms)
-5. Check if experimental gates help: `set bandflux_crestgate 5.0`
+5. Check if experimental gates help: `set bfcrestgate 5.0`
 
 ### Missing Transients
 
 1. Lower BandFlux threshold: `set detector_thresh bandflux 0.3`
-2. Decrease onset delta: `set bandflux_onsetdelta 0.1` (lets more through)
+2. Decrease onset delta: `set bfonsetdelta 0.1` (lets more through)
 3. Lower `ensminconf` (try 0.3)
 4. Ensure `enscooldown` isn't too long for fast patterns
 5. Check AGC is tracking properly: `show gain`
@@ -571,7 +572,7 @@ Visual inspection of fire effect with beat-synced music:
 ```bash
 show beat          # CBSS beat tracker state (BPM, phase, confidence)
 show detectors     # All detector statuses, weights, thresholds
-show bandflux_*    # BandFlux-specific parameters
+show bandflux      # BandFlux-specific parameters
 json beat          # Beat tracker state as JSON
 json rhythm        # Full rhythm tracking state as JSON
 json settings      # All settings as JSON

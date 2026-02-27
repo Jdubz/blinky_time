@@ -97,9 +97,9 @@ Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
 2. Onset delta filter (minOnsetDelta=0.3, rejects slow-rising signals)
 
 **Available but disabled gates** (for future experimentation):
-- `bandflux_dominance` — band-dominance gate (0.0=disabled)
-- `bandflux_decayratio` + `bandflux_decayframes` — post-onset decay gate (0.0=disabled)
-- `bandflux_crestgate` — spectral crest factor gate (0.0=disabled)
+- `bfdominance` — band-dominance gate (0.0=disabled)
+- `bfdecayratio` + `bfconfirmframes` — post-onset decay gate (0.0=disabled)
+- `bfcrestgate` — spectral crest factor gate (0.0=disabled)
 
 ### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — Validated (SETTINGS_VERSION 25)
 
@@ -362,7 +362,7 @@ Our lower scores vs literature benchmarks are primarily due to: (1) room acousti
 
 #### 7a. Per-Band Independent Thresholds — TESTED, KEEP OFF (Feb 24, 2026)
 
-Independent adaptive thresholds per band (bass/mid/high). Detection fires if ANY band exceeds its own threshold × multiplier. **Disabled by default** (`bandflux_perbandthresh=0`).
+Independent adaptive thresholds per band (bass/mid/high). Detection fires if ANY band exceeds its own threshold × multiplier. **Disabled by default** (`bfperbandthresh=0`).
 
 - **Full 9-track regression:** avg F1 0.421→0.354 (**-0.067**) — major regressions on quiet/sparse tracks
 - **Verdict:** Keep disabled. Literature supports this finding — splitting detection by band without per-band calibration increases false positives.
@@ -498,8 +498,8 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 | **Bayesian weights** | bayesacf=0.8, bayesft=2.0, bayescomb=0.7, bayesioi=2.0, bayeslambda=0.07, bayespriorw=0 | **v25** — harmonic comb ACF + Rayleigh prior, tighter lambda. Needs 18-track validation |
 | **CBSS adaptive threshold** | cbssthresh=1.0 | **Validated** (SETTINGS_VERSION 22) — prevents phantom beats |
 | ODF Mean Subtraction | odfmeansub (toggle) | **Essential** — keep ON. OFF destroys BPM (Feb 24) |
-| Per-band thresholds | bandflux_perbandthresh, perbandmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
-| Multi-frame diffframes | bandflux_diffframes | **Tested, keep at 1** — diffframes=2 too many transients (Feb 24) |
+| Per-band thresholds | bfperbandthresh, bfpbmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
+| Multi-frame diffframes | bfdiffframes | **Tested, keep at 1** — diffframes=2 too many transients (Feb 24) |
 | BandFlux core params | gamma, bassWeight, threshold, onsetDelta | **Calibrated** (Feb 21) |
 
 ## State-of-the-Art Gap Analysis (Feb 27, 2026)

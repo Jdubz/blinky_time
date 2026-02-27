@@ -295,6 +295,7 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
             // else: flux is still rising on a non-detection frame (e.g., cooldown).
             // Hold the pending — it was the detection peak, the rising flux is just
             // the onset tail during cooldown. Will be emitted when flux finally drops.
+            // Bounded by max cooldown (150ms ≈ 9 frames at 60Hz), so starvation can't occur.
             else {
                 // Update ppPrevFlux_ to track the rising flux so we confirm
                 // local max relative to the true peak of the tail

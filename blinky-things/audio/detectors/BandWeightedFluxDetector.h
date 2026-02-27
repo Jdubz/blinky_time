@@ -55,9 +55,9 @@ public:
     bool hiResBassEnabled = false;       // Hi-res bass via Goertzel (runtime toggle)
     bool peakPickEnabled = true;         // Local-max peak picking (Phase 2.6, SuperFlux-style)
 
-    // === LEGACY GETTER/SETTER API ===
-    // Kept for backward compatibility with existing serial console manual handlers.
-    // New code should access the public members directly.
+    // === GETTER/SETTER API ===
+    // Convenience wrappers. Some have side effects (setHiResBass resets bass history)
+    // or bounds checks (setDecayFrames, setDiffFrames). New code may access public members directly.
     void setGamma(float g) { gamma = g; }
     float getGamma() const { return gamma; }
     void setBassWeight(float w) { bassWeight = w; }

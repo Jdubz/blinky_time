@@ -304,8 +304,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~16 KB total (baseline 10 KB + CBSS/OSS buffers ~3 KB + comb filters ~5 KB)
-- Flash: ~222 KB firmware, ~30 KB settings storage
+- RAM: ~20 KB total (baseline 10 KB + CBSS/OSS buffers ~3 KB + comb filters ~10 KB)
+- Flash: ~266 KB firmware, ~30 KB settings storage
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**

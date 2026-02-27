@@ -1113,11 +1113,11 @@ set detector_enable bandflux 1
 
 BandFlux-specific parameters (all at design defaults):
 ```
-bandflux_gamma = 20.0      (log compression strength)
-bandflux_bassweight = 2.0  (bass band weight, bins 1-6)
-bandflux_midweight = 1.5   (mid band weight, bins 7-32)
-bandflux_highweight = 0.1  (high band weight, bins 33-63)
-bandflux_maxbin = 64       (max FFT bin to analyze)
+bfgamma = 20.0      (log compression strength)
+bfbassweight = 2.0  (bass band weight, bins 1-6)
+bfmidweight = 1.5   (mid band weight, bins 7-32)
+bfhighweight = 0.1  (high band weight, bins 33-63)
+bfmaxbin = 64       (max FFT bin to analyze)
 bandflux threshold = 0.5   (set via: set detector_thresh bandflux 0.5)
 ```
 

@@ -276,7 +276,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",
         "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
 
-    // BandFlux detector parameters (v28+)
+    // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
     settings_.registerFloat("bfgamma", &bf.gamma, "bandflux",
         "Log compression strength", 1.0f, 100.0f);
@@ -2182,7 +2182,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     }
 
     // === BAND FLUX PARAMETERS ===
-    // All BandFlux params migrated to SettingsRegistry (v28):
+    // All BandFlux params migrated to SettingsRegistry (v29):
     //   bfgamma, bfbassweight, bfmidweight, bfhighweight, bfonsetdelta, bfpbmult,
     //   bfdominance, bfdecayratio, bfcrestgate, bfmaxbin, bfconfirmframes, bfdiffframes,
     //   bfperbandthresh, bfhiresbass, bfpeakpick
