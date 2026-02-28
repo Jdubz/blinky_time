@@ -507,19 +507,19 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
-    // Apply inverse-lag-squared normalization to ACF (strong sub-harmonic penalty).
+    // Apply inverse-lag normalization to ACF (sub-harmonic penalty).
     // For a periodic signal, acf(2T) ≈ acf(T), so sub-harmonics score equally.
-    // Dividing by lag^2 penalizes longer periods quadratically:
-    //   acf(2T)/(2T)^2 = 0.25 * acf(T)/T^2
-    // giving the true period a 4x advantage over its first sub-harmonic.
-    // Combined with Rayleigh prior (1.67x), total discrimination is ~6.7x.
+    // Dividing by lag penalizes longer periods linearly:
+    //   acf(2T)/(2T) = 0.5 * acf(T)/T
+    // giving the true period a 2x advantage over its first sub-harmonic.
+    // Combined with Rayleigh prior (1.67x), total discrimination is ~3.3x.
     // This must happen AFTER periodicity strength (which uses raw ACF magnitude)
     // but BEFORE Bayesian fusion and harmonic disambiguation (which need
     // discriminative lag-weighted values).
     for (int i = 0; i < harmonicCorrelationSize; i++) {
         int lag = minLag + i;
         float lagF = static_cast<float>(lag);
-        correlationAtLag[i] /= (lagF * lagF);  // lag^2
+        correlationAtLag[i] /= lagF;  // lag^1 (proven at F1=0.519)
     }
 
     // === BAYESIAN TEMPO FUSION ===

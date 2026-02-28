@@ -1919,11 +1919,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             });
 
             child.on('close', (code) => {
-              if (code === 0) {
-                resolve({ success: true });
-              } else {
-                resolve({ success: false, error: stderr || `ffplay exited with code ${code}` });
-              }
+              // ffplay can exit non-zero after successful playback (codec warnings, -t duration).
+              // Only treat spawn failures as hard errors; non-zero exit is a warning.
+              resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
             });
 
             child.on('error', (err) => {
@@ -1931,7 +1929,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             });
           });
 
-          // Stop recording
+          // Always stop recording and collect data, even on playback issues
           const musicTestData = musicTestSession.stopTestRecording();
           const rawDuration = musicTestData.duration;
           let detections = [...musicTestData.transients];
@@ -1940,11 +1938,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           const recordStartTime = musicTestData.startTime;
 
+          // Hard failure only if ffplay couldn't spawn at all
           if (!result.success) {
             return {
               content: [{ type: 'text', text: JSON.stringify({ error: result.error }, null, 2) }],
             };
           }
+
+          // Non-zero exit is a warning, included in results
+          const singlePlaybackWarning = result.error;
 
           // Timing alignment: adjust detections relative to audio start
           const timingOffsetMs = audioStartTime - recordStartTime;
@@ -2339,6 +2341,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             pattern: gtData.pattern,
             durationMs: duration,
             audioDurationSec: Math.round(audioDurationSec * 10) / 10,
+            ...(singlePlaybackWarning ? { playbackWarning: singlePlaybackWarning } : {}),
             beatTracking: {
               f1: fullResults.beatTracking.f1,
               precision: fullResults.beatTracking.precision,
@@ -2462,24 +2465,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             let stderr = '';
             child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
             child.on('close', (code: number | null) => {
-              resolve(code === 0 ? { success: true } : { success: false, error: stderr || `ffplay exited with code ${code}` });
+              // ffplay can exit non-zero after successful playback (codec warnings, -t duration).
+              // Only treat spawn failures as hard errors; non-zero exit is a warning.
+              resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
             });
             child.on('error', (err: Error) => {
               resolve({ success: false, error: err.message });
             });
           });
 
-          // Stop recording on all devices
+          // Always stop recording and collect data, even on playback issues
           const deviceResults: Array<{ port: string; data: ReturnType<import('./device-session.js').DeviceSession['stopTestRecording']> }> = [];
           for (const { port: p, session } of connectedSessions) {
             deviceResults.push({ port: p, data: session.stopTestRecording() });
           }
 
+          // Hard failure only if ffplay couldn't spawn at all
           if (!playResult.success) {
             return {
               content: [{ type: 'text', text: JSON.stringify({ error: `Audio playback failed: ${playResult.error}` }, null, 2) }],
             };
           }
+
+          // Non-zero exit is a warning, included in results
+          const playbackWarning = playResult.error;
 
           // Score each device independently
           const MULTI_BEAT_TOL_SEC = 0.07;
@@ -2634,6 +2643,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 pattern: multiGtData.pattern,
                 audioDurationSec: multiDurationMs ? Math.round(multiDurationMs / 100) / 10 : null,
                 deviceCount: perDeviceSummaries.length,
+                ...(playbackWarning ? { playbackWarning } : {}),
                 perDevice: perDeviceSummaries,
               }, null, 2),
             }],

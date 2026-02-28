@@ -56,7 +56,7 @@ public:
     //             Phase 2.2 — Increased tempo bins (20→40)
     // Version 29: All BandFlux detector params persisted (StoredBandFluxParams added to ConfigData)
     //             peakPickEnabled first persisted (in StoredBandFluxParams)
-    // Version 30: Added posteriorFloor + disambigNudge to prevent Bayesian half-time lock with 40 bins
+    // Version 30: posteriorFloor/disambigNudge/harmonicTransWeight; ACF lag normalization; MIN_LAG 20→18; NUM_FILTERS 40→20
     static const uint8_t SETTINGS_VERSION = 30;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
