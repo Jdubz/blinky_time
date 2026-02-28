@@ -335,11 +335,34 @@ public:
     // === IOI HISTOGRAM (enables per-bin observation in Bayesian fusion) ===
     bool ioiEnabled = false;             // IOI histogram observation (disabled: O(n²), unnormalized counts)
 
+    // === ADAPTIVE ODF THRESHOLD (BTrack-style local mean + HWR) ===
+    // Applies local-mean subtraction with half-wave rectification to the OSS
+    // buffer before autocorrelation. Removes arrangement-level dynamics
+    // (verse/chorus energy changes) so ACF sees cleaner periodicity peaks.
+    // BTrack applies this twice; we apply once (compressor+whitening handle the rest).
+    bool adaptiveOdfThresh = false;      // Enable local-mean ODF threshold before autocorrelation (off by default for A/B testing)
+
     // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
     // Subtracts the local mean from OSS buffer before autocorrelation.
     // Removes DC bias that makes all lags appear somewhat correlated,
     // helping the true tempo peak stand out vs sub-harmonics.
-    bool odfMeanSubEnabled = true;       // Enable ODF mean subtraction before autocorrelation
+    bool odfMeanSubEnabled = false;      // ODF mean subtraction (v32: disabled — raw ODF +70% F1)
+
+    // === ONSET-DENSITY OCTAVE DISCRIMINATOR ===
+    // Penalizes implausible tempos in the Bayesian posterior using onset density.
+    // If BPM implies < densityMinPerBeat or > densityMaxPerBeat transients/beat,
+    // applies a Gaussian penalty. Helps escape half-time lock on dance music.
+    bool densityOctaveEnabled = true;    // Onset-density octave penalty (v32: enabled, +13% F1)
+    float densityMinPerBeat = 0.5f;      // Min plausible transients per beat
+    float densityMaxPerBeat = 5.0f;      // Max plausible transients per beat
+
+    // === SHADOW CBSS OCTAVE CHECKER ===
+    // Every N beats, compares CBSS score at current tempo T vs double-time T/2.
+    // If T/2 scores significantly better, switches to double-time.
+    // Inspired by BeatNet's "tempo investigators" — provides escape from octave lock.
+    bool octaveCheckEnabled = true;      // Shadow CBSS octave check (v32: enabled, +13% F1)
+    uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
+    float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
 
     // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
     bool ftEnabled = false;              // Fourier tempogram observation (disabled: no ref system uses FT for real-time beat tracking)
@@ -504,6 +527,9 @@ private:
     // Beat-boundary tempo update state (Phase 2.1)
     int pendingBeatPeriod_ = -1;       // Pending beat period (applied at next beat fire, -1=none)
 
+    // Octave check state (Phase 3)
+    uint16_t beatsSinceOctaveCheck_ = 0; // Beats since last octave check
+
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
     int beatExpectationSize_ = 0;
@@ -574,6 +600,7 @@ private:
     void updateCBSS(float onsetStrength);
     void detectBeat();
     void predictBeat();
+    void checkOctaveAlternative();
 
     // ODF smoothing
     float smoothOnsetStrength(float raw);

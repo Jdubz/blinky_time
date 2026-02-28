@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: February 27, 2026*
+*Last Updated: February 28, 2026*
 
 ## Current Status
 
@@ -499,14 +499,18 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 | **Spectral pipeline** | compenabled, compthresh=-30, compratio=3, compknee=15, compmakeup=6, whitenenabled, whitendecay=0.997 | **Validated** (SETTINGS_VERSION 23-24) — resolves mic sensitivity, enables FT/IOI |
 | **Bayesian weights** | bayesacf=0.8, bayesft=0.0, bayescomb=0.7, bayesioi=0.0, bayeslambda=0.07, bayespriorw=0 | **v29** — FT+IOI disabled (v28), harmonic comb ACF + Rayleigh prior (v25). Needs 18-track validation |
 | **CBSS adaptive threshold** | cbssthresh=1.0 | **Validated** (SETTINGS_VERSION 22) — prevents phantom beats |
-| ODF Mean Subtraction | odfmeansub (toggle) | **Essential** — keep ON. OFF destroys BPM (Feb 24) |
+| ODF Mean Subtraction | odfmeansub=**off** | **v32: Disabled** — raw ODF +70% Beat F1 (contradicts Feb 24 finding; v24 had no spectral whitening) |
+| Onset-Density Octave Penalty | densityoctave=1, min=0.5, max=5.0 | **v32: Enabled** — +13% Beat F1, penalizes implausible transients/beat |
+| Shadow CBSS Octave Checker | octavecheck=1, beats=2, ratio=1.3 | **v32: Enabled** — +13% Beat F1, compares T vs T/2 every 2 beats |
+| Adaptive ODF Threshold | adaptodf=off | **Tested, keep OFF** — marginal benefit over raw ODF (Feb 28) |
+| Hi-Res Bass | bfhiresbass=off | **Tested, keep OFF** — hurts Beat F1 by ~9% (Feb 28) |
 | Per-band thresholds | bfperbandthresh, bfpbmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
 | Multi-frame diffframes | bfdiffframes | **Tested, keep at 1** — diffframes=2 too many transients (Feb 24) |
 | BandFlux core params | gamma, bassWeight, threshold, onsetDelta | **Calibrated** (Feb 21) |
 
 ## State-of-the-Art Gap Analysis (Feb 27, 2026)
 
-Comprehensive comparison against BTrack, madmom DBN, BeatNet, Essentia, and published academic systems. Current avg Beat F1: **0.519**. BTrack (nearest comparable DSP-only system): **~65-75%**. The ~15-20 point gap is explained by architectural differences documented below.
+Comprehensive comparison against BTrack, madmom DBN, BeatNet, Essentia, and published academic systems. Current avg Beat F1: **0.265** (4-device avg, 18 tracks full-length, v32; best-device avg 0.302). BTrack (nearest comparable DSP-only system): **~65-75%**. Note: v22 baseline of 0.519 was measured under different acoustic conditions (not reproducible). The gap is explained by persistent double-time lock at ~182 BPM and architectural differences documented below.
 
 ### Performance Context
 

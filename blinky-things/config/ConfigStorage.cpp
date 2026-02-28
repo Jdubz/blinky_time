@@ -206,12 +206,21 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.disambigNudge = 0.15f;       // Transfer 15% mass on disambiguation correction (v30)
     data_.music.harmonicTransWeight = 0.30f; // Harmonic transition shortcuts for 2:1/1:2/3:2 jumps (v30)
 
+    // Onset-density octave discriminator (v31)
+    data_.music.densityMinPerBeat = 0.5f;    // Min plausible transients per beat
+    data_.music.densityMaxPerBeat = 5.0f;    // Max plausible transients per beat
+    data_.music.octaveScoreRatio = 1.3f;     // Shadow CBSS score ratio for octave switch (v32: was 1.5, aggressive works better)
+
     data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
+    data_.music.octaveCheckBeats = 2;        // Check octave every N beats (v32: was 4, aggressive works better)
     data_.music.ioiEnabled = false;          // IOI histogram observation (disabled v28)
-    data_.music.odfMeanSubEnabled = true;    // ODF mean subtraction (BTrack-style detrending)
+    data_.music.odfMeanSubEnabled = false;   // ODF mean subtraction (v32: disabled — raw ODF +70% F1 vs global mean sub)
     data_.music.ftEnabled = false;           // Fourier tempogram observation (disabled v28)
     data_.music.beatBoundaryTempo = true;    // Defer tempo to beat boundaries (v28, BTrack-style)
     data_.music.unifiedOdf = true;           // BandFlux pre-threshold as CBSS ODF (v28, BTrack-style)
+    data_.music.adaptiveOdfThresh = false;   // Local-mean ODF threshold (v31, marginal benefit — keep off)
+    data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
+    data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
 
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
@@ -500,7 +509,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
         fixedCount++;
     }
-    // ioiEnabled, odfMeanSubEnabled, ftEnabled are bools — no range validation needed
+    // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
+
+    // Onset-density octave discriminator validation (v31)
+    validateFloat(data_.music.densityMinPerBeat, 0.1f, 3.0f, F("densityMinPerBeat"));
+    validateFloat(data_.music.densityMaxPerBeat, 1.0f, 20.0f, F("densityMaxPerBeat"));
+    validateFloat(data_.music.octaveScoreRatio, 1.0f, 5.0f, F("octaveScoreRatio"));
+    if (data_.music.octaveCheckBeats < 2 || data_.music.octaveCheckBeats > 16) {
+        SerialConsole::logWarn(F("Invalid octaveCheckBeats, clamping"));
+        data_.music.octaveCheckBeats = data_.music.octaveCheckBeats < 2 ? 2 : 16;
+        fixedCount++;
+    }
 
     // Spectral processing validation (v23+)
     validateFloat(data_.music.whitenDecay, 0.9f, 0.9999f, F("whitenDecay"));
@@ -687,11 +706,18 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->harmonicTransWeight = data_.music.harmonicTransWeight;
 
         audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
+        audioCtrl->octaveCheckBeats = data_.music.octaveCheckBeats;
         audioCtrl->ioiEnabled = data_.music.ioiEnabled;
         audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
         audioCtrl->ftEnabled = data_.music.ftEnabled;
         audioCtrl->beatBoundaryTempo = data_.music.beatBoundaryTempo;
         audioCtrl->unifiedOdf = data_.music.unifiedOdf;
+        audioCtrl->adaptiveOdfThresh = data_.music.adaptiveOdfThresh;
+        audioCtrl->densityOctaveEnabled = data_.music.densityOctaveEnabled;
+        audioCtrl->densityMinPerBeat = data_.music.densityMinPerBeat;
+        audioCtrl->densityMaxPerBeat = data_.music.densityMaxPerBeat;
+        audioCtrl->octaveCheckEnabled = data_.music.octaveCheckEnabled;
+        audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
 
         // Spectral processing (v23+)
         SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
@@ -867,11 +893,18 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.harmonicTransWeight = audioCtrl->harmonicTransWeight;
 
         data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
+        data_.music.octaveCheckBeats = audioCtrl->octaveCheckBeats;
         data_.music.ioiEnabled = audioCtrl->ioiEnabled;
         data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
         data_.music.ftEnabled = audioCtrl->ftEnabled;
         data_.music.beatBoundaryTempo = audioCtrl->beatBoundaryTempo;
         data_.music.unifiedOdf = audioCtrl->unifiedOdf;
+        data_.music.adaptiveOdfThresh = audioCtrl->adaptiveOdfThresh;
+        data_.music.densityOctaveEnabled = audioCtrl->densityOctaveEnabled;
+        data_.music.densityMinPerBeat = audioCtrl->densityMinPerBeat;
+        data_.music.densityMaxPerBeat = audioCtrl->densityMaxPerBeat;
+        data_.music.octaveCheckEnabled = audioCtrl->octaveCheckEnabled;
+        data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
 
         // Spectral processing (v23+)
         const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();

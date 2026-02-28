@@ -134,6 +134,7 @@ bool AudioController::begin(uint32_t sampleRate) {
     timeToNextBeat_ = 15;  // ~250ms at 60Hz
     timeToNextPrediction_ = 10;
     pendingBeatPeriod_ = -1;  // No pending tempo change
+    beatsSinceOctaveCheck_ = 0;
     logGaussianLastT_ = 0;
     logGaussianLastTight_ = 0.0f;
     logGaussianWeightsSize_ = 0;
@@ -399,13 +400,47 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     if (maxLag > ossCount_ / 2) maxLag = ossCount_ / 2;
     if (minLag >= maxLag) return;
 
-    // Compute signal energy for normalization
+    // === LINEARIZE OSS + ADAPTIVE ODF THRESHOLD ===
+    // Copy circular OSS buffer to a linear working buffer.
+    // When adaptiveOdfThresh is on, apply BTrack-style local-mean subtraction
+    // with half-wave rectification to remove arrangement-level dynamics.
+    static float ossLinear[OSS_BUFFER_SIZE];
+    for (int i = 0; i < ossCount_; i++) {
+        int idx = (ossWriteIdx_ - ossCount_ + i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
+        ossLinear[i] = ossBuffer_[idx];
+    }
+
+    if (adaptiveOdfThresh) {
+        static constexpr int ODF_THRESH_WINDOW = 15;  // 15-sample centered window (~250ms at 60Hz)
+        int halfWin = ODF_THRESH_WINDOW / 2;
+
+        for (int i = 0; i < ossCount_; i++) {
+            // Compute local mean in centered window
+            float localSum = 0.0f;
+            int count = 0;
+            int wStart = i - halfWin;
+            int wEnd = i + halfWin;
+            if (wStart < 0) wStart = 0;
+            if (wEnd >= ossCount_) wEnd = ossCount_ - 1;
+            for (int j = wStart; j <= wEnd; j++) {
+                localSum += ossLinear[j];
+                count++;
+            }
+            float localMean = localSum / static_cast<float>(count);
+
+            // Subtract local mean + half-wave rectification (keep only positive residuals)
+            float val = ossLinear[i] - localMean;
+            ossLinear[i] = (val > 0.0f) ? val : 0.0f;
+        }
+    }
+
+    // Compute signal energy for normalization (from linearized/thresholded buffer)
     float signalEnergy = 0.0f;
     float maxOss = 0.0f;
     for (int i = 0; i < ossCount_; i++) {
-        int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-        signalEnergy += ossBuffer_[idx] * ossBuffer_[idx];
-        if (ossBuffer_[idx] > maxOss) maxOss = ossBuffer_[idx];
+        float val = ossLinear[i];
+        signalEnergy += val * val;
+        if (val > maxOss) maxOss = val;
     }
 
     // DEBUG: Print autocorrelation diagnostics (only when rhythm debug channel enabled)
@@ -465,8 +500,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float ossMean = 0.0f;
     if (odfMeanSubEnabled) {
         for (int i = 0; i < ossCount_; i++) {
-            int idx = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-            ossMean += ossBuffer_[idx];
+            ossMean += ossLinear[i];
         }
         ossMean /= static_cast<float>(ossCount_);
         // Adjust signalEnergy to variance: sum((x-mean)^2) = sum(x^2) - N*mean^2
@@ -482,10 +516,12 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
         // FIX: Skip if count <= 0 to prevent division by zero
         if (count <= 0) continue;
 
+        // Use linearized ossLinear buffer (may be adaptively thresholded)
+        // ossLinear[0] = oldest sample, ossLinear[ossCount_-1] = newest
         for (int i = 0; i < count; i++) {
-            int idx1 = (ossWriteIdx_ - 1 - i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-            int idx2 = (ossWriteIdx_ - 1 - i - lag + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-            correlation += (ossBuffer_[idx1] - ossMean) * (ossBuffer_[idx2] - ossMean);
+            int idx1 = ossCount_ - 1 - i;
+            int idx2 = ossCount_ - 1 - i - lag;
+            correlation += (ossLinear[idx1] - ossMean) * (ossLinear[idx2] - ossMean);
         }
 
         correlation /= static_cast<float>(count);
@@ -851,6 +887,38 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     } else {
         // Degenerate — reset to uniform
         for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] = 1.0f / TEMPO_BINS;
+    }
+
+    // === ONSET-DENSITY OCTAVE DISCRIMINATOR ===
+    // Penalizes bins where the implied transients-per-beat is implausible.
+    // For dance music at BPM B with onset density D (onsets/sec):
+    //   transients_per_beat = D / (B/60) = 60*D/B
+    // If this ratio is outside [densityMinPerBeat, densityMaxPerBeat],
+    // apply a Gaussian penalty to suppress implausible tempos.
+    if (densityOctaveEnabled && onsetDensity_ > 0.1f) {
+        float densitySum = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float bpm = tempoBinBpms_[i];
+            float transPerBeat = 60.0f * onsetDensity_ / bpm;
+            float penalty = 1.0f;
+
+            if (transPerBeat < densityMinPerBeat) {
+                // Too few transients for this tempo — probably half-time error
+                float diff = (densityMinPerBeat - transPerBeat) / densityMinPerBeat;
+                penalty = expf(-2.0f * diff * diff);
+            } else if (transPerBeat > densityMaxPerBeat) {
+                // Too many transients for this tempo — probably double-time error
+                float diff = (transPerBeat - densityMaxPerBeat) / densityMaxPerBeat;
+                penalty = expf(-2.0f * diff * diff);
+            }
+
+            tempoStatePost_[i] *= penalty;
+            densitySum += tempoStatePost_[i];
+        }
+        // Re-normalize
+        if (densitySum > 1e-9f) {
+            for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] /= densitySum;
+        }
     }
 
     // Posterior uniform floor: mix with uniform to prevent hard mode lock.
@@ -1272,6 +1340,76 @@ void AudioController::predictBeat() {
     lastBeatWasPredicted_ = true;  // Mark that prediction refined the next beat time
 }
 
+void AudioController::checkOctaveAlternative() {
+    // Shadow CBSS octave checker: compare CBSS score at current tempo T
+    // vs double-time T/2. If T/2 scores significantly better, switch.
+    // Inspired by BeatNet's "tempo investigators."
+    int T = beatPeriodSamples_;
+    if (T < 20) return;  // Can't halve below minimum period
+
+    int halfT = T / 2;
+    if (halfT < 10) return;
+
+    // Score each tempo by summing CBSS values at expected beat positions
+    // Look back over the last ~4 beats of history
+    int lookback = T * 4;
+    if (lookback > sampleCounter_) lookback = sampleCounter_;
+
+    float scoreT = 0.0f;
+    float scoreHalfT = 0.0f;
+    int countT = 0;
+    int countHalfT = 0;
+
+    // Score at current tempo T: sum CBSS at positions spaced T apart
+    for (int offset = 0; offset < lookback; offset += T) {
+        int idx = sampleCounter_ - 1 - offset;
+        if (idx >= 0) {
+            scoreT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
+            countT++;
+        }
+    }
+
+    // Score at half-period T/2: sum CBSS at positions spaced T/2 apart
+    for (int offset = 0; offset < lookback; offset += halfT) {
+        int idx = sampleCounter_ - 1 - offset;
+        if (idx >= 0) {
+            scoreHalfT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
+            countHalfT++;
+        }
+    }
+
+    // Normalize by count to make scores comparable
+    if (countT > 0) scoreT /= static_cast<float>(countT);
+    if (countHalfT > 0) scoreHalfT /= static_cast<float>(countHalfT);
+
+    // If double-time scores significantly better, switch
+    if (scoreT > 0.001f && scoreHalfT > octaveScoreRatio * scoreT) {
+        // Switch to double-time
+        beatPeriodSamples_ = halfT;
+        float newBpm = 3600.0f / static_cast<float>(halfT);  // 60Hz * 60s / halfT
+        bpm_ = clampf(newBpm, bpmMin, bpmMax);
+        beatPeriodMs_ = 60000.0f / bpm_;
+
+        // Also update Bayesian posterior — nudge toward the new tempo bin
+        int newBin = findClosestTempoBin(bpm_);
+        if (newBin >= 0 && newBin < TEMPO_BINS) {
+            // Transfer mass from old best bin to new
+            float transfer = tempoStatePost_[bayesBestBin_] * 0.3f;
+            tempoStatePost_[bayesBestBin_] -= transfer;
+            tempoStatePost_[newBin] += transfer;
+            // Update prior to match
+            for (int i = 0; i < TEMPO_BINS; i++) {
+                tempoStatePrior_[i] = tempoStatePost_[i];
+            }
+            bayesBestBin_ = newBin;
+        }
+
+        // Reset countdown for new period
+        timeToNextBeat_ = halfT;
+        timeToNextPrediction_ = halfT / 2;
+    }
+}
+
 void AudioController::detectBeat() {
     uint32_t nowMs = time_.millis();
 
@@ -1308,6 +1446,15 @@ void AudioController::detectBeat() {
             if (pendingBeatPeriod_ > 0) {
                 beatPeriodSamples_ = pendingBeatPeriod_;
                 pendingBeatPeriod_ = -1;
+            }
+
+            // Shadow CBSS octave checker: periodically test if double-time is better
+            if (octaveCheckEnabled) {
+                beatsSinceOctaveCheck_++;
+                if (beatsSinceOctaveCheck_ >= octaveCheckBeats) {
+                    checkOctaveAlternative();
+                    beatsSinceOctaveCheck_ = 0;
+                }
             }
         }
 
