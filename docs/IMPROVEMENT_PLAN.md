@@ -486,9 +486,11 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 
 ---
 
-## Calibration Status (Feb 27, 2026)
+## Calibration Status (Feb 28, 2026)
 
-**Bayesian fusion v25 with BTrack-style improvements.** Comb filter bank is the primary tempo observation. Harmonic-enhanced ACF (weight 0.8) with 4-harmonic comb summation and Rayleigh prior replaces raw single-point ACF. Lambda tightened to 0.07 to prevent octave jumps. FT and IOI re-enabled at weight 2.0 (spectral processing fixed normalization, v24). CBSS adaptive threshold at 1.0 prevents phantom beats. Bidirectional harmonic disambiguation (2x, 1.5x, 0.5x checks). **Needs 18-track validation** — see NEXT_TESTS.md.
+**Bayesian fusion v25 with BTrack-style improvements.** Comb filter bank is the primary tempo observation. Harmonic-enhanced ACF (weight 0.8) with 4-harmonic comb summation and Rayleigh prior replaces raw single-point ACF. Lambda tightened to 0.07 to prevent octave jumps. FT and IOI disabled (v28). CBSS adaptive threshold at 1.0 prevents phantom beats. Bidirectional harmonic disambiguation (2x, 1.5x checks).
+
+**v30 experiment sweep (Feb 28):** 4-experiment, 18-track sweep found v30 changes caused **80% Beat F1 regression** (best 0.109 vs v27 baseline 0.519). Primary cause: lag^2 ACF normalization compressed observations 18x at lag=18, driving systematic double-time lock (detected BPM 30-50% above expected on most tracks). Reverted to lag^1 normalization. Other v30 findings: FT helps music mode activation (15/18 vs 12/18 without), comb variance fix has marginal impact, harmonicTransWeight=0.30 may amplify double-time locking. posteriorFloor/disambigNudge/harmonicTransWeight retained as tunable parameters (defaults may need adjustment).
 
 **Multi-device sweep capability:** 4 devices sweep parameters in parallel (4x speedup). Example: `param-tuner multi-sweep --ports /dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2,/dev/ttyACM3 --params bayesacf --duration 30`. Uses real music files with ground truth annotations, ffplay for headless audio playback.
 

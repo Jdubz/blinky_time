@@ -122,13 +122,13 @@ def check_validation_coverage(config_h_path, config_cpp_path):
 
     missing_validation = []
     for param in params:
-        # Check for validateFloat or validateUint32 call with this parameter
-        if not re.search(rf'validate(Float|Uint32)\s*\([^,]*mic\.{param}', load_body):
+        # Check for validateFloat, validateUint32, or VALIDATE_INT call with this parameter
+        if not re.search(rf'(validate(Float|Uint32)\s*\([^,]*|VALIDATE_INT\s*\().*mic\.{param}', load_body):
             missing_validation.append(param)
 
     if missing_validation:
         error(f"Missing validation for parameters: {', '.join(missing_validation)}")
-        error("Add validateFloat/validateUint32 calls in loadConfiguration()")
+        error("Add validateFloat/validateUint32/VALIDATE_INT calls in loadConfiguration()")
         return False
 
     success(f"All {len(params)} parameters have validation")

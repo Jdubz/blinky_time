@@ -448,6 +448,45 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ['audio_file', 'ground_truth', 'port'],
         },
       },
+      {
+        name: 'run_music_test_multi',
+        description: 'Run a real-music beat tracking test on MULTIPLE devices simultaneously. Connects all ports, optionally sends per-port configuration commands, starts streaming/recording on all, plays audio ONCE through speakers, then scores each device independently. Returns per-device Beat F1, BPM accuracy, transient F1. Use for A/B testing different parameter configurations across devices.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ports: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Serial ports to test simultaneously (e.g., ["/dev/ttyACM0", "/dev/ttyACM1"])',
+            },
+            audio_file: {
+              type: 'string',
+              description: 'Path to audio file to play (WAV, MP3, etc.)',
+            },
+            ground_truth: {
+              type: 'string',
+              description: 'Path to ground truth beat annotations JSON file',
+            },
+            duration_ms: {
+              type: 'number',
+              description: 'Override playback duration in milliseconds (default: full file)',
+            },
+            gain: {
+              type: 'number',
+              description: 'Optional hardware gain to lock during test (0-80)',
+            },
+            port_commands: {
+              type: 'object',
+              description: 'Per-port serial commands to send before test for A/B configuration. Keys are port paths, values are arrays of commands. E.g., {"/dev/ttyACM0": ["set unifiedodf 0"], "/dev/ttyACM1": ["set beatboundary 0"]}',
+              additionalProperties: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+            },
+          },
+          required: ['ports', 'audio_file', 'ground_truth'],
+        },
+      },
     ],
   };
 });
@@ -870,12 +909,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
         };
 
-        session.serial.on('audio', onAudio);
-        await new Promise(resolve => setTimeout(resolve, durationMs));
-        session.serial.off('audio', onAudio);
-
-        // Restore normal stream mode
-        await session.serial.sendCommand('stream normal');
+        try {
+          session.serial.on('audio', onAudio);
+          await new Promise(resolve => setTimeout(resolve, durationMs));
+          session.serial.off('audio', onAudio);
+        } finally {
+          // Always restore normal stream mode, even if monitoring was interrupted
+          await session.serial.sendCommand('stream normal').catch(() => {});
+        }
 
         const durationSec = durationMs / 1000;
         const response = {
@@ -999,9 +1040,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (musicState.q === 1) beats.push({ type: 'quarter', timestampMs, bpm: musicState.bpm });
         };
 
-        session.serial.on('music', onMusic);
-        await new Promise(resolve => setTimeout(resolve, durationMs));
-        session.serial.off('music', onMusic);
+        try {
+          session.serial.on('music', onMusic);
+          await new Promise(resolve => setTimeout(resolve, durationMs));
+          session.serial.off('music', onMusic);
+        } finally {
+          // Always restore normal stream mode, even if monitoring was interrupted
+          await session.serial.sendCommand('stream normal').catch(() => {});
+        }
 
         // Calculate metrics
         const activeStates = samples.filter(s => s.a === 1);
@@ -1873,11 +1919,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             });
 
             child.on('close', (code) => {
-              if (code === 0) {
-                resolve({ success: true });
-              } else {
-                resolve({ success: false, error: stderr || `ffplay exited with code ${code}` });
-              }
+              // ffplay can exit non-zero after successful playback (codec warnings, -t duration).
+              // Only treat spawn failures as hard errors; non-zero exit is a warning.
+              resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
             });
 
             child.on('error', (err) => {
@@ -1885,7 +1929,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             });
           });
 
-          // Stop recording
+          // Always stop recording and collect data, even on playback issues
           const musicTestData = musicTestSession.stopTestRecording();
           const rawDuration = musicTestData.duration;
           let detections = [...musicTestData.transients];
@@ -1894,11 +1938,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           const recordStartTime = musicTestData.startTime;
 
+          // Hard failure only if ffplay couldn't spawn at all
           if (!result.success) {
             return {
               content: [{ type: 'text', text: JSON.stringify({ error: result.error }, null, 2) }],
             };
           }
+
+          // Non-zero exit is a warning, included in results
+          const singlePlaybackWarning = result.error;
 
           // Timing alignment: adjust detections relative to audio start
           const timingOffsetMs = audioStartTime - recordStartTime;
@@ -2293,6 +2341,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             pattern: gtData.pattern,
             durationMs: duration,
             audioDurationSec: Math.round(audioDurationSec * 10) / 10,
+            ...(singlePlaybackWarning ? { playbackWarning: singlePlaybackWarning } : {}),
             beatTracking: {
               f1: fullResults.beatTracking.f1,
               precision: fullResults.beatTracking.precision,
@@ -2334,6 +2383,283 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }
           }
           await manager.disconnect(port);
+        }
+      }
+
+      case 'run_music_test_multi': {
+        const {
+          ports: multiPorts,
+          audio_file: multiAudioFile,
+          ground_truth: multiGtFile,
+          gain: multiGain,
+          duration_ms: multiDurationMs,
+          port_commands: multiPortCommands,
+        } = args as {
+          ports: string[];
+          audio_file: string;
+          ground_truth: string;
+          gain?: number;
+          duration_ms?: number;
+          port_commands?: Record<string, string[]>;
+        };
+
+        // Validate inputs
+        if (!existsSync(multiAudioFile)) throw new Error(`Audio file not found: ${multiAudioFile}`);
+        if (!existsSync(multiGtFile)) throw new Error(`Ground truth file not found: ${multiGtFile}`);
+        if (!multiPorts || multiPorts.length === 0) throw new Error('At least one port required');
+
+        // Load ground truth
+        const multiGtData = JSON.parse(readFileSync(multiGtFile, 'utf-8')) as {
+          pattern: string;
+          durationMs: number;
+          bpm?: number;
+          hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
+        };
+
+        // Connect all devices in parallel
+        const connectedSessions = await Promise.all(multiPorts.map(async (p) => {
+          const { session } = await manager.connect(p);
+          return { port: p, session };
+        }));
+        try {
+          // Lock gain on all devices if specified
+          if (multiGain !== undefined) {
+            await Promise.all(connectedSessions.map(({ session }) =>
+              session.serial.sendCommand(`set hwgainlock ${multiGain}`)
+            ));
+          }
+
+          // Send per-port commands for A/B configuration (parallel across devices)
+          if (multiPortCommands) {
+            await Promise.all(Object.entries(multiPortCommands).map(async ([p, cmds]) => {
+              const s = connectedSessions.find(x => x.port === p);
+              if (s) {
+                for (const cmd of cmds) {
+                  await s.session.serial.sendCommand(cmd);
+                }
+              }
+            }));
+          }
+
+          // Start streaming on all devices
+          await Promise.all(connectedSessions.map(({ session }) =>
+            session.serial.sendCommand('stream fast')
+          ));
+
+          // Start recording on all devices (synchronized)
+          for (const { session } of connectedSessions) {
+            session.startTestRecording();
+          }
+
+          // Play audio file ONCE through speakers
+          const multiAudioStartTime = Date.now();
+          const multiFFplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', multiAudioFile];
+          if (multiDurationMs) {
+            multiFFplayArgs.push('-t', (multiDurationMs / 1000).toString());
+          }
+
+          const playResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+            const child = spawn('ffplay', multiFFplayArgs, {
+              stdio: ['ignore', 'pipe', 'pipe'],
+            });
+            let stderr = '';
+            child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+            child.on('close', (code: number | null) => {
+              // ffplay can exit non-zero after successful playback (codec warnings, -t duration).
+              // Only treat spawn failures as hard errors; non-zero exit is a warning.
+              resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
+            });
+            child.on('error', (err: Error) => {
+              resolve({ success: false, error: err.message });
+            });
+          });
+
+          // Always stop recording and collect data, even on playback issues
+          const deviceResults: Array<{ port: string; data: ReturnType<import('./device-session.js').DeviceSession['stopTestRecording']> }> = [];
+          for (const { port: p, session } of connectedSessions) {
+            deviceResults.push({ port: p, data: session.stopTestRecording() });
+          }
+
+          // Hard failure only if ffplay couldn't spawn at all
+          if (!playResult.success) {
+            return {
+              content: [{ type: 'text', text: JSON.stringify({ error: `Audio playback failed: ${playResult.error}` }, null, 2) }],
+            };
+          }
+
+          // Non-zero exit is a warning, included in results
+          const playbackWarning = playResult.error;
+
+          // Score each device independently
+          const MULTI_BEAT_TOL_SEC = 0.07;
+          const perDeviceSummaries = deviceResults.map(({ port: devPort, data }) => {
+            const rawDuration = data.duration;
+            const timingOffset = multiAudioStartTime - data.startTime;
+            const audioDurationSec = (rawDuration - timingOffset) / 1000;
+
+            // Correct timestamps relative to audio start
+            const correctedDetections = data.transients
+              .map(d => ({ ...d, timestampMs: d.timestampMs - timingOffset }))
+              .filter(d => d.timestampMs >= 0);
+
+            const correctedBeatEvents = data.beatEvents
+              .map(b => ({ ...b, timestampMs: b.timestampMs - timingOffset }))
+              .filter(b => b.timestampMs >= 0);
+
+            const correctedMusicStates = data.musicStates
+              .map(s => ({ ...s, timestampMs: s.timestampMs - timingOffset }))
+              .filter(s => s.timestampMs >= 0);
+
+            // Reference beats from ground truth
+            const refBeats = multiGtData.hits
+              .filter(h => h.expectTrigger !== false)
+              .filter(h => h.time <= audioDurationSec)
+              .map(h => h.time);
+
+            // Estimate audio latency
+            const latencyOffsets: number[] = [];
+            correctedDetections.forEach((det) => {
+              let minDist = Infinity;
+              let closestOff = 0;
+              for (const ref of refBeats) {
+                const off = det.timestampMs / 1000 - ref;
+                if (Math.abs(off) < Math.abs(minDist)) {
+                  minDist = off;
+                  closestOff = off;
+                }
+              }
+              if (Math.abs(minDist) < 1.0) latencyOffsets.push(closestOff);
+            });
+            let latencyMs = 0;
+            if (latencyOffsets.length > 0) {
+              latencyOffsets.sort((a, b) => a - b);
+              latencyMs = latencyOffsets[Math.floor(latencyOffsets.length / 2)] * 1000;
+            }
+
+            // Beat F1: match device beat events to reference beats
+            const estBeats = correctedBeatEvents.map(b => (b.timestampMs - latencyMs) / 1000);
+            const matchedRefBeats = new Set<number>();
+            let beatTp = 0;
+            for (const est of estBeats) {
+              let bestIdx = -1;
+              let bestDist = Infinity;
+              for (let i = 0; i < refBeats.length; i++) {
+                if (matchedRefBeats.has(i)) continue;
+                const dist = Math.abs(est - refBeats[i]);
+                if (dist < bestDist && dist <= MULTI_BEAT_TOL_SEC) {
+                  bestDist = dist;
+                  bestIdx = i;
+                }
+              }
+              if (bestIdx >= 0) {
+                matchedRefBeats.add(bestIdx);
+                beatTp++;
+              }
+            }
+            const beatPrec = estBeats.length > 0 ? beatTp / estBeats.length : 0;
+            const beatRec = refBeats.length > 0 ? beatTp / refBeats.length : 0;
+            const beatF1 = (beatPrec + beatRec) > 0 ? 2 * beatPrec * beatRec / (beatPrec + beatRec) : 0;
+
+            // Transient F1: match transient detections to reference beats
+            const estTrans = correctedDetections.map(d => (d.timestampMs - latencyMs) / 1000);
+            const matchedRefTrans = new Set<number>();
+            let transTp = 0;
+            for (const est of estTrans) {
+              let bestIdx = -1;
+              let bestDist = Infinity;
+              for (let i = 0; i < refBeats.length; i++) {
+                if (matchedRefTrans.has(i)) continue;
+                const dist = Math.abs(est - refBeats[i]);
+                if (dist < bestDist && dist <= MULTI_BEAT_TOL_SEC) {
+                  bestDist = dist;
+                  bestIdx = i;
+                }
+              }
+              if (bestIdx >= 0) {
+                matchedRefTrans.add(bestIdx);
+                transTp++;
+              }
+            }
+            const transPrec = estTrans.length > 0 ? transTp / estTrans.length : 0;
+            const transRec = refBeats.length > 0 ? transTp / refBeats.length : 0;
+            const transF1 = (transPrec + transRec) > 0 ? 2 * transPrec * transRec / (transPrec + transRec) : 0;
+
+            // BPM accuracy
+            const activeStates = correctedMusicStates.filter(s => s.active);
+            const avgBpm = activeStates.length > 0
+              ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
+            const expectedBPM = multiGtData.bpm || 0;
+            const bpmErr = expectedBPM > 0 && avgBpm > 0
+              ? Math.abs(avgBpm - expectedBPM) / expectedBPM * 100 : null;
+            const bpmAcc = bpmErr !== null ? Math.max(0, 1 - bpmErr / 100) : null;
+
+            // Beat offset stats
+            const beatOffsets: number[] = [];
+            estBeats.forEach((est) => {
+              let bestOff = Infinity;
+              for (const ref of refBeats) {
+                const off = est - ref;
+                if (Math.abs(off) < Math.abs(bestOff)) bestOff = off;
+              }
+              if (Math.abs(bestOff) < 0.5) beatOffsets.push(Math.round(bestOff * 1000));
+            });
+            let beatOffsetMedian: number | null = null;
+            if (beatOffsets.length >= 3) {
+              const sorted = [...beatOffsets].sort((a, b) => a - b);
+              beatOffsetMedian = sorted[Math.floor(sorted.length / 2)];
+            }
+
+            return {
+              port: devPort,
+              beatTracking: {
+                f1: Math.round(beatF1 * 1000) / 1000,
+                precision: Math.round(beatPrec * 1000) / 1000,
+                recall: Math.round(beatRec * 1000) / 1000,
+                refBeats: refBeats.length,
+                estBeats: estBeats.length,
+              },
+              transientTracking: {
+                f1: Math.round(transF1 * 1000) / 1000,
+                precision: Math.round(transPrec * 1000) / 1000,
+                recall: Math.round(transRec * 1000) / 1000,
+                count: correctedDetections.length,
+              },
+              musicMode: {
+                avgBpm: Math.round(avgBpm * 10) / 10,
+                expectedBpm: expectedBPM,
+                bpmAccuracy: bpmAcc !== null ? Math.round(bpmAcc * 1000) / 1000 : null,
+              },
+              timing: {
+                latencyMs: Math.round(latencyMs),
+                beatOffsetMedianMs: beatOffsetMedian,
+              },
+            };
+          });
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                pattern: multiGtData.pattern,
+                audioDurationSec: multiDurationMs ? Math.round(multiDurationMs / 100) / 10 : null,
+                deviceCount: perDeviceSummaries.length,
+                ...(playbackWarning ? { playbackWarning } : {}),
+                perDevice: perDeviceSummaries,
+              }, null, 2),
+            }],
+          };
+        } finally {
+          // Always cleanup: unlock gain, disconnect all (parallel)
+          if (multiGain !== undefined) {
+            await Promise.all(connectedSessions.map(({ session }) =>
+              session.getState().connected
+                ? session.serial.sendCommand('set hwgainlock 255').catch(() => {})
+                : Promise.resolve()
+            ));
+          }
+          await Promise.all(connectedSessions.map(({ port: p }) =>
+            manager.disconnect(p).catch(() => {})
+          ));
         }
       }
 

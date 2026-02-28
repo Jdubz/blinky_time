@@ -263,6 +263,156 @@ def find_port_by_serial(serial_number, target_pid=None):
 
 MAX_BOOTLOADER_RETRIES = 5
 
+
+# ============================================================
+#  USB port recovery (uhubctl)
+# ============================================================
+
+def _find_usb_hub_port(port_path):
+    """Map a serial port (e.g., /dev/ttyACM0) to its USB hub location.
+
+    Returns (hub_path, port_number) for uhubctl, or (None, None) if
+    the mapping cannot be determined.
+
+    Example: /dev/ttyACM0 → ('1-1.1', 2)
+    """
+    # Find the device path in sysfs via /sys/class/tty/ttyACMx/device
+    port_name = os.path.basename(port_path)
+    sysfs_device = f"/sys/class/tty/{port_name}/device"
+
+    if not os.path.exists(sysfs_device):
+        return None, None
+
+    # Resolve symlink to get the USB interface path
+    # e.g., /sys/devices/.../1-1.1.2:1.0 → device is 1-1.1.2, hub is 1-1.1, port is 2
+    try:
+        real_path = os.path.realpath(sysfs_device)
+        # Walk up to the USB device level (one above the interface :1.0)
+        usb_device_path = os.path.dirname(real_path)
+        device_name = os.path.basename(usb_device_path)
+
+        # Parse the USB device name (e.g., "1-1.1.2")
+        # The hub is everything except the last number, the port is the last number
+        parts = device_name.rsplit(".", 1)
+        if len(parts) == 2:
+            hub_path = parts[0]
+            port_num = int(parts[1])
+            return hub_path, port_num
+    except (ValueError, OSError):
+        pass
+
+    return None, None
+
+
+def _recover_usb_port(hub_path, port_num, device_serial=None, verbose=False):
+    """Power-cycle a USB hub port via uhubctl to recover a stuck device.
+
+    Returns the new serial port path if the device recovered, or None.
+    """
+    uhubctl = shutil.which("uhubctl")
+    if not uhubctl:
+        print(f"  uhubctl not installed — cannot recover USB port")
+        print(f"  Install with: sudo apt install uhubctl")
+        return None
+
+    print(f"  Recovering USB port: hub={hub_path} port={port_num}")
+
+    # Power off
+    try:
+        result = subprocess.run(
+            ["sudo", uhubctl, "-l", hub_path, "-p", str(port_num), "-a", "0"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            print(f"  uhubctl power-off failed (exit {result.returncode})")
+            if result.stderr:
+                print(f"  stderr: {result.stderr.strip()}")
+            return None
+        if verbose and result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                print(f"    {line}")
+    except subprocess.TimeoutExpired:
+        print(f"  uhubctl power-off timed out")
+        return None
+
+    time.sleep(2)
+
+    # Power on
+    try:
+        result = subprocess.run(
+            ["sudo", uhubctl, "-l", hub_path, "-p", str(port_num), "-a", "1"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            print(f"  uhubctl power-on failed (exit {result.returncode})")
+            if result.stderr:
+                print(f"  stderr: {result.stderr.strip()}")
+            return None
+        if verbose and result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                print(f"    {line}")
+    except subprocess.TimeoutExpired:
+        print(f"  uhubctl power-on timed out")
+        return None
+
+    # Wait for device to re-enumerate
+    print(f"  Waiting for device to re-enumerate...")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        time.sleep(0.5)
+        if device_serial:
+            new_port = find_port_by_serial(device_serial, target_pid=NORMAL_PID)
+            if new_port:
+                print(f"  Device recovered on {new_port}")
+                return new_port
+        else:
+            # No serial number — check if any new XIAO port appeared
+            ports = find_all_xiao_ports()
+            if ports:
+                # Can't be sure which one is ours, return the first new one
+                return ports[0]
+
+    print(f"  Device did not re-enumerate after USB port recovery")
+    return None
+
+
+def _device_port_exists(port_path):
+    """Check if a serial port path currently exists."""
+    return os.path.exists(port_path)
+
+
+def _check_port_available(port, verbose=False):
+    """Verify a serial port is not locked by another process.
+
+    Opens and immediately closes the port. If the port is busy (e.g., held
+    by a stale MCP server connection), this will raise an error rather than
+    letting the bootloader entry silently fail.
+
+    Returns True if the port is available, False if locked.
+    """
+    try:
+        ser = serial.Serial(port, 115200, timeout=0.1)
+        ser.close()
+        return True
+    except serial.SerialException as e:
+        err_str = str(e)
+        if "Device or resource busy" in err_str or "EBUSY" in err_str:
+            print(f"\n  ERROR: {port} is locked by another process!")
+            print(f"  This usually means an MCP server or console session is still connected.")
+            print(f"  Fix: Disconnect all MCP sessions, or kill stale processes:")
+            print(f"    pkill -f 'node.*blinky-serial-mcp'")
+            print(f"  Then wait 2-3 seconds for the port to be released.\n")
+            return False
+        if verbose:
+            print(f"  Port check warning: {e}")
+        # Other errors (e.g., port not found) may be transient
+        return True
+    except OSError as e:
+        if verbose:
+            print(f"  Port check OS error: {e}")
+        return True
+
+
 def trigger_bootloader(port, verbose=False):
     """Enter UF2 bootloader mode with automatic retry.
 
@@ -272,10 +422,20 @@ def trigger_bootloader(port, verbose=False):
     this reliable, but older firmware may still have the race condition.
     Retrying resolves the intermittent failure.
 
+    If a bootloader entry causes the device to disconnect but fail to
+    enumerate (stuck USB state), this function will attempt recovery via
+    uhubctl USB port power-cycling.
+
     Returns the USB serial number for tracking the device across
     the mode switch.
     """
     print_section("ENTERING BOOTLOADER")
+
+    # Pre-flight: verify port is not locked by another process
+    if not _check_port_available(port, verbose):
+        print(f"\n  ABORTING: Port {port} is not available.")
+        print(f"  Resolve the port lock and retry.")
+        return None
 
     device_serial = get_serial_number(port)
     if device_serial:
@@ -283,10 +443,44 @@ def trigger_bootloader(port, verbose=False):
     else:
         print(f"  Warning: Could not read serial number from {port}")
 
+    # Record the USB hub location BEFORE any reset attempts.
+    # After a failed USB enumeration, the sysfs entry disappears and we
+    # can no longer determine which hub port to power-cycle.
+    hub_path, hub_port = _find_usb_hub_port(port)
+    if hub_path:
+        if verbose:
+            print(f"  USB location: hub={hub_path} port={hub_port}")
+    else:
+        print(f"  Warning: Could not determine USB hub location for {port}")
+
+    current_port = port  # Track port across re-enumerations
+
     for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
         if attempt > 1:
             print(f"  Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
             time.sleep(2)  # Let device settle between retries
+
+            # Re-discover port if it changed (e.g., after USB recovery)
+            if not _device_port_exists(current_port) and device_serial:
+                new_port = find_port_by_serial(device_serial, target_pid=NORMAL_PID)
+                if new_port:
+                    print(f"  Device re-discovered on {new_port}")
+                    current_port = new_port
+                else:
+                    # Device is gone — try USB recovery if we know the hub location
+                    if hub_path:
+                        print(f"  Device not found — attempting USB port recovery...")
+                        recovered_port = _recover_usb_port(
+                            hub_path, hub_port, device_serial, verbose
+                        )
+                        if recovered_port:
+                            current_port = recovered_port
+                        else:
+                            print(f"  USB recovery failed")
+                            continue
+                    else:
+                        print(f"  Device not found and no hub info for recovery")
+                        continue
 
         pre_existing_blocks = _get_usb_block_devices()
 
@@ -294,7 +488,7 @@ def trigger_bootloader(port, verbose=False):
         if attempt == 1:
             print(f"  Trying serial command: bootloader")
         try:
-            ser = serial.Serial(port, 115200, timeout=1)
+            ser = serial.Serial(current_port, 115200, timeout=1)
             time.sleep(0.3)
             ser.reset_input_buffer()
             ser.write(b'bootloader\n')
@@ -307,6 +501,15 @@ def trigger_bootloader(port, verbose=False):
 
             if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
                 return device_serial
+
+            # Check if device disconnected but UF2 drive didn't appear.
+            # If so, the device may be stuck in a failed USB enumeration
+            # state. Skip the 1200 baud touch (port is dead) and go
+            # straight to recovery on the next attempt.
+            if not _device_port_exists(current_port):
+                print(f"  Device disconnected but UF2 drive not detected")
+                # Don't try 1200 baud touch — port is gone
+                continue
 
         except (serial.SerialException, OSError) as e:
             if verbose:
@@ -322,10 +525,10 @@ def trigger_bootloader(port, verbose=False):
         # ports rather than blindly retrying on a potentially stale path.
         if attempt == 1:
             pre_existing_blocks = _get_usb_block_devices()
-            print(f"  Trying 1200 baud touch on {port}...")
+            print(f"  Trying 1200 baud touch on {current_port}...")
             try:
                 ser = serial.Serial()
-                ser.port = port
+                ser.port = current_port
                 ser.baudrate = 1200
                 ser.dtr = True
                 ser.open()
@@ -1014,6 +1217,8 @@ def upload_to_device(port, uf2_path, verbose=False):
     try:
         # Phase 3: Enter bootloader
         device_serial = trigger_bootloader(port, verbose=verbose)
+        if device_serial is None:
+            return False, "port locked by another process — disconnect MCP sessions first"
 
         # Phase 4: Mount UF2 drive
         mount_point = mount_uf2_drive(
@@ -1091,11 +1296,16 @@ def upload_parallel(ports, uf2_path, verbose=False):
 
         # --- Phase 1: Record device serial numbers ---
         device_serials = {}
+        hub_locations = {}  # port -> (hub_path, hub_port) for USB recovery
         for port in ports:
             sn = get_serial_number(port)
             if sn:
                 device_serials[port] = sn
                 print(f"  {port}: serial={sn}")
+            # Record USB hub location before any resets (sysfs disappears after disconnect)
+            hp, hn = _find_usb_hub_port(port)
+            if hp:
+                hub_locations[port] = (hp, hn)
             mount_map[port] = {"serial": sn, "block_dev": None,
                                "mount_point": None, "copied": False}
 
@@ -1112,15 +1322,37 @@ def upload_parallel(ports, uf2_path, verbose=False):
             # Snapshot block devices before bootloader command
             pre_blocks = _get_usb_block_devices()
 
-            # Send bootloader command (with retries)
+            # Send bootloader command (with retries + USB recovery)
             entered = False
+            current_port = port
             for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
                 if attempt > 1:
                     print(f"    Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
                     time.sleep(2)
 
+                    # Re-discover port if it disappeared (USB recovery)
+                    if not _device_port_exists(current_port):
+                        sn = mount_map[port]["serial"]
+                        if sn:
+                            new_port = find_port_by_serial(sn, target_pid=NORMAL_PID)
+                            if new_port:
+                                print(f"    Device re-discovered on {new_port}")
+                                current_port = new_port
+                            elif port in hub_locations:
+                                hp, hn = hub_locations[port]
+                                print(f"    Device not found — attempting USB port recovery...")
+                                recovered = _recover_usb_port(hp, hn, sn, verbose)
+                                if recovered:
+                                    current_port = recovered
+                                else:
+                                    print(f"    USB recovery failed")
+                                    continue
+                            else:
+                                print(f"    Device not found, no hub info")
+                                continue
+
                 try:
-                    ser = serial.Serial(port, 115200, timeout=1)
+                    ser = serial.Serial(current_port, 115200, timeout=1)
                     time.sleep(0.3)
                     ser.reset_input_buffer()
                     ser.write(b'bootloader\n')
@@ -1165,13 +1397,19 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     break
                 else:
                     print(f"    No UF2 drive appeared (attempt {attempt})")
+
+                    # Skip 1200 baud touch if device disconnected (port is dead)
+                    if not _device_port_exists(current_port):
+                        print(f"    Device disconnected — skipping 1200 baud touch")
+                        continue
+
                     # 1200-baud touch first-attempt only (see single-device path comment)
                     if attempt == 1:
                         pre_blocks = _get_usb_block_devices()
                         print(f"    Trying 1200 baud touch...")
                         try:
                             ser = serial.Serial()
-                            ser.port = port
+                            ser.port = current_port
                             ser.baudrate = 1200
                             ser.dtr = True
                             ser.open()

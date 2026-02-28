@@ -100,6 +100,8 @@ export class DeviceSession {
   }
 
   async disconnect(): Promise<void> {
+    // Remove all event listeners to prevent accumulation on reconnect
+    this.serial.removeAllListeners();
     return this.serial.disconnect();
   }
 

@@ -324,6 +324,12 @@ void SerialConsole::registerRhythmSettings() {
         "Comb filter bank observation weight", 0.0f, 5.0f);
     settings_.registerFloat("bayesioi", &audioCtrl_->bayesIoiWeight, "bayesian",
         "IOI histogram observation weight", 0.0f, 5.0f);
+    settings_.registerFloat("postfloor", &audioCtrl_->posteriorFloor, "bayesian",
+        "Posterior uniform floor to prevent mode lock (0=off)", 0.0f, 0.5f);
+    settings_.registerFloat("disambignudge", &audioCtrl_->disambigNudge, "bayesian",
+        "Posterior nudge when disambiguation corrects (0=off)", 0.0f, 0.5f);
+    settings_.registerFloat("harmonictrans", &audioCtrl_->harmonicTransWeight, "bayesian",
+        "Transition matrix harmonic shortcut weight (0=off)", 0.0f, 1.0f);
 
     // Ensemble fusion parameters (detection gating)
     settings_.registerUint16("enscooldown", &audioCtrl_->getEnsemble().getFusion().cooldownMs, "ensemble",
@@ -1092,6 +1098,9 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->bayesFtWeight = 0.0f;
         audioCtrl_->bayesCombWeight = 0.7f;
         audioCtrl_->bayesIoiWeight = 0.0f;
+        audioCtrl_->posteriorFloor = 0.05f;
+        audioCtrl_->disambigNudge = 0.15f;
+        audioCtrl_->harmonicTransWeight = 0.30f;
         audioCtrl_->cbssThresholdFactor = 1.0f;
         audioCtrl_->ioiEnabled = false;
         audioCtrl_->ftEnabled = false;
