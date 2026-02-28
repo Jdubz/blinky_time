@@ -168,8 +168,8 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
-    data_.music.bpmMin = 60.0f;
-    data_.music.bpmMax = 200.0f;
+    data_.music.bpmMin = 80.0f;
+    data_.music.bpmMax = 160.0f;
     data_.music.cbssAlpha = 0.9f;         // CBSS weighting (high = more predictive)
 
     // Tempo prior width (used by Bayesian static prior)
@@ -202,6 +202,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.bayesFtWeight = 0.0f;        // Fourier tempogram — disabled (v28: no ref system uses FT for real-time beat tracking)
     data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
     data_.music.bayesIoiWeight = 0.0f;       // IOI histogram — disabled (v28: O(n²), unnormalized counts dominate posterior)
+    data_.music.posteriorFloor = 0.05f;      // 5% uniform mixing to prevent half-time mode lock (v30)
+    data_.music.disambigNudge = 0.15f;       // Transfer 15% mass on disambiguation correction (v30)
+    data_.music.harmonicTransWeight = 0.30f; // Harmonic transition shortcuts for 2:1/1:2/3:2 jumps (v30)
 
     data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
     data_.music.ioiEnabled = false;          // IOI histogram observation (disabled v28)
@@ -489,6 +492,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.bayesFtWeight, 0.0f, 5.0f, F("bayesFtWeight"));
     validateFloat(data_.music.bayesCombWeight, 0.0f, 5.0f, F("bayesCombWeight"));
     validateFloat(data_.music.bayesIoiWeight, 0.0f, 5.0f, F("bayesIoiWeight"));
+    validateFloat(data_.music.posteriorFloor, 0.0f, 0.5f, F("posteriorFloor"));
+    validateFloat(data_.music.disambigNudge, 0.0f, 0.5f, F("disambigNudge"));
+    validateFloat(data_.music.harmonicTransWeight, 0.0f, 1.0f, F("harmonicTransWeight"));
     if (data_.music.odfSmoothWidth < 3 || data_.music.odfSmoothWidth > 11) {
         SerialConsole::logWarn(F("Invalid odfSmoothWidth, clamping"));
         data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
@@ -676,6 +682,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->bayesFtWeight = data_.music.bayesFtWeight;
         audioCtrl->bayesCombWeight = data_.music.bayesCombWeight;
         audioCtrl->bayesIoiWeight = data_.music.bayesIoiWeight;
+        audioCtrl->posteriorFloor = data_.music.posteriorFloor;
+        audioCtrl->disambigNudge = data_.music.disambigNudge;
+        audioCtrl->harmonicTransWeight = data_.music.harmonicTransWeight;
 
         audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
         audioCtrl->ioiEnabled = data_.music.ioiEnabled;
@@ -853,6 +862,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.bayesFtWeight = audioCtrl->bayesFtWeight;
         data_.music.bayesCombWeight = audioCtrl->bayesCombWeight;
         data_.music.bayesIoiWeight = audioCtrl->bayesIoiWeight;
+        data_.music.posteriorFloor = audioCtrl->posteriorFloor;
+        data_.music.disambigNudge = audioCtrl->disambigNudge;
+        data_.music.harmonicTransWeight = audioCtrl->harmonicTransWeight;
 
         data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
         data_.music.ioiEnabled = audioCtrl->ioiEnabled;

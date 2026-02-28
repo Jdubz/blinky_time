@@ -39,12 +39,12 @@ struct AutocorrPeak {
  */
 class CombFilterBank {
 public:
-    // 40 filters: 60-180 BPM at ~3 BPM resolution (Phase 2.2, was 20 @ ~6 BPM)
-    // At 60 Hz: lag range = 20-60 samples
-    // Finer bins reduce cumulative phase drift (6 BPM/bin caused ~42ms drift over 10 beats)
+    // 40 filters: 80-160 BPM at ~2 BPM resolution (single octave, BTrack-style)
+    // At 60 Hz: lag range = 23-45 samples
+    // Single octave prevents sub-harmonic ambiguity (68 vs 136 BPM impossible)
     static constexpr int NUM_FILTERS = 40;
-    static constexpr int MAX_LAG = 60;  // 60 BPM at 60 Hz
-    static constexpr int MIN_LAG = 20;  // 180 BPM at 60 Hz
+    static constexpr int MAX_LAG = 45;  // 80 BPM at 60 Hz
+    static constexpr int MIN_LAG = 23;  // ~157 BPM at 60 Hz (closest int to 3600/160)
 
     // === TUNING PARAMETERS ===
     float feedbackGain = 0.92f;       // Resonance strength (0.85-0.98)
@@ -263,8 +263,8 @@ public:
     float pulseFarFromBeatThreshold = 0.3f; // Phase distance > this = suppress transients
 
     // BPM range for autocorrelation tempo detection
-    float bpmMin = 60.0f;               // Minimum BPM to detect (affects autocorr lag range)
-    float bpmMax = 200.0f;              // Maximum BPM to detect (affects autocorr lag range)
+    float bpmMin = 80.0f;               // Minimum BPM (BTrack-style single octave prevents octave ambiguity)
+    float bpmMax = 160.0f;              // Maximum BPM (single octave: 80-160 BPM)
 
     // (Tempo prior params removed — replaced by bayesPriorCenter in Bayesian fusion)
     float tempoPriorWidth = 50.0f;      // Width (sigma) of Gaussian prior (BPM) — used by Bayesian static prior
@@ -297,7 +297,10 @@ public:
     uint16_t autocorrPeriodMs = 250;  // Run autocorr every N ms (default 250ms for faster adaptation)
 
     // === COMB FILTER BANK (Independent Tempo Validation) ===
-    // Bank of 40 comb filters at 60-180 BPM for independent tempo detection
+    // IIR resonator bank (Scheirer 1998): continuous real-time resonance at candidate
+    // tempos. Provides phase-sensitive evidence that complements ACF (which is recomputed
+    // every 250ms). BTrack uses only ACF with harmonic summation (no IIR bank), but our
+    // comb bank may help with faster tempo lock. A/B testable via serial.
     bool combBankEnabled = true;    // Enable comb filter bank
     float combBankFeedback = 0.92f; // Bank resonance strength (0.85-0.98)
 
@@ -350,6 +353,9 @@ public:
     float bayesFtWeight = 0.0f;          // Fourier tempogram observation weight (disabled: suspected flat observation vectors)
     float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
     float bayesIoiWeight = 0.0f;         // IOI histogram observation weight (disabled: O(n²) complexity, unnormalized counts)
+    float posteriorFloor = 0.05f;        // Uniform mixing ratio to prevent mode lock (0=off, 0.05=5% floor)
+    float disambigNudge = 0.15f;         // Posterior mass transfer when disambiguation corrects (0=off)
+    float harmonicTransWeight = 0.30f;   // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -546,6 +552,7 @@ private:
     int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
     float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
     float transMatrixLambda_ = -1.0f;             // bayesLambda used to compute transMatrix_ (-1 = uninitialized)
+    float transMatrixHarmonic_ = -1.0f;          // harmonicTransWeight used to compute transMatrix_
     bool tempoStateInitialized_ = false;
     int bayesBestBin_ = TEMPO_BINS / 2;              // Best bin from last fusion (for debug)
     float lastFtObs_[TEMPO_BINS] = {0};           // Last FT observations (for debug)
@@ -588,6 +595,7 @@ private:
     // the static prior. If these params change at runtime, call initTempoState()
     // again (or reboot) for the new values to take effect.
     void initTempoState();
+    void buildTransitionMatrix();
     void runBayesianTempoFusion(float* correlationAtLag, int correlationSize,
                                 int minLag, int maxLag, float avgEnergy,
                                 float samplesPerMs, bool debugPrint,

@@ -113,8 +113,12 @@ export class BlinkySerial extends EventEmitter {
           // Close the port to release the OS file descriptor on failed connect.
           // Without this, the port stays locked by the node process even though
           // the session is never registered in DeviceManager.
+          // IMPORTANT: Wait for close to complete before nulling references,
+          // otherwise the FD is still open but unreachable.
           if (this.port && this.port.isOpen) {
-            this.port.close(() => {});
+            await new Promise<void>((resolve) => {
+              this.port!.close(() => resolve());
+            });
           }
           this.port = null;
           this.parser = null;
@@ -136,11 +140,24 @@ export class BlinkySerial extends EventEmitter {
       try {
         this.port.write('stream off\n');
         this.streaming = false;
-        // Brief pause to let the device process the command before port close
-        await new Promise(r => setTimeout(r, 50));
+        // Wait for write to drain to OS buffer before closing the port.
+        // This ensures the device receives "stream off" before we close.
+        await new Promise<void>((resolve) => {
+          this.port!.drain((err) => {
+            if (err) resolve(); // Drain failed, proceed with close anyway
+            else resolve();
+          });
+        });
       } catch {
         // Ignore write errors - port may already be closing
       }
+    }
+
+    // Reject any pending command so callers don't hang
+    if (this.pendingCommand) {
+      clearTimeout(this.pendingCommand.timeout);
+      this.pendingCommand.reject(new Error('Disconnected while command pending'));
+      this.pendingCommand = null;
     }
 
     // Clear any pending response state

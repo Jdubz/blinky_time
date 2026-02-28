@@ -551,6 +551,58 @@ float AudioController::smoothOnsetStrength(float raw) {
 
 // ===== BAYESIAN TEMPO STATE =====
 
+void AudioController::buildTransitionMatrix() {
+    // Gaussian transition matrix with harmonic shortcuts.
+    // The narrow Gaussian (lambda=0.07) handles smooth tempo tracking.
+    // Harmonic shortcuts add non-zero transition probability for octave-related
+    // tempo jumps (2:1, 1:2, 3:2, 2:3). Without these, the tight Gaussian makes
+    // it mathematically impossible for the posterior to escape half-time lock
+    // (e.g., 68→136 BPM gets exp(-102) ≈ 0 probability).
+    // Reference: madmom's TempoTransitionModel includes similar octave shortcuts.
+    float htw = harmonicTransWeight;  // Tunable harmonic transition weight
+
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        for (int j = 0; j < TEMPO_BINS; j++) {
+            // Standard narrow Gaussian
+            float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
+            float sigma = bayesLambda * tempoBinBpms_[j];
+            if (sigma < 1.0f) sigma = 1.0f;
+            float narrow = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
+
+            // Harmonic shortcuts: check if bin i is at a harmonic ratio of bin j
+            float ratio = tempoBinBpms_[i] / tempoBinBpms_[j];
+            float harmonicBonus = 0.0f;
+
+            // 2:1 (octave up, e.g., 68→136)
+            float diff2x = fabsf(ratio - 2.0f);
+            if (diff2x < 0.15f) {
+                float w = htw * expf(-diff2x * diff2x * 100.0f);
+                if (w > harmonicBonus) harmonicBonus = w;
+            }
+            // 1:2 (octave down, e.g., 136→68)
+            float diffHalf = fabsf(ratio - 0.5f);
+            if (diffHalf < 0.15f) {
+                float w = htw * expf(-diffHalf * diffHalf * 100.0f);
+                if (w > harmonicBonus) harmonicBonus = w;
+            }
+            // 3:2 (e.g., 90→135)
+            float diff32 = fabsf(ratio - 1.5f);
+            if (diff32 < 0.1f) {
+                float w = htw * 0.5f * expf(-diff32 * diff32 * 200.0f);
+                if (w > harmonicBonus) harmonicBonus = w;
+            }
+            // 2:3 (e.g., 135→90)
+            float diff23 = fabsf(ratio - 0.6667f);
+            if (diff23 < 0.1f) {
+                float w = htw * 0.5f * expf(-diff23 * diff23 * 200.0f);
+                if (w > harmonicBonus) harmonicBonus = w;
+            }
+
+            transMatrix_[i][j] = narrow + harmonicBonus;
+        }
+    }
+}
+
 void AudioController::initTempoState() {
     // Copy bin BPMs and lags from CombFilterBank
     for (int i = 0; i < TEMPO_BINS; i++) {
@@ -587,15 +639,9 @@ void AudioController::initTempoState() {
 
     // Pre-compute Gaussian transition matrix (only depends on bin BPMs and bayesLambda)
     // Avoids 1600 expf() calls per autocorrelation cycle at runtime.
-    for (int i = 0; i < TEMPO_BINS; i++) {
-        for (int j = 0; j < TEMPO_BINS; j++) {
-            float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
-            float sigma = bayesLambda * tempoBinBpms_[j];
-            if (sigma < 1.0f) sigma = 1.0f;
-            transMatrix_[i][j] = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
-        }
-    }
+    buildTransitionMatrix();
     transMatrixLambda_ = bayesLambda;
+    transMatrixHarmonic_ = harmonicTransWeight;
 
     // Rayleigh prior peaked at ~120 BPM (BTrack-style perceptual weighting)
     // For candidate period T (lag), Rayleigh(T; sigma) = T/sigma^2 * exp(-T^2 / (2*sigma^2))
@@ -670,17 +716,10 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
     // === 1. BAYESIAN PREDICTION STEP: Spread prior through Gaussian transition ===
     // Uses precomputed transition matrix (built in initTempoState, rebuilt if bayesLambda changes).
-    if (bayesLambda != transMatrixLambda_) {
-        // Rebuild transition matrix if lambda changed at runtime
-        for (int i = 0; i < TEMPO_BINS; i++) {
-            for (int j = 0; j < TEMPO_BINS; j++) {
-                float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
-                float sigma = bayesLambda * tempoBinBpms_[j];
-                if (sigma < 1.0f) sigma = 1.0f;
-                transMatrix_[i][j] = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
-            }
-        }
+    if (bayesLambda != transMatrixLambda_ || harmonicTransWeight != transMatrixHarmonic_) {
+        buildTransitionMatrix();
         transMatrixLambda_ = bayesLambda;
+        transMatrixHarmonic_ = harmonicTransWeight;
     }
 
     float prediction[TEMPO_BINS];
@@ -814,6 +853,21 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] = 1.0f / TEMPO_BINS;
     }
 
+    // Posterior uniform floor: mix with uniform to prevent hard mode lock.
+    // With a tight transition matrix (lambda=0.07), the prediction step drives
+    // distant bins to zero, making tempo jumps (e.g., 68→136 BPM) mathematically
+    // impossible. Mixing in a small uniform component ensures every bin retains
+    // non-zero probability, allowing strong observations to gradually pull the
+    // posterior toward the correct tempo.
+    if (posteriorFloor > 0.0f) {
+        float alpha = clampf(posteriorFloor, 0.0f, 0.5f);
+        float uniform = alpha / static_cast<float>(TEMPO_BINS);
+        float scale = 1.0f - alpha;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            tempoStatePost_[i] = scale * tempoStatePost_[i] + uniform;
+        }
+    }
+
     // === 7. EXTRACT MAP ESTIMATE with per-sample ACF harmonic disambiguation ===
     int bestBin = 0;
     float bestPost = tempoStatePost_[0];
@@ -823,6 +877,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             bestBin = i;
         }
     }
+    int preCorrectionBin = bestBin;  // Save for disambiguation feedback
 
     // Per-sample ACF harmonic disambiguation (like old system):
     // Check if the raw autocorrelation at half-lag (2x BPM) or 2/3-lag (1.5x BPM)
@@ -878,9 +933,10 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                 }
             }
 
-            // Check double-lag (0.5x BPM): if MAP is too fast, demote to half tempo
-            // When FT/IOI push BPM to double-time, this provides a mechanism to
-            // correct back down. Uses harmonicCorrelationSize for extended range.
+            // Check double-lag (0.5x BPM): if MAP is too fast, demote to half tempo.
+            // Can create octave oscillation with the half-lag check above, but
+            // half/double-time lock is acceptable if phase is correct (beats still
+            // sync visually at octave errors).
             if (!corrected) {
                 int doubleLag = bestLag * 2;
                 int doubleIdx = doubleLag - minLag;
@@ -902,6 +958,16 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         }
     }
     bayesBestBin_ = bestBin;
+
+    // Disambiguation feedback: if disambiguation corrected the MAP, nudge the
+    // posterior toward the corrected bin. This helps the posterior gradually
+    // track the corrected tempo over multiple cycles.
+    if (bestBin != preCorrectionBin && disambigNudge > 0.0f) {
+        float nudge = clampf(disambigNudge, 0.0f, 0.5f);
+        float transfer = tempoStatePost_[preCorrectionBin] * nudge;
+        tempoStatePost_[preCorrectionBin] -= transfer;
+        tempoStatePost_[bestBin] += transfer;
+    }
 
     // Quadratic interpolation for sub-bin precision
     float interpolatedBpm = tempoBinBpms_[bestBin];

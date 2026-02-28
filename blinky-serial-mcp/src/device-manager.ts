@@ -45,8 +45,10 @@ export class DeviceManager {
   async disconnect(port: string): Promise<void> {
     const session = this.sessions.get(port);
     if (session) {
-      await session.disconnect();
+      // Always remove from map, even if disconnect throws.
+      // A stuck session in the map blocks reconnection to this port.
       this.sessions.delete(port);
+      await session.disconnect();
     }
   }
 
