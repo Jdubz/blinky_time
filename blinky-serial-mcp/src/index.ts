@@ -2413,37 +2413,35 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
         };
 
-        // Connect all devices
-        const connectedSessions: Array<{ port: string; session: import('./device-session.js').DeviceSession }> = [];
+        // Connect all devices in parallel
+        const connectedSessions = await Promise.all(multiPorts.map(async (p) => {
+          const { session } = await manager.connect(p);
+          return { port: p, session };
+        }));
         try {
-          for (const p of multiPorts) {
-            const { session } = await manager.connect(p);
-            connectedSessions.push({ port: p, session });
-          }
-
           // Lock gain on all devices if specified
           if (multiGain !== undefined) {
-            for (const { session } of connectedSessions) {
-              await session.serial.sendCommand(`set hwgainlock ${multiGain}`);
-            }
+            await Promise.all(connectedSessions.map(({ session }) =>
+              session.serial.sendCommand(`set hwgainlock ${multiGain}`)
+            ));
           }
 
-          // Send per-port commands for A/B configuration
+          // Send per-port commands for A/B configuration (parallel across devices)
           if (multiPortCommands) {
-            for (const [p, cmds] of Object.entries(multiPortCommands)) {
+            await Promise.all(Object.entries(multiPortCommands).map(async ([p, cmds]) => {
               const s = connectedSessions.find(x => x.port === p);
               if (s) {
                 for (const cmd of cmds) {
                   await s.session.serial.sendCommand(cmd);
                 }
               }
-            }
+            }));
           }
 
           // Start streaming on all devices
-          for (const { session } of connectedSessions) {
-            await session.serial.sendCommand('stream fast');
-          }
+          await Promise.all(connectedSessions.map(({ session }) =>
+            session.serial.sendCommand('stream fast')
+          ));
 
           // Start recording on all devices (synchronized)
           for (const { session } of connectedSessions) {
@@ -2641,15 +2639,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             }],
           };
         } finally {
-          // Always cleanup: unlock gain, disconnect all
-          for (const { session } of connectedSessions) {
-            if (multiGain !== undefined && session.getState().connected) {
-              await session.serial.sendCommand('set hwgainlock 255').catch(() => {});
-            }
+          // Always cleanup: unlock gain, disconnect all (parallel)
+          if (multiGain !== undefined) {
+            await Promise.all(connectedSessions.map(({ session }) =>
+              session.getState().connected
+                ? session.serial.sendCommand('set hwgainlock 255').catch(() => {})
+                : Promise.resolve()
+            ));
           }
-          for (const { port: p } of connectedSessions) {
-            await manager.disconnect(p).catch(() => {});
-          }
+          await Promise.all(connectedSessions.map(({ port: p }) =>
+            manager.disconnect(p).catch(() => {})
+          ));
         }
       }
 

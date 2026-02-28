@@ -318,24 +318,42 @@ def _recover_usb_port(hub_path, port_num, device_serial=None, verbose=False):
     print(f"  Recovering USB port: hub={hub_path} port={port_num}")
 
     # Power off
-    result = subprocess.run(
-        ["sudo", uhubctl, "-l", hub_path, "-p", str(port_num), "-a", "0"],
-        capture_output=True, text=True, timeout=10,
-    )
-    if verbose and result.stdout:
-        for line in result.stdout.strip().split("\n"):
-            print(f"    {line}")
+    try:
+        result = subprocess.run(
+            ["sudo", uhubctl, "-l", hub_path, "-p", str(port_num), "-a", "0"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            print(f"  uhubctl power-off failed (exit {result.returncode})")
+            if result.stderr:
+                print(f"  stderr: {result.stderr.strip()}")
+            return None
+        if verbose and result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                print(f"    {line}")
+    except subprocess.TimeoutExpired:
+        print(f"  uhubctl power-off timed out")
+        return None
 
     time.sleep(2)
 
     # Power on
-    result = subprocess.run(
-        ["sudo", uhubctl, "-l", hub_path, "-p", str(port_num), "-a", "1"],
-        capture_output=True, text=True, timeout=10,
-    )
-    if verbose and result.stdout:
-        for line in result.stdout.strip().split("\n"):
-            print(f"    {line}")
+    try:
+        result = subprocess.run(
+            ["sudo", uhubctl, "-l", hub_path, "-p", str(port_num), "-a", "1"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            print(f"  uhubctl power-on failed (exit {result.returncode})")
+            if result.stderr:
+                print(f"  stderr: {result.stderr.strip()}")
+            return None
+        if verbose and result.stdout:
+            for line in result.stdout.strip().split("\n"):
+                print(f"    {line}")
+    except subprocess.TimeoutExpired:
+        print(f"  uhubctl power-on timed out")
+        return None
 
     # Wait for device to re-enumerate
     print(f"  Waiting for device to re-enumerate...")

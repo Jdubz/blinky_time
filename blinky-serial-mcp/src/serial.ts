@@ -143,9 +143,9 @@ export class BlinkySerial extends EventEmitter {
         // Wait for write to drain to OS buffer before closing the port.
         // This ensures the device receives "stream off" before we close.
         await new Promise<void>((resolve) => {
-          this.port!.drain((err) => {
-            if (err) resolve(); // Drain failed, proceed with close anyway
-            else resolve();
+          this.port!.drain(() => {
+            // Proceed with close regardless of drain success
+            resolve();
           });
         });
       } catch {

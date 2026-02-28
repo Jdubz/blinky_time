@@ -39,7 +39,8 @@ struct AutocorrPeak {
  */
 class CombFilterBank {
 public:
-    // 20 filters over 60-200 BPM range (~7 BPM resolution)
+    // 20 filters: 60-200 BPM (~7 BPM resolution, broad musical tempo coverage)
+    // At 60 Hz: lag range = 18-60 samples
     // 40 bins created systematic posterior drift toward low BPM due to
     // non-uniform BPM spacing on the lag-uniform grid (more bins per BPM
     // at low tempos → probability accumulation). 20 bins proven at F1=0.519.
