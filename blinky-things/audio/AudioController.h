@@ -43,8 +43,8 @@ public:
     // At 60 Hz: lag range = 23-45 samples
     // Single octave prevents sub-harmonic ambiguity (68 vs 136 BPM impossible)
     static constexpr int NUM_FILTERS = 40;
-    static constexpr int MAX_LAG = 45;  // 80 BPM at 60 Hz
-    static constexpr int MIN_LAG = 23;  // ~157 BPM at 60 Hz (closest int to 3600/160)
+    static constexpr int MAX_LAG = 60;  // 60 BPM at 60 Hz
+    static constexpr int MIN_LAG = 18;  // 200 BPM at 60 Hz
 
     // === TUNING PARAMETERS ===
     float feedbackGain = 0.92f;       // Resonance strength (0.85-0.98)
@@ -263,8 +263,8 @@ public:
     float pulseFarFromBeatThreshold = 0.3f; // Phase distance > this = suppress transients
 
     // BPM range for autocorrelation tempo detection
-    float bpmMin = 80.0f;               // Minimum BPM (BTrack-style single octave prevents octave ambiguity)
-    float bpmMax = 160.0f;              // Maximum BPM (single octave: 80-160 BPM)
+    float bpmMin = 60.0f;               // Minimum BPM
+    float bpmMax = 200.0f;              // Maximum BPM
 
     // (Tempo prior params removed — replaced by bayesPriorCenter in Bayesian fusion)
     float tempoPriorWidth = 50.0f;      // Width (sigma) of Gaussian prior (BPM) — used by Bayesian static prior

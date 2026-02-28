@@ -168,8 +168,8 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
-    data_.music.bpmMin = 80.0f;
-    data_.music.bpmMax = 160.0f;
+    data_.music.bpmMin = 60.0f;
+    data_.music.bpmMax = 200.0f;
     data_.music.cbssAlpha = 0.9f;         // CBSS weighting (high = more predictive)
 
     // Tempo prior width (used by Bayesian static prior)
