@@ -507,16 +507,19 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
-    // Apply inverse-lag normalization to ACF (BTrack-style sub-harmonic penalty).
+    // Apply inverse-lag-squared normalization to ACF (strong sub-harmonic penalty).
     // For a periodic signal, acf(2T) ≈ acf(T), so sub-harmonics score equally.
-    // Dividing by lag penalizes longer periods: acf(2T)/(2T) ≈ 0.5 * acf(T)/T,
-    // giving the true period a 2x advantage over its first sub-harmonic.
+    // Dividing by lag^2 penalizes longer periods quadratically:
+    //   acf(2T)/(2T)^2 = 0.25 * acf(T)/T^2
+    // giving the true period a 4x advantage over its first sub-harmonic.
+    // Combined with Rayleigh prior (1.67x), total discrimination is ~6.7x.
     // This must happen AFTER periodicity strength (which uses raw ACF magnitude)
     // but BEFORE Bayesian fusion and harmonic disambiguation (which need
     // discriminative lag-weighted values).
     for (int i = 0; i < harmonicCorrelationSize; i++) {
         int lag = minLag + i;
-        correlationAtLag[i] /= static_cast<float>(lag);
+        float lagF = static_cast<float>(lag);
+        correlationAtLag[i] /= (lagF * lagF);  // lag^2
     }
 
     // === BAYESIAN TEMPO FUSION ===
@@ -553,17 +556,14 @@ float AudioController::smoothOnsetStrength(float raw) {
 
 void AudioController::buildTransitionMatrix() {
     // Gaussian transition matrix with harmonic shortcuts.
-    // The narrow Gaussian (lambda=0.07) handles smooth tempo tracking.
-    // Harmonic shortcuts add non-zero transition probability for octave-related
-    // tempo jumps (2:1, 1:2, 3:2, 2:3). Without these, the tight Gaussian makes
-    // it mathematically impossible for the posterior to escape half-time lock
-    // (e.g., 68→136 BPM gets exp(-102) ≈ 0 probability).
-    // Reference: madmom's TempoTransitionModel includes similar octave shortcuts.
+    // Simple BPM-space Gaussian with sigma proportional to source BPM.
+    // With 20 bins (lag-uniform grid), the non-uniform BPM spacing creates
+    // mild drift toward low BPM, but it's slow enough that observations
+    // overcome it. (40 bins had 2x worse drift — reverted to 20.)
     float htw = harmonicTransWeight;  // Tunable harmonic transition weight
 
     for (int i = 0; i < TEMPO_BINS; i++) {
         for (int j = 0; j < TEMPO_BINS; j++) {
-            // Standard narrow Gaussian
             float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
             float sigma = bayesLambda * tempoBinBpms_[j];
             if (sigma < 1.0f) sigma = 1.0f;
@@ -933,28 +933,11 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                 }
             }
 
-            // Check double-lag (0.5x BPM): if MAP is too fast, demote to half tempo.
-            // Can create octave oscillation with the half-lag check above, but
-            // half/double-time lock is acceptable if phase is correct (beats still
-            // sync visually at octave errors).
-            if (!corrected) {
-                int doubleLag = bestLag * 2;
-                int doubleIdx = doubleLag - minLag;
-                if (doubleIdx >= 0 && doubleIdx < harmonicCorrelationSize) {
-                    float doubleAcf = correlationAtLag[doubleIdx];
-                    if (doubleAcf > HARMONIC_2X_THRESH * bestAcf) {
-                        float halfBpm = 3600.0f / static_cast<float>(doubleLag);
-                        if (halfBpm >= bpmMin) {
-                            int closest = findClosestTempoBin(halfBpm);
-                            if (closest >= 0 && fabsf(tempoBinBpms_[closest] - halfBpm) < halfBpm * 0.1f) {
-                                bestBin = closest;
-                                // cppcheck-suppress unreadVariable
-                                corrected = true;
-                            }
-                        }
-                    }
-                }
-            }
+            // Double-lag check REMOVED: it created a one-way ratchet to half-time.
+            // For tempos above ~130 BPM, the half-lag (2x up) falls below minLag
+            // and can't correct back, while the double-lag (0.5x down) always fires.
+            // The 4-harmonic comb ACF + Rayleigh prior already handle sub-harmonic
+            // suppression; adding a downward disambiguation was redundant and harmful.
         }
     }
     bayesBestBin_ = bestBin;

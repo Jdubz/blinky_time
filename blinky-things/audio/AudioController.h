@@ -39,10 +39,11 @@ struct AutocorrPeak {
  */
 class CombFilterBank {
 public:
-    // 40 filters: 80-160 BPM at ~2 BPM resolution (single octave, BTrack-style)
-    // At 60 Hz: lag range = 23-45 samples
-    // Single octave prevents sub-harmonic ambiguity (68 vs 136 BPM impossible)
-    static constexpr int NUM_FILTERS = 40;
+    // 20 filters over 60-200 BPM range (~7 BPM resolution)
+    // 40 bins created systematic posterior drift toward low BPM due to
+    // non-uniform BPM spacing on the lag-uniform grid (more bins per BPM
+    // at low tempos → probability accumulation). 20 bins proven at F1=0.519.
+    static constexpr int NUM_FILTERS = 20;
     static constexpr int MAX_LAG = 60;  // 60 BPM at 60 Hz
     static constexpr int MIN_LAG = 18;  // 200 BPM at 60 Hz
 

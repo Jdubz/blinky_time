@@ -363,6 +363,38 @@ def _device_port_exists(port_path):
     return os.path.exists(port_path)
 
 
+def _check_port_available(port, verbose=False):
+    """Verify a serial port is not locked by another process.
+
+    Opens and immediately closes the port. If the port is busy (e.g., held
+    by a stale MCP server connection), this will raise an error rather than
+    letting the bootloader entry silently fail.
+
+    Returns True if the port is available, False if locked.
+    """
+    try:
+        ser = serial.Serial(port, 115200, timeout=0.1)
+        ser.close()
+        return True
+    except serial.SerialException as e:
+        err_str = str(e)
+        if "Device or resource busy" in err_str or "EBUSY" in err_str:
+            print(f"\n  ERROR: {port} is locked by another process!")
+            print(f"  This usually means an MCP server or console session is still connected.")
+            print(f"  Fix: Disconnect all MCP sessions, or kill stale processes:")
+            print(f"    pkill -f 'node.*blinky-serial-mcp'")
+            print(f"  Then wait 2-3 seconds for the port to be released.\n")
+            return False
+        if verbose:
+            print(f"  Port check warning: {e}")
+        # Other errors (e.g., port not found) may be transient
+        return True
+    except OSError as e:
+        if verbose:
+            print(f"  Port check OS error: {e}")
+        return True
+
+
 def trigger_bootloader(port, verbose=False):
     """Enter UF2 bootloader mode with automatic retry.
 
@@ -380,6 +412,12 @@ def trigger_bootloader(port, verbose=False):
     the mode switch.
     """
     print_section("ENTERING BOOTLOADER")
+
+    # Pre-flight: verify port is not locked by another process
+    if not _check_port_available(port, verbose):
+        print(f"\n  ABORTING: Port {port} is not available.")
+        print(f"  Resolve the port lock and retry.")
+        return None
 
     device_serial = get_serial_number(port)
     if device_serial:
@@ -1161,6 +1199,8 @@ def upload_to_device(port, uf2_path, verbose=False):
     try:
         # Phase 3: Enter bootloader
         device_serial = trigger_bootloader(port, verbose=verbose)
+        if device_serial is None:
+            return False, "port locked by another process — disconnect MCP sessions first"
 
         # Phase 4: Mount UF2 drive
         mount_point = mount_uf2_drive(
