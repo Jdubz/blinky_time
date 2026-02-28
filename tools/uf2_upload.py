@@ -369,7 +369,9 @@ def _recover_usb_port(hub_path, port_num, device_serial=None, verbose=False):
             # No serial number — check if any new XIAO port appeared
             ports = find_all_xiao_ports()
             if ports:
-                # Can't be sure which one is ours, return the first new one
+                if len(ports) > 1:
+                    print(f"  WARNING: No device serial available and {len(ports)} XIAO ports found.")
+                    print(f"  Returning {ports[0]} as best guess — may be wrong device in multi-device setups.")
                 return ports[0]
 
     print(f"  Device did not re-enumerate after USB port recovery")
@@ -391,7 +393,7 @@ def _check_port_available(port, verbose=False):
     Returns True if the port is available, False if locked.
     """
     try:
-        ser = serial.Serial(port, 115200, timeout=0.1)
+        ser = serial.Serial(port, 115200, timeout=0.1, dsrdtr=False, rtscts=False)
         ser.close()
         return True
     except serial.SerialException as e:
