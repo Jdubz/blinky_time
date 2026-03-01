@@ -61,10 +61,10 @@ def _find_uf2conv():
 UF2CONV_PATH = _find_uf2conv()
 
 # --- Timeouts (seconds) ---
-BOOTLOADER_TIMEOUT = 15
-DRIVE_MOUNT_TIMEOUT = 15
-REBOOT_TIMEOUT = 15
-PORT_REAPPEAR_TIMEOUT = 15
+BOOTLOADER_TIMEOUT = 8
+DRIVE_MOUNT_TIMEOUT = 10
+REBOOT_TIMEOUT = 8
+PORT_REAPPEAR_TIMEOUT = 10
 
 # --- UF2 drive identification ---
 UF2_INFO_FILE = "INFO_UF2.TXT"
@@ -204,7 +204,10 @@ def convert_to_uf2(hex_path, output_dir=None):
     print(f"  Output: {uf2_path}")
     print(f"  Family: {UF2_FAMILY_ID}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("UF2 conversion hung (timed out after 30s)")
 
     if result.returncode != 0:
         print(f"  [FAIL] uf2conv.py failed:")
@@ -261,7 +264,7 @@ def find_port_by_serial(serial_number, target_pid=None):
     return None
 
 
-MAX_BOOTLOADER_RETRIES = 5
+MAX_BOOTLOADER_RETRIES = 3
 
 
 # ============================================================
@@ -384,14 +387,42 @@ def _device_port_exists(port_path):
 
 
 def _check_port_available(port, verbose=False):
-    """Verify a serial port is not locked by another process.
+    """Verify a serial port is available and belongs to a XIAO device.
 
-    Opens and immediately closes the port. If the port is busy (e.g., held
-    by a stale MCP server connection), this will raise an error rather than
-    letting the bootloader entry silently fail.
+    Checks:
+    1. Port exists and can be opened (not locked by another process)
+    2. Port VID/PID matches XIAO nRF52840 in application mode
 
-    Returns True if the port is available, False if locked.
+    Returns True if the port is available and valid, False otherwise.
     """
+    # Check 1: Verify VID/PID matches a XIAO device in application mode.
+    # This prevents sending bootloader commands to the wrong device if
+    # ports shuffled after a previous flash (USB re-enumeration).
+    port_info = None
+    for p in serial.tools.list_ports.comports():
+        if p.device == port:
+            port_info = p
+            break
+
+    if port_info is None:
+        print(f"\n  ERROR: {port} not found in system port list!")
+        print(f"  The port may have disappeared (device reset or USB disconnect).")
+        return False
+
+    if port_info.vid != NORMAL_VID or port_info.pid != NORMAL_PID:
+        print(f"\n  ERROR: {port} is not a XIAO nRF52840 in application mode!")
+        print(f"  Expected VID:PID {NORMAL_VID:#06x}:{NORMAL_PID:#06x}")
+        print(f"  Found    VID:PID {port_info.vid:#06x}:{port_info.pid:#06x}" if port_info.vid else
+              f"  Found    VID:PID None:None")
+        print(f"  Port numbers may have shuffled after a previous flash.")
+        print(f"  Re-run with the correct port, or use --all to auto-detect.")
+        return False
+
+    if verbose:
+        print(f"  Port identity: VID:PID {port_info.vid:#06x}:{port_info.pid:#06x}"
+              f" serial={port_info.serial_number}")
+
+    # Check 2: Verify port is not locked by another process.
     try:
         ser = serial.Serial(port, 115200, timeout=0.1, dsrdtr=False, rtscts=False)
         ser.close()
@@ -501,7 +532,7 @@ def trigger_bootloader(port, verbose=False):
             except (BrokenPipeError, OSError):
                 pass
 
-            if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+            if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
                 return device_serial
 
             # Check if device disconnected but UF2 drive didn't appear.
@@ -549,7 +580,7 @@ def trigger_bootloader(port, verbose=False):
                     pass
                 print(f"  1200 baud touch complete")
 
-                if _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=verbose):
+                if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
                     return device_serial
 
             except serial.SerialException as e:
@@ -558,11 +589,16 @@ def trigger_bootloader(port, verbose=False):
 
         print(f"  UF2 drive not detected (attempt {attempt})")
 
-    print(f"  Warning: UF2 drive not detected after {MAX_BOOTLOADER_RETRIES} attempts")
-    return device_serial
+    print(f"  ERROR: Bootloader entry failed after {MAX_BOOTLOADER_RETRIES} attempts")
+    print(f"  Device did not enter UF2 mode (no block device appeared).")
+    print(f"  Possible causes:")
+    print(f"    - Intermittent GPREGRET race condition (nRF52 SoftDevice clears register)")
+    print(f"    - USB bus instability (too many recent re-enumerations)")
+    print(f"    - Device firmware not responding to bootloader command")
+    return None
 
 
-def _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=False):
+def _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=False):
     """Wait for a new USB block device to appear (UF2 bootloader mode).
 
     Returns True if a new USB block device appeared, False if timeout.
@@ -588,18 +624,25 @@ def _wait_for_uf2_drive(pre_existing_blocks, timeout=8, verbose=False):
 
 def ensure_udisks2_running():
     """Start udisks2 service if not running. Returns True if running."""
-    result = subprocess.run(
-        ["systemctl", "is-active", "udisks2"],
-        capture_output=True, text=True,
-    )
-    if result.stdout.strip() == "active":
-        return True
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "udisks2"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip() == "active":
+            return True
+    except subprocess.TimeoutExpired:
+        print(f"  Warning: 'systemctl is-active' timed out, assuming udisks2 not running")
 
     print(f"  Starting udisks2 service...")
-    result = subprocess.run(
-        ["sudo", "systemctl", "start", "udisks2"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "start", "udisks2"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"  Warning: 'systemctl start udisks2' timed out")
+        return False
     if result.returncode == 0:
         time.sleep(1)
         print(f"  udisks2 started")
@@ -642,10 +685,13 @@ def find_uf2_block_device(timeout):
 def _get_usb_block_devices():
     """Get set of USB block device paths from lsblk."""
     devices = set()
-    result = subprocess.run(
-        ["lsblk", "-o", "NAME,TRAN,RM,TYPE", "-J"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["lsblk", "-o", "NAME,TRAN,RM,TYPE", "-J"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        return devices
     if result.returncode != 0:
         return devices
 
@@ -759,11 +805,15 @@ def find_existing_uf2_mount():
 def mount_with_udisksctl(block_device):
     """Mount using udisksctl. Returns mount point Path or None."""
     print(f"  Mounting {block_device} with udisksctl...")
-    result = subprocess.run(
-        ["udisksctl", "mount", "--block-device", block_device,
-         "--no-user-interaction"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["udisksctl", "mount", "--block-device", block_device,
+             "--no-user-interaction"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"  udisksctl mount timed out after 10s")
+        return None
 
     if result.returncode == 0:
         output = result.stdout.strip()
@@ -800,19 +850,26 @@ def mount_manually(block_device, mount_point=None):
         mount_point = Path(mount_point)
     print(f"  Manual mount {block_device} -> {mount_point}...")
 
-    subprocess.run(
-        ["sudo", "mkdir", "-p", str(mount_point)],
-        capture_output=True,
-    )
+    try:
+        subprocess.run(
+            ["sudo", "mkdir", "-p", str(mount_point)],
+            capture_output=True, timeout=5,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"  Warning: 'mkdir -p' timed out, continuing anyway")
 
     uid = os.getuid()
     gid = os.getgid()
-    result = subprocess.run(
-        ["sudo", "mount", "-t", "vfat", "-o",
-         f"uid={uid},gid={gid},umask=022",
-         block_device, str(mount_point)],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["sudo", "mount", "-t", "vfat", "-o",
+             f"uid={uid},gid={gid},umask=022",
+             block_device, str(mount_point)],
+            capture_output=True, text=True, timeout=10,
+        )
+    except subprocess.TimeoutExpired:
+        print(f"  Mount timed out after 10s")
+        return None
 
     if result.returncode == 0:
         if (mount_point / UF2_INFO_FILE).exists():
@@ -820,10 +877,13 @@ def mount_manually(block_device, mount_point=None):
             return mount_point
         else:
             print(f"  Mounted but {UF2_INFO_FILE} not found (wrong device?)")
-            subprocess.run(
-                ["sudo", "umount", str(mount_point)],
-                capture_output=True,
-            )
+            try:
+                subprocess.run(
+                    ["sudo", "umount", str(mount_point)],
+                    capture_output=True, timeout=10,
+                )
+            except subprocess.TimeoutExpired:
+                print(f"  Warning: umount timed out")
     else:
         print(f"  Mount failed: {result.stderr.strip()}")
 
@@ -1055,12 +1115,16 @@ def run_self_test():
 
     # Test 3: udisksctl
     print("Test 3: udisksctl...")
-    result = subprocess.run(["which", "udisksctl"], capture_output=True, text=True)
-    if result.returncode == 0:
-        print(f"  [PASS] {result.stdout.strip()}")
-        passed += 1
-    else:
-        print(f"  [FAIL] Not found (install udisks2)")
+    try:
+        result = subprocess.run(["which", "udisksctl"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            print(f"  [PASS] {result.stdout.strip()}")
+            passed += 1
+        else:
+            print(f"  [FAIL] Not found (install udisks2)")
+            failed += 1
+    except subprocess.TimeoutExpired:
+        print(f"  [FAIL] 'which udisksctl' timed out")
         failed += 1
 
     # Test 4: pre_upload_check.py
@@ -1102,7 +1166,7 @@ def run_self_test():
     print("Test 7: User permissions...")
     try:
         groups_out = subprocess.run(
-            ["groups"], capture_output=True, text=True
+            ["groups"], capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         has_dialout = "dialout" in groups_out
         has_plugdev = "plugdev" in groups_out
@@ -1216,11 +1280,12 @@ def upload_to_device(port, uf2_path, verbose=False):
     Runs phases 3-6: bootloader entry, drive mount, firmware copy, reboot verify.
     Returns (success: bool, message: str).
     """
+    dev_start = time.monotonic()
     try:
         # Phase 3: Enter bootloader
         device_serial = trigger_bootloader(port, verbose=verbose)
         if device_serial is None:
-            return False, "port locked by another process — disconnect MCP sessions first"
+            return False, f"bootloader entry failed ({_elapsed(dev_start)}) — see errors above"
 
         # Phase 4: Mount UF2 drive
         mount_point = mount_uf2_drive(
@@ -1230,15 +1295,16 @@ def upload_to_device(port, uf2_path, verbose=False):
 
         # Phase 5: Copy firmware
         if not copy_firmware(uf2_path, mount_point):
-            return False, "firmware copy failed"
+            return False, f"firmware copy failed ({_elapsed(dev_start)})"
 
         # Phase 6: Verify reboot
         if verify_reboot(mount_point, port, device_serial, verbose=verbose):
             new_port = find_port_by_serial(device_serial, NORMAL_PID) if device_serial else None
-            msg = f"OK (now on {new_port})" if new_port else "OK"
+            elapsed = _elapsed(dev_start)
+            msg = f"OK in {elapsed} (now on {new_port})" if new_port else f"OK in {elapsed}"
             return True, msg
         else:
-            return False, "reboot verification failed"
+            return False, f"reboot verification failed ({_elapsed(dev_start)})"
 
     except TimeoutError as e:
         return False, f"timeout: {e}"
@@ -1321,6 +1387,11 @@ def upload_parallel(ports, uf2_path, verbose=False):
 
             print(f"  Device {i + 1}/{len(ports)}: {port}")
 
+            # Pre-flight: verify port identity (VID/PID check)
+            if not _check_port_available(port, verbose):
+                print(f"    SKIPPING: {port} is not available or not a XIAO device")
+                continue
+
             # Snapshot block devices before bootloader command
             pre_blocks = _get_usb_block_devices()
 
@@ -1373,7 +1444,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
 
                 # Wait for a new block device (this specific device)
                 print(f"    Waiting for UF2 drive...")
-                deadline = time.monotonic() + 8
+                deadline = time.monotonic() + 5
                 new_dev = None
                 while time.monotonic() < deadline:
                     current = _get_usb_block_devices()
@@ -1428,7 +1499,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                             except (BrokenPipeError, OSError):
                                 pass
 
-                            deadline = time.monotonic() + 8
+                            deadline = time.monotonic() + 5
                             while time.monotonic() < deadline:
                                 current = _get_usb_block_devices()
                                 new_devices = current - pre_blocks
@@ -1557,11 +1628,19 @@ def upload_parallel(ports, uf2_path, verbose=False):
 #  Main
 # ============================================================
 
+def _elapsed(start_time):
+    """Return elapsed time string since start_time."""
+    elapsed = time.monotonic() - start_time
+    return f"{elapsed:.1f}s"
+
+
 def main():
     args = parse_args()
 
     if args.self_test:
         return 0 if run_self_test() else 1
+
+    start_time = time.monotonic()
 
     # --- Resolve port list ---
     ports = list(args.ports)  # copy so we can modify
@@ -1632,10 +1711,10 @@ def main():
 
             port = ports[0] if ports else None
             if verify_reboot(mount_point, port, None, verbose=args.verbose):
-                print_success("UPLOAD SUCCESSFUL")
+                print_success(f"UPLOAD SUCCESSFUL ({_elapsed(start_time)})")
                 return 0
             else:
-                print_failure("REBOOT VERIFICATION FAILED")
+                print_failure(f"REBOOT VERIFICATION FAILED ({_elapsed(start_time)})")
                 return 1
 
         # --- Multi-device upload ---
@@ -1646,6 +1725,16 @@ def main():
             results = []  # list of (port, success, message)
 
             for i, port in enumerate(ports):
+                # USB settle time between devices: after a flash, the previous
+                # device reboots and re-enumerates. Give the USB bus time to
+                # stabilize before touching the next port, preventing port
+                # number shuffling and USB congestion.
+                if i > 0 and len(ports) > 1:
+                    prev_port, prev_ok, _ = results[-1]
+                    if prev_ok:
+                        print(f"\n  Waiting 3s for USB bus to settle after {prev_port} reboot...")
+                        time.sleep(3)
+
                 if len(ports) > 1:
                     print_section(f"DEVICE {i + 1}/{len(ports)}: {port}")
 
@@ -1653,10 +1742,10 @@ def main():
                 results.append((port, success, message))
 
             if success and len(ports) == 1:
-                print_success("UPLOAD SUCCESSFUL")
+                print_success(f"UPLOAD SUCCESSFUL ({_elapsed(start_time)})")
                 print(f"  {message}")
             elif not success and len(ports) == 1:
-                print_failure("UPLOAD FAILED")
+                print_failure(f"UPLOAD FAILED ({_elapsed(start_time)})")
                 print(f"  {message}")
 
         # --- Summary (multi-device only) ---
@@ -1664,7 +1753,7 @@ def main():
             succeeded = sum(1 for _, ok, _ in results if ok)
             total = len(results)
 
-            print_section(f"UPLOAD SUMMARY: {succeeded}/{total} devices")
+            print_section(f"UPLOAD SUMMARY: {succeeded}/{total} devices ({_elapsed(start_time)})")
             for port, success, message in results:
                 status = "OK" if success else "FAILED"
                 print(f"  {port:20s}  {status:8s}  {message}")
@@ -1680,21 +1769,21 @@ def main():
         return 0 if results[0][1] else 1
 
     except FileNotFoundError as e:
-        print(f"\nERROR: {e}")
+        print(f"\nERROR ({_elapsed(start_time)}): {e}")
         cleanup_stale_mounts()
         return 2
     except TimeoutError as e:
-        print_failure("TIMEOUT")
+        print_failure(f"TIMEOUT ({_elapsed(start_time)})")
         print(f"  {e}")
         cleanup_stale_mounts()
         return 3
     except RuntimeError as e:
-        print_failure("ERROR")
+        print_failure(f"ERROR ({_elapsed(start_time)})")
         print(f"  {e}")
         cleanup_stale_mounts()
         return 1
     except KeyboardInterrupt:
-        print("\n\nUpload cancelled.")
+        print(f"\n\nUpload cancelled ({_elapsed(start_time)}).")
         cleanup_stale_mounts()
         return 130
 
