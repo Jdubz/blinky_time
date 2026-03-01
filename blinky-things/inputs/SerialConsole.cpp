@@ -276,15 +276,15 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",
         "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
     settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
-        "Local-mean ODF threshold before autocorrelation (BTrack-style, v31)");
+        "Local-mean ODF threshold before autocorrelation (BTrack-style, v32)");
     settings_.registerBool("densityoctave", &audioCtrl_->densityOctaveEnabled, "rhythm",
-        "Onset-density octave penalty in Bayesian posterior (v31)");
+        "Onset-density octave penalty in Bayesian posterior (v32)");
     settings_.registerFloat("densityminpb", &audioCtrl_->densityMinPerBeat, "rhythm",
         "Min plausible transients per beat for density octave (0.1-3)", 0.1f, 3.0f);
     settings_.registerFloat("densitymaxpb", &audioCtrl_->densityMaxPerBeat, "rhythm",
         "Max plausible transients per beat for density octave (1-20)", 1.0f, 20.0f);
     settings_.registerBool("octavecheck", &audioCtrl_->octaveCheckEnabled, "rhythm",
-        "Shadow CBSS octave checker (v31)");
+        "Shadow CBSS octave checker (v32)");
     settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
         "Check octave every N beats (2-16)", 2, 16);
     settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",

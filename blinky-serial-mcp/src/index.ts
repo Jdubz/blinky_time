@@ -2048,7 +2048,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // F-measure with 70ms tolerance (standard beat tracking)
           const BEAT_TOLERANCE_SEC = 0.07;
-          const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp } =
+          const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
             matchEventsF1(estBeatsFromDevice, refBeats, BEAT_TOLERANCE_SEC);
 
           // Transient F1: raw transient timestamps vs ground truth beats
@@ -2187,9 +2187,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             beatOffsetStats: null,
             beatOffsetHistogram: {},
             beatVsReference: {
-              matched: tp,
-              extra: estBeatsFromDevice.length - tp,
-              missed: refBeats.length - tp,
+              matched: beatTp,
+              extra: estBeatsFromDevice.length - beatTp,
+              missed: refBeats.length - beatTp,
             },
             predictionRatio: null,
             transientBeatOffsets: [],
@@ -2559,7 +2559,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const avgBpm = activeStates.length > 0
               ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
             const expectedBPM = multiGtData.bpm || 0;
-            const bpmAcc = computeBpmMetrics(avgBpm, expectedBPM)?.accuracy ?? null;
+            const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
+            const bpmAcc = bpmMetrics?.accuracy ?? null;
+            const bpmErr = bpmMetrics?.error ?? null;
 
             // Beat offset stats
             const beatOffsets: number[] = [];
@@ -2595,6 +2597,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               musicMode: {
                 avgBpm: Math.round(avgBpm * 10) / 10,
                 expectedBpm: expectedBPM,
+                bpmError: bpmErr !== null ? Math.round(bpmErr * 10) / 10 : null,
                 bpmAccuracy: bpmAcc !== null ? Math.round(bpmAcc * 1000) / 1000 : null,
               },
               timing: {

@@ -404,7 +404,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Copy circular OSS buffer to a linear working buffer.
     // When adaptiveOdfThresh is on, apply BTrack-style local-mean subtraction
     // with half-wave rectification to remove arrangement-level dynamics.
-    static float ossLinear[OSS_BUFFER_SIZE];
+    static float ossLinear[OSS_BUFFER_SIZE];  // static to avoid 1.4KB stack allocation; single-threaded, not reentrant
     for (int i = 0; i < ossCount_; i++) {
         int idx = (ossWriteIdx_ - ossCount_ + i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
         ossLinear[i] = ossBuffer_[idx];
@@ -1350,7 +1350,9 @@ void AudioController::checkOctaveAlternative() {
     int halfT = T / 2;
     if (halfT < 10) return;
 
-    // Score each tempo by summing CBSS values at expected beat positions
+    // Score each tempo by summing CBSS values at expected beat positions.
+    // cbssBuffer_ is circular with sampleCounter_ as the write head;
+    // idx % OSS_BUFFER_SIZE maps absolute sample indices to buffer positions.
     // Look back over the last ~4 beats of history
     int lookback = T * 4;
     if (lookback > sampleCounter_) lookback = sampleCounter_;
