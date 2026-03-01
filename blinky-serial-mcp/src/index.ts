@@ -64,11 +64,12 @@ function matchEventsF1(
   return { f1, precision, recall, tp };
 }
 
-/** BPM accuracy as 1 - percentError/100, clamped to [0, 1]. */
-function computeBpmAccuracy(avgBpm: number, expectedBpm: number): number | null {
+/** Computes BPM accuracy and error percentage. */
+function computeBpmMetrics(avgBpm: number, expectedBpm: number): { accuracy: number; error: number } | null {
   if (expectedBpm <= 0 || avgBpm <= 0) return null;
-  const errPct = Math.abs(avgBpm - expectedBpm) / expectedBpm * 100;
-  return Math.max(0, 1 - errPct / 100);
+  const error = Math.abs(avgBpm - expectedBpm) / expectedBpm * 100;
+  const accuracy = Math.max(0, 1 - error / 100);
+  return { accuracy, error };
 }
 
 // Multi-device connection manager
@@ -2138,9 +2139,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // BPM accuracy
           const expectedBPM = gtData.bpm || 0;
-          const bpmAccuracy = computeBpmAccuracy(avgBpm, expectedBPM);
-          const bpmError = (expectedBPM > 0 && avgBpm > 0)
-            ? Math.abs(avgBpm - expectedBPM) / expectedBPM * 100 : null;
+          const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
+          const bpmAccuracy = bpmMetrics?.accuracy ?? null;
+          const bpmError = bpmMetrics?.error ?? null;
 
           // Phase stability: standard deviation of phase during active tracking
           let phaseStability = 0;
@@ -2417,11 +2418,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             return { port: p, session };
           }));
           const connectFailures: string[] = [];
-          for (const result of connectResults) {
+          for (let idx = 0; idx < connectResults.length; idx++) {
+            const result = connectResults[idx];
             if (result.status === 'fulfilled') {
               connectedSessions.push(result.value);
             } else {
-              connectFailures.push(String(result.reason));
+              const reason = result.reason as Error;
+              connectFailures.push(`${multiPorts[idx]}: ${reason.message ?? String(result.reason)}`);
             }
           }
           if (connectFailures.length > 0) {
@@ -2556,7 +2559,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const avgBpm = activeStates.length > 0
               ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
             const expectedBPM = multiGtData.bpm || 0;
-            const bpmAcc = computeBpmAccuracy(avgBpm, expectedBPM);
+            const bpmAcc = computeBpmMetrics(avgBpm, expectedBPM)?.accuracy ?? null;
 
             // Beat offset stats
             const beatOffsets: number[] = [];
