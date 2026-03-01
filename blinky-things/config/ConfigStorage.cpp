@@ -192,6 +192,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
     data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
+    data_.music.cbssContrast = 1.0f;          // Power-law ODF contrast before CBSS (1=linear, 2=BTrack square)
+    data_.music.cbssWarmupBeats = 0;          // CBSS warmup: lower alpha for first N beats (0=disabled)
+    data_.music.onsetSnapWindow = 4;          // Snap beat to strongest OSS in last N frames (0=disabled)
 
     // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via 4-device sweep)
     // v25: BTrack-style harmonic comb ACF + Rayleigh prior + tighter lambda
@@ -209,6 +212,8 @@ void ConfigStorage::loadSettingsDefaults() {
     // Onset-density octave discriminator (v31)
     data_.music.densityMinPerBeat = 0.5f;    // Min plausible transients per beat
     data_.music.densityMaxPerBeat = 5.0f;    // Max plausible transients per beat
+    data_.music.densityPenaltyExp = 2.0f;    // Gaussian exponent for density penalty
+    data_.music.densityTarget = 0.0f;        // Target transients/beat (0=disabled, uses min/max)
     data_.music.octaveScoreRatio = 1.3f;     // Shadow CBSS score ratio for octave switch (v32: was 1.5, aggressive works better)
 
     data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
@@ -219,10 +224,20 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.beatBoundaryTempo = true;    // Defer tempo to beat boundaries (v28, BTrack-style)
     data_.music.unifiedOdf = true;           // BandFlux pre-threshold as CBSS ODF (v28, BTrack-style)
     data_.music.adaptiveOdfThresh = false;   // Local-mean ODF threshold (v31, marginal benefit — keep off)
+    data_.music.odfThreshWindow = 15;        // Half-window size (15 samples = ~250ms at 60Hz)
+    data_.music.onsetTrainOdf = false;       // Binary onset-train ODF for ACF (v34, off by default)
+    data_.music.odfDiffMode = false;         // HWR first-difference ODF for ACF (v35, off by default)
+    data_.music.odfSource = 0;               // Default ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux)
     data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
     data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
+    data_.music.phaseCheckEnabled = false;  // Phase alignment checker (v37: disabled — full validation showed net-negative F1)
+    data_.music.phaseCheckBeats = 4;        // Check phase every 4 beats
+    data_.music.phaseCheckRatio = 1.2f;     // Shifted phase must score 1.2x better
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
+    data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
+    data_.music.hmmContrast = 2.0f;           // ODF power-law contrast (sharper beat/non-beat)
+    data_.music.hmmTempoNorm = true;          // Tempo-normalized argmax (prevents slow-tempo bias)
 
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
@@ -494,6 +509,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.beatTimingOffset, 0.0f, 15.0f, F("beatTimingOffset"));
     validateFloat(data_.music.phaseCorrectionStrength, 0.0f, 1.0f, F("phaseCorrStrength"));
     validateFloat(data_.music.cbssThresholdFactor, 0.0f, 2.0f, F("cbssThreshFactor"));
+    validateFloat(data_.music.cbssContrast, 0.5f, 4.0f, F("cbssContrast"));
+    VALIDATE_INT(data_.music.cbssWarmupBeats, 0, 32, F("cbssWarmupBeats"));
+    VALIDATE_INT(data_.music.onsetSnapWindow, 0, 16, F("onsetSnapWindow"));
 
     // Bayesian tempo fusion validation (v18+)
     validateFloat(data_.music.bayesLambda, 0.01f, 1.0f, F("bayesLambda"));
@@ -511,11 +529,21 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
         fixedCount++;
     }
-    // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
+    // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled, phaseCheckEnabled are bools — no range validation needed
+    VALIDATE_INT(data_.music.phaseCheckBeats, 2, 16, F("phaseCheckBeats"));
+    validateFloat(data_.music.phaseCheckRatio, 1.1f, 3.0f, F("phaseCheckRatio"));
+    VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
+    if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
+        SerialConsole::logWarn(F("Invalid odfThreshWindow, clamping"));
+        data_.music.odfThreshWindow = data_.music.odfThreshWindow < 5 ? 5 : 30;
+        fixedCount++;
+    }
 
     // Onset-density octave discriminator validation (v31)
     validateFloat(data_.music.densityMinPerBeat, 0.1f, 3.0f, F("densityMinPerBeat"));
     validateFloat(data_.music.densityMaxPerBeat, 1.0f, 20.0f, F("densityMaxPerBeat"));
+    validateFloat(data_.music.densityPenaltyExp, 1.0f, 20.0f, F("densityPenaltyExp"));
+    validateFloat(data_.music.densityTarget, 0.0f, 10.0f, F("densityTarget"));
     if (data_.music.densityMinPerBeat >= data_.music.densityMaxPerBeat) {
         SerialConsole::logWarn(F("densityMinPerBeat >= densityMaxPerBeat, resetting"));
         data_.music.densityMinPerBeat = 0.5f;
@@ -523,6 +551,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         fixedCount++;
     }
     validateFloat(data_.music.octaveScoreRatio, 1.0f, 5.0f, F("octaveScoreRatio"));
+    validateFloat(data_.music.hmmContrast, 0.5f, 8.0f, F("hmmContrast"));
     if (data_.music.octaveCheckBeats < 2 || data_.music.octaveCheckBeats > 16) {
         SerialConsole::logWarn(F("Invalid octaveCheckBeats, clamping"));
         data_.music.octaveCheckBeats = data_.music.octaveCheckBeats < 2 ? 2 : 16;
@@ -700,6 +729,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->beatTimingOffset = data_.music.beatTimingOffset;
         audioCtrl->phaseCorrectionStrength = data_.music.phaseCorrectionStrength;
         audioCtrl->cbssThresholdFactor = data_.music.cbssThresholdFactor;
+        audioCtrl->cbssContrast = data_.music.cbssContrast;
+        audioCtrl->cbssWarmupBeats = data_.music.cbssWarmupBeats;
+        audioCtrl->onsetSnapWindow = data_.music.onsetSnapWindow;
 
         // Bayesian tempo fusion (v18+)
         audioCtrl->bayesLambda = data_.music.bayesLambda;
@@ -721,12 +753,24 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->beatBoundaryTempo = data_.music.beatBoundaryTempo;
         audioCtrl->unifiedOdf = data_.music.unifiedOdf;
         audioCtrl->adaptiveOdfThresh = data_.music.adaptiveOdfThresh;
+        audioCtrl->odfThreshWindow = data_.music.odfThreshWindow;
+        audioCtrl->onsetTrainOdf = data_.music.onsetTrainOdf;
+        audioCtrl->odfDiffMode = data_.music.odfDiffMode;
+        audioCtrl->odfSource = data_.music.odfSource;
         audioCtrl->densityOctaveEnabled = data_.music.densityOctaveEnabled;
         audioCtrl->densityMinPerBeat = data_.music.densityMinPerBeat;
         audioCtrl->densityMaxPerBeat = data_.music.densityMaxPerBeat;
+        audioCtrl->densityPenaltyExp = data_.music.densityPenaltyExp;
+        audioCtrl->densityTarget = data_.music.densityTarget;
         audioCtrl->octaveCheckEnabled = data_.music.octaveCheckEnabled;
+        audioCtrl->phaseCheckEnabled = data_.music.phaseCheckEnabled;
+        audioCtrl->phaseCheckBeats = data_.music.phaseCheckBeats;
+        audioCtrl->phaseCheckRatio = data_.music.phaseCheckRatio;
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
+        audioCtrl->barPointerHmm = data_.music.barPointerHmm;
+        audioCtrl->hmmContrast = data_.music.hmmContrast;
+        audioCtrl->hmmTempoNorm = data_.music.hmmTempoNorm;
         audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
 
         // Spectral processing (v23+)
@@ -889,6 +933,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.beatTimingOffset = audioCtrl->beatTimingOffset;
         data_.music.phaseCorrectionStrength = audioCtrl->phaseCorrectionStrength;
         data_.music.cbssThresholdFactor = audioCtrl->cbssThresholdFactor;
+        data_.music.cbssContrast = audioCtrl->cbssContrast;
+        data_.music.cbssWarmupBeats = audioCtrl->cbssWarmupBeats;
+        data_.music.onsetSnapWindow = audioCtrl->onsetSnapWindow;
 
         // Bayesian tempo fusion (v18+)
         data_.music.bayesLambda = audioCtrl->bayesLambda;
@@ -910,12 +957,24 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.beatBoundaryTempo = audioCtrl->beatBoundaryTempo;
         data_.music.unifiedOdf = audioCtrl->unifiedOdf;
         data_.music.adaptiveOdfThresh = audioCtrl->adaptiveOdfThresh;
+        data_.music.odfThreshWindow = audioCtrl->odfThreshWindow;
+        data_.music.onsetTrainOdf = audioCtrl->onsetTrainOdf;
+        data_.music.odfDiffMode = audioCtrl->odfDiffMode;
+        data_.music.odfSource = audioCtrl->odfSource;
         data_.music.densityOctaveEnabled = audioCtrl->densityOctaveEnabled;
         data_.music.densityMinPerBeat = audioCtrl->densityMinPerBeat;
         data_.music.densityMaxPerBeat = audioCtrl->densityMaxPerBeat;
+        data_.music.densityPenaltyExp = audioCtrl->densityPenaltyExp;
+        data_.music.densityTarget = audioCtrl->densityTarget;
         data_.music.octaveCheckEnabled = audioCtrl->octaveCheckEnabled;
+        data_.music.phaseCheckEnabled = audioCtrl->phaseCheckEnabled;
+        data_.music.phaseCheckBeats = audioCtrl->phaseCheckBeats;
+        data_.music.phaseCheckRatio = audioCtrl->phaseCheckRatio;
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
+        data_.music.barPointerHmm = audioCtrl->barPointerHmm;
+        data_.music.hmmContrast = audioCtrl->hmmContrast;
+        data_.music.hmmTempoNorm = audioCtrl->hmmTempoNorm;
         data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
 
         // Spectral processing (v23+)

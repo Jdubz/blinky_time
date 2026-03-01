@@ -261,6 +261,12 @@ void SerialConsole::registerRhythmSettings() {
         "Phase correction toward transients (0=off, 1=full snap)", 0.0f, 1.0f);
     settings_.registerFloat("cbssthresh", &audioCtrl_->cbssThresholdFactor, "rhythm",
         "CBSS adaptive threshold factor (0=off, beat fires only if CBSS > factor*mean)", 0.0f, 2.0f);
+    settings_.registerFloat("cbsscontrast", &audioCtrl_->cbssContrast, "rhythm",
+        "Power-law ODF contrast before CBSS (1=linear, 2=BTrack-style square)", 0.5f, 4.0f);
+    settings_.registerUint8("warmupbeats", &audioCtrl_->cbssWarmupBeats, "rhythm",
+        "CBSS warmup beats: lower alpha for first N beats (0=disabled)", 0, 32);
+    settings_.registerUint8("onsetsnap", &audioCtrl_->onsetSnapWindow, "rhythm",
+        "Snap beat to strongest OSS in last N frames (0=disabled, 4=default)", 0, 16);
     settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothingFactor, "rhythm",
         "Tempo EMA smoothing (0.5=fast, 0.99=slow)", 0.5f, 0.99f);
     settings_.registerUint8("odfsmooth", &audioCtrl_->odfSmoothWidth, "rhythm",
@@ -277,22 +283,46 @@ void SerialConsole::registerRhythmSettings() {
         "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
     settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
         "Local-mean ODF threshold before autocorrelation (BTrack-style, v32)");
+    settings_.registerUint8("odfthreshwin", &audioCtrl_->odfThreshWindow, "rhythm",
+        "Adaptive ODF threshold half-window size (samples each side, 5-30)", 5, 30);
+    settings_.registerBool("onsettrainodf", &audioCtrl_->onsetTrainOdf, "rhythm",
+        "Binary onset-train ODF for ACF (post-threshold events, immune to enclosure resonance)");
+    settings_.registerBool("odfdiff", &audioCtrl_->odfDiffMode, "rhythm",
+        "HWR first-difference ODF for ACF (BTrack-style, suppresses enclosure modulation)");
+    settings_.registerUint8("odfsource", &audioCtrl_->odfSource, "rhythm",
+        "ACF ODF source (0=flux, 1=bass energy, 2=mic level, 3=bass flux, 4=centroid, 5=bass ratio)", 0, 5);
     settings_.registerBool("densityoctave", &audioCtrl_->densityOctaveEnabled, "rhythm",
         "Onset-density octave penalty in Bayesian posterior (v32)");
     settings_.registerFloat("densityminpb", &audioCtrl_->densityMinPerBeat, "rhythm",
         "Min plausible transients per beat for density octave (0.1-3)", 0.1f, 3.0f);
     settings_.registerFloat("densitymaxpb", &audioCtrl_->densityMaxPerBeat, "rhythm",
         "Max plausible transients per beat for density octave (1-20)", 1.0f, 20.0f);
+    settings_.registerFloat("densityexp", &audioCtrl_->densityPenaltyExp, "rhythm",
+        "Density penalty Gaussian exponent (higher=sharper, 1-20)", 1.0f, 20.0f);
+    settings_.registerFloat("densitytarget", &audioCtrl_->densityTarget, "rhythm",
+        "Target transients/beat for density penalty (0=disabled, 1-4 typical)", 0.0f, 10.0f);
     settings_.registerBool("octavecheck", &audioCtrl_->octaveCheckEnabled, "rhythm",
         "Shadow CBSS octave checker (v32)");
     settings_.registerBool("btrkpipeline", &audioCtrl_->btrkPipeline, "rhythm",
         "BTrack-style tempo pipeline: Viterbi + comb-on-ACF (v33)");
     settings_.registerUint8("btrkthreshwin", &audioCtrl_->btrkThreshWindow, "rhythm",
         "Pipeline adaptive threshold half-window (0=off, 1-5 bins each side)", 0, 5);
+    settings_.registerBool("hmm", &audioCtrl_->barPointerHmm, "rhythm",
+        "Bar-pointer HMM beat tracking (v34, A/B vs CBSS)");
+    settings_.registerFloat("hmmcontrast", &audioCtrl_->hmmContrast, "rhythm",
+        "HMM ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
+    settings_.registerBool("hmmtemponorm", &audioCtrl_->hmmTempoNorm, "rhythm",
+        "HMM tempo-normalized argmax (prevents slow-tempo bias)");
     settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
         "Check octave every N beats (2-16)", 2, 16);
     settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
         "CBSS score ratio needed for octave switch (1-5)", 1.0f, 5.0f);
+    settings_.registerBool("phasecheck", &audioCtrl_->phaseCheckEnabled, "rhythm",
+        "Phase alignment checker (v37: fixes anti-phase lock using raw OSS)");
+    settings_.registerUint8("phasecheckbeats", &audioCtrl_->phaseCheckBeats, "rhythm",
+        "Check phase every N beats (2-16)", 2, 16);
+    settings_.registerFloat("phasecheckratio", &audioCtrl_->phaseCheckRatio, "rhythm",
+        "Phase check: shifted phase must score this much better (1.1-3.0)", 1.1f, 3.0f);
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -1134,6 +1164,9 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->octaveScoreRatio = 1.3f;      // v32: aggressive threshold
         audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
         audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
+        audioCtrl_->barPointerHmm = false;        // v34: bar-pointer HMM (disabled by default, A/B)
+        audioCtrl_->hmmContrast = 2.0f;           // v34: ODF power-law contrast
+        audioCtrl_->hmmTempoNorm = true;          // v34: tempo-normalized argmax
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;

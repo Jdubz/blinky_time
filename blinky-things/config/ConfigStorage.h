@@ -60,7 +60,11 @@ public:
     // Version 31: Adaptive ODF threshold, onset-density octave discriminator, shadow CBSS octave checker (internal dev, never deployed)
     // Version 32: ODF mean sub disabled, density octave + octave checker defaults (first deployed with v31 features)
     // Version 33: BTrack-style tempo pipeline (Viterbi max-product + comb-on-ACF adaptive threshold)
-    static const uint8_t SETTINGS_VERSION = 33;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 34: Bar-pointer HMM beat tracking (Phase 3.1, joint tempo-phase)
+    // Version 35: odfDiffMode, densityPenaltyExp, densityTarget (ODF experiments)
+    // Version 36: bassEnergyOdf (bass energy envelope for ACF tempo estimation)
+    // Version 37: cbssContrast (BTrack-style power-law ODF contrast before CBSS)
+    static const uint8_t SETTINGS_VERSION = 37;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -185,6 +189,9 @@ public:
         float beatTimingOffset;         // Beat prediction advance in frames (ODF+CBSS delay compensation)
         float phaseCorrectionStrength;  // Phase correction toward transients (0=off, 1=full snap)
         float cbssThresholdFactor;      // CBSS adaptive threshold: beat fires only if CBSS > factor * mean (0=off)
+        float cbssContrast;             // Power-law ODF contrast before CBSS (v37: 1.0=linear, 2.0=BTrack-style square)
+        uint8_t cbssWarmupBeats;        // CBSS warmup beats: lower alpha for first N beats (v37: 0=disabled)
+        uint8_t onsetSnapWindow;       // Snap beat to strongest OSS in last N frames (v37: 4, 0=disabled)
 
         // Bayesian tempo fusion (v18)
         float bayesLambda;              // Transition tightness (0.01=rigid, 1.0=loose)
@@ -211,10 +218,22 @@ public:
         bool beatBoundaryTempo;         // Defer tempo changes to beat boundaries (v28)
         bool unifiedOdf;                // Use BandFlux pre-threshold as CBSS ODF (v28)
         bool adaptiveOdfThresh;         // Local-mean ODF threshold before autocorrelation (v31)
+        uint8_t odfThreshWindow;        // Adaptive ODF threshold half-window (samples each side, 5-30)
+        bool onsetTrainOdf;             // Binary onset-train ODF for ACF (v34)
+        bool odfDiffMode;               // HWR first-difference ODF for ACF (v35)
+        uint8_t odfSource;              // Alternative ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux)
         bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
+        float densityPenaltyExp;        // Density penalty Gaussian exponent (v35)
+        float densityTarget;            // Target transients/beat (0=disabled, v35)
         bool octaveCheckEnabled;        // Shadow CBSS octave check (v31)
+        bool phaseCheckEnabled;         // Phase alignment checker (v37: fixes anti-phase lock)
+        uint8_t phaseCheckBeats;        // Check phase every N beats (v37: 4)
+        float phaseCheckRatio;          // Shifted phase must score this much better to correct (v37: 1.5)
         bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
         uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)
+        bool barPointerHmm;            // Bar-pointer HMM beat tracking (v34: joint tempo-phase)
+        float hmmContrast;             // HMM ODF power-law contrast (v34)
+        bool hmmTempoNorm;             // HMM tempo-normalized argmax (v34)
 
         // Spectral processing (v23+)
         bool whitenEnabled;             // Per-bin spectral whitening
@@ -345,8 +364,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 168,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (168 bytes = 38 floats + 3 uint8 + 11 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 204,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (204 bytes = 43 floats + 7 uint8 + 17 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,

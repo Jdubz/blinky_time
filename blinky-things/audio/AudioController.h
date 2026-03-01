@@ -317,6 +317,9 @@ public:
     float beatTimingOffset = 5.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
     float cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
+    float cbssContrast = 1.0f;           // Power-law ODF contrast before CBSS (BTrack uses 2.0; higher = sharper beat peaks)
+    uint8_t cbssWarmupBeats = 0;         // CBSS warmup: lower alpha for first N beats (0=disabled; tested 8, increased variance 5.5x)
+    uint8_t onsetSnapWindow = 4;         // Snap beat anchor to strongest OSS in last N frames (0=disabled, 4≈67ms at 60Hz)
 
     // === BEAT-BOUNDARY TEMPO UPDATES (Phase 2.1) ===
     // Defers beatPeriodSamples_ changes to the next beat fire, synchronizing
@@ -341,6 +344,31 @@ public:
     // (verse/chorus energy changes) so ACF sees cleaner periodicity peaks.
     // BTrack applies this twice; we apply once (compressor+whitening handle the rest).
     bool adaptiveOdfThresh = false;      // Enable local-mean ODF threshold before autocorrelation (off by default for A/B testing)
+    uint8_t odfThreshWindow = 15;        // Half-window size for adaptive ODF threshold (samples each side, 5-30)
+
+    // === ONSET-TRAIN ODF (binary onset events for ACF) ===
+    // Feeds post-threshold transient events to OSS buffer instead of continuous flux.
+    // ACF of onset events finds inter-onset periodicity (immune to enclosure resonance).
+    // CBSS and comb bank remain on continuous ODF.
+    bool onsetTrainOdf = false;          // Binary onset-train ODF for ACF (off by default for A/B testing)
+
+    // === HWR FIRST-DIFFERENCE ODF ===
+    // Feeds max(0, odf[n] - odf[n-1]) to OSS buffer instead of raw odf[n].
+    // Emphasizes onset ATTACKS (~30x larger than continuous modulation), suppressing
+    // enclosure-induced periodic fluctuations. BTrack uses this approach.
+    bool odfDiffMode = false;            // HWR first-difference ODF for ACF (off by default)
+
+    // === ALTERNATIVE ODF SOURCE FOR ACF ===
+    // Selects which signal feeds the OSS buffer (and thus ACF tempo estimation).
+    // CBSS and comb bank always use the smoothed onset strength (BandFlux).
+    // Options:
+    //   0: Default (smoothed BandFlux combined flux, same as CBSS)
+    //   1: Bass energy (sum of whitened bass mags bins 1-6, 62.5-375 Hz)
+    //   2: Mic level (broadband time-domain RMS from AdaptiveMic)
+    //   3: Bass-only flux (BandFlux bass band flux, no mid/high)
+    //   4: Spectral centroid (tracks spectral SHAPE, robust to uniform energy modulation)
+    //   5: Bass ratio (bass energy / total energy, kick=high, snare=low)
+    uint8_t odfSource = 0;               // Alternative ODF source for ACF (0=default)
 
     // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
     // Subtracts the local mean from OSS buffer before autocorrelation.
@@ -355,6 +383,8 @@ public:
     bool densityOctaveEnabled = true;    // Onset-density octave penalty (v32: enabled, +13% F1)
     float densityMinPerBeat = 0.5f;      // Min plausible transients per beat
     float densityMaxPerBeat = 5.0f;      // Max plausible transients per beat
+    float densityPenaltyExp = 2.0f;      // Gaussian exponent for density penalty (higher = sharper cutoff)
+    float densityTarget = 0.0f;          // Target transients/beat (0=disabled, >0=Gaussian centered here)
 
     // === SHADOW CBSS OCTAVE CHECKER ===
     // Every N beats, compares CBSS score at current tempo T vs double-time T/2.
@@ -364,12 +394,31 @@ public:
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
 
+    // === PHASE ALIGNMENT CHECKER ===
+    // Every N beats, compares raw onset strength (OSS) at current beat phase vs
+    // phase shifted by T/2. If the shifted phase has consistently stronger onsets,
+    // the CBSS has locked to the wrong phase (anti-phase). Corrects by shifting
+    // lastBeatSample_ to re-anchor beats at the stronger onset positions.
+    // Uses OSS (raw onset detection) not CBSS (which is self-reinforcing at wrong phase).
+    bool phaseCheckEnabled = false;       // Phase alignment check (v37: disabled — net-negative on 18-track validation)
+    uint8_t phaseCheckBeats = 4;          // Check every N beats (accumulate evidence)
+    float phaseCheckRatio = 1.2f;         // Shifted phase must score this much better to correct
+
     // === BTRACK-STYLE TEMPO PIPELINE ===
     // Replaces multiplicative Bayesian fusion with BTrack's sequential pipeline:
     // Adaptive threshold on comb-on-ACF + Viterbi max-product.
     // Skips FT/IOI/IIR comb observations and post-hoc harmonic disambiguation.
     bool btrkPipeline = true;            // BTrack pipeline (v33: enabled, replaces multiplicative fusion)
     uint8_t btrkThreshWindow = 0;        // Adaptive threshold half-window (0=off, 1-5 bins each side)
+
+    // === BAR-POINTER HMM BEAT TRACKING (Phase 3.1, v34) ===
+    // Joint tempo-phase tracking via bar-pointer HMM (Bock/madmom 2016).
+    // State = (tempo_bin, position_within_beat). Phase advances deterministically
+    // each frame; tempo can only change at beat boundaries. Replaces CBSS + detectBeat.
+    // Reuses transMatrix_ and tempoBinLags_ from Bayesian tempo fusion.
+    bool barPointerHmm = false;          // Enable HMM beat tracking (A/B vs CBSS)
+    float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
+    bool hmmTempoNorm = true;            // Normalize argmax by period (prevents slow-tempo bias)
 
     // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
     bool ftEnabled = false;              // Fourier tempogram observation (disabled: no ref system uses FT for real-time beat tracking)
@@ -513,6 +562,7 @@ private:
                                          // Starts at 0 — threshold is intentionally inactive during
                                          // warmup (~2s) so LEDs respond immediately to music onset
     float lastSmoothedOnset_ = 0.0f;    // Last smoothed onset strength (for observability)
+    float prevOdfForDiff_ = 0.0f;       // Previous ODF value for HWR first-difference mode
     bool lastBeatWasPredicted_ = false; // Whether predictBeat() ran since last beat (working flag)
     bool lastFiredBeatPredicted_ = false; // Whether the most recently fired beat was predicted (stable for streaming)
     int lastTransientSample_ = -1;      // Sample index of most recent strong transient (-1 = none)
@@ -538,6 +588,9 @@ private:
 
     // Octave check state (Phase 3)
     uint16_t beatsSinceOctaveCheck_ = 0; // Beats since last octave check
+
+    // Phase alignment check state (v37)
+    uint16_t beatsSincePhaseCheck_ = 0;  // Beats since last phase alignment check
 
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
@@ -596,6 +649,19 @@ private:
     float lastCombObs_[TEMPO_BINS] = {0};         // Last comb observations (for debug)
     float lastIoiObs_[TEMPO_BINS] = {0};          // Last IOI observations (for debug)
 
+    // === BAR-POINTER HMM STATE (Phase 3.1, v34) ===
+    // State space: (tempo_bin, position) where position ∈ [0, period[tempo_bin])
+    // Total states = sum of all periods ≈ 780 for 20 bins (lags 18-60)
+    static constexpr int MAX_HMM_STATES = 900;  // Upper bound for 20 bins
+    float hmmAlpha_[MAX_HMM_STATES] = {0};      // Forward probability vector
+    int hmmStateOffsets_[TEMPO_BINS + 1] = {0};  // Cumulative offset per tempo bin
+    int hmmPeriods_[TEMPO_BINS] = {0};           // Period (frames/beat) per tempo bin
+    int totalHmmStates_ = 0;                     // Actual total states
+    int hmmBestTempo_ = 0;                       // Best tempo bin (from argmax)
+    int hmmBestPosition_ = 0;                    // Best position within beat
+    int hmmPrevBestPosition_ = -1;               // Previous frame's best position (for phase wrap detection)
+    bool hmmInitialized_ = false;
+
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
 
@@ -610,6 +676,13 @@ private:
     void detectBeat();
     void predictBeat();
     void checkOctaveAlternative();
+    void checkPhaseAlignment();
+    void switchTempo(int newPeriodSamples);
+
+    // Bar-pointer HMM beat tracking (Phase 3.1)
+    void initHmmState();
+    void updateHmmForward(float onsetStrength);
+    void detectBeatHmm();
 
     // ODF smoothing
     float smoothOnsetStrength(float raw);
