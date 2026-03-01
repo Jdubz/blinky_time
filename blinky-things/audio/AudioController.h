@@ -364,6 +364,13 @@ public:
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
 
+    // === BTRACK-STYLE TEMPO PIPELINE ===
+    // Replaces multiplicative Bayesian fusion with BTrack's sequential pipeline:
+    // Adaptive threshold on comb-on-ACF + Viterbi max-product.
+    // Skips FT/IOI/IIR comb observations and post-hoc harmonic disambiguation.
+    bool btrkPipeline = true;            // BTrack pipeline (v33: enabled, replaces multiplicative fusion)
+    uint8_t btrkThreshWindow = 0;        // Adaptive threshold half-window (0=off, 1-5 bins each side)
+
     // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
     bool ftEnabled = false;              // Fourier tempogram observation (disabled: no ref system uses FT for real-time beat tracking)
 
@@ -371,7 +378,7 @@ public:
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
     // into a unified posterior distribution over 40 tempo bins (60-180 BPM).
     // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
-    float bayesLambda = 0.07f;           // Transition tightness (0.01=rigid, 1.0=loose)
+    float bayesLambda = 0.60f;           // Transition tightness (0.01=rigid, 1.0=loose)
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
     float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
     float bayesAcfWeight = 0.8f;         // Autocorrelation observation weight (high: harmonic comb makes ACF reliable)

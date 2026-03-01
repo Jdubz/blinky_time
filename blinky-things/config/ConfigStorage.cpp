@@ -195,7 +195,7 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via 4-device sweep)
     // v25: BTrack-style harmonic comb ACF + Rayleigh prior + tighter lambda
-    data_.music.bayesLambda = 0.07f;         // Tighter transition (prevents octave jumps accumulating)
+    data_.music.bayesLambda = 0.60f;         // Wide transition (Viterbi max-product needs broad support)
     data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
     data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
     data_.music.bayesAcfWeight = 0.8f;       // High weight: harmonic comb makes ACF reliable (v25)
@@ -221,6 +221,8 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.adaptiveOdfThresh = false;   // Local-mean ODF threshold (v31, marginal benefit — keep off)
     data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
     data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
+    data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
+    data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
 
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
@@ -717,6 +719,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->densityMinPerBeat = data_.music.densityMinPerBeat;
         audioCtrl->densityMaxPerBeat = data_.music.densityMaxPerBeat;
         audioCtrl->octaveCheckEnabled = data_.music.octaveCheckEnabled;
+        audioCtrl->btrkPipeline = data_.music.btrkPipeline;
+        audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
 
         // Spectral processing (v23+)
@@ -904,6 +908,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.densityMinPerBeat = audioCtrl->densityMinPerBeat;
         data_.music.densityMaxPerBeat = audioCtrl->densityMaxPerBeat;
         data_.music.octaveCheckEnabled = audioCtrl->octaveCheckEnabled;
+        data_.music.btrkPipeline = audioCtrl->btrkPipeline;
+        data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
         data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
 
         // Spectral processing (v23+)

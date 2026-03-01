@@ -591,12 +591,10 @@ float AudioController::smoothOnsetStrength(float raw) {
 // ===== BAYESIAN TEMPO STATE =====
 
 void AudioController::buildTransitionMatrix() {
-    // Gaussian transition matrix with harmonic shortcuts.
-    // Simple BPM-space Gaussian with sigma proportional to source BPM.
+    // Gaussian transition matrix in BPM-space, sigma proportional to source BPM.
     // With 20 bins (lag-uniform grid), the non-uniform BPM spacing creates
     // mild drift toward low BPM, but it's slow enough that observations
     // overcome it. (40 bins had 2x worse drift — reverted to 20.)
-    float htw = harmonicTransWeight;  // Tunable harmonic transition weight
 
     for (int i = 0; i < TEMPO_BINS; i++) {
         for (int j = 0; j < TEMPO_BINS; j++) {
@@ -605,33 +603,39 @@ void AudioController::buildTransitionMatrix() {
             if (sigma < 1.0f) sigma = 1.0f;
             float narrow = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
 
-            // Harmonic shortcuts: check if bin i is at a harmonic ratio of bin j
-            float ratio = tempoBinBpms_[i] / tempoBinBpms_[j];
             float harmonicBonus = 0.0f;
 
-            // 2:1 (octave up, e.g., 68→136)
-            float diff2x = fabsf(ratio - 2.0f);
-            if (diff2x < 0.15f) {
-                float w = htw * expf(-diff2x * diff2x * 100.0f);
-                if (w > harmonicBonus) harmonicBonus = w;
-            }
-            // 1:2 (octave down, e.g., 136→68)
-            float diffHalf = fabsf(ratio - 0.5f);
-            if (diffHalf < 0.15f) {
-                float w = htw * expf(-diffHalf * diffHalf * 100.0f);
-                if (w > harmonicBonus) harmonicBonus = w;
-            }
-            // 3:2 (e.g., 90→135)
-            float diff32 = fabsf(ratio - 1.5f);
-            if (diff32 < 0.1f) {
-                float w = htw * 0.5f * expf(-diff32 * diff32 * 200.0f);
-                if (w > harmonicBonus) harmonicBonus = w;
-            }
-            // 2:3 (e.g., 135→90)
-            float diff23 = fabsf(ratio - 0.6667f);
-            if (diff23 < 0.1f) {
-                float w = htw * 0.5f * expf(-diff23 * diff23 * 200.0f);
-                if (w > harmonicBonus) harmonicBonus = w;
+            // Harmonic shortcuts only for multiplicative path.
+            // BTrack pipeline relies on comb-on-ACF for octave handling;
+            // harmonic shortcuts in the transition matrix are redundant.
+            if (!btrkPipeline) {
+                float htw = harmonicTransWeight;
+                float ratio = tempoBinBpms_[i] / tempoBinBpms_[j];
+
+                // 2:1 (octave up, e.g., 68→136)
+                float diff2x = fabsf(ratio - 2.0f);
+                if (diff2x < 0.15f) {
+                    float w = htw * expf(-diff2x * diff2x * 100.0f);
+                    if (w > harmonicBonus) harmonicBonus = w;
+                }
+                // 1:2 (octave down, e.g., 136→68)
+                float diffHalf = fabsf(ratio - 0.5f);
+                if (diffHalf < 0.15f) {
+                    float w = htw * expf(-diffHalf * diffHalf * 100.0f);
+                    if (w > harmonicBonus) harmonicBonus = w;
+                }
+                // 3:2 (e.g., 90→135)
+                float diff32 = fabsf(ratio - 1.5f);
+                if (diff32 < 0.1f) {
+                    float w = htw * 0.5f * expf(-diff32 * diff32 * 200.0f);
+                    if (w > harmonicBonus) harmonicBonus = w;
+                }
+                // 2:3 (e.g., 135→90)
+                float diff23 = fabsf(ratio - 0.6667f);
+                if (diff23 < 0.1f) {
+                    float w = htw * 0.5f * expf(-diff23 * diff23 * 200.0f);
+                    if (w > harmonicBonus) harmonicBonus = w;
+                }
             }
 
             transMatrix_[i][j] = narrow + harmonicBonus;
@@ -673,11 +677,11 @@ void AudioController::initTempoState() {
         if (tempoStaticPrior_[i] < 0.01f) tempoStaticPrior_[i] = 0.01f;  // Floor
     }
 
-    // Pre-compute Gaussian transition matrix (only depends on bin BPMs and bayesLambda)
+    // Pre-compute Gaussian transition matrix (only depends on bin BPMs, bayesLambda, btrkPipeline)
     // Avoids 1600 expf() calls per autocorrelation cycle at runtime.
     buildTransitionMatrix();
     transMatrixLambda_ = bayesLambda;
-    transMatrixHarmonic_ = harmonicTransWeight;
+    transMatrixHarmonic_ = btrkPipeline ? -2.0f : harmonicTransWeight;
 
     // Rayleigh prior peaked at ~120 BPM (BTrack-style perceptual weighting)
     // For candidate period T (lag), Rayleigh(T; sigma) = T/sigma^2 * exp(-T^2 / (2*sigma^2))
@@ -750,27 +754,33 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                                               int harmonicCorrelationSize) {
     if (!tempoStateInitialized_) return;
 
-    // === 1. BAYESIAN PREDICTION STEP: Spread prior through Gaussian transition ===
-    // Uses precomputed transition matrix (built in initTempoState, rebuilt if bayesLambda changes).
-    if (bayesLambda != transMatrixLambda_ || harmonicTransWeight != transMatrixHarmonic_) {
+    // === 1. PREDICTION STEP ===
+    // Rebuild transition matrix if parameters changed.
+    // btrkPipeline disables harmonic shortcuts — use sentinel (-2) so toggling
+    // btrkpipeline at runtime triggers a rebuild.
+    float effectiveHarmonic = btrkPipeline ? -2.0f : harmonicTransWeight;
+    if (bayesLambda != transMatrixLambda_ || effectiveHarmonic != transMatrixHarmonic_) {
         buildTransitionMatrix();
         transMatrixLambda_ = bayesLambda;
-        transMatrixHarmonic_ = harmonicTransWeight;
+        transMatrixHarmonic_ = effectiveHarmonic;
     }
 
+    // When btrkPipeline is active, prediction is deferred to the Viterbi step (Change 2b).
+    // When inactive, use the original Bayesian prediction (sum-product).
     float prediction[TEMPO_BINS];
-    float predSum = 0.0f;
-
-    for (int i = 0; i < TEMPO_BINS; i++) {
-        prediction[i] = 0.0f;
-        for (int j = 0; j < TEMPO_BINS; j++) {
-            prediction[i] += tempoStatePrior_[j] * transMatrix_[i][j];
+    if (!btrkPipeline) {
+        float predSum = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            prediction[i] = 0.0f;
+            for (int j = 0; j < TEMPO_BINS; j++) {
+                prediction[i] += tempoStatePrior_[j] * transMatrix_[i][j];
+            }
+            predSum += prediction[i];
         }
-        predSum += prediction[i];
-    }
-    // Normalize prediction
-    if (predSum > 1e-9f) {
-        for (int i = 0; i < TEMPO_BINS; i++) prediction[i] /= predSum;
+        // Normalize prediction
+        if (predSum > 1e-9f) {
+            for (int i = 0; i < TEMPO_BINS; i++) prediction[i] /= predSum;
+        }
     }
 
     // === 2. AUTOCORRELATION OBSERVATION (BTrack-style 4-harmonic comb) ===
@@ -810,16 +820,42 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             acfObs[i] = 0.01f;  // Out of range — small floor
         }
     }
-    // Exponentiate by weight
-    if (bayesAcfWeight != 1.0f) {
+    // Exponentiate by weight (only for multiplicative path — pipeline uses raw comb-on-ACF)
+    if (!btrkPipeline && bayesAcfWeight != 1.0f) {
         for (int i = 0; i < TEMPO_BINS; i++) {
             acfObs[i] = powf(acfObs[i], bayesAcfWeight);
         }
     }
 
+    // BTrack pipeline: adaptive threshold on comb-on-ACF (moving-average subtraction + HWR)
+    // Removes background level, leaving only genuine periodicity peaks.
+    // btrkThreshWindow controls half-window size (0=off, 1-5 bins each side).
+    // Two-pass like BTrack: compute thresholds from original data, then apply.
+    if (btrkPipeline && btrkThreshWindow > 0) {
+        int threshHalf = btrkThreshWindow;
+        float thresh[TEMPO_BINS];
+        // Pass 1: compute local-mean threshold from unmodified acfObs
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float sum = 0.0f;
+            int count = 0;
+            for (int j = i - threshHalf; j <= i + threshHalf; j++) {
+                if (j >= 0 && j < TEMPO_BINS) {
+                    sum += acfObs[j];
+                    count++;
+                }
+            }
+            thresh[i] = sum / static_cast<float>(count);
+        }
+        // Pass 2: subtract threshold + half-wave rectify
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float val = acfObs[i] - thresh[i];
+            acfObs[i] = (val > 0.0f) ? val : 0.0f;
+        }
+    }
+
     // === 3. FOURIER TEMPOGRAM OBSERVATION ===
     float ftObs[TEMPO_BINS];
-    if (ftEnabled && ossCount_ >= 60) {
+    if (!btrkPipeline && ftEnabled && ossCount_ >= 60) {
         computeFTObservations(ftObs, TEMPO_BINS);
         if (bayesFtWeight != 1.0f) {
             for (int i = 0; i < TEMPO_BINS; i++) {
@@ -834,7 +870,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
     // === 4. COMB FILTER BANK OBSERVATION ===
     float combObs[TEMPO_BINS];
-    if (combBankEnabled) {
+    if (!btrkPipeline && combBankEnabled) {
         for (int i = 0; i < TEMPO_BINS; i++) {
             combObs[i] = combFilterBank_.getFilterEnergy(i);
             if (combObs[i] < 0.01f) combObs[i] = 0.01f;  // Floor
@@ -851,7 +887,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
     // === 5. IOI HISTOGRAM OBSERVATION ===
     float ioiObs[TEMPO_BINS];
-    if (ioiEnabled && ioiOnsetCount_ >= 8) {
+    if (!btrkPipeline && ioiEnabled && ioiOnsetCount_ >= 8) {
         computeIOIObservations(ioiObs, TEMPO_BINS);
         if (bayesIoiWeight != 1.0f) {
             for (int i = 0; i < TEMPO_BINS; i++) {
@@ -863,30 +899,53 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     }
     for (int i = 0; i < TEMPO_BINS; i++) lastIoiObs_[i] = ioiObs[i];
 
-    // === 6. MULTIPLY ALL OBSERVATIONS WITH PREDICTION AND STATIC PRIOR ===
-    // Apply weight exponent to static prior (0=off, 1=standard, >1=stronger pull)
-    float weightedPrior[TEMPO_BINS];
-    if (bayesPriorWeight != 0.0f) {
-        if (bayesPriorWeight == 1.0f) {
-            for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = tempoStaticPrior_[i];
+    // === 6. COMBINE PREDICTION AND OBSERVATIONS ===
+    if (btrkPipeline) {
+        // Viterbi max-product (BTrack-style): for each candidate tempo bin,
+        // find the maximum prior[j] * transition[j→i], then multiply by observation.
+        // Uses only acfObs (comb-on-ACF with adaptive threshold) — no FT/IOI/comb.
+        float postSum = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float maxPred = 0.0f;
+            for (int j = 0; j < TEMPO_BINS; j++) {
+                float val = tempoStatePrior_[j] * transMatrix_[i][j];
+                if (val > maxPred) maxPred = val;
+            }
+            tempoStatePost_[i] = maxPred * acfObs[i];
+            postSum += tempoStatePost_[i];
+        }
+        // Normalize posterior
+        if (postSum > 1e-9f) {
+            for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] /= postSum;
         } else {
-            for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = powf(tempoStaticPrior_[i], bayesPriorWeight);
+            for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] = 1.0f / TEMPO_BINS;
         }
     } else {
-        for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = 1.0f;  // Disabled
-    }
+        // Original multiplicative Bayesian fusion (sum-product prediction × all observations)
+        // Apply weight exponent to static prior (0=off, 1=standard, >1=stronger pull)
+        float weightedPrior[TEMPO_BINS];
+        if (bayesPriorWeight != 0.0f) {
+            if (bayesPriorWeight == 1.0f) {
+                for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = tempoStaticPrior_[i];
+            } else {
+                for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = powf(tempoStaticPrior_[i], bayesPriorWeight);
+            }
+        } else {
+            for (int i = 0; i < TEMPO_BINS; i++) weightedPrior[i] = 1.0f;  // Disabled
+        }
 
-    float postSum = 0.0f;
-    for (int i = 0; i < TEMPO_BINS; i++) {
-        tempoStatePost_[i] = prediction[i] * weightedPrior[i] * acfObs[i] * ftObs[i] * combObs[i] * ioiObs[i];
-        postSum += tempoStatePost_[i];
-    }
-    // Normalize posterior
-    if (postSum > 1e-9f) {
-        for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] /= postSum;
-    } else {
-        // Degenerate — reset to uniform
-        for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] = 1.0f / TEMPO_BINS;
+        float postSum = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            tempoStatePost_[i] = prediction[i] * weightedPrior[i] * acfObs[i] * ftObs[i] * combObs[i] * ioiObs[i];
+            postSum += tempoStatePost_[i];
+        }
+        // Normalize posterior
+        if (postSum > 1e-9f) {
+            for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] /= postSum;
+        } else {
+            // Degenerate — reset to uniform
+            for (int i = 0; i < TEMPO_BINS; i++) tempoStatePost_[i] = 1.0f / TEMPO_BINS;
+        }
     }
 
     // === ONSET-DENSITY OCTAVE DISCRIMINATOR ===
@@ -947,18 +1006,12 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     }
     int preCorrectionBin = bestBin;  // Save for disambiguation feedback
 
-    // Per-sample ACF harmonic disambiguation (like old system):
-    // Check if the raw autocorrelation at half-lag (2x BPM) or 2/3-lag (1.5x BPM)
-    // is strong relative to the MAP bin's lag. If so, switch to the higher tempo.
-    // Uses per-sample ACF values for full resolution (not the coarse 40-bin observations).
-    // Thresholds calibrated empirically (Feb 2026) from the old harmonicUp2xThresh/
-    // harmonicUp32Thresh params; 2/3-lag needs higher threshold because 1.5x
-    // corrections are riskier (less common harmonic error).
-    // Uses else-if: only one correction per cycle to prevent cascading changes
-    // (e.g., 60→120 BPM then 120→180 BPM in the same update).
-    static constexpr float HARMONIC_2X_THRESH = 0.5f;   // Half-lag ACF ratio for 2x BPM correction
-    static constexpr float HARMONIC_1_5X_THRESH = 0.6f; // 2/3-lag ACF ratio for 1.5x BPM correction
-    {
+    // Per-sample ACF harmonic disambiguation (skipped in BTrack pipeline — comb-on-ACF
+    // with adaptive threshold provides structural octave handling, making post-hoc
+    // correction redundant and a source of overcorrection).
+    if (!btrkPipeline) {
+        static constexpr float HARMONIC_2X_THRESH = 0.5f;   // Half-lag ACF ratio for 2x BPM correction
+        static constexpr float HARMONIC_1_5X_THRESH = 0.6f; // 2/3-lag ACF ratio for 1.5x BPM correction
         int bestLag = tempoBinLags_[bestBin];
         int halfLag = bestLag / 2;          // 2x BPM
         int twoThirdLag = bestLag * 2 / 3;  // 1.5x BPM
@@ -985,7 +1038,6 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             }
 
             // Check 2/3-lag (1.5x BPM): if strong, prefer 3/2 tempo
-            // Only if half-lag didn't already correct (prevent double-correction)
             if (!corrected) {
                 int twoThirdIdx = twoThirdLag - minLag;
                 if (twoThirdIdx >= 0 && twoThirdIdx < correlationSize) {
@@ -999,20 +1051,12 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                     }
                 }
             }
-
-            // Double-lag check REMOVED: it created a one-way ratchet to half-time.
-            // For tempos above ~130 BPM, the half-lag (2x up) falls below minLag
-            // and can't correct back, while the double-lag (0.5x down) always fires.
-            // The 4-harmonic comb ACF + Rayleigh prior already handle sub-harmonic
-            // suppression; adding a downward disambiguation was redundant and harmful.
         }
     }
     bayesBestBin_ = bestBin;
 
-    // Disambiguation feedback: if disambiguation corrected the MAP, nudge the
-    // posterior toward the corrected bin. This helps the posterior gradually
-    // track the corrected tempo over multiple cycles.
-    if (bestBin != preCorrectionBin && disambigNudge > 0.0f) {
+    // Disambiguation feedback (only for multiplicative path)
+    if (!btrkPipeline && bestBin != preCorrectionBin && disambigNudge > 0.0f) {
         float nudge = clampf(disambigNudge, 0.0f, 0.5f);
         float transfer = tempoStatePost_[preCorrectionBin] * nudge;
         tempoStatePost_[preCorrectionBin] -= transfer;

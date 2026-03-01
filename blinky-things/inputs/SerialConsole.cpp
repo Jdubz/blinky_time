@@ -285,6 +285,10 @@ void SerialConsole::registerRhythmSettings() {
         "Max plausible transients per beat for density octave (1-20)", 1.0f, 20.0f);
     settings_.registerBool("octavecheck", &audioCtrl_->octaveCheckEnabled, "rhythm",
         "Shadow CBSS octave checker (v32)");
+    settings_.registerBool("btrkpipeline", &audioCtrl_->btrkPipeline, "rhythm",
+        "BTrack-style tempo pipeline: Viterbi + comb-on-ACF (v33)");
+    settings_.registerUint8("btrkthreshwin", &audioCtrl_->btrkThreshWindow, "rhythm",
+        "Pipeline adaptive threshold half-window (0=off, 1-5 bins each side)", 0, 5);
     settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
         "Check octave every N beats (2-16)", 2, 16);
     settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
@@ -1105,7 +1109,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->cbssAlpha = 0.9f;
         audioCtrl_->cbssTightness = 5.0f;
         audioCtrl_->beatConfidenceDecay = 0.98f;
-        audioCtrl_->bayesLambda = 0.07f;
+        audioCtrl_->bayesLambda = 0.60f;
         audioCtrl_->bayesPriorCenter = 128.0f;
         audioCtrl_->bayesPriorWeight = 0.0f;
         audioCtrl_->bayesAcfWeight = 0.8f;
@@ -1128,6 +1132,8 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->octaveCheckEnabled = true;    // v32: shadow CBSS octave checker
         audioCtrl_->octaveCheckBeats = 2;         // v32: aggressive (every 2 beats)
         audioCtrl_->octaveScoreRatio = 1.3f;      // v32: aggressive threshold
+        audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
+        audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
