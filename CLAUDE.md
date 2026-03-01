@@ -207,7 +207,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v32)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v33)
    - `SettingsRegistry.h/cpp` - 70+ tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -422,7 +422,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 32
+- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 33
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **ODF mean subtraction disabled** (v32): Raw ODF feeds ACF — global mean sub was destroying peak structure (+70% F1)
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0 (+13% F1)

@@ -57,8 +57,8 @@ public:
     // Version 29: All BandFlux detector params persisted (StoredBandFluxParams added to ConfigData)
     //             peakPickEnabled first persisted (in StoredBandFluxParams)
     // Version 30: posteriorFloor/disambigNudge/harmonicTransWeight; ACF lag normalization; MIN_LAG 20→18; NUM_FILTERS 40→20
-    // Version 31: Adaptive ODF threshold, onset-density octave discriminator, shadow CBSS octave checker
-    // Version 32: ODF mean sub disabled, density octave + octave checker defaults
+    // Version 31: Adaptive ODF threshold, onset-density octave discriminator, shadow CBSS octave checker (internal dev, never deployed)
+    // Version 32: ODF mean sub disabled, density octave + octave checker defaults (first deployed with v31 features)
     // Version 33: BTrack-style tempo pipeline (Viterbi max-product + comb-on-ACF adaptive threshold)
     static const uint8_t SETTINGS_VERSION = 33;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 

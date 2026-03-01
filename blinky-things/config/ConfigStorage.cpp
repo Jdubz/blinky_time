@@ -516,6 +516,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // Onset-density octave discriminator validation (v31)
     validateFloat(data_.music.densityMinPerBeat, 0.1f, 3.0f, F("densityMinPerBeat"));
     validateFloat(data_.music.densityMaxPerBeat, 1.0f, 20.0f, F("densityMaxPerBeat"));
+    if (data_.music.densityMinPerBeat >= data_.music.densityMaxPerBeat) {
+        SerialConsole::logWarn(F("densityMinPerBeat >= densityMaxPerBeat, resetting"));
+        data_.music.densityMinPerBeat = 0.5f;
+        data_.music.densityMaxPerBeat = 5.0f;
+        fixedCount++;
+    }
     validateFloat(data_.music.octaveScoreRatio, 1.0f, 5.0f, F("octaveScoreRatio"));
     if (data_.music.octaveCheckBeats < 2 || data_.music.octaveCheckBeats > 16) {
         SerialConsole::logWarn(F("Invalid octaveCheckBeats, clamping"));

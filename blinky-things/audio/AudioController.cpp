@@ -649,7 +649,7 @@ void AudioController::initTempoState() {
         tempoBinBpms_[i] = combFilterBank_.getFilterBPM(i);
         // Compute lag from BPM: lag = frameRate / (bpm / 60) = 60 * frameRate / bpm
         // At 60 Hz: lag = 3600 / bpm
-        tempoBinLags_[i] = static_cast<int>(3600.0f / tempoBinBpms_[i] + 0.5f);
+        tempoBinLags_[i] = static_cast<int>(OSS_FRAMES_PER_MIN / tempoBinBpms_[i] + 0.5f);
     }
 
     // Initialize prior as Gaussian centered on bayesPriorCenter
@@ -687,7 +687,7 @@ void AudioController::initTempoState() {
     // For candidate period T (lag), Rayleigh(T; sigma) = T/sigma^2 * exp(-T^2 / (2*sigma^2))
     // Peaked at sigma = lag corresponding to 120 BPM = 3600/120 = 30 at 60 Hz
     {
-        float rayleighSigma = 3600.0f / 120.0f;  // = 30 (lag for 120 BPM)
+        float rayleighSigma = OSS_FRAMES_PER_MIN / 120.0f;  // = 30 (lag for 120 BPM)
         float maxR = 0.0f;
         for (int i = 0; i < TEMPO_BINS; i++) {
             float lag = static_cast<float>(tempoBinLags_[i]);
@@ -1028,7 +1028,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             if (halfIdx >= 0 && halfIdx < correlationSize) {
                 float halfAcf = correlationAtLag[halfIdx];
                 if (halfAcf > HARMONIC_2X_THRESH * bestAcf) {
-                    float halfBpm = 60.0f * 60.0f / static_cast<float>(halfLag);  // 60Hz * 60s
+                    float halfBpm = OSS_FRAMES_PER_MIN / static_cast<float>(halfLag);
                     int closest = findClosestTempoBin(halfBpm);
                     if (closest >= 0 && fabsf(tempoBinBpms_[closest] - halfBpm) < halfBpm * 0.1f) {
                         bestBin = closest;
@@ -1043,7 +1043,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                 if (twoThirdIdx >= 0 && twoThirdIdx < correlationSize) {
                     float twoThirdAcf = correlationAtLag[twoThirdIdx];
                     if (twoThirdAcf > HARMONIC_1_5X_THRESH * bestAcf) {
-                        float twoThirdBpm = 60.0f * 60.0f / static_cast<float>(twoThirdLag);
+                        float twoThirdBpm = OSS_FRAMES_PER_MIN / static_cast<float>(twoThirdLag);
                         int closest = findClosestTempoBin(twoThirdBpm);
                         if (closest >= 0 && fabsf(tempoBinBpms_[closest] - twoThirdBpm) < twoThirdBpm * 0.1f) {
                             bestBin = closest;
@@ -1432,7 +1432,7 @@ void AudioController::checkOctaveAlternative() {
     if (scoreT > 0.001f && scoreHalfT > octaveScoreRatio * scoreT) {
         // Switch to double-time
         beatPeriodSamples_ = halfT;
-        float newBpm = 3600.0f / static_cast<float>(halfT);  // 60Hz * 60s / halfT
+        float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(halfT);
         bpm_ = clampf(newBpm, bpmMin, bpmMax);
         beatPeriodMs_ = 60000.0f / bpm_;
 

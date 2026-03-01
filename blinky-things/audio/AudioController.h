@@ -455,6 +455,8 @@ private:
     // === RHYTHM TRACKING STATE ===
 
     // Onset Strength Signal buffer (6 seconds at 60 Hz frame rate)
+    static constexpr int OSS_FRAME_RATE = 60;  // OSS samples per second (tied to mic frame rate)
+    static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;  // 3600.0 — lag-to-BPM conversion
     static constexpr int OSS_BUFFER_SIZE = 360;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};
     uint32_t ossTimestamps_[OSS_BUFFER_SIZE] = {0};  // Track actual timestamps for adaptive lag
