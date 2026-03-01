@@ -1508,3 +1508,147 @@ Tested 4 configurations to isolate interaction effects:
 ### Raw Results
 
 Full sweep results: `tuning-results/post-spectral/multi-sweep-results.json`
+
+---
+
+## Test Session: 2026-02-28 — v31→v32 Octave Disambiguation Experiments
+
+**Environment:**
+- Hardware: 4× Seeeduino XIAO nRF52840 Sense (3 Long Tube, 1 Tube Light)
+- Ports: /dev/ttyACM0-3 (Linux, Raspberry Pi)
+- Audio: USB speakers (JBL Pebbles), 30s clips, `run_music_test_multi`
+- Starting firmware: SETTINGS_VERSION 31 (all new features OFF by default)
+- 9 core tracks: trance-party, minimal-01, infected-vibes, goa-mantra, minimal-emotion, deep-ambience, machine-drum, trap-electro, dub-groove
+
+**Goal:** Improve Beat F1 from ~0.148 baseline via BTrack-inspired algorithms.
+
+### Phase 0: Baseline (all defaults)
+- Avg best-device Beat F1: **0.148** across 9 tracks
+- Consistent with known acoustic degradation vs historical v22 baseline (0.519)
+
+### Phase 1: ODF Mean Subtraction (A/B)
+
+| Config | Avg Beat F1 | vs Baseline |
+|--------|:-----------:|:-----------:|
+| ACM0: defaults (adaptodf=0, odfmeansub=1) | 0.111 | — |
+| ACM1: adaptodf=1, odfmeansub=1 | 0.144 | +30% |
+| ACM2: adaptodf=1, odfmeansub=0 | 0.154 | +39% |
+| **ACM3: adaptodf=0, odfmeansub=0 (raw ODF)** | **0.252** | **+127%** |
+
+**Key finding:** Disabling global ODF mean subtraction was the major win (+70% vs odfmeansub=1). The adaptive local threshold (adaptodf) showed marginal benefit. Raw ODF preserves natural ACF peak structure.
+
+**Winner:** `odfmeansub=0`
+
+### Phase 2: Onset-Density Octave Discriminator (A/B)
+
+Locked: `odfmeansub=0`
+
+| Config | Avg Beat F1 | vs Control |
+|--------|:-----------:|:----------:|
+| ACM0: control (odfmeansub=0 only) | 0.239 | — |
+| **ACM1: + densityoctave=1, min=0.5, max=5.0** | **0.270** | **+13%** |
+| ACM2: + densityoctave=1, min=0.3, max=3.0 | 0.250 | +5% |
+| ACM3: + densityoctave=1, min=1.0, max=8.0 | 0.239 | +0% |
+
+Notable per-track: infected-vibes 0.276→0.389 (+41%), trance-party 0.142→0.266 (+87%), dub-groove 0.269→0.365 (+36%).
+
+**Winner:** `densityoctave=1, densityminpb=0.5, densitymaxpb=5.0`
+
+### Phase 3: Shadow CBSS Octave Checker (A/B)
+
+Locked: `odfmeansub=0`, `densityoctave=1` (0.5-5.0)
+
+| Config | Avg Beat F1 | vs Control |
+|--------|:-----------:|:----------:|
+| ACM0: control (Phase 1+2 winners) | 0.233 | — |
+| ACM1: + octavecheck=1, beats=4, ratio=1.5 | 0.250 | +7% |
+| **ACM2: + octavecheck=1, beats=2, ratio=1.3** | **0.263** | **+13%** |
+| ACM3: + octavecheck=1, beats=8, ratio=2.0 | 0.257 | +10% |
+
+ACM2 consistently achieved best BPM accuracy: deep-ambience 0.968, trap-electro 0.981, dub-groove 0.844. The aggressive octave checker breaks the double-time lock.
+
+**Winner:** `octavecheck=1, octavecheckbeats=2, octavescoreratio=1.3`
+
+### Phase 4: Hi-Res Bass Toggle (A/B)
+
+Locked: all Phase 1-3 winners
+
+| Config | Avg Beat F1 |
+|--------|:-----------:|
+| **bfhiresbass=0 (off)** | **0.255** |
+| bfhiresbass=1 (on) | 0.233 |
+
+Same-device paired comparison (ACM0 vs ACM1): 0.253 vs 0.231. No hiresbass wins 6/9 tracks.
+
+**Winner:** `bfhiresbass=0` (no change needed)
+
+### Compound Validation (all 4 devices, best combined config)
+
+Config: `odfmeansub=0, densityoctave=1, densityminpb=0.5, densitymaxpb=5.0, octavecheck=1, octavecheckbeats=2, octavescoreratio=1.3`
+
+| Track | ACM0 | ACM1 | ACM2 | ACM3 | Avg | Best |
+|-------|:----:|:----:|:----:|:----:|:---:|:----:|
+| trance-party | 0.222 | 0.210 | 0.263 | 0.315 | 0.253 | 0.315 |
+| minimal-01 | 0.220 | 0.206 | 0.224 | 0.157 | 0.202 | 0.224 |
+| infected-vibes | 0.281 | 0.325 | 0.235 | 0.283 | 0.281 | 0.325 |
+| goa-mantra | 0.183 | 0.212 | 0.143 | 0.218 | 0.189 | 0.218 |
+| minimal-emotion | 0.283 | 0.243 | 0.330 | 0.317 | 0.293 | 0.330 |
+| deep-ambience | 0.241 | 0.213 | 0.212 | 0.235 | 0.225 | 0.241 |
+| machine-drum | 0.291 | 0.180 | 0.244 | 0.288 | 0.251 | 0.291 |
+| trap-electro | 0.208 | 0.280 | 0.336 | 0.254 | 0.270 | 0.336 |
+| dub-groove | 0.283 | 0.367 | 0.189 | 0.270 | 0.277 | 0.367 |
+| **Overall** | **0.246** | **0.248** | **0.242** | **0.260** | **0.249** | **0.294** |
+
+### Summary
+
+| Metric | Baseline (v31 defaults) | Best Combined (v32) | Improvement |
+|--------|:-----------------------:|:-------------------:|:-----------:|
+| 4-device avg Beat F1 | 0.148 | 0.249 | +68% |
+| Best-device avg Beat F1 | 0.148 | 0.294 | +99% |
+
+**New SETTINGS_VERSION 32 defaults:**
+- `odfmeansub=0` (was true) — raw ODF preserves natural ACF structure
+- `densityoctave=1` (was false) — onset-density octave penalty
+- `octavecheck=1` (was false) — shadow CBSS octave checker
+- `octavecheckbeats=2` (was 4) — aggressive checking
+- `octavescoreratio=1.3` (was 1.5) — lower switch threshold
+- `adaptodf=0` (unchanged) — local threshold not needed
+- `bfhiresbass=0` (unchanged) — hi-res bass hurts
+
+**Remaining bottleneck:** Double-time lock at ~182 BPM persists on many tracks/devices. The density penalty and octave checker mitigate but don't eliminate it. Fundamental octave disambiguation remains the primary gap vs BTrack.
+
+### Full 18-Track Validation (v32 firmware, full-length tracks, all devices at defaults)
+
+| # | Track | BPM | ACM0 | ACM1 | ACM2 | ACM3 | Avg | Best |
+|:-:|-------|:---:|:----:|:----:|:----:|:----:|:---:|:----:|
+| 1 | trance-party | 136 | 0.271 | 0.279 | 0.275 | 0.272 | 0.274 | 0.279 |
+| 2 | minimal-01 | 129 | 0.213 | 0.243 | 0.343 | 0.185 | 0.246 | 0.343 |
+| 3 | infected-vibes | 144 | 0.338 | 0.298 | 0.270 | 0.247 | 0.288 | 0.338 |
+| 4 | goa-mantra | 136 | 0.312 | 0.381 | 0.230 | 0.370 | 0.323 | 0.381 |
+| 5 | minimal-emotion | 129 | 0.237 | 0.293 | 0.220 | 0.225 | 0.244 | 0.293 |
+| 6 | deep-ambience | 123 | 0.247 | 0.258 | 0.305 | 0.282 | 0.273 | 0.305 |
+| 7 | machine-drum | 144 | 0.328 | 0.310 | 0.248 | 0.355 | 0.310 | 0.355 |
+| 8 | trap-electro | 112 | 0.234 | 0.255 | 0.239 | 0.260 | 0.247 | 0.260 |
+| 9 | dub-groove | 123 | 0.299 | 0.319 | 0.251 | 0.311 | 0.295 | 0.319 |
+| 10 | afrobeat-feelgood | 118 | 0.288 | 0.272 | 0.276 | 0.268 | 0.276 | 0.288 |
+| 11 | amapiano-vibez | 112 | 0.250 | 0.255 | 0.242 | 0.245 | 0.248 | 0.255 |
+| 12 | breakbeat-bg | 86 | 0.313 | 0.284 | 0.174 | 0.366 | 0.284 | 0.366 |
+| 13 | breakbeat-drive | 96 | 0.209 | 0.206 | 0.194 | 0.197 | 0.202 | 0.209 |
+| 14 | dnb-energetic | 118 | 0.298 | 0.286 | 0.308 | 0.256 | 0.287 | 0.308 |
+| 15 | dnb-liquid-jungle | 112 | 0.255 | 0.240 | 0.232 | 0.284 | 0.253 | 0.284 |
+| 16 | dubstep-halftime | 118 | 0.278 | 0.306 | 0.366 | 0.317 | 0.317 | 0.366 |
+| 17 | garage-uk-2step | 129 | 0.301 | 0.305 | 0.253 | 0.306 | 0.291 | 0.306 |
+| 18 | reggaeton | 92 | 0.057 | 0.123 | 0.178 | 0.123 | 0.120 | 0.178 |
+| | **Overall** | | **0.265** | **0.273** | **0.256** | **0.271** | **0.265** | **0.302** |
+
+| Metric | Core 9 | Extended 9 | All 18 |
+|--------|:------:|:----------:|:------:|
+| 4-device avg | 0.278 | 0.253 | 0.265 |
+| Best-device avg | 0.319 | 0.284 | 0.302 |
+
+**Observations:**
+- ACM2 (Tube Light, different acoustic position) consistently gets best BPM accuracy but not always best Beat F1
+- Double-time lock at ~182 BPM remains dominant failure mode on ACM0/ACM1/ACM3
+- Worst: reggaeton (92 BPM, below density discriminator range) — F1 0.120
+- Best: goa-mantra (0.381), breakbeat-bg (0.366), dubstep-halftime (0.366), machine-drum (0.355)
+- Extended tracks perform ~10% worse than core 9, mainly due to breakbeat/reggaeton genres with BPMs outside 110-150 range

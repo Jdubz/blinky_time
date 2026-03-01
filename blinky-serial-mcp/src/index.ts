@@ -34,6 +34,44 @@ function ensureTestResultsDir(): void {
   }
 }
 
+/** Greedy nearest-neighbor matching of estimated events against reference events. */
+function matchEventsF1(
+  estimated: number[],
+  reference: number[],
+  toleranceSec: number,
+): { f1: number; precision: number; recall: number; tp: number } {
+  const matched = new Set<number>();
+  let tp = 0;
+  for (const est of estimated) {
+    let bestIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < reference.length; i++) {
+      if (matched.has(i)) continue;
+      const dist = Math.abs(est - reference[i]);
+      if (dist < bestDist && dist <= toleranceSec) {
+        bestDist = dist;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx >= 0) {
+      matched.add(bestIdx);
+      tp++;
+    }
+  }
+  const precision = estimated.length > 0 ? tp / estimated.length : 0;
+  const recall = reference.length > 0 ? tp / reference.length : 0;
+  const f1 = (precision + recall) > 0 ? 2 * precision * recall / (precision + recall) : 0;
+  return { f1, precision, recall, tp };
+}
+
+/** Computes BPM accuracy and error percentage. */
+function computeBpmMetrics(avgBpm: number, expectedBpm: number): { accuracy: number; error: number } | null {
+  if (expectedBpm <= 0 || avgBpm <= 0) return null;
+  const error = Math.abs(avgBpm - expectedBpm) / expectedBpm * 100;
+  const accuracy = Math.max(0, 1 - error / 100);
+  return { accuracy, error };
+}
+
 // Multi-device connection manager
 const manager = new DeviceManager();
 
@@ -2010,58 +2048,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // F-measure with 70ms tolerance (standard beat tracking)
           const BEAT_TOLERANCE_SEC = 0.07;
-          const matchedRef = new Set<number>();
-          let tp = 0;
-          for (const est of estBeatsFromDevice) {
-            let bestIdx = -1;
-            let bestDist = Infinity;
-            for (let i = 0; i < refBeats.length; i++) {
-              if (matchedRef.has(i)) continue;
-              const dist = Math.abs(est - refBeats[i]);
-              if (dist < bestDist && dist <= BEAT_TOLERANCE_SEC) {
-                bestDist = dist;
-                bestIdx = i;
-              }
-            }
-            if (bestIdx >= 0) {
-              matchedRef.add(bestIdx);
-              tp++;
-            }
-          }
-
-          const beatPrecision = estBeatsFromDevice.length > 0 ? tp / estBeatsFromDevice.length : 0;
-          const beatRecall = refBeats.length > 0 ? tp / refBeats.length : 0;
-          const beatF1 = (beatPrecision + beatRecall) > 0
-            ? 2 * (beatPrecision * beatRecall) / (beatPrecision + beatRecall)
-            : 0;
+          const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
+            matchEventsF1(estBeatsFromDevice, refBeats, BEAT_TOLERANCE_SEC);
 
           // Transient F1: raw transient timestamps vs ground truth beats
           // This measures detector quality independent of rhythm tracking
           const estTransients = detections.map(d => (d.timestampMs - audioLatencyMs) / 1000);
-          const transientMatchedRef = new Set<number>();
-          let transientTp = 0;
-          for (const est of estTransients) {
-            let bestIdx = -1;
-            let bestDist = Infinity;
-            for (let i = 0; i < refBeats.length; i++) {
-              if (transientMatchedRef.has(i)) continue;
-              const dist = Math.abs(est - refBeats[i]);
-              if (dist < bestDist && dist <= BEAT_TOLERANCE_SEC) {
-                bestDist = dist;
-                bestIdx = i;
-              }
-            }
-            if (bestIdx >= 0) {
-              transientMatchedRef.add(bestIdx);
-              transientTp++;
-            }
-          }
-
-          const transientPrecision = estTransients.length > 0 ? transientTp / estTransients.length : 0;
-          const transientRecall = refBeats.length > 0 ? transientTp / refBeats.length : 0;
-          const transientF1 = (transientPrecision + transientRecall) > 0
-            ? 2 * (transientPrecision * transientRecall) / (transientPrecision + transientRecall)
-            : 0;
+          const { f1: transientF1, precision: transientPrecision, recall: transientRecall } =
+            matchEventsF1(estTransients, refBeats, BEAT_TOLERANCE_SEC);
 
           // CMLt: Continuity metric
           // Check each reference beat for a matching device beat
@@ -2145,9 +2139,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           // BPM accuracy
           const expectedBPM = gtData.bpm || 0;
-          const bpmError = expectedBPM > 0 && avgBpm > 0
-            ? Math.abs(avgBpm - expectedBPM) / expectedBPM * 100 : null;
-          const bpmAccuracy = bpmError !== null ? Math.max(0, 1 - bpmError / 100) : null;
+          const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
+          const bpmAccuracy = bpmMetrics?.accuracy ?? null;
+          const bpmError = bpmMetrics?.error ?? null;
 
           // Phase stability: standard deviation of phase during active tracking
           let phaseStability = 0;
@@ -2193,9 +2187,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             beatOffsetStats: null,
             beatOffsetHistogram: {},
             beatVsReference: {
-              matched: tp,
-              extra: estBeatsFromDevice.length - tp,
-              missed: refBeats.length - tp,
+              matched: beatTp,
+              extra: estBeatsFromDevice.length - beatTp,
+              missed: refBeats.length - beatTp,
             },
             predictionRatio: null,
             transientBeatOffsets: [],
@@ -2416,12 +2410,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
         };
 
-        // Connect all devices in parallel
-        const connectedSessions = await Promise.all(multiPorts.map(async (p) => {
-          const { session } = await manager.connect(p);
-          return { port: p, session };
-        }));
+        // Connect all devices in parallel, handling partial failures
+        const connectedSessions: Array<{ port: string; session: Awaited<ReturnType<typeof manager.connect>>['session'] }> = [];
         try {
+          const connectResults = await Promise.allSettled(multiPorts.map(async (p) => {
+            const { session } = await manager.connect(p);
+            return { port: p, session };
+          }));
+          const connectFailures: string[] = [];
+          for (let idx = 0; idx < connectResults.length; idx++) {
+            const result = connectResults[idx];
+            if (result.status === 'fulfilled') {
+              connectedSessions.push(result.value);
+            } else {
+              const reason = result.reason as Error;
+              connectFailures.push(`${multiPorts[idx]}: ${reason.message ?? String(result.reason)}`);
+            }
+          }
+          if (connectFailures.length > 0) {
+            throw new Error(`Failed to connect some ports: ${connectFailures.join('; ')}`);
+          }
           // Lock gain on all devices if specified
           if (multiGain !== undefined) {
             await Promise.all(connectedSessions.map(({ session }) =>
@@ -2538,60 +2546,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             // Beat F1: match device beat events to reference beats
             const estBeats = correctedBeatEvents.map(b => (b.timestampMs - latencyMs) / 1000);
-            const matchedRefBeats = new Set<number>();
-            let beatTp = 0;
-            for (const est of estBeats) {
-              let bestIdx = -1;
-              let bestDist = Infinity;
-              for (let i = 0; i < refBeats.length; i++) {
-                if (matchedRefBeats.has(i)) continue;
-                const dist = Math.abs(est - refBeats[i]);
-                if (dist < bestDist && dist <= MULTI_BEAT_TOL_SEC) {
-                  bestDist = dist;
-                  bestIdx = i;
-                }
-              }
-              if (bestIdx >= 0) {
-                matchedRefBeats.add(bestIdx);
-                beatTp++;
-              }
-            }
-            const beatPrec = estBeats.length > 0 ? beatTp / estBeats.length : 0;
-            const beatRec = refBeats.length > 0 ? beatTp / refBeats.length : 0;
-            const beatF1 = (beatPrec + beatRec) > 0 ? 2 * beatPrec * beatRec / (beatPrec + beatRec) : 0;
+            const { f1: beatF1, precision: beatPrec, recall: beatRec } =
+              matchEventsF1(estBeats, refBeats, MULTI_BEAT_TOL_SEC);
 
             // Transient F1: match transient detections to reference beats
             const estTrans = correctedDetections.map(d => (d.timestampMs - latencyMs) / 1000);
-            const matchedRefTrans = new Set<number>();
-            let transTp = 0;
-            for (const est of estTrans) {
-              let bestIdx = -1;
-              let bestDist = Infinity;
-              for (let i = 0; i < refBeats.length; i++) {
-                if (matchedRefTrans.has(i)) continue;
-                const dist = Math.abs(est - refBeats[i]);
-                if (dist < bestDist && dist <= MULTI_BEAT_TOL_SEC) {
-                  bestDist = dist;
-                  bestIdx = i;
-                }
-              }
-              if (bestIdx >= 0) {
-                matchedRefTrans.add(bestIdx);
-                transTp++;
-              }
-            }
-            const transPrec = estTrans.length > 0 ? transTp / estTrans.length : 0;
-            const transRec = refBeats.length > 0 ? transTp / refBeats.length : 0;
-            const transF1 = (transPrec + transRec) > 0 ? 2 * transPrec * transRec / (transPrec + transRec) : 0;
+            const { f1: transF1, precision: transPrec, recall: transRec } =
+              matchEventsF1(estTrans, refBeats, MULTI_BEAT_TOL_SEC);
 
             // BPM accuracy
             const activeStates = correctedMusicStates.filter(s => s.active);
             const avgBpm = activeStates.length > 0
               ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
             const expectedBPM = multiGtData.bpm || 0;
-            const bpmErr = expectedBPM > 0 && avgBpm > 0
-              ? Math.abs(avgBpm - expectedBPM) / expectedBPM * 100 : null;
-            const bpmAcc = bpmErr !== null ? Math.max(0, 1 - bpmErr / 100) : null;
+            const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
+            const bpmAcc = bpmMetrics?.accuracy ?? null;
+            const bpmErr = bpmMetrics?.error ?? null;
 
             // Beat offset stats
             const beatOffsets: number[] = [];
@@ -2627,6 +2597,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               musicMode: {
                 avgBpm: Math.round(avgBpm * 10) / 10,
                 expectedBpm: expectedBPM,
+                bpmError: bpmErr !== null ? Math.round(bpmErr * 10) / 10 : null,
                 bpmAccuracy: bpmAcc !== null ? Math.round(bpmAcc * 1000) / 1000 : null,
               },
               timing: {

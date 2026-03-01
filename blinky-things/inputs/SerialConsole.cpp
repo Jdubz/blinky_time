@@ -275,6 +275,24 @@ void SerialConsole::registerRhythmSettings() {
         "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
     settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",
         "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
+    settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
+        "Local-mean ODF threshold before autocorrelation (BTrack-style, v32)");
+    settings_.registerBool("densityoctave", &audioCtrl_->densityOctaveEnabled, "rhythm",
+        "Onset-density octave penalty in Bayesian posterior (v32)");
+    settings_.registerFloat("densityminpb", &audioCtrl_->densityMinPerBeat, "rhythm",
+        "Min plausible transients per beat for density octave (0.1-3)", 0.1f, 3.0f);
+    settings_.registerFloat("densitymaxpb", &audioCtrl_->densityMaxPerBeat, "rhythm",
+        "Max plausible transients per beat for density octave (1-20)", 1.0f, 20.0f);
+    settings_.registerBool("octavecheck", &audioCtrl_->octaveCheckEnabled, "rhythm",
+        "Shadow CBSS octave checker (v32)");
+    settings_.registerBool("btrkpipeline", &audioCtrl_->btrkPipeline, "rhythm",
+        "BTrack-style tempo pipeline: Viterbi + comb-on-ACF (v33)");
+    settings_.registerUint8("btrkthreshwin", &audioCtrl_->btrkThreshWindow, "rhythm",
+        "Pipeline adaptive threshold half-window (0=off, 1-5 bins each side)", 0, 5);
+    settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
+        "Check octave every N beats (2-16)", 2, 16);
+    settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
+        "CBSS score ratio needed for octave switch (1-5)", 1.0f, 5.0f);
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -1091,7 +1109,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->cbssAlpha = 0.9f;
         audioCtrl_->cbssTightness = 5.0f;
         audioCtrl_->beatConfidenceDecay = 0.98f;
-        audioCtrl_->bayesLambda = 0.07f;
+        audioCtrl_->bayesLambda = 0.60f;
         audioCtrl_->bayesPriorCenter = 128.0f;
         audioCtrl_->bayesPriorWeight = 0.0f;
         audioCtrl_->bayesAcfWeight = 0.8f;
@@ -1106,6 +1124,16 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->ftEnabled = false;
         audioCtrl_->beatBoundaryTempo = true;
         audioCtrl_->unifiedOdf = true;
+        audioCtrl_->odfMeanSubEnabled = false;   // v32: raw ODF better than mean-subtracted
+        audioCtrl_->adaptiveOdfThresh = false;
+        audioCtrl_->densityOctaveEnabled = true;  // v32: onset-density octave penalty
+        audioCtrl_->densityMinPerBeat = 0.5f;
+        audioCtrl_->densityMaxPerBeat = 5.0f;
+        audioCtrl_->octaveCheckEnabled = true;    // v32: shadow CBSS octave checker
+        audioCtrl_->octaveCheckBeats = 2;         // v32: aggressive (every 2 beats)
+        audioCtrl_->octaveScoreRatio = 1.3f;      // v32: aggressive threshold
+        audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
+        audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;

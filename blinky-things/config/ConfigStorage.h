@@ -57,7 +57,10 @@ public:
     // Version 29: All BandFlux detector params persisted (StoredBandFluxParams added to ConfigData)
     //             peakPickEnabled first persisted (in StoredBandFluxParams)
     // Version 30: posteriorFloor/disambigNudge/harmonicTransWeight; ACF lag normalization; MIN_LAG 20→18; NUM_FILTERS 40→20
-    static const uint8_t SETTINGS_VERSION = 30;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 31: Adaptive ODF threshold, onset-density octave discriminator, shadow CBSS octave checker (internal dev, never deployed)
+    // Version 32: ODF mean sub disabled, density octave + octave checker defaults (first deployed with v31 features)
+    // Version 33: BTrack-style tempo pipeline (Viterbi max-product + comb-on-ACF adaptive threshold)
+    static const uint8_t SETTINGS_VERSION = 33;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -195,12 +198,23 @@ public:
         float disambigNudge;            // Posterior nudge on disambiguation correction (0=off)
         float harmonicTransWeight;      // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
 
+        // Onset-density octave discriminator (v31)
+        float densityMinPerBeat;        // Min plausible transients per beat (0.5)
+        float densityMaxPerBeat;        // Max plausible transients per beat (5.0)
+        float octaveScoreRatio;         // Shadow CBSS score ratio for octave switch (1.5)
+
         uint8_t odfSmoothWidth;         // ODF smooth window (3-11, odd)
+        uint8_t octaveCheckBeats;       // Check octave every N beats (4)
         bool ioiEnabled;                // Enable IOI histogram observation
         bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
         bool ftEnabled;                 // Enable Fourier tempogram observation
         bool beatBoundaryTempo;         // Defer tempo changes to beat boundaries (v28)
         bool unifiedOdf;                // Use BandFlux pre-threshold as CBSS ODF (v28)
+        bool adaptiveOdfThresh;         // Local-mean ODF threshold before autocorrelation (v31)
+        bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
+        bool octaveCheckEnabled;        // Shadow CBSS octave check (v31)
+        bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
+        uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)
 
         // Spectral processing (v23+)
         bool whitenEnabled;             // Per-bin spectral whitening
@@ -331,8 +345,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 148,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (148 bytes = 35 floats + 1 uint8 + 7 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 168,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (168 bytes = 38 floats + 3 uint8 + 11 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,

@@ -183,16 +183,30 @@ float output = organic * (1.0f - blend) + synced * blend;
 | `tempoPriorStrength` | 0.3 | Blend: 0=no prior, 1=full prior | `set tempoprior_strength 0.3` |
 | `tempoPriorEnabled` | true | Enable tempo prior weighting | `set tempoprior_enabled 1` |
 
+### Octave Disambiguation Parameters (v32)
+
+| Parameter | Default | Description | SerialConsole Command |
+|-----------|---------|-------------|----------------------|
+| `odfMeanSubEnabled` | false | ODF mean subtraction before ACF (disabled: raw ODF +70% F1) | `set odfmeansub 0` |
+| `adaptiveOdfThresh` | false | Local-mean ODF threshold (BTrack-style, marginal benefit) | `set adaptodf 0` |
+| `densityOctaveEnabled` | true | Onset-density octave penalty in Bayesian posterior | `set densityoctave 1` |
+| `densityMinPerBeat` | 0.5 | Min plausible transients per beat | `set densityminpb 0.5` |
+| `densityMaxPerBeat` | 5.0 | Max plausible transients per beat | `set densitymaxpb 5.0` |
+| `octaveCheckEnabled` | true | Shadow CBSS octave checker (T vs T/2 comparison) | `set octavecheck 1` |
+| `octaveCheckBeats` | 2 | Check octave every N beats | `set octavecheckbeats 2` |
+| `octaveScoreRatio` | 1.3 | T/2 must score this much better to switch | `set octavescoreratio 1.3` |
+
 ---
 
 ## Detection: EnsembleDetector
 
-AudioController delegates transient detection to the EnsembleDetector. Currently 2 detectors are enabled:
+AudioController delegates transient detection to the EnsembleDetector. Currently **BandFlux Solo** config (1 detector enabled):
 
-| Detector | Weight | Threshold | Role |
-|----------|--------|-----------|------|
-| Drummer | 0.50 | 4.5 | Best recall on kicks/snares |
-| ComplexDomain | 0.50 | 3.5 | Best precision, near-zero false positives |
+| Detector | Weight | Threshold | Enabled | Role |
+|----------|--------|-----------|---------|------|
+| **BandWeightedFlux** | 1.00 | 0.5 | **Yes** | Log-compressed band-weighted spectral flux |
+| Drummer | 0.50 | 4.5 | No | Good kick/snare recall |
+| ComplexDomain | 0.50 | 3.5 | No | Good precision |
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
@@ -203,13 +217,14 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 | Component | RAM | CPU @ 64 MHz | Notes |
 |-----------|-----|-------------|-------|
 | AdaptiveMic + FFT | ~4 KB | ~4% | Microphone processing |
-| EnsembleDetector | ~0.5 KB | ~1% | 2 enabled detectors + fusion |
+| EnsembleDetector | ~0.5 KB | ~1% | BandFlux Solo (1 detector) |
 | OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ 60 Hz |
+| ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5 KB | ~1% | Tempo validation |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| **Total** | **~13 KB** | **~9-10%** | Ample headroom |
+| **Total** | **~15 KB** | **~9-10%** | Ample headroom |
 
 ---
 
