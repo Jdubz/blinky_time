@@ -728,7 +728,7 @@ private:
     void pfResample();
     void pfDetectBeat();
     void pfExtractConsensus();
-    float pfRandom();           // LCG uniform [0,1)
+    float pfRandom();           // LCG uniform 0 to 1
     float pfGaussianRandom();   // Box-Muller
 
     // ODF smoothing
