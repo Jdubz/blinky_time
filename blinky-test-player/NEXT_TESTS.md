@@ -5,7 +5,7 @@
 
 **Last Updated:** March 2, 2026
 
-## Current Config (SETTINGS_VERSION 38)
+## Current Config (SETTINGS_VERSION 39)
 
 **Detector:** BandWeightedFlux Solo (all others disabled)
 - gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5
@@ -13,15 +13,16 @@
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
 - bayesacf=0.3 (v25 inverse-lag normalized), bayescomb=0.7, bayesft=0, bayesioi=0
-- cbssthresh=1.0, beatoffset=5, onsetSnapWindow=4
+- cbssthresh=1.0, beatoffset=5, onsetSnapWindow=8
 - densityoctave=1, octavecheck=1 (v32 octave disambiguation)
 - odfmeansub=0 (v32 — raw ODF preserves ACF structure)
 - phasecheck=0, warmup=0, cbssContrast=1.0
 
-**NEW (v38):** Particle filter beat tracker (disabled by default, A/B testable)
+**NEW (v38-v39):** Particle filter beat tracker (disabled by default, A/B testable)
 - `set particlefilter 1` to enable
-- Replaces CBSS beat detection when active (Bayesian tempo + ACF still run)
+- Hybrid mode: PF provides tempo estimate, CBSS handles beat detection and phase
 - 100 particles, stratified resampling with octave injection (T/2, 2T)
+- v39: madmom obs model, info gate, phase-coherent octave, PF+CBSS hybrid
 
 ## Current Baselines
 

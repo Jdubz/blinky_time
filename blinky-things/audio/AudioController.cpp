@@ -1180,8 +1180,9 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // Corrects 3:2 and 2:1 lock by checking if a slower fundamental
     // has comparable ACF support. Posterior-gated: only overrides the MAP
     // when the Bayesian posterior shows genuine ambiguity (fundamental bin
-    // has >= 20% of MAP probability). This prevents false correction when
-    // the prior/density/comb filters confidently favor the MAP.
+    // has at least 50% of the MAP probability, i.e., posterior >= 0.5 × MAP).
+    // This prevents false correction when the prior/density/comb filters
+    // confidently favor the MAP.
     {
         int bestLag = tempoBinLags_[bestBin];
         int bestLagIdx = bestLag - minLag;
@@ -1925,11 +1926,12 @@ void AudioController::initParticleFilter() {
             pfParticles_[i].period = estPeriod + pfGaussianRandom() * 2.0f;
         } else {
             // 30% uniform across full range (exploration)
-            pfParticles_[i].period = 18.0f + pfRandom() * 42.0f;  // 18-60
+            pfParticles_[i].period = static_cast<float>(CombFilterBank::MIN_LAG)
+                + pfRandom() * static_cast<float>(CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG);
         }
-        // Clamp period
-        if (pfParticles_[i].period < 18.0f) pfParticles_[i].period = 18.0f;
-        if (pfParticles_[i].period > 60.0f) pfParticles_[i].period = 60.0f;
+        // Clamp period to comb filter lag range
+        if (pfParticles_[i].period < static_cast<float>(CombFilterBank::MIN_LAG)) pfParticles_[i].period = static_cast<float>(CombFilterBank::MIN_LAG);
+        if (pfParticles_[i].period > static_cast<float>(CombFilterBank::MAX_LAG)) pfParticles_[i].period = static_cast<float>(CombFilterBank::MAX_LAG);
 
         // Uniform random phase
         pfParticles_[i].position = pfRandom() * pfParticles_[i].period;
@@ -1954,7 +1956,7 @@ void AudioController::pfUpdate(float odf) {
     // from destabilizing particle weights
     float gatedOdf = odf;
     if (pfInfoGate > 0.0f && odf < pfInfoGate) {
-        gatedOdf = 0.03f;
+        gatedOdf = PF_INFO_GATE_ODF_FLOOR;
     }
     pfUpdateWeights(gatedOdf);
 
@@ -1988,8 +1990,13 @@ void AudioController::pfPredict() {
             float noise = pfGaussianRandom() * pfNoise * pfParticles_[i].period;
             pfParticles_[i].period += noise;
 
-            if (pfParticles_[i].period < 18.0f) pfParticles_[i].period = 18.0f;
-            if (pfParticles_[i].period > 60.0f) pfParticles_[i].period = 60.0f;
+            if (pfParticles_[i].period < static_cast<float>(CombFilterBank::MIN_LAG)) pfParticles_[i].period = static_cast<float>(CombFilterBank::MIN_LAG);
+            if (pfParticles_[i].period > static_cast<float>(CombFilterBank::MAX_LAG)) pfParticles_[i].period = static_cast<float>(CombFilterBank::MAX_LAG);
+
+            // After tempo diffusion and clamping, ensure position is still within [0, period)
+            if (pfParticles_[i].position >= pfParticles_[i].period) {
+                pfParticles_[i].position = fmodf(pfParticles_[i].position, pfParticles_[i].period);
+            }
         }
         // No period noise between beats — phase is deterministic
     }
@@ -2004,7 +2011,7 @@ void AudioController::pfUpdateWeights(float odf) {
     if (lambda < 2.0f) lambda = 2.0f;
     float beatRegionFrac = 1.0f / lambda;  // Fraction of period that is "beat region"
     float nonBeatDenom = lambda - 1.0f;    // For non-beat likelihood normalization
-    float epsilon = 0.01f;
+    float epsilon = PF_LIKELIHOOD_EPSILON;
 
     float odfClamped = odf;
     if (odfClamped > 1.0f) odfClamped = 1.0f;
@@ -2082,13 +2089,13 @@ void AudioController::pfResample() {
         // Alternate between T/2 (double-time) and 2T (half-time)
         if ((i & 1) == 0) {
             float newPeriod = pfResampleBuf_[i].period * 0.5f;
-            if (newPeriod >= 18.0f) {
+            if (newPeriod >= static_cast<float>(CombFilterBank::MIN_LAG)) {
                 pfResampleBuf_[i].period = newPeriod;
                 pfResampleBuf_[i].position = 0.0f;  // Beat boundary (was fmodf)
             }
         } else {
             float newPeriod = pfResampleBuf_[i].period * 2.0f;
-            if (newPeriod <= 60.0f) {
+            if (newPeriod <= static_cast<float>(CombFilterBank::MAX_LAG)) {
                 pfResampleBuf_[i].period = newPeriod;
                 pfResampleBuf_[i].position = 0.0f;  // Beat boundary (was keep old)
             }
@@ -2105,10 +2112,10 @@ void AudioController::pfExtractConsensus() {
     // Use weighted MODE (peak of period histogram) instead of mean.
     // Mean is pulled toward T/2 by octave-injected particles and off-beat onsets.
     // Mode selects the dominant tempo cluster, ignoring minority octave variants.
-    static constexpr int PERIOD_BINS = 43;  // periods 18-60
+    static constexpr int PERIOD_BINS = CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG + 1;
     float binWeights[PERIOD_BINS] = {};
     for (int i = 0; i < PF_NUM_PARTICLES; i++) {
-        int bin = static_cast<int>(pfParticles_[i].period + 0.5f) - 18;
+        int bin = static_cast<int>(pfParticles_[i].period + 0.5f) - CombFilterBank::MIN_LAG;
         if (bin < 0) bin = 0;
         if (bin >= PERIOD_BINS) bin = PERIOD_BINS - 1;
         binWeights[bin] += pfParticles_[i].weight;
@@ -2126,21 +2133,21 @@ void AudioController::pfExtractConsensus() {
     float sumW = 0.0f, sumWP = 0.0f;
     for (int b = bestBin - 2; b <= bestBin + 2; b++) {
         if (b >= 0 && b < PERIOD_BINS) {
-            float period = static_cast<float>(b + 18);
+            float period = static_cast<float>(b + CombFilterBank::MIN_LAG);
             sumW += binWeights[b];
             sumWP += binWeights[b] * period;
         }
     }
-    float modePeriod = (sumW > 1e-10f) ? (sumWP / sumW) : static_cast<float>(bestBin + 18);
-    if (modePeriod < 18.0f) modePeriod = 18.0f;
-    if (modePeriod > 60.0f) modePeriod = 60.0f;
+    float modePeriod = (sumW > 1e-10f) ? (sumWP / sumW) : static_cast<float>(bestBin + CombFilterBank::MIN_LAG);
+    if (modePeriod < static_cast<float>(CombFilterBank::MIN_LAG)) modePeriod = static_cast<float>(CombFilterBank::MIN_LAG);
+    if (modePeriod > static_cast<float>(CombFilterBank::MAX_LAG)) modePeriod = static_cast<float>(CombFilterBank::MAX_LAG);
 
     // Light EMA smoothing for frame-to-frame stability (tau ≈ 10 frames)
     static constexpr float pfPeriodSmoothing = 0.90f;
     float smoothedPeriod = pfSmoothedPeriod_ * pfPeriodSmoothing +
                            modePeriod * (1.0f - pfPeriodSmoothing);
-    if (smoothedPeriod < 18.0f) smoothedPeriod = 18.0f;
-    if (smoothedPeriod > 60.0f) smoothedPeriod = 60.0f;
+    if (smoothedPeriod < static_cast<float>(CombFilterBank::MIN_LAG)) smoothedPeriod = static_cast<float>(CombFilterBank::MIN_LAG);
+    if (smoothedPeriod > static_cast<float>(CombFilterBank::MAX_LAG)) smoothedPeriod = static_cast<float>(CombFilterBank::MAX_LAG);
     pfSmoothedPeriod_ = smoothedPeriod;
 
     bpm_ = OSS_FRAMES_PER_MIN / smoothedPeriod;
@@ -2977,8 +2984,8 @@ void CombFilterBank::init(float frameRate) {
     frameRate_ = frameRate;
 
     // Compute lag and BPM for each filter
-    // Distribute filters evenly from MIN_LAG (180 BPM) to MAX_LAG (60 BPM)
-    // At 60 Hz: lag 20 = 180 BPM, lag 60 = 60 BPM
+    // Distribute filters evenly from MIN_LAG (~200 BPM) to MAX_LAG (~60 BPM)
+    // At 66 Hz: lag 20 = 198 BPM, lag 66 = 60 BPM
     for (int i = 0; i < NUM_FILTERS; i++) {
         // Linear interpolation of lag values
         float t = static_cast<float>(i) / static_cast<float>(NUM_FILTERS - 1);

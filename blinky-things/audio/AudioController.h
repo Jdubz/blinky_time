@@ -40,13 +40,13 @@ struct AutocorrPeak {
 class CombFilterBank {
 public:
     // 20 filters: 60-200 BPM (~7 BPM resolution, broad musical tempo coverage)
-    // At 60 Hz: lag range = 18-60 samples
+    // At 66 Hz: lag range = 20-66 samples (198-60 BPM)
     // 40 bins created systematic posterior drift toward low BPM due to
     // non-uniform BPM spacing on the lag-uniform grid (more bins per BPM
     // at low tempos → probability accumulation). 20 bins proven at F1=0.519.
     static constexpr int NUM_FILTERS = 20;
-    static constexpr int MAX_LAG = 60;  // ~66 BPM at 66 Hz
-    static constexpr int MIN_LAG = 18;  // ~220 BPM at 66 Hz
+    static constexpr int MAX_LAG = 66;  // 60 BPM at 66 Hz (66*60/66)
+    static constexpr int MIN_LAG = 20;  // 198 BPM at 66 Hz (66*60/20)
 
     // === TUNING PARAMETERS ===
     float feedbackGain = 0.92f;       // Resonance strength (0.85-0.98)
@@ -58,7 +58,7 @@ public:
     /**
      * Initialize the filter bank (compute filter lags/BPMs)
      */
-    void init(float frameRate = 60.0f);
+    void init(float frameRate = 66.0f);
 
     /**
      * Reset all state (delay line, resonators, energy)
@@ -319,7 +319,7 @@ public:
     float cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
     float cbssContrast = 1.0f;           // Power-law ODF contrast before CBSS (BTrack uses 2.0; higher = sharper beat peaks)
     uint8_t cbssWarmupBeats = 0;         // CBSS warmup: lower alpha for first N beats (0=disabled; tested 8, increased variance 5.5x)
-    uint8_t onsetSnapWindow = 8;         // Snap beat anchor to strongest OSS in last N frames (0=disabled, 8≈133ms at 60Hz)
+    uint8_t onsetSnapWindow = 8;         // Snap beat anchor to strongest OSS in last N frames (0=disabled; default 8 frames)
 
     // === BEAT-BOUNDARY TEMPO UPDATES (Phase 2.1) ===
     // Defers beatPeriodSamples_ changes to the next beat fire, synchronizing
@@ -660,7 +660,7 @@ private:
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
     float rayleighWeight_[TEMPO_BINS] = {0};      // Rayleigh tempo prior peaked at ~120 BPM (BTrack-style)
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
-    int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
+    int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at OSS_FRAME_RATE Hz)
     float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
     float transMatrixLambda_ = -1.0f;             // bayesLambda used to compute transMatrix_ (-1 = uninitialized)
     float transMatrixHarmonic_ = -1.0f;          // harmonicTransWeight used to compute transMatrix_
@@ -685,8 +685,10 @@ private:
 
     // === PARTICLE FILTER STATE (v38) ===
     static constexpr int PF_NUM_PARTICLES = 100;
+    static constexpr float PF_INFO_GATE_ODF_FLOOR = 0.03f;  // Floor value for gated ODF during silence
+    static constexpr float PF_LIKELIHOOD_EPSILON = 0.01f;    // Small epsilon to avoid zero likelihoods
     struct BeatParticle {
-        float period;    // 18.0-60.0 frames (60-200 BPM at 60 Hz)
+        float period;    // MIN_LAG-MAX_LAG frames (60-200 BPM at 66 Hz)
         float position;  // 0.0 to period
         float weight;    // Unnormalized likelihood
     };
