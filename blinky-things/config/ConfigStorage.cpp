@@ -239,6 +239,15 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.hmmContrast = 2.0f;           // ODF power-law contrast (sharper beat/non-beat)
     data_.music.hmmTempoNorm = true;          // Tempo-normalized argmax (prevents slow-tempo bias)
 
+    // Particle filter beat tracking defaults (v38)
+    data_.music.particleFilterEnabled = false; // Disabled by default (A/B vs CBSS+Bayesian)
+    data_.music.pfNoise = 0.02f;              // Period diffusion noise
+    data_.music.pfBeatSigma = 0.05f;          // Beat kernel width
+    data_.music.pfOctaveInjectRatio = 0.10f;  // 10% octave variants at resampling
+    data_.music.pfBeatThreshold = 0.25f;      // Beat detection threshold
+    data_.music.pfNeffRatio = 0.5f;           // Resample when Neff < 50% of N
+    data_.music.pfContrast = 1.0f;            // ODF contrast (1=linear)
+
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
     data_.music.compressorEnabled = true;
@@ -552,6 +561,15 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     }
     validateFloat(data_.music.octaveScoreRatio, 1.0f, 5.0f, F("octaveScoreRatio"));
     validateFloat(data_.music.hmmContrast, 0.5f, 8.0f, F("hmmContrast"));
+
+    // Particle filter validation (v38)
+    validateFloat(data_.music.pfNoise, 0.001f, 0.1f, F("pfNoise"));
+    validateFloat(data_.music.pfBeatSigma, 0.01f, 0.2f, F("pfBeatSigma"));
+    validateFloat(data_.music.pfOctaveInjectRatio, 0.0f, 0.3f, F("pfOctaveInject"));
+    validateFloat(data_.music.pfBeatThreshold, 0.05f, 0.8f, F("pfBeatThresh"));
+    validateFloat(data_.music.pfNeffRatio, 0.1f, 0.9f, F("pfNeffRatio"));
+    validateFloat(data_.music.pfContrast, 0.5f, 4.0f, F("pfContrast"));
+
     if (data_.music.octaveCheckBeats < 2 || data_.music.octaveCheckBeats > 16) {
         SerialConsole::logWarn(F("Invalid octaveCheckBeats, clamping"));
         data_.music.octaveCheckBeats = data_.music.octaveCheckBeats < 2 ? 2 : 16;
@@ -773,6 +791,15 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->hmmTempoNorm = data_.music.hmmTempoNorm;
         audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
 
+        // Particle filter beat tracking (v38)
+        audioCtrl->particleFilterEnabled = data_.music.particleFilterEnabled;
+        audioCtrl->pfNoise = data_.music.pfNoise;
+        audioCtrl->pfBeatSigma = data_.music.pfBeatSigma;
+        audioCtrl->pfOctaveInjectRatio = data_.music.pfOctaveInjectRatio;
+        audioCtrl->pfBeatThreshold = data_.music.pfBeatThreshold;
+        audioCtrl->pfNeffRatio = data_.music.pfNeffRatio;
+        audioCtrl->pfContrast = data_.music.pfContrast;
+
         // Spectral processing (v23+)
         SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
         spectral.whitenEnabled = data_.music.whitenEnabled;
@@ -976,6 +1003,15 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.hmmContrast = audioCtrl->hmmContrast;
         data_.music.hmmTempoNorm = audioCtrl->hmmTempoNorm;
         data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
+
+        // Particle filter beat tracking (v38)
+        data_.music.particleFilterEnabled = audioCtrl->particleFilterEnabled;
+        data_.music.pfNoise = audioCtrl->pfNoise;
+        data_.music.pfBeatSigma = audioCtrl->pfBeatSigma;
+        data_.music.pfOctaveInjectRatio = audioCtrl->pfOctaveInjectRatio;
+        data_.music.pfBeatThreshold = audioCtrl->pfBeatThreshold;
+        data_.music.pfNeffRatio = audioCtrl->pfNeffRatio;
+        data_.music.pfContrast = audioCtrl->pfContrast;
 
         // Spectral processing (v23+)
         const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();

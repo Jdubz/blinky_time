@@ -63,8 +63,11 @@ public:
     // Version 34: Bar-pointer HMM beat tracking (Phase 3.1, joint tempo-phase)
     // Version 35: odfDiffMode, densityPenaltyExp, densityTarget (ODF experiments)
     // Version 36: bassEnergyOdf (bass energy envelope for ACF tempo estimation)
-    // Version 37: cbssContrast (BTrack-style power-law ODF contrast before CBSS)
-    static const uint8_t SETTINGS_VERSION = 37;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 37: cbssContrast, cbssWarmupBeats, onsetSnapWindow, odfThreshWindow,
+    //             onsetTrainOdf, odfDiffMode, odfSource, densityPenaltyExp,
+    //             densityTarget, phaseCheck{Enabled,Beats,Ratio}, HMM params
+    // Version 38: Particle filter beat tracking (100 particles, octave injection)
+    static const uint8_t SETTINGS_VERSION = 38;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -221,7 +224,7 @@ public:
         uint8_t odfThreshWindow;        // Adaptive ODF threshold half-window (samples each side, 5-30)
         bool onsetTrainOdf;             // Binary onset-train ODF for ACF (v34)
         bool odfDiffMode;               // HWR first-difference ODF for ACF (v35)
-        uint8_t odfSource;              // Alternative ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux)
+        uint8_t odfSource;              // Alternative ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux, 4=centroid, 5=bass ratio)
         bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
         float densityPenaltyExp;        // Density penalty Gaussian exponent (v35)
         float densityTarget;            // Target transients/beat (0=disabled, v35)
@@ -234,6 +237,15 @@ public:
         bool barPointerHmm;            // Bar-pointer HMM beat tracking (v34: joint tempo-phase)
         float hmmContrast;             // HMM ODF power-law contrast (v34)
         bool hmmTempoNorm;             // HMM tempo-normalized argmax (v34)
+
+        // Particle filter beat tracking (v38)
+        bool particleFilterEnabled;    // Enable PF (A/B vs CBSS+Bayesian)
+        float pfNoise;                 // Period diffusion noise (fraction of period/frame)
+        float pfBeatSigma;             // Beat kernel width (fraction of period)
+        float pfOctaveInjectRatio;     // Fraction of particles replaced with octave variants
+        float pfBeatThreshold;         // Weighted fraction near phase=0 to trigger beat
+        float pfNeffRatio;             // Resample when Neff < ratio * N
+        float pfContrast;              // ODF power-law contrast for PF likelihood
 
         // Spectral processing (v23+)
         bool whitenEnabled;             // Per-bin spectral whitening
@@ -364,16 +376,16 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 204,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (204 bytes = 43 floats + 7 uint8 + 17 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 232,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (232 bytes = 49 floats + 7 uint8 + 18 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    // ConfigData: ~553 bytes (4+160+64+64+32+24+148+44+1 + padding). Allocated in last 4KB flash page.
+    // ConfigData: ~581 bytes (4+160+64+64+32+24+176+44+1 + padding). Allocated in last 4KB flash page.
     // Tight bound (640) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
     static_assert(sizeof(ConfigData) <= 640,
-        "ConfigData exceeds 640 bytes! Current estimate ~553B. Check for unintended struct growth.");
+        "ConfigData exceeds 640 bytes! Current estimate ~581B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

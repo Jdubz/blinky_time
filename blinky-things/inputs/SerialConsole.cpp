@@ -313,6 +313,20 @@ void SerialConsole::registerRhythmSettings() {
         "HMM ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
     settings_.registerBool("hmmtemponorm", &audioCtrl_->hmmTempoNorm, "rhythm",
         "HMM tempo-normalized argmax (prevents slow-tempo bias)");
+    settings_.registerBool("particlefilter", &audioCtrl_->particleFilterEnabled, "rhythm",
+        "Particle filter beat tracking (v38, A/B vs CBSS)");
+    settings_.registerFloat("pfnoise", &audioCtrl_->pfNoise, "rhythm",
+        "PF period diffusion noise (fraction of period/frame)", 0.001f, 0.1f);
+    settings_.registerFloat("pfbeatsigma", &audioCtrl_->pfBeatSigma, "rhythm",
+        "PF beat kernel width (fraction of period)", 0.01f, 0.2f);
+    settings_.registerFloat("pfoctaveinject", &audioCtrl_->pfOctaveInjectRatio, "rhythm",
+        "PF fraction of particles replaced with octave variants", 0.0f, 0.3f);
+    settings_.registerFloat("pfbeatthresh", &audioCtrl_->pfBeatThreshold, "rhythm",
+        "PF weighted fraction near beat to trigger", 0.05f, 0.8f);
+    settings_.registerFloat("pfneff", &audioCtrl_->pfNeffRatio, "rhythm",
+        "PF resample when Neff < ratio * N", 0.1f, 0.9f);
+    settings_.registerFloat("pfcontrast", &audioCtrl_->pfContrast, "rhythm",
+        "PF ODF power-law contrast (1=linear)", 0.5f, 4.0f);
     settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
         "Check octave every N beats (2-16)", 2, 16);
     settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
@@ -1167,6 +1181,25 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->barPointerHmm = false;        // v34: bar-pointer HMM (disabled by default, A/B)
         audioCtrl_->hmmContrast = 2.0f;           // v34: ODF power-law contrast
         audioCtrl_->hmmTempoNorm = true;          // v34: tempo-normalized argmax
+        audioCtrl_->cbssContrast = 1.0f;           // v37: ODF contrast before CBSS
+        audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
+        audioCtrl_->onsetSnapWindow = 4;           // v37: snap beat to strongest OSS in ±4 frames
+        audioCtrl_->odfThreshWindow = 15;          // v35: adaptive ODF threshold half-window
+        audioCtrl_->onsetTrainOdf = false;         // v35: binary onset-train ODF
+        audioCtrl_->odfDiffMode = false;           // v36: HWR first-difference ODF
+        audioCtrl_->odfSource = 0;                 // v36: default ODF source
+        audioCtrl_->densityPenaltyExp = 2.0f;      // v32: density penalty exponent
+        audioCtrl_->densityTarget = 0.0f;          // v32: density target (0=disabled)
+        audioCtrl_->phaseCheckEnabled = false;      // v37: phase check disabled (net-negative)
+        audioCtrl_->phaseCheckBeats = 4;           // v37: check every 4 beats
+        audioCtrl_->phaseCheckRatio = 1.2f;        // v37: correction ratio threshold
+        audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
+        audioCtrl_->pfNoise = 0.02f;
+        audioCtrl_->pfBeatSigma = 0.05f;
+        audioCtrl_->pfOctaveInjectRatio = 0.10f;
+        audioCtrl_->pfBeatThreshold = 0.25f;
+        audioCtrl_->pfNeffRatio = 0.5f;
+        audioCtrl_->pfContrast = 1.0f;
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;

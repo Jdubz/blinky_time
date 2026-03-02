@@ -14,9 +14,8 @@ Key differences from current firmware (Bayesian tempo + CBSS):
 Evaluates against ground truth beat annotations on 18-track EDM test set.
 """
 
+import argparse
 import json
-import sys
-import os
 import numpy as np
 import librosa
 import soundfile as sf
@@ -154,7 +153,8 @@ def build_bar_pointer_hmm(num_tempo_bins=NUM_TEMPO_BINS, min_bpm=MIN_BPM, max_bp
 
 def viterbi_online(odf, hmm):
     """
-    Online Viterbi-style forward pass through the bar-pointer HMM.
+    Reference implementation: Online Viterbi-style forward pass through the bar-pointer HMM.
+    Not called in production — kept as a readable reference for the optimized version below.
 
     For each frame:
     - Non-beat states: position advances deterministically
@@ -428,8 +428,19 @@ def process_track(audio_path, gt_path, max_duration_sec=30, hmm=None):
 
 
 def main():
-    music_dir = Path('/home/blinkytime/blinky_time/blinky-test-player/music/edm')
-    max_duration = 30  # Match firmware testing
+    parser = argparse.ArgumentParser(description='Bar-pointer HMM beat tracking prototype')
+    parser.add_argument('music_dir', nargs='?',
+                        default=str(Path(__file__).resolve().parent.parent / 'blinky-test-player' / 'music' / 'edm'),
+                        help='Directory containing .mp3 + .beats.json pairs (default: blinky-test-player/music/edm)')
+    parser.add_argument('--duration', type=int, default=30, help='Max duration in seconds (default: 30)')
+    args = parser.parse_args()
+
+    music_dir = Path(args.music_dir)
+    max_duration = args.duration
+
+    if not music_dir.is_dir():
+        print(f"Error: music directory not found: {music_dir}")
+        return
 
     # Find all track pairs
     tracks = []
@@ -440,7 +451,7 @@ def main():
             tracks.append((name, str(audio_file), str(gt_file)))
 
     if not tracks:
-        print("No tracks found!")
+        print(f"No tracks found in {music_dir}!")
         return
 
     print(f"Found {len(tracks)} tracks")

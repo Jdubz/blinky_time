@@ -420,6 +420,18 @@ public:
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
     bool hmmTempoNorm = true;            // Normalize argmax by period (prevents slow-tempo bias)
 
+    // === PARTICLE FILTER BEAT TRACKING (v38) ===
+    // Maintains 100 tempo/phase hypotheses; octave variants injected at resampling
+    // compete on equal footing via observation model. Most principled octave
+    // disambiguation within CPU/RAM budget. A/B testable vs CBSS+Bayesian.
+    bool particleFilterEnabled = false;    // Enable PF (A/B vs CBSS+Bayesian)
+    float pfNoise = 0.02f;                // Period diffusion noise (fraction of period/frame)
+    float pfBeatSigma = 0.05f;            // Beat kernel width (fraction of period)
+    float pfOctaveInjectRatio = 0.10f;    // Fraction of particles to replace with octave variants
+    float pfBeatThreshold = 0.25f;        // Weighted fraction near phase=0 to trigger beat
+    float pfNeffRatio = 0.5f;             // Resample when Neff < ratio * N
+    float pfContrast = 1.0f;              // ODF power-law contrast for PF likelihood
+
     // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
     bool ftEnabled = false;              // Fourier tempogram observation (disabled: no ref system uses FT for real-time beat tracking)
 
@@ -489,6 +501,11 @@ public:
     float getLastOnsetStrength() const { return lastSmoothedOnset_; }
     int getTimeToNextBeat() const { return timeToNextBeat_; }
     bool wasLastBeatPredicted() const { return lastFiredBeatPredicted_; }
+
+    // Particle filter debug getters (v38)
+    bool isParticleFilterActive() const { return particleFilterEnabled && pfInitialized_; }
+    float getPfNeff() const { return pfNeff_; }
+    float getPfBeatFraction() const { return pfBeatFraction_; }
 
 private:
     // === HAL REFERENCES ===
@@ -662,6 +679,22 @@ private:
     int hmmPrevBestPosition_ = -1;               // Previous frame's best position (for phase wrap detection)
     bool hmmInitialized_ = false;
 
+    // === PARTICLE FILTER STATE (v38) ===
+    static constexpr int PF_NUM_PARTICLES = 100;
+    struct BeatParticle {
+        float period;    // 18.0-60.0 frames (60-200 BPM at 60 Hz)
+        float position;  // 0.0 to period
+        float weight;    // Unnormalized likelihood
+    };
+    BeatParticle pfParticles_[PF_NUM_PARTICLES];
+    BeatParticle pfResampleBuf_[PF_NUM_PARTICLES];  // Scratch for resampling
+    bool pfInitialized_ = false;
+    float pfNeff_ = 0.0f;
+    float pfBeatFraction_ = 0.0f;
+    float pfPrevBeatFraction_ = 0.0f;
+    uint32_t pfRngState_ = 0x12345678;
+    int pfCooldown_ = 0;  // Beat cooldown counter (frames)
+
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
 
@@ -670,6 +703,9 @@ private:
     // Rhythm tracking
     void addOssSample(float onsetStrength, uint32_t timestampMs);
     void runAutocorrelation(uint32_t nowMs);
+
+    // Shared counter management
+    void renormalizeCounters();  // Prevent sampleCounter_ overflow
 
     // CBSS beat tracking
     void updateCBSS(float onsetStrength);
@@ -683,6 +719,17 @@ private:
     void initHmmState();
     void updateHmmForward(float onsetStrength);
     void detectBeatHmm();
+
+    // Particle filter beat tracking (v38)
+    void initParticleFilter();
+    void pfUpdate(float odf);
+    void pfPredict();
+    void pfUpdateWeights(float odf);
+    void pfResample();
+    void pfDetectBeat();
+    void pfExtractConsensus();
+    float pfRandom();           // LCG uniform [0,1)
+    float pfGaussianRandom();   // Box-Muller
 
     // ODF smoothing
     float smoothOnsetStrength(float raw);
