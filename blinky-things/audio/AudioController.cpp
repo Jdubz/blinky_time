@@ -1403,7 +1403,7 @@ void AudioController::renormalizeCounters() {
     // Renormalize counters to keep values small while preserving their
     // differences (which is all the CBSS/IOI logic depends on).
     if (sampleCounter_ > 1000000) {
-        BLINKY_ASSERT(false, "AudioController: sampleCounter_ renormalization triggered");
+        // Expected after ~4.6 hours of continuous operation — not an error
         int shift = sampleCounter_ - OSS_BUFFER_SIZE;
         sampleCounter_ -= shift;
         lastBeatSample_ -= shift;
@@ -1610,6 +1610,10 @@ void AudioController::checkPhaseAlignment() {
     // For each candidate phase offset φ ∈ [0, T), in steps of T/8:
     //   score(φ) = mean OSS at positions (now - φ), (now - φ - T), (now - φ - 2T), ...
     // The offset with the highest score is where onsets actually occur.
+    //
+    // Note: ossBuffer_ uses ossWriteIdx_ while we index via sampleCounter_.
+    // These stay in sync because addOssSample() and updateCBSS() each
+    // advance their counter once per frame, so sampleCounter_ % OSS_BUFFER_SIZE == ossWriteIdx_.
     int T = beatPeriodSamples_;
     if (T < 10 || ossCount_ < T * 3) return;
 
@@ -1829,6 +1833,9 @@ void AudioController::updateHmmForward(float odf) {
     // are handled by updateCBSS() which always runs after updateHmmForward().
 }
 
+// NOTE: Not called in production — HMM mode uses CBSS for beat detection
+// (HMM provides tempo, CBSS detects beats). Kept as experimental reference
+// for future work on fully HMM-driven beat detection.
 void AudioController::detectBeatHmm() {
     uint32_t nowMs = time_.millis();
 

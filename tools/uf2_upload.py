@@ -615,8 +615,8 @@ def _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=False):
             return True
         time.sleep(0.1)
 
-    if verbose:
-        print(f"  Warning: No UF2 drive appeared within {timeout}s")
+    # Always show failure warning — silent timeout is confusing
+    print(f"  Warning: No UF2 drive appeared within {timeout}s")
     return False
 
 
