@@ -385,7 +385,7 @@ public:
     // ConfigData: ~637 bytes (4+160+64+64+32+24+232+44+1 + padding). Allocated in last 4KB flash page.
     // Tight bound (640) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
     static_assert(sizeof(ConfigData) <= 640,
-        "ConfigData exceeds 640 bytes! Current estimate ~581B. Check for unintended struct growth.");
+        "ConfigData exceeds 640 bytes! Current estimate ~637B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

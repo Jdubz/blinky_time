@@ -368,6 +368,7 @@ public:
     //   3: Bass-only flux (BandFlux bass band flux, no mid/high)
     //   4: Spectral centroid (tracks spectral SHAPE, robust to uniform energy modulation)
     //   5: Bass ratio (bass energy / total energy, kick=high, snare=low)
+    // Priority: odfSource > onsetTrainOdf > odfDiffMode > default (only one active)
     uint8_t odfSource = 0;               // Alternative ODF source for ACF (0=default)
 
     // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
@@ -718,7 +719,7 @@ private:
     // Bar-pointer HMM beat tracking (Phase 3.1)
     void initHmmState();
     void updateHmmForward(float onsetStrength);
-    void detectBeatHmm();
+    // void detectBeatHmm();  // Experimental — not called; HMM provides tempo, CBSS detects beats
 
     // Particle filter beat tracking (v38)
     void initParticleFilter();

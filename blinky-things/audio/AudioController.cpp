@@ -1833,64 +1833,6 @@ void AudioController::updateHmmForward(float odf) {
     // are handled by updateCBSS() which always runs after updateHmmForward().
 }
 
-// NOTE: Not called in production — HMM mode uses CBSS for beat detection
-// (HMM provides tempo, CBSS detects beats). Kept as experimental reference
-// for future work on fully HMM-driven beat detection.
-void AudioController::detectBeatHmm() {
-    uint32_t nowMs = time_.millis();
-
-    bool beatDetected = false;
-
-    // Beat fires when best state is at position 0 AND previous was not
-    // (i.e., we just crossed a beat boundary)
-    if (hmmBestPosition_ == 0 && hmmPrevBestPosition_ != 0) {
-        // Adaptive threshold: suppress beats during silence (same as CBSS)
-        float currentOdf = lastSmoothedOnset_;
-        bool aboveThreshold = (cbssThresholdFactor <= 0.0f) ||
-                               (currentOdf > cbssThresholdFactor * cbssMean_);
-
-        if (aboveThreshold) {
-            lastBeatSample_ = sampleCounter_;
-            if (beatCount_ < 65535) beatCount_++;
-            beatDetected = true;
-            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
-            updateBeatStability(nowMs);
-            lastFiredBeatPredicted_ = true;  // HMM beats are always "predicted"
-
-            // Update beat period from HMM state
-            int hmmPeriod = hmmPeriods_[hmmBestTempo_];
-            beatPeriodSamples_ = hmmPeriod;
-
-            // Update BPM from HMM state
-            bpm_ = tempoBinBpms_[hmmBestTempo_];
-            beatPeriodMs_ = 60000.0f / bpm_;
-            bayesBestBin_ = hmmBestTempo_;
-
-            // Update ensemble detector with tempo hint
-            ensemble_.getFusion().setTempoHint(bpm_);
-        }
-    }
-
-    // Decay confidence when no beat
-    if (!beatDetected) {
-        cbssConfidence_ *= beatConfidenceDecay;
-    }
-
-    // Derive phase from HMM state: position / period
-    int period = hmmPeriods_[hmmBestTempo_];
-    if (period < 10) period = 10;
-    float newPhase = static_cast<float>(hmmBestPosition_) / static_cast<float>(period);
-    if (newPhase >= 1.0f) newPhase = 0.0f;
-    if (newPhase < 0.0f) newPhase = 0.0f;
-    if (!isfinite(newPhase)) newPhase = 0.0f;
-    phase_ = newPhase;
-
-    // Update timeToNextBeat_ for serial streaming compatibility
-    timeToNextBeat_ = period - hmmBestPosition_;
-
-    predictNextBeat(nowMs);
-}
-
 // ===== PARTICLE FILTER BEAT TRACKING (v38) =====
 
 float AudioController::pfRandom() {
