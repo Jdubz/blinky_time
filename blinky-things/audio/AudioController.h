@@ -407,11 +407,12 @@ public:
     float phaseCheckRatio = 1.2f;         // Shifted phase must score this much better to correct
 
     // === PLP PHASE EXTRACTION (v42) ===
-    // Predominant Local Pulse: analytical beat phase from Fourier angle of OSS at
-    // dominant tempo. Corrects CBSS phase drift by adjusting lastBeatSample_.
+    // Predominant Local Pulse: beat phase from comb filter bank peak resonator.
+    // Corrects CBSS phase drift by adjusting lastBeatSample_ in detectBeat().
+    // v42 testing: no measurable effect (redundant with onset snap). Disabled by default.
     bool plpPhaseEnabled = false;             // Master toggle (A/B testing)
     float plpCorrectionStrength = 0.5f;       // Correction aggressiveness (0=off, 1=snap)
-    float plpMinConfidence = 0.3f;            // Min DFT magnitude ratio to trust PLP
+    float plpMinConfidence = 0.3f;            // Min comb filter peak confidence to apply correction
 
     // === BTRACK-STYLE TEMPO PIPELINE ===
     // Replaces multiplicative Bayesian fusion with BTrack's sequential pipeline:
@@ -626,8 +627,10 @@ private:
     uint16_t beatsSincePhaseCheck_ = 0;  // Beats since last phase alignment check
 
     // PLP phase extraction state (v42)
+    // plpPhase_: fraction of beat period elapsed since last beat (0=beat is now, 1=full period ago).
+    // Sourced from comb filter bank peak resonator phase.
     float plpPhase_ = 0.0f;           // Last extracted PLP phase (0-1)
-    float plpConfidence_ = 0.0f;      // DFT magnitude confidence (0-1)
+    float plpConfidence_ = 0.0f;      // Comb filter peak confidence (0-1)
 
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
@@ -736,7 +739,6 @@ private:
     void predictBeat();
     void checkOctaveAlternative();
     void checkPhaseAlignment();
-    void extractPlpPhase();
     void switchTempo(int newPeriodSamples);
 
     // Bar-pointer HMM beat tracking (Phase 3.1)

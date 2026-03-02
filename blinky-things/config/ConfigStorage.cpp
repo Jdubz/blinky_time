@@ -236,7 +236,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.phaseCheckRatio = 1.2f;     // Shifted phase must score 1.2x better
     data_.music.plpPhaseEnabled = false;    // PLP phase extraction (v42: disabled by default for A/B testing)
     data_.music.plpCorrectionStrength = 0.5f; // Correction aggressiveness (0=off, 1=snap)
-    data_.music.plpMinConfidence = 0.3f;    // Min DFT magnitude ratio to trust PLP phase
+    data_.music.plpMinConfidence = 0.3f;    // Min comb filter peak confidence to trust PLP phase
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
     data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)

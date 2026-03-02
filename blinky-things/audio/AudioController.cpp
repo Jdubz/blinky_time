@@ -1339,10 +1339,15 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     }
 
     // === 9.5. PLP PHASE EXTRACTION ===
-    // Extract analytical beat phase from Fourier angle of OSS at dominant tempo.
+    // Extract beat phase from comb filter bank peak resonator.
     // Must run after tempo update (step 9) so beatPeriodSamples_ is current.
     if (plpPhaseEnabled) {
-        extractPlpPhase();
+        if (combBankEnabled) {
+            plpPhase_ = combFilterBank_.getPhaseAtPeak();
+            plpConfidence_ = combFilterBank_.getPeakConfidence();
+        } else {
+            plpConfidence_ = 0.0f;
+        }
     }
 
     // === 10. SAVE POSTERIOR AS NEXT PRIOR ===
@@ -1737,33 +1742,6 @@ void AudioController::checkPhaseAlignment() {
         if (timeToNextBeat_ < 1) timeToNextBeat_ = 1;
         timeToNextPrediction_ = timeToNextBeat_ / 2;
     }
-}
-
-// ===== PLP PHASE EXTRACTION (v42) =====
-//
-// Predominant Local Pulse: analytical beat phase from the dominant tempo.
-// Corrects CBSS phase drift by adjusting lastBeatSample_ in detectBeat().
-//
-// Uses the comb filter bank's IIR-accumulated phase rather than a raw DFT of
-// the OSS buffer. The IIR resonators integrate onset energy over the entire
-// track history (exponentially decaying), providing much higher SNR than a
-// windowed DFT of the noisy, spiky OSS buffer. The comb bank's extractPhase()
-// method applies the same Fourier angle extraction (phasor rotation) to the
-// resonator output, which is already bandpass-filtered to the dominant tempo.
-//
-// Original single-bin DFT approach (removed): confidence was only ~3% due to
-// the OSS buffer containing broadband onset energy, not a clean sinusoid.
-// The comb bank resonators act as narrow-band filters, concentrating energy
-// at the tempo frequency and yielding confidence 10-50x higher.
-//
-// CPU: ~0% (reads existing comb bank state, no additional computation)
-// Memory: 0 bytes extra
-
-void AudioController::extractPlpPhase() {
-    if (!combBankEnabled) return;
-
-    plpPhase_ = combFilterBank_.getPhaseAtPeak();
-    plpConfidence_ = combFilterBank_.getPeakConfidence();
 }
 
 void AudioController::switchTempo(int newPeriodSamples) {
@@ -2354,7 +2332,7 @@ void AudioController::detectBeat() {
                     while (error < -T / 2) error += T;
                     // Scale by both strength and confidence for graceful degradation
                     float effectiveStrength = plpCorrectionStrength * plpConfidence_;
-                    int correction = static_cast<int>(error * effectiveStrength + 0.5f);
+                    int correction = static_cast<int>(roundf(error * effectiveStrength));
                     lastBeatSample_ -= correction;
 
                     // Debug: log PLP correction details

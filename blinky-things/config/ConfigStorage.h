@@ -241,7 +241,7 @@ public:
         // PLP phase extraction (v42)
         bool plpPhaseEnabled;           // PLP analytical phase correction (v42: disabled by default)
         float plpCorrectionStrength;    // Correction aggressiveness (0=off, 1=snap)
-        float plpMinConfidence;         // Min DFT magnitude ratio to trust PLP
+        float plpMinConfidence;         // Min comb filter peak confidence to trust PLP
 
         bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
         uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)

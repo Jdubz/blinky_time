@@ -22,8 +22,8 @@
 - Fixed OSS_FRAME_RATE from 60 to 66 (measured ~66.4 Hz; PDM 16kHz / FFT-256 ≈ 62.5 theoretical). Was causing ~10.7% systematic BPM under-reporting.
 - Onset snap window 4→8 frames (133ms vs 67ms). 119ms median phase offset couldn't be reached with 4 frames.
 - Downward harmonic correction for >160 BPM (3:2 and 2:1 checks). Experimental — overcorrects 136 BPM trance to ~98 BPM. Gated behind `downwardcorrect` toggle (disabled by default, v41).
-- BPM accuracy 45% → 82.5% (4-device avg). **F1 unchanged** (0.275 vs 0.280 baseline) — phase alignment is the bottleneck, not tempo.
-- Particle filter implemented (v38-39): 100 particles tracking (period, phase), madmom-style observation model, PF+CBSS hybrid. Achieves 85% BPM accuracy but F1 doesn't improve. Phase alignment remains the bottleneck regardless of tempo accuracy.
+- BPM accuracy 45% → 82.5% (4-device avg). **F1 unchanged** (0.275 vs 0.280 baseline) — tempo octave errors and run-to-run variance dominate the F1 gap (see v42 analysis).
+- Particle filter implemented (v38-39): 100 particles tracking (period, phase), madmom-style observation model, PF+CBSS hybrid. Achieves 85% BPM accuracy but F1 doesn't improve. Tempo octave errors and run-to-run variance dominate the F1 gap (see v42 analysis).
 - cbssTightness 5→8 (v40): +24% in controlled comparison, +3.6% on full 18-track (within noise).
 - Deprecated pfBeatSigma/pfBeatThreshold (unused in v39+ madmom observation model).
 - SETTINGS_VERSION 41. 270KB flash (33%), 21KB RAM (9%).
@@ -529,7 +529,7 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 - 4-device avg Beat F1: **0.275-0.285**
 - Best-device avg Beat F1: **0.348-0.351**
 - BPM accuracy: **82.5%** (4-device avg)
-- **Primary bottleneck: phase alignment** (correct BPM does not yield correct F1)
+- **Primary bottlenecks: tempo octave errors and run-to-run variance** (correct BPM does not guarantee correct F1; double-time lock on 3/4 devices)
 - Run-to-run variance is large (std=0.04-0.23 per track). Single-run validations cannot detect improvements < ~0.15 F1.
 
 **Multi-device sweep capability:** 4 devices sweep parameters in parallel (4x speedup). Uses real music files with ground truth annotations, ffplay for headless audio playback.
@@ -913,36 +913,13 @@ The only approach that can learn complex spectral patterns (kicks vs bass vs pad
 
 ## Next Actions (Priority Order)
 
-### Priority 1: Phase Alignment (Primary Bottleneck)
+### Priority 1: Beat Tracking Accuracy
 
-Phase alignment is the #1 bottleneck. BPM accuracy is 82.5% but Beat F1 is only 0.28. Systems achieving >60% F1 either track phase explicitly (HMM) or extract it analytically (Fourier). Our CBSS predict+countdown derives phase indirectly.
+Tempo octave errors (double-time lock on 3/4 devices) and run-to-run variance (std=0.04-0.23) are the primary bottlenecks. BPM accuracy is 82.5% but Beat F1 is only 0.28. PLP phase extraction was tested (v42) and found redundant with onset snap — phase alignment is not the gap.
 
-#### 1a. PLP Phase Extraction from OSS Buffer — HIGH IMPACT, LOW EFFORT
+#### ~~1a. PLP Phase Extraction~~ — COMPLETED, NO EFFECT
 
-Extract beat phase analytically from the existing OSS buffer using Fourier analysis at the dominant tempo. The Real-time PLP approach (Meier, Chiu, Müller 2024) achieves 74.7% F1 using this technique.
-
-```c
-// At dominant tempo period T (in frames), compute complex DFT coefficient
-float omega = 2.0f * M_PI / T;
-float real_sum = 0, imag_sum = 0;
-for (int i = 0; i < OSS_BUFFER_SIZE; i++) {
-    int idx = (ossWriteIdx_ - OSS_BUFFER_SIZE + i + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-    real_sum += ossBuffer_[idx] * cosf(omega * i);
-    imag_sum += ossBuffer_[idx] * sinf(omega * i);
-}
-float phase = -atan2f(imag_sum, real_sum) / (2.0f * M_PI);
-```
-
-This gives an analytical phase estimate independent of CBSS momentum. Can be used to:
-- Verify CBSS phase is correct
-- Correct CBSS phase when it drifts
-- Replace CBSS phase entirely
-
-**Memory**: Zero extra (uses existing OSS buffer).
-**CPU**: 360 sin/cos per tempo re-estimation (~250ms). With lookup table, ~0.1% CPU.
-**Effort**: Low (~50 lines).
-**Expected impact**: +10-20% F1. This is how PLP achieves 74.7% on clean audio.
-**References**: Meier, Chiu, Müller 2024 "Real-Time Beat Tracking with Zero Latency", https://github.com/groupmm/real_time_plp
+Implemented and tested in v42. Both single-bin DFT (~3% confidence) and comb filter bank IIR (~2% confidence) produce too-low confidence for reliable correction. Mean F1 identical to baseline (0.426 vs 0.426 over 4 runs). Redundant with onset snap. Disabled by default.
 
 #### 1b. Lower CBSS Tightness — HIGH IMPACT, TRIVIAL EFFORT
 
