@@ -519,7 +519,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.phaseCorrectionStrength, 0.0f, 1.0f, F("phaseCorrStrength"));
     validateFloat(data_.music.cbssThresholdFactor, 0.0f, 2.0f, F("cbssThreshFactor"));
     validateFloat(data_.music.cbssContrast, 0.5f, 4.0f, F("cbssContrast"));
+    // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.cbssWarmupBeats, 0, 32, F("cbssWarmupBeats"));
+    // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.onsetSnapWindow, 0, 16, F("onsetSnapWindow"));
 
     // Bayesian tempo fusion validation (v18+)
@@ -541,6 +543,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled, phaseCheckEnabled are bools — no range validation needed
     VALIDATE_INT(data_.music.phaseCheckBeats, 2, 16, F("phaseCheckBeats"));
     validateFloat(data_.music.phaseCheckRatio, 1.1f, 3.0f, F("phaseCheckRatio"));
+    // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
         SerialConsole::logWarn(F("Invalid odfThreshWindow, clamping"));
