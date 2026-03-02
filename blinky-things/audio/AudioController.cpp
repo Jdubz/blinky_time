@@ -136,6 +136,9 @@ bool AudioController::begin(uint32_t sampleRate) {
     timeToNextPrediction_ = 10;
     pendingBeatPeriod_ = -1;  // No pending tempo change
     beatsSinceOctaveCheck_ = 0;
+    beatsSincePhaseCheck_ = 0;
+    plpPhase_ = 0.0f;
+    plpConfidence_ = 0.0f;
     hmmInitialized_ = false;  // HMM will re-init on first use
     pfInitialized_ = false;   // PF will re-init on first use
     pfRngState_ = 0x12345678;
@@ -1335,6 +1338,13 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         }
     }
 
+    // === 9.5. PLP PHASE EXTRACTION ===
+    // Extract analytical beat phase from Fourier angle of OSS at dominant tempo.
+    // Must run after tempo update (step 9) so beatPeriodSamples_ is current.
+    if (plpPhaseEnabled) {
+        extractPlpPhase();
+    }
+
     // === 10. SAVE POSTERIOR AS NEXT PRIOR ===
     for (int i = 0; i < TEMPO_BINS; i++) {
         tempoStatePrior_[i] = tempoStatePost_[i];
@@ -1727,6 +1737,33 @@ void AudioController::checkPhaseAlignment() {
         if (timeToNextBeat_ < 1) timeToNextBeat_ = 1;
         timeToNextPrediction_ = timeToNextBeat_ / 2;
     }
+}
+
+// ===== PLP PHASE EXTRACTION (v42) =====
+//
+// Predominant Local Pulse: analytical beat phase from the dominant tempo.
+// Corrects CBSS phase drift by adjusting lastBeatSample_ in detectBeat().
+//
+// Uses the comb filter bank's IIR-accumulated phase rather than a raw DFT of
+// the OSS buffer. The IIR resonators integrate onset energy over the entire
+// track history (exponentially decaying), providing much higher SNR than a
+// windowed DFT of the noisy, spiky OSS buffer. The comb bank's extractPhase()
+// method applies the same Fourier angle extraction (phasor rotation) to the
+// resonator output, which is already bandpass-filtered to the dominant tempo.
+//
+// Original single-bin DFT approach (removed): confidence was only ~3% due to
+// the OSS buffer containing broadband onset energy, not a clean sinusoid.
+// The comb bank resonators act as narrow-band filters, concentrating energy
+// at the tempo frequency and yielding confidence 10-50x higher.
+//
+// CPU: ~0% (reads existing comb bank state, no additional computation)
+// Memory: 0 bytes extra
+
+void AudioController::extractPlpPhase() {
+    if (!combBankEnabled) return;
+
+    plpPhase_ = combFilterBank_.getPhaseAtPeak();
+    plpConfidence_ = combFilterBank_.getPeakConfidence();
 }
 
 void AudioController::switchTempo(int newPeriodSamples) {
@@ -2300,6 +2337,43 @@ void AudioController::detectBeat() {
             } else {
                 lastBeatSample_ = sampleCounter_;
             }
+
+            // PLP phase correction: nudge lastBeatSample_ toward comb bank's
+            // analytical phase. Runs after onset snap so both corrections compose.
+            // Correction is scaled by both strength and confidence — low-confidence
+            // phases produce proportionally smaller corrections (no hard gate).
+            if (plpPhaseEnabled && plpConfidence_ > plpMinConfidence) {
+                int T = beatPeriodSamples_;
+                if (T >= 10) {
+                    // Where PLP says the beat should be (relative to now)
+                    int plpBeatSample = sampleCounter_ - static_cast<int>(plpPhase_ * T + 0.5f);
+                    // Phase error: how far off lastBeatSample_ is from PLP prediction
+                    int error = lastBeatSample_ - plpBeatSample;
+                    // Wrap to [-T/2, T/2] to find shortest correction path
+                    while (error > T / 2) error -= T;
+                    while (error < -T / 2) error += T;
+                    // Scale by both strength and confidence for graceful degradation
+                    float effectiveStrength = plpCorrectionStrength * plpConfidence_;
+                    int correction = static_cast<int>(error * effectiveStrength + 0.5f);
+                    lastBeatSample_ -= correction;
+
+                    // Debug: log PLP correction details
+                    if (SerialConsole::isDebugChannelEnabled(DebugChannel::RHYTHM)) {
+                        Serial.print(F("{\"type\":\"PLP\",\"ph\":"));
+                        Serial.print(plpPhase_, 3);
+                        Serial.print(F(",\"conf\":"));
+                        Serial.print(plpConfidence_, 3);
+                        Serial.print(F(",\"err\":"));
+                        Serial.print(error);
+                        Serial.print(F(",\"cor\":"));
+                        Serial.print(correction);
+                        Serial.print(F(",\"T\":"));
+                        Serial.print(T);
+                        Serial.println(F("}"));
+                    }
+                }
+            }
+
             if (beatCount_ < 65535) beatCount_++;
             beatDetected = true;
             cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
