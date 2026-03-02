@@ -63,8 +63,8 @@ UF2CONV_PATH = _find_uf2conv()
 # --- Timeouts (seconds) ---
 BOOTLOADER_TIMEOUT = 8
 DRIVE_MOUNT_TIMEOUT = 10
-REBOOT_TIMEOUT = 8
-PORT_REAPPEAR_TIMEOUT = 10
+REBOOT_TIMEOUT = 5
+PORT_REAPPEAR_TIMEOUT = 5
 
 # --- UF2 drive identification ---
 UF2_INFO_FILE = "INFO_UF2.TXT"
@@ -491,7 +491,7 @@ def trigger_bootloader(port, verbose=False):
     for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
         if attempt > 1:
             print(f"  Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
-            time.sleep(2)  # Let device settle between retries
+            time.sleep(1)  # Let device settle between retries
 
             # Re-discover port if it changed (e.g., after USB recovery)
             if not _device_port_exists(current_port) and device_serial:
@@ -522,17 +522,17 @@ def trigger_bootloader(port, verbose=False):
             print(f"  Trying serial command: bootloader")
         try:
             ser = serial.Serial(current_port, 115200, timeout=1)
-            time.sleep(0.3)
+            time.sleep(0.1)
             ser.reset_input_buffer()
             ser.write(b'bootloader\n')
             ser.flush()
-            time.sleep(0.3)
+            time.sleep(0.1)
             try:
                 ser.close()
             except (BrokenPipeError, OSError):
                 pass
 
-            if _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=verbose):
+            if _wait_for_uf2_drive(pre_existing_blocks, timeout=3, verbose=verbose):
                 return device_serial
 
             # Check if device disconnected but UF2 drive didn't appear.
@@ -603,7 +603,8 @@ def _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=False):
 
     Returns True if a new USB block device appeared, False if timeout.
     """
-    print(f"  Waiting for UF2 drive...")
+    if verbose:
+        print(f"  Waiting for UF2 drive...")
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         current = _get_usb_block_devices()
@@ -612,8 +613,9 @@ def _wait_for_uf2_drive(pre_existing_blocks, timeout=5, verbose=False):
             dev = sorted(new_devices)[0]
             print(f"  UF2 drive detected: {dev}")
             return True
-        time.sleep(0.3)
+        time.sleep(0.1)
 
+    # Always show failure warning — silent timeout is confusing
     print(f"  Warning: No UF2 drive appeared within {timeout}s")
     return False
 
@@ -677,7 +679,7 @@ def find_uf2_block_device(timeout):
             dev = sorted(current)[0]
             print(f"  New USB block device: {dev}")
             return dev
-        time.sleep(0.5)
+        time.sleep(0.2)
 
     return None
 
@@ -965,7 +967,7 @@ def mount_uf2_drive(device_serial=None, timeout=BOOTLOADER_TIMEOUT):
     print(f"  Block device: {block_dev}")
 
     # Give the device a moment to settle
-    time.sleep(1)
+    time.sleep(0.5)
 
     # Strategy 1: udisksctl
     udisks_ok = ensure_udisks2_running()
@@ -1055,7 +1057,7 @@ def verify_reboot(mount_point, port=None, device_serial=None, verbose=False):
             drive_gone = True
             print(f"  UF2 drive disappeared (board is rebooting)")
             break
-        time.sleep(0.5)
+        time.sleep(0.2)
 
     if not drive_gone:
         print(f"  [WARN] UF2 drive still present after {REBOOT_TIMEOUT}s")
@@ -1076,7 +1078,7 @@ def verify_reboot(mount_point, port=None, device_serial=None, verbose=False):
             if Path(port).exists():
                 print(f"  Port {port} is back")
                 return True
-        time.sleep(0.5)
+        time.sleep(0.2)
 
     # Drive disappeared but port didn't return -- partial success
     print(f"  [WARN] Serial port not detected within {PORT_REAPPEAR_TIMEOUT}s")
@@ -1382,8 +1384,8 @@ def upload_parallel(ports, uf2_path, verbose=False):
 
         for i, port in enumerate(ports):
             if i > 0:
-                print(f"\n  Waiting 2s for USB bus to settle...")
-                time.sleep(2)
+                print(f"\n  Waiting 1s for USB bus to settle...")
+                time.sleep(1)
 
             print(f"  Device {i + 1}/{len(ports)}: {port}")
 
@@ -1401,7 +1403,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
             for attempt in range(1, MAX_BOOTLOADER_RETRIES + 1):
                 if attempt > 1:
                     print(f"    Retry {attempt}/{MAX_BOOTLOADER_RETRIES}...")
-                    time.sleep(2)
+                    time.sleep(1)
 
                     # Re-discover port if it disappeared (USB recovery)
                     if not _device_port_exists(current_port):
@@ -1426,11 +1428,11 @@ def upload_parallel(ports, uf2_path, verbose=False):
 
                 try:
                     ser = serial.Serial(current_port, 115200, timeout=1)
-                    time.sleep(0.3)
+                    time.sleep(0.1)
                     ser.reset_input_buffer()
                     ser.write(b'bootloader\n')
                     ser.flush()
-                    time.sleep(0.3)
+                    time.sleep(0.1)
                     try:
                         ser.close()
                     except (BrokenPipeError, OSError):
@@ -1443,8 +1445,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     pass
 
                 # Wait for a new block device (this specific device)
-                print(f"    Waiting for UF2 drive...")
-                deadline = time.monotonic() + 5
+                deadline = time.monotonic() + 3
                 new_dev = None
                 while time.monotonic() < deadline:
                     current = _get_usb_block_devices()
@@ -1452,7 +1453,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     if new_devices:
                         new_dev = sorted(new_devices)[0]
                         break
-                    time.sleep(0.3)
+                    time.sleep(0.1)
 
                 if new_dev:
                     # Verify block device belongs to this port's device via USB serial number
@@ -1499,14 +1500,14 @@ def upload_parallel(ports, uf2_path, verbose=False):
                             except (BrokenPipeError, OSError):
                                 pass
 
-                            deadline = time.monotonic() + 5
+                            deadline = time.monotonic() + 3
                             while time.monotonic() < deadline:
                                 current = _get_usb_block_devices()
                                 new_devices = current - pre_blocks
                                 if new_devices:
                                     new_dev = sorted(new_devices)[0]
                                     break
-                                time.sleep(0.3)
+                                time.sleep(0.1)
 
                             if new_dev:
                                 print(f"    UF2 drive detected: {new_dev}")
@@ -1522,7 +1523,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                 continue
 
             # Mount this device's block device to /mnt/uf2-{i}
-            time.sleep(1)  # Let device settle after mode switch
+            time.sleep(0.5)  # Let device settle after mode switch
             mp = mount_device(mount_map[port]["block_dev"], i)
             if mp:
                 mount_map[port]["mount_point"] = str(mp)
@@ -1578,7 +1579,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
         # --- Phase 5: Verify reboots ---
         print_section("VERIFYING REBOOTS")
         print(f"  Waiting for devices to reboot...")
-        time.sleep(3)
+        time.sleep(2)
 
         # Poll for serial ports to return
         deadline = time.monotonic() + PORT_REAPPEAR_TIMEOUT
@@ -1598,7 +1599,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                 all_found = False
             if all_found or len(found) == len(device_serials):
                 break
-            time.sleep(0.5)
+            time.sleep(0.2)
 
         # Build results
         results = []

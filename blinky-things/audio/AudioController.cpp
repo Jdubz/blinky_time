@@ -122,6 +122,7 @@ bool AudioController::begin(uint32_t sampleRate) {
     beatCount_ = 0;
     cbssConfidence_ = 0.0f;
     lastSmoothedOnset_ = 0.0f;
+    prevOdfForDiff_ = 0.0f;
     lastBeatWasPredicted_ = false;
     lastFiredBeatPredicted_ = false;
     lastTransientSample_ = -1;
@@ -135,6 +136,10 @@ bool AudioController::begin(uint32_t sampleRate) {
     timeToNextPrediction_ = 10;
     pendingBeatPeriod_ = -1;  // No pending tempo change
     beatsSinceOctaveCheck_ = 0;
+    hmmInitialized_ = false;  // HMM will re-init on first use
+    pfInitialized_ = false;   // PF will re-init on first use
+    pfRngState_ = 0x12345678;
+    pfCooldown_ = 0;
     logGaussianLastT_ = 0;
     logGaussianLastTight_ = 0.0f;
     logGaussianWeightsSize_ = 0;
@@ -282,13 +287,78 @@ const AudioControl& AudioController::update(float dt) {
 
     // 5. Add sample to onset strength buffer with timestamp
     // Only add significant audio to avoid filling buffer with noise patterns
-    if (hasSignificantAudio) {
-        lastSignificantAudioMs_ = nowMs;
-        addOssSample(onsetStrength, nowMs);
+    // When onsetTrainOdf is on, feed binary onset events (1.0 on transient, 0.0 otherwise)
+    // to the OSS buffer instead of continuous ODF. This makes the ACF track
+    // inter-onset periodicity (immune to enclosure resonance artifacts in continuous flux).
+    float ossValue;
+    // Hoist spectral access for ODF sources 1-5 (all use the same spectral object)
+    const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
+    bool spectralReady = hasSignificantAudio && (spectral.isFrameReady() || spectral.hasPreviousFrame());
+    if (odfSource == 1) {
+        // Bass energy: sum of whitened bass magnitudes (bins 1-6, 62.5-375 Hz).
+        // Tracks kick drum PRESENCE (absolute magnitude) rather than spectral CHANGES (flux).
+        if (spectralReady) {
+            const float* mags = spectral.getMagnitudes();
+            float bassEnergy = 0.0f;
+            for (int i = 1; i <= 6; i++) {
+                bassEnergy += mags[i];
+            }
+            ossValue = bassEnergy;
+        } else {
+            ossValue = 0.0f;
+        }
+    } else if (odfSource == 2) {
+        // Mic level: broadband time-domain RMS from AdaptiveMic.
+        // Not affected by frequency-specific enclosure resonances.
+        ossValue = hasSignificantAudio ? mic_.getLevel() : 0.0f;
+    } else if (odfSource == 3) {
+        // Bass-only flux: just the bass band spectral flux from BandFlux.
+        // Eliminates mid/high band contamination from enclosure resonance.
+        if (spectralReady) {
+            ossValue = ensemble_.getBandFlux().getBassFlux();
+        } else {
+            ossValue = 0.0f;
+        }
+    } else if (odfSource == 4) {
+        // Spectral centroid: tracks spectral SHAPE (center of mass of spectrum).
+        // Kick drum = centroid drops (bass-heavy), snare = centroid rises.
+        // Robust to uniform energy modulation from enclosure resonance.
+        // Normalize to 0-1 range (centroid is in Hz, typ 200-4000).
+        if (spectralReady) {
+            ossValue = spectral.getSpectralCentroid() / 4000.0f;
+            if (ossValue > 1.0f) ossValue = 1.0f;
+        } else {
+            ossValue = 0.0f;
+        }
+    } else if (odfSource == 5) {
+        // Bass ratio: bass energy / total energy. Tracks kick drum dominance.
+        // When kick hits: bass ratio spikes (bass dominates). Between kicks: drops.
+        // Immune to overall level modulation (ratio cancels out).
+        if (spectralReady) {
+            const float* mags = spectral.getMagnitudes();
+            float bassEnergy = 0.0f;
+            for (int i = 1; i <= 6; i++) bassEnergy += mags[i];
+            float totalEnergy = spectral.getTotalEnergy();
+            ossValue = (totalEnergy > 0.001f) ? (bassEnergy / totalEnergy) : 0.0f;
+        } else {
+            ossValue = 0.0f;
+        }
+    } else if (onsetTrainOdf) {
+        ossValue = (lastEnsembleOutput_.transientStrength > 0.0f) ? 1.0f : 0.0f;
+    } else if (odfDiffMode) {
+        // HWR first-difference: max(0, odf[n] - odf[n-1])
+        // Emphasizes onset attacks (~30x larger than continuous modulation),
+        // suppressing enclosure-induced periodic fluctuations.
+        float diff = onsetStrength - prevOdfForDiff_;
+        prevOdfForDiff_ = onsetStrength;
+        ossValue = (diff > 0.0f) ? diff : 0.0f;
     } else {
-        // Add zero during silence to maintain buffer timing but not contribute to correlation
-        addOssSample(0.0f, nowMs);
+        ossValue = hasSignificantAudio ? onsetStrength : 0.0f;
     }
+    if (hasSignificantAudio || onsetTrainOdf) {
+        lastSignificantAudioMs_ = nowMs;
+    }
+    addOssSample(ossValue, nowMs);
 
     // 6. Run autocorrelation periodically (tunable period, default 500ms)
     if (nowMs - lastAutocorrMs_ >= autocorrPeriodMs) {
@@ -303,11 +373,42 @@ const AudioControl& AudioController::update(float dt) {
         combFilterBank_.process(onsetStrength);
     }
 
-    // 7. Update CBSS and detect beats
-    //    Uses spectral flux (continuous onset strength signal) so CBSS tracks
-    //    the audio energy pattern regardless of whether transients are detected.
-    updateCBSS(onsetStrength);
-    detectBeat();
+    // 7. Update beat tracking
+    //    Three modes (mutually exclusive for beat detection):
+    //    a) particleFilterEnabled: PF handles tempo+phase+beat detection, skips CBSS
+    //    b) barPointerHmm: HMM determines tempo, CBSS detects beats
+    //    c) default: full Bayesian+CBSS pipeline
+    if (particleFilterEnabled) {
+        // Particle filter path: skips CBSS entirely
+        if (!pfInitialized_) initParticleFilter();
+        if (pfInitialized_) {
+            float pfInput = onsetStrength;
+            if (pfContrast != 1.0f && pfInput > 0.0f) {
+                pfInput = powf(pfInput, pfContrast);
+            }
+            pfUpdate(pfInput);
+        }
+    } else {
+        if (barPointerHmm && (hmmInitialized_ || tempoStateInitialized_)) {
+            if (!hmmInitialized_) initHmmState();
+            if (hmmInitialized_) {
+                updateHmmForward(onsetStrength);
+                // Feed HMM tempo to CBSS: override Bayesian tempo estimate
+                bpm_ = tempoBinBpms_[hmmBestTempo_];
+                beatPeriodMs_ = 60000.0f / bpm_;
+                beatPeriodSamples_ = hmmPeriods_[hmmBestTempo_];
+                bayesBestBin_ = hmmBestTempo_;
+            }
+        }
+        // CBSS always runs for beat detection (uses HMM tempo when active)
+        // Apply power-law contrast to sharpen beat/non-beat distinction in CBSS.
+        float cbssInput = onsetStrength;
+        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
+            cbssInput = powf(cbssInput, cbssContrast);
+        }
+        updateCBSS(cbssInput);
+        detectBeat();
+    }
 
     // 9. Synthesize output
     synthesizeEnergy();
@@ -411,8 +512,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     }
 
     if (adaptiveOdfThresh) {
-        static constexpr int ODF_THRESH_WINDOW = 15;  // 15-sample centered window (~250ms at 60Hz)
-        int halfWin = ODF_THRESH_WINDOW / 2;
+        int halfWin = odfThreshWindow;  // Tunable half-window (each side), default 15 samples (~250ms at 60Hz)
 
         for (int i = 0; i < ossCount_; i++) {
             // Compute local mean in centered window
@@ -639,6 +739,23 @@ void AudioController::buildTransitionMatrix() {
             }
 
             transMatrix_[i][j] = narrow + harmonicBonus;
+        }
+    }
+
+    // Column-normalize: each column j must sum to 1 (proper stochastic matrix).
+    // Without this, the BPM-space Gaussian on a lag-uniform grid creates more
+    // probability mass at low BPM (densely-spaced bins) than high BPM, causing
+    // systematic drift toward slow tempos.
+    for (int j = 0; j < TEMPO_BINS; j++) {
+        float colSum = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            colSum += transMatrix_[i][j];
+        }
+        if (colSum > 1e-9f) {
+            float invSum = 1.0f / colSum;
+            for (int i = 0; i < TEMPO_BINS; i++) {
+                transMatrix_[i][j] *= invSum;
+            }
         }
     }
 }
@@ -961,14 +1078,20 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             float transPerBeat = 60.0f * onsetDensity_ / bpm;
             float penalty = 1.0f;
 
-            if (transPerBeat < densityMinPerBeat) {
-                // Too few transients for this tempo — probably half-time error
+            if (densityTarget > 0.0f) {
+                // Target-density mode: Gaussian centered on densityTarget trans/beat.
+                // Penalizes all bins proportionally to distance from target.
+                // Provides smooth, symmetric discrimination without hard thresholds.
+                float diff = (transPerBeat - densityTarget) / densityTarget;
+                penalty = expf(-densityPenaltyExp * diff * diff);
+            } else if (transPerBeat < densityMinPerBeat) {
+                // Legacy min/max mode: too few transients
                 float diff = (densityMinPerBeat - transPerBeat) / densityMinPerBeat;
-                penalty = expf(-2.0f * diff * diff);
+                penalty = expf(-densityPenaltyExp * diff * diff);
             } else if (transPerBeat > densityMaxPerBeat) {
-                // Too many transients for this tempo — probably double-time error
+                // Legacy min/max mode: too many transients
                 float diff = (transPerBeat - densityMaxPerBeat) / densityMaxPerBeat;
-                penalty = expf(-2.0f * diff * diff);
+                penalty = expf(-densityPenaltyExp * diff * diff);
             }
 
             tempoStatePost_[i] *= penalty;
@@ -1104,7 +1227,13 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     }
 
     // === 9. UPDATE TEMPO ===
-    if (periodicityStrength_ > 0.25f) {
+    // Skip when bar-pointer HMM is actually running — HMM sets bpm_/beatPeriodSamples_
+    // at beat boundaries in detectBeatHmm(). Writing here would override HMM's tempo
+    // between beats, causing jitter and wrong phase predictions. The Bayesian posterior
+    // (step 10) still updates to keep transMatrix_ current for the HMM.
+    // Only skip when HMM is both enabled AND initialized, so disabling barPointerHmm
+    // at runtime resumes Bayesian tempo updates even if hmmInitialized_ remains true.
+    if (!(barPointerHmm && hmmInitialized_) && periodicityStrength_ > 0.25f) {
         float newBpm = clampf(interpolatedBpm, bpmMin, bpmMax);
 
         // Smooth tempo update (EMA)
@@ -1266,6 +1395,28 @@ void AudioController::recomputeLogGaussianWeights(int T) {
     }
 }
 
+// ===== COUNTER MANAGEMENT =====
+
+void AudioController::renormalizeCounters() {
+    // Prevent signed integer overflow (UB in C++).
+    // At 60 Hz, sampleCounter_ reaches 1M after ~4.6 hours.
+    // Renormalize counters to keep values small while preserving their
+    // differences (which is all the CBSS/IOI logic depends on).
+    if (sampleCounter_ > 1000000) {
+        // Expected after ~4.6 hours of continuous operation — not an error
+        int shift = sampleCounter_ - OSS_BUFFER_SIZE;
+        sampleCounter_ -= shift;
+        lastBeatSample_ -= shift;
+        lastTransientSample_ -= shift;
+        if (lastBeatSample_ < 0) lastBeatSample_ = 0;
+        if (lastTransientSample_ < 0) lastTransientSample_ = -1;
+        for (int i = 0; i < ioiOnsetCount_; i++) {
+            ioiOnsetSamples_[i] -= shift;
+            if (ioiOnsetSamples_[i] < 0) ioiOnsetSamples_[i] = 0;
+        }
+    }
+}
+
 // ===== CBSS BEAT TRACKING =====
 
 void AudioController::updateCBSS(float onsetStrength) {
@@ -1287,7 +1438,15 @@ void AudioController::updateCBSS(float onsetStrength) {
         if (val > maxWeightedCBSS) maxWeightedCBSS = val;
     }
 
-    float cbssVal = (1.0f - cbssAlpha) * onsetStrength + cbssAlpha * maxWeightedCBSS;
+    // During warmup (first N beats), use lower alpha so onsets contribute more
+    // to the CBSS. This gives ~4x more onset weight during initial phase acquisition,
+    // preventing random phase lock from weak early CBSS values.
+    float effectiveAlpha = cbssAlpha;
+    if (cbssWarmupBeats > 0 && beatCount_ < cbssWarmupBeats) {
+        effectiveAlpha = cbssAlpha * 0.55f;  // e.g., 0.9 * 0.55 = 0.495 → onset gets ~50% weight
+    }
+
+    float cbssVal = (1.0f - effectiveAlpha) * onsetStrength + effectiveAlpha * maxWeightedCBSS;
     cbssBuffer_[sampleCounter_ % OSS_BUFFER_SIZE] = cbssVal;
 
     // Update running mean of CBSS for adaptive threshold
@@ -1296,24 +1455,7 @@ void AudioController::updateCBSS(float onsetStrength) {
     cbssMean_ = cbssMean_ * (1.0f - CBSS_MEAN_ALPHA) + cbssVal * CBSS_MEAN_ALPHA;
 
     sampleCounter_++;
-
-    // Prevent signed integer overflow (UB in C++).
-    // At 60 Hz, sampleCounter_ reaches 1M after ~4.6 hours.
-    // Renormalize counters to keep values small while preserving their
-    // differences (which is all the CBSS/IOI logic depends on).
-    if (sampleCounter_ > 1000000) {
-        BLINKY_ASSERT(false, "AudioController: sampleCounter_ renormalization triggered");
-        int shift = sampleCounter_ - OSS_BUFFER_SIZE;
-        sampleCounter_ -= shift;
-        lastBeatSample_ -= shift;
-        lastTransientSample_ -= shift;
-        if (lastBeatSample_ < 0) lastBeatSample_ = 0;
-        if (lastTransientSample_ < 0) lastTransientSample_ = -1;
-        for (int i = 0; i < ioiOnsetCount_; i++) {
-            ioiOnsetSamples_[i] -= shift;
-            if (ioiOnsetSamples_[i] < 0) ioiOnsetSamples_[i] = 0;
-        }
-    }
+    renormalizeCounters();
 }
 
 void AudioController::predictBeat() {
@@ -1386,13 +1528,14 @@ void AudioController::predictBeat() {
 
 void AudioController::checkOctaveAlternative() {
     // Shadow CBSS octave checker: compare CBSS score at current tempo T
-    // vs double-time T/2. If T/2 scores significantly better, switch.
+    // vs double-time T/2 and half-time 2T. Switches if the alternative
+    // scores significantly better. Fixes both double-time and half-time lock.
     // Inspired by BeatNet's "tempo investigators."
     int T = beatPeriodSamples_;
     if (T < 20) return;  // Can't halve below minimum period
 
     int halfT = T / 2;
-    if (halfT < 10) return;
+    int doubleT = T * 2;
 
     // Score each tempo by summing CBSS values at expected beat positions.
     // cbssBuffer_ is circular with sampleCounter_ as the write head;
@@ -1402,9 +1545,7 @@ void AudioController::checkOctaveAlternative() {
     if (lookback > sampleCounter_) lookback = sampleCounter_;
 
     float scoreT = 0.0f;
-    float scoreHalfT = 0.0f;
     int countT = 0;
-    int countHalfT = 0;
 
     // Score at current tempo T: sum CBSS at positions spaced T apart
     for (int offset = 0; offset < lookback; offset += T) {
@@ -1414,46 +1555,592 @@ void AudioController::checkOctaveAlternative() {
             countT++;
         }
     }
-
-    // Score at half-period T/2: sum CBSS at positions spaced T/2 apart
-    for (int offset = 0; offset < lookback; offset += halfT) {
-        int idx = sampleCounter_ - 1 - offset;
-        if (idx >= 0) {
-            scoreHalfT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
-            countHalfT++;
-        }
-    }
-
-    // Normalize by count to make scores comparable
     if (countT > 0) scoreT /= static_cast<float>(countT);
-    if (countHalfT > 0) scoreHalfT /= static_cast<float>(countHalfT);
 
-    // If double-time scores significantly better, switch
-    if (scoreT > 0.001f && scoreHalfT > octaveScoreRatio * scoreT) {
-        // Switch to double-time
-        beatPeriodSamples_ = halfT;
-        float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(halfT);
-        bpm_ = clampf(newBpm, bpmMin, bpmMax);
-        beatPeriodMs_ = 60000.0f / bpm_;
-
-        // Also update Bayesian posterior — nudge toward the new tempo bin
-        int newBin = findClosestTempoBin(bpm_);
-        if (newBin >= 0 && newBin < TEMPO_BINS) {
-            // Transfer mass from old best bin to new
-            float transfer = tempoStatePost_[bayesBestBin_] * 0.3f;
-            tempoStatePost_[bayesBestBin_] -= transfer;
-            tempoStatePost_[newBin] += transfer;
-            // Update prior to match
-            for (int i = 0; i < TEMPO_BINS; i++) {
-                tempoStatePrior_[i] = tempoStatePost_[i];
+    // --- Check double-time (T/2 = faster) ---
+    if (halfT >= 10) {
+        float scoreHalfT = 0.0f;
+        int countHalfT = 0;
+        for (int offset = 0; offset < lookback; offset += halfT) {
+            int idx = sampleCounter_ - 1 - offset;
+            if (idx >= 0) {
+                scoreHalfT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
+                countHalfT++;
             }
-            bayesBestBin_ = newBin;
+        }
+        if (countHalfT > 0) scoreHalfT /= static_cast<float>(countHalfT);
+
+        if (scoreT > 0.001f && scoreHalfT > octaveScoreRatio * scoreT) {
+            switchTempo(halfT);
+            return;
+        }
+    }
+
+    // --- Check half-time (2T = slower) ---
+    // Use longer lookback for slower tempo (need enough history at 2T spacing)
+    int lookbackDouble = doubleT * 4;
+    if (lookbackDouble > sampleCounter_) lookbackDouble = sampleCounter_;
+    // Only check if 2T is within valid BPM range
+    float doubleTPeriodBpm = OSS_FRAMES_PER_MIN / static_cast<float>(doubleT);
+    if (doubleTPeriodBpm >= bpmMin && doubleT < OSS_BUFFER_SIZE / 2) {
+        float scoreDoubleT = 0.0f;
+        int countDoubleT = 0;
+        for (int offset = 0; offset < lookbackDouble; offset += doubleT) {
+            int idx = sampleCounter_ - 1 - offset;
+            if (idx >= 0) {
+                scoreDoubleT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
+                countDoubleT++;
+            }
+        }
+        if (countDoubleT > 0) scoreDoubleT /= static_cast<float>(countDoubleT);
+
+        if (scoreT > 0.001f && scoreDoubleT > octaveScoreRatio * scoreT) {
+            switchTempo(doubleT);
+            return;
+        }
+    }
+}
+
+void AudioController::checkPhaseAlignment() {
+    // Phase alignment check: scan all phase offsets within one beat period
+    // to find where raw onset strength (OSS) peaks. If the optimal phase is
+    // far from the current beat phase, shift the beat anchor.
+    //
+    // Uses OSS (raw onset detection) not CBSS (which is self-reinforcing).
+    // For each candidate phase offset φ ∈ [0, T), in steps of T/8:
+    //   score(φ) = mean OSS at positions (now - φ), (now - φ - T), (now - φ - 2T), ...
+    // The offset with the highest score is where onsets actually occur.
+    //
+    // Note: ossBuffer_ uses ossWriteIdx_ while we index via sampleCounter_.
+    // These stay in sync because addOssSample() and updateCBSS() each
+    // advance their counter once per frame, so sampleCounter_ % OSS_BUFFER_SIZE == ossWriteIdx_.
+    int T = beatPeriodSamples_;
+    if (T < 10 || ossCount_ < T * 3) return;
+
+    // Number of beats to average over (limited by buffer)
+    int maxBeats = (OSS_BUFFER_SIZE - T) / T;
+    if (maxBeats > 6) maxBeats = 6;
+    if (maxBeats < 2) return;
+
+    // Scan phase offsets in steps of T/8 (8 candidates)
+    static constexpr int NUM_PHASE_STEPS = 8;
+    float bestScore = -1.0f;
+    int bestOffset = 0;
+    float currentScore = 0.0f;
+
+    for (int step = 0; step < NUM_PHASE_STEPS; step++) {
+        int phaseOffset = (step * T) / NUM_PHASE_STEPS;
+        float score = 0.0f;
+        int count = 0;
+
+        for (int beatIdx = 0; beatIdx < maxBeats; beatIdx++) {
+            int lookback = phaseOffset + beatIdx * T;
+            if (lookback >= ossCount_ || lookback >= OSS_BUFFER_SIZE) break;
+
+            // Map to circular buffer position
+            int idx = sampleCounter_ - 1 - lookback;
+            if (idx < 0) continue;
+            idx = idx % OSS_BUFFER_SIZE;
+
+            score += ossBuffer_[idx];
+            count++;
         }
 
-        // Reset countdown for new period
-        timeToNextBeat_ = halfT;
-        timeToNextPrediction_ = halfT / 2;
+        if (count > 0) score /= static_cast<float>(count);
+
+        if (step == 0) currentScore = score;  // Current beat phase = offset 0
+
+        if (score > bestScore) {
+            bestScore = score;
+            bestOffset = phaseOffset;
+        }
     }
+
+    // If a different phase has significantly stronger onsets, shift
+    if (bestOffset > 0 && currentScore > 0.001f &&
+        bestScore > phaseCheckRatio * currentScore) {
+        // Shift beat timing: next beat fires bestOffset frames SOONER
+        // (because the optimal onset is bestOffset frames BEFORE the current beat position)
+        timeToNextBeat_ = T - bestOffset;
+        if (timeToNextBeat_ < 1) timeToNextBeat_ = 1;
+        timeToNextPrediction_ = timeToNextBeat_ / 2;
+    }
+}
+
+void AudioController::switchTempo(int newPeriodSamples) {
+    beatPeriodSamples_ = newPeriodSamples;
+    float newBpm = OSS_FRAMES_PER_MIN / static_cast<float>(newPeriodSamples);
+    bpm_ = clampf(newBpm, bpmMin, bpmMax);
+    beatPeriodMs_ = 60000.0f / bpm_;
+
+    // Also update Bayesian posterior — nudge toward the new tempo bin
+    int newBin = findClosestTempoBin(bpm_);
+    if (newBin >= 0 && newBin < TEMPO_BINS) {
+        // Transfer mass from old best bin to new
+        float transfer = tempoStatePost_[bayesBestBin_] * 0.3f;
+        tempoStatePost_[bayesBestBin_] -= transfer;
+        tempoStatePost_[newBin] += transfer;
+        // Update prior to match
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            tempoStatePrior_[i] = tempoStatePost_[i];
+        }
+        bayesBestBin_ = newBin;
+    }
+
+    // Reset countdown for new period
+    timeToNextBeat_ = newPeriodSamples;
+    timeToNextPrediction_ = newPeriodSamples / 2;
+}
+
+// ===== BAR-POINTER HMM BEAT TRACKING (Phase 3.1) =====
+//
+// Joint tempo-phase tracking via bar-pointer model (Whiteley/Bock 2016).
+// State = (tempo_bin, position) where position counts up from 0 to period-1.
+// Position 0 = beat boundary. At each frame, non-beat positions advance
+// deterministically (p-1 → p). When position period-1 wraps back to 0,
+// a tempo transition via transMatrix_[20][20] selects the new tempo bin.
+// Uses Viterbi (max-product) at beat boundaries, consistent with btrkPipeline.
+
+void AudioController::initHmmState() {
+    if (!tempoStateInitialized_) return;  // Need tempo bins from Bayesian init
+
+    // Build offset table: each tempo bin contributes period[t] states
+    totalHmmStates_ = 0;
+    for (int t = 0; t < TEMPO_BINS; t++) {
+        hmmPeriods_[t] = tempoBinLags_[t];
+        // Clamp to reasonable range (18 frames = 200 BPM, 90 frames = 40 BPM)
+        static constexpr int MIN_HMM_PERIOD_FRAMES = 10;
+        static constexpr int MAX_HMM_PERIOD_FRAMES = 90;
+        if (hmmPeriods_[t] < MIN_HMM_PERIOD_FRAMES) hmmPeriods_[t] = MIN_HMM_PERIOD_FRAMES;
+        if (hmmPeriods_[t] > MAX_HMM_PERIOD_FRAMES) hmmPeriods_[t] = MAX_HMM_PERIOD_FRAMES;
+        hmmStateOffsets_[t] = totalHmmStates_;
+        totalHmmStates_ += hmmPeriods_[t];
+    }
+    hmmStateOffsets_[TEMPO_BINS] = totalHmmStates_;  // Sentinel
+
+    // Safety: abort if state space exceeds buffer (should never happen with 20 bins, lags 18-60)
+    if (totalHmmStates_ > MAX_HMM_STATES) {
+        BLINKY_ASSERT(false, "AudioController: HMM states exceed MAX_HMM_STATES");
+        hmmInitialized_ = false;
+        return;
+    }
+
+    // Initialize alpha to uniform
+    float uniformProb = 1.0f / static_cast<float>(totalHmmStates_);
+    for (int i = 0; i < totalHmmStates_; i++) {
+        hmmAlpha_[i] = uniformProb;
+    }
+
+    hmmBestTempo_ = TEMPO_BINS / 2;
+    hmmBestPosition_ = hmmPeriods_[hmmBestTempo_] / 2;
+    hmmPrevBestPosition_ = hmmBestPosition_;  // Match initial state to prevent spurious first-frame beat
+    hmmInitialized_ = true;
+}
+
+void AudioController::updateHmmForward(float odf) {
+    if (!hmmInitialized_ || totalHmmStates_ == 0) return;
+
+    // Clamp ODF to [0, 1] for observation model.
+    // The smoothed ODF (BandFlux pre-threshold) is unbounded above — log-compressed
+    // weighted spectral flux with band weights 2.0/1.5/0.1 routinely exceeds 1.0.
+    // Without clamping, obsNonBeat floors at 0.01 and observation ratios explode.
+    float odfClamped = clampf(odf, 0.0f, 1.0f);
+
+    // Apply power-law contrast to sharpen beat/non-beat distinction.
+    // With contrast > 1, small ODF values (non-beats) get pushed toward 0,
+    // while values near 1 (beats) stay high. This makes the observation model
+    // more decisive, counteracting the structural bias toward longer periods.
+    if (hmmContrast != 1.0f && odfClamped > 0.0f) {
+        odfClamped = powf(odfClamped, hmmContrast);
+    }
+
+    // Observation likelihoods (Bernoulli model, requires odf ∈ [0,1])
+    // Floor prevents log(0) in downstream computations
+    static constexpr float MIN_OBS_PROBABILITY = 0.01f;
+    float obsBeat = (odfClamped > MIN_OBS_PROBABILITY) ? odfClamped : MIN_OBS_PROBABILITY;
+    float obsNonBeat = (1.0f - odfClamped > MIN_OBS_PROBABILITY) ? (1.0f - odfClamped) : MIN_OBS_PROBABILITY;
+
+    // Step 1: Save wrap probabilities (probability at last position of each tempo bin)
+    // These are the states that will transition to beat positions (position 0)
+    float wrapProb[TEMPO_BINS];
+    for (int t = 0; t < TEMPO_BINS; t++) {
+        int lastPos = hmmStateOffsets_[t] + hmmPeriods_[t] - 1;
+        wrapProb[t] = (lastPos < totalHmmStates_) ? hmmAlpha_[lastPos] : 0.0f;
+    }
+
+    // Step 2: Shift non-beat states forward (position p-1 → p)
+    // This is the deterministic advance: position increments each frame
+    for (int t = 0; t < TEMPO_BINS; t++) {
+        int offset = hmmStateOffsets_[t];
+        int period = hmmPeriods_[t];
+        // Shift from end to start to avoid overwriting
+        for (int p = period - 1; p >= 1; p--) {
+            hmmAlpha_[offset + p] = hmmAlpha_[offset + p - 1] * obsNonBeat;
+        }
+    }
+
+    // Step 3: Compute beat states (position 0) via Viterbi transition
+    // At beat boundary: max over all source tempo bins' wrap probabilities
+    for (int t = 0; t < TEMPO_BINS; t++) {
+        float maxPred = 0.0f;
+        for (int tPrev = 0; tPrev < TEMPO_BINS; tPrev++) {
+            float val = wrapProb[tPrev] * transMatrix_[t][tPrev];
+            if (val > maxPred) maxPred = val;
+        }
+        hmmAlpha_[hmmStateOffsets_[t]] = maxPred * obsBeat;
+    }
+
+    // Step 4: Normalize to prevent underflow
+    float alphaSum = 0.0f;
+    for (int i = 0; i < totalHmmStates_; i++) {
+        alphaSum += hmmAlpha_[i];
+    }
+    if (alphaSum > 1e-30f) {
+        float invSum = 1.0f / alphaSum;
+        for (int i = 0; i < totalHmmStates_; i++) {
+            hmmAlpha_[i] *= invSum;
+        }
+    } else {
+        // Degenerate — reset to uniform
+        float uniformProb = 1.0f / static_cast<float>(totalHmmStates_);
+        for (int i = 0; i < totalHmmStates_; i++) {
+            hmmAlpha_[i] = uniformProb;
+        }
+    }
+
+    // Step 5: Find best state (argmax)
+    // Two modes: raw argmax (hmmTempoNorm=false) or tempo-normalized (default).
+    // Tempo-normalized divides each bin's best probability by its period length,
+    // removing the structural bias where longer-period bins accumulate more mass
+    // simply by having more non-beat positions.
+    hmmPrevBestPosition_ = hmmBestPosition_;
+    float bestAlpha = 0.0f;
+    for (int t = 0; t < TEMPO_BINS; t++) {
+        int offset = hmmStateOffsets_[t];
+        int period = hmmPeriods_[t];
+        float periodNorm = hmmTempoNorm ? (1.0f / static_cast<float>(period)) : 1.0f;
+        for (int p = 0; p < period; p++) {
+            float score = hmmAlpha_[offset + p] * periodNorm;
+            if (score > bestAlpha) {
+                bestAlpha = score;
+                hmmBestTempo_ = t;
+                hmmBestPosition_ = p;
+            }
+        }
+    }
+
+    // Note: sampleCounter_++, cbssMean_ update, and overflow renormalization
+    // are handled by updateCBSS() which always runs after updateHmmForward().
+}
+
+// ===== PARTICLE FILTER BEAT TRACKING (v38) =====
+
+float AudioController::pfRandom() {
+    // LCG with Numerical Recipes constants, 24-bit precision
+    pfRngState_ = pfRngState_ * 1664525u + 1013904223u;
+    return static_cast<float>(pfRngState_ >> 8) / 16777216.0f;  // 2^24
+}
+
+float AudioController::pfGaussianRandom() {
+    // Box-Muller transform (uses two uniform samples, returns one Gaussian)
+    float u1 = pfRandom();
+    float u2 = pfRandom();
+    if (u1 < 1e-10f) u1 = 1e-10f;  // Prevent log(0)
+    return sqrtf(-2.0f * logf(u1)) * cosf(6.283185307f * u2);
+}
+
+void AudioController::initParticleFilter() {
+    // Seed LCG from nRF52 hardware RNG if available (millis as fallback)
+    pfRngState_ = time_.millis() ^ 0x12345678u;
+    // Run LCG a few times to spread the state
+    for (int i = 0; i < 10; i++) pfRandom();
+
+    // Check if Bayesian tempo estimate is available for warm start
+    bool haveEstimate = tempoStateInitialized_ && beatPeriodSamples_ >= 18 && beatPeriodSamples_ <= 60;
+    float estPeriod = haveEstimate ? static_cast<float>(beatPeriodSamples_) : 30.0f;
+
+    for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+        if (haveEstimate && i < 70) {
+            // 70% near current Bayesian estimate (warm start)
+            pfParticles_[i].period = estPeriod + pfGaussianRandom() * 2.0f;
+        } else {
+            // 30% uniform across full range (exploration)
+            pfParticles_[i].period = 18.0f + pfRandom() * 42.0f;  // 18-60
+        }
+        // Clamp period
+        if (pfParticles_[i].period < 18.0f) pfParticles_[i].period = 18.0f;
+        if (pfParticles_[i].period > 60.0f) pfParticles_[i].period = 60.0f;
+
+        // Uniform random phase
+        pfParticles_[i].position = pfRandom() * pfParticles_[i].period;
+        pfParticles_[i].weight = 1.0f / PF_NUM_PARTICLES;
+    }
+
+    pfNeff_ = static_cast<float>(PF_NUM_PARTICLES);
+    pfBeatFraction_ = 0.0f;
+    pfPrevBeatFraction_ = 0.0f;
+    // Initial cooldown prevents false beat on first frame from random particle positions
+    pfCooldown_ = static_cast<int>(estPeriod / 2);
+    pfInitialized_ = true;
+}
+
+void AudioController::pfUpdate(float odf) {
+    pfPredict();
+    pfUpdateWeights(odf);
+
+    // Compute effective sample size (Neff)
+    float sumWsq = 0.0f;
+    for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+        sumWsq += pfParticles_[i].weight * pfParticles_[i].weight;
+    }
+    pfNeff_ = (sumWsq > 1e-30f) ? (1.0f / sumWsq) : 0.0f;
+
+    // Conditionally resample
+    if (pfNeff_ < pfNeffRatio * PF_NUM_PARTICLES) {
+        pfResample();
+    }
+
+    pfExtractConsensus();
+    pfDetectBeat();
+
+    // Advance sampleCounter_ (shared with CBSS for phase derivation & OSS indexing)
+    sampleCounter_++;
+    renormalizeCounters();
+
+    // Update CBSS mean tracking (needed for silence suppression threshold)
+    static constexpr float CBSS_MEAN_ALPHA_PF = 0.008f;
+    cbssMean_ = cbssMean_ * (1.0f - CBSS_MEAN_ALPHA_PF) + odf * CBSS_MEAN_ALPHA_PF;
+}
+
+void AudioController::pfPredict() {
+    for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+        // Advance position by 1 frame
+        pfParticles_[i].position += 1.0f;
+
+        // Wrap position around period
+        if (pfParticles_[i].position >= pfParticles_[i].period) {
+            pfParticles_[i].position -= pfParticles_[i].period;
+        }
+
+        // Add Gaussian noise to period (diffusion)
+        float noise = pfGaussianRandom() * pfNoise * pfParticles_[i].period;
+        pfParticles_[i].period += noise;
+
+        // Clamp period to valid range
+        if (pfParticles_[i].period < 18.0f) pfParticles_[i].period = 18.0f;
+        if (pfParticles_[i].period > 60.0f) pfParticles_[i].period = 60.0f;
+
+        // Re-wrap position after period change (period shrinkage can leave position > period)
+        if (pfParticles_[i].position >= pfParticles_[i].period) {
+            pfParticles_[i].position = fmodf(pfParticles_[i].position, pfParticles_[i].period);
+        }
+    }
+}
+
+void AudioController::pfUpdateWeights(float odf) {
+    float sigma = pfBeatSigma;
+    if (sigma < 0.001f) sigma = 0.001f;  // Defensive floor
+    float invTwoSigmaSq = 1.0f / (2.0f * sigma * sigma);
+    float sumW = 0.0f;
+
+    for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+        // Compute phase (0-1) and distance from beat boundary
+        float phase = pfParticles_[i].position / pfParticles_[i].period;
+        float beatDist = phase;
+        if (beatDist > 0.5f) beatDist = 1.0f - beatDist;  // min(phase, 1-phase)
+
+        // Gaussian beat kernel
+        float kernel = expf(-beatDist * beatDist * invTwoSigmaSq);
+
+        // Likelihood: when near beat, ODF should be high; when far, ODF should be low
+        // P(odf | state) = kernel * odf + (1-kernel) * (1-clamp(odf,0,1)) + epsilon
+        float odfClamped = odf;
+        if (odfClamped > 1.0f) odfClamped = 1.0f;
+        if (odfClamped < 0.0f) odfClamped = 0.0f;
+        float likelihood = kernel * odfClamped + (1.0f - kernel) * (1.0f - odfClamped) + 0.01f;
+
+        pfParticles_[i].weight *= likelihood;
+        sumW += pfParticles_[i].weight;
+    }
+
+    // Normalize weights
+    if (sumW > 1e-30f) {
+        float invSum = 1.0f / sumW;
+        for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+            pfParticles_[i].weight *= invSum;
+        }
+    } else {
+        // Degenerate — reset to uniform
+        float uniformW = 1.0f / PF_NUM_PARTICLES;
+        for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+            pfParticles_[i].weight = uniformW;
+        }
+    }
+}
+
+void AudioController::pfResample() {
+    // Stratified resampling into scratch buffer
+    // Build CDF
+    float cdf[PF_NUM_PARTICLES];
+    cdf[0] = pfParticles_[0].weight;
+    for (int i = 1; i < PF_NUM_PARTICLES; i++) {
+        cdf[i] = cdf[i - 1] + pfParticles_[i].weight;
+    }
+
+    // Stratified sampling
+    int mainCount = PF_NUM_PARTICLES - static_cast<int>(pfOctaveInjectRatio * PF_NUM_PARTICLES);
+    if (mainCount < 1) mainCount = 1;
+    float step = 1.0f / mainCount;  // Step covers full CDF range for mainCount samples
+    float u = pfRandom() * step;    // Initial random offset within first stratum
+    int j = 0;
+
+    for (int i = 0; i < mainCount; i++) {
+        while (j < PF_NUM_PARTICLES - 1 && u > cdf[j]) j++;
+        pfResampleBuf_[i] = pfParticles_[j];
+        pfResampleBuf_[i].weight = 1.0f / PF_NUM_PARTICLES;
+        u += step;
+    }
+
+    // Inject octave variants in remaining slots
+    for (int i = mainCount; i < PF_NUM_PARTICLES; i++) {
+        // Pick a random resampled particle as source
+        int srcIdx = static_cast<int>(pfRandom() * mainCount);
+        if (srcIdx >= mainCount) srcIdx = mainCount - 1;
+        pfResampleBuf_[i] = pfResampleBuf_[srcIdx];
+        pfResampleBuf_[i].weight = 1.0f / PF_NUM_PARTICLES;
+
+        // Alternate between T/2 (double-time) and 2T (half-time)
+        if ((i & 1) == 0) {
+            // Double-time: T/2
+            float newPeriod = pfResampleBuf_[i].period * 0.5f;
+            if (newPeriod >= 18.0f) {
+                pfResampleBuf_[i].period = newPeriod;
+                pfResampleBuf_[i].position = fmodf(pfResampleBuf_[i].position, newPeriod);
+            }
+        } else {
+            // Half-time: 2T
+            float newPeriod = pfResampleBuf_[i].period * 2.0f;
+            if (newPeriod <= 60.0f) {
+                pfResampleBuf_[i].period = newPeriod;
+                // Position stays valid (already < old period < new period)
+            }
+        }
+    }
+
+    // Copy back
+    for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+        pfParticles_[i] = pfResampleBuf_[i];
+    }
+}
+
+void AudioController::pfExtractConsensus() {
+    // Weighted mean period → BPM
+    float sumPeriod = 0.0f;
+    for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+        sumPeriod += pfParticles_[i].weight * pfParticles_[i].period;
+    }
+    float meanPeriod = sumPeriod;
+    if (meanPeriod < 18.0f) meanPeriod = 18.0f;
+    if (meanPeriod > 60.0f) meanPeriod = 60.0f;
+
+    bpm_ = OSS_FRAMES_PER_MIN / meanPeriod;
+    beatPeriodMs_ = 60000.0f / bpm_;
+    beatPeriodSamples_ = static_cast<int>(meanPeriod + 0.5f);
+    if (beatPeriodSamples_ < 18) beatPeriodSamples_ = 18;
+    if (beatPeriodSamples_ > 60) beatPeriodSamples_ = 60;
+
+    // Find closest tempo bin for debug display
+    bayesBestBin_ = findClosestTempoBin(bpm_);
+
+    // Compute beat fraction: weighted sum of particles within 2σ of beat boundary
+    float sigma = pfBeatSigma;
+    float threshold2sigma = 2.0f * sigma;
+    pfPrevBeatFraction_ = pfBeatFraction_;
+    pfBeatFraction_ = 0.0f;
+    for (int i = 0; i < PF_NUM_PARTICLES; i++) {
+        float phase = pfParticles_[i].position / pfParticles_[i].period;
+        float beatDist = phase;
+        if (beatDist > 0.5f) beatDist = 1.0f - beatDist;
+        if (beatDist < threshold2sigma) {
+            pfBeatFraction_ += pfParticles_[i].weight;
+        }
+    }
+}
+
+void AudioController::pfDetectBeat() {
+    uint32_t nowMs = time_.millis();
+
+    // Decrement cooldown
+    if (pfCooldown_ > 0) pfCooldown_--;
+
+    bool beatDetected = false;
+
+    // Rising edge detector: pfBeatFraction crosses threshold from below
+    if (pfCooldown_ <= 0 &&
+        pfBeatFraction_ >= pfBeatThreshold &&
+        pfPrevBeatFraction_ < pfBeatThreshold) {
+
+        // Silence suppression: require ODF above running mean
+        float currentOdf = lastSmoothedOnset_;
+        bool aboveThreshold = (cbssThresholdFactor <= 0.0f) ||
+                               (currentOdf > cbssThresholdFactor * cbssMean_);
+
+        if (aboveThreshold) {
+            // Onset snap: anchor beat at strongest nearby onset
+            if (onsetSnapWindow > 0 && ossCount_ > 0) {
+                int W = static_cast<int>(onsetSnapWindow);
+                float bestOSS = -1.0f;
+                int bestSnapOffset = 0;
+                for (int d = 0; d <= W; d++) {
+                    int idx = sampleCounter_ - d;
+                    if (idx < 0) break;
+                    float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+                    if (oss > bestOSS) {
+                        bestOSS = oss;
+                        bestSnapOffset = d;
+                    }
+                }
+                lastBeatSample_ = sampleCounter_ - bestSnapOffset;
+            } else {
+                lastBeatSample_ = sampleCounter_;
+            }
+
+            if (beatCount_ < 65535) beatCount_++;
+            beatDetected = true;
+            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+            updateBeatStability(nowMs);
+            lastFiredBeatPredicted_ = true;  // PF beats are predicted
+
+            // Set cooldown to 1/3 of beat period (prevent double-firing)
+            pfCooldown_ = beatPeriodSamples_ / 3;
+            if (pfCooldown_ < 3) pfCooldown_ = 3;
+
+            // Update ensemble detector with tempo hint
+            ensemble_.getFusion().setTempoHint(bpm_);
+        }
+    }
+
+    // Decay confidence when no beat
+    if (!beatDetected) {
+        cbssConfidence_ *= beatConfidenceDecay;
+    }
+
+    // Derive phase from particle consensus
+    // Use sampleCounter_ - lastBeatSample_ for deterministic counter-based phase
+    // (same as CBSS path, for consistent behavior)
+    int T = beatPeriodSamples_;
+    if (T < 10) T = 10;
+    float newPhase = static_cast<float>(sampleCounter_ - lastBeatSample_) / static_cast<float>(T);
+    newPhase = fmodf(newPhase, 1.0f);
+    if (newPhase < 0.0f) newPhase += 1.0f;
+    if (!isfinite(newPhase)) newPhase = 0.0f;
+    phase_ = newPhase;
+
+    // Update timeToNextBeat_ for serial streaming compatibility
+    timeToNextBeat_ = T - static_cast<int>(newPhase * T);
+    if (timeToNextBeat_ < 0) timeToNextBeat_ = 0;
+
+    predictNextBeat(nowMs);
 }
 
 void AudioController::detectBeat() {
@@ -1478,7 +2165,27 @@ void AudioController::detectBeat() {
                                    (currentCBSS > cbssThresholdFactor * cbssMean_);
 
         if (cbssAboveThreshold) {
-            lastBeatSample_ = sampleCounter_;
+            // Onset snap: anchor the beat at the strongest nearby onset
+            // in the raw OSS buffer, rather than at the exact countdown position.
+            // This corrects small phase errors each beat cycle, pulling the
+            // beat grid toward actual onset positions over time.
+            if (onsetSnapWindow > 0 && ossCount_ > 0) {
+                int W = static_cast<int>(onsetSnapWindow);
+                float bestOSS = -1.0f;
+                int bestSnapOffset = 0;
+                for (int d = 0; d <= W; d++) {
+                    int idx = sampleCounter_ - 1 - d;
+                    if (idx < 0) break;
+                    float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+                    if (oss > bestOSS) {
+                        bestOSS = oss;
+                        bestSnapOffset = d;
+                    }
+                }
+                lastBeatSample_ = sampleCounter_ - bestSnapOffset;
+            } else {
+                lastBeatSample_ = sampleCounter_;
+            }
             if (beatCount_ < 65535) beatCount_++;
             beatDetected = true;
             cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
@@ -1500,6 +2207,15 @@ void AudioController::detectBeat() {
                 if (beatsSinceOctaveCheck_ >= octaveCheckBeats) {
                     checkOctaveAlternative();
                     beatsSinceOctaveCheck_ = 0;
+                }
+            }
+
+            // Phase alignment checker: fix anti-phase lock using raw OSS
+            if (phaseCheckEnabled) {
+                beatsSincePhaseCheck_++;
+                if (beatsSincePhaseCheck_ >= phaseCheckBeats) {
+                    checkPhaseAlignment();
+                    beatsSincePhaseCheck_ = 0;
                 }
             }
         }
