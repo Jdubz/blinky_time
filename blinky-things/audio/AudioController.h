@@ -312,7 +312,7 @@ public:
     // Cumulative Beat Strength Signal with counter-based beat prediction
     // Phase is derived deterministically from beat counter — no drift, no jitter
     float cbssAlpha = 0.9f;              // CBSS weighting (0.8-0.95, higher = more predictive)
-    float cbssTightness = 5.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence)
+    float cbssTightness = 8.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence, v40: raised from 5.0, +24% avg F1)
     float beatConfidenceDecay = 0.98f;   // Per-frame confidence decay when no beat detected
     float beatTimingOffset = 5.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks

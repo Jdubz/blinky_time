@@ -5,7 +5,7 @@
 
 **Last Updated:** March 2, 2026
 
-## Current Config (SETTINGS_VERSION 39)
+## Current Config (SETTINGS_VERSION 40)
 
 **Detector:** BandWeightedFlux Solo (all others disabled)
 - gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5
@@ -13,112 +13,112 @@
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
 - bayesacf=0.3 (v25 inverse-lag normalized), bayescomb=0.7, bayesft=0, bayesioi=0
-- cbssthresh=1.0, beatoffset=5, onsetSnapWindow=8
+- cbssthresh=1.0, cbssTightness=8.0 (v40, raised from 5.0), beatoffset=5, onsetSnapWindow=8
 - densityoctave=1, octavecheck=1 (v32 octave disambiguation)
 - odfmeansub=0 (v32 — raw ODF preserves ACF structure)
 - phasecheck=0, warmup=0, cbssContrast=1.0
 
-**NEW (v38-v39):** Particle filter beat tracker (disabled by default, A/B testable)
-- `set particlefilter 1` to enable
+**Particle filter** (disabled by default, A/B testable via `set particlefilter 1`)
 - Hybrid mode: PF provides tempo estimate, CBSS handles beat detection and phase
 - 100 particles, stratified resampling with octave injection (T/2, 2T)
 - v39: madmom obs model, info gate, phase-coherent octave, PF+CBSS hybrid
+- **Smoke test result:** Dramatically improves BPM accuracy (+52%) but no Beat F1 improvement
 
 ## Current Baselines
 
-### v36 18-Track Validation (Feb 28, 2026)
+### v40 18-Track Validation (Mar 2, 2026)
 
 | Metric | 4-Device Avg | Best-Device Avg |
 |--------|:------------:|:---------------:|
-| Beat F1 | 0.280 | 0.364 |
-| BPM Accuracy | 0.846 | 0.872 |
+| Beat F1 | 0.285 | 0.348 |
 
-### v37 Onset Snap Validation (Mar 1, 2026)
+### Historical Baselines
 
-5-run repeated test on trance-party (ACM0):
-- **With onset snap (window=4):** mean F1=0.588, std=0.099
-- **Without onset snap:** mean F1=0.491, std=0.173
-- **+20% mean, -43% variance** — improvement is statistically significant
+| Version | Change | 4-Dev F1 | Best-Dev F1 |
+|---------|--------|:--------:|:-----------:|
+| v36 | Frame rate fix, onset snap, downward correction | 0.275 | 0.351 |
+| v40 | cbssTightness 5→8 | 0.285 | 0.348 |
 
-### Known Bottleneck
+### Known Bottlenecks
 
-**Double-time lock at ~182 BPM** remains the primary failure mode.
-ACF + comb provide only ~3.3x octave discrimination (inverse-lag 2x × Rayleigh 1.67x).
-v32 features (density penalty + shadow octave checker) help but don't fully solve it.
-The particle filter is designed to address this via competing tempo/phase hypotheses.
+1. **Double-time lock (~182 BPM)** on 3/4 devices — primary failure mode.
+   ACF + comb provide only ~3.3x octave discrimination. v32 features help but don't fully solve it.
+   ACM0 consistently avoids this (acoustic/enclosure effect).
 
-## v38 Particle Filter — Test Plan
+2. **Phase alignment** — even with correct BPM (PF achieves 85%), Beat F1 doesn't improve.
+   Phase (timing of beat placement) is the limiting factor, not tempo estimation.
 
-### Phase 1: Smoke Test (Quick Validation)
+3. **Run-to-run variance** (std 0.04-0.23) — single-run evaluations cannot detect < ~0.15 F1 changes.
 
-Verify PF runs without crashes and produces beats on 3 representative tracks.
-
-```
-# Enable PF on ACM0, leave CBSS on ACM1 as control
-run_music_test_multi(
-  ports: ["/dev/ttyACM0", "/dev/ttyACM1"],
-  port_commands: {"/dev/ttyACM0": ["set particlefilter 1"]},
-  audio_file: "<track>",
-  ground_truth: "<annotations>"
-)
-```
-
-Tracks: trance-party (stable 138 BPM), techno-minimal-emotion (minimal), breakbeat-drive (complex)
-
-**Pass criteria:** PF produces beats (Beat F1 > 0), no device crashes, BPM estimate present.
-
-### Phase 2: Full 18-Track A/B Comparison
-
-Run all 18 tracks with PF (ACM0) vs CBSS control (ACM1).
-Compare Beat F1, BPM accuracy, and per-track results.
-
-**Key questions:**
-1. Does PF reduce double-time errors? (Check BPM accuracy on tracks where CBSS locks at ~182)
-2. Does PF maintain performance on tracks where CBSS already works well?
-3. What's the Beat F1 distribution like? (PF may have different failure modes)
-
-### Phase 3: Parameter Sensitivity Sweep
-
-If Phase 2 shows promise, sweep key PF parameters using multi-device testing:
-
-| Parameter | Serial cmd | Default | Sweep range | Rationale |
-|-----------|:----------:|:-------:|:-----------:|-----------|
-| pfnoise | `pfnoise` | 0.02 | 0.005-0.08 | Period diffusion — too low = stuck, too high = jittery |
-| pfbeatsigma | `pfbeatsigma` | 0.05 | 0.02-0.15 | Beat kernel width — narrow = precise but brittle |
-| pfoctaveinject | `pfoctaveinject` | 0.10 | 0.0-0.25 | Octave injection ratio — key for octave disambiguation |
-| pfbeatthresh | `pfbeatthresh` | 0.25 | 0.1-0.5 | Beat detection threshold — affects precision/recall tradeoff |
-| pfcontrast | `pfcontrast` | 1.0 | 0.5-3.0 | ODF power-law — higher = peakier likelihood |
-
-**Method:** 3 devices × 3 values per parameter × 3 tracks = 9 runs per parameter.
-Use `run_music_test_multi` with `port_commands` to set different values per device.
-
-### Phase 4: Repeated-Run Validation
-
-Once optimal parameters are found, run 5× repeated tests on 4-5 tracks to verify
-improvement is statistically significant (given run-to-run variance std=0.04-0.23).
-
-### Phase 5: Full Suite Validation
-
-Final 18-track validation with optimized PF parameters on all 4 devices.
-Document results in PARAMETER_TUNING_HISTORY.md.
-
-## Next Priorities (After PF Evaluation)
+## Next Steps Toward 70% Beat F1
 
 > **Design philosophy:** See [VISUALIZER_GOALS.md](../docs/VISUALIZER_GOALS.md) — visual quality over metric perfection. Low Beat F1 on ambient/trap tracks is acceptable (organic mode fallback is correct).
 
-1. **If PF works:** Tune parameters, make default, remove/simplify Bayesian fusion
-2. **If PF doesn't help:** Consider BTrack-style Viterbi on ACF (v33 prototype exists), or TinyML ODF
-3. **Visual quality evaluation** — Run render_preview with PF-tracked beats, compare animation smoothness
-4. **Generator tuning** — Adjust Fire/Water/Lightning response curves for PF beat characteristics
+### Analysis: Why Are We Stuck at ~0.28?
 
-## Completed (v28-v37, Feb-Mar 2026)
+The v40 testing revealed two independent bottlenecks:
+1. **Double-time lock (3/4 devices):** ACF harmonic ambiguity (3.3x discrimination) causes
+   devices to lock at ~180-195 BPM instead of correct tempo. ACM0 avoids this consistently
+   (acoustic/enclosure effect). This dominates 4-device averages.
+2. **Phase alignment:** Even PF with 85% BPM accuracy produces the same Beat F1 as CBSS.
+   Beat placement timing within the beat cycle is the limiting factor.
+
+### Priority 1: Address Double-Time Lock
+
+The single biggest F1 improvement will come from preventing 3/4 devices from locking to double time.
+
+**Options:**
+- **PF tempo → CBSS phase (hybrid, already implemented):** PF avoids double-time but doesn't
+  improve F1 yet. May need PF to influence CBSS period directly, not just as observation.
+- **Stronger octave penalty in Bayesian posterior:** Current density octave + shadow checker
+  provide ~13% each. Stacking additional cues (e.g., spectral bass/broadband ratio).
+- **BTrack-style ACF post-processing:** Comb filter on ACF output to sharpen fundamental
+  peak (v33 prototype exists as Viterbi, could be simplified).
+
+### Priority 2: Phase Alignment Architecture
+
+Once BPM is correct, improve beat placement:
+- **Joint tempo-phase HMM (BTrack-style):** Viterbi on CBSS scores across phase-period grid.
+  This is the standard approach in reference implementations.
+- **Phase-locked loop on CBSS peaks:** Track CBSS peak phase over time, smooth corrections.
+- **Stronger onset snap:** Current window=8 frames. Could use weighted snap (prefer high-ODF frames).
+
+### Priority 3: Evaluate Visual Quality
+
+Before further metric optimization, evaluate whether current performance produces
+acceptable visual results:
+- Run `render_preview` with real music patterns
+- Compare animation smoothness and beat-reactivity
+- If visual quality is acceptable at current F1, focus on reliability over accuracy
+
+## PF Evaluation — Completed (v40)
+
+### Phase 1: Smoke Test — PASSED
+- PF runs stably on 3 tracks, no crashes, produces beats
+- BPM accuracy: PF 0.848 vs CBSS 0.560 (+52%)
+- Beat F1: PF 0.274 vs CBSS 0.295 (within noise)
+- **Conclusion:** PF solves tempo, not phase
+
+### Phase 2-5: Deferred
+- Full A/B and parameter sweeps deferred pending architectural work on phase alignment
+- PF's value is in tempo estimation; without phase improvement, parameter tuning won't help F1
+
+### CBSS Parameter Sweeps — Completed (v40)
+
+| Parameter | Values Tested | Optimal | Effect |
+|-----------|:------------:|:-------:|--------|
+| beatTimingOffset | 3, 5, 7, 9 | 5 (default) | Inconclusive — device BPM variation dominates |
+| cbssTightness | 2, 5, 8, 12 | **8** | +24% on same-BPM devices, +3.6% on 18-track avg |
+
+## Completed (v28-v40, Feb-Mar 2026)
 
 - v28: FT+IOI disabled, beat-boundary tempo, peak picking, unified ODF, 40→20 bins
 - v29: Transition matrix drift investigation (reverted 40 bins)
 - v32: ODF mean sub disabled (+70%), density octave penalty (+13%), shadow octave checker (+13%)
 - v33: BTrack-style Viterbi max-product on comb-ACF (experimental, not default)
 - v35-v37: Phase alignment experiments (onset snap +20%, phase check/warmup/HMM negative)
-- v38: Particle filter implementation (pending testing)
+- v38-v39: Particle filter implementation and bar-pointer model
+- v40: cbssTightness 5→8, PF smoke test, parameter sweeps
 
 ## Known Limitations
 

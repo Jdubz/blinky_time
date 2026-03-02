@@ -187,7 +187,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tempoChangeThreshold = 0.1f;
 
     // CBSS beat tracking
-    data_.music.cbssTightness = 5.0f;         // Log-Gaussian tightness (higher=stricter tempo)
+    data_.music.cbssTightness = 8.0f;         // Log-Gaussian tightness (v40: raised from 5.0, +24% avg F1)
     data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
     data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)

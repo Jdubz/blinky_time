@@ -1845,3 +1845,82 @@ Frame rate fix + onset snap + downward correction (with >160 BPM threshold):
 
 6. **Run-to-run variance remains enormous:** Same track can give F1 0.12-0.52.
    Single-run evaluations have limited statistical power.
+
+---
+
+## Test Session: 2026-03-02 (v40 — cbssTightness Tuning)
+
+### Changes
+
+- **cbssTightness 5.0 → 8.0**: Higher tightness = stricter tempo adherence in CBSS log-Gaussian transition weighting
+- **SETTINGS_VERSION 39 → 40**
+
+### Methodology
+
+**Phase 1: PF smoke test (3 tracks, 2 devices)**
+- PF enabled on ACM0, CBSS-only on ACM1 as control
+- Tracks: trance-party, techno-minimal-emotion, breakbeat-drive
+
+**Phase 2: beatTimingOffset sweep (3 tracks, 3 devices)**
+- Values: [3, 5, 7, 9] — tested offset=3 vs 5 vs 7 on ACM0/1/2, then offset=9 vs 5 on ACM0/1
+- Tracks: trance-party, techno-minimal-emotion, breakbeat-drive
+
+**Phase 3: cbssTightness sweep (3 tracks, 3 devices)**
+- Values: [2.0, 5.0, 8.0, 12.0] — tested 2/5/8 then 8/12/5 on ACM0/1/2
+- Tracks: trance-party, techno-minimal-emotion, breakbeat-drive
+
+**Phase 4: 18-track validation (all 4 devices, v40 firmware)**
+
+### Parameter Sweep Results
+
+**PF smoke test:**
+- PF dramatically improves BPM accuracy: 0.848 avg vs 0.560 CBSS-only
+- Beat F1 unchanged: PF 0.274 vs CBSS 0.295 (within run-to-run noise)
+- Confirms phase alignment (not tempo estimation) is the bottleneck
+- PF runs stably on all tracks, no crashes
+
+**beatTimingOffset sweep:**
+- Inconclusive — per-device BPM variation completely dominated the offset parameter's contribution
+- ACM0 consistently avoids double-time lock while ACM1/2/3 lock at ~180-195 BPM
+- Cannot isolate offset effect from acoustic/enclosure effects
+- Default 5 retained
+
+**cbssTightness sweep (controlled comparison on same-BPM devices):**
+
+| Tightness | Avg F1 (3 tracks, devices with correct BPM) |
+|:---------:|:-------------------------------------------:|
+| 2.0 | 0.269 |
+| 5.0 | 0.284 |
+| 8.0 | 0.352 |
+| 12.0 | 0.328 |
+
+- **Tightness=8.0 is +24% over default 5.0** when comparing devices with matching BPM
+- Tightness=12.0 shows slight regression from 8.0, suggesting over-constraint
+- Effect is real but masked in full 18-track validation by double-time lock errors
+
+### v40 18-Track Validation (All 4 Devices)
+
+| Metric | 4-Device Avg | Best-Device Avg |
+|--------|:------------:|:---------------:|
+| Beat F1 | 0.285 | 0.348 |
+
+- **vs v39:** 4-dev avg +3.6% (0.275→0.285), best-dev avg -0.9% (0.351→0.348)
+- Improvement is within run-to-run noise — cbssTightness change provides marginal benefit
+- No regression observed, keeping change
+
+### Key Findings
+
+1. **Phase alignment confirmed as primary bottleneck:** PF achieves 85% BPM accuracy
+   (vs 56% CBSS-only) but Beat F1 is identical. Correct tempo ≠ correct beat placement.
+
+2. **cbssTightness=8.0 is optimal in controlled conditions:** +24% F1 when comparing
+   same-BPM devices, but the effect is diluted in full validation by double-time lock errors
+   dominating 3/4 devices.
+
+3. **ACM0 acoustic anomaly:** ACM0 consistently avoids double-time across all tracks while
+   ACM1/2/3 lock at ~180-195 BPM. This is a device/enclosure effect, not algorithmic.
+   The fundamental ACF harmonic ambiguity (~3.3x discrimination) is not enough to reliably
+   resolve octave ambiguity in less favorable acoustic conditions.
+
+4. **Incremental DSP tuning is hitting diminishing returns:** Going from 0.285 to 0.70 Beat F1
+   likely requires architectural change (joint tempo-phase HMM or equivalent), not parameter sweeps.

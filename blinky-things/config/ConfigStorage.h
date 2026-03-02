@@ -68,7 +68,8 @@ public:
     //             densityTarget, phaseCheck{Enabled,Beats,Ratio}, HMM params
     // Version 38: Particle filter beat tracking (100 particles, octave injection)
     // Version 39: Bar-pointer PF (beat-boundary diffusion, madmom obs model, info gate, phase-coherent octave)
-    static const uint8_t SETTINGS_VERSION = 39;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 40: cbssTightness 5→8 (+24% avg Beat F1 in 3-track sweep)
+    static const uint8_t SETTINGS_VERSION = 40;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
