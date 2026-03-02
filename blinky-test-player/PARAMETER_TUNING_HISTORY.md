@@ -1652,3 +1652,90 @@ Config: `odfmeansub=0, densityoctave=1, densityminpb=0.5, densitymaxpb=5.0, octa
 - Worst: reggaeton (92 BPM, below density discriminator range) — F1 0.120
 - Best: goa-mantra (0.381), breakbeat-bg (0.366), dubstep-halftime (0.366), machine-drum (0.355)
 - Extended tracks perform ~10% worse than core 9, mainly due to breakbeat/reggaeton genres with BPMs outside 110-150 range
+
+---
+
+## Test Session: 2026-03-01 — v37 Phase Alignment Experiments
+
+**Firmware:** SETTINGS_VERSION 37 (v36 baseline + 5 new experiments)
+**Build:** 277 KB flash (34%), 21 KB RAM (8%)
+**Test device:** ACM0 (Long Tube)
+
+### Experiments Tested
+
+Five approaches to improve CBSS beat phase alignment, evaluated on ACM0:
+
+| # | Approach | Parameter | Result | Notes |
+|:-:|----------|-----------|--------|-------|
+| 1 | **Onset snap** | `onsetsnap=4` | **+20% on 5-run repeated tests** | Snaps beat anchor to strongest OSS within ±4 frames (~67ms at 60Hz) |
+| 2 | Phase check | `phasecheck=1` (8 phases, ratio=1.2) | **Net negative** (3 wins, 9 losses) | Introduces phase instability; corrects toward noisy OSS |
+| 3 | CBSS contrast | `cbsscontrast=2.0` (BTrack-style ODF squaring) | **Net negative** | Doesn't address phase, makes CBSS more brittle |
+| 4 | HMM beat tracker | `hmm=1` | **Half-time lock** (~80 BPM) | Worse BPM tracking than CBSS |
+| 5 | CBSS warmup | `warmup=8` (lower alpha for first 8 beats) | **5.5x variance increase, -15% mean** | Noisy early values destabilize phase lock |
+
+### Onset Snap Validation (5-run repeated test on trance-party)
+
+| Run | Without snap | With snap (window=4) |
+|:---:|:------------:|:--------------------:|
+| 1 | 0.491 | 0.588 |
+| 2 | 0.472 | 0.612 |
+| 3 | 0.523 | 0.571 |
+| 4 | 0.445 | 0.601 |
+| 5 | 0.525 | 0.568 |
+| **Mean** | **0.491** | **0.588** |
+| **Std** | 0.034 | 0.018 |
+
+**+20% improvement** with reduced variance. Onset snap is the only v37 feature enabled by default.
+
+### Critical Measurement Finding
+
+Run-to-run variance is enormous (std=0.04-0.23 across tracks):
+- Same track, same firmware: F1 ranges from 0.123 to 0.748
+- Single-run 18-track validations cannot detect improvements < ~0.15 F1
+- **Reliable evaluation requires 5+ runs per track per condition**
+
+### v37 Defaults
+
+```
+phasecheck=off, warmup=0, onsetsnap=4, cbssContrast=1.0
+```
+
+### v36 Baseline (4-device avg, 18 tracks)
+
+| Metric | Value |
+|--------|:-----:|
+| 4-device avg Beat F1 | 0.280 |
+| Best-device avg Beat F1 | 0.364 |
+
+---
+
+## Implementation Session: 2026-03-02 — v38 Particle Filter Beat Tracker
+
+**Firmware:** SETTINGS_VERSION 38 (v37 + particle filter)
+**Build:** 283 KB flash (34%), 21 KB RAM (8%) (+2.4 KB for PF state)
+
+### Implementation Summary
+
+100-particle beat tracker implemented as a toggleable alternative to CBSS:
+- **Stratified resampling** with octave injection (T/2 and 2T variants)
+- **Bernoulli observation model** with Gaussian beat kernel
+- **Rising-edge beat detection** on weighted particle fraction near beat boundary
+- **A/B testable** via `set particlefilter 1` (disabled by default)
+- When active: skips CBSS entirely, handles its own sampleCounter and beat detection
+
+### Parameters
+
+| Parameter | Serial cmd | Default | Range |
+|-----------|:----------:|:-------:|:-----:|
+| Enable PF | `particlefilter` | false | bool |
+| Period noise | `pfnoise` | 0.02 | 0.001-0.1 |
+| Beat kernel width | `pfbeatsigma` | 0.05 | 0.01-0.2 |
+| Octave injection ratio | `pfoctaveinject` | 0.10 | 0.0-0.3 |
+| Beat threshold | `pfbeatthresh` | 0.25 | 0.05-0.8 |
+| Resample threshold | `pfneff` | 0.5 | 0.1-0.9 |
+| ODF contrast | `pfcontrast` | 1.0 | 0.5-4.0 |
+
+### No Test Results Yet
+
+Particle filter was implemented and compiled but NOT yet tested on real music.
+Next step: A/B test PF vs CBSS using `run_music_test_multi` on representative tracks.
