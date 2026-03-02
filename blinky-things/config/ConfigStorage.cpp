@@ -229,6 +229,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.odfDiffMode = false;         // HWR first-difference ODF for ACF (v35, off by default)
     data_.music.odfSource = 0;               // Default ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux)
     data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
+    data_.music.downwardCorrectEnabled = false; // Downward harmonic correction (experimental, overcorrects mid-tempo)
     data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
     data_.music.phaseCheckEnabled = false;  // Phase alignment checker (v37: disabled — full validation showed net-negative F1)
     data_.music.phaseCheckBeats = 4;        // Check phase every 4 beats
@@ -791,6 +792,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->densityMaxPerBeat = data_.music.densityMaxPerBeat;
         audioCtrl->densityPenaltyExp = data_.music.densityPenaltyExp;
         audioCtrl->densityTarget = data_.music.densityTarget;
+        audioCtrl->downwardCorrectEnabled = data_.music.downwardCorrectEnabled;
         audioCtrl->octaveCheckEnabled = data_.music.octaveCheckEnabled;
         audioCtrl->phaseCheckEnabled = data_.music.phaseCheckEnabled;
         audioCtrl->phaseCheckBeats = data_.music.phaseCheckBeats;
@@ -1006,6 +1008,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.densityMaxPerBeat = audioCtrl->densityMaxPerBeat;
         data_.music.densityPenaltyExp = audioCtrl->densityPenaltyExp;
         data_.music.densityTarget = audioCtrl->densityTarget;
+        data_.music.downwardCorrectEnabled = audioCtrl->downwardCorrectEnabled;
         data_.music.octaveCheckEnabled = audioCtrl->octaveCheckEnabled;
         data_.music.phaseCheckEnabled = audioCtrl->phaseCheckEnabled;
         data_.music.phaseCheckBeats = audioCtrl->phaseCheckBeats;

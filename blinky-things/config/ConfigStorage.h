@@ -69,7 +69,8 @@ public:
     // Version 38: Particle filter beat tracking (100 particles, octave injection)
     // Version 39: Bar-pointer PF (beat-boundary diffusion, madmom obs model, info gate, phase-coherent octave)
     // Version 40: cbssTightness 5→8 (+24% avg Beat F1 in 3-track sweep)
-    static const uint8_t SETTINGS_VERSION = 40;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 41: downwardCorrectEnabled toggle (disabled by default), deprecated PF params
+    static const uint8_t SETTINGS_VERSION = 41;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -230,6 +231,7 @@ public:
         bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
         float densityPenaltyExp;        // Density penalty Gaussian exponent (v35)
         float densityTarget;            // Target transients/beat (0=disabled, v35)
+        bool downwardCorrectEnabled;    // Downward harmonic correction 3:2/2:1 (v41: disabled by default)
         bool octaveCheckEnabled;        // Shadow CBSS octave check (v31)
         bool phaseCheckEnabled;         // Phase alignment checker (v37: fixes anti-phase lock)
         uint8_t phaseCheckBeats;        // Check phase every N beats (v37: 4)

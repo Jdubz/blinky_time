@@ -1183,7 +1183,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // has at least 50% of the MAP probability, i.e., posterior >= 0.5 × MAP).
     // This prevents false correction when the prior/density/comb filters
     // confidently favor the MAP.
-    {
+    // Disabled by default: overcorrects 136 BPM trance to ~98 BPM (3:2 ambiguity).
+    if (downwardCorrectEnabled) {
         int bestLag = tempoBinLags_[bestBin];
         int bestLagIdx = bestLag - minLag;
         float bestAcf = (bestLagIdx >= 0 && bestLagIdx < correlationSize)
@@ -1192,7 +1193,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
         if (bestAcf > 0.001f) {
             // Check 3:2 downward: fundamental at 1.5x the lag (2/3 BPM)
-            int fundamentalLag = bestLag * 3 / 2;
+            int fundamentalLag = (bestLag * 3 + 1) / 2;  // Round instead of truncate for odd lags
             int fundIdx = fundamentalLag - minLag;
             bool corrected = false;
             if (fundIdx >= 0 && fundIdx < correlationSize) {
@@ -1779,7 +1780,7 @@ void AudioController::initHmmState() {
     }
     hmmStateOffsets_[TEMPO_BINS] = totalHmmStates_;  // Sentinel
 
-    // Safety: abort if state space exceeds buffer (should never happen with 20 bins, lags 18-60)
+    // Safety: abort if state space exceeds buffer (should never happen with 20 bins, lags MIN_LAG-MAX_LAG)
     if (totalHmmStates_ > MAX_HMM_STATES) {
         BLINKY_ASSERT(false, "AudioController: HMM states exceed MAX_HMM_STATES");
         hmmInitialized_ = false;
@@ -1917,7 +1918,7 @@ void AudioController::initParticleFilter() {
     for (int i = 0; i < 10; i++) pfRandom();
 
     // Check if Bayesian tempo estimate is available for warm start
-    bool haveEstimate = tempoStateInitialized_ && beatPeriodSamples_ >= 18 && beatPeriodSamples_ <= 60;
+    bool haveEstimate = tempoStateInitialized_ && beatPeriodSamples_ >= CombFilterBank::MIN_LAG && beatPeriodSamples_ <= CombFilterBank::MAX_LAG;
     float estPeriod = haveEstimate ? static_cast<float>(beatPeriodSamples_) : 30.0f;
 
     for (int i = 0; i < PF_NUM_PARTICLES; i++) {
@@ -2153,8 +2154,8 @@ void AudioController::pfExtractConsensus() {
     bpm_ = OSS_FRAMES_PER_MIN / smoothedPeriod;
     beatPeriodMs_ = 60000.0f / bpm_;
     beatPeriodSamples_ = static_cast<int>(smoothedPeriod + 0.5f);
-    if (beatPeriodSamples_ < 18) beatPeriodSamples_ = 18;
-    if (beatPeriodSamples_ > 60) beatPeriodSamples_ = 60;
+    if (beatPeriodSamples_ < CombFilterBank::MIN_LAG) beatPeriodSamples_ = CombFilterBank::MIN_LAG;
+    if (beatPeriodSamples_ > CombFilterBank::MAX_LAG) beatPeriodSamples_ = CombFilterBank::MAX_LAG;
 
     // Find closest tempo bin for debug display
     bayesBestBin_ = findClosestTempoBin(bpm_);
@@ -2261,7 +2262,10 @@ void AudioController::detectBeat() {
     bool beatDetected = false;
 
     // Run prediction at beat midpoint (skip when PF provides tempo — PF is
-    // the sole tempo authority; predict can shorten countdown toward T/2 peaks)
+    // the sole tempo authority; predict can shorten countdown toward T/2 peaks).
+    // Note: when PF is active, timeToNextPrediction_ goes negative but gets reset
+    // each beat cycle (line 2339). If PF is later disabled, prediction fires
+    // immediately on the next frame (safe — uses current CBSS state).
     if (timeToNextPrediction_ <= 0 && !(particleFilterEnabled && pfInitialized_)) {
         predictBeat();
     }

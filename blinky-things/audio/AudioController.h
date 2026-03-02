@@ -391,6 +391,7 @@ public:
     // Every N beats, compares CBSS score at current tempo T vs double-time T/2.
     // If T/2 scores significantly better, switches to double-time.
     // Inspired by BeatNet's "tempo investigators" — provides escape from octave lock.
+    bool downwardCorrectEnabled = false;  // Downward harmonic correction (experimental: overcorrects on mid-tempo, disabled by default)
     bool octaveCheckEnabled = true;      // Shadow CBSS octave check (v32: enabled, +13% F1)
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
@@ -696,7 +697,7 @@ private:
     BeatParticle pfResampleBuf_[PF_NUM_PARTICLES];  // Scratch for resampling
     bool pfInitialized_ = false;
     float pfNeff_ = 0.0f;
-    float pfSmoothedPeriod_ = 30.0f;  // EMA-smoothed consensus period (init ~120 BPM)
+    float pfSmoothedPeriod_ = 33.0f;  // EMA-smoothed consensus period (init ~120 BPM at 66 Hz)
     float pfBeatFraction_ = 0.0f;
     float pfPrevBeatFraction_ = 0.0f;
     uint32_t pfRngState_ = 0x12345678;
