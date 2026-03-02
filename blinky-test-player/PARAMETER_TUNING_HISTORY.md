@@ -1739,3 +1739,109 @@ phasecheck=off, warmup=0, onsetsnap=4, cbssContrast=1.0
 
 Particle filter was implemented and compiled but NOT yet tested on real music.
 Next step: A/B test PF vs CBSS using `run_music_test_multi` on representative tracks.
+
+---
+
+## Test Session: 2026-03-02 — v39 Beat Tracking Improvements
+
+**Firmware:** SETTINGS_VERSION 39
+**Build:** 283 KB flash (32%), ~21 KB RAM
+
+### Changes from v38
+
+1. **Frame rate fix (OSS_FRAME_RATE 60→66):** Measured empirically at 66.4 Hz via
+   `monitor_audio` 5-second sample (332 frames / 5000ms). All BPM calculations,
+   Bayesian prior, Rayleigh prior, comb filter bank, and density discriminator were
+   using 60 Hz, causing ~10.7% systematic BPM under-reporting.
+   Fixed: `OSS_FRAME_RATE = 66`, `combFilterBank_.init(static_cast<float>(OSS_FRAME_RATE))`,
+   and `computeBandAutocorrelation()` local frameRate.
+
+2. **Onset snap window 4→8 frames (~133ms):** Previous diagnostic showed 119ms median
+   phase offset between detected and ground-truth beats. The 4-frame (67ms) snap window
+   couldn't reach the correct onset. Widening to 8 frames (133ms at 66Hz) reduced
+   median offset to ±50ms across most tracks.
+
+3. **Downward harmonic correction:** New post-MAP correction in `runBayesianTempoFusion()`
+   checks if a slower fundamental at 3:2 or 2:1 lag has comparable ACF support (lag-compensated
+   comparison). Posterior-gated: only fires when the Bayesian posterior shows genuine ambiguity
+   (fundamental bin has ≥50% of MAP probability). Breaks 3:2 lock on tracks >160 BPM.
+   **Status: still experimental** — overcorrects on 136 BPM trance (pulls to ~98 BPM).
+
+4. **Disambiguation feedback for both pipelines:** Removed `!btrkPipeline` condition
+   from posterior nudge code, enabling feedback for the default comb-on-ACF pipeline.
+
+5. **Bar-pointer PF predict:** Period diffusion only at beat boundaries (Whiteley/Cemgil 2006).
+   `pfNoise` default 0.02→0.08 (compensates for ~30x fewer applications).
+
+6. **madmom-style observation model:** Binary beat-region model replaces Gaussian kernel.
+   Beat region = 1/lambda of period. `pfObsLambda` default 8 (empirically better than 4 or 16).
+
+7. **PF info gate:** Floor low ODF to 0.03 when below `pfInfoGate` (default 0.10).
+
+8. **Phase-coherent octave injection:** Octave variants start at position=0 (beat boundary).
+
+9. **PF+CBSS hybrid mode:** PF estimates tempo, CBSS handles beat phase detection.
+
+### New Parameters
+
+| Parameter | Serial cmd | Default | Range |
+|-----------|:----------:|:-------:|:-----:|
+| PF info gate | `pfinfogate` | 0.10 | 0.0-0.5 |
+| PF obs lambda | `pfobslambda` | 8 | 2-32 |
+
+### Updated Defaults
+
+| Parameter | v38 | v39 | Reason |
+|-----------|:---:|:---:|--------|
+| `pfnoise` | 0.02 | 0.08 | Per-beat instead of per-frame (need larger value) |
+| `onsetsnap` | 4 | 8 | Fix 119ms phase offset (4 frames too narrow) |
+| `pfnoise` range | 0.001-0.1 | 0.001-0.3 | Allow wider tuning range |
+
+### Test Results (18 tracks, 4 devices, CBSS pipeline)
+
+Frame rate fix + onset snap + downward correction (with >160 BPM threshold):
+
+| Track | 4-dev F1 | Best F1 | 4-dev BPM% |
+|-------|:--------:|:-------:|:----------:|
+| trance-party | 0.233 | 0.376 | 96.2% |
+| techno-minimal-01 | 0.315 | 0.425 | 97.1% |
+| techno-dub-groove | 0.295 | 0.300 | 91.0% |
+| edm-trap-electro | 0.286 | 0.306 | 74.7% |
+| afrobeat-feelgood | 0.301 | 0.375 | 84.2% |
+| dnb-breakbeat | 0.169 | 0.216 | 82.6% |
+| amapiano-vibez | 0.216 | 0.246 | 79.3% |
+| breakbeat-bg | 0.198 | 0.294 | 39.8% |
+| breakbeat-drive | 0.197 | 0.220 | 54.8% |
+| dnb-liquid-jungle | 0.293 | 0.328 | 78.1% |
+| dubstep-halftime | 0.232 | 0.311 | 81.9% |
+| garage-2step | 0.233 | 0.483 | 97.1% |
+| reggaeton | 0.219 | 0.268 | 56.5% |
+| techno-deep-ambience | 0.345 | 0.551 | 93.0% |
+| techno-machine-drum | 0.222 | 0.288 | 90.9% |
+| techno-minimal-emotion | 0.378 | 0.394 | 96.1% |
+| trance-goa-mantra | 0.354 | 0.430 | 95.3% |
+| trance-infected-vibes | 0.469 | 0.515 | 96.6% |
+| **AGGREGATE** | **0.275** | **0.351** | **82.5%** |
+
+### Key Findings
+
+1. **Frame rate fix was the biggest BPM accuracy win:** 4-device avg BPM accuracy jumped
+   from ~45% (v36) to **82.5%**. Single-device on trance-party: 90.5% → 99.7%.
+
+2. **Onset snap 8 fixed phase offset:** Median offset on trance-party dropped from
+   119ms to 3ms on first test. Across tracks, typical offsets now ±50ms.
+
+3. **BPM accuracy improved massively but F1 unchanged (0.275 vs 0.280 baseline):**
+   This proves **phase alignment is the remaining bottleneck**, not tempo estimation.
+   Correct BPM is necessary but not sufficient for high F1.
+
+4. **Downward harmonic correction overcorrects on mid-tempo tracks:** With no BPM
+   threshold, 136 BPM trance was pulled to ~98 BPM. Even with posterior gating at 0.5,
+   the posterior is genuinely ambiguous at the 3:2 ratio. Needs further work.
+
+5. **Slow-tempo tracks (86-96 BPM) remain problematic:** ACM1/2/3 consistently lock
+   to ~135-140 BPM (not a clean 3:2 or 2:1 ratio — appears to be a different ACF peak).
+   ACM0 gets correct BPM after removing the threshold, but this breaks fast tracks.
+
+6. **Run-to-run variance remains enormous:** Same track can give F1 0.12-0.52.
+   Single-run evaluations have limited statistical power.

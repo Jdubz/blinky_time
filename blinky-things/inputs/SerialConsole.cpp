@@ -266,7 +266,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerUint8("warmupbeats", &audioCtrl_->cbssWarmupBeats, "rhythm",
         "CBSS warmup beats: lower alpha for first N beats (0=disabled)", 0, 32);
     settings_.registerUint8("onsetsnap", &audioCtrl_->onsetSnapWindow, "rhythm",
-        "Snap beat to strongest OSS in last N frames (0=disabled, 4=default)", 0, 16);
+        "Snap beat to strongest OSS in last N frames (0=disabled, 8=default)", 0, 16);
     settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothingFactor, "rhythm",
         "Tempo EMA smoothing (0.5=fast, 0.99=slow)", 0.5f, 0.99f);
     settings_.registerUint8("odfsmooth", &audioCtrl_->odfSmoothWidth, "rhythm",
@@ -316,7 +316,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerBool("particlefilter", &audioCtrl_->particleFilterEnabled, "rhythm",
         "Particle filter beat tracking (v38, A/B vs CBSS)");
     settings_.registerFloat("pfnoise", &audioCtrl_->pfNoise, "rhythm",
-        "PF period diffusion noise (fraction of period/frame)", 0.001f, 0.1f);
+        "PF period diffusion noise (fraction of period, at beat boundaries)", 0.001f, 0.3f);
     settings_.registerFloat("pfbeatsigma", &audioCtrl_->pfBeatSigma, "rhythm",
         "PF beat kernel width (fraction of period)", 0.01f, 0.2f);
     settings_.registerFloat("pfoctaveinject", &audioCtrl_->pfOctaveInjectRatio, "rhythm",
@@ -327,6 +327,10 @@ void SerialConsole::registerRhythmSettings() {
         "PF resample when Neff < ratio * N", 0.1f, 0.9f);
     settings_.registerFloat("pfcontrast", &audioCtrl_->pfContrast, "rhythm",
         "PF ODF power-law contrast (1=linear)", 0.5f, 4.0f);
+    settings_.registerFloat("pfinfogate", &audioCtrl_->pfInfoGate, "rhythm",
+        "PF info gate: floor ODF below this to 0.03 (0=off)", 0.0f, 0.5f);
+    settings_.registerUint8("pfobslambda", &audioCtrl_->pfObsLambda, "rhythm",
+        "PF observation lambda: beat region = 1/lambda (2-32)", 2, 32);
     settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
         "Check octave every N beats (2-16)", 2, 16);
     settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
@@ -1194,12 +1198,14 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->phaseCheckBeats = 4;           // v37: check every 4 beats
         audioCtrl_->phaseCheckRatio = 1.2f;        // v37: correction ratio threshold
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
-        audioCtrl_->pfNoise = 0.02f;
+        audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)
         audioCtrl_->pfBeatSigma = 0.05f;
         audioCtrl_->pfOctaveInjectRatio = 0.10f;
         audioCtrl_->pfBeatThreshold = 0.25f;
         audioCtrl_->pfNeffRatio = 0.5f;
         audioCtrl_->pfContrast = 1.0f;
+        audioCtrl_->pfInfoGate = 0.10f;        // v39: information gate
+        audioCtrl_->pfObsLambda = 8;            // v39: madmom observation lambda
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
