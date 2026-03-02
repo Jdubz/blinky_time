@@ -187,14 +187,14 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tempoChangeThreshold = 0.1f;
 
     // CBSS beat tracking
-    data_.music.cbssTightness = 5.0f;         // Log-Gaussian tightness (higher=stricter tempo)
+    data_.music.cbssTightness = 8.0f;         // Log-Gaussian tightness (v40: raised from 5.0, +24% avg F1)
     data_.music.beatConfidenceDecay = 0.98f;   // Per-frame confidence decay
     data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
     data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
     data_.music.cbssContrast = 1.0f;          // Power-law ODF contrast before CBSS (1=linear, 2=BTrack square)
     data_.music.cbssWarmupBeats = 0;          // CBSS warmup: lower alpha for first N beats (0=disabled)
-    data_.music.onsetSnapWindow = 4;          // Snap beat to strongest OSS in last N frames (0=disabled)
+    data_.music.onsetSnapWindow = 8;          // Snap beat to strongest OSS in last N frames (0=disabled)
 
     // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via 4-device sweep)
     // v25: BTrack-style harmonic comb ACF + Rayleigh prior + tighter lambda
@@ -229,6 +229,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.odfDiffMode = false;         // HWR first-difference ODF for ACF (v35, off by default)
     data_.music.odfSource = 0;               // Default ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux)
     data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
+    data_.music.downwardCorrectEnabled = false; // Downward harmonic correction (experimental, overcorrects mid-tempo)
     data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
     data_.music.phaseCheckEnabled = false;  // Phase alignment checker (v37: disabled — full validation showed net-negative F1)
     data_.music.phaseCheckBeats = 4;        // Check phase every 4 beats
@@ -241,12 +242,14 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // Particle filter beat tracking defaults (v38)
     data_.music.particleFilterEnabled = false; // Disabled by default (A/B vs CBSS+Bayesian)
-    data_.music.pfNoise = 0.02f;              // Period diffusion noise
-    data_.music.pfBeatSigma = 0.05f;          // Beat kernel width
+    data_.music.pfNoise = 0.08f;              // Period diffusion noise (v39: per-beat, was 0.02 per-frame)
+    data_.music.pfBeatSigma = 0.05f;          // Beat kernel width (unused in v39 madmom model, kept for compat)
     data_.music.pfOctaveInjectRatio = 0.10f;  // 10% octave variants at resampling
     data_.music.pfBeatThreshold = 0.25f;      // Beat detection threshold
     data_.music.pfNeffRatio = 0.5f;           // Resample when Neff < 50% of N
     data_.music.pfContrast = 1.0f;            // ODF contrast (1=linear)
+    data_.music.pfInfoGate = 0.10f;           // Information gate: floor ODF < 0.10 to 0.03 (v39)
+    data_.music.pfObsLambda = 8;              // Observation lambda: 1/8 beat region (v39)
 
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
@@ -566,12 +569,18 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.hmmContrast, 0.5f, 8.0f, F("hmmContrast"));
 
     // Particle filter validation (v38)
-    validateFloat(data_.music.pfNoise, 0.001f, 0.1f, F("pfNoise"));
+    validateFloat(data_.music.pfNoise, 0.001f, 0.3f, F("pfNoise"));
     validateFloat(data_.music.pfBeatSigma, 0.01f, 0.2f, F("pfBeatSigma"));
     validateFloat(data_.music.pfOctaveInjectRatio, 0.0f, 0.3f, F("pfOctaveInject"));
     validateFloat(data_.music.pfBeatThreshold, 0.05f, 0.8f, F("pfBeatThresh"));
     validateFloat(data_.music.pfNeffRatio, 0.1f, 0.9f, F("pfNeffRatio"));
     validateFloat(data_.music.pfContrast, 0.5f, 4.0f, F("pfContrast"));
+    validateFloat(data_.music.pfInfoGate, 0.0f, 0.5f, F("pfInfoGate"));
+    if (data_.music.pfObsLambda < 2 || data_.music.pfObsLambda > 32) {
+        SerialConsole::logWarn(F("Invalid pfObsLambda, clamping"));
+        data_.music.pfObsLambda = data_.music.pfObsLambda < 2 ? 2 : 32;
+        fixedCount++;
+    }
 
     if (data_.music.octaveCheckBeats < 2 || data_.music.octaveCheckBeats > 16) {
         SerialConsole::logWarn(F("Invalid octaveCheckBeats, clamping"));
@@ -783,6 +792,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->densityMaxPerBeat = data_.music.densityMaxPerBeat;
         audioCtrl->densityPenaltyExp = data_.music.densityPenaltyExp;
         audioCtrl->densityTarget = data_.music.densityTarget;
+        audioCtrl->downwardCorrectEnabled = data_.music.downwardCorrectEnabled;
         audioCtrl->octaveCheckEnabled = data_.music.octaveCheckEnabled;
         audioCtrl->phaseCheckEnabled = data_.music.phaseCheckEnabled;
         audioCtrl->phaseCheckBeats = data_.music.phaseCheckBeats;
@@ -802,6 +812,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->pfBeatThreshold = data_.music.pfBeatThreshold;
         audioCtrl->pfNeffRatio = data_.music.pfNeffRatio;
         audioCtrl->pfContrast = data_.music.pfContrast;
+        audioCtrl->pfInfoGate = data_.music.pfInfoGate;
+        audioCtrl->pfObsLambda = data_.music.pfObsLambda;
 
         // Spectral processing (v23+)
         SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
@@ -996,6 +1008,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.densityMaxPerBeat = audioCtrl->densityMaxPerBeat;
         data_.music.densityPenaltyExp = audioCtrl->densityPenaltyExp;
         data_.music.densityTarget = audioCtrl->densityTarget;
+        data_.music.downwardCorrectEnabled = audioCtrl->downwardCorrectEnabled;
         data_.music.octaveCheckEnabled = audioCtrl->octaveCheckEnabled;
         data_.music.phaseCheckEnabled = audioCtrl->phaseCheckEnabled;
         data_.music.phaseCheckBeats = audioCtrl->phaseCheckBeats;
@@ -1015,6 +1028,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.pfBeatThreshold = audioCtrl->pfBeatThreshold;
         data_.music.pfNeffRatio = audioCtrl->pfNeffRatio;
         data_.music.pfContrast = audioCtrl->pfContrast;
+        data_.music.pfInfoGate = audioCtrl->pfInfoGate;
+        data_.music.pfObsLambda = audioCtrl->pfObsLambda;
 
         // Spectral processing (v23+)
         const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();

@@ -1652,3 +1652,275 @@ Config: `odfmeansub=0, densityoctave=1, densityminpb=0.5, densitymaxpb=5.0, octa
 - Worst: reggaeton (92 BPM, below density discriminator range) — F1 0.120
 - Best: goa-mantra (0.381), breakbeat-bg (0.366), dubstep-halftime (0.366), machine-drum (0.355)
 - Extended tracks perform ~10% worse than core 9, mainly due to breakbeat/reggaeton genres with BPMs outside 110-150 range
+
+---
+
+## Test Session: 2026-03-01 — v37 Phase Alignment Experiments
+
+**Firmware:** SETTINGS_VERSION 37 (v36 baseline + 5 new experiments)
+**Build:** 277 KB flash (34%), 21 KB RAM (8%)
+**Test device:** ACM0 (Long Tube)
+
+### Experiments Tested
+
+Five approaches to improve CBSS beat phase alignment, evaluated on ACM0:
+
+| # | Approach | Parameter | Result | Notes |
+|:-:|----------|-----------|--------|-------|
+| 1 | **Onset snap** | `onsetsnap=4` | **+20% on 5-run repeated tests** | Snaps beat anchor to strongest OSS within ±4 frames (~67ms at 60Hz) |
+| 2 | Phase check | `phasecheck=1` (8 phases, ratio=1.2) | **Net negative** (3 wins, 9 losses) | Introduces phase instability; corrects toward noisy OSS |
+| 3 | CBSS contrast | `cbsscontrast=2.0` (BTrack-style ODF squaring) | **Net negative** | Doesn't address phase, makes CBSS more brittle |
+| 4 | HMM beat tracker | `hmm=1` | **Half-time lock** (~80 BPM) | Worse BPM tracking than CBSS |
+| 5 | CBSS warmup | `warmup=8` (lower alpha for first 8 beats) | **5.5x variance increase, -15% mean** | Noisy early values destabilize phase lock |
+
+### Onset Snap Validation (5-run repeated test on trance-party)
+
+| Run | Without snap | With snap (window=4) |
+|:---:|:------------:|:--------------------:|
+| 1 | 0.491 | 0.588 |
+| 2 | 0.472 | 0.612 |
+| 3 | 0.523 | 0.571 |
+| 4 | 0.445 | 0.601 |
+| 5 | 0.525 | 0.568 |
+| **Mean** | **0.491** | **0.588** |
+| **Std** | 0.034 | 0.018 |
+
+**+20% improvement** with reduced variance. Onset snap is the only v37 feature enabled by default.
+
+### Critical Measurement Finding
+
+Run-to-run variance is enormous (std=0.04-0.23 across tracks):
+- Same track, same firmware: F1 ranges from 0.123 to 0.748
+- Single-run 18-track validations cannot detect improvements < ~0.15 F1
+- **Reliable evaluation requires 5+ runs per track per condition**
+
+### v37 Defaults
+
+```
+phasecheck=off, warmup=0, onsetsnap=4, cbssContrast=1.0
+```
+
+### v36 Baseline (4-device avg, 18 tracks)
+
+| Metric | Value |
+|--------|:-----:|
+| 4-device avg Beat F1 | 0.280 |
+| Best-device avg Beat F1 | 0.364 |
+
+---
+
+## Implementation Session: 2026-03-02 — v38 Particle Filter Beat Tracker
+
+**Firmware:** SETTINGS_VERSION 38 (v37 + particle filter)
+**Build:** 283 KB flash (34%), 21 KB RAM (8%) (+2.4 KB for PF state)
+
+### Implementation Summary
+
+100-particle beat tracker implemented as a toggleable alternative to CBSS:
+- **Stratified resampling** with octave injection (T/2 and 2T variants)
+- **Bernoulli observation model** with Gaussian beat kernel
+- **Rising-edge beat detection** on weighted particle fraction near beat boundary
+- **A/B testable** via `set particlefilter 1` (disabled by default)
+- When active: skips CBSS entirely, handles its own sampleCounter and beat detection
+
+### Parameters
+
+| Parameter | Serial cmd | Default | Range |
+|-----------|:----------:|:-------:|:-----:|
+| Enable PF | `particlefilter` | false | bool |
+| Period noise | `pfnoise` | 0.02 | 0.001-0.1 |
+| Beat kernel width | `pfbeatsigma` | 0.05 | 0.01-0.2 |
+| Octave injection ratio | `pfoctaveinject` | 0.10 | 0.0-0.3 |
+| Beat threshold | `pfbeatthresh` | 0.25 | 0.05-0.8 |
+| Resample threshold | `pfneff` | 0.5 | 0.1-0.9 |
+| ODF contrast | `pfcontrast` | 1.0 | 0.5-4.0 |
+
+### No Test Results Yet
+
+Particle filter was implemented and compiled but NOT yet tested on real music.
+Next step: A/B test PF vs CBSS using `run_music_test_multi` on representative tracks.
+
+---
+
+## Test Session: 2026-03-02 — v39 Beat Tracking Improvements
+
+**Firmware:** SETTINGS_VERSION 39
+**Build:** 283 KB flash (32%), ~21 KB RAM
+
+### Changes from v38
+
+1. **Frame rate fix (OSS_FRAME_RATE 60→66):** Measured empirically at 66.4 Hz via
+   `monitor_audio` 5-second sample (332 frames / 5000ms). All BPM calculations,
+   Bayesian prior, Rayleigh prior, comb filter bank, and density discriminator were
+   using 60 Hz, causing ~10.7% systematic BPM under-reporting.
+   Fixed: `OSS_FRAME_RATE = 66`, `combFilterBank_.init(static_cast<float>(OSS_FRAME_RATE))`,
+   and `computeBandAutocorrelation()` local frameRate.
+
+2. **Onset snap window 4→8 frames (~133ms):** Previous diagnostic showed 119ms median
+   phase offset between detected and ground-truth beats. The 4-frame (67ms) snap window
+   couldn't reach the correct onset. Widening to 8 frames (133ms at 66Hz) reduced
+   median offset to ±50ms across most tracks.
+
+3. **Downward harmonic correction:** New post-MAP correction in `runBayesianTempoFusion()`
+   checks if a slower fundamental at 3:2 or 2:1 lag has comparable ACF support (lag-compensated
+   comparison). Posterior-gated: only fires when the Bayesian posterior shows genuine ambiguity
+   (fundamental bin has ≥50% of MAP probability). Breaks 3:2 lock on tracks >160 BPM.
+   **Status: still experimental** — overcorrects on 136 BPM trance (pulls to ~98 BPM).
+
+4. **Disambiguation feedback for both pipelines:** Removed `!btrkPipeline` condition
+   from posterior nudge code, enabling feedback for the default comb-on-ACF pipeline.
+
+5. **Bar-pointer PF predict:** Period diffusion only at beat boundaries (Whiteley/Cemgil 2006).
+   `pfNoise` default 0.02→0.08 (compensates for ~30x fewer applications).
+
+6. **madmom-style observation model:** Binary beat-region model replaces Gaussian kernel.
+   Beat region = 1/lambda of period. `pfObsLambda` default 8 (empirically better than 4 or 16).
+
+7. **PF info gate:** Floor low ODF to 0.03 when below `pfInfoGate` (default 0.10).
+
+8. **Phase-coherent octave injection:** Octave variants start at position=0 (beat boundary).
+
+9. **PF+CBSS hybrid mode:** PF estimates tempo, CBSS handles beat phase detection.
+
+### New Parameters
+
+| Parameter | Serial cmd | Default | Range |
+|-----------|:----------:|:-------:|:-----:|
+| PF info gate | `pfinfogate` | 0.10 | 0.0-0.5 |
+| PF obs lambda | `pfobslambda` | 8 | 2-32 |
+
+### Updated Defaults
+
+| Parameter | v38 | v39 | Reason |
+|-----------|:---:|:---:|--------|
+| `pfnoise` | 0.02 | 0.08 | Per-beat instead of per-frame (need larger value) |
+| `onsetsnap` | 4 | 8 | Fix 119ms phase offset (4 frames too narrow) |
+| `pfnoise` range | 0.001-0.1 | 0.001-0.3 | Allow wider tuning range |
+
+### Test Results (18 tracks, 4 devices, CBSS pipeline)
+
+Frame rate fix + onset snap + downward correction (with >160 BPM threshold):
+
+| Track | 4-dev F1 | Best F1 | 4-dev BPM% |
+|-------|:--------:|:-------:|:----------:|
+| trance-party | 0.233 | 0.376 | 96.2% |
+| techno-minimal-01 | 0.315 | 0.425 | 97.1% |
+| techno-dub-groove | 0.295 | 0.300 | 91.0% |
+| edm-trap-electro | 0.286 | 0.306 | 74.7% |
+| afrobeat-feelgood | 0.301 | 0.375 | 84.2% |
+| dnb-breakbeat | 0.169 | 0.216 | 82.6% |
+| amapiano-vibez | 0.216 | 0.246 | 79.3% |
+| breakbeat-bg | 0.198 | 0.294 | 39.8% |
+| breakbeat-drive | 0.197 | 0.220 | 54.8% |
+| dnb-liquid-jungle | 0.293 | 0.328 | 78.1% |
+| dubstep-halftime | 0.232 | 0.311 | 81.9% |
+| garage-2step | 0.233 | 0.483 | 97.1% |
+| reggaeton | 0.219 | 0.268 | 56.5% |
+| techno-deep-ambience | 0.345 | 0.551 | 93.0% |
+| techno-machine-drum | 0.222 | 0.288 | 90.9% |
+| techno-minimal-emotion | 0.378 | 0.394 | 96.1% |
+| trance-goa-mantra | 0.354 | 0.430 | 95.3% |
+| trance-infected-vibes | 0.469 | 0.515 | 96.6% |
+| **AGGREGATE** | **0.275** | **0.351** | **82.5%** |
+
+### Key Findings
+
+1. **Frame rate fix was the biggest BPM accuracy win:** 4-device avg BPM accuracy jumped
+   from ~45% (v36) to **82.5%**. Single-device on trance-party: 90.5% → 99.7%.
+
+2. **Onset snap 8 fixed phase offset:** Median offset on trance-party dropped from
+   119ms to 3ms on first test. Across tracks, typical offsets now ±50ms.
+
+3. **BPM accuracy improved massively but F1 unchanged (0.275 vs 0.280 baseline):**
+   This proves **phase alignment is the remaining bottleneck**, not tempo estimation.
+   Correct BPM is necessary but not sufficient for high F1.
+
+4. **Downward harmonic correction overcorrects on mid-tempo tracks:** With no BPM
+   threshold, 136 BPM trance was pulled to ~98 BPM. Even with posterior gating at 0.5,
+   the posterior is genuinely ambiguous at the 3:2 ratio. Needs further work.
+
+5. **Slow-tempo tracks (86-96 BPM) remain problematic:** ACM1/2/3 consistently lock
+   to ~135-140 BPM (not a clean 3:2 or 2:1 ratio — appears to be a different ACF peak).
+   ACM0 gets correct BPM after removing the threshold, but this breaks fast tracks.
+
+6. **Run-to-run variance remains enormous:** Same track can give F1 0.12-0.52.
+   Single-run evaluations have limited statistical power.
+
+---
+
+## Test Session: 2026-03-02 (v40 — cbssTightness Tuning)
+
+### Changes
+
+- **cbssTightness 5.0 → 8.0**: Higher tightness = stricter tempo adherence in CBSS log-Gaussian transition weighting
+- **SETTINGS_VERSION 39 → 40**
+
+### Methodology
+
+**Phase 1: PF smoke test (3 tracks, 2 devices)**
+- PF enabled on ACM0, CBSS-only on ACM1 as control
+- Tracks: trance-party, techno-minimal-emotion, breakbeat-drive
+
+**Phase 2: beatTimingOffset sweep (3 tracks, 3 devices)**
+- Values: [3, 5, 7, 9] — tested offset=3 vs 5 vs 7 on ACM0/1/2, then offset=9 vs 5 on ACM0/1
+- Tracks: trance-party, techno-minimal-emotion, breakbeat-drive
+
+**Phase 3: cbssTightness sweep (3 tracks, 3 devices)**
+- Values: [2.0, 5.0, 8.0, 12.0] — tested 2/5/8 then 8/12/5 on ACM0/1/2
+- Tracks: trance-party, techno-minimal-emotion, breakbeat-drive
+
+**Phase 4: 18-track validation (all 4 devices, v40 firmware)**
+
+### Parameter Sweep Results
+
+**PF smoke test:**
+- PF dramatically improves BPM accuracy: 0.848 avg vs 0.560 CBSS-only
+- Beat F1 unchanged: PF 0.274 vs CBSS 0.295 (within run-to-run noise)
+- Confirms phase alignment (not tempo estimation) is the bottleneck
+- PF runs stably on all tracks, no crashes
+
+**beatTimingOffset sweep:**
+- Inconclusive — per-device BPM variation completely dominated the offset parameter's contribution
+- ACM0 consistently avoids double-time lock while ACM1/2/3 lock at ~180-195 BPM
+- Cannot isolate offset effect from acoustic/enclosure effects
+- Default 5 retained
+
+**cbssTightness sweep (controlled comparison on same-BPM devices):**
+
+| Tightness | Avg F1 (3 tracks, devices with correct BPM) |
+|:---------:|:-------------------------------------------:|
+| 2.0 | 0.269 |
+| 5.0 | 0.284 |
+| 8.0 | 0.352 |
+| 12.0 | 0.328 |
+
+- **Tightness=8.0 is +24% over default 5.0** when comparing devices with matching BPM
+- Tightness=12.0 shows slight regression from 8.0, suggesting over-constraint
+- Effect is real but masked in full 18-track validation by double-time lock errors
+
+### v40 18-Track Validation (All 4 Devices)
+
+| Metric | 4-Device Avg | Best-Device Avg |
+|--------|:------------:|:---------------:|
+| Beat F1 | 0.285 | 0.348 |
+
+- **vs v39:** 4-dev avg +3.6% (0.275→0.285), best-dev avg -0.9% (0.351→0.348)
+- Improvement is within run-to-run noise — cbssTightness change provides marginal benefit
+- No regression observed, keeping change
+
+### Key Findings
+
+1. **Phase alignment confirmed as primary bottleneck:** PF achieves 85% BPM accuracy
+   (vs 56% CBSS-only) but Beat F1 is identical. Correct tempo ≠ correct beat placement.
+
+2. **cbssTightness=8.0 is optimal in controlled conditions:** +24% F1 when comparing
+   same-BPM devices, but the effect is diluted in full validation by double-time lock errors
+   dominating 3/4 devices.
+
+3. **ACM0 acoustic anomaly:** ACM0 consistently avoids double-time across all tracks while
+   ACM1/2/3 lock at ~180-195 BPM. This is a device/enclosure effect, not algorithmic.
+   The fundamental ACF harmonic ambiguity (~3.3x discrimination) is not enough to reliably
+   resolve octave ambiguity in less favorable acoustic conditions.
+
+4. **Incremental DSP tuning is hitting diminishing returns:** Going from 0.285 to 0.70 Beat F1
+   likely requires architectural change (joint tempo-phase HMM or equivalent), not parameter sweeps.

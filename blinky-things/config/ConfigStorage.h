@@ -67,7 +67,10 @@ public:
     //             onsetTrainOdf, odfDiffMode, odfSource, densityPenaltyExp,
     //             densityTarget, phaseCheck{Enabled,Beats,Ratio}, HMM params
     // Version 38: Particle filter beat tracking (100 particles, octave injection)
-    static const uint8_t SETTINGS_VERSION = 38;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 39: Bar-pointer PF (beat-boundary diffusion, madmom obs model, info gate, phase-coherent octave)
+    // Version 40: cbssTightness 5→8 (+24% avg Beat F1 in 3-track sweep)
+    // Version 41: downwardCorrectEnabled toggle (disabled by default), deprecated PF params
+    static const uint8_t SETTINGS_VERSION = 41;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -228,6 +231,7 @@ public:
         bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
         float densityPenaltyExp;        // Density penalty Gaussian exponent (v35)
         float densityTarget;            // Target transients/beat (0=disabled, v35)
+        bool downwardCorrectEnabled;    // Downward harmonic correction 3:2/2:1 (v41: disabled by default)
         bool octaveCheckEnabled;        // Shadow CBSS octave check (v31)
         bool phaseCheckEnabled;         // Phase alignment checker (v37: fixes anti-phase lock)
         uint8_t phaseCheckBeats;        // Check phase every N beats (v37: 4)
@@ -246,6 +250,8 @@ public:
         float pfBeatThreshold;         // Weighted fraction near phase=0 to trigger beat
         float pfNeffRatio;             // Resample when Neff < ratio * N
         float pfContrast;              // ODF power-law contrast for PF likelihood
+        float pfInfoGate;              // Information gate: floor ODF below this to 0.03 (v39, 0=off)
+        uint8_t pfObsLambda;           // Observation lambda: beat region = 1/lambda of period (v39, 2-32)
 
         // Spectral processing (v23+)
         bool whitenEnabled;             // Per-bin spectral whitening
@@ -376,16 +382,16 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 232,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (232 bytes = 49 floats + 7 uint8 + 18 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 236,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (236 bytes = 50 floats + 8 uint8 + 18 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    // ConfigData: ~637 bytes (4+160+64+64+32+24+232+44+1 + padding). Allocated in last 4KB flash page.
-    // Tight bound (640) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 640,
-        "ConfigData exceeds 640 bytes! Current estimate ~637B. Check for unintended struct growth.");
+    // ConfigData: ~641 bytes (4+160+64+64+32+24+236+44+1 + padding). Allocated in last 4KB flash page.
+    // Tight bound (648) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
+    static_assert(sizeof(ConfigData) <= 648,
+        "ConfigData exceeds 648 bytes! Current estimate ~641B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

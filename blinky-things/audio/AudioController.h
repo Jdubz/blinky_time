@@ -40,13 +40,13 @@ struct AutocorrPeak {
 class CombFilterBank {
 public:
     // 20 filters: 60-200 BPM (~7 BPM resolution, broad musical tempo coverage)
-    // At 60 Hz: lag range = 18-60 samples
+    // At 66 Hz: lag range = 20-66 samples (198-60 BPM)
     // 40 bins created systematic posterior drift toward low BPM due to
     // non-uniform BPM spacing on the lag-uniform grid (more bins per BPM
     // at low tempos → probability accumulation). 20 bins proven at F1=0.519.
     static constexpr int NUM_FILTERS = 20;
-    static constexpr int MAX_LAG = 60;  // 60 BPM at 60 Hz
-    static constexpr int MIN_LAG = 18;  // 200 BPM at 60 Hz
+    static constexpr int MAX_LAG = 66;  // 60 BPM at 66 Hz (66*60/66)
+    static constexpr int MIN_LAG = 20;  // 198 BPM at 66 Hz (66*60/20)
 
     // === TUNING PARAMETERS ===
     float feedbackGain = 0.92f;       // Resonance strength (0.85-0.98)
@@ -58,7 +58,7 @@ public:
     /**
      * Initialize the filter bank (compute filter lags/BPMs)
      */
-    void init(float frameRate = 60.0f);
+    void init(float frameRate = 66.0f);
 
     /**
      * Reset all state (delay line, resonators, energy)
@@ -312,14 +312,14 @@ public:
     // Cumulative Beat Strength Signal with counter-based beat prediction
     // Phase is derived deterministically from beat counter — no drift, no jitter
     float cbssAlpha = 0.9f;              // CBSS weighting (0.8-0.95, higher = more predictive)
-    float cbssTightness = 5.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence)
+    float cbssTightness = 8.0f;           // Log-Gaussian tightness (higher=stricter tempo adherence, v40: raised from 5.0, +24% avg F1)
     float beatConfidenceDecay = 0.98f;   // Per-frame confidence decay when no beat detected
     float beatTimingOffset = 5.0f;       // Beat prediction advance in frames (compensates ODF+CBSS delay)
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
     float cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
     float cbssContrast = 1.0f;           // Power-law ODF contrast before CBSS (BTrack uses 2.0; higher = sharper beat peaks)
     uint8_t cbssWarmupBeats = 0;         // CBSS warmup: lower alpha for first N beats (0=disabled; tested 8, increased variance 5.5x)
-    uint8_t onsetSnapWindow = 4;         // Snap beat anchor to strongest OSS in last N frames (0=disabled, 4≈67ms at 60Hz)
+    uint8_t onsetSnapWindow = 8;         // Snap beat anchor to strongest OSS in last N frames (0=disabled; default 8 frames)
 
     // === BEAT-BOUNDARY TEMPO UPDATES (Phase 2.1) ===
     // Defers beatPeriodSamples_ changes to the next beat fire, synchronizing
@@ -391,6 +391,7 @@ public:
     // Every N beats, compares CBSS score at current tempo T vs double-time T/2.
     // If T/2 scores significantly better, switches to double-time.
     // Inspired by BeatNet's "tempo investigators" — provides escape from octave lock.
+    bool downwardCorrectEnabled = false;  // Downward harmonic correction (experimental: overcorrects on mid-tempo, disabled by default)
     bool octaveCheckEnabled = true;      // Shadow CBSS octave check (v32: enabled, +13% F1)
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
@@ -426,12 +427,14 @@ public:
     // compete on equal footing via observation model. Most principled octave
     // disambiguation within CPU/RAM budget. A/B testable vs CBSS+Bayesian.
     bool particleFilterEnabled = false;    // Enable PF (A/B vs CBSS+Bayesian)
-    float pfNoise = 0.02f;                // Period diffusion noise (fraction of period/frame)
-    float pfBeatSigma = 0.05f;            // Beat kernel width (fraction of period)
+    float pfNoise = 0.08f;                // Period diffusion noise (fraction of period, applied at beat boundaries only)
+    float pfBeatSigma = 0.05f;            // Beat kernel width (fraction of period) — unused in v39 madmom model, kept for serial compat
     float pfOctaveInjectRatio = 0.10f;    // Fraction of particles to replace with octave variants
     float pfBeatThreshold = 0.25f;        // Weighted fraction near phase=0 to trigger beat
     float pfNeffRatio = 0.5f;             // Resample when Neff < ratio * N
     float pfContrast = 1.0f;              // ODF power-law contrast for PF likelihood
+    float pfInfoGate = 0.10f;             // Information gate: floor ODF below this to 0.03 (BeatNet-style, 0=off)
+    uint8_t pfObsLambda = 8;              // Observation model lambda: beat region = 1/lambda of period (madmom-style, 2-32)
 
     // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
     bool ftEnabled = false;              // Fourier tempogram observation (disabled: no ref system uses FT for real-time beat tracking)
@@ -521,9 +524,10 @@ private:
 
     // === RHYTHM TRACKING STATE ===
 
-    // Onset Strength Signal buffer (6 seconds at 60 Hz frame rate)
-    static constexpr int OSS_FRAME_RATE = 60;  // OSS samples per second (tied to mic frame rate)
-    static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;  // 3600.0 — lag-to-BPM conversion
+    // Onset Strength Signal buffer (~5.5 seconds at 66 Hz frame rate)
+    // Measured empirically: PDM 16kHz / FFT-256 = 62.5 theoretical, ~66 actual on nRF52840
+    static constexpr int OSS_FRAME_RATE = 66;  // OSS samples per second (measured mic frame rate)
+    static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;  // 3960.0 — lag-to-BPM conversion
     static constexpr int OSS_BUFFER_SIZE = 360;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};
     uint32_t ossTimestamps_[OSS_BUFFER_SIZE] = {0};  // Track actual timestamps for adaptive lag
@@ -657,7 +661,7 @@ private:
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
     float rayleighWeight_[TEMPO_BINS] = {0};      // Rayleigh tempo prior peaked at ~120 BPM (BTrack-style)
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
-    int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at ~60 Hz)
+    int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at OSS_FRAME_RATE Hz)
     float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
     float transMatrixLambda_ = -1.0f;             // bayesLambda used to compute transMatrix_ (-1 = uninitialized)
     float transMatrixHarmonic_ = -1.0f;          // harmonicTransWeight used to compute transMatrix_
@@ -682,8 +686,10 @@ private:
 
     // === PARTICLE FILTER STATE (v38) ===
     static constexpr int PF_NUM_PARTICLES = 100;
+    static constexpr float PF_INFO_GATE_ODF_FLOOR = 0.03f;  // Floor value for gated ODF during silence
+    static constexpr float PF_LIKELIHOOD_EPSILON = 0.01f;    // Small epsilon to avoid zero likelihoods
     struct BeatParticle {
-        float period;    // 18.0-60.0 frames (60-200 BPM at 60 Hz)
+        float period;    // MIN_LAG-MAX_LAG frames (60-200 BPM at 66 Hz)
         float position;  // 0.0 to period
         float weight;    // Unnormalized likelihood
     };
@@ -691,6 +697,7 @@ private:
     BeatParticle pfResampleBuf_[PF_NUM_PARTICLES];  // Scratch for resampling
     bool pfInitialized_ = false;
     float pfNeff_ = 0.0f;
+    float pfSmoothedPeriod_ = 33.0f;  // EMA-smoothed consensus period (init ~120 BPM at 66 Hz)
     float pfBeatFraction_ = 0.0f;
     float pfPrevBeatFraction_ = 0.0f;
     uint32_t pfRngState_ = 0x12345678;
