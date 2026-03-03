@@ -237,6 +237,12 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.plpPhaseEnabled = false;    // PLP phase extraction (v42: disabled by default for A/B testing)
     data_.music.plpCorrectionStrength = 0.5f; // Correction aggressiveness (0=off, 1=snap)
     data_.music.plpMinConfidence = 0.3f;    // Min comb filter peak confidence to trust PLP phase
+    data_.music.rayleighBpm = 120.0f;       // Rayleigh prior peak BPM (v44: configurable, was hardcoded 120)
+    data_.music.tempoNudge = 0.8f;          // switchTempo posterior mass transfer (v44: was hardcoded 0.3)
+    data_.music.fold32Enabled = false;      // 3:2 octave folding (v44: OFF — no net benefit in 18-track sweep)
+    data_.music.sesquiCheckEnabled = false; // 3:2 shadow octave check (v44: OFF — no net benefit in 18-track sweep)
+    data_.music.bidirectionalSnap = true;   // Bidirectional onset snap (v44: delay beat by 3 frames for forward snap)
+    data_.music.harmonicSesqui = false;    // 3:2/2:3 transition matrix shortcuts (v44: OFF — causes fast-track regression)
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
     data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
@@ -552,6 +558,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // plpPhaseEnabled is bool — no range validation needed
     validateFloat(data_.music.plpCorrectionStrength, 0.0f, 1.0f, F("plpCorrectionStrength"));
     validateFloat(data_.music.plpMinConfidence, 0.0f, 1.0f, F("plpMinConfidence"));
+    validateFloat(data_.music.rayleighBpm, 60.0f, 180.0f, F("rayleighBpm"));
+    validateFloat(data_.music.tempoNudge, 0.0f, 1.0f, F("tempoNudge"));
+    // fold32Enabled, sesquiCheckEnabled, bidirectionalSnap are bools — no range validation needed
     // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
@@ -806,6 +815,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->plpPhaseEnabled = data_.music.plpPhaseEnabled;
         audioCtrl->plpCorrectionStrength = data_.music.plpCorrectionStrength;
         audioCtrl->plpMinConfidence = data_.music.plpMinConfidence;
+        audioCtrl->rayleighBpm = data_.music.rayleighBpm;
+        audioCtrl->tempoNudge = data_.music.tempoNudge;
+        audioCtrl->fold32Enabled = data_.music.fold32Enabled;
+        audioCtrl->sesquiCheckEnabled = data_.music.sesquiCheckEnabled;
+        audioCtrl->bidirectionalSnap = data_.music.bidirectionalSnap;
+        audioCtrl->harmonicSesqui = data_.music.harmonicSesqui;
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->barPointerHmm = data_.music.barPointerHmm;
@@ -1025,6 +1040,12 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.plpPhaseEnabled = audioCtrl->plpPhaseEnabled;
         data_.music.plpCorrectionStrength = audioCtrl->plpCorrectionStrength;
         data_.music.plpMinConfidence = audioCtrl->plpMinConfidence;
+        data_.music.rayleighBpm = audioCtrl->rayleighBpm;
+        data_.music.tempoNudge = audioCtrl->tempoNudge;
+        data_.music.fold32Enabled = audioCtrl->fold32Enabled;
+        data_.music.sesquiCheckEnabled = audioCtrl->sesquiCheckEnabled;
+        data_.music.bidirectionalSnap = audioCtrl->bidirectionalSnap;
+        data_.music.harmonicSesqui = audioCtrl->harmonicSesqui;
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
         data_.music.barPointerHmm = audioCtrl->barPointerHmm;

@@ -705,36 +705,43 @@ void AudioController::buildTransitionMatrix() {
 
             float harmonicBonus = 0.0f;
 
-            // Harmonic shortcuts only for multiplicative path.
-            // BTrack pipeline relies on comb-on-ACF for octave handling;
-            // harmonic shortcuts in the transition matrix are redundant.
-            if (!btrkPipeline) {
-                float htw = harmonicTransWeight;
+            float htw = harmonicTransWeight;
+            if (htw > 0.0f) {
                 float ratio = tempoBinBpms_[i] / tempoBinBpms_[j];
 
-                // 2:1 (octave up, e.g., 68→136)
-                float diff2x = fabsf(ratio - 2.0f);
-                if (diff2x < 0.15f) {
-                    float w = htw * expf(-diff2x * diff2x * 100.0f);
-                    if (w > harmonicBonus) harmonicBonus = w;
+                // 2:1/1:2 octave shortcuts: only for multiplicative path.
+                // BTrack pipeline handles 2:1 via comb-on-ACF octave folding.
+                if (!btrkPipeline) {
+                    // 2:1 (octave up, e.g., 68→136)
+                    float diff2x = fabsf(ratio - 2.0f);
+                    if (diff2x < 0.15f) {
+                        float w = htw * expf(-diff2x * diff2x * 100.0f);
+                        if (w > harmonicBonus) harmonicBonus = w;
+                    }
+                    // 1:2 (octave down, e.g., 136→68)
+                    float diffHalf = fabsf(ratio - 0.5f);
+                    if (diffHalf < 0.15f) {
+                        float w = htw * expf(-diffHalf * diffHalf * 100.0f);
+                        if (w > harmonicBonus) harmonicBonus = w;
+                    }
                 }
-                // 1:2 (octave down, e.g., 136→68)
-                float diffHalf = fabsf(ratio - 0.5f);
-                if (diffHalf < 0.15f) {
-                    float w = htw * expf(-diffHalf * diffHalf * 100.0f);
-                    if (w > harmonicBonus) harmonicBonus = w;
-                }
-                // 3:2 (e.g., 90→135)
-                float diff32 = fabsf(ratio - 1.5f);
-                if (diff32 < 0.1f) {
-                    float w = htw * 0.5f * expf(-diff32 * diff32 * 200.0f);
-                    if (w > harmonicBonus) harmonicBonus = w;
-                }
-                // 2:3 (e.g., 135→90)
-                float diff23 = fabsf(ratio - 0.6667f);
-                if (diff23 < 0.1f) {
-                    float w = htw * 0.5f * expf(-diff23 * diff23 * 200.0f);
-                    if (w > harmonicBonus) harmonicBonus = w;
+
+                // 3:2/2:3 sesquialtera shortcuts: gated by harmonicSesqui toggle.
+                // Helps slow tracks (86-96 BPM) escape 128 BPM lock, but causes
+                // regression on fast tracks (130+ BPM) by allowing downward jumps.
+                if (harmonicSesqui) {
+                    // 3:2 (e.g., 90→135)
+                    float diff32 = fabsf(ratio - 1.5f);
+                    if (diff32 < 0.1f) {
+                        float w = htw * 0.5f * expf(-diff32 * diff32 * 200.0f);
+                        if (w > harmonicBonus) harmonicBonus = w;
+                    }
+                    // 2:3 (e.g., 135→90)
+                    float diff23 = fabsf(ratio - 0.6667f);
+                    if (diff23 < 0.1f) {
+                        float w = htw * 0.5f * expf(-diff23 * diff23 * 200.0f);
+                        if (w > harmonicBonus) harmonicBonus = w;
+                    }
                 }
             }
 
@@ -798,13 +805,15 @@ void AudioController::initTempoState() {
     // Avoids 1600 expf() calls per autocorrelation cycle at runtime.
     buildTransitionMatrix();
     transMatrixLambda_ = bayesLambda;
-    transMatrixHarmonic_ = btrkPipeline ? -2.0f : harmonicTransWeight;
+    float initHarmonic = btrkPipeline ? -(harmonicTransWeight + 1.0f) : harmonicTransWeight;
+    if (harmonicSesqui) initHarmonic += 100.0f;
+    transMatrixHarmonic_ = initHarmonic;
 
-    // Rayleigh prior peaked at ~120 BPM (BTrack-style perceptual weighting)
+    // Rayleigh prior peaked at rayleighBpm (BTrack-style perceptual weighting)
     // For candidate period T (lag), Rayleigh(T; sigma) = T/sigma^2 * exp(-T^2 / (2*sigma^2))
-    // Peaked at sigma = lag corresponding to 120 BPM = 3600/120 = 30 at 60 Hz
+    // Peaked at sigma = lag corresponding to rayleighBpm (default 120 BPM = lag 33 at 66 Hz)
     {
-        float rayleighSigma = OSS_FRAMES_PER_MIN / 120.0f;  // = 33 (lag for 120 BPM at 66 Hz)
+        float rayleighSigma = OSS_FRAMES_PER_MIN / rayleighBpm;  // Lag for peak BPM at 66 Hz (default 120 BPM = lag 33)
         float maxR = 0.0f;
         for (int i = 0; i < TEMPO_BINS; i++) {
             float lag = static_cast<float>(tempoBinLags_[i]);
@@ -873,9 +882,9 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
 
     // === 1. PREDICTION STEP ===
     // Rebuild transition matrix if parameters changed.
-    // btrkPipeline disables harmonic shortcuts — use sentinel (-2) so toggling
-    // btrkpipeline at runtime triggers a rebuild.
-    float effectiveHarmonic = btrkPipeline ? -2.0f : harmonicTransWeight;
+    // Sentinel encodes btrkPipeline, harmonicTransWeight, and harmonicSesqui.
+    float effectiveHarmonic = btrkPipeline ? -(harmonicTransWeight + 1.0f) : harmonicTransWeight;
+    if (harmonicSesqui) effectiveHarmonic += 100.0f;  // Shift sentinel to detect sesqui toggle
     if (bayesLambda != transMatrixLambda_ || effectiveHarmonic != transMatrixHarmonic_) {
         buildTransitionMatrix();
         transMatrixLambda_ = bayesLambda;
@@ -960,6 +969,16 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         int halfLi = halfLag - minLag;
         if (halfLi >= 0 && halfLi < correlationSize) {
             score += fullCombAcf[halfLi];
+        }
+        // 3:2 octave folding: add comb score at 2L/3 (sesquialtera harmonic)
+        // For lag=46 (86 BPM): 2*46/3=30 (128 BPM comb), giving 86 BPM a boost
+        // For lag<30 (>132 BPM): 2L/3 < minLag, safely skipped
+        if (fold32Enabled) {
+            int twoThirdLag = (lag * 2) / 3;
+            int twoThirdLi = twoThirdLag - minLag;
+            if (twoThirdLi >= 0 && twoThirdLi < correlationSize) {
+                score += fullCombAcf[twoThirdLi];
+            }
         }
         acfObs[i] = score * rayleighWeight_[i] / (avgEnergy + 0.001f);
         if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;
@@ -1703,6 +1722,54 @@ void AudioController::checkOctaveAlternative() {
             return;
         }
     }
+
+    // --- Check sesquialtera ratios (3:2) ---
+    // If locked at ~128 BPM, checks ~84 BPM (3T/2) and vice versa
+    if (sesquiCheckEnabled) {
+        // 3T/2 (slower, sesquialtera down): e.g., 128 BPM -> 84 BPM
+        int threeHalvesT = (T * 3) / 2;
+        float threeHalvesBpm = OSS_FRAMES_PER_MIN / static_cast<float>(threeHalvesT);
+        if (threeHalvesBpm >= bpmMin && threeHalvesT < OSS_BUFFER_SIZE / 2) {
+            int lookback32 = threeHalvesT * 4;
+            if (lookback32 > sampleCounter_) lookback32 = sampleCounter_;
+            float score32 = 0.0f;
+            int count32 = 0;
+            for (int offset = 0; offset < lookback32; offset += threeHalvesT) {
+                int idx = sampleCounter_ - 1 - offset;
+                if (idx >= 0) {
+                    score32 += cbssBuffer_[idx % OSS_BUFFER_SIZE];
+                    count32++;
+                }
+            }
+            if (count32 > 0) score32 /= static_cast<float>(count32);
+            if (scoreT > 0.001f && score32 > octaveScoreRatio * scoreT) {
+                switchTempo(threeHalvesT);
+                return;
+            }
+        }
+
+        // 2T/3 (faster, sesquialtera up): e.g., 84 BPM -> 128 BPM
+        int twoThirdsT = (T * 2) / 3;
+        float twoThirdsBpm = OSS_FRAMES_PER_MIN / static_cast<float>(twoThirdsT);
+        if (twoThirdsT >= 10 && twoThirdsBpm <= bpmMax) {
+            int lookback23 = twoThirdsT * 4;
+            if (lookback23 > sampleCounter_) lookback23 = sampleCounter_;
+            float score23 = 0.0f;
+            int count23 = 0;
+            for (int offset = 0; offset < lookback23; offset += twoThirdsT) {
+                int idx = sampleCounter_ - 1 - offset;
+                if (idx >= 0) {
+                    score23 += cbssBuffer_[idx % OSS_BUFFER_SIZE];
+                    count23++;
+                }
+            }
+            if (count23 > 0) score23 /= static_cast<float>(count23);
+            if (scoreT > 0.001f && score23 > octaveScoreRatio * scoreT) {
+                switchTempo(twoThirdsT);
+                return;
+            }
+        }
+    }
 }
 
 void AudioController::checkPhaseAlignment() {
@@ -1780,8 +1847,8 @@ void AudioController::switchTempo(int newPeriodSamples) {
     // Also update Bayesian posterior — nudge toward the new tempo bin
     int newBin = findClosestTempoBin(bpm_);
     if (newBin >= 0 && newBin < TEMPO_BINS) {
-        // Transfer mass from old best bin to new
-        float transfer = tempoStatePost_[bayesBestBin_] * 0.3f;
+        // Transfer mass from old best bin to new (tempoNudge=0.8 default)
+        float transfer = tempoStatePost_[bayesBestBin_] * tempoNudge;
         tempoStatePost_[bayesBestBin_] -= transfer;
         tempoStatePost_[newBin] += transfer;
         // Update prior to match
@@ -2312,8 +2379,11 @@ void AudioController::detectBeat() {
         predictBeat();
     }
 
-    // Beat declared when countdown reaches zero AND CBSS is above adaptive threshold
-    if (timeToNextBeat_ <= 0) {
+    // Beat declared when countdown reaches threshold AND CBSS is above adaptive threshold
+    // Bidirectional snap: delay by 3 frames (~45ms) so the backward-only onset snap
+    // window covers frames arriving after the predicted beat time
+    int snapDelay = bidirectionalSnap ? 3 : 0;
+    if (timeToNextBeat_ <= -snapDelay) {
         // Adaptive threshold: suppress beats during silence/breakdowns
         // When cbssThresholdFactor > 0, require current CBSS > factor * running mean
         float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];

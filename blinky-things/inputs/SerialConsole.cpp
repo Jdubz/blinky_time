@@ -349,6 +349,18 @@ void SerialConsole::registerRhythmSettings() {
         "PLP correction strength (0=off, 1=full snap to analytical phase)", 0.0f, 1.0f);
     settings_.registerFloat("plpminconf", &audioCtrl_->plpMinConfidence, "rhythm",
         "PLP min comb-filter peak confidence to apply correction (0-1)", 0.0f, 1.0f);
+    settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "rhythm",
+        "Rayleigh prior peak BPM (v44: takes effect on reboot)", 60.0f, 180.0f);
+    settings_.registerFloat("temponudge", &audioCtrl_->tempoNudge, "rhythm",
+        "switchTempo posterior mass transfer fraction (v44: 0=none, 1=full swap)", 0.0f, 1.0f);
+    settings_.registerBool("fold32", &audioCtrl_->fold32Enabled, "rhythm",
+        "3:2 octave folding: fold comb evidence from 2L/3 into L (v44)");
+    settings_.registerBool("sesquicheck", &audioCtrl_->sesquiCheckEnabled, "rhythm",
+        "3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44)");
+    settings_.registerBool("bisnap", &audioCtrl_->bidirectionalSnap, "rhythm",
+        "Bidirectional onset snap: delay beat 3 frames for forward snap window (v44)");
+    settings_.registerBool("harmonicsesqui", &audioCtrl_->harmonicSesqui, "rhythm",
+        "3:2/2:3 shortcuts in transition matrix (v44, OFF default — causes fast-track regression)");
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();

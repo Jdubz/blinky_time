@@ -73,7 +73,8 @@ public:
     // Version 42: PLP phase extraction (plpPhaseEnabled, plpCorrectionStrength, plpMinConfidence)
     //            v43 algorithmic fixes (no new settings): removed double inverse-lag, full-res comb,
     //            octave folding, lag-space transition matrix. Struct reordered (bool padding fix).
-    static const uint8_t SETTINGS_VERSION = 42;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 43: 128 BPM gravity well fixes (rayleighBpm, fold32, sesquicheck, bisnap)
+    static const uint8_t SETTINGS_VERSION = 43;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -243,6 +244,11 @@ public:
         // PLP phase extraction (v42)
         float plpCorrectionStrength;    // Correction aggressiveness (0=off, 1=snap)
         float plpMinConfidence;         // Min comb filter peak confidence to trust PLP
+
+        // 128 BPM gravity well fixes (v44)
+        float rayleighBpm;              // Rayleigh prior peak BPM (60-180, default 120)
+        float tempoNudge;               // switchTempo posterior mass transfer (0-1, default 0.8)
+
         bool plpPhaseEnabled;           // PLP analytical phase correction (v42: disabled by default)
 
         bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
@@ -273,6 +279,12 @@ public:
         float compMakeupDb;            // Makeup gain (dB)
         float compAttackTau;           // Attack time constant (seconds)
         float compReleaseTau;          // Release time constant (seconds)
+
+        // 128 BPM gravity well fixes (v44)
+        bool fold32Enabled;             // 3:2 octave folding (v44)
+        bool sesquiCheckEnabled;        // 3:2 shadow octave check (v44)
+        bool bidirectionalSnap;         // Bidirectional onset snap (v44)
+        bool harmonicSesqui;            // 3:2/2:3 transition matrix shortcuts (v44, default OFF)
     };
 
     struct StoredBandFluxParams {
@@ -391,16 +403,16 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 244,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (244 bytes = 52 floats + 8 uint8 + 19 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 256,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (256 bytes = 54 floats + 9 uint8 + 23 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    // ConfigData: ~641 bytes (4+160+64+64+32+24+236+44+1 + padding). Allocated in last 4KB flash page.
-    // Tight bound (648) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 656,
-        "ConfigData exceeds 656 bytes! Current estimate ~649B. Check for unintended struct growth.");
+    // ConfigData: ~649 bytes (4+160+64+64+32+24+244+44+1 + padding). Allocated in last 4KB flash page.
+    // Tight bound catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
+    static_assert(sizeof(ConfigData) <= 668,
+        "ConfigData exceeds 668 bytes! Current estimate ~661B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

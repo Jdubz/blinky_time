@@ -2044,3 +2044,103 @@ in our Bayesian tempo estimation causing universal ~195 BPM lock on all tracks.
 4. **Phase alignment is the primary F1 bottleneck.** Garage-uk-2step: 99% BPM accuracy but
    Beat F1 = 0.05-0.32. Best F1 scores (0.61-0.68) only on techno-minimal with strong
    four-on-floor kicks where phase naturally aligns with transients.
+
+---
+
+## Test Session: 2026-03-03 (v44 — 128 BPM Gravity Well + Bidirectional Onset Snap)
+
+### v44 Feature Sweep (SETTINGS_VERSION 43)
+
+**Environment:**
+- Hardware: 3 identical bare XIAO nRF52840 Sense boards (no enclosures)
+- Serial Ports: /dev/ttyACM0, /dev/ttyACM1, /dev/ttyACM2
+- Audio: JBL Pebbles USB speakers, 100% volume, ALSA card 2
+- Test: 18-track suite, full duration, 3 devices simultaneous
+
+**Motivation:**
+v43 eliminated double-time lock but revealed ~128 BPM gravity well: 3 slow tracks (86-96 BPM)
+lock to 125-135 BPM. Investigated 6 features to fix this + improve phase alignment.
+
+**Features Tested:**
+
+1. **Bidirectional onset snap** (`bisnap=1`): Delays beat declaration by 3 frames (~45ms) so
+   backward onset snap window covers frames arriving after predicted beat time. No changes to
+   snap loop itself.
+
+2. **3:2 octave folding** (`fold32`): For each tempo bin at lag L, adds comb-on-ACF score from
+   lag 2L/3 (the 3:2 harmonic). Analogous to existing L/2 folding for 2:1 octave.
+
+3. **3:2 shadow octave check** (`sesquicheck`): Extends shadow CBSS octave checker to test
+   3T/2 and 2T/3 alternatives alongside existing T/2 and 2T checks.
+
+4. **3:2/2:3 transition matrix shortcuts** (`harmonicsesqui`): Adds Gaussian-weighted transition
+   shortcuts at ratio 1.5 and 0.667 in the Bayesian posterior transition matrix.
+
+5. **Configurable Rayleigh prior peak** (`rayleighbpm`, default 120): Allows shifting the
+   perceptual tempo prior away from 120 BPM.
+
+6. **Tunable switchTempo nudge** (`temponudge`, default 0.8, was hardcoded 0.3): Controls
+   posterior mass transfer fraction when octave checker triggers a tempo switch.
+
+### 18-Track Feature Isolation Results
+
+**Config A (ACM0):** bisnap only — `bisnap=1, fold32=0, sesquicheck=0, harmonicsesqui=0`
+**Config B (ACM1):** v43 baseline — all v44 features OFF
+**Config C (ACM2):** fold32+sesquicheck — `fold32=1, sesquicheck=1, bisnap=0, harmonicsesqui=0`
+
+| Track | Expected BPM | bisnap F1 | baseline F1 | f32+sq F1 | bisnap BPM | base BPM | f32+sq BPM |
+|-------|:-----------:|:---------:|:-----------:|:---------:|:----------:|:--------:|:----------:|
+| afrobeat-feelgood | 117.5 | 0.286 | **0.320** | 0.185 | 138.9 | 138.0 | 123.4 |
+| amapiano-vibez | 112.3 | **0.290** | 0.253 | 0.272 | 121.2 | 120.4 | 128.8 |
+| breakbeat-background | 86.1 | 0.227 | **0.235** | 0.227 | 130.0 | 126.1 | 130.0* |
+| breakbeat-drive | 95.7 | **0.253** | 0.230 | 0.232 | 133.5 | 134.9 | 135.6* |
+| dnb-energetic | 117.5 | 0.225 | **0.292** | 0.238 | 129.5 | 129.3 | 128.3 |
+| dnb-liquid-jungle | 112.3 | 0.232 | **0.234** | 0.227 | 131.7 | 132.8 | 132.7 |
+| dubstep-halftime | 117.5 | 0.275 | **0.281** | 0.239 | 129.5 | 130.5 | 131.2 |
+| edm-trap-electro | 112.3 | **0.248** | 0.236 | 0.241 | 131.8 | 133.2 | 133.0 |
+| garage-uk-2step | 129.2 | 0.179 | **0.397** | 0.276 | 128.7 | 129.6 | 128.6 |
+| reggaeton-fuego | 92.3 | **0.261** | 0.190 | 0.216 | 132.8 | 132.9 | 133.3 |
+| techno-deep-amb | 123.0 | **0.286** | 0.222 | 0.260 | 124.7 | 126.9 | 124.5 |
+| techno-dub-groove | 123.0 | **0.315** | 0.296 | 0.260 | 132.0 | 132.4 | 132.5 |
+| techno-machine-drum | 143.6 | 0.257 | **0.299** | 0.250 | 131.4 | 131.2 | 131.3 |
+| techno-minimal-01 | 129.2 | 0.091 | **0.262** | 0.282 | 132.8 | 133.3 | 134.3 |
+| techno-minimal-emo | 129.2 | **0.259** | 0.167 | 0.237 | 130.2 | 129.1 | 125.5 |
+| trance-goa-mantra | 136.0 | **0.409** | 0.216 | 0.324 | 134.2 | 133.4 | 133.4 |
+| trance-infected | 143.6 | **0.370** | 0.246 | 0.331 | 129.4 | 126.7 | 133.0 |
+| trance-party | 136.0 | 0.408 | **0.420** | 0.329 | 132.0 | 132.6 | 132.9 |
+| **AVERAGE** | | **0.271** | **0.266** | **0.257** | | | |
+| **WINS** | | **9** | **8** | **1** | | | |
+
+### harmonicSesqui Regression Test
+
+Separate test with `harmonicsesqui=1` on ACM2, trance-party (136 BPM expected):
+- harmonicsesqui ON: BPM 100.2 (acc 0.736), F1 0.237 — **catastrophic regression**
+- harmonicsesqui OFF: BPM 132.6 (acc 0.975), F1 0.420 — baseline
+
+The 2:3 transition shortcut (0.667 ratio) allows 136→91 BPM posterior jumps, pulling fast tracks
+down to ~100 BPM. The same shortcut is needed for slow tracks (128→86 BPM escape), making
+asymmetric gating impossible — both help and harm come from the same direction.
+
+### Key Findings
+
+1. **bisnap is a net positive** (+0.005 avg F1, +0.011 median, 9/18 wins). Large gains on
+   trance tracks from improved phase alignment (+0.193 trance-goa, +0.124 trance-infected,
+   +0.092 techno-minimal-emo). Two significant regressions (garage -0.218, techno-minimal-01
+   -0.171) may be high-variance artifacts.
+
+2. **fold32+sesquicheck is a net negative** (-0.009 avg F1, 1/18 wins). The observation-side
+   3:2 features hurt more tracks than they help. Gains on trance tracks are smaller than bisnap
+   alone and come with broader regressions.
+
+3. **harmonicSesqui causes catastrophic regression** on fast tracks. The only feature that
+   helps slow tracks escape the 128 BPM gravity well, but 2:3 shortcuts also pull correct
+   130+ BPM tracks down to ~100 BPM. Cannot be safely enabled.
+
+4. **128 BPM gravity well is unsolvable with current architecture.** The comb filter bank
+   produces strong harmonic reinforcement at 3:2 ratios. Observation-side corrections (folding,
+   shadow checks) cannot overcome this. Transition matrix shortcuts can shift the posterior but
+   introduce worse regressions. Would require architectural change (e.g., multipitch comb
+   inhibition, learned harmonic templates, or joint tempo-phase HMM).
+
+5. **Final defaults for v44:** `bisnap=1` (only feature retained). `fold32=0, sesquicheck=0,
+   harmonicsesqui=0, rayleighbpm=120, temponudge=0.8`. All features remain togglable via serial.

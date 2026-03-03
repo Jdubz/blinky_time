@@ -6,6 +6,17 @@
 
 ### Completed (March 3, 2026)
 
+**v44 Bidirectional Onset Snap + 128 BPM Gravity Well Investigation (SETTINGS_VERSION 43):**
+- Fixed MAX_SETTINGS overflow: 178 registered settings vs MAX_SETTINGS=128. Increased to 192.
+- Bidirectional onset snap (`bisnap=1`): delays beat declaration by 3 frames (~45ms) so backward onset snap window covers frames arriving after predicted beat. **+0.005 avg F1, 9/18 track wins.** Large gains on trance tracks (+0.193 trance-goa-mantra, +0.124 trance-infected-vibes) from improved phase alignment.
+- 3:2 octave folding (`fold32`, default OFF): folds comb evidence from 2L/3 into L. **No net benefit** in 18-track sweep (-0.009 avg F1, 1/18 wins). Kept as tunable toggle.
+- 3:2 shadow octave check (`sesquicheck`, default OFF): tests 3T/2 and 2T/3 alternatives in CBSS octave checker. **No net benefit** alongside fold32.
+- 3:2/2:3 transition matrix shortcuts (`harmonicsesqui`, default OFF): enables Bayesian posterior jumps between 3:2-related tempo bins. **Causes catastrophic regression** on fast tracks (130+ BPM pulled down to 100-110 BPM). The only feature that helps slow tracks escape 128 BPM lock, but too dangerous for production.
+- Configurable Rayleigh prior peak (`rayleighbpm`, default 120). Shifting to 90-100 insufficient to escape 128 BPM well alone.
+- Tunable switchTempo nudge (`temponudge`, default 0.8, was hardcoded 0.3). Stronger nudge improves octave checker responsiveness.
+- **128 BPM gravity well remains unsolved**: observation-side features (fold32, sesquicheck) cannot overcome the comb filter bank's harmonic reinforcement. Only transition matrix shortcuts help, but they cause worse regressions than they fix.
+- SETTINGS_VERSION 43. 287KB flash (35%), 21KB RAM (8%).
+
 **v43 Bayesian Tempo Bug Fixes — 4 critical fixes, BPM accuracy 33%→88%:**
 - Fixed 4 compounding bugs identified by comparison with BTrack/madmom: (1) double inverse-lag normalization causing 1.65x upward bias, (2) coarse comb evaluation at 20 bins instead of full 47-lag resolution, (3) missing octave folding (L + L/2 evidence sum), (4) BPM-space transition matrix causing asymmetric bandwidth on lag-uniform grid.
 - Validated on 3 identical bare boards — confirmed double-time lock is 100% algorithmic, not enclosure-related.
