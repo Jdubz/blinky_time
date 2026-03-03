@@ -396,25 +396,8 @@ public:
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
 
-    // === PHASE ALIGNMENT CHECKER ===
-    // Every N beats, compares raw onset strength (OSS) at current beat phase vs
-    // phase shifted by T/2. If the shifted phase has consistently stronger onsets,
-    // the CBSS has locked to the wrong phase (anti-phase). Corrects by shifting
-    // lastBeatSample_ to re-anchor beats at the stronger onset positions.
-    // Uses OSS (raw onset detection) not CBSS (which is self-reinforcing at wrong phase).
-    bool phaseCheckEnabled = false;       // Phase alignment check (v37: disabled — net-negative on 18-track validation)
-    uint8_t phaseCheckBeats = 4;          // Check every N beats (accumulate evidence)
-    float phaseCheckRatio = 1.2f;         // Shifted phase must score this much better to correct
-
-    // === PLP PHASE EXTRACTION (v42) ===
-    // Predominant Local Pulse: beat phase from comb filter bank IIR resonator phase
-    // (CombFilterBank::getPhaseAtPeak()). Corrects CBSS phase drift by adjusting
-    // lastBeatSample_ in detectBeat(). Phase convention: 0=beat now, 1=full period ago.
-    // v42 testing: no measurable effect (redundant with onset snap, <4% confidence
-    // in mic-in-room environment). Disabled by default.
-    bool plpPhaseEnabled = false;             // Master toggle (A/B testing)
-    float plpCorrectionStrength = 0.5f;       // Correction aggressiveness (0=off, 1=snap)
-    float plpMinConfidence = 0.3f;            // Min comb filter peak confidence to apply correction
+    // (phaseCheckEnabled removed v44 — net-negative on 18-track validation)
+    // (plpPhaseEnabled/plpCorrectionStrength/plpMinConfidence removed v44 — zero effect, redundant with onset snap)
 
     // === BTRACK-STYLE TEMPO PIPELINE ===
     // Replaces multiplicative Bayesian fusion with BTrack's sequential pipeline:
@@ -468,7 +451,36 @@ public:
     bool sesquiCheckEnabled = false;      // 3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44, OFF — no net benefit)
     bool bidirectionalSnap = true;        // Delay beat by 3 frames for bidirectional onset snap (v44)
     float tempoNudge = 0.8f;              // switchTempo posterior mass transfer fraction (0-1, v44)
-    bool harmonicSesqui = false;           // 3:2/2:3 shortcuts in transition matrix (v44, default OFF — causes fast-track regression)
+    // (harmonicSesqui removed v44 — catastrophic regression on fast tracks)
+
+    // === PERCIVAL ACF HARMONIC PRE-ENHANCEMENT (v45) ===
+    // Folds 2nd and 4th harmonic ACF values into fundamental lag before comb-on-ACF.
+    // Gives fundamental a unique advantage: double-time at L/2 does NOT get the same
+    // boost because its harmonics (L, 3L/2) are at different positions.
+    // Source: Percival & Tzanetakis 2014, Essentia percivalenhanceharmonics.cpp
+    bool percivalEnhance = true;           // Enable harmonic pre-enhancement (v45)
+    float percivalWeight2 = 0.5f;          // 2nd harmonic fold weight (v45)
+    float percivalWeight4 = 0.25f;         // 4th harmonic fold weight (v45)
+
+    // === PLL PHASE CORRECTION (v45) ===
+    // Proportional+integral phase correction applied at each beat fire.
+    // Measures phase error between predicted and actual onset position,
+    // nudges lastBeatSample_ to reduce drift over time.
+    // Source: Kim 2007 (PLL-style proportional correction for beat tracking)
+    bool pllEnabled = true;                // Enable PLL phase correction (v45)
+    float pllKp = 0.15f;                   // Proportional gain (v45)
+    float pllKi = 0.005f;                  // Integral gain (v45)
+
+    // === ADAPTIVE CBSS TIGHTNESS (v45) ===
+    // Modulates cbssTightness based on onset confidence (OSS/mean ratio).
+    // Strong onsets → looser tightness (allow phase correction).
+    // Weak onsets → tighter (resist noise-driven drift).
+    // Source: BTrack adaptation for noisy microphone input
+    bool adaptiveTightnessEnabled = true;  // Enable adaptive tightness (v45)
+    float tightnessLowMult = 0.7f;         // Multiplier when onset confidence HIGH (v45)
+    float tightnessHighMult = 1.3f;        // Multiplier when onset confidence LOW (v45)
+    float tightnessConfThreshHigh = 3.0f;  // OSS/mean ratio above this = high confidence (v45)
+    float tightnessConfThreshLow = 1.5f;   // OSS/mean ratio below this = low confidence (v45)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -522,9 +534,7 @@ public:
     int getTimeToNextBeat() const { return timeToNextBeat_; }
     bool wasLastBeatPredicted() const { return lastFiredBeatPredicted_; }
 
-    // PLP phase extraction debug getters (v42)
-    float getPlpPhase() const { return plpPhase_; }
-    float getPlpConfidence() const { return plpConfidence_; }
+    // (PLP phase getters removed v44 — feature removed)
 
     // Particle filter debug getters (v38)
     bool isParticleFilterActive() const { return particleFilterEnabled && pfInitialized_; }
@@ -631,17 +641,8 @@ private:
     // Octave check state (Phase 3)
     uint16_t beatsSinceOctaveCheck_ = 0; // Beats since last octave check
 
-    // Phase alignment check state (v37)
-    uint16_t beatsSincePhaseCheck_ = 0;  // Beats since last phase alignment check
-
-    // PLP phase extraction state (v42)
-    // Phase convention: plpPhase_ is fraction of beat period elapsed since last beat.
-    // 0.0 = beat is now, 0.5 = halfway between beats, 1.0 = full period since last beat.
-    // Sourced from CombFilterBank::getPhaseAtPeak() (IIR resonator complex exponential).
-    // Note: Updated every ~250ms (Bayesian update rate), not every frame. Between updates,
-    // the value is a stale snapshot and does not advance with elapsed time.
-    float plpPhase_ = 0.0f;           // Last extracted PLP phase (0-1)
-    float plpConfidence_ = 0.0f;      // Comb filter peak confidence (0-1)
+    // (beatsSincePhaseCheck_ removed v44 — phase check feature removed)
+    // (plpPhase_/plpConfidence_ removed v44 — PLP feature removed)
 
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
@@ -732,6 +733,12 @@ private:
     uint32_t pfRngState_ = 0x12345678;
     int pfCooldown_ = 0;  // Beat cooldown counter (frames)
 
+    // === PLL PHASE CORRECTION STATE (v45) ===
+    float pllPhaseIntegral_ = 0.0f;  // PLL integral accumulator
+
+    // === ADAPTIVE TIGHTNESS STATE (v45) ===
+    float effectiveTightness_ = 8.0f;  // Current effective tightness (modulated by onset confidence)
+
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
 
@@ -749,7 +756,7 @@ private:
     void detectBeat();
     void predictBeat();
     void checkOctaveAlternative();
-    void checkPhaseAlignment();
+    // (checkPhaseAlignment removed v44 — net-negative on 18-track validation)
     void switchTempo(int newPeriodSamples);
 
     // Bar-pointer HMM beat tracking (Phase 3.1)

@@ -1,10 +1,18 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 3, 2026*
+*Last Updated: March 3, 2026 (v45 implementation)*
 
 ## Current Status
 
 ### Completed (March 3, 2026)
+
+**v45 Percival Harmonic Enhancement + PLL Phase Correction + Adaptive Tightness (SETTINGS_VERSION 45):**
+- **Percival ACF harmonic pre-enhancement** (`percival=1, percivalw2=0.5, percivalw4=0.25`): Folds ACF[2L]+ACF[4L] into ACF[L] before comb-on-ACF evaluation. Gives fundamental a unique ~2-3x advantage over sub-harmonic through the combined Percival+comb pipeline. Forward iteration safe. Targets 128 BPM gravity well.
+- **PLL proportional phase correction** (`pll=1, pllkp=0.15, pllki=0.005`): Measures IBI error against expected period T at each beat fire, applies proportional + leaky integral correction (decay=0.95). Max shift capped at T/4. Targets slow phase drift.
+- **Adaptive CBSS tightness** (`adaptight=1, tightlowmult=0.7, tighthighmult=1.3, tightconfhi=3.0, tightconflo=1.5`): Modulates log-Gaussian tightness based on onset confidence (OSS/cbssMean ratio). Strong onsets → looser (allow phase correction), weak → tighter (resist noise). Resolves tightness 5 vs 8 dilemma.
+- All 3 features togglable for A/B testing. 11 new settings (3 bools + 8 floats).
+- **NOT YET TESTED** — needs 18-track validation and per-feature A/B comparison.
+- SETTINGS_VERSION 45. 286KB flash (35%), 21.2KB RAM (8%). 188/192 settings slots used.
 
 **v44 Bidirectional Onset Snap + 128 BPM Gravity Well Investigation (SETTINGS_VERSION 43):**
 - Fixed MAX_SETTINGS overflow: 178 registered settings vs MAX_SETTINGS=128. Increased to 192.
@@ -162,6 +170,61 @@ BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. T
 
 **Current bottleneck: phase alignment + ~128 BPM gravity well.** v43 fixed 4 Bayesian tempo bugs (BPM accuracy 33%→88%), eliminating double-time lock. Despite correct BPM, Beat F1 is unchanged at ~0.28. Phase alignment (beat placement timing) is the primary F1 bottleneck. Secondary: slow tracks (86-96 BPM) lock to ~128 BPM via 3:2 harmonic. Run-to-run variance (std=0.04-0.23) limits measurement precision.
 
+#### Literature Review — Root Cause Analysis (March 2026)
+
+Research into BTrack, madmom, Essentia/Percival, librosa, and recent papers identified root causes and untried techniques:
+
+**128 BPM gravity well — three compounding forces:**
+1. **Additive comb-on-ACF** (lines 912-948): Sums ACF at L, 2L, 3L, 4L — boosts harmonics just as much as fundamentals. This is the core problem. A comb tuned to lag 31 (128 BPM) accumulates nearly as much energy from a 86 BPM signal as the lag-46 (86 BPM) comb itself.
+2. **Rayleigh prior** (lines 812-828): Peaked at lag 33 (120 BPM), gives bins at 86 BPM ~35% less multiplicative weight.
+3. **IIR comb bank resonance** (lines 3193-3209): No harmonic inhibition. Resonator at 128 BPM accumulates energy from 64 BPM signals indistinguishably.
+
+BTrack has the same three mechanisms and the same fundamental limitation — it just works well enough because its test corpus doesn't emphasize slow tempos. No system using additive comb evaluation has solved 3:2 harmonic ambiguity.
+
+**Phase alignment — CBSS is inherently limited:**
+- Alpha=0.9: 90% of CBSS comes from history → self-reinforcing phase lock-in
+- Phase is emergent (from a counter), not an explicit state variable
+- Asymmetric correction: onsets before prediction found by backward search, onsets after prediction arrive too late
+- Small tempo errors accumulate as phase drift (1 frame/beat with 3% error → half-period drift after 17 beats)
+- **All systems achieving >60% F1 track phase explicitly** (HMM state variable, Fourier angle, or particle cloud)
+
+**Tightness 8 vs BTrack's 5 — explained:**
+BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has noisier onsets, so higher tightness prevents noise from pulling phase incorrectly. The correct solution is **adaptive tightness** (lower when onset confidence high, higher when low), not a fixed value.
+
+#### Untried Techniques from Literature (Ranked by Effort)
+
+**For 128 BPM gravity well:**
+
+| # | Technique | Source | Effort | Expected Impact | Status |
+|---|-----------|--------|--------|----------------|--------|
+| 1a | **Percival ACF harmonic pre-enhancement** | Essentia `percivalenhanceharmonics.cpp` | ~50 ops, 0 memory | Addresses root cause — gives fundamental unique advantage | **v45 — implemented, untested** |
+| 1b | **Anti-harmonic comb** | Speech F0 estimation | ~50 ops, 0 memory | More aggressive variant — subtracts higher harmonics | Not started |
+| 1c | **Metrical contrast check** | Beat Critic (ISMIR 2010) | ~20 ops/beat | New disambiguation signal — compares beat vs midpoint onsets | Not started |
+
+**For phase alignment:**
+
+| # | Technique | Source | Effort | Expected Impact | Status |
+|---|-----------|--------|--------|----------------|--------|
+| 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +5-10% F1, addresses slow phase drift | **v45 — implemented, untested** |
+| 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +3-7% F1, resolves 5 vs 8 dilemma | **v45 — implemented, untested** |
+| 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | +5-10% F1, prevents off-beat phase pulls | Not started |
+| 4 | **1D joint tempo-phase HMM** | Krebs/Böck (ISMIR 2015), Heydari (ICASSP 2022) | ~14 KB RAM, ~2% CPU | +15-25% F1, standard architecture for >60% F1 | Not started |
+
+**Eliminated by research/testing:**
+- ~~Widen Rayleigh prior~~ — weak lever, doesn't overcome comb filter harmonics
+- ~~Stronger density penalty for 3:2~~ — fold32/sesquicheck tested in v44, no net benefit. Density can't distinguish 2.0 trans/beat (90 BPM) from 1.33 trans/beat (135 BPM)
+- ~~Lower cbssTightness (8→5)~~ — tested in v40, wrong for noisy mic audio
+- ~~PLP phase extraction~~ — tested in v42, OSS too noisy for analytical phase
+- ~~Bidirectional onset snap~~ — implemented in v44 as bisnap (+0.005 F1, near theoretical limit)
+
+**Key references:**
+- Percival & Tzanetakis 2014 — Streamlined Tempo Estimation (IEEE/ACM TASLP)
+- Krebs, Böck & Widmer 2015 — Efficient State-Space Model for Joint Tempo and Meter Tracking (ISMIR)
+- Heydari et al. 2022 — Novel 1D State Space for Efficient Music Rhythmic Analysis (ICASSP)
+- Davies & Plumbley 2007 — Context-Dependent Beat Tracking (IEEE TASLP)
+- Beat Critic (ISMIR 2010) — Beat Tracking Octave Error Identification
+- Kim et al. 2007 — On-Line Musical Beat Tracking with PLL Technique
+
 **Pre-Bayesian baseline (sequential override chain, Feb 21):** avg Beat F1 **0.472** on 9 tracks.
 **Bayesian v20 (all observations on, cbssthresh=0.4, Feb 24):** avg Beat F1 **0.421**.
 **Bayesian v21 (comb-only, cbssthresh=1.0, Feb 25):** avg Beat F1 **0.590** (best independent cbssthresh sweep).
@@ -226,8 +289,14 @@ Static Gaussian prior (centered at `bayesprior`, sigma `priorwidth`) multiplied 
 - Ongoing static prior as sole sub-harmonic fix: Helps near 128 BPM, hurts far from it (Feb 23)
 - Posterior-based harmonic disambig: Posterior already sub-harmonic dominated, check never triggers (Feb 24)
 - Soft bin-level ACF penalty: Helped trance-party (0.856) but destroyed goa-mantra (0.246), collateral damage (Feb 24)
-- HPS (both ratio-based and additive): Penalizes correct peaks or boosts wrong sub-harmonics (Feb 22)
+- HPS (both ratio-based and additive): Penalizes correct peaks or boosts wrong sub-harmonics (Feb 22). Note: **log-domain HPS** (geometric mean) not yet tested — may avoid the zero-product problem.
 - Pulse train cross-correlation: Sub-harmonics produce similar onset alignment (Feb 22)
+- Lower cbssTightness (8→5): Tested v40. BTrack's value assumes clean line-in; noisy mic audio needs higher tightness. Adaptive tightness is the correct reformulation (Mar 2026 research)
+- Widen/flatten Rayleigh prior alone: Insufficient — doesn't overcome comb filter harmonic resonance (v44 testing + Mar 2026 research)
+- fold32 (3:2 octave folding): -0.009 avg F1, 1/18 wins (v44)
+- sesquicheck (3:2 shadow CBSS check): No benefit alongside fold32 (v44)
+- harmonicsesqui (3:2 transition shortcuts): Catastrophic on 130+ BPM tracks (v44)
+- v37 HMM attempt: Failed due to too-few bins (20) and wrong observation model (flat across all states). Corrected version needs full integer-lag resolution (46 periods) and position-0-specific observation model (Mar 2026 research)
 - Sequential override chain: Features interact negatively, combined avg F1 dropped 0.472→0.381 (Feb 23)
 - Raw ACF observation in Bayesian: Sub-harmonic bias without inverse-lag normalization (Feb 25) — **fixed**: inverse-lag normalization added, then harmonic comb + Rayleigh prior added (v25), ACF weight raised to 0.8
 - Fourier tempogram at full weight without spectral processing: Mean normalization destroys discriminability (Feb 25) — **fixed**: spectral compressor+whitening (v23) enabled re-activation at weight 2.0 (v24)
@@ -541,7 +610,7 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 
 ## Calibration Status (March 3, 2026)
 
-**SETTINGS_VERSION 42.** Bayesian tempo fusion (Comb+ACF) + CBSS beat tracking. v43 algorithmic fixes: removed double inverse-lag normalization, full-resolution comb-on-ACF, octave folding, lag-space Gaussian transition matrix. Frame rate 66 Hz. FT+IOI disabled. PLP disabled (no effect).
+**SETTINGS_VERSION 45.** Bayesian tempo fusion (Comb+ACF) + CBSS beat tracking. v43 algorithmic fixes: removed double inverse-lag normalization, full-resolution comb-on-ACF, octave folding, lag-space Gaussian transition matrix. Frame rate 66 Hz. FT+IOI disabled. PLP disabled (no effect). v44: bidirectional onset snap. v45: Percival harmonic pre-enhancement, PLL phase correction, adaptive CBSS tightness.
 
 **Current performance (v43, 18-track validation on 3 bare boards):**
 - 3-device avg Beat F1: **0.284**
@@ -1015,6 +1084,12 @@ Knowledge-distilled CNN for onset detection. Only approach that can learn room-s
 **Phase 3 (Architecture):**
 - ✅ Particle filter — v38-39, 100 particles, madmom obs model, PF+CBSS hybrid. BPM accuracy improved but F1 unchanged (phase bottleneck).
 - ✅ Joint HMM (first attempt) — v37, half-time lock at 80 BPM. Needs corrected observation model (see Priority 1d).
+
+**Phase 4 (Literature-based improvements, v44-v45):**
+- ✅ Bidirectional onset snap — v44, +0.005 F1 (9/18 wins, large trance gains)
+- ✅ Percival ACF harmonic pre-enhancement — v45, implemented (untested)
+- ✅ PLL proportional phase correction — v45, implemented (untested)
+- ✅ Adaptive CBSS tightness — v45, implemented (untested)
 
 **Pre-Bayesian:**
 - ✅ Microphone sensitivity — spectral compressor + per-bin adaptive whitening (v23+)

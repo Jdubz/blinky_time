@@ -231,18 +231,30 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
     data_.music.downwardCorrectEnabled = false; // Downward harmonic correction (experimental, overcorrects mid-tempo)
     data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
-    data_.music.phaseCheckEnabled = false;  // Phase alignment checker (v37: disabled — full validation showed net-negative F1)
-    data_.music.phaseCheckBeats = 4;        // Check phase every 4 beats
-    data_.music.phaseCheckRatio = 1.2f;     // Shifted phase must score 1.2x better
-    data_.music.plpPhaseEnabled = false;    // PLP phase extraction (v42: disabled by default for A/B testing)
-    data_.music.plpCorrectionStrength = 0.5f; // Correction aggressiveness (0=off, 1=snap)
-    data_.music.plpMinConfidence = 0.3f;    // Min comb filter peak confidence to trust PLP phase
+    // (phaseCheck, PLP, harmonicSesqui defaults removed v44 — features deleted)
     data_.music.rayleighBpm = 120.0f;       // Rayleigh prior peak BPM (v44: configurable, was hardcoded 120)
     data_.music.tempoNudge = 0.8f;          // switchTempo posterior mass transfer (v44: was hardcoded 0.3)
     data_.music.fold32Enabled = false;      // 3:2 octave folding (v44: OFF — no net benefit in 18-track sweep)
     data_.music.sesquiCheckEnabled = false; // 3:2 shadow octave check (v44: OFF — no net benefit in 18-track sweep)
     data_.music.bidirectionalSnap = true;   // Bidirectional onset snap (v44: delay beat by 3 frames for forward snap)
-    data_.music.harmonicSesqui = false;    // 3:2/2:3 transition matrix shortcuts (v44: OFF — causes fast-track regression)
+    // (harmonicSesqui default removed v44 — feature deleted)
+
+    // Percival ACF harmonic pre-enhancement (v45)
+    data_.music.percivalEnhance = true;     // Enable harmonic pre-enhancement
+    data_.music.percivalWeight2 = 0.5f;     // 2nd harmonic fold weight
+    data_.music.percivalWeight4 = 0.25f;    // 4th harmonic fold weight
+
+    // PLL phase correction (v45)
+    data_.music.pllEnabled = true;          // Enable PLL phase correction
+    data_.music.pllKp = 0.15f;              // Proportional gain
+    data_.music.pllKi = 0.005f;             // Integral gain
+
+    // Adaptive CBSS tightness (v45)
+    data_.music.adaptiveTightnessEnabled = true;  // Enable adaptive tightness
+    data_.music.tightnessLowMult = 0.7f;    // Multiplier when onset confidence HIGH
+    data_.music.tightnessHighMult = 1.3f;   // Multiplier when onset confidence LOW
+    data_.music.tightnessConfThreshHigh = 3.0f;   // OSS/mean ratio for high confidence
+    data_.music.tightnessConfThreshLow = 1.5f;    // OSS/mean ratio for low confidence
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
     data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
@@ -552,15 +564,27 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
         fixedCount++;
     }
-    // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled, phaseCheckEnabled are bools — no range validation needed
-    VALIDATE_INT(data_.music.phaseCheckBeats, 2, 16, F("phaseCheckBeats"));
-    validateFloat(data_.music.phaseCheckRatio, 1.1f, 3.0f, F("phaseCheckRatio"));
-    // plpPhaseEnabled is bool — no range validation needed
-    validateFloat(data_.music.plpCorrectionStrength, 0.0f, 1.0f, F("plpCorrectionStrength"));
-    validateFloat(data_.music.plpMinConfidence, 0.0f, 1.0f, F("plpMinConfidence"));
+    // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
     validateFloat(data_.music.rayleighBpm, 60.0f, 180.0f, F("rayleighBpm"));
     validateFloat(data_.music.tempoNudge, 0.0f, 1.0f, F("tempoNudge"));
     // fold32Enabled, sesquiCheckEnabled, bidirectionalSnap are bools — no range validation needed
+
+    // Percival ACF harmonic pre-enhancement validation (v45)
+    validateFloat(data_.music.percivalWeight2, 0.0f, 1.0f, F("percivalWeight2"));
+    validateFloat(data_.music.percivalWeight4, 0.0f, 1.0f, F("percivalWeight4"));
+    // percivalEnhance is bool — no range validation needed
+
+    // PLL phase correction validation (v45)
+    validateFloat(data_.music.pllKp, 0.0f, 1.0f, F("pllKp"));
+    validateFloat(data_.music.pllKi, 0.0f, 0.1f, F("pllKi"));
+    // pllEnabled is bool — no range validation needed
+
+    // Adaptive tightness validation (v45)
+    validateFloat(data_.music.tightnessLowMult, 0.3f, 1.0f, F("tightnessLowMult"));
+    validateFloat(data_.music.tightnessHighMult, 1.0f, 3.0f, F("tightnessHighMult"));
+    validateFloat(data_.music.tightnessConfThreshHigh, 1.5f, 10.0f, F("tightnessConfThreshHigh"));
+    validateFloat(data_.music.tightnessConfThreshLow, 0.5f, 3.0f, F("tightnessConfThreshLow"));
+    // adaptiveTightnessEnabled is bool — no range validation needed
     // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
@@ -809,18 +833,30 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->densityTarget = data_.music.densityTarget;
         audioCtrl->downwardCorrectEnabled = data_.music.downwardCorrectEnabled;
         audioCtrl->octaveCheckEnabled = data_.music.octaveCheckEnabled;
-        audioCtrl->phaseCheckEnabled = data_.music.phaseCheckEnabled;
-        audioCtrl->phaseCheckBeats = data_.music.phaseCheckBeats;
-        audioCtrl->phaseCheckRatio = data_.music.phaseCheckRatio;
-        audioCtrl->plpPhaseEnabled = data_.music.plpPhaseEnabled;
-        audioCtrl->plpCorrectionStrength = data_.music.plpCorrectionStrength;
-        audioCtrl->plpMinConfidence = data_.music.plpMinConfidence;
+        // (phaseCheck/PLP load removed v44 — features deleted)
         audioCtrl->rayleighBpm = data_.music.rayleighBpm;
         audioCtrl->tempoNudge = data_.music.tempoNudge;
         audioCtrl->fold32Enabled = data_.music.fold32Enabled;
         audioCtrl->sesquiCheckEnabled = data_.music.sesquiCheckEnabled;
         audioCtrl->bidirectionalSnap = data_.music.bidirectionalSnap;
-        audioCtrl->harmonicSesqui = data_.music.harmonicSesqui;
+        // (harmonicSesqui load removed v44 — feature deleted)
+
+        // Percival ACF harmonic pre-enhancement (v45)
+        audioCtrl->percivalEnhance = data_.music.percivalEnhance;
+        audioCtrl->percivalWeight2 = data_.music.percivalWeight2;
+        audioCtrl->percivalWeight4 = data_.music.percivalWeight4;
+
+        // PLL phase correction (v45)
+        audioCtrl->pllEnabled = data_.music.pllEnabled;
+        audioCtrl->pllKp = data_.music.pllKp;
+        audioCtrl->pllKi = data_.music.pllKi;
+
+        // Adaptive CBSS tightness (v45)
+        audioCtrl->adaptiveTightnessEnabled = data_.music.adaptiveTightnessEnabled;
+        audioCtrl->tightnessLowMult = data_.music.tightnessLowMult;
+        audioCtrl->tightnessHighMult = data_.music.tightnessHighMult;
+        audioCtrl->tightnessConfThreshHigh = data_.music.tightnessConfThreshHigh;
+        audioCtrl->tightnessConfThreshLow = data_.music.tightnessConfThreshLow;
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->barPointerHmm = data_.music.barPointerHmm;
@@ -1034,18 +1070,30 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.densityTarget = audioCtrl->densityTarget;
         data_.music.downwardCorrectEnabled = audioCtrl->downwardCorrectEnabled;
         data_.music.octaveCheckEnabled = audioCtrl->octaveCheckEnabled;
-        data_.music.phaseCheckEnabled = audioCtrl->phaseCheckEnabled;
-        data_.music.phaseCheckBeats = audioCtrl->phaseCheckBeats;
-        data_.music.phaseCheckRatio = audioCtrl->phaseCheckRatio;
-        data_.music.plpPhaseEnabled = audioCtrl->plpPhaseEnabled;
-        data_.music.plpCorrectionStrength = audioCtrl->plpCorrectionStrength;
-        data_.music.plpMinConfidence = audioCtrl->plpMinConfidence;
+        // (phaseCheck/PLP save removed v44 — features deleted)
         data_.music.rayleighBpm = audioCtrl->rayleighBpm;
         data_.music.tempoNudge = audioCtrl->tempoNudge;
         data_.music.fold32Enabled = audioCtrl->fold32Enabled;
         data_.music.sesquiCheckEnabled = audioCtrl->sesquiCheckEnabled;
         data_.music.bidirectionalSnap = audioCtrl->bidirectionalSnap;
-        data_.music.harmonicSesqui = audioCtrl->harmonicSesqui;
+        // (harmonicSesqui save removed v44 — feature deleted)
+
+        // Percival ACF harmonic pre-enhancement (v45)
+        data_.music.percivalEnhance = audioCtrl->percivalEnhance;
+        data_.music.percivalWeight2 = audioCtrl->percivalWeight2;
+        data_.music.percivalWeight4 = audioCtrl->percivalWeight4;
+
+        // PLL phase correction (v45)
+        data_.music.pllEnabled = audioCtrl->pllEnabled;
+        data_.music.pllKp = audioCtrl->pllKp;
+        data_.music.pllKi = audioCtrl->pllKi;
+
+        // Adaptive CBSS tightness (v45)
+        data_.music.adaptiveTightnessEnabled = audioCtrl->adaptiveTightnessEnabled;
+        data_.music.tightnessLowMult = audioCtrl->tightnessLowMult;
+        data_.music.tightnessHighMult = audioCtrl->tightnessHighMult;
+        data_.music.tightnessConfThreshHigh = audioCtrl->tightnessConfThreshHigh;
+        data_.music.tightnessConfThreshLow = audioCtrl->tightnessConfThreshLow;
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
         data_.music.barPointerHmm = audioCtrl->barPointerHmm;
