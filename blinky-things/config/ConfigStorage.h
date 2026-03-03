@@ -70,7 +70,10 @@ public:
     // Version 39: Bar-pointer PF (beat-boundary diffusion, madmom obs model, info gate, phase-coherent octave)
     // Version 40: cbssTightness 5→8 (+24% avg Beat F1 in 3-track sweep)
     // Version 41: downwardCorrectEnabled toggle (disabled by default), deprecated PF params
-    static const uint8_t SETTINGS_VERSION = 41;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 42: PLP phase extraction (plpPhaseEnabled, plpCorrectionStrength, plpMinConfidence)
+    //            v43 algorithmic fixes (no new settings): removed double inverse-lag, full-res comb,
+    //            octave folding, lag-space transition matrix. Struct reordered (bool padding fix).
+    static const uint8_t SETTINGS_VERSION = 42;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -236,6 +239,12 @@ public:
         bool phaseCheckEnabled;         // Phase alignment checker (v37: fixes anti-phase lock)
         uint8_t phaseCheckBeats;        // Check phase every N beats (v37: 4)
         float phaseCheckRatio;          // Shifted phase must score this much better to correct (v37: 1.5)
+
+        // PLP phase extraction (v42)
+        float plpCorrectionStrength;    // Correction aggressiveness (0=off, 1=snap)
+        float plpMinConfidence;         // Min comb filter peak confidence to trust PLP
+        bool plpPhaseEnabled;           // PLP analytical phase correction (v42: disabled by default)
+
         bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
         uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)
         bool barPointerHmm;            // Bar-pointer HMM beat tracking (v34: joint tempo-phase)
@@ -382,16 +391,16 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 236,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (236 bytes = 50 floats + 8 uint8 + 18 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 244,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (244 bytes = 52 floats + 8 uint8 + 19 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     // ConfigData: ~641 bytes (4+160+64+64+32+24+236+44+1 + padding). Allocated in last 4KB flash page.
     // Tight bound (648) catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 648,
-        "ConfigData exceeds 648 bytes! Current estimate ~641B. Check for unintended struct growth.");
+    static_assert(sizeof(ConfigData) <= 656,
+        "ConfigData exceeds 656 bytes! Current estimate ~649B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

@@ -1924,3 +1924,123 @@ Frame rate fix + onset snap + downward correction (with >160 BPM threshold):
 
 4. **Incremental DSP tuning is hitting diminishing returns:** Going from 0.285 to 0.70 Beat F1
    likely requires architectural change (joint tempo-phase HMM or equivalent), not parameter sweeps.
+
+---
+
+## Test Session: 2026-03-02 (v42 — PLP Phase Extraction)
+
+### PLP Analytical Phase Correction
+
+**Environment:**
+- Hardware: 1x XIAO nRF52840 Sense (ACM0, Tube Light)
+- SETTINGS_VERSION: 42
+- Test: 4-run repeated measurement on techno-minimal-01 (129.2 BPM)
+
+**Approaches Tested:**
+1. Single-bin DFT phasor rotation of OSS at dominant tempo
+2. Comb filter bank IIR resonator phase (CombFilterBank::getPhaseAtPeak)
+
+**Findings:**
+- DFT confidence: 3.2% — OSS too noisy/spiky for reliable single-bin phase extraction
+- Comb bank confidence: 2.2% — enclosure acoustics don't produce strong periodicity
+- With confidence-scaled corrections (plpstrength=0.5, plpminconf=0.3): corrections round to 0 frames
+- Without confidence scaling (strength=1.0, minconf=0): corrections are noise-driven
+
+**4-Run Repeated Measurement (techno-minimal-01):**
+
+| Condition | Run 1 | Run 2 | Run 3 | Run 4 | Mean | Std |
+|-----------|:-----:|:-----:|:-----:|:-----:|:----:|:---:|
+| PLP OFF (baseline) | 0.489 | 0.363 | 0.407 | 0.446 | 0.426 | 0.065 |
+| PLP ON (defaults) | 0.394 | 0.416 | 0.462 | 0.431 | 0.426 | 0.045 |
+
+**Conclusion:** No measurable effect. PLP is redundant with onset snap — both align beats to nearby
+onsets. Phase alignment is not the primary F1 bottleneck; tempo octave errors and run-to-run
+variance dominate. Feature kept in firmware (togglable via `set plpphase 1`), disabled by default.
+
+**New params:** plpphase=0, plpstrength=0.5, plpminconf=0.3
+
+---
+
+## Test Session: 2026-03-03
+
+### v43 Bayesian Tempo Bug Fixes (4 Fixes)
+
+**Environment:**
+- Hardware: 3 identical bare XIAO nRF52840 Sense boards (no enclosures)
+- Serial Ports: /dev/ttyACM0, /dev/ttyACM1, /dev/ttyACM2
+- Audio: JBL Pebbles USB speakers, 100% volume, ALSA card 2
+- Test: 18-track suite, 30s per track, 3 devices simultaneous
+
+**Motivation:**
+Comparison with BTrack/madmom reference implementations revealed 4 compounding bugs
+in our Bayesian tempo estimation causing universal ~195 BPM lock on all tracks.
+
+**Fixes Applied:**
+
+1. **Double inverse-lag normalization removed:** Balanced ACF (`correlation /= count` where
+   `count = ossCount_ - lag`) already corrects for sample-count bias at longer lags. The
+   additional explicit `/lag` loop created a 1.65x upward bias at lag=20 (~198 BPM) vs
+   lag=33 (~120 BPM). BTrack applies one normalization, not both.
+
+2. **Full-resolution comb-on-ACF:** 4-harmonic comb now evaluated at all 47 lags in the
+   fundamental range (minLag to maxLag), not just the 20 bin centers. With ~2.4 lag/bin
+   spacing, the old approach missed peaks falling between bin centers.
+
+3. **Octave folding (BTrack-style):** For each bin at lag L, adds the comb score from lag L/2
+   (double BPM). The fundamental gets evidence from both L and L/2, while the double-time
+   candidate at L/2 only gets its own evidence (its L/4 is out of range). Gives fundamental
+   ~2x advantage over double-time harmonic.
+
+4. **Lag-space Gaussian transition matrix:** Replaced BPM-space Gaussian (sigma = bayesLambda
+   * BPM_j) with fixed-sigma lag-space Gaussian (sigma = bayesLambda * mean(MAX_LAG, MIN_LAG)).
+   BPM-space Gaussian on lag-uniform grid created asymmetric bandwidth: more probability mass
+   at low BPM (dense bins) vs high BPM (sparse bins), causing drift toward slow tempos.
+
+**Bare-board baseline (pre-fix firmware):**
+- 3-device avg Beat F1: 0.313, BPM accuracy: 0.33
+- All tracks locked to ~190-197 BPM regardless of content
+- Confirmed double-time lock is 100% algorithmic, not enclosure-related
+
+### v43 18-Track Validation (3 Bare Boards)
+
+| Track | Expected BPM | Avg BPM | BPM Acc | 3-Dev F1 | Best F1 |
+|-------|:-----------:|:-------:|:-------:|:--------:|:-------:|
+| afrobeat-feelgood | 117.5 | 135 | 0.854 | 0.297 | 0.344 |
+| amapiano-vibez | 112.3 | 112 | 0.986 | 0.298 | 0.302 |
+| breakbeat-background | 86.1 | 127 | 0.527 | 0.236 | 0.283 |
+| breakbeat-drive | 95.7 | 128 | 0.663 | 0.219 | 0.235 |
+| dnb-energetic | 117.5 | 125 | 0.939 | 0.217 | 0.279 |
+| dnb-liquid-jungle | 112.3 | 131 | 0.833 | 0.302 | 0.439 |
+| dubstep-halftime | 117.5 | 124 | 0.940 | 0.264 | 0.330 |
+| edm-trap-electro | 112.3 | 129 | 0.853 | 0.248 | 0.319 |
+| garage-uk-2step | 129.2 | 128 | 0.988 | 0.148 | 0.322 |
+| reggaeton-fuego | 92.3 | 130 | 0.589 | 0.214 | 0.233 |
+| techno-deep-amb | 123.0 | 127 | 0.965 | 0.330 | 0.403 |
+| techno-dub-groove | 123.0 | 131 | 0.935 | 0.227 | 0.273 |
+| techno-machine-drum | 143.6 | 127 | 0.884 | 0.209 | 0.235 |
+| techno-minimal-01 | 129.2 | 131 | 0.986 | 0.533 | 0.614 |
+| techno-minimal-emotion | 129.2 | 125 | 0.969 | 0.501 | 0.683 |
+| trance-goa-mantra | 136.0 | 130 | 0.957 | 0.206 | 0.224 |
+| trance-infected | 143.6 | 129 | 0.920 | 0.265 | 0.359 |
+| trance-party | 136.0 | 135 | 0.993 | 0.394 | 0.519 |
+| **AVERAGE** | | | **0.877** | **0.284** | **0.355** |
+
+### Key Findings
+
+1. **Double-time ~195 BPM lock completely eliminated.** No track shows >136 BPM average.
+   The 4 compounding bugs were the sole cause — not acoustic/enclosure effects as previously
+   hypothesized. BPM accuracy: 33% → 88% (+166%).
+
+2. **Beat F1 unchanged despite massively better BPM.** 3-dev avg 0.284 (vs 0.313 pre-fix
+   baseline, vs v40's 0.285). The old double-time lock produced coincidental beat hits
+   (every other predicted beat at 2x tempo could match a real beat). Phase alignment, not
+   tempo, is the F1 bottleneck.
+
+3. **New ~128 BPM gravity well.** System gravitates to 125-135 BPM regardless of actual
+   tempo. Tracks in that range get 97-100% BPM accuracy. Slow tracks (86-96 BPM breakbeat,
+   reggaeton) lock to ~128 BPM (3:2 harmonic ratio, not 2:1 double-time). Rayleigh prior
+   peaked at ~120 BPM likely contributes.
+
+4. **Phase alignment is the primary F1 bottleneck.** Garage-uk-2step: 99% BPM accuracy but
+   Beat F1 = 0.05-0.32. Best F1 scores (0.61-0.68) only on techno-minimal with strong
+   four-on-floor kicks where phase naturally aligns with transients.

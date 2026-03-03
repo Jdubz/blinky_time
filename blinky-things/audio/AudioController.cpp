@@ -136,6 +136,9 @@ bool AudioController::begin(uint32_t sampleRate) {
     timeToNextPrediction_ = 10;
     pendingBeatPeriod_ = -1;  // No pending tempo change
     beatsSinceOctaveCheck_ = 0;
+    beatsSincePhaseCheck_ = 0;
+    plpPhase_ = 0.0f;
+    plpConfidence_ = 0.0f;
     hmmInitialized_ = false;  // HMM will re-init on first use
     pfInitialized_ = false;   // PF will re-init on first use
     pfRngState_ = 0x12345678;
@@ -643,20 +646,15 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
     periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
 
-    // Apply inverse-lag normalization to ACF (sub-harmonic penalty).
-    // For a periodic signal, acf(2T) ≈ acf(T), so sub-harmonics score equally.
-    // Dividing by lag penalizes longer periods linearly:
-    //   acf(2T)/(2T) = 0.5 * acf(T)/T
-    // giving the true period a 2x advantage over its first sub-harmonic.
-    // Combined with Rayleigh prior (1.67x), total discrimination is ~3.3x.
-    // This must happen AFTER periodicity strength (which uses raw ACF magnitude)
-    // but BEFORE Bayesian fusion and harmonic disambiguation (which need
-    // discriminative lag-weighted values).
-    for (int i = 0; i < harmonicCorrelationSize; i++) {
-        int lag = minLag + i;
-        float lagF = static_cast<float>(lag);
-        correlationAtLag[i] /= lagF;  // lag^1 (proven at F1=0.519)
-    }
+    // NOTE: Inverse-lag normalization REMOVED (v43).
+    // The balanced ACF (correlation /= count, where count = ossCount_ - lag)
+    // already corrects for the sample-count bias at longer lags.
+    // Applying an additional /lag on top created a DOUBLE normalization that
+    // gave lag=20 (~198 BPM) a 1.65x boost over lag=33 (120 BPM), causing
+    // systematic upward tempo lock to ~195 BPM on all tracks.
+    // BTrack applies one or the other, not both.
+    // The Rayleigh prior + comb filter now provide octave discrimination
+    // without this artificial upward bias.
 
     // === BAYESIAN TEMPO FUSION ===
     // Replaces sequential override chain (HPS → pulse train → harmonic disambiguation
@@ -691,17 +689,19 @@ float AudioController::smoothOnsetStrength(float raw) {
 // ===== BAYESIAN TEMPO STATE =====
 
 void AudioController::buildTransitionMatrix() {
-    // Gaussian transition matrix in BPM-space, sigma proportional to source BPM.
-    // With 20 bins (lag-uniform grid), the non-uniform BPM spacing creates
-    // mild drift toward low BPM, but it's slow enough that observations
-    // overcome it. (40 bins had 2x worse drift — reverted to 20.)
+    // Lag-space Gaussian transition matrix (v43: Fix #4).
+    // Previous BPM-space Gaussian on lag-uniform grid created asymmetric
+    // bandwidth: at low BPM (dense bins in BPM), the Gaussian covered more
+    // bins → more probability mass → systematic drift toward slow tempos.
+    // Fixed sigma in lag units ensures symmetric bandwidth on the uniform-lag
+    // grid. Reference lag = midpoint of range (43 at 66 Hz).
+    float lagSigma = bayesLambda * static_cast<float>(CombFilterBank::MAX_LAG + CombFilterBank::MIN_LAG) * 0.5f;
+    if (lagSigma < 1.0f) lagSigma = 1.0f;
 
     for (int i = 0; i < TEMPO_BINS; i++) {
         for (int j = 0; j < TEMPO_BINS; j++) {
-            float bpmDiff = tempoBinBpms_[i] - tempoBinBpms_[j];
-            float sigma = bayesLambda * tempoBinBpms_[j];
-            if (sigma < 1.0f) sigma = 1.0f;
-            float narrow = expf(-0.5f * (bpmDiff * bpmDiff) / (sigma * sigma));
+            float lagDiff = static_cast<float>(tempoBinLags_[i] - tempoBinLags_[j]);
+            float narrow = expf(-0.5f * (lagDiff * lagDiff) / (lagSigma * lagSigma));
 
             float harmonicBonus = 0.0f;
 
@@ -900,14 +900,19 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         }
     }
 
-    // === 2. AUTOCORRELATION OBSERVATION (BTrack-style 4-harmonic comb) ===
-    // For each candidate period T, sum ACF at 1T, 2T, 3T, 4T with spread windows.
-    // The true period matches all 4 harmonics; a sub-harmonic at 2T only matches 2.
-    // This gives the fundamental a ~4x advantage over sub-harmonics.
-    // Multiplied by Rayleigh prior peaked at ~120 BPM for perceptual weighting.
-    float acfObs[TEMPO_BINS];
-    for (int i = 0; i < TEMPO_BINS; i++) {
-        int lag = tempoBinLags_[i];
+    // === 2. FULL-RESOLUTION COMB-ON-ACF (v43: Fix #2) ===
+    // Evaluate 4-harmonic comb at EVERY lag in the fundamental range,
+    // not just the 20 bin centers. With 20 bins spanning 47 lags (~2.4 lag/bin),
+    // the old approach missed ~50% of true peaks due to quantization.
+    // Full-resolution evaluation ensures the comb catches peaks regardless
+    // of where they fall relative to bin centers.
+    // Size matches correlationAtLag[] (MAX_LAG - MIN_LAG + 1 = 47 in practice,
+    // but 256 is the shared cap for both arrays since harmonicCorrelationSize can grow).
+    static_assert(CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG + 1 <= 256,
+        "fullCombAcf buffer too small for lag range");
+    static float fullCombAcf[CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG + 1];
+    for (int li = 0; li < correlationSize; li++) {
+        int lag = minLag + li;
         float combAcf = 0.0f;
         int harmonicsUsed = 0;
         for (int a = 1; a <= 4; a++) {
@@ -930,12 +935,34 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
                 }
             }
         }
-        if (harmonicsUsed > 0) {
-            acfObs[i] = combAcf * rayleighWeight_[i] / (avgEnergy + 0.001f);
-            if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;
-        } else {
-            acfObs[i] = 0.01f;  // Out of range — small floor
+        fullCombAcf[li] = (harmonicsUsed > 0) ? combAcf : 0.0f;
+    }
+
+    // === OCTAVE FOLDING (v43: Fix #3, BTrack-style) ===
+    // For each bin at lag L, also add the comb score at lag L/2 (double BPM).
+    // The fundamental at L gets evidence from both L and L/2, while the
+    // double-time candidate at L/2 only gets evidence from L/2 (its own L/4
+    // is out of range). This gives the fundamental a ~2x advantage over
+    // its double-time harmonic — the key discrimination missing from our
+    // system that caused universal ~195 BPM lock.
+    // Only lags >= 2*minLag (i.e., BPM <= ~99) get folding benefit;
+    // upper-octave candidates (100-200 BPM) naturally don't get the bonus.
+    float acfObs[TEMPO_BINS];
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        int lag = tempoBinLags_[i];
+        int li = lag - minLag;
+        float score = 0.0f;
+        if (li >= 0 && li < correlationSize) {
+            score = fullCombAcf[li];
         }
+        // Octave folding: add comb score at half-period (double BPM)
+        int halfLag = lag / 2;
+        int halfLi = halfLag - minLag;
+        if (halfLi >= 0 && halfLi < correlationSize) {
+            score += fullCombAcf[halfLi];
+        }
+        acfObs[i] = score * rayleighWeight_[i] / (avgEnergy + 0.001f);
+        if (acfObs[i] < 0.01f) acfObs[i] = 0.01f;
     }
     // Exponentiate by weight (only for multiplicative path — pipeline uses raw comb-on-ACF)
     if (!btrkPipeline && bayesAcfWeight != 1.0f) {
@@ -1332,6 +1359,21 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
         if (fabsf(bpm_ - prevBpm_) / (prevBpm_ > 1.0f ? prevBpm_ : 1.0f) > tempoChangeThreshold) {
             float dt = autocorrPeriodMs / 1000.0f;
             updateTempoVelocity(bpm_, dt);
+        }
+    }
+
+    // === 9.5. PLP PHASE EXTRACTION ===
+    // Extract beat phase from comb filter bank peak resonator.
+    // Must run after tempo update (step 9) so beatPeriodSamples_ is current.
+    if (plpPhaseEnabled) {
+        if (combBankEnabled) {
+            plpPhase_ = combFilterBank_.getPhaseAtPeak();
+            plpConfidence_ = combFilterBank_.getPeakConfidence();
+        } else {
+            // Comb filter bank disabled — clear to prevent stale values from
+            // driving corrections in detectBeat().
+            plpPhase_ = 0.0f;
+            plpConfidence_ = 0.0f;
         }
     }
 
@@ -2300,6 +2342,43 @@ void AudioController::detectBeat() {
             } else {
                 lastBeatSample_ = sampleCounter_;
             }
+
+            // PLP phase correction: nudge lastBeatSample_ toward comb bank's
+            // analytical phase. Runs after onset snap so both corrections compose.
+            // Correction is scaled by both strength and confidence — low-confidence
+            // phases produce proportionally smaller corrections (no hard gate).
+            if (plpPhaseEnabled && plpConfidence_ > plpMinConfidence) {
+                int T = beatPeriodSamples_;
+                if (T >= 10) {
+                    // Where PLP says the beat should be (relative to now)
+                    int plpBeatSample = sampleCounter_ - static_cast<int>(plpPhase_ * T + 0.5f);
+                    // Phase error: how far off lastBeatSample_ is from PLP prediction
+                    int error = lastBeatSample_ - plpBeatSample;
+                    // Wrap to [-T/2, T/2] to find shortest correction path
+                    while (error > T / 2) error -= T;
+                    while (error < -T / 2) error += T;
+                    // Scale by both strength and confidence for graceful degradation
+                    float effectiveStrength = plpCorrectionStrength * plpConfidence_;
+                    int correction = static_cast<int>(roundf(error * effectiveStrength));
+                    lastBeatSample_ -= correction;
+
+                    // Debug: log PLP correction details
+                    if (SerialConsole::isDebugChannelEnabled(DebugChannel::RHYTHM)) {
+                        Serial.print(F("{\"type\":\"PLP\",\"ph\":"));
+                        Serial.print(plpPhase_, 3);
+                        Serial.print(F(",\"conf\":"));
+                        Serial.print(plpConfidence_, 3);
+                        Serial.print(F(",\"err\":"));
+                        Serial.print(error);
+                        Serial.print(F(",\"cor\":"));
+                        Serial.print(correction);
+                        Serial.print(F(",\"T\":"));
+                        Serial.print(T);
+                        Serial.println(F("}"));
+                    }
+                }
+            }
+
             if (beatCount_ < 65535) beatCount_++;
             beatDetected = true;
             cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);

@@ -406,6 +406,16 @@ public:
     uint8_t phaseCheckBeats = 4;          // Check every N beats (accumulate evidence)
     float phaseCheckRatio = 1.2f;         // Shifted phase must score this much better to correct
 
+    // === PLP PHASE EXTRACTION (v42) ===
+    // Predominant Local Pulse: beat phase from comb filter bank IIR resonator phase
+    // (CombFilterBank::getPhaseAtPeak()). Corrects CBSS phase drift by adjusting
+    // lastBeatSample_ in detectBeat(). Phase convention: 0=beat now, 1=full period ago.
+    // v42 testing: no measurable effect (redundant with onset snap, <4% confidence
+    // in mic-in-room environment). Disabled by default.
+    bool plpPhaseEnabled = false;             // Master toggle (A/B testing)
+    float plpCorrectionStrength = 0.5f;       // Correction aggressiveness (0=off, 1=snap)
+    float plpMinConfidence = 0.3f;            // Min comb filter peak confidence to apply correction
+
     // === BTRACK-STYLE TEMPO PIPELINE ===
     // Replaces multiplicative Bayesian fusion with BTrack's sequential pipeline:
     // Adaptive threshold on comb-on-ACF + Viterbi max-product.
@@ -505,6 +515,10 @@ public:
     float getLastOnsetStrength() const { return lastSmoothedOnset_; }
     int getTimeToNextBeat() const { return timeToNextBeat_; }
     bool wasLastBeatPredicted() const { return lastFiredBeatPredicted_; }
+
+    // PLP phase extraction debug getters (v42)
+    float getPlpPhase() const { return plpPhase_; }
+    float getPlpConfidence() const { return plpConfidence_; }
 
     // Particle filter debug getters (v38)
     bool isParticleFilterActive() const { return particleFilterEnabled && pfInitialized_; }
@@ -613,6 +627,15 @@ private:
 
     // Phase alignment check state (v37)
     uint16_t beatsSincePhaseCheck_ = 0;  // Beats since last phase alignment check
+
+    // PLP phase extraction state (v42)
+    // Phase convention: plpPhase_ is fraction of beat period elapsed since last beat.
+    // 0.0 = beat is now, 0.5 = halfway between beats, 1.0 = full period since last beat.
+    // Sourced from CombFilterBank::getPhaseAtPeak() (IIR resonator complex exponential).
+    // Note: Updated every ~250ms (Bayesian update rate), not every frame. Between updates,
+    // the value is a stale snapshot and does not advance with elapsed time.
+    float plpPhase_ = 0.0f;           // Last extracted PLP phase (0-1)
+    float plpConfidence_ = 0.0f;      // Comb filter peak confidence (0-1)
 
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};

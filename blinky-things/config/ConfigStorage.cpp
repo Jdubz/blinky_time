@@ -234,6 +234,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.phaseCheckEnabled = false;  // Phase alignment checker (v37: disabled — full validation showed net-negative F1)
     data_.music.phaseCheckBeats = 4;        // Check phase every 4 beats
     data_.music.phaseCheckRatio = 1.2f;     // Shifted phase must score 1.2x better
+    data_.music.plpPhaseEnabled = false;    // PLP phase extraction (v42: disabled by default for A/B testing)
+    data_.music.plpCorrectionStrength = 0.5f; // Correction aggressiveness (0=off, 1=snap)
+    data_.music.plpMinConfidence = 0.3f;    // Min comb filter peak confidence to trust PLP phase
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
     data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
@@ -546,6 +549,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled, phaseCheckEnabled are bools — no range validation needed
     VALIDATE_INT(data_.music.phaseCheckBeats, 2, 16, F("phaseCheckBeats"));
     validateFloat(data_.music.phaseCheckRatio, 1.1f, 3.0f, F("phaseCheckRatio"));
+    // plpPhaseEnabled is bool — no range validation needed
+    validateFloat(data_.music.plpCorrectionStrength, 0.0f, 1.0f, F("plpCorrectionStrength"));
+    validateFloat(data_.music.plpMinConfidence, 0.0f, 1.0f, F("plpMinConfidence"));
     // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
@@ -797,6 +803,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->phaseCheckEnabled = data_.music.phaseCheckEnabled;
         audioCtrl->phaseCheckBeats = data_.music.phaseCheckBeats;
         audioCtrl->phaseCheckRatio = data_.music.phaseCheckRatio;
+        audioCtrl->plpPhaseEnabled = data_.music.plpPhaseEnabled;
+        audioCtrl->plpCorrectionStrength = data_.music.plpCorrectionStrength;
+        audioCtrl->plpMinConfidence = data_.music.plpMinConfidence;
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->barPointerHmm = data_.music.barPointerHmm;
@@ -1013,6 +1022,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.phaseCheckEnabled = audioCtrl->phaseCheckEnabled;
         data_.music.phaseCheckBeats = audioCtrl->phaseCheckBeats;
         data_.music.phaseCheckRatio = audioCtrl->phaseCheckRatio;
+        data_.music.plpPhaseEnabled = audioCtrl->plpPhaseEnabled;
+        data_.music.plpCorrectionStrength = audioCtrl->plpCorrectionStrength;
+        data_.music.plpMinConfidence = audioCtrl->plpMinConfidence;
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
         data_.music.barPointerHmm = audioCtrl->barPointerHmm;

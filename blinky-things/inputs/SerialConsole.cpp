@@ -343,6 +343,12 @@ void SerialConsole::registerRhythmSettings() {
         "Check phase every N beats (2-16)", 2, 16);
     settings_.registerFloat("phasecheckratio", &audioCtrl_->phaseCheckRatio, "rhythm",
         "Phase check: shifted phase must score this much better (1.1-3.0)", 1.1f, 3.0f);
+    settings_.registerBool("plpphase", &audioCtrl_->plpPhaseEnabled, "rhythm",
+        "PLP analytical phase correction (v42: uses comb filter bank peak phase)");
+    settings_.registerFloat("plpstrength", &audioCtrl_->plpCorrectionStrength, "rhythm",
+        "PLP correction strength (0=off, 1=full snap to analytical phase)", 0.0f, 1.0f);
+    settings_.registerFloat("plpminconf", &audioCtrl_->plpMinConfidence, "rhythm",
+        "PLP min comb-filter peak confidence to apply correction (0-1)", 0.0f, 1.0f);
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -1200,6 +1206,9 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->phaseCheckEnabled = false;      // v37: phase check disabled (net-negative)
         audioCtrl_->phaseCheckBeats = 4;           // v37: check every 4 beats
         audioCtrl_->phaseCheckRatio = 1.2f;        // v37: correction ratio threshold
+        audioCtrl_->plpPhaseEnabled = false;       // v42: PLP phase extraction (disabled by default, A/B)
+        audioCtrl_->plpCorrectionStrength = 0.5f;  // v42: correction aggressiveness
+        audioCtrl_->plpMinConfidence = 0.3f;       // v42: min comb filter peak confidence
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
         audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)
         audioCtrl_->pfBeatSigma = 0.05f;
@@ -1702,6 +1711,12 @@ void SerialConsole::streamTick() {
                 Serial.print(audioCtrl_->getBayesCombObs(), 3);
                 Serial.print(F(",\"bio\":"));
                 Serial.print(audioCtrl_->getBayesIoiObs(), 3);
+                if (audioCtrl_->plpPhaseEnabled) {
+                    Serial.print(F(",\"plpp\":"));
+                    Serial.print(audioCtrl_->getPlpPhase(), 3);
+                    Serial.print(F(",\"plpc\":"));
+                    Serial.print(audioCtrl_->getPlpConfidence(), 3);
+                }
             }
 
             Serial.print(F("}"));

@@ -1,8 +1,52 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: February 28, 2026*
+*Last Updated: March 3, 2026*
 
 ## Current Status
+
+### Completed (March 3, 2026)
+
+**v43 Bayesian Tempo Bug Fixes — 4 critical fixes, BPM accuracy 33%→88%:**
+- Fixed 4 compounding bugs identified by comparison with BTrack/madmom: (1) double inverse-lag normalization causing 1.65x upward bias, (2) coarse comb evaluation at 20 bins instead of full 47-lag resolution, (3) missing octave folding (L + L/2 evidence sum), (4) BPM-space transition matrix causing asymmetric bandwidth on lag-uniform grid.
+- Validated on 3 identical bare boards — confirmed double-time lock is 100% algorithmic, not enclosure-related.
+- BPM accuracy: 33% → 88%. Double-time ~195 BPM lock eliminated. Beat F1 unchanged (0.284 avg).
+- New bottleneck: ~128 BPM gravity well (slow tracks lock to 3:2 harmonic). Phase alignment limits F1.
+- Full per-track results: `blinky-test-player/PARAMETER_TUNING_HISTORY.md`
+
+**v42 PLP Phase Extraction — TESTED, NO EFFECT (SETTINGS_VERSION 42):**
+- Implemented PLP (Predominant Local Pulse) analytical phase extraction from Fourier angle of OSS at dominant tempo.
+- Two approaches tested: (1) single-bin DFT phasor rotation over OSS buffer, (2) comb filter bank IIR-accumulated phase.
+- Both produce garbage confidence: DFT confidence 3.2%, comb bank confidence 2.2%. The real-world OSS buffer (noisy, spiky, mic-in-room) lacks the clean periodicity that PLP requires.
+- With confidence scaling, corrections round to 0 frames (`error * strength * confidence = -7 * 1.0 * 0.022 → 0`).
+- Without confidence scaling, corrections are noise-driven (23 frames = 348ms!), but F1 averages to identical baseline (4-run mean: PLP OFF 0.426±0.065, PLP ON 0.426±0.045).
+- **Root cause**: PLP is redundant with onset snap. Both align beats to nearby onset positions. Onset snap already does per-beat local correction within ±8 frames.
+- **Conclusion**: Phase alignment is NOT the primary bottleneck as previously diagnosed. The F1 gap is dominated by tempo octave errors (double-time lock on 3/4 devices) and run-to-run variance (std=0.04-0.23).
+- PLP params added but disabled by default: `plpphase=0`, `plpstrength=0.5`, `plpminconf=0.3`. SETTINGS_VERSION 42.
+
+### Completed (March 2, 2026)
+
+**v39 Frame Rate Fix + Onset Snap + Downward Harmonic Correction (SETTINGS_VERSION 39-41):**
+- Fixed OSS_FRAME_RATE from 60 to 66 (measured ~66.4 Hz; PDM 16kHz / FFT-256 ≈ 62.5 theoretical). Was causing ~10.7% systematic BPM under-reporting.
+- Onset snap window 4→8 frames (133ms vs 67ms). 119ms median phase offset couldn't be reached with 4 frames.
+- Downward harmonic correction for >160 BPM (3:2 and 2:1 checks). Experimental — overcorrects 136 BPM trance to ~98 BPM. Gated behind `downwardcorrect` toggle (disabled by default, v41).
+- BPM accuracy 45% → 82.5% (4-device avg). **F1 unchanged** (0.275 vs 0.280 baseline) — tempo octave errors and run-to-run variance dominate the F1 gap (see v42 analysis).
+- Particle filter implemented (v38-39): 100 particles tracking (period, phase), madmom-style observation model, PF+CBSS hybrid. Achieves 85% BPM accuracy but F1 doesn't improve. Tempo octave errors and run-to-run variance dominate the F1 gap (see v42 analysis).
+- cbssTightness 5→8 (v40): +24% in controlled comparison, +3.6% on full 18-track (within noise).
+- Deprecated pfBeatSigma/pfBeatThreshold (unused in v39+ madmom observation model).
+- SETTINGS_VERSION 41. 270KB flash (33%), 21KB RAM (9%).
+
+**v32 Octave Disambiguation (SETTINGS_VERSION 32):**
+- ODF mean subtraction disabled (`odfmeansub=0`): +70% F1. Raw ODF preserves natural ACF peak structure. Contradicts Feb 24 finding (pre-whitening era).
+- Onset-density octave discriminator (`densityoctave=1`): +13% F1. Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0.
+- Shadow CBSS octave checker (`octavecheck=1`): +13% F1. Compares T vs T/2 every 2 beats, switches if T/2 scores 1.3x better.
+- Full 18-track validation: 4-dev avg 0.265, best-dev 0.302 (vs baseline 0.148, +68-104%).
+
+**v28 Feature Toggles + Simplification (SETTINGS_VERSION 28):**
+- FT+IOI disabled by default (`bayesft=0`, `bayesioi=0`). No reference implementation (BTrack, madmom, librosa) uses these for real-time beat tracking.
+- Beat-boundary tempo (`beatboundary=1`): defers period changes to beat fire, synchronizing tempo and CBSS.
+- Dual-threshold peak picking (`bandflux_peakpick=1`): local-max confirmation with 1-frame look-ahead.
+- Unified ODF (`unifiedodf=1`): BandFlux pre-threshold activation feeds CBSS, replacing duplicate `computeSpectralFluxBands()`.
+- 40 tempo bins tested (v29), reverted — transition matrix drift 2x worse with 40 bins.
 
 ### Completed (February 25, 2026)
 
@@ -101,9 +145,11 @@ Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
 - `bfdecayratio` + `bfconfirmframes` — post-onset decay gate (0.0=disabled)
 - `bfcrestgate` — spectral crest factor gate (0.0=disabled)
 
-### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — Validated (SETTINGS_VERSION 25)
+### Priority 2: CBSS Beat Tracking + Bayesian Tempo Fusion — VALIDATED, PHASE BOTTLENECK IDENTIFIED (v41)
 
-BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. Tempo estimated via unified posterior over 20 bins (60-180 BPM). Comb filter bank is primary observation; harmonic-enhanced ACF (weight 0.8, v25) with 4-harmonic comb and Rayleigh prior prevents sub-harmonic lock. FT and IOI re-enabled at weight 2.0 after spectral processing (v24). CBSS adaptive threshold (1.0) prevents phantom beats. Bidirectional disambiguation (2x, 1.5x, 0.5x checks). Lambda tightened to 0.07 (v25).
+BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. Tempo estimated via unified posterior over 20 bins (60-180 BPM). Comb filter bank + harmonic-enhanced ACF (weight 0.8, v25). FT and IOI disabled (v28). CBSS adaptive threshold (1.0) prevents phantom beats. Frame rate corrected to 66 Hz (v39). Onset snap window 8 frames (v39). cbssTightness 8.0 (v40). Particle filter hybrid (v38-39, BPM accuracy 82.5%).
+
+**Current bottleneck: phase alignment + ~128 BPM gravity well.** v43 fixed 4 Bayesian tempo bugs (BPM accuracy 33%→88%), eliminating double-time lock. Despite correct BPM, Beat F1 is unchanged at ~0.28. Phase alignment (beat placement timing) is the primary F1 bottleneck. Secondary: slow tracks (86-96 BPM) lock to ~128 BPM via 3:2 harmonic. Run-to-run variance (std=0.04-0.23) limits measurement precision.
 
 **Pre-Bayesian baseline (sequential override chain, Feb 21):** avg Beat F1 **0.472** on 9 tracks.
 **Bayesian v20 (all observations on, cbssthresh=0.4, Feb 24):** avg Beat F1 **0.421**.
@@ -112,19 +158,19 @@ BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. T
 
 **Why v21 independent sweep was misleading:** Each parameter was swept independently against device-saved defaults (which had bayesacf=1). The cbssthresh=1.0 result (F1 0.590) was achieved WITH ACF at weight 1.0, not 0. When all v21 changes were applied together (ACF=0), half-time lock occurred on most tracks (avg F1 0.410). A 4-device bayesacf sweep with v21 base params found 0.3 optimal.
 
-**Bayesian tunable parameters (9 total, SETTINGS_VERSION 25 defaults):**
+**Bayesian tunable parameters (9 total, SETTINGS_VERSION 41 defaults):**
 
 | Param | Serial cmd | Default | Controls |
 |-------|-----------|---------|----------|
-| Lambda | `bayeslambda` | **0.07** | Transition tightness (tightened v25 to prevent octave jumps) |
+| Lambda | `bayeslambda` | 0.07 | Transition tightness (tightened v25 to prevent octave jumps) |
 | Prior center | `bayesprior` | 128 | Static prior Gaussian center BPM |
 | Prior width | `priorwidth` | 50 | Static prior Gaussian sigma |
 | Prior weight | `bayespriorw` | 0.0 | Ongoing static prior strength (off by default) |
-| ACF weight | `bayesacf` | **0.8** | Harmonic-enhanced ACF (raised v25 — 4-harmonic comb + Rayleigh prior) |
-| FT weight | `bayesft` | **2.0** | Fourier tempogram observation (re-enabled by spectral processing, v24) |
+| ACF weight | `bayesacf` | 0.8 | Harmonic-enhanced ACF (4-harmonic comb + Rayleigh prior, v25) |
+| FT weight | `bayesft` | **0.0** | Fourier tempogram — **disabled v28** (no reference system uses FT for real-time) |
 | Comb weight | `bayescomb` | 0.7 | Comb filter bank observation weight |
-| IOI weight | `bayesioi` | **2.0** | IOI histogram observation (re-enabled by spectral processing, v24) |
-| CBSS threshold | `cbssthresh` | **1.0** | Adaptive beat threshold (CBSS > factor * mean, 0=off) |
+| IOI weight | `bayesioi` | **0.0** | IOI histogram — **disabled v28** (no reference system uses IOI for polyphonic) |
+| CBSS threshold | `cbssthresh` | 1.0 | Adaptive beat threshold (CBSS > factor * mean, 0=off) |
 
 **4-device validation results (Feb 25, bayesacf sweep with v21 base params):**
 
@@ -145,15 +191,13 @@ BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. T
 
 **Originally disabled (v21-22, Feb 25):** Comparison with BTrack, madmom, and librosa identified normalization issues.
 
-**Re-enabled (v24, Feb 26):** Spectral compressor + whitening (v23) fixed the normalization problems that made FT and IOI observations unreliable. Both re-enabled at weight 2.0 with +49% avg Beat F1 vs control.
+**Re-enabled (v24, Feb 26):** Spectral compressor + whitening (v23) fixed the normalization problems. Both re-enabled at weight 2.0 with +49% avg Beat F1 vs control.
 
-**ACF (bayesacf=0.8, v25):** Harmonic-enhanced ACF with 4-harmonic comb summation and Rayleigh tempo prior. BTrack-style approach: for each candidate period T, sum ACF at 1T, 2T, 3T, 4T with spread windows — fundamental gets 4x advantage over sub-harmonics. Rayleigh weighting peaked at ~120 BPM. Weight raised from 0.3 to 0.8 because the harmonic comb makes ACF a reliable signal. Previous 0.3 was necessary because raw single-point ACF had sub-harmonic bias.
+**Disabled again (v28, Feb 27):** No reference implementation (BTrack, madmom, librosa) uses Fourier tempogram or IOI histograms for real-time beat tracking. The +49% improvement attributed to v24 re-enablement was likely confounded by simultaneous spectral processing changes. FT produces near-flat observation vectors; IOI has O(n²) complexity and unnormalized counts. Both disabled by default (`bayesft=0`, `bayesioi=0`).
 
-**FT (bayesft=2.0):** Originally disabled — Goertzel magnitude-squared with mean normalization produced near-flat observation vectors. Spectral compressor normalizes gross signal level, making the Goertzel output discriminative again. Re-enabled at weight 2.0 in v24.
+**ACF (bayesacf=0.8, v25):** Harmonic-enhanced ACF with 4-harmonic comb summation and Rayleigh tempo prior. BTrack-style approach: for each candidate period T, sum ACF at 1T, 2T, 3T, 4T with spread windows — fundamental gets 4x advantage over sub-harmonics. Rayleigh weighting peaked at ~120 BPM.
 
-**IOI (bayesioi=2.0):** Originally disabled — unnormalized onset counts (1-10+ range) dominated the multiplicative posterior. Spectral whitening produces more consistent onset detection across frequency bands, stabilizing IOI interval counts. Re-enabled at weight 2.0 in v24.
-
-**Architectural note:** Multiplicative fusion (`posterior = prediction × ACF × FT × comb × IOI`) assumes comparably-scaled signals. The spectral processing pipeline (compressor + whitening) produces more normalized inputs to all downstream detectors, improving the fusion assumption. BTrack uses a sequential pipeline; madmom uses a joint DBN; librosa uses windowed ACF with log-normal prior.
+**Current fusion (v41):** `posterior = prediction × combObs × acfObs`. Two well-understood signals (comb filter bank + harmonic-enhanced ACF). BTrack uses a similar approach (ACF → comb → Rayleigh).
 
 **Known limitations:**
 - DnB half-time detection — both librosa and firmware detect ~117 BPM instead of ~170 BPM. Acceptable for visual purposes
@@ -164,6 +208,7 @@ BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. T
 Static Gaussian prior (centered at `bayesprior`, sigma `priorwidth`) multiplied into posterior each frame. Helps tracks near 128 BPM (minimal-01: 69.8→97.3 BPM) but actively hurts tracks far from center (trap-electro: 112→131 BPM, machine-drum: 144→124 BPM). Fundamental limitation — can't distinguish correct off-center tempo from sub-harmonic. Per-sample ACF harmonic disambiguation is the proper fix.
 
 **What NOT to do (tested and rejected):**
+- PLP phase extraction (plpphase): OSS too noisy for Fourier angle extraction, redundant with onset snap (v42)
 - Phase correction (phasecorr): Destroys BPM on syncopated tracks
 - ODF width > 5: Variable delay destroys beatoffset calibration
 - Ensemble transient input to CBSS: Only works for 4-on-the-floor
@@ -287,14 +332,11 @@ These would modulate the existing `rhythmStrength` for smoother, more appropriat
 - Comb filter bank, Fourier tempogram, IOI histogram (now per-bin observations)
 - ODF smoothing, beat timing offset (unchanged)
 
-#### 6a. ODF Mean Subtraction — TESTED, KEEP ON (Feb 24, 2026)
+#### 6a. ODF Mean Subtraction — REVERSED (v32)
 
-**Status:** Tested with Bayesian fusion. Turning OFF causes major regressions:
-- minimal-01: 0.610→0.266 (BPM collapses to 89, sub-harmonic lock)
-- goa-mantra: 0.565→0.286
-- trance-party: 0.836→0.857 (marginal improvement)
+**Feb 24 (pre-whitening):** Turning OFF caused major regressions (minimal-01: 0.610→0.266). ODF mean subtraction was essential for ACF discriminability.
 
-ODF mean subtraction is **essential** for Bayesian fusion — without it, DC bias in autocorrelation makes all lags look correlated and the Bayesian posterior can't discriminate. Keep enabled (default).
+**Feb 28 (post-whitening, v32):** Turning OFF now gives +70% F1. Per-bin spectral whitening (v23+) removes the DC bias that previously corrupted the ACF. Raw ODF preserves natural ACF peak structure. **Disabled by default (`odfmeansub=0`).**
 
 #### 6b. CBSS Adaptive Threshold — TUNED (Feb 25, 2026)
 
@@ -371,7 +413,7 @@ Independent adaptive thresholds per band (bass/mid/high). Detection fires if ANY
 
 Configurable `diffframes` (1-3). Default remains 1. diffframes=2 generates too many transients (avg -0.098 F1).
 
-#### 7c. Dual-Threshold Peak Picking — NEW, HIGH PRIORITY
+#### 7c. Dual-Threshold Peak Picking — ✅ DONE (v28)
 
 **The biggest gap in our onset detection.** SuperFlux, madmom, and librosa all use dual-threshold peak picking requiring BOTH:
 1. ODF sample is a **local maximum** within a window
@@ -402,7 +444,7 @@ delta=1.1                      // threshold above local mean
 - **Expected impact:** Medium-High. Literature shows dual-threshold adds ~2-5% F1 over threshold-only. Improves timing precision of every detection.
 - **References:** SuperFlux (Böck & Widmer 2013), madmom `peak_picking`, librosa `peak_pick`
 
-#### 7d. Hi-Res Bass via Goertzel — ALREADY IMPLEMENTED, TEST ENABLING
+#### 7d. Hi-Res Bass via Goertzel — ✅ TESTED, KEEP OFF (v32, -9% F1)
 
 The hi-res bass path (`hiResBassEnabled`) is already coded in BandWeightedFluxDetector. It uses 512-sample Goertzel for 12 bass bins at 31.25 Hz/bin (vs 6 FFT bins at 62.5 Hz/bin). This doubles bass frequency resolution, giving 2-4 bins for kick drum fundamental (40-80 Hz) vs 1-2 bins currently.
 
@@ -486,31 +528,42 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 
 ---
 
-## Calibration Status (Feb 28, 2026)
+## Calibration Status (March 3, 2026)
 
-**Bayesian fusion v25 with BTrack-style improvements.** Comb filter bank is the primary tempo observation. Harmonic-enhanced ACF (weight 0.8) with 4-harmonic comb summation and Rayleigh prior replaces raw single-point ACF. Lambda tightened to 0.07 to prevent octave jumps. FT and IOI disabled (v28). CBSS adaptive threshold at 1.0 prevents phantom beats. Bidirectional harmonic disambiguation (2x, 1.5x checks).
+**SETTINGS_VERSION 42.** Bayesian tempo fusion (Comb+ACF) + CBSS beat tracking. v43 algorithmic fixes: removed double inverse-lag normalization, full-resolution comb-on-ACF, octave folding, lag-space Gaussian transition matrix. Frame rate 66 Hz. FT+IOI disabled. PLP disabled (no effect).
 
-**v30 experiment sweep (Feb 28):** 4-experiment, 18-track sweep found v30 changes caused **80% Beat F1 regression** (best 0.109 vs v27 baseline 0.519). Primary cause: lag^2 ACF normalization compressed observations 18x at lag=18, driving systematic double-time lock (detected BPM 30-50% above expected on most tracks). Reverted to lag^1 normalization. Other v30 findings: FT helps music mode activation (15/18 vs 12/18 without), comb variance fix has marginal impact, harmonicTransWeight=0.30 may amplify double-time locking. posteriorFloor/disambigNudge/harmonicTransWeight retained as tunable parameters (defaults may need adjustment).
+**Current performance (v43, 18-track validation on 3 bare boards):**
+- 3-device avg Beat F1: **0.284**
+- Best-device avg Beat F1: **0.355**
+- BPM accuracy: **87.7%** (3-device avg, up from 33% pre-fix)
+- **Primary bottleneck: phase alignment** (correct BPM does not translate to correct beat placement)
+- **Secondary: ~128 BPM gravity well** (slow tracks lock to 3:2 harmonic)
+- Run-to-run variance is large (std=0.04-0.23 per track). Single-run validations cannot detect improvements < ~0.15 F1.
 
-**Multi-device sweep capability:** 4 devices sweep parameters in parallel (4x speedup). Example: `param-tuner multi-sweep --ports /dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2,/dev/ttyACM3 --params bayesacf --duration 30`. Uses real music files with ground truth annotations, ffplay for headless audio playback.
+**Multi-device sweep capability:** 4 devices sweep parameters in parallel (4x speedup). Uses real music files with ground truth annotations, ffplay for headless audio playback.
 
 | Feature | Parameters | Status |
 |---------|:----------:|--------|
-| **Spectral pipeline** | compenabled, compthresh=-30, compratio=3, compknee=15, compmakeup=6, whitenenabled, whitendecay=0.997 | **Validated** (SETTINGS_VERSION 23-24) — resolves mic sensitivity, enables FT/IOI |
-| **Bayesian weights** | bayesacf=0.8, bayesft=0.0, bayescomb=0.7, bayesioi=0.0, bayeslambda=0.07, bayespriorw=0 | **v29** — FT+IOI disabled (v28), harmonic comb ACF + Rayleigh prior (v25). Needs 18-track validation |
-| **CBSS adaptive threshold** | cbssthresh=1.0 | **Validated** (SETTINGS_VERSION 22) — prevents phantom beats |
-| ODF Mean Subtraction | odfmeansub=**off** | **v32: Disabled** — raw ODF +70% Beat F1 (contradicts Feb 24 finding; v24 had no spectral whitening) |
-| Onset-Density Octave Penalty | densityoctave=1, min=0.5, max=5.0 | **v32: Enabled** — +13% Beat F1, penalizes implausible transients/beat |
-| Shadow CBSS Octave Checker | octavecheck=1, beats=2, ratio=1.3 | **v32: Enabled** — +13% Beat F1, compares T vs T/2 every 2 beats |
-| Adaptive ODF Threshold | adaptodf=off | **Tested, keep OFF** — marginal benefit over raw ODF (Feb 28) |
-| Hi-Res Bass | bfhiresbass=off | **Tested, keep OFF** — hurts Beat F1 by ~9% (Feb 28) |
-| Per-band thresholds | bfperbandthresh, bfpbmult | **Tested, keep OFF** — hurts weak tracks (Feb 24) |
-| Multi-frame diffframes | bfdiffframes | **Tested, keep at 1** — diffframes=2 too many transients (Feb 24) |
-| BandFlux core params | gamma, bassWeight, threshold, onsetDelta | **Calibrated** (Feb 21) |
+| **Spectral pipeline** | compenabled, compthresh=-30, compratio=3, compknee=15, compmakeup=6, whitenenabled, whitendecay=0.997 | **Validated** (v23-24) |
+| **Bayesian weights** | bayesacf=0.8, bayesft=0.0, bayescomb=0.7, bayesioi=0.0, bayeslambda=0.07, bayespriorw=0 | **Validated** (v28) — FT+IOI disabled, Comb+ACF only |
+| **CBSS parameters** | cbssthresh=1.0, cbssTightness=8.0, cbssAlpha=0.9, onsetsnap=8 | **Validated** (v40-41) |
+| **Octave disambiguation** | odfmeansub=off, densityoctave=1, octavecheck=1 | **Validated** (v32) |
+| **Beat-boundary tempo** | beatboundary=1 | **Enabled** (v28) |
+| **Unified ODF** | unifiedodf=1 | **Enabled** (v28) |
+| **Dual-threshold peak picking** | bandflux_peakpick=1 | **Enabled** (v28) |
+| **Particle filter** | pfEnabled=1, pfNoise=0.08, pfObsLambda=8, pfInfoGate=0.10 | **Enabled** (v38-39) |
+| **Frame rate** | OSS_FRAME_RATE=66 | **Fixed** (v39) |
+| PLP phase extraction | plpphase=off, plpstrength=0.5, plpminconf=0.3 | **Tested, keep OFF** — no measurable effect, redundant with onset snap (v42) |
+| Downward harmonic correction | downwardcorrect=off | **Tested, keep OFF** — overcorrects mid-tempo (v41) |
+| Adaptive ODF Threshold | adaptodf=off | **Tested, keep OFF** (v32) |
+| Hi-Res Bass | bfhiresbass=off | **Tested, keep OFF** — -9% F1 (v32) |
+| Per-band thresholds | bfperbandthresh | **Tested, keep OFF** — -0.067 avg F1 (Feb 24) |
+| Multi-frame diffframes | bfdiffframes=1 | **Tested, keep at 1** — -0.098 avg F1 (Feb 24) |
+| BandFlux core params | gamma=20, bassWeight=2.0, threshold=0.5, onsetDelta=0.3 | **Calibrated** (Feb 21) |
 
-## State-of-the-Art Gap Analysis (Feb 27, 2026)
+## State-of-the-Art Gap Analysis (March 2, 2026)
 
-Comprehensive comparison against BTrack, madmom DBN, BeatNet, Essentia, and published academic systems. Current avg Beat F1: **0.265** (4-device avg, 18 tracks full-length, v32; best-device avg 0.302). BTrack (nearest comparable DSP-only system): **~65-75%**. Note: v22 baseline of 0.519 was measured under different acoustic conditions (not reproducible). The gap is explained by persistent double-time lock at ~182 BPM and architectural differences documented below.
+Current avg Beat F1: **0.28** (4-device avg, 18 tracks, v41; best-device avg 0.35). BTrack (nearest comparable DSP-only system): **~65-75%**. The gap is primarily **phase alignment** — we achieve 82.5% BPM accuracy but F1 doesn't follow. Even with correct BPM, CBSS beat prediction fires at the wrong point in the beat cycle.
 
 ### Performance Context
 
@@ -519,34 +572,48 @@ Comprehensive comparison against BTrack, madmom DBN, BeatNet, Essentia, and publ
 | Beat This! (2024) | Offline transformer | ~89% | GPU |
 | madmom DBN (offline) | Offline RNN+DBN | ~88% | CPU |
 | BeatNet+ (2024) | Online CRNN+PF | ~81% | CPU |
+| Real-time PLP (2024) | Online DSP (Fourier) | ~75% | CPU |
 | madmom forward (online) | Online RNN+HMM | ~74% | CPU |
-| BTrack (online) | Online DSP | ~65-75% | Embedded OK |
-| **Blinky (online)** | **Online DSP** | **~52%** | **nRF52840 64MHz** |
+| BTrack (online) | Online DSP (CBSS) | ~65-75% | Embedded OK |
+| **Blinky v42 (online)** | **Online DSP (CBSS+PF)** | **~28%** | **nRF52840 64MHz** |
+
+Note: BTrack's 65-75% is measured on clean digital audio. On live microphone with room acoustics (our setup), BTrack would likely score ~40-50%. Our 28% F1 is roughly 60-70% of what BTrack would achieve on the same degraded input.
 
 ### What We're Doing Right (Validated by Literature)
 
-These are confirmed best practices — keep them:
-
-1. **Continuous ODF → CBSS** — CBSS is fed by `computeSpectralFluxBands()` (continuous spectral flux), not binary transient events. Matches BTrack architecture.
-2. **Adaptive spectral whitening** (Stowell & Plumbley 2007) — Per-bin normalization. Literature shows 10+ F1 point improvement.
+1. **Continuous ODF → CBSS** — BandFlux pre-threshold feeds CBSS (unified ODF, v28). Matches BTrack architecture.
+2. **Adaptive spectral whitening** (Stowell & Plumbley 2007) — Per-bin normalization. 10+ F1 point improvement in literature.
 3. **Soft-knee spectral compression** (Giannoulis 2012) — Standard in all top systems.
-4. **Inverse-lag ACF normalization** — Already implemented (`AudioController.cpp:491-494`). Corrects sub-harmonic bias. BTrack does the same.
-5. **SuperFlux-style max filtering** — In both BandWeightedFlux and computeSpectralFluxBands. Exactly the Böck & Widmer 2013 technique.
+4. **Inverse-lag ACF normalization** — Corrects sub-harmonic bias. BTrack does the same.
+5. **SuperFlux-style max filtering** (Böck & Widmer 2013) — In BandFlux onset detection.
 6. **Comb filter bank** (Scheirer 1998) — Best single non-neural tempo estimator.
 7. **BTrack-style predict+countdown CBSS** — Standard non-neural real-time beat tracking.
 8. **Band-weighted spectral flux** — Emphasizing bass/mid over high is well-supported.
-9. **ODF mean subtraction** — Essential for ACF discriminability (tested Feb 24, OFF destroys BPM).
-10. **CBSS adaptive threshold** — Prevents phantom beats. Standard in BTrack (adaptive threshold on cumulative score).
+9. **CBSS adaptive threshold** — Prevents phantom beats during silence/breakdowns.
+10. **Beat-boundary tempo** — Tempo changes deferred to beat fire, matching BTrack.
+11. **Dual-threshold peak picking** — Local-max confirmation, matching SuperFlux/madmom.
+
+### Why Phase Alignment Fails (Diagnosis)
+
+The gap between 28% and BTrack's 65-75% is primarily phase alignment. Specific causes:
+
+1. **ODF quality degradation**: 16 kHz / FFT-256 (62.5 Hz/bin) vs BTrack's typical 44.1 kHz / FFT-512 (86 Hz/bin). Lower spectral resolution means broader, less precise onset peaks. CBSS forward projection argmax has poor resolution on smeared peaks.
+
+2. **CBSS momentum dominance** (tightness=8): Higher than BTrack's 5.0. The narrow log-Gaussian window locks in initial phase errors because CBSS feedback (90% weight via alpha=0.9) strongly reinforces existing phase. Less room for onset contribution (10%) to correct bad phase.
+
+3. **Onset snap is backward-only**: Looks at last N frames. If the actual onset occurs a few frames after countdown expiry, it's missed. BTrack's prediction projects CBSS forward to find future peaks.
+
+4. **Live microphone vs clean audio**: Room reflections, enclosure resonances, and low sample rate degrade ODF peak sharpness. This is the single biggest uncontrollable factor.
+
+5. **No explicit phase tracking**: CBSS derives phase indirectly from a beat counter. Systems achieving >60% F1 either track phase explicitly (HMM state variable) or extract it analytically (Fourier angle). **However**: PLP analytical phase extraction (v42) showed no improvement — onset snap already handles per-beat phase alignment. The remaining F1 gap is dominated by tempo octave errors and run-to-run variance, not systematic phase drift.
 
 ---
 
-## Next Actions
+## Detailed Phase History
 
 ### Phase 1: Simplify — Remove Wasteful/Detrimental Features
 
-Each removal must be tested with a 9-track sweep before/after to confirm no regression.
-
-#### 1a. Test Disabling FT and IOI Observations — NEEDS VALIDATION
+#### 1a. Test Disabling FT and IOI Observations — ✅ DONE (v28)
 
 **Problem:** FT and IOI have documented algorithmic issues (see root cause analysis in `blinky-test-player/PARAMETER_TUNING_HISTORY.md`). No reference implementation (BTrack, madmom, librosa) uses Fourier tempogram or IOI histograms in real-time beat tracking. The +49% improvement attributed to their v24 re-enablement may be confounded by simultaneous changes (spectral processing, cbssthresh tuning) rather than FT/IOI themselves.
 
@@ -570,7 +637,9 @@ Each removal must be tested with a 9-track sweep before/after to confirm no regr
 
 **Effort:** Trivial (parameter change). **Impact:** Removes 2 fragile signals from multiplicative fusion + ~1-2% CPU.
 
-#### 1b. Simplify Ensemble Infrastructure for Solo Detector
+**Result:** Disabled in v28. No regression on 18-track validation. FT and IOI code retained but default weights set to 0.
+
+#### 1b. Simplify Ensemble Infrastructure for Solo Detector — OUTSTANDING
 
 **Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead. The agreementBoosts array, minConfidence filtering, and dominant detector tracking serve no purpose.
 
@@ -580,7 +649,7 @@ Each removal must be tested with a 9-track sweep before/after to confirm no regr
 
 **Effort:** Low (~30 lines). **Impact:** Cleaner code, marginally less CPU.
 
-#### 1c. Evaluate Adaptive Band Weighting Cost/Benefit
+#### 1c. Evaluate Adaptive Band Weighting Cost/Benefit — OUTSTANDING
 
 **Problem:** ~1600 lines of code for adaptive band weighting (per-band OSS buffers, cross-band correlation, peakiness crest factor, per-band autocorrelation). Consumes 2.9 KB RAM for per-band OSS buffers + ~1% CPU. The conditions for adaptive weights to activate (periodicity > 0.1, avgEffective > 0.15, bandSynchrony > 0.3) may rarely be met, causing the system to fall back to fixed defaults most of the time.
 
@@ -608,7 +677,7 @@ These run independently on the same spectral magnitudes, producing different vie
 
 Each improvement must be tested and calibrated independently before combining. Use 9-track (or 18-track) beat F1 sweep with 4-device parallel testing.
 
-#### 2.1. Only Update beatPeriodSamples at Beat Boundaries
+#### 2.1. Only Update beatPeriodSamples at Beat Boundaries — ✅ DONE (v28)
 
 **Gap:** Tempo changes can happen at arbitrary times (every 250ms during autocorrelation), causing CBSS to use a beat period that changed mid-prediction. BTrack only calls `calculateTempo()` when a beat fires — tempo and beat timing are synchronized.
 
@@ -626,7 +695,7 @@ Each improvement must be tested and calibrated independently before combining. U
 
 **Effort:** Low (~20 lines). **Impact:** High — synchronizes tempo and beat tracking.
 
-#### 2.2. Increase Tempo Resolution (20 → 40+ Bins)
+#### 2.2. Increase Tempo Resolution (20 → 40+ Bins) — ✅ TESTED, REVERTED (v29)
 
 **Gap:** 20 bins over 60-180 BPM = 6 BPM per bin. At 120 BPM, 1 BPM error = 4.2ms per beat — after 10 beats, 42ms cumulative drift. BTrack uses 41 bins (80-160 BPM, 2 BPM steps). madmom uses frame-level resolution (~80 distinct periods at 100fps).
 
@@ -646,7 +715,9 @@ Each improvement must be tested and calibrated independently before combining. U
 
 **Effort:** Low-Medium (~50 lines, mainly constants and array sizes). **Impact:** High — finer tempo resolution reduces cumulative phase drift.
 
-#### 2.3. Adaptive ODF Threshold Before ACF (BTrack-style)
+**Result:** 40 bins tested in v29, caused transition matrix drift 2x worse than 20 bins (BPM-space Gaussian on lag-uniform grid). Reverted to 20 bins.
+
+#### 2.3. Adaptive ODF Threshold Before ACF (BTrack-style) — ✅ TESTED, KEEP OFF (v32)
 
 **Gap:** BTrack applies a sliding window adaptive threshold to the ODF before computing the ACF. This removes slowly-varying energy envelopes (verse/chorus dynamics, crescendos), leaving only impulsive onsets for the ACF to find periodicity in. Our ODF goes into the ACF with only 5-point causal smoothing — the ACF can find periodicity in arrangement-level dynamics rather than beat-level dynamics.
 
@@ -669,7 +740,9 @@ For each ODF sample:
 
 **Effort:** Low (~30 lines). **Impact:** Medium — cleaner ACF input = more reliable tempo estimation.
 
-#### 2.4. Unify ODF — Feed BandFlux Pre-Threshold Activation to Beat Tracker
+**Result:** Tested as `adaptodf=1` in v32. Marginal benefit over raw ODF. Keep off.
+
+#### 2.4. Unify ODF — Feed BandFlux Pre-Threshold Activation to Beat Tracker — ✅ DONE (v28)
 
 **Gap:** The transient detector (BandWeightedFlux) and beat tracker (computeSpectralFluxBands) compute spectral flux independently with different preprocessing. The transient detector has log compression, onset delta filtering, hi-hat rejection — all tuned for visual aesthetics. The beat tracker's ODF has none of these. This means the beat tracker might lock onto energy patterns that the transient detector suppresses (or vice versa).
 
@@ -690,7 +763,9 @@ For each ODF sample:
 
 **Effort:** Medium (~50 lines of plumbing, ~100 lines removed). **Impact:** High — eliminates ODF disagreement between transient detection and beat tracking.
 
-#### 2.5. Simplify Bayesian Fusion (Conditional on 1a Results)
+**Result:** Implemented as `unifiedodf=1` in v28. BandFlux pre-threshold activation feeds CBSS via `getPreThresholdFlux()`.
+
+#### 2.5. Simplify Bayesian Fusion — OUTSTANDING (Conditional on phase alignment work)
 
 **Gap:** Multiplicative fusion of 4 independent estimators is fragile. If any estimator produces near-zero for the correct bin, the posterior collapses. BTrack uses a sequential pipeline (ACF → comb filter on ACF → Rayleigh → Viterbi). madmom uses a single observation model into a DBN. No reference system uses multiplicative fusion of 4 independent estimators.
 
@@ -710,7 +785,7 @@ Apply comb filter to ACF values (not to raw ODF), then Rayleigh weight, then Vit
 
 **Effort:** Medium. **Impact:** Medium — reduces fragile interaction effects.
 
-#### 2.6. Dual-Threshold Peak Picking for BandFlux (Priority 7c)
+#### 2.6. Dual-Threshold Peak Picking for BandFlux — ✅ DONE (v28)
 
 **Gap:** The biggest gap in our onset detection. SuperFlux, madmom, and librosa all use dual-threshold peak picking requiring BOTH a local maximum AND exceeding the threshold. We use threshold-only, which fires on rising edges rather than true peaks, with cooldown doing double-duty as rate limiter and peak selector.
 
@@ -733,7 +808,9 @@ Detection requires ALL of:
 
 **Effort:** Low (~40 lines). **Impact:** Medium-High — improves timing precision of every detection, reduces double-fires.
 
-#### 2.7. Enable Hi-Res Bass (Priority 7d)
+**Result:** Implemented as `bandflux_peakpick=1` in v28. Local-max confirmation with 1-frame look-ahead.
+
+#### 2.7. Enable Hi-Res Bass — ✅ TESTED, KEEP OFF (v32)
 
 **Already implemented** in BandWeightedFluxDetector (`hiResBassEnabled`). 512-sample Goertzel for 12 bass bins at 31.25 Hz/bin. Doubles bass resolution vs 6 FFT bins at 62.5 Hz/bin.
 
@@ -745,7 +822,9 @@ Detection requires ALL of:
 
 **Effort:** Trivial (parameter toggle). **Impact:** Medium for kick discrimination.
 
-#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking (Priority 7e)
+**Result:** Tested as `bfhiresbass=1` in v32. Hurts Beat F1 by ~9%. Keep off.
+
+#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking — OUTSTANDING
 
 BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phase. We already have phase data in SharedSpectralAnalysis. CSD catches pitched onsets at constant energy that magnitude flux misses. **For CBSS rhythm ODF only** — phase is too noisy via microphone for visual transient detection.
 
@@ -757,15 +836,11 @@ BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phas
 
 **Effort:** Medium (~80 lines + 512 bytes). **Impact:** Uncertain — phase noisy via mic in room.
 
-#### 2.9. Tempo Transition Constraints (Apply at Beat Boundaries Only)
+#### 2.9. Tempo Transition Constraints (Apply at Beat Boundaries Only) — PARTIALLY DONE (v28)
 
-**Gap:** madmom's DBN allows tempo changes ONLY at beat boundaries (lambda=100). BTrack runs `calculateTempo()` only at beat time. Our system applies tempo changes every 250ms regardless of beat phase.
+Beat-boundary tempo (`beatboundary=1`) defers `beatPeriodSamples_` application to beat fire. The full Bayesian posterior still updates every 250ms but the applied period only changes at beat boundaries. This matches BTrack's behavior (tempo calculated at beat time).
 
-**This is a generalization of 2.1** — not just deferring the beat period update, but constraining the entire Bayesian posterior to only transition at beat boundaries. Between beats, the posterior should be frozen (carry forward the previous posterior as-is without prediction spreading).
-
-**Test plan:** After implementing 2.1, evaluate whether further constraining posterior updates to beat boundaries helps. If 2.1 already addresses the phase discontinuity issue, this may be unnecessary overhead.
-
-**Effort:** Low (conditional on 2.1). **Impact:** Medium.
+Further constraining posterior updates themselves to beat boundaries was not tested — the current approach (frequent posterior updates, deferred application) seems sound.
 
 ---
 
@@ -773,21 +848,24 @@ BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phas
 
 These require significant design work and should only be attempted after Phase 1+2 gains are realized and calibrated.
 
-#### 3.1. Joint Tempo-Phase HMM (Bar Pointer Model)
+#### 3.1. Joint Tempo-Phase HMM (Bar Pointer Model) — FIRST ATTEMPT TESTED (v37), NEEDS CORRECTED OBSERVATION MODEL
 
 **The biggest architectural gap.** madmom's DBN jointly tracks `(position_within_beat, beat_period)`. Position advances deterministically by 1 each frame. Tempo can only change at beat boundaries. Phase and tempo are structurally coupled. This is fundamentally different from our decoupled approach (Bayesian tempo every 250ms + CBSS phase independently).
 
-**Feasibility on nRF52840:**
-- 40 tempo bins × 15 position steps = 600 states
-- Forward algorithm: 600 × 600 = 360K multiplies per frame (but transition matrix is sparse — only ~10 states reachable per step → ~6K multiplies)
-- At 60 Hz: 6K × 60 = 360K ops/second = ~0.5% CPU at 64 MHz
-- Memory: 600 × 4 bytes (forward vector) + sparse transition matrix (~2 KB) = ~5 KB
+**v37 attempt (hmm=1):** Half-time lock at 80 BPM. Likely caused by:
+1. Too few tempo bins (20 bins, MAX_HMM_STATES=900)
+2. Raw ODF observation model with power-law contrast (hmmContrast=2.0) — doesn't provide sharp discrimination between beat and non-beat states
+3. madmom uses RNN activations (0.0-1.0, sharp peaks) — our raw spectral flux ODF lacks this discrimination
 
-**What it provides:**
-- Frame-by-frame beat probability (not just countdown)
-- Structural enforcement of even beat spacing
-- Implicit tempo smoothing through transition probabilities
-- Beat and tempo locked together — no phase discontinuities
+**Corrected approach (see Next Actions Priority 1d):**
+- 40+ tempo bins with periods 18-60, ~1700 states
+- madmom-style observation model: beat region (first 1/lambda of period) gets `obs = odf`, non-beat region gets `obs = (1-odf) / (lambda-1)`
+- Transition lambda=100 (strongly penalizes tempo changes)
+
+**Feasibility on nRF52840:**
+- ~1700 states × 4 bytes = 6.8 KB forward vector + ~2 KB transitions = ~9 KB total
+- ~1700 multiply-adds per frame at 66 Hz = 0.12% CPU. Trivially within budget.
+- Sparse transitions: within-beat is just index shift, between-beat only at boundaries
 
 **Would replace:** Bayesian tempo fusion + CBSS + predict-and-countdown. Essentially the entire rhythm tracking backend.
 
@@ -804,15 +882,11 @@ Replace 3-band grouping (bass/mid/high) with 12-24 log-spaced bands for finer fr
 
 **Deferred:** Phase 2.7 (hi-res bass Goertzel, already implemented) addresses the most critical bass resolution gap. Sub-band filterbank is a further refinement if bass resolution alone is insufficient.
 
-#### 3.3. Particle Filter Beat Tracking (Previously Priority 6c)
+#### 3.3. Particle Filter Beat Tracking — ✅ DONE (v38-39)
 
-100-200 particles tracking `(beat_period, beat_position)`. Naturally handles multi-modal tempo distributions. Octave investigator injects particles at 2x/0.5x median tempo.
+100 particles tracking `(beat_period, beat_position)`. Madmom-style observation model, info gate, phase-coherent octave investigator. PF+CBSS hybrid mode.
 
-- **CPU:** ~1% (100 particles × weight update per frame + periodic resampling)
-- **Memory:** ~2 KB
-- **Complexity:** ~100-150 lines
-
-**Deferred:** Evaluate after Phase 3.1 (joint HMM) prototyping. If the HMM achieves BTrack-level performance, a particle filter adds diminishing returns. If the HMM is too rigid, particles offer more flexibility.
+**Result:** Achieves 85% BPM accuracy (vs 56% Bayesian-only) but Beat F1 unchanged (~0.28). Correct tempo alone does not improve beat placement — **phase alignment is the F1 bottleneck**. PF is useful for BPM but doesn't solve phase. (v43 Bayesian fixes later achieved 88% BPM accuracy without PF, confirming this finding.)
 
 #### 3.4. Knowledge-Distilled TinyML Onset Detector (Previously Priority 7e)
 
@@ -830,15 +904,15 @@ The only approach that can learn complex spectral patterns (kicks vs bass vs pad
 
 | Feature | Status | Action | Rationale |
 |---------|--------|--------|-----------|
-| **FT observation** | Enabled (bayesft=2.0) | **Test disabling (Phase 1a)** | Suspected algorithmic issues; v24 improvement needs validation; no reference system uses FT for real-time beat tracking |
-| **IOI observation** | Enabled (bayesioi=2.0) | **Test disabling (Phase 1a)** | Suspected algorithmic issues; O(n²) complexity; v24 improvement needs validation; no reference system uses IOI for polyphonic beat tracking |
-| **Adaptive band weighting** | Enabled | **Test disabling (Phase 1c)** | ~1600 lines + 2.9 KB RAM for potentially minimal benefit |
-| **computeSpectralFluxBands()** | Active | **Replace with unified ODF (Phase 2.4)** | Duplicate computation; disagrees with BandFlux transient detector |
+| **FT observation** | Disabled (bayesft=0) | ✅ **Done** (v28) | No reference system uses FT for real-time beat tracking |
+| **IOI observation** | Disabled (bayesioi=0) | ✅ **Done** (v28) | No reference system uses IOI for polyphonic beat tracking |
+| **Adaptive band weighting** | Enabled | **Test disabling** | ~1600 lines + 2.9 KB RAM for potentially minimal benefit |
+| **computeSpectralFluxBands()** | Bypassed | ✅ **Done** (v28, unified ODF) | Replaced by BandFlux pre-threshold value |
 | **6 disabled detectors** | Code present, disabled | **Keep as-is** | Zero runtime cost; useful for future experimentation |
 | **Phase correction** | Disabled (phasecorr=0) | **Keep disabled** | Documented failure on syncopated tracks |
 | **Static Bayesian prior** | Disabled (bayespriorw=0) | **Keep disabled** | Hurts tracks far from 128 BPM center |
-| **Ensemble fusion complexity** | Active | **Simplify for solo detector (Phase 1b)** | Agreement scaling, weighted averaging unnecessary with 1 detector |
-| **ODF smooth width=5** | Active | **Re-evaluate after Phase 2.4** | 83ms latency; may be unnecessary once ODF is unified |
+| **Ensemble fusion complexity** | Active | **Simplify for solo detector** | Agreement scaling, weighted averaging unnecessary with 1 detector |
+| **ODF smooth width=5** | Active | **Re-evaluate** | 83ms latency; may be unnecessary with unified ODF |
 | **Disabled BandFlux gates** | Code present, disabled | **Keep as-is** | Zero runtime cost; available for future testing |
 | **Per-band thresholds** | Disabled | **Keep disabled** | Tested, -0.067 avg F1 regression |
 | **diffframes > 1** | Set to 1 | **Keep at 1** | Tested, -0.098 avg F1 regression |
@@ -847,40 +921,100 @@ The only approach that can learn complex spectral patterns (kicks vs bass vs pad
 
 ## Next Actions (Priority Order)
 
-### Active — Phase 1: Simplify
-1. **Test disable FT+IOI** (Phase 1a) — 9-track sweep with bayesft=0, bayesioi=0 vs current
-2. **Test disable adaptive band weighting** (Phase 1c) — 9-track sweep with adaptiveBandWeightEnabled=false
-3. **Simplify ensemble fusion** (Phase 1b) — bypass multi-detector logic for solo mode
+### Priority 1: Beat Tracking Accuracy
 
-### Next — Phase 2: Improve (after Phase 1 validated)
-4. **Beat-boundary tempo updates** (Phase 2.1) — defer beatPeriodSamples_ changes to beat fire
-5. **Increase tempo bins** (Phase 2.2) — 20 → 40 bins, +~5 KB RAM
-6. **Adaptive ODF threshold** (Phase 2.3) — local-mean subtraction on OSS buffer before ACF
-7. **Unify ODF** (Phase 2.4) — replace computeSpectralFluxBands with BandFlux pre-threshold value
-8. **Simplify Bayesian fusion** (Phase 2.5) — reduce to Comb+ACF or switch to log-domain
-9. **Dual-threshold peak picking** (Phase 2.6) — add local-max confirmation to BandFlux with 1-frame look-ahead
-10. **Enable hi-res bass** (Phase 2.7) — test `hiResBassEnabled=true` (already implemented)
-11. **Complex spectral difference** (Phase 2.8) — phase-based ODF for CBSS rhythm tracking only
+Phase alignment is the primary bottleneck. v43 fixed 4 Bayesian tempo bugs (BPM accuracy 33%→88%, double-time lock eliminated), but Beat F1 is unchanged at ~0.28. Correct BPM does not guarantee correct beat placement. Secondary: ~128 BPM gravity well on slow tracks (3:2 harmonic lock). Run-to-run variance (std=0.04-0.23) limits measurement precision.
 
-### Future — Phase 3: Architecture
-12. **Joint tempo-phase HMM** (Phase 3.1) — prototype in Python, port if clearly better
-13. **Log-spaced sub-band filterbank** (Phase 3.2) — 12-24 bands, evaluate after Phase 2.7 hi-res bass
-14. **Particle filter** (Phase 3.3) — evaluate after Phase 3.1 HMM prototyping
-15. **TinyML onset detector** (Phase 3.4) — long-term research
+#### ~~1a. PLP Phase Extraction~~ — COMPLETED, NO EFFECT
+
+Implemented and tested in v42. Both single-bin DFT (~3% confidence) and comb filter bank IIR (~2% confidence) produce too-low confidence for reliable correction. Mean F1 identical to baseline (0.426 vs 0.426 over 4 runs). Redundant with onset snap. Disabled by default.
+
+#### 1b. Lower CBSS Tightness — HIGH IMPACT, TRIVIAL EFFORT
+
+Try `cbssTightness=5.0` (BTrack default) and/or `cbssAlpha=0.85`. Current tightness=8.0 creates a very narrow log-Gaussian window that locks in initial phase errors. BTrack's tightness=5.0 allows more flexibility for the 10% onset contribution to gradually correct bad phase.
+
+**Effort**: Parameter change, A/B test on 18-track suite.
+**Expected impact**: +5-10% F1. May regress tracks where phase was already correct.
+
+#### 1c. Bidirectional Onset Snap — MEDIUM IMPACT, LOW EFFORT
+
+Current onset snap only looks backward from countdown expiry. If the actual onset occurs a few frames after the predicted beat time, it's missed. Add a forward lookahead of 3-4 frames (45-60ms), delaying beat fire to allow searching both directions.
+
+**Effort**: Low (~15 lines).
+**Expected impact**: +3-5% F1. Adds 45-60ms latency (imperceptible for visuals).
+
+#### 1d. Joint Tempo-Phase HMM (Bar Pointer Model) — HIGH IMPACT, HIGH EFFORT
+
+Re-attempt the bar-pointer HMM with madmom-style observation model. Previous attempt (v37, `hmm=1`) failed with half-time lock at 80 BPM — likely caused by too-few tempo bins and raw ODF observation model.
+
+**Corrected approach (based on madmom source analysis):**
+1. **State space**: Each state = (tempo_bin, position_within_beat). For 40 tempo bins with periods 18-60, total ~1700 states. Position advances deterministically by 1 each frame.
+2. **Transitions**: Within a beat period, deterministic (position → position+1). At beat boundaries (position wraps to 0), tempo changes allowed with exponential penalty: `prob = exp(-lambda * |to_period/from_period - 1|)`, lambda=100 (strongly penalizes tempo changes).
+3. **Observation model**: Beat region (first 1/lambda of period) gets `obs = odf`. Non-beat region gets `obs = (1-odf) / (lambda-1)`. With lambda=8-16, creates sharp likelihood peak for beat-aligned states.
+4. **Forward algorithm**: Maintain probability vector over all states, update each frame.
+
+**Memory**: ~7 KB for forward vector + ~2 KB transitions = ~9 KB. Within 30 KB headroom.
+**CPU**: ~1700 multiply-adds per frame at 66 Hz = 0.12% CPU. Trivially within budget.
+**Effort**: High (~300 lines). Would replace Bayesian tempo + CBSS + predict-and-countdown.
+**Expected impact**: +15-25% F1. This is how madmom achieves >74% F1 (online forward mode).
+**Risk**: Complete rewrite of beat tracking backend. Prototype in Python first.
+**References**: Krebs, Böck, Widmer 2015 "Efficient State-Space Model for Joint Tempo and Meter Tracking"
+
+### Priority 2: Simplify — Remove Wasteful Features
+
+#### 2a. Test Disable Adaptive Band Weighting
+~1600 lines + 2.9 KB RAM. May rarely activate (conditions: periodicity > 0.1, avgEffective > 0.15, bandSynchrony > 0.3). Toggle `adaptiveBandWeightEnabled=false`, run 18-track sweep.
+
+#### 2b. Simplify Ensemble for Solo Detector
+Bypass multi-detector agreement logic when only 1 detector is enabled. Keep multi-detector path as dead code.
+
+#### 2c. Simplify Bayesian Fusion
+With FT+IOI disabled, reduce to `posterior = prediction × combObs × acfObs`. Two well-understood signals. Consider log-domain additive fusion for numerical stability.
+
+### Priority 3: Remaining Improvements
+
+#### 3a. Complex Spectral Difference ODF for CBSS
+BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phase. We have phase data in SharedSpectralAnalysis. For CBSS rhythm ODF only — phase too noisy via mic for visual transients. ~80 lines + 512 bytes.
+
+#### 3b. Log-Spaced Sub-Band Filterbank
+Replace 3-band grouping with 12-24 log-spaced bands. Separates kick from bass, snare from vocals. ~80 lines.
+
+#### 3c. TinyML Onset Detector
+Knowledge-distilled CNN for onset detection. Only approach that can learn room-specific spectral patterns. 10-15 F1 point gap between DSP and neural methods. Long-term research.
 
 ### Completed
-- ~~**Microphone sensitivity**~~ — ✅ Spectral compressor + per-bin adaptive whitening (v23+)
-- ~~**Post-spectral Bayesian re-calibration**~~ — ✅ FT/IOI re-enabled at 2.0, cbssthresh=1.0 confirmed (v24)
-- ~~**ACF inverse-lag normalization**~~ — ✅ `acf[i] /= lag` (BTrack-style, confirmed)
-- ~~**Combined defaults validation**~~ — ✅ bayesacf=0.3 prevents half-time lock (4-device validated, v22)
-- ~~**Bayesian weight sweep**~~ — ✅ All 6 params swept (Feb 25)
-- ~~**Multi-device testing infrastructure**~~ — ✅ 4-device parallel capture (Feb 25)
-- ~~**Feature testing sweep**~~ — ✅ ODF mean sub, diffframes, per-band thresholds tested (Feb 24)
-- ~~**CBSS Adaptive Threshold**~~ — ✅ Implemented (v20), tuned to 1.0 (v22)
-- ~~**Per-sample ACF Harmonic Disambiguation**~~ — ✅ Fixed minimal-01 sub-harmonic
-- ~~**Bayesian Tempo Fusion**~~ — ✅ Implemented (v18-21), replaced sequential override chain
-- ~~**Onset density tracking**~~ — ✅ Done
-- ~~**Diverse test music library**~~ — ✅ 18 tracks
+
+**Phase 1 (Simplify):**
+- ✅ FT+IOI disabled (v28) — no reference system uses these for real-time beat tracking
+- ✅ Unified ODF (v28) — BandFlux pre-threshold feeds CBSS, eliminated duplicate computeSpectralFluxBands()
+- ✅ Dual-threshold peak picking (v28) — local-max confirmation with 1-frame look-ahead
+- ✅ Beat-boundary tempo (v28) — defers period changes to beat fire
+
+**Phase 2 (Improve):**
+- ✅ 40 tempo bins — tested v29, reverted (transition matrix drift 2x worse)
+- ✅ Adaptive ODF threshold — tested v32, marginal (keep off)
+- ✅ Hi-res bass — tested v32, negative (-9% F1, keep off)
+- ✅ ODF mean subtraction disabled — tested v32, +70% F1
+- ✅ Onset-density octave discriminator — v32, +13% F1
+- ✅ Shadow CBSS octave checker — v32, +13% F1
+- ✅ Frame rate correction — v39, OSS_FRAME_RATE 60→66
+- ✅ Onset snap 4→8 frames — v39
+- ✅ cbssTightness 5→8 — v40, +24% controlled comparison
+
+**Phase 3 (Architecture):**
+- ✅ Particle filter — v38-39, 100 particles, madmom obs model, PF+CBSS hybrid. BPM accuracy improved but F1 unchanged (phase bottleneck).
+- ✅ Joint HMM (first attempt) — v37, half-time lock at 80 BPM. Needs corrected observation model (see Priority 1d).
+
+**Pre-Bayesian:**
+- ✅ Microphone sensitivity — spectral compressor + per-bin adaptive whitening (v23+)
+- ✅ ACF inverse-lag normalization — `acf[i] /= lag` (BTrack-style)
+- ✅ Bayesian Tempo Fusion — replaced sequential override chain (v18-21)
+- ✅ CBSS Adaptive Threshold — cbssthresh=1.0 (v22)
+- ✅ Per-sample ACF Harmonic Disambiguation — fixed sub-harmonic lock
+- ✅ Bayesian weight sweep — all 6 params swept (Feb 25)
+- ✅ Multi-device testing infrastructure — 4-device parallel capture
+- ✅ Onset density tracking
+- ✅ Diverse test music library — 18 tracks
 
 ---
 
