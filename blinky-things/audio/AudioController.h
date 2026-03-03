@@ -396,25 +396,8 @@ public:
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
 
-    // === PHASE ALIGNMENT CHECKER ===
-    // Every N beats, compares raw onset strength (OSS) at current beat phase vs
-    // phase shifted by T/2. If the shifted phase has consistently stronger onsets,
-    // the CBSS has locked to the wrong phase (anti-phase). Corrects by shifting
-    // lastBeatSample_ to re-anchor beats at the stronger onset positions.
-    // Uses OSS (raw onset detection) not CBSS (which is self-reinforcing at wrong phase).
-    bool phaseCheckEnabled = false;       // Phase alignment check (v37: disabled — net-negative on 18-track validation)
-    uint8_t phaseCheckBeats = 4;          // Check every N beats (accumulate evidence)
-    float phaseCheckRatio = 1.2f;         // Shifted phase must score this much better to correct
-
-    // === PLP PHASE EXTRACTION (v42) ===
-    // Predominant Local Pulse: beat phase from comb filter bank IIR resonator phase
-    // (CombFilterBank::getPhaseAtPeak()). Corrects CBSS phase drift by adjusting
-    // lastBeatSample_ in detectBeat(). Phase convention: 0=beat now, 1=full period ago.
-    // v42 testing: no measurable effect (redundant with onset snap, <4% confidence
-    // in mic-in-room environment). Disabled by default.
-    bool plpPhaseEnabled = false;             // Master toggle (A/B testing)
-    float plpCorrectionStrength = 0.5f;       // Correction aggressiveness (0=off, 1=snap)
-    float plpMinConfidence = 0.3f;            // Min comb filter peak confidence to apply correction
+    // (phaseCheckEnabled removed v44 — net-negative on 18-track validation)
+    // (plpPhaseEnabled/plpCorrectionStrength/plpMinConfidence removed v44 — zero effect, redundant with onset snap)
 
     // === BTRACK-STYLE TEMPO PIPELINE ===
     // Replaces multiplicative Bayesian fusion with BTrack's sequential pipeline:
@@ -426,11 +409,13 @@ public:
     // === BAR-POINTER HMM BEAT TRACKING (Phase 3.1, v34) ===
     // Joint tempo-phase tracking via bar-pointer HMM (Bock/madmom 2016).
     // State = (tempo_bin, position_within_beat). Phase advances deterministically
-    // each frame; tempo can only change at beat boundaries. Replaces CBSS + detectBeat.
-    // Reuses transMatrix_ and tempoBinLags_ from Bayesian tempo fusion.
+    // each frame; tempo can only change at beat boundaries.
+    // v46: HMM uses its own tight hmmTransMatrix_ for beat detection (position-0 wrap).
+    // Reuses tempoBinLags_ from Bayesian tempo fusion.
     bool barPointerHmm = false;          // Enable HMM beat tracking (A/B vs CBSS)
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
     bool hmmTempoNorm = true;            // Normalize argmax by period (prevents slow-tempo bias)
+    float hmmLambda = 0.05f;             // HMM transition tightness (small=tight, prevents octave jumps) (v46)
 
     // === PARTICLE FILTER BEAT TRACKING (v38) ===
     // Maintains 100 tempo/phase hypotheses; octave variants injected at resampling
@@ -463,6 +448,41 @@ public:
     float posteriorFloor = 0.05f;        // Uniform mixing ratio to prevent mode lock (0=off, 0.05=5% floor)
     float disambigNudge = 0.15f;         // Posterior mass transfer when disambiguation corrects (0=off)
     float harmonicTransWeight = 0.30f;   // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
+    float rayleighBpm = 120.0f;          // Rayleigh prior peak BPM (60-180)
+    bool fold32Enabled = false;           // 3:2 octave folding: fold evidence from 2L/3 into L (v44, OFF — no net benefit)
+    bool sesquiCheckEnabled = false;      // 3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44, OFF — no net benefit)
+    bool bidirectionalSnap = true;        // Delay beat by 3 frames for bidirectional onset snap (v44)
+    float tempoNudge = 0.8f;              // switchTempo posterior mass transfer fraction (0-1, v44)
+    // (harmonicSesqui removed v44 — catastrophic regression on fast tracks)
+
+    // === PERCIVAL ACF HARMONIC PRE-ENHANCEMENT (v45) ===
+    // Folds 2nd and 4th harmonic ACF values into fundamental lag before comb-on-ACF.
+    // Gives fundamental a unique advantage: double-time at L/2 does NOT get the same
+    // boost because its harmonics (L, 3L/2) are at different positions.
+    // Source: Percival & Tzanetakis 2014, Essentia percivalenhanceharmonics.cpp
+    bool percivalEnhance = true;           // Enable harmonic pre-enhancement (v45)
+    float percivalWeight2 = 0.5f;          // 2nd harmonic fold weight (v45)
+    float percivalWeight4 = 0.25f;         // 4th harmonic fold weight (v45)
+
+    // === PLL PHASE CORRECTION (v45) ===
+    // Proportional+integral phase correction applied at each beat fire.
+    // Measures phase error between predicted and actual onset position,
+    // nudges lastBeatSample_ to reduce drift over time.
+    // Source: Kim 2007 (PLL-style proportional correction for beat tracking)
+    bool pllEnabled = true;                // Enable PLL phase correction (v45)
+    float pllKp = 0.15f;                   // Proportional gain (v45)
+    float pllKi = 0.005f;                  // Integral gain (v45)
+
+    // === ADAPTIVE CBSS TIGHTNESS (v45) ===
+    // Modulates cbssTightness based on onset confidence (OSS/mean ratio).
+    // Strong onsets → looser tightness (allow phase correction).
+    // Weak onsets → tighter (resist noise-driven drift).
+    // Source: BTrack adaptation for noisy microphone input
+    bool adaptiveTightnessEnabled = true;  // Enable adaptive tightness (v45)
+    float tightnessLowMult = 0.7f;         // Multiplier when onset confidence HIGH (v45)
+    float tightnessHighMult = 1.3f;        // Multiplier when onset confidence LOW (v45)
+    float tightnessConfThreshHigh = 3.0f;  // OSS/mean ratio above this = high confidence (v45)
+    float tightnessConfThreshLow = 1.5f;   // OSS/mean ratio below this = low confidence (v45)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -516,9 +536,7 @@ public:
     int getTimeToNextBeat() const { return timeToNextBeat_; }
     bool wasLastBeatPredicted() const { return lastFiredBeatPredicted_; }
 
-    // PLP phase extraction debug getters (v42)
-    float getPlpPhase() const { return plpPhase_; }
-    float getPlpConfidence() const { return plpConfidence_; }
+    // (PLP phase getters removed v44 — feature removed)
 
     // Particle filter debug getters (v38)
     bool isParticleFilterActive() const { return particleFilterEnabled && pfInitialized_; }
@@ -625,17 +643,8 @@ private:
     // Octave check state (Phase 3)
     uint16_t beatsSinceOctaveCheck_ = 0; // Beats since last octave check
 
-    // Phase alignment check state (v37)
-    uint16_t beatsSincePhaseCheck_ = 0;  // Beats since last phase alignment check
-
-    // PLP phase extraction state (v42)
-    // Phase convention: plpPhase_ is fraction of beat period elapsed since last beat.
-    // 0.0 = beat is now, 0.5 = halfway between beats, 1.0 = full period since last beat.
-    // Sourced from CombFilterBank::getPhaseAtPeak() (IIR resonator complex exponential).
-    // Note: Updated every ~250ms (Bayesian update rate), not every frame. Between updates,
-    // the value is a stale snapshot and does not advance with elapsed time.
-    float plpPhase_ = 0.0f;           // Last extracted PLP phase (0-1)
-    float plpConfidence_ = 0.0f;      // Comb filter peak confidence (0-1)
+    // (beatsSincePhaseCheck_ removed v44 — phase check feature removed)
+    // (plpPhase_/plpConfidence_ removed v44 — PLP feature removed)
 
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
@@ -686,8 +695,10 @@ private:
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
     int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at OSS_FRAME_RATE Hz)
     float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
-    float transMatrixLambda_ = -1.0f;             // bayesLambda used to compute transMatrix_ (-1 = uninitialized)
-    float transMatrixHarmonic_ = -1.0f;          // harmonicTransWeight used to compute transMatrix_
+    float transMatrixLambda_ = -1.0f;             // Last bayesLambda used to build transMatrix_
+    float transMatrixHarmonic_ = -1.0f;          // Last harmonicTransWeight used to build transMatrix_
+    bool transMatrixBtrkPipeline_ = false;       // Last btrkPipeline state used to build transMatrix_
+    float rayleighBpm_ = -1.0f;                  // Last rayleighBpm used to compute rayleighWeight_
     bool tempoStateInitialized_ = false;
     int bayesBestBin_ = TEMPO_BINS / 2;              // Best bin from last fusion (for debug)
     float lastFtObs_[TEMPO_BINS] = {0};           // Last FT observations (for debug)
@@ -706,6 +717,11 @@ private:
     int hmmBestPosition_ = 0;                    // Best position within beat
     int hmmPrevBestPosition_ = -1;               // Previous frame's best position (for phase wrap detection)
     bool hmmInitialized_ = false;
+
+    // HMM-specific transition matrix (v46: tight lambda for beat detection)
+    float hmmTransMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};
+    float hmmTransLambda_ = -1.0f;              // Cache key: rebuild when hmmLambda changes
+    int hmmPrevBestTempo_ = 0;                  // Previous frame's best tempo (spurious wrap detection)
 
     // === PARTICLE FILTER STATE (v38) ===
     static constexpr int PF_NUM_PARTICLES = 100;
@@ -726,6 +742,12 @@ private:
     uint32_t pfRngState_ = 0x12345678;
     int pfCooldown_ = 0;  // Beat cooldown counter (frames)
 
+    // === PLL PHASE CORRECTION STATE (v45) ===
+    float pllPhaseIntegral_ = 0.0f;  // PLL integral accumulator
+
+    // === ADAPTIVE TIGHTNESS STATE (v45) ===
+    float effectiveTightness_ = 8.0f;  // Current effective tightness (modulated by onset confidence)
+
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
 
@@ -743,13 +765,14 @@ private:
     void detectBeat();
     void predictBeat();
     void checkOctaveAlternative();
-    void checkPhaseAlignment();
+    // (checkPhaseAlignment removed v44 — net-negative on 18-track validation)
     void switchTempo(int newPeriodSamples);
 
     // Bar-pointer HMM beat tracking (Phase 3.1)
     void initHmmState();
     void updateHmmForward(float onsetStrength);
-    // void detectBeatHmm();  // Experimental — not called; HMM provides tempo, CBSS detects beats
+    void buildHmmTransitionMatrix();  // v46: tight transition matrix for HMM beat detection
+    void detectHmmBeat();             // v46: HMM position-0 wrap beat detection
 
     // Particle filter beat tracking (v38)
     void initParticleFilter();

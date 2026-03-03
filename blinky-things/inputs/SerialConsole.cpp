@@ -315,6 +315,8 @@ void SerialConsole::registerRhythmSettings() {
         "HMM ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
     settings_.registerBool("hmmtemponorm", &audioCtrl_->hmmTempoNorm, "rhythm",
         "HMM tempo-normalized argmax (prevents slow-tempo bias)");
+    settings_.registerFloat("hmmlambda", &audioCtrl_->hmmLambda, "rhythm",
+        "HMM transition tightness (small=tight, prevents octave jumps) (v46)", 0.01f, 1.0f);
     settings_.registerBool("particlefilter", &audioCtrl_->particleFilterEnabled, "rhythm",
         "Particle filter beat tracking (v38, A/B vs CBSS)");
     settings_.registerFloat("pfnoise", &audioCtrl_->pfNoise, "rhythm",
@@ -337,18 +339,46 @@ void SerialConsole::registerRhythmSettings() {
         "Check octave every N beats (2-16)", 2, 16);
     settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
         "CBSS score ratio needed for octave switch (1-5)", 1.0f, 5.0f);
-    settings_.registerBool("phasecheck", &audioCtrl_->phaseCheckEnabled, "rhythm",
-        "Phase alignment checker (v37: fixes anti-phase lock using raw OSS)");
-    settings_.registerUint8("phasecheckbeats", &audioCtrl_->phaseCheckBeats, "rhythm",
-        "Check phase every N beats (2-16)", 2, 16);
-    settings_.registerFloat("phasecheckratio", &audioCtrl_->phaseCheckRatio, "rhythm",
-        "Phase check: shifted phase must score this much better (1.1-3.0)", 1.1f, 3.0f);
-    settings_.registerBool("plpphase", &audioCtrl_->plpPhaseEnabled, "rhythm",
-        "PLP analytical phase correction (v42: uses comb filter bank peak phase)");
-    settings_.registerFloat("plpstrength", &audioCtrl_->plpCorrectionStrength, "rhythm",
-        "PLP correction strength (0=off, 1=full snap to analytical phase)", 0.0f, 1.0f);
-    settings_.registerFloat("plpminconf", &audioCtrl_->plpMinConfidence, "rhythm",
-        "PLP min comb-filter peak confidence to apply correction (0-1)", 0.0f, 1.0f);
+    // (phasecheck/plpphase/plpstrength/plpminconf registrations removed v44 — features deleted)
+    settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "rhythm",
+        "Rayleigh prior peak BPM (v44)", 60.0f, 180.0f);
+    settings_.registerFloat("temponudge", &audioCtrl_->tempoNudge, "rhythm",
+        "switchTempo posterior mass transfer fraction (v44: 0=none, 1=full swap)", 0.0f, 1.0f);
+    settings_.registerBool("fold32", &audioCtrl_->fold32Enabled, "rhythm",
+        "3:2 octave folding: fold comb evidence from 2L/3 into L (v44)");
+    settings_.registerBool("sesquicheck", &audioCtrl_->sesquiCheckEnabled, "rhythm",
+        "3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44)");
+    settings_.registerBool("bisnap", &audioCtrl_->bidirectionalSnap, "rhythm",
+        "Bidirectional onset snap: delay beat 3 frames for forward snap window (v44)");
+    // (harmonicsesqui registration removed v44 — feature deleted)
+
+    // Percival ACF harmonic pre-enhancement (v45)
+    settings_.registerBool("percival", &audioCtrl_->percivalEnhance, "rhythm",
+        "Percival harmonic pre-enhancement: fold 2nd/4th ACF harmonics into fundamental (v45)");
+    settings_.registerFloat("percivalw2", &audioCtrl_->percivalWeight2, "rhythm",
+        "Percival 2nd harmonic fold weight (v45)", 0.0f, 1.0f);
+    settings_.registerFloat("percivalw4", &audioCtrl_->percivalWeight4, "rhythm",
+        "Percival 4th harmonic fold weight (v45)", 0.0f, 1.0f);
+
+    // PLL phase correction (v45)
+    settings_.registerBool("pll", &audioCtrl_->pllEnabled, "rhythm",
+        "PLL proportional+integral phase correction at beat fires (v45)");
+    settings_.registerFloat("pllkp", &audioCtrl_->pllKp, "rhythm",
+        "PLL proportional gain (v45)", 0.0f, 1.0f);
+    settings_.registerFloat("pllki", &audioCtrl_->pllKi, "rhythm",
+        "PLL integral gain (v45)", 0.0f, 0.1f);
+
+    // Adaptive CBSS tightness (v45)
+    settings_.registerBool("adaptight", &audioCtrl_->adaptiveTightnessEnabled, "rhythm",
+        "Adaptive tightness: modulate cbssTightness by onset confidence (v45)");
+    settings_.registerFloat("tightlowmult", &audioCtrl_->tightnessLowMult, "rhythm",
+        "Tightness multiplier when onset confidence HIGH (looser) (v45)", 0.3f, 1.0f);
+    settings_.registerFloat("tighthighmult", &audioCtrl_->tightnessHighMult, "rhythm",
+        "Tightness multiplier when onset confidence LOW (tighter) (v45)", 1.0f, 3.0f);
+    settings_.registerFloat("tightconfhi", &audioCtrl_->tightnessConfThreshHigh, "rhythm",
+        "OSS/mean ratio above this = high onset confidence (v45)", 1.5f, 10.0f);
+    settings_.registerFloat("tightconflo", &audioCtrl_->tightnessConfThreshLow, "rhythm",
+        "OSS/mean ratio below this = low onset confidence (v45)", 0.5f, 3.0f);
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -1194,6 +1224,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->barPointerHmm = false;        // v34: bar-pointer HMM (disabled by default, A/B)
         audioCtrl_->hmmContrast = 2.0f;           // v34: ODF power-law contrast
         audioCtrl_->hmmTempoNorm = true;          // v34: tempo-normalized argmax
+        audioCtrl_->hmmLambda = 0.05f;            // v46: HMM transition tightness
         audioCtrl_->cbssContrast = 1.0f;           // v37: ODF contrast before CBSS
         audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
         audioCtrl_->onsetSnapWindow = 8;           // v39: snap beat to strongest OSS in ±8 frames
@@ -1203,12 +1234,25 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->odfSource = 0;                 // v36: default ODF source
         audioCtrl_->densityPenaltyExp = 2.0f;      // v32: density penalty exponent
         audioCtrl_->densityTarget = 0.0f;          // v32: density target (0=disabled)
-        audioCtrl_->phaseCheckEnabled = false;      // v37: phase check disabled (net-negative)
-        audioCtrl_->phaseCheckBeats = 4;           // v37: check every 4 beats
-        audioCtrl_->phaseCheckRatio = 1.2f;        // v37: correction ratio threshold
-        audioCtrl_->plpPhaseEnabled = false;       // v42: PLP phase extraction (disabled by default, A/B)
-        audioCtrl_->plpCorrectionStrength = 0.5f;  // v42: correction aggressiveness
-        audioCtrl_->plpMinConfidence = 0.3f;       // v42: min comb filter peak confidence
+        // (phaseCheck/PLP defaults removed v44 — features deleted)
+
+        // Percival ACF harmonic pre-enhancement (v45)
+        audioCtrl_->percivalEnhance = true;
+        audioCtrl_->percivalWeight2 = 0.5f;
+        audioCtrl_->percivalWeight4 = 0.25f;
+
+        // PLL phase correction (v45)
+        audioCtrl_->pllEnabled = true;
+        audioCtrl_->pllKp = 0.15f;
+        audioCtrl_->pllKi = 0.005f;
+
+        // Adaptive CBSS tightness (v45)
+        audioCtrl_->adaptiveTightnessEnabled = true;
+        audioCtrl_->tightnessLowMult = 0.7f;
+        audioCtrl_->tightnessHighMult = 1.3f;
+        audioCtrl_->tightnessConfThreshHigh = 3.0f;
+        audioCtrl_->tightnessConfThreshLow = 1.5f;
+
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
         audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)
         audioCtrl_->pfBeatSigma = 0.05f;
@@ -1711,12 +1755,7 @@ void SerialConsole::streamTick() {
                 Serial.print(audioCtrl_->getBayesCombObs(), 3);
                 Serial.print(F(",\"bio\":"));
                 Serial.print(audioCtrl_->getBayesIoiObs(), 3);
-                if (audioCtrl_->plpPhaseEnabled) {
-                    Serial.print(F(",\"plpp\":"));
-                    Serial.print(audioCtrl_->getPlpPhase(), 3);
-                    Serial.print(F(",\"plpc\":"));
-                    Serial.print(audioCtrl_->getPlpConfidence(), 3);
-                }
+                // (PLP streaming fields removed v44 — feature deleted)
             }
 
             Serial.print(F("}"));
