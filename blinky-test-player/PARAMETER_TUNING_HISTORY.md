@@ -1927,6 +1927,40 @@ Frame rate fix + onset snap + downward correction (with >160 BPM threshold):
 
 ---
 
+## Test Session: 2026-03-02 (v42 — PLP Phase Extraction)
+
+### PLP Analytical Phase Correction
+
+**Environment:**
+- Hardware: 1x XIAO nRF52840 Sense (ACM0, Tube Light)
+- SETTINGS_VERSION: 42
+- Test: 4-run repeated measurement on techno-minimal-01 (129.2 BPM)
+
+**Approaches Tested:**
+1. Single-bin DFT phasor rotation of OSS at dominant tempo
+2. Comb filter bank IIR resonator phase (CombFilterBank::getPhaseAtPeak)
+
+**Findings:**
+- DFT confidence: 3.2% — OSS too noisy/spiky for reliable single-bin phase extraction
+- Comb bank confidence: 2.2% — enclosure acoustics don't produce strong periodicity
+- With confidence-scaled corrections (plpstrength=0.5, plpminconf=0.3): corrections round to 0 frames
+- Without confidence scaling (strength=1.0, minconf=0): corrections are noise-driven
+
+**4-Run Repeated Measurement (techno-minimal-01):**
+
+| Condition | Run 1 | Run 2 | Run 3 | Run 4 | Mean | Std |
+|-----------|:-----:|:-----:|:-----:|:-----:|:----:|:---:|
+| PLP OFF (baseline) | 0.489 | 0.363 | 0.407 | 0.446 | 0.426 | 0.065 |
+| PLP ON (defaults) | 0.394 | 0.416 | 0.462 | 0.431 | 0.426 | 0.045 |
+
+**Conclusion:** No measurable effect. PLP is redundant with onset snap — both align beats to nearby
+onsets. Phase alignment is not the primary F1 bottleneck; tempo octave errors and run-to-run
+variance dominate. Feature kept in firmware (togglable via `set plpphase 1`), disabled by default.
+
+**New params:** plpphase=0, plpstrength=0.5, plpminconf=0.3
+
+---
+
 ## Test Session: 2026-03-03
 
 ### v43 Bayesian Tempo Bug Fixes (4 Fixes)

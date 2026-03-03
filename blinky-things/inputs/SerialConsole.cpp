@@ -1712,6 +1712,8 @@ void SerialConsole::streamTick() {
                 Serial.print(F(",\"bio\":"));
                 Serial.print(audioCtrl_->getBayesIoiObs(), 3);
                 if (audioCtrl_->plpPhaseEnabled) {
+                    Serial.print(F(",\"plpp\":"));
+                    Serial.print(audioCtrl_->getPlpPhase(), 3);
                     Serial.print(F(",\"plpc\":"));
                     Serial.print(audioCtrl_->getPlpConfidence(), 3);
                 }

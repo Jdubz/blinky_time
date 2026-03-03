@@ -7,20 +7,11 @@
 ### Completed (March 3, 2026)
 
 **v43 Bayesian Tempo Bug Fixes — 4 critical fixes, BPM accuracy 33%→88%:**
-- Fixed 4 compounding bugs in Bayesian tempo estimation identified by comparison with BTrack/madmom reference implementations.
-- **Fix 1: Double inverse-lag normalization removed.** Balanced ACF (`/count` where `count = ossCount_ - lag`) already corrects for sample-count bias. The additional `/lag` created a 1.65x upward bias at lag=20 (~198 BPM) vs lag=33 (~120 BPM), causing universal ~195 BPM lock.
-- **Fix 2: Full-resolution comb-on-ACF.** 4-harmonic comb now evaluated at every lag in the fundamental range (47 values), not just the 20 bin centers. With ~2.4 lag/bin, the old approach missed peaks between bins.
-- **Fix 3: Octave folding (BTrack-style).** For each bin at lag L, adds comb score from lag L/2 (double BPM). The fundamental gets evidence from both L and L/2, while the double-time candidate at L/2 only gets its own evidence — gives fundamental ~2x advantage.
-- **Fix 4: Lag-space Gaussian transition matrix.** Replaced BPM-space Gaussian (asymmetric bandwidth on lag-uniform grid) with fixed-sigma lag-space Gaussian. Eliminates systematic drift toward low BPM from non-uniform bin spacing.
-- **Validated on 3 identical bare boards** (no enclosures) — confirmed double-time lock is 100% algorithmic, not enclosure-related.
-- **Results (18-track, 3-device):**
-  - BPM accuracy: **33% → 88%** (+166%). 11/18 tracks >90% accuracy.
-  - Double-time ~195 BPM lock **completely eliminated** — no track >136 BPM avg.
-  - Beat F1: 3-dev avg 0.284 (comparable to v40's 0.285). Best-dev avg 0.355.
-  - Best individual track F1: 0.683 (techno-minimal-emotion), 0.614 (techno-minimal-01).
-- **New bottleneck: ~128 BPM gravity well.** System gravitates to 125-135 BPM regardless of actual tempo. Tracks in-range get 97-100% accuracy; slow tracks (86-96 BPM) lock to 3:2 harmonic (~128 BPM). Rayleigh prior (peaked ~120 BPM) likely contributes.
-- **Phase alignment confirmed as F1 bottleneck:** Even with 88% BPM accuracy, Beat F1 is unchanged. Phase (beat placement timing) limits F1, not tempo estimation.
-- 284KB flash (35%), 22KB RAM (9%).
+- Fixed 4 compounding bugs identified by comparison with BTrack/madmom: (1) double inverse-lag normalization causing 1.65x upward bias, (2) coarse comb evaluation at 20 bins instead of full 47-lag resolution, (3) missing octave folding (L + L/2 evidence sum), (4) BPM-space transition matrix causing asymmetric bandwidth on lag-uniform grid.
+- Validated on 3 identical bare boards — confirmed double-time lock is 100% algorithmic, not enclosure-related.
+- BPM accuracy: 33% → 88%. Double-time ~195 BPM lock eliminated. Beat F1 unchanged (0.284 avg).
+- New bottleneck: ~128 BPM gravity well (slow tracks lock to 3:2 harmonic). Phase alignment limits F1.
+- Full per-track results: `blinky-test-player/PARAMETER_TUNING_HISTORY.md`
 
 **v42 PLP Phase Extraction — TESTED, NO EFFECT (SETTINGS_VERSION 42):**
 - Implemented PLP (Predominant Local Pulse) analytical phase extraction from Fourier angle of OSS at dominant tempo.
@@ -158,7 +149,7 @@ Analysis of 22 FPs from pad-rejection pattern (80 BPM, 750ms beat period):
 
 BTrack-style predict+countdown CBSS beat detection with Bayesian tempo fusion. Tempo estimated via unified posterior over 20 bins (60-180 BPM). Comb filter bank + harmonic-enhanced ACF (weight 0.8, v25). FT and IOI disabled (v28). CBSS adaptive threshold (1.0) prevents phantom beats. Frame rate corrected to 66 Hz (v39). Onset snap window 8 frames (v39). cbssTightness 8.0 (v40). Particle filter hybrid (v38-39, BPM accuracy 82.5%).
 
-**Current bottleneck: tempo octave errors + run-to-run variance.** BPM accuracy is 82.5% but Beat F1 is only 0.28. Phase alignment was initially suspected but PLP testing (v42) showed onset snap already handles per-beat phase correction. The F1 gap is dominated by double-time lock on 3/4 devices (enclosure acoustics) and stochastic variance (std=0.04-0.23). See "Why Phase Alignment Fails" in State-of-the-Art Gap Analysis.
+**Current bottleneck: phase alignment + ~128 BPM gravity well.** v43 fixed 4 Bayesian tempo bugs (BPM accuracy 33%→88%), eliminating double-time lock. Despite correct BPM, Beat F1 is unchanged at ~0.28. Phase alignment (beat placement timing) is the primary F1 bottleneck. Secondary: slow tracks (86-96 BPM) lock to ~128 BPM via 3:2 harmonic. Run-to-run variance (std=0.04-0.23) limits measurement precision.
 
 **Pre-Bayesian baseline (sequential override chain, Feb 21):** avg Beat F1 **0.472** on 9 tracks.
 **Bayesian v20 (all observations on, cbssthresh=0.4, Feb 24):** avg Beat F1 **0.421**.
@@ -537,15 +528,16 @@ Performance gap between DSP and neural onset detection: ~10-15 F1 points on stan
 
 ---
 
-## Calibration Status (March 2, 2026)
+## Calibration Status (March 3, 2026)
 
-**SETTINGS_VERSION 42.** Bayesian tempo fusion (Comb+ACF) + CBSS beat tracking + particle filter (hybrid). Frame rate corrected to 66 Hz. FT+IOI disabled. Beat-boundary tempo, unified ODF, dual-threshold peak picking enabled. PLP phase extraction implemented but disabled (no measurable effect).
+**SETTINGS_VERSION 42.** Bayesian tempo fusion (Comb+ACF) + CBSS beat tracking. v43 algorithmic fixes: removed double inverse-lag normalization, full-resolution comb-on-ACF, octave folding, lag-space Gaussian transition matrix. Frame rate 66 Hz. FT+IOI disabled. PLP disabled (no effect).
 
-**Current performance (v39-41, 18-track validation):**
-- 4-device avg Beat F1: **0.275-0.285**
-- Best-device avg Beat F1: **0.348-0.351**
-- BPM accuracy: **82.5%** (4-device avg)
-- **Primary bottlenecks: tempo octave errors and run-to-run variance** (correct BPM does not guarantee correct F1; double-time lock on 3/4 devices)
+**Current performance (v43, 18-track validation on 3 bare boards):**
+- 3-device avg Beat F1: **0.284**
+- Best-device avg Beat F1: **0.355**
+- BPM accuracy: **87.7%** (3-device avg, up from 33% pre-fix)
+- **Primary bottleneck: phase alignment** (correct BPM does not translate to correct beat placement)
+- **Secondary: ~128 BPM gravity well** (slow tracks lock to 3:2 harmonic)
 - Run-to-run variance is large (std=0.04-0.23 per track). Single-run validations cannot detect improvements < ~0.15 F1.
 
 **Multi-device sweep capability:** 4 devices sweep parameters in parallel (4x speedup). Uses real music files with ground truth annotations, ffplay for headless audio playback.
@@ -894,7 +886,7 @@ Replace 3-band grouping (bass/mid/high) with 12-24 log-spaced bands for finer fr
 
 100 particles tracking `(beat_period, beat_position)`. Madmom-style observation model, info gate, phase-coherent octave investigator. PF+CBSS hybrid mode.
 
-**Result:** Achieves 85% BPM accuracy (vs 56% Bayesian-only) but Beat F1 unchanged (~0.28). Confirms that **phase alignment is the bottleneck**, not tempo accuracy. PF is useful for BPM but doesn't solve phase.
+**Result:** Achieves 85% BPM accuracy (vs 56% Bayesian-only) but Beat F1 unchanged (~0.28). Correct tempo alone does not improve beat placement — **phase alignment is the F1 bottleneck**. PF is useful for BPM but doesn't solve phase. (v43 Bayesian fixes later achieved 88% BPM accuracy without PF, confirming this finding.)
 
 #### 3.4. Knowledge-Distilled TinyML Onset Detector (Previously Priority 7e)
 
@@ -931,7 +923,7 @@ The only approach that can learn complex spectral patterns (kicks vs bass vs pad
 
 ### Priority 1: Beat Tracking Accuracy
 
-Tempo octave errors (double-time lock on 3/4 devices) and run-to-run variance (std=0.04-0.23) are the primary bottlenecks. BPM accuracy is 82.5% but Beat F1 is only 0.28. PLP phase extraction was tested (v42) and found redundant with onset snap — phase alignment is not the gap.
+Phase alignment is the primary bottleneck. v43 fixed 4 Bayesian tempo bugs (BPM accuracy 33%→88%, double-time lock eliminated), but Beat F1 is unchanged at ~0.28. Correct BPM does not guarantee correct beat placement. Secondary: ~128 BPM gravity well on slow tracks (3:2 harmonic lock). Run-to-run variance (std=0.04-0.23) limits measurement precision.
 
 #### ~~1a. PLP Phase Extraction~~ — COMPLETED, NO EFFECT
 

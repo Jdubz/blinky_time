@@ -906,7 +906,11 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // the old approach missed ~50% of true peaks due to quantization.
     // Full-resolution evaluation ensures the comb catches peaks regardless
     // of where they fall relative to bin centers.
-    static float fullCombAcf[256]; // Indexed by (lag - minLag)
+    // Size matches correlationAtLag[] (MAX_LAG - MIN_LAG + 1 = 47 in practice,
+    // but 256 is the shared cap for both arrays since harmonicCorrelationSize can grow).
+    static_assert(CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG + 1 <= 256,
+        "fullCombAcf buffer too small for lag range");
+    static float fullCombAcf[CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG + 1];
     for (int li = 0; li < correlationSize; li++) {
         int lag = minLag + li;
         float combAcf = 0.0f;
@@ -1366,6 +1370,9 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             plpPhase_ = combFilterBank_.getPhaseAtPeak();
             plpConfidence_ = combFilterBank_.getPeakConfidence();
         } else {
+            // Comb filter bank disabled — clear to prevent stale values from
+            // driving corrections in detectBeat().
+            plpPhase_ = 0.0f;
             plpConfidence_ = 0.0f;
         }
     }
