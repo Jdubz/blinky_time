@@ -6,6 +6,22 @@
 
 ### Completed (March 3, 2026)
 
+**v43 Bayesian Tempo Bug Fixes — 4 critical fixes, BPM accuracy 33%→88%:**
+- Fixed 4 compounding bugs in Bayesian tempo estimation identified by comparison with BTrack/madmom reference implementations.
+- **Fix 1: Double inverse-lag normalization removed.** Balanced ACF (`/count` where `count = ossCount_ - lag`) already corrects for sample-count bias. The additional `/lag` created a 1.65x upward bias at lag=20 (~198 BPM) vs lag=33 (~120 BPM), causing universal ~195 BPM lock.
+- **Fix 2: Full-resolution comb-on-ACF.** 4-harmonic comb now evaluated at every lag in the fundamental range (47 values), not just the 20 bin centers. With ~2.4 lag/bin, the old approach missed peaks between bins.
+- **Fix 3: Octave folding (BTrack-style).** For each bin at lag L, adds comb score from lag L/2 (double BPM). The fundamental gets evidence from both L and L/2, while the double-time candidate at L/2 only gets its own evidence — gives fundamental ~2x advantage.
+- **Fix 4: Lag-space Gaussian transition matrix.** Replaced BPM-space Gaussian (asymmetric bandwidth on lag-uniform grid) with fixed-sigma lag-space Gaussian. Eliminates systematic drift toward low BPM from non-uniform bin spacing.
+- **Validated on 3 identical bare boards** (no enclosures) — confirmed double-time lock is 100% algorithmic, not enclosure-related.
+- **Results (18-track, 3-device):**
+  - BPM accuracy: **33% → 88%** (+166%). 11/18 tracks >90% accuracy.
+  - Double-time ~195 BPM lock **completely eliminated** — no track >136 BPM avg.
+  - Beat F1: 3-dev avg 0.284 (comparable to v40's 0.285). Best-dev avg 0.355.
+  - Best individual track F1: 0.683 (techno-minimal-emotion), 0.614 (techno-minimal-01).
+- **New bottleneck: ~128 BPM gravity well.** System gravitates to 125-135 BPM regardless of actual tempo. Tracks in-range get 97-100% accuracy; slow tracks (86-96 BPM) lock to 3:2 harmonic (~128 BPM). Rayleigh prior (peaked ~120 BPM) likely contributes.
+- **Phase alignment confirmed as F1 bottleneck:** Even with 88% BPM accuracy, Beat F1 is unchanged. Phase (beat placement timing) limits F1, not tempo estimation.
+- 284KB flash (35%), 22KB RAM (9%).
+
 **v42 PLP Phase Extraction — TESTED, NO EFFECT (SETTINGS_VERSION 42):**
 - Implemented PLP (Predominant Local Pulse) analytical phase extraction from Fourier angle of OSS at dominant tempo.
 - Two approaches tested: (1) single-bin DFT phasor rotation over OSS buffer, (2) comb filter bank IIR-accumulated phase.
