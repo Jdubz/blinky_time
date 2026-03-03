@@ -394,22 +394,27 @@ const AudioControl& AudioController::update(float dt) {
     } else if (barPointerHmm && (hmmInitialized_ || tempoStateInitialized_)) {
         if (!hmmInitialized_) initHmmState();
         if (hmmInitialized_) {
+            if (hmmTransLambda_ != hmmLambda) buildHmmTransitionMatrix();
             updateHmmForward(onsetStrength);
-            // Feed HMM tempo to CBSS: override Bayesian tempo estimate
+            // Feed HMM tempo to CBSS
             bpm_ = tempoBinBpms_[hmmBestTempo_];
             beatPeriodMs_ = 60000.0f / bpm_;
             beatPeriodSamples_ = hmmPeriods_[hmmBestTempo_];
             bayesBestBin_ = hmmBestTempo_;
         }
     }
-    // CBSS beat detection (uses PF/HMM/Bayesian tempo for period)
+    // CBSS + beat detection
     {
         float cbssInput = onsetStrength;
         if (cbssContrast != 1.0f && cbssInput > 0.0f) {
             cbssInput = powf(cbssInput, cbssContrast);
         }
-        updateCBSS(cbssInput);
-        detectBeat();
+        updateCBSS(cbssInput);    // sampleCounter_++ happens here
+        if (barPointerHmm && hmmInitialized_) {
+            detectHmmBeat();       // v46: HMM position-0 wrap beat detection
+        } else {
+            detectBeat();          // existing CBSS beat detection
+        }
     }
 
     // 9. Synthesize output
@@ -1573,7 +1578,16 @@ void AudioController::updateCBSS(float onsetStrength) {
                     / (tightnessConfThreshHigh - tightnessConfThreshLow);
             mult = tightnessHighMult + t * (tightnessLowMult - tightnessHighMult);
         }
-        effectiveTightness_ = cbssTightness * mult;
+        // Quantize to 8 levels so log-Gaussian weight cache can hit.
+        // Without quantization, effectiveTightness_ changes nearly every frame,
+        // causing recomputeLogGaussianWeights() to re-run at 66 Hz (~250 float ops).
+        float raw = cbssTightness * mult;
+        float step = (cbssTightness * tightnessHighMult - cbssTightness * tightnessLowMult) / 8.0f;
+        if (step > 0.01f) {
+            effectiveTightness_ = cbssTightness * tightnessLowMult + roundf((raw - cbssTightness * tightnessLowMult) / step) * step;
+        } else {
+            effectiveTightness_ = raw;
+        }
     } else {
         effectiveTightness_ = cbssTightness;
     }
@@ -1828,6 +1842,7 @@ void AudioController::initHmmState() {
     hmmBestTempo_ = TEMPO_BINS / 2;
     hmmBestPosition_ = hmmPeriods_[hmmBestTempo_] / 2;
     hmmPrevBestPosition_ = hmmBestPosition_;  // Match initial state to prevent spurious first-frame beat
+    hmmPrevBestTempo_ = hmmBestTempo_;         // Match initial state for tempo stability check
     hmmInitialized_ = true;
 }
 
@@ -1878,7 +1893,7 @@ void AudioController::updateHmmForward(float odf) {
     for (int t = 0; t < TEMPO_BINS; t++) {
         float maxPred = 0.0f;
         for (int tPrev = 0; tPrev < TEMPO_BINS; tPrev++) {
-            float val = wrapProb[tPrev] * transMatrix_[t][tPrev];
+            float val = wrapProb[tPrev] * hmmTransMatrix_[t][tPrev];
             if (val > maxPred) maxPred = val;
         }
         hmmAlpha_[hmmStateOffsets_[t]] = maxPred * obsBeat;
@@ -1925,6 +1940,129 @@ void AudioController::updateHmmForward(float odf) {
 
     // Note: sampleCounter_++, cbssMean_ update, and overflow renormalization
     // are handled by updateCBSS() which always runs after updateHmmForward().
+}
+
+// ===== HMM TRANSITION MATRIX (v46) =====
+// Separate tight transition matrix for HMM beat detection.
+// Uses hmmLambda (default 0.05, much tighter than bayesLambda 0.60)
+// to prevent octave jumps — tempo changes are mathematically near-impossible.
+// No harmonic shortcuts (octave jumps are the problem, not the solution).
+
+void AudioController::buildHmmTransitionMatrix() {
+    float lagSigma = hmmLambda * static_cast<float>(CombFilterBank::MAX_LAG + CombFilterBank::MIN_LAG) * 0.5f;
+    if (lagSigma < 0.5f) lagSigma = 0.5f;
+
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        for (int j = 0; j < TEMPO_BINS; j++) {
+            float lagDiff = static_cast<float>(tempoBinLags_[i] - tempoBinLags_[j]);
+            hmmTransMatrix_[i][j] = expf(-0.5f * (lagDiff * lagDiff) / (lagSigma * lagSigma));
+        }
+    }
+
+    // Column-normalize for proper stochastic matrix
+    for (int j = 0; j < TEMPO_BINS; j++) {
+        float colSum = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) colSum += hmmTransMatrix_[i][j];
+        if (colSum > 1e-10f) {
+            float invSum = 1.0f / colSum;
+            for (int i = 0; i < TEMPO_BINS; i++) hmmTransMatrix_[i][j] *= invSum;
+        }
+    }
+
+    hmmTransLambda_ = hmmLambda;
+}
+
+// ===== HMM BEAT DETECTION (v46) =====
+// Detects beats via HMM position-0 wrap instead of CBSS predict+countdown.
+// Phase is an explicit state variable (HMM position), not derived from a counter.
+// Runs AFTER updateCBSS() so sampleCounter_ is already incremented.
+
+void AudioController::detectHmmBeat() {
+    uint32_t nowMs = time_.millis();
+    bool beatDetected = false;
+
+    int period = hmmPeriods_[hmmBestTempo_];
+    if (period < 10) period = 10;
+
+    // Position-0 wrap detection with safeguards:
+    // 1. Tempo stability: tempo bin unchanged or changed by ≤2 lags
+    // 2. Phase wrap: previous position in last quarter, current in first quarter
+    // 3. Silence gate: skip if audio too quiet
+    bool tempoStable = (hmmBestTempo_ == hmmPrevBestTempo_) ||
+                        (abs(tempoBinLags_[hmmBestTempo_] - tempoBinLags_[hmmPrevBestTempo_]) <= 2);
+    bool positionWrapped = (hmmPrevBestPosition_ > period * 3 / 4) &&
+                           (hmmBestPosition_ < period / 4);
+    bool silenceGate = (cbssMean_ >= 0.01f);
+
+    if (tempoStable && positionWrapped && silenceGate) {
+        // Save previous beat anchor BEFORE onset snap overwrites it (needed by PLL)
+        int prevBeatSample = lastBeatSample_;
+
+        // Onset snap: anchor the beat at the strongest nearby onset (reuse detectBeat logic)
+        if (onsetSnapWindow > 0 && ossCount_ > 0) {
+            int W = static_cast<int>(onsetSnapWindow);
+            float bestOSS = -1.0f;
+            int bestSnapOffset = 0;
+            for (int d = 0; d <= W; d++) {
+                int idx = sampleCounter_ - 1 - d;
+                if (idx < 0) break;
+                float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+                if (oss > bestOSS) {
+                    bestOSS = oss;
+                    bestSnapOffset = d;
+                }
+            }
+            lastBeatSample_ = sampleCounter_ - bestSnapOffset;
+        } else {
+            lastBeatSample_ = sampleCounter_;
+        }
+
+        // PLL proportional+integral phase correction (reuse detectBeat logic)
+        if (pllEnabled && beatCount_ > 2) {
+            int T = beatPeriodSamples_;
+            if (T < 10) T = 10;
+            int ibi = lastBeatSample_ - prevBeatSample;
+            float phaseError = static_cast<float>(ibi - T) / static_cast<float>(T);
+            if (phaseError > 0.5f) phaseError = 0.5f;
+            if (phaseError < -0.5f) phaseError = -0.5f;
+
+            float correction = pllKp * phaseError * static_cast<float>(T);
+            pllPhaseIntegral_ = 0.95f * pllPhaseIntegral_ + phaseError;
+            correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
+
+            int maxShift = T / 4;
+            int shift = static_cast<int>(correction);
+            if (shift > maxShift) shift = maxShift;
+            if (shift < -maxShift) shift = -maxShift;
+            lastBeatSample_ += shift;
+        }
+
+        if (beatCount_ < 65535) beatCount_++;
+        beatDetected = true;
+        cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+        updateBeatStability(nowMs);
+        lastFiredBeatPredicted_ = false;  // HMM beats are not predicted via countdown
+    }
+
+    hmmPrevBestTempo_ = hmmBestTempo_;
+
+    // Decay confidence when no beat
+    if (!beatDetected) {
+        cbssConfidence_ *= beatConfidenceDecay;
+    }
+
+    // Derive phase from HMM position (explicit state variable)
+    float newPhase = static_cast<float>(hmmBestPosition_) / static_cast<float>(period);
+    if (newPhase < 0.0f) newPhase = 0.0f;
+    if (newPhase >= 1.0f) newPhase = 0.0f;
+    if (!isfinite(newPhase)) newPhase = 0.0f;
+    phase_ = newPhase;
+
+    // Update timeToNextBeat_ for serial streaming compatibility
+    timeToNextBeat_ = period - hmmBestPosition_;
+    if (timeToNextBeat_ < 0) timeToNextBeat_ = 0;
+
+    predictNextBeat(nowMs);
 }
 
 // ===== PARTICLE FILTER BEAT TRACKING (v38) =====

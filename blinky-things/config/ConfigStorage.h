@@ -76,7 +76,8 @@ public:
     // Version 43: 128 BPM gravity well fixes (rayleighBpm, tempoNudge, fold32, sesquicheck, bisnap, harmonicSesqui)
     // Version 44: Remove proven-detrimental features (harmonicSesqui, PLP phase, phase check)
     // Version 45: Percival ACF harmonic pre-enhancement, PLL phase correction, adaptive CBSS tightness
-    static const uint8_t SETTINGS_VERSION = 45;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 46: HMM beat detection (position-0 wrap replaces CBSS countdown when hmm=1)
+    static const uint8_t SETTINGS_VERSION = 46;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -253,6 +254,7 @@ public:
         bool barPointerHmm;            // Bar-pointer HMM beat tracking (v34: joint tempo-phase)
         float hmmContrast;             // HMM ODF power-law contrast (v34)
         bool hmmTempoNorm;             // HMM tempo-normalized argmax (v34)
+        float hmmLambda;               // HMM transition tightness (v46: 0.01-1.0, default 0.05)
 
         // Particle filter beat tracking (v38)
         bool particleFilterEnabled;    // Enable PF (A/B vs CBSS+Bayesian)
@@ -417,16 +419,16 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 288,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (288 bytes = 59 floats + 8 uint8 + 23 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 296,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (296 bytes = 60 floats + 8 uint8 + 23 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     // ConfigData: ~693 bytes (4+160+64+64+32+24+288+44+1 + padding). Allocated in last 4KB flash page.
     // Tight bound catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 700,
-        "ConfigData exceeds 700 bytes! Current estimate ~693B. Check for unintended struct growth.");
+    static_assert(sizeof(ConfigData) <= 708,
+        "ConfigData exceeds 708 bytes! Current estimate ~701B. Check for unintended struct growth.");
 
     ConfigStorage();
     void begin();

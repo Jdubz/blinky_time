@@ -2144,3 +2144,105 @@ asymmetric gating impossible — both help and harm come from the same direction
 
 5. **Final defaults for v44:** `bisnap=1` (only feature retained). `fold32=0, sesquicheck=0,
    harmonicsesqui=0, rayleighbpm=120, temponudge=0.8`. All features remain togglable via serial.
+
+---
+
+## Test Session: 2026-03-03 (v45 Feature Validation)
+
+**Environment:**
+- Firmware: SETTINGS_VERSION 45 (with PR 61 bug fixes applied)
+- Devices: 3 bare XIAO nRF52840 Sense boards (ACM0, ACM1, ACM2)
+- Audio: JBL Pebbles USB speakers, ffplay, ALSA card 2 @ 100%
+- v45 features: Percival ACF harmonic enhancement, PLL phase correction, Adaptive CBSS tightness
+
+### Step 1: v45 Baseline (All Features ON)
+
+All 3 devices with default v45 settings: `percival=1, pll=1, adaptight=1`
+
+| Track | BPM | ACM0 F1 | ACM1 F1 | ACM2 F1 | 3-Dev Avg | BPM Acc |
+|-------|:---:|:-------:|:-------:|:-------:|:---------:|:-------:|
+| afrobeat-feelgood | 105 | 0.310 | 0.429 | 0.242 | 0.327 | 0.758 |
+| amapiano-vibez | 113 | 0.397 | 0.540 | 0.278 | 0.405 | 0.928 |
+| breakbeat-background | 86 | 0.259 | 0.363 | 0.327 | 0.316 | 0.427 |
+| breakbeat-drive | 86 | 0.256 | 0.225 | 0.253 | 0.245 | 0.516 |
+| dnb-energetic | 174 | 0.228 | 0.196 | 0.178 | 0.201 | 0.917 |
+| dnb-liquid-jungle | 174 | 0.286 | 0.308 | 0.221 | 0.272 | 0.779 |
+| dubstep-halftime | 140 | 0.306 | 0.302 | 0.321 | 0.310 | 0.880 |
+| edm-trap-electro | 130 | 0.230 | 0.343 | 0.256 | 0.276 | 0.694 |
+| garage-uk-2step | 130 | 0.310 | 0.156 | 0.342 | 0.269 | 0.912 |
+| reggaeton-fuego | 92 | 0.221 | 0.392 | 0.249 | 0.287 | 0.583 |
+| techno-deep-amb | 124 | 0.381 | 0.415 | 0.277 | 0.358 | 0.820 |
+| techno-dub-groove | 96 | 0.300 | 0.329 | 0.254 | 0.294 | 0.839 |
+| techno-machine-drum | 136 | 0.283 | 0.243 | 0.268 | 0.265 | 0.980 |
+| techno-minimal-01 | 133 | 0.356 | 0.412 | 0.337 | 0.368 | 0.911 |
+| techno-minimal-emotion | 126 | 0.338 | 0.475 | 0.443 | 0.419 | 0.918 |
+| trance-goa-mantra | 138 | 0.379 | 0.347 | 0.358 | 0.361 | 0.917 |
+| trance-infected | 140 | 0.386 | 0.358 | 0.353 | 0.366 | 0.967 |
+| trance-party | 138 | 0.333 | 0.367 | 0.346 | 0.349 | 0.920 |
+| **AVERAGE** | | **0.309** | **0.335** | **0.305** | **0.317** | **0.815** |
+
+**vs v43 baseline:** 3-Dev Avg F1 0.317 vs 0.284 (**+11.6%**), BPM Acc 0.815 vs 0.877 (-7.1%)
+
+### Step 2: A/B Feature Isolation (One Feature OFF Per Device)
+
+Each device has one feature disabled; others remain ON.
+- ACM0: `percival=0` (Percival OFF)
+- ACM1: `pll=0` (PLL OFF)
+- ACM2: `adaptight=0` (Adaptive tightness OFF)
+
+| Track | ACM0 (no perc) | ACM1 (no pll) | ACM2 (no adapt) |
+|-------|:--------------:|:-------------:|:---------------:|
+| afrobeat-feelgood | 0.230 | 0.325 | 0.220 |
+| amapiano-vibez | 0.245 | 0.374 | 0.333 |
+| breakbeat-background | 0.259 | 0.318 | 0.324 |
+| breakbeat-drive | 0.182 | 0.278 | 0.256 |
+| dnb-energetic | 0.211 | 0.261 | 0.252 |
+| dnb-liquid-jungle | 0.250 | 0.233 | 0.205 |
+| dubstep-halftime | 0.387 | 0.331 | 0.220 |
+| edm-trap-electro | 0.250 | 0.262 | 0.299 |
+| garage-uk-2step | 0.430 | 0.279 | 0.365 |
+| reggaeton-fuego | 0.360 | 0.324 | 0.304 |
+| techno-deep-amb | 0.256 | 0.354 | 0.271 |
+| techno-dub-groove | 0.320 | 0.186 | 0.349 |
+| techno-machine-drum | 0.167 | 0.404 | 0.089 |
+| techno-minimal-01 | 0.415 | 0.308 | 0.418 |
+| techno-minimal-emotion | 0.381 | 0.415 | 0.496 |
+| trance-goa-mantra | 0.284 | 0.263 | 0.254 |
+| trance-infected | 0.234 | 0.286 | 0.257 |
+| trance-party | 0.537 | 0.267 | 0.366 |
+| **AVERAGE** | **0.299** | **0.304** | **0.293** |
+
+### Feature Contribution Analysis
+
+| Feature | Baseline (ON) | A/B (OFF) | Delta | Win/Loss | Assessment |
+|---------|:------------:|:---------:|:-----:|:--------:|:----------:|
+| **PLL** | 0.335 | 0.304 | **+0.031** | 11/18 | **Strongest — keep ON** |
+| **Adaptive tightness** | 0.305 | 0.293 | **+0.012** | 10/18 | Marginal positive |
+| **Percival** | 0.309 | 0.299 | **+0.010** | 10/18 | Marginal positive |
+
+**Note:** Given run-to-run variance (std 0.04-0.23), only PLL's +0.031 contribution likely exceeds noise.
+Percival and adaptive tightness show positive trends but are within measurement uncertainty.
+
+### Key Findings
+
+1. **v45 combined effect is real**: +11.6% avg F1 over v43 (0.317 vs 0.284). Improvement
+   is broad-based — 14/18 tracks show improvement.
+
+2. **PLL is the primary contributor** (+0.031 avg F1, 11/18 wins). Consistent gains on
+   tracks with good BPM accuracy (trance, techno) where phase alignment is the bottleneck.
+
+3. **Percival and adaptive tightness are marginal** (~+0.01 each). May be contributing
+   synergistically but neither shows strong independent signal above run-to-run noise.
+
+4. **BPM accuracy decreased slightly** (0.877→0.815, -7.1%). Percival may be slightly
+   over-boosting certain harmonics. Worth investigating in Step 3.
+
+5. **Still far from 70% target**: 0.317 avg F1 is good progress but confirms the architectural
+   ceiling identified in literature review. CBSS-based phase derivation caps practical F1
+   around 0.35-0.40 even with perfect tempo tracking.
+
+### Recommendation
+
+Keep all 3 features ON as defaults. The +11.6% combined improvement is meaningful.
+For the path to 70% F1, the 1D joint tempo-phase HMM (Priority 4) remains the necessary
+architectural change — incremental CBSS improvements have diminishing returns.

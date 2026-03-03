@@ -409,11 +409,13 @@ public:
     // === BAR-POINTER HMM BEAT TRACKING (Phase 3.1, v34) ===
     // Joint tempo-phase tracking via bar-pointer HMM (Bock/madmom 2016).
     // State = (tempo_bin, position_within_beat). Phase advances deterministically
-    // each frame; tempo can only change at beat boundaries. Replaces CBSS + detectBeat.
-    // Reuses transMatrix_ and tempoBinLags_ from Bayesian tempo fusion.
+    // each frame; tempo can only change at beat boundaries.
+    // v46: HMM uses its own tight hmmTransMatrix_ for beat detection (position-0 wrap).
+    // Reuses tempoBinLags_ from Bayesian tempo fusion.
     bool barPointerHmm = false;          // Enable HMM beat tracking (A/B vs CBSS)
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
     bool hmmTempoNorm = true;            // Normalize argmax by period (prevents slow-tempo bias)
+    float hmmLambda = 0.05f;             // HMM transition tightness (small=tight, prevents octave jumps) (v46)
 
     // === PARTICLE FILTER BEAT TRACKING (v38) ===
     // Maintains 100 tempo/phase hypotheses; octave variants injected at resampling
@@ -716,6 +718,11 @@ private:
     int hmmPrevBestPosition_ = -1;               // Previous frame's best position (for phase wrap detection)
     bool hmmInitialized_ = false;
 
+    // HMM-specific transition matrix (v46: tight lambda for beat detection)
+    float hmmTransMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};
+    float hmmTransLambda_ = -1.0f;              // Cache key: rebuild when hmmLambda changes
+    int hmmPrevBestTempo_ = 0;                  // Previous frame's best tempo (spurious wrap detection)
+
     // === PARTICLE FILTER STATE (v38) ===
     static constexpr int PF_NUM_PARTICLES = 100;
     static constexpr float PF_INFO_GATE_ODF_FLOOR = 0.03f;  // Floor value for gated ODF during silence
@@ -764,7 +771,8 @@ private:
     // Bar-pointer HMM beat tracking (Phase 3.1)
     void initHmmState();
     void updateHmmForward(float onsetStrength);
-    // void detectBeatHmm();  // Experimental — not called; HMM provides tempo, CBSS detects beats
+    void buildHmmTransitionMatrix();  // v46: tight transition matrix for HMM beat detection
+    void detectHmmBeat();             // v46: HMM position-0 wrap beat detection
 
     // Particle filter beat tracking (v38)
     void initParticleFilter();

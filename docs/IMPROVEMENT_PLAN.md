@@ -11,7 +11,9 @@
 - **PLL proportional phase correction** (`pll=1, pllkp=0.15, pllki=0.005`): Measures IBI error against expected period T at each beat fire, applies proportional + leaky integral correction (decay=0.95). Max shift capped at T/4. Targets slow phase drift.
 - **Adaptive CBSS tightness** (`adaptight=1, tightlowmult=0.7, tighthighmult=1.3, tightconfhi=3.0, tightconflo=1.5`): Modulates log-Gaussian tightness based on onset confidence (OSS/cbssMean ratio). Strong onsets → looser (allow phase correction), weak → tighter (resist noise). Resolves tightness 5 vs 8 dilemma.
 - All 3 features togglable for A/B testing. 11 new settings (3 bools + 8 floats).
-- **NOT YET TESTED** — needs 18-track validation and per-feature A/B comparison.
+- **TESTED** (Mar 3, 2026): 3-dev avg F1 0.317 (+11.6% vs v43 0.284), BPM accuracy 0.815 (-7.1% vs v43 0.877).
+- A/B isolation: PLL +0.031 (strongest), adaptive tightness +0.012, Percival +0.010. All retained as defaults.
+- Phase alignment remains the F1 bottleneck. v45 improvements are positive but confirm CBSS architectural ceiling (~0.35).
 - SETTINGS_VERSION 45. 286KB flash (35%), 21.2KB RAM (8%). 188/192 settings slots used.
 
 **v44 Bidirectional Onset Snap + 128 BPM Gravity Well Investigation (SETTINGS_VERSION 43):**
@@ -197,7 +199,7 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 
 | # | Technique | Source | Effort | Expected Impact | Status |
 |---|-----------|--------|--------|----------------|--------|
-| 1a | **Percival ACF harmonic pre-enhancement** | Essentia `percivalenhanceharmonics.cpp` | ~50 ops, 0 memory | Addresses root cause — gives fundamental unique advantage | **v45 — implemented, untested** |
+| 1a | **Percival ACF harmonic pre-enhancement** | Essentia `percivalenhanceharmonics.cpp` | ~50 ops, 0 memory | Addresses root cause — gives fundamental unique advantage | **v45 — +0.010 F1, marginal** |
 | 1b | **Anti-harmonic comb** | Speech F0 estimation | ~50 ops, 0 memory | More aggressive variant — subtracts higher harmonics | Not started |
 | 1c | **Metrical contrast check** | Beat Critic (ISMIR 2010) | ~20 ops/beat | New disambiguation signal — compares beat vs midpoint onsets | Not started |
 
@@ -205,8 +207,8 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 
 | # | Technique | Source | Effort | Expected Impact | Status |
 |---|-----------|--------|--------|----------------|--------|
-| 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +5-10% F1, addresses slow phase drift | **v45 — implemented, untested** |
-| 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +3-7% F1, resolves 5 vs 8 dilemma | **v45 — implemented, untested** |
+| 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +5-10% F1, addresses slow phase drift | **v45 — +0.031 F1, strongest feature** |
+| 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +3-7% F1, resolves 5 vs 8 dilemma | **v45 — +0.012 F1, marginal** |
 | 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | +5-10% F1, prevents off-beat phase pulls | Not started |
 | 4 | **1D joint tempo-phase HMM** | Krebs/Böck (ISMIR 2015), Heydari (ICASSP 2022) | ~14 KB RAM, ~2% CPU | +15-25% F1, standard architecture for >60% F1 | Not started |
 

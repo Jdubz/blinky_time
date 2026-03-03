@@ -39,10 +39,15 @@
 | Beat F1 | 0.284 | 0.355 |
 | BPM Accuracy | **0.877** | — |
 
-### v45 — NOT YET TESTED
+### v45 18-Track Validation (Mar 3, 2026, 3 bare boards)
 
-v45 adds 3 new features (Percival + PLL + adaptive tightness). All enabled by default.
-Baselines below are from v43/v44. Run 18-track validation to establish v45 baselines.
+| Metric | 3-Device Avg | vs v43 |
+|--------|:------------:|:------:|
+| Beat F1 | **0.317** | +11.6% |
+| BPM Accuracy | 0.815 | -7.1% |
+
+Feature contributions (A/B isolation): PLL +0.031, Adaptive tightness +0.012, Percival +0.010.
+All 3 features retained as defaults.
 
 ### Historical Baselines
 
@@ -198,45 +203,53 @@ model (flat across all states). Corrected version needs: (1) full integer-lag re
 
 ## v45 Test Plan
 
-### Step 1: Establish v45 Baseline (all 3 features ON)
-Run full 18-track validation on 3 devices with all defaults. This is the combined baseline.
-```
-# All features enabled (default):
-# percival=1, pll=1, adaptight=1
-```
+### Step 1: Establish v45 Baseline — COMPLETE (Mar 3, 2026)
+3-dev avg F1 = 0.317 (+11.6% vs v43 0.284), BPM accuracy = 0.815.
+Full per-track results in PARAMETER_TUNING_HISTORY.md.
 
-### Step 2: A/B Each Feature (3 devices, one feature OFF per device)
-For each 18-track run, configure 3 devices differently to test each feature's contribution:
-```
-# ACM0: percival=0 (Percival OFF, others ON)
-# ACM1: pll=0 (PLL OFF, others ON)
-# ACM2: adaptight=0 (adaptive tightness OFF, others ON)
-```
-Compare each device's F1 against the Step 1 baseline. A feature is a keeper if disabling it
-hurts F1 (i.e., baseline > feature-off).
+### Step 2: A/B Feature Isolation — COMPLETE (Mar 3, 2026)
+Feature contributions: PLL +0.031 (11/18), Adaptive tightness +0.012 (10/18), Percival +0.010 (10/18).
+All 3 features retained. Combined improvement is real (+11.6%) but individual signals are within
+run-to-run noise (except PLL).
 
-### Step 3: Slow Track Focus (Percival validation)
-Percival specifically targets the 128 BPM gravity well on slow tracks. Run a focused test
-on the slow subset (breakbeat-amen 86 BPM, reggaeton 92 BPM, dub-groove 96 BPM):
-```
-# ACM0: percival=1 (default)
-# ACM1: percival=0
-# ACM2: percival=1, percivalw2=0.8, percivalw4=0.5 (stronger weights)
-```
-Check BPM accuracy specifically — does Percival prevent 3:2 harmonic lock?
+### Steps 3-5: SKIPPED — Diminishing returns
+A/B data shows v45 features are positive but marginal. Further parameter tuning on CBSS cannot
+reach 0.70 F1 — the architectural ceiling is ~0.35. Proceeding to Priority 4 (1D HMM).
 
-### Step 4: Phase-Sensitive Tracks (PLL validation)
-PLL targets phase drift. Focus on tracks with good BPM but poor F1 (garage-uk-2step,
-trance-goa-mantra):
-```
-# ACM0: pll=1 (default)
-# ACM1: pll=0
-# ACM2: pll=1, pllkp=0.25 (stronger correction)
-```
+## Priority 4: 1D Joint Tempo-Phase HMM Implementation
 
-### Step 5: Full Validation (if features look promising)
-If individual features show improvement, run a 5-run repeated 18-track validation
-to confirm results exceed run-to-run variance (std 0.04-0.23).
+The path to 70% F1 requires replacing CBSS with explicit phase tracking. The 1D joint
+tempo-phase HMM (Krebs/Böck ISMIR 2015, Heydari ICASSP 2022) is the standard architecture
+for >60% Beat F1 in all reference systems (madmom, BeatNet).
+
+### Why HMM solves both bottlenecks:
+1. **Phase alignment**: Phase is an explicit state variable, not emergent from a counter.
+   Each state encodes (period, position). Beats fire at position 0 with mathematically
+   optimal timing.
+2. **128 BPM gravity well**: transition_lambda=100 makes tempo jumps >10% essentially
+   zero probability within the HMM. Octave errors become mathematically impossible.
+
+### Architecture:
+- ~1,800 states (sum of integer lags 20-66, each lag L has L phase positions)
+- Phase advances deterministically: state (L, p) → (L, p+1)
+- At beat boundary (p wraps to 0): can jump to nearby tempos via Gaussian transition
+- Observation model: `lambda * ODF` at position 0, `1 - ODF` at other positions
+- Sparse Viterbi forward pass: each state has 1-2 transitions (phase advance + optional tempo change)
+- **Resources**: ~14 KB RAM (float[1800] × 2), ~2% CPU
+
+### Implementation Plan:
+1. Add `BeatHMM` class alongside existing CBSS (toggle: `hmm=0/1`)
+2. State space: integer lags 20-66 (60-198 BPM at 66 Hz), each with L phase positions
+3. Sparse transition: precompute valid transitions at init (deterministic phase + beat-boundary tempo changes)
+4. Observation: use existing BandFlux ODF (post-smoothing, pre-thresholding)
+5. Beat output: fire when MAP state has position=0 and previous MAP had position>0
+6. Keep CBSS as fallback (toggle between HMM and CBSS via serial)
+
+### Previous v37 HMM Failure Analysis:
+Failed due to: (1) too-few bins (20 bins = 20 total states, too coarse for phase), (2) wrong
+observation model (flat likelihood across all states instead of position-0-specific).
+Corrected version needs full integer-lag resolution (46 periods, ~1,800 states) and
+beat-position-specific observation model.
 
 ## PF Evaluation — Completed (v40)
 
