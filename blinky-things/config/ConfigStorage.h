@@ -73,7 +73,7 @@ public:
     // Version 42: PLP phase extraction (plpPhaseEnabled, plpCorrectionStrength, plpMinConfidence)
     //            v43 algorithmic fixes (no new settings): removed double inverse-lag, full-res comb,
     //            octave folding, lag-space transition matrix. Struct reordered (bool padding fix).
-    // Version 43: 128 BPM gravity well fixes (rayleighBpm, fold32, sesquicheck, bisnap)
+    // Version 43: 128 BPM gravity well fixes (rayleighBpm, tempoNudge, fold32, sesquicheck, bisnap, harmonicSesqui)
     // Version 44: Remove proven-detrimental features (harmonicSesqui, PLP phase, phase check)
     // Version 45: Percival ACF harmonic pre-enhancement, PLL phase correction, adaptive CBSS tightness
     static const uint8_t SETTINGS_VERSION = 45;  // Settings schema (fire, water, lightning, mic, music, bandflux params)

@@ -446,7 +446,7 @@ public:
     float posteriorFloor = 0.05f;        // Uniform mixing ratio to prevent mode lock (0=off, 0.05=5% floor)
     float disambigNudge = 0.15f;         // Posterior mass transfer when disambiguation corrects (0=off)
     float harmonicTransWeight = 0.30f;   // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
-    float rayleighBpm = 120.0f;          // Rayleigh prior peak BPM (60-180, takes effect on reboot)
+    float rayleighBpm = 120.0f;          // Rayleigh prior peak BPM (60-180)
     bool fold32Enabled = false;           // 3:2 octave folding: fold evidence from 2L/3 into L (v44, OFF — no net benefit)
     bool sesquiCheckEnabled = false;      // 3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44, OFF — no net benefit)
     bool bidirectionalSnap = true;        // Delay beat by 3 frames for bidirectional onset snap (v44)
@@ -693,8 +693,10 @@ private:
     float tempoBinBpms_[TEMPO_BINS] = {0};        // BPM value for each bin
     int tempoBinLags_[TEMPO_BINS] = {0};          // Lag value for each bin (at OSS_FRAME_RATE Hz)
     float transMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Precomputed Gaussian transition probabilities
-    float transMatrixLambda_ = -1.0f;             // bayesLambda used to compute transMatrix_ (-1 = uninitialized)
-    float transMatrixHarmonic_ = -1.0f;          // harmonicTransWeight used to compute transMatrix_
+    float transMatrixLambda_ = -1.0f;             // Last bayesLambda used to build transMatrix_
+    float transMatrixHarmonic_ = -1.0f;          // Last harmonicTransWeight used to build transMatrix_
+    bool transMatrixBtrkPipeline_ = false;       // Last btrkPipeline state used to build transMatrix_
+    float rayleighBpm_ = -1.0f;                  // Last rayleighBpm used to compute rayleighWeight_
     bool tempoStateInitialized_ = false;
     int bayesBestBin_ = TEMPO_BINS / 2;              // Best bin from last fusion (for debug)
     float lastFtObs_[TEMPO_BINS] = {0};           // Last FT observations (for debug)

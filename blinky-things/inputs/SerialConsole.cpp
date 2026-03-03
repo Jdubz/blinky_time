@@ -339,7 +339,7 @@ void SerialConsole::registerRhythmSettings() {
         "CBSS score ratio needed for octave switch (1-5)", 1.0f, 5.0f);
     // (phasecheck/plpphase/plpstrength/plpminconf registrations removed v44 — features deleted)
     settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "rhythm",
-        "Rayleigh prior peak BPM (v44: takes effect on reboot)", 60.0f, 180.0f);
+        "Rayleigh prior peak BPM (v44)", 60.0f, 180.0f);
     settings_.registerFloat("temponudge", &audioCtrl_->tempoNudge, "rhythm",
         "switchTempo posterior mass transfer fraction (v44: 0=none, 1=full swap)", 0.0f, 1.0f);
     settings_.registerBool("fold32", &audioCtrl_->fold32Enabled, "rhythm",

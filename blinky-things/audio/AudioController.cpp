@@ -788,8 +788,8 @@ void AudioController::initTempoState() {
     // Avoids 1600 expf() calls per autocorrelation cycle at runtime.
     buildTransitionMatrix();
     transMatrixLambda_ = bayesLambda;
-    float initHarmonic = btrkPipeline ? -(harmonicTransWeight + 1.0f) : harmonicTransWeight;
-    transMatrixHarmonic_ = initHarmonic;
+    transMatrixHarmonic_ = harmonicTransWeight;
+    transMatrixBtrkPipeline_ = btrkPipeline;
 
     // Rayleigh prior peaked at rayleighBpm (BTrack-style perceptual weighting)
     // For candidate period T (lag), Rayleigh(T; sigma) = T/sigma^2 * exp(-T^2 / (2*sigma^2))
@@ -807,6 +807,7 @@ void AudioController::initTempoState() {
         if (maxR > 0.0f) {
             for (int i = 0; i < TEMPO_BINS; i++) rayleighWeight_[i] /= maxR;
         }
+        rayleighBpm_ = rayleighBpm;
     }
 
     // Clear posterior and debug arrays
@@ -863,13 +864,30 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     if (!tempoStateInitialized_) return;
 
     // === 1. PREDICTION STEP ===
-    // Rebuild transition matrix if parameters changed.
-    // Sentinel encodes btrkPipeline and harmonicTransWeight.
-    float effectiveHarmonic = btrkPipeline ? -(harmonicTransWeight + 1.0f) : harmonicTransWeight;
-    if (bayesLambda != transMatrixLambda_ || effectiveHarmonic != transMatrixHarmonic_) {
+    // Rebuild transition matrix if any governing parameter changed.
+    if (bayesLambda != transMatrixLambda_ ||
+        harmonicTransWeight != transMatrixHarmonic_ ||
+        btrkPipeline != transMatrixBtrkPipeline_) {
         buildTransitionMatrix();
         transMatrixLambda_ = bayesLambda;
-        transMatrixHarmonic_ = effectiveHarmonic;
+        transMatrixHarmonic_ = harmonicTransWeight;
+        transMatrixBtrkPipeline_ = btrkPipeline;
+    }
+
+    // Recompute Rayleigh weights if rayleighBpm changed at runtime
+    if (rayleighBpm != rayleighBpm_) {
+        float rayleighSigma = OSS_FRAMES_PER_MIN / rayleighBpm;
+        float maxR = 0.0f;
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float lag = static_cast<float>(tempoBinLags_[i]);
+            rayleighWeight_[i] = (lag / (rayleighSigma * rayleighSigma))
+                                * expf(-lag * lag / (2.0f * rayleighSigma * rayleighSigma));
+            if (rayleighWeight_[i] > maxR) maxR = rayleighWeight_[i];
+        }
+        if (maxR > 0.0f) {
+            for (int i = 0; i < TEMPO_BINS; i++) rayleighWeight_[i] /= maxR;
+        }
+        rayleighBpm_ = rayleighBpm;
     }
 
     // When btrkPipeline is active, prediction is deferred to the Viterbi step (Change 2b).
@@ -919,11 +937,10 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // the old approach missed ~50% of true peaks due to quantization.
     // Full-resolution evaluation ensures the comb catches peaks regardless
     // of where they fall relative to bin centers.
-    // Size matches correlationAtLag[] (MAX_LAG - MIN_LAG + 1 = 47 in practice,
-    // but 256 is the shared cap for both arrays since harmonicCorrelationSize can grow).
-    static_assert(CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG + 1 <= 256,
-        "fullCombAcf buffer too small for lag range");
-    static float fullCombAcf[CombFilterBank::MAX_LAG - CombFilterBank::MIN_LAG + 1];
+    // Size must accommodate the full correlationSize range (maxLag - minLag + 1),
+    // which can exceed CombFilterBank::MAX_LAG - MIN_LAG + 1 when bpmMin < 60.
+    // Use 256 to match correlationAtLag[] capacity.
+    static float fullCombAcf[256];
     for (int li = 0; li < correlationSize; li++) {
         int lag = minLag + li;
         float combAcf = 0.0f;
@@ -1545,13 +1562,18 @@ void AudioController::updateCBSS(float onsetStrength) {
     // Weak onsets → tighter (resist noise-driven drift during quiet passages)
     if (adaptiveTightnessEnabled && cbssMean_ > 0.001f) {
         float ossRatio = onsetStrength / cbssMean_;
-        if (ossRatio > tightnessConfThreshHigh) {
-            effectiveTightness_ = cbssTightness * tightnessLowMult;
-        } else if (ossRatio < tightnessConfThreshLow) {
-            effectiveTightness_ = cbssTightness * tightnessHighMult;
+        float mult;
+        if (ossRatio >= tightnessConfThreshHigh) {
+            mult = tightnessLowMult;
+        } else if (ossRatio <= tightnessConfThreshLow) {
+            mult = tightnessHighMult;
         } else {
-            effectiveTightness_ = cbssTightness;
+            // Linear interpolation between thresholds to avoid step-function jitter
+            float t = (ossRatio - tightnessConfThreshLow)
+                    / (tightnessConfThreshHigh - tightnessConfThreshLow);
+            mult = tightnessHighMult + t * (tightnessLowMult - tightnessHighMult);
         }
+        effectiveTightness_ = cbssTightness * mult;
     } else {
         effectiveTightness_ = cbssTightness;
     }
@@ -1688,95 +1710,52 @@ void AudioController::checkOctaveAlternative() {
     }
     if (countT > 0) scoreT /= static_cast<float>(countT);
 
-    // --- Check double-time (T/2 = faster) ---
-    if (halfT >= 10) {
-        float scoreHalfT = 0.0f;
-        int countHalfT = 0;
-        for (int offset = 0; offset < lookback; offset += halfT) {
+    // Helper: score a candidate period by averaging CBSS at expected beat positions
+    auto scorePeriod = [&](int period) -> float {
+        int lb = period * 4;
+        if (lb > sampleCounter_) lb = sampleCounter_;
+        float score = 0.0f;
+        int count = 0;
+        for (int offset = 0; offset < lb; offset += period) {
             int idx = sampleCounter_ - 1 - offset;
             if (idx >= 0) {
-                scoreHalfT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
-                countHalfT++;
+                score += cbssBuffer_[idx % OSS_BUFFER_SIZE];
+                count++;
             }
         }
-        if (countHalfT > 0) scoreHalfT /= static_cast<float>(countHalfT);
+        return (count > 0) ? score / static_cast<float>(count) : 0.0f;
+    };
 
-        if (scoreT > 0.001f && scoreHalfT > octaveScoreRatio * scoreT) {
-            switchTempo(halfT);
-            return;
+    // Helper: check if a candidate period is valid (within BPM range and buffer)
+    auto isValidPeriod = [&](int period) -> bool {
+        if (period < 10 || period >= OSS_BUFFER_SIZE / 2) return false;
+        float candidateBpm = OSS_FRAMES_PER_MIN / static_cast<float>(period);
+        return candidateBpm >= bpmMin && candidateBpm <= bpmMax;
+    };
+
+    // Try a candidate: score it and switch if it beats current tempo
+    auto tryCandidate = [&](int period) -> bool {
+        if (!isValidPeriod(period)) return false;
+        float score = scorePeriod(period);
+        if (scoreT > 0.001f && score > octaveScoreRatio * scoreT) {
+            switchTempo(period);
+            return true;
         }
-    }
+        return false;
+    };
+
+    // --- Check double-time (T/2 = faster) ---
+    if (tryCandidate(halfT)) return;
 
     // --- Check half-time (2T = slower) ---
-    // Use longer lookback for slower tempo (need enough history at 2T spacing)
-    int lookbackDouble = doubleT * 4;
-    if (lookbackDouble > sampleCounter_) lookbackDouble = sampleCounter_;
-    // Only check if 2T is within valid BPM range
-    float doubleTPeriodBpm = OSS_FRAMES_PER_MIN / static_cast<float>(doubleT);
-    if (doubleTPeriodBpm >= bpmMin && doubleT < OSS_BUFFER_SIZE / 2) {
-        float scoreDoubleT = 0.0f;
-        int countDoubleT = 0;
-        for (int offset = 0; offset < lookbackDouble; offset += doubleT) {
-            int idx = sampleCounter_ - 1 - offset;
-            if (idx >= 0) {
-                scoreDoubleT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
-                countDoubleT++;
-            }
-        }
-        if (countDoubleT > 0) scoreDoubleT /= static_cast<float>(countDoubleT);
-
-        if (scoreT > 0.001f && scoreDoubleT > octaveScoreRatio * scoreT) {
-            switchTempo(doubleT);
-            return;
-        }
-    }
+    if (tryCandidate(doubleT)) return;
 
     // --- Check sesquialtera ratios (3:2) ---
-    // If locked at ~128 BPM, checks ~84 BPM (3T/2) and vice versa
     if (sesquiCheckEnabled) {
-        // 3T/2 (slower, sesquialtera down): e.g., 128 BPM -> 84 BPM
-        int threeHalvesT = (T * 3) / 2;
-        float threeHalvesBpm = OSS_FRAMES_PER_MIN / static_cast<float>(threeHalvesT);
-        if (threeHalvesBpm >= bpmMin && threeHalvesT < OSS_BUFFER_SIZE / 2) {
-            int lookback32 = threeHalvesT * 4;
-            if (lookback32 > sampleCounter_) lookback32 = sampleCounter_;
-            float score32 = 0.0f;
-            int count32 = 0;
-            for (int offset = 0; offset < lookback32; offset += threeHalvesT) {
-                int idx = sampleCounter_ - 1 - offset;
-                if (idx >= 0) {
-                    score32 += cbssBuffer_[idx % OSS_BUFFER_SIZE];
-                    count32++;
-                }
-            }
-            if (count32 > 0) score32 /= static_cast<float>(count32);
-            if (scoreT > 0.001f && score32 > octaveScoreRatio * scoreT) {
-                switchTempo(threeHalvesT);
-                return;
-            }
-        }
-
-        // 2T/3 (faster, sesquialtera up): e.g., 84 BPM -> 128 BPM
-        int twoThirdsT = (T * 2) / 3;
-        float twoThirdsBpm = OSS_FRAMES_PER_MIN / static_cast<float>(twoThirdsT);
-        if (twoThirdsT >= 10 && twoThirdsBpm <= bpmMax) {
-            int lookback23 = twoThirdsT * 4;
-            if (lookback23 > sampleCounter_) lookback23 = sampleCounter_;
-            float score23 = 0.0f;
-            int count23 = 0;
-            for (int offset = 0; offset < lookback23; offset += twoThirdsT) {
-                int idx = sampleCounter_ - 1 - offset;
-                if (idx >= 0) {
-                    score23 += cbssBuffer_[idx % OSS_BUFFER_SIZE];
-                    count23++;
-                }
-            }
-            if (count23 > 0) score23 /= static_cast<float>(count23);
-            if (scoreT > 0.001f && score23 > octaveScoreRatio * scoreT) {
-                switchTempo(twoThirdsT);
-                return;
-            }
-        }
+        // 3T/2 (slower): e.g., 128 BPM -> 84 BPM
+        if (tryCandidate((T * 3) / 2)) return;
+        // 2T/3 (faster): e.g., 84 BPM -> 128 BPM
+        if (tryCandidate((T * 2) / 3)) return;
     }
 }
 
@@ -2323,11 +2302,11 @@ void AudioController::detectBeat() {
         predictBeat();
     }
 
-    // Beat declared when countdown reaches threshold AND CBSS is above adaptive threshold
-    // Bidirectional snap: delay by 3 frames (~45ms) so the backward-only onset snap
-    // window covers frames arriving after the predicted beat time
-    int snapDelay = bidirectionalSnap ? 3 : 0;
-    if (timeToNextBeat_ <= -snapDelay) {
+    // Beat declared when countdown reaches threshold AND CBSS is above adaptive threshold.
+    // Bidirectional snap: delay declaration by 3 frames (~45ms at 66 Hz) so the
+    // backward-only onset snap window covers frames arriving after the predicted beat time.
+    int beatDeclareDelay = bidirectionalSnap ? 3 : 0;
+    if (timeToNextBeat_ <= -beatDeclareDelay) {
         // Adaptive threshold: suppress beats during silence/breakdowns
         // When cbssThresholdFactor > 0, require current CBSS > factor * running mean
         float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];
@@ -2421,10 +2400,11 @@ void AudioController::detectBeat() {
             // (phase alignment checker removed v44 — net-negative on 18-track validation)
         }
 
-        // Always reset timers (even if suppressed) to prevent re-firing stale countdown
+        // Always reset timers (even if suppressed) to prevent re-firing stale countdown.
+        // Account for snapDelay so the effective beat interval stays at T, not T + snapDelay.
         int T = beatPeriodSamples_;
         if (T < 10) T = 10;
-        timeToNextBeat_ = T;
+        timeToNextBeat_ = T - beatDeclareDelay;
         timeToNextPrediction_ = T / 2;
         lastBeatWasPredicted_ = false;  // Reset; prediction will set true when it runs
     }

@@ -567,7 +567,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
     validateFloat(data_.music.rayleighBpm, 60.0f, 180.0f, F("rayleighBpm"));
     validateFloat(data_.music.tempoNudge, 0.0f, 1.0f, F("tempoNudge"));
-    // fold32Enabled, sesquiCheckEnabled, bidirectionalSnap are bools — no range validation needed
+    // fold32Enabled, sesquiCheckEnabled, bidirectionalSnap, harmonicSesqui are bools — no range validation needed
 
     // Percival ACF harmonic pre-enhancement validation (v45)
     validateFloat(data_.music.percivalWeight2, 0.0f, 1.0f, F("percivalWeight2"));
