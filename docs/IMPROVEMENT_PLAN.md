@@ -1,10 +1,48 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 3, 2026 (v45 implementation)*
+*Last Updated: March 3, 2026 (v47 signal chain mitigation tested)*
 
 ## Current Status
 
 ### Completed (March 3, 2026)
+
+**v47 Signal Chain Decompression — NEUTRAL, retained as default (SETTINGS_VERSION 47):**
+- Implemented raw FFT magnitude path for BandFlux (`bfprewhiten=1`): bypasses both compressor and per-bin whitening. Matches how reference systems (SuperFlux, BTrack) feed their ODF.
+- Implemented band-selective whitening bypass (`whitenbassbypass`): preserves kick drum contrast in bins 1-6.
+- **Tested across 11 tracks + compressor/gamma parameter sweeps: NO measurable improvement.**
+- BandFlux's `log(1+20*mag)` + adaptive threshold self-normalizes, compensating for any upstream processing.
+- Transient detection identical across all configs (~200 detections, 0.83 recall on techno-minimal-01).
+- Run-to-run Beat F1 variance (0.24-0.52) dwarfs any config effect.
+- **Conclusion**: Signal chain is NOT the F1 bottleneck. Phase alignment remains the dominant limitation.
+- Retained as default (`bfprewhiten=1`) since it matches reference architecture. +512B RAM.
+
+**v46 HMM Phase Tracker Experiment — FAILED, CBSS retained (SETTINGS_VERSION 45, no version bump):**
+- Attempted to replace CBSS beat detection with explicit phase tracking via Bernoulli observation model.
+- Three approaches tested, all regressed vs CBSS baseline:
+
+| Approach | Avg Beat F1 | Beat Count vs Expected | Root Cause |
+|----------|:-----------:|:---------------------:|------------|
+| Bernoulli argmax wrap | 0.241 | ~50-60% (under-fire) | Observation model requires onset at every beat; beats without transients missed |
+| Simple countdown | 0.265 | ~72% (under-fire) | Onset snap + PLL extend effective period cumulatively |
+| CBSS baseline | 0.366 | ~100% (correct) | Threshold-based detection adapts to signal, not reliant on onset at every beat |
+
+- **Key finding**: The Bernoulli observation model `P(obs|pos=0) = ODF, P(obs|pos≠0) = 1-ODF` fundamentally requires a transient at every beat position. Real music has beats without strong transients (e.g., sustained bass notes, syncopated patterns). CBSS's threshold-based detection avoids this by using cumulative beat strength history.
+- **v37 HMM analysis confirmed**: Both v37 (joint tempo-phase, 855 states) and v46 (phase-only, single period) HMM approaches fail for the same reason — the observation model conflates "onset" with "beat."
+- **Conclusion**: CBSS `detectBeat()` is architecturally better-suited for noisy mic-in-room audio than probabilistic phase trackers. Future improvements should enhance CBSS phase alignment, not replace the detection mechanism.
+
+**Signal chain audit — 6 adaptive systems identified that compound to reduce transient contrast:**
+
+| System | Timescale | Risk | Mechanism |
+|--------|-----------|------|-----------|
+| **Compressor release** | 2.0s | HIGH | 3:1 ratio with 2s release dampens next transient after loud peak |
+| **Per-bin whitening** | ~1s (decay 0.997) | HIGH | Running max normalization flattens sustained rhythmic content |
+| **Hardware AGC** | 5-30s | HIGH | Gain adaptation lag during quiet→loud transitions |
+| **BandFlux threshold** | ~0.8s (α=0.02) | MEDIUM | Additive threshold drift after loud sections misses quieter kicks |
+| **ODF 5-point MA** | 80ms | MEDIUM | Phase lag + transient broadening |
+| **Bayesian transition** | 2-5s | MEDIUM | Slow tempo lock |
+
+- These interact multiplicatively: a kick triggers AGC gain reduction + compressor gain reduction + whitening running-max increase + threshold elevation = 3-4 independent attenuation stages on subsequent transients.
+- **Next priority**: Investigate mitigation approaches (dual-path ODF, modified compressor parameters, band-selective whitening).
 
 **v45 Percival Harmonic Enhancement + PLL Phase Correction + Adaptive Tightness (SETTINGS_VERSION 45):**
 - **Percival ACF harmonic pre-enhancement** (`percival=1, percivalw2=0.5, percivalw4=0.25`): Folds ACF[2L]+ACF[4L] into ACF[L] before comb-on-ACF evaluation. Gives fundamental a unique ~2-3x advantage over sub-harmonic through the combined Percival+comb pipeline. Forward iteration safe. Targets 128 BPM gravity well.
@@ -210,7 +248,7 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 | 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +5-10% F1, addresses slow phase drift | **v45 — +0.031 F1, strongest feature** |
 | 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +3-7% F1, resolves 5 vs 8 dilemma | **v45 — +0.012 F1, marginal** |
 | 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | +5-10% F1, prevents off-beat phase pulls | Not started |
-| 4 | **1D joint tempo-phase HMM** | Krebs/Böck (ISMIR 2015), Heydari (ICASSP 2022) | ~14 KB RAM, ~2% CPU | +15-25% F1, standard architecture for >60% F1 | Not started |
+| 4 | ~~1D joint tempo-phase HMM~~ | Krebs/Böck (ISMIR 2015), Heydari (ICASSP 2022) | ~14 KB RAM, ~2% CPU | ~~+15-25% F1~~ | **v46 — FAILED, all approaches regress** |
 
 **Eliminated by research/testing:**
 - ~~Widen Rayleigh prior~~ — weak lever, doesn't overcome comb filter harmonics
@@ -218,6 +256,8 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 - ~~Lower cbssTightness (8→5)~~ — tested in v40, wrong for noisy mic audio
 - ~~PLP phase extraction~~ — tested in v42, OSS too noisy for analytical phase
 - ~~Bidirectional onset snap~~ — implemented in v44 as bisnap (+0.005 F1, near theoretical limit)
+- ~~1D joint tempo-phase HMM~~ — tested in v46, all approaches regress vs CBSS. Bernoulli obs model requires onset at every beat; fails on noisy mic audio
+- ~~Phase-only Bernoulli tracker~~ — tested in v46, argmax (F1=0.241), countdown (F1=0.265), deterministic counter (F1=0.195). All worse than CBSS (F1=0.366)
 
 **Key references:**
 - Percival & Tzanetakis 2014 — Streamlined Tempo Estimation (IEEE/ACM TASLP)
@@ -298,7 +338,8 @@ Static Gaussian prior (centered at `bayesprior`, sigma `priorwidth`) multiplied 
 - fold32 (3:2 octave folding): -0.009 avg F1, 1/18 wins (v44)
 - sesquicheck (3:2 shadow CBSS check): No benefit alongside fold32 (v44)
 - harmonicsesqui (3:2 transition shortcuts): Catastrophic on 130+ BPM tracks (v44)
-- v37 HMM attempt: Failed due to too-few bins (20) and wrong observation model (flat across all states). Corrected version needs full integer-lag resolution (46 periods) and position-0-specific observation model (Mar 2026 research)
+- v37 HMM attempt: Failed due to too-few bins (20) and wrong observation model (flat across all states). (Mar 2026 research)
+- v46 HMM phase tracker (3 approaches): Bernoulli argmax wrap (F1=0.241), countdown (F1=0.265), deterministic counter (F1=0.195). All worse than CBSS (F1=0.366). Root cause: Bernoulli obs model requires onset at every beat position — real music doesn't have this. The HMM/probabilistic phase tracking architecture is fundamentally unsuited for noisy mic-in-room audio where onsets are sparse and irregular.
 - Sequential override chain: Features interact negatively, combined avg F1 dropped 0.472→0.381 (Feb 23)
 - Raw ACF observation in Bayesian: Sub-harmonic bias without inverse-lag normalization (Feb 25) — **fixed**: inverse-lag normalization added, then harmonic comb + Rayleigh prior added (v25), ACF weight raised to 0.8
 - Fourier tempogram at full weight without spectral processing: Mean normalization destroys discriminability (Feb 25) — **fixed**: spectral compressor+whitening (v23) enabled re-activation at weight 2.0 (v24)
@@ -1025,22 +1066,62 @@ Current onset snap only looks backward from countdown expiry. If the actual onse
 **Effort**: Low (~15 lines).
 **Expected impact**: +3-5% F1. Adds 45-60ms latency (imperceptible for visuals).
 
-#### 1d. Joint Tempo-Phase HMM (Bar Pointer Model) — HIGH IMPACT, HIGH EFFORT
+#### 1d. Joint Tempo-Phase HMM (Bar Pointer Model) — TESTED, FAILED (v37 + v46)
 
-Re-attempt the bar-pointer HMM with madmom-style observation model. Previous attempt (v37, `hmm=1`) failed with half-time lock at 80 BPM — likely caused by too-few tempo bins and raw ODF observation model.
+**Status: CLOSED.** Tested twice — v37 (joint HMM) and v46 (phase-only tracker with corrected observation model). Both regress vs CBSS. See v46 section in "Current Status" for full results.
 
-**Corrected approach (based on madmom source analysis):**
-1. **State space**: Each state = (tempo_bin, position_within_beat). For 40 tempo bins with periods 18-60, total ~1700 states. Position advances deterministically by 1 each frame.
-2. **Transitions**: Within a beat period, deterministic (position → position+1). At beat boundaries (position wraps to 0), tempo changes allowed with exponential penalty: `prob = exp(-lambda * |to_period/from_period - 1|)`, lambda=100 (strongly penalizes tempo changes).
-3. **Observation model**: Beat region (first 1/lambda of period) gets `obs = odf`. Non-beat region gets `obs = (1-odf) / (lambda-1)`. With lambda=8-16, creates sharp likelihood peak for beat-aligned states.
-4. **Forward algorithm**: Maintain probability vector over all states, update each frame.
+**Why it fails in our context:** The Bernoulli/madmom observation model requires transients at beat positions. In room-captured audio, AGC + compression + whitening reduce transient contrast to the point where many beats have no detectable onset. CBSS's threshold-based approach handles this gracefully; HMM's probabilistic phase tracking does not.
 
-**Memory**: ~7 KB for forward vector + ~2 KB transitions = ~9 KB. Within 30 KB headroom.
-**CPU**: ~1700 multiply-adds per frame at 66 Hz = 0.12% CPU. Trivially within budget.
-**Effort**: High (~300 lines). Would replace Bayesian tempo + CBSS + predict-and-countdown.
-**Expected impact**: +15-25% F1. This is how madmom achieves >74% F1 (online forward mode).
-**Risk**: Complete rewrite of beat tracking backend. Prototype in Python first.
-**References**: Krebs, Böck, Widmer 2015 "Efficient State-Space Model for Joint Tempo and Meter Tracking"
+**madmom achieves >74% F1** because it operates on studio-quality audio (clean line-in) where every beat has a clear spectral flux onset. Our mic-in-room setup has fundamentally different signal characteristics.
+
+**New priority:** Instead of replacing the beat tracker, improve signal quality feeding it.
+
+#### 1e. Signal Chain Mitigation — TESTED, NEUTRAL (v47, Mar 3, 2026)
+
+v46 investigation revealed that the signal chain applies 3-4 cascaded adaptation stages that
+reduce transient contrast before the ODF reaches CBSS. No reference system (BTrack, SuperFlux,
+madmom) uses both compression AND per-bin whitening before onset detection.
+
+**Reference system comparison — no system uses compression + whitening for ODF:**
+
+| System | Compression | Whitening | Pre-ODF Processing |
+|--------|------------|-----------|-------------------|
+| BTrack | None | None | Adaptive threshold (local mean + HWR) |
+| SuperFlux | log10(mul*spec+1) | None | Triangular filterbank (24 bands/octave) |
+| madmom | log-filtered spectrogram | None | Filterbank (24 bands, 30-17kHz) |
+| aubio | Optional | Optional (relax=250s) | Per-ODF config |
+| Essentia | log1p(gamma*mag) | None | Percival harmonic enhancement on ACF |
+| **This system** | **3:1 soft-knee + 6dB makeup** | **Per-bin running max (decay=0.997)** | **Band-weighted flux + additive threshold** |
+
+**v47 Implementation (SETTINGS_VERSION 47):**
+- `bfprewhiten` (default ON): BandFlux receives raw FFT magnitudes (no compressor, no whitening). All other consumers (energy, mel bands, visualizer) still see compressed+whitened magnitudes.
+- `whitenbassbypass` (default OFF): Skips whitening for bass bins 1-6 (62-375 Hz) in the whitened path.
+- +512B RAM (preWhitenMagnitudes buffer). 288KB flash (35%), 22KB RAM (9%).
+
+**v47 Test Results — NO measurable improvement:**
+
+Tested across 11 tracks with 3-device A/B (prewhiten=1 vs prewhiten=0 vs prewhiten+bassbypass).
+Also tested compressor release (0.3s, 1.0s, 2.0s), compressor ratio (1.5:1 vs 3:1), and
+BandFlux gamma (5, 10, 20) variants on techno-minimal-01.
+
+| Finding | Details |
+|---------|---------|
+| **Transient detection unchanged** | All configs produce ~200 detections on techno-minimal-01 (recall ~0.83). BandFlux's `log(1+20*mag)` + adaptive threshold compensates for upstream processing differences |
+| **Beat F1 within noise** | Same track same firmware: F1 ranges 0.24-0.52 across runs. Run-to-run variance (std=0.04-0.23) drowns any config effect |
+| **BPM accuracy slightly better** | prewhiten=1 shows ~5-7% better BPM accuracy on some tracks (not consistent across full set) |
+| **Compressor release 0.3s hurts** | Fast release causes pumping artifacts that increase ODF noise |
+| **Gamma recalibration unnecessary** | gamma=5, 10, 20 all produce similar transient counts on raw input |
+
+**Root cause: BandFlux self-normalizes.** Its `log(1+gamma*mag)` with gamma=20 maps any
+input range to a manageable scale, and the adaptive additive threshold (running mean + delta)
+adjusts to whatever the input magnitude distribution is. The upstream processing IS redundant,
+but removing it doesn't help because BandFlux already compensates.
+
+**Conclusion:** Signal chain decompression is architecturally sound (matches reference systems)
+and retained as default (`bfprewhiten=1`), but it is NOT the F1 bottleneck. Phase alignment
+remains the dominant limitation — the system detects the right onsets and the right tempo, but
+beat predictions don't land close enough to ground truth beat times. This is a CBSS
+predict+countdown limitation.
 
 ### Priority 2: Simplify — Remove Wasteful Features
 

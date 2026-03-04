@@ -16,7 +16,7 @@ import type { AudioSample, MusicModeState } from './types.js';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync, mkdirSync, existsSync, statSync, readFileSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, statSync, readFileSync, readdirSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -26,6 +26,9 @@ const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'blinky-test-player', 'dist
 
 // Path to test results directory
 const TEST_RESULTS_DIR = join(__dirname, '..', '..', 'test-results');
+
+// Gap between runs/tracks to let AGC and detectors settle
+const INTER_RUN_GAP_MS = 5000;
 
 // Ensure test results directory exists
 function ensureTestResultsDir(): void {
@@ -70,6 +73,425 @@ function computeBpmMetrics(avgBpm: number, expectedBpm: number): { accuracy: num
   const error = Math.abs(avgBpm - expectedBpm) / expectedBpm * 100;
   const accuracy = Math.max(0, 1 - error / 100);
   return { accuracy, error };
+}
+
+/** Compute mean, std, min, max of a numeric array.
+ *  Returns zeros for empty arrays — callers filter upstream so this rarely triggers. */
+function computeStats(values: number[]): { mean: number; std: number; min: number; max: number } {
+  if (values.length === 0) return { mean: 0, std: 0, min: 0, max: 0 };
+  const mean = values.reduce((s, v) => s + v, 0) / values.length;
+  const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+  return {
+    mean,
+    std: Math.sqrt(variance),
+    min: Math.min(...values),
+    max: Math.max(...values),
+  };
+}
+
+/** Round stats to 3 decimal places for display. */
+function roundStats(s: { mean: number; std: number; min: number; max: number }) {
+  return {
+    mean: Math.round(s.mean * 1000) / 1000,
+    std: Math.round(s.std * 1000) / 1000,
+    min: Math.round(s.min * 1000) / 1000,
+    max: Math.round(s.max * 1000) / 1000,
+  };
+}
+
+/**
+ * Robust audio latency estimation using filtered detections + histogram peak.
+ * Replaces the naive all-detections median approach which was noisy.
+ *
+ * @param detections - Transient detections with timestampMs relative to audio start
+ * @param gtHits - Ground truth hits with time in seconds and strength
+ * @param audioDurationMs - Total audio duration for filtering
+ * @returns Estimated latency in milliseconds, or null if insufficient data
+ */
+function estimateAudioLatency(
+  detections: Array<{ timestampMs: number; strength: number }>,
+  gtHits: Array<{ time: number; strength: number; expectTrigger?: boolean }>,
+  audioDurationMs: number,
+): number | null {
+  // 1. Filter to strong detections only (strength > 0.5)
+  const strongDetections = detections.filter(d => d.strength > 0.5);
+
+  // 2. Match against strong ground truth beats only (strength >= 0.8)
+  const allExpected = gtHits.filter(h =>
+    h.expectTrigger !== false && h.time * 1000 <= audioDurationMs
+  );
+  const strongExpected = allExpected.filter(h => h.strength >= 0.8);
+
+  // Fall back to all events if not enough strong ones
+  const useDetections = strongDetections.length >= 5 ? strongDetections : detections;
+  const useExpected = strongExpected.length >= 3 ? strongExpected : allExpected;
+
+  // 3. Compute offsets with tighter 350ms window
+  const offsets: number[] = [];
+  for (const det of useDetections) {
+    let bestSignedOffset = Infinity;
+    for (const hit of useExpected) {
+      const hitMs = hit.time * 1000;
+      const offset = det.timestampMs - hitMs;
+      if (Math.abs(offset) < Math.abs(bestSignedOffset)) bestSignedOffset = offset;
+    }
+    if (Math.abs(bestSignedOffset) < 350) offsets.push(bestSignedOffset);
+  }
+
+  if (offsets.length < 3) return null;
+
+  // 4. Histogram-peak estimation (10ms buckets, find mode)
+  const BUCKET = 10;
+  const histogram = new Map<number, number>();
+  for (const o of offsets) {
+    const bucket = Math.round(o / BUCKET) * BUCKET;
+    histogram.set(bucket, (histogram.get(bucket) || 0) + 1);
+  }
+
+  let peakBucket = 0;
+  let peakCount = 0;
+  for (const [bucket, count] of histogram) {
+    if (count > peakCount || (count === peakCount && Math.abs(bucket) < Math.abs(peakBucket))) {
+      peakCount = count;
+      peakBucket = bucket;
+    }
+  }
+
+  // Refine: weighted average of offsets within ±1 bucket of peak
+  let sumWeight = 0;
+  let sumOffset = 0;
+  for (const o of offsets) {
+    if (Math.abs(Math.round(o / BUCKET) * BUCKET - peakBucket) <= BUCKET) {
+      sumOffset += o;
+      sumWeight++;
+    }
+  }
+
+  return sumWeight > 0 ? sumOffset / sumWeight : peakBucket;
+}
+
+/** Discover audio tracks with matching ground truth annotations in a directory. */
+function discoverTracks(dir: string): Array<{ name: string; audioFile: string; groundTruth: string }> {
+  if (!existsSync(dir)) throw new Error(`Track directory does not exist: ${dir}`);
+  const files = readdirSync(dir);
+  const tracks: Array<{ name: string; audioFile: string; groundTruth: string }> = [];
+  for (const f of files) {
+    if (f.endsWith('.mp3') || f.endsWith('.wav') || f.endsWith('.flac')) {
+      const base = f.replace(/\.(mp3|wav|flac)$/, '');
+      const gtFile = `${base}.beats.json`;
+      if (files.includes(gtFile)) {
+        tracks.push({
+          name: base,
+          audioFile: join(dir, f),
+          groundTruth: join(dir, gtFile),
+        });
+      }
+    }
+  }
+  return tracks.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Ground truth type shared by music test scoring. */
+type GroundTruth = {
+  pattern: string;
+  durationMs: number;
+  bpm?: number;
+  hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
+};
+
+/** Result of scoring a single device run against ground truth. */
+interface DeviceRunScore {
+  audioLatencyMs: number | null;
+  audioDurationSec: number;
+  timingOffsetMs: number;
+  beatTracking: {
+    f1: number; precision: number; recall: number;
+    cmlt: number; cmlc: number; amlt: number;
+    refBeats: number; estBeats: number;
+  };
+  transientTracking: {
+    f1: number; precision: number; recall: number; count: number;
+  };
+  musicMode: {
+    avgBpm: number; expectedBpm: number;
+    bpmError: number | null; bpmAccuracy: number | null;
+    avgConfidence: number; phaseStability: number;
+    activationMs: number | null;
+  };
+  diagnostics: {
+    transientRate: number; expectedBeatRate: number; beatEventRate: number;
+    phaseOffsetStats: { median: number; stdDev: number; iqr: number } | null;
+    beatOffsetStats: { median: number; stdDev: number; iqr: number } | null;
+    beatOffsetHistogram: Record<string, number>;
+    beatVsReference: { matched: number; extra: number; missed: number };
+    predictionRatio: { predicted: number; fallback: number; total: number } | null;
+    transientBeatOffsets: number[];
+    beatEventOffsets: number[];
+  };
+  // Adjusted raw data
+  adjustedDetections: Array<{ timestampMs: number; type: string; strength: number }>;
+  adjustedBeatEvents: Array<{ timestampMs: number; bpm: number; type: string; predicted?: boolean }>;
+  adjustedMusicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; cbss?: number }>;
+}
+
+/**
+ * Score a single device's test recording against ground truth.
+ * This is the shared scoring logic used by run_music_test, run_music_test_multi,
+ * and run_validation_suite.
+ */
+function scoreDeviceRun(
+  testData: {
+    duration: number;
+    startTime: number;
+    transients: Array<{ timestampMs: number; type: string; strength: number }>;
+    musicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; cbss?: number }>;
+    beatEvents: Array<{ timestampMs: number; bpm: number; type: string; predicted?: boolean }>;
+  },
+  audioStartTime: number,
+  gtData: GroundTruth,
+): DeviceRunScore {
+  const rawDuration = testData.duration;
+  const timingOffsetMs = audioStartTime - testData.startTime;
+
+  // Adjust timestamps relative to audio start
+  const detections = testData.transients
+    .map(d => ({ ...d, timestampMs: d.timestampMs - timingOffsetMs }))
+    .filter(d => d.timestampMs >= 0);
+  const musicStates = testData.musicStates
+    .map(s => ({ ...s, timestampMs: s.timestampMs - timingOffsetMs }))
+    .filter(s => s.timestampMs >= 0);
+  const beatEvents = testData.beatEvents
+    .map(b => ({ ...b, timestampMs: b.timestampMs - timingOffsetMs }))
+    .filter(b => b.timestampMs >= 0);
+
+  // Compute audio latency using robust estimator
+  const audioDurationMs = rawDuration - timingOffsetMs;
+  const audioLatencyMs = estimateAudioLatency(detections, gtData.hits, audioDurationMs);
+  // Use 0 offset for beat adjustment when latency estimation fails (insufficient data)
+  const latencyCorrectionMs = audioLatencyMs ?? 0;
+
+  // Beat tracking evaluation
+  const audioDurationSec = audioDurationMs / 1000;
+  const BEAT_TOLERANCE_SEC = 0.07;
+
+  // Reference beats from ground truth
+  const refBeats = gtData.hits
+    .filter(h => h.expectTrigger !== false)
+    .filter(h => h.time <= audioDurationSec)
+    .map(h => h.time);
+
+  // Estimated beats from device
+  const estBeats = beatEvents.map(b => (b.timestampMs - latencyCorrectionMs) / 1000);
+
+  // F-measure
+  const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
+    matchEventsF1(estBeats, refBeats, BEAT_TOLERANCE_SEC);
+
+  // Transient F1
+  const estTransients = detections.map(d => (d.timestampMs - latencyCorrectionMs) / 1000);
+  const { f1: transientF1, precision: transientPrecision, recall: transientRecall } =
+    matchEventsF1(estTransients, refBeats, BEAT_TOLERANCE_SEC);
+
+  // CMLt: Continuity metric
+  const correct: boolean[] = refBeats.map(ref =>
+    estBeats.some(est => Math.abs(est - ref) <= BEAT_TOLERANCE_SEC)
+  );
+
+  let totalCorrectInSegments = 0;
+  let longestSegment = 0;
+  let currentSegment = 0;
+  for (const c of correct) {
+    if (c) {
+      currentSegment++;
+    } else {
+      if (currentSegment > 0) {
+        totalCorrectInSegments += currentSegment;
+        longestSegment = Math.max(longestSegment, currentSegment);
+        currentSegment = 0;
+      }
+    }
+  }
+  if (currentSegment > 0) {
+    totalCorrectInSegments += currentSegment;
+    longestSegment = Math.max(longestSegment, currentSegment);
+  }
+  const cmlt = refBeats.length > 0 ? totalCorrectInSegments / refBeats.length : 0;
+  const cmlc = refBeats.length > 0 ? longestSegment / refBeats.length : 0;
+
+  // AMLt: Also check half-time and double-time
+  const doubleTimeBeats: number[] = [];
+  for (let i = 0; i < estBeats.length; i++) {
+    doubleTimeBeats.push(estBeats[i]);
+    if (i < estBeats.length - 1) {
+      doubleTimeBeats.push((estBeats[i] + estBeats[i + 1]) / 2);
+    }
+  }
+  const halfTimeBeats = estBeats.filter((_, i) => i % 2 === 0);
+
+  let bestAmlCorrect = correct;
+  for (const altEst of [doubleTimeBeats, halfTimeBeats]) {
+    const altCorrect = refBeats.map(ref =>
+      altEst.some(est => Math.abs(est - ref) <= BEAT_TOLERANCE_SEC)
+    );
+    if (altCorrect.filter(Boolean).length > bestAmlCorrect.filter(Boolean).length) {
+      bestAmlCorrect = altCorrect;
+    }
+  }
+
+  let amlTotal = 0;
+  let amlLongest = 0;
+  let amlCurrent = 0;
+  for (const c of bestAmlCorrect) {
+    if (c) {
+      amlCurrent++;
+    } else {
+      if (amlCurrent > 0) {
+        amlTotal += amlCurrent;
+        amlLongest = Math.max(amlLongest, amlCurrent);
+        amlCurrent = 0;
+      }
+    }
+  }
+  if (amlCurrent > 0) {
+    amlTotal += amlCurrent;
+    amlLongest = Math.max(amlLongest, amlCurrent);
+  }
+  const amlt = refBeats.length > 0 ? amlTotal / refBeats.length : 0;
+
+  // Music mode metrics
+  const activeStates = musicStates.filter(s => s.active);
+  const avgBpm = activeStates.length > 0
+    ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
+  const avgConf = activeStates.length > 0
+    ? activeStates.reduce((sum, s) => sum + s.confidence, 0) / activeStates.length : 0;
+
+  const expectedBPM = gtData.bpm || 0;
+  const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
+
+  // Phase stability
+  let phaseStability = 0;
+  if (activeStates.length > 1) {
+    const phaseDiffs: number[] = [];
+    for (let i = 1; i < activeStates.length; i++) {
+      let diff = activeStates[i].phase - activeStates[i - 1].phase;
+      if (diff < -0.5) diff += 1.0;
+      if (diff > 0.5) diff -= 1.0;
+      phaseDiffs.push(diff);
+    }
+    if (phaseDiffs.length > 0) {
+      const meanDiff = phaseDiffs.reduce((s, d) => s + d, 0) / phaseDiffs.length;
+      const variance = phaseDiffs.reduce((s, d) => s + (d - meanDiff) ** 2, 0) / phaseDiffs.length;
+      phaseStability = Math.max(0, 1 - Math.sqrt(variance) * 10);
+    }
+  }
+
+  // Diagnostics
+  const transientBeatOffsets: number[] = [];
+  detections.forEach((det) => {
+    const detSec = (det.timestampMs - latencyCorrectionMs) / 1000;
+    let bestOffset = Infinity;
+    for (const ref of refBeats) {
+      const offset = detSec - ref;
+      if (Math.abs(offset) < Math.abs(bestOffset)) bestOffset = offset;
+    }
+    if (Math.abs(bestOffset) < 0.5) {
+      transientBeatOffsets.push(Math.round(bestOffset * 1000));
+    }
+  });
+
+  let phaseOffsetStats: { median: number; stdDev: number; iqr: number } | null = null;
+  if (transientBeatOffsets.length >= 3) {
+    const sorted = [...transientBeatOffsets].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const mean = sorted.reduce((s, v) => s + v, 0) / sorted.length;
+    const stdDev = Math.sqrt(sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / sorted.length);
+    const q1 = sorted[Math.floor(sorted.length * 0.25)];
+    const q3 = sorted[Math.floor(sorted.length * 0.75)];
+    phaseOffsetStats = { median: Math.round(median), stdDev: Math.round(stdDev), iqr: Math.round(q3 - q1) };
+  }
+
+  const beatEventOffsets: number[] = [];
+  estBeats.forEach((est) => {
+    let bestOffset = Infinity;
+    for (const ref of refBeats) {
+      const offset = est - ref;
+      if (Math.abs(offset) < Math.abs(bestOffset)) bestOffset = offset;
+    }
+    if (Math.abs(bestOffset) < 0.5) {
+      beatEventOffsets.push(Math.round(bestOffset * 1000));
+    }
+  });
+
+  let beatOffsetStats: { median: number; stdDev: number; iqr: number } | null = null;
+  if (beatEventOffsets.length >= 3) {
+    const sorted = [...beatEventOffsets].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const mean = sorted.reduce((s, v) => s + v, 0) / sorted.length;
+    const stdDev = Math.sqrt(sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / sorted.length);
+    const q1 = sorted[Math.floor(sorted.length * 0.25)];
+    const q3 = sorted[Math.floor(sorted.length * 0.75)];
+    beatOffsetStats = { median: Math.round(median), stdDev: Math.round(stdDev), iqr: Math.round(q3 - q1) };
+  }
+
+  const beatOffsetHistogram: Record<string, number> = {};
+  for (const offset of beatEventOffsets) {
+    const bucket = Math.round(offset / 10) * 10;
+    const key = `${bucket}`;
+    beatOffsetHistogram[key] = (beatOffsetHistogram[key] || 0) + 1;
+  }
+
+  const predictedBeats = beatEvents.filter(b => b.predicted === true).length;
+  const fallbackBeats = beatEvents.filter(b => b.predicted === false || b.predicted === undefined).length;
+
+  return {
+    audioLatencyMs,
+    audioDurationSec,
+    timingOffsetMs,
+    beatTracking: {
+      f1: Math.round(beatF1 * 1000) / 1000,
+      precision: Math.round(beatPrecision * 1000) / 1000,
+      recall: Math.round(beatRecall * 1000) / 1000,
+      cmlt: Math.round(cmlt * 1000) / 1000,
+      cmlc: Math.round(cmlc * 1000) / 1000,
+      amlt: Math.round(amlt * 1000) / 1000,
+      refBeats: refBeats.length,
+      estBeats: estBeats.length,
+    },
+    transientTracking: {
+      f1: Math.round(transientF1 * 1000) / 1000,
+      precision: Math.round(transientPrecision * 1000) / 1000,
+      recall: Math.round(transientRecall * 1000) / 1000,
+      count: detections.length,
+    },
+    musicMode: {
+      avgBpm: Math.round(avgBpm * 10) / 10,
+      expectedBpm: expectedBPM,
+      bpmError: bpmMetrics ? Math.round(bpmMetrics.error * 10) / 10 : null,
+      bpmAccuracy: bpmMetrics ? Math.round(bpmMetrics.accuracy * 1000) / 1000 : null,
+      avgConfidence: Math.round(avgConf * 100) / 100,
+      phaseStability: Math.round(phaseStability * 1000) / 1000,
+      activationMs: activeStates.length > 0 ? activeStates[0].timestampMs : null,
+    },
+    diagnostics: {
+      transientRate: audioDurationSec > 0 ? detections.length / audioDurationSec : 0,
+      expectedBeatRate: audioDurationSec > 0 ? refBeats.length / audioDurationSec : 0,
+      beatEventRate: audioDurationSec > 0 ? estBeats.length / audioDurationSec : 0,
+      phaseOffsetStats,
+      beatOffsetStats,
+      beatOffsetHistogram,
+      beatVsReference: {
+        matched: beatTp,
+        extra: estBeats.length - beatTp,
+        missed: refBeats.length - beatTp,
+      },
+      predictionRatio: beatEvents.length > 0 ? { predicted: predictedBeats, fallback: fallbackBeats, total: beatEvents.length } : null,
+      transientBeatOffsets,
+      beatEventOffsets,
+    },
+    adjustedDetections: detections,
+    adjustedBeatEvents: beatEvents,
+    adjustedMusicStates: musicStates,
+  };
 }
 
 // Multi-device connection manager
@@ -482,6 +904,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               items: { type: 'string' },
               description: 'Serial commands to send before test (e.g., "set detector_enable drummer 0")',
             },
+            runs: {
+              type: 'number',
+              description: 'Number of test runs (default 1, max 10). When >1, plays audio multiple times and returns per-run results + aggregate statistics.',
+            },
           },
           required: ['audio_file', 'ground_truth', 'port'],
         },
@@ -521,8 +947,56 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
                 items: { type: 'string' },
               },
             },
+            runs: {
+              type: 'number',
+              description: 'Number of test runs (default 1, max 10). When >1, plays audio multiple times and returns per-run results + aggregate statistics.',
+            },
           },
           required: ['ports', 'audio_file', 'ground_truth'],
+        },
+      },
+      {
+        name: 'run_validation_suite',
+        description: 'Run a complete validation suite: auto-discovers tracks, runs multi-device multi-run tests on all tracks, saves full results to disk, returns compact summary. Replaces 18+ manual tool calls with one.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ports: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Serial ports to test (e.g., ["/dev/ttyACM0"])',
+            },
+            runs: {
+              type: 'number',
+              description: 'Runs per track (default 3, max 10)',
+            },
+            tracks: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Track names to test. Default: all tracks found in music/edm/',
+            },
+            track_dir: {
+              type: 'string',
+              description: 'Directory containing tracks (default: blinky-test-player/music/edm/)',
+            },
+            port_commands: {
+              type: 'object',
+              description: 'Per-port serial commands for A/B configuration',
+              additionalProperties: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+            },
+            gain: {
+              type: 'number',
+              description: 'Optional hardware gain to lock during tests (0-80)',
+            },
+            duration_ms: {
+              type: 'number',
+              description: 'Cap per-track playback duration in milliseconds',
+            },
+          },
+          required: ['ports'],
         },
       },
     ],
@@ -1894,6 +2368,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           gain,
           duration_ms: overrideDurationMs,
           commands: preTestCommands,
+          runs: requestedRuns,
         } = args as {
           audio_file: string;
           ground_truth: string;
@@ -1901,6 +2376,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           gain?: number;
           duration_ms?: number;
           commands?: string[];
+          runs?: number;
         };
 
         // Validate files exist
@@ -1935,439 +2411,157 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
           await musicTestSession.serial.sendCommand('stream fast');
 
-          // Start recording AFTER stream fast — avoid capturing events during command response
-          musicTestSession.startTestRecording();
+          const numRuns = Math.max(1, Math.min(10, requestedRuns || 1));
+          const perRunScores: DeviceRunScore[] = [];
+          const perRunSummaries: Array<Record<string, unknown>> = [];
+          let lastPlaybackWarning: string | undefined;
 
-          // Play audio file directly with ffplay (no browser needed)
-          const ffplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', audioFile];
-          if (overrideDurationMs) {
-            ffplayArgs.push('-t', (overrideDurationMs / 1000).toString());
+          for (let runIdx = 0; runIdx < numRuns; runIdx++) {
+            // Start recording AFTER stream fast — avoid capturing events during command response
+            musicTestSession.startTestRecording();
+
+            // Play audio file directly with ffplay (no browser needed)
+            const ffplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', audioFile];
+            if (overrideDurationMs) {
+              ffplayArgs.push('-t', (overrideDurationMs / 1000).toString());
+            }
+
+            const audioStartTime = Date.now();
+            const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+              const child = spawn('ffplay', ffplayArgs, {
+                stdio: ['ignore', 'pipe', 'pipe'],
+              });
+
+              let stderr = '';
+              child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+              child.on('close', (code: number | null) => {
+                resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
+              });
+              child.on('error', (err: Error) => {
+                resolve({ success: false, error: err.message });
+              });
+            });
+
+            // Always stop recording and collect data
+            const musicTestData = musicTestSession.stopTestRecording();
+
+            // Hard failure only if ffplay couldn't spawn at all
+            if (!result.success) {
+              return {
+                content: [{ type: 'text', text: JSON.stringify({ error: result.error }, null, 2) }],
+              };
+            }
+
+            lastPlaybackWarning = result.error;
+
+            // Score this run using shared scoring function
+            const score = scoreDeviceRun(musicTestData, audioStartTime, gtData);
+            perRunScores.push(score);
+
+            const duration = overrideDurationMs || gtData.durationMs || musicTestData.duration;
+
+            // Save detailed results for this run
+            ensureTestResultsDir();
+            const timestamp = Date.now();
+            const runSuffix = numRuns > 1 ? `-run${runIdx + 1}` : '';
+            const detailsFilename = `music-${gtData.pattern}${runSuffix}-${timestamp}.json`;
+            const detailsPath = join(TEST_RESULTS_DIR, detailsFilename);
+
+            const fullResults = {
+              type: 'music_test',
+              pattern: gtData.pattern,
+              audioFile,
+              run: numRuns > 1 ? runIdx + 1 : undefined,
+              totalRuns: numRuns > 1 ? numRuns : undefined,
+              timestamp: new Date(timestamp).toISOString(),
+              durationMs: duration,
+              timingOffsetMs: score.timingOffsetMs,
+              audioLatencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null,
+              beatTracking: { ...score.beatTracking, toleranceSec: 0.07 },
+              transientTracking: score.transientTracking,
+              musicMode: score.musicMode,
+              diagnostics: score.diagnostics,
+              groundTruth: gtData,
+              detections: score.adjustedDetections,
+              musicStates: score.adjustedMusicStates,
+              beatEvents: score.adjustedBeatEvents,
+            };
+
+            writeFileSync(detailsPath, JSON.stringify(fullResults, null, 2));
+            if (numRuns === 1) {
+              // Only write latest for single-run (multi-run results are in per-run detail files)
+              writeFileSync(join(TEST_RESULTS_DIR, 'latest-music.json'), JSON.stringify(fullResults, null, 2));
+            }
+
+            // Build per-run compact summary
+            perRunSummaries.push({
+              ...(numRuns > 1 ? { run: runIdx + 1 } : {}),
+              beatTracking: {
+                f1: score.beatTracking.f1,
+                precision: score.beatTracking.precision,
+                recall: score.beatTracking.recall,
+                cmlt: score.beatTracking.cmlt,
+                amlt: score.beatTracking.amlt,
+                refBeats: score.beatTracking.refBeats,
+                estBeats: score.beatTracking.estBeats,
+              },
+              transientTracking: score.transientTracking,
+              musicMode: score.musicMode,
+              diagnostics: {
+                transientRate: Math.round(score.diagnostics.transientRate * 10) / 10,
+                expectedBeatRate: Math.round(score.diagnostics.expectedBeatRate * 10) / 10,
+                beatEventRate: Math.round(score.diagnostics.beatEventRate * 10) / 10,
+                transientOffsetMs: score.diagnostics.phaseOffsetStats,
+                beatOffsetMs: score.diagnostics.beatOffsetStats,
+                beatOffsetHistogram: score.diagnostics.beatOffsetHistogram,
+                predictionRatio: score.diagnostics.predictionRatio,
+                matched: score.diagnostics.beatVsReference.matched,
+                extra: score.diagnostics.beatVsReference.extra,
+                missed: score.diagnostics.beatVsReference.missed,
+              },
+              timing: { latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null },
+              detailsFile: detailsFilename,
+            });
+
+            // Inter-run gap
+            if (runIdx < numRuns - 1) {
+              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
+            }
           }
 
-          const audioStartTime = Date.now();
-          const result = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-            const child = spawn('ffplay', ffplayArgs, {
-              stdio: ['ignore', 'pipe', 'pipe'],
-            });
-
-            let stderr = '';
-
-            child.stderr.on('data', (data) => {
-              stderr += data.toString();
-            });
-
-            child.on('close', (code) => {
-              // ffplay can exit non-zero after successful playback (codec warnings, -t duration).
-              // Only treat spawn failures as hard errors; non-zero exit is a warning.
-              resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
-            });
-
-            child.on('error', (err) => {
-              resolve({ success: false, error: err.message });
-            });
-          });
-
-          // Always stop recording and collect data, even on playback issues
-          const musicTestData = musicTestSession.stopTestRecording();
-          const rawDuration = musicTestData.duration;
-          let detections = [...musicTestData.transients];
-          let musicStates = [...musicTestData.musicStates];
-          let beatEvents = [...musicTestData.beatEvents];
-
-          const recordStartTime = musicTestData.startTime;
-
-          // Hard failure only if ffplay couldn't spawn at all
-          if (!result.success) {
+          // Build output
+          if (numRuns === 1) {
+            // Single run: backward-compatible format
+            const s = perRunSummaries[0];
             return {
-              content: [{ type: 'text', text: JSON.stringify({ error: result.error }, null, 2) }],
+              content: [{ type: 'text', text: JSON.stringify({
+                pattern: gtData.pattern,
+                durationMs: overrideDurationMs || gtData.durationMs || perRunScores[0].audioDurationSec * 1000,
+                audioDurationSec: Math.round(perRunScores[0].audioDurationSec * 10) / 10,
+                ...(lastPlaybackWarning ? { playbackWarning: lastPlaybackWarning } : {}),
+                ...s,
+              }) }],
+            };
+          } else {
+            // Multi-run: aggregate statistics
+            const aggregate = {
+              beatF1: roundStats(computeStats(perRunScores.map(s => s.beatTracking.f1))),
+              beatPrecision: roundStats(computeStats(perRunScores.map(s => s.beatTracking.precision))),
+              beatRecall: roundStats(computeStats(perRunScores.map(s => s.beatTracking.recall))),
+              bpmAccuracy: roundStats(computeStats(perRunScores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
+              transientF1: roundStats(computeStats(perRunScores.map(s => s.transientTracking.f1))),
+              latencyMs: roundStats(computeStats(perRunScores.filter(s => s.audioLatencyMs !== null).map(s => s.audioLatencyMs!))),
+            };
+
+            return {
+              content: [{ type: 'text', text: JSON.stringify({
+                pattern: gtData.pattern,
+                runs: numRuns,
+                aggregate,
+                perRun: perRunSummaries,
+              }) }],
             };
           }
-
-          // Non-zero exit is a warning, included in results
-          const singlePlaybackWarning = result.error;
-
-          // Timing alignment: adjust detections relative to audio start
-          const timingOffsetMs = audioStartTime - recordStartTime;
-
-          detections = detections.map(d => ({
-            ...d,
-            timestampMs: d.timestampMs - timingOffsetMs,
-          })).filter(d => d.timestampMs >= 0);
-
-          musicStates = musicStates.map(s => ({
-            ...s,
-            timestampMs: s.timestampMs - timingOffsetMs,
-          })).filter(s => s.timestampMs >= 0);
-
-          beatEvents = beatEvents.map(b => ({
-            ...b,
-            timestampMs: b.timestampMs - timingOffsetMs,
-          })).filter(b => b.timestampMs >= 0);
-
-          // Calculate audio latency from onset detections vs ground truth
-          // Only consider hits within the recording window for latency estimation
-          const audioDurationMs = rawDuration - timingOffsetMs;
-          const expectedHits = gtData.hits.filter(h =>
-            h.expectTrigger !== false && h.time * 1000 <= audioDurationMs
-          );
-          const offsets: number[] = [];
-          detections.forEach((detection) => {
-            let minDist = Infinity;
-            let closestOffset = 0;
-            expectedHits.forEach((hit) => {
-              const hitMs = hit.time * 1000;
-              const offset = detection.timestampMs - hitMs;
-              if (Math.abs(offset) < Math.abs(minDist)) {
-                minDist = offset;
-                closestOffset = offset;
-              }
-            });
-            if (Math.abs(minDist) < 1000) {
-              offsets.push(closestOffset);
-            }
-          });
-
-          let audioLatencyMs = 0;
-          if (offsets.length > 0) {
-            offsets.sort((a, b) => a - b);
-            audioLatencyMs = offsets[Math.floor(offsets.length / 2)];
-          }
-
-          // Beat tracking evaluation
-          // Determine the actual audio playback window (in seconds)
-          const audioDurationSec = (rawDuration - timingOffsetMs) / 1000;
-
-          // Reference beats from ground truth, filtered to recording window
-          const refBeats = gtData.hits
-            .filter(h => h.expectTrigger !== false)
-            .filter(h => h.time <= audioDurationSec)
-            .map(h => h.time);
-
-          // Estimated beats from device beat events (phase wrapping)
-          const estBeatsFromDevice = beatEvents.map(b => (b.timestampMs - audioLatencyMs) / 1000);
-
-          // F-measure with 70ms tolerance (standard beat tracking)
-          const BEAT_TOLERANCE_SEC = 0.07;
-          const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
-            matchEventsF1(estBeatsFromDevice, refBeats, BEAT_TOLERANCE_SEC);
-
-          // Transient F1: raw transient timestamps vs ground truth beats
-          // This measures detector quality independent of rhythm tracking
-          const estTransients = detections.map(d => (d.timestampMs - audioLatencyMs) / 1000);
-          const { f1: transientF1, precision: transientPrecision, recall: transientRecall } =
-            matchEventsF1(estTransients, refBeats, BEAT_TOLERANCE_SEC);
-
-          // CMLt: Continuity metric
-          // Check each reference beat for a matching device beat
-          const correct: boolean[] = refBeats.map(ref => {
-            return estBeatsFromDevice.some(est => Math.abs(est - ref) <= BEAT_TOLERANCE_SEC);
-          });
-
-          let totalCorrectInSegments = 0;
-          let longestSegment = 0;
-          let currentSegment = 0;
-          for (const c of correct) {
-            if (c) {
-              currentSegment++;
-            } else {
-              if (currentSegment > 0) {
-                totalCorrectInSegments += currentSegment;
-                longestSegment = Math.max(longestSegment, currentSegment);
-                currentSegment = 0;
-              }
-            }
-          }
-          if (currentSegment > 0) {
-            totalCorrectInSegments += currentSegment;
-            longestSegment = Math.max(longestSegment, currentSegment);
-          }
-
-          const cmlt = refBeats.length > 0 ? totalCorrectInSegments / refBeats.length : 0;
-          const cmlc = refBeats.length > 0 ? longestSegment / refBeats.length : 0;
-
-          // AMLt: Also check half-time and double-time
-          // Generate double-time beats (insert between each pair)
-          const doubleTimeBeats: number[] = [];
-          for (let i = 0; i < estBeatsFromDevice.length; i++) {
-            doubleTimeBeats.push(estBeatsFromDevice[i]);
-            if (i < estBeatsFromDevice.length - 1) {
-              doubleTimeBeats.push((estBeatsFromDevice[i] + estBeatsFromDevice[i + 1]) / 2);
-            }
-          }
-
-          // Generate half-time beats (every other beat)
-          const halfTimeBeats = estBeatsFromDevice.filter((_, i) => i % 2 === 0);
-
-          // Find best AML match
-          let bestAmlCorrect = correct;
-          for (const altEst of [doubleTimeBeats, halfTimeBeats]) {
-            const altCorrect = refBeats.map(ref => {
-              return altEst.some(est => Math.abs(est - ref) <= BEAT_TOLERANCE_SEC);
-            });
-            if (altCorrect.filter(Boolean).length > bestAmlCorrect.filter(Boolean).length) {
-              bestAmlCorrect = altCorrect;
-            }
-          }
-
-          let amlTotal = 0;
-          let amlLongest = 0;
-          let amlCurrent = 0;
-          for (const c of bestAmlCorrect) {
-            if (c) {
-              amlCurrent++;
-            } else {
-              if (amlCurrent > 0) {
-                amlTotal += amlCurrent;
-                amlLongest = Math.max(amlLongest, amlCurrent);
-                amlCurrent = 0;
-              }
-            }
-          }
-          if (amlCurrent > 0) {
-            amlTotal += amlCurrent;
-            amlLongest = Math.max(amlLongest, amlCurrent);
-          }
-
-          const amlt = refBeats.length > 0 ? amlTotal / refBeats.length : 0;
-
-          // Music mode metrics
-          const activeStates = musicStates.filter(s => s.active);
-          const avgBpm = activeStates.length > 0
-            ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
-          const avgConf = activeStates.length > 0
-            ? activeStates.reduce((sum, s) => sum + s.confidence, 0) / activeStates.length : 0;
-
-          // BPM accuracy
-          const expectedBPM = gtData.bpm || 0;
-          const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
-          const bpmAccuracy = bpmMetrics?.accuracy ?? null;
-          const bpmError = bpmMetrics?.error ?? null;
-
-          // Phase stability: standard deviation of phase during active tracking
-          let phaseStability = 0;
-          if (activeStates.length > 1) {
-            // Measure how consistently phase advances
-            // In a perfect tracker, consecutive phase differences should be nearly constant
-            const phaseDiffs: number[] = [];
-            for (let i = 1; i < activeStates.length; i++) {
-              let diff = activeStates[i].phase - activeStates[i - 1].phase;
-              // Handle wrapping
-              if (diff < -0.5) diff += 1.0;
-              if (diff > 0.5) diff -= 1.0;
-              phaseDiffs.push(diff);
-            }
-            if (phaseDiffs.length > 0) {
-              const meanDiff = phaseDiffs.reduce((s, d) => s + d, 0) / phaseDiffs.length;
-              const variance = phaseDiffs.reduce((s, d) => s + (d - meanDiff) ** 2, 0) / phaseDiffs.length;
-              // Convert to 0-1 stability score (lower variance = higher stability)
-              phaseStability = Math.max(0, 1 - Math.sqrt(variance) * 10);
-            }
-          }
-
-          const duration = overrideDurationMs || gtData.durationMs || rawDuration;
-
-          // Diagnostics: analyze beat alignment and detection patterns
-          const diagnostics: {
-            transientRate: number;
-            expectedBeatRate: number;
-            beatEventRate: number;
-            phaseOffsetStats: { median: number; stdDev: number; iqr: number } | null;
-            beatOffsetStats: { median: number; stdDev: number; iqr: number } | null;
-            beatOffsetHistogram: Record<string, number>;
-            beatVsReference: { matched: number; extra: number; missed: number };
-            predictionRatio: { predicted: number; fallback: number; total: number } | null;
-            transientBeatOffsets: number[];
-            beatEventOffsets: number[];
-          } = {
-            // Transient detections per second vs expected beats per second
-            transientRate: audioDurationSec > 0 ? detections.length / audioDurationSec : 0,
-            expectedBeatRate: audioDurationSec > 0 ? refBeats.length / audioDurationSec : 0,
-            beatEventRate: audioDurationSec > 0 ? estBeatsFromDevice.length / audioDurationSec : 0,
-            phaseOffsetStats: null,
-            beatOffsetStats: null,
-            beatOffsetHistogram: {},
-            beatVsReference: {
-              matched: beatTp,
-              extra: estBeatsFromDevice.length - beatTp,
-              missed: refBeats.length - beatTp,
-            },
-            predictionRatio: null,
-            transientBeatOffsets: [],
-            beatEventOffsets: [],
-          };
-
-          // Compute offset of each transient detection from nearest reference beat
-          // This reveals systematic latency or phase misalignment
-          const transientBeatOffsets: number[] = [];
-          detections.forEach((det) => {
-            const detSec = (det.timestampMs - audioLatencyMs) / 1000;
-            let bestOffset = Infinity;
-            for (const ref of refBeats) {
-              const offset = detSec - ref;
-              if (Math.abs(offset) < Math.abs(bestOffset)) {
-                bestOffset = offset;
-              }
-            }
-            if (Math.abs(bestOffset) < 0.5) {
-              transientBeatOffsets.push(Math.round(bestOffset * 1000));
-            }
-          });
-          diagnostics.transientBeatOffsets = transientBeatOffsets;
-
-          if (transientBeatOffsets.length >= 3) {
-            const sorted = [...transientBeatOffsets].sort((a, b) => a - b);
-            const median = sorted[Math.floor(sorted.length / 2)];
-            const mean = sorted.reduce((s, v) => s + v, 0) / sorted.length;
-            const stdDev = Math.sqrt(sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / sorted.length);
-            const q1 = sorted[Math.floor(sorted.length * 0.25)];
-            const q3 = sorted[Math.floor(sorted.length * 0.75)];
-            diagnostics.phaseOffsetStats = {
-              median: Math.round(median),
-              stdDev: Math.round(stdDev),
-              iqr: Math.round(q3 - q1),
-            };
-          }
-
-          // Compute offset of each beat event from nearest reference beat
-          // This reveals beat tracking alignment quality
-          const beatEventOffsets: number[] = [];
-          estBeatsFromDevice.forEach((est) => {
-            let bestOffset = Infinity;
-            for (const ref of refBeats) {
-              const offset = est - ref;
-              if (Math.abs(offset) < Math.abs(bestOffset)) {
-                bestOffset = offset;
-              }
-            }
-            if (Math.abs(bestOffset) < 0.5) {
-              beatEventOffsets.push(Math.round(bestOffset * 1000));
-            }
-          });
-          diagnostics.beatEventOffsets = beatEventOffsets;
-
-          if (beatEventOffsets.length >= 3) {
-            const sorted = [...beatEventOffsets].sort((a, b) => a - b);
-            const median = sorted[Math.floor(sorted.length / 2)];
-            const mean = sorted.reduce((s, v) => s + v, 0) / sorted.length;
-            const stdDev = Math.sqrt(sorted.reduce((s, v) => s + (v - mean) ** 2, 0) / sorted.length);
-            const q1 = sorted[Math.floor(sorted.length * 0.25)];
-            const q3 = sorted[Math.floor(sorted.length * 0.75)];
-            diagnostics.beatOffsetStats = {
-              median: Math.round(median),
-              stdDev: Math.round(stdDev),
-              iqr: Math.round(q3 - q1),
-            };
-          }
-
-          // Beat offset histogram (10ms buckets)
-          const BUCKET_SIZE_MS = 10;
-          const beatOffsetHist: Record<string, number> = {};
-          for (const offset of beatEventOffsets) {
-            const bucket = Math.round(offset / BUCKET_SIZE_MS) * BUCKET_SIZE_MS;
-            const key = `${bucket}`;
-            beatOffsetHist[key] = (beatOffsetHist[key] || 0) + 1;
-          }
-          diagnostics.beatOffsetHistogram = beatOffsetHist;
-
-          // Prediction vs fallback ratio from beat events
-          const predictedBeats = beatEvents.filter(b => b.predicted === true).length;
-          const fallbackBeats = beatEvents.filter(b => b.predicted === false || b.predicted === undefined).length;
-          if (beatEvents.length > 0) {
-            diagnostics.predictionRatio = {
-              predicted: predictedBeats,
-              fallback: fallbackBeats,
-              total: beatEvents.length,
-            };
-          }
-
-          // Save detailed results
-          ensureTestResultsDir();
-          const timestamp = Date.now();
-          const detailsFilename = `music-${gtData.pattern}-${timestamp}.json`;
-          const detailsPath = join(TEST_RESULTS_DIR, detailsFilename);
-
-          const fullResults = {
-            type: 'music_test',
-            pattern: gtData.pattern,
-            audioFile,
-            timestamp: new Date(timestamp).toISOString(),
-            durationMs: duration,
-            timingOffsetMs,
-            audioLatencyMs: Math.round(audioLatencyMs),
-            beatTracking: {
-              f1: Math.round(beatF1 * 1000) / 1000,
-              precision: Math.round(beatPrecision * 1000) / 1000,
-              recall: Math.round(beatRecall * 1000) / 1000,
-              cmlt: Math.round(cmlt * 1000) / 1000,
-              cmlc: Math.round(cmlc * 1000) / 1000,
-              amlt: Math.round(amlt * 1000) / 1000,
-              toleranceSec: BEAT_TOLERANCE_SEC,
-              refBeats: refBeats.length,
-              estBeats: estBeatsFromDevice.length,
-            },
-            transientTracking: {
-              f1: Math.round(transientF1 * 1000) / 1000,
-              precision: Math.round(transientPrecision * 1000) / 1000,
-              recall: Math.round(transientRecall * 1000) / 1000,
-              count: detections.length,
-            },
-            musicMode: {
-              avgBpm: Math.round(avgBpm * 10) / 10,
-              expectedBpm: expectedBPM,
-              bpmError: bpmError !== null ? Math.round(bpmError * 10) / 10 : null,
-              bpmAccuracy: bpmAccuracy !== null ? Math.round(bpmAccuracy * 1000) / 1000 : null,
-              avgConfidence: Math.round(avgConf * 100) / 100,
-              phaseStability: Math.round(phaseStability * 1000) / 1000,
-              activationMs: activeStates.length > 0 ? activeStates[0].timestampMs : null,
-            },
-            diagnostics,
-            groundTruth: gtData,
-            detections,
-            musicStates,
-            beatEvents,
-          };
-
-          writeFileSync(detailsPath, JSON.stringify(fullResults, null, 2));
-          writeFileSync(join(TEST_RESULTS_DIR, 'latest-music.json'), JSON.stringify(fullResults, null, 2));
-
-          // Return compact summary
-          const summary = {
-            pattern: gtData.pattern,
-            durationMs: duration,
-            audioDurationSec: Math.round(audioDurationSec * 10) / 10,
-            ...(singlePlaybackWarning ? { playbackWarning: singlePlaybackWarning } : {}),
-            beatTracking: {
-              f1: fullResults.beatTracking.f1,
-              precision: fullResults.beatTracking.precision,
-              recall: fullResults.beatTracking.recall,
-              cmlt: fullResults.beatTracking.cmlt,
-              amlt: fullResults.beatTracking.amlt,
-              refBeats: refBeats.length,
-              estBeats: estBeatsFromDevice.length,
-            },
-            transientTracking: fullResults.transientTracking,
-            musicMode: fullResults.musicMode,
-            diagnostics: {
-              transientRate: Math.round(diagnostics.transientRate * 10) / 10,
-              expectedBeatRate: Math.round(diagnostics.expectedBeatRate * 10) / 10,
-              beatEventRate: Math.round(diagnostics.beatEventRate * 10) / 10,
-              transientOffsetMs: diagnostics.phaseOffsetStats,
-              beatOffsetMs: diagnostics.beatOffsetStats,
-              beatOffsetHistogram: diagnostics.beatOffsetHistogram,
-              predictionRatio: diagnostics.predictionRatio,
-              matched: diagnostics.beatVsReference.matched,
-              extra: diagnostics.beatVsReference.extra,
-              missed: diagnostics.beatVsReference.missed,
-            },
-            timing: {
-              latencyMs: Math.round(audioLatencyMs),
-            },
-            detailsFile: detailsFilename,
-          };
-
-          return {
-            content: [{ type: 'text', text: JSON.stringify(summary) }],
-          };
         } finally {
           if (gain !== undefined && musicTestSession.getState().connected) {
             try {
@@ -2388,6 +2582,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           gain: multiGain,
           duration_ms: multiDurationMs,
           port_commands: multiPortCommands,
+          runs: multiRequestedRuns,
         } = args as {
           ports: string[];
           audio_file: string;
@@ -2395,6 +2590,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           gain?: number;
           duration_ms?: number;
           port_commands?: Record<string, string[]>;
+          runs?: number;
         };
 
         // Validate inputs
@@ -2403,12 +2599,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (!multiPorts || multiPorts.length === 0) throw new Error('At least one port required');
 
         // Load ground truth
-        const multiGtData = JSON.parse(readFileSync(multiGtFile, 'utf-8')) as {
-          pattern: string;
-          durationMs: number;
-          bpm?: number;
-          hits: Array<{ time: number; type: string; strength: number; expectTrigger?: boolean }>;
-        };
+        const multiGtData = JSON.parse(readFileSync(multiGtFile, 'utf-8')) as GroundTruth;
+
+        const multiNumRuns = Math.max(1, Math.min(10, multiRequestedRuns || 1));
 
         // Connect all devices in parallel, handling partial failures
         const connectedSessions: Array<{ port: string; session: Awaited<ReturnType<typeof manager.connect>>['session'] }> = [];
@@ -2454,171 +2647,141 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             session.serial.sendCommand('stream fast')
           ));
 
-          // Start recording on all devices (synchronized)
-          for (const { session } of connectedSessions) {
-            session.startTestRecording();
+          // Per-device per-run scores
+          const allRunScores: Map<string, DeviceRunScore[]> = new Map();
+          for (const { port: p } of connectedSessions) {
+            allRunScores.set(p, []);
           }
+          let lastPlaybackWarning: string | undefined;
 
-          // Play audio file ONCE through speakers
-          const multiAudioStartTime = Date.now();
-          const multiFFplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', multiAudioFile];
-          if (multiDurationMs) {
-            multiFFplayArgs.push('-t', (multiDurationMs / 1000).toString());
-          }
-
-          const playResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
-            const child = spawn('ffplay', multiFFplayArgs, {
-              stdio: ['ignore', 'pipe', 'pipe'],
-            });
-            let stderr = '';
-            child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
-            child.on('close', (code: number | null) => {
-              // ffplay can exit non-zero after successful playback (codec warnings, -t duration).
-              // Only treat spawn failures as hard errors; non-zero exit is a warning.
-              resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
-            });
-            child.on('error', (err: Error) => {
-              resolve({ success: false, error: err.message });
-            });
-          });
-
-          // Always stop recording and collect data, even on playback issues
-          const deviceResults: Array<{ port: string; data: ReturnType<import('./device-session.js').DeviceSession['stopTestRecording']> }> = [];
-          for (const { port: p, session } of connectedSessions) {
-            deviceResults.push({ port: p, data: session.stopTestRecording() });
-          }
-
-          // Hard failure only if ffplay couldn't spawn at all
-          if (!playResult.success) {
-            return {
-              content: [{ type: 'text', text: JSON.stringify({ error: `Audio playback failed: ${playResult.error}` }, null, 2) }],
-            };
-          }
-
-          // Non-zero exit is a warning, included in results
-          const playbackWarning = playResult.error;
-
-          // Score each device independently
-          const MULTI_BEAT_TOL_SEC = 0.07;
-          const perDeviceSummaries = deviceResults.map(({ port: devPort, data }) => {
-            const rawDuration = data.duration;
-            const timingOffset = multiAudioStartTime - data.startTime;
-            const audioDurationSec = (rawDuration - timingOffset) / 1000;
-
-            // Correct timestamps relative to audio start
-            const correctedDetections = data.transients
-              .map(d => ({ ...d, timestampMs: d.timestampMs - timingOffset }))
-              .filter(d => d.timestampMs >= 0);
-
-            const correctedBeatEvents = data.beatEvents
-              .map(b => ({ ...b, timestampMs: b.timestampMs - timingOffset }))
-              .filter(b => b.timestampMs >= 0);
-
-            const correctedMusicStates = data.musicStates
-              .map(s => ({ ...s, timestampMs: s.timestampMs - timingOffset }))
-              .filter(s => s.timestampMs >= 0);
-
-            // Reference beats from ground truth
-            const refBeats = multiGtData.hits
-              .filter(h => h.expectTrigger !== false)
-              .filter(h => h.time <= audioDurationSec)
-              .map(h => h.time);
-
-            // Estimate audio latency
-            const latencyOffsets: number[] = [];
-            correctedDetections.forEach((det) => {
-              let minDist = Infinity;
-              let closestOff = 0;
-              for (const ref of refBeats) {
-                const off = det.timestampMs / 1000 - ref;
-                if (Math.abs(off) < Math.abs(minDist)) {
-                  minDist = off;
-                  closestOff = off;
-                }
-              }
-              if (Math.abs(minDist) < 1.0) latencyOffsets.push(closestOff);
-            });
-            let latencyMs = 0;
-            if (latencyOffsets.length > 0) {
-              latencyOffsets.sort((a, b) => a - b);
-              latencyMs = latencyOffsets[Math.floor(latencyOffsets.length / 2)] * 1000;
+          for (let runIdx = 0; runIdx < multiNumRuns; runIdx++) {
+            // Start recording on all devices (synchronized)
+            for (const { session } of connectedSessions) {
+              session.startTestRecording();
             }
 
-            // Beat F1: match device beat events to reference beats
-            const estBeats = correctedBeatEvents.map(b => (b.timestampMs - latencyMs) / 1000);
-            const { f1: beatF1, precision: beatPrec, recall: beatRec } =
-              matchEventsF1(estBeats, refBeats, MULTI_BEAT_TOL_SEC);
-
-            // Transient F1: match transient detections to reference beats
-            const estTrans = correctedDetections.map(d => (d.timestampMs - latencyMs) / 1000);
-            const { f1: transF1, precision: transPrec, recall: transRec } =
-              matchEventsF1(estTrans, refBeats, MULTI_BEAT_TOL_SEC);
-
-            // BPM accuracy
-            const activeStates = correctedMusicStates.filter(s => s.active);
-            const avgBpm = activeStates.length > 0
-              ? activeStates.reduce((sum, s) => sum + s.bpm, 0) / activeStates.length : 0;
-            const expectedBPM = multiGtData.bpm || 0;
-            const bpmMetrics = computeBpmMetrics(avgBpm, expectedBPM);
-            const bpmAcc = bpmMetrics?.accuracy ?? null;
-            const bpmErr = bpmMetrics?.error ?? null;
-
-            // Beat offset stats
-            const beatOffsets: number[] = [];
-            estBeats.forEach((est) => {
-              let bestOff = Infinity;
-              for (const ref of refBeats) {
-                const off = est - ref;
-                if (Math.abs(off) < Math.abs(bestOff)) bestOff = off;
-              }
-              if (Math.abs(bestOff) < 0.5) beatOffsets.push(Math.round(bestOff * 1000));
-            });
-            let beatOffsetMedian: number | null = null;
-            if (beatOffsets.length >= 3) {
-              const sorted = [...beatOffsets].sort((a, b) => a - b);
-              beatOffsetMedian = sorted[Math.floor(sorted.length / 2)];
+            // Play audio file ONCE through speakers
+            const multiAudioStartTime = Date.now();
+            const multiFFplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', multiAudioFile];
+            if (multiDurationMs) {
+              multiFFplayArgs.push('-t', (multiDurationMs / 1000).toString());
             }
 
-            return {
-              port: devPort,
-              beatTracking: {
-                f1: Math.round(beatF1 * 1000) / 1000,
-                precision: Math.round(beatPrec * 1000) / 1000,
-                recall: Math.round(beatRec * 1000) / 1000,
-                refBeats: refBeats.length,
-                estBeats: estBeats.length,
-              },
-              transientTracking: {
-                f1: Math.round(transF1 * 1000) / 1000,
-                precision: Math.round(transPrec * 1000) / 1000,
-                recall: Math.round(transRec * 1000) / 1000,
-                count: correctedDetections.length,
-              },
-              musicMode: {
-                avgBpm: Math.round(avgBpm * 10) / 10,
-                expectedBpm: expectedBPM,
-                bpmError: bpmErr !== null ? Math.round(bpmErr * 10) / 10 : null,
-                bpmAccuracy: bpmAcc !== null ? Math.round(bpmAcc * 1000) / 1000 : null,
-              },
-              timing: {
-                latencyMs: Math.round(latencyMs),
-                beatOffsetMedianMs: beatOffsetMedian,
-              },
-            };
-          });
+            const playResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+              const child = spawn('ffplay', multiFFplayArgs, {
+                stdio: ['ignore', 'pipe', 'pipe'],
+              });
+              let stderr = '';
+              child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
+              child.on('close', (code: number | null) => {
+                resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
+              });
+              child.on('error', (err: Error) => {
+                resolve({ success: false, error: err.message });
+              });
+            });
 
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                pattern: multiGtData.pattern,
-                audioDurationSec: multiDurationMs ? Math.round(multiDurationMs / 100) / 10 : null,
-                deviceCount: perDeviceSummaries.length,
-                ...(playbackWarning ? { playbackWarning } : {}),
-                perDevice: perDeviceSummaries,
-              }, null, 2),
-            }],
-          };
+            // Stop recording on all devices
+            const deviceResults: Array<{ port: string; data: ReturnType<import('./device-session.js').DeviceSession['stopTestRecording']> }> = [];
+            for (const { port: p, session } of connectedSessions) {
+              deviceResults.push({ port: p, data: session.stopTestRecording() });
+            }
+
+            if (!playResult.success) {
+              return {
+                content: [{ type: 'text', text: JSON.stringify({ error: `Audio playback failed: ${playResult.error}` }, null, 2) }],
+              };
+            }
+            lastPlaybackWarning = playResult.error;
+
+            // Score each device for this run
+            for (const { port: devPort, data } of deviceResults) {
+              const score = scoreDeviceRun(data, multiAudioStartTime, multiGtData);
+              allRunScores.get(devPort)!.push(score);
+            }
+
+            // Inter-run gap
+            if (runIdx < multiNumRuns - 1) {
+              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
+            }
+          }
+
+          // Build output
+          if (multiNumRuns === 1) {
+            // Single run: backward-compatible format
+            const perDeviceSummaries = connectedSessions.map(({ port: devPort }) => {
+              const score = allRunScores.get(devPort)![0];
+              return {
+                port: devPort,
+                beatTracking: {
+                  f1: score.beatTracking.f1,
+                  precision: score.beatTracking.precision,
+                  recall: score.beatTracking.recall,
+                  refBeats: score.beatTracking.refBeats,
+                  estBeats: score.beatTracking.estBeats,
+                },
+                transientTracking: score.transientTracking,
+                musicMode: {
+                  avgBpm: score.musicMode.avgBpm,
+                  expectedBpm: score.musicMode.expectedBpm,
+                  bpmError: score.musicMode.bpmError,
+                  bpmAccuracy: score.musicMode.bpmAccuracy,
+                },
+                timing: {
+                  latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null,
+                  beatOffsetMedianMs: score.diagnostics.beatOffsetStats?.median ?? null,
+                },
+              };
+            });
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  pattern: multiGtData.pattern,
+                  audioDurationSec: multiDurationMs ? Math.round(multiDurationMs / 100) / 10 : null,
+                  deviceCount: perDeviceSummaries.length,
+                  ...(lastPlaybackWarning ? { playbackWarning: lastPlaybackWarning } : {}),
+                  perDevice: perDeviceSummaries,
+                }, null, 2),
+              }],
+            };
+          } else {
+            // Multi-run: per-device aggregates
+            const perDeviceAggregates = connectedSessions.map(({ port: devPort }) => {
+              const scores = allRunScores.get(devPort)!;
+              return {
+                port: devPort,
+                runs: scores.length,
+                aggregate: {
+                  beatF1: roundStats(computeStats(scores.map(s => s.beatTracking.f1))),
+                  bpmAccuracy: roundStats(computeStats(scores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
+                  transientF1: roundStats(computeStats(scores.map(s => s.transientTracking.f1))),
+                  latencyMs: roundStats(computeStats(scores.filter(s => s.audioLatencyMs !== null).map(s => s.audioLatencyMs!))),
+                },
+                perRun: scores.map((s, i) => ({
+                  run: i + 1,
+                  beatF1: s.beatTracking.f1,
+                  transientF1: s.transientTracking.f1,
+                  bpmAccuracy: s.musicMode.bpmAccuracy,
+                  latencyMs: s.audioLatencyMs !== null ? Math.round(s.audioLatencyMs) : null,
+                })),
+              };
+            });
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  pattern: multiGtData.pattern,
+                  runs: multiNumRuns,
+                  deviceCount: connectedSessions.length,
+                  ...(lastPlaybackWarning ? { playbackWarning: lastPlaybackWarning } : {}),
+                  perDevice: perDeviceAggregates,
+                }, null, 2),
+              }],
+            };
+          }
         } finally {
           // Always cleanup: unlock gain, disconnect all (parallel)
           if (multiGain !== undefined) {
@@ -2629,6 +2792,280 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             ));
           }
           await Promise.all(connectedSessions.map(({ port: p }) =>
+            manager.disconnect(p).catch(() => {})
+          ));
+        }
+      }
+
+      case 'run_validation_suite': {
+        const {
+          ports: valPorts,
+          runs: valRunsParam,
+          tracks: valTrackNames,
+          track_dir: valTrackDir,
+          port_commands: valPortCommands,
+          gain: valGain,
+          duration_ms: valDurationMs,
+        } = args as {
+          ports: string[];
+          runs?: number;
+          tracks?: string[];
+          track_dir?: string;
+          port_commands?: Record<string, string[]>;
+          gain?: number;
+          duration_ms?: number;
+        };
+
+        if (!valPorts || valPorts.length === 0) throw new Error('At least one port required');
+
+        const valNumRuns = Math.max(1, Math.min(10, valRunsParam || 3));
+
+        // Discover tracks
+        const defaultTrackDir = join(__dirname, '..', '..', 'blinky-test-player', 'music', 'edm');
+        const trackDir = valTrackDir || defaultTrackDir;
+        let allTracks = discoverTracks(trackDir);
+        if (allTracks.length === 0) throw new Error(`No tracks found in ${trackDir}`);
+
+        // Filter to requested tracks if specified
+        if (valTrackNames && valTrackNames.length > 0) {
+          allTracks = allTracks.filter(t => valTrackNames.includes(t.name));
+          if (allTracks.length === 0) throw new Error(`None of the requested tracks found in ${trackDir}`);
+        }
+
+        // Connect all devices
+        const valSessions: Array<{ port: string; session: Awaited<ReturnType<typeof manager.connect>>['session'] }> = [];
+        try {
+          const connectResults = await Promise.allSettled(valPorts.map(async (p) => {
+            const { session } = await manager.connect(p);
+            return { port: p, session };
+          }));
+          const failures: string[] = [];
+          for (let i = 0; i < connectResults.length; i++) {
+            const r = connectResults[i];
+            if (r.status === 'fulfilled') {
+              valSessions.push(r.value);
+            } else {
+              failures.push(`${valPorts[i]}: ${(r.reason as Error).message}`);
+            }
+          }
+          if (failures.length > 0) throw new Error(`Failed to connect: ${failures.join('; ')}`);
+
+          // Lock gain if specified
+          if (valGain !== undefined) {
+            await Promise.all(valSessions.map(({ session }) =>
+              session.serial.sendCommand(`set hwgainlock ${valGain}`)
+            ));
+          }
+
+          // Send per-port commands
+          if (valPortCommands) {
+            await Promise.all(Object.entries(valPortCommands).map(async ([p, cmds]) => {
+              const s = valSessions.find(x => x.port === p);
+              if (s) {
+                for (const cmd of cmds) {
+                  await s.session.serial.sendCommand(cmd);
+                }
+              }
+            }));
+          }
+
+          // Start streaming on all devices
+          await Promise.all(valSessions.map(({ session }) =>
+            session.serial.sendCommand('stream fast')
+          ));
+
+          // Run all tracks × all runs
+          const trackResults: Array<{
+            track: string;
+            bpm: number;
+            error?: string;
+            perDevice: Array<{
+              port: string;
+              aggregate: { beatF1: ReturnType<typeof roundStats>; bpmAccuracy: ReturnType<typeof roundStats>; transientF1: ReturnType<typeof roundStats> };
+              perRun?: Array<{ run: number; beatF1: number; bpmAccuracy: number | null; transientF1: number; latencyMs: number | null }>;
+            }>;
+          }> = [];
+
+          for (let trackIdx = 0; trackIdx < allTracks.length; trackIdx++) {
+            const track = allTracks[trackIdx];
+            const gtData = JSON.parse(readFileSync(track.groundTruth, 'utf-8')) as GroundTruth;
+
+            // Per-device per-run scores for this track
+            const trackDeviceScores: Map<string, DeviceRunScore[]> = new Map();
+            for (const { port: p } of valSessions) {
+              trackDeviceScores.set(p, []);
+            }
+
+            let trackFailed = false;
+            for (let runIdx = 0; runIdx < valNumRuns; runIdx++) {
+              // Start recording on all devices
+              for (const { session } of valSessions) {
+                session.startTestRecording();
+              }
+
+              // Play audio
+              const audioStartTime = Date.now();
+              const ffplayArgs = ['-nodisp', '-autoexit', '-loglevel', 'error', track.audioFile];
+              if (valDurationMs) {
+                ffplayArgs.push('-t', (valDurationMs / 1000).toString());
+              }
+
+              const playResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
+                const child = spawn('ffplay', ffplayArgs, {
+                  stdio: ['ignore', 'pipe', 'pipe'],
+                });
+                let settled = false;
+                let stderr = '';
+                child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+                child.on('error', (err) => {
+                  if (settled) return;
+                  settled = true;
+                  resolve({ success: false, error: `Failed to start ffplay: ${err.message}` });
+                });
+                child.on('close', (code) => {
+                  if (settled) return;
+                  settled = true;
+                  if (code !== 0) {
+                    resolve({ success: false, error: `ffplay exited with code ${code}: ${stderr.slice(0, 200)}` });
+                  } else {
+                    resolve({ success: true, error: stderr ? `ffplay warning: ${stderr.slice(0, 200)}` : undefined });
+                  }
+                });
+              });
+
+              if (!playResult.success) {
+                // Skip this track — record error and move on
+                trackResults.push({
+                  track: track.name,
+                  bpm: gtData.bpm || 0,
+                  error: `${playResult.error} (failed on run ${runIdx + 1}/${valNumRuns})`,
+                  perDevice: [],
+                });
+                trackFailed = true;
+                // Stop recording on all devices (discard data)
+                for (const { session } of valSessions) {
+                  session.stopTestRecording();
+                }
+                break; // Skip remaining runs for this track
+              }
+
+              // Stop recording and score each device
+              for (const { port: p, session } of valSessions) {
+                const data = session.stopTestRecording();
+                const score = scoreDeviceRun(data, audioStartTime, gtData);
+                trackDeviceScores.get(p)!.push(score);
+              }
+
+              // Inter-run gap
+              if (runIdx < valNumRuns - 1) {
+                await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
+              }
+            }
+
+            // Skip aggregation if track playback failed (error already pushed above)
+            if (trackFailed) {
+              if (trackIdx < allTracks.length - 1) {
+                await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
+              }
+              continue;
+            }
+
+            // Aggregate per-device for this track
+            const perDevice = valSessions.map(({ port: p }) => {
+              const scores = trackDeviceScores.get(p)!;
+              return {
+                port: p,
+                aggregate: {
+                  beatF1: roundStats(computeStats(scores.map(s => s.beatTracking.f1))),
+                  bpmAccuracy: roundStats(computeStats(scores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
+                  transientF1: roundStats(computeStats(scores.map(s => s.transientTracking.f1))),
+                },
+                // Per-run detail for post-hoc analysis
+                perRun: scores.map((s, i) => ({
+                  run: i + 1,
+                  beatF1: Math.round(s.beatTracking.f1 * 1000) / 1000,
+                  bpmAccuracy: s.musicMode.bpmAccuracy !== null ? Math.round(s.musicMode.bpmAccuracy * 1000) / 1000 : null,
+                  transientF1: Math.round(s.transientTracking.f1 * 1000) / 1000,
+                  latencyMs: s.audioLatencyMs !== null ? Math.round(s.audioLatencyMs) : null,
+                })),
+              };
+            });
+
+            trackResults.push({
+              track: track.name,
+              bpm: gtData.bpm || 0,
+              perDevice,
+            });
+
+            // Inter-track gap (same duration as inter-run; AGC re-adapts within first ~2s
+            // of new track, so 5s is sufficient for both cases)
+            if (trackIdx < allTracks.length - 1) {
+              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
+            }
+          }
+
+          // Compute overall per-device aggregates across all tracks
+          const overallPerDevice = valSessions.map(({ port: p }) => {
+            const allBeatF1s = trackResults
+              .map(t => t.perDevice.find(d => d.port === p)?.aggregate.beatF1.mean)
+              .filter((v): v is number => typeof v === 'number');
+            const allBpmAccs = trackResults
+              .map(t => t.perDevice.find(d => d.port === p)?.aggregate.bpmAccuracy.mean)
+              .filter((v): v is number => typeof v === 'number');
+            return {
+              port: p,
+              overallBeatF1: roundStats(computeStats(allBeatF1s)),
+              overallBpmAccuracy: roundStats(computeStats(allBpmAccs)),
+              trackCount: allBeatF1s.length,
+            };
+          });
+
+          // Save full results to disk
+          ensureTestResultsDir();
+          const valTimestamp = Date.now();
+          const valFilename = `validation-suite-${valTimestamp}.json`;
+          const valPath = join(TEST_RESULTS_DIR, valFilename);
+          const fullValidationResults = {
+            type: 'validation_suite',
+            timestamp: new Date(valTimestamp).toISOString(),
+            config: { ports: valPorts, runs: valNumRuns, trackCount: allTracks.length, trackDir, gain: valGain, durationMs: valDurationMs },
+            overallPerDevice,
+            trackResults,
+          };
+          writeFileSync(valPath, JSON.stringify(fullValidationResults, null, 2));
+
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                type: 'validation_suite',
+                tracks: allTracks.length,
+                runsPerTrack: valNumRuns,
+                devices: valSessions.length,
+                overallPerDevice,
+                perTrack: trackResults.map(t => ({
+                  track: t.track,
+                  bpm: t.bpm,
+                  ...(t.error ? { error: t.error } : {}),
+                  perDevice: t.perDevice.map(d => ({
+                    port: d.port,
+                    beatF1: d.aggregate.beatF1.mean,
+                    bpmAccuracy: d.aggregate.bpmAccuracy.mean,
+                  })),
+                })),
+                resultsFile: valFilename,
+              }, null, 2),
+            }],
+          };
+        } finally {
+          if (valGain !== undefined) {
+            await Promise.all(valSessions.map(({ session }) =>
+              session.getState().connected
+                ? session.serial.sendCommand('set hwgainlock 255').catch(() => {})
+                : Promise.resolve()
+            ));
+          }
+          await Promise.all(valSessions.map(({ port: p }) =>
             manager.disconnect(p).catch(() => {})
           ));
         }

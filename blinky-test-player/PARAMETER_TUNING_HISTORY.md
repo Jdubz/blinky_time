@@ -2244,5 +2244,149 @@ Percival and adaptive tightness show positive trends but are within measurement 
 ### Recommendation
 
 Keep all 3 features ON as defaults. The +11.6% combined improvement is meaningful.
-For the path to 70% F1, the 1D joint tempo-phase HMM (Priority 4) remains the necessary
-architectural change — incremental CBSS improvements have diminishing returns.
+
+---
+
+## Test Session: 2026-03-03 (v47 Signal Chain Decompression)
+
+**Goal:** Eliminate redundant triple-compression (compressor → whitening → BandFlux log) by giving BandFlux raw FFT magnitudes.
+
+**Environment:** 3 bare boards (ACM0/1/2), USB speakers, 30s clips, 11 tracks tested.
+
+**Changes (SETTINGS_VERSION 47):**
+- `bfprewhiten` (bool, default ON): BandFlux receives raw FFT magnitudes (no compressor, no whitening)
+- `whitenbassbypass` (bool, default OFF): Skip whitening for bass bins 1-6 in whitened path
+- +512B RAM (preWhitenMagnitudes buffer)
+
+**Test 1: prewhiten on/off + bassbypass (3 tracks):**
+
+| Track | ACM0 prewhiten=1 | ACM1 prewhiten=0 | ACM2 prewhiten+bassbypass |
+|-------|:-----------------:|:-----------------:|:-------------------------:|
+| techno-minimal-01 | **0.489** | 0.370 | **0.519** |
+| trance-infected | 0.336 | **0.364** | 0.301 |
+| garage-uk-2step | 0.240 | **0.369** | 0.309 |
+
+**Test 2: Compressor release time (techno-minimal-01):**
+
+| Config | Beat F1 | Notes |
+|--------|:-------:|-------|
+| prewhiten=1, release=0.3s | 0.338 | Fast release hurts (pumping) |
+| prewhiten=0, release=2.0s | 0.456 | Baseline won this run |
+| prewhiten=1, release=1.0s | 0.391 | Medium release no clear benefit |
+
+**Test 3: BandFlux gamma on raw input (techno-minimal-01):**
+
+| Config | Beat F1 | Transients |
+|--------|:-------:|:----------:|
+| prewhiten=1, gamma=10 | 0.336 | 186 |
+| prewhiten=1, gamma=20 | 0.311 | 205 |
+| prewhiten=1, ratio=1.5 | 0.244 | 209 |
+
+**Test 4: gamma=5 vs gamma=20 on raw input (techno-minimal-01):**
+
+| Config | Beat F1 | Transients |
+|--------|:-------:|:----------:|
+| prewhiten=1, gamma=20 | 0.338 | 203 |
+| prewhiten=0 (baseline) | 0.400 | 209 |
+| prewhiten=1, gamma=5 | 0.321 | 205 |
+
+**Key findings:**
+- **Transient detection unchanged**: All configs produce ~200 detections (recall ~0.83) on techno-minimal-01. BandFlux's log(1+20*mag) + adaptive threshold compensates for upstream processing.
+- **Run-to-run variance dominates**: Same track, same firmware → F1 ranges 0.244 to 0.519 across runs. Cannot reliably detect improvements < ~0.15 F1 with single-run tests.
+- **Compressor release 0.3s hurts**: Fast release causes pumping artifacts.
+- **Signal chain is NOT the bottleneck**: Phase alignment remains the dominant limitation.
+
+---
+
+## Test Session: 2026-03-03 (v46 HMM Phase Tracker Experiment)
+
+**Goal:** Replace CBSS beat detection with explicit phase tracking via Bernoulli observation model.
+
+**Environment:**
+- Hardware: 3 bare boards (XIAO nRF52840 Sense), ACM0/ACM1/ACM2
+- Firmware: SETTINGS_VERSION 45 (no version bump — experimental, toggle `hmm=0/1`)
+- Test tracks: techno-minimal-01, trance-infected-vibes, garage-uk-2step (30s each)
+- Scoring: Beat F1 @ 200ms tolerance
+
+### Approach 1: Bernoulli Argmax Wrap Detection
+
+Phase tracker maintains circular probability distribution over [0, period). Bernoulli observation
+model: `P(obs|pos=0) = ODF, P(obs|pos≠0) = 1-ODF`. Beat fires when argmax wraps from near
+period-1 to near 0. T/2 cooldown prevents double-fires.
+
+**Result:** Under-fires by 50-60%. The observation model requires a transient at every beat
+position. When no onset occurs at beat time, `phaseAlpha_[0] ≈ wrapProb × 0.01` and the
+argmax never reaches position 0.
+
+| Track | HMM F1 | HMM beats | CBSS F1 | CBSS beats | Expected |
+|-------|:------:|:---------:|:-------:|:----------:|:--------:|
+| techno-minimal-01 | 0.202 | 33 | **0.424** | 66 | 66 |
+| trance-infected | 0.303 | 47 | **0.345** | 73 | 72 |
+| garage-uk-2step | 0.217 | 35 | **0.328** | 77 | 57 |
+| **Average** | **0.241** | | **0.366** | | |
+
+### Approach 2: Simple Countdown (Onset Snap + PLL)
+
+Beat fires when `sampleCounter_ - lastBeatSample_ >= T`. Phase correction via onset snap
+(±8 frames) and PLL (Kp=0.15, Ki=0.005). No threshold check — beats are strictly periodic.
+
+**Result:** Under-fires by 28%. Onset snap moves lastBeatSample_ forward, and PLL positive
+corrections extend effective period. Cumulative drift loses ~19 beats per 30s.
+
+| Track | HMM F1 | HMM beats | CBSS F1 | CBSS beats | Expected |
+|-------|:------:|:---------:|:-------:|:----------:|:--------:|
+| techno-minimal-01 | 0.265 | 47 | **0.489** | 65 | 66 |
+| trance-infected | 0.283 | 48 | **0.392** | 71 | 72 |
+| garage-uk-2step | 0.248 | 48 | **0.205** | 70 | 57 |
+| **Average** | **0.265** | | **0.362** | | |
+
+### Approach 3: Deterministic Counter (No Observation Model)
+
+Position advances by 1 each frame, wraps at period. No observation model influence.
+Beat fires on position-0 wrap. Phase correction only from onset snap + PLL.
+
+**Result:** Worst approach. No phase correction mechanism (counter free-runs), integer
+period quantization causes cumulative drift. Only 47 beats in 30s, F1=0.195.
+
+### Summary
+
+| Approach | Avg F1 | vs CBSS | Root Cause |
+|----------|:------:|:-------:|------------|
+| CBSS baseline | **0.366** | — | Threshold adapts to signal, doesn't require onset at every beat |
+| Bernoulli argmax | 0.241 | -34% | Requires onset at beat position; ~50% of beats have none |
+| Countdown | 0.265 | -28% | Onset snap + PLL extend effective period cumulatively |
+| Deterministic | 0.195 | -47% | No phase correction, drifts |
+
+### Key Findings
+
+1. **CBSS is architecturally better for noisy mic audio.** Its threshold-based detection
+   doesn't require onset-beat alignment. The HMM Bernoulli model does.
+
+2. **madmom works because it uses studio-quality audio.** Every beat has a clean spectral
+   flux onset in studio recordings. Our mic-in-room setup has AGC + compression + whitening
+   reducing transient contrast to where many beats lack detectable onsets.
+
+3. **Signal quality is the real bottleneck, not tracker architecture.** Six adaptive systems
+   (AGC, compressor, whitening, BandFlux threshold, ODF smoothing, Bayesian transitions)
+   compound to reduce transient sharpness. Improving signal quality (dual-path ODF,
+   compressor tuning, band-selective whitening) is more promising than replacing the tracker.
+
+4. **Critical bug found during testing:** `hmmPeriods_[]` was never initialized after removing
+   `initHmmState()` call. All periods defaulted to 0 (clamped to 10), causing 2x beat count.
+   Fixed by using `tempoBinLags_[]` directly.
+
+### Signal Chain Audit
+
+Comprehensive audit of all adaptive systems between mic and beat tracker:
+
+| System | Timescale | Risk | Mechanism |
+|--------|-----------|------|-----------|
+| Compressor (3:1, 2s release) | 2.0s | HIGH | Dampens next transient after loud peak |
+| Per-bin whitening (decay 0.997) | ~1s | HIGH | Running max flattens rhythmic content |
+| Hardware AGC (5-30s adaptation) | 5-30s | HIGH | Gain lag during quiet→loud transitions |
+| BandFlux threshold (α=0.02) | ~0.8s | MEDIUM | Additive threshold drift after loud sections |
+| ODF 5-point MA | 80ms | MEDIUM | Phase lag + transient broadening |
+| Bayesian transition (λ=0.60) | 2-5s | MEDIUM | Slow tempo lock |
+
+**Next priority:** Signal chain mitigation experiments (compressor release sweep, whitening
+decay sweep, dual-path ODF, band-selective whitening).

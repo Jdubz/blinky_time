@@ -77,7 +77,9 @@ public:
     // Version 44: Remove proven-detrimental features (harmonicSesqui, PLP phase, phase check)
     // Version 45: Percival ACF harmonic pre-enhancement, PLL phase correction, adaptive CBSS tightness
     // Version 46: HMM beat detection (position-0 wrap replaces CBSS countdown when hmm=1)
-    static const uint8_t SETTINGS_VERSION = 46;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 47: Pre-whitening BandFlux path + bass whitening bypass (signal chain decompression)
+    // Version 48: Multi-agent beat tracking, anti-harmonic 3rd comb, metrical contrast check
+    static const uint8_t SETTINGS_VERSION = 48;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -270,6 +272,7 @@ public:
         // Spectral processing (v23+)
         bool whitenEnabled;             // Per-bin spectral whitening
         bool compressorEnabled;         // Soft-knee compressor
+        bool whitenBassBypass;          // Skip whitening for bass bins 1-6 (v47)
         float whitenDecay;              // Peak decay per frame (~5s at 0.997)
         float whitenFloor;              // Noise floor for whitening
         float compThresholdDb;          // Compressor threshold (dB)
@@ -301,6 +304,17 @@ public:
         float tightnessConfThreshHigh;  // OSS/mean ratio for high confidence (1.5-10)
         float tightnessConfThreshLow;   // OSS/mean ratio for low confidence (0.5-3.0)
         bool adaptiveTightnessEnabled;  // Enable adaptive tightness
+
+        // Anti-harmonic 3rd comb (v48)
+        float percivalWeight3;          // 3rd harmonic SUBTRACT weight (0-1, default 0)
+
+        // Multi-agent beat tracking (v48)
+        float agentDecay;               // Agent score EMA decay (0.7-0.95)
+        float metricalMinRatio;         // Min beat/midpoint strength ratio (1.0-5.0)
+        bool multiAgentEnabled;         // Enable multi-agent phase competition
+        bool metricalCheckEnabled;      // Enable metrical contrast check
+        uint8_t agentInitBeats;         // Initialize agents after N beats (2-8)
+        uint8_t metricalCheckBeats;     // Check every N beats (2-8)
     };
 
     struct StoredBandFluxParams {
@@ -323,6 +337,7 @@ public:
         bool perBandThreshEnabled;  // Per-band independent detection
         bool hiResBassEnabled;      // Hi-res bass via Goertzel
         bool peakPickEnabled;       // Local-max peak picking (Phase 2.6)
+        bool usePreWhitenMags;      // Use raw (pre-compressor, pre-whitening) magnitudes (v47)
     };
 
     /**
@@ -419,16 +434,16 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 296,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (296 bytes = 60 floats + 8 uint8 + 23 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 312,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (312 bytes = 63 floats + 10 uint8 + 26 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
-        "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 3 bools + padding)");
+        "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    // ConfigData: ~693 bytes (4+160+64+64+32+24+288+44+1 + padding). Allocated in last 4KB flash page.
+    // ConfigData: allocated in last 4KB flash page (4096 bytes available).
     // Tight bound catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 708,
-        "ConfigData exceeds 708 bytes! Current estimate ~701B. Check for unintended struct growth.");
+    static_assert(sizeof(ConfigData) <= 768,
+        "ConfigData exceeds 768 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes.");
 
     ConfigStorage();
     void begin();

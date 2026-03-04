@@ -25,6 +25,7 @@ export class DeviceSession {
   private musicStateBuffer: TimestampedMusicState[] = [];
   private beatEventBuffer: BeatEvent[] = [];
   private _testStartTime: number | null = null;
+  private firmwareTimeOffset: number | null = null; // Date.now() - firmware millis(), for bt timestamps
 
   constructor(port: string) {
     this.port = port;
@@ -64,6 +65,11 @@ export class DeviceSession {
     this.serial.on('music', (state: MusicModeState) => {
       this.lastMusicState = state;
 
+      // Establish firmware time offset from first beat event in music stream (bt field when q=1)
+      if (this.firmwareTimeOffset === null && state.bt !== undefined && state.bt > 0) {
+        this.firmwareTimeOffset = Date.now() - state.bt;
+      }
+
       if (this._testStartTime !== null) {
         const timestampMs = Date.now() - this._testStartTime;
         this.musicStateBuffer.push({
@@ -78,9 +84,15 @@ export class DeviceSession {
       }
     });
 
-    this.serial.on('beat', (beat: { type: string; bpm: number; predicted?: boolean }) => {
+    this.serial.on('beat', (beat: { type: string; bpm: number; predicted?: boolean; bt?: number }) => {
       if (this._testStartTime !== null) {
-        const timestampMs = Date.now() - this._testStartTime;
+        let timestampMs: number;
+        // Use firmware-precise beat timestamp when available
+        if (beat.bt !== undefined && beat.bt > 0 && this.firmwareTimeOffset !== null) {
+          timestampMs = (beat.bt + this.firmwareTimeOffset) - this._testStartTime;
+        } else {
+          timestampMs = Date.now() - this._testStartTime;
+        }
         this.beatEventBuffer.push({
           timestampMs,
           bpm: beat.bpm,
@@ -133,6 +145,7 @@ export class DeviceSession {
     this.audioSampleBuffer = [];
     this.musicStateBuffer = [];
     this.beatEventBuffer = [];
+    this.firmwareTimeOffset = null; // Re-establish from next bt field
     this._testStartTime = Date.now();
   }
 

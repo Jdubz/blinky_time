@@ -396,6 +396,13 @@ public:
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
 
+    // === METRICAL CONTRAST CHECK (v48) ===
+    // Compares raw onset strength at beat positions vs midpoints.
+    // Weak contrast indicates possible octave error — triggers checkOctaveAlternative().
+    bool metricalCheckEnabled = false;      // Enable metrical contrast check (v48)
+    float metricalMinRatio = 1.5f;          // Min beat/midpoint strength ratio (v48, 1.0-5.0)
+    uint8_t metricalCheckBeats = 4;         // Check every N beats (v48, 2-8)
+
     // (phaseCheckEnabled removed v44 — net-negative on 18-track validation)
     // (plpPhaseEnabled/plpCorrectionStrength/plpMinConfidence removed v44 — zero effect, redundant with onset snap)
 
@@ -463,6 +470,7 @@ public:
     bool percivalEnhance = true;           // Enable harmonic pre-enhancement (v45)
     float percivalWeight2 = 0.5f;          // 2nd harmonic fold weight (v45)
     float percivalWeight4 = 0.25f;         // 4th harmonic fold weight (v45)
+    float percivalWeight3 = 0.0f;          // 3rd harmonic SUBTRACT weight (v48, 0=off, 0.3=recommended for anti-harmonic)
 
     // === PLL PHASE CORRECTION (v45) ===
     // Proportional+integral phase correction applied at each beat fire.
@@ -483,6 +491,14 @@ public:
     float tightnessHighMult = 1.3f;        // Multiplier when onset confidence LOW (v45)
     float tightnessConfThreshHigh = 3.0f;  // OSS/mean ratio above this = high confidence (v45)
     float tightnessConfThreshLow = 1.5f;   // OSS/mean ratio below this = low confidence (v45)
+
+    // === MULTI-AGENT BEAT TRACKING (v48) ===
+    // 8 beat agents at different phases compete; best-scoring agent fires beats.
+    // Replaces single CBSS countdown when enabled. CBSS still provides the cumulative
+    // beat strength signal; agents use it for onset quality scoring.
+    bool multiAgentEnabled = false;         // Enable multi-agent phase competition (A/B vs single CBSS)
+    float agentDecay = 0.85f;              // Agent score EMA decay (0.7-0.95, lower = faster adaptation)
+    uint8_t agentInitBeats = 3;            // Initialize agents after N beats (2-8)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -535,6 +551,7 @@ public:
     float getLastOnsetStrength() const { return lastSmoothedOnset_; }
     int getTimeToNextBeat() const { return timeToNextBeat_; }
     bool wasLastBeatPredicted() const { return lastFiredBeatPredicted_; }
+    uint32_t getLastBeatTimeMs() const { return lastBeatMs_; }
 
     // (PLP phase getters removed v44 — feature removed)
 
@@ -642,6 +659,7 @@ private:
 
     // Octave check state (Phase 3)
     uint16_t beatsSinceOctaveCheck_ = 0; // Beats since last octave check
+    uint16_t beatsSinceMetricalCheck_ = 0; // Beats since last metrical contrast check (v48)
 
     // (beatsSincePhaseCheck_ removed v44 — phase check feature removed)
     // (plpPhase_/plpConfidence_ removed v44 — PLP feature removed)
@@ -723,6 +741,16 @@ private:
     float hmmTransLambda_ = -1.0f;              // Cache key: rebuild when hmmLambda changes
     int hmmPrevBestTempo_ = 0;                  // Previous frame's best tempo (spurious wrap detection)
 
+    // === PHASE-ONLY TRACKER (v46b) ===
+    // Single-tempo circular distribution — Bayesian handles tempo, this tracks phase.
+    // All probability mass stays in one period, unlike joint HMM where mass spreads
+    // across tempo bins leaving the Bayesian bin's positions unreliable.
+    static constexpr int PHASE_MAX_PERIOD = CombFilterBank::MAX_LAG + 1;  // 67
+    float phaseAlpha_[PHASE_MAX_PERIOD] = {0};  // Circular probability distribution
+    int phasePeriod_ = 0;                        // Current tracked period (from Bayesian)
+    int phaseFramesSinceBeat_ = 999;             // Frames since last phase-tracker beat (wrap cooldown)
+    void updatePhaseTracker(float odf);
+
     // === PARTICLE FILTER STATE (v38) ===
     static constexpr int PF_NUM_PARTICLES = 100;
     static constexpr float PF_INFO_GATE_ODF_FLOOR = 0.03f;  // Floor value for gated ODF during silence
@@ -747,6 +775,19 @@ private:
 
     // === ADAPTIVE TIGHTNESS STATE (v45) ===
     float effectiveTightness_ = 8.0f;  // Current effective tightness (modulated by onset confidence)
+
+    // === MULTI-AGENT BEAT TRACKING STATE (v48) ===
+    static constexpr int NUM_BEAT_AGENTS = 8;
+    struct BeatAgent {
+        int countdown;        // Frames until next predicted beat
+        float score;          // EMA quality score (higher = better onset alignment)
+        int lastBeatSample;   // Onset-snapped beat anchor
+        bool justFired;       // Flag: this agent's countdown hit 0 this frame
+    };
+    BeatAgent beatAgents_[NUM_BEAT_AGENTS];
+    int bestAgentIdx_ = 0;
+    bool agentsInitialized_ = false;
+    int agentPeriod_ = 30;      // Cached period used by agents
 
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
@@ -773,6 +814,11 @@ private:
     void updateHmmForward(float onsetStrength);
     void buildHmmTransitionMatrix();  // v46: tight transition matrix for HMM beat detection
     void detectHmmBeat();             // v46: HMM position-0 wrap beat detection
+
+    // Multi-agent beat tracking (v48)
+    void initBeatAgents();
+    void detectBeatMultiAgent();
+    void checkMetricalContrast();
 
     // Particle filter beat tracking (v38)
     void initParticleFilter();

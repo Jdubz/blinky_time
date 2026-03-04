@@ -101,6 +101,7 @@ AudioFrame EnsembleDetector::buildFrame(float level, float rawLevel,
     // Spectral data (may be null if no FFT this frame)
     frame.spectralValid = spectral_.isFrameReady() || spectral_.hasPreviousFrame();
     frame.magnitudes = spectral_.getMagnitudes();
+    frame.preWhitenMagnitudes = spectral_.getPreWhitenMagnitudes();
     frame.phases = spectral_.getPhases();
     frame.melBands = spectral_.getMelBands();
     frame.numBins = spectral_.getNumBins();

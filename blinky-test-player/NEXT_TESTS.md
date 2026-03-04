@@ -3,7 +3,7 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 3, 2026
+**Last Updated:** March 3, 2026 (v46 HMM experiment concluded)
 
 ## Current Config (v45, SETTINGS_VERSION 45)
 
@@ -168,38 +168,19 @@ From Davies & Plumbley (2007). After establishing phase, multiply CBSS by a wind
 function centered on expected beat positions. Attenuates off-beat onsets that pull phase
 incorrectly. ~100 bytes, ~0.1% CPU.
 
-### Priority 3: Evaluate Visual Quality
+### Priority 3: 1D Joint Tempo-Phase HMM — TESTED, FAILED (v37 + v46)
 
-Before investing in the HMM (Priority 4), evaluate whether Priorities 1-2 produce
-acceptable visual results:
-- Run `render_preview` with real music patterns
-- Compare animation smoothness and beat-reactivity
-- If visual quality is acceptable at the improved F1, focus on reliability over accuracy
+**Status: CLOSED.** Tested twice with different approaches, both regress vs CBSS baseline.
 
-### Priority 4: 1D Joint Tempo-Phase HMM (HIGH effort, highest impact)
+| v46 Approach | Avg Beat F1 | vs CBSS (0.366) | Issue |
+|-------------|:-----------:|:---------------:|-------|
+| Bernoulli argmax wrap | 0.241 | -34% | Requires onset at every beat; misses ~50% of beats |
+| Countdown (onset snap) | 0.265 | -28% | Onset snap extends effective period cumulatively |
+| Deterministic counter | 0.195 | -47% | No phase correction, drifts |
 
-The madmom-style 1D state space (Krebs/Böck ISMIR 2015, Heydari ICASSP 2022) is the
-**architectural change** needed for >60% F1. All reference systems achieving this level
-track phase explicitly as a state variable.
-
-**Architecture:**
-- ~1,800 states (sum of integer lags 20-66, each lag L contributes L phase positions)
-- Phase advances deterministically within a beat: state p → p+1
-- Tempo changes only at beat boundaries (phase wraps 0): jump-back transitions
-- `transition_lambda=100`: tempo changes >10% are essentially zero probability
-- Observation model: high likelihood at position 0 when onset detected, low otherwise
-- Sparse Viterbi forward pass: each state has 1-2 transitions
-
-**Resources:** ~14 KB RAM, ~2% CPU (1.2M ops/sec at 66 Hz, trivial for 64 MHz Cortex-M4)
-
-**Why this also solves 128 BPM gravity well:** `transition_lambda=100` makes octave jumps
-(ratio 1.5 or 2.0) mathematically impossible within the HMM. Tempo can only change
-gradually at beat boundaries.
-
-**Previous v37 HMM failure analysis:** Failed due to too-few bins (20) and wrong observation
-model (flat across all states). Corrected version needs: (1) full integer-lag resolution
-(46 distinct periods), (2) position-0-specific observation model (beat states get
-`lambda * activation`, non-beat states get `1 - activation`).
+**Root cause**: Bernoulli observation model requires transients at beat positions. Room-captured
+audio through AGC + compression + whitening has insufficient transient contrast for this to work.
+madmom achieves >74% F1 because it operates on studio-quality line-in audio.
 
 ## v45 Test Plan
 
@@ -214,42 +195,45 @@ run-to-run noise (except PLL).
 
 ### Steps 3-5: SKIPPED — Diminishing returns
 A/B data shows v45 features are positive but marginal. Further parameter tuning on CBSS cannot
-reach 0.70 F1 — the architectural ceiling is ~0.35. Proceeding to Priority 4 (1D HMM).
+reach 0.70 F1 — the architectural ceiling is ~0.35.
 
-## Priority 4: 1D Joint Tempo-Phase HMM Implementation
+## Priority 4: HMM Phase Tracker — TESTED, FAILED (v46)
 
-The path to 70% F1 requires replacing CBSS with explicit phase tracking. The 1D joint
-tempo-phase HMM (Krebs/Böck ISMIR 2015, Heydari ICASSP 2022) is the standard architecture
-for >60% Beat F1 in all reference systems (madmom, BeatNet).
+See Priority 4 in "Next Steps Toward 70% Beat F1" above. All approaches tested, all regress
+vs CBSS. The observation model fundamentally doesn't work with our signal quality.
 
-### Why HMM solves both bottlenecks:
-1. **Phase alignment**: Phase is an explicit state variable, not emergent from a counter.
-   Each state encodes (period, position). Beats fire at position 0 with mathematically
-   optimal timing.
-2. **128 BPM gravity well**: transition_lambda=100 makes tempo jumps >10% essentially
-   zero probability within the HMM. Octave errors become mathematically impossible.
+## Priority 5: Signal Chain Mitigation (NEW)
 
-### Architecture:
-- ~1,800 states (sum of integer lags 20-66, each lag L has L phase positions)
-- Phase advances deterministically: state (L, p) → (L, p+1)
-- At beat boundary (p wraps to 0): can jump to nearby tempos via Gaussian transition
-- Observation model: `lambda * ODF` at position 0, `1 - ODF` at other positions
-- Sparse Viterbi forward pass: each state has 1-2 transitions (phase advance + optional tempo change)
-- **Resources**: ~14 KB RAM (float[1800] × 2), ~2% CPU
+The v46 investigation revealed that the beat tracker's F1 ceiling is driven by **signal quality**,
+not tracker architecture. Six adaptive systems between mic and beat tracker compound to reduce
+transient contrast. The next improvement path is to mitigate these effects.
 
-### Implementation Plan:
-1. Add `BeatHMM` class alongside existing CBSS (toggle: `hmm=0/1`)
-2. State space: integer lags 20-66 (60-198 BPM at 66 Hz), each with L phase positions
-3. Sparse transition: precompute valid transitions at init (deterministic phase + beat-boundary tempo changes)
-4. Observation: use existing BandFlux ODF (post-smoothing, pre-thresholding)
-5. Beat output: fire when MAP state has position=0 and previous MAP had position>0
-6. Keep CBSS as fallback (toggle between HMM and CBSS via serial)
+### Proposed Experiments
 
-### Previous v37 HMM Failure Analysis:
-Failed due to: (1) too-few bins (20 bins = 20 total states, too coarse for phase), (2) wrong
-observation model (flat likelihood across all states instead of position-0-specific).
-Corrected version needs full integer-lag resolution (46 periods, ~1,800 states) and
-beat-position-specific observation model.
+**5a. Compressor release time sweep** (LOW effort)
+Test compRelease values: 0.25, 0.5, 1.0, 2.0 (current). Faster release = less inter-transient
+dampening but more noise. Use `run_music_test_multi` with 3 devices at different values.
+
+**5b. Whitening decay sweep** (LOW effort)
+Test whitenDecay values: 0.990, 0.995, 0.997 (current), 0.999. Faster decay = more responsive
+but noisier. Or disable whitening entirely (`whitening 0`) as control.
+
+**5c. Dual-path ODF** (MEDIUM effort, highest expected impact)
+Compute BandFlux on raw (pre-compression, pre-whitening) FFT magnitudes for beat tracking ODF.
+Keep compressed+whitened path for energy/visualization. Preserves transient contrast for CBSS
+while maintaining normalized output for visual generators.
+
+**5d. Band-selective whitening** (MEDIUM effort)
+Only whiten mid/high bands (>500 Hz). Leave bass bands raw to preserve kick drum contrast.
+Kicks have most energy <200 Hz where whitening is most destructive.
+
+**5e. Sidechain-aware compression** (MEDIUM effort)
+Pause or reduce compression gain reduction during detected onsets. Prevents compression from
+dampening the very transients that onset detection relies on.
+
+**5f. Fixed-gain testing** (LOW effort)
+Lock hardware gain during tests (`gain` parameter in `run_music_test`) to isolate AGC effects.
+If F1 improves with locked gain, AGC adaptation is a significant factor.
 
 ## PF Evaluation — Completed (v40)
 
@@ -270,7 +254,7 @@ beat-position-specific observation model.
 | beatTimingOffset | 3, 5, 7, 9 | 5 (default) | Inconclusive — device BPM variation dominates |
 | cbssTightness | 2, 5, 8, 12 | **8** | +24% on same-BPM devices, +3.6% on 18-track avg |
 
-## Completed (v28-v45, Feb-Mar 2026)
+## Completed (v28-v46, Feb-Mar 2026)
 
 - v28: FT+IOI disabled, beat-boundary tempo, peak picking, unified ODF, 40→20 bins
 - v29: Transition matrix drift investigation (reverted 40 bins)
@@ -282,12 +266,14 @@ beat-position-specific observation model.
 - v42: PLP phase extraction (tested, no effect — disabled by default)
 - v43: 4 Bayesian tempo bug fixes — BPM accuracy 33%→88%, double-time lock eliminated
 - v44: bisnap=1 (+0.005 F1); fold32/sesquicheck/harmonicsesqui all negative
-- v45: Percival harmonic pre-enhancement + PLL phase correction + adaptive tightness (all implemented, untested)
+- v45: Percival +0.010, PLL +0.031, adaptive tightness +0.012 (+11.6% combined)
+- v46: HMM phase tracker (3 approaches tested, all regress vs CBSS). Signal chain audit completed
 
 ## Known Limitations
 
 | Issue | Root Cause | Visual Impact |
 |-------|-----------|---------------|
+| Signal chain attenuation | Compressor/whitening/AGC compound to reduce transient contrast | **High** — limits beat F1 ceiling |
 | ~128 BPM gravity well | Rayleigh prior + comb harmonic resonance | **Medium** — slow tracks lock to 3:2 harmonic |
 | Phase alignment limits F1 | CBSS derives phase indirectly from beat counter | **Medium** — correct BPM but misplaced beats |
 | Run-to-run variance (std 0.04-0.23) | Room acoustics, ambient noise, AGC state | Requires 5+ runs for reliable evaluation |

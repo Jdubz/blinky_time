@@ -136,6 +136,17 @@ bool AudioController::begin(uint32_t sampleRate) {
     timeToNextPrediction_ = 10;
     pendingBeatPeriod_ = -1;  // No pending tempo change
     beatsSinceOctaveCheck_ = 0;
+    beatsSinceMetricalCheck_ = 0;  // Reset metrical contrast counter (v48)
+    // Reset multi-agent state (v48)
+    agentsInitialized_ = false;
+    bestAgentIdx_ = 0;
+    agentPeriod_ = 30;
+    for (int i = 0; i < NUM_BEAT_AGENTS; i++) {
+        beatAgents_[i].countdown = 0;
+        beatAgents_[i].score = 0.5f;
+        beatAgents_[i].lastBeatSample = 0;
+        beatAgents_[i].justFired = false;
+    }
     hmmInitialized_ = false;  // HMM will re-init on first use
     pfInitialized_ = false;   // PF will re-init on first use
     pfRngState_ = 0x12345678;
@@ -391,17 +402,14 @@ const AudioControl& AudioController::update(float dt) {
             }
             pfUpdate(pfInput);  // Sets bpm_, beatPeriodSamples_ via pfExtractConsensus
         }
-    } else if (barPointerHmm && (hmmInitialized_ || tempoStateInitialized_)) {
-        if (!hmmInitialized_) initHmmState();
-        if (hmmInitialized_) {
-            if (hmmTransLambda_ != hmmLambda) buildHmmTransitionMatrix();
-            updateHmmForward(onsetStrength);
-            // Feed HMM tempo to CBSS
-            bpm_ = tempoBinBpms_[hmmBestTempo_];
-            beatPeriodMs_ = 60000.0f / bpm_;
-            beatPeriodSamples_ = hmmPeriods_[hmmBestTempo_];
-            bayesBestBin_ = hmmBestTempo_;
-        }
+    } else if (barPointerHmm && tempoStateInitialized_) {
+        // v46b: Phase-only tracker — Bayesian handles tempo, this tracks phase.
+        // Uses single circular probability distribution (not joint tempo-phase HMM)
+        // so all probability mass stays in one period for reliable position tracking.
+        updatePhaseTracker(onsetStrength);
+        bpm_ = tempoBinBpms_[bayesBestBin_];
+        beatPeriodMs_ = 60000.0f / bpm_;
+        beatPeriodSamples_ = tempoBinLags_[bayesBestBin_];
     }
     // CBSS + beat detection
     {
@@ -410,8 +418,12 @@ const AudioControl& AudioController::update(float dt) {
             cbssInput = powf(cbssInput, cbssContrast);
         }
         updateCBSS(cbssInput);    // sampleCounter_++ happens here
-        if (barPointerHmm && hmmInitialized_) {
-            detectHmmBeat();       // v46: HMM position-0 wrap beat detection
+        // Precedence: HMM phase tracker > multi-agent > default CBSS.
+        // If both barPointerHmm and multiAgentEnabled are set, HMM wins.
+        if (barPointerHmm && phasePeriod_ > 0) {
+            detectHmmBeat();       // v46b: Phase tracker position-0 wrap beat detection
+        } else if (multiAgentEnabled) {
+            detectBeatMultiAgent();  // v48: multi-agent phase competition
         } else {
             detectBeat();          // existing CBSS beat detection
         }
@@ -932,6 +944,14 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             int harm4Idx = 4 * lag - minLag;
             if (harm4Idx >= 0 && harm4Idx < harmonicCorrelationSize) {
                 correlationAtLag[li] += percivalWeight4 * correlationAtLag[harm4Idx];
+            }
+            // 3rd harmonic: SUBTRACT to suppress 3:2 ratio confusion (v48 anti-harmonic)
+            // Speech F0 lit: negative weight on odd harmonics distinguishes fundamental from sub-harmonic
+            if (percivalWeight3 > 0.0f) {
+                int harm3Idx = 3 * lag - minLag;
+                if (harm3Idx >= 0 && harm3Idx < harmonicCorrelationSize) {
+                    correlationAtLag[li] = fmaxf(0.0f, correlationAtLag[li] - percivalWeight3 * correlationAtLag[harm3Idx]);
+                }
             }
         }
     }
@@ -1972,6 +1992,82 @@ void AudioController::buildHmmTransitionMatrix() {
     hmmTransLambda_ = hmmLambda;
 }
 
+// ===== PHASE-ONLY TRACKER (v46b) =====
+// Single-tempo circular probability distribution for phase tracking.
+// Bayesian tempo fusion handles tempo (87.7% accuracy); this tracks phase within
+// the Bayesian best period. All probability mass stays in one period, solving the
+// mass-spreading problem of the joint tempo-phase HMM.
+//
+// State: phaseAlpha_[0..period-1], circular. Position 0 = beat position.
+// Transition: deterministic advance (position = (position+1) % period).
+// Observation: Bernoulli — high onset at position 0, low elsewhere.
+
+void AudioController::updatePhaseTracker(float odf) {
+    int period = tempoBinLags_[bayesBestBin_];
+    if (period < 10) period = 10;
+    if (period >= PHASE_MAX_PERIOD) period = PHASE_MAX_PERIOD - 1;
+
+    // Handle tempo change: reinitialize when period changes
+    if (period != phasePeriod_) {
+        // Uniform initialization — let observations establish phase
+        float uniform = 1.0f / static_cast<float>(period);
+        for (int p = 0; p < period; p++) {
+            phaseAlpha_[p] = uniform;
+        }
+        phasePeriod_ = period;
+    }
+
+    // Observation model: full Bernoulli with contrast.
+    // Position 0 gets obs = odf^contrast, others get obs = (1-odf)^contrast.
+    // Creates phase concentration but also a ghost peak at position 0 during onsets.
+    // The tracking filter below prevents ghost-peak jumps from causing double-fires.
+    float odfClamped = clampf(odf, 0.0f, 1.0f);
+    if (hmmContrast != 1.0f && odfClamped > 0.0f) {
+        odfClamped = powf(odfClamped, hmmContrast);
+    }
+    static constexpr float MIN_OBS_PROBABILITY = 0.01f; // Floor to prevent log(0)
+    float obsBeat = (odfClamped > MIN_OBS_PROBABILITY) ? odfClamped : MIN_OBS_PROBABILITY;
+    float obsNonBeat = ((1.0f - odfClamped) > MIN_OBS_PROBABILITY) ? (1.0f - odfClamped) : MIN_OBS_PROBABILITY;
+
+    // Save wrap probability (last position → position 0)
+    float wrapProb = phaseAlpha_[period - 1];
+
+    // Shift forward: position p-1 → p (non-beat observation)
+    for (int p = period - 1; p >= 1; p--) {
+        phaseAlpha_[p] = phaseAlpha_[p - 1] * obsNonBeat;
+    }
+
+    // Beat state: position 0 = wrapped from last position × beat observation
+    phaseAlpha_[0] = wrapProb * obsBeat;
+
+    // Normalize
+    float sum = 0.0f;
+    for (int p = 0; p < period; p++) sum += phaseAlpha_[p];
+    if (sum > 1e-30f) {
+        float inv = 1.0f / sum;
+        for (int p = 0; p < period; p++) phaseAlpha_[p] *= inv;
+    }
+
+    // Track position via argmax of phase distribution.
+    // With correct periods (T≈30-33), ghost peaks at position 0 are negligible
+    // because phaseAlpha_[period-1] ≈ 0 when the main peak is far from wrap.
+    // T/2 cooldown in detectHmmBeat() prevents any residual double-fires.
+    hmmPrevBestPosition_ = hmmBestPosition_;
+    float bestAlpha = -1.0f;
+    int bestPos = 0;
+    for (int p = 0; p < period; p++) {
+        if (phaseAlpha_[p] > bestAlpha) {
+            bestAlpha = phaseAlpha_[p];
+            bestPos = p;
+        }
+    }
+    hmmBestPosition_ = bestPos;
+    hmmPrevBestTempo_ = hmmBestTempo_;
+    hmmBestTempo_ = bayesBestBin_;
+    phaseFramesSinceBeat_++;
+}
+
+
 // ===== HMM BEAT DETECTION (v46) =====
 // Detects beats via HMM position-0 wrap instead of CBSS predict+countdown.
 // Phase is an explicit state variable (HMM position), not derived from a counter.
@@ -1981,20 +2077,19 @@ void AudioController::detectHmmBeat() {
     uint32_t nowMs = time_.millis();
     bool beatDetected = false;
 
-    int period = hmmPeriods_[hmmBestTempo_];
+    // v46b: Position-0 wrap detection with T/2 cooldown.
+    // Beat fires when the phase tracker's argmax wraps from near period-1 to near 0.
+    // With correct periods (T≈30-33), ghost peaks are negligible because
+    // phaseAlpha_[period-1] ≈ 0 when the main peak is far from the wrap point.
+    // T/2 cooldown provides a safety net against any residual double-fires.
+    int period = phasePeriod_;
     if (period < 10) period = 10;
-
-    // Position-0 wrap detection with safeguards:
-    // 1. Tempo stability: tempo bin unchanged or changed by ≤2 lags
-    // 2. Phase wrap: previous position in last quarter, current in first quarter
-    // 3. Silence gate: skip if audio too quiet
-    bool tempoStable = (hmmBestTempo_ == hmmPrevBestTempo_) ||
-                        (abs(tempoBinLags_[hmmBestTempo_] - tempoBinLags_[hmmPrevBestTempo_]) <= 2);
-    bool positionWrapped = (hmmPrevBestPosition_ > period * 3 / 4) &&
-                           (hmmBestPosition_ < period / 4);
+    bool positionWrap = (hmmPrevBestPosition_ > period * 3 / 4) &&
+                        (hmmBestPosition_ < period / 4);
+    bool cooldownOk = (phaseFramesSinceBeat_ >= period / 2);
     bool silenceGate = (cbssMean_ >= 0.01f);
-
-    if (tempoStable && positionWrapped && silenceGate) {
+    if (positionWrap && cooldownOk && silenceGate) {
+        phaseFramesSinceBeat_ = 0;
         // Save previous beat anchor BEFORE onset snap overwrites it (needed by PLL)
         int prevBeatSample = lastBeatSample_;
 
@@ -2027,7 +2122,7 @@ void AudioController::detectHmmBeat() {
             if (phaseError < -0.5f) phaseError = -0.5f;
 
             float correction = pllKp * phaseError * static_cast<float>(T);
-            pllPhaseIntegral_ = 0.95f * pllPhaseIntegral_ + phaseError;
+            pllPhaseIntegral_ = clampf(0.95f * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
             correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
 
             int maxShift = T / 4;
@@ -2051,16 +2146,18 @@ void AudioController::detectHmmBeat() {
         cbssConfidence_ *= beatConfidenceDecay;
     }
 
-    // Derive phase from HMM position (explicit state variable)
-    float newPhase = static_cast<float>(hmmBestPosition_) / static_cast<float>(period);
+    // Derive phase from tracker position (0 = on-beat, 1 = just before next beat)
+    int period2 = phasePeriod_;
+    if (period2 < 1) period2 = 1;
+    float newPhase = static_cast<float>(hmmBestPosition_) / static_cast<float>(period2);
     if (newPhase < 0.0f) newPhase = 0.0f;
     if (newPhase >= 1.0f) newPhase = 0.0f;
     if (!isfinite(newPhase)) newPhase = 0.0f;
     phase_ = newPhase;
 
     // Update timeToNextBeat_ for serial streaming compatibility
-    timeToNextBeat_ = period - hmmBestPosition_;
-    if (timeToNextBeat_ < 0) timeToNextBeat_ = 0;
+    int remaining = period2 - hmmBestPosition_;
+    timeToNextBeat_ = (remaining > 0) ? remaining : 0;
 
     predictNextBeat(nowMs);
 }
@@ -2423,6 +2520,215 @@ void AudioController::pfDetectBeat() {
     predictNextBeat(nowMs);
 }
 
+// ===== MULTI-AGENT BEAT TRACKING (v48) =====
+
+void AudioController::initBeatAgents() {
+    int T = beatPeriodSamples_;
+    if (T < 10) T = 10;
+    for (int i = 0; i < NUM_BEAT_AGENTS; i++) {
+        beatAgents_[i].countdown = (T * i) / NUM_BEAT_AGENTS;
+        beatAgents_[i].score = 0.5f;  // Neutral starting score
+        beatAgents_[i].lastBeatSample = lastBeatSample_;
+        beatAgents_[i].justFired = false;
+    }
+    // Agent 0 inherits CBSS phase (countdown=0 means fires immediately)
+    agentPeriod_ = T;
+    bestAgentIdx_ = 0;
+    agentsInitialized_ = true;
+}
+
+void AudioController::detectBeatMultiAgent() {
+    // If agents not initialized yet, use standard detectBeat as fallback
+    if (!agentsInitialized_) {
+        detectBeat();
+        // Check if it's time to init agents
+        if (beatCount_ >= agentInitBeats) {
+            initBeatAgents();
+        }
+        return;
+    }
+
+    uint32_t nowMs = time_.millis();
+    int T = beatPeriodSamples_;
+    if (T < 10) T = 10;
+
+    // Rescale countdowns when tempo changes (float intermediate prevents int overflow)
+    if (T != agentPeriod_ && agentPeriod_ > 0) {
+        float scale = static_cast<float>(T) / static_cast<float>(agentPeriod_);
+        for (int i = 0; i < NUM_BEAT_AGENTS; i++) {
+            beatAgents_[i].countdown = static_cast<int>(beatAgents_[i].countdown * scale);
+        }
+        agentPeriod_ = T;
+    }
+
+    // Update all agents
+    for (int i = 0; i < NUM_BEAT_AGENTS; i++) {
+        BeatAgent& a = beatAgents_[i];
+        a.justFired = false;
+        a.countdown--;
+        if (a.countdown <= 0) {
+            a.justFired = true;
+            // Onset snap: find strongest OSS in window
+            float bestOSS = 0.0f;
+            int bestSnapOffset = 0;
+            int W = static_cast<int>(onsetSnapWindow);
+            for (int d = 0; d <= W; d++) {
+                int idx = sampleCounter_ - 1 - d;
+                if (idx < 0) break;
+                float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+                if (oss > bestOSS) {
+                    bestOSS = oss;
+                    bestSnapOffset = d;
+                }
+            }
+            // Score: onset quality relative to running mean
+            float quality = (cbssMean_ > 0.001f) ? bestOSS / cbssMean_ : 0.0f;
+            a.score = agentDecay * a.score + (1.0f - agentDecay) * quality;
+            a.lastBeatSample = sampleCounter_ - bestSnapOffset;
+            a.countdown = T;
+        }
+    }
+
+    // Find best agent (highest EMA score)
+    float bestScore = -1.0f;
+    for (int i = 0; i < NUM_BEAT_AGENTS; i++) {
+        if (beatAgents_[i].score > bestScore) {
+            bestScore = beatAgents_[i].score;
+            bestAgentIdx_ = i;
+        }
+    }
+
+    // Fire beat when best agent just fired
+    bool beatDetected = false;
+    const BeatAgent& best = beatAgents_[bestAgentIdx_];
+    if (best.justFired) {
+        // CBSS threshold gate (prevent beats during silence)
+        float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];
+        bool cbssAboveThreshold = (cbssThresholdFactor <= 0.0f) ||
+                                   (currentCBSS > cbssThresholdFactor * cbssMean_);
+
+        // Minimum inter-beat interval (prevent double-fire on agent switch)
+        int elapsed = sampleCounter_ - lastBeatSample_;
+        bool minIntervalOk = elapsed > T / 2;
+
+        if (cbssAboveThreshold && minIntervalOk) {
+            int prevBeatSample = lastBeatSample_;
+            lastBeatSample_ = best.lastBeatSample;
+
+            // PLL correction (same as detectBeat)
+            if (pllEnabled && beatCount_ > 2) {
+                int ibi = lastBeatSample_ - prevBeatSample;
+                float phaseError = static_cast<float>(ibi - T) / static_cast<float>(T);
+                if (phaseError > 0.5f) phaseError = 0.5f;
+                if (phaseError < -0.5f) phaseError = -0.5f;
+                float correction = pllKp * phaseError * static_cast<float>(T);
+                pllPhaseIntegral_ = clampf(0.95f * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
+                correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
+                int maxShift = T / 4;
+                int shift = static_cast<int>(correction);
+                if (shift > maxShift) shift = maxShift;
+                if (shift < -maxShift) shift = -maxShift;
+                lastBeatSample_ += shift;
+            }
+
+            if (beatCount_ < 65535) beatCount_++;
+            beatDetected = true;
+            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+            updateBeatStability(nowMs);
+            lastFiredBeatPredicted_ = true;
+
+            // Beat-boundary tempo update
+            if (pendingBeatPeriod_ > 0 && !(particleFilterEnabled && pfInitialized_)) {
+                beatPeriodSamples_ = pendingBeatPeriod_;
+                pendingBeatPeriod_ = -1;
+            }
+
+            // Octave check (same as detectBeat)
+            if (octaveCheckEnabled && !(particleFilterEnabled && pfInitialized_)) {
+                beatsSinceOctaveCheck_++;
+                if (beatsSinceOctaveCheck_ >= octaveCheckBeats) {
+                    checkOctaveAlternative();
+                    beatsSinceOctaveCheck_ = 0;
+                }
+            }
+
+            // Metrical contrast check (v48)
+            if (metricalCheckEnabled) {
+                beatsSinceMetricalCheck_++;
+                if (beatsSinceMetricalCheck_ >= metricalCheckBeats) {
+                    checkMetricalContrast();
+                    beatsSinceMetricalCheck_ = 0;
+                }
+            }
+
+            // Update ensemble detector with tempo hint (adaptive cooldown)
+            ensemble_.getFusion().setTempoHint(bpm_);
+        }
+    }
+
+    // Confidence decay
+    if (!beatDetected) cbssConfidence_ *= beatConfidenceDecay;
+
+    // Update timeToNextBeat_ for serial streaming compatibility
+    // (Multi-agent doesn't use countdown for beat detection, but streaming needs this)
+    int timeFromLastBeat = sampleCounter_ - lastBeatSample_;
+    timeToNextBeat_ = T - timeFromLastBeat;
+    if (timeToNextBeat_ < 0) timeToNextBeat_ = 0;
+
+    // Phase derivation (identical to detectBeat)
+    float newPhase = static_cast<float>(sampleCounter_ - lastBeatSample_) / static_cast<float>(T);
+    newPhase = fmodf(newPhase, 1.0f);
+    if (newPhase < 0.0f) newPhase += 1.0f;
+    if (!isfinite(newPhase)) newPhase = 0.0f;
+    phase_ = newPhase;
+
+    predictNextBeat(nowMs);
+}
+
+void AudioController::checkMetricalContrast() {
+    int T = beatPeriodSamples_;
+    if (T < 10) return;
+
+    // Compare OSS at beat positions vs midpoints over last 8 beats
+    float beatSum = 0.0f, midSum = 0.0f;
+    int count = 0;
+    int lookback = T * 8;
+    if (lookback > sampleCounter_) lookback = sampleCounter_;
+    int W = 3; // ±3 frame window for peak search
+
+    for (int offset = 0; offset < lookback && count < 8; offset += T) {
+        // Beat position: strongest OSS near expected beat time
+        float beatPeak = 0.0f;
+        for (int d = -W; d <= W; d++) {
+            int idx = sampleCounter_ - 1 - offset + d;
+            if (idx >= 0) {
+                float v = ossBuffer_[idx % OSS_BUFFER_SIZE];
+                if (v > beatPeak) beatPeak = v;
+            }
+        }
+        // Midpoint position: strongest OSS near T/2 between beats
+        float midPeak = 0.0f;
+        for (int d = -W; d <= W; d++) {
+            int idx = sampleCounter_ - 1 - offset - T/2 + d;
+            if (idx >= 0) {
+                float v = ossBuffer_[idx % OSS_BUFFER_SIZE];
+                if (v > midPeak) midPeak = v;
+            }
+        }
+        beatSum += beatPeak;
+        midSum += midPeak;
+        count++;
+    }
+
+    if (count >= 3 && midSum > 0.01f) {
+        float contrast = beatSum / midSum;
+        if (contrast < metricalMinRatio) {
+            // Weak metrical contrast → possibly wrong octave
+            checkOctaveAlternative();
+        }
+    }
+}
+
 void AudioController::detectBeat() {
     uint32_t nowMs = time_.millis();
 
@@ -2498,7 +2804,7 @@ void AudioController::detectBeat() {
                 float correction = pllKp * phaseError * static_cast<float>(T);
 
                 // Integral: accumulate persistent bias (leaky integrator, tau ~20 beats)
-                pllPhaseIntegral_ = 0.95f * pllPhaseIntegral_ + phaseError;
+                pllPhaseIntegral_ = clampf(0.95f * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
                 correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
 
                 // Apply correction to lastBeatSample_ (clamp to ±T/4 to prevent large jumps)
@@ -2536,6 +2842,15 @@ void AudioController::detectBeat() {
             }
 
             // (phase alignment checker removed v44 — net-negative on 18-track validation)
+
+            // Metrical contrast check: trigger octave correction on weak beat/midpoint contrast (v48)
+            if (metricalCheckEnabled) {
+                beatsSinceMetricalCheck_++;
+                if (beatsSinceMetricalCheck_ >= metricalCheckBeats) {
+                    checkMetricalContrast();
+                    beatsSinceMetricalCheck_ = 0;
+                }
+            }
         }
 
         // Always reset timers (even if suppressed) to prevent re-firing stale countdown.
