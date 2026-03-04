@@ -348,6 +348,7 @@ void SerialConsole::registerRhythmSettings() {
         "3:2 octave folding: fold comb evidence from 2L/3 into L (v44)");
     settings_.registerBool("sesquicheck", &audioCtrl_->sesquiCheckEnabled, "rhythm",
         "3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44)");
+    // bisnap requires onsetSnapWindow > 0 to have any effect (snap logic is skipped when window=0)
     settings_.registerBool("bisnap", &audioCtrl_->bidirectionalSnap, "rhythm",
         "Bidirectional onset snap: delay beat 3 frames for forward snap window (v44)");
     // (harmonicsesqui registration removed v44 — feature deleted)
@@ -379,6 +380,26 @@ void SerialConsole::registerRhythmSettings() {
         "OSS/mean ratio above this = high onset confidence (v45)", 1.5f, 10.0f);
     settings_.registerFloat("tightconflo", &audioCtrl_->tightnessConfThreshLow, "rhythm",
         "OSS/mean ratio below this = low onset confidence (v45)", 0.5f, 3.0f);
+
+    // Multi-agent beat tracking (v48)
+    settings_.registerBool("multiagent", &audioCtrl_->multiAgentEnabled, "rhythm",
+        "Multi-agent phase competition: 8 agents at different phases compete (v48)");
+    settings_.registerFloat("agentdecay", &audioCtrl_->agentDecay, "rhythm",
+        "Agent score EMA decay (lower=faster adaptation) (v48)", 0.7f, 0.95f);
+    settings_.registerUint8("agentinitbeats", &audioCtrl_->agentInitBeats, "rhythm",
+        "Initialize agents after N beats (v48)", 2, 8);
+
+    // Anti-harmonic 3rd comb (v48)
+    settings_.registerFloat("percivalw3", &audioCtrl_->percivalWeight3, "rhythm",
+        "3rd harmonic SUBTRACT weight: suppress 3:2 ratio confusion (v48)", 0.0f, 1.0f);
+
+    // Metrical contrast check (v48)
+    settings_.registerBool("metricalcheck", &audioCtrl_->metricalCheckEnabled, "rhythm",
+        "Metrical contrast: trigger octave check on weak beat/midpoint contrast (v48)");
+    settings_.registerFloat("metricalminratio", &audioCtrl_->metricalMinRatio, "rhythm",
+        "Min beat/midpoint onset strength ratio (v48)", 1.0f, 5.0f);
+    settings_.registerUint8("metricalcheckbeats", &audioCtrl_->metricalCheckBeats, "rhythm",
+        "Check metrical contrast every N beats (v48)", 2, 8);
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -412,6 +433,8 @@ void SerialConsole::registerRhythmSettings() {
         "Hi-res bass via Goertzel", onHiResBassChanged);
     settings_.registerBool("bfpeakpick", &bf.peakPickEnabled, "bandflux",
         "Local-max peak picking (SuperFlux-style, Phase 2.6)");
+    settings_.registerBool("bfprewhiten", &bf.usePreWhitenMags, "bandflux",
+        "Use pre-whitened magnitudes (bypass triple-compression, v47)");
 
     // Bayesian tempo fusion weights (v18+)
     settings_.registerFloat("bayeslambda", &audioCtrl_->bayesLambda, "bayesian",
@@ -496,6 +519,8 @@ void SerialConsole::registerRhythmSettings() {
         "Whitening peak decay per frame (0.99-0.999)", 0.9f, 0.9999f);
     settings_.registerFloat("whitenfloor", &spectral.whitenFloor, "spectral",
         "Whitening noise floor", 0.0001f, 0.1f);
+    settings_.registerBool("whitenbassbypass", &spectral.whitenBassBypass, "spectral",
+        "Skip whitening for bass bins 1-6 (preserve kick contrast, v47)");
     settings_.registerBool("compenabled", &spectral.compressorEnabled, "spectral",
         "Soft-knee compressor");
     settings_.registerFloat("compthresh", &spectral.compThresholdDb, "spectral",
@@ -1253,6 +1278,15 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->tightnessConfThreshHigh = 3.0f;
         audioCtrl_->tightnessConfThreshLow = 1.5f;
 
+        // Multi-agent beat tracking (v48)
+        audioCtrl_->multiAgentEnabled = false;
+        audioCtrl_->agentDecay = 0.85f;
+        audioCtrl_->agentInitBeats = 3;
+        audioCtrl_->percivalWeight3 = 0.0f;
+        audioCtrl_->metricalCheckEnabled = false;
+        audioCtrl_->metricalMinRatio = 1.5f;
+        audioCtrl_->metricalCheckBeats = 4;
+
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
         audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)
         audioCtrl_->pfBeatSigma = 0.05f;
@@ -1275,6 +1309,7 @@ void SerialConsole::restoreDefaults() {
         spectral.compressorEnabled = true;
         spectral.whitenDecay = 0.997f;
         spectral.whitenFloor = 0.001f;
+        spectral.whitenBassBypass = false;
         spectral.compThresholdDb = -30.0f;
         spectral.compRatio = 3.0f;
         spectral.compKneeDb = 15.0f;
@@ -1299,6 +1334,7 @@ void SerialConsole::restoreDefaults() {
         bf.perBandThreshEnabled = false;
         bf.setHiResBass(false);
         bf.peakPickEnabled = true;
+        bf.usePreWhitenMags = true;
         audioCtrl_->getEnsemble().getBassSpectral().enabled = false;
     }
 
@@ -1697,9 +1733,10 @@ void SerialConsole::streamTick() {
         Serial.print(F("}"));
 
         // AudioController telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"bt":12345,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
         // conf = CBSS confidence, bc = beat count, q = beat event (phase wrap)
+        // bt = firmware millis() at beat (only when q=1 and timestamp>0)
         // e = energy, p = pulse, cb = CBSS value, oss = onset strength
         // ttb = frames until next beat, bp = last beat was predicted (1) vs fallback (0)
         // od = onset density (onsets/second, EMA smoothed)
@@ -1726,6 +1763,11 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getBeatCount());
             Serial.print(F(",\"q\":"));
             Serial.print(beatEvent);
+            // Precise firmware beat timestamp (millis) for MCP latency reduction
+            if (beatEvent && audioCtrl_->getLastBeatTimeMs() > 0) {
+                Serial.print(F(",\"bt\":"));
+                Serial.print(audioCtrl_->getLastBeatTimeMs());
+            }
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));

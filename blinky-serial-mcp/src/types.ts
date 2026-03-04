@@ -34,6 +34,7 @@ export interface MusicModeState {
   conf: number;   // CBSS beat tracking confidence (0-1)
   bc: number;     // Beat count (tracked beats)
   q: number;      // Beat event (0 or 1, phase wrap)
+  bt?: number;    // Firmware millis() timestamp of last beat (only when q=1)
   e: number;      // Energy (0-1)
   p: number;      // Pulse (0-1)
   // Observability fields (always present in stream)
