@@ -127,7 +127,8 @@ struct AudioFrame {
     uint32_t timestampMs;     // Frame timestamp
 
     // Spectral data (from SharedSpectralAnalysis)
-    const float* magnitudes;  // FFT magnitude spectrum (128 bins)
+    const float* magnitudes;          // FFT magnitude spectrum (128 bins) — compressed + whitened
+    const float* preWhitenMagnitudes; // FFT magnitude spectrum (128 bins) — raw, no compression or whitening
     const float* phases;      // FFT phase spectrum (128 bins)
     const float* melBands;    // Mel-scaled bands (26 bands)
     int numBins;              // Number of FFT bins (128)
@@ -144,6 +145,7 @@ struct AudioFrame {
         , rawLevel(0.0f)
         , timestampMs(0)
         , magnitudes(nullptr)
+        , preWhitenMagnitudes(nullptr)
         , phases(nullptr)
         , melBands(nullptr)
         , numBins(0)

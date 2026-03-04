@@ -54,6 +54,7 @@ public:
     bool perBandThreshEnabled = false;   // Per-band independent detection
     bool hiResBassEnabled = false;       // Hi-res bass via Goertzel (runtime toggle)
     bool peakPickEnabled = true;         // Local-max peak picking (Phase 2.6, SuperFlux-style)
+    bool usePreWhitenMags = true;        // Use compressed-only (not whitened) magnitudes (v47)
 
     // === GETTER/SETTER API ===
     // Convenience wrappers. Some have side effects (setHiResBass resets bass history)

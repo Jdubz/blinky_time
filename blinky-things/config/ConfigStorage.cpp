@@ -255,6 +255,16 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tightnessHighMult = 1.3f;   // Multiplier when onset confidence LOW
     data_.music.tightnessConfThreshHigh = 3.0f;   // OSS/mean ratio for high confidence
     data_.music.tightnessConfThreshLow = 1.5f;    // OSS/mean ratio for low confidence
+
+    // Multi-agent beat tracking (v48)
+    data_.music.multiAgentEnabled = false;   // Disabled by default (A/B vs single CBSS)
+    data_.music.agentDecay = 0.85f;          // Agent score EMA decay
+    data_.music.agentInitBeats = 3;          // Initialize agents after N beats
+    data_.music.percivalWeight3 = 0.0f;      // Anti-harmonic 3rd comb (OFF by default)
+    data_.music.metricalCheckEnabled = false; // Metrical contrast check (OFF by default)
+    data_.music.metricalMinRatio = 1.5f;     // Min beat/midpoint strength ratio
+    data_.music.metricalCheckBeats = 4;      // Check every 4 beats
+
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
     data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
@@ -276,6 +286,7 @@ void ConfigStorage::loadSettingsDefaults() {
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
     data_.music.compressorEnabled = true;
+    data_.music.whitenBassBypass = false;     // Skip whitening for bass bins (v47)
     data_.music.whitenDecay = 0.997f;        // ~5s memory at 60fps
     data_.music.whitenFloor = 0.001f;        // Noise floor
     data_.music.compThresholdDb = -30.0f;    // dB threshold
@@ -301,6 +312,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.bandflux.perBandThreshEnabled = false;
     data_.bandflux.hiResBassEnabled = false;
     data_.bandflux.peakPickEnabled = true;
+    data_.bandflux.usePreWhitenMags = true;  // Bypass triple-compression (v47)
 
     data_.brightness = 100;
 }
@@ -585,7 +597,20 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.tightnessHighMult, 1.0f, 3.0f, F("tightnessHighMult"));
     validateFloat(data_.music.tightnessConfThreshHigh, 1.5f, 10.0f, F("tightnessConfThreshHigh"));
     validateFloat(data_.music.tightnessConfThreshLow, 0.5f, 3.0f, F("tightnessConfThreshLow"));
+    // Disable adaptive tightness if thresholds are inverted (high must exceed low)
+    if (data_.music.tightnessConfThreshHigh <= data_.music.tightnessConfThreshLow) {
+        data_.music.adaptiveTightnessEnabled = false;
+    }
     // adaptiveTightnessEnabled is bool — no range validation needed
+
+    // Multi-agent beat tracking (v48)
+    validateFloat(data_.music.agentDecay, 0.7f, 0.95f, F("agentDecay"));
+    VALIDATE_INT(data_.music.agentInitBeats, 2, 8, F("agentInitBeats"));
+    validateFloat(data_.music.percivalWeight3, 0.0f, 1.0f, F("percivalWeight3"));
+    validateFloat(data_.music.metricalMinRatio, 1.0f, 5.0f, F("metricalMinRatio"));
+    VALIDATE_INT(data_.music.metricalCheckBeats, 2, 8, F("metricalCheckBeats"));
+    // multiAgentEnabled, metricalCheckEnabled are bools — no range validation needed
+
     // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
@@ -638,7 +663,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.compMakeupDb, -10.0f, 30.0f, F("compMakeupDb"));
     validateFloat(data_.music.compAttackTau, 0.0001f, 0.1f, F("compAttackTau"));
     validateFloat(data_.music.compReleaseTau, 0.01f, 10.0f, F("compReleaseTau"));
-    // whitenEnabled, compressorEnabled are bools — no range validation needed
+    // whitenEnabled, compressorEnabled, whitenBassBypass are bools — no range validation needed
 
     // BandFlux detector validation (v29+)
     validateFloat(data_.bandflux.gamma, 1.0f, 100.0f, F("bfGamma"));
@@ -859,6 +884,16 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->tightnessHighMult = data_.music.tightnessHighMult;
         audioCtrl->tightnessConfThreshHigh = data_.music.tightnessConfThreshHigh;
         audioCtrl->tightnessConfThreshLow = data_.music.tightnessConfThreshLow;
+
+        // Multi-agent beat tracking (v48)
+        audioCtrl->multiAgentEnabled = data_.music.multiAgentEnabled;
+        audioCtrl->agentDecay = data_.music.agentDecay;
+        audioCtrl->agentInitBeats = data_.music.agentInitBeats;
+        audioCtrl->percivalWeight3 = data_.music.percivalWeight3;
+        audioCtrl->metricalCheckEnabled = data_.music.metricalCheckEnabled;
+        audioCtrl->metricalMinRatio = data_.music.metricalMinRatio;
+        audioCtrl->metricalCheckBeats = data_.music.metricalCheckBeats;
+
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->barPointerHmm = data_.music.barPointerHmm;
@@ -882,6 +917,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
         spectral.whitenEnabled = data_.music.whitenEnabled;
         spectral.compressorEnabled = data_.music.compressorEnabled;
+        spectral.whitenBassBypass = data_.music.whitenBassBypass;
         spectral.whitenDecay = data_.music.whitenDecay;
         spectral.whitenFloor = data_.music.whitenFloor;
         spectral.compThresholdDb = data_.music.compThresholdDb;
@@ -908,6 +944,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         bf.perBandThreshEnabled = data_.bandflux.perBandThreshEnabled;
         bf.setHiResBass(data_.bandflux.hiResBassEnabled);  // Side effect: resets bass history
         bf.peakPickEnabled = data_.bandflux.peakPickEnabled;
+        bf.usePreWhitenMags = data_.bandflux.usePreWhitenMags;
 
         // Sync BassSpectralAnalysis enabled state with hi-res bass setting
         BassSpectralAnalysis& bass = audioCtrl->getEnsemble().getBassSpectral();
@@ -1097,6 +1134,16 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.tightnessHighMult = audioCtrl->tightnessHighMult;
         data_.music.tightnessConfThreshHigh = audioCtrl->tightnessConfThreshHigh;
         data_.music.tightnessConfThreshLow = audioCtrl->tightnessConfThreshLow;
+
+        // Multi-agent beat tracking (v48)
+        data_.music.multiAgentEnabled = audioCtrl->multiAgentEnabled;
+        data_.music.agentDecay = audioCtrl->agentDecay;
+        data_.music.agentInitBeats = audioCtrl->agentInitBeats;
+        data_.music.percivalWeight3 = audioCtrl->percivalWeight3;
+        data_.music.metricalCheckEnabled = audioCtrl->metricalCheckEnabled;
+        data_.music.metricalMinRatio = audioCtrl->metricalMinRatio;
+        data_.music.metricalCheckBeats = audioCtrl->metricalCheckBeats;
+
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
         data_.music.barPointerHmm = audioCtrl->barPointerHmm;
@@ -1120,6 +1167,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
         data_.music.whitenEnabled = spectral.whitenEnabled;
         data_.music.compressorEnabled = spectral.compressorEnabled;
+        data_.music.whitenBassBypass = spectral.whitenBassBypass;
         data_.music.whitenDecay = spectral.whitenDecay;
         data_.music.whitenFloor = spectral.whitenFloor;
         data_.music.compThresholdDb = spectral.compThresholdDb;
@@ -1146,6 +1194,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.bandflux.perBandThreshEnabled = bf.perBandThreshEnabled;
         data_.bandflux.hiResBassEnabled = bf.hiResBassEnabled;
         data_.bandflux.peakPickEnabled = bf.peakPickEnabled;
+        data_.bandflux.usePreWhitenMags = bf.usePreWhitenMags;
     }
 
     saveToFlash();

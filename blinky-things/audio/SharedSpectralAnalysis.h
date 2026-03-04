@@ -82,6 +82,7 @@ public:
     bool whitenEnabled = true;
     float whitenDecay = 0.997f;    // Per-frame peak decay (~5s memory at 60fps)
     float whitenFloor = 0.001f;    // Floor to avoid amplifying noise
+    bool whitenBassBypass = false;  // Skip whitening for bass bins 1-6 (preserve kick contrast)
 
     // Soft-knee compressor (Giannoulis/Massberg/Reiss, JAES 2012)
     bool compressorEnabled = true;
@@ -134,6 +135,15 @@ public:
      * Valid after process() returns, until next process() call
      */
     const float* getMagnitudes() const { return magnitudes_; }
+
+    /**
+     * Get raw magnitude spectrum (128 bins) — NO compression, NO whitening
+     * Saved after computeMagnitudesAndPhases() but before applyCompressor().
+     * BandFlux already applies log(1+gamma*mag) internally, making upstream
+     * compression and whitening redundant. This matches how reference systems
+     * (SuperFlux, BTrack) feed their ODF: raw FFT magnitudes only.
+     */
+    const float* getPreWhitenMagnitudes() const { return preWhitenMagnitudes_; }
 
     /**
      * Get phase spectrum (128 bins, in radians [-pi, pi])
@@ -206,6 +216,7 @@ private:
 
     // Output buffers
     float magnitudes_[SpectralConstants::NUM_BINS];      // Compressed + whitened magnitudes (all detectors see this state)
+    float preWhitenMagnitudes_[SpectralConstants::NUM_BINS]; // Raw FFT magnitudes, no compression or whitening (for BandFlux)
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)

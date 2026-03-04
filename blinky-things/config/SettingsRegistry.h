@@ -24,9 +24,10 @@
  */
 
 // Maximum number of settings (adjust based on needs)
-// Current usage: ~178 settings (fire, water, lightning, effect, audio, agc, rhythm, cbss, ensemble, bandflux, spectral, pf)
-// Increased to 192 to cover all registered settings with headroom
-#define MAX_SETTINGS 192
+// Current usage: ~198 settings (fire, water, lightning, effect, audio, agc, rhythm, cbss, ensemble, bandflux, spectral, pf, v48 multi-agent)
+// Increased to 210 to cover all registered settings with headroom
+#define MAX_SETTINGS 210
+static_assert(MAX_SETTINGS <= 255, "MAX_SETTINGS exceeds uint8_t range of numSettings_");
 
 // Setting value types
 enum class SettingType : uint8_t {

@@ -56,7 +56,11 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         return DetectionResult::none();
     }
 
-    const float* magnitudes = frame.magnitudes;
+    // Use pre-whitened magnitudes when available to avoid triple-compression
+    // (compressor → whitening → BandFlux log compression). BandFlux's log(1+gamma*mag)
+    // already normalizes dynamic range, making upstream whitening redundant.
+    const float* magnitudes = (usePreWhitenMags && frame.preWhitenMagnitudes)
+                              ? frame.preWhitenMagnitudes : frame.magnitudes;
     int numBins = frame.numBins;
 
     // Clamp analysis range

@@ -51,6 +51,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , vReal_{}
     , vImag_{}
     , magnitudes_{}
+    , preWhitenMagnitudes_{}
     , phases_{}
     , prevMagnitudes_{}
     , melBands_{}
@@ -86,6 +87,7 @@ void SharedSpectralAnalysis::reset() {
     }
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         magnitudes_[i] = 0.0f;
+        preWhitenMagnitudes_[i] = 0.0f;
         phases_[i] = 0.0f;
         prevMagnitudes_[i] = 0.0f;
     }
@@ -134,6 +136,13 @@ void SharedSpectralAnalysis::process() {
 
     // Extract magnitudes and phases from FFT output
     computeMagnitudesAndPhases();
+
+    // Save raw FFT magnitudes BEFORE any processing for detectors that handle
+    // their own normalization (BandFlux uses log(1+gamma*mag) which is functionally
+    // equivalent to compression+whitening — applying upstream processing is redundant)
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        preWhitenMagnitudes_[i] = magnitudes_[i];
+    }
 
     // Frame-level soft-knee compression (normalizes gross signal level)
     applyCompressor();
@@ -361,6 +370,11 @@ void SharedSpectralAnalysis::whitenMagnitudes() {
         // Update running max: max(current, decayed previous)
         float decayedMax = binRunningMax_[i] * whitenDecay;
         binRunningMax_[i] = (current > decayedMax) ? current : decayedMax;
+
+        // Bass bypass: skip whitening for bins 1-6 (62-375 Hz) to preserve kick contrast
+        if (whitenBassBypass && i >= SpectralConstants::BASS_MIN_BIN && i <= SpectralConstants::BASS_MAX_BIN) {
+            continue;  // Keep compressed-only magnitude for bass bins
+        }
 
         // Normalize by running max (with floor to avoid amplifying noise)
         float maxVal = (binRunningMax_[i] > whitenFloor) ? binRunningMax_[i] : whitenFloor;
