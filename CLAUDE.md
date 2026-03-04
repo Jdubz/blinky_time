@@ -207,7 +207,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v46)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v50)
    - `SettingsRegistry.h/cpp` - 70+ tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -323,8 +323,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~21 KB total (20,872B measured; CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB)
-- Flash: ~270 KB firmware, ~30 KB settings storage
+- RAM: ~22 KB total (22,064B measured; CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB)
+- Flash: ~300 KB firmware, ~30 KB settings storage
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -379,7 +379,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ 3 device configurations (Hat, Tube, Bucket)
 
 **In Progress:**
-- Beat tracking octave disambiguation (v32 avg Beat F1 0.265, best-device 0.302 on 18 tracks; double-time lock at ~182 BPM remains primary bottleneck)
+- Beat tracking octave disambiguation (v50: templates + subbeat alternation implemented, default OFF, awaiting A/B validation)
 - Full hardware installation validation
 
 **Planned (Not Started):**
@@ -422,7 +422,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 46
+- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 50
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **ODF mean subtraction disabled** (v32): Raw ODF feeds ACF — global mean sub was destroying peak structure (+70% F1)
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0 (+13% F1)
@@ -431,6 +431,8 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
 - **HMM beat detection** (v46): Optional bar-pointer HMM position-0 wrap replaces CBSS countdown (`hmm=1`). Phase is explicit state variable. Tight transition matrix (`hmmLambda=0.05`) prevents octave jumps.
+- **Rhythmic pattern templates** (v50): Pearson correlation of CBSS vs 3 EDM bar templates for octave disambiguation (`templatecheck=0`, default OFF)
+- **Subbeat alternation** (v50): Odd/even energy ratio across 8 subbeat bins detects double-time lock (`subbeatcheck=0`, default OFF)
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Shared FFT + spectral pipeline**: All detectors share a single FFT → compressor → whitening chain
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

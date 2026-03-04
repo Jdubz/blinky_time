@@ -317,6 +317,8 @@ void SerialConsole::registerRhythmSettings() {
         "HMM tempo-normalized argmax (prevents slow-tempo bias)");
     settings_.registerFloat("hmmlambda", &audioCtrl_->hmmLambda, "rhythm",
         "HMM transition tightness (small=tight, prevents octave jumps) (v46)", 0.01f, 1.0f);
+    settings_.registerFloat("fwdobslambda", &audioCtrl_->fwdObsLambda, "rhythm",
+        "Continuous ODF observation strength (v49: higher=sharper beat/non-beat)", 2.0f, 32.0f);
     settings_.registerBool("particlefilter", &audioCtrl_->particleFilterEnabled, "rhythm",
         "Particle filter beat tracking (v38, A/B vs CBSS)");
     settings_.registerFloat("pfnoise", &audioCtrl_->pfNoise, "rhythm",
@@ -400,6 +402,22 @@ void SerialConsole::registerRhythmSettings() {
         "Min beat/midpoint onset strength ratio (v48)", 1.0f, 5.0f);
     settings_.registerUint8("metricalcheckbeats", &audioCtrl_->metricalCheckBeats, "rhythm",
         "Check metrical contrast every N beats (v48)", 2, 8);
+
+    // Rhythmic pattern templates (v50)
+    settings_.registerBool("templatecheck", &audioCtrl_->templateCheckEnabled, "rhythm",
+        "Rhythmic pattern template octave check (v50)");
+    settings_.registerFloat("templatescoreratio", &audioCtrl_->templateScoreRatio, "rhythm",
+        "Min template score ratio to switch tempo (v50)", 1.0f, 3.0f);
+    settings_.registerUint8("templatecheckbeats", &audioCtrl_->templateCheckBeats, "rhythm",
+        "Check template match every N beats (v50)", 2, 8);
+
+    // Beat critic subbeat alternation (v50)
+    settings_.registerBool("subbeatcheck", &audioCtrl_->subbeatCheckEnabled, "rhythm",
+        "Beat critic subbeat alternation octave check (v50)");
+    settings_.registerFloat("alternationthresh", &audioCtrl_->alternationThresh, "rhythm",
+        "Subbeat odd/even ratio threshold (v50)", 0.3f, 3.0f);
+    settings_.registerUint8("subbeatcheckbeats", &audioCtrl_->subbeatCheckBeats, "rhythm",
+        "Check subbeat alternation every N beats (v50)", 2, 8);
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -1250,6 +1268,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->hmmContrast = 2.0f;           // v34: ODF power-law contrast
         audioCtrl_->hmmTempoNorm = true;          // v34: tempo-normalized argmax
         audioCtrl_->hmmLambda = 0.05f;            // v46: HMM transition tightness
+        audioCtrl_->fwdObsLambda = 8.0f;          // v49: continuous ODF observation strength
         audioCtrl_->cbssContrast = 1.0f;           // v37: ODF contrast before CBSS
         audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
         audioCtrl_->onsetSnapWindow = 8;           // v39: snap beat to strongest OSS in ±8 frames
@@ -1286,6 +1305,16 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->metricalCheckEnabled = false;
         audioCtrl_->metricalMinRatio = 1.5f;
         audioCtrl_->metricalCheckBeats = 4;
+
+        // Rhythmic pattern templates (v50)
+        audioCtrl_->templateCheckEnabled = false;
+        audioCtrl_->templateScoreRatio = 1.3f;
+        audioCtrl_->templateCheckBeats = 4;
+
+        // Beat critic subbeat alternation (v50)
+        audioCtrl_->subbeatCheckEnabled = false;
+        audioCtrl_->alternationThresh = 1.2f;
+        audioCtrl_->subbeatCheckBeats = 4;
 
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
         audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)

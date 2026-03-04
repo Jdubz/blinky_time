@@ -137,6 +137,8 @@ bool AudioController::begin(uint32_t sampleRate) {
     pendingBeatPeriod_ = -1;  // No pending tempo change
     beatsSinceOctaveCheck_ = 0;
     beatsSinceMetricalCheck_ = 0;  // Reset metrical contrast counter (v48)
+    beatsSinceTemplateCheck_ = 0;  // Reset template match counter (v50)
+    beatsSinceSubbeatCheck_ = 0;   // Reset subbeat alternation counter (v50)
     // Reset multi-agent state (v48)
     agentsInitialized_ = false;
     bestAgentIdx_ = 0;
@@ -2000,7 +2002,7 @@ void AudioController::buildHmmTransitionMatrix() {
 //
 // State: phaseAlpha_[0..period-1], circular. Position 0 = beat position.
 // Transition: deterministic advance (position = (position+1) % period).
-// Observation: Bernoulli — high onset at position 0, low elsewhere.
+// Observation: continuous ODF (v49) — lambda*odf at beat, (1-odf)/(lambda-1) elsewhere.
 
 void AudioController::updatePhaseTracker(float odf) {
     int period = tempoBinLags_[bayesBestBin_];
@@ -2017,17 +2019,19 @@ void AudioController::updatePhaseTracker(float odf) {
         phasePeriod_ = period;
     }
 
-    // Observation model: full Bernoulli with contrast.
-    // Position 0 gets obs = odf^contrast, others get obs = (1-odf)^contrast.
-    // Creates phase concentration but also a ghost peak at position 0 during onsets.
-    // The tracking filter below prevents ghost-peak jumps from causing double-fires.
+    // Observation model: continuous ODF (v49, madmom-style).
+    // Position 0 gets obs = lambda * odf, others get obs = (1 - odf) / (lambda - 1).
+    // Gentler than Bernoulli: ODF=0 gives ~14:1 against beat (at lambda=8), not 99:1.
+    // Note: hmmContrast (default 2.0) is applied as power-law BEFORE lambda scaling.
+    // With both active, discrimination is sharper than lambda alone (e.g., ODF=0.5 →
+    // squared to 0.25, then 8*0.25=2.0 vs 0.75/7≈0.107, ~19:1 ratio vs 4:1 without contrast).
     float odfClamped = clampf(odf, 0.0f, 1.0f);
     if (hmmContrast != 1.0f && odfClamped > 0.0f) {
         odfClamped = powf(odfClamped, hmmContrast);
     }
     static constexpr float MIN_OBS_PROBABILITY = 0.01f; // Floor to prevent log(0)
-    float obsBeat = (odfClamped > MIN_OBS_PROBABILITY) ? odfClamped : MIN_OBS_PROBABILITY;
-    float obsNonBeat = ((1.0f - odfClamped) > MIN_OBS_PROBABILITY) ? (1.0f - odfClamped) : MIN_OBS_PROBABILITY;
+    float obsBeat = fmaxf(fwdObsLambda * odfClamped, MIN_OBS_PROBABILITY);
+    float obsNonBeat = fmaxf((1.0f - odfClamped) / (fwdObsLambda - 1.0f), MIN_OBS_PROBABILITY);
 
     // Save wrap probability (last position → position 0)
     float wrapProb = phaseAlpha_[period - 1];
@@ -2729,6 +2733,179 @@ void AudioController::checkMetricalContrast() {
     }
 }
 
+// ===== RHYTHMIC PATTERN TEMPLATE CHECK (v50) =====
+// Krebs/Böck/Widmer ISMIR 2013: correlate OSS against EDM bar templates
+// at candidate tempos T, T/2, 2T. Switch if alternative scores better.
+void AudioController::checkTemplateMatch() {
+    int T = beatPeriodSamples_;
+    if (T < 10 || ossCount_ < 2) return;
+
+    // 3 EDM templates (16 slots/bar), pre-normalized to zero-mean for Pearson correlation.
+    // Note: only rotationally-symmetric patterns (fourOnFloor) work reliably without
+    // bar-phase alignment. Asymmetric templates (standard44, breakbeat) are included for
+    // future use but provide noisier correlation without phase-aligned binning.
+    // fourOnFloor mean=0.325, standard44 mean=0.275, breakbeat mean=0.15625
+    static const float tmplZM[3][16] = {
+        // Four-on-the-floor (zero-mean): emphasis at 0,4,8,12
+        { 0.675f,-0.225f,-0.225f,-0.225f, 0.675f,-0.225f,-0.225f,-0.225f,
+          0.675f,-0.225f,-0.225f,-0.225f, 0.675f,-0.225f,-0.225f,-0.225f},
+        // Standard 4/4 (zero-mean): strong 0,8; medium 4,12
+        { 0.725f,-0.175f,-0.175f,-0.175f, 0.225f,-0.175f,-0.175f,-0.175f,
+          0.725f,-0.175f,-0.175f,-0.175f, 0.225f,-0.175f,-0.175f,-0.175f},
+        // Breakbeat (zero-mean): kick at 0, snare at 8
+        { 0.84375f,-0.05625f,-0.05625f,-0.05625f, -0.05625f,-0.05625f,-0.05625f,-0.05625f,
+          0.44375f,-0.05625f,-0.05625f,-0.05625f, -0.05625f,-0.05625f,-0.05625f,-0.05625f}
+    };
+
+    // Score CBSS at a given period: bin into 16 bar-phase slots over ~2 bars.
+    // Uses cbssBuffer_ (indexed by sampleCounter_) not ossBuffer_ (indexed by ossWriteIdx_)
+    // for correct lookback after counter renormalization. Same pattern as checkOctaveAlternative.
+    auto scoreAtPeriod = [&](int period) -> float {
+        if (period < 10 || period > MAX_BEAT_PERIOD) return -1.0f;
+        int barLen = period * 4;  // 4 beats per bar
+        int historyNeeded = barLen * 2;  // ~2 bars
+        if (historyNeeded > sampleCounter_) historyNeeded = sampleCounter_;
+        if (historyNeeded < period * 2) return -1.0f;  // Need at least 2 beats
+
+        float slots[16] = {0};
+        int slotCounts[16] = {0};
+        for (int i = 0; i < historyNeeded; i++) {
+            int idx = sampleCounter_ - 1 - i;
+            if (idx < 0) break;
+            float val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
+            // Map position within bar to slot 0-15
+            int barPos = i % barLen;
+            int slot = (barPos * 16) / barLen;
+            if (slot >= 16) slot = 15;
+            slots[slot] += val;
+            slotCounts[slot]++;
+        }
+
+        // Normalize slots to means
+        for (int i = 0; i < 16; i++) {
+            if (slotCounts[i] > 0) slots[i] /= slotCounts[i];
+        }
+
+        // Compute mean of slot values
+        float slotMean = 0.0f;
+        for (int i = 0; i < 16; i++) slotMean += slots[i];
+        slotMean /= 16.0f;
+
+        // Pearson correlation with each precomputed zero-mean template, return best
+        float bestCorr = -1.0f;
+        for (int t = 0; t < 3; t++) {
+            float num = 0.0f, denomA = 0.0f, denomB = 0.0f;
+            for (int s = 0; s < 16; s++) {
+                float a = slots[s] - slotMean;
+                float b = tmplZM[t][s];
+                num += a * b;
+                denomA += a * a;
+                denomB += b * b;
+            }
+            float denom = sqrtf(denomA * denomB);
+            if (denom > 1e-6f) {
+                float corr = num / denom;
+                if (corr > bestCorr) bestCorr = corr;
+            }
+        }
+        return bestCorr;
+    };
+
+    // Validate candidate period: within buffer and BPM range
+    auto isValidPeriod = [&](int period) -> bool {
+        if (period < 10 || period >= OSS_BUFFER_SIZE / 2) return false;
+        float candidateBpm = OSS_FRAMES_PER_MIN / static_cast<float>(period);
+        return candidateBpm >= bpmMin && candidateBpm <= bpmMax;
+    };
+
+    float scoreT = scoreAtPeriod(T);
+    if (scoreT < -0.5f) return;  // Not enough data
+
+    int halfT = T / 2;
+    int doubleT = T * 2;
+
+    // Check half-time (gate on scoreT > 0 to avoid spurious switches when correlation is negative)
+    if (scoreT > 0.0f && isValidPeriod(halfT)) {
+        float scoreHalf = scoreAtPeriod(halfT);
+        if (scoreHalf > scoreT * templateScoreRatio && scoreHalf > 0.1f) {
+            switchTempo(halfT);
+            return;
+        }
+    }
+
+    // Check double-time
+    if (scoreT > 0.0f && isValidPeriod(doubleT)) {
+        float scoreDouble = scoreAtPeriod(doubleT);
+        if (scoreDouble > scoreT * templateScoreRatio && scoreDouble > 0.1f) {
+            switchTempo(doubleT);
+        }
+    }
+}
+
+// ===== BEAT CRITIC SUBBEAT ALTERNATION CHECK (v50) =====
+// Davies ISMIR 2010: divide beats into 8 subbeat bins, compare even vs odd energy.
+// High alternation at T but low at T/2 → switch to T/2 (current T is double-time).
+void AudioController::checkSubbeatAlternation() {
+    int T = beatPeriodSamples_;
+    if (T < 10 || ossCount_ < 2) return;
+
+    // Compute alternation ratio at a given period.
+    // Uses cbssBuffer_ (indexed by sampleCounter_) for correct lookback after renormalization.
+    auto alternationAtPeriod = [&](int period) -> float {
+        if (period < 10 || period > MAX_BEAT_PERIOD) return 0.0f;
+        int historyNeeded = period * 8;  // ~8 beats of history
+        if (historyNeeded > sampleCounter_) historyNeeded = sampleCounter_;
+        if (historyNeeded < period * 2) return 0.0f;  // Need at least 2 beats
+
+        float evenSum = 0.0f, oddSum = 0.0f;
+        int evenCount = 0, oddCount = 0;
+        for (int i = 0; i < historyNeeded; i++) {
+            int idx = sampleCounter_ - 1 - i;
+            if (idx < 0) break;
+            float val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
+            // Map position within beat to subbeat bin 0-7
+            int beatPos = i % period;
+            int bin = (beatPos * 8) / period;
+            if (bin >= 8) bin = 7;
+            if (bin % 2 == 0) {
+                evenSum += val;
+                evenCount++;
+            } else {
+                oddSum += val;
+                oddCount++;
+            }
+        }
+
+        if (evenCount > 0) evenSum /= evenCount;
+        if (oddCount > 0) oddSum /= oddCount;
+
+        // Alternation = odd/even ratio (high = strong off-beat energy relative to on-beat)
+        return oddSum / (evenSum + 1e-6f);
+    };
+
+    float altT = alternationAtPeriod(T);
+
+    int halfT = T / 2;
+
+    // Validate halfT is within BPM range before evaluating
+    bool halfTValid = (halfT >= 10 && halfT < OSS_BUFFER_SIZE / 2);
+    if (halfTValid) {
+        float candidateBpm = OSS_FRAMES_PER_MIN / static_cast<float>(halfT);
+        halfTValid = (candidateBpm >= bpmMin && candidateBpm <= bpmMax);
+    }
+
+    if (!halfTValid) return;
+
+    float altHalf = alternationAtPeriod(halfT);
+
+    // High alternation at T but low at T/2 → current T is double-time, switch down.
+    // Only downward switching is implemented: the half-time case (switch up to 2T)
+    // has a weak discriminative signal and risks spurious tempo doubling.
+    if (altT > alternationThresh && altHalf < alternationThresh) {
+        switchTempo(halfT);
+    }
+}
+
 void AudioController::detectBeat() {
     uint32_t nowMs = time_.millis();
 
@@ -2849,6 +3026,24 @@ void AudioController::detectBeat() {
                 if (beatsSinceMetricalCheck_ >= metricalCheckBeats) {
                     checkMetricalContrast();
                     beatsSinceMetricalCheck_ = 0;
+                }
+            }
+
+            // Rhythmic pattern template check (v50)
+            if (templateCheckEnabled) {
+                beatsSinceTemplateCheck_++;
+                if (beatsSinceTemplateCheck_ >= templateCheckBeats) {
+                    checkTemplateMatch();
+                    beatsSinceTemplateCheck_ = 0;
+                }
+            }
+
+            // Beat critic subbeat alternation check (v50)
+            if (subbeatCheckEnabled) {
+                beatsSinceSubbeatCheck_++;
+                if (beatsSinceSubbeatCheck_ >= subbeatCheckBeats) {
+                    checkSubbeatAlternation();
+                    beatsSinceSubbeatCheck_ = 0;
                 }
             }
         }

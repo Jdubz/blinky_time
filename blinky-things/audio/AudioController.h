@@ -423,6 +423,7 @@ public:
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
     bool hmmTempoNorm = true;            // Normalize argmax by period (prevents slow-tempo bias)
     float hmmLambda = 0.05f;             // HMM transition tightness (small=tight, prevents octave jumps) (v46)
+    float fwdObsLambda = 8.0f;           // Continuous ODF observation strength (v49: higher=sharper beat/non-beat)
 
     // === PARTICLE FILTER BEAT TRACKING (v38) ===
     // Maintains 100 tempo/phase hypotheses; octave variants injected at resampling
@@ -499,6 +500,20 @@ public:
     bool multiAgentEnabled = false;         // Enable multi-agent phase competition (A/B vs single CBSS)
     float agentDecay = 0.85f;              // Agent score EMA decay (0.7-0.95, lower = faster adaptation)
     uint8_t agentInitBeats = 3;            // Initialize agents after N beats (2-8)
+
+    // === RHYTHMIC PATTERN TEMPLATES (v50, Krebs/Böck/Widmer ISMIR 2013) ===
+    // Bins OSS into 16 bar-phase slots at candidate tempos, correlates against
+    // EDM templates. Switches tempo if alternative scores better by templateScoreRatio.
+    bool templateCheckEnabled = false;         // Enable template-based octave check
+    float templateScoreRatio = 1.3f;           // Min score ratio to switch (1.0-3.0)
+    uint8_t templateCheckBeats = 4;            // Check every N beats (2-8)
+
+    // === BEAT CRITIC SUBBEAT ALTERNATION (v50, Davies ISMIR 2010) ===
+    // Divides beats into 8 subbeat bins, compares even vs odd energy.
+    // High alternation at T but low at T/2 → switch to T/2.
+    bool subbeatCheckEnabled = false;          // Enable subbeat alternation check
+    float alternationThresh = 1.2f;            // Odd/even ratio threshold (0.3-3.0)
+    uint8_t subbeatCheckBeats = 4;             // Check every N beats (2-8)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
@@ -660,6 +675,8 @@ private:
     // Octave check state (Phase 3)
     uint16_t beatsSinceOctaveCheck_ = 0; // Beats since last octave check
     uint16_t beatsSinceMetricalCheck_ = 0; // Beats since last metrical contrast check (v48)
+    uint16_t beatsSinceTemplateCheck_ = 0; // Beats since last template match check (v50)
+    uint16_t beatsSinceSubbeatCheck_ = 0;  // Beats since last subbeat alternation check (v50)
 
     // (beatsSincePhaseCheck_ removed v44 — phase check feature removed)
     // (plpPhase_/plpConfidence_ removed v44 — PLP feature removed)
@@ -819,6 +836,8 @@ private:
     void initBeatAgents();
     void detectBeatMultiAgent();
     void checkMetricalContrast();
+    void checkTemplateMatch();         // Rhythmic pattern template check (v50)
+    void checkSubbeatAlternation();    // Beat critic subbeat alternation (v50)
 
     // Particle filter beat tracking (v38)
     void initParticleFilter();

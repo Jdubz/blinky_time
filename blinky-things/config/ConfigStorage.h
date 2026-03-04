@@ -79,7 +79,9 @@ public:
     // Version 46: HMM beat detection (position-0 wrap replaces CBSS countdown when hmm=1)
     // Version 47: Pre-whitening BandFlux path + bass whitening bypass (signal chain decompression)
     // Version 48: Multi-agent beat tracking, anti-harmonic 3rd comb, metrical contrast check
-    static const uint8_t SETTINGS_VERSION = 48;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 49: Continuous ODF observation model for phase tracker (fwdObsLambda, replaces Bernoulli)
+    // Version 50: Rhythmic pattern templates + beat critic subbeat alternation (octave disambiguation)
+    static const uint8_t SETTINGS_VERSION = 50;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -257,6 +259,7 @@ public:
         float hmmContrast;             // HMM ODF power-law contrast (v34)
         bool hmmTempoNorm;             // HMM tempo-normalized argmax (v34)
         float hmmLambda;               // HMM transition tightness (v46: 0.01-1.0, default 0.05)
+        float fwdObsLambda;            // Continuous ODF observation strength (v49: 2-32, default 8)
 
         // Particle filter beat tracking (v38)
         bool particleFilterEnabled;    // Enable PF (A/B vs CBSS+Bayesian)
@@ -315,6 +318,16 @@ public:
         bool metricalCheckEnabled;      // Enable metrical contrast check
         uint8_t agentInitBeats;         // Initialize agents after N beats (2-8)
         uint8_t metricalCheckBeats;     // Check every N beats (2-8)
+
+        // Rhythmic pattern templates (v50)
+        float templateScoreRatio;       // Min score ratio to switch tempo (1.0-3.0)
+        bool templateCheckEnabled;      // Enable template-based octave check
+        uint8_t templateCheckBeats;     // Check every N beats (2-8)
+
+        // Beat critic subbeat alternation (v50)
+        float alternationThresh;        // Odd/even ratio threshold (0.3-3.0)
+        bool subbeatCheckEnabled;       // Enable subbeat alternation check
+        uint8_t subbeatCheckBeats;      // Check every N beats (2-8)
     };
 
     struct StoredBandFluxParams {
@@ -434,8 +447,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 312,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (312 bytes = 63 floats + 10 uint8 + 26 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 332,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (332 bytes = 66 floats + 12 uint8 + 28 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
