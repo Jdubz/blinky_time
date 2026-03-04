@@ -2077,9 +2077,6 @@ void AudioController::detectHmmBeat() {
     uint32_t nowMs = time_.millis();
     bool beatDetected = false;
 
-    int T = beatPeriodSamples_;
-    if (T < 10) T = 10;
-
     // v46b: Position-0 wrap detection with T/2 cooldown.
     // Beat fires when the phase tracker's argmax wraps from near period-1 to near 0.
     // With correct periods (T≈30-33), ghost peaks are negligible because
@@ -2603,7 +2600,7 @@ void AudioController::detectBeatMultiAgent() {
 
     // Fire beat when best agent just fired
     bool beatDetected = false;
-    BeatAgent& best = beatAgents_[bestAgentIdx_];
+    const BeatAgent& best = beatAgents_[bestAgentIdx_];
     if (best.justFired) {
         // CBSS threshold gate (prevent beats during silence)
         float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];
