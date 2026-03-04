@@ -983,7 +983,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             track_dir: {
               type: 'string',
-              description: 'Directory containing tracks (default: music/edm/ relative to project root)',
+              description: 'Directory containing tracks (default: blinky-test-player/music/edm/)',
             },
             port_commands: {
               type: 'object',
@@ -2826,7 +2826,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const valNumRuns = Math.max(1, Math.min(10, valRunsParam || 3));
 
         // Discover tracks
-        const defaultTrackDir = join(__dirname, '..', '..', 'music', 'edm');
+        const defaultTrackDir = join(__dirname, '..', '..', 'blinky-test-player', 'music', 'edm');
         const trackDir = valTrackDir || defaultTrackDir;
         let allTracks = discoverTracks(trackDir);
         if (allTracks.length === 0) throw new Error(`No tracks found in ${trackDir}`);
