@@ -13,7 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { DeviceManager } from './device-manager.js';
 import type { AudioSample, MusicModeState } from './types.js';
-import { spawn, execSync, type ChildProcess } from 'child_process';
+import { spawn, exec, type ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { writeFileSync, mkdirSync, existsSync, statSync, readFileSync, readdirSync } from 'fs';
@@ -37,18 +37,19 @@ let activeFFplay: ChildProcess | null = null;
  * Kill any orphan ffplay processes. Called before every test to prevent
  * overlapping audio (all devices share the same speakers).
  */
-function killOrphanAudio(): void {
+async function killOrphanAudio(): Promise<void> {
   // Kill our tracked child first
   if (activeFFplay && !activeFFplay.killed) {
     activeFFplay.kill('SIGKILL');
     activeFFplay = null;
   }
   // Also kill any system-wide ffplay (catches orphans from crashed/aborted runs)
-  try {
-    execSync('pkill -9 ffplay 2>/dev/null', { stdio: 'ignore' });
-  } catch {
-    // pkill returns non-zero if no processes matched — that's fine
-  }
+  await new Promise<void>((resolve) => {
+    exec('pkill -9 ffplay', (err) => {
+      // pkill returns non-zero if no processes matched — that's fine
+      resolve();
+    });
+  });
 }
 
 // Ensure test results directory exists
@@ -2382,7 +2383,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_music_test': {
-        killOrphanAudio();
+        await killOrphanAudio();
         const {
           audio_file: audioFile,
           ground_truth: groundTruthFile,
@@ -2600,7 +2601,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_music_test_multi': {
-        killOrphanAudio();
+        await killOrphanAudio();
         const {
           ports: multiPorts,
           audio_file: multiAudioFile,
@@ -2827,7 +2828,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_validation_suite': {
-        killOrphanAudio();
+        await killOrphanAudio();
         const {
           ports: valPorts,
           runs: valRunsParam,

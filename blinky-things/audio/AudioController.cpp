@@ -2842,7 +2842,7 @@ void AudioController::checkTemplateMatch() {
 }
 
 // ===== BEAT CRITIC SUBBEAT ALTERNATION CHECK (v50) =====
-// Davies ISMIR 2010: divide beats into 8 subbeat bins, compare even vs odd energy.
+// Davies ISMIR 2010: divide beats into subbeatBins subbeat bins, compare even vs odd energy.
 // High alternation at T but low at T/2 → switch to T/2 (current T is double-time).
 void AudioController::checkSubbeatAlternation() {
     int T = beatPeriodSamples_;
@@ -3155,7 +3155,7 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     uint32_t elapsed = nowMs - onsetDensityWindowStart_;
     if (elapsed >= 1000) {
         float rawDensity = (float)onsetCountInWindow_ * (1000.0f / (float)elapsed);
-        // EMA: 70/30 blend (matches periodicityStrength_ pattern)
+        // EMA using periodicityBlend (shared with periodicityStrength_ smoothing)
         onsetDensity_ = onsetDensity_ * periodicityBlend + rawDensity * (1.0f - periodicityBlend);
         onsetCountInWindow_ = 0;
         onsetDensityWindowStart_ = nowMs;

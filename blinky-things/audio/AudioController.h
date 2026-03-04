@@ -509,7 +509,7 @@ public:
     uint8_t templateCheckBeats = 4;            // Check every N beats (2-8)
 
     // === BEAT CRITIC SUBBEAT ALTERNATION (v50, Davies ISMIR 2010) ===
-    // Divides beats into 8 subbeat bins, compares even vs odd energy.
+    // Divides beats into subbeatBins subbeat bins, compares even vs odd energy.
     // High alternation at T but low at T/2 → switch to T/2.
     bool subbeatCheckEnabled = false;          // Enable subbeat alternation check
     float alternationThresh = 1.2f;            // Odd/even ratio threshold (0.3-3.0)

@@ -420,7 +420,7 @@ void SerialConsole::registerRhythmSettings() {
         "Check subbeat alternation every N beats (v50)", 2, 8);
 
     // Hidden calibration constants (v51)
-    settings_.registerFloat("templateminscor", &audioCtrl_->templateMinScore, "rhythm",
+    settings_.registerFloat("templateminscore", &audioCtrl_->templateMinScore, "rhythm",
         "Min template correlation to consider switch (v51)", 0.0f, 1.0f);
     settings_.registerUint8("subbeatbins", &audioCtrl_->subbeatBins, "rhythm",
         "Subbeat alternation bin count (v51)", 4, 16);
