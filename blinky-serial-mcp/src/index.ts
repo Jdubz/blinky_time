@@ -27,6 +27,9 @@ const TEST_PLAYER_PATH = join(__dirname, '..', '..', 'blinky-test-player', 'dist
 // Path to test results directory
 const TEST_RESULTS_DIR = join(__dirname, '..', '..', 'test-results');
 
+// Gap between runs/tracks to let AGC and detectors settle
+const INTER_RUN_GAP_MS = 5000;
+
 // Ensure test results directory exists
 function ensureTestResultsDir(): void {
   if (!existsSync(TEST_RESULTS_DIR)) {
@@ -72,7 +75,8 @@ function computeBpmMetrics(avgBpm: number, expectedBpm: number): { accuracy: num
   return { accuracy, error };
 }
 
-/** Compute mean, std, min, max of a numeric array. */
+/** Compute mean, std, min, max of a numeric array.
+ *  Returns zeros for empty arrays — callers filter upstream so this rarely triggers. */
 function computeStats(values: number[]): { mean: number; std: number; min: number; max: number } {
   if (values.length === 0) return { mean: 0, std: 0, min: 0, max: 0 };
   const mean = values.reduce((s, v) => s + v, 0) / values.length;
@@ -102,13 +106,13 @@ function roundStats(s: { mean: number; std: number; min: number; max: number }) 
  * @param detections - Transient detections with timestampMs relative to audio start
  * @param gtHits - Ground truth hits with time in seconds and strength
  * @param audioDurationMs - Total audio duration for filtering
- * @returns Estimated latency in milliseconds
+ * @returns Estimated latency in milliseconds, or null if insufficient data
  */
 function estimateAudioLatency(
   detections: Array<{ timestampMs: number; strength: number }>,
   gtHits: Array<{ time: number; strength: number; expectTrigger?: boolean }>,
   audioDurationMs: number,
-): number {
+): number | null {
   // 1. Filter to strong detections only (strength > 0.5)
   const strongDetections = detections.filter(d => d.strength > 0.5);
 
@@ -125,28 +129,16 @@ function estimateAudioLatency(
   // 3. Compute offsets with tighter 350ms window
   const offsets: number[] = [];
   for (const det of useDetections) {
-    let minDist = Infinity;
-    let closestOffset = 0;
+    let bestSignedOffset = Infinity;
     for (const hit of useExpected) {
       const hitMs = hit.time * 1000;
       const offset = det.timestampMs - hitMs;
-      if (Math.abs(offset) < Math.abs(minDist)) {
-        minDist = offset;
-        closestOffset = offset;
-      }
+      if (Math.abs(offset) < Math.abs(bestSignedOffset)) bestSignedOffset = offset;
     }
-    if (Math.abs(minDist) < 350) {
-      offsets.push(closestOffset);
-    }
+    if (Math.abs(bestSignedOffset) < 350) offsets.push(bestSignedOffset);
   }
 
-  if (offsets.length === 0) return 0;
-
-  // Fallback to median if too few offsets for histogram
-  if (offsets.length < 3) {
-    offsets.sort((a, b) => a - b);
-    return offsets[Math.floor(offsets.length / 2)];
-  }
+  if (offsets.length < 3) return null;
 
   // 4. Histogram-peak estimation (10ms buckets, find mode)
   const BUCKET = 10;
@@ -180,7 +172,7 @@ function estimateAudioLatency(
 
 /** Discover audio tracks with matching ground truth annotations in a directory. */
 function discoverTracks(dir: string): Array<{ name: string; audioFile: string; groundTruth: string }> {
-  if (!existsSync(dir)) return [];
+  if (!existsSync(dir)) throw new Error(`Track directory does not exist: ${dir}`);
   const files = readdirSync(dir);
   const tracks: Array<{ name: string; audioFile: string; groundTruth: string }> = [];
   for (const f of files) {
@@ -209,7 +201,7 @@ type GroundTruth = {
 
 /** Result of scoring a single device run against ground truth. */
 interface DeviceRunScore {
-  audioLatencyMs: number;
+  audioLatencyMs: number | null;
   audioDurationSec: number;
   timingOffsetMs: number;
   beatTracking: {
@@ -262,19 +254,21 @@ function scoreDeviceRun(
   const timingOffsetMs = audioStartTime - testData.startTime;
 
   // Adjust timestamps relative to audio start
-  let detections = testData.transients
+  const detections = testData.transients
     .map(d => ({ ...d, timestampMs: d.timestampMs - timingOffsetMs }))
     .filter(d => d.timestampMs >= 0);
-  let musicStates = testData.musicStates
+  const musicStates = testData.musicStates
     .map(s => ({ ...s, timestampMs: s.timestampMs - timingOffsetMs }))
     .filter(s => s.timestampMs >= 0);
-  let beatEvents = testData.beatEvents
+  const beatEvents = testData.beatEvents
     .map(b => ({ ...b, timestampMs: b.timestampMs - timingOffsetMs }))
     .filter(b => b.timestampMs >= 0);
 
   // Compute audio latency using robust estimator
   const audioDurationMs = rawDuration - timingOffsetMs;
   const audioLatencyMs = estimateAudioLatency(detections, gtData.hits, audioDurationMs);
+  // Use 0 offset for beat adjustment when latency estimation fails (insufficient data)
+  const latencyCorrectionMs = audioLatencyMs ?? 0;
 
   // Beat tracking evaluation
   const audioDurationSec = audioDurationMs / 1000;
@@ -287,14 +281,14 @@ function scoreDeviceRun(
     .map(h => h.time);
 
   // Estimated beats from device
-  const estBeats = beatEvents.map(b => (b.timestampMs - audioLatencyMs) / 1000);
+  const estBeats = beatEvents.map(b => (b.timestampMs - latencyCorrectionMs) / 1000);
 
   // F-measure
   const { f1: beatF1, precision: beatPrecision, recall: beatRecall, tp: beatTp } =
     matchEventsF1(estBeats, refBeats, BEAT_TOLERANCE_SEC);
 
   // Transient F1
-  const estTransients = detections.map(d => (d.timestampMs - audioLatencyMs) / 1000);
+  const estTransients = detections.map(d => (d.timestampMs - latencyCorrectionMs) / 1000);
   const { f1: transientF1, precision: transientPrecision, recall: transientRecall } =
     matchEventsF1(estTransients, refBeats, BEAT_TOLERANCE_SEC);
 
@@ -394,7 +388,7 @@ function scoreDeviceRun(
   // Diagnostics
   const transientBeatOffsets: number[] = [];
   detections.forEach((det) => {
-    const detSec = (det.timestampMs - audioLatencyMs) / 1000;
+    const detSec = (det.timestampMs - latencyCorrectionMs) / 1000;
     let bestOffset = Infinity;
     for (const ref of refBeats) {
       const offset = detSec - ref;
@@ -2482,7 +2476,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               timestamp: new Date(timestamp).toISOString(),
               durationMs: duration,
               timingOffsetMs: score.timingOffsetMs,
-              audioLatencyMs: Math.round(score.audioLatencyMs),
+              audioLatencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null,
               beatTracking: { ...score.beatTracking, toleranceSec: 0.07 },
               transientTracking: score.transientTracking,
               musicMode: score.musicMode,
@@ -2495,6 +2489,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             writeFileSync(detailsPath, JSON.stringify(fullResults, null, 2));
             if (numRuns === 1) {
+              // Only write latest for single-run (multi-run results are in per-run detail files)
               writeFileSync(join(TEST_RESULTS_DIR, 'latest-music.json'), JSON.stringify(fullResults, null, 2));
             }
 
@@ -2524,13 +2519,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 extra: score.diagnostics.beatVsReference.extra,
                 missed: score.diagnostics.beatVsReference.missed,
               },
-              timing: { latencyMs: Math.round(score.audioLatencyMs) },
+              timing: { latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null },
               detailsFile: detailsFilename,
             });
 
-            // Inter-run gap (5 seconds, except after last run)
+            // Inter-run gap
             if (runIdx < numRuns - 1) {
-              await new Promise(r => setTimeout(r, 5000));
+              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
             }
           }
 
@@ -2555,7 +2550,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               beatRecall: roundStats(computeStats(perRunScores.map(s => s.beatTracking.recall))),
               bpmAccuracy: roundStats(computeStats(perRunScores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
               transientF1: roundStats(computeStats(perRunScores.map(s => s.transientTracking.f1))),
-              latencyMs: roundStats(computeStats(perRunScores.map(s => s.audioLatencyMs))),
+              latencyMs: roundStats(computeStats(perRunScores.filter(s => s.audioLatencyMs !== null).map(s => s.audioLatencyMs!))),
             };
 
             return {
@@ -2707,7 +2702,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
             // Inter-run gap
             if (runIdx < multiNumRuns - 1) {
-              await new Promise(r => setTimeout(r, 5000));
+              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
             }
           }
 
@@ -2733,7 +2728,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   bpmAccuracy: score.musicMode.bpmAccuracy,
                 },
                 timing: {
-                  latencyMs: Math.round(score.audioLatencyMs),
+                  latencyMs: score.audioLatencyMs !== null ? Math.round(score.audioLatencyMs) : null,
                   beatOffsetMedianMs: score.diagnostics.beatOffsetStats?.median ?? null,
                 },
               };
@@ -2762,14 +2757,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   beatF1: roundStats(computeStats(scores.map(s => s.beatTracking.f1))),
                   bpmAccuracy: roundStats(computeStats(scores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
                   transientF1: roundStats(computeStats(scores.map(s => s.transientTracking.f1))),
-                  latencyMs: roundStats(computeStats(scores.map(s => s.audioLatencyMs))),
+                  latencyMs: roundStats(computeStats(scores.filter(s => s.audioLatencyMs !== null).map(s => s.audioLatencyMs!))),
                 },
                 perRun: scores.map((s, i) => ({
                   run: i + 1,
                   beatF1: s.beatTracking.f1,
                   transientF1: s.transientTracking.f1,
                   bpmAccuracy: s.musicMode.bpmAccuracy,
-                  latencyMs: Math.round(s.audioLatencyMs),
+                  latencyMs: s.audioLatencyMs !== null ? Math.round(s.audioLatencyMs) : null,
                 })),
               };
             });
@@ -2900,6 +2895,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               trackDeviceScores.set(p, []);
             }
 
+            let trackFailed = false;
             for (let runIdx = 0; runIdx < valNumRuns; runIdx++) {
               // Start recording on all devices
               for (const { session } of valSessions) {
@@ -2944,6 +2940,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   error: playResult.error,
                   perDevice: [],
                 });
+                trackFailed = true;
                 // Stop recording on all devices (discard data)
                 for (const { session } of valSessions) {
                   session.stopTestRecording();
@@ -2960,8 +2957,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
               // Inter-run gap
               if (runIdx < valNumRuns - 1) {
-                await new Promise(r => setTimeout(r, 5000));
+                await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
               }
+            }
+
+            // Skip aggregation if track playback failed (error already pushed above)
+            if (trackFailed) {
+              if (trackIdx < allTracks.length - 1) {
+                await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
+              }
+              continue;
             }
 
             // Aggregate per-device for this track
@@ -2983,9 +2988,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               perDevice,
             });
 
-            // Inter-track gap (5 seconds)
+            // Inter-track gap
             if (trackIdx < allTracks.length - 1) {
-              await new Promise(r => setTimeout(r, 5000));
+              await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
             }
           }
 
@@ -3032,7 +3037,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   track: t.track,
                   bpm: t.bpm,
                   ...(t.error ? { error: t.error } : {}),
-                  perDevice: t.perDevice.map((d: any) => ({
+                  perDevice: t.perDevice.map(d => ({
                     port: d.port,
                     beatF1: d.aggregate.beatF1.mean,
                     bpmAccuracy: d.aggregate.bpmAccuracy.mean,

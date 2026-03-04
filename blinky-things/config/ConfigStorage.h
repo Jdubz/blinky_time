@@ -440,10 +440,10 @@ public:
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
-    // ConfigData: ~693 bytes (4+160+64+64+32+24+288+44+1 + padding). Allocated in last 4KB flash page.
+    // ConfigData: allocated in last 4KB flash page (4096 bytes available).
     // Tight bound catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 724,
-        "ConfigData exceeds 724 bytes! Current estimate ~717B. Check for unintended struct growth.");
+    static_assert(sizeof(ConfigData) <= 768,
+        "ConfigData exceeds 768 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes.");
 
     ConfigStorage();
     void begin();

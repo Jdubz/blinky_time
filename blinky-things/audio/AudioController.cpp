@@ -950,7 +950,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             if (percivalWeight3 > 0.0f) {
                 int harm3Idx = 3 * lag - minLag;
                 if (harm3Idx >= 0 && harm3Idx < harmonicCorrelationSize) {
-                    correlationAtLag[li] -= percivalWeight3 * correlationAtLag[harm3Idx];
+                    correlationAtLag[li] = fmaxf(0.0f, correlationAtLag[li] - percivalWeight3 * correlationAtLag[harm3Idx]);
                 }
             }
         }

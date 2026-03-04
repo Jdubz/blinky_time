@@ -312,7 +312,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.bandflux.perBandThreshEnabled = false;
     data_.bandflux.hiResBassEnabled = false;
     data_.bandflux.peakPickEnabled = true;
-    data_.bandflux.usePreWhitenMags = true;  // Bypass triple-compression (v47)
+    data_.bandflux.usePreWhitenMags = true; // Matches reference arch; tested neutral (v47)
 
     data_.brightness = 100;
 }

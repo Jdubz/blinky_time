@@ -65,7 +65,7 @@ export class DeviceSession {
     this.serial.on('music', (state: MusicModeState) => {
       this.lastMusicState = state;
 
-      // Establish firmware time offset from first beat timestamp
+      // Establish firmware time offset from first beat event in music stream (bt field when q=1)
       if (this.firmwareTimeOffset === null && state.bt !== undefined && state.bt > 0) {
         this.firmwareTimeOffset = Date.now() - state.bt;
       }
