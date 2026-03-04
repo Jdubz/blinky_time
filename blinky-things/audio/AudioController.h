@@ -512,7 +512,7 @@ public:
     // Divides beats into 8 subbeat bins, compares even vs odd energy.
     // High alternation at T but low at T/2 → switch to T/2.
     bool subbeatCheckEnabled = false;          // Enable subbeat alternation check
-    float alternationThresh = 0.8f;            // Odd/even ratio threshold (0.3-3.0)
+    float alternationThresh = 1.2f;            // Odd/even ratio threshold (0.3-3.0)
     uint8_t subbeatCheckBeats = 4;             // Check every N beats (2-8)
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===

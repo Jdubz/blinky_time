@@ -137,6 +137,8 @@ bool AudioController::begin(uint32_t sampleRate) {
     pendingBeatPeriod_ = -1;  // No pending tempo change
     beatsSinceOctaveCheck_ = 0;
     beatsSinceMetricalCheck_ = 0;  // Reset metrical contrast counter (v48)
+    beatsSinceTemplateCheck_ = 0;  // Reset template match counter (v50)
+    beatsSinceSubbeatCheck_ = 0;   // Reset subbeat alternation counter (v50)
     // Reset multi-agent state (v48)
     agentsInitialized_ = false;
     bestAgentIdx_ = 0;
@@ -2020,6 +2022,9 @@ void AudioController::updatePhaseTracker(float odf) {
     // Observation model: continuous ODF (v49, madmom-style).
     // Position 0 gets obs = lambda * odf, others get obs = (1 - odf) / (lambda - 1).
     // Gentler than Bernoulli: ODF=0 gives ~14:1 against beat (at lambda=8), not 99:1.
+    // Note: hmmContrast (default 2.0) is applied as power-law BEFORE lambda scaling.
+    // With both active, discrimination is sharper than lambda alone (e.g., ODF=0.5 →
+    // squared to 0.25, then 8*0.25=2.0 vs 0.75/7≈0.107, ~19:1 ratio vs 4:1 without contrast).
     float odfClamped = clampf(odf, 0.0f, 1.0f);
     if (hmmContrast != 1.0f && odfClamped > 0.0f) {
         odfClamped = powf(odfClamped, hmmContrast);
@@ -2735,31 +2740,31 @@ void AudioController::checkTemplateMatch() {
     int T = beatPeriodSamples_;
     if (T < 10 || ossCount_ < 2) return;
 
-    // 3 EDM templates (16 slots/bar, normalized to zero-mean for Pearson)
-    static const float fourOnFloor[16] = {1.0f,0.1f,0.1f,0.1f, 1.0f,0.1f,0.1f,0.1f,
-                                          1.0f,0.1f,0.1f,0.1f, 1.0f,0.1f,0.1f,0.1f};
-    static const float standard44[16]  = {1.0f,0.1f,0.1f,0.1f, 0.5f,0.1f,0.1f,0.1f,
-                                          1.0f,0.1f,0.1f,0.1f, 0.5f,0.1f,0.1f,0.1f};
-    static const float breakbeat[16]   = {1.0f,0.1f,0.1f,0.1f, 0.1f,0.1f,0.1f,0.1f,
-                                          0.6f,0.1f,0.1f,0.1f, 0.1f,0.1f,0.1f,0.1f};
-    static const float* const templates[3] = {fourOnFloor, standard44, breakbeat};
+    // 3 EDM templates (16 slots/bar), pre-normalized to zero-mean for Pearson correlation.
+    // Note: only rotationally-symmetric patterns (fourOnFloor) work reliably without
+    // bar-phase alignment. Asymmetric templates (standard44, breakbeat) are included for
+    // future use but provide noisier correlation without phase-aligned binning.
+    // fourOnFloor mean=0.325, standard44 mean=0.275, breakbeat mean=0.15625
+    static const float tmplZM[3][16] = {
+        // Four-on-the-floor (zero-mean): emphasis at 0,4,8,12
+        { 0.675f,-0.225f,-0.225f,-0.225f, 0.675f,-0.225f,-0.225f,-0.225f,
+          0.675f,-0.225f,-0.225f,-0.225f, 0.675f,-0.225f,-0.225f,-0.225f},
+        // Standard 4/4 (zero-mean): strong 0,8; medium 4,12
+        { 0.725f,-0.175f,-0.175f,-0.175f, 0.225f,-0.175f,-0.175f,-0.175f,
+          0.725f,-0.175f,-0.175f,-0.175f, 0.225f,-0.175f,-0.175f,-0.175f},
+        // Breakbeat (zero-mean): kick at 0, snare at 8
+        { 0.84375f,-0.05625f,-0.05625f,-0.05625f, -0.05625f,-0.05625f,-0.05625f,-0.05625f,
+          0.44375f,-0.05625f,-0.05625f,-0.05625f, -0.05625f,-0.05625f,-0.05625f,-0.05625f}
+    };
 
-    // Pre-compute zero-mean templates for Pearson correlation
-    // (done at runtime since they're small and this runs every 4 beats)
-    float tmplZM[3][16];
-    for (int t = 0; t < 3; t++) {
-        float sum = 0.0f;
-        for (int i = 0; i < 16; i++) sum += templates[t][i];
-        float tmplMean = sum / 16.0f;
-        for (int i = 0; i < 16; i++) tmplZM[t][i] = templates[t][i] - tmplMean;
-    }
-
-    // Score OSS at a given period: bin into 16 bar-phase slots over ~2 bars
+    // Score CBSS at a given period: bin into 16 bar-phase slots over ~2 bars.
+    // Uses cbssBuffer_ (indexed by sampleCounter_) not ossBuffer_ (indexed by ossWriteIdx_)
+    // for correct lookback after counter renormalization. Same pattern as checkOctaveAlternative.
     auto scoreAtPeriod = [&](int period) -> float {
         if (period < 10 || period > MAX_BEAT_PERIOD) return -1.0f;
         int barLen = period * 4;  // 4 beats per bar
         int historyNeeded = barLen * 2;  // ~2 bars
-        if (historyNeeded > ossCount_) historyNeeded = ossCount_;
+        if (historyNeeded > sampleCounter_) historyNeeded = sampleCounter_;
         if (historyNeeded < period * 2) return -1.0f;  // Need at least 2 beats
 
         float slots[16] = {0};
@@ -2767,12 +2772,12 @@ void AudioController::checkTemplateMatch() {
         for (int i = 0; i < historyNeeded; i++) {
             int idx = sampleCounter_ - 1 - i;
             if (idx < 0) break;
-            float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+            float val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
             // Map position within bar to slot 0-15
             int barPos = i % barLen;
             int slot = (barPos * 16) / barLen;
             if (slot >= 16) slot = 15;
-            slots[slot] += oss;
+            slots[slot] += val;
             slotCounts[slot]++;
         }
 
@@ -2786,13 +2791,13 @@ void AudioController::checkTemplateMatch() {
         for (int i = 0; i < 16; i++) slotMean += slots[i];
         slotMean /= 16.0f;
 
-        // Pearson correlation with each template, return best
+        // Pearson correlation with each precomputed zero-mean template, return best
         float bestCorr = -1.0f;
         for (int t = 0; t < 3; t++) {
             float num = 0.0f, denomA = 0.0f, denomB = 0.0f;
-            for (int i = 0; i < 16; i++) {
-                float a = slots[i] - slotMean;
-                float b = tmplZM[t][i];
+            for (int s = 0; s < 16; s++) {
+                float a = slots[s] - slotMean;
+                float b = tmplZM[t][s];
                 num += a * b;
                 denomA += a * a;
                 denomB += b * b;
@@ -2835,11 +2840,12 @@ void AudioController::checkSubbeatAlternation() {
     int T = beatPeriodSamples_;
     if (T < 10 || ossCount_ < 2) return;
 
-    // Compute alternation ratio at a given period
+    // Compute alternation ratio at a given period.
+    // Uses cbssBuffer_ (indexed by sampleCounter_) for correct lookback after renormalization.
     auto alternationAtPeriod = [&](int period) -> float {
         if (period < 10 || period > MAX_BEAT_PERIOD) return 0.0f;
         int historyNeeded = period * 8;  // ~8 beats of history
-        if (historyNeeded > ossCount_) historyNeeded = ossCount_;
+        if (historyNeeded > sampleCounter_) historyNeeded = sampleCounter_;
         if (historyNeeded < period * 2) return 0.0f;  // Need at least 2 beats
 
         float evenSum = 0.0f, oddSum = 0.0f;
@@ -2847,16 +2853,16 @@ void AudioController::checkSubbeatAlternation() {
         for (int i = 0; i < historyNeeded; i++) {
             int idx = sampleCounter_ - 1 - i;
             if (idx < 0) break;
-            float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+            float val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
             // Map position within beat to subbeat bin 0-7
             int beatPos = i % period;
             int bin = (beatPos * 8) / period;
             if (bin >= 8) bin = 7;
             if (bin % 2 == 0) {
-                evenSum += oss;
+                evenSum += val;
                 evenCount++;
             } else {
-                oddSum += oss;
+                oddSum += val;
                 oddCount++;
             }
         }
@@ -2873,20 +2879,11 @@ void AudioController::checkSubbeatAlternation() {
     int halfT = T / 2;
     float altHalf = alternationAtPeriod(halfT);
 
-    // High alternation at T but low at T/2 → current T is double-time, switch down
+    // High alternation at T but low at T/2 → current T is double-time, switch down.
+    // Only downward switching is implemented: the half-time case (switch up to 2T)
+    // has a weak discriminative signal and risks spurious tempo doubling.
     if (altT > alternationThresh && altHalf < alternationThresh) {
         switchTempo(halfT);
-        return;
-    }
-
-    // Check double-time too
-    int doubleT = T * 2;
-    if (doubleT <= MAX_BEAT_PERIOD) {
-        float altDouble = alternationAtPeriod(doubleT);
-        // High alternation at T but low at 2T → current T might be half-time
-        if (altT > alternationThresh && altDouble < alternationThresh) {
-            switchTempo(doubleT);
-        }
     }
 }
 

@@ -1313,7 +1313,7 @@ void SerialConsole::restoreDefaults() {
 
         // Beat critic subbeat alternation (v50)
         audioCtrl_->subbeatCheckEnabled = false;
-        audioCtrl_->alternationThresh = 0.8f;
+        audioCtrl_->alternationThresh = 1.2f;
         audioCtrl_->subbeatCheckBeats = 4;
 
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)

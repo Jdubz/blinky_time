@@ -1,8 +1,19 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 3, 2026 (v47 signal chain mitigation tested)*
+*Last Updated: March 4, 2026 (v50 rhythmic pattern templates + subbeat alternation)*
 
 ## Current Status
+
+### Completed (March 4, 2026)
+
+**v50 Rhythmic Pattern Templates + Subbeat Alternation — IMPLEMENTED, default OFF, awaiting A/B validation (SETTINGS_VERSION 50):**
+- Rhythmic pattern templates (Krebs/Böck/Widmer ISMIR 2013): Pearson correlation of CBSS history against 3 precomputed zero-mean EDM bar templates (16 slots/bar). Compares T vs T/2 and T vs 2T every 4 beats. Calls `switchTempo()` if alternative wins by `templateScoreRatio` (1.3). Settings: `templatecheck=0`, `templatescoreratio=1.3`, `templatecheckbeats=4`.
+- Beat Critic subbeat alternation (Davies ISMIR 2010): Bins CBSS into 8 subbeat slots, computes odd/even energy ratio. Strong alternation at T indicates double-time → switches to T/2. Only downward switching (upward branch removed as weak signal). Settings: `subbeatcheck=0`, `alternationthresh=1.2`, `subbeatcheckbeats=4`.
+- Both features default OFF pending A/B validation on slow tracks (breakbeat, reggaeton, dub) where 128 BPM gravity well occurs.
+- 300KB flash (37%), 22KB RAM (9%). 6 new settings.
+
+**v49 Continuous ODF Observation Model in CBSS Phase Tracker (SETTINGS_VERSION 49):**
+- Replaced Bernoulli observation model with continuous ODF observation in phase tracker. Addresses the key finding from v46 failure analysis.
 
 ### Completed (March 3, 2026)
 
@@ -231,41 +242,102 @@ BTrack has the same three mechanisms and the same fundamental limitation — it 
 **Tightness 8 vs BTrack's 5 — explained:**
 BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has noisier onsets, so higher tightness prevents noise from pulling phase incorrectly. The correct solution is **adaptive tightness** (lower when onset confidence high, higher when low), not a fixed value.
 
-#### Untried Techniques from Literature (Ranked by Effort)
+#### Untried Techniques from Literature (Ranked by Expected Impact)
 
-**For 128 BPM gravity well:**
-
-| # | Technique | Source | Effort | Expected Impact | Status |
-|---|-----------|--------|--------|----------------|--------|
-| 1a | **Percival ACF harmonic pre-enhancement** | Essentia `percivalenhanceharmonics.cpp` | ~50 ops, 0 memory | Addresses root cause — gives fundamental unique advantage | **v45 — +0.010 F1, marginal** |
-| 1b | **Anti-harmonic comb** | Speech F0 estimation | ~50 ops, 0 memory | More aggressive variant — subtracts higher harmonics | Not started |
-| 1c | **Metrical contrast check** | Beat Critic (ISMIR 2010) | ~20 ops/beat | New disambiguation signal — compares beat vs midpoint onsets | Not started |
-
-**For phase alignment:**
+**For phase alignment (PRIMARY bottleneck):**
 
 | # | Technique | Source | Effort | Expected Impact | Status |
 |---|-----------|--------|--------|----------------|--------|
-| 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +5-10% F1, addresses slow phase drift | **v45 — +0.031 F1, strongest feature** |
-| 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +3-7% F1, resolves 5 vs 8 dilemma | **v45 — +0.012 F1, marginal** |
-| 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | +5-10% F1, prevents off-beat phase pulls | Not started |
-| 4 | ~~1D joint tempo-phase HMM~~ | Krebs/Böck (ISMIR 2015), Heydari (ICASSP 2022) | ~14 KB RAM, ~2% CPU | ~~+15-25% F1~~ | **v46 — FAILED, all approaches regress** |
+| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~1.3 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **Not started — NEXT PRIORITY** |
+| 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +0.031 F1, addresses slow phase drift | **v45 — DONE, retained** |
+| 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +0.012 F1, resolves 5 vs 8 dilemma | **v45 — DONE, retained** |
+| 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | Low — minor refinement per literature | Deprioritized |
+
+**For 128 BPM gravity well (SECONDARY bottleneck):**
+
+| # | Technique | Source | Effort | Expected Impact | Status |
+|---|-----------|--------|--------|----------------|--------|
+| **B** | **Rhythmic pattern templates** | Krebs/Böck/Widmer (ISMIR 2013) | ~512 bytes, negligible CPU | **MEDIUM** — "drastically reduces octave errors" per paper | **v50 — IMPLEMENTED, default OFF, awaiting validation** |
+| **C** | **Beat Critic subbeat alternation** | Davies (ISMIR 2010) | ~256 bytes, negligible CPU | **MEDIUM** — different discriminative signal from metricalcheck | **v50 — IMPLEMENTED, default OFF, awaiting validation** |
+| 1a | **Percival ACF harmonic pre-enhancement** | Essentia `percivalenhanceharmonics.cpp` | ~50 ops, 0 memory | +0.010 F1, marginal | **v45 — DONE, retained** |
+| 1b | **Anti-harmonic comb (percivalw3)** | Speech F0 estimation | ~50 ops, 0 memory | Marginal, default OFF | **v48 — tested, marginal** |
+| 1c | **Metrical contrast check** | Beat Critic (ISMIR 2010) | ~20 ops/beat | Negative on full validation | **v48 — tested, default OFF** |
+
+**Technique A — Forward Filter with Continuous ODF Observation (DETAILED):**
+
+Replace CBSS countdown + onset snap + PLL with a 320-state forward filter (20 tempos × 16 phases) using BandFlux ODF as a continuous observation at every frame. This is the standard architecture for all systems achieving >60% F1.
+
+**How it works:** Each state (tempo_i, phase_j) receives a likelihood at every frame based on the current ODF value. At beat-zone positions (first 1/λ of period), high ODF = high likelihood. At non-beat positions, low ODF = high likelihood (confirms "no onset here, as expected"). The state with the highest accumulated probability determines both tempo and phase.
+
+**madmom observation model:**
+```
+P(ODF | beat position)     = ODF_value              // high ODF = evidence for beat here
+P(ODF | non-beat position) = (1 - ODF_value) / (λ-1) // low ODF = evidence for non-beat
+```
+
+**Why this differs from v46 (which failed):**
+
+| | v46 Bernoulli (FAILED) | Continuous ODF (proposed) |
+|---|---|---|
+| At beat, ODF=0.1 | P → 0.1 (near-catastrophic) | P = 0.1 (low but survivable) |
+| At beat, ODF=0.0 | P → 0 (tracker crashes) | P ≈ 0 (but other states fill in) |
+| Between beats, ODF=0.0 | P = 1.0 (binary certainty) | P = 1/λ ≈ 0.125 (proportional) |
+| Missing an onset | Probability collapses | Probability reduced gracefully |
+
+The v46 Bernoulli model treated onset detection as binary (onset or not). The continuous model uses the raw ODF value, so missing a beat is just weaker evidence, not a catastrophe. This is why madmom achieves 74% F1 on its forward (online) mode.
+
+**Implementation:**
+- State space: 20 tempo bins × 16 phase positions = 320 states
+- Per frame: advance all phase counters by 1, wrap at period boundary
+- Observation: compute log-likelihood for each state based on ODF and beat-zone membership
+- Transition: deterministic advance within-tempo; exponential penalty `exp(-λ * |ratio - 1|)` for tempo changes at beat boundaries only
+- Beat detection: state at phase position 0 with highest probability → beat fired
+- `observation_lambda = 8` (wider beat zone than madmom's 16 to accommodate noisy mic ODF)
+- RAM: 320 × 4 bytes = ~1.3 KB
+- CPU: 320 multiplications per frame at 66 Hz = negligible on 64 MHz
+- Replaces: CBSS + onset snap + PLL + octave check (single unified mechanism)
+
+**Technique B — Rhythmic Pattern Templates (DETAILED):**
+
+Pre-compute 2-3 EDM bar templates as onset distributions across one bar (32 time slots). Compare observed ODF pattern (accumulated over 4-8 beats) against templates at each candidate tempo. The tempo where the observed pattern best matches a template is preferred.
+
+**Templates:**
+- Template 1: Standard 4/4 kick (emphasis on 1,3)
+- Template 2: Four-on-the-floor (equal kicks on all 4 beats)
+- Template 3: Sparse/breakbeat (kick on 1, snare on 3)
+
+**Why this helps octave ambiguity:** At 96 BPM, the kick pattern fills a template one way. At 128 BPM (3:2), the same audio misaligns with all templates. Template correlation provides metrical-level evidence that ACF/comb cannot.
+
+**Technique C — Beat Critic Subbeat Alternation (DETAILED):**
+
+Divide each beat period into 16 bins, measure ODF energy in each (phase histogram). Compute alternation measure: ratio of even-bin to odd-bin energy. Strong alternation at period T but weak at T/2 indicates double-time tracking. Different discriminative signal from existing `checkOctaveAlternative` (CBSS score comparison) and `metricalcheck` (beat/midpoint ratio).
+
+Split into 2-4 spectral subbands for the histogram (kick energy vs hi-hat energy provide independent evidence).
 
 **Eliminated by research/testing:**
 - ~~Widen Rayleigh prior~~ — weak lever, doesn't overcome comb filter harmonics
-- ~~Stronger density penalty for 3:2~~ — fold32/sesquicheck tested in v44, no net benefit. Density can't distinguish 2.0 trans/beat (90 BPM) from 1.33 trans/beat (135 BPM)
+- ~~Stronger density penalty for 3:2~~ — fold32/sesquicheck tested in v44, no net benefit
 - ~~Lower cbssTightness (8→5)~~ — tested in v40, wrong for noisy mic audio
 - ~~PLP phase extraction~~ — tested in v42, OSS too noisy for analytical phase
 - ~~Bidirectional onset snap~~ — implemented in v44 as bisnap (+0.005 F1, near theoretical limit)
-- ~~1D joint tempo-phase HMM~~ — tested in v46, all approaches regress vs CBSS. Bernoulli obs model requires onset at every beat; fails on noisy mic audio
+- ~~Bernoulli observation model HMM~~ — tested in v46, all approaches regress vs CBSS. Binary onset/no-onset observation requires onset at every beat; fails on noisy mic audio. **NOTE: The continuous ODF observation model (technique A above) is fundamentally different and has NOT been tested.**
 - ~~Phase-only Bernoulli tracker~~ — tested in v46, argmax (F1=0.241), countdown (F1=0.265), deterministic counter (F1=0.195). All worse than CBSS (F1=0.366)
+- ~~Multi-agent beat tracking~~ — tested in v48, -4% on full 18-track validation. Strong on kick-prominent tracks but weak on sparse/ambient
+- ~~Anti-harmonic comb (percivalw3)~~ — tested in v48, marginal BPM improvement but no F1 improvement
+- ~~Metrical contrast check (metricalcheck)~~ — tested in v48, negative on full 18-track validation
+- ~~Signal chain mitigation (bfprewhiten, whitenbassbypass)~~ — tested in v47, BandFlux self-normalizes. Signal chain is NOT the F1 bottleneck
+- ~~Complex Spectral Difference for rhythm ODF~~ — eliminated by research. Phase too noisy via microphone in reverberant room (Dixon 2006)
 
 **Key references:**
-- Percival & Tzanetakis 2014 — Streamlined Tempo Estimation (IEEE/ACM TASLP)
+- Krebs, Böck & Widmer 2013 — Rhythmic Pattern Modeling for Beat and Downbeat Tracking (ISMIR)
 - Krebs, Böck & Widmer 2015 — Efficient State-Space Model for Joint Tempo and Meter Tracking (ISMIR)
 - Heydari et al. 2022 — Novel 1D State Space for Efficient Music Rhythmic Analysis (ICASSP)
 - Davies & Plumbley 2007 — Context-Dependent Beat Tracking (IEEE TASLP)
-- Beat Critic (ISMIR 2010) — Beat Tracking Octave Error Identification
+- Davies 2010 — Beat Critic: Beat Tracking Octave Error Identification (ISMIR)
 - Kim et al. 2007 — On-Line Musical Beat Tracking with PLL Technique
+- Percival & Tzanetakis 2014 — Streamlined Tempo Estimation (IEEE/ACM TASLP)
+- Heydari et al. 2024 — BeatNet+: Real-Time Rhythm Analysis for Diverse Music Audio (TISMIR)
+- Meier, Chiu & Müller 2024 — Real-Time PLP Beat Tracking (TISMIR)
 
 **Pre-Bayesian baseline (sequential override chain, Feb 21):** avg Beat F1 **0.472** on 9 tracks.
 **Bayesian v20 (all observations on, cbssthresh=0.4, Feb 24):** avg Beat F1 **0.421**.
@@ -339,7 +411,7 @@ Static Gaussian prior (centered at `bayesprior`, sigma `priorwidth`) multiplied 
 - sesquicheck (3:2 shadow CBSS check): No benefit alongside fold32 (v44)
 - harmonicsesqui (3:2 transition shortcuts): Catastrophic on 130+ BPM tracks (v44)
 - v37 HMM attempt: Failed due to too-few bins (20) and wrong observation model (flat across all states). (Mar 2026 research)
-- v46 HMM phase tracker (3 approaches): Bernoulli argmax wrap (F1=0.241), countdown (F1=0.265), deterministic counter (F1=0.195). All worse than CBSS (F1=0.366). Root cause: Bernoulli obs model requires onset at every beat position — real music doesn't have this. The HMM/probabilistic phase tracking architecture is fundamentally unsuited for noisy mic-in-room audio where onsets are sparse and irregular.
+- v46 HMM phase tracker with **Bernoulli obs model** (3 approaches): Bernoulli argmax wrap (F1=0.241), countdown (F1=0.265), deterministic counter (F1=0.195). All worse than CBSS (F1=0.366). Root cause: **Bernoulli observation model** (binary onset/no-onset) requires onset at every beat position. **NOTE:** This does NOT rule out probabilistic phase tracking with a **continuous ODF observation model** (madmom-style), which is fundamentally different and has not been tested. See untried technique A.
 - Sequential override chain: Features interact negatively, combined avg F1 dropped 0.472→0.381 (Feb 23)
 - Raw ACF observation in Bayesian: Sub-harmonic bias without inverse-lag normalization (Feb 25) — **fixed**: inverse-lag normalization added, then harmonic comb + Rayleigh prior added (v25), ACF weight raised to 0.8
 - Fourier tempogram at full weight without spectral processing: Mean normalization destroys discriminability (Feb 25) — **fixed**: spectral compressor+whitening (v23) enabled re-activation at weight 2.0 (v24)
@@ -577,24 +649,9 @@ At FFT-256/16kHz, kick drum fundamental (40-80 Hz) and bass guitar (80-250 Hz) c
 - **Expected impact:** Medium for kick-specific detection
 - **References:** Multi-resolution spectral flux (Bello 2005), Böck CNN multi-scale input (ICASSP 2014)
 
-#### 7e. Complex Spectral Difference for Rhythm ODF — MEDIUM PRIORITY
+#### 7e. Complex Spectral Difference for Rhythm ODF — ELIMINATED (Mar 2026 research)
 
-BTrack's default ODF is ComplexSpectralDifferenceHWR, which uses both magnitude AND phase:
-```
-phaseDeviation[k] = phase[k] - 2*prevPhase[k] + prevPhase2[k]
-CSD[k] = sqrt(mag[k]² + prevMag[k]² - 2*mag[k]*prevMag[k]*cos(phaseDeviation[k]))
-ODF = Σ max(0, CSD[k])  // half-wave rectified
-```
-
-This catches pitched onsets at constant energy (chord changes, bass note changes) that magnitude flux misses. We already compute and store phase data in SharedSpectralAnalysis.
-
-**Caveat:** Phase is extremely sensitive to noise. Through a microphone in a reverberant room, phase coherence degrades rapidly. Dixon (2006) found CSD only slightly outperforms spectral flux on clean recordings and performs worse on noisy signals. **Recommended for CBSS rhythm ODF only, not for visual transient detection.**
-
-- **Memory:** ~512 bytes (one extra frame of phase history)
-- **CPU:** ~0.5% (128 trig ops per frame)
-- **Effort:** Medium (~80 lines)
-- **Expected impact:** Uncertain for mic-in-room. Test as CBSS ODF only.
-- **References:** Duxbury 2003, Dixon 2006 (Onset Detection Revisited), Bello 2005
+BTrack's default ODF uses both magnitude AND phase (ComplexSpectralDifferenceHWR). Phase is extremely sensitive to noise — through a microphone in a reverberant room, phase coherence degrades rapidly. Dixon (2006) found CSD only slightly outperforms spectral flux on clean recordings and performs **worse** on noisy signals. Not worth implementing for our mic-in-room signal path.
 
 #### 7f. Log-Spaced Sub-Band Filterbank — MEDIUM PRIORITY
 
@@ -1074,7 +1131,7 @@ Current onset snap only looks backward from countdown expiry. If the actual onse
 
 **madmom achieves >74% F1** because it operates on studio-quality audio (clean line-in) where every beat has a clear spectral flux onset. Our mic-in-room setup has fundamentally different signal characteristics.
 
-**New priority:** Instead of replacing the beat tracker, improve signal quality feeding it.
+**IMPORTANT UPDATE (Mar 4, 2026):** The v46 failure was specific to the **Bernoulli observation model** (binary onset/no-onset), NOT the probabilistic phase tracking architecture. madmom's **continuous ODF observation model** uses the raw ODF value at every frame: high ODF at beat positions = evidence for beat, low ODF between beats = evidence for correct phase. Missing a beat degrades probability gracefully instead of catastrophically. This approach has NOT been tested. See "Untried Techniques" section (technique A) for details. The continuous ODF forward filter is the current Priority 1.
 
 #### 1e. Signal Chain Mitigation — TESTED, NEUTRAL (v47, Mar 3, 2026)
 
@@ -1136,8 +1193,8 @@ With FT+IOI disabled, reduce to `posterior = prediction × combObs × acfObs`. T
 
 ### Priority 3: Remaining Improvements
 
-#### 3a. Complex Spectral Difference ODF for CBSS
-BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phase. We have phase data in SharedSpectralAnalysis. For CBSS rhythm ODF only — phase too noisy via mic for visual transients. ~80 lines + 512 bytes.
+#### ~~3a. Complex Spectral Difference ODF for CBSS~~ — ELIMINATED (Mar 2026 research)
+Phase is too noisy via microphone in a reverberant room. Dixon (2006) found CSD performs **worse** than spectral flux on noisy signals. Not worth implementing for mic-in-room.
 
 #### 3b. Log-Spaced Sub-Band Filterbank
 Replace 3-band grouping with 12-24 log-spaced bands. Separates kick from bass, snare from vocals. ~80 lines.

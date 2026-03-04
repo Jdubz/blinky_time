@@ -272,7 +272,7 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // Beat critic subbeat alternation (v50)
     data_.music.subbeatCheckEnabled = false;  // OFF by default (A/B testing)
-    data_.music.alternationThresh = 0.8f;     // Odd/even ratio threshold
+    data_.music.alternationThresh = 1.2f;     // Odd/even ratio threshold
     data_.music.subbeatCheckBeats = 4;        // Check every 4 beats
 
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
