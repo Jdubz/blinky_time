@@ -265,6 +265,16 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.metricalMinRatio = 1.5f;     // Min beat/midpoint strength ratio
     data_.music.metricalCheckBeats = 4;      // Check every 4 beats
 
+    // Rhythmic pattern templates (v50)
+    data_.music.templateCheckEnabled = false; // OFF by default (A/B testing)
+    data_.music.templateScoreRatio = 1.3f;   // Min score ratio to switch
+    data_.music.templateCheckBeats = 4;      // Check every 4 beats
+
+    // Beat critic subbeat alternation (v50)
+    data_.music.subbeatCheckEnabled = false;  // OFF by default (A/B testing)
+    data_.music.alternationThresh = 0.8f;     // Odd/even ratio threshold
+    data_.music.subbeatCheckBeats = 4;        // Check every 4 beats
+
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
     data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
@@ -612,6 +622,16 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     VALIDATE_INT(data_.music.metricalCheckBeats, 2, 8, F("metricalCheckBeats"));
     // multiAgentEnabled, metricalCheckEnabled are bools — no range validation needed
 
+    // Rhythmic pattern templates (v50)
+    validateFloat(data_.music.templateScoreRatio, 1.0f, 3.0f, F("templateScoreRatio"));
+    VALIDATE_INT(data_.music.templateCheckBeats, 2, 8, F("templateCheckBeats"));
+    // templateCheckEnabled is bool — no range validation needed
+
+    // Beat critic subbeat alternation (v50)
+    validateFloat(data_.music.alternationThresh, 0.3f, 3.0f, F("alternationThresh"));
+    VALIDATE_INT(data_.music.subbeatCheckBeats, 2, 8, F("subbeatCheckBeats"));
+    // subbeatCheckEnabled is bool — no range validation needed
+
     // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
@@ -896,6 +916,16 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->metricalMinRatio = data_.music.metricalMinRatio;
         audioCtrl->metricalCheckBeats = data_.music.metricalCheckBeats;
 
+        // Rhythmic pattern templates (v50)
+        audioCtrl->templateCheckEnabled = data_.music.templateCheckEnabled;
+        audioCtrl->templateScoreRatio = data_.music.templateScoreRatio;
+        audioCtrl->templateCheckBeats = data_.music.templateCheckBeats;
+
+        // Beat critic subbeat alternation (v50)
+        audioCtrl->subbeatCheckEnabled = data_.music.subbeatCheckEnabled;
+        audioCtrl->alternationThresh = data_.music.alternationThresh;
+        audioCtrl->subbeatCheckBeats = data_.music.subbeatCheckBeats;
+
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->barPointerHmm = data_.music.barPointerHmm;
@@ -1146,6 +1176,16 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.metricalCheckEnabled = audioCtrl->metricalCheckEnabled;
         data_.music.metricalMinRatio = audioCtrl->metricalMinRatio;
         data_.music.metricalCheckBeats = audioCtrl->metricalCheckBeats;
+
+        // Rhythmic pattern templates (v50)
+        data_.music.templateCheckEnabled = audioCtrl->templateCheckEnabled;
+        data_.music.templateScoreRatio = audioCtrl->templateScoreRatio;
+        data_.music.templateCheckBeats = audioCtrl->templateCheckBeats;
+
+        // Beat critic subbeat alternation (v50)
+        data_.music.subbeatCheckEnabled = audioCtrl->subbeatCheckEnabled;
+        data_.music.alternationThresh = audioCtrl->alternationThresh;
+        data_.music.subbeatCheckBeats = audioCtrl->subbeatCheckBeats;
 
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;

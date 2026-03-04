@@ -403,6 +403,22 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerUint8("metricalcheckbeats", &audioCtrl_->metricalCheckBeats, "rhythm",
         "Check metrical contrast every N beats (v48)", 2, 8);
 
+    // Rhythmic pattern templates (v50)
+    settings_.registerBool("templatecheck", &audioCtrl_->templateCheckEnabled, "rhythm",
+        "Rhythmic pattern template octave check (v50)");
+    settings_.registerFloat("templatescoreratio", &audioCtrl_->templateScoreRatio, "rhythm",
+        "Min template score ratio to switch tempo (v50)", 1.0f, 3.0f);
+    settings_.registerUint8("templatecheckbeats", &audioCtrl_->templateCheckBeats, "rhythm",
+        "Check template match every N beats (v50)", 2, 8);
+
+    // Beat critic subbeat alternation (v50)
+    settings_.registerBool("subbeatcheck", &audioCtrl_->subbeatCheckEnabled, "rhythm",
+        "Beat critic subbeat alternation octave check (v50)");
+    settings_.registerFloat("alternationthresh", &audioCtrl_->alternationThresh, "rhythm",
+        "Subbeat odd/even ratio threshold (v50)", 0.3f, 3.0f);
+    settings_.registerUint8("subbeatcheckbeats", &audioCtrl_->subbeatCheckBeats, "rhythm",
+        "Check subbeat alternation every N beats (v50)", 2, 8);
+
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
     settings_.registerFloat("bfgamma", &bf.gamma, "bandflux",
@@ -1289,6 +1305,16 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->metricalCheckEnabled = false;
         audioCtrl_->metricalMinRatio = 1.5f;
         audioCtrl_->metricalCheckBeats = 4;
+
+        // Rhythmic pattern templates (v50)
+        audioCtrl_->templateCheckEnabled = false;
+        audioCtrl_->templateScoreRatio = 1.3f;
+        audioCtrl_->templateCheckBeats = 4;
+
+        // Beat critic subbeat alternation (v50)
+        audioCtrl_->subbeatCheckEnabled = false;
+        audioCtrl_->alternationThresh = 0.8f;
+        audioCtrl_->subbeatCheckBeats = 4;
 
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
         audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)

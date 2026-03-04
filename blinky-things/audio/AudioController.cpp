@@ -2728,6 +2728,168 @@ void AudioController::checkMetricalContrast() {
     }
 }
 
+// ===== RHYTHMIC PATTERN TEMPLATE CHECK (v50) =====
+// Krebs/Böck/Widmer ISMIR 2013: correlate OSS against EDM bar templates
+// at candidate tempos T, T/2, 2T. Switch if alternative scores better.
+void AudioController::checkTemplateMatch() {
+    int T = beatPeriodSamples_;
+    if (T < 10 || ossCount_ < 2) return;
+
+    // 3 EDM templates (16 slots/bar, normalized to zero-mean for Pearson)
+    static const float fourOnFloor[16] = {1.0f,0.1f,0.1f,0.1f, 1.0f,0.1f,0.1f,0.1f,
+                                          1.0f,0.1f,0.1f,0.1f, 1.0f,0.1f,0.1f,0.1f};
+    static const float standard44[16]  = {1.0f,0.1f,0.1f,0.1f, 0.5f,0.1f,0.1f,0.1f,
+                                          1.0f,0.1f,0.1f,0.1f, 0.5f,0.1f,0.1f,0.1f};
+    static const float breakbeat[16]   = {1.0f,0.1f,0.1f,0.1f, 0.1f,0.1f,0.1f,0.1f,
+                                          0.6f,0.1f,0.1f,0.1f, 0.1f,0.1f,0.1f,0.1f};
+    static const float* const templates[3] = {fourOnFloor, standard44, breakbeat};
+
+    // Pre-compute zero-mean templates for Pearson correlation
+    // (done at runtime since they're small and this runs every 4 beats)
+    float tmplZM[3][16];
+    for (int t = 0; t < 3; t++) {
+        float sum = 0.0f;
+        for (int i = 0; i < 16; i++) sum += templates[t][i];
+        float tmplMean = sum / 16.0f;
+        for (int i = 0; i < 16; i++) tmplZM[t][i] = templates[t][i] - tmplMean;
+    }
+
+    // Score OSS at a given period: bin into 16 bar-phase slots over ~2 bars
+    auto scoreAtPeriod = [&](int period) -> float {
+        if (period < 10 || period > MAX_BEAT_PERIOD) return -1.0f;
+        int barLen = period * 4;  // 4 beats per bar
+        int historyNeeded = barLen * 2;  // ~2 bars
+        if (historyNeeded > ossCount_) historyNeeded = ossCount_;
+        if (historyNeeded < period * 2) return -1.0f;  // Need at least 2 beats
+
+        float slots[16] = {0};
+        int slotCounts[16] = {0};
+        for (int i = 0; i < historyNeeded; i++) {
+            int idx = sampleCounter_ - 1 - i;
+            if (idx < 0) break;
+            float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+            // Map position within bar to slot 0-15
+            int barPos = i % barLen;
+            int slot = (barPos * 16) / barLen;
+            if (slot >= 16) slot = 15;
+            slots[slot] += oss;
+            slotCounts[slot]++;
+        }
+
+        // Normalize slots to means
+        for (int i = 0; i < 16; i++) {
+            if (slotCounts[i] > 0) slots[i] /= slotCounts[i];
+        }
+
+        // Compute mean of slot values
+        float slotMean = 0.0f;
+        for (int i = 0; i < 16; i++) slotMean += slots[i];
+        slotMean /= 16.0f;
+
+        // Pearson correlation with each template, return best
+        float bestCorr = -1.0f;
+        for (int t = 0; t < 3; t++) {
+            float num = 0.0f, denomA = 0.0f, denomB = 0.0f;
+            for (int i = 0; i < 16; i++) {
+                float a = slots[i] - slotMean;
+                float b = tmplZM[t][i];
+                num += a * b;
+                denomA += a * a;
+                denomB += b * b;
+            }
+            float denom = sqrtf(denomA * denomB);
+            if (denom > 1e-6f) {
+                float corr = num / denom;
+                if (corr > bestCorr) bestCorr = corr;
+            }
+        }
+        return bestCorr;
+    };
+
+    float scoreT = scoreAtPeriod(T);
+    if (scoreT < -0.5f) return;  // Not enough data
+
+    int halfT = T / 2;
+    int doubleT = T * 2;
+
+    // Check half-time
+    float scoreHalf = scoreAtPeriod(halfT);
+    if (scoreHalf > scoreT * templateScoreRatio && scoreHalf > 0.1f) {
+        switchTempo(halfT);
+        return;
+    }
+
+    // Check double-time
+    if (doubleT <= MAX_BEAT_PERIOD) {
+        float scoreDouble = scoreAtPeriod(doubleT);
+        if (scoreDouble > scoreT * templateScoreRatio && scoreDouble > 0.1f) {
+            switchTempo(doubleT);
+        }
+    }
+}
+
+// ===== BEAT CRITIC SUBBEAT ALTERNATION CHECK (v50) =====
+// Davies ISMIR 2010: divide beats into 8 subbeat bins, compare even vs odd energy.
+// High alternation at T but low at T/2 → switch to T/2 (current T is double-time).
+void AudioController::checkSubbeatAlternation() {
+    int T = beatPeriodSamples_;
+    if (T < 10 || ossCount_ < 2) return;
+
+    // Compute alternation ratio at a given period
+    auto alternationAtPeriod = [&](int period) -> float {
+        if (period < 10 || period > MAX_BEAT_PERIOD) return 0.0f;
+        int historyNeeded = period * 8;  // ~8 beats of history
+        if (historyNeeded > ossCount_) historyNeeded = ossCount_;
+        if (historyNeeded < period * 2) return 0.0f;  // Need at least 2 beats
+
+        float evenSum = 0.0f, oddSum = 0.0f;
+        int evenCount = 0, oddCount = 0;
+        for (int i = 0; i < historyNeeded; i++) {
+            int idx = sampleCounter_ - 1 - i;
+            if (idx < 0) break;
+            float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+            // Map position within beat to subbeat bin 0-7
+            int beatPos = i % period;
+            int bin = (beatPos * 8) / period;
+            if (bin >= 8) bin = 7;
+            if (bin % 2 == 0) {
+                evenSum += oss;
+                evenCount++;
+            } else {
+                oddSum += oss;
+                oddCount++;
+            }
+        }
+
+        if (evenCount > 0) evenSum /= evenCount;
+        if (oddCount > 0) oddSum /= oddCount;
+
+        // Alternation = odd/even ratio (high = strong off-beat energy relative to on-beat)
+        return oddSum / (evenSum + 1e-6f);
+    };
+
+    float altT = alternationAtPeriod(T);
+
+    int halfT = T / 2;
+    float altHalf = alternationAtPeriod(halfT);
+
+    // High alternation at T but low at T/2 → current T is double-time, switch down
+    if (altT > alternationThresh && altHalf < alternationThresh) {
+        switchTempo(halfT);
+        return;
+    }
+
+    // Check double-time too
+    int doubleT = T * 2;
+    if (doubleT <= MAX_BEAT_PERIOD) {
+        float altDouble = alternationAtPeriod(doubleT);
+        // High alternation at T but low at 2T → current T might be half-time
+        if (altT > alternationThresh && altDouble < alternationThresh) {
+            switchTempo(doubleT);
+        }
+    }
+}
+
 void AudioController::detectBeat() {
     uint32_t nowMs = time_.millis();
 
@@ -2848,6 +3010,24 @@ void AudioController::detectBeat() {
                 if (beatsSinceMetricalCheck_ >= metricalCheckBeats) {
                     checkMetricalContrast();
                     beatsSinceMetricalCheck_ = 0;
+                }
+            }
+
+            // Rhythmic pattern template check (v50)
+            if (templateCheckEnabled) {
+                beatsSinceTemplateCheck_++;
+                if (beatsSinceTemplateCheck_ >= templateCheckBeats) {
+                    checkTemplateMatch();
+                    beatsSinceTemplateCheck_ = 0;
+                }
+            }
+
+            // Beat critic subbeat alternation check (v50)
+            if (subbeatCheckEnabled) {
+                beatsSinceSubbeatCheck_++;
+                if (beatsSinceSubbeatCheck_ >= subbeatCheckBeats) {
+                    checkSubbeatAlternation();
+                    beatsSinceSubbeatCheck_ = 0;
                 }
             }
         }

@@ -80,7 +80,8 @@ public:
     // Version 47: Pre-whitening BandFlux path + bass whitening bypass (signal chain decompression)
     // Version 48: Multi-agent beat tracking, anti-harmonic 3rd comb, metrical contrast check
     // Version 49: Continuous ODF observation model for phase tracker (fwdObsLambda, replaces Bernoulli)
-    static const uint8_t SETTINGS_VERSION = 49;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 50: Rhythmic pattern templates + beat critic subbeat alternation (octave disambiguation)
+    static const uint8_t SETTINGS_VERSION = 50;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -317,6 +318,16 @@ public:
         bool metricalCheckEnabled;      // Enable metrical contrast check
         uint8_t agentInitBeats;         // Initialize agents after N beats (2-8)
         uint8_t metricalCheckBeats;     // Check every N beats (2-8)
+
+        // Rhythmic pattern templates (v50)
+        float templateScoreRatio;       // Min score ratio to switch tempo (1.0-3.0)
+        bool templateCheckEnabled;      // Enable template-based octave check
+        uint8_t templateCheckBeats;     // Check every N beats (2-8)
+
+        // Beat critic subbeat alternation (v50)
+        float alternationThresh;        // Odd/even ratio threshold (0.3-3.0)
+        bool subbeatCheckEnabled;       // Enable subbeat alternation check
+        uint8_t subbeatCheckBeats;      // Check every N beats (2-8)
     };
 
     struct StoredBandFluxParams {
@@ -436,8 +447,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 316,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (316 bytes = 64 floats + 10 uint8 + 26 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 332,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (332 bytes = 66 floats + 12 uint8 + 28 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
