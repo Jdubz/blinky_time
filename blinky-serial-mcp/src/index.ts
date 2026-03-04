@@ -151,7 +151,7 @@ function estimateAudioLatency(
   let peakBucket = 0;
   let peakCount = 0;
   for (const [bucket, count] of histogram) {
-    if (count > peakCount) {
+    if (count > peakCount || (count === peakCount && Math.abs(bucket) < Math.abs(peakBucket))) {
       peakCount = count;
       peakBucket = bucket;
     }
@@ -2882,6 +2882,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             perDevice: Array<{
               port: string;
               aggregate: { beatF1: ReturnType<typeof roundStats>; bpmAccuracy: ReturnType<typeof roundStats>; transientF1: ReturnType<typeof roundStats> };
+              perRun?: Array<{ run: number; beatF1: number; bpmAccuracy: number | null; transientF1: number; latencyMs: number | null }>;
             }>;
           }> = [];
 
@@ -2937,7 +2938,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 trackResults.push({
                   track: track.name,
                   bpm: gtData.bpm || 0,
-                  error: playResult.error,
+                  error: `${playResult.error} (failed on run ${runIdx + 1}/${valNumRuns})`,
                   perDevice: [],
                 });
                 trackFailed = true;
@@ -2979,6 +2980,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   bpmAccuracy: roundStats(computeStats(scores.filter(s => s.musicMode.bpmAccuracy !== null).map(s => s.musicMode.bpmAccuracy!))),
                   transientF1: roundStats(computeStats(scores.map(s => s.transientTracking.f1))),
                 },
+                // Per-run detail for post-hoc analysis
+                perRun: scores.map((s, i) => ({
+                  run: i + 1,
+                  beatF1: Math.round(s.beatTracking.f1 * 1000) / 1000,
+                  bpmAccuracy: s.musicMode.bpmAccuracy !== null ? Math.round(s.musicMode.bpmAccuracy * 1000) / 1000 : null,
+                  transientF1: Math.round(s.transientTracking.f1 * 1000) / 1000,
+                  latencyMs: s.audioLatencyMs !== null ? Math.round(s.audioLatencyMs) : null,
+                })),
               };
             });
 
@@ -2988,7 +2997,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               perDevice,
             });
 
-            // Inter-track gap
+            // Inter-track gap (same duration as inter-run; AGC re-adapts within first ~2s
+            // of new track, so 5s is sufficient for both cases)
             if (trackIdx < allTracks.length - 1) {
               await new Promise(r => setTimeout(r, INTER_RUN_GAP_MS));
             }

@@ -2025,9 +2025,9 @@ void AudioController::updatePhaseTracker(float odf) {
     if (hmmContrast != 1.0f && odfClamped > 0.0f) {
         odfClamped = powf(odfClamped, hmmContrast);
     }
-    static constexpr float MIN_OBS = 0.01f;
-    float obsBeat = (odfClamped > MIN_OBS) ? odfClamped : MIN_OBS;
-    float obsNonBeat = ((1.0f - odfClamped) > MIN_OBS) ? (1.0f - odfClamped) : MIN_OBS;
+    static constexpr float MIN_OBS_PROBABILITY = 0.01f; // Floor to prevent log(0)
+    float obsBeat = (odfClamped > MIN_OBS_PROBABILITY) ? odfClamped : MIN_OBS_PROBABILITY;
+    float obsNonBeat = ((1.0f - odfClamped) > MIN_OBS_PROBABILITY) ? (1.0f - odfClamped) : MIN_OBS_PROBABILITY;
 
     // Save wrap probability (last position → position 0)
     float wrapProb = phaseAlpha_[period - 1];
