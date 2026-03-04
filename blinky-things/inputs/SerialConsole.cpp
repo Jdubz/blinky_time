@@ -423,7 +423,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("templateminscore", &audioCtrl_->templateMinScore, "rhythm",
         "Min template correlation to consider switch (v51)", 0.0f, 1.0f);
     settings_.registerUint8("subbeatbins", &audioCtrl_->subbeatBins, "rhythm",
-        "Subbeat alternation bin count (v51)", 4, 16);
+        "Subbeat alternation bin count, even only (v51)", 4, 16);
     settings_.registerUint8("templatehistbars", &audioCtrl_->templateHistBars, "rhythm",
         "Template history depth in bars (v51)", 1, 4);
     settings_.registerFloat("cbssmeanalpha", &audioCtrl_->cbssMeanAlpha, "rhythm",
@@ -440,6 +440,8 @@ void SerialConsole::registerRhythmSettings() {
         "Periodicity weight in rhythmStrength (v51)", 0.0f, 1.0f);
     settings_.registerFloat("periodicityblend", &audioCtrl_->periodicityBlend, "rhythm",
         "Periodicity strength EMA coefficient (v51)", 0.3f, 0.95f);
+    settings_.registerFloat("onsetdensityblend", &audioCtrl_->onsetDensityBlend, "rhythm",
+        "Onset density EMA coefficient (v51)", 0.3f, 0.95f);
 
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -1347,6 +1349,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->beatConfBoost = 0.15f;
         audioCtrl_->rhythmBlend = 0.6f;
         audioCtrl_->periodicityBlend = 0.7f;
+        audioCtrl_->onsetDensityBlend = 0.7f;
         audioCtrl_->subbeatBins = 8;
         audioCtrl_->templateHistBars = 2;
 

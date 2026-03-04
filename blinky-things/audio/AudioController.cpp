@@ -3155,8 +3155,8 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     uint32_t elapsed = nowMs - onsetDensityWindowStart_;
     if (elapsed >= 1000) {
         float rawDensity = (float)onsetCountInWindow_ * (1000.0f / (float)elapsed);
-        // EMA using periodicityBlend (shared with periodicityStrength_ smoothing)
-        onsetDensity_ = onsetDensity_ * periodicityBlend + rawDensity * (1.0f - periodicityBlend);
+        // EMA smoothing for onset density (independent from periodicityStrength_)
+        onsetDensity_ = onsetDensity_ * onsetDensityBlend + rawDensity * (1.0f - onsetDensityBlend);
         onsetCountInWindow_ = 0;
         onsetDensityWindowStart_ = nowMs;
     }

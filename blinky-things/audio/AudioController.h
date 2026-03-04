@@ -517,7 +517,7 @@ public:
 
     // === HIDDEN CALIBRATION CONSTANTS (v51, exposed for parameter sweeps) ===
     float templateMinScore = 0.1f;         // Min Pearson correlation to consider tempo switch
-    uint8_t subbeatBins = 8;              // Number of subbeat bins for alternation check (4-16)
+    uint8_t subbeatBins = 8;              // Number of subbeat bins for alternation check (even, 4-16)
     uint8_t templateHistBars = 2;         // Template history depth in bars (1-4)
     float cbssMeanAlpha = 0.008f;         // CBSS running mean EMA alpha (tau ~2s at 66Hz)
     float harmonic2xThresh = 0.5f;        // ACF ratio at half-lag for 2x BPM correction
@@ -526,6 +526,7 @@ public:
     float beatConfBoost = 0.15f;          // Confidence increment per beat fire (0.01-0.5)
     float rhythmBlend = 0.6f;             // Periodicity weight in rhythmStrength (1-x = CBSS)
     float periodicityBlend = 0.7f;        // Periodicity strength EMA coefficient
+    float onsetDensityBlend = 0.7f;       // Onset density EMA coefficient
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 

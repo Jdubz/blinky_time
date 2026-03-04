@@ -24,7 +24,7 @@
  */
 
 // Maximum number of settings (adjust based on needs)
-// Current usage: ~208 settings (fire, water, lightning, effect, audio, agc, rhythm, cbss, ensemble, bandflux, spectral, pf, v48 multi-agent, v51 calibration)
+// Current usage: ~209 settings (fire, water, lightning, effect, audio, agc, rhythm, cbss, ensemble, bandflux, spectral, pf, v48 multi-agent, v51 calibration)
 // Increased to 224 to cover all registered settings with headroom
 #define MAX_SETTINGS 224
 static_assert(MAX_SETTINGS <= 255, "MAX_SETTINGS exceeds uint8_t range of numSettings_");

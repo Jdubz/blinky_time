@@ -284,6 +284,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.beatConfBoost = 0.15f;        // Confidence increment per beat fire
     data_.music.rhythmBlend = 0.6f;           // Periodicity weight in rhythmStrength
     data_.music.periodicityBlend = 0.7f;      // Periodicity strength EMA coefficient
+    data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
     data_.music.subbeatBins = 8;              // Subbeat bin count
     data_.music.templateHistBars = 2;         // Template history depth in bars
 
@@ -653,7 +654,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.beatConfBoost, 0.01f, 0.5f, F("beatConfBoost"));
     validateFloat(data_.music.rhythmBlend, 0.0f, 1.0f, F("rhythmBlend"));
     validateFloat(data_.music.periodicityBlend, 0.3f, 0.95f, F("periodicityBlend"));
+    validateFloat(data_.music.onsetDensityBlend, 0.3f, 0.95f, F("onsetDensityBlend"));
     VALIDATE_INT(data_.music.subbeatBins, 4, 16, F("subbeatBins"));
+    if (data_.music.subbeatBins % 2 != 0) {
+        data_.music.subbeatBins &= ~1u;  // Snap to even (odd bias even/odd alternation)
+        fixedCount++;
+    }
     VALIDATE_INT(data_.music.templateHistBars, 1, 4, F("templateHistBars"));
 
     // cppcheck-suppress unsignedLessThanZero
@@ -959,6 +965,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->beatConfBoost = data_.music.beatConfBoost;
         audioCtrl->rhythmBlend = data_.music.rhythmBlend;
         audioCtrl->periodicityBlend = data_.music.periodicityBlend;
+        audioCtrl->onsetDensityBlend = data_.music.onsetDensityBlend;
         audioCtrl->subbeatBins = data_.music.subbeatBins;
         audioCtrl->templateHistBars = data_.music.templateHistBars;
 
@@ -1232,6 +1239,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.beatConfBoost = audioCtrl->beatConfBoost;
         data_.music.rhythmBlend = audioCtrl->rhythmBlend;
         data_.music.periodicityBlend = audioCtrl->periodicityBlend;
+        data_.music.onsetDensityBlend = audioCtrl->onsetDensityBlend;
         data_.music.subbeatBins = audioCtrl->subbeatBins;
         data_.music.templateHistBars = audioCtrl->templateHistBars;
 

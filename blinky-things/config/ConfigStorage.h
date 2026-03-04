@@ -339,7 +339,8 @@ public:
         float beatConfBoost;            // Confidence increment per beat fire
         float rhythmBlend;              // Periodicity weight in rhythmStrength
         float periodicityBlend;         // Periodicity strength EMA coefficient
-        uint8_t subbeatBins;            // Subbeat bin resolution (4-16)
+        float onsetDensityBlend;        // Onset density EMA coefficient
+        uint8_t subbeatBins;            // Subbeat bin resolution (even, 4-16)
         uint8_t templateHistBars;       // Template history depth in bars (1-4)
     };
 
@@ -460,8 +461,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 368,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (368 bytes = 74 floats + 14 uint8 + 28 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 372,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (372 bytes = 75 floats + 14 uint8 + 28 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
