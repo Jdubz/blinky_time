@@ -423,6 +423,7 @@ public:
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
     bool hmmTempoNorm = true;            // Normalize argmax by period (prevents slow-tempo bias)
     float hmmLambda = 0.05f;             // HMM transition tightness (small=tight, prevents octave jumps) (v46)
+    float fwdObsLambda = 8.0f;           // Continuous ODF observation strength (v49: higher=sharper beat/non-beat)
 
     // === PARTICLE FILTER BEAT TRACKING (v38) ===
     // Maintains 100 tempo/phase hypotheses; octave variants injected at resampling

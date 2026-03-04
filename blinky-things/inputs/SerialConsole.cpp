@@ -317,6 +317,8 @@ void SerialConsole::registerRhythmSettings() {
         "HMM tempo-normalized argmax (prevents slow-tempo bias)");
     settings_.registerFloat("hmmlambda", &audioCtrl_->hmmLambda, "rhythm",
         "HMM transition tightness (small=tight, prevents octave jumps) (v46)", 0.01f, 1.0f);
+    settings_.registerFloat("fwdobslambda", &audioCtrl_->fwdObsLambda, "rhythm",
+        "Continuous ODF observation strength (v49: higher=sharper beat/non-beat)", 2.0f, 32.0f);
     settings_.registerBool("particlefilter", &audioCtrl_->particleFilterEnabled, "rhythm",
         "Particle filter beat tracking (v38, A/B vs CBSS)");
     settings_.registerFloat("pfnoise", &audioCtrl_->pfNoise, "rhythm",
@@ -1250,6 +1252,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->hmmContrast = 2.0f;           // v34: ODF power-law contrast
         audioCtrl_->hmmTempoNorm = true;          // v34: tempo-normalized argmax
         audioCtrl_->hmmLambda = 0.05f;            // v46: HMM transition tightness
+        audioCtrl_->fwdObsLambda = 8.0f;          // v49: continuous ODF observation strength
         audioCtrl_->cbssContrast = 1.0f;           // v37: ODF contrast before CBSS
         audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
         audioCtrl_->onsetSnapWindow = 8;           // v39: snap beat to strongest OSS in ±8 frames

@@ -271,6 +271,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.hmmContrast = 2.0f;           // ODF power-law contrast (sharper beat/non-beat)
     data_.music.hmmTempoNorm = true;          // Tempo-normalized argmax (prevents slow-tempo bias)
     data_.music.hmmLambda = 0.05f;            // HMM transition tightness (v46: tight prevents octave jumps)
+    data_.music.fwdObsLambda = 8.0f;          // Continuous ODF observation strength (v49)
 
     // Particle filter beat tracking defaults (v38)
     data_.music.particleFilterEnabled = false; // Disabled by default (A/B vs CBSS+Bayesian)
@@ -633,6 +634,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.octaveScoreRatio, 1.0f, 5.0f, F("octaveScoreRatio"));
     validateFloat(data_.music.hmmContrast, 0.5f, 8.0f, F("hmmContrast"));
     validateFloat(data_.music.hmmLambda, 0.01f, 1.0f, F("hmmLambda"));
+    validateFloat(data_.music.fwdObsLambda, 2.0f, 32.0f, F("fwdObsLambda"));
 
     // Particle filter validation (v38)
     validateFloat(data_.music.pfNoise, 0.001f, 0.3f, F("pfNoise"));
@@ -900,6 +902,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->hmmContrast = data_.music.hmmContrast;
         audioCtrl->hmmTempoNorm = data_.music.hmmTempoNorm;
         audioCtrl->hmmLambda = data_.music.hmmLambda;
+        audioCtrl->fwdObsLambda = data_.music.fwdObsLambda;
         audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
 
         // Particle filter beat tracking (v38)
@@ -1150,6 +1153,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.hmmContrast = audioCtrl->hmmContrast;
         data_.music.hmmTempoNorm = audioCtrl->hmmTempoNorm;
         data_.music.hmmLambda = audioCtrl->hmmLambda;
+        data_.music.fwdObsLambda = audioCtrl->fwdObsLambda;
         data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
 
         // Particle filter beat tracking (v38)

@@ -2000,7 +2000,7 @@ void AudioController::buildHmmTransitionMatrix() {
 //
 // State: phaseAlpha_[0..period-1], circular. Position 0 = beat position.
 // Transition: deterministic advance (position = (position+1) % period).
-// Observation: Bernoulli — high onset at position 0, low elsewhere.
+// Observation: continuous ODF (v49) — lambda*odf at beat, (1-odf)/(lambda-1) elsewhere.
 
 void AudioController::updatePhaseTracker(float odf) {
     int period = tempoBinLags_[bayesBestBin_];
@@ -2017,17 +2017,16 @@ void AudioController::updatePhaseTracker(float odf) {
         phasePeriod_ = period;
     }
 
-    // Observation model: full Bernoulli with contrast.
-    // Position 0 gets obs = odf^contrast, others get obs = (1-odf)^contrast.
-    // Creates phase concentration but also a ghost peak at position 0 during onsets.
-    // The tracking filter below prevents ghost-peak jumps from causing double-fires.
+    // Observation model: continuous ODF (v49, madmom-style).
+    // Position 0 gets obs = lambda * odf, others get obs = (1 - odf) / (lambda - 1).
+    // Gentler than Bernoulli: ODF=0 gives ~14:1 against beat (at lambda=8), not 99:1.
     float odfClamped = clampf(odf, 0.0f, 1.0f);
     if (hmmContrast != 1.0f && odfClamped > 0.0f) {
         odfClamped = powf(odfClamped, hmmContrast);
     }
     static constexpr float MIN_OBS_PROBABILITY = 0.01f; // Floor to prevent log(0)
-    float obsBeat = (odfClamped > MIN_OBS_PROBABILITY) ? odfClamped : MIN_OBS_PROBABILITY;
-    float obsNonBeat = ((1.0f - odfClamped) > MIN_OBS_PROBABILITY) ? (1.0f - odfClamped) : MIN_OBS_PROBABILITY;
+    float obsBeat = fmaxf(fwdObsLambda * odfClamped, MIN_OBS_PROBABILITY);
+    float obsNonBeat = fmaxf((1.0f - odfClamped) / (fwdObsLambda - 1.0f), MIN_OBS_PROBABILITY);
 
     // Save wrap probability (last position → position 0)
     float wrapProb = phaseAlpha_[period - 1];

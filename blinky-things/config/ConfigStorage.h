@@ -79,7 +79,8 @@ public:
     // Version 46: HMM beat detection (position-0 wrap replaces CBSS countdown when hmm=1)
     // Version 47: Pre-whitening BandFlux path + bass whitening bypass (signal chain decompression)
     // Version 48: Multi-agent beat tracking, anti-harmonic 3rd comb, metrical contrast check
-    static const uint8_t SETTINGS_VERSION = 48;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 49: Continuous ODF observation model for phase tracker (fwdObsLambda, replaces Bernoulli)
+    static const uint8_t SETTINGS_VERSION = 49;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -257,6 +258,7 @@ public:
         float hmmContrast;             // HMM ODF power-law contrast (v34)
         bool hmmTempoNorm;             // HMM tempo-normalized argmax (v34)
         float hmmLambda;               // HMM transition tightness (v46: 0.01-1.0, default 0.05)
+        float fwdObsLambda;            // Continuous ODF observation strength (v49: 2-32, default 8)
 
         // Particle filter beat tracking (v38)
         bool particleFilterEnabled;    // Enable PF (A/B vs CBSS+Bayesian)
@@ -434,8 +436,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 312,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (312 bytes = 63 floats + 10 uint8 + 26 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 316,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (316 bytes = 64 floats + 10 uint8 + 26 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
