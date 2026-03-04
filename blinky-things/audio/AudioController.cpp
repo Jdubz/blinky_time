@@ -662,7 +662,7 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
 
     // Smooth periodicity strength updates
     float newStrength = clampf(normCorrelation * 1.5f, 0.0f, 1.0f);
-    periodicityStrength_ = periodicityStrength_ * 0.7f + newStrength * 0.3f;
+    periodicityStrength_ = periodicityStrength_ * periodicityBlend + newStrength * (1.0f - periodicityBlend);
 
     // NOTE: Inverse-lag normalization REMOVED (v43).
     // The balanced ACF (correlation /= count, where count = ossCount_ - lag)
@@ -1227,8 +1227,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // with adaptive threshold provides structural octave handling, making post-hoc
     // correction redundant and a source of overcorrection).
     if (!btrkPipeline) {
-        static constexpr float HARMONIC_2X_THRESH = 0.5f;   // Half-lag ACF ratio for 2x BPM correction
-        static constexpr float HARMONIC_1_5X_THRESH = 0.6f; // 2/3-lag ACF ratio for 1.5x BPM correction
+        const float HARMONIC_2X_THRESH = harmonic2xThresh;   // Half-lag ACF ratio for 2x BPM correction
+        const float HARMONIC_1_5X_THRESH = harmonic15xThresh; // 2/3-lag ACF ratio for 1.5x BPM correction
         int bestLag = tempoBinLags_[bestBin];
         int halfLag = bestLag / 2;          // 2x BPM
         int twoThirdLag = bestLag * 2 / 3;  // 1.5x BPM
@@ -1640,8 +1640,7 @@ void AudioController::updateCBSS(float onsetStrength) {
 
     // Update running mean of CBSS for adaptive threshold
     // EMA alpha ≈ 1/120 ≈ 0.008 → tau ~120 frames (~2 seconds at 60 Hz)
-    static constexpr float CBSS_MEAN_ALPHA = 0.008f;
-    cbssMean_ = cbssMean_ * (1.0f - CBSS_MEAN_ALPHA) + cbssVal * CBSS_MEAN_ALPHA;
+    cbssMean_ = cbssMean_ * (1.0f - cbssMeanAlpha) + cbssVal * cbssMeanAlpha;
 
     sampleCounter_++;
     renormalizeCounters();
@@ -2126,7 +2125,7 @@ void AudioController::detectHmmBeat() {
             if (phaseError < -0.5f) phaseError = -0.5f;
 
             float correction = pllKp * phaseError * static_cast<float>(T);
-            pllPhaseIntegral_ = clampf(0.95f * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
+            pllPhaseIntegral_ = clampf(pllSmoother * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
             correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
 
             int maxShift = T / 4;
@@ -2138,7 +2137,7 @@ void AudioController::detectHmmBeat() {
 
         if (beatCount_ < 65535) beatCount_++;
         beatDetected = true;
-        cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+        cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
         updateBeatStability(nowMs);
         lastFiredBeatPredicted_ = false;  // HMM beats are not predicted via countdown
     }
@@ -2488,7 +2487,7 @@ void AudioController::pfDetectBeat() {
 
             if (beatCount_ < 65535) beatCount_++;
             beatDetected = true;
-            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+            cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
             updateBeatStability(nowMs);
             lastFiredBeatPredicted_ = true;  // PF beats are predicted
 
@@ -2626,7 +2625,7 @@ void AudioController::detectBeatMultiAgent() {
                 if (phaseError > 0.5f) phaseError = 0.5f;
                 if (phaseError < -0.5f) phaseError = -0.5f;
                 float correction = pllKp * phaseError * static_cast<float>(T);
-                pllPhaseIntegral_ = clampf(0.95f * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
+                pllPhaseIntegral_ = clampf(pllSmoother * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
                 correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
                 int maxShift = T / 4;
                 int shift = static_cast<int>(correction);
@@ -2637,7 +2636,7 @@ void AudioController::detectBeatMultiAgent() {
 
             if (beatCount_ < 65535) beatCount_++;
             beatDetected = true;
-            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+            cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
             updateBeatStability(nowMs);
             lastFiredBeatPredicted_ = true;
 
@@ -2763,7 +2762,7 @@ void AudioController::checkTemplateMatch() {
     auto scoreAtPeriod = [&](int period) -> float {
         if (period < 10 || period > MAX_BEAT_PERIOD) return -1.0f;
         int barLen = period * 4;  // 4 beats per bar
-        int historyNeeded = barLen * 2;  // ~2 bars
+        int historyNeeded = barLen * templateHistBars;  // configurable bars of history
         if (historyNeeded > sampleCounter_) historyNeeded = sampleCounter_;
         if (historyNeeded < period * 2) return -1.0f;  // Need at least 2 beats
 
@@ -2827,7 +2826,7 @@ void AudioController::checkTemplateMatch() {
     // Check half-time (gate on scoreT > 0 to avoid spurious switches when correlation is negative)
     if (scoreT > 0.0f && isValidPeriod(halfT)) {
         float scoreHalf = scoreAtPeriod(halfT);
-        if (scoreHalf > scoreT * templateScoreRatio && scoreHalf > 0.1f) {
+        if (scoreHalf > scoreT * templateScoreRatio && scoreHalf > templateMinScore) {
             switchTempo(halfT);
             return;
         }
@@ -2836,7 +2835,7 @@ void AudioController::checkTemplateMatch() {
     // Check double-time
     if (scoreT > 0.0f && isValidPeriod(doubleT)) {
         float scoreDouble = scoreAtPeriod(doubleT);
-        if (scoreDouble > scoreT * templateScoreRatio && scoreDouble > 0.1f) {
+        if (scoreDouble > scoreT * templateScoreRatio && scoreDouble > templateMinScore) {
             switchTempo(doubleT);
         }
     }
@@ -2853,7 +2852,7 @@ void AudioController::checkSubbeatAlternation() {
     // Uses cbssBuffer_ (indexed by sampleCounter_) for correct lookback after renormalization.
     auto alternationAtPeriod = [&](int period) -> float {
         if (period < 10 || period > MAX_BEAT_PERIOD) return 0.0f;
-        int historyNeeded = period * 8;  // ~8 beats of history
+        int historyNeeded = period * subbeatBins;  // ~N beats of history
         if (historyNeeded > sampleCounter_) historyNeeded = sampleCounter_;
         if (historyNeeded < period * 2) return 0.0f;  // Need at least 2 beats
 
@@ -2865,8 +2864,8 @@ void AudioController::checkSubbeatAlternation() {
             float val = cbssBuffer_[idx % OSS_BUFFER_SIZE];
             // Map position within beat to subbeat bin 0-7
             int beatPos = i % period;
-            int bin = (beatPos * 8) / period;
-            if (bin >= 8) bin = 7;
+            int bin = (beatPos * subbeatBins) / period;
+            if (bin >= subbeatBins) bin = subbeatBins - 1;
             if (bin % 2 == 0) {
                 evenSum += val;
                 evenCount++;
@@ -2981,7 +2980,7 @@ void AudioController::detectBeat() {
                 float correction = pllKp * phaseError * static_cast<float>(T);
 
                 // Integral: accumulate persistent bias (leaky integrator, tau ~20 beats)
-                pllPhaseIntegral_ = clampf(0.95f * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
+                pllPhaseIntegral_ = clampf(pllSmoother * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
                 correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
 
                 // Apply correction to lastBeatSample_ (clamp to ±T/4 to prevent large jumps)
@@ -2994,7 +2993,7 @@ void AudioController::detectBeat() {
 
             if (beatCount_ < 65535) beatCount_++;
             beatDetected = true;
-            cbssConfidence_ = clampf(cbssConfidence_ + 0.15f, 0.0f, 1.0f);
+            cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
             updateBeatStability(nowMs);
 
             // Capture whether prediction refined this beat's timing (for streaming)
@@ -3135,7 +3134,7 @@ void AudioController::synthesizePhase() {
 
 void AudioController::synthesizeRhythmStrength() {
     // Blend autocorrelation periodicity with CBSS beat tracking confidence
-    float strength = periodicityStrength_ * 0.6f + cbssConfidence_ * 0.4f;
+    float strength = periodicityStrength_ * rhythmBlend + cbssConfidence_ * (1.0f - rhythmBlend);
 
     // Apply activation threshold with soft knee
     if (strength < activationThreshold) {
@@ -3157,7 +3156,7 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     if (elapsed >= 1000) {
         float rawDensity = (float)onsetCountInWindow_ * (1000.0f / (float)elapsed);
         // EMA: 70/30 blend (matches periodicityStrength_ pattern)
-        onsetDensity_ = onsetDensity_ * 0.7f + rawDensity * 0.3f;
+        onsetDensity_ = onsetDensity_ * periodicityBlend + rawDensity * (1.0f - periodicityBlend);
         onsetCountInWindow_ = 0;
         onsetDensityWindowStart_ = nowMs;
     }

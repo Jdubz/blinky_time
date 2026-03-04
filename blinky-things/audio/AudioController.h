@@ -515,6 +515,18 @@ public:
     float alternationThresh = 1.2f;            // Odd/even ratio threshold (0.3-3.0)
     uint8_t subbeatCheckBeats = 4;             // Check every N beats (2-8)
 
+    // === HIDDEN CALIBRATION CONSTANTS (v51, exposed for parameter sweeps) ===
+    float templateMinScore = 0.1f;         // Min Pearson correlation to consider tempo switch
+    uint8_t subbeatBins = 8;              // Number of subbeat bins for alternation check (4-16)
+    uint8_t templateHistBars = 2;         // Template history depth in bars (1-4)
+    float cbssMeanAlpha = 0.008f;         // CBSS running mean EMA alpha (tau ~2s at 66Hz)
+    float harmonic2xThresh = 0.5f;        // ACF ratio at half-lag for 2x BPM correction
+    float harmonic15xThresh = 0.6f;       // ACF ratio at 2/3-lag for 1.5x BPM correction
+    float pllSmoother = 0.95f;            // PLL phase integral leaky decay (0.8-0.99)
+    float beatConfBoost = 0.15f;          // Confidence increment per beat fire (0.01-0.5)
+    float rhythmBlend = 0.6f;             // Periodicity weight in rhythmStrength (1-x = CBSS)
+    float periodicityBlend = 0.7f;        // Periodicity strength EMA coefficient
+
     // === ADVANCED ACCESS (for debugging/tuning only) ===
 
     AdaptiveMic& getMicForTuning() { return mic_; }

@@ -13,7 +13,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { DeviceManager } from './device-manager.js';
 import type { AudioSample, MusicModeState } from './types.js';
-import { spawn } from 'child_process';
+import { spawn, execSync, type ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { writeFileSync, mkdirSync, existsSync, statSync, readFileSync, readdirSync } from 'fs';
@@ -29,6 +29,27 @@ const TEST_RESULTS_DIR = join(__dirname, '..', '..', 'test-results');
 
 // Gap between runs/tracks to let AGC and detectors settle
 const INTER_RUN_GAP_MS = 5000;
+
+// Track the current ffplay process so we can kill it before starting a new test
+let activeFFplay: ChildProcess | null = null;
+
+/**
+ * Kill any orphan ffplay processes. Called before every test to prevent
+ * overlapping audio (all devices share the same speakers).
+ */
+function killOrphanAudio(): void {
+  // Kill our tracked child first
+  if (activeFFplay && !activeFFplay.killed) {
+    activeFFplay.kill('SIGKILL');
+    activeFFplay = null;
+  }
+  // Also kill any system-wide ffplay (catches orphans from crashed/aborted runs)
+  try {
+    execSync('pkill -9 ffplay 2>/dev/null', { stdio: 'ignore' });
+  } catch {
+    // pkill returns non-zero if no processes matched — that's fine
+  }
+}
 
 // Ensure test results directory exists
 function ensureTestResultsDir(): void {
@@ -2361,6 +2382,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_music_test': {
+        killOrphanAudio();
         const {
           audio_file: audioFile,
           ground_truth: groundTruthFile,
@@ -2431,13 +2453,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const child = spawn('ffplay', ffplayArgs, {
                 stdio: ['ignore', 'pipe', 'pipe'],
               });
+              activeFFplay = child;
 
               let stderr = '';
               child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
               child.on('close', (code: number | null) => {
+                activeFFplay = null;
                 resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
               });
               child.on('error', (err: Error) => {
+                activeFFplay = null;
                 resolve({ success: false, error: err.message });
               });
             });
@@ -2575,6 +2600,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_music_test_multi': {
+        killOrphanAudio();
         const {
           ports: multiPorts,
           audio_file: multiAudioFile,
@@ -2671,12 +2697,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               const child = spawn('ffplay', multiFFplayArgs, {
                 stdio: ['ignore', 'pipe', 'pipe'],
               });
+              activeFFplay = child;
               let stderr = '';
               child.stderr.on('data', (data: Buffer) => { stderr += data.toString(); });
               child.on('close', (code: number | null) => {
+                activeFFplay = null;
                 resolve({ success: true, error: code !== 0 ? (stderr || `ffplay exited with code ${code}`) : undefined });
               });
               child.on('error', (err: Error) => {
+                activeFFplay = null;
                 resolve({ success: false, error: err.message });
               });
             });
@@ -2798,6 +2827,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'run_validation_suite': {
+        killOrphanAudio();
         const {
           ports: valPorts,
           runs: valRunsParam,
@@ -2914,15 +2944,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 const child = spawn('ffplay', ffplayArgs, {
                   stdio: ['ignore', 'pipe', 'pipe'],
                 });
+                activeFFplay = child;
                 let settled = false;
                 let stderr = '';
                 child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
                 child.on('error', (err) => {
+                  activeFFplay = null;
                   if (settled) return;
                   settled = true;
                   resolve({ success: false, error: `Failed to start ffplay: ${err.message}` });
                 });
                 child.on('close', (code) => {
+                  activeFFplay = null;
                   if (settled) return;
                   settled = true;
                   if (code !== 0) {
