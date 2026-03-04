@@ -2811,21 +2811,30 @@ void AudioController::checkTemplateMatch() {
         return bestCorr;
     };
 
+    // Validate candidate period: within buffer and BPM range
+    auto isValidPeriod = [&](int period) -> bool {
+        if (period < 10 || period >= OSS_BUFFER_SIZE / 2) return false;
+        float candidateBpm = OSS_FRAMES_PER_MIN / static_cast<float>(period);
+        return candidateBpm >= bpmMin && candidateBpm <= bpmMax;
+    };
+
     float scoreT = scoreAtPeriod(T);
     if (scoreT < -0.5f) return;  // Not enough data
 
     int halfT = T / 2;
     int doubleT = T * 2;
 
-    // Check half-time
-    float scoreHalf = scoreAtPeriod(halfT);
-    if (scoreHalf > scoreT * templateScoreRatio && scoreHalf > 0.1f) {
-        switchTempo(halfT);
-        return;
+    // Check half-time (gate on scoreT > 0 to avoid spurious switches when correlation is negative)
+    if (scoreT > 0.0f && isValidPeriod(halfT)) {
+        float scoreHalf = scoreAtPeriod(halfT);
+        if (scoreHalf > scoreT * templateScoreRatio && scoreHalf > 0.1f) {
+            switchTempo(halfT);
+            return;
+        }
     }
 
     // Check double-time
-    if (doubleT <= MAX_BEAT_PERIOD) {
+    if (scoreT > 0.0f && isValidPeriod(doubleT)) {
         float scoreDouble = scoreAtPeriod(doubleT);
         if (scoreDouble > scoreT * templateScoreRatio && scoreDouble > 0.1f) {
             switchTempo(doubleT);
@@ -2877,6 +2886,16 @@ void AudioController::checkSubbeatAlternation() {
     float altT = alternationAtPeriod(T);
 
     int halfT = T / 2;
+
+    // Validate halfT is within BPM range before evaluating
+    bool halfTValid = (halfT >= 10 && halfT < OSS_BUFFER_SIZE / 2);
+    if (halfTValid) {
+        float candidateBpm = OSS_FRAMES_PER_MIN / static_cast<float>(halfT);
+        halfTValid = (candidateBpm >= bpmMin && candidateBpm <= bpmMax);
+    }
+
+    if (!halfTValid) return;
+
     float altHalf = alternationAtPeriod(halfT);
 
     // High alternation at T but low at T/2 → current T is double-time, switch down.
