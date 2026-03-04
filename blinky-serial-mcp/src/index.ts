@@ -2883,6 +2883,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           const trackResults: Array<{
             track: string;
             bpm: number;
+            error?: string;
             perDevice: Array<{
               port: string;
               aggregate: { beatF1: ReturnType<typeof roundStats>; bpmAccuracy: ReturnType<typeof roundStats>; transientF1: ReturnType<typeof roundStats> };
@@ -2912,13 +2913,43 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 ffplayArgs.push('-t', (valDurationMs / 1000).toString());
               }
 
-              await new Promise<void>((resolve) => {
+              const playResult = await new Promise<{ success: boolean; error?: string }>((resolve) => {
                 const child = spawn('ffplay', ffplayArgs, {
                   stdio: ['ignore', 'pipe', 'pipe'],
                 });
-                child.on('close', () => resolve());
-                child.on('error', () => resolve());
+                let settled = false;
+                let stderr = '';
+                child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+                child.on('error', (err) => {
+                  if (settled) return;
+                  settled = true;
+                  resolve({ success: false, error: `Failed to start ffplay: ${err.message}` });
+                });
+                child.on('close', (code) => {
+                  if (settled) return;
+                  settled = true;
+                  if (code !== 0) {
+                    resolve({ success: false, error: `ffplay exited with code ${code}: ${stderr.slice(0, 200)}` });
+                  } else {
+                    resolve({ success: true, error: stderr ? `ffplay warning: ${stderr.slice(0, 200)}` : undefined });
+                  }
+                });
               });
+
+              if (!playResult.success) {
+                // Skip this track — record error and move on
+                trackResults.push({
+                  track: track.name,
+                  bpm: gtData.bpm || 0,
+                  error: playResult.error,
+                  perDevice: [],
+                });
+                // Stop recording on all devices (discard data)
+                for (const { session } of valSessions) {
+                  session.stopTestRecording();
+                }
+                break; // Skip remaining runs for this track
+              }
 
               // Stop recording and score each device
               for (const { port: p, session } of valSessions) {
@@ -3000,7 +3031,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 perTrack: trackResults.map(t => ({
                   track: t.track,
                   bpm: t.bpm,
-                  perDevice: t.perDevice.map(d => ({
+                  ...(t.error ? { error: t.error } : {}),
+                  perDevice: t.perDevice.map((d: any) => ({
                     port: d.port,
                     beatF1: d.aggregate.beatF1.mean,
                     bpmAccuracy: d.aggregate.bpmAccuracy.mean,

@@ -337,7 +337,7 @@ public:
         bool perBandThreshEnabled;  // Per-band independent detection
         bool hiResBassEnabled;      // Hi-res bass via Goertzel
         bool peakPickEnabled;       // Local-max peak picking (Phase 2.6)
-        bool usePreWhitenMags;      // Use compressed-only magnitudes (v47)
+        bool usePreWhitenMags;      // Use raw (pre-compressor, pre-whitening) magnitudes (v47)
     };
 
     /**

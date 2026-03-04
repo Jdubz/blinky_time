@@ -434,7 +434,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerBool("bfpeakpick", &bf.peakPickEnabled, "bandflux",
         "Local-max peak picking (SuperFlux-style, Phase 2.6)");
     settings_.registerBool("bfprewhiten", &bf.usePreWhitenMags, "bandflux",
-        "Use pre-whitened magnitudes (bypass triple-compression, v47)");
+        "Use raw FFT magnitudes before compressor+whitening (BandFlux bypass, v47)");
 
     // Bayesian tempo fusion weights (v18+)
     settings_.registerFloat("bayeslambda", &audioCtrl_->bayesLambda, "bayesian",

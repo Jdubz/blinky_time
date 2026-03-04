@@ -418,6 +418,8 @@ const AudioControl& AudioController::update(float dt) {
             cbssInput = powf(cbssInput, cbssContrast);
         }
         updateCBSS(cbssInput);    // sampleCounter_++ happens here
+        // Precedence: HMM phase tracker > multi-agent > default CBSS.
+        // If both barPointerHmm and multiAgentEnabled are set, HMM wins.
         if (barPointerHmm && phasePeriod_ > 0) {
             detectHmmBeat();       // v46b: Phase tracker position-0 wrap beat detection
         } else if (multiAgentEnabled) {

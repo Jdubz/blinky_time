@@ -56,9 +56,9 @@ DetectionResult BandWeightedFluxDetector::detect(const AudioFrame& frame, float 
         return DetectionResult::none();
     }
 
-    // Use pre-whitened magnitudes when available to avoid triple-compression
-    // (compressor → whitening → BandFlux log compression). BandFlux's log(1+gamma*mag)
-    // already normalizes dynamic range, making upstream whitening redundant.
+    // Use raw (pre-compressor, pre-whitening) magnitudes when available to avoid
+    // triple-compression (compressor → whitening → BandFlux log compression).
+    // BandFlux's log(1+gamma*mag) already normalizes dynamic range.
     const float* magnitudes = (usePreWhitenMags && frame.preWhitenMagnitudes)
                               ? frame.preWhitenMagnitudes : frame.magnitudes;
     int numBins = frame.numBins;
