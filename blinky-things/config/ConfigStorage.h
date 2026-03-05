@@ -84,7 +84,8 @@ public:
     // Version 51: Hidden calibration constants exposed as serial settings (10 new params)
     // Version 52: Joint forward filter fix (fwdObsFloor, fwdWrapFraction) + remove FT/IOI dead code
     // Version 53: Remove joint HMM dead code (hmmTempoNorm, hmmLambda, hmmBayesBias)
-    static const uint8_t SETTINGS_VERSION = 53;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 54: Add nnBeatActivation (NN beat ODF toggle)
+    static const uint8_t SETTINGS_VERSION = 54;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {

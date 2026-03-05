@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioControl.h"
+#include "BeatActivationNN.h"
 #include "EnsembleDetector.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
@@ -332,6 +333,13 @@ public:
     // beat tracking see the same signal. BTrack uses a single ODF for both.
     bool unifiedOdf = true;              // Use BandFlux pre-threshold as CBSS ODF (BTrack-style)
 
+    // === NN BEAT ACTIVATION ===
+    // Replaces BandFlux ODF with a learned causal CNN beat activation function.
+    // Requires ENABLE_NN_BEAT_ACTIVATION compile flag and valid model in beat_model_data.h.
+    // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
+    // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
+    bool nnBeatActivation = false;       // Use NN beat activation as ODF (A/B vs BandFlux)
+
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
 
@@ -593,6 +601,9 @@ private:
     // === ENSEMBLE DETECTOR ===
     EnsembleDetector ensemble_;
     EnsembleOutput lastEnsembleOutput_;
+
+    // === NN BEAT ACTIVATION ===
+    BeatActivationNN beatActivationNN_;
 
     // === RHYTHM TRACKING STATE ===
 

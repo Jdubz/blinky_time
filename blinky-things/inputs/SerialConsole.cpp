@@ -278,6 +278,8 @@ void SerialConsole::registerRhythmSettings() {
         "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
     settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",
         "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
+    settings_.registerBool("nnbeat", &audioCtrl_->nnBeatActivation, "rhythm",
+        "Use NN beat activation as ODF (overrides unifiedOdf when model loaded)");
     settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
         "Local-mean ODF threshold before autocorrelation (BTrack-style, v32)");
     settings_.registerUint8("odfthreshwin", &audioCtrl_->odfThreshWindow, "rhythm",

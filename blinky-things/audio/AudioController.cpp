@@ -155,6 +155,9 @@ bool AudioController::begin(uint32_t sampleRate) {
     beatExpectationLastT_ = 0;
     beatExpectationSize_ = 0;
 
+    // Initialize NN beat activation (fails gracefully if model not compiled in)
+    beatActivationNN_.begin();
+
     // Reset output
     control_ = AudioControl();
     lastEnsembleOutput_ = EnsembleOutput();
@@ -226,7 +229,25 @@ const AudioControl& AudioController::update(float dt) {
     //    tracker and transient detector "hear" the same signal.
     float onsetStrength = 0.0f;
 
-    if (unifiedOdf) {
+    if (nnBeatActivation && beatActivationNN_.isReady()) {
+        // NN beat activation: feed mel bands to causal CNN, get learned ODF
+        // BandFlux still runs for transient detection (sparks/effects)
+        const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
+        if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
+            onsetStrength = beatActivationNN_.infer(spectral.getMelBands());
+
+            // Still feed adaptive band weighting from BandFlux
+            if (adaptiveBandWeightEnabled) {
+                addBandOssSamples(
+                    ensemble_.getBandFlux().getBassFlux(),
+                    ensemble_.getBandFlux().getMidFlux(),
+                    ensemble_.getBandFlux().getHighFlux()
+                );
+            }
+        } else {
+            onsetStrength = mic_.getLevel();
+        }
+    } else if (unifiedOdf) {
         // Phase 2.4: Use BandFlux continuous pre-threshold activation
         // This is the combined weighted flux BEFORE thresholding/cooldown/peak-picking
         // Log-compressed, band-weighted, vibrato-suppressed — same signal driving transients
