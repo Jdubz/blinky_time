@@ -12,7 +12,7 @@
 // environment augmentation. It feeds into the existing CBSS beat tracker —
 // only the ODF source changes.
 //
-// Memory: ~20 KB flash (model weights) + ~8 KB RAM (tensor arena)
+// Memory: ~20 KB flash (model weights) + ~8 KB RAM (tensor arena) + ~3.3 KB context
 // Inference: ~3-5 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)
@@ -33,29 +33,37 @@ public:
     static constexpr int INPUT_MEL_BANDS = 26;
 
     bool begin() {
-        // Note: skip tflite::InitializeTarget() — it reinitializes Serial
-        // at 9600 baud, clobbering our 115200 console. Not needed since
-        // Arduino setup() already initializes Serial.
+        // Guard against double-initialization: static locals in this function
+        // are constructed once and cannot be re-initialized. If begin() was
+        // already successful, just return true.
+        if (ready_) return true;
+
+        // Skip tflite::InitializeTarget() — it reinitializes Serial at 9600
+        // baud, clobbering our 115200 console. Not needed since Arduino
+        // setup() already initializes Serial.
 
         model_ = tflite::GetModel(beat_model_data);
-        if (model_->version() != TFLITE_SCHEMA_VERSION) {
+        if (model_ == nullptr || model_->version() != TFLITE_SCHEMA_VERSION) {
             return false;
         }
 
         // Register ops used by our causal CNN model.
         // Conv1D → Conv2D (TFLite internal), ZeroPadding1D → Pad,
-        // BatchNorm fuses into conv weights during export (usually).
+        // BatchNorm may fuse into conv weights during export, or remain as
+        // separate Mul/Add ops. ReLU is used after each conv layer.
         // If AllocateTensors fails, check tflite model ops with visualizer.
         static tflite::MicroErrorReporter micro_error_reporter;
-        static tflite::MicroMutableOpResolver<8> resolver;
+        static tflite::MicroMutableOpResolver<10> resolver;
         resolver.AddConv2D();          // Conv1D is implemented as Conv2D internally
         resolver.AddReshape();
         resolver.AddFullyConnected();
-        resolver.AddLogistic();        // Sigmoid
+        resolver.AddLogistic();        // Sigmoid (output layer)
         resolver.AddQuantize();
         resolver.AddDequantize();
         resolver.AddPad();             // ZeroPadding1D (causal padding)
-        resolver.AddMul();             // BatchNorm (if not fused during conversion)
+        resolver.AddMul();             // BatchNorm (if not fused)
+        resolver.AddAdd();             // BatchNorm bias (if not fused)
+        resolver.AddRelu();            // ReLU activation after conv layers
 
         static tflite::MicroInterpreter static_interpreter(
             model_, resolver, tensorArena_, TENSOR_ARENA_SIZE,
@@ -77,14 +85,12 @@ public:
 
         // Verify context length fits buffer
         contextLen_ = input_->dims->data[input_->dims->size - 2];
-        if (contextLen_ > MAX_CONTEXT) {
-            return false;  // Model needs more context than buffer allows
+        if (contextLen_ <= 0 || contextLen_ > MAX_CONTEXT) {
+            return false;
         }
 
-        // Fill context buffer with zeros
-        for (int i = 0; i < contextLen_ * INPUT_MEL_BANDS; i++) {
-            contextBuffer_[i] = 0;
-        }
+        // Zero-fill context buffer
+        memset(contextBuffer_, 0, contextLen_ * INPUT_MEL_BANDS * sizeof(float));
         contextWriteIdx_ = 0;
         ready_ = true;
         return true;
@@ -102,19 +108,16 @@ public:
         // Context buffer is (contextLen_, INPUT_MEL_BANDS) in row-major order
         if (contextWriteIdx_ < contextLen_) {
             // Still filling up — just append
-            for (int i = 0; i < INPUT_MEL_BANDS; i++) {
-                contextBuffer_[contextWriteIdx_ * INPUT_MEL_BANDS + i] = melBands[i];
-            }
+            memcpy(&contextBuffer_[contextWriteIdx_ * INPUT_MEL_BANDS],
+                   melBands, INPUT_MEL_BANDS * sizeof(float));
             contextWriteIdx_++;
         } else {
-            // Shift left by one frame
-            for (int i = 0; i < (contextLen_ - 1) * INPUT_MEL_BANDS; i++) {
-                contextBuffer_[i] = contextBuffer_[i + INPUT_MEL_BANDS];
-            }
+            // Shift left by one frame using memmove (handles overlap)
+            memmove(contextBuffer_, contextBuffer_ + INPUT_MEL_BANDS,
+                    (contextLen_ - 1) * INPUT_MEL_BANDS * sizeof(float));
             // Append new frame at end
-            for (int i = 0; i < INPUT_MEL_BANDS; i++) {
-                contextBuffer_[(contextLen_ - 1) * INPUT_MEL_BANDS + i] = melBands[i];
-            }
+            memcpy(&contextBuffer_[(contextLen_ - 1) * INPUT_MEL_BANDS],
+                   melBands, INPUT_MEL_BANDS * sizeof(float));
         }
 
         // Don't run inference until we have a full context window
@@ -134,10 +137,8 @@ public:
                 input_data[i] = static_cast<int8_t>(quantized);
             }
         } else {
-            float* input_data = input_->data.f;
-            for (int i = 0; i < contextLen_ * INPUT_MEL_BANDS; i++) {
-                input_data[i] = contextBuffer_[i];
-            }
+            memcpy(input_->data.f, contextBuffer_,
+                   contextLen_ * INPUT_MEL_BANDS * sizeof(float));
         }
 
         // Run inference

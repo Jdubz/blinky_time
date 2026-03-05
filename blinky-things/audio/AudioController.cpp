@@ -1839,6 +1839,16 @@ void AudioController::detectHmmBeat() {
 
     hmmPrevBestTempo_ = hmmBestTempo_;
 
+    // Keep bpm_ and beatPeriodSamples_ in sync with phase tracker's tempo.
+    // Without this, serial streaming and CBSS logic see stale values because
+    // the Bayesian update path is skipped when barPointerHmm is active.
+    int trackerPeriod = tempoBinLags_[hmmBestTempo_];
+    if (trackerPeriod >= 10) {
+        beatPeriodSamples_ = trackerPeriod;
+        bpm_ = OSS_FRAMES_PER_MIN / static_cast<float>(trackerPeriod);
+        beatPeriodMs_ = 60000.0f / bpm_;
+    }
+
     // Decay confidence when no beat
     if (!beatDetected) {
         cbssConfidence_ *= beatConfidenceDecay;

@@ -257,7 +257,7 @@ public:
 
         bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
         uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)
-        bool barPointerHmm;            // Bar-pointer HMM beat tracking (v34: joint tempo-phase)
+        bool barPointerHmm;            // Phase tracker beat detection (v34, v52: single-tempo forward filter)
         float hmmContrast;             // Phase tracker ODF power-law contrast (v34)
         // (hmmTempoNorm removed v53 — only used by dead joint HMM)
         // (hmmLambda removed v53 — only used by dead joint HMM)
