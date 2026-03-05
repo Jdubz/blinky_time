@@ -44,13 +44,14 @@ quantization:
 
 # Export
 export:
-  max_model_size_kb: 20     # Reject models larger than this
+  max_model_size_kb: 25     # Reject models larger than this (nRF52840 has ~700 KB flash free)
   output_header: "../blinky-things/audio/beat_model_data.h"
   c_array_name: "beat_model_data"
 
-# Data paths
+# Data paths (bulk data on /mnt/storage, processed data local for fast training)
 data:
-  audio_dir: "data/audio"
-  labels_dir: "data/labels"
+  audio_dir: "/mnt/storage/blinky-ml-data/audio"
+  labels_dir: "/mnt/storage/blinky-ml-data/labels"
   processed_dir: "data/processed"
-  test_set: "../blinky-test-player/music/edm"  # Existing 18-track test set
+  rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
+  test_set: "../blinky-test-player/music/edm"  # Existing 19-track test set
