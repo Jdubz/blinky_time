@@ -12,7 +12,7 @@
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 20 bytes (5 floats)
+ * Memory: 24 bytes (6 floats)
  */
 struct AudioControl {
     // === ENERGY ===

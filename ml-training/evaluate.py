@@ -51,6 +51,10 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
 
     all_results = []
 
+    # Detect if model has downbeat output (constant across tracks)
+    out_channels = model.output_shape[-1]
+    has_downbeat = out_channels > 1
+
     for audio_path in audio_files:
         label_path = audio_path.parent / f"{audio_path.stem}.beats.json"
         if not label_path.exists():
@@ -59,10 +63,6 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
         # Load and process
         audio, _ = librosa.load(str(audio_path), sr=sr, mono=True)
         mel = firmware_mel_spectrogram(audio, cfg)
-
-        # Detect if model has downbeat output
-        out_channels = model.output_shape[-1]
-        has_downbeat = out_channels > 1
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
@@ -128,7 +128,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
             result["est_downbeats"] = len(est_downbeats)
 
         all_results.append(result)
-        db_str = f", DB F1={result.get('db_f1', 'N/A'):.3f}" if has_downbeat else ""
+        db_str = f", DB F1={result['db_f1']:.3f}" if has_downbeat else ""
         print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){db_str}")
 
         # Save activation plot

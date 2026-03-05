@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Extract mel spectrograms and beat activation targets from labeled audio.
 
-Replicates the firmware's SharedSpectralAnalysis mel pipeline exactly:
+Replicates the firmware's SharedSpectralAnalysis mel pipeline (raw path):
   - 16 kHz sample rate
   - Hamming window (alpha=0.54, beta=0.46)
   - FFT-256, hop-256 (no overlap)
   - 26 mel bands (60-8000 Hz), HTK mel scale
   - Triangular filterbank (area-normalized)
-  - Soft-knee compressor on FFT magnitudes
   - Log compression: 10*log10(x + 1e-10), mapped [-60, 0] dB -> [0, 1]
+  - NO compressor or whitening (matches getRawMelBands() used at inference)
 
 Acoustic environment augmentation for robustness across venues:
   - Room impulse responses (RIR convolution)
@@ -73,19 +73,19 @@ def firmware_mel_spectrogram(audio: np.ndarray, cfg: dict) -> np.ndarray:
     return log_mel.T  # (n_frames, n_mels)
 
 
-def apply_spectral_conditioning(mel: np.ndarray, cfg: dict) -> np.ndarray:
-    """Apply a static approximation of the firmware's spectral conditioning.
+def apply_spectral_conditioning(mel: np.ndarray) -> np.ndarray:
+    """Apply dynamic range compression + whitening as feature augmentation.
 
-    Simulates the compressor + per-band whitening pipeline that detectors
-    (other than the NN) see. Training on a mix of raw and conditioned mel
-    features teaches the NN robustness — important because:
-      1. NN inference uses raw mel bands (getRawMelBands), but
-      2. If someone accidentally routes conditioned bands, the NN shouldn't break
-      3. The NN should learn features invariant to dynamic range compression
+    Approximates the firmware's spectral conditioning (soft-knee compressor +
+    per-band whitening) applied in the mel-band domain. Not an exact replica
+    of the firmware pipeline (which operates on raw FFT magnitudes), but
+    produces similar gain/normalization effects for augmentation purposes.
+
+    Training on a mix of raw and conditioned mel features teaches the NN
+    robustness to dynamic range variations.
 
     Args:
         mel: (n_frames, n_mels) raw log-compressed mel bands in [0, 1]
-        cfg: config dict (uses compressor params from firmware defaults)
 
     Returns:
         (n_frames, n_mels) conditioned mel bands in [0, 1]
@@ -285,7 +285,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         # Spectral conditioning augmentation: apply firmware compressor+whitening
         # to the clean variant. Teaches NN robustness to spectral conditioning.
         if augment and aug_name == "clean":
-            conditioned_mel = apply_spectral_conditioning(mel, cfg)
+            conditioned_mel = apply_spectral_conditioning(mel)
             cond_result = {
                 "mel": conditioned_mel,
                 "target": targets,

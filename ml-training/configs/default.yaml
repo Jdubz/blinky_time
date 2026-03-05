@@ -22,7 +22,7 @@ model:
   type: "causal_cnn"        # or "tcn"
   channels: 32              # Conv filter count
   kernel_size: 3
-  dilations: [1, 2, 4]      # Receptive field: 21 frames = 336ms
+  dilations: [1, 2, 4]      # Receptive field: 15 frames = 240ms
   dropout: 0.1
   downbeat: true            # Add downbeat output head (channel 1 = downbeat activation)
 

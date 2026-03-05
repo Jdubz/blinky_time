@@ -5,7 +5,7 @@ via TFLite Micro + CMSIS-NN.
 
 Architecture: 3 dilated causal conv layers (shared backbone) with per-task
 output heads. Beat activation is always present; downbeat is optional.
-Receptive field: 21 frames = 336ms at 62.5 Hz (covers one beat at 180 BPM).
+Receptive field: 15 frames = 240ms at 62.5 Hz (covers one beat at 250 BPM).
 Size budget: ~3,500 params = ~14 KB INT8.
 """
 
