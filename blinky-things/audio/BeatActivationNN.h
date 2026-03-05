@@ -21,10 +21,10 @@
 #ifdef ENABLE_NN_BEAT_ACTIVATION
 
 #include <TensorFlowLite.h>
-#include <tensorflow/lite/micro/micro_interpreter.h>
-#include <tensorflow/lite/micro/micro_mutable_op_resolver.h>
-#include <tensorflow/lite/micro/system_setup.h>
-#include <tensorflow/lite/schema/schema_generated.h>
+#include "tensorflow/lite/micro/micro_interpreter.h"
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/system_setup.h"
+#include "tensorflow/lite/schema/schema_generated.h"
 
 #include "beat_model_data.h"
 
@@ -40,14 +40,19 @@ public:
             return false;
         }
 
-        // Register only the ops used by our model
-        static tflite::MicroMutableOpResolver<6> resolver;
+        // Register ops used by our causal CNN model.
+        // Conv1D → Conv2D (TFLite internal), ZeroPadding1D → Pad,
+        // BatchNorm fuses into conv weights during export (usually).
+        // If AllocateTensors fails, check tflite model ops with visualizer.
+        static tflite::MicroMutableOpResolver<8> resolver;
         resolver.AddConv2D();          // Conv1D is implemented as Conv2D internally
         resolver.AddReshape();
         resolver.AddFullyConnected();
         resolver.AddLogistic();        // Sigmoid
         resolver.AddQuantize();
         resolver.AddDequantize();
+        resolver.AddPad();             // ZeroPadding1D (causal padding)
+        resolver.AddMul();             // BatchNorm (if not fused during conversion)
 
         static tflite::MicroInterpreter static_interpreter(
             model_, resolver, tensorArena_, TENSOR_ARENA_SIZE);
@@ -66,8 +71,13 @@ public:
             return false;
         }
 
-        // Fill context buffer with zeros
+        // Verify context length fits buffer
         contextLen_ = input_->dims->data[input_->dims->size - 2];
+        if (contextLen_ > MAX_CONTEXT) {
+            return false;  // Model needs more context than buffer allows
+        }
+
+        // Fill context buffer with zeros
         for (int i = 0; i < contextLen_ * INPUT_MEL_BANDS; i++) {
             contextBuffer_[i] = 0;
         }
@@ -159,8 +169,11 @@ private:
     static constexpr int TENSOR_ARENA_SIZE = 8192;
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
-    // Context buffer for sliding window (max 128 frames × 26 bands)
-    static constexpr int MAX_CONTEXT = 128;
+    // Context buffer for sliding window
+    // Model is exported with --inference-frames (default 32 = 512ms at 62.5 Hz).
+    // Receptive field is 15 frames; 32 provides margin.
+    // Set MAX_CONTEXT >= the exported model's input time dimension.
+    static constexpr int MAX_CONTEXT = 32;
     float contextBuffer_[MAX_CONTEXT * INPUT_MEL_BANDS];
     int contextLen_ = 0;      // Actual context length from model input shape
     int contextWriteIdx_ = 0; // How many frames we've written so far

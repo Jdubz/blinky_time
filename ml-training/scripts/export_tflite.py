@@ -4,11 +4,11 @@
 Usage:
     python scripts/export_tflite.py --config configs/default.yaml
     python scripts/export_tflite.py --config configs/default.yaml --model outputs/best_model.keras
+    python scripts/export_tflite.py --inference-frames 32  # Smaller context = less device RAM
 """
 
 import argparse
 import os
-import struct
 import sys
 from pathlib import Path
 
@@ -19,25 +19,78 @@ import tensorflow as tf
 import yaml
 
 
-def representative_dataset_gen(data_path: Path, n_samples: int = 200):
+def representative_dataset_gen(data_path: Path, inference_frames: int = None,
+                                n_samples: int = 200):
     """Generator for calibration data (required for full INT8 quantization)."""
     X = np.load(data_path / "X_train.npy")
     indices = np.random.choice(len(X), size=min(n_samples, len(X)), replace=False)
     for i in indices:
-        yield [X[i:i+1].astype(np.float32)]
+        sample = X[i:i+1].astype(np.float32)
+        if inference_frames is not None and sample.shape[1] != inference_frames:
+            # Truncate or pad to match inference shape
+            sample = sample[:, :inference_frames, :]
+        yield [sample]
+
+
+def rebuild_model_for_inference(model, inference_frames: int):
+    """Rebuild model with a different input time dimension, copying weights.
+
+    The causal CNN weights are shape-independent along the time axis, so we can
+    export with a smaller context window to save device RAM.
+    """
+    import tf_keras as keras
+    from models.beat_cnn import build_beat_cnn
+
+    # Extract architecture config from trained model
+    input_shape = model.input_shape  # (None, chunk_frames, n_mels)
+    n_mels = input_shape[-1]
+
+    # Count conv layers and extract config
+    conv_layers = [l for l in model.layers if 'conv' in l.name and l.name != 'output_conv']
+    channels = conv_layers[0].filters if conv_layers else 32
+    kernel_size = conv_layers[0].kernel_size[0] if conv_layers else 3
+    dilations = []
+    for l in conv_layers:
+        dilations.append(l.dilation_rate[0])
+
+    print(f"Rebuilding model: {input_shape[-1]} mels, {channels} ch, "
+          f"k={kernel_size}, d={dilations}, inference_frames={inference_frames}")
+
+    new_model = build_beat_cnn(
+        n_mels=n_mels,
+        channels=channels,
+        kernel_size=kernel_size,
+        dilations=dilations,
+        dropout=0.0,  # No dropout at inference
+        chunk_frames=inference_frames,
+    )
+
+    # Copy weights by name
+    for new_layer in new_model.layers:
+        try:
+            old_layer = model.get_layer(new_layer.name)
+            new_layer.set_weights(old_layer.get_weights())
+        except ValueError:
+            pass  # Layers like input, padding don't have weights
+
+    return new_model
 
 
 def export_tflite(model_path: str, data_path: Path, output_path: str,
-                  quantize_int8: bool = True) -> bytes:
+                  quantize_int8: bool = True, inference_frames: int = None) -> bytes:
     """Convert Keras model to TFLite, optionally with INT8 quantization."""
     import tf_keras as keras
     model = keras.models.load_model(model_path, compile=False)
+
+    if inference_frames is not None:
+        model = rebuild_model_for_inference(model, inference_frames)
 
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
     if quantize_int8:
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = lambda: representative_dataset_gen(data_path)
+        converter.representative_dataset = lambda: representative_dataset_gen(
+            data_path, inference_frames=inference_frames)
         converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
         converter.inference_input_type = tf.int8
         converter.inference_output_type = tf.int8
@@ -83,6 +136,9 @@ def main():
     parser.add_argument("--data-dir", default=None, help="Processed data dir (for calibration)")
     parser.add_argument("--output-dir", default="outputs", help="Output directory")
     parser.add_argument("--no-quantize", action="store_true", help="Skip INT8 quantization")
+    parser.add_argument("--inference-frames", type=int, default=None,
+                        help="Context frames for device inference (default: use training chunk size). "
+                             "Smaller = less device RAM. Must be >= receptive field (15 frames).")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -97,6 +153,10 @@ def main():
         print(f"Error: Model not found at {model_path}", file=sys.stderr)
         sys.exit(1)
 
+    if args.inference_frames is not None and args.inference_frames < 15:
+        print(f"Error: --inference-frames must be >= 15 (model receptive field)", file=sys.stderr)
+        sys.exit(1)
+
     max_size_kb = cfg["export"]["max_model_size_kb"]
     c_array_name = cfg["export"]["c_array_name"]
     header_path = cfg["export"]["output_header"]
@@ -105,8 +165,11 @@ def main():
     quantize = not args.no_quantize
     tflite_path = str(output_dir / ("beat_model_int8.tflite" if quantize else "beat_model_fp32.tflite"))
 
-    print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model...")
-    tflite_bytes = export_tflite(model_path, data_dir, tflite_path, quantize_int8=quantize)
+    suffix = f" (inference_frames={args.inference_frames})" if args.inference_frames else ""
+    print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model{suffix}...")
+    tflite_bytes = export_tflite(model_path, data_dir, tflite_path,
+                                  quantize_int8=quantize,
+                                  inference_frames=args.inference_frames)
 
     size_kb = len(tflite_bytes) / 1024
     print(f"TFLite model: {size_kb:.1f} KB ({tflite_path})")
@@ -130,12 +193,20 @@ def main():
     print(f"  Input:  {input_details[0]['shape']} dtype={input_details[0]['dtype']}")
     print(f"  Output: {output_details[0]['shape']} dtype={output_details[0]['dtype']}")
 
-    # Estimate firmware memory
+    # Context buffer RAM estimate for device
+    ctx_frames = args.inference_frames or cfg["training"]["chunk_frames"]
+    n_mels = cfg["audio"]["n_mels"]
+    ctx_ram = ctx_frames * n_mels * 4  # float32 buffer
+    print(f"  Context buffer: {ctx_frames} frames x {n_mels} mels = {ctx_ram / 1024:.1f} KB RAM")
+
+    # Estimate firmware tensor arena
     tensor_arena_kb = sum(
         np.prod(d["shape"]) * np.dtype(d["dtype"]).itemsize
         for d in interpreter.get_tensor_details()
     ) / 1024
     print(f"  Estimated tensor arena: ~{tensor_arena_kb:.1f} KB")
+    print(f"  Total device RAM: ~{(ctx_ram / 1024 + tensor_arena_kb + size_kb):.1f} KB "
+          f"(context + arena + model flash)")
 
 
 if __name__ == "__main__":

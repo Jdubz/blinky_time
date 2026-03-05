@@ -285,6 +285,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
     data_.music.subbeatBins = 8;              // Subbeat bin count
     data_.music.templateHistBars = 2;         // Template history depth in bars
+    data_.music.nnBeatActivation = false;    // NN beat activation (v54: off by default, A/B vs BandFlux)
 
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
@@ -962,6 +963,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->onsetDensityBlend = data_.music.onsetDensityBlend;
         audioCtrl->subbeatBins = data_.music.subbeatBins;
         audioCtrl->templateHistBars = data_.music.templateHistBars;
+        audioCtrl->nnBeatActivation = data_.music.nnBeatActivation;
 
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
@@ -1232,6 +1234,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.onsetDensityBlend = audioCtrl->onsetDensityBlend;
         data_.music.subbeatBins = audioCtrl->subbeatBins;
         data_.music.templateHistBars = audioCtrl->templateHistBars;
+        data_.music.nnBeatActivation = audioCtrl->nnBeatActivation;
 
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;

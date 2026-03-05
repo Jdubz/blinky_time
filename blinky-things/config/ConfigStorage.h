@@ -346,6 +346,9 @@ public:
         float onsetDensityBlend;        // Onset density EMA coefficient
         uint8_t subbeatBins;            // Subbeat bin resolution (even, 4-16)
         uint8_t templateHistBars;       // Template history depth in bars (1-4)
+
+        // NN beat activation (v54)
+        bool nnBeatActivation;          // Use NN ODF instead of BandFlux (requires ENABLE_NN_BEAT_ACTIVATION)
     };
 
     struct StoredBandFluxParams {
@@ -466,7 +469,7 @@ public:
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
     static_assert(sizeof(StoredMusicParams) == 360,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (360 bytes = 74 floats + 14 uint8 + 25 bools + padding)");
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (360 bytes = 74 floats + 14 uint8 + 26 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
