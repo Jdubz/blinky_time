@@ -275,6 +275,19 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.alternationThresh = 1.2f;     // Odd/even ratio threshold
     data_.music.subbeatCheckBeats = 4;        // Check every 4 beats
 
+    // Hidden calibration constants (v51)
+    data_.music.templateMinScore = 0.1f;      // Min Pearson correlation to consider switch
+    data_.music.cbssMeanAlpha = 0.008f;       // CBSS running mean EMA alpha
+    data_.music.harmonic2xThresh = 0.5f;      // ACF half-lag ratio for 2x BPM correction
+    data_.music.harmonic15xThresh = 0.6f;     // ACF 2/3-lag ratio for 1.5x BPM correction
+    data_.music.pllSmoother = 0.95f;          // PLL phase integral leaky decay
+    data_.music.beatConfBoost = 0.15f;        // Confidence increment per beat fire
+    data_.music.rhythmBlend = 0.6f;           // Periodicity weight in rhythmStrength
+    data_.music.periodicityBlend = 0.7f;      // Periodicity strength EMA coefficient
+    data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
+    data_.music.subbeatBins = 8;              // Subbeat bin count
+    data_.music.templateHistBars = 2;         // Template history depth in bars
+
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
     data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
@@ -632,6 +645,23 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     VALIDATE_INT(data_.music.subbeatCheckBeats, 2, 8, F("subbeatCheckBeats"));
     // subbeatCheckEnabled is bool — no range validation needed
 
+    // Hidden calibration constants (v51)
+    validateFloat(data_.music.templateMinScore, 0.0f, 1.0f, F("templateMinScore"));
+    validateFloat(data_.music.cbssMeanAlpha, 0.001f, 0.1f, F("cbssMeanAlpha"));
+    validateFloat(data_.music.harmonic2xThresh, 0.1f, 0.9f, F("harmonic2xThresh"));
+    validateFloat(data_.music.harmonic15xThresh, 0.1f, 0.9f, F("harmonic15xThresh"));
+    validateFloat(data_.music.pllSmoother, 0.8f, 0.99f, F("pllSmoother"));
+    validateFloat(data_.music.beatConfBoost, 0.01f, 0.5f, F("beatConfBoost"));
+    validateFloat(data_.music.rhythmBlend, 0.0f, 1.0f, F("rhythmBlend"));
+    validateFloat(data_.music.periodicityBlend, 0.3f, 0.95f, F("periodicityBlend"));
+    validateFloat(data_.music.onsetDensityBlend, 0.3f, 0.95f, F("onsetDensityBlend"));
+    VALIDATE_INT(data_.music.subbeatBins, 4, 16, F("subbeatBins"));
+    if (data_.music.subbeatBins % 2 != 0) {
+        data_.music.subbeatBins &= ~1u;  // Snap to even (odd bias even/odd alternation)
+        fixedCount++;
+    }
+    VALIDATE_INT(data_.music.templateHistBars, 1, 4, F("templateHistBars"));
+
     // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
@@ -926,6 +956,19 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->alternationThresh = data_.music.alternationThresh;
         audioCtrl->subbeatCheckBeats = data_.music.subbeatCheckBeats;
 
+        // Hidden calibration constants (v51)
+        audioCtrl->templateMinScore = data_.music.templateMinScore;
+        audioCtrl->cbssMeanAlpha = data_.music.cbssMeanAlpha;
+        audioCtrl->harmonic2xThresh = data_.music.harmonic2xThresh;
+        audioCtrl->harmonic15xThresh = data_.music.harmonic15xThresh;
+        audioCtrl->pllSmoother = data_.music.pllSmoother;
+        audioCtrl->beatConfBoost = data_.music.beatConfBoost;
+        audioCtrl->rhythmBlend = data_.music.rhythmBlend;
+        audioCtrl->periodicityBlend = data_.music.periodicityBlend;
+        audioCtrl->onsetDensityBlend = data_.music.onsetDensityBlend;
+        audioCtrl->subbeatBins = data_.music.subbeatBins;
+        audioCtrl->templateHistBars = data_.music.templateHistBars;
+
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->barPointerHmm = data_.music.barPointerHmm;
@@ -1186,6 +1229,19 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.subbeatCheckEnabled = audioCtrl->subbeatCheckEnabled;
         data_.music.alternationThresh = audioCtrl->alternationThresh;
         data_.music.subbeatCheckBeats = audioCtrl->subbeatCheckBeats;
+
+        // Hidden calibration constants (v51)
+        data_.music.templateMinScore = audioCtrl->templateMinScore;
+        data_.music.cbssMeanAlpha = audioCtrl->cbssMeanAlpha;
+        data_.music.harmonic2xThresh = audioCtrl->harmonic2xThresh;
+        data_.music.harmonic15xThresh = audioCtrl->harmonic15xThresh;
+        data_.music.pllSmoother = audioCtrl->pllSmoother;
+        data_.music.beatConfBoost = audioCtrl->beatConfBoost;
+        data_.music.rhythmBlend = audioCtrl->rhythmBlend;
+        data_.music.periodicityBlend = audioCtrl->periodicityBlend;
+        data_.music.onsetDensityBlend = audioCtrl->onsetDensityBlend;
+        data_.music.subbeatBins = audioCtrl->subbeatBins;
+        data_.music.templateHistBars = audioCtrl->templateHistBars;
 
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;

@@ -81,7 +81,8 @@ public:
     // Version 48: Multi-agent beat tracking, anti-harmonic 3rd comb, metrical contrast check
     // Version 49: Continuous ODF observation model for phase tracker (fwdObsLambda, replaces Bernoulli)
     // Version 50: Rhythmic pattern templates + beat critic subbeat alternation (octave disambiguation)
-    static const uint8_t SETTINGS_VERSION = 50;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 51: Hidden calibration constants exposed as serial settings (10 new params)
+    static const uint8_t SETTINGS_VERSION = 51;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -328,6 +329,19 @@ public:
         float alternationThresh;        // Odd/even ratio threshold (0.3-3.0)
         bool subbeatCheckEnabled;       // Enable subbeat alternation check
         uint8_t subbeatCheckBeats;      // Check every N beats (2-8)
+
+        // Hidden constants exposed (v51)
+        float templateMinScore;         // Min Pearson correlation to consider tempo switch
+        float cbssMeanAlpha;            // CBSS running mean EMA alpha
+        float harmonic2xThresh;         // ACF half-lag ratio for 2x BPM correction
+        float harmonic15xThresh;        // ACF 2/3-lag ratio for 1.5x BPM correction
+        float pllSmoother;              // PLL phase integral leaky decay
+        float beatConfBoost;            // Confidence increment per beat fire
+        float rhythmBlend;              // Periodicity weight in rhythmStrength
+        float periodicityBlend;         // Periodicity strength EMA coefficient
+        float onsetDensityBlend;        // Onset density EMA coefficient
+        uint8_t subbeatBins;            // Subbeat bin resolution (even, 4-16)
+        uint8_t templateHistBars;       // Template history depth in bars (1-4)
     };
 
     struct StoredBandFluxParams {
@@ -447,8 +461,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 332,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (332 bytes = 66 floats + 12 uint8 + 28 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 372,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (372 bytes = 75 floats + 14 uint8 + 28 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,

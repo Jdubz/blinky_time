@@ -419,6 +419,30 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerUint8("subbeatcheckbeats", &audioCtrl_->subbeatCheckBeats, "rhythm",
         "Check subbeat alternation every N beats (v50)", 2, 8);
 
+    // Hidden calibration constants (v51)
+    settings_.registerFloat("templateminscore", &audioCtrl_->templateMinScore, "rhythm",
+        "Min template correlation to consider switch (v51)", 0.0f, 1.0f);
+    settings_.registerUint8("subbeatbins", &audioCtrl_->subbeatBins, "rhythm",
+        "Subbeat alternation bin count, even only (v51)", 4, 16);
+    settings_.registerUint8("templatehistbars", &audioCtrl_->templateHistBars, "rhythm",
+        "Template history depth in bars (v51)", 1, 4);
+    settings_.registerFloat("cbssmeanalpha", &audioCtrl_->cbssMeanAlpha, "rhythm",
+        "CBSS running mean EMA alpha (v51)", 0.001f, 0.1f);
+    settings_.registerFloat("harm2xthresh", &audioCtrl_->harmonic2xThresh, "rhythm",
+        "ACF half-lag ratio for 2x BPM correction (v51)", 0.1f, 0.9f);
+    settings_.registerFloat("harm15xthresh", &audioCtrl_->harmonic15xThresh, "rhythm",
+        "ACF 2/3-lag ratio for 1.5x BPM correction (v51)", 0.1f, 0.9f);
+    settings_.registerFloat("pllsmoother", &audioCtrl_->pllSmoother, "rhythm",
+        "PLL phase integral leaky decay (v51)", 0.8f, 0.99f);
+    settings_.registerFloat("beatconfboost", &audioCtrl_->beatConfBoost, "rhythm",
+        "Confidence increment per beat fire (v51)", 0.01f, 0.5f);
+    settings_.registerFloat("rhythmblend", &audioCtrl_->rhythmBlend, "rhythm",
+        "Periodicity weight in rhythmStrength (v51)", 0.0f, 1.0f);
+    settings_.registerFloat("periodicityblend", &audioCtrl_->periodicityBlend, "rhythm",
+        "Periodicity strength EMA coefficient (v51)", 0.3f, 0.95f);
+    settings_.registerFloat("onsetdensityblend", &audioCtrl_->onsetDensityBlend, "rhythm",
+        "Onset density EMA coefficient (v51)", 0.3f, 0.95f);
+
     // BandFlux detector parameters (v29+)
     BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
     settings_.registerFloat("bfgamma", &bf.gamma, "bandflux",
@@ -1315,6 +1339,19 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->subbeatCheckEnabled = false;
         audioCtrl_->alternationThresh = 1.2f;
         audioCtrl_->subbeatCheckBeats = 4;
+
+        // Hidden calibration constants (v51)
+        audioCtrl_->templateMinScore = 0.1f;
+        audioCtrl_->cbssMeanAlpha = 0.008f;
+        audioCtrl_->harmonic2xThresh = 0.5f;
+        audioCtrl_->harmonic15xThresh = 0.6f;
+        audioCtrl_->pllSmoother = 0.95f;
+        audioCtrl_->beatConfBoost = 0.15f;
+        audioCtrl_->rhythmBlend = 0.6f;
+        audioCtrl_->periodicityBlend = 0.7f;
+        audioCtrl_->onsetDensityBlend = 0.7f;
+        audioCtrl_->subbeatBins = 8;
+        audioCtrl_->templateHistBars = 2;
 
         audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
         audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)
