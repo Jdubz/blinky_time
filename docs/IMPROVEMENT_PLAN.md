@@ -1,8 +1,32 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 4, 2026 (v50 rhythmic pattern templates + subbeat alternation)*
+*Last Updated: March 5, 2026 (v54 NN beat activation scaffolding + firmware integration)*
 
 ## Current Status
+
+### In Progress: Neural Network Beat Activation (v54, March 5, 2026)
+
+Training a small causal CNN to replace BandFlux ODF with a learned beat activation. See [ML_TRAINING_PLAN.md](ML_TRAINING_PLAN.md) for full details.
+
+**Completed:**
+- Full `ml-training/` pipeline: feature extraction, model definition, training script, export, evaluation
+- Causal 1D CNN: 3 dilated conv layers, ~9K params, ~20 KB INT8, 15 frame (240ms) receptive field
+- Multi-output: beat activation (channel 0) + downbeat activation (channel 1)
+- Acoustic environment augmentation (volume, noise, reverb, bass boost, RIR convolution)
+- Spectral conditioning augmentation (static compressor + whitening approximation)
+- Firmware integration: `BeatActivationNN.h` (multi-output TFLite Micro), `SharedSpectralAnalysis::getRawMelBands()`, `AudioControl.downbeat`, `AudioController` NN path
+- Compiles on nRF52840: NN build 312 KB flash / 22 KB RAM, non-NN 301 KB / 22 KB
+- Labeling tool research: Beat This! (primary, SOTA), essentia (cross-validation), BeatNet (needs Python 3.11)
+- Determinism verified: Beat This!, librosa, and essentia all produce bit-identical results across runs
+- Cross-tool comparison on 18 EDM tracks: 94% BPM agreement, BT-essentia F1=0.948
+
+**Outstanding:**
+- Install pyenv + Python 3.11 venv for BeatNet/madmom cross-validation
+- Build cross-validation labeling pipeline
+- Download training data (FMA electronic, ~5K tracks)
+- Label with Beat This! + cross-validate
+- Train model on real data
+- Deploy trained model and A/B test vs BandFlux (expected: 0.28-0.35 → 0.50-0.70 F1)
 
 ### Completed (March 4, 2026)
 
@@ -1199,8 +1223,8 @@ Phase is too noisy via microphone in a reverberant room. Dixon (2006) found CSD 
 #### 3b. Log-Spaced Sub-Band Filterbank
 Replace 3-band grouping with 12-24 log-spaced bands. Separates kick from bass, snare from vocals. ~80 lines.
 
-#### 3c. TinyML Onset Detector
-Knowledge-distilled CNN for onset detection. Only approach that can learn room-specific spectral patterns. 10-15 F1 point gap between DSP and neural methods. Long-term research.
+#### 3c. TinyML Beat Activation CNN — IN PROGRESS (v54)
+Causal 1D CNN for beat activation, replacing BandFlux ODF. Full pipeline scaffolded, firmware integrated, awaiting training data. See [ML_TRAINING_PLAN.md](ML_TRAINING_PLAN.md). Expected F1 improvement: 0.28-0.35 → 0.50-0.70.
 
 ### Completed
 
