@@ -24,7 +24,6 @@
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
-#include "tensorflow/lite/micro/system_setup.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 #include "beat_model_data.h"
@@ -34,7 +33,9 @@ public:
     static constexpr int INPUT_MEL_BANDS = 26;
 
     bool begin() {
-        tflite::InitializeTarget();
+        // Note: skip tflite::InitializeTarget() — it reinitializes Serial
+        // at 9600 baud, clobbering our 115200 console. Not needed since
+        // Arduino setup() already initializes Serial.
 
         model_ = tflite::GetModel(beat_model_data);
         if (model_->version() != TFLITE_SCHEMA_VERSION) {
