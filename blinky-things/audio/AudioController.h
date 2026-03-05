@@ -335,8 +335,7 @@ public:
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
 
-    // === IOI HISTOGRAM (enables per-bin observation in Bayesian fusion) ===
-    bool ioiEnabled = false;             // IOI histogram observation (disabled: O(n²), unnormalized counts)
+    // (ioiEnabled removed v52 — dead code since v28)
 
     // === ADAPTIVE ODF THRESHOLD (BTrack-style local mean + HWR) ===
     // Applies local-mean subtraction with half-wave rectification to the OSS
@@ -413,17 +412,20 @@ public:
     bool btrkPipeline = true;            // BTrack pipeline (v33: enabled, replaces multiplicative fusion)
     uint8_t btrkThreshWindow = 0;        // Adaptive threshold half-window (0=off, 1-5 bins each side)
 
-    // === BAR-POINTER HMM BEAT TRACKING (Phase 3.1, v34) ===
-    // Joint tempo-phase tracking via bar-pointer HMM (Bock/madmom 2016).
-    // State = (tempo_bin, position_within_beat). Phase advances deterministically
-    // each frame; tempo can only change at beat boundaries.
-    // v46: HMM uses its own tight hmmTransMatrix_ for beat detection (position-0 wrap).
-    // Reuses tempoBinLags_ from Bayesian tempo fusion.
-    bool barPointerHmm = false;          // Enable HMM beat tracking (A/B vs CBSS)
+    // === PHASE TRACKER BEAT DETECTION (v46b, formerly bar-pointer HMM) ===
+    // Single-tempo phase tracker with continuous ODF observation model.
+    // Bayesian fusion handles tempo; this tracks phase within the best period.
+    // Beat detection via position-0 wrap (detectHmmBeat).
+    // Joint HMM (updateHmmForward) removed v53 — position-wrap doesn't work
+    // across 20 tempo bins (argmax jumps between bins).
+    bool barPointerHmm = false;          // Enable phase tracker beat detection (A/B vs CBSS)
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
-    bool hmmTempoNorm = true;            // Normalize argmax by period (prevents slow-tempo bias)
-    float hmmLambda = 0.05f;             // HMM transition tightness (small=tight, prevents octave jumps) (v46)
+    // (hmmTempoNorm removed v53 — only used by dead joint HMM updateHmmForward)
+    // (hmmLambda removed v53 — only used by dead joint HMM buildHmmTransitionMatrix)
     float fwdObsLambda = 8.0f;           // Continuous ODF observation strength (v49: higher=sharper beat/non-beat)
+    float fwdObsFloor = 0.01f;           // Observation probability floor (v52)
+    float fwdWrapFraction = 0.25f;       // Wrap detection zone fraction (v52)
+    // (hmmBayesBias removed v53 — only used by dead joint HMM updateHmmForward)
 
     // === PARTICLE FILTER BEAT TRACKING (v38) ===
     // Maintains 100 tempo/phase hypotheses; octave variants injected at resampling
@@ -439,8 +441,7 @@ public:
     float pfInfoGate = 0.10f;             // Information gate: floor ODF below this to 0.03 (BeatNet-style, 0=off)
     uint8_t pfObsLambda = 8;              // Observation model lambda: beat region = 1/lambda of period (madmom-style, 2-32)
 
-    // === FOURIER TEMPOGRAM (enables per-bin observation in Bayesian fusion) ===
-    bool ftEnabled = false;              // Fourier tempogram observation (disabled: no ref system uses FT for real-time beat tracking)
+    // (ftEnabled removed v52 — dead code since v28)
 
     // === BAYESIAN TEMPO FUSION ===
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
@@ -450,9 +451,8 @@ public:
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
     float bayesPriorWeight = 0.0f;       // Ongoing static prior strength (0=off, 1=standard, 2=strong)
     float bayesAcfWeight = 0.8f;         // Autocorrelation observation weight (high: harmonic comb makes ACF reliable)
-    float bayesFtWeight = 0.0f;          // Fourier tempogram observation weight (disabled: suspected flat observation vectors)
+    // (bayesFtWeight/bayesIoiWeight removed v52 — dead code since v28)
     float bayesCombWeight = 0.7f;        // Comb filter bank observation weight
-    float bayesIoiWeight = 0.0f;         // IOI histogram observation weight (disabled: O(n²) complexity, unnormalized counts)
     float posteriorFloor = 0.05f;        // Uniform mixing ratio to prevent mode lock (0=off, 0.05=5% floor)
     float disambigNudge = 0.15f;         // Posterior mass transfer when disambiguation corrects (0=off)
     float harmonicTransWeight = 0.30f;   // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
@@ -553,9 +553,7 @@ public:
     // Bayesian tempo state debug getters
     int getBayesBestBin() const { return bayesBestBin_; }
     float getBayesBestConf() const;
-    float getBayesFtObs() const;
     float getBayesCombObs() const;
-    float getBayesIoiObs() const;
 
     // Comb filter bank debug getters
     float getCombBankBPM() const { return combFilterBank_.getPeakBPM(); }
@@ -565,9 +563,6 @@ public:
 
     // Onset density debug getter
     float getOnsetDensity() const { return onsetDensity_; }
-
-    // IOI histogram debug getter
-    int getIOIOnsetCount() const { return ioiOnsetCount_; }
 
     // (lastFtMagRatio_ removed — Bayesian fusion exposes per-bin observations)
 
@@ -727,11 +722,7 @@ private:
     uint16_t onsetCountInWindow_ = 0;      // Onsets detected in current 1s window
     uint32_t onsetDensityWindowStart_ = 0; // Window start timestamp (ms)
 
-    // IOI histogram onset ring buffer (records sample indices of detected onsets)
-    static constexpr int IOI_ONSET_BUFFER_SIZE = 48;
-    int ioiOnsetSamples_[IOI_ONSET_BUFFER_SIZE] = {0};
-    int ioiOnsetWriteIdx_ = 0;
-    int ioiOnsetCount_ = 0;
+    // (IOI onset buffer removed v52 — dead code since v28)
 
     // === BAYESIAN TEMPO STATE ===
     // 40 bins matching CombFilterBank resolution (60-180 BPM, ~3 BPM/bin)
@@ -749,27 +740,15 @@ private:
     float rayleighBpm_ = -1.0f;                  // Last rayleighBpm used to compute rayleighWeight_
     bool tempoStateInitialized_ = false;
     int bayesBestBin_ = TEMPO_BINS / 2;              // Best bin from last fusion (for debug)
-    float lastFtObs_[TEMPO_BINS] = {0};           // Last FT observations (for debug)
     float lastCombObs_[TEMPO_BINS] = {0};         // Last comb observations (for debug)
-    float lastIoiObs_[TEMPO_BINS] = {0};          // Last IOI observations (for debug)
 
-    // === BAR-POINTER HMM STATE (Phase 3.1, v34) ===
-    // State space: (tempo_bin, position) where position ∈ [0, period[tempo_bin])
-    // Total states = sum of all periods ≈ 780 for 20 bins (lags 18-60)
-    static constexpr int MAX_HMM_STATES = 900;  // Upper bound for 20 bins
-    float hmmAlpha_[MAX_HMM_STATES] = {0};      // Forward probability vector
-    int hmmStateOffsets_[TEMPO_BINS + 1] = {0};  // Cumulative offset per tempo bin
-    int hmmPeriods_[TEMPO_BINS] = {0};           // Period (frames/beat) per tempo bin
-    int totalHmmStates_ = 0;                     // Actual total states
-    int hmmBestTempo_ = 0;                       // Best tempo bin (from argmax)
+    // === PHASE TRACKER STATE (v46b) ===
+    // Used by updatePhaseTracker() and detectHmmBeat().
+    // Joint HMM arrays (hmmAlpha_, hmmStateOffsets_, hmmTransMatrix_, etc.) removed v53.
+    int hmmBestTempo_ = 0;                       // Best tempo bin (from Bayesian via phase tracker)
     int hmmBestPosition_ = 0;                    // Best position within beat
     int hmmPrevBestPosition_ = -1;               // Previous frame's best position (for phase wrap detection)
-    bool hmmInitialized_ = false;
-
-    // HMM-specific transition matrix (v46: tight lambda for beat detection)
-    float hmmTransMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};
-    float hmmTransLambda_ = -1.0f;              // Cache key: rebuild when hmmLambda changes
-    int hmmPrevBestTempo_ = 0;                  // Previous frame's best tempo (spurious wrap detection)
+    int hmmPrevBestTempo_ = 0;                   // Previous frame's best tempo (spurious wrap detection)
 
     // === PHASE-ONLY TRACKER (v46b) ===
     // Single-tempo circular distribution — Bayesian handles tempo, this tracks phase.
@@ -839,11 +818,8 @@ private:
     // (checkPhaseAlignment removed v44 — net-negative on 18-track validation)
     void switchTempo(int newPeriodSamples);
 
-    // Bar-pointer HMM beat tracking (Phase 3.1)
-    void initHmmState();
-    void updateHmmForward(float onsetStrength);
-    void buildHmmTransitionMatrix();  // v46: tight transition matrix for HMM beat detection
-    void detectHmmBeat();             // v46: HMM position-0 wrap beat detection
+    // Phase tracker beat detection (v46b, joint HMM removed v53)
+    void detectHmmBeat();             // v46: position-0 wrap beat detection
 
     // Multi-agent beat tracking (v48)
     void initBeatAgents();
@@ -890,8 +866,6 @@ private:
                                 int minLag, int maxLag, float avgEnergy,
                                 float samplesPerMs, bool debugPrint,
                                 int harmonicCorrelationSize);
-    void computeFTObservations(float* ftObs, int numBins);
-    void computeIOIObservations(float* ioiObs, int numBins);
     int findClosestTempoBin(float targetBpm) const;
 
     // Tempo prior and stability

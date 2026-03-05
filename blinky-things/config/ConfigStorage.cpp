@@ -202,9 +202,8 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.bayesPriorCenter = 128.0f;   // Static prior center BPM (EDM midpoint)
     data_.music.bayesPriorWeight = 0.0f;     // Ongoing static prior strength (0=off, harmonic disambig handles sub-harmonics)
     data_.music.bayesAcfWeight = 0.8f;       // High weight: harmonic comb makes ACF reliable (v25)
-    data_.music.bayesFtWeight = 0.0f;        // Fourier tempogram — disabled (v28: no ref system uses FT for real-time beat tracking)
+    // (bayesFtWeight/bayesIoiWeight removed v52 — dead code since v28)
     data_.music.bayesCombWeight = 0.7f;      // Comb filter bank observation weight
-    data_.music.bayesIoiWeight = 0.0f;       // IOI histogram — disabled (v28: O(n²), unnormalized counts dominate posterior)
     data_.music.posteriorFloor = 0.05f;      // 5% uniform mixing to prevent half-time mode lock (v30)
     data_.music.disambigNudge = 0.15f;       // Transfer 15% mass on disambiguation correction (v30)
     data_.music.harmonicTransWeight = 0.30f; // Harmonic transition shortcuts for 2:1/1:2/3:2 jumps (v30)
@@ -218,9 +217,8 @@ void ConfigStorage::loadSettingsDefaults() {
 
     data_.music.odfSmoothWidth = 5;          // ODF smooth window (odd, 3-11)
     data_.music.octaveCheckBeats = 2;        // Check octave every N beats (v32: was 4, aggressive works better)
-    data_.music.ioiEnabled = false;          // IOI histogram observation (disabled v28)
+    // (ioiEnabled/ftEnabled removed v52 — dead code since v28)
     data_.music.odfMeanSubEnabled = false;   // ODF mean subtraction (v32: disabled — raw ODF +70% F1 vs global mean sub)
-    data_.music.ftEnabled = false;           // Fourier tempogram observation (disabled v28)
     data_.music.beatBoundaryTempo = true;    // Defer tempo to beat boundaries (v28, BTrack-style)
     data_.music.unifiedOdf = true;           // BandFlux pre-threshold as CBSS ODF (v28, BTrack-style)
     data_.music.adaptiveOdfThresh = false;   // Local-mean ODF threshold (v31, marginal benefit — keep off)
@@ -290,11 +288,12 @@ void ConfigStorage::loadSettingsDefaults() {
 
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
-    data_.music.barPointerHmm = false;       // Bar-pointer HMM (v34: disabled by default, A/B vs CBSS)
+    data_.music.barPointerHmm = false;       // Phase tracker (v34: disabled by default, A/B vs CBSS)
     data_.music.hmmContrast = 2.0f;           // ODF power-law contrast (sharper beat/non-beat)
-    data_.music.hmmTempoNorm = true;          // Tempo-normalized argmax (prevents slow-tempo bias)
-    data_.music.hmmLambda = 0.05f;            // HMM transition tightness (v46: tight prevents octave jumps)
+    // (hmmTempoNorm, hmmLambda, hmmBayesBias removed v53 — joint HMM dead code)
     data_.music.fwdObsLambda = 8.0f;          // Continuous ODF observation strength (v49)
+    data_.music.fwdObsFloor = 0.01f;          // Observation probability floor (v52)
+    data_.music.fwdWrapFraction = 0.25f;      // Wrap detection zone fraction (v52)
 
     // Particle filter beat tracking defaults (v38)
     data_.music.particleFilterEnabled = false; // Disabled by default (A/B vs CBSS+Bayesian)
@@ -590,9 +589,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.bayesPriorCenter, 60.0f, 200.0f, F("bayesPriorCenter"));
     validateFloat(data_.music.bayesPriorWeight, 0.0f, 3.0f, F("bayesPriorWeight"));
     validateFloat(data_.music.bayesAcfWeight, 0.0f, 5.0f, F("bayesAcfWeight"));
-    validateFloat(data_.music.bayesFtWeight, 0.0f, 5.0f, F("bayesFtWeight"));
     validateFloat(data_.music.bayesCombWeight, 0.0f, 5.0f, F("bayesCombWeight"));
-    validateFloat(data_.music.bayesIoiWeight, 0.0f, 5.0f, F("bayesIoiWeight"));
     validateFloat(data_.music.posteriorFloor, 0.0f, 0.5f, F("posteriorFloor"));
     validateFloat(data_.music.disambigNudge, 0.0f, 0.5f, F("disambigNudge"));
     validateFloat(data_.music.harmonicTransWeight, 0.0f, 1.0f, F("harmonicTransWeight"));
@@ -601,7 +598,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
         fixedCount++;
     }
-    // ioiEnabled, odfMeanSubEnabled, ftEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
+    // odfMeanSubEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
     validateFloat(data_.music.rayleighBpm, 60.0f, 180.0f, F("rayleighBpm"));
     validateFloat(data_.music.tempoNudge, 0.0f, 1.0f, F("tempoNudge"));
     // fold32Enabled, sesquiCheckEnabled, bidirectionalSnap, harmonicSesqui are bools — no range validation needed
@@ -683,8 +680,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     }
     validateFloat(data_.music.octaveScoreRatio, 1.0f, 5.0f, F("octaveScoreRatio"));
     validateFloat(data_.music.hmmContrast, 0.5f, 8.0f, F("hmmContrast"));
-    validateFloat(data_.music.hmmLambda, 0.01f, 1.0f, F("hmmLambda"));
     validateFloat(data_.music.fwdObsLambda, 2.0f, 32.0f, F("fwdObsLambda"));
+    validateFloat(data_.music.fwdObsFloor, 0.001f, 0.1f, F("fwdObsFloor"));
+    validateFloat(data_.music.fwdWrapFraction, 0.1f, 0.4f, F("fwdWrapFraction"));
 
     // Particle filter validation (v38)
     validateFloat(data_.music.pfNoise, 0.001f, 0.3f, F("pfNoise"));
@@ -886,18 +884,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->bayesPriorCenter = data_.music.bayesPriorCenter;
         audioCtrl->bayesPriorWeight = data_.music.bayesPriorWeight;
         audioCtrl->bayesAcfWeight = data_.music.bayesAcfWeight;
-        audioCtrl->bayesFtWeight = data_.music.bayesFtWeight;
         audioCtrl->bayesCombWeight = data_.music.bayesCombWeight;
-        audioCtrl->bayesIoiWeight = data_.music.bayesIoiWeight;
         audioCtrl->posteriorFloor = data_.music.posteriorFloor;
         audioCtrl->disambigNudge = data_.music.disambigNudge;
         audioCtrl->harmonicTransWeight = data_.music.harmonicTransWeight;
 
         audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
         audioCtrl->octaveCheckBeats = data_.music.octaveCheckBeats;
-        audioCtrl->ioiEnabled = data_.music.ioiEnabled;
         audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
-        audioCtrl->ftEnabled = data_.music.ftEnabled;
         audioCtrl->beatBoundaryTempo = data_.music.beatBoundaryTempo;
         audioCtrl->unifiedOdf = data_.music.unifiedOdf;
         audioCtrl->adaptiveOdfThresh = data_.music.adaptiveOdfThresh;
@@ -973,9 +967,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
         audioCtrl->barPointerHmm = data_.music.barPointerHmm;
         audioCtrl->hmmContrast = data_.music.hmmContrast;
-        audioCtrl->hmmTempoNorm = data_.music.hmmTempoNorm;
-        audioCtrl->hmmLambda = data_.music.hmmLambda;
         audioCtrl->fwdObsLambda = data_.music.fwdObsLambda;
+        audioCtrl->fwdObsFloor = data_.music.fwdObsFloor;
+        audioCtrl->fwdWrapFraction = data_.music.fwdWrapFraction;
         audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
 
         // Particle filter beat tracking (v38)
@@ -1160,18 +1154,14 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.bayesPriorCenter = audioCtrl->bayesPriorCenter;
         data_.music.bayesPriorWeight = audioCtrl->bayesPriorWeight;
         data_.music.bayesAcfWeight = audioCtrl->bayesAcfWeight;
-        data_.music.bayesFtWeight = audioCtrl->bayesFtWeight;
         data_.music.bayesCombWeight = audioCtrl->bayesCombWeight;
-        data_.music.bayesIoiWeight = audioCtrl->bayesIoiWeight;
         data_.music.posteriorFloor = audioCtrl->posteriorFloor;
         data_.music.disambigNudge = audioCtrl->disambigNudge;
         data_.music.harmonicTransWeight = audioCtrl->harmonicTransWeight;
 
         data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
         data_.music.octaveCheckBeats = audioCtrl->octaveCheckBeats;
-        data_.music.ioiEnabled = audioCtrl->ioiEnabled;
         data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
-        data_.music.ftEnabled = audioCtrl->ftEnabled;
         data_.music.beatBoundaryTempo = audioCtrl->beatBoundaryTempo;
         data_.music.unifiedOdf = audioCtrl->unifiedOdf;
         data_.music.adaptiveOdfThresh = audioCtrl->adaptiveOdfThresh;
@@ -1247,9 +1237,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
         data_.music.barPointerHmm = audioCtrl->barPointerHmm;
         data_.music.hmmContrast = audioCtrl->hmmContrast;
-        data_.music.hmmTempoNorm = audioCtrl->hmmTempoNorm;
-        data_.music.hmmLambda = audioCtrl->hmmLambda;
         data_.music.fwdObsLambda = audioCtrl->fwdObsLambda;
+        data_.music.fwdObsFloor = audioCtrl->fwdObsFloor;
+        data_.music.fwdWrapFraction = audioCtrl->fwdWrapFraction;
         data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
 
         // Particle filter beat tracking (v38)
