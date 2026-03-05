@@ -30,6 +30,11 @@ UPLOAD_PORT ?= /dev/ttyACM0
 BUILD_OUTPUT_DIR ?= /tmp/blinky-build
 UF2_UPLOAD_TOOL = tools/uf2_upload.py
 
+# NN beat activation (set NN=1 to enable TFLite inference)
+ifdef NN
+EXTRA_CPP_FLAGS += -DENABLE_NN_BEAT_ACTIVATION
+endif
+
 # Arduino CLI detection
 ifeq ($(OS),Windows_NT)
     ARDUINO_CLI = arduino-cli.exe
@@ -60,8 +65,14 @@ help:
 	@echo "  uf2-test       - Verify upload infrastructure is ready"
 	@echo "  safety-check   - Run pre-compile safety checks only"
 	@echo ""
+	@echo "NN Beat Activation (ML model):"
+	@echo "  compile NN=1     - Compile with TFLite NN beat activation"
+	@echo "  uf2-upload NN=1  - Upload with NN beat activation enabled"
+	@echo "  setup-tflite     - Install TFLite Micro Arduino library"
+	@echo ""
 	@echo "Parameters:"
 	@echo "  DEVICE       - Device type (1=Hat, 2=TubeLight, 3=BucketTotem)"
+	@echo "  NN           - Set to 1 to enable NN beat activation (requires TFLite lib)"
 	@echo "  PORT         - Serial port for Windows (default: COM3)"
 	@echo "  UPLOAD_PORT  - Serial port for single UF2 upload (default: /dev/ttyACM0)"
 	@echo "  UPLOAD_PORTS - Space-separated ports for uf2-upload-all"
@@ -100,7 +111,7 @@ compile: check-arduino-cli update-device-type version
 	@echo "========================================"
 	@echo "Sketch: $(SKETCH_DIR)"
 	@echo "Board: $(FQBN)"
-	@cd $(SKETCH_DIR) && $(ARDUINO_CLI) compile --fqbn $(FQBN) .
+	@cd $(SKETCH_DIR) && $(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") .
 	@echo "Compilation successful!"
 
 # Upload sketch
@@ -191,7 +202,7 @@ compile-out: safety-check check-arduino-cli update-device-type version
 	@echo "========================================"
 	@echo "Sketch: $(SKETCH_DIR)"
 	@echo "Board: $(FQBN)"
-	@$(ARDUINO_CLI) compile --fqbn $(FQBN) --output-dir $(BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
+	@$(ARDUINO_CLI) compile --fqbn $(FQBN) $(if $(EXTRA_CPP_FLAGS),--build-property "compiler.cpp.extra_flags=$(EXTRA_CPP_FLAGS)") --output-dir $(BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
 	@echo "Compilation successful!"
 
 # UF2 upload: compile + validate + convert + upload
@@ -221,6 +232,12 @@ uf2-check: compile-out
 .PHONY: uf2-test
 uf2-test:
 	python3 $(UF2_UPLOAD_TOOL) --self-test
+
+# Install TFLite Micro Arduino library (required for NN=1 builds)
+.PHONY: setup-tflite
+setup-tflite:
+	@echo "Installing TFLite Micro Arduino library..."
+	@bash tools/setup_tflite_lib.sh
 
 # Quick aliases
 .PHONY: build flash serial boards

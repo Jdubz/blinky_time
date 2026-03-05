@@ -1,0 +1,30 @@
+# ML Training Pipeline for Blinky Beat Activation
+# Install: pip install -r requirements.txt
+# Note: Install PyTorch first for CUDA support:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# Core ML
+tensorflow>=2.16,<2.21
+tf_keras>=2.16
+tensorflow-model-optimization>=0.8
+
+# Audio processing
+librosa>=0.10
+soundfile>=0.12
+numpy>=1.26,<2.0
+scipy>=1.10
+
+# Beat annotation (GPU)
+beat-this @ git+https://github.com/CPJKU/beat_this.git
+
+# Evaluation
+scikit-learn>=1.3
+matplotlib>=3.7
+mir_eval>=0.7
+
+# Acoustic augmentation
+audiomentations>=0.30
+
+# Data management
+pyyaml>=6.0
+tqdm>=4.65

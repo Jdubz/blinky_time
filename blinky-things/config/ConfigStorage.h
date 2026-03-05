@@ -82,7 +82,10 @@ public:
     // Version 49: Continuous ODF observation model for phase tracker (fwdObsLambda, replaces Bernoulli)
     // Version 50: Rhythmic pattern templates + beat critic subbeat alternation (octave disambiguation)
     // Version 51: Hidden calibration constants exposed as serial settings (10 new params)
-    static const uint8_t SETTINGS_VERSION = 51;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    // Version 52: Joint forward filter fix (fwdObsFloor, fwdWrapFraction) + remove FT/IOI dead code
+    // Version 53: Remove joint HMM dead code (hmmTempoNorm, hmmLambda, hmmBayesBias)
+    // Version 54: Add nnBeatActivation (NN beat ODF toggle)
+    static const uint8_t SETTINGS_VERSION = 54;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -216,9 +219,8 @@ public:
         float bayesPriorCenter;         // Static prior center BPM (Gaussian)
         float bayesPriorWeight;         // Ongoing static prior strength (0=off, 1=standard, 2=strong)
         float bayesAcfWeight;           // Autocorrelation observation weight
-        float bayesFtWeight;            // Fourier tempogram observation weight
+        // (bayesFtWeight/bayesIoiWeight removed v52 — dead code since v28)
         float bayesCombWeight;          // Comb filter bank observation weight
-        float bayesIoiWeight;           // IOI histogram observation weight
         float posteriorFloor;           // Posterior uniform floor (0=off, 0.05=5% mixing)
         float disambigNudge;            // Posterior nudge on disambiguation correction (0=off)
         float harmonicTransWeight;      // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
@@ -230,9 +232,8 @@ public:
 
         uint8_t odfSmoothWidth;         // ODF smooth window (3-11, odd)
         uint8_t octaveCheckBeats;       // Check octave every N beats (4)
-        bool ioiEnabled;                // Enable IOI histogram observation
+        // (ioiEnabled/ftEnabled removed v52 — dead code since v28)
         bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
-        bool ftEnabled;                 // Enable Fourier tempogram observation
         bool beatBoundaryTempo;         // Defer tempo changes to beat boundaries (v28)
         bool unifiedOdf;                // Use BandFlux pre-threshold as CBSS ODF (v28)
         bool adaptiveOdfThresh;         // Local-mean ODF threshold before autocorrelation (v31)
@@ -256,11 +257,14 @@ public:
 
         bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
         uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)
-        bool barPointerHmm;            // Bar-pointer HMM beat tracking (v34: joint tempo-phase)
-        float hmmContrast;             // HMM ODF power-law contrast (v34)
-        bool hmmTempoNorm;             // HMM tempo-normalized argmax (v34)
-        float hmmLambda;               // HMM transition tightness (v46: 0.01-1.0, default 0.05)
+        bool barPointerHmm;            // Phase tracker beat detection (v34, v52: single-tempo forward filter)
+        float hmmContrast;             // Phase tracker ODF power-law contrast (v34)
+        // (hmmTempoNorm removed v53 — only used by dead joint HMM)
+        // (hmmLambda removed v53 — only used by dead joint HMM)
         float fwdObsLambda;            // Continuous ODF observation strength (v49: 2-32, default 8)
+        float fwdObsFloor;             // Observation probability floor (v52: 0.001-0.1, default 0.01)
+        float fwdWrapFraction;         // Wrap detection zone fraction (v52: 0.1-0.4, default 0.25)
+        // (hmmBayesBias removed v53 — only used by dead joint HMM)
 
         // Particle filter beat tracking (v38)
         bool particleFilterEnabled;    // Enable PF (A/B vs CBSS+Bayesian)
@@ -342,6 +346,9 @@ public:
         float onsetDensityBlend;        // Onset density EMA coefficient
         uint8_t subbeatBins;            // Subbeat bin resolution (even, 4-16)
         uint8_t templateHistBars;       // Template history depth in bars (1-4)
+
+        // NN beat activation (v54)
+        bool nnBeatActivation;          // Use NN ODF instead of BandFlux (requires ENABLE_NN_BEAT_ACTIVATION)
     };
 
     struct StoredBandFluxParams {
@@ -461,8 +468,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 372,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (372 bytes = 75 floats + 14 uint8 + 28 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 360,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (360 bytes = 74 floats + 14 uint8 + 26 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,

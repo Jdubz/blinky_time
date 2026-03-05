@@ -2906,6 +2906,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ));
 
           // Run all tracks × all runs
+          // Results are written incrementally after each track so interrupted suites
+          // only lose the currently-running track's data.
+          ensureTestResultsDir();
+          const valStartTimestamp = Date.now();
+          const valFilename = `validation-suite-${valStartTimestamp}.json`;
+          const valPath = join(TEST_RESULTS_DIR, valFilename);
+
           const trackResults: Array<{
             track: string;
             bpm: number;
@@ -3031,6 +3038,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               perDevice,
             });
 
+            // Write incremental results after each track (survives interruption)
+            const partialResults = {
+              type: 'validation_suite',
+              status: trackIdx < allTracks.length - 1 ? 'in_progress' : 'complete',
+              timestamp: new Date(valStartTimestamp).toISOString(),
+              config: { ports: valPorts, runs: valNumRuns, trackCount: allTracks.length, trackDir, gain: valGain, durationMs: valDurationMs },
+              completedTracks: trackResults.length,
+              totalTracks: allTracks.length,
+              trackResults,
+            };
+            writeFileSync(valPath, JSON.stringify(partialResults, null, 2));
+
             // Inter-track gap (same duration as inter-run; AGC re-adapts within first ~2s
             // of new track, so 5s is sufficient for both cases)
             if (trackIdx < allTracks.length - 1) {
@@ -3054,15 +3073,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             };
           });
 
-          // Save full results to disk
-          ensureTestResultsDir();
-          const valTimestamp = Date.now();
-          const valFilename = `validation-suite-${valTimestamp}.json`;
-          const valPath = join(TEST_RESULTS_DIR, valFilename);
+          // Final write with overall aggregates (overwrites incremental file)
           const fullValidationResults = {
             type: 'validation_suite',
-            timestamp: new Date(valTimestamp).toISOString(),
+            status: 'complete',
+            timestamp: new Date(valStartTimestamp).toISOString(),
             config: { ports: valPorts, runs: valNumRuns, trackCount: allTracks.length, trackDir, gain: valGain, durationMs: valDurationMs },
+            completedTracks: trackResults.length,
+            totalTracks: allTracks.length,
             overallPerDevice,
             trackResults,
           };

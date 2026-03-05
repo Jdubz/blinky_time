@@ -271,16 +271,15 @@ void SerialConsole::registerRhythmSettings() {
         "Tempo EMA smoothing (0.5=fast, 0.99=slow)", 0.5f, 0.99f);
     settings_.registerUint8("odfsmooth", &audioCtrl_->odfSmoothWidth, "rhythm",
         "ODF smooth window (3-11, odd)", 3, 11);
-    settings_.registerBool("ioi", &audioCtrl_->ioiEnabled, "rhythm",
-        "IOI histogram observation in Bayesian fusion");
+    // (ioi/ft registrations removed v52 — dead code since v28)
     settings_.registerBool("odfmeansub", &audioCtrl_->odfMeanSubEnabled, "rhythm",
         "ODF mean subtraction before autocorrelation (BTrack-style detrending)");
-    settings_.registerBool("ft", &audioCtrl_->ftEnabled, "rhythm",
-        "Fourier tempogram observation in Bayesian fusion");
     settings_.registerBool("beatboundary", &audioCtrl_->beatBoundaryTempo, "rhythm",
         "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
     settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",
         "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
+    settings_.registerBool("nnbeat", &audioCtrl_->nnBeatActivation, "rhythm",
+        "Use NN beat activation as ODF (overrides unifiedOdf when model loaded)");
     settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
         "Local-mean ODF threshold before autocorrelation (BTrack-style, v32)");
     settings_.registerUint8("odfthreshwin", &audioCtrl_->odfThreshWindow, "rhythm",
@@ -310,15 +309,16 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerUint8("btrkthreshwin", &audioCtrl_->btrkThreshWindow, "rhythm",
         "Pipeline adaptive threshold half-window (0=off, 1-5 bins each side)", 0, 5);
     settings_.registerBool("hmm", &audioCtrl_->barPointerHmm, "rhythm",
-        "Bar-pointer HMM beat tracking (v34, A/B vs CBSS)");
+        "Phase tracker beat detection (v34, A/B vs CBSS)");
     settings_.registerFloat("hmmcontrast", &audioCtrl_->hmmContrast, "rhythm",
-        "HMM ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
-    settings_.registerBool("hmmtemponorm", &audioCtrl_->hmmTempoNorm, "rhythm",
-        "HMM tempo-normalized argmax (prevents slow-tempo bias)");
-    settings_.registerFloat("hmmlambda", &audioCtrl_->hmmLambda, "rhythm",
-        "HMM transition tightness (small=tight, prevents octave jumps) (v46)", 0.01f, 1.0f);
+        "Phase tracker ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
+    // (hmmtemponorm, hmmlambda, hmmbayesbias removed v53 — joint HMM dead code)
     settings_.registerFloat("fwdobslambda", &audioCtrl_->fwdObsLambda, "rhythm",
         "Continuous ODF observation strength (v49: higher=sharper beat/non-beat)", 2.0f, 32.0f);
+    settings_.registerFloat("fwdobsfloor", &audioCtrl_->fwdObsFloor, "rhythm",
+        "Observation probability floor (v52)", 0.001f, 0.1f);
+    settings_.registerFloat("fwdwrapfrac", &audioCtrl_->fwdWrapFraction, "rhythm",
+        "Wrap detection zone fraction (v52: 0.25=25% of period)", 0.1f, 0.4f);
     settings_.registerBool("particlefilter", &audioCtrl_->particleFilterEnabled, "rhythm",
         "Particle filter beat tracking (v38, A/B vs CBSS)");
     settings_.registerFloat("pfnoise", &audioCtrl_->pfNoise, "rhythm",
@@ -487,12 +487,9 @@ void SerialConsole::registerRhythmSettings() {
         "Ongoing static prior strength (0=off, 1=std, 2=strong)", 0.0f, 3.0f);
     settings_.registerFloat("bayesacf", &audioCtrl_->bayesAcfWeight, "bayesian",
         "Autocorrelation observation weight", 0.0f, 5.0f);
-    settings_.registerFloat("bayesft", &audioCtrl_->bayesFtWeight, "bayesian",
-        "Fourier tempogram observation weight", 0.0f, 5.0f);
+    // (bayesft/bayesioi registrations removed v52 — dead code since v28)
     settings_.registerFloat("bayescomb", &audioCtrl_->bayesCombWeight, "bayesian",
         "Comb filter bank observation weight", 0.0f, 5.0f);
-    settings_.registerFloat("bayesioi", &audioCtrl_->bayesIoiWeight, "bayesian",
-        "IOI histogram observation weight", 0.0f, 5.0f);
     settings_.registerFloat("postfloor", &audioCtrl_->posteriorFloor, "bayesian",
         "Posterior uniform floor to prevent mode lock (0=off)", 0.0f, 0.5f);
     settings_.registerFloat("disambignudge", &audioCtrl_->disambigNudge, "bayesian",
@@ -1266,15 +1263,11 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->bayesPriorCenter = 128.0f;
         audioCtrl_->bayesPriorWeight = 0.0f;
         audioCtrl_->bayesAcfWeight = 0.8f;
-        audioCtrl_->bayesFtWeight = 0.0f;
         audioCtrl_->bayesCombWeight = 0.7f;
-        audioCtrl_->bayesIoiWeight = 0.0f;
         audioCtrl_->posteriorFloor = 0.05f;
         audioCtrl_->disambigNudge = 0.15f;
         audioCtrl_->harmonicTransWeight = 0.30f;
         audioCtrl_->cbssThresholdFactor = 1.0f;
-        audioCtrl_->ioiEnabled = false;
-        audioCtrl_->ftEnabled = false;
         audioCtrl_->beatBoundaryTempo = true;
         audioCtrl_->unifiedOdf = true;
         audioCtrl_->odfMeanSubEnabled = false;   // v32: raw ODF better than mean-subtracted
@@ -1288,11 +1281,12 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->octaveScoreRatio = 1.3f;      // v32: aggressive threshold
         audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
         audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
-        audioCtrl_->barPointerHmm = false;        // v34: bar-pointer HMM (disabled by default, A/B)
+        audioCtrl_->barPointerHmm = false;        // v34: phase tracker (disabled by default, A/B)
         audioCtrl_->hmmContrast = 2.0f;           // v34: ODF power-law contrast
-        audioCtrl_->hmmTempoNorm = true;          // v34: tempo-normalized argmax
-        audioCtrl_->hmmLambda = 0.05f;            // v46: HMM transition tightness
+        // (hmmTempoNorm, hmmLambda, hmmBayesBias removed v53)
         audioCtrl_->fwdObsLambda = 8.0f;          // v49: continuous ODF observation strength
+        audioCtrl_->fwdObsFloor = 0.01f;          // v52: observation probability floor
+        audioCtrl_->fwdWrapFraction = 0.25f;      // v52: wrap detection zone fraction
         audioCtrl_->cbssContrast = 1.0f;           // v37: ODF contrast before CBSS
         audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
         audioCtrl_->onsetSnapWindow = 8;           // v39: snap beat to strongest OSS in ±8 frames
@@ -1690,19 +1684,7 @@ void SerialConsole::syncEffectSettings() {
 
 void SerialConsole::checkBayesianInteractions() {
     // audioCtrl_ guaranteed valid — allocated in setup() before any commands
-
-    // WARN: cbssthresh < 0.8 + bayesft > 0.5 causes catastrophic F1 collapse (0.049)
-    // because FT sub-harmonic bias floods CBSS with phantom beats at low threshold.
-    // See PARAMETER_TUNING_HISTORY.md "Combined Bayesian validation" for details.
-    float cbss = audioCtrl_->cbssThresholdFactor;
-    float ft = audioCtrl_->bayesFtWeight;
-    float ioi = audioCtrl_->bayesIoiWeight;
-
-    if (cbss < 0.8f && (ft > 0.5f || ioi > 0.5f)) {
-        Serial.println(F("WARNING: cbssthresh < 0.8 with bayesft or bayesioi > 0.5 causes"));
-        Serial.println(F("  catastrophic beat tracking failure. Raise cbssthresh >= 1.0"));
-        Serial.println(F("  or lower bayesft/bayesioi <= 0.5. See PARAMETER_TUNING_HISTORY.md"));
-    }
+    // (FT/IOI interaction warning removed v52 — FT/IOI dead code removed)
 }
 
 void SerialConsole::streamTick() {
@@ -1857,12 +1839,8 @@ void SerialConsole::streamTick() {
                 Serial.print(audioCtrl_->getBayesBestBin());
                 Serial.print(F(",\"bbc\":"));
                 Serial.print(audioCtrl_->getBayesBestConf(), 4);
-                Serial.print(F(",\"bft\":"));
-                Serial.print(audioCtrl_->getBayesFtObs(), 3);
                 Serial.print(F(",\"bcb\":"));
                 Serial.print(audioCtrl_->getBayesCombObs(), 3);
-                Serial.print(F(",\"bio\":"));
-                Serial.print(audioCtrl_->getBayesIoiObs(), 3);
                 // (PLP streaming fields removed v44 — feature deleted)
             }
 
