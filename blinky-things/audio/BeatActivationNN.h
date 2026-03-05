@@ -21,6 +21,7 @@
 #ifdef ENABLE_NN_BEAT_ACTIVATION
 
 #include <TensorFlowLite.h>
+#include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/micro/system_setup.h"
@@ -44,6 +45,7 @@ public:
         // Conv1D → Conv2D (TFLite internal), ZeroPadding1D → Pad,
         // BatchNorm fuses into conv weights during export (usually).
         // If AllocateTensors fails, check tflite model ops with visualizer.
+        static tflite::MicroErrorReporter micro_error_reporter;
         static tflite::MicroMutableOpResolver<8> resolver;
         resolver.AddConv2D();          // Conv1D is implemented as Conv2D internally
         resolver.AddReshape();
@@ -55,7 +57,8 @@ public:
         resolver.AddMul();             // BatchNorm (if not fused during conversion)
 
         static tflite::MicroInterpreter static_interpreter(
-            model_, resolver, tensorArena_, TENSOR_ARENA_SIZE);
+            model_, resolver, tensorArena_, TENSOR_ARENA_SIZE,
+            &micro_error_reporter);
         interpreter_ = &static_interpreter;
 
         if (interpreter_->AllocateTensors() != kTfLiteOk) {
