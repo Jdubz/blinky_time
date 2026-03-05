@@ -157,11 +157,19 @@ public:
     const float* getPrevMagnitudes() const { return prevMagnitudes_; }
 
     /**
-     * Get mel-scaled bands (26 bands)
+     * Get mel-scaled bands (26 bands) — compressed + whitened
      * Log-compressed, suitable for perceptual analysis
      * Valid after process() returns, until next process() call
      */
     const float* getMelBands() const { return melBands_; }
+
+    /**
+     * Get raw mel-scaled bands (26 bands) — NO compression, NO whitening
+     * Computed from pre-compressor magnitudes with only log compression.
+     * Matches the training pipeline exactly (firmware_mel_spectrogram()).
+     * Use for NN inference to avoid train/inference feature mismatch.
+     */
+    const float* getRawMelBands() const { return rawMelBands_; }
 
     /**
      * Get number of FFT bins
@@ -220,6 +228,7 @@ private:
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
+    float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Raw mel bands (no compressor, no whitening) for NN inference
     float prevMelBands_[SpectralConstants::NUM_MEL_BANDS];
 
     // Mel-band whitening: per-band running maximum for adaptive normalization
@@ -251,6 +260,7 @@ private:
     void applyCompressor();
     void whitenMagnitudes();
     void computeMelBands();
+    void computeRawMelBands();
     void whitenMelBands();
     void computeDerivedFeatures();
     void savePreviousFrame();

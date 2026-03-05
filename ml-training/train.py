@@ -42,6 +42,7 @@ def main():
     batch_size = args.batch_size or cfg["training"]["batch_size"]
     lr = args.lr or cfg["training"]["learning_rate"]
     pos_weight = cfg["training"]["pos_weight"]
+    use_downbeat = cfg["model"].get("downbeat", False)
 
     # Load data
     print(f"Loading data from {data_dir}...")
@@ -53,9 +54,26 @@ def main():
     print(f"Train: {X_train.shape}, Val: {X_val.shape}")
     print(f"Positive ratio - Train: {Y_train.mean():.4f}, Val: {Y_val.mean():.4f}")
 
-    # Add channel dim to targets: (batch, time) -> (batch, time, 1)
-    Y_train = Y_train[..., np.newaxis]
-    Y_val = Y_val[..., np.newaxis]
+    # Handle multi-output (beat + downbeat)
+    if use_downbeat:
+        db_train_path = data_dir / "Y_db_train.npy"
+        db_val_path = data_dir / "Y_db_val.npy"
+        if db_train_path.exists():
+            Y_db_train = np.load(db_train_path)
+            Y_db_val = np.load(db_val_path)
+            # Stack: (batch, time, 2) — channel 0 = beat, channel 1 = downbeat
+            Y_train = np.stack([Y_train, Y_db_train], axis=-1)
+            Y_val = np.stack([Y_val, Y_db_val], axis=-1)
+            print(f"Downbeat ratio - Train: {Y_db_train.mean():.4f}")
+        else:
+            print("WARNING: downbeat=true but Y_db_train.npy not found. Training beat-only.")
+            use_downbeat = False
+            Y_train = Y_train[..., np.newaxis]
+            Y_val = Y_val[..., np.newaxis]
+    else:
+        # Add channel dim to targets: (batch, time) -> (batch, time, 1)
+        Y_train = Y_train[..., np.newaxis]
+        Y_val = Y_val[..., np.newaxis]
 
     # Build model
     model = build_beat_cnn(
@@ -65,6 +83,7 @@ def main():
         dilations=cfg["model"]["dilations"],
         dropout=cfg["model"]["dropout"],
         chunk_frames=cfg["training"]["chunk_frames"],
+        downbeat=use_downbeat,
     )
 
     # Optional: quantization-aware training
@@ -76,7 +95,7 @@ def main():
         except Exception as e:
             print(f"Warning: QAT failed ({e}), training without QAT")
 
-    # Weighted binary cross-entropy
+    # Weighted binary cross-entropy (per-channel)
     def weighted_bce(y_true, y_pred):
         bce = keras.backend.binary_crossentropy(y_true, y_pred)
         weights = y_true * pos_weight + (1 - y_true) * 1.0
@@ -115,6 +134,7 @@ def main():
 
     # Train
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
+    print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
     history = model.fit(
         X_train, Y_train,
         validation_data=(X_val, Y_val),

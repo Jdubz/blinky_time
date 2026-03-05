@@ -48,6 +48,13 @@ struct AudioControl {
     // Use for: Content classification, organic/music mode blending
     float onsetDensity = 0.0f;
 
+    // === DOWNBEAT ===
+    // Downbeat activation from NN (0.0 - 1.0), if model supports it.
+    // Higher values indicate a downbeat (first beat of a bar).
+    // Only meaningful when nnBeatActivation is enabled with a multi-output model.
+    // Use for: Extra-dramatic effects every 4 beats (e.g., burst of sparks on bar 1)
+    float downbeat = 0.0f;
+
     // === CONVENIENCE METHODS ===
 
     /**

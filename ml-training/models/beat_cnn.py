@@ -3,7 +3,8 @@
 Designed to run on XIAO nRF52840 Sense (Cortex-M4F @ 64 MHz, 256 KB RAM)
 via TFLite Micro + CMSIS-NN.
 
-Architecture: 3 dilated causal conv layers → per-frame sigmoid output.
+Architecture: 3 dilated causal conv layers (shared backbone) with per-task
+output heads. Beat activation is always present; downbeat is optional.
 Receptive field: 21 frames = 336ms at 62.5 Hz (covers one beat at 180 BPM).
 Size budget: ~3,500 params = ~14 KB INT8.
 """
@@ -17,8 +18,8 @@ from tf_keras import layers
 
 def build_beat_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
                    dilations: list[int] = [1, 2, 4], dropout: float = 0.1,
-                   chunk_frames: int = 128) -> keras.Model:
-    """Build a causal 1D CNN for beat activation.
+                   chunk_frames: int = 128, downbeat: bool = False) -> keras.Model:
+    """Build a causal 1D CNN for beat (and optional downbeat) activation.
 
     Args:
         n_mels: Number of mel bands (must match firmware: 26)
@@ -27,9 +28,13 @@ def build_beat_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
         dilations: Dilation rates for each conv layer
         dropout: Dropout rate between layers
         chunk_frames: Input sequence length (for shape info only)
+        downbeat: If True, add a second output channel for downbeat activation
 
     Returns:
-        Keras model: input (batch, time, n_mels) -> output (batch, time, 1)
+        Keras model:
+          - Single output: input (batch, time, n_mels) -> output (batch, time, 1)
+          - Downbeat: input (batch, time, n_mels) -> output (batch, time, 2)
+            Channel 0 = beat activation, Channel 1 = downbeat activation
     """
     inputs = keras.Input(shape=(chunk_frames, n_mels), name="mel_input")
     x = inputs
@@ -39,9 +44,8 @@ def build_beat_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
         pad_size = (kernel_size - 1) * dilation
         x = layers.ZeroPadding1D(padding=(pad_size, 0))(x)
 
-        out_channels = channels if i < len(dilations) - 1 else channels
         x = layers.Conv1D(
-            out_channels, kernel_size, dilation_rate=dilation,
+            channels, kernel_size, dilation_rate=dilation,
             padding="valid", use_bias=True,
             name=f"conv{i+1}_d{dilation}",
         )(x)
@@ -50,8 +54,10 @@ def build_beat_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
         if dropout > 0:
             x = layers.Dropout(dropout, name=f"drop{i+1}")(x)
 
-    # Final 1x1 conv to single output channel
-    x = layers.Conv1D(1, 1, padding="valid", activation="sigmoid", name="output_conv")(x)
+    # Output: 1x1 conv to N output channels with sigmoid
+    out_channels = 2 if downbeat else 1
+    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                      name="output_conv")(x)
 
     model = keras.Model(inputs=inputs, outputs=x, name="beat_cnn")
     return model
@@ -66,6 +72,7 @@ def model_summary(cfg: dict) -> None:
         dilations=cfg["model"]["dilations"],
         dropout=cfg["model"]["dropout"],
         chunk_frames=cfg["training"]["chunk_frames"],
+        downbeat=cfg["model"].get("downbeat", False),
     )
     model.summary()
 

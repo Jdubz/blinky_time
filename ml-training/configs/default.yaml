@@ -24,6 +24,7 @@ model:
   kernel_size: 3
   dilations: [1, 2, 4]      # Receptive field: 21 frames = 336ms
   dropout: 0.1
+  downbeat: true            # Add downbeat output head (channel 1 = downbeat activation)
 
 # Training
 training:

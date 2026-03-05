@@ -5,12 +5,15 @@
 // ============================================================================
 //
 // Replaces BandFlux ODF with a learned beat activation function.
-// Input: 26 mel bands from SharedSpectralAnalysis (per frame)
-// Output: beat activation (0-1) per frame
+// Input: 26 raw mel bands from SharedSpectralAnalysis (per frame)
+// Output: beat activation (0-1) and optional downbeat activation (0-1) per frame
 //
 // The model is a causal 1D CNN trained on ~10K EDM tracks with acoustic
 // environment augmentation. It feeds into the existing CBSS beat tracker —
 // only the ODF source changes.
+//
+// Multi-output: if the model has 2 output channels, channel 0 = beat activation,
+// channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
 // Memory: ~20 KB flash (model weights) + ~8 KB RAM (tensor arena) + ~3.3 KB context
 // Inference: ~3-5 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
@@ -89,6 +92,10 @@ public:
             return false;
         }
 
+        // Detect output channels: 1 = beat only, 2 = beat + downbeat
+        int outDims = output_->dims->size;
+        outputChannels_ = (outDims >= 2) ? output_->dims->data[outDims - 1] : 1;
+
         // Zero-fill context buffer
         memset(contextBuffer_, 0, contextLen_ * INPUT_MEL_BANDS * sizeof(float));
         contextWriteIdx_ = 0;
@@ -146,31 +153,42 @@ public:
             return 0.0f;
         }
 
-        // Extract output — take the last frame's activation
-        float activation;
-        if (output_->type == kTfLiteInt8) {
-            float scale = output_->params.scale;
-            int32_t zero_point = output_->params.zero_point;
-            // Output shape is (1, contextLen_, 1) — take last frame
-            int last_idx = contextLen_ - 1;
-            activation = (output_->data.int8[last_idx] - zero_point) * scale;
-        } else {
-            int last_idx = contextLen_ - 1;
-            activation = output_->data.f[last_idx];
-        }
+        // Extract outputs from last frame
+        int lastFrame = contextLen_ - 1;
+        float beat = extractOutput(lastFrame, 0);
+        lastDownbeat_ = (outputChannels_ >= 2) ? extractOutput(lastFrame, 1) : 0.0f;
 
-        // Clamp to [0, 1]
-        if (activation < 0.0f) activation = 0.0f;
-        if (activation > 1.0f) activation = 1.0f;
-
-        return activation;
+        return beat;
     }
 
     bool isReady() const { return ready_; }
 
+    /** Get last downbeat activation (0-1). Only valid after infer(). */
+    float getLastDownbeat() const { return lastDownbeat_; }
+
+    /** Whether model has a downbeat output head. */
+    bool hasDownbeatOutput() const { return outputChannels_ >= 2; }
+
 private:
+    float extractOutput(int frame, int channel) {
+        float value;
+        int idx = frame * outputChannels_ + channel;
+
+        if (output_->type == kTfLiteInt8) {
+            float scale = output_->params.scale;
+            int32_t zero_point = output_->params.zero_point;
+            value = (output_->data.int8[idx] - zero_point) * scale;
+        } else {
+            value = output_->data.f[idx];
+        }
+
+        if (value < 0.0f) value = 0.0f;
+        if (value > 1.0f) value = 1.0f;
+        return value;
+    }
+
     // Tensor arena — pre-allocated, no dynamic memory
-    // 8 KB should be sufficient for our 9K-param model
+    // 8 KB should be sufficient for our model
     static constexpr int TENSOR_ARENA_SIZE = 8192;
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
@@ -187,6 +205,8 @@ private:
     tflite::MicroInterpreter* interpreter_ = nullptr;
     TfLiteTensor* input_ = nullptr;
     TfLiteTensor* output_ = nullptr;
+    int outputChannels_ = 1;  // 1 = beat only, 2 = beat + downbeat
+    float lastDownbeat_ = 0.0f;
     bool ready_ = false;
 };
 
@@ -199,6 +219,8 @@ public:
     bool begin() { return false; }
     float infer(const float*) { return 0.0f; }
     bool isReady() const { return false; }
+    float getLastDownbeat() const { return 0.0f; }
+    bool hasDownbeatOutput() const { return false; }
 };
 
 #endif // ENABLE_NN_BEAT_ACTIVATION

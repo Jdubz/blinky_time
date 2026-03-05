@@ -55,6 +55,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , phases_{}
     , prevMagnitudes_{}
     , melBands_{}
+    , rawMelBands_{}
     , prevMelBands_{}
     , melRunningMax_{}
     , binRunningMax_{}
@@ -93,6 +94,7 @@ void SharedSpectralAnalysis::reset() {
     }
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         melBands_[i] = 0.0f;
+        rawMelBands_[i] = 0.0f;
         prevMelBands_[i] = 0.0f;
         melRunningMax_[i] = 0.0f;
     }
@@ -143,6 +145,10 @@ void SharedSpectralAnalysis::process() {
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         preWhitenMagnitudes_[i] = magnitudes_[i];
     }
+
+    // Compute raw mel bands from pre-compressor magnitudes (for NN inference).
+    // Must happen BEFORE applyCompressor() modifies magnitudes_ in-place.
+    computeRawMelBands();
 
     // Frame-level soft-knee compression (normalizes gross signal level)
     applyCompressor();
@@ -266,6 +272,47 @@ void SharedSpectralAnalysis::computeMelBands() {
         logEnergy = (logEnergy + 60.0f) / 60.0f;  // Map [-60, 0] to [0, 1]
 
         melBands_[band] = safeIsFinite(logEnergy) ? clamp01(logEnergy) : 0.0f;
+    }
+}
+
+void SharedSpectralAnalysis::computeRawMelBands() {
+    // Compute mel bands from raw (pre-compressor) magnitudes with only log compression.
+    // No whitening. Matches the training pipeline exactly (firmware_mel_spectrogram()).
+    // Uses preWhitenMagnitudes_ which are raw FFT mags saved before applyCompressor().
+
+    for (int band = 0; band < SpectralConstants::NUM_MEL_BANDS; band++) {
+        const MelBandDef& def = MEL_BANDS[band];
+        float sum = 0.0f;
+        float weightSum = 0.0f;
+
+        for (int bin = def.startBin; bin <= def.centerBin && bin < SpectralConstants::NUM_BINS; bin++) {
+            float weight = (def.centerBin > def.startBin)
+                ? (float)(bin - def.startBin) / (def.centerBin - def.startBin)
+                : 1.0f;
+            sum += preWhitenMagnitudes_[bin] * weight;
+            weightSum += weight;
+        }
+        for (int bin = def.centerBin + 1; bin <= def.endBin && bin < SpectralConstants::NUM_BINS; bin++) {
+            float weight = (def.endBin > def.centerBin)
+                ? 1.0f - (float)(bin - def.centerBin) / (def.endBin - def.centerBin)
+                : 1.0f;
+            sum += preWhitenMagnitudes_[bin] * weight;
+            weightSum += weight;
+        }
+
+        float bandEnergy = (weightSum > 0) ? sum / weightSum : 0.0f;
+
+        const float silenceThreshold = 1e-6f;
+        if (bandEnergy < silenceThreshold) {
+            rawMelBands_[band] = 0.0f;
+            continue;
+        }
+
+        const float epsilon = 1e-10f;
+        float logEnergy = 10.0f * log10f(bandEnergy + epsilon);
+        logEnergy = (logEnergy + 60.0f) / 60.0f;
+
+        rawMelBands_[band] = safeIsFinite(logEnergy) ? clamp01(logEnergy) : 0.0f;
     }
 }
 

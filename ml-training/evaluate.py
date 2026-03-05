@@ -60,9 +60,14 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
         audio, _ = librosa.load(str(audio_path), sr=sr, mono=True)
         mel = firmware_mel_spectrogram(audio, cfg)
 
+        # Detect if model has downbeat output
+        out_channels = model.output_shape[-1]
+        has_downbeat = out_channels > 1
+
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
         activations = np.zeros(n_frames, dtype=np.float32)
+        db_activations = np.zeros(n_frames, dtype=np.float32) if has_downbeat else None
         counts = np.zeros(n_frames, dtype=np.float32)
 
         stride = chunk_frames // 2
@@ -74,12 +79,16 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
             else:
                 chunk = mel[start:end]
 
-            pred = model.predict(chunk[np.newaxis], verbose=0)[0, :, 0]
+            pred = model.predict(chunk[np.newaxis], verbose=0)[0]  # (time, channels)
             actual_len = min(chunk_frames, n_frames - start)
-            activations[start:start + actual_len] += pred[:actual_len]
+            activations[start:start + actual_len] += pred[:actual_len, 0]
+            if has_downbeat:
+                db_activations[start:start + actual_len] += pred[:actual_len, 1]
             counts[start:start + actual_len] += 1
 
         activations /= np.maximum(counts, 1)
+        if has_downbeat:
+            db_activations /= np.maximum(counts, 1)
 
         # Load ground truth beats
         with open(label_path) as f:
@@ -101,18 +110,43 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
             "est_beats": len(est_beats),
             "f1": float(scores),
         }
+
+        # Downbeat evaluation
+        if has_downbeat:
+            ref_downbeats = np.array([
+                h["time"] for h in labels["hits"]
+                if h.get("expectTrigger", True) and h.get("strength", 0.7) > 0.9
+            ])
+            est_downbeats = _peak_pick(db_activations, threshold, frame_rate)
+            if len(ref_downbeats) > 0 and len(est_downbeats) > 0:
+                db_scores = mir_eval.beat.f_measure(
+                    ref_downbeats, est_downbeats, f_measure_threshold=0.07)
+            else:
+                db_scores = 0.0
+            result["db_f1"] = float(db_scores)
+            result["ref_downbeats"] = len(ref_downbeats)
+            result["est_downbeats"] = len(est_downbeats)
+
         all_results.append(result)
-        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)})")
+        db_str = f", DB F1={result.get('db_f1', 'N/A'):.3f}" if has_downbeat else ""
+        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){db_str}")
 
         # Save activation plot
         _plot_activation(activations, ref_beats, est_beats, frame_rate,
-                         audio_path.stem, output_dir / "plots")
+                         audio_path.stem, output_dir / "plots",
+                         db_activations=db_activations)
 
     # Aggregate
     if all_results:
         f1s = [r["f1"] for r in all_results]
-        print(f"\nAggregate: mean F1={np.mean(f1s):.3f}, median={np.median(f1s):.3f}, "
+        print(f"\nAggregate Beat: mean F1={np.mean(f1s):.3f}, median={np.median(f1s):.3f}, "
               f"min={np.min(f1s):.3f}, max={np.max(f1s):.3f}")
+
+        db_f1s = [r["db_f1"] for r in all_results if "db_f1" in r]
+        if db_f1s:
+            print(f"Aggregate Downbeat: mean F1={np.mean(db_f1s):.3f}, "
+                  f"median={np.median(db_f1s):.3f}, "
+                  f"min={np.min(db_f1s):.3f}, max={np.max(db_f1s):.3f}")
 
         # Save results
         with open(output_dir / "eval_results.json", "w") as f:
@@ -139,13 +173,17 @@ def _peak_pick(activations: np.ndarray, threshold: float,
 
 def _plot_activation(activations: np.ndarray, ref_beats: np.ndarray,
                      est_beats: np.ndarray, frame_rate: float,
-                     title: str, plot_dir: Path):
+                     title: str, plot_dir: Path,
+                     db_activations: np.ndarray = None):
     """Save activation plot with reference and estimated beats."""
     plot_dir.mkdir(parents=True, exist_ok=True)
 
     times = np.arange(len(activations)) / frame_rate
     fig, ax = plt.subplots(figsize=(14, 3))
-    ax.plot(times, activations, "b-", linewidth=0.5, alpha=0.8, label="Activation")
+    ax.plot(times, activations, "b-", linewidth=0.5, alpha=0.8, label="Beat")
+
+    if db_activations is not None:
+        ax.plot(times, db_activations, "m-", linewidth=0.5, alpha=0.6, label="Downbeat")
 
     for bt in ref_beats:
         ax.axvline(bt, color="green", alpha=0.3, linewidth=0.5)
@@ -173,16 +211,34 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path):
     Y_val = np.load(data_dir / "Y_val.npy")
 
     model = keras.models.load_model(model_path, compile=False)
+    out_channels = model.output_shape[-1]
+    has_downbeat = out_channels > 1
 
     # Predict
-    Y_pred = model.predict(X_val, batch_size=64, verbose=1)[:, :, 0]
+    Y_pred_all = model.predict(X_val, batch_size=64, verbose=1)  # (N, time, channels)
 
-    # Frame-level metrics at various thresholds
-    print("\nFrame-level metrics:")
+    # Beat metrics (channel 0)
+    Y_pred_beat = Y_pred_all[:, :, 0]
+    _print_frame_metrics("Beat", Y_pred_beat, Y_val)
+
+    # Downbeat metrics (channel 1)
+    if has_downbeat:
+        db_val_path = data_dir / "Y_db_val.npy"
+        if db_val_path.exists():
+            Y_db_val = np.load(db_val_path)
+            Y_pred_db = Y_pred_all[:, :, 1]
+            _print_frame_metrics("Downbeat", Y_pred_db, Y_db_val)
+        else:
+            print("\nNo Y_db_val.npy found — skipping downbeat frame metrics")
+
+
+def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):
+    """Print frame-level precision/recall/F1 at various thresholds."""
+    print(f"\n{label} frame-level metrics:")
     print(f"{'Threshold':>10} {'Precision':>10} {'Recall':>10} {'F1':>10}")
     for thresh in [0.3, 0.4, 0.5, 0.6, 0.7]:
         pred_binary = (Y_pred > thresh).astype(float)
-        ref_binary = (Y_val > 0.5).astype(float)
+        ref_binary = (Y_ref > 0.5).astype(float)
 
         tp = np.sum(pred_binary * ref_binary)
         fp = np.sum(pred_binary * (1 - ref_binary))

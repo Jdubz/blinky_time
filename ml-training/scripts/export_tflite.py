@@ -45,6 +45,10 @@ def rebuild_model_for_inference(model, inference_frames: int):
     input_shape = model.input_shape  # (None, chunk_frames, n_mels)
     n_mels = input_shape[-1]
 
+    # Detect if model has downbeat output (output shape last dim > 1)
+    output_shape = model.output_shape  # (None, chunk_frames, n_channels)
+    has_downbeat = output_shape[-1] > 1
+
     # Count conv layers and extract config
     conv_layers = [l for l in model.layers if 'conv' in l.name and l.name != 'output_conv']
     channels = conv_layers[0].filters if conv_layers else 32
@@ -54,7 +58,8 @@ def rebuild_model_for_inference(model, inference_frames: int):
         dilations.append(l.dilation_rate[0])
 
     print(f"Rebuilding model: {input_shape[-1]} mels, {channels} ch, "
-          f"k={kernel_size}, d={dilations}, inference_frames={inference_frames}")
+          f"k={kernel_size}, d={dilations}, inference_frames={inference_frames}, "
+          f"downbeat={has_downbeat}")
 
     new_model = build_beat_cnn(
         n_mels=n_mels,
@@ -63,6 +68,7 @@ def rebuild_model_for_inference(model, inference_frames: int):
         dilations=dilations,
         dropout=0.0,  # No dropout at inference
         chunk_frames=inference_frames,
+        downbeat=has_downbeat,
     )
 
     # Copy weights by name
