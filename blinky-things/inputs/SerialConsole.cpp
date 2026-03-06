@@ -786,6 +786,7 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
 
     if (strcmp(cmd, "stream off") == 0) {
         streamEnabled_ = false;
+        streamNN_ = false;
         Serial.println(F("OK"));
         return true;
     }
@@ -800,7 +801,16 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
     if (strcmp(cmd, "stream normal") == 0) {
         streamDebug_ = false;
         streamFast_ = false;
+        streamNN_ = false;
         Serial.println(F("OK normal"));
+        return true;
+    }
+
+    if (strcmp(cmd, "stream nn") == 0) {
+        streamEnabled_ = true;
+        streamNN_ = true;
+        streamFast_ = false;  // NN mode streams at frame rate, not timer-based
+        Serial.println(F("OK nn"));
         return true;
     }
 
@@ -1691,6 +1701,56 @@ void SerialConsole::streamTick() {
     if (!streamEnabled_) return;
 
     uint32_t now = millis();
+
+    // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
+    // Outputs the exact mel bands fed to the NN + NN output for offline validation.
+    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"beat":<float>,"db":<float>,"bpm":<float>}
+    // "mel" = getRawMelBands() — the exact input to BeatActivationNN::infer()
+    // "beat" = NN beat activation output (0 if NN not loaded)
+    // "db" = NN downbeat activation (0 if no downbeat head)
+    // "bpm" = current estimated tempo
+    if (streamNN_ && audioCtrl_) {
+        const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
+        if (spectral.isFrameReady()) {
+#ifdef ENABLE_NN_BEAT_ACTIVATION
+            const float* mel = spectral.getRawMelBands();
+#else
+            const float* mel = spectral.getMelBands();
+#endif
+
+            Serial.print(F("{\"type\":\"NN\",\"ts\":"));
+            Serial.print(now);
+            Serial.print(F(",\"mel\":["));
+            for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
+                if (i > 0) Serial.print(',');
+                Serial.print(mel[i], 4);
+            }
+            // onset = raw ODF fed into CBSS (NN activation or BandFlux)
+            Serial.print(F("],\"onset\":"));
+            Serial.print(audioCtrl_->getLastOnsetStrength(), 4);
+#ifdef ENABLE_NN_BEAT_ACTIVATION
+            Serial.print(F(",\"nn\":"));
+            Serial.print(audioCtrl_->getBeatActivationNN().isReady() ? 1 : 0);
+            if (audioCtrl_->getBeatActivationNN().isReady()) {
+                Serial.print(F(",\"nndb\":"));
+                Serial.print(audioCtrl_->getBeatActivationNN().getLastDownbeat(), 4);
+            }
+#else
+            Serial.print(F(",\"nn\":0"));
+#endif
+            Serial.print(F(",\"bpm\":"));
+            Serial.print(audioCtrl_->getControl().bpm, 1);
+            Serial.print(F(",\"phase\":"));
+            Serial.print(audioCtrl_->getControl().phase, 4);
+            Serial.print(F(",\"rstr\":"));
+            Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
+            Serial.print(F(",\"lvl\":"));
+            Serial.print(mic_->getLevel(), 3);
+            Serial.print(F(",\"gain\":"));
+            Serial.print(mic_->getHwGain());
+            Serial.println(F("}"));
+        }
+    }
 
     // STATUS update at ~1Hz
     static uint32_t lastStatusMs = 0;

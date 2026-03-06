@@ -235,7 +235,9 @@ const AudioControl& AudioController::update(float dt) {
         // BandFlux still runs for transient detection (sparks/effects).
         const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
         if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
+#ifdef ENABLE_NN_BEAT_ACTIVATION
             onsetStrength = beatActivationNN_.infer(spectral.getRawMelBands());
+#endif
             // Skip adaptive band weighting — NN learns its own frequency weighting.
             // Per-band OSS samples are not fed to Bayesian tempo fusion here;
             // band weights freeze at their last BandFlux-derived values. This is

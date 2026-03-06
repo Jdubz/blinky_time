@@ -281,12 +281,34 @@ def augment_audio(audio: torch.Tensor, sr: int, rir_dir: Path | None,
     return variants
 
 
+def _apply_mic_profile(mel: np.ndarray, mic_profile: dict,
+                       rng: np.random.Generator) -> np.ndarray:
+    """Apply mic transfer function to simulate MEMS mic response.
+
+    Scales per-band by measured gain ratio and adds noise floor.
+    Uses the provided rng for reproducible noise generation.
+    """
+    band_gain = mic_profile["band_gain"]
+    noise_floor = mic_profile["noise_floor"]
+
+    mel_mic = mel * band_gain[np.newaxis, :]
+    if noise_floor.max() > 0:
+        noise = rng.normal(
+            loc=noise_floor, scale=noise_floor * 0.3,
+            size=mel.shape
+        ).astype(np.float32)
+        noise = np.maximum(noise, 0)
+        mel_mic = np.maximum(mel_mic, noise)
+    return np.clip(mel_mic, 0.0, 1.0)
+
+
 def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  augment: bool, rir_dir: Path | None,
                  rng: np.random.Generator,
                  device: torch.device,
                  mel_fb: torch.Tensor,
-                 window: torch.Tensor) -> list[dict]:
+                 window: torch.Tensor,
+                 mic_profile: dict | None = None) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -331,6 +353,10 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
     for aug_name, aug_audio in variants:
         mel = firmware_mel_spectrogram(aug_audio, cfg, mel_fb, window)
+        # Apply mic transfer function if calibration profile provided.
+        # This transforms clean mel bands to match what the mic actually produces.
+        if mic_profile is not None:
+            mel = _apply_mic_profile(mel, mic_profile, rng)
         n_frames = mel.shape[0]
         targets = make_beat_targets(beat_times, n_frames, frame_rate, sigma)
 
@@ -401,6 +427,9 @@ def main():
     parser.add_argument("--labels-dir", default=None, help="Override labels directory from config")
     parser.add_argument("--output-dir", default=None, help="Override output directory from config")
     parser.add_argument("--rir-dir", default=None, help="Directory of room impulse responses (.wav/.npy)")
+    parser.add_argument("--mic-profile", default=None,
+                        help="Mic calibration profile (.npz from calibrate_mic.py). "
+                             "Applied to all mel spectrograms to simulate mic response.")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto (default: auto)")
     args = parser.parse_args()
@@ -421,6 +450,22 @@ def main():
 
     output_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
+
+    # Load mic calibration profile if provided
+    mic_profile = None
+    if args.mic_profile:
+        profile_path = Path(args.mic_profile)
+        if not profile_path.exists():
+            print(f"ERROR: Mic profile not found: {profile_path}", file=sys.stderr)
+            sys.exit(1)
+        data = np.load(profile_path)
+        mic_profile = {
+            "band_gain": data["band_gain"].astype(np.float32),
+            "noise_floor": data["noise_floor"].astype(np.float32),
+        }
+        print(f"Mic profile loaded: {profile_path}")
+        print(f"  Band gain range: [{mic_profile['band_gain'].min():.3f}, {mic_profile['band_gain'].max():.3f}]")
+        print(f"  Noise floor range: [{mic_profile['noise_floor'].min():.4f}, {mic_profile['noise_floor'].max():.4f}]")
 
     # Precompute mel filterbank and window on device (reused for every file)
     mel_fb = _build_mel_filterbank(cfg, device)
@@ -475,7 +520,8 @@ def main():
         for i, (audio_path, label_path) in enumerate(tqdm(split_pairs, desc=split_name)):
             try:
                 results = process_file(audio_path, label_path, cfg, args.augment,
-                                       rir_dir, rng, device, mel_fb, window)
+                                       rir_dir, rng, device, mel_fb, window,
+                                       mic_profile=mic_profile)
                 for r in results:
                     mel_chunks, target_chunks, db_chunks = chunk_data(
                         r["mel"], r["target"], chunk_frames, chunk_stride,

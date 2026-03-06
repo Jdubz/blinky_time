@@ -26,6 +26,7 @@ LABELS_CONSENSUS := $(STORAGE)/labels/consensus
 PROCESSED_DIR := data/processed
 OUTPUT_DIR    := outputs/full-v1
 RIR_DIR       := $(STORAGE)/rir/processed
+CAL_DIR       := data/calibration
 CONFIG        := configs/default.yaml
 TEST_AUDIO    := ../blinky-test-player/music/edm
 
@@ -36,17 +37,20 @@ THREADS       := 4
 DEVICE        := cuda
 EPOCHS        := 100
 AUGMENT       := 1
+MIC_PROFILE   :=
 MIN_AGREEMENT := 2
 TOLERANCE     := 0.05
+CAL_PORT      := /dev/ttyACM0
 
 # --- Derived ---
 AUGMENT_FLAG  := $(if $(filter 1 yes true,$(AUGMENT)),--augment,)
+MIC_PROFILE_FLAG := $(if $(MIC_PROFILE),--mic-profile $(MIC_PROFILE),)
 PYTHON        := python3
 
 # ============================================================
 # Phony targets
 # ============================================================
-.PHONY: all download label merge prepare train export eval clean help
+.PHONY: all download label merge calibrate prepare train export eval clean help
 
 all: download label merge prepare train export eval
 	@echo "Pipeline complete. Results in $(OUTPUT_DIR)/"
@@ -113,6 +117,27 @@ merge:
 		--min-agreement $(MIN_AGREEMENT)
 
 # ============================================================
+# Step 4b: Calibrate mic transfer function (run on blinkyhost)
+# ============================================================
+calibrate-generate:
+	$(PYTHON) scripts/calibrate_mic.py generate --output-dir $(CAL_DIR)
+
+calibrate-capture:
+	@echo "Run these on blinkyhost with speakers connected:"
+	@echo "  python3 scripts/calibrate_mic.py capture --port $(CAL_PORT) --audio $(CAL_DIR)/sweep_16k.wav --output $(CAL_DIR)/sweep_capture.jsonl"
+	@echo "  python3 scripts/calibrate_mic.py capture --port $(CAL_PORT) --audio $(CAL_DIR)/pink_noise_16k.wav --output $(CAL_DIR)/pink_capture.jsonl"
+	@echo "  python3 scripts/calibrate_mic.py capture --port $(CAL_PORT) --audio $(CAL_DIR)/white_noise_16k.wav --output $(CAL_DIR)/white_capture.jsonl"
+	@echo "  python3 scripts/calibrate_mic.py capture --port $(CAL_PORT) --audio $(CAL_DIR)/silence_16k.wav --output $(CAL_DIR)/silence_capture.jsonl"
+
+calibrate-analyze:
+	$(PYTHON) scripts/calibrate_mic.py analyze \
+		--captures $(CAL_DIR) \
+		--output $(CAL_DIR)/mic_profile.npz
+
+calibrate: calibrate-generate
+	@echo "Next: run 'make calibrate-capture' on blinkyhost, then 'make calibrate-analyze'"
+
+# ============================================================
 # Step 5: Prepare dataset (feature extraction + augmentation)
 # ============================================================
 prepare:
@@ -122,7 +147,7 @@ prepare:
 		--labels-dir $(LABELS_CONSENSUS) \
 		--output-dir $(PROCESSED_DIR) \
 		--rir-dir $(RIR_DIR) \
-		$(AUGMENT_FLAG)
+		$(AUGMENT_FLAG) $(MIC_PROFILE_FLAG)
 
 # ============================================================
 # Step 6: Train model
@@ -187,18 +212,22 @@ help:
 	@echo "ML Training Pipeline"
 	@echo ""
 	@echo "Targets:"
-	@echo "  all       Full pipeline (download → label → merge → prepare → train → export → eval)"
-	@echo "  download  Download FMA, GiantSteps, and RIR datasets"
-	@echo "  label     Multi-system beat labeling (parallel CPU workers)"
-	@echo "  merge     Merge per-system labels into consensus"
-	@echo "  prepare   Extract mel features + augmentation"
-	@echo "  train     Train beat activation CNN"
-	@echo "  export    Export TFLite INT8 model"
-	@echo "  eval      Evaluate on test tracks"
-	@echo "  status    Show dataset/pipeline status"
+	@echo "  all                Full pipeline (download → label → merge → prepare → train → export → eval)"
+	@echo "  download           Download FMA, GiantSteps, and RIR datasets"
+	@echo "  label              Multi-system beat labeling (parallel CPU workers)"
+	@echo "  merge              Merge per-system labels into consensus"
+	@echo "  calibrate          Generate calibration audio (then capture on blinkyhost)"
+	@echo "  calibrate-capture  Print capture commands for blinkyhost"
+	@echo "  calibrate-analyze  Derive mic profile from captures"
+	@echo "  prepare            Extract mel features + augmentation"
+	@echo "  train              Train beat activation CNN"
+	@echo "  export             Export TFLite INT8 model"
+	@echo "  eval               Evaluate on test tracks"
+	@echo "  status             Show dataset/pipeline status"
 	@echo ""
 	@echo "Options (override with make target VAR=value):"
 	@echo "  SYSTEMS=$(SYSTEMS)"
 	@echo "  WORKERS=$(WORKERS)  THREADS=$(THREADS)"
 	@echo "  DEVICE=$(DEVICE)  EPOCHS=$(EPOCHS)"
-	@echo "  AUGMENT=$(AUGMENT)  MIN_AGREEMENT=$(MIN_AGREEMENT)"
+	@echo "  AUGMENT=$(AUGMENT)  MIC_PROFILE=$(MIC_PROFILE)"
+	@echo "  MIN_AGREEMENT=$(MIN_AGREEMENT)  CAL_PORT=$(CAL_PORT)"
