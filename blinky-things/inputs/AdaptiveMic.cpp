@@ -213,9 +213,11 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // This ensures high-quality signal into ADC before software processing
 
   // Determine if we're in fast AGC mode
-  // Fast mode: when gain is high (>=70) and signal is persistently low
+  // Fast mode: when gain is near the AGC ceiling and signal is persistently low.
+  // Threshold is relative to hwGainMaxSignal so it adapts to any ceiling value.
+  int fastAgcGainThreshold = (hwGainMaxSignal > 10) ? (hwGainMaxSignal - 10) : hwGainMaxSignal;
   inFastAgcMode_ = fastAgcEnabled &&
-                   currentHardwareGain >= 70 &&
+                   currentHardwareGain >= fastAgcGainThreshold &&
                    rawTrackedLevel < fastAgcThreshold;
 
   // Determine if we're in loud AGC mode (symmetric to fast AGC)
@@ -276,10 +278,13 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
 
   int delta = direction * stepSize;
   int oldGain = currentHardwareGain;
-  // Use full gain range (0-80) in loud mode to handle extreme SPL
-  // Otherwise enforce headroom minimum (10-80) to preserve dynamic range
+  // Use full gain range in loud mode to handle extreme SPL
+  // Otherwise enforce headroom minimum to preserve dynamic range
   int effectiveMinGain = inLoudAgcMode_ ? HW_GAIN_MIN : hwGainMinHeadroom;
-  currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, HW_GAIN_MAX);
+  // AGC ceiling: applies unconditionally (including loud mode) — harmless since
+  // loud mode drives gain down, never up toward the ceiling.
+  int effectiveMaxGain = (hwGainMaxSignal < HW_GAIN_MAX) ? hwGainMaxSignal : HW_GAIN_MAX;
+  currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, effectiveMaxGain);
 
   if (currentHardwareGain != oldGain) {
     pdm_.setGain(currentHardwareGain);

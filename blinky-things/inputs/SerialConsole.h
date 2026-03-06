@@ -217,6 +217,7 @@ private:
     bool streamDebug_ = false;     // Include debug fields (baselines, raw energy)
     bool streamFast_ = false;      // 100Hz mode for testing
     bool streamNN_ = false;        // NN diagnostic: stream mel bands + NN output at full frame rate
+    uint32_t lastNNFrameCount_ = 0; // Track last emitted frame for NN stream
     uint32_t streamLastMs_ = 0;
     uint32_t batteryLastMs_ = 0;
     static const uint16_t STREAM_PERIOD_MS = 50;        // Normal: ~20Hz for audio

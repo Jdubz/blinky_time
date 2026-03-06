@@ -204,6 +204,8 @@ void SerialConsole::registerAgcSettings() {
         "Fast AGC calibration period (ms)", 2000, 15000);
     settings_.registerFloat("fastagctau", &mic_->fastAgcTrackingTau, "agc",
         "Fast AGC tracking time (s)", 1.0f, 15.0f);
+    settings_.registerUint8("hwgainmax", &mic_->hwGainMaxSignal, "agc",
+        "Max HW gain for AGC (10-80)", 10, 80);
 }
 
 // === TRANSIENT DETECTION SETTINGS ===
@@ -574,6 +576,18 @@ void SerialConsole::registerRhythmSettings() {
         "Attack time constant (s)", 0.0001f, 0.1f);
     settings_.registerFloat("comprelease", &spectral.compReleaseTau, "spectral",
         "Release time constant (s)", 0.01f, 10.0f);
+
+    // Noise estimation (v56: minimum statistics + spectral subtraction)
+    settings_.registerBool("noiseest", &spectral.noiseEstEnabled, "spectral",
+        "Spectral noise subtraction (Martin 2001)");
+    settings_.registerFloat("noisesmooth", &spectral.noiseSmoothAlpha, "spectral",
+        "Noise power smoothing (0.8-0.99)", 0.8f, 0.999f);
+    settings_.registerFloat("noiserelease", &spectral.noiseReleaseFactor, "spectral",
+        "Noise floor release rate (0.99-0.9999)", 0.99f, 0.9999f);
+    settings_.registerFloat("noiseover", &spectral.noiseOversubtract, "spectral",
+        "Oversubtraction factor (1.0-3.0)", 0.5f, 5.0f);
+    settings_.registerFloat("noisefloor", &spectral.noiseFloorRatio, "spectral",
+        "Spectral floor ratio (0.001-0.5)", 0.001f, 0.5f);
 }
 
 void SerialConsole::update() {
@@ -1254,7 +1268,7 @@ void SerialConsole::restoreDefaults() {
     if (mic_) {
         mic_->peakTau = Defaults::PeakTau;              // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
-        mic_->hwTarget = 0.35f;                         // Target raw input level (±0.01 dead zone)
+        mic_->hwTarget = 0.20f;                         // Target raw input level (lower = less gain seeking)
 
         // Fast AGC defaults (enabled by default for better low-level response)
         mic_->fastAgcEnabled = true;
@@ -1386,6 +1400,12 @@ void SerialConsole::restoreDefaults() {
         spectral.compMakeupDb = 6.0f;
         spectral.compAttackTau = 0.001f;
         spectral.compReleaseTau = 2.0f;
+        // Noise estimation (v56)
+        spectral.noiseEstEnabled = false;
+        spectral.noiseSmoothAlpha = 0.92f;
+        spectral.noiseReleaseFactor = 0.999f;
+        spectral.noiseOversubtract = 1.5f;
+        spectral.noiseFloorRatio = 0.02f;
 
         // Restore BandFlux detector defaults
         BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();
@@ -1711,7 +1731,9 @@ void SerialConsole::streamTick() {
     // "bpm" = current estimated tempo
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
-        if (spectral.isFrameReady()) {
+        uint32_t fc = spectral.getFrameCount();
+        if (fc != lastNNFrameCount_) {
+            lastNNFrameCount_ = fc;
             const float* mel = spectral.getRawMelBands();
 
             Serial.print(F("{\"type\":\"NN\",\"ts\":"));
@@ -1765,8 +1787,9 @@ void SerialConsole::streamTick() {
     }
 
     // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
+    // Skip when NN-only stream is active (saves serial bandwidth for mel bands)
     uint16_t period = streamFast_ ? STREAM_FAST_PERIOD_MS : STREAM_PERIOD_MS;
-    if (mic_ && (now - streamLastMs_ >= period)) {
+    if (streamEnabled_ && mic_ && (now - streamLastMs_ >= period)) {
         streamLastMs_ = now;
 
         // Output compact JSON for web app (abbreviated field names for serial bandwidth)

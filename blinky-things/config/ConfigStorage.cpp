@@ -158,13 +158,14 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.mic.peakTau = 1.0f;        // 1s peak adaptation (fast response)
     data_.mic.releaseTau = 3.0f;     // 3s peak release (quick recovery)
     // Hardware AGC parameters (primary - optimizes raw ADC input)
-    data_.mic.hwTarget = 0.35f;      // Target raw input level (±0.01 dead zone)
+    data_.mic.hwTarget = 0.20f;      // Target raw input level (v56: lower = less gain seeking)
 
     // Fast AGC parameters (accelerates calibration when signal is persistently low)
     data_.mic.fastAgcEnabled = true;        // Enable fast AGC when gain is high
     data_.mic.fastAgcThreshold = 0.15f;     // Raw level threshold to trigger fast mode
     data_.mic.fastAgcPeriodMs = 5000;       // 5s calibration period in fast mode
     data_.mic.fastAgcTrackingTau = 5.0f;    // 5s tracking tau in fast mode
+    data_.mic.hwGainMaxSignal = 40;         // AGC ceiling (v56: lowered from 60, sweep shows SNR degrades >35-40)
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
@@ -286,6 +287,13 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.subbeatBins = 8;              // Subbeat bin count
     data_.music.templateHistBars = 2;         // Template history depth in bars
     data_.music.nnBeatActivation = false;    // NN beat activation (v54: off by default, A/B vs BandFlux)
+
+    // Spectral noise estimation defaults (v56)
+    data_.music.noiseEstEnabled = false;  // Default OFF until A/B validated
+    data_.music.noiseSmoothAlpha = 0.92f;    // Power smoothing (~200ms at 62.5 Hz)
+    data_.music.noiseReleaseFactor = 0.999f; // Noise floor release (~16s)
+    data_.music.noiseOversubtract = 1.5f;    // Moderate oversubtraction
+    data_.music.noiseFloorRatio = 0.02f;     // 2% spectral floor
 
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
@@ -552,6 +560,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.mic.fastAgcThreshold, 0.01f, 0.5f, F("fastAgcThresh"));
     validateFloat(data_.mic.fastAgcTrackingTau, 0.5f, 30.0f, F("fastAgcTau"));
     VALIDATE_INT(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
+    VALIDATE_INT(data_.mic.hwGainMaxSignal, 10, 80, F("hwGainMax"));
 
     // AudioController validation (v23+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
@@ -716,6 +725,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.compReleaseTau, 0.01f, 10.0f, F("compReleaseTau"));
     // whitenEnabled, compressorEnabled, whitenBassBypass are bools — no range validation needed
 
+    // Noise estimation validation (v56)
+    validateFloat(data_.music.noiseSmoothAlpha, 0.8f, 0.999f, F("noiseSmoothAlpha"));
+    validateFloat(data_.music.noiseReleaseFactor, 0.99f, 0.9999f, F("noiseRelease"));
+    validateFloat(data_.music.noiseOversubtract, 0.5f, 5.0f, F("noiseOversubtract"));
+    validateFloat(data_.music.noiseFloorRatio, 0.001f, 0.5f, F("noiseFloorRatio"));
+
     // BandFlux detector validation (v29+)
     validateFloat(data_.bandflux.gamma, 1.0f, 100.0f, F("bfGamma"));
     validateFloat(data_.bandflux.bassWeight, 0.0f, 5.0f, F("bfBassWeight"));
@@ -841,6 +856,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     mic.fastAgcThreshold = data_.mic.fastAgcThreshold;
     mic.fastAgcPeriodMs = data_.mic.fastAgcPeriodMs;
     mic.fastAgcTrackingTau = data_.mic.fastAgcTrackingTau;
+    // AGC ceiling
+    mic.hwGainMaxSignal = data_.mic.hwGainMaxSignal;
 
     // NOTE: Detection-specific parameters (transientThreshold, attackMultiplier, etc.)
     // are now handled by EnsembleDetector. The data_.mic fields are kept for
@@ -999,6 +1016,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         spectral.compAttackTau = data_.music.compAttackTau;
         spectral.compReleaseTau = data_.music.compReleaseTau;
 
+        // Noise estimation (v56)
+        spectral.noiseEstEnabled = data_.music.noiseEstEnabled;
+        spectral.noiseSmoothAlpha = data_.music.noiseSmoothAlpha;
+        spectral.noiseReleaseFactor = data_.music.noiseReleaseFactor;
+        spectral.noiseOversubtract = data_.music.noiseOversubtract;
+        spectral.noiseFloorRatio = data_.music.noiseFloorRatio;
+
         // BandFlux detector parameters (v29+)
         BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();
         bf.gamma = data_.bandflux.gamma;
@@ -1112,6 +1136,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.mic.fastAgcThreshold = mic.fastAgcThreshold;
     data_.mic.fastAgcPeriodMs = mic.fastAgcPeriodMs;
     data_.mic.fastAgcTrackingTau = mic.fastAgcTrackingTau;
+    // AGC ceiling
+    data_.mic.hwGainMaxSignal = mic.hwGainMaxSignal;
 
     // NOTE: Detection-specific parameters (transientThreshold, detectionMode, etc.)
     // are now handled by EnsembleDetector. The data_.mic fields are kept for
@@ -1269,6 +1295,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.compMakeupDb = spectral.compMakeupDb;
         data_.music.compAttackTau = spectral.compAttackTau;
         data_.music.compReleaseTau = spectral.compReleaseTau;
+
+        // Noise estimation (v56)
+        data_.music.noiseEstEnabled = spectral.noiseEstEnabled;
+        data_.music.noiseSmoothAlpha = spectral.noiseSmoothAlpha;
+        data_.music.noiseReleaseFactor = spectral.noiseReleaseFactor;
+        data_.music.noiseOversubtract = spectral.noiseOversubtract;
+        data_.music.noiseFloorRatio = spectral.noiseFloorRatio;
 
         // BandFlux detector parameters (v29+)
         const BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();

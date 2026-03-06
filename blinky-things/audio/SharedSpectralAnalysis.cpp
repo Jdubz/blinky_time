@@ -65,6 +65,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralCentroid_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
+    , frameCount_(0)
 {
 }
 
@@ -100,6 +101,10 @@ void SharedSpectralAnalysis::reset() {
     }
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         binRunningMax_[i] = 0.0f;
+    }
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        smoothedPower_[i] = 0.0f;
+        noiseFloorEst_[i] = 0.0f;
     }
     smoothedGainDb_ = 0.0f;
     frameRmsDb_ = -200.0f;
@@ -139,9 +144,13 @@ void SharedSpectralAnalysis::process() {
     // Extract magnitudes and phases from FFT output
     computeMagnitudesAndPhases();
 
-    // Save raw FFT magnitudes BEFORE any processing for detectors that handle
-    // their own normalization (BandFlux uses log(1+gamma*mag) which is functionally
-    // equivalent to compression+whitening — applying upstream processing is redundant)
+    // Noise floor estimation + spectral subtraction (Martin 2001)
+    // Applied BEFORE preWhitenMagnitudes snapshot so both BandFlux and NN paths
+    // see noise-subtracted magnitudes. This removes gain-dependent MEMS noise.
+    estimateAndSubtractNoise();
+
+    // Save noise-subtracted magnitudes BEFORE compressor/whitening for detectors
+    // that handle their own normalization (BandFlux uses log(1+gamma*mag))
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         preWhitenMagnitudes_[i] = magnitudes_[i];
     }
@@ -176,6 +185,7 @@ void SharedSpectralAnalysis::process() {
 
     // Mark frame as ready
     frameReady_ = true;
+    frameCount_++;
     hasPrevFrame_ = true;
 
     // Reset sample buffer for next frame
@@ -219,6 +229,34 @@ void SharedSpectralAnalysis::computeMagnitudesAndPhases() {
         // Phase: atan2(imag, real) -> [-pi, pi]
         float phase = atan2f(imag, real);
         phases_[i] = safeIsFinite(phase) ? phase : 0.0f;
+    }
+}
+
+void SharedSpectralAnalysis::estimateAndSubtractNoise() {
+    if (!noiseEstEnabled) return;
+
+    for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {  // Skip DC
+        float mag = magnitudes_[i];
+        float power = mag * mag;
+
+        // Smooth power estimate (exponential moving average)
+        smoothedPower_[i] = noiseSmoothAlpha * smoothedPower_[i]
+                          + (1.0f - noiseSmoothAlpha) * power;
+
+        // Noise floor: tracks minimum of smoothed power with slow release
+        // Instant attack to new minimums, exponential release upward
+        if (smoothedPower_[i] < noiseFloorEst_[i] || noiseFloorEst_[i] == 0.0f) {
+            noiseFloorEst_[i] = smoothedPower_[i];
+        } else {
+            noiseFloorEst_[i] = noiseReleaseFactor * noiseFloorEst_[i]
+                              + (1.0f - noiseReleaseFactor) * smoothedPower_[i];
+        }
+
+        // Spectral subtraction: remove estimated noise magnitude
+        float noiseMag = noiseOversubtract * sqrtf(noiseFloorEst_[i]);
+        float floor = noiseFloorRatio * mag;  // Spectral floor prevents zero-out
+        float clean = mag - noiseMag;
+        magnitudes_[i] = (clean > floor) ? clean : floor;
     }
 }
 

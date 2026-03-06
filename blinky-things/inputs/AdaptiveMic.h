@@ -17,8 +17,8 @@ namespace MicConstants {
     constexpr uint32_t MIC_DEAD_TIMEOUT_MS = 250;     // PDM alive check timeout
 
     // Timing constants (not user-configurable)
-    constexpr uint32_t HW_CALIB_PERIOD_MS = 30000;    // Hardware gain calibration period (30s)
-    constexpr float HW_TRACKING_TAU = 30.0f;          // Hardware gain tracking time constant (30s)
+    constexpr uint32_t HW_CALIB_PERIOD_MS = 60000;    // Hardware gain calibration period (60s)
+    constexpr float HW_TRACKING_TAU = 60.0f;          // Hardware gain tracking time constant (60s, Kates 2008: slow AGC preserves dynamics)
 }
 
 /**
@@ -46,9 +46,12 @@ public:
   float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
 
   // Hardware gain target (adapts to raw ADC input for best signal quality)
-  // Note: hwGainMin/Max are hardware limits (0-80 for nRF52840 PDM), not configurable
   // Dead zone: ±0.01 around target (no adjustment if within range)
-  float    hwTarget = 0.35f;   // Target raw input level for optimal ADC quality
+  float    hwTarget = 0.20f;   // Target raw input level (lower = less gain seeking, cleaner signal)
+  // AGC ceiling: gain sweep calibration shows SNR peaks at gain 25-35 and degrades
+  // above 40. Must agree with training pipeline (ml-training/configs/default.yaml
+  // audio.hw_gain_max) so the NN sees the same noise conditions it was trained on.
+  uint8_t  hwGainMaxSignal = 40; // Max HW gain for AGC (10-80, default 40)
 
   // Fast AGC for low-level sources (accelerates calibration when signal is persistently low)
   bool     fastAgcEnabled = true;       // Enable fast AGC when signal is low and gain is high

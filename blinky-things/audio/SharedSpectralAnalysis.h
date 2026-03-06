@@ -84,6 +84,15 @@ public:
     float whitenFloor = 0.001f;    // Floor to avoid amplifying noise
     bool whitenBassBypass = false;  // Skip whitening for bass bins 1-6 (preserve kick contrast)
 
+    // Minimum statistics noise estimation + spectral subtraction (Martin 2001)
+    // Per-bin noise floor tracking with oversubtraction. Inserted after FFT,
+    // before preWhitenMagnitudes — benefits both BandFlux and NN paths.
+    bool noiseEstEnabled = false;   // Default OFF until A/B validated on hardware
+    float noiseSmoothAlpha = 0.92f;    // Power smoothing (0.9-0.99, higher = slower)
+    float noiseReleaseFactor = 0.999f; // Noise floor release rate (0.99-0.9999, ~16s at 0.999)
+    float noiseOversubtract = 1.5f;    // Oversubtraction factor (1.0-3.0)
+    float noiseFloorRatio = 0.02f;     // Spectral floor as fraction of original (prevents zero-out)
+
     // Soft-knee compressor (Giannoulis/Massberg/Reiss, JAES 2012)
     bool compressorEnabled = true;
     float compThresholdDb = -30.0f;  // dB threshold
@@ -115,6 +124,13 @@ public:
      * Reset by calling resetFrameReady() after detectors have consumed data
      */
     bool isFrameReady() const { return frameReady_; }
+
+    /**
+     * Monotonic frame counter — incremented each time process() produces a new frame.
+     * Use this instead of isFrameReady() when you need to detect new frames
+     * independently of the ensemble detector's resetFrameReady() call.
+     */
+    uint32_t getFrameCount() const { return frameCount_; }
 
     /**
      * Check if enough samples are buffered for processing
@@ -164,8 +180,9 @@ public:
     const float* getMelBands() const { return melBands_; }
 
     /**
-     * Get raw mel-scaled bands (26 bands) — NO compression, NO whitening
+     * Get mel-scaled bands (26 bands) — post-noise-subtraction, NO compression, NO whitening
      * Computed from pre-compressor magnitudes with only log compression.
+     * When noise estimation is enabled, these bands reflect noise-subtracted spectra.
      * Closely matches the training pipeline (firmware_mel_spectrogram()).
      * Used for NN inference and mic calibration streaming.
      *
@@ -232,7 +249,7 @@ private:
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
-    float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Raw mel bands (no compressor, no whitening) for NN inference + calibration
+    float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Pre-compressor mel bands (noise-subtracted if enabled, no whitening) for NN + calibration
     float prevMelBands_[SpectralConstants::NUM_MEL_BANDS];
 
     // Mel-band whitening: per-band running maximum for adaptive normalization
@@ -245,6 +262,10 @@ private:
     // Per-bin spectral whitening state (128 bins)
     float binRunningMax_[SpectralConstants::NUM_BINS];
 
+    // Noise estimation state (Martin 2001 minimum statistics, simplified)
+    float smoothedPower_[SpectralConstants::NUM_BINS];  // Smoothed power spectral density
+    float noiseFloorEst_[SpectralConstants::NUM_BINS];  // Estimated noise floor per bin
+
     // Compressor state
     float smoothedGainDb_;
     float frameRmsDb_;
@@ -256,11 +277,13 @@ private:
     // State
     bool frameReady_;
     bool hasPrevFrame_;
+    uint32_t frameCount_;  // Monotonic counter for NN stream (survives resetFrameReady)
 
     // Helper methods
     void applyHammingWindow();
     void computeFFT();
     void computeMagnitudesAndPhases();
+    void estimateAndSubtractNoise();
     void applyCompressor();
     void whitenMagnitudes();
     void computeMelBands();

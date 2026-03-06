@@ -1,8 +1,85 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 5, 2026 (v54 NN beat activation scaffolding + firmware integration)*
+*Last Updated: March 6, 2026 (signal chain treatment: conservative AGC + spectral noise subtraction)*
 
 ## Current Status
+
+### Completed: Mic Calibration & Gain Optimization (March 6, 2026)
+
+Gain sweep completed on all 3 devices (ACM0, ACM1, ACM2) with pink noise reference audio. Calibration data stored at `ml-training/data/calibration/`.
+
+**Per-Device Results:**
+
+| Device | Best SNR Gain | Peak SNR | Max Gain (noise < 0.5) |
+|--------|:---:|:---:|:---:|
+| ACM0 | 25 | 24.9 dB | 20 |
+| ACM1 | 35 | 24.8 dB | 20 |
+| ACM2 | 30 | 24.1 dB | 15 |
+
+**Dynamic Range vs Gain (median across 3 devices, bands 3-25):**
+
+| Gain | Avg Noise Floor | Avg Dynamic Range |
+|------|:-:|:-:|
+| 0 | 0.372 | 38 dB |
+| 5 | 0.354 | 39 dB |
+| 15 | 0.387 | 37 dB |
+| 30 | 0.431 | 34 dB |
+| 50 | 0.513 | 29 dB |
+| 80 | 0.633 | 22 dB |
+
+**Gain-aware mic profile built** (`mic_profile.npz`): 17 gain levels × 26 bands, with recommended AGC range 0-15. Profile includes per-band gain (0.91-1.00, nearly flat) and gain-indexed noise floor for training augmentation.
+
+**Firmware AGC ceiling set to 40** (`hwGainMaxSignal=40` in AdaptiveMic.h, `hw_gain_max: 40` in default.yaml, v56). Training pipeline must agree — `prepare_dataset.py` caps gain-aware noise augmentation at this value.
+
+**Gain×Volume discriminability sweep completed** (`gain_volume_sweep.py`): 8 gains × 4 volumes × 4 tracks × 3 devices. Measured ODF AUC-ROC and Beat SNR with latency-corrected alignment (~560ms audio pipeline latency).
+
+| Gain | ODF Beat SNR | AUC-ROC | Status |
+|------|:---:|:---:|--------|
+| 10 | 1.60x | 0.686 | Best discriminability |
+| 20-40 | 1.55x | 0.675 | Excellent |
+| 50 | 1.52x | 0.664 | Good |
+| **60** | **1.42x** | **0.650** | **AGC ceiling — acceptable** |
+| 70 | 1.33x | 0.642 | Degraded (17% SNR loss) |
+| 80 | 1.28x | 0.620 | Poor (20% SNR loss) |
+
+**Key finding: Speaker volume has negligible effect on discriminability.** AUC is nearly identical at 25% vs 100% volume because the AGC compensates. The noise floor at a given gain is the dominant factor, not signal amplitude. This means the AGC ceiling is the critical parameter — once gain is capped, the noise floor is bounded regardless of source loudness.
+
+### In Progress: Signal Chain Treatment (v56, March 6, 2026)
+
+Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees hardware gain — software AGC, compressor, and whitening are all bypassed. Higher gain adds more noise than signal above gain 30-40, degrading ODF discriminability by 12-20%.
+
+**Three-part treatment implemented:**
+
+**1. Conservative hardware AGC (AdaptiveMic.h):**
+- Gain ceiling: 60 → 40 (sweep shows SNR degrades above 35-40)
+- Target raw level: 0.35 → 0.20 (accept quieter signal, rely on BandFlux `log(1+γ·mag)` for level mapping)
+- Tracking tau: 30s → 60s (slow AGC preserves within-song dynamics, per Kates 2008 hearing aid literature)
+- Calibration period: 30s → 60s (matches tracking tau)
+
+**2. Spectral noise floor estimation (SharedSpectralAnalysis):**
+- Minimum statistics noise estimation (Martin 2001, simplified for real-time)
+- Per-bin smoothed power tracking → running minimum with slow release → noise floor estimate
+- Spectral subtraction: `cleanMag = max(mag - α·√noiseFloor, floor·mag)`
+- Inserted after FFT, before `preWhitenMagnitudes_` → benefits both BandFlux and NN paths
+- Parameters: `noiseest=1`, `noisesmooth=0.92`, `noiserelease=0.999`, `noiseover=1.5`, `noisefloor=0.02`
+- ~1 KB RAM (2×128 floats), ~0.1% CPU
+
+**3. Training pipeline alignment (TODO — next step after firmware validation):**
+- `hw_gain_max: 60 → 40` in default.yaml (done)
+- Spectral subtraction in `prepare_dataset.py`: apply same min-statistics algorithm after adding mic noise, before mel extraction. Teaches NN to work with subtracted spectra.
+- Re-prepare dataset and retrain after firmware validation confirms improvement
+
+**Literature:**
+- Boll 1979: Spectral subtraction (noise estimation during silence)
+- Martin 2001: Minimum statistics (continuous noise floor tracking without VAD)
+- Cohen 2003 (IMCRA): Improved minima-controlled recursive averaging
+- Kates 2008: Hearing aid AGC (slow-acting >30s preserves dynamics)
+- Böck & Widmer 2013: Spectral flux onset detection with adaptive whitening (complementary to subtraction)
+
+**Outstanding:**
+- Validate on hardware: A/B test v56 vs v55 with gain sweep to measure ODF SNR improvement
+- Implement spectral subtraction in training pipeline (`prepare_dataset.py`)
+- Re-prepare dataset and train v4 with subtracted spectra
 
 ### In Progress: Neural Network Beat Activation (v54, March 5, 2026)
 
@@ -19,14 +96,33 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 - Labeling tool research: Beat This! (primary, SOTA), essentia (cross-validation), BeatNet (needs Python 3.11)
 - Determinism verified: Beat This!, librosa, and essentia all produce bit-identical results across runs
 - Cross-tool comparison on 18 EDM tracks: 94% BPM agreement, BT-essentia F1=0.948
+- Multi-system consensus labeling (4 systems: Beat This!, essentia, librosa, madmom)
+- Mic calibration pipeline: `calibrate_mic.py` with generate/capture/capture-all/gain-sweep/analyze
+- Fixed consensus labels: Beat This! file naming bug excluded it from merge (stem.beats.beat_this → stem.beat_this). Re-merged with all 4 systems → 616K consensus beats (39% 2-sys, 35% 3-sys, 26% 4-sys agreement), 31.6% downbeat ratio
+- Fixed config labels_dir: was pointing to Beat This!-only labels, now points to 4-system consensus
+- Training v2 kicked off (overnight): 6993 tracks, 4-system consensus labels, augmentation ON, 100 epochs
+
+**Training v1 (consensus-4sys-v1) — FAILED:**
+- pos_weight was wrong: 10.0 (configured) vs 4.7 (measured from data). Downbeat pos_weight: 40.0 vs 10.5 actual.
+- Model accuracy stuck at 61.7% (= negative class ratio — model learned nothing useful)
+- Beat F1 = 0.473 mean on test set, but 2.09x over-detection ratio
+- Downbeat F1 = 0.003 (broken — test labels were missing isDownbeat flags)
+- At optimal threshold (0.70-0.80), F1 improves to ~0.505 but still over-detects
+
+**Fixes applied (v2):**
+- pos_weight corrected: beat=4.7, downbeat=10.5
+- Re-merged test track labels (`blinky-test-player/music/edm/`) with downbeat propagation from 4-system consensus
+- Fixed eval code: downbeat filter uses `isDownbeat` field instead of broken `strength > 0.9`
+- Added `--sweep-thresholds` to evaluate.py for automatic threshold optimization
+- Training v2 in progress: epoch 6 at 83.7% accuracy (vs 61.7% with wrong weights)
 
 **Outstanding:**
-- Install pyenv + Python 3.11 venv for BeatNet/madmom cross-validation
-- Build cross-validation labeling pipeline
-- Download training data (FMA electronic, ~5K tracks)
-- Label with Beat This! + cross-validate
-- Train model on real data
-- Deploy trained model and A/B test vs BandFlux (expected: 0.28-0.35 → 0.50-0.70 F1)
+- Wait for v2 training to complete (~3-5 hours for 100 epochs)
+- Evaluate v2 model with threshold sweep
+- ~~Re-prepare dataset with gain-aware mic profile~~ **DONE** — 3M train / 545K val chunks at `/mnt/storage/blinky-ml-data/processed/`
+- Train v3 with mic profile augmentation (data ready, waiting for v2 to finish GPU)
+- Deploy best model and A/B test vs BandFlux (expected: 0.28-0.35 → 0.50-0.70 F1)
+- ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 60 validated.
 
 ### Completed (March 4, 2026)
 

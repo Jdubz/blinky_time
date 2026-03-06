@@ -69,6 +69,9 @@ def firmware_mel_spectrogram(audio: torch.Tensor, cfg: dict,
                              window: torch.Tensor) -> np.ndarray:
     """Compute mel spectrogram matching the firmware pipeline exactly.
 
+    NOTE: calibrate_mic.py has a numpy-only copy (_firmware_mel_from_audio).
+    If you change the mel pipeline here, update that copy too.
+
     Args:
         audio: (samples,) tensor on GPU/CPU
         cfg: config dict
@@ -286,10 +289,36 @@ def _apply_mic_profile(mel: np.ndarray, mic_profile: dict,
     """Apply mic transfer function to simulate MEMS mic response.
 
     Scales per-band by measured gain ratio and adds noise floor.
+    If gain-sweep data is available, randomly samples a HW gain level
+    and uses the corresponding noise floor for that gain — this trains
+    the model to be robust across the AGC's operating range.
+
     Uses the provided rng for reproducible noise generation.
     """
     band_gain = mic_profile["band_gain"]
-    noise_floor = mic_profile["noise_floor"]
+
+    # Select noise floor: gain-aware (random gain per example) or static
+    if "noise_floor_by_gain" in mic_profile:
+        nf_by_gain = mic_profile["noise_floor_by_gain"]  # (G, 26)
+        hw_gains = mic_profile["hw_gain_levels"]           # (G,)
+        # Sample a random gain level, weighted toward the recommended range
+        if "recommended_gain_min" in mic_profile and "recommended_gain_max" in mic_profile:
+            rec_min = mic_profile["recommended_gain_min"]
+            rec_max = mic_profile["recommended_gain_max"]
+            # 70% chance within recommended range, 30% full range
+            if rng.random() < 0.7:
+                valid = np.where((hw_gains >= rec_min) & (hw_gains <= rec_max))[0]
+                if len(valid) > 0:
+                    g_idx = rng.choice(valid)
+                else:
+                    g_idx = rng.integers(len(hw_gains))
+            else:
+                g_idx = rng.integers(len(hw_gains))
+        else:
+            g_idx = rng.integers(len(hw_gains))
+        noise_floor = nf_by_gain[g_idx]
+    else:
+        noise_floor = mic_profile["noise_floor"]
 
     mel_mic = mel * band_gain[np.newaxis, :]
     if noise_floor.max() > 0:
@@ -463,9 +492,29 @@ def main():
             "band_gain": data["band_gain"].astype(np.float32),
             "noise_floor": data["noise_floor"].astype(np.float32),
         }
+        # Load gain-aware fields if present
+        if "noise_floor_by_gain" in data:
+            mic_profile["noise_floor_by_gain"] = data["noise_floor_by_gain"].astype(np.float32)
+            mic_profile["hw_gain_levels"] = data["hw_gain_levels"]
+            if "recommended_gain_min" in data:
+                mic_profile["recommended_gain_min"] = int(data["recommended_gain_min"])
+                mic_profile["recommended_gain_max"] = int(data["recommended_gain_max"])
         print(f"Mic profile loaded: {profile_path}")
         print(f"  Band gain range: [{mic_profile['band_gain'].min():.3f}, {mic_profile['band_gain'].max():.3f}]")
         print(f"  Noise floor range: [{mic_profile['noise_floor'].min():.4f}, {mic_profile['noise_floor'].max():.4f}]")
+        # Override recommended gain max with config hw_gain_max if set
+        # This must agree with firmware AdaptiveMic.h hwGainMaxSignal
+        hw_gain_max = cfg.get("audio", {}).get("hw_gain_max")
+        if hw_gain_max is not None and "noise_floor_by_gain" in mic_profile:
+            mic_profile["recommended_gain_max"] = int(hw_gain_max)
+            if "recommended_gain_min" not in mic_profile:
+                mic_profile["recommended_gain_min"] = 0
+        if "noise_floor_by_gain" in mic_profile:
+            g = mic_profile["hw_gain_levels"]
+            print(f"  Gain-aware: {len(g)} levels ({g[0]}-{g[-1]})")
+            if "recommended_gain_min" in mic_profile:
+                print(f"  AGC range: [{mic_profile['recommended_gain_min']} - {mic_profile['recommended_gain_max']}]"
+                      f"{' (from config hw_gain_max)' if hw_gain_max is not None else ''}")
 
     # Precompute mel filterbank and window on device (reused for every file)
     mel_fb = _build_mel_filterbank(cfg, device)
