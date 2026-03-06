@@ -55,9 +55,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , phases_{}
     , prevMagnitudes_{}
     , melBands_{}
-#ifdef ENABLE_NN_BEAT_ACTIVATION
     , rawMelBands_{}
-#endif
     , prevMelBands_{}
     , melRunningMax_{}
     , binRunningMax_{}
@@ -96,9 +94,7 @@ void SharedSpectralAnalysis::reset() {
     }
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         melBands_[i] = 0.0f;
-#ifdef ENABLE_NN_BEAT_ACTIVATION
         rawMelBands_[i] = 0.0f;
-#endif
         prevMelBands_[i] = 0.0f;
         melRunningMax_[i] = 0.0f;
     }
@@ -150,11 +146,9 @@ void SharedSpectralAnalysis::process() {
         preWhitenMagnitudes_[i] = magnitudes_[i];
     }
 
-#ifdef ENABLE_NN_BEAT_ACTIVATION
-    // Compute raw mel bands from pre-compressor magnitudes (for NN inference).
+    // Compute raw mel bands from pre-compressor magnitudes (for NN inference + calibration).
     // Must happen BEFORE applyCompressor() modifies magnitudes_ in-place.
     computeRawMelBands();
-#endif
 
     // Frame-level soft-knee compression (normalizes gross signal level)
     applyCompressor();
@@ -286,7 +280,6 @@ void SharedSpectralAnalysis::computeRawMelBands() {
     // Uses preWhitenMagnitudes_ saved before applyCompressor().
     computeMelBandsFrom(preWhitenMagnitudes_, rawMelBands_);
 }
-#endif
 
 void SharedSpectralAnalysis::whitenMelBands() {
     // Adaptive whitening on mel bands (Stowell & Plumbley 2007 adapted)

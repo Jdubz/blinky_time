@@ -1712,11 +1712,7 @@ void SerialConsole::streamTick() {
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
         if (spectral.isFrameReady()) {
-#ifdef ENABLE_NN_BEAT_ACTIVATION
             const float* mel = spectral.getRawMelBands();
-#else
-            const float* mel = spectral.getMelBands();
-#endif
 
             Serial.print(F("{\"type\":\"NN\",\"ts\":"));
             Serial.print(now);
