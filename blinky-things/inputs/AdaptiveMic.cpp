@@ -213,9 +213,11 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // This ensures high-quality signal into ADC before software processing
 
   // Determine if we're in fast AGC mode
-  // Fast mode: when gain is high (>=70) and signal is persistently low
+  // Fast mode: when gain is near the AGC ceiling and signal is persistently low.
+  // Threshold is relative to hwGainMaxSignal so it adapts to any ceiling value.
+  int fastAgcGainThreshold = (hwGainMaxSignal > 10) ? (hwGainMaxSignal - 10) : hwGainMaxSignal;
   inFastAgcMode_ = fastAgcEnabled &&
-                   currentHardwareGain >= 70 &&
+                   currentHardwareGain >= fastAgcGainThreshold &&
                    rawTrackedLevel < fastAgcThreshold;
 
   // Determine if we're in loud AGC mode (symmetric to fast AGC)

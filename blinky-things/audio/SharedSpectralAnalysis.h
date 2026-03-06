@@ -180,8 +180,9 @@ public:
     const float* getMelBands() const { return melBands_; }
 
     /**
-     * Get raw mel-scaled bands (26 bands) — NO compression, NO whitening
+     * Get mel-scaled bands (26 bands) — post-noise-subtraction, NO compression, NO whitening
      * Computed from pre-compressor magnitudes with only log compression.
+     * When noise estimation is enabled, these bands reflect noise-subtracted spectra.
      * Closely matches the training pipeline (firmware_mel_spectrogram()).
      * Used for NN inference and mic calibration streaming.
      *
@@ -248,7 +249,7 @@ private:
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
-    float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Raw mel bands (no compressor, no whitening) for NN inference + calibration
+    float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Pre-compressor mel bands (noise-subtracted if enabled, no whitening) for NN + calibration
     float prevMelBands_[SpectralConstants::NUM_MEL_BANDS];
 
     // Mel-band whitening: per-band running maximum for adaptive normalization

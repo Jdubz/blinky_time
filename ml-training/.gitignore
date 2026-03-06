@@ -3,11 +3,8 @@ data/audio/
 data/labels/
 data/processed/
 
-# Calibration captures and generated audio (large, reproducible)
-data/calibration/*.jsonl
-data/calibration/*.wav
-data/calibration/*.npy
-data/calibration/*.npz
+# Calibration captures and generated audio (large, reproducible via calibrate_mic.py)
+data/calibration/
 
 # Training outputs
 outputs/
