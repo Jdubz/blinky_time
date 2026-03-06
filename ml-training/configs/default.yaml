@@ -10,6 +10,7 @@ audio:
   fmin: 60                  # MEL_MIN_FREQ
   fmax: 8000                # MEL_MAX_FREQ
   frame_rate: 62.5          # 16000 / 256
+  target_rms_db: -35        # Normalize audio RMS to simulate firmware AGC level
 
 # Target label generation
 labels:

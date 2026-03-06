@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate beat activation model offline.
+"""Evaluate beat activation model offline (PyTorch, GPU-accelerated).
 
 Computes per-track and aggregate metrics:
   - Frame-level: precision, recall, F1 (at threshold)
@@ -16,33 +16,63 @@ Usage:
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
-os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
-
+import librosa
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import mir_eval
 import numpy as np
+import torch
 import yaml
 
-from scripts.prepare_dataset import firmware_mel_spectrogram, load_config
+from models.beat_cnn import build_beat_cnn
+from scripts.prepare_dataset import (
+    _build_mel_filterbank, firmware_mel_spectrogram, load_config,
+)
 
 
-def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: Path,
-                       threshold: float = 0.5):
+def _load_model(model_path: str, cfg: dict, device: torch.device):
+    """Load a trained BeatCNN model."""
+    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+
+    # Handle both bare state_dict and full checkpoint
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        state_dict = checkpoint["state_dict"]
+        use_downbeat = checkpoint.get("use_downbeat", cfg["model"].get("downbeat", False))
+    else:
+        state_dict = checkpoint
+        use_downbeat = cfg["model"].get("downbeat", False)
+
+    model = build_beat_cnn(
+        n_mels=cfg["audio"]["n_mels"],
+        channels=cfg["model"]["channels"],
+        kernel_size=cfg["model"]["kernel_size"],
+        dilations=cfg["model"]["dilations"],
+        dropout=cfg["model"].get("dropout", 0.1),
+        downbeat=use_downbeat,
+    ).to(device)
+    model.load_state_dict(state_dict)
+    model.eval()
+    return model, use_downbeat
+
+
+def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
+                       output_dir: Path, threshold: float = 0.5,
+                       device: torch.device = None):
     """Run model on full tracks and evaluate beat detection accuracy."""
-    import librosa
-    import tf_keras as keras
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     sr = cfg["audio"]["sample_rate"]
     frame_rate = cfg["audio"]["frame_rate"]
+    chunk_frames = cfg["training"]["chunk_frames"]
 
-    model = keras.models.load_model(model_path, compile=False)
-    chunk_frames = model.input_shape[1]
+    model, has_downbeat = _load_model(model_path, cfg, device)
+    mel_fb = _build_mel_filterbank(cfg, device)
+    window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
 
     audio_files = sorted(
         f for f in audio_dir.rglob("*")
@@ -51,18 +81,18 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
 
     all_results = []
 
-    # Detect if model has downbeat output (constant across tracks)
-    out_channels = model.output_shape[-1]
-    has_downbeat = out_channels > 1
-
     for audio_path in audio_files:
         label_path = audio_path.parent / f"{audio_path.stem}.beats.json"
         if not label_path.exists():
             continue
 
-        # Load and process
-        audio, _ = librosa.load(str(audio_path), sr=sr, mono=True)
-        mel = firmware_mel_spectrogram(audio, cfg)
+        # Load and process (normalize RMS to match firmware AGC level)
+        audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
+        target_rms_db = cfg["audio"].get("target_rms_db", -35)
+        rms = np.sqrt(np.mean(audio_np ** 2) + 1e-10)
+        audio_np = audio_np * (10 ** (target_rms_db / 20) / rms)
+        audio_gpu = torch.from_numpy(audio_np).to(device)
+        mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
@@ -71,20 +101,25 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict, output_dir: 
         counts = np.zeros(n_frames, dtype=np.float32)
 
         stride = chunk_frames // 2
-        for start in range(0, max(1, n_frames - chunk_frames + 1), stride):
-            end = start + chunk_frames
-            if end > n_frames:
-                chunk = np.zeros((chunk_frames, mel.shape[1]), dtype=np.float32)
-                chunk[:n_frames - start] = mel[start:n_frames]
-            else:
-                chunk = mel[start:end]
+        mel_tensor = torch.from_numpy(mel).float().to(device)
 
-            pred = model.predict(chunk[np.newaxis], verbose=0)[0]  # (time, channels)
-            actual_len = min(chunk_frames, n_frames - start)
-            activations[start:start + actual_len] += pred[:actual_len, 0]
-            if has_downbeat:
-                db_activations[start:start + actual_len] += pred[:actual_len, 1]
-            counts[start:start + actual_len] += 1
+        with torch.no_grad():
+            for start in range(0, max(1, n_frames - chunk_frames + 1), stride):
+                end = start + chunk_frames
+                if end > n_frames:
+                    chunk = torch.zeros(chunk_frames, mel.shape[1],
+                                        device=device, dtype=torch.float32)
+                    chunk[:n_frames - start] = mel_tensor[start:n_frames]
+                else:
+                    chunk = mel_tensor[start:end]
+
+                pred = model(chunk.unsqueeze(0))[0]  # (time, channels)
+                actual_len = min(chunk_frames, n_frames - start)
+                pred_np = pred[:actual_len].cpu().numpy()
+                activations[start:start + actual_len] += pred_np[:, 0]
+                if has_downbeat:
+                    db_activations[start:start + actual_len] += pred_np[:, 1]
+                counts[start:start + actual_len] += 1
 
         activations /= np.maximum(counts, 1)
         if has_downbeat:
@@ -202,26 +237,26 @@ def _plot_activation(activations: np.ndarray, ref_beats: np.ndarray,
     plt.close(fig)
 
 
-def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path):
+def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
+                            device: torch.device = None):
     """Evaluate on the processed validation set (frame-level metrics)."""
-    import tf_keras as keras
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     data_dir = Path(cfg["data"]["processed_dir"])
     X_val = np.load(data_dir / "X_val.npy")
     Y_val = np.load(data_dir / "Y_val.npy")
 
-    model = keras.models.load_model(model_path, compile=False)
-    out_channels = model.output_shape[-1]
-    has_downbeat = out_channels > 1
+    model, has_downbeat = _load_model(model_path, cfg, device)
 
-    # Predict
-    Y_pred_all = model.predict(X_val, batch_size=64, verbose=1)  # (N, time, channels)
+    # Batch predict
+    X_tensor = torch.from_numpy(X_val).float().to(device)
+    with torch.no_grad():
+        Y_pred_all = model(X_tensor).cpu().numpy()
 
-    # Beat metrics (channel 0)
     Y_pred_beat = Y_pred_all[:, :, 0]
     _print_frame_metrics("Beat", Y_pred_beat, Y_val)
 
-    # Downbeat metrics (channel 1)
     if has_downbeat:
         db_val_path = data_dir / "Y_db_val.npy"
         if db_val_path.exists():
@@ -253,20 +288,28 @@ def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):
 def main():
     parser = argparse.ArgumentParser(description="Evaluate beat activation model")
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--model", default="outputs/best_model.keras")
+    parser.add_argument("--model", default="outputs/best_model.pt")
     parser.add_argument("--audio-dir", default=None, help="Evaluate on full tracks")
     parser.add_argument("--output-dir", default="outputs/eval")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if args.audio_dir:
-        evaluate_on_tracks(args.model, Path(args.audio_dir), cfg, output_dir, args.threshold)
+    if args.device is None or args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
-        evaluate_validation_set(args.model, cfg, output_dir)
+        device = torch.device(args.device)
+    print(f"Using device: {device}")
+
+    if args.audio_dir:
+        evaluate_on_tracks(args.model, Path(args.audio_dir), cfg, output_dir,
+                           args.threshold, device)
+    else:
+        evaluate_validation_set(args.model, cfg, output_dir, device)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the beat activation CNN.
+"""Train the beat activation CNN (PyTorch, GPU-accelerated).
 
 Usage:
     python train.py --config configs/default.yaml
@@ -7,17 +7,46 @@ Usage:
 """
 
 import argparse
-import os
+import csv
+import math
 import sys
 from pathlib import Path
 
-os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
-
 import numpy as np
-import tf_keras as keras
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
 import yaml
 
 from models.beat_cnn import build_beat_cnn
+
+
+class MemmapBeatDataset(Dataset):
+    """Dataset backed by memory-mapped .npy files for low RAM usage."""
+
+    def __init__(self, x_path, y_path, y_db_path=None):
+        self.X = np.load(x_path, mmap_mode='r')
+        self.Y = np.load(y_path, mmap_mode='r')
+        self.Y_db = np.load(y_db_path, mmap_mode='r') if y_db_path else None
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        x = torch.from_numpy(self.X[idx].copy()).float()
+        y = torch.from_numpy(self.Y[idx].copy()).float()
+        if self.Y_db is not None:
+            y_db = torch.from_numpy(self.Y_db[idx].copy()).float()
+            return x, torch.stack([y, y_db], dim=-1)
+        return x, y.unsqueeze(-1)
+
+
+def weighted_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
+                 pos_weight: float) -> torch.Tensor:
+    """Weighted binary cross-entropy matching the Keras implementation."""
+    bce = nn.functional.binary_cross_entropy(y_pred, y_true, reduction="none")
+    weights = y_true * pos_weight + (1 - y_true) * 1.0
+    return (bce * weights).mean()
 
 
 def main():
@@ -28,7 +57,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
-    parser.add_argument("--qat", action="store_true", help="Enable quantization-aware training")
+    parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -44,36 +73,36 @@ def main():
     pos_weight = cfg["training"]["pos_weight"]
     use_downbeat = cfg["model"].get("downbeat", False)
 
-    # Load data
-    print(f"Loading data from {data_dir}...")
-    X_train = np.load(data_dir / "X_train.npy")
-    Y_train = np.load(data_dir / "Y_train.npy")
-    X_val = np.load(data_dir / "X_val.npy")
-    Y_val = np.load(data_dir / "Y_val.npy")
-
-    print(f"Train: {X_train.shape}, Val: {X_val.shape}")
-    print(f"Positive ratio - Train: {Y_train.mean():.4f}, Val: {Y_val.mean():.4f}")
-
-    # Handle multi-output (beat + downbeat)
-    if use_downbeat:
-        db_train_path = data_dir / "Y_db_train.npy"
-        db_val_path = data_dir / "Y_db_val.npy"
-        if db_train_path.exists():
-            Y_db_train = np.load(db_train_path)
-            Y_db_val = np.load(db_val_path)
-            # Stack: (batch, time, 2) — channel 0 = beat, channel 1 = downbeat
-            Y_train = np.stack([Y_train, Y_db_train], axis=-1)
-            Y_val = np.stack([Y_val, Y_db_val], axis=-1)
-            print(f"Downbeat ratio - Train: {Y_db_train.mean():.4f}")
-        else:
-            print("WARNING: downbeat=true but Y_db_train.npy not found. Training beat-only.")
-            use_downbeat = False
-            Y_train = Y_train[..., np.newaxis]
-            Y_val = Y_val[..., np.newaxis]
+    if args.device is None or args.device == "auto":
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     else:
-        # Add channel dim to targets: (batch, time) -> (batch, time, 1)
-        Y_train = Y_train[..., np.newaxis]
-        Y_val = Y_val[..., np.newaxis]
+        device = torch.device(args.device)
+    print(f"Using device: {device}")
+
+    # Load data (memory-mapped for low RAM usage)
+    print(f"Loading data from {data_dir}...")
+
+    db_train_path = data_dir / "Y_db_train.npy"
+    db_val_path = data_dir / "Y_db_val.npy"
+    has_db = use_downbeat and db_train_path.exists()
+
+    if use_downbeat and not has_db:
+        print("WARNING: downbeat=true but Y_db_train.npy not found. Training beat-only.")
+        use_downbeat = False
+
+    train_ds = MemmapBeatDataset(
+        data_dir / "X_train.npy", data_dir / "Y_train.npy",
+        y_db_path=db_train_path if has_db else None)
+    val_ds = MemmapBeatDataset(
+        data_dir / "X_val.npy", data_dir / "Y_val.npy",
+        y_db_path=db_val_path if has_db else None)
+
+    print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
+
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                              num_workers=4, pin_memory=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
+                            num_workers=4, pin_memory=True)
 
     # Build model
     model = build_beat_cnn(
@@ -84,74 +113,121 @@ def main():
         dropout=cfg["model"]["dropout"],
         chunk_frames=cfg["training"]["chunk_frames"],
         downbeat=use_downbeat,
-    )
+    ).to(device)
 
-    # Optional: quantization-aware training
-    if args.qat or cfg["quantization"]["method"] == "qat":
-        try:
-            import tensorflow_model_optimization as tfmot
-            model = tfmot.quantization.keras.quantize_model(model)
-            print("QAT enabled")
-        except Exception as e:
-            print(f"Warning: QAT failed ({e}), training without QAT")
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Model: {total_params} params")
 
-    # Weighted binary cross-entropy (per-channel)
-    def weighted_bce(y_true, y_pred):
-        bce = keras.backend.binary_crossentropy(y_true, y_pred)
-        weights = y_true * pos_weight + (1 - y_true) * 1.0
-        return keras.backend.mean(bce * weights)
+    # Optimizer + cosine LR schedule
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    total_steps = epochs * len(train_loader)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
-    # Learning rate schedule
-    if cfg["training"]["lr_schedule"] == "cosine":
-        lr_schedule = keras.optimizers.schedules.CosineDecay(
-            initial_learning_rate=lr,
-            decay_steps=epochs * (len(X_train) // batch_size),
-        )
-    else:
-        lr_schedule = lr
-
-    model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=lr_schedule),
-        loss=weighted_bce,
-        metrics=["binary_accuracy"],
-    )
-    model.summary()
-
-    # Callbacks
-    callbacks = [
-        keras.callbacks.ModelCheckpoint(
-            str(output_dir / "best_model.keras"),
-            monitor="val_loss", save_best_only=True, verbose=1,
-        ),
-        keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=15, restore_best_weights=True, verbose=1,
-        ),
-        keras.callbacks.CSVLogger(str(output_dir / "training_log.csv")),
-        keras.callbacks.ReduceLROnPlateau(
-            monitor="val_loss", factor=0.5, patience=7, min_lr=1e-6, verbose=1,
-        ),
-    ]
-
-    # Train
+    # Training loop
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
     print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
-    history = model.fit(
-        X_train, Y_train,
-        validation_data=(X_val, Y_val),
-        epochs=epochs,
-        batch_size=batch_size,
-        callbacks=callbacks,
-    )
+
+    best_val_loss = float("inf")
+    patience_counter = 0
+    patience = 15
+    log_rows = []
+
+    for epoch in range(epochs):
+        # --- Train ---
+        model.train()
+        train_loss = 0.0
+        train_correct = 0
+        train_total = 0
+
+        for X_batch, Y_batch in train_loader:
+            X_batch = X_batch.to(device, non_blocking=True)
+            Y_batch = Y_batch.to(device, non_blocking=True)
+
+            optimizer.zero_grad()
+            Y_pred = model(X_batch)
+            loss = weighted_bce(Y_pred, Y_batch, pos_weight)
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
+            train_loss += loss.item() * X_batch.size(0)
+            train_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
+            train_total += Y_batch.numel()
+
+        train_loss /= len(train_ds)
+        train_acc = train_correct / train_total
+
+        # --- Validate ---
+        model.eval()
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+
+        with torch.no_grad():
+            for X_batch, Y_batch in val_loader:
+                X_batch = X_batch.to(device, non_blocking=True)
+                Y_batch = Y_batch.to(device, non_blocking=True)
+
+                Y_pred = model(X_batch)
+                loss = weighted_bce(Y_pred, Y_batch, pos_weight)
+
+                val_loss += loss.item() * X_batch.size(0)
+                val_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
+                val_total += Y_batch.numel()
+
+        val_loss /= len(val_ds)
+        val_acc = val_correct / val_total
+
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(f"Epoch {epoch+1}/{epochs} - loss: {train_loss:.4f} - acc: {train_acc:.4f} "
+              f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} - lr: {current_lr:.2e}")
+
+        log_rows.append({
+            "epoch": epoch + 1, "loss": train_loss, "binary_accuracy": train_acc,
+            "val_loss": val_loss, "val_binary_accuracy": val_acc, "lr": current_lr,
+        })
+
+        # Checkpointing
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            torch.save(model.state_dict(), output_dir / "best_model.pt")
+            print(f"  Saved best model (val_loss={val_loss:.4f})")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"  Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)")
+                break
+
+        # Reduce LR on plateau (check every epoch)
+        if patience_counter > 0 and patience_counter % 7 == 0:
+            for pg in optimizer.param_groups:
+                pg["lr"] = max(pg["lr"] * 0.5, 1e-6)
+            print(f"  Reduced LR to {optimizer.param_groups[0]['lr']:.2e}")
+
+    # Restore best weights
+    model.load_state_dict(torch.load(output_dir / "best_model.pt", weights_only=True))
 
     # Save final model
-    model.save(str(output_dir / "final_model.keras"))
-    print(f"\nTraining complete. Models saved to {output_dir}/")
+    torch.save(model.state_dict(), output_dir / "final_model.pt")
+    # Save full model info for export
+    torch.save({
+        "state_dict": model.state_dict(),
+        "config": cfg,
+        "use_downbeat": use_downbeat,
+    }, output_dir / "model_checkpoint.pt")
 
-    # Print best metrics
-    best_epoch = np.argmin(history.history["val_loss"])
-    print(f"Best epoch: {best_epoch + 1}")
-    print(f"  val_loss: {history.history['val_loss'][best_epoch]:.4f}")
-    print(f"  val_binary_accuracy: {history.history['val_binary_accuracy'][best_epoch]:.4f}")
+    # Save training log
+    with open(output_dir / "training_log.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=log_rows[0].keys())
+        writer.writeheader()
+        writer.writerows(log_rows)
+
+    print(f"\nTraining complete. Models saved to {output_dir}/")
+    best_epoch = min(log_rows, key=lambda r: r["val_loss"])
+    print(f"Best epoch: {best_epoch['epoch']}")
+    print(f"  val_loss: {best_epoch['val_loss']:.4f}")
+    print(f"  val_binary_accuracy: {best_epoch['val_binary_accuracy']:.4f}")
 
 
 if __name__ == "__main__":

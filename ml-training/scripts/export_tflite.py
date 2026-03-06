@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Export trained Keras model to TFLite INT8 and C header for firmware.
+"""Export trained PyTorch model to TFLite INT8 and C header for firmware.
+
+Loads PyTorch weights, rebuilds equivalent TF/Keras model, and converts
+to TFLite INT8. TF is used only for export (CPU-only is fine).
 
 Usage:
     python scripts/export_tflite.py --config configs/default.yaml
-    python scripts/export_tflite.py --config configs/default.yaml --model outputs/best_model.keras
+    python scripts/export_tflite.py --config configs/default.yaml --model outputs/best_model.pt
     python scripts/export_tflite.py --inference-frames 32  # Smaller context = less device RAM
 """
 
@@ -13,84 +16,87 @@ import sys
 from pathlib import Path
 
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
+os.environ["CUDA_VISIBLE_DEVICES"] = ""  # TF export runs on CPU (TF GPU is broken)
+
+# Ensure ml-training root is on path (for "from models.beat_cnn import ...")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import tensorflow as tf
+import tf_keras as keras
+from tf_keras import layers
+import torch
 import yaml
+
+
+def build_tf_beat_cnn(n_mels: int, channels: int, kernel_size: int,
+                      dilations: list[int], chunk_frames: int,
+                      downbeat: bool) -> keras.Model:
+    """Build TF/Keras equivalent of PyTorch BeatCNN (for TFLite export only)."""
+    out_channels = 2 if downbeat else 1
+    inputs = keras.Input(shape=(chunk_frames, n_mels), name="mel_input")
+    x = inputs
+
+    for i, dilation in enumerate(dilations):
+        pad_size = (kernel_size - 1) * dilation
+        x = layers.ZeroPadding1D(padding=(pad_size, 0))(x)
+        x = layers.Conv1D(channels, kernel_size, dilation_rate=dilation,
+                          padding="valid", use_bias=True,
+                          name=f"conv{i+1}_d{dilation}")(x)
+        x = layers.BatchNormalization(name=f"bn{i+1}")(x)
+        x = layers.ReLU(name=f"relu{i+1}")(x)
+
+    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                      name="output_conv")(x)
+
+    return keras.Model(inputs=inputs, outputs=x, name="beat_cnn")
+
+
+def transfer_pytorch_weights(tf_model: keras.Model, pt_state_dict: dict,
+                             dilations: list[int]):
+    """Copy weights from PyTorch state_dict to equivalent TF/Keras model.
+
+    Handles the Conv1D weight transposition (PyTorch: out,in,k → TF: k,in,out)
+    and BatchNorm parameter mapping.
+    """
+    for i, dilation in enumerate(dilations):
+        # Conv weights: PyTorch (out_ch, in_ch, kernel) → TF (kernel, in_ch, out_ch)
+        conv_name = f"conv{i+1}_d{dilation}"
+        pt_w = pt_state_dict[f"backbone.{i*5+1}.weight"].numpy()  # (out, in, k)
+        pt_b = pt_state_dict[f"backbone.{i*5+1}.bias"].numpy()
+        tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
+        tf_model.get_layer(conv_name).set_weights([tf_w, pt_b])
+
+        # BatchNorm: gamma, beta, running_mean, running_var
+        bn_name = f"bn{i+1}"
+        gamma = pt_state_dict[f"backbone.{i*5+2}.weight"].numpy()
+        beta = pt_state_dict[f"backbone.{i*5+2}.bias"].numpy()
+        mean = pt_state_dict[f"backbone.{i*5+2}.running_mean"].numpy()
+        var = pt_state_dict[f"backbone.{i*5+2}.running_var"].numpy()
+        tf_model.get_layer(bn_name).set_weights([gamma, beta, mean, var])
+
+    # Output conv
+    pt_w = pt_state_dict["output_conv.weight"].numpy()
+    pt_b = pt_state_dict["output_conv.bias"].numpy()
+    tf_w = np.transpose(pt_w, (2, 1, 0))
+    tf_model.get_layer("output_conv").set_weights([tf_w, pt_b])
 
 
 def representative_dataset_gen(data_path: Path, inference_frames: int = None,
                                 n_samples: int = 200):
     """Generator for calibration data (required for full INT8 quantization)."""
-    X = np.load(data_path / "X_train.npy")
+    X = np.load(data_path / "X_train.npy", mmap_mode='r')
     indices = np.random.choice(len(X), size=min(n_samples, len(X)), replace=False)
     for i in indices:
         sample = X[i:i+1].astype(np.float32)
         if inference_frames is not None and sample.shape[1] != inference_frames:
-            # Truncate or pad to match inference shape
             sample = sample[:, :inference_frames, :]
         yield [sample]
 
 
-def rebuild_model_for_inference(model, inference_frames: int):
-    """Rebuild model with a different input time dimension, copying weights.
-
-    The causal CNN weights are shape-independent along the time axis, so we can
-    export with a smaller context window to save device RAM.
-    """
-    import tf_keras as keras
-    from models.beat_cnn import build_beat_cnn
-
-    # Extract architecture config from trained model
-    input_shape = model.input_shape  # (None, chunk_frames, n_mels)
-    n_mels = input_shape[-1]
-
-    # Detect if model has downbeat output (output shape last dim > 1)
-    output_shape = model.output_shape  # (None, chunk_frames, n_channels)
-    has_downbeat = output_shape[-1] > 1
-
-    # Count conv layers and extract config
-    conv_layers = [l for l in model.layers if 'conv' in l.name and l.name != 'output_conv']
-    channels = conv_layers[0].filters if conv_layers else 32
-    kernel_size = conv_layers[0].kernel_size[0] if conv_layers else 3
-    dilations = []
-    for l in conv_layers:
-        dilations.append(l.dilation_rate[0])
-
-    print(f"Rebuilding model: {input_shape[-1]} mels, {channels} ch, "
-          f"k={kernel_size}, d={dilations}, inference_frames={inference_frames}, "
-          f"downbeat={has_downbeat}")
-
-    new_model = build_beat_cnn(
-        n_mels=n_mels,
-        channels=channels,
-        kernel_size=kernel_size,
-        dilations=dilations,
-        dropout=0.0,  # No dropout at inference
-        chunk_frames=inference_frames,
-        downbeat=has_downbeat,
-    )
-
-    # Copy weights by name
-    for new_layer in new_model.layers:
-        try:
-            old_layer = model.get_layer(new_layer.name)
-            new_layer.set_weights(old_layer.get_weights())
-        except ValueError:
-            pass  # Layers like input, padding don't have weights
-
-    return new_model
-
-
-def export_tflite(model_path: str, data_path: Path, output_path: str,
+def export_tflite(model: keras.Model, data_path: Path, output_path: str,
                   quantize_int8: bool = True, inference_frames: int = None) -> bytes:
     """Convert Keras model to TFLite, optionally with INT8 quantization."""
-    import tf_keras as keras
-    model = keras.models.load_model(model_path, compile=False)
-
-    if inference_frames is not None:
-        model = rebuild_model_for_inference(model, inference_frames)
-
     converter = tf.lite.TFLiteConverter.from_keras_model(model)
 
     if quantize_int8:
@@ -138,7 +144,7 @@ const unsigned int {c_array_name}_len = {len(tflite_bytes)};
 def main():
     parser = argparse.ArgumentParser(description="Export model to TFLite INT8 C header")
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--model", default="outputs/best_model.keras", help="Trained model path")
+    parser.add_argument("--model", default="outputs/best_model.pt", help="PyTorch model path")
     parser.add_argument("--data-dir", default=None, help="Processed data dir (for calibration)")
     parser.add_argument("--output-dir", default="outputs", help="Output directory")
     parser.add_argument("--no-quantize", action="store_true", help="Skip INT8 quantization")
@@ -154,26 +160,71 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = args.model
-    if not Path(model_path).exists():
-        print(f"Error: Model not found at {model_path}", file=sys.stderr)
+    if not Path(args.model).exists():
+        print(f"Error: Model not found at {args.model}", file=sys.stderr)
         sys.exit(1)
 
     if args.inference_frames is not None and args.inference_frames < 15:
         print(f"Error: --inference-frames must be >= 15 (model receptive field)", file=sys.stderr)
         sys.exit(1)
 
+    # Load PyTorch model
+    print(f"Loading PyTorch model from {args.model}...")
+    checkpoint = torch.load(args.model, map_location="cpu", weights_only=True)
+    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+        pt_state = checkpoint["state_dict"]
+        use_downbeat = checkpoint.get("use_downbeat", cfg["model"].get("downbeat", False))
+    else:
+        pt_state = checkpoint
+        use_downbeat = cfg["model"].get("downbeat", False)
+
+    # Build TF model and transfer weights
+    inference_frames = args.inference_frames or cfg["training"]["chunk_frames"]
+    dilations = cfg["model"]["dilations"]
+
+    print(f"Building TF model (inference_frames={inference_frames}, downbeat={use_downbeat})...")
+    tf_model = build_tf_beat_cnn(
+        n_mels=cfg["audio"]["n_mels"],
+        channels=cfg["model"]["channels"],
+        kernel_size=cfg["model"]["kernel_size"],
+        dilations=dilations,
+        chunk_frames=inference_frames,
+        downbeat=use_downbeat,
+    )
+    transfer_pytorch_weights(tf_model, pt_state, dilations)
+
+    # Verify weight transfer
+    print("Verifying weight transfer...")
+    from models.beat_cnn import build_beat_cnn as build_pt_cnn
+    pt_model = build_pt_cnn(
+        n_mels=cfg["audio"]["n_mels"],
+        channels=cfg["model"]["channels"],
+        kernel_size=cfg["model"]["kernel_size"],
+        dilations=dilations,
+        dropout=cfg["model"].get("dropout", 0.1),
+        downbeat=use_downbeat,
+    )
+    pt_model.load_state_dict(pt_state)
+    pt_model.eval()
+
+    test_input = np.random.randn(1, inference_frames, cfg["audio"]["n_mels"]).astype(np.float32)
+    with torch.no_grad():
+        pt_out = pt_model(torch.from_numpy(test_input)).numpy()
+    tf_out = tf_model.predict(test_input, verbose=0)
+    max_diff = np.abs(pt_out - tf_out).max()
+    print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
+
+    # Export TFLite
     max_size_kb = cfg["export"]["max_model_size_kb"]
     c_array_name = cfg["export"]["c_array_name"]
     header_path = cfg["export"]["output_header"]
 
-    # Export TFLite
     quantize = not args.no_quantize
     tflite_path = str(output_dir / ("beat_model_int8.tflite" if quantize else "beat_model_fp32.tflite"))
 
-    suffix = f" (inference_frames={args.inference_frames})" if args.inference_frames else ""
+    suffix = f" (inference_frames={inference_frames})" if args.inference_frames else ""
     print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model{suffix}...")
-    tflite_bytes = export_tflite(model_path, data_dir, tflite_path,
+    tflite_bytes = export_tflite(tf_model, data_dir, tflite_path,
                                   quantize_int8=quantize,
                                   inference_frames=args.inference_frames)
 
@@ -199,13 +250,11 @@ def main():
     print(f"  Input:  {input_details[0]['shape']} dtype={input_details[0]['dtype']}")
     print(f"  Output: {output_details[0]['shape']} dtype={output_details[0]['dtype']}")
 
-    # Context buffer RAM estimate for device
-    ctx_frames = args.inference_frames or cfg["training"]["chunk_frames"]
+    ctx_frames = inference_frames
     n_mels = cfg["audio"]["n_mels"]
-    ctx_ram = ctx_frames * n_mels * 4  # float32 buffer
+    ctx_ram = ctx_frames * n_mels * 4
     print(f"  Context buffer: {ctx_frames} frames x {n_mels} mels = {ctx_ram / 1024:.1f} KB RAM")
 
-    # Estimate firmware tensor arena
     tensor_arena_kb = sum(
         np.prod(d["shape"]) * np.dtype(d["dtype"]).itemsize
         for d in interpreter.get_tensor_details()
