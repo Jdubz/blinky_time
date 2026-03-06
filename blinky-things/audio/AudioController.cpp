@@ -236,7 +236,10 @@ const AudioControl& AudioController::update(float dt) {
         const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
         if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
             onsetStrength = beatActivationNN_.infer(spectral.getRawMelBands());
-            // Skip adaptive band weighting — NN learns its own frequency weighting
+            // Skip adaptive band weighting — NN learns its own frequency weighting.
+            // Per-band OSS samples are not fed to Bayesian tempo fusion here;
+            // band weights freeze at their last BandFlux-derived values. This is
+            // intentional: the NN's ODF replaces the need for adaptive band emphasis.
         } else {
             onsetStrength = mic_.getLevel();
         }
@@ -286,9 +289,10 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
-    // Bypass when NN is active — the dilated CNN's receptive field (21 frames)
-    // already provides temporal smoothing. Additional smoothing blurs activation
-    // peaks that the CBSS needs sharp. (madmom/BeatNet don't smooth NN output.)
+    // Bypass when NN is active — the dilated CNN's receptive field (15 frames
+    // with dilations [1, 2, 4] and kernel size 3) already provides temporal
+    // smoothing. Additional smoothing blurs activation peaks that the CBSS needs
+    // sharp. (madmom/BeatNet don't smooth NN output.)
     if (nnBeatActivation && beatActivationNN_.isReady()) {
         lastSmoothedOnset_ = onsetStrength;
     } else {

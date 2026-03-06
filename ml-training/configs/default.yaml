@@ -35,7 +35,8 @@ training:
   lr_schedule: "cosine"
   chunk_frames: 128         # ~2s chunks at 62.5 Hz
   chunk_stride: 64          # 50% overlap between chunks
-  pos_weight: 10.0          # BCE positive class weight (~10:1 neg:pos ratio)
+  pos_weight: 10.0          # BCE positive class weight for beat head (~10:1 neg:pos ratio)
+  downbeat_pos_weight: 40.0 # BCE positive class weight for downbeat head (~4x rarer than beats)
   val_split: 0.15
   seed: 42
 

@@ -100,8 +100,8 @@ def apply_spectral_conditioning(mel: np.ndarray) -> np.ndarray:
     """Apply dynamic range compression + whitening as feature augmentation.
 
     Approximates the firmware's spectral conditioning (soft-knee compressor +
-    per-band whitening). Sequential per-frame processing — kept on CPU as
-    running_max depends on previous frame.
+    per-band whitening). Compressor stage is vectorized; whitening stage
+    requires sequential processing (running_max depends on previous frame).
     """
     mel = mel.copy()
     n_frames, n_mels = mel.shape
@@ -112,25 +112,26 @@ def apply_spectral_conditioning(mel: np.ndarray) -> np.ndarray:
     makeup_db = 6.0
     half_knee = knee_db * 0.5
 
-    for t in range(n_frames):
-        frame_rms = np.sqrt(np.mean(mel[t] ** 2) + 1e-10)
-        rms_db = 20.0 * np.log10(frame_rms + 1e-10)
+    # Vectorized soft-knee compressor: compute per-frame RMS and gain
+    frame_rms = np.sqrt(np.mean(mel ** 2, axis=1) + 1e-10)  # (n_frames,)
+    rms_db = 20.0 * np.log10(frame_rms + 1e-10)
+    diff = rms_db - threshold_db
 
-        diff = rms_db - threshold_db
-        if diff <= -half_knee:
-            gain_db = 0.0
-        elif diff >= half_knee:
-            gain_db = (1.0 - 1.0 / ratio) * (threshold_db - rms_db)
-        else:
-            x = diff + half_knee
-            gain_db = (1.0 / ratio - 1.0) * x * x / (2.0 * knee_db)
+    gain_db = np.full(n_frames, makeup_db, dtype=np.float64)
+    # Below knee: gain_db = 0 + makeup
+    # Above knee: full ratio compression
+    above = diff >= half_knee
+    gain_db[above] += (1.0 - 1.0 / ratio) * (threshold_db - rms_db[above])
+    # Within soft knee: quadratic interpolation
+    within = (~above) & (diff > -half_knee)
+    x = diff[within] + half_knee
+    gain_db[within] += (1.0 / ratio - 1.0) * x * x / (2.0 * knee_db)
 
-        gain_db += makeup_db
-        linear_gain = 10 ** (gain_db / 20.0)
-        mel[t] *= linear_gain
-
+    linear_gain = 10 ** (gain_db / 20.0)  # (n_frames,)
+    mel *= linear_gain[:, np.newaxis]
     mel = np.clip(mel, 0.0, 1.0)
 
+    # Per-band whitening (sequential — running_max depends on previous frame)
     decay = 0.97
     floor = 0.01
     running_max = np.full(n_mels, floor, dtype=np.float32)

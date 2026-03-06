@@ -8,9 +8,9 @@
 // Input: 26 raw mel bands from SharedSpectralAnalysis (per frame)
 // Output: beat activation (0-1) and optional downbeat activation (0-1) per frame
 //
-// The model is a causal 1D CNN trained on ~10K EDM tracks with acoustic
-// environment augmentation. It feeds into the existing CBSS beat tracker —
-// only the ODF source changes.
+// The model is a causal 1D CNN designed to be trained on ~10K EDM tracks with
+// acoustic environment augmentation. It feeds into the existing CBSS beat
+// tracker — only the ODF source changes.
 //
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
@@ -171,9 +171,10 @@ public:
 
 private:
     float extractOutput(int frame, int channel) {
-        float value;
         int idx = frame * outputChannels_ + channel;
+        if (idx < 0 || idx >= contextLen_ * outputChannels_) return 0.0f;
 
+        float value;
         if (output_->type == kTfLiteInt8) {
             float scale = output_->params.scale;
             int32_t zero_point = output_->params.zero_point;

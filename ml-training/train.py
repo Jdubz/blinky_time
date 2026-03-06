@@ -42,8 +42,14 @@ class MemmapBeatDataset(Dataset):
 
 
 def weighted_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
-                 pos_weight: float) -> torch.Tensor:
-    """Weighted binary cross-entropy matching the Keras implementation."""
+                 pos_weight: torch.Tensor | float) -> torch.Tensor:
+    """Weighted binary cross-entropy with per-channel positive class weights.
+
+    Args:
+        pos_weight: scalar (same weight for all channels) or 1D tensor with
+                    one weight per output channel (e.g., [10.0, 40.0] for
+                    beat + downbeat).
+    """
     bce = nn.functional.binary_cross_entropy(y_pred, y_true, reduction="none")
     weights = y_true * pos_weight + (1 - y_true) * 1.0
     return (bce * weights).mean()
@@ -70,7 +76,8 @@ def main():
     epochs = args.epochs or cfg["training"]["epochs"]
     batch_size = args.batch_size or cfg["training"]["batch_size"]
     lr = args.lr or cfg["training"]["learning_rate"]
-    pos_weight = cfg["training"]["pos_weight"]
+    beat_pos_weight = cfg["training"]["pos_weight"]
+    downbeat_pos_weight = cfg["training"].get("downbeat_pos_weight", beat_pos_weight * 4)
     use_downbeat = cfg["model"].get("downbeat", False)
 
     if args.device is None or args.device == "auto":
@@ -84,11 +91,27 @@ def main():
 
     db_train_path = data_dir / "Y_db_train.npy"
     db_val_path = data_dir / "Y_db_val.npy"
-    has_db = use_downbeat and db_train_path.exists()
+    has_db = False
 
-    if use_downbeat and not has_db:
-        print("WARNING: downbeat=true but Y_db_train.npy not found. Training beat-only.")
-        use_downbeat = False
+    if use_downbeat:
+        if not db_train_path.exists() or not db_val_path.exists():
+            print("WARNING: downbeat=true but Y_db_train.npy and/or Y_db_val.npy not found. "
+                  "Training beat-only.")
+            use_downbeat = False
+        else:
+            # Validate shapes match beat targets before committing to downbeat mode
+            y_train_shape = np.load(data_dir / "Y_train.npy", mmap_mode='r').shape
+            y_db_train_shape = np.load(db_train_path, mmap_mode='r').shape
+            y_val_shape = np.load(data_dir / "Y_val.npy", mmap_mode='r').shape
+            y_db_val_shape = np.load(db_val_path, mmap_mode='r').shape
+            if y_db_train_shape != y_train_shape or y_db_val_shape != y_val_shape:
+                print(f"WARNING: Downbeat target shapes don't match beat targets "
+                      f"(Y_db_train: {y_db_train_shape} vs Y_train: {y_train_shape}, "
+                      f"Y_db_val: {y_db_val_shape} vs Y_val: {y_val_shape}). "
+                      f"Training beat-only.")
+                use_downbeat = False
+            else:
+                has_db = True
 
     train_ds = MemmapBeatDataset(
         data_dir / "X_train.npy", data_dir / "Y_train.npy",
@@ -122,6 +145,13 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     total_steps = epochs * len(train_loader)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
+
+    # Build per-channel pos_weight tensor
+    if use_downbeat:
+        pos_weight = torch.tensor([beat_pos_weight, downbeat_pos_weight], device=device)
+        print(f"Pos weights: beat={beat_pos_weight}, downbeat={downbeat_pos_weight}")
+    else:
+        pos_weight = beat_pos_weight
 
     # Training loop
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
