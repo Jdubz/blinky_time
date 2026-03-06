@@ -55,6 +55,21 @@ def weighted_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * weights).mean()
 
 
+def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
+                   pos_weight: torch.Tensor | float,
+                   gamma: float = 2.0) -> torch.Tensor:
+    """Focal loss (Lin et al. 2017) with per-channel positive class weights.
+
+    Down-weights well-classified examples by (1-p_t)^gamma, focusing training
+    on hard examples where the model is uncertain (the 0.3-0.5 activation zone).
+    """
+    bce = nn.functional.binary_cross_entropy(y_pred, y_true, reduction="none")
+    p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+    focal_weight = (1 - p_t) ** gamma
+    class_weight = y_true * pos_weight + (1 - y_true) * 1.0
+    return (bce * focal_weight * class_weight).mean()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train beat activation CNN")
     parser.add_argument("--config", default="configs/default.yaml")
@@ -64,6 +79,10 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
+    parser.add_argument("--loss", default="bce", choices=["bce", "focal"],
+                        help="Loss function: bce (default) or focal")
+    parser.add_argument("--focal-gamma", type=float, default=2.0,
+                        help="Focal loss gamma (default: 2.0)")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -153,6 +172,14 @@ def main():
     else:
         pos_weight = beat_pos_weight
 
+    # Select loss function
+    if args.loss == "focal":
+        loss_fn = lambda pred, true: weighted_focal(pred, true, pos_weight, args.focal_gamma)
+        print(f"Loss: focal (gamma={args.focal_gamma})")
+    else:
+        loss_fn = lambda pred, true: weighted_bce(pred, true, pos_weight)
+        print(f"Loss: weighted BCE")
+
     # Training loop
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
     print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
@@ -175,7 +202,7 @@ def main():
 
             optimizer.zero_grad()
             Y_pred = model(X_batch)
-            loss = weighted_bce(Y_pred, Y_batch, pos_weight)
+            loss = loss_fn(Y_pred, Y_batch)
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -199,7 +226,7 @@ def main():
                 Y_batch = Y_batch.to(device, non_blocking=True)
 
                 Y_pred = model(X_batch)
-                loss = weighted_bce(Y_pred, Y_batch, pos_weight)
+                loss = loss_fn(Y_pred, Y_batch)
 
                 val_loss += loss.item() * X_batch.size(0)
                 val_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
