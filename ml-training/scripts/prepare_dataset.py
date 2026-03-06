@@ -69,6 +69,9 @@ def firmware_mel_spectrogram(audio: torch.Tensor, cfg: dict,
                              window: torch.Tensor) -> np.ndarray:
     """Compute mel spectrogram matching the firmware pipeline exactly.
 
+    NOTE: calibrate_mic.py has a numpy-only copy (_firmware_mel_from_audio).
+    If you change the mel pipeline here, update that copy too.
+
     Args:
         audio: (samples,) tensor on GPU/CPU
         cfg: config dict

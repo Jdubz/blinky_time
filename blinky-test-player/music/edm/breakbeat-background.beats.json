@@ -1,4 +1,7 @@
 {
+  "pattern": "breakbeat-background",
+  "durationMs": 103314,
+  "bpm": 171.4,
   "hits": [
     {
       "time": 0.06,

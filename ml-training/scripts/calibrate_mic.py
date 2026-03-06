@@ -118,6 +118,11 @@ def _firmware_mel_from_audio(audio: np.ndarray) -> np.ndarray:
     """Compute mel spectrogram matching firmware pipeline exactly.
 
     Returns (n_frames, 26) array with values in [0, 1].
+
+    NOTE: Must stay in sync with firmware_mel_spectrogram() in prepare_dataset.py.
+    Both implement: Hamming window → FFT-256 → HTK mel (26 bands, 60-8000 Hz) →
+    10*log10(x+1e-10) → [-60,0] dB → [0,1]. This copy exists to avoid importing
+    torch/config dependencies into the calibration tool.
     """
     from scipy.signal.windows import hamming
 

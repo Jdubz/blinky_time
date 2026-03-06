@@ -1,4 +1,7 @@
 {
+  "pattern": "breakbeat-drive",
+  "durationMs": 109923,
+  "bpm": 95.0,
   "hits": [
     {
       "time": 0.6551,

@@ -1,4 +1,7 @@
 {
+  "pattern": "edm-trap-electro",
+  "durationMs": 115776,
+  "bpm": 240.7,
   "hits": [
     {
       "time": 0.2145,
