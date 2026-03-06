@@ -99,8 +99,8 @@ public:
         }
 
         // Detect output channels: 1 = beat only, 2 = beat + downbeat
-        int outDims = output_->dims->size;
-        outputChannels_ = (outDims >= 2) ? output_->dims->data[outDims - 1] : 1;
+        int nDims = output_->dims->size;
+        outputChannels_ = (nDims >= 2) ? output_->dims->data[nDims - 1] : 1;
 
         // Zero-fill context buffer
         memset(contextBuffer_, 0, contextLen_ * INPUT_MEL_BANDS * sizeof(float));
@@ -178,7 +178,7 @@ public:
 private:
     float extractOutput(int frame, int channel) {
         int idx = frame * outputChannels_ + channel;
-        if (idx < 0 || idx >= contextLen_ * outputChannels_) return 0.0f;
+        if (idx >= contextLen_ * outputChannels_) return 0.0f;
 
         float value;
         if (output_->type == kTfLiteInt8) {

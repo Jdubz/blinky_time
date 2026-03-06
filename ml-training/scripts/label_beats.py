@@ -68,10 +68,15 @@ def _bpm_from_beats(beats: np.ndarray) -> float:
     return round(60.0 / float(np.median(ibis)), 1)
 
 
+_beat_this_model = None
+
+
 def label_beat_this(audio_path: Path, device: str = "cuda") -> dict:
     """Label beats using Beat This! (GPU-accelerated)."""
-    model = label_beat_this._model
-    beats, downbeats = model(str(audio_path))
+    global _beat_this_model
+    if _beat_this_model is None:
+        _init_beat_this(device)
+    beats, downbeats = _beat_this_model(str(audio_path))
     return {
         "system": "beat_this",
         "beats": [round(float(t), 4) for t in beats],
@@ -82,8 +87,9 @@ def label_beat_this(audio_path: Path, device: str = "cuda") -> dict:
 
 def _init_beat_this(device: str = "cuda"):
     """Initialize Beat This! model (call once before labeling loop)."""
+    global _beat_this_model
     from beat_this.inference import File2Beats
-    label_beat_this._model = File2Beats(device=device, dbn=False)
+    _beat_this_model = File2Beats(device=device, dbn=False)
 
 
 def label_essentia(audio_path: Path, **_kwargs) -> dict:

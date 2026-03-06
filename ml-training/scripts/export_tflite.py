@@ -53,26 +53,32 @@ def build_tf_beat_cnn(n_mels: int, channels: int, kernel_size: int,
 
 
 def transfer_pytorch_weights(tf_model: keras.Model, pt_state_dict: dict,
-                             dilations: list[int]):
+                             dilations: list[int], dropout: float = 0.1):
     """Copy weights from PyTorch state_dict to equivalent TF/Keras model.
 
     Handles the Conv1D weight transposition (PyTorch: out,in,k → TF: k,in,out)
     and BatchNorm parameter mapping.
     """
+    # PyTorch backbone block: Pad, Conv1d, BatchNorm1d, ReLU[, Dropout]
+    # Stride depends on whether Dropout is present
+    stride = 5 if dropout > 0 else 4
     for i, dilation in enumerate(dilations):
         # Conv weights: PyTorch (out_ch, in_ch, kernel) → TF (kernel, in_ch, out_ch)
         conv_name = f"conv{i+1}_d{dilation}"
-        pt_w = pt_state_dict[f"backbone.{i*5+1}.weight"].numpy()  # (out, in, k)
-        pt_b = pt_state_dict[f"backbone.{i*5+1}.bias"].numpy()
+        conv_key = f"backbone.{i*stride+1}.weight"
+        assert conv_key in pt_state_dict, \
+            f"Expected Conv1d at {conv_key}; check dropout={dropout} matches trained model"
+        pt_w = pt_state_dict[conv_key].numpy()  # (out, in, k)
+        pt_b = pt_state_dict[f"backbone.{i*stride+1}.bias"].numpy()
         tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
         tf_model.get_layer(conv_name).set_weights([tf_w, pt_b])
 
         # BatchNorm: gamma, beta, running_mean, running_var
         bn_name = f"bn{i+1}"
-        gamma = pt_state_dict[f"backbone.{i*5+2}.weight"].numpy()
-        beta = pt_state_dict[f"backbone.{i*5+2}.bias"].numpy()
-        mean = pt_state_dict[f"backbone.{i*5+2}.running_mean"].numpy()
-        var = pt_state_dict[f"backbone.{i*5+2}.running_var"].numpy()
+        gamma = pt_state_dict[f"backbone.{i*stride+2}.weight"].numpy()
+        beta = pt_state_dict[f"backbone.{i*stride+2}.bias"].numpy()
+        mean = pt_state_dict[f"backbone.{i*stride+2}.running_mean"].numpy()
+        var = pt_state_dict[f"backbone.{i*stride+2}.running_var"].numpy()
         tf_model.get_layer(bn_name).set_weights([gamma, beta, mean, var])
 
     # Output conv
@@ -202,7 +208,8 @@ def main():
         chunk_frames=inference_frames,
         downbeat=use_downbeat,
     )
-    transfer_pytorch_weights(tf_model, pt_state, dilations)
+    dropout = cfg["model"].get("dropout", 0.1)
+    transfer_pytorch_weights(tf_model, pt_state, dilations, dropout=dropout)
 
     # Verify weight transfer
     print("Verifying weight transfer...")

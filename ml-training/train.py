@@ -229,12 +229,6 @@ def main():
                 print(f"  Early stopping at epoch {epoch+1} (no improvement for {patience} epochs)")
                 break
 
-        # Reduce LR on plateau (check every epoch)
-        if patience_counter > 0 and patience_counter % 7 == 0:
-            for pg in optimizer.param_groups:
-                pg["lr"] = max(pg["lr"] * 0.5, 1e-6)
-            print(f"  Reduced LR to {optimizer.param_groups[0]['lr']:.2e}")
-
     # Restore best weights
     model.load_state_dict(torch.load(output_dir / "best_model.pt", weights_only=True))
 

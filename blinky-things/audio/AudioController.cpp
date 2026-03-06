@@ -2871,7 +2871,9 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     }
     control_.onsetDensity = onsetDensity_;
 
-    // Pass through NN downbeat activation if available
+    // Pass through NN downbeat activation if available.
+    // Co-located here (not in a separate function) because it runs at the same
+    // 1-second cadence and both fields are simple passthrough assignments.
     if (nnBeatActivation && beatActivationNN_.isReady() && beatActivationNN_.hasDownbeatOutput()) {
         control_.downbeat = beatActivationNN_.getLastDownbeat();
     } else {

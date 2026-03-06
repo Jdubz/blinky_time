@@ -807,9 +807,9 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
     }
 
     if (strcmp(cmd, "stream nn") == 0) {
-        streamEnabled_ = true;
-        streamNN_ = true;
-        streamFast_ = false;  // NN mode streams at frame rate, not timer-based
+        streamEnabled_ = false;  // Disable timer-based stream to avoid TX overflow
+        streamNN_ = true;        // NN stream fires independently on isFrameReady()
+        streamFast_ = false;
         Serial.println(F("OK nn"));
         return true;
     }
@@ -1698,7 +1698,7 @@ void SerialConsole::checkBayesianInteractions() {
 }
 
 void SerialConsole::streamTick() {
-    if (!streamEnabled_) return;
+    if (!streamEnabled_ && !streamNN_) return;
 
     uint32_t now = millis();
 
