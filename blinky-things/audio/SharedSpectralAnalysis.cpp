@@ -274,7 +274,6 @@ void SharedSpectralAnalysis::computeMelBands() {
     computeMelBandsFrom(magnitudes_, melBands_);
 }
 
-#ifdef ENABLE_NN_BEAT_ACTIVATION
 void SharedSpectralAnalysis::computeRawMelBands() {
     // Compute mel bands from raw (pre-compressor) magnitudes.
     // Uses preWhitenMagnitudes_ saved before applyCompressor().
