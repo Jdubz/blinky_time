@@ -1,8 +1,33 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 5, 2026 (v54 NN beat activation scaffolding + firmware integration)*
+*Last Updated: March 5, 2026 (gain-sweep calibration + gain-aware training augmentation)*
 
 ## Current Status
+
+### In Progress: Mic Calibration & Gain Optimization (March 5, 2026)
+
+Initial mic calibration (3 devices × 23 signals) revealed the noise floor is the dominant factor — not band gain. At the default AGC behavior (gain ramps to 80 during silence), the lowest mel bands are nearly saturated by mic self-noise:
+
+| Band | Freq | Noise Floor (gain=80) | Dynamic Range |
+|------|------|-----------------------|---------------|
+| 0 | 68 Hz | 0.977 (−1.4 dB) | 1.4 dB (unusable) |
+| 1 | 136 Hz | 0.894 (−6.4 dB) | 6.4 dB (poor) |
+| 2 | 211 Hz | 0.790 (−12.6 dB) | 12.6 dB (poor) |
+| 3+ | 293+ Hz | < 0.745 | 15+ dB (usable) |
+
+**Root cause:** The HW AGC has no upper bound on gain during silence — it ramps to 80, maximally amplifying MEMS 1/f noise. The noise floor is gain-dependent, not intrinsic.
+
+**New tooling (this commit):**
+- `calibrate_mic.py gain-sweep`: Measures noise floor at every HW gain level (0–80 in steps of 5). Locks gain via `test lock hwgain N`, captures silence mel bands, optionally plays reference audio for SNR measurement. Produces `gain_sweep.npz` with per-gain noise floor, dynamic range, and SNR data.
+- `calibrate_mic.py analyze --gain-sweep`: Incorporates sweep data into `mic_profile.npz`, producing a gain-indexed noise floor table and recommended AGC range.
+- `prepare_dataset.py`: Updated to use gain-aware profiles — randomly samples a HW gain level per training example (70% within recommended range, 30% full range), using the corresponding noise floor. Model learns to be robust across the AGC's operating range.
+
+**Next steps:**
+1. Run `gain-sweep` on all 3 devices to characterize noise floor vs gain
+2. Identify optimal AGC range (likely gain 20–50: enough sensitivity for quiet sources, without blowing out the noise floor)
+3. Update `hwGainMinHeadroom` / add `hwGainMaxSignal` to limit AGC range in firmware
+4. Retrain with gain-aware augmentation for robust performance across the constrained range
+5. Consider hybrid approach: lower HW gain ceiling + software gain boost for quiet signals (avoids amplifying analog noise)
 
 ### In Progress: Neural Network Beat Activation (v54, March 5, 2026)
 
@@ -19,13 +44,14 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 - Labeling tool research: Beat This! (primary, SOTA), essentia (cross-validation), BeatNet (needs Python 3.11)
 - Determinism verified: Beat This!, librosa, and essentia all produce bit-identical results across runs
 - Cross-tool comparison on 18 EDM tracks: 94% BPM agreement, BT-essentia F1=0.948
+- Multi-system consensus labeling (4 systems: Beat This!, essentia, librosa, madmom)
+- Mic calibration pipeline: `calibrate_mic.py` with generate/capture/capture-all/gain-sweep/analyze
 
 **Outstanding:**
-- Install pyenv + Python 3.11 venv for BeatNet/madmom cross-validation
-- Build cross-validation labeling pipeline
+- Run gain-sweep calibration on all devices (see above)
 - Download training data (FMA electronic, ~5K tracks)
-- Label with Beat This! + cross-validate
-- Train model on real data
+- Label with consensus pipeline
+- Train model on real data with gain-aware mic augmentation
 - Deploy trained model and A/B test vs BandFlux (expected: 0.28-0.35 → 0.50-0.70 F1)
 
 ### Completed (March 4, 2026)

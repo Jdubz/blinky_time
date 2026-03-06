@@ -10,9 +10,11 @@ The resulting mic_profile.npz is consumed by prepare_dataset.py --mic-profile
 to transform clean mel spectrograms into realistic mic-captured equivalents.
 
 Subcommands:
-    generate  - Create reference audio files (sweep, white, pink, silence)
-    capture   - Play audio through speakers + record device mel bands
-    analyze   - Compare captures vs originals -> mic_profile.npz
+    generate    - Create reference audio files (sweep, white, pink, silence)
+    capture     - Play audio through speakers + record device mel bands
+    capture-all - Capture all reference signals on all ports
+    gain-sweep  - Measure noise floor + signal at each HW gain level
+    analyze     - Compare captures vs originals -> mic_profile.npz
 
 Usage:
     # 1. Generate reference signals
@@ -29,7 +31,16 @@ Usage:
         --audio-dir data/calibration \
         --output-dir data/calibration
 
-    # 3. Analyze captures vs originals
+    # 3. Sweep HW gain levels to characterize noise floor vs gain
+    python scripts/calibrate_mic.py gain-sweep --port /dev/ttyACM0 \
+        --output data/calibration/gain_sweep_ACM0.npz
+
+    # 3b. With reference audio to also measure signal quality at each gain
+    python scripts/calibrate_mic.py gain-sweep --port /dev/ttyACM0 \
+        --audio data/calibration/pink_noise_16k.wav \
+        --output data/calibration/gain_sweep_ACM0.npz
+
+    # 4. Analyze captures vs originals
     python scripts/calibrate_mic.py analyze \
         --captures data/calibration \
         --output data/calibration/mic_profile.npz
@@ -437,7 +448,282 @@ def capture_all(ports: list[str], audio_dir: str, output_dir: str,
     print("Capture-all complete.")
 
 
-def analyze(captures_dir: str, output: str, config: str = None):
+def _send_command(ser, cmd: str, expect: str = "OK", timeout: float = 2.0) -> str:
+    """Send a serial command and wait for response containing expect string."""
+    ser.reset_input_buffer()
+    ser.write(f"{cmd}\n".encode())
+    deadline = time.time() + timeout
+    lines = []
+    while time.time() < deadline:
+        line = ser.readline().decode("utf-8", errors="replace").strip()
+        if line:
+            lines.append(line)
+            if expect and expect in line:
+                return line
+    resp = "; ".join(lines) if lines else "(no response)"
+    if expect and expect not in resp:
+        print(f"  WARNING: expected '{expect}' in response to '{cmd}', got: {resp}")
+    return resp
+
+
+def _capture_nn_frames(ser, duration: float) -> list[dict]:
+    """Capture NN stream frames from an already-open serial connection."""
+    frames = []
+    errors = 0
+    start = time.time()
+    while time.time() - start < duration:
+        line = ser.readline().decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            errors += 1
+            continue
+        if data.get("type") == "NN":
+            frames.append(data)
+    if errors > 0:
+        elapsed = time.time() - start
+        rate = len(frames) / elapsed if elapsed > 0 else 0
+        print(f"    {len(frames)} frames ({rate:.1f} Hz), {errors} parse errors")
+    return frames
+
+
+def gain_sweep(port: str, output: str, gains: list[int] | None = None,
+               silence_duration: float = 5.0, signal_duration: float = 8.0,
+               audio: str | None = None, baud: int = 115200):
+    """Sweep HW gain levels, measuring noise floor and optionally signal quality.
+
+    At each gain level:
+      1. Lock HW gain via 'test lock hwgain N'
+      2. Wait for mic to settle (2s)
+      3. Capture silence mel bands (noise floor)
+      4. Optionally play reference audio and capture signal mel bands
+      5. Compute per-band noise floor, and SNR if audio provided
+
+    Produces gain_sweep.npz with:
+      - gains:        (G,) gain levels tested
+      - noise_floor:  (G, 26) per-band noise floor at each gain
+      - noise_std:    (G, 26) noise floor std dev
+      - signal_mean:  (G, 26) mean signal level (if audio provided, else zeros)
+      - snr_db:       (G, 26) signal-to-noise ratio in dB (if audio provided)
+      - dynamic_range_db: (G, 26) usable dynamic range above noise floor
+    """
+    import serial
+
+    if gains is None:
+        gains = list(range(0, 81, 5))  # 0, 5, 10, ..., 80
+
+    n_gains = len(gains)
+    noise_floor = np.zeros((n_gains, N_MELS), dtype=np.float32)
+    noise_std = np.zeros((n_gains, N_MELS), dtype=np.float32)
+    signal_mean = np.zeros((n_gains, N_MELS), dtype=np.float32)
+    snr_db = np.zeros((n_gains, N_MELS), dtype=np.float32)
+
+    has_audio = audio is not None
+    if has_audio:
+        audio_path = Path(audio)
+        if not audio_path.exists():
+            print(f"ERROR: Audio file not found: {audio_path}", file=sys.stderr)
+            sys.exit(1)
+
+    total_per_step = 2.0 + silence_duration + (signal_duration + 4.0 if has_audio else 0)
+    est_total = total_per_step * n_gains
+    print(f"Gain sweep: {n_gains} levels on {port}")
+    print(f"  Gains: {gains}")
+    print(f"  Silence capture: {silence_duration:.0f}s per level")
+    if has_audio:
+        print(f"  Signal capture: {signal_duration:.0f}s per level ({audio_path.name})")
+    print(f"  Estimated total: {est_total / 60:.1f} min")
+    print()
+
+    ser = serial.Serial(port, baud, timeout=1)
+    time.sleep(0.5)
+    ser.reset_input_buffer()
+
+    try:
+        for idx, gain in enumerate(gains):
+            print(f"[{idx + 1}/{n_gains}] Gain = {gain}")
+
+            # Lock hardware gain
+            resp = _send_command(ser, f"test lock hwgain {gain}")
+            print(f"  Locked: {resp}")
+
+            # Start NN stream
+            _send_command(ser, "stream nn")
+
+            # Settle time for mic adaptation
+            print(f"  Settling 2s...")
+            time.sleep(2.0)
+
+            # Capture silence
+            print(f"  Capturing silence ({silence_duration:.0f}s)...")
+            silence_frames = _capture_nn_frames(ser, silence_duration)
+
+            if silence_frames:
+                mels = np.array([f["mel"] for f in silence_frames])
+                noise_floor[idx] = mels.mean(axis=0)
+                noise_std[idx] = mels.std(axis=0)
+                nf_db = -60.0 * (1.0 - noise_floor[idx])
+                print(f"  Silence: {len(silence_frames)} frames, "
+                      f"noise floor [{noise_floor[idx].min():.4f}, {noise_floor[idx].max():.4f}] "
+                      f"({nf_db.max():.1f} to {nf_db.min():.1f} dB)")
+            else:
+                print(f"  WARNING: No silence frames captured!")
+
+            # Capture with audio if provided
+            if has_audio:
+                print(f"  Playing {audio_path.name} + capturing ({signal_duration:.0f}s)...")
+                # Start playback in background
+                play_proc = _play_audio(str(audio_path), wait=False)
+                # Capture during playback
+                sig_frames = _capture_nn_frames(ser, signal_duration)
+                # Stop playback if still running
+                play_proc.terminate()
+                play_proc.wait()
+
+                if sig_frames:
+                    sig_mels = np.array([f["mel"] for f in sig_frames])
+                    signal_mean[idx] = sig_mels.mean(axis=0)
+
+                    # SNR = signal_mean / noise_floor (in mel [0,1] space)
+                    # Convert to dB: both are already log-compressed mel values
+                    # Dynamic range = how much the signal rises above noise floor
+                    for b in range(N_MELS):
+                        nf = noise_floor[idx, b]
+                        sig = signal_mean[idx, b]
+                        if nf > 0.001 and sig > nf:
+                            # Both in [0,1] mapped from [-60, 0] dB
+                            # Convert back to linear power, compute ratio, back to dB
+                            nf_power = 10.0 ** ((nf * 60.0 - 60.0) / 10.0)
+                            sig_power = 10.0 ** ((sig * 60.0 - 60.0) / 10.0)
+                            snr_db[idx, b] = 10.0 * np.log10(sig_power / nf_power)
+                        else:
+                            snr_db[idx, b] = 0.0
+
+                    print(f"  Signal: {len(sig_frames)} frames, "
+                          f"mean [{signal_mean[idx].min():.4f}, {signal_mean[idx].max():.4f}], "
+                          f"SNR [{snr_db[idx].min():.1f}, {snr_db[idx].max():.1f}] dB")
+
+                # Brief pause between signal and next gain level
+                time.sleep(1.0)
+
+            # Stop NN stream before changing gain
+            _send_command(ser, "stream off")
+            time.sleep(0.3)
+
+        # Restore AGC
+        _send_command(ser, "test unlock hwgain")
+        print(f"\nAGC unlocked.")
+
+    finally:
+        # Always try to clean up
+        try:
+            ser.write(b"stream off\n")
+            time.sleep(0.1)
+            ser.write(b"test unlock hwgain\n")
+            time.sleep(0.1)
+        except Exception:
+            pass
+        ser.close()
+
+    # Compute dynamic range (dB above noise floor, out of 60 dB total)
+    dynamic_range_db = 60.0 * (1.0 - noise_floor)
+
+    # Save results
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    gains_arr = np.array(gains, dtype=np.int32)
+    np.savez(out_path,
+             gains=gains_arr,
+             noise_floor=noise_floor,
+             noise_std=noise_std,
+             signal_mean=signal_mean,
+             snr_db=snr_db,
+             dynamic_range_db=dynamic_range_db)
+
+    # Print summary table
+    mel_centers = _get_mel_center_freqs()
+    print(f"\n{'='*80}")
+    print(f"Gain Sweep Results: {out_path}")
+    print(f"{'='*80}")
+
+    # Compact noise floor table: gains as columns, bands as rows
+    print(f"\nNoise Floor (mel [0-1]) — rows=bands, cols=gain levels:")
+    header = f"{'Band':>5} {'Hz':>7} |" + "".join(f" {g:>4}" for g in gains)
+    print(header)
+    print("-" * len(header))
+    for b in range(N_MELS):
+        row = f"{b:>5d} {mel_centers[b]:>7.0f} |"
+        for g_idx in range(n_gains):
+            row += f" {noise_floor[g_idx, b]:.2f}"
+        print(row)
+
+    # Dynamic range summary
+    print(f"\nDynamic Range (dB above noise floor):")
+    header = f"{'Band':>5} {'Hz':>7} |" + "".join(f" {g:>4}" for g in gains)
+    print(header)
+    print("-" * len(header))
+    for b in range(N_MELS):
+        row = f"{b:>5d} {mel_centers[b]:>7.0f} |"
+        for g_idx in range(n_gains):
+            dr = dynamic_range_db[g_idx, b]
+            row += f" {dr:>4.0f}"
+        print(row)
+
+    if has_audio:
+        print(f"\nSNR (dB) with {Path(audio).name}:")
+        header = f"{'Band':>5} {'Hz':>7} |" + "".join(f" {g:>4}" for g in gains)
+        print(header)
+        print("-" * len(header))
+        for b in range(N_MELS):
+            row = f"{b:>5d} {mel_centers[b]:>7.0f} |"
+            for g_idx in range(n_gains):
+                row += f" {snr_db[g_idx, b]:>4.0f}"
+            print(row)
+
+    # Recommend optimal gain range
+    print(f"\n{'='*80}")
+    print("Gain Range Recommendations:")
+    print(f"{'='*80}")
+
+    # For each gain, compute average dynamic range across "useful" bands (3-25)
+    useful_bands = slice(3, N_MELS)  # skip bands 0-2 (often noise-dominated)
+    avg_dr = dynamic_range_db[:, useful_bands].mean(axis=1)
+    avg_nf = noise_floor[:, useful_bands].mean(axis=1)
+
+    if has_audio:
+        avg_snr = snr_db[:, useful_bands].mean(axis=1)
+        # Best gain = highest SNR
+        best_snr_idx = np.argmax(avg_snr)
+        print(f"  Best SNR:  gain={gains[best_snr_idx]} "
+              f"(avg SNR={avg_snr[best_snr_idx]:.1f} dB across bands 3-25)")
+
+    # Minimum gain where all useful bands have >= 20 dB dynamic range
+    min_dr_target = 20.0
+    for g_idx, gain in enumerate(gains):
+        min_dr = dynamic_range_db[g_idx, useful_bands].min()
+        if min_dr >= min_dr_target:
+            print(f"  Min gain for {min_dr_target:.0f} dB DR everywhere: gain={gain} "
+                  f"(worst band has {min_dr:.1f} dB)")
+            break
+    else:
+        print(f"  WARNING: No gain level achieves {min_dr_target:.0f} dB DR across all useful bands")
+
+    # Gain where noise floor < 0.5 for all useful bands
+    for g_idx, gain in enumerate(reversed(gains)):
+        ridx = n_gains - 1 - g_idx
+        max_nf = noise_floor[ridx, useful_bands].max()
+        if max_nf < 0.5:
+            print(f"  Max gain with noise < 0.5: gain={gain} "
+                  f"(worst band noise={max_nf:.3f})")
+            break
+
+    print(f"\nTo use: np.load('{out_path}') -> gains, noise_floor, dynamic_range_db, ...")
+
+
+def analyze(captures_dir: str, output: str, config: str = None,
+            gain_sweep_file: str | None = None):
     """Analyze captures vs theoretical mel bands to derive mic profile.
 
     For each captured signal, computes the per-band gain ratio:
@@ -446,7 +732,12 @@ def analyze(captures_dir: str, output: str, config: str = None):
     And the noise floor from silence capture:
         noise_floor[band] = mean(silence_capture[band])
 
-    Output: mic_profile.npz with band_gain (26,) and noise_floor (26,).
+    If --gain-sweep is provided, produces a gain-aware profile with:
+      - noise_floor_by_gain: (G, 26) noise floor indexed by HW gain
+      - hw_gain_levels: (G,) the gain levels
+      - recommended_min/max: suggested AGC range
+
+    Output: mic_profile.npz
     """
     cap_dir = Path(captures_dir)
     out_path = Path(output)
@@ -568,10 +859,56 @@ def analyze(captures_dir: str, output: str, config: str = None):
         print("WARNING: No silence captures — using zero noise floor", file=sys.stderr)
         noise_floor = np.zeros(N_MELS, dtype=np.float32)
 
+    # Build output profile
+    profile = {
+        "band_gain": band_gain.astype(np.float32),
+        "noise_floor": noise_floor.astype(np.float32),
+    }
+
+    # Incorporate gain sweep data if available
+    if gain_sweep_file:
+        sweep_files = sorted(Path(captures_dir).glob("gain_sweep*.npz"))
+        if not sweep_files and Path(gain_sweep_file).exists():
+            sweep_files = [Path(gain_sweep_file)]
+
+        if sweep_files:
+            # Average across all sweep files (multiple devices)
+            all_nf = []
+            all_hw_gains = None
+            for sf in sweep_files:
+                sweep = np.load(sf)
+                all_nf.append(sweep["noise_floor"])
+                if all_hw_gains is None:
+                    all_hw_gains = sweep["gains"]
+                print(f"  Gain sweep loaded: {sf.name} ({len(sweep['gains'])} levels)")
+
+            nf_by_gain = np.median(np.array(all_nf), axis=0)  # (G, 26)
+
+            # Recommend AGC range: max gain where band 3 noise < 0.5
+            recommended_max = int(all_hw_gains[-1])
+            for g_idx in range(len(all_hw_gains) - 1, -1, -1):
+                if nf_by_gain[g_idx, 3:].max() < 0.50:
+                    recommended_max = int(all_hw_gains[g_idx])
+                    break
+
+            # Min gain: lowest where we still get > 30 dB DR on band 15 (mid)
+            recommended_min = int(all_hw_gains[0])
+            for g_idx in range(len(all_hw_gains)):
+                dr_mid = 60.0 * (1.0 - nf_by_gain[g_idx, 15])
+                if dr_mid >= 30.0:
+                    recommended_min = int(all_hw_gains[g_idx])
+                    break
+
+            profile["noise_floor_by_gain"] = nf_by_gain.astype(np.float32)
+            profile["hw_gain_levels"] = all_hw_gains.astype(np.int32)
+            profile["recommended_gain_min"] = np.int32(recommended_min)
+            profile["recommended_gain_max"] = np.int32(recommended_max)
+
+            print(f"\n  Gain-aware profile: {len(all_hw_gains)} levels")
+            print(f"  Recommended AGC range: {recommended_min} - {recommended_max}")
+
     # Save profile
-    np.savez(out_path,
-             band_gain=band_gain.astype(np.float32),
-             noise_floor=noise_floor.astype(np.float32))
+    np.savez(out_path, **profile)
 
     print(f"\n=== Mic Profile: {out_path} ===")
     print(f"{'Band':>6} {'Freq(Hz)':>10} {'Gain':>8} {'NoiseFlr':>10}")
@@ -581,6 +918,8 @@ def analyze(captures_dir: str, output: str, config: str = None):
 
     print(f"\n  Band gain range:   [{band_gain.min():.3f}, {band_gain.max():.3f}]")
     print(f"  Noise floor range: [{noise_floor.min():.4f}, {noise_floor.max():.4f}]")
+    if "recommended_gain_max" in profile:
+        print(f"  Recommended AGC:   [{profile['recommended_gain_min']} - {profile['recommended_gain_max']}]")
     print(f"\nUsage: python scripts/prepare_dataset.py --mic-profile {out_path}")
 
 
@@ -620,6 +959,22 @@ def main():
     cap_all.add_argument("--settle", type=float, default=SETTLE_SECONDS,
                          help="AGC settle time per file")
 
+    # Gain sweep
+    gsw = sub.add_parser("gain-sweep",
+                         help="Sweep HW gain levels to measure noise vs gain")
+    gsw.add_argument("--port", required=True, help="Serial port")
+    gsw.add_argument("--output", "-o", default="data/calibration/gain_sweep.npz",
+                     help="Output .npz file")
+    gsw.add_argument("--gains", type=int, nargs="+", default=None,
+                     help="Gain levels to test (default: 0,5,10,...,80)")
+    gsw.add_argument("--silence-duration", type=float, default=5.0,
+                     help="Seconds of silence capture per gain level")
+    gsw.add_argument("--signal-duration", type=float, default=8.0,
+                     help="Seconds of signal capture per gain level (if --audio)")
+    gsw.add_argument("--audio", default=None,
+                     help="Optional: reference audio to play at each gain level")
+    gsw.add_argument("--baud", type=int, default=115200, help="Baud rate")
+
     # Analyze captures
     ana = sub.add_parser("analyze", help="Derive mic profile from captures")
     ana.add_argument("--captures", required=True,
@@ -628,6 +983,8 @@ def main():
                      help="Output mic profile (.npz)")
     ana.add_argument("--config", default="configs/default.yaml",
                      help="Training config (for reference)")
+    ana.add_argument("--gain-sweep", default=None,
+                     help="Gain sweep .npz file(s) to incorporate into profile")
 
     args = parser.parse_args()
 
@@ -638,8 +995,13 @@ def main():
     elif args.command == "capture-all":
         capture_all(args.ports, args.audio_dir, args.output_dir,
                     args.baud, args.settle, args.music_dir)
+    elif args.command == "gain-sweep":
+        gain_sweep(args.port, args.output, args.gains,
+                   args.silence_duration, args.signal_duration,
+                   args.audio, args.baud)
     elif args.command == "analyze":
-        analyze(args.captures, args.output, getattr(args, "config", None))
+        analyze(args.captures, args.output, getattr(args, "config", None),
+                getattr(args, "gain_sweep", None))
     else:
         parser.print_help()
 
