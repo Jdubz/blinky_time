@@ -7,6 +7,7 @@ data/processed/
 data/calibration/*.jsonl
 data/calibration/*.wav
 data/calibration/*.npy
+data/calibration/*.npz
 
 # Training outputs
 outputs/

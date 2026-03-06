@@ -29,7 +29,7 @@ Gain sweep completed on all 3 devices (ACM0, ACM1, ACM2) with pink noise referen
 
 **Gain-aware mic profile built** (`mic_profile.npz`): 17 gain levels × 26 bands, with recommended AGC range 0-15. Profile includes per-band gain (0.91-1.00, nearly flat) and gain-indexed noise floor for training augmentation.
 
-**Firmware AGC ceiling set to 60** (`hwGainMaxSignal=60` in AdaptiveMic.h, `hw_gain_max: 60` in default.yaml). Training pipeline must agree — `prepare_dataset.py` caps gain-aware noise augmentation at this value.
+**Firmware AGC ceiling set to 40** (`hwGainMaxSignal=40` in AdaptiveMic.h, `hw_gain_max: 40` in default.yaml, v56). Training pipeline must agree — `prepare_dataset.py` caps gain-aware noise augmentation at this value.
 
 **Gain×Volume discriminability sweep completed** (`gain_volume_sweep.py`): 8 gains × 4 volumes × 4 tracks × 3 devices. Measured ODF AUC-ROC and Beat SNR with latency-corrected alignment (~560ms audio pipeline latency).
 

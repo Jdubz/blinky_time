@@ -51,7 +51,7 @@ public:
   // AGC ceiling: gain sweep calibration shows SNR peaks at gain 25-35 and degrades
   // above 40. Must agree with training pipeline (ml-training/configs/default.yaml
   // audio.hw_gain_max) so the NN sees the same noise conditions it was trained on.
-  uint8_t  hwGainMaxSignal = 40; // Max HW gain for AGC (0-80, default 40)
+  uint8_t  hwGainMaxSignal = 40; // Max HW gain for AGC (10-80, default 40)
 
   // Fast AGC for low-level sources (accelerates calibration when signal is persistently low)
   bool     fastAgcEnabled = true;       // Enable fast AGC when signal is low and gain is high

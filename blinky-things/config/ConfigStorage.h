@@ -85,7 +85,9 @@ public:
     // Version 52: Joint forward filter fix (fwdObsFloor, fwdWrapFraction) + remove FT/IOI dead code
     // Version 53: Remove joint HMM dead code (hmmTempoNorm, hmmLambda, hmmBayesBias)
     // Version 54: Add nnBeatActivation (NN beat ODF toggle)
-    static const uint8_t SETTINGS_VERSION = 56;  // v56: conservative AGC + spectral noise subtraction
+    // Version 55: Conservative AGC (hwGainMaxSignal 60→40, hwTarget 0.35→0.20, tracking tau 30→60s)
+    // Version 56: Spectral noise estimation (noiseEst*, 5 new params) — same commit as v55
+    static const uint8_t SETTINGS_VERSION = 56;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -356,7 +358,7 @@ public:
         float noiseSmoothAlpha;         // Power smoothing coefficient (0.9-0.99)
         float noiseReleaseFactor;       // Noise floor release rate (0.99-0.9999)
         float noiseOversubtract;        // Oversubtraction factor (1.0-3.0)
-        float noiseFloorRatio;          // Spectral floor as fraction of original (0.01-0.1)
+        float noiseFloorRatio;          // Spectral floor as fraction of original (0.001-0.5)
     };
 
     struct StoredBandFluxParams {

@@ -87,7 +87,7 @@ public:
     // Minimum statistics noise estimation + spectral subtraction (Martin 2001)
     // Per-bin noise floor tracking with oversubtraction. Inserted after FFT,
     // before preWhitenMagnitudes — benefits both BandFlux and NN paths.
-    bool noiseEstEnabled = true;
+    bool noiseEstEnabled = false;   // Default OFF until A/B validated on hardware
     float noiseSmoothAlpha = 0.92f;    // Power smoothing (0.9-0.99, higher = slower)
     float noiseReleaseFactor = 0.999f; // Noise floor release rate (0.99-0.9999, ~16s at 0.999)
     float noiseOversubtract = 1.5f;    // Oversubtraction factor (1.0-3.0)

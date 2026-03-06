@@ -1400,6 +1400,12 @@ void SerialConsole::restoreDefaults() {
         spectral.compMakeupDb = 6.0f;
         spectral.compAttackTau = 0.001f;
         spectral.compReleaseTau = 2.0f;
+        // Noise estimation (v56)
+        spectral.noiseEstEnabled = false;
+        spectral.noiseSmoothAlpha = 0.92f;
+        spectral.noiseReleaseFactor = 0.999f;
+        spectral.noiseOversubtract = 1.5f;
+        spectral.noiseFloorRatio = 0.02f;
 
         // Restore BandFlux detector defaults
         BandWeightedFluxDetector& bf = audioCtrl_->getEnsemble().getBandFlux();

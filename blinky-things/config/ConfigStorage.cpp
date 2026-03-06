@@ -289,7 +289,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.nnBeatActivation = false;    // NN beat activation (v54: off by default, A/B vs BandFlux)
 
     // Spectral noise estimation defaults (v56)
-    data_.music.noiseEstEnabled = true;
+    data_.music.noiseEstEnabled = false;  // Default OFF until A/B validated
     data_.music.noiseSmoothAlpha = 0.92f;    // Power smoothing (~200ms at 62.5 Hz)
     data_.music.noiseReleaseFactor = 0.999f; // Noise floor release (~16s)
     data_.music.noiseOversubtract = 1.5f;    // Moderate oversubtraction

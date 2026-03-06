@@ -279,6 +279,8 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // Use full gain range in loud mode to handle extreme SPL
   // Otherwise enforce headroom minimum to preserve dynamic range
   int effectiveMinGain = inLoudAgcMode_ ? HW_GAIN_MIN : hwGainMinHeadroom;
+  // AGC ceiling: applies unconditionally (including loud mode) — harmless since
+  // loud mode drives gain down, never up toward the ceiling.
   int effectiveMaxGain = (hwGainMaxSignal < HW_GAIN_MAX) ? hwGainMaxSignal : HW_GAIN_MAX;
   currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, effectiveMaxGain);
 
