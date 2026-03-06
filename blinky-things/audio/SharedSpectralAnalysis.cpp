@@ -55,6 +55,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , phases_{}
     , prevMagnitudes_{}
     , melBands_{}
+    , rawMelBands_{}
     , prevMelBands_{}
     , melRunningMax_{}
     , binRunningMax_{}
@@ -93,6 +94,7 @@ void SharedSpectralAnalysis::reset() {
     }
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         melBands_[i] = 0.0f;
+        rawMelBands_[i] = 0.0f;
         prevMelBands_[i] = 0.0f;
         melRunningMax_[i] = 0.0f;
     }
@@ -143,6 +145,10 @@ void SharedSpectralAnalysis::process() {
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
         preWhitenMagnitudes_[i] = magnitudes_[i];
     }
+
+    // Compute raw mel bands from pre-compressor magnitudes (for NN inference + calibration).
+    // Must happen BEFORE applyCompressor() modifies magnitudes_ in-place.
+    computeRawMelBands();
 
     // Frame-level soft-knee compression (normalizes gross signal level)
     applyCompressor();
@@ -216,9 +222,9 @@ void SharedSpectralAnalysis::computeMagnitudesAndPhases() {
     }
 }
 
-void SharedSpectralAnalysis::computeMelBands() {
-    // Apply triangular mel filterbank to magnitude spectrum
-    // Each mel band is computed by weighting magnitudes with triangular filter
+void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, float* outputMelBands) {
+    // Apply triangular mel filterbank to magnitude spectrum and log-compress.
+    // Shared implementation for both compressed (melBands_) and raw (rawMelBands_) paths.
 
     for (int band = 0; band < SpectralConstants::NUM_MEL_BANDS; band++) {
         const MelBandDef& def = MEL_BANDS[band];
@@ -227,46 +233,51 @@ void SharedSpectralAnalysis::computeMelBands() {
 
         // Rising edge: start to center
         for (int bin = def.startBin; bin <= def.centerBin && bin < SpectralConstants::NUM_BINS; bin++) {
-            // Weight increases linearly from 0 at start to 1 at center
             float weight = (def.centerBin > def.startBin)
                 ? (float)(bin - def.startBin) / (def.centerBin - def.startBin)
                 : 1.0f;
-            sum += magnitudes_[bin] * weight;
+            sum += inputMagnitudes[bin] * weight;
             weightSum += weight;
         }
 
         // Falling edge: center to end
         for (int bin = def.centerBin + 1; bin <= def.endBin && bin < SpectralConstants::NUM_BINS; bin++) {
-            // Weight decreases linearly from 1 at center to 0 at end
             float weight = (def.endBin > def.centerBin)
                 ? 1.0f - (float)(bin - def.centerBin) / (def.endBin - def.centerBin)
                 : 1.0f;
-            sum += magnitudes_[bin] * weight;
+            sum += inputMagnitudes[bin] * weight;
             weightSum += weight;
         }
 
-        // Normalize and apply log compression
         float bandEnergy = (weightSum > 0) ? sum / weightSum : 0.0f;
 
-        // FIX: Special-case silence to ensure mel bands are truly zero
-        // Use threshold matching typical noise floor (~1e-6)
+        // Special-case silence to ensure mel bands are truly zero.
+        // Note: this 1e-6 threshold is not replicated in the Python training
+        // pipeline, but only affects near-silent frames (negligible impact).
         const float silenceThreshold = 1e-6f;
         if (bandEnergy < silenceThreshold) {
-            melBands_[band] = 0.0f;
+            outputMelBands[band] = 0.0f;
             continue;
         }
 
         // Log compression: 10 * log10(energy + epsilon)
-        // This matches human perception (dB scale)
+        // Map [-60, 0] dB to [0, 1]
         const float epsilon = 1e-10f;
         float logEnergy = 10.0f * log10f(bandEnergy + epsilon);
+        logEnergy = (logEnergy + 60.0f) / 60.0f;
 
-        // Clamp to reasonable range (-100 dB to 0 dB) and normalize to 0-1
-        // -60 dB is quiet, -20 dB is moderate, 0 dB is loud
-        logEnergy = (logEnergy + 60.0f) / 60.0f;  // Map [-60, 0] to [0, 1]
-
-        melBands_[band] = safeIsFinite(logEnergy) ? clamp01(logEnergy) : 0.0f;
+        outputMelBands[band] = safeIsFinite(logEnergy) ? clamp01(logEnergy) : 0.0f;
     }
+}
+
+void SharedSpectralAnalysis::computeMelBands() {
+    computeMelBandsFrom(magnitudes_, melBands_);
+}
+
+void SharedSpectralAnalysis::computeRawMelBands() {
+    // Compute mel bands from raw (pre-compressor) magnitudes.
+    // Uses preWhitenMagnitudes_ saved before applyCompressor().
+    computeMelBandsFrom(preWhitenMagnitudes_, rawMelBands_);
 }
 
 void SharedSpectralAnalysis::whitenMelBands() {

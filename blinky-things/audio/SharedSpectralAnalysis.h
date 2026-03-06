@@ -157,11 +157,23 @@ public:
     const float* getPrevMagnitudes() const { return prevMagnitudes_; }
 
     /**
-     * Get mel-scaled bands (26 bands)
+     * Get mel-scaled bands (26 bands) — compressed + whitened
      * Log-compressed, suitable for perceptual analysis
      * Valid after process() returns, until next process() call
      */
     const float* getMelBands() const { return melBands_; }
+
+    /**
+     * Get raw mel-scaled bands (26 bands) — NO compression, NO whitening
+     * Computed from pre-compressor magnitudes with only log compression.
+     * Closely matches the training pipeline (firmware_mel_spectrogram()).
+     * Used for NN inference and mic calibration streaming.
+     *
+     * Note: firmware applies a 1e-6 silence threshold (bandEnergy < 1e-6 → 0.0)
+     * that the Python path does not. In practice this only affects near-silent
+     * frames and has negligible impact on inference accuracy.
+     */
+    const float* getRawMelBands() const { return rawMelBands_; }
 
     /**
      * Get number of FFT bins
@@ -220,6 +232,7 @@ private:
     float phases_[SpectralConstants::NUM_BINS];
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
+    float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Raw mel bands (no compressor, no whitening) for NN inference + calibration
     float prevMelBands_[SpectralConstants::NUM_MEL_BANDS];
 
     // Mel-band whitening: per-band running maximum for adaptive normalization
@@ -251,6 +264,8 @@ private:
     void applyCompressor();
     void whitenMagnitudes();
     void computeMelBands();
+    void computeMelBandsFrom(const float* inputMagnitudes, float* outputMelBands);
+    void computeRawMelBands();
     void whitenMelBands();
     void computeDerivedFeatures();
     void savePreviousFrame();

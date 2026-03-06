@@ -230,20 +230,16 @@ const AudioControl& AudioController::update(float dt) {
     float onsetStrength = 0.0f;
 
     if (nnBeatActivation && beatActivationNN_.isReady()) {
-        // NN beat activation: feed mel bands to causal CNN, get learned ODF
-        // BandFlux still runs for transient detection (sparks/effects)
+        // NN beat activation: feed raw mel bands (no compressor/whitening) to
+        // causal CNN. Raw mel bands match the training pipeline exactly.
+        // BandFlux still runs for transient detection (sparks/effects).
         const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
         if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
-            onsetStrength = beatActivationNN_.infer(spectral.getMelBands());
-
-            // Still feed adaptive band weighting from BandFlux
-            if (adaptiveBandWeightEnabled) {
-                addBandOssSamples(
-                    ensemble_.getBandFlux().getBassFlux(),
-                    ensemble_.getBandFlux().getMidFlux(),
-                    ensemble_.getBandFlux().getHighFlux()
-                );
-            }
+            onsetStrength = beatActivationNN_.infer(spectral.getRawMelBands());
+            // Skip adaptive band weighting — NN learns its own frequency weighting.
+            // Per-band OSS samples are not fed to Bayesian tempo fusion here;
+            // band weights freeze at their last BandFlux-derived values. This is
+            // intentional: the NN's ODF replaces the need for adaptive band emphasis.
         } else {
             onsetStrength = mic_.getLevel();
         }
@@ -292,9 +288,17 @@ const AudioControl& AudioController::update(float dt) {
         }
     }
 
-    // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS)
-    onsetStrength = smoothOnsetStrength(onsetStrength);
-    lastSmoothedOnset_ = onsetStrength;
+    // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
+    // Bypass when NN is active — the dilated CNN's receptive field (15 frames
+    // with dilations [1, 2, 4] and kernel size 3) already provides temporal
+    // smoothing. Additional smoothing blurs activation peaks that the CBSS needs
+    // sharp. (madmom/BeatNet don't smooth NN output.)
+    if (nnBeatActivation && beatActivationNN_.isReady()) {
+        lastSmoothedOnset_ = onsetStrength;
+    } else {
+        onsetStrength = smoothOnsetStrength(onsetStrength);
+        lastSmoothedOnset_ = onsetStrength;
+    }
 
     // Update per-band periodicities periodically (same rate as main autocorr)
     if (adaptiveBandWeightEnabled && nowMs - lastBandAutocorrMs_ >= autocorrPeriodMs) {
@@ -2866,6 +2870,15 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
         onsetDensityWindowStart_ = nowMs;
     }
     control_.onsetDensity = onsetDensity_;
+
+    // Pass through NN downbeat activation if available.
+    // Co-located here (not in a separate function) because it runs at the same
+    // 1-second cadence and both fields are simple passthrough assignments.
+    if (nnBeatActivation && beatActivationNN_.isReady() && beatActivationNN_.hasDownbeatOutput()) {
+        control_.downbeat = beatActivationNN_.getLastDownbeat();
+    } else {
+        control_.downbeat = 0.0f;
+    }
 }
 
 // ============================================================================

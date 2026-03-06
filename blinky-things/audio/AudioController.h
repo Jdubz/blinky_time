@@ -544,6 +544,8 @@ public:
     EnsembleDetector& getEnsemble() { return ensemble_; }
     const EnsembleDetector& getEnsemble() const { return ensemble_; }
 
+    const BeatActivationNN& getBeatActivationNN() const { return beatActivationNN_; }
+
     // Get last ensemble output for debugging
     const EnsembleOutput& getLastEnsembleOutput() const { return ensemble_.getLastOutput(); }
 

@@ -10,6 +10,7 @@ audio:
   fmin: 60                  # MEL_MIN_FREQ
   fmax: 8000                # MEL_MAX_FREQ
   frame_rate: 62.5          # 16000 / 256
+  target_rms_db: -35        # Normalize audio RMS to simulate firmware AGC level
 
 # Target label generation
 labels:
@@ -22,8 +23,9 @@ model:
   type: "causal_cnn"        # or "tcn"
   channels: 32              # Conv filter count
   kernel_size: 3
-  dilations: [1, 2, 4]      # Receptive field: 21 frames = 336ms
+  dilations: [1, 2, 4]      # Receptive field: 15 frames = 240ms
   dropout: 0.1
+  downbeat: true            # Add downbeat output head (channel 1 = downbeat activation)
 
 # Training
 training:
@@ -33,7 +35,8 @@ training:
   lr_schedule: "cosine"
   chunk_frames: 128         # ~2s chunks at 62.5 Hz
   chunk_stride: 64          # 50% overlap between chunks
-  pos_weight: 10.0          # BCE positive class weight (~10:1 neg:pos ratio)
+  pos_weight: 10.0          # BCE positive class weight for beat head (~10:1 neg:pos ratio)
+  downbeat_pos_weight: 40.0 # BCE positive class weight for downbeat head (~4x rarer than beats)
   val_split: 0.15
   seed: 42
 
