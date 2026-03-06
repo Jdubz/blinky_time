@@ -9,6 +9,13 @@ transfer function (gain + noise floor).
 The resulting mic_profile.npz is consumed by prepare_dataset.py --mic-profile
 to transform clean mel spectrograms into realistic mic-captured equivalents.
 
+Dependencies:
+    - numpy (required)
+    - librosa (for mel filterbank computation)
+    - scipy (for audio I/O and windowing)
+    - pyserial (for device communication)
+    - ffplay/ffprobe (for audio playback and duration detection)
+
 Subcommands:
     generate    - Create reference audio files (sweep, white, pink, silence)
     capture     - Play audio through speakers + record device mel bands
@@ -55,7 +62,33 @@ import threading
 import time
 from pathlib import Path
 
+import shutil
+
 import numpy as np
+
+
+def _check_imports(*modules):
+    """Check that required Python modules are importable."""
+    for mod in modules:
+        try:
+            __import__(mod)
+        except ImportError:
+            print(f"ERROR: {mod} is required. Install with: pip install {mod}", file=sys.stderr)
+            sys.exit(1)
+
+
+def _check_ffplay():
+    """Check that ffplay is available on PATH."""
+    if shutil.which("ffplay") is None:
+        print("ERROR: ffplay not found. Install ffmpeg (includes ffplay).", file=sys.stderr)
+        sys.exit(1)
+
+
+def _check_ffprobe():
+    """Check that ffprobe is available on PATH."""
+    if shutil.which("ffprobe") is None:
+        print("ERROR: ffprobe not found. Install ffmpeg (includes ffprobe).", file=sys.stderr)
+        sys.exit(1)
 
 
 # Must match firmware SharedSpectralAnalysis exactly
@@ -110,6 +143,7 @@ def _firmware_mel_from_audio(audio: np.ndarray) -> np.ndarray:
 
 def generate(output_dir: str, duration: float = 10.0):
     """Generate reference calibration audio files."""
+    _check_imports("scipy", "librosa")
     from scipy.io import wavfile
     from scipy.signal import chirp
 
@@ -265,6 +299,8 @@ def _play_audio(audio_path: str, wait: bool = True) -> subprocess.Popen:
 def capture(port: str, audio: str, output: str, baud: int = 115200,
             settle: float = SETTLE_SECONDS):
     """Play audio through speakers and capture device mel bands simultaneously."""
+    _check_imports("scipy", "serial")
+    _check_ffplay()
     from scipy.io import wavfile
 
     audio_path = Path(audio)
@@ -351,6 +387,9 @@ def capture_all(ports: list[str], audio_dir: str, output_dir: str,
     Plays one audio file at a time (shared acoustic space), captures from
     all ports in parallel.
     """
+    _check_imports("scipy", "serial")
+    _check_ffplay()
+    _check_ffprobe()
     from scipy.io import wavfile
 
     audio_path = Path(audio_dir)
@@ -391,7 +430,19 @@ def capture_all(ports: list[str], audio_dir: str, output_dir: str,
                  "format=duration", "-of", "csv=p=0", str(audio_file)],
                 capture_output=True, text=True
             )
-            audio_duration = float(result.stdout.strip())
+            if result.returncode != 0:
+                err = result.stderr.strip() or result.stdout.strip()
+                print(f"  WARNING: ffprobe failed for {audio_file.name} "
+                      f"(rc={result.returncode}): {err}")
+                print(f"  Skipping file.\n")
+                continue
+            try:
+                audio_duration = float(result.stdout.strip())
+            except (ValueError, TypeError):
+                print(f"  WARNING: Could not parse duration from ffprobe for "
+                      f"{audio_file.name}: {result.stdout.strip()!r}")
+                print(f"  Skipping file.\n")
+                continue
 
         total_capture = settle + audio_duration + POST_SILENCE_SECONDS
 
@@ -509,6 +560,9 @@ def gain_sweep(port: str, output: str, gains: list[int] | None = None,
       - snr_db:       (G, 26) signal-to-noise ratio in dB (if audio provided)
       - dynamic_range_db: (G, 26) usable dynamic range above noise floor
     """
+    _check_imports("serial")
+    if audio:
+        _check_ffplay()
     import serial
 
     if gains is None:
@@ -739,6 +793,7 @@ def analyze(captures_dir: str, output: str, config: str = None,
 
     Output: mic_profile.npz
     """
+    _check_imports("librosa")
     cap_dir = Path(captures_dir)
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -867,9 +922,18 @@ def analyze(captures_dir: str, output: str, config: str = None,
 
     # Incorporate gain sweep data if available
     if gain_sweep_file:
-        sweep_files = sorted(Path(captures_dir).glob("gain_sweep*.npz"))
-        if not sweep_files and Path(gain_sweep_file).exists():
-            sweep_files = [Path(gain_sweep_file)]
+        gain_sweep_path = Path(gain_sweep_file)
+        sweep_files = []
+
+        # Prefer the explicitly specified path
+        if gain_sweep_path.is_file():
+            sweep_files.append(gain_sweep_path)
+
+        # Also include any other sweep files from captures dir, avoiding duplicates
+        for sf in sorted(Path(captures_dir).glob("gain_sweep*.npz")):
+            if gain_sweep_path.is_file() and sf.resolve() == gain_sweep_path.resolve():
+                continue
+            sweep_files.append(sf)
 
         if sweep_files:
             # Average across all sweep files (multiple devices)
