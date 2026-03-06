@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 5, 2026 (gain-sweep calibration + gain-aware training augmentation)*
+*Last Updated: March 5, 2026 (fix consensus labels, retrain overnight)*
 
 ## Current Status
 
@@ -46,12 +46,13 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 - Cross-tool comparison on 18 EDM tracks: 94% BPM agreement, BT-essentia F1=0.948
 - Multi-system consensus labeling (4 systems: Beat This!, essentia, librosa, madmom)
 - Mic calibration pipeline: `calibrate_mic.py` with generate/capture/capture-all/gain-sweep/analyze
+- Fixed consensus labels: Beat This! file naming bug excluded it from merge (stem.beats.beat_this → stem.beat_this). Re-merged with all 4 systems → 616K consensus beats (39% 2-sys, 35% 3-sys, 26% 4-sys agreement), 31.6% downbeat ratio
+- Fixed config labels_dir: was pointing to Beat This!-only labels, now points to 4-system consensus
+- Training v2 kicked off (overnight): 6993 tracks, 4-system consensus labels, augmentation ON, 100 epochs
 
 **Outstanding:**
 - Run gain-sweep calibration on all devices (see above)
-- Download training data (FMA electronic, ~5K tracks)
-- Label with consensus pipeline
-- Train model on real data with gain-aware mic augmentation
+- Review overnight training results and evaluate model quality
 - Deploy trained model and A/B test vs BandFlux (expected: 0.28-0.35 → 0.50-0.70 F1)
 
 ### Completed (March 4, 2026)

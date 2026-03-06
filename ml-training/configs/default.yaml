@@ -54,7 +54,7 @@ export:
 # Data paths (bulk data on /mnt/storage, processed data local for fast training)
 data:
   audio_dir: "/mnt/storage/blinky-ml-data/audio"
-  labels_dir: "/mnt/storage/blinky-ml-data/labels"
+  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus"
   processed_dir: "data/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
   test_set: "../blinky-test-player/music/edm"  # Existing 19-track test set
