@@ -1711,7 +1711,9 @@ void SerialConsole::streamTick() {
     // "bpm" = current estimated tempo
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getEnsemble().getSpectral();
-        if (spectral.isFrameReady()) {
+        uint32_t fc = spectral.getFrameCount();
+        if (fc != lastNNFrameCount_) {
+            lastNNFrameCount_ = fc;
             const float* mel = spectral.getRawMelBands();
 
             Serial.print(F("{\"type\":\"NN\",\"ts\":"));
@@ -1765,8 +1767,9 @@ void SerialConsole::streamTick() {
     }
 
     // Audio streaming at ~20Hz (normal) or ~100Hz (fast mode for testing)
+    // Skip when NN-only stream is active (saves serial bandwidth for mel bands)
     uint16_t period = streamFast_ ? STREAM_FAST_PERIOD_MS : STREAM_PERIOD_MS;
-    if (mic_ && (now - streamLastMs_ >= period)) {
+    if (streamEnabled_ && mic_ && (now - streamLastMs_ >= period)) {
         streamLastMs_ = now;
 
         // Output compact JSON for web app (abbreviated field names for serial bandwidth)

@@ -65,6 +65,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , spectralCentroid_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
+    , frameCount_(0)
 {
 }
 
@@ -176,6 +177,7 @@ void SharedSpectralAnalysis::process() {
 
     // Mark frame as ready
     frameReady_ = true;
+    frameCount_++;
     hasPrevFrame_ = true;
 
     // Reset sample buffer for next frame

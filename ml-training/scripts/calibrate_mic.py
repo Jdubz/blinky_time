@@ -1,206 +1,221 @@
 #!/usr/bin/env python3
-"""Calibrate microphone transfer function for training data augmentation.
+"""Capture mic transfer function for ML training data augmentation.
 
-Measures the end-to-end difference between the Python mel pipeline (clean audio)
-and firmware mel pipeline (audio played through speaker → air → MEMS mic → PDM →
-AGC → FFT → raw mel bands). The resulting transfer function is applied to all
-training data so the model trains on what the mic actually sees.
+Plays reference signals (frequency sweeps, white/pink noise, music) through
+speakers, captures what the device mic hears via `stream nn`, and compares
+against the theoretical mel bands of the original audio to derive a per-band
+transfer function (gain + noise floor).
 
-Three calibration modes:
-  1. sweep  — Log sine sweep for per-band frequency response (most precise)
-  2. noise  — White/pink noise for broadband statistical characterization
-  3. music  — Real music tracks for realistic end-to-end validation
+The resulting mic_profile.npz is consumed by prepare_dataset.py --mic-profile
+to transform clean mel spectrograms into realistic mic-captured equivalents.
 
-The output is a mic_profile.npz containing:
-  - band_gain:  (26,) per-mel-band gain ratio (firmware/python)
-  - band_bias:  (26,) per-mel-band additive bias
-  - noise_floor: (26,) per-band noise floor (silence capture)
-  - agc_curve:  fitted AGC response curve (input level → output level)
+Subcommands:
+    generate  - Create reference audio files (sweep, white, pink, silence)
+    capture   - Play audio through speakers + record device mel bands
+    analyze   - Compare captures vs originals -> mic_profile.npz
 
 Usage:
-    # Step 1: Generate reference audio files
+    # 1. Generate reference signals
     python scripts/calibrate_mic.py generate --output-dir data/calibration
 
-    # Step 2: Play audio on blinkyhost while capturing firmware mel bands
-    # (Run this ON blinkyhost, with speakers connected)
-    python scripts/calibrate_mic.py capture \
-        --port /dev/ttyACM0 \
+    # 2. Capture each signal (run on host with speakers + devices)
+    python scripts/calibrate_mic.py capture --port /dev/ttyACM0 \
         --audio data/calibration/sweep_16k.wav \
-        --output data/calibration/sweep_capture.jsonl
+        --output data/calibration/sweep_capture_ACM0.jsonl
 
-    # Step 3: Derive transfer function from paired (reference, capture) data
+    # 2b. Capture all signals on all ports at once
+    python scripts/calibrate_mic.py capture-all \
+        --ports /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2 \
+        --audio-dir data/calibration \
+        --output-dir data/calibration
+
+    # 3. Analyze captures vs originals
     python scripts/calibrate_mic.py analyze \
-        --captures data/calibration/ \
+        --captures data/calibration \
         --output data/calibration/mic_profile.npz
-
-    # Step 4: Verify profile by applying to test track and comparing
-    python scripts/calibrate_mic.py verify \
-        --profile data/calibration/mic_profile.npz \
-        --audio test.wav
 """
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 import numpy as np
-import yaml
 
 
-def cmd_generate(args):
-    """Generate reference audio files for calibration."""
-    import soundfile as sf
+# Must match firmware SharedSpectralAnalysis exactly
+SAMPLE_RATE = 16000
+N_FFT = 256
+HOP_LENGTH = 256
+N_MELS = 26
+FMIN = 60
+FMAX = 8000
+FRAME_RATE = SAMPLE_RATE / HOP_LENGTH  # 62.5 Hz
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    sr = args.sample_rate
+# Capture timing
+SETTLE_SECONDS = 3.0  # AGC settle time before recording
+POST_SILENCE_SECONDS = 1.0  # Silence after audio ends
 
-    # 1. Log sine sweep (20 Hz to sr/2, 20 seconds)
-    duration = 20.0
-    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
-    f0, f1 = 20.0, sr / 2
-    # Exponential chirp: f(t) = f0 * (f1/f0)^(t/T)
-    sweep = 0.8 * np.sin(
-        2 * np.pi * f0 * duration / np.log(f1 / f0)
-        * (np.power(f1 / f0, t / duration) - 1)
+
+def _build_mel_filterbank() -> np.ndarray:
+    """Build mel filterbank matching firmware (librosa HTK, no norm)."""
+    import librosa
+    return librosa.filters.mel(
+        sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS,
+        fmin=FMIN, fmax=FMAX, htk=True, norm=None,
     ).astype(np.float32)
-    sweep_path = output_dir / "sweep_16k.wav"
-    sf.write(str(sweep_path), sweep, sr)
-    print(f"Generated: {sweep_path} ({duration}s log sweep, {f0}-{f1} Hz)")
 
-    # 2. Pink noise (30 seconds)
-    duration = 30.0
-    n = int(sr * duration)
-    white = np.random.default_rng(42).standard_normal(n).astype(np.float32)
-    fft = np.fft.rfft(white)
-    freqs = np.fft.rfftfreq(n, 1 / sr)
+
+def _firmware_mel_from_audio(audio: np.ndarray) -> np.ndarray:
+    """Compute mel spectrogram matching firmware pipeline exactly.
+
+    Returns (n_frames, 26) array with values in [0, 1].
+    """
+    from scipy.signal.windows import hamming
+
+    window = hamming(N_FFT, sym=True).astype(np.float32)
+    mel_fb = _build_mel_filterbank()
+
+    n_frames = len(audio) // HOP_LENGTH
+    mels = np.zeros((n_frames, N_MELS), dtype=np.float32)
+
+    for i in range(n_frames):
+        frame = audio[i * HOP_LENGTH:(i * HOP_LENGTH) + N_FFT]
+        if len(frame) < N_FFT:
+            break
+        windowed = frame * window
+        spectrum = np.abs(np.fft.rfft(windowed))
+        mel_spec = mel_fb @ spectrum
+        log_mel = 10.0 * np.log10(mel_spec + 1e-10)
+        log_mel = (log_mel + 60.0) / 60.0
+        mels[i] = np.clip(log_mel, 0.0, 1.0)
+
+    return mels
+
+
+def generate(output_dir: str, duration: float = 10.0):
+    """Generate reference calibration audio files."""
+    from scipy.io import wavfile
+    from scipy.signal import chirp
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    n_samples = int(SAMPLE_RATE * duration)
+    t = np.linspace(0, duration, n_samples, endpoint=False)
+
+    # 1. Logarithmic frequency sweep (20 Hz -> 8000 Hz)
+    sweep = chirp(t, f0=20, f1=8000, t1=duration, method='logarithmic')
+    sweep = (sweep * 0.8 * 32767).astype(np.int16)
+    path = out / "sweep_16k.wav"
+    wavfile.write(str(path), SAMPLE_RATE, sweep)
+    print(f"  Generated: {path} ({duration}s, 20-8000 Hz log sweep)")
+
+    # 2. White noise
+    rng = np.random.default_rng(42)
+    white = rng.standard_normal(n_samples)
+    white = (white / np.abs(white).max() * 0.8 * 32767).astype(np.int16)
+    path = out / "white_noise_16k.wav"
+    wavfile.write(str(path), SAMPLE_RATE, white)
+    print(f"  Generated: {path} ({duration}s)")
+
+    # 3. Pink noise (1/f spectrum)
+    white_f = np.fft.rfft(rng.standard_normal(n_samples))
+    freqs = np.fft.rfftfreq(n_samples, d=1 / SAMPLE_RATE)
     freqs[0] = 1  # avoid div by zero
-    fft /= np.sqrt(freqs)
-    pink = np.fft.irfft(fft, n=n).astype(np.float32)
-    pink = 0.8 * pink / (np.abs(pink).max() + 1e-10)
-    pink_path = output_dir / "pink_noise_16k.wav"
-    sf.write(str(pink_path), pink, sr)
-    print(f"Generated: {pink_path} ({duration}s pink noise)")
+    pink_f = white_f / np.sqrt(freqs)
+    pink = np.fft.irfft(pink_f, n=n_samples)
+    pink = (pink / np.abs(pink).max() * 0.8 * 32767).astype(np.int16)
+    path = out / "pink_noise_16k.wav"
+    wavfile.write(str(path), SAMPLE_RATE, pink)
+    print(f"  Generated: {path} ({duration}s)")
 
-    # 3. White noise (30 seconds)
-    duration = 30.0
-    white = np.random.default_rng(43).standard_normal(int(sr * duration)).astype(np.float32)
-    white = 0.8 * white / (np.abs(white).max() + 1e-10)
-    white_path = output_dir / "white_noise_16k.wav"
-    sf.write(str(white_path), white, sr)
-    print(f"Generated: {white_path} ({duration}s white noise)")
+    # 4. Silence (for noise floor measurement)
+    silence = np.zeros(n_samples, dtype=np.int16)
+    path = out / "silence_16k.wav"
+    wavfile.write(str(path), SAMPLE_RATE, silence)
+    print(f"  Generated: {path} ({duration}s)")
 
-    # 4. Silence (10 seconds — for noise floor measurement)
-    silence = np.zeros(int(sr * 10), dtype=np.float32)
-    silence_path = output_dir / "silence_16k.wav"
-    sf.write(str(silence_path), silence, sr)
-    print(f"Generated: {silence_path} (10s silence)")
+    # 5. Per-band tone bursts (pure tones at mel band center frequencies)
+    # Each tone plays for 0.5s with 0.1s gaps — tests individual band response
+    from scipy.signal.windows import hann
 
-    # 5. Multi-level test tones (for AGC characterization)
-    # 1kHz sine at different levels: -40, -30, -20, -10, 0 dBFS
-    duration_each = 5.0
-    tone_freqs = [250, 1000, 4000]
-    levels_db = [-40, -30, -20, -10, -3]
-    tones = []
-    for level_db in levels_db:
-        for freq in tone_freqs:
-            t = np.linspace(0, duration_each, int(sr * duration_each), endpoint=False)
-            amp = 10 ** (level_db / 20)
-            tone = (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
-            tones.append(tone)
-            # 0.5s silence between tones for AGC settling
-            tones.append(np.zeros(int(sr * 0.5), dtype=np.float32))
-    agc_signal = np.concatenate(tones)
-    agc_path = output_dir / "agc_test_16k.wav"
-    sf.write(str(agc_path), agc_signal, sr)
-    print(f"Generated: {agc_path} ({len(agc_signal)/sr:.0f}s AGC test, "
-          f"{len(levels_db)} levels × {len(tone_freqs)} freqs)")
+    mel_centers = _get_mel_center_freqs()
+    burst_dur = 0.4
+    gap_dur = 0.1
+    total_dur = N_MELS * (burst_dur + gap_dur)
+    n_total = int(SAMPLE_RATE * total_dur)
+    tones = np.zeros(n_total, dtype=np.float64)
 
-    print(f"\nAll reference files in {output_dir}/")
-    print("Next: copy to blinkyhost and run 'calibrate_mic.py capture' for each file")
+    for band_idx, freq in enumerate(mel_centers):
+        start = int(band_idx * (burst_dur + gap_dur) * SAMPLE_RATE)
+        n_burst = int(burst_dur * SAMPLE_RATE)
+        t_burst = np.arange(n_burst) / SAMPLE_RATE
+        tone = np.sin(2 * np.pi * freq * t_burst)
+        # Apply Hann envelope to avoid clicks
+        envelope = hann(n_burst, sym=True)
+        tone *= envelope * 0.8
+        tones[start:start + n_burst] = tone
+
+    tones = (tones * 32767).astype(np.int16)
+    path = out / "tone_bursts_16k.wav"
+    wavfile.write(str(path), SAMPLE_RATE, tones)
+    print(f"  Generated: {path} ({total_dur:.1f}s, {N_MELS} bands)")
+
+    # Save mel center frequencies for reference
+    np.save(out / "mel_centers.npy", mel_centers)
+    print(f"\n  Mel band center frequencies (Hz):")
+    for i, f in enumerate(mel_centers):
+        print(f"    Band {i:2d}: {f:7.1f} Hz")
+
+    # Also compute and save theoretical mel bands for each signal
+    print(f"\nComputing theoretical mel bands for reference signals...")
+    for wav_name in ["sweep_16k.wav", "white_noise_16k.wav",
+                     "pink_noise_16k.wav", "silence_16k.wav",
+                     "tone_bursts_16k.wav"]:
+        wav_path = out / wav_name
+        _, audio_int16 = wavfile.read(str(wav_path))
+        audio_f32 = audio_int16.astype(np.float32) / 32768.0
+        mel = _firmware_mel_from_audio(audio_f32)
+        ref_path = out / f"{wav_name.replace('.wav', '_reference.npy')}"
+        np.save(ref_path, mel)
+        print(f"  {ref_path}: {mel.shape}")
 
 
-def cmd_capture(args):
-    """Play audio through speakers while capturing firmware mel bands."""
+def _get_mel_center_freqs() -> np.ndarray:
+    """Get center frequencies of the 26 mel filter bands."""
+    mel_fb = _build_mel_filterbank()
+    freqs = np.fft.rfftfreq(N_FFT, d=1 / SAMPLE_RATE)
+    centers = np.zeros(N_MELS)
+    for i in range(N_MELS):
+        weights = mel_fb[i]
+        if weights.sum() > 0:
+            centers[i] = np.average(freqs[:len(weights)], weights=weights)
+    return centers
+
+
+def _capture_serial(port: str, duration: float, baud: int = 115200) -> list[dict]:
+    """Capture NN stream frames from device for given duration."""
     import serial
-    import soundfile as sf
-    import subprocess
 
-    port = args.port
-    audio_path = Path(args.audio)
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Validate audio file
-    info = sf.info(str(audio_path))
-    duration = info.duration
-    print(f"Audio: {audio_path.name} ({duration:.1f}s, {info.samplerate} Hz)")
-
-    # Connect to device
-    print(f"Connecting to {port}...")
-    ser = serial.Serial(port, 115200, timeout=1)
+    ser = serial.Serial(port, baud, timeout=1)
     time.sleep(0.5)
     ser.reset_input_buffer()
 
-    # Enable NN stream mode
     ser.write(b"stream nn\n")
     time.sleep(0.2)
     resp = ser.readline().decode("utf-8", errors="replace").strip()
-    print(f"Stream mode: {resp}")
+    if "OK" not in resp:
+        print(f"  Warning [{port}]: unexpected response: {resp}")
 
-    # Pre-capture silence (2 seconds for noise floor)
-    print("Capturing 2s silence (noise floor)...")
-    silence_frames = _capture_frames(ser, 2.0)
-
-    # Play audio and capture simultaneously
-    print(f"Playing audio + capturing ({duration:.1f}s)...")
-    # Start audio playback in background using aplay/paplay
-    play_cmd = _get_play_command(str(audio_path))
-    play_proc = subprocess.Popen(play_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # Small delay for audio to start (speaker latency)
-    time.sleep(args.latency)
-
-    audio_frames = _capture_frames(ser, duration + 1.0)
-
-    play_proc.wait()
-
-    # Post-capture silence (2 seconds)
-    print("Capturing 2s post-silence...")
-    post_frames = _capture_frames(ser, 2.0)
-
-    # Disable streaming
-    ser.write(b"stream off\n")
-    time.sleep(0.2)
-    ser.close()
-
-    # Save all frames
-    all_data = {
-        "audio_file": audio_path.name,
-        "sample_rate": info.samplerate,
-        "duration": duration,
-        "port": port,
-        "latency_compensation": args.latency,
-        "silence_pre": silence_frames,
-        "audio": audio_frames,
-        "silence_post": post_frames,
-    }
-    with open(output_path, "w") as f:
-        json.dump(all_data, f)
-
-    n_total = len(silence_frames) + len(audio_frames) + len(post_frames)
-    print(f"\nCaptured {n_total} frames → {output_path}")
-    print(f"  Pre-silence: {len(silence_frames)} frames")
-    print(f"  Audio: {len(audio_frames)} frames")
-    print(f"  Post-silence: {len(post_frames)} frames")
-
-
-def _capture_frames(ser, duration: float) -> list[dict]:
-    """Capture NN stream frames for a given duration."""
     frames = []
     start = time.time()
+    errors = 0
+
     while time.time() - start < duration:
         line = ser.readline().decode("utf-8", errors="replace").strip()
         if not line:
@@ -208,294 +223,423 @@ def _capture_frames(ser, duration: float) -> list[dict]:
         try:
             data = json.loads(line)
         except json.JSONDecodeError:
+            errors += 1
             continue
         if data.get("type") == "NN":
             frames.append(data)
+
+    ser.write(b"stream off\n")
+    time.sleep(0.2)
+    ser.close()
+
+    elapsed = time.time() - start
+    rate = len(frames) / elapsed if elapsed > 0 else 0
+    if errors > 0:
+        print(f"  [{port}] {len(frames)} frames ({rate:.1f} Hz), {errors} parse errors")
     return frames
 
 
-def _get_play_command(audio_path: str) -> list[str]:
-    """Get platform-appropriate audio playback command."""
-    import shutil
-    if shutil.which("paplay"):
-        return ["paplay", audio_path]
-    if shutil.which("aplay"):
-        return ["aplay", "-q", audio_path]
-    if shutil.which("ffplay"):
-        return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", audio_path]
-    raise RuntimeError("No audio player found. Install pulseaudio (paplay) or alsa-utils (aplay).")
-
-
-def cmd_analyze(args):
-    """Derive mic transfer function from paired captures."""
-    import torch
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from scripts.prepare_dataset import (
-        _build_mel_filterbank, firmware_mel_spectrogram, load_config,
+def _play_audio(audio_path: str, wait: bool = True) -> subprocess.Popen:
+    """Play audio file via ffplay. Returns process handle."""
+    proc = subprocess.Popen(
+        ["ffplay", "-nodisp", "-autoexit", "-loglevel", "error", str(audio_path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
+    if wait:
+        proc.wait()
+    return proc
 
-    captures_dir = Path(args.captures)
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cfg = load_config(args.config)
-    sr = cfg["audio"]["sample_rate"]
-    frame_rate = cfg["audio"]["frame_rate"]
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    mel_fb = _build_mel_filterbank(cfg, device)
-    window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
+def capture(port: str, audio: str, output: str, baud: int = 115200,
+            settle: float = SETTLE_SECONDS):
+    """Play audio through speakers and capture device mel bands simultaneously."""
+    from scipy.io import wavfile
 
-    n_mels = cfg["audio"]["n_mels"]
-    all_band_ratios = []
-    all_noise_floors = []
-
-    # Process each capture file
-    capture_files = sorted(captures_dir.glob("*_capture.json"))
-    if not capture_files:
-        print(f"No *_capture.json files found in {captures_dir}", file=sys.stderr)
+    audio_path = Path(audio)
+    if not audio_path.exists():
+        print(f"ERROR: Audio file not found: {audio_path}", file=sys.stderr)
         sys.exit(1)
 
-    for cap_path in capture_files:
-        print(f"\nAnalyzing: {cap_path.name}")
-        with open(cap_path) as f:
-            cap = json.load(f)
+    # Get audio duration
+    sr, audio_data = wavfile.read(str(audio_path))
+    audio_duration = len(audio_data) / sr
+    total_capture = settle + audio_duration + POST_SILENCE_SECONDS
 
-        audio_name = cap["audio_file"]
-        audio_path = captures_dir / audio_name
-        if not audio_path.exists():
-            # Try parent dir
-            audio_path = captures_dir.parent / audio_name
-        if not audio_path.exists():
-            print(f"  WARNING: audio file {audio_name} not found, skipping")
-            continue
+    print(f"Calibration capture: {audio_path.name}")
+    print(f"  Port: {port}")
+    print(f"  Audio duration: {audio_duration:.1f}s")
+    print(f"  Settle time: {settle:.1f}s")
+    print(f"  Total capture: {total_capture:.1f}s")
 
-        # Compute Python mel bands for reference audio
-        import librosa
-        audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
-        target_rms_db = cfg["audio"].get("target_rms_db", -35)
-        rms = np.sqrt(np.mean(audio_np ** 2) + 1e-10)
-        audio_np = audio_np * (10 ** (target_rms_db / 20) / rms)
-        audio_gpu = torch.from_numpy(audio_np).to(device)
-        py_mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
-        print(f"  Python mel: {py_mel.shape}")
+    # Start serial capture in background thread
+    capture_result = {"frames": []}
 
-        # Extract firmware mel bands from capture
-        fw_frames = cap.get("audio", [])
-        if not fw_frames:
-            print(f"  WARNING: no audio frames in capture, skipping")
-            continue
-        fw_mel = np.array([f["mel"] for f in fw_frames])
-        print(f"  Firmware mel: {fw_mel.shape}")
+    def capture_thread():
+        capture_result["frames"] = _capture_serial(port, total_capture, baud)
 
-        # Cross-correlate mean energy to find time alignment
-        py_energy = py_mel.mean(axis=1)
-        fw_energy = fw_mel.mean(axis=1)
-        min_len = min(len(py_energy), len(fw_energy))
-        if min_len < 20:
-            print(f"  WARNING: too few frames ({min_len}), skipping")
-            continue
+    thread = threading.Thread(target=capture_thread)
+    thread.start()
 
-        corr = np.correlate(
-            fw_energy[:min_len] - fw_energy[:min_len].mean(),
-            py_energy[:min_len] - py_energy[:min_len].mean(),
-            mode="full"
-        )
-        offset = np.argmax(corr) - min_len + 1
-        print(f"  Alignment offset: {offset} frames ({offset / frame_rate * 1000:.0f} ms)")
+    # Wait for AGC to settle, then play audio
+    print(f"  Waiting {settle:.0f}s for AGC settle...")
+    time.sleep(settle)
 
-        # Align arrays
-        if offset >= 0:
-            fw_aligned = fw_mel[offset:]
-            py_aligned = py_mel[:]
+    print(f"  Playing {audio_path.name}...")
+    play_start = time.time()
+    _play_audio(str(audio_path), wait=True)
+    play_elapsed = time.time() - play_start
+    print(f"  Playback finished ({play_elapsed:.1f}s)")
+
+    # Wait for post-silence capture
+    time.sleep(POST_SILENCE_SECONDS)
+
+    # Wait for capture thread
+    thread.join(timeout=5)
+    frames = capture_result["frames"]
+
+    if not frames:
+        print("ERROR: No frames captured!", file=sys.stderr)
+        sys.exit(1)
+
+    # Mark frames with timing relative to audio start
+    # Audio started after settle_seconds of capture
+    capture_start_ts = frames[0]["ts"]
+    audio_start_ts = capture_start_ts + int(settle * 1000)
+
+    for f in frames:
+        f["audio_offset_ms"] = f["ts"] - audio_start_ts
+
+    # Save capture
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w") as f:
+        for frame in frames:
+            f.write(json.dumps(frame) + "\n")
+
+    # Summary
+    mels = np.array([f["mel"] for f in frames])
+    audio_frames = [f for f in frames if 0 <= f["audio_offset_ms"] <= audio_duration * 1000]
+    settle_frames = [f for f in frames if f["audio_offset_ms"] < 0]
+
+    print(f"\n  Saved: {out_path}")
+    print(f"  Total frames: {len(frames)}")
+    print(f"  Settle frames: {len(settle_frames)}")
+    print(f"  Audio frames: {len(audio_frames)}")
+    print(f"  Mel range: [{mels.min():.4f}, {mels.max():.4f}]")
+    print(f"  Gain: {frames[-1].get('gain', '?')}")
+
+    return frames
+
+
+def capture_all(ports: list[str], audio_dir: str, output_dir: str,
+                baud: int = 115200, settle: float = SETTLE_SECONDS,
+                music_dir: str | None = None):
+    """Capture all reference signals + optional music tracks on all ports.
+
+    Plays one audio file at a time (shared acoustic space), captures from
+    all ports in parallel.
+    """
+    from scipy.io import wavfile
+
+    audio_path = Path(audio_dir)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    # Collect reference signals
+    ref_files = sorted(audio_path.glob("*_16k.wav"))
+    if not ref_files:
+        print(f"ERROR: No reference WAV files in {audio_dir}", file=sys.stderr)
+        print(f"  Run 'generate' first to create them.", file=sys.stderr)
+        sys.exit(1)
+
+    # Optionally add music tracks
+    all_files = list(ref_files)
+    if music_dir:
+        music_path = Path(music_dir)
+        music_files = sorted(music_path.glob("*.mp3")) + sorted(music_path.glob("*.wav"))
+        all_files.extend(music_files)
+        print(f"Including {len(music_files)} music tracks from {music_dir}")
+
+    print(f"Capture-all: {len(all_files)} files, {len(ports)} ports")
+    print(f"  Ports: {', '.join(ports)}")
+    print(f"  Files: {', '.join(f.name for f in all_files)}")
+    print()
+
+    for file_idx, audio_file in enumerate(all_files):
+        print(f"=== [{file_idx + 1}/{len(all_files)}] {audio_file.name} ===")
+
+        # Get duration
+        if audio_file.suffix == ".wav":
+            sr, data = wavfile.read(str(audio_file))
+            audio_duration = len(data) / sr
         else:
-            fw_aligned = fw_mel[:]
-            py_aligned = py_mel[-offset:]
-        align_len = min(len(fw_aligned), len(py_aligned))
-        fw_aligned = fw_aligned[:align_len]
-        py_aligned = py_aligned[:align_len]
+            # For mp3, use ffprobe
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries",
+                 "format=duration", "-of", "csv=p=0", str(audio_file)],
+                capture_output=True, text=True
+            )
+            audio_duration = float(result.stdout.strip())
 
-        # Compute per-band gain ratio (firmware / python)
-        # Use median to be robust to outliers (transients, AGC adaptation)
-        for band in range(n_mels):
-            py_vals = py_aligned[:, band]
-            fw_vals = fw_aligned[:, band]
-            # Only compare where both have signal (avoid div-by-zero)
-            mask = (py_vals > 0.05) & (fw_vals > 0.01)
-            if mask.sum() > 50:
-                ratios = fw_vals[mask] / py_vals[mask]
-                all_band_ratios.append(ratios)
+        total_capture = settle + audio_duration + POST_SILENCE_SECONDS
 
-        # Noise floor from silence frames
-        silence_frames = cap.get("silence_pre", [])
-        if silence_frames:
-            silence_mel = np.array([f["mel"] for f in silence_frames])
-            if len(silence_mel) > 5:
-                all_noise_floors.append(silence_mel.mean(axis=0))
+        # Start capture on all ports in parallel
+        results = {}
 
-        # Per-band correlation for diagnostics
-        correlations = []
-        for band in range(n_mels):
-            if py_aligned[:, band].std() > 0.01 and fw_aligned[:, band].std() > 0.01:
-                corr = np.corrcoef(py_aligned[:, band], fw_aligned[:, band])[0, 1]
-            else:
-                corr = float("nan")
-            correlations.append(corr)
-        mean_corr = np.nanmean(correlations)
-        print(f"  Mean per-band correlation: {mean_corr:.4f}")
+        def port_capture(p):
+            results[p] = _capture_serial(p, total_capture, baud)
 
-    if not all_band_ratios:
-        print("\nERROR: No valid paired data to analyze", file=sys.stderr)
+        threads = []
+        for port in ports:
+            t = threading.Thread(target=port_capture, args=(port,))
+            t.start()
+            threads.append(t)
+
+        # Wait for AGC settle, then play
+        print(f"  Settling {settle:.0f}s...")
+        time.sleep(settle)
+        print(f"  Playing ({audio_duration:.1f}s)...")
+        _play_audio(str(audio_file), wait=True)
+        time.sleep(POST_SILENCE_SECONDS)
+
+        # Wait for all capture threads
+        for t in threads:
+            t.join(timeout=5)
+
+        # Save each port's capture
+        for port in ports:
+            port_name = Path(port).name  # e.g., "ttyACM0"
+            frames = results.get(port, [])
+            if not frames:
+                print(f"  WARNING: No frames from {port}")
+                continue
+
+            # Mark audio timing
+            capture_start_ts = frames[0]["ts"]
+            audio_start_ts = capture_start_ts + int(settle * 1000)
+            for f in frames:
+                f["audio_offset_ms"] = f["ts"] - audio_start_ts
+
+            out_file = out_path / f"{audio_file.stem}_{port_name}.jsonl"
+            with open(out_file, "w") as fh:
+                for frame in frames:
+                    fh.write(json.dumps(frame) + "\n")
+
+            audio_frames = [f for f in frames
+                            if 0 <= f["audio_offset_ms"] <= audio_duration * 1000]
+            print(f"  {port_name}: {len(audio_frames)} audio frames -> {out_file.name}")
+
+        # Brief pause between files
+        print()
+        time.sleep(1)
+
+    print("Capture-all complete.")
+
+
+def analyze(captures_dir: str, output: str, config: str = None):
+    """Analyze captures vs theoretical mel bands to derive mic profile.
+
+    For each captured signal, computes the per-band gain ratio:
+        gain[band] = mean(captured[band]) / mean(theoretical[band])
+
+    And the noise floor from silence capture:
+        noise_floor[band] = mean(silence_capture[band])
+
+    Output: mic_profile.npz with band_gain (26,) and noise_floor (26,).
+    """
+    cap_dir = Path(captures_dir)
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Load reference mel bands (generated by 'generate' step)
+    ref_files = {
+        "sweep": "sweep_16k_reference.npy",
+        "white": "white_noise_16k_reference.npy",
+        "pink": "pink_noise_16k_reference.npy",
+        "silence": "silence_16k_reference.npy",
+        "tones": "tone_bursts_16k_reference.npy",
+    }
+
+    refs = {}
+    for name, fname in ref_files.items():
+        ref_path = cap_dir / fname
+        if ref_path.exists():
+            refs[name] = np.load(ref_path)
+            print(f"  Reference loaded: {name} {refs[name].shape}")
+
+    # Find capture files (pattern: *_ttyACMN.jsonl)
+    capture_files = sorted(cap_dir.glob("*.jsonl"))
+    if not capture_files:
+        print(f"ERROR: No .jsonl capture files in {captures_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Aggregate per-band gain (median across all captures and frames)
-    band_gain = np.ones(n_mels, dtype=np.float32)
-    all_ratios_flat = np.concatenate(all_band_ratios)
-    # Overall median gain
-    overall_gain = np.median(all_ratios_flat)
-    print(f"\nOverall gain ratio (firmware/python): {overall_gain:.4f}")
+    # Group captures by signal type and port
+    captures = {}  # {signal_name: {port: frames}}
+    for cf in capture_files:
+        stem = cf.stem  # e.g., "sweep_16k_ttyACM0"
+        parts = stem.rsplit("_", 1)
+        if len(parts) == 2:
+            signal_name, port_name = parts
+        else:
+            signal_name = stem
+            port_name = "default"
 
-    # TODO: Per-band gain would require tracking which ratios belong to which band.
-    # For now, compute overall gain. This can be refined once we have real captures.
-    band_gain[:] = overall_gain
+        frames = []
+        with open(cf) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        data = json.loads(line)
+                        if data.get("type") == "NN":
+                            frames.append(data)
+                    except json.JSONDecodeError:
+                        pass
 
-    # Noise floor
-    if all_noise_floors:
-        noise_floor = np.mean(all_noise_floors, axis=0).astype(np.float32)
+        if frames:
+            captures.setdefault(signal_name, {})[port_name] = frames
+            print(f"  Capture loaded: {cf.name} ({len(frames)} frames)")
+
+    # Extract audio-region frames (where audio_offset_ms >= 0)
+    def get_audio_mels(frames):
+        audio_frames = [f for f in frames
+                        if f.get("audio_offset_ms", 0) >= 0
+                        and f.get("audio_offset_ms", float("inf")) < 999999]
+        if not audio_frames:
+            audio_frames = frames  # fallback: use all frames
+        return np.array([f["mel"] for f in audio_frames])
+
+    # Compute per-band gain ratios from noise signals
+    all_gains = []
+    signal_gains = {}
+
+    for sig_key, ref_key in [("sweep_16k", "sweep"),
+                              ("white_noise_16k", "white"),
+                              ("pink_noise_16k", "pink")]:
+        if sig_key not in captures or ref_key not in refs:
+            continue
+
+        ref_mel = refs[ref_key]
+        ref_mean = ref_mel.mean(axis=0)  # (26,)
+        ref_mean = np.maximum(ref_mean, 0.001)  # avoid div by zero
+
+        for port_name, frames in captures[sig_key].items():
+            cap_mel = get_audio_mels(frames)
+            if len(cap_mel) == 0:
+                continue
+
+            # Time-align: truncate to shorter length
+            min_len = min(len(cap_mel), len(ref_mel))
+            cap_mean = cap_mel[:min_len].mean(axis=0)
+
+            gain = cap_mean / ref_mean
+            all_gains.append(gain)
+            signal_gains[f"{sig_key}_{port_name}"] = gain
+
+            print(f"\n  {sig_key} ({port_name}):")
+            print(f"    Ref mean:  [{ref_mean.min():.3f}, {ref_mean.max():.3f}]")
+            print(f"    Cap mean:  [{cap_mean.min():.3f}, {cap_mean.max():.3f}]")
+            print(f"    Gain:      [{gain.min():.3f}, {gain.max():.3f}]")
+
+    # Noise floor from silence captures
+    noise_floors = []
+    for sig_key in ["silence_16k"]:
+        if sig_key not in captures:
+            continue
+        for port_name, frames in captures[sig_key].items():
+            cap_mel = get_audio_mels(frames)
+            if len(cap_mel) > 0:
+                nf = cap_mel.mean(axis=0)
+                noise_floors.append(nf)
+                print(f"\n  Noise floor ({port_name}):")
+                print(f"    Mean:  [{nf.min():.4f}, {nf.max():.4f}]")
+
+    # Aggregate across ports and signal types
+    if all_gains:
+        band_gain = np.median(np.array(all_gains), axis=0)
     else:
-        noise_floor = np.zeros(n_mels, dtype=np.float32)
+        print("WARNING: No gain data — using unity gain", file=sys.stderr)
+        band_gain = np.ones(N_MELS, dtype=np.float32)
+
+    if noise_floors:
+        noise_floor = np.median(np.array(noise_floors), axis=0)
+    else:
+        print("WARNING: No silence captures — using zero noise floor", file=sys.stderr)
+        noise_floor = np.zeros(N_MELS, dtype=np.float32)
 
     # Save profile
-    np.savez(output_path,
-             band_gain=band_gain,
-             noise_floor=noise_floor,
-             n_captures=len(capture_files))
+    np.savez(out_path,
+             band_gain=band_gain.astype(np.float32),
+             noise_floor=noise_floor.astype(np.float32))
 
-    print(f"\nMic profile saved to {output_path}")
-    print(f"  Band gain: mean={band_gain.mean():.4f}, "
-          f"min={band_gain.min():.4f}, max={band_gain.max():.4f}")
-    print(f"  Noise floor: mean={noise_floor.mean():.4f}, "
-          f"max={noise_floor.max():.4f}")
-    print(f"\nUse with prepare_dataset.py:")
-    print(f"  python scripts/prepare_dataset.py --config configs/default.yaml "
-          f"--mic-profile {output_path}")
+    print(f"\n=== Mic Profile: {out_path} ===")
+    print(f"{'Band':>6} {'Freq(Hz)':>10} {'Gain':>8} {'NoiseFlr':>10}")
+    mel_centers = _get_mel_center_freqs()
+    for i in range(N_MELS):
+        print(f"{i:>6d} {mel_centers[i]:>10.1f} {band_gain[i]:>8.3f} {noise_floor[i]:>10.4f}")
 
-
-def cmd_verify(args):
-    """Verify mic profile by applying to test audio and comparing stats."""
-    profile = np.load(args.profile)
-    band_gain = profile["band_gain"]
-    noise_floor = profile["noise_floor"]
-
-    print("Mic Profile:")
-    print(f"  Band gain range: [{band_gain.min():.4f}, {band_gain.max():.4f}]")
+    print(f"\n  Band gain range:   [{band_gain.min():.3f}, {band_gain.max():.3f}]")
     print(f"  Noise floor range: [{noise_floor.min():.4f}, {noise_floor.max():.4f}]")
-
-    if args.audio:
-        import librosa
-        import torch
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from scripts.prepare_dataset import (
-            _build_mel_filterbank, firmware_mel_spectrogram, load_config,
-        )
-
-        cfg = load_config(args.config)
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        mel_fb = _build_mel_filterbank(cfg, device)
-        window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
-
-        audio_np, _ = librosa.load(args.audio, sr=cfg["audio"]["sample_rate"], mono=True)
-        target_rms_db = cfg["audio"].get("target_rms_db", -35)
-        rms = np.sqrt(np.mean(audio_np ** 2) + 1e-10)
-        audio_np = audio_np * (10 ** (target_rms_db / 20) / rms)
-        audio_gpu = torch.from_numpy(audio_np).to(device)
-        mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
-
-        print(f"\nOriginal mel stats:")
-        print(f"  Mean: {mel.mean():.4f}, Std: {mel.std():.4f}")
-        print(f"  Range: [{mel.min():.4f}, {mel.max():.4f}]")
-
-        # Apply mic profile
-        mel_mic = apply_mic_profile(mel, band_gain, noise_floor)
-        print(f"\nAfter mic profile:")
-        print(f"  Mean: {mel_mic.mean():.4f}, Std: {mel_mic.std():.4f}")
-        print(f"  Range: [{mel_mic.min():.4f}, {mel_mic.max():.4f}]")
-
-        # Per-band comparison
-        print(f"\n{'Band':>6} {'Orig Mean':>10} {'Mic Mean':>10} {'Gain':>8}")
-        for b in range(mel.shape[1]):
-            print(f"{b:>6d} {mel[:, b].mean():>10.4f} {mel_mic[:, b].mean():>10.4f} "
-                  f"{band_gain[b]:>8.4f}")
-
-
-def apply_mic_profile(mel: np.ndarray, band_gain: np.ndarray,
-                      noise_floor: np.ndarray) -> np.ndarray:
-    """Apply mic transfer function to mel spectrogram.
-
-    Simulates the effect of the MEMS mic on clean audio mel bands:
-      1. Scale each band by the measured gain ratio
-      2. Add noise floor (mic self-noise)
-      3. Clip to [0, 1]
-
-    Args:
-        mel: (n_frames, n_mels) clean mel spectrogram
-        band_gain: (n_mels,) per-band gain ratio
-        noise_floor: (n_mels,) per-band noise floor
-
-    Returns:
-        (n_frames, n_mels) mic-simulated mel spectrogram
-    """
-    mel_mic = mel * band_gain[np.newaxis, :]
-    # Add noise floor (random per-frame variation around the mean)
-    if noise_floor.max() > 0:
-        noise = np.random.default_rng().normal(
-            loc=noise_floor, scale=noise_floor * 0.3,
-            size=mel.shape
-        ).astype(np.float32)
-        noise = np.maximum(noise, 0)
-        mel_mic = np.maximum(mel_mic, noise)
-    return np.clip(mel_mic, 0.0, 1.0)
+    print(f"\nUsage: python scripts/prepare_dataset.py --mic-profile {out_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Calibrate microphone transfer function for NN training",
-    )
+        description="Mic transfer function calibration for ML training")
     sub = parser.add_subparsers(dest="command")
 
-    # generate
-    gen = sub.add_parser("generate", help="Generate reference audio files")
-    gen.add_argument("--output-dir", default="data/calibration")
-    gen.add_argument("--sample-rate", type=int, default=16000)
+    # Generate reference signals
+    gen = sub.add_parser("generate", help="Create reference calibration audio")
+    gen.add_argument("--output-dir", default="data/calibration",
+                     help="Output directory for WAV files")
+    gen.add_argument("--duration", type=float, default=10.0,
+                     help="Duration of each signal in seconds")
 
-    # capture
-    cap = sub.add_parser("capture", help="Play audio + capture firmware mel bands")
+    # Single capture
+    cap = sub.add_parser("capture", help="Play audio + capture device mel bands")
     cap.add_argument("--port", required=True, help="Serial port (e.g., /dev/ttyACM0)")
-    cap.add_argument("--audio", required=True, help="Reference audio file to play")
-    cap.add_argument("--output", required=True, help="Output capture file (.json)")
-    cap.add_argument("--latency", type=float, default=0.1,
-                     help="Speaker latency compensation in seconds (default: 0.1)")
+    cap.add_argument("--audio", required=True, help="Audio file to play")
+    cap.add_argument("--output", "-o", required=True, help="Output .jsonl file")
+    cap.add_argument("--baud", type=int, default=115200, help="Baud rate")
+    cap.add_argument("--settle", type=float, default=SETTLE_SECONDS,
+                     help="AGC settle time in seconds")
 
-    # analyze
-    ana = sub.add_parser("analyze", help="Derive transfer function from captures")
-    ana.add_argument("--captures", required=True, help="Directory with *_capture.json files")
-    ana.add_argument("--output", default="data/calibration/mic_profile.npz")
-    ana.add_argument("--config", default="configs/default.yaml")
+    # Capture all signals on all ports
+    cap_all = sub.add_parser("capture-all",
+                             help="Capture all reference signals on all ports")
+    cap_all.add_argument("--ports", nargs="+", required=True,
+                         help="Serial ports (e.g., /dev/ttyACM0 /dev/ttyACM1)")
+    cap_all.add_argument("--audio-dir", default="data/calibration",
+                         help="Directory with reference WAV files")
+    cap_all.add_argument("--output-dir", default="data/calibration",
+                         help="Output directory for captures")
+    cap_all.add_argument("--music-dir", default=None,
+                         help="Optional: directory with music tracks to also capture")
+    cap_all.add_argument("--baud", type=int, default=115200, help="Baud rate")
+    cap_all.add_argument("--settle", type=float, default=SETTLE_SECONDS,
+                         help="AGC settle time per file")
 
-    # verify
-    ver = sub.add_parser("verify", help="Verify mic profile")
-    ver.add_argument("--profile", required=True, help="mic_profile.npz path")
-    ver.add_argument("--audio", default=None, help="Optional test audio file")
-    ver.add_argument("--config", default="configs/default.yaml")
+    # Analyze captures
+    ana = sub.add_parser("analyze", help="Derive mic profile from captures")
+    ana.add_argument("--captures", required=True,
+                     help="Directory with .jsonl captures and _reference.npy files")
+    ana.add_argument("--output", default="data/calibration/mic_profile.npz",
+                     help="Output mic profile (.npz)")
+    ana.add_argument("--config", default="configs/default.yaml",
+                     help="Training config (for reference)")
 
     args = parser.parse_args()
+
     if args.command == "generate":
-        cmd_generate(args)
+        generate(args.output_dir, args.duration)
     elif args.command == "capture":
-        cmd_capture(args)
+        capture(args.port, args.audio, args.output, args.baud, args.settle)
+    elif args.command == "capture-all":
+        capture_all(args.ports, args.audio_dir, args.output_dir,
+                    args.baud, args.settle, args.music_dir)
     elif args.command == "analyze":
-        cmd_analyze(args)
-    elif args.command == "verify":
-        cmd_verify(args)
+        analyze(args.captures, args.output, getattr(args, "config", None))
     else:
         parser.print_help()
 

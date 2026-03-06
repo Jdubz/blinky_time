@@ -117,6 +117,13 @@ public:
     bool isFrameReady() const { return frameReady_; }
 
     /**
+     * Monotonic frame counter — incremented each time process() produces a new frame.
+     * Use this instead of isFrameReady() when you need to detect new frames
+     * independently of the ensemble detector's resetFrameReady() call.
+     */
+    uint32_t getFrameCount() const { return frameCount_; }
+
+    /**
      * Check if enough samples are buffered for processing
      */
     bool hasSamples() const { return sampleCount_ >= SpectralConstants::FFT_SIZE; }
@@ -256,6 +263,7 @@ private:
     // State
     bool frameReady_;
     bool hasPrevFrame_;
+    uint32_t frameCount_;  // Monotonic counter for NN stream (survives resetFrameReady)
 
     // Helper methods
     void applyHammingWindow();
