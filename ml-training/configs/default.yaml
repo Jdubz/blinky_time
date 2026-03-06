@@ -11,6 +11,11 @@ audio:
   fmax: 8000                # MEL_MAX_FREQ
   frame_rate: 62.5          # 16000 / 256
   target_rms_db: -35        # Normalize audio RMS to simulate firmware AGC level
+  # AGC ceiling — must agree with firmware AdaptiveMic.h hwGainMaxSignal.
+  # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
+  # v56: lowered from 60 to 40 (conservative AGC preserves signal quality).
+  # prepare_dataset.py uses this to cap gain-aware noise augmentation.
+  hw_gain_max: 40           # Firmware default: 40 (AdaptiveMic.h v56)
 
 # Target label generation
 labels:
@@ -35,8 +40,8 @@ training:
   lr_schedule: "cosine"
   chunk_frames: 128         # ~2s chunks at 62.5 Hz
   chunk_stride: 64          # 50% overlap between chunks
-  pos_weight: 10.0          # BCE positive class weight for beat head (~10:1 neg:pos ratio)
-  downbeat_pos_weight: 40.0 # BCE positive class weight for downbeat head (~4x rarer than beats)
+  pos_weight: 4.7           # BCE positive class weight for beat head (measured 17.7% positive ratio)
+  downbeat_pos_weight: 10.5 # BCE positive class weight for downbeat head (measured 8.7% positive ratio)
   val_split: 0.15
   seed: 42
 

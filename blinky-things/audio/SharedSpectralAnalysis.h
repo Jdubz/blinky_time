@@ -84,6 +84,15 @@ public:
     float whitenFloor = 0.001f;    // Floor to avoid amplifying noise
     bool whitenBassBypass = false;  // Skip whitening for bass bins 1-6 (preserve kick contrast)
 
+    // Minimum statistics noise estimation + spectral subtraction (Martin 2001)
+    // Per-bin noise floor tracking with oversubtraction. Inserted after FFT,
+    // before preWhitenMagnitudes — benefits both BandFlux and NN paths.
+    bool noiseEstEnabled = true;
+    float noiseSmoothAlpha = 0.92f;    // Power smoothing (0.9-0.99, higher = slower)
+    float noiseReleaseFactor = 0.999f; // Noise floor release rate (0.99-0.9999, ~16s at 0.999)
+    float noiseOversubtract = 1.5f;    // Oversubtraction factor (1.0-3.0)
+    float noiseFloorRatio = 0.02f;     // Spectral floor as fraction of original (prevents zero-out)
+
     // Soft-knee compressor (Giannoulis/Massberg/Reiss, JAES 2012)
     bool compressorEnabled = true;
     float compThresholdDb = -30.0f;  // dB threshold
@@ -252,6 +261,10 @@ private:
     // Per-bin spectral whitening state (128 bins)
     float binRunningMax_[SpectralConstants::NUM_BINS];
 
+    // Noise estimation state (Martin 2001 minimum statistics, simplified)
+    float smoothedPower_[SpectralConstants::NUM_BINS];  // Smoothed power spectral density
+    float noiseFloorEst_[SpectralConstants::NUM_BINS];  // Estimated noise floor per bin
+
     // Compressor state
     float smoothedGainDb_;
     float frameRmsDb_;
@@ -269,6 +282,7 @@ private:
     void applyHammingWindow();
     void computeFFT();
     void computeMagnitudesAndPhases();
+    void estimateAndSubtractNoise();
     void applyCompressor();
     void whitenMagnitudes();
     void computeMelBands();

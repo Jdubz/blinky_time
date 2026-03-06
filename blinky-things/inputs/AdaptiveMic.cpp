@@ -276,10 +276,11 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
 
   int delta = direction * stepSize;
   int oldGain = currentHardwareGain;
-  // Use full gain range (0-80) in loud mode to handle extreme SPL
-  // Otherwise enforce headroom minimum (10-80) to preserve dynamic range
+  // Use full gain range in loud mode to handle extreme SPL
+  // Otherwise enforce headroom minimum to preserve dynamic range
   int effectiveMinGain = inLoudAgcMode_ ? HW_GAIN_MIN : hwGainMinHeadroom;
-  currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, HW_GAIN_MAX);
+  int effectiveMaxGain = (hwGainMaxSignal < HW_GAIN_MAX) ? hwGainMaxSignal : HW_GAIN_MAX;
+  currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, effectiveMaxGain);
 
   if (currentHardwareGain != oldGain) {
     pdm_.setGain(currentHardwareGain);

@@ -85,7 +85,7 @@ public:
     // Version 52: Joint forward filter fix (fwdObsFloor, fwdWrapFraction) + remove FT/IOI dead code
     // Version 53: Remove joint HMM dead code (hmmTempoNorm, hmmLambda, hmmBayesBias)
     // Version 54: Add nnBeatActivation (NN beat ODF toggle)
-    static const uint8_t SETTINGS_VERSION = 54;  // Settings schema (fire, water, lightning, mic, music, bandflux params)
+    static const uint8_t SETTINGS_VERSION = 56;  // v56: conservative AGC + spectral noise subtraction
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -181,6 +181,7 @@ public:
         float fastAgcTrackingTau; // Tracking tau in fast mode (seconds)
         uint16_t fastAgcPeriodMs; // Calibration period in fast mode (ms)
         bool fastAgcEnabled;      // Enable fast AGC when signal is low
+        uint8_t hwGainMaxSignal;  // Max HW gain for AGC (0-80)
     };
 
     struct StoredMusicParams {
@@ -349,6 +350,13 @@ public:
 
         // NN beat activation (v54)
         bool nnBeatActivation;          // Use NN ODF instead of BandFlux (requires ENABLE_NN_BEAT_ACTIVATION)
+
+        // Spectral noise estimation (v56)
+        bool noiseEstEnabled;           // Enable minimum statistics noise subtraction
+        float noiseSmoothAlpha;         // Power smoothing coefficient (0.9-0.99)
+        float noiseReleaseFactor;       // Noise floor release rate (0.99-0.9999)
+        float noiseOversubtract;        // Oversubtraction factor (1.0-3.0)
+        float noiseFloorRatio;          // Spectral floor as fraction of original (0.01-0.1)
     };
 
     struct StoredBandFluxParams {
@@ -467,17 +475,17 @@ public:
     static_assert(sizeof(StoredLightningParams) == 32,
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
-        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + padding)");
-    static_assert(sizeof(StoredMusicParams) == 360,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (360 bytes = 74 floats + 14 uint8 + 26 bools + padding)");
+        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
+    static_assert(sizeof(StoredMusicParams) == 380,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (380 bytes = 78 floats + 14 uint8 + 27 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     // ConfigData: allocated in last 4KB flash page (4096 bytes available).
     // Tight bound catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 768,
-        "ConfigData exceeds 768 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes.");
+    static_assert(sizeof(ConfigData) <= 800,
+        "ConfigData exceeds 800 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes.");
 
     ConfigStorage();
     void begin();

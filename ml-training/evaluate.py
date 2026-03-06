@@ -150,7 +150,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         if has_downbeat:
             ref_downbeats = np.array([
                 h["time"] for h in labels["hits"]
-                if h.get("expectTrigger", True) and h.get("strength", 0.7) > 0.9
+                if h.get("expectTrigger", True) and h.get("isDownbeat", False)
             ])
             est_downbeats = _peak_pick(db_activations, threshold, frame_rate)
             if len(ref_downbeats) > 0 and len(est_downbeats) > 0:
@@ -237,6 +237,93 @@ def _plot_activation(activations: np.ndarray, ref_beats: np.ndarray,
     plt.close(fig)
 
 
+def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
+                     output_dir: Path, device: torch.device = None):
+    """Sweep detection thresholds and report best F1."""
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    sr = cfg["audio"]["sample_rate"]
+    frame_rate = cfg["audio"]["frame_rate"]
+    chunk_frames = cfg["training"]["chunk_frames"]
+
+    model, has_downbeat = _load_model(model_path, cfg, device)
+    mel_fb = _build_mel_filterbank(cfg, device)
+    window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
+
+    thresholds = np.arange(0.1, 0.95, 0.05)
+
+    # Collect activations + ref beats for all tracks
+    tracks = []
+    for audio_path in sorted(f for f in audio_dir.rglob("*")
+                              if f.suffix.lower() in {".mp3", ".wav", ".flac"}):
+        label_path = audio_path.parent / f"{audio_path.stem}.beats.json"
+        if not label_path.exists():
+            continue
+
+        audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
+        target_rms_db = cfg["audio"].get("target_rms_db", -35)
+        rms = np.sqrt(np.mean(audio_np ** 2) + 1e-10)
+        audio_np = audio_np * (10 ** (target_rms_db / 20) / rms)
+        audio_gpu = torch.from_numpy(audio_np).to(device)
+        mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
+
+        n_frames = mel.shape[0]
+        activations = np.zeros(n_frames, dtype=np.float32)
+        counts = np.zeros(n_frames, dtype=np.float32)
+        stride = chunk_frames // 2
+        mel_tensor = torch.from_numpy(mel).float().to(device)
+
+        with torch.no_grad():
+            for start in range(0, max(1, n_frames - chunk_frames + 1), stride):
+                end = start + chunk_frames
+                if end > n_frames:
+                    chunk = torch.zeros(chunk_frames, mel.shape[1],
+                                        device=device, dtype=torch.float32)
+                    chunk[:n_frames - start] = mel_tensor[start:n_frames]
+                else:
+                    chunk = mel_tensor[start:end]
+                pred = model(chunk.unsqueeze(0))[0]
+                actual_len = min(chunk_frames, n_frames - start)
+                activations[start:start + actual_len] += pred[:actual_len, 0].cpu().numpy()
+                counts[start:start + actual_len] += 1
+
+        activations /= np.maximum(counts, 1)
+
+        with open(label_path) as f:
+            labels = json.load(f)
+        ref_beats = np.array([h["time"] for h in labels["hits"]
+                              if h.get("expectTrigger", True)])
+        tracks.append((audio_path.stem, activations, ref_beats))
+
+    # Sweep thresholds
+    print(f"\n{'Thresh':>8} {'Mean F1':>8} {'Median':>8} {'Min':>8} {'Max':>8} {'Est/Ref':>8}")
+    best_t, best_f1 = 0.5, 0.0
+    for thresh in thresholds:
+        f1s = []
+        ratios = []
+        for name, act, ref in tracks:
+            est = _peak_pick(act, thresh, frame_rate)
+            if len(ref) > 0 and len(est) > 0:
+                f1 = mir_eval.beat.f_measure(ref, est, f_measure_threshold=0.07)
+            else:
+                f1 = 0.0
+            f1s.append(f1)
+            ratios.append(len(est) / max(len(ref), 1))
+        mean_f1 = np.mean(f1s)
+        print(f"{thresh:>8.2f} {mean_f1:>8.3f} {np.median(f1s):>8.3f} "
+              f"{np.min(f1s):>8.3f} {np.max(f1s):>8.3f} {np.mean(ratios):>7.2f}x")
+        if mean_f1 > best_f1:
+            best_f1 = mean_f1
+            best_t = thresh
+
+    print(f"\nBest threshold: {best_t:.2f} (F1={best_f1:.3f})")
+
+    # Run full eval at best threshold
+    print(f"\n--- Full evaluation at threshold={best_t:.2f} ---")
+    evaluate_on_tracks(model_path, audio_dir, cfg, output_dir, best_t, device)
+
+
 def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
                             device: torch.device = None):
     """Evaluate on the processed validation set (frame-level metrics)."""
@@ -291,7 +378,10 @@ def main():
     parser.add_argument("--model", default="outputs/best_model.pt")
     parser.add_argument("--audio-dir", default=None, help="Evaluate on full tracks")
     parser.add_argument("--output-dir", default="outputs/eval")
-    parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threshold", type=float, default=0.5,
+                        help="Peak-pick threshold (or 0 to sweep 0.1-0.9)")
+    parser.add_argument("--sweep-thresholds", action="store_true",
+                        help="Sweep thresholds 0.1-0.9 and report best")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     args = parser.parse_args()
 
@@ -306,8 +396,11 @@ def main():
     print(f"Using device: {device}")
 
     if args.audio_dir:
-        evaluate_on_tracks(args.model, Path(args.audio_dir), cfg, output_dir,
-                           args.threshold, device)
+        if args.sweep_thresholds:
+            sweep_thresholds(args.model, Path(args.audio_dir), cfg, output_dir, device)
+        else:
+            evaluate_on_tracks(args.model, Path(args.audio_dir), cfg, output_dir,
+                               args.threshold, device)
     else:
         evaluate_validation_set(args.model, cfg, output_dir, device)
 

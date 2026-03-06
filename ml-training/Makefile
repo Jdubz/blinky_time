@@ -24,9 +24,9 @@ AUDIO_DIR     := $(STORAGE)/audio/combined
 LABELS_MULTI  := $(STORAGE)/labels/multi
 LABELS_CONSENSUS := $(STORAGE)/labels/consensus
 PROCESSED_DIR := data/processed
-OUTPUT_DIR    := outputs/full-v1
+OUTPUT_DIR    := $(STORAGE)/outputs/consensus-4sys-v2
 RIR_DIR       := $(STORAGE)/rir/processed
-CAL_DIR       := data/calibration
+CAL_DIR       := $(STORAGE)/calibration
 CONFIG        := configs/default.yaml
 TEST_AUDIO    := ../blinky-test-player/music/edm
 

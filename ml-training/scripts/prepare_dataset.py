@@ -499,11 +499,19 @@ def main():
         print(f"Mic profile loaded: {profile_path}")
         print(f"  Band gain range: [{mic_profile['band_gain'].min():.3f}, {mic_profile['band_gain'].max():.3f}]")
         print(f"  Noise floor range: [{mic_profile['noise_floor'].min():.4f}, {mic_profile['noise_floor'].max():.4f}]")
+        # Override recommended gain max with config hw_gain_max if set
+        # This must agree with firmware AdaptiveMic.h hwGainMaxSignal
+        hw_gain_max = cfg.get("audio", {}).get("hw_gain_max")
+        if hw_gain_max is not None and "noise_floor_by_gain" in mic_profile:
+            mic_profile["recommended_gain_max"] = int(hw_gain_max)
+            if "recommended_gain_min" not in mic_profile:
+                mic_profile["recommended_gain_min"] = 0
         if "noise_floor_by_gain" in mic_profile:
             g = mic_profile["hw_gain_levels"]
             print(f"  Gain-aware: {len(g)} levels ({g[0]}-{g[-1]})")
             if "recommended_gain_min" in mic_profile:
-                print(f"  Recommended AGC: [{mic_profile['recommended_gain_min']} - {mic_profile['recommended_gain_max']}]")
+                print(f"  AGC range: [{mic_profile['recommended_gain_min']} - {mic_profile['recommended_gain_max']}]"
+                      f"{' (from config hw_gain_max)' if hw_gain_max is not None else ''}")
 
     # Precompute mel filterbank and window on device (reused for every file)
     mel_fb = _build_mel_filterbank(cfg, device)
