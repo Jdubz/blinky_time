@@ -1735,7 +1735,7 @@ void SerialConsole::streamTick() {
             Serial.print(F(",\"nn\":0"));
 #endif
             Serial.print(F(",\"bpm\":"));
-            Serial.print(audioCtrl_->getControl().bpm, 1);
+            Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"phase\":"));
             Serial.print(audioCtrl_->getControl().phase, 4);
             Serial.print(F(",\"rstr\":"));
