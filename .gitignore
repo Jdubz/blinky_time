@@ -158,3 +158,6 @@ blinky-test-player/music/*.tar.gz
 
 # Playwright MCP workspace scratch files
 .playwright-mcp/
+
+# TFLite binary copies (canonical version in ml-training outputs, .h is tracked)
+blinky-things/audio/beat_model.tflite

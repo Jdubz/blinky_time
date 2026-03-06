@@ -31,6 +31,12 @@
 
 #include "beat_model_data.h"
 
+// Fail at compile time if NN is enabled but model data is the placeholder stub.
+// A real model exported by export_tflite.py is ~20 KB; the placeholder is 4 bytes.
+static_assert(beat_model_data_len > 100,
+    "ENABLE_NN_BEAT_ACTIVATION requires a trained model. "
+    "Run: python ml-training/scripts/export_tflite.py");
+
 class BeatActivationNN {
 public:
     static constexpr int INPUT_MEL_BANDS = 26;
