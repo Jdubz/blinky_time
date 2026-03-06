@@ -3,6 +3,11 @@ data/audio/
 data/labels/
 data/processed/
 
+# Calibration captures and generated audio (large, reproducible)
+data/calibration/*.jsonl
+data/calibration/*.wav
+data/calibration/*.npy
+
 # Training outputs
 outputs/
 
