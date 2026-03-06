@@ -507,6 +507,7 @@ def main():
     chunk_frames = cfg["training"]["chunk_frames"]
     chunk_stride = cfg["training"]["chunk_stride"]
     n_mels = cfg["audio"]["n_mels"]
+    use_downbeat = cfg["model"].get("downbeat", False)
     SHARD_BATCH = 500  # files per shard (limits RAM to ~3 GB)
 
     for split_name, split_pairs in [("train", train_pairs), ("val", val_pairs)]:
@@ -529,7 +530,9 @@ def main():
                     )
                     batch_X.append(mel_chunks)
                     batch_Y.append(target_chunks)
-                    if db_chunks is not None:
+                    if use_downbeat:
+                        assert db_chunks is not None, \
+                            f"downbeat=true but no downbeat_target for {audio_path.name}"
                         batch_D.append(db_chunks)
                     total_variants += 1
             except Exception as e:
