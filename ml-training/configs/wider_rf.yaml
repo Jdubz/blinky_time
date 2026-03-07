@@ -1,6 +1,6 @@
 # Beat Activation CNN — Wider receptive field variant
 # 5-layer dilated CNN: RF = 63 frames = 1008ms (covers one full beat at 60 BPM)
-# ~15 KB INT8, fits 25 KB budget with room to spare
+# ~33 KB INT8 (nRF52840 has ~700 KB flash free)
 
 # Audio feature extraction (must match firmware exactly)
 audio:
@@ -53,7 +53,7 @@ export:
   output_header: "../blinky-things/audio/beat_model_data.h"
   c_array_name: "beat_model_data"
 
-# Data paths
+# Data paths (local training machine — override with CLI args as needed)
 data:
   audio_dir: "/mnt/storage/blinky-ml-data/audio"
   labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus"
