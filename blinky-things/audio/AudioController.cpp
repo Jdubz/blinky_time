@@ -451,6 +451,10 @@ const AudioControl& AudioController::update(float dt) {
             cbssInput = powf(cbssInput, cbssContrast);
         }
         updateCBSS(cbssInput);
+        // Hybrid phase: run phase tracker alongside CBSS for smoother phase (v58)
+        if (fwdPhaseOnly && tempoStateInitialized_) {
+            updatePhaseTracker(onsetStrength);
+        }
         // Precedence: multi-agent > default CBSS
         if (multiAgentEnabled) {
             detectBeatMultiAgent();
@@ -3048,14 +3052,26 @@ void AudioController::detectBeat() {
         cbssConfidence_ *= beatConfidenceDecay;
     }
 
-    // Derive phase deterministically
+    // Derive phase
     int T = beatPeriodSamples_;
     if (T < 10) T = 10;
-    float newPhase = static_cast<float>(sampleCounter_ - lastBeatSample_) / static_cast<float>(T);
-    newPhase = fmodf(newPhase, 1.0f);
-    if (newPhase < 0.0f) newPhase += 1.0f;
-    if (!isfinite(newPhase)) newPhase = 0.0f;
-    phase_ = newPhase;
+    if (fwdPhaseOnly && phasePeriod_ > 0) {
+        // Hybrid mode (v58): use phase tracker's observation-based position
+        float newPhase = static_cast<float>(hmmBestPosition_) / static_cast<float>(phasePeriod_);
+        newPhase = clampf(newPhase, 0.0f, 0.999f);
+        if (!isfinite(newPhase)) newPhase = 0.0f;
+        phase_ = newPhase;
+        // Update timeToNextBeat_ from phase tracker position
+        int remaining = phasePeriod_ - hmmBestPosition_;
+        timeToNextBeat_ = (remaining > 0) ? remaining : 0;
+    } else {
+        // Default: deterministic counter-based phase
+        float newPhase = static_cast<float>(sampleCounter_ - lastBeatSample_) / static_cast<float>(T);
+        newPhase = fmodf(newPhase, 1.0f);
+        if (newPhase < 0.0f) newPhase += 1.0f;
+        if (!isfinite(newPhase)) newPhase = 0.0f;
+        phase_ = newPhase;
+    }
 
     predictNextBeat(nowMs);
 }

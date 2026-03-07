@@ -25,7 +25,7 @@ audio:
   # Applied to FFT magnitudes before mel projection. Mirrors firmware
   # SharedSpectralAnalysis::estimateAndSubtractNoise().
   noise_subtraction:
-    enabled: true             # ON for training — matches firmware inference path
+    enabled: false            # OFF — firmware default is noiseest=0 (A/B tested: hurts BPM accuracy)
     smooth_alpha: 0.92        # Power smoothing EMA (firmware: noiseSmoothAlpha)
     release_factor: 0.999     # Noise floor release rate (firmware: noiseReleaseFactor)
     oversubtract: 1.5         # Oversubtraction factor (firmware: noiseOversubtract)

@@ -322,6 +322,8 @@ void SerialConsole::registerRhythmSettings() {
         "Forward filter observation probability floor (v57)", 0.001f, 0.1f);
     settings_.registerBool("hmm", &audioCtrl_->barPointerHmm, "rhythm",
         "Phase tracker beat detection (v34, A/B vs CBSS)");
+    settings_.registerBool("fwdphase", &audioCtrl_->fwdPhaseOnly, "rhythm",
+        "Hybrid: phase tracker for phase, CBSS for beats (v58)");
     settings_.registerFloat("hmmcontrast", &audioCtrl_->hmmContrast, "rhythm",
         "Phase tracker ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
     // (hmmtemponorm, hmmlambda, hmmbayesbias removed v53 — joint HMM dead code)
@@ -1318,6 +1320,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->fwdFilterContrast = 2.0f;     // v57: squared ODF contrast
         audioCtrl_->fwdFilterLambda = 8.0f;       // v57: beat zone = 12.5% of period
         audioCtrl_->fwdFilterFloor = 0.01f;       // v57: observation probability floor
+        audioCtrl_->fwdPhaseOnly = false;         // v58: hybrid phase tracker (OFF by default, A/B)
         audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
         audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
         audioCtrl_->barPointerHmm = false;        // v34: phase tracker (disabled by default, A/B)

@@ -338,7 +338,7 @@ public:
     // Requires ENABLE_NN_BEAT_ACTIVATION compile flag and valid model in beat_model_data.h.
     // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
     // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
-    bool nnBeatActivation = false;       // Use NN beat activation as ODF (A/B vs BandFlux)
+    bool nnBeatActivation = true;        // Use NN beat activation as ODF (A/B tested, 11/18 wins)
 
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
@@ -427,6 +427,7 @@ public:
     // Joint HMM (updateHmmForward) removed v53 — position-wrap doesn't work
     // across 20 tempo bins (argmax jumps between bins).
     bool barPointerHmm = false;          // Enable phase tracker beat detection (A/B vs CBSS)
+    bool fwdPhaseOnly = false;           // Hybrid: phase tracker for phase, CBSS for beats (v58)
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
     // (hmmTempoNorm removed v53 — only used by dead joint HMM updateHmmForward)
     // (hmmLambda removed v53 — only used by dead joint HMM buildHmmTransitionMatrix)

@@ -286,7 +286,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
     data_.music.subbeatBins = 8;              // Subbeat bin count
     data_.music.templateHistBars = 2;         // Template history depth in bars
-    data_.music.nnBeatActivation = false;    // NN beat activation (v54: off by default, A/B vs BandFlux)
+    data_.music.nnBeatActivation = true;     // NN beat activation (v58: on by default, A/B tested 11/18 wins)
 
     // Joint forward filter defaults (v57)
     data_.music.forwardFilterEnabled = false;  // OFF by default, A/B vs CBSS+Bayesian
@@ -294,6 +294,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.fwdFilterContrast = 2.0f;      // Squared ODF for sharper discrimination
     data_.music.fwdFilterLambda = 8.0f;        // Beat zone = 12.5% of period
     data_.music.fwdFilterFloor = 0.01f;        // Observation probability floor
+
+    // Hybrid phase tracker (v58)
+    data_.music.fwdPhaseOnly = false;           // OFF by default, A/B vs counter-based phase
 
     // Spectral noise estimation defaults (v56)
     data_.music.noiseEstEnabled = false;  // Default OFF until A/B validated
@@ -994,6 +997,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->fwdFilterContrast = data_.music.fwdFilterContrast;
         audioCtrl->fwdFilterLambda = data_.music.fwdFilterLambda;
         audioCtrl->fwdFilterFloor = data_.music.fwdFilterFloor;
+        audioCtrl->fwdPhaseOnly = data_.music.fwdPhaseOnly;
 
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
@@ -1280,6 +1284,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.fwdFilterContrast = audioCtrl->fwdFilterContrast;
         data_.music.fwdFilterLambda = audioCtrl->fwdFilterLambda;
         data_.music.fwdFilterFloor = audioCtrl->fwdFilterFloor;
+        data_.music.fwdPhaseOnly = audioCtrl->fwdPhaseOnly;
 
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;

@@ -88,7 +88,7 @@ public:
     // Version 55: Conservative AGC (hwGainMaxSignal 60→40, hwTarget 0.35→0.20, tracking tau 30→60s)
     // Version 56: Spectral noise estimation (noiseEst*, 5 new params) — same commit as v55
     // Version 57: Joint tempo-phase forward filter (forwardFilter*, 5 new params)
-    static const uint8_t SETTINGS_VERSION = 57; // v57: forward filter (Krebs/Böck 2015)
+    static const uint8_t SETTINGS_VERSION = 58; // v58: hybrid phase tracker, nnbeat default ON
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -367,6 +367,9 @@ public:
         float fwdFilterContrast;        // ODF power-law contrast (1-8)
         float fwdFilterLambda;          // Beat zone = 1/lambda of period (4-32)
         float fwdFilterFloor;           // Observation probability floor (0.001-0.1)
+
+        // Hybrid phase tracker (v58)
+        bool fwdPhaseOnly;             // Phase tracker for phase, CBSS for beats
     };
 
     struct StoredBandFluxParams {
@@ -487,7 +490,7 @@ public:
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
     static_assert(sizeof(StoredMusicParams) == 396,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (396 bytes = 82 floats + 14 uint8 + 28 bools + padding)");
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (396 bytes = 82 floats + 14 uint8 + 29 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
