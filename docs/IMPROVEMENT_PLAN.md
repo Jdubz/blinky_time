@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 6, 2026 (v57: joint forward filter + spectral noise subtraction in training pipeline)*
+*Last Updated: March 6, 2026 (v57+NN: A/B tests for NN beat, noise subtraction, forward filter)*
 
 ## Current Status
 
@@ -44,7 +44,7 @@ Gain sweep completed on all 3 devices (ACM0, ACM1, ACM2) with pink noise referen
 
 **Key finding: Speaker volume has negligible effect on discriminability.** AUC is nearly identical at 25% vs 100% volume because the AGC compensates. The noise floor at a given gain is the dominant factor, not signal amplitude. This means the AGC ceiling is the critical parameter — once gain is capped, the noise floor is bounded regardless of source loudness.
 
-### In Progress: Signal Chain Treatment (v56, March 6, 2026)
+### Completed: Signal Chain Treatment (v56, March 6, 2026)
 
 Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees hardware gain — software AGC, compressor, and whitening are all bypassed. Higher gain adds more noise than signal above gain 30-40, degrading ODF discriminability by 12-20%.
 
@@ -76,12 +76,26 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 - Kates 2008: Hearing aid AGC (slow-acting >30s preserves dynamics)
 - Böck & Widmer 2013: Spectral flux onset detection with adaptive whitening (complementary to subtraction)
 
-**Outstanding:**
-- Validate on hardware: A/B test v56 vs v55 with gain sweep to measure ODF SNR improvement
-- ~~Implement spectral subtraction in training pipeline (`prepare_dataset.py`)~~ **DONE** — `scripts/audio.py` + `configs/base.yaml`
-- Re-prepare dataset and train v5 with subtracted spectra (after v4 completes + firmware validation)
+**Hardware A/B Test: Spectral Noise Subtraction (March 6, 2026):**
 
-### In Progress: Neural Network Beat Activation (v54, March 5, 2026)
+18-track EDM sweep on ACM0 (25s per track × 2 configs, seeking to middle of track):
+
+| Metric | Baseline (noiseest OFF) | Noise Estimation ON |
+|--------|:---:|:---:|
+| Track wins | **13** | 5 |
+| Mean BPM error | **15.4** | 17.1 |
+| Octave errors | **4/18** | 7/18 |
+
+**Finding: Noise estimation HURTS.** Higher BPM std on most tracks (instability), +3 octave errors, baseline wins 13/18. The minimum statistics estimator subtracts useful spectral content in the speaker-to-mic path, not just noise. Notable regressions: techno-minimal-01 (17.2 vs 6.1 err), trance-party (12.6 vs 3.8), edm-trap-electro (12.3 vs 4.7).
+
+**Decision: Keep `noiseest=0` as default.** The conservative AGC ceiling (part 1) is the effective noise treatment. Spectral subtraction may help in noisier environments (outdoors, crowds) but hurts in controlled speaker-to-mic testing.
+
+**Outstanding:**
+- ~~Validate on hardware: A/B test~~ **DONE** — noise estimation regresses BPM accuracy
+- ~~Implement spectral subtraction in training pipeline~~ **DONE** — `scripts/audio.py` + `configs/base.yaml`
+- Training pipeline: consider disabling noise subtraction in feature extraction since firmware default is OFF
+
+### Completed: Neural Network Beat Activation (v54, March 5-6, 2026)
 
 Training a small causal CNN to replace BandFlux ODF with a learned beat activation. See [ML_TRAINING_PLAN.md](ML_TRAINING_PLAN.md) for full details.
 
@@ -92,7 +106,7 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 - Acoustic environment augmentation (volume, noise, reverb, bass boost, RIR convolution)
 - Spectral conditioning augmentation (static compressor + whitening approximation)
 - Firmware integration: `BeatActivationNN.h` (multi-output TFLite Micro), `SharedSpectralAnalysis::getRawMelBands()`, `AudioControl.downbeat`, `AudioController` NN path
-- Compiles on nRF52840: NN build 312 KB flash / 22 KB RAM, non-NN 301 KB / 22 KB
+- Compiles on nRF52840: NN build 426 KB flash (52%) / 22 KB RAM (9%), non-NN 301 KB / 22 KB
 - Labeling tool research: Beat This! (primary, SOTA), essentia (cross-validation), BeatNet (needs Python 3.11)
 - Determinism verified: Beat This!, librosa, and essentia all produce bit-identical results across runs
 - Cross-tool comparison on 18 EDM tracks: 94% BPM agreement, BT-essentia F1=0.948
@@ -141,9 +155,27 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 - Model exported to `beat_model_data.h` (33.3 KB INT8, hash 28b2dfd5)
 - ~5 min/epoch on RTX 3080. Output: `/mnt/storage/blinky-ml-data/outputs/v4-wider-ch32-augmented/`
 
+**Hardware A/B Test: NN Beat ODF vs BandFlux (March 6, 2026):**
+
+v4 model deployed to all 3 devices (v57+NN firmware, `ENABLE_NN_BEAT_ACTIVATION`). TFLite library fix: `precompiled=full` → `precompiled=false` + cache clear. 426 KB flash (52%), 22 KB RAM (9%).
+
+18-track EDM sweep on ACM0 (25s per track × 2 configs, seeking to middle of track):
+
+| Metric | BandFlux (Baseline) | NN Beat |
+|--------|:---:|:---:|
+| Track wins | 6 | **11** |
+| Ties | 1 | 1 |
+| Mean BPM error | 15.6 | **14.8** |
+| Octave errors | 4/18 | 5/18 |
+
+**Best NN improvements:** techno-minimal-01 (0.6 vs 7.5 err), garage-uk-2step (3.3 vs 8.2), amapiano-vibez (18.2 vs 23.2).
+
+**Finding: Modest but consistent improvement.** NN ODF wins 11/18 tracks with -0.8 lower mean error. Not transformative — both systems are dominated by the ~135-138 BPM gravity well in the Bayesian tempo estimator. The NN's advantage is in tracks where BandFlux locks to the wrong tempo region. Octave error rate is comparable (4 vs 5).
+
 **Outstanding:**
-- Deploy v4 model to devices → A/B test nnbeat vs BandFlux on hardware
+- Consider enabling `nnbeat=1` as default (11/18 wins justifies it)
 - Consider focal loss variant if v4 activations are too soft (hedging around 0.5)
+- ~~Deploy v4 model to devices → A/B test~~ **DONE**
 - ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 40 validated.
 
 ### Completed (March 4, 2026)

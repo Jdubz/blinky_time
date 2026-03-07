@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * Batch A/B test: CBSS baseline vs forward filter across all EDM tracks.
- * Plays each track twice (fwdfilter OFF then ON), records BPM accuracy.
+ * Batch A/B test: BandFlux ODF (baseline) vs NN Beat ODF across all EDM tracks.
+ * Plays each track twice (nnbeat OFF then ON), records BPM accuracy.
  *
- * Usage: node ab_test_fwdfilter.cjs --port /dev/ttyACM0 --music-dir music/edm
+ * Usage: node ab_test_nnbeat.cjs --port /dev/ttyACM0 --music-dir music/edm
  */
 
 const { SerialPort } = require('serialport');
@@ -29,6 +29,7 @@ function getTrackDuration(trackPath) {
 function getSeekPosition(trackPath, playDurationSec) {
   const dur = getTrackDuration(trackPath);
   if (dur <= 0) return 0;
+  // Seek to center of track minus half of play duration
   const center = dur / 2;
   const seekTo = Math.max(0, center - playDurationSec / 2);
   return seekTo;
@@ -121,7 +122,7 @@ async function main() {
     .map(f => path.join(musicDir, f))
     .sort();
 
-  console.log(`=== Batch BPM A/B Test: CBSS baseline vs Forward Filter ===`);
+  console.log(`=== Batch BPM A/B Test: BandFlux ODF vs NN Beat ODF ===`);
   console.log(`Port: ${portPath}, Tracks: ${tracks.length}, Duration: ${durationMs}ms\n`);
 
   const results = [];
@@ -133,24 +134,24 @@ async function main() {
     const seekSec = getSeekPosition(track, durationMs / 1000);
     console.log(`[${i + 1}/${tracks.length}] ${name} (true: ${trueBpm ? trueBpm.toFixed(0) : '?'} BPM, seek: ${seekSec.toFixed(0)}s)`);
 
-    // Test 1: baseline (fwdfilter OFF — uses CBSS + Bayesian)
-    await setSetting(port, 'fwdfilter', 0);
+    // Test 1: baseline (nnbeat OFF — uses BandFlux ODF)
+    await setSetting(port, 'nnbeat', 0);
     await sleep(1500);
     const baseReadings = await collectBpm(port, track, durationMs, seekSec);
     const baseResult = analyzeBpm(baseReadings);
     const baseErr = classifyError(baseResult.mean, trueBpm);
     await sleep(2000);
 
-    // Test 2: forward filter ON
-    await setSetting(port, 'fwdfilter', 1);
+    // Test 2: NN beat ODF ON
+    await setSetting(port, 'nnbeat', 1);
     await sleep(1500);
-    const fwdReadings = await collectBpm(port, track, durationMs, seekSec);
-    const fwdResult = analyzeBpm(fwdReadings);
-    const fwdErr = classifyError(fwdResult.mean, trueBpm);
+    const nnReadings = await collectBpm(port, track, durationMs, seekSec);
+    const nnResult = analyzeBpm(nnReadings);
+    const nnErr = classifyError(nnResult.mean, trueBpm);
     await sleep(2000);
 
     // Reset to baseline
-    await setSetting(port, 'fwdfilter', 0);
+    await setSetting(port, 'nnbeat', 0);
 
     const row = {
       track: name,
@@ -159,64 +160,64 @@ async function main() {
       baseStd: baseResult.std.toFixed(1),
       baseErr: baseErr.error !== null ? baseErr.error.toFixed(1) : '?',
       baseOctave: baseErr.octave ? 'YES' : 'no',
-      fwdBpm: fwdResult.mean.toFixed(1),
-      fwdStd: fwdResult.std.toFixed(1),
-      fwdErr: fwdErr.error !== null ? fwdErr.error.toFixed(1) : '?',
-      fwdOctave: fwdErr.octave ? 'YES' : 'no',
+      nnBpm: nnResult.mean.toFixed(1),
+      nnStd: nnResult.std.toFixed(1),
+      nnErr: nnErr.error !== null ? nnErr.error.toFixed(1) : '?',
+      nnOctave: nnErr.octave ? 'YES' : 'no',
     };
     results.push(row);
 
-    const winner = (fwdErr.error !== null && baseErr.error !== null)
-      ? (fwdErr.error < baseErr.error ? 'FWD' : (fwdErr.error > baseErr.error ? 'BASE' : 'TIE'))
+    const winner = (nnErr.error !== null && baseErr.error !== null)
+      ? (nnErr.error < baseErr.error ? 'NN' : (nnErr.error > baseErr.error ? 'BASE' : 'TIE'))
       : '?';
-    console.log(`  Base: ${row.baseBpm} ±${row.baseStd} (err ${row.baseErr}, oct: ${row.baseOctave})`);
-    console.log(`  Fwd:  ${row.fwdBpm} ±${row.fwdStd} (err ${row.fwdErr}, oct: ${row.fwdOctave}) → ${winner}`);
+    console.log(`  Base: ${row.baseBpm} +/-${row.baseStd} (err ${row.baseErr}, oct: ${row.baseOctave})`);
+    console.log(`  NN:   ${row.nnBpm} +/-${row.nnStd} (err ${row.nnErr}, oct: ${row.nnOctave}) -> ${winner}`);
   }
 
   // Summary table
   console.log('\n' + '='.repeat(115));
-  console.log('SUMMARY: CBSS Baseline vs Forward Filter');
+  console.log('SUMMARY: BandFlux ODF (Baseline) vs NN Beat ODF');
   console.log('='.repeat(115));
   const h = 'Track'.padEnd(30) + 'True'.padEnd(7) + 'Base BPM'.padEnd(12) + 'Err'.padEnd(8) + 'Oct'.padEnd(5)
-    + 'Fwd BPM'.padEnd(12) + 'Err'.padEnd(8) + 'Oct'.padEnd(5) + 'Winner';
+    + 'NN BPM'.padEnd(12) + 'Err'.padEnd(8) + 'Oct'.padEnd(5) + 'Winner';
   console.log(h);
   console.log('-'.repeat(115));
 
-  let baseWins = 0, fwdWins = 0, ties = 0;
-  let baseOctaveErrors = 0, fwdOctaveErrors = 0;
-  let baseTotalErr = 0, fwdTotalErr = 0, counted = 0;
+  let baseWins = 0, nnWins = 0, ties = 0;
+  let baseOctaveErrors = 0, nnOctaveErrors = 0;
+  let baseTotalErr = 0, nnTotalErr = 0, counted = 0;
 
   for (const r of results) {
-    const winner = (r.fwdErr !== '?' && r.baseErr !== '?')
-      ? (parseFloat(r.fwdErr) < parseFloat(r.baseErr) ? 'FWD' : (parseFloat(r.fwdErr) > parseFloat(r.baseErr) ? 'BASE' : 'TIE'))
+    const winner = (r.nnErr !== '?' && r.baseErr !== '?')
+      ? (parseFloat(r.nnErr) < parseFloat(r.baseErr) ? 'NN' : (parseFloat(r.nnErr) > parseFloat(r.baseErr) ? 'BASE' : 'TIE'))
       : '?';
     if (winner === 'BASE') baseWins++;
-    else if (winner === 'FWD') fwdWins++;
+    else if (winner === 'NN') nnWins++;
     else if (winner === 'TIE') ties++;
     if (r.baseOctave === 'YES') baseOctaveErrors++;
-    if (r.fwdOctave === 'YES') fwdOctaveErrors++;
-    if (r.baseErr !== '?' && r.fwdErr !== '?') {
+    if (r.nnOctave === 'YES') nnOctaveErrors++;
+    if (r.baseErr !== '?' && r.nnErr !== '?') {
       baseTotalErr += parseFloat(r.baseErr);
-      fwdTotalErr += parseFloat(r.fwdErr);
+      nnTotalErr += parseFloat(r.nnErr);
       counted++;
     }
     console.log(
       r.track.padEnd(30) + r.trueBpm.padEnd(7) +
-      (`${r.baseBpm}±${r.baseStd}`).padEnd(12) + r.baseErr.padEnd(8) + r.baseOctave.padEnd(5) +
-      (`${r.fwdBpm}±${r.fwdStd}`).padEnd(12) + r.fwdErr.padEnd(8) + r.fwdOctave.padEnd(5) +
+      (`${r.baseBpm}+/-${r.baseStd}`).padEnd(12) + r.baseErr.padEnd(8) + r.baseOctave.padEnd(5) +
+      (`${r.nnBpm}+/-${r.nnStd}`).padEnd(12) + r.nnErr.padEnd(8) + r.nnOctave.padEnd(5) +
       winner
     );
   }
 
   console.log('-'.repeat(115));
-  console.log(`Wins: Baseline=${baseWins}, ForwardFilter=${fwdWins}, Ties=${ties}`);
-  console.log(`Octave errors: Baseline=${baseOctaveErrors}, ForwardFilter=${fwdOctaveErrors}`);
+  console.log(`Wins: Baseline=${baseWins}, NNBeat=${nnWins}, Ties=${ties}`);
+  console.log(`Octave errors: Baseline=${baseOctaveErrors}, NNBeat=${nnOctaveErrors}`);
   if (counted > 0) {
-    console.log(`Mean error: Baseline=${(baseTotalErr / counted).toFixed(1)}, ForwardFilter=${(fwdTotalErr / counted).toFixed(1)}`);
+    console.log(`Mean error: Baseline=${(baseTotalErr / counted).toFixed(1)}, NNBeat=${(nnTotalErr / counted).toFixed(1)}`);
   }
 
   // Save results
-  const outPath = `tuning-results/ab-fwdfilter-${Date.now()}.json`;
+  const outPath = `tuning-results/ab-nnbeat-${Date.now()}.json`;
   fs.mkdirSync('tuning-results', { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify({ timestamp: new Date().toISOString(), results }, null, 2));
   console.log(`\nResults saved to ${outPath}`);

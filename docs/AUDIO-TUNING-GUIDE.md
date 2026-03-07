@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** February 27, 2026
-**Firmware Version:** SETTINGS_VERSION 25 (BandFlux Solo + Bayesian Tempo Fusion)
+**Last Updated:** March 6, 2026
+**Firmware Version:** SETTINGS_VERSION 57 (CBSS + Bayesian Tempo + NN Beat ODF option)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -109,6 +109,24 @@ monitor_audio(port: "/dev/ttyACM0", duration_ms: 3000)
 
 # Monitor transient detections
 monitor_transients(port: "/dev/ttyACM0", duration_ms: 5000)
+```
+
+### A/B Test Scripts (`ml-training/tools/ab_test_*.cjs`)
+
+Batch A/B test scripts compare two firmware configurations across all 18 EDM tracks. Each track is played twice (config A, then config B) with BPM accuracy recorded.
+
+**Critical: Always seek to middle of track.** EDM tracks typically have 15-30s intros with no beat. Playing from the start wastes most of the test window on intro/buildup. All scripts use `ffprobe` to get track duration and `ffplay -ss` to seek to the center minus half the play duration. This ensures the beat-tracking section of the track is captured.
+
+**Available scripts:**
+- `ab_test_nnbeat.cjs` — BandFlux ODF vs NN Beat ODF (`nnbeat=0` vs `nnbeat=1`)
+- `ab_test_fwdfilter.cjs` — CBSS baseline vs forward filter (`fwdfilter=0` vs `fwdfilter=1`)
+- `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (`noiseest=0` vs `noiseest=1`)
+
+```bash
+# Run from blinky-test-player dir (needs serialport module)
+cd blinky-test-player
+NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
+  --port /dev/ttyACM0 --music-dir music/edm --duration 25000
 ```
 
 ### Test Tracks (18 Total)
