@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Extract mel spectrograms and beat activation targets from labeled audio.
 
-Replicates the firmware's SharedSpectralAnalysis mel pipeline (raw path):
+Replicates the firmware's SharedSpectralAnalysis mel pipeline (raw path, v56+):
   - 16 kHz sample rate
   - Hamming window (alpha=0.54, beta=0.46)
   - FFT-256, hop-256 (no overlap)
+  - Spectral noise subtraction (Martin 2001 min-statistics, v56)
   - 26 mel bands (60-8000 Hz), HTK mel scale
   - Triangular filterbank (area-normalized)
   - Log compression: 10*log10(x + 1e-10), mapped [-60, 0] dB -> [0, 1]

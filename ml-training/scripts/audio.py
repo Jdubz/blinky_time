@@ -4,10 +4,11 @@ Single source of truth for the firmware-matching mel spectrogram computation.
 Both GPU (torch) and CPU (numpy) implementations are provided here to avoid
 duplication across scripts.
 
-Firmware pipeline (SharedSpectralAnalysis::getRawMelBands):
+Firmware pipeline (SharedSpectralAnalysis::getRawMelBands, v56+):
   - 16 kHz sample rate
   - Hamming window (alpha=0.54, symmetric)
   - FFT-256, hop-256 (no overlap)
+  - Spectral noise subtraction (Martin 2001 min-statistics, v56)
   - 26 mel bands (60-8000 Hz), HTK mel scale, no normalization
   - Log compression: 10*log10(x + 1e-10), mapped [-60, 0] dB -> [0, 1]
   - NO compressor or whitening (raw mel path for NN input)
@@ -56,6 +57,57 @@ def build_mel_filterbank_torch(cfg: dict, device) -> "torch.Tensor":
     return torch.from_numpy(mel_basis.astype(np.float32)).to(device)
 
 
+def apply_spectral_noise_subtraction(magnitudes: np.ndarray,
+                                      smooth_alpha: float = 0.92,
+                                      release_factor: float = 0.999,
+                                      oversubtract: float = 1.5,
+                                      floor_ratio: float = 0.02) -> np.ndarray:
+    """Minimum-statistics noise estimation + spectral subtraction (Martin 2001).
+
+    Mirrors firmware SharedSpectralAnalysis::estimateAndSubtractNoise().
+    Per-bin smoothed power tracking -> running minimum -> oversubtraction.
+    Applied to FFT magnitudes before mel projection.
+
+    Args:
+        magnitudes: (n_freqs, n_frames) FFT magnitude array
+        smooth_alpha: power smoothing EMA coefficient (0.9-0.99)
+        release_factor: noise floor release rate (0.99-0.9999)
+        oversubtract: oversubtraction factor (1.0-3.0)
+        floor_ratio: spectral floor as fraction of original (prevents zero-out)
+
+    Returns: (n_freqs, n_frames) noise-subtracted magnitudes
+    """
+    mags = magnitudes.copy()
+    n_freqs, n_frames = mags.shape
+
+    # State arrays — skip DC bin 0 (matching firmware)
+    smoothed_power = np.zeros(n_freqs - 1, dtype=np.float32)
+    noise_floor_est = np.zeros(n_freqs - 1, dtype=np.float32)
+
+    for t in range(n_frames):
+        mag = mags[1:, t]
+        power = mag * mag
+
+        # Smooth power estimate (EMA)
+        smoothed_power[:] = smooth_alpha * smoothed_power + (1.0 - smooth_alpha) * power
+
+        # Noise floor: instant attack to new minimums, exponential release
+        new_min = (smoothed_power < noise_floor_est) | (noise_floor_est == 0.0)
+        noise_floor_est[:] = np.where(
+            new_min,
+            smoothed_power,
+            release_factor * noise_floor_est + (1.0 - release_factor) * smoothed_power,
+        )
+
+        # Spectral subtraction
+        noise_mag = oversubtract * np.sqrt(noise_floor_est)
+        floor = floor_ratio * mag
+        clean = mag - noise_mag
+        mags[1:, t] = np.maximum(clean, floor)
+
+    return mags
+
+
 def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
                                    mel_fb: "torch.Tensor",
                                    window: "torch.Tensor") -> np.ndarray:
@@ -78,6 +130,19 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
                       window=window, center=False, return_complex=True)
     magnitudes = stft.abs()  # (n_freqs, n_frames)
 
+    # Spectral noise subtraction (v56, Martin 2001 min-statistics)
+    ns_cfg = cfg.get("audio", {}).get("noise_subtraction", {})
+    if ns_cfg.get("enabled", False):
+        mags_np = magnitudes.cpu().numpy()
+        mags_np = apply_spectral_noise_subtraction(
+            mags_np,
+            smooth_alpha=ns_cfg.get("smooth_alpha", 0.92),
+            release_factor=ns_cfg.get("release_factor", 0.999),
+            oversubtract=ns_cfg.get("oversubtract", 1.5),
+            floor_ratio=ns_cfg.get("floor_ratio", 0.02),
+        )
+        magnitudes = torch.from_numpy(mags_np).to(magnitudes.device)
+
     mel_spec = mel_fb @ magnitudes
     log_mel = 10.0 * torch.log10(mel_spec + 1e-10)
     log_mel = (log_mel + 60.0) / 60.0
@@ -86,10 +151,15 @@ def firmware_mel_spectrogram_torch(audio: "torch.Tensor", cfg: dict,
     return log_mel.T.cpu().numpy()  # (n_frames, n_mels)
 
 
-def firmware_mel_spectrogram_np(audio: np.ndarray) -> np.ndarray:
+def firmware_mel_spectrogram_np(audio: np.ndarray,
+                                noise_subtraction: bool = False) -> np.ndarray:
     """Compute mel spectrogram matching firmware (CPU-only numpy).
 
     For use in calibration scripts and tools that don't need GPU or config.
+
+    Args:
+        audio: mono audio samples at 16 kHz
+        noise_subtraction: if True, apply min-statistics noise subtraction
 
     Returns: (n_frames, n_mels) numpy array with values in [0, 1].
     """
@@ -99,8 +169,24 @@ def firmware_mel_spectrogram_np(audio: np.ndarray) -> np.ndarray:
     mel_fb = build_mel_filterbank_np()
 
     n_frames = len(audio) // HOP_LENGTH
-    mels = np.zeros((n_frames, N_MELS), dtype=np.float32)
 
+    if noise_subtraction:
+        # Build full magnitude spectrogram, apply noise subtraction, then mel
+        n_freqs = N_FFT // 2 + 1
+        all_mags = np.zeros((n_freqs, n_frames), dtype=np.float32)
+        for i in range(n_frames):
+            frame = audio[i * HOP_LENGTH:(i * HOP_LENGTH) + N_FFT]
+            if len(frame) < N_FFT:
+                break
+            windowed = frame * window
+            all_mags[:, i] = np.abs(np.fft.rfft(windowed))
+        all_mags = apply_spectral_noise_subtraction(all_mags)
+        mel_spec = mel_fb @ all_mags  # (n_mels, n_frames)
+        log_mel = 10.0 * np.log10(mel_spec + 1e-10)
+        log_mel = (log_mel + 60.0) / 60.0
+        return np.clip(log_mel.T, 0.0, 1.0)
+
+    mels = np.zeros((n_frames, N_MELS), dtype=np.float32)
     for i in range(n_frames):
         frame = audio[i * HOP_LENGTH:(i * HOP_LENGTH) + N_FFT]
         if len(frame) < N_FFT:

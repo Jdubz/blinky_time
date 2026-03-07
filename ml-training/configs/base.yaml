@@ -21,6 +21,15 @@ audio:
   # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
   # prepare_dataset.py uses this to cap gain-aware noise augmentation.
   hw_gain_max: 40           # Firmware default: 40 (AdaptiveMic.h v56)
+  # Spectral noise subtraction (Martin 2001 min-statistics, firmware v56)
+  # Applied to FFT magnitudes before mel projection. Mirrors firmware
+  # SharedSpectralAnalysis::estimateAndSubtractNoise().
+  noise_subtraction:
+    enabled: true             # ON for training — matches firmware inference path
+    smooth_alpha: 0.92        # Power smoothing EMA (firmware: noiseSmoothAlpha)
+    release_factor: 0.999     # Noise floor release rate (firmware: noiseReleaseFactor)
+    oversubtract: 1.5         # Oversubtraction factor (firmware: noiseOversubtract)
+    floor_ratio: 0.02         # Spectral floor fraction (firmware: noiseFloorRatio)
 
 # Target label generation
 labels:

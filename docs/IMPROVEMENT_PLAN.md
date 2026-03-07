@@ -64,9 +64,9 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 - Parameters: `noiseest=1`, `noisesmooth=0.92`, `noiserelease=0.999`, `noiseover=1.5`, `noisefloor=0.02`
 - ~1 KB RAM (2×128 floats), ~0.1% CPU
 
-**3. Training pipeline alignment (TODO — next step after firmware validation):**
+**3. Training pipeline alignment:**
 - `hw_gain_max: 60 → 40` in default.yaml (done)
-- Spectral subtraction in `prepare_dataset.py`: apply same min-statistics algorithm after adding mic noise, before mel extraction. Teaches NN to work with subtracted spectra.
+- Spectral subtraction in training pipeline (done): `apply_spectral_noise_subtraction()` in `scripts/audio.py`, mirrors firmware algorithm exactly (per-bin smoothed power → running minimum → oversubtraction). Applied to FFT magnitudes before mel projection in `firmware_mel_spectrogram_torch()`. Config in `base.yaml` under `audio.noise_subtraction` (enabled=true, params match firmware defaults).
 - Re-prepare dataset and retrain after firmware validation confirms improvement
 
 **Literature:**
@@ -78,8 +78,8 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 
 **Outstanding:**
 - Validate on hardware: A/B test v56 vs v55 with gain sweep to measure ODF SNR improvement
-- Implement spectral subtraction in training pipeline (`prepare_dataset.py`)
-- Re-prepare dataset and train v4 with subtracted spectra
+- ~~Implement spectral subtraction in training pipeline (`prepare_dataset.py`)~~ **DONE** — `scripts/audio.py` + `configs/base.yaml`
+- Re-prepare dataset and train v5 with subtracted spectra (after v4 completes + firmware validation)
 
 ### In Progress: Neural Network Beat Activation (v54, March 5, 2026)
 

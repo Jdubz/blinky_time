@@ -145,6 +145,7 @@ bool AudioController::begin(uint32_t sampleRate) {
         beatAgents_[i].justFired = false;
     }
     pfInitialized_ = false;   // PF will re-init on first use
+    fwdInitialized_ = false;   // Forward filter will re-init on first use
     pfRngState_ = 0x12345678;
     pllPhaseIntegral_ = 0.0f;  // Reset PLL integral accumulator (v45)
     effectiveTightness_ = cbssTightness;  // Initialize adaptive tightness (v45)
@@ -401,12 +402,23 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 7. Update beat tracking
-    //    Tempo estimation (mutually exclusive):
-    //    a) particleFilterEnabled: PF estimates tempo via 100-particle bar-pointer model
-    //    b) barPointerHmm: HMM estimates tempo via joint tempo-phase forward algorithm
-    //    c) default: Bayesian fusion (ACF + comb filter bank)
-    //    Beat detection: CBSS predict+countdown always handles phase/beat detection.
-    if (particleFilterEnabled) {
+    //    Tempo + beat detection modes (mutually exclusive, highest precedence first):
+    //    a) forwardFilterEnabled: Joint tempo-phase forward filter (v57, Krebs/Böck 2015)
+    //    b) particleFilterEnabled: PF estimates tempo via 100-particle bar-pointer model
+    //    c) barPointerHmm: Single-tempo phase tracker with continuous ODF observation
+    //    d) default: Bayesian fusion (ACF + comb filter bank) + CBSS predict+countdown
+    if (forwardFilterEnabled && tempoStateInitialized_) {
+        // Joint forward filter: handles both tempo and beat detection
+        if (!fwdInitialized_) initForwardFilter();
+        updateForwardFilter(onsetStrength);
+        // Still update CBSS for sampleCounter_++ and cbssMean_ (used as silence gate)
+        float cbssInput = onsetStrength;
+        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
+            cbssInput = powf(cbssInput, cbssContrast);
+        }
+        updateCBSS(cbssInput);
+        detectForwardFilterBeat();
+    } else if (particleFilterEnabled) {
         // PF for tempo, CBSS for beats (hybrid mode)
         if (!pfInitialized_) initParticleFilter();
         if (pfInitialized_) {
@@ -416,26 +428,34 @@ const AudioControl& AudioController::update(float dt) {
             }
             pfUpdate(pfInput);  // Sets bpm_, beatPeriodSamples_ via pfExtractConsensus
         }
-    } else if (barPointerHmm && tempoStateInitialized_) {
-        // Single-tempo phase tracker with continuous ODF observation model (v49).
-        // Uses Bayesian best tempo + explicit phase tracking.
-        updatePhaseTracker(onsetStrength);
-    }
-    // CBSS + beat detection
-    {
+        // CBSS + beat detection (fallthrough for PF mode)
         float cbssInput = onsetStrength;
         if (cbssContrast != 1.0f && cbssInput > 0.0f) {
             cbssInput = powf(cbssInput, cbssContrast);
         }
-        updateCBSS(cbssInput);    // sampleCounter_++ happens here
-        // Precedence: phase tracker > multi-agent > default CBSS.
-        // If both barPointerHmm and multiAgentEnabled are set, phase tracker wins.
-        if (barPointerHmm && tempoStateInitialized_) {
-            detectHmmBeat();       // v46b: Phase tracker position-0 wrap beat detection
-        } else if (multiAgentEnabled) {
-            detectBeatMultiAgent();  // v48: multi-agent phase competition
+        updateCBSS(cbssInput);
+        detectBeat();
+    } else if (barPointerHmm && tempoStateInitialized_) {
+        // Single-tempo phase tracker with continuous ODF observation model (v49).
+        updatePhaseTracker(onsetStrength);
+        float cbssInput = onsetStrength;
+        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
+            cbssInput = powf(cbssInput, cbssContrast);
+        }
+        updateCBSS(cbssInput);
+        detectHmmBeat();
+    } else {
+        // Default: CBSS + beat detection
+        float cbssInput = onsetStrength;
+        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
+            cbssInput = powf(cbssInput, cbssContrast);
+        }
+        updateCBSS(cbssInput);
+        // Precedence: multi-agent > default CBSS
+        if (multiAgentEnabled) {
+            detectBeatMultiAgent();
         } else {
-            detectBeat();          // existing CBSS beat detection
+            detectBeat();
         }
     }
 
@@ -1355,7 +1375,8 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
     // countdown to use the wrong period at beat boundaries.
     // The Bayesian posterior (step 10) still updates to keep transMatrix_ current.
     bool externalTempoActive = (particleFilterEnabled && pfInitialized_) ||
-                               (barPointerHmm && tempoStateInitialized_);
+                               (barPointerHmm && tempoStateInitialized_) ||
+                               (forwardFilterEnabled && fwdInitialized_);
     if (!externalTempoActive && periodicityStrength_ > 0.25f) {
         float newBpm = clampf(interpolatedBpm, bpmMin, bpmMax);
 
@@ -1873,6 +1894,263 @@ void AudioController::detectHmmBeat() {
 
     predictNextBeat(nowMs);
 }
+
+// ===== JOINT TEMPO-PHASE FORWARD FILTER (v57) =====
+// Tracks tempo and phase jointly via forward algorithm (Krebs/Böck/Widmer 2015).
+// 20 tempo bins × variable phase positions. Continuous ODF observation model.
+// Beat detected when argmax state wraps from near period-1 to near 0.
+
+void AudioController::initForwardFilter() {
+    // Zero state array before re-initialization (prevents stale values beyond new total)
+    memset(fwdAlpha_, 0, sizeof(fwdAlpha_));
+
+    // Build offset table — each tempo bin starts where the previous one ends
+    int offset = 0;
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        fwdBinOffset_[i] = offset;
+        int period = tempoBinLags_[i];
+        if (period < 10) period = 10;
+        offset += period;
+    }
+    fwdTotalStates_ = offset;
+    if (fwdTotalStates_ > FWD_MAX_STATES) {
+        fwdTotalStates_ = FWD_MAX_STATES;  // Safety clamp
+    }
+
+    // Initialize with Rayleigh prior over tempo, uniform over phase
+    float rayleighPeak = rayleighBpm;
+    float rayleighLag = OSS_FRAMES_PER_MIN / rayleighPeak;
+    float rayleighSigma = rayleighLag * 0.3f;  // 30% width
+
+    float totalWeight = 0.0f;
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        int period = tempoBinLags_[i];
+        if (period < 10) period = 10;
+        float lagDiff = static_cast<float>(period) - rayleighLag;
+        float w = expf(-0.5f * (lagDiff * lagDiff) / (rayleighSigma * rayleighSigma));
+        // Distribute weight uniformly across phase positions
+        float perPos = w / static_cast<float>(period);
+        int base = fwdBinOffset_[i];
+        for (int p = 0; p < period && (base + p) < fwdTotalStates_; p++) {
+            fwdAlpha_[base + p] = perPos;
+        }
+        totalWeight += w;
+    }
+    // Normalize
+    if (totalWeight > 1e-30f) {
+        float inv = 1.0f / totalWeight;
+        for (int s = 0; s < fwdTotalStates_; s++) {
+            fwdAlpha_[s] *= inv;
+        }
+    }
+
+    fwdTransSigmaLast_ = -1.0f;  // Force transition matrix rebuild
+    fwdBestBin_ = TEMPO_BINS / 2;
+    fwdBestPos_ = 0;
+    fwdPrevBestBin_ = TEMPO_BINS / 2;
+    fwdPrevBestPos_ = -1;
+    fwdFramesSinceBeat_ = 999;
+    fwdInitialized_ = true;
+}
+
+
+void AudioController::updateForwardFilter(float odf) {
+    if (!fwdInitialized_) return;
+
+    // Rebuild tempo transition matrix if sigma changed
+    if (fwdTransSigma != fwdTransSigmaLast_) {
+        float sigma = fwdTransSigma;
+        if (sigma < 0.5f) sigma = 0.5f;
+        float invVar = 1.0f / (2.0f * sigma * sigma);
+        for (int j = 0; j < TEMPO_BINS; j++) {
+            float sumRow = 0.0f;
+            for (int i = 0; i < TEMPO_BINS; i++) {
+                float lagDiff = static_cast<float>(tempoBinLags_[j] - tempoBinLags_[i]);
+                float w = expf(-lagDiff * lagDiff * invVar);
+                fwdTransMatrix_[j][i] = w;
+                sumRow += w;
+            }
+            // Normalize each row
+            if (sumRow > 1e-30f) {
+                float inv = 1.0f / sumRow;
+                for (int i = 0; i < TEMPO_BINS; i++) {
+                    fwdTransMatrix_[j][i] *= inv;
+                }
+            }
+        }
+        fwdTransSigmaLast_ = fwdTransSigma;
+    }
+
+    // Clamp and apply contrast to ODF
+    float odfVal = clampf(odf, 0.0f, 1.0f);
+    if (fwdFilterContrast != 1.0f && odfVal > 0.0f) {
+        odfVal = powf(odfVal, fwdFilterContrast);
+    }
+
+    // Observation likelihoods
+    float lambda = fwdFilterLambda;
+    if (lambda < 2.0f) lambda = 2.0f;
+    float floor = fwdFilterFloor;
+    float obsBeat = fmaxf(lambda * odfVal, floor);
+    float obsNonBeat = fmaxf((1.0f - odfVal) / (lambda - 1.0f), floor);
+
+    // Collect wrap probabilities (last position of each tempo bin) BEFORE shift
+    float wrapProbs[TEMPO_BINS];  // 20 floats = 80 bytes on stack
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        int period = tempoBinLags_[i];
+        if (period < 10) period = 10;
+        int base = fwdBinOffset_[i];
+        int lastIdx = base + period - 1;
+        wrapProbs[i] = (lastIdx < fwdTotalStates_) ? fwdAlpha_[lastIdx] : 0.0f;
+    }
+
+    // For each tempo bin: shift phases forward and apply observations
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        int base = fwdBinOffset_[i];
+        int period = tempoBinLags_[i];
+        if (period < 10) period = 10;
+        int beatZone = period / static_cast<int>(lambda);
+        if (beatZone < 1) beatZone = 1;
+
+        // Shift: position p = old position p-1, with appropriate observation
+        for (int p = period - 1; p >= 1; p--) {
+            if (base + p >= fwdTotalStates_) continue;
+            float obs = (p < beatZone) ? obsBeat : obsNonBeat;
+            fwdAlpha_[base + p] = fwdAlpha_[base + p - 1] * obs;
+        }
+
+        // Position 0: receives from tempo transitions at beat boundary
+        // Sum of trans[j→i] * wrapProb[j] across all source tempo bins
+        float transSum = 0.0f;
+        for (int j = 0; j < TEMPO_BINS; j++) {
+            transSum += fwdTransMatrix_[j][i] * wrapProbs[j];
+        }
+        fwdAlpha_[base] = transSum * obsBeat;
+    }
+
+    // Normalize
+    float total = 0.0f;
+    for (int s = 0; s < fwdTotalStates_; s++) {
+        total += fwdAlpha_[s];
+    }
+    if (total > 1e-30f) {
+        float inv = 1.0f / total;
+        for (int s = 0; s < fwdTotalStates_; s++) {
+            fwdAlpha_[s] *= inv;
+        }
+    }
+
+    // Find argmax state
+    fwdPrevBestBin_ = fwdBestBin_;
+    fwdPrevBestPos_ = fwdBestPos_;
+    float bestProb = -1.0f;
+    for (int i = 0; i < TEMPO_BINS; i++) {
+        int base = fwdBinOffset_[i];
+        int period = tempoBinLags_[i];
+        if (period < 10) period = 10;
+        for (int p = 0; p < period && (base + p) < fwdTotalStates_; p++) {
+            if (fwdAlpha_[base + p] > bestProb) {
+                bestProb = fwdAlpha_[base + p];
+                fwdBestBin_ = i;
+                fwdBestPos_ = p;
+            }
+        }
+    }
+
+    fwdFramesSinceBeat_++;
+}
+
+
+void AudioController::detectForwardFilterBeat() {
+    uint32_t nowMs = time_.millis();
+    bool beatDetected = false;
+
+    int period = tempoBinLags_[fwdBestBin_];
+    if (period < 10) period = 10;
+
+    // Beat detection: argmax wraps from near period-1 to near 0
+    int prevPeriod = tempoBinLags_[fwdPrevBestBin_];
+    if (prevPeriod < 10) prevPeriod = 10;
+    int wrapHigh = prevPeriod - prevPeriod / 4;  // Last 25% of period
+    int wrapLow = period / 4;                     // First 25% of period
+    bool positionWrap = (fwdPrevBestPos_ >= wrapHigh) && (fwdBestPos_ <= wrapLow);
+    bool cooldownOk = (fwdFramesSinceBeat_ >= period / 2);
+
+    // CBSS mean provides silence gate (reuse existing infrastructure)
+    bool silenceGate = (cbssMean_ >= 0.01f);
+
+    if (positionWrap && cooldownOk && silenceGate) {
+        fwdFramesSinceBeat_ = 0;
+
+        // Onset snap: anchor beat at strongest nearby OSS
+        int prevBeatSample = lastBeatSample_;
+        if (onsetSnapWindow > 0 && ossCount_ > 0) {
+            int W = static_cast<int>(onsetSnapWindow);
+            float bestOSS = -1.0f;
+            int bestSnapOffset = 0;
+            for (int d = 0; d <= W; d++) {
+                int idx = sampleCounter_ - 1 - d;
+                if (idx < 0) break;
+                float oss = ossBuffer_[idx % OSS_BUFFER_SIZE];
+                if (oss > bestOSS) {
+                    bestOSS = oss;
+                    bestSnapOffset = d;
+                }
+            }
+            lastBeatSample_ = sampleCounter_ - bestSnapOffset;
+        } else {
+            lastBeatSample_ = sampleCounter_;
+        }
+
+        // PLL phase correction (reuse existing logic)
+        if (pllEnabled && beatCount_ > 2) {
+            int T = period;
+            int ibi = lastBeatSample_ - prevBeatSample;
+            float phaseError = static_cast<float>(ibi - T) / static_cast<float>(T);
+            phaseError = clampf(phaseError, -0.5f, 0.5f);
+
+            float correction = pllKp * phaseError * static_cast<float>(T);
+            pllPhaseIntegral_ = clampf(pllSmoother * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
+            correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
+
+            int maxShift = T / 4;
+            int shift = static_cast<int>(correction);
+            shift = (shift > maxShift) ? maxShift : (shift < -maxShift ? -maxShift : shift);
+            lastBeatSample_ += shift;
+        }
+
+        if (beatCount_ < 65535) beatCount_++;
+        beatDetected = true;
+        cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
+        updateBeatStability(nowMs);
+        lastFiredBeatPredicted_ = false;
+    }
+
+    // Update tempo from forward filter's best bin
+    if (period >= 10) {
+        beatPeriodSamples_ = period;
+        bpm_ = OSS_FRAMES_PER_MIN / static_cast<float>(period);
+        beatPeriodMs_ = 60000.0f / bpm_;
+    }
+
+    // Decay confidence when no beat
+    if (!beatDetected) {
+        cbssConfidence_ *= beatConfidenceDecay;
+    }
+
+    // Derive phase from forward filter position
+    float newPhase = static_cast<float>(fwdBestPos_) / static_cast<float>(period);
+    newPhase = clampf(newPhase, 0.0f, 0.999f);
+    if (!isfinite(newPhase)) newPhase = 0.0f;
+    phase_ = newPhase;
+
+    // Update timeToNextBeat_ for serial streaming compatibility
+    int remaining = period - fwdBestPos_;
+    timeToNextBeat_ = (remaining > 0) ? remaining : 0;
+
+    predictNextBeat(nowMs);
+}
+
 
 // ===== PARTICLE FILTER BEAT TRACKING (v38) =====
 
