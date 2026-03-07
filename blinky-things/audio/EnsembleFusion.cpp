@@ -78,57 +78,64 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
         return output;
     }
 
-    // Count how many enabled detectors fired and compute weighted strength
-    int agreementCount = 0;
-    float weightedStrengthSum = 0.0f;
-    float activeWeightSum = 0.0f;
-    float maxStrength = 0.0f;
-    int maxStrengthIdx = 0;
-
+    // Fast path: when exactly 1 detector is enabled, bypass agreement scaling
+    // and weighted averaging — just pass through the detector's raw strength.
+    int enabledCount = 0;
+    int soloIdx = -1;
     for (int i = 0; i < MAX_DETECTORS; i++) {
-        if (!configs_[i].enabled) {
-            continue;  // Skip disabled detectors
-        }
-
-        const DetectionResult& result = results[i];
-
-        if (result.detected) {
-            // Apply confidence threshold - ignore low-confidence detections
-            if (result.confidence < minConfidence) {
-                continue;  // Skip this detector, confidence too low
-            }
-
-            agreementCount++;
-
-            // Weighted contribution
-            float weight = configs_[i].weight;
-            weightedStrengthSum += result.strength * weight;
-            activeWeightSum += weight;
-
-            // Track dominant detector
-            if (result.strength > maxStrength) {
-                maxStrength = result.strength;
-                maxStrengthIdx = i;
-            }
+        if (configs_[i].enabled) {
+            enabledCount++;
+            soloIdx = i;
         }
     }
 
-    // Compute combined strength (normalized weighted average of firing detectors)
-    float combinedStrength = 0.0f;
-    if (activeWeightSum > 0.0f) {
-        combinedStrength = weightedStrengthSum / activeWeightSum;
-    }
+    float fusedStrength = 0.0f;
+    int agreementCount = 0;
+    int dominantIdx = 0;
 
-    // Apply agreement-based confidence scaling
-    int boostIdx = (agreementCount > MAX_DETECTORS) ? MAX_DETECTORS : agreementCount;
-    float agreementBoost = agreementBoosts_[boostIdx];
+    if (enabledCount == 1 && soloIdx >= 0) {
+        // Solo detector: direct pass-through (no agreement scaling, no weighted average)
+        const DetectionResult& result = results[soloIdx];
+        if (result.detected && result.confidence >= minConfidence) {
+            fusedStrength = result.strength;
+            if (fusedStrength > 1.0f) fusedStrength = 1.0f;
+            agreementCount = 1;
+        }
+        dominantIdx = soloIdx;
+    } else {
+        // Multi-detector path: weighted average with agreement scaling
+        float weightedStrengthSum = 0.0f;
+        float activeWeightSum = 0.0f;
+        float maxStrength = 0.0f;
 
-    // Compute fused strength BEFORE cooldown
-    float fusedStrength = combinedStrength * agreementBoost;
+        for (int i = 0; i < MAX_DETECTORS; i++) {
+            if (!configs_[i].enabled) continue;
 
-    // Clamp to valid range
-    if (fusedStrength > 1.0f) {
-        fusedStrength = 1.0f;
+            const DetectionResult& result = results[i];
+            if (result.detected) {
+                if (result.confidence < minConfidence) continue;
+
+                agreementCount++;
+                float weight = configs_[i].weight;
+                weightedStrengthSum += result.strength * weight;
+                activeWeightSum += weight;
+
+                if (result.strength > maxStrength) {
+                    maxStrength = result.strength;
+                    dominantIdx = i;
+                }
+            }
+        }
+
+        float combinedStrength = 0.0f;
+        if (activeWeightSum > 0.0f) {
+            combinedStrength = weightedStrengthSum / activeWeightSum;
+        }
+
+        int boostIdx = (agreementCount > MAX_DETECTORS) ? MAX_DETECTORS : agreementCount;
+        float agreementBoost = agreementBoosts_[boostIdx];
+        fusedStrength = combinedStrength * agreementBoost;
+        if (fusedStrength > 1.0f) fusedStrength = 1.0f;
     }
 
     // UNIFIED ENSEMBLE COOLDOWN: Apply cooldown AFTER fusion
@@ -140,20 +147,15 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
     bool cooldownElapsed = elapsedMs > (uint32_t)effectiveCooldown;
 
     if (fusedStrength > 0.01f && cooldownElapsed) {
-        // Detection passes cooldown - output it
         output.transientStrength = fusedStrength;
-        lastTransientMs_ = timestampMs;  // Update cooldown timer
+        lastTransientMs_ = timestampMs;
     } else {
-        // Either no detection or suppressed by cooldown
         output.transientStrength = 0.0f;
     }
 
-    // Confidence and agreement always reported (even if suppressed by cooldown)
-    // This allows debugging of what fusion WOULD have output without cooldown
-    // FIX: Clamp ensembleConfidence to [0, 1] - agreementBoost can exceed 1.0 for strong consensus
-    output.ensembleConfidence = (agreementBoost > 1.0f) ? 1.0f : agreementBoost;
+    output.ensembleConfidence = (agreementCount > 0) ? 1.0f : 0.0f;
     output.detectorAgreement = static_cast<uint8_t>(agreementCount);
-    output.dominantDetector = static_cast<uint8_t>(maxStrengthIdx);
+    output.dominantDetector = static_cast<uint8_t>(dominantIdx);
 
     return output;
 }

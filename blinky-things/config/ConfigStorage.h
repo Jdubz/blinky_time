@@ -89,7 +89,8 @@ public:
     // Version 56: Spectral noise estimation (noiseEst*, 5 new params) — same commit as v55
     // Version 57: Joint tempo-phase forward filter (forwardFilter*, 5 new params)
     // Version 58: Hybrid phase tracker (fwdPhaseOnly), nnBeatActivation default ON
-    static const uint8_t SETTINGS_VERSION = 58;
+    // Version 59: Bayesian posterior bias for forward filter (fwdBayesBias)
+    static const uint8_t SETTINGS_VERSION = 59;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -368,6 +369,7 @@ public:
         float fwdFilterContrast;        // ODF power-law contrast (1-8)
         float fwdFilterLambda;          // Beat zone = 1/lambda of period (4-32)
         float fwdFilterFloor;           // Observation probability floor (0.001-0.1)
+        float fwdBayesBias;            // Bayesian posterior modulation strength (v59, 0-1)
 
         // Hybrid phase tracker (v58)
         bool fwdPhaseOnly;             // Phase tracker for phase, CBSS for beats
@@ -490,8 +492,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
-    static_assert(sizeof(StoredMusicParams) == 400,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (400 bytes = 82 floats + 14 uint8 + 29 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 404,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (404 bytes = 83 floats + 14 uint8 + 29 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,

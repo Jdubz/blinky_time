@@ -2035,6 +2035,44 @@ void AudioController::updateForwardFilter(float odf) {
         }
     }
 
+    // Bayesian tempo prior modulation: use the Bayesian posterior (which runs
+    // in parallel via runAutocorrelation) to bias the forward filter toward the
+    // correct octave. The Bayesian system has comb+ACF+density penalty and doesn't
+    // suffer from half-time bias. Multiplying each tempo bin's forward filter
+    // probability by the Bayesian posterior weight prevents half-time lock while
+    // preserving the forward filter's superior phase tracking.
+    if (fwdBayesBias > 0.0f && tempoStateInitialized_) {
+        // Compute per-bin modulation: blend between uniform (0.0) and full posterior (1.0)
+        float uniform = 1.0f / TEMPO_BINS;
+        float modWeights[TEMPO_BINS];
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float post = tempoStatePost_[i];
+            modWeights[i] = (1.0f - fwdBayesBias) * uniform + fwdBayesBias * post;
+        }
+
+        // Apply modulation to all states in each tempo bin
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            int base = fwdBinOffset_[i];
+            int period = tempoBinLags_[i];
+            if (period < 10) period = 10;
+            for (int p = 0; p < period && (base + p) < fwdTotalStates_; p++) {
+                fwdAlpha_[base + p] *= modWeights[i];
+            }
+        }
+
+        // Re-normalize after modulation
+        float modTotal = 0.0f;
+        for (int s = 0; s < fwdTotalStates_; s++) {
+            modTotal += fwdAlpha_[s];
+        }
+        if (modTotal > 1e-30f) {
+            float inv = 1.0f / modTotal;
+            for (int s = 0; s < fwdTotalStates_; s++) {
+                fwdAlpha_[s] *= inv;
+            }
+        }
+    }
+
     // Find argmax state
     fwdPrevBestBin_ = fwdBestBin_;
     fwdPrevBestPos_ = fwdBestPos_;

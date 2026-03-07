@@ -294,6 +294,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.fwdFilterContrast = 2.0f;      // Squared ODF for sharper discrimination
     data_.music.fwdFilterLambda = 8.0f;        // Beat zone = 12.5% of period
     data_.music.fwdFilterFloor = 0.01f;        // Observation probability floor
+    data_.music.fwdBayesBias = 0.5f;           // Moderate Bayesian tempo bias (v59)
 
     // Hybrid phase tracker (v58)
     data_.music.fwdPhaseOnly = false;           // OFF by default, A/B vs counter-based phase
@@ -997,6 +998,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->fwdFilterContrast = data_.music.fwdFilterContrast;
         audioCtrl->fwdFilterLambda = data_.music.fwdFilterLambda;
         audioCtrl->fwdFilterFloor = data_.music.fwdFilterFloor;
+        audioCtrl->fwdBayesBias = data_.music.fwdBayesBias;
         audioCtrl->fwdPhaseOnly = data_.music.fwdPhaseOnly;
 
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
@@ -1284,6 +1286,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.fwdFilterContrast = audioCtrl->fwdFilterContrast;
         data_.music.fwdFilterLambda = audioCtrl->fwdFilterLambda;
         data_.music.fwdFilterFloor = audioCtrl->fwdFilterFloor;
+        data_.music.fwdBayesBias = audioCtrl->fwdBayesBias;
         data_.music.fwdPhaseOnly = audioCtrl->fwdPhaseOnly;
 
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;

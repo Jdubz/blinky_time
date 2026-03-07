@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 7, 2026 (v58+NN: nnbeat default ON, hybrid phase tracker, fwdphase A/B test)*
+*Last Updated: March 7, 2026 (v59: forward filter density penalty, ensemble solo fast path, v5 focal loss training)*
 
 ## Current Status
 
@@ -497,10 +497,15 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Tracks tempo and pha
 
 **Next steps (prioritized):**
 1. ~~**Hybrid approach**: Use forward filter for phase tracking only~~ **DONE (v58)** — `fwdphase=1` runs single-bin phase tracker alongside CBSS. A/B tested: BPM-neutral (8 wins vs 6, mean error 14.9 vs 14.8). Phase smoothness needs visual evaluation on LEDs.
-2. **Onset-density penalty in forward filter**: Port the `densityOctaveEnabled` logic from Bayesian posterior into the forward filter's tempo transition probability. At half-time, transients/beat < 0.5 should heavily penalize those bins.
-3. **Asymmetric observation model**: Scale `obsNonBeat` penalty by expected beats-per-bar at that tempo. Slower tempos should more strongly penalize high ODF at non-beat positions.
+2. ~~**Onset-density penalty in forward filter**~~ **TESTED (v59)** — Density penalty didn't fix half-time bias (transients/beat is plausible at half-time: ~2.7 at 67 BPM with 3/s onset rate). **Replaced with Bayesian posterior bias** (`fwdBayesBias`): modulates forward filter per-bin probabilities by the Bayesian posterior (which runs in parallel and doesn't have half-time bias). A/B tested at bias=0.5 and 0.8:
+   - **bias=0.0 (density penalty only):** 18/18 octave errors, mean err 8.1 (all half-time, ~65-85 BPM)
+   - **bias=0.5:** 11/18 octave errors, mean err 12.3, wins 9/9 tie. Tracks at ~105-125 BPM.
+   - **bias=0.8:** 9/18 octave errors, mean err 12.6, wins 10/8. Tracks at ~108-130 BPM.
+   - **Baseline:** 4/18 octave errors, mean err 15.2, tracks at ~135 BPM (gravity well).
+   - **Conclusion:** Bayesian bias eliminates half-time lock but forward filter still tracks ~10-20 BPM below truth. Not yet good enough to enable as default (9 octave errors vs baseline's 4). Higher bias makes the forward filter converge toward the Bayesian estimate — at bias=1.0 it would just be the Bayesian system with forward filter overhead.
+3. **Asymmetric observation model**: Scale `obsNonBeat` penalty by expected beats-per-bar at that tempo. Slower tempos should more strongly penalize high ODF at non-beat positions. May address the residual downward drift after Bayesian bias.
 
-**Positive signal: tempo variability.** The forward filter's std (13.5 BPM) is higher than baseline (5.1 BPM), indicating the filter is responsive to the audio rather than locked to a gravity well. If the octave bias is fixed, this responsiveness could translate to better tracking.
+**Current state:** The forward filter has better octave-aware error (12.6 vs 15.2) but more octave errors (9 vs 4). The Bayesian bias approach is promising but needs tuning — the optimal bias may be track-dependent.
 
 **Technique B — Rhythmic Pattern Templates (DETAILED):**
 
@@ -1024,15 +1029,11 @@ The gap between 28% and BTrack's 65-75% is primarily phase alignment. Specific c
 
 **Result:** Disabled in v28. No regression on 18-track validation. FT and IOI code retained but default weights set to 0.
 
-#### 1b. Simplify Ensemble Infrastructure for Solo Detector — OUTSTANDING
+#### 1b. Simplify Ensemble Infrastructure for Solo Detector — DONE (v59)
 
-**Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead. The agreementBoosts array, minConfidence filtering, and dominant detector tracking serve no purpose.
+**Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead.
 
-**Action:** Simplify EnsembleFusion to pass BandFlux output directly when only 1 detector is enabled. Keep the multi-detector path as dead code for future experimentation, but bypass it at runtime.
-
-**Test plan:** Before/after 9-track sweep to confirm no regression from simplification.
-
-**Effort:** Low (~30 lines). **Impact:** Cleaner code, marginally less CPU.
+**Result:** Added fast path in `EnsembleFusion::fuse()`: when exactly 1 detector is enabled, bypasses agreement scaling and weighted averaging — direct strength pass-through with confidence filtering and cooldown only. Multi-detector path retained for future experimentation.
 
 #### 1c. Evaluate Adaptive Band Weighting Cost/Benefit — OUTSTANDING
 
@@ -1209,7 +1210,7 @@ Detection requires ALL of:
 
 **Result:** Tested as `bfhiresbass=1` in v32. Hurts Beat F1 by ~9%. Keep off.
 
-#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking — OUTSTANDING
+#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking — ELIMINATED
 
 BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phase. We already have phase data in SharedSpectralAnalysis. CSD catches pitched onsets at constant energy that magnitude flux misses. **For CBSS rhythm ODF only** — phase is too noisy via microphone for visual transient detection.
 
