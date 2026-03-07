@@ -52,7 +52,7 @@ quantization:
 
 # Export
 export:
-  max_model_size_kb: 50     # Reject models larger than this (nRF52840 has ~700 KB flash free)
+  max_model_size_kb: 25     # Guard for 3-layer baseline (wider_rf configs override to 50)
   output_header: "../blinky-things/audio/beat_model_data.h"
   c_array_name: "beat_model_data"
 

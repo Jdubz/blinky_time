@@ -74,6 +74,10 @@ def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
     Down-weights well-classified (easy) examples with high p_t by a factor of
     (1 - p_t)^gamma, and up-weights hard examples with low p_t, including
     confidently wrong predictions.
+
+    Note: pos_weight and focal modulation multiply together, so easy positives
+    are suppressed from both directions. This makes pos_weight feel weaker in
+    focal mode than in plain BCE — may need higher pos_weight to compensate.
     """
     y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
     pw = _broadcast_pos_weight(pos_weight, y_true)
