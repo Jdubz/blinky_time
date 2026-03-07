@@ -2035,47 +2035,38 @@ void AudioController::updateForwardFilter(float odf) {
         }
     }
 
-    // Onset-density octave penalty: penalizes tempo bins where transients/beat
-    // is implausible (same logic as Bayesian posterior discriminator).
-    // Addresses forward filter's severe half-time bias by down-weighting bins
-    // where the onset rate doesn't match the implied BPM.
-    if (densityOctaveEnabled && onsetDensity_ > 0.1f) {
-        float penalties[TEMPO_BINS];
+    // Bayesian tempo prior modulation: use the Bayesian posterior (which runs
+    // in parallel via runAutocorrelation) to bias the forward filter toward the
+    // correct octave. The Bayesian system has comb+ACF+density penalty and doesn't
+    // suffer from half-time bias. Multiplying each tempo bin's forward filter
+    // probability by the Bayesian posterior weight prevents half-time lock while
+    // preserving the forward filter's superior phase tracking.
+    if (fwdBayesBias > 0.0f && tempoStateInitialized_) {
+        // Compute per-bin modulation: blend between uniform (0.0) and full posterior (1.0)
+        float uniform = 1.0f / TEMPO_BINS;
+        float modWeights[TEMPO_BINS];
         for (int i = 0; i < TEMPO_BINS; i++) {
-            float bpm = tempoBinBpms_[i];
-            float transPerBeat = 60.0f * onsetDensity_ / bpm;
-            float penalty = 1.0f;
-
-            if (densityTarget > 0.0f) {
-                float diff = (transPerBeat - densityTarget) / densityTarget;
-                penalty = expf(-densityPenaltyExp * diff * diff);
-            } else if (transPerBeat < densityMinPerBeat) {
-                float diff = (densityMinPerBeat - transPerBeat) / densityMinPerBeat;
-                penalty = expf(-densityPenaltyExp * diff * diff);
-            } else if (transPerBeat > densityMaxPerBeat) {
-                float diff = (transPerBeat - densityMaxPerBeat) / densityMaxPerBeat;
-                penalty = expf(-densityPenaltyExp * diff * diff);
-            }
-            penalties[i] = penalty;
+            float post = tempoStatePost_[i];
+            modWeights[i] = (1.0f - fwdBayesBias) * uniform + fwdBayesBias * post;
         }
 
-        // Apply penalty to all states in each tempo bin
+        // Apply modulation to all states in each tempo bin
         for (int i = 0; i < TEMPO_BINS; i++) {
             int base = fwdBinOffset_[i];
             int period = tempoBinLags_[i];
             if (period < 10) period = 10;
             for (int p = 0; p < period && (base + p) < fwdTotalStates_; p++) {
-                fwdAlpha_[base + p] *= penalties[i];
+                fwdAlpha_[base + p] *= modWeights[i];
             }
         }
 
-        // Re-normalize after penalty
-        float penaltyTotal = 0.0f;
+        // Re-normalize after modulation
+        float modTotal = 0.0f;
         for (int s = 0; s < fwdTotalStates_; s++) {
-            penaltyTotal += fwdAlpha_[s];
+            modTotal += fwdAlpha_[s];
         }
-        if (penaltyTotal > 1e-30f) {
-            float inv = 1.0f / penaltyTotal;
+        if (modTotal > 1e-30f) {
+            float inv = 1.0f / modTotal;
             for (int s = 0; s < fwdTotalStates_; s++) {
                 fwdAlpha_[s] *= inv;
             }

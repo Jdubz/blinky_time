@@ -512,6 +512,7 @@ public:
     float fwdFilterContrast = 2.0f;        // ODF power-law contrast (1=linear, 2-4=sharper discrimination)
     float fwdFilterLambda = 8.0f;          // Beat zone = 1/lambda of period (4-32, higher=narrower beat zone)
     float fwdFilterFloor = 0.01f;          // Observation probability floor (prevents zero-out)
+    float fwdBayesBias = 0.5f;             // Bayesian posterior modulation strength (0=off, 1=full posterior, v59)
 
     // === MULTI-AGENT BEAT TRACKING (v48) ===
     // 8 beat agents at different phases compete; best-scoring agent fires beats.
