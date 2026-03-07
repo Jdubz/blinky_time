@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
- * Batch A/B test: baseline vs subbeatcheck across all EDM tracks.
+ * Batch A/B test: baseline (setting OFF) vs test (setting ON) across all EDM tracks.
  * Plays each track twice (OFF then ON), records BPM accuracy.
  *
- * Usage: node ab_test_batch.cjs --port /dev/ttyACM0 --music-dir music/edm
+ * Usage:
+ *   node ab_test_batch.cjs --port /dev/ttyACM0 --music-dir music/edm --setting fwdfilter
+ *   node ab_test_batch.cjs --port /dev/ttyACM0 --setting subbeatcheck
+ *   node ab_test_batch.cjs --port /dev/ttyACM0 --setting fwdfilter --duration 25000
  */
 
 const { SerialPort } = require('serialport');
@@ -22,6 +25,7 @@ function getArg(name, defaultValue) {
 const portPath = getArg('--port', '/dev/ttyACM0');
 const musicDir = getArg('--music-dir', 'music/edm');
 const durationMs = parseInt(getArg('--duration', '20000'));
+const settingName = getArg('--setting', 'subbeatcheck');
 const settleMs = 4000;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -42,6 +46,17 @@ function getGroundTruthBpm(trackPath) {
   const ibis = [];
   for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);
   return 60.0 / (ibis.reduce((a, b) => a + b) / ibis.length);
+}
+
+function getTrackDuration(trackPath) {
+  try {
+    const { execSync } = require('child_process');
+    const out = execSync(
+      `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${trackPath}"`,
+      { encoding: 'utf-8' }
+    );
+    return parseFloat(out.trim());
+  } catch (e) { return null; }
 }
 
 function collectBpm(port, trackPath, playDurationMs) {
@@ -66,7 +81,14 @@ function collectBpm(port, trackPath, playDurationMs) {
     port.on('data', handler);
     port.write('stream on\n');
 
-    const ffplay = spawn('ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', trackPath]);
+    // Seek to middle of track (EDM intros have no beat)
+    const duration = getTrackDuration(trackPath);
+    const seekTo = duration ? Math.max(0, duration / 2 - playDurationMs / 2000) : 30;
+    const ffplay = spawn('ffplay', [
+      '-nodisp', '-autoexit', '-loglevel', 'quiet',
+      '-ss', seekTo.toFixed(1),
+      trackPath
+    ]);
 
     setTimeout(() => {
       ffplay.kill('SIGTERM');
@@ -110,7 +132,7 @@ async function main() {
     .map(f => path.join(musicDir, f))
     .sort();
 
-  console.log(`=== Batch BPM A/B Test: subbeatcheck ===`);
+  console.log(`=== Batch BPM A/B Test: ${settingName} ===`);
   console.log(`Port: ${portPath}, Tracks: ${tracks.length}, Duration: ${durationMs}ms\n`);
 
   const results = [];
@@ -121,25 +143,24 @@ async function main() {
     const trueBpm = getGroundTruthBpm(track);
     console.log(`[${i + 1}/${tracks.length}] ${name} (true: ${trueBpm ? trueBpm.toFixed(0) : '?'} BPM)`);
 
-    // Test 1: baseline (subbeatcheck OFF)
-    await setSetting(port, 'subbeatcheck', 0);
-    await setSetting(port, 'templatecheck', 0);
+    // Test 1: baseline (setting OFF)
+    await setSetting(port, settingName, 0);
     await sleep(1500);
     const baseReadings = await collectBpm(port, track, durationMs);
     const baseResult = analyzeBpm(baseReadings);
     const baseErr = classifyError(baseResult.mean, trueBpm);
     await sleep(2000);
 
-    // Test 2: subbeatcheck ON
-    await setSetting(port, 'subbeatcheck', 1);
+    // Test 2: setting ON
+    await setSetting(port, settingName, 1);
     await sleep(1500);
-    const subReadings = await collectBpm(port, track, durationMs);
-    const subResult = analyzeBpm(subReadings);
-    const subErr = classifyError(subResult.mean, trueBpm);
+    const testReadings = await collectBpm(port, track, durationMs);
+    const testResult = analyzeBpm(testReadings);
+    const testErr = classifyError(testResult.mean, trueBpm);
     await sleep(2000);
 
     // Reset
-    await setSetting(port, 'subbeatcheck', 0);
+    await setSetting(port, settingName, 0);
 
     const row = {
       track: name,
@@ -148,66 +169,70 @@ async function main() {
       baseStd: baseResult.std.toFixed(1),
       baseErr: baseErr.error !== null ? baseErr.error.toFixed(1) : '?',
       baseOctave: baseErr.octave ? 'YES' : 'no',
-      subBpm: subResult.mean.toFixed(1),
-      subStd: subResult.std.toFixed(1),
-      subErr: subErr.error !== null ? subErr.error.toFixed(1) : '?',
-      subOctave: subErr.octave ? 'YES' : 'no',
+      testBpm: testResult.mean.toFixed(1),
+      testStd: testResult.std.toFixed(1),
+      testErr: testErr.error !== null ? testErr.error.toFixed(1) : '?',
+      testOctave: testErr.octave ? 'YES' : 'no',
     };
     results.push(row);
 
-    const winner = (subErr.error !== null && baseErr.error !== null)
-      ? (subErr.error < baseErr.error ? 'SUB' : (subErr.error > baseErr.error ? 'BASE' : 'TIE'))
+    const winner = (testErr.error !== null && baseErr.error !== null)
+      ? (testErr.error < baseErr.error ? 'TEST' : (testErr.error > baseErr.error ? 'BASE' : 'TIE'))
       : '?';
-    console.log(`  Base: ${row.baseBpm} ±${row.baseStd} (err ${row.baseErr}, oct: ${row.baseOctave})`);
-    console.log(`  Sub:  ${row.subBpm} ±${row.subStd} (err ${row.subErr}, oct: ${row.subOctave}) → ${winner}`);
+    console.log(`  Base: ${row.baseBpm} +/-${row.baseStd} (err ${row.baseErr}, oct: ${row.baseOctave})`);
+    console.log(`  Test: ${row.testBpm} +/-${row.testStd} (err ${row.testErr}, oct: ${row.testOctave}) -> ${winner}`);
   }
 
   // Summary table
   console.log('\n' + '='.repeat(110));
-  console.log('SUMMARY: Baseline vs subbeatcheck ON');
+  console.log(`SUMMARY: Baseline vs ${settingName}=1`);
   console.log('='.repeat(110));
   const h = 'Track'.padEnd(30) + 'True'.padEnd(7) + 'Base BPM'.padEnd(12) + 'Err'.padEnd(8) + 'Oct'.padEnd(5)
-    + 'Sub BPM'.padEnd(12) + 'Err'.padEnd(8) + 'Oct'.padEnd(5) + 'Winner';
+    + 'Test BPM'.padEnd(12) + 'Err'.padEnd(8) + 'Oct'.padEnd(5) + 'Winner';
   console.log(h);
   console.log('-'.repeat(110));
 
-  let baseWins = 0, subWins = 0, ties = 0;
-  let baseOctaveErrors = 0, subOctaveErrors = 0;
-  let baseTotalErr = 0, subTotalErr = 0, counted = 0;
+  let baseWins = 0, testWins = 0, ties = 0;
+  let baseOctaveErrors = 0, testOctaveErrors = 0;
+  let baseTotalErr = 0, testTotalErr = 0, counted = 0;
 
   for (const r of results) {
-    const winner = (r.subErr !== '?' && r.baseErr !== '?')
-      ? (parseFloat(r.subErr) < parseFloat(r.baseErr) ? 'SUB' : (parseFloat(r.subErr) > parseFloat(r.baseErr) ? 'BASE' : 'TIE'))
+    const winner = (r.testErr !== '?' && r.baseErr !== '?')
+      ? (parseFloat(r.testErr) < parseFloat(r.baseErr) ? 'TEST' : (parseFloat(r.testErr) > parseFloat(r.baseErr) ? 'BASE' : 'TIE'))
       : '?';
     if (winner === 'BASE') baseWins++;
-    else if (winner === 'SUB') subWins++;
+    else if (winner === 'TEST') testWins++;
     else if (winner === 'TIE') ties++;
     if (r.baseOctave === 'YES') baseOctaveErrors++;
-    if (r.subOctave === 'YES') subOctaveErrors++;
-    if (r.baseErr !== '?' && r.subErr !== '?') {
+    if (r.testOctave === 'YES') testOctaveErrors++;
+    if (r.baseErr !== '?' && r.testErr !== '?') {
       baseTotalErr += parseFloat(r.baseErr);
-      subTotalErr += parseFloat(r.subErr);
+      testTotalErr += parseFloat(r.testErr);
       counted++;
     }
     console.log(
       r.track.padEnd(30) + r.trueBpm.padEnd(7) +
-      (`${r.baseBpm}±${r.baseStd}`).padEnd(12) + r.baseErr.padEnd(8) + r.baseOctave.padEnd(5) +
-      (`${r.subBpm}±${r.subStd}`).padEnd(12) + r.subErr.padEnd(8) + r.subOctave.padEnd(5) +
+      (`${r.baseBpm}+/-${r.baseStd}`).padEnd(12) + r.baseErr.padEnd(8) + r.baseOctave.padEnd(5) +
+      (`${r.testBpm}+/-${r.testStd}`).padEnd(12) + r.testErr.padEnd(8) + r.testOctave.padEnd(5) +
       winner
     );
   }
 
   console.log('-'.repeat(110));
-  console.log(`Wins: Baseline=${baseWins}, Subbeat=${subWins}, Ties=${ties}`);
-  console.log(`Octave errors: Baseline=${baseOctaveErrors}, Subbeat=${subOctaveErrors}`);
+  console.log(`Wins: Baseline=${baseWins}, ${settingName}=${testWins}, Ties=${ties}`);
+  console.log(`Octave errors: Baseline=${baseOctaveErrors}, ${settingName}=${testOctaveErrors}`);
   if (counted > 0) {
-    console.log(`Mean error: Baseline=${(baseTotalErr / counted).toFixed(1)}, Subbeat=${(subTotalErr / counted).toFixed(1)}`);
+    console.log(`Mean error: Baseline=${(baseTotalErr / counted).toFixed(1)}, ${settingName}=${(testTotalErr / counted).toFixed(1)}`);
   }
 
   // Save results
-  const outPath = `tuning-results/ab-subbeatcheck-${Date.now()}.json`;
+  const outPath = `tuning-results/ab-${settingName}-${Date.now()}.json`;
   fs.mkdirSync('tuning-results', { recursive: true });
-  fs.writeFileSync(outPath, JSON.stringify({ timestamp: new Date().toISOString(), results }, null, 2));
+  fs.writeFileSync(outPath, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    setting: settingName,
+    results
+  }, null, 2));
   console.log(`\nResults saved to ${outPath}`);
 
   port.close();

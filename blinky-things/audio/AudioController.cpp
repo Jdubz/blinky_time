@@ -2035,6 +2035,53 @@ void AudioController::updateForwardFilter(float odf) {
         }
     }
 
+    // Onset-density octave penalty: penalizes tempo bins where transients/beat
+    // is implausible (same logic as Bayesian posterior discriminator).
+    // Addresses forward filter's severe half-time bias by down-weighting bins
+    // where the onset rate doesn't match the implied BPM.
+    if (densityOctaveEnabled && onsetDensity_ > 0.1f) {
+        float penalties[TEMPO_BINS];
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float bpm = tempoBinBpms_[i];
+            float transPerBeat = 60.0f * onsetDensity_ / bpm;
+            float penalty = 1.0f;
+
+            if (densityTarget > 0.0f) {
+                float diff = (transPerBeat - densityTarget) / densityTarget;
+                penalty = expf(-densityPenaltyExp * diff * diff);
+            } else if (transPerBeat < densityMinPerBeat) {
+                float diff = (densityMinPerBeat - transPerBeat) / densityMinPerBeat;
+                penalty = expf(-densityPenaltyExp * diff * diff);
+            } else if (transPerBeat > densityMaxPerBeat) {
+                float diff = (transPerBeat - densityMaxPerBeat) / densityMaxPerBeat;
+                penalty = expf(-densityPenaltyExp * diff * diff);
+            }
+            penalties[i] = penalty;
+        }
+
+        // Apply penalty to all states in each tempo bin
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            int base = fwdBinOffset_[i];
+            int period = tempoBinLags_[i];
+            if (period < 10) period = 10;
+            for (int p = 0; p < period && (base + p) < fwdTotalStates_; p++) {
+                fwdAlpha_[base + p] *= penalties[i];
+            }
+        }
+
+        // Re-normalize after penalty
+        float penaltyTotal = 0.0f;
+        for (int s = 0; s < fwdTotalStates_; s++) {
+            penaltyTotal += fwdAlpha_[s];
+        }
+        if (penaltyTotal > 1e-30f) {
+            float inv = 1.0f / penaltyTotal;
+            for (int s = 0; s < fwdTotalStates_; s++) {
+                fwdAlpha_[s] *= inv;
+            }
+        }
+    }
+
     // Find argmax state
     fwdPrevBestBin_ = fwdBestBin_;
     fwdPrevBestPos_ = fwdBestPos_;

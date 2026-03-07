@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 7, 2026 (v58+NN: nnbeat default ON, hybrid phase tracker, fwdphase A/B test)*
+*Last Updated: March 7, 2026 (v59: forward filter density penalty, ensemble solo fast path, v5 focal loss training)*
 
 ## Current Status
 
@@ -497,7 +497,7 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Tracks tempo and pha
 
 **Next steps (prioritized):**
 1. ~~**Hybrid approach**: Use forward filter for phase tracking only~~ **DONE (v58)** — `fwdphase=1` runs single-bin phase tracker alongside CBSS. A/B tested: BPM-neutral (8 wins vs 6, mean error 14.9 vs 14.8). Phase smoothness needs visual evaluation on LEDs.
-2. **Onset-density penalty in forward filter**: Port the `densityOctaveEnabled` logic from Bayesian posterior into the forward filter's tempo transition probability. At half-time, transients/beat < 0.5 should heavily penalize those bins.
+2. ~~**Onset-density penalty in forward filter**~~ **DONE (v59)** — Ported `densityOctaveEnabled` logic into `updateForwardFilter()`. Applied after normalization, before argmax: penalizes all states in tempo bins where `60*onsetDensity/BPM` falls outside [0.5, 5.0] transients/beat. Re-normalizes after penalty. Awaiting A/B test.
 3. **Asymmetric observation model**: Scale `obsNonBeat` penalty by expected beats-per-bar at that tempo. Slower tempos should more strongly penalize high ODF at non-beat positions.
 
 **Positive signal: tempo variability.** The forward filter's std (13.5 BPM) is higher than baseline (5.1 BPM), indicating the filter is responsive to the audio rather than locked to a gravity well. If the octave bias is fixed, this responsiveness could translate to better tracking.
@@ -1024,15 +1024,11 @@ The gap between 28% and BTrack's 65-75% is primarily phase alignment. Specific c
 
 **Result:** Disabled in v28. No regression on 18-track validation. FT and IOI code retained but default weights set to 0.
 
-#### 1b. Simplify Ensemble Infrastructure for Solo Detector — OUTSTANDING
+#### 1b. Simplify Ensemble Infrastructure for Solo Detector — DONE (v59)
 
-**Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead. The agreementBoosts array, minConfidence filtering, and dominant detector tracking serve no purpose.
+**Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead.
 
-**Action:** Simplify EnsembleFusion to pass BandFlux output directly when only 1 detector is enabled. Keep the multi-detector path as dead code for future experimentation, but bypass it at runtime.
-
-**Test plan:** Before/after 9-track sweep to confirm no regression from simplification.
-
-**Effort:** Low (~30 lines). **Impact:** Cleaner code, marginally less CPU.
+**Result:** Added fast path in `EnsembleFusion::fuse()`: when exactly 1 detector is enabled, bypasses agreement scaling and weighted averaging — direct strength pass-through with confidence filtering and cooldown only. Multi-detector path retained for future experimentation.
 
 #### 1c. Evaluate Adaptive Band Weighting Cost/Benefit — OUTSTANDING
 
@@ -1209,7 +1205,7 @@ Detection requires ALL of:
 
 **Result:** Tested as `bfhiresbass=1` in v32. Hurts Beat F1 by ~9%. Keep off.
 
-#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking — OUTSTANDING
+#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking — ELIMINATED
 
 BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phase. We already have phase data in SharedSpectralAnalysis. CSD catches pitched onsets at constant energy that magnitude flux misses. **For CBSS rhythm ODF only** — phase is too noisy via microphone for visual transient detection.
 
