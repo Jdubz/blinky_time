@@ -1,0 +1,349 @@
+#!/usr/bin/env node
+/**
+ * Multi-device parameter sweep: test a feature across its parameter range.
+ *
+ * Plays each track once per sweep value, reads ALL devices simultaneously.
+ * Use this BEFORE running A/B tests to find optimal parameter values.
+ *
+ * Usage:
+ *   # Sweep fwdasymmetry from 0 to 5 in 6 steps, with fwdfilter enabled
+ *   node param_sweep_multidev.cjs --param fwdasymmetry --min 0 --max 5 --steps 6 \
+ *     --enable "fwdfilter=1" --pre "fwdbayesbias=0.5"
+ *
+ *   # Sweep fwdbayesbias from 0 to 1 in 5 steps
+ *   node param_sweep_multidev.cjs --param fwdbayesbias --min 0 --max 1 --steps 5 \
+ *     --enable "fwdfilter=1,fwdasymmetry=2"
+ *
+ *   # Custom ports
+ *   node param_sweep_multidev.cjs --param fwdasymmetry --min 0 --max 5 --steps 6 \
+ *     --ports /dev/ttyACM0,/dev/ttyACM1
+ */
+
+const { SerialPort } = require('serialport');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const args = process.argv.slice(2);
+function getArg(name, defaultValue) {
+  const idx = args.indexOf(name);
+  if (idx === -1 || idx + 1 >= args.length) return defaultValue;
+  return args[idx + 1];
+}
+
+const portsArg = getArg('--ports', '/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2');
+const portPaths = portsArg.split(',').map(s => s.trim());
+const musicDir = getArg('--music-dir', 'music/edm');
+const durationMs = parseInt(getArg('--duration', '35000'));
+const paramName = getArg('--param', '');
+const paramMin = parseFloat(getArg('--min', '0'));
+const paramMax = parseFloat(getArg('--max', '1'));
+const paramSteps = parseInt(getArg('--steps', '5'));
+const enableSettings = getArg('--enable', '');  // settings to enable before sweep (e.g., fwdfilter=1)
+const preSettings = getArg('--pre', '');         // additional pre-settings
+// Settle time: OSS buffer fill (5.5s) + autocorrelation convergence (~2s)
+// + Bayesian posterior stabilization (~2s) + audio latency (~0.6s) = ~10s minimum.
+// Use 12s for margin.
+const settleMs = 12000;
+
+if (!paramName) {
+  console.error('ERROR: --param is required');
+  console.error('Usage: node param_sweep_multidev.cjs --param <name> --min <v> --max <v> --steps <n> --enable "feature=1"');
+  process.exit(1);
+}
+
+const AUDIO_LOCK = '/tmp/blinky-audio.lock';
+
+function acquireAudioLock() {
+  try {
+    const fd = fs.openSync(AUDIO_LOCK, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, ports: portPaths, started: new Date().toISOString() }));
+    fs.closeSync(fd);
+    return true;
+  } catch (e) {
+    if (e.code === 'EEXIST') {
+      try {
+        const info = JSON.parse(fs.readFileSync(AUDIO_LOCK, 'utf-8'));
+        try { process.kill(info.pid, 0); } catch (killErr) {
+          if (killErr.code === 'ESRCH') { fs.unlinkSync(AUDIO_LOCK); return acquireAudioLock(); }
+        }
+        console.error(`ERROR: Audio lock held by PID ${info.pid} on ${info.ports} (started ${info.started})`);
+      } catch (readErr) {
+        console.error(`ERROR: Audio lock exists at ${AUDIO_LOCK}.`);
+      }
+      return false;
+    }
+    throw e;
+  }
+}
+
+function releaseAudioLock() {
+  try { fs.unlinkSync(AUDIO_LOCK); } catch (e) { /* ignore */ }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function openPort(portPath) {
+  const port = new SerialPort({ path: portPath, baudRate: 115200 });
+  await new Promise((resolve, reject) => {
+    port.on('open', resolve);
+    port.on('error', reject);
+  });
+  await sleep(500);
+  return port;
+}
+
+function setSetting(port, name, value) {
+  return new Promise((resolve) => {
+    port.write(`set ${name} ${value}\n`);
+    setTimeout(resolve, 200);
+  });
+}
+
+async function setAllDevices(ports, name, value) {
+  await Promise.all(ports.map(p => setSetting(p, name, value)));
+}
+
+function loadManifest() {
+  const manifestPath = path.join(musicDir, 'track_manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    console.error(`ERROR: No track manifest found at ${manifestPath}`);
+    console.error('Run: node generate_track_manifest.cjs --music-dir ' + musicDir);
+    process.exit(1);
+  }
+  return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+}
+
+function getGroundTruthBpm(trackName) {
+  const beatsPath = path.join(musicDir, trackName + '.beats.json');
+  if (!fs.existsSync(beatsPath)) return null;
+  const data = JSON.parse(fs.readFileSync(beatsPath, 'utf-8'));
+  const beats = data.hits.filter(h => h.expectTrigger !== false).map(h => h.time);
+  if (beats.length < 3) return null;
+  const ibis = [];
+  for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);
+  return 60.0 / (ibis.reduce((a, b) => a + b) / ibis.length);
+}
+
+function collectBpmMultiDevice(ports, trackPath, seekOffset, playDurationMs) {
+  return new Promise((resolve) => {
+    const readings = {};
+    const bufs = {};
+    const handlers = {};
+
+    for (let i = 0; i < ports.length; i++) {
+      const devId = `dev${i}`;
+      readings[devId] = [];
+      bufs[devId] = '';
+      handlers[devId] = (d) => {
+        bufs[devId] += d.toString();
+        const lines = bufs[devId].split('\n');
+        bufs[devId] = lines.pop();
+        for (const line of lines) {
+          try {
+            const obj = JSON.parse(line);
+            if (obj.m && obj.m.bpm) {
+              readings[devId].push({ time: Date.now(), bpm: obj.m.bpm });
+            }
+          } catch (e) { /* skip */ }
+        }
+      };
+      ports[i].on('data', handlers[devId]);
+      ports[i].write('stream on\n');
+    }
+
+    const ffplay = spawn('ffplay', [
+      '-nodisp', '-autoexit', '-loglevel', 'quiet',
+      '-ss', seekOffset.toFixed(1),
+      trackPath
+    ]);
+
+    setTimeout(() => {
+      ffplay.kill('SIGTERM');
+      for (let i = 0; i < ports.length; i++) {
+        const devId = `dev${i}`;
+        ports[i].write('stream off\n');
+        ports[i].removeListener('data', handlers[devId]);
+      }
+      setTimeout(() => resolve(readings), 500);
+    }, playDurationMs);
+  });
+}
+
+function analyzeBpm(readings) {
+  if (readings.length === 0) return { mean: 0, std: 0, count: 0 };
+  const startTime = readings[0].time + settleMs;
+  const settled = readings.filter(r => r.time >= startTime);
+  if (settled.length === 0) return { mean: 0, std: 0, count: 0 };
+  const bpms = settled.map(r => r.bpm);
+  const mean = bpms.reduce((a, b) => a + b) / bpms.length;
+  const variance = bpms.reduce((a, b) => a + (b - mean) ** 2, 0) / bpms.length;
+  return { mean, std: Math.sqrt(variance), count: settled.length };
+}
+
+function classifyError(detected, actual) {
+  if (!actual) return { error: null, ratio: null, octave: false };
+  const ratios = [0.5, 2 / 3, 1.0, 3 / 2, 2.0];
+  let bestError = Infinity, bestRatio = 1.0;
+  for (const r of ratios) {
+    const err = Math.abs(detected - actual * r);
+    if (err < bestError) { bestError = err; bestRatio = r; }
+  }
+  return { error: bestError, ratio: bestRatio, octave: bestRatio !== 1.0 };
+}
+
+async function main() {
+  if (!acquireAudioLock()) process.exit(1);
+  process.on('exit', releaseAudioLock);
+  process.on('SIGINT', () => { releaseAudioLock(); process.exit(130); });
+  process.on('SIGTERM', () => { releaseAudioLock(); process.exit(143); });
+
+  const manifest = loadManifest();
+
+  // Open ports
+  console.log(`Opening ${portPaths.length} device(s)...`);
+  const ports = [];
+  for (const pp of portPaths) {
+    try {
+      const port = await openPort(pp);
+      ports.push(port);
+      console.log(`  ${pp}: connected`);
+    } catch (e) {
+      console.error(`  ${pp}: FAILED (${e.message})`);
+    }
+  }
+  if (ports.length === 0) {
+    console.error('No devices connected.');
+    releaseAudioLock();
+    process.exit(1);
+  }
+
+  // Apply enable-settings and pre-settings
+  const allPreSettings = [enableSettings, preSettings].filter(Boolean).join(',');
+  if (allPreSettings) {
+    for (const pair of allPreSettings.split(',').filter(Boolean)) {
+      const [key, val] = pair.split('=');
+      if (key && val !== undefined) {
+        console.log(`Setting: ${key.trim()} = ${val.trim()}`);
+        await setAllDevices(ports, key.trim(), val.trim());
+      }
+    }
+    await sleep(500);
+  }
+
+  // Generate sweep values
+  const sweepValues = [];
+  for (let i = 0; i < paramSteps; i++) {
+    const value = paramMin + (paramMax - paramMin) * i / Math.max(1, paramSteps - 1);
+    sweepValues.push(Math.round(value * 1000) / 1000);
+  }
+
+  // Valid tracks
+  const tracks = fs.readdirSync(musicDir)
+    .filter(f => f.endsWith('.mp3'))
+    .map(f => f.replace('.mp3', ''))
+    .filter(name => manifest[name] && manifest[name].valid)
+    .sort();
+
+  console.log(`\n=== Parameter Sweep: ${paramName} ===`);
+  console.log(`Values: [${sweepValues.join(', ')}]`);
+  console.log(`Devices: ${ports.length}, Tracks: ${tracks.length}, Duration: ${durationMs}ms\n`);
+
+  // Results: sweepResults[valueIdx][trackIdx] = { mean, std, error, octave, perDevice: [...] }
+  const sweepResults = [];
+
+  for (let vi = 0; vi < sweepValues.length; vi++) {
+    const value = sweepValues[vi];
+    console.log(`\n--- ${paramName} = ${value} (${vi + 1}/${sweepValues.length}) ---`);
+    await setAllDevices(ports, paramName, value);
+    await sleep(1000);
+
+    const valueResults = [];
+
+    for (let ti = 0; ti < tracks.length; ti++) {
+      const name = tracks[ti];
+      const entry = manifest[name];
+      const trackPath = path.join(musicDir, name + '.mp3');
+      const trueBpm = getGroundTruthBpm(name);
+
+      const multi = await collectBpmMultiDevice(ports, trackPath, entry.seekOffset, durationMs);
+      await sleep(2000);
+
+      const devResults = [];
+      for (let di = 0; di < ports.length; di++) {
+        devResults.push(analyzeBpm(multi[`dev${di}`] || []));
+      }
+
+      const means = devResults.filter(r => r.count > 0).map(r => r.mean);
+      const aggMean = means.length > 0 ? means.reduce((a, b) => a + b) / means.length : 0;
+      const err = classifyError(aggMean, trueBpm);
+
+      valueResults.push({
+        track: name, trueBpm, aggMean, perDevice: means,
+        error: err.error, octave: err.octave
+      });
+
+      console.log(`  [${ti + 1}/${tracks.length}] ${name.substring(0, 25).padEnd(27)} BPM: ${means.map(m => m.toFixed(0)).join('/')} avg=${aggMean.toFixed(1)} err=${err.error !== null ? err.error.toFixed(1) : '?'} oct=${err.octave ? 'YES' : 'no'}`);
+    }
+
+    sweepResults.push({ value, tracks: valueResults });
+  }
+
+  // Summary: for each sweep value, aggregate stats
+  console.log('\n' + '='.repeat(100));
+  console.log(`SWEEP SUMMARY: ${paramName} [${paramMin} → ${paramMax}]`);
+  console.log('='.repeat(100));
+  console.log('Value'.padEnd(10) + 'Mean Err'.padEnd(12) + 'Octave Errs'.padEnd(14) + 'Tracks OK'.padEnd(12) + 'Best Tracks');
+  console.log('-'.repeat(100));
+
+  let bestValue = sweepValues[0], bestMeanErr = Infinity;
+
+  for (let vi = 0; vi < sweepValues.length; vi++) {
+    const value = sweepValues[vi];
+    const vr = sweepResults[vi].tracks;
+    const errors = vr.filter(t => t.error !== null).map(t => t.error);
+    const octaveCount = vr.filter(t => t.octave).length;
+    const meanErr = errors.length > 0 ? errors.reduce((a, b) => a + b) / errors.length : Infinity;
+    const tracksOk = vr.filter(t => !t.octave && t.error !== null && t.error < 10).length;
+
+    // Score: prioritize low octave errors, then low mean error
+    const score = meanErr + octaveCount * 5;  // 5 BPM penalty per octave error
+    if (score < bestMeanErr + (sweepResults[sweepValues.indexOf(bestValue)] ?
+        sweepResults[sweepValues.indexOf(bestValue)].tracks.filter(t => t.octave).length * 5 : 0)) {
+      bestValue = value;
+      bestMeanErr = meanErr;
+    }
+
+    console.log(
+      `${value}`.padEnd(10) +
+      `${meanErr.toFixed(1)}`.padEnd(12) +
+      `${octaveCount}/${vr.length}`.padEnd(14) +
+      `${tracksOk}/${vr.length}`.padEnd(12) +
+      vr.filter(t => !t.octave && t.error < 5).map(t => t.track.substring(0, 15)).join(', ')
+    );
+  }
+
+  console.log('-'.repeat(100));
+  console.log(`Recommended: ${paramName} = ${bestValue} (lowest combined score)`);
+
+  // Save full results
+  const timestamp = Date.now();
+  const outPath = `tuning-results/sweep-${paramName}-${timestamp}.json`;
+  fs.mkdirSync('tuning-results', { recursive: true });
+  fs.writeFileSync(outPath, JSON.stringify({
+    timestamp: new Date().toISOString(),
+    param: paramName,
+    min: paramMin, max: paramMax, steps: paramSteps,
+    enableSettings, preSettings,
+    nDevices: ports.length,
+    durationMs, settleMs,
+    sweepValues,
+    results: sweepResults
+  }, null, 2));
+  console.log(`\nFull results saved to ${outPath}`);
+
+  releaseAudioLock();
+  for (const port of ports) port.close();
+}
+
+main().catch(e => { console.error(e); releaseAudioLock(); process.exit(1); });

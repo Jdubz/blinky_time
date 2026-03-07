@@ -1987,7 +1987,15 @@ void AudioController::updateForwardFilter(float odf) {
     if (lambda < 2.0f) lambda = 2.0f;
     float obsFloor = fwdFilterFloor;
     float obsBeat = fmaxf(lambda * odfVal, obsFloor);
-    float obsNonBeat = fmaxf((1.0f - odfVal) / (lambda - 1.0f), obsFloor);
+    float obsNonBeatBase = fmaxf((1.0f - odfVal) / (lambda - 1.0f), obsFloor);
+
+    // For asymmetric model: find minimum period (fastest tempo bin)
+    int fwdMinPeriod = tempoBinLags_[0];
+    for (int i = 1; i < TEMPO_BINS; i++) {
+        if (tempoBinLags_[i] < fwdMinPeriod && tempoBinLags_[i] >= 10)
+            fwdMinPeriod = tempoBinLags_[i];
+    }
+    if (fwdMinPeriod < 10) fwdMinPeriod = 10;
 
     // Collect wrap probabilities (last position of each tempo bin) BEFORE shift
     float wrapProbs[TEMPO_BINS];  // 20 floats = 80 bytes on stack
@@ -2006,6 +2014,19 @@ void AudioController::updateForwardFilter(float odf) {
         if (period < 10) period = 10;
         int beatZone = period / static_cast<int>(lambda);
         if (beatZone < 1) beatZone = 1;
+
+        // Asymmetric non-beat penalty: at slower tempos (longer periods),
+        // high ODF at non-beat positions is penalized more strongly.
+        // This breaks octave symmetry — at half-time, real beats that
+        // land in non-beat positions incur a tempo-dependent penalty.
+        // The penalty scales with odfVal so low ODF (correct non-beat)
+        // is barely affected while high ODF (missed beat) is punished.
+        float obsNonBeat = obsNonBeatBase;
+        if (fwdAsymmetry > 0.0f && odfVal > 0.1f) {
+            float periodRatio = static_cast<float>(period) / static_cast<float>(fwdMinPeriod);
+            float asymPenalty = powf(1.0f / periodRatio, fwdAsymmetry * odfVal);
+            obsNonBeat = fmaxf(obsNonBeatBase * asymPenalty, obsFloor);
+        }
 
         // Shift: position p = old position p-1, with appropriate observation
         for (int p = period - 1; p >= 1; p--) {

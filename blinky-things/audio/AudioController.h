@@ -513,6 +513,7 @@ public:
     float fwdFilterLambda = 8.0f;          // Beat zone = 1/lambda of period (4-32, higher=narrower beat zone)
     float fwdFilterFloor = 0.01f;          // Observation probability floor (prevents zero-out)
     float fwdBayesBias = 0.5f;             // Bayesian posterior modulation strength (0=off, 1=full posterior, v59)
+    float fwdAsymmetry = 2.0f;             // Asymmetric non-beat penalty by tempo (0=off, 1-3=typical, v60)
 
     // === MULTI-AGENT BEAT TRACKING (v48) ===
     // 8 beat agents at different phases compete; best-scoring agent fires beats.

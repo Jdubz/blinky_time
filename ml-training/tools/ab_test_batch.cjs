@@ -7,6 +7,7 @@
  *   node ab_test_batch.cjs --port /dev/ttyACM0 --music-dir music/edm --setting fwdfilter
  *   node ab_test_batch.cjs --port /dev/ttyACM0 --setting subbeatcheck
  *   node ab_test_batch.cjs --port /dev/ttyACM0 --setting fwdfilter --duration 25000
+ *   node ab_test_batch.cjs --port /dev/ttyACM0 --setting fwdfilter --pre "fwdbayesbias=0,fwdasymmetry=2"
  */
 
 const { SerialPort } = require('serialport');
@@ -24,9 +25,50 @@ function getArg(name, defaultValue) {
 
 const portPath = getArg('--port', '/dev/ttyACM0');
 const musicDir = getArg('--music-dir', 'music/edm');
-const durationMs = parseInt(getArg('--duration', '20000'));
+const durationMs = parseInt(getArg('--duration', '35000'));
 const settingName = getArg('--setting', 'subbeatcheck');
-const settleMs = 4000;
+const preSettings = getArg('--pre', '');  // comma-separated key=value pairs applied at startup
+// Settle: OSS buffer fill (5.5s) + autocorr convergence (~2s) + posterior (~2s) + latency (~0.6s)
+const settleMs = 12000;
+
+// Audio lock: prevents multiple instances from playing audio simultaneously.
+// All devices share the same room — concurrent audio invalidates all results.
+const AUDIO_LOCK = '/tmp/blinky-audio.lock';
+
+function acquireAudioLock() {
+  try {
+    // O_EXCL: fail if file already exists (atomic check-and-create)
+    const fd = fs.openSync(AUDIO_LOCK, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY);
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, port: portPath, started: new Date().toISOString() }));
+    fs.closeSync(fd);
+    return true;
+  } catch (e) {
+    if (e.code === 'EEXIST') {
+      try {
+        const info = JSON.parse(fs.readFileSync(AUDIO_LOCK, 'utf-8'));
+        // Check if the holding process is still alive
+        try { process.kill(info.pid, 0); } catch (killErr) {
+          if (killErr.code === 'ESRCH') {
+            // Process is dead — stale lock, remove and retry
+            fs.unlinkSync(AUDIO_LOCK);
+            return acquireAudioLock();
+          }
+        }
+        console.error(`\nERROR: Audio lock held by PID ${info.pid} on ${info.port} (started ${info.started})`);
+        console.error('All devices share the same room — concurrent audio tests are invalid.');
+        console.error(`Remove ${AUDIO_LOCK} manually if the process is stuck.\n`);
+      } catch (readErr) {
+        console.error(`\nERROR: Audio lock exists at ${AUDIO_LOCK}. Another test may be running.\n`);
+      }
+      return false;
+    }
+    throw e;
+  }
+}
+
+function releaseAudioLock() {
+  try { fs.unlinkSync(AUDIO_LOCK); } catch (e) { /* ignore */ }
+}
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -122,9 +164,31 @@ function classifyError(detected, actual) {
 }
 
 async function main() {
+  // Acquire audio lock — only one test can play audio at a time
+  if (!acquireAudioLock()) {
+    process.exit(1);
+  }
+  // Ensure lock is released on exit (normal, error, or signal)
+  process.on('exit', releaseAudioLock);
+  process.on('SIGINT', () => { releaseAudioLock(); process.exit(130); });
+  process.on('SIGTERM', () => { releaseAudioLock(); process.exit(143); });
+
   const port = new SerialPort({ path: portPath, baudRate: 115200 });
   await new Promise(r => port.on('open', r));
   await sleep(1000);
+
+  // Apply pre-settings (e.g., --pre "fwdbayesbias=0,fwdasymmetry=2")
+  if (preSettings) {
+    const pairs = preSettings.split(',').filter(Boolean);
+    for (const pair of pairs) {
+      const [key, val] = pair.split('=');
+      if (key && val !== undefined) {
+        console.log(`Pre-setting: ${key} = ${val}`);
+        await setSetting(port, key.trim(), val.trim());
+      }
+    }
+    await sleep(500);
+  }
 
   // Find all MP3 tracks
   const tracks = fs.readdirSync(musicDir)
@@ -235,6 +299,7 @@ async function main() {
   }, null, 2));
   console.log(`\nResults saved to ${outPath}`);
 
+  releaseAudioLock();
   port.close();
 }
 
