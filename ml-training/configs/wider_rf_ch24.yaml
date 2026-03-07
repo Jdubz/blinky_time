@@ -1,6 +1,6 @@
 # Beat Activation CNN — Wider receptive field, reduced channels
+# Identical to wider_rf.yaml except channels: 24 (vs 32). ~23 KB INT8.
 # 5-layer dilated CNN: RF = 63 frames = 1008ms (covers one full beat at 60 BPM)
-# ~23 KB INT8 (vs 33 KB for ch32 variant)
 
 # Audio feature extraction (must match firmware exactly)
 audio:

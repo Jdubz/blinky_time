@@ -15,8 +15,9 @@
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
-// Memory: ~20 KB flash (v2 model) or ~34 KB (v3 wider model, in progress)
-//         Tensor arena and context buffer are pre-sized for the v3 model.
+// Memory (v2, current):  ~20 KB flash, 16 KB arena + 3.3 KB context = ~19 KB RAM
+// Memory (v3, planned):  ~34 KB flash, 16 KB arena + 13 KB context  = ~29 KB RAM
+// Arena and context buffer are pre-sized for v3 (~18 KB over v2's needs).
 // Inference: ~3-5 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)

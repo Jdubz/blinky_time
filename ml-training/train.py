@@ -6,6 +6,8 @@ Usage:
     python train.py --config configs/default.yaml --epochs 50 --batch-size 32
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import math
