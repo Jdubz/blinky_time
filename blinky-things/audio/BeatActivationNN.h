@@ -15,7 +15,7 @@
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
-// Memory: ~20 KB flash (model weights) + ~8 KB RAM (tensor arena) + ~3.3 KB context
+// Memory: ~34 KB flash (model weights) + ~16 KB RAM (tensor arena) + ~13 KB context
 // Inference: ~3-5 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)
@@ -195,15 +195,15 @@ private:
     }
 
     // Tensor arena — pre-allocated, no dynamic memory
-    // 8 KB should be sufficient for our model
-    static constexpr int TENSOR_ARENA_SIZE = 8192;
+    // 16 KB for 5-layer dilated CNN (wider receptive field model)
+    static constexpr int TENSOR_ARENA_SIZE = 16384;
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
     // Context buffer for sliding window
-    // Model is exported with --inference-frames (default 32 = 512ms at 62.5 Hz).
-    // Receptive field is 15 frames; 32 provides margin.
+    // Model is exported with --inference-frames (default: chunk_frames from config).
+    // Must be >= model receptive field (63 frames for 5-layer [1,2,4,8,16]).
     // Set MAX_CONTEXT >= the exported model's input time dimension.
-    static constexpr int MAX_CONTEXT = 32;
+    static constexpr int MAX_CONTEXT = 128;
     float contextBuffer_[MAX_CONTEXT * INPUT_MEL_BANDS];
     int contextLen_ = 0;      // Actual context length from model input shape
     int contextWriteIdx_ = 0; // How many frames we've written so far

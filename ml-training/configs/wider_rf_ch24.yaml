@@ -1,6 +1,6 @@
-# Beat Activation CNN — Wider receptive field variant
+# Beat Activation CNN — Wider receptive field, reduced channels (fits 25 KB budget)
 # 5-layer dilated CNN: RF = 63 frames = 1008ms (covers one full beat at 60 BPM)
-# ~15 KB INT8, fits 25 KB budget with room to spare
+# ~23 KB INT8, fits 25 KB budget (vs 33.3 KB for ch32 variant)
 
 # Audio feature extraction (must match firmware exactly)
 audio:
@@ -20,12 +20,12 @@ labels:
   beat_value: 1.0
   nonbeat_value: 0.0
 
-# Model architecture — wider receptive field
+# Model architecture — wider receptive field, reduced channels to fit budget
 model:
   type: "causal_cnn"
-  channels: 32
+  channels: 24
   kernel_size: 3
-  dilations: [1, 2, 4, 8, 16]    # RF: 63 frames = 1008ms (vs 15 frames = 240ms)
+  dilations: [1, 2, 4, 8, 16]    # RF: 63 frames = 1008ms
   dropout: 0.1
   downbeat: true
 
