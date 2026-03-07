@@ -106,7 +106,6 @@ def model_summary(cfg: dict) -> None:
 
 
 if __name__ == "__main__":
-    import yaml
-    with open("configs/default.yaml") as f:
-        cfg = yaml.safe_load(f)
+    from scripts.audio import load_config
+    cfg = load_config("configs/default.yaml")
     model_summary(cfg)

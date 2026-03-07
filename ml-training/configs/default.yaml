@@ -1,65 +1,15 @@
-# Beat Activation CNN — Training Configuration
-# Matches firmware audio pipeline in SharedSpectralAnalysis.h
+# Beat Activation CNN — 3-layer baseline
+#
+# Shared settings are in base.yaml and merged automatically by load_config().
+# This file only contains model-specific overrides.
 
-# Audio feature extraction (must match firmware exactly)
-audio:
-  sample_rate: 16000        # PDM mic rate
-  n_fft: 256                # FFT-256
-  hop_length: 256           # No overlap (hop = FFT size)
-  n_mels: 26                # SharedSpectralAnalysis NUM_MEL_BANDS
-  fmin: 60                  # MEL_MIN_FREQ
-  fmax: 8000                # MEL_MAX_FREQ
-  frame_rate: 62.5          # 16000 / 256
-  target_rms_db: -35        # Normalize audio RMS to simulate firmware AGC level
-  # AGC ceiling — must agree with firmware AdaptiveMic.h hwGainMaxSignal.
-  # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
-  # v56: lowered from 60 to 40 (conservative AGC preserves signal quality).
-  # prepare_dataset.py uses this to cap gain-aware noise augmentation.
-  hw_gain_max: 40           # Firmware default: 40 (AdaptiveMic.h v56)
-
-# Target label generation
-labels:
-  sigma_frames: 2           # Gaussian smoothing width (±32ms at 62.5 Hz)
-  beat_value: 1.0           # Peak activation at beat center
-  nonbeat_value: 0.0        # Background activation
-
-# Model architecture
 model:
-  type: "causal_cnn"        # or "tcn"
+  type: "causal_cnn"
   channels: 32              # Conv filter count
   kernel_size: 3
   dilations: [1, 2, 4]      # Receptive field: 15 frames = 240ms
   dropout: 0.1
-  downbeat: true            # Add downbeat output head (channel 1 = downbeat activation)
+  downbeat: true
 
-# Training
-training:
-  batch_size: 64
-  epochs: 100
-  learning_rate: 0.001
-  lr_schedule: "cosine"
-  chunk_frames: 128         # ~2s chunks at 62.5 Hz
-  chunk_stride: 64          # 50% overlap between chunks
-  pos_weight: 4.7           # BCE positive class weight for beat head (measured 17.7% positive ratio)
-  downbeat_pos_weight: 10.5 # BCE positive class weight for downbeat head (measured 8.7% positive ratio)
-  val_split: 0.15
-  seed: 42
-
-# Quantization
-quantization:
-  method: "qat"             # quantization-aware training
-  target_bits: 8            # INT8
-
-# Export
 export:
-  max_model_size_kb: 25     # Guard for 3-layer baseline (wider_rf configs override to 50)
-  output_header: "../blinky-things/audio/beat_model_data.h"
-  c_array_name: "beat_model_data"
-
-# Data paths (bulk data on /mnt/storage, processed data local for fast training)
-data:
-  audio_dir: "/mnt/storage/blinky-ml-data/audio"
-  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus"
-  processed_dir: "data/processed"
-  rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
-  test_set: "../blinky-test-player/music/edm"  # Existing 19-track test set
+  max_model_size_kb: 25     # ~20 KB INT8 for 3-layer model

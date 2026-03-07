@@ -18,15 +18,12 @@ from pathlib import Path
 
 import librosa
 import numpy as np
-import yaml
 
 
 def generate_reference(audio_path: str, config_path: str, output_path: str):
     """Compute mel bands for an audio file using the Python pipeline."""
-    with open(config_path) as f:
-        cfg = yaml.safe_load(f)
-
-    from scripts.prepare_dataset import firmware_mel_spectrogram
+    from scripts.audio import load_config, firmware_mel_spectrogram_torch as firmware_mel_spectrogram
+    cfg = load_config(config_path)
 
     audio, _ = librosa.load(audio_path, sr=cfg["audio"]["sample_rate"], mono=True)
     mel = firmware_mel_spectrogram(audio, cfg)

@@ -19,9 +19,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-import yaml
-
 from models.beat_cnn import build_beat_cnn
+from scripts.audio import load_config
 
 
 class MemmapBeatDataset(Dataset):
@@ -105,8 +104,7 @@ def main():
                         help="Focal loss gamma (default: 2.0)")
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     data_dir = Path(args.data_dir or cfg["data"]["processed_dir"])
     output_dir = Path(args.output_dir)

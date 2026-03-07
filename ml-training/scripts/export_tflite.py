@@ -26,7 +26,8 @@ import tensorflow as tf
 import tf_keras as keras
 from tf_keras import layers
 import torch
-import yaml
+
+from scripts.audio import load_config
 
 
 def build_tf_beat_cnn(n_mels: int, channels: int, kernel_size: int,
@@ -170,8 +171,7 @@ def main():
                              "Smaller = less device RAM. Must be >= receptive field (15 frames).")
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     data_dir = Path(args.data_dir or cfg["data"]["processed_dir"])
     output_dir = Path(args.output_dir)

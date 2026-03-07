@@ -26,11 +26,12 @@ import matplotlib.pyplot as plt
 import mir_eval
 import numpy as np
 import torch
-import yaml
 
 from models.beat_cnn import build_beat_cnn
-from scripts.prepare_dataset import (
-    _build_mel_filterbank, firmware_mel_spectrogram, load_config,
+from scripts.audio import (
+    build_mel_filterbank_torch as _build_mel_filterbank,
+    firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
+    load_config,
 )
 
 
