@@ -12,9 +12,16 @@ const fs = require('fs');
 const path = require('path');
 
 const args = process.argv.slice(2);
-const portPath = args[args.indexOf('--port') + 1] || '/dev/ttyACM0';
-const musicDir = args[args.indexOf('--music-dir') + 1] || 'music/edm';
-const durationMs = args.includes('--duration') ? parseInt(args[args.indexOf('--duration') + 1]) : 20000;
+
+function getArg(name, defaultValue) {
+  const idx = args.indexOf(name);
+  if (idx === -1 || idx + 1 >= args.length) return defaultValue;
+  return args[idx + 1];
+}
+
+const portPath = getArg('--port', '/dev/ttyACM0');
+const musicDir = getArg('--music-dir', 'music/edm');
+const durationMs = parseInt(getArg('--duration', '20000'));
 const settleMs = 4000;
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -30,7 +37,7 @@ function getGroundTruthBpm(trackPath) {
   const beatsPath = trackPath.replace('.mp3', '.beats.json');
   if (!fs.existsSync(beatsPath)) return null;
   const data = JSON.parse(fs.readFileSync(beatsPath, 'utf-8'));
-  const beats = data.hits.filter(h => h.expectTrigger).map(h => h.time);
+  const beats = data.hits.filter(h => h.expectTrigger !== false).map(h => h.time);
   if (beats.length < 3) return null;
   const ibis = [];
   for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);

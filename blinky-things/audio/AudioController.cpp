@@ -401,7 +401,13 @@ const AudioControl& AudioController::update(float dt) {
         combFilterBank_.process(onsetStrength);
     }
 
-    // 7. Update beat tracking
+    // 7. CBSS input: apply contrast to onset strength (shared across all beat tracking modes)
+    float cbssInput = onsetStrength;
+    if (cbssContrast != 1.0f && cbssInput > 0.0f) {
+        cbssInput = powf(cbssInput, cbssContrast);
+    }
+
+    // 8. Update beat tracking
     //    Tempo + beat detection modes (mutually exclusive, highest precedence first):
     //    a) forwardFilterEnabled: Joint tempo-phase forward filter (v57, Krebs/Böck 2015)
     //    b) particleFilterEnabled: PF estimates tempo via 100-particle bar-pointer model
@@ -412,10 +418,6 @@ const AudioControl& AudioController::update(float dt) {
         if (!fwdInitialized_) initForwardFilter();
         updateForwardFilter(onsetStrength);
         // Still update CBSS for sampleCounter_++ and cbssMean_ (used as silence gate)
-        float cbssInput = onsetStrength;
-        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
-            cbssInput = powf(cbssInput, cbssContrast);
-        }
         updateCBSS(cbssInput);
         detectForwardFilterBeat();
     } else if (particleFilterEnabled) {
@@ -428,28 +430,15 @@ const AudioControl& AudioController::update(float dt) {
             }
             pfUpdate(pfInput);  // Sets bpm_, beatPeriodSamples_ via pfExtractConsensus
         }
-        // CBSS + beat detection (fallthrough for PF mode)
-        float cbssInput = onsetStrength;
-        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
-            cbssInput = powf(cbssInput, cbssContrast);
-        }
         updateCBSS(cbssInput);
         detectBeat();
     } else if (barPointerHmm && tempoStateInitialized_) {
         // Single-tempo phase tracker with continuous ODF observation model (v49).
         updatePhaseTracker(onsetStrength);
-        float cbssInput = onsetStrength;
-        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
-            cbssInput = powf(cbssInput, cbssContrast);
-        }
         updateCBSS(cbssInput);
         detectHmmBeat();
     } else {
         // Default: CBSS + beat detection
-        float cbssInput = onsetStrength;
-        if (cbssContrast != 1.0f && cbssInput > 0.0f) {
-            cbssInput = powf(cbssInput, cbssContrast);
-        }
         updateCBSS(cbssInput);
         // Hybrid phase: run phase tracker alongside CBSS for smoother phase (v58)
         if (fwdPhaseOnly && tempoStateInitialized_) {
@@ -1966,6 +1955,8 @@ void AudioController::updateForwardFilter(float odf) {
         float sigma = fwdTransSigma;
         if (sigma < 0.5f) sigma = 0.5f;
         float invVar = 1.0f / (2.0f * sigma * sigma);
+        // fwdTransMatrix_[src][dest]: row-normalized so sum_dest T[src][dest] = 1.
+        // Accessed as T[j][i] where j=source, i=destination in the forward step.
         for (int j = 0; j < TEMPO_BINS; j++) {
             float sumRow = 0.0f;
             for (int i = 0; i < TEMPO_BINS; i++) {
@@ -1994,9 +1985,9 @@ void AudioController::updateForwardFilter(float odf) {
     // Observation likelihoods
     float lambda = fwdFilterLambda;
     if (lambda < 2.0f) lambda = 2.0f;
-    float floor = fwdFilterFloor;
-    float obsBeat = fmaxf(lambda * odfVal, floor);
-    float obsNonBeat = fmaxf((1.0f - odfVal) / (lambda - 1.0f), floor);
+    float obsFloor = fwdFilterFloor;
+    float obsBeat = fmaxf(lambda * odfVal, obsFloor);
+    float obsNonBeat = fmaxf((1.0f - odfVal) / (lambda - 1.0f), obsFloor);
 
     // Collect wrap probabilities (last position of each tempo bin) BEFORE shift
     float wrapProbs[TEMPO_BINS];  // 20 floats = 80 bytes on stack

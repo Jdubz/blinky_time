@@ -3,22 +3,29 @@
  * A/B test BPM accuracy with octave disambiguation settings.
  * Plays audio via ffplay, streams BPM from device, compares to ground truth.
  *
- * Usage: node ab_test_bpm.js --port /dev/ttyACM0 --track music/edm/dubstep-edm-halftime.mp3
+ * Usage: node ab_test_bpm.cjs --port /dev/ttyACM0 --track music/edm/dubstep-edm-halftime.mp3
  */
 
 const { SerialPort } = require('serialport');
-const { execSync, spawn } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const args = process.argv.slice(2);
-const portPath = args[args.indexOf('--port') + 1] || '/dev/ttyACM0';
-const trackPath = args[args.indexOf('--track') + 1];
+
+function getArg(name, defaultValue) {
+  const idx = args.indexOf(name);
+  if (idx === -1 || idx + 1 >= args.length) return defaultValue;
+  return args[idx + 1];
+}
+
+const portPath = getArg('--port', '/dev/ttyACM0');
+const trackPath = getArg('--track', null);
 const settleMs = 5000; // wait for BPM to settle before measuring
-const durationMs = args.includes('--duration') ? parseInt(args[args.indexOf('--duration') + 1]) : 30000;
+const durationMs = parseInt(getArg('--duration', '30000'));
 
 if (!trackPath) {
-  console.error('Usage: node ab_test_bpm.js --port /dev/ttyACM0 --track <path_to_mp3>');
+  console.error('Usage: node ab_test_bpm.cjs --port /dev/ttyACM0 --track <path_to_mp3>');
   process.exit(1);
 }
 
@@ -27,7 +34,7 @@ const beatsPath = trackPath.replace('.mp3', '.beats.json');
 let trueBpm = null;
 if (fs.existsSync(beatsPath)) {
   const data = JSON.parse(fs.readFileSync(beatsPath, 'utf-8'));
-  const beats = data.hits.filter(h => h.expectTrigger).map(h => h.time);
+  const beats = data.hits.filter(h => h.expectTrigger !== false).map(h => h.time);
   if (beats.length > 2) {
     const ibis = [];
     for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);
@@ -39,20 +46,6 @@ function setSetting(port, name, value) {
   return new Promise((resolve) => {
     port.write(`set ${name} ${value}\n`);
     setTimeout(resolve, 200);
-  });
-}
-
-function getSetting(port, name) {
-  return new Promise((resolve) => {
-    let buf = '';
-    const handler = (d) => { buf += d.toString(); };
-    port.on('data', handler);
-    port.write(`get ${name}\n`);
-    setTimeout(() => {
-      port.removeListener('data', handler);
-      const match = buf.match(new RegExp(`${name}\\s*=\\s*(\\S+)`));
-      resolve(match ? match[1] : null);
-    }, 300);
   });
 }
 

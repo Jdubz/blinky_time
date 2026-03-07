@@ -91,6 +91,9 @@ def _check_ffprobe():
         sys.exit(1)
 
 
+# Ensure ml-training root is on sys.path for `from scripts.audio import ...`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from scripts.audio import (
     SAMPLE_RATE, N_FFT, HOP_LENGTH, N_MELS, FMIN, FMAX, FRAME_RATE,
     build_mel_filterbank_np, firmware_mel_spectrogram_np,

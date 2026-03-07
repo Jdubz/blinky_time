@@ -41,6 +41,9 @@ import torchaudio
 from tqdm import tqdm
 
 
+# Ensure ml-training root is on sys.path for `from scripts.audio import ...`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from scripts.audio import (
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,

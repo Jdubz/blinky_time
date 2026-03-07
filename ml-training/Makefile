@@ -190,8 +190,8 @@ status:
 	@echo "=== Dataset Status ==="
 	@echo "Audio files:      $$(ls $(AUDIO_DIR)/*.mp3 2>/dev/null | wc -l)"
 	@echo "Consensus labels: $$(ls $(LABELS_CONSENSUS)/*.beats.json 2>/dev/null | wc -l)"
-	@echo "Processed train:  $$([ -f $(PROCESSED_DIR)/X_train.npy ] && $(PYTHON) -c \"import numpy; print(len(numpy.load('$(PROCESSED_DIR)/X_train.npy', mmap_mode='r')))\" 2>/dev/null || echo 'none')"
-	@echo "Processed val:    $$([ -f $(PROCESSED_DIR)/X_val.npy ] && $(PYTHON) -c \"import numpy; print(len(numpy.load('$(PROCESSED_DIR)/X_val.npy', mmap_mode='r')))\" 2>/dev/null || echo 'none')"
+	@echo "Processed train:  $$([ -f $(PROCESSED_DIR)/X_train.npy ] && DATADIR='$(PROCESSED_DIR)' $(PYTHON) -c "import numpy, os; print(len(numpy.load(os.path.join(os.environ['DATADIR'], 'X_train.npy'), mmap_mode='r')))" 2>/dev/null || echo 'none')"
+	@echo "Processed val:    $$([ -f $(PROCESSED_DIR)/X_val.npy ] && DATADIR='$(PROCESSED_DIR)' $(PYTHON) -c "import numpy, os; print(len(numpy.load(os.path.join(os.environ['DATADIR'], 'X_val.npy'), mmap_mode='r')))" 2>/dev/null || echo 'none')"
 	@echo "=== Recent Runs ==="
 	@ls -dt $(STORAGE)/outputs/*/ 2>/dev/null | head -5
 

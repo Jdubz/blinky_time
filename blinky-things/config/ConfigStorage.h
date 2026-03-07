@@ -88,7 +88,8 @@ public:
     // Version 55: Conservative AGC (hwGainMaxSignal 60→40, hwTarget 0.35→0.20, tracking tau 30→60s)
     // Version 56: Spectral noise estimation (noiseEst*, 5 new params) — same commit as v55
     // Version 57: Joint tempo-phase forward filter (forwardFilter*, 5 new params)
-    static const uint8_t SETTINGS_VERSION = 58; // v58: hybrid phase tracker, nnbeat default ON
+    // Version 58: Hybrid phase tracker (fwdPhaseOnly), nnBeatActivation default ON
+    static const uint8_t SETTINGS_VERSION = 58;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {

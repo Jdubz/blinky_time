@@ -330,7 +330,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB). +5.1 KB if forward filter enabled. +16 KB tensor arena if NN=1 build.
+- RAM: ~27 KB base (CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB + forward filter ~5.1 KB). +16 KB tensor arena if NN=1 build.
 - Flash: ~301 KB base, ~426 KB with NN=1 (includes 33 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
@@ -444,7 +444,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **Rhythmic pattern templates** (v50): Pearson correlation of CBSS vs 3 EDM bar templates for octave disambiguation (`templatecheck=0`, default OFF)
 - **Subbeat alternation** (v50): Odd/even energy ratio across 8 subbeat bins detects double-time lock (`subbeatcheck=0`, default OFF)
 - **NN beat activation** (v54+): Causal 1D CNN (5L ch32, 33.3 KB INT8) replaces BandFlux as ODF source. Requires `NN=1` build flag. Toggle: `nnbeat=1`. A/B tested: 11/18 track wins vs BandFlux, -0.8 mean error.
-- **Joint forward filter** (v57): Krebs/Böck/Widmer 2015 joint tempo-phase forward algorithm with continuous ODF observation. ~700 states (20 tempos × variable phase). Replaces CBSS+Bayesian when enabled (`fwdfilter=0`, default OFF — severe half-time bias in A/B test)
+- **Joint forward filter** (v57): Krebs/Böck/Widmer 2015 joint tempo-phase forward algorithm with continuous ODF observation. ~860 states (20 tempos × variable phase). Replaces CBSS+Bayesian when enabled (`fwdfilter=0`, default OFF — severe half-time bias in A/B test)
 - **Spectral noise subtraction** (v56): Martin 2001 minimum statistics noise estimation, per-bin oversubtraction after FFT (`noiseest=0`, default OFF — A/B tested, hurts BPM accuracy)
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Shared FFT + spectral pipeline**: All detectors share a single FFT → compressor → whitening chain
