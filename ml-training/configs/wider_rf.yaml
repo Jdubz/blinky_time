@@ -1,0 +1,62 @@
+# Beat Activation CNN — Wider receptive field variant
+# 5-layer dilated CNN: RF = 63 frames = 1008ms (covers one full beat at 60 BPM)
+# ~33 KB INT8 (nRF52840 has ~700 KB flash free)
+
+# Audio feature extraction (must match firmware exactly)
+audio:
+  sample_rate: 16000
+  n_fft: 256
+  hop_length: 256
+  n_mels: 26
+  fmin: 60
+  fmax: 8000
+  frame_rate: 62.5
+  target_rms_db: -35
+  hw_gain_max: 40
+
+# Target label generation
+labels:
+  sigma_frames: 2
+  beat_value: 1.0
+  nonbeat_value: 0.0
+
+# Model architecture — wider receptive field
+model:
+  type: "causal_cnn"
+  channels: 32
+  kernel_size: 3
+  dilations: [1, 2, 4, 8, 16]    # RF: 63 frames = 1008ms (vs 15 frames = 240ms)
+  dropout: 0.1
+  downbeat: true
+
+# Training
+training:
+  batch_size: 64
+  epochs: 100
+  learning_rate: 0.001
+  lr_schedule: "cosine"
+  chunk_frames: 128
+  chunk_stride: 64
+  pos_weight: 4.7
+  downbeat_pos_weight: 10.5
+  val_split: 0.15
+  seed: 42
+
+# Quantization
+quantization:
+  method: "qat"
+  target_bits: 8
+
+# Export
+export:
+  max_model_size_kb: 50
+  output_header: "../blinky-things/audio/beat_model_data.h"
+  c_array_name: "beat_model_data"
+
+# Data paths (local training machine — override with CLI args as needed)
+data:
+  audio_dir: "/mnt/storage/blinky-ml-data/audio"
+  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus"
+  processed_dir: "data/processed"
+  rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
+  test_set: "../blinky-test-player/music/edm"

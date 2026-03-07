@@ -6,10 +6,13 @@ Usage:
     python train.py --config configs/default.yaml --epochs 50 --batch-size 32
 """
 
+from __future__ import annotations
+
 import argparse
 import csv
 import math
 import sys
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +44,14 @@ class MemmapBeatDataset(Dataset):
         return x, y.unsqueeze(-1)
 
 
+def _broadcast_pos_weight(pos_weight: torch.Tensor | float,
+                          y: torch.Tensor) -> torch.Tensor | float:
+    """Reshape pos_weight for broadcasting against y (batch, time, channels)."""
+    if isinstance(pos_weight, torch.Tensor) and pos_weight.dim() == 1:
+        return pos_weight.view(1, 1, -1)
+    return pos_weight
+
+
 def weighted_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
                  pos_weight: torch.Tensor | float) -> torch.Tensor:
     """Weighted binary cross-entropy with per-channel positive class weights.
@@ -50,9 +61,33 @@ def weighted_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
                     one weight per output channel (e.g., [10.0, 40.0] for
                     beat + downbeat).
     """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
     bce = nn.functional.binary_cross_entropy(y_pred, y_true, reduction="none")
-    weights = y_true * pos_weight + (1 - y_true) * 1.0
+    weights = y_true * pw + (1 - y_true) * 1.0
     return (bce * weights).mean()
+
+
+def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
+                   pos_weight: torch.Tensor | float,
+                   gamma: float = 2.0) -> torch.Tensor:
+    """Focal loss (Lin et al. 2017) with per-channel positive class weights.
+
+    Down-weights well-classified (easy) examples with high p_t by a factor of
+    (1 - p_t)^gamma, and up-weights hard examples with low p_t, including
+    confidently wrong predictions.
+
+    Note: pos_weight and focal modulation multiply together, so easy positives
+    are suppressed from both directions. This makes pos_weight feel weaker in
+    focal mode than in plain BCE — may need higher pos_weight to compensate.
+    """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
+    bce = nn.functional.binary_cross_entropy(y_pred, y_true, reduction="none")
+    p_t = y_true * y_pred + (1 - y_true) * (1 - y_pred)
+    focal_weight = (1 - p_t) ** gamma
+    class_weight = y_true * pw + (1 - y_true) * 1.0
+    return (bce * focal_weight * class_weight).mean()
 
 
 def main():
@@ -64,6 +99,10 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
+    parser.add_argument("--loss", default="bce", choices=["bce", "focal"],
+                        help="Loss function: bce (default) or focal")
+    parser.add_argument("--focal-gamma", type=float, default=2.0,
+                        help="Focal loss gamma (default: 2.0)")
     args = parser.parse_args()
 
     with open(args.config) as f:
@@ -153,6 +192,14 @@ def main():
     else:
         pos_weight = beat_pos_weight
 
+    # Select loss function
+    if args.loss == "focal":
+        loss_fn = partial(weighted_focal, pos_weight=pos_weight, gamma=args.focal_gamma)
+        print(f"Loss: focal (gamma={args.focal_gamma})")
+    else:
+        loss_fn = partial(weighted_bce, pos_weight=pos_weight)
+        print(f"Loss: weighted BCE")
+
     # Training loop
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
     print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
@@ -175,7 +222,7 @@ def main():
 
             optimizer.zero_grad()
             Y_pred = model(X_batch)
-            loss = weighted_bce(Y_pred, Y_batch, pos_weight)
+            loss = loss_fn(Y_pred, Y_batch)
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -199,7 +246,7 @@ def main():
                 Y_batch = Y_batch.to(device, non_blocking=True)
 
                 Y_pred = model(X_batch)
-                loss = weighted_bce(Y_pred, Y_batch, pos_weight)
+                loss = loss_fn(Y_pred, Y_batch)
 
                 val_loss += loss.item() * X_batch.size(0)
                 val_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
@@ -239,6 +286,8 @@ def main():
         "state_dict": model.state_dict(),
         "config": cfg,
         "use_downbeat": use_downbeat,
+        "loss": args.loss,
+        "focal_gamma": args.focal_gamma if args.loss == "focal" else None,
     }, output_dir / "model_checkpoint.pt")
 
     # Save training log

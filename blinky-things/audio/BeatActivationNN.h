@@ -15,7 +15,9 @@
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
-// Memory: ~20 KB flash (model weights) + ~8 KB RAM (tensor arena) + ~3.3 KB context
+// Memory (v2, current):  ~20 KB flash, 16 KB arena + 3.3 KB context = ~19 KB RAM
+// Memory (v3, planned):  ~34 KB flash, 16 KB arena + 13 KB context  = ~29 KB RAM
+// Arena and context buffer are pre-sized for v3 (~18 KB over v2's needs).
 // Inference: ~3-5 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)
@@ -195,15 +197,15 @@ private:
     }
 
     // Tensor arena — pre-allocated, no dynamic memory
-    // 8 KB should be sufficient for our model
-    static constexpr int TENSOR_ARENA_SIZE = 8192;
+    // 16 KB: sized for v3 wider model (v2 needs ~8 KB, but pre-provisioned
+    // to avoid a firmware update when v3 ships)
+    static constexpr int TENSOR_ARENA_SIZE = 16384;
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
-    // Context buffer for sliding window
-    // Model is exported with --inference-frames (default 32 = 512ms at 62.5 Hz).
-    // Receptive field is 15 frames; 32 provides margin.
-    // Set MAX_CONTEXT >= the exported model's input time dimension.
-    static constexpr int MAX_CONTEXT = 32;
+    // Context buffer for sliding window — pre-sized for v3 wider model.
+    // v2 uses 32 frames; v3 needs up to 128. Runtime contextLen_ is set from
+    // the model's actual input shape, so only the needed portion is used.
+    static constexpr int MAX_CONTEXT = 128;
     float contextBuffer_[MAX_CONTEXT * INPUT_MEL_BANDS];
     int contextLen_ = 0;      // Actual context length from model input shape
     int contextWriteIdx_ = 0; // How many frames we've written so far

@@ -107,22 +107,31 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 - Model accuracy stuck at 61.7% (= negative class ratio — model learned nothing useful)
 - Beat F1 = 0.473 mean on test set, but 2.09x over-detection ratio
 - Downbeat F1 = 0.003 (broken — test labels were missing isDownbeat flags)
-- At optimal threshold (0.70-0.80), F1 improves to ~0.505 but still over-detects
 
-**Fixes applied (v2):**
+**Training v2 (consensus-4sys-v2) — COMPLETED, FUNCTIONAL:**
 - pos_weight corrected: beat=4.7, downbeat=10.5
-- Re-merged test track labels (`blinky-test-player/music/edm/`) with downbeat propagation from 4-system consensus
-- Fixed eval code: downbeat filter uses `isDownbeat` field instead of broken `strength > 0.9`
-- Added `--sweep-thresholds` to evaluate.py for automatic threshold optimization
-- Training v2 in progress: epoch 6 at 83.7% accuracy (vs 61.7% with wrong weights)
+- Best val_loss=1.0445 at epoch 55/70 (early stopped, patience=15)
+- **Mean Beat F1=0.548** @ threshold 0.70 (18 EDM test tracks, ±70ms mir_eval tolerance)
+- **Mean Downbeat F1=0.320** (functional, up from 0.003)
+- Detection ratio: 1.03x (near-perfect, v1 was 2.09x over-detecting)
+- Best tracks: techno-minimal-01 (0.798), trance-party (0.722), trance-goa-mantra (0.698)
+- Worst tracks: techno-dub-groove (0.230), dubstep-edm-halftime (0.402)
+- Failure mode: model hedges on complex rhythms (peaks ~0.5-0.7 not 0.9+, valleys ~0.2 not 0.0). 240ms receptive field too narrow for slow/halftime patterns.
+- Model exported to `beat_model_data.h` (20.4 KB INT8, hash c8e4c40c)
+
+**Training v3 (consensus-4sys-v3-wider) — IN PROGRESS:**
+- Wider receptive field: dilations [1,2,4,8,16], RF=63 frames=1008ms (vs 15 frames=240ms)
+- 15,330 params, ~15 KB INT8 (fits 25 KB budget)
+- Early results: val_loss=0.998 at epoch 5 (v2 best was 1.044 — 4.5% lower already)
+- Training ~6 min/epoch on RTX 3080, estimated 5-7 hours total
+- Config: `configs/wider_rf.yaml`
 
 **Outstanding:**
-- Wait for v2 training to complete (~3-5 hours for 100 epochs)
-- Evaluate v2 model with threshold sweep
-- ~~Re-prepare dataset with gain-aware mic profile~~ **DONE** — 3M train / 545K val chunks at `/mnt/storage/blinky-ml-data/processed/`
-- Train v3 with mic profile augmentation (data ready, waiting for v2 to finish GPU)
-- Deploy best model and A/B test vs BandFlux (expected: 0.28-0.35 → 0.50-0.70 F1)
-- ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 60 validated.
+- Wait for v3 training to complete and evaluate
+- Train v4 with focal loss (sharper activations, `--loss focal --focal-gamma 2.0`)
+- Train v5 with mic profile augmentation (`--mic-profile /mnt/storage/blinky-ml-data/calibration/mic_profile.npz`)
+- Deploy best model and A/B test vs BandFlux on hardware
+- ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 40 validated.
 
 ### Completed (March 4, 2026)
 
@@ -1229,19 +1238,15 @@ Phase alignment is the primary bottleneck. v43 fixed 4 Bayesian tempo bugs (BPM 
 
 Implemented and tested in v42. Both single-bin DFT (~3% confidence) and comb filter bank IIR (~2% confidence) produce too-low confidence for reliable correction. Mean F1 identical to baseline (0.426 vs 0.426 over 4 runs). Redundant with onset snap. Disabled by default.
 
-#### 1b. Lower CBSS Tightness — HIGH IMPACT, TRIVIAL EFFORT
+#### 1b. Lower CBSS Tightness — UNTESTED WITH NN ODF
 
-Try `cbssTightness=5.0` (BTrack default) and/or `cbssAlpha=0.85`. Current tightness=8.0 creates a very narrow log-Gaussian window that locks in initial phase errors. BTrack's tightness=5.0 allows more flexibility for the 10% onset contribution to gradually correct bad phase.
+Current tightness=8.0 (v40: raised from 5.0, +24% avg F1 with BandFlux ODF). With NN ODF, optimal tightness may differ — NN produces smoother, more periodic activations that could benefit from looser tightness. Requires hardware A/B test.
 
-**Effort**: Parameter change, A/B test on 18-track suite.
-**Expected impact**: +5-10% F1. May regress tracks where phase was already correct.
+**Effort**: Parameter change via serial (`set cbsstight 5.0`), A/B test on 18-track suite.
 
-#### 1c. Bidirectional Onset Snap — MEDIUM IMPACT, LOW EFFORT
+#### ~~1c. Bidirectional Onset Snap~~ — IMPLEMENTED (v44)
 
-Current onset snap only looks backward from countdown expiry. If the actual onset occurs a few frames after the predicted beat time, it's missed. Add a forward lookahead of 3-4 frames (45-60ms), delaying beat fire to allow searching both directions.
-
-**Effort**: Low (~15 lines).
-**Expected impact**: +3-5% F1. Adds 45-60ms latency (imperceptible for visuals).
+Already implemented: `bidirectionalSnap=true` delays beat declaration by 3 frames (~45ms) for bidirectional onset snap window. Default ON since v44.
 
 #### 1d. Joint Tempo-Phase HMM (Bar Pointer Model) — TESTED, FAILED (v37 + v46)
 
@@ -1319,8 +1324,8 @@ Phase is too noisy via microphone in a reverberant room. Dixon (2006) found CSD 
 #### 3b. Log-Spaced Sub-Band Filterbank
 Replace 3-band grouping with 12-24 log-spaced bands. Separates kick from bass, snare from vocals. ~80 lines.
 
-#### 3c. TinyML Beat Activation CNN — IN PROGRESS (v54)
-Causal 1D CNN for beat activation, replacing BandFlux ODF. Full pipeline scaffolded, firmware integrated, awaiting training data. See [ML_TRAINING_PLAN.md](ML_TRAINING_PLAN.md). Expected F1 improvement: 0.28-0.35 → 0.50-0.70.
+#### 3c. TinyML Beat Activation CNN — VALIDATED (v54, v2 model)
+Causal 1D CNN for beat activation. v2 model achieves 0.548 mean F1 (vs BandFlux ~0.28-0.35). v3 wider model (1008ms RF) in training. See NN section above for full results.
 
 ### Completed
 

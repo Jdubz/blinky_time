@@ -5,8 +5,9 @@ via TFLite Micro + CMSIS-NN.
 
 Architecture: 3 dilated causal conv layers (shared backbone) with per-task
 output heads. Beat activation is always present; downbeat is optional.
-Receptive field: 15 frames = 240ms at 62.5 Hz (covers one beat at 250 BPM).
-Size budget: ~9,000 params = ~20 KB INT8.
+Receptive field depends on dilation config:
+  [1,2,4] = 15 frames (240ms), [1,2,4,8,16] = 63 frames (1008ms).
+Size budget: ≤50 KB INT8 (nRF52840 has ~700 KB flash free).
 """
 
 import torch
