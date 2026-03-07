@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 6, 2026 (v57+NN: A/B tests for NN beat, noise subtraction, forward filter)*
+*Last Updated: March 7, 2026 (v58+NN: nnbeat default ON, hybrid phase tracker, fwdphase A/B test)*
 
 ## Current Status
 
@@ -496,7 +496,7 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Tracks tempo and pha
 - **Conclusion: lambda tuning cannot fix the octave problem.** The observation model is fundamentally octave-symmetric — at half-time, the filter sees a beat every other cycle and reinforces it.
 
 **Next steps (prioritized):**
-1. **Hybrid approach**: Use forward filter for phase tracking only, keep Bayesian+CBSS for tempo estimation. The forward filter's phase-tracking capability is the primary value; it doesn't need to own tempo. Implementation: constrain fwd filter to single tempo bin matching current `beatPeriodSamples_`, use argmax position for phase derivation.
+1. ~~**Hybrid approach**: Use forward filter for phase tracking only~~ **DONE (v58)** — `fwdphase=1` runs single-bin phase tracker alongside CBSS. A/B tested: BPM-neutral (8 wins vs 6, mean error 14.9 vs 14.8). Phase smoothness needs visual evaluation on LEDs.
 2. **Onset-density penalty in forward filter**: Port the `densityOctaveEnabled` logic from Bayesian posterior into the forward filter's tempo transition probability. At half-time, transients/beat < 0.5 should heavily penalize those bins.
 3. **Asymmetric observation model**: Scale `obsNonBeat` penalty by expected beats-per-bar at that tempo. Slower tempos should more strongly penalize high ODF at non-beat positions.
 
