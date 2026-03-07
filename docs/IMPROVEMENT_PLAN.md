@@ -391,7 +391,7 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 
 | # | Technique | Source | Effort | Expected Impact | Status |
 |---|-----------|--------|--------|----------------|--------|
-| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~5.1 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **v57 — IMPLEMENTED, default OFF, awaiting A/B validation** |
+| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~5.1 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **v57 — IMPLEMENTED, A/B tested: half-time bias (see below)** |
 | 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +0.031 F1, addresses slow phase drift | **v45 — DONE, retained** |
 | 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +0.012 F1, resolves 5 vs 8 dilemma | **v45 — DONE, retained** |
 | 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | Low — minor refinement per literature | Deprioritized |
@@ -434,6 +434,37 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Tracks tempo and pha
 - RAM: ~5.1 KB (3.5 KB alpha + 1.6 KB transition matrix)
 - CPU: ~700 multiplications per frame at 66 Hz = negligible on 64 MHz
 - SETTINGS_VERSION 57. When enabled, bypasses Bayesian tempo fusion for tempo setting (guard added to `externalTempoActive`)
+
+**Technique A — A/B Test Results (March 6, 2026):**
+
+18-track EDM sweep on ACM0 (v57 firmware, 25s per track × 2 configs).
+
+| Metric | CBSS Baseline | Forward Filter |
+|--------|:---:|:---:|
+| Mean BPM error (octave-aware) | 15.4 | **9.3** |
+| Track wins | 5 | **13** |
+| Octave errors | 7/18 | **17/18** |
+| Mean std dev (BPM stability) | **5.1** | 13.5 |
+
+**Finding: Severe half-time bias.** The forward filter consistently tracks at ~½ the true tempo (65-95 BPM for 120-175 BPM tracks). It gets lower octave-aware error because half-time is often closer than baseline's ~135 BPM gravity well, but **17/18 tracks are octave errors** vs 7/18 for baseline.
+
+**Root cause analysis:**
+1. **Rayleigh prior favors slow tempos**: The prior peaks at 120 BPM lag, which maps to ~30 samples. Half-tempo (~60 BPM, lag ~60) gets moderate prior weight, and once the filter locks to half-time, the observation model reinforces it because every other beat aligns with the slow tempo.
+2. **Narrow beat zone (λ=8, 12.5%)**: At half-tempo, beats land in the beat zone every other real beat. The missed real beats produce moderate ODF values at non-beat positions, which are only weakly penalized by `(1-ODF)/(λ-1)`.
+3. **No tempo lower bound enforcement**: The forward filter tracks tempos down to 60 BPM (the OSS buffer limit), while the baseline's Bayesian posterior + comb bank have stronger upward pressure from the gravity well.
+
+**Follow-up parameter sweep (lambda=4, 6, 8):**
+- λ=4: Swings to double-time (152-169 BPM for 118-129 BPM tracks). Too wide a beat zone.
+- λ=6: Still half-time biased (4/5 tracks at 73-106 BPM for 118-154 BPM true). Marginally better.
+- λ=8 (default): Consistent half-time (17/18 octave errors in full sweep).
+- **Conclusion: lambda tuning cannot fix the octave problem.** The observation model is fundamentally octave-symmetric — at half-time, the filter sees a beat every other cycle and reinforces it.
+
+**Next steps (prioritized):**
+1. **Hybrid approach**: Use forward filter for phase tracking only, keep Bayesian+CBSS for tempo estimation. The forward filter's phase-tracking capability is the primary value; it doesn't need to own tempo. Implementation: constrain fwd filter to single tempo bin matching current `beatPeriodSamples_`, use argmax position for phase derivation.
+2. **Onset-density penalty in forward filter**: Port the `densityOctaveEnabled` logic from Bayesian posterior into the forward filter's tempo transition probability. At half-time, transients/beat < 0.5 should heavily penalize those bins.
+3. **Asymmetric observation model**: Scale `obsNonBeat` penalty by expected beats-per-bar at that tempo. Slower tempos should more strongly penalize high ODF at non-beat positions.
+
+**Positive signal: tempo variability.** The forward filter's std (13.5 BPM) is higher than baseline (5.1 BPM), indicating the filter is responsive to the audio rather than locked to a gravity well. If the octave bias is fixed, this responsiveness could translate to better tracking.
 
 **Technique B — Rhythmic Pattern Templates (DETAILED):**
 
