@@ -338,7 +338,7 @@ public:
     // Requires ENABLE_NN_BEAT_ACTIVATION compile flag and valid model in beat_model_data.h.
     // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
     // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
-    bool nnBeatActivation = false;       // Use NN beat activation as ODF (A/B vs BandFlux)
+    bool nnBeatActivation = true;        // Use NN beat activation as ODF (A/B tested, 11/18 wins)
 
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
@@ -427,6 +427,7 @@ public:
     // Joint HMM (updateHmmForward) removed v53 — position-wrap doesn't work
     // across 20 tempo bins (argmax jumps between bins).
     bool barPointerHmm = false;          // Enable phase tracker beat detection (A/B vs CBSS)
+    bool fwdPhaseOnly = false;           // Hybrid: phase tracker for phase, CBSS for beats (v58)
     float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
     // (hmmTempoNorm removed v53 — only used by dead joint HMM updateHmmForward)
     // (hmmLambda removed v53 — only used by dead joint HMM buildHmmTransitionMatrix)
@@ -500,6 +501,17 @@ public:
     float tightnessHighMult = 1.3f;        // Multiplier when onset confidence LOW (v45)
     float tightnessConfThreshHigh = 3.0f;  // OSS/mean ratio above this = high confidence (v45)
     float tightnessConfThreshLow = 1.5f;   // OSS/mean ratio below this = low confidence (v45)
+
+    // === JOINT TEMPO-PHASE FORWARD FILTER (v57, Krebs/Böck 2015) ===
+    // Tracks tempo AND phase jointly via forward algorithm with continuous ODF observation.
+    // 20 tempo bins × variable phase positions (~860 states). Each state accumulates
+    // likelihood at every frame. Tempo changes only at beat boundaries (phase wrap).
+    // Replaces CBSS countdown + Bayesian tempo when enabled.
+    bool forwardFilterEnabled = false;      // Enable joint forward filter (A/B vs CBSS+Bayesian)
+    float fwdTransSigma = 3.0f;            // Tempo transition width in lag units (1-10, tighter=less octave jump)
+    float fwdFilterContrast = 2.0f;        // ODF power-law contrast (1=linear, 2-4=sharper discrimination)
+    float fwdFilterLambda = 8.0f;          // Beat zone = 1/lambda of period (4-32, higher=narrower beat zone)
+    float fwdFilterFloor = 0.01f;          // Observation probability floor (prevents zero-out)
 
     // === MULTI-AGENT BEAT TRACKING (v48) ===
     // 8 beat agents at different phases compete; best-scoring agent fires beats.
@@ -773,6 +785,22 @@ private:
     int phaseFramesSinceBeat_ = 999;             // Frames since last phase-tracker beat (wrap cooldown)
     void updatePhaseTracker(float odf);
 
+    // === JOINT FORWARD FILTER STATE (v57) ===
+    // 20 tempo bins with variable phase positions (= lag per bin, 20-66 frames).
+    // Total states: sum of all lags ≈ 860. Uses existing tempoBinLags_[] for periods.
+    static constexpr int FWD_MAX_STATES = 880;  // Sum of lags + margin
+    float fwdAlpha_[FWD_MAX_STATES] = {0};       // Forward probabilities
+    int fwdBinOffset_[TEMPO_BINS] = {0};          // Start index of each bin in fwdAlpha_
+    int fwdTotalStates_ = 0;                      // Actual total states
+    float fwdTransMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Tempo transition probabilities
+    float fwdTransSigmaLast_ = -1.0f;            // Last sigma used to build transition matrix
+    bool fwdInitialized_ = false;
+    int fwdBestBin_ = TEMPO_BINS / 2;            // Best tempo bin (~120 BPM)
+    int fwdBestPos_ = 0;                          // Best phase position
+    int fwdPrevBestBin_ = TEMPO_BINS / 2;
+    int fwdPrevBestPos_ = -1;
+    int fwdFramesSinceBeat_ = 999;
+
     // === PARTICLE FILTER STATE (v38) ===
     static constexpr int PF_NUM_PARTICLES = 100;
     static constexpr float PF_INFO_GATE_ODF_FLOOR = 0.03f;  // Floor value for gated ODF during silence
@@ -833,6 +861,11 @@ private:
 
     // Phase tracker beat detection (v46b, joint HMM removed v53)
     void detectHmmBeat();             // v46: position-0 wrap beat detection
+
+    // Joint forward filter (v57)
+    void initForwardFilter();
+    void updateForwardFilter(float odf);
+    void detectForwardFilterBeat();
 
     // Multi-agent beat tracking (v48)
     void initBeatAgents();

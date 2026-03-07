@@ -91,59 +91,22 @@ def _check_ffprobe():
         sys.exit(1)
 
 
-# Must match firmware SharedSpectralAnalysis exactly
-SAMPLE_RATE = 16000
-N_FFT = 256
-HOP_LENGTH = 256
-N_MELS = 26
-FMIN = 60
-FMAX = 8000
-FRAME_RATE = SAMPLE_RATE / HOP_LENGTH  # 62.5 Hz
+# Ensure ml-training root is on sys.path for `from scripts.audio import ...`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.audio import (
+    SAMPLE_RATE, N_FFT, HOP_LENGTH, N_MELS, FMIN, FMAX, FRAME_RATE,
+    build_mel_filterbank_np, firmware_mel_spectrogram_np,
+)
 
 # Capture timing
 SETTLE_SECONDS = 3.0  # AGC settle time before recording
 POST_SILENCE_SECONDS = 1.0  # Silence after audio ends
 
 
-def _build_mel_filterbank() -> np.ndarray:
-    """Build mel filterbank matching firmware (librosa HTK, no norm)."""
-    import librosa
-    return librosa.filters.mel(
-        sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS,
-        fmin=FMIN, fmax=FMAX, htk=True, norm=None,
-    ).astype(np.float32)
-
-
-def _firmware_mel_from_audio(audio: np.ndarray) -> np.ndarray:
-    """Compute mel spectrogram matching firmware pipeline exactly.
-
-    Returns (n_frames, 26) array with values in [0, 1].
-
-    NOTE: Must stay in sync with firmware_mel_spectrogram() in prepare_dataset.py.
-    Both implement: Hamming window → FFT-256 → HTK mel (26 bands, 60-8000 Hz) →
-    10*log10(x+1e-10) → [-60,0] dB → [0,1]. This copy exists to avoid importing
-    torch/config dependencies into the calibration tool.
-    """
-    from scipy.signal.windows import hamming
-
-    window = hamming(N_FFT, sym=True).astype(np.float32)
-    mel_fb = _build_mel_filterbank()
-
-    n_frames = len(audio) // HOP_LENGTH
-    mels = np.zeros((n_frames, N_MELS), dtype=np.float32)
-
-    for i in range(n_frames):
-        frame = audio[i * HOP_LENGTH:(i * HOP_LENGTH) + N_FFT]
-        if len(frame) < N_FFT:
-            break
-        windowed = frame * window
-        spectrum = np.abs(np.fft.rfft(windowed))
-        mel_spec = mel_fb @ spectrum
-        log_mel = 10.0 * np.log10(mel_spec + 1e-10)
-        log_mel = (log_mel + 60.0) / 60.0
-        mels[i] = np.clip(log_mel, 0.0, 1.0)
-
-    return mels
+# Aliases for backward compat within this file
+_build_mel_filterbank = build_mel_filterbank_np
+_firmware_mel_from_audio = firmware_mel_spectrogram_np
 
 
 def generate(output_dir: str, duration: float = 10.0):

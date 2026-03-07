@@ -2,124 +2,125 @@
 
 Train a small causal CNN to produce beat activation signals for the Blinky firmware. Replaces the handcrafted BandFlux ODF with a learned activation function that feeds into the existing CBSS beat tracker.
 
-See [docs/ML_TRAINING_PLAN.md](../docs/ML_TRAINING_PLAN.md) for the full plan, motivation, and architecture details.
-
 ## Quick Start
 
 ```bash
-# Activate venv
 source venv/bin/activate
 
-# 1. Label existing test tracks with Beat This! (GPU)
-python scripts/label_beats.py --audio-dir ../blinky-test-player/music/edm \
-  --output-dir /mnt/storage/blinky-ml-data/labels/edm-test
+# Standard pipeline: prepare data → train → export → evaluate
+make prepare train export eval
 
-# 2. Download room impulse responses for augmentation
-python scripts/download_rir.py --output-dir /mnt/storage/blinky-ml-data/rir
-
-# 3. Prepare dataset (with acoustic environment augmentation)
-python scripts/prepare_dataset.py --config configs/default.yaml \
-  --audio-dir ../blinky-test-player/music/edm \
-  --labels-dir /mnt/storage/blinky-ml-data/labels/edm-test \
-  --augment
-
-# 4. Train model (CPU is fine for this tiny model)
-CUDA_VISIBLE_DEVICES="" python train.py --config configs/default.yaml
-
-# 5. Export to TFLite INT8 C header
-CUDA_VISIBLE_DEVICES="" python scripts/export_tflite.py --config configs/default.yaml
-
-# 6. Evaluate on test tracks
-CUDA_VISIBLE_DEVICES="" python evaluate.py --config configs/default.yaml \
-  --audio-dir ../blinky-test-player/music/edm
+# Or step by step:
+make prepare                    # Extract mel features + augmentation
+make train                      # Train model (auto-named output dir)
+make export                     # Export TFLite INT8 → C header
+make eval                       # Evaluate on 18-track EDM test set
 ```
 
-## Full Dataset Pipeline
+## Configuration
+
+Configs use a **base + override** pattern:
+
+```
+configs/
+├── base.yaml        # Shared audio/training/data settings (single source of truth)
+├── default.yaml     # 3-layer baseline model (overrides model + export sections)
+└── wider_rf.yaml    # 5-layer wider model (overrides model + export sections)
+```
+
+`base.yaml` contains everything that must match firmware or is shared across experiments. Model configs only specify the architecture and export budget. `load_config()` merges them automatically.
 
 ```bash
-# Download FMA electronic subset (~5,000 tracks, 22 GB archive)
-python scripts/download_fma.py --output-dir /mnt/storage/blinky-ml-data/audio/fma
+# Train with wider model
+make train CONFIG=configs/wider_rf.yaml
 
-# Auto-label all tracks with Beat This!
-python scripts/label_beats.py --audio-dir /mnt/storage/blinky-ml-data/audio/fma \
-  --output-dir /mnt/storage/blinky-ml-data/labels/fma
-
-# Prepare with augmentation (generates ~10x variants per track)
-python scripts/prepare_dataset.py --config configs/default.yaml --augment \
-  --rir-dir /mnt/storage/blinky-ml-data/rir/processed
+# Train with custom run name
+make train RUN_NAME=v4-augmented-final
 ```
 
 ## Directory Structure
 
 ```
 ml-training/
-├── configs/default.yaml     # Training hyperparameters (must match firmware)
+├── configs/
+│   ├── base.yaml               # Shared settings (audio, training, data paths)
+│   ├── default.yaml            # 3-layer baseline overrides
+│   └── wider_rf.yaml           # 5-layer wider model overrides
 ├── scripts/
-│   ├── download_fma.py      # Download FMA electronic subset
-│   ├── download_giantsteps.py # Download GiantSteps tempo dataset
-│   ├── download_rir.py      # Download/generate room impulse responses
-│   ├── label_beats.py       # Auto-label with Beat This! (GPU)
-│   ├── validate_features.py # Verify Python/firmware feature parity
-│   ├── prepare_dataset.py   # Audio -> mel spectrograms + targets (with augmentation)
-│   ├── export_tflite.py     # Keras -> TFLite INT8 -> C header
-│   └── run_full_pipeline.sh # End-to-end download → label → train → export
+│   ├── audio.py                # Shared mel pipeline (torch + numpy, single source of truth)
+│   ├── prepare_dataset.py      # Audio → mel spectrograms + targets (with augmentation)
+│   ├── label_beats.py          # Multi-system beat labeling (Beat This!, essentia, librosa, madmom)
+│   ├── merge_consensus_labels.py # Merge per-system labels into consensus
+│   ├── export_tflite.py        # PyTorch → TFLite INT8 → C header
+│   ├── calibrate_mic.py        # Mic calibration pipeline
+│   ├── validate_features.py    # Verify Python/firmware mel feature parity
+│   ├── download_fma.py         # Download FMA electronic subset
+│   ├── download_giantsteps.py  # Download GiantSteps tempo dataset
+│   └── download_rir.py         # Download room impulse responses
+├── tools/                      # Experimental/one-off scripts (not part of pipeline)
+│   ├── ab_test_bpm.js          # BPM A/B testing on device (single track)
+│   ├── ab_test_batch.cjs       # Batch BPM A/B testing (all tracks)
+│   ├── gain_volume_sweep.py    # ODF discriminability measurement
+│   └── capture_nn_stream.py    # NN diagnostic stream capture
 ├── models/
-│   └── beat_cnn.py          # Causal 1D CNN (beat + optional downbeat head)
-├── train.py                 # Training script (multi-output support)
-├── evaluate.py              # Offline evaluation (beat + downbeat F1, activation plots)
-├── data/                    # (gitignored) Processed .npy files
-└── outputs/                 # (gitignored) Models, checkpoints, logs
+│   └── beat_cnn.py             # Causal 1D CNN model definition
+├── train.py                    # Training loop (BCE/focal loss, cosine LR)
+├── evaluate.py                 # Offline evaluation (beat + downbeat F1)
+├── Makefile                    # Pipeline orchestration
+├── data/                       # (gitignored) Processed .npy files, calibration
+└── venv/                       # (gitignored) Python virtual environment
 ```
 
-## Acoustic Environment Augmentation
+## Output Convention
 
-Designed for robustness across diverse venues:
-- **Volume variation**: -18 to +6 dB (near-speaker to far-from-speaker)
-- **Pink noise**: SNR 6-20 dB (crowd noise approximation)
-- **Low-pass filter**: 4 kHz cutoff (boomy warehouse)
-- **Bass boost**: 60-200 Hz resonance (warehouse/club)
-- **Room impulse responses**: Real RIRs from EchoThief + synthetic (warehouse, outdoor, arena, club)
+Each training run creates a timestamped directory under `/mnt/storage/blinky-ml-data/outputs/`:
+
+```
+outputs/
+├── wider_rf-20260306-173448/   # Auto-named: {config}-{timestamp}
+│   ├── best_model.pt           # Best validation loss checkpoint
+│   ├── final_model.pt          # Last epoch checkpoint
+│   ├── model_checkpoint.pt     # Full checkpoint (state_dict + config + metadata)
+│   ├── training_log.csv        # Per-epoch metrics
+│   ├── beat_model_int8.tflite  # Exported INT8 model
+│   └── eval/                   # Evaluation results + activation plots
+│       ├── eval_results.json
+│       └── plots/
+└── v4-final/                   # Or use a custom name: RUN_NAME=v4-final
+```
+
+Override with `make train RUN_NAME=my-experiment` for human-readable names.
 
 ## Key Constraint: Feature Parity
 
-The model input **must exactly match** the firmware's `SharedSpectralAnalysis::getRawMelBands()` output:
+The model input **must exactly match** the firmware's `SharedSpectralAnalysis::getRawMelBands()`:
 - 16 kHz sample rate, Hamming window, FFT-256, hop 256
-- 26 mel bands (60-8000 Hz), HTK mel scale, no normalization
+- 26 mel bands (60–8000 Hz), HTK mel scale, no normalization
 - Log compression: `10*log10(x + 1e-10)`, mapped [-60, 0] dB to [0, 1]
-- **No compressor or whitening** — firmware uses `getRawMelBands()` for NN input (bypasses the signal chain)
 
-Use `scripts/validate_features.py` to verify parity against firmware serial output.
-
-## Downbeat Support
-
-The model supports an optional second output channel for downbeat activation (enabled by `model.downbeat: true` in config). When enabled:
-- Output shape: `(batch, time, 2)` — channel 0 = beat, channel 1 = downbeat
-- Training targets: `Y_db_train.npy` / `Y_db_val.npy` generated by `prepare_dataset.py`
-- Beat This! labels encode downbeats as `strength=1.0` (vs `0.7` for regular beats)
-- Firmware: `BeatActivationNN.h` auto-detects output channels, exposes `getLastDownbeat()`
-- `AudioControl.downbeat` field passed through to visual generators
+The mel pipeline is defined once in `scripts/audio.py` and imported by all scripts.
 
 ## Hardware Target
 
 - **XIAO nRF52840 Sense** (Cortex-M4F @ 64 MHz, 256 KB RAM, 1 MB Flash)
-- Model: ~9K params, ~20 KB INT8, ~8 KB tensor arena, ~3-5 ms inference
-- Runtime: TFLite Micro + CMSIS-NN (Arduino_TensorFlowLite 2.4.0-ALPHA)
-- Measured build: 312 KB flash / 22 KB RAM (NN enabled), 301 KB / 22 KB (NN disabled)
+- 3-layer model: ~9K params, ~20 KB INT8
+- 5-layer model: ~15K params, ~33 KB INT8
+- 16 KB tensor arena, ~3–5 ms inference per frame
+- Runtime: TFLite Micro + CMSIS-NN
 
-## Cross-Validation Tools
+## Training Results
 
-| Tool | Use | Status |
-|------|-----|--------|
-| Beat This! | Primary labeler (SOTA ~97% F1) | Working (GPU + CPU) |
-| essentia | Cross-validation (BPM + beats) | Working (Python 3.12) |
-| BeatNet | Cross-validation (meter detection) | Needs Python 3.11 (madmom dep broken on 3.12) |
-| mir_eval | Evaluation metrics (beat F1) | Working |
+| Version | Architecture | Beat F1 | Downbeat F1 | Notes |
+|---------|-------------|---------|-------------|-------|
+| v2 | 3L ch32, clean data | 0.525 | 0.256 | Baseline |
+| v4 (epoch 15) | 5L ch32, augmented + mic profile | **0.715** | **0.364** | +36% beat, +42% downbeat |
 
-All three tested tools are **fully deterministic** (bit-identical across runs).
+## Acoustic Environment Augmentation
 
-## Notes
-
-- **TensorFlow GPU**: CuDNN version mismatch with PyTorch's CUDA 12.4 install. Use `CUDA_VISIBLE_DEVICES=""` for TF training (model is tiny, CPU is ~6s/epoch on 18K chunks).
-- **Beat This! GPU**: Works fine with PyTorch CUDA. ~0.7s/track on RTX 3080.
-- **madmom/BeatNet**: Broken on Python 3.12 (collections.MutableSequence + np.float removed). Use pyenv + Python 3.11 venv for cross-validation.
-- **Spectral conditioning augmentation**: `prepare_dataset.py` generates "conditioned" variants (static compressor + whitening approximation) to improve robustness to firmware signal chain variations.
+Designed for robustness across diverse venues:
+- **Volume variation**: -18 to +6 dB
+- **Pink noise**: SNR 6–20 dB (crowd noise approximation)
+- **Low-pass filter**: 4 kHz cutoff (boomy warehouse)
+- **Bass boost**: 60–200 Hz resonance
+- **Room impulse responses**: EchoThief + synthetic (warehouse, outdoor, arena, club)
+- **Mic profile**: Gain-aware noise floor from calibration data (17 gain levels × 26 bands)

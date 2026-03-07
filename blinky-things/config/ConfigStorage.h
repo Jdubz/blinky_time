@@ -87,7 +87,9 @@ public:
     // Version 54: Add nnBeatActivation (NN beat ODF toggle)
     // Version 55: Conservative AGC (hwGainMaxSignal 60→40, hwTarget 0.35→0.20, tracking tau 30→60s)
     // Version 56: Spectral noise estimation (noiseEst*, 5 new params) — same commit as v55
-    static const uint8_t SETTINGS_VERSION = 56;
+    // Version 57: Joint tempo-phase forward filter (forwardFilter*, 5 new params)
+    // Version 58: Hybrid phase tracker (fwdPhaseOnly), nnBeatActivation default ON
+    static const uint8_t SETTINGS_VERSION = 58;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -359,6 +361,16 @@ public:
         float noiseReleaseFactor;       // Noise floor release rate (0.99-0.9999)
         float noiseOversubtract;        // Oversubtraction factor (1.0-3.0)
         float noiseFloorRatio;          // Spectral floor as fraction of original (0.001-0.5)
+
+        // Joint forward filter (v57)
+        bool forwardFilterEnabled;      // Enable joint tempo-phase forward filter
+        float fwdTransSigma;            // Tempo transition width in lag units (1-10)
+        float fwdFilterContrast;        // ODF power-law contrast (1-8)
+        float fwdFilterLambda;          // Beat zone = 1/lambda of period (4-32)
+        float fwdFilterFloor;           // Observation probability floor (0.001-0.1)
+
+        // Hybrid phase tracker (v58)
+        bool fwdPhaseOnly;             // Phase tracker for phase, CBSS for beats
     };
 
     struct StoredBandFluxParams {
@@ -478,8 +490,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
-    static_assert(sizeof(StoredMusicParams) == 376,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (376 bytes = 78 floats + 14 uint8 + 27 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 400,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (400 bytes = 82 floats + 14 uint8 + 29 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,

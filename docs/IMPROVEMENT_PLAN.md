@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 6, 2026 (signal chain treatment: conservative AGC + spectral noise subtraction)*
+*Last Updated: March 7, 2026 (v58+NN: nnbeat default ON, hybrid phase tracker, fwdphase A/B test)*
 
 ## Current Status
 
@@ -44,7 +44,7 @@ Gain sweep completed on all 3 devices (ACM0, ACM1, ACM2) with pink noise referen
 
 **Key finding: Speaker volume has negligible effect on discriminability.** AUC is nearly identical at 25% vs 100% volume because the AGC compensates. The noise floor at a given gain is the dominant factor, not signal amplitude. This means the AGC ceiling is the critical parameter — once gain is capped, the noise floor is bounded regardless of source loudness.
 
-### In Progress: Signal Chain Treatment (v56, March 6, 2026)
+### Completed: Signal Chain Treatment (v56, March 6, 2026)
 
 Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees hardware gain — software AGC, compressor, and whitening are all bypassed. Higher gain adds more noise than signal above gain 30-40, degrading ODF discriminability by 12-20%.
 
@@ -64,9 +64,9 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 - Parameters: `noiseest=1`, `noisesmooth=0.92`, `noiserelease=0.999`, `noiseover=1.5`, `noisefloor=0.02`
 - ~1 KB RAM (2×128 floats), ~0.1% CPU
 
-**3. Training pipeline alignment (TODO — next step after firmware validation):**
+**3. Training pipeline alignment:**
 - `hw_gain_max: 60 → 40` in default.yaml (done)
-- Spectral subtraction in `prepare_dataset.py`: apply same min-statistics algorithm after adding mic noise, before mel extraction. Teaches NN to work with subtracted spectra.
+- Spectral subtraction in training pipeline (done): `apply_spectral_noise_subtraction()` in `scripts/audio.py`, mirrors firmware algorithm exactly (per-bin smoothed power → running minimum → oversubtraction). Applied to FFT magnitudes before mel projection in `firmware_mel_spectrogram_torch()`. Config in `base.yaml` under `audio.noise_subtraction` (enabled=true, params match firmware defaults).
 - Re-prepare dataset and retrain after firmware validation confirms improvement
 
 **Literature:**
@@ -76,23 +76,37 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 - Kates 2008: Hearing aid AGC (slow-acting >30s preserves dynamics)
 - Böck & Widmer 2013: Spectral flux onset detection with adaptive whitening (complementary to subtraction)
 
-**Outstanding:**
-- Validate on hardware: A/B test v56 vs v55 with gain sweep to measure ODF SNR improvement
-- Implement spectral subtraction in training pipeline (`prepare_dataset.py`)
-- Re-prepare dataset and train v4 with subtracted spectra
+**Hardware A/B Test: Spectral Noise Subtraction (March 6, 2026):**
 
-### In Progress: Neural Network Beat Activation (v54, March 5, 2026)
+18-track EDM sweep on ACM0 (25s per track × 2 configs, seeking to middle of track):
+
+| Metric | Baseline (noiseest OFF) | Noise Estimation ON |
+|--------|:---:|:---:|
+| Track wins | **13** | 5 |
+| Mean BPM error | **15.4** | 17.1 |
+| Octave errors | **4/18** | 7/18 |
+
+**Finding: Noise estimation HURTS.** Higher BPM std on most tracks (instability), +3 octave errors, baseline wins 13/18. The minimum statistics estimator subtracts useful spectral content in the speaker-to-mic path, not just noise. Notable regressions: techno-minimal-01 (17.2 vs 6.1 err), trance-party (12.6 vs 3.8), edm-trap-electro (12.3 vs 4.7).
+
+**Decision: Keep `noiseest=0` as default.** The conservative AGC ceiling (part 1) is the effective noise treatment. Spectral subtraction may help in noisier environments (outdoors, crowds) but hurts in controlled speaker-to-mic testing.
+
+**Outstanding:**
+- ~~Validate on hardware: A/B test~~ **DONE** — noise estimation regresses BPM accuracy
+- ~~Implement spectral subtraction in training pipeline~~ **DONE** — `scripts/audio.py` + `configs/base.yaml`
+- Training pipeline: consider disabling noise subtraction in feature extraction since firmware default is OFF
+
+### Completed: Neural Network Beat Activation (v54, March 5-6, 2026)
 
 Training a small causal CNN to replace BandFlux ODF with a learned beat activation. See [ML_TRAINING_PLAN.md](ML_TRAINING_PLAN.md) for full details.
 
 **Completed:**
 - Full `ml-training/` pipeline: feature extraction, model definition, training script, export, evaluation
-- Causal 1D CNN: 3 dilated conv layers, ~9K params, ~20 KB INT8, 15 frame (240ms) receptive field
+- Causal 1D CNN: configurable dilated conv layers (3L baseline or 5L wider). ~9K-15K params, ~20-33 KB INT8
 - Multi-output: beat activation (channel 0) + downbeat activation (channel 1)
 - Acoustic environment augmentation (volume, noise, reverb, bass boost, RIR convolution)
 - Spectral conditioning augmentation (static compressor + whitening approximation)
 - Firmware integration: `BeatActivationNN.h` (multi-output TFLite Micro), `SharedSpectralAnalysis::getRawMelBands()`, `AudioControl.downbeat`, `AudioController` NN path
-- Compiles on nRF52840: NN build 312 KB flash / 22 KB RAM, non-NN 301 KB / 22 KB
+- Compiles on nRF52840: NN build 426 KB flash (52%) / 22 KB RAM (9%), non-NN 301 KB / 22 KB
 - Labeling tool research: Beat This! (primary, SOTA), essentia (cross-validation), BeatNet (needs Python 3.11)
 - Determinism verified: Beat This!, librosa, and essentia all produce bit-identical results across runs
 - Cross-tool comparison on 18 EDM tracks: 94% BPM agreement, BT-essentia F1=0.948
@@ -111,35 +125,71 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 **Training v2 (consensus-4sys-v2) — COMPLETED, FUNCTIONAL:**
 - pos_weight corrected: beat=4.7, downbeat=10.5
 - Best val_loss=1.0445 at epoch 55/70 (early stopped, patience=15)
-- **Mean Beat F1=0.548** @ threshold 0.70 (18 EDM test tracks, ±70ms mir_eval tolerance)
-- **Mean Downbeat F1=0.320** (functional, up from 0.003)
+- **Mean Beat F1=0.525** @ threshold 0.50 (18 EDM test tracks, ±70ms mir_eval tolerance)
+- **Mean Downbeat F1=0.256** (functional, up from 0.003)
 - Detection ratio: 1.03x (near-perfect, v1 was 2.09x over-detecting)
 - Best tracks: techno-minimal-01 (0.798), trance-party (0.722), trance-goa-mantra (0.698)
 - Worst tracks: techno-dub-groove (0.230), dubstep-edm-halftime (0.402)
 - Failure mode: model hedges on complex rhythms (peaks ~0.5-0.7 not 0.9+, valleys ~0.2 not 0.0). 240ms receptive field too narrow for slow/halftime patterns.
 - Model exported to `beat_model_data.h` (20.4 KB INT8, hash c8e4c40c)
 
-**Training v3 (consensus-4sys-v3-wider) — IN PROGRESS:**
+**Training v3 (consensus-4sys-v3-wider) — COMPLETED:**
 - Wider receptive field: dilations [1,2,4,8,16], RF=63 frames=1008ms (vs 15 frames=240ms)
-- 15,330 params, ~15 KB INT8 (fits 25 KB budget)
-- Early results: val_loss=0.998 at epoch 5 (v2 best was 1.044 — 4.5% lower already)
-- Training ~6 min/epoch on RTX 3080, estimated 5-7 hours total
+- 15,330 params, 33.3 KB INT8 (fits nRF52840: ~700 KB flash free, tensor arena bumped 8→16 KB)
 - Config: `configs/wider_rf.yaml`
+- Trained on clean data only (no augmentation, no mic profile)
+- Not deployed — superseded by v4
+
+**Training v4 (consensus-4sys-v4-augmented) — COMPLETED:**
+- Same architecture as v3: 5L ch32, dilations [1,2,4,8,16], 15,330 params
+- Full augmentation pipeline: clean + 4 gain levels + 3 noise floors + lowpass + bass-boost + 3 RIR = ~13 variants per track
+- Mic profile augmentation: gain-aware noise floor from calibration data (17 gain levels × 26 bands)
+- 4-system consensus labels (Beat This! + essentia + librosa + madmom)
+- Dataset: 3M+ training chunks, 545K val chunks (6993 tracks × ~13 augmented variants)
+- Best val_loss=0.9692 at epoch 53/68 (early stopped, patience=15; v2 best was 1.0445)
+- **Final eval (18-track EDM test set):**
+  - **Mean Beat F1=0.717** (+36.6% vs v2's 0.525)
+  - **Mean Downbeat F1=0.362** (+41.4% vs v2's 0.256)
+  - Best tracks: trance-infected-vibes 0.953, techno-minimal-01 0.947, techno-deep-ambience 0.884
+  - Worst tracks: breakbeat-drive 0.449, reggaeton-fuego-lento 0.451
+- Model exported to `beat_model_data.h` (33.3 KB INT8, hash 28b2dfd5)
+- ~5 min/epoch on RTX 3080. Output: `/mnt/storage/blinky-ml-data/outputs/v4-wider-ch32-augmented/`
+
+**Hardware A/B Test: NN Beat ODF vs BandFlux (March 6, 2026):**
+
+v4 model deployed to all 3 devices (v57+NN firmware, `ENABLE_NN_BEAT_ACTIVATION`). TFLite library fix: `precompiled=full` → `precompiled=false` + cache clear. 426 KB flash (52%), 22 KB RAM (9%).
+
+18-track EDM sweep on ACM0 (25s per track × 2 configs, seeking to middle of track):
+
+| Metric | BandFlux (Baseline) | NN Beat |
+|--------|:---:|:---:|
+| Track wins | 6 | **11** |
+| Ties | 1 | 1 |
+| Mean BPM error | 15.6 | **14.8** |
+| Octave errors | 4/18 | 5/18 |
+
+**Best NN improvements:** techno-minimal-01 (0.6 vs 7.5 err), garage-uk-2step (3.3 vs 8.2), amapiano-vibez (18.2 vs 23.2).
+
+**Finding: Modest but consistent improvement.** NN ODF wins 11/18 tracks with -0.8 lower mean error. Not transformative — both systems are dominated by the ~135-138 BPM gravity well in the Bayesian tempo estimator. The NN's advantage is in tracks where BandFlux locks to the wrong tempo region. Octave error rate is comparable (4 vs 5).
 
 **Outstanding:**
-- Wait for v3 training to complete and evaluate
-- Train v4 with focal loss (sharper activations, `--loss focal --focal-gamma 2.0`)
-- Train v5 with mic profile augmentation (`--mic-profile /mnt/storage/blinky-ml-data/calibration/mic_profile.npz`)
-- Deploy best model and A/B test vs BandFlux on hardware
+- Consider enabling `nnbeat=1` as default (11/18 wins justifies it)
+- Consider focal loss variant if v4 activations are too soft (hedging around 0.5)
+- ~~Deploy v4 model to devices → A/B test~~ **DONE**
 - ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 40 validated.
 
 ### Completed (March 4, 2026)
 
-**v50 Rhythmic Pattern Templates + Subbeat Alternation — IMPLEMENTED, default OFF, awaiting A/B validation (SETTINGS_VERSION 50):**
+**v50 Rhythmic Pattern Templates + Subbeat Alternation — VALIDATED, default OFF, NO NET BENEFIT (SETTINGS_VERSION 50):**
 - Rhythmic pattern templates (Krebs/Böck/Widmer ISMIR 2013): Pearson correlation of CBSS history against 3 precomputed zero-mean EDM bar templates (16 slots/bar). Compares T vs T/2 and T vs 2T every 4 beats. Calls `switchTempo()` if alternative wins by `templateScoreRatio` (1.3). Settings: `templatecheck=0`, `templatescoreratio=1.3`, `templatecheckbeats=4`.
 - Beat Critic subbeat alternation (Davies ISMIR 2010): Bins CBSS into 8 subbeat slots, computes odd/even energy ratio. Strong alternation at T indicates double-time → switches to T/2. Only downward switching (upward branch removed as weak signal). Settings: `subbeatcheck=0`, `alternationthresh=1.2`, `subbeatcheckbeats=4`.
-- Both features default OFF pending A/B validation on slow tracks (breakbeat, reggaeton, dub) where 128 BPM gravity well occurs.
-- 300KB flash (37%), 22KB RAM (9%). 6 new settings.
+- **A/B tested (Mar 6, 2026):** 18-track EDM sweep on hardware. Results:
+  - Baseline wins 10, subbeatcheck wins 8. Mean BPM error: baseline 16.3, subbeat 15.8 (within noise).
+  - templatecheck alone: slightly worse than baseline (per-track A/B).
+  - subbeatcheck alone: best per-track result on techno-minimal-01 (3.0 vs 15.5 error) but regression on techno-dub-groove (11.5 vs 6.6).
+  - Both ON: best on earlier techno-minimal-01 test (129.1 vs 129.0 true) but inconsistent across genres.
+  - **Dominant issue: ~140 BPM gravity well** — nearly all tracks converge to 130-148 BPM regardless of true tempo. Octave disambiguation features cannot fix this observation-side bias.
+- Both features retained as OFF defaults. 300KB flash (37%), 22KB RAM (9%). 6 new settings.
 
 **v49 Continuous ODF Observation Model in CBSS Phase Tracker (SETTINGS_VERSION 49):**
 - Replaced Bernoulli observation model with continuous ODF observation in phase tracker. Addresses the key finding from v46 failure analysis.
@@ -377,7 +427,7 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 
 | # | Technique | Source | Effort | Expected Impact | Status |
 |---|-----------|--------|--------|----------------|--------|
-| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~1.3 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **Not started — NEXT PRIORITY** |
+| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~5.1 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **v57 — IMPLEMENTED, A/B tested: half-time bias (see below)** |
 | 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +0.031 F1, addresses slow phase drift | **v45 — DONE, retained** |
 | 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +0.012 F1, resolves 5 vs 8 dilemma | **v45 — DONE, retained** |
 | 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | Low — minor refinement per literature | Deprioritized |
@@ -392,39 +442,65 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 | 1b | **Anti-harmonic comb (percivalw3)** | Speech F0 estimation | ~50 ops, 0 memory | Marginal, default OFF | **v48 — tested, marginal** |
 | 1c | **Metrical contrast check** | Beat Critic (ISMIR 2010) | ~20 ops/beat | Negative on full validation | **v48 — tested, default OFF** |
 
-**Technique A — Forward Filter with Continuous ODF Observation (DETAILED):**
+**Technique A — Forward Filter with Continuous ODF Observation (v57, IMPLEMENTED):**
 
-Replace CBSS countdown + onset snap + PLL with a 320-state forward filter (20 tempos × 16 phases) using BandFlux ODF as a continuous observation at every frame. This is the standard architecture for all systems achieving >60% F1.
+Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Tracks tempo and phase jointly via forward algorithm. 20 tempo bins × variable phase positions (~700 states). Continuous ODF observation model. Toggle: `fwdfilter=1` (default OFF for A/B testing).
 
-**How it works:** Each state (tempo_i, phase_j) receives a likelihood at every frame based on the current ODF value. At beat-zone positions (first 1/λ of period), high ODF = high likelihood. At non-beat positions, low ODF = high likelihood (confirms "no onset here, as expected"). The state with the highest accumulated probability determines both tempo and phase.
-
-**madmom observation model:**
-```
-P(ODF | beat position)     = ODF_value              // high ODF = evidence for beat here
-P(ODF | non-beat position) = (1 - ODF_value) / (λ-1) // low ODF = evidence for non-beat
-```
+**How it works:** Each state (tempo_i, phase_j) receives a likelihood at every frame based on the current ODF value. At beat-zone positions (first 1/λ of period), high ODF = high likelihood. At non-beat positions, low ODF = high likelihood (confirms "no onset here, as expected"). The state with the highest accumulated probability determines both tempo and phase. Beat detected when the argmax position wraps from near period-1 to near 0.
 
 **Why this differs from v46 (which failed):**
 
-| | v46 Bernoulli (FAILED) | Continuous ODF (proposed) |
+| | v46 Bernoulli (FAILED) | v57 Continuous ODF |
 |---|---|---|
 | At beat, ODF=0.1 | P → 0.1 (near-catastrophic) | P = 0.1 (low but survivable) |
-| At beat, ODF=0.0 | P → 0 (tracker crashes) | P ≈ 0 (but other states fill in) |
+| At beat, ODF=0.0 | P → 0 (tracker crashes) | P ≈ floor (other states fill in) |
 | Between beats, ODF=0.0 | P = 1.0 (binary certainty) | P = 1/λ ≈ 0.125 (proportional) |
 | Missing an onset | Probability collapses | Probability reduced gracefully |
 
-The v46 Bernoulli model treated onset detection as binary (onset or not). The continuous model uses the raw ODF value, so missing a beat is just weaker evidence, not a catastrophe. This is why madmom achieves 74% F1 on its forward (online) mode.
+**Implementation (actual, v57):**
+- State space: 20 tempo bins × variable phase per bin (period in samples) = ~700 total states (880 max)
+- Per frame: shift all phase positions forward by 1, apply observation likelihood
+- Observation: `obsBeat = max(λ * ODF^contrast, floor)`, `obsNonBeat = max((1 - ODF^contrast) / (λ-1), floor)`
+- Beat zone: first `period/λ` positions of each tempo bin
+- Transition: Gaussian `exp(-lagDiff² / 2σ²)` for tempo changes, applied only at position 0 (beat boundary)
+- Beat detection: argmax position wraps from near period-1 (last 25%) to near 0 (first 25%) + cooldown + silence gate
+- Onset snap + PLL correction reused from CBSS path
+- CBSS still updated for `sampleCounter_++` and `cbssMean_` (silence gate)
+- Settings: `fwdtranssigma=3.0`, `fwdfiltcontrast=2.0`, `fwdfiltlambda=8.0`, `fwdfiltfloor=0.01`
+- RAM: ~5.1 KB (3.5 KB alpha + 1.6 KB transition matrix)
+- CPU: ~700 multiplications per frame at 66 Hz = negligible on 64 MHz
+- SETTINGS_VERSION 57. When enabled, bypasses Bayesian tempo fusion for tempo setting (guard added to `externalTempoActive`)
 
-**Implementation:**
-- State space: 20 tempo bins × 16 phase positions = 320 states
-- Per frame: advance all phase counters by 1, wrap at period boundary
-- Observation: compute log-likelihood for each state based on ODF and beat-zone membership
-- Transition: deterministic advance within-tempo; exponential penalty `exp(-λ * |ratio - 1|)` for tempo changes at beat boundaries only
-- Beat detection: state at phase position 0 with highest probability → beat fired
-- `observation_lambda = 8` (wider beat zone than madmom's 16 to accommodate noisy mic ODF)
-- RAM: 320 × 4 bytes = ~1.3 KB
-- CPU: 320 multiplications per frame at 66 Hz = negligible on 64 MHz
-- Replaces: CBSS + onset snap + PLL + octave check (single unified mechanism)
+**Technique A — A/B Test Results (March 6, 2026):**
+
+18-track EDM sweep on ACM0 (v57 firmware, 25s per track × 2 configs).
+
+| Metric | CBSS Baseline | Forward Filter |
+|--------|:---:|:---:|
+| Mean BPM error (octave-aware) | 15.4 | **9.3** |
+| Track wins | 5 | **13** |
+| Octave errors | 7/18 | **17/18** |
+| Mean std dev (BPM stability) | **5.1** | 13.5 |
+
+**Finding: Severe half-time bias.** The forward filter consistently tracks at ~½ the true tempo (65-95 BPM for 120-175 BPM tracks). It gets lower octave-aware error because half-time is often closer than baseline's ~135 BPM gravity well, but **17/18 tracks are octave errors** vs 7/18 for baseline.
+
+**Root cause analysis:**
+1. **Rayleigh prior favors slow tempos**: The prior peaks at 120 BPM lag, which maps to ~30 samples. Half-tempo (~60 BPM, lag ~60) gets moderate prior weight, and once the filter locks to half-time, the observation model reinforces it because every other beat aligns with the slow tempo.
+2. **Narrow beat zone (λ=8, 12.5%)**: At half-tempo, beats land in the beat zone every other real beat. The missed real beats produce moderate ODF values at non-beat positions, which are only weakly penalized by `(1-ODF)/(λ-1)`.
+3. **No tempo lower bound enforcement**: The forward filter tracks tempos down to 60 BPM (the OSS buffer limit), while the baseline's Bayesian posterior + comb bank have stronger upward pressure from the gravity well.
+
+**Follow-up parameter sweep (lambda=4, 6, 8):**
+- λ=4: Swings to double-time (152-169 BPM for 118-129 BPM tracks). Too wide a beat zone.
+- λ=6: Still half-time biased (4/5 tracks at 73-106 BPM for 118-154 BPM true). Marginally better.
+- λ=8 (default): Consistent half-time (17/18 octave errors in full sweep).
+- **Conclusion: lambda tuning cannot fix the octave problem.** The observation model is fundamentally octave-symmetric — at half-time, the filter sees a beat every other cycle and reinforces it.
+
+**Next steps (prioritized):**
+1. ~~**Hybrid approach**: Use forward filter for phase tracking only~~ **DONE (v58)** — `fwdphase=1` runs single-bin phase tracker alongside CBSS. A/B tested: BPM-neutral (8 wins vs 6, mean error 14.9 vs 14.8). Phase smoothness needs visual evaluation on LEDs.
+2. **Onset-density penalty in forward filter**: Port the `densityOctaveEnabled` logic from Bayesian posterior into the forward filter's tempo transition probability. At half-time, transients/beat < 0.5 should heavily penalize those bins.
+3. **Asymmetric observation model**: Scale `obsNonBeat` penalty by expected beats-per-bar at that tempo. Slower tempos should more strongly penalize high ODF at non-beat positions.
+
+**Positive signal: tempo variability.** The forward filter's std (13.5 BPM) is higher than baseline (5.1 BPM), indicating the filter is responsive to the audio rather than locked to a gravity well. If the octave bias is fixed, this responsiveness could translate to better tracking.
 
 **Technique B — Rhythmic Pattern Templates (DETAILED):**
 

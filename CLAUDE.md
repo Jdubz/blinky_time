@@ -71,6 +71,10 @@ make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 
 # Compile + validate only (dry run)
 make uf2-check UPLOAD_PORT=/dev/ttyACM0
+
+# Compile with NN beat activation (TFLite Micro inference)
+make uf2-upload UPLOAD_PORT=/dev/ttyACM0 NN=1
+make uf2-check UPLOAD_PORT=/dev/ttyACM0 NN=1
 ```
 
 ## Documentation Structure
@@ -155,7 +159,8 @@ AdaptiveMic (AGC + normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening)
     ↓
-EnsembleDetector (BandWeightedFlux Solo)
+    ├── EnsembleDetector (BandWeightedFlux Solo) → ODF [default]
+    └── BeatActivationNN (TFLite Micro, NN=1 build) → ODF [nnbeat=1]
     ↓
 AudioController (CBSS beat tracking)
     ↓
@@ -185,6 +190,7 @@ RenderPipeline → LED Output
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
+   - ODF source: BandFlux (default) or NN beat activation (`nnbeat=1`, requires NN=1 build)
    - Bayesian tempo fusion: 20-bin posterior (60-180 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -207,7 +213,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v51)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v57)
    - `SettingsRegistry.h/cpp` - 80+ tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -301,9 +307,10 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening)
-3. SharedSpectralAnalysis → EnsembleDetector (BandFlux Solo, sees whitened magnitudes)
-4. EnsembleDetector → fusion → transient strength (0-1)
-5. Transient → AudioController OSS buffer (6s history)
+3. SharedSpectralAnalysis → EnsembleDetector (BandFlux Solo, sees whitened magnitudes) [default]
+   OR SharedSpectralAnalysis → BeatActivationNN (TFLite Micro, sees raw mel bands) [nnbeat=1]
+4. Detector → ODF value (0-1)
+5. ODF → AudioController OSS buffer (6s history)
 6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
    (ACF + Fourier tempogram + comb filter bank + IOI → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
@@ -323,8 +330,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB total (22,064B measured; CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB)
-- Flash: ~300 KB firmware, ~30 KB settings storage
+- RAM: ~27 KB base (CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB + forward filter ~5.1 KB). +16 KB tensor arena if NN=1 build.
+- Flash: ~301 KB base, ~426 KB with NN=1 (includes 33 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -367,20 +374,23 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Arduino IDE only (NO arduino-cli)
 - Device bricking prevention
 
-### Current Status (February 2026)
+### Current Status (March 2026)
 
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
 - ✅ BandFlux Solo detector (log-compressed band-weighted spectral flux)
+- ✅ NN beat activation (v4 model, 33.3 KB INT8, `nnbeat=1` — A/B tested, 11/18 wins vs BandFlux)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
-- ✅ Testing infrastructure (MCP + param-tuner)
+- ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
 - ✅ Multi-layer safety mechanisms
 - ✅ 3 device configurations (Hat, Tube, Bucket)
+- ✅ Mic calibration pipeline + gain-aware training augmentation
 
-**In Progress:**
-- Beat tracking octave disambiguation (v50: templates + subbeat alternation implemented, default OFF, awaiting A/B validation)
-- Full hardware installation validation
+**A/B Tested (default OFF, no net benefit):**
+- Forward filter (`fwdfilter=1`): severe half-time bias, 17/18 octave errors
+- Spectral noise subtraction (`noiseest=1`): hurts BPM accuracy, baseline wins 13/18
+- Octave disambiguation templates/subbeat (`templatecheck=1`, `subbeatcheck=1`): no net benefit
 
 **Planned (Not Started):**
 - Bluetooth/BLE support (design doc complete)
@@ -403,7 +413,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Reviews and analysis must focus on outstanding actions**, not documenting past work. Git history serves as the permanent record of changes and decisions.
 
-## Current Audio System (February 2026)
+## Current Audio System (March 2026)
 
 ### Ensemble Detection Architecture
 The system uses 7 detectors with weighted fusion (1 enabled, 6 disabled).
@@ -422,7 +432,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 51
+- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 57
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **ODF mean subtraction disabled** (v32): Raw ODF feeds ACF — global mean sub was destroying peak structure (+70% F1)
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0 (+13% F1)
@@ -433,6 +443,9 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **HMM beat detection** (v46): Optional bar-pointer HMM position-0 wrap replaces CBSS countdown (`hmm=1`). Phase is explicit state variable. Tight transition matrix (`hmmLambda=0.05`) prevents octave jumps.
 - **Rhythmic pattern templates** (v50): Pearson correlation of CBSS vs 3 EDM bar templates for octave disambiguation (`templatecheck=0`, default OFF)
 - **Subbeat alternation** (v50): Odd/even energy ratio across 8 subbeat bins detects double-time lock (`subbeatcheck=0`, default OFF)
+- **NN beat activation** (v54+): Causal 1D CNN (5L ch32, 33.3 KB INT8) replaces BandFlux as ODF source. Requires `NN=1` build flag. Toggle: `nnbeat=1`. A/B tested: 11/18 track wins vs BandFlux, -0.8 mean error.
+- **Joint forward filter** (v57): Krebs/Böck/Widmer 2015 joint tempo-phase forward algorithm with continuous ODF observation. ~860 states (20 tempos × variable phase). Replaces CBSS+Bayesian when enabled (`fwdfilter=0`, default OFF — severe half-time bias in A/B test)
+- **Spectral noise subtraction** (v56): Martin 2001 minimum statistics noise estimation, per-bin oversubtraction after FFT (`noiseest=0`, default OFF — A/B tested, hurts BPM accuracy)
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Shared FFT + spectral pipeline**: All detectors share a single FFT → compressor → whitening chain
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame

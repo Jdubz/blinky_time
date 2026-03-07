@@ -310,8 +310,20 @@ void SerialConsole::registerRhythmSettings() {
         "BTrack-style tempo pipeline: Viterbi + comb-on-ACF (v33)");
     settings_.registerUint8("btrkthreshwin", &audioCtrl_->btrkThreshWindow, "rhythm",
         "Pipeline adaptive threshold half-window (0=off, 1-5 bins each side)", 0, 5);
+    settings_.registerBool("fwdfilter", &audioCtrl_->forwardFilterEnabled, "rhythm",
+        "Joint tempo-phase forward filter (v57, A/B vs CBSS+Bayesian)");
+    settings_.registerFloat("fwdtranssigma", &audioCtrl_->fwdTransSigma, "rhythm",
+        "Forward filter tempo transition width in lag units (v57)", 0.5f, 10.0f);
+    settings_.registerFloat("fwdfiltcontrast", &audioCtrl_->fwdFilterContrast, "rhythm",
+        "Forward filter ODF power-law contrast (v57)", 0.5f, 8.0f);
+    settings_.registerFloat("fwdfiltlambda", &audioCtrl_->fwdFilterLambda, "rhythm",
+        "Forward filter beat zone = 1/lambda of period (v57)", 2.0f, 32.0f);
+    settings_.registerFloat("fwdfiltfloor", &audioCtrl_->fwdFilterFloor, "rhythm",
+        "Forward filter observation probability floor (v57)", 0.001f, 0.1f);
     settings_.registerBool("hmm", &audioCtrl_->barPointerHmm, "rhythm",
         "Phase tracker beat detection (v34, A/B vs CBSS)");
+    settings_.registerBool("fwdphase", &audioCtrl_->fwdPhaseOnly, "rhythm",
+        "Hybrid: phase tracker for phase, CBSS for beats (v58)");
     settings_.registerFloat("hmmcontrast", &audioCtrl_->hmmContrast, "rhythm",
         "Phase tracker ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
     // (hmmtemponorm, hmmlambda, hmmbayesbias removed v53 — joint HMM dead code)
@@ -1303,6 +1315,12 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->octaveCheckEnabled = true;    // v32: shadow CBSS octave checker
         audioCtrl_->octaveCheckBeats = 2;         // v32: aggressive (every 2 beats)
         audioCtrl_->octaveScoreRatio = 1.3f;      // v32: aggressive threshold
+        audioCtrl_->forwardFilterEnabled = false;   // v57: joint forward filter (OFF by default, A/B)
+        audioCtrl_->fwdTransSigma = 3.0f;         // v57: tight tempo transitions
+        audioCtrl_->fwdFilterContrast = 2.0f;     // v57: squared ODF contrast
+        audioCtrl_->fwdFilterLambda = 8.0f;       // v57: beat zone = 12.5% of period
+        audioCtrl_->fwdFilterFloor = 0.01f;       // v57: observation probability floor
+        audioCtrl_->fwdPhaseOnly = false;         // v58: hybrid phase tracker (OFF by default, A/B)
         audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
         audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
         audioCtrl_->barPointerHmm = false;        // v34: phase tracker (disabled by default, A/B)

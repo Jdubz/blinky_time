@@ -10,6 +10,9 @@ Receptive field depends on dilation config:
 Size budget: ≤50 KB INT8 (nRF52840 has ~700 KB flash free).
 """
 
+import sys
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 
@@ -106,7 +109,7 @@ def model_summary(cfg: dict) -> None:
 
 
 if __name__ == "__main__":
-    import yaml
-    with open("configs/default.yaml") as f:
-        cfg = yaml.safe_load(f)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from scripts.audio import load_config
+    cfg = load_config("configs/default.yaml")
     model_summary(cfg)

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Extract mel spectrograms and beat activation targets from labeled audio.
 
-Replicates the firmware's SharedSpectralAnalysis mel pipeline (raw path):
+Replicates the firmware's SharedSpectralAnalysis mel pipeline (raw path, v56+):
   - 16 kHz sample rate
   - Hamming window (alpha=0.54, beta=0.46)
   - FFT-256, hop-256 (no overlap)
+  - Spectral noise subtraction (Martin 2001 min-statistics, v56)
   - 26 mel bands (60-8000 Hz), HTK mel scale
   - Triangular filterbank (area-normalized)
   - Log compression: 10*log10(x + 1e-10), mapped [-60, 0] dB -> [0, 1]
@@ -37,66 +38,17 @@ import librosa
 import numpy as np
 import torch
 import torchaudio
-import yaml
 from tqdm import tqdm
 
 
-def load_config(config_path: str) -> dict:
-    with open(config_path) as f:
-        return yaml.safe_load(f)
+# Ensure ml-training root is on sys.path for `from scripts.audio import ...`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-
-def _build_mel_filterbank(cfg: dict, device: torch.device) -> torch.Tensor:
-    """Build mel filterbank using librosa (for exact consistency), on GPU.
-
-    Returns shape (n_mels, n_fft//2 + 1) on the specified device.
-    """
-    sr = cfg["audio"]["sample_rate"]
-    n_fft = cfg["audio"]["n_fft"]
-    n_mels = cfg["audio"]["n_mels"]
-    fmin = cfg["audio"]["fmin"]
-    fmax = cfg["audio"]["fmax"]
-
-    mel_basis = librosa.filters.mel(
-        sr=sr, n_fft=n_fft, n_mels=n_mels,
-        fmin=fmin, fmax=fmax, htk=True, norm=None,
-    )
-    return torch.from_numpy(mel_basis.astype(np.float32)).to(device)
-
-
-def firmware_mel_spectrogram(audio: torch.Tensor, cfg: dict,
-                             mel_fb: torch.Tensor,
-                             window: torch.Tensor) -> np.ndarray:
-    """Compute mel spectrogram matching the firmware pipeline exactly.
-
-    NOTE: calibrate_mic.py has a numpy-only copy (_firmware_mel_from_audio).
-    If you change the mel pipeline here, update that copy too.
-
-    Args:
-        audio: (samples,) tensor on GPU/CPU
-        cfg: config dict
-        mel_fb: precomputed mel filterbank (n_mels, n_freqs) on same device
-        window: precomputed Hamming window on same device
-
-    Returns shape (n_frames, n_mels) numpy array with values in [0, 1].
-    """
-    n_fft = cfg["audio"]["n_fft"]
-    hop_length = cfg["audio"]["hop_length"]
-
-    # STFT on GPU — center=False matches firmware (no padding)
-    stft = torch.stft(audio, n_fft=n_fft, hop_length=hop_length,
-                      window=window, center=False, return_complex=True)
-    magnitudes = stft.abs()  # (n_freqs, n_frames)
-
-    # Apply mel filterbank: (n_mels, n_freqs) @ (n_freqs, n_frames) = (n_mels, n_frames)
-    mel_spec = mel_fb @ magnitudes
-
-    # Log compression: 10*log10(x + 1e-10), map [-60, 0] -> [0, 1]
-    log_mel = 10.0 * torch.log10(mel_spec + 1e-10)
-    log_mel = (log_mel + 60.0) / 60.0
-    log_mel = log_mel.clamp(0.0, 1.0)
-
-    return log_mel.T.cpu().numpy()  # (n_frames, n_mels)
+from scripts.audio import (
+    build_mel_filterbank_torch as _build_mel_filterbank,
+    firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
+    load_config,
+)
 
 
 def apply_spectral_conditioning(mel: np.ndarray) -> np.ndarray:

@@ -4,7 +4,7 @@
 
 AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output a simple 4-parameter `AudioControl` struct.
 
-**Current Version:** AudioController with CBSS Beat Tracking (February 2026)
+**Current Version:** AudioController with CBSS Beat Tracking + NN Beat ODF + Forward Filter option (March 2026)
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -43,21 +43,23 @@ PDM Microphone
       |
 AdaptiveMic (level, transient, spectral flux)
       |
-EnsembleDetector (2 detectors: Drummer + Complex) --> Transient Hits (visual only)
+      +--- EnsembleDetector (BandFlux Solo) --> ODF [default]
+      |                                    --> Transient Hits (visual only)
+      +--- BeatActivationNN (TFLite Micro) --> ODF [nnbeat=1, requires NN=1 build]
       |
 OSS Buffer (6s @ 60Hz)
       |
-      +--- Autocorrelation (every 500ms) --> Best BPM (with tempo prior)
-      |                                           |
-      |                                   beatPeriodSamples_
-      |                                           |
-      +--- CBSS Buffer ----> updateCBSS() ------> detectBeat()
-                              |                        |
-                    Cumulative Beat              Counter-based
-                    Strength Signal              beat prediction
-                              |                        |
-                              +--- Phase = (now - lastBeat) / period
-                                          |
+      +--- Autocorrelation (every 500ms) --> Bayesian Tempo Fusion --> Best BPM
+      |                                                                    |
+      |                                                            beatPeriodSamples_
+      |                                                                    |
+      +--- [Default] CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
+      |                                                                    |
+      +--- [fwdfilter=1] Forward Filter → updateForwardFilter() → Wrap-based beats
+                              |                                            |
+                    Joint tempo-phase                               Phase = position/period
+                    forward algorithm
+                              |
 AudioControl { energy, pulse, phase, rhythmStrength }
       |
 Generators (Fire, Water, Lightning)
@@ -170,7 +172,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
 | `cbssAlpha` | 0.9 | CBSS weighting (0.8-0.95, higher = more predictive) | `set cbssalpha 0.9` |
-| `cbssTightness` | 5.0 | Log-Gaussian tightness (higher = stricter tempo) | `set cbsstight 5.0` |
+| `cbssTightness` | 8.0 | Log-Gaussian tightness (higher = stricter tempo) | `set cbsstight 8.0` |
 | `beatConfidenceDecay` | 0.98 | Per-frame confidence decay when no beat | `set beatconfdecay 0.98` |
 | `tempoSnapThreshold` | 0.15 | BPM change ratio to snap vs smooth | `set temposnap 0.15` |
 
@@ -210,6 +212,45 @@ AudioController delegates transient detection to the EnsembleDetector. Currently
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
+### NN Beat Activation (v54+ - Optional, requires NN=1 build)
+
+Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from `SharedSpectralAnalysis::getRawMelBands()` (26 bands, 60-8000 Hz). Outputs beat activation (channel 0) and downbeat activation (channel 1). Toggle with `set nnbeat 1`.
+
+**Architecture:** 5-layer dilated causal conv (dilations [1,2,4,8,16], channels=32). 15,330 params, 33.3 KB INT8. Receptive field: 63 frames (~1008ms at 66 Hz).
+
+**Training:** 4-system consensus labels (Beat This! + essentia + librosa + madmom) across 6993 tracks with acoustic environment augmentation (volume, noise, reverb, RIR convolution) and mic profile augmentation. v4 model: Mean Beat F1=0.717, Downbeat F1=0.362.
+
+**Hardware A/B test (March 2026):** NN wins 11/18 tracks vs BandFlux, mean error 14.8 vs 15.6. Best on techno-minimal-01 (0.6 vs 7.5 error). Both dominated by ~135 BPM gravity well in Bayesian tempo estimator.
+
+**Key settings:**
+
+| Parameter | Default | Description | SerialConsole Command |
+|-----------|---------|-------------|----------------------|
+| `nnBeatEnabled` | false | Use NN ODF instead of BandFlux (requires NN=1 build) | `set nnbeat 1` |
+
+### Forward Filter Beat Tracking (v57 - Optional)
+
+Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwdfilter 1`. Default OFF — A/B tested, severe half-time bias (17/18 octave errors).
+
+**How it works:** 20 tempo bins × variable phase positions (~700 states). Each frame:
+1. Shift all phase positions forward by 1
+2. Apply observation: beat-zone positions (first `period/λ`) get `λ * ODF`, others get `(1-ODF)/(λ-1)`
+3. At position 0 (beat boundary): apply tempo transitions via Gaussian kernel
+4. Normalize probabilities
+5. Argmax determines current tempo and phase
+
+**Beat detection:** When argmax position wraps from near period-1 to near 0, a beat is fired (with cooldown, silence gate, onset snap, PLL correction).
+
+**Key settings:**
+
+| Parameter | Default | Description | SerialConsole Command |
+|-----------|---------|-------------|----------------------|
+| `forwardFilterEnabled` | false | Enable forward filter (replaces CBSS+Bayesian for tempo/beats) | `set fwdfilter 1` |
+| `fwdTransSigma` | 3.0 | Tempo transition width in lag units (tighter = less tempo jumping) | `set fwdtranssigma 3.0` |
+| `fwdFilterContrast` | 2.0 | ODF power-law contrast (higher = sharper onset discrimination) | `set fwdfiltcontrast 2.0` |
+| `fwdFilterLambda` | 8.0 | Beat zone = 1/λ of period (higher = narrower beat zone) | `set fwdfiltlambda 8.0` |
+| `fwdFilterFloor` | 0.01 | Observation probability floor (prevents zero probabilities) | `set fwdfiltfloor 0.01` |
+
 ---
 
 ## Resource Usage
@@ -224,7 +265,9 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5 KB | ~1% | Tempo validation |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| **Total** | **~15 KB** | **~9-10%** | Ample headroom |
+| Forward filter (optional) | ~5.1 KB | ~1% | Joint tempo-phase (v57, `fwdfilter=1`) |
+| NN beat activation (optional) | ~16 KB | ~2% | TFLite Micro tensor arena (NN=1 build, `nnbeat=1`) |
+| **Total** | **~15-20 KB** | **~9-11%** | Base. +16 KB with NN, +5 KB with fwdfilter |
 
 ---
 
@@ -235,6 +278,8 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 - `blinky-things/audio/AudioController.cpp` - Implementation (autocorrelation, CBSS, beat detection)
 - `blinky-things/audio/AudioControl.h` - Output struct definition
 - `blinky-things/audio/EnsembleDetector.h` - 2-detector ensemble fusion system
+- `blinky-things/audio/BeatActivationNN.h` - TFLite Micro NN beat/downbeat activation (NN=1 build)
+- `blinky-things/audio/beat_model_data.h` - INT8 TFLite model weights (v4, 33.3 KB)
 
 **Input Processing:**
 - `blinky-things/inputs/AdaptiveMic.h` - Microphone processing

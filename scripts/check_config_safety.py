@@ -43,21 +43,30 @@ def check_config_version_comments(config_h_path):
         content = f.read()
 
     # Find SETTINGS_VERSION line (was CONFIG_VERSION in older codebase)
-    match = re.search(r'SETTINGS_VERSION\s*=\s*(\d+)\s*;(.+)', content)
+    match = re.search(r'SETTINGS_VERSION\s*=\s*(\d+)\s*;(.*)', content)
     if not match:
         error("SETTINGS_VERSION not found in ConfigStorage.h")
         return False
 
     version = int(match.group(1))
-    comment = match.group(2)
+    inline_comment = match.group(2).strip()
 
-    # Check if comment describes changes
-    if len(comment.strip()) < 20:
-        warning(f"SETTINGS_VERSION {version} has minimal comment. Add details about struct changes.")
-        return False
+    # Check for descriptive comment: inline or on the preceding line
+    if len(inline_comment) >= 20:
+        success(f"SETTINGS_VERSION {version} has descriptive comment")
+        return True
 
-    success(f"SETTINGS_VERSION {version} has descriptive comment")
-    return True
+    # Check preceding line for a version comment (e.g., "// Version 57: ...")
+    prev_line_match = re.search(
+        r'//\s*Version\s+' + str(version) + r'\s*:\s*(.{20,})\n\s*static\s.*SETTINGS_VERSION',
+        content
+    )
+    if prev_line_match:
+        success(f"SETTINGS_VERSION {version} has descriptive comment (preceding line)")
+        return True
+
+    warning(f"SETTINGS_VERSION {version} has minimal comment. Add details about struct changes.")
+    return False
 
 def check_static_assertions(config_h_path):
     """Verify static_assert for struct sizes exists"""
