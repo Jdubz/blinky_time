@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 6, 2026 (signal chain treatment: conservative AGC + spectral noise subtraction)*
+*Last Updated: March 6, 2026 (v57: joint forward filter + spectral noise subtraction in training pipeline)*
 
 ## Current Status
 
@@ -391,7 +391,7 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 
 | # | Technique | Source | Effort | Expected Impact | Status |
 |---|-----------|--------|--------|----------------|--------|
-| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~1.3 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **Not started — NEXT PRIORITY** |
+| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~5.1 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **v57 — IMPLEMENTED, default OFF, awaiting A/B validation** |
 | 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +0.031 F1, addresses slow phase drift | **v45 — DONE, retained** |
 | 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +0.012 F1, resolves 5 vs 8 dilemma | **v45 — DONE, retained** |
 | 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | Low — minor refinement per literature | Deprioritized |
@@ -406,39 +406,34 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 | 1b | **Anti-harmonic comb (percivalw3)** | Speech F0 estimation | ~50 ops, 0 memory | Marginal, default OFF | **v48 — tested, marginal** |
 | 1c | **Metrical contrast check** | Beat Critic (ISMIR 2010) | ~20 ops/beat | Negative on full validation | **v48 — tested, default OFF** |
 
-**Technique A — Forward Filter with Continuous ODF Observation (DETAILED):**
+**Technique A — Forward Filter with Continuous ODF Observation (v57, IMPLEMENTED):**
 
-Replace CBSS countdown + onset snap + PLL with a 320-state forward filter (20 tempos × 16 phases) using BandFlux ODF as a continuous observation at every frame. This is the standard architecture for all systems achieving >60% F1.
+Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Tracks tempo and phase jointly via forward algorithm. 20 tempo bins × variable phase positions (~700 states). Continuous ODF observation model. Toggle: `fwdfilter=1` (default OFF for A/B testing).
 
-**How it works:** Each state (tempo_i, phase_j) receives a likelihood at every frame based on the current ODF value. At beat-zone positions (first 1/λ of period), high ODF = high likelihood. At non-beat positions, low ODF = high likelihood (confirms "no onset here, as expected"). The state with the highest accumulated probability determines both tempo and phase.
-
-**madmom observation model:**
-```
-P(ODF | beat position)     = ODF_value              // high ODF = evidence for beat here
-P(ODF | non-beat position) = (1 - ODF_value) / (λ-1) // low ODF = evidence for non-beat
-```
+**How it works:** Each state (tempo_i, phase_j) receives a likelihood at every frame based on the current ODF value. At beat-zone positions (first 1/λ of period), high ODF = high likelihood. At non-beat positions, low ODF = high likelihood (confirms "no onset here, as expected"). The state with the highest accumulated probability determines both tempo and phase. Beat detected when the argmax position wraps from near period-1 to near 0.
 
 **Why this differs from v46 (which failed):**
 
-| | v46 Bernoulli (FAILED) | Continuous ODF (proposed) |
+| | v46 Bernoulli (FAILED) | v57 Continuous ODF |
 |---|---|---|
 | At beat, ODF=0.1 | P → 0.1 (near-catastrophic) | P = 0.1 (low but survivable) |
-| At beat, ODF=0.0 | P → 0 (tracker crashes) | P ≈ 0 (but other states fill in) |
+| At beat, ODF=0.0 | P → 0 (tracker crashes) | P ≈ floor (other states fill in) |
 | Between beats, ODF=0.0 | P = 1.0 (binary certainty) | P = 1/λ ≈ 0.125 (proportional) |
 | Missing an onset | Probability collapses | Probability reduced gracefully |
 
-The v46 Bernoulli model treated onset detection as binary (onset or not). The continuous model uses the raw ODF value, so missing a beat is just weaker evidence, not a catastrophe. This is why madmom achieves 74% F1 on its forward (online) mode.
-
-**Implementation:**
-- State space: 20 tempo bins × 16 phase positions = 320 states
-- Per frame: advance all phase counters by 1, wrap at period boundary
-- Observation: compute log-likelihood for each state based on ODF and beat-zone membership
-- Transition: deterministic advance within-tempo; exponential penalty `exp(-λ * |ratio - 1|)` for tempo changes at beat boundaries only
-- Beat detection: state at phase position 0 with highest probability → beat fired
-- `observation_lambda = 8` (wider beat zone than madmom's 16 to accommodate noisy mic ODF)
-- RAM: 320 × 4 bytes = ~1.3 KB
-- CPU: 320 multiplications per frame at 66 Hz = negligible on 64 MHz
-- Replaces: CBSS + onset snap + PLL + octave check (single unified mechanism)
+**Implementation (actual, v57):**
+- State space: 20 tempo bins × variable phase per bin (period in samples) = ~700 total states (880 max)
+- Per frame: shift all phase positions forward by 1, apply observation likelihood
+- Observation: `obsBeat = max(λ * ODF^contrast, floor)`, `obsNonBeat = max((1 - ODF^contrast) / (λ-1), floor)`
+- Beat zone: first `period/λ` positions of each tempo bin
+- Transition: Gaussian `exp(-lagDiff² / 2σ²)` for tempo changes, applied only at position 0 (beat boundary)
+- Beat detection: argmax position wraps from near period-1 (last 25%) to near 0 (first 25%) + cooldown + silence gate
+- Onset snap + PLL correction reused from CBSS path
+- CBSS still updated for `sampleCounter_++` and `cbssMean_` (silence gate)
+- Settings: `fwdtranssigma=3.0`, `fwdfiltcontrast=2.0`, `fwdfiltlambda=8.0`, `fwdfiltfloor=0.01`
+- RAM: ~5.1 KB (3.5 KB alpha + 1.6 KB transition matrix)
+- CPU: ~700 multiplications per frame at 66 Hz = negligible on 64 MHz
+- SETTINGS_VERSION 57. When enabled, bypasses Bayesian tempo fusion for tempo setting (guard added to `externalTempoActive`)
 
 **Technique B — Rhythmic Pattern Templates (DETAILED):**
 

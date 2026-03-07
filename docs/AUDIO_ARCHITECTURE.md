@@ -4,7 +4,7 @@
 
 AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output a simple 4-parameter `AudioControl` struct.
 
-**Current Version:** AudioController with CBSS Beat Tracking (February 2026)
+**Current Version:** AudioController with CBSS Beat Tracking + Forward Filter option (March 2026)
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -43,21 +43,21 @@ PDM Microphone
       |
 AdaptiveMic (level, transient, spectral flux)
       |
-EnsembleDetector (2 detectors: Drummer + Complex) --> Transient Hits (visual only)
+EnsembleDetector (BandFlux Solo) --> Transient Hits (visual only)
       |
 OSS Buffer (6s @ 60Hz)
       |
-      +--- Autocorrelation (every 500ms) --> Best BPM (with tempo prior)
-      |                                           |
-      |                                   beatPeriodSamples_
-      |                                           |
-      +--- CBSS Buffer ----> updateCBSS() ------> detectBeat()
-                              |                        |
-                    Cumulative Beat              Counter-based
-                    Strength Signal              beat prediction
-                              |                        |
-                              +--- Phase = (now - lastBeat) / period
-                                          |
+      +--- Autocorrelation (every 500ms) --> Bayesian Tempo Fusion --> Best BPM
+      |                                                                    |
+      |                                                            beatPeriodSamples_
+      |                                                                    |
+      +--- [Default] CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
+      |                                                                    |
+      +--- [fwdfilter=1] Forward Filter → updateForwardFilter() → Wrap-based beats
+                              |                                            |
+                    Joint tempo-phase                               Phase = position/period
+                    forward algorithm
+                              |
 AudioControl { energy, pulse, phase, rhythmStrength }
       |
 Generators (Fire, Water, Lightning)
@@ -170,7 +170,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
 | `cbssAlpha` | 0.9 | CBSS weighting (0.8-0.95, higher = more predictive) | `set cbssalpha 0.9` |
-| `cbssTightness` | 5.0 | Log-Gaussian tightness (higher = stricter tempo) | `set cbsstight 5.0` |
+| `cbssTightness` | 8.0 | Log-Gaussian tightness (higher = stricter tempo) | `set cbsstight 8.0` |
 | `beatConfidenceDecay` | 0.98 | Per-frame confidence decay when no beat | `set beatconfdecay 0.98` |
 | `tempoSnapThreshold` | 0.15 | BPM change ratio to snap vs smooth | `set temposnap 0.15` |
 
@@ -210,6 +210,29 @@ AudioController delegates transient detection to the EnsembleDetector. Currently
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
+### Forward Filter Beat Tracking (v57 - Optional)
+
+Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwdfilter 1`. Default OFF — A/B testing vs CBSS.
+
+**How it works:** 20 tempo bins × variable phase positions (~700 states). Each frame:
+1. Shift all phase positions forward by 1
+2. Apply observation: beat-zone positions (first `period/λ`) get `λ * ODF`, others get `(1-ODF)/(λ-1)`
+3. At position 0 (beat boundary): apply tempo transitions via Gaussian kernel
+4. Normalize probabilities
+5. Argmax determines current tempo and phase
+
+**Beat detection:** When argmax position wraps from near period-1 to near 0, a beat is fired (with cooldown, silence gate, onset snap, PLL correction).
+
+**Key settings:**
+
+| Parameter | Default | Description | SerialConsole Command |
+|-----------|---------|-------------|----------------------|
+| `forwardFilterEnabled` | false | Enable forward filter (replaces CBSS+Bayesian for tempo/beats) | `set fwdfilter 1` |
+| `fwdTransSigma` | 3.0 | Tempo transition width in lag units (tighter = less tempo jumping) | `set fwdtranssigma 3.0` |
+| `fwdFilterContrast` | 2.0 | ODF power-law contrast (higher = sharper onset discrimination) | `set fwdfiltcontrast 2.0` |
+| `fwdFilterLambda` | 8.0 | Beat zone = 1/λ of period (higher = narrower beat zone) | `set fwdfiltlambda 8.0` |
+| `fwdFilterFloor` | 0.01 | Observation probability floor (prevents zero probabilities) | `set fwdfiltfloor 0.01` |
+
 ---
 
 ## Resource Usage
@@ -224,7 +247,8 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5 KB | ~1% | Tempo validation |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| **Total** | **~15 KB** | **~9-10%** | Ample headroom |
+| Forward filter (optional) | ~5.1 KB | ~1% | Joint tempo-phase (v57, `fwdfilter=1`) |
+| **Total** | **~15-20 KB** | **~9-11%** | Ample headroom |
 
 ---
 

@@ -207,7 +207,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v51)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v57)
    - `SettingsRegistry.h/cpp` - 80+ tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -323,7 +323,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB total (22,064B measured; CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB)
+- RAM: ~27 KB total (22 KB base + 5.1 KB forward filter; CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB + forward filter alpha/trans ~5.1 KB)
 - Flash: ~300 KB firmware, ~30 KB settings storage
 - Available: 256 KB RAM, 1 MB Flash
 
@@ -422,7 +422,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 51
+- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 57
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **ODF mean subtraction disabled** (v32): Raw ODF feeds ACF — global mean sub was destroying peak structure (+70% F1)
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0 (+13% F1)
@@ -433,6 +433,8 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **HMM beat detection** (v46): Optional bar-pointer HMM position-0 wrap replaces CBSS countdown (`hmm=1`). Phase is explicit state variable. Tight transition matrix (`hmmLambda=0.05`) prevents octave jumps.
 - **Rhythmic pattern templates** (v50): Pearson correlation of CBSS vs 3 EDM bar templates for octave disambiguation (`templatecheck=0`, default OFF)
 - **Subbeat alternation** (v50): Odd/even energy ratio across 8 subbeat bins detects double-time lock (`subbeatcheck=0`, default OFF)
+- **Joint forward filter** (v57): Krebs/Böck/Widmer 2015 joint tempo-phase forward algorithm with continuous ODF observation. ~700 states (20 tempos × variable phase). Replaces CBSS+Bayesian when enabled (`fwdfilter=0`, default OFF, A/B testing)
+- **Spectral noise subtraction** (v56): Martin 2001 minimum statistics noise estimation, per-bin oversubtraction after FFT (`noiseest=1`)
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Shared FFT + spectral pipeline**: All detectors share a single FFT → compressor → whitening chain
 - **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame
