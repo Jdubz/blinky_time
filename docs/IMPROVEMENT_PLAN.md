@@ -126,19 +126,23 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 - Trained on clean data only (no augmentation, no mic profile)
 - Not deployed — superseded by v4
 
-**Training v4 (consensus-4sys-v4-augmented) — IN PROGRESS:**
+**Training v4 (consensus-4sys-v4-augmented) — COMPLETED:**
 - Same architecture as v3: 5L ch32, dilations [1,2,4,8,16], 15,330 params
 - Full augmentation pipeline: clean + 4 gain levels + 3 noise floors + lowpass + bass-boost + 3 RIR = ~13 variants per track
 - Mic profile augmentation: gain-aware noise floor from calibration data (17 gain levels × 26 bands)
 - 4-system consensus labels (Beat This! + essentia + librosa + madmom)
 - Dataset: 3M+ training chunks, 545K val chunks (6993 tracks × ~13 augmented variants)
-- Training progress: epoch 16/100, val_loss=0.9719 (best at epoch 15; v2 best was 1.0445)
-- **Interim eval (epoch 15):** Mean Beat F1=0.715 (+36% vs v2's 0.525), Mean DB F1=0.364 (+42% vs v2's 0.256)
-- Best tracks: trance-infected-vibes 0.919, techno-minimal-01 0.902, trance-goa-mantra 0.876
-- ~5 min/epoch on RTX 3080 via nohup. Output: `/mnt/storage/blinky-ml-data/outputs/v4-wider-ch32-augmented/`
+- Best val_loss=0.9692 at epoch 53/68 (early stopped, patience=15; v2 best was 1.0445)
+- **Final eval (18-track EDM test set):**
+  - **Mean Beat F1=0.717** (+36.6% vs v2's 0.525)
+  - **Mean Downbeat F1=0.362** (+41.4% vs v2's 0.256)
+  - Best tracks: trance-infected-vibes 0.953, techno-minimal-01 0.947, techno-deep-ambience 0.884
+  - Worst tracks: breakbeat-drive 0.449, reggaeton-fuego-lento 0.451
+- Model exported to `beat_model_data.h` (33.3 KB INT8, hash 28b2dfd5)
+- ~5 min/epoch on RTX 3080. Output: `/mnt/storage/blinky-ml-data/outputs/v4-wider-ch32-augmented/`
 
 **Outstanding:**
-- Wait for v4 to complete → export INT8 → deploy to devices → A/B test vs BandFlux
+- Deploy v4 model to devices → A/B test nnbeat vs BandFlux on hardware
 - Consider focal loss variant if v4 activations are too soft (hedging around 0.5)
 - ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 40 validated.
 
