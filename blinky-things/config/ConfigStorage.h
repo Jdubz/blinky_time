@@ -489,8 +489,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
-    static_assert(sizeof(StoredMusicParams) == 396,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (396 bytes = 82 floats + 14 uint8 + 29 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 400,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (400 bytes = 82 floats + 14 uint8 + 29 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,
