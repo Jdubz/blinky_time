@@ -87,7 +87,7 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 
 **Completed:**
 - Full `ml-training/` pipeline: feature extraction, model definition, training script, export, evaluation
-- Causal 1D CNN: 3 dilated conv layers, ~9K params, ~20 KB INT8, 15 frame (240ms) receptive field
+- Causal 1D CNN: configurable dilated conv layers (3L baseline or 5L wider). ~9K-15K params, ~20-33 KB INT8
 - Multi-output: beat activation (channel 0) + downbeat activation (channel 1)
 - Acoustic environment augmentation (volume, noise, reverb, bass boost, RIR convolution)
 - Spectral conditioning augmentation (static compressor + whitening approximation)
@@ -111,35 +111,49 @@ Training a small causal CNN to replace BandFlux ODF with a learned beat activati
 **Training v2 (consensus-4sys-v2) — COMPLETED, FUNCTIONAL:**
 - pos_weight corrected: beat=4.7, downbeat=10.5
 - Best val_loss=1.0445 at epoch 55/70 (early stopped, patience=15)
-- **Mean Beat F1=0.548** @ threshold 0.70 (18 EDM test tracks, ±70ms mir_eval tolerance)
-- **Mean Downbeat F1=0.320** (functional, up from 0.003)
+- **Mean Beat F1=0.525** @ threshold 0.50 (18 EDM test tracks, ±70ms mir_eval tolerance)
+- **Mean Downbeat F1=0.256** (functional, up from 0.003)
 - Detection ratio: 1.03x (near-perfect, v1 was 2.09x over-detecting)
 - Best tracks: techno-minimal-01 (0.798), trance-party (0.722), trance-goa-mantra (0.698)
 - Worst tracks: techno-dub-groove (0.230), dubstep-edm-halftime (0.402)
 - Failure mode: model hedges on complex rhythms (peaks ~0.5-0.7 not 0.9+, valleys ~0.2 not 0.0). 240ms receptive field too narrow for slow/halftime patterns.
 - Model exported to `beat_model_data.h` (20.4 KB INT8, hash c8e4c40c)
 
-**Training v3 (consensus-4sys-v3-wider) — IN PROGRESS:**
+**Training v3 (consensus-4sys-v3-wider) — COMPLETED:**
 - Wider receptive field: dilations [1,2,4,8,16], RF=63 frames=1008ms (vs 15 frames=240ms)
-- 15,330 params, ~15 KB INT8 (fits 25 KB budget)
-- Early results: val_loss=0.998 at epoch 5 (v2 best was 1.044 — 4.5% lower already)
-- Training ~6 min/epoch on RTX 3080, estimated 5-7 hours total
+- 15,330 params, 33.3 KB INT8 (fits nRF52840: ~700 KB flash free, tensor arena bumped 8→16 KB)
 - Config: `configs/wider_rf.yaml`
+- Trained on clean data only (no augmentation, no mic profile)
+- Not deployed — superseded by v4
+
+**Training v4 (consensus-4sys-v4-augmented) — IN PROGRESS:**
+- Same architecture as v3: 5L ch32, dilations [1,2,4,8,16], 15,330 params
+- Full augmentation pipeline: clean + 4 gain levels + 3 noise floors + lowpass + bass-boost + 3 RIR = ~13 variants per track
+- Mic profile augmentation: gain-aware noise floor from calibration data (17 gain levels × 26 bands)
+- 4-system consensus labels (Beat This! + essentia + librosa + madmom)
+- Dataset: 3M+ training chunks, 545K val chunks (6993 tracks × ~13 augmented variants)
+- Training progress: epoch 16/100, val_loss=0.9719 (best at epoch 15; v2 best was 1.0445)
+- **Interim eval (epoch 15):** Mean Beat F1=0.715 (+36% vs v2's 0.525), Mean DB F1=0.364 (+42% vs v2's 0.256)
+- Best tracks: trance-infected-vibes 0.919, techno-minimal-01 0.902, trance-goa-mantra 0.876
+- ~5 min/epoch on RTX 3080 via nohup. Output: `/mnt/storage/blinky-ml-data/outputs/v4-wider-ch32-augmented/`
 
 **Outstanding:**
-- Wait for v3 training to complete and evaluate
-- Train v4 with focal loss (sharper activations, `--loss focal --focal-gamma 2.0`)
-- Train v5 with mic profile augmentation (`--mic-profile /mnt/storage/blinky-ml-data/calibration/mic_profile.npz`)
-- Deploy best model and A/B test vs BandFlux on hardware
+- Wait for v4 to complete → export INT8 → deploy to devices → A/B test vs BandFlux
+- Consider focal loss variant if v4 activations are too soft (hedging around 0.5)
 - ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 40 validated.
 
 ### Completed (March 4, 2026)
 
-**v50 Rhythmic Pattern Templates + Subbeat Alternation — IMPLEMENTED, default OFF, awaiting A/B validation (SETTINGS_VERSION 50):**
+**v50 Rhythmic Pattern Templates + Subbeat Alternation — VALIDATED, default OFF, NO NET BENEFIT (SETTINGS_VERSION 50):**
 - Rhythmic pattern templates (Krebs/Böck/Widmer ISMIR 2013): Pearson correlation of CBSS history against 3 precomputed zero-mean EDM bar templates (16 slots/bar). Compares T vs T/2 and T vs 2T every 4 beats. Calls `switchTempo()` if alternative wins by `templateScoreRatio` (1.3). Settings: `templatecheck=0`, `templatescoreratio=1.3`, `templatecheckbeats=4`.
 - Beat Critic subbeat alternation (Davies ISMIR 2010): Bins CBSS into 8 subbeat slots, computes odd/even energy ratio. Strong alternation at T indicates double-time → switches to T/2. Only downward switching (upward branch removed as weak signal). Settings: `subbeatcheck=0`, `alternationthresh=1.2`, `subbeatcheckbeats=4`.
-- Both features default OFF pending A/B validation on slow tracks (breakbeat, reggaeton, dub) where 128 BPM gravity well occurs.
-- 300KB flash (37%), 22KB RAM (9%). 6 new settings.
+- **A/B tested (Mar 6, 2026):** 18-track EDM sweep on hardware. Results:
+  - Baseline wins 10, subbeatcheck wins 8. Mean BPM error: baseline 16.3, subbeat 15.8 (within noise).
+  - templatecheck alone: slightly worse than baseline (per-track A/B).
+  - subbeatcheck alone: best per-track result on techno-minimal-01 (3.0 vs 15.5 error) but regression on techno-dub-groove (11.5 vs 6.6).
+  - Both ON: best on earlier techno-minimal-01 test (129.1 vs 129.0 true) but inconsistent across genres.
+  - **Dominant issue: ~140 BPM gravity well** — nearly all tracks converge to 130-148 BPM regardless of true tempo. Octave disambiguation features cannot fix this observation-side bias.
+- Both features retained as OFF defaults. 300KB flash (37%), 22KB RAM (9%). 6 new settings.
 
 **v49 Continuous ODF Observation Model in CBSS Phase Tracker (SETTINGS_VERSION 49):**
 - Replaced Bernoulli observation model with continuous ODF observation in phase tracker. Addresses the key finding from v46 failure analysis.
