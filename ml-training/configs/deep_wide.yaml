@@ -1,0 +1,25 @@
+# Beat Activation CNN — 7-layer deep + wide
+#
+# RF = 255 frames = 4080ms (covers ~4 beats at 60 BPM, ~8 beats at 120 BPM)
+# ~68 KB INT8 (nRF52840 has ~700 KB flash free)
+# 3x parameters vs 5L ch32; 4x receptive field
+# Context: 256 frames (needs MAX_CONTEXT bump in BeatActivationNN.h)
+# Estimated inference: 8-12 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
+#
+# Shared settings are in base.yaml and merged automatically by load_config().
+# This file only contains model-specific overrides.
+
+model:
+  type: "causal_cnn"
+  channels: 48
+  kernel_size: 3
+  dilations: [1, 2, 4, 8, 16, 32, 64]    # RF: 255 frames = 4080ms
+  dropout: 0.1
+  downbeat: true
+
+training:
+  chunk_frames: 256         # Must be >= RF (255 frames)
+  chunk_stride: 128         # 50% overlap
+
+export:
+  max_model_size_kb: 80

@@ -1,19 +1,8 @@
 #include "EnsembleDetector.h"
 
-EnsembleDetector::EnsembleDetector() {
-    // Initialize detector array (order matches DetectorType enum)
-    detectors_[static_cast<int>(DetectorType::DRUMMER)] = &drummer_;
-    detectors_[static_cast<int>(DetectorType::SPECTRAL_FLUX)] = &spectralFlux_;
-    detectors_[static_cast<int>(DetectorType::HFC)] = &hfc_;
-    detectors_[static_cast<int>(DetectorType::BASS_BAND)] = &bassBand_;
-    detectors_[static_cast<int>(DetectorType::COMPLEX_DOMAIN)] = &complexDomain_;
-    detectors_[static_cast<int>(DetectorType::NOVELTY)] = &novelty_;
-    detectors_[static_cast<int>(DetectorType::BAND_FLUX)] = &bandFlux_;
-
-    // Initialize last results
-    for (int i = 0; i < NUM_DETECTORS; i++) {
-        lastResults_[i] = DetectionResult::none();
-    }
+EnsembleDetector::EnsembleDetector()
+    : lastBandFluxResult_(DetectionResult::none())
+{
 }
 
 void EnsembleDetector::begin() {
@@ -21,12 +10,9 @@ void EnsembleDetector::begin() {
     spectral_.begin();
     bassSpectral_.begin();
 
-    // Configure each detector with fusion defaults
-    for (int i = 0; i < NUM_DETECTORS; i++) {
-        DetectorType type = static_cast<DetectorType>(i);
-        DetectorConfig config = fusion_.getConfig(type);
-        detectors_[i]->configure(config);
-    }
+    // Configure BandFlux detector with fusion defaults
+    DetectorConfig config = fusion_.getConfig(DetectorType::BAND_FLUX);
+    bandFlux_.configure(config);
 }
 
 void EnsembleDetector::reset() {
@@ -34,18 +20,14 @@ void EnsembleDetector::reset() {
     spectral_.reset();
     bassSpectral_.reset();
 
-    // Reset all detectors
-    for (int i = 0; i < NUM_DETECTORS; i++) {
-        detectors_[i]->reset();
-    }
+    // Reset detector
+    bandFlux_.reset();
 
     // Reset fusion (back to calibrated defaults)
     fusion_.resetToDefaults();
 
     // Reset last results
-    for (int i = 0; i < NUM_DETECTORS; i++) {
-        lastResults_[i] = DetectionResult::none();
-    }
+    lastBandFluxResult_ = DetectionResult::none();
     lastOutput_ = EnsembleOutput();
 }
 
@@ -67,24 +49,29 @@ EnsembleOutput EnsembleDetector::update(float level, float rawLevel,
         bassSpectral_.process();
     }
 
-    // Build frame structure for detectors
+    // Build frame structure for detector
     AudioFrame frame = buildFrame(level, rawLevel, timestampMs);
 
-    // Run only enabled detectors (disabled ones are skipped to save CPU)
-    for (int i = 0; i < NUM_DETECTORS; i++) {
-        if (fusion_.getConfig(static_cast<DetectorType>(i)).enabled) {
-            lastResults_[i] = detectors_[i]->detect(frame, dt);
-        } else {
-            lastResults_[i] = DetectionResult::none();
-        }
+    // Run BandFlux detector (only enabled detector)
+    if (fusion_.getConfig(DetectorType::BAND_FLUX).enabled) {
+        lastBandFluxResult_ = bandFlux_.detect(frame, dt);
+    } else {
+        lastBandFluxResult_ = DetectionResult::none();
     }
 
-    // Clear spectral frame ready flags (detectors have consumed data)
+    // Clear spectral frame ready flags (detector has consumed data)
     spectral_.resetFrameReady();
     bassSpectral_.resetFrameReady();
 
+    // Build sparse results array for fusion (all slots none except BAND_FLUX)
+    DetectionResult results[NUM_DETECTORS];
+    for (int i = 0; i < NUM_DETECTORS; i++) {
+        results[i] = DetectionResult::none();
+    }
+    results[static_cast<int>(DetectorType::BAND_FLUX)] = lastBandFluxResult_;
+
     // Fuse results with unified ensemble cooldown and noise gate
-    lastOutput_ = fusion_.fuse(lastResults_, timestampMs, level);
+    lastOutput_ = fusion_.fuse(results, timestampMs, level);
 
     return lastOutput_;
 }
@@ -120,53 +107,34 @@ AudioFrame EnsembleDetector::buildFrame(float level, float rawLevel,
     return frame;
 }
 
-IDetector* EnsembleDetector::getDetector(DetectorType type) {
-    int idx = static_cast<int>(type);
-    if (idx >= 0 && idx < NUM_DETECTORS) {
-        return detectors_[idx];
-    }
-    return nullptr;
-}
-
-const IDetector* EnsembleDetector::getDetector(DetectorType type) const {
-    int idx = static_cast<int>(type);
-    if (idx >= 0 && idx < NUM_DETECTORS) {
-        return detectors_[idx];
-    }
-    return nullptr;
-}
-
 void EnsembleDetector::setDetectorWeight(DetectorType type, float weight) {
     fusion_.setWeight(type, weight);
 
-    // Also update detector's own config (matches setDetectorEnabled/setDetectorThreshold)
-    int idx = static_cast<int>(type);
-    if (idx >= 0 && idx < NUM_DETECTORS) {
-        DetectorConfig config = detectors_[idx]->getConfig();
+    // Also update detector's own config if it's BandFlux
+    if (type == DetectorType::BAND_FLUX) {
+        DetectorConfig config = bandFlux_.getConfig();
         config.weight = weight;
-        detectors_[idx]->configure(config);
+        bandFlux_.configure(config);
     }
 }
 
 void EnsembleDetector::setDetectorEnabled(DetectorType type, bool enabled) {
     fusion_.setEnabled(type, enabled);
 
-    // Also update detector's own config
-    int idx = static_cast<int>(type);
-    if (idx >= 0 && idx < NUM_DETECTORS) {
-        DetectorConfig config = detectors_[idx]->getConfig();
+    // Also update detector's own config if it's BandFlux
+    if (type == DetectorType::BAND_FLUX) {
+        DetectorConfig config = bandFlux_.getConfig();
         config.enabled = enabled;
-        detectors_[idx]->configure(config);
+        bandFlux_.configure(config);
     }
 }
 
 void EnsembleDetector::setDetectorThreshold(DetectorType type, float threshold) {
-    int idx = static_cast<int>(type);
-    if (idx >= 0 && idx < NUM_DETECTORS) {
+    if (type == DetectorType::BAND_FLUX) {
         // Update detector's own config
-        DetectorConfig config = detectors_[idx]->getConfig();
+        DetectorConfig config = bandFlux_.getConfig();
         config.threshold = threshold;
-        detectors_[idx]->configure(config);
+        bandFlux_.configure(config);
 
         // Also update fusion config (for display consistency)
         DetectorConfig fusionConfig = fusion_.getConfig(type);

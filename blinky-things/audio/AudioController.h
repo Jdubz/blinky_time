@@ -286,15 +286,11 @@ public:
     float tempoSmoothingFactor = 0.85f; // Higher = smoother, slower adaptation (0-1)
     float tempoChangeThreshold = 0.1f;  // Min BPM change ratio to trigger update
 
-    // === ADAPTIVE BAND WEIGHTING ===
-    // Dynamically adjusts band weights based on which frequency bands show strongest periodicity
-    // When enabled, bands with stronger rhythmic content get higher weights
-    // Uses SuperFlux-style max filtering, cross-band correlation, and peakiness detection
-    // to distinguish real beats from vibrato/tremolo in sustained content
-    bool adaptiveBandWeightEnabled = true;  // Enable/disable adaptive weighting
-    float bassBandWeight = 0.5f;    // Bass band weight (when adaptive disabled)
-    float midBandWeight = 0.3f;     // Mid band weight (when adaptive disabled)
-    float highBandWeight = 0.2f;    // High band weight (when adaptive disabled)
+    // === BAND WEIGHTING ===
+    // Fixed band weights for spectral flux computation (bass/mid/high)
+    float bassBandWeight = 0.5f;    // Bass band weight
+    float midBandWeight = 0.3f;     // Mid band weight
+    float highBandWeight = 0.2f;    // High band weight
 
     // === AUTOCORRELATION TIMING ===
     // Controls how often BPM is re-estimated via autocorrelation
@@ -571,10 +567,6 @@ public:
     uint32_t getNextBeatMs() const { return nextBeatMs_; }
     // (getLastTempoPriorWeight removed — Bayesian fusion replaces tempo prior)
 
-    // Adaptive band weight debug getters
-    const float* getAdaptiveBandWeights() const { return adaptiveBandWeights_; }
-    const float* getBandPeriodicityStrength() const { return bandPeriodicityStrength_; }
-
     // Bayesian tempo state debug getters
     int getBayesBestBin() const { return bayesBestBin_; }
     float getBayesBestConf() const;
@@ -638,26 +630,6 @@ private:
     static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
     float prevMagnitudes_[SPECTRAL_BINS] = {0};
     bool prevMagnitudesValid_ = false;  // First frame has no previous
-
-    // Per-band OSS tracking for adaptive weighting
-    // Tracks periodicity strength in bass, mid, high bands independently
-    static constexpr int BAND_COUNT = 3;  // bass, mid, high
-    static constexpr int BAND_OSS_BUFFER_SIZE = 240;  // 4 seconds at 60 Hz (captures 4+ beats at 60 BPM)
-    float bandOssBuffers_[BAND_COUNT][BAND_OSS_BUFFER_SIZE] = {{0}};
-    int bandOssWriteIdx_ = 0;
-    int bandOssCount_ = 0;
-    float bandPeriodicityStrength_[BAND_COUNT] = {0};
-    float adaptiveBandWeights_[BAND_COUNT] = {0.5f, 0.3f, 0.2f};  // Default weights
-    uint32_t lastBandAutocorrMs_ = 0;
-    // Cross-band correlation tracking (SuperFlux-inspired)
-    // Measures how synchronized the bands are - real beats correlate across bands
-    float crossBandCorrelation_[BAND_COUNT] = {0};  // Correlation of each band with others
-    float bandSynchrony_ = 0.0f;  // Overall synchrony metric (0-1)
-
-    // Peakiness tracking - distinguishes transient bursts from continuous vibrato
-    // Transients: sparse, high peaks (high peakiness)
-    // Vibrato: continuous, low-level fluctuations (low peakiness)
-    float bandPeakiness_[BAND_COUNT] = {0};
 
     // Maximum-filtered previous magnitudes for vibrato suppression (SuperFlux style)
     float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};
@@ -898,13 +870,6 @@ private:
     // Onset strength computation
     float computeSpectralFluxBands(const float* magnitudes, int numBins,
                                     float& bassFlux, float& midFlux, float& highFlux);
-
-    // Adaptive band weighting
-    void addBandOssSamples(float bassFlux, float midFlux, float highFlux);
-    void updateBandPeriodicities(uint32_t nowMs);
-    float computeBandAutocorrelation(int band);
-    void computeCrossBandCorrelation();
-    void computeBandPeakiness();
 
     // Bayesian tempo fusion
     // Note: initTempoState() uses bayesPriorCenter and tempoPriorWidth to build

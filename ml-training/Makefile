@@ -18,7 +18,7 @@ SHELL := /bin/bash
 STORAGE       := /mnt/storage/blinky-ml-data
 AUDIO_DIR     := $(STORAGE)/audio/combined
 LABELS_MULTI  := $(STORAGE)/labels/multi
-LABELS_CONSENSUS := $(STORAGE)/labels/consensus
+LABELS_CONSENSUS := $(STORAGE)/labels/consensus_v2
 PROCESSED_DIR := data/processed
 RIR_DIR       := $(STORAGE)/rir/processed
 TEST_AUDIO    := ../blinky-test-player/music/edm
@@ -52,7 +52,7 @@ PYTHON        := python3
 # ============================================================
 # Phony targets
 # ============================================================
-.PHONY: all download label merge prepare train export eval clean status help
+.PHONY: all download label merge merge-v2 prepare train export eval clean status help
 
 all: download label merge prepare train export eval
 	@echo "Pipeline complete. Results in $(OUTPUT_DIR)/"
@@ -109,9 +109,16 @@ label: combine-audio
 # Step 4: Merge consensus labels
 # ============================================================
 merge:
-	$(PYTHON) scripts/merge_consensus_labels.py \
+	$(PYTHON) scripts/merge_consensus_labels_v2.py \
 		--labels-dir $(LABELS_MULTI) \
 		--output-dir $(LABELS_CONSENSUS) \
+		--tolerance $(TOLERANCE) \
+		--min-agreement $(MIN_AGREEMENT)
+
+merge-v1:
+	$(PYTHON) scripts/merge_consensus_labels.py \
+		--labels-dir $(LABELS_MULTI) \
+		--output-dir $(STORAGE)/labels/consensus \
 		--tolerance $(TOLERANCE) \
 		--min-agreement $(MIN_AGREEMENT)
 
@@ -165,7 +172,12 @@ eval:
 # ============================================================
 # Utilities
 # ============================================================
-.PHONY: validate-features calibrate calibrate-generate calibrate-capture calibrate-analyze
+.PHONY: validate-labels validate-features calibrate calibrate-generate calibrate-capture calibrate-analyze
+
+validate-labels:
+	$(PYTHON) scripts/validate_labels.py \
+		--labels-dir $(LABELS_MULTI) \
+		--output $(STORAGE)/label_validation_report.json
 
 validate-features:
 	$(PYTHON) scripts/validate_features.py --generate-reference \
