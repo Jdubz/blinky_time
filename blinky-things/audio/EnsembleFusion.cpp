@@ -153,7 +153,9 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
         output.transientStrength = 0.0f;
     }
 
-    output.ensembleConfidence = (agreementCount > 0) ? 1.0f : 0.0f;
+    int boostIdx2 = (agreementCount > MAX_DETECTORS) ? MAX_DETECTORS : agreementCount;
+    float confidence = agreementBoosts_[boostIdx2];
+    output.ensembleConfidence = (confidence > 1.0f) ? 1.0f : confidence;
     output.detectorAgreement = static_cast<uint8_t>(agreementCount);
     output.dominantDetector = static_cast<uint8_t>(dominantIdx);
 

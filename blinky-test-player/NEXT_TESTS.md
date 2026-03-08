@@ -3,9 +3,9 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 7, 2026 (v58+NN: nnbeat default ON, hybrid phase tracker, forward filter density penalty)
+**Last Updated:** March 8, 2026 (v60: asymmetric obs model, Bayesian bias, sweep-optimal defaults)
 
-## Current Config (v58, SETTINGS_VERSION 58)
+## Current Config (v60, SETTINGS_VERSION 60)
 
 **Detector:** BandWeightedFlux Solo (all others disabled)
 - gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5

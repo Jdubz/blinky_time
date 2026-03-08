@@ -11,7 +11,7 @@
  */
 
 const { SerialPort } = require('serialport');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -26,7 +26,12 @@ function getArg(name, defaultValue) {
 const portPath = getArg('--port', '/dev/ttyACM0');
 const musicDir = getArg('--music-dir', 'music/edm');
 const durationMs = parseInt(getArg('--duration', '35000'));
-const settingName = getArg('--setting', 'subbeatcheck');
+const settingNameRaw = getArg('--setting', 'subbeatcheck');
+if (!/^[a-z0-9]+$/.test(settingNameRaw)) {
+  console.error(`ERROR: --setting must match [a-z0-9]+ (got: "${settingNameRaw}")`);
+  process.exit(1);
+}
+const settingName = settingNameRaw;
 const preSettings = getArg('--pre', '');  // comma-separated key=value pairs applied at startup
 // Settle: OSS buffer fill (5.5s) + autocorr convergence (~2s) + posterior (~2s) + latency (~0.6s)
 const settleMs = 12000;
@@ -92,12 +97,14 @@ function getGroundTruthBpm(trackPath) {
 
 function getTrackDuration(trackPath) {
   try {
-    const { execSync } = require('child_process');
-    const out = execSync(
-      `ffprobe -v quiet -show_entries format=duration -of csv=p=0 "${trackPath}"`,
-      { encoding: 'utf-8' }
-    );
-    return parseFloat(out.trim());
+    const result = spawnSync('ffprobe', [
+      '-v', 'quiet',
+      '-show_entries', 'format=duration',
+      '-of', 'csv=p=0',
+      trackPath
+    ], { encoding: 'utf-8' });
+    if (result.status !== 0 || !result.stdout) return null;
+    return parseFloat(result.stdout.trim());
   } catch (e) { return null; }
 }
 

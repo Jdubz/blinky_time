@@ -323,7 +323,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("fwdbayesbias", &audioCtrl_->fwdBayesBias, "rhythm",
         "Bayesian posterior bias on forward filter tempo (v59, 0=off, 1=full)", 0.0f, 1.0f);
     settings_.registerFloat("fwdasymmetry", &audioCtrl_->fwdAsymmetry, "rhythm",
-        "Asymmetric non-beat penalty by tempo (v60, 0=off, 2=default, higher=stronger)", 0.0f, 5.0f);
+        "Asymmetric non-beat penalty by tempo (v60, 0=off, 0.8=optimal)", 0.0f, 3.0f);
     settings_.registerBool("hmm", &audioCtrl_->barPointerHmm, "rhythm",
         "Phase tracker beat detection (v34, A/B vs CBSS)");
     settings_.registerBool("fwdphase", &audioCtrl_->fwdPhaseOnly, "rhythm",
@@ -1324,8 +1324,8 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->fwdFilterContrast = 2.0f;     // v57: squared ODF contrast
         audioCtrl_->fwdFilterLambda = 8.0f;       // v57: beat zone = 12.5% of period
         audioCtrl_->fwdFilterFloor = 0.01f;       // v57: observation probability floor
-        audioCtrl_->fwdBayesBias = 0.5f;         // v59: Bayesian tempo bias for forward filter
-        audioCtrl_->fwdAsymmetry = 2.0f;         // v60: asymmetric non-beat penalty by tempo
+        audioCtrl_->fwdBayesBias = 0.2f;         // v59: Bayesian tempo bias (sweep-optimal)
+        audioCtrl_->fwdAsymmetry = 0.8f;         // v60: asymmetric non-beat penalty (sweep-optimal)
         audioCtrl_->fwdPhaseOnly = false;         // v58: hybrid phase tracker (OFF by default, A/B)
         audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
         audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)

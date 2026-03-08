@@ -294,8 +294,8 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.fwdFilterContrast = 2.0f;      // Squared ODF for sharper discrimination
     data_.music.fwdFilterLambda = 8.0f;        // Beat zone = 12.5% of period
     data_.music.fwdFilterFloor = 0.01f;        // Observation probability floor
-    data_.music.fwdBayesBias = 0.5f;           // Moderate Bayesian tempo bias (v59)
-    data_.music.fwdAsymmetry = 2.0f;           // Asymmetric non-beat penalty (v60)
+    data_.music.fwdBayesBias = 0.2f;           // Bayesian tempo bias (v59, sweep-optimal)
+    data_.music.fwdAsymmetry = 0.8f;           // Asymmetric non-beat penalty (v60, sweep-optimal)
 
     // Hybrid phase tracker (v58)
     data_.music.fwdPhaseOnly = false;           // OFF by default, A/B vs counter-based phase

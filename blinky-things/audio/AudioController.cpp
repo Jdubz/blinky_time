@@ -1910,6 +1910,14 @@ void AudioController::initForwardFilter() {
         fwdTotalStates_ = FWD_MAX_STATES;  // Safety clamp
     }
 
+    // Cache minimum period across all tempo bins (fastest tempo)
+    fwdMinPeriod_ = tempoBinLags_[0];
+    for (int i = 1; i < TEMPO_BINS; i++) {
+        if (tempoBinLags_[i] < fwdMinPeriod_ && tempoBinLags_[i] >= 10)
+            fwdMinPeriod_ = tempoBinLags_[i];
+    }
+    if (fwdMinPeriod_ < 10) fwdMinPeriod_ = 10;
+
     // Initialize with Rayleigh prior over tempo, uniform over phase
     float rayleighPeak = rayleighBpm;
     float rayleighLag = OSS_FRAMES_PER_MIN / rayleighPeak;
@@ -1989,13 +1997,8 @@ void AudioController::updateForwardFilter(float odf) {
     float obsBeat = fmaxf(lambda * odfVal, obsFloor);
     float obsNonBeatBase = fmaxf((1.0f - odfVal) / (lambda - 1.0f), obsFloor);
 
-    // For asymmetric model: find minimum period (fastest tempo bin)
-    int fwdMinPeriod = tempoBinLags_[0];
-    for (int i = 1; i < TEMPO_BINS; i++) {
-        if (tempoBinLags_[i] < fwdMinPeriod && tempoBinLags_[i] >= 10)
-            fwdMinPeriod = tempoBinLags_[i];
-    }
-    if (fwdMinPeriod < 10) fwdMinPeriod = 10;
+    // Use cached minimum period (computed in initForwardFilter)
+    int fwdMinPeriod = fwdMinPeriod_;
 
     // Collect wrap probabilities (last position of each tempo bin) BEFORE shift
     float wrapProbs[TEMPO_BINS];  // 20 floats = 80 bytes on stack
