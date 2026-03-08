@@ -230,9 +230,9 @@ Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from 
 
 ### Forward Filter Beat Tracking (v57 - Optional)
 
-Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwdfilter 1`. Default OFF — A/B tested, severe half-time bias (17/18 octave errors).
+Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwdfilter 1`. Default OFF — full 6-parameter sweep (v60) optimized to 7/18 octave errors but still worse than CBSS baseline (4/18). Observation model is fundamentally octave-symmetric.
 
-**How it works:** 20 tempo bins × variable phase positions (~700 states). Each frame:
+**How it works:** 20 tempo bins × variable phase positions (~700-880 states). Each frame:
 1. Shift all phase positions forward by 1
 2. Apply observation: beat-zone positions (first `period/λ`) get `λ * ODF`, others get `(1-ODF)/(λ-1)`
 3. At position 0 (beat boundary): apply tempo transitions via Gaussian kernel
@@ -246,10 +246,12 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
 | `forwardFilterEnabled` | false | Enable forward filter (replaces CBSS+Bayesian for tempo/beats) | `set fwdfilter 1` |
-| `fwdTransSigma` | 3.0 | Tempo transition width in lag units (tighter = less tempo jumping) | `set fwdtranssigma 3.0` |
-| `fwdFilterContrast` | 2.0 | ODF power-law contrast (higher = sharper onset discrimination) | `set fwdfiltcontrast 2.0` |
-| `fwdFilterLambda` | 8.0 | Beat zone = 1/λ of period (higher = narrower beat zone) | `set fwdfiltlambda 8.0` |
+| `fwdTransSigma` | 0.6 | Tempo transition width in lag units (v60 sweep optimal, was 3.0) | `set fwdtranssigma 0.6` |
+| `fwdFilterContrast` | 1.0 | ODF power-law contrast (v60 sweep optimal, was 2.0) | `set fwdfiltcontrast 1.0` |
+| `fwdFilterLambda` | 10.0 | Beat zone = 1/λ of period (v60 sweep optimal, was 8.0) | `set fwdfiltlambda 10.0` |
 | `fwdFilterFloor` | 0.01 | Observation probability floor (prevents zero probabilities) | `set fwdfiltfloor 0.01` |
+| `fwdBayesBias` | 0.2 | Bayesian posterior modulation strength (v59, 0=off, 1=full) | `set fwdbayesbias 0.2` |
+| `fwdAsymmetry` | 0.8 | Asymmetric non-beat penalty by tempo (v60, 0=off, 0.8=optimal) | `set fwdasymmetry 0.8` |
 
 ---
 

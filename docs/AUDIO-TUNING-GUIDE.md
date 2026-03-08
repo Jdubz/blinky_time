@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** March 6, 2026
-**Firmware Version:** SETTINGS_VERSION 57 (CBSS + Bayesian Tempo + NN Beat ODF option)
+**Last Updated:** March 8, 2026
+**Firmware Version:** SETTINGS_VERSION 60 (CBSS + Bayesian Tempo + NN Beat ODF default + Forward Filter option)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -37,14 +37,18 @@ PDM Microphone (16kHz, mono)
         |
    BassSpectralAnalysis (Goertzel-12, 31.25 Hz/bin, optional)
         |
-   EnsembleDetector (BandFlux Solo — 1 of 7 detectors enabled)
-   ├── BandWeightedFlux (1.0) ── enabled  ← log-compressed band-weighted flux
-   ├── Drummer (0.50) ────────── disabled
-   ├── SpectralFlux (0.20) ───── disabled
-   ├── HFC (0.20) ────────────── disabled
-   ├── BassBand (0.45) ───────── disabled
-   ├── ComplexDomain (0.50) ──── disabled
-   └── Novelty (0.12) ────────── disabled
+   ├── EnsembleDetector (BandFlux Solo — 1 of 7 detectors enabled)
+   │   ├── BandWeightedFlux (1.0) ── enabled  ← log-compressed band-weighted flux
+   │   ├── Drummer (0.50) ────────── disabled
+   │   ├── SpectralFlux (0.20) ───── disabled
+   │   ├── HFC (0.20) ────────────── disabled
+   │   ├── BassBand (0.45) ───────── disabled
+   │   ├── ComplexDomain (0.50) ──── disabled
+   │   └── Novelty (0.12) ────────── disabled
+   │        → ODF (default, or when nnbeat=0)
+   │
+   └── BeatActivationNN (TFLite Micro, NN=1 build, nnbeat=1 default)
+        → ODF (when nnbeat=1)
         |
    Fusion: agree_1=1.0 (solo pass-through), cooldown=250ms, minconf=0.40
         |
@@ -53,9 +57,9 @@ PDM Microphone (16kHz, mono)
    ├── Autocorrelation (every 250ms) with inverse-lag normalization
    ├── Bayesian Tempo Fusion (20 bins, 60-180 BPM)
    │   ├── ACF observation (weight 0.8, harmonic-enhanced v25)
-   │   ├── Fourier tempogram (weight 2.0, re-enabled v24)
    │   ├── Comb filter bank (weight 0.7, primary)
-   │   └── IOI histogram (weight 2.0, re-enabled v24)
+   │   ├── Fourier tempogram (weight 0, disabled v28)
+   │   └── IOI histogram (weight 0, disabled v28)
    ├── Per-sample ACF harmonic disambiguation (2x + 1.5x + 0.5x checks)
    ├── CBSS beat tracking (adaptive threshold = 1.0 × running mean)
    ├── Counter-based beat detection (deterministic phase)
@@ -69,7 +73,7 @@ PDM Microphone (16kHz, mono)
 ### Key Design Decisions
 
 1. **BandFlux Solo**: Single detector outperforms multi-detector ensembles (+14% avg Beat F1). Ensemble fusion dilutes BandFlux's cleaner signal.
-2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening makes detectors invariant to sustained spectral content. Enables FT/IOI re-activation.
+2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening makes detectors invariant to sustained spectral content.
 3. **Bayesian tempo fusion**: Unified posterior estimation over 20 tempo bins. Comb filter bank is the primary observation; harmonic-enhanced ACF (weight 0.8, v25) with 4-harmonic comb and Rayleigh prior prevents sub-harmonic lock.
 4. **CBSS beat tracking**: Cumulative Beat Strength Signal with adaptive threshold prevents phantom beats during silence/breakdowns.
 5. **Deterministic phase**: Phase derived from counter: `(now - lastBeat) / period` — no drift or jitter.
@@ -173,7 +177,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 | Detector | Weight | Threshold | Enabled | Notes |
 |----------|--------|-----------|---------|-------|
-| **BandWeightedFlux** | 0.50 | 0.5 | **yes** | Log-compressed band-weighted flux, additive threshold |
+| **BandWeightedFlux** | 1.00 | 0.5 | **yes** | Log-compressed band-weighted flux, additive threshold |
 | Drummer | 0.50 | 4.5 | no | Amplitude transients |
 | ComplexDomain | 0.50 | 3.5 | no | Phase onset detection |
 | BassBand | 0.45 | 3.0 | no | Too noisy (100+ detections/30s) |
@@ -212,7 +216,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `midbandweight` | 0.3 | 0.0-1.0 | Mid band weight |
 | `highbandweight` | 0.2 | 0.0-1.0 | High band weight |
 | `odfsmooth` | 5 | 3-11 (odd) | ODF smoothing window width |
-| `odfmeansub` | true | bool | ODF mean subtraction (essential — keep ON) |
+| `odfmeansub` | false | bool | ODF mean subtraction (OFF since v32 — raw ODF preserves ACF structure, +70% F1) |
 
 **Tempo estimation:**
 | Command | Default | Range | Description |
@@ -223,14 +227,14 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `bpmmin` | 60 | 40-120 | Minimum BPM to detect |
 | `bpmmax` | 200 | 80-240 | Maximum BPM to detect |
 | `temposmooth` | 0.85 | 0.5-0.99 | Tempo EMA smoothing factor |
-| `ft` | true | bool | Fourier tempogram observation (re-enabled v24) |
-| `ioi` | true | bool | IOI histogram observation (re-enabled v24) |
+| `ft` | false | bool | Fourier tempogram observation (disabled v28) |
+| `ioi` | false | bool | IOI histogram observation (disabled v28) |
 
 **CBSS beat detection:**
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
 | `cbssalpha` | 0.9 | 0.5-0.99 | CBSS weighting (higher = more predictive) |
-| `cbsstight` | 5.0 | 1.0-20.0 | Log-Gaussian tightness (higher = stricter tempo) |
+| `cbsstight` | 8.0 | 1.0-20.0 | Log-Gaussian tightness (higher = stricter tempo, raised v40) |
 | `cbssthresh` | 1.0 | 0.0-2.0 | Adaptive threshold: beat fires only if CBSS > factor × mean |
 | `beatconfdecay` | 0.98 | 0.9-0.999 | Per-frame confidence decay when no beat |
 | `beatoffset` | 5.0 | 0.0-15.0 | Beat prediction advance in frames (ODF+CBSS delay compensation) |
@@ -253,11 +257,11 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `bayespriorw` | 0.0 | 0.0-3.0 | Ongoing static prior strength (0 = off, default) |
 | `priorwidth` | 50.0 | 10-80 | Prior width (sigma BPM) |
 | `bayesacf` | 0.8 | 0.0-5.0 | ACF observation weight (raised in v25 — harmonic comb makes ACF reliable) |
-| `bayesft` | 2.0 | 0.0-5.0 | Fourier tempogram weight (re-enabled v24) |
+| `bayesft` | 0.0 | 0.0-5.0 | Fourier tempogram weight (disabled v28) |
 | `bayescomb` | 0.7 | 0.0-5.0 | Comb filter bank weight (primary observation) |
-| `bayesioi` | 2.0 | 0.0-5.0 | IOI histogram weight (re-enabled v24) |
+| `bayesioi` | 0.0 | 0.0-5.0 | IOI histogram weight (disabled v28) |
 
-**CRITICAL interaction warning:** Setting `cbssthresh` below 0.8 while `bayesft` or `bayesioi` are above 0.5 causes catastrophic beat tracking failure (F1 drops to 0.049). The FT/IOI sub-harmonic bias floods CBSS with phantom beats that the low threshold can't reject. Safe combinations: `cbssthresh >= 1.0` with any FT/IOI weight, or `bayesft/bayesioi <= 0.5` with any cbssthresh.
+**CRITICAL interaction warning:** Setting `cbssthresh` below 0.8 while `bayesft` or `bayesioi` are above 0.5 causes catastrophic beat tracking failure (F1 drops to 0.049). The FT/IOI sub-harmonic bias floods CBSS with phantom beats that the low threshold can't reject. Both are disabled by default (v28). If re-enabled: `cbssthresh >= 1.0` with any FT/IOI weight, or `bayesft/bayesioi <= 0.5` with any cbssthresh.
 
 ### Category: `spectral` (10 parameters) - Spectral Processing (v23+)
 
@@ -273,6 +277,66 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `compmakeup` | 6.0 | -10.0 to 30.0 dB | Makeup gain |
 | `compattack` | 0.001 | 0.0001-0.1 s | Attack time constant (effectively instantaneous at 62.5 fps) |
 | `comprelease` | 2.0 | 0.01-10.0 s | Release time constant |
+
+### Category: `nn` (1 parameter) - NN Beat Activation (v54+, requires NN=1 build)
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `nnbeat` | 1 | bool | Use NN ODF instead of BandFlux (default ON since v58, requires NN=1 build) |
+
+### Category: `forward` (7 parameters) - Forward Filter Beat Tracking (v57+, default OFF)
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `fwdfilter` | 0 | bool | Enable forward filter (replaces CBSS+Bayesian for beats) |
+| `fwdtranssigma` | 0.6 | 0.1-10.0 | Tempo transition width in lag units (v60 sweep optimal) |
+| `fwdfiltcontrast` | 1.0 | 0.5-5.0 | ODF power-law contrast (v60 sweep: 1.0 optimal) |
+| `fwdfiltlambda` | 10.0 | 2.0-20.0 | Beat zone = 1/λ of period (v60 sweep: 10 optimal) |
+| `fwdfiltfloor` | 0.01 | 0.001-0.1 | Observation probability floor |
+| `fwdbayesbias` | 0.2 | 0.0-1.0 | Bayesian posterior modulation strength (v59) |
+| `fwdasymmetry` | 0.8 | 0.0-3.0 | Asymmetric non-beat penalty by tempo (v60) |
+
+**Forward filter is OFF by default.** A/B testing showed severe half-time bias (17/18 octave errors at original defaults). Full 6-parameter sweep (v60) optimized to 7/18 octave errors but still worse than CBSS baseline (4/18). Use `fwdphase=1` for phase-only tracking if smoother phase is desired.
+
+### Category: `fwdphase` (1 parameter) - Forward Phase Tracking (v58+, default OFF)
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `fwdphase` | 0 | bool | Use forward filter phase only (CBSS tempo, fwd filter phase) |
+
+### Category: `v45` (8 parameters) - PLL + Adaptive Tightness + Percival (v45+)
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `pll` | 1 | bool | PLL proportional phase correction |
+| `pllkp` | 0.15 | 0.0-1.0 | PLL proportional gain |
+| `pllki` | 0.005 | 0.0-0.1 | PLL integral gain |
+| `adaptight` | 1 | bool | Adaptive CBSS tightness based on onset confidence |
+| `percival` | 1 | bool | Percival ACF harmonic pre-enhancement |
+| `bisnap` | 1 | bool | Bidirectional onset snap (v44) |
+| `onsetSnapWindow` | 8 | 1-16 | Onset snap search window in frames |
+
+### Category: `noise` (5 parameters) - Spectral Noise Estimation (v56, default OFF)
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `noiseest` | 0 | bool | Enable spectral noise floor subtraction (hurts — OFF by default) |
+| `noisesmooth` | 0.92 | 0.8-0.99 | Per-bin power smoothing |
+| `noiserelease` | 0.999 | 0.99-0.9999 | Running minimum release |
+| `noiseover` | 1.5 | 1.0-4.0 | Oversubtraction factor |
+| `noisefloor` | 0.02 | 0.001-0.1 | Minimum magnitude floor |
+
+### Category: `octave` (7 parameters) - Octave Disambiguation (v32/v50)
+
+| Command | Default | Range | Description |
+|---------|---------|-------|-------------|
+| `templatecheck` | 0 | bool | Rhythmic pattern template matching (v50, no benefit) |
+| `subbeatcheck` | 0 | bool | Subbeat alternation octave check (v50, no benefit) |
+| `densityoctave` | 1 | bool | Onset-density octave penalty |
+| `octavecheck` | 1 | bool | Shadow CBSS octave checker |
+| `octavecheckbeats` | 2 | 1-8 | Octave check interval in beats |
+| `octavescoreratio` | 1.3 | 1.0-3.0 | Required score improvement for octave switch |
+| `odfmeansub` | 0 | bool | ODF mean subtraction (OFF v32: raw ODF +70% F1) |
 
 ### Category: `stability` (1 parameter)
 
@@ -347,7 +411,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 ## Current Best Settings
 
-### BandFlux Solo Configuration (SETTINGS_VERSION 25)
+### BandFlux Solo Configuration (SETTINGS_VERSION 60)
 
 **Single detector outperforms all multi-detector ensembles** — BandFlux Solo achieves avg Beat F1 0.468 vs 0.411 baseline (HFC+Drummer). Multi-detector combos tested worse; ensemble fusion dilutes BandFlux's cleaner signal.
 
@@ -355,7 +419,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 | Detector | Weight | Threshold | Enabled | Reason |
 |----------|--------|-----------|---------|--------|
-| **BandWeightedFlux** | 0.50 | 0.5 | **yes** | Best solo Beat F1, log-compressed band-weighted flux |
+| **BandWeightedFlux** | 1.00 | 0.5 | **yes** | Best solo Beat F1, log-compressed band-weighted flux |
 | Drummer | 0.50 | 4.5 | no | Multiplicative threshold fails at low signal levels |
 | ComplexDomain | 0.50 | 3.5 | no | Adds noise when combined with BandFlux |
 | BassBand | 0.45 | 3.0 | no | Too noisy (100+ detections/30s even at thresh 60) |
@@ -379,14 +443,14 @@ ensminlevel = 0.0      # Noise gate (disabled)
 5. Onset delta filter: reject if `fluxDelta < 0.3` (pad/echo rejection)
 6. Hi-hat rejection gate (high-only flux suppression)
 
-### Bayesian Tempo Fusion Defaults (v25)
+### Bayesian Tempo Fusion Defaults (v28+)
 
 | Parameter | Command | Default | Role |
 |-----------|---------|---------|------|
 | Comb weight | `bayescomb` | 0.7 | **Primary** observation — Scheirer-style resonators |
-| FT weight | `bayesft` | 2.0 | Re-enabled v24 (spectral processing fixed normalization) |
-| IOI weight | `bayesioi` | 2.0 | Re-enabled v24 (spectral whitening stabilized onsets) |
 | ACF weight | `bayesacf` | 0.8 | Harmonic-enhanced ACF (4-harmonic comb + Rayleigh prior, v25) |
+| FT weight | `bayesft` | 0.0 | **Disabled v28** — no reference system uses FT for real-time |
+| IOI weight | `bayesioi` | 0.0 | **Disabled v28** — no reference system uses IOI for polyphonic |
 | Lambda | `bayeslambda` | 0.07 | Tighter transitions prevent octave jumps (v25) |
 | Prior weight | `bayespriorw` | 0.0 | Static prior OFF (hurts off-center tempos) |
 | CBSS threshold | `cbssthresh` | 1.0 | Prevents phantom beats during silence |
@@ -456,7 +520,7 @@ Key changes from v24:
 
 ### Overview
 
-**Goal:** Validate current v24 firmware defaults and tune parameters for optimal beat tracking and transient detection across diverse music genres.
+**Goal:** Validate current v60 firmware defaults and tune parameters for optimal beat tracking and transient detection across diverse music genres.
 
 ### Prerequisites
 
@@ -467,7 +531,7 @@ Key changes from v24:
 
 ### Phase 1: Baseline Validation (all 18 tracks)
 
-**Purpose:** Establish v24 performance across the full track library.
+**Purpose:** Establish v60 performance across the full track library.
 
 **Method:** Use `run_music_test` MCP tool per track, one at a time (shared acoustic space — all devices hear same audio). Run full tracks (Bayesian fusion needs >30s to warm up).
 
@@ -576,14 +640,14 @@ Visual inspection of fire effect with beat-synced music:
 
 1. Increase `cbssthresh` (try 1.2-1.5) — higher threshold rejects weak CBSS peaks
 2. **NEVER** lower cbssthresh below 0.8 when FT/IOI weights > 0.5 (catastrophic failure)
-3. Check that `odfmeansub` is ON (essential for Bayesian fusion)
+3. Check that `odfmeansub` is OFF (v32: raw ODF preserves ACF structure, +70% F1)
 
 ### FT/IOI Causing Problems
 
-1. If FT/IOI are causing sub-harmonic issues, disable them: `set ft 0` and `set ioi 0`
-2. Or reduce their Bayesian weights: `set bayesft 0.5` and `set bayesioi 0.5`
-3. Ensure `cbssthresh >= 1.0` before increasing FT/IOI weights
-4. FT and IOI depend on spectral processing — if compressor/whitening are disabled, disable FT/IOI too
+FT and IOI are **disabled by default** since v28 (`bayesft=0`, `bayesioi=0`). No reference system uses these for real-time beat tracking. If re-enabled for experimentation:
+1. Disable them: `set bayesft 0` and `set bayesioi 0`
+2. Ensure `cbssthresh >= 1.0` before increasing FT/IOI weights
+3. FT and IOI depend on spectral processing — if compressor/whitening are disabled, disable FT/IOI too
 
 ### Serial Commands Reference
 

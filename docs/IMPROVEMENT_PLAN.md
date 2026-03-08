@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 8, 2026 (gravity well root cause identified: coarse 20-bin tempo resolution + NN training data issues)*
+*Last Updated: March 8, 2026 (SOTA alignment review, gravity well root cause, revised priorities)*
 
 ## Current Status
 
@@ -309,7 +309,7 @@ Analysis of training pipeline revealed several issues that may limit model quali
 - Beat-boundary tempo (`beatboundary=1`): defers period changes to beat fire, synchronizing tempo and CBSS.
 - Dual-threshold peak picking (`bandflux_peakpick=1`): local-max confirmation with 1-frame look-ahead.
 - Unified ODF (`unifiedodf=1`): BandFlux pre-threshold activation feeds CBSS, replacing duplicate `computeSpectralFluxBands()`.
-- 40 tempo bins tested (v29), reverted — transition matrix drift 2x worse with 40 bins.
+- 40 tempo bins tested (v29), reverted — transition matrix drift 2x worse with 40 bins. **NOTE: Root cause was BPM-space Gaussian transition matrix on lag-uniform grid, fixed in v43.** 40 bins should now work correctly.
 
 ### Completed (February 25, 2026)
 
@@ -372,6 +372,43 @@ Analysis of training pipeline revealed several issues that may limit model quali
 **Architecture:** Generator → Effect → Renderer, AudioController v3, ensemble detection (6 algorithms), agreement-based fusion, comprehensive testing infrastructure (MCP + param-tuner), calibration completed.
 
 ---
+
+## SOTA Context (March 2026)
+
+Best online/causal beat tracking systems on standard benchmarks (line-in audio):
+
+| System | Year | Beat F1 | Architecture | Notes |
+|--------|:----:|:-------:|-------------|-------|
+| BEAST | 2024 | **80.0%** | Streaming Transformer (9 layers, 1024 dim) | SOTA, too large for MCU |
+| BeatNet+ | 2024 | ~78% | CRNN + 2-level particle filter (1500 particles) | Microphone-capable |
+| Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
+| RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
+| BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
+| **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in ODF quality, not the beat tracking backend. The NN ODF is the biggest lever for improvement.
+
+**Reference tempo resolutions:** madmom uses 82 lag-domain bins (~2.4 BPM at 120 BPM), BTrack uses 41 bins (2 BPM steps), BeatNet uses 300 discrete levels. Our 20 bins (11.5 BPM at 130 BPM) is far coarser than any reference system.
+
+### Current Priorities (March 2026)
+
+| Priority | Task | Expected Impact | Status |
+|----------|------|----------------|--------|
+| **1** | Increase tempo bins (20→40+) | Fix gravity well (root cause) | Not started |
+| **2** | Fix NN training pipeline (v6 model) | Biggest lever per SOTA research | Not started |
+| **3** | Visual eval of fwdphase=1 | May improve LED smoothness | BPM-neutral, needs eyes on hardware |
+
+**Priority 1: Increase Tempo Bins (20→40+)**
+Root cause fix for the ~135 BPM gravity well. Previous v29 attempt at 40 bins failed due to BPM-space Gaussian transition matrix bug — **fixed in v43** (now uses lag-space Gaussian). Should be re-attempted. Consider lag-domain uniform spacing (natural ~2 BPM resolution at 120 BPM, ~41 integer lags at 60 Hz frame rate) rather than linear BPM spacing. ~17 KB extra RAM (fits nRF52840's 256 KB).
+
+**Priority 2: Fix NN Training Pipeline (v6 model)**
+Research confirms NN ODF quality is the biggest lever. Five issues: (1) exclude 18 test tracks from training (data leakage), (2) add time-stretch augmentation (33.5% training data at 120-140 BPM), (3) reduce Gaussian sigma or use binary targets (41.5% of frames wasted on tails), (4) improve mel normalization (compressed range, ~50 effective INT8 levels), (5) add ACF-based ODF quality metric.
+
+**Priority 3: Visual Eval of fwdphase=1**
+Forward filter phase tracking was BPM-neutral in A/B test (8 wins vs 6). May give smoother LED animations. No code changes required.
+
+**Future: Heydari 1D State Space**
+Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. Collapses 2D (tempo × phase) into 1D phase-only where tempo changes are "jumps back" in the state space. ~860 states fits our memory budget. Could replace CBSS if tempo bins + NN training improvements are insufficient.
 
 ## Design Philosophy
 
