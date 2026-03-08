@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 7, 2026 (v58+NN: nnbeat default ON, hybrid phase tracker, fwdphase A/B test)*
+*Last Updated: March 8, 2026 (gravity well root cause identified: coarse 20-bin tempo resolution + NN training data issues)*
 
 ## Current Status
 
@@ -173,10 +173,24 @@ v4 model deployed to all 3 devices (v57+NN firmware, `ENABLE_NN_BEAT_ACTIVATION`
 **Finding: Modest but consistent improvement.** NN ODF wins 11/18 tracks with -0.8 lower mean error. Not transformative — both systems are dominated by the ~135-138 BPM gravity well in the Bayesian tempo estimator. The NN's advantage is in tracks where BandFlux locks to the wrong tempo region. Octave error rate is comparable (4 vs 5).
 
 **Outstanding:**
-- Consider enabling `nnbeat=1` as default (11/18 wins justifies it)
-- Consider focal loss variant if v4 activations are too soft (hedging around 0.5)
+- ~~Consider enabling `nnbeat=1` as default~~ **DONE (v58)** — 11/18 wins justifies it
+- ~~Consider focal loss variant~~ **DONE (v5)** — identical results to v4, focal loss doesn't help
 - ~~Deploy v4 model to devices → A/B test~~ **DONE**
 - ~~Gain × Volume characterization sweep~~ **DONE** — see results in Mic Calibration section above. AGC ceiling of 40 validated.
+
+**Training Pipeline Issues Identified (March 8, 2026):**
+
+Analysis of training pipeline revealed several issues that may limit model quality:
+
+1. **Test set data leakage (CRITICAL):** All 18 EDM evaluation tracks exist in the training data directory (`/mnt/storage/blinky-ml-data/audio/combined/`). Random train/val split likely included them in training. Beat F1=0.717 is inflated — true generalization unknown. Fix: exclude test tracks from `prepare_dataset.py`.
+
+2. **Compressed mel feature range:** Mean mel value 0.84, IQR [0.78, 0.95]. Only ~0.2 units of dynamic range in [0,1] space. After INT8 quantization, only ~50 effective levels. The -35 dB RMS normalization helped but didn't fully solve the problem.
+
+3. **Gaussian targets waste capacity:** sigma_frames=2 produces 41.5% frames in Gaussian tails (0 < target ≤ 0.5), more than the 16.6% at beat centers (target > 0.5). Model spends capacity fitting the tail shape that CBSS doesn't use. Fix: reduce sigma or use binary targets.
+
+4. **No time-stretch augmentation:** Training data is 33.5% in 120-140 BPM range. Model has 3x more exposure to ~120 BPM beat patterns than 80 or 160 BPM. With RF=63 frames (1008ms, covering 2+ beats), model can learn tempo-correlated features. Fix: add time-stretch augmentation.
+
+5. **Evaluation metric mismatch:** evaluate.py measures standalone beat detection F1, but model is used as ODF source for CBSS. A model with slightly smeared but consistent activations could score lower on F1 but produce better ACF peaks. Consider adding ACF-based ODF quality metric.
 
 ### Completed (March 4, 2026)
 
@@ -252,7 +266,7 @@ v4 model deployed to all 3 devices (v57+NN firmware, `ENABLE_NN_BEAT_ACTIVATION`
 - 3:2/2:3 transition matrix shortcuts (`harmonicsesqui`, default OFF): enables Bayesian posterior jumps between 3:2-related tempo bins. **Causes catastrophic regression** on fast tracks (130+ BPM pulled down to 100-110 BPM). The only feature that helps slow tracks escape 128 BPM lock, but too dangerous for production.
 - Configurable Rayleigh prior peak (`rayleighbpm`, default 120). Shifting to 90-100 insufficient to escape 128 BPM well alone.
 - Tunable switchTempo nudge (`temponudge`, default 0.8, was hardcoded 0.3). Stronger nudge improves octave checker responsiveness.
-- **128 BPM gravity well remains unsolved**: observation-side features (fold32, sesquicheck) cannot overcome the comb filter bank's harmonic reinforcement. Only transition matrix shortcuts help, but they cause worse regressions than they fix.
+- **128 BPM gravity well ROOT CAUSE IDENTIFIED (Mar 8)**: coarse 20-bin tempo resolution is the primary cause. Only 2 bins cover 120-140 BPM (bin 4=132.0 BPM, bin 5=123.8 BPM). Bin 4 catches 128-139 BPM (11.5 BPM width). Full-resolution comb-on-ACF is computed at every lag but sampled only at 20 bin-center lags, throwing away fine-grained information. **Fix: increase to 40 bins (~5 BPM resolution, ~17 KB extra RAM).** Secondary causes: training data 33.5% in 120-140 BPM (no time-stretch augmentation), Bayesian prior at 128 BPM, octave folding asymmetry (bins >99 BPM cannot receive half-time bonus).
 - SETTINGS_VERSION 43. 287KB flash (35%), 21KB RAM (8%).
 
 **v43 Bayesian Tempo Bug Fixes — 4 critical fixes, BPM accuracy 33%→88%:**
@@ -427,7 +441,7 @@ BTrack's tightness=5 assumes clean line-in audio. Our reverberant mic setup has 
 
 | # | Technique | Source | Effort | Expected Impact | Status |
 |---|-----------|--------|--------|----------------|--------|
-| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~5.1 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **v57 — IMPLEMENTED, A/B tested: half-time bias (see below)** |
+| **A** | **Forward filter with continuous ODF observation** | madmom obs model (Krebs/Böck 2015) | ~5.1 KB RAM, ~1% CPU | **HIGH** — addresses root cause; all systems >60% F1 use this | **v57 — IMPLEMENTED, full 6-param sweep: best 7/18 oct err vs CBSS 4/18. Default OFF.** |
 | 2a | **PLL-style proportional correction** | PLL beat tracking (Kim 2007) | ~20 bytes, trivial CPU | +0.031 F1, addresses slow phase drift | **v45 — DONE, retained** |
 | 2b | **Adaptive tightness** | Novel (noise-vs-correction tradeoff) | ~10 bytes, trivial CPU | +0.012 F1, resolves 5 vs 8 dilemma | **v45 — DONE, retained** |
 | 2c | **Off-beat suppression in CBSS** | Davies & Plumbley (2007) | ~100 bytes, 0.1% CPU | Low — minor refinement per literature | Deprioritized |
@@ -495,12 +509,33 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Tracks tempo and pha
 - λ=8 (default): Consistent half-time (17/18 octave errors in full sweep).
 - **Conclusion: lambda tuning cannot fix the octave problem.** The observation model is fundamentally octave-symmetric — at half-time, the filter sees a beat every other cycle and reinforces it.
 
-**Next steps (prioritized):**
-1. ~~**Hybrid approach**: Use forward filter for phase tracking only~~ **DONE (v58)** — `fwdphase=1` runs single-bin phase tracker alongside CBSS. A/B tested: BPM-neutral (8 wins vs 6, mean error 14.9 vs 14.8). Phase smoothness needs visual evaluation on LEDs.
-2. **Onset-density penalty in forward filter**: Port the `densityOctaveEnabled` logic from Bayesian posterior into the forward filter's tempo transition probability. At half-time, transients/beat < 0.5 should heavily penalize those bins.
-3. **Asymmetric observation model**: Scale `obsNonBeat` penalty by expected beats-per-bar at that tempo. Slower tempos should more strongly penalize high ODF at non-beat positions.
+**Full 6-parameter sweep (Mar 8, 2026):**
 
-**Positive signal: tempo variability.** The forward filter's std (13.5 BPM) is higher than baseline (5.1 BPM), indicating the filter is responsive to the audio rather than locked to a gravity well. If the octave bias is fixed, this responsiveness could translate to better tracking.
+Systematic sweep of all 6 forward filter parameters using 3-device batched testing (3 values per audio pass, ~23 min per sweep). Each sweep used optimized values from previous sweeps.
+
+| Parameter | Range | Best | Score | Oct Err | Significance |
+|-----------|-------|------|-------|---------|-------------|
+| `fwdtranssigma` | 0.3-5.0 | 0.6 | 82.9 | 7/18 | **HIGH** — most impactful (13->7 octave errors) |
+| `fwdbayesbias` | 0-1 | 0.2 | 82.5 | 7/18 | **HIGH** — 0 = catastrophic (12/18 octave) |
+| `fwdasymmetry` | 0-4 | 0.8 | 92.2 | 8/18 | Moderate — helps at low values, hurts >3.0 |
+| `fwdfiltcontrast` | 1-5 | 1.0 | 83.5 | 7/18 | Moderate — higher = more octave errors |
+| `fwdfiltlambda` | 4-16 | 10 | 93.3 | 8/18 | Low — noisy, no clear trend |
+| `fwdfiltfloor` | 0.001-0.05 | ~0.01 | 82.5 | 7-8 | **None** — no measurable effect |
+
+Optimal config: `sigma=0.6, bias=0.2, lambda=10, asym=0.8, contrast=1, floor=0.01`
+Best achievable: **mean err 12.5, 7/18 octave errors** (score ~82.5)
+
+**CBSS baseline: mean err 14.5, 4/18 octave errors**
+
+**Conclusion: Forward filter CANNOT beat CBSS baseline on octave errors.** The optimized forward filter has lower mean BPM error (12.5 vs 14.5) but nearly double the octave errors (7 vs 4). The observation model is fundamentally octave-symmetric — at half-time, every other beat aligns perfectly, and no amount of parameter tuning can break this symmetry. 6 tracks (breakbeat-background, breakbeat-drive, dnb-energetic-breakbeat, dnb-liquid-jungle, dubstep-edm-halftime, reggaeton-fuego-lento) always have octave errors regardless of any parameter combination.
+
+**Key findings from sweeps:**
+- `fwdTransSigma`: Literature was right — our default 3.0 was 5x too loose. Tightening to 0.6 reduced octave errors from 13 to 7.
+- `fwdBayesBias`: NOT just a workaround for loose sigma — essential even with tight sigma. Without it, forward filter reverts to full half-time bias.
+- `fwdAsymmetry`: Sweet spot at 0.8-1.6. Default 2.0 was close. Above 3.0, pushes tracks to double-time.
+- `fwdFilterFloor`: Despite being 10-100x higher than literature values, has NO measurable effect. Our observation model formula differs enough that floor is irrelevant.
+
+**Status: Forward filter remains OFF as default.** Use `fwdphase=1` for phase-only tracking if smoother phase is desired (BPM-neutral).
 
 **Technique B — Rhythmic Pattern Templates (DETAILED):**
 
@@ -1024,15 +1059,11 @@ The gap between 28% and BTrack's 65-75% is primarily phase alignment. Specific c
 
 **Result:** Disabled in v28. No regression on 18-track validation. FT and IOI code retained but default weights set to 0.
 
-#### 1b. Simplify Ensemble Infrastructure for Solo Detector — OUTSTANDING
+#### 1b. Simplify Ensemble Infrastructure for Solo Detector — DONE (v59)
 
-**Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead. The agreementBoosts array, minConfidence filtering, and dominant detector tracking serve no purpose.
+**Problem:** EnsembleFusion runs agreement-based confidence scaling, weighted averaging, and multi-detector cooldown logic — all designed for N detectors. With BandFlux Solo (1 detector enabled), this is pure overhead.
 
-**Action:** Simplify EnsembleFusion to pass BandFlux output directly when only 1 detector is enabled. Keep the multi-detector path as dead code for future experimentation, but bypass it at runtime.
-
-**Test plan:** Before/after 9-track sweep to confirm no regression from simplification.
-
-**Effort:** Low (~30 lines). **Impact:** Cleaner code, marginally less CPU.
+**Result:** Added fast path in `EnsembleFusion::fuse()`: when exactly 1 detector is enabled, bypasses agreement scaling and weighted averaging — direct strength pass-through with confidence filtering and cooldown only. Multi-detector path retained for future experimentation.
 
 #### 1c. Evaluate Adaptive Band Weighting Cost/Benefit — OUTSTANDING
 
@@ -1209,7 +1240,7 @@ Detection requires ALL of:
 
 **Result:** Tested as `bfhiresbass=1` in v32. Hurts Beat F1 by ~9%. Keep off.
 
-#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking — OUTSTANDING
+#### 2.8. Complex Spectral Difference ODF for Rhythm Tracking — ELIMINATED
 
 BTrack's default ODF (ComplexSpectralDifferenceHWR) uses both magnitude AND phase. We already have phase data in SharedSpectralAnalysis. CSD catches pitched onsets at constant energy that magnitude flux misses. **For CBSS rhythm ODF only** — phase is too noisy via microphone for visual transient detection.
 

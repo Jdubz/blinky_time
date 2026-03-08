@@ -1,0 +1,261 @@
+{
+  "type": "definitive_screening_design",
+  "factors": [
+    {
+      "name": "fwdfiltlambda",
+      "min": 4,
+      "center": 10,
+      "max": 16,
+      "setting": "fwdfiltlambda"
+    },
+    {
+      "name": "fwdfiltcontrast",
+      "min": 1,
+      "center": 3,
+      "max": 5,
+      "setting": "fwdfiltcontrast"
+    },
+    {
+      "name": "fwdtranssigma",
+      "min": 0.5,
+      "center": 3,
+      "max": 6,
+      "setting": "fwdtranssigma"
+    },
+    {
+      "name": "fwdbayesbias",
+      "min": 0,
+      "center": 0.5,
+      "max": 1,
+      "setting": "fwdbayesbias"
+    },
+    {
+      "name": "fwdasymmetry",
+      "min": 0,
+      "center": 2,
+      "max": 4,
+      "setting": "fwdasymmetry"
+    },
+    {
+      "name": "fwdfiltfloor",
+      "min": 0.001,
+      "center": 0.01,
+      "max": 0.05,
+      "setting": "fwdfiltfloor"
+    }
+  ],
+  "nRuns": 13,
+  "codedMatrix": [
+    [
+      0,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    [
+      1,
+      0,
+      1,
+      -1,
+      -1,
+      1
+    ],
+    [
+      1,
+      1,
+      0,
+      1,
+      -1,
+      -1
+    ],
+    [
+      1,
+      -1,
+      1,
+      0,
+      1,
+      -1
+    ],
+    [
+      1,
+      -1,
+      -1,
+      1,
+      0,
+      1
+    ],
+    [
+      1,
+      1,
+      -1,
+      -1,
+      1,
+      0
+    ],
+    [
+      0,
+      -1,
+      -1,
+      -1,
+      -1,
+      -1
+    ],
+    [
+      -1,
+      0,
+      -1,
+      1,
+      1,
+      -1
+    ],
+    [
+      -1,
+      -1,
+      0,
+      -1,
+      1,
+      1
+    ],
+    [
+      -1,
+      1,
+      -1,
+      0,
+      -1,
+      1
+    ],
+    [
+      -1,
+      1,
+      1,
+      -1,
+      0,
+      -1
+    ],
+    [
+      -1,
+      -1,
+      1,
+      1,
+      -1,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  ],
+  "runs": [
+    {
+      "fwdfiltlambda": 10,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 3,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 3,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 0.5,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 2,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.01
+    },
+    {
+      "fwdfiltlambda": 10,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 3,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 3,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 0.5,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 2,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.01
+    },
+    {
+      "fwdfiltlambda": 10,
+      "fwdfiltcontrast": 3,
+      "fwdtranssigma": 3,
+      "fwdbayesbias": 0.5,
+      "fwdasymmetry": 2,
+      "fwdfiltfloor": 0.01
+    }
+  ],
+  "estimatedHours": 2.6
+}

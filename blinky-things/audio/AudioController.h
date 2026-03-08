@@ -512,6 +512,8 @@ public:
     float fwdFilterContrast = 2.0f;        // ODF power-law contrast (1=linear, 2-4=sharper discrimination)
     float fwdFilterLambda = 8.0f;          // Beat zone = 1/lambda of period (4-32, higher=narrower beat zone)
     float fwdFilterFloor = 0.01f;          // Observation probability floor (prevents zero-out)
+    float fwdBayesBias = 0.2f;             // Bayesian posterior modulation strength (0=off, 1=full posterior, v59)
+    float fwdAsymmetry = 0.8f;             // Asymmetric non-beat penalty by tempo (0=off, 0.8=optimal, v60)
 
     // === MULTI-AGENT BEAT TRACKING (v48) ===
     // 8 beat agents at different phases compete; best-scoring agent fires beats.
@@ -794,6 +796,7 @@ private:
     int fwdTotalStates_ = 0;                      // Actual total states
     float fwdTransMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Tempo transition probabilities
     float fwdTransSigmaLast_ = -1.0f;            // Last sigma used to build transition matrix
+    int fwdMinPeriod_ = 10;                      // Cached min period across tempo bins
     bool fwdInitialized_ = false;
     int fwdBestBin_ = TEMPO_BINS / 2;            // Best tempo bin (~120 BPM)
     int fwdBestPos_ = 0;                          // Best phase position

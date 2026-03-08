@@ -2390,3 +2390,132 @@ Comprehensive audit of all adaptive systems between mic and beat tracker:
 
 **Next priority:** Signal chain mitigation experiments (compressor release sweep, whitening
 decay sweep, dual-path ODF, band-selective whitening).
+
+---
+
+## Test Session: 2026-03-08 (Forward Filter 6-Parameter Sweep)
+
+**Goal:** Systematically optimize all 6 forward filter parameters informed by literature comparison (madmom/BTrack reference implementations).
+
+**Environment:**
+- Hardware: 3 XIAO nRF52840 Sense devices (ACM0/ACM1/ACM2) on blinkyhost
+- Firmware: v59+NN, `fwdfilter=1`, `nnbeat=1` (NN beat ODF)
+- Test tracks: 18 EDM tracks, 35s duration, 12s settle, middle-of-track seeking
+- Method: Batched multi-device sweep (3 values/batch, ~23 min per 6-value sweep)
+- Tool: `param_sweep_multidev.cjs` with `analyze_sweep.cjs`
+
+**Literature findings motivating this work:**
+- `fwdTransSigma=3.0` is 4-10x too loose vs madmom equivalent (~0.3-0.9)
+- `fwdFilterFloor=0.01` is 10-100x too high vs madmom (~2e-16)
+- Our observation model has extra `lambda*` multiplier (lambda=8 gives ~3.7x stronger discrimination than madmom's lambda=16)
+
+### Sweep 1: fwdfiltlambda (4->16, 7 values)
+
+| Value | Mean Err | Oct Err | Score |
+|-------|----------|---------|-------|
+| 4 | 15.2 | 10/18 | 115.2 |
+| 6 | 14.1 | 9/18 | 104.1 |
+| 8 | 13.5 | 8/18 | 93.5 |
+| **10** | **13.3** | **8/18** | **93.3** |
+| 12 | 13.8 | 9/18 | 103.8 |
+| 14 | 14.5 | 11/18 | 124.5 |
+| 16 | 14.9 | 10/18 | 114.9 |
+
+**Finding:** Lambda has minimal effect on octave errors (8-11 across range). Non-monotonic, optimum at 10.
+
+### Sweep 2: fwdtranssigma (0.5->5.0, 6 values, then 0.3->0.8)
+
+Wide sweep:
+
+| Value | Mean Err | Oct Err | Score |
+|-------|----------|---------|-------|
+| **0.5** | **12.9** | **7/18** | **82.9** |
+| 1.4 | 13.1 | 8/18 | 93.1 |
+| 2.3 | 13.5 | 9/18 | 103.5 |
+| 3.2 | 14.2 | 10/18 | 114.2 |
+| 4.1 | 14.8 | 12/18 | 134.8 |
+| 5.0 | 15.1 | 13/18 | 145.1 |
+
+Tight sweep (0.3-0.8): All values perform nearly identically (scores 82.7-92.9). Plateau at ~0.5-0.6.
+
+**Finding:** Most impactful parameter. Clear monotonic: tighter = fewer octave errors (13->7). Literature prediction confirmed. Plateau reached at ~0.5-0.6.
+
+### Sweep 3: fwdbayesbias (0->1, 6 values)
+
+Using sigma=0.6, lambda=10.
+
+| Value | Mean Err | Oct Err | Score |
+|-------|----------|---------|-------|
+| 0 | 14.8 | 12/18 | 134.8 |
+| **0.2** | **12.5** | **7/18** | **82.5** |
+| 0.4 | 12.7 | 7/18 | 82.7 |
+| 0.6 | 12.9 | 8/18 | 92.9 |
+| 0.8 | 13.1 | 8/18 | 93.1 |
+| 1.0 | 13.5 | 9/18 | 103.5 |
+
+**Finding:** bias=0 is CATASTROPHIC (12/18 octave errors). Bayesian bias is NOT just a workaround for loose sigma — essential for octave disambiguation even with tight sigma.
+
+### Sweep 4: fwdasymmetry (0->4, 6 values)
+
+Using sigma=0.6, bayesBias=0.2, lambda=10.
+
+| Value | Mean Err | Oct Err | Score |
+|-------|----------|---------|-------|
+| 0 | 13.4 | 8/18 | 93.4 |
+| **0.8** | **12.2** | **8/18** | **92.2** |
+| 1.6 | 12.4 | 8/18 | 92.4 |
+| 2.4 | 13.4 | 8/18 | 93.4 |
+| 3.2 | 14.8 | 10/18 | 114.8 |
+| 4.0 | 15.3 | 12/18 | 135.3 |
+
+**Finding:** Helps at low values (fixes garage-uk-2step half-time), catastrophic >3.0 (pushes tracks to double-time). Sweet spot 0.8-1.6.
+
+### Sweep 5: fwdfiltfloor (0.001->0.05, 6 values)
+
+Using sigma=0.6, bayesBias=0.2, lambda=10, asymmetry=0.8.
+
+| Value | Mean Err | Oct Err | Score |
+|-------|----------|---------|-------|
+| 0.001 | 13.0 | 7/18 | 83.0 |
+| 0.011 | 12.3 | 8/18 | 92.3 |
+| 0.021 | 11.9 | 8/18 | 91.9 |
+| 0.03 | 12.6 | 7/18 | 82.6 |
+| 0.04 | 12.8 | 7/18 | 82.8 |
+| 0.05 | 12.5 | 7/18 | 82.5 |
+
+**Finding:** NOT SIGNIFICANT. Scores all within noise (82.5-92.3). Despite being 10-100x higher than literature, floor has no measurable effect with our observation model formula.
+
+### Sweep 6: fwdfiltcontrast (1->5, 6 values)
+
+Using sigma=0.6, bayesBias=0.2, lambda=10, asymmetry=0.8, floor=0.01.
+
+| Value | Mean Err | Oct Err | Score |
+|-------|----------|---------|-------|
+| **1.0** | **13.5** | **7/18** | **83.5** |
+| 1.8 | 12.9 | 8/18 | 92.9 |
+| 2.6 | 12.7 | 9/18 | 102.7 |
+| 3.4 | 11.7 | 9/18 | 101.7 |
+| 4.2 | 11.9 | 10/18 | 111.9 |
+| 5.0 | 12.1 | 11/18 | 122.1 |
+
+**Finding:** Trade-off: lower contrast = fewer octave errors but higher mean error. Higher contrast helps non-octave tracks but pushes borderline tracks into half-time. contrast=1 minimizes octave errors.
+
+### Overall Conclusions
+
+**Optimal forward filter config:**
+- `fwdfiltlambda=10, fwdtranssigma=0.6, fwdbayesbias=0.2, fwdasymmetry=0.8, fwdfiltfloor=0.01, fwdfiltcontrast=1.0`
+- Best achievable: mean err ~12.5, 7/18 octave errors
+
+**vs CBSS baseline: mean err ~14.5, 4/18 octave errors**
+
+Forward filter has lower mean BPM error but nearly double the octave errors. The observation model is fundamentally octave-symmetric — at half-time, every other beat aligns perfectly. No parameter combination can fully eliminate this bias.
+
+**Parameter significance ranking:**
+1. `fwdTransSigma` — most impactful (13->7 octave errors across range)
+2. `fwdBayesBias` — essential (0 = catastrophic 12/18 octave errors)
+3. `fwdAsymmetry` — moderate (helps low, hurts high)
+4. `fwdFilterContrast` — moderate (trade-off: mean err vs octave count)
+5. `fwdFilterLambda` — low (noisy, no clear trend on octave errors)
+6. `fwdFilterFloor` — none (no measurable effect)
+
+**Decision: Forward filter remains OFF as default.** CBSS baseline is superior for octave accuracy.

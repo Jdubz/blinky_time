@@ -1910,6 +1910,14 @@ void AudioController::initForwardFilter() {
         fwdTotalStates_ = FWD_MAX_STATES;  // Safety clamp
     }
 
+    // Cache minimum period across all tempo bins (fastest tempo)
+    fwdMinPeriod_ = tempoBinLags_[0];
+    for (int i = 1; i < TEMPO_BINS; i++) {
+        if (tempoBinLags_[i] < fwdMinPeriod_ && tempoBinLags_[i] >= 10)
+            fwdMinPeriod_ = tempoBinLags_[i];
+    }
+    if (fwdMinPeriod_ < 10) fwdMinPeriod_ = 10;
+
     // Initialize with Rayleigh prior over tempo, uniform over phase
     float rayleighPeak = rayleighBpm;
     float rayleighLag = OSS_FRAMES_PER_MIN / rayleighPeak;
@@ -1987,7 +1995,10 @@ void AudioController::updateForwardFilter(float odf) {
     if (lambda < 2.0f) lambda = 2.0f;
     float obsFloor = fwdFilterFloor;
     float obsBeat = fmaxf(lambda * odfVal, obsFloor);
-    float obsNonBeat = fmaxf((1.0f - odfVal) / (lambda - 1.0f), obsFloor);
+    float obsNonBeatBase = fmaxf((1.0f - odfVal) / (lambda - 1.0f), obsFloor);
+
+    // Use cached minimum period (computed in initForwardFilter)
+    int fwdMinPeriod = fwdMinPeriod_;
 
     // Collect wrap probabilities (last position of each tempo bin) BEFORE shift
     float wrapProbs[TEMPO_BINS];  // 20 floats = 80 bytes on stack
@@ -2006,6 +2017,19 @@ void AudioController::updateForwardFilter(float odf) {
         if (period < 10) period = 10;
         int beatZone = period / static_cast<int>(lambda);
         if (beatZone < 1) beatZone = 1;
+
+        // Asymmetric non-beat penalty: at slower tempos (longer periods),
+        // high ODF at non-beat positions is penalized more strongly.
+        // This breaks octave symmetry — at half-time, real beats that
+        // land in non-beat positions incur a tempo-dependent penalty.
+        // The penalty scales with odfVal so low ODF (correct non-beat)
+        // is barely affected while high ODF (missed beat) is punished.
+        float obsNonBeat = obsNonBeatBase;
+        if (fwdAsymmetry > 0.0f && odfVal > 0.1f) {
+            float periodRatio = static_cast<float>(period) / static_cast<float>(fwdMinPeriod);
+            float asymPenalty = powf(1.0f / periodRatio, fwdAsymmetry * odfVal);
+            obsNonBeat = fmaxf(obsNonBeatBase * asymPenalty, obsFloor);
+        }
 
         // Shift: position p = old position p-1, with appropriate observation
         for (int p = period - 1; p >= 1; p--) {
@@ -2032,6 +2056,44 @@ void AudioController::updateForwardFilter(float odf) {
         float inv = 1.0f / total;
         for (int s = 0; s < fwdTotalStates_; s++) {
             fwdAlpha_[s] *= inv;
+        }
+    }
+
+    // Bayesian tempo prior modulation: use the Bayesian posterior (which runs
+    // in parallel via runAutocorrelation) to bias the forward filter toward the
+    // correct octave. The Bayesian system has comb+ACF+density penalty and doesn't
+    // suffer from half-time bias. Multiplying each tempo bin's forward filter
+    // probability by the Bayesian posterior weight prevents half-time lock while
+    // preserving the forward filter's superior phase tracking.
+    if (fwdBayesBias > 0.0f && tempoStateInitialized_) {
+        // Compute per-bin modulation: blend between uniform (0.0) and full posterior (1.0)
+        float uniform = 1.0f / TEMPO_BINS;
+        float modWeights[TEMPO_BINS];
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            float post = tempoStatePost_[i];
+            modWeights[i] = (1.0f - fwdBayesBias) * uniform + fwdBayesBias * post;
+        }
+
+        // Apply modulation to all states in each tempo bin
+        for (int i = 0; i < TEMPO_BINS; i++) {
+            int base = fwdBinOffset_[i];
+            int period = tempoBinLags_[i];
+            if (period < 10) period = 10;
+            for (int p = 0; p < period && (base + p) < fwdTotalStates_; p++) {
+                fwdAlpha_[base + p] *= modWeights[i];
+            }
+        }
+
+        // Re-normalize after modulation
+        float modTotal = 0.0f;
+        for (int s = 0; s < fwdTotalStates_; s++) {
+            modTotal += fwdAlpha_[s];
+        }
+        if (modTotal > 1e-30f) {
+            float inv = 1.0f / modTotal;
+            for (int s = 0; s < fwdTotalStates_; s++) {
+                fwdAlpha_[s] *= inv;
+            }
         }
     }
 
