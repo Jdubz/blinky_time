@@ -1,0 +1,109 @@
+{
+  "enable": "fwdfilter=1",
+  "configs": [
+    {
+      "fwdfiltlambda": 10,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 3,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 3,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 0.5,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 2,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 16,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.01
+    },
+    {
+      "fwdfiltlambda": 10,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 3,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 3,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 4,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 0.5,
+      "fwdbayesbias": 0.5,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.05
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 5,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 0,
+      "fwdasymmetry": 2,
+      "fwdfiltfloor": 0.001
+    },
+    {
+      "fwdfiltlambda": 4,
+      "fwdfiltcontrast": 1,
+      "fwdtranssigma": 6,
+      "fwdbayesbias": 1,
+      "fwdasymmetry": 0,
+      "fwdfiltfloor": 0.01
+    },
+    {
+      "fwdfiltlambda": 10,
+      "fwdfiltcontrast": 3,
+      "fwdtranssigma": 3,
+      "fwdbayesbias": 0.5,
+      "fwdasymmetry": 2,
+      "fwdfiltfloor": 0.01
+    }
+  ]
+}

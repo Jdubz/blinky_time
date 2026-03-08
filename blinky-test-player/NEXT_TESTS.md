@@ -47,77 +47,65 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 ## Current Bottlenecks
 
-1. **~135 BPM gravity well** -- nearly all tracks converge to ~135 BPM regardless of ODF source (affects both BandFlux and NN). Root cause: Rayleigh prior + comb harmonic resonance + ACF sub-harmonic bias.
+1. **~135 BPM gravity well** -- ROOT CAUSE IDENTIFIED (Mar 8): coarse 20-bin tempo resolution. Only 2 bins cover 120-140 BPM (bin 4=132.0, bin 5=123.8). Bin 4 catches 128-139 BPM (11.5 BPM width). Full-resolution comb-on-ACF is computed but sampled at only 20 bin-center lags. Secondary: training data 33.5% in 120-140 BPM, Bayesian prior at 128 BPM, octave folding asymmetry.
 
-2. **Forward filter half-time bias** -- 17/18 octave errors. Onset-density penalty just ported to forward filter (pending A/B test). If density penalty fixes it, forward filter's lower mean error (9.3 vs 15.4) and higher responsiveness (std 13.5 vs 5.1) could be significant.
+2. **NN training data issues** -- test set leakage (F1=0.717 inflated), no time-stretch augmentation, Gaussian targets waste capacity, compressed mel feature range.
 
-3. **Phase alignment** -- correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. Forward filter tracks phase explicitly but needs octave fix first.
+3. **Phase alignment** -- correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly.
 
-## Priority 1: A/B Test Forward Filter + Density Penalty
+## Priority 1: Increase Tempo Bins (20 -> 40)
 
-**Status: IMPLEMENTED, awaiting A/B test**
+**Status: NOT STARTED**
 
-Onset-density octave discriminator ported from Bayesian posterior into `updateForwardFilter()`. Penalizes tempo bins where `60 * onsetDensity / BPM` falls outside [0.5, 5.0] transients/beat.
+Root cause fix for the gravity well. Doubling tempo bins gives ~5 BPM resolution across the entire range instead of ~11 BPM at 130 BPM. Memory cost: ~17 KB extra RAM (double comb delay lines ~10 KB, transition matrix 40x40=6.4 KB). Fits in nRF52840's 256 KB RAM (currently using ~27 KB).
 
-**Hypothesis:** The density penalty should eliminate the half-time bias (where transients/beat < 0.5) while preserving the forward filter's lower mean error and higher tempo responsiveness.
+**Implementation:**
+1. Change `CombFilterBank::NUM_FILTERS` from 20 to 40
+2. Recompute transition matrix for 40 bins
+3. Update all arrays indexed by TEMPO_BINS
+4. Test: gravity well should be substantially reduced
 
-**Test plan:**
-1. Flash v59 firmware to blinkyhost devices (all 3)
-2. Run batch A/B test: `fwdfilter=0` (baseline CBSS) vs `fwdfilter=1` (forward filter + density penalty)
-3. Compare: octave errors, mean BPM error, track wins
-4. If octave errors drop from 17/18 to < 5/18 AND mean error stays < 12: enable as default
+## Priority 2: Fix NN Training Pipeline
 
-**A/B test command:**
-```bash
-cd /home/blinkytime/blinky_time/blinky-test-player
-NODE_PATH=node_modules node tools/ab_test_batch.cjs --port /dev/ttyACM0 --music-dir music/edm
-```
-(Modify script to toggle `fwdfilter` instead of `subbeatcheck`)
+**Status: NOT STARTED**
 
-## Priority 2: Evaluate v5 Focal Loss Model
+Five issues identified in training pipeline analysis (Mar 8):
 
-**Status: TRAINING (v5-focal-gamma2, ~8 hours)**
+1. **Exclude 18 EDM test tracks from training** (CRITICAL -- data leakage)
+2. **Add time-stretch augmentation** to flatten BPM distribution (33.5% in 120-140 BPM)
+3. **Reduce Gaussian sigma** or use binary targets (41.5% of frames wasted on tails)
+4. **Improve mel normalization** (mean=0.84, only ~50 effective INT8 levels)
+5. **Add ODF quality metric** to evaluation (standalone F1 doesn't predict CBSS performance)
 
-Focal loss `(1-p_t)^gamma * BCE` with gamma=2.0 down-weights easy negatives. Same architecture as v4 (5L ch32).
+Train v6 with fixes #1-3, evaluate, compare to v4.
 
-**Test plan:**
-1. Wait for training to complete (~100 epochs)
-2. Run evaluation: `make eval RUN_NAME=v5-focal-gamma2`
-3. Compare Beat F1 and DB F1 vs v4 (Beat F1=0.717, DB F1=0.362)
-4. If improved: export TFLite INT8, flash to devices, A/B test on hardware
+## Priority 3: Visual Evaluation of fwdphase=1
 
-## Priority 3: Asymmetric Observation Model (Forward Filter)
+**Status: BPM-neutral in A/B test, visual eval needed**
 
-**Status: NOT STARTED -- contingent on Priority 1 results**
+Forward filter phase tracking (`fwdphase=1`) was BPM-neutral (8 wins vs 6, mean err 14.9 vs 14.8). May give smoother LED animations. Needs eyes on hardware -- no code changes required.
 
-Scale `obsNonBeat` penalty by expected beats-per-bar at each tempo. Slower tempos should more strongly penalize high ODF at non-beat positions, breaking the octave symmetry.
+## Completed (v50-v59, March 2026)
 
-Only pursue if density penalty alone doesn't fully fix half-time bias.
-
-## Priority 4: Ensemble Simplification
-
-**Status: IMPLEMENTED (solo detector fast path)**
-
-`EnsembleFusion::fuse()` now short-circuits when exactly 1 detector is enabled, bypassing agreement scaling and weighted averaging. Multi-detector path retained for future experimentation.
-
-**Test plan:** No regression expected (same output, less computation). Verify on next firmware flash.
-
-## Completed (v50-v58, March 2026)
-
-- v50: Rhythmic pattern templates + subbeat alternation (implemented, A/B tested, default OFF)
+- v50: Rhythmic pattern templates + subbeat alternation (A/B tested, default OFF)
 - v54: NN beat activation CNN (v2 model, 5L ch32, 33.3 KB INT8)
+- v55: v4 NN model (+36.6% vs v2), full augmentation + mic profile
 - v56: Spectral noise subtraction (A/B tested, hurts -- default OFF)
 - v56: AGC ceiling lowered 60->40, conservative AGC params
 - v57: Forward filter (Krebs/Bock/Widmer 2015, ~860 states, A/B tested -- severe half-time)
-- v58: Hybrid phase tracker (fwdphase=1), NN beat default ON, v4 model (+36.6% vs v2)
+- v58: Hybrid phase tracker (fwdphase=1), NN beat default ON
+- v59: Forward filter density penalty + Bayesian bias + asymmetric obs model
+- v59: Full 6-parameter sweep of forward filter -- optimized but still 7/18 octave (vs CBSS 4/18). OFF.
+- v5: Focal loss training -- identical to v4, no benefit
 
 ## Known Limitations
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | Rayleigh prior + comb harmonic resonance | **Medium** -- slow tracks lock to harmonics | Forward filter + density penalty (Priority 1) |
-| Forward filter half-time | Observation model is octave-symmetric | **Blocked** | Density penalty implemented, needs A/B test |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | Forward filter (if octave fix works) |
+| ~135 BPM gravity well | **Coarse 20-bin tempo resolution** (only 2 bins in 120-140 BPM range) | **Medium** -- tracks lock to ~132 BPM | Increase to 40 bins (Priority 1) |
+| NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | Exclude test tracks, retrain (Priority 2) |
+| Forward filter half-time | Observation model is octave-symmetric | N/A | **CLOSED** -- 6-param sweep, stays OFF |
+| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | fwdphase=1 visual eval (Priority 3) |
 | Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs for reliable evaluation | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** -- acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** -- organic mode is correct | -- |

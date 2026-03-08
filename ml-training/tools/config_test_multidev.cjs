@@ -1,22 +1,28 @@
 #!/usr/bin/env node
 /**
- * Multi-device parameter sweep: test a feature across its parameter range.
+ * Multi-config multi-device test runner.
  *
- * Each device tests a DIFFERENT parameter value simultaneously (3x throughput).
- * Sweep values are batched: with 3 devices and 6 values, only 2 audio passes needed.
+ * Tests a set of parameter configurations (e.g., from a screening design)
+ * by playing each track once per config and reading all devices simultaneously.
+ *
+ * Input: JSON file with array of configs, each being an object of {paramName: value}.
  *
  * Usage:
- *   # Sweep fwdasymmetry from 0 to 5 in 6 steps, with fwdfilter enabled
- *   node param_sweep_multidev.cjs --param fwdasymmetry --min 0 --max 5 --steps 6 \
- *     --enable "fwdfilter=1" --pre "fwdbayesbias=0.5"
+ *   # Run a screening design
+ *   node config_test_multidev.cjs --configs screening-design.json
  *
- *   # Sweep fwdbayesbias from 0 to 1 in 5 steps
- *   node param_sweep_multidev.cjs --param fwdbayesbias --min 0 --max 1 --steps 5 \
- *     --enable "fwdfilter=1,fwdasymmetry=2"
+ *   # With custom ports and duration
+ *   node config_test_multidev.cjs --configs screening-design.json --ports /dev/ttyACM0,/dev/ttyACM1
  *
- *   # Custom ports
- *   node param_sweep_multidev.cjs --param fwdasymmetry --min 0 --max 5 --steps 6 \
- *     --ports /dev/ttyACM0,/dev/ttyACM1
+ * Config file format:
+ *   {
+ *     "enable": "fwdfilter=1",          // settings applied before each config
+ *     "configs": [
+ *       {"fwdfiltlambda": 4, "fwdfiltcontrast": 1, "fwdtranssigma": 0.5, ...},
+ *       {"fwdfiltlambda": 10, "fwdfiltcontrast": 5, "fwdtranssigma": 3, ...},
+ *       ...
+ *     ]
+ *   }
  */
 
 const { SerialPort } = require('serialport');
@@ -35,20 +41,11 @@ const portsArg = getArg('--ports', '/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2');
 const portPaths = portsArg.split(',').map(s => s.trim());
 const musicDir = getArg('--music-dir', 'music/edm');
 const durationMs = parseInt(getArg('--duration', '35000'));
-const paramName = getArg('--param', '');
-const paramMin = parseFloat(getArg('--min', '0'));
-const paramMax = parseFloat(getArg('--max', '1'));
-const paramSteps = parseInt(getArg('--steps', '5'));
-const enableSettings = getArg('--enable', '');  // settings to enable before sweep (e.g., fwdfilter=1)
-const preSettings = getArg('--pre', '');         // additional pre-settings
-// Settle time: OSS buffer fill (5.5s) + autocorrelation convergence (~2s)
-// + Bayesian posterior stabilization (~2s) + audio latency (~0.6s) = ~10s minimum.
-// Use 12s for margin.
+const configsFile = getArg('--configs', '');
 const settleMs = 12000;
 
-if (!paramName) {
-  console.error('ERROR: --param is required');
-  console.error('Usage: node param_sweep_multidev.cjs --param <name> --min <v> --max <v> --steps <n> --enable "feature=1"');
+if (!configsFile) {
+  console.error('ERROR: --configs <file.json> is required');
   process.exit(1);
 }
 
@@ -108,7 +105,6 @@ function loadManifest() {
   const manifestPath = path.join(musicDir, 'track_manifest.json');
   if (!fs.existsSync(manifestPath)) {
     console.error(`ERROR: No track manifest found at ${manifestPath}`);
-    console.error('Run: node generate_track_manifest.cjs --music-dir ' + musicDir);
     process.exit(1);
   }
   return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
@@ -198,6 +194,17 @@ async function main() {
   process.on('SIGINT', () => { releaseAudioLock(); process.exit(130); });
   process.on('SIGTERM', () => { releaseAudioLock(); process.exit(143); });
 
+  // Load config
+  const configData = JSON.parse(fs.readFileSync(configsFile, 'utf-8'));
+  const enableSettings = configData.enable || '';
+  const configs = configData.configs || [];
+
+  if (configs.length === 0) {
+    console.error('ERROR: No configs found in file');
+    releaseAudioLock();
+    process.exit(1);
+  }
+
   const manifest = loadManifest();
 
   // Open ports
@@ -218,26 +225,6 @@ async function main() {
     process.exit(1);
   }
 
-  // Apply enable-settings and pre-settings
-  const allPreSettings = [enableSettings, preSettings].filter(Boolean).join(',');
-  if (allPreSettings) {
-    for (const pair of allPreSettings.split(',').filter(Boolean)) {
-      const [key, val] = pair.split('=');
-      if (key && val !== undefined) {
-        console.log(`Setting: ${key.trim()} = ${val.trim()}`);
-        await setAllDevices(ports, key.trim(), val.trim());
-      }
-    }
-    await sleep(500);
-  }
-
-  // Generate sweep values
-  const sweepValues = [];
-  for (let i = 0; i < paramSteps; i++) {
-    const value = paramMin + (paramMax - paramMin) * i / Math.max(1, paramSteps - 1);
-    sweepValues.push(Math.round(value * 1000) / 1000);
-  }
-
   // Valid tracks
   const tracks = fs.readdirSync(musicDir)
     .filter(f => f.endsWith('.mp3'))
@@ -245,37 +232,39 @@ async function main() {
     .filter(name => manifest[name] && manifest[name].valid)
     .sort();
 
-  // Batch sweep values across devices: each device tests a DIFFERENT value per track.
-  // With 3 devices and 6 values, we need only 2 audio passes (batches) instead of 6.
-  const nDev = ports.length;
-  const batches = [];
-  for (let i = 0; i < sweepValues.length; i += nDev) {
-    batches.push(sweepValues.slice(i, i + nDev));
-  }
-  const totalPasses = batches.length * tracks.length;
-  const estimatedMin = Math.round(totalPasses * (durationMs / 1000 + 4) / 60);
+  const totalRuns = configs.length * tracks.length;
+  const estimatedMin = Math.round(totalRuns * (durationMs / 1000 + 4) / 60);
+  console.log(`\n=== Multi-Config Test ===`);
+  console.log(`Configs: ${configs.length}, Tracks: ${tracks.length}, Devices: ${ports.length}`);
+  console.log(`Duration: ${durationMs}ms, Settle: ${settleMs}ms`);
+  console.log(`Estimated time: ~${estimatedMin} min\n`);
 
-  console.log(`\n=== Parameter Sweep: ${paramName} ===`);
-  console.log(`Values: [${sweepValues.join(', ')}]`);
-  console.log(`Devices: ${nDev}, Tracks: ${tracks.length}, Duration: ${durationMs}ms`);
-  console.log(`Batches: ${batches.length} (${nDev} values/batch), Estimated: ~${estimatedMin} min\n`);
+  // Results: configResults[ci] = { config, tracks: [{track, trueBpm, aggMean, error, octave, perDevice}] }
+  const configResults = [];
 
-  // Pre-allocate results indexed by sweep value
-  const sweepResultsMap = {};
-  for (const v of sweepValues) {
-    sweepResultsMap[v] = [];
-  }
+  for (let ci = 0; ci < configs.length; ci++) {
+    const config = configs[ci];
+    console.log(`\n--- Config ${ci + 1}/${configs.length} ---`);
 
-  for (let bi = 0; bi < batches.length; bi++) {
-    const batch = batches[bi];
-    console.log(`\n--- Batch ${bi + 1}/${batches.length}: ${paramName} = [${batch.join(', ')}] ---`);
+    // Apply enable settings
+    if (enableSettings) {
+      for (const pair of enableSettings.split(',').filter(Boolean)) {
+        const [key, val] = pair.split('=');
+        if (key && val !== undefined) {
+          await setAllDevices(ports, key.trim(), val.trim());
+        }
+      }
+    }
 
-    // Set each device to a different value in this batch
-    for (let di = 0; di < batch.length; di++) {
-      await setSetting(ports[di], paramName, batch[di]);
-      console.log(`  dev${di}: ${paramName} = ${batch[di]}`);
+    // Apply this config's settings
+    const paramNames = Object.keys(config);
+    for (const key of paramNames) {
+      console.log(`  ${key} = ${config[key]}`);
+      await setAllDevices(ports, key, config[key]);
     }
     await sleep(1000);
+
+    const trackResults = [];
 
     for (let ti = 0; ti < tracks.length; ti++) {
       const name = tracks[ti];
@@ -286,80 +275,81 @@ async function main() {
       const multi = await collectBpmMultiDevice(ports, trackPath, entry.seekOffset, durationMs);
       await sleep(2000);
 
-      // Each device's reading belongs to a DIFFERENT sweep value
-      let logParts = [];
-      for (let di = 0; di < batch.length; di++) {
-        const value = batch[di];
-        const devResult = analyzeBpm(multi[`dev${di}`] || []);
-        const err = classifyError(devResult.mean, trueBpm);
-
-        sweepResultsMap[value].push({
-          track: name, trueBpm, aggMean: devResult.mean, perDevice: [devResult.mean],
-          error: err.error, octave: err.octave
-        });
-
-        logParts.push(`v=${value}:${devResult.mean.toFixed(0)}${err.octave ? '!' : ''}`);
+      const devResults = [];
+      for (let di = 0; di < ports.length; di++) {
+        devResults.push(analyzeBpm(multi[`dev${di}`] || []));
       }
 
-      console.log(`  [${ti + 1}/${tracks.length}] ${name.substring(0, 25).padEnd(27)} ${logParts.join('  ')}`);
+      const means = devResults.filter(r => r.count > 0).map(r => r.mean);
+      const aggMean = means.length > 0 ? means.reduce((a, b) => a + b) / means.length : 0;
+      const err = classifyError(aggMean, trueBpm);
+
+      trackResults.push({
+        track: name, trueBpm, aggMean, perDevice: means,
+        error: err.error, octave: err.octave
+      });
+
+      console.log(`  [${ti + 1}/${tracks.length}] ${name.substring(0, 25).padEnd(27)} BPM: ${means.map(m => m.toFixed(0)).join('/')} avg=${aggMean.toFixed(1)} err=${err.error !== null ? err.error.toFixed(1) : '?'} oct=${err.octave ? 'YES' : 'no'}`);
     }
+
+    configResults.push({ config, tracks: trackResults });
   }
 
-  // Convert map to ordered array
-  const sweepResults = sweepValues.map(v => ({ value: v, tracks: sweepResultsMap[v] }));
-
-  // Summary: for each sweep value, aggregate stats
+  // Summary
   console.log('\n' + '='.repeat(100));
-  console.log(`SWEEP SUMMARY: ${paramName} [${paramMin} → ${paramMax}]`);
+  console.log('CONFIG COMPARISON SUMMARY');
   console.log('='.repeat(100));
-  console.log('Value'.padEnd(10) + 'Mean Err'.padEnd(12) + 'Octave Errs'.padEnd(14) + 'Tracks OK'.padEnd(12) + 'Best Tracks');
+
+  const paramNames = Object.keys(configs[0]);
+  const hdr = 'Cfg'.padEnd(5) + paramNames.map(n => n.substring(0, 12).padEnd(14)).join('') +
+    'Mean Err'.padEnd(10) + 'Oct Err'.padEnd(10) + '<10 BPM'.padEnd(10) + 'Score';
+  console.log(hdr);
   console.log('-'.repeat(100));
 
-  let bestValue = sweepValues[0], bestMeanErr = Infinity;
-
-  for (let vi = 0; vi < sweepValues.length; vi++) {
-    const value = sweepValues[vi];
-    const vr = sweepResults[vi].tracks;
-    const errors = vr.filter(t => t.error !== null).map(t => t.error);
-    const octaveCount = vr.filter(t => t.octave).length;
+  let bestScore = Infinity, bestIdx = 0;
+  for (let ci = 0; ci < configResults.length; ci++) {
+    const cr = configResults[ci];
+    const errors = cr.tracks.filter(t => t.error !== null).map(t => t.error);
+    const octaveCount = cr.tracks.filter(t => t.octave).length;
     const meanErr = errors.length > 0 ? errors.reduce((a, b) => a + b) / errors.length : Infinity;
-    const tracksOk = vr.filter(t => !t.octave && t.error !== null && t.error < 10).length;
+    const tracksOk = cr.tracks.filter(t => !t.octave && t.error !== null && t.error < 10).length;
+    const score = meanErr + octaveCount * 10;
 
-    // Score: prioritize low octave errors, then low mean error
-    const score = meanErr + octaveCount * 5;  // 5 BPM penalty per octave error
-    if (score < bestMeanErr + (sweepResults[sweepValues.indexOf(bestValue)] ?
-        sweepResults[sweepValues.indexOf(bestValue)].tracks.filter(t => t.octave).length * 5 : 0)) {
-      bestValue = value;
-      bestMeanErr = meanErr;
+    if (score < bestScore) { bestScore = score; bestIdx = ci; }
+
+    let line = `${ci + 1}`.padEnd(5);
+    for (const pn of paramNames) {
+      line += `${cr.config[pn]}`.padEnd(14);
     }
-
-    console.log(
-      `${value}`.padEnd(10) +
-      `${meanErr.toFixed(1)}`.padEnd(12) +
-      `${octaveCount}/${vr.length}`.padEnd(14) +
-      `${tracksOk}/${vr.length}`.padEnd(12) +
-      vr.filter(t => !t.octave && t.error < 5).map(t => t.track.substring(0, 15)).join(', ')
-    );
+    line += `${meanErr.toFixed(1)}`.padEnd(10) +
+      `${octaveCount}/${cr.tracks.length}`.padEnd(10) +
+      `${tracksOk}/${cr.tracks.length}`.padEnd(10) +
+      `${score.toFixed(1)}`;
+    if (ci === bestIdx) line += ' *';
+    console.log(line);
   }
 
   console.log('-'.repeat(100));
-  console.log(`Recommended: ${paramName} = ${bestValue} (lowest combined score)`);
+  console.log(`BEST: Config ${bestIdx + 1} (score ${bestScore.toFixed(1)})`);
+  for (const pn of paramNames) {
+    console.log(`  ${pn} = ${configResults[bestIdx].config[pn]}`);
+  }
 
-  // Save full results
+  // Save results
   const timestamp = Date.now();
-  const outPath = `tuning-results/sweep-${paramName}-${timestamp}.json`;
+  const outPath = `tuning-results/config-test-${timestamp}.json`;
   fs.mkdirSync('tuning-results', { recursive: true });
   fs.writeFileSync(outPath, JSON.stringify({
     timestamp: new Date().toISOString(),
-    param: paramName,
-    min: paramMin, max: paramMax, steps: paramSteps,
-    enableSettings, preSettings,
+    configsFile,
+    enableSettings,
     nDevices: ports.length,
+    nTracks: tracks.length,
     durationMs, settleMs,
-    sweepValues,
-    results: sweepResults
+    configs,
+    results: configResults
   }, null, 2));
-  console.log(`\nFull results saved to ${outPath}`);
+  console.log(`\nResults saved to ${outPath}`);
 
   releaseAudioLock();
   for (const port of ports) port.close();
