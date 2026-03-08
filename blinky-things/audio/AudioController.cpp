@@ -2001,7 +2001,7 @@ void AudioController::updateForwardFilter(float odf) {
     int fwdMinPeriod = fwdMinPeriod_;
 
     // Collect wrap probabilities (last position of each tempo bin) BEFORE shift
-    float wrapProbs[TEMPO_BINS];  // 20 floats = 80 bytes on stack
+    float wrapProbs[TEMPO_BINS];  // 47 floats = 188 bytes on stack
     for (int i = 0; i < TEMPO_BINS; i++) {
         int period = tempoBinLags_[i];
         if (period < 10) period = 10;
@@ -3764,16 +3764,13 @@ void AudioController::updateBandPeriodicities(uint32_t nowMs) {
 void CombFilterBank::init(float frameRate) {
     frameRate_ = frameRate;
 
-    // Compute lag and BPM for each filter
-    // Distribute filters evenly from MIN_LAG (~200 BPM) to MAX_LAG (~60 BPM)
-    // At 66 Hz: lag 20 = 198 BPM, lag 66 = 60 BPM
+    // Every integer lag from MIN_LAG to MAX_LAG (lag-domain uniform spacing).
+    // At 66 Hz: lag 20 = 198 BPM, lag 33 = 120 BPM, lag 66 = 60 BPM.
+    // This gives ~2 BPM resolution at 120 BPM (vs old 20-bin ~7 BPM).
+    // Matches madmom's approach of using integer lag bins.
     for (int i = 0; i < NUM_FILTERS; i++) {
-        // Linear interpolation of lag values
-        float t = static_cast<float>(i) / static_cast<float>(NUM_FILTERS - 1);
-        int lag = MIN_LAG + static_cast<int>(t * (MAX_LAG - MIN_LAG) + 0.5f);
+        int lag = MIN_LAG + i;
         filterLags_[i] = lag;
-
-        // Convert lag to BPM: BPM = frameRate * 60 / lag
         filterBPMs_[i] = (frameRate_ * 60.0f) / static_cast<float>(lag);
     }
 
