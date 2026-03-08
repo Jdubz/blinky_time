@@ -125,6 +125,7 @@ prepare:
 		--labels-dir $(LABELS_CONSENSUS) \
 		--output-dir $(PROCESSED_DIR) \
 		--rir-dir $(RIR_DIR) \
+		--exclude-dir $(TEST_AUDIO) \
 		$(AUGMENT_FLAG) $(MIC_PROFILE_FLAG)
 
 # ============================================================

@@ -159,6 +159,15 @@ def main():
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
+    # Diagnostic: measure actual positive ratio for pos_weight verification
+    sample_size = min(10000, len(train_ds))
+    y_sample = np.load(data_dir / "Y_train.npy", mmap_mode='r')[:sample_size]
+    pos_ratio_binary = (y_sample > 0.5).mean()
+    pos_ratio_mean = y_sample.mean()
+    suggested_pw = (1 - pos_ratio_binary) / max(pos_ratio_binary, 1e-10)
+    print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
+    print(f"  Suggested pos_weight: {suggested_pw:.1f} (configured: {beat_pos_weight})")
+
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
                               num_workers=4, pin_memory=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
