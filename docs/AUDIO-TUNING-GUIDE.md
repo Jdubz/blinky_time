@@ -37,14 +37,8 @@ PDM Microphone (16kHz, mono)
         |
    BassSpectralAnalysis (Goertzel-12, 31.25 Hz/bin, optional)
         |
-   ├── EnsembleDetector (BandFlux Solo — 1 of 7 detectors enabled)
-   │   ├── BandWeightedFlux (1.0) ── enabled  ← log-compressed band-weighted flux
-   │   ├── Drummer (0.50) ────────── disabled
-   │   ├── SpectralFlux (0.20) ───── disabled
-   │   ├── HFC (0.20) ────────────── disabled
-   │   ├── BassBand (0.45) ───────── disabled
-   │   ├── ComplexDomain (0.50) ──── disabled
-   │   └── Novelty (0.12) ────────── disabled
+   ├── EnsembleDetector (BandFlux Solo)
+   │   └── BandWeightedFlux (1.0) ── log-compressed band-weighted flux
    │        → ODF (default, or when nnbeat=0)
    │
    └── BeatActivationNN (TFLite Micro, NN=1 build, nnbeat=1 default)
@@ -173,17 +167,11 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `set detector_weight <type> <val>` | Set detector weight in fusion |
 | `set detector_thresh <type> <val>` | Set detector threshold |
 
-**Per-detector defaults (SETTINGS_VERSION 25):**
+**Detector config (v62+, BandFlux Solo — disabled detectors removed):**
 
-| Detector | Weight | Threshold | Enabled | Notes |
-|----------|--------|-----------|---------|-------|
-| **BandWeightedFlux** | 1.00 | 0.5 | **yes** | Log-compressed band-weighted flux, additive threshold |
-| Drummer | 0.50 | 4.5 | no | Amplitude transients |
-| ComplexDomain | 0.50 | 3.5 | no | Phase onset detection |
-| BassBand | 0.45 | 3.0 | no | Too noisy (100+ detections/30s) |
-| SpectralFlux | 0.20 | 1.4 | no | Fires on pad chord changes |
-| HFC | 0.20 | 4.0 | no | Hi-hat detector, creates busy visuals |
-| Novelty | 0.12 | 2.5 | no | Near-zero detections on real music |
+| Detector | Weight | Threshold | Notes |
+|----------|--------|-----------|-------|
+| **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted flux, additive threshold |
 
 ### BandFlux Parameters (via `set`/`show` commands, persisted to flash since v29)
 
@@ -304,7 +292,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 |---------|---------|-------|-------------|
 | `fwdphase` | 0 | bool | Use forward filter phase only (CBSS tempo, fwd filter phase) |
 
-### Category: `v45` (8 parameters) - PLL + Adaptive Tightness + Percival (v45+)
+### Category: `v45` (7 parameters) - PLL + Adaptive Tightness + Percival (v45+)
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
@@ -415,17 +403,11 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 **Single detector outperforms all multi-detector ensembles** — BandFlux Solo achieves avg Beat F1 0.468 vs 0.411 baseline (HFC+Drummer). Multi-detector combos tested worse; ensemble fusion dilutes BandFlux's cleaner signal.
 
-**Detector table:**
+**Detector (v62+, BandFlux Solo — 6 disabled detectors removed from firmware):**
 
-| Detector | Weight | Threshold | Enabled | Reason |
-|----------|--------|-----------|---------|--------|
-| **BandWeightedFlux** | 1.00 | 0.5 | **yes** | Best solo Beat F1, log-compressed band-weighted flux |
-| Drummer | 0.50 | 4.5 | no | Multiplicative threshold fails at low signal levels |
-| ComplexDomain | 0.50 | 3.5 | no | Adds noise when combined with BandFlux |
-| BassBand | 0.45 | 3.0 | no | Too noisy (100+ detections/30s even at thresh 60) |
-| SpectralFlux | 0.20 | 1.4 | no | Fires on pad chord changes |
-| HFC | 0.20 | 4.0 | no | Hi-hat detector, max F1=0.620, creates busy visuals |
-| Novelty | 0.12 | 2.5 | no | Near-zero detections on real music |
+| Detector | Weight | Threshold | Notes |
+|----------|--------|-----------|-------|
+| **BandWeightedFlux** | 1.00 | 0.5 | Best solo Beat F1, log-compressed band-weighted flux |
 
 **Fusion parameters (BandFlux Solo):**
 ```

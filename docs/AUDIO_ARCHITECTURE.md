@@ -204,11 +204,11 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 AudioController delegates transient detection to the EnsembleDetector. Currently **BandFlux Solo** config (1 detector enabled):
 
-| Detector | Weight | Threshold | Enabled | Role |
-|----------|--------|-----------|---------|------|
-| **BandWeightedFlux** | 1.00 | 0.5 | **Yes** | Log-compressed band-weighted spectral flux |
-| Drummer | 0.50 | 4.5 | No | Good kick/snare recall |
-| ComplexDomain | 0.50 | 3.5 | No | Good precision |
+| Detector | Weight | Threshold | Role |
+|----------|--------|-----------|------|
+| **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted spectral flux |
+
+6 disabled detectors (Drummer, SpectralFlux, HFC, BassBand, ComplexDomain, Novelty) were removed in v62.
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
@@ -260,16 +260,16 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 | Component | RAM | CPU @ 64 MHz | Notes |
 |-----------|-----|-------------|-------|
 | AdaptiveMic + FFT | ~4 KB | ~4% | Microphone processing |
-| EnsembleDetector | ~0.5 KB | ~1% | BandFlux Solo (1 detector) |
+| EnsembleDetector | ~0.3 KB | ~1% | BandFlux Solo (v62, disabled detectors removed) |
 | OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ 60 Hz |
 | ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
-| CombFilterBank (20 filters) | ~5 KB | ~1% | Tempo validation |
+| CombFilterBank (47 filters) | ~12.4 KB | ~1% | Tempo validation (lag-domain uniform, v61) |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| Forward filter (optional) | ~5.1 KB | ~1% | Joint tempo-phase (v57, `fwdfilter=1`) |
+| Forward filter (always allocated) | ~8.4 KB | ~1% | fwdAlpha_[2100], always in RAM even when `fwdfilter=0` |
 | NN beat activation (optional) | ~16 KB | ~2% | TFLite Micro tensor arena (NN=1 build, `nnbeat=1`) |
-| **Total** | **~15-20 KB** | **~9-11%** | Base. +16 KB with NN, +5 KB with fwdfilter |
+| **Total** | **~27 KB base** | **~9-11%** | +16 KB with NN. ~43 KB max (NN=1). |
 
 ---
 
@@ -279,7 +279,7 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 - `blinky-things/audio/AudioController.h` - Main controller class + CBSS structures
 - `blinky-things/audio/AudioController.cpp` - Implementation (autocorrelation, CBSS, beat detection)
 - `blinky-things/audio/AudioControl.h` - Output struct definition
-- `blinky-things/audio/EnsembleDetector.h` - 2-detector ensemble fusion system
+- `blinky-things/audio/EnsembleDetector.h` - BandFlux Solo detector (v62, disabled detectors removed)
 - `blinky-things/audio/BeatActivationNN.h` - TFLite Micro NN beat/downbeat activation (NN=1 build)
 - `blinky-things/audio/beat_model_data.h` - INT8 TFLite model weights (v4, 33.3 KB)
 

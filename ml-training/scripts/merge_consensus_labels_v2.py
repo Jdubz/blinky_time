@@ -165,6 +165,9 @@ def normalize_octaves(system_beats: dict[str, dict]) -> dict[str, dict]:
     2. Group systems by tempo octave (within ±15% of 2:1 ratio)
     3. Find the majority metrical level (weighted by system reliability)
     4. Halve or double outlier systems to match majority
+
+    Note: Only handles 2:1 (single octave) ratios. 4:1 (double-octave) is not
+    covered, which is fine for EDM where double-octave disagreements are rare.
     """
     # Get tempos from actual beat IBIs (more reliable than reported tempo)
     tempos = {}
