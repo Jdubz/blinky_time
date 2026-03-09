@@ -15,10 +15,11 @@
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
-// Memory (v2, current):  ~20 KB flash, 16 KB arena + 3.3 KB context = ~19 KB RAM
-// Memory (v3, planned):  ~34 KB flash, 16 KB arena + 13 KB context  = ~29 KB RAM
-// Arena and context buffer are pre-sized for v3 (~18 KB over v2's needs).
-// Inference: ~3-5 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
+// Memory (5L v4/v6):  ~33 KB flash, 16 KB arena + 13 KB context (128 frames) = ~29 KB RAM
+// Memory (7L v7):     ~41 KB flash, 16 KB arena + 27 KB context (256 frames) = ~43 KB RAM
+// Memory (7L v8):     ~68 KB flash, 16 KB arena + 27 KB context (256 frames) = ~43 KB RAM
+// Context buffer pre-sized for 256 frames. Runtime contextLen_ adapts to actual model.
+// Inference: ~3-5 ms per frame (5L), ~5-12 ms per frame (7L) (Cortex-M4F @ 64 MHz)
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)
 // ============================================================================
@@ -202,10 +203,10 @@ private:
     static constexpr int TENSOR_ARENA_SIZE = 16384;
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
-    // Context buffer for sliding window — pre-sized for v3 wider model.
-    // v2 uses 32 frames; v3 needs up to 128. Runtime contextLen_ is set from
-    // the model's actual input shape, so only the needed portion is used.
-    static constexpr int MAX_CONTEXT = 128;
+    // Context buffer for sliding window — sized for 7L deep models (v7/v8).
+    // 5L models (v4/v6) use 128 frames; 7L models need 256. Runtime contextLen_
+    // is set from the model's actual input shape, so only the needed portion is used.
+    static constexpr int MAX_CONTEXT = 256;
     float contextBuffer_[MAX_CONTEXT * INPUT_MEL_BANDS];
     int contextLen_ = 0;      // Actual context length from model input shape
     int contextWriteIdx_ = 0; // How many frames we've written so far

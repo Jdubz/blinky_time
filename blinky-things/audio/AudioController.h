@@ -448,7 +448,7 @@ public:
 
     // === BAYESIAN TEMPO FUSION ===
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
-    // into a unified posterior distribution over 40 tempo bins (60-180 BPM).
+    // into a unified posterior distribution over 20 tempo bins (~55-180 BPM).
     // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
     float bayesLambda = 0.60f;           // Transition tightness (0.01=rigid, 1.0=loose)
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)

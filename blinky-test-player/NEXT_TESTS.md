@@ -3,16 +3,16 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 8, 2026 (v60: literature review, revised priorities based on SOTA research)
+**Last Updated:** March 8, 2026 (v62: training pipeline fixes complete, v6/v7/v8 training in progress)
 
-## Current Config (v60, SETTINGS_VERSION 60)
+## Current Config (v62, SETTINGS_VERSION 60)
 
-**Detector:** BandWeightedFlux Solo (all others disabled)
+**Detector:** BandWeightedFlux Solo (6 disabled detectors removed in v62)
 - gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5
 - minOnsetDelta=0.3 (onset sharpness gate)
 
 **ODF source:** NN beat activation (default since v58, `nnbeat=1`)
-- Causal 1D CNN, 5L ch32, 33.3 KB INT8 (v4 model)
+- Causal 1D CNN, 5L ch32, 33.3 KB INT8 (v4 model — deployed, but known data leakage)
 - Requires `NN=1` build flag. Toggle: `nnbeat=0/1`
 - A/B tested: 11/18 track wins vs BandFlux, -0.8 mean error
 
@@ -65,56 +65,63 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 ## Current Bottlenecks
 
-1. **~135 BPM gravity well** -- ROOT CAUSE: coarse 20-bin tempo resolution (11.5 BPM width at 130 BPM, vs madmom's 2.4 BPM). Only 2 bins cover 120-140 BPM. Secondary: training data BPM bias, Rayleigh prior, octave folding asymmetry.
+1. **~135 BPM gravity well** -- Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks, octave folding asymmetry. Tested 47 bins in v61 — no improvement. NOT a bin count issue.
 
-2. **NN ODF quality** -- the biggest lever per SOTA research. Current v4 model has test set data leakage (F1=0.717 inflated), no time-stretch augmentation, compressed mel feature range, and wide Gaussian targets. SOTA systems use strong neural frontends (CRNN/Transformer) as the primary differentiator.
+2. **NN ODF quality** -- the biggest lever per SOTA research. v4 model has test set data leakage (F1=0.717 inflated). v6/v7/v8 training in progress with all fixes (binary targets, time-stretch, test exclusion, v2 consensus labels, strength weighting).
 
 3. **Phase alignment** -- correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. All systems achieving >60% F1 use explicit phase tracking (HMM state, PLP oscillator, or particle cloud).
 
-## Priority 1: Increase Tempo Bins (20 -> 40+)
+## Priority 1: NN Model Training (v6/v7/v8)
 
-**Status: NOT STARTED**
+**Status: TRAINING IN PROGRESS (March 8, 2026)**
 
-Root cause fix for the gravity well. Previous v29 attempt at 40 bins failed due to BPM-space Gaussian transition matrix bug -- **fixed in v43** (now uses lag-space Gaussian). Should be re-attempted.
+All training pipeline fixes implemented and data prepared. Three models training sequentially:
 
-**Literature context:** madmom uses 82 lag-domain bins, BTrack 41 bins. Our 20 bins is the coarsest of any reference system. Consider lag-domain uniform spacing (natural ~2 BPM resolution at 120 BPM, ~41 integer lags at 60 Hz frame rate) rather than linear BPM spacing.
+| Model | Config | Architecture | Data | Est. Size |
+|-------|--------|-------------|------|-----------|
+| **v6-restart** | wider_rf.yaml | 5L ch32, RF=1008ms | 3.87M × 128-frame | ~33 KB INT8 |
+| **v7** | deep.yaml | 7L ch32, RF=4080ms | 1.72M × 256-frame | ~41 KB INT8 |
+| **v8** | deep_wide.yaml | 7L ch48, RF=4080ms | 1.72M × 256-frame | ~68 KB INT8 |
 
-**Memory cost:** ~17 KB extra RAM for 40 bins (comb delay lines ~10 KB, transition matrix 40x40=6.4 KB). Fits in nRF52840's 256 KB RAM (currently ~27 KB used).
+**Pipeline fixes applied (all models):**
+1. ~~Test set data leakage~~ FIXED — 18 EDM test tracks excluded
+2. ~~Time-stretch augmentation~~ FIXED — [0.8, 0.9, 1.1, 1.2] speed factors
+3. ~~Gaussian target waste~~ FIXED — binary targets, pos_weight=20.0
+4. ~~v1 consensus labels~~ FIXED — v2 labels with octave normalization, timing correction
+5. ~~Downbeat bug~~ FIXED — explicit isDownbeat field, not strength>0.9
+6. Strength-weighted targets from consensus agreement (v62)
 
-**Implementation:**
-1. Change `CombFilterBank::NUM_FILTERS` from 20 to 40
-2. Consider lag-domain uniform spacing instead of linear BPM
-3. Recompute transition matrix (lag-space Gaussian, fixed since v43)
-4. Update all arrays indexed by TEMPO_BINS
-5. Test: gravity well should be substantially reduced
+**After training completes:**
+1. Compare v6/v7/v8 eval F1 against v4 (0.717, inflated)
+2. Export best model to TFLite INT8
+3. If 7L model wins: bump MAX_CONTEXT 128→256 in BeatActivationNN.h (+13 KB RAM)
+4. Deploy to devices, A/B test on blinkyhost
 
-## Priority 2: Fix NN Training Pipeline (v6 model)
+**Outstanding (not yet addressed):**
+- Compressed mel feature range (mean=0.84, ~50 INT8 levels) — inherent to -35 dB RMS + INT8
+- ACF-based ODF quality metric — standalone F1 doesn't predict CBSS performance
 
-**Status: NOT STARTED**
-
-Research confirms NN ODF quality is the biggest lever for improvement. Five issues identified:
-
-1. **Exclude 18 EDM test tracks from training** (CRITICAL -- data leakage)
-2. **Add time-stretch augmentation** to flatten BPM distribution (33.5% in 120-140 BPM). SOTA practice: Beat This! uses ±6% stretch, madmom uses ±4% pitch shift with sox. This is the most validated technique for tempo invariance.
-3. **Reduce Gaussian sigma or use binary targets** (41.5% of frames wasted on tails). Literature uses narrow Gaussian (sigma=1-2 frames) or binary targets for beat activation.
-4. **Improve mel normalization** (mean=0.84, only ~50 effective INT8 levels)
-5. **Add ACF-based ODF quality metric** (standalone F1 doesn't predict CBSS performance)
-
-Train v6 with fixes #1-3, evaluate, compare to v4.
-
-## Priority 3: Visual Evaluation of fwdphase=1
+## Priority 2: Visual Evaluation of fwdphase=1
 
 **Status: BPM-neutral in A/B test, visual eval needed**
 
 Forward filter phase tracking (`fwdphase=1`) was BPM-neutral (8 wins vs 6, mean err 14.9 vs 14.8). May give smoother LED animations. Needs eyes on hardware -- no code changes required.
 
-## Future: Heydari 1D State Space (if tempo bins insufficient)
+## Future: Heydari 1D State Space
 
 **Status: RESEARCH ONLY**
 
-Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. This collapses the 2D (tempo x phase) state into a 1D phase-only representation where tempo changes are handled by "jumping back" in the state space. Could be a path to explicit phase tracking without the forward filter's octave symmetry problem. ~860 states fits our memory budget.
+Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. Could be a path to explicit phase tracking without the forward filter's octave symmetry problem. ~860 states fits our memory budget.
 
-## Completed (v50-v60, March 2026)
+## Closed Investigations
+
+- **Tempo bins 20→47** (v61): Tested, no improvement. Gravity well is not a bin count issue.
+- **Forward filter** (v57-v60): 6-param sweep, optimized but still 7/18 octave errors (vs CBSS 4/18). Half-time bias is fundamental.
+- **Spectral noise subtraction** (v56): A/B tested, hurts BPM accuracy (baseline wins 13/18).
+- **Focal loss** (v5): Identical to v4, no benefit.
+- **Template+subbeat** (v50): No net benefit (baseline 10 wins, subbeat 8).
+
+## Completed (v50-v62, March 2026)
 
 - v50: Rhythmic pattern templates + subbeat alternation (A/B tested, default OFF)
 - v54: NN beat activation CNN (v2 model, 5L ch32, 33.3 KB INT8)
@@ -125,16 +132,19 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 - v58: Hybrid phase tracker (fwdphase=1), NN beat default ON
 - v59: Forward filter Bayesian bias + asymmetric obs model
 - v60: Full 6-parameter sweep of forward filter -- optimized but still 7/18 octave (vs CBSS 4/18). OFF.
+- v61: Tempo bins 20→47 -- tested, no improvement. Reverted to 20 bins.
+- v62: Firmware simplification (removed 6 disabled detectors, -19.5 KB flash, -5.4 KB RAM)
+- v62: v2 consensus labels, training pipeline fixes (binary targets, time-stretch, test exclusion)
 - v5: Focal loss training -- identical to v4, no benefit
 
 ## Known Limitations
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | **Coarse 20-bin tempo resolution** (vs madmom 82, BTrack 41) | **Medium** -- tracks lock to ~132 BPM | Increase to 40+ bins (Priority 1) |
-| NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | Exclude test tracks, retrain (Priority 2) |
+| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Improved NN ODF may help (training) |
+| NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | v6/v7/v8 training in progress |
 | Forward filter half-time | Observation model is octave-symmetric (known literature issue) | N/A | **CLOSED** -- 6-param sweep, stays OFF |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | fwdphase=1 visual eval (Priority 3) |
+| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | fwdphase=1 visual eval (Priority 2) |
 | Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs for reliable evaluation | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** -- acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** -- organic mode is correct | -- |

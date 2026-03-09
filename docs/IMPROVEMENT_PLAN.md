@@ -95,6 +95,20 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 - ~~Implement spectral subtraction in training pipeline~~ **DONE** — `scripts/audio.py` + `configs/base.yaml`
 - Training pipeline: consider disabling noise subtraction in feature extraction since firmware default is OFF
 
+### In Progress: v6/v7/v8 NN Model Training (March 8, 2026)
+
+All training pipeline fixes applied, data prepared with v2 consensus labels. Three models training sequentially on RTX 3080 (~12 hours total):
+
+| Model | Config | Architecture | Data | Est. Size |
+|-------|--------|-------------|------|-----------|
+| **v6-restart** | wider_rf.yaml | 5L ch32, RF=1008ms | 3.87M × 128-frame | ~33 KB INT8 |
+| **v7** | deep.yaml | 7L ch32, RF=4080ms | 1.72M × 256-frame | ~41 KB INT8 |
+| **v8** | deep_wide.yaml | 7L ch48, RF=4080ms | 1.72M × 256-frame | ~68 KB INT8 |
+
+v6-restart is the clean comparison to v4 (same architecture, fixed pipeline). v7/v8 test whether 4x deeper receptive field improves beat activation. If a 7L model wins, firmware needs `MAX_CONTEXT` bumped 128→256 in `BeatActivationNN.h` (+13 KB RAM).
+
+Previous v6 attempt was killed at epoch 11 — it was accidentally trained on v1 consensus labels (no octave normalization, no timing correction).
+
 ### Completed: Training Pipeline & Label Quality (March 8, 2026)
 
 **Label Quality Pipeline v2:**
@@ -123,7 +137,7 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 
 **Data Preparation:**
 - v2 labels being prepared for both 128-frame (5L ch32, v6) and 256-frame (7L models, v7/v8) chunk sizes
-- v6 training launched (5L ch32 + binary targets + time-stretch + test exclusion)
+- v6 initial run killed at epoch 11 (accidentally used v1 labels). v6-restart + v7 + v8 training in progress with v2 labels.
 
 ### Completed: Neural Network Beat Activation (v54, March 5-6, 2026)
 

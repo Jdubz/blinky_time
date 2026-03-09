@@ -147,7 +147,7 @@ def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str)
 #define BEAT_MODEL_HASH "{model_hash}"
 #define BEAT_MODEL_SIZE {len(tflite_bytes)}
 
-static alignas(8) const unsigned char {c_array_name}[] = {{
+alignas(8) static const unsigned char {c_array_name}[] = {{
 {chr(10).join(hex_lines)}
 }};
 
