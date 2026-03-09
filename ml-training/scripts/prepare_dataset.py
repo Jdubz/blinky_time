@@ -111,15 +111,43 @@ def _gaussian_targets(times: np.ndarray, n_frames: int, frame_rate: float,
     return targets
 
 
+def _binary_targets(times: np.ndarray, n_frames: int,
+                    frame_rate: float,
+                    strengths: np.ndarray | None = None) -> np.ndarray:
+    """Create binary activation targets (at nearest frame to each event).
+
+    If strengths is provided, uses per-beat strength values (0-1) instead of
+    binary 1.0. This gives softer supervision for lower-confidence beats
+    (e.g., 2/4 system agreement → 0.5 target vs 4/4 → 1.0 target).
+    """
+    targets = np.zeros(n_frames, dtype=np.float32)
+    for i, t in enumerate(times):
+        frame_idx = round(t * frame_rate)
+        if 0 <= frame_idx < n_frames:
+            val = float(strengths[i]) if strengths is not None else 1.0
+            targets[frame_idx] = max(targets[frame_idx], val)
+    return targets
+
+
 def make_beat_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
-                      sigma: float) -> np.ndarray:
-    """Create Gaussian-smoothed beat activation targets."""
+                      sigma: float, target_type: str = "gaussian",
+                      strengths: np.ndarray | None = None) -> np.ndarray:
+    """Create beat activation targets (binary or Gaussian-smoothed).
+
+    If target_type is "binary" and strengths is provided, uses per-beat
+    strength values as targets instead of 1.0.
+    """
+    if target_type == "binary":
+        return _binary_targets(beat_times, n_frames, frame_rate, strengths)
     return _gaussian_targets(beat_times, n_frames, frame_rate, sigma)
 
 
 def make_downbeat_targets(downbeat_times: np.ndarray, n_frames: int,
-                          frame_rate: float, sigma: float) -> np.ndarray:
-    """Create Gaussian-smoothed downbeat activation targets."""
+                          frame_rate: float, sigma: float,
+                          target_type: str = "gaussian") -> np.ndarray:
+    """Create downbeat activation targets (binary or Gaussian-smoothed)."""
+    if target_type == "binary":
+        return _binary_targets(downbeat_times, n_frames, frame_rate)
     return _gaussian_targets(downbeat_times, n_frames, frame_rate, sigma)
 
 
@@ -294,11 +322,16 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
     for STFT, mel extraction, and augmentation.
+
+    When augmenting, also generates time-stretched variants (resample-based,
+    changes pitch — fine for beat detection). Stretched variants get clean
+    audio only (no noise/gain/RIR augmentation) to keep dataset size reasonable.
     """
     sr = cfg["audio"]["sample_rate"]
     sigma = cfg["labels"]["sigma_frames"]
     frame_rate = cfg["audio"]["frame_rate"]
     use_downbeat = cfg["model"].get("downbeat", False)
+    target_type = cfg["labels"].get("target_type", "gaussian")
 
     # Load audio with librosa for resampling consistency
     audio_np, _ = librosa.load(str(audio_path), sr=sr, mono=True)
@@ -317,54 +350,88 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     # Load beat labels
     with open(label_path) as f:
         labels = json.load(f)
-    beat_times = np.array([h["time"] for h in labels["hits"] if h.get("expectTrigger", True)])
+    hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]
+    beat_times = np.array([h["time"] for h in hits])
+    beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
 
     downbeat_times = np.array([
-        h["time"] for h in labels["hits"]
-        if h.get("expectTrigger", True)
-        and (h.get("isDownbeat", False) or h.get("strength", 0.7) > 0.9)
+        h["time"] for h in hits if h.get("isDownbeat", False)
     ]) if use_downbeat else np.array([])
 
     results = []
 
+    # Time-stretch factors: original speed + stretched variants when augmenting.
+    # Resample-based stretch changes pitch (fine for beat detection).
+    # Diversifies BPM distribution — training data is 33.5% at 120-140 BPM.
+    time_stretch_factors = [1.0]
     if augment:
-        variants = augment_audio(audio_gpu, sr, rir_dir, rng, device)
-    else:
-        variants = [("clean", audio_gpu)]
+        ts_factors = cfg.get("augmentation", {}).get("time_stretch_factors", [])
+        time_stretch_factors.extend(ts_factors)
 
-    for aug_name, aug_audio in variants:
-        mel = firmware_mel_spectrogram(aug_audio, cfg, mel_fb, window)
-        # Apply mic transfer function if calibration profile provided.
-        # This transforms clean mel bands to match what the mic actually produces.
-        if mic_profile is not None:
-            mel = _apply_mic_profile(mel, mic_profile, rng)
-        n_frames = mel.shape[0]
-        targets = make_beat_targets(beat_times, n_frames, frame_rate, sigma)
+    for speed in time_stretch_factors:
+        if speed == 1.0:
+            src_audio = audio_gpu
+            src_beats = beat_times
+            src_strengths = beat_strengths
+            src_downbeats = downbeat_times
+        else:
+            # Resample to simulate tempo change: speed > 1 = faster
+            try:
+                src_audio = torchaudio.functional.resample(
+                    audio_gpu.unsqueeze(0), int(sr * speed), sr).squeeze(0)
+            except Exception as e:
+                import logging
+                logging.warning(f"Time-stretch {speed:.2f}x failed for "
+                                f"{audio_path.name}: {e}")
+                continue
+            src_beats = beat_times / speed
+            src_strengths = beat_strengths  # Strengths don't change with speed
+            src_downbeats = (downbeat_times / speed
+                            if len(downbeat_times) > 0 else downbeat_times)
 
-        result = {
-            "mel": mel,
-            "target": targets,
-            "aug": aug_name,
-            "source": audio_path.stem,
-        }
+        # Full augmentation only for original speed; clean only for stretched
+        if augment and speed == 1.0:
+            variants = augment_audio(src_audio, sr, rir_dir, rng, device)
+        else:
+            tag = f"stretch{speed:.2f}" if speed != 1.0 else "clean"
+            variants = [(tag, src_audio)]
 
-        if use_downbeat:
-            result["downbeat_target"] = make_downbeat_targets(
-                downbeat_times, n_frames, frame_rate, sigma)
+        for aug_name, aug_audio in variants:
+            mel = firmware_mel_spectrogram(aug_audio, cfg, mel_fb, window)
+            # Apply mic transfer function if calibration profile provided.
+            if mic_profile is not None:
+                mel = _apply_mic_profile(mel, mic_profile, rng)
+            n_frames = mel.shape[0]
+            targets = make_beat_targets(src_beats, n_frames, frame_rate, sigma,
+                                        target_type=target_type,
+                                        strengths=src_strengths)
 
-        results.append(result)
-
-        if augment and aug_name == "clean":
-            conditioned_mel = apply_spectral_conditioning(mel)
-            cond_result = {
-                "mel": conditioned_mel,
+            result = {
+                "mel": mel,
                 "target": targets,
-                "aug": "conditioned",
+                "aug": aug_name,
                 "source": audio_path.stem,
             }
+
             if use_downbeat:
-                cond_result["downbeat_target"] = result["downbeat_target"]
-            results.append(cond_result)
+                result["downbeat_target"] = make_downbeat_targets(
+                    src_downbeats, n_frames, frame_rate, sigma,
+                    target_type=target_type)
+
+            results.append(result)
+
+            # Spectral conditioning variant (only for original speed, clean)
+            if augment and aug_name == "clean" and speed == 1.0:
+                conditioned_mel = apply_spectral_conditioning(mel)
+                cond_result = {
+                    "mel": conditioned_mel,
+                    "target": targets,
+                    "aug": "conditioned",
+                    "source": audio_path.stem,
+                }
+                if use_downbeat:
+                    cond_result["downbeat_target"] = result["downbeat_target"]
+                results.append(cond_result)
 
     return results
 
@@ -411,6 +478,9 @@ def main():
     parser.add_argument("--mic-profile", default=None,
                         help="Mic calibration profile (.npz from calibrate_mic.py). "
                              "Applied to all mel spectrograms to simulate mic response.")
+    parser.add_argument("--exclude-dir", default=None,
+                        help="Directory of audio files to exclude from training (e.g., test set). "
+                             "Files with matching stems are filtered out to prevent data leakage.")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto (default: auto)")
     args = parser.parse_args()
@@ -493,6 +563,35 @@ def main():
               f"  Audio dir: {audio_dir}\n"
               f"  Labels dir: {labels_dir}", file=sys.stderr)
         sys.exit(1)
+
+    # Exclude test tracks to prevent data leakage
+    if args.exclude_dir:
+        exclude_path = Path(args.exclude_dir)
+        audio_exts = {".mp3", ".wav", ".flac", ".ogg"}
+        exclude_stems = {f.stem for f in exclude_path.rglob("*")
+                         if f.suffix.lower() in audio_exts}
+        before = len(pairs)
+        pairs = [(a, l) for a, l in pairs if a.stem not in exclude_stems]
+        excluded = before - len(pairs)
+        if excluded > 0:
+            print(f"Excluded {excluded} test tracks from training data "
+                  f"(from {exclude_path})")
+
+    # Filter by label quality score (v2 consensus labels include quality_score)
+    min_quality = cfg.get("training", {}).get("min_quality", 0.0)
+    if min_quality > 0:
+        before = len(pairs)
+        filtered = []
+        for a, l in pairs:
+            with open(l) as f:
+                q = json.load(f).get("quality_score", 1.0)
+            if q >= min_quality:
+                filtered.append((a, l))
+        pairs = filtered
+        dropped = before - len(pairs)
+        if dropped > 0:
+            print(f"Filtered {dropped} tracks below quality {min_quality} "
+                  f"({len(pairs)} remaining)")
 
     # File-level train/val split (prevents data leakage between splits)
     pairs_shuffled = list(pairs)

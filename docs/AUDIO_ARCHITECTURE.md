@@ -204,11 +204,11 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 AudioController delegates transient detection to the EnsembleDetector. Currently **BandFlux Solo** config (1 detector enabled):
 
-| Detector | Weight | Threshold | Enabled | Role |
-|----------|--------|-----------|---------|------|
-| **BandWeightedFlux** | 1.00 | 0.5 | **Yes** | Log-compressed band-weighted spectral flux |
-| Drummer | 0.50 | 4.5 | No | Good kick/snare recall |
-| ComplexDomain | 0.50 | 3.5 | No | Good precision |
+| Detector | Weight | Threshold | Role |
+|----------|--------|-----------|------|
+| **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted spectral flux |
+
+6 disabled detectors (Drummer, SpectralFlux, HFC, BassBand, ComplexDomain, Novelty) were removed in v62.
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
@@ -230,9 +230,9 @@ Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from 
 
 ### Forward Filter Beat Tracking (v57 - Optional)
 
-Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwdfilter 1`. Default OFF — A/B tested, severe half-time bias (17/18 octave errors).
+Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwdfilter 1`. Default OFF — full 6-parameter sweep (v60) optimized to 7/18 octave errors but still worse than CBSS baseline (4/18). Observation model is fundamentally octave-symmetric.
 
-**How it works:** 20 tempo bins × variable phase positions (~700 states). Each frame:
+**How it works:** 20 tempo bins × variable phase positions (~700-880 states). Each frame:
 1. Shift all phase positions forward by 1
 2. Apply observation: beat-zone positions (first `period/λ`) get `λ * ODF`, others get `(1-ODF)/(λ-1)`
 3. At position 0 (beat boundary): apply tempo transitions via Gaussian kernel
@@ -246,10 +246,12 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
 | `forwardFilterEnabled` | false | Enable forward filter (replaces CBSS+Bayesian for tempo/beats) | `set fwdfilter 1` |
-| `fwdTransSigma` | 3.0 | Tempo transition width in lag units (tighter = less tempo jumping) | `set fwdtranssigma 3.0` |
-| `fwdFilterContrast` | 2.0 | ODF power-law contrast (higher = sharper onset discrimination) | `set fwdfiltcontrast 2.0` |
-| `fwdFilterLambda` | 8.0 | Beat zone = 1/λ of period (higher = narrower beat zone) | `set fwdfiltlambda 8.0` |
+| `fwdTransSigma` | 0.6 | Tempo transition width in lag units (v60 sweep optimal, was 3.0) | `set fwdtranssigma 0.6` |
+| `fwdFilterContrast` | 1.0 | ODF power-law contrast (v60 sweep optimal, was 2.0) | `set fwdfiltcontrast 1.0` |
+| `fwdFilterLambda` | 10.0 | Beat zone = 1/λ of period (v60 sweep optimal, was 8.0) | `set fwdfiltlambda 10.0` |
 | `fwdFilterFloor` | 0.01 | Observation probability floor (prevents zero probabilities) | `set fwdfiltfloor 0.01` |
+| `fwdBayesBias` | 0.2 | Bayesian posterior modulation strength (v59, 0=off, 1=full) | `set fwdbayesbias 0.2` |
+| `fwdAsymmetry` | 0.8 | Asymmetric non-beat penalty by tempo (v60, 0=off, 0.8=optimal) | `set fwdasymmetry 0.8` |
 
 ---
 
@@ -258,16 +260,16 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 | Component | RAM | CPU @ 64 MHz | Notes |
 |-----------|-----|-------------|-------|
 | AdaptiveMic + FFT | ~4 KB | ~4% | Microphone processing |
-| EnsembleDetector | ~0.5 KB | ~1% | BandFlux Solo (1 detector) |
+| EnsembleDetector | ~0.3 KB | ~1% | BandFlux Solo (v62, disabled detectors removed) |
 | OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ 60 Hz |
 | ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
-| CombFilterBank (20 filters) | ~5 KB | ~1% | Tempo validation |
+| CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| Forward filter (optional) | ~5.1 KB | ~1% | Joint tempo-phase (v57, `fwdfilter=1`) |
+| Forward filter (always allocated) | ~3.5 KB | ~1% | fwdAlpha_[880], always in RAM even when `fwdfilter=0` |
 | NN beat activation (optional) | ~16 KB | ~2% | TFLite Micro tensor arena (NN=1 build, `nnbeat=1`) |
-| **Total** | **~15-20 KB** | **~9-11%** | Base. +16 KB with NN, +5 KB with fwdfilter |
+| **Total** | **~22 KB base** | **~9-11%** | +16 KB with NN. ~38 KB max (NN=1). |
 
 ---
 
@@ -277,7 +279,7 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 - `blinky-things/audio/AudioController.h` - Main controller class + CBSS structures
 - `blinky-things/audio/AudioController.cpp` - Implementation (autocorrelation, CBSS, beat detection)
 - `blinky-things/audio/AudioControl.h` - Output struct definition
-- `blinky-things/audio/EnsembleDetector.h` - 2-detector ensemble fusion system
+- `blinky-things/audio/EnsembleDetector.h` - BandFlux Solo detector (v62, disabled detectors removed)
 - `blinky-things/audio/BeatActivationNN.h` - TFLite Micro NN beat/downbeat activation (NN=1 build)
 - `blinky-things/audio/beat_model_data.h` - INT8 TFLite model weights (v4, 33.3 KB)
 

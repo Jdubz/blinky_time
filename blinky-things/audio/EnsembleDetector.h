@@ -1,42 +1,32 @@
 #pragma once
 
 #include "DetectionResult.h"
-#include "IDetector.h"
 #include "SharedSpectralAnalysis.h"
 #include "BassSpectralAnalysis.h"
 #include "EnsembleFusion.h"
-#include "detectors/DrummerDetector.h"
-#include "detectors/SpectralFluxDetector.h"
-#include "detectors/HFCDetector.h"
-#include "detectors/BassBandDetector.h"
-#include "detectors/ComplexDomainDetector.h"
-#include "detectors/NoveltyDetector.h"
 #include "detectors/BandWeightedFluxDetector.h"
 
 /**
- * EnsembleDetector - Main orchestrator for ensemble onset detection
+ * EnsembleDetector - Main orchestrator for onset detection
  *
- * Runs all detection algorithms simultaneously and combines their results
- * using the A+B hybrid fusion strategy:
- * - Fixed calibrated weights (Option A)
- * - Agreement-based confidence scaling (Option B)
+ * Runs BandWeightedFlux detector and passes result through EnsembleFusion.
+ * Previously supported 7 concurrent detectors with weighted fusion;
+ * 6 disabled detectors (Drummer, SpectralFlux, HFC, BassBand,
+ * ComplexDomain, Novelty) were removed in Mar 2026 to save ~1.5 KB RAM.
  *
  * Architecture:
  * 1. Receive audio samples from AdaptiveMic
  * 2. Run SharedSpectralAnalysis once (FFT, magnitudes, phases, mel bands)
- * 3. Run enabled detectors (disabled ones are skipped to save CPU)
- * 4. Fuse results using EnsembleFusion
+ * 3. Run BandWeightedFlux detector
+ * 4. Pass result through EnsembleFusion (solo fast path)
  * 5. Return unified EnsembleOutput
  *
- * This replaces the mutually-exclusive mode switching in AdaptiveMic.
- * All techniques contribute simultaneously with weighted confidence scores.
- *
- * Memory: ~5KB (spectral analysis + 6 detectors + fusion)
- * CPU: ~4% at 60Hz (FFT is shared, detectors are lightweight)
+ * Memory: ~3.5KB (spectral analysis + 1 detector + fusion)
+ * CPU: ~4% at 60Hz (FFT is shared, detector is lightweight)
  */
 class EnsembleDetector {
 public:
-    // Number of detectors
+    // Number of detector types (kept for enum/fusion array compatibility)
     static constexpr int NUM_DETECTORS = static_cast<int>(DetectorType::COUNT);
 
     EnsembleDetector();
@@ -63,7 +53,7 @@ public:
     bool addSamples(const int16_t* samples, int count);
 
     /**
-     * Update all detectors and fuse results
+     * Update detector and fuse results
      * Call this once per frame (~60Hz)
      * @param level Normalized audio level (0-1) from AdaptiveMic
      * @param rawLevel Raw ADC level
@@ -85,25 +75,18 @@ public:
     BassSpectralAnalysis& getBassSpectral() { return bassSpectral_; }
     const BassSpectralAnalysis& getBassSpectral() const { return bassSpectral_; }
 
-    // --- Accessor for individual detectors ---
-    IDetector* getDetector(DetectorType type);
-    const IDetector* getDetector(DetectorType type) const;
-
-    // --- Convenience accessors ---
-    DrummerDetector& getDrummer() { return drummer_; }
-    SpectralFluxDetector& getSpectralFlux() { return spectralFlux_; }
-    HFCDetector& getHFC() { return hfc_; }
-    BassBandDetector& getBassBand() { return bassBand_; }
-    ComplexDomainDetector& getComplexDomain() { return complexDomain_; }
-    NoveltyDetector& getNovelty() { return novelty_; }
+    // --- Accessor for BandFlux detector ---
     BandWeightedFluxDetector& getBandFlux() { return bandFlux_; }
     const BandWeightedFluxDetector& getBandFlux() const { return bandFlux_; }
 
-    // --- Last results (for debugging/streaming) ---
-    const DetectionResult* getLastResults() const { return lastResults_; }
+    // --- Last result (for debugging/streaming) ---
+    const DetectionResult& getLastBandFluxResult() const { return lastBandFluxResult_; }
     const EnsembleOutput& getLastOutput() const { return lastOutput_; }
 
-    // --- Configuration ---
+    // --- Configuration (only BAND_FLUX type is supported) ---
+    // Non-BAND_FLUX types were removed in v62. Setters for other types are
+    // intentional no-ops — fusion config array retains all enum slots for
+    // compatibility, but only BandFlux has a backing detector object.
     void setDetectorWeight(DetectorType type, float weight);
     void setDetectorEnabled(DetectorType type, bool enabled);
     void setDetectorThreshold(DetectorType type, float threshold);
@@ -120,23 +103,14 @@ private:
     // High-resolution bass analysis (Goertzel 512-sample, 12 bins)
     BassSpectralAnalysis bassSpectral_;
 
-    // Individual detectors
-    DrummerDetector drummer_;
-    SpectralFluxDetector spectralFlux_;
-    HFCDetector hfc_;
-    BassBandDetector bassBand_;
-    ComplexDomainDetector complexDomain_;
-    NoveltyDetector novelty_;
+    // BandWeightedFlux detector (only active detector)
     BandWeightedFluxDetector bandFlux_;
-
-    // Detector array for iteration
-    IDetector* detectors_[NUM_DETECTORS];
 
     // Fusion engine
     EnsembleFusion fusion_;
 
     // Last frame results
-    DetectionResult lastResults_[NUM_DETECTORS];
+    DetectionResult lastBandFluxResult_;
     EnsembleOutput lastOutput_;
 
     // Build AudioFrame from current state

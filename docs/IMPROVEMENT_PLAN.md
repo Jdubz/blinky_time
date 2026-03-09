@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 8, 2026 (gravity well root cause identified: coarse 20-bin tempo resolution + NN training data issues)*
+*Last Updated: March 8, 2026 (training pipeline fixes, v2 labels, tempo bins closed, revised priorities)*
 
 ## Current Status
 
@@ -95,6 +95,36 @@ Gain sweep analysis revealed the beat detection path (BandFlux + NN) only sees h
 - ~~Implement spectral subtraction in training pipeline~~ **DONE** — `scripts/audio.py` + `configs/base.yaml`
 - Training pipeline: consider disabling noise subtraction in feature extraction since firmware default is OFF
 
+### Completed: Training Pipeline & Label Quality (March 8, 2026)
+
+**Label Quality Pipeline v2:**
+- `scripts/validate_labels.py`: cross-system consistency analysis, identifies octave errors, timing outliers, and system failures
+- `scripts/merge_consensus_labels_v2.py`: improved consensus merge with quality-aware processing
+
+**V2 Consensus Label Improvements:**
+- **Octave normalization**: detects and corrects when systems report BPM at 2x or 0.5x relative to majority consensus
+- **System failure rejection**: excludes individual system labels when a system clearly failed on a track (e.g., zero beats, wildly wrong BPM)
+- **Librosa timing correction**: systematic +31ms offset correction for librosa beat positions (measured across full dataset)
+- **Weighted median positions**: beat positions computed as weighted median across agreeing systems rather than simple mean
+- **Per-track quality scores**: each track gets a quality score based on cross-system agreement, enabling quality-based filtering during training
+
+**Training Pipeline Fixes (all 5 identified issues addressed):**
+- **Test track exclusion**: `prepare_dataset.py --exclude-dir` removes 18 EDM test tracks from training/validation
+- **Binary targets**: `target_type: "binary"` replaces Gaussian targets (eliminates 41.5% tail-fitting waste, pos_weight 4.7→20.0)
+- **Time-stretch augmentation**: `time_stretch_factors: [0.8, 0.9, 1.1, 1.2]` generates 5 variants per track, balancing tempo distribution
+- **Strength-weighted targets**: consensus `strength` field (fraction of agreeing systems) used as target weight — high-confidence beats weighted more
+- **Quality filtering**: tracks below quality threshold excluded from training
+- **Downbeat bug fix**: `strength > 0.9` was incorrectly used as downbeat indicator; fixed to use explicit `isDownbeat` field from consensus labels
+
+**New Model Configurations:**
+- `configs/deep_wide.yaml`: 7L ch48, ~46K params, ~68 KB INT8 — pushes flash budget for maximum capacity
+- `configs/deep.yaml`: 7L ch32, ~22K params, ~41 KB INT8 — deeper receptive field at same channel width as v4
+- Both use 256-frame context (vs 128-frame for 5L models) for ~4 second receptive field
+
+**Data Preparation:**
+- v2 labels being prepared for both 128-frame (5L ch32, v6) and 256-frame (7L models, v7/v8) chunk sizes
+- v6 training launched (5L ch32 + binary targets + time-stretch + test exclusion)
+
 ### Completed: Neural Network Beat Activation (v54, March 5-6, 2026)
 
 Training a small causal CNN to replace BandFlux ODF with a learned beat activation. See [ML_TRAINING_PLAN.md](ML_TRAINING_PLAN.md) for full details.
@@ -180,17 +210,17 @@ v4 model deployed to all 3 devices (v57+NN firmware, `ENABLE_NN_BEAT_ACTIVATION`
 
 **Training Pipeline Issues Identified (March 8, 2026):**
 
-Analysis of training pipeline revealed several issues that may limit model quality:
+Analysis of training pipeline revealed several issues that may limit model quality. Status as of March 8:
 
-1. **Test set data leakage (CRITICAL):** All 18 EDM evaluation tracks exist in the training data directory (`/mnt/storage/blinky-ml-data/audio/combined/`). Random train/val split likely included them in training. Beat F1=0.717 is inflated — true generalization unknown. Fix: exclude test tracks from `prepare_dataset.py`.
+1. **Test set data leakage (CRITICAL):** ~~All 18 EDM evaluation tracks exist in the training data directory. Random train/val split likely included them in training. Beat F1=0.717 is inflated.~~ **FIXED** — `prepare_dataset.py --exclude-dir` removes 18 test tracks from training/validation splits. v6+ models trained without test data.
 
-2. **Compressed mel feature range:** Mean mel value 0.84, IQR [0.78, 0.95]. Only ~0.2 units of dynamic range in [0,1] space. After INT8 quantization, only ~50 effective levels. The -35 dB RMS normalization helped but didn't fully solve the problem.
+2. **Compressed mel feature range:** Mean mel value 0.84, IQR [0.78, 0.95]. Only ~0.2 units of dynamic range in [0,1] space. After INT8 quantization, only ~50 effective levels. Known limitation — inherent to -35 dB RMS normalization + INT8 quantization. Not fixed.
 
-3. **Gaussian targets waste capacity:** sigma_frames=2 produces 41.5% frames in Gaussian tails (0 < target ≤ 0.5), more than the 16.6% at beat centers (target > 0.5). Model spends capacity fitting the tail shape that CBSS doesn't use. Fix: reduce sigma or use binary targets.
+3. **Gaussian targets waste capacity:** ~~sigma_frames=2 produces 41.5% frames in Gaussian tails (0 < target ≤ 0.5), more than the 16.6% at beat centers (target > 0.5). Model spends capacity fitting the tail shape that CBSS doesn't use.~~ **FIXED** — switched to binary targets (`target_type: "binary"`, `pos_weight: 20.0`). Eliminates tail-fitting waste entirely.
 
-4. **No time-stretch augmentation:** Training data is 33.5% in 120-140 BPM range. Model has 3x more exposure to ~120 BPM beat patterns than 80 or 160 BPM. With RF=63 frames (1008ms, covering 2+ beats), model can learn tempo-correlated features. Fix: add time-stretch augmentation.
+4. **No time-stretch augmentation:** ~~Training data is 33.5% in 120-140 BPM range. Model has 3x more exposure to ~120 BPM beat patterns than 80 or 160 BPM.~~ **FIXED** — `time_stretch_factors: [0.8, 0.9, 1.1, 1.2]` in `base.yaml`. Each track generates 5 variants (1.0x + 4 stretch factors), balancing tempo distribution.
 
-5. **Evaluation metric mismatch:** evaluate.py measures standalone beat detection F1, but model is used as ODF source for CBSS. A model with slightly smeared but consistent activations could score lower on F1 but produce better ACF peaks. Consider adding ACF-based ODF quality metric.
+5. **Evaluation metric mismatch:** evaluate.py measures standalone beat detection F1, but model is used as ODF source for CBSS. A model with slightly smeared but consistent activations could score lower on F1 but produce better ACF peaks. **Still outstanding** — consider adding ACF-based ODF quality metric.
 
 ### Completed (March 4, 2026)
 
@@ -266,7 +296,7 @@ Analysis of training pipeline revealed several issues that may limit model quali
 - 3:2/2:3 transition matrix shortcuts (`harmonicsesqui`, default OFF): enables Bayesian posterior jumps between 3:2-related tempo bins. **Causes catastrophic regression** on fast tracks (130+ BPM pulled down to 100-110 BPM). The only feature that helps slow tracks escape 128 BPM lock, but too dangerous for production.
 - Configurable Rayleigh prior peak (`rayleighbpm`, default 120). Shifting to 90-100 insufficient to escape 128 BPM well alone.
 - Tunable switchTempo nudge (`temponudge`, default 0.8, was hardcoded 0.3). Stronger nudge improves octave checker responsiveness.
-- **128 BPM gravity well ROOT CAUSE IDENTIFIED (Mar 8)**: coarse 20-bin tempo resolution is the primary cause. Only 2 bins cover 120-140 BPM (bin 4=132.0 BPM, bin 5=123.8 BPM). Bin 4 catches 128-139 BPM (11.5 BPM width). Full-resolution comb-on-ACF is computed at every lag but sampled only at 20 bin-center lags, throwing away fine-grained information. **Fix: increase to 40 bins (~5 BPM resolution, ~17 KB extra RAM).** Secondary causes: training data 33.5% in 120-140 BPM (no time-stretch augmentation), Bayesian prior at 128 BPM, octave folding asymmetry (bins >99 BPM cannot receive half-time bonus).
+- **128 BPM gravity well ROOT CAUSE INVESTIGATED (Mar 8)**: Initially identified coarse 20-bin tempo resolution as primary cause. Only 2 bins cover 120-140 BPM (bin 4=132.0 BPM, bin 5=123.8 BPM). Bin 4 catches 128-139 BPM (11.5 BPM width). **Tested in v61 with 47 bins — NO improvement.** Gravity well persists. The root cause is multi-factorial: training data BPM distribution (33.5% at 120-140 BPM), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks, and octave folding asymmetry. Bin count is a contributing factor but not the primary bottleneck.
 - SETTINGS_VERSION 43. 287KB flash (35%), 21KB RAM (8%).
 
 **v43 Bayesian Tempo Bug Fixes — 4 critical fixes, BPM accuracy 33%→88%:**
@@ -309,7 +339,7 @@ Analysis of training pipeline revealed several issues that may limit model quali
 - Beat-boundary tempo (`beatboundary=1`): defers period changes to beat fire, synchronizing tempo and CBSS.
 - Dual-threshold peak picking (`bandflux_peakpick=1`): local-max confirmation with 1-frame look-ahead.
 - Unified ODF (`unifiedodf=1`): BandFlux pre-threshold activation feeds CBSS, replacing duplicate `computeSpectralFluxBands()`.
-- 40 tempo bins tested (v29), reverted — transition matrix drift 2x worse with 40 bins.
+- 40 tempo bins tested (v29), reverted — transition matrix drift 2x worse with 40 bins. **NOTE: Root cause was BPM-space Gaussian transition matrix on lag-uniform grid, fixed in v43.** Re-tested in v61 with 47 bins after fix — still no improvement. Gravity well is not a bin count issue.
 
 ### Completed (February 25, 2026)
 
@@ -372,6 +402,61 @@ Analysis of training pipeline revealed several issues that may limit model quali
 **Architecture:** Generator → Effect → Renderer, AudioController v3, ensemble detection (6 algorithms), agreement-based fusion, comprehensive testing infrastructure (MCP + param-tuner), calibration completed.
 
 ---
+
+## SOTA Context (March 2026)
+
+Best online/causal beat tracking systems on standard benchmarks (line-in audio):
+
+| System | Year | Beat F1 | Architecture | Notes |
+|--------|:----:|:-------:|-------------|-------|
+| BEAST | 2024 | **80.0%** | Streaming Transformer (9 layers, 1024 dim) | SOTA, too large for MCU |
+| BeatNet+ | 2024 | ~78% | CRNN + 2-level particle filter (1500 particles) | Microphone-capable |
+| Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
+| RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
+| BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
+| **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in ODF quality, not the beat tracking backend. The NN ODF is the biggest lever for improvement.
+
+**Reference tempo resolutions:** madmom uses 82 lag-domain bins (~2.4 BPM at 120 BPM), BTrack uses 41 bins (2 BPM steps), BeatNet uses 300 discrete levels. Our 20 bins (11.5 BPM at 130 BPM) is far coarser than any reference system. **Note:** Tested 47 bins in v61 — no improvement. Bin count alone is not the bottleneck.
+
+### Current Priorities (March 2026)
+
+| Priority | Task | Expected Impact | Status |
+|----------|------|----------------|--------|
+| ~~**1**~~ | ~~Increase tempo bins (20→40+)~~ | ~~Fix gravity well~~ | **CLOSED** — tested 47 bins in v61, no benefit |
+| ~~**2**~~ | ~~Fix NN training pipeline~~ | ~~Biggest lever per SOTA research~~ | **DONE** — all 5 issues fixed |
+| **3** | Visual eval of fwdphase=1 | May improve LED smoothness | BPM-neutral, needs eyes on hardware |
+| **NEW 1** | Train & evaluate improved models | Biggest lever per SOTA research | In progress (v6 training, v7/v8 queued) |
+| **NEW 2** | Firmware simplification | Reduce complexity, free RAM | Not started |
+| **NEW 3** | ACF-based ODF quality metric | Better eval signal for NN models | Not started |
+
+**~~Priority 1: Increase Tempo Bins (20→40+)~~ — CLOSED (v61, March 8, 2026)**
+Tested in v61 with 47 bins (up from 20). A/B test on 18-track EDM suite showed **no benefit** — gravity well persists at ~135 BPM. The coarse bin count was a contributing factor but not the root cause. The gravity well is driven by multiple reinforcing factors: training data BPM distribution (33.5% at 120-140 BPM), Bayesian prior, comb filter harmonic structure, and ACF sub-harmonic peaks. Increasing bins alone cannot fix observation-side bias. Previous v29 attempt also failed (transition matrix drift). **Two independent tests confirm: bin count is not the bottleneck.**
+
+**~~Priority 2: Fix NN Training Pipeline (v6 model)~~ — DONE (March 8, 2026)**
+All five identified issues fixed: (1) test track exclusion via `--exclude-dir`, (2) time-stretch augmentation [0.8, 0.9, 1.1, 1.2], (3) binary targets replacing Gaussian (pos_weight 20.0), (4) strength-weighted targets from consensus, (5) v2 consensus labels with octave normalization, failure rejection, and timing correction. Additionally fixed downbeat target bug (strength>0.9 misused as downbeat indicator). See "Completed: Training Pipeline & Label Quality" section above.
+
+**Priority 3: Visual Eval of fwdphase=1**
+Forward filter phase tracking was BPM-neutral in A/B test (8 wins vs 6). May give smoother LED animations. No code changes required.
+
+**NEW Priority 1: Train & Evaluate Improved Models**
+With the training pipeline fixed and v2 consensus labels ready, train and evaluate three model variants:
+- **v6** (5L ch32): same architecture as v4, but with all pipeline fixes (binary targets, time-stretch, test exclusion, v2 labels). Training launched Mar 8.
+- **v7** (7L ch48, `deep_wide.yaml`): ~46K params, ~68 KB INT8. 256-frame context (~4s RF). Pushes flash budget.
+- **v8** (7L ch32, `deep.yaml`): ~22K params, ~41 KB INT8. 256-frame context at same channel width as v4. Best capacity/size tradeoff.
+Deploy best model to hardware for A/B test vs v4.
+
+**NEW Priority 2: Firmware Simplification**
+- Remove adaptive band weighting (~1600 lines + 2.9 KB RAM, rarely activates)
+- Simplify ensemble detection path for solo detector (bypass multi-detector agreement logic)
+- Both changes reduce code complexity and free RAM for larger NN models
+
+**NEW Priority 3: ACF-based ODF Quality Metric**
+evaluate.py measures standalone beat F1, but the model is used as ODF source for CBSS. A model with slightly smeared but consistent activations could score lower on F1 but produce better ACF peaks. Add an ACF-based metric that measures ODF periodicity quality — how well the ODF's autocorrelation peak matches the ground truth tempo.
+
+**Future: Heydari 1D State Space**
+Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-back reward" achieves 76.5% F1 online with 30x speedup over 2D joint models. Collapses 2D (tempo × phase) into 1D phase-only where tempo changes are "jumps back" in the state space. ~860 states fits our memory budget. Could replace CBSS if NN training improvements are insufficient.
 
 ## Design Philosophy
 
@@ -1345,11 +1430,9 @@ Phase alignment is the primary bottleneck. v43 fixed 4 Bayesian tempo bugs (BPM 
 
 Implemented and tested in v42. Both single-bin DFT (~3% confidence) and comb filter bank IIR (~2% confidence) produce too-low confidence for reliable correction. Mean F1 identical to baseline (0.426 vs 0.426 over 4 runs). Redundant with onset snap. Disabled by default.
 
-#### 1b. Lower CBSS Tightness — UNTESTED WITH NN ODF
+#### 1b. Lower CBSS Tightness — DEPRIORITIZED
 
-Current tightness=8.0 (v40: raised from 5.0, +24% avg F1 with BandFlux ODF). With NN ODF, optimal tightness may differ — NN produces smoother, more periodic activations that could benefit from looser tightness. Requires hardware A/B test.
-
-**Effort**: Parameter change via serial (`set cbsstight 5.0`), A/B test on 18-track suite.
+Current tightness=8.0 (v40: raised from 5.0, +24% avg F1 with BandFlux ODF). With NN ODF, optimal tightness may differ — NN produces smoother, more periodic activations that could benefit from looser tightness. **Deprioritized** given focus on NN model improvements (v6/v7/v8) and gravity well investigation results. May revisit after new model deployment if phase alignment remains the bottleneck.
 
 #### ~~1c. Bidirectional Onset Snap~~ — IMPLEMENTED (v44)
 
@@ -1431,8 +1514,8 @@ Phase is too noisy via microphone in a reverberant room. Dixon (2006) found CSD 
 #### 3b. Log-Spaced Sub-Band Filterbank
 Replace 3-band grouping with 12-24 log-spaced bands. Separates kick from bass, snare from vocals. ~80 lines.
 
-#### 3c. TinyML Beat Activation CNN — VALIDATED (v54, v2 model)
-Causal 1D CNN for beat activation. v2 model achieves 0.548 mean F1 (vs BandFlux ~0.28-0.35). v3 wider model (1008ms RF) in training. See NN section above for full results.
+#### 3c. TinyML Beat Activation CNN — VALIDATED (v54, deployed v4 model)
+Causal 1D CNN for beat activation. v4 model (5L ch32, 33.3 KB INT8) deployed as default ODF source (nnbeat=1 since v58). Hardware A/B: 11/18 wins vs BandFlux. Training pipeline fixed (Mar 8) — v6/v7/v8 models in progress with binary targets, time-stretch augmentation, test track exclusion, and v2 consensus labels. See NN + Training Pipeline sections above for full results.
 
 ### Completed
 
@@ -1443,7 +1526,7 @@ Causal 1D CNN for beat activation. v2 model achieves 0.548 mean F1 (vs BandFlux 
 - ✅ Beat-boundary tempo (v28) — defers period changes to beat fire
 
 **Phase 2 (Improve):**
-- ✅ 40 tempo bins — tested v29, reverted (transition matrix drift 2x worse)
+- ✅ 40 tempo bins — tested v29 (reverted, transition matrix drift) and v61 with 47 bins (no benefit, gravity well persists)
 - ✅ Adaptive ODF threshold — tested v32, marginal (keep off)
 - ✅ Hi-res bass — tested v32, negative (-9% F1, keep off)
 - ✅ ODF mean subtraction disabled — tested v32, +70% F1

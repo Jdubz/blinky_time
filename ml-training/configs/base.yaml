@@ -33,7 +33,8 @@ audio:
 
 # Target label generation
 labels:
-  sigma_frames: 2           # Gaussian smoothing width (±32ms at 62.5 Hz)
+  target_type: "binary"     # "binary" (v6+: 1 frame per beat) or "gaussian" (v1-v5)
+  sigma_frames: 2           # Gaussian smoothing width, only used if target_type is "gaussian"
   beat_value: 1.0           # Peak activation at beat center
   nonbeat_value: 0.0        # Background activation
 
@@ -45,10 +46,19 @@ training:
   lr_schedule: "cosine"
   chunk_frames: 128         # ~2s chunks at 62.5 Hz
   chunk_stride: 64          # 50% overlap between chunks
-  pos_weight: 4.7           # BCE positive class weight for beat head (measured 17.7% positive ratio)
-  downbeat_pos_weight: 10.5 # BCE positive class weight for downbeat head (measured 8.7% positive ratio)
+  pos_weight: 20.0          # BCE positive class weight for beat head (binary targets ~4.5% positive ratio)
+  downbeat_pos_weight: 60.0 # BCE positive class weight for downbeat head (binary targets ~1.5% positive ratio)
+  min_quality: 0.0            # Minimum label quality_score to include track (0.0 = no filtering)
   val_split: 0.15
   seed: 42
+
+# Augmentation settings (used by prepare_dataset.py when --augment is passed)
+augmentation:
+  # Resample-based time stretch: diversifies BPM distribution.
+  # Training data is 33.5% at 120-140 BPM — these factors spread it out.
+  # 0.8x: 120→96, 1.2x: 120→144 BPM. Pitch changes are fine for beat detection.
+  # Stretched variants get clean audio only (no noise/gain/RIR on top).
+  time_stretch_factors: [0.8, 0.9, 1.1, 1.2]
 
 # Quantization
 quantization:
@@ -63,7 +73,7 @@ export:
 # Data paths (bulk data on /mnt/storage, processed data local for fast training)
 data:
   audio_dir: "/mnt/storage/blinky-ml-data/audio"
-  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus"
+  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus_v2"
   processed_dir: "data/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
   test_set: "../blinky-test-player/music/edm"

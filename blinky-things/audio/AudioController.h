@@ -24,7 +24,7 @@ struct AutocorrPeak {
 /**
  * CombFilterBank - Independent tempo validation using parallel comb filter resonators
  *
- * Theory: A bank of comb filters at different tempos (60-180 BPM) provides
+ * Theory: A bank of comb filters at different tempos (60-198 BPM) provides
  * independent tempo validation without depending on autocorrelation being correct.
  * Each filter accumulates energy when the input has periodicity at its tempo.
  * The filter with maximum energy indicates the most likely tempo.
@@ -35,19 +35,17 @@ struct AutocorrPeak {
  * - Complex phase extraction (not peak detection)
  * - Tempo prior weighting to reduce half-time/double-time confusion
  *
- * Memory: ~10.2 KB total (9.6 KB per-filter delay lines + 0.6 KB state)
- * CPU: ~3% (40 filters × simple math, phase every 4 frames)
+ * Memory: ~5.3 KB total (resonatorDelay_[20][66] = 5,280 bytes + state)
+ * CPU: ~2% (20 filters × simple math, phase every 4 frames)
  */
 class CombFilterBank {
 public:
-    // 20 filters: 60-200 BPM (~7 BPM resolution, broad musical tempo coverage)
-    // At 66 Hz: lag range = 20-66 samples (198-60 BPM)
-    // 40 bins created systematic posterior drift toward low BPM due to
-    // non-uniform BPM spacing on the lag-uniform grid (more bins per BPM
-    // at low tempos → probability accumulation). 20 bins proven at F1=0.519.
-    static constexpr int NUM_FILTERS = 20;
     static constexpr int MAX_LAG = 66;  // 60 BPM at 66 Hz (66*60/66)
     static constexpr int MIN_LAG = 20;  // 198 BPM at 66 Hz (66*60/20)
+    // 20 filters linearly interpolated from MIN_LAG to MAX_LAG (60-198 BPM).
+    // Proven at F1=0.519. 47 bins tested (v61, every integer lag) but A/B showed
+    // no benefit (+12 KB RAM wasted). Reverted to 20.
+    static constexpr int NUM_FILTERS = 20;
 
     // === TUNING PARAMETERS ===
     float feedbackGain = 0.92f;       // Resonance strength (0.85-0.98)
@@ -68,7 +66,7 @@ public:
 
     /**
      * Process one sample of onset strength
-     * Updates all 40 resonators and finds peak tempo
+     * Updates all 20 resonators and finds peak tempo
      */
     void process(float input);
 
@@ -113,7 +111,7 @@ public:
 private:
     // Per-filter output delay lines for IIR feedback
     // Each filter stores its own output history so y[n-L] feeds back correctly.
-    // Memory: 40 filters × 60 samples × 4 bytes = 9600 bytes
+    // Memory: 20 filters × 66 samples × 4 bytes = 5,280 bytes
     float resonatorDelay_[NUM_FILTERS][MAX_LAG] = {{0}};
     int writeIdx_ = 0;
 
@@ -285,15 +283,11 @@ public:
     float tempoSmoothingFactor = 0.85f; // Higher = smoother, slower adaptation (0-1)
     float tempoChangeThreshold = 0.1f;  // Min BPM change ratio to trigger update
 
-    // === ADAPTIVE BAND WEIGHTING ===
-    // Dynamically adjusts band weights based on which frequency bands show strongest periodicity
-    // When enabled, bands with stronger rhythmic content get higher weights
-    // Uses SuperFlux-style max filtering, cross-band correlation, and peakiness detection
-    // to distinguish real beats from vibrato/tremolo in sustained content
-    bool adaptiveBandWeightEnabled = true;  // Enable/disable adaptive weighting
-    float bassBandWeight = 0.5f;    // Bass band weight (when adaptive disabled)
-    float midBandWeight = 0.3f;     // Mid band weight (when adaptive disabled)
-    float highBandWeight = 0.2f;    // High band weight (when adaptive disabled)
+    // === BAND WEIGHTING ===
+    // Fixed band weights for spectral flux computation (bass/mid/high)
+    float bassBandWeight = 0.5f;    // Bass band weight
+    float midBandWeight = 0.3f;     // Mid band weight
+    float highBandWeight = 0.2f;    // High band weight
 
     // === AUTOCORRELATION TIMING ===
     // Controls how often BPM is re-estimated via autocorrelation
@@ -570,10 +564,6 @@ public:
     uint32_t getNextBeatMs() const { return nextBeatMs_; }
     // (getLastTempoPriorWeight removed — Bayesian fusion replaces tempo prior)
 
-    // Adaptive band weight debug getters
-    const float* getAdaptiveBandWeights() const { return adaptiveBandWeights_; }
-    const float* getBandPeriodicityStrength() const { return bandPeriodicityStrength_; }
-
     // Bayesian tempo state debug getters
     int getBayesBestBin() const { return bayesBestBin_; }
     float getBayesBestConf() const;
@@ -637,26 +627,6 @@ private:
     static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
     float prevMagnitudes_[SPECTRAL_BINS] = {0};
     bool prevMagnitudesValid_ = false;  // First frame has no previous
-
-    // Per-band OSS tracking for adaptive weighting
-    // Tracks periodicity strength in bass, mid, high bands independently
-    static constexpr int BAND_COUNT = 3;  // bass, mid, high
-    static constexpr int BAND_OSS_BUFFER_SIZE = 240;  // 4 seconds at 60 Hz (captures 4+ beats at 60 BPM)
-    float bandOssBuffers_[BAND_COUNT][BAND_OSS_BUFFER_SIZE] = {{0}};
-    int bandOssWriteIdx_ = 0;
-    int bandOssCount_ = 0;
-    float bandPeriodicityStrength_[BAND_COUNT] = {0};
-    float adaptiveBandWeights_[BAND_COUNT] = {0.5f, 0.3f, 0.2f};  // Default weights
-    uint32_t lastBandAutocorrMs_ = 0;
-    // Cross-band correlation tracking (SuperFlux-inspired)
-    // Measures how synchronized the bands are - real beats correlate across bands
-    float crossBandCorrelation_[BAND_COUNT] = {0};  // Correlation of each band with others
-    float bandSynchrony_ = 0.0f;  // Overall synchrony metric (0-1)
-
-    // Peakiness tracking - distinguishes transient bursts from continuous vibrato
-    // Transients: sparse, high peaks (high peakiness)
-    // Vibrato: continuous, low-level fluctuations (low peakiness)
-    float bandPeakiness_[BAND_COUNT] = {0};
 
     // Maximum-filtered previous magnitudes for vibrato suppression (SuperFlux style)
     float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};
@@ -752,8 +722,8 @@ private:
     // (IOI onset buffer removed v52 — dead code since v28)
 
     // === BAYESIAN TEMPO STATE ===
-    // 40 bins matching CombFilterBank resolution (60-180 BPM, ~3 BPM/bin)
-    static constexpr int TEMPO_BINS = CombFilterBank::NUM_FILTERS;  // 40
+    // 20 bins matching CombFilterBank resolution (60-198 BPM, linearly interpolated lags)
+    static constexpr int TEMPO_BINS = CombFilterBank::NUM_FILTERS;  // 20
     float tempoStatePrior_[TEMPO_BINS] = {0};     // Previous posterior (becomes prior)
     float tempoStatePost_[TEMPO_BINS] = {0};      // Current posterior after update
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
@@ -789,8 +759,8 @@ private:
 
     // === JOINT FORWARD FILTER STATE (v57) ===
     // 20 tempo bins with variable phase positions (= lag per bin, 20-66 frames).
-    // Total states: sum of all lags ≈ 860. Uses existing tempoBinLags_[] for periods.
-    static constexpr int FWD_MAX_STATES = 880;  // Sum of lags + margin
+    // Total states: sum of 20 interpolated lags. Uses existing tempoBinLags_[] for periods.
+    static constexpr int FWD_MAX_STATES = 880;  // Sum of 20 interpolated lags + margin
     float fwdAlpha_[FWD_MAX_STATES] = {0};       // Forward probabilities
     int fwdBinOffset_[TEMPO_BINS] = {0};          // Start index of each bin in fwdAlpha_
     int fwdTotalStates_ = 0;                      // Actual total states
@@ -895,15 +865,7 @@ private:
     void recomputeLogGaussianWeights(int T);
 
     // Onset strength computation
-    float computeSpectralFluxBands(const float* magnitudes, int numBins,
-                                    float& bassFlux, float& midFlux, float& highFlux);
-
-    // Adaptive band weighting
-    void addBandOssSamples(float bassFlux, float midFlux, float highFlux);
-    void updateBandPeriodicities(uint32_t nowMs);
-    float computeBandAutocorrelation(int band);
-    void computeCrossBandCorrelation();
-    void computeBandPeakiness();
+    float computeSpectralFluxBands(const float* magnitudes, int numBins);
 
     // Bayesian tempo fusion
     // Note: initTempoState() uses bayesPriorCenter and tempoPriorWidth to build
