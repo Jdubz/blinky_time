@@ -63,15 +63,10 @@ EnsembleOutput EnsembleDetector::update(float level, float rawLevel,
     spectral_.resetFrameReady();
     bassSpectral_.resetFrameReady();
 
-    // Build sparse results array for fusion (all slots none except BAND_FLUX)
-    DetectionResult results[NUM_DETECTORS];
-    for (int i = 0; i < NUM_DETECTORS; i++) {
-        results[i] = DetectionResult::none();
-    }
-    results[static_cast<int>(DetectorType::BAND_FLUX)] = lastBandFluxResult_;
-
-    // Fuse results with unified ensemble cooldown and noise gate
-    lastOutput_ = fusion_.fuse(results, timestampMs, level);
+    // Solo fusion: pass BandFlux result directly (no 7-element array needed)
+    lastOutput_ = fusion_.fuseSolo(lastBandFluxResult_,
+                                   static_cast<int>(DetectorType::BAND_FLUX),
+                                   timestampMs, level);
 
     return lastOutput_;
 }

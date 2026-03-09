@@ -87,6 +87,20 @@ public:
     EnsembleOutput fuse(const DetectionResult* results, uint32_t timestampMs, float audioLevel = 1.0f);
 
     /**
+     * Fast path for single-detector fusion (avoids array allocation)
+     * Equivalent to fuse() when exactly one detector is enabled, but takes
+     * a single DetectionResult instead of a full MAX_DETECTORS array.
+     * Applies noise gate, confidence filter, and cooldown — same as fuse() solo path.
+     * @param result Detection result from the solo detector
+     * @param detectorIdx Index of the detector (for dominantDetector output)
+     * @param timestampMs Current timestamp in milliseconds
+     * @param audioLevel Current normalized audio level (0.0-1.0) for noise gate
+     * @return Combined EnsembleOutput
+     */
+    EnsembleOutput fuseSolo(const DetectionResult& result, int detectorIdx,
+                            uint32_t timestampMs, float audioLevel = 1.0f);
+
+    /**
      * Get the weight sum for normalization (debug/tuning)
      */
     float getTotalWeight() const;

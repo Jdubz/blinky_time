@@ -243,9 +243,8 @@ const AudioControl& AudioController::update(float dt) {
             const float* magnitudes = spectral.getMagnitudes();
             int numBins = spectral.getNumBins();
 
-            // Compute spectral flux with per-band outputs for adaptive weighting
-            float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
-            onsetStrength = computeSpectralFluxBands(magnitudes, numBins, bassFlux, midFlux, highFlux);
+            // Compute spectral flux
+            onsetStrength = computeSpectralFluxBands(magnitudes, numBins);
         } else {
             // Fallback when no spectral data: use normalized level
             onsetStrength = mic_.getLevel();
@@ -1960,7 +1959,7 @@ void AudioController::updateForwardFilter(float odf) {
     int fwdMinPeriod = fwdMinPeriod_;
 
     // Collect wrap probabilities (last position of each tempo bin) BEFORE shift
-    float wrapProbs[TEMPO_BINS];  // 47 floats = 188 bytes on stack
+    float wrapProbs[TEMPO_BINS];  // 20 floats = 80 bytes on stack
     for (int i = 0; i < TEMPO_BINS; i++) {
         int period = tempoBinLags_[i];
         if (period < 10) period = 10;
@@ -3302,8 +3301,7 @@ void AudioController::predictNextBeat(uint32_t nowMs) {
 // Onset Strength Computation Methods
 // ============================================================================
 
-float AudioController::computeSpectralFluxBands(const float* magnitudes, int numBins,
-                                                 float& outBassFlux, float& outMidFlux, float& outHighFlux) {
+float AudioController::computeSpectralFluxBands(const float* magnitudes, int numBins) {
     // Band-weighted half-wave rectified spectral flux with SuperFlux-style vibrato suppression
     // Captures frame-to-frame energy INCREASES only (onsets, not decays)
     //
@@ -3385,11 +3383,6 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
     }
     prevMagnitudesValid_ = true;
 
-    // Output individual band fluxes (pre-compression)
-    outBassFlux = bassFlux;
-    outMidFlux = midFlux;
-    outHighFlux = highFlux;
-
     // Weighted sum: fixed tunable weights
     float flux = bassBandWeight * bassFlux + midBandWeight * midFlux + highBandWeight * highFlux;
 
@@ -3409,12 +3402,10 @@ float AudioController::computeSpectralFluxBands(const float* magnitudes, int num
 void CombFilterBank::init(float frameRate) {
     frameRate_ = frameRate;
 
-    // Every integer lag from MIN_LAG to MAX_LAG (lag-domain uniform spacing).
-    // At 66 Hz: lag 20 = 198 BPM, lag 33 = 120 BPM, lag 66 = 60 BPM.
-    // This gives ~2 BPM resolution at 120 BPM (vs old 20-bin ~7 BPM).
-    // Matches madmom's approach of using integer lag bins.
+    // Distribute 20 filters evenly from MIN_LAG (~198 BPM) to MAX_LAG (~60 BPM)
     for (int i = 0; i < NUM_FILTERS; i++) {
-        int lag = MIN_LAG + i;
+        float t = static_cast<float>(i) / static_cast<float>(NUM_FILTERS - 1);
+        int lag = MIN_LAG + static_cast<int>(t * (MAX_LAG - MIN_LAG) + 0.5f);
         filterLags_[i] = lag;
         filterBPMs_[i] = (frameRate_ * 60.0f) / static_cast<float>(lag);
     }

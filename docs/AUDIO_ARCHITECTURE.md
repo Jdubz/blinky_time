@@ -265,11 +265,11 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 | ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
-| CombFilterBank (47 filters) | ~12.4 KB | ~1% | Tempo validation (lag-domain uniform, v61) |
+| CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| Forward filter (always allocated) | ~8.4 KB | ~1% | fwdAlpha_[2100], always in RAM even when `fwdfilter=0` |
+| Forward filter (always allocated) | ~3.5 KB | ~1% | fwdAlpha_[880], always in RAM even when `fwdfilter=0` |
 | NN beat activation (optional) | ~16 KB | ~2% | TFLite Micro tensor arena (NN=1 build, `nnbeat=1`) |
-| **Total** | **~27 KB base** | **~9-11%** | +16 KB with NN. ~43 KB max (NN=1). |
+| **Total** | **~22 KB base** | **~9-11%** | +16 KB with NN. ~38 KB max (NN=1). |
 
 ---
 

@@ -162,6 +162,50 @@ EnsembleOutput EnsembleFusion::fuse(const DetectionResult* results, uint32_t tim
     return output;
 }
 
+EnsembleOutput EnsembleFusion::fuseSolo(const DetectionResult& result, int detectorIdx,
+                                        uint32_t timestampMs, float audioLevel) {
+    EnsembleOutput output;
+
+    // === NOISE GATE ===
+    if (audioLevel < minAudioLevel) {
+        output.transientStrength = 0.0f;
+        output.ensembleConfidence = 0.0f;
+        output.detectorAgreement = 0;
+        output.dominantDetector = 0;
+        return output;
+    }
+
+    // Solo detector: direct pass-through (no agreement scaling, no weighted average)
+    float fusedStrength = 0.0f;
+    int agreementCount = 0;
+
+    if (result.detected && result.confidence >= minConfidence) {
+        fusedStrength = result.strength;
+        if (fusedStrength > 1.0f) fusedStrength = 1.0f;
+        agreementCount = 1;
+    }
+
+    // UNIFIED ENSEMBLE COOLDOWN (same as fuse())
+    uint32_t elapsedMs = timestampMs - lastTransientMs_;
+    uint16_t effectiveCooldown = getEffectiveCooldownMs();
+    bool cooldownElapsed = elapsedMs > (uint32_t)effectiveCooldown;
+
+    if (fusedStrength > 0.01f && cooldownElapsed) {
+        output.transientStrength = fusedStrength;
+        lastTransientMs_ = timestampMs;
+    } else {
+        output.transientStrength = 0.0f;
+    }
+
+    int boostIdx = (agreementCount > MAX_DETECTORS) ? MAX_DETECTORS : agreementCount;
+    float confidence = agreementBoosts_[boostIdx];
+    output.ensembleConfidence = (confidence > 1.0f) ? 1.0f : confidence;
+    output.detectorAgreement = static_cast<uint8_t>(agreementCount);
+    output.dominantDetector = static_cast<uint8_t>(detectorIdx);
+
+    return output;
+}
+
 float EnsembleFusion::getTotalWeight() const {
     float sum = 0.0f;
     for (int i = 0; i < MAX_DETECTORS; i++) {

@@ -35,20 +35,17 @@ struct AutocorrPeak {
  * - Complex phase extraction (not peak detection)
  * - Tempo prior weighting to reduce half-time/double-time confusion
  *
- * Memory: ~12.4 KB total (resonatorDelay_[47][66] = 12,408 bytes + state)
- * CPU: ~3% (47 filters × simple math, phase every 4 frames)
+ * Memory: ~5.3 KB total (resonatorDelay_[20][66] = 5,280 bytes + state)
+ * CPU: ~2% (20 filters × simple math, phase every 4 frames)
  */
 class CombFilterBank {
 public:
     static constexpr int MAX_LAG = 66;  // 60 BPM at 66 Hz (66*60/66)
     static constexpr int MIN_LAG = 20;  // 198 BPM at 66 Hz (66*60/20)
-    // 47 filters: every integer lag from MIN_LAG to MAX_LAG (60-198 BPM)
-    // Lag-domain uniform spacing gives natural ~2 BPM resolution at 120 BPM
-    // (vs old 20-bin system with ~7 BPM resolution and only 2 bins at 120-140 BPM).
-    // v29 tested 40 bins but failed due to BPM-space Gaussian transition matrix;
-    // v43 fixed this with lag-space Gaussian + column normalization.
-    // Reference: madmom uses 82 lag bins, BTrack uses 41, BeatNet uses 300.
-    static constexpr int NUM_FILTERS = MAX_LAG - MIN_LAG + 1;  // 47
+    // 20 filters linearly interpolated from MIN_LAG to MAX_LAG (60-198 BPM).
+    // Proven at F1=0.519. 47 bins tested (v61, every integer lag) but A/B showed
+    // no benefit (+12 KB RAM wasted). Reverted to 20.
+    static constexpr int NUM_FILTERS = 20;
 
     // === TUNING PARAMETERS ===
     float feedbackGain = 0.92f;       // Resonance strength (0.85-0.98)
@@ -725,8 +722,8 @@ private:
     // (IOI onset buffer removed v52 — dead code since v28)
 
     // === BAYESIAN TEMPO STATE ===
-    // 47 bins matching CombFilterBank resolution (60-198 BPM, lag-domain uniform)
-    static constexpr int TEMPO_BINS = CombFilterBank::NUM_FILTERS;  // 47
+    // 20 bins matching CombFilterBank resolution (60-198 BPM, linearly interpolated lags)
+    static constexpr int TEMPO_BINS = CombFilterBank::NUM_FILTERS;  // 20
     float tempoStatePrior_[TEMPO_BINS] = {0};     // Previous posterior (becomes prior)
     float tempoStatePost_[TEMPO_BINS] = {0};      // Current posterior after update
     float tempoStaticPrior_[TEMPO_BINS] = {0};    // Fixed Gaussian prior (ongoing pull toward bayesPriorCenter)
@@ -761,9 +758,9 @@ private:
     void updatePhaseTracker(float odf);
 
     // === JOINT FORWARD FILTER STATE (v57) ===
-    // 47 tempo bins with variable phase positions (= lag per bin, 20-66 frames).
-    // Total states: sum of all lags = 2021. Uses existing tempoBinLags_[] for periods.
-    static constexpr int FWD_MAX_STATES = 2100;  // Sum of lags 20..66 = 2021 + margin
+    // 20 tempo bins with variable phase positions (= lag per bin, 20-66 frames).
+    // Total states: sum of 20 interpolated lags. Uses existing tempoBinLags_[] for periods.
+    static constexpr int FWD_MAX_STATES = 880;  // Sum of 20 interpolated lags + margin
     float fwdAlpha_[FWD_MAX_STATES] = {0};       // Forward probabilities
     int fwdBinOffset_[TEMPO_BINS] = {0};          // Start index of each bin in fwdAlpha_
     int fwdTotalStates_ = 0;                      // Actual total states
@@ -868,8 +865,7 @@ private:
     void recomputeLogGaussianWeights(int T);
 
     // Onset strength computation
-    float computeSpectralFluxBands(const float* magnitudes, int numBins,
-                                    float& bassFlux, float& midFlux, float& highFlux);
+    float computeSpectralFluxBands(const float* magnitudes, int numBins);
 
     // Bayesian tempo fusion
     // Note: initTempoState() uses bayesPriorCenter and tempoPriorWidth to build
