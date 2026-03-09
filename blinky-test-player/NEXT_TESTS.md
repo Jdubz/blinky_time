@@ -107,6 +107,28 @@ All training pipeline fixes implemented and data prepared. Three models training
 
 Forward filter phase tracking (`fwdphase=1`) was BPM-neutral (8 wins vs 6, mean err 14.9 vs 14.8). May give smoother LED animations. Needs eyes on hardware -- no code changes required.
 
+## Priority 3: CBSS ODF Contrast (cbssContrast=2.0)
+
+**Status: NOT TESTED**
+
+BTrack applies power-law contrast (squaring) to the ODF before feeding it into CBSS. This sharpens beat peaks relative to non-beat frames, making the cumulative score more discriminative. Our `cbssContrast` parameter exists (AudioController.h:315) but defaults to 1.0 (linear, no contrast).
+
+**Rationale:** Code review against BTrack source confirms this is an intentional design choice in BTrack, not an accident. Squaring the ODF suppresses low-level noise while amplifying genuine onset peaks, which should improve CBSS beat/non-beat discrimination.
+
+**Test plan:**
+1. Single-parameter A/B test: `cbssContrast=1.0` (baseline) vs `cbssContrast=2.0` (BTrack-style)
+2. Standard 18-track EDM test set, 3 devices, track manifest seeking
+3. Duration 35s, settle 12s
+4. Metric: BPM error + octave error count (same as previous A/B tests)
+5. If 2.0 wins, optionally sweep [1.5, 2.0, 2.5, 3.0] for optimal value
+
+**Command:**
+```bash
+cd blinky_time/blinky-test-player && NODE_PATH=node_modules node ../ml-training/tools/ab_test_multidev.cjs \
+  --baseline "cbsscontrast=1.0" --candidate "cbsscontrast=2.0" \
+  --tracks ../music/edm/track_manifest.json --duration 35 --settle 12
+```
+
 ## Future: Heydari 1D State Space
 
 **Status: RESEARCH ONLY**

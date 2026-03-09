@@ -623,13 +623,14 @@ private:
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
-    // Spectral flux: previous frame magnitudes for frame-to-frame comparison
+    // Legacy spectral flux state — only used by computeSpectralFluxBands(),
+    // which is the fallback ODF path when BOTH unifiedOdf=false AND nnBeatActivation=false.
+    // In practice both default to true, making this ~1 KB dead weight. Kept as a
+    // runtime-togglable fallback; safe to remove if both toggles are permanently retired.
     static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
     float prevMagnitudes_[SPECTRAL_BINS] = {0};
     bool prevMagnitudesValid_ = false;  // First frame has no previous
-
-    // Maximum-filtered previous magnitudes for vibrato suppression (SuperFlux style)
-    float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};
+    float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};  // SuperFlux vibrato suppression
 
     // Comb filter bank (independent tempo validation)
     CombFilterBank combFilterBank_;

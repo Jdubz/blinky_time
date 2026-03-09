@@ -3302,6 +3302,9 @@ void AudioController::predictNextBeat(uint32_t nowMs) {
 // ============================================================================
 
 float AudioController::computeSpectralFluxBands(const float* magnitudes, int numBins) {
+    // LEGACY PATH: Only reachable when unifiedOdf=false AND nnBeatActivation=false.
+    // Both default to true since v54/v58. Kept as runtime fallback.
+    //
     // Band-weighted half-wave rectified spectral flux with SuperFlux-style vibrato suppression
     // Captures frame-to-frame energy INCREASES only (onsets, not decays)
     //
