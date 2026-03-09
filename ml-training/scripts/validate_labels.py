@@ -15,12 +15,6 @@ Usage:
     python scripts/validate_labels.py \
         --labels-dir /mnt/storage/blinky-ml-data/labels/multi \
         --output report.json
-
-    # With consensus labels for cross-reference
-    python scripts/validate_labels.py \
-        --labels-dir /mnt/storage/blinky-ml-data/labels/multi \
-        --consensus-dir /mnt/storage/blinky-ml-data/labels/consensus \
-        --output report.json
 """
 
 from __future__ import annotations
@@ -412,8 +406,6 @@ def main():
         description="Validate beat label quality across multi-system annotations.")
     parser.add_argument("--labels-dir", required=True,
                         help="Directory with per-system .beats.json files")
-    parser.add_argument("--consensus-dir", default=None,
-                        help="Optional: consensus labels dir for cross-reference")
     parser.add_argument("--output", default="label_validation_report.json",
                         help="Output report path (default: label_validation_report.json)")
     parser.add_argument("--worst", type=int, default=50,

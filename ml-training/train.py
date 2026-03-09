@@ -164,7 +164,7 @@ def main():
     y_sample = np.load(data_dir / "Y_train.npy", mmap_mode='r')[:sample_size]
     pos_ratio_binary = (y_sample > 0.5).mean()
     pos_ratio_mean = y_sample.mean()
-    suggested_pw = (1 - pos_ratio_binary) / max(pos_ratio_binary, 1e-10)
+    suggested_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
     print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
     print(f"  Suggested pos_weight: {suggested_pw:.1f} (configured: {beat_pos_weight})")
 

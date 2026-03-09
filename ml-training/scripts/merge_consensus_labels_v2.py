@@ -241,12 +241,16 @@ def align_beats(
     system_beats: dict[str, dict],
     tolerance: float,
     min_agreement: int,
+    total_original_systems: int | None = None,
 ) -> list[dict]:
     """Align beats across systems and return consensus beats.
 
     Uses weighted median for consensus position (system weights).
+    total_original_systems: the number of systems before failure filtering.
+    Used for strength calculation so failed systems don't inflate strength
+    (e.g., 2/2 valid = 1.0 is wrong when 2 of 4 original systems failed).
     """
-    total_systems = len(system_beats)
+    total_systems = total_original_systems if total_original_systems is not None else len(system_beats)
     if total_systems == 0:
         return []
 
@@ -400,7 +404,8 @@ def merge_stem(
                         if normalized[s].get("_octave_corrected")}
 
     # Step 4: Align and filter
-    consensus_beats = align_beats(normalized, tolerance, min_agreement)
+    consensus_beats = align_beats(normalized, tolerance, min_agreement,
+                                  total_original_systems=len(all_systems))
 
     # Step 5: Compute quality score
     quality = compute_quality_score(

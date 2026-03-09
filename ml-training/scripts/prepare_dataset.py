@@ -376,8 +376,14 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             src_downbeats = downbeat_times
         else:
             # Resample to simulate tempo change: speed > 1 = faster
-            src_audio = torchaudio.functional.resample(
-                audio_gpu.unsqueeze(0), int(sr * speed), sr).squeeze(0)
+            try:
+                src_audio = torchaudio.functional.resample(
+                    audio_gpu.unsqueeze(0), int(sr * speed), sr).squeeze(0)
+            except Exception as e:
+                import logging
+                logging.warning(f"Time-stretch {speed:.2f}x failed for "
+                                f"{audio_path.name}: {e}")
+                continue
             src_beats = beat_times / speed
             src_strengths = beat_strengths  # Strengths don't change with speed
             src_downbeats = (downbeat_times / speed

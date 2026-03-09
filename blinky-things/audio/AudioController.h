@@ -24,7 +24,7 @@ struct AutocorrPeak {
 /**
  * CombFilterBank - Independent tempo validation using parallel comb filter resonators
  *
- * Theory: A bank of comb filters at different tempos (60-180 BPM) provides
+ * Theory: A bank of comb filters at different tempos (60-198 BPM) provides
  * independent tempo validation without depending on autocorrelation being correct.
  * Each filter accumulates energy when the input has periodicity at its tempo.
  * The filter with maximum energy indicates the most likely tempo.
@@ -35,8 +35,8 @@ struct AutocorrPeak {
  * - Complex phase extraction (not peak detection)
  * - Tempo prior weighting to reduce half-time/double-time confusion
  *
- * Memory: ~10.2 KB total (9.6 KB per-filter delay lines + 0.6 KB state)
- * CPU: ~3% (40 filters × simple math, phase every 4 frames)
+ * Memory: ~12.4 KB total (resonatorDelay_[47][66] = 12,408 bytes + state)
+ * CPU: ~3% (47 filters × simple math, phase every 4 frames)
  */
 class CombFilterBank {
 public:

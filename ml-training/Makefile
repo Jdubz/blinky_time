@@ -52,7 +52,7 @@ PYTHON        := python3
 # ============================================================
 # Phony targets
 # ============================================================
-.PHONY: all download label merge merge-v2 prepare train export eval clean status help
+.PHONY: all download label merge merge-v1 prepare train export eval clean status help
 
 all: download label merge prepare train export eval
 	@echo "Pipeline complete. Results in $(OUTPUT_DIR)/"
