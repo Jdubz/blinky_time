@@ -222,11 +222,19 @@ def normalize_octaves(system_beats: dict[str, dict]) -> dict[str, dict]:
             # This group is at double the majority tempo — halve their beats
             for m in members:
                 new_data = dict(result[m])
-                new_data["beats"] = halve_beats(new_data["beats"])
+                halved = halve_beats(new_data["beats"])
+                new_data["beats"] = halved
+                # Filter downbeats to only those surviving the halving
+                if len(new_data.get("downbeats", [])) > 0:
+                    halved_set = set(halved.tolist())
+                    new_data["downbeats"] = np.array(
+                        [d for d in new_data["downbeats"] if d in halved_set],
+                        dtype=float)
                 new_data["_octave_corrected"] = "halved"
                 result[m] = new_data
         elif relation == "half":
             # This group is at half the majority tempo — double their beats
+            # Downbeats stay at original positions (interpolated beats aren't downbeats)
             for m in members:
                 new_data = dict(result[m])
                 new_data["beats"] = double_beats(new_data["beats"])

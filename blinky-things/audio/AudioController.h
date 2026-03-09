@@ -66,7 +66,7 @@ public:
 
     /**
      * Process one sample of onset strength
-     * Updates all 47 resonators and finds peak tempo
+     * Updates all 20 resonators and finds peak tempo
      */
     void process(float input);
 
@@ -111,7 +111,7 @@ public:
 private:
     // Per-filter output delay lines for IIR feedback
     // Each filter stores its own output history so y[n-L] feeds back correctly.
-    // Memory: 47 filters × 66 samples × 4 bytes = 12,408 bytes
+    // Memory: 20 filters × 66 samples × 4 bytes = 5,280 bytes
     float resonatorDelay_[NUM_FILTERS][MAX_LAG] = {{0}};
     int writeIdx_ = 0;
 

@@ -84,6 +84,9 @@ public:
     const EnsembleOutput& getLastOutput() const { return lastOutput_; }
 
     // --- Configuration (only BAND_FLUX type is supported) ---
+    // Non-BAND_FLUX types were removed in v62. Setters for other types are
+    // intentional no-ops — fusion config array retains all enum slots for
+    // compatibility, but only BandFlux has a backing detector object.
     void setDetectorWeight(DetectorType type, float weight);
     void setDetectorEnabled(DetectorType type, bool enabled);
     void setDetectorThreshold(DetectorType type, float threshold);

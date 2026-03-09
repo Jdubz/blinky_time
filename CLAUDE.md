@@ -109,7 +109,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0 NN=1
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - 7 detectors with weighted fusion (BandFlux Solo default)
+- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (v62, disabled detectors removed)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
 
@@ -181,7 +181,7 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output)
 
 2. **Transient Detection (Ensemble)**
-   - `EnsembleDetector.h` - Weighted fusion of 7 detectors (1 enabled, 6 disabled)
+   - `EnsembleDetector.h` - BandFlux Solo detector (v62, disabled detectors removed)
    - **BandFlux Solo config (Feb 2026):** BandWeightedFlux (1.0, thresh 0.5) — all others disabled
    - BandFlux: log-compressed band-weighted spectral flux with additive threshold and onset delta filter
    - Agreement-based confidence scaling (single-detector boost 1.0 for solo config)
@@ -330,7 +330,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~27 KB base (CBSS/OSS ~3 KB + comb filters ~10 KB + Bayesian transition matrix ~6 KB + ODF linear buffer ~1.4 KB + forward filter ~5.1 KB). +16 KB tensor arena if NN=1 build.
+- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + forward filter ~3.5 KB). +16 KB tensor arena if NN=1 build.
 - Flash: ~301 KB base, ~426 KB with NN=1 (includes 33 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
@@ -416,18 +416,12 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Ensemble Detection Architecture
-The system uses 7 detectors with weighted fusion (1 enabled, 6 disabled).
+BandFlux Solo — single detector (6 disabled detectors removed from firmware in v62).
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 
-| Detector | Weight | Thresh | Enabled | Notes |
-|----------|--------|--------|---------|-------|
-| **BandWeightedFlux** | 1.00 | 0.5 | **Yes** | Log-compressed band-weighted spectral flux, additive threshold, onset delta filter |
-| Drummer | 0.50 | 4.5 | No | Good kick/snare recall, but BandFlux Solo outperforms (+14% avg Beat F1) |
-| ComplexDomain | 0.50 | 3.5 | No | Good precision, but adds noise when combined with BandFlux |
-| SpectralFlux | 0.20 | 1.4 | No | Fires on pad chords |
-| HFC | 0.20 | 4.0 | No | Hi-hat detector, misses kicks |
-| BassBand | 0.45 | 3.0 | No | Too noisy (100+ detections/30s) |
-| Novelty | 0.12 | 2.5 | No | Near-zero detections on real music |
+| Detector | Weight | Thresh | Notes |
+|----------|--------|--------|-------|
+| **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted spectral flux, additive threshold, onset delta filter |
 
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
