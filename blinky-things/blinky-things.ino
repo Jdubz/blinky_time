@@ -27,6 +27,8 @@
 #include "hal/DefaultHal.h"          // HAL singleton instances
 #include "hal/hardware/NeoPixelLedStrip.h"  // LED strip wrapper
 #include "config/DeviceConfigLoader.h"       // Runtime device config loading
+#include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
+#include "hal/SafeBootWatchdog.h"            // Hardware WDT + auto-recovery to UF2 bootloader
 
 // Runtime Device Configuration (v28+)
 // Device config is now loaded from flash at boot time instead of compile-time selection.
@@ -108,8 +110,13 @@ void haltWithError(const __FlashStringHelper* msg) {
 }
 
 void setup() {
-  // CRITICAL: Check for crash loop FIRST - before any other initialization
-  // This allows recovery if the app is crashing on boot
+  // CRITICAL: Hardware watchdog + boot counter — catches HardFaults, heap
+  // exhaustion, infinite loops. After 3 consecutive failed boots, automatically
+  // enters UF2 bootloader for safe firmware upload. Uses GPREGRET2 which
+  // persists across all reset types (WDT, soft reset, HardFault).
+  SafeBootWatchdog::begin();
+
+  // Software crash detection (complementary — uses .noinit RAM)
   SafeMode::check();
 
   // Initialize serial with default baud rate (config not loaded yet)
@@ -321,9 +328,14 @@ void setup() {
   // Mark boot as stable - we made it through setup without crashing
   // This resets the crash counter so future boots start fresh
   SafeMode::markStable();
+  SafeBootWatchdog::markStable();
+
+  Serial.print(F("[BOOT] Watchdog active, boot attempt #"));
+  Serial.println(SafeBootWatchdog::getBootCount());
 }
 
 void loop() {
+  SafeBootWatchdog::feed();  // Keep hardware WDT alive
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
 

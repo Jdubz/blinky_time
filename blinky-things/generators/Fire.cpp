@@ -114,6 +114,11 @@ void Fire::spawnParticles(float dt) {
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
         beatCount_++;
         sparkCount += (uint8_t)(params_.burstSparks * audio_.rhythmStrength);
+
+        // Downbeat: extra-dramatic spark burst every ~4 beats
+        if (audio_.downbeat > 0.5f) {
+            sparkCount += (uint8_t)(params_.burstSparks * audio_.downbeat);
+        }
     }
 
     // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)

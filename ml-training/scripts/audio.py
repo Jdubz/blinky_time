@@ -30,18 +30,30 @@ FRAME_RATE = SAMPLE_RATE / HOP_LENGTH  # 62.5 Hz
 
 
 def build_mel_filterbank_np() -> np.ndarray:
-    """Build mel filterbank as numpy array (CPU). Shape: (n_mels, n_fft//2 + 1)."""
+    """Build mel filterbank as numpy array (CPU). Shape: (n_mels, n_fft//2 + 1).
+
+    Firmware uses weighted AVERAGE (divides by sum of triangle weights per band),
+    not weighted SUM. We normalize each row by its weight sum so that
+    ``mel_fb @ magnitudes`` produces the same result as firmware's
+    ``sum(mag*weight) / sum(weight)`` loop.
+    """
     import librosa
-    return librosa.filters.mel(
+    fb = librosa.filters.mel(
         sr=SAMPLE_RATE, n_fft=N_FFT, n_mels=N_MELS,
         fmin=FMIN, fmax=FMAX, htk=True, norm=None,
     ).astype(np.float32)
+    # Normalize: divide each band's weights by their sum → weighted average
+    row_sums = fb.sum(axis=1, keepdims=True)
+    row_sums = np.maximum(row_sums, 1e-10)  # avoid division by zero
+    fb /= row_sums
+    return fb
 
 
 def build_mel_filterbank_torch(cfg: dict, device) -> "torch.Tensor":
     """Build mel filterbank as torch tensor on device. Shape: (n_mels, n_fft//2 + 1).
 
     Reads audio params from config dict for flexibility (supports custom n_mels, fmin, etc).
+    Normalized to weighted average (matching firmware ``computeMelBandsFrom()``).
     """
     import librosa
     import torch
@@ -53,8 +65,14 @@ def build_mel_filterbank_torch(cfg: dict, device) -> "torch.Tensor":
         fmin=cfg["audio"]["fmin"],
         fmax=cfg["audio"]["fmax"],
         htk=True, norm=None,
-    )
-    return torch.from_numpy(mel_basis.astype(np.float32)).to(device)
+    ).astype(np.float32)
+    # Normalize: divide each band's weights by their sum → weighted average
+    # Matches firmware SharedSpectralAnalysis::computeMelBandsFrom() which
+    # computes sum(mag*weight)/sum(weight), not just sum(mag*weight).
+    row_sums = mel_basis.sum(axis=1, keepdims=True)
+    row_sums = np.maximum(row_sums, 1e-10)
+    mel_basis /= row_sums
+    return torch.from_numpy(mel_basis).to(device)
 
 
 def apply_spectral_noise_subtraction(magnitudes: np.ndarray,

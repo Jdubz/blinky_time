@@ -15,10 +15,13 @@
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
-// Memory (v2, current):  ~20 KB flash, 16 KB arena + 3.3 KB context = ~19 KB RAM
-// Memory (v3, planned):  ~34 KB flash, 16 KB arena + 13 KB context  = ~29 KB RAM
-// Arena and context buffer are pre-sized for v3 (~18 KB over v2's needs).
-// Inference: ~3-5 ms per frame (Cortex-M4F @ 64 MHz + CMSIS-NN)
+// Memory (5L v4/v6):  ~33 KB flash, ~14 KB arena + 13 KB context (128 frames) = ~27 KB RAM
+// Memory (7L v7):     ~46 KB flash, ~28 KB arena + 27 KB context (256 frames) = ~55 KB RAM
+// Memory (7L v8):     ~73 KB flash, ~53 KB arena + 27 KB context (256 frames) = ~80 KB RAM
+// Arena sized to 96 KB (generous headroom). Context pre-sized for 256 frames.
+// Runtime contextLen_ adapts to actual model.
+// Inference: ~79 ms per frame (5L BN-fused), ~120+ ms per frame (7L) (Cortex-M4F @ 64 MHz)
+// Profiling: Conv2D ~37ms, ADD reqant ~24ms, rest ~18ms. MicroProfiler prints every 50 frames.
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)
 // ============================================================================
@@ -29,6 +32,7 @@
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_profiler.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 #include "beat_model_data.h"
@@ -54,36 +58,54 @@ public:
         // setup() already initializes Serial.
 
         model_ = tflite::GetModel(beat_model_data);
-        if (model_ == nullptr || model_->version() != TFLITE_SCHEMA_VERSION) {
+        if (model_ == nullptr) {
+            initError_ = 1;
+            return false;
+        }
+        if (model_->version() != TFLITE_SCHEMA_VERSION) {
+            initError_ = 2;
+            initSchemaVersion_ = model_->version();
             return false;
         }
 
         // Register ops used by our causal CNN model.
         // Conv1D → Conv2D (TFLite internal), ZeroPadding1D → Pad,
-        // BatchNorm may fuse into conv weights during export, or remain as
-        // separate Mul/Add ops. ReLU is used after each conv layer.
-        // If AllocateTensors fails, check tflite model ops with visualizer.
+        // BatchNorm fused into conv weights during export, remaining as Mul/Add.
+        // Dilated convs (dilation > 1) use SpaceToBatchNd/BatchToSpaceNd.
+        // EXPAND_DIMS is inserted by TFLite converter for shape manipulation.
+        // If AllocateTensors fails, inspect model ops with:
+        //   python -c "import tensorflow as tf; i=tf.lite.Interpreter('model.tflite'); ..."
         static tflite::MicroErrorReporter micro_error_reporter;
-        static tflite::MicroMutableOpResolver<10> resolver;
+        static tflite::MicroMutableOpResolver<12> resolver;
         resolver.AddConv2D();          // Conv1D is implemented as Conv2D internally
         resolver.AddReshape();
-        resolver.AddFullyConnected();
+        resolver.AddExpandDims();      // Shape manipulation (TFLite converter inserts)
         resolver.AddLogistic();        // Sigmoid (output layer)
         resolver.AddQuantize();
         resolver.AddDequantize();
         resolver.AddPad();             // ZeroPadding1D (causal padding)
         resolver.AddMul();             // BatchNorm (if not fused)
         resolver.AddAdd();             // BatchNorm bias (if not fused)
-        resolver.AddRelu();            // ReLU activation after conv layers
+        resolver.AddSpaceToBatchNd();  // Dilated conv (dilation > 1)
+        resolver.AddBatchToSpaceNd();  // Dilated conv output reshape
+        // Slot 12 reserved. Removed ops: FullyConnected (no FC layers in v4-v8),
+        // ReLU (fused into Conv activation). If loading an older model that needs
+        // these, AllocateTensors will fail with error=3 — re-add the op here.
+
+        static tflite::MicroProfiler micro_profiler;
+        profiler_ = &micro_profiler;
 
         static tflite::MicroInterpreter static_interpreter(
             model_, resolver, tensorArena_, TENSOR_ARENA_SIZE,
-            &micro_error_reporter);
+            &micro_error_reporter, nullptr, &micro_profiler);
         interpreter_ = &static_interpreter;
 
-        if (interpreter_->AllocateTensors() != kTfLiteOk) {
+        TfLiteStatus allocStatus = interpreter_->AllocateTensors();
+        if (allocStatus != kTfLiteOk) {
+            initError_ = 3;
             return false;
         }
+        arenaUsed_ = interpreter_->arena_used_bytes();
 
         input_ = interpreter_->input(0);
         output_ = interpreter_->output(0);
@@ -141,6 +163,7 @@ public:
         }
 
         // Copy context to input tensor (handles quantization if INT8)
+        unsigned long tQuant0 = micros();
         if (input_->type == kTfLiteInt8) {
             float scale = input_->params.scale;
             int32_t zero_point = input_->params.zero_point;
@@ -155,10 +178,36 @@ public:
             memcpy(input_->data.f, contextBuffer_,
                    contextLen_ * INPUT_MEL_BANDS * sizeof(float));
         }
+        lastQuantUs_ = micros() - tQuant0;
 
-        // Run inference
+        // Run inference (with timing and per-op profiling)
+        if (profiler_) profiler_->ClearEvents();
+        unsigned long t0 = micros();
         if (interpreter_->Invoke() != kTfLiteOk) {
             return 0.0f;
+        }
+        lastInferUs_ = micros() - t0;
+
+        // Per-operator profiling: only when enabled via `set nnprofile 1`.
+        // Prints [NNPROF] block every 50 inferences (~10s at 5 FPS).
+        // Disabled by default to avoid polluting the serial stream / breaking JSON parsers.
+        inferCount_++;
+        if (profileEnabled_ && inferCount_ % 50 == 0) {
+            Serial.print(F("[NNPROF] cnt="));
+            Serial.print(inferCount_);
+            Serial.print(F(" inv="));
+            Serial.print(lastInferUs_);
+            Serial.print(F(" q="));
+            Serial.print(lastQuantUs_);
+            if (profiler_) {
+                Serial.print(F(" ticks="));
+                Serial.print(profiler_->GetTotalTicks());
+            }
+            Serial.println();
+            if (profiler_) {
+                profiler_->Log();
+            }
+            Serial.println(F("[/NNPROF]"));
         }
 
         // Extract outputs from last frame
@@ -176,6 +225,39 @@ public:
 
     /** Whether model has a downbeat output head. */
     bool hasDownbeatOutput() const { return outputChannels_ >= 2; }
+
+    /** Enable/disable per-operator profiling output to Serial. */
+    void setProfileEnabled(bool enabled) { profileEnabled_ = enabled; }
+    bool isProfileEnabled() const { return profileEnabled_; }
+
+    /** Print diagnostic info to Serial (call after Serial.begin). */
+    void printDiagnostics() const {
+        Serial.print(F("[NN] ready="));
+        Serial.print(ready_ ? F("yes") : F("no"));
+        if (ready_) {
+            Serial.print(F(" arena="));
+            Serial.print(arenaUsed_);
+            Serial.print(F("/"));
+            Serial.print(TENSOR_ARENA_SIZE);
+            Serial.print(F(" channels="));
+            Serial.print(outputChannels_);
+            Serial.print(F(" context="));
+            Serial.print(contextLen_);
+            Serial.print(F(" infer="));
+            Serial.print(lastInferUs_ / 1000);
+            Serial.print(F("ms quant="));
+            Serial.print(lastQuantUs_ / 1000);
+            Serial.print(F("ms"));
+        } else {
+            Serial.print(F(" error="));
+            Serial.print(initError_);
+            if (initError_ == 2) {
+                Serial.print(F(" schema="));
+                Serial.print(initSchemaVersion_);
+            }
+        }
+        Serial.println();
+    }
 
 private:
     float extractOutput(int frame, int channel) {
@@ -196,27 +278,36 @@ private:
         return value;
     }
 
-    // Tensor arena — pre-allocated, no dynamic memory
-    // 16 KB: sized for v3 wider model (v2 needs ~8 KB, but pre-provisioned
-    // to avoid a firmware update when v3 ships)
-    static constexpr int TENSOR_ARENA_SIZE = 16384;
+    // Tensor arena — pre-allocated, no dynamic memory.
+    // Only exists in NN=1 builds (#ifdef ENABLE_NN_BEAT_ACTIVATION).
+    // Measured: v6 BN-fused 14 KB, v7 28 KB. 96 KB covers all deployed models
+    // with headroom for future architectures. Non-NN builds pay zero cost.
+    static constexpr int TENSOR_ARENA_SIZE = 98304;  // 96 KB
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
-    // Context buffer for sliding window — pre-sized for v3 wider model.
-    // v2 uses 32 frames; v3 needs up to 128. Runtime contextLen_ is set from
-    // the model's actual input shape, so only the needed portion is used.
-    static constexpr int MAX_CONTEXT = 128;
+    // Context buffer for sliding window.
+    // 5L models (v4/v6) use 128 frames; 7L models (v7/v8) need 256.
+    // Runtime contextLen_ is set from the model's actual input shape.
+    static constexpr int MAX_CONTEXT = 256;
     float contextBuffer_[MAX_CONTEXT * INPUT_MEL_BANDS];
     int contextLen_ = 0;      // Actual context length from model input shape
     int contextWriteIdx_ = 0; // How many frames we've written so far
 
     const tflite::Model* model_ = nullptr;
     tflite::MicroInterpreter* interpreter_ = nullptr;
+    tflite::MicroProfiler* profiler_ = nullptr;
     TfLiteTensor* input_ = nullptr;
     TfLiteTensor* output_ = nullptr;
     int outputChannels_ = 1;  // 1 = beat only, 2 = beat + downbeat
     float lastDownbeat_ = 0.0f;
     bool ready_ = false;
+    bool profileEnabled_ = false;     // Runtime toggle for [NNPROF] serial output
+    uint32_t inferCount_ = 0;         // Inference counter for periodic profile
+    int initError_ = 0;       // 0=not attempted, 1=null model, 2=schema, 3=alloc
+    int initSchemaVersion_ = 0;
+    size_t arenaUsed_ = 0;
+    unsigned long lastInferUs_ = 0;   // Last Invoke() time in microseconds
+    unsigned long lastQuantUs_ = 0;   // Last quantization loop time in microseconds
 };
 
 #else
@@ -230,6 +321,9 @@ public:
     bool isReady() const { return false; }
     float getLastDownbeat() const { return 0.0f; }
     bool hasDownbeatOutput() const { return false; }
+    void setProfileEnabled(bool) {}
+    bool isProfileEnabled() const { return false; }
+    void printDiagnostics() const { Serial.println(F("[NN] not compiled")); }
 };
 
 #endif // ENABLE_NN_BEAT_ACTIVATION

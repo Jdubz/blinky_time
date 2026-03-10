@@ -247,7 +247,7 @@ void SerialConsole::registerRhythmSettings() {
 
     // CBSS beat tracking parameters
     settings_.registerFloat("cbssalpha", &audioCtrl_->cbssAlpha, "rhythm",
-        "CBSS weighting (0.8-0.95, higher=more predictive)", 0.5f, 0.99f);
+        "CBSS weighting (0.8-0.95). NN auto-lowers to 0.8 if higher", 0.5f, 0.99f);
     settings_.registerFloat("cbsstight", &audioCtrl_->cbssTightness, "rhythm",
         "CBSS log-Gaussian tightness (higher=stricter tempo)", 1.0f, 20.0f);
     settings_.registerFloat("beatconfdecay", &audioCtrl_->beatConfidenceDecay, "rhythm",
@@ -260,7 +260,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("cbssthresh", &audioCtrl_->cbssThresholdFactor, "rhythm",
         "CBSS adaptive threshold factor (0=off, beat fires only if CBSS > factor*mean)", 0.0f, 2.0f);
     settings_.registerFloat("cbsscontrast", &audioCtrl_->cbssContrast, "rhythm",
-        "Power-law ODF contrast before CBSS (1=linear, 2=BTrack-style square)", 0.5f, 4.0f);
+        "Power-law ODF contrast before CBSS (1=off, 2=square). NN auto-sets 2.0 if 1.0", 0.5f, 4.0f);
     settings_.registerUint8("warmupbeats", &audioCtrl_->cbssWarmupBeats, "rhythm",
         "CBSS warmup beats: lower alpha for first N beats (0=disabled)", 0, 32);
     settings_.registerUint8("onsetsnap", &audioCtrl_->onsetSnapWindow, "rhythm",
@@ -271,13 +271,15 @@ void SerialConsole::registerRhythmSettings() {
         "ODF smooth window (3-11, odd)", 3, 11);
     // (ioi/ft registrations removed v52 — dead code since v28)
     settings_.registerBool("odfmeansub", &audioCtrl_->odfMeanSubEnabled, "rhythm",
-        "ODF mean subtraction before autocorrelation (BTrack-style detrending)");
+        "ODF mean subtraction before ACF. NN auto-enables (smooth baseline)");
     settings_.registerBool("beatboundary", &audioCtrl_->beatBoundaryTempo, "rhythm",
         "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
     settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",
         "Use BandFlux pre-threshold as CBSS ODF (BTrack-style unified, Phase 2.4)");
     settings_.registerBool("nnbeat", &audioCtrl_->nnBeatActivation, "rhythm",
         "Use NN beat activation as ODF (overrides unifiedOdf when model loaded)");
+    settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "rhythm",
+        "Enable [NNPROF] per-operator timing output (default off, clutters serial)");
     settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
         "Local-mean ODF threshold before autocorrelation (BTrack-style, v32)");
     settings_.registerUint8("odfthreshwin", &audioCtrl_->odfThreshWindow, "rhythm",
@@ -1929,6 +1931,8 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->wasLastBeatPredicted() ? 1 : 0);
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
+            Serial.print(F(",\"db\":"));
+            Serial.print(audio.downbeat, 2);
 
             // Debug mode: add Bayesian tempo state for tuning
             if (streamDebug_) {
@@ -1979,6 +1983,30 @@ void SerialConsole::streamTick() {
 // === ENSEMBLE DETECTOR COMMANDS ===
 bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     // Handle "show detectors" - list all detector states
+    if (strcmp(cmd, "show nn") == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        audioCtrl_->getBeatActivationNN().printDiagnostics();
+        // Show effective NN-mode parameter overrides so users aren't surprised
+        bool nnActive = audioCtrl_->nnBeatActivation &&
+                        audioCtrl_->getBeatActivationNN().isReady();
+        if (nnActive) {
+            float contrast = audioCtrl_->cbssContrast;
+            float alpha = audioCtrl_->cbssAlpha;
+            bool meanSub = audioCtrl_->odfMeanSubEnabled;
+            Serial.print(F("[NN] overrides: contrast="));
+            Serial.print((contrast == 1.0f) ? 2.0f : contrast);
+            Serial.print(F(" alpha="));
+            Serial.print((alpha > 0.8f) ? 0.8f : alpha);
+            Serial.print(F(" odfMeanSub=on"));
+            if (!meanSub) Serial.print(F(" (auto)"));
+            Serial.println();
+        }
+        return true;
+    }
+
     if (strcmp(cmd, "show detectors") == 0 || strcmp(cmd, "detectors") == 0) {
         if (!audioCtrl_) {
             Serial.println(F("ERROR: AudioController not available"));

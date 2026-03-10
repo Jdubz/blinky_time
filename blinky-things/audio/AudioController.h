@@ -333,6 +333,7 @@ public:
     // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
     // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
     bool nnBeatActivation = true;        // Use NN beat activation as ODF (A/B tested, 11/18 wins)
+    bool nnProfile = false;              // Enable [NNPROF] per-operator timing output to Serial
 
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
@@ -448,7 +449,7 @@ public:
 
     // === BAYESIAN TEMPO FUSION ===
     // Fuses autocorrelation, Fourier tempogram, comb filter bank, and IOI histogram
-    // into a unified posterior distribution over 40 tempo bins (60-180 BPM).
+    // into a unified posterior distribution over 20 tempo bins (~60-198 BPM).
     // Each signal provides an observation likelihood; the posterior = prior × Π(observations).
     float bayesLambda = 0.60f;           // Transition tightness (0.01=rigid, 1.0=loose)
     float bayesPriorCenter = 128.0f;     // Static prior center BPM (Gaussian)
@@ -459,7 +460,7 @@ public:
     float posteriorFloor = 0.05f;        // Uniform mixing ratio to prevent mode lock (0=off, 0.05=5% floor)
     float disambigNudge = 0.15f;         // Posterior mass transfer when disambiguation corrects (0=off)
     float harmonicTransWeight = 0.30f;   // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
-    float rayleighBpm = 120.0f;          // Rayleigh prior peak BPM (60-180)
+    float rayleighBpm = 140.0f;          // Rayleigh prior peak BPM (v63: 120→140, fewer octave errors on fast tracks)
     bool fold32Enabled = false;           // 3:2 octave folding: fold evidence from 2L/3 into L (v44, OFF — no net benefit)
     bool sesquiCheckEnabled = false;      // 3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44, OFF — no net benefit)
     bool bidirectionalSnap = true;        // Delay beat by 3 frames for bidirectional onset snap (v44)
@@ -610,6 +611,7 @@ private:
 
     // === NN BEAT ACTIVATION ===
     BeatActivationNN beatActivationNN_;
+    bool nnActive_ = false;  // Cached per-update: nnBeatActivation && beatActivationNN_.isReady()
 
     // === RHYTHM TRACKING STATE ===
 
@@ -623,13 +625,14 @@ private:
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
-    // Spectral flux: previous frame magnitudes for frame-to-frame comparison
+    // Legacy spectral flux state — only used by computeSpectralFluxBands(),
+    // which is the fallback ODF path when BOTH unifiedOdf=false AND nnBeatActivation=false.
+    // In practice both default to true, making this ~1 KB dead weight. Kept as a
+    // runtime-togglable fallback; safe to remove if both toggles are permanently retired.
     static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
     float prevMagnitudes_[SPECTRAL_BINS] = {0};
     bool prevMagnitudesValid_ = false;  // First frame has no previous
-
-    // Maximum-filtered previous magnitudes for vibrato suppression (SuperFlux style)
-    float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};
+    float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};  // SuperFlux vibrato suppression
 
     // Comb filter bank (independent tempo validation)
     CombFilterBank combFilterBank_;

@@ -3,6 +3,7 @@ data/audio/
 data/labels/
 data/processed/
 data/processed-deep/
+data/processed-deep-v2/
 
 # Calibration captures and generated audio (large, reproducible via calibrate_mic.py)
 data/calibration/

@@ -191,7 +191,7 @@ RenderPipeline → LED Output
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
    - ODF source: BandFlux (default) or NN beat activation (`nnbeat=1`, requires NN=1 build)
-   - Bayesian tempo fusion: 20-bin posterior (60-180 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
+   - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
    - BTrack-style predict+countdown beat detection with CBSS adaptive threshold (cbssthresh=1.0)
@@ -330,8 +330,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + forward filter ~3.5 KB). +16 KB tensor arena if NN=1 build.
-- Flash: ~301 KB base, ~426 KB with NN=1 (includes 33 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + forward filter ~5.2 KB when enabled). +96 KB tensor arena (static, 14-28 KB used) + 27 KB context buffer if NN=1 build. Total NN=1: ~145 KB of 256 KB.
+- Flash: ~288 KB base, ~411 KB with NN=1 (includes 46 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -426,7 +426,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over 60-200 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 60
+- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 60
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **ODF mean subtraction disabled** (v32): Raw ODF feeds ACF — global mean sub was destroying peak structure (+70% F1)
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0 (+13% F1)
@@ -442,4 +442,4 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **Spectral noise subtraction** (v56): Martin 2001 minimum statistics noise estimation, per-bin oversubtraction after FFT (`noiseest=0`, default OFF — A/B tested, hurts BPM accuracy)
 - **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
 - **Shared FFT + spectral pipeline**: All detectors share a single FFT → compressor → whitening chain
-- **Disabled detectors use zero CPU**: Only enabled detectors are processed each frame
+- **Solo detector**: All non-BandFlux detectors removed from firmware in v62 (~1.5 KB RAM, ~600 lines saved)

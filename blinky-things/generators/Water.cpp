@@ -82,6 +82,11 @@ void Water::spawnParticles(float dt) {
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
         uint8_t waveDrops = 3 + (uint8_t)(5 * audio_.rhythmStrength);
         dropCount += (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
+
+        // Downbeat: extra wave surge every ~4 beats
+        if (audio_.downbeat > 0.5f) {
+            dropCount += (uint8_t)(waveDrops * audio_.downbeat);
+        }
     }
 
     // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)

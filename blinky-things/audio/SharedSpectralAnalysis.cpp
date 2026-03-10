@@ -38,10 +38,15 @@ static const MelBandDef MEL_BANDS[SpectralConstants::NUM_MEL_BANDS] = {
     {86, 100, 116},// 21: 6250 Hz center
 
     // Band 22-25: High frequencies (7-8 kHz)
+    // NOTE: Bands 23-25 are identical (same start/center/end bins). FFT-256 at
+    // 16 kHz only has 128 bins, so the mel scale runs out of distinct bins above
+    // ~7 kHz. These 3 degenerate bands produce identical values every frame,
+    // wasting ~12% of NN input bandwidth. Consider reducing to 23 bands if
+    // retraining from scratch. Not worth changing mid-training cycle.
     {100, 116, 127},// 22: 7250 Hz center
     {116, 127, 127},// 23: 8000 Hz center (at Nyquist)
-    {116, 127, 127},// 24: (extended)
-    {116, 127, 127} // 25: (extended)
+    {116, 127, 127},// 24: degenerate (identical to band 23)
+    {116, 127, 127} // 25: degenerate (identical to band 23)
 };
 
 SharedSpectralAnalysis::SharedSpectralAnalysis()
