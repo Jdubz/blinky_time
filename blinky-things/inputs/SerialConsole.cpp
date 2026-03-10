@@ -1929,6 +1929,8 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->wasLastBeatPredicted() ? 1 : 0);
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
+            Serial.print(F(",\"db\":"));
+            Serial.print(audio.downbeat, 2);
 
             // Debug mode: add Bayesian tempo state for tuning
             if (streamDebug_) {
