@@ -247,7 +247,7 @@ void SerialConsole::registerRhythmSettings() {
 
     // CBSS beat tracking parameters
     settings_.registerFloat("cbssalpha", &audioCtrl_->cbssAlpha, "rhythm",
-        "CBSS weighting (0.8-0.95, higher=more predictive)", 0.5f, 0.99f);
+        "CBSS weighting (0.8-0.95). NN auto-lowers to 0.8 if higher", 0.5f, 0.99f);
     settings_.registerFloat("cbsstight", &audioCtrl_->cbssTightness, "rhythm",
         "CBSS log-Gaussian tightness (higher=stricter tempo)", 1.0f, 20.0f);
     settings_.registerFloat("beatconfdecay", &audioCtrl_->beatConfidenceDecay, "rhythm",
@@ -260,7 +260,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("cbssthresh", &audioCtrl_->cbssThresholdFactor, "rhythm",
         "CBSS adaptive threshold factor (0=off, beat fires only if CBSS > factor*mean)", 0.0f, 2.0f);
     settings_.registerFloat("cbsscontrast", &audioCtrl_->cbssContrast, "rhythm",
-        "Power-law ODF contrast before CBSS (1=linear, 2=BTrack-style square)", 0.5f, 4.0f);
+        "Power-law ODF contrast before CBSS (1=off, 2=square). NN auto-sets 2.0 if 1.0", 0.5f, 4.0f);
     settings_.registerUint8("warmupbeats", &audioCtrl_->cbssWarmupBeats, "rhythm",
         "CBSS warmup beats: lower alpha for first N beats (0=disabled)", 0, 32);
     settings_.registerUint8("onsetsnap", &audioCtrl_->onsetSnapWindow, "rhythm",
@@ -271,7 +271,7 @@ void SerialConsole::registerRhythmSettings() {
         "ODF smooth window (3-11, odd)", 3, 11);
     // (ioi/ft registrations removed v52 — dead code since v28)
     settings_.registerBool("odfmeansub", &audioCtrl_->odfMeanSubEnabled, "rhythm",
-        "ODF mean subtraction before autocorrelation (BTrack-style detrending)");
+        "ODF mean subtraction before ACF. NN auto-enables (smooth baseline)");
     settings_.registerBool("beatboundary", &audioCtrl_->beatBoundaryTempo, "rhythm",
         "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
     settings_.registerBool("unifiedodf", &audioCtrl_->unifiedOdf, "rhythm",

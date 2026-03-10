@@ -91,7 +91,8 @@ public:
     // Version 58: Hybrid phase tracker (fwdPhaseOnly), nnBeatActivation default ON
     // Version 59: Bayesian posterior bias for forward filter (fwdBayesBias)
     // Version 60: Asymmetric non-beat observation model for forward filter (fwdAsymmetry)
-    static const uint8_t SETTINGS_VERSION = 60;
+    // Version 61: rayleighBpm default 120→140 (sweep: fewer octave errors), nnProfile setting
+    static const uint8_t SETTINGS_VERSION = 61;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {

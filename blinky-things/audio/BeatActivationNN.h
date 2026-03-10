@@ -192,7 +192,7 @@ public:
         // Prints [NNPROF] block every 50 inferences (~10s at 5 FPS).
         // Disabled by default to avoid polluting the serial stream / breaking JSON parsers.
         inferCount_++;
-        if (profileEnabled_ && inferCount_ % 50 == 1) {
+        if (profileEnabled_ && inferCount_ % 50 == 0) {
             Serial.print(F("[NNPROF] cnt="));
             Serial.print(inferCount_);
             Serial.print(F(" inv="));

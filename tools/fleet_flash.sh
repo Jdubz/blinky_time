@@ -156,7 +156,7 @@ for port in "${PORTS[@]}"; do
     # Check if device is responsive
     if ! timeout 2 python3 -c "
 import serial
-s = serial.Serial('$port', 115200, timeout=1)
+s = serial.Serial('${port}', 115200, timeout=1)
 s.close()
 " 2>/dev/null; then
         warn "$port_name: port not accessible, skipping"
