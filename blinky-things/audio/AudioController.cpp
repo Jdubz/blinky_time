@@ -360,9 +360,15 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 7. CBSS input: apply contrast to onset strength (shared across all beat tracking modes)
+    //    NN ODF is smooth [0,1] with non-zero baseline (~0.2-0.4). Power-law contrast
+    //    (squaring) sharpens beat peaks vs baseline: 0.8→0.64, 0.3→0.09 (ratio 7:1 vs 2.7:1).
+    //    BTrack applies squaring (contrast=2.0) by default; our BandFlux is already spiky so
+    //    doesn't need it (default 1.0). For NN, apply 2.0 unless user explicitly set contrast.
     float cbssInput = onsetStrength;
-    if (cbssContrast != 1.0f && cbssInput > 0.0f) {
-        cbssInput = powf(cbssInput, cbssContrast);
+    bool nnActive = nnBeatActivation && beatActivationNN_.isReady();
+    float effectiveContrast = (nnActive && cbssContrast == 1.0f) ? 2.0f : cbssContrast;
+    if (effectiveContrast != 1.0f && cbssInput > 0.0f) {
+        cbssInput = powf(cbssInput, effectiveContrast);
     }
 
     // 8. Update beat tracking
@@ -597,8 +603,12 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // ODF mean subtraction (BTrack-style detrending)
     // Removes DC bias from autocorrelation — without this, all lags appear
     // somewhat correlated due to the non-zero mean of the OSS buffer.
+    // Disabled for BandFlux (v32: raw ODF preserves ACF structure, +70% F1).
+    // Enabled for NN ODF: smooth [0,1] output has non-zero baseline (~0.2-0.4)
+    // that elevates all ACF lags equally, masking the true tempo peak.
+    bool nnActiveForACF = nnBeatActivation && beatActivationNN_.isReady();
     float ossMean = 0.0f;
-    if (odfMeanSubEnabled) {
+    if (odfMeanSubEnabled || nnActiveForACF) {
         for (int i = 0; i < ossCount_; i++) {
             ossMean += ossLinear[i];
         }
@@ -1470,12 +1480,20 @@ void AudioController::updateCBSS(float onsetStrength) {
         if (val > maxWeightedCBSS) maxWeightedCBSS = val;
     }
 
+    // NN ODF adaptation: lower alpha gives onsets more weight in the CBSS recursion.
+    // BandFlux peaks at ~2-5, so at alpha=0.9: onset weight = 0.1*3 = 0.3.
+    // NN peaks at ~0.6-0.9, so at alpha=0.9: onset weight = 0.1*0.8 = 0.08 (too weak).
+    // At alpha=0.8: onset weight = 0.2*0.8 = 0.16, still conservative but 2x stronger.
+    // Only override if user hasn't explicitly lowered cbssAlpha below the NN target.
+    bool nnActiveForCBSS = nnBeatActivation && beatActivationNN_.isReady();
+    float baseAlpha = (nnActiveForCBSS && cbssAlpha > 0.8f) ? 0.8f : cbssAlpha;
+
     // During warmup (first N beats), use lower alpha so onsets contribute more
     // to the CBSS. This gives ~4x more onset weight during initial phase acquisition,
     // preventing random phase lock from weak early CBSS values.
-    float effectiveAlpha = cbssAlpha;
+    float effectiveAlpha = baseAlpha;
     if (cbssWarmupBeats > 0 && beatCount_ < cbssWarmupBeats) {
-        effectiveAlpha = cbssAlpha * 0.55f;  // e.g., 0.9 * 0.55 = 0.495 → onset gets ~50% weight
+        effectiveAlpha = baseAlpha * 0.55f;  // e.g., 0.9 * 0.55 = 0.495 → onset gets ~50% weight
     }
 
     float cbssVal = (1.0f - effectiveAlpha) * onsetStrength + effectiveAlpha * maxWeightedCBSS;
