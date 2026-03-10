@@ -234,9 +234,9 @@ private:
 
     // Tensor arena — pre-allocated, no dynamic memory
     // Sized for the largest deployable model (v8: 7L ch48, 256-frame).
-    // Planner estimate: 48 KB; with metadata/scratch/alignment overhead: ~53 KB.
+    // SpaceToBatchND for dilated convs creates large intermediates (~18 KB at d=64).
     // 5L models (v4/v6) only use ~16 KB but the extra space is unused heap.
-    static constexpr int TENSOR_ARENA_SIZE = 98304;  // 96 KB (v8 7L ch48 with dilated convs)
+    static constexpr int TENSOR_ARENA_SIZE = 131072;  // 128 KB (v8 7L ch48 with dilated convs)
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
     // Context buffer for sliding window — sized for 7L deep models (v7/v8).
