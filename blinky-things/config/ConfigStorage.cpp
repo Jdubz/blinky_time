@@ -231,7 +231,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.downwardCorrectEnabled = false; // Downward harmonic correction (experimental, overcorrects mid-tempo)
     data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
     // (phaseCheck, PLP, harmonicSesqui defaults removed v44 — features deleted)
-    data_.music.rayleighBpm = 120.0f;       // Rayleigh prior peak BPM (v44: configurable, was hardcoded 120)
+    data_.music.rayleighBpm = 140.0f;       // Rayleigh prior peak BPM (v63: 120→140, sweep shows fewer octave errors)
     data_.music.tempoNudge = 0.8f;          // switchTempo posterior mass transfer (v44: was hardcoded 0.3)
     data_.music.fold32Enabled = false;      // 3:2 octave folding (v44: OFF — no net benefit in 18-track sweep)
     data_.music.sesquiCheckEnabled = false; // 3:2 shadow octave check (v44: OFF — no net benefit in 18-track sweep)

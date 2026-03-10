@@ -459,7 +459,7 @@ public:
     float posteriorFloor = 0.05f;        // Uniform mixing ratio to prevent mode lock (0=off, 0.05=5% floor)
     float disambigNudge = 0.15f;         // Posterior mass transfer when disambiguation corrects (0=off)
     float harmonicTransWeight = 0.30f;   // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
-    float rayleighBpm = 120.0f;          // Rayleigh prior peak BPM (60-180)
+    float rayleighBpm = 140.0f;          // Rayleigh prior peak BPM (v63: 120→140, fewer octave errors on fast tracks)
     bool fold32Enabled = false;           // 3:2 octave folding: fold evidence from 2L/3 into L (v44, OFF — no net benefit)
     bool sesquiCheckEnabled = false;      // 3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44, OFF — no net benefit)
     bool bidirectionalSnap = true;        // Delay beat by 3 frames for bidirectional onset snap (v44)

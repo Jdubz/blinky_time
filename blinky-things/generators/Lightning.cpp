@@ -78,6 +78,11 @@ void Lightning::spawnParticles(float dt) {
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
         uint8_t baseBolts = 2 + (uint8_t)(2 * audio_.rhythmStrength);
         boltCount += (uint8_t)(baseBolts * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
+
+        // Downbeat: extra bolts for dramatic bar-level impact
+        if (audio_.downbeat > 0.5f) {
+            boltCount += (uint8_t)(baseBolts * audio_.downbeat);
+        }
     }
 
     // ORGANIC-DRIVEN behavior (inverse rhythmStrength weighted)
