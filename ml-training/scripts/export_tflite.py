@@ -223,7 +223,10 @@ def estimate_tensor_arena(tflite_path: str) -> tuple[int, int]:
     # Constant tensors (weights, biases) have non-empty buffer data in the
     # flatbuffer and are read directly from flash. Mutable tensors (activations,
     # inputs, outputs) have empty buffers and must be allocated in the arena.
-    dtype_sizes = {0: 4, 1: 2, 2: 4, 3: 1, 7: 8, 9: 1, 12: 1, 15: 1}  # TfLiteType enum
+    # TensorType enum → element size in bytes (from TFLite schema)
+    # 0=FLOAT32, 1=FLOAT16, 2=INT32, 3=UINT8, 4=INT64, 6=BOOL,
+    # 7=INT16, 8=COMPLEX64, 9=INT8, 12=FLOAT64, 15=UINT32
+    dtype_sizes = {0: 4, 1: 2, 2: 4, 3: 1, 4: 8, 6: 1, 7: 2, 8: 8, 9: 1, 12: 8, 15: 4}
 
     mutable = []
     for i in range(sg.TensorsLength()):

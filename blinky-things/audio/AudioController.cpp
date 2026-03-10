@@ -141,7 +141,9 @@ bool AudioController::begin(uint32_t sampleRate) {
 
     // Initialize NN beat activation (fails gracefully if model not compiled in)
     beatActivationNN_.begin();
-    beatActivationNN_.printDiagnostics();
+    if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
+        beatActivationNN_.printDiagnostics();
+    }
 
     // Reset output
     control_ = AudioControl();

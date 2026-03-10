@@ -432,13 +432,18 @@ async function main() {
       devResults.push({ beatResult, phaseResult, dbResult, bpmResult, latency, nBeats: settledBeats.length });
     }
 
-    // Aggregate across devices (average)
-    const avgBeatF1 = devResults.reduce((s, d) => s + d.beatResult.f1, 0) / devResults.length;
-    const avgPhaseErr = devResults.reduce((s, d) => s + (isNaN(d.phaseResult.meanError) ? 0 : d.phaseResult.meanError), 0) / devResults.length;
-    const avgDbF1 = devResults.reduce((s, d) => s + d.dbResult.downbeatF1, 0) / devResults.length;
-    const avgDbDisc = devResults.reduce((s, d) => s + d.dbResult.discrimination, 0) / devResults.length;
-    const avgLatency = devResults.reduce((s, d) => s + d.latency, 0) / devResults.length;
-    const avgBpm = devResults.reduce((s, d) => s + (isNaN(d.bpmResult.detectedBpm) ? 0 : d.bpmResult.detectedBpm), 0) / devResults.length;
+    // Aggregate across devices (average of finite values only — NaN means
+    // device produced no settled beats, and treating as 0 would bias averages)
+    function meanFinite(getValue) {
+      const vals = devResults.map(getValue).filter(v => Number.isFinite(v));
+      return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : NaN;
+    }
+    const avgBeatF1 = meanFinite(d => d.beatResult.f1);
+    const avgPhaseErr = meanFinite(d => d.phaseResult.meanError);
+    const avgDbF1 = meanFinite(d => d.dbResult.downbeatF1);
+    const avgDbDisc = meanFinite(d => d.dbResult.discrimination);
+    const avgLatency = meanFinite(d => d.latency);
+    const avgBpm = meanFinite(d => d.bpmResult.detectedBpm);
 
     const trackResult = {
       track: name,

@@ -1987,6 +1987,21 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             return true;
         }
         audioCtrl_->getBeatActivationNN().printDiagnostics();
+        // Show effective NN-mode parameter overrides so users aren't surprised
+        bool nnActive = audioCtrl_->nnBeatActivation &&
+                        audioCtrl_->getBeatActivationNN().isReady();
+        if (nnActive) {
+            float contrast = audioCtrl_->cbssContrast;
+            float alpha = audioCtrl_->cbssAlpha;
+            bool meanSub = audioCtrl_->odfMeanSubEnabled;
+            Serial.print(F("[NN] overrides: contrast="));
+            Serial.print((contrast == 1.0f) ? 2.0f : contrast);
+            Serial.print(F(" alpha="));
+            Serial.print((alpha > 0.8f) ? 0.8f : alpha);
+            Serial.print(F(" odfMeanSub=on"));
+            if (!meanSub) Serial.print(F(" (auto)"));
+            Serial.println();
+        }
         return true;
     }
 

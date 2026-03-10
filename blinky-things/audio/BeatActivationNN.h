@@ -272,9 +272,10 @@ private:
         return value;
     }
 
-    // Tensor arena — pre-allocated, no dynamic memory
-    // Measured: v6 BN-fused 14 KB, v7 28 KB. 96 KB provides generous headroom.
-    // Prior "not deployable" claims were caused by missing ExpandDims op, not arena size.
+    // Tensor arena — pre-allocated, no dynamic memory.
+    // Only exists in NN=1 builds (#ifdef ENABLE_NN_BEAT_ACTIVATION).
+    // Measured: v6 BN-fused 14 KB, v7 28 KB. 96 KB covers all deployed models
+    // with headroom for future architectures. Non-NN builds pay zero cost.
     static constexpr int TENSOR_ARENA_SIZE = 98304;  // 96 KB
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 

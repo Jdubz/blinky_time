@@ -191,7 +191,7 @@ RenderPipeline → LED Output
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
    - ODF source: BandFlux (default) or NN beat activation (`nnbeat=1`, requires NN=1 build)
-   - Bayesian tempo fusion: 20-bin posterior (~55-180 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
+   - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
    - BTrack-style predict+countdown beat detection with CBSS adaptive threshold (cbssthresh=1.0)
@@ -426,7 +426,7 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 ### Key Features
 - **BandFlux Solo**: Single detector outperforms multi-detector combos
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over ~55-180 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 60
+- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 60
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **ODF mean subtraction disabled** (v32): Raw ODF feeds ACF — global mean sub was destroying peak structure (+70% F1)
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0 (+13% F1)
