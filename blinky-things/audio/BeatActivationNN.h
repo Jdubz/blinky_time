@@ -15,9 +15,9 @@
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
-// Memory (5L v4/v6):  ~33 KB flash, 48 KB arena + 13 KB context (128 frames) = ~61 KB RAM
-// Memory (7L v7):     ~46 KB flash, 48 KB arena + 27 KB context (256 frames) = ~75 KB RAM
-// Memory (7L v8):     ~73 KB flash, 48 KB arena + 27 KB context (256 frames) = ~75 KB RAM
+// Memory (5L v4/v6):  ~33 KB flash, 96 KB arena + 13 KB context (128 frames) = ~109 KB RAM
+// Memory (7L v7):     ~46 KB flash, 96 KB arena + 27 KB context (256 frames) = ~123 KB RAM
+// Memory (7L v8):     NOT deployable — 128 KB arena crashes device (heap exhaustion)
 // Context buffer pre-sized for 256 frames. Runtime contextLen_ adapts to actual model.
 // Inference: ~3-5 ms per frame (5L), ~5-12 ms per frame (7L) (Cortex-M4F @ 64 MHz)
 //
@@ -233,10 +233,10 @@ private:
     }
 
     // Tensor arena — pre-allocated, no dynamic memory
-    // Sized for the largest deployable model (v8: 7L ch48, 256-frame).
-    // SpaceToBatchND for dilated convs creates large intermediates (~18 KB at d=64).
+    // Sized for 7L ch32 model (v7). Largest activation: 12 KB (SpaceToBatchND at d=64).
+    // v8 (7L ch48) needs >96 KB but 128 KB crashes device (heap exhaustion).
     // 5L models (v4/v6) only use ~16 KB but the extra space is unused heap.
-    static constexpr int TENSOR_ARENA_SIZE = 131072;  // 128 KB (v8 7L ch48 with dilated convs)
+    static constexpr int TENSOR_ARENA_SIZE = 98304;  // 96 KB (v7 7L ch32 with dilated convs)
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
     // Context buffer for sliding window — sized for 7L deep models (v7/v8).
