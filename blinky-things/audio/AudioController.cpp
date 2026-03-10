@@ -140,12 +140,8 @@ bool AudioController::begin(uint32_t sampleRate) {
     beatExpectationSize_ = 0;
 
     // Initialize NN beat activation (fails gracefully if model not compiled in)
-    if (!beatActivationNN_.begin()) {
-        Serial.println(F("[AudioController] NN beat activation failed to initialize"));
-    } else {
-        Serial.print(F("[AudioController] NN beat activation ready, downbeat="));
-        Serial.println(beatActivationNN_.hasDownbeatOutput() ? F("yes") : F("no"));
-    }
+    beatActivationNN_.begin();
+    beatActivationNN_.printDiagnostics();
 
     // Reset output
     control_ = AudioControl();

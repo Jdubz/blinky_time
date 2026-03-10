@@ -56,14 +56,12 @@ public:
 
         model_ = tflite::GetModel(beat_model_data);
         if (model_ == nullptr) {
-            Serial.println(F("[NN] model data null"));
+            initError_ = 1;
             return false;
         }
         if (model_->version() != TFLITE_SCHEMA_VERSION) {
-            Serial.print(F("[NN] schema mismatch: model="));
-            Serial.print(model_->version());
-            Serial.print(F(" expected="));
-            Serial.println(TFLITE_SCHEMA_VERSION);
+            initError_ = 2;
+            initSchemaVersion_ = model_->version();
             return false;
         }
 
@@ -94,16 +92,10 @@ public:
 
         TfLiteStatus allocStatus = interpreter_->AllocateTensors();
         if (allocStatus != kTfLiteOk) {
-            Serial.print(F("[NN] AllocateTensors failed, arena="));
-            Serial.print(TENSOR_ARENA_SIZE);
-            Serial.print(F(" used="));
-            Serial.println(interpreter_->arena_used_bytes());
+            initError_ = 3;
             return false;
         }
-        Serial.print(F("[NN] arena used: "));
-        Serial.print(interpreter_->arena_used_bytes());
-        Serial.print(F("/"));
-        Serial.println(TENSOR_ARENA_SIZE);
+        arenaUsed_ = interpreter_->arena_used_bytes();
 
         input_ = interpreter_->input(0);
         output_ = interpreter_->output(0);
@@ -197,6 +189,30 @@ public:
     /** Whether model has a downbeat output head. */
     bool hasDownbeatOutput() const { return outputChannels_ >= 2; }
 
+    /** Print diagnostic info to Serial (call after Serial.begin). */
+    void printDiagnostics() const {
+        Serial.print(F("[NN] ready="));
+        Serial.print(ready_ ? F("yes") : F("no"));
+        if (ready_) {
+            Serial.print(F(" arena="));
+            Serial.print(arenaUsed_);
+            Serial.print(F("/"));
+            Serial.print(TENSOR_ARENA_SIZE);
+            Serial.print(F(" channels="));
+            Serial.print(outputChannels_);
+            Serial.print(F(" context="));
+            Serial.print(contextLen_);
+        } else {
+            Serial.print(F(" error="));
+            Serial.print(initError_);
+            if (initError_ == 2) {
+                Serial.print(F(" schema="));
+                Serial.print(initSchemaVersion_);
+            }
+        }
+        Serial.println();
+    }
+
 private:
     float extractOutput(int frame, int channel) {
         int idx = frame * outputChannels_ + channel;
@@ -238,6 +254,9 @@ private:
     int outputChannels_ = 1;  // 1 = beat only, 2 = beat + downbeat
     float lastDownbeat_ = 0.0f;
     bool ready_ = false;
+    int initError_ = 0;       // 0=not attempted, 1=null model, 2=schema, 3=alloc
+    int initSchemaVersion_ = 0;
+    size_t arenaUsed_ = 0;
 };
 
 #else
@@ -251,6 +270,7 @@ public:
     bool isReady() const { return false; }
     float getLastDownbeat() const { return 0.0f; }
     bool hasDownbeatOutput() const { return false; }
+    void printDiagnostics() const { Serial.println(F("[NN] not compiled")); }
 };
 
 #endif // ENABLE_NN_BEAT_ACTIVATION
