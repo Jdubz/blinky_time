@@ -55,7 +55,15 @@ public:
         // setup() already initializes Serial.
 
         model_ = tflite::GetModel(beat_model_data);
-        if (model_ == nullptr || model_->version() != TFLITE_SCHEMA_VERSION) {
+        if (model_ == nullptr) {
+            Serial.println(F("[NN] model data null"));
+            return false;
+        }
+        if (model_->version() != TFLITE_SCHEMA_VERSION) {
+            Serial.print(F("[NN] schema mismatch: model="));
+            Serial.print(model_->version());
+            Serial.print(F(" expected="));
+            Serial.println(TFLITE_SCHEMA_VERSION);
             return false;
         }
 
@@ -84,9 +92,18 @@ public:
             &micro_error_reporter);
         interpreter_ = &static_interpreter;
 
-        if (interpreter_->AllocateTensors() != kTfLiteOk) {
+        TfLiteStatus allocStatus = interpreter_->AllocateTensors();
+        if (allocStatus != kTfLiteOk) {
+            Serial.print(F("[NN] AllocateTensors failed, arena="));
+            Serial.print(TENSOR_ARENA_SIZE);
+            Serial.print(F(" used="));
+            Serial.println(interpreter_->arena_used_bytes());
             return false;
         }
+        Serial.print(F("[NN] arena used: "));
+        Serial.print(interpreter_->arena_used_bytes());
+        Serial.print(F("/"));
+        Serial.println(TENSOR_ARENA_SIZE);
 
         input_ = interpreter_->input(0);
         output_ = interpreter_->output(0);
