@@ -1981,6 +1981,15 @@ void SerialConsole::streamTick() {
 // === ENSEMBLE DETECTOR COMMANDS ===
 bool SerialConsole::handleEnsembleCommand(const char* cmd) {
     // Handle "show detectors" - list all detector states
+    if (strcmp(cmd, "show nn") == 0) {
+        if (!audioCtrl_) {
+            Serial.println(F("ERROR: AudioController not available"));
+            return true;
+        }
+        audioCtrl_->getBeatActivationNN().printDiagnostics();
+        return true;
+    }
+
     if (strcmp(cmd, "show detectors") == 0 || strcmp(cmd, "detectors") == 0) {
         if (!audioCtrl_) {
             Serial.println(F("ERROR: AudioController not available"));
