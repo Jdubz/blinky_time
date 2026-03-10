@@ -65,7 +65,7 @@ public:
         // separate Mul/Add ops. ReLU is used after each conv layer.
         // If AllocateTensors fails, check tflite model ops with visualizer.
         static tflite::MicroErrorReporter micro_error_reporter;
-        static tflite::MicroMutableOpResolver<10> resolver;
+        static tflite::MicroMutableOpResolver<12> resolver;
         resolver.AddConv2D();          // Conv1D is implemented as Conv2D internally
         resolver.AddReshape();
         resolver.AddFullyConnected();
@@ -76,6 +76,8 @@ public:
         resolver.AddMul();             // BatchNorm (if not fused)
         resolver.AddAdd();             // BatchNorm bias (if not fused)
         resolver.AddRelu();            // ReLU activation after conv layers
+        resolver.AddSpaceToBatchNd();  // Dilated conv (dilation > 1)
+        resolver.AddBatchToSpaceNd();  // Dilated conv output reshape
 
         static tflite::MicroInterpreter static_interpreter(
             model_, resolver, tensorArena_, TENSOR_ARENA_SIZE,
