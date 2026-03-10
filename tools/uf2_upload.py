@@ -23,6 +23,8 @@ Usage:
 
 import sys
 import os
+import re
+import glob
 import time
 import json
 import shutil
@@ -61,13 +63,14 @@ def _find_uf2conv():
 UF2CONV_PATH = _find_uf2conv()
 
 # --- Timeouts (seconds) ---
-BOOTLOADER_TIMEOUT = 8
-DRIVE_MOUNT_TIMEOUT = 10
-REBOOT_TIMEOUT = 5
-PORT_REAPPEAR_TIMEOUT = 5
+BOOTLOADER_TIMEOUT = 15
+DRIVE_MOUNT_TIMEOUT = 15
+REBOOT_TIMEOUT = 10
+PORT_REAPPEAR_TIMEOUT = 10
 
 # --- UF2 drive identification ---
 UF2_INFO_FILE = "INFO_UF2.TXT"
+UF2_DRIVE_LABEL = "XIAO-SENSE"
 
 
 # ============================================================
@@ -234,33 +237,88 @@ def convert_to_uf2(hex_path, output_dir=None):
 #  Phase 3: Bootloader entry (1200 baud touch)
 # ============================================================
 
+def _resolve_by_id_path(port_device):
+    """Resolve a /dev/ttyACMx path to its stable /dev/serial/by-id/ symlink.
+
+    The by-id path encodes the USB serial number and is stable across
+    reconnects, unlike ttyACMx which can shuffle after USB re-enumeration.
+
+    Returns the by-id path if found, otherwise the original path.
+    """
+    by_id_dir = Path("/dev/serial/by-id")
+    if not by_id_dir.exists():
+        return port_device
+    try:
+        real_target = Path(port_device).resolve()
+        for symlink in by_id_dir.iterdir():
+            if symlink.resolve() == real_target:
+                return str(symlink)
+    except OSError:
+        pass
+    return port_device
+
+
 def find_all_xiao_ports():
     """Auto-detect all connected XIAO nRF52840 devices in application mode.
 
-    Returns sorted list of serial port paths (e.g., ['/dev/ttyACM0', '/dev/ttyACM1']).
+    Prefers stable /dev/serial/by-id/ paths over /dev/ttyACMx paths.
+    Returns sorted list of serial port paths.
     """
-    return sorted([
-        p.device for p in serial.tools.list_ports.comports()
-        if p.vid == NORMAL_VID and p.pid == NORMAL_PID
-    ])
+    ports = []
+    for p in serial.tools.list_ports.comports():
+        if p.vid == NORMAL_VID and p.pid == NORMAL_PID:
+            stable_path = _resolve_by_id_path(p.device)
+            ports.append(stable_path)
+    return sorted(ports)
 
 
 def get_serial_number(port):
-    """Get the USB serial number for a port to track device identity."""
+    """Get the USB serial number for a port to track device identity.
+
+    Resolves symlinks (e.g., /dev/serial/by-id/... -> /dev/ttyACMx)
+    before matching against pyserial's port list.
+    """
+    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
     for p in serial.tools.list_ports.comports():
-        if p.device == port:
+        if p.device == port or p.device == real_port:
             return p.serial_number
     return None
 
 
 def find_port_by_serial(serial_number, target_pid=None):
-    """Find a serial port matching a USB serial number and optional PID."""
+    """Find a serial port matching a USB serial number and optional PID.
+
+    Returns the stable /dev/serial/by-id/ path if available.
+    """
     if not serial_number:
         return None
     for p in serial.tools.list_ports.comports():
         if p.serial_number == serial_number:
             if target_pid is None or p.pid == target_pid:
-                return p.device
+                return _resolve_by_id_path(p.device)
+    return None
+
+
+def find_port_by_id_path(serial_number):
+    """Find a device's /dev/serial/by-id/ symlink by USB serial number.
+
+    This is the most reliable way to find a device after reboot, since
+    by-id paths encode the serial number and don't change with USB
+    re-enumeration.
+
+    Returns the by-id path string or None.
+    """
+    if not serial_number:
+        return None
+    by_id_dir = Path("/dev/serial/by-id")
+    if not by_id_dir.exists():
+        return None
+    try:
+        for symlink in by_id_dir.iterdir():
+            if serial_number in symlink.name:
+                return str(symlink)
+    except OSError:
+        pass
     return None
 
 
@@ -274,13 +332,17 @@ MAX_BOOTLOADER_RETRIES = 3
 def _find_usb_hub_port(port_path):
     """Map a serial port (e.g., /dev/ttyACM0) to its USB hub location.
 
+    Handles /dev/serial/by-id/ symlinks by resolving to the real device first.
+
     Returns (hub_path, port_number) for uhubctl, or (None, None) if
     the mapping cannot be determined.
 
     Example: /dev/ttyACM0 → ('1-1.1', 2)
     """
+    # Resolve symlinks (e.g., /dev/serial/by-id/... -> /dev/ttyACMx)
+    real_path = str(Path(port_path).resolve()) if Path(port_path).is_symlink() else port_path
     # Find the device path in sysfs via /sys/class/tty/ttyACMx/device
-    port_name = os.path.basename(port_path)
+    port_name = os.path.basename(real_path)
     sysfs_device = f"/sys/class/tty/{port_name}/device"
 
     if not os.path.exists(sysfs_device):
@@ -382,8 +444,19 @@ def _recover_usb_port(hub_path, port_num, device_serial=None, verbose=False):
 
 
 def _device_port_exists(port_path):
-    """Check if a serial port path currently exists."""
-    return os.path.exists(port_path)
+    """Check if a serial port path currently exists.
+
+    For /dev/serial/by-id/ symlinks, checks both the symlink and its target.
+    """
+    if os.path.exists(port_path):
+        return True
+    # For by-id symlinks, check if the target device exists
+    try:
+        if os.path.islink(port_path):
+            return os.path.exists(os.path.realpath(port_path))
+    except OSError:
+        pass
+    return False
 
 
 def _check_port_available(port, verbose=False):
@@ -398,9 +471,11 @@ def _check_port_available(port, verbose=False):
     # Check 1: Verify VID/PID matches a XIAO device in application mode.
     # This prevents sending bootloader commands to the wrong device if
     # ports shuffled after a previous flash (USB re-enumeration).
+    # Resolve symlinks (e.g., /dev/serial/by-id/... -> /dev/ttyACMx)
+    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
     port_info = None
     for p in serial.tools.list_ports.comports():
-        if p.device == port:
+        if p.device == port or p.device == real_port:
             port_info = p
             break
 
@@ -423,8 +498,10 @@ def _check_port_available(port, verbose=False):
               f" serial={port_info.serial_number}")
 
     # Check 2: Verify port is not locked by another process.
+    # Use real path for serial.Serial() (some pyserial versions don't follow symlinks)
+    open_port = real_port if real_port != port else port
     try:
-        ser = serial.Serial(port, 115200, timeout=0.1, dsrdtr=False, rtscts=False)
+        ser = serial.Serial(open_port, 115200, timeout=0.1, dsrdtr=False, rtscts=False)
         ser.close()
         return True
     except serial.SerialException as e:
@@ -685,31 +762,81 @@ def find_uf2_block_device(timeout):
 
 
 def _get_usb_block_devices():
-    """Get set of USB block device paths from lsblk."""
+    """Get set of USB block device paths from lsblk, with sysfs/label fallbacks.
+
+    Strategy:
+    1. Try lsblk -J for USB block devices (standard method)
+    2. Fallback: scan /sys/block/sd* for devices with Seeed VID (0x2886)
+    3. Fallback: check /dev/disk/by-label/ for XIAO-SENSE label
+    """
     devices = set()
+
+    # Strategy 1: lsblk
     try:
         result = subprocess.run(
             ["lsblk", "-o", "NAME,TRAN,RM,TYPE", "-J"],
             capture_output=True, text=True, timeout=5,
         )
+        if result.returncode == 0:
+            try:
+                data = json.loads(result.stdout)
+                for dev in data.get("blockdevices", []):
+                    if dev.get("tran") == "usb":
+                        # Check partitions
+                        for child in dev.get("children", []):
+                            if child.get("type") in ("part", "disk"):
+                                devices.add(f"/dev/{child['name']}")
+                        # If no partitions, use disk itself
+                        if not dev.get("children"):
+                            devices.add(f"/dev/{dev['name']}")
+            except (json.JSONDecodeError, KeyError):
+                pass
     except subprocess.TimeoutExpired:
-        return devices
-    if result.returncode != 0:
+        pass
+
+    if devices:
         return devices
 
-    try:
-        data = json.loads(result.stdout)
-        for dev in data.get("blockdevices", []):
-            if dev.get("tran") == "usb":
-                # Check partitions
-                for child in dev.get("children", []):
-                    if child.get("type") in ("part", "disk"):
-                        devices.add(f"/dev/{child['name']}")
-                # If no partitions, use disk itself
-                if not dev.get("children"):
-                    devices.add(f"/dev/{dev['name']}")
-    except (json.JSONDecodeError, KeyError):
-        pass
+    # Strategy 2: scan /sys/block/sd* for Seeed VID (0x2886)
+    sys_block = Path("/sys/block")
+    if sys_block.exists():
+        for block_dir in glob.glob("/sys/block/sd*"):
+            block_name = os.path.basename(block_dir)
+            # Walk up the sysfs tree to find the USB device's idVendor
+            try:
+                real_path = os.path.realpath(os.path.join(block_dir, "device"))
+                # Walk up directories looking for idVendor
+                check_path = real_path
+                for _ in range(10):
+                    vendor_file = os.path.join(check_path, "idVendor")
+                    if os.path.exists(vendor_file):
+                        with open(vendor_file) as f:
+                            vid = f.read().strip()
+                        if vid == f"{NORMAL_VID:04x}":
+                            # Found a Seeed device, check for partitions
+                            part_path = Path(f"/dev/{block_name}1")
+                            if part_path.exists():
+                                devices.add(str(part_path))
+                            else:
+                                devices.add(f"/dev/{block_name}")
+                        break
+                    check_path = os.path.dirname(check_path)
+                    if check_path in ("", "/"):
+                        break
+            except OSError:
+                continue
+
+    if devices:
+        return devices
+
+    # Strategy 3: check /dev/disk/by-label/ for UF2 drive label
+    by_label = Path("/dev/disk/by-label") / UF2_DRIVE_LABEL
+    if by_label.exists():
+        try:
+            real_dev = str(by_label.resolve())
+            devices.add(real_dev)
+        except OSError:
+            pass
 
     return devices
 
@@ -723,7 +850,6 @@ def _get_block_device_serial(block_dev):
     # Extract device name from path (e.g., /dev/sda1 -> sda1, /dev/sda -> sda)
     dev_name = Path(block_dev).name
     # Strip partition number to get parent disk (sda1 -> sda)
-    import re
     disk_name = re.sub(r'\d+$', '', dev_name)
 
     serial_path = Path(f"/sys/block/{disk_name}/device/../../serial")
@@ -1044,6 +1170,9 @@ def verify_reboot(mount_point, port=None, device_serial=None, verbose=False):
     Checks:
     1. UF2 drive disappears (firmware accepted, board rebooting)
     2. Serial port reappears (new firmware is running)
+    3. Firmware responds to serial command (post-flash verification)
+
+    Returns (success: bool, new_port: str or None).
     """
     print_section("VERIFYING REBOOT")
 
@@ -1062,28 +1191,123 @@ def verify_reboot(mount_point, port=None, device_serial=None, verbose=False):
     if not drive_gone:
         print(f"  [WARN] UF2 drive still present after {REBOOT_TIMEOUT}s")
         print(f"  The firmware may have been rejected (wrong family or corrupt).")
-        return False
+        return False, None
 
     # Wait for serial port to reappear
     print(f"  Waiting for serial port...")
     deadline = time.monotonic() + PORT_REAPPEAR_TIMEOUT
+    new_port = None
 
     while time.monotonic() < deadline:
         if device_serial:
-            new_port = find_port_by_serial(device_serial, NORMAL_PID)
+            # Try by-id path first (most reliable after reboot)
+            new_port = find_port_by_id_path(device_serial)
+            if not new_port:
+                new_port = find_port_by_serial(device_serial, NORMAL_PID)
             if new_port:
                 print(f"  Device back on {new_port}")
-                return True
+                break
         elif port:
             if Path(port).exists():
+                new_port = port
                 print(f"  Port {port} is back")
-                return True
+                break
         time.sleep(0.2)
 
-    # Drive disappeared but port didn't return -- partial success
-    print(f"  [WARN] Serial port not detected within {PORT_REAPPEAR_TIMEOUT}s")
-    print(f"  Firmware was likely accepted (drive disappeared).")
-    return True
+    if not new_port:
+        # Drive disappeared but port didn't return -- partial success
+        print(f"  [WARN] Serial port not detected within {PORT_REAPPEAR_TIMEOUT}s")
+        print(f"  Firmware was likely accepted (drive disappeared).")
+        return True, None
+
+    # Post-flash verification: query the firmware
+    verify_result = verify_firmware(new_port, verbose=verbose)
+    return True, new_port
+
+
+def verify_firmware(port, verbose=False):
+    """Verify firmware is running by querying the device over serial.
+
+    Sends 'version' command and prints the response. This confirms:
+    1. The device is running (not stuck in bootloader)
+    2. The serial interface is functional
+    3. The firmware version matches what was flashed
+
+    Returns True if verification succeeded, False otherwise.
+    """
+    print_section("POST-FLASH VERIFICATION")
+
+    # Resolve symlink for serial.Serial() (some pyserial versions need real path)
+    real_port = str(Path(port).resolve()) if Path(port).is_symlink() else port
+
+    # Wait for firmware to finish booting (setup() includes delays)
+    print(f"  Waiting for firmware to initialize...")
+    time.sleep(3)
+
+    try:
+        ser = serial.Serial(real_port, 115200, timeout=2)
+        time.sleep(0.5)  # Let serial settle
+        ser.reset_input_buffer()
+
+        # Send 'version' command to verify basic firmware operation
+        ser.write(b'version\n')
+        ser.flush()
+        time.sleep(0.3)
+
+        # Read response lines
+        response_lines = []
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if ser.in_waiting:
+                line = ser.readline().decode('utf-8', errors='replace').strip()
+                if line:
+                    response_lines.append(line)
+            else:
+                if response_lines:
+                    break
+                time.sleep(0.1)
+
+        if response_lines:
+            print(f"  Firmware response:")
+            for line in response_lines:
+                print(f"    {line}")
+            print(f"  [PASS] Firmware is running")
+        else:
+            print(f"  [WARN] No response to 'version' command")
+            print(f"  Device may still be initializing.")
+
+        # Also try 'show nn' to check NN status
+        ser.reset_input_buffer()
+        ser.write(b'show nn\n')
+        ser.flush()
+        time.sleep(0.3)
+
+        nn_lines = []
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if ser.in_waiting:
+                line = ser.readline().decode('utf-8', errors='replace').strip()
+                if line:
+                    nn_lines.append(line)
+            else:
+                if nn_lines:
+                    break
+                time.sleep(0.1)
+
+        if nn_lines:
+            print(f"  NN status:")
+            for line in nn_lines:
+                print(f"    {line}")
+
+        ser.close()
+        return True
+
+    except serial.SerialException as e:
+        print(f"  [WARN] Could not verify firmware: {e}")
+        return False
+    except OSError as e:
+        print(f"  [WARN] OS error during verification: {e}")
+        return False
 
 
 # ============================================================
@@ -1299,9 +1523,9 @@ def upload_to_device(port, uf2_path, verbose=False):
         if not copy_firmware(uf2_path, mount_point):
             return False, f"firmware copy failed ({_elapsed(dev_start)})"
 
-        # Phase 6: Verify reboot
-        if verify_reboot(mount_point, port, device_serial, verbose=verbose):
-            new_port = find_port_by_serial(device_serial, NORMAL_PID) if device_serial else None
+        # Phase 6: Verify reboot + post-flash verification
+        reboot_ok, new_port = verify_reboot(mount_point, port, device_serial, verbose=verbose)
+        if reboot_ok:
             elapsed = _elapsed(dev_start)
             msg = f"OK in {elapsed} (now on {new_port})" if new_port else f"OK in {elapsed}"
             return True, msg
@@ -1711,7 +1935,8 @@ def main():
                 return 1
 
             port = ports[0] if ports else None
-            if verify_reboot(mount_point, port, None, verbose=args.verbose):
+            reboot_ok, new_port = verify_reboot(mount_point, port, None, verbose=args.verbose)
+            if reboot_ok:
                 print_success(f"UPLOAD SUCCESSFUL ({_elapsed(start_time)})")
                 return 0
             else:

@@ -15,11 +15,13 @@
 // Multi-output: if the model has 2 output channels, channel 0 = beat activation,
 // channel 1 = downbeat activation. Single-channel models are backward compatible.
 //
-// Memory (5L v4/v6):  ~33 KB flash, 96 KB arena + 13 KB context (128 frames) = ~109 KB RAM
-// Memory (7L v7):     ~46 KB flash, 96 KB arena + 27 KB context (256 frames) = ~123 KB RAM
-// Memory (7L v8):     NOT deployable — 128 KB arena crashes device (heap exhaustion)
-// Context buffer pre-sized for 256 frames. Runtime contextLen_ adapts to actual model.
-// Inference: ~3-5 ms per frame (5L), ~5-12 ms per frame (7L) (Cortex-M4F @ 64 MHz)
+// Memory (5L v4/v6):  ~33 KB flash, ~14 KB arena + 13 KB context (128 frames) = ~27 KB RAM
+// Memory (7L v7):     ~46 KB flash, ~28 KB arena + 27 KB context (256 frames) = ~55 KB RAM
+// Memory (7L v8):     ~73 KB flash, ~53 KB arena + 27 KB context (256 frames) = ~80 KB RAM
+// Arena sized to 96 KB (generous headroom). Context pre-sized for 256 frames.
+// Runtime contextLen_ adapts to actual model.
+// Inference: ~79 ms per frame (5L BN-fused), ~120+ ms per frame (7L) (Cortex-M4F @ 64 MHz)
+// Profiling: Conv2D ~37ms, ADD reqant ~24ms, rest ~18ms. MicroProfiler prints every 50 frames.
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)
 // ============================================================================
@@ -30,6 +32,7 @@
 #include "tensorflow/lite/micro/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#include "tensorflow/lite/micro/micro_profiler.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
 #include "beat_model_data.h"
@@ -67,27 +70,32 @@ public:
 
         // Register ops used by our causal CNN model.
         // Conv1D → Conv2D (TFLite internal), ZeroPadding1D → Pad,
-        // BatchNorm may fuse into conv weights during export, or remain as
-        // separate Mul/Add ops. ReLU is used after each conv layer.
-        // If AllocateTensors fails, check tflite model ops with visualizer.
+        // BatchNorm fused into conv weights during export, remaining as Mul/Add.
+        // Dilated convs (dilation > 1) use SpaceToBatchNd/BatchToSpaceNd.
+        // EXPAND_DIMS is inserted by TFLite converter for shape manipulation.
+        // If AllocateTensors fails, inspect model ops with:
+        //   python -c "import tensorflow as tf; i=tf.lite.Interpreter('model.tflite'); ..."
         static tflite::MicroErrorReporter micro_error_reporter;
         static tflite::MicroMutableOpResolver<12> resolver;
         resolver.AddConv2D();          // Conv1D is implemented as Conv2D internally
         resolver.AddReshape();
-        resolver.AddFullyConnected();
+        resolver.AddExpandDims();      // Shape manipulation (TFLite converter inserts)
         resolver.AddLogistic();        // Sigmoid (output layer)
         resolver.AddQuantize();
         resolver.AddDequantize();
         resolver.AddPad();             // ZeroPadding1D (causal padding)
         resolver.AddMul();             // BatchNorm (if not fused)
         resolver.AddAdd();             // BatchNorm bias (if not fused)
-        resolver.AddRelu();            // ReLU activation after conv layers
         resolver.AddSpaceToBatchNd();  // Dilated conv (dilation > 1)
         resolver.AddBatchToSpaceNd();  // Dilated conv output reshape
+        // Slot 12 reserved — FullyConnected/ReLU removed (not used by current models)
+
+        static tflite::MicroProfiler micro_profiler;
+        profiler_ = &micro_profiler;
 
         static tflite::MicroInterpreter static_interpreter(
             model_, resolver, tensorArena_, TENSOR_ARENA_SIZE,
-            &micro_error_reporter);
+            &micro_error_reporter, nullptr, &micro_profiler);
         interpreter_ = &static_interpreter;
 
         TfLiteStatus allocStatus = interpreter_->AllocateTensors();
@@ -153,6 +161,7 @@ public:
         }
 
         // Copy context to input tensor (handles quantization if INT8)
+        unsigned long tQuant0 = micros();
         if (input_->type == kTfLiteInt8) {
             float scale = input_->params.scale;
             int32_t zero_point = input_->params.zero_point;
@@ -167,10 +176,36 @@ public:
             memcpy(input_->data.f, contextBuffer_,
                    contextLen_ * INPUT_MEL_BANDS * sizeof(float));
         }
+        lastQuantUs_ = micros() - tQuant0;
 
-        // Run inference
+        // Run inference (with timing and per-op profiling)
+        if (profiler_) profiler_->ClearEvents();
+        unsigned long t0 = micros();
         if (interpreter_->Invoke() != kTfLiteOk) {
             return 0.0f;
+        }
+        lastInferUs_ = micros() - t0;
+
+        // Print per-operator profile every 50 inferences (~10 seconds at 5 FPS)
+        inferCount_++;
+        if (inferCount_ % 50 == 1) {
+            Serial.print(F("[NNPROF] cnt="));
+            Serial.print(inferCount_);
+            Serial.print(F(" inv="));
+            Serial.print(lastInferUs_);
+            Serial.print(F(" q="));
+            Serial.print(lastQuantUs_);
+            Serial.print(F(" prof="));
+            Serial.print(profiler_ != nullptr ? 1 : 0);
+            if (profiler_) {
+                Serial.print(F(" ticks="));
+                Serial.print(profiler_->GetTotalTicks());
+            }
+            Serial.println();
+            if (profiler_) {
+                profiler_->Log();
+            }
+            Serial.println(F("[/NNPROF]"));
         }
 
         // Extract outputs from last frame
@@ -202,6 +237,11 @@ public:
             Serial.print(outputChannels_);
             Serial.print(F(" context="));
             Serial.print(contextLen_);
+            Serial.print(F(" infer="));
+            Serial.print(lastInferUs_ / 1000);
+            Serial.print(F("ms quant="));
+            Serial.print(lastQuantUs_ / 1000);
+            Serial.print(F("ms"));
         } else {
             Serial.print(F(" error="));
             Serial.print(initError_);
@@ -233,15 +273,14 @@ private:
     }
 
     // Tensor arena — pre-allocated, no dynamic memory
-    // Sized for 7L ch32 model (v7). Largest activation: 12 KB (SpaceToBatchND at d=64).
-    // v8 (7L ch48) needs >96 KB but 128 KB crashes device (heap exhaustion).
-    // 5L models (v4/v6) only use ~16 KB but the extra space is unused heap.
-    static constexpr int TENSOR_ARENA_SIZE = 98304;  // 96 KB (v7 7L ch32 with dilated convs)
+    // Measured: v6 BN-fused 14 KB, v7 28 KB. 96 KB provides generous headroom.
+    // Prior "not deployable" claims were caused by missing ExpandDims op, not arena size.
+    static constexpr int TENSOR_ARENA_SIZE = 98304;  // 96 KB
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
-    // Context buffer for sliding window — sized for 7L deep models (v7/v8).
-    // 5L models (v4/v6) use 128 frames; 7L models need 256. Runtime contextLen_
-    // is set from the model's actual input shape, so only the needed portion is used.
+    // Context buffer for sliding window.
+    // 5L models (v4/v6) use 128 frames; 7L models (v7/v8) need 256.
+    // Runtime contextLen_ is set from the model's actual input shape.
     static constexpr int MAX_CONTEXT = 256;
     float contextBuffer_[MAX_CONTEXT * INPUT_MEL_BANDS];
     int contextLen_ = 0;      // Actual context length from model input shape
@@ -249,14 +288,18 @@ private:
 
     const tflite::Model* model_ = nullptr;
     tflite::MicroInterpreter* interpreter_ = nullptr;
+    tflite::MicroProfiler* profiler_ = nullptr;
     TfLiteTensor* input_ = nullptr;
     TfLiteTensor* output_ = nullptr;
     int outputChannels_ = 1;  // 1 = beat only, 2 = beat + downbeat
     float lastDownbeat_ = 0.0f;
     bool ready_ = false;
+    uint32_t inferCount_ = 0;         // Inference counter for periodic profile
     int initError_ = 0;       // 0=not attempted, 1=null model, 2=schema, 3=alloc
     int initSchemaVersion_ = 0;
     size_t arenaUsed_ = 0;
+    unsigned long lastInferUs_ = 0;   // Last Invoke() time in microseconds
+    unsigned long lastQuantUs_ = 0;   // Last quantization loop time in microseconds
 };
 
 #else
