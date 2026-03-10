@@ -159,6 +159,117 @@ static const unsigned int {c_array_name}_len = {len(tflite_bytes)};
         f.write(header)
 
 
+def estimate_tensor_arena(tflite_path: str) -> tuple[int, int]:
+    """Estimate TFLite Micro tensor arena size from a TFLite model file.
+
+    Parses the TFLite flatbuffer to identify mutable tensors (activations that
+    need arena RAM, as opposed to constant weights stored in flash), then
+    simulates TFLite Micro's GreedyMemoryPlanner to compute peak memory usage.
+
+    The arena must also hold per-tensor metadata, per-op node structs, and
+    scratch buffers. These are estimated via a calibration factor derived from
+    the known-good v6 model (5L ch32, 128-frame: 16 KB arena for 8 KB planner).
+
+    Returns (estimated_bytes, recommended_bytes) where recommended includes
+    a 10% safety margin rounded up to 1 KB.
+    """
+    from tensorflow.lite.python import schema_py_generated as schema_fb
+
+    with open(tflite_path, "rb") as f:
+        buf = bytearray(f.read())
+
+    model = schema_fb.Model.GetRootAs(buf, 0)
+    sg = model.Subgraphs(0)
+
+    ALIGNMENT = 16  # TFLite Micro tensor buffer alignment
+
+    # --- Identify mutable tensors ---
+    # Constant tensors (weights, biases) have non-empty buffer data in the
+    # flatbuffer and are read directly from flash. Mutable tensors (activations,
+    # inputs, outputs) have empty buffers and must be allocated in the arena.
+    dtype_sizes = {0: 4, 1: 2, 2: 4, 3: 1, 7: 8, 9: 1, 12: 1, 15: 1}  # TfLiteType enum
+
+    mutable = []
+    for i in range(sg.TensorsLength()):
+        t = sg.Tensors(i)
+        buf_idx = t.Buffer()
+        b = model.Buffers(buf_idx)
+        if buf_idx != 0 and b.DataLength() > 0:
+            continue  # Constant tensor — stored in flash, not arena
+
+        shape = [t.Shape(j) for j in range(t.ShapeLength())]
+        elem_size = dtype_sizes.get(t.Type(), 1)
+        size_bytes = int(np.prod(shape)) * elem_size if shape else 0
+        mutable.append({"index": i, "size": size_bytes})
+
+    # --- Compute tensor lifetimes from operator execution order ---
+    n_tensors = sg.TensorsLength()
+    first_use = [float("inf")] * n_tensors
+    last_use = [-1] * n_tensors
+
+    for j in range(sg.InputsLength()):
+        first_use[sg.Inputs(j)] = -1
+    for j in range(sg.OutputsLength()):
+        last_use[sg.Outputs(j)] = sg.OperatorsLength()
+
+    for op_i in range(sg.OperatorsLength()):
+        op = sg.Operators(op_i)
+        for j in range(op.InputsLength()):
+            t_idx = op.Inputs(j)
+            if t_idx >= 0:
+                first_use[t_idx] = min(first_use[t_idx], op_i)
+                last_use[t_idx] = max(last_use[t_idx], op_i)
+        for j in range(op.OutputsLength()):
+            t_idx = op.Outputs(j)
+            if t_idx >= 0:
+                first_use[t_idx] = min(first_use[t_idx], op_i)
+                last_use[t_idx] = max(last_use[t_idx], op_i)
+
+    # --- Simulate GreedyMemoryPlanner (first-fit-decreasing with alignment) ---
+    allocations = []
+    for m in mutable:
+        idx = m["index"]
+        if first_use[idx] == float("inf"):
+            continue  # Unused tensor
+        aligned_size = ((m["size"] + ALIGNMENT - 1) // ALIGNMENT) * ALIGNMENT
+        allocations.append({
+            "size": aligned_size, "alloc": first_use[idx],
+            "free": last_use[idx] + 1, "index": idx,
+        })
+
+    allocations.sort(key=lambda x: -x["size"])  # Largest first
+
+    placements = []
+    arena_planner = 0
+    for alloc in allocations:
+        size, a_start, a_end = alloc["size"], alloc["alloc"], alloc["free"]
+        # Find conflicting placements (overlapping lifetimes)
+        conflicts = sorted(
+            [p for p in placements if not (a_end <= p["alloc"] or a_start >= p["free"])],
+            key=lambda p: p["offset"],
+        )
+        candidate = 0
+        for c in conflicts:
+            if candidate + size <= c["offset"]:
+                break
+            candidate = ((c["offset"] + c["size"] + ALIGNMENT - 1) // ALIGNMENT) * ALIGNMENT
+        placements.append({"offset": candidate, "size": size, "alloc": a_start, "free": a_end})
+        arena_planner = max(arena_planner, candidate + size)
+
+    # --- Apply overhead factor ---
+    # TFLite Micro's arena also holds: per-tensor TfLiteTensor structs (~52 bytes
+    # each, for ALL tensors including constants), per-op TfLiteNode structs
+    # (~24 bytes each), op scratch buffers, and runtime bookkeeping.
+    # Calibrated against v6 (5L ch32, 128-frame): planner=8192, actual=16384 → 2.0x.
+    OVERHEAD_FACTOR = 2.0
+    estimated = int(arena_planner * OVERHEAD_FACTOR)
+
+    # Recommended: +10% margin, rounded up to nearest 1024 bytes
+    recommended = ((int(estimated * 1.1) + 1023) // 1024) * 1024
+
+    return estimated, recommended
+
+
 def main():
     parser = argparse.ArgumentParser(description="Export model to TFLite INT8 C header")
     parser.add_argument("--config", default="configs/default.yaml")
@@ -278,13 +389,14 @@ def main():
     ctx_ram = ctx_frames * n_mels * 4
     print(f"  Context buffer: {ctx_frames} frames x {n_mels} mels = {ctx_ram / 1024:.1f} KB RAM")
 
-    tensor_arena_kb = sum(
-        np.prod(d["shape"]) * np.dtype(d["dtype"]).itemsize
-        for d in interpreter.get_tensor_details()
-    ) / 1024
-    print(f"  Estimated tensor arena: ~{tensor_arena_kb:.1f} KB")
-    print(f"  Total device RAM: ~{(ctx_ram / 1024 + tensor_arena_kb + size_kb):.1f} KB "
-          f"(context + arena + model flash)")
+    arena_bytes, arena_rec = estimate_tensor_arena(tflite_path)
+    arena_kb = arena_bytes / 1024
+    rec_kb = arena_rec / 1024
+    print(f"  Estimated tensor arena: ~{arena_kb:.1f} KB")
+    print(f"  Recommended TENSOR_ARENA_SIZE: {arena_rec:,} ({rec_kb:.0f} KB)")
+    total_ram_kb = ctx_ram / 1024 + rec_kb
+    print(f"  Device RAM (heap): ~{total_ram_kb:.0f} KB (context {ctx_ram / 1024:.0f} KB + arena {rec_kb:.0f} KB)")
+    print(f"  Device flash: {size_kb:.1f} KB (model weights, read-only)")
 
 
 if __name__ == "__main__":
