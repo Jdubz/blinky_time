@@ -220,6 +220,13 @@ const AudioControl& AudioController::update(float dt) {
         // NN beat activation: feed raw mel bands (no compressor/whitening) to
         // causal CNN. Raw mel bands match the training pipeline exactly.
         // BandFlux still runs for transient detection (sparks/effects).
+        //
+        // Inference takes ~79ms on Cortex-M4F @ 64 MHz. This blocks the main loop
+        // but is acceptable because: (1) PDM mic runs via DMA/ISR — no samples are
+        // lost, (2) the mic callback rate (~62.5 Hz) naturally gates inference to
+        // ~12 Hz, (3) LED rendering at ~60 FPS tolerates occasional longer frames
+        // (fire/water effects are temporally smooth), and (4) the WDT timeout (15s)
+        // is far above worst-case frame time.
         const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
         if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
             onsetStrength = beatActivationNN_.infer(spectral.getRawMelBands());
@@ -256,12 +263,17 @@ const AudioControl& AudioController::update(float dt) {
         }
     }
 
+    // Cache NN-active state once per update — used by ODF smoothing, contrast,
+    // ACF mean subtraction, and CBSS alpha adaptation.
+    nnActive_ = nnBeatActivation && beatActivationNN_.isReady();
+    beatActivationNN_.setProfileEnabled(nnProfile);
+
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
     // Bypass when NN is active — the dilated CNN's receptive field (15 frames
     // with dilations [1, 2, 4] and kernel size 3) already provides temporal
     // smoothing. Additional smoothing blurs activation peaks that the CBSS needs
     // sharp. (madmom/BeatNet don't smooth NN output.)
-    if (nnBeatActivation && beatActivationNN_.isReady()) {
+    if (nnActive_) {
         lastSmoothedOnset_ = onsetStrength;
     } else {
         onsetStrength = smoothOnsetStrength(onsetStrength);
@@ -368,8 +380,7 @@ const AudioControl& AudioController::update(float dt) {
     //    BTrack applies squaring (contrast=2.0) by default; our BandFlux is already spiky so
     //    doesn't need it (default 1.0). For NN, apply 2.0 unless user explicitly set contrast.
     float cbssInput = onsetStrength;
-    bool nnActive = nnBeatActivation && beatActivationNN_.isReady();
-    float effectiveContrast = (nnActive && cbssContrast == 1.0f) ? 2.0f : cbssContrast;
+    float effectiveContrast = (nnActive_ && cbssContrast == 1.0f) ? 2.0f : cbssContrast;
     if (effectiveContrast != 1.0f && cbssInput > 0.0f) {
         cbssInput = powf(cbssInput, effectiveContrast);
     }
@@ -609,9 +620,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Disabled for BandFlux (v32: raw ODF preserves ACF structure, +70% F1).
     // Enabled for NN ODF: smooth [0,1] output has non-zero baseline (~0.2-0.4)
     // that elevates all ACF lags equally, masking the true tempo peak.
-    bool nnActiveForACF = nnBeatActivation && beatActivationNN_.isReady();
     float ossMean = 0.0f;
-    if (odfMeanSubEnabled || nnActiveForACF) {
+    if (odfMeanSubEnabled || nnActive_) {
         for (int i = 0; i < ossCount_; i++) {
             ossMean += ossLinear[i];
         }
@@ -1488,8 +1498,7 @@ void AudioController::updateCBSS(float onsetStrength) {
     // NN peaks at ~0.6-0.9, so at alpha=0.9: onset weight = 0.1*0.8 = 0.08 (too weak).
     // At alpha=0.8: onset weight = 0.2*0.8 = 0.16, still conservative but 2x stronger.
     // Only override if user hasn't explicitly lowered cbssAlpha below the NN target.
-    bool nnActiveForCBSS = nnBeatActivation && beatActivationNN_.isReady();
-    float baseAlpha = (nnActiveForCBSS && cbssAlpha > 0.8f) ? 0.8f : cbssAlpha;
+    float baseAlpha = (nnActive_ && cbssAlpha > 0.8f) ? 0.8f : cbssAlpha;
 
     // During warmup (first N beats), use lower alpha so onsets contribute more
     // to the CBSS. This gives ~4x more onset weight during initial phase acquisition,
@@ -3200,7 +3209,7 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     // Pass through NN downbeat activation if available.
     // Co-located here (not in a separate function) because it runs at the same
     // 1-second cadence and both fields are simple passthrough assignments.
-    if (nnBeatActivation && beatActivationNN_.isReady() && beatActivationNN_.hasDownbeatOutput()) {
+    if (nnActive_ && beatActivationNN_.hasDownbeatOutput()) {
         control_.downbeat = beatActivationNN_.getLastDownbeat();
     } else {
         control_.downbeat = 0.0f;

@@ -88,7 +88,9 @@ public:
         resolver.AddAdd();             // BatchNorm bias (if not fused)
         resolver.AddSpaceToBatchNd();  // Dilated conv (dilation > 1)
         resolver.AddBatchToSpaceNd();  // Dilated conv output reshape
-        // Slot 12 reserved — FullyConnected/ReLU removed (not used by current models)
+        // Slot 12 reserved. Removed ops: FullyConnected (no FC layers in v4-v8),
+        // ReLU (fused into Conv activation). If loading an older model that needs
+        // these, AllocateTensors will fail with error=3 — re-add the op here.
 
         static tflite::MicroProfiler micro_profiler;
         profiler_ = &micro_profiler;
@@ -186,17 +188,17 @@ public:
         }
         lastInferUs_ = micros() - t0;
 
-        // Print per-operator profile every 50 inferences (~10 seconds at 5 FPS)
+        // Per-operator profiling: only when enabled via `set nnprofile 1`.
+        // Prints [NNPROF] block every 50 inferences (~10s at 5 FPS).
+        // Disabled by default to avoid polluting the serial stream / breaking JSON parsers.
         inferCount_++;
-        if (inferCount_ % 50 == 1) {
+        if (profileEnabled_ && inferCount_ % 50 == 1) {
             Serial.print(F("[NNPROF] cnt="));
             Serial.print(inferCount_);
             Serial.print(F(" inv="));
             Serial.print(lastInferUs_);
             Serial.print(F(" q="));
             Serial.print(lastQuantUs_);
-            Serial.print(F(" prof="));
-            Serial.print(profiler_ != nullptr ? 1 : 0);
             if (profiler_) {
                 Serial.print(F(" ticks="));
                 Serial.print(profiler_->GetTotalTicks());
@@ -223,6 +225,10 @@ public:
 
     /** Whether model has a downbeat output head. */
     bool hasDownbeatOutput() const { return outputChannels_ >= 2; }
+
+    /** Enable/disable per-operator profiling output to Serial. */
+    void setProfileEnabled(bool enabled) { profileEnabled_ = enabled; }
+    bool isProfileEnabled() const { return profileEnabled_; }
 
     /** Print diagnostic info to Serial (call after Serial.begin). */
     void printDiagnostics() const {
@@ -295,6 +301,7 @@ private:
     int outputChannels_ = 1;  // 1 = beat only, 2 = beat + downbeat
     float lastDownbeat_ = 0.0f;
     bool ready_ = false;
+    bool profileEnabled_ = false;     // Runtime toggle for [NNPROF] serial output
     uint32_t inferCount_ = 0;         // Inference counter for periodic profile
     int initError_ = 0;       // 0=not attempted, 1=null model, 2=schema, 3=alloc
     int initSchemaVersion_ = 0;
@@ -314,6 +321,8 @@ public:
     bool isReady() const { return false; }
     float getLastDownbeat() const { return 0.0f; }
     bool hasDownbeatOutput() const { return false; }
+    void setProfileEnabled(bool) {}
+    bool isProfileEnabled() const { return false; }
     void printDiagnostics() const { Serial.println(F("[NN] not compiled")); }
 };
 

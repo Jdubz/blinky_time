@@ -330,8 +330,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + forward filter ~5.2 KB when enabled). +16 KB tensor arena + 27 KB context buffer if NN=1 build.
-- Flash: ~301 KB base, ~426 KB with NN=1 (includes 33 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + forward filter ~5.2 KB when enabled). +96 KB tensor arena (static, 14-28 KB used) + 27 KB context buffer if NN=1 build. Total NN=1: ~145 KB of 256 KB.
+- Flash: ~288 KB base, ~411 KB with NN=1 (includes 46 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**

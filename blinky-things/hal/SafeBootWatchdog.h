@@ -52,7 +52,10 @@ namespace SafeBootWatchdog {
     // 15s gives generous headroom
     static constexpr uint32_t WDT_TIMEOUT_SECONDS = 15;
 
-    // Track whether we started the WDT (cannot be stopped once started)
+    // Track whether we started the WDT (cannot be stopped once started).
+    // static gives internal linkage — each TU gets its own copy. This is safe
+    // because only blinky-things.ino includes this header. If included from
+    // multiple .cpp files, move these to a .cpp file or use inline (C++17).
     static bool wdtStarted_ = false;
     static uint8_t bootCount_ = 0;
 

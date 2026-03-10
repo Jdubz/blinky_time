@@ -333,6 +333,7 @@ public:
     // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
     // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
     bool nnBeatActivation = true;        // Use NN beat activation as ODF (A/B tested, 11/18 wins)
+    bool nnProfile = false;              // Enable [NNPROF] per-operator timing output to Serial
 
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
@@ -610,6 +611,7 @@ private:
 
     // === NN BEAT ACTIVATION ===
     BeatActivationNN beatActivationNN_;
+    bool nnActive_ = false;  // Cached per-update: nnBeatActivation && beatActivationNN_.isReady()
 
     // === RHYTHM TRACKING STATE ===
 
