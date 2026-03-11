@@ -1891,6 +1891,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             return true;
         }
         audioCtrl_->getBeatActivationNN().printDiagnostics();
+        audioCtrl_->getBeatSyncNN().printDiagnostics();
         // Show effective NN-mode parameter overrides so users aren't surprised
         bool nnActive = audioCtrl_->nnBeatActivation &&
                         audioCtrl_->getBeatActivationNN().isReady();

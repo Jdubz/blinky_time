@@ -2,7 +2,9 @@
 
 #include "AudioControl.h"
 #include "BeatActivationNN.h"
+#include "BeatSyncNN.h"
 #include "EnsembleDetector.h"
+#include "SpectralAccumulator.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -489,6 +491,8 @@ public:
     const EnsembleDetector& getEnsemble() const { return ensemble_; }
 
     const BeatActivationNN& getBeatActivationNN() const { return beatActivationNN_; }
+    const BeatSyncNN& getBeatSyncNN() const { return beatSyncNN_; }
+    const SpectralAccumulator& getSpectralAccumulator() const { return spectralAccumulator_; }
 
     // Get last ensemble output for debugging
     const EnsembleOutput& getLastEnsembleOutput() const { return ensemble_.getLastOutput(); }
@@ -543,6 +547,10 @@ private:
     // === NN BEAT ACTIVATION ===
     BeatActivationNN beatActivationNN_;
     bool nnActive_ = false;  // Cached per-update: nnBeatActivation && beatActivationNN_.isReady()
+
+    // === BEAT-SYNC NN (Phase A: downbeat classifier) ===
+    BeatSyncNN beatSyncNN_;
+    SpectralAccumulator spectralAccumulator_;
 
     // === RHYTHM TRACKING STATE ===
 

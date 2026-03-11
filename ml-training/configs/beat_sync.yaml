@@ -1,0 +1,46 @@
+# Beat-Synchronous Classifier Configuration — Phase A (downbeat only)
+#
+# Overrides base.yaml for the beat-sync model architecture.
+# Training data is beat-level features (not frame-level mel spectrograms).
+
+model:
+  type: "beat_sync"
+  n_beats: 4              # Context: last 4 beats (~2 bars in 4/4)
+  features_per_beat: 79   # 26 mel × 2 subdivision means + 26 peak + 1 duration
+  hidden1: 32             # First FC hidden layer
+  hidden2: 16             # Second FC hidden layer
+  dropout: 0.15           # Dropout rate
+  phase: "A"              # A=downbeat, B=+confidence, C=+tempo/phase
+
+# Beat-sync specific training params (override base.yaml)
+training:
+  batch_size: 256         # Small examples, can use larger batches
+  epochs: 200             # Fast convergence expected
+  learning_rate: 0.003    # Higher initial LR for FC model
+  lr_schedule: "cosine"
+  pos_weight: 2.3         # ~0.7/0.3 = actual class ratio
+  loss: "bce"             # Start with weighted BCE; focal traps model in all-positive mode
+  focal_gamma: 2.0
+  patience: 25            # Early stopping patience
+  seed: 42
+
+# Beat-level feature extraction settings
+beat_features:
+  # Subdivision pooling: split each beat interval into N equal parts
+  # and compute mean mel bands per subdivision
+  subdivisions: 2         # 2 = first half / second half (captures kick vs snare)
+  include_peak: true      # Whole-beat peak mel bands
+  include_std: false      # Replaced by subdivision pooling
+  # Beat jitter augmentation (simulates CBSS timing errors)
+  jitter_ms: 15           # Max beat time perturbation (+/- ms)
+  # Feature-level noise augmentation
+  feature_noise_std: 0.03 # Gaussian noise added to features
+  # Beat drop/insert augmentation
+  beat_drop_prob: 0.05    # Probability of dropping a beat in sequence
+  beat_insert_prob: 0.03  # Probability of inserting a spurious beat
+
+# Export settings
+export:
+  max_model_size_kb: 15   # INT8 budget
+  output_header: "../blinky-things/audio/beat_sync_model_data.h"
+  c_array_name: "beat_sync_model_data"
