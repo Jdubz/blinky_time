@@ -169,11 +169,11 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
 AudioController (CBSS beat tracking)
     │
-    ├── [NN=1, planned] SpectralAccumulator (raw mel bands between beats)
-    │     └── BeatSyncNN (FC, ~2 Hz) → corrections + downbeat
+    ├── [NN=1, planned] FrameBeatNN (FC on mel frame window, ~15.6 Hz)
+    │     → beat_activation (replaces BandFlux ODF) + downbeat_activation
     ↓
 AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat*, beatInMeasure*}
-    (* = planned, driven by BeatSyncNN when available; currently from mel CNN or mod-4 counter)
+    (* = planned, driven by FrameBeatNN when available; currently from mel CNN or mod-4 counter)
     ↓
 Generator (Fire/Water/Lightning)
     ↓
@@ -198,7 +198,7 @@ RenderPipeline → LED Output
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: BandFlux (default) or legacy mel CNN (`nnbeat=1`, requires NN=1 build, default ON — functional but 79-98ms limits framerate to ~12 Hz). Beat-sync NN (planned) will correct CBSS + add downbeat at beat fire, doesn't replace ODF.
+   - ODF source: BandFlux (default) or legacy mel CNN (`nnbeat=1`, requires NN=1 build, default ON — functional but 79-98ms limits framerate to ~12 Hz). Frame-level FC NN (planned) will replace BandFlux as ODF + add downbeat activation.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -322,8 +322,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
    (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
-9. [NN=1, planned] At beat fire: SpectralAccumulator → BeatSyncNN → corrections + downbeat
-   Corrections (beat_confidence, tempo_factor, phase_offset) feed back into CBSS before output
+9. [NN=1, planned] Every 4th frame: FrameBeatNN (FC on mel window) → beat_activation + downbeat
+   beat_activation replaces BandFlux ODF; downbeat drives AudioControl.downbeat
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
     onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
 11. Fire generator:
@@ -342,7 +342,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). Current NN=1 build: +96 KB tensor arena + 27 KB context buffer. Planned beat-sync NN: +4 KB arena + 2.5 KB beat history (8 beats × 79 floats) + 0.3 KB accumulator.
+- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). Current NN=1 build: +96 KB tensor arena + 27 KB context buffer. Planned frame-level FC NN: +8-16 KB arena + 3.3 KB mel frame buffer.
 - Flash: ~259 KB base, ~391 KB with NN=1 (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
@@ -404,16 +404,19 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
 **In Progress:**
-- Beat-synchronous spectral NN (downbeat/meter classifier, ~2 Hz inference at beat fire, design phase)
+- Frame-level FC beat/downbeat activation NN (~15.6 Hz inference, design phase — replaces abandoned beat-synchronous approach)
 
 **Planned (Not Started):**
 - Bluetooth/BLE support (design doc complete)
 - Dynamic device switching (runtime config)
 - CI/CD automation
 
-**Closed (mel-spectrogram NN, v4-v9):**
+**Closed (mel-spectrogram CNN, v4-v9):**
 - All architectures (standard conv, BN-fused, DS-TCN) measured 79-98ms on Cortex-M4F — 8-10× over frame budget
-- Superseded by beat-synchronous approach (<0.5ms at ~2 Hz)
+- Superseded by frame-level FC approach (~60-200µs at 15.6 Hz)
+
+**Closed (beat-synchronous hybrid, March 2026):**
+- FC on accumulated spectral summaries at beat rate (~2 Hz). Circular dependency with CBSS, negligible discriminative power in per-beat features, misaligned with all leading approaches. Superseded by frame-level FC.
 
 ## Documentation Guidelines
 
@@ -446,5 +449,5 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
 - **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation, adaptive threshold
-- **NN beat activation** (v54+, CLOSED): Mel-spectrogram CNN models (v4-v9) all 79-98ms — too slow. Superseded by beat-synchronous spectral NN (design phase): tiny FC model runs at beat rate (~2 Hz) on accumulated mel band summaries, provides downbeat/meter. See `IMPROVEMENT_PLAN.md` Priority 1.
+- **NN beat activation** (v54+, CLOSED for CNN): Mel-spectrogram CNN models (v4-v9) all 79-98ms — too slow. Beat-synchronous FC hybrid also abandoned (circular dependency, no discriminative signal). Pivoting to frame-level FC: sliding window of raw mel frames → FC layers → beat + downbeat activation at ~15.6 Hz, ~60-200µs inference. See `IMPROVEMENT_PLAN.md` Priority 1.
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)

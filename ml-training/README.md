@@ -1,6 +1,10 @@
 # Blinky Beat Activation — ML Training Pipeline
 
-Train a small causal CNN to produce beat activation signals for the Blinky firmware. Replaces the handcrafted BandFlux ODF with a learned activation function that feeds into the existing CBSS beat tracker.
+Train a small NN to produce beat/downbeat activation signals for the Blinky firmware. Replaces the handcrafted BandFlux ODF with a learned activation function that feeds into the existing CBSS beat tracker.
+
+**Current direction (March 2026):** Frame-level FC model on a sliding window of raw mel frames. Produces per-frame beat activation + downbeat activation at ~15.6 Hz. ~60-200µs inference on Cortex-M4F. See `docs/IMPROVEMENT_PLAN.md` Priority 1.
+
+**Previous approaches (CLOSED):** Mel-spectrogram CNN (79-98ms, too slow), beat-synchronous FC hybrid (circular dependency with CBSS, negligible discriminative power in per-beat features).
 
 ## Quick Start
 
@@ -63,7 +67,8 @@ ml-training/
 │   ├── gain_volume_sweep.py    # ODF discriminability measurement
 │   └── capture_nn_stream.py    # NN diagnostic stream capture
 ├── models/
-│   └── beat_cnn.py             # Causal 1D CNN model definition
+│   ├── beat_cnn.py             # Causal 1D CNN model definition (legacy, CLOSED)
+│   └── beat_sync.py            # Beat-sync FC classifier (ABANDONED, kept for reference)
 ├── train.py                    # Training loop (BCE/focal loss, cosine LR)
 ├── evaluate.py                 # Offline evaluation (beat + downbeat F1)
 ├── Makefile                    # Pipeline orchestration
@@ -103,17 +108,28 @@ The mel pipeline is defined once in `scripts/audio.py` and imported by all scrip
 ## Hardware Target
 
 - **XIAO nRF52840 Sense** (Cortex-M4F @ 64 MHz, 256 KB RAM, 1 MB Flash)
-- 3-layer model: ~9K params, ~20 KB INT8
-- 5-layer model: ~15K params, ~33 KB INT8
-- 16 KB tensor arena, ~3–5 ms inference per frame
+- Frame-level FC (planned): ~20-60 KB INT8, ~8-16 KB arena, ~60-200µs @ 15.6 Hz
+- Mel CNN (legacy): ~20-46 KB INT8, 96 KB arena, 79-98ms @ 62.5 Hz (too slow)
 - Runtime: TFLite Micro + CMSIS-NN
 
 ## Training Results
 
+**Mel-spectrogram CNN (CLOSED — all too slow on MCU):**
+
 | Version | Architecture | Beat F1 | Downbeat F1 | Notes |
 |---------|-------------|---------|-------------|-------|
 | v2 | 3L ch32, clean data | 0.525 | 0.256 | Baseline |
-| v4 (epoch 15) | 5L ch32, augmented + mic profile | **0.715** | **0.364** | +36% beat, +42% downbeat |
+| v4 | 5L ch32, augmented + mic profile | 0.715 | 0.364 | +36% beat |
+| v7 | 7L ch32, deep | **0.787** | **0.371** | Best F1, 79ms+ inference |
+| v9 | 5L DS-TCN 24ch | 0.688 | — | 98ms, residual ADD overhead |
+
+**Beat-sync FC (ABANDONED — circular dependency, no discriminative signal):**
+
+| Version | Architecture | Downbeat F1 | Notes |
+|---------|-------------|-------------|-------|
+| Phase A | FC 316→32→16→1 | 0.548 | Per-beat features lack discriminative power |
+
+**Frame-level FC (IN PROGRESS):** Not yet trained.
 
 ## Acoustic Environment Augmentation
 

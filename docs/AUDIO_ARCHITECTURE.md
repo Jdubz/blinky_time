@@ -55,8 +55,9 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |                                    --> Transient Hits (visual only)
       +--- [legacy, NN=1 build] BeatActivationNN (mel CNN, 79-98ms) --> ODF [nnbeat=1]
       |
-      +--- [planned] SpectralAccumulator (rawMelBands_, every frame)
-      |                   accumulates pre-compression/pre-whitening mel bands
+      +--- [planned] FrameBeatNN (FC, ~15.6 Hz)
+      |                   Input: sliding window of rawMelBands_ (N frames × 26)
+      |                   Output: beat_activation (replaces BandFlux ODF) + downbeat_activation
       |
 OSS Buffer (6s @ 60Hz)
       |
@@ -65,12 +66,6 @@ OSS Buffer (6s @ 60Hz)
       |                                                            beatPeriodSamples_
       |                                                                    |
       +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
-      |                                        |
-      |                            [at beat fire, planned] BeatSyncNN (FC, ~2 Hz)
-      |                              Input: last 4 beats from SpectralAccumulator
-      |                              → CORRECTIONS: beat confidence, tempo factor, phase offset
-      |                              → NEW: downbeat prob
-      |                              Corrections feed back → CBSS (tempo, phase, confidence)
       |                                        |
 AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure }
       |
@@ -224,19 +219,19 @@ AudioController delegates transient detection to the EnsembleDetector. Currently
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
-### NN Beat Activation (mel-spectrogram CNN — legacy; beat-sync hybrid — planned)
+### NN Beat Activation (mel-spectrogram CNN — legacy; frame-level FC — planned)
 
-**Current (mel-spectrogram CNN, supported but performance-limited):** Causal 1D CNN replacing BandFlux as ODF source. Still wired through `BeatActivationNN` / `AudioController` / `ConfigStorage` and enabled by default when built with `NN=1` (`nnBeatEnabled=true`). All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget but functional at reduced framerate (~12 Hz). Best offline F1: v7-melfixed 0.787. No further architecture work planned — superseded by beat-synchronous approach. See `IMPROVEMENT_PLAN.md` Closed Investigations.
+**Current (mel-spectrogram CNN, supported but performance-limited):** Causal 1D CNN replacing BandFlux as ODF source. Still wired through `BeatActivationNN` / `AudioController` / `ConfigStorage` and enabled by default when built with `NN=1` (`nnBeatEnabled=true`). All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget but functional at reduced framerate (~12 Hz). Best offline F1: v7-melfixed 0.787. No further CNN work planned. See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
-**Planned (beat-synchronous hybrid corrector):** Replaces per-frame mel CNN with a tiny FC model that runs at beat rate (~2 Hz). A `SpectralAccumulator` accumulates **raw mel bands** (pre-compression, pre-whitening) between beats — computing mean, max, and std dev per band. At beat fire, the last 4 beat spectral summaries (316 floats = 4 × 79) feed through a 316→48→24→N FC network producing both **correction outputs** (beat confidence, tempo factor, phase offset → feed back into CBSS) and **new capability outputs** (downbeat probability, meter). Projected: ~10,000 params, ~10 KB INT8, <0.5ms per beat. See `IMPROVEMENT_PLAN.md` Priority 1 for full design.
+**Planned (frame-level FC beat/downbeat activation):** FC model processing a sliding window of raw mel frames (N frames × 26 bands) at ~15.6 Hz (every 4th frame). Produces two outputs: **beat activation** (replaces BandFlux as ODF for CBSS) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing — but uses FC layers instead of convolutions for Cortex-M4F feasibility (~60-200µs vs 79-98ms). Uses raw mel bands (pre-compression, pre-whitening), decoupled from 47+ tunable firmware parameters. See `IMPROVEMENT_PLAN.md` Priority 1 for full design.
 
-**Key difference:** The mel-spectrogram CNN replaced BandFlux (the ODF source). The beat-sync model *corrects and augments* CBSS — BandFlux ODF and the CBSS pipeline handle beat detection, but the NN validates each beat (confidence), corrects octave errors (tempo factor), nudges phase alignment (phase offset), and provides downbeat/meter that the deterministic pipeline cannot compute. Using raw mel bands (not processed melBands_) decouples the NN from 47+ tunable firmware parameters.
+**Previous approach (beat-synchronous hybrid, ABANDONED March 11):** A beat-rate FC classifier on accumulated spectral summaries was prototyped (Phase A downbeat-only, val_F1=0.548). Abandoned due to circular dependency with CBSS, negligible discriminative power in per-beat features, and misalignment with proven approaches. See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
 **Key settings:**
 
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
-| `nnBeatEnabled` | true | Use mel CNN ODF instead of BandFlux (requires NN=1 build). Will be repurposed to enable/disable beat-sync NN when available. | `set nnbeat 1` |
+| `nnBeatEnabled` | true | Use mel CNN ODF instead of BandFlux (requires NN=1 build). Will be repurposed to enable/disable frame-level FC when available. | `set nnbeat 1` |
 
 ---
 
@@ -253,8 +248,8 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (250ms) | - | ~3% | Amortized |
 | NN mel-spectrogram (current, NN=1) | ~14 KB arena + 13 KB context | ~5% | TFLite Micro (96 KB arena, 79-98ms/frame — too slow) |
-| NN beat-sync (planned, NN=1) | ~4 KB arena + 2.5 KB history + 0.3 KB accumulator | <0.1% | FC model at ~2 Hz, <0.5ms per beat |
-| **Total** | **~22 KB base** | **~15-20%** | +96 KB arena (current) or +7 KB (planned beat-sync) |
+| NN frame-level FC (planned, NN=1) | ~8-16 KB arena + 3.3 KB mel buffer | ~0.1-0.3% | FC model at ~15.6 Hz, ~60-200µs/inference |
+| **Total** | **~22 KB base** | **~15-20%** | +96 KB arena (current) or +11-19 KB (planned frame-level FC) |
 
 ---
 
