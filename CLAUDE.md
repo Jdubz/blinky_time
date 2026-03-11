@@ -165,7 +165,7 @@ AdaptiveMic (AGC + normalization)
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
     ├── EnsembleDetector (BandWeightedFlux Solo) → ODF [default]
-    ├── [legacy, NN=1 build] BeatActivationNN (mel CNN, 79-98ms) → ODF [nnbeat=1]
+    ├── [NN=1 build] FrameBeatNN (frame-level FC, ~60-200µs) → ODF [nnbeat=1]
     ↓
 AudioController (CBSS beat tracking)
     │

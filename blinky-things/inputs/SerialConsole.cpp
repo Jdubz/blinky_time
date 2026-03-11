@@ -1646,7 +1646,7 @@ void SerialConsole::streamTick() {
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
     // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"beat":<float>,"db":<float>,"bpm":<float>}
-    // "mel" = getRawMelBands() — the exact input to BeatActivationNN::infer()
+    // "mel" = getRawMelBands() — the exact input to FrameBeatNN::infer()
     // "beat" = NN beat activation output (0 if NN not loaded)
     // "db" = NN downbeat activation (0 if no downbeat head)
     // "bpm" = current estimated tempo
@@ -1667,16 +1667,12 @@ void SerialConsole::streamTick() {
             // onset = raw ODF fed into CBSS (NN activation or BandFlux)
             Serial.print(F("],\"onset\":"));
             Serial.print(audioCtrl_->getLastOnsetStrength(), 4);
-#ifdef ENABLE_NN_BEAT_ACTIVATION
             Serial.print(F(",\"nn\":"));
-            Serial.print(audioCtrl_->getBeatActivationNN().isReady() ? 1 : 0);
-            if (audioCtrl_->getBeatActivationNN().isReady()) {
+            Serial.print(audioCtrl_->getFrameBeatNN().isReady() ? 1 : 0);
+            if (audioCtrl_->getFrameBeatNN().isReady()) {
                 Serial.print(F(",\"nndb\":"));
-                Serial.print(audioCtrl_->getBeatActivationNN().getLastDownbeat(), 4);
+                Serial.print(audioCtrl_->getFrameBeatNN().getLastDownbeat(), 4);
             }
-#else
-            Serial.print(F(",\"nn\":0"));
-#endif
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"phase\":"));
@@ -1890,13 +1886,10 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             Serial.println(F("ERROR: AudioController not available"));
             return true;
         }
-        audioCtrl_->getBeatActivationNN().printDiagnostics();
-#ifdef ENABLE_NN_BEAT_ACTIVATION
-        audioCtrl_->getBeatSyncNN().printDiagnostics();
-#endif
+        audioCtrl_->getFrameBeatNN().printDiagnostics();
         // Show effective NN-mode parameter overrides so users aren't surprised
         bool nnActive = audioCtrl_->nnBeatActivation &&
-                        audioCtrl_->getBeatActivationNN().isReady();
+                        audioCtrl_->getFrameBeatNN().isReady();
         if (nnActive) {
             float contrast = audioCtrl_->cbssContrast;
             float alpha = audioCtrl_->cbssAlpha;

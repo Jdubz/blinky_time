@@ -4,7 +4,7 @@
 # This script:
 # 1. Exports the trained model to TFLite INT8 C header
 # 2. Validates the model fits within size budget
-# 3. Commits the updated beat_model_data.h to git
+# 3. Commits the updated frame_beat_model_data.h to git
 # 4. Pushes to remote (blinkyhost pulls, compiles, flashes)
 #
 # Usage:
@@ -19,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ML_DIR="$REPO_ROOT/ml-training"
-HEADER_PATH="$REPO_ROOT/blinky-things/audio/beat_model_data.h"
+HEADER_PATH="$REPO_ROOT/blinky-things/audio/frame_beat_model_data.h"
 DEFAULT_MODEL="$ML_DIR/outputs/best_model.keras"
 DEFAULT_CONFIG="$ML_DIR/configs/default.yaml"
 
@@ -76,8 +76,8 @@ fi
 
 # Check it's not the placeholder
 if grep -q "0x00, 0x00, 0x00, 0x00," "$HEADER_PATH" && \
-   grep -q "beat_model_data_len = 4;" "$HEADER_PATH"; then
-    echo "ERROR: beat_model_data.h is still the placeholder (4 bytes)."
+   grep -q "frame_beat_model_data_len = 4;" "$HEADER_PATH"; then
+    echo "ERROR: frame_beat_model_data.h is still the placeholder (4 bytes)."
     echo "Export a real model first."
     exit 1
 fi
@@ -93,9 +93,9 @@ echo "=== Committing model to git ==="
 git add "$HEADER_PATH"
 
 if git diff --cached --quiet "$HEADER_PATH"; then
-    echo "No changes to beat_model_data.h (already committed)."
+    echo "No changes to frame_beat_model_data.h (already committed)."
 else
-    git commit -m "Update beat_model_data.h with trained NN model
+    git commit -m "Update frame_beat_model_data.h with trained NN model
 
 $MODEL_SIZE
 Source: $MODEL_PATH"

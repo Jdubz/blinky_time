@@ -97,7 +97,9 @@ public:
     //   multi-agent, template/subbeat/metrical checks, ODF sources 1-5, legacy spectral flux.
     //   All A/B tested: zero or negative benefit vs CBSS baseline. Saves ~1500 lines, ~40 KB flash.
     //   Devices on v61 or earlier will factory-reset on first boot with v64 firmware.
-    static const uint8_t SETTINGS_VERSION = 64;
+    // Version 65: Replace BeatActivationNN/BeatSyncNN/SpectralAccumulator with FrameBeatNN.
+    //   Mel-CNN (79-98ms) and beat-sync hybrid both closed. Frame-level FC approach.
+    static const uint8_t SETTINGS_VERSION = 65;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -330,7 +332,7 @@ public:
         // (subbeatBins/templateHistBars removed v64 — associated features removed)
 
         // NN beat activation (v54)
-        bool nnBeatActivation;          // Use NN ODF instead of BandFlux (requires ENABLE_NN_BEAT_ACTIVATION)
+        bool nnBeatActivation;          // Use FrameBeatNN ODF instead of BandFlux (requires ENABLE_NN_BEAT_ACTIVATION)
 
         // Spectral noise estimation (v56)
         bool noiseEstEnabled;           // Enable minimum statistics noise subtraction
