@@ -55,15 +55,15 @@ uninitMemberVarPrivate
 # IMU code has conditions that are always true/false when IMU_ENABLED is not defined
 knownConditionTrueFalse:*IMUHelper*
 
-# BeatActivationNN stub (when ENABLE_NN_BEAT_ACTIVATION is not defined) has isReady()
+# FrameBeatNN stub (when ENABLE_NN_BEAT_ACTIVATION is not defined) has isReady()
 # returning false, making NN-active conditions always false. This is intentional
 # conditional compilation — the real class returns true when NN model loads successfully.
 knownConditionTrueFalse:blinky-things/audio/AudioController.cpp
 knownConditionTrueFalse:blinky-things/inputs/SerialConsole.cpp
 
-# BeatActivationNN has #ifdef/#else stubs — cppcheck sees both classes without
+# FrameBeatNN has #ifdef/#else stubs — cppcheck sees both classes without
 # understanding the preprocessor guard, falsely reporting an ODR violation
-ctuOneDefinitionRuleViolation:blinky-things/audio/BeatActivationNN.h
+ctuOneDefinitionRuleViolation:blinky-things/audio/FrameBeatNN.h
 
 # ============================================
 # ArduinoJson library patterns
