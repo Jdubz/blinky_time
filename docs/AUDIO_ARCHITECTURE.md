@@ -49,19 +49,26 @@ PDM Microphone
       |
 AdaptiveMic (level, transient, spectral flux)
       |
+SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
+      |
       +--- EnsembleDetector (BandFlux Solo) --> ODF [default]
       |                                    --> Transient Hits (visual only)
-      +--- BeatActivationNN (TFLite Micro) --> ODF [nnbeat=1, requires NN=1 build]
       |
 OSS Buffer (6s @ 60Hz)
       |
-      +--- Autocorrelation (every 500ms) --> Bayesian Tempo Fusion --> Best BPM
+      +--- Autocorrelation (every 250ms) --> Bayesian Tempo Fusion --> Best BPM
       |                                                                    |
       |                                                            beatPeriodSamples_
       |                                                                    |
       +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
-      |                                                                    |
-AudioControl { energy, pulse, phase, rhythmStrength }
+      |                                                        |
+      |                             [NN=1 build, planned] SpectralAccumulator
+      |                                  melBands_ accumulated between beats
+      |                                        |
+      |                                  BeatSyncNN (FC, ~2 Hz at beat fire)
+      |                                  → downbeat, beat confidence, tempo hint
+      |                                        |
+AudioControl { energy, pulse, phase, rhythmStrength, downbeat, beatInMeasure }
       |
 Generators (Fire, Water, Lightning)
 ```
@@ -215,13 +222,11 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 
 ### NN Beat Activation (v54+ - Optional, requires NN=1 build)
 
-Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from `SharedSpectralAnalysis::getRawMelBands()` (26 bands, 60-8000 Hz). Outputs beat activation (channel 0) and downbeat activation (channel 1). Toggle with `set nnbeat 1`.
+**Current (mel-spectrogram CNN, CLOSED):** Causal 1D CNN replacing BandFlux as ODF source. All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget. Best offline F1: v7-melfixed 0.787. See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
-**Committed model (staging):** v9 DS-TCN 24ch (depthwise separable TCN, 128-frame context). ~26.5 KB INT8, targeting ~25-30ms inference on Cortex-M4F @ 64 MHz (not yet measured). Previous standard conv models (5L/7L) took 79ms+ (~12 Hz framerate).
+**Planned (beat-synchronous spectral classifier):** Replaces per-frame mel CNN with a tiny FC model that runs at beat rate (~2 Hz). A `SpectralAccumulator` averages mel bands between beats. At beat fire, the last 4 beat spectral summaries (220 floats) feed through a 220→32→16→3 FC network producing downbeat probability, beat confidence, and tempo hint. Projected: ~7,500 params, ~8 KB INT8, <0.5ms per beat. See `IMPROVEMENT_PLAN.md` Priority 1 for full design.
 
-**Training:** 4-system consensus labels (Beat This! + essentia + librosa + madmom) across 6993 tracks with acoustic environment augmentation (volume, noise, reverb, RIR convolution) and mic profile augmentation. Best offline F1: v7-melfixed 0.787 (too slow to deploy). v9 DS-TCN training in progress (24ch and 32ch variants).
-
-**Hardware A/B test (v4 model, March 2026):** NN wins 11/18 tracks vs BandFlux, mean error 14.8 vs 15.6. Default ON since v58.
+**Key difference:** The mel-spectrogram CNN replaced BandFlux (the ODF source). The beat-sync model *augments* CBSS — BandFlux ODF and the entire CBSS pipeline stay unchanged. The NN provides downbeat/meter information that the deterministic pipeline cannot compute.
 
 **Key settings:**
 
@@ -243,8 +248,9 @@ Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from 
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| NN beat activation (optional) | ~14 KB arena + 13 KB context | ~5% | TFLite Micro (NN=1 build, `nnbeat=1`, 96 KB arena allocated) |
-| **Total** | **~22 KB base** | **~15-20%** | +96 KB static arena + 27 KB context buffer (NN=1 build) |
+| NN mel-spectrogram (current, NN=1) | ~14 KB arena + 13 KB context | ~5% | TFLite Micro (96 KB arena, 79-98ms/frame — too slow) |
+| NN beat-sync (planned, NN=1) | ~4 KB arena + 1.8 KB history | <0.1% | FC model at ~2 Hz, <0.5ms per beat |
+| **Total** | **~22 KB base** | **~15-20%** | +96 KB arena (current) or +6 KB (planned beat-sync) |
 
 ---
 

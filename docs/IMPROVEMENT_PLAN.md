@@ -26,74 +26,179 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ## Active Priorities
 
-### Priority 1: Feature-Level NN Architecture
+### Priority 1: Beat-Synchronous Spectral NN
 
 **Status: DESIGN PHASE (March 10, 2026)**
 
-**Problem:** Mel-spectrogram models process 3,328+ inputs and require 79-98ms inference — 8-10× over budget. The signal chain already extracts rich features (onset strength, autocorrelation, comb filter state, spectral flux) that are discarded before the NN sees them.
+**Problem:** The deterministic pipeline (BandFlux + CBSS) achieves only ~28% beat F1 in mic-in-room conditions. Core failures:
+- **Octave errors**: ACF/comb filters have strong sub-harmonic peaks → half/double-time lock (135 BPM gravity well). Hand-tuned octave checks help but are brittle.
+- **Phase drift**: CBSS derives phase from a counter. Slight BPM error accumulates phase offset. PLL correction is conservative to avoid jitter.
+- **False beats during breakdowns**: CBSS forces beats when no onset is detected, maintaining phase through silence but triggering false visuals.
+- **Slow tempo adaptation**: Bayesian fusion with conservative transitions takes 4-8 seconds to lock a new tempo after a transition.
+- **Downbeat detection**: F1 ~0.33 offline. No spectral content analysis — purely counting beats modulo 4.
 
-**Approach:** Train a tiny model on pre-extracted features from the existing signal chain instead of raw mel spectrograms. The model assists and corrects the real-time algorithms rather than replacing them.
+Mel-spectrogram NN models that could improve ODF quality require 79-98ms inference — 8-10× over budget.
 
-**Input features (candidate set, ~30-64 floats):**
+**Approach:** Accumulate spectral summaries between beats, run a hybrid classifier at beat time (~2 Hz) that both **corrects the deterministic pipeline** and **provides new capabilities** (downbeat, meter). The NN validates and corrects CBSS rather than passively layering on top of it.
 
-| Feature | Size | Source | Rate |
-|---------|------|--------|------|
-| OSS buffer (recent) | 16-32 floats | AudioController circular buffer | 60 Hz |
-| ACF output | 8-16 floats | Autocorrelation (top lags + scores) | 2 Hz |
-| Comb filter bank | 20 floats | Bayesian tempo posterior | 2 Hz |
-| Current BPM + confidence | 2 floats | AudioController state | 60 Hz |
-| Spectral band energies | 4-8 floats | SharedSpectralAnalysis | 60 Hz |
+**Architecture: Beat-Synchronous Spectral Accumulator + Hybrid Corrector**
 
-**Output targets:**
-- Beat activation (0-1): confirms or corrects CBSS beat placement
-- Downbeat activation (0-1): identifies bar boundaries
-- Tempo correction signal: nudges BPM when ACF is ambiguous
+```
+SharedSpectralAnalysis (already runs every frame, no additional cost)
+     │
+     ├── melBands_ (26 bands, 62.5 Hz)
+     │         │
+     │    SpectralAccumulator (NEW, ~200 bytes firmware)
+     │         │  Between beats: running sum + count + max of mel bands per frame
+     │         │  At beat fire: avg_mel[26], peak_mel[26], odf_stats[3] → 55 floats
+     │         │
+     │    Beat history buffer (last 4-8 beats):
+     │         │  beat_features[8][55] ≈ 1.8 KB
+     │         │
+     │    BeatSyncNN inference (at beat fire only, ~2 Hz):
+     │         │  Input:  4 beats × 55 features = 220 floats
+     │         │  Model:  220 → 32 → 16 → N outputs (FC layers)
+     │         │  ~7,500 params, ~8 KB INT8, <0.5ms inference
+     │         │
+     │         ├── CORRECTION outputs → feed back into AudioController:
+     │         │     beat_confidence  → suppress false beats (breakdowns)
+     │         │     tempo_factor     → correct octave errors (×2, ×0.5, ×1)
+     │         │     phase_offset     → nudge beat timing
+     │         │
+     │         └── NEW CAPABILITY outputs → AudioControl:
+     │               downbeat_prob   → AudioControl.downbeat
+     │               meter           → AudioControl.beatInMeasure
+     │
+     ├── BandFlux ODF → CBSS → beat detection (NN corrections applied)
+     │
+     └── AudioControl (all fields, with NN-corrected phase/tempo + downbeat/meter)
+```
 
-**Projected inference:** With ~64 input features → 1-2 hidden layers (16-32 units) → 2-3 outputs, total <500 parameters, <5,000 MACs. Estimated **<1ms inference** on Cortex-M4F. Well within 10ms budget.
+**Why beat-synchronous, not per-frame:**
+- Runs at ~2 Hz (at beat fire) instead of 62.5 Hz → 30x less inference work
+- Can use richer inputs per inference (220 floats vs 3,328 for mel CNN)
+- Even 10,000 params at 2 Hz is trivial CPU
+- Mel bands are already computed every frame by SharedSpectralAnalysis — zero additional feature cost
+- Krebs et al. (2016) demonstrated one 180-dim feature vector per beat is sufficient for downbeat tracking
 
-**Three candidate architectures:**
+**Per-beat feature vector (55 floats):**
 
-1. **1D TCN on ODF time series** — Process 32-64 recent OSS samples through 2-3 conv layers (k=3, 8-16ch). Runs every frame at 60 Hz. Learns temporal onset patterns that predict beats. ~2,000 params, ~2ms projected.
+| Feature | Size | Computation |
+|---------|------|-------------|
+| `avg_mel` | 26 | Mean mel bands over frames since last beat |
+| `peak_mel` | 26 | Max mel bands over frames since last beat |
+| `odf_mean` | 1 | Mean spectral flux since last beat |
+| `odf_max` | 1 | Peak spectral flux since last beat |
+| `onset_ratio` | 1 | Fraction of frames above onset threshold |
 
-2. **Beat-synchronous downbeat classifier (Krebs 2016 style)** — Accumulate features between beats, run inference only at beat time (~2 Hz). Input: spectral profile at beat + inter-beat statistics + position-in-measure history. Very MCU-friendly since it runs at beat rate, not frame rate. ~500 params, <1ms per beat.
+**Model outputs (hybrid — correction + new capabilities):**
 
-3. **Learned ACF refinement** — Post-process the raw ACF output (140 lags) through a small FC network to disambiguate harmonics. Runs at ACF update rate (2 Hz). Could directly replace the hand-tuned octave discrimination logic. ~1,000 params, <1ms per update.
+*Correction outputs (feed back into AudioController):*
+- **Beat confidence (0-1)**: How likely this beat was a true beat. Low values during breakdowns suppress forced beats and reduce `rhythmStrength`. Addresses false beat problem.
+- **Tempo factor**: Octave correction signal. Trained to output ~1.0 when tempo is correct, ~2.0 when half-time, ~0.5 when double-time. The NN learns this from spectral patterns — at the correct tempo, beats alternate kick-heavy and snare-heavy spectral profiles. At half-time, every beat looks the same. Addresses octave error and 135 BPM gravity well.
+- **Phase offset (-0.5 to 0.5)**: Fractional beat correction. If the spectral onset peak is consistently offset from the beat anchor, nudge the PLL. Addresses phase drift.
 
-**Approach (2) is most promising** for downbeat detection — Krebs et al. (2016) demonstrated that processing one feature vector per beat (not per frame) is sufficient for downbeat tracking, achieving strong results with a 180-dimensional input at ~2 Hz inference rate.
+*New capability outputs:*
+- **Downbeat probability (0-1)**: Identifies bar boundaries from spectral content changes (harmony shifts, bass patterns). Addresses downbeat F1 ~0.33.
+- **Meter estimate**: Currently 4/4 assumed. Could learn 3/4, 6/8 from beat-level spectral patterns.
 
-**Training data strategy:**
+**How correction outputs integrate with CBSS:**
+1. **Beat confidence < threshold** → AudioController reduces `rhythmStrength`, suppresses visual pulse. Does NOT stop the beat counter (CBSS continues tracking internally so it can recover quickly).
+2. **Tempo factor != 1.0** → AudioController applies `switchTempo(bpm * tempoFactor)` with existing Bayesian posterior nudge (`tempoNudge`). More reliable than the current shadow CBSS octave checker because the NN sees spectral evidence, not just beat strength ratios.
+3. **Phase offset** → Added to PLL's proportional correction term. Bounded by existing PLL clamp (±T/4 after warmup). Replaces or supplements the onset snap heuristic.
 
-Existing mel-spectrogram training data (64 GB, 3.8M chunks of 128×26) is **not reusable** — wrong feature format. Reusable assets:
+**Training the correction outputs requires CBSS simulation** (partial):
+- Beat confidence: Label = 1.0 if CBSS beat aligns with ground truth (±70ms), 0.0 otherwise. Requires simulating beat timing from the ODF — but only simple CBSS, not full Bayesian fusion.
+- Tempo factor: Label = ground_truth_bpm / cbss_bpm (clipped to {0.5, 1.0, 2.0}). Requires a rough BPM estimate from ACF — simple autocorrelation, not full fusion.
+- Phase offset: Label = signed distance from CBSS beat to nearest ground truth beat, in fractions of beat period.
+
+This means we DO need a **lightweight CBSS/ACF simulator** — not the full signal chain, but enough to produce approximate beat times and BPM from the ODF. ~300-500 lines of Python (ACF + simple peak-picking + counter-based beat detection), not 2000+ lines.
+
+**Projected resource usage:**
+
+| Resource | Mel-spectrogram NN (current) | BeatSyncNN (proposed) | Savings |
+|----------|-----|-----|---------|
+| Inference time | 79-98ms @ 62.5 Hz | <0.5ms @ ~2 Hz | **99.5%** |
+| Tensor arena | 96 KB | ~4 KB | **96%** |
+| Context buffer | 13-27 KB (128-256 frames × 26) | ~1.8 KB (8 beats × 55) | **93%** |
+| Model flash | 26-46 KB | ~8 KB | **75%** |
+| Op resolver | 14 ops (Conv2D, Pad, SpaceToBatch, ...) | 2 ops (FullyConnected, Logistic) | **86%** |
+
+**Firmware changes (3 files):**
+
+1. **`SpectralAccumulator` (NEW, ~80 lines)** — Running mel band sum/count/max between beats. Reset at beat fire. ~200 bytes state.
+
+2. **`BeatActivationNN.h` (MODIFY)** — Replace sliding mel-spectrogram window + per-frame CNN inference with beat history buffer + FC inference at beat time. Dramatically simpler: remove 96 KB arena, 256-frame context buffer, quantization loop. Add ~4 KB arena, 8-beat feature buffer, beat-time trigger.
+
+3. **`AudioController.cpp` (MODIFY, ~40 lines)** — Each frame: `accumulator_.accumulate(melBands, odf)`. At beat fire: `accumulator_.getFeatures(out)`, slide into history, run NN, reset accumulator. Apply correction outputs:
+   - `beat_confidence` → modulate `rhythmStrength` and pulse suppression
+   - `tempo_factor` → call `switchTempo(bpm * factor)` when != 1.0, with hysteresis
+   - `phase_offset` → add to PLL proportional correction term
+   - `downbeat_prob` → feed into `control_.downbeat` and `control_.beatInMeasure`
+
+The CBSS pipeline itself is unchanged, but AudioController now has a feedback path from NN outputs that corrects tempo, phase, and confidence at each beat.
+
+#### Training Data Strategy
+
+**Dataset size:** Tiny. ~400 tracks × ~200 beats/track = ~80K training examples. Each example is ~220 floats. **Total: ~70 MB** (vs 64 GB for mel-spectrogram chunks). Processes in minutes on GPU.
+
+**Reusable assets (no changes needed):**
 - Raw audio files (`/mnt/storage/blinky-ml-data/audio/`, ~400 tracks)
 - 4-system consensus beat/downbeat labels (`/mnt/storage/blinky-ml-data/labels/consensus_v2/`)
+- Mel extraction pipeline (`scripts/audio.py`, `firmware_mel_spectrogram_torch`) — already firmware-matched
+- Audio augmentation (gain, noise, RIR, time-stretch) from `prepare_dataset.py`
 - Mic calibration profiles (gain-aware augmentation)
 
-New data pipeline requires two components:
+**Previous "full signal chain simulator" plan (RESCOPED):** The earlier plan called for reimplementing the complete BandFlux → OSS → ACF → comb filter → Bayesian fusion → CBSS pipeline in Python (~2000 lines). The correction outputs require a **lightweight** subset: BandFlux ODF + simple ACF + counter-based beat detection (~300-500 lines). This is enough to produce approximate beat times and BPM estimates so we can compute correction labels (beat_confidence, tempo_factor, phase_offset).
 
-1. **Python signal chain simulator** (MUST BUILD) — Reimplement BandFlux → OSS → ACF → comb filter → CBSS in Python. Process all training audio offline. This is the only practical path for bulk data generation (thousands of tracks). No firmware signal chain simulation exists today — `prepare_dataset.py` only does mel extraction.
+**New components to build:**
 
-2. **Firmware feature exporter** (MUST BUILD) — Add serial commands to dump OSS buffer history (360 frames), ACF top lags + scores, comb filter 20-bin posterior, CBSS state. The current `stream nn` command exports mel+onset+BPM+phase per frame but NOT internal buffers. Needed to validate Python simulator matches real firmware behavior.
+1. **Python BandFlux ODF (~100 lines)** — Compute spectral flux from mel spectrograms. Simple: log-compress, band-weight, half-wave rectify.
 
-For the beat-synchronous downbeat approach (candidate 2), the simulator only needs OSS + spectral profile at beat times — a simpler subset than the full chain.
+2. **Lightweight CBSS simulator (~300 lines)** — Simple ACF peak-picking → BPM estimate → counter-based beat prediction. Does NOT need comb filter bank, Bayesian fusion, onset snap, PLL, or octave checks. Just enough to produce "where CBSS would place beats" for computing correction labels.
+
+3. **Beat-aligned feature extractor (~200 lines)** — Segment mel spectrograms by ground truth beat times, compute per-beat summaries (avg_mel, peak_mel, odf_stats), group into sequences of 4-8 beats.
+
+4. **Correction label generator (~100 lines)** — Compare CBSS-simulated beats against ground truth to produce per-beat labels: beat_confidence (aligned?), tempo_factor (octave error?), phase_offset (signed distance to nearest GT beat).
+
+5. **`BeatSyncClassifier` model (~80 lines PyTorch)** — FC with multi-head output: correction outputs (beat_confidence, tempo_factor, phase_offset) + capability outputs (downbeat_prob). Add to `models/beat_cnn.py`.
+
+6. **Modified training/export pipeline** — New Dataset class for beat-level features, multi-output loss (weighted combination of correction + capability losses), beat-level evaluation metrics (downbeat F1, octave correction accuracy, phase error reduction), simplified TFLite export.
 
 **Training pipeline:**
-1. Build Python signal chain simulator (BandFlux, OSS, ACF, comb filter bank, CBSS)
-2. Validate simulator against firmware feature exporter on reference tracks
-3. Process all training audio through simulator → extract feature-level inputs
-4. Align with ground truth beat/downbeat labels (existing 4-system consensus)
-5. Train in PyTorch
-6. Export to TFLite INT8 (<2 KB model size)
-7. Deploy alongside existing signal chain
+1. Process training audio through existing mel extraction (GPU, existing code)
+2. Compute BandFlux-style ODF from mel spectrograms (new, ~20 lines NumPy)
+3. Run lightweight CBSS simulator → approximate beat times + BPM (new)
+4. Segment mel spectrograms by simulated beats → per-beat feature vectors (new)
+5. Compute correction labels by comparing simulated vs ground truth beats (new)
+6. Group into sequences of 4-8 beats with correction + downbeat labels (new)
+7. Apply augmentation at audio level (existing gain/noise/RIR/time-stretch code)
+8. Train BeatSyncClassifier in PyTorch (multi-output loss)
+9. Export to TFLite INT8 (<8 KB model)
+10. Deploy in modified BeatActivationNN
 
-**Key advantage:** The existing signal chain does heavy lifting (FFT, spectral analysis, onset detection, autocorrelation, CBSS). The NN only needs to learn patterns in already-extracted features, making the task dramatically simpler than end-to-end mel-spectrogram processing.
+**Phased implementation:**
+- **Phase A (downbeat only):** Train with ground truth beat times as input segmentation. Downbeat output only (no correction). Validates the architecture and training pipeline. No CBSS simulator needed.
+- **Phase B (+ beat confidence):** Add beat_confidence output. Simulated beats vs ground truth produces confidence labels. Lightweight CBSS simulator needed.
+- **Phase C (+ tempo/phase correction):** Add tempo_factor and phase_offset outputs. Full correction feedback loop. Requires tuning the AudioController integration (hysteresis, clamp bounds, correction rates).
+
+**Firmware validation:** Use existing `stream nn` command + `capture_nn_stream.py` to confirm Python mel bands match firmware. Additionally, compare Python CBSS simulator beat times against firmware beat times on reference tracks (via `stream on` beat events) to validate the simulator produces comparable error patterns.
+
+#### Follow-up: ACF Features as Additional Input
+
+**Status: DEFERRED** (address if tempo_factor correction from spectral features alone proves insufficient)
+
+The beat-sync model's `tempo_factor` output learns octave errors from spectral patterns (kick/snare alternation, harmonic structure). If this isn't enough to solve the 135 BPM gravity well, add ACF-derived features to the per-beat feature vector:
+- Top 3 ACF peak lags + normalized correlation values (6 floats)
+- Comb filter bank peak BPM + confidence (2 floats)
+- Current Bayesian posterior entropy (1 float)
+
+These are already computed in AudioController and would add only 9 floats to the feature vector (55 → 64). The SpectralAccumulator would snapshot them at beat time. The model could then learn "the ACF says 68 BPM but the spectral pattern says alternating kick/snare → double it to 136 BPM." Same architecture, just richer input.
 
 **Research context:**
-- Krebs, Böck & Widmer (2016): Beat-synchronous RNN for downbeat detection. Processes one 180-dim feature vector per beat (~2 Hz). State of the art for meter tracking. Directly applicable to our beat-rate inference approach.
-- Gkiokas et al. (2017): CNN Beat Activation Function for dancing robot on ARM Cortex-A8. Demonstrates practical embedded beat tracking with architectural constraints.
-- No published TinyML beat tracking system on Cortex-M class hardware exists. Blinky appears to be the first.
-
-**Changes deferred from v9 DS-TCN (applicable to future mel-spectrogram models if revisited):**
-- `beat_cnn.py`: Set `bias=False` on `DSConvBlock.pw_conv` and `DSTCNBeatCNN.input_conv` (redundant before BatchNorm). Also update `export_tflite.py`.
+- Krebs/Böck/Widmer 2016: Beat-synchronous downbeat RNN. Processes one 180-dim vector per beat (~2 Hz). Key insight: per-beat features are sufficient for meter tracking.
+- Gkiokas et al. 2017: CNN Beat Activation Function for dancing robot on ARM Cortex-A8. Practical embedded beat tracking with HW constraints.
+- No published TinyML beat tracking on Cortex-M class hardware exists (as of March 2026).
 
 ### Priority 2: v65 Parameter Calibration
 
@@ -135,13 +240,15 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **NN inference speed** — No mel-spectrogram model fits within the 10ms inference budget. Feature-level approach (Priority 1) is the path forward.
+1. **Deterministic pipeline accuracy (~28% F1)** — BandFlux + CBSS is unreliable in mic-in-room conditions. Root causes: octave errors, phase drift, false beats during breakdowns, slow tempo adaptation. Priority 1 hybrid corrector (Phase B/C) addresses all four via NN feedback at beat time.
 
-2. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Tested 47 bins in v61 — no improvement. NOT a bin count issue. A learned ACF refinement model (Priority 1, approach 3) could help.
+2. **Downbeat detection quality (F1 ~0.33)** — Only 2/4 consensus systems provide downbeat labels. No spectral analysis at beat time. Priority 1 (Phase A) provides learned downbeat classification from spectral content.
 
-3. **Phase alignment** — Correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. All systems achieving >60% F1 use explicit phase tracking (HMM, PLP oscillator, or particle cloud). Feature-level NN could learn phase correction patterns.
+3. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Priority 1 tempo_factor output (Phase C) learns octave correction from spectral patterns. ACF features can be added if spectral-only is insufficient.
 
-4. **Downbeat detection quality** — Only 2/4 consensus systems provide downbeat labels. Current downbeat F1 ~0.33 offline. Beat-synchronous classifier (Priority 1, approach 2) is the most promising path.
+4. **Phase alignment** — CBSS derives phase indirectly from a counter. All SOTA systems achieving >60% F1 use explicit phase tracking. Priority 1 phase_offset output (Phase C) provides learned phase correction.
+
+5. **NN inference speed (RESOLVED)** — Mel-spectrogram models require 79-98ms at 62.5 Hz (8-10× over budget). Beat-synchronous approach runs <0.5ms at ~2 Hz, well within budget.
 
 ## SOTA Context (March 2026)
 
@@ -154,14 +261,14 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
 | **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends. Our gap is primarily in ODF quality, not the beat tracking backend. However, all SOTA neural frontends require 79ms+ inference on our hardware — the feature-level approach (Priority 1) aims to close this gap using pre-extracted features within the 10ms budget.
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends that require 79ms+ on our hardware. The beat-synchronous approach (Priority 1) sidesteps this by running at beat rate (~2 Hz) on pre-accumulated spectral summaries, focusing on downbeat/meter — the areas where our deterministic pipeline has no solution — rather than trying to replace the ODF.
 
 ## Known Limitations
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** | Improved NN ODF may help |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | Open research question |
+| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** | P1 tempo_factor correction (Phase C) |
+| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | P1 phase_offset correction (Phase C) |
 | Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** | Acceptable for visuals |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** | Organic mode is correct |
@@ -171,7 +278,9 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 All items below were A/B tested and showed zero or negative benefit, or proven infeasible. Removed from firmware in v64 unless noted.
 
-- **Mel-spectrogram NN models (v4-v9)**: All architectures (standard conv, BN-fused, DS-TCN) exceed 79ms inference on Cortex-M4F @ 64 MHz. The v9 DS-TCN (designed for speed) measured 98ms due to INT8 ADD requantization overhead from residual connections. No mel-spectrogram architecture can fit the 10ms inference budget. NN=1 build flag and BeatActivationNN.h retained for future feature-level models.
+- **Mel-spectrogram NN models (v4-v9)**: All architectures (standard conv, BN-fused, DS-TCN) exceed 79ms inference on Cortex-M4F @ 64 MHz. The v9 DS-TCN (designed for speed) measured 98ms due to INT8 ADD requantization overhead from residual connections. No mel-spectrogram architecture can fit the 10ms per-frame budget. Superseded by beat-synchronous approach (<0.5ms at ~2 Hz). NN=1 build flag and BeatActivationNN.h retained for beat-sync model.
+
+- **Full Python signal chain simulator (March 2026)**: Originally proposed reimplementing the complete BandFlux → OSS → ACF → comb filter → Bayesian fusion → CBSS pipeline in Python (~2000 lines). Rescoped to lightweight CBSS simulator (~300 lines): BandFlux ODF + simple ACF + counter-based beat detection. Only needed for Phase B/C correction labels, not Phase A downbeat-only.
 
 - **Forward filter** (v57-v60): Full 6-param sweep, 7/18 octave errors vs CBSS 4/18. Half-time bias fundamental.
 - **Spectral noise subtraction** (v56): Baseline wins 13/18. Code retained, default OFF.

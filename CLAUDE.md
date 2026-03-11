@@ -162,14 +162,16 @@ PDM Microphone (16 kHz)
     ↓
 AdaptiveMic (AGC + normalization)
     ↓
-SharedSpectralAnalysis (FFT-256 → compressor → whitening)
+SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── EnsembleDetector (BandWeightedFlux Solo) → ODF [default]
-    └── BeatActivationNN (TFLite Micro, NN=1 build) → ODF [nnbeat=1]
-    ↓
+    ├── EnsembleDetector (BandWeightedFlux Solo) → ODF
+    │
 AudioController (CBSS beat tracking)
+    │
+    ├── [NN=1, planned] SpectralAccumulator (mel bands between beats)
+    │     └── BeatSyncNN (FC, ~2 Hz at beat fire) → downbeat, meter
     ↓
-AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity}
+AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure}
     ↓
 Generator (Fire/Water/Lightning)
     ↓
@@ -194,7 +196,7 @@ RenderPipeline → LED Output
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: BandFlux (default) or NN beat activation (`nnbeat=1`, requires NN=1 build)
+   - ODF source: BandFlux (default). Mel-spectrogram NN ODF closed (too slow). Beat-sync NN (planned) augments at beat fire, doesn't replace ODF.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -310,31 +312,34 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
-2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening)
-3. SharedSpectralAnalysis → EnsembleDetector (BandFlux Solo, sees whitened magnitudes) [default]
-   OR SharedSpectralAnalysis → BeatActivationNN (TFLite Micro, sees raw mel bands) [nnbeat=1]
-4. Detector → ODF value (0-1)
+2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands)
+3. SharedSpectralAnalysis → EnsembleDetector (BandFlux Solo, sees whitened magnitudes)
+4. BandFlux → ODF value (0-1)
 5. ODF → AudioController OSS buffer (6s history)
 6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
    (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
-9. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75, onsetDensity=3.2}
-10. Fire generator:
+9. [NN=1, planned] At beat fire: SpectralAccumulator → BeatSyncNN → downbeat, meter
+10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
+    onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
+11. Fire generator:
     - energy → baseline flame height
     - pulse → spark burst intensity
     - phase → breathing effect (0=on-beat)
     - rhythmStrength → blend music/organic mode
     - onsetDensity → content classification (dance=2-6/s, ambient=0-1/s)
-11. Fire heat diffusion (matrix propagation)
-12. HueRotationEffect (optional color shift)
-13. RenderPipeline → LED strip output
+    - downbeat → extra-dramatic effects on bar 1
+    - beatInMeasure → syncopation patterns, accent beats
+12. Fire heat diffusion (matrix propagation)
+13. HueRotationEffect (optional color shift)
+14. RenderPipeline → LED strip output
 ```
 
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). +96 KB tensor arena (static, 14-28 KB used) + 27 KB context buffer if NN=1 build.
+- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). Current NN=1 build: +96 KB tensor arena + 27 KB context buffer. Planned beat-sync NN: +4 KB arena + 1.8 KB beat history.
 - Flash: ~259 KB base, ~391 KB with NN=1 (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
@@ -383,8 +388,6 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
 - ✅ BandFlux Solo detector (log-compressed band-weighted spectral flux)
-- ✅ NN beat activation (5L ch32, `nnbeat=1` — default ON since v58)
-- ✅ v9 DS-TCN architecture implemented (depthwise separable TCN, training in progress)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
@@ -397,10 +400,17 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
+**In Progress:**
+- Beat-synchronous spectral NN (downbeat/meter classifier, ~2 Hz inference at beat fire, design phase)
+
 **Planned (Not Started):**
 - Bluetooth/BLE support (design doc complete)
 - Dynamic device switching (runtime config)
 - CI/CD automation
+
+**Closed (mel-spectrogram NN, v4-v9):**
+- All architectures (standard conv, BN-fused, DS-TCN) measured 79-98ms on Cortex-M4F — 8-10× over frame budget
+- Superseded by beat-synchronous approach (<0.5ms at ~2 Hz)
 
 ## Documentation Guidelines
 
@@ -433,5 +443,5 @@ Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly bus
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
 - **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation, adaptive threshold
-- **NN beat activation** (v54+): Causal 1D CNN replaces BandFlux as ODF source. Requires `NN=1` build flag. Default ON (`nnbeat=1`). v9 DS-TCN architecture training.
+- **NN beat activation** (v54+, CLOSED): Mel-spectrogram CNN models (v4-v9) all 79-98ms — too slow. Superseded by beat-synchronous spectral NN (design phase): tiny FC model runs at beat rate (~2 Hz) on accumulated mel band summaries, provides downbeat/meter. See `IMPROVEMENT_PLAN.md` Priority 1.
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)
