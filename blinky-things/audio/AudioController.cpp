@@ -123,12 +123,14 @@ bool AudioController::begin(uint32_t sampleRate) {
         beatActivationNN_.printDiagnostics();
     }
 
+#ifdef ENABLE_NN_BEAT_ACTIVATION
     // Initialize beat-sync NN (Phase A: downbeat classifier at beat rate)
     spectralAccumulator_.reset();
     beatSyncNN_.begin();
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
         beatSyncNN_.printDiagnostics();
     }
+#endif
 
     // Reset output
     control_ = AudioControl();
@@ -167,15 +169,18 @@ const AudioControl& AudioController::update(float dt) {
         dt
     );
 
+#ifdef ENABLE_NN_BEAT_ACTIVATION
     // 3b. Accumulate raw mel bands for beat-sync NN
     //     SpectralAccumulator runs every frame, building per-beat feature vectors
     //     (subdivision means + peak + duration). Features are extracted at beat fire.
+    //     Only accumulate on new frames to avoid double-counting.
     {
         const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
-        if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
+        if (spectral.isFrameReady()) {
             spectralAccumulator_.accumulate(spectral.getRawMelBands());
         }
     }
+#endif
 
     // 3c. Count onsets for density tracking
     if (lastEnsembleOutput_.transientStrength > 0.0f) {
@@ -1703,34 +1708,35 @@ void AudioController::detectBeat() {
             cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
             updateBeatStability(nowMs);
 
+            // Beat-synchronized downbeat value (from BeatSyncNN or mel-CNN fallback).
+            float downbeatValue = downbeatSmoothed_;  // default: mel-CNN EMA
+#ifdef ENABLE_NN_BEAT_ACTIVATION
             // Beat-sync NN: extract accumulated features, push to history, run inference.
             // SpectralAccumulator has been accumulating raw mel bands since last beat.
             // getFeatures() extracts the 79-float feature vector and resets for next interval.
             // BeatSyncNN maintains a ring buffer of the last 4 beats and runs FC inference.
-            float beatSyncDownbeat = 0.0f;
             {
                 float beatFeatures[SpectralAccumulator::FEATURES_PER_BEAT];
                 spectralAccumulator_.getFeatures(beatFeatures);
 
-                // Update expected beat length for better subdivision split next interval
+                // Update expected beat length for better subdivision split next interval.
+                // beatPeriodSamples_ is in OSS frames (~60 Hz), same unit as
+                // SpectralAccumulator frame count. Called after getFeatures() because
+                // getFeatures() resets the accumulator; this configures the next interval.
                 if (beatPeriodSamples_ > 2) {
                     spectralAccumulator_.setExpectedBeatFrames(beatPeriodSamples_);
                 }
 
                 beatSyncNN_.pushBeat(beatFeatures);
                 if (beatSyncNN_.isReady()) {
-                    beatSyncDownbeat = beatSyncNN_.infer();
+                    // infer() returns 0.0f if history < N_BEATS
+                    float beatSyncDownbeat = beatSyncNN_.infer();
+                    if (beatSyncDownbeat > 0.0f) {
+                        downbeatValue = beatSyncDownbeat;
+                    }
                 }
             }
-
-            // Beat-synchronized downbeat: prefer BeatSyncNN when available,
-            // fall back to smoothed mel-CNN downbeat (NN frame-rate model).
-            float downbeatValue;
-            if (beatSyncNN_.isReady() && beatSyncNN_.getBeatHistoryCount() >= BeatSyncNN::N_BEATS) {
-                downbeatValue = beatSyncDownbeat;
-            } else {
-                downbeatValue = downbeatSmoothed_;
-            }
+#endif
 
             if (downbeatValue > dbThreshold) {
                 control_.downbeat = downbeatValue;

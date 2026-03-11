@@ -18,8 +18,10 @@ PHASE="A"
 CONFIG="configs/beat_sync.yaml"
 DATA_DIR="data/beat_sync"
 STORAGE=/mnt/storage/blinky-ml-data
-OUTPUT_DIR="$STORAGE/outputs/beat-sync-phase${PHASE}-$(date +%Y%m%d-%H%M%S)"
-LOG="$STORAGE/outputs/beat-sync-phase${PHASE}-$(date +%Y%m%d-%H%M%S).log"
+RUN_ID="$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$STORAGE/outputs"
+OUTPUT_DIR="$STORAGE/outputs/beat-sync-phase${PHASE}-${RUN_ID}"
+LOG="$STORAGE/outputs/beat-sync-phase${PHASE}-${RUN_ID}.log"
 
 SKIP_EXTRACT=false
 for arg in "$@"; do

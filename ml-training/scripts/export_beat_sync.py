@@ -52,12 +52,12 @@ def build_tf_beat_sync(n_beats: int, features_per_beat: int,
     output_list.append(db)
 
     # Phase B: beat confidence
-    if phase >= 'B':
+    if phase in ('B', 'C'):
         bc = layers.Dense(1, activation="sigmoid", name="beat_confidence")(x)
         output_list.append(bc)
 
     # Phase C: tempo factor (3-class softmax) + phase offset (tanh)
-    if phase >= 'C':
+    if phase == 'C':
         tf_out = layers.Dense(3, activation="softmax", name="tempo_factor")(x)
         po = layers.Dense(1, activation="tanh", name="phase_offset_raw")(x)
         # Scale tanh output by 0.5 → [-0.5, 0.5]
@@ -134,13 +134,13 @@ def transfer_weights(pt_state_dict: dict, tf_model: keras.Model,
         'downbeat_head.bias': ('downbeat', 'bias'),
     }
 
-    if phase >= 'B':
+    if phase in ('B', 'C'):
         weight_map.update({
             'beat_conf_head.weight': ('beat_confidence', 'kernel'),
             'beat_conf_head.bias': ('beat_confidence', 'bias'),
         })
 
-    if phase >= 'C':
+    if phase == 'C':
         weight_map.update({
             'tempo_head.weight': ('tempo_factor', 'kernel'),
             'tempo_head.bias': ('tempo_factor', 'bias'),
@@ -175,7 +175,7 @@ def generate_c_header(tflite_bytes: bytes, output_path: Path,
                       c_array_name: str = "beat_sync_model_data",
                       model_info: dict | None = None) -> None:
     """Generate C header file with model data."""
-    sha256 = hashlib.sha256(tflite_bytes).hexdigest()[:16]
+    sha256 = hashlib.sha256(tflite_bytes).hexdigest()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     lines = [
@@ -183,7 +183,7 @@ def generate_c_header(tflite_bytes: bytes, output_path: Path,
         "",
         "// Beat-synchronous classifier model (auto-generated)",
         f"// Exported: {timestamp}",
-        f"// SHA256:   {sha256}...",
+        f"// SHA256:   {sha256}",
         f"// Size:     {len(tflite_bytes)} bytes ({len(tflite_bytes)/1024:.1f} KB)",
     ]
     if model_info:
@@ -253,19 +253,30 @@ def main():
     # Training applies z-score normalization: x_norm = (x - mean) / std.
     # By absorbing this into the first layer weights, the model accepts
     # raw features directly — no normalization needed in firmware.
-    feat_mean_path = output_dir / "feature_mean.npy"
-    feat_std_path = output_dir / "feature_std.npy"
-    if feat_mean_path.exists() and feat_std_path.exists():
-        feat_mean = np.load(feat_mean_path)
-        feat_std = np.load(feat_std_path)
-        print(f"Folding z-score normalization into fc1 weights...")
-        print(f"  mean range: [{feat_mean.min():.4f}, {feat_mean.max():.4f}]")
-        print(f"  std range:  [{feat_std.min():.4f}, {feat_std.max():.4f}]")
-        fold_normalization_into_fc1(pt_state, feat_mean, feat_std, n_beats)
-    else:
-        print("WARNING: feature_mean.npy / feature_std.npy not found!")
-        print("  Model will expect z-score normalized input (firmware sends raw).")
-        print(f"  Looked in: {output_dir}")
+    # Search output_dir first, then model's parent directory.
+    feat_mean = feat_std = None
+    search_dirs = [output_dir]
+    model_dir = Path(model_path).parent
+    if model_dir != output_dir:
+        search_dirs.append(model_dir)
+    for stats_dir in search_dirs:
+        mean_path = stats_dir / "feature_mean.npy"
+        std_path = stats_dir / "feature_std.npy"
+        if mean_path.exists() and std_path.exists():
+            feat_mean = np.load(mean_path)
+            feat_std = np.load(std_path)
+            print(f"Folding z-score normalization into fc1 weights...")
+            print(f"  Loaded stats from: {stats_dir}")
+            print(f"  mean range: [{feat_mean.min():.4f}, {feat_mean.max():.4f}]")
+            print(f"  std range:  [{feat_std.min():.4f}, {feat_std.max():.4f}]")
+            fold_normalization_into_fc1(pt_state, feat_mean, feat_std, n_beats)
+            break
+    if feat_mean is None:
+        raise RuntimeError(
+            f"feature_mean.npy / feature_std.npy not found. "
+            f"Cannot export without normalization folding. "
+            f"Searched: {[str(d) for d in search_dirs]}"
+        )
 
     # Build PT model with folded weights (for verification)
     pt_model = build_beat_sync(

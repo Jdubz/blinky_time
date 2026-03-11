@@ -353,6 +353,14 @@ def main():
     if args.max_tracks:
         label_files = label_files[:args.max_tracks]
 
+    # Pre-index audio files for O(1) lookup (avoids repeated rglob per track)
+    print(f"Indexing audio files in {audio_dir}...")
+    audio_index: dict[str, Path] = {}
+    for ext in ["*.mp3", "*.wav", "*.flac", "*.ogg"]:
+        for p in audio_dir.rglob(ext):
+            audio_index[p.stem] = p
+    print(f"  Indexed {len(audio_index)} audio files")
+
     # Collect all features across tracks
     all_features = []
     all_labels = []
@@ -362,14 +370,7 @@ def main():
     for label_path in tqdm(label_files, desc="Extracting beat features"):
         # Find matching audio file
         track_id = label_path.stem.replace(".beats", "")
-
-        # Search for audio in subdirectories
-        audio_path = None
-        for ext in [".mp3", ".wav", ".flac", ".ogg"]:
-            candidates = list(audio_dir.rglob(f"{track_id}{ext}"))
-            if candidates:
-                audio_path = candidates[0]
-                break
+        audio_path = audio_index.get(track_id)
 
         if audio_path is None:
             skipped += 1

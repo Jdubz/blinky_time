@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string.h>
-#include <math.h>
 
 /**
  * SpectralAccumulator - Accumulates raw mel band statistics between beats
@@ -107,12 +106,8 @@ public:
         // Duration (normalized by typical beat length)
         outFeatures[MEL_BANDS * 3] = (float)frameCount_ / TYPICAL_BEAT_FRAMES;
 
-        // Update expected half-frames for next interval (use this interval's length)
-        if (frameCount_ > 2) {
-            expectedHalfFrames_ = frameCount_ / 2;
-        }
-
-        // Reset for next interval
+        // Reset for next interval.
+        // Caller owns expectedHalfFrames_ via setExpectedBeatFrames() after reset.
         reset();
     }
 

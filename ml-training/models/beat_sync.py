@@ -49,12 +49,12 @@ class BeatSyncClassifier(nn.Module):
         self.downbeat_head = nn.Linear(hidden2, 1)
 
         # Phase B: beat confidence
-        self.beat_conf_head = nn.Linear(hidden2, 1) if phase >= 'B' else None
+        self.beat_conf_head = nn.Linear(hidden2, 1) if phase in ('B', 'C') else None
 
         # Phase C: tempo correction (3-class: half, correct, double)
         #          + phase offset (continuous, [-0.5, 0.5])
-        self.tempo_head = nn.Linear(hidden2, 3) if phase >= 'C' else None
-        self.phase_head = nn.Linear(hidden2, 1) if phase >= 'C' else None
+        self.tempo_head = nn.Linear(hidden2, 3) if phase == 'C' else None
+        self.phase_head = nn.Linear(hidden2, 1) if phase == 'C' else None
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Forward pass.
@@ -121,9 +121,9 @@ def model_summary(n_beats: int = 4, features_per_beat: int = 79,
     # MACs estimate (FC layers)
     input_dim = n_beats * features_per_beat
     macs = input_dim * hidden1 + hidden1 * hidden2 + hidden2 * 1
-    if phase >= 'B':
+    if phase in ('B', 'C'):
         macs += hidden2 * 1
-    if phase >= 'C':
+    if phase == 'C':
         macs += hidden2 * 3 + hidden2 * 1
     print(f"  MACs per inference: {macs:,}")
 

@@ -10,8 +10,8 @@
 //
 // Architecture: FC-only (316→32→16→1), ~10.7K params, ~10.4 KB INT8
 // Inference: ~83µs on Cortex-M4F @ 64 MHz (negligible)
-// Memory: ~4 KB tensor arena + 2.5 KB beat history (4 beats × 79 floats × 4 bytes)
-//         + ~0.3 KB SpectralAccumulator (managed externally)
+// Memory: 8 KB tensor arena + ~1.2 KB beat history (4 beats × 79 floats × 4 bytes)
+//         + ~0.4 KB SpectralAccumulator (managed externally)
 //
 // Training uses z-score normalized features, but the export script folds the
 // normalization (mean/std) into the first FC layer weights. The exported model
@@ -37,6 +37,11 @@ public:
     static constexpr int FEATURES_PER_BEAT = SpectralAccumulator::FEATURES_PER_BEAT;  // 79
     static constexpr int INPUT_DIM = N_BEATS * FEATURES_PER_BEAT;  // 316
 
+    /**
+     * Initialize TFLite interpreter and allocate tensors.
+     * Must be called once at startup. Not safe to retry after failure —
+     * static locals are constructed exactly once.
+     */
     bool begin() {
         if (ready_) return true;
 
@@ -56,16 +61,19 @@ public:
             return false;
         }
 
-        // FC-only model needs very few ops: FullyConnected + Logistic (sigmoid)
-        // Quantize/Dequantize for INT8 I/O, Reshape for shape manipulation
+        // FC-only model needs: FullyConnected + Logistic (sigmoid)
+        // Quantize/Dequantize for INT8 I/O
         static tflite::MicroErrorReporter error_reporter;
-        static tflite::MicroMutableOpResolver<6> resolver;
-        resolver.AddFullyConnected();
-        resolver.AddLogistic();        // Sigmoid output
-        resolver.AddRelu();            // Hidden layer activations
-        resolver.AddQuantize();
-        resolver.AddDequantize();
-        resolver.AddReshape();
+        static tflite::MicroMutableOpResolver<5> resolver;
+        static bool resolverInited = false;
+        if (!resolverInited) {
+            resolver.AddFullyConnected();
+            resolver.AddLogistic();        // Sigmoid output
+            resolver.AddRelu();            // Hidden layer activations
+            resolver.AddQuantize();
+            resolver.AddDequantize();
+            resolverInited = true;
+        }
 
         static tflite::MicroInterpreter static_interpreter(
             model_, resolver, tensorArena_, TENSOR_ARENA_SIZE,
@@ -134,6 +142,7 @@ public:
         // Quantize and copy to input tensor
         if (input_->type == kTfLiteInt8) {
             float scale = input_->params.scale;
+            if (scale <= 0.0f) { invokeErrors_++; return 0.0f; }  // corrupt model guard
             int32_t zero_point = input_->params.zero_point;
             int8_t* input_data = input_->data.int8;
             for (int i = 0; i < INPUT_DIM; i++) {
