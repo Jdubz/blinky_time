@@ -7,7 +7,9 @@
 // Frame-level FC model: sliding window of N raw mel frames × 26 bands
 // → FC hidden layers → beat_activation + downbeat_activation.
 //
-// Runs every Kth frame (~15.6 Hz at K=4, 62.5 Hz mic rate).
+// Currently runs every spectral frame (~62.5 Hz). At 60-200µs per call
+// this is negligible; K-frame subsampling (e.g. K=4 → ~15.6 Hz) can be
+// added later if inference cost increases with larger models.
 // Replaces BandFlux ODF for CBSS beat tracking; BandFlux still runs
 // for transient detection (sparks/effects).
 //
@@ -45,7 +47,10 @@ public:
     bool begin() {
         if (ready_) return true;
 
-        // Only initialize if we have a real model (not the 4-byte placeholder stub)
+        // Only initialize if we have a real model (not the 4-byte placeholder stub).
+        // Runtime check allows scaffold builds; when a trained model is committed,
+        // replace with static_assert(frame_beat_model_data_len > 100, ...) to catch
+        // accidental stub-model NN=1 builds at compile time.
         if (frame_beat_model_data_len < 100) {
             initError_ = 4;  // Placeholder model
             return false;
@@ -65,6 +70,10 @@ public:
         // Quantize/Dequantize for INT8 I/O
         static tflite::MicroErrorReporter error_reporter;
         static tflite::MicroMutableOpResolver<5> resolver;
+        // Guard: C++ guarantees static locals init once, but Add*() is not
+        // idempotent — duplicate registration wastes resolver slots. The guard
+        // protects against a hypothetical retry path even though begin() is
+        // documented as not safe to retry after failure.
         static bool resolverInited = false;
         if (!resolverInited) {
             resolver.AddFullyConnected();
@@ -243,6 +252,7 @@ public:
 
 private:
     float extractOutput(int channel) {
+        if (channel < 0 || channel >= outputChannels_) return 0.0f;
         float value;
         if (output_->type == kTfLiteInt8) {
             float scale = output_->params.scale;

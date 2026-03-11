@@ -1667,6 +1667,9 @@ void SerialConsole::streamTick() {
             // onset = raw ODF fed into CBSS (NN activation or BandFlux)
             Serial.print(F("],\"onset\":"));
             Serial.print(audioCtrl_->getLastOnsetStrength(), 4);
+            // Note (v65): "nn" field is now always present in both NN and non-NN builds.
+            // Previously it was ifdef-guarded; non-NN builds emitted "nn":0 via #else.
+            // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
             Serial.print(F(",\"nn\":"));
             Serial.print(audioCtrl_->getFrameBeatNN().isReady() ? 1 : 0);
             if (audioCtrl_->getFrameBeatNN().isReady()) {
