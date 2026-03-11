@@ -70,18 +70,13 @@ struct DetectorConfig {
 };
 
 /**
- * EnsembleOutput - Combined result from all detectors
- *
- * The fusion system produces this output by combining all detector results
- * using the A+B hybrid strategy:
- * - Fixed calibrated weights (Option A)
- * - Agreement-based confidence scaling (Option B)
+ * EnsembleOutput - Detection result from BandFlux solo detector + fusion
  */
 struct EnsembleOutput {
-    float transientStrength;   // 0.0-1.0: Weighted combination of detector strengths
-    float ensembleConfidence;  // 0.0-1.0: Agreement-scaled confidence
-    uint8_t detectorAgreement; // Count of detectors that fired (0-7)
-    uint8_t dominantDetector;  // Index of detector with highest contribution
+    float transientStrength;   // 0.0-1.0: Detection strength (post-cooldown)
+    float ensembleConfidence;  // 0.0-1.0: Detection confidence
+    uint8_t detectorAgreement; // 0 or 1 (solo detector)
+    uint8_t dominantDetector;  // Always 0 (BAND_FLUX)
 
     EnsembleOutput()
         : transientStrength(0.0f)
@@ -90,28 +85,9 @@ struct EnsembleOutput {
         , dominantDetector(0)
     {}
 
-    // Check if any detector fired
     bool hasDetection() const {
         return detectorAgreement > 0;
     }
-
-    // Check if multiple detectors agree (higher confidence)
-    bool hasAgreement() const {
-        return detectorAgreement >= 2;
-    }
-
-    // Check if strong consensus (3+ detectors)
-    bool hasConsensus() const {
-        return detectorAgreement >= 3;
-    }
-
-    // Debug accessors
-    float getAgreementBoost() const {
-        return ensembleConfidence;
-    }
-
-    // Defined after DetectorType enum (see below)
-    const char* getDominantDetectorName() const;
 };
 
 /**
@@ -159,74 +135,27 @@ struct AudioFrame {
 
 /**
  * Detector type enumeration
- *
- * Used for identifying detectors in logs, configs, and serial commands.
+ * BandFlux Solo — 6 disabled detectors removed Mar 2026 (v64).
  */
 enum class DetectorType : uint8_t {
-    DRUMMER = 0,        // Time-domain amplitude spikes
-    SPECTRAL_FLUX = 1,  // SuperFlux on mel bands
-    HFC = 2,            // High-frequency content (FFT-based)
-    BASS_BAND = 3,      // Low-frequency flux (disabled: environmental noise)
-    COMPLEX_DOMAIN = 4, // Phase deviation
-    NOVELTY = 5,        // Cosine distance spectral novelty
-    BAND_FLUX = 6,      // Log-compressed band-weighted spectral flux
-    COUNT = 7           // Total number of detectors
+    BAND_FLUX = 0,      // Log-compressed band-weighted spectral flux (only active detector)
+    COUNT = 1
 };
 
-/**
- * Get detector name string
- */
-inline const char* getDetectorName(DetectorType type) {
-    switch (type) {
-        case DetectorType::DRUMMER:        return "drummer";
-        case DetectorType::SPECTRAL_FLUX:  return "spectral";
-        case DetectorType::HFC:            return "hfc";
-        case DetectorType::BASS_BAND:      return "bass";
-        case DetectorType::COMPLEX_DOMAIN: return "complex";
-        case DetectorType::NOVELTY:        return "novelty";
-        case DetectorType::BAND_FLUX:      return "bandflux";
-        default:                           return "unknown";
-    }
+inline const char* getDetectorName(DetectorType) {
+    return "bandflux";
 }
 
 /**
- * Parse detector name to type
- * Returns true if valid, false otherwise
+ * Parse detector name to type. Only "bandflux"/"b"/"bf"/"f" are valid.
  */
 inline bool parseDetectorType(const char* str, DetectorType& type) {
     if (!str) return false;
-
     char c = str[0];
-    if (c >= 'A' && c <= 'Z') c += 32;  // tolower
-
-    switch (c) {
-        case 'd': type = DetectorType::DRUMMER; return true;
-        case 's': type = DetectorType::SPECTRAL_FLUX; return true;
-        case 'h': type = DetectorType::HFC; return true;
-        case 'b': {
-            // Disambiguate: "ba*" → BASS_BAND, "bf*"/"bl*" → BAND_FLUX, bare "b" → BASS_BAND
-            char c2 = str[1];
-            if (c2 >= 'A' && c2 <= 'Z') c2 += 32;
-            if (c2 == 'f' || c2 == 'l' || (c2 == 'a' && str[2] == 'n')) {
-                // "bf*", "bl*" (bandflux/bflux), "ban*" (bandflux)
-                type = DetectorType::BAND_FLUX;
-            } else {
-                // "b", "ba*" (bass), or anything else starting with b
-                type = DetectorType::BASS_BAND;
-            }
-            return true;
-        }
-        case 'c': type = DetectorType::COMPLEX_DOMAIN; return true;
-        case 'n': type = DetectorType::NOVELTY; return true;
-        case 'f': type = DetectorType::BAND_FLUX; return true;  // "f"/"flux" shorthand
-        default: return false;
+    if (c >= 'A' && c <= 'Z') c += 32;
+    if (c == 'b' || c == 'f') {
+        type = DetectorType::BAND_FLUX;
+        return true;
     }
-}
-
-/**
- * EnsembleOutput method implementations
- * (must be defined after DetectorType enum)
- */
-inline const char* EnsembleOutput::getDominantDetectorName() const {
-    return getDetectorName(static_cast<DetectorType>(dominantDetector));
+    return false;
 }

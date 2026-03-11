@@ -4,7 +4,7 @@
 
 AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output a simple 4-parameter `AudioControl` struct.
 
-**Current Version:** AudioController with CBSS Beat Tracking + NN Beat ODF + Forward Filter option (March 2026)
+**Current Version:** AudioController with CBSS Beat Tracking + NN Beat ODF (March 2026)
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -53,13 +53,8 @@ OSS Buffer (6s @ 60Hz)
       |                                                                    |
       |                                                            beatPeriodSamples_
       |                                                                    |
-      +--- [Default] CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
+      +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
       |                                                                    |
-      +--- [fwdfilter=1] Forward Filter → updateForwardFilter() → Wrap-based beats
-                              |                                            |
-                    Joint tempo-phase                               Phase = position/period
-                    forward algorithm
-                              |
 AudioControl { energy, pulse, phase, rhythmStrength }
       |
 Generators (Fire, Water, Lightning)
@@ -228,31 +223,6 @@ Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from 
 |-----------|---------|-------------|----------------------|
 | `nnBeatEnabled` | false | Use NN ODF instead of BandFlux (requires NN=1 build) | `set nnbeat 1` |
 
-### Forward Filter Beat Tracking (v57 - Optional)
-
-Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwdfilter 1`. Default OFF — full 6-parameter sweep (v60) optimized to 7/18 octave errors but still worse than CBSS baseline (4/18). Observation model is fundamentally octave-symmetric.
-
-**How it works:** 20 tempo bins × variable phase positions (~700-880 states). Each frame:
-1. Shift all phase positions forward by 1
-2. Apply observation: beat-zone positions (first `period/λ`) get `λ * ODF`, others get `(1-ODF)/(λ-1)`
-3. At position 0 (beat boundary): apply tempo transitions via Gaussian kernel
-4. Normalize probabilities
-5. Argmax determines current tempo and phase
-
-**Beat detection:** When argmax position wraps from near period-1 to near 0, a beat is fired (with cooldown, silence gate, onset snap, PLL correction).
-
-**Key settings:**
-
-| Parameter | Default | Description | SerialConsole Command |
-|-----------|---------|-------------|----------------------|
-| `forwardFilterEnabled` | false | Enable forward filter (replaces CBSS+Bayesian for tempo/beats) | `set fwdfilter 1` |
-| `fwdTransSigma` | 0.6 | Tempo transition width in lag units (v60 sweep optimal, was 3.0) | `set fwdtranssigma 0.6` |
-| `fwdFilterContrast` | 1.0 | ODF power-law contrast (v60 sweep optimal, was 2.0) | `set fwdfiltcontrast 1.0` |
-| `fwdFilterLambda` | 10.0 | Beat zone = 1/λ of period (v60 sweep optimal, was 8.0) | `set fwdfiltlambda 10.0` |
-| `fwdFilterFloor` | 0.01 | Observation probability floor (prevents zero probabilities) | `set fwdfiltfloor 0.01` |
-| `fwdBayesBias` | 0.2 | Bayesian posterior modulation strength (v59, 0=off, 1=full) | `set fwdbayesbias 0.2` |
-| `fwdAsymmetry` | 0.8 | Asymmetric non-beat penalty by tempo (v60, 0=off, 0.8=optimal) | `set fwdasymmetry 0.8` |
-
 ---
 
 ## Resource Usage
@@ -267,9 +237,8 @@ Joint tempo-phase forward filter (Krebs/Böck/Widmer 2015). Toggle with `set fwd
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| Forward filter (always allocated) | ~3.5 KB | ~1% | fwdAlpha_[880], always in RAM even when `fwdfilter=0` |
 | NN beat activation (optional) | ~16 KB | ~2% | TFLite Micro tensor arena (NN=1 build, `nnbeat=1`) |
-| **Total** | **~22 KB base** | **~9-11%** | +16 KB with NN. ~38 KB max (NN=1). |
+| **Total** | **~18.5 KB base** | **~8-10%** | +16 KB with NN. ~34.5 KB max (NN=1). |
 
 ---
 

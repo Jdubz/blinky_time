@@ -1926,29 +1926,17 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         }
         const EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
 
-        Serial.println(F("=== Ensemble Fusion Configuration ==="));
-        Serial.println(F("Agreement Boost Values:"));
-        for (int i = 0; i <= EnsembleDetector::NUM_DETECTORS; i++) {
-            Serial.print(F("  "));
-            Serial.print(i);
-            Serial.print(F(" detector(s): "));
-            Serial.println(fusion.getAgreementBoost(i), 2);
-        }
-        Serial.print(F("\nTotal Weight: "));
-        Serial.println(fusion.getTotalWeight(), 3);
+        Serial.println(F("=== BandFlux Solo Detection ==="));
 
         // Show last output
         const EnsembleOutput& output = audioCtrl_->getLastEnsembleOutput();
-        Serial.println(F("\nLast Output:"));
+        Serial.println(F("Last Output:"));
         Serial.print(F("  Strength: "));
         Serial.println(output.transientStrength, 3);
         Serial.print(F("  Confidence: "));
         Serial.println(output.ensembleConfidence, 3);
-        Serial.print(F("  Agreement: "));
-        Serial.print(output.detectorAgreement);
-        Serial.println(F("/1"));
-        Serial.print(F("  Dominant: "));
-        Serial.println(getDetectorName(static_cast<DetectorType>(output.dominantDetector)));
+        Serial.print(F("  Detected: "));
+        Serial.println(output.hasDetection() ? F("yes") : F("no"));
         Serial.println(F("\nFusion Parameters:"));
         Serial.print(F("  cooldown: "));
         Serial.print(fusion.getCooldownMs());
@@ -2227,37 +2215,6 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         } else {
             Serial.println(F("Usage: set detector_thresh <type> <value>"));
             Serial.println(F("Types: bandflux"));
-        }
-        return true;
-    }
-
-    // Handle "set agree_<n> <value>" for agreement boost values
-    if (strncmp(cmd, "set agree_", 10) == 0) {
-        if (!audioCtrl_) {
-            Serial.println(F("ERROR: AudioController not available"));
-            return true;
-        }
-        // Parse "set agree_N value" where N is 0-7
-        // Format: "set agree_" (10 chars) + digit + space + value
-        const char* args = cmd + 10;
-        if (args[0] >= '0' && args[0] <= '7' && args[1] == ' ') {
-            int n = args[0] - '0';
-            float value = atof(args + 2);
-            // Get current boosts, modify one, set all
-            EnsembleFusion& fusion = audioCtrl_->getEnsemble().getFusion();
-            float boosts[EnsembleDetector::NUM_DETECTORS + 1];
-            for (int i = 0; i <= EnsembleDetector::NUM_DETECTORS; i++) {
-                boosts[i] = fusion.getAgreementBoost(i);
-            }
-            boosts[n] = value;
-            fusion.setAgreementBoosts(boosts);
-            Serial.print(F("OK agree_"));
-            Serial.print(n);
-            Serial.print(F("="));
-            Serial.println(value, 2);
-        } else {
-            Serial.println(F("Usage: set agree_<0-7> <value>"));
-            Serial.println(F("Example: set agree_1 0.6"));
         }
         return true;
     }

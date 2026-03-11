@@ -440,10 +440,10 @@ Best online/causal beat tracking systems on standard benchmarks (line-in audio):
 |----------|------|----------------|--------|
 | ~~**1**~~ | ~~Increase tempo bins (20→40+)~~ | ~~Fix gravity well~~ | **CLOSED** — tested 47 bins in v61, no benefit |
 | ~~**2**~~ | ~~Fix NN training pipeline~~ | ~~Biggest lever per SOTA research~~ | **DONE** — all 5 issues fixed |
-| **3** | Visual eval of fwdphase=1 | May improve LED smoothness | BPM-neutral, needs eyes on hardware |
-| **NEW 1** | Train & evaluate improved models | Biggest lever per SOTA research | In progress (v6 training, v7/v8 queued) |
-| **NEW 2** | Firmware simplification | Reduce complexity, free RAM | Not started |
-| **NEW 3** | ACF-based ODF quality metric | Better eval signal for NN models | Not started |
+| ~~**3**~~ | ~~Visual eval of fwdphase=1~~ | ~~May improve LED smoothness~~ | **REMOVED v64** — forward filter removed from firmware |
+| **NEW 1** | Train & evaluate v9 DS-TCN model | Biggest lever per SOTA research | In progress (24ch and 32ch variants) |
+| **NEW 2** | Firmware simplification | Reduce complexity, free RAM | In progress (v64 dead code removed, ensemble simplification ongoing) |
+| **NEW 3** | ACF-based ODF quality metric | Better eval signal for NN models | Being implemented |
 
 **~~Priority 1: Increase Tempo Bins (20→40+)~~ — CLOSED (v61, March 8, 2026)**
 Tested in v61 with 47 bins (up from 20). A/B test on 18-track EDM suite showed **no benefit** — gravity well persists at ~135 BPM. The coarse bin count was a contributing factor but not the root cause. The gravity well is driven by multiple reinforcing factors: training data BPM distribution (33.5% at 120-140 BPM), Bayesian prior, comb filter harmonic structure, and ACF sub-harmonic peaks. Increasing bins alone cannot fix observation-side bias. Previous v29 attempt also failed (transition matrix drift). **Two independent tests confirm: bin count is not the bottleneck.**
@@ -451,20 +451,17 @@ Tested in v61 with 47 bins (up from 20). A/B test on 18-track EDM suite showed *
 **~~Priority 2: Fix NN Training Pipeline (v6 model)~~ — DONE (March 8, 2026)**
 All five identified issues fixed: (1) test track exclusion via `--exclude-dir`, (2) time-stretch augmentation [0.8, 0.9, 1.1, 1.2], (3) binary targets replacing Gaussian (pos_weight 20.0), (4) strength-weighted targets from consensus, (5) v2 consensus labels with octave normalization, failure rejection, and timing correction. Additionally fixed downbeat target bug (strength>0.9 misused as downbeat indicator). See "Completed: Training Pipeline & Label Quality" section above.
 
-**Priority 3: Visual Eval of fwdphase=1**
-Forward filter phase tracking was BPM-neutral in A/B test (8 wins vs 6). May give smoother LED animations. No code changes required.
+**~~Priority 3: Visual Eval of fwdphase=1~~ — REMOVED (v64, March 2026)**
+Forward filter removed from firmware in v64 dead code cleanup.
 
-**NEW Priority 1: Train & Evaluate Improved Models**
-With the training pipeline fixed and v2 consensus labels ready, train and evaluate three model variants:
-- **v6** (5L ch32): same architecture as v4, but with all pipeline fixes (binary targets, time-stretch, test exclusion, v2 labels). Training launched Mar 8.
-- **v7** (7L ch48, `deep_wide.yaml`): ~46K params, ~68 KB INT8. 256-frame context (~4s RF). Pushes flash budget.
-- **v8** (7L ch32, `deep.yaml`): ~22K params, ~41 KB INT8. 256-frame context at same channel width as v4. Best capacity/size tradeoff.
-Deploy best model to hardware for A/B test vs v4.
+**NEW Priority 1: Train & Evaluate v9 DS-TCN Model**
+v7-melfixed deployed (7L ch32, 46.3 KB INT8, Beat F1=0.787). v9 DS-TCN architecture training with 24ch and 32ch variants.
+
+Previous models completed: v6-restart (F1=0.727), v7 (F1=0.787, deployed), v8 (F1=0.821, not deployable — heap exhaustion).
 
 **NEW Priority 2: Firmware Simplification**
-- Remove adaptive band weighting (~1600 lines + 2.9 KB RAM, rarely activates)
-- Simplify ensemble detection path for solo detector (bypass multi-detector agreement logic)
-- Both changes reduce code complexity and free RAM for larger NN models
+- v64: Dead code removal completed (forward filter, noise estimation, HMM, particle filter, PLP, adaptive tightness, percival, bisnap, template/subbeat checks). ConfigStorage 408->296 bytes.
+- Ensemble simplification in progress (bypass multi-detector agreement logic for solo detector)
 
 **NEW Priority 3: ACF-based ODF Quality Metric**
 evaluate.py measures standalone beat F1, but the model is used as ODF source for CBSS. A model with slightly smeared but consistent activations could score lower on F1 but produce better ACF peaks. Add an ACF-based metric that measures ODF periodicity quality — how well the ODF's autocorrelation peak matches the ground truth tempo.
