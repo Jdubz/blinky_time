@@ -288,8 +288,7 @@ void SerialConsole::registerRhythmSettings() {
         "Binary onset-train ODF for ACF (post-threshold events, immune to enclosure resonance)");
     settings_.registerBool("odfdiff", &audioCtrl_->odfDiffMode, "rhythm",
         "HWR first-difference ODF for ACF (BTrack-style, suppresses enclosure modulation)");
-    settings_.registerUint8("odfsource", &audioCtrl_->odfSource, "rhythm",
-        "ACF ODF source (0=flux, 1=bass energy, 2=mic level, 3=bass flux, 4=centroid, 5=bass ratio)", 0, 5);
+    // (odfsource registration removed v64 — experimental alternatives deleted)
     settings_.registerBool("densityoctave", &audioCtrl_->densityOctaveEnabled, "rhythm",
         "Onset-density octave penalty in Bayesian posterior (v32)");
     settings_.registerFloat("densityminpb", &audioCtrl_->densityMinPerBeat, "rhythm",
@@ -308,51 +307,9 @@ void SerialConsole::registerRhythmSettings() {
         "BTrack-style tempo pipeline: Viterbi + comb-on-ACF (v33)");
     settings_.registerUint8("btrkthreshwin", &audioCtrl_->btrkThreshWindow, "rhythm",
         "Pipeline adaptive threshold half-window (0=off, 1-5 bins each side)", 0, 5);
-    settings_.registerBool("fwdfilter", &audioCtrl_->forwardFilterEnabled, "rhythm",
-        "Joint tempo-phase forward filter (v57, A/B vs CBSS+Bayesian)");
-    settings_.registerFloat("fwdtranssigma", &audioCtrl_->fwdTransSigma, "rhythm",
-        "Forward filter tempo transition width in lag units (v57)", 0.5f, 10.0f);
-    settings_.registerFloat("fwdfiltcontrast", &audioCtrl_->fwdFilterContrast, "rhythm",
-        "Forward filter ODF power-law contrast (v57)", 0.5f, 8.0f);
-    settings_.registerFloat("fwdfiltlambda", &audioCtrl_->fwdFilterLambda, "rhythm",
-        "Forward filter beat zone = 1/lambda of period (v57)", 2.0f, 32.0f);
-    settings_.registerFloat("fwdfiltfloor", &audioCtrl_->fwdFilterFloor, "rhythm",
-        "Forward filter observation probability floor (v57)", 0.001f, 0.1f);
-    settings_.registerFloat("fwdbayesbias", &audioCtrl_->fwdBayesBias, "rhythm",
-        "Bayesian posterior bias on forward filter tempo (v59, 0=off, 1=full)", 0.0f, 1.0f);
-    settings_.registerFloat("fwdasymmetry", &audioCtrl_->fwdAsymmetry, "rhythm",
-        "Asymmetric non-beat penalty by tempo (v60, 0=off, 0.8=optimal)", 0.0f, 3.0f);
-    settings_.registerBool("hmm", &audioCtrl_->barPointerHmm, "rhythm",
-        "Phase tracker beat detection (v34, A/B vs CBSS)");
-    settings_.registerBool("fwdphase", &audioCtrl_->fwdPhaseOnly, "rhythm",
-        "Hybrid: phase tracker for phase, CBSS for beats (v58)");
-    settings_.registerFloat("hmmcontrast", &audioCtrl_->hmmContrast, "rhythm",
-        "Phase tracker ODF power-law contrast (1=linear, 2-4=sharper)", 0.5f, 8.0f);
-    // (hmmtemponorm, hmmlambda, hmmbayesbias removed v53 — joint HMM dead code)
-    settings_.registerFloat("fwdobslambda", &audioCtrl_->fwdObsLambda, "rhythm",
-        "Continuous ODF observation strength (v49: higher=sharper beat/non-beat)", 2.0f, 32.0f);
-    settings_.registerFloat("fwdobsfloor", &audioCtrl_->fwdObsFloor, "rhythm",
-        "Observation probability floor (v52)", 0.001f, 0.1f);
-    settings_.registerFloat("fwdwrapfrac", &audioCtrl_->fwdWrapFraction, "rhythm",
-        "Wrap detection zone fraction (v52: 0.25=25% of period)", 0.1f, 0.4f);
-    settings_.registerBool("particlefilter", &audioCtrl_->particleFilterEnabled, "rhythm",
-        "Particle filter beat tracking (v38, A/B vs CBSS)");
-    settings_.registerFloat("pfnoise", &audioCtrl_->pfNoise, "rhythm",
-        "PF period diffusion noise (fraction of period, at beat boundaries)", 0.001f, 0.3f);
-    settings_.registerFloat("pfbeatsigma", &audioCtrl_->pfBeatSigma, "rhythm",
-        "DEPRECATED: unused in v39+ madmom observation model", 0.01f, 0.2f);
-    settings_.registerFloat("pfoctaveinject", &audioCtrl_->pfOctaveInjectRatio, "rhythm",
-        "PF fraction of particles replaced with octave variants", 0.0f, 0.3f);
-    settings_.registerFloat("pfbeatthresh", &audioCtrl_->pfBeatThreshold, "rhythm",
-        "DEPRECATED: unused in v39+ hybrid mode (CBSS handles beat detection)", 0.05f, 0.8f);
-    settings_.registerFloat("pfneff", &audioCtrl_->pfNeffRatio, "rhythm",
-        "PF resample when Neff < ratio * N", 0.1f, 0.9f);
-    settings_.registerFloat("pfcontrast", &audioCtrl_->pfContrast, "rhythm",
-        "PF ODF power-law contrast (1=linear)", 0.5f, 4.0f);
-    settings_.registerFloat("pfinfogate", &audioCtrl_->pfInfoGate, "rhythm",
-        "PF info gate: floor ODF below this to 0.03 (0=off)", 0.0f, 0.5f);
-    settings_.registerUint8("pfobslambda", &audioCtrl_->pfObsLambda, "rhythm",
-        "PF observation lambda: beat region = 1/lambda (2-32)", 2, 32);
+    // (fwdfilter/fwdtranssigma/fwdfiltcontrast/fwdfiltlambda/fwdfiltfloor/fwdbayesbias/fwdasymmetry removed v64)
+    // (hmm/fwdphase/hmmcontrast/fwdobslambda/fwdobsfloor/fwdwrapfrac removed v64)
+    // (particlefilter and all pf* registrations removed v64)
     settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
         "Check octave every N beats (2-16)", 2, 16);
     settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
@@ -399,49 +356,16 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("tightconflo", &audioCtrl_->tightnessConfThreshLow, "rhythm",
         "OSS/mean ratio below this = low onset confidence (v45)", 0.5f, 3.0f);
 
-    // Multi-agent beat tracking (v48)
-    settings_.registerBool("multiagent", &audioCtrl_->multiAgentEnabled, "rhythm",
-        "Multi-agent phase competition: 8 agents at different phases compete (v48)");
-    settings_.registerFloat("agentdecay", &audioCtrl_->agentDecay, "rhythm",
-        "Agent score EMA decay (lower=faster adaptation) (v48)", 0.7f, 0.95f);
-    settings_.registerUint8("agentinitbeats", &audioCtrl_->agentInitBeats, "rhythm",
-        "Initialize agents after N beats (v48)", 2, 8);
+    // (multiagent/agentdecay/agentinitbeats removed v64)
 
     // Anti-harmonic 3rd comb (v48)
     settings_.registerFloat("percivalw3", &audioCtrl_->percivalWeight3, "rhythm",
         "3rd harmonic SUBTRACT weight: suppress 3:2 ratio confusion (v48)", 0.0f, 1.0f);
 
-    // Metrical contrast check (v48)
-    settings_.registerBool("metricalcheck", &audioCtrl_->metricalCheckEnabled, "rhythm",
-        "Metrical contrast: trigger octave check on weak beat/midpoint contrast (v48)");
-    settings_.registerFloat("metricalminratio", &audioCtrl_->metricalMinRatio, "rhythm",
-        "Min beat/midpoint onset strength ratio (v48)", 1.0f, 5.0f);
-    settings_.registerUint8("metricalcheckbeats", &audioCtrl_->metricalCheckBeats, "rhythm",
-        "Check metrical contrast every N beats (v48)", 2, 8);
-
-    // Rhythmic pattern templates (v50)
-    settings_.registerBool("templatecheck", &audioCtrl_->templateCheckEnabled, "rhythm",
-        "Rhythmic pattern template octave check (v50)");
-    settings_.registerFloat("templatescoreratio", &audioCtrl_->templateScoreRatio, "rhythm",
-        "Min template score ratio to switch tempo (v50)", 1.0f, 3.0f);
-    settings_.registerUint8("templatecheckbeats", &audioCtrl_->templateCheckBeats, "rhythm",
-        "Check template match every N beats (v50)", 2, 8);
-
-    // Beat critic subbeat alternation (v50)
-    settings_.registerBool("subbeatcheck", &audioCtrl_->subbeatCheckEnabled, "rhythm",
-        "Beat critic subbeat alternation octave check (v50)");
-    settings_.registerFloat("alternationthresh", &audioCtrl_->alternationThresh, "rhythm",
-        "Subbeat odd/even ratio threshold (v50)", 0.3f, 3.0f);
-    settings_.registerUint8("subbeatcheckbeats", &audioCtrl_->subbeatCheckBeats, "rhythm",
-        "Check subbeat alternation every N beats (v50)", 2, 8);
-
-    // Hidden calibration constants (v51)
-    settings_.registerFloat("templateminscore", &audioCtrl_->templateMinScore, "rhythm",
-        "Min template correlation to consider switch (v51)", 0.0f, 1.0f);
-    settings_.registerUint8("subbeatbins", &audioCtrl_->subbeatBins, "rhythm",
-        "Subbeat alternation bin count, even only (v51)", 4, 16);
-    settings_.registerUint8("templatehistbars", &audioCtrl_->templateHistBars, "rhythm",
-        "Template history depth in bars (v51)", 1, 4);
+    // (metricalcheck/metricalminratio/metricalcheckbeats removed v64)
+    // (templatecheck/templatescoreratio/templatecheckbeats removed v64)
+    // (subbeatcheck/alternationthresh/subbeatcheckbeats removed v64)
+    // (templateminscore/subbeatbins/templatehistbars removed v64)
     settings_.registerFloat("cbssmeanalpha", &audioCtrl_->cbssMeanAlpha, "rhythm",
         "CBSS running mean EMA alpha (v51)", 0.001f, 0.1f);
     settings_.registerFloat("harm2xthresh", &audioCtrl_->harmonic2xThresh, "rhythm",
@@ -1317,29 +1241,17 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->octaveCheckEnabled = true;    // v32: shadow CBSS octave checker
         audioCtrl_->octaveCheckBeats = 2;         // v32: aggressive (every 2 beats)
         audioCtrl_->octaveScoreRatio = 1.3f;      // v32: aggressive threshold
-        audioCtrl_->forwardFilterEnabled = false;   // v57: joint forward filter (OFF by default, A/B)
-        audioCtrl_->fwdTransSigma = 3.0f;         // v57: tight tempo transitions
-        audioCtrl_->fwdFilterContrast = 2.0f;     // v57: squared ODF contrast
-        audioCtrl_->fwdFilterLambda = 8.0f;       // v57: beat zone = 12.5% of period
-        audioCtrl_->fwdFilterFloor = 0.01f;       // v57: observation probability floor
-        audioCtrl_->fwdBayesBias = 0.2f;         // v59: Bayesian tempo bias (sweep-optimal)
-        audioCtrl_->fwdAsymmetry = 0.8f;         // v60: asymmetric non-beat penalty (sweep-optimal)
-        audioCtrl_->fwdPhaseOnly = false;         // v58: hybrid phase tracker (OFF by default, A/B)
+        // (forwardFilter/fwd*/fwdPhaseOnly defaults removed v64 — forward filter deleted)
         audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
         audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
-        audioCtrl_->barPointerHmm = false;        // v34: phase tracker (disabled by default, A/B)
-        audioCtrl_->hmmContrast = 2.0f;           // v34: ODF power-law contrast
-        // (hmmTempoNorm, hmmLambda, hmmBayesBias removed v53)
-        audioCtrl_->fwdObsLambda = 8.0f;          // v49: continuous ODF observation strength
-        audioCtrl_->fwdObsFloor = 0.01f;          // v52: observation probability floor
-        audioCtrl_->fwdWrapFraction = 0.25f;      // v52: wrap detection zone fraction
+        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction defaults removed v64)
         audioCtrl_->cbssContrast = 1.0f;           // v37: ODF contrast before CBSS
         audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
         audioCtrl_->onsetSnapWindow = 8;           // v39: snap beat to strongest OSS in ±8 frames
         audioCtrl_->odfThreshWindow = 15;          // v35: adaptive ODF threshold half-window
         audioCtrl_->onsetTrainOdf = false;         // v35: binary onset-train ODF
         audioCtrl_->odfDiffMode = false;           // v36: HWR first-difference ODF
-        audioCtrl_->odfSource = 0;                 // v36: default ODF source
+        // (odfSource default removed v64 — experimental alternatives deleted)
         audioCtrl_->densityPenaltyExp = 2.0f;      // v32: density penalty exponent
         audioCtrl_->densityTarget = 0.0f;          // v32: density target (0=disabled)
         // (phaseCheck/PLP defaults removed v44 — features deleted)
@@ -1361,27 +1273,10 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->tightnessConfThreshHigh = 3.0f;
         audioCtrl_->tightnessConfThreshLow = 1.5f;
 
-        // Multi-agent beat tracking (v48)
-        audioCtrl_->multiAgentEnabled = false;
-        audioCtrl_->agentDecay = 0.85f;
-        audioCtrl_->agentInitBeats = 3;
         audioCtrl_->percivalWeight3 = 0.0f;
-        audioCtrl_->metricalCheckEnabled = false;
-        audioCtrl_->metricalMinRatio = 1.5f;
-        audioCtrl_->metricalCheckBeats = 4;
-
-        // Rhythmic pattern templates (v50)
-        audioCtrl_->templateCheckEnabled = false;
-        audioCtrl_->templateScoreRatio = 1.3f;
-        audioCtrl_->templateCheckBeats = 4;
-
-        // Beat critic subbeat alternation (v50)
-        audioCtrl_->subbeatCheckEnabled = false;
-        audioCtrl_->alternationThresh = 1.2f;
-        audioCtrl_->subbeatCheckBeats = 4;
+        // (multiAgent/metrical/template/subbeat defaults removed v64 — features deleted)
 
         // Hidden calibration constants (v51)
-        audioCtrl_->templateMinScore = 0.1f;
         audioCtrl_->cbssMeanAlpha = 0.008f;
         audioCtrl_->harmonic2xThresh = 0.5f;
         audioCtrl_->harmonic15xThresh = 0.6f;
@@ -1390,18 +1285,8 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->rhythmBlend = 0.6f;
         audioCtrl_->periodicityBlend = 0.7f;
         audioCtrl_->onsetDensityBlend = 0.7f;
-        audioCtrl_->subbeatBins = 8;
-        audioCtrl_->templateHistBars = 2;
-
-        audioCtrl_->particleFilterEnabled = false; // v38: particle filter (disabled by default, A/B)
-        audioCtrl_->pfNoise = 0.08f;           // v39: per-beat (was 0.02 per-frame)
-        audioCtrl_->pfBeatSigma = 0.05f;
-        audioCtrl_->pfOctaveInjectRatio = 0.10f;
-        audioCtrl_->pfBeatThreshold = 0.25f;
-        audioCtrl_->pfNeffRatio = 0.5f;
-        audioCtrl_->pfContrast = 1.0f;
-        audioCtrl_->pfInfoGate = 0.10f;        // v39: information gate
-        audioCtrl_->pfObsLambda = 8;            // v39: madmom observation lambda
+        // (subbeatBins/templateHistBars defaults removed v64)
+        // (particleFilter defaults removed v64 — PF deleted)
         audioCtrl_->tempoSmoothingFactor = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;

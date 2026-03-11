@@ -17,11 +17,11 @@
 //
 // Memory (5L v4/v6):  ~33 KB flash, ~14 KB arena + 13 KB context (128 frames) = ~27 KB RAM
 // Memory (7L v7):     ~46 KB flash, ~28 KB arena + 27 KB context (256 frames) = ~55 KB RAM
-// Memory (7L v8):     ~73 KB flash, ~53 KB arena + 27 KB context (256 frames) = ~80 KB RAM
+// Memory (DS-TCN v9): ~26 KB flash, ~34 KB arena + 13 KB context (128 frames) = ~47 KB RAM
 // Arena sized to 96 KB (generous headroom). Context pre-sized for 256 frames.
 // Runtime contextLen_ adapts to actual model.
-// Inference: ~79 ms per frame (5L BN-fused), ~120+ ms per frame (7L) (Cortex-M4F @ 64 MHz)
-// Profiling: Conv2D ~37ms, ADD reqant ~24ms, rest ~18ms. MicroProfiler prints every 50 frames.
+// Inference: ~79 ms per frame (5L BN-fused), target ~25-30 ms (v9 DS-TCN) (Cortex-M4F @ 64 MHz)
+// Profiling: MicroProfiler prints per-op timing every 50 frames when nnprofile=1.
 //
 // Enable via serial: `set nnbeat 1` (toggle A/B vs BandFlux)
 // ============================================================================
@@ -76,21 +76,22 @@ public:
         // If AllocateTensors fails, inspect model ops with:
         //   python -c "import tensorflow as tf; i=tf.lite.Interpreter('model.tflite'); ..."
         static tflite::MicroErrorReporter micro_error_reporter;
-        static tflite::MicroMutableOpResolver<12> resolver;
+        static tflite::MicroMutableOpResolver<14> resolver;
         resolver.AddConv2D();          // Conv1D is implemented as Conv2D internally
+        resolver.AddDepthwiseConv2D(); // Depthwise separable conv (v9+ DS-TCN model)
         resolver.AddReshape();
         resolver.AddExpandDims();      // Shape manipulation (TFLite converter inserts)
         resolver.AddLogistic();        // Sigmoid (output layer)
+        resolver.AddRelu();            // Separate ReLU after dilated depthwise conv
         resolver.AddQuantize();
         resolver.AddDequantize();
         resolver.AddPad();             // ZeroPadding1D (causal padding)
         resolver.AddMul();             // BatchNorm (if not fused)
-        resolver.AddAdd();             // BatchNorm bias (if not fused)
+        resolver.AddAdd();             // Residual skip connections / BatchNorm bias
         resolver.AddSpaceToBatchNd();  // Dilated conv (dilation > 1)
         resolver.AddBatchToSpaceNd();  // Dilated conv output reshape
-        // Slot 12 reserved. Removed ops: FullyConnected (no FC layers in v4-v8),
-        // ReLU (fused into Conv activation). If loading an older model that needs
-        // these, AllocateTensors will fail with error=3 — re-add the op here.
+        // 14 slots used. If loading a model that needs additional ops,
+        // AllocateTensors will fail with error=3 — add the missing op here.
 
         static tflite::MicroProfiler micro_profiler;
         profiler_ = &micro_profiler;
@@ -184,6 +185,7 @@ public:
         if (profiler_) profiler_->ClearEvents();
         unsigned long t0 = micros();
         if (interpreter_->Invoke() != kTfLiteOk) {
+            invokeErrors_++;
             return 0.0f;
         }
         lastInferUs_ = micros() - t0;
@@ -230,6 +232,10 @@ public:
     void setProfileEnabled(bool enabled) { profileEnabled_ = enabled; }
     bool isProfileEnabled() const { return profileEnabled_; }
 
+    /** Get count of failed Invoke() calls (returns 0.0f silently on failure). */
+    uint32_t getInvokeErrors() const { return invokeErrors_; }
+    uint32_t getInferCount() const { return inferCount_; }
+
     /** Print diagnostic info to Serial (call after Serial.begin). */
     void printDiagnostics() const {
         Serial.print(F("[NN] ready="));
@@ -247,7 +253,12 @@ public:
             Serial.print(lastInferUs_ / 1000);
             Serial.print(F("ms quant="));
             Serial.print(lastQuantUs_ / 1000);
-            Serial.print(F("ms"));
+            Serial.print(F("ms cnt="));
+            Serial.print(inferCount_);
+            if (invokeErrors_ > 0) {
+                Serial.print(F(" ERRORS="));
+                Serial.print(invokeErrors_);
+            }
         } else {
             Serial.print(F(" error="));
             Serial.print(initError_);
@@ -308,6 +319,7 @@ private:
     size_t arenaUsed_ = 0;
     unsigned long lastInferUs_ = 0;   // Last Invoke() time in microseconds
     unsigned long lastQuantUs_ = 0;   // Last quantization loop time in microseconds
+    uint32_t invokeErrors_ = 0;       // Count of failed Invoke() calls (silent fallback to 0.0)
 };
 
 #else
@@ -323,6 +335,8 @@ public:
     bool hasDownbeatOutput() const { return false; }
     void setProfileEnabled(bool) {}
     bool isProfileEnabled() const { return false; }
+    uint32_t getInvokeErrors() const { return 0; }
+    uint32_t getInferCount() const { return 0; }
     void printDiagnostics() const { Serial.println(F("[NN] not compiled")); }
 };
 

@@ -92,7 +92,10 @@ public:
     // Version 59: Bayesian posterior bias for forward filter (fwdBayesBias)
     // Version 60: Asymmetric non-beat observation model for forward filter (fwdAsymmetry)
     // Version 61: rayleighBpm default 120→140 (sweep: fewer octave errors), nnProfile setting
-    static const uint8_t SETTINGS_VERSION = 61;
+    // Version 64: Removed dead features: forward filter, particle filter, HMM phase tracker,
+    //   multi-agent, template/subbeat/metrical checks, ODF sources 1-5, legacy spectral flux.
+    //   All A/B tested: zero or negative benefit vs CBSS baseline. Saves ~1500 lines, ~40 KB flash.
+    static const uint8_t SETTINGS_VERSION = 64;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -248,7 +251,7 @@ public:
         uint8_t odfThreshWindow;        // Adaptive ODF threshold half-window (samples each side, 5-30)
         bool onsetTrainOdf;             // Binary onset-train ODF for ACF (v34)
         bool odfDiffMode;               // HWR first-difference ODF for ACF (v35)
-        uint8_t odfSource;              // Alternative ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux, 4=centroid, 5=bass ratio)
+        // (odfSource removed v64 — experimental alternatives 1-5 never used)
         bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
         float densityPenaltyExp;        // Density penalty Gaussian exponent (v35)
         float densityTarget;            // Target transients/beat (0=disabled, v35)
@@ -265,25 +268,8 @@ public:
 
         bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
         uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)
-        bool barPointerHmm;            // Phase tracker beat detection (v34, v52: single-tempo forward filter)
-        float hmmContrast;             // Phase tracker ODF power-law contrast (v34)
-        // (hmmTempoNorm removed v53 — only used by dead joint HMM)
-        // (hmmLambda removed v53 — only used by dead joint HMM)
-        float fwdObsLambda;            // Continuous ODF observation strength (v49: 2-32, default 8)
-        float fwdObsFloor;             // Observation probability floor (v52: 0.001-0.1, default 0.01)
-        float fwdWrapFraction;         // Wrap detection zone fraction (v52: 0.1-0.4, default 0.25)
-        // (hmmBayesBias removed v53 — only used by dead joint HMM)
-
-        // Particle filter beat tracking (v38)
-        bool particleFilterEnabled;    // Enable PF (A/B vs CBSS+Bayesian)
-        float pfNoise;                 // Period diffusion noise (fraction of period/frame)
-        float pfBeatSigma;             // Beat kernel width (fraction of period)
-        float pfOctaveInjectRatio;     // Fraction of particles replaced with octave variants
-        float pfBeatThreshold;         // Weighted fraction near phase=0 to trigger beat
-        float pfNeffRatio;             // Resample when Neff < ratio * N
-        float pfContrast;              // ODF power-law contrast for PF likelihood
-        float pfInfoGate;              // Information gate: floor ODF below this to 0.03 (v39, 0=off)
-        uint8_t pfObsLambda;           // Observation lambda: beat region = 1/lambda of period (v39, 2-32)
+        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction removed v64 — HMM phase tracker never outperformed CBSS)
+        // (particleFilterEnabled and all pf* params removed v64 — never outperformed CBSS)
 
         // Spectral processing (v23+)
         bool whitenEnabled;             // Per-bin spectral whitening
@@ -324,26 +310,13 @@ public:
         // Anti-harmonic 3rd comb (v48)
         float percivalWeight3;          // 3rd harmonic SUBTRACT weight (0-1, default 0)
 
-        // Multi-agent beat tracking (v48)
-        float agentDecay;               // Agent score EMA decay (0.7-0.95)
-        float metricalMinRatio;         // Min beat/midpoint strength ratio (1.0-5.0)
-        bool multiAgentEnabled;         // Enable multi-agent phase competition
-        bool metricalCheckEnabled;      // Enable metrical contrast check
-        uint8_t agentInitBeats;         // Initialize agents after N beats (2-8)
-        uint8_t metricalCheckBeats;     // Check every N beats (2-8)
-
-        // Rhythmic pattern templates (v50)
-        float templateScoreRatio;       // Min score ratio to switch tempo (1.0-3.0)
-        bool templateCheckEnabled;      // Enable template-based octave check
-        uint8_t templateCheckBeats;     // Check every N beats (2-8)
-
-        // Beat critic subbeat alternation (v50)
-        float alternationThresh;        // Odd/even ratio threshold (0.3-3.0)
-        bool subbeatCheckEnabled;       // Enable subbeat alternation check
-        uint8_t subbeatCheckBeats;      // Check every N beats (2-8)
+        // (multiAgentEnabled/agentDecay/agentInitBeats removed v64 — never outperformed single CBSS)
+        // (metricalCheckEnabled/metricalMinRatio/metricalCheckBeats removed v64 — no octave disambiguation benefit)
+        // (templateCheckEnabled/templateScoreRatio/templateCheckBeats removed v64 — A/B tested: baseline wins 10/18)
+        // (subbeatCheckEnabled/alternationThresh/subbeatCheckBeats removed v64 — A/B tested: no net benefit)
 
         // Hidden constants exposed (v51)
-        float templateMinScore;         // Min Pearson correlation to consider tempo switch
+        // (templateMinScore removed v64 — associated feature removed)
         float cbssMeanAlpha;            // CBSS running mean EMA alpha
         float harmonic2xThresh;         // ACF half-lag ratio for 2x BPM correction
         float harmonic15xThresh;        // ACF 2/3-lag ratio for 1.5x BPM correction
@@ -352,8 +325,7 @@ public:
         float rhythmBlend;              // Periodicity weight in rhythmStrength
         float periodicityBlend;         // Periodicity strength EMA coefficient
         float onsetDensityBlend;        // Onset density EMA coefficient
-        uint8_t subbeatBins;            // Subbeat bin resolution (even, 4-16)
-        uint8_t templateHistBars;       // Template history depth in bars (1-4)
+        // (subbeatBins/templateHistBars removed v64 — associated features removed)
 
         // NN beat activation (v54)
         bool nnBeatActivation;          // Use NN ODF instead of BandFlux (requires ENABLE_NN_BEAT_ACTIVATION)
@@ -365,17 +337,8 @@ public:
         float noiseOversubtract;        // Oversubtraction factor (1.0-3.0)
         float noiseFloorRatio;          // Spectral floor as fraction of original (0.001-0.5)
 
-        // Joint forward filter (v57)
-        bool forwardFilterEnabled;      // Enable joint tempo-phase forward filter
-        float fwdTransSigma;            // Tempo transition width in lag units (1-10)
-        float fwdFilterContrast;        // ODF power-law contrast (1-8)
-        float fwdFilterLambda;          // Beat zone = 1/lambda of period (4-32)
-        float fwdFilterFloor;           // Observation probability floor (0.001-0.1)
-        float fwdBayesBias;            // Bayesian posterior modulation strength (v59, 0-1)
-        float fwdAsymmetry;            // Asymmetric non-beat penalty by tempo (v60, 0-5)
-
-        // Hybrid phase tracker (v58)
-        bool fwdPhaseOnly;             // Phase tracker for phase, CBSS for beats
+        // (forwardFilterEnabled and all fwd* params removed v64 — A/B tested: severe half-time bias, 17/18 octave errors)
+        // (fwdPhaseOnly removed v64 — phase tracker removed, no benefit)
     };
 
     struct StoredBandFluxParams {
@@ -495,8 +458,8 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
-    static_assert(sizeof(StoredMusicParams) == 408,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (408 bytes = 84 floats + 14 uint8 + 29 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 296,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (296 bytes = 62 floats + 6 uint8 + 21 bools + padding)");
     static_assert(sizeof(StoredBandFluxParams) == 44,
         "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
     static_assert(sizeof(StoredDeviceConfig) <= 160,

@@ -226,7 +226,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.odfThreshWindow = 15;        // Half-window size (15 samples = ~250ms at 60Hz)
     data_.music.onsetTrainOdf = false;       // Binary onset-train ODF for ACF (v34, off by default)
     data_.music.odfDiffMode = false;         // HWR first-difference ODF for ACF (v35, off by default)
-    data_.music.odfSource = 0;               // Default ODF source for ACF (v36: 0=default, 1=bass energy, 2=mic level, 3=bass flux)
+    // (odfSource removed v64 — experimental alternatives never used)
     data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
     data_.music.downwardCorrectEnabled = false; // Downward harmonic correction (experimental, overcorrects mid-tempo)
     data_.music.octaveCheckEnabled = true;   // Shadow CBSS octave check (v32: enabled, +13% F1)
@@ -255,27 +255,14 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.tightnessConfThreshHigh = 3.0f;   // OSS/mean ratio for high confidence
     data_.music.tightnessConfThreshLow = 1.5f;    // OSS/mean ratio for low confidence
 
-    // Multi-agent beat tracking (v48)
-    data_.music.multiAgentEnabled = false;   // Disabled by default (A/B vs single CBSS)
-    data_.music.agentDecay = 0.85f;          // Agent score EMA decay
-    data_.music.agentInitBeats = 3;          // Initialize agents after N beats
     data_.music.percivalWeight3 = 0.0f;      // Anti-harmonic 3rd comb (OFF by default)
-    data_.music.metricalCheckEnabled = false; // Metrical contrast check (OFF by default)
-    data_.music.metricalMinRatio = 1.5f;     // Min beat/midpoint strength ratio
-    data_.music.metricalCheckBeats = 4;      // Check every 4 beats
-
-    // Rhythmic pattern templates (v50)
-    data_.music.templateCheckEnabled = false; // OFF by default (A/B testing)
-    data_.music.templateScoreRatio = 1.3f;   // Min score ratio to switch
-    data_.music.templateCheckBeats = 4;      // Check every 4 beats
-
-    // Beat critic subbeat alternation (v50)
-    data_.music.subbeatCheckEnabled = false;  // OFF by default (A/B testing)
-    data_.music.alternationThresh = 1.2f;     // Odd/even ratio threshold
-    data_.music.subbeatCheckBeats = 4;        // Check every 4 beats
+    // (multiAgentEnabled/agentDecay/agentInitBeats removed v64)
+    // (metricalCheckEnabled/metricalMinRatio/metricalCheckBeats removed v64)
+    // (templateCheckEnabled/templateScoreRatio/templateCheckBeats removed v64)
+    // (subbeatCheckEnabled/alternationThresh/subbeatCheckBeats removed v64)
 
     // Hidden calibration constants (v51)
-    data_.music.templateMinScore = 0.1f;      // Min Pearson correlation to consider switch
+    // (templateMinScore removed v64)
     data_.music.cbssMeanAlpha = 0.008f;       // CBSS running mean EMA alpha
     data_.music.harmonic2xThresh = 0.5f;      // ACF half-lag ratio for 2x BPM correction
     data_.music.harmonic15xThresh = 0.6f;     // ACF 2/3-lag ratio for 1.5x BPM correction
@@ -284,21 +271,11 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.rhythmBlend = 0.6f;           // Periodicity weight in rhythmStrength
     data_.music.periodicityBlend = 0.7f;      // Periodicity strength EMA coefficient
     data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
-    data_.music.subbeatBins = 8;              // Subbeat bin count
-    data_.music.templateHistBars = 2;         // Template history depth in bars
+    // (subbeatBins/templateHistBars removed v64)
     data_.music.nnBeatActivation = true;     // NN beat activation (v58: on by default, A/B tested 11/18 wins)
 
-    // Joint forward filter defaults (v57)
-    data_.music.forwardFilterEnabled = false;  // OFF by default, A/B vs CBSS+Bayesian
-    data_.music.fwdTransSigma = 3.0f;          // Tight tempo transitions (±3 lags)
-    data_.music.fwdFilterContrast = 2.0f;      // Squared ODF for sharper discrimination
-    data_.music.fwdFilterLambda = 8.0f;        // Beat zone = 12.5% of period
-    data_.music.fwdFilterFloor = 0.01f;        // Observation probability floor
-    data_.music.fwdBayesBias = 0.2f;           // Bayesian tempo bias (v59, sweep-optimal)
-    data_.music.fwdAsymmetry = 0.8f;           // Asymmetric non-beat penalty (v60, sweep-optimal)
-
-    // Hybrid phase tracker (v58)
-    data_.music.fwdPhaseOnly = false;           // OFF by default, A/B vs counter-based phase
+    // (forwardFilterEnabled and all fwd* params removed v64)
+    // (fwdPhaseOnly removed v64)
 
     // Spectral noise estimation defaults (v56)
     data_.music.noiseEstEnabled = false;  // Default OFF until A/B validated
@@ -309,23 +286,8 @@ void ConfigStorage::loadSettingsDefaults() {
 
     data_.music.btrkPipeline = true;         // BTrack pipeline (v33: Viterbi + comb-on-ACF, replaces multiplicative)
     data_.music.btrkThreshWindow = 0;        // Adaptive threshold OFF (too aggressive with 20 bins)
-    data_.music.barPointerHmm = false;       // Phase tracker (v34: disabled by default, A/B vs CBSS)
-    data_.music.hmmContrast = 2.0f;           // ODF power-law contrast (sharper beat/non-beat)
-    // (hmmTempoNorm, hmmLambda, hmmBayesBias removed v53 — joint HMM dead code)
-    data_.music.fwdObsLambda = 8.0f;          // Continuous ODF observation strength (v49)
-    data_.music.fwdObsFloor = 0.01f;          // Observation probability floor (v52)
-    data_.music.fwdWrapFraction = 0.25f;      // Wrap detection zone fraction (v52)
-
-    // Particle filter beat tracking defaults (v38)
-    data_.music.particleFilterEnabled = false; // Disabled by default (A/B vs CBSS+Bayesian)
-    data_.music.pfNoise = 0.08f;              // Period diffusion noise (v39: per-beat, was 0.02 per-frame)
-    data_.music.pfBeatSigma = 0.05f;          // Beat kernel width (unused in v39 madmom model, kept for compat)
-    data_.music.pfOctaveInjectRatio = 0.10f;  // 10% octave variants at resampling
-    data_.music.pfBeatThreshold = 0.25f;      // Beat detection threshold
-    data_.music.pfNeffRatio = 0.5f;           // Resample when Neff < 50% of N
-    data_.music.pfContrast = 1.0f;            // ODF contrast (1=linear)
-    data_.music.pfInfoGate = 0.10f;           // Information gate: floor ODF < 0.10 to 0.03 (v39)
-    data_.music.pfObsLambda = 8;              // Observation lambda: 1/8 beat region (v39)
+    // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction removed v64)
+    // (particleFilterEnabled and all pf* params removed v64)
 
     // Spectral processing defaults (v23+)
     data_.music.whitenEnabled = true;
@@ -646,26 +608,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     }
     // adaptiveTightnessEnabled is bool — no range validation needed
 
-    // Multi-agent beat tracking (v48)
-    validateFloat(data_.music.agentDecay, 0.7f, 0.95f, F("agentDecay"));
-    VALIDATE_INT(data_.music.agentInitBeats, 2, 8, F("agentInitBeats"));
     validateFloat(data_.music.percivalWeight3, 0.0f, 1.0f, F("percivalWeight3"));
-    validateFloat(data_.music.metricalMinRatio, 1.0f, 5.0f, F("metricalMinRatio"));
-    VALIDATE_INT(data_.music.metricalCheckBeats, 2, 8, F("metricalCheckBeats"));
-    // multiAgentEnabled, metricalCheckEnabled are bools — no range validation needed
-
-    // Rhythmic pattern templates (v50)
-    validateFloat(data_.music.templateScoreRatio, 1.0f, 3.0f, F("templateScoreRatio"));
-    VALIDATE_INT(data_.music.templateCheckBeats, 2, 8, F("templateCheckBeats"));
-    // templateCheckEnabled is bool — no range validation needed
-
-    // Beat critic subbeat alternation (v50)
-    validateFloat(data_.music.alternationThresh, 0.3f, 3.0f, F("alternationThresh"));
-    VALIDATE_INT(data_.music.subbeatCheckBeats, 2, 8, F("subbeatCheckBeats"));
-    // subbeatCheckEnabled is bool — no range validation needed
+    // (multiAgent/metrical/template/subbeat validation removed v64 — features deleted)
 
     // Hidden calibration constants (v51)
-    validateFloat(data_.music.templateMinScore, 0.0f, 1.0f, F("templateMinScore"));
     validateFloat(data_.music.cbssMeanAlpha, 0.001f, 0.1f, F("cbssMeanAlpha"));
     validateFloat(data_.music.harmonic2xThresh, 0.1f, 0.9f, F("harmonic2xThresh"));
     validateFloat(data_.music.harmonic15xThresh, 0.1f, 0.9f, F("harmonic15xThresh"));
@@ -674,15 +620,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.rhythmBlend, 0.0f, 1.0f, F("rhythmBlend"));
     validateFloat(data_.music.periodicityBlend, 0.3f, 0.95f, F("periodicityBlend"));
     validateFloat(data_.music.onsetDensityBlend, 0.3f, 0.95f, F("onsetDensityBlend"));
-    VALIDATE_INT(data_.music.subbeatBins, 4, 16, F("subbeatBins"));
-    if (data_.music.subbeatBins % 2 != 0) {
-        data_.music.subbeatBins &= ~1u;  // Snap to even (odd bias even/odd alternation)
-        fixedCount++;
-    }
-    VALIDATE_INT(data_.music.templateHistBars, 1, 4, F("templateHistBars"));
-
-    // cppcheck-suppress unsignedLessThanZero
-    VALIDATE_INT(data_.music.odfSource, 0, 5, F("odfSource"));
+    // (subbeatBins/templateHistBars/odfSource validation removed v64 — features deleted)
     if (data_.music.odfThreshWindow < 5 || data_.music.odfThreshWindow > 30) {
         SerialConsole::logWarn(F("Invalid odfThreshWindow, clamping"));
         data_.music.odfThreshWindow = data_.music.odfThreshWindow < 5 ? 5 : 30;
@@ -701,24 +639,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         fixedCount++;
     }
     validateFloat(data_.music.octaveScoreRatio, 1.0f, 5.0f, F("octaveScoreRatio"));
-    validateFloat(data_.music.hmmContrast, 0.5f, 8.0f, F("hmmContrast"));
-    validateFloat(data_.music.fwdObsLambda, 2.0f, 32.0f, F("fwdObsLambda"));
-    validateFloat(data_.music.fwdObsFloor, 0.001f, 0.1f, F("fwdObsFloor"));
-    validateFloat(data_.music.fwdWrapFraction, 0.1f, 0.4f, F("fwdWrapFraction"));
-
-    // Particle filter validation (v38)
-    validateFloat(data_.music.pfNoise, 0.001f, 0.3f, F("pfNoise"));
-    validateFloat(data_.music.pfBeatSigma, 0.01f, 0.2f, F("pfBeatSigma"));
-    validateFloat(data_.music.pfOctaveInjectRatio, 0.0f, 0.3f, F("pfOctaveInject"));
-    validateFloat(data_.music.pfBeatThreshold, 0.05f, 0.8f, F("pfBeatThresh"));
-    validateFloat(data_.music.pfNeffRatio, 0.1f, 0.9f, F("pfNeffRatio"));
-    validateFloat(data_.music.pfContrast, 0.5f, 4.0f, F("pfContrast"));
-    validateFloat(data_.music.pfInfoGate, 0.0f, 0.5f, F("pfInfoGate"));
-    if (data_.music.pfObsLambda < 2 || data_.music.pfObsLambda > 32) {
-        SerialConsole::logWarn(F("Invalid pfObsLambda, clamping"));
-        data_.music.pfObsLambda = data_.music.pfObsLambda < 2 ? 2 : 32;
-        fixedCount++;
-    }
+    // (hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction validation removed v64 — HMM/phase tracker deleted)
+    // (particleFilter validation removed v64 — PF deleted)
 
     if (data_.music.octaveCheckBeats < 2 || data_.music.octaveCheckBeats > 16) {
         SerialConsole::logWarn(F("Invalid octaveCheckBeats, clamping"));
@@ -928,7 +850,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->odfThreshWindow = data_.music.odfThreshWindow;
         audioCtrl->onsetTrainOdf = data_.music.onsetTrainOdf;
         audioCtrl->odfDiffMode = data_.music.odfDiffMode;
-        audioCtrl->odfSource = data_.music.odfSource;
+        // (odfSource load removed v64 — experimental alternatives deleted)
         audioCtrl->densityOctaveEnabled = data_.music.densityOctaveEnabled;
         audioCtrl->densityMinPerBeat = data_.music.densityMinPerBeat;
         audioCtrl->densityMaxPerBeat = data_.music.densityMaxPerBeat;
@@ -961,27 +883,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->tightnessConfThreshHigh = data_.music.tightnessConfThreshHigh;
         audioCtrl->tightnessConfThreshLow = data_.music.tightnessConfThreshLow;
 
-        // Multi-agent beat tracking (v48)
-        audioCtrl->multiAgentEnabled = data_.music.multiAgentEnabled;
-        audioCtrl->agentDecay = data_.music.agentDecay;
-        audioCtrl->agentInitBeats = data_.music.agentInitBeats;
         audioCtrl->percivalWeight3 = data_.music.percivalWeight3;
-        audioCtrl->metricalCheckEnabled = data_.music.metricalCheckEnabled;
-        audioCtrl->metricalMinRatio = data_.music.metricalMinRatio;
-        audioCtrl->metricalCheckBeats = data_.music.metricalCheckBeats;
-
-        // Rhythmic pattern templates (v50)
-        audioCtrl->templateCheckEnabled = data_.music.templateCheckEnabled;
-        audioCtrl->templateScoreRatio = data_.music.templateScoreRatio;
-        audioCtrl->templateCheckBeats = data_.music.templateCheckBeats;
-
-        // Beat critic subbeat alternation (v50)
-        audioCtrl->subbeatCheckEnabled = data_.music.subbeatCheckEnabled;
-        audioCtrl->alternationThresh = data_.music.alternationThresh;
-        audioCtrl->subbeatCheckBeats = data_.music.subbeatCheckBeats;
+        // (multiAgent/metrical/template/subbeat load removed v64 — features deleted)
 
         // Hidden calibration constants (v51)
-        audioCtrl->templateMinScore = data_.music.templateMinScore;
         audioCtrl->cbssMeanAlpha = data_.music.cbssMeanAlpha;
         audioCtrl->harmonic2xThresh = data_.music.harmonic2xThresh;
         audioCtrl->harmonic15xThresh = data_.music.harmonic15xThresh;
@@ -990,38 +895,17 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->rhythmBlend = data_.music.rhythmBlend;
         audioCtrl->periodicityBlend = data_.music.periodicityBlend;
         audioCtrl->onsetDensityBlend = data_.music.onsetDensityBlend;
-        audioCtrl->subbeatBins = data_.music.subbeatBins;
-        audioCtrl->templateHistBars = data_.music.templateHistBars;
+        // (subbeatBins/templateHistBars load removed v64 — features deleted)
         audioCtrl->nnBeatActivation = data_.music.nnBeatActivation;
 
-        audioCtrl->forwardFilterEnabled = data_.music.forwardFilterEnabled;
-        audioCtrl->fwdTransSigma = data_.music.fwdTransSigma;
-        audioCtrl->fwdFilterContrast = data_.music.fwdFilterContrast;
-        audioCtrl->fwdFilterLambda = data_.music.fwdFilterLambda;
-        audioCtrl->fwdFilterFloor = data_.music.fwdFilterFloor;
-        audioCtrl->fwdBayesBias = data_.music.fwdBayesBias;
-        audioCtrl->fwdAsymmetry = data_.music.fwdAsymmetry;
-        audioCtrl->fwdPhaseOnly = data_.music.fwdPhaseOnly;
+        // (forwardFilter/fwd*/fwdPhaseOnly load removed v64 — forward filter deleted)
 
         audioCtrl->btrkPipeline = data_.music.btrkPipeline;
         audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
-        audioCtrl->barPointerHmm = data_.music.barPointerHmm;
-        audioCtrl->hmmContrast = data_.music.hmmContrast;
-        audioCtrl->fwdObsLambda = data_.music.fwdObsLambda;
-        audioCtrl->fwdObsFloor = data_.music.fwdObsFloor;
-        audioCtrl->fwdWrapFraction = data_.music.fwdWrapFraction;
+        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction load removed v64)
         audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
 
-        // Particle filter beat tracking (v38)
-        audioCtrl->particleFilterEnabled = data_.music.particleFilterEnabled;
-        audioCtrl->pfNoise = data_.music.pfNoise;
-        audioCtrl->pfBeatSigma = data_.music.pfBeatSigma;
-        audioCtrl->pfOctaveInjectRatio = data_.music.pfOctaveInjectRatio;
-        audioCtrl->pfBeatThreshold = data_.music.pfBeatThreshold;
-        audioCtrl->pfNeffRatio = data_.music.pfNeffRatio;
-        audioCtrl->pfContrast = data_.music.pfContrast;
-        audioCtrl->pfInfoGate = data_.music.pfInfoGate;
-        audioCtrl->pfObsLambda = data_.music.pfObsLambda;
+        // (particleFilter load removed v64 — PF deleted)
 
         // Spectral processing (v23+)
         SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
@@ -1217,7 +1101,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.odfThreshWindow = audioCtrl->odfThreshWindow;
         data_.music.onsetTrainOdf = audioCtrl->onsetTrainOdf;
         data_.music.odfDiffMode = audioCtrl->odfDiffMode;
-        data_.music.odfSource = audioCtrl->odfSource;
+        // (odfSource save removed v64 — experimental alternatives deleted)
         data_.music.densityOctaveEnabled = audioCtrl->densityOctaveEnabled;
         data_.music.densityMinPerBeat = audioCtrl->densityMinPerBeat;
         data_.music.densityMaxPerBeat = audioCtrl->densityMaxPerBeat;
@@ -1250,27 +1134,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.tightnessConfThreshHigh = audioCtrl->tightnessConfThreshHigh;
         data_.music.tightnessConfThreshLow = audioCtrl->tightnessConfThreshLow;
 
-        // Multi-agent beat tracking (v48)
-        data_.music.multiAgentEnabled = audioCtrl->multiAgentEnabled;
-        data_.music.agentDecay = audioCtrl->agentDecay;
-        data_.music.agentInitBeats = audioCtrl->agentInitBeats;
         data_.music.percivalWeight3 = audioCtrl->percivalWeight3;
-        data_.music.metricalCheckEnabled = audioCtrl->metricalCheckEnabled;
-        data_.music.metricalMinRatio = audioCtrl->metricalMinRatio;
-        data_.music.metricalCheckBeats = audioCtrl->metricalCheckBeats;
-
-        // Rhythmic pattern templates (v50)
-        data_.music.templateCheckEnabled = audioCtrl->templateCheckEnabled;
-        data_.music.templateScoreRatio = audioCtrl->templateScoreRatio;
-        data_.music.templateCheckBeats = audioCtrl->templateCheckBeats;
-
-        // Beat critic subbeat alternation (v50)
-        data_.music.subbeatCheckEnabled = audioCtrl->subbeatCheckEnabled;
-        data_.music.alternationThresh = audioCtrl->alternationThresh;
-        data_.music.subbeatCheckBeats = audioCtrl->subbeatCheckBeats;
+        // (multiAgent/metrical/template/subbeat save removed v64 — features deleted)
 
         // Hidden calibration constants (v51)
-        data_.music.templateMinScore = audioCtrl->templateMinScore;
         data_.music.cbssMeanAlpha = audioCtrl->cbssMeanAlpha;
         data_.music.harmonic2xThresh = audioCtrl->harmonic2xThresh;
         data_.music.harmonic15xThresh = audioCtrl->harmonic15xThresh;
@@ -1279,38 +1146,17 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.rhythmBlend = audioCtrl->rhythmBlend;
         data_.music.periodicityBlend = audioCtrl->periodicityBlend;
         data_.music.onsetDensityBlend = audioCtrl->onsetDensityBlend;
-        data_.music.subbeatBins = audioCtrl->subbeatBins;
-        data_.music.templateHistBars = audioCtrl->templateHistBars;
+        // (subbeatBins/templateHistBars save removed v64 — features deleted)
         data_.music.nnBeatActivation = audioCtrl->nnBeatActivation;
 
-        data_.music.forwardFilterEnabled = audioCtrl->forwardFilterEnabled;
-        data_.music.fwdTransSigma = audioCtrl->fwdTransSigma;
-        data_.music.fwdFilterContrast = audioCtrl->fwdFilterContrast;
-        data_.music.fwdFilterLambda = audioCtrl->fwdFilterLambda;
-        data_.music.fwdFilterFloor = audioCtrl->fwdFilterFloor;
-        data_.music.fwdBayesBias = audioCtrl->fwdBayesBias;
-        data_.music.fwdAsymmetry = audioCtrl->fwdAsymmetry;
-        data_.music.fwdPhaseOnly = audioCtrl->fwdPhaseOnly;
+        // (forwardFilter/fwd*/fwdPhaseOnly save removed v64 — forward filter deleted)
 
         data_.music.btrkPipeline = audioCtrl->btrkPipeline;
         data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
-        data_.music.barPointerHmm = audioCtrl->barPointerHmm;
-        data_.music.hmmContrast = audioCtrl->hmmContrast;
-        data_.music.fwdObsLambda = audioCtrl->fwdObsLambda;
-        data_.music.fwdObsFloor = audioCtrl->fwdObsFloor;
-        data_.music.fwdWrapFraction = audioCtrl->fwdWrapFraction;
+        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction save removed v64)
         data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
 
-        // Particle filter beat tracking (v38)
-        data_.music.particleFilterEnabled = audioCtrl->particleFilterEnabled;
-        data_.music.pfNoise = audioCtrl->pfNoise;
-        data_.music.pfBeatSigma = audioCtrl->pfBeatSigma;
-        data_.music.pfOctaveInjectRatio = audioCtrl->pfOctaveInjectRatio;
-        data_.music.pfBeatThreshold = audioCtrl->pfBeatThreshold;
-        data_.music.pfNeffRatio = audioCtrl->pfNeffRatio;
-        data_.music.pfContrast = audioCtrl->pfContrast;
-        data_.music.pfInfoGate = audioCtrl->pfInfoGate;
-        data_.music.pfObsLambda = audioCtrl->pfObsLambda;
+        // (particleFilter save removed v64 — PF deleted)
 
         // Spectral processing (v23+)
         const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
