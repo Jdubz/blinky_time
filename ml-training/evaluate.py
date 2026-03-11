@@ -35,6 +35,88 @@ from scripts.audio import (
 )
 
 
+def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
+                              frame_rate: float) -> dict:
+    """Compute ACF-based ODF quality metrics against ground truth tempo.
+
+    Measures how well the activation signal's autocorrelation peak matches
+    the expected tempo period -- a proxy for how useful the ODF is for a
+    CBSS beat tracker (which relies on clear periodicity, not just isolated
+    peak accuracy).
+
+    Returns:
+        acf_peak_ratio:      ACF value at the ground-truth lag relative to
+                             lag-0 (periodicity strength, 0-1).
+        acf_peak_prominence: Ratio of the peak value to the mean ACF in its
+                             surrounding region (how sharp/clear the peak is).
+        acf_lag_error:       Absolute error in frames between the nearest ACF
+                             peak and the expected lag.
+    """
+    result = {
+        "acf_peak_ratio": 0.0,
+        "acf_peak_prominence": 0.0,
+        "acf_lag_error": float("inf"),
+    }
+
+    # Need at least 3 reference beats to compute a meaningful IBI
+    if len(ref_beats) < 3 or len(activations) < 4:
+        return result
+
+    # Ground truth tempo from median inter-beat interval
+    ibi = float(np.median(np.diff(ref_beats)))
+    if ibi <= 0:
+        return result
+
+    expected_lag = ibi * frame_rate  # in frames
+
+    # ACF needs enough signal to cover at least one full period
+    if expected_lag < 2 or expected_lag >= len(activations) // 2:
+        return result
+
+    # Full (unbiased-normalized) autocorrelation
+    x = activations - np.mean(activations)
+    acf_full = np.correlate(x, x, mode="full")
+    # Take the positive-lag half (including lag 0)
+    acf = acf_full[len(x) - 1:]
+
+    # Normalize by lag-0 (energy)
+    if acf[0] <= 0:
+        return result
+    acf = acf / acf[0]
+
+    # Search for the ACF peak within ±10% of expected lag
+    search_lo = max(1, int(expected_lag * 0.9))
+    search_hi = min(len(acf) - 1, int(expected_lag * 1.1) + 1)
+    if search_lo >= search_hi:
+        return result
+
+    search_region = acf[search_lo:search_hi]
+    peak_idx_local = int(np.argmax(search_region))
+    peak_idx = search_lo + peak_idx_local
+    peak_value = float(acf[peak_idx])
+
+    # acf_peak_ratio: periodicity strength (ACF at best lag vs lag 0)
+    result["acf_peak_ratio"] = peak_value
+
+    # acf_lag_error: distance from the peak to the expected lag
+    result["acf_lag_error"] = abs(peak_idx - expected_lag)
+
+    # acf_peak_prominence: peak value relative to surrounding ACF mean
+    # Use ±20% of expected lag around the peak as the "surrounding region"
+    margin = max(1, int(expected_lag * 0.2))
+    surr_lo = max(1, peak_idx - margin)
+    surr_hi = min(len(acf), peak_idx + margin + 1)
+    surrounding = np.concatenate([acf[surr_lo:peak_idx], acf[peak_idx + 1:surr_hi]])
+    if len(surrounding) > 0:
+        surr_mean = float(np.mean(surrounding))
+        # Avoid division by zero/negative; use small floor
+        result["acf_peak_prominence"] = peak_value / max(surr_mean, 1e-6)
+    else:
+        result["acf_peak_prominence"] = 0.0
+
+    return result
+
+
 def _load_model(model_path: str, cfg: dict, device: torch.device):
     """Load a trained BeatCNN or DSTCNBeatCNN model."""
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
@@ -165,9 +247,18 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             result["ref_downbeats"] = len(ref_downbeats)
             result["est_downbeats"] = len(est_downbeats)
 
+        # ACF-based ODF quality metrics
+        acf_metrics = compute_acf_tempo_quality(activations, ref_beats, frame_rate)
+        result["acf_peak_ratio"] = acf_metrics["acf_peak_ratio"]
+        result["acf_peak_prominence"] = acf_metrics["acf_peak_prominence"]
+        lag_err = acf_metrics["acf_lag_error"]
+        result["acf_lag_error"] = lag_err if np.isfinite(lag_err) else None
+
         all_results.append(result)
         db_str = f", DB F1={result['db_f1']:.3f}" if has_downbeat else ""
-        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){db_str}")
+        acf_err_str = f"{lag_err:.1f}f" if np.isfinite(lag_err) else "n/a"
+        acf_str = f", ACF ratio={acf_metrics['acf_peak_ratio']:.3f} prom={acf_metrics['acf_peak_prominence']:.2f} err={acf_err_str}"
+        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){db_str}{acf_str}")
 
         # Save activation plot
         _plot_activation(activations, ref_beats, est_beats, frame_rate,
@@ -185,6 +276,19 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             print(f"Aggregate Downbeat: mean F1={np.mean(db_f1s):.3f}, "
                   f"median={np.median(db_f1s):.3f}, "
                   f"min={np.min(db_f1s):.3f}, max={np.max(db_f1s):.3f}")
+
+        # ACF tempo quality aggregates
+        acf_ratios = [r["acf_peak_ratio"] for r in all_results]
+        acf_proms = [r["acf_peak_prominence"] for r in all_results]
+        acf_errs = [r["acf_lag_error"] for r in all_results
+                    if r["acf_lag_error"] is not None]
+        if acf_errs:
+            print(f"Aggregate ACF Tempo Quality: "
+                  f"mean peak_ratio={np.mean(acf_ratios):.3f}, "
+                  f"mean prominence={np.mean(acf_proms):.2f}, "
+                  f"mean lag_error={np.mean(acf_errs):.1f}f")
+        else:
+            print("Aggregate ACF Tempo Quality: no valid ACF metrics")
 
         # Save results
         with open(output_dir / "eval_results.json", "w") as f:
