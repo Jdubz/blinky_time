@@ -109,7 +109,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0 NN=1
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (v62, disabled detectors removed)
+- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (v64, multi-detector fusion removed)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
 
@@ -133,6 +133,11 @@ The following were deleted as outdated:
 - `docs/AUDIO_IMPROVEMENT_ANALYSIS.md` - Completed analysis (Feb 2026)
 - `blinky-test-player/src/param-tuner/hypothesis-validator.ts` - Old hypothesis test (Feb 2026)
 - `blinky-test-player/TUNING_SCENARIOS.md` - Merged into PARAM_TUNER_GUIDE.md (Jan 2026)
+- `docs/PLAN-blinky-console-ui.md` - Console UI built, plan obsolete (Mar 2026)
+- `docs/ML_TRAINING_PLAN.md` - Superseded by IMPROVEMENT_PLAN.md sections (Mar 2026)
+- `docs/FREQUENCY_DETECTION.md` - Feature removed from firmware (Mar 2026)
+- `docs/PLATFORM_FIX.md` - Applied to old Seeeduino mbed platform, no longer used (Mar 2026)
+- `docs/COMMON_SCENARIO_TEST_PLAN.md` - Superseded by multi-device A/B test infrastructure (Mar 2026)
 
 ## System Architecture Overview
 
@@ -180,12 +185,11 @@ RenderPipeline → LED Output
    - `SharedSpectralAnalysis.h` - FFT-256 (128 freq bins @ 62.5 Hz), soft-knee compressor → per-bin whitening (v23+)
    - Window/range normalization (0-1 output)
 
-2. **Transient Detection (Ensemble)**
-   - `EnsembleDetector.h` - BandFlux Solo detector (v62, disabled detectors removed)
-   - **BandFlux Solo config (Feb 2026):** BandWeightedFlux (1.0, thresh 0.5) — all others disabled
+2. **Transient Detection**
+   - `EnsembleDetector.h` - BandFlux Solo detector (v64, 6 disabled detector types removed)
    - BandFlux: log-compressed band-weighted spectral flux with additive threshold and onset delta filter
-   - Agreement-based confidence scaling (single-detector boost 1.0 for solo config)
-   - Adaptive cooldown (tempo-aware)
+   - Noise gate + confidence threshold + tempo-adaptive cooldown
+   - DetectorType enum collapsed to BAND_FLUX only (v64)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
@@ -213,8 +217,8 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v60)
-   - `SettingsRegistry.h/cpp` - 80+ tunable parameters
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v64)
+   - `SettingsRegistry.h/cpp` - ~50 tunable parameters
    - Runtime validation (min/max bounds)
    - Factory reset capability
 
@@ -312,7 +316,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 4. Detector → ODF value (0-1)
 5. ODF → AudioController OSS buffer (6s history)
 6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
-   (ACF + Fourier tempogram + comb filter bank + IOI → 20-bin posterior → harmonic disambig → MAP → BPM)
+   (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
 9. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75, onsetDensity=3.2}
@@ -330,8 +334,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + forward filter ~5.2 KB when enabled). +96 KB tensor arena (static, 14-28 KB used) + 27 KB context buffer if NN=1 build. Total NN=1: ~145 KB of 256 KB.
-- Flash: ~288 KB base, ~411 KB with NN=1 (includes 46 KB TFLite model + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). +96 KB tensor arena (static, 14-28 KB used) + 27 KB context buffer if NN=1 build.
+- Flash: ~259 KB base, ~391 KB with NN=1 (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -379,7 +383,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
 - ✅ BandFlux Solo detector (log-compressed band-weighted spectral flux)
-- ✅ NN beat activation (v4 model, 33.3 KB INT8, `nnbeat=1` — A/B tested, 11/18 wins vs BandFlux)
+- ✅ NN beat activation (5L ch32, `nnbeat=1` — default ON since v58)
+- ✅ v9 DS-TCN architecture implemented (depthwise separable TCN, training in progress)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
@@ -387,10 +392,10 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ 3 device configurations (Hat, Tube, Bucket)
 - ✅ Mic calibration pipeline + gain-aware training augmentation
 
-**A/B Tested (default OFF, no net benefit):**
-- Forward filter (`fwdfilter=1`): severe half-time bias, 17/18 octave errors
-- Spectral noise subtraction (`noiseest=1`): hurts BPM accuracy, baseline wins 13/18
-- Octave disambiguation templates/subbeat (`templatecheck=1`, `subbeatcheck=1`): no net benefit
+**Removed (v64, A/B tested — zero or negative benefit, ~1500 lines deleted):**
+- Forward filter, particle filter, HMM phase tracker, multi-agent beat tracking
+- Template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux
+- Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
 **Planned (Not Started):**
 - Bluetooth/BLE support (design doc complete)
@@ -415,31 +420,18 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ## Current Audio System (March 2026)
 
-### Ensemble Detection Architecture
-BandFlux Solo — single detector (6 disabled detectors removed from firmware in v62).
+### Detection Architecture
+BandFlux Solo — single detector. DetectorType enum collapsed to BAND_FLUX only (v64).
+6 disabled detector types and 12 source files removed. Multi-detector fusion logic removed.
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 
-| Detector | Weight | Thresh | Notes |
-|----------|--------|--------|-------|
-| **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted spectral flux, additive threshold, onset delta filter |
-
 ### Key Features
-- **BandFlux Solo**: Single detector outperforms multi-detector combos
-- **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening. Magnitudes modified in-place; totalEnergy/centroid reflect pre-whitened state
-- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF (FT/IOI disabled v28). SETTINGS_VERSION 60
+- **BandFlux Solo**: Log-compressed band-weighted spectral flux with additive threshold and onset delta filter (minOnsetDelta=0.3)
+- **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
+- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 64
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
-- **ODF mean subtraction disabled** (v32): Raw ODF feeds ACF — global mean sub was destroying peak structure (+70% F1)
-- **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0 (+13% F1)
-- **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better (+13% F1)
-- **CBSS adaptive threshold**: Beat fires only if CBSS > cbssthresh * running mean (prevents phantom beats during silence)
-- **Adaptive cooldown**: Tempo-aware cooldown (shorter at faster BPMs, min 40ms, max 150ms)
-- **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation
-- **HMM beat detection** (v46): Optional bar-pointer HMM position-0 wrap replaces CBSS countdown (`hmm=1`). Phase is explicit state variable. Tight transition matrix (`hmmLambda=0.05`) prevents octave jumps.
-- **Rhythmic pattern templates** (v50): Pearson correlation of CBSS vs 3 EDM bar templates for octave disambiguation (`templatecheck=0`, default OFF)
-- **Subbeat alternation** (v50): Odd/even energy ratio across 8 subbeat bins detects double-time lock (`subbeatcheck=0`, default OFF)
-- **NN beat activation** (v54+): Causal 1D CNN (5L ch32, 33.3 KB INT8) replaces BandFlux as ODF source. Requires `NN=1` build flag. Toggle: `nnbeat=1`. A/B tested: 11/18 track wins vs BandFlux, -0.8 mean error.
-- **Joint forward filter** (v57): Krebs/Böck/Widmer 2015 joint tempo-phase forward algorithm with continuous ODF observation. ~860 states (20 tempos × variable phase). Replaces CBSS+Bayesian when enabled (`fwdfilter=0`, default OFF — severe half-time bias in A/B test)
-- **Spectral noise subtraction** (v56): Martin 2001 minimum statistics noise estimation, per-bin oversubtraction after FFT (`noiseest=0`, default OFF — A/B tested, hurts BPM accuracy)
-- **Onset delta filter**: Rejects slow-rising pads/swells (minOnsetDelta=0.3)
-- **Shared FFT + spectral pipeline**: All detectors share a single FFT → compressor → whitening chain
-- **Solo detector**: All non-BandFlux detectors removed from firmware in v62 (~1.5 KB RAM, ~600 lines saved)
+- **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
+- **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better
+- **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation, adaptive threshold
+- **NN beat activation** (v54+): Causal 1D CNN replaces BandFlux as ODF source. Requires `NN=1` build flag. Default ON (`nnbeat=1`). v9 DS-TCN architecture training.
+- **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)

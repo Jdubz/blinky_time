@@ -3,35 +3,26 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 8, 2026 (v62: training pipeline fixes complete, v6/v7/v8 training in progress)
+**Last Updated:** March 10, 2026 (v64: dead code removal, v9 DS-TCN training in progress)
 
-## Current Config (v62, SETTINGS_VERSION 60)
+## Current Config (v64, SETTINGS_VERSION 64)
 
 **Detector:** BandWeightedFlux Solo (6 disabled detectors removed in v62)
 - gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5
 - minOnsetDelta=0.3 (onset sharpness gate)
 
 **ODF source:** NN beat activation (default since v58, `nnbeat=1`)
-- Causal 1D CNN, 5L ch32, 33.3 KB INT8 (v4 model — deployed, but known data leakage)
+- v9 DS-TCN 24ch committed to staging (26.5 KB INT8, commit 10711d2 "mead model"). Training in progress (24ch and 32ch variants — F1 and on-device inference time not yet measured)
+- Previous standard conv models (5L/7L) take 79ms+ inference (~12 Hz), unacceptable framerate. DS-TCN targets ~25-30ms (~33-40 Hz)
 - Requires `NN=1` build flag. Toggle: `nnbeat=0/1`
-- A/B tested: 11/18 track wins vs BandFlux, -0.8 mean error
+- A/B tested (v4 model vs BandFlux): 11/18 track wins, -0.8 mean error
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
 - bayesacf=0.8, bayescomb=0.7, bayesft=0, bayesioi=0
 - cbssthresh=1.0, cbssTightness=8.0, beatoffset=5, onsetSnapWindow=8
 - densityoctave=1, octavecheck=1 (v32 octave disambiguation)
 - odfmeansub=0 (v32 -- raw ODF preserves ACF structure)
-- bisnap=1 (v44 bidirectional onset snap)
 - pll=1, pllkp=0.15, pllki=0.005 (v45 PLL phase correction)
-- adaptight=1 (v45 adaptive CBSS tightness)
-- percival=1 (v45 ACF harmonic pre-enhancement)
-
-**Default OFF (A/B tested, no net benefit):**
-- `fwdfilter=0` -- severe half-time bias (17/18 octave errors, known literature problem)
-- `fwdphase=0` -- BPM-neutral (8 wins vs 6, phase smoothness untested on LEDs)
-- `templatecheck=0` -- no net benefit (baseline 10 wins, subbeat 8)
-- `subbeatcheck=0` -- no net benefit
-- `noiseest=0` -- hurts BPM accuracy (baseline wins 13/18)
 
 ## SOTA Context (March 2026)
 
@@ -57,57 +48,39 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 | Feature | Wins | Losses | Ties | Mean Err | Octave Errs | Verdict |
 |---------|:----:|:------:|:----:|:--------:|:-----------:|---------|
 | NN beat (nnbeat=1) | **11** | 7 | 0 | **14.8** vs 15.6 | 7 vs 7 | Default ON |
-| Forward filter (fwdfilter=1) | 13 | 5 | 0 | **9.3** vs 15.4 | **17/18** | OFF (half-time) |
-| Fwd filter optimized (6-param) | -- | -- | -- | **12.5** vs 14.5 | **7/18** vs 4/18 | OFF (still worse) |
-| Hybrid phase (fwdphase=1) | 8 | 6 | 4 | 14.9 vs 14.8 | same | OFF (neutral) |
-| Noise subtraction (noiseest=1) | 5 | **13** | 0 | 17.1 vs 15.4 | +3 | OFF (hurts) |
-| Template+subbeat (v50) | 8 | **10** | 0 | -- | -- | OFF (no benefit) |
+| Forward filter (fwdfilter=1) | 13 | 5 | 0 | **9.3** vs 15.4 | **17/18** | **REMOVED v64** |
+| Fwd filter optimized (6-param) | -- | -- | -- | **12.5** vs 14.5 | **7/18** vs 4/18 | **REMOVED v64** |
+| Hybrid phase (fwdphase=1) | 8 | 6 | 4 | 14.9 vs 14.8 | same | **REMOVED v64** |
+| Noise subtraction (noiseest=1) | 5 | **13** | 0 | 17.1 vs 15.4 | +3 | Default OFF (kept in v64) |
+| Template+subbeat (v50) | 8 | **10** | 0 | -- | -- | **REMOVED v64** |
 
 ## Current Bottlenecks
 
 1. **~135 BPM gravity well** -- Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks, octave folding asymmetry. Tested 47 bins in v61 — no improvement. NOT a bin count issue.
 
-2. **NN ODF quality** -- the biggest lever per SOTA research. v4 model has test set data leakage (F1=0.717 inflated). v6/v7/v8 training in progress with all fixes (binary targets, time-stretch, test exclusion, v2 consensus labels, strength weighting).
+2. **NN ODF quality** -- the biggest lever per SOTA research. v9 DS-TCN 24ch committed (staging), training in progress (24ch and 32ch). Standard conv models too slow (79ms+).
 
 3. **Phase alignment** -- correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. All systems achieving >60% F1 use explicit phase tracking (HMM state, PLP oscillator, or particle cloud).
 
-## Priority 1: NN Model Training (v6/v7/v8)
+## Priority 1: NN Model Training (v9 DS-TCN)
 
-**Status: TRAINING IN PROGRESS (March 8, 2026)**
+**Status: TRAINING IN PROGRESS (March 10, 2026)**
 
-All training pipeline fixes implemented and data prepared. Three models training sequentially:
+v9 DS-TCN 24ch committed to staging (26.5 KB INT8, commit 10711d2). Training in progress for 24ch and 32ch variants. **Critical constraint:** standard conv models (5L/7L) take 79ms+ inference → ~12 Hz framerate. Only DS-TCN architecture can achieve acceptable inference times (~25-30ms target).
 
-| Model | Config | Architecture | Data | Est. Size |
-|-------|--------|-------------|------|-----------|
-| **v6-restart** | wider_rf.yaml | 5L ch32, RF=1008ms | 3.87M × 128-frame | ~33 KB INT8 |
-| **v7** | deep.yaml | 7L ch32, RF=4080ms | 1.72M × 256-frame | ~41 KB INT8 |
-| **v8** | deep_wide.yaml | 7L ch48, RF=4080ms | 1.72M × 256-frame | ~68 KB INT8 |
-
-**Pipeline fixes applied (all models):**
-1. ~~Test set data leakage~~ FIXED — 18 EDM test tracks excluded
-2. ~~Time-stretch augmentation~~ FIXED — [0.8, 0.9, 1.1, 1.2] speed factors
-3. ~~Gaussian target waste~~ FIXED — binary targets, pos_weight=20.0
-4. ~~v1 consensus labels~~ FIXED — v2 labels with octave normalization, timing correction
-5. ~~Downbeat bug~~ FIXED — explicit isDownbeat field, not strength>0.9
-6. Strength-weighted targets from consensus agreement (v62)
-
-**After training completes:**
-1. Compare v6/v7/v8 eval F1 against v4 (0.717, inflated)
-2. Export best model to TFLite INT8
-3. If 7L model wins: bump MAX_CONTEXT 128→256 in BeatActivationNN.h (+13 KB RAM)
-4. Deploy to devices, A/B test on blinkyhost
+**Previous models (completed):**
+- v6-restart (5L ch32): Beat F1=0.727. 79ms inference (BN-fused). Too slow.
+- v7-melfixed (7L ch32): Beat F1=0.787. Best offline F1 but >79ms inference. Too slow.
+- v8 (7L ch48): Beat F1=0.821. Heap exhaustion on device.
 
 **Outstanding (not yet addressed):**
 - Compressed mel feature range (mean=0.84, ~50 INT8 levels) — inherent to -35 dB RMS + INT8
 - ACF-based ODF quality metric — standalone F1 doesn't predict CBSS performance
 
-## Priority 2: Visual Evaluation of fwdphase=1
+**Changes for next training run (v10+):**
+- `beat_cnn.py`: Set `bias=False` on `DSConvBlock.pw_conv` and `DSTCNBeatCNN.input_conv` (redundant before BatchNorm). Saves 120 params. Also update `export_tflite.py` TF model builder (`use_bias=False`) and weight transfer (`set_weights([tf_w])` without bias in unfused path). See TODO comments in code.
 
-**Status: BPM-neutral in A/B test, visual eval needed**
-
-Forward filter phase tracking (`fwdphase=1`) was BPM-neutral (8 wins vs 6, mean err 14.9 vs 14.8). May give smoother LED animations. Needs eyes on hardware -- no code changes required.
-
-## Priority 3: CBSS ODF Contrast (cbssContrast=2.0)
+## Priority 2: CBSS ODF Contrast (cbssContrast=2.0)
 
 **Status: NOT TESTED**
 
@@ -138,12 +111,13 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 ## Closed Investigations
 
 - **Tempo bins 20→47** (v61): Tested, no improvement. Gravity well is not a bin count issue.
-- **Forward filter** (v57-v60): 6-param sweep, optimized but still 7/18 octave errors (vs CBSS 4/18). Half-time bias is fundamental.
-- **Spectral noise subtraction** (v56): A/B tested, hurts BPM accuracy (baseline wins 13/18).
+- **Forward filter** (v57-v60): 6-param sweep, optimized but still 7/18 octave errors (vs CBSS 4/18). Half-time bias is fundamental. **Removed from firmware in v64.**
+- **Spectral noise subtraction** (v56): A/B tested, hurts BPM accuracy (baseline wins 13/18). **Removed from firmware in v64.**
 - **Focal loss** (v5): Identical to v4, no benefit.
-- **Template+subbeat** (v50): No net benefit (baseline 10 wins, subbeat 8).
+- **Template+subbeat** (v50): No net benefit (baseline 10 wins, subbeat 8). **Removed from firmware in v64.**
+- **Adaptive tightness, Percival harmonic, bidirectional snap, HMM, particle filter, PLP phase** — all removed as dead code in v64.
 
-## Completed (v50-v62, March 2026)
+## Completed (v50-v64, March 2026)
 
 - v50: Rhythmic pattern templates + subbeat alternation (A/B tested, default OFF)
 - v54: NN beat activation CNN (v2 model, 5L ch32, 33.3 KB INT8)
@@ -157,6 +131,7 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 - v61: Tempo bins 20→47 -- tested, no improvement. Reverted to 20 bins.
 - v62: Firmware simplification (removed 6 disabled detectors, -19.5 KB flash, -5.4 KB RAM)
 - v62: v2 consensus labels, training pipeline fixes (binary targets, time-stretch, test exclusion)
+- v64: Dead code removal (forward filter, noise estimation, HMM, particle filter, PLP, adaptive tightness, percival, bisnap, template/subbeat checks, etc.). ConfigStorage 408->296 bytes.
 - v5: Focal loss training -- identical to v4, no benefit
 
 ## Known Limitations
@@ -164,9 +139,8 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
 | ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Improved NN ODF may help (training) |
-| NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | v6/v7/v8 training in progress |
-| Forward filter half-time | Observation model is octave-symmetric (known literature issue) | N/A | **CLOSED** -- 6-param sweep, stays OFF |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | fwdphase=1 visual eval (Priority 2) |
+| NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | Fixed in v6+; v9 DS-TCN in progress |
+| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | Open research question |
 | Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs for reliable evaluation | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** -- acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** -- organic mode is correct | -- |

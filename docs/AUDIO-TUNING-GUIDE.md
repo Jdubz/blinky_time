@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** March 8, 2026
-**Firmware Version:** SETTINGS_VERSION 60 (CBSS + Bayesian Tempo + NN Beat ODF default + Forward Filter option)
+**Last Updated:** March 10, 2026
+**Firmware Version:** SETTINGS_VERSION 64 (CBSS + Bayesian Tempo + NN Beat ODF default)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -117,8 +117,7 @@ Batch A/B test scripts compare two firmware configurations across all 18 EDM tra
 
 **Available scripts:**
 - `ab_test_nnbeat.cjs` — BandFlux ODF vs NN Beat ODF (`nnbeat=0` vs `nnbeat=1`)
-- `ab_test_fwdfilter.cjs` — CBSS baseline vs forward filter (`fwdfilter=0` vs `fwdfilter=1`)
-- `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (`noiseest=0` vs `noiseest=1`)
+- `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (default OFF in v64; settings still exposed)
 
 ```bash
 # Run from blinky-test-player dir (needs serialport module)
@@ -272,54 +271,19 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 |---------|---------|-------|-------------|
 | `nnbeat` | 1 | bool | Use NN ODF instead of BandFlux (default ON since v58, requires NN=1 build) |
 
-### Category: `forward` (7 parameters) - Forward Filter Beat Tracking (v57+, default OFF)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `fwdfilter` | 0 | bool | Enable forward filter (replaces CBSS+Bayesian for beats) |
-| `fwdtranssigma` | 0.6 | 0.1-10.0 | Tempo transition width in lag units (v60 sweep optimal) |
-| `fwdfiltcontrast` | 1.0 | 0.5-5.0 | ODF power-law contrast (v60 sweep: 1.0 optimal) |
-| `fwdfiltlambda` | 10.0 | 2.0-20.0 | Beat zone = 1/λ of period (v60 sweep: 10 optimal) |
-| `fwdfiltfloor` | 0.01 | 0.001-0.1 | Observation probability floor |
-| `fwdbayesbias` | 0.2 | 0.0-1.0 | Bayesian posterior modulation strength (v59) |
-| `fwdasymmetry` | 0.8 | 0.0-3.0 | Asymmetric non-beat penalty by tempo (v60) |
-
-**Forward filter is OFF by default.** A/B testing showed severe half-time bias (17/18 octave errors at original defaults). Full 6-parameter sweep (v60) optimized to 7/18 octave errors but still worse than CBSS baseline (4/18). Use `fwdphase=1` for phase-only tracking if smoother phase is desired.
-
-### Category: `fwdphase` (1 parameter) - Forward Phase Tracking (v58+, default OFF)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `fwdphase` | 0 | bool | Use forward filter phase only (CBSS tempo, fwd filter phase) |
-
-### Category: `v45` (7 parameters) - PLL + Adaptive Tightness + Percival (v45+)
+### Category: `v45` (4 parameters) - PLL + Onset Snap (v45+)
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
 | `pll` | 1 | bool | PLL proportional phase correction |
 | `pllkp` | 0.15 | 0.0-1.0 | PLL proportional gain |
 | `pllki` | 0.005 | 0.0-0.1 | PLL integral gain |
-| `adaptight` | 1 | bool | Adaptive CBSS tightness based on onset confidence |
-| `percival` | 1 | bool | Percival ACF harmonic pre-enhancement |
-| `bisnap` | 1 | bool | Bidirectional onset snap (v44) |
 | `onsetSnapWindow` | 8 | 1-16 | Onset snap search window in frames |
 
-### Category: `noise` (5 parameters) - Spectral Noise Estimation (v56, default OFF)
+### Category: `octave` (5 parameters) - Octave Disambiguation (v32)
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `noiseest` | 0 | bool | Enable spectral noise floor subtraction (hurts — OFF by default) |
-| `noisesmooth` | 0.92 | 0.8-0.99 | Per-bin power smoothing |
-| `noiserelease` | 0.999 | 0.99-0.9999 | Running minimum release |
-| `noiseover` | 1.5 | 1.0-4.0 | Oversubtraction factor |
-| `noisefloor` | 0.02 | 0.001-0.1 | Minimum magnitude floor |
-
-### Category: `octave` (7 parameters) - Octave Disambiguation (v32/v50)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `templatecheck` | 0 | bool | Rhythmic pattern template matching (v50, no benefit) |
-| `subbeatcheck` | 0 | bool | Subbeat alternation octave check (v50, no benefit) |
 | `densityoctave` | 1 | bool | Onset-density octave penalty |
 | `octavecheck` | 1 | bool | Shadow CBSS octave checker |
 | `octavecheckbeats` | 2 | 1-8 | Octave check interval in beats |
@@ -399,7 +363,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 ## Current Best Settings
 
-### BandFlux Solo Configuration (SETTINGS_VERSION 60)
+### BandFlux Solo Configuration (SETTINGS_VERSION 64)
 
 **Single detector outperforms all multi-detector ensembles** — BandFlux Solo achieves avg Beat F1 0.468 vs 0.411 baseline (HFC+Drummer). Multi-detector combos tested worse; ensemble fusion dilutes BandFlux's cleaner signal.
 
@@ -502,7 +466,7 @@ Key changes from v24:
 
 ### Overview
 
-**Goal:** Validate current v60 firmware defaults and tune parameters for optimal beat tracking and transient detection across diverse music genres.
+**Goal:** Validate current v64 firmware defaults and tune parameters for optimal beat tracking and transient detection across diverse music genres.
 
 ### Prerequisites
 
@@ -687,6 +651,43 @@ stream off         # Stop streaming
 | `ioiMinAutocorr` | AudioController | IOI now feeds Bayesian fusion directly |
 | `ftMinMagnitudeRatio` | AudioController | FT now feeds Bayesian fusion directly |
 | `ftMinAutocorr` | AudioController | FT now feeds Bayesian fusion directly |
+
+### Removed in SETTINGS_VERSION 64 (v64 dead code removal, March 2026)
+
+| Old Parameter | Old Component | Reason |
+|---------------|---------------|--------|
+| `fwdfilter` | Forward Filter | A/B tested, severe half-time bias — removed |
+| `fwdtranssigma` | Forward Filter | Removed with forward filter |
+| `fwdfiltcontrast` | Forward Filter | Removed with forward filter |
+| `fwdfiltlambda` | Forward Filter | Removed with forward filter |
+| `fwdfiltfloor` | Forward Filter | Removed with forward filter |
+| `fwdbayesbias` | Forward Filter | Removed with forward filter |
+| `fwdasymmetry` | Forward Filter | Removed with forward filter |
+| `fwdphase` | Forward Phase | Removed with forward filter |
+| `templatecheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
+| `subbeatcheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
+| `noiseest` | Noise Estimation | A/B tested, hurts BPM accuracy — default OFF (settings still exposed) |
+| `noisesmooth` | Noise Estimation | Default OFF with noise estimation |
+| `noiserelease` | Noise Estimation | Default OFF with noise estimation |
+| `noiseover` | Noise Estimation | Default OFF with noise estimation |
+| `noisefloor` | Noise Estimation | Default OFF with noise estimation |
+| `adaptight` | Adaptive Tightness | Removed (dead code) |
+| `percival` | Percival Harmonic | Removed (dead code) |
+| `bisnap` | Bidirectional Snap | Removed (dead code) |
+| `pfNoise` | Particle Filter | Removed (dead code) |
+| `pfBeatSigma` | Particle Filter | Removed (dead code) |
+| `pfParticles` | Particle Filter | Removed (dead code) |
+| `barPointerHmm` | HMM Phase Tracker | Removed (dead code) |
+| `hmmContrast` | HMM Phase Tracker | Removed (dead code) |
+| `hmmLambda` | HMM Phase Tracker | Removed (dead code) |
+| `odfSource` | ODF Source Select | Removed (dead code) |
+| `plpphase` | PLP Phase | Removed (dead code) |
+| `plpstrength` | PLP Phase | Removed (dead code) |
+| `plpminconf` | PLP Phase | Removed (dead code) |
+| `fold32` | Misc | Removed (dead code) |
+| `sesquicheck` | Misc | Removed (dead code) |
+| `harmonicsesqui` | Misc | Removed (dead code) |
+| `downwardcorrect` | Misc | Removed (dead code) |
 
 ### Removed in AudioController v2/v3 (December 2025)
 

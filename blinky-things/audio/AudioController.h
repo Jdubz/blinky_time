@@ -360,18 +360,7 @@ public:
     // enclosure-induced periodic fluctuations. BTrack uses this approach.
     bool odfDiffMode = false;            // HWR first-difference ODF for ACF (off by default)
 
-    // === ALTERNATIVE ODF SOURCE FOR ACF ===
-    // Selects which signal feeds the OSS buffer (and thus ACF tempo estimation).
-    // CBSS and comb bank always use the smoothed onset strength (BandFlux).
-    // Options:
-    //   0: Default (smoothed BandFlux combined flux, same as CBSS)
-    //   1: Bass energy (sum of whitened bass mags bins 1-6, 62.5-375 Hz)
-    //   2: Mic level (broadband time-domain RMS from AdaptiveMic)
-    //   3: Bass-only flux (BandFlux bass band flux, no mid/high)
-    //   4: Spectral centroid (tracks spectral SHAPE, robust to uniform energy modulation)
-    //   5: Bass ratio (bass energy / total energy, kick=high, snare=low)
-    // Priority: odfSource > onsetTrainOdf > odfDiffMode > default (only one active)
-    uint8_t odfSource = 0;               // Alternative ODF source for ACF (0=default)
+    // (odfSource 1-5 removed v64 — experimental alternatives never used in production)
 
     // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
     // Subtracts the local mean from OSS buffer before autocorrelation.
@@ -398,13 +387,7 @@ public:
     uint8_t octaveCheckBeats = 2;        // Check every N beats (v32: aggressive, was 4)
     float octaveScoreRatio = 1.3f;       // T/2 must score this much better to switch (v32: was 1.5)
 
-    // === METRICAL CONTRAST CHECK (v48) ===
-    // Compares raw onset strength at beat positions vs midpoints.
-    // Weak contrast indicates possible octave error — triggers checkOctaveAlternative().
-    bool metricalCheckEnabled = false;      // Enable metrical contrast check (v48)
-    float metricalMinRatio = 1.5f;          // Min beat/midpoint strength ratio (v48, 1.0-5.0)
-    uint8_t metricalCheckBeats = 4;         // Check every N beats (v48, 2-8)
-
+    // (metricalCheckEnabled/metricalMinRatio/metricalCheckBeats removed v64 — no octave disambiguation benefit)
     // (phaseCheckEnabled removed v44 — net-negative on 18-track validation)
     // (plpPhaseEnabled/plpCorrectionStrength/plpMinConfidence removed v44 — zero effect, redundant with onset snap)
 
@@ -415,36 +398,8 @@ public:
     bool btrkPipeline = true;            // BTrack pipeline (v33: enabled, replaces multiplicative fusion)
     uint8_t btrkThreshWindow = 0;        // Adaptive threshold half-window (0=off, 1-5 bins each side)
 
-    // === PHASE TRACKER BEAT DETECTION (v46b, formerly bar-pointer HMM) ===
-    // Single-tempo phase tracker with continuous ODF observation model.
-    // Bayesian fusion handles tempo; this tracks phase within the best period.
-    // Beat detection via position-0 wrap (detectHmmBeat).
-    // Joint HMM (updateHmmForward) removed v53 — position-wrap doesn't work
-    // across 20 tempo bins (argmax jumps between bins).
-    bool barPointerHmm = false;          // Enable phase tracker beat detection (A/B vs CBSS)
-    bool fwdPhaseOnly = false;           // Hybrid: phase tracker for phase, CBSS for beats (v58)
-    float hmmContrast = 2.0f;            // ODF power-law contrast (higher = sharper beat/non-beat)
-    // (hmmTempoNorm removed v53 — only used by dead joint HMM updateHmmForward)
-    // (hmmLambda removed v53 — only used by dead joint HMM buildHmmTransitionMatrix)
-    float fwdObsLambda = 8.0f;           // Continuous ODF observation strength (v49: higher=sharper beat/non-beat)
-    float fwdObsFloor = 0.01f;           // Observation probability floor (v52)
-    float fwdWrapFraction = 0.25f;       // Wrap detection zone fraction (v52)
-    // (hmmBayesBias removed v53 — only used by dead joint HMM updateHmmForward)
-
-    // === PARTICLE FILTER BEAT TRACKING (v38) ===
-    // Maintains 100 tempo/phase hypotheses; octave variants injected at resampling
-    // compete on equal footing via observation model. Most principled octave
-    // disambiguation within CPU/RAM budget. A/B testable vs CBSS+Bayesian.
-    bool particleFilterEnabled = false;    // Enable PF (A/B vs CBSS+Bayesian)
-    float pfNoise = 0.08f;                // Period diffusion noise (fraction of period, applied at beat boundaries only)
-    float pfBeatSigma = 0.05f;            // Beat kernel width (fraction of period) — unused in v39 madmom model, kept for serial compat
-    float pfOctaveInjectRatio = 0.10f;    // Fraction of particles to replace with octave variants
-    float pfBeatThreshold = 0.25f;        // Weighted fraction near phase=0 to trigger beat
-    float pfNeffRatio = 0.5f;             // Resample when Neff < ratio * N
-    float pfContrast = 1.0f;              // ODF power-law contrast for PF likelihood
-    float pfInfoGate = 0.10f;             // Information gate: floor ODF below this to 0.03 (BeatNet-style, 0=off)
-    uint8_t pfObsLambda = 8;              // Observation model lambda: beat region = 1/lambda of period (madmom-style, 2-32)
-
+    // (barPointerHmm/fwdPhaseOnly/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction removed v64 — HMM phase tracker never outperformed CBSS)
+    // (particleFilterEnabled and all pf* params removed v64 — never outperformed CBSS)
     // (ftEnabled removed v52 — dead code since v28)
 
     // === BAYESIAN TEMPO FUSION ===
@@ -485,6 +440,18 @@ public:
     bool pllEnabled = true;                // Enable PLL phase correction (v45)
     float pllKp = 0.15f;                   // Proportional gain (v45)
     float pllKi = 0.005f;                  // Integral gain (v45)
+    // v65 runtime-only params: registered in SettingsRegistry for serial tuning,
+    // but NOT persisted in StoredMusicParams. Reset to defaults on reboot.
+    // Will be added to ConfigStorage after calibration sweeps confirm optimal values.
+    uint8_t pllWarmupBeats = 5;            // Beats before tightening PLL clamp from ±T/2 to ±T/4 (v65)
+
+    // === ONSET SNAP HYSTERESIS (v65) ===
+    float snapHysteresis = 0.8f;           // Prefer previous snap if >this fraction of best (v65, 0=off)
+
+    // === DOWNBEAT CALIBRATION (v65) ===
+    float dbEmaAlpha = 0.3f;              // Downbeat EMA smoothing alpha (v65)
+    float dbThreshold = 0.5f;             // Smoothed downbeat activation threshold to fire (v65)
+    float dbDecay = 0.85f;                // Per-frame downbeat decay between beats (v65)
 
     // === ADAPTIVE CBSS TIGHTNESS (v45) ===
     // Modulates cbssTightness based on onset confidence (OSS/mean ratio).
@@ -497,45 +464,13 @@ public:
     float tightnessConfThreshHigh = 3.0f;  // OSS/mean ratio above this = high confidence (v45)
     float tightnessConfThreshLow = 1.5f;   // OSS/mean ratio below this = low confidence (v45)
 
-    // === JOINT TEMPO-PHASE FORWARD FILTER (v57, Krebs/Böck 2015) ===
-    // Tracks tempo AND phase jointly via forward algorithm with continuous ODF observation.
-    // 20 tempo bins × variable phase positions (~860 states). Each state accumulates
-    // likelihood at every frame. Tempo changes only at beat boundaries (phase wrap).
-    // Replaces CBSS countdown + Bayesian tempo when enabled.
-    bool forwardFilterEnabled = false;      // Enable joint forward filter (A/B vs CBSS+Bayesian)
-    float fwdTransSigma = 3.0f;            // Tempo transition width in lag units (1-10, tighter=less octave jump)
-    float fwdFilterContrast = 2.0f;        // ODF power-law contrast (1=linear, 2-4=sharper discrimination)
-    float fwdFilterLambda = 8.0f;          // Beat zone = 1/lambda of period (4-32, higher=narrower beat zone)
-    float fwdFilterFloor = 0.01f;          // Observation probability floor (prevents zero-out)
-    float fwdBayesBias = 0.2f;             // Bayesian posterior modulation strength (0=off, 1=full posterior, v59)
-    float fwdAsymmetry = 0.8f;             // Asymmetric non-beat penalty by tempo (0=off, 0.8=optimal, v60)
+    // (forwardFilterEnabled and all fwd* params removed v64 — A/B tested: severe half-time bias, 17/18 octave errors)
+    // (multiAgentEnabled/agentDecay/agentInitBeats removed v64 — never outperformed single CBSS)
+    // (templateCheckEnabled/templateScoreRatio/templateCheckBeats removed v64 — A/B tested: baseline wins 10/18)
+    // (subbeatCheckEnabled/alternationThresh/subbeatCheckBeats removed v64 — A/B tested: no net benefit)
+    // (templateMinScore/subbeatBins/templateHistBars removed v64 — associated features removed)
 
-    // === MULTI-AGENT BEAT TRACKING (v48) ===
-    // 8 beat agents at different phases compete; best-scoring agent fires beats.
-    // Replaces single CBSS countdown when enabled. CBSS still provides the cumulative
-    // beat strength signal; agents use it for onset quality scoring.
-    bool multiAgentEnabled = false;         // Enable multi-agent phase competition (A/B vs single CBSS)
-    float agentDecay = 0.85f;              // Agent score EMA decay (0.7-0.95, lower = faster adaptation)
-    uint8_t agentInitBeats = 3;            // Initialize agents after N beats (2-8)
-
-    // === RHYTHMIC PATTERN TEMPLATES (v50, Krebs/Böck/Widmer ISMIR 2013) ===
-    // Bins OSS into 16 bar-phase slots at candidate tempos, correlates against
-    // EDM templates. Switches tempo if alternative scores better by templateScoreRatio.
-    bool templateCheckEnabled = false;         // Enable template-based octave check
-    float templateScoreRatio = 1.3f;           // Min score ratio to switch (1.0-3.0)
-    uint8_t templateCheckBeats = 4;            // Check every N beats (2-8)
-
-    // === BEAT CRITIC SUBBEAT ALTERNATION (v50, Davies ISMIR 2010) ===
-    // Divides beats into subbeatBins subbeat bins, compares even vs odd energy.
-    // High alternation at T but low at T/2 → switch to T/2.
-    bool subbeatCheckEnabled = false;          // Enable subbeat alternation check
-    float alternationThresh = 1.2f;            // Odd/even ratio threshold (0.3-3.0)
-    uint8_t subbeatCheckBeats = 4;             // Check every N beats (2-8)
-
-    // === HIDDEN CALIBRATION CONSTANTS (v51, exposed for parameter sweeps) ===
-    float templateMinScore = 0.1f;         // Min Pearson correlation to consider tempo switch
-    uint8_t subbeatBins = 8;              // Number of subbeat bins for alternation check (even, 4-16)
-    uint8_t templateHistBars = 2;         // Template history depth in bars (1-4)
+    // === CALIBRATION CONSTANTS (v51, exposed for parameter sweeps) ===
     float cbssMeanAlpha = 0.008f;         // CBSS running mean EMA alpha (tau ~2s at 66Hz)
     float harmonic2xThresh = 0.5f;        // ACF ratio at half-lag for 2x BPM correction
     float harmonic15xThresh = 0.6f;       // ACF ratio at 2/3-lag for 1.5x BPM correction
@@ -592,11 +527,7 @@ public:
     uint32_t getLastBeatTimeMs() const { return lastBeatMs_; }
 
     // (PLP phase getters removed v44 — feature removed)
-
-    // Particle filter debug getters (v38)
-    bool isParticleFilterActive() const { return particleFilterEnabled && pfInitialized_; }
-    float getPfNeff() const { return pfNeff_; }
-    float getPfBeatFraction() const { return pfBeatFraction_; }
+    // (PF debug getters removed v64 — particle filter removed)
 
 private:
     // === HAL REFERENCES ===
@@ -625,14 +556,7 @@ private:
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
-    // Legacy spectral flux state — only used by computeSpectralFluxBands(),
-    // which is the fallback ODF path when BOTH unifiedOdf=false AND nnBeatActivation=false.
-    // In practice both default to true, making this ~1 KB dead weight. Kept as a
-    // runtime-togglable fallback; safe to remove if both toggles are permanently retired.
-    static constexpr int SPECTRAL_BINS = 128;  // FFT_SIZE / 2
-    float prevMagnitudes_[SPECTRAL_BINS] = {0};
-    bool prevMagnitudesValid_ = false;  // First frame has no previous
-    float maxFilteredPrevMags_[SPECTRAL_BINS] = {0};  // SuperFlux vibrato suppression
+    // (prevMagnitudes_/maxFilteredPrevMags_ removed v64 — computeSpectralFluxBands removed)
 
     // Comb filter bank (independent tempo validation)
     CombFilterBank combFilterBank_;
@@ -680,14 +604,9 @@ private:
     // Beat-boundary tempo update state (Phase 2.1)
     int pendingBeatPeriod_ = -1;       // Pending beat period (applied at next beat fire, -1=none)
 
-    // Octave check state (Phase 3)
+    // Octave check state
     uint16_t beatsSinceOctaveCheck_ = 0; // Beats since last octave check
-    uint16_t beatsSinceMetricalCheck_ = 0; // Beats since last metrical contrast check (v48)
-    uint16_t beatsSinceTemplateCheck_ = 0; // Beats since last template match check (v50)
-    uint16_t beatsSinceSubbeatCheck_ = 0;  // Beats since last subbeat alternation check (v50)
-
-    // (beatsSincePhaseCheck_ removed v44 — phase check feature removed)
-    // (plpPhase_/plpConfidence_ removed v44 — PLP feature removed)
+    // (beatsSinceMetricalCheck_/beatsSinceTemplateCheck_/beatsSinceSubbeatCheck_ removed v64)
 
     // Beat expectation Gaussian (precomputed for current beat period)
     float beatExpectationWindow_[MAX_BEAT_PERIOD] = {0};
@@ -742,78 +661,24 @@ private:
     int bayesBestBin_ = TEMPO_BINS / 2;              // Best bin from last fusion (for debug)
     float lastCombObs_[TEMPO_BINS] = {0};         // Last comb observations (for debug)
 
-    // === PHASE TRACKER STATE (v46b) ===
-    // Used by updatePhaseTracker() and detectHmmBeat().
-    // Joint HMM arrays (hmmAlpha_, hmmStateOffsets_, hmmTransMatrix_, etc.) removed v53.
-    int hmmBestTempo_ = 0;                       // Best tempo bin (from Bayesian via phase tracker)
-    int hmmBestPosition_ = 0;                    // Best position within beat
-    int hmmPrevBestPosition_ = -1;               // Previous frame's best position (for phase wrap detection)
-    int hmmPrevBestTempo_ = 0;                   // Previous frame's best tempo (spurious wrap detection)
-
-    // === PHASE-ONLY TRACKER (v46b) ===
-    // Single-tempo circular distribution — Bayesian handles tempo, this tracks phase.
-    // All probability mass stays in one period, unlike joint HMM where mass spreads
-    // across tempo bins leaving the Bayesian bin's positions unreliable.
-    static constexpr int PHASE_MAX_PERIOD = CombFilterBank::MAX_LAG + 1;  // 67
-    float phaseAlpha_[PHASE_MAX_PERIOD] = {0};  // Circular probability distribution
-    int phasePeriod_ = 0;                        // Current tracked period (from Bayesian)
-    int phaseFramesSinceBeat_ = 999;             // Frames since last phase-tracker beat (wrap cooldown)
-    void updatePhaseTracker(float odf);
-
-    // === JOINT FORWARD FILTER STATE (v57) ===
-    // 20 tempo bins with variable phase positions (= lag per bin, 20-66 frames).
-    // Total states: sum of 20 interpolated lags. Uses existing tempoBinLags_[] for periods.
-    static constexpr int FWD_MAX_STATES = 880;  // Sum of 20 interpolated lags + margin
-    float fwdAlpha_[FWD_MAX_STATES] = {0};       // Forward probabilities
-    int fwdBinOffset_[TEMPO_BINS] = {0};          // Start index of each bin in fwdAlpha_
-    int fwdTotalStates_ = 0;                      // Actual total states
-    float fwdTransMatrix_[TEMPO_BINS][TEMPO_BINS] = {{0}};  // Tempo transition probabilities
-    float fwdTransSigmaLast_ = -1.0f;            // Last sigma used to build transition matrix
-    int fwdMinPeriod_ = 10;                      // Cached min period across tempo bins
-    bool fwdInitialized_ = false;
-    int fwdBestBin_ = TEMPO_BINS / 2;            // Best tempo bin (~120 BPM)
-    int fwdBestPos_ = 0;                          // Best phase position
-    int fwdPrevBestBin_ = TEMPO_BINS / 2;
-    int fwdPrevBestPos_ = -1;
-    int fwdFramesSinceBeat_ = 999;
-
-    // === PARTICLE FILTER STATE (v38) ===
-    static constexpr int PF_NUM_PARTICLES = 100;
-    static constexpr float PF_INFO_GATE_ODF_FLOOR = 0.03f;  // Floor value for gated ODF during silence
-    static constexpr float PF_LIKELIHOOD_EPSILON = 0.01f;    // Small epsilon to avoid zero likelihoods
-    struct BeatParticle {
-        float period;    // MIN_LAG-MAX_LAG frames (60-200 BPM at 66 Hz)
-        float position;  // 0.0 to period
-        float weight;    // Unnormalized likelihood
-    };
-    BeatParticle pfParticles_[PF_NUM_PARTICLES];
-    BeatParticle pfResampleBuf_[PF_NUM_PARTICLES];  // Scratch for resampling
-    bool pfInitialized_ = false;
-    float pfNeff_ = 0.0f;
-    float pfSmoothedPeriod_ = 33.0f;  // EMA-smoothed consensus period (init ~120 BPM at 66 Hz)
-    float pfBeatFraction_ = 0.0f;
-    float pfPrevBeatFraction_ = 0.0f;
-    uint32_t pfRngState_ = 0x12345678;
-    int pfCooldown_ = 0;  // Beat cooldown counter (frames)
+    // (Phase tracker state removed v64 — HMM/phase tracker never outperformed CBSS)
+    // (Forward filter state removed v64 — ~5.5 KB: fwdAlpha_[880], fwdTransMatrix_[20][20], etc.)
+    // (Particle filter state removed v64 — ~2.4 KB: 100 particles × 2 buffers + RNG state)
 
     // === PLL PHASE CORRECTION STATE (v45) ===
     float pllPhaseIntegral_ = 0.0f;  // PLL integral accumulator
 
+    // === ONSET SNAP HYSTERESIS (v65) ===
+    int lastSnapOffset_ = 0;         // Previous beat's snap offset (for hysteresis)
+
+    // === DOWNBEAT TRACKING (v65) ===
+    float downbeatSmoothed_ = 0.0f;  // EMA-smoothed NN downbeat activation
+    uint8_t beatInMeasure_ = 0;      // Position in measure (1-4, 0=unknown)
+
     // === ADAPTIVE TIGHTNESS STATE (v45) ===
     float effectiveTightness_ = 8.0f;  // Current effective tightness (modulated by onset confidence)
 
-    // === MULTI-AGENT BEAT TRACKING STATE (v48) ===
-    static constexpr int NUM_BEAT_AGENTS = 8;
-    struct BeatAgent {
-        int countdown;        // Frames until next predicted beat
-        float score;          // EMA quality score (higher = better onset alignment)
-        int lastBeatSample;   // Onset-snapped beat anchor
-        bool justFired;       // Flag: this agent's countdown hit 0 this frame
-    };
-    BeatAgent beatAgents_[NUM_BEAT_AGENTS];
-    int bestAgentIdx_ = 0;
-    bool agentsInitialized_ = false;
-    int agentPeriod_ = 30;      // Cached period used by agents
+    // (Multi-agent state removed v64 — never outperformed single CBSS)
 
     // === SYNTHESIZED OUTPUT ===
     AudioControl control_;
@@ -835,31 +700,7 @@ private:
     // (checkPhaseAlignment removed v44 — net-negative on 18-track validation)
     void switchTempo(int newPeriodSamples);
 
-    // Phase tracker beat detection (v46b, joint HMM removed v53)
-    void detectHmmBeat();             // v46: position-0 wrap beat detection
-
-    // Joint forward filter (v57)
-    void initForwardFilter();
-    void updateForwardFilter(float odf);
-    void detectForwardFilterBeat();
-
-    // Multi-agent beat tracking (v48)
-    void initBeatAgents();
-    void detectBeatMultiAgent();
-    void checkMetricalContrast();
-    void checkTemplateMatch();         // Rhythmic pattern template check (v50)
-    void checkSubbeatAlternation();    // Beat critic subbeat alternation (v50)
-
-    // Particle filter beat tracking (v38)
-    void initParticleFilter();
-    void pfUpdate(float odf);
-    void pfPredict();
-    void pfUpdateWeights(float odf);
-    void pfResample();
-    void pfDetectBeat();
-    void pfExtractConsensus();
-    float pfRandom();           // LCG uniform 0 to 1
-    float pfGaussianRandom();   // Box-Muller
+    // (Phase tracker/forward filter/multi-agent/particle filter declarations removed v64)
 
     // ODF smoothing
     float smoothOnsetStrength(float raw);
@@ -867,8 +708,7 @@ private:
     // Log-Gaussian weight computation
     void recomputeLogGaussianWeights(int T);
 
-    // Onset strength computation
-    float computeSpectralFluxBands(const float* magnitudes, int numBins);
+    // (computeSpectralFluxBands removed v64 — legacy ODF path, unreachable since v54)
 
     // Bayesian tempo fusion
     // Note: initTempoState() uses bayesPriorCenter and tempoPriorWidth to build

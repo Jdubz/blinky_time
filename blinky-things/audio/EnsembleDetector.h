@@ -26,9 +26,6 @@
  */
 class EnsembleDetector {
 public:
-    // Number of detector types (kept for enum/fusion array compatibility)
-    static constexpr int NUM_DETECTORS = static_cast<int>(DetectorType::COUNT);
-
     EnsembleDetector();
 
     /**

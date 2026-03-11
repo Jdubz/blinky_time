@@ -339,8 +339,11 @@ void loop() {
   uint32_t now = millis();
   float dt = (lastMs == 0) ? Constants::DEFAULT_FRAME_TIME : (now - lastMs) * 0.001f;
 
-  // FIX: Add diagnostics when frame time exceeds maximum (indicates performance issues)
-  if (dt > Constants::MAX_FRAME_TIME) {
+  // Frame time diagnostics: only warn for unexpectedly long frames.
+  // When NN inference is active (~98ms per frame), long frames are expected
+  // and warnings would flood serial output, corrupting JSON streams.
+  // Only warn when frame time exceeds 200ms (indicates actual performance issue).
+  if (dt > 0.2f) {
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::WARN) {
       Serial.print(F("[WARN] Frame time: "));
       Serial.print((now - lastMs));
