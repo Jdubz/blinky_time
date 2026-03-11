@@ -322,7 +322,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
    (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
-9. [NN=1, planned] At beat fire: SpectralAccumulator → BeatSyncNN → corrections (confidence, tempo, phase) + downbeat
+9. [NN=1, planned] At beat fire: SpectralAccumulator → BeatSyncNN → corrections + downbeat
+   Corrections (beat_confidence, tempo_factor, phase_offset) feed back into CBSS before output
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
     onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
 11. Fire generator:
@@ -341,7 +342,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). Current NN=1 build: +96 KB tensor arena + 27 KB context buffer. Planned beat-sync NN: +4 KB arena + 1.8 KB beat history.
+- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). Current NN=1 build: +96 KB tensor arena + 27 KB context buffer. Planned beat-sync NN: +4 KB arena + 2.5 KB beat history (8 beats × 79 floats) + 0.3 KB accumulator.
 - Flash: ~259 KB base, ~391 KB with NN=1 (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 

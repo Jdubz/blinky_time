@@ -224,7 +224,7 @@ AudioController delegates transient detection to the EnsembleDetector. Currently
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
-### NN Beat Activation (v54+ - Optional, requires NN=1 build)
+### NN Beat Activation (mel-spectrogram CNN — legacy; beat-sync hybrid — planned)
 
 **Current (mel-spectrogram CNN, supported but performance-limited):** Causal 1D CNN replacing BandFlux as ODF source. Still wired through `BeatActivationNN` / `AudioController` / `ConfigStorage` and enabled by default when built with `NN=1` (`nnBeatEnabled=true`). All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget but functional at reduced framerate (~12 Hz). Best offline F1: v7-melfixed 0.787. No further architecture work planned — superseded by beat-synchronous approach. See `IMPROVEMENT_PLAN.md` Closed Investigations.
 

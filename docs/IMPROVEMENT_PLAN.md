@@ -167,12 +167,12 @@ The deterministic pipeline has **50+ hand-tuned parameters** across BandFlux, En
 | Category | Parameters | Count | NN replaces? |
 |----------|-----------|:-----:|:---:|
 | BandFlux detection | gamma, bandWeights[7], threshold, minOnsetDelta, onsetDeltaDecay | ~11 | Phase B: beat_confidence makes threshold tuning less critical |
-| EnsembleFusion | minConfidence, cooldownMs, noiseGateLevel, noiseGateDecay | 4 | Phase B: NN confidence supersedes post-hoc gating |
+| EnsembleFusion | minConfidence, cooldownMs | 2 | Phase B: NN confidence supersedes post-hoc gating (noiseGate params already removed in v64) |
 | Tempo prior | center, width, strength, enabled | 4 | Phase C: tempo_factor replaces prior-based disambiguation |
 | Octave disambiguation | densityOctave, densityMinPerBeat, densityMaxPerBeat, octaveCheck, octaveCheckBeats, octaveScoreRatio | 6 | Phase C: tempo_factor replaces heuristic octave checks |
 | CBSS beat detection | cbssAlpha, cbssTightness, cbssContrast, beatConfidenceDecay, tempoSnapThreshold | 5 | Phase C: phase_offset + tempo_factor make CBSS tuning less sensitive |
 | Onset snap / PLL | snaphyst, pllwarmup, proportionalGain, integralGain | 4 | Phase C: phase_offset replaces snap heuristic |
-| **Total removable** | | **~34** | Progressive, A/B tested |
+| **Total removable** | | **~32** | Progressive, A/B tested |
 
 **Progressive simplification roadmap:**
 1. **Phase A**: Train NN with full pipeline intact. BandFlux + CBSS still does all beat detection. NN adds downbeat only.
@@ -230,7 +230,7 @@ Either approach allows aggressive simplification in Phase D without the NN depen
 10. Deploy in modified BeatActivationNN
 
 **Phased implementation:**
-- **Phase A (downbeat only):** Train with ground truth beat times as input segmentation. Downbeat output only (no correction). Validates the feature pipeline and output heads. No CBSS simulator needed. **Caveat:** At inference time, features are segmented by CBSS-predicted beats (not GT), so the model sees systematically offset spectral windows. Phase A validates the architecture, not full system accuracy — expect noisier downbeat output on-device than offline eval suggests.
+- **Phase A (downbeat only):** Train with ground truth beat times as input segmentation. Downbeat output only (no correction). Validates the feature pipeline and output heads. No CBSS simulator needed. **Caveat:** At inference time, features are segmented by CBSS-predicted beats (not GT), so the model sees systematically offset spectral windows. Phase A validates the architecture, not full system accuracy — expect noisier downbeat output on-device than offline eval suggests. **Recommended:** Also evaluate Phase A with CBSS-simulated beat segmentation (even though it's not needed for training labels) to quantify the distribution shift before committing to Phase B.
 - **Phase B (+ beat confidence):** Add beat_confidence output. Simulated beats vs ground truth produces confidence labels. Lightweight CBSS simulator needed.
 - **Phase C (+ tempo/phase correction):** Add tempo_factor and phase_offset outputs. Full correction feedback loop. Requires tuning the AudioController integration (hysteresis, clamp bounds, correction rates).
 
