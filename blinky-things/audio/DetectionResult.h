@@ -145,8 +145,8 @@ enum class DetectorType : uint8_t {
     COUNT = 1
 };
 
-inline const char* getDetectorName(DetectorType) {
-    return "bandflux";
+inline const char* getDetectorName(DetectorType /* type */) {
+    return "bandflux";  // Solo detector — always BandFlux
 }
 
 /**

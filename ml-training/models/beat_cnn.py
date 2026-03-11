@@ -135,7 +135,8 @@ class DSTCNBeatCNN(nn.Module):
                  downbeat: bool = False, residual: bool = True):
         super().__init__()
         self.out_channels = 2 if downbeat else 1
-        assert dilations[0] == 1, f"First dilation must be 1 (got {dilations[0]})"
+        if dilations[0] != 1:
+            raise ValueError(f"First dilation must be 1 (got {dilations[0]})")
 
         # Input projection: standard conv to go from n_mels → channels
         # (can't use depthwise here since in_ch != out_ch)

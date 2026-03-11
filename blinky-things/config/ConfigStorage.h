@@ -92,9 +92,11 @@ public:
     // Version 59: Bayesian posterior bias for forward filter (fwdBayesBias)
     // Version 60: Asymmetric non-beat observation model for forward filter (fwdAsymmetry)
     // Version 61: rayleighBpm default 120→140 (sweep: fewer octave errors), nnProfile setting
+    // Versions 62-63: skipped (never released; reserved during development)
     // Version 64: Removed dead features: forward filter, particle filter, HMM phase tracker,
     //   multi-agent, template/subbeat/metrical checks, ODF sources 1-5, legacy spectral flux.
     //   All A/B tested: zero or negative benefit vs CBSS baseline. Saves ~1500 lines, ~40 KB flash.
+    //   Devices on v61 or earlier will factory-reset on first boot with v64 firmware.
     static const uint8_t SETTINGS_VERSION = 64;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
