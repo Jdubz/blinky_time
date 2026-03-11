@@ -26,10 +26,11 @@ from scripts.audio import load_config
 class MemmapBeatDataset(Dataset):
     """Dataset backed by memory-mapped .npy files for low RAM usage."""
 
-    def __init__(self, x_path, y_path, y_db_path=None):
+    def __init__(self, x_path, y_path, y_db_path=None, y_teacher_path=None):
         self.X = np.load(x_path, mmap_mode='r')
         self.Y = np.load(y_path, mmap_mode='r')
         self.Y_db = np.load(y_db_path, mmap_mode='r') if y_db_path else None
+        self.Y_teacher = np.load(y_teacher_path, mmap_mode='r') if y_teacher_path else None
 
     def __len__(self):
         return len(self.X)
@@ -39,8 +40,14 @@ class MemmapBeatDataset(Dataset):
         y = torch.from_numpy(self.Y[idx].copy()).float()
         if self.Y_db is not None:
             y_db = torch.from_numpy(self.Y_db[idx].copy()).float()
-            return x, torch.stack([y, y_db], dim=-1)
-        return x, y.unsqueeze(-1)
+            y_out = torch.stack([y, y_db], dim=-1)
+        else:
+            y_out = y.unsqueeze(-1)
+
+        if self.Y_teacher is not None:
+            t = torch.from_numpy(self.Y_teacher[idx].copy()).float()
+            return x, y_out, t
+        return x, y_out, torch.empty(0)  # Empty tensor as placeholder
 
 
 def _broadcast_pos_weight(pos_weight: torch.Tensor | float,
@@ -89,6 +96,35 @@ def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * focal_weight * class_weight).mean()
 
 
+def distillation_loss(student_pred: torch.Tensor, teacher_pred: torch.Tensor,
+                      temperature: float = 2.0) -> torch.Tensor:
+    """Knowledge distillation loss (KL divergence on softened predictions).
+
+    Uses binary KL divergence since outputs are independent sigmoids, not softmax.
+    Temperature softens the teacher's predictions to expose dark knowledge
+    (relative confidence between beat positions).
+
+    Args:
+        student_pred: Student model output (batch, time, channels), after sigmoid
+        teacher_pred: Teacher soft labels (batch, time, 1), beat activation only
+        temperature: Softening temperature (higher = softer, more knowledge transfer)
+    """
+    # Soften predictions with temperature (apply to logits, not probabilities)
+    s_logit = torch.log(student_pred[:, :, :1].clamp(1e-7, 1 - 1e-7) /
+                        (1 - student_pred[:, :, :1].clamp(1e-7, 1 - 1e-7)))
+    t_logit = torch.log(teacher_pred.clamp(1e-7, 1 - 1e-7) /
+                        (1 - teacher_pred.clamp(1e-7, 1 - 1e-7)))
+
+    s_soft = torch.sigmoid(s_logit / temperature)
+    t_soft = torch.sigmoid(t_logit / temperature)
+
+    # Binary KL divergence
+    kl = t_soft * torch.log(t_soft / s_soft.clamp(1e-7)) + \
+         (1 - t_soft) * torch.log((1 - t_soft) / (1 - s_soft).clamp(1e-7))
+
+    return kl.mean() * (temperature ** 2)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train beat activation CNN")
     parser.add_argument("--config", default="configs/default.yaml")
@@ -102,6 +138,12 @@ def main():
                         help="Loss function: bce (default) or focal")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
+    parser.add_argument("--distill", default=None,
+                        help="Path to teacher soft labels (Y_teacher_train.npy) for knowledge distillation")
+    parser.add_argument("--distill-alpha", type=float, default=0.3,
+                        help="Distillation loss weight (0-1). Total = (1-alpha)*hard + alpha*soft")
+    parser.add_argument("--distill-temp", type=float, default=2.0,
+                        help="Distillation temperature (default: 2.0)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -150,12 +192,34 @@ def main():
             else:
                 has_db = True
 
+    # Resolve teacher label paths for knowledge distillation
+    teacher_train_path = None
+    teacher_val_path = None
+    use_distill = False
+    distill_alpha = args.distill_alpha
+    distill_temp = args.distill_temp
+    if args.distill:
+        teacher_path = Path(args.distill)
+        if teacher_path.exists():
+            teacher_train_path = teacher_path
+            teacher_val_path = teacher_path.parent / teacher_path.name.replace("train", "val")
+            if not teacher_val_path.exists():
+                teacher_val_path = None
+            use_distill = True
+            print(f"Knowledge distillation: alpha={distill_alpha}, temp={distill_temp}")
+            print(f"  Teacher train: {teacher_train_path}")
+            print(f"  Teacher val: {teacher_val_path}")
+        else:
+            print(f"WARNING: Teacher labels not found at {teacher_path}, training without distillation")
+
     train_ds = MemmapBeatDataset(
         data_dir / "X_train.npy", data_dir / "Y_train.npy",
-        y_db_path=db_train_path if has_db else None)
+        y_db_path=db_train_path if has_db else None,
+        y_teacher_path=teacher_train_path)
     val_ds = MemmapBeatDataset(
         data_dir / "X_val.npy", data_dir / "Y_val.npy",
-        y_db_path=db_val_path if has_db else None)
+        y_db_path=db_val_path if has_db else None,
+        y_teacher_path=teacher_val_path)
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
@@ -174,6 +238,7 @@ def main():
                             num_workers=4, pin_memory=True)
 
     # Build model
+    model_type = cfg["model"].get("type", "causal_cnn")
     model = build_beat_cnn(
         n_mels=cfg["audio"]["n_mels"],
         channels=cfg["model"]["channels"],
@@ -182,10 +247,12 @@ def main():
         dropout=cfg["model"]["dropout"],
         chunk_frames=cfg["training"]["chunk_frames"],
         downbeat=use_downbeat,
+        model_type=model_type,
+        residual=cfg["model"].get("residual", False),
     ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model: {total_params} params")
+    print(f"Model ({model_type}): {total_params} params")
 
     # Optimizer + cosine LR schedule
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -210,6 +277,8 @@ def main():
     # Training loop
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
     print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
+    if use_distill:
+        print(f"Distillation: alpha={distill_alpha}, temp={distill_temp}")
 
     best_val_loss = float("inf")
     patience_counter = 0
@@ -223,13 +292,24 @@ def main():
         train_correct = 0
         train_total = 0
 
-        for X_batch, Y_batch in train_loader:
+        for X_batch, Y_batch, T_batch in train_loader:
             X_batch = X_batch.to(device, non_blocking=True)
             Y_batch = Y_batch.to(device, non_blocking=True)
 
             optimizer.zero_grad()
             Y_pred = model(X_batch)
-            loss = loss_fn(Y_pred, Y_batch)
+            hard_loss = loss_fn(Y_pred, Y_batch)
+
+            # Knowledge distillation: blend hard and soft losses
+            if use_distill and T_batch.numel() > 0:
+                T_batch = T_batch.to(device, non_blocking=True)
+                if T_batch.dim() == 2:
+                    T_batch = T_batch.unsqueeze(-1)  # (batch, time) → (batch, time, 1)
+                soft_loss = distillation_loss(Y_pred, T_batch, temperature=distill_temp)
+                loss = (1 - distill_alpha) * hard_loss + distill_alpha * soft_loss
+            else:
+                loss = hard_loss
+
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -248,12 +328,21 @@ def main():
         val_total = 0
 
         with torch.no_grad():
-            for X_batch, Y_batch in val_loader:
+            for X_batch, Y_batch, T_batch in val_loader:
                 X_batch = X_batch.to(device, non_blocking=True)
                 Y_batch = Y_batch.to(device, non_blocking=True)
 
                 Y_pred = model(X_batch)
-                loss = loss_fn(Y_pred, Y_batch)
+                hard_loss = loss_fn(Y_pred, Y_batch)
+
+                if use_distill and T_batch.numel() > 0:
+                    T_batch = T_batch.to(device, non_blocking=True)
+                    if T_batch.dim() == 2:
+                        T_batch = T_batch.unsqueeze(-1)
+                    soft_loss = distillation_loss(Y_pred, T_batch, temperature=distill_temp)
+                    loss = (1 - distill_alpha) * hard_loss + distill_alpha * soft_loss
+                else:
+                    loss = hard_loss
 
                 val_loss += loss.item() * X_batch.size(0)
                 val_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()

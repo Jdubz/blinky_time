@@ -36,7 +36,7 @@ from scripts.audio import (
 
 
 def _load_model(model_path: str, cfg: dict, device: torch.device):
-    """Load a trained BeatCNN model."""
+    """Load a trained BeatCNN or DSTCNBeatCNN model."""
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
 
     # Handle both bare state_dict and full checkpoint
@@ -54,6 +54,8 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
         dilations=cfg["model"]["dilations"],
         dropout=cfg["model"].get("dropout", 0.1),
         downbeat=use_downbeat,
+        model_type=cfg["model"].get("type", "causal_cnn"),
+        residual=cfg["model"].get("residual", False),
     ).to(device)
     model.load_state_dict(state_dict)
     model.eval()

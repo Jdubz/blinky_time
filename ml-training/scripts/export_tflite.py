@@ -32,13 +32,19 @@ from scripts.audio import load_config
 
 def build_tf_beat_cnn(n_mels: int, channels: int, kernel_size: int,
                       dilations: list[int], chunk_frames: int,
-                      downbeat: bool, fuse_bn: bool = False) -> keras.Model:
-    """Build TF/Keras equivalent of PyTorch BeatCNN (for TFLite export only).
+                      downbeat: bool, fuse_bn: bool = False,
+                      model_type: str = "causal_cnn",
+                      residual: bool = False) -> keras.Model:
+    """Build TF/Keras equivalent of PyTorch BeatCNN or DSTCNBeatCNN.
 
     If fuse_bn=True, BatchNorm is omitted (weights will be fused into Conv
     by transfer_pytorch_weights). This eliminates expensive unfused ADD/MUL
     ops in TFLite for dilated convolutions.
     """
+    if model_type == "ds_tcn":
+        return _build_tf_ds_tcn(n_mels, channels, kernel_size, dilations,
+                                chunk_frames, downbeat, fuse_bn, residual)
+
     out_channels = 2 if downbeat else 1
     inputs = keras.Input(shape=(chunk_frames, n_mels), name="mel_input")
     x = inputs
@@ -64,9 +70,77 @@ def build_tf_beat_cnn(n_mels: int, channels: int, kernel_size: int,
     return keras.Model(inputs=inputs, outputs=x, name="beat_cnn")
 
 
+def _build_tf_ds_tcn(n_mels: int, channels: int, kernel_size: int,
+                     dilations: list[int], chunk_frames: int,
+                     downbeat: bool, fuse_bn: bool, residual: bool) -> keras.Model:
+    """Build TF/Keras equivalent of DSTCNBeatCNN.
+
+    Depthwise separable blocks: ZeroPad → DepthwiseConv1D → [BN] → ReLU →
+                                Conv1D(1×1) → [BN] → ReLU → [+ residual]
+    """
+    out_channels = 2 if downbeat else 1
+    inputs = keras.Input(shape=(chunk_frames, n_mels), name="mel_input")
+
+    # Input projection (standard conv, n_mels → channels)
+    pad_size = (kernel_size - 1) * dilations[0]
+    x = layers.ZeroPadding1D(padding=(pad_size, 0))(inputs)
+    if fuse_bn:
+        x = layers.Conv1D(channels, kernel_size, dilation_rate=dilations[0],
+                          padding="valid", use_bias=True, activation="relu",
+                          name="input_conv")(x)
+    else:
+        x = layers.Conv1D(channels, kernel_size, dilation_rate=dilations[0],
+                          padding="valid", use_bias=True,
+                          name="input_conv")(x)
+        x = layers.BatchNormalization(name="input_bn")(x)
+        x = layers.ReLU(name="input_relu")(x)
+
+    # DS-TCN blocks for remaining dilations
+    for i, dilation in enumerate(dilations[1:]):
+        block_idx = i + 1  # 1-indexed (input conv is block 0)
+        skip = x  # Save for residual
+
+        pad_size = (kernel_size - 1) * dilation
+        x = layers.ZeroPadding1D(padding=(pad_size, 0))(x)
+
+        # Depthwise conv (each channel independently)
+        # When BN is fused, depthwise needs use_bias=True (synthetic bias from BN params)
+        if fuse_bn:
+            x = layers.DepthwiseConv1D(kernel_size, dilation_rate=dilation,
+                                       padding="valid", use_bias=True, activation="relu",
+                                       name=f"dw_conv{block_idx}_d{dilation}")(x)
+        else:
+            x = layers.DepthwiseConv1D(kernel_size, dilation_rate=dilation,
+                                       padding="valid", use_bias=False,
+                                       name=f"dw_conv{block_idx}_d{dilation}")(x)
+            x = layers.BatchNormalization(name=f"dw_bn{block_idx}")(x)
+            x = layers.ReLU(name=f"dw_relu{block_idx}")(x)
+
+        # Pointwise conv (1×1, mixes channels)
+        if fuse_bn:
+            x = layers.Conv1D(channels, 1, padding="valid", use_bias=True,
+                              activation="relu",
+                              name=f"pw_conv{block_idx}")(x)
+        else:
+            x = layers.Conv1D(channels, 1, padding="valid", use_bias=True,
+                              name=f"pw_conv{block_idx}")(x)
+            x = layers.BatchNormalization(name=f"pw_bn{block_idx}")(x)
+            x = layers.ReLU(name=f"pw_relu{block_idx}")(x)
+
+        # Residual connection
+        if residual:
+            x = layers.Add(name=f"residual{block_idx}")([x, skip])
+
+    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                      name="output_conv")(x)
+
+    return keras.Model(inputs=inputs, outputs=x, name="ds_tcn")
+
+
 def transfer_pytorch_weights(tf_model: keras.Model, pt_state_dict: dict,
                              dilations: list[int], dropout: float = 0.1,
-                             fuse_bn: bool = False):
+                             fuse_bn: bool = False,
+                             model_type: str = "causal_cnn"):
     """Copy weights from PyTorch state_dict to equivalent TF/Keras model.
 
     Handles the Conv1D weight transposition (PyTorch: out,in,k → TF: k,in,out)
@@ -78,6 +152,10 @@ def transfer_pytorch_weights(tf_model: keras.Model, pt_state_dict: dict,
     This eliminates unfused ADD/MUL ops in TFLite, saving ~67% inference time
     on Cortex-M4 where element-wise ops lack CMSIS-NN SIMD optimization.
     """
+    if model_type == "ds_tcn":
+        _transfer_ds_tcn_weights(tf_model, pt_state_dict, dilations, fuse_bn)
+        return
+
     # PyTorch backbone block: Pad, Conv1d, BatchNorm1d, ReLU[, Dropout]
     # Stride depends on whether Dropout is present
     stride = 5 if dropout > 0 else 4
@@ -119,6 +197,120 @@ def transfer_pytorch_weights(tf_model: keras.Model, pt_state_dict: dict,
         tf_model.get_layer(conv_name).set_weights([tf_w, pt_b])
 
     # Output conv
+    pt_w = pt_state_dict["output_conv.weight"].numpy()
+    pt_b = pt_state_dict["output_conv.bias"].numpy()
+    tf_w = np.transpose(pt_w, (2, 1, 0))
+    tf_model.get_layer("output_conv").set_weights([tf_w, pt_b])
+
+
+def _fuse_bn_into_conv(pt_w, pt_b, gamma, beta, mean, var, bn_eps=1e-5):
+    """Fuse BatchNorm parameters into Conv weights."""
+    std = np.sqrt(var + bn_eps)
+    scale = gamma / std
+    fused_w = pt_w * scale[:, np.newaxis, np.newaxis]
+    fused_b = scale * (pt_b - mean) + beta
+    return fused_w, fused_b
+
+
+def _fuse_bn_into_depthwise(pt_w, gamma, beta, mean, var, bn_eps=1e-5):
+    """Fuse BatchNorm parameters into depthwise conv weights (no bias).
+
+    Depthwise conv has no bias in our model, so we create one from BN params.
+    Weight shape: (ch, 1, k) for PyTorch depthwise.
+    """
+    std = np.sqrt(var + bn_eps)
+    scale = gamma / std
+    # Depthwise weight: (ch, 1, k) — scale per output channel
+    fused_w = pt_w * scale[:, np.newaxis, np.newaxis]
+    # Bias from BN: -mean * scale + beta
+    fused_b = -mean * scale + beta
+    return fused_w, fused_b
+
+
+def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
+                              dilations: list[int], fuse_bn: bool):
+    """Transfer DSTCNBeatCNN weights to TF/Keras equivalent.
+
+    DSTCNBeatCNN PyTorch state_dict key layout:
+      input_conv.weight, input_conv.bias
+      input_bn.weight, input_bn.bias, input_bn.running_mean, input_bn.running_var
+      blocks.0.dw_conv.weight          (no bias)
+      blocks.0.dw_bn.weight/bias/running_mean/running_var
+      blocks.0.pw_conv.weight, blocks.0.pw_conv.bias
+      blocks.0.pw_bn.weight/bias/running_mean/running_var
+      ...
+      output_conv.weight, output_conv.bias
+    """
+    bn_eps = 1e-5
+
+    # --- Input conv ---
+    pt_w = pt_state_dict["input_conv.weight"].numpy()  # (out, in, k)
+    pt_b = pt_state_dict["input_conv.bias"].numpy()
+
+    if fuse_bn:
+        gamma = pt_state_dict["input_bn.weight"].numpy()
+        beta = pt_state_dict["input_bn.bias"].numpy()
+        mean = pt_state_dict["input_bn.running_mean"].numpy()
+        var = pt_state_dict["input_bn.running_var"].numpy()
+        pt_w, pt_b = _fuse_bn_into_conv(pt_w, pt_b, gamma, beta, mean, var, bn_eps)
+    else:
+        gamma = pt_state_dict["input_bn.weight"].numpy()
+        beta = pt_state_dict["input_bn.bias"].numpy()
+        mean = pt_state_dict["input_bn.running_mean"].numpy()
+        var = pt_state_dict["input_bn.running_var"].numpy()
+        tf_model.get_layer("input_bn").set_weights([gamma, beta, mean, var])
+
+    tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
+    tf_model.get_layer("input_conv").set_weights([tf_w, pt_b])
+
+    # --- DS-TCN blocks ---
+    for i, dilation in enumerate(dilations[1:]):
+        block_idx = i + 1
+
+        # Depthwise conv: PyTorch shape (ch, 1, k) → TF shape (k, 1, ch)
+        dw_w = pt_state_dict[f"blocks.{i}.dw_conv.weight"].numpy()  # (ch, 1, k)
+
+        if fuse_bn:
+            gamma = pt_state_dict[f"blocks.{i}.dw_bn.weight"].numpy()
+            beta = pt_state_dict[f"blocks.{i}.dw_bn.bias"].numpy()
+            mean = pt_state_dict[f"blocks.{i}.dw_bn.running_mean"].numpy()
+            var = pt_state_dict[f"blocks.{i}.dw_bn.running_var"].numpy()
+            dw_w, dw_b = _fuse_bn_into_depthwise(dw_w, gamma, beta, mean, var, bn_eps)
+            # TF DepthwiseConv1D weight: (k, ch, depth_mul=1)
+            # PyTorch depthwise: (ch, 1, k) → permute(2, 0, 1) → (k, ch, 1)
+            tf_dw_w = np.transpose(dw_w, (2, 0, 1))  # (k, ch, 1)
+            tf_model.get_layer(f"dw_conv{block_idx}_d{dilation}").set_weights([tf_dw_w, dw_b])
+        else:
+            gamma = pt_state_dict[f"blocks.{i}.dw_bn.weight"].numpy()
+            beta = pt_state_dict[f"blocks.{i}.dw_bn.bias"].numpy()
+            mean = pt_state_dict[f"blocks.{i}.dw_bn.running_mean"].numpy()
+            var = pt_state_dict[f"blocks.{i}.dw_bn.running_var"].numpy()
+            tf_model.get_layer(f"dw_bn{block_idx}").set_weights([gamma, beta, mean, var])
+            # (ch, 1, k) → (k, ch, 1)
+            tf_dw_w = np.transpose(dw_w, (2, 0, 1))
+            tf_model.get_layer(f"dw_conv{block_idx}_d{dilation}").set_weights([tf_dw_w])
+
+        # Pointwise conv: PyTorch (out, in, 1) → TF (1, in, out)
+        pw_w = pt_state_dict[f"blocks.{i}.pw_conv.weight"].numpy()
+        pw_b = pt_state_dict[f"blocks.{i}.pw_conv.bias"].numpy()
+
+        if fuse_bn:
+            gamma = pt_state_dict[f"blocks.{i}.pw_bn.weight"].numpy()
+            beta = pt_state_dict[f"blocks.{i}.pw_bn.bias"].numpy()
+            mean = pt_state_dict[f"blocks.{i}.pw_bn.running_mean"].numpy()
+            var = pt_state_dict[f"blocks.{i}.pw_bn.running_var"].numpy()
+            pw_w, pw_b = _fuse_bn_into_conv(pw_w, pw_b, gamma, beta, mean, var, bn_eps)
+        else:
+            gamma = pt_state_dict[f"blocks.{i}.pw_bn.weight"].numpy()
+            beta = pt_state_dict[f"blocks.{i}.pw_bn.bias"].numpy()
+            mean = pt_state_dict[f"blocks.{i}.pw_bn.running_mean"].numpy()
+            var = pt_state_dict[f"blocks.{i}.pw_bn.running_var"].numpy()
+            tf_model.get_layer(f"pw_bn{block_idx}").set_weights([gamma, beta, mean, var])
+
+        tf_pw_w = np.transpose(pw_w, (2, 1, 0))  # (1, in, out)
+        tf_model.get_layer(f"pw_conv{block_idx}").set_weights([tf_pw_w, pw_b])
+
+    # --- Output conv ---
     pt_w = pt_state_dict["output_conv.weight"].numpy()
     pt_b = pt_state_dict["output_conv.bias"].numpy()
     tf_w = np.transpose(pt_w, (2, 1, 0))
@@ -350,9 +542,12 @@ def main():
     # Build TF model and transfer weights
     inference_frames = args.inference_frames or cfg["training"]["chunk_frames"]
     dilations = cfg["model"]["dilations"]
+    model_type = cfg["model"].get("type", "causal_cnn")
+    residual = cfg["model"].get("residual", False)
 
     fuse_bn = not args.no_fuse_bn
-    print(f"Building TF model (inference_frames={inference_frames}, downbeat={use_downbeat}, fuse_bn={fuse_bn})...")
+    print(f"Building TF model (type={model_type}, inference_frames={inference_frames}, "
+          f"downbeat={use_downbeat}, fuse_bn={fuse_bn}, residual={residual})...")
     tf_model = build_tf_beat_cnn(
         n_mels=cfg["audio"]["n_mels"],
         channels=cfg["model"]["channels"],
@@ -361,10 +556,12 @@ def main():
         chunk_frames=inference_frames,
         downbeat=use_downbeat,
         fuse_bn=fuse_bn,
+        model_type=model_type,
+        residual=residual,
     )
     dropout = cfg["model"].get("dropout", 0.1)
     transfer_pytorch_weights(tf_model, pt_state, dilations, dropout=dropout,
-                             fuse_bn=fuse_bn)
+                             fuse_bn=fuse_bn, model_type=model_type)
 
     # Verify weight transfer (fused TF model should match unfused PyTorch model)
     print("Verifying weight transfer...")
@@ -376,6 +573,8 @@ def main():
         dilations=dilations,
         dropout=cfg["model"].get("dropout", 0.1),
         downbeat=use_downbeat,
+        model_type=model_type,
+        residual=residual,
     )
     pt_model.load_state_dict(pt_state)
     pt_model.eval()

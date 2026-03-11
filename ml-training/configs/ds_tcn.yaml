@@ -1,0 +1,33 @@
+# Beat Activation CNN v9 — Depthwise Separable TCN
+#
+# Architecture changes vs v7 (deep.yaml):
+#   1. Depthwise separable convolutions: 2.7x fewer MACs per layer
+#      - DepthwiseConv1D(k=3) + PointwiseConv1D(k=1) replaces Conv1D(k=3)
+#      - Both ops have CMSIS-NN SIMD optimization on Cortex-M4F
+#   2. Residual skip connections: ADD is CMSIS-NN optimized, ~free
+#   3. 24 channels (vs 32): ~44% fewer MACs, proportional speedup
+#   4. 5 layers with dilations [1,2,4,8,16]: RF=63 frames (1008ms)
+#      v7's RF=255 (4080ms) didn't translate to hardware accuracy gains
+#
+# Speed target: ~25-30ms inference (vs 79ms v7) on Cortex-M4F @ 64 MHz
+# Size target: ~12-15 KB INT8 (vs 46.3 KB v7)
+# Context: 128 frames (same as v6)
+#
+# Shared settings are in base.yaml and merged automatically by load_config().
+# This file only contains model-specific overrides.
+
+model:
+  type: "ds_tcn"
+  channels: 24
+  kernel_size: 3
+  dilations: [1, 2, 4, 8, 16]    # RF: 63 frames = 1008ms
+  dropout: 0.1
+  downbeat: true
+  residual: true                   # Skip connections (input + output per block)
+
+training:
+  chunk_frames: 128               # 128 frames = 2048ms
+  chunk_stride: 64                # 50% overlap
+
+export:
+  max_model_size_kb: 30           # ~26 KB INT8 (flatbuffer overhead is proportionally large for small models)

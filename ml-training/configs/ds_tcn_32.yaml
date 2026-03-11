@@ -1,0 +1,23 @@
+# Beat Activation CNN v9 — Depthwise Separable TCN (32ch variant)
+#
+# Same architecture as ds_tcn.yaml but with 32 channels for ablation study.
+# Useful to isolate the effect of depthwise separable convs vs channel reduction.
+#
+# ~7.6 KB params, ~28 KB INT8 (flatbuffer overhead)
+# MACs/timestep: 7,264 (vs 4,464 for 24ch, vs 14,784 for v6 standard 32ch)
+
+model:
+  type: "ds_tcn"
+  channels: 32
+  kernel_size: 3
+  dilations: [1, 2, 4, 8, 16]    # RF: 63 frames = 1008ms
+  dropout: 0.1
+  downbeat: true
+  residual: true
+
+training:
+  chunk_frames: 128
+  chunk_stride: 64
+
+export:
+  max_model_size_kb: 35
