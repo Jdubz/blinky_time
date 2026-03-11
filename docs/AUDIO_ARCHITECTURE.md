@@ -63,10 +63,14 @@ OSS Buffer (6s @ 60Hz)
       +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
       |                                                        |
       |                             [NN=1 build, planned] SpectralAccumulator
-      |                                  melBands_ accumulated between beats
+      |                                  rawMelBands_ accumulated between beats
+      |                                  (pre-compression, pre-whitening — stable interface)
       |                                        |
       |                                  BeatSyncNN (FC, ~2 Hz at beat fire)
-      |                                  → downbeat, beat confidence, tempo hint
+      |                                  → CORRECTIONS: beat confidence, tempo factor, phase offset
+      |                                  → NEW: downbeat prob, meter
+      |                                        |
+      |                                  Corrections feed back → CBSS (tempo, phase, confidence)
       |                                        |
 AudioControl { energy, pulse, phase, rhythmStrength, downbeat, beatInMeasure }
       |
@@ -224,9 +228,9 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 
 **Current (mel-spectrogram CNN, CLOSED):** Causal 1D CNN replacing BandFlux as ODF source. All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget. Best offline F1: v7-melfixed 0.787. See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
-**Planned (beat-synchronous spectral classifier):** Replaces per-frame mel CNN with a tiny FC model that runs at beat rate (~2 Hz). A `SpectralAccumulator` averages mel bands between beats. At beat fire, the last 4 beat spectral summaries (220 floats) feed through a 220→32→16→3 FC network producing downbeat probability, beat confidence, and tempo hint. Projected: ~7,500 params, ~8 KB INT8, <0.5ms per beat. See `IMPROVEMENT_PLAN.md` Priority 1 for full design.
+**Planned (beat-synchronous hybrid corrector):** Replaces per-frame mel CNN with a tiny FC model that runs at beat rate (~2 Hz). A `SpectralAccumulator` accumulates **raw mel bands** (pre-compression, pre-whitening) between beats — computing mean, max, and std dev per band. At beat fire, the last 4 beat spectral summaries (316 floats = 4 × 79) feed through a 316→48→24→N FC network producing both **correction outputs** (beat confidence, tempo factor, phase offset → feed back into CBSS) and **new capability outputs** (downbeat probability, meter). Projected: ~10,000 params, ~10 KB INT8, <0.5ms per beat. See `IMPROVEMENT_PLAN.md` Priority 1 for full design.
 
-**Key difference:** The mel-spectrogram CNN replaced BandFlux (the ODF source). The beat-sync model *augments* CBSS — BandFlux ODF and the entire CBSS pipeline stay unchanged. The NN provides downbeat/meter information that the deterministic pipeline cannot compute.
+**Key difference:** The mel-spectrogram CNN replaced BandFlux (the ODF source). The beat-sync model *corrects and augments* CBSS — BandFlux ODF and the CBSS pipeline handle beat detection, but the NN validates each beat (confidence), corrects octave errors (tempo factor), nudges phase alignment (phase offset), and provides downbeat/meter that the deterministic pipeline cannot compute. Using raw mel bands (not processed melBands_) decouples the NN from 47+ tunable firmware parameters.
 
 **Key settings:**
 
@@ -249,8 +253,8 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
 | NN mel-spectrogram (current, NN=1) | ~14 KB arena + 13 KB context | ~5% | TFLite Micro (96 KB arena, 79-98ms/frame — too slow) |
-| NN beat-sync (planned, NN=1) | ~4 KB arena + 1.8 KB history | <0.1% | FC model at ~2 Hz, <0.5ms per beat |
-| **Total** | **~22 KB base** | **~15-20%** | +96 KB arena (current) or +6 KB (planned beat-sync) |
+| NN beat-sync (planned, NN=1) | ~4 KB arena + 2.5 KB history + 0.3 KB accumulator | <0.1% | FC model at ~2 Hz, <0.5ms per beat |
+| **Total** | **~22 KB base** | **~15-20%** | +96 KB arena (current) or +7 KB (planned beat-sync) |
 
 ---
 

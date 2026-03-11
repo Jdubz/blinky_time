@@ -46,19 +46,19 @@ Mel-spectrogram NN models that could improve ODF quality require 79-98ms inferen
 ```
 SharedSpectralAnalysis (already runs every frame, no additional cost)
      │
-     ├── melBands_ (26 bands, 62.5 Hz)
+     ├── rawMelBands_ (26 bands, 62.5 Hz, pre-compression, pre-whitening)
      │         │
-     │    SpectralAccumulator (NEW, ~200 bytes firmware)
-     │         │  Between beats: running sum + count + max of mel bands per frame
-     │         │  At beat fire: avg_mel[26], peak_mel[26], odf_stats[3] → 55 floats
+     │    SpectralAccumulator (NEW, ~300 bytes firmware)
+     │         │  Between beats: running sum + sum² + count + max of raw mel bands
+     │         │  At beat fire: avg_mel[26], peak_mel[26], std_mel[26], duration → 79 floats
      │         │
      │    Beat history buffer (last 4-8 beats):
-     │         │  beat_features[8][55] ≈ 1.8 KB
+     │         │  beat_features[8][79] ≈ 2.5 KB
      │         │
      │    BeatSyncNN inference (at beat fire only, ~2 Hz):
-     │         │  Input:  4 beats × 55 features = 220 floats
-     │         │  Model:  220 → 32 → 16 → N outputs (FC layers)
-     │         │  ~7,500 params, ~8 KB INT8, <0.5ms inference
+     │         │  Input:  4 beats × 79 features = 316 floats
+     │         │  Model:  316 → 48 → 24 → N outputs (FC layers)
+     │         │  ~10,000 params, ~10 KB INT8, <0.5ms inference
      │         │
      │         ├── CORRECTION outputs → feed back into AudioController:
      │         │     beat_confidence  → suppress false beats (breakdowns)
@@ -81,15 +81,18 @@ SharedSpectralAnalysis (already runs every frame, no additional cost)
 - Mel bands are already computed every frame by SharedSpectralAnalysis — zero additional feature cost
 - Krebs et al. (2016) demonstrated one 180-dim feature vector per beat is sufficient for downbeat tracking
 
-**Per-beat feature vector (55 floats):**
+**Per-beat feature vector (79 floats, raw mel only):**
 
 | Feature | Size | Computation |
 |---------|------|-------------|
-| `avg_mel` | 26 | Mean mel bands over frames since last beat |
-| `peak_mel` | 26 | Max mel bands over frames since last beat |
-| `odf_mean` | 1 | Mean spectral flux since last beat |
-| `odf_max` | 1 | Peak spectral flux since last beat |
-| `onset_ratio` | 1 | Fraction of frames above onset threshold |
+| `avg_mel` | 26 | Mean raw mel bands over frames since last beat |
+| `peak_mel` | 26 | Max raw mel bands over frames since last beat |
+| `std_mel` | 26 | Std dev of raw mel bands (spectral stability measure) |
+| `duration_frames` | 1 | Number of frames since last beat (encodes tempo implicitly) |
+
+**Critical design decision: raw mel bands only.** The feature vector uses `rawMelBands_` (post-FFT, post-noise-subtraction, pre-compression, pre-whitening) — NOT `melBands_` (which passes through the soft-knee compressor and per-bin adaptive whitening). This decouples the NN from **47+ tunable firmware parameters** (compressor threshold/ratio/knee, whitening alpha, BandFlux gamma/band weights/thresholds, cooldown timing, etc.). Changes to the audio processing chain do NOT require retraining. Only the mel filterbank itself (FFT size, hop, sample rate, mel scale, band count) would require retraining — and these are fundamental constants that never change.
+
+Previous design included `odf_stats[3]` (odf_mean, odf_max, onset_ratio) derived from BandFlux. These were removed because BandFlux output depends on 16+ tunable parameters (gamma, bandWeights, threshold, minOnsetDelta, etc.) — any firmware tweak would invalidate the training data. The `std_mel` feature replaces ODF stats with a parameter-free spectral variability measure that captures similar information (high std = transient activity, low std = sustained/silence).
 
 **Model outputs (hybrid — correction + new capabilities):**
 
@@ -120,17 +123,17 @@ This means we DO need a **lightweight CBSS/ACF simulator** — not the full sign
 |----------|-----|-----|---------|
 | Inference time | 79-98ms @ 62.5 Hz | <0.5ms @ ~2 Hz | **99.5%** |
 | Tensor arena | 96 KB | ~4 KB | **96%** |
-| Context buffer | 13-27 KB (128-256 frames × 26) | ~1.8 KB (8 beats × 55) | **93%** |
-| Model flash | 26-46 KB | ~8 KB | **75%** |
+| Context buffer | 13-27 KB (128-256 frames × 26) | ~2.5 KB (8 beats × 79) | **91%** |
+| Model flash | 26-46 KB | ~10 KB | **70%** |
 | Op resolver | 14 ops (Conv2D, Pad, SpaceToBatch, ...) | 2 ops (FullyConnected, Logistic) | **86%** |
 
 **Firmware changes (3 files):**
 
-1. **`SpectralAccumulator` (NEW, ~80 lines)** — Running mel band sum/count/max between beats. Reset at beat fire. ~200 bytes state.
+1. **`SpectralAccumulator` (NEW, ~100 lines)** — Running raw mel band sum/sum²/count/max between beats. Computes avg, peak, std at beat fire. Reset after extraction. ~300 bytes state (26 bands × 3 accumulators × 4 bytes + count).
 
 2. **`BeatActivationNN.h` (MODIFY)** — Replace sliding mel-spectrogram window + per-frame CNN inference with beat history buffer + FC inference at beat time. Dramatically simpler: remove 96 KB arena, 256-frame context buffer, quantization loop. Add ~4 KB arena, 8-beat feature buffer, beat-time trigger.
 
-3. **`AudioController.cpp` (MODIFY, ~40 lines)** — Each frame: `accumulator_.accumulate(melBands, odf)`. At beat fire: `accumulator_.getFeatures(out)`, slide into history, run NN, reset accumulator. Apply correction outputs:
+3. **`AudioController.cpp` (MODIFY, ~40 lines)** — Each frame: `accumulator_.accumulate(rawMelBands_)`. At beat fire: `accumulator_.getFeatures(out)`, slide into history, run NN, reset accumulator. Apply correction outputs:
    - `beat_confidence` → modulate `rhythmStrength` and pulse suppression
    - `tempo_factor` → call `switchTempo(bpm * factor)` when != 1.0, with hysteresis
    - `phase_offset` → add to PLL proportional correction term
@@ -138,9 +141,58 @@ This means we DO need a **lightweight CBSS/ACF simulator** — not the full sign
 
 The CBSS pipeline itself is unchanged, but AudioController now has a feedback path from NN outputs that corrects tempo, phase, and confidence at each beat.
 
+#### Feature Stability and Progressive Simplification
+
+**The coupling problem:** If NN inputs depend on hand-tuned processing stages (compressor, whitening, BandFlux), every firmware parameter change invalidates the model and requires reprocessing training data and retraining. This is the #1 practical risk for maintainability.
+
+**Solution: Raw mel bands as the stable interface.** `rawMelBands_` in `SharedSpectralAnalysis` are computed directly from the FFT magnitude spectrum via the mel filterbank — no compressor, no whitening, no thresholds. The only parameters that affect them are fundamental constants that never change:
+
+| Parameter | Value | Ever changes? |
+|-----------|-------|:---:|
+| Sample rate | 16 kHz | No |
+| FFT size | 256 | No |
+| Hop size | 256 | No |
+| Mel bands | 26 | No |
+| Mel range | 60-8000 Hz | No |
+| Mel scale | HTK | No |
+| Log compression | `10*log10(x+1e-10)` | No |
+| Window | Hamming (alpha=0.54) | No |
+
+Everything downstream — compressor threshold/ratio/knee, whitening alpha, BandFlux gamma/band weights/thresholds, cooldown timing, onset delta — is **invisible to the NN**. The training mel extraction pipeline (`scripts/audio.py`) already matches these constants exactly.
+
+**Parameters that become redundant with a trained NN (progressive removal candidates):**
+
+The deterministic pipeline has **50+ hand-tuned parameters** across BandFlux, EnsembleFusion, tempo prior, octave disambiguation, and CBSS. Many exist to compensate for each other's limitations. If the NN provides reliable beat confidence, tempo correction, and phase correction, many become unnecessary:
+
+| Category | Parameters | Count | NN replaces? |
+|----------|-----------|:-----:|:---:|
+| BandFlux detection | gamma, bandWeights[7], threshold, minOnsetDelta, onsetDeltaDecay | ~11 | Phase B: beat_confidence makes threshold tuning less critical |
+| EnsembleFusion | minConfidence, cooldownMs, noiseGateLevel, noiseGateDecay | 4 | Phase B: NN confidence supersedes post-hoc gating |
+| Tempo prior | center, width, strength, enabled | 4 | Phase C: tempo_factor replaces prior-based disambiguation |
+| Octave disambiguation | densityOctave, densityMinPerBeat, densityMaxPerBeat, octaveCheck, octaveCheckBeats, octaveScoreRatio | 6 | Phase C: tempo_factor replaces heuristic octave checks |
+| CBSS beat detection | cbssAlpha, cbssTightness, cbssContrast, beatConfidenceDecay, tempoSnapThreshold | 5 | Phase C: phase_offset + tempo_factor make CBSS tuning less sensitive |
+| Onset snap / PLL | snaphyst, pllwarmup, proportionalGain, integralGain | 4 | Phase C: phase_offset replaces snap heuristic |
+| **Total removable** | | **~34** | Progressive, A/B tested |
+
+**Progressive simplification roadmap:**
+1. **Phase A**: Train NN with full pipeline intact. BandFlux + CBSS still does all beat detection. NN adds downbeat only.
+2. **Phase B**: NN provides beat_confidence. A/B test disabling: EnsembleFusion confidence gate, noise gate, BandFlux minOnsetDelta filter. If NN compensates → remove.
+3. **Phase C**: NN provides tempo_factor + phase_offset. A/B test disabling: tempo prior, octave disambiguation, onset snap, shadow CBSS checker. If NN compensates → remove.
+4. **Phase D (speculative)**: If NN correction is robust enough, consider replacing CBSS beat detection entirely with NN-driven beat decisions. The deterministic pipeline reduces to: raw mel → accumulate → NN → beat timing + downbeat + meter. ~10 parameters instead of 50+.
+
+**The circular dependency:** The NN runs at beat fire — but CBSS fires the beats. If we simplify CBSS too aggressively, beat timing degrades, which degrades NN inputs. Two escape hatches:
+
+1. **Simple onset trigger (preferred):** Replace CBSS with a trivial spectral flux threshold as the beat trigger. 1-2 parameters (threshold, minimum interval). The NN then classifies each trigger as real beat/false positive and provides timing correction. This breaks the dependency on all CBSS/fusion parameters while keeping beat-rate inference.
+
+2. **Fixed-rate inference (fallback):** Run NN at fixed 4 Hz (every 250ms) regardless of beat detection. Slightly higher compute (~2× vs beat-rate) but completely decoupled from the deterministic pipeline. The NN output includes "was this a beat?" as an additional binary output.
+
+Either approach allows aggressive simplification in Phase D without the NN depending on the system it's trying to replace.
+
 #### Training Data Strategy
 
-**Dataset size:** Tiny. ~400 tracks × ~200 beats/track = ~80K training examples. Each example is ~220 floats. **Total: ~70 MB** (vs 64 GB for mel-spectrogram chunks). Processes in minutes on GPU.
+**Dataset size:** Tiny. ~400 tracks × ~200 beats/track = ~80K training examples. Each example is ~316 floats (4 beats × 79). **Total: ~100 MB** (vs 64 GB for mel-spectrogram chunks). Processes in minutes on GPU.
+
+**Retraining requirement: NONE for audio chain changes.** Because the feature vector uses only raw mel bands (pre-compression, pre-whitening), changes to BandFlux parameters, compressor settings, whitening alpha, cooldown timing, etc. do NOT affect training data. Only changes to the 8 fundamental mel constants (sample rate, FFT size, hop, band count, mel range, mel scale, log compression, window) would require retraining — and these are architectural constants that have never changed.
 
 **Reusable assets (no changes needed):**
 - Raw audio files (`/mnt/storage/blinky-ml-data/audio/`, ~400 tracks)
@@ -149,15 +201,15 @@ The CBSS pipeline itself is unchanged, but AudioController now has a feedback pa
 - Audio augmentation (gain, noise, RIR, time-stretch) from `prepare_dataset.py`
 - Mic calibration profiles (gain-aware augmentation)
 
-**Previous "full signal chain simulator" plan (RESCOPED):** The earlier plan called for reimplementing the complete BandFlux → OSS → ACF → comb filter → Bayesian fusion → CBSS pipeline in Python (~2000 lines). The correction outputs require a **lightweight** subset: BandFlux ODF + simple ACF + counter-based beat detection (~300-500 lines). This is enough to produce approximate beat times and BPM estimates so we can compute correction labels (beat_confidence, tempo_factor, phase_offset).
+**Previous "full signal chain simulator" plan (RESCOPED):** The earlier plan called for reimplementing the complete BandFlux → OSS → ACF → comb filter → Bayesian fusion → CBSS pipeline in Python (~2000 lines). The correction outputs require a **lightweight** subset: simple spectral flux ODF + simple ACF + counter-based beat detection (~300-500 lines). This is enough to produce approximate beat times and BPM estimates so we can compute correction labels (beat_confidence, tempo_factor, phase_offset).
 
 **New components to build:**
 
-1. **Python BandFlux ODF (~100 lines)** — Compute spectral flux from mel spectrograms. Simple: log-compress, band-weight, half-wave rectify.
+1. **Simple spectral flux ODF (~50 lines)** — Half-wave rectified difference of consecutive raw mel frames. No BandFlux-specific parameters (gamma, band weights, thresholds). Parameter-free.
 
-2. **Lightweight CBSS simulator (~300 lines)** — Simple ACF peak-picking → BPM estimate → counter-based beat prediction. Does NOT need comb filter bank, Bayesian fusion, onset snap, PLL, or octave checks. Just enough to produce "where CBSS would place beats" for computing correction labels.
+2. **Lightweight CBSS simulator (~300 lines)** — Simple ACF peak-picking → BPM estimate → counter-based beat prediction. Does NOT need comb filter bank, Bayesian fusion, onset snap, PLL, or octave checks. Just enough to produce "where a simple tracker would place beats" for computing correction labels.
 
-3. **Beat-aligned feature extractor (~200 lines)** — Segment mel spectrograms by ground truth beat times, compute per-beat summaries (avg_mel, peak_mel, odf_stats), group into sequences of 4-8 beats.
+3. **Beat-aligned feature extractor (~200 lines)** — Segment raw mel spectrograms by ground truth beat times, compute per-beat summaries (avg_mel, peak_mel, std_mel, duration_frames), group into sequences of 4-8 beats.
 
 4. **Correction label generator (~100 lines)** — Compare CBSS-simulated beats against ground truth to produce per-beat labels: beat_confidence (aligned?), tempo_factor (octave error?), phase_offset (signed distance to nearest GT beat).
 
@@ -166,15 +218,15 @@ The CBSS pipeline itself is unchanged, but AudioController now has a feedback pa
 6. **Modified training/export pipeline** — New Dataset class for beat-level features, multi-output loss (weighted combination of correction + capability losses), beat-level evaluation metrics (downbeat F1, octave correction accuracy, phase error reduction), simplified TFLite export.
 
 **Training pipeline:**
-1. Process training audio through existing mel extraction (GPU, existing code)
-2. Compute BandFlux-style ODF from mel spectrograms (new, ~20 lines NumPy)
+1. Process training audio through existing mel extraction (GPU, existing code) — raw mel bands, no compression/whitening
+2. Compute simple spectral flux ODF from raw mel frames (new, parameter-free)
 3. Run lightweight CBSS simulator → approximate beat times + BPM (new)
-4. Segment mel spectrograms by simulated beats → per-beat feature vectors (new)
+4. Segment raw mel spectrograms by simulated beats → per-beat feature vectors (new)
 5. Compute correction labels by comparing simulated vs ground truth beats (new)
 6. Group into sequences of 4-8 beats with correction + downbeat labels (new)
 7. Apply augmentation at audio level (existing gain/noise/RIR/time-stretch code)
 8. Train BeatSyncClassifier in PyTorch (multi-output loss)
-9. Export to TFLite INT8 (<8 KB model)
+9. Export to TFLite INT8 (<10 KB model)
 10. Deploy in modified BeatActivationNN
 
 **Phased implementation:**
@@ -193,7 +245,9 @@ The beat-sync model's `tempo_factor` output learns octave errors from spectral p
 - Comb filter bank peak BPM + confidence (2 floats)
 - Current Bayesian posterior entropy (1 float)
 
-These are already computed in AudioController and would add only 9 floats to the feature vector (55 → 64). The SpectralAccumulator would snapshot them at beat time. The model could then learn "the ACF says 68 BPM but the spectral pattern says alternating kick/snare → double it to 136 BPM." Same architecture, just richer input.
+These are already computed in AudioController and would add only 9 floats to the feature vector (79 → 88). The SpectralAccumulator would snapshot them at beat time. The model could then learn "the ACF says 68 BPM but the spectral pattern says alternating kick/snare → double it to 136 BPM." Same architecture, just richer input.
+
+**Note:** ACF features re-introduce coupling to ~5 AudioController parameters (acfLagRange, combFilterBins, bayesianPrior). This is acceptable because these are stable architectural parameters, not tuning knobs that change frequently. But defer this until raw-mel-only proves insufficient.
 
 **Research context:**
 - Krebs/Böck/Widmer 2016: Beat-synchronous downbeat RNN. Processes one 180-dim vector per beat (~2 Hz). Key insight: per-beat features are sufficient for meter tracking.
@@ -261,7 +315,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
 | **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends that require 79ms+ on our hardware. The beat-synchronous approach (Priority 1) sidesteps this by running at beat rate (~2 Hz) on pre-accumulated spectral summaries, focusing on downbeat/meter — the areas where our deterministic pipeline has no solution — rather than trying to replace the ODF.
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends that require 79ms+ on our hardware. The beat-synchronous approach (Priority 1) sidesteps this by running at beat rate (~2 Hz) on pre-accumulated raw spectral summaries. The NN both **corrects** the deterministic pipeline (beat confidence, tempo, phase) and **adds capabilities** it cannot provide (downbeat, meter). Using raw mel bands as the stable interface decouples the NN from 47+ tunable firmware parameters, enabling progressive simplification of the hand-tuned pipeline as the NN proves it can compensate.
 
 ## Known Limitations
 
