@@ -29,7 +29,8 @@ from scripts.audio import load_config
 
 def generate_teacher_activations(X: np.ndarray, cfg: dict,
                                  device: torch.device,
-                                 batch_size: int = 16) -> np.ndarray:
+                                 batch_size: int = 16,
+                                 split: str = "train") -> np.ndarray:
     """Run Beat This! on mel features to get frame-level beat activations.
 
     Beat This! expects audio waveforms, but we already have mel spectrograms.
@@ -60,7 +61,7 @@ def generate_teacher_activations(X: np.ndarray, cfg: dict,
     if not chunk_index_path.exists():
         print("ERROR: chunk_index.npy not found. Re-run prepare_dataset.py with --save-index")
         print("Falling back to Gaussian-smoothed hard labels as teacher targets.")
-        return _gaussian_smooth_hard_labels(X, data_dir, sigma, chunk_frames)
+        return _gaussian_smooth_hard_labels(X, data_dir, sigma, chunk_frames, split=split)
 
     chunk_index = np.load(chunk_index_path, allow_pickle=True)
     n_chunks = len(X)

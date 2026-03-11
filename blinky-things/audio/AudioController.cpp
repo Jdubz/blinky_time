@@ -41,8 +41,6 @@ bool AudioController::begin(uint32_t sampleRate) {
     ossWriteIdx_ = 0;
     ossCount_ = 0;
 
-    // (prevMagnitudes_/maxFilteredPrevMags_ init removed v64 — only used by computeSpectralFluxBands, removed)
-
     // Reset tempo estimation
     bpm_ = 120.0f;
     beatPeriodMs_ = 500.0f;

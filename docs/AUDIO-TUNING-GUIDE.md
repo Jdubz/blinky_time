@@ -666,11 +666,11 @@ stream off         # Stop streaming
 | `fwdphase` | Forward Phase | Removed with forward filter |
 | `templatecheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
 | `subbeatcheck` | Octave Disambiguation | A/B tested, no net benefit — removed |
-| `noiseest` | Noise Estimation | A/B tested, hurts BPM accuracy — removed |
-| `noisesmooth` | Noise Estimation | Removed with noise estimation |
-| `noiserelease` | Noise Estimation | Removed with noise estimation |
-| `noiseover` | Noise Estimation | Removed with noise estimation |
-| `noisefloor` | Noise Estimation | Removed with noise estimation |
+| `noiseest` | Noise Estimation | A/B tested, hurts BPM accuracy — default OFF (settings still exposed) |
+| `noisesmooth` | Noise Estimation | Default OFF with noise estimation |
+| `noiserelease` | Noise Estimation | Default OFF with noise estimation |
+| `noiseover` | Noise Estimation | Default OFF with noise estimation |
+| `noisefloor` | Noise Estimation | Default OFF with noise estimation |
 | `adaptight` | Adaptive Tightness | Removed (dead code) |
 | `percival` | Percival Harmonic | Removed (dead code) |
 | `bisnap` | Bidirectional Snap | Removed (dead code) |

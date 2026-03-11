@@ -47,8 +47,12 @@ struct DetectionResult {
  *
  * Each detector has its own configuration controlling:
  * - weight: Base contribution to ensemble (calibrated offline)
- * - threshold: Detection sensitivity for this detector
+ * - threshold: Detection sensitivity (used by detector internally, e.g. BandFlux additive threshold)
  * - enabled: Runtime enable/disable without changing weights
+ *
+ * Note: EnsembleFusion::minConfidence is a separate post-detection confidence
+ * gate applied after the detector fires. The detector's threshold controls when
+ * it fires; minConfidence controls whether the fusion layer accepts the detection.
  */
 struct DetectorConfig {
     float weight;        // 0.0-1.0: Base contribution weight (sum across all should = 1.0)
