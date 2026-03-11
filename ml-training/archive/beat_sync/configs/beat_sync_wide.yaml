@@ -1,0 +1,37 @@
+# Beat-Sync Wide Model — 4-beat context, 64→32 hidden layers
+# Tests whether Phase A accuracy is capacity-limited.
+# ~22K params, ~22 KB INT8 (over 15 KB target but well within flash budget)
+
+model:
+  type: "beat_sync"
+  n_beats: 4
+  features_per_beat: 79
+  hidden1: 64
+  hidden2: 32
+  dropout: 0.15
+  phase: "A"
+
+training:
+  batch_size: 256
+  epochs: 200
+  learning_rate: 0.003
+  lr_schedule: "cosine"
+  pos_weight: 2.3
+  loss: "bce"
+  focal_gamma: 2.0
+  patience: 25
+  seed: 42
+
+beat_features:
+  subdivisions: 2
+  include_peak: true
+  include_std: false
+  jitter_ms: 15
+  feature_noise_std: 0.03
+  beat_drop_prob: 0.05
+  beat_insert_prob: 0.03
+
+export:
+  max_model_size_kb: 25
+  output_header: "../blinky-things/audio/beat_sync_model_data.h"
+  c_array_name: "beat_sync_model_data"

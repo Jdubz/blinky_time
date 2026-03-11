@@ -60,10 +60,13 @@ if [ "$SKIP_EXPORT" = false ]; then
         source venv/bin/activate
     fi
 
-    TF_USE_LEGACY_KERAS=1 CUDA_VISIBLE_DEVICES="" python scripts/export_tflite.py \
-        --config "$DEFAULT_CONFIG" \
-        --model "$MODEL_PATH" \
-        --inference-frames 32
+    # TODO: Replace with frame-level FC export script once training pipeline is built.
+    # The old export_tflite.py was for mel-CNN models (closed).
+    # export_beat_sync.py was for beat-sync models (closed).
+    # Frame-level FC export script will be: scripts/export_frame_beat.py
+    echo "ERROR: Frame-level FC export script not yet implemented."
+    echo "Manually export the model and place the header at: $HEADER_PATH"
+    exit 1
 
     cd "$REPO_ROOT"
 fi

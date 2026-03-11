@@ -112,6 +112,10 @@ public:
             outSize *= output_->dims->data[i];
         }
         outputChannels_ = outSize;
+        if (outputChannels_ < 1 || outputChannels_ > 4) {
+            initError_ = 7;  // Unexpected output shape
+            return false;
+        }
 
         // Zero-fill sliding window buffer
         memset(windowBuffer_, 0, sizeof(windowBuffer_));
@@ -172,6 +176,19 @@ public:
         lastInferUs_ = micros() - t0;
         inferCount_++;
 
+        // Periodic timing output when profiling enabled via `set nnprofile 1`
+        if (profileEnabled_ && (inferCount_ % 100 == 0)) {
+            Serial.print(F("[NNPROF] cnt="));
+            Serial.print(inferCount_);
+            Serial.print(F(" infer="));
+            Serial.print(lastInferUs_);
+            Serial.print(F("us arena="));
+            Serial.print(arenaUsed_);
+            Serial.print(F("/"));
+            Serial.print(TENSOR_ARENA_SIZE);
+            Serial.println();
+        }
+
         // Extract beat activation (output channel 0)
         float beat = extractOutput(0);
         lastDownbeat_ = (outputChannels_ >= 2) ? extractOutput(1) : 0.0f;
@@ -187,9 +204,10 @@ public:
     /** Whether model has a downbeat output head. */
     bool hasDownbeatOutput() const { return outputChannels_ >= 2; }
 
-    /** Enable/disable per-operator profiling output to Serial. */
+    /** Enable/disable periodic timing output to Serial. */
     void setProfileEnabled(bool enabled) { profileEnabled_ = enabled; }
     bool isProfileEnabled() const { return profileEnabled_; }
+    unsigned long getLastInferUs() const { return lastInferUs_; }
 
     /** Get count of failed Invoke() calls. */
     uint32_t getInvokeErrors() const { return invokeErrors_; }
@@ -238,7 +256,9 @@ private:
         return value;
     }
 
-    // Tensor arena — FC-only model needs ~4-8 KB
+    // Tensor arena — FC-only model needs ~2-4 KB measured.
+    // 8 KB provides generous headroom for varying window sizes and hidden dims.
+    // Actual usage reported by arenaUsed_ via printDiagnostics() / `show nn`.
     static constexpr int TENSOR_ARENA_SIZE = 8192;  // 8 KB
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
@@ -258,7 +278,7 @@ private:
     bool ready_ = false;
     bool profileEnabled_ = false;
     uint32_t inferCount_ = 0;
-    int initError_ = 0;  // 0=not attempted, 1=null model, 2=schema, 3=alloc, 4=placeholder, 5=dim, 6=window too large
+    int initError_ = 0;  // 0=not attempted, 1=null model, 2=schema, 3=alloc, 4=placeholder, 5=dim, 6=window too large, 7=bad output shape
     size_t arenaUsed_ = 0;
     unsigned long lastInferUs_ = 0;
     uint32_t invokeErrors_ = 0;
@@ -277,6 +297,7 @@ public:
     bool hasDownbeatOutput() const { return false; }
     void setProfileEnabled(bool) {}
     bool isProfileEnabled() const { return false; }
+    unsigned long getLastInferUs() const { return 0; }
     uint32_t getInvokeErrors() const { return 0; }
     uint32_t getInferCount() const { return 0; }
     void printDiagnostics() const { Serial.println(F("[FrameBeatNN] not compiled")); }
