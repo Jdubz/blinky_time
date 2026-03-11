@@ -35,7 +35,7 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 - **Phase drift**: CBSS derives phase from a counter. Slight BPM error accumulates phase offset. PLL correction is conservative to avoid jitter.
 - **False beats during breakdowns**: CBSS forces beats when no onset is detected, maintaining phase through silence but triggering false visuals.
 - **Slow tempo adaptation**: Bayesian fusion with conservative transitions takes 4-8 seconds to lock a new tempo after a transition.
-- **Downbeat detection**: F1 ~0.33 offline. No spectral content analysis — purely counting beats modulo 4.
+- **Downbeat detection**: F1 ~0.33 offline. Current firmware samples the mel CNN downbeat head (BeatActivationNN channel 1 EMA at beat time) when `nnBeatEnabled=true`, but quality remains low. With NN disabled or low confidence, behavior falls back to counting beats modulo 4. No beat-synchronous spectral analysis.
 
 Mel-spectrogram NN models that could improve ODF quality require 79-98ms inference — 8-10× over budget.
 
@@ -67,7 +67,7 @@ SharedSpectralAnalysis (already runs every frame, no additional cost)
      │         │
      │         └── NEW CAPABILITY outputs → AudioControl:
      │               downbeat_prob   → AudioControl.downbeat
-     │               meter           → AudioControl.beatInMeasure
+     │               (beats_per_bar  → future: governs beatInMeasure wrapping, deferred)
      │
      ├── BandFlux ODF → CBSS → beat detection (NN corrections applied)
      │
@@ -98,21 +98,21 @@ Previous design included `odf_stats[3]` (odf_mean, odf_max, onset_ratio) derived
 
 *Correction outputs (feed back into AudioController):*
 - **Beat confidence (0-1)**: How likely this beat was a true beat. Low values during breakdowns suppress forced beats and reduce `rhythmStrength`. Addresses false beat problem.
-- **Tempo factor**: Octave correction signal. Trained to output ~1.0 when tempo is correct, ~2.0 when half-time, ~0.5 when double-time. The NN learns this from spectral patterns — at the correct tempo, beats alternate kick-heavy and snare-heavy spectral profiles. At half-time, every beat looks the same. Addresses octave error and 135 BPM gravity well.
+- **Tempo factor (3-class softmax: p_half, p_correct, p_double)**: Octave correction signal. The label distribution is tri-modal ({0.5, 1.0, 2.0}), making this a classification problem rather than regression. A 3-class softmax with a confidence gate (apply correction only when max-class probability > 0.85) gives cleaner gradients and simpler hysteresis than continuous regression. The NN learns this from spectral patterns — at the correct tempo, beats alternate kick-heavy and snare-heavy spectral profiles. At half-time, every beat looks the same. Addresses octave error and 135 BPM gravity well.
 - **Phase offset (-0.5 to 0.5)**: Fractional beat correction. If the spectral onset peak is consistently offset from the beat anchor, nudge the PLL. Addresses phase drift.
 
 *New capability outputs:*
-- **Downbeat probability (0-1)**: Identifies bar boundaries from spectral content changes (harmony shifts, bass patterns). Addresses downbeat F1 ~0.33.
-- **Meter estimate**: Currently 4/4 assumed. Could learn 3/4, 6/8 from beat-level spectral patterns.
+- **Downbeat probability (0-1)**: Identifies bar boundaries from spectral content changes (harmony shifts, bass patterns). Drives `AudioControl.downbeat`. Addresses downbeat F1 ~0.33.
+- **Beats per bar (optional, deferred)**: Currently 4/4 assumed — `AudioControl.beatInMeasure` wraps at 4. A future NN output could learn 3/4, 6/8 from beat-level spectral patterns, changing the wrap modulus. Not in initial phases — 4/4 covers >95% of target content (EDM, pop, rock).
 
 **How correction outputs integrate with CBSS:**
 1. **Beat confidence < threshold** → AudioController reduces `rhythmStrength`, suppresses visual pulse. Does NOT stop the beat counter (CBSS continues tracking internally so it can recover quickly).
-2. **Tempo factor != 1.0** → AudioController applies `switchTempo(bpm * tempoFactor)` with existing Bayesian posterior nudge (`tempoNudge`). More reliable than the current shadow CBSS octave checker because the NN sees spectral evidence, not just beat strength ratios.
+2. **Tempo factor != 1.0** → AudioController applies `switchTempo(bpm * tempoFactor)` with hysteresis to prevent oscillation: (a) require N consecutive beats (e.g. 3) with consistent tempo_factor class before triggering, (b) cooldown period after `switchTempo()` (e.g. 4 beats) during which tempo_factor is ignored, (c) replaces the existing shadow CBSS octave checker (which uses beat strength ratios) since the NN has spectral evidence.
 3. **Phase offset** → Added to PLL's proportional correction term. Bounded by existing PLL clamp (±T/4 after warmup). Replaces or supplements the onset snap heuristic.
 
 **Training the correction outputs requires CBSS simulation** (partial):
 - Beat confidence: Label = 1.0 if CBSS beat aligns with ground truth (±70ms), 0.0 otherwise. Requires simulating beat timing from the ODF — but only simple CBSS, not full Bayesian fusion.
-- Tempo factor: Label = ground_truth_bpm / cbss_bpm (clipped to {0.5, 1.0, 2.0}). Requires a rough BPM estimate from ACF — simple autocorrelation, not full fusion.
+- Tempo factor: Label = 3-class one-hot (half/correct/double) derived from ground_truth_bpm / cbss_bpm ratio. Requires a rough BPM estimate from ACF — simple autocorrelation, not full fusion.
 - Phase offset: Label = signed distance from CBSS beat to nearest ground truth beat, in fractions of beat period.
 
 This means we DO need a **lightweight CBSS/ACF simulator** — not the full signal chain, but enough to produce approximate beat times and BPM from the ODF. ~300-500 lines of Python (ACF + simple peak-picking + counter-based beat detection), not 2000+ lines.
@@ -205,7 +205,7 @@ Either approach allows aggressive simplification in Phase D without the NN depen
 
 **New components to build:**
 
-1. **Simple spectral flux ODF (~50 lines)** — Half-wave rectified difference of consecutive raw mel frames. No BandFlux-specific parameters (gamma, band weights, thresholds). Parameter-free.
+1. **Simple spectral flux ODF (~50 lines)** — Half-wave rectified difference of consecutive raw mel frames. Computed directly from already-extracted mel spectrograms (which `prepare_dataset.py` already produces) — no need to go back to raw audio. No BandFlux-specific parameters (gamma, band weights, thresholds). Parameter-free.
 
 2. **Lightweight CBSS simulator (~300 lines)** — Simple ACF peak-picking → BPM estimate → counter-based beat prediction. Does NOT need comb filter bank, Bayesian fusion, onset snap, PLL, or octave checks. Just enough to produce "where a simple tracker would place beats" for computing correction labels.
 
@@ -230,7 +230,7 @@ Either approach allows aggressive simplification in Phase D without the NN depen
 10. Deploy in modified BeatActivationNN
 
 **Phased implementation:**
-- **Phase A (downbeat only):** Train with ground truth beat times as input segmentation. Downbeat output only (no correction). Validates the architecture and training pipeline. No CBSS simulator needed.
+- **Phase A (downbeat only):** Train with ground truth beat times as input segmentation. Downbeat output only (no correction). Validates the feature pipeline and output heads. No CBSS simulator needed. **Caveat:** At inference time, features are segmented by CBSS-predicted beats (not GT), so the model sees systematically offset spectral windows. Phase A validates the architecture, not full system accuracy — expect noisier downbeat output on-device than offline eval suggests.
 - **Phase B (+ beat confidence):** Add beat_confidence output. Simulated beats vs ground truth produces confidence labels. Lightweight CBSS simulator needed.
 - **Phase C (+ tempo/phase correction):** Add tempo_factor and phase_offset outputs. Full correction feedback loop. Requires tuning the AudioController integration (hysteresis, clamp bounds, correction rates).
 

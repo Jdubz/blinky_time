@@ -164,14 +164,16 @@ AdaptiveMic (AGC + normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── EnsembleDetector (BandWeightedFlux Solo) → ODF
-    │
+    ├── EnsembleDetector (BandWeightedFlux Solo) → ODF [default]
+    ├── [legacy, NN=1 build] BeatActivationNN (mel CNN, 79-98ms) → ODF [nnbeat=1]
+    ↓
 AudioController (CBSS beat tracking)
     │
-    ├── [NN=1, planned] SpectralAccumulator (mel bands between beats)
-    │     └── BeatSyncNN (FC, ~2 Hz at beat fire) → downbeat, meter
+    ├── [NN=1, planned] SpectralAccumulator (raw mel bands between beats)
+    │     └── BeatSyncNN (FC, ~2 Hz) → corrections + downbeat
     ↓
-AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure}
+AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat*, beatInMeasure*}
+    (* = planned, driven by BeatSyncNN when available; currently from mel CNN or mod-4 counter)
     ↓
 Generator (Fire/Water/Lightning)
     ↓
@@ -196,7 +198,7 @@ RenderPipeline → LED Output
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: BandFlux (default). Mel-spectrogram NN ODF closed (too slow). Beat-sync NN (planned) augments at beat fire, doesn't replace ODF.
+   - ODF source: BandFlux (default) or legacy mel CNN (`nnbeat=1`, requires NN=1 build, default ON — functional but 79-98ms limits framerate to ~12 Hz). Beat-sync NN (planned) will correct CBSS + add downbeat at beat fire, doesn't replace ODF.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -320,7 +322,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
    (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
-9. [NN=1, planned] At beat fire: SpectralAccumulator → BeatSyncNN → downbeat, meter
+9. [NN=1, planned] At beat fire: SpectralAccumulator → BeatSyncNN → corrections (confidence, tempo, phase) + downbeat
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
     onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
 11. Fire generator:

@@ -53,6 +53,10 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |
       +--- EnsembleDetector (BandFlux Solo) --> ODF [default]
       |                                    --> Transient Hits (visual only)
+      +--- [legacy, NN=1 build] BeatActivationNN (mel CNN, 79-98ms) --> ODF [nnbeat=1]
+      |
+      +--- [planned] SpectralAccumulator (rawMelBands_, every frame)
+      |                   accumulates pre-compression/pre-whitening mel bands
       |
 OSS Buffer (6s @ 60Hz)
       |
@@ -61,18 +65,14 @@ OSS Buffer (6s @ 60Hz)
       |                                                            beatPeriodSamples_
       |                                                                    |
       +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
-      |                                                        |
-      |                             [NN=1 build, planned] SpectralAccumulator
-      |                                  rawMelBands_ accumulated between beats
-      |                                  (pre-compression, pre-whitening — stable interface)
       |                                        |
-      |                                  BeatSyncNN (FC, ~2 Hz at beat fire)
-      |                                  → CORRECTIONS: beat confidence, tempo factor, phase offset
-      |                                  → NEW: downbeat prob, meter
+      |                            [at beat fire, planned] BeatSyncNN (FC, ~2 Hz)
+      |                              Input: last 4 beats from SpectralAccumulator
+      |                              → CORRECTIONS: beat confidence, tempo factor, phase offset
+      |                              → NEW: downbeat prob
+      |                              Corrections feed back → CBSS (tempo, phase, confidence)
       |                                        |
-      |                                  Corrections feed back → CBSS (tempo, phase, confidence)
-      |                                        |
-AudioControl { energy, pulse, phase, rhythmStrength, downbeat, beatInMeasure }
+AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure }
       |
 Generators (Fire, Water, Lightning)
 ```
@@ -99,7 +99,7 @@ Generators (Fire, Water, Lightning)
 3. **Detect Beat**: Search for local maximum in CBSS within window around expected beat time
 4. **Derive Phase**: `phase = (sampleCounter - lastBeatSample) / beatPeriodSamples`
 
-**Every 500ms:**
+**Every 250ms:**
 5. **Run Autocorrelation**: Compute correlation across all lags (60-200 BPM range), with inverse-lag normalization (`acf[i] /= lag`) to penalize sub-harmonics
 6. **Apply Tempo Prior**: Weight autocorrelation by Gaussian prior to disambiguate harmonics
 7. **Update Beat Period**: Convert best BPM to `beatPeriodSamples`
@@ -226,7 +226,7 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 
 ### NN Beat Activation (v54+ - Optional, requires NN=1 build)
 
-**Current (mel-spectrogram CNN, CLOSED):** Causal 1D CNN replacing BandFlux as ODF source. All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget. Best offline F1: v7-melfixed 0.787. See `IMPROVEMENT_PLAN.md` Closed Investigations.
+**Current (mel-spectrogram CNN, supported but performance-limited):** Causal 1D CNN replacing BandFlux as ODF source. Still wired through `BeatActivationNN` / `AudioController` / `ConfigStorage` and enabled by default when built with `NN=1` (`nnBeatEnabled=true`). All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget but functional at reduced framerate (~12 Hz). Best offline F1: v7-melfixed 0.787. No further architecture work planned — superseded by beat-synchronous approach. See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
 **Planned (beat-synchronous hybrid corrector):** Replaces per-frame mel CNN with a tiny FC model that runs at beat rate (~2 Hz). A `SpectralAccumulator` accumulates **raw mel bands** (pre-compression, pre-whitening) between beats — computing mean, max, and std dev per band. At beat fire, the last 4 beat spectral summaries (316 floats = 4 × 79) feed through a 316→48→24→N FC network producing both **correction outputs** (beat confidence, tempo factor, phase offset → feed back into CBSS) and **new capability outputs** (downbeat probability, meter). Projected: ~10,000 params, ~10 KB INT8, <0.5ms per beat. See `IMPROVEMENT_PLAN.md` Priority 1 for full design.
 
@@ -236,7 +236,7 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
-| `nnBeatEnabled` | true | Use NN ODF instead of BandFlux (requires NN=1 build) | `set nnbeat 1` |
+| `nnBeatEnabled` | true | Use mel CNN ODF instead of BandFlux (requires NN=1 build). Will be repurposed to enable/disable beat-sync NN when available. | `set nnbeat 1` |
 
 ---
 
@@ -251,7 +251,7 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
-| Autocorrelation (500ms) | - | ~3% | Amortized |
+| Autocorrelation (250ms) | - | ~3% | Amortized |
 | NN mel-spectrogram (current, NN=1) | ~14 KB arena + 13 KB context | ~5% | TFLite Micro (96 KB arena, 79-98ms/frame — too slow) |
 | NN beat-sync (planned, NN=1) | ~4 KB arena + 2.5 KB history + 0.3 KB accumulator | <0.1% | FC model at ~2 Hz, <0.5ms per beat |
 | **Total** | **~22 KB base** | **~15-20%** | +96 KB arena (current) or +7 KB (planned beat-sync) |
