@@ -11,6 +11,9 @@
  *   # Basic A/B test (toggles setting between 0 and 1)
  *   node ab_test_multidev.cjs --setting fwdfilter
  *
+ *   # Custom baseline/test values (e.g., cbsscontrast 1.0 vs 2.0)
+ *   node ab_test_multidev.cjs --setting cbsscontrast --baseline-val 1.0 --test-val 2.0
+ *
  *   # With pre-configuration
  *   node ab_test_multidev.cjs --setting fwdfilter --pre "fwdbayesbias=0.5,fwdasymmetry=2"
  *
@@ -38,6 +41,8 @@ const portPaths = portsArg.split(',').map(s => s.trim());
 const musicDir = getArg('--music-dir', 'music/edm');
 const durationMs = parseInt(getArg('--duration', '35000'));
 const settingName = getArg('--setting', 'fwdfilter');
+const baselineVal = getArg('--baseline-val', '0');
+const testVal = getArg('--test-val', '1');
 const preSettings = getArg('--pre', '');
 // Settle time: OSS buffer fill (5.5s) + autocorrelation convergence (3-5 cycles @ 250ms)
 // + Bayesian posterior stabilization (~2s) + audio latency (~0.6s) = ~10s minimum.
@@ -251,7 +256,7 @@ async function main() {
     .filter(name => manifest[name] && manifest[name].valid)
     .sort();
 
-  console.log(`\n=== Multi-Device A/B Test: ${settingName} ===`);
+  console.log(`\n=== Multi-Device A/B Test: ${settingName} (${baselineVal} vs ${testVal}) ===`);
   console.log(`Devices: ${ports.length}, Tracks: ${tracks.length}, Duration: ${durationMs}ms, Settle: ${settleMs}ms\n`);
 
   const results = [];
@@ -264,20 +269,20 @@ async function main() {
 
     console.log(`[${ti + 1}/${tracks.length}] ${name} (true: ${trueBpm ? trueBpm.toFixed(0) : '?'} BPM, seek: ${entry.seekOffset}s)`);
 
-    // === BASELINE: setting OFF ===
-    await setAllDevices(ports, settingName, 0);
+    // === BASELINE ===
+    await setAllDevices(ports, settingName, baselineVal);
     await sleep(1500);
     const baseMulti = await collectBpmMultiDevice(ports, trackPath, entry.seekOffset, durationMs);
     await sleep(2000);
 
-    // === TEST: setting ON ===
-    await setAllDevices(ports, settingName, 1);
+    // === TEST ===
+    await setAllDevices(ports, settingName, testVal);
     await sleep(1500);
     const testMulti = await collectBpmMultiDevice(ports, trackPath, entry.seekOffset, durationMs);
     await sleep(2000);
 
     // Reset to baseline
-    await setAllDevices(ports, settingName, 0);
+    await setAllDevices(ports, settingName, baselineVal);
 
     // Analyze each device's readings
     const baseDevResults = [];
@@ -335,7 +340,7 @@ async function main() {
 
   // Summary table
   console.log('\n' + '='.repeat(120));
-  console.log(`SUMMARY: Baseline vs ${settingName}=1 (${ports.length} devices × ${tracks.length} tracks)`);
+  console.log(`SUMMARY: ${settingName}=${baselineVal} (baseline) vs ${settingName}=${testVal} (test) — ${ports.length} devices × ${tracks.length} tracks`);
   console.log('='.repeat(120));
   const h = 'Track'.padEnd(30) + 'True'.padEnd(7) + 'Seek'.padEnd(6) + 'Base BPM'.padEnd(14) + 'Err'.padEnd(8) + 'Oct'.padEnd(5)
     + 'Test BPM'.padEnd(14) + 'Err'.padEnd(8) + 'Oct'.padEnd(5) + 'Winner';
@@ -384,6 +389,8 @@ async function main() {
   fs.writeFileSync(outPath, JSON.stringify({
     timestamp: new Date().toISOString(),
     setting: settingName,
+    baselineVal,
+    testVal,
     preSettings: preSettings || null,
     nDevices: ports.length,
     durationMs,

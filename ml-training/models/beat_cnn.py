@@ -94,6 +94,7 @@ class DSConvBlock(nn.Module):
         self.dw_bn = nn.BatchNorm1d(in_ch)
         self.dw_relu = nn.ReLU()
         # Pointwise: 1×1 conv mixes channels
+        # TODO(next training run): change to bias=False — redundant before BN
         self.pw_conv = nn.Conv1d(in_ch, out_ch, 1, bias=True)
         self.pw_bn = nn.BatchNorm1d(out_ch)
         self.pw_relu = nn.ReLU()
@@ -134,10 +135,12 @@ class DSTCNBeatCNN(nn.Module):
                  downbeat: bool = False, residual: bool = True):
         super().__init__()
         self.out_channels = 2 if downbeat else 1
+        assert dilations[0] == 1, f"First dilation must be 1 (got {dilations[0]})"
 
         # Input projection: standard conv to go from n_mels → channels
         # (can't use depthwise here since in_ch != out_ch)
         self.input_pad = nn.ConstantPad1d(((kernel_size - 1) * dilations[0], 0), 0.0)
+        # TODO(next training run): change to bias=False — redundant before BN
         self.input_conv = nn.Conv1d(n_mels, channels, kernel_size,
                                     dilation=dilations[0], padding=0, bias=True)
         self.input_bn = nn.BatchNorm1d(channels)

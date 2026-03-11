@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
+
 import sys
 from functools import partial
 from pathlib import Path
@@ -31,6 +31,7 @@ class MemmapBeatDataset(Dataset):
         self.Y = np.load(y_path, mmap_mode='r')
         self.Y_db = np.load(y_db_path, mmap_mode='r') if y_db_path else None
         self.Y_teacher = np.load(y_teacher_path, mmap_mode='r') if y_teacher_path else None
+        self._empty_teacher = torch.empty(0)  # Shared placeholder (avoid per-sample alloc)
 
     def __len__(self):
         return len(self.X)
@@ -47,7 +48,7 @@ class MemmapBeatDataset(Dataset):
         if self.Y_teacher is not None:
             t = torch.from_numpy(self.Y_teacher[idx].copy()).float()
             return x, y_out, t
-        return x, y_out, torch.empty(0)  # Empty tensor as placeholder
+        return x, y_out, self._empty_teacher
 
 
 def _broadcast_pos_weight(pos_weight: torch.Tensor | float,

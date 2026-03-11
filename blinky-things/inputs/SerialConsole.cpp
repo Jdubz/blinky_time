@@ -343,6 +343,20 @@ void SerialConsole::registerRhythmSettings() {
         "PLL proportional gain (v45)", 0.0f, 1.0f);
     settings_.registerFloat("pllki", &audioCtrl_->pllKi, "rhythm",
         "PLL integral gain (v45)", 0.0f, 0.1f);
+    settings_.registerUint8("pllwarmup", &audioCtrl_->pllWarmupBeats, "rhythm",
+        "PLL warmup beats before tightening clamp (v65)", 0, 20);
+
+    // Onset snap hysteresis (v65)
+    settings_.registerFloat("snaphyst", &audioCtrl_->snapHysteresis, "rhythm",
+        "Snap hysteresis: prefer prev offset if >ratio of best (v65)", 0.0f, 1.0f);
+
+    // Downbeat calibration (v65)
+    settings_.registerFloat("dbema", &audioCtrl_->dbEmaAlpha, "rhythm",
+        "Downbeat EMA smoothing alpha (v65)", 0.05f, 0.9f);
+    settings_.registerFloat("dbthresh", &audioCtrl_->dbThreshold, "rhythm",
+        "Smoothed downbeat activation threshold (v65)", 0.1f, 0.9f);
+    settings_.registerFloat("dbdecay", &audioCtrl_->dbDecay, "rhythm",
+        "Per-frame downbeat decay between beats (v65)", 0.5f, 0.99f);
 
     // Adaptive CBSS tightness (v45)
     settings_.registerBool("adaptight", &audioCtrl_->adaptiveTightnessEnabled, "rhythm",
@@ -1767,13 +1781,14 @@ void SerialConsole::streamTick() {
         Serial.print(F("}"));
 
         // AudioController telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"bt":12345,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2}
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"bt":12345,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2,"db":0.8,"bm":1}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
         // conf = CBSS confidence, bc = beat count, q = beat event (phase wrap)
         // bt = firmware millis() at beat (only when q=1 and timestamp>0)
         // e = energy, p = pulse, cb = CBSS value, oss = onset strength
         // ttb = frames until next beat, bp = last beat was predicted (1) vs fallback (0)
         // od = onset density (onsets/second, EMA smoothed)
+        // db = downbeat activation (beat-synchronized), bm = beat in measure (1-4, 0=unknown)
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
 
@@ -1818,6 +1833,8 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
             Serial.print(F(",\"db\":"));
             Serial.print(audio.downbeat, 2);
+            Serial.print(F(",\"bm\":"));
+            Serial.print(audio.beatInMeasure);
 
             // Debug mode: add Bayesian tempo state for tuning
             if (streamDebug_) {
@@ -1905,7 +1922,7 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
         Serial.println(F("--------  ------  ------  -------  ------------"));
 
         // Only BandFlux detector is present (6 others removed Mar 2026)
-        const DetectorConfig& cfg = fusion.getConfig(DetectorType::BAND_FLUX);
+        const DetectorConfig& cfg = fusion.getConfig();
         const DetectionResult& lastResult = ens.getLastBandFluxResult();
         Serial.print(F("bandflux  "));
         Serial.print(cfg.weight, 2);
@@ -2388,6 +2405,10 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(F("Onset Density: "));
         Serial.print(audioCtrl_->getOnsetDensity(), 1);
         Serial.println(F(" /s"));
+        Serial.print(F("Downbeat: "));
+        Serial.println(audioCtrl_->getControl().downbeat, 2);
+        Serial.print(F("Beat in Measure: "));
+        Serial.println(audioCtrl_->getControl().beatInMeasure);
         Serial.println();
         return true;
     }
@@ -2416,6 +2437,10 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getBeatCount());
         Serial.print(F(",\"onsetDensity\":"));
         Serial.print(audioCtrl_->getOnsetDensity(), 1);
+        Serial.print(F(",\"downbeat\":"));
+        Serial.print(audioCtrl_->getControl().downbeat, 2);
+        Serial.print(F(",\"beatInMeasure\":"));
+        Serial.print(audioCtrl_->getControl().beatInMeasure);
         Serial.println(F("}"));
         return true;
     }
@@ -2436,6 +2461,10 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(audioCtrl_->getBeatPeriodSamples());
         Serial.print(F(",\"stability\":"));
         Serial.print(audioCtrl_->getBeatStability(), 3);
+        Serial.print(F(",\"downbeat\":"));
+        Serial.print(audioCtrl_->getControl().downbeat, 2);
+        Serial.print(F(",\"beatInMeasure\":"));
+        Serial.print(audioCtrl_->getControl().beatInMeasure);
         Serial.println(F("}"));
         return true;
     }

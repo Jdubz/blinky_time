@@ -440,6 +440,15 @@ public:
     bool pllEnabled = true;                // Enable PLL phase correction (v45)
     float pllKp = 0.15f;                   // Proportional gain (v45)
     float pllKi = 0.005f;                  // Integral gain (v45)
+    uint8_t pllWarmupBeats = 5;            // Beats before tightening PLL clamp from ±T/2 to ±T/4 (v65)
+
+    // === ONSET SNAP HYSTERESIS (v65) ===
+    float snapHysteresis = 0.8f;           // Prefer previous snap if >this fraction of best (v65, 0=off)
+
+    // === DOWNBEAT CALIBRATION (v65) ===
+    float dbEmaAlpha = 0.3f;              // Downbeat EMA smoothing alpha (v65)
+    float dbThreshold = 0.5f;             // Smoothed downbeat activation threshold to fire (v65)
+    float dbDecay = 0.85f;                // Per-frame downbeat decay between beats (v65)
 
     // === ADAPTIVE CBSS TIGHTNESS (v45) ===
     // Modulates cbssTightness based on onset confidence (OSS/mean ratio).
@@ -655,6 +664,13 @@ private:
 
     // === PLL PHASE CORRECTION STATE (v45) ===
     float pllPhaseIntegral_ = 0.0f;  // PLL integral accumulator
+
+    // === ONSET SNAP HYSTERESIS (v65) ===
+    int lastSnapOffset_ = 0;         // Previous beat's snap offset (for hysteresis)
+
+    // === DOWNBEAT TRACKING (v65) ===
+    float downbeatSmoothed_ = 0.0f;  // EMA-smoothed NN downbeat activation
+    uint8_t beatInMeasure_ = 0;      // Position in measure (1-4, 0=unknown)
 
     // === ADAPTIVE TIGHTNESS STATE (v45) ===
     float effectiveTightness_ = 8.0f;  // Current effective tightness (modulated by onset confidence)

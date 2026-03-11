@@ -10,19 +10,19 @@ void EnsembleFusion::resetToDefaults() {
     config_.enabled = true;
 }
 
-void EnsembleFusion::configureDetector(DetectorType, const DetectorConfig& config) {
+void EnsembleFusion::configureDetector(const DetectorConfig& config) {
     config_ = config;
 }
 
-const DetectorConfig& EnsembleFusion::getConfig(DetectorType) const {
+const DetectorConfig& EnsembleFusion::getConfig() const {
     return config_;
 }
 
-void EnsembleFusion::setWeight(DetectorType, float weight) {
+void EnsembleFusion::setWeight(float weight) {
     config_.weight = (weight < 0.0f) ? 0.0f : weight;
 }
 
-void EnsembleFusion::setEnabled(DetectorType, bool enabled) {
+void EnsembleFusion::setEnabled(bool enabled) {
     config_.enabled = enabled;
 }
 
@@ -42,7 +42,11 @@ EnsembleOutput EnsembleFusion::fuseSolo(const DetectionResult& result, int detec
         if (strength > 1.0f) strength = 1.0f;
     }
 
-    // Tempo-adaptive cooldown
+    // Tempo-adaptive cooldown (guard against timestamp wraparound)
+    if (timestampMs < lastTransientMs_) {
+        lastTransientMs_ = timestampMs;
+        return output;
+    }
     uint32_t elapsedMs = timestampMs - lastTransientMs_;
     uint16_t effectiveCooldown = getEffectiveCooldownMs();
 

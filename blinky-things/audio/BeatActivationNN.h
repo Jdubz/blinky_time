@@ -90,7 +90,7 @@ public:
         resolver.AddAdd();             // Residual skip connections / BatchNorm bias
         resolver.AddSpaceToBatchNd();  // Dilated conv (dilation > 1)
         resolver.AddBatchToSpaceNd();  // Dilated conv output reshape
-        // 14 slots used. If loading a model that needs additional ops,
+        // 13 of 14 slots used. If loading a model that needs additional ops,
         // AllocateTensors will fail with error=3 — add the missing op here.
 
         static tflite::MicroProfiler micro_profiler;

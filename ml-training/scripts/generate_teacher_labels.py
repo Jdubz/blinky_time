@@ -104,7 +104,8 @@ def generate_teacher_activations(X: np.ndarray, cfg: dict,
 
 
 def _gaussian_smooth_hard_labels(X: np.ndarray, data_dir: Path,
-                                 sigma: float, chunk_frames: int) -> np.ndarray:
+                                 sigma: float, chunk_frames: int,
+                                 split: str = "train") -> np.ndarray:
     """Fallback: create soft teacher labels by Gaussian-smoothing hard labels.
 
     Less ideal than Beat This! activations, but still provides softer targets
@@ -112,8 +113,7 @@ def _gaussian_smooth_hard_labels(X: np.ndarray, data_dir: Path,
     """
     from scipy.ndimage import gaussian_filter1d
 
-    Y_hard = np.load(data_dir / "Y_train.npy" if "train" in str(data_dir)
-                     else data_dir / "Y_train.npy", mmap_mode='r')
+    Y_hard = np.load(data_dir / f"Y_{split}.npy", mmap_mode='r')
 
     n_chunks = len(X)
     teacher = np.zeros((n_chunks, chunk_frames), dtype=np.float32)

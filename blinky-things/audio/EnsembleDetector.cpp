@@ -11,7 +11,7 @@ void EnsembleDetector::begin() {
     bassSpectral_.begin();
 
     // Configure BandFlux detector with fusion defaults
-    DetectorConfig config = fusion_.getConfig(DetectorType::BAND_FLUX);
+    DetectorConfig config = fusion_.getConfig();
     bandFlux_.configure(config);
 }
 
@@ -53,7 +53,7 @@ EnsembleOutput EnsembleDetector::update(float level, float rawLevel,
     AudioFrame frame = buildFrame(level, rawLevel, timestampMs);
 
     // Run BandFlux detector (only enabled detector)
-    if (fusion_.getConfig(DetectorType::BAND_FLUX).enabled) {
+    if (fusion_.getConfig().enabled) {
         lastBandFluxResult_ = bandFlux_.detect(frame, dt);
     } else {
         lastBandFluxResult_ = DetectionResult::none();
@@ -102,38 +102,28 @@ AudioFrame EnsembleDetector::buildFrame(float level, float rawLevel,
     return frame;
 }
 
-void EnsembleDetector::setDetectorWeight(DetectorType type, float weight) {
-    fusion_.setWeight(type, weight);
-
-    // Also update detector's own config if it's BandFlux
-    if (type == DetectorType::BAND_FLUX) {
-        DetectorConfig config = bandFlux_.getConfig();
-        config.weight = weight;
-        bandFlux_.configure(config);
-    }
+void EnsembleDetector::setDetectorWeight(DetectorType, float weight) {
+    fusion_.setWeight(weight);
+    DetectorConfig config = bandFlux_.getConfig();
+    config.weight = weight;
+    bandFlux_.configure(config);
 }
 
-void EnsembleDetector::setDetectorEnabled(DetectorType type, bool enabled) {
-    fusion_.setEnabled(type, enabled);
-
-    // Also update detector's own config if it's BandFlux
-    if (type == DetectorType::BAND_FLUX) {
-        DetectorConfig config = bandFlux_.getConfig();
-        config.enabled = enabled;
-        bandFlux_.configure(config);
-    }
+void EnsembleDetector::setDetectorEnabled(DetectorType, bool enabled) {
+    fusion_.setEnabled(enabled);
+    DetectorConfig config = bandFlux_.getConfig();
+    config.enabled = enabled;
+    bandFlux_.configure(config);
 }
 
-void EnsembleDetector::setDetectorThreshold(DetectorType type, float threshold) {
-    if (type == DetectorType::BAND_FLUX) {
-        // Update detector's own config
-        DetectorConfig config = bandFlux_.getConfig();
-        config.threshold = threshold;
-        bandFlux_.configure(config);
+void EnsembleDetector::setDetectorThreshold(DetectorType, float threshold) {
+    // Update detector's own config
+    DetectorConfig config = bandFlux_.getConfig();
+    config.threshold = threshold;
+    bandFlux_.configure(config);
 
-        // Also update fusion config (for display consistency)
-        DetectorConfig fusionConfig = fusion_.getConfig(type);
-        fusionConfig.threshold = threshold;
-        fusion_.configureDetector(type, fusionConfig);
-    }
+    // Also update fusion config (for display consistency)
+    DetectorConfig fusionConfig = fusion_.getConfig();
+    fusionConfig.threshold = threshold;
+    fusion_.configureDetector(fusionConfig);
 }

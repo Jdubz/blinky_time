@@ -109,6 +109,9 @@ bool AudioController::begin(uint32_t sampleRate) {
     // (multi-agent state init removed v64 — multi-agent beat tracking removed, no benefit)
     // (pfInitialized_/fwdInitialized_/pfRngState_/pfCooldown_ init removed v64 — PF and forward filter removed)
     pllPhaseIntegral_ = 0.0f;  // Reset PLL integral accumulator (v45)
+    lastSnapOffset_ = 0;       // Reset onset snap hysteresis (v65)
+    downbeatSmoothed_ = 0.0f;  // Reset downbeat EMA (v65)
+    beatInMeasure_ = 0;        // Reset measure counter (v65)
     effectiveTightness_ = cbssTightness;  // Initialize adaptive tightness (v45)
     logGaussianLastT_ = 0;
     logGaussianLastTight_ = 0.0f;
@@ -1628,6 +1631,19 @@ void AudioController::detectBeat() {
                         bestSnapOffset = d;
                     }
                 }
+                // Hysteresis: prefer previous snap position if within ±1 sample
+                // and nearly as strong (>80%). Prevents chatter when two onsets
+                // are similar strength, reducing phase jitter.
+                if (bestOSS > 0.0f && abs(bestSnapOffset - lastSnapOffset_) > 1) {
+                    int prevIdx = sampleCounter_ - 1 - lastSnapOffset_;
+                    if (prevIdx >= 0 && lastSnapOffset_ <= W) {
+                        float prevOSS = ossBuffer_[prevIdx % OSS_BUFFER_SIZE];
+                        if (prevOSS > bestOSS * snapHysteresis) {
+                            bestSnapOffset = lastSnapOffset_;
+                        }
+                    }
+                }
+                lastSnapOffset_ = bestSnapOffset;
                 lastBeatSample_ = sampleCounter_ - bestSnapOffset;
             } else {
                 lastBeatSample_ = sampleCounter_;
@@ -1657,8 +1673,10 @@ void AudioController::detectBeat() {
                 pllPhaseIntegral_ = clampf(pllSmoother * pllPhaseIntegral_ + phaseError, -10.0f, 10.0f);
                 correction += pllKi * pllPhaseIntegral_ * static_cast<float>(T);
 
-                // Apply correction to lastBeatSample_ (clamp to ±T/4 to prevent large jumps)
-                int maxShift = T / 4;
+                // Apply correction to lastBeatSample_.
+                // First N beats: relax to ±T/2 for faster initial phase lock.
+                // After warmup: ±T/4 to prevent large jumps during stable tracking.
+                int maxShift = (beatCount_ < pllWarmupBeats) ? T / 2 : T / 4;
                 int shift = static_cast<int>(correction);
                 if (shift > maxShift) shift = maxShift;
                 if (shift < -maxShift) shift = -maxShift;
@@ -1669,6 +1687,20 @@ void AudioController::detectBeat() {
             beatDetected = true;
             cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
             updateBeatStability(nowMs);
+
+            // Beat-synchronized downbeat: sample the smoothed NN downbeat
+            // activation at beat time. This prevents false triggers between beats.
+            if (downbeatSmoothed_ > dbThreshold) {
+                control_.downbeat = downbeatSmoothed_;
+                beatInMeasure_ = 1;  // Reset measure counter on downbeat
+            } else {
+                control_.downbeat = 0.0f;
+                if (beatInMeasure_ > 0) {
+                    beatInMeasure_++;
+                    if (beatInMeasure_ > 4) beatInMeasure_ = 1;
+                }
+            }
+            control_.beatInMeasure = beatInMeasure_;
 
             // Capture whether prediction refined this beat's timing (for streaming)
             // Must happen before reset so streaming reads the correct value
@@ -1705,6 +1737,10 @@ void AudioController::detectBeat() {
     // Decay confidence when no beat
     if (!beatDetected) {
         cbssConfidence_ *= beatConfidenceDecay;
+        // Decay downbeat activation between beats so generators see a brief
+        // pulse (~150ms) rather than a sustained high value for the entire beat period.
+        control_.downbeat *= dbDecay;
+        if (control_.downbeat < 0.01f) control_.downbeat = 0.0f;
     }
 
     // Derive phase (deterministic counter-based)
@@ -1797,6 +1833,13 @@ void AudioController::synthesizeRhythmStrength() {
     strength += densityNudge;
 
     control_.rhythmStrength = clampf(strength, 0.0f, 1.0f);
+
+    // Reset measure tracking when rhythm is lost (beatInMeasure 0 = unknown)
+    if (control_.rhythmStrength < activationThreshold * 0.5f) {
+        beatInMeasure_ = 0;
+        control_.beatInMeasure = 0;
+        control_.downbeat = 0.0f;
+    }
 }
 
 void AudioController::updateOnsetDensity(uint32_t nowMs) {
@@ -1811,14 +1854,16 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     }
     control_.onsetDensity = onsetDensity_;
 
-    // Pass through NN downbeat activation if available.
-    // Co-located here (not in a separate function) because it runs at the same
-    // 1-second cadence and both fields are simple passthrough assignments.
+    // Smooth NN downbeat activation with EMA for beat-synchronized sampling.
+    // The smoothed value is sampled in detectBeat() when a beat fires, so
+    // downbeat only triggers on actual beats (not between beats).
     if (nnActive_ && beatActivationNN_.hasDownbeatOutput()) {
-        control_.downbeat = beatActivationNN_.getLastDownbeat();
+        float rawDownbeat = beatActivationNN_.getLastDownbeat();
+        downbeatSmoothed_ = downbeatSmoothed_ * (1.0f - dbEmaAlpha) + rawDownbeat * dbEmaAlpha;
     } else {
-        control_.downbeat = 0.0f;
+        downbeatSmoothed_ *= 0.9f;  // Decay when no NN
     }
+    // Note: control_.downbeat is set in detectBeat(), not here.
 }
 
 // ============================================================================

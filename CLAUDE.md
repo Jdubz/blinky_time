@@ -109,7 +109,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0 NN=1
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (v65, multi-detector fusion removed)
+- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (v64, multi-detector fusion removed)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
 
@@ -133,6 +133,11 @@ The following were deleted as outdated:
 - `docs/AUDIO_IMPROVEMENT_ANALYSIS.md` - Completed analysis (Feb 2026)
 - `blinky-test-player/src/param-tuner/hypothesis-validator.ts` - Old hypothesis test (Feb 2026)
 - `blinky-test-player/TUNING_SCENARIOS.md` - Merged into PARAM_TUNER_GUIDE.md (Jan 2026)
+- `docs/PLAN-blinky-console-ui.md` - Console UI built, plan obsolete (Mar 2026)
+- `docs/ML_TRAINING_PLAN.md` - Superseded by IMPROVEMENT_PLAN.md sections (Mar 2026)
+- `docs/FREQUENCY_DETECTION.md` - Feature removed from firmware (Mar 2026)
+- `docs/PLATFORM_FIX.md` - Applied to old Seeeduino mbed platform, no longer used (Mar 2026)
+- `docs/COMMON_SCENARIO_TEST_PLAN.md` - Superseded by multi-device A/B test infrastructure (Mar 2026)
 
 ## System Architecture Overview
 
@@ -181,10 +186,10 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output)
 
 2. **Transient Detection**
-   - `EnsembleDetector.h` - BandFlux Solo detector (v65, 6 disabled detector types removed)
+   - `EnsembleDetector.h` - BandFlux Solo detector (v64, 6 disabled detector types removed)
    - BandFlux: log-compressed band-weighted spectral flux with additive threshold and onset delta filter
    - Noise gate + confidence threshold + tempo-adaptive cooldown
-   - DetectorType enum collapsed to BAND_FLUX only (v65)
+   - DetectorType enum collapsed to BAND_FLUX only (v64)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
@@ -416,7 +421,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-BandFlux Solo — single detector. DetectorType enum collapsed to BAND_FLUX only (v65).
+BandFlux Solo — single detector. DetectorType enum collapsed to BAND_FLUX only (v64).
 6 disabled detector types and 12 source files removed. Multi-detector fusion logic removed.
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 

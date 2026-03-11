@@ -2,7 +2,7 @@
 
 ## Overview
 
-AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output a simple 4-parameter `AudioControl` struct.
+AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output an `AudioControl` struct with 6 parameters.
 
 **Current Version:** AudioController with CBSS Beat Tracking + NN Beat ODF (March 2026)
 
@@ -16,7 +16,7 @@ AudioController provides unified audio analysis and rhythm tracking for LED effe
 
 ## Output: AudioControl Struct
 
-Generators receive a single struct with 4 parameters:
+Generators receive a single struct with 7 parameters:
 
 ```cpp
 struct AudioControl {
@@ -24,6 +24,9 @@ struct AudioControl {
     float pulse;          // Transient intensity (0-1)
     float phase;          // Beat phase position (0-1)
     float rhythmStrength; // Confidence in rhythm (0-1)
+    float onsetDensity;   // Smoothed onsets per second (0-10+)
+    float downbeat;       // Beat-synchronized downbeat activation (0-1)
+    uint8_t beatInMeasure; // Position in measure (1-4, 0=unknown)
 };
 ```
 
@@ -33,6 +36,9 @@ struct AudioControl {
 | `pulse` | Transient hits with beat context | Sparks, flashes, bursts |
 | `phase` | Position in beat cycle (0=on-beat) | Pulsing, breathing effects |
 | `rhythmStrength` | Periodicity confidence | Music mode vs organic mode |
+| `onsetDensity` | Smoothed transients/second (EMA) | Content classification (dance=2-6, ambient=0-1) |
+| `downbeat` | Beat-synchronized downbeat (v65, smoothed NN output) | Extra-dramatic effects on bar 1 |
+| `beatInMeasure` | Position in measure (1-4, 0=unknown, v65) | Syncopation patterns, accent beats |
 
 ---
 
@@ -203,7 +209,7 @@ AudioController delegates transient detection to the EnsembleDetector. Currently
 |----------|--------|-----------|------|
 | **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted spectral flux |
 
-6 disabled detectors (Drummer, SpectralFlux, HFC, BassBand, ComplexDomain, Novelty) were removed in v62.
+6 disabled detectors (Drummer, SpectralFlux, HFC, BassBand, ComplexDomain, Novelty) removed in v64. Source files deleted, DetectorType enum collapsed to BAND_FLUX only.
 
 Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
 
@@ -211,17 +217,17 @@ Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create ov
 
 Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from `SharedSpectralAnalysis::getRawMelBands()` (26 bands, 60-8000 Hz). Outputs beat activation (channel 0) and downbeat activation (channel 1). Toggle with `set nnbeat 1`.
 
-**Architecture:** 5-layer dilated causal conv (dilations [1,2,4,8,16], channels=32). 15,330 params, 33.3 KB INT8. Receptive field: 63 frames (~1008ms at 66 Hz).
+**Committed model (staging):** v9 DS-TCN 24ch (depthwise separable TCN, 128-frame context). ~26.5 KB INT8, targeting ~25-30ms inference on Cortex-M4F @ 64 MHz (not yet measured). Previous standard conv models (5L/7L) took 79ms+ (~12 Hz framerate).
 
-**Training:** 4-system consensus labels (Beat This! + essentia + librosa + madmom) across 6993 tracks with acoustic environment augmentation (volume, noise, reverb, RIR convolution) and mic profile augmentation. v4 model: Mean Beat F1=0.717, Downbeat F1=0.362.
+**Training:** 4-system consensus labels (Beat This! + essentia + librosa + madmom) across 6993 tracks with acoustic environment augmentation (volume, noise, reverb, RIR convolution) and mic profile augmentation. Best offline F1: v7-melfixed 0.787 (too slow to deploy). v9 DS-TCN training in progress (24ch and 32ch variants).
 
-**Hardware A/B test (March 2026):** NN wins 11/18 tracks vs BandFlux, mean error 14.8 vs 15.6. Best on techno-minimal-01 (0.6 vs 7.5 error). Both dominated by ~135 BPM gravity well in Bayesian tempo estimator.
+**Hardware A/B test (v4 model, March 2026):** NN wins 11/18 tracks vs BandFlux, mean error 14.8 vs 15.6. Default ON since v58.
 
 **Key settings:**
 
 | Parameter | Default | Description | SerialConsole Command |
 |-----------|---------|-------------|----------------------|
-| `nnBeatEnabled` | false | Use NN ODF instead of BandFlux (requires NN=1 build) | `set nnbeat 1` |
+| `nnBeatEnabled` | true | Use NN ODF instead of BandFlux (requires NN=1 build) | `set nnbeat 1` |
 
 ---
 
@@ -230,15 +236,15 @@ Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from 
 | Component | RAM | CPU @ 64 MHz | Notes |
 |-----------|-----|-------------|-------|
 | AdaptiveMic + FFT | ~4 KB | ~4% | Microphone processing |
-| EnsembleDetector | ~0.3 KB | ~1% | BandFlux Solo (v62, disabled detectors removed) |
+| EnsembleDetector | ~0.3 KB | ~1% | BandFlux Solo (v64, detector source files removed) |
 | OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ 60 Hz |
 | ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (500ms) | - | ~3% | Amortized |
-| NN beat activation (optional) | ~16 KB | ~2% | TFLite Micro tensor arena (NN=1 build, `nnbeat=1`) |
-| **Total** | **~18.5 KB base** | **~8-10%** | +16 KB with NN. ~34.5 KB max (NN=1). |
+| NN beat activation (optional) | ~14 KB arena + 13 KB context | ~5% | TFLite Micro (NN=1 build, `nnbeat=1`, 96 KB arena allocated) |
+| **Total** | **~22 KB base** | **~15-20%** | +96 KB static arena + 27 KB context buffer (NN=1 build) |
 
 ---
 
@@ -248,9 +254,9 @@ Causal 1D CNN that replaces BandFlux as ODF source. Consumes raw mel bands from 
 - `blinky-things/audio/AudioController.h` - Main controller class + CBSS structures
 - `blinky-things/audio/AudioController.cpp` - Implementation (autocorrelation, CBSS, beat detection)
 - `blinky-things/audio/AudioControl.h` - Output struct definition
-- `blinky-things/audio/EnsembleDetector.h` - BandFlux Solo detector (v62, disabled detectors removed)
+- `blinky-things/audio/EnsembleDetector.h` - BandFlux Solo detector (v64, source files for 6 disabled detectors removed)
 - `blinky-things/audio/BeatActivationNN.h` - TFLite Micro NN beat/downbeat activation (NN=1 build)
-- `blinky-things/audio/beat_model_data.h` - INT8 TFLite model weights (v4, 33.3 KB)
+- `blinky-things/audio/beat_model_data.h` - INT8 TFLite model weights (5L BN-fused, ~27 KB)
 
 **Input Processing:**
 - `blinky-things/inputs/AdaptiveMic.h` - Microphone processing

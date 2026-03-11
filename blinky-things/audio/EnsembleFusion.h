@@ -23,10 +23,10 @@ public:
     /**
      * Configure the BandFlux detector's weight, threshold, and enabled state
      */
-    void configureDetector(DetectorType type, const DetectorConfig& config);
-    const DetectorConfig& getConfig(DetectorType type) const;
-    void setWeight(DetectorType type, float weight);
-    void setEnabled(DetectorType type, bool enabled);
+    void configureDetector(const DetectorConfig& config);
+    const DetectorConfig& getConfig() const;
+    void setWeight(float weight);
+    void setEnabled(bool enabled);
 
     /**
      * Fuse BandFlux detection result with noise gate and cooldown

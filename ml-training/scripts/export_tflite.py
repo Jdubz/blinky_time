@@ -232,11 +232,11 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
     """Transfer DSTCNBeatCNN weights to TF/Keras equivalent.
 
     DSTCNBeatCNN PyTorch state_dict key layout:
-      input_conv.weight, input_conv.bias
+      input_conv.weight, input_conv.bias  (bias redundant with BN, TODO: remove)
       input_bn.weight, input_bn.bias, input_bn.running_mean, input_bn.running_var
       blocks.0.dw_conv.weight          (no bias)
       blocks.0.dw_bn.weight/bias/running_mean/running_var
-      blocks.0.pw_conv.weight, blocks.0.pw_conv.bias
+      blocks.0.pw_conv.weight, blocks.0.pw_conv.bias  (bias redundant with BN, TODO: remove)
       blocks.0.pw_bn.weight/bias/running_mean/running_var
       ...
       output_conv.weight, output_conv.bias
@@ -245,7 +245,8 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
 
     # --- Input conv ---
     pt_w = pt_state_dict["input_conv.weight"].numpy()  # (out, in, k)
-    pt_b = pt_state_dict["input_conv.bias"].numpy()
+    pt_b = pt_state_dict.get("input_conv.bias", None)
+    pt_b = pt_b.numpy() if pt_b is not None else np.zeros(pt_w.shape[0], dtype=np.float32)
 
     if fuse_bn:
         gamma = pt_state_dict["input_bn.weight"].numpy()
@@ -292,7 +293,8 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
 
         # Pointwise conv: PyTorch (out, in, 1) → TF (1, in, out)
         pw_w = pt_state_dict[f"blocks.{i}.pw_conv.weight"].numpy()
-        pw_b = pt_state_dict[f"blocks.{i}.pw_conv.bias"].numpy()
+        pw_b_tensor = pt_state_dict.get(f"blocks.{i}.pw_conv.bias", None)
+        pw_b = pw_b_tensor.numpy() if pw_b_tensor is not None else np.zeros(pw_w.shape[0], dtype=np.float32)
 
         if fuse_bn:
             gamma = pt_state_dict[f"blocks.{i}.pw_bn.weight"].numpy()
@@ -321,7 +323,8 @@ def representative_dataset_gen(data_path: Path, inference_frames: int = None,
                                 n_samples: int = 200):
     """Generator for calibration data (required for full INT8 quantization)."""
     X = np.load(data_path / "X_train.npy", mmap_mode='r')
-    indices = np.random.choice(len(X), size=min(n_samples, len(X)), replace=False)
+    rng = np.random.RandomState(42)  # Deterministic for reproducible quantization
+    indices = rng.choice(len(X), size=min(n_samples, len(X)), replace=False)
     for i in indices:
         sample = X[i:i+1].astype(np.float32)
         if inference_frames is not None and sample.shape[1] != inference_frames:
@@ -492,6 +495,8 @@ def estimate_tensor_arena(tflite_path: str) -> tuple[int, int]:
     # each, for ALL tensors including constants), per-op TfLiteNode structs
     # (~24 bytes each), op scratch buffers, and runtime bookkeeping.
     # Calibrated against v6 (5L ch32, 128-frame): planner=8192, actual=16384 → 2.0x.
+    # Note: DS-TCN v9 has a different op mix (DepthwiseConv2D + ADD residuals);
+    # re-calibrate once v9 runs on-device and update with measured arena usage.
     OVERHEAD_FACTOR = 2.0
     estimated = int(arena_planner * OVERHEAD_FACTOR)
 

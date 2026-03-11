@@ -10,8 +10,7 @@
  * - How strong the transient appears (strength)
  * - How confident the detector is in its assessment (confidence)
  *
- * The ensemble fusion system combines results from all detectors
- * using weighted voting with agreement-based confidence scaling.
+ * BandFlux Solo detector feeds into EnsembleFusion for cooldown and noise gate.
  */
 struct DetectionResult {
     float strength;      // 0.0-1.0: How strong the transient appears

@@ -73,11 +73,16 @@ def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
     if expected_lag < 2 or expected_lag >= len(activations) // 2:
         return result
 
-    # Full (unbiased-normalized) autocorrelation
+    # FFT-based autocorrelation (O(N log N) vs O(N^2) for np.correlate)
     x = activations - np.mean(activations)
-    acf_full = np.correlate(x, x, mode="full")
+    n = len(x)
+    fft_size = 1
+    while fft_size < 2 * n:
+        fft_size *= 2
+    X_fft = np.fft.rfft(x, n=fft_size)
+    acf_full = np.fft.irfft(X_fft * np.conj(X_fft), n=fft_size)
     # Take the positive-lag half (including lag 0)
-    acf = acf_full[len(x) - 1:]
+    acf = acf_full[:n]
 
     # Normalize by lag-0 (energy)
     if acf[0] <= 0:

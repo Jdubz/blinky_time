@@ -117,7 +117,7 @@ Batch A/B test scripts compare two firmware configurations across all 18 EDM tra
 
 **Available scripts:**
 - `ab_test_nnbeat.cjs` — BandFlux ODF vs NN Beat ODF (`nnbeat=0` vs `nnbeat=1`)
-- `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (historical, feature removed in v64)
+- `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (default OFF in v64; settings still exposed)
 
 ```bash
 # Run from blinky-test-player dir (needs serialport module)

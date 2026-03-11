@@ -5,14 +5,14 @@
 /**
  * AudioControl - Unified audio control signal for visual generators
  *
- * Synthesizes all audio analysis into 5 simple parameters.
+ * Synthesizes all audio analysis into 7 parameters.
  * Generators receive this struct and don't need to know about:
  * - Microphone processing
  * - FFT/spectral analysis
  * - BPM detection algorithms
  * - Beat tracking internals
  *
- * Memory: 24 bytes (6 floats)
+ * Memory: 28 bytes (6 floats + 1 uint8_t + padding)
  */
 struct AudioControl {
     // === ENERGY ===
@@ -49,11 +49,18 @@ struct AudioControl {
     float onsetDensity = 0.0f;
 
     // === DOWNBEAT ===
-    // Downbeat activation from NN (0.0 - 1.0), if model supports it.
-    // Higher values indicate a downbeat (first beat of a bar).
+    // Downbeat activation (0.0 - 1.0), synchronized with beat detection.
+    // Only fires on actual beats (not between beats). Smoothed from NN output.
     // Only meaningful when nnBeatActivation is enabled with a multi-output model.
     // Use for: Extra-dramatic effects every 4 beats (e.g., burst of sparks on bar 1)
     float downbeat = 0.0f;
+
+    // === BEAT IN MEASURE ===
+    // Position in the current measure (1-4 for 4/4 time, 0 = unknown/no rhythm).
+    // Reset to 1 when downbeat detected. Increments each beat. Wraps at 5→1.
+    // Only meaningful when rhythmStrength > 0.5 and downbeat model is available.
+    // Use for: Syncopation patterns, accent beats 1 and 3, etc.
+    uint8_t beatInMeasure = 0;
 
     // === CONVENIENCE METHODS ===
 
