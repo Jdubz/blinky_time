@@ -1,7 +1,7 @@
 #pragma once
 
 #include "AudioControl.h"
-#include "BeatActivationNN.h"
+#include "FrameBeatNN.h"
 #include "EnsembleDetector.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
@@ -328,12 +328,12 @@ public:
     bool unifiedOdf = true;              // Use BandFlux pre-threshold as CBSS ODF (BTrack-style)
 
     // === NN BEAT ACTIVATION ===
-    // Replaces BandFlux ODF with a learned causal CNN beat activation function.
-    // Requires ENABLE_NN_BEAT_ACTIVATION compile flag and valid model in beat_model_data.h.
+    // Replaces BandFlux ODF with a learned frame-level FC beat activation function.
+    // Requires ENABLE_NN_BEAT_ACTIVATION compile flag and valid model in frame_beat_model_data.h.
     // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
     // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
     bool nnBeatActivation = true;        // Use NN beat activation as ODF (A/B tested, 11/18 wins)
-    bool nnProfile = false;              // Enable [NNPROF] per-operator timing output to Serial
+    bool nnProfile = false;              // Enable profiling output to Serial
 
     // === AUTOCORRELATION TUNING ===
     uint8_t odfSmoothWidth = 5;          // ODF smooth window size (3-11, odd). Affects CBSS delay and noise rejection
@@ -488,7 +488,7 @@ public:
     EnsembleDetector& getEnsemble() { return ensemble_; }
     const EnsembleDetector& getEnsemble() const { return ensemble_; }
 
-    const BeatActivationNN& getBeatActivationNN() const { return beatActivationNN_; }
+    const FrameBeatNN& getFrameBeatNN() const { return frameBeatNN_; }
 
     // Get last ensemble output for debugging
     const EnsembleOutput& getLastEnsembleOutput() const { return ensemble_.getLastOutput(); }
@@ -541,8 +541,8 @@ private:
     EnsembleOutput lastEnsembleOutput_;
 
     // === NN BEAT ACTIVATION ===
-    BeatActivationNN beatActivationNN_;
-    bool nnActive_ = false;  // Cached per-update: nnBeatActivation && beatActivationNN_.isReady()
+    FrameBeatNN frameBeatNN_;
+    bool nnActive_ = false;  // Cached per-update: nnBeatActivation && frameBeatNN_.isReady()
 
     // === RHYTHM TRACKING STATE ===
 

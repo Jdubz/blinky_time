@@ -118,9 +118,9 @@ bool AudioController::begin(uint32_t sampleRate) {
     beatExpectationSize_ = 0;
 
     // Initialize NN beat activation (fails gracefully if model not compiled in)
-    beatActivationNN_.begin();
+    frameBeatNN_.begin();
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
-        beatActivationNN_.printDiagnostics();
+        frameBeatNN_.printDiagnostics();
     }
 
     // Reset output
@@ -165,7 +165,7 @@ const AudioControl& AudioController::update(float dt) {
         onsetCountInWindow_++;
     }
 
-    // 3c. Phase correction: when a transient occurs near a predicted beat
+    // 3d. Phase correction: when a transient occurs near a predicted beat
     //     boundary, nudge lastBeatSample_ to align phase with the transient.
     //     This corrects cumulative drift from small BPM errors.
     if (lastEnsembleOutput_.transientStrength > 0.0f) {
@@ -192,20 +192,14 @@ const AudioControl& AudioController::update(float dt) {
     //    transient detector "hear" the same signal.
     float onsetStrength = 0.0f;
 
-    if (nnBeatActivation && beatActivationNN_.isReady()) {
-        // NN beat activation: feed raw mel bands (no compressor/whitening) to
-        // causal CNN. Raw mel bands match the training pipeline exactly.
+    if (nnBeatActivation && frameBeatNN_.isReady()) {
+        // NN beat activation: feed raw mel bands to frame-level FC model.
+        // Raw mel bands match the training pipeline exactly (no compressor/whitening).
         // BandFlux still runs for transient detection (sparks/effects).
-        //
-        // Inference takes ~79ms on Cortex-M4F @ 64 MHz. This blocks the main loop
-        // but is acceptable because: (1) PDM mic runs via DMA/ISR — no samples are
-        // lost, (2) the mic callback rate (~62.5 Hz) naturally gates inference to
-        // ~12 Hz, (3) LED rendering at ~60 FPS tolerates occasional longer frames
-        // (fire/water effects are temporally smooth), and (4) the WDT timeout (15s)
-        // is far above worst-case frame time.
+        // FC inference is ~60-200µs on Cortex-M4F @ 64 MHz (negligible).
         const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
         if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
-            onsetStrength = beatActivationNN_.infer(spectral.getRawMelBands());
+            onsetStrength = frameBeatNN_.infer(spectral.getRawMelBands());
         } else {
             onsetStrength = mic_.getLevel();
         }
@@ -229,14 +223,13 @@ const AudioControl& AudioController::update(float dt) {
 
     // Cache NN-active state once per update — used by ODF smoothing, contrast,
     // ACF mean subtraction, and CBSS alpha adaptation.
-    nnActive_ = nnBeatActivation && beatActivationNN_.isReady();
-    beatActivationNN_.setProfileEnabled(nnProfile);
+    nnActive_ = nnBeatActivation && frameBeatNN_.isReady();
+    frameBeatNN_.setProfileEnabled(nnProfile);
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
-    // Bypass when NN is active — the dilated CNN's receptive field (15 frames
-    // with dilations [1, 2, 4] and kernel size 3) already provides temporal
-    // smoothing. Additional smoothing blurs activation peaks that the CBSS needs
-    // sharp. (madmom/BeatNet don't smooth NN output.)
+    // Bypass when NN is active — the FC model's sliding window already provides
+    // temporal context. Additional smoothing blurs activation peaks that the CBSS
+    // needs sharp. (madmom/BeatNet don't smooth NN output.)
     if (nnActive_) {
         lastSmoothedOnset_ = onsetStrength;
     } else {
@@ -1686,10 +1679,12 @@ void AudioController::detectBeat() {
             cbssConfidence_ = clampf(cbssConfidence_ + beatConfBoost, 0.0f, 1.0f);
             updateBeatStability(nowMs);
 
-            // Beat-synchronized downbeat: sample the smoothed NN downbeat
-            // activation at beat time. This prevents false triggers between beats.
-            if (downbeatSmoothed_ > dbThreshold) {
-                control_.downbeat = downbeatSmoothed_;
+            // Downbeat value from FrameBeatNN's EMA-smoothed output.
+            // downbeatSmoothed_ is updated every frame in updateOnsetDensity().
+            float downbeatValue = downbeatSmoothed_;
+
+            if (downbeatValue > dbThreshold) {
+                control_.downbeat = downbeatValue;
                 beatInMeasure_ = 1;  // Reset measure counter on downbeat
             } else {
                 control_.downbeat = 0.0f;
@@ -1855,8 +1850,8 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     // Smooth NN downbeat activation with EMA for beat-synchronized sampling.
     // The smoothed value is sampled in detectBeat() when a beat fires, so
     // downbeat only triggers on actual beats (not between beats).
-    if (nnActive_ && beatActivationNN_.hasDownbeatOutput()) {
-        float rawDownbeat = beatActivationNN_.getLastDownbeat();
+    if (nnActive_ && frameBeatNN_.hasDownbeatOutput()) {
+        float rawDownbeat = frameBeatNN_.getLastDownbeat();
         downbeatSmoothed_ = downbeatSmoothed_ * (1.0f - dbEmaAlpha) + rawDownbeat * dbEmaAlpha;
     } else {
         downbeatSmoothed_ *= 0.9f;  // Decay when no NN

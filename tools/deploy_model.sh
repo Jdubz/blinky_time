@@ -4,7 +4,7 @@
 # This script:
 # 1. Exports the trained model to TFLite INT8 C header
 # 2. Validates the model fits within size budget
-# 3. Commits the updated beat_model_data.h to git
+# 3. Commits the updated frame_beat_model_data.h to git
 # 4. Pushes to remote (blinkyhost pulls, compiles, flashes)
 #
 # Usage:
@@ -19,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ML_DIR="$REPO_ROOT/ml-training"
-HEADER_PATH="$REPO_ROOT/blinky-things/audio/beat_model_data.h"
+HEADER_PATH="$REPO_ROOT/blinky-things/audio/frame_beat_model_data.h"
 DEFAULT_MODEL="$ML_DIR/outputs/best_model.keras"
 DEFAULT_CONFIG="$ML_DIR/configs/default.yaml"
 
@@ -60,10 +60,16 @@ if [ "$SKIP_EXPORT" = false ]; then
         source venv/bin/activate
     fi
 
-    TF_USE_LEGACY_KERAS=1 CUDA_VISIBLE_DEVICES="" python scripts/export_tflite.py \
-        --config "$DEFAULT_CONFIG" \
-        --model "$MODEL_PATH" \
-        --inference-frames 32
+    # TODO: Replace with frame-level FC export script once training pipeline is built.
+    # The old export_tflite.py was for mel-CNN models (closed).
+    # export_beat_sync.py was for beat-sync models (closed, archived).
+    # Frame-level FC export script will be: scripts/export_frame_beat.py
+    # NOTE: Any CI job calling deploy_model.sh will fail until the export script exists.
+    # This is intentional — use --skip-export to bypass for manual header placement.
+    echo "ERROR: Frame-level FC export script not yet implemented."
+    echo "Manually export the model and place the header at: $HEADER_PATH"
+    echo "Or use: $0 --skip-export (to commit+push an existing header)"
+    exit 1
 
     cd "$REPO_ROOT"
 fi
@@ -76,8 +82,8 @@ fi
 
 # Check it's not the placeholder
 if grep -q "0x00, 0x00, 0x00, 0x00," "$HEADER_PATH" && \
-   grep -q "beat_model_data_len = 4;" "$HEADER_PATH"; then
-    echo "ERROR: beat_model_data.h is still the placeholder (4 bytes)."
+   grep -q "frame_beat_model_data_len = 4;" "$HEADER_PATH"; then
+    echo "ERROR: frame_beat_model_data.h is still the placeholder (4 bytes)."
     echo "Export a real model first."
     exit 1
 fi
@@ -93,9 +99,9 @@ echo "=== Committing model to git ==="
 git add "$HEADER_PATH"
 
 if git diff --cached --quiet "$HEADER_PATH"; then
-    echo "No changes to beat_model_data.h (already committed)."
+    echo "No changes to frame_beat_model_data.h (already committed)."
 else
-    git commit -m "Update beat_model_data.h with trained NN model
+    git commit -m "Update frame_beat_model_data.h with trained NN model
 
 $MODEL_SIZE
 Source: $MODEL_PATH"

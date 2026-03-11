@@ -41,7 +41,7 @@ PDM Microphone (16kHz, mono)
    │   └── BandWeightedFlux (1.0) ── log-compressed band-weighted flux
    │        → ODF (default, or when nnbeat=0)
    │
-   └── BeatActivationNN (TFLite Micro, NN=1 build, nnbeat=1 default)
+   └── FrameBeatNN (TFLite Micro FC, NN=1 build, nnbeat=1 default)
         → ODF (when nnbeat=1)
         |
    Fusion: agree_1=1.0 (solo pass-through), cooldown=250ms, minconf=0.40
