@@ -101,7 +101,10 @@ public:
     //   Mel-CNN (79-98ms) and beat-sync hybrid both closed. Frame-level FC approach.
     // Version 66: cbssContrast default 1.0→2.0 (A/B tested 10-6 win). Bump forces
     //   devices with saved v65 settings to pick up the new default on first boot.
-    static const uint8_t SETTINGS_VERSION = 66;
+    // Version 67: Removed BandFlux/EnsembleDetector pipeline (StoredBandFluxParams removed,
+    //   unifiedOdf/onsetTrainOdf/odfDiffMode removed from StoredMusicParams). FrameBeatNN is
+    //   sole ODF source. Pulse detection inlined in AudioController.
+    static const uint8_t SETTINGS_VERSION = 67;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -252,11 +255,11 @@ public:
         // (ioiEnabled/ftEnabled removed v52 — dead code since v28)
         bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
         bool beatBoundaryTempo;         // Defer tempo changes to beat boundaries (v28)
-        bool unifiedOdf;                // Use BandFlux pre-threshold as CBSS ODF (v28)
+        // (unifiedOdf removed v67 — BandFlux pipeline removed)
         bool adaptiveOdfThresh;         // Local-mean ODF threshold before autocorrelation (v31)
         uint8_t odfThreshWindow;        // Adaptive ODF threshold half-window (samples each side, 5-30)
-        bool onsetTrainOdf;             // Binary onset-train ODF for ACF (v34)
-        bool odfDiffMode;               // HWR first-difference ODF for ACF (v35)
+        // (onsetTrainOdf removed v67 — BandFlux pipeline removed)
+        // (odfDiffMode removed v67 — BandFlux pipeline removed)
         // (odfSource removed v64 — experimental alternatives 1-5 never used)
         bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
         float densityPenaltyExp;        // Density penalty Gaussian exponent (v35)
@@ -347,28 +350,7 @@ public:
         // (fwdPhaseOnly removed v64 — phase tracker removed, no benefit)
     };
 
-    struct StoredBandFluxParams {
-        // Core ODF parameters
-        float gamma;                // Log compression strength (1-100)
-        float bassWeight;           // Bass band weight (0-5)
-        float midWeight;            // Mid band weight (0-5)
-        float highWeight;           // High band weight (0-2)
-        float minOnsetDelta;        // Min flux jump for onset (0-2, pad rejection)
-        float perBandThreshMult;    // Per-band threshold multiplier (0.5-5)
-        // Experimental gates (all 0.0 = disabled)
-        float bandDominanceGate;    // Band-dominance ratio gate (0-1)
-        float decayRatioThreshold;  // Post-onset decay confirmation (0-1)
-        float crestGate;            // Spectral crest factor gate (0-20)
-        // Integer params
-        uint8_t maxBin;             // Max FFT bin to analyze (16-128)
-        uint8_t confirmFrames;      // Decay check frames (0-6)
-        uint8_t diffFrames;         // Temporal reference depth (1-3)
-        // Feature toggles
-        bool perBandThreshEnabled;  // Per-band independent detection
-        bool hiResBassEnabled;      // Hi-res bass via Goertzel
-        bool peakPickEnabled;       // Local-max peak picking (Phase 2.6)
-        bool usePreWhitenMags;      // Use raw (pre-compressor, pre-whitening) magnitudes (v47)
-    };
+    // (StoredBandFluxParams removed v67 — BandFlux pipeline removed, FrameBeatNN is sole ODF source)
 
     /**
      * StoredDeviceConfig - Serializable device configuration for flash storage
@@ -445,7 +427,7 @@ public:
         StoredLightningParams lightning;
         StoredMicParams mic;
         StoredMusicParams music;
-        StoredBandFluxParams bandflux;
+        // (StoredBandFluxParams bandflux removed v67)
         uint8_t brightness;
     };
 
@@ -464,10 +446,9 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
-    static_assert(sizeof(StoredMusicParams) == 296,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (296 bytes = 62 floats + 6 uint8 + 21 bools + padding)");
-    static_assert(sizeof(StoredBandFluxParams) == 44,
-        "StoredBandFluxParams size changed! Increment SETTINGS_VERSION and update assertion. (44 bytes = 9 floats + 3 uint8 + 4 bools + padding)");
+    static_assert(sizeof(StoredMusicParams) == 292,
+        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (292 bytes = 62 floats + 6 uint8 + 18 bools + padding)");
+    // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     // ConfigData: allocated in last 4KB flash page (4096 bytes available).
