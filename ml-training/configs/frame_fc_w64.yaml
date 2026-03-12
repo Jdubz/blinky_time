@@ -1,0 +1,17 @@
+# Frame-level FC — 64-frame window (1024ms) for maximum temporal context
+#
+# Sees ~2 full beats at 120 BPM. Maximum context but largest model —
+# may hit the 60 KB INT8 budget with current hidden dims.
+# ~109K params, ~109 KB INT8 — likely needs smaller hidden_dims.
+
+model:
+  type: "frame_fc"
+  window_frames: 64         # 64 frames = 1024ms at 62.5 Hz
+  hidden_dims: [48, 24]     # Smaller hidden dims to fit budget
+  dropout: 0.1
+  downbeat: true
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 90
