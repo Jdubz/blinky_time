@@ -158,7 +158,7 @@ void AdaptiveMic::update(float dt) {
     float mapped = (normalized - valleyLevel) / range;
     level = clamp01(mapped);
 
-    // NOTE: Transient detection is now handled by EnsembleDetector
+    // NOTE: Onset detection handled by FrameBeatNN or ODF-derived pulse (v67)
     // AdaptiveMic only provides normalized audio levels
   }
 
@@ -348,11 +348,11 @@ void AdaptiveMic::onPDMdata() {
   s_instance->lastIsrMs = s_instance->time_.millis();
 }
 
-// NOTE: All transient detection has been moved to EnsembleDetector
-// AdaptiveMic now only provides audio input with level normalization
+// NOTE: Onset detection handled by FrameBeatNN or ODF-derived pulse (v67)
+// AdaptiveMic only provides audio input with level normalization
 
 /**
- * Get samples for external FFT consumers (EnsembleDetector)
+ * Get samples for external FFT consumers (AudioController → SharedSpectralAnalysis)
  * Provides raw PCM samples from ISR ring buffer for spectral analysis
  */
 int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {

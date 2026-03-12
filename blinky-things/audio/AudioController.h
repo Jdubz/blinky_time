@@ -177,13 +177,15 @@ private:
  *        |
  *   AdaptiveMic (level normalization, gain control)
  *        |
- *   EnsembleDetector (detectors + fusion)
+ *   SharedSpectralAnalysis (FFT → compressor → whitening → mel bands)
+ *        |
+ *   FrameBeatNN (frame-level FC, primary ODF) / mic level fallback
  *        |
  *   OSS Buffer (6s) --> Autocorrelation --> BPM(T)
  *        |                                    |
  *        +-----> CBSS Buffer ----> Beat Counter --> Phase = (now-lastBeat)/T
  *        |                                            |
- *   Ensemble Transient --> Pulse (visual only)        |
+ *   ODF-derived Pulse --> Pulse (visual only)         |
  *        |                                            |
  *   AudioControl { energy, pulse, phase, rhythmStrength }
  *        |

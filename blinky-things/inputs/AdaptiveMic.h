@@ -8,8 +8,8 @@
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
 // - Auto-ranging: Tracks peak/valley, maps to 0-1 output (no clipping)
 // - Hardware gain adapts to environment over minutes
-// - Provides raw PCM samples for EnsembleDetector via getSamplesForExternal()
-// NOTE: Transient detection has been moved to EnsembleDetector
+// - Provides raw PCM samples for AudioController via getSamplesForExternal()
+// NOTE: Transient/onset detection handled by FrameBeatNN or ODF-derived pulse (v67)
 
 namespace MicConstants {
     constexpr float MIN_DT_SECONDS = 0.0001f;         // Minimum dt clamp (0.1ms)
@@ -36,7 +36,7 @@ namespace MicConstants {
  * - Fast attack, slow release for natural loudness following
  * - Output = (signal - valleyLevel) / (peak - valleyLevel) → always 0-1
  *
- * NOTE: Transient detection moved to EnsembleDetector (audio/EnsembleDetector.h)
+ * NOTE: Onset detection handled by FrameBeatNN (audio/FrameBeatNN.h) or ODF-derived pulse (v67)
  */
 class AdaptiveMic {
 public:
@@ -108,7 +108,7 @@ public:
 
   /**
    * Get samples from ISR ring buffer for external FFT consumers
-   * Used by EnsembleDetector to feed SharedSpectralAnalysis
+   * Used by AudioController to feed SharedSpectralAnalysis
    * @param buffer Destination buffer for samples (must be at least maxCount)
    * @param maxCount Maximum number of samples to retrieve
    * @return Number of samples actually retrieved
@@ -144,7 +144,7 @@ private:
   static constexpr int FFT_RING_SIZE = 512;  // Power of 2 for efficient modulo
   volatile static int16_t s_fftRing[FFT_RING_SIZE];
   volatile static uint32_t s_fftWriteIdx;    // ISR increments this
-  static uint32_t s_extFftReadIdx;           // External FFT consumers (EnsembleDetector)
+  static uint32_t s_extFftReadIdx;           // External FFT consumers (AudioController)
 
   // Window/Range tracking
   float peakLevel = 0.0f;        // Tracked peak for range window
