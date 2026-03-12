@@ -30,8 +30,8 @@ bool AudioController::begin(uint32_t sampleRate) {
         return false;
     }
 
-    // Initialize ensemble detector
-    ensemble_.begin();
+    // Initialize spectral analysis
+    spectral_.begin();
 
     // Reset OSS buffer and timestamps
     for (int i = 0; i < OSS_BUFFER_SIZE; i++) {
@@ -89,7 +89,6 @@ bool AudioController::begin(uint32_t sampleRate) {
     beatCount_ = 0;
     cbssConfidence_ = 0.0f;
     lastSmoothedOnset_ = 0.0f;
-    prevOdfForDiff_ = 0.0f;
     lastBeatWasPredicted_ = false;
     lastFiredBeatPredicted_ = false;
     lastTransientSample_ = -1;
@@ -125,7 +124,8 @@ bool AudioController::begin(uint32_t sampleRate) {
 
     // Reset output
     control_ = AudioControl();
-    lastEnsembleOutput_ = EnsembleOutput();
+    lastPulseStrength_ = 0.0f;
+    lastPulseMs_ = 0;
 
     return true;
 }
@@ -142,33 +142,65 @@ const AudioControl& AudioController::update(float dt) {
     // 1. Update microphone (level normalization, gain control)
     mic_.update(dt);
 
-    // 2. Feed samples to ensemble detector from mic's ring buffer
-    //    This provides samples for all spectral detectors (FFT-based)
+    // 2. Feed samples to spectral analysis from mic's ring buffer
     static int16_t sampleBuffer[256];  // Matches FFT_SIZE
     int samplesRead = mic_.getSamplesForExternal(sampleBuffer, 256);
     if (samplesRead > 0) {
-        ensemble_.addSamples(sampleBuffer, samplesRead);
+        spectral_.addSamples(sampleBuffer, samplesRead);
     }
 
-    // 3. Run ensemble detector with current audio frame data
-    //    The ensemble uses level for time-domain detectors (drummer)
-    //    and spectral data when available
-    lastEnsembleOutput_ = ensemble_.update(
-        mic_.getLevel(),
-        mic_.getRawLevel(),
-        nowMs,
-        dt
-    );
+    // 3. Process spectral data
+    if (spectral_.hasSamples()) {
+        spectral_.process();
+    }
 
-    // 3b. Count onsets for density tracking
-    if (lastEnsembleOutput_.transientStrength > 0.0f) {
+    // 4. Get onset strength for rhythm analysis
+    //    NN builds: FrameBeatNN inference on raw mel bands (primary ODF).
+    //    Non-NN builds: mic level as simple fallback.
+    float onsetStrength = 0.0f;
+
+    if (nnBeatActivation && frameBeatNN_.isReady()) {
+        // NN beat activation: feed raw mel bands to frame-level FC model.
+        // Raw mel bands match the training pipeline exactly (no compressor/whitening).
+        // FC inference is ~60-200us on Cortex-M4F @ 64 MHz (negligible).
+        if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
+            onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
+        } else {
+            onsetStrength = mic_.getLevel();
+        }
+    } else {
+        // Non-NN fallback: use mic level
+        onsetStrength = mic_.getLevel();
+    }
+
+    // 4b. Simple pulse detection from ODF signal
+    //     Replaces EnsembleFusion cooldown + noise gate + confidence threshold.
+    //     Pulse drives visual spark effects only; ODF drives beat tracking separately.
+    {
+        float pulseStrength = 0.0f;
+        if (mic_.getLevel() > PULSE_MIN_LEVEL) {
+            float odfVal = onsetStrength;
+            // Detect pulse when ODF exceeds 2x running mean and cooldown elapsed
+            float odfMean = (lastSmoothedOnset_ > 0.001f) ? lastSmoothedOnset_ : 0.1f;
+            uint16_t cooldown = effectivePulseCooldownMs();
+            if (odfVal > odfMean * 2.0f &&
+                (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldown)) {
+                pulseStrength = clampf(odfVal, 0.0f, 1.0f);
+                lastPulseMs_ = nowMs;
+            }
+        }
+        lastPulseStrength_ = pulseStrength;
+    }
+
+    // 4c. Count onsets for density tracking
+    if (lastPulseStrength_ > 0.0f) {
         onsetCountInWindow_++;
     }
 
-    // 3d. Phase correction: when a transient occurs near a predicted beat
-    //     boundary, nudge lastBeatSample_ to align phase with the transient.
+    // 4d. Phase correction: when a pulse occurs near a predicted beat
+    //     boundary, nudge lastBeatSample_ to align phase with the pulse.
     //     This corrects cumulative drift from small BPM errors.
-    if (lastEnsembleOutput_.transientStrength > 0.0f) {
+    if (lastPulseStrength_ > 0.0f) {
         lastTransientSample_ = sampleCounter_;
 
         if (phaseCorrectionStrength > 0.0f && beatCount_ > 2 && beatPeriodSamples_ >= 10) {
@@ -177,7 +209,7 @@ const AudioControl& AudioController::update(float dt) {
             int phaseError = elapsed % T;
             if (phaseError > T / 2) phaseError -= T;  // Center: -T/2 to +T/2
 
-            int window = T / 4;  // Correction window: ±25% of beat period
+            int window = T / 4;  // Correction window: +/-25% of beat period
             if (phaseError != 0 && phaseError > -window && phaseError < window) {
                 int correction = static_cast<int>(phaseError * phaseCorrectionStrength);
                 if (correction != 0) {
@@ -185,40 +217,6 @@ const AudioControl& AudioController::update(float dt) {
                 }
             }
         }
-    }
-
-    // 4. Get onset strength for rhythm analysis
-    //    Uses BandFlux pre-threshold value (unified ODF) so the beat tracker and
-    //    transient detector "hear" the same signal.
-    float onsetStrength = 0.0f;
-
-    if (nnBeatActivation && frameBeatNN_.isReady()) {
-        // NN beat activation: feed raw mel bands to frame-level FC model.
-        // Raw mel bands match the training pipeline exactly (no compressor/whitening).
-        // BandFlux still runs for transient detection (sparks/effects).
-        // FC inference is ~60-200µs on Cortex-M4F @ 64 MHz (negligible).
-        const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
-        if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
-            onsetStrength = frameBeatNN_.infer(spectral.getRawMelBands());
-        } else {
-            onsetStrength = mic_.getLevel();
-        }
-    } else if (unifiedOdf) {
-        // Phase 2.4: Use BandFlux continuous pre-threshold activation
-        // This is the combined weighted flux BEFORE thresholding/cooldown/peak-picking
-        // Log-compressed, band-weighted, vibrato-suppressed — same signal driving transients
-        // Guard: if BandFlux didn't run this frame (no spectral data), combinedFlux_ is stale.
-        // Fall back to mic level, matching the legacy path behavior.
-        const SharedSpectralAnalysis& spectral = ensemble_.getSpectral();
-        if (spectral.isFrameReady() || spectral.hasPreviousFrame()) {
-            onsetStrength = ensemble_.getBandFlux().getPreThresholdFlux();
-        } else {
-            onsetStrength = mic_.getLevel();
-        }
-    } else {
-        // Legacy fallback: use mic level when no spectral data available
-        // (computeSpectralFluxBands removed v64 — unreachable with unifiedOdf=true default)
-        onsetStrength = mic_.getLevel();
     }
 
     // Cache NN-active state once per update — used by ODF smoothing, contrast,
@@ -245,24 +243,9 @@ const AudioControl& AudioController::update(float dt) {
 
     // 5. Add sample to onset strength buffer with timestamp
     // Only add significant audio to avoid filling buffer with noise patterns
-    // When onsetTrainOdf is on, feed binary onset events (1.0 on transient, 0.0 otherwise)
-    // to the OSS buffer instead of continuous ODF. This makes the ACF track
-    // inter-onset periodicity (immune to enclosure resonance artifacts in continuous flux).
-    float ossValue;
-    // (odfSource 1-5 removed v64 — experimental ODF sources, never used in default config)
-    if (onsetTrainOdf) {
-        ossValue = (lastEnsembleOutput_.transientStrength > 0.0f) ? 1.0f : 0.0f;
-    } else if (odfDiffMode) {
-        // HWR first-difference: max(0, odf[n] - odf[n-1])
-        // Emphasizes onset attacks (~30x larger than continuous modulation),
-        // suppressing enclosure-induced periodic fluctuations.
-        float diff = onsetStrength - prevOdfForDiff_;
-        prevOdfForDiff_ = onsetStrength;
-        ossValue = (diff > 0.0f) ? diff : 0.0f;
-    } else {
-        ossValue = hasSignificantAudio ? onsetStrength : 0.0f;
-    }
-    if (hasSignificantAudio || onsetTrainOdf) {
+    // (onsetTrainOdf/odfDiffMode removed v67 — BandFlux pipeline removed)
+    float ossValue = hasSignificantAudio ? onsetStrength : 0.0f;
+    if (hasSignificantAudio) {
         lastSignificantAudioMs_ = nowMs;
     }
     addOssSample(ossValue, nowMs);
@@ -306,18 +289,7 @@ const AudioControl& AudioController::update(float dt) {
 }
 
 // ===== CONFIGURATION =====
-
-void AudioController::setDetectorEnabled(DetectorType type, bool enabled) {
-    ensemble_.setDetectorEnabled(type, enabled);
-}
-
-void AudioController::setDetectorWeight(DetectorType type, float weight) {
-    ensemble_.setDetectorWeight(type, weight);
-}
-
-void AudioController::setDetectorThreshold(DetectorType type, float threshold) {
-    ensemble_.setDetectorThreshold(type, threshold);
-}
+// (setDetectorEnabled/Weight/Threshold removed v67 — BandFlux pipeline removed)
 
 void AudioController::lockHwGain(int gain) {
     mic_.lockHwGain(gain);
@@ -1240,8 +1212,7 @@ void AudioController::runBayesianTempoFusion(float* correlationAtLag, int correl
             beatPeriodSamples_ = newPeriodSamples;
         }
 
-        // Update ensemble detector with tempo hint for adaptive cooldown
-        ensemble_.getFusion().setTempoHint(bpm_);
+        // (ensemble_.getFusion().setTempoHint removed v67 — BandFlux pipeline removed)
 
         // Update tempo velocity if BPM changed significantly
         if (fabsf(bpm_ - prevBpm_) / (prevBpm_ > 1.0f ? prevBpm_ : 1.0f) > tempoChangeThreshold) {
@@ -1749,6 +1720,19 @@ void AudioController::detectBeat() {
     predictNextBeat(nowMs);
 }
 
+// ===== PULSE DETECTION =====
+
+uint16_t AudioController::effectivePulseCooldownMs() const {
+    // Tempo-adaptive cooldown (inlined from EnsembleFusion::getEffectiveCooldownMs)
+    // beatPeriod/6, clamped to [MIN_COOLDOWN_MS, MAX_COOLDOWN_MS], min(adaptive, base)
+    if (bpm_ < 30.0f) return PULSE_MAX_COOLDOWN_MS;
+    float beatPeriodMs = 60000.0f / bpm_;
+    uint16_t adaptiveCooldown = static_cast<uint16_t>(beatPeriodMs / 6.0f);
+    if (adaptiveCooldown < PULSE_MIN_COOLDOWN_MS) adaptiveCooldown = PULSE_MIN_COOLDOWN_MS;
+    if (adaptiveCooldown > PULSE_MAX_COOLDOWN_MS) adaptiveCooldown = PULSE_MAX_COOLDOWN_MS;
+    return adaptiveCooldown;
+}
+
 // ===== OUTPUT SYNTHESIS =====
 
 void AudioController::synthesizeEnergy() {
@@ -1770,8 +1754,8 @@ void AudioController::synthesizeEnergy() {
 }
 
 void AudioController::synthesizePulse() {
-    // Use ensemble transient strength instead of single-detector output
-    float pulse = lastEnsembleOutput_.transientStrength;
+    // Use ODF-derived pulse strength (replaces ensemble transient detection, v67)
+    float pulse = lastPulseStrength_;
 
     // Apply beat-aligned modulation when rhythm is detected (visual effect only)
     if (pulse > 0.0f && periodicityStrength_ > activationThreshold) {
