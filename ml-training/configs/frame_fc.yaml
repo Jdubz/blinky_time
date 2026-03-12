@@ -1,0 +1,20 @@
+# Frame-level FC — sliding window of mel frames → FC → beat/downbeat
+#
+# Shared settings are in base.yaml and merged automatically by load_config().
+# This file only contains model-specific overrides.
+#
+# Architecture: 32 frames × 26 mels = 832 → FC 64 (ReLU) → FC 32 (ReLU) → 2 (sigmoid)
+# ~55K params, ~55 KB INT8, ~60-200µs inference on Cortex-M4F @ 64 MHz
+# Window: 32 frames = 512 ms at 62.5 Hz
+
+model:
+  type: "frame_fc"
+  window_frames: 32         # Sliding window size (32 frames = 512ms at 62.5 Hz)
+  hidden_dims: [64, 32]     # FC hidden layer sizes
+  dropout: 0.1
+  downbeat: true
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 60     # ~55 KB INT8 for 832→64→32→2

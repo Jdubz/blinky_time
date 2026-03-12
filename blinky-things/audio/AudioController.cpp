@@ -283,12 +283,10 @@ const AudioControl& AudioController::update(float dt) {
     // 7. CBSS input: apply contrast to onset strength (shared across all beat tracking modes)
     //    NN ODF is smooth [0,1] with non-zero baseline (~0.2-0.4). Power-law contrast
     //    (squaring) sharpens beat peaks vs baseline: 0.8→0.64, 0.3→0.09 (ratio 7:1 vs 2.7:1).
-    //    BTrack applies squaring (contrast=2.0) by default; our BandFlux is already spiky so
-    //    doesn't need it (default 1.0). For NN, apply 2.0 unless user explicitly set contrast.
+    //    A/B tested: cbssContrast=2.0 wins 10-6 vs 1.0 (BandFlux ODF, 3 devices × 18 tracks).
     float cbssInput = onsetStrength;
-    float effectiveContrast = (nnActive_ && cbssContrast == 1.0f) ? 2.0f : cbssContrast;
-    if (effectiveContrast != 1.0f && cbssInput > 0.0f) {
-        cbssInput = powf(cbssInput, effectiveContrast);
+    if (cbssContrast != 1.0f && cbssInput > 0.0f) {
+        cbssInput = powf(cbssInput, cbssContrast);
     }
 
     // 8. Update beat tracking

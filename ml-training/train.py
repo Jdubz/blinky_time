@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from models.beat_cnn import build_beat_cnn
 from scripts.audio import load_config
@@ -71,6 +72,42 @@ def weighted_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
     y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
     pw = _broadcast_pos_weight(pos_weight, y_true)
     bce = nn.functional.binary_cross_entropy(y_pred, y_true, reduction="none")
+    weights = y_true * pw + (1 - y_true) * 1.0
+    return (bce * weights).mean()
+
+
+def shift_tolerant_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
+                       pos_weight: torch.Tensor | float,
+                       tolerance_frames: int = 3) -> torch.Tensor:
+    """Shift-tolerant weighted BCE (from Beat This!, Schreiber et al.).
+
+    Max-pools predictions over ±tolerance_frames before computing loss
+    for positive targets. This allows the model to fire slightly before
+    or after the exact annotation without penalty.
+
+    At 62.5 Hz, tolerance_frames=3 means ±48ms tolerance, matching
+    typical annotation jitter in consensus labels.
+
+    Beat This! paper reports +12.6 F1 on downbeat detection with this loss.
+
+    Args:
+        tolerance_frames: Half-window for max pooling (default 3 = ±48ms at 62.5 Hz)
+    """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
+
+    pool_size = 2 * tolerance_frames + 1
+    # Max-pool predictions in time dimension: (batch, time, channels) → pool over time
+    y_pooled = F.max_pool1d(
+        y_pred.permute(0, 2, 1),  # (batch, channels, time)
+        kernel_size=pool_size, stride=1, padding=tolerance_frames
+    ).permute(0, 2, 1)  # back to (batch, time, channels)
+
+    # Use pooled predictions where target is positive (beat/downbeat frames),
+    # original predictions where target is negative (non-beat frames)
+    y_effective = torch.where(y_true > 0.5, y_pooled, y_pred)
+
+    bce = nn.functional.binary_cross_entropy(y_effective, y_true, reduction="none")
     weights = y_true * pw + (1 - y_true) * 1.0
     return (bce * weights).mean()
 
@@ -135,16 +172,20 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
-    parser.add_argument("--loss", default="bce", choices=["bce", "focal"],
-                        help="Loss function: bce (default) or focal")
+    parser.add_argument("--loss", default="bce", choices=["bce", "focal", "shift_bce"],
+                        help="Loss function: bce (default), focal, or shift_bce (shift-tolerant)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
+    parser.add_argument("--shift-tolerance", type=int, default=3,
+                        help="Shift-tolerant loss: ±N frames tolerance (default: 3 = ±48ms at 62.5 Hz)")
     parser.add_argument("--distill", default=None,
                         help="Path to teacher soft labels (Y_teacher_train.npy) for knowledge distillation")
     parser.add_argument("--distill-alpha", type=float, default=0.3,
                         help="Distillation loss weight (0-1). Total = (1-alpha)*hard + alpha*soft")
     parser.add_argument("--distill-temp", type=float, default=2.0,
                         help="Distillation temperature (default: 2.0)")
+    parser.add_argument("--patience", type=int, default=None,
+                        help="Early stopping patience (default: from config, or 15)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -240,20 +281,50 @@ def main():
 
     # Build model
     model_type = cfg["model"].get("type", "causal_cnn")
-    model = build_beat_cnn(
-        n_mels=cfg["audio"]["n_mels"],
-        channels=cfg["model"]["channels"],
-        kernel_size=cfg["model"]["kernel_size"],
-        dilations=cfg["model"]["dilations"],
-        dropout=cfg["model"]["dropout"],
-        chunk_frames=cfg["training"]["chunk_frames"],
-        downbeat=use_downbeat,
-        model_type=model_type,
-        residual=cfg["model"].get("residual", False),
-    ).to(device)
+    if model_type == "frame_fc":
+        from models.beat_fc import build_beat_fc
+        model = build_beat_fc(
+            n_mels=cfg["audio"]["n_mels"],
+            window_frames=cfg["model"]["window_frames"],
+            hidden_dims=cfg["model"]["hidden_dims"],
+            dropout=cfg["model"]["dropout"],
+            downbeat=use_downbeat,
+        ).to(device)
+    elif model_type == "frame_conv1d":
+        from models.beat_conv1d import build_beat_conv1d
+        model = build_beat_conv1d(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_sizes=cfg["model"]["kernel_sizes"],
+            dropout=cfg["model"]["dropout"],
+            downbeat=use_downbeat,
+        ).to(device)
+    else:
+        model = build_beat_cnn(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_size=cfg["model"]["kernel_size"],
+            dilations=cfg["model"]["dilations"],
+            dropout=cfg["model"]["dropout"],
+            chunk_frames=cfg["training"]["chunk_frames"],
+            downbeat=use_downbeat,
+            model_type=model_type,
+            residual=cfg["model"].get("residual", False),
+        ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model ({model_type}): {total_params} params")
+    if model_type == "frame_fc":
+        wf = cfg["model"]["window_frames"]
+        print(f"  Window: {wf} frames ({wf / cfg['audio']['frame_rate'] * 1000:.0f} ms)")
+        print(f"  Hidden: {cfg['model']['hidden_dims']}")
+    elif model_type == "frame_conv1d":
+        print(f"  Channels: {cfg['model']['channels']}")
+        print(f"  Kernels: {cfg['model']['kernel_sizes']}")
+        rf = 1
+        for k in cfg["model"]["kernel_sizes"]:
+            rf += k - 1
+        print(f"  Receptive field: {rf} frames ({rf / cfg['audio']['frame_rate'] * 1000:.0f} ms)")
 
     # Optimizer + cosine LR schedule
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -271,6 +342,11 @@ def main():
     if args.loss == "focal":
         loss_fn = partial(weighted_focal, pos_weight=pos_weight, gamma=args.focal_gamma)
         print(f"Loss: focal (gamma={args.focal_gamma})")
+    elif args.loss == "shift_bce":
+        loss_fn = partial(shift_tolerant_bce, pos_weight=pos_weight,
+                          tolerance_frames=args.shift_tolerance)
+        print(f"Loss: shift-tolerant BCE (±{args.shift_tolerance} frames = "
+              f"±{args.shift_tolerance / cfg['audio']['frame_rate'] * 1000:.0f}ms)")
     else:
         loss_fn = partial(weighted_bce, pos_weight=pos_weight)
         print(f"Loss: weighted BCE")
@@ -283,7 +359,7 @@ def main():
 
     best_val_loss = float("inf")
     patience_counter = 0
-    patience = 15
+    patience = args.patience or cfg["training"].get("patience", 15)
     log_rows = []
 
     for epoch in range(epochs):

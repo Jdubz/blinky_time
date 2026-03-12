@@ -123,7 +123,7 @@ def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
 
 
 def _load_model(model_path: str, cfg: dict, device: torch.device):
-    """Load a trained BeatCNN or DSTCNBeatCNN model."""
+    """Load a trained beat activation model (CNN, DS-TCN, or frame FC)."""
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
 
     # Handle both bare state_dict and full checkpoint
@@ -134,16 +134,36 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
         state_dict = checkpoint
         use_downbeat = cfg["model"].get("downbeat", False)
 
-    model = build_beat_cnn(
-        n_mels=cfg["audio"]["n_mels"],
-        channels=cfg["model"]["channels"],
-        kernel_size=cfg["model"]["kernel_size"],
-        dilations=cfg["model"]["dilations"],
-        dropout=cfg["model"].get("dropout", 0.1),
-        downbeat=use_downbeat,
-        model_type=cfg["model"].get("type", "causal_cnn"),
-        residual=cfg["model"].get("residual", False),
-    ).to(device)
+    model_type = cfg["model"].get("type", "causal_cnn")
+    if model_type == "frame_fc":
+        from models.beat_fc import build_beat_fc
+        model = build_beat_fc(
+            n_mels=cfg["audio"]["n_mels"],
+            window_frames=cfg["model"]["window_frames"],
+            hidden_dims=cfg["model"]["hidden_dims"],
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+        ).to(device)
+    elif model_type == "frame_conv1d":
+        from models.beat_conv1d import build_beat_conv1d
+        model = build_beat_conv1d(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_sizes=cfg["model"]["kernel_sizes"],
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+        ).to(device)
+    else:
+        model = build_beat_cnn(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_size=cfg["model"]["kernel_size"],
+            dilations=cfg["model"]["dilations"],
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+            model_type=model_type,
+            residual=cfg["model"].get("residual", False),
+        ).to(device)
     model.load_state_dict(state_dict)
     model.eval()
     return model, use_downbeat
@@ -448,10 +468,14 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
 
     model, has_downbeat = _load_model(model_path, cfg, device)
 
-    # Batch predict
-    X_tensor = torch.from_numpy(X_val).float().to(device)
+    # Batch predict (chunked to avoid GPU OOM on large val sets)
+    batch_size = 4096
+    Y_pred_parts = []
     with torch.no_grad():
-        Y_pred_all = model(X_tensor).cpu().numpy()
+        for start in range(0, len(X_val), batch_size):
+            X_batch = torch.from_numpy(X_val[start:start + batch_size]).float().to(device)
+            Y_pred_parts.append(model(X_batch).cpu().numpy())
+    Y_pred_all = np.concatenate(Y_pred_parts, axis=0)
 
     Y_pred_beat = Y_pred_all[:, :, 0]
     _print_frame_metrics("Beat", Y_pred_beat, Y_val)

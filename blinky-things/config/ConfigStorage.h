@@ -99,7 +99,9 @@ public:
     //   Devices on v61 or earlier will factory-reset on first boot with v64 firmware.
     // Version 65: Replace BeatActivationNN/BeatSyncNN/SpectralAccumulator with FrameBeatNN.
     //   Mel-CNN (79-98ms) and beat-sync hybrid both closed. Frame-level FC approach.
-    static const uint8_t SETTINGS_VERSION = 65;
+    // Version 66: cbssContrast default 1.0→2.0 (A/B tested 10-6 win). Bump forces
+    //   devices with saved v65 settings to pick up the new default on first boot.
+    static const uint8_t SETTINGS_VERSION = 66;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -225,7 +227,7 @@ public:
         float beatTimingOffset;         // Beat prediction advance in frames (ODF+CBSS delay compensation)
         float phaseCorrectionStrength;  // Phase correction toward transients (0=off, 1=full snap)
         float cbssThresholdFactor;      // CBSS adaptive threshold: beat fires only if CBSS > factor * mean (0=off)
-        float cbssContrast;             // Power-law ODF contrast before CBSS (v37: 1.0=linear, 2.0=BTrack-style square)
+        float cbssContrast;             // Power-law ODF contrast before CBSS (v66: default 2.0=BTrack-style square, 1.0=linear)
         uint8_t cbssWarmupBeats;        // CBSS warmup beats: lower alpha for first N beats (v37: 0=disabled)
         uint8_t onsetSnapWindow;       // Snap beat to strongest OSS in last N frames (v37: 4, 0=disabled)
 

@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** March 10, 2026
-**Firmware Version:** SETTINGS_VERSION 64 (CBSS + Bayesian Tempo + NN Beat ODF default)
+**Last Updated:** March 12, 2026
+**Firmware Version:** SETTINGS_VERSION 64 (CBSS + Bayesian Tempo + Frame-Level NN ODF)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -37,14 +37,11 @@ PDM Microphone (16kHz, mono)
         |
    BassSpectralAnalysis (Goertzel-12, 31.25 Hz/bin, optional)
         |
-   ├── EnsembleDetector (BandFlux Solo)
-   │   └── BandWeightedFlux (1.0) ── log-compressed band-weighted flux
-   │        → ODF (default, or when nnbeat=0)
-   │
-   └── FrameBeatNN (TFLite Micro FC, NN=1 build, nnbeat=1 default)
-        → ODF (when nnbeat=1)
+   └── FrameBeatNN (TFLite Micro FC, 56.8 KB INT8, ~3ms)
+        → ODF (primary, NN=1 build)
+        → beat_activation + downbeat_activation
         |
-   Fusion: agree_1=1.0 (solo pass-through), cooldown=250ms, minconf=0.40
+   [OBSOLETE: EnsembleDetector/BandFlux — scheduled for removal]
         |
    AudioController
    ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
@@ -66,8 +63,8 @@ PDM Microphone (16kHz, mono)
 
 ### Key Design Decisions
 
-1. **BandFlux Solo**: Single detector outperforms multi-detector ensembles (+14% avg Beat F1). Ensemble fusion dilutes BandFlux's cleaner signal.
-2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening makes detectors invariant to sustained spectral content.
+1. **NN ODF**: Frame-level FC model provides learned beat activation, replacing hand-tuned BandFlux. BandFlux is obsolete and scheduled for removal.
+2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization.
 3. **Bayesian tempo fusion**: Unified posterior estimation over 20 tempo bins. Comb filter bank is the primary observation; harmonic-enhanced ACF (weight 0.8, v25) with 4-harmonic comb and Rayleigh prior prevents sub-harmonic lock.
 4. **CBSS beat tracking**: Cumulative Beat Strength Signal with adaptive threshold prevents phantom beats during silence/breakdowns.
 5. **Deterministic phase**: Phase derived from counter: `(now - lastBeat) / period` — no drift or jitter.
@@ -363,31 +360,15 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 ## Current Best Settings
 
-### BandFlux Solo Configuration (SETTINGS_VERSION 64)
+### NN ODF Configuration (March 2026)
 
-**Single detector outperforms all multi-detector ensembles** — BandFlux Solo achieves avg Beat F1 0.468 vs 0.411 baseline (HFC+Drummer). Multi-detector combos tested worse; ensemble fusion dilutes BandFlux's cleaner signal.
+**Frame-level FC model** is the primary ODF source, replacing BandFlux. FrameBeatNN processes 32 frames × 26 mel bands through FC(832→64→32→2) to produce beat and downbeat activations at ~3ms per inference. 56.8 KB INT8 model with per-tensor quantization.
 
-**Detector (v62+, BandFlux Solo — 6 disabled detectors removed from firmware):**
+**Current issue:** Mel level mismatch between firmware (mean ~0.52) and training data (mean ~0.86) causes weak activations. See `IMPROVEMENT_PLAN.md` Priority 1 for calibration plan.
 
-| Detector | Weight | Threshold | Notes |
-|----------|--------|-----------|-------|
-| **BandWeightedFlux** | 1.00 | 0.5 | Best solo Beat F1, log-compressed band-weighted flux |
+### ~~BandFlux Solo Configuration~~ (OBSOLETE — scheduled for removal)
 
-**Fusion parameters (BandFlux Solo):**
-```
-agree_1 = 1.0          # Single-detector pass-through at full strength
-enscooldown = 250      # ms between detections (adaptive: tempo-aware)
-ensminconf = 0.40      # Minimum confidence for output
-ensminlevel = 0.0      # Noise gate (disabled)
-```
-
-**BandFlux algorithm:**
-1. Log-compress FFT magnitudes: `log(1 + 20 * mag[k])`
-2. 3-bin max-filter (SuperFlux vibrato suppression)
-3. Band-weighted half-wave rectified flux (bass 2.0×, mid 1.5×, high 0.1×)
-4. Additive threshold: `mean + 0.5` (NOT multiplicative)
-5. Onset delta filter: reject if `fluxDelta < 0.3` (pad/echo rejection)
-6. Hi-hat rejection gate (high-only flux suppression)
+BandFlux Solo and all ~15 associated parameters are obsolete, superseded by the NN ODF. Code will be removed once NN mel calibration is complete. Parameters documented in appendix for reference until removal.
 
 ### Bayesian Tempo Fusion Defaults (v28+)
 

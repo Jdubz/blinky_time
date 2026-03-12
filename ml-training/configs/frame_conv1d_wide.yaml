@@ -1,0 +1,25 @@
+# Frame-level Conv1D (wide) — wider kernels for larger receptive field
+#
+# Shared settings are in base.yaml and merged automatically by load_config().
+# This file only contains model-specific overrides.
+#
+# Architecture: 3-layer causal Conv1D, no BN, no dilation, wider kernels
+#   Conv1D(26→32, k=7) → Conv1D(32→48, k=7) → Conv1D(48→32, k=5) → Conv1D(32→2, k=1)
+#   ~23K params, ~23 KB INT8, ~8-12ms inference on Cortex-M4F @ 64 MHz (32-frame window)
+#   Receptive field: 17 frames = 272ms at 62.5 Hz (vs 11/176ms for standard)
+#
+# Motivation: standard Conv1D RF=11 (176ms) sees only 35% of a beat at 120 BPM.
+# Wide variant RF=17 (272ms) sees ~55% — should improve beat detection accuracy.
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 48, 32]         # Same channel widths as standard
+  kernel_sizes: [7, 7, 5]        # Wider kernels: RF=17 (272ms at 62.5 Hz)
+  window_frames: 32               # Firmware sliding window (32 frames = 512ms)
+  dropout: 0.1
+  downbeat: true
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 60           # ~23 KB INT8 — ample headroom

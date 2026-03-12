@@ -319,6 +319,179 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
     tf_model.get_layer("output_conv").set_weights([tf_w, pt_b])
 
 
+def build_tf_frame_conv1d(n_mels: int, channels: list[int],
+                          kernel_sizes: list[int], window_frames: int,
+                          downbeat: bool) -> keras.Model:
+    """Build TF/Keras equivalent of PyTorch FrameBeatConv1D.
+
+    Causal Conv1D layers with ReLU fused into Conv ops (no separate ReLU op).
+    No BatchNorm — no fusion needed. ZeroPadding1D for causal padding.
+
+    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Quantize, Dequantize.
+    """
+    out_channels = 2 if downbeat else 1
+    inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
+    x = inputs
+
+    for i, (ch, k) in enumerate(zip(channels, kernel_sizes)):
+        pad = k - 1
+        x = layers.ZeroPadding1D(padding=(pad, 0))(x)
+        x = layers.Conv1D(ch, k, padding="valid", use_bias=True,
+                          activation="relu", name=f"conv{i+1}")(x)
+
+    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                      name="output_conv")(x)
+
+    return keras.Model(inputs=inputs, outputs=x, name="frame_beat_conv1d")
+
+
+def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
+                              channels: list[int]):
+    """Transfer FrameBeatConv1D weights from PyTorch to TF/Keras.
+
+    No BatchNorm to worry about — just transpose Conv1D weights.
+    Extracts Conv1d layers by name pattern (backbone.N.weight) rather than
+    assuming a fixed stride, robust to changes in non-parametric layers.
+    """
+    # Find all Conv1d layers in backbone by scanning for .weight keys
+    backbone_conv_keys = sorted(
+        [k for k in pt_state_dict if k.startswith("backbone.") and k.endswith(".weight")],
+        key=lambda k: int(k.split(".")[1])
+    )
+    assert len(backbone_conv_keys) == len(channels), (
+        f"Expected {len(channels)} Conv1d layers in backbone, "
+        f"found {len(backbone_conv_keys)}: {backbone_conv_keys}"
+    )
+
+    for i, w_key in enumerate(backbone_conv_keys):
+        b_key = w_key.replace(".weight", ".bias")
+        pt_w = pt_state_dict[w_key].numpy()  # (out, in, k)
+        pt_b = pt_state_dict[b_key].numpy()
+        tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
+        tf_layer = tf_model.get_layer(f"conv{i+1}")
+        expected_shape = tuple(tf_layer.get_weights()[0].shape)
+        assert tf_w.shape == expected_shape, (
+            f"Shape mismatch for conv{i+1}: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+        )
+        tf_layer.set_weights([tf_w, pt_b])
+
+    # Output conv (1×1)
+    pt_w = pt_state_dict["output_conv.weight"].numpy()  # (out, in, 1)
+    pt_b = pt_state_dict["output_conv.bias"].numpy()
+    tf_w = np.transpose(pt_w, (2, 1, 0))  # (1, in, out)
+    tf_layer = tf_model.get_layer("output_conv")
+    expected_shape = tuple(tf_layer.get_weights()[0].shape)
+    assert tf_w.shape == expected_shape, (
+        f"Shape mismatch for output_conv: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+    )
+    tf_layer.set_weights([tf_w, pt_b])
+
+
+def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
+                                       n_mels: int = 26, n_samples: int = 200):
+    """Calibration data generator for Conv1D model INT8 quantization.
+
+    Extracts random windows from training chunks as 3D tensors
+    (1, window_frames, n_mels) — matching the TFLite model's input shape.
+    """
+    X = np.load(data_path / "X_train.npy", mmap_mode='r')
+    chunk_frames = X.shape[1]
+    rng = np.random.RandomState(42)
+    indices = rng.choice(len(X), size=min(n_samples, len(X)), replace=False)
+    for i in indices:
+        chunk = X[i].astype(np.float32)  # (chunk_frames, n_mels)
+        start = rng.randint(0, chunk_frames - window_frames + 1)
+        window = chunk[start:start + window_frames]  # (W, n_mels)
+        yield [window.reshape(1, window_frames, n_mels)]
+
+
+def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
+                      downbeat: bool) -> keras.Model:
+    """Build TF/Keras equivalent of PyTorch FrameBeatFC.
+
+    Takes flat input (1, window_frames * n_mels) — no Reshape op needed in
+    TFLite. Firmware writes window buffer as flat array, so shapes match.
+
+    TFLite ops: FullyConnected (with fused ReLU/Logistic), Quantize, Dequantize.
+    All already in FrameBeatNN.h resolver (5 slots).
+    """
+    out_channels = 2 if downbeat else 1
+    input_dim = window_frames * n_mels
+
+    inputs = keras.Input(shape=(input_dim,), name="flat_input")
+    x = inputs
+
+    for i, h in enumerate(hidden_dims):
+        x = layers.Dense(h, activation="relu", name=f"fc{i+1}")(x)
+
+    x = layers.Dense(out_channels, activation="sigmoid", name="output")(x)
+
+    return keras.Model(inputs=inputs, outputs=x, name="frame_beat_fc")
+
+
+def _transfer_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
+                         hidden_dims: list[int]):
+    """Transfer FrameBeatFC weights from PyTorch to TF/Keras.
+
+    Extracts Linear layer weights by name pattern (backbone.N.weight/bias)
+    rather than assuming a fixed stride through the state_dict. This is
+    robust to changes in non-parametric layers (ReLU, Dropout, etc.).
+
+    PyTorch Linear: weight (out_features, in_features), bias (out_features)
+    TF Dense: kernel (in_features, out_features), bias (out_features)
+    """
+    # Find all Linear layers in backbone by scanning for .weight keys
+    backbone_linear_keys = sorted(
+        [k for k in pt_state_dict if k.startswith("backbone.") and k.endswith(".weight")],
+        key=lambda k: int(k.split(".")[1])
+    )
+    assert len(backbone_linear_keys) == len(hidden_dims), (
+        f"Expected {len(hidden_dims)} Linear layers in backbone, "
+        f"found {len(backbone_linear_keys)}: {backbone_linear_keys}"
+    )
+
+    for i, w_key in enumerate(backbone_linear_keys):
+        b_key = w_key.replace(".weight", ".bias")
+        pt_w = pt_state_dict[w_key].numpy()  # (out, in)
+        pt_b = pt_state_dict[b_key].numpy()
+        tf_w = pt_w.T  # (in, out)
+        tf_layer = tf_model.get_layer(f"fc{i+1}")
+        expected_shape = tuple(tf_layer.get_weights()[0].shape)
+        assert tf_w.shape == expected_shape, (
+            f"Shape mismatch for fc{i+1}: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+        )
+        tf_layer.set_weights([tf_w, pt_b])
+
+    # Output head
+    pt_w = pt_state_dict["output_head.weight"].numpy()
+    pt_b = pt_state_dict["output_head.bias"].numpy()
+    tf_w = pt_w.T
+    tf_layer = tf_model.get_layer("output")
+    expected_shape = tuple(tf_layer.get_weights()[0].shape)
+    assert tf_w.shape == expected_shape, (
+        f"Shape mismatch for output: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+    )
+    tf_layer.set_weights([tf_w, pt_b])
+
+
+def fc_representative_dataset_gen(data_path: Path, window_frames: int,
+                                  n_mels: int = 26, n_samples: int = 200):
+    """Calibration data generator for FC model INT8 quantization.
+
+    Extracts random windows from training chunks and flattens them
+    to match the TFLite model's flat input shape (1, window_frames * n_mels).
+    """
+    X = np.load(data_path / "X_train.npy", mmap_mode='r')
+    chunk_frames = X.shape[1]
+    rng = np.random.RandomState(42)
+    indices = rng.choice(len(X), size=min(n_samples, len(X)), replace=False)
+    for i in indices:
+        chunk = X[i].astype(np.float32)  # (chunk_frames, n_mels)
+        start = rng.randint(0, chunk_frames - window_frames + 1)
+        window = chunk[start:start + window_frames]  # (W, n_mels)
+        yield [window.reshape(1, -1)]  # (1, W * n_mels)
+
+
 def representative_dataset_gen(data_path: Path, inference_frames: int = None,
                                 n_samples: int = 200):
     """Generator for calibration data (required for full INT8 quantization)."""
@@ -367,16 +540,19 @@ def tflite_to_c_header(tflite_bytes: bytes, c_array_name: str, output_path: str)
         hex_str = ", ".join(f"0x{b:02x}" for b in chunk)
         hex_lines.append(f"  {hex_str},")
 
+    guard_name = c_array_name.upper() + "_H"
+    macro_prefix = c_array_name.upper()
+
     header = f"""// Auto-generated by export_tflite.py — do not edit
 // Model size: {len(tflite_bytes)} bytes ({len(tflite_bytes)/1024:.1f} KB)
 // SHA256 prefix: {model_hash}
 // Exported: {timestamp}
 
-#ifndef BEAT_MODEL_DATA_H
-#define BEAT_MODEL_DATA_H
+#ifndef {guard_name}
+#define {guard_name}
 
-#define BEAT_MODEL_HASH "{model_hash}"
-#define BEAT_MODEL_SIZE {len(tflite_bytes)}
+#define {macro_prefix}_HASH "{model_hash}"
+#define {macro_prefix}_SIZE {len(tflite_bytes)}
 
 alignas(8) static const unsigned char {c_array_name}[] = {{
 {chr(10).join(hex_lines)}
@@ -384,7 +560,7 @@ alignas(8) static const unsigned char {c_array_name}[] = {{
 
 static const unsigned int {c_array_name}_len = {len(tflite_bytes)};
 
-#endif // BEAT_MODEL_DATA_H
+#endif // {guard_name}
 """
     with open(output_path, "w") as f:
         f.write(header)
@@ -544,53 +720,134 @@ def main():
         pt_state = checkpoint
         use_downbeat = cfg["model"].get("downbeat", False)
 
-    # Build TF model and transfer weights
-    inference_frames = args.inference_frames or cfg["training"]["chunk_frames"]
-    dilations = cfg["model"]["dilations"]
     model_type = cfg["model"].get("type", "causal_cnn")
-    residual = cfg["model"].get("residual", False)
+    n_mels = cfg["audio"]["n_mels"]
 
-    fuse_bn = not args.no_fuse_bn
-    print(f"Building TF model (type={model_type}, inference_frames={inference_frames}, "
-          f"downbeat={use_downbeat}, fuse_bn={fuse_bn}, residual={residual})...")
-    tf_model = build_tf_beat_cnn(
-        n_mels=cfg["audio"]["n_mels"],
-        channels=cfg["model"]["channels"],
-        kernel_size=cfg["model"]["kernel_size"],
-        dilations=dilations,
-        chunk_frames=inference_frames,
-        downbeat=use_downbeat,
-        fuse_bn=fuse_bn,
-        model_type=model_type,
-        residual=residual,
-    )
-    dropout = cfg["model"].get("dropout", 0.1)
-    transfer_pytorch_weights(tf_model, pt_state, dilations, dropout=dropout,
-                             fuse_bn=fuse_bn, model_type=model_type)
+    if model_type == "frame_fc":
+        # --- Frame-level FC model ---
+        window_frames = cfg["model"]["window_frames"]
+        hidden_dims = cfg["model"]["hidden_dims"]
 
-    # Verify weight transfer (fused TF model should match unfused PyTorch model)
-    print("Verifying weight transfer...")
-    from models.beat_cnn import build_beat_cnn as build_pt_cnn
-    pt_model = build_pt_cnn(
-        n_mels=cfg["audio"]["n_mels"],
-        channels=cfg["model"]["channels"],
-        kernel_size=cfg["model"]["kernel_size"],
-        dilations=dilations,
-        dropout=cfg["model"].get("dropout", 0.1),
-        downbeat=use_downbeat,
-        model_type=model_type,
-        residual=residual,
-    )
-    pt_model.load_state_dict(pt_state)
-    pt_model.eval()
+        print(f"Building TF model (type=frame_fc, window={window_frames}, "
+              f"hidden={hidden_dims}, downbeat={use_downbeat})...")
 
-    test_input = np.random.randn(1, inference_frames, cfg["audio"]["n_mels"]).astype(np.float32)
-    with torch.no_grad():
-        pt_out = pt_model(torch.from_numpy(test_input)).numpy()
-    tf_out = tf_model.predict(test_input, verbose=0)
-    max_diff = np.abs(pt_out - tf_out).max()
-    ok_thresh = 0.01 if fuse_bn else 0.001  # BN fusion has slightly larger float rounding
-    print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < ok_thresh else 'WARNING'}")
+        tf_model = build_tf_frame_fc(
+            n_mels=n_mels,
+            window_frames=window_frames,
+            hidden_dims=hidden_dims,
+            downbeat=use_downbeat,
+        )
+        _transfer_fc_weights(tf_model, pt_state, hidden_dims)
+
+        # Verify weight transfer
+        print("Verifying weight transfer...")
+        from models.beat_fc import build_beat_fc
+        pt_model = build_beat_fc(
+            n_mels=n_mels,
+            window_frames=window_frames,
+            hidden_dims=hidden_dims,
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+        )
+        pt_model.load_state_dict(pt_state)
+        pt_model.eval()
+
+        # PT takes (1, W, 26); TF takes (1, W*26). Compare at last timestep.
+        test_window = np.random.randn(1, window_frames, n_mels).astype(np.float32)
+        test_flat = test_window.reshape(1, -1)
+        with torch.no_grad():
+            pt_out = pt_model(torch.from_numpy(test_window))[:, -1, :].numpy()
+        tf_out = tf_model.predict(test_flat, verbose=0)
+        max_diff = np.abs(pt_out - tf_out).max()
+        print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
+
+        inference_frames = window_frames  # For RAM estimate
+    elif model_type == "frame_conv1d":
+        # --- Frame-level Conv1D model ---
+        channels = cfg["model"]["channels"]
+        kernel_sizes = cfg["model"]["kernel_sizes"]
+        window_frames = cfg["model"]["window_frames"]
+        dropout = cfg["model"].get("dropout", 0.1)
+
+        print(f"Building TF model (type=frame_conv1d, channels={channels}, "
+              f"kernels={kernel_sizes}, window={window_frames}, downbeat={use_downbeat})...")
+        tf_model = build_tf_frame_conv1d(
+            n_mels=n_mels,
+            channels=channels,
+            kernel_sizes=kernel_sizes,
+            window_frames=window_frames,
+            downbeat=use_downbeat,
+        )
+        _transfer_conv1d_weights(tf_model, pt_state, channels)
+
+        # Verify weight transfer
+        print("Verifying weight transfer...")
+        from models.beat_conv1d import build_beat_conv1d
+        pt_model = build_beat_conv1d(
+            n_mels=n_mels,
+            channels=channels,
+            kernel_sizes=kernel_sizes,
+            dropout=dropout,
+            downbeat=use_downbeat,
+        )
+        pt_model.load_state_dict(pt_state)
+        pt_model.eval()
+
+        test_input = np.random.randn(1, window_frames, n_mels).astype(np.float32)
+        with torch.no_grad():
+            pt_out = pt_model(torch.from_numpy(test_input)).numpy()
+        tf_out = tf_model.predict(test_input, verbose=0)
+        max_diff = np.abs(pt_out - tf_out).max()
+        print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
+
+        inference_frames = window_frames
+    else:
+        # --- CNN model (causal_cnn or ds_tcn) ---
+        inference_frames = args.inference_frames or cfg["training"]["chunk_frames"]
+        dilations = cfg["model"]["dilations"]
+        residual = cfg["model"].get("residual", False)
+
+        fuse_bn = not args.no_fuse_bn
+        print(f"Building TF model (type={model_type}, inference_frames={inference_frames}, "
+              f"downbeat={use_downbeat}, fuse_bn={fuse_bn}, residual={residual})...")
+        tf_model = build_tf_beat_cnn(
+            n_mels=n_mels,
+            channels=cfg["model"]["channels"],
+            kernel_size=cfg["model"]["kernel_size"],
+            dilations=dilations,
+            chunk_frames=inference_frames,
+            downbeat=use_downbeat,
+            fuse_bn=fuse_bn,
+            model_type=model_type,
+            residual=residual,
+        )
+        dropout = cfg["model"].get("dropout", 0.1)
+        transfer_pytorch_weights(tf_model, pt_state, dilations, dropout=dropout,
+                                 fuse_bn=fuse_bn, model_type=model_type)
+
+        # Verify weight transfer
+        print("Verifying weight transfer...")
+        from models.beat_cnn import build_beat_cnn as build_pt_cnn
+        pt_model = build_pt_cnn(
+            n_mels=n_mels,
+            channels=cfg["model"]["channels"],
+            kernel_size=cfg["model"]["kernel_size"],
+            dilations=dilations,
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+            model_type=model_type,
+            residual=residual,
+        )
+        pt_model.load_state_dict(pt_state)
+        pt_model.eval()
+
+        test_input = np.random.randn(1, inference_frames, n_mels).astype(np.float32)
+        with torch.no_grad():
+            pt_out = pt_model(torch.from_numpy(test_input)).numpy()
+        tf_out = tf_model.predict(test_input, verbose=0)
+        max_diff = np.abs(pt_out - tf_out).max()
+        ok_thresh = 0.01 if fuse_bn else 0.001
+        print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < ok_thresh else 'WARNING'}")
 
     # Export TFLite
     max_size_kb = cfg["export"]["max_model_size_kb"]
@@ -598,20 +855,47 @@ def main():
     header_path = cfg["export"]["output_header"]
 
     quantize = not args.no_quantize
-    tflite_path = str(output_dir / ("beat_model_int8.tflite" if quantize else "beat_model_fp32.tflite"))
+    tflite_name = f"{c_array_name}_int8.tflite" if quantize else f"{c_array_name}_fp32.tflite"
+    tflite_path = str(output_dir / tflite_name)
 
-    suffix = f" (inference_frames={inference_frames})" if args.inference_frames else ""
-    print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model{suffix}...")
-    tflite_bytes = export_tflite(tf_model, data_dir, tflite_path,
-                                  quantize_int8=quantize,
-                                  inference_frames=args.inference_frames)
+    print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model...")
+    if model_type in ("frame_fc", "frame_conv1d") and quantize:
+        # Frame models need window-based calibration samples
+        window_frames = cfg["model"]["window_frames"]
+        converter = tf.lite.TFLiteConverter.from_keras_model(tf_model)
+        converter.optimizations = [tf.lite.Optimize.DEFAULT]
+        if model_type == "frame_fc":
+            converter.representative_dataset = lambda: fc_representative_dataset_gen(
+                data_dir, window_frames=window_frames, n_mels=n_mels)
+            # CRITICAL: Disable per-channel weight quantization for Dense layers.
+            # TFLite Micro's CMSIS-NN FullyConnected kernel (arm_fully_connected_s8)
+            # only supports per-tensor requantization (single multiplier/shift).
+            # Per-channel weights cause filter->params.scale=0, making the
+            # requantization multiplier=0 and producing constant -128 output.
+            converter._experimental_disable_per_channel = True
+        else:
+            converter.representative_dataset = lambda: conv1d_representative_dataset_gen(
+                data_dir, window_frames=window_frames, n_mels=n_mels)
+        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+        converter.inference_input_type = tf.int8
+        converter.inference_output_type = tf.int8
+        tflite_bytes = converter.convert()
+        with open(tflite_path, "wb") as f:
+            f.write(tflite_bytes)
+    else:
+        tflite_bytes = export_tflite(tf_model, data_dir, tflite_path,
+                                      quantize_int8=quantize,
+                                      inference_frames=args.inference_frames)
 
     size_kb = len(tflite_bytes) / 1024
     print(f"TFLite model: {size_kb:.1f} KB ({tflite_path})")
 
     if size_kb > max_size_kb:
         print(f"WARNING: Model ({size_kb:.1f} KB) exceeds budget ({max_size_kb} KB)!", file=sys.stderr)
-        print("Consider reducing channels or layers.", file=sys.stderr)
+        if model_type == "frame_fc":
+            print("Consider reducing hidden_dims or window_frames.", file=sys.stderr)
+        else:
+            print("Consider reducing channels, layers, or context size.", file=sys.stderr)
         sys.exit(1)
 
     # Export C header
@@ -620,7 +904,7 @@ def main():
     print(f"C header: {header_path}")
 
     # Also save .tflite next to the header for verification/re-export
-    tflite_copy = Path(header_path).parent / "beat_model.tflite"
+    tflite_copy = Path(header_path).parent / f"{c_array_name}.tflite"
     tflite_copy.write_bytes(tflite_bytes)
     print(f"TFLite copy: {tflite_copy}")
 
@@ -634,7 +918,6 @@ def main():
     print(f"  Output: {output_details[0]['shape']} dtype={output_details[0]['dtype']}")
 
     ctx_frames = inference_frames
-    n_mels = cfg["audio"]["n_mels"]
     ctx_ram = ctx_frames * n_mels * 4
     print(f"  Context buffer: {ctx_frames} frames x {n_mels} mels = {ctx_ram / 1024:.1f} KB RAM")
 

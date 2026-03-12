@@ -34,7 +34,7 @@ const defaultValues = {
   rayleighbpm: 120,
   postfloor: 0.05,
   octavescoreratio: 1.3,
-  cbsscontrast: 1.0,  // Note: auto-overridden to 2.0 for NN
+  cbsscontrast: 2.0,
   cbssalpha: 0.9,     // Note: auto-overridden to 0.8 for NN
   octavecheckbeats: 2
 };

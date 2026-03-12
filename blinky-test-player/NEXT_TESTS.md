@@ -3,23 +3,21 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 10, 2026 (v64: dead code removal, v9 DS-TCN training in progress)
+**Last Updated:** March 12, 2026 (Frame-level FC NN deployed on all devices, BandFlux obsolete)
 
-## Current Config (v64, SETTINGS_VERSION 64)
+## Current Config (v65+, SETTINGS_VERSION 64)
 
-**Detector:** BandWeightedFlux Solo (6 disabled detectors removed in v62)
-- gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5
-- minOnsetDelta=0.3 (onset sharpness gate)
+**ODF source:** FrameBeatNN (frame-level FC, 56.8 KB INT8, per-tensor quantization, ~3ms inference)
+- FC(832→64→32→2), 55K params, 32-frame window (0.5s at 62.5 Hz)
+- Beat + downbeat activation, deployed on all 3 devices (March 12)
+- Current activation range: 0.07-0.26 (weak — mel level calibration needed)
 
-**ODF source:** NN beat activation (default since v58, `nnbeat=1`)
-- v9 DS-TCN 24ch committed to staging (26.5 KB INT8, commit 10711d2 "mead model"). Training in progress (24ch and 32ch variants — F1 and on-device inference time not yet measured)
-- Previous standard conv models (5L/7L) take 79ms+ inference (~12 Hz), unacceptable framerate. DS-TCN targets ~25-30ms (~33-40 Hz)
-- Requires `NN=1` build flag. Toggle: `nnbeat=0/1`
-- A/B tested (v4 model vs BandFlux): 11/18 track wins, -0.8 mean error
+**BandFlux:** OBSOLETE — scheduled for removal. Code and ~15 parameters to be deleted once NN mel calibration is complete.
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
 - bayesacf=0.8, bayescomb=0.7, bayesft=0, bayesioi=0
-- cbssthresh=1.0, cbssTightness=8.0, beatoffset=5, onsetSnapWindow=8
+- cbssthresh=1.0, cbssTightness=8.0, cbsscontrast=2.0 (v66, A/B tested 10-6 win)
+- beatoffset=5, onsetSnapWindow=8
 - densityoctave=1, octavecheck=1 (v32 octave disambiguation)
 - odfmeansub=0 (v32 -- raw ODF preserves ACF structure)
 - pll=1, pllkp=0.15, pllki=0.005 (v45 PLL phase correction)
@@ -56,51 +54,40 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 ## Current Bottlenecks
 
-1. **~135 BPM gravity well** -- Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks, octave folding asymmetry. Tested 47 bins in v61 — no improvement. NOT a bin count issue.
+1. **Mel level mismatch (ACTIVE)** — Firmware mel values (mean ~0.52) are lower than training data (mean ~0.86). Causes weak NN activations on device (max ~0.26 at 120 BPM). Fix: retrain with corrected `target_rms_db` or capture real firmware mel streams for calibration.
 
-2. **NN ODF quality** -- the biggest lever per SOTA research. v9 DS-TCN 24ch committed (staging), training in progress (24ch and 32ch). Standard conv models too slow (79ms+).
+2. **NN activation quality** — With correct mel calibration, NN should produce sharper, more discriminative beat activations. This is the biggest lever for improving overall beat tracking F1.
 
-3. **Phase alignment** -- correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. All systems achieving >60% F1 use explicit phase tracking (HMM state, PLP oscillator, or particle cloud).
+3. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Stronger NN ODF should help.
 
-## Priority 1: NN Model Training (v9 DS-TCN)
+4. **Phase alignment** — correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. Sharper NN activations help.
 
-**Status: TRAINING IN PROGRESS (March 10, 2026)**
+## Priority 1: NN Mel Calibration
 
-v9 DS-TCN 24ch committed to staging (26.5 KB INT8, commit 10711d2). Training in progress for 24ch and 32ch variants. **Critical constraint:** standard conv models (5L/7L) take 79ms+ inference → ~12 Hz framerate. Only DS-TCN architecture can achieve acceptable inference times (~25-30ms target).
+**Status: NEEDED (March 12, 2026)**
 
-**Previous models (completed):**
-- v6-restart (5L ch32): Beat F1=0.727. 79ms inference (BN-fused). Too slow.
-- v7-melfixed (7L ch32): Beat F1=0.787. Best offline F1 but >79ms inference. Too slow.
-- v8 (7L ch48): Beat F1=0.821. Heap exhaustion on device.
+The FC model is deployed and producing real output, but activations are weak. Root cause: firmware AGC produces lower mel levels than training normalization.
 
-**Outstanding (not yet addressed):**
-- Compressed mel feature range (mean=0.84, ~50 INT8 levels) — inherent to -35 dB RMS + INT8
-- ACF-based ODF quality metric — standalone F1 doesn't predict CBSS performance
+**Approaches to investigate:**
+1. Lower `target_rms_db` in training config (e.g. -45 dB instead of -35 dB) to match firmware AGC levels
+2. Capture real firmware mel streams via `stream nn` and use as calibration reference
+3. Add mel normalization layer in firmware before NN input (mean/variance normalization)
 
-**Changes for next training run (v10+):**
-- `beat_cnn.py`: Set `bias=False` on `DSConvBlock.pw_conv` and `DSTCNBeatCNN.input_conv` (redundant before BatchNorm). Saves 120 params. Also update `export_tflite.py` TF model builder (`use_bias=False`) and weight transfer (`set_weights([tf_w])` without bias in unfused path). See TODO comments in code.
+## Priority 2: Conv1D Wide Model Evaluation
 
-## Priority 2: CBSS ODF Contrast (cbssContrast=2.0)
+**Status: TRAINING COMPLETE (March 12, 2026)**
 
-**Status: NOT TESTED**
+Conv1D wide model finished training (val_loss=0.4756, epoch 28). Needs export, evaluation, and comparison against FC model. FrameBeatNN.h auto-detects FC vs Conv1D from TFLite input shape.
 
-BTrack applies power-law contrast (squaring) to the ODF before feeding it into CBSS. This sharpens beat peaks relative to non-beat frames, making the cumulative score more discriminative. Our `cbssContrast` parameter exists (AudioController.h:315) but defaults to 1.0 (linear, no contrast).
+## Priority 3: BandFlux Removal
 
-**Rationale:** Code review against BTrack source confirms this is an intentional design choice in BTrack, not an accident. Squaring the ODF suppresses low-level noise while amplifying genuine onset peaks, which should improve CBSS beat/non-beat discrimination.
+Remove obsolete BandFlux code and ~15 associated parameters once NN mel calibration is complete. See `IMPROVEMENT_PLAN.md` Priority 2.
 
-**Test plan:**
-1. Single-parameter A/B test: `cbssContrast=1.0` (baseline) vs `cbssContrast=2.0` (BTrack-style)
-2. Standard 18-track EDM test set, 3 devices, track manifest seeking
-3. Duration 35s, settle 12s
-4. Metric: BPM error + octave error count (same as previous A/B tests)
-5. If 2.0 wins, optionally sweep [1.5, 2.0, 2.5, 3.0] for optimal value
+## ~~Priority 2: CBSS ODF Contrast~~ — COMPLETED (v66)
 
-**Command:**
-```bash
-cd blinky_time/blinky-test-player && NODE_PATH=node_modules node ../ml-training/tools/ab_test_multidev.cjs \
-  --baseline "cbsscontrast=1.0" --candidate "cbsscontrast=2.0" \
-  --tracks ../music/edm/track_manifest.json --duration 35 --settle 12
-```
+**Status: COMPLETED — cbssContrast=2.0 is now the default**
+
+A/B tested cbssContrast=1.0 vs 2.0 (BTrack-style ODF squaring): 10 wins, 6 losses, 2 ties across 3 devices × 18 tracks. Mean BPM error 12.4 vs 12.6. Octave errors 9 vs 9 (unchanged). Default updated to 2.0 in v66.
 
 ## Future: Heydari 1D State Space
 
@@ -133,6 +120,7 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 - v62: v2 consensus labels, training pipeline fixes (binary targets, time-stretch, test exclusion)
 - v64: Dead code removal (forward filter, noise estimation, HMM, particle filter, PLP, adaptive tightness, percival, bisnap, template/subbeat checks, etc.). ConfigStorage 408->296 bytes.
 - v5: Focal loss training -- identical to v4, no benefit
+- v66: cbssContrast=2.0 default (A/B tested 10 wins, 6 losses, 2 ties vs 1.0. Mean error 12.4 vs 12.6)
 
 ## Known Limitations
 

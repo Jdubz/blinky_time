@@ -65,10 +65,10 @@ quantization:
   method: "qat"             # quantization-aware training
   target_bits: 8            # INT8
 
-# Export defaults (model configs may override max_model_size_kb)
+# Export defaults (model configs may override)
 export:
-  output_header: "../blinky-things/audio/beat_model_data.h"
-  c_array_name: "beat_model_data"
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
 
 # Data paths (bulk data on /mnt/storage, processed data local for fast training)
 data:

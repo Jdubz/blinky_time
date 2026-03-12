@@ -193,7 +193,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.beatTimingOffset = 5.0f;       // Beat prediction advance (frames, ~83ms at 60Hz)
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
     data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
-    data_.music.cbssContrast = 1.0f;          // Power-law ODF contrast before CBSS (1=linear, 2=BTrack square)
+    data_.music.cbssContrast = 2.0f;          // Power-law ODF contrast before CBSS (2=BTrack square, A/B tested 10-6 win)
     data_.music.cbssWarmupBeats = 0;          // CBSS warmup: lower alpha for first N beats (0=disabled)
     data_.music.onsetSnapWindow = 8;          // Snap beat to strongest OSS in last N frames (0=disabled)
 
