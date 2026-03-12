@@ -208,9 +208,16 @@ public:
             Serial.println();
         }
 
+        // Capture raw INT8 output for diagnostics (before dequantization)
+        if (output_->type == kTfLiteInt8) {
+            lastRawOut0_ = output_->data.int8[outputOffset_];
+            lastRawOut1_ = (outputChannels_ >= 2) ? output_->data.int8[outputOffset_ + 1] : 0;
+        }
+
         // Extract beat activation (output channel 0)
         float beat = extractOutput(0);
         lastDownbeat_ = (outputChannels_ >= 2) ? extractOutput(1) : 0.0f;
+        lastBeat_ = beat;
 
         return beat;
     }
@@ -232,6 +239,19 @@ public:
     uint32_t getInvokeErrors() const { return invokeErrors_; }
     uint32_t getInferCount() const { return inferCount_; }
 
+    /** Get last beat activation (for diagnostics). */
+    float getLastBeat() const { return lastBeat_; }
+
+    /** Get raw INT8 output values for debugging quantization issues. */
+    int8_t getLastRawOut0() const { return lastRawOut0_; }
+    int8_t getLastRawOut1() const { return lastRawOut1_; }
+
+    /** Get input/output quantization parameters for debugging. */
+    float getInputScale() const { return input_ ? input_->params.scale : 0.0f; }
+    int32_t getInputZeroPoint() const { return input_ ? input_->params.zero_point : 0; }
+    float getOutputScale() const { return output_ ? output_->params.scale : 0.0f; }
+    int32_t getOutputZeroPoint() const { return output_ ? output_->params.zero_point : 0; }
+
     /** Print diagnostic info to Serial. */
     void printDiagnostics() const {
         Serial.print(F("[FrameBeatNN] ready="));
@@ -252,6 +272,40 @@ public:
             if (invokeErrors_ > 0) {
                 Serial.print(F(" ERRORS="));
                 Serial.print(invokeErrors_);
+            }
+            // Quantization debug: input scale/zp, output scale/zp, last raw outputs
+            Serial.print(F("\n[FrameBeatNN] iscale="));
+            Serial.print(input_->params.scale, 8);
+            Serial.print(F(" izp="));
+            Serial.print(input_->params.zero_point);
+            Serial.print(F(" oscale="));
+            Serial.print(output_->params.scale, 8);
+            Serial.print(F(" ozp="));
+            Serial.print(output_->params.zero_point);
+            Serial.print(F("\n[FrameBeatNN] raw_out=["));
+            Serial.print(lastRawOut0_);
+            Serial.print(F(","));
+            Serial.print(lastRawOut1_);
+            Serial.print(F("] beat="));
+            Serial.print(lastBeat_, 4);
+            Serial.print(F(" db="));
+            Serial.print(lastDownbeat_, 4);
+            // Print last frame's input: first and last mel band INT8 values
+            if (input_->type == kTfLiteInt8 && windowFilled_ >= windowFrames_) {
+                int lastFrameStart = (windowFrames_ - 1) * INPUT_MEL_BANDS;
+                Serial.print(F("\n[FrameBeatNN] last_input_float=["));
+                Serial.print(windowBuffer_[lastFrameStart], 4);
+                Serial.print(F(","));
+                Serial.print(windowBuffer_[lastFrameStart + 1], 4);
+                Serial.print(F(",...,"));
+                Serial.print(windowBuffer_[lastFrameStart + INPUT_MEL_BANDS - 1], 4);
+                Serial.print(F("] int8=["));
+                Serial.print(input_->data.int8[lastFrameStart]);
+                Serial.print(F(","));
+                Serial.print(input_->data.int8[lastFrameStart + 1]);
+                Serial.print(F(",...,"));
+                Serial.print(input_->data.int8[lastFrameStart + INPUT_MEL_BANDS - 1]);
+                Serial.print(F("]"));
             }
         } else {
             Serial.print(F(" error="));
@@ -299,6 +353,9 @@ private:
     int outputChannels_ = 1;   // 1 = beat only, 2 = beat + downbeat
     int outputOffset_ = 0;     // Byte offset to last timestep (0 for FC, (W-1)*ch for Conv1D)
     float lastDownbeat_ = 0.0f;
+    float lastBeat_ = 0.0f;
+    int8_t lastRawOut0_ = 0;  // Raw INT8 output for beat (before dequantization)
+    int8_t lastRawOut1_ = 0;  // Raw INT8 output for downbeat
     bool ready_ = false;
     bool profileEnabled_ = false;
     uint32_t inferCount_ = 0;

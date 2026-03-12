@@ -846,6 +846,12 @@ def main():
         if model_type == "frame_fc":
             converter.representative_dataset = lambda: fc_representative_dataset_gen(
                 data_dir, window_frames=window_frames, n_mels=n_mels)
+            # CRITICAL: Disable per-channel weight quantization for Dense layers.
+            # TFLite Micro's CMSIS-NN FullyConnected kernel (arm_fully_connected_s8)
+            # only supports per-tensor requantization (single multiplier/shift).
+            # Per-channel weights cause filter->params.scale=0, making the
+            # requantization multiplier=0 and producing constant -128 output.
+            converter._experimental_disable_per_channel = True
         else:
             converter.representative_dataset = lambda: conv1d_representative_dataset_gen(
                 data_dir, window_frames=window_frames, n_mels=n_mels)
