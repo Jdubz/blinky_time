@@ -39,12 +39,15 @@ class FrameBeatFC(nn.Module):
     """
 
     def __init__(self, n_mels: int = 26, window_frames: int = 32,
-                 hidden_dims: list[int] = [64, 32], dropout: float = 0.1,
+                 hidden_dims: list[int] | None = None, dropout: float = 0.1,
                  downbeat: bool = False):
         super().__init__()
         self.n_mels = n_mels
         self.window_frames = window_frames
         self.out_channels = 2 if downbeat else 1
+
+        if hidden_dims is None:
+            hidden_dims = [64, 32]
 
         input_dim = window_frames * n_mels
         layers = []
@@ -86,7 +89,7 @@ class FrameBeatFC(nn.Module):
 
 
 def build_beat_fc(n_mels: int = 26, window_frames: int = 32,
-                  hidden_dims: list[int] = [64, 32], dropout: float = 0.1,
+                  hidden_dims: list[int] | None = None, dropout: float = 0.1,
                   downbeat: bool = False) -> nn.Module:
     """Build a frame-level FC beat activation model.
 

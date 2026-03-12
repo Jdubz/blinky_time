@@ -25,13 +25,14 @@ DEFAULT_CONFIG="$ML_DIR/configs/frame_fc.yaml"
 
 # Parse args
 MODEL_PATH="$DEFAULT_MODEL"
+CONFIG_PATH="$DEFAULT_CONFIG"
 SKIP_EXPORT=false
 PUSH=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --model) MODEL_PATH="$2"; shift 2 ;;
-        --config) DEFAULT_CONFIG="$2"; shift 2 ;;
+        --config) CONFIG_PATH="$2"; shift 2 ;;
         --skip-export) SKIP_EXPORT=true; shift ;;
         --no-push) PUSH=false; shift ;;
         --help)
@@ -61,7 +62,7 @@ if [ "$SKIP_EXPORT" = false ]; then
     fi
 
     python scripts/export_tflite.py \
-        --config "$DEFAULT_CONFIG" \
+        --config "$CONFIG_PATH" \
         --model "$MODEL_PATH" \
         --output-dir outputs/deploy
     if [ $? -ne 0 ]; then

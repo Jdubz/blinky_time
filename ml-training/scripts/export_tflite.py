@@ -421,7 +421,7 @@ def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
 
 
 def _transfer_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
-                         hidden_dims: list[int]):
+                         hidden_dims: list[int], dropout: float = 0.1):
     """Transfer FrameBeatFC weights from PyTorch to TF/Keras.
 
     PyTorch Linear: weight (out_features, in_features), bias (out_features)
@@ -431,14 +431,15 @@ def _transfer_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
     PyTorch FrameBeatFC state_dict keys:
       backbone.0.weight, backbone.0.bias    (Linear)
       backbone.1 = ReLU (no params)
-      backbone.2 = Dropout (no params)
+      backbone.2 = Dropout (no params, if dropout > 0)
       backbone.3.weight, backbone.3.bias    (Linear)
       ...
       output_head.weight, output_head.bias
     """
-    # Hidden layers: backbone stride is 3 (Linear, ReLU, Dropout)
+    # Hidden layers: stride is 3 (Linear, ReLU, Dropout) or 2 (Linear, ReLU) if no dropout
+    stride = 3 if dropout > 0 else 2
     for i in range(len(hidden_dims)):
-        key_idx = i * 3  # Linear at 0, 3, 6, ...
+        key_idx = i * stride  # Linear at 0, 3, 6... or 0, 2, 4...
         pt_w = pt_state_dict[f"backbone.{key_idx}.weight"].numpy()  # (out, in)
         pt_b = pt_state_dict[f"backbone.{key_idx}.bias"].numpy()
         tf_w = pt_w.T  # (in, out)
@@ -707,13 +708,15 @@ def main():
 
         print(f"Building TF model (type=frame_fc, window={window_frames}, "
               f"hidden={hidden_dims}, downbeat={use_downbeat})...")
+        dropout = cfg["model"].get("dropout", 0.1)
+
         tf_model = build_tf_frame_fc(
             n_mels=n_mels,
             window_frames=window_frames,
             hidden_dims=hidden_dims,
             downbeat=use_downbeat,
         )
-        _transfer_fc_weights(tf_model, pt_state, hidden_dims)
+        _transfer_fc_weights(tf_model, pt_state, hidden_dims, dropout=dropout)
 
         # Verify weight transfer
         print("Verifying weight transfer...")
@@ -862,7 +865,10 @@ def main():
 
     if size_kb > max_size_kb:
         print(f"WARNING: Model ({size_kb:.1f} KB) exceeds budget ({max_size_kb} KB)!", file=sys.stderr)
-        print("Consider reducing hidden_dims or window_frames.", file=sys.stderr)
+        if model_type == "frame_fc":
+            print("Consider reducing hidden_dims or window_frames.", file=sys.stderr)
+        else:
+            print("Consider reducing channels, layers, or context size.", file=sys.stderr)
         sys.exit(1)
 
     # Export C header
