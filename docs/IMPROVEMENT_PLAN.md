@@ -153,27 +153,20 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 **Phased implementation:**
 
 - ~~**Phase A (beat activation only):**~~ DONE — FC model deployed, beat+downbeat activation working on all 3 devices.
-- **Phase B (mel calibration):** Fix firmware/training mel level mismatch (firmware AGC produces mean ~0.52 vs training ~0.86). Retrain with corrected `target_rms_db` or capture real firmware mel streams for calibration. This is the current blocker for strong on-device activations.
-- **Phase C (model architecture iteration):** Evaluate Conv1D wide model (training complete), compare against FC. Explore larger windows, more hidden units, or hybrid approaches.
-- **Phase D (BandFlux removal):** Remove BandFlux code, EnsembleDetector, and all associated parameters (~15 BandFlux params, ensemble cooldown/confidence). Simplify firmware audio pipeline to NN-only ODF.
+- **Phase B (mel calibration):** ~~Fix firmware/training mel level mismatch.~~ DONE — calibrated `target_rms_db` from -35 to -63 dB (mel mean 0.52, matching firmware AGC). Dataset reprocessing in progress.
+- **Phase C (model architecture iteration):** Evaluate Conv1D wide model (training complete), compare against FC. Explore larger windows (16/32/48/64 frame configs ready), more hidden units, or hybrid approaches.
+- ~~**Phase D (BandFlux removal):**~~ DONE (v67) — Removed EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult. 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved. SETTINGS_VERSION 66→67.
 
 **Research context:**
 - ALL leading beat trackers use frame-level NNs: BeatNet (CRNN), Beat This! (CNN+Transformer), madmom (BiLSTM), TCN beat tracker
 - Our innovation: using FC instead of CNN/RNN to fit Cortex-M4F compute budget, while following the same frame-level activation → post-processing paradigm
 - No published TinyML beat tracking on Cortex-M class hardware exists (as of March 2026)
 
-### Priority 2: BandFlux Removal
+### ~~Priority 2: BandFlux Removal~~ — COMPLETED (v67)
 
-**Status: PLANNED**
+**Status: COMPLETED — March 12, 2026**
 
-With NN ODF as the primary and only approach, remove the obsolete BandFlux code:
-- `EnsembleDetector.h/.cpp` — BandFlux Solo detector
-- ~15 BandFlux parameters (`bfgamma`, `bfbassweight`, `bfmidweight`, `bfhighweight`, `bfmaxbin`, `bfonsetdelta`, etc.)
-- Ensemble fusion parameters (`enscooldown`, `ensminconf`, `ensminlevel`)
-- `nnbeat` toggle (NN becomes the only ODF, no fallback)
-- Update `AudioController.cpp` to remove BandFlux ODF path
-
-**Depends on:** Priority 1 Phase B (mel calibration) — NN activations must be strong enough before removing BandFlux.
+Removed all BandFlux/EnsembleDetector code. SharedSpectralAnalysis promoted to direct AudioController ownership. Pulse detection inlined from EnsembleFusion (ODF threshold + tempo-adaptive cooldown). Non-NN fallback: `mic_.getLevel()` as simple energy ODF. See git log for details.
 
 ### ~~Priority 3: CBSS ODF Contrast~~ — COMPLETED (v66)
 

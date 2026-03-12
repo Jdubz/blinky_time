@@ -5,7 +5,7 @@
 AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output an `AudioControl` struct with 6 parameters.
 
 **Current Version:** AudioController with CBSS Beat Tracking + Frame-Level NN ODF (March 2026)
-**ODF Source:** FrameBeatNN (frame-level FC, 56.8 KB INT8). BandFlux is obsolete and scheduled for removal.
+**ODF Source:** FrameBeatNN (frame-level FC, 56.8 KB INT8). Non-NN fallback: mic level.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -52,11 +52,11 @@ AdaptiveMic (level, transient, spectral flux)
       |
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |
-      +--- FrameBeatNN (frame-level FC, ~3ms, NN=1 build)
+      +--- FrameBeatNN (frame-level FC, ~60-200µs, NN=1 build)
       |         Input: sliding window of rawMelBands_ (32 frames × 26 bands)
       |         Output: beat_activation (ODF for CBSS) + downbeat_activation
       |
-      +--- [OBSOLETE, being removed] EnsembleDetector (BandFlux Solo)
+      +--- [non-NN fallback] mic_.getLevel() → simple energy ODF
       |
 OSS Buffer (6s @ 60Hz)
       |
@@ -214,11 +214,11 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 **TFLite export note:** Must use per-tensor weight quantization (`_experimental_disable_per_channel=True`). CMSIS-NN FullyConnected kernel does not support per-channel quantization — causes constant zero output.
 
-### EnsembleDetector / BandFlux (OBSOLETE — scheduled for removal)
+### Pulse Detection (v67)
 
-BandFlux Solo was the previous ODF source. It used log-compressed band-weighted spectral flux tuned for kicks and snares. 6 disabled detectors were already removed in v64. BandFlux itself is now obsolete, superseded by FrameBeatNN's learned ODF. Code and ~15 associated parameters will be removed once NN mel calibration is complete (see `IMPROVEMENT_PLAN.md` Priority 2).
+Pulse detection (for visual spark effects) is derived from the ODF signal directly in AudioController. Simple threshold against running mean with tempo-adaptive cooldown (min 40ms, max 150ms). Replaces the EnsembleFusion cooldown + noise gate removed in v67.
 
-**Previous NN approaches (CLOSED):** Mel-spectrogram CNN (v4-v9, 79-98ms, too slow), beat-synchronous hybrid (circular dependency, no discriminative signal). See `IMPROVEMENT_PLAN.md` Closed Investigations.
+**Previous approaches (REMOVED):** BandFlux Solo detector (removed v67, ~2600 lines), EnsembleDetector/EnsembleFusion/BassSpectralAnalysis. Mel-spectrogram CNN (v4-v9, 79-98ms, too slow), beat-synchronous hybrid (circular dependency, no discriminative signal). See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
 ---
 
@@ -227,7 +227,6 @@ BandFlux Solo was the previous ODF source. It used log-compressed band-weighted 
 | Component | RAM | CPU @ 64 MHz | Notes |
 |-----------|-----|-------------|-------|
 | AdaptiveMic + FFT | ~4 KB | ~4% | Microphone processing |
-| EnsembleDetector | ~0.3 KB | ~1% | BandFlux Solo (v64, detector source files removed) |
 | OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ 60 Hz |
 | ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
@@ -235,7 +234,7 @@ BandFlux Solo was the previous ODF source. It used log-compressed band-weighted 
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (250ms) | - | ~3% | Amortized |
 | FrameBeatNN (NN=1) | ~8-16 KB arena + 3.3 KB mel buffer | ~0.1-0.3% | FC model at ~15.6 Hz, ~60-200µs/inference |
-| **Total** | **~22 KB base** | **~15-20%** | +8-16 KB arena (FrameBeatNN) |
+| **Total** | **~20 KB base** | **~15-20%** | +16 KB arena (FrameBeatNN) |
 
 ---
 
@@ -245,7 +244,7 @@ BandFlux Solo was the previous ODF source. It used log-compressed band-weighted 
 - `blinky-things/audio/AudioController.h` - Main controller class + CBSS structures
 - `blinky-things/audio/AudioController.cpp` - Implementation (autocorrelation, CBSS, beat detection)
 - `blinky-things/audio/AudioControl.h` - Output struct definition
-- `blinky-things/audio/EnsembleDetector.h` - BandFlux Solo detector (v64, source files for 6 disabled detectors removed)
+- `blinky-things/audio/SharedSpectralAnalysis.h` - FFT → compressor → whitening → mel bands (owned by AudioController since v67)
 - `blinky-things/audio/FrameBeatNN.h` - TFLite Micro NN beat/downbeat activation (NN=1 build)
 - `blinky-things/audio/frame_beat_model_data.h` - INT8 TFLite model weights
 
