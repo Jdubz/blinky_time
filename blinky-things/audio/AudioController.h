@@ -313,10 +313,10 @@ public:
     bool beatBoundaryTempo = true;       // Defer tempo changes to beat boundaries (BTrack-style)
 
     // === NN BEAT ACTIVATION ===
-    // Replaces BandFlux ODF with a learned frame-level FC beat activation function.
+    // Frame-level FC beat activation function (primary ODF source).
     // Requires ENABLE_NN_BEAT_ACTIVATION compile flag and valid model in frame_beat_model_data.h.
-    // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
-    // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
+    // When enabled and model loads successfully, provides ODF for CBSS beat tracking.
+    // Non-NN builds fall back to mic level as ODF.
     bool nnBeatActivation = true;        // Use NN beat activation as ODF (A/B tested, 11/18 wins)
     bool nnProfile = false;              // Enable profiling output to Serial
 
