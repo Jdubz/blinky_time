@@ -240,20 +240,34 @@ def main():
 
     # Build model
     model_type = cfg["model"].get("type", "causal_cnn")
-    model = build_beat_cnn(
-        n_mels=cfg["audio"]["n_mels"],
-        channels=cfg["model"]["channels"],
-        kernel_size=cfg["model"]["kernel_size"],
-        dilations=cfg["model"]["dilations"],
-        dropout=cfg["model"]["dropout"],
-        chunk_frames=cfg["training"]["chunk_frames"],
-        downbeat=use_downbeat,
-        model_type=model_type,
-        residual=cfg["model"].get("residual", False),
-    ).to(device)
+    if model_type == "frame_fc":
+        from models.beat_fc import build_beat_fc
+        model = build_beat_fc(
+            n_mels=cfg["audio"]["n_mels"],
+            window_frames=cfg["model"]["window_frames"],
+            hidden_dims=cfg["model"]["hidden_dims"],
+            dropout=cfg["model"]["dropout"],
+            downbeat=use_downbeat,
+        ).to(device)
+    else:
+        model = build_beat_cnn(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_size=cfg["model"]["kernel_size"],
+            dilations=cfg["model"]["dilations"],
+            dropout=cfg["model"]["dropout"],
+            chunk_frames=cfg["training"]["chunk_frames"],
+            downbeat=use_downbeat,
+            model_type=model_type,
+            residual=cfg["model"].get("residual", False),
+        ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model ({model_type}): {total_params} params")
+    if model_type == "frame_fc":
+        wf = cfg["model"]["window_frames"]
+        print(f"  Window: {wf} frames ({wf / cfg['audio']['frame_rate'] * 1000:.0f} ms)")
+        print(f"  Hidden: {cfg['model']['hidden_dims']}")
 
     # Optimizer + cosine LR schedule
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
