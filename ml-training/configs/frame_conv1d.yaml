@@ -1,0 +1,25 @@
+# Frame-level Conv1D — causal convolutions → beat/downbeat
+#
+# Shared settings are in base.yaml and merged automatically by load_config().
+# This file only contains model-specific overrides.
+#
+# Architecture: 3-layer causal Conv1D, no BN, no dilation
+#   Conv1D(26→32, k=5) → Conv1D(32→48, k=5) → Conv1D(48→32, k=3) → Conv1D(32→2, k=1)
+#   ~16K params, ~16 KB INT8, ~7ms inference on Cortex-M4F @ 64 MHz (32-frame window)
+#   Receptive field: 11 frames = 176ms at 62.5 Hz
+#
+# No dilation: avoids SpaceToBatch/BatchToSpace overhead that made old CNN 79-98ms
+# No BatchNorm: eliminates BN fusion complexity in TFLite export
+
+model:
+  type: "frame_conv1d"
+  channels: [32, 48, 32]         # Per-layer channel widths
+  kernel_sizes: [5, 5, 3]        # Per-layer kernel sizes
+  window_frames: 32               # Firmware sliding window (32 frames = 512ms)
+  dropout: 0.1
+  downbeat: true
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 60           # ~16 KB INT8 — ample headroom for wider variants

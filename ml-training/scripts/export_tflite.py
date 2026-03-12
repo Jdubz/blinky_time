@@ -319,6 +319,83 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
     tf_model.get_layer("output_conv").set_weights([tf_w, pt_b])
 
 
+def build_tf_frame_conv1d(n_mels: int, channels: list[int],
+                          kernel_sizes: list[int], window_frames: int,
+                          downbeat: bool) -> keras.Model:
+    """Build TF/Keras equivalent of PyTorch FrameBeatConv1D.
+
+    Causal Conv1D layers with ReLU fused into Conv ops (no separate ReLU op).
+    No BatchNorm — no fusion needed. ZeroPadding1D for causal padding.
+
+    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Quantize, Dequantize.
+    """
+    out_channels = 2 if downbeat else 1
+    inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
+    x = inputs
+
+    for i, (ch, k) in enumerate(zip(channels, kernel_sizes)):
+        pad = k - 1
+        x = layers.ZeroPadding1D(padding=(pad, 0))(x)
+        x = layers.Conv1D(ch, k, padding="valid", use_bias=True,
+                          activation="relu", name=f"conv{i+1}")(x)
+
+    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                      name="output_conv")(x)
+
+    return keras.Model(inputs=inputs, outputs=x, name="frame_beat_conv1d")
+
+
+def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
+                              channels: list[int], dropout: float = 0.1):
+    """Transfer FrameBeatConv1D weights from PyTorch to TF/Keras.
+
+    No BatchNorm to worry about — just transpose Conv1D weights.
+
+    PyTorch FrameBeatConv1D state_dict key layout:
+      backbone.0 = ConstantPad1d (no params)
+      backbone.1 = Conv1d → backbone.1.weight, backbone.1.bias
+      backbone.2 = ReLU (no params)
+      backbone.3 = Dropout (no params, if dropout > 0)
+      backbone.4 = ConstantPad1d
+      backbone.5 = Conv1d
+      ...
+      output_conv.weight, output_conv.bias
+    """
+    # Stride: ConstantPad1d, Conv1d, ReLU, [Dropout]
+    stride = 4 if dropout > 0 else 3
+
+    for i in range(len(channels)):
+        key_idx = i * stride + 1  # Conv1d at positions 1, 5, 9, ...
+        pt_w = pt_state_dict[f"backbone.{key_idx}.weight"].numpy()  # (out, in, k)
+        pt_b = pt_state_dict[f"backbone.{key_idx}.bias"].numpy()
+        tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
+        tf_model.get_layer(f"conv{i+1}").set_weights([tf_w, pt_b])
+
+    # Output conv (1×1)
+    pt_w = pt_state_dict["output_conv.weight"].numpy()  # (out, in, 1)
+    pt_b = pt_state_dict["output_conv.bias"].numpy()
+    tf_w = np.transpose(pt_w, (2, 1, 0))  # (1, in, out)
+    tf_model.get_layer("output_conv").set_weights([tf_w, pt_b])
+
+
+def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
+                                       n_mels: int = 26, n_samples: int = 200):
+    """Calibration data generator for Conv1D model INT8 quantization.
+
+    Extracts random windows from training chunks as 3D tensors
+    (1, window_frames, n_mels) — matching the TFLite model's input shape.
+    """
+    X = np.load(data_path / "X_train.npy", mmap_mode='r')
+    chunk_frames = X.shape[1]
+    rng = np.random.RandomState(42)
+    indices = rng.choice(len(X), size=min(n_samples, len(X)), replace=False)
+    for i in indices:
+        chunk = X[i].astype(np.float32)  # (chunk_frames, n_mels)
+        start = rng.randint(0, chunk_frames - window_frames + 1)
+        window = chunk[start:start + window_frames]  # (W, n_mels)
+        yield [window.reshape(1, window_frames, n_mels)]
+
+
 def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
                       downbeat: bool) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch FrameBeatFC.
@@ -661,6 +738,45 @@ def main():
         print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
 
         inference_frames = window_frames  # For RAM estimate
+    elif model_type == "frame_conv1d":
+        # --- Frame-level Conv1D model ---
+        channels = cfg["model"]["channels"]
+        kernel_sizes = cfg["model"]["kernel_sizes"]
+        window_frames = cfg["model"]["window_frames"]
+        dropout = cfg["model"].get("dropout", 0.1)
+
+        print(f"Building TF model (type=frame_conv1d, channels={channels}, "
+              f"kernels={kernel_sizes}, window={window_frames}, downbeat={use_downbeat})...")
+        tf_model = build_tf_frame_conv1d(
+            n_mels=n_mels,
+            channels=channels,
+            kernel_sizes=kernel_sizes,
+            window_frames=window_frames,
+            downbeat=use_downbeat,
+        )
+        _transfer_conv1d_weights(tf_model, pt_state, channels, dropout=dropout)
+
+        # Verify weight transfer
+        print("Verifying weight transfer...")
+        from models.beat_conv1d import build_beat_conv1d
+        pt_model = build_beat_conv1d(
+            n_mels=n_mels,
+            channels=channels,
+            kernel_sizes=kernel_sizes,
+            dropout=dropout,
+            downbeat=use_downbeat,
+        )
+        pt_model.load_state_dict(pt_state)
+        pt_model.eval()
+
+        test_input = np.random.randn(1, window_frames, n_mels).astype(np.float32)
+        with torch.no_grad():
+            pt_out = pt_model(torch.from_numpy(test_input)).numpy()
+        tf_out = tf_model.predict(test_input, verbose=0)
+        max_diff = np.abs(pt_out - tf_out).max()
+        print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
+
+        inference_frames = window_frames
     else:
         # --- CNN model (causal_cnn or ds_tcn) ---
         inference_frames = args.inference_frames or cfg["training"]["chunk_frames"]
@@ -719,13 +835,17 @@ def main():
     tflite_path = str(output_dir / tflite_name)
 
     print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model...")
-    if model_type == "frame_fc" and quantize:
-        # FC model needs flat calibration samples
+    if model_type in ("frame_fc", "frame_conv1d") and quantize:
+        # Frame models need window-based calibration samples
         window_frames = cfg["model"]["window_frames"]
         converter = tf.lite.TFLiteConverter.from_keras_model(tf_model)
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = lambda: fc_representative_dataset_gen(
-            data_dir, window_frames=window_frames, n_mels=n_mels)
+        if model_type == "frame_fc":
+            converter.representative_dataset = lambda: fc_representative_dataset_gen(
+                data_dir, window_frames=window_frames, n_mels=n_mels)
+        else:
+            converter.representative_dataset = lambda: conv1d_representative_dataset_gen(
+                data_dir, window_frames=window_frames, n_mels=n_mels)
         converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
         converter.inference_input_type = tf.int8
         converter.inference_output_type = tf.int8

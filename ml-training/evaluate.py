@@ -144,6 +144,15 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             dropout=cfg["model"].get("dropout", 0.1),
             downbeat=use_downbeat,
         ).to(device)
+    elif model_type == "frame_conv1d":
+        from models.beat_conv1d import build_beat_conv1d
+        model = build_beat_conv1d(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_sizes=cfg["model"]["kernel_sizes"],
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+        ).to(device)
     else:
         model = build_beat_cnn(
             n_mels=cfg["audio"]["n_mels"],
