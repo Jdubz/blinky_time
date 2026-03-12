@@ -119,8 +119,8 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 - v62: Firmware simplification (removed 6 disabled detectors, -19.5 KB flash, -5.4 KB RAM)
 - v62: v2 consensus labels, training pipeline fixes (binary targets, time-stretch, test exclusion)
 - v64: Dead code removal (forward filter, noise estimation, HMM, particle filter, PLP, adaptive tightness, percival, bisnap, template/subbeat checks, etc.). ConfigStorage 408->296 bytes.
-- v66: cbssContrast=2.0 default (A/B tested 10 wins, 6 losses, 2 ties vs 1.0. Mean error 12.4 vs 12.6)
 - v5: Focal loss training -- identical to v4, no benefit
+- v66: cbssContrast=2.0 default (A/B tested 10 wins, 6 losses, 2 ties vs 1.0. Mean error 12.4 vs 12.6)
 
 ## Known Limitations
 

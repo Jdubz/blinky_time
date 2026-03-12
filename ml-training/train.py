@@ -184,6 +184,8 @@ def main():
                         help="Distillation loss weight (0-1). Total = (1-alpha)*hard + alpha*soft")
     parser.add_argument("--distill-temp", type=float, default=2.0,
                         help="Distillation temperature (default: 2.0)")
+    parser.add_argument("--patience", type=int, default=None,
+                        help="Early stopping patience (default: from config, or 15)")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -357,7 +359,7 @@ def main():
 
     best_val_loss = float("inf")
     patience_counter = 0
-    patience = 15
+    patience = args.patience or cfg["training"].get("patience", 15)
     log_rows = []
 
     for epoch in range(epochs):

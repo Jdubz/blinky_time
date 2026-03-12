@@ -346,36 +346,45 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
 
 
 def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
-                              channels: list[int], dropout: float = 0.1):
+                              channels: list[int]):
     """Transfer FrameBeatConv1D weights from PyTorch to TF/Keras.
 
     No BatchNorm to worry about — just transpose Conv1D weights.
-
-    PyTorch FrameBeatConv1D state_dict key layout:
-      backbone.0 = ConstantPad1d (no params)
-      backbone.1 = Conv1d → backbone.1.weight, backbone.1.bias
-      backbone.2 = ReLU (no params)
-      backbone.3 = Dropout (no params, if dropout > 0)
-      backbone.4 = ConstantPad1d
-      backbone.5 = Conv1d
-      ...
-      output_conv.weight, output_conv.bias
+    Extracts Conv1d layers by name pattern (backbone.N.weight) rather than
+    assuming a fixed stride, robust to changes in non-parametric layers.
     """
-    # Stride: ConstantPad1d, Conv1d, ReLU, [Dropout]
-    stride = 4 if dropout > 0 else 3
+    # Find all Conv1d layers in backbone by scanning for .weight keys
+    backbone_conv_keys = sorted(
+        [k for k in pt_state_dict if k.startswith("backbone.") and k.endswith(".weight")],
+        key=lambda k: int(k.split(".")[1])
+    )
+    assert len(backbone_conv_keys) == len(channels), (
+        f"Expected {len(channels)} Conv1d layers in backbone, "
+        f"found {len(backbone_conv_keys)}: {backbone_conv_keys}"
+    )
 
-    for i in range(len(channels)):
-        key_idx = i * stride + 1  # Conv1d at positions 1, 5, 9, ...
-        pt_w = pt_state_dict[f"backbone.{key_idx}.weight"].numpy()  # (out, in, k)
-        pt_b = pt_state_dict[f"backbone.{key_idx}.bias"].numpy()
+    for i, w_key in enumerate(backbone_conv_keys):
+        b_key = w_key.replace(".weight", ".bias")
+        pt_w = pt_state_dict[w_key].numpy()  # (out, in, k)
+        pt_b = pt_state_dict[b_key].numpy()
         tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
-        tf_model.get_layer(f"conv{i+1}").set_weights([tf_w, pt_b])
+        tf_layer = tf_model.get_layer(f"conv{i+1}")
+        expected_shape = tuple(tf_layer.get_weights()[0].shape)
+        assert tf_w.shape == expected_shape, (
+            f"Shape mismatch for conv{i+1}: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+        )
+        tf_layer.set_weights([tf_w, pt_b])
 
     # Output conv (1×1)
     pt_w = pt_state_dict["output_conv.weight"].numpy()  # (out, in, 1)
     pt_b = pt_state_dict["output_conv.bias"].numpy()
     tf_w = np.transpose(pt_w, (2, 1, 0))  # (1, in, out)
-    tf_model.get_layer("output_conv").set_weights([tf_w, pt_b])
+    tf_layer = tf_model.get_layer("output_conv")
+    expected_shape = tuple(tf_layer.get_weights()[0].shape)
+    assert tf_w.shape == expected_shape, (
+        f"Shape mismatch for output_conv: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+    )
+    tf_layer.set_weights([tf_w, pt_b])
 
 
 def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
@@ -421,35 +430,48 @@ def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
 
 
 def _transfer_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
-                         hidden_dims: list[int], dropout: float = 0.1):
+                         hidden_dims: list[int]):
     """Transfer FrameBeatFC weights from PyTorch to TF/Keras.
+
+    Extracts Linear layer weights by name pattern (backbone.N.weight/bias)
+    rather than assuming a fixed stride through the state_dict. This is
+    robust to changes in non-parametric layers (ReLU, Dropout, etc.).
 
     PyTorch Linear: weight (out_features, in_features), bias (out_features)
     TF Dense: kernel (in_features, out_features), bias (out_features)
-    Just transpose the weight matrix.
-
-    PyTorch FrameBeatFC state_dict keys:
-      backbone.0.weight, backbone.0.bias    (Linear)
-      backbone.1 = ReLU (no params)
-      backbone.2 = Dropout (no params, if dropout > 0)
-      backbone.3.weight, backbone.3.bias    (Linear)
-      ...
-      output_head.weight, output_head.bias
     """
-    # Hidden layers: stride is 3 (Linear, ReLU, Dropout) or 2 (Linear, ReLU) if no dropout
-    stride = 3 if dropout > 0 else 2
-    for i in range(len(hidden_dims)):
-        key_idx = i * stride  # Linear at 0, 3, 6... or 0, 2, 4...
-        pt_w = pt_state_dict[f"backbone.{key_idx}.weight"].numpy()  # (out, in)
-        pt_b = pt_state_dict[f"backbone.{key_idx}.bias"].numpy()
+    # Find all Linear layers in backbone by scanning for .weight keys
+    backbone_linear_keys = sorted(
+        [k for k in pt_state_dict if k.startswith("backbone.") and k.endswith(".weight")],
+        key=lambda k: int(k.split(".")[1])
+    )
+    assert len(backbone_linear_keys) == len(hidden_dims), (
+        f"Expected {len(hidden_dims)} Linear layers in backbone, "
+        f"found {len(backbone_linear_keys)}: {backbone_linear_keys}"
+    )
+
+    for i, w_key in enumerate(backbone_linear_keys):
+        b_key = w_key.replace(".weight", ".bias")
+        pt_w = pt_state_dict[w_key].numpy()  # (out, in)
+        pt_b = pt_state_dict[b_key].numpy()
         tf_w = pt_w.T  # (in, out)
-        tf_model.get_layer(f"fc{i+1}").set_weights([tf_w, pt_b])
+        tf_layer = tf_model.get_layer(f"fc{i+1}")
+        expected_shape = tuple(tf_layer.get_weights()[0].shape)
+        assert tf_w.shape == expected_shape, (
+            f"Shape mismatch for fc{i+1}: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+        )
+        tf_layer.set_weights([tf_w, pt_b])
 
     # Output head
     pt_w = pt_state_dict["output_head.weight"].numpy()
     pt_b = pt_state_dict["output_head.bias"].numpy()
     tf_w = pt_w.T
-    tf_model.get_layer("output").set_weights([tf_w, pt_b])
+    tf_layer = tf_model.get_layer("output")
+    expected_shape = tuple(tf_layer.get_weights()[0].shape)
+    assert tf_w.shape == expected_shape, (
+        f"Shape mismatch for output: PT weight {tf_w.shape} vs TF kernel {expected_shape}"
+    )
+    tf_layer.set_weights([tf_w, pt_b])
 
 
 def fc_representative_dataset_gen(data_path: Path, window_frames: int,
@@ -708,7 +730,6 @@ def main():
 
         print(f"Building TF model (type=frame_fc, window={window_frames}, "
               f"hidden={hidden_dims}, downbeat={use_downbeat})...")
-        dropout = cfg["model"].get("dropout", 0.1)
 
         tf_model = build_tf_frame_fc(
             n_mels=n_mels,
@@ -716,7 +737,7 @@ def main():
             hidden_dims=hidden_dims,
             downbeat=use_downbeat,
         )
-        _transfer_fc_weights(tf_model, pt_state, hidden_dims, dropout=dropout)
+        _transfer_fc_weights(tf_model, pt_state, hidden_dims)
 
         # Verify weight transfer
         print("Verifying weight transfer...")
@@ -757,7 +778,7 @@ def main():
             window_frames=window_frames,
             downbeat=use_downbeat,
         )
-        _transfer_conv1d_weights(tf_model, pt_state, channels, dropout=dropout)
+        _transfer_conv1d_weights(tf_model, pt_state, channels)
 
         # Verify weight transfer
         print("Verifying weight transfer...")

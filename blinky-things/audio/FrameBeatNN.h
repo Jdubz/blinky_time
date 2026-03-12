@@ -14,7 +14,7 @@
 //
 // Model type auto-detected from TFLite input/output shapes.
 // Conv1D output is (1, W, 2); firmware extracts last timestep.
-// Memory: ~24 KB tensor arena (covers both architectures) + sliding window buffer
+// Memory: ~16 KB tensor arena (covers both architectures) + sliding window buffer
 //
 // Input: raw mel bands from SharedSpectralAnalysis::getRawMelBands()
 // These depend only on 8 fundamental constants (sample rate, FFT size,
@@ -334,9 +334,9 @@ private:
     // Tensor arena — must fit both FC and Conv1D models:
     //   FC:     ~2-4 KB (matrix multiplies on flat input)
     //   Conv1D: ~12-20 KB (intermediate activations: 32 frames × up to 48 channels)
-    // 24 KB covers Conv1D with generous headroom.
-    // Actual usage reported by arenaUsed_ via printDiagnostics() / `show nn`.
-    static constexpr int TENSOR_ARENA_SIZE = 24576;  // 24 KB
+    // FC model uses ~2 KB arena. Conv1D estimated ~12-16 KB.
+    // 16 KB covers both with headroom. Check `show nn` for actual usage.
+    static constexpr int TENSOR_ARENA_SIZE = 16384;  // 16 KB
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
     // Sliding window buffer for mel frames

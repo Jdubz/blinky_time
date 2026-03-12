@@ -99,7 +99,9 @@ public:
     //   Devices on v61 or earlier will factory-reset on first boot with v64 firmware.
     // Version 65: Replace BeatActivationNN/BeatSyncNN/SpectralAccumulator with FrameBeatNN.
     //   Mel-CNN (79-98ms) and beat-sync hybrid both closed. Frame-level FC approach.
-    static const uint8_t SETTINGS_VERSION = 65;
+    // Version 66: cbssContrast default 1.0→2.0 (A/B tested 10-6 win). Bump forces
+    //   devices with saved v65 settings to pick up the new default on first boot.
+    static const uint8_t SETTINGS_VERSION = 66;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
