@@ -90,7 +90,7 @@ enum class DebugChannel : uint16_t {
     RHYTHM     = 0x0002,  // Rhythm/BPM tracking (RHYTHM_DEBUG, RHYTHM_DEBUG2)
     AUDIO      = 0x0008,  // Audio level, AGC, mic debug
     GENERATOR  = 0x0010,  // Generator-specific debug (fire, water, lightning)
-    ENSEMBLE   = 0x0020,  // Ensemble detector internals
+    ENSEMBLE   = 0x0020,  // (legacy, kept for enum stability)
     ALL        = 0xFFFF
 };
 
@@ -168,9 +168,7 @@ private:
     void registerFireSettings(FireParams* fp);
     void registerAudioSettings();
     void registerAgcSettings();
-    void registerTransientSettings();
-    void registerDetectionSettings();
-    void registerEnsembleSettings();  // Ensemble detector configuration
+    // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67)
     void registerRhythmSettings();
 
     // Command handlers (extracted from handleSpecialCommand for clarity)
@@ -185,7 +183,7 @@ private:
     bool handleEffectCommand(const char* cmd);
     bool handleLogCommand(const char* cmd);
     bool handleDebugCommand(const char* cmd);     // Debug channel control
-    bool handleEnsembleCommand(const char* cmd);  // Ensemble detector configuration
+    // (handleEnsembleCommand removed v67 — BandFlux pipeline removed; show nn moved to handleBeatTrackingCommand)
     bool handleBeatTrackingCommand(const char* cmd);  // CBSS beat tracking commands
     bool handleDeviceConfigCommand(const char* cmd);  // Device configuration commands (v28+)
     void showDeviceConfig();                          // Display current device config as JSON
@@ -230,8 +228,7 @@ private:
     // Static instance pointer for callbacks
     static SerialConsole* instance_;
 
-    // SettingsRegistry change callbacks (need static access to instance_)
-    static void onHiResBassChanged();
+    // (onHiResBassChanged removed v67 — hi-res bass removed with BandFlux pipeline)
 
     // Debug channels (default: NONE - all debug output disabled)
     // Each channel can be enabled independently for targeted debugging
