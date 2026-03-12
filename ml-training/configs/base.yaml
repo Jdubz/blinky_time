@@ -16,7 +16,10 @@ audio:
   fmin: 60                  # MEL_MIN_FREQ
   fmax: 8000                # MEL_MAX_FREQ
   frame_rate: 62.5          # 16000 / 256
-  target_rms_db: -35        # Normalize audio RMS to simulate firmware AGC level
+  target_rms_db: -63        # Normalize audio RMS to simulate firmware AGC level
+  # Calibrated via tools/rms_mel_sweep.py: -63 dB → mel mean 0.52, matching
+  # firmware AGC output. Previous -35 dB gave mel mean 0.75, causing weak
+  # NN activations on device (max ~0.26 at 120 BPM).
   # AGC ceiling — must agree with firmware AdaptiveMic.h hwGainMaxSignal.
   # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
   # prepare_dataset.py uses this to cap gain-aware noise augmentation.
