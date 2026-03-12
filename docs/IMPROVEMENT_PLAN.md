@@ -175,23 +175,11 @@ New v65 parameters need sweep testing:
 | `dbdecay` | 0.85 | 0.5-0.99 | `set dbdecay` |
 | `pllwarmup` | 5 | 0-20 | `set pllwarmup` |
 
-### Priority 3: CBSS ODF Contrast (cbssContrast=2.0)
+### ~~Priority 3: CBSS ODF Contrast~~ — COMPLETED (v66)
 
-**Status: NOT TESTED**
+**Status: COMPLETED — cbssContrast=2.0 is now the default**
 
-BTrack applies power-law contrast (squaring) to the ODF before CBSS. Sharpens beat peaks relative to non-beat frames. Our `cbssContrast` parameter exists (AudioController.h) but defaults to 1.0 (no contrast).
-
-**Test plan:**
-1. A/B test: `cbssContrast=1.0` vs `cbssContrast=2.0` (BTrack-style)
-2. Standard 18-track EDM test set, 3 devices
-3. Duration 35s, settle 12s
-4. If 2.0 wins, sweep [1.5, 2.0, 2.5, 3.0]
-
-```bash
-cd blinky_time/blinky-test-player && NODE_PATH=node_modules node ../ml-training/tools/ab_test_multidev.cjs \
-  --baseline "cbsscontrast=1.0" --candidate "cbsscontrast=2.0" \
-  --tracks ../music/edm/track_manifest.json --duration 35 --settle 12
-```
+A/B tested cbssContrast=1.0 vs 2.0 (BTrack-style ODF squaring). Results: 10 wins, 6 losses, 2 ties across 3 devices × 18 tracks. Mean BPM error 12.4 vs 12.6. Octave errors unchanged (9 vs 9). Default updated to 2.0 in v66.
 
 ### Future: Heydari 1D State Space
 

@@ -260,7 +260,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("cbssthresh", &audioCtrl_->cbssThresholdFactor, "rhythm",
         "CBSS adaptive threshold factor (0=off, beat fires only if CBSS > factor*mean)", 0.0f, 2.0f);
     settings_.registerFloat("cbsscontrast", &audioCtrl_->cbssContrast, "rhythm",
-        "Power-law ODF contrast before CBSS (1=off, 2=square). NN auto-sets 2.0 if 1.0", 0.5f, 4.0f);
+        "Power-law ODF contrast before CBSS (1=off, 2=BTrack square, default 2.0)", 0.5f, 4.0f);
     settings_.registerUint8("warmupbeats", &audioCtrl_->cbssWarmupBeats, "rhythm",
         "CBSS warmup beats: lower alpha for first N beats (0=disabled)", 0, 32);
     settings_.registerUint8("onsetsnap", &audioCtrl_->onsetSnapWindow, "rhythm",
@@ -1259,7 +1259,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
         audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
         // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction defaults removed v64)
-        audioCtrl_->cbssContrast = 1.0f;           // v37: ODF contrast before CBSS
+        audioCtrl_->cbssContrast = 2.0f;           // v66: ODF contrast before CBSS (A/B tested 10-6 win)
         audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
         audioCtrl_->onsetSnapWindow = 8;           // v39: snap beat to strongest OSS in ±8 frames
         audioCtrl_->odfThreshWindow = 15;          // v35: adaptive ODF threshold half-window
@@ -1897,8 +1897,8 @@ bool SerialConsole::handleEnsembleCommand(const char* cmd) {
             float contrast = audioCtrl_->cbssContrast;
             float alpha = audioCtrl_->cbssAlpha;
             bool meanSub = audioCtrl_->odfMeanSubEnabled;
-            Serial.print(F("[NN] overrides: contrast="));
-            Serial.print((contrast == 1.0f) ? 2.0f : contrast);
+            Serial.print(F("[NN] params: contrast="));
+            Serial.print(contrast);
             Serial.print(F(" alpha="));
             Serial.print((alpha > 0.8f) ? 0.8f : alpha);
             Serial.print(F(" odfMeanSub=on"));

@@ -225,7 +225,7 @@ public:
         float beatTimingOffset;         // Beat prediction advance in frames (ODF+CBSS delay compensation)
         float phaseCorrectionStrength;  // Phase correction toward transients (0=off, 1=full snap)
         float cbssThresholdFactor;      // CBSS adaptive threshold: beat fires only if CBSS > factor * mean (0=off)
-        float cbssContrast;             // Power-law ODF contrast before CBSS (v37: 1.0=linear, 2.0=BTrack-style square)
+        float cbssContrast;             // Power-law ODF contrast before CBSS (v66: default 2.0=BTrack-style square, 1.0=linear)
         uint8_t cbssWarmupBeats;        // CBSS warmup beats: lower alpha for first N beats (v37: 0=disabled)
         uint8_t onsetSnapWindow;       // Snap beat to strongest OSS in last N frames (v37: 4, 0=disabled)
 
