@@ -1,14 +1,14 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 11, 2026*
+*Last Updated: March 12, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v65 (SETTINGS_VERSION 64, new v65 tunable parameters). CBSS beat tracking + Bayesian tempo fusion. BandFlux Solo detector. Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation.
+**Firmware:** v65 (SETTINGS_VERSION 64, new v65 tunable parameters). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (NN=1 build, default). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation.
 
-**NN Model Status:** Mel-spectrogram CNN models (v4-v9) are too slow (79-98ms). Beat-synchronous FC hybrid abandoned (circular dependency, no discriminative signal). Pivoting to **frame-level FC**: sliding window of raw mel frames → FC layers → beat + downbeat activation. ~60-200µs inference, well within 10ms frame budget.
+**NN Model Status:** Frame-level FC model deployed and running on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). Produces real beat/downbeat activations. **BandFlux is officially obsolete** — being removed in favor of NN ODF. Current priority: fix mel level calibration to improve NN activation quality on device.
 
 **Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Audio processing + FFT + detection + CBSS + generator + LED output consume ~6-7ms, leaving **~10ms for any NN inference**. Mel-spectrogram CNNs can't fit this budget, but FC layers can (~60-200µs).
 
@@ -26,11 +26,11 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ## Active Priorities
 
-### Priority 1: Frame-Level FC Beat/Downbeat Activation
+### Priority 1: Frame-Level NN Model Improvement
 
-**Status: DESIGN PHASE (March 11, 2026)**
+**Status: DEPLOYED, CALIBRATION NEEDED (March 12, 2026)**
 
-**Problem:** The deterministic pipeline (BandFlux + CBSS) achieves only ~28% beat F1 in mic-in-room conditions. Core failures:
+**Problem:** The NN model is deployed and producing non-zero output on device, but beat activations are weak (max ~0.26 at 120 BPM). Root cause: firmware mel values (mean ~0.52) are lower than training data (mean ~0.86) due to AGC level mismatch. The previous deterministic pipeline (BandFlux + CBSS) achieved only ~28% beat F1. Core failures:
 - **Octave errors**: ACF/comb filters have strong sub-harmonic peaks → half/double-time lock (135 BPM gravity well). Hand-tuned octave checks help but are brittle.
 - **Phase drift**: CBSS derives phase from a counter. Slight BPM error accumulates phase offset. PLL correction is conservative to avoid jitter.
 - **False beats during breakdowns**: CBSS forces beats when no onset is detected, maintaining phase through silence but triggering false visuals.
@@ -88,7 +88,7 @@ All frame-level FC options are well within the 10ms per-frame budget.
 
 1. **Raw mel bands as stable interface.** Same principle as beat-sync approach — uses `rawMelBands_` (pre-compression, pre-whitening), decoupled from 47+ tunable firmware parameters. Only depends on 8 fundamental constants (sample rate, FFT size, hop, mel bands, mel range, mel scale, log compression, window) that never change.
 
-2. **NN replaces BandFlux as ODF source.** The beat activation output feeds directly into CBSS as a higher-quality ODF signal. BandFlux becomes the fallback when NN is not compiled in.
+2. **NN replaces BandFlux as ODF source.** The beat activation output feeds directly into CBSS as a higher-quality ODF signal. BandFlux is obsolete and being removed from the codebase.
 
 3. **No circular dependency.** Feature extraction (raw mel frames) is independent of CBSS. The NN produces the ODF that CBSS consumes — a clean feedforward pipeline, not a feedback loop.
 
@@ -122,13 +122,13 @@ Output: [beat_prob, downbeat_prob] per frame
 
 **Projected resource usage:**
 
-| Resource | BandFlux (current) | Frame-level FC NN | Notes |
+| Resource | BandFlux (obsolete) | Frame-level FC NN (current) | Notes |
 |----------|-------------------|-------------------|-------|
 | ODF quality | ~28% F1 | Target >50% F1 | Learned vs hand-tuned |
-| Inference time | <0.1ms @ 62.5 Hz | ~60-200µs @ 15.6 Hz | Both negligible |
-| Tensor arena | 0 | ~8-16 KB | Modest |
+| Inference time | <0.1ms @ 62.5 Hz | ~3ms @ 62.5 Hz | Both well within budget |
+| Tensor arena | 0 | ~2 KB | Minimal |
 | Mel frame buffer | 0 | ~3.3 KB (32×26×4 bytes) | Ring buffer |
-| Model flash | 0 | ~20-60 KB INT8 | Depends on architecture |
+| Model flash | 0 | 56.8 KB INT8 | Per-tensor quantization |
 | Downbeat | No | Yes | New capability |
 
 **Training data and labels:**
@@ -152,28 +152,28 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 
 **Phased implementation:**
 
-- **Phase A (beat activation only):** Train FC on frame-level beat labels. NN output replaces BandFlux as CBSS ODF. A/B test vs BandFlux. No downbeat yet — validates the approach.
-- **Phase B (+ downbeat):** Add downbeat output head. Train jointly on beat + downbeat labels. Evaluate downbeat F1 improvement.
-- **Phase C (progressive simplification):** If NN ODF is reliable, A/B test removing hand-tuned BandFlux parameters (gamma, band weights, threshold, cooldown). Each parameter group removed independently with A/B validation.
+- ~~**Phase A (beat activation only):**~~ DONE — FC model deployed, beat+downbeat activation working on all 3 devices.
+- **Phase B (mel calibration):** Fix firmware/training mel level mismatch (firmware AGC produces mean ~0.52 vs training ~0.86). Retrain with corrected `target_rms_db` or capture real firmware mel streams for calibration. This is the current blocker for strong on-device activations.
+- **Phase C (model architecture iteration):** Evaluate Conv1D wide model (training complete), compare against FC. Explore larger windows, more hidden units, or hybrid approaches.
+- **Phase D (BandFlux removal):** Remove BandFlux code, EnsembleDetector, and all associated parameters (~15 BandFlux params, ensemble cooldown/confidence). Simplify firmware audio pipeline to NN-only ODF.
 
 **Research context:**
 - ALL leading beat trackers use frame-level NNs: BeatNet (CRNN), Beat This! (CNN+Transformer), madmom (BiLSTM), TCN beat tracker
 - Our innovation: using FC instead of CNN/RNN to fit Cortex-M4F compute budget, while following the same frame-level activation → post-processing paradigm
 - No published TinyML beat tracking on Cortex-M class hardware exists (as of March 2026)
 
-### Priority 2: v65 Parameter Calibration
+### Priority 2: BandFlux Removal
 
-**Status: NOT STARTED**
+**Status: PLANNED**
 
-New v65 parameters need sweep testing:
+With NN ODF as the primary and only approach, remove the obsolete BandFlux code:
+- `EnsembleDetector.h/.cpp` — BandFlux Solo detector
+- ~15 BandFlux parameters (`bfgamma`, `bfbassweight`, `bfmidweight`, `bfhighweight`, `bfmaxbin`, `bfonsetdelta`, etc.)
+- Ensemble fusion parameters (`enscooldown`, `ensminconf`, `ensminlevel`)
+- `nnbeat` toggle (NN becomes the only ODF, no fallback)
+- Update `AudioController.cpp` to remove BandFlux ODF path
 
-| Parameter | Default | Range | Command |
-|-----------|---------|-------|---------|
-| `snaphyst` | 0.8 | 0.0-1.0 | `set snaphyst` |
-| `dbema` | 0.3 | 0.05-0.9 | `set dbema` |
-| `dbthresh` | 0.5 | 0.1-0.9 | `set dbthresh` |
-| `dbdecay` | 0.85 | 0.5-0.99 | `set dbdecay` |
-| `pllwarmup` | 5 | 0-20 | `set pllwarmup` |
+**Depends on:** Priority 1 Phase B (mel calibration) — NN activations must be strong enough before removing BandFlux.
 
 ### ~~Priority 3: CBSS ODF Contrast~~ — COMPLETED (v66)
 
@@ -189,15 +189,19 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **Deterministic pipeline accuracy (~28% F1)** — BandFlux + CBSS is unreliable in mic-in-room conditions. Root causes: octave errors, phase drift, false beats during breakdowns, slow tempo adaptation. Priority 1 frame-level FC provides a learned ODF that should improve all four via better activation quality feeding into CBSS.
+1. **Mel level mismatch (ACTIVE)** — Firmware mel values (mean ~0.52) are lower than training data (mean ~0.86). This causes weak NN activations on device (max ~0.26 at 120 BPM). Root cause: training normalizes audio to -35 dB RMS, but firmware AGC produces different levels. Fix: retrain with corrected `target_rms_db` or capture real firmware mel streams for calibration.
 
-2. **Downbeat detection quality (F1 ~0.33)** — Only 2/4 consensus systems provide downbeat labels. Priority 1 Phase B provides learned downbeat activation from frame-level mel context.
+2. **NN activation quality** — With correct mel calibration, the NN should produce sharper, more discriminative beat activations. This is the biggest lever for improving overall beat tracking F1.
 
-3. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. A learned ODF that cleanly marks real beats (and not sub-harmonics) should reduce octave ambiguity in ACF/CBSS.
+3. **Downbeat detection quality (F1 ~0.33)** — Only 2/4 consensus systems provide downbeat labels. NN downbeat output head provides learned downbeat activation from frame-level mel context.
 
-4. **Phase alignment** — CBSS derives phase indirectly from a counter. A higher-quality NN ODF with sharper, more accurate beat activations gives CBSS better signal for phase tracking.
+4. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. A strong NN ODF that cleanly marks real beats (and not sub-harmonics) should reduce octave ambiguity in ACF/CBSS.
 
-5. **NN inference speed (RESOLVED)** — Mel-spectrogram CNN models require 79-98ms at 62.5 Hz (8-10× over budget). Frame-level FC runs ~60-200µs at 15.6 Hz, well within budget.
+5. **Phase alignment** — CBSS derives phase indirectly from a counter. Sharper NN beat activations give CBSS better signal for phase tracking.
+
+6. **NN inference speed (RESOLVED)** — Mel-spectrogram CNN models require 79-98ms at 62.5 Hz (8-10× over budget). Frame-level FC runs ~3ms, well within budget.
+
+7. **Per-channel quantization (RESOLVED March 12)** — TFLite converter defaulted to per-channel weight quantization, incompatible with CMSIS-NN FullyConnected kernel. Fixed: `_experimental_disable_per_channel=True` in export.
 
 ## SOTA Context (March 2026)
 
@@ -210,7 +214,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
 | **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The frame-level FC approach (Priority 1) follows the same paradigm (frame-level NN activation → post-processing) but uses FC layers instead of convolutions, achieving ~60-200µs inference — 400-1600× faster. The NN replaces BandFlux as the ODF source, providing a learned beat activation that feeds into CBSS for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from 47+ tunable firmware parameters.
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The frame-level FC approach follows the same paradigm (frame-level NN activation → post-processing) but uses FC layers instead of convolutions, achieving ~3ms inference. The NN is now the sole ODF source (BandFlux is obsolete and being removed), providing a learned beat activation that feeds into CBSS for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
 
 ## Known Limitations
 

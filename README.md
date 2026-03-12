@@ -18,10 +18,9 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 
 ### Audio Analysis
 - **🎵 CBSS Beat Tracking** - Counter-based beat prediction with deterministic phase
-- **🎧 BandFlux Solo Detector** - Log-compressed band-weighted spectral flux for kicks and snares
+- **🧠 NN Beat Detection** - Frame-level FC neural network for beat and downbeat activation (~3ms inference on Cortex-M4F)
 - **🎤 Advanced AGC** - Hardware + software automatic gain control
-- **📊 Rhythm Tracking** - Autocorrelation with tempo prior (60-200 BPM range)
-- **🔊 Transient Detection** - Agreement-based fusion with adaptive cooldown
+- **📊 Rhythm Tracking** - Autocorrelation with Bayesian tempo fusion (60-200 BPM range)
 - **50+ Tunable Parameters** - Comprehensive audio parameter system
 
 ### System Features

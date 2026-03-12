@@ -3,19 +3,16 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 11, 2026 (v66: cbssContrast=2.0 default, frame-level FC/Conv1D training)
+**Last Updated:** March 12, 2026 (Frame-level FC NN deployed on all devices, BandFlux obsolete)
 
-## Current Config (v64, SETTINGS_VERSION 64)
+## Current Config (v65+, SETTINGS_VERSION 64)
 
-**Detector:** BandWeightedFlux Solo (6 disabled detectors removed in v62)
-- gamma=20, bassWeight=2.0, midWeight=1.5, highWeight=0.1, threshold=0.5
-- minOnsetDelta=0.3 (onset sharpness gate)
+**ODF source:** FrameBeatNN (frame-level FC, 56.8 KB INT8, per-tensor quantization, ~3ms inference)
+- FC(832→64→32→2), 55K params, 32-frame window (0.5s at 62.5 Hz)
+- Beat + downbeat activation, deployed on all 3 devices (March 12)
+- Current activation range: 0.07-0.26 (weak — mel level calibration needed)
 
-**ODF source:** BandFlux Solo (default; NN beat activation available with `NN=1` build)
-- Mel-CNN (v4-v9) all 79-98ms on Cortex-M4F — too slow. DS-TCN 98ms. All CLOSED.
-- Frame-level FC and Conv1D models training (Mar 11). FC: ~60-200µs, Conv1D: ~3-8ms target.
-- Requires `NN=1` build flag. Toggle: `nnbeat=0/1`
-- A/B tested (v4 model vs BandFlux): 11/18 track wins, -0.8 mean error
+**BandFlux:** OBSOLETE — scheduled for removal. Code and ~15 parameters to be deleted once NN mel calibration is complete.
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
 - bayesacf=0.8, bayescomb=0.7, bayesft=0, bayesioi=0
@@ -57,30 +54,34 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 ## Current Bottlenecks
 
-1. **~135 BPM gravity well** -- Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks, octave folding asymmetry. Tested 47 bins in v61 — no improvement. NOT a bin count issue.
+1. **Mel level mismatch (ACTIVE)** — Firmware mel values (mean ~0.52) are lower than training data (mean ~0.86). Causes weak NN activations on device (max ~0.26 at 120 BPM). Fix: retrain with corrected `target_rms_db` or capture real firmware mel streams for calibration.
 
-2. **NN ODF quality** -- the biggest lever per SOTA research. Mel-CNN and DS-TCN all 79-98ms (closed). Frame-level FC and Conv1D models training (Mar 11).
+2. **NN activation quality** — With correct mel calibration, NN should produce sharper, more discriminative beat activations. This is the biggest lever for improving overall beat tracking F1.
 
-3. **Phase alignment** -- correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. All systems achieving >60% F1 use explicit phase tracking (HMM state, PLP oscillator, or particle cloud).
+3. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Stronger NN ODF should help.
 
-## Priority 1: Frame-Level NN Beat Activation
+4. **Phase alignment** — correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. Sharper NN activations help.
 
-**Status: TRAINING IN PROGRESS (March 11, 2026)**
+## Priority 1: NN Mel Calibration
 
-Mel-CNN (v4-v9) and DS-TCN all measured 79-98ms on Cortex-M4F — closed. Frame-level approach replaces them:
-- **Frame FC**: FC(832→64→32→2), 55K params, ~60-200µs. Training ~epoch 20/100.
-- **Frame Conv1D**: 3-layer causal Conv1D [32,48,32], 16K params, ~3-8ms target. Training ~epoch 17/100, outperforming FC (val_loss 0.4787 vs 0.5246).
-- Both use shift-tolerant BCE loss (±3 frames / ±48ms).
-- FrameBeatNN.h auto-detects FC vs Conv1D from TFLite input shape.
+**Status: NEEDED (March 12, 2026)**
 
-**Previous models (closed):**
-- v6-restart (5L ch32): Beat F1=0.727. 79ms. Too slow.
-- v7-melfixed (7L ch32): Beat F1=0.787. >79ms. Too slow.
-- v9 DS-TCN (24/32ch): 98ms (residual ADD ops). Too slow.
+The FC model is deployed and producing real output, but activations are weak. Root cause: firmware AGC produces lower mel levels than training normalization.
 
-**Next steps:**
-- Run `eval_and_export.sh` for both models post-training
-- Export winner to TFLite, flash to devices, A/B test vs BandFlux
+**Approaches to investigate:**
+1. Lower `target_rms_db` in training config (e.g. -45 dB instead of -35 dB) to match firmware AGC levels
+2. Capture real firmware mel streams via `stream nn` and use as calibration reference
+3. Add mel normalization layer in firmware before NN input (mean/variance normalization)
+
+## Priority 2: Conv1D Wide Model Evaluation
+
+**Status: TRAINING COMPLETE (March 12, 2026)**
+
+Conv1D wide model finished training (val_loss=0.4756, epoch 28). Needs export, evaluation, and comparison against FC model. FrameBeatNN.h auto-detects FC vs Conv1D from TFLite input shape.
+
+## Priority 3: BandFlux Removal
+
+Remove obsolete BandFlux code and ~15 associated parameters once NN mel calibration is complete. See `IMPROVEMENT_PLAN.md` Priority 2.
 
 ## ~~Priority 2: CBSS ODF Contrast~~ — COMPLETED (v66)
 

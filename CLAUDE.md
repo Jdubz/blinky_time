@@ -109,7 +109,8 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0 NN=1
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (v64, multi-detector fusion removed)
+- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Frame-level FC NN beat/downbeat activation (primary ODF)
+- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (OBSOLETE, scheduled for removal)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
 
@@ -164,13 +165,8 @@ AdaptiveMic (AGC + normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── EnsembleDetector (BandWeightedFlux Solo) → ODF [default]
-    ├── [NN=1 build] FrameBeatNN (frame-level FC, ~60-200µs) → ODF [nnbeat=1]
-    ↓
-AudioController (CBSS beat tracking)
-    │
-    ├── [NN=1, planned] FrameBeatNN (FC on mel frame window, ~15.6 Hz)
-    │     → beat_activation (replaces BandFlux ODF) + downbeat_activation
+    ├── [NN=1 build] FrameBeatNN (frame-level FC, ~3ms) → ODF (primary)
+    ├── [OBSOLETE] EnsembleDetector (BandFlux Solo) → scheduled for removal
     ↓
 AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat*, beatInMeasure*}
     (* = planned, driven by FrameBeatNN when available; currently from mel CNN or mod-4 counter)
@@ -189,16 +185,15 @@ RenderPipeline → LED Output
    - `SharedSpectralAnalysis.h` - FFT-256 (128 freq bins @ 62.5 Hz), soft-knee compressor → per-bin whitening (v23+)
    - Window/range normalization (0-1 output)
 
-2. **Transient Detection**
-   - `EnsembleDetector.h` - BandFlux Solo detector (v64, 6 disabled detector types removed)
-   - BandFlux: log-compressed band-weighted spectral flux with additive threshold and onset delta filter
-   - Noise gate + confidence threshold + tempo-adaptive cooldown
-   - DetectorType enum collapsed to BAND_FLUX only (v64)
+2. **Onset Detection**
+   - `FrameBeatNN.h` - **Primary ODF**: Frame-level FC neural network (56.8 KB INT8, ~3ms inference, NN=1 build)
+   - Input: 32 frames × 26 raw mel bands (0.5s window). Output: beat_activation + downbeat_activation
+   - `EnsembleDetector.h` - **OBSOLETE** (BandFlux Solo, scheduled for removal)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: BandFlux (default) or legacy mel CNN (`nnbeat=1`, requires NN=1 build, default ON — functional but 79-98ms limits framerate to ~12 Hz). Frame-level FC NN (planned) will replace BandFlux as ODF + add downbeat activation.
+   - ODF source: FrameBeatNN (frame-level FC, ~3ms, NN=1 build). BandFlux is OBSOLETE and scheduled for removal.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -315,15 +310,14 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands)
-3. SharedSpectralAnalysis → EnsembleDetector (BandFlux Solo, sees whitened magnitudes)
-4. BandFlux → ODF value (0-1)
+3. SharedSpectralAnalysis → FrameBeatNN (32-frame mel window → FC layers → beat + downbeat activation)
+4. FrameBeatNN beat_activation → ODF value (0-1)
 5. ODF → AudioController OSS buffer (6s history)
 6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
    (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
-9. [NN=1, planned] Every 4th frame: FrameBeatNN (FC on mel window) → beat_activation + downbeat
-   beat_activation replaces BandFlux ODF; downbeat drives AudioControl.downbeat
+9. FrameBeatNN downbeat_activation → AudioControl.downbeat
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
     onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
 11. Fire generator:
@@ -390,7 +384,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
-- ✅ BandFlux Solo detector (log-compressed band-weighted spectral flux)
+- ✅ FrameBeatNN (frame-level FC, 56.8 KB INT8, deployed on all devices)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
@@ -404,7 +398,9 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
 **In Progress:**
-- Frame-level FC beat/downbeat activation NN (~15.6 Hz inference, design phase — replaces abandoned beat-synchronous approach)
+- NN mel calibration (firmware mel mean ~0.52 vs training ~0.86, causes weak activations)
+- Conv1D wide model evaluation (training complete, needs export and comparison)
+- BandFlux code removal (after mel calibration complete)
 
 **Planned (Not Started):**
 - Bluetooth/BLE support (design doc complete)
@@ -437,17 +433,18 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-BandFlux Solo — single detector. DetectorType enum collapsed to BAND_FLUX only (v64).
-6 disabled detector types and 12 source files removed. Multi-detector fusion logic removed.
+FrameBeatNN — frame-level FC neural network (primary ODF). FC(832→64→32→2), 55K params, 56.8 KB INT8.
+Input: 32 frames × 26 raw mel bands (0.5s window at 62.5 Hz). Output: beat_activation (ODF for CBSS) + downbeat_activation.
+~3ms inference on Cortex-M4F. Deployed on all 3 devices (March 2026).
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
+BandFlux Solo (EnsembleDetector) is OBSOLETE and scheduled for removal.
 
 ### Key Features
-- **BandFlux Solo**: Log-compressed band-weighted spectral flux with additive threshold and onset delta filter (minOnsetDelta=0.3)
+- **FrameBeatNN** (v65+): Frame-level FC neural network, primary ODF source. Per-tensor INT8 quantization (CMSIS-NN requirement). ~3ms inference at ~15.6 Hz.
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 64
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
 - **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better
 - **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation, adaptive threshold
-- **NN beat activation** (v54+, CLOSED for CNN): Mel-spectrogram CNN models (v4-v9) all 79-98ms — too slow. Beat-synchronous FC hybrid also abandoned (circular dependency, no discriminative signal). Pivoting to frame-level FC: sliding window of raw mel frames → FC layers → beat + downbeat activation at ~15.6 Hz, ~60-200µs inference. See `IMPROVEMENT_PLAN.md` Priority 1.
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)

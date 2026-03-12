@@ -4,7 +4,8 @@
 
 AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output an `AudioControl` struct with 6 parameters.
 
-**Current Version:** AudioController with CBSS Beat Tracking + NN Beat ODF (March 2026)
+**Current Version:** AudioController with CBSS Beat Tracking + Frame-Level NN ODF (March 2026)
+**ODF Source:** FrameBeatNN (frame-level FC, 56.8 KB INT8). BandFlux is obsolete and scheduled for removal.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -51,13 +52,11 @@ AdaptiveMic (level, transient, spectral flux)
       |
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |
-      +--- EnsembleDetector (BandFlux Solo) --> ODF [default]
-      |                                    --> Transient Hits (visual only)
-      +--- [NN=1 build] FrameBeatNN (frame-level FC, ~60-200µs) --> ODF [nnbeat=1]
+      +--- FrameBeatNN (frame-level FC, ~3ms, NN=1 build)
+      |         Input: sliding window of rawMelBands_ (32 frames × 26 bands)
+      |         Output: beat_activation (ODF for CBSS) + downbeat_activation
       |
-      +--- [planned] FrameBeatNN (FC, ~15.6 Hz)
-      |                   Input: sliding window of rawMelBands_ (N frames × 26)
-      |                   Output: beat_activation (replaces BandFlux ODF) + downbeat_activation
+      +--- [OBSOLETE, being removed] EnsembleDetector (BandFlux Solo)
       |
 OSS Buffer (6s @ 60Hz)
       |
@@ -207,31 +206,19 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ---
 
-## Detection: EnsembleDetector
+## Detection: FrameBeatNN (Primary ODF)
 
-AudioController delegates transient detection to the EnsembleDetector. Currently **BandFlux Solo** config (1 detector enabled):
+`FrameBeatNN` is the primary ODF source. It processes a sliding window of raw mel frames (32 frames × 26 bands) every spectral frame. Produces two outputs: **beat activation** (ODF for CBSS) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing — but uses FC layers instead of convolutions for Cortex-M4F feasibility (~3ms vs 79-98ms for CNNs). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Enabled by default when built with `NN=1`.
 
-| Detector | Weight | Threshold | Role |
-|----------|--------|-----------|------|
-| **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted spectral flux |
+**Architecture:** FC(832→64→32→2), 55K params, 56.8 KB INT8 (per-tensor quantization). Tensor arena ~2 KB, window buffer 3.2 KB.
 
-6 disabled detectors (Drummer, SpectralFlux, HFC, BassBand, ComplexDomain, Novelty) removed in v64. Source files deleted, DetectorType enum collapsed to BAND_FLUX only.
+**TFLite export note:** Must use per-tensor weight quantization (`_experimental_disable_per_channel=True`). CMSIS-NN FullyConnected kernel does not support per-channel quantization — causes constant zero output.
 
-Design goal: trigger on **kicks and snares** only. Hi-hats and cymbals create overly busy visuals and are filtered out.
+### EnsembleDetector / BandFlux (OBSOLETE — scheduled for removal)
 
-### NN Beat Activation (FrameBeatNN — frame-level FC)
+BandFlux Solo was the previous ODF source. It used log-compressed band-weighted spectral flux tuned for kicks and snares. 6 disabled detectors were already removed in v64. BandFlux itself is now obsolete, superseded by FrameBeatNN's learned ODF. Code and ~15 associated parameters will be removed once NN mel calibration is complete (see `IMPROVEMENT_PLAN.md` Priority 2).
 
-**Current (frame-level FC beat/downbeat activation):** `FrameBeatNN` processes a sliding window of raw mel frames (N frames × 26 bands) at ~15.6 Hz (every 4th frame). Produces two outputs: **beat activation** (replaces BandFlux as ODF for CBSS) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing — but uses FC layers instead of convolutions for Cortex-M4F feasibility (~60-200µs vs 79-98ms). Uses raw mel bands (pre-compression, pre-whitening), decoupled from 47+ tunable firmware parameters. Wired through `FrameBeatNN` / `AudioController` / `ConfigStorage` and enabled by default when built with `NN=1` (`nnBeatEnabled=true`). See `IMPROVEMENT_PLAN.md` Priority 1 for full design.
-
-**Previous approach (mel-spectrogram CNN, CLOSED):** All architectures (v4-v9) measured 79-98ms on Cortex-M4F — too slow for 60 Hz frame budget. Best offline F1: v7-melfixed 0.787. Superseded by FrameBeatNN. See `IMPROVEMENT_PLAN.md` Closed Investigations.
-
-**Previous approach (beat-synchronous hybrid, ABANDONED March 11):** A beat-rate FC classifier on accumulated spectral summaries was prototyped (Phase A downbeat-only, val_F1=0.548). Abandoned due to circular dependency with CBSS, negligible discriminative power in per-beat features, and misalignment with proven approaches. See `IMPROVEMENT_PLAN.md` Closed Investigations.
-
-**Key settings:**
-
-| Parameter | Default | Description | SerialConsole Command |
-|-----------|---------|-------------|----------------------|
-| `nnBeatEnabled` | true | Use FrameBeatNN ODF instead of BandFlux (requires NN=1 build) | `set nnbeat 1` |
+**Previous NN approaches (CLOSED):** Mel-spectrogram CNN (v4-v9, 79-98ms, too slow), beat-synchronous hybrid (circular dependency, no discriminative signal). See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
 ---
 
