@@ -468,10 +468,14 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
 
     model, has_downbeat = _load_model(model_path, cfg, device)
 
-    # Batch predict
-    X_tensor = torch.from_numpy(X_val).float().to(device)
+    # Batch predict (chunked to avoid GPU OOM on large val sets)
+    batch_size = 4096
+    Y_pred_parts = []
     with torch.no_grad():
-        Y_pred_all = model(X_tensor).cpu().numpy()
+        for start in range(0, len(X_val), batch_size):
+            X_batch = torch.from_numpy(X_val[start:start + batch_size]).float().to(device)
+            Y_pred_parts.append(model(X_batch).cpu().numpy())
+    Y_pred_all = np.concatenate(Y_pred_parts, axis=0)
 
     Y_pred_beat = Y_pred_all[:, :, 0]
     _print_frame_metrics("Beat", Y_pred_beat, Y_val)
