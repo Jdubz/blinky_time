@@ -3,14 +3,15 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 12, 2026 (BandFlux fully removed v67, mel calibration in progress)
+**Last Updated:** March 13, 2026 (cal63 deployed on all 3 devices, CBSS sweeps done, w64 training)
 
-## Current Config (v67, SETTINGS_VERSION 67)
+## Current Config (v70, SETTINGS_VERSION 70)
 
-**ODF source:** FrameBeatNN (frame-level FC, 56.8 KB INT8, per-tensor quantization, ~60-200µs inference)
+**ODF source:** FrameBeatNN (frame-level FC, 56.8 KB INT8, per-tensor quantization, ~3ms inference)
 - FC(832→64→32→2), 55K params, 32-frame window (0.5s at 62.5 Hz)
 - Beat + downbeat activation, deployed on all 3 devices (March 12)
-- Mel calibration corrected: target_rms_db -35→-63 dB (mel mean 0.52, matching firmware AGC). Retraining in progress.
+- **Cal63 model** (mel-calibrated at -63 dB RMS) deployed on all 3 devices (March 13). On-device A/B: ~50% stronger ODF, BPM improved 4/6 tracks, downbeat functional.
+- W64 model (64-frame window, 109K params, ~106 KB INT8) training in progress (epoch 16/60).
 - BandFlux/EnsembleDetector fully removed (v67, ~2600 lines, ~24 settings deleted).
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
@@ -53,30 +54,37 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 ## Current Bottlenecks
 
-1. **Mel level mismatch (ACTIVE)** — Firmware mel values (mean ~0.52) are lower than training data (mean ~0.86). Causes weak NN activations on device (max ~0.26 at 120 BPM). Fix: retrain with corrected `target_rms_db` or capture real firmware mel streams for calibration.
+1. ~~**Mel level mismatch (RESOLVED March 13)**~~ — Fixed with cal63 model (target_rms_db=-63 dB). ODF activations ~50% stronger on device.
 
-2. **NN activation quality** — With correct mel calibration, NN should produce sharper, more discriminative beat activations. This is the biggest lever for improving overall beat tracking F1.
+2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0, 6 steps) and `cbsscontrast` (1.0-3.0, 5 steps) on all 3 devices with cal63 ODF. Neither parameter showed significant improvement over current defaults. cbssthresh: mean error 10.1-11.4 (current 1.0 ≈ 11.0). cbsscontrast: mean error 8.9-11.2 (current 2.0 ≈ 10.8). Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) are self-compensating as expected. **No changes needed.**
 
-3. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Stronger NN ODF should help.
+3. **~135 BPM gravity well** — Multi-factorial. Not improved by CBSS parameter tuning. Not a tempo bin resolution issue (47 bins tested v61, full-res ACF already evaluates all lags). Likely requires better NN ODF or Rayleigh prior adjustment.
 
 4. **Phase alignment** — correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. Sharper NN activations help.
 
-## Priority 1: NN Mel Calibration
+5. **Downbeat label ceiling** — Consensus v3 AND-merge improved label quality (65% noisy single-system labels removed), but inter-annotator agreement remains the ceiling. Offline DB F1=0.24. On-device downbeat activations are now functional with cal63 (max 0.37-0.57).
 
-**Status: NEEDED (March 12, 2026)**
+## Priority 1: W64 Model Evaluation
 
-The FC model is deployed and producing real output, but activations are weak. Root cause: firmware AGC produces lower mel levels than training normalization.
+**Status: TRAINING IN PROGRESS (March 13, 2026)**
 
-**Approaches to investigate:**
-1. Lower `target_rms_db` in training config (e.g. -45 dB instead of -35 dB) to match firmware AGC levels
-2. Capture real firmware mel streams via `stream nn` and use as calibration reference
-3. Add mel normalization layer in firmware before NN input (mean/variance normalization)
+64-frame window FC model (1024ms context, ~2 beats at 120 BPM). FC(1664→64→32→2), 109K params, ~106 KB INT8, ~400µs estimated inference. Expected to improve downbeat detection via longer context. Training ~60 epochs (~6 min/epoch, epoch 16/60 at time of writing).
 
-## Priority 2: Conv1D Wide Model Evaluation
+**When training completes:**
+1. Evaluate offline (beat/downbeat F1 on EDM test tracks)
+2. Export to TFLite INT8
+3. Deploy to one device, compare activations vs cal63 (32-frame)
+4. Full on-device A/B test if offline metrics are promising
 
-**Status: TRAINING COMPLETE (March 12, 2026)**
+## ~~Priority 2: CBSS Parameter Re-Tuning~~ — DONE (No Change)
 
-Conv1D wide model finished training (val_loss=0.4756, epoch 28). Needs export, evaluation, and comparison against FC model. FrameBeatNN.h auto-detects FC vs Conv1D from TFLite input shape.
+**Swept March 13, 2026.** Both `cbssthresh` and `cbsscontrast` tested on all 3 devices (cal63 firmware) across 18 tracks.
+
+cbssthresh (0.5, 0.8, 1.1, 1.4, 1.7, 2.0): Mean err range 10.1-11.4, octave errs 11-13/18. Marginal differences. cbsscontrast (1.0, 1.5, 2.0, 2.5, 3.0): Mean err range 8.9-11.2, octave errs 11-13/18. No clear winner. Current defaults (cbssthresh=1.0, cbsscontrast=2.0) retained.
+
+## ~~Priority 3: Conv1D Wide Model Evaluation~~ — DONE
+
+**Evaluated March 12**: Beat F1=0.500, DB F1=0.217. 24K params, ~24 KB INT8. Nearly matches FC (0.491) at half the model size but ~10.8ms inference (vs ~3ms FC). Superseded by w64 investigation.
 
 ## ~~Priority 3: BandFlux Removal~~ — COMPLETED (v67)
 

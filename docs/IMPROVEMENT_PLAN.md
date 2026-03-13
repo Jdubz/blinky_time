@@ -8,7 +8,7 @@
 
 **Firmware:** v70 (SETTINGS_VERSION 70). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (always-on, TFLite required). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation. Dimension-independent generator params (v69). All v65 rhythm params persisted (v70).
 
-**NN Model Status:** Frame-level FC model deployed and running on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). Produces real beat/downbeat activations. **BandFlux is officially obsolete** — being removed in favor of NN ODF. Current priority: fix mel level calibration to improve NN activation quality on device.
+**NN Model Status:** Frame-level FC model deployed on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). **Mel calibration DONE** — cal63 model trained with corrected target_rms_db=-63 dB. On-device A/B test (6 tracks) shows ~50% stronger ODF activations (mean 0.30 vs 0.20), BPM accuracy improved on 4/6 tracks, and functional downbeat detection (max 0.37-0.57 vs 0.00 on old model). Cal63 deployed on ACM0; ACM1/ACM2 still on old model. W64 model (64-frame window, 109K params, ~106 KB INT8) training in progress.
 
 **Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Audio processing + FFT + detection + CBSS + generator + LED output consume ~6-7ms, leaving **~10ms for any NN inference**. Mel-spectrogram CNNs can't fit this budget, but FC layers can (~60-200µs).
 
@@ -153,8 +153,8 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 **Phased implementation:**
 
 - ~~**Phase A (beat activation only):**~~ DONE — FC model deployed, beat+downbeat activation working on all 3 devices.
-- **Phase B (mel calibration):** ~~Fix firmware/training mel level mismatch.~~ DONE — calibrated `target_rms_db` from -35 to -63 dB (mel mean 0.52, matching firmware AGC). Dataset reprocessing in progress.
-- **Phase C (model architecture iteration):** Evaluate Conv1D wide model (training complete), compare against FC. Explore larger windows (16/32/48/64 frame configs ready), more hidden units, or hybrid approaches.
+- ~~**Phase B (mel calibration):**~~ DONE — calibrated `target_rms_db` from -35 to -63 dB (mel mean 0.52, matching firmware AGC). Cal63 model trained on corrected data. On-device A/B (6 tracks): mean ODF 0.30 vs 0.20 (+50%), BPM accuracy improved 4/6, downbeat activations now functional (max 0.37-0.57 vs 0.00).
+- **Phase C (model architecture iteration):** W64 model training in progress (64-frame window, 109K params, [64,32] hidden, ~106 KB INT8). Conv1D wide evaluated (beat F1=0.500, DB F1=0.217). Configs for 16/32/48/64 frames ready.
 - ~~**Phase D (BandFlux removal):**~~ DONE (v67) — Removed EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult. 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved. SETTINGS_VERSION 66→67.
 
 **Research context:**
@@ -182,19 +182,19 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **Mel level mismatch (ACTIVE)** — Firmware mel values (mean ~0.52) are lower than training data (mean ~0.86). This causes weak NN activations on device (max ~0.26 at 120 BPM). Root cause: training normalizes audio to -35 dB RMS, but firmware AGC produces different levels. Fix: retrain with corrected `target_rms_db` or capture real firmware mel streams for calibration.
+1. ~~**Mel level mismatch (RESOLVED March 13)**~~ — Fixed by retraining with `target_rms_db=-63` (cal63 model). On-device ODF activations now ~50% stronger (mean 0.30 vs 0.20). Deployed on ACM0.
 
-2. **NN activation quality** — With correct mel calibration, the NN should produce sharper, more discriminative beat activations. This is the biggest lever for improving overall beat tracking F1.
+2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0) and `cbsscontrast` (1.0-3.0) across 18 tracks on all 3 devices with cal63 ODF. Neither showed significant improvement over current defaults. Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) confirmed self-compensating. No changes needed.
 
-3. **Downbeat detection quality (F1 ~0.33)** — Only 2/4 consensus systems provide downbeat labels. NN downbeat output head provides learned downbeat activation from frame-level mel context.
+3. **Downbeat detection quality (F1 ~0.24 offline)** — Consensus v3 labels now use AND-merge (require 2+ system agreement), eliminating 65% of noisy single-system downbeat labels. Cal63 trained on v3. On-device downbeat activations are now functional (max 0.37-0.57), but offline F1 remains limited by label quality ceiling.
 
-4. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. A strong NN ODF that cleanly marks real beats (and not sub-harmonics) should reduce octave ambiguity in ACF/CBSS.
+4. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Not improved by CBSS parameter tuning (March 13 sweep). Not a tempo bin resolution issue (47 bins tested v61; ACF already evaluates at full lag resolution). Likely requires better NN ODF discrimination or Rayleigh prior adjustment.
 
 5. **Phase alignment** — CBSS derives phase indirectly from a counter. Sharper NN beat activations give CBSS better signal for phase tracking.
 
-6. **NN inference speed (RESOLVED)** — Mel-spectrogram CNN models require 79-98ms at 62.5 Hz (8-10× over budget). Frame-level FC runs ~3ms, well within budget.
+6. ~~**NN inference speed (RESOLVED)**~~ — Frame-level FC runs ~3ms, well within 10ms budget.
 
-7. **Per-channel quantization (RESOLVED March 12)** — TFLite converter defaulted to per-channel weight quantization, incompatible with CMSIS-NN FullyConnected kernel. Fixed: `_experimental_disable_per_channel=True` in export.
+7. ~~**Per-channel quantization (RESOLVED March 12)**~~ — Fixed: `_experimental_disable_per_channel=True` in export.
 
 ## SOTA Context (March 2026)
 
@@ -213,7 +213,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** | P1 NN ODF (cleaner activations reduce ACF ambiguity) |
+| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** | Not CBSS params or bin count. Rayleigh prior or NN ODF quality. |
 | Phase alignment limits F1 | CBSS derives phase indirectly | **High** | P1 NN ODF (sharper beat activations improve CBSS phase) |
 | Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** | Acceptable for visuals |
