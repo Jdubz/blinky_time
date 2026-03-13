@@ -60,6 +60,20 @@ If a device stops responding to serial commands:
 3. If the port disappeared entirely, wait 10 seconds and check `ls /dev/ttyACM*`
 4. Last resort: physically access the device and double-tap reset
 
+## CRITICAL: Long-Running Scripts
+
+**NEVER run ML training or other long-running scripts as Claude session tasks.**
+Claude background tasks die when the session ends, killing training mid-run.
+
+Always use tmux:
+```bash
+tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/frame_fc.yaml --output-dir outputs/... 2>&1 | tee outputs/.../training.log"
+```
+
+To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/.../training.log`
+
+`train.py` enforces this — it will refuse to start outside tmux/screen unless `--allow-foreground` is passed.
+
 ## Compilation Commands
 
 ```bash

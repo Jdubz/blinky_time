@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import time
 
 import sys
@@ -187,7 +188,20 @@ def main():
                         help="Distillation temperature (default: 2.0)")
     parser.add_argument("--patience", type=int, default=None,
                         help="Early stopping patience (default: from config, or 15)")
+    parser.add_argument("--allow-foreground", action="store_true",
+                        help="Allow running outside tmux/screen (not recommended)")
     args = parser.parse_args()
+
+    # Guard: training takes hours — must run in tmux/screen to survive session end.
+    # Claude Code background tasks die when the session closes, killing training mid-run.
+    if not args.allow_foreground:
+        in_tmux = os.environ.get("TMUX")
+        in_screen = os.environ.get("STY")
+        if not (in_tmux or in_screen):
+            print("ERROR: Training must run inside tmux or screen to survive session disconnects.")
+            print("  tmux new-session -d -s training 'source venv/bin/activate && python train.py ...'")
+            print("  Or pass --allow-foreground to override (not recommended).")
+            sys.exit(1)
 
     cfg = load_config(args.config)
 
