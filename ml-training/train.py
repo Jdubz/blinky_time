@@ -21,7 +21,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, RandomSampler
 from models.beat_cnn import build_beat_cnn
 from scripts.audio import load_config
 
@@ -188,6 +188,11 @@ def main():
                         help="Distillation temperature (default: 2.0)")
     parser.add_argument("--patience", type=int, default=None,
                         help="Early stopping patience (default: from config, or 15)")
+    parser.add_argument("--subsample", type=float, default=None,
+                        help="Fraction of training data to sample per epoch (0-1). "
+                             "Each epoch sees a different random subset. Default: from config, or 1.0")
+    parser.add_argument("--num-workers", type=int, default=None,
+                        help="DataLoader workers (default: from config, or 4)")
     parser.add_argument("--allow-foreground", action="store_true",
                         help="Allow running outside tmux/screen (not recommended)")
     args = parser.parse_args()
@@ -289,10 +294,20 @@ def main():
     print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
     print(f"  Suggested pos_weight: {suggested_pw:.1f} (configured: {beat_pos_weight})")
 
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=4, pin_memory=True, persistent_workers=True)
+    num_workers = args.num_workers if args.num_workers is not None else cfg["training"].get("num_workers", 4)
+    subsample = args.subsample if args.subsample is not None else cfg["training"].get("subsample", 1.0)
+
+    if subsample < 1.0:
+        subset_size = max(1, int(len(train_ds) * subsample))
+        train_sampler = RandomSampler(train_ds, num_samples=subset_size, replacement=False)
+        train_loader = DataLoader(train_ds, batch_size=batch_size, sampler=train_sampler,
+                                  num_workers=num_workers, pin_memory=True, persistent_workers=True)
+        print(f"Subsampling: {subset_size:,} of {len(train_ds):,} per epoch ({subsample:.0%})")
+    else:
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
+                                  num_workers=num_workers, pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
-                            num_workers=4, pin_memory=True, persistent_workers=True)
+                            num_workers=num_workers, pin_memory=True, persistent_workers=True)
 
     # Build model
     model_type = cfg["model"].get("type", "causal_cnn")
@@ -367,7 +382,10 @@ def main():
         print(f"Loss: weighted BCE")
 
     # Training loop
+    steps_per_epoch = len(train_loader)
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
+    print(f"  {steps_per_epoch} steps/epoch, {epochs * steps_per_epoch} total steps")
+    print(f"  Patience: {args.patience or cfg['training'].get('patience', 15)} epochs")
     print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
     if use_distill:
         print(f"Distillation: alpha={distill_alpha}, temp={distill_temp}")
@@ -387,6 +405,7 @@ def main():
         train_loss = 0.0
         train_correct = 0
         train_total = 0
+        train_samples = 0
         epoch_start = time.time()
 
         for batch_idx, (X_batch, Y_batch, T_batch) in enumerate(train_loader):
@@ -414,6 +433,7 @@ def main():
             train_loss += loss.item() * X_batch.size(0)
             train_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
             train_total += Y_batch.numel()
+            train_samples += X_batch.size(0)
 
             if (batch_idx + 1) % log_interval == 0:
                 elapsed = time.time() - epoch_start
@@ -423,7 +443,7 @@ def main():
                       f"loss={running_loss:.4f} "
                       f"elapsed={elapsed:.0f}s eta={eta:.0f}s", flush=True)
 
-        train_loss /= len(train_ds)
+        train_loss /= max(train_samples, 1)
         train_acc = train_correct / train_total
 
         # --- Validate ---
