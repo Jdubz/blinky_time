@@ -11,9 +11,15 @@
 #
 # Usage:
 #   bash tools/setup_tflite_lib.sh
+#   bash tools/setup_tflite_lib.sh --ci   # non-interactive (auto-reinstall, quiet wget)
 #   make setup-tflite
 
 set -euo pipefail
+
+CI_MODE=false
+if [[ "${1:-}" == "--ci" ]]; then
+    CI_MODE=true
+fi
 
 REPO_URL="https://github.com/lakshanthad/tflite-micro-arduino-examples"
 LIB_NAME="tflite-micro-arduino-examples"
@@ -34,8 +40,12 @@ if arduino-cli lib list 2>/dev/null | grep -qi "tflite\|tensorflowlite\|tensorfl
     echo "TFLite library already installed:"
     arduino-cli lib list 2>/dev/null | grep -i "tflite\|tensorflowlite\|tensorflow"
     echo ""
-    read -rp "Reinstall? [y/N] " reply
-    [[ "$reply" =~ ^[Yy]$ ]] || { echo "Skipped."; exit 0; }
+    if $CI_MODE; then
+        echo "CI mode: auto-reinstalling..."
+    else
+        read -rp "Reinstall? [y/N] " reply
+        [[ "$reply" =~ ^[Yy]$ ]] || { echo "Skipped."; exit 0; }
+    fi
     # Remove old installation
     LIB_DIR=$(arduino-cli config get directories.user 2>/dev/null || echo "$HOME/Arduino")/libraries
     rm -rf "$LIB_DIR/tflite-micro-arduino-examples-main" "$LIB_DIR/Arduino_TensorFlowLite" 2>/dev/null || true
@@ -45,8 +55,13 @@ fi
 arduino-cli config set library.enable_unsafe_install true 2>/dev/null || true
 
 echo "Downloading TFLite Micro Arduino library..."
-wget -q --show-progress -O "$TMP_DIR/$LIB_NAME.zip" \
-    "$REPO_URL/archive/refs/heads/main.zip"
+if $CI_MODE; then
+    wget -q -O "$TMP_DIR/$LIB_NAME.zip" \
+        "$REPO_URL/archive/refs/heads/main.zip"
+else
+    wget -q --show-progress -O "$TMP_DIR/$LIB_NAME.zip" \
+        "$REPO_URL/archive/refs/heads/main.zip"
+fi
 
 echo "Installing via arduino-cli..."
 arduino-cli lib install --zip-path "$TMP_DIR/$LIB_NAME.zip"

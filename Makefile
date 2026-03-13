@@ -30,9 +30,6 @@ UPLOAD_PORT ?= /dev/ttyACM0
 BUILD_OUTPUT_DIR ?= /tmp/blinky-build
 UF2_UPLOAD_TOOL = tools/uf2_upload.py
 
-# NN beat activation (always enabled — TFLite is a required dependency)
-EXTRA_CPP_FLAGS += -DENABLE_NN_BEAT_ACTIVATION
-
 # Arduino CLI detection
 ifeq ($(OS),Windows_NT)
     ARDUINO_CLI = arduino-cli.exe

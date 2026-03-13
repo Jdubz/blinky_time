@@ -112,10 +112,9 @@ if [[ -n "$PRE_BUILT_UF2" ]]; then
     log "Using pre-built UF2: $PRE_BUILT_UF2"
     UF2_FILE="$PRE_BUILT_UF2"
 else
-    EXTRA_FLAGS="--build-property compiler.cpp.extra_flags=-DENABLE_NN_BEAT_ACTIVATION"
     log "Compiling firmware..."
 
-    if ! $ARDUINO_CLI compile --fqbn "$FQBN" $EXTRA_FLAGS \
+    if ! $ARDUINO_CLI compile --fqbn "$FQBN" \
         --output-dir "$BUILD_DIR" "$PROJECT_DIR/blinky-things" 2>&1 | tail -3; then
         fail "Compilation failed"
         exit 1

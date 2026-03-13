@@ -64,7 +64,7 @@ If a device stops responding to serial commands:
 
 ```bash
 # Compile only (in-tree build, requires TFLite library)
-arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense --build-property "compiler.cpp.extra_flags=-DENABLE_NN_BEAT_ACTIVATION" blinky-things
+arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things
 
 # Compile + validate + upload via UF2 (recommended)
 make uf2-upload UPLOAD_PORT=/dev/ttyACM0
