@@ -444,10 +444,8 @@ void AudioController::runAutocorrelation(uint32_t nowMs) {
     // Clamp fundamental range to harmonic range (fires when OSS buffer < one full period)
     if (correlationSize > harmonicCorrelationSize) correlationSize = harmonicCorrelationSize;
 
-    // FIX: Clear the portion we'll use to prevent stale data (full harmonic range)
-    for (int i = 0; i < harmonicCorrelationSize; i++) {
-        correlationAtLag[i] = 0.0f;
-    }
+    // Clear entire buffer to prevent any stale data from previous calls
+    memset(correlationAtLag, 0, sizeof(correlationAtLag));
 
     float maxCorrelation = 0.0f;
     int bestLag = minLag;  // FIX: Initialize to valid lag, not 0

@@ -188,8 +188,8 @@ void Water::renderParticle(const Particle* p, PixelMatrix& matrix) {
 uint32_t Water::particleColor(uint8_t intensity) const {
     // White/light cyan drops for visibility against blue background
     uint8_t white = intensity;
-    uint8_t blue = min(255, intensity + 40);
-    uint8_t green = intensity * 3 / 4;
+    uint8_t blue = (uint8_t)min(255, (int)intensity + 40);
+    uint8_t green = (uint8_t)((uint16_t)intensity * 3 / 4);
     return ((uint32_t)white << 16) | ((uint32_t)green << 8) | blue;
 }
 

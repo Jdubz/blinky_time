@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PropagationModel.h"
+#include "../types/BlinkyAssert.h"
 #include <Arduino.h>
 
 /**
@@ -30,9 +31,9 @@ public:
         // THREAD SAFETY: Uses static buffer - assumes single-threaded execution
         // (standard for embedded systems, multiple generators don't run concurrently)
         static uint8_t tempHeat[256];
+        BLINKY_ASSERT(numLeds <= 256 && numLeds > 0,
+            "LinearPropagation: numLeds out of range (max 256)");
         if (numLeds > 256 || numLeds == 0) {
-            // Cannot propagate: buffer too small or no LEDs
-            // Skip propagation rather than corrupt memory or produce incorrect results
             return;
         }
 

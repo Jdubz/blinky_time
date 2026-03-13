@@ -275,6 +275,13 @@ void ConfigStorage::loadSettingsDefaults() {
     // (forwardFilterEnabled and all fwd* params removed v64)
     // (fwdPhaseOnly removed v64)
 
+    // v65 params (persisted v70)
+    data_.music.snapHysteresis = 0.8f;       // Prefer previous snap if >0.8× best
+    data_.music.dbEmaAlpha = 0.3f;           // Downbeat EMA smoothing alpha
+    data_.music.dbThreshold = 0.5f;          // Smoothed downbeat activation threshold
+    data_.music.dbDecay = 0.85f;             // Per-frame downbeat decay between beats
+    data_.music.pllWarmupBeats = 5;          // PLL warmup: ±T/2 clamp for first 5 beats
+
     // Spectral noise estimation defaults (v56)
     data_.music.noiseEstEnabled = false;  // Default OFF until A/B validated
     data_.music.noiseSmoothAlpha = 0.92f;    // Power smoothing (~200ms at 62.5 Hz)
@@ -642,6 +649,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.compReleaseTau, 0.01f, 10.0f, F("compReleaseTau"));
     // whitenEnabled, compressorEnabled, whitenBassBypass are bools — no range validation needed
 
+    // v65 params (persisted v70)
+    validateFloat(data_.music.snapHysteresis, 0.0f, 1.0f, F("snapHysteresis"));
+    validateFloat(data_.music.dbEmaAlpha, 0.01f, 1.0f, F("dbEmaAlpha"));
+    validateFloat(data_.music.dbThreshold, 0.0f, 1.0f, F("dbThreshold"));
+    validateFloat(data_.music.dbDecay, 0.5f, 0.99f, F("dbDecay"));
+    VALIDATE_INT(data_.music.pllWarmupBeats, 0, 32, F("pllWarmupBeats"));
+
     // Noise estimation validation (v56)
     validateFloat(data_.music.noiseSmoothAlpha, 0.8f, 0.999f, F("noiseSmoothAlpha"));
     validateFloat(data_.music.noiseReleaseFactor, 0.99f, 0.9999f, F("noiseRelease"));
@@ -896,6 +910,13 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         spectral.noiseOversubtract = data_.music.noiseOversubtract;
         spectral.noiseFloorRatio = data_.music.noiseFloorRatio;
 
+        // v65 params (persisted v70)
+        audioCtrl->pllWarmupBeats = data_.music.pllWarmupBeats;
+        audioCtrl->snapHysteresis = data_.music.snapHysteresis;
+        audioCtrl->dbEmaAlpha = data_.music.dbEmaAlpha;
+        audioCtrl->dbThreshold = data_.music.dbThreshold;
+        audioCtrl->dbDecay = data_.music.dbDecay;
+
         // (BandFlux detector load removed v67 — BandFlux pipeline removed)
         // (BassSpectralAnalysis sync removed v67 — hi-res bass removed)
     }
@@ -1125,6 +1146,13 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.noiseReleaseFactor = spectral.noiseReleaseFactor;
         data_.music.noiseOversubtract = spectral.noiseOversubtract;
         data_.music.noiseFloorRatio = spectral.noiseFloorRatio;
+
+        // v65 params (persisted v70)
+        data_.music.pllWarmupBeats = audioCtrl->pllWarmupBeats;
+        data_.music.snapHysteresis = audioCtrl->snapHysteresis;
+        data_.music.dbEmaAlpha = audioCtrl->dbEmaAlpha;
+        data_.music.dbThreshold = audioCtrl->dbThreshold;
+        data_.music.dbDecay = audioCtrl->dbDecay;
 
         // (BandFlux detector save removed v67 — BandFlux pipeline removed)
     }
