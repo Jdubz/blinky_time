@@ -1,12 +1,12 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 12, 2026*
+*Last Updated: March 13, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v68 (SETTINGS_VERSION 68). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (always-on, TFLite required). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation.
+**Firmware:** v70 (SETTINGS_VERSION 70). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (always-on, TFLite required). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation. Dimension-independent generator params (v69). All v65 rhythm params persisted (v70).
 
 **NN Model Status:** Frame-level FC model deployed and running on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). Produces real beat/downbeat activations. **BandFlux is officially obsolete** — being removed in favor of NN ODF. Current priority: fix mel level calibration to improve NN activation quality on device.
 
@@ -240,6 +240,344 @@ All items below were A/B tested and showed zero or negative benefit, or proven i
 - **Signal chain decompression** (v47): BandFlux self-normalizes. Not the F1 bottleneck.
 - **Particle filter** (v38-39): Improved BPM but not F1. Phase is the bottleneck.
 - **Adaptive tightness, Percival harmonic, bidirectional snap** (v44-45): Marginal or no benefit.
+
+## Visualizer Improvements
+
+### Fire Generator Enhancement
+
+**Status: PLANNED**
+
+The fire generator uses a particle system with 3 spark types, thermal buoyancy, simplex noise wind, and audio-reactive spawn/velocity modulation. The improvements below are ranked by visual impact vs. implementation cost. All are feasible on the current hardware (64 MHz Cortex-M4, 64-particle pool).
+
+#### Tier 1: High Impact, Low Effort
+
+**1. Phase-driven thermal buoyancy breathing**
+Currently thermal force is constant. Modulate with phase so sparks surge upward on-beat and hover between beats. Affects every active particle every frame — the single most impactful audio coupling.
+- Map: `thermalForce *= (0.5 + 0.5 * phaseToPulse())`
+- Optionally modulate drag too: less drag on-beat (fast motion), more off-beat (lazy float)
+
+**2. Downbeat dramatic effects beyond spark count**
+Currently downbeat only adds more sparks. More impactful:
+- **Width expansion**: Multiply `sparkSpread` 2-3× on downbeat, exponential decay over 0.5s
+- **Color temperature shift**: Briefly push palette hotter (add white/blue tint), fade back over 0.5s
+- **Velocity burst**: Multiply `sparkVelocityMax` 1.5× for 0.3s after downbeat
+- These make bar 1 visually distinct, not just denser
+
+**3. Onset density → particle character**
+`onsetDensity` is currently unused by generators. Map it to fire personality:
+- High density (dance, 4-6/s): shorter lifespan, higher spawn rate, high-freq noise → jittery energetic fire
+- Low density (ambient, 0-1/s): longer lifespan, rare large bursts, low-freq noise → languid swaying
+- The fire's character automatically matches the music's density
+
+**4. Beat-in-measure accent patterns**
+`beatInMeasure` is only used for downbeat. Extend:
+- Beat 1 (downbeat): maximum burst (already done)
+- Beat 3: medium burst (secondary accent)
+- Beats 2 & 4: spawn rate increase only (no extra sparks)
+- Even/odd beats: slight left/right spawn bias for visual "rocking"
+
+#### Tier 2: High Impact, Medium Effort
+
+**5. Multi-palette blending**
+Single fixed 6-stop palette. Define 2-3 palettes and blend by audio state:
+- **Warm** (default): black → red → orange → yellow (campfire)
+- **Hot** (high energy + rhythm): black → red → white → pale blue (intense)
+- **Cool** (low energy/ambient): black → deep red → dark orange (embers only)
+- Blend factor driven by `energy × rhythmStrength`
+
+**6. Spawn-on-death cascading embers**
+When a high-intensity spark dies (boundary kill or max age), spawn 1-2 dim child embers with reduced velocity and longer lifespan. Creates the "shower of sparks" campfire feel and increases visual depth. Just a spawn call in the particle kill path.
+
+**7. Curl noise wind field**
+Replace per-particle simplex noise wind with curl noise (Bridson, SIGGRAPH 2007). Take the curl of a scalar noise field to get a divergence-free velocity field. Particles swirl around each other instead of just being pushed. 4 noise evaluations per particle per frame (~256 calls for 64 particles). Produces the characteristic rolling/curling motion at flame edges.
+```
+curl_x = (noise(x, y+eps, t) - noise(x, y-eps, t)) / (2*eps)
+curl_y = -(noise(x+eps, y, t) - noise(x-eps, y, t)) / (2*eps)
+```
+
+**8. Energy → flame height and density**
+`energy` currently only modulates spawn rate. Map it to:
+- Flame height: adjust kill boundary (low energy = particles die at 60% of height, high = reach top)
+- Particle density cap: `maxActive = 16 + energy * 48`
+- Background ember brightness: `backgroundIntensity = 0.05 + energy * 0.2`
+- Turbulence amplitude: higher energy = more chaotic wind
+
+#### Tier 3: Medium Impact, Creative
+
+**9. Self-modulating noise background (Stefan Petrick technique)**
+Use output of one noise field to distort coordinates of a second:
+```
+n1 = SimplexNoise::noise3D(x * 0.1, y * 0.1, t * 0.02)
+n2 = SimplexNoise::noise3D(x * 0.2 + n1 * 2.0, y * 0.2 + n1 * 1.5, t * 0.03)
+```
+Dramatically more organic ember bed appearance. 2 noise evals per pixel (256 calls for 16×8 matrix).
+
+**10. Ember pulsing**
+Slow embers don't fade linearly — they pulse. Per-particle sinusoidal modulation:
+`intensity *= (0.7 + 0.3 * sin(age * freq + phase_offset))`
+Random freq and phase per ember. Creates "breathing coals" effect.
+
+**11. Reaction-diffusion flame base (FitzHugh-Nagumo)**
+Run a 1D reaction-diffusion system along the bottom row to control spawn intensity. Creates naturally-forming "flame tongues" that split, merge, and oscillate. ~32 multiply-adds per frame for 16-wide base. Very organic.
+
+**12. Intensity-to-palette gamma curve**
+Apply nonlinear gamma before palette lookup: `index = pow(intensity/255.0, gamma) * 255`. Audio-driven gamma: high energy → gamma < 1.0 (more visible ember glow). Low energy → gamma > 1.0 (only brightest sparks visible).
+
+**13. Vortex filaments at flame base**
+2 counter-rotating virtual vortices that alternate activation. Particles get rotational kicks, creating S-curve flame shapes. One sqrt + division per vortex per particle. Could trigger on downbeat (inject temporary vortex for 1s, creating mushroom-cloud bloom).
+
+#### Audio Signal → Fire Parameter Mapping Reference
+
+| Signal | Current Use | Proposed New Mappings |
+|--------|-------------|----------------------|
+| `phase` | Spawn rate breathing, velocity boost | Thermal buoyancy breathing, drag breathing, background glow, color temp |
+| `pulse` | Spark burst count | Wind gust magnitude, flash particles, background spike |
+| `downbeat` | Extra sparks | Width expansion, color temp shift, velocity burst, vortex injection |
+| `energy` | Spawn rate modifier | Flame height, particle density cap, background brightness, turbulence |
+| `rhythmStrength` | Organic/music blend | Spawn regularity window, particle type distribution |
+| `onsetDensity` | *Unused* | Particle lifespan, turbulence frequency, spawn rate vs burst size |
+| `beatInMeasure` | *Unused (beyond downbeat)* | Accent patterns, left/right spawn bias |
+
+#### References
+
+- [Bridson SIGGRAPH 2007: Curl-Noise for Procedural Fluid Flow](https://www.cs.ubc.ca/~rbridson/docs/bridson-siggraph2007-curlnoise.pdf)
+- [Stefan Petrick: Self-Modulating Noise Fire Effect](https://gist.github.com/StefanPetrick/819e873492f344ebebac5bcd2fdd8aa8)
+- [FastLED Fire2012 (Mark Kriegsman)](https://github.com/FastLED/FastLED/blob/master/examples/Fire2012/Fire2012.ino)
+- [Fabien Sanglard: How DOOM Fire Was Done](https://fabiensanglard.net/doom_fire_psx/)
+- [Andrew Chan: Simulating Fluids, Fire, and Smoke in Real-Time](https://andrewkchan.dev/posts/fire.html)
+
+### Lightning → Plasma Globe Redesign
+
+**Status: PLANNED**
+
+The current Lightning generator produces stationary Bresenham line bolts that flash on and fade out in ~0.3s. This creates a strobe-like effect that is visually harsh at low resolutions. The goal is to replace it with a **plasma globe** aesthetic: persistent, flowing tendrils of light that sweep slowly and organically, always-on and never flashing.
+
+**Why the current Lightning doesn't work:**
+- **Zero motion**: Particles have `vx=vy=0`, bolts appear and die in place
+- **Fast fade**: 30 intensity/frame = gone in ~8 frames (~130ms)
+- **Discrete events**: beat → spawn bolt → fade → nothing. No continuity between events
+- **MAX blending**: Creates harsh, clipped brightness peaks
+- A plasma globe is the opposite: continuous, flowing, always-on
+
+**Architecture: Extend Generator directly, NOT ParticleGenerator.** Plasma is a continuous field, not discrete particles. No particle pool, no spawn/kill lifecycle.
+
+#### Layer 1: Plasma Background (Demoscene Sine-Wave Plasma)
+
+Sum 3-4 sine waves at different frequencies/phases across the LED field. Map summed value through a purple/violet palette. Very cheap (~1 multiply + lookup per pixel), always-on dim glow.
+- Audio: `energy` modulates brightness, `phase` shifts sine offsets for breathing
+
+#### Layer 2: Noise-Field Tendrils (Simplex-Noise-Steered Paths)
+
+3-6 persistent tendrils, each a path from center outward:
+- At each step, sample `noise3D(x, y, time)` to determine direction bias
+- Tendrils sweep slowly, guided by noise field evolution
+- Brightness gradient: white core → lavender → deep violet → black
+- ~60-120 `noise3D` calls per frame, well under 1ms on Cortex-M4F
+
+#### Tier 1: Core Plasma (Biggest Visual Impact)
+
+**1. Sine-wave plasma background with violet palette**
+Sum 3-4 sine waves with different spatial frequencies and time-varying phases to produce a slowly-shifting organic glow across all pixels. Map through a 4-stop palette: black → deep violet → purple → magenta. ~1 multiply + 1 lookup per pixel.
+
+**2. Noise-steered tendrils from center (3-4 initially)**
+Each tendril: start at center, step outward. At each step, sample `noise3D(x, y, t)` to bias direction. Tendrils persist across frames (state: just angle + length), creating smooth sweeping motion. Core brightness white, fading to violet at tips.
+
+**3. Core-to-edge brightness gradient**
+Radial falloff from center outward. Center is always bright (white/lavender), edges dim (deep violet). Combined with tendril rendering, this creates the characteristic plasma globe depth.
+
+#### Tier 2: Audio Reactivity (All Smooth, Never Flash)
+
+**4. Phase-locked tendril breathing**
+Tendril brightness and length pulse with `phase`. On-beat (phase=0): tendrils extend to full length, peak brightness. Off-beat: retract slightly, dim. Creates a rhythmic "pumping" without any flash.
+
+**5. Energy → overall brightness modulation**
+`energy` scales background plasma brightness and tendril intensity together. Low energy: dim ambient glow. High energy: vivid, saturated plasma. Always smooth — energy is already a slow-moving signal.
+
+**6. Pulse → tendril extension**
+On transient (`pulse`): tendrils momentarily reach further outward, with smooth ease-out return over ~0.3s. Creates "reaching" effect on kicks/snares without strobing.
+
+#### Tier 3: Polish
+
+**7. Mutual tendril repulsion**
+Tendrils that are too close angularly repel each other, maintaining visual spread. Simple pairwise angular distance check, add small angular velocity away from neighbors. Prevents clustering on one side.
+
+**8. Downbeat color warmth shift**
+On bar 1 (`downbeat > 0.5`): core shifts slightly warm (white → pink/magenta tint), smooth decay back to white over 0.5s. Subtle but marks musical structure.
+
+**9. Onset density → tendril count adaptation**
+`onsetDensity` modulates active tendril count (3-6). Sparse ambient music → 3 lazy tendrils. Dense dance music → 5-6 active tendrils. Gradual transitions over 2-3 seconds, never instant add/remove.
+
+#### Audio Signal → Plasma Parameter Mapping
+
+| Signal | Plasma Parameter | Behavior |
+|--------|-----------------|----------|
+| `energy` | Background brightness + tendril intensity | Higher energy = brighter overall glow |
+| `phase` | Noise time offset + sine phase shift | Breathing sync — tendrils pulse in phase with beat |
+| `pulse` | Tendril length extension | Transient → tendrils reach further momentarily |
+| `rhythmStrength` | Blend organic↔music mode | Low: slow random drift. High: phase-locked breathing |
+| `onsetDensity` | Tendril count (3-6) | Sparse music → fewer tendrils. Dense → more |
+| `downbeat` | Color warmth shift | Bar 1 → white core shifts slightly warm/pink |
+| `beatInMeasure` | Tendril rotation bias | Different beats favor different angular sectors |
+
+**Key principle: Nothing flashes or strobes.** Audio modulates continuous parameters (brightness, speed, spread, length) — never triggers discrete spawn/kill events.
+
+#### Resource Budget
+
+| Resource | Current Lightning | Plasma Globe | Notes |
+|----------|------------------|-------------|-------|
+| RAM | ~2 KB (40 particles) | ~600 bytes (tendril state + noise scratch) | 70% reduction |
+| CPU | <1ms | ~1-1.5ms (noise3D + sine lookups) | Comparable |
+| Flash | Minimal | Minimal | No model/tables needed |
+
+#### Color Palette
+
+4-stop gradient for tendril/background rendering:
+- Stop 0: Black (0, 0, 0) — beyond tendril reach
+- Stop 1: Deep violet (40, 0, 80) — distant plasma
+- Stop 2: Lavender (140, 80, 200) — mid tendril
+- Stop 3: White (255, 240, 255) — tendril core / center
+
+#### References
+
+- [Stefan Petrick: Noise-Field Fire/Plasma](https://gist.github.com/StefanPetrick/819e873492f344ebebac5bcd2fdd8aa8) — Self-modulating noise for organic flow
+- [Demoscene Plasma Tutorial (Lode Vandevenne)](https://lodev.org/cgtutor/plasma.html) — Classic sine-sum plasma technique
+- [Simplex Noise (Stefan Gustavson)](http://staffwww.itn.liu.se/~stegu/simplexnoise/simplexnoise.pdf) — Efficient 3D noise for tendril steering
+
+### Water Generator Enhancement
+
+**Status: PLANNED**
+
+The water generator uses a 30-particle rain system with simplex noise background. Drops spawn from the top edge (matrix) or random positions (linear), fall under gravity, and splash radially on impact. The background is a thresholded noise field with blue/green coloring. Audio reactivity drives spawn rate via phase breathing and beat-triggered wave bursts.
+
+**Current weaknesses:**
+- **Sparse** — 30 particles on 128 LEDs creates rain, not ocean
+- **No surface simulation** — no visible waterline, no wave motion, no body of water
+- **No ripples** — drops splash radially but no expanding ring patterns
+- **Fixed color** — no depth gradient, no mood shifts, no bioluminescence
+- **Background disconnected** — noise layer doesn't interact with particles
+- **Wind is dead** — `windBase=0`, no audio-driven gusts
+- **No foam/whitecaps** — wave crests have no visual distinction
+- **`beatInMeasure` and `onsetDensity` unused**
+
+**Proposed architecture: Layered water system.** Replace single-layer particle rain with stacked composited layers for a richer scene. Keep ParticleGenerator base class (particles still useful for rain/splashes/bioluminescence).
+
+#### Tier 1: High Impact, Low Effort
+
+**1. Two-buffer ripple simulation**
+Classic demoscene water algorithm. Two `int16` buffers, 5 operations per cell per frame. Audio events inject impulses, ripples propagate and interfere automatically. This single addition transforms sparse "rain" into "living water surface."
+```
+new[x] = ((prev[x-1] + prev[x+1]) >> 1) - current[x]
+new[x] -= new[x] >> 5  // ~3% damping
+swap(prev, current)
+```
+- Audio: `pulse` → drop injection, `beat` → larger impulse, `downbeat` → edge wave sweep
+- Cost: 512 bytes RAM, ~2K cycles/frame
+
+**2. Depth-gradient base coloring (matrix)**
+Row-dependent base color before particles/noise: pale cyan at surface → turquoise → deep blue → near-black at bottom. Creates immediate sense of water depth with zero CPU cost (per-row tint lookup).
+```
+Row 0 (surface): (140, 220, 255) — pale cyan
+Row 2-3:         (0, 180, 220)   — turquoise
+Row 5-6:         (0, 30, 120)    — deep blue
+Row 7 (bottom):  (0, 10, 60)     — near-black
+```
+
+**3. Bioluminescence on audio events**
+Blue-green glow (RGB ≈ 0, 80-255, 100-200) triggered by `pulse`. Glow appears at random position, persists 0.5-1s with exponential decay. Maps perfectly to transients — water "lights up" on kicks/snares without strobing.
+- Audio: `pulse` → spawn glow, `energy` → glow brightness, `downbeat` → large area glow burst
+- Cost: 128-byte glow buffer, ~500 cycles/frame
+
+**4. Phase-driven wave speed breathing**
+Modulate noise time advancement with `phase`: `noiseTime += baseSpeed * (0.5 + 0.5 * phaseToPulse())`. Water flows faster on-beat, slower off-beat. Creates rhythmic breathing without flash. Currently noise speed only varies by energy (0.012-0.05).
+
+#### Tier 2: High Impact, Medium Effort
+
+**5. Gerstner wave surface (matrix)**
+3 summed trochoidal waves create rolling ocean surface with sharp crests and flat troughs. On 16×8: illuminate the row nearest the surface height with max brightness, exponential falloff below. Surface highlights at crests where slope changes sign. Sharp crests + flat troughs = unmistakably "water" even at low res.
+```
+x_disp = (steepness/k) * cos(k*x0 - w*t)
+y_disp = (steepness/k) * sin(k*x0 - w*t)
+```
+- Audio: `energy` → wave amplitude, `phase` → wave speed, `downbeat` → inject large swell
+- Cost: ~50K cycles/frame (6-8 trig calls per LED)
+
+**6. Foam/whitecap at wave crests**
+When surface height or turbulence (large neighbor height differences) exceeds threshold, blend toward white. Foam persists via separate buffer with slow decay (~1s half-life). Drifts with surface motion.
+- Audio: `energy` → foam threshold (more energy = more foam), `rhythmStrength` → foam regularity
+- Cost: 128 bytes RAM, ~500 cycles/frame
+
+**7. Domain-warped noise background**
+Replace current simplex noise with domain-warped noise: `noise(x + noise(x,y,t), y, t)`. Creates organic swirling currents and eddies instead of drifting blobs. Dramatically more organic.
+- Audio: `energy` → warp amplitude, `phase` → time offset
+- Cost: 2-3× current noise cost (~100K cycles), still under 0.2% CPU
+
+**8. Onset density → rain intensity mapping**
+`onsetDensity` (currently unused) drives rain character:
+- Sparse (0-1/s): 1-2 drops/sec, gentle ripples, calm water
+- Moderate (2-4/s): 5-10 drops/sec, overlapping ripples
+- Dense (4-6/s): 15+ drops/sec, chaotic interference, foam activation
+- Auto-matches rain to music density without manual tuning
+
+#### Tier 3: Medium Impact, Creative
+
+**9. Caustic overlay (matrix only)**
+Animated Voronoi noise or `abs(noise1 + noise2)^0.5` creates underwater "swimming light" pattern. Applied as additive cyan/blue layer under particles. Per-cell: 9 neighbor checks × (2 sin + 1 sqrt + compare).
+- Audio: `energy` → caustic brightness, `phase` → animation speed
+- Cost: ~100-140K cycles/frame (~0.2% CPU)
+
+**10. Multi-palette color system**
+3 palettes via Inigo Quilez cosine formula `color(t) = a + b * cos(2π(c*t + d))`, blend by audio state:
+- **Deep ocean** (low energy): dark blues, near-black
+- **Tropical** (moderate energy): turquoise, bright cyan
+- **Storm/moonlit** (high energy + high rhythm): silver/white highlights, dark base
+- Blend factor: `energy × rhythmStrength`
+
+**11. Ridged noise wave crests**
+`1.0 - abs(noise3D(x, y, t))` creates sharp bright ridges with smooth dark valleys — looks like wave crests catching light. Can replace or blend with the current thresholded noise background.
+
+**12. Drop trails (motion blur)**
+Render falling drops as 2-3 LEDs with decreasing brightness along velocity vector. Makes individual drops visible at low resolution and adds sense of speed. Just render at `(x, y)`, `(x-vx*dt, y-vy*dt)`, `(x-2*vx*dt, y-2*vy*dt)` with 100%, 50%, 25% intensity.
+
+**13. Beat-driven swell accumulator**
+On each beat, add 0.1 to a "swell" variable that decays at 0.02/frame. Swell increases wave height and brightness. Multiple beats accumulate into growing swell that subsides between phrases. Makes musical sections feel like rising/falling seas.
+
+#### Audio Signal → Water Parameter Mapping
+
+| Signal | Current Use | Proposed New Mappings |
+|--------|-------------|----------------------|
+| `energy` | Weak spawn rate modifier (0.5-1.0×) | Wave amplitude, caustic brightness, foam threshold, color temperature, rain intensity |
+| `phase` | Spawn breathing (0.4-1.0×) | Wave speed breathing, noise time modulation, background brightness |
+| `pulse` | Beat → wave burst, organic transient drops | Ripple buffer injection, bioluminescence spawn, swell accumulation |
+| `rhythmStrength` | Organic↔music blend | Foam regularity, rain pattern (random vs phase-locked), color palette blend |
+| `downbeat` | Extra wave drops | Edge wave sweep, large bioluminescence burst, swell spike, palette warmth shift |
+| `onsetDensity` | *Unused* | Rain intensity/character, turbulence level, ripple spawn rate |
+| `beatInMeasure` | *Unused* | Wave direction bias (left/right alternation), accent ripple size |
+
+**Key principle: Water absorbs energy into continuous flow.** Unlike fire (discrete sparks) or plasma (continuous tendrils), water should respond through amplitude and speed modulation — bigger waves, faster flow, more interference — not through discrete flashes.
+
+#### Resource Budget
+
+| Component | RAM | CPU (128 LEDs) |
+|-----------|-----|----------------|
+| Ripple buffers (2 × 128 × int16) | 512 bytes | ~2K cycles |
+| Foam buffer (128 × uint8) | 128 bytes | ~500 cycles |
+| Bioluminescence buffer (128 × uint8) | 128 bytes | ~500 cycles |
+| Gerstner waves (3 waves) | — | ~50K cycles |
+| Domain-warped noise | — | ~100K cycles |
+| Caustics (Voronoi) | — | ~140K cycles |
+| Particle pool (existing, 30) | ~600 bytes | ~5K cycles |
+| **Total new** | **~1.5 KB** | **~0.25% CPU** |
+
+All layers combined use under 0.3% CPU at 60 Hz. Enormous headroom on the nRF52840.
+
+#### References
+
+- [Demoscene 2D Water Effect (Hugo Elias)](https://web.archive.org/web/20160418004149/http://freespace.virgin.net/hugo.elias/graphics/x_water.htm) — Two-buffer ripple simulation
+- [Catlike Coding: Flow / Waves](https://catlikecoding.com/unity/tutorials/flow/waves/) — Gerstner wave implementation
+- [Inigo Quilez: Domain Warping](https://iquilezles.org/articles/warp/) — Noise domain warping for organic patterns
+- [Inigo Quilez: Cosine Palettes](https://iquilezles.org/articles/palettes/) — Parametric color gradients
+- [Lode Vandevenne: Plasma Tutorial](https://lodev.org/cgtutor/plasma.html) — Sine-sum interference patterns
+- [The Book of Shaders: Voronoi](https://thebookofshaders.com/12/) — Animated Voronoi for caustics
 
 ## Design Philosophy
 

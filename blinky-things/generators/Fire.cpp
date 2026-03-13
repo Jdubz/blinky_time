@@ -27,8 +27,8 @@ bool Fire::begin(const DeviceConfig& config) {
 }
 
 void Fire::initPhysicsContext() {
-    // Set physics parameters from FireParams
-    gravity_ = params_.gravity;
+    // Set physics parameters from FireParams (dimension-scaled)
+    gravity_ = params_.gravity * traversalDim_;
     drag_ = params_.drag;
 
     // Create layout-appropriate physics components
@@ -45,7 +45,7 @@ void Fire::initPhysicsContext() {
     // Force adapter: 2D for matrix, 1D for linear
     forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);
     if (forceAdapter_) {
-        forceAdapter_->setWind(params_.windBase, params_.windVariation);
+        forceAdapter_->setWind(params_.windBase, scaledWindVar());
     }
 
     // Background model: height-falloff for matrix, uniform for linear
@@ -75,7 +75,7 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
         // Blend modulation by rhythmStrength (no modulation when no rhythm detected)
         float mod = 1.0f * (1.0f - audio.rhythmStrength) +
                     phaseWind * transientGust * audio.rhythmStrength;
-        forceAdapter_->setWind(params_.windBase, params_.windVariation * mod);
+        forceAdapter_->setWind(params_.windBase, scaledWindVar() * mod);
     }
 
     // Run particle system (spawn → physics → render)
@@ -101,10 +101,11 @@ void Fire::spawnParticles(float dt) {
     float musicSpawnProb = params_.baseSpawnChance * phasePump + params_.audioSpawnBoost * audio_.energy;
 
     // Transient response (stronger in music mode)
+    uint8_t burst = scaledBurstSparks();
     if (audio_.pulse > params_.organicTransientMin) {
         float transientStrength = (audio_.pulse - params_.organicTransientMin) /
                                  (1.0f - params_.organicTransientMin);
-        uint8_t musicSparks = (uint8_t)(params_.burstSparks * transientStrength);
+        uint8_t musicSparks = (uint8_t)(burst * transientStrength);
         uint8_t organicSparks = 2;  // Small boost in organic mode
         sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength) +
                                 musicSparks * audio_.rhythmStrength);
@@ -113,11 +114,11 @@ void Fire::spawnParticles(float dt) {
     // Extra burst on predicted beats (only when rhythm is strong)
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
         beatCount_++;
-        sparkCount += (uint8_t)(params_.burstSparks * audio_.rhythmStrength);
+        sparkCount += (uint8_t)(burst * audio_.rhythmStrength);
 
         // Downbeat: extra-dramatic spark burst every ~4 beats
         if (audio_.downbeat > 0.5f) {
-            sparkCount += (uint8_t)(params_.burstSparks * audio_.downbeat);
+            sparkCount += (uint8_t)(burst * audio_.downbeat);
         }
     }
 
@@ -126,7 +127,7 @@ void Fire::spawnParticles(float dt) {
 
     // Continuous spark rate proportional to energy (organic mode)
     if (audio_.energy > 0.05f) {
-        uint8_t organicSparks = (uint8_t)((audio_.energy - 0.05f) * params_.burstSparks * 0.5f);
+        uint8_t organicSparks = (uint8_t)((audio_.energy - 0.05f) * burst * 0.5f);
         sparkCount += (uint8_t)(organicSparks * (1.0f - audio_.rhythmStrength));
     }
 
@@ -140,13 +141,14 @@ void Fire::spawnParticles(float dt) {
     }
 
     // Spawn sparks using layout-aware spawn region with variety
-    for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < params_.maxParticles; i++) {
+    uint8_t maxParts = scaledMaxParticles();
+    for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;
         getSpawnPosition(x, y);
 
-        // Base speed for this spark
-        float baseSpeed = params_.sparkVelocityMin +
-                         random(100) * (params_.sparkVelocityMax - params_.sparkVelocityMin) / 100.0f;
+        // Base speed for this spark (dimension-scaled)
+        float baseSpeed = scaledVelMin() +
+                         random(100) * (scaledVelMax() - scaledVelMin()) / 100.0f;
 
         // Determine spark type (more variety during music mode)
         SparkType type;
@@ -170,8 +172,8 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
     float vx, vy;
     getInitialVelocity(baseSpeed, vx, vy);
 
-    // Add spread perpendicular to main direction
-    float spreadAmount = (random(200) - 100) * params_.sparkSpread / 100.0f;
+    // Add spread perpendicular to main direction (dimension-scaled)
+    float spreadAmount = (random(200) - 100) * scaledSpread() / 100.0f;
     if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
         vx += spreadAmount;  // Matrix: horizontal spread
     } else {
@@ -251,10 +253,11 @@ void Fire::updateParticle(Particle* p, float dt) {
 
     // At full intensity (1.0): applies params_.thermalForce LEDs/sec^2 upward.
     // p->mass is clamped to 0.01 minimum by ParticlePool::spawn, no div-by-zero risk.
+    float thermal = scaledThermalForce();
     if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
-        p->vy -= (heat * params_.thermalForce / p->mass) * dt;  // Matrix: upward = negative Y
+        p->vy -= (heat * thermal / p->mass) * dt;  // Matrix: upward = negative Y
     } else {
-        p->vx += (heat * params_.thermalForce / p->mass) * dt;  // Linear: forward = positive X
+        p->vx += (heat * thermal / p->mass) * dt;  // Linear: forward = positive X
     }
 }
 

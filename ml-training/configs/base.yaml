@@ -43,14 +43,19 @@ labels:
 
 # Training hyperparameters (shared across model variants)
 training:
-  batch_size: 64
-  epochs: 100
+  batch_size: 4096          # Large batch for small models (FC: 55K params). ~53 MB on GPU.
+  epochs: 60                # Convergence typically by epoch 40-50; cosine LR sized to match.
   learning_rate: 0.001
   lr_schedule: "cosine"
   chunk_frames: 128         # ~2s chunks at 62.5 Hz
   chunk_stride: 64          # 50% overlap between chunks
+  subsample: 0.5            # Fraction of training data per epoch (0-1). Random subset each epoch.
+                            # With 7.8M chunks and 55K params, 50% per epoch is plenty.
+                            # All data is still seen across every 2 epochs.
+  num_workers: 4            # DataLoader workers
   pos_weight: 20.0          # BCE positive class weight for beat head (binary targets ~4.5% positive ratio)
   downbeat_pos_weight: 60.0 # BCE positive class weight for downbeat head (v3 AND merge: ~0.75% positive ratio, cleaner labels)
+  patience: 10               # Early stopping: stop after N epochs with no val_loss improvement
   min_quality: 0.0            # Minimum label quality_score to include track (0.0 = no filtering)
   val_split: 0.15
   seed: 42

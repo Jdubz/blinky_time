@@ -108,7 +108,8 @@ void Lightning::spawnParticles(float dt) {
     }
 
     // Spawn coherent lightning bolts as connected particle chains (respect maxParticles limit)
-    for (uint8_t i = 0; i < boltCount && pool_.getActiveCount() < params_.maxParticles; i++) {
+    uint8_t maxParts = scaledMaxParticles();
+    for (uint8_t i = 0; i < boltCount && pool_.getActiveCount() < maxParts; i++) {
         spawnBolt();
     }
 }
@@ -138,8 +139,8 @@ void Lightning::spawnBolt() {
     int dy = abs((int)y1 - (int)y0);
     int steps = max(dx, dy);
 
-    // Limit bolt length to prevent using entire pool
-    steps = min(steps, 12);  // Max 12 particles per bolt
+    // Limit bolt length to prevent using entire pool (dimension-scaled)
+    steps = min(steps, scaledMaxBoltLength());
 
     if (steps == 0) return;  // Degenerate case
 
@@ -147,7 +148,8 @@ void Lightning::spawnBolt() {
     float yStep = (y1 - y0) / steps;
 
     // Spawn particles along the line with slight random jitter for organic look
-    for (int step = 0; step <= steps && pool_.getActiveCount() < params_.maxParticles; step++) {
+    uint8_t maxParts = scaledMaxParticles();
+    for (int step = 0; step <= steps && pool_.getActiveCount() < maxParts; step++) {
         float x = x0 + xStep * step;
         float y = y0 + yStep * step;
 
@@ -164,7 +166,7 @@ void Lightning::spawnBolt() {
 void Lightning::updateParticle(Particle* p, float dt) {
     // Branching logic (only branch once, when particle is young)
     if (p->hasFlag(ParticleFlags::BRANCH) && p->age > 2 && p->age < 8) {
-        if (random(100) < params_.branchChance && pool_.getActiveCount() < params_.maxParticles) {
+        if (random(100) < params_.branchChance && pool_.getActiveCount() < scaledMaxParticles()) {
             spawnBranch(p);
             p->clearFlag(ParticleFlags::BRANCH);  // Only branch once
         }
@@ -204,13 +206,14 @@ uint32_t Lightning::particleColor(uint8_t intensity) const {
 }
 
 void Lightning::spawnBranch(const Particle* parent) {
-    // Calculate available slots (respect maxParticles limit)
-    uint8_t available = params_.maxParticles > pool_.getActiveCount()
-                        ? params_.maxParticles - pool_.getActiveCount()
+    // Calculate available slots (dimension-scaled)
+    uint8_t maxParts = scaledMaxParticles();
+    uint8_t available = maxParts > pool_.getActiveCount()
+                        ? maxParts - pool_.getActiveCount()
                         : 0;
 
-    // Spawn short branch lines (3-5 particles per branch)
-    uint8_t branchLength = 3 + random(3);  // 3-5 particles
+    // Branch length: ~15-30% of diagonal, capped to avoid pool exhaustion
+    uint8_t branchLength = (uint8_t)max(2.0f, min(8.0f, diagonal() * (0.15f + random(100) * 0.0015f)));
     uint8_t particlesNeeded = branchLength * params_.branchCount;
 
     if (particlesNeeded > available) {
@@ -234,7 +237,7 @@ void Lightning::spawnBranch(const Particle* parent) {
         float y1 = y0 + sin(branchAngle) * branchDist;
 
         // Spawn connected particles along branch line
-        for (uint8_t step = 0; step < branchLength && pool_.getActiveCount() < params_.maxParticles; step++) {
+        for (uint8_t step = 0; step < branchLength && pool_.getActiveCount() < maxParts; step++) {
             float t = (float)step / branchLength;
             float x = x0 + (x1 - x0) * t;
             float y = y0 + (y1 - y0) * t;

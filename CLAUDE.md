@@ -60,6 +60,20 @@ If a device stops responding to serial commands:
 3. If the port disappeared entirely, wait 10 seconds and check `ls /dev/ttyACM*`
 4. Last resort: physically access the device and double-tap reset
 
+## CRITICAL: Long-Running Scripts
+
+**NEVER run ML training or other long-running scripts as Claude session tasks.**
+Claude background tasks die when the session ends, killing training mid-run.
+
+Always use tmux:
+```bash
+tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/frame_fc.yaml --output-dir outputs/<experiment_name> 2>&1 | tee outputs/<experiment_name>/training.log"
+```
+
+To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/<experiment_name>/training.log`
+
+`train.py` enforces this — it will refuse to start outside tmux/screen unless `--allow-foreground` is passed.
+
 ## Compilation Commands
 
 ```bash
@@ -213,7 +227,7 @@ RenderPipeline → LED Output
 
 6. **Configuration & Persistence**
    - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v68)
-   - `SettingsRegistry.h/cpp` - Tunable parameters (v67: ~30 after BandFlux removal)
+   - `SettingsRegistry.h/cpp` - Tunable parameters (v70: ~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
 

@@ -14,7 +14,7 @@ struct LightningParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
-    uint8_t maxParticles;         // Maximum active particles (1-32, default 32)
+    float maxParticles;           // Fraction of numLeds for max active particles (scaled, clamped to pool)
     uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range, short-lived)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -37,9 +37,10 @@ struct LightningParams {
 
     LightningParams() {
         // LIGHTNING EFFECT: Dramatic bright flashing bolts
+        // maxParticles is a fraction of numLeds, scaled at use-time.
         baseSpawnChance = 0.15f;  // Regular strikes
         audioSpawnBoost = 0.8f;   // Strong music response
-        maxParticles = 40;        // Enough for bolts + branches
+        maxParticles = 0.67f;     // Fraction of numLeds (clamped to pool capacity 40)
         defaultLifespan = 30;     // 0.3 seconds - quick flash (30 centiseconds)
         intensityMin = 220;       // VERY BRIGHT
         intensityMax = 255;       // MAXIMUM brightness
@@ -102,6 +103,19 @@ private:
      * Spawn branch particles from parent bolt
      */
     void spawnBranch(const Particle* parent);
+
+    // Dimension-derived parameter accessors
+    uint8_t scaledMaxParticles() const {
+        return (uint8_t)min(40.0f, max(8.0f, params_.maxParticles * numLeds_));
+    }
+    float diagonal() const {
+        return sqrtf((float)(width_ * width_ + height_ * height_));
+    }
+    int scaledMaxBoltLength() const {
+        // Bolts span ~80% of diagonal, capped to 12 to avoid draining pool
+        // (particularly on linear layouts where diagonal ≈ numLeds)
+        return max(3, min(12, (int)(diagonal() * 0.8f)));
+    }
 
     LightningParams params_;
     float noiseTime_;             // Animation time for noise field

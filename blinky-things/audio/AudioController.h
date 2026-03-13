@@ -409,9 +409,7 @@ public:
     bool pllEnabled = true;                // Enable PLL phase correction (v45)
     float pllKp = 0.15f;                   // Proportional gain (v45)
     float pllKi = 0.005f;                  // Integral gain (v45)
-    // v65 runtime-only params: registered in SettingsRegistry for serial tuning,
-    // but NOT persisted in StoredMusicParams. Reset to defaults on reboot.
-    // Will be added to ConfigStorage after calibration sweeps confirm optimal values.
+    // v65 params (persisted in StoredMusicParams since v70)
     uint8_t pllWarmupBeats = 5;            // Beats before tightening PLL clamp from ±T/2 to ±T/4 (v65)
 
     // === ONSET SNAP HYSTERESIS (v65) ===
