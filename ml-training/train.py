@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import time
 
 import sys
 from functools import partial
@@ -275,9 +276,9 @@ def main():
     print(f"  Suggested pos_weight: {suggested_pw:.1f} (configured: {beat_pos_weight})")
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              num_workers=4, pin_memory=True)
+                              num_workers=4, pin_memory=True, persistent_workers=True)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
-                            num_workers=4, pin_memory=True)
+                            num_workers=4, pin_memory=True, persistent_workers=True)
 
     # Build model
     model_type = cfg["model"].get("type", "causal_cnn")
@@ -362,14 +363,19 @@ def main():
     patience = args.patience or cfg["training"].get("patience", 15)
     log_rows = []
 
+    num_train_batches = len(train_loader)
+    num_val_batches = len(val_loader)
+    log_interval = max(1, num_train_batches // 10)  # Print ~10 times per epoch
+
     for epoch in range(epochs):
         # --- Train ---
         model.train()
         train_loss = 0.0
         train_correct = 0
         train_total = 0
+        epoch_start = time.time()
 
-        for X_batch, Y_batch, T_batch in train_loader:
+        for batch_idx, (X_batch, Y_batch, T_batch) in enumerate(train_loader):
             X_batch = X_batch.to(device, non_blocking=True)
             Y_batch = Y_batch.to(device, non_blocking=True)
 
@@ -394,6 +400,14 @@ def main():
             train_loss += loss.item() * X_batch.size(0)
             train_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
             train_total += Y_batch.numel()
+
+            if (batch_idx + 1) % log_interval == 0:
+                elapsed = time.time() - epoch_start
+                eta = elapsed / (batch_idx + 1) * (num_train_batches - batch_idx - 1)
+                running_loss = train_loss / train_total * (2 if use_downbeat else 1)
+                print(f"  [{batch_idx+1}/{num_train_batches}] "
+                      f"loss={running_loss:.4f} "
+                      f"elapsed={elapsed:.0f}s eta={eta:.0f}s", flush=True)
 
         train_loss /= len(train_ds)
         train_acc = train_correct / train_total
@@ -428,9 +442,11 @@ def main():
         val_loss /= len(val_ds)
         val_acc = val_correct / val_total
 
+        epoch_elapsed = time.time() - epoch_start
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch+1}/{epochs} - loss: {train_loss:.4f} - acc: {train_acc:.4f} "
-              f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} - lr: {current_lr:.2e}")
+              f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} - lr: {current_lr:.2e} "
+              f"- {epoch_elapsed:.0f}s")
 
         log_rows.append({
             "epoch": epoch + 1, "loss": train_loss, "binary_accuracy": train_acc,
