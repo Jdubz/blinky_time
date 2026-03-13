@@ -512,8 +512,9 @@ private:
     float lastPulseStrength_ = 0.0f;
     uint32_t lastPulseMs_ = 0;
 
-    // Pulse detection parameters (inline from EnsembleFusion)
+    // Pulse detection parameters
     static constexpr float PULSE_MIN_LEVEL = 0.025f;    // Noise gate
+    static constexpr float PULSE_THRESHOLD_MULT = 2.0f;  // ODF must exceed mean × this
     static constexpr uint16_t PULSE_MIN_COOLDOWN_MS = 40;
     static constexpr uint16_t PULSE_MAX_COOLDOWN_MS = 150;
 

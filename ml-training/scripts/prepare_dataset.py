@@ -341,7 +341,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     # Firmware mic+AGC operates at much lower levels where [-60, 0] dB mapping
     # uses the full [0, 1] range. Target -63 dB RMS gives mel mean ~0.52,
     # matching firmware AGC output (calibrated via tools/rms_mel_sweep.py).
-    target_rms_db = cfg["audio"].get("target_rms_db", -35)
+    target_rms_db = cfg["audio"].get("target_rms_db", -63)
     rms = np.sqrt(np.mean(audio_np ** 2) + 1e-10)
     target_rms = 10 ** (target_rms_db / 20)
     audio_np = audio_np * (target_rms / rms)

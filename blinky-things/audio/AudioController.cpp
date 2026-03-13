@@ -161,6 +161,7 @@ const AudioControl& AudioController::update(float dt) {
     if (frameBeatNN_.isReady()) {
         if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
             onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
+            spectral_.resetFrameReady();
         } else {
             onsetStrength = mic_.getLevel();
         }
@@ -169,16 +170,21 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 4b. Simple pulse detection from ODF signal
-    //     Replaces EnsembleFusion cooldown + noise gate + confidence threshold.
     //     Pulse drives visual spark effects only; ODF drives beat tracking separately.
     {
         float pulseStrength = 0.0f;
         if (mic_.getLevel() > PULSE_MIN_LEVEL) {
             float odfVal = onsetStrength;
-            // Detect pulse when ODF exceeds 2x running mean and cooldown elapsed
+            // Detect pulse when ODF exceeds smoothed ODF × threshold and cooldown elapsed.
+            // lastSmoothedOnset_ is the EMA-smoothed ODF; use as baseline for spike detection.
             float odfMean = (lastSmoothedOnset_ > 0.001f) ? lastSmoothedOnset_ : 0.1f;
             uint16_t cooldown = effectivePulseCooldownMs();
-            if (odfVal > odfMean * 2.0f &&
+            // Wraparound guard: if nowMs < lastPulseMs_ (uint32 wrap at ~49 days),
+            // reset lastPulseMs_ to allow the next pulse through cleanly.
+            if (nowMs < lastPulseMs_) {
+                lastPulseMs_ = nowMs;
+            }
+            if (odfVal > odfMean * PULSE_THRESHOLD_MULT &&
                 (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldown)) {
                 pulseStrength = clampf(odfVal, 0.0f, 1.0f);
                 lastPulseMs_ = nowMs;
@@ -1718,8 +1724,7 @@ void AudioController::detectBeat() {
 // ===== PULSE DETECTION =====
 
 uint16_t AudioController::effectivePulseCooldownMs() const {
-    // Tempo-adaptive cooldown (inlined from EnsembleFusion::getEffectiveCooldownMs)
-    // beatPeriod/6, clamped to [MIN_COOLDOWN_MS, MAX_COOLDOWN_MS], min(adaptive, base)
+    // Tempo-adaptive cooldown: beatPeriod/6, clamped to [PULSE_MIN_COOLDOWN_MS, PULSE_MAX_COOLDOWN_MS]
     if (bpm_ < 30.0f) return PULSE_MAX_COOLDOWN_MS;
     float beatPeriodMs = 60000.0f / bpm_;
     uint16_t adaptiveCooldown = static_cast<uint16_t>(beatPeriodMs / 6.0f);

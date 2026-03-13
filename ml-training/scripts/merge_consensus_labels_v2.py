@@ -335,8 +335,8 @@ def align_beats(
             "strength": strength,
             "systems": sorted(systems_in_cluster),
             "isDownbeat": is_downbeat,
-            "downbeatSystems": db_system_count,
-            "downbeatSystemNames": sorted(db_systems),
+            "downbeatSystemCount": db_system_count,
+            "downbeatSystems": sorted(db_systems),
         })
 
     consensus.sort(key=lambda x: x["time"])

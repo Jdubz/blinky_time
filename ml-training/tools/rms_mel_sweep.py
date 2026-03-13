@@ -64,6 +64,10 @@ def sweep_rms_levels(audio_dir: Path, rms_values: list[float],
 
         print(" done")
 
+    if loaded == 0:
+        print("ERROR: No audio files could be loaded")
+        sys.exit(1)
+
     return results
 
 
@@ -74,7 +78,7 @@ def main():
     parser.add_argument("--tracks", type=int, default=10, help="Number of tracks to sample")
     parser.add_argument("--target-mean", type=float, default=0.52,
                         help="Target mel mean to match firmware (default: 0.52)")
-    parser.add_argument("--rms-min", type=float, default=-55, help="Min RMS dB to sweep")
+    parser.add_argument("--rms-min", type=float, default=-75, help="Min RMS dB to sweep")
     parser.add_argument("--rms-max", type=float, default=-30, help="Max RMS dB to sweep")
     parser.add_argument("--rms-step", type=float, default=2.5, help="RMS dB step size")
     args = parser.parse_args()
