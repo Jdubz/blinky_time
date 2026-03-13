@@ -40,14 +40,7 @@ jobs:
     - name: Install TFLite Micro library
       run: |
         # TFLite Micro is a required dependency (NN always enabled since v68)
-        TFLITE_DIR="$HOME/Arduino/libraries/Arduino_TensorFlowLite"
-        mkdir -p "$TFLITE_DIR"
-        # Use the setup script if available, otherwise install from the repo copy
-        if [ -f tools/setup_tflite_lib.sh ]; then
-          bash tools/setup_tflite_lib.sh --ci
-        else
-          echo "WARNING: setup_tflite_lib.sh not found, checking for pre-packaged library"
-        fi
+        bash tools/setup_tflite_lib.sh --ci
         echo "Installed libraries:"
         arduino-cli lib list
 
