@@ -112,8 +112,9 @@ private:
         return sqrtf((float)(width_ * width_ + height_ * height_));
     }
     int scaledMaxBoltLength() const {
-        // Bolts span ~80% of diagonal, capped to avoid draining pool
-        return max(3, min(20, (int)(diagonal() * 0.8f)));
+        // Bolts span ~80% of diagonal, capped to 12 to avoid draining pool
+        // (particularly on linear layouts where diagonal ≈ numLeds)
+        return max(3, min(12, (int)(diagonal() * 0.8f)));
     }
 
     LightningParams params_;

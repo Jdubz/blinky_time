@@ -80,7 +80,7 @@ void Water::spawnParticles(float dt) {
 
     // Wave burst on beat (scales with rhythmStrength and device width)
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
-        uint8_t waveDrops = (uint8_t)max(2.0f, 0.5f * crossDim_ * (1.0f + audio_.rhythmStrength));
+        uint8_t waveDrops = (uint8_t)min(8.0f, max(2.0f, 0.5f * crossDim_ * (1.0f + audio_.rhythmStrength)));
         dropCount += (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
 
         // Downbeat: extra wave surge every ~4 beats

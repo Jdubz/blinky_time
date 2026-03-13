@@ -117,7 +117,7 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
     settings_.registerFloat("audiospawnboost", &fp->audioSpawnBoost, "fire",
         "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("burstsparks", &fp->burstSparks, "fire",
-        "Burst sparks (x crossDim -> count)", 0.1f, 5.0f, onParamChanged);
+        "Burst sparks (x crossDim -> count)", 0.1f, 2.0f, onParamChanged);
 
     // Physics
     settings_.registerFloat("gravity", &fp->gravity, "fire",

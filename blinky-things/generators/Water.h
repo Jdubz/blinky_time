@@ -135,6 +135,7 @@ private:
     }
     float scaledSplashVelMin() const { return params_.splashVelocityMin * traversalDim_; }
     float scaledSplashVelMax() const { return params_.splashVelocityMax * traversalDim_; }
+    // No minimum floor: allows 0 to disable splashes via serial (set w_splashparts 0)
     uint8_t scaledSplashParticles() const {
         return (uint8_t)min(10.0f, params_.splashParticles * crossDim_);
     }
