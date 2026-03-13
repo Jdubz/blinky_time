@@ -3,16 +3,15 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 12, 2026 (Frame-level FC NN deployed on all devices, BandFlux obsolete)
+**Last Updated:** March 12, 2026 (BandFlux fully removed v67, mel calibration in progress)
 
-## Current Config (v65+, SETTINGS_VERSION 64)
+## Current Config (v67, SETTINGS_VERSION 67)
 
-**ODF source:** FrameBeatNN (frame-level FC, 56.8 KB INT8, per-tensor quantization, ~3ms inference)
+**ODF source:** FrameBeatNN (frame-level FC, 56.8 KB INT8, per-tensor quantization, ~60-200µs inference)
 - FC(832→64→32→2), 55K params, 32-frame window (0.5s at 62.5 Hz)
 - Beat + downbeat activation, deployed on all 3 devices (March 12)
-- Current activation range: 0.07-0.26 (weak — mel level calibration needed)
-
-**BandFlux:** OBSOLETE — scheduled for removal. Code and ~15 parameters to be deleted once NN mel calibration is complete.
+- Mel calibration corrected: target_rms_db -35→-63 dB (mel mean 0.52, matching firmware AGC). Retraining in progress.
+- BandFlux/EnsembleDetector fully removed (v67, ~2600 lines, ~24 settings deleted).
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
 - bayesacf=0.8, bayescomb=0.7, bayesft=0, bayesioi=0
@@ -79,9 +78,9 @@ The FC model is deployed and producing real output, but activations are weak. Ro
 
 Conv1D wide model finished training (val_loss=0.4756, epoch 28). Needs export, evaluation, and comparison against FC model. FrameBeatNN.h auto-detects FC vs Conv1D from TFLite input shape.
 
-## Priority 3: BandFlux Removal
+## ~~Priority 3: BandFlux Removal~~ — COMPLETED (v67)
 
-Remove obsolete BandFlux code and ~15 associated parameters once NN mel calibration is complete. See `IMPROVEMENT_PLAN.md` Priority 2.
+Removed in v67 (March 12, 2026). 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved.
 
 ## ~~Priority 2: CBSS ODF Contrast~~ — COMPLETED (v66)
 

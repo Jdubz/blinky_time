@@ -2,7 +2,7 @@
 
 #include "AudioControl.h"
 #include "FrameBeatNN.h"
-#include "EnsembleDetector.h"
+#include "SharedSpectralAnalysis.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
@@ -177,13 +177,15 @@ private:
  *        |
  *   AdaptiveMic (level normalization, gain control)
  *        |
- *   EnsembleDetector (detectors + fusion)
+ *   SharedSpectralAnalysis (FFT → compressor → whitening → mel bands)
+ *        |
+ *   FrameBeatNN (frame-level FC, primary ODF) / mic level fallback
  *        |
  *   OSS Buffer (6s) --> Autocorrelation --> BPM(T)
  *        |                                    |
  *        +-----> CBSS Buffer ----> Beat Counter --> Phase = (now-lastBeat)/T
  *        |                                            |
- *   Ensemble Transient --> Pulse (visual only)        |
+ *   ODF-derived Pulse --> Pulse (visual only)         |
  *        |                                            |
  *   AudioControl { energy, pulse, phase, rhythmStrength }
  *        |
@@ -225,11 +227,6 @@ public:
     const AudioControl& getControl() const { return control_; }
 
     // === CONFIGURATION ===
-
-    // Ensemble detector configuration
-    void setDetectorEnabled(DetectorType type, bool enabled);
-    void setDetectorWeight(DetectorType type, float weight);
-    void setDetectorThreshold(DetectorType type, float threshold);
 
     // BPM range constraints (set directly via bpmMin/bpmMax members + SettingsRegistry)
     float getBpmMin() const { return bpmMin; }
@@ -283,12 +280,6 @@ public:
     float tempoSmoothingFactor = 0.85f; // Higher = smoother, slower adaptation (0-1)
     float tempoChangeThreshold = 0.1f;  // Min BPM change ratio to trigger update
 
-    // === BAND WEIGHTING ===
-    // Fixed band weights for spectral flux computation (bass/mid/high)
-    float bassBandWeight = 0.5f;    // Bass band weight
-    float midBandWeight = 0.3f;     // Mid band weight
-    float highBandWeight = 0.2f;    // High band weight
-
     // === AUTOCORRELATION TIMING ===
     // Controls how often BPM is re-estimated via autocorrelation
     uint16_t autocorrPeriodMs = 250;  // Run autocorr every N ms (default 250ms for faster adaptation)
@@ -321,18 +312,8 @@ public:
     // tempo and beat timing like BTrack. Prevents mid-beat period discontinuities.
     bool beatBoundaryTempo = true;       // Defer tempo changes to beat boundaries (BTrack-style)
 
-    // === UNIFIED ODF (Phase 2.4) ===
-    // Uses BandFlux pre-threshold continuous activation as the ODF for CBSS beat tracking,
-    // instead of the separate computeSpectralFluxBands(). Ensures transient detection and
-    // beat tracking see the same signal. BTrack uses a single ODF for both.
-    bool unifiedOdf = true;              // Use BandFlux pre-threshold as CBSS ODF (BTrack-style)
-
     // === NN BEAT ACTIVATION ===
-    // Replaces BandFlux ODF with a learned frame-level FC beat activation function.
-    // Requires ENABLE_NN_BEAT_ACTIVATION compile flag and valid model in frame_beat_model_data.h.
-    // When enabled and model loads successfully, overrides unifiedOdf for the ODF source.
-    // BandFlux still runs for transient detection (sparks/effects); only the ODF changes.
-    bool nnBeatActivation = true;        // Use NN beat activation as ODF (A/B tested, 11/18 wins)
+    // Frame-level FC beat/downbeat activation (sole ODF source for CBSS).
     bool nnProfile = false;              // Enable profiling output to Serial
 
     // === AUTOCORRELATION TUNING ===
@@ -348,19 +329,7 @@ public:
     bool adaptiveOdfThresh = false;      // Enable local-mean ODF threshold before autocorrelation (off by default for A/B testing)
     uint8_t odfThreshWindow = 15;        // Half-window size for adaptive ODF threshold (samples each side, 5-30)
 
-    // === ONSET-TRAIN ODF (binary onset events for ACF) ===
-    // Feeds post-threshold transient events to OSS buffer instead of continuous flux.
-    // ACF of onset events finds inter-onset periodicity (immune to enclosure resonance).
-    // CBSS and comb bank remain on continuous ODF.
-    bool onsetTrainOdf = false;          // Binary onset-train ODF for ACF (off by default for A/B testing)
-
-    // === HWR FIRST-DIFFERENCE ODF ===
-    // Feeds max(0, odf[n] - odf[n-1]) to OSS buffer instead of raw odf[n].
-    // Emphasizes onset ATTACKS (~30x larger than continuous modulation), suppressing
-    // enclosure-induced periodic fluctuations. BTrack uses this approach.
-    bool odfDiffMode = false;            // HWR first-difference ODF for ACF (off by default)
-
-    // (odfSource 1-5 removed v64 — experimental alternatives never used in production)
+    // (onsetTrainOdf/odfDiffMode removed v67 — BandFlux pipeline removed, NN is sole ODF source)
 
     // === ODF MEAN SUBTRACTION (BTrack-style detrending) ===
     // Subtracts the local mean from OSS buffer before autocorrelation.
@@ -485,13 +454,13 @@ public:
     AdaptiveMic& getMicForTuning() { return mic_; }
     const AdaptiveMic& getMic() const { return mic_; }
 
-    EnsembleDetector& getEnsemble() { return ensemble_; }
-    const EnsembleDetector& getEnsemble() const { return ensemble_; }
+    SharedSpectralAnalysis& getSpectral() { return spectral_; }
+    const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
 
     const FrameBeatNN& getFrameBeatNN() const { return frameBeatNN_; }
 
-    // Get last ensemble output for debugging
-    const EnsembleOutput& getLastEnsembleOutput() const { return ensemble_.getLastOutput(); }
+    // Get last pulse strength for debugging/streaming
+    float getLastPulseStrength() const { return lastPulseStrength_; }
 
     // Debug getters
     float getPeriodicityStrength() const { return periodicityStrength_; }
@@ -536,13 +505,22 @@ private:
     // === MICROPHONE ===
     AdaptiveMic mic_;
 
-    // === ENSEMBLE DETECTOR ===
-    EnsembleDetector ensemble_;
-    EnsembleOutput lastEnsembleOutput_;
+    // === SPECTRAL ANALYSIS ===
+    SharedSpectralAnalysis spectral_;
+
+    // === PULSE DETECTION (derived from ODF) ===
+    float lastPulseStrength_ = 0.0f;
+    uint32_t lastPulseMs_ = 0;
+
+    // Pulse detection parameters
+    static constexpr float PULSE_MIN_LEVEL = 0.025f;    // Noise gate
+    static constexpr float PULSE_THRESHOLD_MULT = 2.0f;  // ODF must exceed mean × this
+    static constexpr uint16_t PULSE_MIN_COOLDOWN_MS = 40;
+    static constexpr uint16_t PULSE_MAX_COOLDOWN_MS = 150;
 
     // === NN BEAT ACTIVATION ===
     FrameBeatNN frameBeatNN_;
-    bool nnActive_ = false;  // Cached per-update: nnBeatActivation && frameBeatNN_.isReady()
+    bool nnActive_ = false;  // Cached per-update: frameBeatNN_.isReady()
 
     // === RHYTHM TRACKING STATE ===
 
@@ -580,7 +558,6 @@ private:
                                          // Starts at 0 — threshold is intentionally inactive during
                                          // warmup (~2s) so LEDs respond immediately to music onset
     float lastSmoothedOnset_ = 0.0f;    // Last smoothed onset strength (for observability)
-    float prevOdfForDiff_ = 0.0f;       // Previous ODF value for HWR first-difference mode
     bool lastBeatWasPredicted_ = false; // Whether predictBeat() ran since last beat (working flag)
     bool lastFiredBeatPredicted_ = false; // Whether the most recently fired beat was predicted (stable for streaming)
     int lastTransientSample_ = -1;      // Sample index of most recent strong transient (-1 = none)
@@ -701,6 +678,9 @@ private:
     void switchTempo(int newPeriodSamples);
 
     // (Phase tracker/forward filter/multi-agent/particle filter declarations removed v64)
+
+    // Pulse detection cooldown (tempo-adaptive, inlined from EnsembleFusion)
+    uint16_t effectivePulseCooldownMs() const;
 
     // ODF smoothing
     float smoothOnsetStrength(float raw);

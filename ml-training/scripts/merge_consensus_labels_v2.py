@@ -253,6 +253,7 @@ def align_beats(
     tolerance: float,
     min_agreement: int,
     total_original_systems: int | None = None,
+    downbeat_min_agreement: int = 2,
 ) -> list[dict]:
     """Align beats across systems and return consensus beats.
 
@@ -315,14 +316,18 @@ def align_beats(
 
         strength = round(len(systems_in_cluster) / total_systems, 4)
 
-        # Downbeat check
-        is_downbeat = False
+        # Downbeat check — count how many systems agree this is a downbeat.
+        # Only beat_this and madmom provide downbeats (essentia/librosa don't).
+        # Require 2+ systems (AND merge) for high-confidence downbeats.
+        db_system_count = 0
+        db_systems = []
         for sys_name in systems_in_cluster:
             db_arr = system_beats[sys_name]["downbeats"]
             if len(db_arr) > 0:
                 if np.min(np.abs(db_arr - median_time)) < tolerance:
-                    is_downbeat = True
-                    break
+                    db_system_count += 1
+                    db_systems.append(sys_name)
+        is_downbeat = db_system_count >= downbeat_min_agreement
 
         consensus.append({
             "time": median_time,
@@ -330,6 +335,8 @@ def align_beats(
             "strength": strength,
             "systems": sorted(systems_in_cluster),
             "isDownbeat": is_downbeat,
+            "downbeatSystemCount": db_system_count,
+            "downbeatSystems": sorted(db_systems),
         })
 
     consensus.sort(key=lambda x: x["time"])
@@ -382,6 +389,7 @@ def merge_stem(
     label_files: dict[str, Path],
     tolerance: float,
     min_agreement: int,
+    downbeat_min_agreement: int = 2,
 ) -> dict:
     """Merge per-system labels for one audio stem."""
     # Load all systems
@@ -416,7 +424,8 @@ def merge_stem(
 
     # Step 4: Align and filter
     consensus_beats = align_beats(normalized, tolerance, min_agreement,
-                                  total_original_systems=len(all_systems))
+                                  total_original_systems=len(all_systems),
+                                  downbeat_min_agreement=downbeat_min_agreement)
 
     # Step 5: Compute quality score
     quality = compute_quality_score(
@@ -499,6 +508,8 @@ def main():
                         help="Max time diff for beat matching (default: 0.05)")
     parser.add_argument("--min-agreement", type=int, default=2,
                         help="Min systems to agree (default: 2)")
+    parser.add_argument("--downbeat-min-agreement", type=int, default=2,
+                        help="Min systems to agree on downbeat (default: 2 = AND merge)")
     parser.add_argument("--min-quality", type=float, default=0.0,
                         help="Skip tracks below this quality score (default: 0.0)")
     args = parser.parse_args()
@@ -514,6 +525,8 @@ def main():
 
     print(f"Found {len(stems)} stems in {labels_dir}")
     print(f"Tolerance: {args.tolerance}s, Min agreement: {args.min_agreement}")
+    db_mode = "AND" if args.downbeat_min_agreement >= 2 else "OR"
+    print(f"Downbeat min agreement: {args.downbeat_min_agreement} ({db_mode} merge)")
     print(f"Min quality: {args.min_quality}")
     print(f"Timing corrections: {SYSTEM_OFFSETS}")
     print(f"System weights: {SYSTEM_WEIGHTS}")
@@ -531,7 +544,8 @@ def main():
 
     for stem in tqdm(sorted(stems.keys()), desc="Merging"):
         try:
-            result = merge_stem(stems[stem], args.tolerance, args.min_agreement)
+            result = merge_stem(stems[stem], args.tolerance, args.min_agreement,
+                               args.downbeat_min_agreement)
 
             quality = result["quality_score"]
             quality_scores.append(quality)

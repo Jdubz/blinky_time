@@ -221,11 +221,9 @@ void ConfigStorage::loadSettingsDefaults() {
     // (ioiEnabled/ftEnabled removed v52 — dead code since v28)
     data_.music.odfMeanSubEnabled = false;   // ODF mean subtraction (v32: disabled — raw ODF +70% F1 vs global mean sub)
     data_.music.beatBoundaryTempo = true;    // Defer tempo to beat boundaries (v28, BTrack-style)
-    data_.music.unifiedOdf = true;           // BandFlux pre-threshold as CBSS ODF (v28, BTrack-style)
+    // (unifiedOdf/onsetTrainOdf/odfDiffMode removed v67 — BandFlux pipeline removed)
     data_.music.adaptiveOdfThresh = false;   // Local-mean ODF threshold (v31, marginal benefit — keep off)
     data_.music.odfThreshWindow = 15;        // Half-window size (15 samples = ~250ms at 60Hz)
-    data_.music.onsetTrainOdf = false;       // Binary onset-train ODF for ACF (v34, off by default)
-    data_.music.odfDiffMode = false;         // HWR first-difference ODF for ACF (v35, off by default)
     // (odfSource removed v64 — experimental alternatives never used)
     data_.music.densityOctaveEnabled = true;  // Onset-density octave penalty (v32: enabled, +13% F1)
     data_.music.downwardCorrectEnabled = false; // Downward harmonic correction (experimental, overcorrects mid-tempo)
@@ -272,7 +270,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.periodicityBlend = 0.7f;      // Periodicity strength EMA coefficient
     data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
     // (subbeatBins/templateHistBars removed v64)
-    data_.music.nnBeatActivation = true;     // NN beat activation (v58: on by default, A/B tested 11/18 wins)
+    // (nnBeatActivation removed v68 — always on)
 
     // (forwardFilterEnabled and all fwd* params removed v64)
     // (fwdPhaseOnly removed v64)
@@ -302,23 +300,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.compAttackTau = 0.001f;      // 1ms attack
     data_.music.compReleaseTau = 2.0f;       // 2s release
 
-    // BandFlux detector defaults (v29+)
-    data_.bandflux.gamma = 20.0f;
-    data_.bandflux.bassWeight = 2.0f;
-    data_.bandflux.midWeight = 1.5f;
-    data_.bandflux.highWeight = 0.1f;
-    data_.bandflux.minOnsetDelta = 0.3f;
-    data_.bandflux.perBandThreshMult = 1.5f;
-    data_.bandflux.bandDominanceGate = 0.0f;
-    data_.bandflux.decayRatioThreshold = 0.0f;
-    data_.bandflux.crestGate = 0.0f;
-    data_.bandflux.maxBin = 64;
-    data_.bandflux.confirmFrames = 3;
-    data_.bandflux.diffFrames = 1;
-    data_.bandflux.perBandThreshEnabled = false;
-    data_.bandflux.hiResBassEnabled = false;
-    data_.bandflux.peakPickEnabled = true;
-    data_.bandflux.usePreWhitenMags = true; // Matches reference arch; tested neutral (v47)
+    // (BandFlux detector defaults removed v67 — BandFlux pipeline removed)
 
     data_.brightness = 100;
 }
@@ -403,7 +385,7 @@ bool ConfigStorage::loadFromFlash() {
         memcpy(&data_.lightning, &temp.lightning, sizeof(StoredLightningParams));
         memcpy(&data_.mic, &temp.mic, sizeof(StoredMicParams));
         memcpy(&data_.music, &temp.music, sizeof(StoredMusicParams));
-        memcpy(&data_.bandflux, &temp.bandflux, sizeof(StoredBandFluxParams));
+        // (StoredBandFluxParams memcpy removed v67 — struct removed)
         data_.brightness = temp.brightness;
         SerialConsole::logDebug(F("Settings loaded from flash"));
     } else {
@@ -582,7 +564,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         data_.music.odfSmoothWidth = data_.music.odfSmoothWidth < 3 ? 3 : 11;
         fixedCount++;
     }
-    // odfMeanSubEnabled, adaptiveOdfThresh, onsetTrainOdf, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
+    // odfMeanSubEnabled, adaptiveOdfThresh, densityOctaveEnabled, octaveCheckEnabled are bools — no range validation needed
+    // (onsetTrainOdf removed v67)
     validateFloat(data_.music.rayleighBpm, 60.0f, 180.0f, F("rayleighBpm"));
     validateFloat(data_.music.tempoNudge, 0.0f, 1.0f, F("tempoNudge"));
     // fold32Enabled, sesquiCheckEnabled, bidirectionalSnap, harmonicSesqui are bools — no range validation needed
@@ -665,21 +648,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.noiseOversubtract, 0.5f, 5.0f, F("noiseOversubtract"));
     validateFloat(data_.music.noiseFloorRatio, 0.001f, 0.5f, F("noiseFloorRatio"));
 
-    // BandFlux detector validation (v29+)
-    validateFloat(data_.bandflux.gamma, 1.0f, 100.0f, F("bfGamma"));
-    validateFloat(data_.bandflux.bassWeight, 0.0f, 5.0f, F("bfBassWeight"));
-    validateFloat(data_.bandflux.midWeight, 0.0f, 5.0f, F("bfMidWeight"));
-    validateFloat(data_.bandflux.highWeight, 0.0f, 2.0f, F("bfHighWeight"));
-    validateFloat(data_.bandflux.minOnsetDelta, 0.0f, 2.0f, F("bfOnsetDelta"));
-    validateFloat(data_.bandflux.perBandThreshMult, 0.5f, 5.0f, F("bfPBThreshMult"));
-    validateFloat(data_.bandflux.bandDominanceGate, 0.0f, 1.0f, F("bfDominance"));
-    validateFloat(data_.bandflux.decayRatioThreshold, 0.0f, 1.0f, F("bfDecayRatio"));
-    validateFloat(data_.bandflux.crestGate, 0.0f, 20.0f, F("bfCrestGate"));
-    VALIDATE_INT(data_.bandflux.maxBin, 16, 128, F("bfMaxBin"));
-    // cppcheck-suppress unsignedLessThanZero
-    VALIDATE_INT(data_.bandflux.confirmFrames, 0, 6, F("bfConfirmFrames"));
-    VALIDATE_INT(data_.bandflux.diffFrames, 1, 3, F("bfDiffFrames"));
-    // perBandThreshEnabled, hiResBassEnabled, peakPickEnabled are bools — no range validation needed
+    // (BandFlux detector validation removed v67 — struct removed)
 
     // Validate BPM range consistency
     if (data_.music.bpmMin >= data_.music.bpmMax) {
@@ -794,9 +763,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     mic.hwGainMaxSignal = data_.mic.hwGainMaxSignal;
 
     // NOTE: Detection-specific parameters (transientThreshold, attackMultiplier, etc.)
-    // are now handled by EnsembleDetector. The data_.mic fields are kept for
-    // backward compatibility when reading old config files, but are not applied
-    // to AdaptiveMic which now only handles audio input normalization.
+    // were historically handled by EnsembleDetector (removed v67). AdaptiveMic now
+    // only handles audio input normalization.
 
     // AudioController parameters (v23+)
     // All rhythm tracking params are now public tunable members
@@ -845,11 +813,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->octaveCheckBeats = data_.music.octaveCheckBeats;
         audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
         audioCtrl->beatBoundaryTempo = data_.music.beatBoundaryTempo;
-        audioCtrl->unifiedOdf = data_.music.unifiedOdf;
+        // (unifiedOdf/onsetTrainOdf/odfDiffMode load removed v67 — BandFlux pipeline removed)
         audioCtrl->adaptiveOdfThresh = data_.music.adaptiveOdfThresh;
         audioCtrl->odfThreshWindow = data_.music.odfThreshWindow;
-        audioCtrl->onsetTrainOdf = data_.music.onsetTrainOdf;
-        audioCtrl->odfDiffMode = data_.music.odfDiffMode;
         // (odfSource load removed v64 — experimental alternatives deleted)
         audioCtrl->densityOctaveEnabled = data_.music.densityOctaveEnabled;
         audioCtrl->densityMinPerBeat = data_.music.densityMinPerBeat;
@@ -896,7 +862,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->periodicityBlend = data_.music.periodicityBlend;
         audioCtrl->onsetDensityBlend = data_.music.onsetDensityBlend;
         // (subbeatBins/templateHistBars load removed v64 — features deleted)
-        audioCtrl->nnBeatActivation = data_.music.nnBeatActivation;
+        // (nnBeatActivation load removed v68 — always on)
 
         // (forwardFilter/fwd*/fwdPhaseOnly load removed v64 — forward filter deleted)
 
@@ -908,7 +874,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         // (particleFilter load removed v64 — PF deleted)
 
         // Spectral processing (v23+)
-        SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
+        SharedSpectralAnalysis& spectral = audioCtrl->getSpectral();
         spectral.whitenEnabled = data_.music.whitenEnabled;
         spectral.compressorEnabled = data_.music.compressorEnabled;
         spectral.whitenBassBypass = data_.music.whitenBassBypass;
@@ -928,28 +894,8 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         spectral.noiseOversubtract = data_.music.noiseOversubtract;
         spectral.noiseFloorRatio = data_.music.noiseFloorRatio;
 
-        // BandFlux detector parameters (v29+)
-        BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();
-        bf.gamma = data_.bandflux.gamma;
-        bf.bassWeight = data_.bandflux.bassWeight;
-        bf.midWeight = data_.bandflux.midWeight;
-        bf.highWeight = data_.bandflux.highWeight;
-        bf.minOnsetDelta = data_.bandflux.minOnsetDelta;
-        bf.perBandThreshMult = data_.bandflux.perBandThreshMult;
-        bf.bandDominanceGate = data_.bandflux.bandDominanceGate;
-        bf.decayRatioThreshold = data_.bandflux.decayRatioThreshold;
-        bf.crestGate = data_.bandflux.crestGate;
-        bf.maxBin = data_.bandflux.maxBin;
-        bf.confirmFrames = data_.bandflux.confirmFrames;
-        bf.diffFrames = data_.bandflux.diffFrames;
-        bf.perBandThreshEnabled = data_.bandflux.perBandThreshEnabled;
-        bf.setHiResBass(data_.bandflux.hiResBassEnabled);  // Side effect: resets bass history
-        bf.peakPickEnabled = data_.bandflux.peakPickEnabled;
-        bf.usePreWhitenMags = data_.bandflux.usePreWhitenMags;
-
-        // Sync BassSpectralAnalysis enabled state with hi-res bass setting
-        BassSpectralAnalysis& bass = audioCtrl->getEnsemble().getBassSpectral();
-        bass.enabled = data_.bandflux.hiResBassEnabled;
+        // (BandFlux detector load removed v67 — BandFlux pipeline removed)
+        // (BassSpectralAnalysis sync removed v67 — hi-res bass removed)
     }
 }
 
@@ -1045,9 +991,8 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.mic.hwGainMaxSignal = mic.hwGainMaxSignal;
 
     // NOTE: Detection-specific parameters (transientThreshold, detectionMode, etc.)
-    // are now handled by EnsembleDetector. The data_.mic fields are kept for
-    // backward compatibility but are no longer saved from AdaptiveMic.
-    // Future versions may save EnsembleDetector configuration separately.
+    // were historically handled by EnsembleDetector (removed v67). AdaptiveMic fields
+    // are kept for backward compatibility but detection is now handled by FrameBeatNN.
 
     // AudioController parameters (v23+)
     // All rhythm tracking params are now public tunable members
@@ -1096,11 +1041,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.octaveCheckBeats = audioCtrl->octaveCheckBeats;
         data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
         data_.music.beatBoundaryTempo = audioCtrl->beatBoundaryTempo;
-        data_.music.unifiedOdf = audioCtrl->unifiedOdf;
+        // (unifiedOdf/onsetTrainOdf/odfDiffMode save removed v67 — BandFlux pipeline removed)
         data_.music.adaptiveOdfThresh = audioCtrl->adaptiveOdfThresh;
         data_.music.odfThreshWindow = audioCtrl->odfThreshWindow;
-        data_.music.onsetTrainOdf = audioCtrl->onsetTrainOdf;
-        data_.music.odfDiffMode = audioCtrl->odfDiffMode;
         // (odfSource save removed v64 — experimental alternatives deleted)
         data_.music.densityOctaveEnabled = audioCtrl->densityOctaveEnabled;
         data_.music.densityMinPerBeat = audioCtrl->densityMinPerBeat;
@@ -1147,7 +1090,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.periodicityBlend = audioCtrl->periodicityBlend;
         data_.music.onsetDensityBlend = audioCtrl->onsetDensityBlend;
         // (subbeatBins/templateHistBars save removed v64 — features deleted)
-        data_.music.nnBeatActivation = audioCtrl->nnBeatActivation;
+        // (nnBeatActivation save removed v68 — always on)
 
         // (forwardFilter/fwd*/fwdPhaseOnly save removed v64 — forward filter deleted)
 
@@ -1159,7 +1102,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         // (particleFilter save removed v64 — PF deleted)
 
         // Spectral processing (v23+)
-        const SharedSpectralAnalysis& spectral = audioCtrl->getEnsemble().getSpectral();
+        const SharedSpectralAnalysis& spectral = audioCtrl->getSpectral();
         data_.music.whitenEnabled = spectral.whitenEnabled;
         data_.music.compressorEnabled = spectral.compressorEnabled;
         data_.music.whitenBassBypass = spectral.whitenBassBypass;
@@ -1179,24 +1122,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.noiseOversubtract = spectral.noiseOversubtract;
         data_.music.noiseFloorRatio = spectral.noiseFloorRatio;
 
-        // BandFlux detector parameters (v29+)
-        const BandWeightedFluxDetector& bf = audioCtrl->getEnsemble().getBandFlux();
-        data_.bandflux.gamma = bf.gamma;
-        data_.bandflux.bassWeight = bf.bassWeight;
-        data_.bandflux.midWeight = bf.midWeight;
-        data_.bandflux.highWeight = bf.highWeight;
-        data_.bandflux.minOnsetDelta = bf.minOnsetDelta;
-        data_.bandflux.perBandThreshMult = bf.perBandThreshMult;
-        data_.bandflux.bandDominanceGate = bf.bandDominanceGate;
-        data_.bandflux.decayRatioThreshold = bf.decayRatioThreshold;
-        data_.bandflux.crestGate = bf.crestGate;
-        data_.bandflux.maxBin = bf.maxBin;
-        data_.bandflux.confirmFrames = bf.confirmFrames;
-        data_.bandflux.diffFrames = bf.diffFrames;
-        data_.bandflux.perBandThreshEnabled = bf.perBandThreshEnabled;
-        data_.bandflux.hiResBassEnabled = bf.hiResBassEnabled;
-        data_.bandflux.peakPickEnabled = bf.peakPickEnabled;
-        data_.bandflux.usePreWhitenMags = bf.usePreWhitenMags;
+        // (BandFlux detector save removed v67 — BandFlux pipeline removed)
     }
 
     saveToFlash();

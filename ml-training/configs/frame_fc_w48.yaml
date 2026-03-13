@@ -1,0 +1,17 @@
+# Frame-level FC — 48-frame window (768ms) for more temporal context
+#
+# Larger window sees ~1.5 beats at 120 BPM. More context for tempo
+# estimation at the cost of more parameters and slightly higher latency.
+# ~82K params, ~82 KB INT8.
+
+model:
+  type: "frame_fc"
+  window_frames: 48         # 48 frames = 768ms at 62.5 Hz
+  hidden_dims: [64, 32]
+  dropout: 0.1
+  downbeat: true
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 90

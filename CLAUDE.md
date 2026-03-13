@@ -63,7 +63,7 @@ If a device stops responding to serial commands:
 ## Compilation Commands
 
 ```bash
-# Compile only (in-tree build)
+# Compile only (in-tree build, requires TFLite library)
 arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things
 
 # Compile + validate + upload via UF2 (recommended)
@@ -71,10 +71,6 @@ make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 
 # Compile + validate only (dry run)
 make uf2-check UPLOAD_PORT=/dev/ttyACM0
-
-# Compile with NN beat activation (TFLite Micro inference)
-make uf2-upload UPLOAD_PORT=/dev/ttyACM0 NN=1
-make uf2-check UPLOAD_PORT=/dev/ttyACM0 NN=1
 ```
 
 ## Documentation Structure
@@ -110,7 +106,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0 NN=1
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
 - **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Frame-level FC NN beat/downbeat activation (primary ODF)
-- **EnsembleDetector** (`blinky-things/audio/EnsembleDetector.h`) - BandFlux Solo detector (OBSOLETE, scheduled for removal)
+- **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
 
@@ -165,11 +161,11 @@ AdaptiveMic (AGC + normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── [NN=1 build] FrameBeatNN (frame-level FC, ~3ms) → ODF (primary)
-    ├── [OBSOLETE] EnsembleDetector (BandFlux Solo) → scheduled for removal
+    ├── FrameBeatNN (frame-level FC, ~60-200µs) → ODF
     ↓
-AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat*, beatInMeasure*}
-    (* = planned, driven by FrameBeatNN when available; currently from mel CNN or mod-4 counter)
+AudioController (CBSS beat tracking + pulse detection)
+    ↓
+AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure}
     ↓
 Generator (Fire/Water/Lightning)
     ↓
@@ -186,14 +182,14 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output)
 
 2. **Onset Detection**
-   - `FrameBeatNN.h` - **Primary ODF**: Frame-level FC neural network (56.8 KB INT8, ~3ms inference, NN=1 build)
+   - `FrameBeatNN.h` - **Sole ODF**: Frame-level FC neural network (56.8 KB INT8, ~60-200µs inference)
    - Input: 32 frames × 26 raw mel bands (0.5s window). Output: beat_activation + downbeat_activation
-   - `EnsembleDetector.h` - **OBSOLETE** (BandFlux Solo, scheduled for removal)
+   - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple ODF)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: FrameBeatNN (frame-level FC, ~3ms, NN=1 build). BandFlux is OBSOLETE and scheduled for removal.
+   - ODF source: FrameBeatNN (frame-level FC, ~60-200µs). Falls back to mic level if model fails to load.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -216,8 +212,8 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v64)
-   - `SettingsRegistry.h/cpp` - ~50 tunable parameters
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v68)
+   - `SettingsRegistry.h/cpp` - Tunable parameters (v67: ~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
 
@@ -336,13 +332,13 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~22 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB). Current NN=1 build: +96 KB tensor arena + 27 KB context buffer. Planned frame-level FC NN: +8-16 KB arena + 3.3 KB mel frame buffer.
-- Flash: ~259 KB base, ~391 KB with NN=1 (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~20 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + 16 KB tensor arena + 3.3 KB mel frame buffer).
+- Flash: ~365 KB (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
 - Microphone + FFT: ~4%
-- Ensemble detector: ~1%
+- FrameBeatNN inference: <1%
 - Autocorrelation (500ms): ~3% amortized
 - CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
@@ -392,15 +388,16 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - ✅ 3 device configurations (Hat, Tube, Bucket)
 - ✅ Mic calibration pipeline + gain-aware training augmentation
 
-**Removed (v64, A/B tested — zero or negative benefit, ~1500 lines deleted):**
-- Forward filter, particle filter, HMM phase tracker, multi-agent beat tracking
-- Template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux
+**Removed (v64-v67):**
+- v64: Forward filter, particle filter, HMM phase tracker, multi-agent beat tracking, template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux (~1500 lines)
+- v67: EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult (~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved)
+- v68: Removed ENABLE_NN_BEAT_ACTIVATION ifdef and nnBeatActivation runtime toggle. FrameBeatNN always compiled in and active. TFLite is a required dependency.
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
 **In Progress:**
-- NN mel calibration (firmware mel mean ~0.52 vs training ~0.86, causes weak activations)
+- NN mel calibration: target_rms_db corrected -35→-63 dB, dataset reprocessing underway
 - Conv1D wide model evaluation (training complete, needs export and comparison)
-- BandFlux code removal (after mel calibration complete)
+- Window size sweep: configs for 16/32/48/64 frames ready to train
 
 **Planned (Not Started):**
 - Bluetooth/BLE support (design doc complete)
@@ -433,16 +430,18 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-FrameBeatNN — frame-level FC neural network (primary ODF). FC(832→64→32→2), 55K params, 56.8 KB INT8.
+FrameBeatNN — frame-level FC neural network (sole ODF, v67). FC(832→64→32→2), 55K params, 56.8 KB INT8.
 Input: 32 frames × 26 raw mel bands (0.5s window at 62.5 Hz). Output: beat_activation (ODF for CBSS) + downbeat_activation.
-~3ms inference on Cortex-M4F. Deployed on all 3 devices (March 2026).
+~60-200µs inference on Cortex-M4F. Deployed on all 3 devices (March 2026).
+Fallback if model fails to load: mic_.getLevel() as simple energy ODF.
+Pulse detection: ODF threshold against running mean with tempo-adaptive cooldown (inlined from removed EnsembleFusion).
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
-BandFlux Solo (EnsembleDetector) is OBSOLETE and scheduled for removal.
+BandFlux/EnsembleDetector fully removed in v67 (~2600 lines, 10 files deleted).
 
 ### Key Features
-- **FrameBeatNN** (v65+): Frame-level FC neural network, primary ODF source. Per-tensor INT8 quantization (CMSIS-NN requirement). ~3ms inference at ~15.6 Hz.
+- **FrameBeatNN** (v65+): Frame-level FC neural network, sole ODF source. Per-tensor INT8 quantization (CMSIS-NN requirement). ~60-200µs inference at ~15.6 Hz.
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
-- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 64
+- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 68
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
 - **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better

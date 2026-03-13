@@ -37,11 +37,9 @@ PDM Microphone (16kHz, mono)
         |
    BassSpectralAnalysis (Goertzel-12, 31.25 Hz/bin, optional)
         |
-   └── FrameBeatNN (TFLite Micro FC, 56.8 KB INT8, ~3ms)
-        → ODF (primary, NN=1 build)
+   └── FrameBeatNN (TFLite Micro FC, 56.8 KB INT8, ~60-200µs)
+        → ODF (sole source)
         → beat_activation + downbeat_activation
-        |
-   [OBSOLETE: EnsembleDetector/BandFlux — scheduled for removal]
         |
    AudioController
    ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
@@ -63,7 +61,7 @@ PDM Microphone (16kHz, mono)
 
 ### Key Design Decisions
 
-1. **NN ODF**: Frame-level FC model provides learned beat activation, replacing hand-tuned BandFlux. BandFlux is obsolete and scheduled for removal.
+1. **NN ODF**: Frame-level FC model provides learned beat activation (sole ODF since v67). Non-NN fallback: mic level.
 2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization.
 3. **Bayesian tempo fusion**: Unified posterior estimation over 20 tempo bins. Comb filter bank is the primary observation; harmonic-enhanced ACF (weight 0.8, v25) with 4-harmonic comb and Rayleigh prior prevents sub-harmonic lock.
 4. **CBSS beat tracking**: Cumulative Beat Strength Signal with adaptive threshold prevents phantom beats during silence/breakdowns.
@@ -113,7 +111,7 @@ Batch A/B test scripts compare two firmware configurations across all 18 EDM tra
 **Critical: Always seek to middle of track.** EDM tracks typically have 15-30s intros with no beat. Playing from the start wastes most of the test window on intro/buildup. All scripts use `ffprobe` to get track duration and `ffplay -ss` to seek to the center minus half the play duration. This ensures the beat-tracking section of the track is captured.
 
 **Available scripts:**
-- `ab_test_nnbeat.cjs` — BandFlux ODF vs NN Beat ODF (`nnbeat=0` vs `nnbeat=1`)
+- `ab_test_nnbeat.cjs` — NN Beat ODF comparison (BandFlux removed in v67; historical data only)
 - `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (default OFF in v64; settings still exposed)
 
 ```bash
@@ -157,48 +155,13 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `ensminlevel` | 0.0 | 0.0-0.5 | Noise gate audio level |
 
 **Per-detector commands** (via `set`/`show`):
-| Command | Description |
-|---------|-------------|
-| `set detector_enable <type> <0\|1>` | Enable/disable detector (drummer, spectral, hfc, bass, complex, novelty, bandflux) |
-| `set detector_weight <type> <val>` | Set detector weight in fusion |
-| `set detector_thresh <type> <val>` | Set detector threshold |
+*Detector commands removed in v67. BandFlux/EnsembleDetector fully removed. FrameBeatNN is the sole ODF source. See git log v67 for details.*
 
-**Detector config (v62+, BandFlux Solo — disabled detectors removed):**
-
-| Detector | Weight | Threshold | Notes |
-|----------|--------|-----------|-------|
-| **BandWeightedFlux** | 1.00 | 0.5 | Log-compressed band-weighted flux, additive threshold |
-
-### BandFlux Parameters (via `set`/`show` commands, persisted to flash since v29)
-
-| Command | Default | Range | Description |
-|---------|---------|-------|-------------|
-| `bfgamma` | 20.0 | 1-100 | Log compression strength: `log(1 + gamma * mag)` |
-| `bfbassweight` | 2.0 | 0-5 | Bass band flux weight (promotes kick detection) |
-| `bfmidweight` | 1.5 | 0-5 | Mid band flux weight |
-| `bfhighweight` | 0.1 | 0-2 | High band flux weight (low = hi-hat rejection) |
-| `bfmaxbin` | 64 | 16-128 | Max FFT bin to analyze |
-| `bfonsetdelta` | 0.3 | 0-2 | Min flux jump from previous frame (pad/echo rejection) |
-| `bfhiresbass` | off | bool | Enable Goertzel-12 hi-res bass analysis |
-| `bfdiffframes` | 1 | 1-3 | Temporal reference depth (keep at 1) |
-| `bfperbandthresh` | off | bool | Per-band independent thresholds (keep off) |
-| `bfpbmult` | 1.5 | 0.5-5 | Per-band threshold multiplier |
-| `bfdominance` | 0.0 | 0-1 | Band-dominance gate (disabled, experimental) |
-| `bfdecayratio` | 0.0 | 0-1 | Post-onset decay gate (disabled, experimental) |
-| `bfconfirmframes` | 3 | 0-6 | Decay confirmation frames |
-| `bfcrestgate` | 0.0 | 0-20 | Spectral crest factor gate (disabled, experimental) |
-| `bfpeakpick` | on | bool | Local-max peak picking (SuperFlux-style, Phase 2.6) |
-
-### Category: `rhythm` (21 parameters) - Beat Tracking (AudioController)
+### Category: `rhythm` - Beat Tracking (AudioController)
 
 **Onset Strength Signal:**
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `ossfluxweight` | 1.0 | 0.0-1.0 | OSS generation: 1.0=spectral flux, 0.0=RMS energy |
-| `adaptbandweight` | true | bool | Enable adaptive band weighting |
-| `bassbandweight` | 0.5 | 0.0-1.0 | Bass band weight (when adaptive disabled) |
-| `midbandweight` | 0.3 | 0.0-1.0 | Mid band weight |
-| `highbandweight` | 0.2 | 0.0-1.0 | High band weight |
 | `odfsmooth` | 5 | 3-11 (odd) | ODF smoothing window width |
 | `odfmeansub` | false | bool | ODF mean subtraction (OFF since v32 — raw ODF preserves ACF structure, +70% F1) |
 
@@ -262,11 +225,11 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `compattack` | 0.001 | 0.0001-0.1 s | Attack time constant (effectively instantaneous at 62.5 fps) |
 | `comprelease` | 2.0 | 0.01-10.0 s | Release time constant |
 
-### Category: `nn` (1 parameter) - NN Beat Activation (v54+, requires NN=1 build)
+### Category: `nn` (1 parameter) - NN Beat Activation
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `nnbeat` | 1 | bool | Use NN ODF instead of BandFlux (default ON since v58, requires NN=1 build) |
+| `nnprofile` | 0 | bool | Enable [NNPROF] per-operator timing output to Serial |
 
 ### Category: `v45` (4 parameters) - PLL + Onset Snap (v45+)
 
@@ -354,7 +317,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 |---------|---------|-------|-------------|
 | `organictransmin` | 0.3 | 0.0-1.0 | Min transient for burst |
 
-**Total: ~75+ tunable parameters** (registered settings + BandFlux runtime params)
+**Total: ~30+ tunable parameters** (v67, after BandFlux removal)
 
 ---
 
@@ -362,13 +325,9 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 ### NN ODF Configuration (March 2026)
 
-**Frame-level FC model** is the primary ODF source, replacing BandFlux. FrameBeatNN processes 32 frames × 26 mel bands through FC(832→64→32→2) to produce beat and downbeat activations at ~3ms per inference. 56.8 KB INT8 model with per-tensor quantization.
+**Frame-level FC model** is the sole ODF source (v67). FrameBeatNN processes 32 frames × 26 mel bands through FC(832→64→32→2) to produce beat and downbeat activations at ~60-200µs per inference. 56.8 KB INT8 model with per-tensor quantization.
 
-**Current issue:** Mel level mismatch between firmware (mean ~0.52) and training data (mean ~0.86) causes weak activations. See `IMPROVEMENT_PLAN.md` Priority 1 for calibration plan.
-
-### ~~BandFlux Solo Configuration~~ (OBSOLETE — scheduled for removal)
-
-BandFlux Solo and all ~15 associated parameters are obsolete, superseded by the NN ODF. Code will be removed once NN mel calibration is complete. Parameters documented in appendix for reference until removal.
+**Current work:** Mel level calibrated (target_rms_db corrected -35→-63 dB). Retraining with calibrated dataset in progress.
 
 ### Bayesian Tempo Fusion Defaults (v28+)
 
@@ -492,20 +451,7 @@ npm run tuner -- multi-sweep \
 
 **CRITICAL:** Always validate combined defaults after independent sweeps — interaction effects are real (bayesacf=0 looked optimal independently but caused half-time lock when combined).
 
-### Phase 3: Transient Detection Tuning (if needed)
-
-**BandFlux parameters to test:**
-1. `bfonsetdelta` — Pad rejection vs kick sensitivity (0.2, 0.3, 0.5)
-2. `bfbassweight` — Kick detection weight (1.5, 2.0, 3.0)
-3. `bfgamma` — Log compression (10, 20, 30)
-
-**Use synthetic patterns** for transient tuning:
-```
-run_test(pattern: "strong-beats", port: "/dev/ttyACM0")
-run_test(pattern: "pad-rejection", port: "/dev/ttyACM0")
-```
-
-### Phase 4: Output Modulation (visual tuning)
+### Phase 3: Output Modulation (visual tuning)
 
 **Parameters:** `pulseboost`, `pulsesuppress`, `energyboost`
 
@@ -514,7 +460,7 @@ Visual inspection of fire effect with beat-synced music:
 - Off-beat transients subdued but visible
 - No visual jarring/flickering
 
-### Phase 5: Save and Verify
+### Phase 4: Save and Verify
 
 1. Save settings on each device: `save`
 2. Run validation pass on 3-5 tracks to confirm
@@ -529,23 +475,19 @@ Visual inspection of fire effect with beat-synced music:
 1. Check `stream on` shows audio data (PDM working)
 2. Verify hardware gain is reasonable (20-60 range): `show gain`
 3. Check raw level rises with sound
-4. Verify BandFlux is enabled: `show detectors`
+4. Check NN status: `show nn`
 
-### Too Many False Positives
+### Too Many False Positives (pulse/spark effects)
 
-1. Raise BandFlux threshold: `set detector_thresh bandflux 0.7`
-2. Increase onset delta: `set bfonsetdelta 0.5` (rejects more pads/echoes)
-3. Raise `ensminconf` (try 0.50-0.60)
-4. Increase `enscooldown` to reduce rapid triggers (try 300-400ms)
-5. Check if experimental gates help: `set bfcrestgate 5.0`
+1. Pulse detection uses ODF threshold against running mean — check if NN model is producing clean activations
+2. Check AGC is tracking properly: `show gain`
+3. Retrain model with cleaner labels if persistent
 
 ### Missing Transients
 
-1. Lower BandFlux threshold: `set detector_thresh bandflux 0.3`
-2. Decrease onset delta: `set bfonsetdelta 0.1` (lets more through)
-3. Lower `ensminconf` (try 0.3)
-4. Ensure `enscooldown` isn't too long for fast patterns
-5. Check AGC is tracking properly: `show gain`
+1. Check AGC is tracking properly: `show gain`
+2. Verify NN model is loaded and producing activations: `show nn`
+3. Check mel calibration — training target_rms_db must match firmware AGC levels
 
 ### Rhythm Not Locking
 
@@ -580,8 +522,7 @@ FT and IOI are **disabled by default** since v28 (`bayesft=0`, `bayesioi=0`). No
 
 ```bash
 show beat          # CBSS beat tracker state (BPM, phase, confidence)
-show detectors     # All detector statuses, weights, thresholds
-show bandflux      # BandFlux-specific parameters
+show nn            # NN model status (ready, arena usage, channels)
 json beat          # Beat tracker state as JSON
 json rhythm        # Full rhythm tracking state as JSON
 json settings      # All settings as JSON

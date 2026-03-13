@@ -24,8 +24,9 @@
  */
 
 // Maximum number of settings (adjust based on needs)
-// Current usage: ~150 settings (fire, water, lightning, effect, audio, agc, rhythm, cbss, ensemble, bandflux, spectral)
+// Current usage: ~120 settings (fire, water, lightning, effect, audio, agc, rhythm, cbss, bayesian, spectral)
 // v64 removed ~35 params (PF, forward filter, HMM, multi-agent, template/subbeat)
+// v67 removed ~24 params (BandFlux, ensemble fusion, band weights, ODF modes)
 #define MAX_SETTINGS 192
 static_assert(MAX_SETTINGS <= 255, "MAX_SETTINGS exceeds uint8_t range of numSettings_");
 

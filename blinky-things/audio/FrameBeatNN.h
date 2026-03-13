@@ -21,10 +21,7 @@
 // hop, mel bands, mel range, mel scale, log compression, window).
 // Changes to compressor, whitening, BandFlux, etc. do NOT require retraining.
 //
-// Enable via: compile with ENABLE_NN_BEAT_ACTIVATION
 // ============================================================================
-
-#ifdef ENABLE_NN_BEAT_ACTIVATION
 
 #include <TensorFlowLite.h>
 #include "tensorflow/lite/micro/micro_error_reporter.h"
@@ -49,7 +46,7 @@ public:
         // Only initialize if we have a real model (not the 4-byte placeholder stub).
         // Runtime check allows scaffold builds; when a trained model is committed,
         // replace with static_assert(frame_beat_model_data_len > 100, ...) to catch
-        // accidental stub-model NN=1 builds at compile time.
+        // accidental stub-model builds at compile time.
         if (frame_beat_model_data_len < 100) {
             initError_ = 4;  // Placeholder model
             return false;
@@ -364,24 +361,3 @@ private:
     unsigned long lastInferUs_ = 0;
     uint32_t invokeErrors_ = 0;
 };
-
-#else
-
-// Stub when NN is not compiled in
-class FrameBeatNN {
-public:
-    static constexpr int INPUT_MEL_BANDS = 26;
-    bool begin() { return false; }
-    float infer(const float*) { return 0.0f; }
-    bool isReady() const { return false; }
-    float getLastDownbeat() const { return 0.0f; }
-    bool hasDownbeatOutput() const { return false; }
-    void setProfileEnabled(bool) {}
-    bool isProfileEnabled() const { return false; }
-    unsigned long getLastInferUs() const { return 0; }
-    uint32_t getInvokeErrors() const { return 0; }
-    uint32_t getInferCount() const { return 0; }
-    void printDiagnostics() const { Serial.println(F("[FrameBeatNN] not compiled")); }
-};
-
-#endif // ENABLE_NN_BEAT_ACTIVATION

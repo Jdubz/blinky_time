@@ -16,7 +16,10 @@ audio:
   fmin: 60                  # MEL_MIN_FREQ
   fmax: 8000                # MEL_MAX_FREQ
   frame_rate: 62.5          # 16000 / 256
-  target_rms_db: -35        # Normalize audio RMS to simulate firmware AGC level
+  target_rms_db: -63        # Normalize audio RMS to simulate firmware AGC level
+  # Calibrated via tools/rms_mel_sweep.py: -63 dB → mel mean 0.52, matching
+  # firmware AGC output. Previous -35 dB gave mel mean 0.75, causing weak
+  # NN activations on device (max ~0.26 at 120 BPM).
   # AGC ceiling — must agree with firmware AdaptiveMic.h hwGainMaxSignal.
   # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
   # prepare_dataset.py uses this to cap gain-aware noise augmentation.
@@ -47,7 +50,7 @@ training:
   chunk_frames: 128         # ~2s chunks at 62.5 Hz
   chunk_stride: 64          # 50% overlap between chunks
   pos_weight: 20.0          # BCE positive class weight for beat head (binary targets ~4.5% positive ratio)
-  downbeat_pos_weight: 60.0 # BCE positive class weight for downbeat head (binary targets ~1.5% positive ratio)
+  downbeat_pos_weight: 60.0 # BCE positive class weight for downbeat head (v3 AND merge: ~0.75% positive ratio, cleaner labels)
   min_quality: 0.0            # Minimum label quality_score to include track (0.0 = no filtering)
   val_split: 0.15
   seed: 42
@@ -73,7 +76,7 @@ export:
 # Data paths (bulk data on /mnt/storage, processed data local for fast training)
 data:
   audio_dir: "/mnt/storage/blinky-ml-data/audio"
-  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus_v2"
+  labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus_v3"
   processed_dir: "data/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"
   test_set: "../blinky-test-player/music/edm"

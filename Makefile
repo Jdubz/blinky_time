@@ -30,11 +30,6 @@ UPLOAD_PORT ?= /dev/ttyACM0
 BUILD_OUTPUT_DIR ?= /tmp/blinky-build
 UF2_UPLOAD_TOOL = tools/uf2_upload.py
 
-# NN beat activation (set NN=1 to enable TFLite inference)
-ifdef NN
-EXTRA_CPP_FLAGS += -DENABLE_NN_BEAT_ACTIVATION
-endif
-
 # Arduino CLI detection
 ifeq ($(OS),Windows_NT)
     ARDUINO_CLI = arduino-cli.exe
@@ -65,14 +60,11 @@ help:
 	@echo "  uf2-test       - Verify upload infrastructure is ready"
 	@echo "  safety-check   - Run pre-compile safety checks only"
 	@echo ""
-	@echo "NN Beat Activation (ML model):"
-	@echo "  compile NN=1     - Compile with TFLite NN beat activation"
-	@echo "  uf2-upload NN=1  - Upload with NN beat activation enabled"
-	@echo "  setup-tflite     - Install TFLite Micro Arduino library"
+	@echo "Setup:"
+	@echo "  setup-tflite     - Install TFLite Micro Arduino library (required)"
 	@echo ""
 	@echo "Parameters:"
 	@echo "  DEVICE       - Device type (1=Hat, 2=TubeLight, 3=BucketTotem)"
-	@echo "  NN           - Set to 1 to enable NN beat activation (requires TFLite lib)"
 	@echo "  PORT         - Serial port for Windows (default: COM3)"
 	@echo "  UPLOAD_PORT  - Serial port for single UF2 upload (default: /dev/ttyACM0)"
 	@echo "  UPLOAD_PORTS - Space-separated ports for uf2-upload-all"
