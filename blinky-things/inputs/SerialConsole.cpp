@@ -116,30 +116,30 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
         "Baseline spark spawn probability", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("audiospawnboost", &fp->audioSpawnBoost, "fire",
         "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
-    settings_.registerUint8("burstsparks", &fp->burstSparks, "fire",
-        "Sparks per beat burst", 1, 20, onParamChanged);
+    settings_.registerFloat("burstsparks", &fp->burstSparks, "fire",
+        "Burst sparks (× crossDim)", 0.1f, 5.0f, onParamChanged);
 
     // Physics
     settings_.registerFloat("gravity", &fp->gravity, "fire",
-        "Gravity strength (negative=upward)", -200.0f, 200.0f, onParamChanged);
+        "Gravity (× traversalDim, negative=upward)", -10.0f, 10.0f, onParamChanged);
     settings_.registerFloat("windbase", &fp->windBase, "fire",
         "Base wind force", -50.0f, 50.0f, onParamChanged);
     settings_.registerFloat("windvariation", &fp->windVariation, "fire",
-        "Wind variation amount", 0.0f, 100.0f, onParamChanged);
+        "Wind variation (× crossDim)", 0.0f, 10.0f, onParamChanged);
     settings_.registerFloat("drag", &fp->drag, "fire",
         "Drag coefficient", 0.0f, 1.0f, onParamChanged);
 
     // Spark appearance
     settings_.registerFloat("sparkvelmin", &fp->sparkVelocityMin, "fire",
-        "Minimum upward velocity", 0.0f, 100.0f, onParamChanged);
+        "Min velocity (× traversalDim/sec)", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("sparkvelmax", &fp->sparkVelocityMax, "fire",
-        "Maximum upward velocity", 0.0f, 100.0f, onParamChanged);
+        "Max velocity (× traversalDim/sec)", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("sparkspread", &fp->sparkSpread, "fire",
-        "Horizontal velocity spread", 0.0f, 50.0f, onParamChanged);
+        "Spread (× crossDim)", 0.0f, 5.0f, onParamChanged);
 
     // Lifecycle
-    settings_.registerUint8("maxparticles", &fp->maxParticles, "fire",
-        "Maximum active particles", 1, 64, onParamChanged);
+    settings_.registerFloat("maxparticles", &fp->maxParticles, "fire",
+        "Max particles (× numLeds, clamped to pool)", 0.1f, 1.0f, onParamChanged);
     settings_.registerUint8("defaultlifespan", &fp->defaultLifespan, "fire",
         "Default particle lifespan (centiseconds, 100=1s)", 1, 255, onParamChanged);
     settings_.registerUint8("intensitymin", &fp->intensityMin, "fire",
@@ -163,7 +163,7 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 
     // Thermal physics
     settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
-        "Thermal buoyancy strength (LEDs/sec^2)", 0.0f, 200.0f, onParamChanged);
+        "Thermal buoyancy (× traversalDim/sec^2)", 0.0f, 10.0f, onParamChanged);
 }
 
 // === AUDIO SETTINGS ===
@@ -1365,37 +1365,37 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
     settings_.registerFloat("w_audioboost", &wp->audioSpawnBoost, "water",
         "Audio reactivity multiplier", 0.0f, 2.0f, onParamChanged);
 
-    // Physics
+    // Physics (fractions × device dimensions)
     settings_.registerFloat("w_gravity", &wp->gravity, "water",
-        "Gravity strength (positive=downward)", 0.0f, 20.0f, onParamChanged);
+        "Gravity (× traversalDim)", 0.0f, 5.0f, onParamChanged);
     settings_.registerFloat("w_windbase", &wp->windBase, "water",
         "Base wind force", -5.0f, 5.0f, onParamChanged);
     settings_.registerFloat("w_windvar", &wp->windVariation, "water",
-        "Wind variation amount", 0.0f, 2.0f, onParamChanged);
+        "Wind variation (× crossDim)", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("w_drag", &wp->drag, "water",
         "Drag coefficient", 0.9f, 1.0f, onParamChanged);
 
-    // Drop appearance
+    // Drop appearance (fractions × device dimensions)
     settings_.registerFloat("w_dropvelmin", &wp->dropVelocityMin, "water",
-        "Minimum downward velocity", 0.0f, 10.0f, onParamChanged);
+        "Min velocity (× traversalDim/sec)", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("w_dropvelmax", &wp->dropVelocityMax, "water",
-        "Maximum downward velocity", 0.0f, 10.0f, onParamChanged);
+        "Max velocity (× traversalDim/sec)", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("w_dropspread", &wp->dropSpread, "water",
-        "Horizontal velocity spread", 0.0f, 5.0f, onParamChanged);
+        "Spread (× crossDim)", 0.0f, 5.0f, onParamChanged);
 
-    // Splash behavior
-    settings_.registerUint8("w_splashparts", &wp->splashParticles, "water",
-        "Particles spawned per splash", 0, 10, onParamChanged);
+    // Splash behavior (fractions × device dimensions)
+    settings_.registerFloat("w_splashparts", &wp->splashParticles, "water",
+        "Splash particles (× crossDim)", 0.0f, 5.0f, onParamChanged);
     settings_.registerFloat("w_splashvelmin", &wp->splashVelocityMin, "water",
-        "Minimum splash velocity", 0.0f, 10.0f, onParamChanged);
+        "Splash velocity min (× traversalDim)", 0.0f, 2.0f, onParamChanged);
     settings_.registerFloat("w_splashvelmax", &wp->splashVelocityMax, "water",
-        "Maximum splash velocity", 0.0f, 10.0f, onParamChanged);
+        "Splash velocity max (× traversalDim)", 0.0f, 2.0f, onParamChanged);
     settings_.registerUint8("w_splashint", &wp->splashIntensity, "water",
         "Splash particle intensity", 0, 255, onParamChanged);
 
-    // Lifecycle (pool size = 30, so maxparticles capped at 30)
-    settings_.registerUint8("w_maxparts", &wp->maxParticles, "water",
-        "Maximum active particles", 1, 30, onParamChanged);
+    // Lifecycle
+    settings_.registerFloat("w_maxparts", &wp->maxParticles, "water",
+        "Max particles (× numLeds, clamped to pool)", 0.1f, 1.0f, onParamChanged);
     settings_.registerUint8("w_lifespan", &wp->defaultLifespan, "water",
         "Default particle lifespan (frames)", 20, 180, onParamChanged);
     settings_.registerUint8("w_intmin", &wp->intensityMin, "water",
@@ -1440,9 +1440,9 @@ void SerialConsole::registerLightningSettings(LightningParams* lp) {
     settings_.registerUint8("l_branchintloss", &lp->branchIntensityLoss, "lightning",
         "Branch intensity reduction (%)", 0, 100, onParamChanged);
 
-    // Lifecycle (pool size = 40, so maxparticles capped at 40)
-    settings_.registerUint8("l_maxparts", &lp->maxParticles, "lightning",
-        "Maximum active particles", 1, 40, onParamChanged);
+    // Lifecycle
+    settings_.registerFloat("l_maxparts", &lp->maxParticles, "lightning",
+        "Max particles (× numLeds, clamped to pool)", 0.1f, 1.0f, onParamChanged);
     settings_.registerUint8("l_lifespan", &lp->defaultLifespan, "lightning",
         "Default particle lifespan (frames)", 10, 60, onParamChanged);
     settings_.registerUint8("l_intmin", &lp->intensityMin, "lightning",

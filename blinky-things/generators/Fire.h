@@ -23,59 +23,61 @@ struct FireParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
-    uint8_t maxParticles;         // Maximum active particles (1-64, default 48)
+    float maxParticles;           // Fraction of numLeds for max active particles (scaled, clamped to pool)
     uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
-    // Physics
-    float gravity;                // Gravity strength (negative = upward, applied per frame)
-    float windBase;               // Base wind force (applied per frame)
-    float windVariation;          // Wind variation amount (applied per frame)
+    // Physics (fractions × device dimensions, scaled at use-time)
+    float gravity;                // × traversalDim → gravity strength (negative = upward)
+    float windBase;               // Base wind force (absolute, typically 0)
+    float windVariation;          // × crossDim → turbulence amplitude
     float drag;                   // Drag coefficient (0-1, per frame damping)
 
-    // Spark appearance
-    float sparkVelocityMin;       // Minimum upward velocity (LEDs/sec)
-    float sparkVelocityMax;       // Maximum upward velocity (LEDs/sec)
-    float sparkSpread;            // Horizontal velocity variation (LEDs/sec)
+    // Spark appearance (fractions × device dimensions, scaled at use-time)
+    float sparkVelocityMin;       // × traversalDim → minimum upward velocity (LEDs/sec)
+    float sparkVelocityMax;       // × traversalDim → maximum upward velocity (LEDs/sec)
+    float sparkSpread;            // × crossDim → horizontal velocity variation (LEDs/sec)
 
     // Audio reactivity
     float musicSpawnPulse;        // Phase modulation for spawn rate (0-1)
     float organicTransientMin;    // Minimum transient to trigger burst (0-1)
-    uint8_t burstSparks;          // Sparks per burst
+    float burstSparks;            // × crossDim → sparks per burst
 
     // Background
     float backgroundIntensity;    // Noise background brightness (0-1)
 
     // Particle variety
     float fastSparkRatio;         // Ratio of fast sparks (0-1, rest are embers)
-    float thermalForce;           // Thermal buoyancy strength in LEDs/sec^2 (0-200)
+    float thermalForce;           // × traversalDim → thermal buoyancy (LEDs/sec^2)
 
     FireParams() {
-        // Defaults must match ConfigStorage::loadSettingsDefaults()
-        baseSpawnChance = 0.5f;   // Continuous sparks for constant fire
-        audioSpawnBoost = 1.5f;   // Strong audio response
-        maxParticles = 48;        // Good spark coverage (pool capacity = 64)
-        defaultLifespan = 170;    // 1.7 seconds to rise (170 centiseconds)
-        intensityMin = 150;       // BRIGHT red/orange
-        intensityMax = 220;       // Very bright (orange range)
-        gravity = 0.0f;           // No gravity (thermal force provides upward push)
+        // All velocity/force/count params are stored as FRACTIONS of device
+        // dimensions.  The generator multiplies by traversalDim_ or crossDim_
+        // at use-time, so no per-device calibration is needed.
+        baseSpawnChance = 0.5f;       // Continuous sparks for constant fire
+        audioSpawnBoost = 1.5f;       // Strong audio response
+        maxParticles = 0.75f;         // Fraction of numLeds (clamped to pool capacity 64)
+        defaultLifespan = 170;        // 1.7 seconds to rise (centiseconds, time-based, device-independent)
+        intensityMin = 150;           // BRIGHT red/orange
+        intensityMax = 220;           // Very bright (orange range)
+        gravity = 0.0f;              // No gravity (thermal force provides upward push)
         windBase = 0.0f;
-        windVariation = 25.0f;    // Turbulence as LEDs/sec advection (visible swirl)
-        drag = 0.985f;            // Smoother flow
-        musicSpawnPulse = 0.95f;  // Deep phase breathing (0=flat, 1=full off-beat silence)
+        windVariation = 1.5f;         // × crossDim → turbulence amplitude in LEDs/sec
+        drag = 0.985f;               // Smoother flow
+        musicSpawnPulse = 0.95f;      // Deep phase breathing (0=flat, 1=full off-beat silence)
         organicTransientMin = 0.25f;  // Responsive to softer transients
-        burstSparks = 8;          // Visible burst on hits
+        burstSparks = 0.5f;           // × crossDim → sparks per burst
         backgroundIntensity = 0.15f;  // Subtle noise background
 
-        // Velocities: sparks rise ~8-10 LEDs in 1.7 seconds
-        sparkVelocityMin = 5.0f;  // LEDs/sec upward
-        sparkVelocityMax = 10.0f; // LEDs/sec upward
-        sparkSpread = 4.0f;       // Good spread
+        // Velocities: fraction of traversal per second (~0.33-0.67 → traverse in 1.5-3s)
+        sparkVelocityMin = 0.33f;     // × traversalDim → LEDs/sec upward
+        sparkVelocityMax = 0.67f;     // × traversalDim → LEDs/sec upward
+        sparkSpread = 1.0f;           // × crossDim → horizontal scatter in LEDs/sec
 
         // Particle variety: 70% fast sparks, 30% slow embers
         fastSparkRatio = 0.7f;
-        thermalForce = 30.0f;     // Thermal buoyancy (LEDs/sec^2 at max heat)
+        thermalForce = 2.0f;          // × traversalDim → buoyancy in LEDs/sec^2
     }
 };
 
@@ -111,10 +113,10 @@ public:
 
     // Sync physics parameters to force adapter (call after params change at runtime)
     void syncPhysicsParams() {
-        gravity_ = params_.gravity;
+        gravity_ = params_.gravity * traversalDim_;
         drag_ = params_.drag;
         if (forceAdapter_) {
-            forceAdapter_->setWind(params_.windBase, params_.windVariation);
+            forceAdapter_->setWind(params_.windBase, scaledWindVar());
         }
     }
 
@@ -133,6 +135,28 @@ private:
      * Spawn a particle with specific type characteristics
      */
     void spawnTypedParticle(SparkType type, float x, float y, float baseSpeed);
+
+    // Dimension-derived parameter accessors.
+    // Params are stored as normalized rates/fractions; these multiply by
+    // the actual device dimensions so the visual effect auto-adapts.
+    //
+    // sparkVelocityMin/Max: fraction of traversal per second (0.33 = 33% of height/sec)
+    // sparkSpread:          fraction of cross dimension for horizontal scatter
+    // windVariation:        fraction of cross dimension for turbulence amplitude
+    // thermalForce:         fraction of traversal for buoyancy acceleration
+    // maxParticles:         fraction of total LEDs (0.0–1.0)
+    // burstSparks:          fraction of cross dimension for burst count
+    float scaledVelMin() const { return params_.sparkVelocityMin * traversalDim_; }
+    float scaledVelMax() const { return params_.sparkVelocityMax * traversalDim_; }
+    float scaledSpread() const { return params_.sparkSpread * crossDim_; }
+    float scaledWindVar() const { return params_.windVariation * crossDim_; }
+    float scaledThermalForce() const { return params_.thermalForce * traversalDim_; }
+    uint8_t scaledMaxParticles() const {
+        return (uint8_t)min(64.0f, max(8.0f, params_.maxParticles * numLeds_));
+    }
+    uint8_t scaledBurstSparks() const {
+        return (uint8_t)max(1.0f, params_.burstSparks * crossDim_);
+    }
 
     FireParams params_;
     uint8_t beatCount_;           // Beat counter for downbeat detection

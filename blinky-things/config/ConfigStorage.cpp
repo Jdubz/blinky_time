@@ -93,48 +93,48 @@ void ConfigStorage::loadSettingsDefaults() {
     // Settings defaults - called when SETTINGS_VERSION changes
     // Device config is preserved separately
 
-    // Fire defaults (particle-based) - matrix-appropriate defaults Feb 2026
-    // These allow wind turbulence to be visibly effective (discrete sparks, fast heat decay)
+    // Fire defaults (particle-based) - dimension-independent fractions (v69)
+    // Values are multiplied by device dimensions at use-time.
     data_.fire.baseSpawnChance = 0.5f;      // Continuous sparks for constant fire
     data_.fire.audioSpawnBoost = 1.5f;      // Strong audio response
     data_.fire.gravity = 0.0f;              // No gravity (thermal force provides upward push)
     data_.fire.windBase = 0.0f;
-    data_.fire.windVariation = 25.0f;       // Turbulence as LEDs/sec advection (visible swirl)
+    data_.fire.windVariation = 1.5f;        // × crossDim → turbulence amplitude
     data_.fire.drag = 0.985f;               // Smoother flow
-    data_.fire.sparkVelocityMin = 5.0f;     // Slower sparks = more time in frame = wind has more effect
-    data_.fire.sparkVelocityMax = 10.0f;    // Varied speeds
-    data_.fire.sparkSpread = 4.0f;          // Good spread
+    data_.fire.sparkVelocityMin = 0.33f;    // × traversalDim/sec → upward velocity
+    data_.fire.sparkVelocityMax = 0.67f;    // × traversalDim/sec → upward velocity
+    data_.fire.sparkSpread = 1.0f;          // × crossDim → horizontal scatter
     data_.fire.musicSpawnPulse = 0.95f;     // Tight beat sync
     data_.fire.organicTransientMin = 0.25f; // Responsive to softer transients
     data_.fire.backgroundIntensity = 0.15f; // Subtle noise background
     data_.fire.fastSparkRatio = 0.7f;       // 70% fast sparks, 30% embers
-    data_.fire.thermalForce = 30.0f;        // Thermal buoyancy strength (LEDs/sec^2)
-    data_.fire.maxParticles = 48;
+    data_.fire.thermalForce = 2.0f;          // × traversalDim → buoyancy LEDs/sec^2
+    data_.fire.maxParticles = 0.75f;        // Fraction of numLeds (clamped to pool 64)
     data_.fire.defaultLifespan = 170;       // 1.7 seconds (170 centiseconds)
     data_.fire.intensityMin = 150;
     data_.fire.intensityMax = 220;
-    data_.fire.burstSparks = 8;             // Visible burst on hits
+    data_.fire.burstSparks = 0.5f;          // × crossDim → sparks per burst
 
-    // Water defaults (particle-based)
-    data_.water.baseSpawnChance = 0.25f;
-    data_.water.audioSpawnBoost = 0.4f;
-    data_.water.gravity = 5.0f;
+    // Water defaults (particle-based) - dimension-independent fractions (v69)
+    data_.water.baseSpawnChance = 0.8f;
+    data_.water.audioSpawnBoost = 0.3f;
+    data_.water.gravity = 1.67f;            // × traversalDim → downward acceleration
     data_.water.windBase = 0.0f;
-    data_.water.windVariation = 0.3f;
-    data_.water.drag = 0.99f;
-    data_.water.dropVelocityMin = 0.5f;
-    data_.water.dropVelocityMax = 1.5f;
-    data_.water.dropSpread = 0.3f;
-    data_.water.splashVelocityMin = 0.5f;
-    data_.water.splashVelocityMax = 2.0f;
-    data_.water.musicSpawnPulse = 0.5f;
-    data_.water.organicTransientMin = 0.3f;
+    data_.water.windVariation = 0.2f;       // × crossDim → sway amplitude
+    data_.water.drag = 0.995f;
+    data_.water.dropVelocityMin = 0.4f;     // × traversalDim/sec
+    data_.water.dropVelocityMax = 0.67f;    // × traversalDim/sec
+    data_.water.dropSpread = 0.375f;        // × crossDim
+    data_.water.splashVelocityMin = 0.27f;  // × traversalDim
+    data_.water.splashVelocityMax = 0.53f;  // × traversalDim
+    data_.water.musicSpawnPulse = 0.4f;
+    data_.water.organicTransientMin = 0.5f;
     data_.water.backgroundIntensity = 0.15f;
-    data_.water.maxParticles = 30;   // Pool size is ParticleGenerator<30>
+    data_.water.maxParticles = 0.5f;  // Fraction of numLeds (clamped to pool 30)
     data_.water.defaultLifespan = 90;
     data_.water.intensityMin = 80;
     data_.water.intensityMax = 200;
-    data_.water.splashParticles = 6;
+    data_.water.splashParticles = 0.75f; // × crossDim → particles per splash
     data_.water.splashIntensity = 120;
 
     // Lightning defaults (particle-based)
@@ -144,7 +144,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.lightning.musicSpawnPulse = 0.6f;
     data_.lightning.organicTransientMin = 0.3f;
     data_.lightning.backgroundIntensity = 0.15f;
-    data_.lightning.maxParticles = 32;
+    data_.lightning.maxParticles = 0.67f;  // Fraction of numLeds (clamped to pool 40)
     data_.lightning.defaultLifespan = 20;
     data_.lightning.intensityMin = 180;
     data_.lightning.intensityMax = 255;
@@ -727,6 +727,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     waterParams.intensityMax = data_.water.intensityMax;
     waterParams.splashParticles = data_.water.splashParticles;
     waterParams.splashIntensity = data_.water.splashIntensity;
+    waterParams.maxParticles = data_.water.maxParticles;
 
     // === LIGHTNING PARAMETERS ===
     // Spawn behavior
@@ -747,6 +748,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     lightningParams.branchChance = data_.lightning.branchChance;
     lightningParams.branchCount = data_.lightning.branchCount;
     lightningParams.branchIntensityLoss = data_.lightning.branchIntensityLoss;
+    lightningParams.maxParticles = data_.lightning.maxParticles;
 
     // Window/Range normalization parameters
     mic.peakTau = data_.mic.peakTau;
@@ -955,6 +957,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.water.intensityMax = waterParams.intensityMax;
     data_.water.splashParticles = waterParams.splashParticles;
     data_.water.splashIntensity = waterParams.splashIntensity;
+    data_.water.maxParticles = waterParams.maxParticles;
 
     // === LIGHTNING PARAMETERS ===
     // Spawn behavior
@@ -975,6 +978,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.lightning.branchChance = lightningParams.branchChance;
     data_.lightning.branchCount = lightningParams.branchCount;
     data_.lightning.branchIntensityLoss = lightningParams.branchIntensityLoss;
+    data_.lightning.maxParticles = lightningParams.maxParticles;
 
     // Window/Range normalization parameters
     data_.mic.peakTau = mic.peakTau;

@@ -14,7 +14,7 @@ struct WaterParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
-    uint8_t maxParticles;         // Maximum active particles (1-64, default 64)
+    float maxParticles;           // Fraction of numLeds for max active particles (scaled, clamped to pool)
     uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -31,9 +31,9 @@ struct WaterParams {
     float dropSpread;             // Horizontal velocity variation (LEDs/sec)
 
     // Splash behavior
-    uint8_t splashParticles;      // Number of particles spawned on splash (0-10)
-    float splashVelocityMin;      // Minimum splash velocity (LEDs/sec)
-    float splashVelocityMax;      // Maximum splash velocity (LEDs/sec)
+    float splashParticles;        // × crossDim → particles spawned on splash
+    float splashVelocityMin;      // × traversalDim → minimum splash velocity (LEDs/sec)
+    float splashVelocityMax;      // × traversalDim → maximum splash velocity (LEDs/sec)
     uint8_t splashIntensity;      // Splash particle intensity multiplier (0-255)
 
     // Audio reactivity
@@ -44,30 +44,31 @@ struct WaterParams {
     float backgroundIntensity;    // Noise background brightness (0-1)
 
     WaterParams() {
-        // RAIN EFFECT: Bright drops falling against dark background
-        baseSpawnChance = 0.8f;   // HIGH spawn rate - always raining
-        audioSpawnBoost = 0.3f;   // Some music response
-        maxParticles = 30;        // Enough for visible rain
-        defaultLifespan = 200;    // 2.0 seconds - time to fall (200 centiseconds)
-        intensityMin = 180;       // BRIGHT drops
-        intensityMax = 255;       // Maximum brightness
-        gravity = 25.0f;          // LEDs/sec² - accelerates fall
+        // All velocity/force/count params are FRACTIONS of device dimensions.
+        // The generator multiplies by traversalDim_ or crossDim_ at use-time.
+        baseSpawnChance = 0.8f;       // HIGH spawn rate - always raining
+        audioSpawnBoost = 0.3f;       // Some music response
+        maxParticles = 0.5f;          // Fraction of numLeds (clamped to pool capacity 30)
+        defaultLifespan = 200;        // 2.0 seconds to fall (centiseconds, device-independent)
+        intensityMin = 180;           // BRIGHT drops
+        intensityMax = 255;           // Maximum brightness
+        gravity = 1.67f;             // × traversalDim → LEDs/sec² downward acceleration
         windBase = 0.0f;
-        windVariation = 3.0f;     // Slight wind sway
-        drag = 0.995f;            // Almost no drag
+        windVariation = 0.2f;         // × crossDim → slight wind sway
+        drag = 0.995f;               // Almost no drag
         musicSpawnPulse = 0.4f;
         organicTransientMin = 0.5f;
-        backgroundIntensity = 0.15f;  // Visible but subtle background
+        backgroundIntensity = 0.15f;
 
-        // Velocities: drops traverse 8-10 LEDs in ~2 seconds with acceleration
-        dropVelocityMin = 6.0f;   // LEDs/sec starting velocity
-        dropVelocityMax = 10.0f;  // LEDs/sec
-        dropSpread = 1.5f;        // Slight horizontal drift
+        // Velocities: fraction of traversal per second (~0.4-0.67 → traverse in 1.5-2.5s)
+        dropVelocityMin = 0.4f;       // × traversalDim → LEDs/sec starting velocity
+        dropVelocityMax = 0.67f;      // × traversalDim → LEDs/sec
+        dropSpread = 0.375f;          // × crossDim → horizontal drift
 
-        splashParticles = 3;      // Small splash
-        splashVelocityMin = 4.0f;
-        splashVelocityMax = 8.0f;
-        splashIntensity = 150;    // Bright splash
+        splashParticles = 0.75f;      // × crossDim → particles per splash
+        splashVelocityMin = 0.27f;    // × traversalDim → LEDs/sec
+        splashVelocityMax = 0.53f;    // × traversalDim → LEDs/sec
+        splashIntensity = 150;        // Bright splash
     }
 };
 
@@ -101,10 +102,10 @@ public:
 
     // Sync physics parameters to force adapter (call after params change at runtime)
     void syncPhysicsParams() {
-        gravity_ = params_.gravity;
+        gravity_ = params_.gravity * traversalDim_;
         drag_ = params_.drag;
         if (forceAdapter_) {
-            forceAdapter_->setWind(params_.windBase, params_.windVariation);
+            forceAdapter_->setWind(params_.windBase, scaledWindVar());
         }
     }
 
@@ -123,6 +124,20 @@ private:
      * Spawn radial splash at position
      */
     void spawnSplash(float x, float y, uint8_t parentIntensity);
+
+    // Dimension-derived parameter accessors (params × device dimensions)
+    float scaledDropVelMin() const { return params_.dropVelocityMin * traversalDim_; }
+    float scaledDropVelMax() const { return params_.dropVelocityMax * traversalDim_; }
+    float scaledDropSpread() const { return params_.dropSpread * crossDim_; }
+    float scaledWindVar() const { return params_.windVariation * crossDim_; }
+    uint8_t scaledMaxParticles() const {
+        return (uint8_t)min(30.0f, max(8.0f, params_.maxParticles * numLeds_));
+    }
+    float scaledSplashVelMin() const { return params_.splashVelocityMin * traversalDim_; }
+    float scaledSplashVelMax() const { return params_.splashVelocityMax * traversalDim_; }
+    uint8_t scaledSplashParticles() const {
+        return (uint8_t)max(1.0f, min(10.0f, params_.splashParticles * crossDim_));
+    }
 
     WaterParams params_;
     float noiseTime_;             // Animation time for noise field

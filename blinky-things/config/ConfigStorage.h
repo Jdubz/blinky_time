@@ -106,7 +106,7 @@ public:
     //   sole ODF source. Pulse detection inlined in AudioController.
     // Version 68: Removed nnBeatActivation toggle and ENABLE_NN_BEAT_ACTIVATION ifdef.
     //   FrameBeatNN is always compiled in and always active. TFLite is a required dependency.
-    static const uint8_t SETTINGS_VERSION = 68;
+    static const uint8_t SETTINGS_VERSION = 69;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -129,13 +129,13 @@ public:
         float backgroundIntensity;
         // Particle variety
         float fastSparkRatio;
-        float thermalForce;       // Thermal buoyancy strength (LEDs/sec^2)
+        float thermalForce;       // × traversalDim → buoyancy LEDs/sec^2
+        float maxParticles;       // Fraction of numLeds (clamped to pool)
+        float burstSparks;        // × crossDim → sparks per burst
         // Lifecycle
-        uint8_t maxParticles;
         uint8_t defaultLifespan;
         uint8_t intensityMin;
         uint8_t intensityMax;
-        uint8_t burstSparks;
     };
 
     struct StoredWaterParams {
@@ -154,17 +154,17 @@ public:
         // Splash behavior
         float splashVelocityMin;
         float splashVelocityMax;
+        float splashParticles;    // × crossDim → particles per splash
         // Audio reactivity
         float musicSpawnPulse;
         float organicTransientMin;
         // Background
         float backgroundIntensity;
+        float maxParticles;       // Fraction of numLeds (clamped to pool)
         // Lifecycle
-        uint8_t maxParticles;
         uint8_t defaultLifespan;
         uint8_t intensityMin;
         uint8_t intensityMax;
-        uint8_t splashParticles;
         uint8_t splashIntensity;
     };
 
@@ -179,8 +179,8 @@ public:
         float organicTransientMin;
         // Background
         float backgroundIntensity;
+        float maxParticles;       // Fraction of numLeds (clamped to pool)
         // Lifecycle
-        uint8_t maxParticles;
         uint8_t defaultLifespan;
         uint8_t intensityMin;
         uint8_t intensityMax;
@@ -439,12 +439,12 @@ public:
     // VERSION BUMPING RULES:
     // - StoredDeviceConfig changes -> bump DEVICE_VERSION (rare, wipes device identity)
     // - Any other struct changes -> bump SETTINGS_VERSION (preserves device config)
-    static_assert(sizeof(StoredFireParams) == 64,
-        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 5 uint8 + padding)");
-    static_assert(sizeof(StoredWaterParams) == 64,
-        "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (64 bytes = 14 floats + 6 uint8 + padding)");
-    static_assert(sizeof(StoredLightningParams) == 32,
-        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (32 bytes = 6 floats + 8 uint8)");
+    static_assert(sizeof(StoredFireParams) == 68,
+        "StoredFireParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 3 uint8 + padding)");
+    static_assert(sizeof(StoredWaterParams) == 68,
+        "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 4 uint8 + padding)");
+    static_assert(sizeof(StoredLightningParams) == 36,
+        "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (36 bytes = 7 floats + 7 uint8 + padding)");
     static_assert(sizeof(StoredMicParams) == 24,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
     static_assert(sizeof(StoredMusicParams) == 292,

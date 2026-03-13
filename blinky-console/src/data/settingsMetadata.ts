@@ -29,8 +29,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   maxparticles: {
     displayName: 'Max Particles',
     tooltip:
-      'Maximum number of particles in the pool (1-64). More particles = denser effects but higher CPU. Pool capacity is 64.',
-    unit: '',
+      'Fraction of total LEDs used as max active particles (0.1-1.0). Scaled by device size, clamped to pool capacity of 64. Higher = denser effects.',
+    unit: '× LEDs',
   },
   defaultlifespan: {
     displayName: 'Default Lifespan',
@@ -51,8 +51,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   gravity: {
     displayName: 'Gravity',
     tooltip:
-      'Gravity strength applied per frame. Negative = upward (fire rises), positive = downward (water falls).',
-    unit: '',
+      'Gravity as a fraction of traversal dimension per sec² (negative = upward for fire). Automatically scaled by device height/width.',
+    unit: '× traversal/s²',
   },
   windbase: {
     displayName: 'Base Wind',
@@ -63,8 +63,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   windvariation: {
     displayName: 'Wind Turbulence',
     tooltip:
-      'Curl-noise turbulence intensity (LEDs/sec). Directly displaces particles laterally each frame — windVariation=10 moves a particle ~0.17 LEDs/frame sideways. Set to 5-15 for subtle sway, 20-40 for strong swirling.',
-    unit: 'LEDs/sec',
+      'Curl-noise turbulence as a fraction of cross dimension. Automatically scaled by device width. Higher = stronger lateral swirling.',
+    unit: '× cross',
   },
   drag: {
     displayName: 'Drag',
@@ -75,24 +75,24 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   sparkvelmin: {
     displayName: 'Min Spark Velocity',
     tooltip:
-      'Minimum upward velocity for sparks (LEDs/sec). Lower = slower rise. At 60fps a value of 10 moves ~0.17 LEDs per frame.',
-    unit: 'LEDs/sec',
+      'Minimum upward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    unit: '× traversal/s',
   },
   sparkvelmax: {
     displayName: 'Max Spark Velocity',
     tooltip:
-      'Maximum upward velocity for sparks (LEDs/sec). Higher = faster rise and greater height reached.',
-    unit: 'LEDs/sec',
+      'Maximum upward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    unit: '× traversal/s',
   },
   sparkspread: {
     displayName: 'Spark Spread',
-    tooltip: 'Horizontal velocity variation for sparks (LEDs/sec). Higher = wider lateral spread.',
-    unit: 'LEDs/sec',
+    tooltip: 'Horizontal velocity variation as a fraction of cross dimension. Automatically scaled by device width.',
+    unit: '× cross/s',
   },
   burstsparks: {
     displayName: 'Burst Spark Count',
-    tooltip: 'Number of sparks generated per beat burst (1-20). More = bigger reactions.',
-    unit: 'sparks',
+    tooltip: 'Burst sparks as a fraction of cross dimension. Automatically scaled by device width. More = bigger beat reactions.',
+    unit: '× cross',
   },
 
   fastsparks: {
@@ -104,8 +104,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   thermalforce: {
     displayName: 'Thermal Force',
     tooltip:
-      'Thermal buoyancy strength in LEDs/sec². Particles over hot regions are pushed upward by this force scaled by local heat (0 = no buoyancy, 30 = default, 100 = strong).',
-    unit: 'LEDs/sec²',
+      'Thermal buoyancy as a fraction of traversal dimension per sec². Automatically scaled by device height/width. Particles over hot regions are pushed upward.',
+    unit: '× traversal/s²',
   },
 
   bgintensity: {
@@ -146,8 +146,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_gravity: {
     displayName: 'Gravity',
-    tooltip: 'Gravity strength (positive=downward, LEDs/sec²). Higher = faster falling drops.',
-    unit: 'LEDs/sec²',
+    tooltip: 'Gravity as a fraction of traversal dimension per sec² (positive = downward). Automatically scaled by device height/width.',
+    unit: '× traversal/s²',
   },
   w_windbase: {
     displayName: 'Base Wind',
@@ -156,8 +156,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_windvar: {
     displayName: 'Wind Variation',
-    tooltip: 'Wind variation amount (LEDs/sec). Higher = more chaotic movement.',
-    unit: 'LEDs/sec',
+    tooltip: 'Wind variation as a fraction of cross dimension. Automatically scaled by device width.',
+    unit: '× cross',
   },
   w_drag: {
     displayName: 'Drag',
@@ -166,33 +166,33 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_dropvelmin: {
     displayName: 'Min Drop Velocity',
-    tooltip: 'Minimum downward velocity for drops (LEDs/sec). Lower = slower falling.',
-    unit: 'LEDs/sec',
+    tooltip: 'Minimum downward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    unit: '× traversal/s',
   },
   w_dropvelmax: {
     displayName: 'Max Drop Velocity',
-    tooltip: 'Maximum downward velocity for drops (LEDs/sec). Higher = faster falling.',
-    unit: 'LEDs/sec',
+    tooltip: 'Maximum downward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    unit: '× traversal/s',
   },
   w_dropspread: {
     displayName: 'Drop Spread',
-    tooltip: 'Horizontal velocity variation for drops (LEDs/sec). Higher = wider spray.',
-    unit: 'LEDs/sec',
+    tooltip: 'Horizontal velocity variation as a fraction of cross dimension. Automatically scaled by device width.',
+    unit: '× cross/s',
   },
   w_splashparts: {
     displayName: 'Splash Particle Count',
-    tooltip: 'Number of particles spawned on splash impact (0-10). More = bigger splashes.',
-    unit: 'particles',
+    tooltip: 'Splash particles as a fraction of cross dimension. Automatically scaled by device width. More = bigger splashes.',
+    unit: '× cross',
   },
   w_splashvelmin: {
     displayName: 'Min Splash Velocity',
-    tooltip: 'Minimum splash velocity (LEDs/sec). Lower = smaller splashes.',
-    unit: 'LEDs/sec',
+    tooltip: 'Minimum splash velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    unit: '× traversal/s',
   },
   w_splashvelmax: {
     displayName: 'Max Splash Velocity',
-    tooltip: 'Maximum splash velocity (LEDs/sec). Higher = bigger splashes.',
-    unit: 'LEDs/sec',
+    tooltip: 'Maximum splash velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    unit: '× traversal/s',
   },
   w_splashint: {
     displayName: 'Splash Intensity',
@@ -201,8 +201,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_maxparts: {
     displayName: 'Max Particles',
-    tooltip: 'Maximum active particles (1-30). Pool capacity is 30.',
-    unit: '',
+    tooltip: 'Fraction of total LEDs used as max active particles (0.1-1.0). Scaled by device size, clamped to pool capacity of 30.',
+    unit: '× LEDs',
   },
   w_lifespan: {
     displayName: 'Lifespan',
@@ -275,8 +275,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   l_maxparts: {
     displayName: 'Max Particles',
-    tooltip: 'Maximum active particles (1-40). Pool capacity is 40.',
-    unit: '',
+    tooltip: 'Fraction of total LEDs used as max active particles (0.1-1.0). Scaled by device size, clamped to pool capacity of 40.',
+    unit: '× LEDs',
   },
   l_lifespan: {
     displayName: 'Lifespan',

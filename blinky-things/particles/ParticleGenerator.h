@@ -47,6 +47,8 @@ public:
         layout_ = config.matrix.layoutType;
         orientation_ = config.matrix.orientation;
 
+        computeDimensionScales();
+
         pool_.reset();
         lastUpdateMs_ = millis();
 

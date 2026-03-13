@@ -66,6 +66,16 @@ protected:
     // Timing
     uint32_t lastUpdateMs_ = 0;
 
+    // Device dimensions for scaling — computed once in begin()
+    // No reference device: generators compute all physics from these directly.
+    float traversalDim_ = 1.0f;   // Primary movement axis (height for matrix, width for linear)
+    float crossDim_ = 1.0f;       // Perpendicular axis (width for matrix, 1 for linear)
+
+    void computeDimensionScales() {
+        traversalDim_ = (layout_ == LINEAR_LAYOUT) ? (float)width_ : (float)height_;
+        crossDim_ = (layout_ == LINEAR_LAYOUT) ? 1.0f : (float)width_;
+    }
+
     /**
      * Convert 2D coordinates to linear LED index
      * Handles different orientations and wiring patterns:

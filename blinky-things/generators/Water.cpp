@@ -21,8 +21,8 @@ bool Water::begin(const DeviceConfig& config) {
 }
 
 void Water::initPhysicsContext() {
-    // Set physics parameters from WaterParams
-    gravity_ = params_.gravity;
+    // Set physics parameters from WaterParams (dimension-scaled)
+    gravity_ = params_.gravity * traversalDim_;
     drag_ = params_.drag;
 
     // Create layout-appropriate physics components
@@ -39,7 +39,7 @@ void Water::initPhysicsContext() {
     // Force adapter: 2D for matrix, 1D for linear
     forceAdapter_ = PhysicsContext::createForceAdapter(layout_, forceBuffer_);
     if (forceAdapter_) {
-        forceAdapter_->setWind(params_.windBase, params_.windVariation);
+        forceAdapter_->setWind(params_.windBase, scaledWindVar());
     }
 
     // Background model: water surface with height variation for matrix, uniform for linear
@@ -78,9 +78,9 @@ void Water::spawnParticles(float dt) {
     float phaseWave = 0.4f + 0.6f * phasePulse;
     float musicSpawnProb = params_.baseSpawnChance * phaseWave + params_.audioSpawnBoost * audio_.pulse * phasePulse;
 
-    // Wave burst on beat (scales with rhythmStrength)
+    // Wave burst on beat (scales with rhythmStrength and device width)
     if (beatHappened() && audio_.rhythmStrength > 0.3f) {
-        uint8_t waveDrops = 3 + (uint8_t)(5 * audio_.rhythmStrength);
+        uint8_t waveDrops = (uint8_t)max(2.0f, 0.5f * crossDim_ * (1.0f + audio_.rhythmStrength));
         dropCount += (uint8_t)(waveDrops * (0.5f + 0.5f * audio_.energy) * audio_.rhythmStrength);
 
         // Downbeat: extra wave surge every ~4 beats
@@ -110,19 +110,20 @@ void Water::spawnParticles(float dt) {
     }
 
     // Spawn drops using layout-aware spawn region
-    for (uint8_t i = 0; i < dropCount && pool_.getActiveCount() < params_.maxParticles; i++) {
+    uint8_t maxParts = scaledMaxParticles();
+    for (uint8_t i = 0; i < dropCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;
         getSpawnPosition(x, y);
 
-        // Get initial velocity from spawn region
-        float speed = params_.dropVelocityMin +
-                     random(100) * (params_.dropVelocityMax - params_.dropVelocityMin) / 100.0f;
+        // Get initial velocity from spawn region (dimension-scaled)
+        float speed = scaledDropVelMin() +
+                     random(100) * (scaledDropVelMax() - scaledDropVelMin()) / 100.0f;
 
         float vx, vy;
         getInitialVelocity(speed, vx, vy);
 
-        // Add spread perpendicular to main direction
-        float spreadAmount = (random(200) - 100) * params_.dropSpread / 100.0f;
+        // Add spread perpendicular to main direction (dimension-scaled)
+        float spreadAmount = (random(200) - 100) * scaledDropSpread() / 100.0f;
         if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
             vx += spreadAmount;
         } else {
@@ -193,11 +194,12 @@ uint32_t Water::particleColor(uint8_t intensity) const {
 }
 
 void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
-    // Calculate available slots
-    uint8_t available = params_.maxParticles > pool_.getActiveCount()
-                        ? params_.maxParticles - pool_.getActiveCount()
+    // Calculate available slots (dimension-scaled)
+    uint8_t maxParts = scaledMaxParticles();
+    uint8_t available = maxParts > pool_.getActiveCount()
+                        ? maxParts - pool_.getActiveCount()
                         : 0;
-    uint8_t splashCount = min(params_.splashParticles, available);
+    uint8_t splashCount = min(scaledSplashParticles(), available);
 
     // Guard against division by zero in angle calculation
     if (splashCount == 0) return;
@@ -205,8 +207,8 @@ void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
     for (uint8_t i = 0; i < splashCount; i++) {
         // Radial splash pattern
         float angle = (i * TWO_PI / splashCount) + random(100) * 0.01f;
-        float speed = params_.splashVelocityMin +
-                     random(100) * (params_.splashVelocityMax - params_.splashVelocityMin) / 100.0f;
+        float speed = scaledSplashVelMin() +
+                     random(100) * (scaledSplashVelMax() - scaledSplashVelMin()) / 100.0f;
 
         float vx = cos(angle) * speed;
         float vy = sin(angle) * speed - 1.0f;  // Slight upward component
