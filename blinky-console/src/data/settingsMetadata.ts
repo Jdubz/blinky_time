@@ -63,8 +63,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   windvariation: {
     displayName: 'Wind Turbulence',
     tooltip:
-      'Curl-noise turbulence as a fraction of cross dimension. Automatically scaled by device width. Higher = stronger lateral swirling.',
-    unit: '× cross',
+      'Curl-noise turbulence as a fraction of cross dimension per second. Automatically scaled by device width. Higher = stronger lateral swirling.',
+    unit: '× cross/s',
   },
   drag: {
     displayName: 'Drag',
@@ -160,8 +160,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   w_windvar: {
     displayName: 'Wind Variation',
     tooltip:
-      'Wind variation as a fraction of cross dimension. Automatically scaled by device width.',
-    unit: '× cross',
+      'Wind variation as a fraction of cross dimension per second. Automatically scaled by device width.',
+    unit: '× cross/s',
   },
   w_drag: {
     displayName: 'Drag',

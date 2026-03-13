@@ -19,16 +19,16 @@ struct WaterParams {
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
 
-    // Physics
-    float gravity;                // Gravity strength (positive = down, applied per frame)
-    float windBase;               // Base wind force (applied per frame)
-    float windVariation;          // Wind variation amount (applied per frame)
+    // Physics (fractions × device dimensions, scaled at use-time)
+    float gravity;                // × traversalDim → downward acceleration (LEDs/sec²)
+    float windBase;               // Base wind force (absolute, typically 0)
+    float windVariation;          // × crossDim → turbulence amplitude (LEDs/sec)
     float drag;                   // Drag coefficient (0-1, per frame damping)
 
-    // Drop appearance
-    float dropVelocityMin;        // Minimum downward velocity (LEDs/sec)
-    float dropVelocityMax;        // Maximum downward velocity (LEDs/sec)
-    float dropSpread;             // Horizontal velocity variation (LEDs/sec)
+    // Drop appearance (fractions × device dimensions, scaled at use-time)
+    float dropVelocityMin;        // × traversalDim → minimum downward velocity (LEDs/sec)
+    float dropVelocityMax;        // × traversalDim → maximum downward velocity (LEDs/sec)
+    float dropSpread;             // × crossDim → horizontal velocity variation (LEDs/sec)
 
     // Splash behavior
     float splashParticles;        // × crossDim → particles spawned on splash
@@ -136,7 +136,7 @@ private:
     float scaledSplashVelMin() const { return params_.splashVelocityMin * traversalDim_; }
     float scaledSplashVelMax() const { return params_.splashVelocityMax * traversalDim_; }
     uint8_t scaledSplashParticles() const {
-        return (uint8_t)max(1.0f, min(10.0f, params_.splashParticles * crossDim_));
+        return (uint8_t)min(10.0f, params_.splashParticles * crossDim_);
     }
 
     WaterParams params_;

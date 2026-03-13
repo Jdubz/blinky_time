@@ -67,10 +67,10 @@ Claude background tasks die when the session ends, killing training mid-run.
 
 Always use tmux:
 ```bash
-tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/frame_fc.yaml --output-dir outputs/... 2>&1 | tee outputs/.../training.log"
+tmux new-session -d -s training "cd ml-training && source venv/bin/activate && PYTHONUNBUFFERED=1 python train.py --config configs/frame_fc.yaml --output-dir outputs/<experiment_name> 2>&1 | tee outputs/<experiment_name>/training.log"
 ```
 
-To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/.../training.log`
+To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/<experiment_name>/training.log`
 
 `train.py` enforces this — it will refuse to start outside tmux/screen unless `--allow-foreground` is passed.
 
@@ -227,7 +227,7 @@ RenderPipeline → LED Output
 
 6. **Configuration & Persistence**
    - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v68)
-   - `SettingsRegistry.h/cpp` - Tunable parameters (v67: ~30 after BandFlux removal)
+   - `SettingsRegistry.h/cpp` - Tunable parameters (v70: ~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
 

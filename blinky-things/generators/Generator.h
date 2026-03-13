@@ -69,11 +69,14 @@ protected:
     // Device dimensions for scaling — computed once in begin()
     // No reference device: generators compute all physics from these directly.
     float traversalDim_ = 1.0f;   // Primary movement axis (height for matrix, width for linear)
-    float crossDim_ = 1.0f;       // Perpendicular axis (width for matrix, 1 for linear)
+    float crossDim_ = 1.0f;       // Perpendicular axis (width for matrix, ~sqrt(numLeds) for linear)
 
     void computeDimensionScales() {
         traversalDim_ = (layout_ == LINEAR_LAYOUT) ? (float)width_ : (float)height_;
-        crossDim_ = (layout_ == LINEAR_LAYOUT) ? 1.0f : (float)width_;
+        // For linear layouts, crossDim_ can't be 1 — that would make burst sparks,
+        // spread, and wind all collapse to trivial values.  Use sqrt(numLeds) as a
+        // reasonable "virtual width" so cross-scaled params stay proportional.
+        crossDim_ = (layout_ == LINEAR_LAYOUT) ? sqrtf((float)numLeds_) : (float)width_;
     }
 
     /**

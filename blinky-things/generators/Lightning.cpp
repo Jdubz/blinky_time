@@ -212,8 +212,8 @@ void Lightning::spawnBranch(const Particle* parent) {
                         ? maxParts - pool_.getActiveCount()
                         : 0;
 
-    // Branch length: ~15-30% of diagonal
-    uint8_t branchLength = (uint8_t)max(2.0f, diagonal() * (0.15f + random(100) * 0.0015f));
+    // Branch length: ~15-30% of diagonal, capped to avoid pool exhaustion
+    uint8_t branchLength = (uint8_t)max(2.0f, min(8.0f, diagonal() * (0.15f + random(100) * 0.0015f)));
     uint8_t particlesNeeded = branchLength * params_.branchCount;
 
     if (particlesNeeded > available) {
