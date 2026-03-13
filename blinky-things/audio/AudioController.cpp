@@ -1430,16 +1430,16 @@ void AudioController::checkOctaveAlternative() {
     // Score each tempo by summing CBSS values at expected beat positions.
     // cbssBuffer_ is circular with sampleCounter_ as the write head;
     // idx % OSS_BUFFER_SIZE maps absolute sample indices to buffer positions.
-    // Look back over the last ~4 beats of history
-    int lookback = T * 4;
-    if (lookback > sampleCounter_) lookback = sampleCounter_;
+    // Use a FIXED number of beats (4) for all candidates so that faster tempos
+    // don't get more samples (which biased mean scores toward fast tempos).
+    static constexpr int OCTAVE_CHECK_BEATS = 4;
 
     float scoreT = 0.0f;
     int countT = 0;
 
     // Score at current tempo T: sum CBSS at positions spaced T apart
-    for (int offset = 0; offset < lookback; offset += T) {
-        int idx = sampleCounter_ - 1 - offset;
+    for (int b = 0; b < OCTAVE_CHECK_BEATS; b++) {
+        int idx = sampleCounter_ - 1 - b * T;
         if (idx >= 0) {
             scoreT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
             countT++;
@@ -1448,13 +1448,12 @@ void AudioController::checkOctaveAlternative() {
     if (countT > 0) scoreT /= static_cast<float>(countT);
 
     // Helper: score a candidate period by averaging CBSS at expected beat positions
+    // Uses the same fixed beat count for fair comparison across tempos.
     auto scorePeriod = [&](int period) -> float {
-        int lb = period * 4;
-        if (lb > sampleCounter_) lb = sampleCounter_;
         float score = 0.0f;
         int count = 0;
-        for (int offset = 0; offset < lb; offset += period) {
-            int idx = sampleCounter_ - 1 - offset;
+        for (int b = 0; b < OCTAVE_CHECK_BEATS; b++) {
+            int idx = sampleCounter_ - 1 - b * period;
             if (idx >= 0) {
                 score += cbssBuffer_[idx % OSS_BUFFER_SIZE];
                 count++;
@@ -1564,9 +1563,12 @@ void AudioController::detectBeat() {
     int beatDeclareDelay = bidirectionalSnap ? 3 : 0;
     if (timeToNextBeat_ <= -beatDeclareDelay) {
         // Adaptive threshold: suppress beats during silence/breakdowns
-        // When cbssThresholdFactor > 0, require current CBSS > factor * running mean
+        // When cbssThresholdFactor > 0, require current CBSS > factor * running mean.
+        // Grace period: bypass threshold for the first 5 beats so silence→music
+        // transitions aren't suppressed while cbssMean_ catches up.
         float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];
         bool cbssAboveThreshold = (cbssThresholdFactor <= 0.0f) ||
+                                   (beatCount_ < 5) ||
                                    (currentCBSS > cbssThresholdFactor * cbssMean_);
 
         if (cbssAboveThreshold) {
@@ -1590,10 +1592,11 @@ void AudioController::detectBeat() {
                         bestSnapOffset = d;
                     }
                 }
-                // Hysteresis: prefer previous snap position if within ±1 sample
-                // and nearly as strong (>80%). Prevents chatter when two onsets
-                // are similar strength, reducing phase jitter.
-                if (bestOSS > 0.0f && abs(bestSnapOffset - lastSnapOffset_) > 1) {
+                // Hysteresis: prefer previous snap position if nearly as strong (>80%).
+                // Only apply after 2+ consecutive beats at the same offset, so
+                // syncopated music can still shift the snap point immediately.
+                if (bestOSS > 0.0f && abs(bestSnapOffset - lastSnapOffset_) > 1
+                    && snapConsistencyCount_ >= 2) {
                     int prevIdx = sampleCounter_ - 1 - lastSnapOffset_;
                     if (prevIdx >= 0 && lastSnapOffset_ <= W) {
                         float prevOSS = ossBuffer_[prevIdx % OSS_BUFFER_SIZE];
@@ -1601,6 +1604,12 @@ void AudioController::detectBeat() {
                             bestSnapOffset = lastSnapOffset_;
                         }
                     }
+                }
+                // Track consistency: increment if offset unchanged, reset otherwise
+                if (bestSnapOffset == lastSnapOffset_) {
+                    if (snapConsistencyCount_ < 255) snapConsistencyCount_++;
+                } else {
+                    snapConsistencyCount_ = 0;
                 }
                 lastSnapOffset_ = bestSnapOffset;
                 lastBeatSample_ = sampleCounter_ - bestSnapOffset;
@@ -1702,6 +1711,10 @@ void AudioController::detectBeat() {
         // pulse (~150ms) rather than a sustained high value for the entire beat period.
         control_.downbeat *= dbDecay;
         if (control_.downbeat < 0.01f) control_.downbeat = 0.0f;
+        // Decay PLL integral during silence to prevent wind-up.
+        // Without this, the integral accumulates large values during breakdowns
+        // and causes a phase jump when beats resume.
+        pllPhaseIntegral_ *= 0.95f;
     }
 
     // Derive phase (deterministic counter-based)
