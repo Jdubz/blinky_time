@@ -86,12 +86,14 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   sparkspread: {
     displayName: 'Spark Spread',
-    tooltip: 'Horizontal velocity variation as a fraction of cross dimension. Automatically scaled by device width.',
+    tooltip:
+      'Horizontal velocity variation as a fraction of cross dimension. Automatically scaled by device width.',
     unit: '× cross/s',
   },
   burstsparks: {
     displayName: 'Burst Spark Count',
-    tooltip: 'Burst sparks as a fraction of cross dimension. Automatically scaled by device width. More = bigger beat reactions.',
+    tooltip:
+      'Burst sparks as a fraction of cross dimension. Automatically scaled by device width. More = bigger beat reactions.',
     unit: '× cross',
   },
 
@@ -146,7 +148,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_gravity: {
     displayName: 'Gravity',
-    tooltip: 'Gravity as a fraction of traversal dimension per sec² (positive = downward). Automatically scaled by device height/width.',
+    tooltip:
+      'Gravity as a fraction of traversal dimension per sec² (positive = downward). Automatically scaled by device height/width.',
     unit: '× traversal/s²',
   },
   w_windbase: {
@@ -156,7 +159,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_windvar: {
     displayName: 'Wind Variation',
-    tooltip: 'Wind variation as a fraction of cross dimension. Automatically scaled by device width.',
+    tooltip:
+      'Wind variation as a fraction of cross dimension. Automatically scaled by device width.',
     unit: '× cross',
   },
   w_drag: {
@@ -166,32 +170,38 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_dropvelmin: {
     displayName: 'Min Drop Velocity',
-    tooltip: 'Minimum downward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    tooltip:
+      'Minimum downward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
     unit: '× traversal/s',
   },
   w_dropvelmax: {
     displayName: 'Max Drop Velocity',
-    tooltip: 'Maximum downward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    tooltip:
+      'Maximum downward velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
     unit: '× traversal/s',
   },
   w_dropspread: {
     displayName: 'Drop Spread',
-    tooltip: 'Horizontal velocity variation as a fraction of cross dimension. Automatically scaled by device width.',
+    tooltip:
+      'Horizontal velocity variation as a fraction of cross dimension. Automatically scaled by device width.',
     unit: '× cross/s',
   },
   w_splashparts: {
     displayName: 'Splash Particle Count',
-    tooltip: 'Splash particles as a fraction of cross dimension. Automatically scaled by device width. More = bigger splashes.',
+    tooltip:
+      'Splash particles as a fraction of cross dimension. Automatically scaled by device width. More = bigger splashes.',
     unit: '× cross',
   },
   w_splashvelmin: {
     displayName: 'Min Splash Velocity',
-    tooltip: 'Minimum splash velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    tooltip:
+      'Minimum splash velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
     unit: '× traversal/s',
   },
   w_splashvelmax: {
     displayName: 'Max Splash Velocity',
-    tooltip: 'Maximum splash velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
+    tooltip:
+      'Maximum splash velocity as a fraction of traversal dimension per second. Automatically scaled by device height/width.',
     unit: '× traversal/s',
   },
   w_splashint: {
@@ -201,7 +211,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   w_maxparts: {
     displayName: 'Max Particles',
-    tooltip: 'Fraction of total LEDs used as max active particles (0.1-1.0). Scaled by device size, clamped to pool capacity of 30.',
+    tooltip:
+      'Fraction of total LEDs used as max active particles (0.1-1.0). Scaled by device size, clamped to pool capacity of 30.',
     unit: '× LEDs',
   },
   w_lifespan: {
@@ -275,7 +286,8 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   },
   l_maxparts: {
     displayName: 'Max Particles',
-    tooltip: 'Fraction of total LEDs used as max active particles (0.1-1.0). Scaled by device size, clamped to pool capacity of 40.',
+    tooltip:
+      'Fraction of total LEDs used as max active particles (0.1-1.0). Scaled by device size, clamped to pool capacity of 40.',
     unit: '× LEDs',
   },
   l_lifespan: {

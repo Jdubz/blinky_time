@@ -654,6 +654,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.music.dbEmaAlpha, 0.01f, 1.0f, F("dbEmaAlpha"));
     validateFloat(data_.music.dbThreshold, 0.0f, 1.0f, F("dbThreshold"));
     validateFloat(data_.music.dbDecay, 0.5f, 0.99f, F("dbDecay"));
+    // cppcheck-suppress unsignedLessThanZero
     VALIDATE_INT(data_.music.pllWarmupBeats, 0, 32, F("pllWarmupBeats"));
 
     // Noise estimation validation (v56)
