@@ -6,7 +6,7 @@
 
 ## Current Status
 
-**Firmware:** v65 (SETTINGS_VERSION 64, new v65 tunable parameters). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (NN=1 build, default). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation.
+**Firmware:** v68 (SETTINGS_VERSION 68). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (always-on, TFLite required). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation.
 
 **NN Model Status:** Frame-level FC model deployed and running on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). Produces real beat/downbeat activations. **BandFlux is officially obsolete** — being removed in favor of NN ODF. Current priority: fix mel level calibration to improve NN activation quality on device.
 
@@ -224,7 +224,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 All items below were A/B tested and showed zero or negative benefit, or proven infeasible. Removed from firmware in v64 unless noted.
 
-- **Mel-spectrogram NN models (v4-v9)**: All architectures (standard conv, BN-fused, DS-TCN) exceed 79ms inference on Cortex-M4F @ 64 MHz. The v9 DS-TCN (designed for speed) measured 98ms due to INT8 ADD requantization overhead from residual connections. No mel-spectrogram CNN architecture can fit the 10ms per-frame budget. Superseded by frame-level FC approach (~60-200µs). NN=1 build flag retained for frame-level FC model.
+- **Mel-spectrogram NN models (v4-v9)**: All architectures (standard conv, BN-fused, DS-TCN) exceed 79ms inference on Cortex-M4F @ 64 MHz. The v9 DS-TCN (designed for speed) measured 98ms due to INT8 ADD requantization overhead from residual connections. No mel-spectrogram CNN architecture can fit the 10ms per-frame budget. Superseded by frame-level FC approach (~60-200µs). NN always compiled in since v68 (ENABLE_NN_BEAT_ACTIVATION ifdef removed).
 
 - **Beat-synchronous hybrid corrector (March 10-11, 2026)**: FC model on accumulated spectral summaries at beat rate (~2 Hz). Phase A (downbeat-only) achieved val_F1=0.548 but label analysis revealed fundamental problems: Cohen's d < 0.13 between downbeat/non-downbeat features, linear classifier gains 0% over baseline, only 51.6% of tracks have clean period-4 downbeats. Circular dependency: unreliable CBSS (~28% F1) produces noisy beat boundaries → noisy features → unreliable correction. ALL leading algorithms use frame-level NNs; only Krebs 2016 used beat-level (with bidirectional GRU, impossible in real-time). Pivot to frame-level FC avoids circular dependency and matches proven paradigm. Code retained: SpectralAccumulator.h, BeatSyncNN.h, models/beat_sync.py, scripts/beat_feature_extractor.py, scripts/export_beat_sync.py — but not actively used.
 

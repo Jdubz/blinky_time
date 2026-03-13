@@ -52,11 +52,9 @@ AdaptiveMic (level, transient, spectral flux)
       |
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |
-      +--- FrameBeatNN (frame-level FC, ~60-200µs, NN=1 build)
+      +--- FrameBeatNN (frame-level FC, ~60-200µs)
       |         Input: sliding window of rawMelBands_ (32 frames × 26 bands)
       |         Output: beat_activation (ODF for CBSS) + downbeat_activation
-      |
-      +--- [non-NN fallback] mic_.getLevel() → simple energy ODF
       |
 OSS Buffer (6s @ 60Hz)
       |
@@ -208,7 +206,7 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ## Detection: FrameBeatNN (Primary ODF)
 
-`FrameBeatNN` is the primary ODF source. It processes a sliding window of raw mel frames (32 frames × 26 bands) every spectral frame. Produces two outputs: **beat activation** (ODF for CBSS) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing — but uses FC layers instead of convolutions for Cortex-M4F feasibility (~3ms vs 79-98ms for CNNs). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Enabled by default when built with `NN=1`.
+`FrameBeatNN` is the primary ODF source. It processes a sliding window of raw mel frames (32 frames × 26 bands) every spectral frame. Produces two outputs: **beat activation** (ODF for CBSS) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing — but uses FC layers instead of convolutions for Cortex-M4F feasibility (~3ms vs 79-98ms for CNNs). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
 **Architecture:** FC(832→64→32→2), 55K params, 56.8 KB INT8 (per-tensor quantization). Tensor arena ~2 KB, window buffer 3.2 KB.
 
@@ -233,7 +231,7 @@ Pulse detection (for visual spark effects) is derived from the ODF signal direct
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (250ms) | - | ~3% | Amortized |
-| FrameBeatNN (NN=1) | ~8-16 KB arena + 3.3 KB mel buffer | ~0.1-0.3% | FC model at ~15.6 Hz, ~60-200µs/inference |
+| FrameBeatNN | ~8-16 KB arena + 3.3 KB mel buffer | ~0.1-0.3% | FC model at ~15.6 Hz, ~60-200µs/inference |
 | **Total** | **~20 KB base** | **~15-20%** | +16 KB arena (FrameBeatNN) |
 
 ---
@@ -245,7 +243,7 @@ Pulse detection (for visual spark effects) is derived from the ODF signal direct
 - `blinky-things/audio/AudioController.cpp` - Implementation (autocorrelation, CBSS, beat detection)
 - `blinky-things/audio/AudioControl.h` - Output struct definition
 - `blinky-things/audio/SharedSpectralAnalysis.h` - FFT → compressor → whitening → mel bands (owned by AudioController since v67)
-- `blinky-things/audio/FrameBeatNN.h` - TFLite Micro NN beat/downbeat activation (NN=1 build)
+- `blinky-things/audio/FrameBeatNN.h` - TFLite Micro NN beat/downbeat activation
 - `blinky-things/audio/frame_beat_model_data.h` - INT8 TFLite model weights
 
 **Input Processing:**

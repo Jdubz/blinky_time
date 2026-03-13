@@ -104,7 +104,9 @@ public:
     // Version 67: Removed BandFlux/EnsembleDetector pipeline (StoredBandFluxParams removed,
     //   unifiedOdf/onsetTrainOdf/odfDiffMode removed from StoredMusicParams). FrameBeatNN is
     //   sole ODF source. Pulse detection inlined in AudioController.
-    static const uint8_t SETTINGS_VERSION = 67;
+    // Version 68: Removed nnBeatActivation toggle and ENABLE_NN_BEAT_ACTIVATION ifdef.
+    //   FrameBeatNN is always compiled in and always active. TFLite is a required dependency.
+    static const uint8_t SETTINGS_VERSION = 68;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -336,8 +338,7 @@ public:
         float onsetDensityBlend;        // Onset density EMA coefficient
         // (subbeatBins/templateHistBars removed v64 — associated features removed)
 
-        // NN beat activation (v54)
-        bool nnBeatActivation;          // Use FrameBeatNN ODF instead of BandFlux (requires ENABLE_NN_BEAT_ACTIVATION)
+        // (nnBeatActivation removed v68 — FrameBeatNN always active, no toggle needed)
 
         // Spectral noise estimation (v56)
         bool noiseEstEnabled;           // Enable minimum statistics noise subtraction

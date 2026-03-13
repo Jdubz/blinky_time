@@ -116,7 +116,7 @@ if [ "$PUSH" = true ]; then
     echo ""
     echo "Done. On blinkyhost, run:"
     echo "  cd ~/Development/blinky_time && git pull"
-    echo "  make uf2-upload NN=1 UPLOAD_PORT=/dev/ttyACM0"
+    echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM0"
 else
     echo ""
     echo "Skipped push (--no-push). Push manually when ready."

@@ -38,10 +38,8 @@ PDM Microphone (16kHz, mono)
    BassSpectralAnalysis (Goertzel-12, 31.25 Hz/bin, optional)
         |
    └── FrameBeatNN (TFLite Micro FC, 56.8 KB INT8, ~60-200µs)
-        → ODF (primary, NN=1 build)
+        → ODF (sole source)
         → beat_activation + downbeat_activation
-        |
-   [non-NN fallback: mic_.getLevel() → energy ODF]
         |
    AudioController
    ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
@@ -157,7 +155,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `ensminlevel` | 0.0 | 0.0-0.5 | Noise gate audio level |
 
 **Per-detector commands** (via `set`/`show`):
-*Detector commands removed in v67. BandFlux/EnsembleDetector fully removed. FrameBeatNN is the sole ODF source (non-NN fallback: mic level). See git log v67 for details.*
+*Detector commands removed in v67. BandFlux/EnsembleDetector fully removed. FrameBeatNN is the sole ODF source. See git log v67 for details.*
 
 ### Category: `rhythm` - Beat Tracking (AudioController)
 
@@ -227,11 +225,11 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `compattack` | 0.001 | 0.0001-0.1 s | Attack time constant (effectively instantaneous at 62.5 fps) |
 | `comprelease` | 2.0 | 0.01-10.0 s | Release time constant |
 
-### Category: `nn` (1 parameter) - NN Beat Activation (v54+, requires NN=1 build)
+### Category: `nn` (1 parameter) - NN Beat Activation
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `nnbeat` | 1 | bool | Use NN ODF (default ON since v58, requires NN=1 build). BandFlux removed v67. |
+| `nnprofile` | 0 | bool | Enable [NNPROF] per-operator timing output to Serial |
 
 ### Category: `v45` (4 parameters) - PLL + Onset Snap (v45+)
 
@@ -477,7 +475,7 @@ Visual inspection of fire effect with beat-synced music:
 1. Check `stream on` shows audio data (PDM working)
 2. Verify hardware gain is reasonable (20-60 range): `show gain`
 3. Check raw level rises with sound
-4. Check NN status: `show nn` (requires NN=1 build)
+4. Check NN status: `show nn`
 
 ### Too Many False Positives (pulse/spark effects)
 

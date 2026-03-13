@@ -37,7 +37,7 @@ PRE_BUILT_UF2=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --nn) NN_FLAG="-DENABLE_NN_BEAT_ACTIVATION"; shift ;;
+        --nn) echo "Note: --nn flag is no longer needed (NN always enabled)"; shift ;;
         --recover) RECOVER_MODE=true; shift ;;
         --uf2) PRE_BUILT_UF2="$2"; shift 2 ;;
         --ports) shift; while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
@@ -112,13 +112,8 @@ if [[ -n "$PRE_BUILT_UF2" ]]; then
     log "Using pre-built UF2: $PRE_BUILT_UF2"
     UF2_FILE="$PRE_BUILT_UF2"
 else
-    EXTRA_FLAGS=""
-    if [[ -n "$NN_FLAG" ]]; then
-        EXTRA_FLAGS="--build-property compiler.cpp.extra_flags=$NN_FLAG"
-        log "Compiling with NN beat activation..."
-    else
-        log "Compiling firmware..."
-    fi
+    EXTRA_FLAGS="--build-property compiler.cpp.extra_flags=-DENABLE_NN_BEAT_ACTIVATION"
+    log "Compiling firmware..."
 
     if ! $ARDUINO_CLI compile --fqbn "$FQBN" $EXTRA_FLAGS \
         --output-dir "$BUILD_DIR" "$PROJECT_DIR/blinky-things" 2>&1 | tail -3; then

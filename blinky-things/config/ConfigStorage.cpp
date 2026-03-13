@@ -270,7 +270,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.periodicityBlend = 0.7f;      // Periodicity strength EMA coefficient
     data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
     // (subbeatBins/templateHistBars removed v64)
-    data_.music.nnBeatActivation = true;     // NN beat activation (v58: on by default, A/B tested 11/18 wins)
+    // (nnBeatActivation removed v68 — always on)
 
     // (forwardFilterEnabled and all fwd* params removed v64)
     // (fwdPhaseOnly removed v64)
@@ -862,7 +862,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         audioCtrl->periodicityBlend = data_.music.periodicityBlend;
         audioCtrl->onsetDensityBlend = data_.music.onsetDensityBlend;
         // (subbeatBins/templateHistBars load removed v64 — features deleted)
-        audioCtrl->nnBeatActivation = data_.music.nnBeatActivation;
+        // (nnBeatActivation load removed v68 — always on)
 
         // (forwardFilter/fwd*/fwdPhaseOnly load removed v64 — forward filter deleted)
 
@@ -1090,7 +1090,7 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.music.periodicityBlend = audioCtrl->periodicityBlend;
         data_.music.onsetDensityBlend = audioCtrl->onsetDensityBlend;
         // (subbeatBins/templateHistBars save removed v64 — features deleted)
-        data_.music.nnBeatActivation = audioCtrl->nnBeatActivation;
+        // (nnBeatActivation save removed v68 — always on)
 
         // (forwardFilter/fwd*/fwdPhaseOnly save removed v64 — forward filter deleted)
 

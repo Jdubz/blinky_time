@@ -155,21 +155,16 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 4. Get onset strength for rhythm analysis
-    //    NN builds: FrameBeatNN inference on raw mel bands (primary ODF).
-    //    Non-NN builds: mic level as simple fallback.
+    //    FrameBeatNN inference on raw mel bands (sole ODF source).
     float onsetStrength = 0.0f;
 
-    if (nnBeatActivation && frameBeatNN_.isReady()) {
-        // NN beat activation: feed raw mel bands to frame-level FC model.
-        // Raw mel bands match the training pipeline exactly (no compressor/whitening).
-        // FC inference is ~60-200us on Cortex-M4F @ 64 MHz (negligible).
+    if (frameBeatNN_.isReady()) {
         if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
             onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
         } else {
             onsetStrength = mic_.getLevel();
         }
     } else {
-        // Non-NN fallback: use mic level
         onsetStrength = mic_.getLevel();
     }
 
@@ -221,7 +216,7 @@ const AudioControl& AudioController::update(float dt) {
 
     // Cache NN-active state once per update — used by ODF smoothing, contrast,
     // ACF mean subtraction, and CBSS alpha adaptation.
-    nnActive_ = nnBeatActivation && frameBeatNN_.isReady();
+    nnActive_ = frameBeatNN_.isReady();
     frameBeatNN_.setProfileEnabled(nnProfile);
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).

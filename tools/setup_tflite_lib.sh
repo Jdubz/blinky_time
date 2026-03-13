@@ -101,6 +101,6 @@ else
 fi
 
 echo ""
-echo "You can now compile with NN beat activation:"
-echo "  make compile NN=1"
-echo "  make uf2-upload NN=1 UPLOAD_PORT=/dev/ttyACM0"
+echo "TFLite library installed. You can now compile:"
+echo "  make compile"
+echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM0"

@@ -239,8 +239,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerBool("beatboundary", &audioCtrl_->beatBoundaryTempo, "rhythm",
         "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
     // (unifiedodf removed v67 — BandFlux pipeline removed)
-    settings_.registerBool("nnbeat", &audioCtrl_->nnBeatActivation, "rhythm",
-        "Use NN beat activation as ODF (primary ODF source)");
+    // (nnbeat removed v68 — FrameBeatNN always active, no toggle)
     settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "rhythm",
         "Enable [NNPROF] per-operator timing output (default off, clutters serial)");
     settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
@@ -1895,9 +1894,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
     // "show nn" - NN beat activation diagnostics (moved from handleEnsembleCommand v67)
     if (strcmp(cmd, "show nn") == 0) {
         audioCtrl_->getFrameBeatNN().printDiagnostics();
-        bool nnActive = audioCtrl_->nnBeatActivation &&
-                        audioCtrl_->getFrameBeatNN().isReady();
-        if (nnActive) {
+        if (audioCtrl_->getFrameBeatNN().isReady()) {
             float contrast = audioCtrl_->cbssContrast;
             float alpha = audioCtrl_->cbssAlpha;
             bool meanSub = audioCtrl_->odfMeanSubEnabled;
