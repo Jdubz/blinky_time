@@ -1,0 +1,28 @@
+# Frame-level Conv1D + FC hybrid — temporal features before FC
+#
+# Small Conv1D front-end (k=5, 32ch) extracts local temporal patterns
+# before the FC sees the flattened window. Captures onset shapes that
+# the flat FC misses, without the residual-ADD overhead that killed
+# DS-TCN performance on Cortex-M4F.
+#
+# Conv1D receptive field: 5 frames (80ms) — enough for onset shape.
+# Total params: ~58K (vs 55K baseline). Model size ~57 KB INT8.
+# Inference: ~200µs FC + ~5ms Conv1D ≈ ~5ms total (well under 10ms budget).
+
+model:
+  type: "frame_fc_enhanced"
+  window_frames: 32
+  hidden_dims: [64, 32]
+  dropout: 0.1
+  downbeat: true
+  conv_channels: 32        # Conv1D output channels
+  conv_kernel: 5            # k=5 → 80ms receptive field at 62.5 Hz
+
+training:
+  epochs: 100
+  patience: 15
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 100   # FC input grows: 32*32=1024 → hidden

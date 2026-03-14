@@ -645,6 +645,7 @@ private:
 
     // === ONSET SNAP HYSTERESIS (v65) ===
     int lastSnapOffset_ = 0;         // Previous beat's snap offset (for hysteresis)
+    uint8_t snapConsistencyCount_ = 0; // Consecutive beats at same snap offset
 
     // === DOWNBEAT TRACKING (v65) ===
     float downbeatSmoothed_ = 0.0f;  // EMA-smoothed NN downbeat activation

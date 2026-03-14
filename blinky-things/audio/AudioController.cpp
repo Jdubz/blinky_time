@@ -107,6 +107,7 @@ bool AudioController::begin(uint32_t sampleRate) {
     // (pfInitialized_/fwdInitialized_/pfRngState_/pfCooldown_ init removed v64 — PF and forward filter removed)
     pllPhaseIntegral_ = 0.0f;  // Reset PLL integral accumulator (v45)
     lastSnapOffset_ = 0;       // Reset onset snap hysteresis (v65)
+    snapConsistencyCount_ = 0; // Reset snap consistency counter (v65)
     downbeatSmoothed_ = 0.0f;  // Reset downbeat EMA (v65)
     beatInMeasure_ = 0;        // Reset measure counter (v65)
     effectiveTightness_ = cbssTightness;  // Initialize adaptive tightness (v45)
@@ -1430,16 +1431,16 @@ void AudioController::checkOctaveAlternative() {
     // Score each tempo by summing CBSS values at expected beat positions.
     // cbssBuffer_ is circular with sampleCounter_ as the write head;
     // idx % OSS_BUFFER_SIZE maps absolute sample indices to buffer positions.
-    // Look back over the last ~4 beats of history
-    int lookback = T * 4;
-    if (lookback > sampleCounter_) lookback = sampleCounter_;
+    // Use a FIXED number of beats (4) for all candidates so that faster tempos
+    // don't get more samples (which biased mean scores toward fast tempos).
+    static constexpr int OCTAVE_CHECK_BEATS = 4;
 
     float scoreT = 0.0f;
     int countT = 0;
 
     // Score at current tempo T: sum CBSS at positions spaced T apart
-    for (int offset = 0; offset < lookback; offset += T) {
-        int idx = sampleCounter_ - 1 - offset;
+    for (int b = 0; b < OCTAVE_CHECK_BEATS; b++) {
+        int idx = sampleCounter_ - 1 - b * T;
         if (idx >= 0) {
             scoreT += cbssBuffer_[idx % OSS_BUFFER_SIZE];
             countT++;
@@ -1448,13 +1449,12 @@ void AudioController::checkOctaveAlternative() {
     if (countT > 0) scoreT /= static_cast<float>(countT);
 
     // Helper: score a candidate period by averaging CBSS at expected beat positions
+    // Uses the same fixed beat count for fair comparison across tempos.
     auto scorePeriod = [&](int period) -> float {
-        int lb = period * 4;
-        if (lb > sampleCounter_) lb = sampleCounter_;
         float score = 0.0f;
         int count = 0;
-        for (int offset = 0; offset < lb; offset += period) {
-            int idx = sampleCounter_ - 1 - offset;
+        for (int b = 0; b < OCTAVE_CHECK_BEATS; b++) {
+            int idx = sampleCounter_ - 1 - b * period;
             if (idx >= 0) {
                 score += cbssBuffer_[idx % OSS_BUFFER_SIZE];
                 count++;
@@ -1564,9 +1564,13 @@ void AudioController::detectBeat() {
     int beatDeclareDelay = bidirectionalSnap ? 3 : 0;
     if (timeToNextBeat_ <= -beatDeclareDelay) {
         // Adaptive threshold: suppress beats during silence/breakdowns
-        // When cbssThresholdFactor > 0, require current CBSS > factor * running mean
+        // When cbssThresholdFactor > 0, require current CBSS > factor * running mean.
+        // Grace period: bypass threshold for the first few beats so silence→music
+        // transitions aren't suppressed while cbssMean_ catches up.
+        static constexpr int CBSS_GRACE_PERIOD_BEATS = 5;
         float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];
         bool cbssAboveThreshold = (cbssThresholdFactor <= 0.0f) ||
+                                   (beatCount_ < CBSS_GRACE_PERIOD_BEATS) ||
                                    (currentCBSS > cbssThresholdFactor * cbssMean_);
 
         if (cbssAboveThreshold) {
@@ -1590,10 +1594,12 @@ void AudioController::detectBeat() {
                         bestSnapOffset = d;
                     }
                 }
-                // Hysteresis: prefer previous snap position if within ±1 sample
-                // and nearly as strong (>80%). Prevents chatter when two onsets
-                // are similar strength, reducing phase jitter.
-                if (bestOSS > 0.0f && abs(bestSnapOffset - lastSnapOffset_) > 1) {
+                // Hysteresis: prefer previous snap position if nearly as strong (>80%).
+                // Only apply after consecutive beats at the same offset, so
+                // syncopated music can still shift the snap point immediately.
+                static constexpr uint8_t SNAP_HYSTERESIS_MIN_CONSISTENCY = 2;
+                if (bestOSS > 0.0f && abs(bestSnapOffset - lastSnapOffset_) > 1
+                    && snapConsistencyCount_ >= SNAP_HYSTERESIS_MIN_CONSISTENCY) {
                     int prevIdx = sampleCounter_ - 1 - lastSnapOffset_;
                     if (prevIdx >= 0 && lastSnapOffset_ <= W) {
                         float prevOSS = ossBuffer_[prevIdx % OSS_BUFFER_SIZE];
@@ -1602,10 +1608,20 @@ void AudioController::detectBeat() {
                         }
                     }
                 }
+                // Track consistency: increment if offset unchanged, reset otherwise
+                if (bestSnapOffset == lastSnapOffset_) {
+                    if (snapConsistencyCount_ < 255) snapConsistencyCount_++;
+                } else {
+                    snapConsistencyCount_ = 0;
+                }
                 lastSnapOffset_ = bestSnapOffset;
                 lastBeatSample_ = sampleCounter_ - bestSnapOffset;
             } else {
                 lastBeatSample_ = sampleCounter_;
+                // Reset snap state when onset snap is disabled so stale
+                // consistency counts don't gate hysteresis if re-enabled.
+                snapConsistencyCount_ = 0;
+                lastSnapOffset_ = 0;
             }
 
             // PLL proportional+integral phase correction (v45)
@@ -1702,6 +1718,11 @@ void AudioController::detectBeat() {
         // pulse (~150ms) rather than a sustained high value for the entire beat period.
         control_.downbeat *= dbDecay;
         if (control_.downbeat < 0.01f) control_.downbeat = 0.0f;
+        // Decay PLL integral during silence to prevent wind-up.
+        // Without this, the integral accumulates large values during breakdowns
+        // and causes a phase jump when beats resume.
+        static constexpr float PLL_INTEGRAL_DECAY_FACTOR = 0.95f;
+        pllPhaseIntegral_ *= PLL_INTEGRAL_DECAY_FACTOR;
     }
 
     // Derive phase (deterministic counter-based)

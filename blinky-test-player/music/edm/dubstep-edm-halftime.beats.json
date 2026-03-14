@@ -11,7 +11,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 0.6351,
@@ -21,7 +21,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 0.9626,
@@ -51,7 +51,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 1.956,
@@ -61,7 +61,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 2.2944,
@@ -91,7 +91,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 3.2936,
@@ -101,7 +101,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 3.6212,
@@ -131,7 +131,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 4.6154,
@@ -141,7 +141,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 4.948,
@@ -171,7 +171,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 5.958,
@@ -181,7 +181,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 6.2913,
@@ -211,7 +211,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 7.2797,
@@ -221,7 +221,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 7.6131,
@@ -251,7 +251,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 8.6231,
@@ -261,7 +261,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 8.9623,
@@ -272,6 +272,22 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 9.3278,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 9.6932,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 10.0587,
@@ -303,7 +319,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 11.1045,
@@ -389,7 +405,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 13.7697,
@@ -477,7 +493,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 16.4398,
@@ -564,7 +580,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 19.105,
@@ -650,7 +666,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 21.7693,
@@ -736,7 +752,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 24.4395,
@@ -823,7 +839,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 27.1039,
@@ -909,7 +925,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 29.769,
@@ -995,7 +1011,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 32.4391,
@@ -1082,7 +1098,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 35.1043,
@@ -1169,7 +1185,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 37.7687,
@@ -1255,7 +1271,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 40.4387,
@@ -1341,7 +1357,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 43.1089,
@@ -1427,7 +1443,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 45.7683,
@@ -1515,7 +1531,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 48.4384,
@@ -1602,7 +1618,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 51.1035,
@@ -1771,7 +1787,15 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 56.465,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 56.79,
@@ -1784,6 +1808,14 @@
       "isDownbeat": false
     },
     {
+      "time": 57.125,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 57.46,
       "expectTrigger": true,
       "strength": 0.5,
@@ -1791,7 +1823,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 57.7875,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 58.115,
@@ -1802,6 +1842,14 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 58.3727,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 58.6304,
@@ -1821,7 +1869,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 59.0519,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 59.3038,
@@ -1844,6 +1900,14 @@
       "isDownbeat": false
     },
     {
+      "time": 59.716,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 59.9771,
       "expectTrigger": true,
       "strength": 0.5,
@@ -1862,6 +1926,14 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 60.3877,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 60.6505,
@@ -1884,6 +1956,14 @@
       "isDownbeat": false
     },
     {
+      "time": 61.0436,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 61.3123,
       "expectTrigger": true,
       "strength": 0.5,
@@ -1901,7 +1981,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 61.7283,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 61.9915,
@@ -1924,6 +2012,14 @@
       "isDownbeat": false
     },
     {
+      "time": 62.3987,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 62.6823,
       "expectTrigger": true,
       "strength": 0.5,
@@ -1942,6 +2038,14 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 63.1059,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 63.4269,
@@ -1975,7 +2079,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 64.4377,
@@ -2062,7 +2166,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 67.1028,
@@ -2148,7 +2252,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 69.7672,
@@ -2235,7 +2339,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 72.4373,
@@ -2322,7 +2426,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 75.1075,
@@ -2409,7 +2513,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 77.7726,
@@ -2495,7 +2599,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 80.4369,
@@ -2581,7 +2685,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 83.1021,
@@ -2667,7 +2771,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 85.7715,
@@ -2754,7 +2858,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 88.4424,
@@ -2842,7 +2946,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 91.1068,
@@ -2929,7 +3033,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 93.7719,
@@ -3015,7 +3119,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 96.4363,
@@ -3101,7 +3205,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 99.1014,
@@ -3188,7 +3292,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 101.7715,
@@ -3276,7 +3380,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 104.4367,
@@ -3363,7 +3467,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 107.1068,
@@ -3405,7 +3509,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 108.4776,
@@ -3415,7 +3519,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 108.795,
@@ -3428,6 +3532,14 @@
       "isDownbeat": false
     },
     {
+      "time": 109.1375,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 109.48,
       "expectTrigger": true,
       "strength": 0.5,
@@ -3435,7 +3547,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 109.8025,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 110.125,
@@ -3448,6 +3568,14 @@
       "isDownbeat": false
     },
     {
+      "time": 110.46,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 110.795,
       "expectTrigger": true,
       "strength": 0.5,
@@ -3455,7 +3583,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 111.125,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 111.455,
@@ -3468,6 +3604,14 @@
       "isDownbeat": false
     },
     {
+      "time": 111.79,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 112.125,
       "expectTrigger": true,
       "strength": 0.5,
@@ -3475,7 +3619,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 112.3825,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 112.64,
@@ -3498,6 +3650,14 @@
       "isDownbeat": false
     },
     {
+      "time": 113.0459,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 113.3018,
       "expectTrigger": true,
       "strength": 0.5,
@@ -3515,7 +3675,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 113.715,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 113.9751,
@@ -3565,7 +3733,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 115.0606,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 115.3161,
@@ -3588,6 +3764,14 @@
       "isDownbeat": false
     },
     {
+      "time": 115.7135,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 115.972,
       "expectTrigger": true,
       "strength": 0.5,
@@ -3605,7 +3789,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 116.4525,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 116.775,
@@ -3615,7 +3807,7 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     }
   ],
   "tempo": 179.3,
@@ -3636,5 +3828,25 @@
     },
     "tolerance_s": 0.05,
     "min_agreement": 2
+  },
+  "downbeat_correction": {
+    "version": "v4",
+    "method": "madmom_grid_phase_vote",
+    "meter": 4,
+    "phase": 0,
+    "margin": 2.317,
+    "confidence": "madmom_grid",
+    "total_votes": 113.2,
+    "phase_scores": [
+      73.0,
+      8.7,
+      0.0,
+      31.5
+    ],
+    "systems_used": [
+      "beat_this",
+      "madmom"
+    ],
+    "beats_inserted": 24
   }
 }

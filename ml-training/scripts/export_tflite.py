@@ -474,6 +474,144 @@ def _transfer_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
     tf_layer.set_weights([tf_w, pt_b])
 
 
+def build_tf_frame_fc_enhanced(n_mels: int, window_frames: int,
+                                hidden_dims: list[int], downbeat: bool,
+                                se_ratio: int = 0, conv_channels: int = 0,
+                                conv_kernel: int = 5, short_window: int = 0,
+                                short_hidden: int = 0) -> keras.Model:
+    """Build TF/Keras equivalent of PyTorch EnhancedBeatFC.
+
+    Input is flat (1, window_frames * n_mels) to match firmware buffer.
+    Reshapes internally when needed for SE/Conv1D operations.
+
+    Additional TFLite ops beyond baseline FC:
+      - SE: Reshape, Mean (ReduceMean), Mul
+      - Conv1D: Reshape, ZeroPad, Conv1D (→Conv2D), Reshape
+      - Multi-window: StridedSlice (or Lambda), Concatenate
+    """
+    out_channels = 2 if downbeat else 1
+    use_se = se_ratio > 0
+    use_conv = conv_channels > 0
+    use_multiwindow = short_window > 0
+
+    input_dim = window_frames * n_mels
+    inputs = keras.Input(shape=(input_dim,), name="flat_input")
+
+    # Reshape to 2D for Conv1D and/or SE operations
+    if use_se or use_conv:
+        x = layers.Reshape((window_frames, n_mels), name="reshape_2d")(inputs)
+    else:
+        x = inputs
+
+    # --- Conv1D front-end (applied before SE, matching PyTorch order) ---
+    if use_conv:
+        pad = conv_kernel - 1
+        x = layers.ZeroPadding1D(padding=(pad, 0), name="conv_pad")(x)
+        x = layers.Conv1D(conv_channels, conv_kernel, padding="valid",
+                          use_bias=True, activation="relu", name="conv_front")(x)
+
+    feature_dim = conv_channels if use_conv else n_mels
+
+    # --- SE block (applied after Conv1D, on the window) ---
+    if use_se:
+        mid = max(1, feature_dim // se_ratio)
+        # Pool over time dimension → (1, feature_dim)
+        se = layers.GlobalAveragePooling1D(name="se_pool")(x)
+        se = layers.Dense(mid, activation="relu", name="se_fc1")(se)
+        se = layers.Dense(feature_dim, activation="sigmoid", name="se_fc2")(se)
+        # Broadcast multiply: (1, W, feature_dim) * (1, 1, feature_dim)
+        se = layers.Reshape((1, feature_dim), name="se_reshape")(se)
+        x = layers.Multiply(name="se_mul")([x, se])
+        # Need reshape for SE-only case (no Conv1D means we need to stay 2D)
+        if not use_conv:
+            pass  # Already 2D from reshape_2d
+
+    # Flatten for FC layers
+    if use_se or use_conv:
+        x_flat = layers.Reshape((window_frames * feature_dim,), name="flatten_long")(x)
+    else:
+        x_flat = x
+
+    # --- Long window FC path ---
+    h = x_flat
+    for i, dim in enumerate(hidden_dims):
+        h = layers.Dense(dim, activation="relu", name=f"fc{i+1}")(h)
+
+    # --- Short window FC path (optional) ---
+    if use_multiwindow:
+        short_hidden = short_hidden or hidden_dims[-1]
+        # Extract last short_window * feature_dim elements from flat representation
+        short_dim = short_window * feature_dim
+        if use_se or use_conv:
+            # Slice from 2D tensor: last short_window frames (after SE+Conv1D)
+            x_short = layers.Cropping1D(cropping=(window_frames - short_window, 0),
+                                         name="crop_short")(x)
+            x_short_flat = layers.Reshape((short_dim,), name="flatten_short")(x_short)
+        else:
+            # Slice from flat input (capture offset via default arg for closure safety)
+            _offset = (window_frames - short_window) * feature_dim
+            x_short_flat = layers.Lambda(
+                lambda t, o=_offset: t[:, o:], output_shape=(short_dim,),
+                name="slice_short")(inputs)
+        h_short = layers.Dense(short_hidden, activation="relu",
+                                name="fc_short")(x_short_flat)
+        h = layers.Concatenate(name="merge")([h, h_short])
+
+    # --- Output ---
+    out = layers.Dense(out_channels, activation="sigmoid", name="output")(h)
+
+    return keras.Model(inputs=inputs, outputs=out, name="enhanced_beat_fc")
+
+
+def _transfer_enhanced_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
+                                   cfg: dict):
+    """Transfer EnhancedBeatFC weights from PyTorch to TF/Keras."""
+    # SE block
+    if cfg["model"].get("se_ratio", 0) > 0:
+        for name_pt, name_tf in [("se.fc1", "se_fc1"), ("se.fc2", "se_fc2")]:
+            pt_w = pt_state_dict[f"{name_pt}.weight"].numpy().T  # (in, out)
+            pt_b = pt_state_dict[f"{name_pt}.bias"].numpy()
+            tf_model.get_layer(name_tf).set_weights([pt_w, pt_b])
+
+    # Conv1D front-end
+    if cfg["model"].get("conv_channels", 0) > 0:
+        pt_w = pt_state_dict["conv1d.weight"].numpy()  # (out, in, k)
+        pt_b = pt_state_dict["conv1d.bias"].numpy()
+        tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
+        tf_model.get_layer("conv_front").set_weights([tf_w, pt_b])
+
+    # Long backbone FC layers
+    hidden_dims = cfg["model"]["hidden_dims"]
+    backbone_linear_keys = sorted(
+        [k for k in pt_state_dict if k.startswith("long_backbone.") and k.endswith(".weight")],
+        key=lambda k: int(k.split(".")[1])
+    )
+    for i, w_key in enumerate(backbone_linear_keys):
+        b_key = w_key.replace(".weight", ".bias")
+        pt_w = pt_state_dict[w_key].numpy().T  # (in, out)
+        pt_b = pt_state_dict[b_key].numpy()
+        tf_model.get_layer(f"fc{i+1}").set_weights([pt_w, pt_b])
+
+    # Short path FC (if multi-window)
+    if cfg["model"].get("short_window", 0) > 0:
+        # Find the Linear layer in short_backbone
+        short_w_keys = sorted(
+            [k for k in pt_state_dict if k.startswith("short_backbone.") and k.endswith(".weight")],
+            key=lambda k: int(k.split(".")[1])
+        )
+        if short_w_keys:
+            w_key = short_w_keys[0]
+            b_key = w_key.replace(".weight", ".bias")
+            pt_w = pt_state_dict[w_key].numpy().T
+            pt_b = pt_state_dict[b_key].numpy()
+            tf_model.get_layer("fc_short").set_weights([pt_w, pt_b])
+
+    # Output head
+    pt_w = pt_state_dict["output_head.weight"].numpy().T
+    pt_b = pt_state_dict["output_head.bias"].numpy()
+    tf_model.get_layer("output").set_weights([pt_w, pt_b])
+
+
 def fc_representative_dataset_gen(data_path: Path, window_frames: int,
                                   n_mels: int = 26, n_samples: int = 200):
     """Calibration data generator for FC model INT8 quantization.
@@ -723,7 +861,65 @@ def main():
     model_type = cfg["model"].get("type", "causal_cnn")
     n_mels = cfg["audio"]["n_mels"]
 
-    if model_type == "frame_fc":
+    if model_type == "frame_fc_enhanced":
+        # --- Enhanced FC model ---
+        window_frames = cfg["model"]["window_frames"]
+        hidden_dims = cfg["model"]["hidden_dims"]
+
+        features = []
+        if cfg["model"].get("se_ratio", 0) > 0:
+            features.append(f"SE(ratio={cfg['model']['se_ratio']})")
+        if cfg["model"].get("conv_channels", 0) > 0:
+            features.append(f"Conv1D({cfg['model']['conv_channels']}ch)")
+        if cfg["model"].get("short_window", 0) > 0:
+            features.append(f"MultiWindow(short={cfg['model']['short_window']})")
+        print(f"Building TF model (type=frame_fc_enhanced, window={window_frames}, "
+              f"hidden={hidden_dims}, features=[{', '.join(features)}], "
+              f"downbeat={use_downbeat})...")
+
+        tf_model = build_tf_frame_fc_enhanced(
+            n_mels=n_mels,
+            window_frames=window_frames,
+            hidden_dims=hidden_dims,
+            downbeat=use_downbeat,
+            se_ratio=cfg["model"].get("se_ratio", 0),
+            conv_channels=cfg["model"].get("conv_channels", 0),
+            conv_kernel=cfg["model"].get("conv_kernel", 5),
+            short_window=cfg["model"].get("short_window", 0),
+            short_hidden=cfg["model"].get("short_hidden", 0),
+        )
+        _transfer_enhanced_fc_weights(tf_model, pt_state, cfg)
+
+        # Verify weight transfer
+        print("Verifying weight transfer...")
+        from models.beat_fc_enhanced import build_beat_fc_enhanced
+        pt_model = build_beat_fc_enhanced(
+            n_mels=n_mels, window_frames=window_frames,
+            hidden_dims=hidden_dims,
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+            se_ratio=cfg["model"].get("se_ratio", 0),
+            conv_channels=cfg["model"].get("conv_channels", 0),
+            conv_kernel=cfg["model"].get("conv_kernel", 5),
+            short_window=cfg["model"].get("short_window", 0),
+            short_hidden=cfg["model"].get("short_hidden", 0),
+        )
+        pt_model.load_state_dict(pt_state, strict=False)  # strict=False: skip tempo_head
+        pt_model.eval()
+
+        test_window = np.random.randn(1, window_frames, n_mels).astype(np.float32)
+        test_flat = test_window.reshape(1, -1)
+        with torch.no_grad():
+            pt_out = pt_model(torch.from_numpy(test_window))
+            if isinstance(pt_out, tuple):
+                pt_out = pt_out[0]
+            pt_out = pt_out[:, -1, :].numpy()
+        tf_out = tf_model.predict(test_flat, verbose=0)
+        max_diff = np.abs(pt_out - tf_out).max()
+        print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.01 else 'WARNING'}")
+
+        inference_frames = window_frames
+    elif model_type == "frame_fc":
         # --- Frame-level FC model ---
         window_frames = cfg["model"]["window_frames"]
         hidden_dims = cfg["model"]["hidden_dims"]
@@ -859,12 +1055,12 @@ def main():
     tflite_path = str(output_dir / tflite_name)
 
     print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model...")
-    if model_type in ("frame_fc", "frame_conv1d") and quantize:
+    if model_type in ("frame_fc", "frame_fc_enhanced", "frame_conv1d") and quantize:
         # Frame models need window-based calibration samples
         window_frames = cfg["model"]["window_frames"]
         converter = tf.lite.TFLiteConverter.from_keras_model(tf_model)
         converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        if model_type == "frame_fc":
+        if model_type in ("frame_fc", "frame_fc_enhanced"):
             converter.representative_dataset = lambda: fc_representative_dataset_gen(
                 data_dir, window_frames=window_frames, n_mels=n_mels)
             # CRITICAL: Disable per-channel weight quantization for Dense layers.

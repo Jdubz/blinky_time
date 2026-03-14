@@ -1,0 +1,47 @@
+# Frame-level FC — improved training recipe
+#
+# Combines all high-impact training improvements from Beat This! research:
+# 1. Shift-tolerant BCE loss (±48ms tolerance)
+# 2. Pitch shift augmentation (±5 semitones)
+# 3. SpecAugment (frequency + time masking)
+# 4. Knowledge distillation from Beat This! soft labels
+# 5. Longer training (100 epochs) with cosine LR
+#
+# Architecture unchanged from frame_fc.yaml — same firmware model.
+# Changes are training recipe only (dataset prep + training loop).
+#
+# Dataset prep:
+#   python scripts/prepare_dataset.py --config configs/frame_fc_improved.yaml --augment
+#
+# Training (with distillation):
+#   python train.py --config configs/frame_fc_improved.yaml \
+#     --distill data/processed/Y_teacher_train.npy \
+#     --output-dir outputs/fc_improved
+#
+# Training (without distillation):
+#   python train.py --config configs/frame_fc_improved.yaml \
+#     --output-dir outputs/fc_improved_nodistill
+
+model:
+  type: "frame_fc"
+  window_frames: 32         # 512ms — matches deployed model
+  hidden_dims: [64, 32]
+  dropout: 0.1
+  downbeat: true
+
+training:
+  epochs: 60                # Previous runs converge by epoch 40-50
+  patience: 15              # More patience to let LR decay work
+
+loss:
+  type: "shift_bce"         # Shift-tolerant BCE (Beat This! most impactful change)
+  shift_tolerance: 3        # ±48ms at 62.5 Hz
+
+distillation:
+  alpha: 0.5                # Higher alpha — teacher labels are cleaner than consensus
+  temperature: 2.0
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 60
