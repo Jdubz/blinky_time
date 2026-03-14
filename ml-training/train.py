@@ -59,8 +59,8 @@ def spec_augment(x: torch.Tensor, num_freq_masks: int = 2,
                   max_time_width: int = 8) -> torch.Tensor:
     """Apply SpecAugment (frequency + time masking) to mel spectrograms.
 
-    Operates in-place on the batch for efficiency. Each sample gets
-    independently random masks.
+    Fully vectorized — builds a boolean mask on GPU, no per-sample Python loop.
+    Each sample gets independently random masks.
 
     Args:
         x: (batch, time, n_mels) mel spectrogram tensor
@@ -70,24 +70,25 @@ def spec_augment(x: torch.Tensor, num_freq_masks: int = 2,
         max_time_width: Maximum frames to mask per mask
     """
     batch_size, time_steps, n_mels = x.shape
+    mask = torch.ones_like(x, dtype=torch.bool)
 
+    # Frequency masks: zero out contiguous mel bands per sample
+    freq_idx = torch.arange(n_mels, device=x.device).view(1, 1, n_mels)
     for _ in range(num_freq_masks):
-        widths = torch.randint(1, max_freq_width + 1, (batch_size,), device=x.device)
-        starts = torch.randint(0, n_mels, (batch_size,), device=x.device)
-        for i in range(batch_size):
-            f0 = starts[i].item()
-            fw = min(widths[i].item(), n_mels - f0)
-            x[i, :, f0:f0 + fw] = 0.0
+        starts = torch.randint(0, n_mels, (batch_size, 1, 1), device=x.device)
+        widths = torch.randint(1, max_freq_width + 1, (batch_size, 1, 1), device=x.device)
+        ends = (starts + widths).clamp(max=n_mels)
+        mask &= ~((freq_idx >= starts) & (freq_idx < ends))
 
+    # Time masks: zero out contiguous frames per sample
+    time_idx = torch.arange(time_steps, device=x.device).view(1, time_steps, 1)
     for _ in range(num_time_masks):
-        widths = torch.randint(1, max_time_width + 1, (batch_size,), device=x.device)
-        starts = torch.randint(0, time_steps, (batch_size,), device=x.device)
-        for i in range(batch_size):
-            t0 = starts[i].item()
-            tw = min(widths[i].item(), time_steps - t0)
-            x[i, t0:t0 + tw, :] = 0.0
+        starts = torch.randint(0, time_steps, (batch_size, 1, 1), device=x.device)
+        widths = torch.randint(1, max_time_width + 1, (batch_size, 1, 1), device=x.device)
+        ends = (starts + widths).clamp(max=time_steps)
+        mask &= ~((time_idx >= starts) & (time_idx < ends))
 
-    return x
+    return x * mask
 
 
 def _broadcast_pos_weight(pos_weight: torch.Tensor | float,

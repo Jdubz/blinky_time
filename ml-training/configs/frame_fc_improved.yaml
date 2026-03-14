@@ -30,7 +30,7 @@ model:
   downbeat: true
 
 training:
-  epochs: 100               # Longer training — cosine LR benefits from more epochs
+  epochs: 60                # Previous runs converge by epoch 40-50
   patience: 15              # More patience to let LR decay work
 
 loss:
