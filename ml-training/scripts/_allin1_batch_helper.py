@@ -29,38 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-
-def _patch_dbn_threshold():
-    """Disable DBN threshold clipping for short clips.
-
-    allin1's postprocessing passes best_threshold_downbeat (0.24) to madmom's
-    DBNDownBeatTrackingProcessor, which crops the activation sequence to only
-    frames exceeding the threshold before Viterbi decoding. After the 3-way
-    normalization (beat/downbeat/no-beat), peak activations on 30s clips are
-    compressed below this threshold, causing near-total beat loss. Setting
-    threshold=None lets the HMM decode the full sequence — its tempo model
-    and transition probabilities already handle noise.
-
-    Must patch allin1.helpers (where the bound name lives), not just
-    allin1.postprocessing.metrical (the defining module).
-    """
-    import allin1.helpers as helpers
-    import allin1.postprocessing.metrical as metrical
-    from allin1.typings import AllInOneOutput
-    from allin1.config import Config
-
-    _original = metrical.postprocess_metrical_structure
-
-    def _patched(logits: AllInOneOutput, cfg: Config):
-        orig_threshold = cfg.best_threshold_downbeat
-        cfg.best_threshold_downbeat = None
-        try:
-            return _original(logits, cfg)
-        finally:
-            cfg.best_threshold_downbeat = orig_threshold
-
-    metrical.postprocess_metrical_structure = _patched
-    helpers.postprocess_metrical_structure = _patched
+from _allin1_common import patch_dbn_threshold
 
 
 def analyze_single(audio_path: Path, model, device, demix_dir, spec_dir):
@@ -150,7 +119,7 @@ def main():
     t0 = time.perf_counter()
 
     # Apply patches
-    _patch_dbn_threshold()
+    patch_dbn_threshold()
 
     # Import and load models ONCE
     import torch

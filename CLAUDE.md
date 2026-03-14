@@ -196,8 +196,8 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output)
 
 2. **Onset Detection**
-   - `FrameBeatNN.h` - **Sole ODF**: Frame-level FC neural network (56.8 KB INT8, ~60-200µs inference)
-   - Input: 32 frames × 26 raw mel bands (0.5s window). Output: beat_activation + downbeat_activation
+   - `FrameBeatNN.h` - **Sole ODF**: Frame-level FC neural network (up to 314 KB INT8, ~60-200µs inference)
+   - Input: up to 192 frames × 26 raw mel bands (up to 3.07s window). Output: beat_activation + downbeat_activation
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple ODF)
 
 3. **Rhythm Tracking (AudioController)**
@@ -346,8 +346,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~20 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + 16 KB tensor arena + 3.3 KB mel frame buffer).
-- Flash: ~365 KB (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~40 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + 16 KB tensor arena + up to 19.5 KB mel frame buffer for W192).
+- Flash: ~625 KB with W192 model (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -394,7 +394,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
-- ✅ FrameBeatNN (frame-level FC, 56.8 KB INT8, deployed on all devices)
+- ✅ FrameBeatNN (frame-level FC, up to 314 KB INT8, deployed on all devices)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
@@ -444,7 +444,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-FrameBeatNN — frame-level FC neural network (sole ODF, v67). FC(832→64→32→2), 55K params, 56.8 KB INT8.
+FrameBeatNN — frame-level FC neural network (sole ODF, v67). Up to FC(4992→64→32→2), up to 322K params, up to 314 KB INT8.
 Input: 32 frames × 26 raw mel bands (0.5s window at 62.5 Hz). Output: beat_activation (ODF for CBSS) + downbeat_activation.
 ~60-200µs inference on Cortex-M4F. Deployed on all 3 devices (March 2026).
 Fallback if model fails to load: mic_.getLevel() as simple energy ODF.

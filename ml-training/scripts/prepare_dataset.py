@@ -743,7 +743,15 @@ def main():
 
     print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}")
     if stems_dir:
+        # Count how many tracks have stems available
+        stems_found = sum(
+            1 for a, _ in pairs
+            if (stems_dir / "htdemucs" / a.stem).exists() or (stems_dir / a.stem).exists()
+        )
+        stems_missing = len(pairs) - stems_found
         print(f"Stem augmentation: {stem_variant_list} from {stems_dir}")
+        print(f"  Stems available: {stems_found}/{len(pairs)} tracks"
+              f"{f' ({stems_missing} missing — will use full mix only)' if stems_missing else ''}")
     print(f"File-level split: {len(train_pairs)} train, {len(val_pairs)} val")
 
     chunk_frames = cfg["training"]["chunk_frames"]

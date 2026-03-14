@@ -25,10 +25,11 @@ cd "$(dirname "$0")/.."
 source venv/bin/activate
 
 OUTPUTS="outputs"
-STEMS_DIR="/mnt/storage/blinky-ml-data/stems"
-LABELS_DIR="/mnt/storage/blinky-ml-data/labels/multi"
-CONSENSUS_V5_DIR="/mnt/storage/blinky-ml-data/labels/consensus_v5"
-AUDIO_DIR="/mnt/storage/blinky-ml-data/audio/combined"
+DATA_ROOT="${BLINKY_DATA_ROOT:-/mnt/storage/blinky-ml-data}"
+STEMS_DIR="$DATA_ROOT/stems"
+LABELS_DIR="$DATA_ROOT/labels/multi"
+CONSENSUS_V5_DIR="$DATA_ROOT/labels/consensus_v5"
+AUDIO_DIR="$DATA_ROOT/audio/combined"
 
 echo "============================================================"
 echo "  W192 Training Pipeline"
@@ -199,10 +200,12 @@ echo ""
 # ──────────────────────────────────────────────────────────────────
 echo "[Step 6/7] Prepare dataset (consensus_v5 + drum stem augmentation)"
 echo "  Started: $(date)"
-# Clear old processed data to make room
+# Move old processed data to backup (recoverable if re-prep fails)
 if [ -f "data/processed/X_train.npy" ]; then
-    echo "  Removing old processed data..."
-    rm data/processed/*.npy
+    BACKUP_DIR="data/processed_backup_$(date +%Y%m%d_%H%M%S)"
+    echo "  Backing up old data to $BACKUP_DIR..."
+    mv data/processed "$BACKUP_DIR"
+    mkdir -p data/processed
 fi
 
 PYTHONUNBUFFERED=1 python scripts/prepare_dataset.py \

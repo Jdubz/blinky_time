@@ -27,53 +27,12 @@ import sys
 
 import numpy as np
 
-
-_dbn_threshold_patched = False
-
-
-def _patch_dbn_threshold():
-    """Disable DBN threshold clipping for short clips.
-
-    allin1's postprocessing passes best_threshold_downbeat (0.24) to madmom's
-    DBNDownBeatTrackingProcessor, which crops the activation sequence to only
-    frames exceeding the threshold before Viterbi decoding. After the 3-way
-    normalization (beat/downbeat/no-beat), peak activations on 30s clips are
-    compressed below this threshold, causing near-total beat loss. Setting
-    threshold=None lets the HMM decode the full sequence — its tempo model
-    and transition probabilities already handle noise.
-
-    Must patch allin1.helpers (where the bound name lives), not just
-    allin1.postprocessing.metrical (the defining module).
-    """
-    global _dbn_threshold_patched
-    if _dbn_threshold_patched:
-        return
-    _dbn_threshold_patched = True
-
-    import allin1.helpers as helpers
-    import allin1.postprocessing.metrical as metrical
-    from allin1.typings import AllInOneOutput
-    from allin1.config import Config
-
-    _original = metrical.postprocess_metrical_structure
-
-    def _patched(logits: AllInOneOutput, cfg: Config):
-        orig_threshold = cfg.best_threshold_downbeat
-        cfg.best_threshold_downbeat = None
-        try:
-            return _original(logits, cfg)
-        finally:
-            cfg.best_threshold_downbeat = orig_threshold
-
-    # Patch both the defining module and the caller module (which captured
-    # the name at import time via `from .postprocessing import ...`)
-    metrical.postprocess_metrical_structure = _patched
-    helpers.postprocess_metrical_structure = _patched
+from _allin1_common import patch_dbn_threshold
 
 
 def analyze(audio_path: str) -> dict:
     """Run All-In-One analysis for beats, downbeats, and segments."""
-    _patch_dbn_threshold()
+    patch_dbn_threshold()
     import allin1
 
     # Redirect stdout → stderr at the file descriptor level during analyze()
