@@ -1,0 +1,29 @@
+# Frame-level multi-window FC — dual-path onset + rhythm
+#
+# Two parallel FC paths with different temporal context:
+#   Short path (16 frames = 256ms): sharp onset detection
+#   Long path (48 frames = 768ms): rhythmic context (~1.5 beats at 120 BPM)
+#
+# "Low-res encoder / high-res decoder" principle: onset precision
+# and rhythmic structure need different temporal scales.
+#
+# Firmware feeds the long window (48*26=1248 flat). Model internally
+# slices the last 16 frames for the short path.
+
+model:
+  type: "frame_fc_enhanced"
+  window_frames: 48         # Long path: 768ms
+  hidden_dims: [64, 32]     # Long path hidden layers
+  dropout: 0.1
+  downbeat: true
+  short_window: 16          # Short path: 256ms
+  short_hidden: 32          # Short path hidden dim
+
+training:
+  epochs: 100
+  patience: 15
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 120   # Larger due to dual paths

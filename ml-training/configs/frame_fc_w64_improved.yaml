@@ -1,0 +1,36 @@
+# Frame-level FC (64-frame window) — improved training recipe
+#
+# Same improvements as frame_fc_improved.yaml but with 64-frame window
+# (1024ms context, ~2 beats at 120 BPM). Larger model (109K params).
+#
+# Dataset prep:
+#   python scripts/prepare_dataset.py --config configs/frame_fc_w64_improved.yaml --augment
+#
+# Training:
+#   python train.py --config configs/frame_fc_w64_improved.yaml \
+#     --distill data/processed/Y_teacher_train.npy \
+#     --output-dir outputs/fc_w64_improved
+
+model:
+  type: "frame_fc"
+  window_frames: 64         # 1024ms — maximum context
+  hidden_dims: [64, 32]
+  dropout: 0.1
+  downbeat: true
+
+training:
+  epochs: 100
+  patience: 15
+
+loss:
+  type: "shift_bce"
+  shift_tolerance: 3
+
+distillation:
+  alpha: 0.5
+  temperature: 2.0
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 120

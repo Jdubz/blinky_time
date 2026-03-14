@@ -67,6 +67,30 @@ augmentation:
   # 0.8x: 120→96, 1.2x: 120→144 BPM. Pitch changes are fine for beat detection.
   # Stretched variants get clean audio only (no noise/gain/RIR on top).
   time_stretch_factors: [0.8, 0.9, 1.1, 1.2]
+  # Pitch shifting (semitones): key-invariant augmentation.
+  # Beat This! ablation: removing pitch shift drops F1 by 4.3 points —
+  # second most impactful augmentation after time stretch.
+  # Applied to original speed audio only. Uses torchaudio.functional.pitch_shift.
+  pitch_shift_semitones: [-5, -3, -1, 1, 3, 5]
+  # SpecAugment frequency masking (applied online during training).
+  # Masks random mel bands to prevent over-reliance on any single frequency.
+  # Beat This! uses this as their third most impactful augmentation.
+  spec_augment:
+    enabled: true
+    num_freq_masks: 2       # Number of random frequency masks per sample
+    max_freq_width: 4       # Max mel bands masked per mask (of 26 total)
+    num_time_masks: 1       # Number of random time masks per sample
+    max_time_width: 8       # Max frames masked per mask
+
+# Loss function defaults
+loss:
+  type: "shift_bce"          # shift-tolerant BCE (Beat This!, +12.6 F1 on downbeat)
+  shift_tolerance: 3         # ±3 frames = ±48ms at 62.5 Hz (annotation jitter tolerance)
+
+# Knowledge distillation defaults
+distillation:
+  alpha: 0.3                 # Weight for soft loss: (1-alpha)*hard + alpha*soft
+  temperature: 2.0           # Softening temperature
 
 # Quantization
 quantization:

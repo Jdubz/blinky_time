@@ -369,6 +369,15 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         ts_factors = cfg.get("augmentation", {}).get("time_stretch_factors", [])
         time_stretch_factors.extend(ts_factors)
 
+    # Pitch-shift semitones: key-invariant augmentation.
+    # Beat This! ablation: removing pitch shift drops F1 by 4.3 points.
+    # Applied to original speed audio only (pitch-shifted + time-stretched
+    # would be redundant and triple the dataset size).
+    pitch_shifts = [0]  # 0 = no shift (original)
+    if augment:
+        ps_semitones = cfg.get("augmentation", {}).get("pitch_shift_semitones", [])
+        pitch_shifts.extend(ps_semitones)
+
     for speed in time_stretch_factors:
         if speed == 1.0:
             src_audio = audio_gpu
@@ -396,6 +405,22 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         else:
             tag = f"stretch{speed:.2f}" if speed != 1.0 else "clean"
             variants = [(tag, src_audio)]
+
+        # Pitch-shifted variants (original speed only, clean audio)
+        # Beat times don't change with pitch shift — only key/timbre changes.
+        if augment and speed == 1.0:
+            for semitones in pitch_shifts:
+                if semitones == 0:
+                    continue  # Already covered by clean variant
+                try:
+                    shifted = torchaudio.functional.pitch_shift(
+                        src_audio.unsqueeze(0), sr, semitones
+                    ).squeeze(0)
+                    variants.append((f"pitch{semitones:+d}st", shifted))
+                except Exception as e:
+                    import logging
+                    logging.warning(f"Pitch shift {semitones:+d}st failed for "
+                                    f"{audio_path.name}: {e}")
 
         for aug_name, aug_audio in variants:
             mel = firmware_mel_spectrogram(aug_audio, cfg, mel_fb, window)

@@ -54,6 +54,42 @@ class MemmapBeatDataset(Dataset):
         return x, y_out, self._empty_teacher
 
 
+def spec_augment(x: torch.Tensor, num_freq_masks: int = 2,
+                  max_freq_width: int = 4, num_time_masks: int = 1,
+                  max_time_width: int = 8) -> torch.Tensor:
+    """Apply SpecAugment (frequency + time masking) to mel spectrograms.
+
+    Operates in-place on the batch for efficiency. Each sample gets
+    independently random masks.
+
+    Args:
+        x: (batch, time, n_mels) mel spectrogram tensor
+        num_freq_masks: Number of frequency masks per sample
+        max_freq_width: Maximum mel bands to mask per mask
+        num_time_masks: Number of time masks per sample
+        max_time_width: Maximum frames to mask per mask
+    """
+    batch_size, time_steps, n_mels = x.shape
+
+    for _ in range(num_freq_masks):
+        widths = torch.randint(1, max_freq_width + 1, (batch_size,), device=x.device)
+        starts = torch.randint(0, n_mels, (batch_size,), device=x.device)
+        for i in range(batch_size):
+            f0 = starts[i].item()
+            fw = min(widths[i].item(), n_mels - f0)
+            x[i, :, f0:f0 + fw] = 0.0
+
+    for _ in range(num_time_masks):
+        widths = torch.randint(1, max_time_width + 1, (batch_size,), device=x.device)
+        starts = torch.randint(0, time_steps, (batch_size,), device=x.device)
+        for i in range(batch_size):
+            t0 = starts[i].item()
+            tw = min(widths[i].item(), time_steps - t0)
+            x[i, t0:t0 + tw, :] = 0.0
+
+    return x
+
+
 def _broadcast_pos_weight(pos_weight: torch.Tensor | float,
                           y: torch.Tensor) -> torch.Tensor | float:
     """Reshape pos_weight for broadcasting against y (batch, time, channels)."""
@@ -174,18 +210,21 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
-    parser.add_argument("--loss", default="bce", choices=["bce", "focal", "shift_bce"],
-                        help="Loss function: bce (default), focal, or shift_bce (shift-tolerant)")
+    parser.add_argument("--loss", default=None, choices=["bce", "focal", "shift_bce"],
+                        help="Loss function (default: from config, or shift_bce)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
-    parser.add_argument("--shift-tolerance", type=int, default=3,
-                        help="Shift-tolerant loss: ±N frames tolerance (default: 3 = ±48ms at 62.5 Hz)")
+    parser.add_argument("--shift-tolerance", type=int, default=None,
+                        help="Shift-tolerant loss: ±N frames tolerance (default: from config, or 3)")
+    parser.add_argument("--no-spec-augment", action="store_true",
+                        help="Disable online SpecAugment during training")
     parser.add_argument("--distill", default=None,
                         help="Path to teacher soft labels (Y_teacher_train.npy) for knowledge distillation")
-    parser.add_argument("--distill-alpha", type=float, default=0.3,
-                        help="Distillation loss weight (0-1). Total = (1-alpha)*hard + alpha*soft")
-    parser.add_argument("--distill-temp", type=float, default=2.0,
-                        help="Distillation temperature (default: 2.0)")
+    parser.add_argument("--distill-alpha", type=float, default=None,
+                        help="Distillation loss weight (0-1). Total = (1-alpha)*hard + alpha*soft. "
+                             "Default: from config, or 0.3")
+    parser.add_argument("--distill-temp", type=float, default=None,
+                        help="Distillation temperature. Default: from config, or 2.0")
     parser.add_argument("--patience", type=int, default=None,
                         help="Early stopping patience (default: from config, or 15)")
     parser.add_argument("--subsample", type=float, default=None,
@@ -258,8 +297,9 @@ def main():
     teacher_train_path = None
     teacher_val_path = None
     use_distill = False
-    distill_alpha = args.distill_alpha
-    distill_temp = args.distill_temp
+    distill_cfg = cfg.get("distillation", {})
+    distill_alpha = args.distill_alpha if args.distill_alpha is not None else distill_cfg.get("alpha", 0.3)
+    distill_temp = args.distill_temp if args.distill_temp is not None else distill_cfg.get("temperature", 2.0)
     if args.distill:
         teacher_path = Path(args.distill)
         if teacher_path.exists():
@@ -311,6 +351,7 @@ def main():
 
     # Build model
     model_type = cfg["model"].get("type", "causal_cnn")
+    num_tempo_bins = cfg["model"].get("num_tempo_bins", 0)
     if model_type == "frame_fc":
         from models.beat_fc import build_beat_fc
         model = build_beat_fc(
@@ -319,6 +360,21 @@ def main():
             hidden_dims=cfg["model"]["hidden_dims"],
             dropout=cfg["model"]["dropout"],
             downbeat=use_downbeat,
+        ).to(device)
+    elif model_type == "frame_fc_enhanced":
+        from models.beat_fc_enhanced import build_beat_fc_enhanced
+        model = build_beat_fc_enhanced(
+            n_mels=cfg["audio"]["n_mels"],
+            window_frames=cfg["model"]["window_frames"],
+            hidden_dims=cfg["model"]["hidden_dims"],
+            dropout=cfg["model"]["dropout"],
+            downbeat=use_downbeat,
+            se_ratio=cfg["model"].get("se_ratio", 0),
+            conv_channels=cfg["model"].get("conv_channels", 0),
+            conv_kernel=cfg["model"].get("conv_kernel", 5),
+            short_window=cfg["model"].get("short_window", 0),
+            short_hidden=cfg["model"].get("short_hidden", 0),
+            num_tempo_bins=num_tempo_bins,
         ).to(device)
     elif model_type == "frame_conv1d":
         from models.beat_conv1d import build_beat_conv1d
@@ -343,11 +399,22 @@ def main():
         ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"Model ({model_type}): {total_params} params")
-    if model_type == "frame_fc":
+    print(f"Model ({model_type}): {total_params:,} params")
+    if model_type in ("frame_fc", "frame_fc_enhanced"):
         wf = cfg["model"]["window_frames"]
         print(f"  Window: {wf} frames ({wf / cfg['audio']['frame_rate'] * 1000:.0f} ms)")
         print(f"  Hidden: {cfg['model']['hidden_dims']}")
+        if model_type == "frame_fc_enhanced":
+            features = []
+            if cfg["model"].get("se_ratio", 0) > 0:
+                features.append(f"SE(ratio={cfg['model']['se_ratio']})")
+            if cfg["model"].get("conv_channels", 0) > 0:
+                features.append(f"Conv1D({cfg['model']['conv_channels']}ch)")
+            if cfg["model"].get("short_window", 0) > 0:
+                features.append(f"MultiWindow(short={cfg['model']['short_window']})")
+            if num_tempo_bins > 0:
+                features.append(f"Tempo({num_tempo_bins} bins)")
+            print(f"  Enhancements: {', '.join(features)}")
     elif model_type == "frame_conv1d":
         print(f"  Channels: {cfg['model']['channels']}")
         print(f"  Kernels: {cfg['model']['kernel_sizes']}")
@@ -368,31 +435,51 @@ def main():
     else:
         pos_weight = beat_pos_weight
 
-    # Select loss function
-    if args.loss == "focal":
+    # Select loss function (CLI overrides config, config overrides default)
+    loss_type = args.loss or cfg.get("loss", {}).get("type", "shift_bce")
+    shift_tolerance = (args.shift_tolerance if args.shift_tolerance is not None
+                       else cfg.get("loss", {}).get("shift_tolerance", 3))
+    if loss_type == "focal":
         loss_fn = partial(weighted_focal, pos_weight=pos_weight, gamma=args.focal_gamma)
         print(f"Loss: focal (gamma={args.focal_gamma})")
-    elif args.loss == "shift_bce":
+    elif loss_type == "shift_bce":
         loss_fn = partial(shift_tolerant_bce, pos_weight=pos_weight,
-                          tolerance_frames=args.shift_tolerance)
-        print(f"Loss: shift-tolerant BCE (±{args.shift_tolerance} frames = "
-              f"±{args.shift_tolerance / cfg['audio']['frame_rate'] * 1000:.0f}ms)")
+                          tolerance_frames=shift_tolerance)
+        print(f"Loss: shift-tolerant BCE (±{shift_tolerance} frames = "
+              f"±{shift_tolerance / cfg['audio']['frame_rate'] * 1000:.0f}ms)")
     else:
         loss_fn = partial(weighted_bce, pos_weight=pos_weight)
         print(f"Loss: weighted BCE")
+
+    # SpecAugment config (online augmentation during training)
+    sa_cfg = cfg.get("augmentation", {}).get("spec_augment", {})
+    use_spec_augment = sa_cfg.get("enabled", False) and not args.no_spec_augment
+    sa_num_freq = sa_cfg.get("num_freq_masks", 2)
+    sa_max_freq = sa_cfg.get("max_freq_width", 4)
+    sa_num_time = sa_cfg.get("num_time_masks", 1)
+    sa_max_time = sa_cfg.get("max_time_width", 8)
+    if use_spec_augment:
+        print(f"SpecAugment: {sa_num_freq} freq masks (max {sa_max_freq} bands), "
+              f"{sa_num_time} time masks (max {sa_max_time} frames)")
 
     # Training loop
     steps_per_epoch = len(train_loader)
     print(f"\nTraining for {epochs} epochs, batch_size={batch_size}, lr={lr}")
     print(f"  {steps_per_epoch} steps/epoch, {epochs * steps_per_epoch} total steps")
-    print(f"  Patience: {args.patience or cfg['training'].get('patience', 15)} epochs")
+    patience = args.patience or cfg["training"].get("patience", 15)
+    print(f"  Patience: {patience} epochs")
     print(f"Output channels: {'beat + downbeat' if use_downbeat else 'beat only'}")
     if use_distill:
         print(f"Distillation: alpha={distill_alpha}, temp={distill_temp}")
 
+    # Pre-compute tempo config (used in inner loop when tempo aux is enabled)
+    tempo_cfg = cfg["model"].get("tempo", {})
+    tempo_min_bpm = tempo_cfg.get("min_bpm", 60)
+    tempo_max_bpm = tempo_cfg.get("max_bpm", 200)
+    tempo_loss_weight = tempo_cfg.get("loss_weight", 0.1)
+
     best_val_loss = float("inf")
     patience_counter = 0
-    patience = args.patience or cfg["training"].get("patience", 15)
     log_rows = []
 
     num_train_batches = len(train_loader)
@@ -412,9 +499,41 @@ def main():
             X_batch = X_batch.to(device, non_blocking=True)
             Y_batch = Y_batch.to(device, non_blocking=True)
 
+            # Online SpecAugment: random freq/time masking (different each batch)
+            if use_spec_augment:
+                X_batch = spec_augment(X_batch, sa_num_freq, sa_max_freq,
+                                       sa_num_time, sa_max_time)
+
             optimizer.zero_grad()
-            Y_pred = model(X_batch)
+            model_out = model(X_batch)
+
+            # Handle tempo auxiliary head (enhanced model returns tuple)
+            if isinstance(model_out, tuple):
+                Y_pred, tempo_logits = model_out
+            else:
+                Y_pred = model_out
+                tempo_logits = None
+
             hard_loss = loss_fn(Y_pred, Y_batch)
+
+            # Tempo auxiliary loss (Bock et al. 2019: +5 F1 from tempo regularization)
+            if tempo_logits is not None and num_tempo_bins > 0:
+                # Compute tempo from beat targets: median IBI → BPM → bin
+                with torch.no_grad():
+                    beat_mask = Y_batch[:, :, 0] > 0.5  # (batch, time)
+                    tempo_targets = torch.zeros(Y_batch.shape[0], dtype=torch.long, device=device)
+                    frame_rate = cfg["audio"]["frame_rate"]
+                    for bi in range(Y_batch.shape[0]):
+                        beat_frames = beat_mask[bi].nonzero(as_tuple=True)[0]
+                        if len(beat_frames) >= 2:
+                            ibis = beat_frames[1:] - beat_frames[:-1]
+                            median_ibi = ibis.float().median()
+                            bpm = 60.0 * frame_rate / max(median_ibi.item(), 1)
+                            bpm = max(tempo_min_bpm, min(tempo_max_bpm, bpm))
+                            bin_idx = int((bpm - tempo_min_bpm) / (tempo_max_bpm - tempo_min_bpm) * num_tempo_bins)
+                            tempo_targets[bi] = min(bin_idx, num_tempo_bins - 1)
+                tempo_loss = F.cross_entropy(tempo_logits, tempo_targets)
+                hard_loss = hard_loss + tempo_loss_weight * tempo_loss
 
             # Knowledge distillation: blend hard and soft losses
             if use_distill and T_batch.numel() > 0:
@@ -457,7 +576,8 @@ def main():
                 X_batch = X_batch.to(device, non_blocking=True)
                 Y_batch = Y_batch.to(device, non_blocking=True)
 
-                Y_pred = model(X_batch)
+                model_out = model(X_batch)
+                Y_pred = model_out[0] if isinstance(model_out, tuple) else model_out
                 hard_loss = loss_fn(Y_pred, Y_batch)
 
                 if use_distill and T_batch.numel() > 0:
@@ -509,8 +629,11 @@ def main():
         "state_dict": model.state_dict(),
         "config": cfg,
         "use_downbeat": use_downbeat,
-        "loss": args.loss,
-        "focal_gamma": args.focal_gamma if args.loss == "focal" else None,
+        "loss": loss_type,
+        "focal_gamma": args.focal_gamma if loss_type == "focal" else None,
+        "shift_tolerance": shift_tolerance if loss_type == "shift_bce" else None,
+        "spec_augment": use_spec_augment,
+        "distillation": {"alpha": distill_alpha, "temp": distill_temp} if use_distill else None,
     }, output_dir / "model_checkpoint.pt")
 
     # Save training log

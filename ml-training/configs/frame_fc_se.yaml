@@ -1,0 +1,25 @@
+# Frame-level FC with Squeeze-and-Excitation — mel band attention
+#
+# Adds a tiny SE block (26→6→26 with sigmoid) that learns which mel
+# bands matter most for beat detection. Encourages weighting kick drum
+# frequencies higher and suppressing hi-hat/cymbal bands.
+#
+# ~338 extra params over baseline FC. Negligible inference cost.
+# Adds Mean + Mul ops to TFLite (need resolver expansion to 10 slots).
+
+model:
+  type: "frame_fc_enhanced"
+  window_frames: 32
+  hidden_dims: [64, 32]
+  dropout: 0.1
+  downbeat: true
+  se_ratio: 4              # Squeeze ratio: 26 → 6 → 26
+
+training:
+  epochs: 100
+  patience: 15
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 65    # ~56 KB baseline + ~0.3 KB SE

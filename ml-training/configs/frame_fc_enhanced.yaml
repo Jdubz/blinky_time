@@ -1,0 +1,60 @@
+# Frame-level enhanced FC — all architecture improvements combined
+#
+# Combines all four improvements:
+#   1. SE block (ratio=4): mel band attention (kick > hi-hat)
+#   2. Conv1D front-end (32ch, k=5): local temporal feature extraction
+#   3. Multi-window (short=16, long=48): onset sharpness + rhythmic context
+#   4. Tempo auxiliary head (20 bins): regularizes hidden features (training only)
+#
+# Plus improved training recipe from frame_fc_improved.yaml:
+#   - Shift-tolerant BCE loss
+#   - SpecAugment
+#   - Knowledge distillation
+#
+# Architecture for TFLite:
+#   Input: flat (1, 48*26=1248) — firmware feeds long window
+#   → Reshape(48, 26) → SE(26→6→26) → Conv1D(26→32, k=5)
+#   → Long path: flatten(48*32=1536) → FC(64) → FC(32)
+#   → Short path: crop_last_16 → flatten(16*32=512) → FC(32)
+#   → Concat(32+32=64) → Output(2)
+#
+# Firmware resolver needs 4 new ops: Mean, Mul, Cropping1D, Concatenation
+# Expand MicroMutableOpResolver<8> to <12>.
+
+model:
+  type: "frame_fc_enhanced"
+  window_frames: 48         # Long window: 768ms
+  hidden_dims: [64, 32]
+  dropout: 0.1
+  downbeat: true
+  # SE block
+  se_ratio: 4               # 26 → 6 → 26 channel attention
+  # Conv1D front-end
+  conv_channels: 32
+  conv_kernel: 5
+  # Multi-window
+  short_window: 16           # 256ms for onset detection
+  short_hidden: 32
+  # Tempo auxiliary head (training only, not exported)
+  num_tempo_bins: 20         # 20 bins covering 60-200 BPM
+  tempo:
+    min_bpm: 60
+    max_bpm: 200
+    loss_weight: 0.1         # Low weight — regularization, not primary objective
+
+training:
+  epochs: 100
+  patience: 15
+
+loss:
+  type: "shift_bce"
+  shift_tolerance: 3
+
+distillation:
+  alpha: 0.5
+  temperature: 2.0
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 200   # Budget for full enhanced model
