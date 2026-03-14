@@ -280,27 +280,32 @@ def _run_allin1_batch(work: list[tuple[Path, Path]], device: str,
 
     spec_dir = demix_dir.parent / "spec"
 
+    def _start_proc():
+        return subprocess.Popen(
+            [str(VENV311_PYTHON), str(helper_script),
+             "--device", device,
+             "--demix-dir", str(demix_dir),
+             "--spec-dir", str(spec_dir)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=None,  # let stderr pass through to console
+            text=True,
+        )
+
     print(f"\n[allin1] Starting batch subprocess ({len(work)} tracks, "
           f"device={device})...")
     print(f"[allin1] Demix dir: {demix_dir} "
           f"(pre-computed stems will be reused)")
 
-    proc = subprocess.Popen(
-        [str(VENV311_PYTHON), str(helper_script),
-         "--device", device,
-         "--demix-dir", str(demix_dir),
-         "--spec-dir", str(spec_dir)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=None,  # let stderr pass through to console
-        text=True,
-    )
+    proc = _start_proc()
 
     success = 0
     errors = []
 
     # Per-track timeout: Demucs (~2s) + NN inference (~1s on GPU, ~90s CPU)
     # + DBN (~0.01s) + overhead. 300s is generous for any single track.
+    # Note: select.select on file objects is Linux-only (not Windows).
+    # This pipeline only runs on Linux training machines.
     TRACK_TIMEOUT = 300
 
     try:
@@ -320,36 +325,19 @@ def _run_allin1_batch(work: list[tuple[Path, Path]], device: str,
                 errors.append((audio_file.name, "allin1",
                                f"timeout ({TRACK_TIMEOUT}s)"))
                 tqdm.write(f"  TIMEOUT [allin1] {audio_file.name}")
-                # Kill and restart subprocess
+                # Kill and restart subprocess (timed-out track is skipped,
+                # not retried — individual failures don't block consensus)
                 proc.kill()
                 proc.wait()
-                proc = subprocess.Popen(
-                    [str(VENV311_PYTHON), str(helper_script),
-                     "--device", device,
-                     "--demix-dir", str(demix_dir),
-                     "--spec-dir", str(spec_dir)],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=None,
-                    text=True,
-                )
+                proc = _start_proc()
                 continue
 
             response_line = proc.stdout.readline()
             if not response_line:
                 errors.append((audio_file.name, "allin1",
                                "batch subprocess died"))
-                # Restart subprocess for remaining tracks
-                proc = subprocess.Popen(
-                    [str(VENV311_PYTHON), str(helper_script),
-                     "--device", device,
-                     "--demix-dir", str(demix_dir),
-                     "--spec-dir", str(spec_dir)],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=None,
-                    text=True,
-                )
+                # Restart for remaining tracks (current track skipped)
+                proc = _start_proc()
                 continue
 
             try:

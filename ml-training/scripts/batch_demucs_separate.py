@@ -82,9 +82,8 @@ def separate_track(
         sources = apply_model(separator, wav.unsqueeze(0).to(device))
     # sources: (1, n_sources, channels, samples)
 
-    # Save all stems
-    for src_name in separator.sources:
-        src_idx = separator.sources.index(src_name)
+    # Save all stems (torchaudio defaults to PCM_S16 for WAV = ~10 MB/track)
+    for src_idx, src_name in enumerate(separator.sources):
         src_wav = sources[0, src_idx].cpu()
         torchaudio.save(
             str(stem_dir / f"{src_name}.wav"),
