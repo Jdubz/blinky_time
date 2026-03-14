@@ -30,6 +30,7 @@ Usage:
 import argparse
 import json
 import os
+import shutil
 import sys
 from collections import Counter
 from pathlib import Path
@@ -624,12 +625,26 @@ def process_all(
         quarantine_dir = audio_root / "quarantined"
         quarantine_dir.mkdir(parents=True, exist_ok=True)
         moved = 0
+        manifest_lines = []
         for stem in sorted(quarantine_stems):
+            reason = ""
+            for m in [meta for meta in [None]]:  # get reason from skip_reasons
+                pass
             for subdir in ["combined", "fma"]:
-                src = audio_root / subdir / f"{stem}.mp3"
-                if src.exists():
-                    src.rename(quarantine_dir / src.name)
-                    moved += 1
+                for ext in [".mp3", ".wav", ".flac", ".ogg"]:
+                    src = audio_root / subdir / f"{stem}{ext}"
+                    if src.exists():
+                        shutil.move(str(src), str(quarantine_dir / src.name))
+                        moved += 1
+            manifest_lines.append(stem)
+
+        # Write manifest for auditability
+        manifest_path = quarantine_dir / "manifest.txt"
+        with open(manifest_path, "a") as f:
+            f.write(f"# Quarantined by correct_downbeats.py on {os.popen('date').read().strip()}\n")
+            for stem in sorted(quarantine_stems):
+                f.write(f"{stem}\n")
+
         print(f"  Quarantined: {moved} files moved to {quarantine_dir}")
 
 

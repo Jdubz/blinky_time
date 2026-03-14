@@ -27,6 +27,10 @@ LABELS_DIR="$DATA_ROOT/labels/multi"
 CONSENSUS_V5_DIR="$DATA_ROOT/labels/consensus_v5"
 AUDIO_DIR="$DATA_ROOT/audio/combined"
 
+# Disk space requirements (GB)
+REQUIRED_STORAGE_GB=75   # ~70 GB for Demucs stems
+REQUIRED_NVME_GB=160     # ~150 GB for processed training data
+
 echo "============================================================"
 echo "  W192 Training Pipeline"
 echo "  Started: $(date)"
@@ -51,17 +55,16 @@ if [ ! -f "data/calibration/mic_profile.npz" ]; then
 fi
 echo "  Mic profile: OK"
 
-# Check disk space (need ~70 GB for stems + ~150 GB for processed data)
 STORAGE_FREE_KB=$(df --output=avail /mnt/storage | tail -1)
 NVMe_FREE_KB=$(df --output=avail /home | tail -1)
-echo "  Storage free: $((STORAGE_FREE_KB / 1024 / 1024)) GB (need ~70 GB for stems)"
-echo "  NVMe free: $((NVMe_FREE_KB / 1024 / 1024)) GB (need ~150 GB for data)"
+echo "  Storage free: $((STORAGE_FREE_KB / 1024 / 1024)) GB (need ~${REQUIRED_STORAGE_GB} GB for stems)"
+echo "  NVMe free: $((NVMe_FREE_KB / 1024 / 1024)) GB (need ~${REQUIRED_NVME_GB} GB for data)"
 
-if [ "$STORAGE_FREE_KB" -lt 75000000 ]; then
-    echo "  WARNING: Less than 75 GB free on /mnt/storage — stems may not fit"
+if [ "$STORAGE_FREE_KB" -lt $((REQUIRED_STORAGE_GB * 1024 * 1024)) ]; then
+    echo "  WARNING: Less than ${REQUIRED_STORAGE_GB} GB free on /mnt/storage — stems may not fit"
 fi
-if [ "$NVMe_FREE_KB" -lt 160000000 ]; then
-    echo "  WARNING: Less than 160 GB free on NVMe — processed data may not fit"
+if [ "$NVMe_FREE_KB" -lt $((REQUIRED_NVME_GB * 1024 * 1024)) ]; then
+    echo "  WARNING: Less than ${REQUIRED_NVME_GB} GB free on NVMe — processed data may not fit"
 fi
 echo ""
 
@@ -130,7 +133,6 @@ echo ""
 # ──────────────────────────────────────────────────────────────────
 echo "[Step 4/6] Prepare dataset (consensus_v5 + drum stems + augmentation)"
 echo "  Started: $(date)"
-# Move old processed data to backup (recoverable if re-prep fails)
 if [ -f "data/processed/X_train.npy" ]; then
     BACKUP_DIR="data/processed_backup_$(date +%Y%m%d_%H%M%S)"
     echo "  Backing up old data to $BACKUP_DIR..."
@@ -155,31 +157,43 @@ echo ""
 # ──────────────────────────────────────────────────────────────────
 echo "[Step 5/6] Train W192 (consensus_v5 + drum stems)"
 echo "  Started: $(date)"
-mkdir -p "$OUTPUTS/w192"
-PYTHONUNBUFFERED=1 python train.py \
-    --config configs/frame_fc_w192.yaml \
-    --output-dir "$OUTPUTS/w192"
-echo "  DONE: Training complete at $(date)"
+if [ -f "$OUTPUTS/w192/best_model.pt" ]; then
+    echo "  SKIP: $OUTPUTS/w192/best_model.pt already exists"
+else
+    mkdir -p "$OUTPUTS/w192"
+    PYTHONUNBUFFERED=1 python train.py \
+        --config configs/frame_fc_w192.yaml \
+        --output-dir "$OUTPUTS/w192"
+    echo "  DONE: Training complete at $(date)"
+fi
 echo ""
 
 # ──────────────────────────────────────────────────────────────────
 # Step 6: Export + evaluate
 # ──────────────────────────────────────────────────────────────────
 echo "[Step 6/6] Export + evaluate"
-mkdir -p "$OUTPUTS/w192/export" "$OUTPUTS/w192/eval"
+if [ -f "$OUTPUTS/w192/export/frame_beat_model_data_int8.tflite" ]; then
+    echo "  SKIP: TFLite model already exported"
+else
+    mkdir -p "$OUTPUTS/w192/export"
+    python scripts/export_tflite.py \
+        --config configs/frame_fc_w192.yaml \
+        --model "$OUTPUTS/w192/best_model.pt" \
+        --output-dir "$OUTPUTS/w192/export"
+    echo "  Export complete"
+fi
 
-python scripts/export_tflite.py \
-    --config configs/frame_fc_w192.yaml \
-    --model "$OUTPUTS/w192/best_model.pt" \
-    --output-dir "$OUTPUTS/w192/export"
-echo "  Export complete"
-
-python evaluate.py \
-    --config configs/frame_fc_w192.yaml \
-    --model "$OUTPUTS/w192/best_model.pt" \
-    --audio-dir ../blinky-test-player/music/edm \
-    --output-dir "$OUTPUTS/w192/eval"
-echo "  Evaluation complete"
+if [ -f "$OUTPUTS/w192/eval/eval_results.json" ]; then
+    echo "  SKIP: Evaluation already complete"
+else
+    mkdir -p "$OUTPUTS/w192/eval"
+    python evaluate.py \
+        --config configs/frame_fc_w192.yaml \
+        --model "$OUTPUTS/w192/best_model.pt" \
+        --audio-dir ../blinky-test-player/music/edm \
+        --output-dir "$OUTPUTS/w192/eval"
+    echo "  Evaluation complete"
+fi
 
 # Print results
 echo ""
@@ -189,11 +203,17 @@ echo "============================================================"
 echo ""
 python3 -c "
 import json
-with open('$OUTPUTS/w192/eval/eval_results.json') as f:
-    data = json.load(f)
-f1s = [t['f1'] for t in data]
-db = [t['db_f1'] for t in data]
-print(f'  W192 Result: Beat F1={sum(f1s)/len(f1s):.3f}, DB F1={sum(db)/len(db):.3f} ({len(data)} tracks)')
+try:
+    with open('$OUTPUTS/w192/eval/eval_results.json') as f:
+        data = json.load(f)
+    if data:
+        f1s = [t['f1'] for t in data]
+        db = [t.get('db_f1', 0.0) for t in data]
+        print(f'  W192 Result: Beat F1={sum(f1s)/len(f1s):.3f}, DB F1={sum(db)/len(db):.3f} ({len(data)} tracks)')
+    else:
+        print('  W192 Result: No evaluation data found.')
+except Exception as e:
+    print(f'  W192 Result: ERROR reading results ({e})')
 "
 echo ""
 echo "Next: Deploy model to devices and run on-device A/B test"
