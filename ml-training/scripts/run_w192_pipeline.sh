@@ -78,7 +78,8 @@ else
     PYTHONUNBUFFERED=1 python scripts/batch_demucs_separate.py \
         --audio-dir "$AUDIO_DIR" \
         --output-dir "$STEMS_DIR" \
-        --device cuda
+        --device cuda \
+        --quarantine "$DATA_ROOT/labels/consensus_v4/quarantine.txt"
     echo "  DONE: Demucs separation complete at $(date)"
 fi
 echo ""
