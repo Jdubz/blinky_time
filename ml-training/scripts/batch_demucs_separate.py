@@ -94,7 +94,8 @@ def separate_track(
 
     # Free GPU memory to prevent fragmentation over 7000 tracks
     del sources, wav
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available() and str(device) != "cpu":
+        torch.cuda.empty_cache()
 
     return True
 

@@ -117,7 +117,8 @@ def analyze_single(audio_path: Path, model, device, demix_dir, spec_dir):
         spec_path.unlink(missing_ok=True)
 
     # Free GPU memory between tracks to prevent fragmentation
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available() and device != "cpu":
+        torch.cuda.empty_cache()
 
     return {
         "system": "allin1",
@@ -192,9 +193,9 @@ def main():
         audio_path = cmd.get("audio_path", "")
         output_path = cmd.get("output_path", "")
 
-        # Redirect stdout during analysis (Demucs C-level output)
+        # Redirect stdout during analysis (Demucs C-level output),
+        # restore in finally block to guarantee JSON response goes to stdout.
         os.dup2(stderr_fd, stdout_fd)
-
         try:
             t_track = time.perf_counter()
             result = analyze_single(
@@ -210,20 +211,17 @@ def main():
             print(f"[allin1-batch] {processed}: {Path(audio_path).name} "
                   f"({elapsed:.1f}s, {len(result['beats'])} beats)",
                   file=sys.stderr)
-
-            # Restore stdout for JSON response
-            os.dup2(saved_stdout_fd, stdout_fd)
-            print(json.dumps({"audio_path": audio_path, "success": True,
-                              "error": ""}),
-                  flush=True)
+            response = {"audio_path": audio_path, "success": True, "error": ""}
 
         except Exception as e:
             errors += 1
-            # Restore stdout for JSON response
+            response = {"audio_path": audio_path, "success": False,
+                        "error": str(e)[:200]}
+        finally:
+            # Always restore stdout before writing JSON response
             os.dup2(saved_stdout_fd, stdout_fd)
-            print(json.dumps({"audio_path": audio_path, "success": False,
-                              "error": str(e)[:200]}),
-                  flush=True)
+
+        print(json.dumps(response), flush=True)
 
     # Restore stdout
     os.dup2(saved_stdout_fd, stdout_fd)

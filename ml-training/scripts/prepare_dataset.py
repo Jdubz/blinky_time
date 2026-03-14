@@ -606,7 +606,15 @@ def main():
     output_dir = Path(args.output_dir or cfg["data"]["processed_dir"])
     rir_dir = Path(args.rir_dir) if args.rir_dir else Path(cfg["data"].get("rir_dir", "data/rir"))
     stems_dir = Path(args.stems_dir) if args.stems_dir else None
-    stem_variant_list = (args.stem_variants or "drums").split(",") if stems_dir else None
+    stem_variant_list = None
+    if stems_dir:
+        valid_variants = {"drums", "no_vocals", "drums_bass"}
+        stem_variant_list = [v.strip() for v in (args.stem_variants or "drums").split(",")]
+        unknown = set(stem_variant_list) - valid_variants
+        if unknown:
+            print(f"ERROR: Unknown stem variants: {unknown}. "
+                  f"Valid options: {sorted(valid_variants)}", file=sys.stderr)
+            sys.exit(1)
     seed = args.seed if args.seed is not None else cfg["training"]["seed"]
 
     if args.device is None or args.device == "auto":

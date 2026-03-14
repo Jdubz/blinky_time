@@ -21,13 +21,14 @@ Prints a JSON object to stdout:
     }
 """
 
-import contextlib
-import io
 import json
 import os
 import sys
 
 import numpy as np
+
+
+_dbn_threshold_patched = False
 
 
 def _patch_dbn_threshold():
@@ -44,6 +45,11 @@ def _patch_dbn_threshold():
     Must patch allin1.helpers (where the bound name lives), not just
     allin1.postprocessing.metrical (the defining module).
     """
+    global _dbn_threshold_patched
+    if _dbn_threshold_patched:
+        return
+    _dbn_threshold_patched = True
+
     import allin1.helpers as helpers
     import allin1.postprocessing.metrical as metrical
     from allin1.typings import AllInOneOutput
