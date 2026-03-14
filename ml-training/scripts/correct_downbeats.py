@@ -618,30 +618,30 @@ def process_all(
         print(f"  {corrected_count} tracks corrected, "
               f"{skipped} copied as-is")
 
-        # Move quarantined tracks out of audio dirs so they're excluded from
-        # all downstream processing (labeling, separation, training)
-        audio_root = Path(os.environ.get("BLINKY_DATA_ROOT",
-                                          "/mnt/storage/blinky-ml-data")) / "audio"
-        quarantine_dir = audio_root / "quarantined"
+        # Move quarantined tracks OUTSIDE the audio/ tree so prepare_dataset.py's
+        # rglob won't find them. Preserve subdir structure to avoid overwriting
+        # when the same stem exists in both combined/ and fma/.
+        data_root = Path(os.environ.get("BLINKY_DATA_ROOT",
+                                         "/mnt/storage/blinky-ml-data"))
+        audio_root = data_root / "audio"
+        quarantine_dir = data_root / "quarantined"
         quarantine_dir.mkdir(parents=True, exist_ok=True)
         moved = 0
-        manifest_lines = []
         for stem in sorted(quarantine_stems):
-            reason = ""
-            for m in [meta for meta in [None]]:  # get reason from skip_reasons
-                pass
             for subdir in ["combined", "fma"]:
                 for ext in [".mp3", ".wav", ".flac", ".ogg"]:
                     src = audio_root / subdir / f"{stem}{ext}"
                     if src.exists():
-                        shutil.move(str(src), str(quarantine_dir / src.name))
+                        dest = quarantine_dir / subdir
+                        dest.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(src), str(dest / src.name))
                         moved += 1
-            manifest_lines.append(stem)
 
-        # Write manifest for auditability
+        # Append manifest for auditability (which tracks were moved and when)
         manifest_path = quarantine_dir / "manifest.txt"
         with open(manifest_path, "a") as f:
-            f.write(f"# Quarantined by correct_downbeats.py on {os.popen('date').read().strip()}\n")
+            from datetime import datetime
+            f.write(f"# {datetime.now().isoformat()} — {len(quarantine_stems)} tracks\n")
             for stem in sorted(quarantine_stems):
                 f.write(f"{stem}\n")
 

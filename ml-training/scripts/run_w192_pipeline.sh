@@ -55,16 +55,16 @@ if [ ! -f "data/calibration/mic_profile.npz" ]; then
 fi
 echo "  Mic profile: OK"
 
-STORAGE_FREE_KB=$(df --output=avail /mnt/storage | tail -1)
-NVMe_FREE_KB=$(df --output=avail /home | tail -1)
-echo "  Storage free: $((STORAGE_FREE_KB / 1024 / 1024)) GB (need ~${REQUIRED_STORAGE_GB} GB for stems)"
-echo "  NVMe free: $((NVMe_FREE_KB / 1024 / 1024)) GB (need ~${REQUIRED_NVME_GB} GB for data)"
+STORAGE_FREE_KB=$(df --output=avail "$DATA_ROOT" | tail -1)
+NVMe_FREE_KB=$(df --output=avail "data/processed" | tail -1)
+echo "  Storage free ($DATA_ROOT): $((STORAGE_FREE_KB / 1024 / 1024)) GB (need ~${REQUIRED_STORAGE_GB} GB for stems)"
+echo "  NVMe free (data/processed): $((NVMe_FREE_KB / 1024 / 1024)) GB (need ~${REQUIRED_NVME_GB} GB for data)"
 
 if [ "$STORAGE_FREE_KB" -lt $((REQUIRED_STORAGE_GB * 1024 * 1024)) ]; then
-    echo "  WARNING: Less than ${REQUIRED_STORAGE_GB} GB free on /mnt/storage — stems may not fit"
+    echo "  WARNING: Less than ${REQUIRED_STORAGE_GB} GB free — stems may not fit"
 fi
 if [ "$NVMe_FREE_KB" -lt $((REQUIRED_NVME_GB * 1024 * 1024)) ]; then
-    echo "  WARNING: Less than ${REQUIRED_NVME_GB} GB free on NVMe — processed data may not fit"
+    echo "  WARNING: Less than ${REQUIRED_NVME_GB} GB free — processed data may not fit"
 fi
 echo ""
 
