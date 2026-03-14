@@ -66,6 +66,12 @@ MIN_TOTAL_VOTES = 3.0
 # Gap filling: IBI ratio threshold to detect a missing beat
 GAP_THRESHOLD = 1.5
 
+# Beat grid regularity: CV above this is too irregular for phase voting
+CONSENSUS_GRID_MAX_CV = 0.35
+
+# Madmom fallback grid: must be this regular to substitute for consensus
+MADMOM_GRID_MAX_CV = 0.20
+
 
 # ---------------------------------------------------------------------------
 # Core algorithm
@@ -143,7 +149,9 @@ def vote_on_phase(
         return phase_scores, 0, 0.0
 
     if len(sorted_scores) < 2 or sorted_scores[1] == 0:
-        margin = float("inf")
+        # Unanimous vote — use None to avoid non-finite JSON values.
+        # Callers treat None as "exceeds any threshold" (unanimous).
+        margin = None
     else:
         margin = sorted_scores[0] / sorted_scores[1]
 
@@ -274,7 +282,7 @@ def correct_track_downbeats(
     _, cv = check_beat_regularity(beat_times)
     use_madmom_grid = False
 
-    if cv > 0.35:
+    if cv > CONSENSUS_GRID_MAX_CV:
         # Fallback: if the consensus grid is noisy but madmom's own grid is
         # regular, use madmom's beats as the reference for phase indexing.
         # This happens when 4 systems merge produces spurious beats but
@@ -284,7 +292,7 @@ def correct_track_downbeats(
         mm_dbs = np.array(mm.get("downbeats", []))
         if len(mm_beats) >= MIN_BEATS and len(mm_dbs) >= 2:
             _, mm_cv = check_beat_regularity(mm_beats)
-            if mm_cv < 0.20:
+            if mm_cv < MADMOM_GRID_MAX_CV:
                 beat_times = mm_beats
                 n_beats = len(beat_times)
                 use_madmom_grid = True
@@ -325,7 +333,7 @@ def correct_track_downbeats(
     total_votes = float(np.sum(phase_scores))
     meta["phase_scores"] = [round(float(s), 2) for s in phase_scores]
     meta["phase"] = best_phase
-    meta["margin"] = round(margin, 3)
+    meta["margin"] = round(margin, 3) if margin is not None else None
     meta["total_votes"] = round(total_votes, 2)
 
     # Reject if insufficient evidence
@@ -341,18 +349,19 @@ def correct_track_downbeats(
     #    ambiguity — apply with lower confidence since grid is still correct
     confidence = "high"
 
-    if margin < min_margin:
+    # margin is None when unanimous (runner-up score is 0) — always passes thresholds
+    if margin is not None and margin < min_margin:
         # Try madmom-only phase vote as tiebreaker
         madmom_resolved = False
         if "madmom" in system_db_indices:
             mm_only = {"madmom": system_db_indices["madmom"]}
             mm_scores, mm_phase, mm_margin = vote_on_phase(mm_only, meter)
             mm_votes = float(np.sum(mm_scores))
-            if mm_margin >= min_margin and mm_votes >= 2.0:
+            if (mm_margin is None or mm_margin >= min_margin) and mm_votes >= 2.0:
                 best_phase = mm_phase
                 margin = mm_margin
                 meta["phase"] = best_phase
-                meta["margin"] = round(margin, 3)
+                meta["margin"] = round(margin, 3) if margin is not None else None
                 confidence = "madmom_tiebreak"
                 madmom_resolved = True
 
@@ -365,7 +374,7 @@ def correct_track_downbeats(
             mm_dbs_fb = np.array(mm.get("downbeats", []))
             if len(mm_beats_fb) >= MIN_BEATS and len(mm_dbs_fb) >= 2:
                 _, mm_cv_fb = check_beat_regularity(mm_beats_fb)
-                if mm_cv_fb < 0.20:
+                if mm_cv_fb < MADMOM_GRID_MAX_CV:
                     # Re-do phase voting with madmom grid
                     fb_indices = {}
                     for sn in ["beat_this", "madmom"]:
@@ -381,13 +390,13 @@ def correct_track_downbeats(
                         fb_scores, fb_phase, fb_margin = vote_on_phase(
                             fb_indices, meter
                         )
-                        if fb_margin >= min_margin:
+                        if fb_margin is None or fb_margin >= min_margin:
                             best_phase = fb_phase
                             margin = fb_margin
                             phase_scores = fb_scores
                             total_votes = float(np.sum(fb_scores))
                             meta["phase"] = best_phase
-                            meta["margin"] = round(margin, 3)
+                            meta["margin"] = round(margin, 3) if margin is not None else None
                             meta["total_votes"] = round(total_votes, 2)
                             meta["phase_scores"] = [
                                 round(float(s), 2) for s in fb_scores
@@ -403,13 +412,14 @@ def correct_track_downbeats(
             phase_diff = abs(int(sorted_phases[0]) - int(sorted_phases[1]))
             is_half_bar = (phase_diff == meter // 2)
 
-            if is_half_bar and margin >= 1.0:
+            if is_half_bar and margin is not None and margin >= 1.0:
                 # Half-bar ambiguity with at least a slight preference.
                 # Apply the grid — the meter structure is correct either way.
                 confidence = "half_bar_ambiguous"
             else:
+                margin_str = f"{margin:.2f}" if margin is not None else "unanimous"
                 meta["reason"] = (
-                    f"low margin ({margin:.2f} < {min_margin})"
+                    f"low margin ({margin_str} < {min_margin})"
                 )
                 return consensus, meta
 

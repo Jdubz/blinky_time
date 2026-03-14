@@ -3772,7 +3772,7 @@
     "method": "grid_phase_vote",
     "meter": 4,
     "phase": 1,
-    "margin": Infinity,
+    "margin": null,
     "confidence": "high",
     "total_votes": 120.5,
     "phase_scores": [

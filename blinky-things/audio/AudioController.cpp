@@ -107,6 +107,7 @@ bool AudioController::begin(uint32_t sampleRate) {
     // (pfInitialized_/fwdInitialized_/pfRngState_/pfCooldown_ init removed v64 — PF and forward filter removed)
     pllPhaseIntegral_ = 0.0f;  // Reset PLL integral accumulator (v45)
     lastSnapOffset_ = 0;       // Reset onset snap hysteresis (v65)
+    snapConsistencyCount_ = 0; // Reset snap consistency counter (v65)
     downbeatSmoothed_ = 0.0f;  // Reset downbeat EMA (v65)
     beatInMeasure_ = 0;        // Reset measure counter (v65)
     effectiveTightness_ = cbssTightness;  // Initialize adaptive tightness (v45)
@@ -1564,11 +1565,12 @@ void AudioController::detectBeat() {
     if (timeToNextBeat_ <= -beatDeclareDelay) {
         // Adaptive threshold: suppress beats during silence/breakdowns
         // When cbssThresholdFactor > 0, require current CBSS > factor * running mean.
-        // Grace period: bypass threshold for the first 5 beats so silence→music
+        // Grace period: bypass threshold for the first few beats so silence→music
         // transitions aren't suppressed while cbssMean_ catches up.
+        static constexpr int CBSS_GRACE_PERIOD_BEATS = 5;
         float currentCBSS = cbssBuffer_[(sampleCounter_ > 0 ? sampleCounter_ - 1 : 0) % OSS_BUFFER_SIZE];
         bool cbssAboveThreshold = (cbssThresholdFactor <= 0.0f) ||
-                                   (beatCount_ < 5) ||
+                                   (beatCount_ < CBSS_GRACE_PERIOD_BEATS) ||
                                    (currentCBSS > cbssThresholdFactor * cbssMean_);
 
         if (cbssAboveThreshold) {
@@ -1593,10 +1595,11 @@ void AudioController::detectBeat() {
                     }
                 }
                 // Hysteresis: prefer previous snap position if nearly as strong (>80%).
-                // Only apply after 2+ consecutive beats at the same offset, so
+                // Only apply after consecutive beats at the same offset, so
                 // syncopated music can still shift the snap point immediately.
+                static constexpr uint8_t SNAP_HYSTERESIS_MIN_CONSISTENCY = 2;
                 if (bestOSS > 0.0f && abs(bestSnapOffset - lastSnapOffset_) > 1
-                    && snapConsistencyCount_ >= 2) {
+                    && snapConsistencyCount_ >= SNAP_HYSTERESIS_MIN_CONSISTENCY) {
                     int prevIdx = sampleCounter_ - 1 - lastSnapOffset_;
                     if (prevIdx >= 0 && lastSnapOffset_ <= W) {
                         float prevOSS = ossBuffer_[prevIdx % OSS_BUFFER_SIZE];
@@ -1615,6 +1618,10 @@ void AudioController::detectBeat() {
                 lastBeatSample_ = sampleCounter_ - bestSnapOffset;
             } else {
                 lastBeatSample_ = sampleCounter_;
+                // Reset snap state when onset snap is disabled so stale
+                // consistency counts don't gate hysteresis if re-enabled.
+                snapConsistencyCount_ = 0;
+                lastSnapOffset_ = 0;
             }
 
             // PLL proportional+integral phase correction (v45)
@@ -1714,7 +1721,8 @@ void AudioController::detectBeat() {
         // Decay PLL integral during silence to prevent wind-up.
         // Without this, the integral accumulates large values during breakdowns
         // and causes a phase jump when beats resume.
-        pllPhaseIntegral_ *= 0.95f;
+        static constexpr float PLL_INTEGRAL_DECAY_FACTOR = 0.95f;
+        pllPhaseIntegral_ *= PLL_INTEGRAL_DECAY_FACTOR;
     }
 
     // Derive phase (deterministic counter-based)
