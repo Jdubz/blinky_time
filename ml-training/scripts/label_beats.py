@@ -3,14 +3,20 @@
 
 Runs multiple beat tracking algorithms on audio files and saves per-system
 labels as separate JSON files. Supports parallel workers for CPU-bound systems
-(essentia, librosa, madmom) while Beat This! runs on GPU sequentially.
+while GPU systems run sequentially with shared models.
 
 Supported systems:
-  - beat_this  : Beat This! (ISMIR 2024 SOTA), GPU-accelerated
-  - essentia   : essentia RhythmExtractor2013, CPU
-  - librosa    : librosa beat_track, CPU
-  - madmom     : madmom RNN+DBN beat/downbeat tracking, CPU
-                 (requires separate Python 3.11 venv at venv311/)
+  - beat_this    : Beat This! (ISMIR 2024 SOTA), GPU-accelerated
+  - essentia     : essentia RhythmExtractor2013, CPU
+  - librosa      : librosa beat_track, CPU
+  - madmom       : madmom RNN+DBN beat/downbeat tracking, CPU
+                   (requires separate Python 3.11 venv at venv311/)
+  - beatnet      : BeatNet CRNN + particle filtering, beat/downbeat/meter
+                   (requires venv311 — depends on madmom)
+  - allin1       : All-In-One structure-aware beat/downbeat + segment analysis
+                   (requires venv311 — depends on madmom)
+  - demucs_beats : Demucs drum separation → Beat This! on isolated drum stem
+                   (GPU, provides independent beat/downbeat from drums only)
 
 Output: For each audio file and system, creates {stem}.{system}.beats.json
 containing beat times, downbeat times, and estimated tempo.
@@ -25,13 +31,13 @@ Usage:
     python scripts/label_beats.py \
         --audio-dir /mnt/storage/blinky-ml-data/audio/combined \
         --output-dir data/labels/multi \
-        --systems beat_this,librosa
+        --systems beat_this,demucs_beats,beatnet
 
-    # More parallel workers for CPU-bound systems
+    # Only new systems (add to existing labels)
     python scripts/label_beats.py \
         --audio-dir /mnt/storage/blinky-ml-data/audio/combined \
         --output-dir data/labels/multi \
-        --systems madmom --workers 5
+        --systems beatnet,allin1,demucs_beats
 """
 
 import argparse
@@ -51,9 +57,14 @@ from tqdm import tqdm
 ML_ROOT = Path(__file__).resolve().parent.parent
 VENV311_PYTHON = ML_ROOT / "venv311" / "bin" / "python"
 
-ALL_SYSTEMS = ["beat_this", "essentia", "librosa", "madmom"]
+ALL_SYSTEMS = ["beat_this", "essentia", "librosa", "madmom",
+               "beatnet", "allin1", "demucs_beats"]
 # Systems that benefit from parallel workers (CPU-bound, no shared model)
 CPU_SYSTEMS = {"essentia", "librosa", "madmom"}
+# Systems that run via venv311 subprocess (madmom dependency, Python 3.11 only)
+VENV311_SYSTEMS = {"madmom", "beatnet", "allin1"}
+# Systems that use GPU sequentially (shared model or heavy GPU use)
+GPU_SYSTEMS = {"beat_this", "demucs_beats"}
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +132,68 @@ def label_librosa(audio_path: Path, **_kwargs) -> dict:
     }
 
 
+_demucs_separator = None
+
+
+def label_demucs_beats(audio_path: Path, device: str = "cuda") -> dict:
+    """Separate drums with Demucs, then run Beat This! on the drum stem.
+
+    Provides beat/downbeat annotations from the isolated percussion track,
+    which has fundamentally different error characteristics from full-mix
+    analysis. Published research (Beat Transformer ISMIR 2022, Drum-Aware
+    Ensemble IEEE 2021) confirms this improves downbeat tracking.
+    """
+    global _demucs_separator, _beat_this_model
+    import torch
+    import torchaudio
+
+    # Initialize demucs separator (reuse across calls)
+    if _demucs_separator is None:
+        import demucs.pretrained
+        from demucs.apply import apply_model
+        _demucs_separator = demucs.pretrained.get_model("htdemucs")
+        _demucs_separator.to(device)
+        _demucs_separator.eval()
+
+    # Ensure Beat This! is initialized
+    if _beat_this_model is None:
+        _init_beat_this(device)
+
+    # Load audio for demucs (expects stereo float32 at model's samplerate)
+    wav, sr = torchaudio.load(str(audio_path))
+    if wav.shape[0] == 1:
+        wav = wav.repeat(2, 1)  # mono → stereo
+    if sr != _demucs_separator.samplerate:
+        wav = torchaudio.functional.resample(wav, sr, _demucs_separator.samplerate)
+
+    # Separate drums
+    from demucs.apply import apply_model
+    with torch.no_grad():
+        sources = apply_model(_demucs_separator, wav.unsqueeze(0).to(device))
+    # sources: (1, n_sources, channels, samples)
+    # source order matches model.sources: ['drums', 'bass', 'other', 'vocals']
+    drum_idx = _demucs_separator.sources.index("drums")
+    drums = sources[0, drum_idx].cpu()  # (channels, samples)
+
+    # Save drum stem to temp file for Beat This!
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+        torchaudio.save(tmp_path, drums, _demucs_separator.samplerate)
+
+    try:
+        beats, downbeats = _beat_this_model(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    return {
+        "system": "demucs_beats",
+        "beats": [round(float(t), 4) for t in beats],
+        "downbeats": [round(float(t), 4) for t in downbeats],
+        "tempo": _bpm_from_beats(beats),
+    }
+
+
 def _label_cpu_worker(audio_path: str, output_path: str, system: str,
                       threads: int) -> tuple[str, str, bool, str]:
     """Process a single (file, system) pair in a worker process.
@@ -133,8 +206,9 @@ def _label_cpu_worker(audio_path: str, output_path: str, system: str,
                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         env[var] = str(threads)
 
-    if system == "madmom":
-        return _label_madmom_subprocess(audio_path, output_path, env)
+    # venv311 subprocess systems (madmom dependency, Python 3.11 only)
+    if system in VENV311_SYSTEMS:
+        return _label_venv311_subprocess(audio_path, output_path, system, env)
 
     # For essentia/librosa, run in-process (already in a worker process)
     # but set thread limits first
@@ -157,33 +231,50 @@ def _label_cpu_worker(audio_path: str, output_path: str, system: str,
         return (audio_path, system, False, str(e)[:200])
 
 
-def _label_madmom_subprocess(audio_path: str, output_path: str,
-                             env: dict) -> tuple[str, str, bool, str]:
-    """Run madmom via subprocess to venv311."""
-    helper_script = Path(__file__).resolve().parent / "_madmom_helper.py"
+def _label_venv311_subprocess(audio_path: str, output_path: str,
+                               system: str,
+                               env: dict) -> tuple[str, str, bool, str]:
+    """Run a labeling system via subprocess to venv311 (Python 3.11).
+
+    Systems that depend on madmom (which requires Python <=3.11) are run
+    via helper scripts in venv311. Each system has its own helper script:
+      madmom  → _madmom_helper.py
+      beatnet → _beatnet_helper.py
+      allin1  → _allin1_helper.py
+    """
+    helper_map = {
+        "madmom": "_madmom_helper.py",
+        "beatnet": "_beatnet_helper.py",
+        "allin1": "_allin1_helper.py",
+    }
+    helper_name = helper_map.get(system)
+    if not helper_name:
+        return (audio_path, system, False, f"no venv311 helper for {system}")
+
+    helper_script = Path(__file__).resolve().parent / helper_name
     if not VENV311_PYTHON.exists():
-        return (audio_path, "madmom", False,
+        return (audio_path, system, False,
                 f"venv311 not found at {VENV311_PYTHON}")
     if not helper_script.exists():
-        return (audio_path, "madmom", False,
+        return (audio_path, system, False,
                 f"helper not found at {helper_script}")
 
     try:
         result = subprocess.run(
             [str(VENV311_PYTHON), str(helper_script), audio_path],
-            capture_output=True, text=True, timeout=300, env=env,
+            capture_output=True, text=True, timeout=600, env=env,
         )
         if result.returncode != 0:
-            return (audio_path, "madmom", False, result.stderr.strip()[:200])
+            return (audio_path, system, False, result.stderr.strip()[:200])
 
         data = json.loads(result.stdout)
         with open(output_path, "w") as f:
             json.dump(data, f, indent=2)
-        return (audio_path, "madmom", True, "")
+        return (audio_path, system, True, "")
     except subprocess.TimeoutExpired:
-        return (audio_path, "madmom", False, "timeout (300s)")
+        return (audio_path, system, False, "timeout (600s)")
     except Exception as e:
-        return (audio_path, "madmom", False, str(e)[:200])
+        return (audio_path, system, False, str(e)[:200])
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +359,7 @@ def main():
             out = output_path_for(f, system, output_dir)
             if out.exists() and not args.overwrite:
                 skipped += 1
-            elif system in CPU_SYSTEMS:
+            elif system in CPU_SYSTEMS or system in VENV311_SYSTEMS:
                 cpu_work.append((f, system))
             else:
                 gpu_work.append((f, system))
@@ -288,15 +379,23 @@ def main():
     success = 0
     errors = []
 
-    # --- GPU work: Beat This! (sequential, shared model) ---
+    # --- GPU work: sequential with shared models ---
     if gpu_work:
-        print(f"\nLoading Beat This! model on {args.device}...")
-        _init_beat_this(device=args.device)
-        print("Beat This! model loaded.")
+        # Group by system to initialize models once
+        gpu_systems_needed = {s for _, s in gpu_work}
+        if "beat_this" in gpu_systems_needed or "demucs_beats" in gpu_systems_needed:
+            print(f"\nLoading Beat This! model on {args.device}...")
+            _init_beat_this(device=args.device)
+            print("Beat This! model loaded.")
 
-        for audio_file, system in tqdm(gpu_work, desc="beat_this (GPU)"):
+        for audio_file, system in tqdm(gpu_work, desc="GPU (sequential)"):
             try:
-                result = label_beat_this(audio_file, device=args.device)
+                if system == "beat_this":
+                    result = label_beat_this(audio_file, device=args.device)
+                elif system == "demucs_beats":
+                    result = label_demucs_beats(audio_file, device=args.device)
+                else:
+                    raise ValueError(f"unknown GPU system: {system}")
                 out = output_path_for(audio_file, system, output_dir)
                 with open(out, "w") as fp:
                     json.dump(result, fp, indent=2)
