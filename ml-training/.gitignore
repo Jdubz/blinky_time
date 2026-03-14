@@ -9,6 +9,12 @@ data/beat_sync/*.npy
 # Calibration captures and generated audio (large, reproducible via calibrate_mic.py)
 data/calibration/
 
+# Demucs separation byproducts (allin1 temp stems and spectrograms).
+# May appear at ml-training/demix/, data/labels/demix/, or other locations
+# depending on --output-dir / --demix-dir settings.
+**/demix/
+**/spec/
+
 # Training outputs
 outputs/
 

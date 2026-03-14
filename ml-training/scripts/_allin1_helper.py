@@ -22,16 +22,31 @@ Prints a JSON object to stdout:
 """
 
 import json
+import os
 import sys
 
 import numpy as np
 
+from _allin1_common import patch_dbn_threshold
+
 
 def analyze(audio_path: str) -> dict:
     """Run All-In-One analysis for beats, downbeats, and segments."""
+    patch_dbn_threshold()
     import allin1
 
-    result = allin1.analyze(audio_path)
+    # Redirect stdout → stderr at the file descriptor level during analyze()
+    # because Demucs writes to C-level stdout (not Python sys.stdout),
+    # which contaminates the JSON output that label_beats.py parses.
+    stdout_fd = sys.stdout.fileno()
+    stderr_fd = sys.stderr.fileno()
+    saved_stdout_fd = os.dup(stdout_fd)
+    os.dup2(stderr_fd, stdout_fd)
+    try:
+        result = allin1.analyze(audio_path)
+    finally:
+        os.dup2(saved_stdout_fd, stdout_fd)
+        os.close(saved_stdout_fd)
 
     beats = [round(float(t), 4) for t in result.beats]
     downbeats = [round(float(t), 4) for t in result.downbeats]

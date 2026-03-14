@@ -175,7 +175,7 @@ AdaptiveMic (AGC + normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── FrameBeatNN (frame-level FC, ~60-200µs) → ODF
+    ├── FrameBeatNN (frame-level FC, ~0.2-5ms) → ODF
     ↓
 AudioController (CBSS beat tracking + pulse detection)
     ↓
@@ -196,14 +196,14 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output)
 
 2. **Onset Detection**
-   - `FrameBeatNN.h` - **Sole ODF**: Frame-level FC neural network (56.8 KB INT8, ~60-200µs inference)
-   - Input: 32 frames × 26 raw mel bands (0.5s window). Output: beat_activation + downbeat_activation
+   - `FrameBeatNN.h` - **Sole ODF**: Frame-level FC neural network (up to 314 KB INT8, ~0.2-5ms inference)
+   - Input: up to 192 frames × 26 raw mel bands (up to 3.07s window). Output: beat_activation + downbeat_activation
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple ODF)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: FrameBeatNN (frame-level FC, ~60-200µs). Falls back to mic level if model fails to load.
+   - ODF source: FrameBeatNN (frame-level FC, ~0.2-5ms). Falls back to mic level if model fails to load.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -346,8 +346,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~20 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + 16 KB tensor arena + 3.3 KB mel frame buffer).
-- Flash: ~365 KB (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~40 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + 16 KB tensor arena + up to 19.5 KB mel frame buffer for W192).
+- Flash: ~625 KB with W192 model (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
@@ -394,7 +394,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
-- ✅ FrameBeatNN (frame-level FC, 56.8 KB INT8, deployed on all devices)
+- ✅ FrameBeatNN (frame-level FC, up to 314 KB INT8, deployed on all devices)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
@@ -420,7 +420,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Closed (mel-spectrogram CNN, v4-v9):**
 - All architectures (standard conv, BN-fused, DS-TCN) measured 79-98ms on Cortex-M4F — 8-10× over frame budget
-- Superseded by frame-level FC approach (~60-200µs at 15.6 Hz)
+- Superseded by frame-level FC approach (~0.2-5ms at 15.6 Hz)
 
 **Closed (beat-synchronous hybrid, March 2026):**
 - FC on accumulated spectral summaries at beat rate (~2 Hz). Circular dependency with CBSS, negligible discriminative power in per-beat features, misaligned with all leading approaches. Superseded by frame-level FC.
@@ -444,16 +444,16 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-FrameBeatNN — frame-level FC neural network (sole ODF, v67). FC(832→64→32→2), 55K params, 56.8 KB INT8.
+FrameBeatNN — frame-level FC neural network (sole ODF, v67). Up to FC(4992→64→32→2), up to 322K params, up to 314 KB INT8.
 Input: 32 frames × 26 raw mel bands (0.5s window at 62.5 Hz). Output: beat_activation (ODF for CBSS) + downbeat_activation.
-~60-200µs inference on Cortex-M4F. Deployed on all 3 devices (March 2026).
+~0.2-5ms inference on Cortex-M4F. Deployed on all 3 devices (March 2026).
 Fallback if model fails to load: mic_.getLevel() as simple energy ODF.
 Pulse detection: ODF threshold against running mean with tempo-adaptive cooldown (inlined from removed EnsembleFusion).
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 BandFlux/EnsembleDetector fully removed in v67 (~2600 lines, 10 files deleted).
 
 ### Key Features
-- **FrameBeatNN** (v65+): Frame-level FC neural network, sole ODF source. Per-tensor INT8 quantization (CMSIS-NN requirement). ~60-200µs inference at ~15.6 Hz.
+- **FrameBeatNN** (v65+): Frame-level FC neural network, sole ODF source. Per-tensor INT8 quantization (CMSIS-NN requirement). ~0.2-5ms inference at ~15.6 Hz.
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 68
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong

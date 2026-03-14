@@ -337,8 +337,10 @@ private:
     alignas(16) uint8_t tensorArena_[TENSOR_ARENA_SIZE];
 
     // Sliding window buffer for mel frames
-    // Max window: 64 frames (~1 second at 62.5 Hz). Actual size set from model.
-    static constexpr int MAX_WINDOW_FRAMES = 64;
+    // Max window: 192 frames (~3 seconds at 62.5 Hz). Covers 1.5 bars at 120 BPM
+    // or 1 full bar at 90 BPM — enough context for reliable downbeat detection.
+    // RAM: 192 × 26 × 4 = 19.5 KB. Flash: ~314 KB INT8 model (of ~500 KB budget).
+    static constexpr int MAX_WINDOW_FRAMES = 192;
     float windowBuffer_[MAX_WINDOW_FRAMES * INPUT_MEL_BANDS];
     int windowFrames_ = 0;     // Actual window size from model input shape
     int windowFilled_ = 0;     // How many frames we've written so far
