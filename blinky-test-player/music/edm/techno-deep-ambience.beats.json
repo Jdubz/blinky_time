@@ -2553,7 +2553,7 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 112.8943,
@@ -2573,7 +2573,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 113.7723,
@@ -2613,7 +2613,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 121.2997,
@@ -2643,5 +2643,24 @@
     },
     "tolerance_s": 0.05,
     "min_agreement": 2
+  },
+  "downbeat_correction": {
+    "version": "v4",
+    "method": "madmom_grid_phase_vote",
+    "meter": 4,
+    "phase": 0,
+    "margin": 143.286,
+    "confidence": "madmom_grid",
+    "total_votes": 101.0,
+    "phase_scores": [
+      100.3,
+      0.0,
+      0.7,
+      0.0
+    ],
+    "systems_used": [
+      "beat_this",
+      "madmom"
+    ]
   }
 }

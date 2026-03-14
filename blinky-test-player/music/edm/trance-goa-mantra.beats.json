@@ -503,7 +503,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 18.3693,
@@ -550,7 +550,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 20.1043,
@@ -598,7 +598,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 21.845,
@@ -646,7 +646,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 23.5808,
@@ -694,7 +694,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 25.31,
@@ -849,7 +849,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 30.9735,
@@ -896,7 +896,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 32.7142,
@@ -943,7 +943,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 34.4492,
@@ -991,7 +991,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 36.1899,
@@ -1039,7 +1039,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 37.9307,
@@ -1087,7 +1087,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 39.6714,
@@ -1135,7 +1135,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 41.4122,
@@ -1182,7 +1182,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 43.1471,
@@ -1230,7 +1230,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 44.8879,
@@ -1325,7 +1325,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 48.35,
@@ -1647,7 +1647,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 60.538,
@@ -1695,7 +1695,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 62.2837,
@@ -1742,7 +1742,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 64.0195,
@@ -1789,7 +1789,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 65.735,
@@ -1844,7 +1844,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 67.475,
@@ -1899,7 +1899,7 @@
         "librosa",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 69.231,
@@ -2025,7 +2025,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 73.555,
@@ -2151,7 +2151,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 77.05,
@@ -2214,7 +2214,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 78.79,
@@ -2347,7 +2347,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 82.255,
@@ -2418,7 +2418,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 84.033,
@@ -2480,7 +2480,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 85.75,
@@ -2667,7 +2667,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 90.94,
@@ -2747,7 +2747,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 92.68,
@@ -2880,7 +2880,7 @@
         "essentia",
         "librosa"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 96.16,
@@ -3032,5 +3032,24 @@
     },
     "tolerance_s": 0.05,
     "min_agreement": 2
+  },
+  "downbeat_correction": {
+    "version": "v4",
+    "method": "madmom_grid_phase_vote",
+    "meter": 4,
+    "phase": 0,
+    "margin": 8.982,
+    "confidence": "madmom_grid",
+    "total_votes": 115.3,
+    "phase_scores": [
+      100.6,
+      3.5,
+      11.2,
+      0.0
+    ],
+    "systems_used": [
+      "beat_this",
+      "madmom"
+    ]
   }
 }
