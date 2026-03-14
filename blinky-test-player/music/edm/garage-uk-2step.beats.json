@@ -11,7 +11,15 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
+    },
+    {
+      "time": 1.3025,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 1.76,
@@ -22,6 +30,14 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 2.2125,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 2.665,
@@ -4027,6 +4043,14 @@
       "isDownbeat": false
     },
     {
+      "time": 161.885,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 162.34,
       "expectTrigger": true,
       "strength": 0.5,
@@ -4034,7 +4058,7 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     }
   ],
   "tempo": 130.4,
@@ -4060,19 +4084,20 @@
     "version": "v4",
     "method": "grid_phase_vote",
     "meter": 4,
-    "phase": 2,
-    "margin": 1.836,
+    "phase": 0,
+    "margin": 1.95,
     "confidence": "high",
     "total_votes": 149.3,
     "phase_scores": [
-      50.0,
-      0.7,
-      91.8,
-      6.8
+      94.2,
+      6.8,
+      48.3,
+      0.0
     ],
     "systems_used": [
       "beat_this",
       "madmom"
-    ]
+    ],
+    "beats_inserted": 3
   }
 }

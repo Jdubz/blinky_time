@@ -2019,6 +2019,14 @@
       "isDownbeat": false
     },
     {
+      "time": 107.3871,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 108.0188,
       "expectTrigger": true,
       "strength": 0.5,
@@ -2036,7 +2044,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     }
   ],
   "tempo": 95.0,
@@ -2075,6 +2083,7 @@
     "systems_used": [
       "beat_this",
       "madmom"
-    ]
+    ],
+    "beats_inserted": 1
   }
 }

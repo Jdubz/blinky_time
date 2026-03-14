@@ -63,6 +63,9 @@ DEFAULT_MIN_MARGIN = 1.5
 # Minimum votes to accept a phase (across all systems, weighted)
 MIN_TOTAL_VOTES = 3.0
 
+# Gap filling: IBI ratio threshold to detect a missing beat
+GAP_THRESHOLD = 1.5
+
 
 # ---------------------------------------------------------------------------
 # Core algorithm
@@ -165,6 +168,62 @@ def check_beat_regularity(beat_times: np.ndarray) -> tuple[float, float]:
     return median_ibi, cv
 
 
+def fill_beat_gaps(hits: list[dict], gap_threshold: float = GAP_THRESHOLD) -> tuple[list[dict], int]:
+    """Fill gaps in the beat grid by interpolating missing beats.
+
+    Detects gaps where the inter-beat interval exceeds gap_threshold × median IBI,
+    and inserts synthetic beats at evenly-spaced positions within each gap.
+    Synthetic beats get strength=0 and a "synthetic" flag.
+
+    Returns:
+        filled_hits: new hits list with gaps filled
+        n_inserted: number of beats inserted
+    """
+    if len(hits) < 4:
+        return hits, 0
+
+    beat_times = np.array([h["time"] for h in hits])
+    ibis = np.diff(beat_times)
+    if len(ibis) < 2:
+        return hits, 0
+
+    median_ibi = float(np.median(ibis))
+    if median_ibi <= 0:
+        return hits, 0
+
+    filled = []
+    n_inserted = 0
+
+    for i, h in enumerate(hits):
+        filled.append(h)
+
+        if i < len(hits) - 1:
+            gap = beat_times[i + 1] - beat_times[i]
+            ratio = gap / median_ibi
+            if ratio > gap_threshold:
+                # How many beats are missing?
+                n_missing = round(ratio) - 1
+                if n_missing < 1:
+                    continue
+                # Interpolate evenly within the gap
+                step = gap / (n_missing + 1)
+                for j in range(1, n_missing + 1):
+                    t = round(float(beat_times[i] + j * step), 4)
+                    filled.append({
+                        "time": t,
+                        "expectTrigger": True,
+                        "strength": 0.0,
+                        "systems": [],
+                        "isDownbeat": False,  # Will be set by phase correction
+                        "synthetic": True,
+                    })
+                    n_inserted += 1
+
+    # Sort by time (inserted beats are appended after each gap)
+    filled.sort(key=lambda x: x["time"])
+    return filled, n_inserted
+
+
 def correct_track_downbeats(
     consensus: dict,
     system_beats: dict[str, dict],
@@ -181,7 +240,10 @@ def correct_track_downbeats(
         corrected: updated consensus dict with corrected downbeats
         meta: correction metadata
     """
-    hits = consensus["hits"]
+    # Fill gaps in the beat grid before doing anything else.
+    # This ensures the beat indices used for phase voting are contiguous.
+    raw_hits = consensus["hits"]
+    hits, n_beats_inserted = fill_beat_gaps(raw_hits)
     beat_times = np.array([h["time"] for h in hits])
     n_beats = len(beat_times)
 
@@ -189,12 +251,13 @@ def correct_track_downbeats(
         "action": "skip",
         "reason": "",
         "n_beats": n_beats,
+        "n_beats_inserted": n_beats_inserted,
         "meter": DEFAULT_METER,
         "phase": -1,
         "margin": 0.0,
         "total_votes": 0.0,
         "phase_scores": [],
-        "original_downbeats": sum(1 for h in hits if h.get("isDownbeat", False)),
+        "original_downbeats": sum(1 for h in raw_hits if h.get("isDownbeat", False)),
         "corrected_downbeats": 0,
         "systems_with_db": [],
         "confidence": "high",
@@ -355,25 +418,23 @@ def correct_track_downbeats(
 
     meta["confidence"] = confidence
 
-    # Apply correction: mark every meter-th beat at the winning phase.
-    # When using the madmom grid as reference, map each consensus beat to
-    # the nearest madmom beat index and check phase against that index.
+    # Apply correction to the gap-filled hits.
+    # When using the madmom grid as reference, map each beat to the nearest
+    # madmom beat index and check phase against that index.
     meta["action"] = "corrected"
-    consensus_hits = consensus["hits"]
-    consensus_beat_times = np.array([h["time"] for h in consensus_hits])
     corrected_hits = []
     n_corrected_db = 0
 
-    for i, h in enumerate(consensus_hits):
+    for i, h in enumerate(hits):
         new_h = dict(h)
         if use_madmom_grid:
-            # Map this consensus beat to nearest madmom beat index
+            # Map this beat to nearest madmom beat index
             dists = np.abs(beat_times - h["time"])
             nearest_mm_idx = int(np.argmin(dists))
             if dists[nearest_mm_idx] < MATCH_TOLERANCE * 2:
                 is_db = (nearest_mm_idx % meter) == best_phase
             else:
-                is_db = False  # No close madmom beat — can't determine
+                is_db = False
         else:
             is_db = (i % meter) == best_phase
         new_h["isDownbeat"] = is_db
@@ -395,6 +456,7 @@ def correct_track_downbeats(
         "total_votes": round(total_votes, 2),
         "phase_scores": meta["phase_scores"],
         "systems_used": meta["systems_with_db"],
+        "beats_inserted": n_beats_inserted,
     }
 
     return corrected, meta
@@ -433,6 +495,9 @@ def process_all(
     phase_diffs = []  # How many downbeats changed per track
     meter_hist = Counter()
     skip_reasons = Counter()
+    total_beats_inserted = 0
+    tracks_with_inserts = 0
+    quarantine_stems = []  # Tracks to exclude from training
 
     for i, fname in enumerate(files):
         stem = fname.replace(".beats.json", "")
@@ -454,12 +519,17 @@ def process_all(
             confidence_hist[meta.get("confidence", "high")] += 1
             diff = abs(meta["corrected_downbeats"] - meta["original_downbeats"])
             phase_diffs.append(diff)
+            n_ins = meta.get("n_beats_inserted", 0)
+            total_beats_inserted += n_ins
+            if n_ins > 0:
+                tracks_with_inserts += 1
 
             if output_dir and not analyze_only:
                 out_path = os.path.join(output_dir, fname)
                 with open(out_path, "w") as f:
                     json.dump(corrected, f, indent=2)
         else:
+            quarantine_stems.append(stem)
             reason = meta["reason"]
             # Aggregate skip reasons
             if "too few" in reason:
@@ -527,10 +597,24 @@ def process_all(
     for reason, count in skip_reasons.most_common():
         print(f"  {reason:25s}: {count:5d} ({100*count/total:.1f}%)")
 
+    if corrected_count > 0:
+        print(f"\n  Gap filling:")
+        print(f"    Tracks with filled gaps: {tracks_with_inserts}")
+        print(f"    Total beats inserted: {total_beats_inserted}")
+
     if output_dir and not analyze_only:
         print(f"\nOutput written to: {output_dir}")
         print(f"  {corrected_count} tracks corrected, "
               f"{skipped} copied as-is")
+
+        # Write quarantine list
+        quarantine_path = os.path.join(output_dir, "quarantine.txt")
+        with open(quarantine_path, "w") as f:
+            f.write("# Tracks excluded from training — unreliable downbeat labels\n")
+            f.write(f"# Generated by correct_downbeats.py ({len(quarantine_stems)} tracks)\n")
+            for stem in sorted(quarantine_stems):
+                f.write(f"{stem}\n")
+        print(f"  Quarantine list: {quarantine_path} ({len(quarantine_stems)} stems)")
 
 
 # ---------------------------------------------------------------------------

@@ -136,6 +136,14 @@
       "isDownbeat": true
     },
     {
+      "time": 5.7106,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 6.0262,
       "expectTrigger": true,
       "strength": 0.5,
@@ -2333,6 +2341,14 @@
       "isDownbeat": false
     },
     {
+      "time": 74.0044,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 74.3387,
       "expectTrigger": true,
       "strength": 0.75,
@@ -4192,6 +4208,38 @@
       "isDownbeat": false
     },
     {
+      "time": 131.4055,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 131.751,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 132.0965,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
+    },
+    {
+      "time": 132.442,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 132.7875,
       "expectTrigger": true,
       "strength": 0.5,
@@ -4200,6 +4248,14 @@
         "essentia"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 133.1071,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 133.4267,
@@ -4212,6 +4268,14 @@
       "isDownbeat": true
     },
     {
+      "time": 133.7464,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 134.066,
       "expectTrigger": true,
       "strength": 0.5,
@@ -4220,6 +4284,14 @@
         "essentia"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 134.383,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 134.7,
@@ -4233,6 +4305,14 @@
       "isDownbeat": true
     },
     {
+      "time": 135.025,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 135.35,
       "expectTrigger": true,
       "strength": 0.5,
@@ -4241,6 +4321,14 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 135.6975,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 136.045,
@@ -4253,6 +4341,14 @@
       "isDownbeat": true
     },
     {
+      "time": 136.3825,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 136.72,
       "expectTrigger": true,
       "strength": 0.5,
@@ -4261,6 +4357,38 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 137.0465,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 137.3729,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
+    },
+    {
+      "time": 137.6994,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 138.0258,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 138.3523,
@@ -4273,6 +4401,22 @@
       "isDownbeat": false
     },
     {
+      "time": 138.6892,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
+    },
+    {
+      "time": 139.0262,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 139.3631,
       "expectTrigger": true,
       "strength": 0.5,
@@ -4281,6 +4425,14 @@
         "madmom"
       ],
       "isDownbeat": false
+    },
+    {
+      "time": 139.6158,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 139.8685,
@@ -4300,7 +4452,7 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     },
     {
       "time": 140.3631,
@@ -4313,6 +4465,22 @@
       "isDownbeat": false
     },
     {
+      "time": 140.6998,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 141.0365,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
+    },
+    {
       "time": 141.3732,
       "expectTrigger": true,
       "strength": 0.5,
@@ -4320,7 +4488,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
     }
   ],
   "tempo": 179.1,
@@ -4344,21 +4512,22 @@
   },
   "downbeat_correction": {
     "version": "v4",
-    "method": "madmom_grid_phase_vote",
+    "method": "grid_phase_vote",
     "meter": 4,
-    "phase": 3,
-    "margin": 99.647,
-    "confidence": "madmom_grid",
-    "total_votes": 173.1,
+    "phase": 0,
+    "margin": 85.05,
+    "confidence": "high",
+    "total_votes": 174.8,
     "phase_scores": [
-      1.0,
+      170.1,
+      2.0,
       1.7,
-      1.0,
-      169.4
+      1.0
     ],
     "systems_used": [
       "beat_this",
       "madmom"
-    ]
+    ],
+    "beats_inserted": 21
   }
 }

@@ -5456,6 +5456,14 @@
       "isDownbeat": false
     },
     {
+      "time": 255.9565,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
       "time": 256.488,
       "expectTrigger": true,
       "strength": 0.5,
@@ -5463,7 +5471,7 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
     },
     {
       "time": 257.025,
@@ -5473,7 +5481,23 @@
         "beat_this",
         "madmom"
       ],
-      "isDownbeat": true
+      "isDownbeat": false
+    },
+    {
+      "time": 257.5163,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 258.0076,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
     },
     {
       "time": 258.4989,
@@ -5483,7 +5507,39 @@
         "essentia",
         "madmom"
       ],
-      "isDownbeat": false
+      "isDownbeat": true
+    },
+    {
+      "time": 258.9791,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 259.4592,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 259.9394,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": false,
+      "synthetic": true
+    },
+    {
+      "time": 260.4195,
+      "expectTrigger": true,
+      "strength": 0.0,
+      "systems": [],
+      "isDownbeat": true,
+      "synthetic": true
     },
     {
       "time": 260.8997,
@@ -5520,18 +5576,19 @@
     "method": "grid_phase_vote",
     "meter": 4,
     "phase": 0,
-    "margin": 14.176,
+    "margin": 13.503,
     "confidence": "high",
-    "total_votes": 207.4,
+    "total_votes": 208.4,
     "phase_scores": [
-      192.8,
-      13.6,
+      193.1,
+      14.3,
       0.0,
       1.0
     ],
     "systems_used": [
       "beat_this",
       "madmom"
-    ]
+    ],
+    "beats_inserted": 7
   }
 }
