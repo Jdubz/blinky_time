@@ -109,8 +109,6 @@ def main():
                         help="Output directory for separated stems")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu",
                         help="Device for Demucs inference (default: cuda)")
-    parser.add_argument("--quarantine", default=None,
-                        help="Quarantine file listing track stems to skip (one per line)")
     args = parser.parse_args()
 
     audio_dir = Path(args.audio_dir)
@@ -118,22 +116,6 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     files = find_audio_files(audio_dir)
-
-    # Skip quarantined tracks (corrupt audio, unreliable labels)
-    if args.quarantine:
-        q_path = Path(args.quarantine)
-        if q_path.exists():
-            q_stems = set()
-            with open(q_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        q_stems.add(line)
-            before = len(files)
-            files = [f for f in files if f.stem not in q_stems]
-            skipped = before - len(files)
-            if skipped:
-                print(f"Skipped {skipped} quarantined tracks")
     if not files:
         print(f"No audio files found in {audio_dir}", file=sys.stderr)
         sys.exit(1)
