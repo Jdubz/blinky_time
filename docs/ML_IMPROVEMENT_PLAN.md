@@ -25,29 +25,47 @@ downbeats), giving only 40.8% inter-system agreement.
 
 ### New systems (3)
 
-| System | Beats | Downbeats | Architecture | Why add |
-|--------|-------|-----------|-------------|---------|
-| demucs_beats | yes | yes | Demucs drum separation → Beat This! on drum stem | Independent errors from percussion-only analysis. Published +4% downbeat (ISMIR 2022) |
-| beatnet | yes | yes | CRNN + particle filter | Architecturally distinct from all others. Provides meter inference |
-| allin1 | yes | yes | NN + structure analysis | Structure-aware (verse/chorus). Trained on Harmonix human annotations |
+| System | Beats | Downbeats | Architecture | Status |
+|--------|-------|-----------|-------------|--------|
+| demucs_beats | yes | yes | Demucs drum separation → Beat This! on drum stem | Working. Labeling in progress. |
+| beatnet | yes | yes | CRNN + particle filter | Working. Labeling in progress (queued after demucs_beats GPU work). |
+| allin1 | yes | yes | NN + structure analysis | **Blocked**: natten 0.17.3 must be compiled against torch 2.4.1 in venv311. See setup instructions below. |
 
-This gives **5 systems with downbeat capability** (vs current 2), which should
-dramatically improve downbeat consensus quality.
+### allin1 setup (manual steps required)
 
-### Implementation
+allin1 depends on natten, which must be compiled from source against the
+correct PyTorch version. The venv311 environment needs:
 
-All three new systems are added to `scripts/label_beats.py`:
-- **demucs_beats**: Runs in main venv (Python 3.12). Uses Demucs for drum
-  separation on GPU, then Beat This! on the drum stem. ~5-8s/track on GPU.
-- **beatnet**: Runs via venv311 subprocess (`_beatnet_helper.py`). CRNN +
-  particle filter in offline mode. pyaudio mocked (only needed for streaming).
-- **allin1**: Runs via venv311 subprocess (`_allin1_helper.py`). Also provides
-  structural segments (intro/verse/chorus) as bonus metadata.
+```bash
+# 1. Pin PyTorch to 2.4.1 (natten 0.17.3 is incompatible with 2.10+)
+./venv311/bin/pip install "torch==2.4.1" "torchaudio==2.4.1"
 
-Usage: `python scripts/label_beats.py --systems beatnet,allin1,demucs_beats`
+# 2. Build natten 0.17.3 from source (--no-deps prevents torch upgrade)
+#    Requires cmake (sudo apt-get install cmake). Takes ~30 min (CUDA kernels).
+./venv311/bin/pip install --force-reinstall --no-cache-dir --no-deps "natten==0.17.3" --no-build-isolation
 
-Labels are additive — new systems produce new `.beats.json` files alongside
-existing ones. No need to re-run beat_this/essentia/librosa/madmom.
+# 3. Patch natten for torch 2.4.1 compatibility (_device_t removed in 2.5+)
+#    Apply to all 3 files: context.py, utils/misc.py, autotuner/misc.py
+#    Replace: from torch.cuda import _device_t
+#    With:    try:
+#                 from torch.cuda import _device_t
+#             except ImportError:
+#                 from typing import Union, Optional
+#                 import torch
+#                 _device_t = Optional[Union[torch.device, int]]
+
+# 4. Revert the dinat.py compat shim (no longer needed with correct natten):
+#    In venv311/.../allin1/models/dinat.py, ensure line 10 is:
+#    from natten.functional import natten1dav, natten1dqkrpb, natten2dav, natten2dqkrpb
+
+# 5. Verify
+./venv311/bin/python -c "import allin1; print('OK')"
+
+# 6. Test on a track
+./venv311/bin/python scripts/_allin1_helper.py path/to/audio.mp3
+```
+
+After setup, run: `python scripts/label_beats.py --systems allin1`
 
 ## Training Recipe (proven, all applied together)
 
@@ -82,8 +100,9 @@ Skipping distillation (stale labels) and pitch shift (not in existing data).
 
 ### Step 2: Expanded consensus labels
 
-Run new labeling systems (beatnet, allin1, demucs_beats) on all ~7000 tracks.
-Merge into consensus_v5 with 5 downbeat-capable systems. Re-prep dataset.
+Run new labeling systems on all ~7000 tracks. demucs_beats and beatnet are
+in progress. allin1 blocked on natten build (see setup above).
+Merge into consensus_v5 with up to 5 downbeat-capable systems. Re-prep dataset.
 
 ### Step 3: Full recipe with expanded labels + augmented data
 
