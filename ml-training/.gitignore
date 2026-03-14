@@ -9,6 +9,10 @@ data/beat_sync/*.npy
 # Calibration captures and generated audio (large, reproducible via calibrate_mic.py)
 data/calibration/
 
+# Demucs separation byproducts (allin1 temp stems and spectrograms)
+demix/
+spec/
+
 # Training outputs
 outputs/
 

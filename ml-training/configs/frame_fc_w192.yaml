@@ -1,0 +1,34 @@
+# Frame-level FC — 192-frame window (3.07s) for full-bar downbeat detection
+#
+# At 120 BPM: 6.1 beats = 1.5 bars. At 90 BPM: 4.6 beats = 1.15 bars.
+# Guarantees visibility of a complete bar at all common EDM tempos (90-180 BPM),
+# giving the model the context it needs to identify downbeat position within a bar.
+#
+# 192×26 = 4992 input features. ~322K params, ~314 KB INT8.
+# Flash: 314 KB of ~500 KB budget. RAM: 19.5 KB mel buffer + ~4 KB arena.
+# Inference: ~5ms on Cortex-M4F @ 64 MHz (runs every 4th frame = 64ms window).
+#
+# This is the maximum viable window size that fits comfortably within all
+# hardware budgets (flash, RAM, inference time). Do not train smaller windows
+# as intermediate steps — each training run costs a full day.
+
+model:
+  type: "frame_fc"
+  window_frames: 192        # 192 frames = 3072ms at 62.5 Hz
+  hidden_dims: [64, 32]     # Same hidden layers — input layer dominates params
+  dropout: 0.1
+  downbeat: true
+
+# Override base.yaml training params for W192:
+# - chunk_frames must be >= window_frames. 384 = 2×window gives 50% of timesteps
+#   with a full 192-frame context (matching the 76% ratio used for W32/chunk128).
+# - batch_size=4096 OOMs on RTX 3080 with 4992-dim flat tensor. 512 uses ~4.2 GB.
+training:
+  chunk_frames: 384         # 2× window_frames for sufficient full-window timesteps
+  chunk_stride: 192         # 50% overlap
+  batch_size: 512           # Reduced from 4096 — W192 flat tensor is 6× larger
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 320    # ~314 KB INT8 for 4992→64→32→2

@@ -317,7 +317,9 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  device: torch.device,
                  mel_fb: torch.Tensor,
                  window: torch.Tensor,
-                 mic_profile: dict | None = None) -> list[dict]:
+                 mic_profile: dict | None = None,
+                 stems_dir: Path | None = None,
+                 stem_variants: list[str] | None = None) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -326,6 +328,17 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     When augmenting, also generates time-stretched variants (resample-based,
     changes pitch — fine for beat detection). Stretched variants get clean
     audio only (no noise/gain/RIR augmentation) to keep dataset size reasonable.
+
+    Stem augmentation (stems_dir + stem_variants):
+    If stems_dir is provided and contains Demucs-separated stems for this track,
+    generates additional training variants from stem combinations. Each variant
+    uses the SAME beat labels (beats happen at the same times regardless of mix).
+    Stem variants get clean audio only — the stems themselves are the augmentation.
+
+    Supported stem_variants:
+      - "drums": Isolated percussion (teaches kick/snare mel patterns)
+      - "no_vocals": drums+bass+other (simulates instrumental sections)
+      - "drums_bass": Rhythmic foundation (kick+bass alignment for downbeats)
     """
     sr = cfg["audio"]["sample_rate"]
     sigma = cfg["labels"]["sigma_frames"]
@@ -459,6 +472,75 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     cond_result["downbeat_target"] = result["downbeat_target"]
                 results.append(cond_result)
 
+    # Stem augmentation: generate additional variants from Demucs-separated stems.
+    # Uses the same beat labels — beats happen at the same times regardless of mix.
+    # Only at original speed, clean audio (the stem itself is the augmentation).
+    if stems_dir and stem_variants:
+        # Check both {stems_dir}/htdemucs/{track}/ and {stems_dir}/{track}/
+        stem_dir = stems_dir / "htdemucs" / audio_path.stem
+        if not stem_dir.exists():
+            stem_dir = stems_dir / audio_path.stem
+        if stem_dir.exists():
+            stem_mixes = {
+                "drums": ["drums"],
+                "no_vocals": ["drums", "bass", "other"],
+                "drums_bass": ["drums", "bass"],
+            }
+            for variant_name in stem_variants:
+                stem_names = stem_mixes.get(variant_name)
+                if not stem_names:
+                    continue
+                # Load and sum the requested stems
+                stem_audio = None
+                all_found = True
+                for sn in stem_names:
+                    stem_path = stem_dir / f"{sn}.wav"
+                    if not stem_path.exists():
+                        all_found = False
+                        break
+                    sw, stem_sr = torchaudio.load(str(stem_path))
+                    # Mix to mono
+                    sw = sw.mean(dim=0)
+                    # Resample to training sample rate if needed
+                    if stem_sr != sr:
+                        sw = torchaudio.functional.resample(sw, stem_sr, sr)
+                    if stem_audio is None:
+                        stem_audio = sw
+                    else:
+                        # Align lengths (stems should be same length but be safe)
+                        min_len = min(len(stem_audio), len(sw))
+                        stem_audio = stem_audio[:min_len] + sw[:min_len]
+
+                if not all_found or stem_audio is None:
+                    continue
+
+                # Normalize RMS to match firmware AGC level (same as full mix)
+                stem_np = stem_audio.numpy()
+                rms = np.sqrt(np.mean(stem_np ** 2) + 1e-10)
+                if rms > 1e-8:  # Skip near-silent stems
+                    target_rms = 10 ** (target_rms_db / 20)
+                    stem_np = stem_np * (target_rms / rms)
+
+                    stem_gpu = torch.from_numpy(stem_np).to(device)
+                    mel = firmware_mel_spectrogram(stem_gpu, cfg, mel_fb, window)
+                    if mic_profile is not None:
+                        mel = _apply_mic_profile(mel, mic_profile, rng)
+                    n_frames = mel.shape[0]
+                    targets = make_beat_targets(beat_times, n_frames, frame_rate,
+                                                sigma, target_type=target_type,
+                                                strengths=beat_strengths)
+                    stem_result = {
+                        "mel": mel,
+                        "target": targets,
+                        "aug": f"stem_{variant_name}",
+                        "source": audio_path.stem,
+                    }
+                    if use_downbeat:
+                        stem_result["downbeat_target"] = make_downbeat_targets(
+                            downbeat_times, n_frames, frame_rate, sigma,
+                            target_type=target_type)
+                    results.append(stem_result)
+
     return results
 
 
@@ -507,6 +589,12 @@ def main():
     parser.add_argument("--exclude-dir", default=None,
                         help="Directory of audio files to exclude from training (e.g., test set). "
                              "Files with matching stems are filtered out to prevent data leakage.")
+    parser.add_argument("--stems-dir", default=None,
+                        help="Directory of Demucs-separated stems (from batch_demucs_separate.py). "
+                             "Generates additional training variants from stem combinations.")
+    parser.add_argument("--stem-variants", default=None,
+                        help="Comma-separated stem variants to generate. "
+                             "Options: drums, no_vocals, drums_bass (default: drums)")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto (default: auto)")
     args = parser.parse_args()
@@ -517,6 +605,8 @@ def main():
     labels_dir = Path(args.labels_dir or cfg["data"]["labels_dir"])
     output_dir = Path(args.output_dir or cfg["data"]["processed_dir"])
     rir_dir = Path(args.rir_dir) if args.rir_dir else Path(cfg["data"].get("rir_dir", "data/rir"))
+    stems_dir = Path(args.stems_dir) if args.stems_dir else None
+    stem_variant_list = (args.stem_variants or "drums").split(",") if stems_dir else None
     seed = args.seed if args.seed is not None else cfg["training"]["seed"]
 
     if args.device is None or args.device == "auto":
@@ -644,6 +734,8 @@ def main():
     train_pairs = pairs_shuffled[n_val_files:]
 
     print(f"Found {len(pairs)} paired files. Augmentation: {'ON' if args.augment else 'OFF'}")
+    if stems_dir:
+        print(f"Stem augmentation: {stem_variant_list} from {stems_dir}")
     print(f"File-level split: {len(train_pairs)} train, {len(val_pairs)} val")
 
     chunk_frames = cfg["training"]["chunk_frames"]
@@ -664,7 +756,9 @@ def main():
             try:
                 results = process_file(audio_path, label_path, cfg, args.augment,
                                        rir_dir, rng, device, mel_fb, window,
-                                       mic_profile=mic_profile)
+                                       mic_profile=mic_profile,
+                                       stems_dir=stems_dir,
+                                       stem_variants=stem_variant_list)
                 for r in results:
                     mel_chunks, target_chunks, db_chunks = chunk_data(
                         r["mel"], r["target"], chunk_frames, chunk_stride,

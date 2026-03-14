@@ -43,6 +43,7 @@ Usage:
 import argparse
 import json
 import os
+import select
 import subprocess
 import sys
 import textwrap
@@ -62,7 +63,10 @@ ALL_SYSTEMS = ["beat_this", "essentia", "librosa", "madmom",
 # Systems that benefit from parallel workers (CPU-bound, no shared model)
 CPU_SYSTEMS = {"essentia", "librosa", "madmom"}
 # Systems that run via venv311 subprocess (madmom dependency, Python 3.11 only)
-VENV311_SYSTEMS = {"madmom", "beatnet", "allin1"}
+VENV311_SYSTEMS = {"madmom", "beatnet"}
+# allin1 uses a long-lived batch subprocess (not per-track subprocess)
+# to avoid ~4s/track initialization overhead (Python + torch + model loading)
+BATCH_SYSTEMS = {"allin1"}
 # Systems that use GPU sequentially (shared model or heavy GPU use)
 GPU_SYSTEMS = {"beat_this", "demucs_beats"}
 
@@ -135,13 +139,17 @@ def label_librosa(audio_path: Path, **_kwargs) -> dict:
 _demucs_separator = None
 
 
-def label_demucs_beats(audio_path: Path, device: str = "cuda") -> dict:
+def label_demucs_beats(audio_path: Path, device: str = "cuda",
+                       demix_dir: Path = None) -> dict:
     """Separate drums with Demucs, then run Beat This! on the drum stem.
 
     Provides beat/downbeat annotations from the isolated percussion track,
     which has fundamentally different error characteristics from full-mix
     analysis. Published research (Beat Transformer ISMIR 2022, Drum-Aware
     Ensemble IEEE 2021) confirms this improves downbeat tracking.
+
+    If demix_dir is provided, saves ALL stems (not just drums) for reuse
+    by allin1 which needs bass/drums/other/vocals spectrograms.
     """
     global _demucs_separator, _beat_this_model
     import torch
@@ -174,6 +182,16 @@ def label_demucs_beats(audio_path: Path, device: str = "cuda") -> dict:
     # source order matches model.sources: ['drums', 'bass', 'other', 'vocals']
     drum_idx = _demucs_separator.sources.index("drums")
     drums = sources[0, drum_idx].cpu()  # (channels, samples)
+
+    # Save ALL stems for allin1 reuse if demix_dir is provided
+    if demix_dir is not None:
+        stem_dir = demix_dir / "htdemucs" / audio_path.stem
+        stem_dir.mkdir(parents=True, exist_ok=True)
+        sr_out = _demucs_separator.samplerate
+        for src_name in _demucs_separator.sources:
+            src_idx = _demucs_separator.sources.index(src_name)
+            src_wav = sources[0, src_idx].cpu()
+            torchaudio.save(str(stem_dir / f"{src_name}.wav"), src_wav, sr_out)
 
     # Save drum stem to temp file for Beat This!
     import tempfile
@@ -231,6 +249,130 @@ def _label_cpu_worker(audio_path: str, output_path: str, system: str,
         return (audio_path, system, False, str(e)[:200])
 
 
+def _run_allin1_batch(work: list[tuple[Path, Path]], device: str,
+                      demix_dir: Path) -> tuple[int, list]:
+    """Run allin1 via a single long-lived batch subprocess.
+
+    Eliminates the ~4s per-track overhead of subprocess-per-track mode
+    (Python startup + torch import + 8-fold model loading).
+
+    Args:
+        work: List of (audio_file, output_path) tuples.
+        device: 'cuda' or 'cpu'.
+        demix_dir: Directory containing pre-computed Demucs stems (from
+                   demucs_beats). allin1 will skip Demucs for tracks
+                   whose stems already exist here.
+
+    Returns:
+        (success_count, error_list) where error_list contains
+        (filename, system, error_message) tuples.
+    """
+    if not work:
+        return 0, []
+
+    helper_script = Path(__file__).resolve().parent / "_allin1_batch_helper.py"
+    if not VENV311_PYTHON.exists():
+        return 0, [(w[0].name, "allin1",
+                     f"venv311 not found at {VENV311_PYTHON}") for w in work]
+    if not helper_script.exists():
+        return 0, [(w[0].name, "allin1",
+                     f"batch helper not found at {helper_script}") for w in work]
+
+    spec_dir = demix_dir.parent / "spec"
+
+    print(f"\n[allin1] Starting batch subprocess ({len(work)} tracks, "
+          f"device={device})...")
+    print(f"[allin1] Demix dir: {demix_dir} "
+          f"(pre-computed stems will be reused)")
+
+    proc = subprocess.Popen(
+        [str(VENV311_PYTHON), str(helper_script),
+         "--device", device,
+         "--demix-dir", str(demix_dir),
+         "--spec-dir", str(spec_dir)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=None,  # let stderr pass through to console
+        text=True,
+    )
+
+    success = 0
+    errors = []
+
+    # Per-track timeout: Demucs (~2s) + NN inference (~1s on GPU, ~90s CPU)
+    # + DBN (~0.01s) + overhead. 300s is generous for any single track.
+    TRACK_TIMEOUT = 300
+
+    try:
+        pbar = tqdm(work, desc="allin1 (batch)")
+        for audio_file, output_path in pbar:
+            # Send command
+            cmd = json.dumps({
+                "audio_path": str(audio_file),
+                "output_path": str(output_path),
+            })
+            proc.stdin.write(cmd + "\n")
+            proc.stdin.flush()
+
+            # Read response with timeout to prevent indefinite hang
+            ready, _, _ = select.select([proc.stdout], [], [], TRACK_TIMEOUT)
+            if not ready:
+                errors.append((audio_file.name, "allin1",
+                               f"timeout ({TRACK_TIMEOUT}s)"))
+                tqdm.write(f"  TIMEOUT [allin1] {audio_file.name}")
+                # Kill and restart subprocess
+                proc.kill()
+                proc.wait()
+                proc = subprocess.Popen(
+                    [str(VENV311_PYTHON), str(helper_script),
+                     "--device", device,
+                     "--demix-dir", str(demix_dir),
+                     "--spec-dir", str(spec_dir)],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=None,
+                    text=True,
+                )
+                continue
+
+            response_line = proc.stdout.readline()
+            if not response_line:
+                errors.append((audio_file.name, "allin1",
+                               "batch subprocess died"))
+                # Restart subprocess for remaining tracks
+                proc = subprocess.Popen(
+                    [str(VENV311_PYTHON), str(helper_script),
+                     "--device", device,
+                     "--demix-dir", str(demix_dir),
+                     "--spec-dir", str(spec_dir)],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=None,
+                    text=True,
+                )
+                continue
+
+            try:
+                resp = json.loads(response_line)
+                if resp.get("success"):
+                    success += 1
+                else:
+                    err = resp.get("error", "unknown error")
+                    errors.append((audio_file.name, "allin1", err))
+                    tqdm.write(f"  ERROR [allin1] {audio_file.name}: {err}")
+            except json.JSONDecodeError as e:
+                errors.append((audio_file.name, "allin1",
+                               f"bad JSON response: {e}"))
+    finally:
+        try:
+            proc.stdin.close()
+            proc.wait(timeout=30)
+        except Exception:
+            proc.kill()
+
+    return success, errors
+
+
 def _label_venv311_subprocess(audio_path: str, output_path: str,
                                system: str,
                                env: dict) -> tuple[str, str, bool, str]:
@@ -240,12 +382,11 @@ def _label_venv311_subprocess(audio_path: str, output_path: str,
     via helper scripts in venv311. Each system has its own helper script:
       madmom  → _madmom_helper.py
       beatnet → _beatnet_helper.py
-      allin1  → _allin1_helper.py
+    Note: allin1 uses _run_allin1_batch() instead (batch subprocess mode).
     """
     helper_map = {
         "madmom": "_madmom_helper.py",
         "beatnet": "_beatnet_helper.py",
-        "allin1": "_allin1_helper.py",
     }
     helper_name = helper_map.get(system)
     if not helper_name:
@@ -330,6 +471,13 @@ def main():
                         help="Parallel workers for CPU systems (default: 5)")
     parser.add_argument("--threads-per-worker", type=int, default=4,
                         help="BLAS threads per worker (default: 4)")
+    parser.add_argument("--demix-dir", type=str, default=None,
+                        help="Directory for Demucs stems (shared between "
+                             "demucs_beats and allin1). Default: "
+                             "<output-dir>/../demix")
+    parser.add_argument("--allin1-device", type=str, default=None,
+                        help="Device for allin1 NN inference: cuda or cpu "
+                             "(default: same as --device)")
     args = parser.parse_args()
 
     audio_dir = Path(args.audio_dir)
@@ -349,9 +497,22 @@ def main():
         print(f"No audio files found in {audio_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # Build work lists: separate GPU (sequential) from CPU (parallel)
-    gpu_work = []  # (file, system) — processed sequentially with shared model
-    cpu_work = []  # (file, system) — processed with parallel workers
+    # Resolve shared Demucs stem directory
+    if args.demix_dir:
+        demix_dir = Path(args.demix_dir)
+    else:
+        demix_dir = output_dir.parent / "demix"
+    # Only create if we need it (demucs_beats or allin1 requested)
+    need_demix = bool({"demucs_beats", "allin1"} & set(systems))
+    if need_demix:
+        demix_dir.mkdir(parents=True, exist_ok=True)
+
+    allin1_device = args.allin1_device or args.device
+
+    # Build work lists: GPU (sequential), CPU (parallel), batch (allin1)
+    gpu_work = []      # (file, system) — processed sequentially with shared model
+    cpu_work = []      # (file, system) — processed with parallel workers
+    allin1_work = []   # (file, output_path) — processed via batch subprocess
     skipped = 0
 
     for f in files:
@@ -359,6 +520,8 @@ def main():
             out = output_path_for(f, system, output_dir)
             if out.exists() and not args.overwrite:
                 skipped += 1
+            elif system in BATCH_SYSTEMS:
+                allin1_work.append((f, out))
             elif system in CPU_SYSTEMS or system in VENV311_SYSTEMS:
                 cpu_work.append((f, system))
             else:
@@ -368,10 +531,12 @@ def main():
     print(f"Systems: {', '.join(systems)}")
     if skipped:
         print(f"Skipping {skipped} already-labeled pairs (use --overwrite to redo)")
-    print(f"GPU work (beat_this, sequential): {len(gpu_work)}")
+    print(f"GPU work (beat_this/demucs_beats, sequential): {len(gpu_work)}")
     print(f"CPU work (parallel, {args.workers} workers): {len(cpu_work)}")
+    if allin1_work:
+        print(f"allin1 work (batch subprocess, {allin1_device}): {len(allin1_work)}")
 
-    if not gpu_work and not cpu_work:
+    if not gpu_work and not cpu_work and not allin1_work:
         print("All files already labeled for all systems.")
         return
 
@@ -380,6 +545,9 @@ def main():
     errors = []
 
     # --- GPU work: sequential with shared models ---
+    # Run demucs_beats BEFORE allin1 so stems can be reused.
+    # If allin1 is also requested, save all Demucs stems to demix_dir.
+    save_stems = bool(allin1_work)
     if gpu_work:
         # Group by system to initialize models once
         gpu_systems_needed = {s for _, s in gpu_work}
@@ -393,7 +561,9 @@ def main():
                 if system == "beat_this":
                     result = label_beat_this(audio_file, device=args.device)
                 elif system == "demucs_beats":
-                    result = label_demucs_beats(audio_file, device=args.device)
+                    result = label_demucs_beats(
+                        audio_file, device=args.device,
+                        demix_dir=demix_dir if save_stems else None)
                 else:
                     raise ValueError(f"unknown GPU system: {system}")
                 out = output_path_for(audio_file, system, output_dir)
@@ -428,8 +598,15 @@ def main():
                     errors.append((name, system, err))
                     tqdm.write(f"  ERROR [{system}] {name}: {err}")
 
+    # --- allin1 batch work: single long-lived subprocess ---
+    if allin1_work:
+        a1_success, a1_errors = _run_allin1_batch(
+            allin1_work, device=allin1_device, demix_dir=demix_dir)
+        success += a1_success
+        errors.extend(a1_errors)
+
     elapsed = time.time() - t0
-    total_work = len(gpu_work) + len(cpu_work)
+    total_work = len(gpu_work) + len(cpu_work) + len(allin1_work)
     print(f"\nDone: {success}/{total_work} jobs in {elapsed:.1f}s "
           f"({elapsed / max(total_work, 1):.2f}s/job)")
 

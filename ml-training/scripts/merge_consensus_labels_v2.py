@@ -53,7 +53,10 @@ SYSTEM_OFFSETS = {
 SYSTEM_WEIGHTS = {
     "beat_this": 1.0,
     "madmom": 0.95,
+    "demucs_beats": 0.85,  # Drum-separated Beat This! — independent error profile
+    "beatnet": 0.8,        # CRNN + particle filter — architecturally distinct
     "essentia": 0.7,
+    "allin1": 0.7,         # Structure-aware NN — weaker on short clips
     "librosa": 0.5,
 }
 
