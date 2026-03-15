@@ -2,42 +2,66 @@
 
 #ifdef BLINKY_PLATFORM_ESP32S3
 
-// arduino-esp32 3.x: I2S library was replaced with ESP_I2S.
-// Use I2S_MODE_PDM_RX with setPinsPdmRx() instead of the legacy
-// setPins()/PDM_MONO_MODE API from 2.x.
-#include <ESP_I2S.h>
+#include <driver/i2s_pdm.h>
+#include <math.h>
+#include <string.h>
 
-static I2SClass i2s;
+static i2s_chan_handle_t rx_handle = nullptr;
 
 bool Esp32PdmMic::begin(int channels, long sampleRate) {
-    // Configure PDM-RX pins: CLK=42, DATA=41
-    i2s.setPinsPdmRx(PDM_CLK_PIN, PDM_DATA_PIN);
-    return i2s.begin(I2S_MODE_PDM_RX, (uint32_t)sampleRate,
-                     I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+    (void)channels;  // always mono
+
+    i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+    if (i2s_new_channel(&chan_cfg, NULL, &rx_handle) != ESP_OK) return false;
+
+    i2s_pdm_rx_config_t pdm_cfg = {
+        .clk_cfg  = I2S_PDM_RX_CLK_DEFAULT_CONFIG((uint32_t)sampleRate),
+        .slot_cfg = I2S_PDM_RX_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
+                                                    I2S_SLOT_MODE_MONO),
+        .gpio_cfg = {
+            .clk          = (gpio_num_t)PDM_CLK_PIN,
+            .din          = (gpio_num_t)PDM_DATA_PIN,
+            .invert_flags = { .clk_inv = false },
+        },
+    };
+
+    if (i2s_channel_init_pdm_rx_mode(rx_handle, &pdm_cfg) != ESP_OK) {
+        i2s_del_channel(rx_handle);
+        rx_handle = nullptr;
+        return false;
+    }
+    if (i2s_channel_enable(rx_handle) != ESP_OK) {
+        i2s_del_channel(rx_handle);
+        rx_handle = nullptr;
+        return false;
+    }
+    return true;
 }
 
 void Esp32PdmMic::end() {
-    i2s.end();
+    if (rx_handle) {
+        i2s_channel_disable(rx_handle);
+        i2s_del_channel(rx_handle);
+        rx_handle = nullptr;
+    }
 }
 
-void Esp32PdmMic::setGain(int gain) {
-    // No hardware gain register accessible via ESP_I2S PDM API on ESP32-S3.
-    // AdaptiveMic tracks currentHardwareGain internally but hardware is unaffected.
-    (void)gain;
+void Esp32PdmMic::setGain(int gainDb) {
+    // ESP32-S3 has no hardware PDM gain register — full range is software only.
+    softwareGain_ = (gainDb > 0) ? powf(10.0f, gainDb / 20.0f) : 1.0f;
 }
 
 void Esp32PdmMic::onReceive(ReceiveCallback callback) {
-    // Store callback for later invocation from poll().
-    // Unlike nRF52, we do NOT register a hardware interrupt here.
     callback_ = callback;
 }
 
 int Esp32PdmMic::available() {
-    return stagingCount_;
+    // Return bytes (not samples) to match the IPdmMic contract used by onPDMdata()
+    return stagingCount_ * (int)sizeof(int16_t);
 }
 
 int Esp32PdmMic::read(int16_t* buffer, int maxBytes) {
-    int toCopy = maxBytes < (stagingCount_ * (int)sizeof(int16_t))
+    int toCopy = (maxBytes < stagingCount_ * (int)sizeof(int16_t))
                  ? maxBytes
                  : stagingCount_ * (int)sizeof(int16_t);
     memcpy(buffer, staging_, toCopy);
@@ -46,23 +70,27 @@ int Esp32PdmMic::read(int16_t* buffer, int maxBytes) {
 }
 
 void Esp32PdmMic::poll() {
-    // Drain however many bytes the I2S DMA has ready
-    int bytesAvailable = i2s.available();
-    if (bytesAvailable <= 0) return;
+    if (!rx_handle) return;
 
-    // Cap to staging buffer capacity
-    int maxBytes = STAGING_SIZE * (int)sizeof(int16_t);
-    int bytesToRead = (bytesAvailable < maxBytes) ? bytesAvailable : maxBytes;
+    size_t bytesRead = 0;
+    esp_err_t err = i2s_channel_read(rx_handle, staging_,
+                                     STAGING_SIZE * sizeof(int16_t),
+                                     &bytesRead, 0);
+    if (err != ESP_OK || bytesRead == 0) return;
 
-    int bytesRead = (int)i2s.readBytes((char*)staging_, (size_t)bytesToRead);
-    stagingCount_ = bytesRead / (int)sizeof(int16_t);
+    stagingCount_ = (int)bytesRead / (int)sizeof(int16_t);
 
-    // Fire the callback (equivalent to the nRF52 hardware interrupt firing).
-    // The callback (AdaptiveMic::onPDMdata) will call available() + read()
-    // to consume from staging_.
-    if (callback_ && stagingCount_ > 0) {
-        callback_();
+    // Software gain (covers full AGC range — no hardware gain available on ESP32-S3)
+    if (softwareGain_ > 1.01f) {
+        for (int i = 0; i < stagingCount_; i++) {
+            float s = staging_[i] * softwareGain_;
+            if      (s >  32767.0f) staging_[i] =  32767;
+            else if (s < -32768.0f) staging_[i] = -32768;
+            else                    staging_[i]  = (int16_t)s;
+        }
     }
+
+    if (callback_) callback_();
 }
 
 #endif // BLINKY_PLATFORM_ESP32S3

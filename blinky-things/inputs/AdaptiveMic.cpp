@@ -67,12 +67,6 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   gainMax_     = pdm_.getGainMaxDb();
   agcStrategy_ = pdm_.hasHardwareGain() ? AgcStrategy::HARDWARE : AgcStrategy::SOFTWARE;
 
-  // On software-gain platforms, fast AGC is counterproductive:
-  // chasing gain faster doesn't improve SNR and can clip transients.
-  if (agcStrategy_ == AgcStrategy::SOFTWARE) {
-    fastAgcEnabled = false;
-  }
-
   currentHardwareGain = constrainValue(gainInit, gainMin_, gainMax_);
 
   pdm_.onReceive(AdaptiveMic::onPDMdata);
@@ -233,7 +227,12 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // Fast mode: when gain is near the AGC ceiling and signal is persistently low.
   // Threshold is relative to hwGainMaxSignal so it adapts to any ceiling value.
   int fastAgcGainThreshold = (hwGainMaxSignal > 10) ? (hwGainMaxSignal - 10) : hwGainMaxSignal;
-  inFastAgcMode_ = fastAgcEnabled &&
+  // Fast AGC is only meaningful on HARDWARE strategy: pre-decimation gain
+  // actually improves SNR so aggressive seeking is worthwhile. On SOFTWARE
+  // strategy the gain is post-decimation amplitude scaling — chasing it faster
+  // adds no SNR benefit and risks clipping transients.
+  inFastAgcMode_ = (agcStrategy_ == AgcStrategy::HARDWARE) &&
+                   fastAgcEnabled &&
                    currentHardwareGain >= fastAgcGainThreshold &&
                    rawTrackedLevel < fastAgcThreshold;
 

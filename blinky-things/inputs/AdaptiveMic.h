@@ -63,7 +63,7 @@ public:
   float releaseTau     = 5.0f;      // Peak release speed (release time, seconds)
 
   // Hardware gain target (adapts to raw ADC input for best signal quality)
-  // Dead zone: ±0.01 around target (no adjustment if within range)
+  // Dead zone: ±0.01 for HARDWARE strategy, ±0.02 for SOFTWARE strategy (see hardwareCalibrate())
   float    hwTarget = 0.20f;   // Target raw input level (lower = less gain seeking, cleaner signal)
   // AGC ceiling: gain sweep calibration shows SNR peaks at gain 25-35 and degrades
   // above 40. Must agree with training pipeline (ml-training/configs/default.yaml
