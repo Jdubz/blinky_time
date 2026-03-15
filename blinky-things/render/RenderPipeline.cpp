@@ -3,7 +3,7 @@
 
 RenderPipeline::RenderPipeline()
     : fire_(nullptr), water_(nullptr), lightning_(nullptr), audioVis_(nullptr),
-      currentGenerator_(nullptr), generatorType_(GeneratorType::FIRE),
+      heatFire_(nullptr), currentGenerator_(nullptr), generatorType_(GeneratorType::FIRE),
       noOp_(nullptr), hueRotation_(nullptr),
       currentEffect_(nullptr), effectType_(EffectType::NONE),
       pixelMatrix_(nullptr), renderer_(nullptr),
@@ -15,6 +15,7 @@ RenderPipeline::~RenderPipeline() {
     delete pixelMatrix_;
     delete hueRotation_;
     delete noOp_;
+    delete heatFire_;
     delete audioVis_;
     delete lightning_;
     delete water_;
@@ -49,6 +50,11 @@ bool RenderPipeline::begin(const DeviceConfig& config, ILedStrip& leds, LEDMappe
 
     audioVis_ = new(std::nothrow) Audio();
     if (!audioVis_ || !audioVis_->begin(config)) {
+        return false;
+    }
+
+    heatFire_ = new(std::nothrow) HeatFire();
+    if (!heatFire_ || !heatFire_->begin(config)) {
         return false;
     }
 
@@ -107,6 +113,9 @@ bool RenderPipeline::setGenerator(GeneratorType type) {
             break;
         case GeneratorType::AUDIO:
             newGen = audioVis_;
+            break;
+        case GeneratorType::HEAT_FIRE:
+            newGen = heatFire_;
             break;
         default:
             return false;
@@ -178,6 +187,10 @@ AudioParams* RenderPipeline::getAudioVisParams() {
     return audioVis_ ? &audioVis_->getParamsMutable() : nullptr;
 }
 
+HeatFireParams* RenderPipeline::getHeatFireParams() {
+    return heatFire_ ? &heatFire_->getParamsMutable() : nullptr;
+}
+
 // Apply methods - params are modified in-place, so these are no-ops
 // Kept for API consistency if future implementations need explicit apply
 void RenderPipeline::applyFireParams() {
@@ -196,6 +209,10 @@ void RenderPipeline::applyAudioVisParams() {
     // Parameters modified via getAudioVisParams() take effect immediately
 }
 
+void RenderPipeline::applyHeatFireParams() {
+    // Parameters modified via getHeatFireParams() take effect immediately
+}
+
 // Static helpers for listing options
 const char* RenderPipeline::getGeneratorNameByIndex(int index) {
     switch (index) {
@@ -203,6 +220,7 @@ const char* RenderPipeline::getGeneratorNameByIndex(int index) {
         case 1: return "water";
         case 2: return "lightning";
         case 3: return "audio";
+        case 4: return "heatfire";
         default: return nullptr;
     }
 }
@@ -221,6 +239,7 @@ GeneratorType RenderPipeline::getGeneratorTypeByIndex(int index) {
         case 1: return GeneratorType::WATER;
         case 2: return GeneratorType::LIGHTNING;
         case 3: return GeneratorType::AUDIO;
+        case 4: return GeneratorType::HEAT_FIRE;
         default: return GeneratorType::FIRE;
     }
 }

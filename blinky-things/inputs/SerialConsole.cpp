@@ -51,13 +51,15 @@ static float effectRotationSpeed_ = 0.0f;
 
 // New constructor with RenderPipeline
 SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
-    : pipeline_(pipeline), fireGenerator_(nullptr), waterGenerator_(nullptr),
+    : pipeline_(pipeline), fireGenerator_(nullptr), heatFireGenerator_(nullptr),
+      waterGenerator_(nullptr),
       lightningGenerator_(nullptr), audioVisGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
       battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
     // Get generator pointers from pipeline
     if (pipeline_) {
         fireGenerator_ = pipeline_->getFireGenerator();
+        heatFireGenerator_ = pipeline_->getHeatFireGenerator();
         waterGenerator_ = pipeline_->getWaterGenerator();
         lightningGenerator_ = pipeline_->getLightningGenerator();
         audioVisGenerator_ = pipeline_->getAudioVisGenerator();
@@ -82,6 +84,11 @@ void SerialConsole::registerSettings() {
 
     // Register all settings by category
     registerFireSettings(fp);
+
+    // Register HeatFire generator settings
+    if (heatFireGenerator_) {
+        registerHeatFireSettings(&heatFireGenerator_->getParamsMutable());
+    }
 
     // Register Water generator settings (use mutable ref so changes apply directly)
     if (waterGenerator_) {
@@ -165,6 +172,38 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
     // Thermal physics
     settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
         "Thermal buoyancy (x traversalDim -> LEDs/sec^2)", 0.0f, 10.0f, onParamChanged);
+}
+
+// === HEAT FIRE SETTINGS (Heat buffer) ===
+// Prefixed with "hf_" to avoid name collisions with particle fire settings.
+// Pool auto-sized in begin(): heat buffer = width * height bytes.
+void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
+    if (!hfp) return;
+
+    auto onParamChanged = []() {};  // Heat buffer params take effect immediately
+
+    settings_.registerFloat("hf_baseheat", &hfp->baseHeat, "heatfire",
+        "Base heat injection level", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("hf_audioheatboost", &hfp->audioHeatBoost, "heatfire",
+        "Energy-driven heat boost", 0.0f, 2.0f, onParamChanged);
+    settings_.registerFloat("hf_beatheatpulse", &hfp->beatHeatPulse, "heatfire",
+        "Phase modulation depth for injection", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("hf_basecooling", &hfp->baseCooling, "heatfire",
+        "Base cooling per row per frame", 0.0f, 0.5f, onParamChanged);
+    settings_.registerFloat("hf_coolingvariation", &hfp->coolingVariation, "heatfire",
+        "Noise-driven spatial cooling variation", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("hf_diffusionspread", &hfp->diffusionSpread, "heatfire",
+        "Horizontal drift range for heat propagation", 0.0f, 3.0f, onParamChanged);
+    settings_.registerFloat("hf_burstheat", &hfp->burstHeat, "heatfire",
+        "Extra heat on transient pulse", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("hf_organictransmin", &hfp->organicTransientMin, "heatfire",
+        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
+        "Beat sync depth for injection", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("hf_winddrift", &hfp->windDrift, "heatfire",
+        "Audio-reactive horizontal drift", 0.0f, 3.0f, onParamChanged);
+    settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
+        "Noise animation speed", 0.001f, 0.1f, onParamChanged);
 }
 
 // === AUDIO SETTINGS ===
@@ -1277,6 +1316,9 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
             found = true;
         } else if (strcmp(name, "audio") == 0) {
             type = GeneratorType::AUDIO;
+            found = true;
+        } else if (strcmp(name, "heatfire") == 0) {
+            type = GeneratorType::HEAT_FIRE;
             found = true;
         }
 

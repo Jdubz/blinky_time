@@ -5,6 +5,7 @@
 #include "../generators/Water.h"
 #include "../generators/Lightning.h"
 #include "../generators/Audio.h"
+#include "../generators/HeatFire.h"
 #include "../effects/Effect.h"
 #include "../effects/NoOpEffect.h"
 #include "../effects/HueRotationEffect.h"
@@ -72,12 +73,14 @@ public:
     WaterParams* getWaterParams();
     LightningParams* getLightningParams();
     AudioParams* getAudioVisParams();
+    HeatFireParams* getHeatFireParams();
 
     // Apply parameters after modification
     void applyFireParams();
     void applyWaterParams();
     void applyLightningParams();
     void applyAudioVisParams();
+    void applyHeatFireParams();
 
     // Effect parameter access
     HueRotationEffect* getHueRotationEffect() { return hueRotation_; }
@@ -87,13 +90,14 @@ public:
     Water* getWaterGenerator() { return water_; }
     Lightning* getLightningGenerator() { return lightning_; }
     Audio* getAudioVisGenerator() { return audioVis_; }
+    HeatFire* getHeatFireGenerator() { return heatFire_; }
 
     // Utility
     PixelMatrix* getPixelMatrix() { return pixelMatrix_; }
     bool isValid() const { return initialized_; }
 
     // List available options (returns count)
-    static constexpr int NUM_GENERATORS = 4;
+    static constexpr int NUM_GENERATORS = 5;
     static constexpr int NUM_EFFECTS = 2;  // Including NONE
     static const char* getGeneratorNameByIndex(int index);
     static const char* getEffectNameByIndex(int index);
@@ -106,6 +110,7 @@ private:
     Water* water_;
     Lightning* lightning_;
     Audio* audioVis_;
+    HeatFire* heatFire_;
     Generator* currentGenerator_;
     GeneratorType generatorType_;
 

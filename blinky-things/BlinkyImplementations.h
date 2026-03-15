@@ -30,6 +30,7 @@
 
 // Generator implementations
 #include "generators/Fire.cpp"
+#include "generators/HeatFire.cpp"
 #include "generators/Water.cpp"
 #include "generators/Lightning.cpp"
 #include "generators/Audio.cpp"
