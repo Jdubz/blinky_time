@@ -59,15 +59,6 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     mic.sampleRate = stored.sampleRate;
     mic.bufferSize = stored.bufferSize;
 
-    FireDefaults fire;
-    fire.baseCooling = stored.baseCooling;
-    fire.sparkHeatMin = stored.sparkHeatMin;
-    fire.sparkHeatMax = stored.sparkHeatMax;
-    fire.sparkChance = stored.sparkChance;
-    fire.audioSparkBoost = stored.audioSparkBoost;
-    fire.coolingAudioBias = stored.coolingAudioBias;
-    fire.bottomRowsForSparks = stored.bottomRowsForSparks;
-
     // Populate output DeviceConfig (structs copied by value, deviceName by pointer)
     outConfig.deviceName = deviceNameBuffer;
     outConfig.matrix = matrix;
@@ -75,7 +66,6 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     outConfig.imu = imu;
     outConfig.serial = serial;
     outConfig.microphone = mic;
-    outConfig.fireDefaults = fire;
 
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
         Serial.print(F("[INFO] Loaded device: "));
@@ -140,15 +130,6 @@ void DeviceConfigLoader::convertToStored(const DeviceConfig& config, ConfigStora
     // Copy mic config
     outStored.sampleRate = config.microphone.sampleRate;
     outStored.bufferSize = config.microphone.bufferSize;
-
-    // Copy fire defaults
-    outStored.baseCooling = config.fireDefaults.baseCooling;
-    outStored.sparkHeatMin = config.fireDefaults.sparkHeatMin;
-    outStored.sparkHeatMax = config.fireDefaults.sparkHeatMax;
-    outStored.sparkChance = config.fireDefaults.sparkChance;
-    outStored.audioSparkBoost = config.fireDefaults.audioSparkBoost;
-    outStored.coolingAudioBias = config.fireDefaults.coolingAudioBias;
-    outStored.bottomRowsForSparks = config.fireDefaults.bottomRowsForSparks;
 
     // Mark as valid
     outStored.isValid = true;

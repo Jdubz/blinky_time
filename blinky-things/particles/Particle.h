@@ -14,10 +14,10 @@ static const float BEAT_PHASE_MAX = 0.8f;  // Phase must rise above this
 /**
  * Particle - Core particle data structure for unified generator system
  *
- * Memory: 28 bytes per particle (aligned)
+ * Memory: 24 bytes per particle (aligned)
  * - Position: 8 bytes (float x, y)
  * - Velocity: 8 bytes (float vx, vy)
- * - State: 8 bytes (uint8_t intensity, age, maxAge, flags, trailHeatFactor; padding)
+ * - State: 4 bytes (uint8_t intensity, age, maxAge, flags)
  * - Physics: 4 bytes (float mass)
  *
  * Supports sparks (Fire), drops/splashes (Water), and bolts (Lightning)
@@ -36,13 +36,10 @@ struct Particle {
     uint8_t maxAge;       // 1 byte - Death age in centiseconds (0=infinite, 1-255=0.01-2.55s)
     uint8_t flags;        // 1 byte - Behavior flags (see ParticleFlags)
 
-    // Fire-specific (used by generators that emit heat trails)
-    uint8_t trailHeatFactor; // 1 byte - Heat emission percentage (0-100, 0=no trail)
-
     // Physics
     float mass;           // 4 bytes - Mass for force calculations (0.1-2.0 typical)
 
-    // === TOTAL: 28 bytes (with padding) ===
+    // === TOTAL: 24 bytes (with padding) ===
 
     /**
      * Check if particle is alive
@@ -82,7 +79,6 @@ struct Particle {
  */
 namespace ParticleFlags {
     constexpr uint8_t NONE           = 0x00;  // No special behavior
-    constexpr uint8_t EMIT_TRAIL     = 0x01;  // Leave trail/heat behind (Fire sparks)
     constexpr uint8_t BOUNCE         = 0x02;  // Bounce off bounds instead of dying
     constexpr uint8_t FADE           = 0x04;  // Fade intensity over lifetime
     constexpr uint8_t BRANCH         = 0x08;  // Can spawn child particles (Lightning)

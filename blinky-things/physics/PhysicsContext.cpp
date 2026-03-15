@@ -1,9 +1,6 @@
 #include "PhysicsContext.h"
-#include "MatrixPropagation.h"
-#include "LinearPropagation.h"
 #include "EdgeSpawnRegion.h"
 #include "RandomSpawnRegion.h"
-#include "CenterSpawnRegion.h"
 #include "KillBoundary.h"
 #include "BounceBoundary.h"
 #include "WrapBoundary.h"
@@ -16,14 +13,9 @@
 // These assertions ensure physics components fit in their allocated buffers.
 // Buffer sizes are defined in ParticleGenerator.h and generator headers.
 
-// Propagation models: propagationBuffer_[64]
-static_assert(sizeof(MatrixPropagation) <= 64, "MatrixPropagation exceeds 64-byte buffer");
-static_assert(sizeof(LinearPropagation) <= 64, "LinearPropagation exceeds 64-byte buffer");
-
 // Spawn regions: spawnBuffer_[32]
 static_assert(sizeof(EdgeSpawnRegion) <= 32, "EdgeSpawnRegion exceeds 32-byte buffer");
 static_assert(sizeof(RandomSpawnRegion) <= 32, "RandomSpawnRegion exceeds 32-byte buffer");
-static_assert(sizeof(CenterSpawnRegion) <= 32, "CenterSpawnRegion exceeds 32-byte buffer");
 
 // Boundary behaviors: boundaryBuffer_[32]
 static_assert(sizeof(KillBoundary) <= 32, "KillBoundary exceeds 32-byte buffer");
@@ -37,21 +29,6 @@ static_assert(sizeof(LinearForceAdapter) <= 48, "LinearForceAdapter exceeds 48-b
 // Background models: backgroundBuffer_[64]
 static_assert(sizeof(MatrixBackground) <= 64, "MatrixBackground exceeds 64-byte buffer");
 static_assert(sizeof(LinearBackground) <= 64, "LinearBackground exceeds 64-byte buffer");
-
-PropagationModel* PhysicsContext::createPropagation(
-    LayoutType layout, uint16_t width, uint16_t height,
-    bool wrap, void* buffer) {
-
-    switch (layout) {
-        case LINEAR_LAYOUT:
-            return new (buffer) LinearPropagation(wrap);
-
-        case MATRIX_LAYOUT:
-        case RANDOM_LAYOUT:
-        default:
-            return new (buffer) MatrixPropagation();
-    }
-}
 
 SpawnRegion* PhysicsContext::createSpawnRegion(
     LayoutType layout, GeneratorType generator,

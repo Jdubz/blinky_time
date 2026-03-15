@@ -23,17 +23,6 @@ public:
     virtual void getSpawnPosition(float& x, float& y) = 0;
 
     /**
-     * Check if a position is within the spawn region
-     * Used for splash effects that spawn near a specific location
-     */
-    virtual bool isInRegion(float x, float y) const = 0;
-
-    /**
-     * Get the spawn region's "center" for radial effects
-     */
-    virtual void getCenter(float& x, float& y) const = 0;
-
-    /**
      * Get initial velocity direction for particles spawned in this region
      * This provides layout-appropriate velocity vectors
      * @param speed Desired speed magnitude

@@ -212,14 +212,6 @@ DeviceConfig createDeviceConfig(const std::string& device) {
     config.charging.minVoltage = 3.0f;
     config.charging.maxVoltage = 4.2f;
 
-    config.fireDefaults.baseCooling = 55;
-    config.fireDefaults.sparkHeatMin = 150;
-    config.fireDefaults.sparkHeatMax = 255;
-    config.fireDefaults.sparkChance = 0.4f;
-    config.fireDefaults.audioSparkBoost = 0.3f;
-    config.fireDefaults.coolingAudioBias = 0;
-    config.fireDefaults.bottomRowsForSparks = 2;
-
     return config;
 }
 

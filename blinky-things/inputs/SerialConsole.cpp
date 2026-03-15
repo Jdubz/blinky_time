@@ -998,15 +998,6 @@ void SerialConsole::showDeviceConfig() {
     doc["sampleRate"] = cfg.sampleRate;
     doc["bufferSize"] = cfg.bufferSize;
 
-    // Fire effect defaults
-    doc["baseCooling"] = cfg.baseCooling;
-    doc["sparkHeatMin"] = cfg.sparkHeatMin;
-    doc["sparkHeatMax"] = cfg.sparkHeatMax;
-    doc["sparkChance"] = serialized(String(cfg.sparkChance, 2));
-    doc["audioSparkBoost"] = serialized(String(cfg.audioSparkBoost, 2));
-    doc["coolingAudioBias"] = cfg.coolingAudioBias;
-    doc["bottomRowsForSparks"] = cfg.bottomRowsForSparks;
-
     // Serialize with pretty printing for readability
     serializeJsonPretty(doc, Serial);
     Serial.println();
@@ -1069,15 +1060,6 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     // Microphone configuration
     newConfig.sampleRate = doc["sampleRate"] | 16000;
     newConfig.bufferSize = doc["bufferSize"] | 32;
-
-    // Fire effect defaults
-    newConfig.baseCooling = doc["baseCooling"] | 40;
-    newConfig.sparkHeatMin = doc["sparkHeatMin"] | 120;
-    newConfig.sparkHeatMax = doc["sparkHeatMax"] | 255;
-    newConfig.sparkChance = doc["sparkChance"] | 0.2f;
-    newConfig.audioSparkBoost = doc["audioSparkBoost"] | 0.5f;
-    newConfig.coolingAudioBias = doc["coolingAudioBias"] | -30;
-    newConfig.bottomRowsForSparks = doc["bottomRowsForSparks"] | 1;
 
     // Mark as valid
     newConfig.isValid = true;

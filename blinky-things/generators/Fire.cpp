@@ -291,10 +291,8 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
     vx *= velocityMult * speedMult * velBurst;
     vy *= velocityMult * speedMult * velBurst;
 
-    // Spawn the particle (trailHeatFactor=0: heat is per-particle intensity, not heat buffer)
     pool_.spawn(x, y, vx, vy, intensity, lifespan, 1.0f,
-               ParticleFlags::GRAVITY | ParticleFlags::WIND | ParticleFlags::FADE,
-               0);
+               ParticleFlags::GRAVITY | ParticleFlags::WIND | ParticleFlags::FADE);
 }
 
 void Fire::updateParticle(Particle* p, float dt) {

@@ -53,16 +53,6 @@ struct MicConfig {
   uint8_t bufferSize;
 };
 
-struct FireDefaults {
-  uint8_t baseCooling;
-  uint8_t sparkHeatMin;
-  uint8_t sparkHeatMax;
-  float sparkChance;
-  float audioSparkBoost;
-  int8_t coolingAudioBias;
-  uint8_t bottomRowsForSparks;
-};
-
 struct DeviceConfig {
   const char* deviceName;
   MatrixConfig matrix;
@@ -70,5 +60,4 @@ struct DeviceConfig {
   IMUConfig imu;
   BlinkySerialConfig serial;
   MicConfig microphone;
-  FireDefaults fireDefaults;
 };

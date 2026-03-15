@@ -47,16 +47,5 @@ const DeviceConfig LONG_TUBE_CONFIG = {
   .microphone = {
     .sampleRate = 16000,
     .bufferSize = 32
-  },
-  .fireDefaults = {
-    // Long tube fire parameters - tuned for tall 60-row vertical matrix
-    // Lower cooling than tube light (15 rows) so flames propagate higher
-    .baseCooling = 20,        // Low cooling for tall matrix (tube: 40)
-    .sparkHeatMin = 60,       // Slightly higher min for visibility over 60 rows
-    .sparkHeatMax = 220,      // High max for bright base
-    .sparkChance = 0.150f,    // Moderate spark rate
-    .audioSparkBoost = 0.350f, // Audio responsiveness
-    .coolingAudioBias = -15,   // Moderate cooling reduction on audio
-    .bottomRowsForSparks = 2   // Two rows for wider fire base on tall matrix
   }
 };

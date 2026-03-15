@@ -134,18 +134,7 @@ Each device type has its own configuration file in `devices/`:
 
 ## 🔥 Fire Effect Parameters
 
-Fine-tune your fire effect in the device config files:
-
-```cpp
-.fireDefaults = {
-  .baseCooling = 40,        // How fast fire cools down
-  .sparkHeatMin = 50,       // Minimum spark intensity
-  .sparkHeatMax = 200,      // Maximum spark intensity  
-  .sparkChance = 0.200f,    // Probability of new sparks
-  .audioSparkBoost = 0.300f, // Audio responsiveness
-  // ... more parameters
-}
-```
+Fire parameters are universal and dimension-normalized — they auto-adapt to any LED layout. Tune via serial console (`set <param> <value>`) or web UI. See `Fire.h` for all 18 `FireParams` fields.
 
 ## 🎵 Audio Features
 
@@ -155,7 +144,7 @@ Fine-tune your fire effect in the device config files:
 - **Real-time Visualization** - Live audio levels in debug output
 - **Low Latency** - ~16ms from sound to LED response
 
-> 📝 **Note**: Audio features require the [platform patch](docs/PLATFORM_FIX.md) to resolve include guard issues in Seeeduino mbed platform.
+> 📝 **Note**: Audio features use the built-in PDM microphone on XIAO nRF52840 Sense or the MSM381ACT on XIAO ESP32-S3 Sense.
 
 ## 🔋 Power Management
 

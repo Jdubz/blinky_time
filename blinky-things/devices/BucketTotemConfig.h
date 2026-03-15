@@ -51,15 +51,5 @@ const DeviceConfig BUCKET_TOTEM_CONFIG = {
   .microphone = {
     .sampleRate = 16000,
     .bufferSize = 32
-  },
-  .fireDefaults = {
-    // Bucket totem fire parameters - tuned for 16x8 horizontal matrix
-    .baseCooling = 25,         // Low cooling for tall flames
-    .sparkHeatMin = 120,       // Hot sparks even without audio
-    .sparkHeatMax = 255,       // Maximum heat on hits
-    .sparkChance = 0.45f,      // Frequent sparks
-    .audioSparkBoost = 0.5f,   // Strong audio reactivity
-    .coolingAudioBias = -30,   // Flames persist longer with sound
-    .bottomRowsForSparks = 2   // Two bottom rows for wider fire base
   }
 };

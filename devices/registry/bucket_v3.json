@@ -24,12 +24,5 @@
   "baudRate": 115200,
   "initTimeoutMs": 3000,
   "sampleRate": 16000,
-  "bufferSize": 32,
-  "baseCooling": 25,
-  "sparkHeatMin": 120,
-  "sparkHeatMax": 255,
-  "sparkChance": 0.45,
-  "audioSparkBoost": 0.5,
-  "coolingAudioBias": -30,
-  "bottomRowsForSparks": 2
+  "bufferSize": 32
 }

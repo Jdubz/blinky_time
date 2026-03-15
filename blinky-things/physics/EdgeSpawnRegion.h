@@ -47,37 +47,6 @@ public:
         }
     }
 
-    bool isInRegion(float x, float y) const override {
-        switch (edge_) {
-            case Edge::TOP: return y < 1.0f;
-            case Edge::BOTTOM: return y >= height_ - 1;
-            case Edge::LEFT: return x < 1.0f;
-            case Edge::RIGHT: return x >= width_ - 1;
-        }
-        return false;
-    }
-
-    void getCenter(float& x, float& y) const override {
-        switch (edge_) {
-            case Edge::TOP:
-                x = width_ / 2.0f;
-                y = 0;
-                break;
-            case Edge::BOTTOM:
-                x = width_ / 2.0f;
-                y = height_ - 1;
-                break;
-            case Edge::LEFT:
-                x = 0;
-                y = height_ / 2.0f;
-                break;
-            case Edge::RIGHT:
-                x = width_ - 1;
-                y = height_ / 2.0f;
-                break;
-        }
-    }
-
     void getInitialVelocity(float speed, float& vx, float& vy) const override {
         switch (edge_) {
             case Edge::TOP:

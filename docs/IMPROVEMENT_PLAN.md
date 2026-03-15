@@ -263,103 +263,137 @@ All items below were A/B tested and showed zero or negative benefit, or proven i
 
 ### Fire Generator Enhancement
 
-**Status: PLANNED**
+**Status: PARTIALLY COMPLETE — audio reactivity done, visual depth improvements remain**
 
-The fire generator uses a particle system with 3 spark types, thermal buoyancy, simplex noise wind, and audio-reactive spawn/velocity modulation. The improvements below are ranked by visual impact vs. implementation cost. All are feasible on the current hardware (64 MHz Cortex-M4, 64-particle pool).
+The fire generator (`Fire.h/cpp`) is a particle system with 3 spark types (FAST_SPARK, SLOW_EMBER, BURST_SPARK), thermal buoyancy, simplex noise wind via `ForceAdapter`, and audio-reactive spawn/velocity modulation. It inherits from `ParticleGenerator<64>` and renders to `PixelMatrix` via additive blending. All physics parameters are stored as dimension-normalized fractions and scaled at use-time via `scaledVelMin()`, `scaledSpread()`, etc. — no per-device tuning needed.
 
-#### Tier 1: High Impact, Low Effort
+**Code review findings (March 15, 2026):**
+- All 7 AudioControl signals are already consumed (phase, pulse, downbeat, energy, rhythmStrength, onsetDensity, beatInMeasure). The original plan items 1-4 are implemented.
+- `FireDefaults` struct in `DeviceConfig.h` (baseCooling, sparkHeatMin, etc.) is **vestigial** — leftover from the old heat-diffusion model. `Fire::begin()` never reads `config.fireDefaults`. Should be removed in a future cleanup.
+- Background noise (`MatrixBackground`) iterates every pixel with 2 simplex noise evals per pixel. At 32×32 = 1024 pixels this is ~2048 noise calls/frame — still under 1ms at 240 MHz (ESP32-S3) but worth monitoring.
 
-**1. Phase-driven thermal buoyancy breathing**
-Currently thermal force is constant. Modulate with phase so sparks surge upward on-beat and hover between beats. Affects every active particle every frame — the single most impactful audio coupling.
-- Map: `thermalForce *= (0.5 + 0.5 * phaseToPulse())`
-- Optionally modulate drag too: less drag on-beat (fast motion), more off-beat (lazy float)
+**Scaling constraint: particle pool size.** `ParticleGenerator<64>` hard-caps at 64 particles (`uint8_t` template, max 255). `scaledMaxParticles()` caps at `min(64, 0.75 * numLeds)`. On the 32×32 display (1024 LEDs), 64 particles cover 6% of pixels. The background noise layer fills the remaining 94%. This is the primary visual bottleneck for larger matrices — the fire looks sparse because the particle layer can't fill the frame.
 
-**2. Downbeat dramatic effects beyond spark count**
-Currently downbeat only adds more sparks. More impactful:
-- **Width expansion**: Multiply `sparkSpread` 2-3× on downbeat, exponential decay over 0.5s
-- **Color temperature shift**: Briefly push palette hotter (add white/blue tint), fade back over 0.5s
-- **Velocity burst**: Multiply `sparkVelocityMax` 1.5× for 0.3s after downbeat
-- These make bar 1 visually distinct, not just denser
+#### Completed (items from original plan)
 
-**3. Onset density → particle character**
-`onsetDensity` is currently unused by generators. Map it to fire personality:
-- High density (dance, 4-6/s): shorter lifespan, higher spawn rate, high-freq noise → jittery energetic fire
-- Low density (ambient, 0-1/s): longer lifespan, rare large bursts, low-freq noise → languid swaying
-- The fire's character automatically matches the music's density
+All originally planned audio coupling is implemented in `Fire.cpp`:
 
-**4. Beat-in-measure accent patterns**
-`beatInMeasure` is only used for downbeat. Extend:
-- Beat 1 (downbeat): maximum burst (already done)
-- Beat 3: medium burst (secondary accent)
-- Beats 2 & 4: spawn rate increase only (no extra sparks)
-- Even/odd beats: slight left/right spawn bias for visual "rocking"
+- **Phase-driven thermal buoyancy breathing** — `updateParticle()` lines 300-331: `phaseMod = 0.5 + 0.5 * phasePulse`, applied to `scaledThermalForce()`. Also phase-driven drag (1.5% extra off-beat).
+- **Downbeat dramatic effects** — `spawnParticles()` lines 138-143: `downbeatSpreadMult_` (2.5× → 1.0 over 0.5s), `downbeatColorShift_` (white/blue tint, 0.5s decay), `downbeatVelBoost_` (1.5× velocity, 0.3s decay). `particleColor()` applies the tint.
+- **Onset density → particle character** — `spawnTypedParticle()` line 237: `densityLifeMult = 1.5 - 0.75 * densityNorm`. Also drives noise speed in `generate()` lines 64-66 and wind turbulence line 85.
+- **Beat-in-measure accent patterns** — `spawnParticles()` lines 146-159: beat 3 at 50%, beats 2/4 at 25%, odd/even left/right rocking bias via `spawnBias_`.
 
-#### Tier 2: High Impact, Medium Effort
+#### Remaining Improvements
 
-**5. Multi-palette blending**
-Single fixed 6-stop palette. Define 2-3 palettes and blend by audio state:
-- **Warm** (default): black → red → orange → yellow (campfire)
-- **Hot** (high energy + rhythm): black → red → white → pale blue (intense)
-- **Cool** (low energy/ambient): black → deep red → dark orange (embers only)
-- Blend factor driven by `energy × rhythmStrength`
+Ranked by visual impact. All items use only `width_`, `height_`, `numLeds_`, `traversalDim_`, `crossDim_` for scaling — no device-specific constants.
 
-**6. Spawn-on-death cascading embers**
-When a high-intensity spark dies (boundary kill or max age), spawn 1-2 dim child embers with reduced velocity and longer lifespan. Creates the "shower of sparks" campfire feel and increases visual depth. Just a spawn call in the particle kill path.
+##### Tier 1: High Impact, Low Effort
 
-**7. Curl noise wind field**
-Replace per-particle simplex noise wind with curl noise (Bridson, SIGGRAPH 2007). Take the curl of a scalar noise field to get a divergence-free velocity field. Particles swirl around each other instead of just being pushed. 4 noise evaluations per particle per frame (~256 calls for 64 particles). Produces the characteristic rolling/curling motion at flame edges.
-```
-curl_x = (noise(x, y+eps, t) - noise(x, y-eps, t)) / (2*eps)
-curl_y = -(noise(x+eps, y, t) - noise(x-eps, y, t)) / (2*eps)
-```
+**1. Increase particle pool capacity**
+`ParticleGenerator<64>` is the bottleneck. On a 32×32 matrix, 64 particles at 6% coverage looks sparse. Change `Fire : ParticleGenerator<64>` to `ParticleGenerator<N>` where N scales with display size.
+- Template parameter is `uint8_t` (max 255). For 1024 LEDs at 0.75 coverage, 255 is the practical max.
+- RAM cost: 28 bytes/particle. 64→192 adds 3.6 KB. ESP32-S3 has 512 KB SRAM (vs nRF52840 256 KB), ample headroom. nRF52840 devices (max 128 LEDs) would still cap at 64-96 via `scaledMaxParticles()`.
+- Options: (a) conditional compile `ParticleGenerator<192>` on ESP32-S3, (b) raise to 192 globally (nRF52840 can absorb 5.4 KB), or (c) make it a runtime-resizable pool (more complex).
+- `scaledMaxParticles()` already handles the scaling: `min(POOL_CAP, 0.75 * numLeds)`. Just raise the pool cap.
 
-**8. Energy → flame height and density**
-`energy` currently only modulates spawn rate. Map it to:
-- Flame height: adjust kill boundary (low energy = particles die at 60% of height, high = reach top)
-- Particle density cap: `maxActive = 16 + energy * 48`
-- Background ember brightness: `backgroundIntensity = 0.05 + energy * 0.2`
-- Turbulence amplitude: higher energy = more chaotic wind
-
-#### Tier 3: Medium Impact, Creative
-
-**9. Self-modulating noise background (Stefan Petrick technique)**
-Use output of one noise field to distort coordinates of a second:
+**2. Self-modulating noise background (Stefan Petrick technique)**
+Current `MatrixBackground` uses 2-octave simplex noise with threshold and height falloff. Replace with domain-warped noise: use output of one noise field to distort coordinates of a second.
 ```
 n1 = SimplexNoise::noise3D(x * 0.1, y * 0.1, t * 0.02)
 n2 = SimplexNoise::noise3D(x * 0.2 + n1 * 2.0, y * 0.2 + n1 * 1.5, t * 0.03)
 ```
-Dramatically more organic ember bed appearance. 2 noise evals per pixel (256 calls for 16×8 matrix).
+Dramatically more organic ember bed with swirling, lava-lamp-like movement. On 32×32: 2048 noise calls (same as current 2-octave), negligible CPU increase. On 16×8: 256 calls. Scales naturally with `width_` × `height_` loop in `MatrixBackground::render()`.
+- Modify: `MatrixBackground::sampleNoise()` (replace second octave with domain warp)
+- Audio coupling already in place: `beatBrightness` and `noiseTime` modulation from `Fire::generate()`
 
-**10. Ember pulsing**
-Slow embers don't fade linearly — they pulse. Per-particle sinusoidal modulation:
-`intensity *= (0.7 + 0.3 * sin(age * freq + phase_offset))`
-Random freq and phase per ember. Creates "breathing coals" effect.
+**3. Multi-palette blending**
+Current `particleColor()` uses a single hardcoded 6-stop palette. Define 2-3 palettes and interpolate between them by audio state.
+- **Warm** (default): black → deep red → red → orange → yellow-orange → bright yellow (current)
+- **Hot** (high energy + rhythm): black → red → orange → white → pale blue (intense)
+- **Cool** (low energy/ambient): black → dark red → deep orange (embers only)
+- Blend factor: `energy * rhythmStrength` (both 0-1, already available in `audio_`)
+- Interpolation: per-stop RGB lerp between palette A and B. No HSV conversion needed — adjacent fire colors are already hue-monotonic.
+- Transition smoothing: low-pass the blend factor (~0.5s time constant) to avoid jarring shifts. Same pattern as `downbeatColorShift_` decay.
+- Modify: `Fire::particleColor()`, add `paletteBias_` member with exponential smoothing in `spawnParticles()`
 
-**11. Reaction-diffusion flame base (FitzHugh-Nagumo)**
-Run a 1D reaction-diffusion system along the bottom row to control spawn intensity. Creates naturally-forming "flame tongues" that split, merge, and oscillate. ~32 multiply-adds per frame for 16-wide base. Very organic.
+**4. Intensity-to-palette gamma curve**
+Apply nonlinear gamma before palette lookup in `particleColor()`: `index = pow(intensity/255.0, gamma) * 255`.
+- Audio-driven gamma: high energy → gamma < 1.0 (more visible ember glow, brighter midtones). Low energy → gamma > 1.0 (only brightest sparks visible, dark base).
+- Reduces banding on larger matrices (32×32 has 1024 pixels to fill smooth gradients).
+- 1 `powf()` call per particle per frame. Trivial cost.
+- Modify: `Fire::particleColor()` (add gamma remap before palette lookup)
 
-**12. Intensity-to-palette gamma curve**
-Apply nonlinear gamma before palette lookup: `index = pow(intensity/255.0, gamma) * 255`. Audio-driven gamma: high energy → gamma < 1.0 (more visible ember glow). Low energy → gamma > 1.0 (only brightest sparks visible).
+##### Tier 2: High Impact, Medium Effort
 
-**13. Vortex filaments at flame base**
-2 counter-rotating virtual vortices that alternate activation. Particles get rotational kicks, creating S-curve flame shapes. One sqrt + division per vortex per particle. Could trigger on downbeat (inject temporary vortex for 1s, creating mushroom-cloud bloom).
+**5. Curl noise wind field**
+Current wind: `ForceAdapter` applies simplex noise per-particle for turbulence. Replace with curl noise (Bridson, SIGGRAPH 2007) — take the curl of a scalar noise field to get a divergence-free velocity field.
+```
+curl_x = (noise(x, y+eps, t) - noise(x, y-eps, t)) / (2*eps)
+curl_y = -(noise(x+eps, y, t) - noise(x-eps, y, t)) / (2*eps)
+```
+Particles swirl around each other instead of being pushed independently. 4 noise evals per particle per frame. At 192 particles: 768 calls. At 64: 256 calls. Well under 1ms on either platform.
+- Modify: `MatrixForceAdapter::applyWind()` or add `CurlNoiseForceAdapter`. Audio coupling: `noiseTime_` already modulates time, wind variation already scales by `densityNorm` and `phasePulse`.
+- Biggest visual win on 32×32 where particle paths are long enough to see the swirling motion.
 
-#### Audio Signal → Fire Parameter Mapping Reference
+**6. Energy → dynamic flame height**
+`energy` drives spawn rate and noise speed but not flame extent. Map it to the kill boundary:
+- Low energy: particles killed at `0.4 * height_` (short flame, mostly embers)
+- High energy: particles reach full `height_` (tall roaring fire)
+- Formula: `killY = height_ * (0.4 + 0.6 * energy)` (already 0-1 normalized)
+- Also modulate `backgroundIntensity`: `0.05 + 0.2 * energy` (brighter ember bed when loud)
+- Requires: custom `BoundaryBehavior` that checks Y against dynamic threshold, or modify `KillBoundary` to accept a dynamic limit. `KillBoundary` currently checks `y < 0 || y >= height_` — change to `y < killY` for fire.
 
-| Signal | Current Use | Proposed New Mappings |
-|--------|-------------|----------------------|
-| `phase` | Spawn rate breathing, velocity boost | Thermal buoyancy breathing, drag breathing, background glow, color temp |
-| `pulse` | Spark burst count | Wind gust magnitude, flash particles, background spike |
-| `downbeat` | Extra sparks | Width expansion, color temp shift, velocity burst, vortex injection |
-| `energy` | Spawn rate modifier | Flame height, particle density cap, background brightness, turbulence |
-| `rhythmStrength` | Organic/music blend | Spawn regularity window, particle type distribution |
-| `onsetDensity` | *Unused* | Particle lifespan, turbulence frequency, spawn rate vs burst size |
-| `beatInMeasure` | *Unused (beyond downbeat)* | Accent patterns, left/right spawn bias |
+**7. Spawn-on-death cascading embers**
+When a high-intensity spark dies (boundary kill or max age), spawn 1-2 dim child embers with reduced velocity and longer lifespan. "Shower of sparks" effect.
+- Child sparks: intensity 30-60 (deep red range), lifespan 1.5× parent, velocity 0.3× parent + random spread, type SLOW_EMBER.
+- **Pool exhaustion guard**: max 2 child spawns per frame, only when `pool_.getActiveCount() < scaledMaxParticles() * 0.8`. Prevents cascade from starving beat-triggered spawns.
+- Modify: `ParticlePool::updateAll()` callback in `ParticleGenerator::updateParticles()` — when particle dies, call `Fire::onParticleDeath()`. Or add a `deathCallback` to the pool template.
+- More impactful with larger pool (#1 above) — 64 particles is too tight for cascading.
+
+##### Tier 3: Medium Impact, Creative
+
+**8. Ember pulsing**
+Slow embers don't fade linearly — they pulse. Per-particle sinusoidal modulation in `renderParticle()`:
+`renderIntensity = intensity * (0.7 + 0.3 * sin(age * freq + phase_offset))`
+Requires adding a `phase_offset` field to `Particle` (or derive from spawn position). Creates "breathing coals" effect. Zero spawn/kill cost — purely cosmetic per-frame modulation.
+- Can use existing `p->x + p->y` as phase seed (deterministic, no extra storage).
+
+**9. Reaction-diffusion flame base (FitzHugh-Nagumo)**
+Run a 1D reaction-diffusion system along the bottom row to modulate spawn intensity. Creates naturally-forming "flame tongues" that split, merge, and oscillate.
+- Buffer: `float activator_[width_]` + `float inhibitor_[width_]` — 256 bytes at width=32, 128 bytes at width=16.
+- Cost: ~width multiply-adds per frame. At 32-wide: negligible.
+- Audio coupling: `energy` → reaction rate (faster = more tongue formation), `pulse` → inject activation spike at random position.
+- Modify: `Fire::spawnParticles()` — multiply `spawnProb` by `activator_[x]` for each spawn position.
+
+**10. Vortex filaments at flame base**
+2 counter-rotating virtual vortices that alternate activation. Particles get rotational velocity kicks, creating S-curve flame shapes.
+- Per vortex per particle: 1 sqrt + 1 division (distance and angle). At 192 particles × 2 vortices: 384 sqrt calls. ~0.1ms.
+- Downbeat trigger: inject temporary vortex for 1s (mushroom-cloud bloom). Dramatic on 32×32 where the bloom has room to develop.
+- Modify: `Fire::updateParticle()` — add vortex velocity contribution when `downbeatVelBoost_ > 0`.
+
+#### Audio Signal → Fire Parameter Mapping (Current State)
+
+| Signal | Current Implementation | Remaining Opportunities |
+|--------|----------------------|------------------------|
+| `phase` | Thermal buoyancy breathing (0.5-1.0×), spawn rate pump, velocity boost, drag modulation, wind breathing, background brightness | — (fully utilized) |
+| `pulse` | Burst spark count, velocity boost, wind gust magnitude | — (fully utilized) |
+| `downbeat` | Extra sparks, spread expansion (2.5×), color temp shift, velocity burst (1.5×) | Vortex injection (#10) |
+| `energy` | Spawn rate, noise speed, wind turbulence | Flame height (#6), background brightness (#6), palette blend (#3), gamma (#4) |
+| `rhythmStrength` | Organic/music mode blend (spawn, velocity, wind, type selection) | — (fully utilized) |
+| `onsetDensity` | Lifespan modulation, noise speed, wind turbulence amplitude | Reaction-diffusion rate (#9) |
+| `beatInMeasure` | Beat 1/3/2/4 accent patterns, left/right spawn rocking bias | — (fully utilized) |
+
+#### Cleanup: Remove Vestigial `FireDefaults`
+
+`FireDefaults` in `DeviceConfig.h` (lines 56-64) contains 7 fields from the old heat-diffusion fire model: `baseCooling`, `sparkHeatMin`, `sparkHeatMax`, `sparkChance`, `audioSparkBoost`, `coolingAudioBias`, `bottomRowsForSparks`. The current particle-based `Fire` class never reads these — `Fire::begin()` only calls `ParticleGenerator::begin(config)` which reads `MatrixConfig` fields. `FireDefaults` is set in all 4 device config headers and persisted via `DeviceConfigLoader`, but serves no purpose.
+
+Remove: `FireDefaults` struct, `DeviceConfig.fireDefaults` field, all device config `.fireDefaults = { ... }` blocks, `DeviceConfigLoader` fire fields. ~40 lines across 7 files.
 
 #### References
 
 - [Bridson SIGGRAPH 2007: Curl-Noise for Procedural Fluid Flow](https://www.cs.ubc.ca/~rbridson/docs/bridson-siggraph2007-curlnoise.pdf)
 - [Stefan Petrick: Self-Modulating Noise Fire Effect](https://gist.github.com/StefanPetrick/819e873492f344ebebac5bcd2fdd8aa8)
+- [Inigo Quilez: Domain Warping](https://iquilezles.org/articles/warp/) — Noise domain warping for organic patterns
 - [FastLED Fire2012 (Mark Kriegsman)](https://github.com/FastLED/FastLED/blob/master/examples/Fire2012/Fire2012.ino)
 - [Fabien Sanglard: How DOOM Fire Was Done](https://fabiensanglard.net/doom_fire_psx/)
 - [Andrew Chan: Simulating Fluids, Fire, and Smoke in Real-Time](https://andrewkchan.dev/posts/fire.html)

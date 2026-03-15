@@ -4,7 +4,6 @@
 #include "ParticlePool.h"
 #include "Particle.h"
 #include "../physics/PhysicsContext.h"
-#include "../physics/PropagationModel.h"
 #include "../physics/SpawnRegion.h"
 #include "../physics/BoundaryBehavior.h"
 #include "../physics/ForceAdapter.h"
@@ -117,7 +116,7 @@ protected:
      * - spawnRegion_
      * - boundary_
      * - forceAdapter_
-     * - (optionally) propagation_ and background_ if needed
+     * - (optionally) background_ if needed
      *
      * Use PhysicsContext factory methods with placement new.
      */
