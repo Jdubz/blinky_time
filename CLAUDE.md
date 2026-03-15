@@ -2,15 +2,26 @@
 
 ## CRITICAL: Upload Safety
 
-**NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial`!**
+Upload safety depends on the platform. ESP32-S3 and nRF52840 use completely different upload protocols.
 
-- `arduino-cli upload` has race conditions in USB port re-enumeration
-- `adafruit-nrfutil dfu serial` uses single-bank DFU that can leave firmware partially written
-- Both methods can brick the device, requiring SWD hardware to recover
+### ESP32-S3: `arduino-cli upload` is SAFE
 
-### Safe Upload Method: UF2
+```bash
+arduino-cli compile --upload --fqbn esp32:esp32:XIAO_ESP32S3 -p /dev/ttyACM0 blinky-things
+```
 
-Use the UF2 upload script for safe CLI-based firmware upload:
+`arduino-cli upload` on ESP32-S3 calls **esptool**, which talks to the chip's hardware ROM bootloader. The ROM bootloader is burned into silicon and cannot be bricked. esptool verifies every write. If interrupted, the ROM bootloader still works and you just re-flash.
+
+### nRF52840: NEVER use `arduino-cli upload`
+
+**NEVER use `arduino-cli upload` or `adafruit-nrfutil dfu serial` on nRF52840!**
+
+- `arduino-cli upload` calls `adafruit-nrfutil dfu serial` under the hood
+- This protocol has race conditions in USB port re-enumeration
+- Single-bank DFU can leave firmware partially written
+- Can brick the device, requiring SWD hardware to recover
+
+**Use UF2 instead:**
 ```bash
 make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 ```
@@ -23,13 +34,13 @@ make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 
 See `tools/uf2_upload.py --help` for all options.
 
-### CRITICAL: Pre-Flash Checklist
+### nRF52840 Pre-Flash Checklist
 
 **Devices are physically installed — double-tap reset is NOT an option.**
 Bootloader entry MUST succeed via software (serial command or 1200-baud touch).
 A failed bootloader entry leaves the device running old firmware but wastes time.
 
-**Before EVERY flash attempt:**
+**Before EVERY nRF52840 flash attempt:**
 1. **Disconnect ALL MCP sessions** — `mcp__blinky-serial__disconnect` on every port, or verify `mcp__blinky-serial__status` shows no connections
 2. **Wait 3 seconds** after MCP disconnect — the Node.js `SerialPort.close()` is async; the OS file descriptor may not be released immediately
 3. **Do NOT flash immediately after interactive serial use** — always disconnect and wait
@@ -37,28 +48,33 @@ A failed bootloader entry leaves the device running old firmware but wastes time
 
 **Why this matters:** If an MCP server or console session holds the serial port, `uf2_upload.py` cannot send the bootloader entry command. The device resets but doesn't enter UF2 mode. The script retries 5 times (40+ seconds wasted), then fails. The `uf2_upload.py` script includes a port availability pre-check that will detect and report this condition.
 
-### Safe Operations
+### Safe Operations Summary
 
-**ALLOWED via CLI:**
-- `arduino-cli compile` - Compiling is safe
-- `make uf2-upload` - UF2 upload is safe (uses mass storage, not DFU serial)
-- `make uf2-check` - Dry run (compile + validate + convert, no upload)
-- `arduino-cli core list/install` - Core management is safe
-- Reading serial ports is safe
+**ESP32-S3:**
+- `arduino-cli compile --upload` — Safe (uses esptool)
+- `arduino-cli upload` — Safe (uses esptool)
 
-**NEVER DO via CLI:**
-- `arduino-cli upload` - Uses fragile DFU serial protocol
-- `adafruit-nrfutil dfu serial` - Same protocol, same risk
-- Any direct invocation of the DFU serial upload method
+**nRF52840:**
+- `arduino-cli compile` — Safe (compile only)
+- `make uf2-upload` — Safe (uses mass storage, not DFU serial)
+- `make uf2-check` — Safe (dry run, no upload)
+- `arduino-cli upload` — **NEVER** (uses fragile DFU serial protocol)
+- `adafruit-nrfutil dfu serial` — **NEVER**
 
-### If the Device Becomes Unresponsive
+**Both platforms:**
+- `arduino-cli core list/install` — Safe
+- Reading serial ports — Safe
 
-Devices are physically installed and reset buttons are NOT accessible.
+### If a Device Becomes Unresponsive
+
+**nRF52840** devices are physically installed and reset buttons are NOT accessible.
 If a device stops responding to serial commands:
 1. Try power-cycling via USB hub: `uhubctl -a cycle -p <port>`
 2. Re-run: `python3 tools/uf2_upload.py --build-dir /tmp/blinky-build /dev/ttyACMx`
 3. If the port disappeared entirely, wait 10 seconds and check `ls /dev/ttyACM*`
 4. Last resort: physically access the device and double-tap reset
+
+**ESP32-S3**: Just re-run `arduino-cli compile --upload`. The ROM bootloader always survives.
 
 ## CRITICAL: Long-Running Scripts
 
@@ -77,10 +93,18 @@ To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/<ex
 ## Compilation Commands
 
 ```bash
+# === ESP32-S3 ===
+# Compile only
+arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 blinky-things
+
+# Compile + upload (safe — uses esptool)
+arduino-cli compile --upload --fqbn esp32:esp32:XIAO_ESP32S3 -p /dev/ttyACM0 blinky-things
+
+# === nRF52840 ===
 # Compile only (in-tree build, requires TFLite library)
 arduino-cli compile --fqbn Seeeduino:nrf52:xiaonRF52840Sense blinky-things
 
-# Compile + validate + upload via UF2 (recommended)
+# Compile + validate + upload via UF2 (recommended, NEVER use arduino-cli upload)
 make uf2-upload UPLOAD_PORT=/dev/ttyACM0
 
 # Compile + validate only (dry run)
