@@ -1352,7 +1352,7 @@ bool SerialConsole::handleEffectCommand(const char* cmd) {
 
 // === WATER SETTINGS (Particle-based) ===
 // Prefixed with "w_" to avoid name collisions with fire settings.
-// Pool size is 30 (ParticleGenerator<30>), so maxparticles capped at 30.
+// Pool auto-sized in begin(): capacity = maxParticles * numLeds.
 void SerialConsole::registerWaterSettings(WaterParams* wp) {
     if (!wp) return;
 
@@ -1413,7 +1413,7 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
 
 // === LIGHTNING SETTINGS (Particle-based) ===
 // Prefixed with "l_" to avoid name collisions with fire settings.
-// Pool size is 40 (ParticleGenerator<40>), so maxparticles capped at 40.
+// Pool auto-sized in begin(): capacity = maxParticles * numLeds.
 void SerialConsole::registerLightningSettings(LightningParams* lp) {
     if (!lp) return;
 

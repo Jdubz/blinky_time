@@ -110,7 +110,7 @@ void Water::spawnParticles(float dt) {
     }
 
     // Spawn drops using layout-aware spawn region
-    uint8_t maxParts = scaledMaxParticles();
+    uint16_t maxParts = scaledMaxParticles();
     for (uint8_t i = 0; i < dropCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;
         getSpawnPosition(x, y);
@@ -195,7 +195,7 @@ uint32_t Water::particleColor(uint8_t intensity) const {
 
 void Water::spawnSplash(float x, float y, uint8_t parentIntensity) {
     // Calculate available slots (dimension-scaled)
-    uint8_t maxParts = scaledMaxParticles();
+    uint16_t maxParts = scaledMaxParticles();
     uint8_t available = maxParts > pool_.getActiveCount()
                         ? maxParts - pool_.getActiveCount()
                         : 0;

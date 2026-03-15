@@ -21,16 +21,18 @@
  * 5. Handle boundaries using BoundaryBehavior abstraction
  * 6. Render particles to matrix
  *
+ * Pool is allocated dynamically in begin() based on device dimensions.
+ * Subclasses provide a density fraction via particleDensity() that
+ * determines pool capacity as a fraction of numLeds.
+ *
  * Subclasses customize behavior by implementing:
+ * - particleDensity(): Fraction of numLeds for pool capacity (e.g., 0.75)
  * - initPhysicsContext(): Set up layout-appropriate physics
  * - spawnParticles(): When and how to create particles
  * - updateParticle(): Per-particle custom logic
  * - renderParticle(): How to draw each particle
  * - particleColor(): Particle appearance
- *
- * Template parameter MAX_PARTICLES determines pool size.
  */
-template<uint8_t MAX_PARTICLES>
 class ParticleGenerator : public Generator {
 public:
     ParticleGenerator()
@@ -48,7 +50,12 @@ public:
 
         computeDimensionScales();
 
-        pool_.reset();
+        // Allocate particle pool based on device size and generator density
+        uint16_t capacity = poolCapacity();
+        if (!pool_.begin(capacity)) {
+            return false;
+        }
+
         lastUpdateMs_ = millis();
 
         // Initialize physics context - subclasses implement this
@@ -68,6 +75,11 @@ public:
         if (!forceAdapter_) {
             Serial.println(F("WARN: forceAdapter_ null after initPhysicsContext"));
         }
+        Serial.print(F("[INFO] Particle pool: "));
+        Serial.print(capacity);
+        Serial.print(F(" particles ("));
+        Serial.print(capacity * (uint16_t)sizeof(Particle));
+        Serial.println(F(" bytes)"));
         #endif
 
         return true;
@@ -106,6 +118,26 @@ public:
     }
 
 protected:
+    // ========================================
+    // Pool sizing
+    // ========================================
+
+    /**
+     * Particle density fraction (0.0-1.0) — fraction of numLeds for pool capacity.
+     * Subclasses override to set their target density.
+     * Default: 0.75 (fire-like density).
+     */
+    virtual float particleDensity() const { return 0.75f; }
+
+    /**
+     * Compute pool capacity from device dimensions and density.
+     * Minimum 8 particles regardless of device size.
+     */
+    uint16_t poolCapacity() const {
+        float raw = particleDensity() * numLeds_;
+        return (uint16_t)max(8.0f, min(raw, 2048.0f));
+    }
+
     // ========================================
     // Physics context initialization
     // ========================================
@@ -272,7 +304,7 @@ protected:
     // State
     // ========================================
 
-    ParticlePool<MAX_PARTICLES> pool_;
+    ParticlePool pool_;
     AudioControl audio_;
     float prevPhase_;
 

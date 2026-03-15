@@ -269,7 +269,7 @@ The fire generator (`Fire.h/cpp`) is a particle system with 3 spark types (FAST_
 
 **Code review findings (March 15, 2026):**
 - All 7 AudioControl signals are already consumed (phase, pulse, downbeat, energy, rhythmStrength, onsetDensity, beatInMeasure). The original plan items 1-4 are implemented.
-- `FireDefaults` struct in `DeviceConfig.h` (baseCooling, sparkHeatMin, etc.) is **vestigial** — leftover from the old heat-diffusion model. `Fire::begin()` never reads `config.fireDefaults`. Should be removed in a future cleanup.
+- `FireDefaults` struct removed (commit 15ce5c7). Was vestigial from old heat-diffusion model — `Fire::begin()` never read it.
 - Background noise (`MatrixBackground`) iterates every pixel with 2 simplex noise evals per pixel. At 32×32 = 1024 pixels this is ~2048 noise calls/frame — still under 1ms at 240 MHz (ESP32-S3) but worth monitoring.
 
 **Scaling constraint: particle pool size.** `ParticleGenerator<64>` hard-caps at 64 particles (`uint8_t` template, max 255). `scaledMaxParticles()` caps at `min(64, 0.75 * numLeds)`. On the 32×32 display (1024 LEDs), 64 particles cover 6% of pixels. The background noise layer fills the remaining 94%. This is the primary visual bottleneck for larger matrices — the fire looks sparse because the particle layer can't fill the frame.
@@ -292,7 +292,7 @@ Ranked by visual impact. All items use only `width_`, `height_`, `numLeds_`, `tr
 **1. Increase particle pool capacity**
 `ParticleGenerator<64>` is the bottleneck. On a 32×32 matrix, 64 particles at 6% coverage looks sparse. Change `Fire : ParticleGenerator<64>` to `ParticleGenerator<N>` where N scales with display size.
 - Template parameter is `uint8_t` (max 255). For 1024 LEDs at 0.75 coverage, 255 is the practical max.
-- RAM cost: 28 bytes/particle. 64→192 adds 3.6 KB. ESP32-S3 has 512 KB SRAM (vs nRF52840 256 KB), ample headroom. nRF52840 devices (max 128 LEDs) would still cap at 64-96 via `scaledMaxParticles()`.
+- RAM cost: 24 bytes/particle. 64→192 adds 3.1 KB. ESP32-S3 has 512 KB SRAM (vs nRF52840 256 KB), ample headroom. nRF52840 devices (max 128 LEDs) would still cap at 64-96 via `scaledMaxParticles()`.
 - Options: (a) conditional compile `ParticleGenerator<192>` on ESP32-S3, (b) raise to 192 globally (nRF52840 can absorb 5.4 KB), or (c) make it a runtime-resizable pool (more complex).
 - `scaledMaxParticles()` already handles the scaling: `min(POOL_CAP, 0.75 * numLeds)`. Just raise the pool cap.
 
@@ -383,11 +383,9 @@ Run a 1D reaction-diffusion system along the bottom row to modulate spawn intens
 | `onsetDensity` | Lifespan modulation, noise speed, wind turbulence amplitude | Reaction-diffusion rate (#9) |
 | `beatInMeasure` | Beat 1/3/2/4 accent patterns, left/right spawn rocking bias | — (fully utilized) |
 
-#### Cleanup: Remove Vestigial `FireDefaults`
+#### Cleanup: ~~Remove Vestigial `FireDefaults`~~ — DONE (commit 15ce5c7)
 
-`FireDefaults` in `DeviceConfig.h` (lines 56-64) contains 7 fields from the old heat-diffusion fire model: `baseCooling`, `sparkHeatMin`, `sparkHeatMax`, `sparkChance`, `audioSparkBoost`, `coolingAudioBias`, `bottomRowsForSparks`. The current particle-based `Fire` class never reads these — `Fire::begin()` only calls `ParticleGenerator::begin(config)` which reads `MatrixConfig` fields. `FireDefaults` is set in all 4 device config headers and persisted via `DeviceConfigLoader`, but serves no purpose.
-
-Remove: `FireDefaults` struct, `DeviceConfig.fireDefaults` field, all device config `.fireDefaults = { ... }` blocks, `DeviceConfigLoader` fire fields. ~40 lines across 7 files.
+Removed `FireDefaults` struct, `PropagationModel` hierarchy, `CenterSpawnRegion`, unused `SpawnRegion` methods, `Particle::trailHeatFactor`, `ParticleFlags::EMIT_TRAIL`, `Generator::coordsToIndex/indexToCoords`, `GeneratorType::CUSTOM`. 32 files, -787 lines. Particle struct 28→24 bytes.
 
 #### References
 

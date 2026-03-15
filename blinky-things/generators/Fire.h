@@ -23,7 +23,7 @@ struct FireParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
-    float maxParticles;           // Fraction of numLeds for max active particles (scaled, clamped to pool)
+    float maxParticles;           // Fraction of numLeds for max active particles
     uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -57,7 +57,7 @@ struct FireParams {
         // at use-time, so no per-device calibration is needed.
         baseSpawnChance = 0.5f;       // Continuous sparks for constant fire
         audioSpawnBoost = 1.5f;       // Strong audio response
-        maxParticles = 0.75f;         // Fraction of numLeds (clamped to pool capacity 64)
+        maxParticles = 0.75f;         // Fraction of numLeds (pool auto-sized in begin())
         defaultLifespan = 170;        // 1.7 seconds to rise (centiseconds, time-based, device-independent)
         intensityMin = 150;           // BRIGHT red/orange
         intensityMax = 220;           // Very bright (orange range)
@@ -94,7 +94,7 @@ struct FireParams {
  * - Wind turbulence visible as sparks sway (no static heat underlayer)
  * - Beat-synced burst spawning in music mode
  */
-class Fire : public ParticleGenerator<64> {
+class Fire : public ParticleGenerator {
 public:
     Fire();
     virtual ~Fire() override;
@@ -136,24 +136,18 @@ private:
      */
     void spawnTypedParticle(SparkType type, float x, float y, float baseSpeed);
 
+    // Pool sizing: density comes from params_.maxParticles
+    float particleDensity() const override { return params_.maxParticles; }
+
     // Dimension-derived parameter accessors.
     // Params are stored as normalized rates/fractions; these multiply by
     // the actual device dimensions so the visual effect auto-adapts.
-    //
-    // sparkVelocityMin/Max: fraction of traversal per second (0.33 = 33% of height/sec)
-    // sparkSpread:          fraction of cross dimension for horizontal scatter
-    // windVariation:        fraction of cross dimension for turbulence amplitude
-    // thermalForce:         fraction of traversal for buoyancy acceleration
-    // maxParticles:         fraction of total LEDs (0.0–1.0)
-    // burstSparks:          fraction of cross dimension for burst count
     float scaledVelMin() const { return params_.sparkVelocityMin * traversalDim_; }
     float scaledVelMax() const { return params_.sparkVelocityMax * traversalDim_; }
     float scaledSpread() const { return params_.sparkSpread * crossDim_; }
     float scaledWindVar() const { return params_.windVariation * crossDim_; }
     float scaledThermalForce() const { return params_.thermalForce * traversalDim_; }
-    uint8_t scaledMaxParticles() const {
-        return (uint8_t)min(64.0f, max(8.0f, params_.maxParticles * numLeds_));
-    }
+    uint16_t scaledMaxParticles() const { return pool_.getCapacity(); }
     uint8_t scaledBurstSparks() const {
         return (uint8_t)max(1.0f, params_.burstSparks * crossDim_);
     }

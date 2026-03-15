@@ -108,7 +108,7 @@ void Lightning::spawnParticles(float dt) {
     }
 
     // Spawn coherent lightning bolts as connected particle chains (respect maxParticles limit)
-    uint8_t maxParts = scaledMaxParticles();
+    uint16_t maxParts = scaledMaxParticles();
     for (uint8_t i = 0; i < boltCount && pool_.getActiveCount() < maxParts; i++) {
         spawnBolt();
     }
@@ -148,7 +148,7 @@ void Lightning::spawnBolt() {
     float yStep = (y1 - y0) / steps;
 
     // Spawn particles along the line with slight random jitter for organic look
-    uint8_t maxParts = scaledMaxParticles();
+    uint16_t maxParts = scaledMaxParticles();
     for (int step = 0; step <= steps && pool_.getActiveCount() < maxParts; step++) {
         float x = x0 + xStep * step;
         float y = y0 + yStep * step;
@@ -207,7 +207,7 @@ uint32_t Lightning::particleColor(uint8_t intensity) const {
 
 void Lightning::spawnBranch(const Particle* parent) {
     // Calculate available slots (dimension-scaled)
-    uint8_t maxParts = scaledMaxParticles();
+    uint16_t maxParts = scaledMaxParticles();
     uint8_t available = maxParts > pool_.getActiveCount()
                         ? maxParts - pool_.getActiveCount()
                         : 0;

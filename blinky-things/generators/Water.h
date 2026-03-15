@@ -14,7 +14,7 @@ struct WaterParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
-    float maxParticles;           // Fraction of numLeds for max active particles (scaled, clamped to pool)
+    float maxParticles;           // Fraction of numLeds for max active particles
     uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -48,7 +48,7 @@ struct WaterParams {
         // The generator multiplies by traversalDim_ or crossDim_ at use-time.
         baseSpawnChance = 0.8f;       // HIGH spawn rate - always raining
         audioSpawnBoost = 0.3f;       // Some music response
-        maxParticles = 0.5f;          // Fraction of numLeds (clamped to pool capacity 30)
+        maxParticles = 0.5f;          // Fraction of numLeds (pool auto-sized in begin())
         defaultLifespan = 200;        // 2.0 seconds to fall (centiseconds, device-independent)
         intensityMin = 180;           // BRIGHT drops
         intensityMax = 255;           // Maximum brightness
@@ -83,7 +83,7 @@ struct WaterParams {
  * - Beat-synced wave generation in music mode
  * - Smooth physics-based motion
  */
-class Water : public ParticleGenerator<30> {
+class Water : public ParticleGenerator {
 public:
     Water();
     virtual ~Water() override = default;
@@ -130,9 +130,9 @@ private:
     float scaledDropVelMax() const { return params_.dropVelocityMax * traversalDim_; }
     float scaledDropSpread() const { return params_.dropSpread * crossDim_; }
     float scaledWindVar() const { return params_.windVariation * crossDim_; }
-    uint8_t scaledMaxParticles() const {
-        return (uint8_t)min(30.0f, max(8.0f, params_.maxParticles * numLeds_));
-    }
+    // Pool sizing: density comes from params_.maxParticles
+    float particleDensity() const override { return params_.maxParticles; }
+    uint16_t scaledMaxParticles() const { return pool_.getCapacity(); }
     float scaledSplashVelMin() const { return params_.splashVelocityMin * traversalDim_; }
     float scaledSplashVelMax() const { return params_.splashVelocityMax * traversalDim_; }
     // No minimum floor: allows 0 to disable splashes via serial (set w_splashparts 0)

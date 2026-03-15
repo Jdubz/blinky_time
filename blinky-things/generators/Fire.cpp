@@ -178,7 +178,7 @@ void Fire::spawnParticles(float dt) {
     }
 
     // Spawn sparks using layout-aware spawn region with variety
-    uint8_t maxParts = scaledMaxParticles();
+    uint16_t maxParts = scaledMaxParticles();
     for (uint8_t i = 0; i < sparkCount && pool_.getActiveCount() < maxParts; i++) {
         float x, y;
         getSpawnPosition(x, y);
