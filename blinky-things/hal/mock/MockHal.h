@@ -243,10 +243,9 @@ public:
         }
     }
 
-    // Capability queries — configurable so tests can exercise either strategy
+    // Capability queries — configurable so tests can exercise either strategy.
+    // Min (0) and max (80) match IPdmMic defaults and are not overridden.
     bool  hasHardwareGain() const override { return hasHardwareGain_; }
-    int   getGainMinDb()    const override { return 0; }
-    int   getGainMaxDb()    const override { return 80; }
     float getGainStepDb()   const override { return hasHardwareGain_ ? 0.5f : 1.0f; }
 
     int getGain() const { return gain_; }

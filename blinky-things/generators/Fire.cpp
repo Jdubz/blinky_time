@@ -309,11 +309,7 @@ void Fire::updateParticle(Particle* p, float dt) {
     float phaseMod = 1.0f;
     if (audio_.rhythmStrength > 0.3f) {
         float phasePulse = audio_.phaseToPulse();  // 1.0 on-beat, 0.0 off-beat
-        phaseMod = (0.5f + 0.5f * phasePulse) *        // 0.5 off-beat → 1.0 on-beat
-                   (1.0f - audio_.rhythmStrength) +     // organic contribution
-                   (0.5f + 0.5f * phasePulse) *         // blended
-                    audio_.rhythmStrength;
-        phaseMod = 0.5f + 0.5f * phasePulse;           // simplified: 0.5–1.0 range
+        phaseMod = 0.5f + 0.5f * phasePulse;      // 0.5 off-beat → 1.0 on-beat
     }
 
     // At full intensity (1.0): applies params_.thermalForce LEDs/sec^2 upward.

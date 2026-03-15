@@ -36,11 +36,9 @@ public:
     int  read(int16_t* buffer, int maxBytes) override;
     void poll() override;
 
-    // Hardware capability: ESP32-S3 has no PDM gain register — software gain only
-    bool  hasHardwareGain() const override { return false; }
-    int   getGainMinDb()    const override { return 0; }
-    int   getGainMaxDb()    const override { return 80; }
-    float getGainStepDb()   const override { return 1.0f; }
+    // Hardware capability: ESP32-S3 has no PDM gain register — software gain only.
+    // All four capability queries (hasHardwareGain=false, min=0, max=80, step=1.0)
+    // match the IPdmMic defaults, so no overrides are needed here.
 
 private:
     static constexpr int STAGING_SIZE = 512;   // samples (1024 bytes)

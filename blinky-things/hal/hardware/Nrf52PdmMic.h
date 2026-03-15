@@ -23,10 +23,10 @@ public:
     int available() override;
     int read(int16_t* buffer, int maxBytes) override;
 
-    // Hardware capability: nRF52840 has real PDM gain registers
+    // Hardware capability: nRF52840 has real PDM gain registers (GAINL/GAINR),
+    // 0–80 dB range at 0.5 dB steps. Min/max match IPdmMic defaults so only the
+    // differentiating properties are overridden here.
     bool  hasHardwareGain() const override { return true; }
-    int   getGainMinDb()    const override { return 0; }
-    int   getGainMaxDb()    const override { return 80; }
     float getGainStepDb()   const override { return 0.5f; }
 };
 
