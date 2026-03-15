@@ -85,26 +85,36 @@ private:
                      float scale, float time, float brightness) {
         float heightFalloff = getIntensityAt(x, y, width, height);
 
-        // Sample 3D noise for lava lamp effect
-        // Increased scale from 0.08 to 0.35 for smaller blobs (1/5 size)
         float lavaScale = (style_ == BackgroundStyle::FIRE) ? 0.35f : scale;
         float nx = x * lavaScale;
         float ny = y * lavaScale;
-        float noiseVal = SimplexNoise::noise3D_01(nx, ny, time * 0.03f);  // VERY slow drift like real lava lamp
 
-        // Add second octave for more organic detail (less influence for lava lamp)
-        float noiseVal2 = SimplexNoise::noise3D_01(nx * 2.0f, ny * 2.0f, time * 0.05f);
-        noiseVal = noiseVal * 0.8f + noiseVal2 * 0.2f;  // Primary octave dominates
+        float noiseVal;
+        if (style_ == BackgroundStyle::FIRE) {
+            // Domain-warped noise (Stefan Petrick technique): use output of
+            // one noise field to distort coordinates of a second. Produces
+            // swirling, lava-lamp-like movement instead of simple drifting blobs.
+            // Same cost as 2-octave (2 noise evals per pixel).
+            float warp = SimplexNoise::noise3D_01(nx * 0.8f, ny * 0.8f, time * 0.02f);
+            noiseVal = SimplexNoise::noise3D_01(
+                nx + warp * 2.0f,
+                ny + warp * 1.5f,
+                time * 0.03f);
+        } else {
+            // Non-fire styles: standard 2-octave noise
+            noiseVal = SimplexNoise::noise3D_01(nx, ny, time * 0.03f);
+            float noiseVal2 = SimplexNoise::noise3D_01(nx * 2.0f, ny * 2.0f, time * 0.05f);
+            noiseVal = noiseVal * 0.8f + noiseVal2 * 0.2f;
+        }
 
-        // LAVA LAMP EFFECT: Apply threshold and contrast boost
-        // Only show noise above threshold (0.4), then boost brightness
+        // Threshold + contrast boost: only show noise above threshold,
+        // then remap to 0-1 and square for high-contrast bright blobs
         const float threshold = 0.4f;
         if (noiseVal < threshold) {
-            noiseVal = 0.0f;  // Dark areas stay completely dark
+            noiseVal = 0.0f;
         } else {
-            // Remap 0.4-1.0 range to 0.0-1.0 and apply power curve for contrast
             noiseVal = (noiseVal - threshold) / (1.0f - threshold);
-            noiseVal = noiseVal * noiseVal;  // Square for higher contrast (bright blobs)
+            noiseVal = noiseVal * noiseVal;
         }
 
         // Combine noise with height falloff and beat brightness

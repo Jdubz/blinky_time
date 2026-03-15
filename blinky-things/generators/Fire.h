@@ -162,6 +162,9 @@ private:
     float downbeatVelBoost_;     // Velocity boost: 0.5 peak (1.5× total) → 0.0 over 0.3s
     float spawnBias_;            // Left/right spawn bias per beat-in-measure (fraction of crossDim)
 
+    // Palette blending state (low-pass filtered to avoid jarring shifts)
+    float paletteBias_;          // 0.0 = warm/cool, 1.0 = hot (smoothed energy*rhythm)
+
     // Fire-specific physics components
     BackgroundModel* background_;
 
