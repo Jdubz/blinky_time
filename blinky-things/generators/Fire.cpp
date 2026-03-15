@@ -71,8 +71,10 @@ void Fire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f / 60.0f);  // ~0.5s at 60 Hz
 
     // Render noise background first (underlayer)
+    // Energy modulates background brightness: louder → brighter ember bed
     if (background_) {
-        background_->setIntensity(params_.backgroundIntensity);
+        float bgIntensity = params_.backgroundIntensity * (0.3f + 0.7f * audio.energy);
+        background_->setIntensity(bgIntensity);
         background_->render(matrix, width_, height_, noiseTime_, audio);
     }
 
@@ -302,6 +304,17 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
 }
 
 void Fire::updateParticle(Particle* p, float dt) {
+    // Dynamic flame height: energy controls how high particles can rise.
+    // Low energy → short flame (40% of height), high energy → full height.
+    // Only applies on matrix layouts where Y=0 is top.
+    if (PhysicsContext::isPrimaryAxisVertical(layout_)) {
+        float flameTop = height_ * (1.0f - (0.4f + 0.6f * audio_.energy));
+        if (p->y < flameTop) {
+            pool_.kill(p);
+            return;
+        }
+    }
+
     if (params_.thermalForce <= 0.0f) return;
 
     // Thermal buoyancy: hotter particles rise faster.

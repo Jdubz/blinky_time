@@ -287,61 +287,23 @@ All originally planned audio coupling is implemented in `Fire.cpp`:
 
 Ranked by visual impact. All items use only `width_`, `height_`, `numLeds_`, `traversalDim_`, `crossDim_` for scaling — no device-specific constants.
 
-##### Tier 1: High Impact, Low Effort
+##### ~~Tier 1: High Impact, Low Effort~~ — ALL DONE
 
-**1. Increase particle pool capacity**
-`ParticleGenerator<64>` is the bottleneck. On a 32×32 matrix, 64 particles at 6% coverage looks sparse. Change `Fire : ParticleGenerator<64>` to `ParticleGenerator<N>` where N scales with display size.
-- Template parameter is `uint8_t` (max 255). For 1024 LEDs at 0.75 coverage, 255 is the practical max.
-- RAM cost: 24 bytes/particle. 64→192 adds 3.1 KB. ESP32-S3 has 512 KB SRAM (vs nRF52840 256 KB), ample headroom. nRF52840 devices (max 128 LEDs) would still cap at 64-96 via `scaledMaxParticles()`.
-- Options: (a) conditional compile `ParticleGenerator<192>` on ESP32-S3, (b) raise to 192 globally (nRF52840 can absorb 5.4 KB), or (c) make it a runtime-resizable pool (more complex).
-- `scaledMaxParticles()` already handles the scaling: `min(POOL_CAP, 0.75 * numLeds)`. Just raise the pool cap.
+**~~1. Dynamic particle pool~~** — DONE (commit b856b98). Removed compile-time `ParticleGenerator<N>` template. Pool allocated in `begin()` from `particleDensity() * numLeds`. 32×32 display gets 768 fire particles (was capped at 64). All generators (Fire/Water/Lightning) auto-size.
 
-**2. Self-modulating noise background (Stefan Petrick technique)**
-Current `MatrixBackground` uses 2-octave simplex noise with threshold and height falloff. Replace with domain-warped noise: use output of one noise field to distort coordinates of a second.
-```
-n1 = SimplexNoise::noise3D(x * 0.1, y * 0.1, t * 0.02)
-n2 = SimplexNoise::noise3D(x * 0.2 + n1 * 2.0, y * 0.2 + n1 * 1.5, t * 0.03)
-```
-Dramatically more organic ember bed with swirling, lava-lamp-like movement. On 32×32: 2048 noise calls (same as current 2-octave), negligible CPU increase. On 16×8: 256 calls. Scales naturally with `width_` × `height_` loop in `MatrixBackground::render()`.
-- Modify: `MatrixBackground::sampleNoise()` (replace second octave with domain warp)
-- Audio coupling already in place: `beatBrightness` and `noiseTime` modulation from `Fire::generate()`
+**~~2. Domain-warped noise background~~** — DONE (commit 5060701). `MatrixBackground::sampleNoise()` uses Stefan Petrick domain-warp for fire style: first noise field distorts coordinates of second. Swirling lava-lamp movement. Same cost (2 noise evals/pixel).
 
-**3. Multi-palette blending**
-Current `particleColor()` uses a single hardcoded 6-stop palette. Define 2-3 palettes and interpolate between them by audio state.
-- **Warm** (default): black → deep red → red → orange → yellow-orange → bright yellow (current)
-- **Hot** (high energy + rhythm): black → red → orange → white → pale blue (intense)
-- **Cool** (low energy/ambient): black → dark red → deep orange (embers only)
-- Blend factor: `energy * rhythmStrength` (both 0-1, already available in `audio_`)
-- Interpolation: per-stop RGB lerp between palette A and B. No HSV conversion needed — adjacent fire colors are already hue-monotonic.
-- Transition smoothing: low-pass the blend factor (~0.5s time constant) to avoid jarring shifts. Same pattern as `downbeatColorShift_` decay.
-- Modify: `Fire::particleColor()`, add `paletteBias_` member with exponential smoothing in `spawnParticles()`
+**~~3. Multi-palette blending~~** — DONE (commit 5060701). Two palettes (warm campfire, hot white-blue) in `particleColor()`. Blended by smoothed `energy * rhythmStrength` via `paletteBias_` (low-pass, ~0.5s time constant). Quiet = warm amber, loud rhythmic = white-hot.
 
-**4. Intensity-to-palette gamma curve**
-Apply nonlinear gamma before palette lookup in `particleColor()`: `index = pow(intensity/255.0, gamma) * 255`.
-- Audio-driven gamma: high energy → gamma < 1.0 (more visible ember glow, brighter midtones). Low energy → gamma > 1.0 (only brightest sparks visible, dark base).
-- Reduces banding on larger matrices (32×32 has 1024 pixels to fill smooth gradients).
-- 1 `powf()` call per particle per frame. Trivial cost.
-- Modify: `Fire::particleColor()` (add gamma remap before palette lookup)
+**~~4. Audio-driven gamma curve~~** — DONE (commit 5060701). `powf(intensity/255, gamma)` remap before palette lookup. Gamma 1.3 (cool) → 0.7 (hot) driven by `paletteBias_`. More ember glow when loud, only brightest sparks when quiet.
 
 ##### Tier 2: High Impact, Medium Effort
 
-**5. Curl noise wind field**
-Current wind: `ForceAdapter` applies simplex noise per-particle for turbulence. Replace with curl noise (Bridson, SIGGRAPH 2007) — take the curl of a scalar noise field to get a divergence-free velocity field.
-```
-curl_x = (noise(x, y+eps, t) - noise(x, y-eps, t)) / (2*eps)
-curl_y = -(noise(x+eps, y, t) - noise(x-eps, y, t)) / (2*eps)
-```
-Particles swirl around each other instead of being pushed independently. 4 noise evals per particle per frame. At 192 particles: 768 calls. At 64: 256 calls. Well under 1ms on either platform.
-- Modify: `MatrixForceAdapter::applyWind()` or add `CurlNoiseForceAdapter`. Audio coupling: `noiseTime_` already modulates time, wind variation already scales by `densityNorm` and `phasePulse`.
-- Biggest visual win on 32×32 where particle paths are long enough to see the swirling motion.
+**~~5. Curl noise wind field~~** — DONE
+Replaced fbm3D offset-pair approximation in `MatrixForceAdapter::applyWind()` with proper Bridson curl noise: finite-difference curl of a shared scalar noise field. 4 `noise3D_01` evals per particle. Divergence-free velocity field → particles swirl around each other. Applied as advection (position displacement), not force. All generators on matrix layouts benefit (Fire, Water, Lightning).
 
-**6. Energy → dynamic flame height**
-`energy` drives spawn rate and noise speed but not flame extent. Map it to the kill boundary:
-- Low energy: particles killed at `0.4 * height_` (short flame, mostly embers)
-- High energy: particles reach full `height_` (tall roaring fire)
-- Formula: `killY = height_ * (0.4 + 0.6 * energy)` (already 0-1 normalized)
-- Also modulate `backgroundIntensity`: `0.05 + 0.2 * energy` (brighter ember bed when loud)
-- Requires: custom `BoundaryBehavior` that checks Y against dynamic threshold, or modify `KillBoundary` to accept a dynamic limit. `KillBoundary` currently checks `y < 0 || y >= height_` — change to `y < killY` for fire.
+**~~6. Energy → dynamic flame height~~** — DONE
+Added dynamic kill in `Fire::updateParticle()`: `flameTop = height * (1 - (0.4 + 0.6 * energy))`. Particles above this threshold are killed. Quiet music = short flame (40% height), loud = full height. Also: background intensity now modulated by energy (`0.3 + 0.7 * energy`), so ember bed brightens with volume. Matrix-only (linear layouts unaffected).
 
 **7. Spawn-on-death cascading embers**
 When a high-intensity spark dies (boundary kill or max age), spawn 1-2 dim child embers with reduced velocity and longer lifespan. "Shower of sparks" effect.
@@ -375,11 +337,11 @@ Run a 1D reaction-diffusion system along the bottom row to modulate spawn intens
 
 | Signal | Current Implementation | Remaining Opportunities |
 |--------|----------------------|------------------------|
-| `phase` | Thermal buoyancy breathing (0.5-1.0×), spawn rate pump, velocity boost, drag modulation, wind breathing, background brightness | — (fully utilized) |
+| `phase` | Thermal buoyancy breathing, spawn pump, velocity boost, drag, wind breathing, background brightness | — (fully utilized) |
 | `pulse` | Burst spark count, velocity boost, wind gust magnitude | — (fully utilized) |
 | `downbeat` | Extra sparks, spread expansion (2.5×), color temp shift, velocity burst (1.5×) | Vortex injection (#10) |
-| `energy` | Spawn rate, noise speed, wind turbulence | Flame height (#6), background brightness (#6), palette blend (#3), gamma (#4) |
-| `rhythmStrength` | Organic/music mode blend (spawn, velocity, wind, type selection) | — (fully utilized) |
+| `energy` | Spawn rate, noise speed, wind turbulence, **palette blend (#3)**, **gamma (#4)**, **flame height (#6)**, **bg brightness (#6)** | — (fully utilized) |
+| `rhythmStrength` | Organic/music blend (spawn, velocity, wind, type), **palette blend (#3)** | — (fully utilized) |
 | `onsetDensity` | Lifespan modulation, noise speed, wind turbulence amplitude | Reaction-diffusion rate (#9) |
 | `beatInMeasure` | Beat 1/3/2/4 accent patterns, left/right spawn rocking bias | — (fully utilized) |
 
