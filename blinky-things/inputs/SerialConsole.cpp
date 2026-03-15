@@ -877,7 +877,12 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         Serial.println(F("Rebooting..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
+#ifdef BLINKY_PLATFORM_NRF52840
         NVIC_SystemReset();
+#elif defined(ARDUINO_ARCH_ESP32)
+        if (configStorage_) configStorage_->end();  // Flush NVS before restart
+        ESP.restart();
+#endif
         return true;  // Never reached
     }
 

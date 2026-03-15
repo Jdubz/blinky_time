@@ -50,7 +50,7 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     imu.invertX = stored.invertX;
     imu.invertY = stored.invertY;
 
-    SerialConfig serial;
+    BlinkySerialConfig serial;
     serial.baudRate = stored.baudRate;
     serial.initTimeoutMs = stored.initTimeoutMs;
 
@@ -169,13 +169,13 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         SerialConsole::logWarn(F("Invalid LED count: 0"));
         return false;
     }
-    if (ledCount > 500) {
-        SerialConsole::logWarn(F("LED count too high (>500)"));
+    if (ledCount > 2048) {
+        SerialConsole::logWarn(F("LED count too high (>2048)"));
         return false;
     }
 
-    // Validate LED pin (common GPIO pins on nRF52840)
-    if (stored.ledPin > 48) {  // nRF52840 has up to 48 GPIO pins
+    // Validate LED pin (nRF52840: 0-47, ESP32-S3: 0-48)
+    if (stored.ledPin > 48) {
         SerialConsole::logWarn(F("Invalid LED pin"));
         return false;
     }
@@ -188,7 +188,7 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
     }
 
     // Validate orientation
-    if (stored.orientation > 1) {  // 0=HORIZONTAL, 1=VERTICAL
+    if (stored.orientation > 2) {  // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID
         SerialConsole::logWarn(F("Invalid orientation"));
         return false;
     }

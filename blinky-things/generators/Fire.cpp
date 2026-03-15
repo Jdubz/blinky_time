@@ -208,8 +208,8 @@ void Fire::spawnTypedParticle(SparkType type, float x, float y, float baseSpeed)
         int lo = max(0, (int)params_.intensityMin - 30);
         int hi = max(0, (int)params_.intensityMax - 50);
         if (hi <= lo) hi = lo + 1;              // Prevent random(x, x) or inverted range
-        intensity = (uint8_t)max(1, random(lo, hi));  // max(1,...) ensures spawn succeeds
-        lifespan = (uint8_t)min(255, params_.defaultLifespan * 1.5f);  // 2.55s max, clamped
+        intensity = (uint8_t)max(1L, random(lo, hi));  // max(1,...) ensures spawn succeeds
+        lifespan = (uint8_t)min(255.0f, params_.defaultLifespan * 1.5f);  // 2.55s max, clamped
         speedMult = 0.6f;  // 40% slower
         break;
     }

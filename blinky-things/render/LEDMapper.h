@@ -183,6 +183,46 @@ private:
                     indexToY[ledIndex] = y;
                 }
             }
+        } else if (orientation == PANEL_GRID) {
+            // 2×2 grid of equal panels, chained TL→TR→BL→BR.
+            // Within each panel: serpentine rows (even rows left→right,
+            // odd rows right→left) — standard WS2812B matrix wiring.
+            //
+            // Physical→logical transpose applied: logical (gx,gy) maps to
+            // physical column=gy, row=gx. This corrects a 90° CCW rotation
+            // in the physical panel mounting (top-right → bottom-left).
+            int panelW = width  / 2;
+            int panelH = height / 2;
+            int panelPixels = panelW * panelH;
+
+            for (int gy = 0; gy < height; gy++) {
+                for (int gx = 0; gx < width; gx++) {
+                    // Transpose: swap logical x/y before panel lookup
+                    int phx = gy;  // physical x = logical y
+                    int phy = gx;  // physical y = logical x
+
+                    int px = phx / panelW;  // Panel column (0=left, 1=right)
+                    int lx = phx % panelW;  // Local x within panel
+                    int py = phy / panelH;  // Panel row (0=top, 1=bottom)
+                    int ly = phy % panelH;  // Local y within panel
+
+                    int panelIdx  = py * 2 + px;         // Chain order: 0=TL,1=TR,2=BL,3=BR
+                    // Swap TL (0) and BR (3) panel positions
+                    if      (panelIdx == 0) panelIdx = 3;
+                    else if (panelIdx == 3) panelIdx = 0;
+                    int panelStart = panelIdx * panelPixels;
+
+                    // Serpentine within panel: even rows L→R, odd rows R→L
+                    int localIdx = (ly % 2 == 0)
+                        ? (ly * panelW + lx)
+                        : (ly * panelW + (panelW - 1 - lx));
+
+                    int ledIndex = panelStart + localIdx;
+                    positionToIndex[gy * width + gx] = ledIndex;
+                    indexToX[ledIndex] = gx;
+                    indexToY[ledIndex] = gy;
+                }
+            }
         } else {
             // Standard row-major mapping (horizontal layouts like bucket totem)
             for (int y = 0; y < height; y++) {

@@ -469,6 +469,7 @@ public:
 
     ConfigStorage();
     void begin();
+    void end();   // Close NVS handle — call before ESP.restart() on ESP32
     bool isValid() const { return valid_; }
 
     // Device configuration accessors (v28+)

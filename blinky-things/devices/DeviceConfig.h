@@ -4,7 +4,8 @@
 
 enum MatrixOrientation {
   HORIZONTAL = 0,  // Standard horizontal layout (fire-totem)
-  VERTICAL = 1     // Vertical layout (tube-light)
+  VERTICAL = 1,    // Vertical layout (tube-light)
+  PANEL_GRID = 2   // 2×2 grid of equal panels, chained TL→TR→BL→BR
 };
 
 enum LayoutType {
@@ -42,7 +43,7 @@ struct IMUConfig {
   bool invertY;           // Invert Y axis
 };
 
-struct SerialConfig {
+struct BlinkySerialConfig {
   uint32_t baudRate;
   uint16_t initTimeoutMs;
 };
@@ -67,7 +68,7 @@ struct DeviceConfig {
   MatrixConfig matrix;
   ChargingConfig charging;
   IMUConfig imu;
-  SerialConfig serial;
+  BlinkySerialConfig serial;
   MicConfig microphone;
   FireDefaults fireDefaults;
 };
