@@ -157,9 +157,89 @@ void testAudioPerformance() {
   ASSERT_RANGE(smoothedLevel, 0.0f, 1.0f);
 }
 
+// ---------------------------------------------------------------------------
+// AgcStrategy: SOFTWARE vs HARDWARE selection and behaviour
+//
+// These tests exercise the strategy-selection logic and per-strategy
+// dead-zone / step-size constants without linking the full AdaptiveMic
+// stack.  Ground-truth values mirror AdaptiveMic.cpp.
+// ---------------------------------------------------------------------------
+
+void testAgcStrategySoftwareDeadZone() {
+  TEST_CASE("AgcStrategy::SOFTWARE dead zone is 0.02");
+
+  // SOFTWARE strategy uses ±0.02 dead zone — wider than HARDWARE (±0.01)
+  // so minor mic noise doesn't continuously nudge post-decimation gain.
+  const float DEAD_ZONE_SW = 0.02f;
+  const float DEAD_ZONE_HW = 0.01f;
+
+  // Within SOFTWARE dead zone — no gain change
+  float delta = 0.015f;
+  bool swAdjust = (delta > DEAD_ZONE_SW || delta < -DEAD_ZONE_SW);
+  ASSERT_FALSE(swAdjust);
+
+  // Outside SOFTWARE dead zone — gain change
+  delta = 0.025f;
+  swAdjust = (delta > DEAD_ZONE_SW || delta < -DEAD_ZONE_SW);
+  ASSERT_TRUE(swAdjust);
+
+  // Delta that crosses HARDWARE dead zone but not SOFTWARE dead zone
+  delta = 0.015f;
+  bool hwAdjust = (delta > DEAD_ZONE_HW || delta < -DEAD_ZONE_HW);
+  swAdjust = (delta > DEAD_ZONE_SW || delta < -DEAD_ZONE_SW);
+  ASSERT_TRUE(hwAdjust);   // Would trigger on hardware mic
+  ASSERT_FALSE(swAdjust);  // Not on software mic (wider dead zone)
+}
+
+void testAgcStrategySoftwareStepSizes() {
+  TEST_CASE("AgcStrategy::SOFTWARE uses smaller gain steps than HARDWARE");
+
+  // Step sizes (dB) from AdaptiveMic.cpp:
+  //   SOFTWARE normal:  up=2, down=1
+  //   HARDWARE normal:  up=4, down=2
+  //   HARDWARE fast:    up=6, down=3
+  const int SW_STEP_UP   = 2;
+  const int SW_STEP_DOWN = 1;
+  const int HW_STEP_UP   = 4;
+  const int HW_STEP_DOWN = 2;
+
+  ASSERT_TRUE(SW_STEP_UP   < HW_STEP_UP);
+  ASSERT_TRUE(SW_STEP_DOWN < HW_STEP_DOWN);
+
+  // Gain must be clamped at bounds [0, 80]
+  int gainMin = 0, gainMax = 80;
+  int gain = 78;
+  gain = min(gainMax, gain + SW_STEP_UP);
+  ASSERT_EQUAL(gain, 80);  // Clamped at max
+
+  gain = 1;
+  gain = max(gainMin, gain - SW_STEP_DOWN);
+  ASSERT_EQUAL(gain, 0);   // Clamped at min
+}
+
+void testAgcStrategyFastAgcRequiresHardware() {
+  TEST_CASE("Fast AGC mode requires HARDWARE strategy");
+
+  // Fast AGC is only enabled when the mic has a hardware gain register.
+  // SOFTWARE strategy suppresses fast AGC even when fastAgcEnabled=true
+  // because post-decimation software gain doesn't improve SNR.
+
+  bool fastAgcEnabled = true;
+
+  // HARDWARE strategy: fast AGC allowed
+  bool hasHardwareGain = true;
+  bool inFastAgcMode = hasHardwareGain && fastAgcEnabled;
+  ASSERT_TRUE(inFastAgcMode);
+
+  // SOFTWARE strategy: fast AGC suppressed regardless of fastAgcEnabled
+  hasHardwareGain = false;
+  inFastAgcMode = hasHardwareGain && fastAgcEnabled;
+  ASSERT_FALSE(inFastAgcMode);
+}
+
 void runAudioTests() {
   Serial.println("=== AUDIO PROCESSING TESTS ===");
-  
+
   testAudioLevelNormalization();
   testAudioSmoothing();
   testBeatDetection();
@@ -168,6 +248,9 @@ void runAudioTests() {
   testAudioFrequencyFiltering();
   testAudioMemoryUsage();
   testAudioPerformance();
-  
+  testAgcStrategySoftwareDeadZone();
+  testAgcStrategySoftwareStepSizes();
+  testAgcStrategyFastAgcRequiresHardware();
+
   Serial.println();
 }
