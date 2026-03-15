@@ -22,10 +22,18 @@ Usage (called by label_beats.py, not directly):
 """
 
 import json
+import logging
 import os
 import sys
 import time
+import warnings
 from pathlib import Path
+
+# Suppress natten deprecation warnings — they spam stderr with thousands of
+# lines per track (one per DiNAT layer per ensemble fold), which bloated the
+# pipeline log to 716 MB and crashed tee.
+warnings.filterwarnings("ignore", module="natten")
+logging.getLogger("natten").setLevel(logging.ERROR)
 
 import numpy as np
 

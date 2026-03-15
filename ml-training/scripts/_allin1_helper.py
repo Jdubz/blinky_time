@@ -22,8 +22,14 @@ Prints a JSON object to stdout:
 """
 
 import json
+import logging
 import os
 import sys
+import warnings
+
+# Suppress natten deprecation warnings (thousands of lines per track)
+warnings.filterwarnings("ignore", module="natten")
+logging.getLogger("natten").setLevel(logging.ERROR)
 
 import numpy as np
 
