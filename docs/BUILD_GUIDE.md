@@ -177,9 +177,10 @@ Global variables use ~11 KB (4%) of dynamic memory.
 
 ### ESP32-S3 (typical)
 ```
-Sketch uses ~X KB of program storage. Maximum is 8 MB.
-Global variables use ~X KB of dynamic memory.
+Sketch uses ~480 KB (5.7%) of program storage. Maximum is 8 MB.
+Global variables use ~30 KB of dynamic memory.
 ```
+_(Higher than nRF52 due to ESP-IDF system libraries and WiFi stack linked in by default.)_
 
 ---
 

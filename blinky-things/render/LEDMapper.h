@@ -114,8 +114,16 @@ public:
             return false;
         }
 
-        // PANEL_GRID requires even dimensions so the 2×2 grid splits cleanly.
-        // Odd dimensions produce truncated panel sizes and out-of-bounds indices.
+        // PANEL_GRID is hardcoded for a 2×2 arrangement of equal panels
+        // (TL→TR→BL→BR chain order).  A 4-panel 2×2 grid with even dimensions
+        // is the only topology the mapping algorithm supports.  A 64×16 or any
+        // other even-dimension rectangle would be accepted by the even-dimension
+        // check but would be mapped incorrectly as a non-square 2×2 panel grid.
+        // If additional topologies are needed, add a panelCols/panelRows field
+        // to MatrixConfig and generalise generateMapping() accordingly.
+        //
+        // Reject odd dimensions: they produce fractional panel sizes and
+        // out-of-bounds LED indices.
         if (orientation == PANEL_GRID && (width % 2 != 0 || height % 2 != 0)) {
             cleanup();
             return false;
