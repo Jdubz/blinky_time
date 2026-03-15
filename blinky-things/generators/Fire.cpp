@@ -367,17 +367,17 @@ void Fire::renderParticle(const Particle* p, PixelMatrix& matrix) {
 }
 
 uint32_t Fire::particleColor(uint8_t intensity) const {
-    // Audio-driven gamma: high energy → gamma < 1 (more visible ember glow),
-    // low energy → gamma > 1 (only brightest sparks visible).
+    // Audio-driven gamma: subtle remap to show more ember detail when loud.
     // paletteBias_ is already smoothed (0 = cool/warm, 1 = hot).
-    float gamma = 1.3f - 0.6f * paletteBias_;  // Range 1.3 (cool) → 0.7 (hot)
+    float gamma = 1.1f - 0.2f * paletteBias_;  // Range 1.1 (cool) → 0.9 (hot)
     float normalized = powf(intensity / 255.0f, gamma);
     uint8_t remapped = (uint8_t)(normalized * 255.0f);
 
-    // Three palettes blended by paletteBias_:
-    //   bias < 0.5: warm (default campfire)
-    //   bias ≥ 0.5: hot (intense white-hot, for high energy + rhythm)
-    // Low energy dims everything naturally via gamma (embers-only look).
+    // Two palettes blended by paletteBias_:
+    //   bias low: warm (default campfire)
+    //   bias high: hot (brighter oranges/yellows, for high energy + rhythm)
+    // Hot palette stays fire-colored (no white/blue) to avoid washing out
+    // with additive blending.
     struct ColorStop { uint8_t position, r, g, b; };
 
     // Warm palette: black → deep red → red → orange → yellow-orange → bright yellow
@@ -390,14 +390,15 @@ uint32_t Fire::particleColor(uint8_t intensity) const {
         {255, 255, 255, 64}
     };
 
-    // Hot palette: black → red → orange → yellow → white → pale blue
+    // Hot palette: black → red → bright orange → intense yellow → hot yellow-white
+    // Stays in warm hues — no blue/white that would wash out under additive blending
     static const ColorStop hot[] = {
         {0,   0,   0,   0},
-        {51,  128, 0,   0},
-        {102, 255, 60,  0},
-        {153, 255, 200, 40},
-        {204, 255, 255, 180},
-        {255, 220, 230, 255}
+        {51,  128, 8,   0},
+        {102, 255, 80,  0},
+        {153, 255, 180, 10},
+        {204, 255, 230, 40},
+        {255, 255, 255, 100}
     };
 
     const int paletteSize = 6;
@@ -422,8 +423,8 @@ uint32_t Fire::particleColor(uint8_t intensity) const {
     lookup(hot,  remapped, hr, hg, hb);
 
     // Blend between warm and hot based on paletteBias_
-    // Map bias 0-1 to blend 0-1 with a slight dead zone so warm is the default
-    float blend = constrain((paletteBias_ - 0.2f) / 0.6f, 0.0f, 1.0f);
+    // Dead zone: warm is default, hot only kicks in above 0.4 (loud + rhythmic)
+    float blend = constrain((paletteBias_ - 0.4f) / 0.5f, 0.0f, 1.0f);
     uint8_t r = (uint8_t)(wr + blend * (hr - wr));
     uint8_t g = (uint8_t)(wg + blend * (hg - wg));
     uint8_t b = (uint8_t)(wb + blend * (hb - wb));

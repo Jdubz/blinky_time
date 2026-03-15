@@ -48,15 +48,19 @@ public:
                 float t = noisePhase_ * 0.5f;
                 float epsScaled = eps * scale;
 
-                // Finite-difference curl with 2-octave fbm: 4 noise evals per particle
-                // fbm3D(x,y,z, octaves=2, persistence=0.5) gives smooth flowing field
+                // Finite-difference curl with 2-octave fbm: 4 noise evals per particle.
+                // fbm3D returns ~[-1,1]. The difference of two nearby samples gives
+                // a directional gradient in [-2,2]. We use this directly as the curl
+                // direction — no division by eps (which would amplify to huge values).
+                // windVariation_ provides the magnitude (LEDs/sec of displacement).
                 float dNdy = SimplexNoise::fbm3D(px, py + epsScaled, t, 2, 0.5f)
                            - SimplexNoise::fbm3D(px, py - epsScaled, t, 2, 0.5f);
                 float dNdx = SimplexNoise::fbm3D(px + epsScaled, py, t, 2, 0.5f)
                            - SimplexNoise::fbm3D(px - epsScaled, py, t, 2, 0.5f);
 
-                float curlX =  dNdy / (2.0f * epsScaled);
-                float curlY = -dNdx / (2.0f * epsScaled);
+                // Curl direction (unnormalized, ~[-2,2] range)
+                float curlX =  dNdy;
+                float curlY = -dNdx;
 
                 // Advection: windVariation is LEDs/sec of displacement
                 p->x += windVariation_ * curlX * dt;
