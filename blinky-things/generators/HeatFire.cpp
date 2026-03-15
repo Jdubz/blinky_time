@@ -62,7 +62,6 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     // Advance scroll time — this is the "fire speed"
     // Organic: moderate scroll. Music: faster, phase-modulated.
     float phasePulse = audio.phaseToPulse();
-    float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
 
     float organicScroll = params_.noiseSpeed * (1.0f + 0.5f * audio.energy);
     float musicScroll = params_.noiseSpeed * (1.5f + audio.energy)
@@ -296,6 +295,7 @@ void HeatFire::propagateHeat2D() {
 void HeatFire::propagateHeat1D() {
     // 1D: shift and decay, with random source positions
     uint8_t temp[MAX_HEAT_CELLS];
+    memset(temp, 0, sizeof(temp));
     for (int x = 0; x < width_; x++) {
         int drift = random(0, 3) - 1;
         int srcX = constrain(x + drift, 0, width_ - 1);
@@ -423,7 +423,6 @@ uint32_t HeatFire::isqrt(uint32_t n) {
 void HeatFire::injectHeat(const AudioControl& audio) {
     if (layout_ == LINEAR_LAYOUT) {
         // 1D: inject at 2-4 source positions
-        float heatLevel = params_.baseHeat + params_.audioHeatBoost * audio.energy;
         int numSources = 2 + (int)(audio.energy * 2.0f);
         for (int i = 0; i < numSources; i++) {
             float noisePos = SimplexNoise::noise3D_01(i * 3.7f, noiseTime_ * 0.3f, 0.0f);

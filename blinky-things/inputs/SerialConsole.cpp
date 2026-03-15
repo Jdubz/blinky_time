@@ -180,32 +180,32 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
 void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
     if (!hfp) return;
 
-    auto onParamChanged = []() {};  // Heat buffer params take effect immediately
+    auto heatFireParamChanged = []() {};  // Heat buffer params take effect immediately
 
     settings_.registerFloat("hf_baseheat", &hfp->baseHeat, "heatfire",
-        "Base heat injection level", 0.0f, 1.0f, onParamChanged);
+        "Base heat injection level", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_audioheatboost", &hfp->audioHeatBoost, "heatfire",
-        "Energy-driven heat boost", 0.0f, 5.0f, onParamChanged);
+        "Energy-driven heat boost", 0.0f, 5.0f, heatFireParamChanged);
     settings_.registerFloat("hf_beatheatpulse", &hfp->beatHeatPulse, "heatfire",
-        "Phase modulation depth for injection", 0.0f, 1.0f, onParamChanged);
+        "Phase modulation depth for injection", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_basecooling", &hfp->baseCooling, "heatfire",
-        "Base cooling per row per frame", 0.0f, 0.5f, onParamChanged);
+        "Base cooling per row per frame", 0.0f, 0.5f, heatFireParamChanged);
     settings_.registerFloat("hf_coolingvariation", &hfp->coolingVariation, "heatfire",
-        "Noise-driven spatial cooling variation", 0.0f, 1.0f, onParamChanged);
+        "Noise-driven spatial cooling variation", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_diffusionspread", &hfp->diffusionSpread, "heatfire",
-        "Horizontal drift range for heat propagation", 0.0f, 3.0f, onParamChanged);
+        "Horizontal drift range for heat propagation", 0.0f, 3.0f, heatFireParamChanged);
     settings_.registerFloat("hf_burstheat", &hfp->burstHeat, "heatfire",
-        "Extra heat on transient pulse", 0.0f, 1.0f, onParamChanged);
+        "Extra heat on transient pulse", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_organictransmin", &hfp->organicTransientMin, "heatfire",
-        "Min transient to trigger burst", 0.0f, 1.0f, onParamChanged);
+        "Min transient to trigger burst", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
-        "Beat sync depth for injection", 0.0f, 1.0f, onParamChanged);
+        "Beat sync depth for injection", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_winddrift", &hfp->windDrift, "heatfire",
-        "Audio-reactive horizontal drift", 0.0f, 3.0f, onParamChanged);
+        "Audio-reactive horizontal drift", 0.0f, 3.0f, heatFireParamChanged);
     settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
-        "Noise animation speed", 0.001f, 0.1f, onParamChanged);
+        "Noise animation speed", 0.001f, 0.1f, heatFireParamChanged);
     settings_.registerFloat("hf_brightness", &hfp->brightness, "heatfire",
-        "Master output brightness (0-1)", 0.0f, 1.0f, onParamChanged);
+        "Master output brightness (0-1)", 0.0f, 1.0f, heatFireParamChanged);
 }
 
 // === AUDIO SETTINGS ===
