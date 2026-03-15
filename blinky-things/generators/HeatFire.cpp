@@ -95,6 +95,7 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
         propagateHeat2D();
     }
     injectHeat(audio);
+
     renderHeat(matrix);
 }
 
@@ -116,31 +117,35 @@ void HeatFire::reset() {
 // ============================================================================
 
 void HeatFire::propagateHeat2D() {
-    // DOOM fire algorithm: for each cell (top to bottom), average heat from
-    // row below with random horizontal drift and cooling subtraction.
-    // Bottom row (y = height-1) is the heat source — skip it in propagation.
-    int maxDrift = max(1, (int)(effectiveSpread_ + 0.5f));
-    uint8_t coolingBase = (uint8_t)(effectiveCooling_ * 255.0f);
+    // Pure DOOM PSX fire algorithm:
+    // Each cell copies from ONE cell in the row below, with small random
+    // lateral drift, and subtracts a small random value (0-1).
+    //
+    // NO lateral averaging — this is critical. Averaging smears heat sideways
+    // and fills the entire width, creating a wall instead of distinct tongues.
+    // DOOM creates tongues because each column evolves independently with only
+    // tiny random lateral shifts.
+    //
+    // Heat values: 0-255 (not 0-36 like original DOOM).
+    // Cooling: random(0, coolingMax) per cell per row. This controls flame height.
+
+    // Scale cooling by height: on taller displays, each row needs less cooling
+    // for the same visual flame height fraction. Audio modulates effectiveCooling_.
+    int coolingMax = max(1, (int)(effectiveCooling_ * 600.0f / height_) + 1);
 
     for (int y = 0; y < height_ - 1; y++) {
         for (int x = 0; x < width_; x++) {
-            // Random horizontal drift from row below
-            int drift = random(-maxDrift, maxDrift + 1);
+            // Pick ONE source cell from row below with random lateral drift (±1)
+            // This is the DOOM formula: dst = src - width - rand(0..2) + 1
+            int drift = random(0, 3) - 1;  // -1, 0, or +1
             int srcX = constrain(x + drift, 0, width_ - 1);
             int srcY = y + 1;
 
             uint8_t srcHeat = heat_[srcY * width_ + srcX];
 
-            // Noise-modulated cooling: spatial variation creates organic ember patterns
-            uint8_t cooling = coolingBase;
-            if (params_.coolingVariation > 0.0f) {
-                float coolNoise = SimplexNoise::noise3D_01(
-                    x * 0.2f, y * 0.2f, noiseTime_ * 0.5f);
-                cooling = (uint8_t)(coolingBase * (0.5f + params_.coolingVariation * coolNoise));
-            }
-
-            // Add small random variation for organic look
-            cooling += random(0, 3);
+            // Random cooling: subtract 0 or 1 (DOOM uses randIdx & 1)
+            // Scale up for 0-255 range (DOOM uses 0-36)
+            uint8_t cooling = (uint8_t)random(0, coolingMax);
 
             heat_[y * width_ + x] = (srcHeat > cooling) ? srcHeat - cooling : 0;
         }
@@ -148,22 +153,15 @@ void HeatFire::propagateHeat2D() {
 }
 
 void HeatFire::propagateHeat1D() {
-    // 1D heat diffusion for linear string layouts.
-    // Heat sources are at random positions, diffuses left and right.
-    int maxDrift = max(1, (int)(effectiveSpread_ + 0.5f));
-    uint8_t coolingBase = (uint8_t)(effectiveCooling_ * 255.0f);
-
-    // Work on a temp copy to avoid read-after-write issues
+    // 1D DOOM-style: copy from neighbor with drift, subtract cooling
+    int coolingMax = max(1, (int)(effectiveCooling_ * 600.0f / width_) + 1);
     uint8_t temp[MAX_HEAT_CELLS];
-    memcpy(temp, heat_, width_);
 
     for (int x = 0; x < width_; x++) {
-        // Average from neighbors with drift
-        int drift = random(-maxDrift, maxDrift + 1);
+        int drift = random(0, 3) - 1;
         int srcX = constrain(x + drift, 0, width_ - 1);
         uint8_t srcHeat = heat_[srcX];
-
-        uint8_t cooling = coolingBase + random(0, 3);
+        uint8_t cooling = (uint8_t)random(0, coolingMax);
         temp[x] = (srcHeat > cooling) ? srcHeat - cooling : 0;
     }
     memcpy(heat_, temp, width_);
@@ -188,27 +186,32 @@ void HeatFire::injectHeat(const AudioControl& audio) {
     float heatLevel = organicHeat * (1.0f - audio.rhythmStrength)
                     + musicHeat * audio.rhythmStrength;
 
-    // Transient burst
+    // Transient burst (pulse-driven, independent of beat)
     if (audio.pulse > params_.organicTransientMin) {
         float burstStrength = (audio.pulse - params_.organicTransientMin) /
                               (1.0f - params_.organicTransientMin);
         heatLevel += params_.burstHeat * burstStrength;
     }
 
-    // Downbeat: max heat injection
-    if (audio.downbeat > 0.5f && beatCount_ > 0) {
-        heatLevel += params_.burstHeat * audio.downbeat;
-    }
+    // Beat burst: extra heat on every predicted beat (not just downbeat)
+    if (beatHappened() && audio.rhythmStrength > 0.3f) {
+        heatLevel += params_.burstHeat * audio.rhythmStrength * 0.5f;
 
-    // BeatInMeasure accents
-    if (audio.rhythmStrength > 0.5f && beatHappened()) {
-        float accent = 0.0f;
-        switch (audio.beatInMeasure) {
-            case 1: accent = 1.0f; break;     // Downbeat: full
-            case 3: accent = 0.5f; break;     // Secondary: half
-            case 2: case 4: accent = 0.25f; break;  // Weak: quarter
+        // Downbeat: max heat injection
+        if (audio.downbeat > 0.5f) {
+            heatLevel += params_.burstHeat * audio.downbeat;
         }
-        heatLevel += params_.burstHeat * accent * audio.rhythmStrength * 0.3f;
+
+        // BeatInMeasure accents
+        if (audio.rhythmStrength > 0.5f) {
+            float accent = 0.0f;
+            switch (audio.beatInMeasure) {
+                case 1: accent = 1.0f; break;
+                case 3: accent = 0.5f; break;
+                case 2: case 4: accent = 0.25f; break;
+            }
+            heatLevel += params_.burstHeat * accent * audio.rhythmStrength * 0.3f;
+        }
     }
 
     // Clamp to valid heat range
@@ -220,10 +223,8 @@ void HeatFire::injectHeat(const AudioControl& audio) {
         for (int i = 0; i < numSources; i++) {
             float noisePos = SimplexNoise::noise3D_01(i * 3.7f, noiseTime_ * 0.3f, 0.0f);
             int srcX = (int)(noisePos * (width_ - 1));
-            // Apply beat rocking bias
             srcX = constrain(srcX + (int)(spawnBias_ * width_ * 0.25f), 0, width_ - 1);
 
-            // Spread heat across a few neighbors for smoother injection
             for (int dx = -1; dx <= 1; dx++) {
                 int xx = constrain(srcX + dx, 0, width_ - 1);
                 uint8_t injected = (dx == 0) ? heatValue : heatValue / 2;
@@ -231,25 +232,23 @@ void HeatFire::injectHeat(const AudioControl& audio) {
             }
         }
     } else {
-        // 2D: inject across bottom row with spatial noise variation
+        // 2D bottom row: fully populated every frame (DOOM PSX style).
+        // Each bottom cell gets a random heat value up to heatValue.
+        // The randomness per cell per frame creates the flickering base.
+        // Audio modulates heatValue (the max), so louder = brighter base.
+        // The propagation's random cooling creates distinct tongues as heat
+        // rises — some columns lose heat faster than others.
         int bottomY = height_ - 1;
+
         for (int x = 0; x < width_; x++) {
-            // Spatial noise for organic flame tongue variation
-            float spatialNoise = SimplexNoise::noise3D_01(x * 0.3f, noiseTime_ * 0.5f, 0.0f);
-            // Threshold: only inject where noise is high → creates distinct flame tongues
-            float tongueThreshold = 0.3f;
-            float tongueIntensity = (spatialNoise > tongueThreshold)
-                ? (spatialNoise - tongueThreshold) / (1.0f - tongueThreshold)
-                : 0.0f;
-
-            // Apply left/right injection bias from beatInMeasure rocking
-            float normalizedX = (float)x / max(1, width_ - 1) - 0.5f;  // -0.5 to 0.5
+            // Left/right injection bias from beatInMeasure rocking
+            float normalizedX = (float)x / max(1, width_ - 1) - 0.5f;
             float biasMod = 1.0f + spawnBias_ * normalizedX * 4.0f;
-            biasMod = max(0.0f, biasMod);
+            biasMod = max(0.3f, biasMod);
 
-            uint8_t injected = (uint8_t)(heatValue * tongueIntensity * biasMod);
-            int idx = bottomY * width_ + x;
-            heat_[idx] = max(heat_[idx], injected);
+            // Random heat with audio-driven ceiling
+            uint8_t maxH = (uint8_t)min(255.0f, heatValue * biasMod);
+            heat_[bottomY * width_ + x] = (uint8_t)random(maxH / 2, max((int)maxH, 1) + 1);
         }
     }
 }
@@ -344,6 +343,13 @@ uint32_t HeatFire::heatToColor(uint8_t heat) const {
         g = (uint8_t)min(255, (int)g + (int)(s * 50));
         b = (uint8_t)min(255, (int)b + (int)(s * 80));
     }
+
+    // Master brightness scale — heat buffer fills every pixel so
+    // full-brightness RGB is much brighter than sparse particles
+    float br = params_.brightness;
+    r = (uint8_t)(r * br);
+    g = (uint8_t)(g * br);
+    b = (uint8_t)(b * br);
 
     return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
 }

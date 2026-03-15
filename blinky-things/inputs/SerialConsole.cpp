@@ -185,7 +185,7 @@ void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
     settings_.registerFloat("hf_baseheat", &hfp->baseHeat, "heatfire",
         "Base heat injection level", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("hf_audioheatboost", &hfp->audioHeatBoost, "heatfire",
-        "Energy-driven heat boost", 0.0f, 2.0f, onParamChanged);
+        "Energy-driven heat boost", 0.0f, 5.0f, onParamChanged);
     settings_.registerFloat("hf_beatheatpulse", &hfp->beatHeatPulse, "heatfire",
         "Phase modulation depth for injection", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("hf_basecooling", &hfp->baseCooling, "heatfire",
@@ -204,6 +204,8 @@ void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
         "Audio-reactive horizontal drift", 0.0f, 3.0f, onParamChanged);
     settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
         "Noise animation speed", 0.001f, 0.1f, onParamChanged);
+    settings_.registerFloat("hf_brightness", &hfp->brightness, "heatfire",
+        "Master output brightness (0-1)", 0.0f, 1.0f, onParamChanged);
 }
 
 // === AUDIO SETTINGS ===

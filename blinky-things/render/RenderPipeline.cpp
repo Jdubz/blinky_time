@@ -77,9 +77,9 @@ bool RenderPipeline::begin(const DeviceConfig& config, ILedStrip& leds, LEDMappe
         return false;
     }
 
-    // Set defaults: Fire generator, no effect
-    currentGenerator_ = fire_;
-    generatorType_ = GeneratorType::FIRE;
+    // Set defaults: HeatFire generator, no effect
+    currentGenerator_ = heatFire_;
+    generatorType_ = GeneratorType::HEAT_FIRE;
     currentEffect_ = noOp_;
     effectType_ = EffectType::NONE;
 

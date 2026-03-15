@@ -46,6 +46,7 @@
 #include "../../blinky-things/generators/Water.h"
 #include "../../blinky-things/generators/Lightning.h"
 #include "../../blinky-things/generators/Audio.h"
+#include "../../blinky-things/generators/HeatFire.h"
 #include "../../blinky-things/effects/Effect.h"
 #include "../../blinky-things/effects/HueRotationEffect.h"
 
@@ -196,6 +197,15 @@ DeviceConfig createDeviceConfig(const std::string& device) {
         config.matrix.ledType = 0;
         config.matrix.orientation = HORIZONTAL;
         config.matrix.layoutType = MATRIX_LAYOUT;
+    } else if (device == "display") {
+        config.deviceName = "Display";
+        config.matrix.width = 32;
+        config.matrix.height = 32;
+        config.matrix.ledPin = 0;
+        config.matrix.brightness = 255;
+        config.matrix.ledType = 0;
+        config.matrix.orientation = HORIZONTAL;
+        config.matrix.layoutType = MATRIX_LAYOUT;
     } else {
         // Default to tube
         config.deviceName = "Default";
@@ -280,6 +290,8 @@ int main(int argc, char* argv[]) {
         genType = GeneratorType::LIGHTNING;
     } else if (config.generator == "audio") {
         genType = GeneratorType::AUDIO;
+    } else if (config.generator == "heatfire") {
+        genType = GeneratorType::HEAT_FIRE;
     }
     pipeline.setGenerator(genType);
 
@@ -314,6 +326,9 @@ int main(int argc, char* argv[]) {
     } else if (genType == GeneratorType::AUDIO && pipeline.getAudioVisGenerator()) {
         applyParams(pipeline.getAudioVisGenerator()->getParamsMutable(), paramOverrides);
         allParams = getParamMap(pipeline.getAudioVisGenerator()->getParams());
+    } else if (genType == GeneratorType::HEAT_FIRE && pipeline.getHeatFireGenerator()) {
+        applyParams(pipeline.getHeatFireGenerator()->getParamsMutable(), paramOverrides);
+        allParams = getParamMap(pipeline.getHeatFireGenerator()->getParams());
     }
 
     if (config.verbose && !paramOverrides.empty()) {

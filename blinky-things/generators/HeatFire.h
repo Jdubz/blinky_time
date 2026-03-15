@@ -36,18 +36,22 @@ struct HeatFireParams {
     // Noise animation
     float noiseSpeed;            // Base noise evolution speed (0.001-0.1)
 
+    // Output brightness
+    float brightness;            // Master output brightness scale (0-1)
+
     HeatFireParams() {
-        baseHeat = 0.7f;
-        audioHeatBoost = 1.5f;
-        beatHeatPulse = 0.8f;
-        baseCooling = 0.08f;
-        coolingVariation = 0.3f;
-        diffusionSpread = 1.2f;
-        burstHeat = 0.9f;
+        baseHeat = 0.2f;          // LOW base — audio must drive the fire, not idle heat
+        audioHeatBoost = 3.0f;    // HIGH — energy makes a dramatic difference
+        beatHeatPulse = 0.95f;    // Deep phase breathing (near-silent off-beat)
+        baseCooling = 0.25f;      // Controls flame height: coolingMax = baseCooling*600/height + 1. Higher = shorter.
+        coolingVariation = 0.4f;  // Reserved
+        diffusionSpread = 1.5f;   // Moderate sway
+        burstHeat = 1.0f;         // Full burst on transients — visible flame surge
         organicTransientMin = 0.25f;
-        musicBeatDepth = 0.9f;
-        windDrift = 0.8f;
-        noiseSpeed = 0.015f;
+        musicBeatDepth = 0.95f;   // Deep beat sync (matches particle Fire's musicSpawnPulse)
+        windDrift = 1.2f;         // Audio-reactive lateral movement
+        noiseSpeed = 0.08f;       // Fast noise — tongues flicker like fire, not lava
+        brightness = 0.4f;        // 40% — solid wall of pixels needs less than sparse particles
     }
 };
 
