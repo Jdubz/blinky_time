@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-Safe UF2 Firmware Upload for XIAO nRF52840 Sense
+Safe UF2 Firmware Upload for XIAO nRF52840 Sense / XIAO ESP32-S3
 
 Uploads firmware via the UF2 mass storage bootloader, bypassing the
 fragile adafruit-nrfutil DFU serial protocol that can brick devices.
 
 Upload workflow:
-  1. Validate hex file (address safety checks)
-  2. Convert hex -> UF2 (using platform uf2conv.py)
+  1. Validate hex file (address safety checks) [nRF52840 only]
+  2. Convert hex -> UF2 (using platform uf2conv.py) [nRF52840 only]
+     OR locate pre-built .uf2 from arduino-esp32 output [ESP32-S3]
   3. Enter bootloader (1200 baud serial touch)
   4. Mount UF2 drive (udisksctl or manual mount)
   5. Copy firmware.uf2 to drive
@@ -19,6 +20,8 @@ Usage:
   python3 uf2_upload.py /dev/ttyACM0 --dry-run
   python3 uf2_upload.py --already-in-bootloader
   python3 uf2_upload.py --self-test
+  python3 uf2_upload.py /dev/ttyACM0 --board esp32s3
+  python3 uf2_upload.py /dev/ttyACM0 --board esp32s3 --build-dir /tmp/blinky-esp32-build
 """
 
 import sys
@@ -39,7 +42,47 @@ except ImportError:
     print("ERROR: pyserial is required. Install with: pip3 install pyserial")
     sys.exit(1)
 
-# --- Hardware constants (from boards.txt) ---
+# --- Board profiles ---
+# VID/PID values from boards.txt for each platform.
+#
+# ESP32-S3 notes (TO VERIFY against your hardware):
+#   normal_pid:      0x0056 — XIAO ESP32-S3 in application mode (check `lsusb`)
+#   bootloader_pid:  0x1001 — ESP32-S3 ROM UF2 bootloader (check `lsusb` after double-tap reset)
+#   drive_label:     "ESP32S3" — label of mass-storage drive in UF2 mode (check `lsblk`)
+#   bin_base_addr:   0x10000 — ESP32-S3 default app partition start address
+#
+# arduino-esp32 does NOT produce a .uf2 directly. It produces a .bin which must
+# be converted with uf2conv.py using the ESP32-S3 family ID.
+BOARD_PROFILES = {
+    "nrf52840": {
+        "name":           "XIAO nRF52840 Sense",
+        "normal_vid":     0x2886,
+        "normal_pid":     0x8045,
+        "bootloader_vid": 0x2886,
+        "bootloader_pid": 0x0045,
+        "uf2_family_id":  "0xADA52840",
+        "drive_label":    "XIAO-SENSE",
+        "firmware_ext":   ".hex",       # compile output; converted via uf2conv
+        "bin_base_addr":  None,         # not used for .hex input
+    },
+    "esp32s3": {
+        "name":           "XIAO ESP32-S3",
+        "normal_vid":     0x303A,   # Espressif native USB CDC (verified: lsusb COM43)
+        "normal_pid":     0x1001,   # Espressif native USB CDC (verified: lsusb COM43)
+        "bootloader_vid": 0x303A,   # TO VERIFY: check `lsusb` after double-tap reset
+        "bootloader_pid": 0x0002,   # TO VERIFY: ESP32-S3 ROM download mode PID
+        "uf2_family_id":  "0xc47e5767",
+        "drive_label":    "ESP32S3", # TO VERIFY: check `lsblk` in UF2 bootloader mode
+        "firmware_ext":   ".bin",       # arduino-esp32 compile output
+        "bin_base_addr":  0x10000,      # default ESP32-S3 app partition start
+    },
+}
+
+# Active board profile — set by main() based on --board argument.
+# All helpers that need VID/PID access use this.
+_active_board = BOARD_PROFILES["nrf52840"]
+
+# --- Hardware constants (derived from active board — kept for backwards compat) ---
 NORMAL_VID = 0x2886
 NORMAL_PID = 0x8045
 BOOTLOADER_VID = 0x2886
@@ -47,18 +90,28 @@ BOOTLOADER_PID = 0x0045
 
 # --- UF2 conversion ---
 UF2_FAMILY_ID = "0xADA52840"
+
 def _find_uf2conv():
-    """Find uf2conv.py in the installed Seeeduino nRF52 board package."""
-    base = Path.home() / ".arduino15/packages/Seeeduino/hardware/nrf52"
-    if base.exists():
-        # Find the latest installed version
-        versions = sorted(base.iterdir(), reverse=True)
-        for v in versions:
-            candidate = v / "tools/uf2conv/uf2conv.py"
-            if candidate.exists():
-                return candidate
-    # Fallback to a fixed path for error messaging
-    return base / "unknown_version" / "tools/uf2conv/uf2conv.py"
+    """Find uf2conv.py — searches Seeeduino nRF52 and arduino-esp32 packages.
+
+    The Adafruit/Microsoft uf2conv.py supports arbitrary family IDs via -f, so
+    the nRF52 package copy can be reused for ESP32-S3 conversion too.
+    """
+    search_bases = [
+        # Seeeduino nRF52 package (primary — ships uf2conv.py)
+        Path.home() / ".arduino15/packages/Seeeduino/hardware/nrf52",
+        # arduino-esp32 package (some versions ship their own copy)
+        Path.home() / ".arduino15/packages/esp32/hardware/esp32",
+    ]
+    for base in search_bases:
+        if base.exists():
+            versions = sorted(base.iterdir(), reverse=True)
+            for v in versions:
+                candidate = v / "tools/uf2conv/uf2conv.py"
+                if candidate.exists():
+                    return candidate
+    # Fallback for error messaging
+    return Path.home() / ".arduino15/packages/Seeeduino/hardware/nrf52/unknown_version/tools/uf2conv/uf2conv.py"
 
 UF2CONV_PATH = _find_uf2conv()
 
@@ -126,6 +179,98 @@ def find_hex_file(args):
         + "\n".join(f"  - {p}" for p in search_paths)
         + "\n\nCompile first or specify path with --hex"
     )
+
+
+def find_bin_file(args):
+    """Locate the .bin firmware file produced by arduino-esp32.
+
+    arduino-esp32 outputs a raw binary (.bin), not a .hex.  We convert it to
+    UF2 ourselves using uf2conv.py with the ESP32-S3 family ID.
+
+    Returns path to the .bin file.
+    """
+    build_dir = Path(args.build_dir)
+    search_paths = [
+        build_dir / "blinky-things.ino.bin",
+        # arduino-esp32 sometimes nests output under the board sub-directory
+        build_dir / "esp32.esp32.XIAO_ESP32S3" / "blinky-things.ino.bin",
+    ]
+
+    for path in search_paths:
+        if path.exists():
+            return path
+
+    raise FileNotFoundError(
+        "No .bin file found for ESP32-S3. Searched:\n"
+        + "\n".join(f"  - {p}" for p in search_paths)
+        + "\n\nCompile first with: make esp32-compile"
+    )
+
+
+def convert_bin_to_uf2(bin_path, output_dir=None):
+    """Convert a raw binary (.bin) to UF2 format for ESP32-S3.
+
+    Uses uf2conv.py with the ESP32-S3 family ID and the app-partition base
+    address (0x10000 for default ESP32-S3 partition table).
+
+    Returns path to the generated .uf2 file.
+    """
+    print_section("UF2 CONVERSION (ESP32-S3)")
+
+    uf2conv = _find_uf2conv()
+    if not uf2conv.exists():
+        raise FileNotFoundError(
+            f"uf2conv.py not found at {uf2conv}\n"
+            "Install the Seeeduino nRF52 or arduino-esp32 board package."
+        )
+
+    profile = _active_board
+    family_id = profile["uf2_family_id"]
+    base_addr = profile["bin_base_addr"]
+
+    if output_dir is None:
+        output_dir = bin_path.parent
+    uf2_path = output_dir / "blinky-things.ino.uf2"
+
+    cmd = [
+        sys.executable,
+        str(uf2conv),
+        str(bin_path),
+        "-f", family_id,
+        "-c",
+        "-b", hex(base_addr),
+        "-o", str(uf2_path),
+    ]
+
+    print(f"  Input:       {bin_path}")
+    print(f"  Output:      {uf2_path}")
+    print(f"  Family:      {family_id}")
+    print(f"  Base addr:   {hex(base_addr)} (app partition start)")
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("UF2 conversion hung (timed out after 30s)")
+
+    if result.returncode != 0:
+        print(f"  [FAIL] uf2conv.py failed:")
+        if result.stderr:
+            print(f"  {result.stderr.strip()}")
+        raise RuntimeError("UF2 conversion failed")
+
+    if result.stdout:
+        for line in result.stdout.strip().split("\n"):
+            if not line.startswith("/"):
+                print(f"  {line}")
+
+    if not uf2_path.exists():
+        raise RuntimeError(f"UF2 file not created: {uf2_path}")
+
+    uf2_size = uf2_path.stat().st_size
+    print(f"  UF2 size:    {uf2_size:,} bytes ({uf2_size // 512} blocks)")
+    print(f"  [PASS] Conversion successful")
+
+    return uf2_path
 
 
 def validate_hex(hex_path, verbose=False):
@@ -258,15 +403,19 @@ def _resolve_by_id_path(port_device):
     return port_device
 
 
-def find_all_xiao_ports():
-    """Auto-detect all connected XIAO nRF52840 devices in application mode.
+def find_all_xiao_ports(board=None):
+    """Auto-detect all connected XIAO devices in application mode.
 
+    Uses the active board profile (or an explicit profile) to filter by VID/PID.
     Prefers stable /dev/serial/by-id/ paths over /dev/ttyACMx paths.
     Returns sorted list of serial port paths.
     """
+    profile = board or _active_board
+    vid = profile["normal_vid"]
+    pid = profile["normal_pid"]
     ports = []
     for p in serial.tools.list_ports.comports():
-        if p.vid == NORMAL_VID and p.pid == NORMAL_PID:
+        if p.vid == vid and p.pid == pid:
             stable_path = _resolve_by_id_path(p.device)
             ports.append(stable_path)
     return sorted(ports)
@@ -426,7 +575,7 @@ def _recover_usb_port(hub_path, port_num, device_serial=None, verbose=False):
     while time.monotonic() < deadline:
         time.sleep(0.5)
         if device_serial:
-            new_port = find_port_by_serial(device_serial, target_pid=NORMAL_PID)
+            new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
             if new_port:
                 print(f"  Device recovered on {new_port}")
                 return new_port
@@ -484,9 +633,12 @@ def _check_port_available(port, verbose=False):
         print(f"  The port may have disappeared (device reset or USB disconnect).")
         return False
 
-    if port_info.vid != NORMAL_VID or port_info.pid != NORMAL_PID:
-        print(f"\n  ERROR: {port} is not a XIAO nRF52840 in application mode!")
-        print(f"  Expected VID:PID {NORMAL_VID:#06x}:{NORMAL_PID:#06x}")
+    exp_vid = _active_board["normal_vid"]
+    exp_pid = _active_board["normal_pid"]
+    board_name = _active_board["name"]
+    if port_info.vid != exp_vid or port_info.pid != exp_pid:
+        print(f"\n  ERROR: {port} is not a {board_name} in application mode!")
+        print(f"  Expected VID:PID {exp_vid:#06x}:{exp_pid:#06x}")
         print(f"  Found    VID:PID {port_info.vid:#06x}:{port_info.pid:#06x}" if port_info.vid else
               f"  Found    VID:PID None:None")
         print(f"  Port numbers may have shuffled after a previous flash.")
@@ -572,7 +724,7 @@ def trigger_bootloader(port, verbose=False):
 
             # Re-discover port if it changed (e.g., after USB recovery)
             if not _device_port_exists(current_port) and device_serial:
-                new_port = find_port_by_serial(device_serial, target_pid=NORMAL_PID)
+                new_port = find_port_by_serial(device_serial, target_pid=_active_board["normal_pid"])
                 if new_port:
                     print(f"  Device re-discovered on {new_port}")
                     current_port = new_port
@@ -1203,7 +1355,7 @@ def verify_reboot(mount_point, port=None, device_serial=None, verbose=False):
             # Try by-id path first (most reliable after reboot)
             new_port = find_port_by_id_path(device_serial)
             if not new_port:
-                new_port = find_port_by_serial(device_serial, NORMAL_PID)
+                new_port = find_port_by_serial(device_serial, _active_board["normal_pid"])
             if new_port:
                 print(f"  Device back on {new_port}")
                 break
@@ -1422,25 +1574,28 @@ def run_self_test():
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Safe UF2 firmware upload for XIAO nRF52840 Sense",
+        description="Safe UF2 firmware upload for XIAO nRF52840 Sense / XIAO ESP32-S3",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Upload workflow:
-  1. Validate hex file (address safety checks)
-  2. Convert hex -> UF2 (family 0xADA52840)
+  1. Validate hex file (address safety checks)   [nRF52840 only]
+  2. Convert hex -> UF2 (family 0xADA52840)      [nRF52840 only]
+     OR locate pre-built .uf2 from arduino-esp32 [ESP32-S3]
   3. Enter bootloader (1200 baud serial touch)
   4. Mount UF2 drive (udisksctl or manual)
   5. Copy firmware.uf2 to drive
   6. Verify reboot (drive disappears, port returns)
 
 Examples:
-  %(prog)s /dev/ttyACM0                          # Single device
+  %(prog)s /dev/ttyACM0                             # Single nRF52840 device
   %(prog)s /dev/ttyACM0 /dev/ttyACM1 /dev/ttyACM2  # Multiple devices
-  %(prog)s --all                                  # Auto-detect all XIAO devices
+  %(prog)s --all                                     # Auto-detect all XIAO devices
   %(prog)s /dev/ttyACM0 --hex firmware.hex
   %(prog)s /dev/ttyACM0 --dry-run
   %(prog)s --already-in-bootloader
   %(prog)s --self-test
+  %(prog)s /dev/ttyACM0 --board esp32s3              # ESP32-S3 device
+  %(prog)s /dev/ttyACM0 --board esp32s3 --build-dir /tmp/blinky-esp32-build
         """,
     )
     parser.add_argument(
@@ -1492,6 +1647,11 @@ Examples:
     parser.add_argument(
         "-v", "--verbose", action="store_true",
         help="Verbose output",
+    )
+    parser.add_argument(
+        "--board", dest="board", default="nrf52840",
+        choices=list(BOARD_PROFILES.keys()),
+        help="Target board (default: nrf52840). Use 'esp32s3' for XIAO ESP32-S3.",
     )
     return parser.parse_args()
 
@@ -1633,7 +1793,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     if not _device_port_exists(current_port):
                         sn = mount_map[port]["serial"]
                         if sn:
-                            new_port = find_port_by_serial(sn, target_pid=NORMAL_PID)
+                            new_port = find_port_by_serial(sn, target_pid=_active_board["normal_pid"])
                             if new_port:
                                 print(f"    Device re-discovered on {new_port}")
                                 current_port = new_port
@@ -1815,7 +1975,7 @@ def upload_parallel(ports, uf2_path, verbose=False):
                     continue
                 sn = device_serials.get(port)
                 if sn:
-                    new_port = find_port_by_serial(sn, NORMAL_PID)
+                    new_port = find_port_by_serial(sn, _active_board["normal_pid"])
                     if new_port:
                         found[port] = new_port
                         print(f"  {port}: back on {new_port}")
@@ -1860,7 +2020,14 @@ def _elapsed(start_time):
 
 
 def main():
+    global _active_board
+
     args = parse_args()
+
+    # Activate the board profile for this run (affects VID/PID checks, etc.)
+    _active_board = BOARD_PROFILES[args.board]
+    if args.board != "nrf52840":
+        print(f"  Board: {_active_board['name']}")
 
     if args.self_test:
         return 0 if run_self_test() else 1
@@ -1876,7 +2043,7 @@ def main():
             return 1
         ports = find_all_xiao_ports()
         if not ports:
-            print("ERROR: No XIAO devices detected (--all)")
+            print(f"ERROR: No {_active_board['name']} devices detected (--all)")
             print("  Check USB connections and verify devices are powered on.")
             return 1
         print(f"  Auto-detected {len(ports)} device(s): {', '.join(ports)}")
@@ -1893,7 +2060,11 @@ def main():
 
     try:
         # --- Phase 1 & 2: Locate, validate, convert (once for all devices) ---
-        if args.uf2_file:
+        if _active_board["firmware_ext"] == ".bin" and not args.uf2_file:
+            # ESP32-S3: arduino-esp32 produces a .bin; convert it to .uf2 ourselves.
+            bin_path = find_bin_file(args)
+            uf2_path = convert_bin_to_uf2(bin_path)
+        elif args.uf2_file:
             uf2_path = Path(args.uf2_file)
             if not uf2_path.exists():
                 print(f"ERROR: UF2 file not found: {uf2_path}")

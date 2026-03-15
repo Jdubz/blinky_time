@@ -410,14 +410,11 @@ public:
         uint16_t sampleRate;
         uint8_t bufferSize;
 
-        // Fire effect defaults (legacy - may be deprecated in future)
-        uint8_t baseCooling;
-        uint8_t sparkHeatMin;
-        uint8_t sparkHeatMax;
-        uint8_t bottomRowsForSparks;
-        float sparkChance;
-        float audioSparkBoost;
-        int8_t coolingAudioBias;
+        // Reserved: was FireDefaults (removed v71 — old heat-diffusion model, never read by particle Fire)
+        // Keep same byte layout to avoid DEVICE_VERSION bump and device config wipe.
+        uint8_t _reserved_fire[4];      // was baseCooling, sparkHeatMin, sparkHeatMax, bottomRowsForSparks
+        float _reserved_fire2[2];       // was sparkChance, audioSparkBoost
+        int8_t _reserved_fire3;         // was coolingAudioBias
 
         // Validity flag
         bool isValid;               // Is this config populated and ready to use?
@@ -469,6 +466,7 @@ public:
 
     ConfigStorage();
     void begin();
+    void end();   // Close NVS handle — call before ESP.restart() on ESP32
     bool isValid() const { return valid_; }
 
     // Device configuration accessors (v28+)

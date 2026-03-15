@@ -2,15 +2,12 @@
 
 #include "../devices/DeviceConfig.h"
 #include "../generators/Generator.h"  // For GeneratorType enum
-#include "PropagationModel.h"
 #include "SpawnRegion.h"
 #include "BoundaryBehavior.h"
 #include "ForceAdapter.h"
 #include "BackgroundModel.h"
 
 // Forward declarations for concrete implementations
-class MatrixPropagation;
-class LinearPropagation;
 class EdgeSpawnRegion;
 class RandomSpawnRegion;
 class KillBoundary;
@@ -35,19 +32,6 @@ enum class BackgroundStyle;
  */
 class PhysicsContext {
 public:
-    /**
-     * Create propagation model for this layout
-     * @param layout The device layout type
-     * @param width Grid width
-     * @param height Grid height
-     * @param wrap Whether to wrap edges (for circular layouts)
-     * @param buffer Memory buffer for placement new (minimum 64 bytes)
-     * @return Pointer to created model
-     */
-    static PropagationModel* createPropagation(
-        LayoutType layout, uint16_t width, uint16_t height,
-        bool wrap, void* buffer);
-
     /**
      * Create spawn region appropriate for this layout and generator
      * @param layout The device layout type

@@ -14,7 +14,7 @@ struct LightningParams {
     float audioSpawnBoost;        // Audio reactivity multiplier (0-2)
 
     // Lifecycle
-    float maxParticles;           // Fraction of numLeds for max active particles (scaled, clamped to pool)
+    float maxParticles;           // Fraction of numLeds for max active particles
     uint8_t defaultLifespan;      // Default particle lifespan in centiseconds (0.01s units, 0-2.55s range, short-lived)
     uint8_t intensityMin;         // Minimum spawn intensity (0-255)
     uint8_t intensityMax;         // Maximum spawn intensity (0-255)
@@ -37,10 +37,10 @@ struct LightningParams {
 
     LightningParams() {
         // LIGHTNING EFFECT: Dramatic bright flashing bolts
-        // maxParticles is a fraction of numLeds, scaled at use-time.
+        // maxParticles is a fraction of numLeds, pool auto-sized in begin().
         baseSpawnChance = 0.15f;  // Regular strikes
         audioSpawnBoost = 0.8f;   // Strong music response
-        maxParticles = 0.67f;     // Fraction of numLeds (clamped to pool capacity 40)
+        maxParticles = 0.67f;     // Fraction of numLeds (pool auto-sized in begin())
         defaultLifespan = 30;     // 0.3 seconds - quick flash (30 centiseconds)
         intensityMin = 220;       // VERY BRIGHT
         intensityMax = 255;       // MAXIMUM brightness
@@ -66,7 +66,7 @@ struct LightningParams {
  * - Fast fade for snappy lightning effect
  * - Beat-synced bolt generation in music mode
  */
-class Lightning : public ParticleGenerator<40> {
+class Lightning : public ParticleGenerator {
 public:
     Lightning();
     virtual ~Lightning() override = default;
@@ -104,10 +104,9 @@ private:
      */
     void spawnBranch(const Particle* parent);
 
-    // Dimension-derived parameter accessors
-    uint8_t scaledMaxParticles() const {
-        return (uint8_t)min(40.0f, max(8.0f, params_.maxParticles * numLeds_));
-    }
+    // Pool sizing: density comes from params_.maxParticles
+    float particleDensity() const override { return params_.maxParticles; }
+    uint16_t scaledMaxParticles() const { return pool_.getCapacity(); }
     float diagonal() const {
         return sqrtf((float)(width_ * width_ + height_ * height_));
     }

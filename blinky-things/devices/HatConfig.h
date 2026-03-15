@@ -54,15 +54,5 @@ const DeviceConfig HAT_CONFIG = {
   .microphone = {
     .sampleRate = 16000,         // Standard rate
     .bufferSize = 32             // Larger buffer for head movement noise
-  },
-  .fireDefaults = {
-    // Hat fire parameters - PUNCHY beat-reactive fire
-    .baseCooling = 90,          // Very fast cooling = quick fade to dark
-    .sparkHeatMin = 200,        // Bright sparks
-    .sparkHeatMax = 255,        // Maximum brightness
-    .sparkChance = 0.080f,      // LOW base rate = quiet when no audio
-    .audioSparkBoost = 0.800f,  // HUGE audio boost = explosive on hits
-    .coolingAudioBias = -70,    // Big cooling reduction on audio
-    .bottomRowsForSparks = 1    // Not relevant for string fire
   }
 };

@@ -1,5 +1,6 @@
 #include "DeviceConfigLoader.h"
 #include "../inputs/SerialConsole.h"
+#include "../hal/PlatformDetect.h"
 
 // Static storage for deviceName string only (since DeviceConfig.deviceName is const char*)
 // Other fields are copied by value, so they can be local variables
@@ -50,22 +51,13 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     imu.invertX = stored.invertX;
     imu.invertY = stored.invertY;
 
-    SerialConfig serial;
+    BlinkySerialConfig serial;
     serial.baudRate = stored.baudRate;
     serial.initTimeoutMs = stored.initTimeoutMs;
 
     MicConfig mic;
     mic.sampleRate = stored.sampleRate;
     mic.bufferSize = stored.bufferSize;
-
-    FireDefaults fire;
-    fire.baseCooling = stored.baseCooling;
-    fire.sparkHeatMin = stored.sparkHeatMin;
-    fire.sparkHeatMax = stored.sparkHeatMax;
-    fire.sparkChance = stored.sparkChance;
-    fire.audioSparkBoost = stored.audioSparkBoost;
-    fire.coolingAudioBias = stored.coolingAudioBias;
-    fire.bottomRowsForSparks = stored.bottomRowsForSparks;
 
     // Populate output DeviceConfig (structs copied by value, deviceName by pointer)
     outConfig.deviceName = deviceNameBuffer;
@@ -74,7 +66,6 @@ bool DeviceConfigLoader::loadFromFlash(const ConfigStorage& storage, DeviceConfi
     outConfig.imu = imu;
     outConfig.serial = serial;
     outConfig.microphone = mic;
-    outConfig.fireDefaults = fire;
 
     if (SerialConsole::getGlobalLogLevel() >= LogLevel::INFO) {
         Serial.print(F("[INFO] Loaded device: "));
@@ -140,15 +131,6 @@ void DeviceConfigLoader::convertToStored(const DeviceConfig& config, ConfigStora
     outStored.sampleRate = config.microphone.sampleRate;
     outStored.bufferSize = config.microphone.bufferSize;
 
-    // Copy fire defaults
-    outStored.baseCooling = config.fireDefaults.baseCooling;
-    outStored.sparkHeatMin = config.fireDefaults.sparkHeatMin;
-    outStored.sparkHeatMax = config.fireDefaults.sparkHeatMax;
-    outStored.sparkChance = config.fireDefaults.sparkChance;
-    outStored.audioSparkBoost = config.fireDefaults.audioSparkBoost;
-    outStored.coolingAudioBias = config.fireDefaults.coolingAudioBias;
-    outStored.bottomRowsForSparks = config.fireDefaults.bottomRowsForSparks;
-
     // Mark as valid
     outStored.isValid = true;
 
@@ -169,13 +151,23 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         SerialConsole::logWarn(F("Invalid LED count: 0"));
         return false;
     }
-    if (ledCount > 500) {
-        SerialConsole::logWarn(F("LED count too high (>500)"));
+    // 2048 cap covers the largest current device (32×32 = 1024 LEDs) with headroom.
+    // nRF52840 practical ceiling is ~512 LEDs before pixel buffers exhaust its 256 KB RAM;
+    // the firmware will compile but may malloc-fail at runtime on that platform.
+    if (ledCount > 2048) {
+        SerialConsole::logWarn(F("LED count too high (>2048)"));
         return false;
     }
 
-    // Validate LED pin (common GPIO pins on nRF52840)
-    if (stored.ledPin > 48) {  // nRF52840 has up to 48 GPIO pins
+    // Validate LED pin — upper bound is platform-dependent
+    // nRF52840: GPIO 0-47 (P0.00-P0.31, P1.00-P1.15)
+    // ESP32-S3: GPIO 0-48
+#ifdef BLINKY_PLATFORM_NRF52840
+    constexpr uint8_t LED_PIN_MAX = 47;
+#else
+    constexpr uint8_t LED_PIN_MAX = 48;
+#endif
+    if (stored.ledPin > LED_PIN_MAX) {
         SerialConsole::logWarn(F("Invalid LED pin"));
         return false;
     }
@@ -188,7 +180,7 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
     }
 
     // Validate orientation
-    if (stored.orientation > 1) {  // 0=HORIZONTAL, 1=VERTICAL
+    if (stored.orientation > 2) {  // 0=HORIZONTAL, 1=VERTICAL, 2=PANEL_GRID
         SerialConsole::logWarn(F("Invalid orientation"));
         return false;
     }

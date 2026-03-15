@@ -114,6 +114,21 @@ public:
             return false;
         }
 
+        // PANEL_GRID is hardcoded for a 2×2 arrangement of equal panels
+        // (TL→TR→BL→BR chain order).  A 4-panel 2×2 grid with even dimensions
+        // is the only topology the mapping algorithm supports.  A 64×16 or any
+        // other even-dimension rectangle would be accepted by the even-dimension
+        // check but would be mapped incorrectly as a non-square 2×2 panel grid.
+        // If additional topologies are needed, add a panelCols/panelRows field
+        // to MatrixConfig and generalise generateMapping() accordingly.
+        //
+        // Reject odd dimensions: they produce fractional panel sizes and
+        // out-of-bounds LED indices.
+        if (orientation == PANEL_GRID && (width % 2 != 0 || height % 2 != 0)) {
+            cleanup();
+            return false;
+        }
+
         // Generate the mapping based on orientation and wiring pattern
         generateMapping();
         return true;
@@ -181,6 +196,57 @@ private:
                     positionToIndex[y * width + x] = ledIndex;
                     indexToX[ledIndex] = x;
                     indexToY[ledIndex] = y;
+                }
+            }
+        } else if (orientation == PANEL_GRID) {
+            // 2×2 grid of equal panels, chained TL→TR→BL→BR.
+            // Within each panel: serpentine rows (even rows left→right,
+            // odd rows right→left) — standard WS2812B matrix wiring.
+            //
+            // Physical chain order (data-in perspective):
+            //   Panel 0 (TL) → Panel 1 (TR) → Panel 2 (BL) → Panel 3 (BR)
+            //   BUT physical panels 0 and 3 are swapped relative to logical
+            //   coordinates (panelIdx swap below), so logical TL = chain BR.
+            //
+            // Physical→logical transpose:
+            //   Logical (gx, gy) → physical (phx=gy, phy=gx)
+            //   This corrects a 90° CCW rotation in the physical panel
+            //   mounting (the panels are installed rotated — top-right
+            //   of the physical chain becomes logical top-left).
+            //
+            //   Logical grid:         Physical chain order:
+            //   (0,0) (1,0) ...       Panel3 Panel1
+            //   (0,1) (1,1) ...       Panel2 Panel0
+            //   ↑ logical origin      (after swap: TL=3, TR=1, BL=2, BR=0)
+            int panelW = width  / 2;
+            int panelH = height / 2;
+            int panelPixels = panelW * panelH;
+
+            for (int gy = 0; gy < height; gy++) {
+                for (int gx = 0; gx < width; gx++) {
+                    // Transpose: swap logical x/y before panel lookup
+                    int phx = gy;  // physical x = logical y
+                    int phy = gx;  // physical y = logical x
+
+                    int px = phx / panelW;  // Panel column (0=left, 1=right)
+                    int lx = phx % panelW;  // Local x within panel
+                    int py = phy / panelH;  // Panel row (0=top, 1=bottom)
+                    int ly = phy % panelH;  // Local y within panel
+
+                    int panelIdx  = py * 2 + px;         // Chain order: 0=TL,1=TR,2=BL,3=BR
+                    // Swap TL (0) and BR (3) panel positions
+                    if (panelIdx == 0 || panelIdx == 3) panelIdx = 3 - panelIdx;
+                    int panelStart = panelIdx * panelPixels;
+
+                    // Serpentine within panel: even rows L→R, odd rows R→L
+                    int localIdx = (ly % 2 == 0)
+                        ? (ly * panelW + lx)
+                        : (ly * panelW + (panelW - 1 - lx));
+
+                    int ledIndex = panelStart + localIdx;
+                    positionToIndex[gy * width + gx] = ledIndex;
+                    indexToX[ledIndex] = gx;
+                    indexToY[ledIndex] = gy;
                 }
             }
         } else {

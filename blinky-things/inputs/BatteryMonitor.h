@@ -4,17 +4,23 @@
 #include "../hal/interfaces/IAdc.h"
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
+#include "../hal/PlatformDetect.h"
 
 // Default pins for XIAO BLE / Sense (override via Config if your core differs)
+// ESP32-S3: no onboard battery circuit — all pins set to -1 (disables battery monitoring)
 #ifndef PIN_VBAT
-  #if defined(P0_31)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
+    #define PIN_VBAT        (-1)     // No battery ADC on XIAO ESP32-S3
+  #elif defined(P0_31)
     #define PIN_VBAT        P0_31    // ADC input for VBAT divider (mbed core)
   #else
     #define PIN_VBAT        32       // ADC input for VBAT divider (non-mbed core) - P0.31 = pin 32
   #endif
 #endif
 #ifndef VBAT_ENABLE_PIN
-  #if defined(P0_14)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
+    #define VBAT_ENABLE_PIN (-1)     // No battery enable pin on XIAO ESP32-S3
+  #elif defined(P0_14)
     #define VBAT_ENABLE_PIN P0_14    // LOW = enable divider to ADC, HIGH = disable (mbed)
   #else
     #define VBAT_ENABLE_PIN 14       // LOW = enable divider to ADC, HIGH = disable (non-mbed)
@@ -22,19 +28,21 @@
 #endif
 
 // HICHG (fast-charge) control:
-//  - mbed core typically exposes P0_13 (LOW = 100mA, HIGH = 50mA)
-//  - non-mbed is often "22" for the same line
 #ifndef HICHG_PIN_DEFAULT
-  #if defined(P0_13)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
+    #define HICHG_PIN_DEFAULT (-1)   // No charge control on XIAO ESP32-S3
+  #elif defined(P0_13)
     #define HICHG_PIN_DEFAULT P0_13
   #else
     #define HICHG_PIN_DEFAULT 22
   #endif
 #endif
 
-// CHG status pin: P0_17 on mbed, pin 23 on non-mbed (active LOW while charging = green LED on)
+// CHG status pin:
 #ifndef CHG_STATUS_PIN_DEFAULT
-  #if defined(P0_17)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
+    #define CHG_STATUS_PIN_DEFAULT (-1)  // No charge status pin on XIAO ESP32-S3
+  #elif defined(P0_17)
     #define CHG_STATUS_PIN_DEFAULT P0_17  // (mbed core)
   #else
     #define CHG_STATUS_PIN_DEFAULT 23     // (non-mbed core) - green LED indicator

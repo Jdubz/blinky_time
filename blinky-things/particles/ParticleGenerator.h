@@ -4,7 +4,6 @@
 #include "ParticlePool.h"
 #include "Particle.h"
 #include "../physics/PhysicsContext.h"
-#include "../physics/PropagationModel.h"
 #include "../physics/SpawnRegion.h"
 #include "../physics/BoundaryBehavior.h"
 #include "../physics/ForceAdapter.h"
@@ -22,16 +21,18 @@
  * 5. Handle boundaries using BoundaryBehavior abstraction
  * 6. Render particles to matrix
  *
+ * Pool is allocated dynamically in begin() based on device dimensions.
+ * Subclasses provide a density fraction via particleDensity() that
+ * determines pool capacity as a fraction of numLeds.
+ *
  * Subclasses customize behavior by implementing:
+ * - particleDensity(): Fraction of numLeds for pool capacity (e.g., 0.75)
  * - initPhysicsContext(): Set up layout-appropriate physics
  * - spawnParticles(): When and how to create particles
  * - updateParticle(): Per-particle custom logic
  * - renderParticle(): How to draw each particle
  * - particleColor(): Particle appearance
- *
- * Template parameter MAX_PARTICLES determines pool size.
  */
-template<uint8_t MAX_PARTICLES>
 class ParticleGenerator : public Generator {
 public:
     ParticleGenerator()
@@ -49,7 +50,12 @@ public:
 
         computeDimensionScales();
 
-        pool_.reset();
+        // Allocate particle pool based on device size and generator density
+        uint16_t capacity = poolCapacity();
+        if (!pool_.begin(capacity)) {
+            return false;
+        }
+
         lastUpdateMs_ = millis();
 
         // Initialize physics context - subclasses implement this
@@ -69,6 +75,11 @@ public:
         if (!forceAdapter_) {
             Serial.println(F("WARN: forceAdapter_ null after initPhysicsContext"));
         }
+        Serial.print(F("[INFO] Particle pool: "));
+        Serial.print(capacity);
+        Serial.print(F(" particles ("));
+        Serial.print(capacity * (uint16_t)sizeof(Particle));
+        Serial.println(F(" bytes)"));
         #endif
 
         return true;
@@ -108,6 +119,33 @@ public:
 
 protected:
     // ========================================
+    // Pool sizing
+    // ========================================
+
+    /**
+     * Particle density fraction — controls pool capacity relative to display size.
+     * Subclasses override to set their target density.
+     * Default: 0.75 (fire-like density).
+     *
+     * Pool scales with sqrt(numLeds), not linearly. A 4× larger display
+     * needs ~2× the particles because each particle still occupies 1 pixel
+     * and additive blending saturates with too many overlaps.
+     */
+    virtual float particleDensity() const { return 0.75f; }
+
+    /**
+     * Compute pool capacity from device dimensions and density.
+     * Uses sqrt scaling: capacity = density * sqrt(numLeds) * 8.
+     * This gives ~64 particles on 128 LEDs at density 0.75 (matching
+     * the old hardcoded pool), and ~192 on 1024 LEDs.
+     * Minimum 8 particles regardless of device size.
+     */
+    uint16_t poolCapacity() const {
+        float raw = particleDensity() * sqrtf((float)numLeds_) * 8.0f;
+        return (uint16_t)max(8.0f, min(raw, 2048.0f));
+    }
+
+    // ========================================
     // Physics context initialization
     // ========================================
 
@@ -117,7 +155,7 @@ protected:
      * - spawnRegion_
      * - boundary_
      * - forceAdapter_
-     * - (optionally) propagation_ and background_ if needed
+     * - (optionally) background_ if needed
      *
      * Use PhysicsContext factory methods with placement new.
      */
@@ -273,7 +311,7 @@ protected:
     // State
     // ========================================
 
-    ParticlePool<MAX_PARTICLES> pool_;
+    ParticlePool pool_;
     AudioControl audio_;
     float prevPhase_;
 

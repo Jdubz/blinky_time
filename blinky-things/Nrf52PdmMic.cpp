@@ -1,4 +1,7 @@
 #include "hal/hardware/Nrf52PdmMic.h"
+
+#ifdef BLINKY_PLATFORM_NRF52840
+
 #include <PDM.h>
 
 bool Nrf52PdmMic::begin(int channels, long sampleRate) {
@@ -24,3 +27,5 @@ int Nrf52PdmMic::available() {
 int Nrf52PdmMic::read(int16_t* buffer, int maxBytes) {
     return PDM.read(buffer, maxBytes);
 }
+
+#endif // BLINKY_PLATFORM_NRF52840

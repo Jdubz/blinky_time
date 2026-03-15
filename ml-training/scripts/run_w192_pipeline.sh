@@ -5,7 +5,10 @@
 # before running (resumable). If any step fails, the pipeline stops.
 #
 # Usage:
-#   tmux new-session -d -s pipeline "cd ml-training && bash scripts/run_w192_pipeline.sh 2>&1 | tee outputs/pipeline.log"
+#   tmux new-session -d -s pipeline "cd ml-training && bash scripts/run_w192_pipeline.sh"
+#
+# Logs are written per-step to outputs/pipeline_step_N.log (not piped through
+# tee, which crashed when allin1's natten warnings bloated the log to 716 MB).
 #
 # Steps:
 #   1. Batch Demucs separation (all 7000 tracks → stems for augmentation + allin1)
@@ -21,6 +24,8 @@ cd "$(dirname "$0")/.."
 source venv/bin/activate
 
 OUTPUTS="outputs"
+LOGDIR="$OUTPUTS/pipeline_logs"
+mkdir -p "$LOGDIR"
 DATA_ROOT="${BLINKY_DATA_ROOT:-/mnt/storage/blinky-ml-data}"
 STEMS_DIR="$DATA_ROOT/stems"
 LABELS_DIR="$DATA_ROOT/labels/multi"
@@ -81,7 +86,9 @@ else
     PYTHONUNBUFFERED=1 python scripts/batch_demucs_separate.py \
         --audio-dir "$AUDIO_DIR" \
         --output-dir "$STEMS_DIR" \
-        --device cuda
+        --device cuda \
+        &> "$LOGDIR/step1_demucs.log"
+    tail -5 "$LOGDIR/step1_demucs.log"
     echo "  DONE: Demucs separation complete at $(date)"
 fi
 echo ""
@@ -104,7 +111,9 @@ else
         --systems allin1 \
         --demix-dir "$STEMS_DIR" \
         --allin1-device cuda \
-        --workers 1
+        --workers 1 \
+        &> "$LOGDIR/step2_allin1.log"
+    tail -5 "$LOGDIR/step2_allin1.log"
     echo "  DONE: allin1 labeling complete at $(date)"
 fi
 echo ""
@@ -123,7 +132,9 @@ else
         --output-dir "$CONSENSUS_V5_DIR" \
         --tolerance 0.05 \
         --min-agreement 2 \
-        --downbeat-min-agreement 2
+        --downbeat-min-agreement 2 \
+        &> "$LOGDIR/step3_consensus.log"
+    tail -10 "$LOGDIR/step3_consensus.log"
     echo "  DONE: consensus_v5 built"
 fi
 echo ""
@@ -148,7 +159,9 @@ PYTHONUNBUFFERED=1 python scripts/prepare_dataset.py \
     --exclude-dir ../blinky-test-player/music/edm \
     --rir-dir "$DATA_ROOT/rir/processed" \
     --stems-dir "$STEMS_DIR" \
-    --stem-variants drums
+    --stem-variants drums \
+    &> "$LOGDIR/step4_prepare.log"
+tail -10 "$LOGDIR/step4_prepare.log"
 echo "  DONE: Dataset prepared at $(date)"
 echo ""
 
@@ -163,7 +176,9 @@ else
     mkdir -p "$OUTPUTS/w192"
     PYTHONUNBUFFERED=1 python train.py \
         --config configs/frame_fc_w192.yaml \
-        --output-dir "$OUTPUTS/w192"
+        --output-dir "$OUTPUTS/w192" \
+        &> "$LOGDIR/step5_train.log"
+    tail -10 "$LOGDIR/step5_train.log"
     echo "  DONE: Training complete at $(date)"
 fi
 echo ""
@@ -179,7 +194,9 @@ else
     python scripts/export_tflite.py \
         --config configs/frame_fc_w192.yaml \
         --model "$OUTPUTS/w192/best_model.pt" \
-        --output-dir "$OUTPUTS/w192/export"
+        --output-dir "$OUTPUTS/w192/export" \
+        &> "$LOGDIR/step6_export.log"
+    tail -5 "$LOGDIR/step6_export.log"
     echo "  Export complete"
 fi
 
@@ -191,7 +208,9 @@ else
         --config configs/frame_fc_w192.yaml \
         --model "$OUTPUTS/w192/best_model.pt" \
         --audio-dir ../blinky-test-player/music/edm \
-        --output-dir "$OUTPUTS/w192/eval"
+        --output-dir "$OUTPUTS/w192/eval" \
+        &> "$LOGDIR/step6_eval.log"
+    tail -10 "$LOGDIR/step6_eval.log"
     echo "  Evaluation complete"
 fi
 

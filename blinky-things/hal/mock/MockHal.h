@@ -140,8 +140,8 @@ public:
         currentMillis_ += us / 1000;
     }
 
-    void noInterrupts() override { interruptsDisabled_ = true; }
-    void interrupts() override { interruptsDisabled_ = false; }
+    void disableInterrupts() override { interruptsDisabled_ = true; }
+    void enableInterrupts() override { interruptsDisabled_ = false; }
 
     // Test helpers
     void advanceMillis(uint32_t ms) {
@@ -177,13 +177,18 @@ private:
  * MockPdmMic - Test mock for PDM microphone
  *
  * Simulates audio data for testing.
+ *
+ * Defaults to HARDWARE capability (hasHardwareGain=true) so tests exercise the
+ * same AGC paths as nRF52840 production firmware. Call setHardwareGain(false)
+ * to specifically test SOFTWARE strategy (ESP32) code paths.
  */
 class MockPdmMic : public IPdmMic {
 public:
     static constexpr int MAX_BUFFER_SIZE = 512;
 
     MockPdmMic() : callback_(nullptr), gain_(0), running_(false),
-                   bufferSize_(0), bufferRead_(0), channels_(0), sampleRate_(0) {}
+                   bufferSize_(0), bufferRead_(0), channels_(0), sampleRate_(0),
+                   hasHardwareGain_(true) {}
 
     bool begin(int channels, long sampleRate) override {
         channels_ = channels;
@@ -238,10 +243,19 @@ public:
         }
     }
 
+    // Capability queries — configurable so tests can exercise either strategy.
+    // Min (0) and max (80) match IPdmMic defaults and are not overridden.
+    bool  hasHardwareGain() const override { return hasHardwareGain_; }
+    float getGainStepDb()   const override { return hasHardwareGain_ ? 0.5f : 1.0f; }
+
     int getGain() const { return gain_; }
     bool isRunning() const { return running_; }
     int getChannels() const { return channels_; }
     long getSampleRate() const { return sampleRate_; }
+
+    // Configure which AGC strategy AdaptiveMic will select.
+    // Default true (HARDWARE) matches nRF52 production behaviour.
+    void setHardwareGain(bool hw) { hasHardwareGain_ = hw; }
 
     void reset() {
         callback_ = nullptr;
@@ -251,6 +265,7 @@ public:
         bufferRead_ = 0;
         channels_ = 0;
         sampleRate_ = 0;
+        hasHardwareGain_ = true;
     }
 
 private:
@@ -262,4 +277,5 @@ private:
     int bufferRead_;
     int channels_;
     long sampleRate_;
+    bool hasHardwareGain_;
 };

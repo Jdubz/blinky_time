@@ -1,4 +1,8 @@
 #pragma once
+#include "../PlatformDetect.h"
+
+#ifdef BLINKY_PLATFORM_NRF52840
+
 #include "../interfaces/IPdmMic.h"
 
 // NOTE: PDM.h is NOT included here to avoid pinDefinitions.h redefinition
@@ -6,6 +10,9 @@
 
 /**
  * Nrf52PdmMic - IPdmMic implementation for nRF52840 using PDM library
+ *
+ * nRF52840 PDM hardware provides true pre-decimation gain via GAINL/GAINR
+ * registers (range 0–80 in 0.5 dB steps), which improves SNR.
  */
 class Nrf52PdmMic : public IPdmMic {
 public:
@@ -15,4 +22,12 @@ public:
     void onReceive(ReceiveCallback callback) override;
     int available() override;
     int read(int16_t* buffer, int maxBytes) override;
+
+    // Hardware capability: nRF52840 has real PDM gain registers (GAINL/GAINR),
+    // 0–80 dB range at 0.5 dB steps. Min/max match IPdmMic defaults so only the
+    // differentiating properties are overridden here.
+    bool  hasHardwareGain() const override { return true; }
+    float getGainStepDb()   const override { return 0.5f; }
 };
+
+#endif // BLINKY_PLATFORM_NRF52840

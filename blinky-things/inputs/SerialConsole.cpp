@@ -1,4 +1,5 @@
 #include "SerialConsole.h"
+#include "../hal/PlatformDetect.h"
 #include "../types/BlinkyAssert.h"
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
@@ -50,13 +51,15 @@ static float effectRotationSpeed_ = 0.0f;
 
 // New constructor with RenderPipeline
 SerialConsole::SerialConsole(RenderPipeline* pipeline, AdaptiveMic* mic)
-    : pipeline_(pipeline), fireGenerator_(nullptr), waterGenerator_(nullptr),
+    : pipeline_(pipeline), fireGenerator_(nullptr), heatFireGenerator_(nullptr),
+      waterGenerator_(nullptr),
       lightningGenerator_(nullptr), audioVisGenerator_(nullptr), hueEffect_(nullptr), mic_(mic),
       battery_(nullptr), audioCtrl_(nullptr), configStorage_(nullptr) {
     instance_ = this;
     // Get generator pointers from pipeline
     if (pipeline_) {
         fireGenerator_ = pipeline_->getFireGenerator();
+        heatFireGenerator_ = pipeline_->getHeatFireGenerator();
         waterGenerator_ = pipeline_->getWaterGenerator();
         lightningGenerator_ = pipeline_->getLightningGenerator();
         audioVisGenerator_ = pipeline_->getAudioVisGenerator();
@@ -81,6 +84,11 @@ void SerialConsole::registerSettings() {
 
     // Register all settings by category
     registerFireSettings(fp);
+
+    // Register HeatFire generator settings
+    if (heatFireGenerator_) {
+        registerHeatFireSettings(&heatFireGenerator_->getParamsMutable());
+    }
 
     // Register Water generator settings (use mutable ref so changes apply directly)
     if (waterGenerator_) {
@@ -164,6 +172,40 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
     // Thermal physics
     settings_.registerFloat("thermalforce", &fp->thermalForce, "fire",
         "Thermal buoyancy (x traversalDim -> LEDs/sec^2)", 0.0f, 10.0f, onParamChanged);
+}
+
+// === HEAT FIRE SETTINGS (Heat buffer) ===
+// Prefixed with "hf_" to avoid name collisions with particle fire settings.
+// Pool auto-sized in begin(): heat buffer = width * height bytes.
+void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
+    if (!hfp) return;
+
+    auto heatFireParamChanged = []() {};  // Heat buffer params take effect immediately
+
+    settings_.registerFloat("hf_baseheat", &hfp->baseHeat, "heatfire",
+        "Base heat injection level", 0.0f, 1.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_audioheatboost", &hfp->audioHeatBoost, "heatfire",
+        "Energy-driven heat boost", 0.0f, 5.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_beatheatpulse", &hfp->beatHeatPulse, "heatfire",
+        "Phase modulation depth for injection", 0.0f, 1.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_basecooling", &hfp->baseCooling, "heatfire",
+        "Base cooling per row per frame", 0.0f, 0.5f, heatFireParamChanged);
+    settings_.registerFloat("hf_coolingvariation", &hfp->coolingVariation, "heatfire",
+        "Noise-driven spatial cooling variation", 0.0f, 1.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_diffusionspread", &hfp->diffusionSpread, "heatfire",
+        "Horizontal drift range for heat propagation", 0.0f, 3.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_burstheat", &hfp->burstHeat, "heatfire",
+        "Extra heat on transient pulse", 0.0f, 1.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_organictransmin", &hfp->organicTransientMin, "heatfire",
+        "Min transient to trigger burst", 0.0f, 1.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
+        "Beat sync depth for injection", 0.0f, 1.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_winddrift", &hfp->windDrift, "heatfire",
+        "Audio-reactive horizontal drift", 0.0f, 3.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
+        "Noise animation speed", 0.001f, 0.1f, heatFireParamChanged);
+    settings_.registerFloat("hf_brightness", &hfp->brightness, "heatfire",
+        "Master output brightness (0-1)", 0.0f, 1.0f, heatFireParamChanged);
 }
 
 // === AUDIO SETTINGS ===
@@ -877,20 +919,30 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         Serial.println(F("Rebooting..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
+#ifdef BLINKY_PLATFORM_NRF52840
         NVIC_SystemReset();
+#elif defined(BLINKY_PLATFORM_ESP32S3)
+        if (configStorage_) configStorage_->end();  // Flush NVS before restart
+        ESP.restart();
+#endif
         return true;  // Never reached
     }
 
     if (strcmp(cmd, "bootloader") == 0) {
-#ifdef ARDUINO_ARCH_NRF52
+#ifdef BLINKY_PLATFORM_NRF52840
         Serial.println(F("Entering UF2 bootloader..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
-        // Use SoftDevice API for GPREGRET when SoftDevice is enabled.
-        // Direct NRF_POWER->GPREGRET writes are unreliable when SoftDevice
-        // owns the POWER peripheral (register gets cleared during reset).
+        // Set GPREGRET magic byte so the UF2 bootloader is entered on reset.
+        // The Seeed/Adafruit non-mbed nRF52 core uses the SoftDevice — writing
+        // GPREGRET directly is unreliable when the SoftDevice owns the POWER
+        // peripheral (it clears the register during reset). Use the SD API when
+        // the SoftDevice is active, otherwise write the register directly.
+        // The mbed core does not link the SoftDevice API, so the inner guard
+        // must remain as ARDUINO_ARCH_NRF52 (non-mbed core check).
         {
             const uint8_t DFU_MAGIC_UF2 = 0x57;
+#ifdef ARDUINO_ARCH_NRF52
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
             if (sd_en) {
@@ -899,6 +951,10 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             } else {
                 NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
             }
+#else
+            // mbed core: SoftDevice API not available; write GPREGRET directly
+            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+#endif
         }
         NVIC_SystemReset();
 #else
@@ -983,15 +1039,6 @@ void SerialConsole::showDeviceConfig() {
     doc["sampleRate"] = cfg.sampleRate;
     doc["bufferSize"] = cfg.bufferSize;
 
-    // Fire effect defaults
-    doc["baseCooling"] = cfg.baseCooling;
-    doc["sparkHeatMin"] = cfg.sparkHeatMin;
-    doc["sparkHeatMax"] = cfg.sparkHeatMax;
-    doc["sparkChance"] = serialized(String(cfg.sparkChance, 2));
-    doc["audioSparkBoost"] = serialized(String(cfg.audioSparkBoost, 2));
-    doc["coolingAudioBias"] = cfg.coolingAudioBias;
-    doc["bottomRowsForSparks"] = cfg.bottomRowsForSparks;
-
     // Serialize with pretty printing for readability
     serializeJsonPretty(doc, Serial);
     Serial.println();
@@ -1054,15 +1101,6 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
     // Microphone configuration
     newConfig.sampleRate = doc["sampleRate"] | 16000;
     newConfig.bufferSize = doc["bufferSize"] | 32;
-
-    // Fire effect defaults
-    newConfig.baseCooling = doc["baseCooling"] | 40;
-    newConfig.sparkHeatMin = doc["sparkHeatMin"] | 120;
-    newConfig.sparkHeatMax = doc["sparkHeatMax"] | 255;
-    newConfig.sparkChance = doc["sparkChance"] | 0.2f;
-    newConfig.audioSparkBoost = doc["audioSparkBoost"] | 0.5f;
-    newConfig.coolingAudioBias = doc["coolingAudioBias"] | -30;
-    newConfig.bottomRowsForSparks = doc["bottomRowsForSparks"] | 1;
 
     // Mark as valid
     newConfig.isValid = true;
@@ -1281,6 +1319,9 @@ bool SerialConsole::handleGeneratorCommand(const char* cmd) {
         } else if (strcmp(name, "audio") == 0) {
             type = GeneratorType::AUDIO;
             found = true;
+        } else if (strcmp(name, "heatfire") == 0) {
+            type = GeneratorType::HEAT_FIRE;
+            found = true;
         }
 
         if (found) {
@@ -1355,7 +1396,7 @@ bool SerialConsole::handleEffectCommand(const char* cmd) {
 
 // === WATER SETTINGS (Particle-based) ===
 // Prefixed with "w_" to avoid name collisions with fire settings.
-// Pool size is 30 (ParticleGenerator<30>), so maxparticles capped at 30.
+// Pool auto-sized in begin(): capacity = maxParticles * numLeds.
 void SerialConsole::registerWaterSettings(WaterParams* wp) {
     if (!wp) return;
 
@@ -1416,7 +1457,7 @@ void SerialConsole::registerWaterSettings(WaterParams* wp) {
 
 // === LIGHTNING SETTINGS (Particle-based) ===
 // Prefixed with "l_" to avoid name collisions with fire settings.
-// Pool size is 40 (ParticleGenerator<40>), so maxparticles capped at 40.
+// Pool auto-sized in begin(): capacity = maxParticles * numLeds.
 void SerialConsole::registerLightningSettings(LightningParams* lp) {
     if (!lp) return;
 

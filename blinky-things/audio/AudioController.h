@@ -1,7 +1,28 @@
 #pragma once
 
 #include "AudioControl.h"
+#include "../hal/PlatformDetect.h"
+
+#if defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)
+// TFLite Micro FrameBeatNN — always active since v68.
+// nRF52840: uses CMSIS-NN optimized kernels (~0.2-1ms inference)
+// ESP32-S3: uses reference kernels (~3-5ms inference, still within 16ms frame budget)
 #include "FrameBeatNN.h"
+#else
+// Unknown platforms: FrameBeatNN stub.
+// All methods are no-ops that report "not ready", so AudioController.cpp
+// needs no platform guards — it falls back to energy-envelope ODF.
+struct FrameBeatNN {
+    static constexpr int INPUT_MEL_BANDS = 26;
+    bool begin()                                    { return false; }
+    bool isReady() const                            { return false; }
+    bool hasDownbeatOutput() const                  { return false; }
+    float infer(const float*)                       { return 0.0f; }
+    float getLastDownbeat() const                   { return 0.0f; }
+    void setProfileEnabled(bool)                    {}
+    void printDiagnostics() const                   {}
+};
+#endif
 #include "SharedSpectralAnalysis.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"

@@ -113,7 +113,7 @@ private:
 inline void applyParams(FireParams& p, const ParamMap& params) {
     p.baseSpawnChance = ParamParser::getFloat(params, "baseSpawnChance", p.baseSpawnChance);
     p.audioSpawnBoost = ParamParser::getFloat(params, "audioSpawnBoost", p.audioSpawnBoost);
-    p.maxParticles = ParamParser::getInt(params, "maxParticles", p.maxParticles);
+    p.maxParticles = ParamParser::getFloat(params, "maxParticles", p.maxParticles);
     p.defaultLifespan = ParamParser::getInt(params, "defaultLifespan", p.defaultLifespan);
     p.intensityMin = ParamParser::getInt(params, "intensityMin", p.intensityMin);
     p.intensityMax = ParamParser::getInt(params, "intensityMax", p.intensityMax);
@@ -124,14 +124,14 @@ inline void applyParams(FireParams& p, const ParamMap& params) {
     p.sparkVelocityMin = ParamParser::getFloat(params, "sparkVelocityMin", p.sparkVelocityMin);
     p.sparkVelocityMax = ParamParser::getFloat(params, "sparkVelocityMax", p.sparkVelocityMax);
     p.sparkSpread = ParamParser::getFloat(params, "sparkSpread", p.sparkSpread);
-    p.trailHeatFactor = ParamParser::getInt(params, "trailHeatFactor", p.trailHeatFactor);
-    p.trailDecay = ParamParser::getInt(params, "trailDecay", p.trailDecay);
     p.musicSpawnPulse = ParamParser::getFloat(params, "musicSpawnPulse", p.musicSpawnPulse);
     p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
-    p.burstSparks = ParamParser::getInt(params, "burstSparks", p.burstSparks);
+    p.burstSparks = ParamParser::getFloat(params, "burstSparks", p.burstSparks);
+    p.backgroundIntensity = ParamParser::getFloat(params, "backgroundIntensity", p.backgroundIntensity);
+    p.fastSparkRatio = ParamParser::getFloat(params, "fastSparkRatio", p.fastSparkRatio);
+    p.thermalForce = ParamParser::getFloat(params, "thermalForce", p.thermalForce);
 }
 
-// Get all FireParams as map (for JSON output)
 inline ParamMap getParamMap(const FireParams& p) {
     ParamMap m;
     m["baseSpawnChance"] = std::to_string(p.baseSpawnChance);
@@ -147,11 +147,46 @@ inline ParamMap getParamMap(const FireParams& p) {
     m["sparkVelocityMin"] = std::to_string(p.sparkVelocityMin);
     m["sparkVelocityMax"] = std::to_string(p.sparkVelocityMax);
     m["sparkSpread"] = std::to_string(p.sparkSpread);
-    m["trailHeatFactor"] = std::to_string(p.trailHeatFactor);
-    m["trailDecay"] = std::to_string(p.trailDecay);
     m["musicSpawnPulse"] = std::to_string(p.musicSpawnPulse);
     m["organicTransientMin"] = std::to_string(p.organicTransientMin);
     m["burstSparks"] = std::to_string(p.burstSparks);
+    m["backgroundIntensity"] = std::to_string(p.backgroundIntensity);
+    m["fastSparkRatio"] = std::to_string(p.fastSparkRatio);
+    m["thermalForce"] = std::to_string(p.thermalForce);
+    return m;
+}
+
+// Apply parsed params to HeatFireParams
+#include "../../blinky-things/generators/HeatFire.h"
+inline void applyParams(HeatFireParams& p, const ParamMap& params) {
+    p.baseHeat = ParamParser::getFloat(params, "baseHeat", p.baseHeat);
+    p.audioHeatBoost = ParamParser::getFloat(params, "audioHeatBoost", p.audioHeatBoost);
+    p.beatHeatPulse = ParamParser::getFloat(params, "beatHeatPulse", p.beatHeatPulse);
+    p.baseCooling = ParamParser::getFloat(params, "baseCooling", p.baseCooling);
+    p.coolingVariation = ParamParser::getFloat(params, "coolingVariation", p.coolingVariation);
+    p.diffusionSpread = ParamParser::getFloat(params, "diffusionSpread", p.diffusionSpread);
+    p.burstHeat = ParamParser::getFloat(params, "burstHeat", p.burstHeat);
+    p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
+    p.musicBeatDepth = ParamParser::getFloat(params, "musicBeatDepth", p.musicBeatDepth);
+    p.windDrift = ParamParser::getFloat(params, "windDrift", p.windDrift);
+    p.noiseSpeed = ParamParser::getFloat(params, "noiseSpeed", p.noiseSpeed);
+    p.brightness = ParamParser::getFloat(params, "brightness", p.brightness);
+}
+
+inline ParamMap getParamMap(const HeatFireParams& p) {
+    ParamMap m;
+    m["baseHeat"] = std::to_string(p.baseHeat);
+    m["audioHeatBoost"] = std::to_string(p.audioHeatBoost);
+    m["beatHeatPulse"] = std::to_string(p.beatHeatPulse);
+    m["baseCooling"] = std::to_string(p.baseCooling);
+    m["coolingVariation"] = std::to_string(p.coolingVariation);
+    m["diffusionSpread"] = std::to_string(p.diffusionSpread);
+    m["burstHeat"] = std::to_string(p.burstHeat);
+    m["organicTransientMin"] = std::to_string(p.organicTransientMin);
+    m["musicBeatDepth"] = std::to_string(p.musicBeatDepth);
+    m["windDrift"] = std::to_string(p.windDrift);
+    m["noiseSpeed"] = std::to_string(p.noiseSpeed);
+    m["brightness"] = std::to_string(p.brightness);
     return m;
 }
 
@@ -212,8 +247,6 @@ inline void applyParams(LightningParams& p, const ParamMap& params) {
     p.defaultLifespan = ParamParser::getInt(params, "defaultLifespan", p.defaultLifespan);
     p.intensityMin = ParamParser::getInt(params, "intensityMin", p.intensityMin);
     p.intensityMax = ParamParser::getInt(params, "intensityMax", p.intensityMax);
-    p.boltVelocityMin = ParamParser::getFloat(params, "boltVelocityMin", p.boltVelocityMin);
-    p.boltVelocityMax = ParamParser::getFloat(params, "boltVelocityMax", p.boltVelocityMax);
     p.fadeRate = ParamParser::getInt(params, "fadeRate", p.fadeRate);
     p.branchChance = ParamParser::getInt(params, "branchChance", p.branchChance);
     p.branchCount = ParamParser::getInt(params, "branchCount", p.branchCount);
@@ -231,8 +264,6 @@ inline ParamMap getParamMap(const LightningParams& p) {
     m["defaultLifespan"] = std::to_string(p.defaultLifespan);
     m["intensityMin"] = std::to_string(p.intensityMin);
     m["intensityMax"] = std::to_string(p.intensityMax);
-    m["boltVelocityMin"] = std::to_string(p.boltVelocityMin);
-    m["boltVelocityMax"] = std::to_string(p.boltVelocityMax);
     m["fadeRate"] = std::to_string(p.fadeRate);
     m["branchChance"] = std::to_string(p.branchChance);
     m["branchCount"] = std::to_string(p.branchCount);

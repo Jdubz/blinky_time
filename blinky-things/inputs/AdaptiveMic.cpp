@@ -38,9 +38,8 @@ constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of ful
 // ISR processing constants
 constexpr int ISR_BUFFER_SIZE = 512;              // PDM read buffer size (samples per ISR call)
 
-// Alias for brevity (hardware gain limits are in PlatformConstants.h)
-using Platform::Microphone::HW_GAIN_MIN;
-using Platform::Microphone::HW_GAIN_MAX;
+// Gain limits are now read from IPdmMic::getGainMinDb/MaxDb() in begin()
+// and stored as gainMin_/gainMax_ instance members.
 
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
@@ -60,9 +59,15 @@ AdaptiveMic::AdaptiveMic(IPdmMic& pdm, ISystemTime& time)
 }
 
 bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
-  _sampleRate    = sampleRate;
-  currentHardwareGain  = constrainValue(gainInit, HW_GAIN_MIN, HW_GAIN_MAX);
-  s_instance     = this;
+  _sampleRate = sampleRate;
+  s_instance  = this;
+
+  // Query microphone capabilities and select AGC strategy
+  gainMin_     = pdm_.getGainMinDb();
+  gainMax_     = pdm_.getGainMaxDb();
+  agcStrategy_ = pdm_.hasHardwareGain() ? AgcStrategy::HARDWARE : AgcStrategy::SOFTWARE;
+
+  currentHardwareGain = constrainValue(gainInit, gainMin_, gainMax_);
 
   pdm_.onReceive(AdaptiveMic::onPDMdata);
 
@@ -83,8 +88,9 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   s_fftWriteIdx = 0;
   s_extFftReadIdx = 0;
 
-  // Initialize fast AGC state
+  // Initialize AGC state
   inFastAgcMode_ = false;
+  inLoudAgcMode_ = false;
 
   return true;
 }
@@ -98,6 +104,11 @@ void AdaptiveMic::update(float dt) {
   // Clamp dt to reasonable range
   if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
   if (dt > MicConstants::MAX_DT_SECONDS) dt = MicConstants::MAX_DT_SECONDS;
+
+  // On platforms without hardware PDM interrupts (e.g. ESP32), poll() drains
+  // the I2S DMA buffer and fires the onPDMdata callback synchronously.
+  // On nRF52 this is a no-op — the hardware interrupt already fired it.
+  pdm_.poll();
 
   // Get raw audio samples from ISR
   float avgAbs = 0.0f;
@@ -174,7 +185,7 @@ void AdaptiveMic::update(float dt) {
 void AdaptiveMic::lockHwGain(int gain) {
   // Lock hardware gain at specific value for testing (disables AGC)
   hwGainLocked_ = true;
-  currentHardwareGain = constrainValue(gain, HW_GAIN_MIN, HW_GAIN_MAX);
+  currentHardwareGain = constrainValue(gain, gainMin_, gainMax_);
   pdm_.setGain(currentHardwareGain);
 }
 
@@ -193,14 +204,14 @@ void AdaptiveMic::unlockHwGain() {
  * The critical section is kept minimal (~20 cycles) to minimize interrupt latency.
  */
 void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
-  time_.noInterrupts();  // Begin critical section
+  time_.disableInterrupts();  // Begin critical section
   uint64_t sum = s_sumAbs;
   uint32_t cnt = s_numSamples;
   uint16_t m   = s_maxAbs;
   s_sumAbs = 0;
   s_numSamples = 0;
   s_maxAbs = 0;
-  time_.interrupts();  // End critical section
+  time_.enableInterrupts();  // End critical section
 
   n = cnt;
   maxAbsVal = m;
@@ -216,7 +227,12 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // Fast mode: when gain is near the AGC ceiling and signal is persistently low.
   // Threshold is relative to hwGainMaxSignal so it adapts to any ceiling value.
   int fastAgcGainThreshold = (hwGainMaxSignal > 10) ? (hwGainMaxSignal - 10) : hwGainMaxSignal;
-  inFastAgcMode_ = fastAgcEnabled &&
+  // Fast AGC is only meaningful on HARDWARE strategy: pre-decimation gain
+  // actually improves SNR so aggressive seeking is worthwhile. On SOFTWARE
+  // strategy the gain is post-decimation amplitude scaling — chasing it faster
+  // adds no SNR benefit and risks clipping transients.
+  inFastAgcMode_ = (agcStrategy_ == AgcStrategy::HARDWARE) &&
+                   fastAgcEnabled &&
                    currentHardwareGain >= fastAgcGainThreshold &&
                    rawTrackedLevel < fastAgcThreshold;
 
@@ -240,12 +256,12 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   if ((int32_t)(nowMs - lastHwCalibMs) < (int32_t)calibPeriod) return;
 
   // Calculate error from target (signed: negative = too quiet, positive = too loud)
-  constexpr float HW_TARGET_DEADZONE = 0.01f;  // ±0.01 dead zone around target
+  // Dead zone is wider for software-gain platforms to avoid thrashing with coarser steps.
+  float deadZone = (agcStrategy_ == AgcStrategy::SOFTWARE) ? 0.02f : 0.01f;
   float error = rawTrackedLevel - hwTarget;
   float errorMagnitude = fabsf(error);
 
-  // Dead zone: Don't adjust if within ±0.01 of target
-  if (errorMagnitude <= HW_TARGET_DEADZONE) {
+  if (errorMagnitude <= deadZone) {
     lastHwCalibMs = nowMs;
     return;
   }
@@ -253,26 +269,35 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // Determine direction: negative error = too quiet → increase gain
   int direction = (error < 0.0f) ? +1 : -1;
 
-  // Adaptive step size: take bigger steps when far from target
-  // In fast mode, use larger steps for faster convergence
+  // Adaptive step size based on error magnitude and AGC strategy.
+  // SOFTWARE: smaller steps — large jumps can clip transients and the signal
+  //   quality benefit is limited since this is post-decimation scaling only.
+  // HARDWARE: normal/fast steps — pre-decimation gain directly improves SNR.
   int stepSize;
   if (inFastAgcMode_) {
-    // Fast mode: larger steps for rapid convergence
+    // Fast mode: only reachable on HARDWARE strategy (SOFTWARE disables fast AGC)
     if (errorMagnitude > 0.10f) {
-      stepSize = 6;  // Large error: 6 steps
+      stepSize = 6;
     } else if (errorMagnitude > 0.05f) {
-      stepSize = 3;  // Medium error: 3 steps
+      stepSize = 3;
     } else {
-      stepSize = 2;  // Small error: 2 steps
+      stepSize = 2;
+    }
+  } else if (agcStrategy_ == AgcStrategy::SOFTWARE) {
+    // Software gain: conservative steps to avoid clipping transients
+    if (errorMagnitude > 0.15f) {
+      stepSize = 2;
+    } else {
+      stepSize = 1;
     }
   } else {
-    // Normal mode: conservative steps
+    // Hardware gain, normal mode
     if (errorMagnitude > 0.15f) {
-      stepSize = 4;  // Large error: 4 steps for fast convergence
+      stepSize = 4;
     } else if (errorMagnitude > 0.05f) {
-      stepSize = 2;  // Medium error: 2 steps for moderate correction
+      stepSize = 2;
     } else {
-      stepSize = 1;  // Small error: 1 step for fine-tuning
+      stepSize = 1;
     }
   }
 
@@ -280,10 +305,10 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   int oldGain = currentHardwareGain;
   // Use full gain range in loud mode to handle extreme SPL
   // Otherwise enforce headroom minimum to preserve dynamic range
-  int effectiveMinGain = inLoudAgcMode_ ? HW_GAIN_MIN : hwGainMinHeadroom;
+  int effectiveMinGain = inLoudAgcMode_ ? gainMin_ : hwGainMinHeadroom;
   // AGC ceiling: applies unconditionally (including loud mode) — harmless since
   // loud mode drives gain down, never up toward the ceiling.
-  int effectiveMaxGain = (hwGainMaxSignal < HW_GAIN_MAX) ? hwGainMaxSignal : HW_GAIN_MAX;
+  int effectiveMaxGain = (hwGainMaxSignal < gainMax_) ? hwGainMaxSignal : gainMax_;
   currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, effectiveMaxGain);
 
   if (currentHardwareGain != oldGain) {
@@ -305,7 +330,7 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
 // - Biquad filters: 2 filters × 256 samples × ~20 cycles/filter = ~10k cycles
 // - ARM Cortex-M4 @ 64MHz with FPU: ~0.16ms for biquad processing
 // - Total ISR time: ~0.4-0.6ms (well under 16ms buffer interval)
-// - Critical section (noInterrupts): <10µs for atomic variable updates
+// - Critical section (disableInterrupts): <10µs for atomic variable updates
 // - ISR does not block other interrupts except during critical section
 void AdaptiveMic::onPDMdata() {
   if (!s_instance) return;

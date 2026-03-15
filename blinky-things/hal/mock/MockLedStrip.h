@@ -9,7 +9,7 @@
  */
 class MockLedStrip : public ILedStrip {
 public:
-    static constexpr uint16_t MAX_PIXELS = 256;
+    static constexpr uint16_t MAX_PIXELS = 2048;
 
     explicit MockLedStrip(uint16_t numPixels)
         : numPixels_(numPixels < MAX_PIXELS ? numPixels : MAX_PIXELS),

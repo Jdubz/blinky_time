@@ -230,6 +230,7 @@ const AudioControl& AudioController::update(float dt) {
     // Bypass when NN is active — the FC model's sliding window already provides
     // temporal context. Additional smoothing blurs activation peaks that the CBSS
     // needs sharp. (madmom/BeatNet don't smooth NN output.)
+    // cppcheck-suppress knownConditionTrueFalse -- nnActive_ is always false until FrameBeatNN is trained and loaded
     if (nnActive_) {
         lastSmoothedOnset_ = onsetStrength;
     } else {

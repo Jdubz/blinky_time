@@ -12,7 +12,7 @@ enum class GeneratorType {
     WATER,
     LIGHTNING,
     AUDIO,
-    CUSTOM
+    HEAT_FIRE
 };
 
 /**
@@ -79,68 +79,4 @@ protected:
         crossDim_ = (layout_ == LINEAR_LAYOUT) ? sqrtf((float)numLeds_) : (float)width_;
     }
 
-    /**
-     * Convert 2D coordinates to linear LED index
-     * Handles different orientations and wiring patterns:
-     * - HORIZONTAL: Standard row-major order
-     * - VERTICAL: Zigzag pattern for vertical strips
-     *
-     * @param x X coordinate (column)
-     * @param y Y coordinate (row)
-     * @return LED index, or -1 if out of bounds
-     */
-    int coordsToIndex(int x, int y) const {
-        if (x < 0 || x >= width_ || y < 0 || y >= height_) return -1;
-
-        switch (orientation_) {
-            case VERTICAL:
-                // Zigzag pattern for vertical orientation
-                if (x % 2 == 0) {
-                    // Even columns: top to bottom
-                    return x * height_ + y;
-                } else {
-                    // Odd columns: bottom to top
-                    return x * height_ + (height_ - 1 - y);
-                }
-            case HORIZONTAL:
-            default:
-                // Standard row-major order
-                return y * width_ + x;
-        }
-    }
-
-    /**
-     * Convert linear LED index to 2D coordinates
-     * Inverse of coordsToIndex
-     *
-     * @param index LED index
-     * @param x Output X coordinate
-     * @param y Output Y coordinate
-     */
-    void indexToCoords(int index, int& x, int& y) const {
-        if (index < 0 || index >= numLeds_) {
-            x = y = -1;
-            return;
-        }
-
-        switch (orientation_) {
-            case VERTICAL:
-                // Reverse of zigzag pattern
-                x = index / height_;
-                if (x % 2 == 0) {
-                    // Even columns: top to bottom
-                    y = index % height_;
-                } else {
-                    // Odd columns: bottom to top
-                    y = height_ - 1 - (index % height_);
-                }
-                break;
-            case HORIZONTAL:
-            default:
-                // Standard row-major order
-                x = index % width_;
-                y = index / width_;
-                break;
-        }
-    }
 };

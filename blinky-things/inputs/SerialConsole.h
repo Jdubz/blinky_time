@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "../generators/Fire.h"
+#include "../generators/HeatFire.h"
 #include "../generators/Water.h"
 #include "../generators/Lightning.h"
 #include "../generators/Audio.h"
@@ -124,6 +125,7 @@ public:
     ConfigStorage* getConfigStorage() { return configStorage_; }  // For static callbacks
     void setRenderPipeline(RenderPipeline* pipeline) { pipeline_ = pipeline; }
     void setFireGenerator(Fire* fireGen) { fireGenerator_ = fireGen; }
+    void setHeatFireGenerator(HeatFire* heatFireGen) { heatFireGenerator_ = heatFireGen; }
     void setAudioVisGenerator(Audio* audioVisGen) { audioVisGenerator_ = audioVisGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     void setAudioController(AudioController* audioCtrl) { audioCtrl_ = audioCtrl; }
@@ -166,6 +168,7 @@ private:
 
     // Settings registration helpers (extracted from registerSettings for clarity)
     void registerFireSettings(FireParams* fp);
+    void registerHeatFireSettings(HeatFireParams* hfp);
     void registerAudioSettings();
     void registerAgcSettings();
     // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67)
@@ -200,6 +203,7 @@ private:
     // Members
     RenderPipeline* pipeline_;
     Fire* fireGenerator_;
+    HeatFire* heatFireGenerator_;
     Water* waterGenerator_;
     Lightning* lightningGenerator_;
     Audio* audioVisGenerator_;

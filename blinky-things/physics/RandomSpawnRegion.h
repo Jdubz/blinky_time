@@ -18,17 +18,7 @@ public:
 
     void getSpawnPosition(float& x, float& y) override {
         x = random(width_ * 100) / 100.0f;
-        y = random(max(1, height_) * 100) / 100.0f;
-    }
-
-    bool isInRegion(float x, float y) const override {
-        // Entire grid is the spawn region
-        return x >= 0 && x < width_ && y >= 0 && y < height_;
-    }
-
-    void getCenter(float& x, float& y) const override {
-        x = width_ / 2.0f;
-        y = height_ / 2.0f;
+        y = random(max((uint16_t)1, height_) * 100) / 100.0f;
     }
 
     void getInitialVelocity(float speed, float& vx, float& vy) const override {

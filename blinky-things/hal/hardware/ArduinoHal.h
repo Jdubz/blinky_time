@@ -60,6 +60,8 @@ public:
             analogReference(AR_INTERNAL2V4);  // mbed core
             #elif defined(AR_INTERNAL_2_4)
             analogReference(AR_INTERNAL_2_4);  // non-mbed Seeed/Adafruit nRF52 core
+            #elif defined(ARDUINO_ARCH_ESP32)
+            // ESP32 has no configurable ADC reference — ignore
             #else
             analogReference(AR_INTERNAL);      // fallback
             #endif
@@ -104,11 +106,11 @@ public:
         ::delayMicroseconds(us);
     }
 
-    void noInterrupts() override {
-        ::noInterrupts();
+    void disableInterrupts() override {
+        noInterrupts();  // Arduino macro — no :: prefix so ESP32 do-while expansion works
     }
 
-    void interrupts() override {
-        ::interrupts();
+    void enableInterrupts() override {
+        interrupts();    // Arduino macro — no :: prefix so ESP32 do-while expansion works
     }
 };

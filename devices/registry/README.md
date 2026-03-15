@@ -52,16 +52,7 @@ All device configuration files must follow this schema:
 
   // Microphone Configuration
   "sampleRate": number,           // Sample rate in Hz (8000, 16000, 32000, etc.)
-  "bufferSize": number,           // Buffer size (typically 32)
-
-  // Fire Effect Defaults (legacy - may be deprecated)
-  "baseCooling": number,          // Base cooling rate (0-255)
-  "sparkHeatMin": number,         // Minimum spark heat (0-255)
-  "sparkHeatMax": number,         // Maximum spark heat (0-255)
-  "sparkChance": number,          // Spark spawn chance (0.0-1.0)
-  "audioSparkBoost": number,      // Audio reactivity multiplier (0.0-2.0)
-  "coolingAudioBias": number,     // Cooling adjustment with audio (-128 to 127)
-  "bottomRowsForSparks": number   // Number of bottom rows for spark spawning
+  "bufferSize": number            // Buffer size (typically 32)
 }
 ```
 

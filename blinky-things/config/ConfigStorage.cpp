@@ -19,6 +19,13 @@ using namespace Adafruit_LittleFS_Namespace;
 static File* configFile = nullptr;
 static bool flashOk = false;
 static const char* CONFIG_FILENAME = "/config.bin";
+// Flash storage for ESP32-S3 via NVS (Non-Volatile Storage) Preferences API
+#elif defined(ESP32)
+#include <Preferences.h>
+static Preferences prefs;
+static bool flashOk = false;
+static const char* NVS_NAMESPACE = "blinky";
+static const char* NVS_KEY       = "cfg";
 #endif
 
 ConfigStorage::ConfigStorage() : valid_(false), dirty_(false), lastSaveMs_(0) {
@@ -75,6 +82,28 @@ void ConfigStorage::begin() {
         valid_ = true;
         return;
     }
+#elif defined(ESP32)
+    bool nvsOk = prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
+    flashOk = nvsOk;
+
+    // Always print NVS diagnostics on ESP32 (not gated on log level)
+    // to help diagnose persistence issues during early bring-up
+    Serial.print(F("[NVS] begin="));
+    Serial.print(nvsOk ? F("ok") : F("FAIL"));
+    Serial.print(F(" storedBytes="));
+    Serial.print(nvsOk ? (uint32_t)prefs.getBytesLength(NVS_KEY) : 0);
+    Serial.print(F(" sizeof(ConfigData)="));
+    Serial.println(sizeof(ConfigData));
+
+    if (loadFromFlash()) {
+        valid_ = true;
+        Serial.print(F("[NVS] Loaded: magic=ok dev="));
+        Serial.print(data_.device.deviceName);
+        Serial.print(F(" isValid="));
+        Serial.println(data_.device.isValid ? F("true") : F("false"));
+        return;
+    }
+    Serial.println(F("[NVS] loadFromFlash failed - using defaults"));
 #endif
     SerialConsole::logDebug(F("Using default config"));
     loadDefaults();
@@ -357,6 +386,14 @@ bool ConfigStorage::loadFromFlash() {
 
     // Nothing useful was read
     if (bytesRead < MIN_DEVICE_BYTES) return false;
+#elif defined(ESP32)
+    if (!flashOk) return false;
+
+    size_t stored = prefs.getBytesLength(NVS_KEY);
+    if (stored < MIN_DEVICE_BYTES) return false;
+
+    bytesRead = prefs.getBytes(NVS_KEY, &temp, sizeof(ConfigData));
+    if (bytesRead < MIN_DEVICE_BYTES) return false;
 #endif
 
     // Magic number mismatch: complete corruption, reset everything
@@ -463,8 +500,38 @@ void ConfigStorage::saveToFlash() {
     }
 
     SerialConsole::logDebug(F("Config saved to flash"));
+#elif defined(ESP32)
+    if (!flashOk) {
+        SerialConsole::logWarn(F("Flash not available"));
+        return;
+    }
+
+    data_.magic = MAGIC_NUMBER;
+    data_.deviceVersion = DEVICE_VERSION;
+    data_.settingsVersion = SETTINGS_VERSION;
+
+    size_t bytesWritten = prefs.putBytes(NVS_KEY, &data_, sizeof(ConfigData));
+    if (bytesWritten != sizeof(ConfigData)) {
+        SerialConsole::logError(F("Config write failed"));
+        return;
+    }
+
+    SerialConsole::logDebug(F("Config saved to NVS"));
 #else
     SerialConsole::logWarn(F("No flash on this platform"));
+#endif
+}
+
+void ConfigStorage::end() {
+#ifdef ESP32
+    // Closes the NVS Preferences handle and flushes any pending writes.
+    // IMPORTANT: This is only called from SerialConsole's "reboot" command.
+    // Watchdog resets, hard faults, stack overflows, and other uncontrolled
+    // restarts will skip this call and may lose the last-written settings.
+    // esp_register_shutdown_handler() could cover more paths but is not yet
+    // wired up — track as a known limitation until NVS write-through is added.
+    prefs.end();
+    flashOk = false;
 #endif
 }
 

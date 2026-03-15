@@ -29,40 +29,42 @@ public:
             p->vx += (baseWind_ / p->mass) * dt;
 
             if (windVariation_ > 0.0f) {
-                // CURL NOISE TURBULENCE — applied as flow-field advection, not force.
+                // CURL NOISE TURBULENCE (Bridson, SIGGRAPH 2007)
                 //
-                // Why advection instead of force (vx += force*dt):
-                //   Force accumulates over many frames before becoming visible.
-                //   On a small 8-row matrix with fast particles (exit in ~20 frames),
-                //   force-based wind only displaces particles ~1 LED laterally even at
-                //   windVariation=50. Completely invisible.
+                // Take the curl of a scalar noise field to get a divergence-free
+                // velocity field. Particles swirl around each other instead of
+                // being pushed independently. The curl of a 2D scalar field N is:
+                //   curl_x =  dN/dy
+                //   curl_y = -dN/dx
+                // Approximated with finite differences (eps = 0.5 LED).
+                // Uses 2-octave fbm for smooth flowing motion (raw noise3D is too jagged).
                 //
-                //   Advection (x += velocity*dt) makes windVariation the *displacement
-                //   rate* in LEDs/sec. At windVariation=10, a particle moves 0.17 LEDs
-                //   per frame laterally — clearly visible in its ~19-frame lifetime.
-                //
-                // scale = 0.25: on a 16-LED grid, spans 4 noise units → several full
-                // variation cycles so adjacent particles feel different forces.
+                // Applied as advection (position displacement) not force, because
+                // force accumulates too slowly on small matrices (~20 frame lifetime).
                 const float scale = 0.25f;
-                const float offset = 100.0f;
+                const float eps = 0.5f;
+                float px = p->x * scale;
+                float py = p->y * scale;
+                float t = noisePhase_ * 0.5f;
+                float epsScaled = eps * scale;
 
-                float noiseX = SimplexNoise::fbm3D(
-                    p->x * scale,
-                    (p->y + offset) * scale,
-                    noisePhase_ * 0.5f,
-                    3, 0.6f
-                );
+                // Finite-difference curl with 2-octave fbm: 4 noise evals per particle.
+                // fbm3D returns ~[-1,1]. The difference of two nearby samples gives
+                // a directional gradient in [-2,2]. We use this directly as the curl
+                // direction — no division by eps (which would amplify to huge values).
+                // windVariation_ provides the magnitude (LEDs/sec of displacement).
+                float dNdy = SimplexNoise::fbm3D(px, py + epsScaled, t, 2, 0.5f)
+                           - SimplexNoise::fbm3D(px, py - epsScaled, t, 2, 0.5f);
+                float dNdx = SimplexNoise::fbm3D(px + epsScaled, py, t, 2, 0.5f)
+                           - SimplexNoise::fbm3D(px - epsScaled, py, t, 2, 0.5f);
 
-                float noiseY = SimplexNoise::fbm3D(
-                    (p->x + offset) * scale,
-                    p->y * scale,
-                    noisePhase_ * 0.5f,
-                    3, 0.6f
-                );
+                // Curl direction (unnormalized, ~[-2,2] range)
+                float curlX =  dNdy;
+                float curlY = -dNdx;
 
-                // Direct position advection: windVariation is LEDs/sec of displacement
-                p->x += windVariation_ * noiseX * dt;
-                p->y += windVariation_ * noiseY * dt;
+                // Advection: windVariation is LEDs/sec of displacement
+                p->x += windVariation_ * curlX * dt;
+                p->y += windVariation_ * curlY * dt;
             }
         }
     }

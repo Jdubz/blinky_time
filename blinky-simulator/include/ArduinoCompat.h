@@ -162,6 +162,9 @@ inline float mapf(float x, float in_min, float in_max, float out_min, float out_
 // String Helpers
 // ============================================================================
 
+// Arduino flash string type — on desktop it's just char
+typedef char __FlashStringHelper;
+
 // F() macro for flash strings - no-op on desktop
 #define F(str) str
 

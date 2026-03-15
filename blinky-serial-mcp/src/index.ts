@@ -670,7 +670,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             name: {
               type: 'string',
-              description: 'Setting name (e.g., "onsetthresh", "risethresh", "cooling")',
+              description: 'Setting name (e.g., "basespawnchance", "thermalforce", "drag")',
             },
             value: {
               type: 'number',

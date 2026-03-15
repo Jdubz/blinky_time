@@ -30,6 +30,7 @@
 
 // Generator implementations
 #include "generators/Fire.cpp"
+#include "generators/HeatFire.cpp"
 #include "generators/Water.cpp"
 #include "generators/Lightning.cpp"
 #include "generators/Audio.cpp"
@@ -44,7 +45,12 @@
 
 // HAL implementations
 #include "hal/hardware/NeoPixelLedStrip.cpp"  // LED strip wrapper
-// NOTE: Nrf52PdmMic.cpp is in sketch root for separate compilation (avoids pinDefinitions.h conflict)
+// NOTE: Nrf52PdmMic.cpp is in sketch root for separate compilation (avoids pinDefinitions.h conflict on nRF52 mbed core)
+// On ESP32-S3 the I2S library has no such conflict so Esp32PdmMic.cpp compiles normally here.
+#include "hal/PlatformDetect.h"
+#ifdef BLINKY_PLATFORM_ESP32S3
+  #include "hal/hardware/Esp32PdmMic.cpp"
+#endif
 
 // Input implementations
 #include "inputs/AdaptiveMic.cpp"

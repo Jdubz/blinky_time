@@ -47,15 +47,5 @@ const DeviceConfig TUBE_LIGHT_CONFIG = {
   .microphone = {
     .sampleRate = 16000,
     .bufferSize = 32
-  },
-  .fireDefaults = {
-    // Tube light specific fire parameters - optimized for vertical matrix
-    .baseCooling = 40,        // Slower cooling for better flames
-    .sparkHeatMin = 50,       // Optimized range for tube display
-    .sparkHeatMax = 200,      // Higher maximum for brightness
-    .sparkChance = 0.200f,    // Reduced for cleaner fire
-    .audioSparkBoost = 0.300f, // Audio responsiveness
-    .coolingAudioBias = -20,   // Audio cooling bias
-    .bottomRowsForSparks = 1   // Single row for sparks
   }
 };
