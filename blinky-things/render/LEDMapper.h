@@ -114,6 +114,13 @@ public:
             return false;
         }
 
+        // PANEL_GRID requires even dimensions so the 2×2 grid splits cleanly.
+        // Odd dimensions produce truncated panel sizes and out-of-bounds indices.
+        if (orientation == PANEL_GRID && (width % 2 != 0 || height % 2 != 0)) {
+            cleanup();
+            return false;
+        }
+
         // Generate the mapping based on orientation and wiring pattern
         generateMapping();
         return true;
@@ -208,8 +215,7 @@ private:
 
                     int panelIdx  = py * 2 + px;         // Chain order: 0=TL,1=TR,2=BL,3=BR
                     // Swap TL (0) and BR (3) panel positions
-                    if      (panelIdx == 0) panelIdx = 3;
-                    else if (panelIdx == 3) panelIdx = 0;
+                    if (panelIdx == 0 || panelIdx == 3) panelIdx = 3 - panelIdx;
                     int panelStart = panelIdx * panelPixels;
 
                     // Serpentine within panel: even rows L→R, odd rows R→L

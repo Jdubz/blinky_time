@@ -140,8 +140,8 @@ public:
         currentMillis_ += us / 1000;
     }
 
-    void noInterrupts() override { interruptsDisabled_ = true; }
-    void interrupts() override { interruptsDisabled_ = false; }
+    void disableInterrupts() override { interruptsDisabled_ = true; }
+    void enableInterrupts() override { interruptsDisabled_ = false; }
 
     // Test helpers
     void advanceMillis(uint32_t ms) {

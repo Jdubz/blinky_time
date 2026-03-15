@@ -1,5 +1,6 @@
 #include "DeviceConfigLoader.h"
 #include "../inputs/SerialConsole.h"
+#include "../hal/PlatformDetect.h"
 
 // Static storage for deviceName string only (since DeviceConfig.deviceName is const char*)
 // Other fields are copied by value, so they can be local variables
@@ -174,8 +175,15 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         return false;
     }
 
-    // Validate LED pin (nRF52840: 0-47, ESP32-S3: 0-48)
-    if (stored.ledPin > 48) {
+    // Validate LED pin — upper bound is platform-dependent
+    // nRF52840: GPIO 0-47 (P0.00-P0.31, P1.00-P1.15)
+    // ESP32-S3: GPIO 0-48
+#ifdef BLINKY_PLATFORM_NRF52840
+    constexpr uint8_t LED_PIN_MAX = 47;
+#else
+    constexpr uint8_t LED_PIN_MAX = 48;
+#endif
+    if (stored.ledPin > LED_PIN_MAX) {
         SerialConsole::logWarn(F("Invalid LED pin"));
         return false;
     }

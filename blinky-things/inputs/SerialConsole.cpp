@@ -1,4 +1,5 @@
 #include "SerialConsole.h"
+#include "../hal/PlatformDetect.h"
 #include "../types/BlinkyAssert.h"
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
@@ -879,7 +880,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
         delay(100);      // Brief delay for serial transmission
 #ifdef BLINKY_PLATFORM_NRF52840
         NVIC_SystemReset();
-#elif defined(ARDUINO_ARCH_ESP32)
+#elif defined(BLINKY_PLATFORM_ESP32S3)
         if (configStorage_) configStorage_->end();  // Flush NVS before restart
         ESP.restart();
 #endif
@@ -887,15 +888,20 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
     }
 
     if (strcmp(cmd, "bootloader") == 0) {
-#ifdef ARDUINO_ARCH_NRF52
+#ifdef BLINKY_PLATFORM_NRF52840
         Serial.println(F("Entering UF2 bootloader..."));
         Serial.flush();  // Ensure message is sent before reset
         delay(100);      // Brief delay for serial transmission
-        // Use SoftDevice API for GPREGRET when SoftDevice is enabled.
-        // Direct NRF_POWER->GPREGRET writes are unreliable when SoftDevice
-        // owns the POWER peripheral (register gets cleared during reset).
+        // Set GPREGRET magic byte so the UF2 bootloader is entered on reset.
+        // The Seeed/Adafruit non-mbed nRF52 core uses the SoftDevice — writing
+        // GPREGRET directly is unreliable when the SoftDevice owns the POWER
+        // peripheral (it clears the register during reset). Use the SD API when
+        // the SoftDevice is active, otherwise write the register directly.
+        // The mbed core does not link the SoftDevice API, so the inner guard
+        // must remain as ARDUINO_ARCH_NRF52 (non-mbed core check).
         {
             const uint8_t DFU_MAGIC_UF2 = 0x57;
+#ifdef ARDUINO_ARCH_NRF52
             uint8_t sd_en = 0;
             sd_softdevice_is_enabled(&sd_en);
             if (sd_en) {
@@ -904,6 +910,10 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
             } else {
                 NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
             }
+#else
+            // mbed core: SoftDevice API not available; write GPREGRET directly
+            NRF_POWER->GPREGRET = DFU_MAGIC_UF2;
+#endif
         }
         NVIC_SystemReset();
 #else
