@@ -21,14 +21,7 @@ bool HeatFire::begin(const DeviceConfig& config) {
     if (numLeds_ > MAX_HEAT_CELLS) return false;
 
     memset(heat_, 0, sizeof(heat_));
-
-    // Initialize bottom row to max heat (fire source)
-    if (layout_ != LINEAR_LAYOUT) {
-        int bottomY = height_ - 1;
-        for (int x = 0; x < width_; x++) {
-            heat_[bottomY * width_ + x] = NCOLORS - 1;
-        }
-    }
+    nflare_ = 0;
 
     return true;
 }
@@ -40,12 +33,6 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     float dt = (currentMs - lastUpdateMs_) / 1000.0f;
     lastUpdateMs_ = currentMs;
     dt = min(dt, 0.05f);
-
-    // Advance noise time
-    float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
-    float organicSpeed = params_.noiseSpeed * (1.0f + densityNorm);
-    float musicSpeed = params_.noiseSpeed * (2.0f + densityNorm);
-    noiseTime_ += organicSpeed * (1.0f - audio.rhythmStrength) + musicSpeed * audio.rhythmStrength;
 
     // Smooth palette bias
     float targetBias = audio.energy * audio.rhythmStrength;
@@ -71,15 +58,19 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     }
     prevPhase_ = audio.phase;
 
-    if (layout_ == LINEAR_LAYOUT) {
-        propagateHeat1D();
-        injectHeat(audio);
-    } else {
-        propagateHeat2D();
-        injectHeat(audio);
-        updateFlares(audio);
-    }
-    renderHeat(matrix);
+    // Advance scroll time — this is the "fire speed"
+    // Organic: moderate scroll. Music: faster, phase-modulated.
+    float phasePulse = audio.phaseToPulse();
+    float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
+
+    float organicScroll = params_.noiseSpeed * (1.0f + 0.5f * audio.energy);
+    float musicScroll = params_.noiseSpeed * (1.5f + audio.energy)
+                      * ((1.0f - params_.musicBeatDepth * 0.5f) + params_.musicBeatDepth * 0.5f * phasePulse);
+    noiseTime_ += organicScroll * (1.0f - audio.rhythmStrength)
+                + musicScroll * audio.rhythmStrength;
+
+    // Noise-field fire: sample scrolling noise, threshold to create tongues
+    renderNoiseFireField(matrix, audio);
 }
 
 void HeatFire::reset() {
@@ -95,37 +86,185 @@ void HeatFire::reset() {
     paletteBias_ = 0.0f;
     audio_ = AudioControl();
 
-    // Re-initialize bottom row
-    if (layout_ != LINEAR_LAYOUT) {
-        int bottomY = height_ - 1;
+    nflare_ = 0;
+}
+
+// ============================================================================
+// Noise-field fire: scrolling thresholded noise with vertical gradient
+// ============================================================================
+
+void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& audio) {
+    float phasePulse = audio.phaseToPulse();
+    float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
+
+    // Audio-reactive threshold: controls how much of the display is lit.
+    // Higher threshold = less lit = sparser fire. Lower = more lit = roaring.
+    // Organic: moderate threshold. Music: threshold drops on-beat (more fire on beat).
+    float organicThreshold = 0.55f - 0.15f * audio.energy;  // 0.40-0.55
+    float musicThreshold = 0.55f - 0.15f * audio.energy
+                         - 0.15f * phasePulse * audio.rhythmStrength;  // drops on-beat
+    float threshold = organicThreshold * (1.0f - audio.rhythmStrength)
+                    + musicThreshold * audio.rhythmStrength;
+
+    // Pulse burst: temporarily lower threshold (more fire)
+    if (audio.pulse > params_.organicTransientMin) {
+        float burst = (audio.pulse - params_.organicTransientMin) /
+                      (1.0f - params_.organicTransientMin);
+        threshold -= params_.burstHeat * burst * 0.15f;
+    }
+
+    // Downbeat: drop threshold significantly
+    if (downbeatCoolSuppress_ > 0.0f) {
+        threshold -= 0.2f * downbeatCoolSuppress_;
+    }
+
+    threshold = max(0.1f, threshold);
+
+    // Noise scales — controls tongue width and vertical structure
+    // Lower xScale = wider tongues, higher = narrower
+    float xScale = 0.15f + 0.05f * densityNorm;  // Slightly narrower when dense
+    float yScale = 0.08f;  // Stretched vertically (tongues are tall)
+
+    // Scroll offset: noiseTime_ provides upward movement
+    float scrollY = noiseTime_;
+
+    // Domain warp: slight horizontal wobble for organic sway
+    // Audio-reactive: more wobble when loud/rhythmic
+    float warpAmount = 0.3f + 0.4f * audio.energy * downbeatSpreadMult_;
+
+    if (layout_ == LINEAR_LAYOUT) {
+        // 1D: horizontal noise with scroll
         for (int x = 0; x < width_; x++) {
-            heat_[bottomY * width_ + x] = NCOLORS - 1;
+            float nx = x * xScale;
+            float val = SimplexNoise::noise3D_01(nx, scrollY, 0.0f);
+            // Add second octave for detail
+            val = val * 0.7f + SimplexNoise::noise3D_01(nx * 2.5f, scrollY * 1.5f, 3.0f) * 0.3f;
+
+            if (val > threshold) {
+                float intensity = (val - threshold) / (1.0f - threshold);
+                intensity *= intensity;  // Square for contrast
+                uint32_t color = intensityToFireColor(intensity);
+                uint8_t r = (color >> 16) & 0xFF;
+                uint8_t g = (color >> 8) & 0xFF;
+                uint8_t b = color & 0xFF;
+                matrix.setPixel(x, 0, r, g, b);
+            }
+            // Below threshold = black (default from clear)
+        }
+    } else {
+        // 2D: scrolling noise field with vertical gradient mask
+        for (int y = 0; y < height_; y++) {
+            // Vertical gradient: probability of fire decreases toward top.
+            // normalizedY: 0.0 at top, 1.0 at bottom.
+            float normalizedY = (float)y / (height_ - 1);
+            // Height mask: full intensity at bottom, fades to zero at top.
+            // Audio energy pushes flames higher (mask extends further up).
+            float flameHeight = 0.3f + 0.7f * (0.3f + 0.7f * audio.energy);
+            float heightMask = constrain((normalizedY - (1.0f - flameHeight)) / flameHeight, 0.0f, 1.0f);
+            // Power curve: sharper falloff at flame tips
+            heightMask = heightMask * heightMask;
+
+            for (int x = 0; x < width_; x++) {
+                // Domain warp: horizontal wobble from a separate noise field
+                float warp = SimplexNoise::noise3D(x * 0.1f, y * 0.15f, noiseTime_ * 0.7f) * warpAmount;
+
+                float nx = (x + warp) * xScale;
+                // Scroll upward: add scrollY (Y=0 is top, increasing Y = down,
+                // so adding to noise Y makes the pattern move upward on screen)
+                float ny = (y * yScale) + scrollY;
+
+                // Two octaves of noise for organic detail
+                float val = SimplexNoise::noise3D_01(nx, ny, 1.0f) * 0.65f
+                          + SimplexNoise::noise3D_01(nx * 2.5f, ny * 2.0f, 4.0f) * 0.35f;
+
+                // Apply height mask — flames fade toward top
+                val *= heightMask;
+
+                // Left/right rocking bias from beatInMeasure
+                if (spawnBias_ != 0.0f) {
+                    float normalizedX = (float)x / (width_ - 1) - 0.5f;
+                    val *= 1.0f + spawnBias_ * normalizedX * 2.0f;
+                }
+
+                if (val > threshold) {
+                    float intensity = (val - threshold) / (1.0f - threshold);
+                    intensity = min(1.0f, intensity * 1.5f);  // Boost contrast
+                    uint32_t color = intensityToFireColor(intensity);
+                    uint8_t r = (color >> 16) & 0xFF;
+                    uint8_t g = (color >> 8) & 0xFF;
+                    uint8_t b = color & 0xFF;
+                    matrix.setPixel(x, y, r, g, b);
+                }
+                // Below threshold = black
+            }
         }
     }
 }
 
+uint32_t HeatFire::intensityToFireColor(float intensity) const {
+    // Map 0-1 intensity through fire palette
+    // 0.0 = dark red, 0.5 = orange, 1.0 = bright yellow
+    uint8_t r, g, b;
+
+    if (intensity < 0.33f) {
+        // Dark red to red
+        float t = intensity / 0.33f;
+        r = (uint8_t)(60 + 195 * t);
+        g = 0;
+        b = 0;
+    } else if (intensity < 0.67f) {
+        // Red to orange
+        float t = (intensity - 0.33f) / 0.34f;
+        r = 255;
+        g = (uint8_t)(160 * t);
+        b = 0;
+    } else {
+        // Orange to yellow
+        float t = (intensity - 0.67f) / 0.33f;
+        r = 255;
+        g = (uint8_t)(160 + 80 * t);
+        b = (uint8_t)(30 * t);
+    }
+
+    // Downbeat color temperature shift
+    if (downbeatColorShift_ > 0.0f) {
+        float s = downbeatColorShift_;
+        r = (uint8_t)min(255, (int)r + (int)(s * 20));
+        g = (uint8_t)min(255, (int)g + (int)(s * 40));
+        b = (uint8_t)min(255, (int)b + (int)(s * 60));
+    }
+
+    // Master brightness
+    float br = params_.brightness;
+    r = (uint8_t)(r * br);
+    g = (uint8_t)(g * br);
+    b = (uint8_t)(b * br);
+
+    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
+}
+
 // ============================================================================
-// MatrixFireFast-style algorithm (credit: Patrick Rigney / toggledbits)
+// Legacy heat buffer functions (kept for LINEAR_LAYOUT fallback)
 // ============================================================================
 
 void HeatFire::propagateHeat2D() {
-    // Step 1: Shift heat UP one row and subtract 1 (simple decay).
-    // Process from top to bottom so we read unmodified data below.
+    // Shift heat UP one row and subtract 1 (simple decay).
+    // Each cell copies from the cell directly below, minus 1.
+    // No lateral spreading — columns are independent.
+    // Flame tongue structure comes entirely from flare injection positions.
     for (int y = 0; y < height_ - 1; y++) {
         for (int x = 0; x < width_; x++) {
             uint8_t below = heat_[(y + 1) * width_ + x];
-            heat_[y * width_ + x] = (below > 0) ? below - 1 : 0;
+            heat_[y * width_ + x] = (below > 1) ? below - 1 : 0;
         }
     }
 
-    // Step 2: Bottom row — if cell has heat, randomize to medium-high value.
-    // This maintains the fire base with natural flickering.
+    // Clear bottom row — flares will inject heat where needed.
+    // Without this, residual heat from flares persists forever.
     int bottomY = height_ - 1;
     for (int x = 0; x < width_; x++) {
         uint8_t h = heat_[bottomY * width_ + x];
-        if (h > 0) {
-            heat_[bottomY * width_ + x] = (uint8_t)random(NCOLORS - 6, NCOLORS - 1);
-        }
+        heat_[bottomY * width_ + x] = (h > 2) ? h - 2 : 0;
     }
 }
 
@@ -171,9 +310,12 @@ void HeatFire::updateFlares(const AudioControl& audio) {
     float phasePulse = audio.phaseToPulse();
 
     // Flare chance: organic vs music blend
-    float organicChance = params_.baseHeat * 40.0f;  // ~20-40% base
-    float musicChance = params_.baseHeat * 30.0f * ((1.0f - params_.musicBeatDepth) + params_.musicBeatDepth * phasePulse)
-                      + params_.audioHeatBoost * audio.energy * 30.0f;
+    // Scale with display width — wider displays need more flares
+    float widthScale = width_ / 8.0f;  // 1.0 for hat-ish, 2.0 for bucket, 4.0 for 32x32
+    float organicChance = params_.baseHeat * 80.0f * widthScale;
+    float musicChance = params_.baseHeat * 60.0f * widthScale
+                      * ((1.0f - params_.musicBeatDepth) + params_.musicBeatDepth * phasePulse)
+                      + params_.audioHeatBoost * audio.energy * 50.0f * widthScale;
     float flareChance = organicChance * (1.0f - audio.rhythmStrength)
                       + musicChance * audio.rhythmStrength;
 
@@ -195,7 +337,7 @@ void HeatFire::updateFlares(const AudioControl& audio) {
     }
 
     // Max simultaneous flares scales with display width
-    int maxFlares = min((int)MAX_FLARES, max(4, width_ / 4));
+    int maxFlares = min((int)MAX_FLARES, max(4, width_ / 2));
 
     if (nflare_ < maxFlares && random(1, 101) <= (int)flareChance) {
         // Spawn position: random x with beat-rocking bias
@@ -214,16 +356,19 @@ void HeatFire::updateFlares(const AudioControl& audio) {
 }
 
 void HeatFire::applyGlow(int x, int y, int z) {
-    // Radial glow around flare position — this creates the tongue shapes.
-    // Heat radiates outward, falling off with distance.
-    int radius = z * 10 / FLARE_DECAY + 1;
-    for (int dy = -radius; dy < radius; dy++) {
-        for (int dx = -radius; dx < radius; dx++) {
+    // Vertically-biased glow — fire tongues are tall and narrow, not round blobs.
+    // Horizontal decay is 3× faster than vertical, creating elongated tongue shapes.
+    // Heat only extends UPWARD from flare position (fire rises, doesn't go down).
+    int radiusX = z * 10 / (FLARE_DECAY * 3) + 1;  // Narrow horizontal
+    int radiusY = z * 10 / FLARE_DECAY + 1;         // Tall vertical
+
+    for (int dy = -radiusY; dy <= 0; dy++) {  // Only upward (dy <= 0)
+        for (int dx = -radiusX; dx <= radiusX; dx++) {
             int px = x + dx;
             int py = y + dy;
             if (px >= 0 && px < width_ && py >= 0 && py < height_) {
-                // Distance-based falloff
-                int dist = isqrt(dx * dx + dy * dy);
+                // Anisotropic distance: horizontal penalized 3×
+                int dist = isqrt(dx * dx * 9 + dy * dy);
                 int decayed = (FLARE_DECAY * dist + 5) / 10;
                 uint8_t n = (z > decayed) ? z - decayed : 0;
                 int idx = py * width_ + px;
@@ -233,6 +378,10 @@ void HeatFire::applyGlow(int x, int y, int z) {
             }
         }
     }
+
+    // Also set the flare origin cell to max (ensures bright base)
+    int idx = y * width_ + x;
+    if (z > heat_[idx]) heat_[idx] = z;
 }
 
 uint32_t HeatFire::isqrt(uint32_t n) {

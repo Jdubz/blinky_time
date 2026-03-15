@@ -84,22 +84,20 @@ public:
     HeatFireParams& getParamsMutable() { return params_; }
 
 private:
-    // Heat propagation (MatrixFireFast-style: shift up and subtract 1)
+    // Noise-field fire: scrolling thresholded noise (primary algorithm)
+    void renderNoiseFireField(PixelMatrix& matrix, const AudioControl& audio);
+
+    // Map 0-1 intensity through fire color palette
+    uint32_t intensityToFireColor(float intensity) const;
+
+    // Legacy heat buffer (kept for reference)
     void propagateHeat2D();
     void propagateHeat1D();
-
-    // Audio-driven heat injection
     void injectHeat(const AudioControl& audio);
-
-    // Flare system — creates the flame tongue shapes
     void updateFlares(const AudioControl& audio);
     void applyGlow(int x, int y, int z);
     static uint32_t isqrt(uint32_t n);
-
-    // Render heat buffer to pixel matrix
     void renderHeat(PixelMatrix& matrix);
-
-    // Map heat value (0-NCOLORS) to fire color
     uint32_t heatToColor(uint8_t heat) const;
 
     // Beat detection
@@ -110,8 +108,8 @@ private:
     // Heat buffer — values are 0 to NCOLORS-1 (not 0-255)
     static constexpr uint16_t MAX_HEAT_CELLS = 2048;
     static constexpr uint8_t NCOLORS = 11;       // Number of colors in fire palette
-    static constexpr uint8_t FLARE_DECAY = 14;   // Radiation decay rate for flare glow
-    static constexpr uint8_t MAX_FLARES = 16;    // Max simultaneous flares
+    static constexpr uint8_t FLARE_DECAY = 20;   // Vertical decay rate (horizontal is 3× faster)
+    static constexpr uint8_t MAX_FLARES = 32;    // Max simultaneous flares
     uint8_t heat_[MAX_HEAT_CELLS];
 
     // Flare state: packed as (z<<16 | y<<8 | x)
