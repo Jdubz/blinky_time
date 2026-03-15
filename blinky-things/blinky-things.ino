@@ -214,7 +214,7 @@ void setup() {
     }
 
     leds->begin();
-    leds->setBrightness(min(config.matrix.brightness, 255));
+    leds->setBrightness(min((int)config.matrix.brightness, 255));
     leds->show();
 
     // Basic LED test - light up first few LEDs to verify hardware

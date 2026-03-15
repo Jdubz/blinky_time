@@ -162,6 +162,12 @@ private:
     uint8_t beatCount_;           // Beat counter for downbeat detection
     float noiseTime_;             // Animation time for noise field
 
+    // Downbeat transient effect state (decay each frame after trigger)
+    float downbeatSpreadMult_;   // Spawn spread multiplier: 2.5 peak → 1.0 over 0.5s
+    float downbeatColorShift_;   // White/blue color temp tint: 1.0 peak → 0.0 over 0.5s
+    float downbeatVelBoost_;     // Velocity boost: 0.5 peak (1.5× total) → 0.0 over 0.3s
+    float spawnBias_;            // Left/right spawn bias per beat-in-measure (fraction of crossDim)
+
     // Fire-specific physics components
     BackgroundModel* background_;
 

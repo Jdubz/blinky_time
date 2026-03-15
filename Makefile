@@ -19,6 +19,7 @@
 # Configuration
 SKETCH_DIR = blinky-things
 FQBN = Seeeduino:nrf52:xiaonRF52840Sense
+ESP32_FQBN = esp32:esp32:XIAO_ESP32S3
 BAUD_RATE = 115200
 
 # Default values
@@ -28,11 +29,13 @@ PORT ?= COM3
 # UF2 upload settings (Linux)
 UPLOAD_PORT ?= /dev/ttyACM0
 BUILD_OUTPUT_DIR ?= /tmp/blinky-build
+ESP32_BUILD_OUTPUT_DIR ?= /tmp/blinky-esp32-build
 UF2_UPLOAD_TOOL = tools/uf2_upload.py
 
 # Arduino CLI detection
 ifeq ($(OS),Windows_NT)
-    ARDUINO_CLI = arduino-cli.exe
+    # Try PATH first, fall back to known install location
+    ARDUINO_CLI = $(or $(shell where arduino-cli.exe 2>nul),D:\Development\Arduino\arduino-cli.exe)
 else
     ARDUINO_CLI = arduino-cli
 endif
@@ -54,11 +57,16 @@ help:
 	@echo "  version      - Update version from VERSION file"
 	@echo ""
 	@echo "UF2 Upload (Linux/headless - SAFE):"
-	@echo "  uf2-upload     - Compile + upload to single device"
-	@echo "  uf2-upload-all - Compile + upload to ALL connected devices"
-	@echo "  uf2-check      - Compile + validate + convert (dry run)"
-	@echo "  uf2-test       - Verify upload infrastructure is ready"
-	@echo "  safety-check   - Run pre-compile safety checks only"
+	@echo "  uf2-upload       - Compile + upload to single nRF52840 device"
+	@echo "  uf2-upload-all   - Compile + upload to ALL connected nRF52840 devices"
+	@echo "  uf2-check        - Compile + validate + convert (dry run)"
+	@echo "  uf2-test         - Verify upload infrastructure is ready"
+	@echo "  safety-check     - Run pre-compile safety checks only"
+	@echo ""
+	@echo "ESP32-S3 (Display board):"
+	@echo "  esp32-compile    - Compile for XIAO ESP32-S3"
+	@echo "  esp32-uf2-upload - Compile + upload to ESP32-S3 via UF2"
+	@echo "  esp32-uf2-check  - Compile + validate UF2 (dry run)"
 	@echo ""
 	@echo "Setup:"
 	@echo "  setup-tflite     - Install TFLite Micro Arduino library (required)"
@@ -74,6 +82,7 @@ help:
 	@echo "  make uf2-upload UPLOAD_PORT=/dev/ttyACM0"
 	@echo "  make uf2-upload-all"
 	@echo "  make uf2-upload-all UPLOAD_PORTS=\"/dev/ttyACM0 /dev/ttyACM1\""
+	@echo "  make esp32-uf2-upload UPLOAD_PORT=/dev/ttyACM0"
 	@echo "  make monitor PORT=/dev/ttyACM0"
 
 # Check if Arduino CLI is installed
@@ -230,6 +239,35 @@ uf2-test:
 setup-tflite:
 	@echo "Installing TFLite Micro Arduino library..."
 	@bash tools/setup_tflite_lib.sh
+
+# --- ESP32-S3 targets (XIAO ESP32-S3 / Display board) ---
+
+# Compile for ESP32-S3
+.PHONY: esp32-compile
+esp32-compile: check-arduino-cli version
+	@echo ""
+	@echo "========================================"
+	@echo "Compiling for XIAO ESP32-S3"
+	@echo "========================================"
+	@echo "Sketch: $(SKETCH_DIR)"
+	@echo "Board:  $(ESP32_FQBN)"
+	@$(ARDUINO_CLI) compile --fqbn $(ESP32_FQBN) --output-dir $(ESP32_BUILD_OUTPUT_DIR) $(SKETCH_DIR)/
+	@echo "Compilation successful!"
+	@echo "UF2 output: $(ESP32_BUILD_OUTPUT_DIR)/blinky-things.ino.uf2"
+
+# UF2 upload to ESP32-S3: compile + upload via UF2 mass-storage bootloader
+.PHONY: esp32-uf2-upload
+esp32-uf2-upload: esp32-compile
+	@echo ""
+	@echo "========================================"
+	@echo "UF2 Upload to ESP32-S3 on $(UPLOAD_PORT)"
+	@echo "========================================"
+	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --board esp32s3 --build-dir $(ESP32_BUILD_OUTPUT_DIR) $(if $(VERBOSE),--verbose)
+
+# Dry run: compile + validate only (no upload)
+.PHONY: esp32-uf2-check
+esp32-uf2-check: esp32-compile
+	python3 $(UF2_UPLOAD_TOOL) $(UPLOAD_PORT) --board esp32s3 --build-dir $(ESP32_BUILD_OUTPUT_DIR) --dry-run
 
 # Quick aliases
 .PHONY: build flash serial boards

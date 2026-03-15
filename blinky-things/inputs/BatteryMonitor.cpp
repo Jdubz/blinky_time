@@ -12,6 +12,9 @@ bool BatteryMonitor::begin() {
 bool BatteryMonitor::begin(const Config& cfg) {
   cfg_ = cfg;
 
+  // No battery circuit on this platform (e.g. XIAO ESP32-S3)
+  if (cfg_.pinVBAT < 0) return false;
+
   // ADC setup
   adc_.setResolution(cfg_.adcBits);
 

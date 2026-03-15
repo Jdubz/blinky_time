@@ -1,7 +1,22 @@
 #pragma once
 
 #include "AudioControl.h"
+#ifdef NN_ENABLED
 #include "FrameBeatNN.h"
+#else
+// Stub FrameBeatNN for builds without TFLite. All methods are no-ops that
+// report "not ready", so AudioController.cpp needs no #ifdef guards.
+struct FrameBeatNN {
+    static constexpr int INPUT_MEL_BANDS = 26;
+    bool begin()                                    { return false; }
+    bool isReady() const                            { return false; }
+    bool hasDownbeatOutput() const                  { return false; }
+    float infer(const float*)                       { return 0.0f; }
+    float getLastDownbeat() const                   { return 0.0f; }
+    void setProfileEnabled(bool)                    {}
+    void printDiagnostics() const                   {}
+};
+#endif
 #include "SharedSpectralAnalysis.h"
 #include "../inputs/AdaptiveMic.h"
 #include "../hal/interfaces/IPdmMic.h"

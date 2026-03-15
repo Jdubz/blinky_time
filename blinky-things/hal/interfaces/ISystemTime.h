@@ -20,6 +20,6 @@ public:
     virtual void delayMicroseconds(uint32_t us) = 0;
 
     // Interrupt control
-    virtual void noInterrupts() = 0;
-    virtual void interrupts() = 0;
+    virtual void disableInterrupts() = 0;
+    virtual void enableInterrupts() = 0;
 };

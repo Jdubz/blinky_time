@@ -18,7 +18,7 @@ public:
 
     void getSpawnPosition(float& x, float& y) override {
         x = random(width_ * 100) / 100.0f;
-        y = random(max(1, height_) * 100) / 100.0f;
+        y = random(max((uint16_t)1, height_) * 100) / 100.0f;
     }
 
     bool isInRegion(float x, float y) const override {

@@ -162,7 +162,25 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 - Our innovation: using FC instead of CNN/RNN to fit Cortex-M4F compute budget, while following the same frame-level activation → post-processing paradigm
 - No published TinyML beat tracking on Cortex-M class hardware exists (as of March 2026)
 
-### ~~Priority 2: BandFlux Removal~~ — COMPLETED (v67)
+### Priority 2 (new): ESP32-S3 Mic Calibration and Model
+
+**Status: PLANNED**
+
+The XIAO ESP32-S3 Sense uses an MSM381ACT PDM microphone via ESP-IDF I2S PDM-RX. Its frequency response, noise floor, and AGC transfer function differ from the nRF52840's built-in microphone. The nRF52840 cal63 model was trained on mel spectrograms captured at `target_rms_db=-63 dB` through the nRF52840 mic chain. Running that model on ESP32-S3 audio will produce mismatched mel statistics and degraded ODF quality.
+
+**Required steps:**
+
+1. **Measure ESP32-S3 mic profile** — Record `target_rms_db` on the ESP32-S3 the same way cal63 was measured for nRF52840: play calibration tones, capture raw mel values via `stream` command, find the RMS dB level where firmware mel mean ≈ training mean (~0.52 normalized).
+
+2. **Capture training data** — The ESP32-S3 mic has a different frequency response. Ideally record a subset of the training corpus through the actual ESP32-S3 mic (or model the transfer function via impulse response measurement and apply it to existing recordings).
+
+3. **Train ESP32-S3 model** — Retrain the FC beat/downbeat model with ESP32-S3 mel statistics. Use the same architecture (32-frame window, FC [64,32] → 2 outputs) but with ESP32-calibrated data. Produce a separate `.tflite` / `.h` model artifact for the ESP32-S3 build target.
+
+4. **Firmware model selection** — Use `#ifdef BLINKY_PLATFORM_ESP32S3` to select the ESP32-S3 model at compile time, keeping the nRF52840 model unchanged.
+
+**Hardware gain note:** The ESP32-S3 I2S PDM-RX slot config has **no hardware gain register** — `amplify_num`, `sd_scale`, `hp_scale` are all absent from `i2s_pdm_rx_slot_config_t` on this SoC (those fields exist only on other ESP32 variants). The full AGC range is applied as software gain in `Esp32PdmMic::setGain()` / `poll()`. The mic profile calibration must account for this — the software gain path has different noise characteristics than the nRF52840 hardware AGC.
+
+### ~~Priority 2 (old): BandFlux Removal~~ — COMPLETED (v67)
 
 **Status: COMPLETED — March 12, 2026**
 
