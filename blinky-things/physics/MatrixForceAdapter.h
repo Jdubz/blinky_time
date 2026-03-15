@@ -37,6 +37,7 @@ public:
                 //   curl_x =  dN/dy
                 //   curl_y = -dN/dx
                 // Approximated with finite differences (eps = 0.5 LED).
+                // Uses 2-octave fbm for smooth flowing motion (raw noise3D is too jagged).
                 //
                 // Applied as advection (position displacement) not force, because
                 // force accumulates too slowly on small matrices (~20 frame lifetime).
@@ -45,15 +46,17 @@ public:
                 float px = p->x * scale;
                 float py = p->y * scale;
                 float t = noisePhase_ * 0.5f;
+                float epsScaled = eps * scale;
 
-                // Finite-difference curl: 4 noise evals per particle
-                float dNdy = SimplexNoise::noise3D_01(px, (py + eps * scale), t)
-                           - SimplexNoise::noise3D_01(px, (py - eps * scale), t);
-                float dNdx = SimplexNoise::noise3D_01((px + eps * scale), py, t)
-                           - SimplexNoise::noise3D_01((px - eps * scale), py, t);
+                // Finite-difference curl with 2-octave fbm: 4 noise evals per particle
+                // fbm3D(x,y,z, octaves=2, persistence=0.5) gives smooth flowing field
+                float dNdy = SimplexNoise::fbm3D(px, py + epsScaled, t, 2, 0.5f)
+                           - SimplexNoise::fbm3D(px, py - epsScaled, t, 2, 0.5f);
+                float dNdx = SimplexNoise::fbm3D(px + epsScaled, py, t, 2, 0.5f)
+                           - SimplexNoise::fbm3D(px - epsScaled, py, t, 2, 0.5f);
 
-                float curlX =  dNdy / (2.0f * eps * scale);
-                float curlY = -dNdx / (2.0f * eps * scale);
+                float curlX =  dNdy / (2.0f * epsScaled);
+                float curlY = -dNdx / (2.0f * epsScaled);
 
                 // Advection: windVariation is LEDs/sec of displacement
                 p->x += windVariation_ * curlX * dt;

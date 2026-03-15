@@ -123,18 +123,25 @@ protected:
     // ========================================
 
     /**
-     * Particle density fraction (0.0-1.0) — fraction of numLeds for pool capacity.
+     * Particle density fraction — controls pool capacity relative to display size.
      * Subclasses override to set their target density.
      * Default: 0.75 (fire-like density).
+     *
+     * Pool scales with sqrt(numLeds), not linearly. A 4× larger display
+     * needs ~2× the particles because each particle still occupies 1 pixel
+     * and additive blending saturates with too many overlaps.
      */
     virtual float particleDensity() const { return 0.75f; }
 
     /**
      * Compute pool capacity from device dimensions and density.
+     * Uses sqrt scaling: capacity = density * sqrt(numLeds) * 8.
+     * This gives ~64 particles on 128 LEDs at density 0.75 (matching
+     * the old hardcoded pool), and ~192 on 1024 LEDs.
      * Minimum 8 particles regardless of device size.
      */
     uint16_t poolCapacity() const {
-        float raw = particleDensity() * numLeds_;
+        float raw = particleDensity() * sqrtf((float)numLeds_) * 8.0f;
         return (uint16_t)max(8.0f, min(raw, 2048.0f));
     }
 
