@@ -4,6 +4,23 @@
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
 
+/**
+ * AgcStrategy - Selected at begin() time based on IPdmMic::hasHardwareGain()
+ *
+ * HARDWARE (nRF52): real pre-decimation gain registers improve SNR.
+ *   - Fast AGC enabled (larger gain steps, shorter calibration period)
+ *   - Tight dead zone (±0.01) — hardware steps are precise (0.5 dB)
+ *
+ * SOFTWARE (ESP32): post-decimation linear multiply, no SNR benefit.
+ *   - Fast AGC disabled (aggressively chasing gain wastes CPU, no benefit)
+ *   - Wide dead zone (±0.02) — prevent thrashing with coarser 1 dB steps
+ *   - Conservative gain steps (avoid large jumps that clip transients)
+ */
+enum class AgcStrategy : uint8_t {
+    HARDWARE = 0,
+    SOFTWARE = 1,
+};
+
 // AdaptiveMic - Clean audio input with window/range normalization
 // - Provides raw, unsmoothed audio level (generators can smooth if needed)
 // - Auto-ranging: Tracks peak/valley, maps to 0-1 output (no clipping)
@@ -89,6 +106,7 @@ public:
   inline bool isHwGainLocked() const { return hwGainLocked_; }     // Check if hardware gain is locked for testing
   inline bool isInFastAgcMode() const { return inFastAgcMode_; }   // Check if fast AGC is active
   inline bool isInLoudAgcMode() const { return inLoudAgcMode_; }   // Check if loud AGC is active
+  inline AgcStrategy getAgcStrategy() const { return agcStrategy_; }
 
 public:
   /**
@@ -156,6 +174,13 @@ private:
   uint32_t lastHwCalibMs = 0;
 
   uint32_t _sampleRate = 16000;
+
+  // AGC strategy — set in begin() from pdm_.hasHardwareGain()
+  AgcStrategy agcStrategy_ = AgcStrategy::HARDWARE;
+
+  // Dynamic gain limits — populated in begin() from pdm_.getGainMinDb/MaxDb()
+  int gainMin_ = 0;
+  int gainMax_ = 80;
 
   // Hardware gain lock state (for testing/bypass)
   bool hwGainLocked_ = false;   // When true, AGC is disabled and gain is fixed
