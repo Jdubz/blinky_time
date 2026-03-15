@@ -18,29 +18,36 @@ bool HeatFire::begin(const DeviceConfig& config) {
     computeDimensionScales();
     lastUpdateMs_ = millis();
 
-    // Validate heat buffer fits
     if (numLeds_ > MAX_HEAT_CELLS) return false;
 
     memset(heat_, 0, sizeof(heat_));
+
+    // Initialize bottom row to max heat (fire source)
+    if (layout_ != LINEAR_LAYOUT) {
+        int bottomY = height_ - 1;
+        for (int x = 0; x < width_; x++) {
+            heat_[bottomY * width_ + x] = NCOLORS - 1;
+        }
+    }
+
     return true;
 }
 
 void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     audio_ = audio;
 
-    // Delta time
     uint32_t currentMs = millis();
     float dt = (currentMs - lastUpdateMs_) / 1000.0f;
     lastUpdateMs_ = currentMs;
-    dt = min(dt, 0.05f);  // Cap at 50ms to prevent huge steps after pauses
+    dt = min(dt, 0.05f);
 
-    // Advance noise time (energy + density drive speed)
+    // Advance noise time
     float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
     float organicSpeed = params_.noiseSpeed * (1.0f + densityNorm);
     float musicSpeed = params_.noiseSpeed * (2.0f + densityNorm);
     noiseTime_ += organicSpeed * (1.0f - audio.rhythmStrength) + musicSpeed * audio.rhythmStrength;
 
-    // Smooth palette bias toward energy*rhythm (~0.5s time constant)
+    // Smooth palette bias
     float targetBias = audio.energy * audio.rhythmStrength;
     paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f * dt);
 
@@ -50,57 +57,34 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     downbeatCoolSuppress_ = max(0.0f, downbeatCoolSuppress_ - 2.0f * dt);
     spawnBias_ *= max(0.0f, 1.0f - dt * 3.0f);
 
-    // Beat detection for downbeat/beatInMeasure effects
+    // Beat detection
     if (beatHappened() && audio.rhythmStrength > 0.3f) {
         beatCount_++;
-
         if (audio.downbeat > 0.5f) {
             downbeatSpreadMult_ = 2.5f;
             downbeatColorShift_ = 1.0f;
             downbeatCoolSuppress_ = 1.0f;
         }
-
-        // Left/right injection bias
         if (audio.beatInMeasure > 0 && audio.rhythmStrength > 0.5f) {
             spawnBias_ = (audio.beatInMeasure % 2 == 1) ? -0.25f : 0.25f;
         }
     }
     prevPhase_ = audio.phase;
 
-    // Compute per-frame effective parameters
-    // Cooling: lower when energy is high (taller flames), higher when onset density is high (jittery)
-    float phasePulse = audio.phaseToPulse();
-    float coolingEnergyMod = 1.0f - 0.4f * audio.energy;  // Louder = less cooling = taller
-    float coolingDensityMod = 1.0f + 0.3f * densityNorm;  // More transients = more cooling = jittery
-    float coolingPhaseMod = 1.0f;
-    if (audio.rhythmStrength > 0.3f) {
-        // Less cooling on-beat (flames surge), more off-beat (flames recede)
-        coolingPhaseMod = 1.2f - 0.4f * phasePulse * audio.rhythmStrength;
-    }
-    float coolingDownbeatMod = 1.0f - 0.5f * downbeatCoolSuppress_;
-    effectiveCooling_ = params_.baseCooling * coolingEnergyMod * coolingDensityMod *
-                        coolingPhaseMod * coolingDownbeatMod;
-
-    // Spread: wider on downbeat, modulated by wind
-    float windMod = 1.0f;
-    if (audio.rhythmStrength > 0.3f) {
-        windMod = 0.5f + 0.5f * phasePulse + audio.pulse * params_.windDrift;
-    }
-    effectiveSpread_ = params_.diffusionSpread * windMod * downbeatSpreadMult_;
-
-    // Propagate heat, inject, render
     if (layout_ == LINEAR_LAYOUT) {
         propagateHeat1D();
+        injectHeat(audio);
     } else {
         propagateHeat2D();
+        injectHeat(audio);
+        updateFlares(audio);
     }
-    injectHeat(audio);
-
     renderHeat(matrix);
 }
 
 void HeatFire::reset() {
     memset(heat_, 0, sizeof(heat_));
+    nflare_ = 0;
     noiseTime_ = 0.0f;
     prevPhase_ = 1.0f;
     beatCount_ = 0;
@@ -110,147 +94,175 @@ void HeatFire::reset() {
     spawnBias_ = 0.0f;
     paletteBias_ = 0.0f;
     audio_ = AudioControl();
+
+    // Re-initialize bottom row
+    if (layout_ != LINEAR_LAYOUT) {
+        int bottomY = height_ - 1;
+        for (int x = 0; x < width_; x++) {
+            heat_[bottomY * width_ + x] = NCOLORS - 1;
+        }
+    }
 }
 
 // ============================================================================
-// Heat Propagation
+// MatrixFireFast-style algorithm (credit: Patrick Rigney / toggledbits)
 // ============================================================================
 
 void HeatFire::propagateHeat2D() {
-    // Pure DOOM PSX fire algorithm:
-    // Each cell copies from ONE cell in the row below, with small random
-    // lateral drift, and subtracts a small random value (0-1).
-    //
-    // NO lateral averaging — this is critical. Averaging smears heat sideways
-    // and fills the entire width, creating a wall instead of distinct tongues.
-    // DOOM creates tongues because each column evolves independently with only
-    // tiny random lateral shifts.
-    //
-    // Heat values: 0-255 (not 0-36 like original DOOM).
-    // Cooling: random(0, coolingMax) per cell per row. This controls flame height.
-
-    // Scale cooling by height: on taller displays, each row needs less cooling
-    // for the same visual flame height fraction. Audio modulates effectiveCooling_.
-    int coolingMax = max(1, (int)(effectiveCooling_ * 600.0f / height_) + 1);
-
+    // Step 1: Shift heat UP one row and subtract 1 (simple decay).
+    // Process from top to bottom so we read unmodified data below.
     for (int y = 0; y < height_ - 1; y++) {
         for (int x = 0; x < width_; x++) {
-            // Pick ONE source cell from row below with random lateral drift (±1)
-            // This is the DOOM formula: dst = src - width - rand(0..2) + 1
-            int drift = random(0, 3) - 1;  // -1, 0, or +1
-            int srcX = constrain(x + drift, 0, width_ - 1);
-            int srcY = y + 1;
+            uint8_t below = heat_[(y + 1) * width_ + x];
+            heat_[y * width_ + x] = (below > 0) ? below - 1 : 0;
+        }
+    }
 
-            uint8_t srcHeat = heat_[srcY * width_ + srcX];
-
-            // Random cooling: subtract 0 or 1 (DOOM uses randIdx & 1)
-            // Scale up for 0-255 range (DOOM uses 0-36)
-            uint8_t cooling = (uint8_t)random(0, coolingMax);
-
-            heat_[y * width_ + x] = (srcHeat > cooling) ? srcHeat - cooling : 0;
+    // Step 2: Bottom row — if cell has heat, randomize to medium-high value.
+    // This maintains the fire base with natural flickering.
+    int bottomY = height_ - 1;
+    for (int x = 0; x < width_; x++) {
+        uint8_t h = heat_[bottomY * width_ + x];
+        if (h > 0) {
+            heat_[bottomY * width_ + x] = (uint8_t)random(NCOLORS - 6, NCOLORS - 1);
         }
     }
 }
 
 void HeatFire::propagateHeat1D() {
-    // 1D DOOM-style: copy from neighbor with drift, subtract cooling
-    int coolingMax = max(1, (int)(effectiveCooling_ * 600.0f / width_) + 1);
+    // 1D: shift and decay, with random source positions
     uint8_t temp[MAX_HEAT_CELLS];
-
     for (int x = 0; x < width_; x++) {
         int drift = random(0, 3) - 1;
         int srcX = constrain(x + drift, 0, width_ - 1);
         uint8_t srcHeat = heat_[srcX];
-        uint8_t cooling = (uint8_t)random(0, coolingMax);
-        temp[x] = (srcHeat > cooling) ? srcHeat - cooling : 0;
+        temp[x] = (srcHeat > 0) ? srcHeat - 1 : 0;
     }
     memcpy(heat_, temp, width_);
 }
 
 // ============================================================================
-// Audio-Driven Heat Injection
+// Flare system — this is what creates the flame tongues
 // ============================================================================
 
-void HeatFire::injectHeat(const AudioControl& audio) {
+void HeatFire::updateFlares(const AudioControl& audio) {
+    // Update existing flares: re-apply glow at reduced intensity, remove dead ones
+    int i = 0;
+    while (i < nflare_) {
+        int x = flares_[i] & 0xFF;
+        int y = (flares_[i] >> 8) & 0xFF;
+        int z = (flares_[i] >> 16) & 0xFF;
+
+        applyGlow(x, y, z);
+
+        if (z > 1) {
+            flares_[i] = (flares_[i] & 0xFFFF) | ((z - 1) << 16);
+            i++;
+        } else {
+            // Flare is dead — remove by shifting
+            for (int j = i + 1; j < nflare_; j++) {
+                flares_[j - 1] = flares_[j];
+            }
+            nflare_--;
+        }
+    }
+
+    // Spawn new flares — audio controls frequency and intensity
     float phasePulse = audio.phaseToPulse();
 
-    // Organic mode: constant base heat + energy-reactive
-    float organicHeat = params_.baseHeat + params_.audioHeatBoost * audio.energy;
+    // Flare chance: organic vs music blend
+    float organicChance = params_.baseHeat * 40.0f;  // ~20-40% base
+    float musicChance = params_.baseHeat * 30.0f * ((1.0f - params_.musicBeatDepth) + params_.musicBeatDepth * phasePulse)
+                      + params_.audioHeatBoost * audio.energy * 30.0f;
+    float flareChance = organicChance * (1.0f - audio.rhythmStrength)
+                      + musicChance * audio.rhythmStrength;
 
-    // Music mode: phase-modulated injection + energy
-    float phaseDepth = params_.musicBeatDepth;
-    float musicHeat = params_.baseHeat * ((1.0f - phaseDepth) + phaseDepth * phasePulse)
-                    + params_.audioHeatBoost * audio.energy;
-
-    // Blend by rhythmStrength
-    float heatLevel = organicHeat * (1.0f - audio.rhythmStrength)
-                    + musicHeat * audio.rhythmStrength;
-
-    // Transient burst (pulse-driven, independent of beat)
+    // Transient burst: extra flares
     if (audio.pulse > params_.organicTransientMin) {
         float burstStrength = (audio.pulse - params_.organicTransientMin) /
                               (1.0f - params_.organicTransientMin);
-        heatLevel += params_.burstHeat * burstStrength;
+        flareChance += params_.burstHeat * burstStrength * 60.0f;
     }
 
-    // Beat burst: extra heat on every predicted beat (not just downbeat)
+    // Beat burst
     if (beatHappened() && audio.rhythmStrength > 0.3f) {
-        heatLevel += params_.burstHeat * audio.rhythmStrength * 0.5f;
+        flareChance += params_.burstHeat * audio.rhythmStrength * 40.0f;
 
-        // Downbeat: max heat injection
+        // Downbeat: max flare burst
         if (audio.downbeat > 0.5f) {
-            heatLevel += params_.burstHeat * audio.downbeat;
-        }
-
-        // BeatInMeasure accents
-        if (audio.rhythmStrength > 0.5f) {
-            float accent = 0.0f;
-            switch (audio.beatInMeasure) {
-                case 1: accent = 1.0f; break;
-                case 3: accent = 0.5f; break;
-                case 2: case 4: accent = 0.25f; break;
-            }
-            heatLevel += params_.burstHeat * accent * audio.rhythmStrength * 0.3f;
+            flareChance += params_.burstHeat * audio.downbeat * 50.0f;
         }
     }
 
-    // Clamp to valid heat range
-    uint8_t heatValue = (uint8_t)min(255.0f, heatLevel * 255.0f);
+    // Max simultaneous flares scales with display width
+    int maxFlares = min((int)MAX_FLARES, max(4, width_ / 4));
 
+    if (nflare_ < maxFlares && random(1, 101) <= (int)flareChance) {
+        // Spawn position: random x with beat-rocking bias
+        int x = random(0, width_);
+        float normalizedX = (float)x / max(1, width_ - 1) - 0.5f;
+        float biasMod = 1.0f + spawnBias_ * normalizedX * 4.0f;
+        if (biasMod > 0.2f) {
+            int flareRows = max(1, height_ / 5);  // Bottom ~20% for flare sources
+            int y = height_ - 1 - random(0, flareRows);
+            int z = NCOLORS - 1;  // Start at max intensity
+
+            flares_[nflare_++] = (z << 16) | (y << 8) | (x & 0xFF);
+            applyGlow(x, y, z);
+        }
+    }
+}
+
+void HeatFire::applyGlow(int x, int y, int z) {
+    // Radial glow around flare position — this creates the tongue shapes.
+    // Heat radiates outward, falling off with distance.
+    int radius = z * 10 / FLARE_DECAY + 1;
+    for (int dy = -radius; dy < radius; dy++) {
+        for (int dx = -radius; dx < radius; dx++) {
+            int px = x + dx;
+            int py = y + dy;
+            if (px >= 0 && px < width_ && py >= 0 && py < height_) {
+                // Distance-based falloff
+                int dist = isqrt(dx * dx + dy * dy);
+                int decayed = (FLARE_DECAY * dist + 5) / 10;
+                uint8_t n = (z > decayed) ? z - decayed : 0;
+                int idx = py * width_ + px;
+                if (n > heat_[idx]) {
+                    heat_[idx] = n;
+                }
+            }
+        }
+    }
+}
+
+uint32_t HeatFire::isqrt(uint32_t n) {
+    if (n < 2) return n;
+    uint32_t small = isqrt(n >> 2) << 1;
+    uint32_t large = small + 1;
+    return (large * large > n) ? small : large;
+}
+
+// ============================================================================
+// Heat injection (bottom row maintenance + audio)
+// ============================================================================
+
+void HeatFire::injectHeat(const AudioControl& audio) {
     if (layout_ == LINEAR_LAYOUT) {
-        // 1D: inject at 2-4 source positions that drift via noise
+        // 1D: inject at 2-4 source positions
+        float heatLevel = params_.baseHeat + params_.audioHeatBoost * audio.energy;
         int numSources = 2 + (int)(audio.energy * 2.0f);
         for (int i = 0; i < numSources; i++) {
             float noisePos = SimplexNoise::noise3D_01(i * 3.7f, noiseTime_ * 0.3f, 0.0f);
             int srcX = (int)(noisePos * (width_ - 1));
             srcX = constrain(srcX + (int)(spawnBias_ * width_ * 0.25f), 0, width_ - 1);
-
             for (int dx = -1; dx <= 1; dx++) {
                 int xx = constrain(srcX + dx, 0, width_ - 1);
-                uint8_t injected = (dx == 0) ? heatValue : heatValue / 2;
-                heat_[xx] = max(heat_[xx], injected);
+                uint8_t val = (dx == 0) ? NCOLORS - 1 : NCOLORS - 3;
+                if (val > heat_[xx]) heat_[xx] = val;
             }
         }
-    } else {
-        // 2D bottom row: fully populated every frame (DOOM PSX style).
-        // Each bottom cell gets a random heat value up to heatValue.
-        // The randomness per cell per frame creates the flickering base.
-        // Audio modulates heatValue (the max), so louder = brighter base.
-        // The propagation's random cooling creates distinct tongues as heat
-        // rises — some columns lose heat faster than others.
-        int bottomY = height_ - 1;
-
-        for (int x = 0; x < width_; x++) {
-            // Left/right injection bias from beatInMeasure rocking
-            float normalizedX = (float)x / max(1, width_ - 1) - 0.5f;
-            float biasMod = 1.0f + spawnBias_ * normalizedX * 4.0f;
-            biasMod = max(0.3f, biasMod);
-
-            // Random heat with audio-driven ceiling
-            uint8_t maxH = (uint8_t)min(255.0f, heatValue * biasMod);
-            heat_[bottomY * width_ + x] = (uint8_t)random(maxH / 2, max((int)maxH, 1) + 1);
-        }
     }
+    // 2D injection is handled by the flare system + bottom row maintenance in propagateHeat2D
 }
 
 // ============================================================================
@@ -259,7 +271,6 @@ void HeatFire::injectHeat(const AudioControl& audio) {
 
 void HeatFire::renderHeat(PixelMatrix& matrix) {
     if (layout_ == LINEAR_LAYOUT) {
-        // 1D: render heat directly to LED positions
         for (int x = 0; x < width_; x++) {
             uint32_t color = heatToColor(heat_[x]);
             uint8_t r = (color >> 16) & 0xFF;
@@ -268,7 +279,6 @@ void HeatFire::renderHeat(PixelMatrix& matrix) {
             matrix.setPixel(x, 0, r, g, b);
         }
     } else {
-        // 2D: render heat buffer to matrix
         for (int y = 0; y < height_; y++) {
             for (int x = 0; x < width_; x++) {
                 uint32_t color = heatToColor(heat_[y * width_ + x]);
@@ -282,70 +292,39 @@ void HeatFire::renderHeat(PixelMatrix& matrix) {
 }
 
 uint32_t HeatFire::heatToColor(uint8_t heat) const {
-    // Audio-driven gamma: subtle remap
-    float gamma = 1.1f - 0.2f * paletteBias_;
-    float normalized = powf(heat / 255.0f, gamma);
-    uint8_t remapped = (uint8_t)(normalized * 255.0f);
+    if (heat == 0) return 0;  // Black — most cells should be black
 
-    // Same dual-palette system as particle Fire
-    struct ColorStop { uint8_t position, r, g, b; };
-
-    // Warm palette: campfire
-    static const ColorStop warm[] = {
-        {0,   0,   0,   0},
-        {51,  64,  0,   0},
-        {102, 255, 0,   0},
-        {153, 255, 128, 0},
-        {204, 255, 200, 0},
-        {255, 255, 255, 64}
+    // Map heat (0-NCOLORS) through fire color palette
+    // Use a fixed 11-stop palette (matching MatrixFireFast) for authentic fire look
+    static const uint32_t fireColors[] = {
+        0x000000,  // 0: black
+        0x100000,  // 1: very dark red
+        0x300000,  // 2: dark red
+        0x600000,  // 3: medium red
+        0x800000,  // 4: red
+        0xA00000,  // 5: bright red
+        0xC02000,  // 6: red-orange
+        0xC04000,  // 7: orange
+        0xC06000,  // 8: yellow-orange
+        0xC08000,  // 9: yellow
+        0x807080   // 10: white/hot
     };
 
-    // Hot palette: intense (stays in warm hues)
-    static const ColorStop hot[] = {
-        {0,   0,   0,   0},
-        {51,  128, 8,   0},
-        {102, 255, 80,  0},
-        {153, 255, 180, 10},
-        {204, 255, 230, 40},
-        {255, 255, 255, 100}
-    };
-
-    const int paletteSize = 6;
-
-    auto lookup = [&](const ColorStop* pal, uint8_t val, uint8_t& ro, uint8_t& go, uint8_t& bo) {
-        int lo = 0, hi = 1;
-        for (int i = 0; i < paletteSize - 1; i++) {
-            if (val >= pal[i].position && val <= pal[i+1].position) {
-                lo = i; hi = i + 1; break;
-            }
-        }
-        float range = pal[hi].position - pal[lo].position;
-        float t = (range > 0) ? (float)(val - pal[lo].position) / range : 0.0f;
-        ro = (uint8_t)(pal[lo].r + t * (pal[hi].r - pal[lo].r));
-        go = (uint8_t)(pal[lo].g + t * (pal[hi].g - pal[lo].g));
-        bo = (uint8_t)(pal[lo].b + t * (pal[hi].b - pal[lo].b));
-    };
-
-    uint8_t wr, wg, wb, hr, hg, hb;
-    lookup(warm, remapped, wr, wg, wb);
-    lookup(hot,  remapped, hr, hg, hb);
-
-    // Blend warm/hot (dead zone at 0.4 so warm is default)
-    float blend = constrain((paletteBias_ - 0.4f) / 0.5f, 0.0f, 1.0f);
-    uint8_t r = (uint8_t)(wr + blend * (hr - wr));
-    uint8_t g = (uint8_t)(wg + blend * (hg - wg));
-    uint8_t b = (uint8_t)(wb + blend * (hb - wb));
+    uint8_t idx = min((int)heat, NCOLORS - 1);
+    uint32_t baseColor = fireColors[idx];
+    uint8_t r = (baseColor >> 16) & 0xFF;
+    uint8_t g = (baseColor >> 8) & 0xFF;
+    uint8_t b = baseColor & 0xFF;
 
     // Downbeat color temperature shift
     if (downbeatColorShift_ > 0.0f) {
         float s = downbeatColorShift_;
-        r = (uint8_t)min(255, (int)r + (int)(s * 40));
-        g = (uint8_t)min(255, (int)g + (int)(s * 50));
-        b = (uint8_t)min(255, (int)b + (int)(s * 80));
+        r = (uint8_t)min(255, (int)r + (int)(s * 30));
+        g = (uint8_t)min(255, (int)g + (int)(s * 40));
+        b = (uint8_t)min(255, (int)b + (int)(s * 60));
     }
 
-    // Master brightness scale — heat buffer fills every pixel so
-    // full-brightness RGB is much brighter than sparse particles
+    // Master brightness scale
     float br = params_.brightness;
     r = (uint8_t)(r * br);
     g = (uint8_t)(g * br);
