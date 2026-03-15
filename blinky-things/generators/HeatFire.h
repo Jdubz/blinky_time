@@ -130,6 +130,10 @@ private:
     float downbeatCoolSuppress_; // Cooling suppression: 1.0 → 0.0 over 0.5s
     float spawnBias_;            // Left/right injection bias per beat-in-measure
 
+    // Smoothed audio state (fire has thermal inertia — no instant jumps)
+    float smoothedEnergy_;       // Low-pass filtered energy (~0.5s time constant)
+    float smoothedThreshold_;    // Low-pass filtered threshold (~0.3s time constant)
+
     // Palette state
     float paletteBias_;          // Smoothed energy*rhythm for warm/hot blend
 

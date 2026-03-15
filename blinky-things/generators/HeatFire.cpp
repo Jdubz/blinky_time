@@ -5,6 +5,7 @@ HeatFire::HeatFire()
     : params_(), audio_(), noiseTime_(0.0f), prevPhase_(1.0f), beatCount_(0),
       downbeatSpreadMult_(1.0f), downbeatColorShift_(0.0f),
       downbeatCoolSuppress_(0.0f), spawnBias_(0.0f),
+      smoothedEnergy_(0.0f), smoothedThreshold_(0.55f),
       paletteBias_(0.0f), effectiveCooling_(0.0f), effectiveSpread_(0.0f) {
     memset(heat_, 0, sizeof(heat_));
 }
@@ -68,6 +69,10 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
                       * ((1.0f - params_.musicBeatDepth * 0.5f) + params_.musicBeatDepth * 0.5f * phasePulse);
     noiseTime_ += organicScroll * (1.0f - audio.rhythmStrength)
                 + musicScroll * audio.rhythmStrength;
+    // Wrap to prevent float precision loss at large values.
+    // Simplex noise has no exact period, but wrapping at 1000 prevents
+    // the gradual degradation that causes fire to fade over minutes.
+    if (noiseTime_ > 1000.0f) noiseTime_ -= 1000.0f;
 
     // Noise-field fire: sample scrolling noise, threshold to create tongues
     renderNoiseFireField(matrix, audio);
@@ -83,6 +88,8 @@ void HeatFire::reset() {
     downbeatColorShift_ = 0.0f;
     downbeatCoolSuppress_ = 0.0f;
     spawnBias_ = 0.0f;
+    smoothedEnergy_ = 0.0f;
+    smoothedThreshold_ = 0.55f;
     paletteBias_ = 0.0f;
     audio_ = AudioControl();
 
@@ -97,28 +104,45 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
     float phasePulse = audio.phaseToPulse();
     float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
 
-    // Audio-reactive threshold: controls how much of the display is lit.
-    // Higher threshold = less lit = sparser fire. Lower = more lit = roaring.
-    // Organic: moderate threshold. Music: threshold drops on-beat (more fire on beat).
-    float organicThreshold = 0.55f - 0.15f * audio.energy;  // 0.40-0.55
-    float musicThreshold = 0.55f - 0.15f * audio.energy
-                         - 0.15f * phasePulse * audio.rhythmStrength;  // drops on-beat
-    float threshold = organicThreshold * (1.0f - audio.rhythmStrength)
-                    + musicThreshold * audio.rhythmStrength;
+    // Smooth energy: fire has thermal inertia. Rises fast (0.15s), falls slow (0.8s).
+    // This prevents strobe and ensures fire doesn't vanish between beats.
+    float dt = 1.0f / 60.0f;  // Approximate — exact dt computed above but not passed here
+    float riseRate = 6.0f * dt;   // ~0.15s to rise
+    float fallRate = 1.2f * dt;   // ~0.8s to fall
+    if (audio.energy > smoothedEnergy_) {
+        smoothedEnergy_ += (audio.energy - smoothedEnergy_) * riseRate;
+    } else {
+        smoothedEnergy_ += (audio.energy - smoothedEnergy_) * fallRate;
+    }
 
-    // Pulse burst: temporarily lower threshold (more fire)
+    // Target threshold from smoothed energy (no raw per-frame jumps).
+    // Wide swing for energy-only devices (ESP32-S3 has no beat NN yet).
+    // Silence: 0.60 (small base fire). Loud: 0.15 (roaring).
+    float targetThreshold = 0.60f - 0.45f * smoothedEnergy_;
+
+    // Phase breathing: SUBTLE modulation (±0.05), not binary on/off.
+    // Only when rhythm is strong.
+    if (audio.rhythmStrength > 0.3f) {
+        targetThreshold -= 0.05f * phasePulse * audio.rhythmStrength;
+    }
+
+    // Pulse burst: instant but small threshold drop on transients
     if (audio.pulse > params_.organicTransientMin) {
         float burst = (audio.pulse - params_.organicTransientMin) /
                       (1.0f - params_.organicTransientMin);
-        threshold -= params_.burstHeat * burst * 0.15f;
+        targetThreshold -= params_.burstHeat * burst * 0.08f;
     }
 
-    // Downbeat: drop threshold significantly
+    // Downbeat: moderate threshold drop (decays via downbeatCoolSuppress_)
     if (downbeatCoolSuppress_ > 0.0f) {
-        threshold -= 0.2f * downbeatCoolSuppress_;
+        targetThreshold -= 0.10f * downbeatCoolSuppress_;
     }
 
-    threshold = max(0.1f, threshold);
+    targetThreshold = constrain(targetThreshold, 0.15f, 0.65f);
+
+    // Smooth the threshold itself to prevent any remaining jitter
+    smoothedThreshold_ += (targetThreshold - smoothedThreshold_) * 4.0f * dt;  // ~0.25s
+    float threshold = smoothedThreshold_;
 
     // Noise scales — controls tongue width and vertical structure
     // Lower xScale = wider tongues, higher = narrower
@@ -158,11 +182,12 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
             // normalizedY: 0.0 at top, 1.0 at bottom.
             float normalizedY = (float)y / (height_ - 1);
             // Height mask: full intensity at bottom, fades to zero at top.
-            // Audio energy pushes flames higher (mask extends further up).
-            float flameHeight = 0.3f + 0.7f * (0.3f + 0.7f * audio.energy);
+            // Uses smoothed energy so flames grow/shrink gradually.
+            // Silence: flames reach ~40% height. Loud: full height.
+            float flameHeight = 0.4f + 0.6f * smoothedEnergy_;
             float heightMask = constrain((normalizedY - (1.0f - flameHeight)) / flameHeight, 0.0f, 1.0f);
-            // Power curve: sharper falloff at flame tips
-            heightMask = heightMask * heightMask;
+            // Gentle falloff (not squared — lets flames reach higher)
+            heightMask = sqrtf(heightMask);
 
             for (int x = 0; x < width_; x++) {
                 // Domain warp: horizontal wobble from a separate noise field
