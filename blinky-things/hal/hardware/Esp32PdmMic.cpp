@@ -65,11 +65,18 @@ int Esp32PdmMic::available() {
 }
 
 int Esp32PdmMic::read(int16_t* buffer, int maxBytes) {
-    int toCopy = (maxBytes < stagingCount_ * (int)sizeof(int16_t))
-                 ? maxBytes
-                 : stagingCount_ * (int)sizeof(int16_t);
+    int availableBytes = stagingCount_ * (int)sizeof(int16_t);
+    int toCopy = (maxBytes < availableBytes) ? maxBytes : availableBytes;
     memcpy(buffer, staging_, toCopy);
-    stagingCount_ = 0;
+
+    // Only consume the samples that were actually copied.
+    // If maxBytes was smaller than available, shift the remainder.
+    int samplesCopied = toCopy / (int)sizeof(int16_t);
+    int remaining = stagingCount_ - samplesCopied;
+    if (remaining > 0) {
+        memmove(staging_, staging_ + samplesCopied, remaining * sizeof(int16_t));
+    }
+    stagingCount_ = remaining;
     return toCopy;
 }
 

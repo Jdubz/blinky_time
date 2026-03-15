@@ -4,11 +4,12 @@
 #include "../hal/interfaces/IAdc.h"
 #include "../hal/interfaces/ISystemTime.h"
 #include "../hal/PlatformConstants.h"
+#include "../hal/PlatformDetect.h"
 
 // Default pins for XIAO BLE / Sense (override via Config if your core differs)
 // ESP32-S3: no onboard battery circuit — all pins set to -1 (disables battery monitoring)
 #ifndef PIN_VBAT
-  #if defined(ESP32)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
     #define PIN_VBAT        (-1)     // No battery ADC on XIAO ESP32-S3
   #elif defined(P0_31)
     #define PIN_VBAT        P0_31    // ADC input for VBAT divider (mbed core)
@@ -17,7 +18,7 @@
   #endif
 #endif
 #ifndef VBAT_ENABLE_PIN
-  #if defined(ESP32)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
     #define VBAT_ENABLE_PIN (-1)     // No battery enable pin on XIAO ESP32-S3
   #elif defined(P0_14)
     #define VBAT_ENABLE_PIN P0_14    // LOW = enable divider to ADC, HIGH = disable (mbed)
@@ -28,7 +29,7 @@
 
 // HICHG (fast-charge) control:
 #ifndef HICHG_PIN_DEFAULT
-  #if defined(ESP32)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
     #define HICHG_PIN_DEFAULT (-1)   // No charge control on XIAO ESP32-S3
   #elif defined(P0_13)
     #define HICHG_PIN_DEFAULT P0_13
@@ -39,7 +40,7 @@
 
 // CHG status pin:
 #ifndef CHG_STATUS_PIN_DEFAULT
-  #if defined(ESP32)
+  #if defined(BLINKY_PLATFORM_ESP32S3)
     #define CHG_STATUS_PIN_DEFAULT (-1)  // No charge status pin on XIAO ESP32-S3
   #elif defined(P0_17)
     #define CHG_STATUS_PIN_DEFAULT P0_17  // (mbed core)
