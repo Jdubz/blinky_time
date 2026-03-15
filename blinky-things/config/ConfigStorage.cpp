@@ -524,6 +524,12 @@ void ConfigStorage::saveToFlash() {
 
 void ConfigStorage::end() {
 #ifdef ESP32
+    // Closes the NVS Preferences handle and flushes any pending writes.
+    // IMPORTANT: This is only called from SerialConsole's "reboot" command.
+    // Watchdog resets, hard faults, stack overflows, and other uncontrolled
+    // restarts will skip this call and may lose the last-written settings.
+    // esp_register_shutdown_handler() could cover more paths but is not yet
+    // wired up — track as a known limitation until NVS write-through is added.
     prefs.end();
     flashOk = false;
 #endif

@@ -1,11 +1,17 @@
 #pragma once
 
 #include "AudioControl.h"
-#ifdef NN_ENABLED
+#include "../hal/PlatformDetect.h"
+
+#ifdef BLINKY_PLATFORM_NRF52840
+// nRF52840: full TFLite Micro FrameBeatNN (always active since v68 — not an optional flag).
+// Requires the Arduino_TensorFlowLite library to be installed.
 #include "FrameBeatNN.h"
 #else
-// Stub FrameBeatNN for builds without TFLite. All methods are no-ops that
-// report "not ready", so AudioController.cpp needs no #ifdef guards.
+// Non-nRF52 platforms: FrameBeatNN stub until TFLite Micro is ported.
+// All methods are no-ops that report "not ready", so AudioController.cpp
+// needs no platform guards — it falls back to energy-envelope ODF.
+// TODO: Port TFLite Micro to ESP32-S3 (library supports Xtensa LX7).
 struct FrameBeatNN {
     static constexpr int INPUT_MEL_BANDS = 26;
     bool begin()                                    { return false; }

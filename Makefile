@@ -32,10 +32,9 @@ BUILD_OUTPUT_DIR ?= /tmp/blinky-build
 ESP32_BUILD_OUTPUT_DIR ?= /tmp/blinky-esp32-build
 UF2_UPLOAD_TOOL = tools/uf2_upload.py
 
-# Arduino CLI detection
+# Arduino CLI detection — must be on PATH
 ifeq ($(OS),Windows_NT)
-    # Try PATH first, fall back to known install location
-    ARDUINO_CLI = $(or $(shell where arduino-cli.exe 2>nul),D:\Development\Arduino\arduino-cli.exe)
+    ARDUINO_CLI = arduino-cli.exe
 else
     ARDUINO_CLI = arduino-cli
 endif

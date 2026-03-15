@@ -195,9 +195,21 @@ private:
             // Within each panel: serpentine rows (even rows left→right,
             // odd rows right→left) — standard WS2812B matrix wiring.
             //
-            // Physical→logical transpose applied: logical (gx,gy) maps to
-            // physical column=gy, row=gx. This corrects a 90° CCW rotation
-            // in the physical panel mounting (top-right → bottom-left).
+            // Physical chain order (data-in perspective):
+            //   Panel 0 (TL) → Panel 1 (TR) → Panel 2 (BL) → Panel 3 (BR)
+            //   BUT physical panels 0 and 3 are swapped relative to logical
+            //   coordinates (panelIdx swap below), so logical TL = chain BR.
+            //
+            // Physical→logical transpose:
+            //   Logical (gx, gy) → physical (phx=gy, phy=gx)
+            //   This corrects a 90° CCW rotation in the physical panel
+            //   mounting (the panels are installed rotated — top-right
+            //   of the physical chain becomes logical top-left).
+            //
+            //   Logical grid:         Physical chain order:
+            //   (0,0) (1,0) ...       Panel3 Panel1
+            //   (0,1) (1,1) ...       Panel2 Panel0
+            //   ↑ logical origin      (after swap: TL=3, TR=1, BL=2, BR=0)
             int panelW = width  / 2;
             int panelH = height / 2;
             int panelPixels = panelW * panelH;

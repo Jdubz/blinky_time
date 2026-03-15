@@ -48,6 +48,10 @@ void Esp32PdmMic::end() {
 
 void Esp32PdmMic::setGain(int gainDb) {
     // ESP32-S3 has no hardware PDM gain register — full range is software only.
+    // gainDb == 0  →  1.0x linear (no scaling needed, poll() skips the multiply).
+    // gainDb > 0   →  amplify post-decimation (does not improve SNR).
+    // Negative dB would attenuate; AGC never goes below getGainMinDb()=0 so
+    // this branch is unreachable in normal use.
     softwareGain_ = (gainDb > 0) ? powf(10.0f, gainDb / 20.0f) : 1.0f;
 }
 

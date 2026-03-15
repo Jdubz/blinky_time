@@ -170,6 +170,9 @@ bool DeviceConfigLoader::validate(const ConfigStorage::StoredDeviceConfig& store
         SerialConsole::logWarn(F("Invalid LED count: 0"));
         return false;
     }
+    // 2048 cap covers the largest current device (32×32 = 1024 LEDs) with headroom.
+    // nRF52840 practical ceiling is ~512 LEDs before pixel buffers exhaust its 256 KB RAM;
+    // the firmware will compile but may malloc-fail at runtime on that platform.
     if (ledCount > 2048) {
         SerialConsole::logWarn(F("LED count too high (>2048)"));
         return false;
