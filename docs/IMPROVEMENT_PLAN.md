@@ -156,79 +156,43 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 
 - ~~**Phase A (beat activation only):**~~ DONE — FC model deployed, beat+downbeat activation working on all 3 devices.
 - ~~**Phase B (mel calibration):**~~ DONE — calibrated `target_rms_db` from -35 to -63 dB (mel mean 0.52, matching firmware AGC). Cal63 model trained on corrected data. On-device A/B (6 tracks): mean ODF 0.30 vs 0.20 (+50%), BPM accuracy improved 4/6, downbeat activations now functional (max 0.37-0.57 vs 0.00).
-- **Phase C (dual-model architecture):** Single-model FC approach reached its limits — W192 FC regressed severely (0.370 vs W32's 0.491). Onset detection and rhythm/downbeat detection have fundamentally different requirements and are being split into two models:
-  - **Phase C.1 (Onset model):** Conv1D narrow, 8-16 frame window (128-256ms), single `onset_activation` output, ~4 KB INT8, <1ms inference, runs every frame at 62.5 Hz. Purpose: sharp kick/snare detection for visual triggers.
-  - **Phase C.2 (Rhythm model):** Conv1D with AvgPool1D temporal pooling, 192 frame window (3.07s = 1.5+ bars), beat + downbeat activation outputs, ~30 KB INT8, <8ms inference, runs every 4th frame at 15.6 Hz. Purpose: bar structure identification and downbeat detection.
-  - Combined: ~34 KB flash (vs 314 KB single W192 FC), ~10 KB arena (vs 16 KB), both within resource budget.
+- ~~**Phase C (dual-model architecture):**~~ ABANDONED (Mar 16). Research showed every published beat/downbeat system uses a single joint model — the dual-model split underperformed the FC baseline on both tasks (OnsetNN Beat F1=0.478 < FC 0.491; RhythmNN DB F1=0.114 < FC 0.238) while using 8.5x more RAM. Reverted to single Conv1D with multi-task output.
+- **Phase C (revised): Single Conv1D W64 with sum head.** Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Beat This! sum head constrains downbeat ≤ beat. W64 (1.024s, ~2 beats) gives modest context increase over W32. ~7K params, ~7 KB INT8, ~26ms inference. Training in progress (conv1d_w64_v1).
 - ~~**Phase D (BandFlux removal):**~~ DONE (v67) — Removed EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult. 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved. SETTINGS_VERSION 66→67.
 
-**Research context:**
-- ALL leading beat trackers use frame-level NNs: BeatNet (CRNN), Beat This! (CNN+Transformer), madmom (BiLSTM), TCN beat tracker
-- Our innovation: using FC instead of CNN/RNN to fit Cortex-M4F compute budget, while following the same frame-level activation → post-processing paradigm
-- No published TinyML beat tracking on Cortex-M class hardware exists (as of March 2026)
+**Research context (updated March 16, 2026):**
+- ALL leading beat trackers use frame-level NNs with **single joint models**: BeatNet (CRNN), Beat This! (CNN+Transformer), madmom (BiLSTM), TCN beat tracker, BEAST (Streaming Transformer), WaveBeat (Strided Conv1D)
+- **No published system splits onset from downbeat into separate models** — multi-task joint training improves both tasks via shared features, structural constraints (downbeats ⊆ beats), and regularization (Bock 2019: +5 F1 from tempo auxiliary task)
+- Beat This! "sum head" technique constrains downbeat output ≤ beat output structurally
+- Our Conv1D W64 with sum head follows this proven paradigm
 
-#### Dual-Model Architecture (March 15, 2026)
+#### Closed: Dual-Model Architecture (March 15-16, 2026)
 
-**Rationale:** Onset detection (kicks/snares) and rhythm/downbeat detection have fundamentally different requirements:
+**Attempted and abandoned.** Dual-model split (OnsetNN W8 + RhythmNN W192) was architecturally wrong:
+- OnsetNN (Beat F1=0.478) < FC baseline (0.491) — W8 too short to distinguish beats from non-beats
+- RhythmNN (DB F1=0.114) < FC baseline (0.238) — 16x pooled labels lost 94.6% of beat labels (bug), plus 74ms inference (over budget)
+- Combined 8.5x more RAM than FC for worse results on both tasks
+- Every published system uses single joint model — no literature support for the split
 
-| Requirement | Onset Detection | Downbeat Detection |
-|-------------|----------------|-------------------|
-| Window | Short (~100-250ms) | Long (~3s, full 4/4 bar) |
-| Precision | High temporal resolution | Bar-level patterns |
-| Rate | Every frame (62.5 Hz) | Every 4th frame (15.6 Hz) |
-| Output | Single onset_activation | beat_activation + downbeat_activation |
-| Purpose | Visual triggers (sparks, pulses) | Bar structure, measure tracking |
+#### Architecture Research (March 16, 2026)
 
-A single model cannot serve both needs. Short windows miss bar structure; wide windows with FC destroy temporal locality (proven by W192 regression).
+**Platform compute budgets (30ms inference):**
 
-**Architecture:**
+| Platform | Clock | Cycles/MAC | MACs budget | Model sweet spot |
+|----------|-------|-----------|-------------|-----------------|
+| nRF52840 | 64 MHz | ~3 (flash waits) | ~640K | 2-3 layer Conv1D, 24-32ch, W32-64, 5-15K params |
+| ESP32-S3 | 240 MHz | ~1.7 (ESP-NN) | ~4M | 3-4 layer Conv1D, 48-96ch, W64-128, 20-80K params |
 
-```
-SharedSpectralAnalysis (already runs every frame)
-     │
-     rawMelBands_ (26 bands, 62.5 Hz)
-     │
-     ├── OnsetNN (every frame, <1ms)
-     │       Input: 8-16 frames × 26 mels (128-256ms)
-     │       Architecture: Conv1D(26→24,k=3) → Conv1D(24→24,k=3) → Conv1D(24→1,k=1)
-     │       Output: onset_activation (0-1)
-     │       → OSS buffer (primary ODF for CBSS)
-     │       → AudioControl.pulse (direct onset trigger)
-     │
-     └── RhythmNN (every 4th frame, <8ms)
-             Input: 192 frames × 26 mels (3.07s)
-             Architecture: Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5)
-                           → AvgPool(4) → FC(576→32) → FC(32→2)
-             Output: beat_activation + downbeat_activation (0-1 each)
-             → CBSS beat/downbeat tracking
-             → AudioControl.downbeat, beatInMeasure
-```
+ESP32-S3 has ~6.5x more compute budget — platform-specific models are feasible.
 
-**Resource budget:**
+**Improving downbeat without wider windows (ranked by viability):**
 
-| Resource | OnsetNN | RhythmNN | Combined | Budget | Headroom |
-|----------|---------|----------|----------|--------|----------|
-| Flash (model) | ~4 KB | ~30 KB | ~34 KB | ~500 KB | 93% |
-| RAM (arena) | ~2 KB | ~8 KB | ~10 KB | 16 KB | 38% |
-| RAM (window) | ~1.6 KB | ~19.5 KB | ~21 KB | 236 KB | 91% |
-| Inference | <1ms@62.5Hz | <8ms@15.6Hz | — | 10ms/frame | OK |
+1. **Tempo auxiliary head during training (BEST)**: Shared backbone predicts tempo via FC branch, stripped at export. Zero firmware cost. +1-5% F1 (Bock 2019, BEAST). Code exists in `beat_fc_enhanced.py`.
+2. **FiLM conditioning (LATER)**: Modulate features by tempo/phase. Train/test mismatch problem — try after beat tracking improves.
+3. **Beat-synchronous mel accumulator (NOT YET)**: Depends on beat quality (~50% F1 makes snapshots noisy). Revisit above 70% beat F1.
+4. **DSP features as extra channels (NO)**: Constant across Conv1D window, useless to convolutions.
 
-Combined: 34 KB flash vs 314 KB for the failed W192 FC, with better architectural alignment to each task.
-
-**Input representation research (March 15):**
-- **Mel bands confirmed as correct** — every published SOTA system (BeatNet, Beat This!, madmom, SuperFlux, BTrack) uses mel spectrograms. Raw PCM requires a completely new training pipeline with no proven benefit. Mel bands provide free perceptual compression: kicks → bands 2-4, snares → bands 5-10+.
-- **Temporal resolution:** Current 62.5 Hz frame rate (16ms/frame) is marginal for kick attacks (10-50ms = 1-3 frames). If onset detection proves limited, test hop-128 (125 Hz, 8ms frames) as a firmware-side change.
-
-**Window size research (March 15):**
-- **2-beat window insufficient for downbeat** — model must see a full 4-beat bar to distinguish beat 1 from beats 2/3/4.
-- **W192 (3.07s) is the sweet spot** — covers 1.15-2.3 bars across all EDM tempos (90-180 BPM). W256 has diminishing returns and exceeds flash budget.
-- **FC cannot exploit wide windows** — W192 FC (4992 flat inputs, 322K params) regressed to F1=0.370. First layer alone has 319K params. Conv1D with temporal pooling is the correct architecture.
-
-**Training experiments (planned):**
-
-1. **Onset Conv1D W8/W16** — Match W32 FC beat F1 (0.491) at 1/14th the size
-2. **Rhythm Conv1D+Pool W192** — Downbeat F1 > 0.30 (beat W32 FC baseline of 0.238)
-3. **Conv1D Wide W32 on v5 + cal63** — Honest baseline with corrected data
+**Input representation:** Mel bands confirmed correct by all SOTA systems. 62.5 Hz frame rate adequate.
 
 #### Closed: W192 FC (March 15, 2026)
 
