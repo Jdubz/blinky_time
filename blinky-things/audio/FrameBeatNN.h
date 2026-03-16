@@ -223,10 +223,11 @@ public:
     }
 
 private:
-    // Op resolver — supports both FC and Conv1D models:
+    // Op resolver — supports FC, Conv1D, and Conv1D+sum_head models:
     // FC: FullyConnected, Logistic, Quantize, Dequantize, Reshape
-    // Conv1D: Conv2D, Pad, Reshape, ExpandDims, Logistic, Mul (sum head)
-    static constexpr int OP_RESOLVER_SLOTS = 9;
+    // Conv1D: Conv2D, Pad, Reshape, ExpandDims, Logistic
+    // Sum head adds: Mul, StridedSlice, Concatenation, extra Quantize
+    static constexpr int OP_RESOLVER_SLOTS = 12;
 
     tflite::MicroErrorReporter errorReporter_;
     tflite::MicroMutableOpResolver<OP_RESOLVER_SLOTS> resolver_;
@@ -242,6 +243,8 @@ private:
         resolver_.AddExpandDims();      // 1D→2D input expansion
         resolver_.AddLogistic();        // Sigmoid activation
         resolver_.AddMul();             // Sum head: beat * sigmoid(db_logit)
+        resolver_.AddStridedSlice();    // Sum head: split channels
+        resolver_.AddConcatenation();   // Sum head: join beat + downbeat
         resolver_.AddQuantize();
         resolver_.AddDequantize();
         resolverInited_ = true;
@@ -265,7 +268,7 @@ private:
 
     // --- Model state ---
 
-    static constexpr int ARENA_SIZE = 16384;          // 16 KB
+    static constexpr int ARENA_SIZE = 32768;          // 32 KB (Conv1D W64 measured 7340 — headroom for model updates)
     static constexpr int MAX_WINDOW_FRAMES = 64;      // Max 64 frames (1.024s) — increase if a wider model is used
 
     alignas(16) uint8_t arena_[ARENA_SIZE];

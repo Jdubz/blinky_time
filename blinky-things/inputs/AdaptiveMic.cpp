@@ -235,17 +235,23 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
                    rawTrackedLevel < fastAgcThreshold;
 
   // Determine if we're in loud AGC mode (symmetric to fast AGC)
-  // Loud mode: when gain is at/near minimum and signal is persistently high
-  inLoudAgcMode_ = currentHardwareGain <= hwGainMinHeadroom &&
+  // Loud mode: when signal is persistently high and gain is in the upper 2/3 of range.
+  // Accelerates gain reduction when mic is clipping. No agcStrategy_ guard — intentionally
+  // active on both HARDWARE and SOFTWARE platforms (ESP32-S3 needs it for startup clipping).
+  // Step sizes use normal-mode values (not fast-mode) to avoid overshoot on gain reduction.
+  int loudAgcGainThreshold = gainMin_ + ((hwGainMaxSignal - gainMin_) / 3);
+  inLoudAgcMode_ = (hwGainMaxSignal > gainMin_) &&
+                   currentHardwareGain >= loudAgcGainThreshold &&
                    rawTrackedLevel > hwLoudThreshold;
 
   // Select calibration period and tracking tau based on mode
-  uint32_t calibPeriod = inFastAgcMode_ ? fastAgcPeriodMs : MicConstants::HW_CALIB_PERIOD_MS;
-  float trackingTau = inFastAgcMode_ ? fastAgcTrackingTau : MicConstants::HW_TRACKING_TAU;
+  bool fastMode = inFastAgcMode_ || inLoudAgcMode_;
+  uint32_t calibPeriod = fastMode ? fastAgcPeriodMs : MicConstants::HW_CALIB_PERIOD_MS;
+  float trackingTau = fastMode ? fastAgcTrackingTau : MicConstants::HW_TRACKING_TAU;
 
-  // Update raw tracking with appropriate tau (faster in fast mode)
-  // Note: This is in addition to the tracking in update() for more responsive fast AGC
-  if (inFastAgcMode_) {
+  // Update raw tracking with appropriate tau (faster in fast/loud mode)
+  // Note: This is in addition to the tracking in update() for more responsive AGC
+  if (fastMode) {
     float alpha = dt / (trackingTau + dt);
     rawTrackedLevel += alpha * (rawInstantLevel - rawTrackedLevel);
   }
@@ -267,29 +273,12 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // Determine direction: negative error = too quiet → increase gain
   int direction = (error < 0.0f) ? +1 : -1;
 
-  // Adaptive step size based on error magnitude and AGC strategy.
-  // SOFTWARE: smaller steps — large jumps can clip transients and the signal
-  //   quality benefit is limited since this is post-decimation scaling only.
-  // HARDWARE: normal/fast steps — pre-decimation gain directly improves SNR.
+  // Adaptive step size: small frequent adjustments for smooth visual response.
+  // Fast/loud mode uses slightly larger steps to converge quickly at startup.
+  // Normal mode uses small steps every 2s — no visible jumps.
   int stepSize;
-  if (inFastAgcMode_) {
-    // Fast mode: only reachable on HARDWARE strategy (SOFTWARE disables fast AGC)
-    if (errorMagnitude > 0.10f) {
-      stepSize = 6;
-    } else if (errorMagnitude > 0.05f) {
-      stepSize = 3;
-    } else {
-      stepSize = 2;
-    }
-  } else if (agcStrategy_ == AgcStrategy::SOFTWARE) {
-    // Software gain: conservative steps to avoid clipping transients
-    if (errorMagnitude > 0.15f) {
-      stepSize = 2;
-    } else {
-      stepSize = 1;
-    }
-  } else {
-    // Hardware gain, normal mode
+  if (fastMode) {
+    // Fast/loud mode: converging from way off target
     if (errorMagnitude > 0.15f) {
       stepSize = 4;
     } else if (errorMagnitude > 0.05f) {
@@ -297,6 +286,12 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
     } else {
       stepSize = 1;
     }
+  } else if (agcStrategy_ == AgcStrategy::SOFTWARE) {
+    // Software gain: always single steps to avoid clipping
+    stepSize = 1;
+  } else {
+    // Hardware gain, normal mode: gentle single steps every 2s
+    stepSize = (errorMagnitude > 0.10f) ? 2 : 1;
   }
 
   int delta = direction * stepSize;
