@@ -184,8 +184,11 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // Mic defaults (hardware-primary, window/range normalization)
     // Window/Range normalization (v72: AGC removed, gain fixed at platform default)
-    data_.mic.peakTau = 2.0f;        // 2s peak adaptation (matches AdaptiveMic.h)
-    data_.mic.releaseTau = 5.0f;     // 5s peak release (matches AdaptiveMic.h)
+    // v72: changed from 1.0/3.0 to 2.0/5.0 — with fixed gain, slower tracking avoids
+    // over-reacting to transients that the AGC would have absorbed. These values match
+    // AdaptiveMic.h defaults and were tested on both nRF52840 and ESP32-S3.
+    data_.mic.peakTau = 2.0f;        // 2s peak adaptation
+    data_.mic.releaseTau = 5.0f;     // 5s peak release
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
