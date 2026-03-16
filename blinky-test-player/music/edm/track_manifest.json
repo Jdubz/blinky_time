@@ -1,0 +1,182 @@
+{
+  "afrobeat-feelgood-groove": {
+    "file": "afrobeat-feelgood-groove.mp3",
+    "duration": 154.435906,
+    "seekOffset": 0,
+    "windowEnd": 25,
+    "beatsInWindow": 50,
+    "windowBpm": 121,
+    "groundTruthBpm": 115.4,
+    "valid": true
+  },
+  "amapiano-vibez": {
+    "file": "amapiano-vibez.mp3",
+    "duration": 263.424,
+    "seekOffset": 214,
+    "windowEnd": 239,
+    "beatsInWindow": 49,
+    "windowBpm": 115.4,
+    "groundTruthBpm": 113,
+    "valid": true
+  },
+  "breakbeat-background": {
+    "file": "breakbeat-background.mp3",
+    "duration": 103.314281,
+    "seekOffset": 0,
+    "windowEnd": 25,
+    "beatsInWindow": 75,
+    "windowBpm": 179.3,
+    "groundTruthBpm": 171.4,
+    "valid": true
+  },
+  "breakbeat-drive": {
+    "file": "breakbeat-drive.mp3",
+    "duration": 109.92325,
+    "seekOffset": 54,
+    "windowEnd": 79,
+    "beatsInWindow": 42,
+    "windowBpm": 100,
+    "groundTruthBpm": 95,
+    "valid": true
+  },
+  "dnb-energetic-breakbeat": {
+    "file": "dnb-energetic-breakbeat.mp3",
+    "duration": 142.706938,
+    "seekOffset": 44,
+    "windowEnd": 69,
+    "beatsInWindow": 76,
+    "windowBpm": 180.3,
+    "groundTruthBpm": 179.1,
+    "valid": true
+  },
+  "dnb-liquid-jungle": {
+    "file": "dnb-liquid-jungle.mp3",
+    "duration": 100.032,
+    "seekOffset": 7,
+    "windowEnd": 32,
+    "beatsInWindow": 72,
+    "windowBpm": 171.1,
+    "groundTruthBpm": 170.4,
+    "valid": true
+  },
+  "dubstep-edm-halftime": {
+    "file": "dubstep-edm-halftime.mp3",
+    "duration": 118.726531,
+    "seekOffset": 10,
+    "windowEnd": 35,
+    "beatsInWindow": 75,
+    "windowBpm": 179.6,
+    "groundTruthBpm": 179.3,
+    "valid": true
+  },
+  "edm-trap-electro": {
+    "file": "edm-trap-electro.mp3",
+    "duration": 115.776,
+    "seekOffset": 0,
+    "windowEnd": 25,
+    "beatsInWindow": 104,
+    "windowBpm": 250,
+    "groundTruthBpm": 240.7,
+    "valid": true
+  },
+  "garage-uk-2step": {
+    "file": "garage-uk-2step.mp3",
+    "duration": 163.944469,
+    "seekOffset": 88,
+    "windowEnd": 113,
+    "beatsInWindow": 57,
+    "windowBpm": 134.8,
+    "groundTruthBpm": 130.4,
+    "valid": true
+  },
+  "reggaeton-fuego-lento": {
+    "file": "reggaeton-fuego-lento.mp3",
+    "duration": 117.408,
+    "seekOffset": 0,
+    "windowEnd": 25,
+    "beatsInWindow": 77,
+    "windowBpm": 183.7,
+    "groundTruthBpm": 179.1,
+    "valid": true
+  },
+  "techno-deep-ambience": {
+    "file": "techno-deep-ambience.mp3",
+    "duration": 122.540406,
+    "seekOffset": 3,
+    "windowEnd": 28,
+    "beatsInWindow": 53,
+    "windowBpm": 124.9,
+    "groundTruthBpm": 125,
+    "valid": true
+  },
+  "techno-dub-groove": {
+    "file": "techno-dub-groove.mp3",
+    "duration": 101.544,
+    "seekOffset": 32,
+    "windowEnd": 57,
+    "beatsInWindow": 83,
+    "windowBpm": 199.8,
+    "groundTruthBpm": 124,
+    "valid": true
+  },
+  "techno-machine-drum": {
+    "file": "techno-machine-drum.mp3",
+    "duration": 131.568,
+    "seekOffset": 17,
+    "windowEnd": 42,
+    "beatsInWindow": 78,
+    "windowBpm": 187.3,
+    "groundTruthBpm": 146.7,
+    "valid": true
+  },
+  "techno-minimal-01": {
+    "file": "techno-minimal-01.mp3",
+    "duration": 123.689781,
+    "seekOffset": 92,
+    "windowEnd": 117,
+    "beatsInWindow": 55,
+    "windowBpm": 133,
+    "groundTruthBpm": 127.7,
+    "valid": true
+  },
+  "techno-minimal-emotion": {
+    "file": "techno-minimal-emotion.mp3",
+    "duration": 120.084875,
+    "seekOffset": 29,
+    "windowEnd": 54,
+    "beatsInWindow": 65,
+    "windowBpm": 154.4,
+    "groundTruthBpm": 128.9,
+    "valid": true
+  },
+  "trance-goa-mantra": {
+    "file": "trance-goa-mantra.mp3",
+    "duration": 104.385281,
+    "seekOffset": 73,
+    "windowEnd": 98,
+    "beatsInWindow": 90,
+    "windowBpm": 215.3,
+    "groundTruthBpm": 139.6,
+    "valid": true
+  },
+  "trance-infected-vibes": {
+    "file": "trance-infected-vibes.mp3",
+    "duration": 91.167344,
+    "seekOffset": 0,
+    "windowEnd": 25,
+    "beatsInWindow": 59,
+    "windowBpm": 140,
+    "groundTruthBpm": 139.5,
+    "valid": true
+  },
+  "trance-party": {
+    "file": "trance-party.mp3",
+    "duration": 108.042438,
+    "seekOffset": 0,
+    "windowEnd": 25,
+    "beatsInWindow": 61,
+    "windowBpm": 145.7,
+    "groundTruthBpm": 136.4,
+    "valid": true
+  }
+}

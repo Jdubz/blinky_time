@@ -8,6 +8,7 @@ data/beat_sync/*.npy
 
 # Calibration captures and generated audio (large, reproducible via calibrate_mic.py)
 data/calibration/**
+data/calibration_esp32s3*/
 # ...but keep distilled mic profiles (small, not reproducible without hardware)
 !data/calibration/mic_profile*.npz
 !data/calibration/gain_sweep*.npz
