@@ -174,36 +174,40 @@ void SerialConsole::registerFireSettings(FireParams* fp) {
         "Thermal buoyancy (x traversalDim -> LEDs/sec^2)", 0.0f, 10.0f, onParamChanged);
 }
 
-// === HEAT FIRE SETTINGS (Heat buffer) ===
+// === HEAT FIRE SETTINGS (Noise-field fire) ===
 // Prefixed with "hf_" to avoid name collisions with particle fire settings.
-// Pool auto-sized in begin(): heat buffer = width * height bytes.
 void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
     if (!hfp) return;
 
-    auto heatFireParamChanged = []() {};  // Heat buffer params take effect immediately
+    auto heatFireParamChanged = []() {};  // Noise-field params take effect immediately
 
-    settings_.registerFloat("hf_baseheat", &hfp->baseHeat, "heatfire",
-        "Base heat injection level", 0.0f, 1.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_audioheatboost", &hfp->audioHeatBoost, "heatfire",
-        "Energy-driven heat boost", 0.0f, 5.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_beatheatpulse", &hfp->beatHeatPulse, "heatfire",
-        "Phase modulation depth for injection", 0.0f, 1.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_basecooling", &hfp->baseCooling, "heatfire",
-        "Base cooling per row per frame", 0.0f, 0.5f, heatFireParamChanged);
-    settings_.registerFloat("hf_coolingvariation", &hfp->coolingVariation, "heatfire",
-        "Noise-driven spatial cooling variation", 0.0f, 1.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_diffusionspread", &hfp->diffusionSpread, "heatfire",
-        "Horizontal drift range for heat propagation", 0.0f, 3.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_burstheat", &hfp->burstHeat, "heatfire",
-        "Extra heat on transient pulse", 0.0f, 1.0f, heatFireParamChanged);
+    // Intensity threshold
+    settings_.registerFloat("hf_silencethresh", &hfp->silenceThreshold, "heatfire",
+        "Noise threshold at silence (higher = less fire)", 0.3f, 0.8f, heatFireParamChanged);
+    settings_.registerFloat("hf_energydrop", &hfp->energyThresholdDrop, "heatfire",
+        "Max threshold reduction from energy", 0.1f, 0.6f, heatFireParamChanged);
+    settings_.registerFloat("hf_beatpulsedepth", &hfp->beatPulseDepth, "heatfire",
+        "On-beat phase breathing threshold drop", 0.0f, 0.15f, heatFireParamChanged);
+    settings_.registerFloat("hf_burststrength", &hfp->burstStrength, "heatfire",
+        "Transient pulse threshold drop magnitude", 0.0f, 0.3f, heatFireParamChanged);
     settings_.registerFloat("hf_organictransmin", &hfp->organicTransientMin, "heatfire",
         "Min transient to trigger burst", 0.0f, 1.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
-        "Beat sync depth for injection", 0.0f, 1.0f, heatFireParamChanged);
-    settings_.registerFloat("hf_winddrift", &hfp->windDrift, "heatfire",
-        "Audio-reactive horizontal drift", 0.0f, 3.0f, heatFireParamChanged);
+
+    // Flame shape
+    settings_.registerFloat("hf_flamebaseheight", &hfp->flameBaseHeight, "heatfire",
+        "Flame height fraction at silence (0-1)", 0.1f, 0.8f, heatFireParamChanged);
+    settings_.registerFloat("hf_warpstrength", &hfp->warpStrength, "heatfire",
+        "Domain warp amplitude (lateral sway)", 0.0f, 1.0f, heatFireParamChanged);
+
+    // Animation
     settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
-        "Noise animation speed", 0.001f, 0.1f, heatFireParamChanged);
+        "Base noise scroll speed", 0.001f, 0.1f, heatFireParamChanged);
+    settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
+        "Beat sync depth for scroll speed (0-1)", 0.0f, 1.0f, heatFireParamChanged);
+    settings_.registerFloat("hf_densityscrollboost", &hfp->densityScrollBoost, "heatfire",
+        "OnsetDensity extra scroll speed (0=none, 1=+100%)", 0.0f, 1.0f, heatFireParamChanged);
+
+    // Output
     settings_.registerFloat("hf_brightness", &hfp->brightness, "heatfire",
         "Master output brightness (0-1)", 0.0f, 1.0f, heatFireParamChanged);
 }
@@ -569,6 +573,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleDeviceConfigCommand(cmd)) return true;  // Device config commands (v28+)
     if (handleLogCommand(cmd)) return true;
     if (handleDebugCommand(cmd)) return true;     // Debug channel commands
+    if (handleFakeAudioCommand(cmd)) return true; // Fake audio for visual debug
     return false;
 }
 
@@ -1925,6 +1930,44 @@ bool SerialConsole::handleDebugCommand(const char* cmd) {
     }
 
     return false;
+}
+
+// === FAKE AUDIO COMMANDS ===
+// Synthetic 120 BPM 4/4 dance pattern for visual design and debugging.
+// Overrides real audio in renderFrame() when enabled.
+bool SerialConsole::handleFakeAudioCommand(const char* cmd) {
+    if (strncmp(cmd, "fakeaudio", 9) != 0) return false;
+
+    const char* arg = cmd + 9;
+    while (*arg == ' ') arg++;  // skip spaces
+
+    if (*arg == '\0') {
+        // "fakeaudio" — show current state
+        Serial.print(F("fakeaudio: "));
+        Serial.println(fakeAudio_ && fakeAudio_->isEnabled() ? F("ON") : F("off"));
+        Serial.println(F("Usage: fakeaudio on|off"));
+        return true;
+    }
+
+    if (!fakeAudio_) {
+        Serial.println(F("ERROR: FakeAudio not available"));
+        return true;
+    }
+
+    if (strcmp(arg, "on") == 0) {
+        fakeAudio_->enable();
+        Serial.println(F("OK fakeaudio ON — 120 BPM 4/4 synthetic pattern active"));
+        return true;
+    }
+
+    if (strcmp(arg, "off") == 0) {
+        fakeAudio_->disable();
+        Serial.println(F("OK fakeaudio off"));
+        return true;
+    }
+
+    Serial.println(F("Usage: fakeaudio on|off"));
+    return true;
 }
 
 // === BEAT TRACKING COMMANDS ===

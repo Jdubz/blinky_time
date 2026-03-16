@@ -3,12 +3,10 @@
 
 HeatFire::HeatFire()
     : params_(), audio_(), noiseTime_(0.0f), prevPhase_(1.0f), beatCount_(0),
-      downbeatSpreadMult_(1.0f), downbeatColorShift_(0.0f),
-      downbeatCoolSuppress_(0.0f), spawnBias_(0.0f),
-      smoothedEnergy_(0.0f), smoothedThreshold_(0.55f),
-      paletteBias_(0.0f), effectiveCooling_(0.0f), effectiveSpread_(0.0f) {
-    memset(heat_, 0, sizeof(heat_));
-}
+      downbeatSpreadMult_(1.0f),
+      downbeatCoolSuppress_(0.0f), beat3Suppress_(0.0f), beat24Suppress_(0.0f),
+      smoothedEnergy_(0.0f), pulseFlare_(0.0f),
+      paletteBias_(0.0f) {}
 
 bool HeatFire::begin(const DeviceConfig& config) {
     width_ = config.matrix.width;
@@ -18,12 +16,6 @@ bool HeatFire::begin(const DeviceConfig& config) {
     orientation_ = config.matrix.orientation;
     computeDimensionScales();
     lastUpdateMs_ = millis();
-
-    if (numLeds_ > MAX_HEAT_CELLS) return false;
-
-    memset(heat_, 0, sizeof(heat_));
-    nflare_ = 0;
-
     return true;
 }
 
@@ -35,469 +27,290 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     lastUpdateMs_ = currentMs;
     dt = min(dt, 0.05f);
 
-    // Smooth palette bias
+    // Smooth palette bias toward target (energy × rhythmStrength)
+    // Fast ~0.15s time constant so hot yellows appear/fade visibly on each beat
     float targetBias = audio.energy * audio.rhythmStrength;
-    paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 2.0f * dt);
+    paletteBias_ += (targetBias - paletteBias_) * min(1.0f, 6.0f * dt);
 
-    // Decay downbeat transient state
-    downbeatSpreadMult_ = max(1.0f, downbeatSpreadMult_ - 3.0f * dt);
-    downbeatColorShift_ = max(0.0f, downbeatColorShift_ - 2.0f * dt);
-    downbeatCoolSuppress_ = max(0.0f, downbeatCoolSuppress_ - 2.0f * dt);
-    spawnBias_ *= max(0.0f, 1.0f - dt * 3.0f);
+    // Decay all transient effect state
+    downbeatSpreadMult_  = max(1.0f, downbeatSpreadMult_  - 3.00f * dt);  // 1.5 range / 0.5s
+    downbeatCoolSuppress_= max(0.0f, downbeatCoolSuppress_- 2.00f * dt);  // 1.0 range / 0.5s
+    beat3Suppress_       = max(0.0f, beat3Suppress_        - 1.25f * dt); // 0.5 range / 0.4s
+    beat24Suppress_      = max(0.0f, beat24Suppress_       - 0.83f * dt); // 0.25 range / 0.3s
 
-    // Beat detection
+    // Pulse flare: transient → flame shoots upward briefly
+    // burstStrength is reused as the flare height fraction (0–1 of display height)
+    if (audio.pulse > params_.organicTransientMin) {
+        float burst = (audio.pulse - params_.organicTransientMin) /
+                      (1.0f - params_.organicTransientMin);
+        float flare = params_.burstStrength * burst;
+        if (flare > pulseFlare_) pulseFlare_ = flare;
+    }
+    pulseFlare_ = max(0.0f, pulseFlare_ - 4.0f * dt);  // τ ≈ 0.25s
+
+    // Beat detection: accent patterns drive warp expansion + height flares
     if (beatHappened() && audio.rhythmStrength > 0.3f) {
         beatCount_++;
+
+        // Downbeat (beat 1): maximum warp spread + biggest height flare
         if (audio.downbeat > 0.5f) {
-            downbeatSpreadMult_ = 2.5f;
-            downbeatColorShift_ = 1.0f;
+            downbeatSpreadMult_   = 2.5f;
             downbeatCoolSuppress_ = 1.0f;
+            pulseFlare_ = max(pulseFlare_, 0.30f);
         }
-        if (audio.beatInMeasure > 0 && audio.rhythmStrength > 0.5f) {
-            spawnBias_ = (audio.beatInMeasure % 2 == 1) ? -0.25f : 0.25f;
+
+        // Beat 3: secondary accent
+        if (audio.beatInMeasure == 3 && audio.rhythmStrength > 0.5f) {
+            beat3Suppress_ = 0.5f;
+            pulseFlare_ = max(pulseFlare_, 0.18f);
+        }
+
+        // Beats 2 & 4: lighter accent
+        if ((audio.beatInMeasure == 2 || audio.beatInMeasure == 4) &&
+                audio.rhythmStrength > 0.5f) {
+            beat24Suppress_ = 0.25f;
+            pulseFlare_ = max(pulseFlare_, 0.10f);
         }
     }
     prevPhase_ = audio.phase;
 
-    // Advance scroll time — this is the "fire speed"
+    // Advance noise scroll time — this is the visual "fire speed"
     // Organic: moderate scroll. Music: faster, phase-modulated.
+    // Both boosted by onset density (more onsets → faster, jitterier flicker).
     float phasePulse = audio.phaseToPulse();
+    float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
+    float densityBoost = params_.densityScrollBoost * densityNorm;
 
-    float organicScroll = params_.noiseSpeed * (1.0f + 0.5f * audio.energy);
-    float musicScroll = params_.noiseSpeed * (1.5f + audio.energy)
-                      * ((1.0f - params_.musicBeatDepth * 0.5f) + params_.musicBeatDepth * 0.5f * phasePulse);
+    float organicScroll = params_.noiseSpeed * (1.0f + 0.5f * audio.energy + densityBoost);
+    float musicScroll   = params_.noiseSpeed * (1.5f + audio.energy + densityBoost)
+                        * ((1.0f - params_.musicBeatDepth * 0.5f)
+                           + params_.musicBeatDepth * 0.5f * phasePulse);
     noiseTime_ += organicScroll * (1.0f - audio.rhythmStrength)
-                + musicScroll * audio.rhythmStrength;
+                + musicScroll   * audio.rhythmStrength;
+
     // Wrap to prevent float precision loss at large values.
-    // Simplex noise has no exact period, but wrapping at 1000 prevents
-    // the gradual degradation that causes fire to fade over minutes.
+    // Simplex noise has no exact period but wrapping at 1000 prevents the
+    // gradual degradation that causes fire to fade over minutes.
     if (noiseTime_ > 1000.0f) noiseTime_ -= 1000.0f;
 
-    // Noise-field fire: sample scrolling noise, threshold to create tongues
-    renderNoiseFireField(matrix, audio);
+    renderNoiseFireField(matrix, audio, dt);
 }
 
 void HeatFire::reset() {
-    memset(heat_, 0, sizeof(heat_));
-    nflare_ = 0;
-    noiseTime_ = 0.0f;
-    prevPhase_ = 1.0f;
-    beatCount_ = 0;
-    downbeatSpreadMult_ = 1.0f;
-    downbeatColorShift_ = 0.0f;
+    noiseTime_            = 0.0f;
+    prevPhase_            = 1.0f;
+    beatCount_            = 0;
+    downbeatSpreadMult_   = 1.0f;
     downbeatCoolSuppress_ = 0.0f;
-    spawnBias_ = 0.0f;
-    smoothedEnergy_ = 0.0f;
-    smoothedThreshold_ = 0.55f;
-    paletteBias_ = 0.0f;
-    audio_ = AudioControl();
-
-    nflare_ = 0;
+    beat3Suppress_        = 0.0f;
+    beat24Suppress_       = 0.0f;
+    smoothedEnergy_       = 0.0f;
+    pulseFlare_           = 0.0f;
+    paletteBias_          = 0.0f;
+    audio_                = AudioControl();
 }
 
 // ============================================================================
-// Noise-field fire: scrolling thresholded noise with vertical gradient
+// Noise-field fire: scrolling noise with height-adaptive threshold
+//
+// Key design principle: the threshold *increases* toward the flame tip rather
+// than the noise value being multiplied by a mask. This means only the
+// brightest noise peaks can exist near the top — naturally forming tapered
+// tongue tips rather than hitting a hard ceiling.
 // ============================================================================
 
-void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& audio) {
-    float phasePulse = audio.phaseToPulse();
+void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& audio, float dt) {
+    float phasePulse  = audio.phaseToPulse();
     float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
 
-    // Smooth energy: fire has thermal inertia. Rises fast (0.15s), falls slow (0.8s).
-    // This prevents strobe and ensures fire doesn't vanish between beats.
-    float dt = 1.0f / 60.0f;  // Approximate — exact dt computed above but not passed here
-    float riseRate = 6.0f * dt;   // ~0.15s to rise
-    float fallRate = 1.2f * dt;   // ~0.8s to fall
+    // Smooth energy: asymmetric thermal inertia.
+    // Fast rise (~0.1s): fire responds immediately to hits.
+    // Moderate fall (~0.25s): flame clearly drops between beats at 120+ BPM.
+    float riseRate = 10.0f * dt;
+    float fallRate =  4.0f * dt;
     if (audio.energy > smoothedEnergy_) {
-        smoothedEnergy_ += (audio.energy - smoothedEnergy_) * riseRate;
+        smoothedEnergy_ += (audio.energy - smoothedEnergy_) * min(1.0f, riseRate);
     } else {
-        smoothedEnergy_ += (audio.energy - smoothedEnergy_) * fallRate;
+        smoothedEnergy_ += (audio.energy - smoothedEnergy_) * min(1.0f, fallRate);
     }
 
-    // Target threshold from smoothed energy (no raw per-frame jumps).
-    // Wide swing for energy-only devices (ESP32-S3 has no beat NN yet).
-    // Silence: 0.60 (small base fire). Loud: 0.15 (roaring).
-    float targetThreshold = 0.60f - 0.45f * smoothedEnergy_;
+    // Threshold: energy drives density/brightness. Keep changes modest so
+    // the whole display doesn't pop at once — height change is the primary
+    // visual beat response, not density.
+    float threshold = params_.silenceThreshold
+                    - params_.energyThresholdDrop * smoothedEnergy_;
 
-    // Phase breathing: SUBTLE modulation (±0.05), not binary on/off.
-    // Only when rhythm is strong.
-    if (audio.rhythmStrength > 0.3f) {
-        targetThreshold -= 0.05f * phasePulse * audio.rhythmStrength;
-    }
+    // Small beat-accent threshold dips (complement the height flare)
+    if (downbeatCoolSuppress_ > 0.0f) threshold -= 0.06f * downbeatCoolSuppress_;
+    if (beat3Suppress_ > 0.0f)        threshold -= 0.03f * beat3Suppress_;
+    if (beat24Suppress_ > 0.0f)       threshold -= 0.015f * beat24Suppress_;
 
-    // Pulse burst: instant but small threshold drop on transients
-    if (audio.pulse > params_.organicTransientMin) {
-        float burst = (audio.pulse - params_.organicTransientMin) /
-                      (1.0f - params_.organicTransientMin);
-        targetThreshold -= params_.burstHeat * burst * 0.08f;
-    }
+    threshold = constrain(threshold, 0.20f, 0.65f);
 
-    // Downbeat: moderate threshold drop (decays via downbeatCoolSuppress_)
-    if (downbeatCoolSuppress_ > 0.0f) {
-        targetThreshold -= 0.10f * downbeatCoolSuppress_;
-    }
+    // Noise spatial scales
+    float xScale = 0.12f + 0.04f * densityNorm;  // Tongue width (~4 tongues across 32px)
+    float yScale = 0.15f;                          // Vertical feature density
 
-    targetThreshold = constrain(targetThreshold, 0.15f, 0.65f);
-
-    // Smooth the threshold itself to prevent any remaining jitter
-    smoothedThreshold_ += (targetThreshold - smoothedThreshold_) * 4.0f * dt;  // ~0.25s
-    float threshold = smoothedThreshold_;
-
-    // Noise scales — controls tongue width and vertical structure
-    // Lower xScale = wider tongues, higher = narrower
-    float xScale = 0.15f + 0.05f * densityNorm;  // Slightly narrower when dense
-    float yScale = 0.08f;  // Stretched vertically (tongues are tall)
-
-    // Scroll offset: noiseTime_ provides upward movement
-    float scrollY = noiseTime_;
-
-    // Domain warp: slight horizontal wobble for organic sway
-    // Audio-reactive: more wobble when loud/rhythmic
-    float warpAmount = 0.3f + 0.4f * audio.energy * downbeatSpreadMult_;
+    // Domain warp: slow sway (0.2× scroll rate keeps it smooth, not jerky)
+    float warpAmount = params_.warpStrength * (0.75f + audio.energy * downbeatSpreadMult_);
 
     if (layout_ == LINEAR_LAYOUT) {
-        // 1D: horizontal noise with scroll
+        // 1D strip: simple threshold + contrast
         for (int x = 0; x < width_; x++) {
             float nx = x * xScale;
-            float val = SimplexNoise::noise3D_01(nx, scrollY, 0.0f);
-            // Add second octave for detail
-            val = val * 0.7f + SimplexNoise::noise3D_01(nx * 2.5f, scrollY * 1.5f, 3.0f) * 0.3f;
-
+            float val = SimplexNoise::noise3D_01(nx, noiseTime_, 0.0f) * 0.7f
+                      + SimplexNoise::noise3D_01(nx * 2.5f, noiseTime_ * 1.5f, 3.0f) * 0.3f;
             if (val > threshold) {
                 float intensity = (val - threshold) / (1.0f - threshold);
-                intensity *= intensity;  // Square for contrast
+                intensity *= intensity;
                 uint32_t color = intensityToFireColor(intensity);
-                uint8_t r = (color >> 16) & 0xFF;
-                uint8_t g = (color >> 8) & 0xFF;
-                uint8_t b = color & 0xFF;
-                matrix.setPixel(x, 0, r, g, b);
+                matrix.setPixel(x, 0, (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
             }
-            // Below threshold = black (default from clear)
         }
     } else {
-        // 2D: scrolling noise field with vertical gradient mask
+        // Flame height: three additive contributions —
+        //   1. Energy level  (slow background variation, capped at 40% of range)
+        //   2. Phase breath  (guaranteed per-beat oscillation — primary music sync)
+        //   3. Pulse flare   (sharp burst on transient/downbeat events)
+        // Energy is capped so the flame never "locks" at full height between beats;
+        // phase breathing always has room to visibly rise and fall.
+        float phaseBreath = params_.beatPulseDepth * phasePulse * audio.rhythmStrength;
+        float flameHeight = params_.flameBaseHeight
+                          + (1.0f - params_.flameBaseHeight) * smoothedEnergy_ * 0.4f
+                          + phaseBreath
+                          + pulseFlare_;
+        flameHeight = constrain(flameHeight, 0.0f, 1.0f);
+
+        // Beat brightness multiplier: dims to ~50% between beats, peaks at ~160% on beat.
+        // Formula: (1 - 0.6*rs) + 1.3*rs*pp  where rs=rhythmStrength, pp=phasePulse
+        //   on-beat  (pp=1, rs=0.85): 0.49 + 1.105 = 1.60
+        //   mid-beat (pp=0, rs=0.85): 0.49 + 0.000 = 0.49
+        //   organic  (rs=0):          1.00 + 0.000 = 1.00  (no modulation)
+        float brightMult = (1.0f - 0.72f * audio.rhythmStrength)
+                         + 1.3f * audio.rhythmStrength * phasePulse;
+
+        // Render zone extends 0.20 above the nominal flame height so tongues can
+        // flicker upward past the "expected" boundary. The adaptive threshold prevents
+        // widespread fire in this extension — only bright peaks poke through.
+        float zoneHeight = min(1.0f, flameHeight + 0.20f);
+        float zoneTop    = 1.0f - zoneHeight;  // normalizedY where zone begins
+
         for (int y = 0; y < height_; y++) {
-            // Vertical gradient: probability of fire decreases toward top.
-            // normalizedY: 0.0 at top, 1.0 at bottom.
-            float normalizedY = (float)y / (height_ - 1);
-            // Height mask: full intensity at bottom, fades to zero at top.
-            // Uses smoothed energy so flames grow/shrink gradually.
-            // Silence: flames reach ~40% height. Loud: full height.
-            float flameHeight = 0.4f + 0.6f * smoothedEnergy_;
-            float heightMask = constrain((normalizedY - (1.0f - flameHeight)) / flameHeight, 0.0f, 1.0f);
-            // Gentle falloff (not squared — lets flames reach higher)
-            heightMask = sqrtf(heightMask);
+            float normalizedY = (float)y / (height_ - 1);  // 0=top, 1=bottom
+
+            // heightProgress: 0.0 at zone top (flame tip region), 1.0 at bottom (base)
+            float heightProgress = constrain(
+                (normalizedY - zoneTop) / max(zoneHeight, 0.001f), 0.0f, 1.0f);
+
+            // Height-adaptive threshold: quadratic rise toward 1.0 near the tip.
+            // At base: localThreshold = threshold (normal density).
+            // At tip:  localThreshold → 1.0 (only the very brightest peaks survive).
+            // This creates natural tongue taper instead of a hard ceiling.
+            float tipFade = (1.0f - heightProgress) * (1.0f - heightProgress);
+            float localThreshold = threshold + (1.0f - threshold) * tipFade;
 
             for (int x = 0; x < width_; x++) {
-                // Domain warp: horizontal wobble from a separate noise field
-                float warp = SimplexNoise::noise3D(x * 0.1f, y * 0.15f, noiseTime_ * 0.7f) * warpAmount;
+                // Domain warp: gentle horizontal sway, slow time evolution
+                float warp = SimplexNoise::noise3D(
+                    x * 0.1f, y * 0.15f, noiseTime_ * 0.2f) * warpAmount;
 
                 float nx = (x + warp) * xScale;
-                // Scroll upward: add scrollY (Y=0 is top, increasing Y = down,
-                // so adding to noise Y makes the pattern move upward on screen)
-                float ny = (y * yScale) + scrollY;
+                float ny = (y * yScale) + noiseTime_;  // +noiseTime_ scrolls upward
 
-                // Two octaves of noise for organic detail
-                float val = SimplexNoise::noise3D_01(nx, ny, 1.0f) * 0.65f
+                // Two octaves: large structure (65%) + fine flicker detail (35%)
+                float val = SimplexNoise::noise3D_01(nx,        ny,        1.0f) * 0.65f
                           + SimplexNoise::noise3D_01(nx * 2.5f, ny * 2.0f, 4.0f) * 0.35f;
 
-                // Apply height mask — flames fade toward top
-                val *= heightMask;
-
-                // Left/right rocking bias from beatInMeasure
-                if (spawnBias_ != 0.0f) {
-                    float normalizedX = (float)x / (width_ - 1) - 0.5f;
-                    val *= 1.0f + spawnBias_ * normalizedX * 2.0f;
+                if (val > localThreshold) {
+                    float intensity = (val - localThreshold) / (1.0f - localThreshold);
+                    // Dim toward tip: gradual brightness gradient from base to tongue tips
+                    intensity *= sqrtf(heightProgress);
+                    // Quadratic boost: dim pixels collapse to black, bright pixels pop.
+                    // Creates hard separation between tongue cores and background.
+                    intensity = min(1.0f, intensity * intensity * 3.0f);
+                    if (intensity > 0.01f) {
+                        uint32_t color = intensityToFireColor(intensity);
+                        // Beat breathing: dims to ~50% between beats, ~160% on beat.
+                        // Applied to final color so boost isn't lost to the 1.0 intensity clamp.
+                        // Organic mode (rhythmStrength=0): brightMult stays at 1.0.
+                        uint8_t r = min(255, (int)(((color >> 16) & 0xFF) * brightMult));
+                        uint8_t g = min(255, (int)(((color >> 8)  & 0xFF) * brightMult));
+                        uint8_t b = min(255, (int)( (color        & 0xFF) * brightMult));
+                        matrix.setPixel(x, y, r, g, b);
+                    }
                 }
-
-                if (val > threshold) {
-                    float intensity = (val - threshold) / (1.0f - threshold);
-                    intensity = min(1.0f, intensity * 1.5f);  // Boost contrast
-                    uint32_t color = intensityToFireColor(intensity);
-                    uint8_t r = (color >> 16) & 0xFF;
-                    uint8_t g = (color >> 8) & 0xFF;
-                    uint8_t b = color & 0xFF;
-                    matrix.setPixel(x, y, r, g, b);
-                }
-                // Below threshold = black
+                // Below localThreshold = black (matrix cleared before generate())
             }
         }
     }
 }
+
+// ============================================================================
+// Color: dual-palette warm/hot blend with audio-driven gamma
+// Mirrors particle Fire's particleColor() for visual consistency.
+// ============================================================================
 
 uint32_t HeatFire::intensityToFireColor(float intensity) const {
-    // Map 0-1 intensity through fire palette
-    // 0.0 = dark red, 0.5 = orange, 1.0 = bright yellow
-    uint8_t r, g, b;
+    // Audio-driven gamma: paletteBias_ low → gamma 1.1 (more ember detail at low energy)
+    //                     paletteBias_ high → gamma 0.9 (brighter at high energy/rhythm)
+    float gamma = 1.1f - 0.2f * paletteBias_;
+    float normalized = powf(intensity, gamma);
+    uint8_t remapped = (uint8_t)(normalized * 255.0f);
 
-    if (intensity < 0.33f) {
-        // Dark red to red
-        float t = intensity / 0.33f;
-        r = (uint8_t)(60 + 195 * t);
-        g = 0;
-        b = 0;
-    } else if (intensity < 0.67f) {
-        // Red to orange
-        float t = (intensity - 0.33f) / 0.34f;
-        r = 255;
-        g = (uint8_t)(160 * t);
-        b = 0;
-    } else {
-        // Orange to yellow
-        float t = (intensity - 0.67f) / 0.33f;
-        r = 255;
-        g = (uint8_t)(160 + 80 * t);
-        b = (uint8_t)(30 * t);
-    }
+    // Two palettes blended by paletteBias_:
+    //   low bias  (quiet, arrhythmic): warm campfire
+    //   high bias (loud, rhythmic):    hot white-yellow
+    // Hot palette stays in warm hues — no blue/white wash-out under direct blending.
+    struct ColorStop { uint8_t position, r, g, b; };
 
-    // Downbeat color temperature shift
-    if (downbeatColorShift_ > 0.0f) {
-        float s = downbeatColorShift_;
-        r = (uint8_t)min(255, (int)r + (int)(s * 20));
-        g = (uint8_t)min(255, (int)g + (int)(s * 40));
-        b = (uint8_t)min(255, (int)b + (int)(s * 60));
-    }
-
-    // Master brightness
-    float br = params_.brightness;
-    r = (uint8_t)(r * br);
-    g = (uint8_t)(g * br);
-    b = (uint8_t)(b * br);
-
-    return ((uint32_t)r << 16) | ((uint32_t)g << 8) | b;
-}
-
-// ============================================================================
-// Legacy heat buffer functions (kept for LINEAR_LAYOUT fallback)
-// ============================================================================
-
-void HeatFire::propagateHeat2D() {
-    // Shift heat UP one row and subtract 1 (simple decay).
-    // Each cell copies from the cell directly below, minus 1.
-    // No lateral spreading — columns are independent.
-    // Flame tongue structure comes entirely from flare injection positions.
-    for (int y = 0; y < height_ - 1; y++) {
-        for (int x = 0; x < width_; x++) {
-            uint8_t below = heat_[(y + 1) * width_ + x];
-            heat_[y * width_ + x] = (below > 1) ? below - 1 : 0;
-        }
-    }
-
-    // Clear bottom row — flares will inject heat where needed.
-    // Without this, residual heat from flares persists forever.
-    int bottomY = height_ - 1;
-    for (int x = 0; x < width_; x++) {
-        uint8_t h = heat_[bottomY * width_ + x];
-        heat_[bottomY * width_ + x] = (h > 2) ? h - 2 : 0;
-    }
-}
-
-void HeatFire::propagateHeat1D() {
-    // 1D: shift and decay, with random source positions
-    uint8_t temp[MAX_HEAT_CELLS];
-    memset(temp, 0, sizeof(temp));
-    for (int x = 0; x < width_; x++) {
-        int drift = random(0, 3) - 1;
-        int srcX = constrain(x + drift, 0, width_ - 1);
-        uint8_t srcHeat = heat_[srcX];
-        temp[x] = (srcHeat > 0) ? srcHeat - 1 : 0;
-    }
-    memcpy(heat_, temp, width_);
-}
-
-// ============================================================================
-// Flare system — this is what creates the flame tongues
-// ============================================================================
-
-void HeatFire::updateFlares(const AudioControl& audio) {
-    // Update existing flares: re-apply glow at reduced intensity, remove dead ones
-    int i = 0;
-    while (i < nflare_) {
-        int x = flares_[i] & 0xFF;
-        int y = (flares_[i] >> 8) & 0xFF;
-        int z = (flares_[i] >> 16) & 0xFF;
-
-        applyGlow(x, y, z);
-
-        if (z > 1) {
-            flares_[i] = (flares_[i] & 0xFFFF) | ((z - 1) << 16);
-            i++;
-        } else {
-            // Flare is dead — remove by shifting
-            for (int j = i + 1; j < nflare_; j++) {
-                flares_[j - 1] = flares_[j];
-            }
-            nflare_--;
-        }
-    }
-
-    // Spawn new flares — audio controls frequency and intensity
-    float phasePulse = audio.phaseToPulse();
-
-    // Flare chance: organic vs music blend
-    // Scale with display width — wider displays need more flares
-    float widthScale = width_ / 8.0f;  // 1.0 for hat-ish, 2.0 for bucket, 4.0 for 32x32
-    float organicChance = params_.baseHeat * 80.0f * widthScale;
-    float musicChance = params_.baseHeat * 60.0f * widthScale
-                      * ((1.0f - params_.musicBeatDepth) + params_.musicBeatDepth * phasePulse)
-                      + params_.audioHeatBoost * audio.energy * 50.0f * widthScale;
-    float flareChance = organicChance * (1.0f - audio.rhythmStrength)
-                      + musicChance * audio.rhythmStrength;
-
-    // Transient burst: extra flares
-    if (audio.pulse > params_.organicTransientMin) {
-        float burstStrength = (audio.pulse - params_.organicTransientMin) /
-                              (1.0f - params_.organicTransientMin);
-        flareChance += params_.burstHeat * burstStrength * 60.0f;
-    }
-
-    // Beat burst
-    if (beatHappened() && audio.rhythmStrength > 0.3f) {
-        flareChance += params_.burstHeat * audio.rhythmStrength * 40.0f;
-
-        // Downbeat: max flare burst
-        if (audio.downbeat > 0.5f) {
-            flareChance += params_.burstHeat * audio.downbeat * 50.0f;
-        }
-    }
-
-    // Max simultaneous flares scales with display width
-    int maxFlares = min((int)MAX_FLARES, max(4, width_ / 2));
-
-    if (nflare_ < maxFlares && random(1, 101) <= (int)flareChance) {
-        // Spawn position: random x with beat-rocking bias
-        int x = random(0, width_);
-        float normalizedX = (float)x / max(1, width_ - 1) - 0.5f;
-        float biasMod = 1.0f + spawnBias_ * normalizedX * 4.0f;
-        if (biasMod > 0.2f) {
-            int flareRows = max(1, height_ / 5);  // Bottom ~20% for flare sources
-            int y = height_ - 1 - random(0, flareRows);
-            int z = NCOLORS - 1;  // Start at max intensity
-
-            flares_[nflare_++] = (z << 16) | (y << 8) | (x & 0xFF);
-            applyGlow(x, y, z);
-        }
-    }
-}
-
-void HeatFire::applyGlow(int x, int y, int z) {
-    // Vertically-biased glow — fire tongues are tall and narrow, not round blobs.
-    // Horizontal decay is 3× faster than vertical, creating elongated tongue shapes.
-    // Heat only extends UPWARD from flare position (fire rises, doesn't go down).
-    int radiusX = z * 10 / (FLARE_DECAY * 3) + 1;  // Narrow horizontal
-    int radiusY = z * 10 / FLARE_DECAY + 1;         // Tall vertical
-
-    for (int dy = -radiusY; dy <= 0; dy++) {  // Only upward (dy <= 0)
-        for (int dx = -radiusX; dx <= radiusX; dx++) {
-            int px = x + dx;
-            int py = y + dy;
-            if (px >= 0 && px < width_ && py >= 0 && py < height_) {
-                // Anisotropic distance: horizontal penalized 3×
-                int dist = isqrt(dx * dx * 9 + dy * dy);
-                int decayed = (FLARE_DECAY * dist + 5) / 10;
-                uint8_t n = (z > decayed) ? z - decayed : 0;
-                int idx = py * width_ + px;
-                if (n > heat_[idx]) {
-                    heat_[idx] = n;
-                }
-            }
-        }
-    }
-
-    // Also set the flare origin cell to max (ensures bright base)
-    int idx = y * width_ + x;
-    if (z > heat_[idx]) heat_[idx] = z;
-}
-
-uint32_t HeatFire::isqrt(uint32_t n) {
-    if (n < 2) return n;
-    uint32_t small = isqrt(n >> 2) << 1;
-    uint32_t large = small + 1;
-    return (large * large > n) ? small : large;
-}
-
-// ============================================================================
-// Heat injection (bottom row maintenance + audio)
-// ============================================================================
-
-void HeatFire::injectHeat(const AudioControl& audio) {
-    if (layout_ == LINEAR_LAYOUT) {
-        // 1D: inject at 2-4 source positions
-        int numSources = 2 + (int)(audio.energy * 2.0f);
-        for (int i = 0; i < numSources; i++) {
-            float noisePos = SimplexNoise::noise3D_01(i * 3.7f, noiseTime_ * 0.3f, 0.0f);
-            int srcX = (int)(noisePos * (width_ - 1));
-            srcX = constrain(srcX + (int)(spawnBias_ * width_ * 0.25f), 0, width_ - 1);
-            for (int dx = -1; dx <= 1; dx++) {
-                int xx = constrain(srcX + dx, 0, width_ - 1);
-                uint8_t val = (dx == 0) ? NCOLORS - 1 : NCOLORS - 3;
-                if (val > heat_[xx]) heat_[xx] = val;
-            }
-        }
-    }
-    // 2D injection is handled by the flare system + bottom row maintenance in propagateHeat2D
-}
-
-// ============================================================================
-// Rendering
-// ============================================================================
-
-void HeatFire::renderHeat(PixelMatrix& matrix) {
-    if (layout_ == LINEAR_LAYOUT) {
-        for (int x = 0; x < width_; x++) {
-            uint32_t color = heatToColor(heat_[x]);
-            uint8_t r = (color >> 16) & 0xFF;
-            uint8_t g = (color >> 8) & 0xFF;
-            uint8_t b = color & 0xFF;
-            matrix.setPixel(x, 0, r, g, b);
-        }
-    } else {
-        for (int y = 0; y < height_; y++) {
-            for (int x = 0; x < width_; x++) {
-                uint32_t color = heatToColor(heat_[y * width_ + x]);
-                uint8_t r = (color >> 16) & 0xFF;
-                uint8_t g = (color >> 8) & 0xFF;
-                uint8_t b = color & 0xFF;
-                matrix.setPixel(x, y, r, g, b);
-            }
-        }
-    }
-}
-
-uint32_t HeatFire::heatToColor(uint8_t heat) const {
-    if (heat == 0) return 0;  // Black — most cells should be black
-
-    // Map heat (0-NCOLORS) through fire color palette
-    // Use a fixed 11-stop palette (matching MatrixFireFast) for authentic fire look
-    static const uint32_t fireColors[] = {
-        0x000000,  // 0: black
-        0x100000,  // 1: very dark red
-        0x300000,  // 2: dark red
-        0x600000,  // 3: medium red
-        0x800000,  // 4: red
-        0xA00000,  // 5: bright red
-        0xC02000,  // 6: red-orange
-        0xC04000,  // 7: orange
-        0xC06000,  // 8: yellow-orange
-        0xC08000,  // 9: yellow
-        0x807080   // 10: white/hot
+    // Warm palette: black → deep red → red → orange → yellow-orange → bright yellow
+    static const ColorStop warm[] = {
+        {  0,   0,   0,   0},
+        { 51,  64,   0,   0},
+        {102, 255,   0,   0},
+        {153, 255, 128,   0},
+        {204, 255, 200,   0},
+        {255, 255, 255,  64}
     };
 
-    uint8_t idx = min((int)heat, NCOLORS - 1);
-    uint32_t baseColor = fireColors[idx];
-    uint8_t r = (baseColor >> 16) & 0xFF;
-    uint8_t g = (baseColor >> 8) & 0xFF;
-    uint8_t b = baseColor & 0xFF;
+    // Hot palette: black → red → bright orange → intense yellow → hot yellow-white
+    static const ColorStop hot[] = {
+        {  0,   0,   0,   0},
+        { 51, 128,   8,   0},
+        {102, 255,  80,   0},
+        {153, 255, 180,  10},
+        {204, 255, 230,  40},
+        {255, 255, 255, 100}
+    };
 
-    // Downbeat color temperature shift
-    if (downbeatColorShift_ > 0.0f) {
-        float s = downbeatColorShift_;
-        r = (uint8_t)min(255, (int)r + (int)(s * 30));
-        g = (uint8_t)min(255, (int)g + (int)(s * 40));
-        b = (uint8_t)min(255, (int)b + (int)(s * 60));
-    }
+    const int paletteSize = 6;
 
-    // Master brightness scale
+    auto lookup = [&](const ColorStop* pal, uint8_t val,
+                      uint8_t& ro, uint8_t& go, uint8_t& bo) {
+        int lo = 0, hi = 1;
+        for (int i = 0; i < paletteSize - 1; i++) {
+            if (val >= pal[i].position && val <= pal[i + 1].position) {
+                lo = i; hi = i + 1; break;
+            }
+        }
+        float range = pal[hi].position - pal[lo].position;
+        float t = (range > 0) ? (float)(val - pal[lo].position) / range : 0.0f;
+        ro = (uint8_t)(pal[lo].r + t * (pal[hi].r - pal[lo].r));
+        go = (uint8_t)(pal[lo].g + t * (pal[hi].g - pal[lo].g));
+        bo = (uint8_t)(pal[lo].b + t * (pal[hi].b - pal[lo].b));
+    };
+
+    uint8_t wr, wg, wb, hr, hg, hb;
+    lookup(warm, remapped, wr, wg, wb);
+    lookup(hot,  remapped, hr, hg, hb);
+
+    // Hot palette blends in above paletteBias_ = 0.2 so yellows appear at moderate energy
+    float blend = constrain((paletteBias_ - 0.2f) / 0.6f, 0.0f, 1.0f);
+    uint8_t r = (uint8_t)(wr + blend * (hr - wr));
+    uint8_t g = (uint8_t)(wg + blend * (hg - wg));
+    uint8_t b = (uint8_t)(wb + blend * (hb - wb));
+
+    // Master brightness
     float br = params_.brightness;
     r = (uint8_t)(r * br);
     g = (uint8_t)(g * br);
