@@ -543,9 +543,7 @@ private:
 
     // === NN BEAT ACTIVATION ===
     FrameBeatNN frameBeatNN_;
-    bool nnActive_ = false;      // Cached per-update: frameBeatNN_.isReady() (OnsetNN)
-    bool rhythmActive_ = false;  // Cached per-update: frameBeatNN_.isRhythmReady()
-    uint8_t rhythmFrameCounter_ = 0;  // Counts frames for RhythmNN scheduling (every 2nd)
+    bool nnActive_ = false;      // Cached per-update: frameBeatNN_.isReady()
 
     // === RHYTHM TRACKING STATE ===
 

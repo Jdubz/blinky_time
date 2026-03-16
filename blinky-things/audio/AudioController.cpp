@@ -156,19 +156,12 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 4. Get onset strength for rhythm analysis
-    //    OnsetNN inference every frame (sole ODF source).
-    //    RhythmNN inference every 2nd frame (downbeat detection, max 32ms stale).
+    //    Single NN model: beat activation (ch0) = ODF, downbeat (ch1) cached.
     float onsetStrength = 0.0f;
 
     if (frameBeatNN_.isReady()) {
         if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
-            onsetStrength = frameBeatNN_.inferOnset(spectral_.getRawMelBands());
-            // RhythmNN: run every 2nd frame (31.25 Hz). inferOnset() already
-            // pushed the mel frame into RhythmNN's window buffer.
-            if (++rhythmFrameCounter_ >= 2) {
-                frameBeatNN_.inferRhythm();
-                rhythmFrameCounter_ = 0;
-            }
+            onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
             spectral_.resetFrameReady();
         } else {
             onsetStrength = mic_.getLevel();
@@ -231,7 +224,6 @@ const AudioControl& AudioController::update(float dt) {
     // Cache NN-active state once per update — used by ODF smoothing, contrast,
     // ACF mean subtraction, and CBSS alpha adaptation.
     nnActive_ = frameBeatNN_.isReady();
-    rhythmActive_ = frameBeatNN_.isRhythmReady();
     frameBeatNN_.setProfileEnabled(nnProfile);
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
@@ -1860,12 +1852,11 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     // Smooth NN downbeat activation with EMA for beat-synchronized sampling.
     // The smoothed value is sampled in detectBeat() when a beat fires, so
     // downbeat only triggers on actual beats (not between beats).
-    // Uses RhythmNN output (separate model from OnsetNN since v69).
-    if (rhythmActive_ && frameBeatNN_.hasDownbeatOutput()) {
+    if (nnActive_ && frameBeatNN_.hasDownbeatOutput()) {
         float rawDownbeat = frameBeatNN_.getLastDownbeat();
         downbeatSmoothed_ = downbeatSmoothed_ * (1.0f - dbEmaAlpha) + rawDownbeat * dbEmaAlpha;
     } else {
-        downbeatSmoothed_ *= 0.9f;  // Decay when no RhythmNN
+        downbeatSmoothed_ *= 0.9f;  // Decay when no downbeat output
     }
     // Note: control_.downbeat is set in detectBeat(), not here.
 }

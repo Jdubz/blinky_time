@@ -1605,8 +1605,6 @@ void SerialConsole::streamTick() {
             // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
             Serial.print(F(",\"nn\":"));
             Serial.print(audioCtrl_->getFrameBeatNN().isReady() ? 1 : 0);
-            Serial.print(F(",\"nnr\":"));
-            Serial.print(audioCtrl_->getFrameBeatNN().isRhythmReady() ? 1 : 0);
             if (audioCtrl_->getFrameBeatNN().hasDownbeatOutput()) {
                 Serial.print(F(",\"nndb\":"));
                 Serial.print(audioCtrl_->getFrameBeatNN().getLastDownbeat(), 4);
