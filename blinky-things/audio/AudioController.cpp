@@ -156,12 +156,19 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 4. Get onset strength for rhythm analysis
-    //    FrameBeatNN inference on raw mel bands (sole ODF source).
+    //    OnsetNN inference every frame (sole ODF source).
+    //    RhythmNN inference every 2nd frame (downbeat detection, max 32ms stale).
     float onsetStrength = 0.0f;
 
     if (frameBeatNN_.isReady()) {
         if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
-            onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
+            onsetStrength = frameBeatNN_.inferOnset(spectral_.getRawMelBands());
+            // RhythmNN: run every 2nd frame (31.25 Hz). inferOnset() already
+            // pushed the mel frame into RhythmNN's window buffer.
+            if (++rhythmFrameCounter_ >= 2) {
+                frameBeatNN_.inferRhythm();
+                rhythmFrameCounter_ = 0;
+            }
             spectral_.resetFrameReady();
         } else {
             onsetStrength = mic_.getLevel();
@@ -224,13 +231,14 @@ const AudioControl& AudioController::update(float dt) {
     // Cache NN-active state once per update — used by ODF smoothing, contrast,
     // ACF mean subtraction, and CBSS alpha adaptation.
     nnActive_ = frameBeatNN_.isReady();
+    rhythmActive_ = frameBeatNN_.isRhythmReady();
     frameBeatNN_.setProfileEnabled(nnProfile);
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
-    // Bypass when NN is active — the FC model's sliding window already provides
+    // Bypass when NN is active — OnsetNN's sliding window already provides
     // temporal context. Additional smoothing blurs activation peaks that the CBSS
     // needs sharp. (madmom/BeatNet don't smooth NN output.)
-    // cppcheck-suppress knownConditionTrueFalse -- nnActive_ is always false until FrameBeatNN is trained and loaded
+    // cppcheck-suppress knownConditionTrueFalse -- nnActive_ is always false until OnsetNN model is loaded
     if (nnActive_) {
         lastSmoothedOnset_ = onsetStrength;
     } else {
@@ -1852,11 +1860,12 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     // Smooth NN downbeat activation with EMA for beat-synchronized sampling.
     // The smoothed value is sampled in detectBeat() when a beat fires, so
     // downbeat only triggers on actual beats (not between beats).
-    if (nnActive_ && frameBeatNN_.hasDownbeatOutput()) {
+    // Uses RhythmNN output (separate model from OnsetNN since v69).
+    if (rhythmActive_ && frameBeatNN_.hasDownbeatOutput()) {
         float rawDownbeat = frameBeatNN_.getLastDownbeat();
         downbeatSmoothed_ = downbeatSmoothed_ * (1.0f - dbEmaAlpha) + rawDownbeat * dbEmaAlpha;
     } else {
-        downbeatSmoothed_ *= 0.9f;  // Decay when no NN
+        downbeatSmoothed_ *= 0.9f;  // Decay when no RhythmNN
     }
     // Note: control_.downbeat is set in detectBeat(), not here.
 }
