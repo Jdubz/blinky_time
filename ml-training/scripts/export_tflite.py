@@ -321,13 +321,18 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
 
 def build_tf_frame_conv1d(n_mels: int, channels: list[int],
                           kernel_sizes: list[int], window_frames: int,
-                          downbeat: bool) -> keras.Model:
+                          downbeat: bool,
+                          sum_head: bool = False) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch FrameBeatConv1D.
 
     Causal Conv1D layers with ReLU fused into Conv ops (no separate ReLU op).
     No BatchNorm — no fusion needed. ZeroPadding1D for causal padding.
 
-    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Quantize, Dequantize.
+    If sum_head: output_conv produces raw logits, then:
+      ch0 = sigmoid(logit_0)  (beat)
+      ch1 = ch0 * sigmoid(logit_1)  (downbeat ≤ beat)
+
+    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Mul, Quantize, Dequantize.
     """
     out_channels = 2 if downbeat else 1
     inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
@@ -339,8 +344,20 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
         x = layers.Conv1D(ch, k, padding="valid", use_bias=True,
                           activation="relu", name=f"conv{i+1}")(x)
 
-    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
-                      name="output_conv")(x)
+    if sum_head and downbeat:
+        # Raw logits (no activation on conv)
+        logits = layers.Conv1D(out_channels, 1, padding="valid",
+                               activation=None, name="output_conv")(x)
+        # Beat = sigmoid(logit_0)
+        beat_logit = logits[:, :, 0:1]
+        db_logit = logits[:, :, 1:2]
+        beat = layers.Activation("sigmoid", name="beat_sigmoid")(beat_logit)
+        db_gate = layers.Activation("sigmoid", name="db_sigmoid")(db_logit)
+        db = layers.Multiply(name="db_multiply")([beat, db_gate])
+        x = layers.Concatenate(axis=-1, name="output_concat")([beat, db])
+    else:
+        x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                          name="output_conv")(x)
 
     return keras.Model(inputs=inputs, outputs=x, name="frame_beat_conv1d")
 
@@ -993,15 +1010,18 @@ def main():
         kernel_sizes = cfg["model"]["kernel_sizes"]
         window_frames = cfg["model"]["window_frames"]
         dropout = cfg["model"].get("dropout", 0.1)
+        sum_head = cfg["model"].get("sum_head", False)
 
         print(f"Building TF model (type=frame_conv1d, channels={channels}, "
-              f"kernels={kernel_sizes}, window={window_frames}, downbeat={use_downbeat})...")
+              f"kernels={kernel_sizes}, window={window_frames}, "
+              f"downbeat={use_downbeat}, sum_head={sum_head})...")
         tf_model = build_tf_frame_conv1d(
             n_mels=n_mels,
             channels=channels,
             kernel_sizes=kernel_sizes,
             window_frames=window_frames,
             downbeat=use_downbeat,
+            sum_head=sum_head,
         )
         _transfer_conv1d_weights(tf_model, pt_state, channels)
 
@@ -1014,6 +1034,7 @@ def main():
             kernel_sizes=kernel_sizes,
             dropout=dropout,
             downbeat=use_downbeat,
+            sum_head=sum_head,
         )
         pt_model.load_state_dict(pt_state)
         pt_model.eval()
