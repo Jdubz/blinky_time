@@ -270,29 +270,12 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // Determine direction: negative error = too quiet → increase gain
   int direction = (error < 0.0f) ? +1 : -1;
 
-  // Adaptive step size based on error magnitude and AGC strategy.
-  // SOFTWARE: smaller steps — large jumps can clip transients and the signal
-  //   quality benefit is limited since this is post-decimation scaling only.
-  // HARDWARE: normal/fast steps — pre-decimation gain directly improves SNR.
+  // Adaptive step size: small frequent adjustments for smooth visual response.
+  // Fast/loud mode uses slightly larger steps to converge quickly at startup.
+  // Normal mode uses small steps every 2s — no visible jumps.
   int stepSize;
-  if (inFastAgcMode_) {
-    // Fast mode: only reachable on HARDWARE strategy (SOFTWARE disables fast AGC)
-    if (errorMagnitude > 0.10f) {
-      stepSize = 6;
-    } else if (errorMagnitude > 0.05f) {
-      stepSize = 3;
-    } else {
-      stepSize = 2;
-    }
-  } else if (agcStrategy_ == AgcStrategy::SOFTWARE) {
-    // Software gain: conservative steps to avoid clipping transients
-    if (errorMagnitude > 0.15f) {
-      stepSize = 2;
-    } else {
-      stepSize = 1;
-    }
-  } else {
-    // Hardware gain, normal mode
+  if (fastMode) {
+    // Fast/loud mode: converging from way off target
     if (errorMagnitude > 0.15f) {
       stepSize = 4;
     } else if (errorMagnitude > 0.05f) {
@@ -300,6 +283,12 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
     } else {
       stepSize = 1;
     }
+  } else if (agcStrategy_ == AgcStrategy::SOFTWARE) {
+    // Software gain: always single steps to avoid clipping
+    stepSize = 1;
+  } else {
+    // Hardware gain, normal mode: gentle single steps every 2s
+    stepSize = (errorMagnitude > 0.10f) ? 2 : 1;
   }
 
   int delta = direction * stepSize;

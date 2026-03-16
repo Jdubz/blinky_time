@@ -34,8 +34,10 @@ namespace MicConstants {
     constexpr uint32_t MIC_DEAD_TIMEOUT_MS = 250;     // PDM alive check timeout
 
     // Timing constants (not user-configurable)
-    constexpr uint32_t HW_CALIB_PERIOD_MS = 60000;    // Hardware gain calibration period (60s)
-    constexpr float HW_TRACKING_TAU = 60.0f;          // Hardware gain tracking time constant (60s, Kates 2008: slow AGC preserves dynamics)
+    // Small frequent adjustments instead of large infrequent jumps — prevents
+    // visible visual disruption at calibration boundaries.
+    constexpr uint32_t HW_CALIB_PERIOD_MS = 2000;     // Hardware gain calibration period (2s)
+    constexpr float HW_TRACKING_TAU = 5.0f;           // Hardware gain tracking time constant (5s)
 }
 
 /**
