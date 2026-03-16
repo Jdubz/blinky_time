@@ -156,36 +156,34 @@ inline ParamMap getParamMap(const FireParams& p) {
     return m;
 }
 
-// Apply parsed params to HeatFireParams
+// Apply parsed params to HeatFireParams (noise-field fire, v70+)
 #include "../../blinky-things/generators/HeatFire.h"
 inline void applyParams(HeatFireParams& p, const ParamMap& params) {
-    p.baseHeat = ParamParser::getFloat(params, "baseHeat", p.baseHeat);
-    p.audioHeatBoost = ParamParser::getFloat(params, "audioHeatBoost", p.audioHeatBoost);
-    p.beatHeatPulse = ParamParser::getFloat(params, "beatHeatPulse", p.beatHeatPulse);
-    p.baseCooling = ParamParser::getFloat(params, "baseCooling", p.baseCooling);
-    p.coolingVariation = ParamParser::getFloat(params, "coolingVariation", p.coolingVariation);
-    p.diffusionSpread = ParamParser::getFloat(params, "diffusionSpread", p.diffusionSpread);
-    p.burstHeat = ParamParser::getFloat(params, "burstHeat", p.burstHeat);
+    p.silenceThreshold = ParamParser::getFloat(params, "silenceThreshold", p.silenceThreshold);
+    p.energyThresholdDrop = ParamParser::getFloat(params, "energyThresholdDrop", p.energyThresholdDrop);
+    p.beatPulseDepth = ParamParser::getFloat(params, "beatPulseDepth", p.beatPulseDepth);
+    p.burstStrength = ParamParser::getFloat(params, "burstStrength", p.burstStrength);
     p.organicTransientMin = ParamParser::getFloat(params, "organicTransientMin", p.organicTransientMin);
-    p.musicBeatDepth = ParamParser::getFloat(params, "musicBeatDepth", p.musicBeatDepth);
-    p.windDrift = ParamParser::getFloat(params, "windDrift", p.windDrift);
+    p.flameBaseHeight = ParamParser::getFloat(params, "flameBaseHeight", p.flameBaseHeight);
+    p.warpStrength = ParamParser::getFloat(params, "warpStrength", p.warpStrength);
     p.noiseSpeed = ParamParser::getFloat(params, "noiseSpeed", p.noiseSpeed);
+    p.musicBeatDepth = ParamParser::getFloat(params, "musicBeatDepth", p.musicBeatDepth);
+    p.densityScrollBoost = ParamParser::getFloat(params, "densityScrollBoost", p.densityScrollBoost);
     p.brightness = ParamParser::getFloat(params, "brightness", p.brightness);
 }
 
 inline ParamMap getParamMap(const HeatFireParams& p) {
     ParamMap m;
-    m["baseHeat"] = std::to_string(p.baseHeat);
-    m["audioHeatBoost"] = std::to_string(p.audioHeatBoost);
-    m["beatHeatPulse"] = std::to_string(p.beatHeatPulse);
-    m["baseCooling"] = std::to_string(p.baseCooling);
-    m["coolingVariation"] = std::to_string(p.coolingVariation);
-    m["diffusionSpread"] = std::to_string(p.diffusionSpread);
-    m["burstHeat"] = std::to_string(p.burstHeat);
+    m["silenceThreshold"] = std::to_string(p.silenceThreshold);
+    m["energyThresholdDrop"] = std::to_string(p.energyThresholdDrop);
+    m["beatPulseDepth"] = std::to_string(p.beatPulseDepth);
+    m["burstStrength"] = std::to_string(p.burstStrength);
     m["organicTransientMin"] = std::to_string(p.organicTransientMin);
-    m["musicBeatDepth"] = std::to_string(p.musicBeatDepth);
-    m["windDrift"] = std::to_string(p.windDrift);
+    m["flameBaseHeight"] = std::to_string(p.flameBaseHeight);
+    m["warpStrength"] = std::to_string(p.warpStrength);
     m["noiseSpeed"] = std::to_string(p.noiseSpeed);
+    m["musicBeatDepth"] = std::to_string(p.musicBeatDepth);
+    m["densityScrollBoost"] = std::to_string(p.densityScrollBoost);
     m["brightness"] = std::to_string(p.brightness);
     return m;
 }

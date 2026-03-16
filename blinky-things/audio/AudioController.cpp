@@ -157,11 +157,15 @@ const AudioControl& AudioController::update(float dt) {
 
     // 4. Get onset strength for rhythm analysis
     //    Single NN model: beat activation (ch0) = ODF, downbeat (ch1) cached.
+    //    When NN is ready, use max(nn, micLevel) so the ODF stays responsive
+    //    even if the NN model isn't calibrated for this device's mic.
     float onsetStrength = 0.0f;
 
     if (frameBeatNN_.isReady()) {
         if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
-            onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
+            float nnOdf = frameBeatNN_.infer(spectral_.getRawMelBands());
+            float micOdf = mic_.getLevel();
+            onsetStrength = max(nnOdf, micOdf);
             spectral_.resetFrameReady();
         } else {
             onsetStrength = mic_.getLevel();
@@ -1756,7 +1760,15 @@ uint16_t AudioController::effectivePulseCooldownMs() const {
 // ===== OUTPUT SYNTHESIS =====
 
 void AudioController::synthesizeEnergy() {
-    float energy = mic_.getLevel();
+    // Use max of mic level and spectral energy so the visualizer always responds.
+    // mic_.getLevel() uses window/range normalization which can produce near-zero
+    // values if the mic abstraction layer hasn't been calibrated for this device.
+    // Spectral RMS is always reliable since it comes directly from the FFT.
+    float micEnergy = mic_.getLevel();
+    float rmsDb = spectral_.getFrameRmsDb();
+    // Map [-60, -10] dB to [0, 1] — silence at -60 dB, loud music at -10 dB
+    float spectralEnergy = clampf((rmsDb + 60.0f) / 50.0f, 0.0f, 1.0f);
+    float energy = maxValue(micEnergy, spectralEnergy);
 
     // Apply beat-aligned energy boost when rhythm is locked
     if (periodicityStrength_ > activationThreshold) {

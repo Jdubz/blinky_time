@@ -222,18 +222,19 @@ public:
     }
 
 private:
-    // Op resolver — Conv1D with sum head needs: Conv2D, Pad, Reshape,
-    // ExpandDims, Logistic, Mul (sum head: beat * sigmoid(db_logit)),
-    // Quantize, Dequantize
-    static constexpr int OP_RESOLVER_SLOTS = 8;
+    // Op resolver — supports both FC and Conv1D models:
+    // FC: FullyConnected, Logistic, Quantize, Dequantize, Reshape
+    // Conv1D: Conv2D, Pad, Reshape, ExpandDims, Logistic, Mul (sum head)
+    static constexpr int OP_RESOLVER_SLOTS = 9;
 
     tflite::MicroErrorReporter errorReporter_;
     tflite::MicroMutableOpResolver<OP_RESOLVER_SLOTS> resolver_;
 
     void initResolver() {
+        resolver_.AddFullyConnected();  // FC models
         resolver_.AddConv2D();          // Conv1D mapped to Conv2D
         resolver_.AddPad();             // Causal padding (ZeroPadding1D)
-        resolver_.AddReshape();         // 1D↔2D tensor conversion
+        resolver_.AddReshape();         // Tensor shape conversion
         resolver_.AddExpandDims();      // 1D→2D input expansion
         resolver_.AddLogistic();        // Sigmoid activation
         resolver_.AddMul();             // Sum head: beat * sigmoid(db_logit)
