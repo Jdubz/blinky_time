@@ -23,7 +23,7 @@ struct HeatFireParams {
     float warpStrength;          // Domain warp amplitude — controls lateral sway (0-1). Default: 0.40.
 
     // Animation
-    float noiseSpeed;            // Base noise scroll speed (0.01-0.5). Default: 0.25.
+    float noiseSpeed;            // Base noise scroll speed in units/sec (1-30). Default: 5.
     float musicBeatDepth;        // Beat sync depth for scroll speed (0-1). Default: 0.95.
     float densityScrollBoost;    // OnsetDensity → extra scroll speed (0-1.0). Default: 0.50.
 
@@ -38,7 +38,7 @@ struct HeatFireParams {
         organicTransientMin = 0.25f;  // Responsive to softer transients
         flameBaseHeight     = 0.20f;  // 20% rest height — room for full phase-breathing range
         warpStrength        = 0.40f;  // Moderate lateral sway
-        noiseSpeed          = 0.25f;  // Scroll speed — fast enough to look like fire
+        noiseSpeed          = 5.0f;   // Scroll speed (units/sec, dt-based) — tuned on 4x15 tube
         musicBeatDepth      = 0.95f;  // Deep beat sync for scroll speed modulation
         densityScrollBoost  = 0.50f;  // 50% faster flicker at max onset density
         brightness          = 0.38f;  // Lower base — beat breathing creates the peaks

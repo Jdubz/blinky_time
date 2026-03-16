@@ -85,8 +85,9 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     float musicScroll   = params_.noiseSpeed * (1.5f + audio.energy + densityBoost)
                         * ((1.0f - params_.musicBeatDepth * 0.5f)
                            + params_.musicBeatDepth * 0.5f * phasePulse);
-    noiseTime_ += organicScroll * (1.0f - audio.rhythmStrength)
-                + musicScroll   * audio.rhythmStrength;
+    float scrollRate = organicScroll * (1.0f - audio.rhythmStrength)
+                     + musicScroll   * audio.rhythmStrength;
+    noiseTime_ += scrollRate * dt;
 
     // Wrap to prevent float precision loss at large values.
     // Simplex noise has no exact period but wrapping at 1000 prevents the

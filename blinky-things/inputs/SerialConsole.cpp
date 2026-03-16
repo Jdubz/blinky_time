@@ -201,7 +201,7 @@ void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
 
     // Animation
     settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
-        "Base noise scroll speed", 0.01f, 0.5f, heatFireParamChanged);
+        "Base noise scroll speed (units/sec)", 1.0f, 30.0f, heatFireParamChanged);
     settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
         "Beat sync depth for scroll speed (0-1)", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_densityscrollboost", &hfp->densityScrollBoost, "heatfire",
