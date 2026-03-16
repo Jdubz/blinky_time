@@ -164,21 +164,42 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 
 ### Priority 2 (new): ESP32-S3 Mic Calibration and Model
 
-**Status: PLANNED**
+**Status: Phase 1 DONE (March 15, 2026) — mic profile measured, training config created. Phase 2 (retrain) pending.**
 
-The XIAO ESP32-S3 Sense uses an MSM381ACT PDM microphone via ESP-IDF I2S PDM-RX. Its frequency response, noise floor, and AGC transfer function differ from the nRF52840's built-in microphone. The nRF52840 cal63 model was trained on mel spectrograms captured at `target_rms_db=-63 dB` through the nRF52840 mic chain. Running that model on ESP32-S3 audio will produce mismatched mel statistics and degraded ODF quality.
+The XIAO ESP32-S3 Sense uses a PDM microphone via ESP-IDF I2S PDM-RX. Its frequency response, noise floor, and AGC transfer function differ from the nRF52840's built-in microphone. The nRF52840 cal63 model was trained on mel spectrograms captured at `target_rms_db=-63 dB` through the nRF52840 mic chain. Running that model on ESP32-S3 audio will produce mismatched mel statistics and degraded ODF quality.
 
-**Required steps:**
+**Calibration results (March 15, 2026):**
 
-1. **Measure ESP32-S3 mic profile** — Record `target_rms_db` on the ESP32-S3 the same way cal63 was measured for nRF52840: play calibration tones, capture raw mel values via `stream` command, find the RMS dB level where firmware mel mean ≈ training mean (~0.52 normalized).
+| Parameter | nRF52840 | ESP32-S3 |
+|-----------|---------|---------|
+| `target_rms_db` | -63 dB | **-30 dB** |
+| Operating mel mean | ~0.52 | ~0.78 |
+| Best SNR gain | gain=30 (hw AGC) | gain=30 (sw gain only) |
+| Band gain range | 0.95–1.04 | 0.93–1.01 (flat) |
+| Noise floor range | 0.58–0.94 | 0.66–1.00 |
 
-2. **Capture training data** — The ESP32-S3 mic has a different frequency response. Ideally record a subset of the training corpus through the actual ESP32-S3 mic (or model the transfer function via impulse response measurement and apply it to existing recordings).
+The ESP32-S3 operates ~0.25 higher mel mean. The software-only AGC (no hardware gain register) converges to a higher operating point (~gain=14–18 during music) vs nRF52840's hardware AGC. Best SNR at gain=30 on both units (27.8–28.7 dB avg across bands 3–25). Above gain=30, SNR degrades (software gain adds noise without pre-decimation amplification).
 
-3. **Train ESP32-S3 model** — Retrain the FC beat/downbeat model with ESP32-S3 mel statistics. Use the same architecture (32-frame window, FC [64,32] → 2 outputs) but with ESP32-calibrated data. Produce a separate `.tflite` / `.h` model artifact for the ESP32-S3 build target.
+**Measured unit-to-unit variation:** Two ESP32-S3 units (ACM0 MAC `11:F8:10`, ACM3 MAC `12:C1:A0`) are < 1 dB apart after confirming identical firmware. The original apparent 3–4 dB divergence was entirely due to firmware version mismatch (one unit was running old firmware with a different streaming rate — 40 Hz vs 21 Hz). Normal MEMS mic manufacturing tolerance is ±1–3 dB per spec; actual measured variation is ≤1 dB between these two units.
 
-4. **Firmware model selection** — Use `#ifdef BLINKY_PLATFORM_ESP32S3` to select the ESP32-S3 model at compile time, keeping the nRF52840 model unchanged.
+**Artifacts:**
+- Mic profile: `ml-training/data/calibration/mic_profile_esp32s3.npz`
+- Gain sweeps: `data/calibration/gain_sweep_ttyACM0_esp32.npz`, `gain_sweep_ttyACM3_esp32.npz`
+- Training config: `ml-training/configs/frame_fc_esp32s3.yaml` (`target_rms_db=-30`, `hw_gain_max=30`)
 
-**Hardware gain note:** The ESP32-S3 I2S PDM-RX slot config has **no hardware gain register** — `amplify_num`, `sd_scale`, `hp_scale` are all absent from `i2s_pdm_rx_slot_config_t` on this SoC (those fields exist only on other ESP32 variants). The full AGC range is applied as software gain in `Esp32PdmMic::setGain()` / `poll()`. The mic profile calibration must account for this — the software gain path has different noise characteristics than the nRF52840 hardware AGC.
+**Remaining steps:**
+
+2. **Train ESP32-S3 model** — Retrain the FC beat/downbeat model with ESP32-calibrated data:
+   ```bash
+   python scripts/prepare_dataset.py --config configs/frame_fc_esp32s3.yaml --augment \
+       --mic-profile data/calibration/mic_profile_esp32s3.npz
+   python train.py --config configs/frame_fc_esp32s3.yaml
+   ```
+   Same architecture (32-frame window, FC [64,32] → 2 outputs). Produces `frame_beat_model_esp32s3_data.h`.
+
+3. **Firmware model selection** — Add `#ifdef BLINKY_PLATFORM_ESP32S3` to select the ESP32-S3 model at compile time, keeping the nRF52840 model unchanged.
+
+**Hardware gain note:** The ESP32-S3 I2S PDM-RX slot config has **no hardware gain register** — confirmed by ESP-IDF source (`soc_caps.h`: `SOC_I2S_SUPPORTS_PDM_RX_HP_FILTER` not defined for S3, `i2s_ll.h`: no gain functions in PDM RX path). The full AGC range is applied as software post-decimation gain in `Esp32PdmMic::setGain()` / `poll()`.
 
 ### ~~Priority 2 (old): BandFlux Removal~~ — COMPLETED (v67)
 

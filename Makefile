@@ -19,7 +19,7 @@
 # Configuration
 SKETCH_DIR = blinky-things
 FQBN = Seeeduino:nrf52:xiaonRF52840Sense
-ESP32_FQBN = esp32:esp32:XIAO_ESP32S3
+ESP32_FQBN = esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240
 BAUD_RATE = 115200
 
 # Default values
