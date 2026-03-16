@@ -250,9 +250,9 @@ Two specialized models replace the single FrameBeatNN:
 - Feeds OSS buffer as primary ODF and directly drives AudioControl.pulse
 
 **RhythmNN** — Bar structure and downbeat detection
-- Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → FC(576→32) → FC(32→2)
+- Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → Conv1D(48→32,k=3) → Conv1D(32→2,k=1)
 - Input: 192 mel frames (3.07s = 1.5+ bars at all EDM tempos), output: beat + downbeat activation
-- ~30 KB INT8, <8ms inference, runs every 4th frame (15.6 Hz)
+- ~16 KB INT8, <8ms inference, runs every 4th frame (15.6 Hz)
 - Drives CBSS beat/downbeat tracking, AudioControl.downbeat, beatInMeasure
 
 **Why two models:** Onset detection needs short windows with high temporal precision. Downbeat detection needs full-bar context. A single FC model with W192 (3.07s) regressed severely (F1=0.370 vs W32's 0.491) because FC flattening destroys temporal locality. Conv1D with temporal pooling (AvgPool1D) preserves local patterns while progressively compressing the time axis for bar-level classification.

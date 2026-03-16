@@ -536,8 +536,9 @@ def main():
             # Downsample labels for pooling models (output time < input time)
             if hasattr(model, 'pool_factor') and model.pool_factor > 1:
                 pf = model.pool_factor
-                # Align to last frame in each pool window (causal)
+                # Align to last frame in each pool window (causal), truncate to match output
                 Y_batch = Y_batch[:, pf - 1::pf]
+                Y_batch = Y_batch[:, :Y_pred.shape[1]]
 
             hard_loss = loss_fn(Y_pred, Y_batch)
 
