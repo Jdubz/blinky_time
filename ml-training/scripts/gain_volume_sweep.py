@@ -16,9 +16,9 @@ Designed to run on blinkyhost where devices and speakers are connected.
 Uses all available devices in parallel (3 gains per audio playback).
 
 Usage:
-  python3 gain_volume_sweep.py --output /mnt/storage/blinky-ml-data/calibration/gain_volume_sweep.json
-  python3 gain_volume_sweep.py --gains 10,30,50,70 --volumes 50,100 --tracks 3
-  python3 gain_volume_sweep.py --analyze /path/to/gain_volume_sweep.json
+  python3 gain_volume_sweep.py sweep --output /mnt/storage/blinky-ml-data/calibration/gain_volume_sweep.json
+  python3 gain_volume_sweep.py sweep --gains 10,30,50,70 --volumes 50,100 --tracks 3
+  python3 gain_volume_sweep.py analyze /path/to/gain_volume_sweep.json
 """
 
 import argparse
@@ -105,7 +105,12 @@ class DeviceReader:
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     self._parse_line(line)
-            except Exception:
+            except serial.SerialException:
+                print(f"Serial error on {self.port}, stopping reader", file=sys.stderr)
+                break
+            except Exception as e:
+                print(f"Error in DeviceReader for {self.port}: {e}", file=sys.stderr)
+                time.sleep(0.1)
                 continue
 
     def _parse_line(self, raw):
@@ -154,10 +159,12 @@ class DeviceReader:
 def set_volume(card, percent):
     """Set ALSA PCM volume. percent 0-100 maps to 0-ALSA_MAX_STEPS."""
     val = max(0, min(ALSA_MAX_STEPS, int(round(percent / 100.0 * ALSA_MAX_STEPS))))
-    subprocess.run(
+    result = subprocess.run(
         ["amixer", "-c", str(card), "set", "PCM Playback Volume", str(val)],
         capture_output=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"amixer failed (rc={result.returncode}): {result.stderr.decode()}")
     return val
 
 
@@ -168,7 +175,9 @@ def play_audio(audio_file, duration=None):
         cmd += ["-t", str(duration)]
     cmd.append(str(audio_file))
     start = time.monotonic()
-    subprocess.run(cmd)
+    result = subprocess.run(cmd, timeout=duration + 30 if duration else 300)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffplay failed (rc={result.returncode}) for {audio_file}")
     end = time.monotonic()
     return start, end
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # CBSS parameter sweep for NN ODF optimization
-set -e
+set -eo pipefail
 
 cd "$(dirname "$0")/../../blinky-test-player"
 export NODE_PATH=node_modules
