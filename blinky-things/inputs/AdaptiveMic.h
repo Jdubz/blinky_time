@@ -71,10 +71,10 @@ public:
   uint8_t  hwGainMaxSignal = 40; // Max HW gain for AGC (10-80, default 40)
 
   // Fast AGC for low-level sources (accelerates calibration when signal is persistently low)
-  bool     fastAgcEnabled = true;       // Enable fast AGC when signal is low and gain is high
+  bool     fastAgcEnabled = true;       // Enable fast AGC when signal is persistently low
   float    fastAgcThreshold = 0.15f;    // Raw level threshold to trigger fast AGC
-  uint16_t fastAgcPeriodMs = 5000;      // Calibration period in fast mode (5s vs 30s)
-  float    fastAgcTrackingTau = 5.0f;   // Tracking tau in fast mode (5s vs 30s)
+  uint16_t fastAgcPeriodMs = 1000;      // Calibration period in fast mode (1s — ramps gain quickly)
+  float    fastAgcTrackingTau = 2.0f;   // Tracking tau in fast mode (2s for responsive tracking)
 
   // Loud AGC mode for high-SPL environments (symmetric to fast AGC for low-SPL)
   // Automatically triggered when hardware gain bottoms out
