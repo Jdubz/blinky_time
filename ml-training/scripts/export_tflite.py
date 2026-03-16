@@ -347,22 +347,24 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
 
 def build_tf_frame_conv1d_pool(n_mels: int, channels: list[int],
                                kernel_sizes: list[int], pool_sizes: list[int],
-                               window_frames: int, downbeat: bool) -> keras.Model:
+                               window_frames: int, downbeat: bool,
+                               use_stride: bool = False) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch FrameBeatConv1DPool.
 
-    Conv1D with interleaved AveragePooling1D for temporal compression.
-    TFLite ops: Conv2D, Pad, AveragePool2D (Pool1D mapped), Logistic, Quantize, Dequantize.
+    Conv1D with interleaved AveragePooling1D or strided conv for temporal compression.
+    Strided mode uses fewer TFLite ops (no separate AvgPool), reducing dispatch overhead.
     """
     out_channels = 2 if downbeat else 1
     inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
     x = inputs
 
     for i, (ch, k, pool) in enumerate(zip(channels, kernel_sizes, pool_sizes)):
-        pad = k - 1
+        stride = pool if use_stride else 1
+        pad = k - 1  # causal: pad left only
         x = layers.ZeroPadding1D(padding=(pad, 0))(x)
-        x = layers.Conv1D(ch, k, padding="valid", use_bias=True,
+        x = layers.Conv1D(ch, k, strides=stride, padding="valid", use_bias=True,
                           activation="relu", name=f"conv{i+1}")(x)
-        if pool > 1:
+        if not use_stride and pool > 1:
             x = layers.AveragePooling1D(pool_size=pool, strides=pool,
                                         padding="valid", name=f"pool{i+1}")(x)
 
@@ -1031,10 +1033,11 @@ def main():
         pool_sizes = cfg["model"]["pool_sizes"]
         window_frames = cfg["model"]["window_frames"]
         dropout = cfg["model"].get("dropout", 0.1)
+        use_stride = cfg["model"].get("use_stride", False)
 
         print(f"Building TF model (type=frame_conv1d_pool, channels={channels}, "
               f"kernels={kernel_sizes}, pools={pool_sizes}, window={window_frames}, "
-              f"downbeat={use_downbeat})...")
+              f"downbeat={use_downbeat}, stride={use_stride})...")
         tf_model = build_tf_frame_conv1d_pool(
             n_mels=n_mels,
             channels=channels,
@@ -1042,6 +1045,7 @@ def main():
             pool_sizes=pool_sizes,
             window_frames=window_frames,
             downbeat=use_downbeat,
+            use_stride=use_stride,
         )
         # Reuse conv1d weight transfer — pooling layers are parameter-free
         _transfer_conv1d_weights(tf_model, pt_state, channels)
@@ -1056,6 +1060,7 @@ def main():
             pool_sizes=pool_sizes,
             dropout=dropout,
             downbeat=use_downbeat,
+            use_stride=use_stride,
         )
         pt_model.load_state_dict(pt_state)
         pt_model.eval()

@@ -153,6 +153,17 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             dropout=cfg["model"].get("dropout", 0.1),
             downbeat=use_downbeat,
         ).to(device)
+    elif model_type == "frame_conv1d_pool":
+        from models.beat_conv1d_pool import build_beat_conv1d_pool
+        model = build_beat_conv1d_pool(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_sizes=cfg["model"]["kernel_sizes"],
+            pool_sizes=cfg["model"]["pool_sizes"],
+            dropout=cfg["model"].get("dropout", 0.1),
+            downbeat=use_downbeat,
+            use_stride=cfg["model"].get("use_stride", False),
+        ).to(device)
     else:
         model = build_beat_cnn(
             n_mels=cfg["audio"]["n_mels"],
@@ -166,7 +177,8 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
         ).to(device)
     model.load_state_dict(state_dict)
     model.eval()
-    return model, use_downbeat
+    pool_factor = getattr(model, 'pool_factor', 1)
+    return model, use_downbeat, pool_factor
 
 
 def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
@@ -180,7 +192,7 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     chunk_frames = cfg["training"]["chunk_frames"]
 
-    model, has_downbeat = _load_model(model_path, cfg, device)
+    model, has_downbeat, pool_factor = _load_model(model_path, cfg, device)
     mel_fb = _build_mel_filterbank(cfg, device)
     window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
 
@@ -223,9 +235,18 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                 else:
                     chunk = mel_tensor[start:end]
 
-                pred = model(chunk.unsqueeze(0))[0]  # (time, channels)
-                actual_len = min(chunk_frames, n_frames - start)
-                pred_np = pred[:actual_len].cpu().numpy()
+                pred = model(chunk.unsqueeze(0))[0]  # (time or time//pf, channels)
+
+                if pool_factor > 1:
+                    # Upsample pooled output back to input resolution
+                    pred_np = pred.cpu().numpy()
+                    pred_np = np.repeat(pred_np, pool_factor, axis=0)
+                    actual_len = min(chunk_frames, n_frames - start)
+                    pred_np = pred_np[:actual_len]
+                else:
+                    actual_len = min(chunk_frames, n_frames - start)
+                    pred_np = pred[:actual_len].cpu().numpy()
+
                 activations[start:start + actual_len] += pred_np[:, 0]
                 if has_downbeat:
                     db_activations[start:start + actual_len] += pred_np[:, 1]
@@ -379,7 +400,7 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
     frame_rate = cfg["audio"]["frame_rate"]
     chunk_frames = cfg["training"]["chunk_frames"]
 
-    model, has_downbeat = _load_model(model_path, cfg, device)
+    model, has_downbeat, pool_factor = _load_model(model_path, cfg, device)
     mel_fb = _build_mel_filterbank(cfg, device)
     window = torch.hamming_window(cfg["audio"]["n_fft"], periodic=False).to(device)
 
@@ -417,7 +438,12 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
                     chunk = mel_tensor[start:end]
                 pred = model(chunk.unsqueeze(0))[0]
                 actual_len = min(chunk_frames, n_frames - start)
-                activations[start:start + actual_len] += pred[:actual_len, 0].cpu().numpy()
+
+                if pool_factor > 1:
+                    pred_np = np.repeat(pred.cpu().numpy(), pool_factor, axis=0)
+                    activations[start:start + actual_len] += pred_np[:actual_len, 0]
+                else:
+                    activations[start:start + actual_len] += pred[:actual_len, 0].cpu().numpy()
                 counts[start:start + actual_len] += 1
 
         activations /= np.maximum(counts, 1)
@@ -466,7 +492,7 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
     X_val = np.load(data_dir / "X_val.npy")
     Y_val = np.load(data_dir / "Y_val.npy")
 
-    model, has_downbeat = _load_model(model_path, cfg, device)
+    model, has_downbeat, pool_factor = _load_model(model_path, cfg, device)
 
     # Batch predict (chunked to avoid GPU OOM on large val sets)
     batch_size = 4096
@@ -477,6 +503,11 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
             Y_pred_parts.append(model(X_batch).cpu().numpy())
     Y_pred_all = np.concatenate(Y_pred_parts, axis=0)
 
+    # For pooled models, downsample labels to match output time dimension
+    if pool_factor > 1:
+        Y_val = Y_val[:, pool_factor - 1::pool_factor]
+        Y_val = Y_val[:, :Y_pred_all.shape[1]]
+
     Y_pred_beat = Y_pred_all[:, :, 0]
     _print_frame_metrics("Beat", Y_pred_beat, Y_val)
 
@@ -484,6 +515,9 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
         db_val_path = data_dir / "Y_db_val.npy"
         if db_val_path.exists():
             Y_db_val = np.load(db_val_path)
+            if pool_factor > 1:
+                Y_db_val = Y_db_val[:, pool_factor - 1::pool_factor]
+                Y_db_val = Y_db_val[:, :Y_pred_all.shape[1]]
             Y_pred_db = Y_pred_all[:, :, 1]
             _print_frame_metrics("Downbeat", Y_pred_db, Y_db_val)
         else:

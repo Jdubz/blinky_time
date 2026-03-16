@@ -235,16 +235,15 @@ private:
     void initSharedResolver() {
         SharedState& s = getShared();
         if (s.inited) return;
-        s.resolver.AddFullyConnected();  // RhythmNN FC head (+ legacy FC models)
         s.resolver.AddConv2D();          // Conv1D mapped to Conv2D
         s.resolver.AddPad();             // Causal padding (ZeroPadding1D)
         s.resolver.AddReshape();         // 1D↔2D tensor conversion
+        s.resolver.AddExpandDims();      // 1D→2D input expansion
         s.resolver.AddLogistic();        // Sigmoid output
-        s.resolver.AddRelu();            // Hidden activations
+        s.resolver.AddAveragePool2D();   // AvgPool1D mapped to AvgPool2D
+        s.resolver.AddFullyConnected();  // RhythmNN FC head
         s.resolver.AddQuantize();
         s.resolver.AddDequantize();
-        s.resolver.AddMean();            // AvgPool1D (mapped to Mean op)
-        s.resolver.AddAveragePool2D();   // AvgPool fallback
         s.inited = true;
     }
 
@@ -439,7 +438,7 @@ private:
 
     // --- OnsetNN state ---
 
-    static constexpr int ONSET_ARENA_SIZE = 8192;     // 8 KB (Conv1D W8, ~2-4 KB actual)
+    static constexpr int ONSET_ARENA_SIZE = 4096;     // 4 KB (Conv1D W8, measured 2636)
     static constexpr int ONSET_MAX_WINDOW_FRAMES = 32; // Max 32 frames (512ms), expect W8
     alignas(16) uint8_t onsetArena_[ONSET_ARENA_SIZE];
     float onsetWindowBuffer_[ONSET_MAX_WINDOW_FRAMES * INPUT_MEL_BANDS];  // 3.3 KB max
@@ -462,7 +461,7 @@ private:
 
     // --- RhythmNN state ---
 
-    static constexpr int RHYTHM_ARENA_SIZE = 16384;       // 16 KB (Conv1D+Pool W192)
+    static constexpr int RHYTHM_ARENA_SIZE = 20480;       // 20 KB (Conv1D+Pool W192, measured 15644)
     static constexpr int RHYTHM_MAX_WINDOW_FRAMES = 192;   // 192 frames (3.07s)
     alignas(16) uint8_t rhythmArena_[RHYTHM_ARENA_SIZE];
     float rhythmWindowBuffer_[RHYTHM_MAX_WINDOW_FRAMES * INPUT_MEL_BANDS];  // 19.5 KB
