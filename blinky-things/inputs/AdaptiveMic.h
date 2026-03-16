@@ -79,7 +79,7 @@ public:
   float    fastAgcTrackingTau = 2.0f;   // Tracking tau in fast mode (2s for responsive tracking)
 
   // Loud AGC mode for high-SPL environments (symmetric to fast AGC for low-SPL)
-  // Automatically triggered when hardware gain bottoms out
+  // Triggered when gain is in upper 2/3 of range and signal is persistently high
   uint8_t hwGainMinHeadroom = 10;       // Min hardware gain (headroom floor)
   float   hwLoudThreshold = 0.60f;      // Trigger loud mode when rawLevel > this at low gain
   float   valleyFastTrackRatio = 2.0f;  // Faster valley tracking in loud mode (vs 4.0 normal)

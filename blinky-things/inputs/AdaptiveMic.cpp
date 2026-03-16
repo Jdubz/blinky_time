@@ -235,10 +235,13 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
                    rawTrackedLevel < fastAgcThreshold;
 
   // Determine if we're in loud AGC mode (symmetric to fast AGC)
-  // Loud mode: when signal is persistently high and gain is in the upper 1/3 of range.
-  // Accelerates gain reduction when mic is clipping, without overshooting near the floor.
+  // Loud mode: when signal is persistently high and gain is in the upper 2/3 of range.
+  // Accelerates gain reduction when mic is clipping. No agcStrategy_ guard — intentionally
+  // active on both HARDWARE and SOFTWARE platforms (ESP32-S3 needs it for startup clipping).
+  // Step sizes use normal-mode values (not fast-mode) to avoid overshoot on gain reduction.
   int loudAgcGainThreshold = gainMin_ + ((hwGainMaxSignal - gainMin_) / 3);
-  inLoudAgcMode_ = currentHardwareGain >= loudAgcGainThreshold &&
+  inLoudAgcMode_ = (hwGainMaxSignal > gainMin_) &&
+                   currentHardwareGain >= loudAgcGainThreshold &&
                    rawTrackedLevel > hwLoudThreshold;
 
   // Select calibration period and tracking tau based on mode

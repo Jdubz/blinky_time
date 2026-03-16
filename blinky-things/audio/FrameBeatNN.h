@@ -268,7 +268,7 @@ private:
 
     // --- Model state ---
 
-    static constexpr int ARENA_SIZE = 32768;          // 32 KB (Conv1D W64 — generous for CMSIS-NN scratch buffers)
+    static constexpr int ARENA_SIZE = 32768;          // 32 KB (Conv1D W64 measured 7340 — headroom for model updates)
     static constexpr int MAX_WINDOW_FRAMES = 64;      // Max 64 frames (1.024s) — increase if a wider model is used
 
     alignas(16) uint8_t arena_[ARENA_SIZE];
