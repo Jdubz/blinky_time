@@ -12,8 +12,8 @@
  */
 struct HeatFireParams {
     // Intensity threshold (controls fire size and audio reactivity)
-    float silenceThreshold;      // Noise threshold at silence (0.3-0.8). Higher = less fire. Default: 0.58.
-    float energyThresholdDrop;   // Max threshold reduction from energy (0.1-0.6). Default: 0.22.
+    float silenceThreshold;      // Noise threshold at silence (0.2-0.6). Higher = less fire. Default: 0.45.
+    float energyThresholdDrop;   // Max threshold reduction from energy (0.1-0.4). Default: 0.30.
     float beatPulseDepth;        // Phase breathing height amplitude (0-0.5). Default: 0.40.
     float burstStrength;         // Transient (pulse) height flare (0-0.5). Default: 0.25.
     float organicTransientMin;   // Minimum pulse value to trigger burst (0-1). Default: 0.25.
@@ -31,8 +31,8 @@ struct HeatFireParams {
     float brightness;            // Master output brightness scale (0-1). Default: 0.38.
 
     HeatFireParams() {
-        silenceThreshold    = 0.58f;  // Higher threshold = fewer lit pixels = more dark space
-        energyThresholdDrop = 0.22f;  // Modest density variation from energy
+        silenceThreshold    = 0.45f;  // Baseline: ~55% of noise produces fire (visible idle embers)
+        energyThresholdDrop = 0.30f;  // Big density swing: loud music drops to 0.15 (85% lit)
         beatPulseDepth      = 0.40f;  // Per-beat height breathing amplitude (primary music sync)
         burstStrength       = 0.25f;  // Height flare on transient (fraction of display height)
         organicTransientMin = 0.25f;  // Responsive to softer transients

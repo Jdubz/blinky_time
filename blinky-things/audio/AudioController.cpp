@@ -1760,15 +1760,10 @@ uint16_t AudioController::effectivePulseCooldownMs() const {
 // ===== OUTPUT SYNTHESIS =====
 
 void AudioController::synthesizeEnergy() {
-    // Use max of mic level and spectral energy so the visualizer always responds.
-    // mic_.getLevel() uses window/range normalization which can produce near-zero
-    // values if the mic abstraction layer hasn't been calibrated for this device.
-    // Spectral RMS is always reliable since it comes directly from the FFT.
-    float micEnergy = mic_.getLevel();
-    float rmsDb = spectral_.getFrameRmsDb();
-    // Map [-60, -10] dB to [0, 1] — silence at -60 dB, loud music at -10 dB
-    float spectralEnergy = clampf((rmsDb + 60.0f) / 50.0f, 0.0f, 1.0f);
-    float energy = maxValue(micEnergy, spectralEnergy);
+    // mic_.getLevel() is the adaptive-normalized audio level (0-1).
+    // This is the source of truth for energy — it tracks actual loudness with
+    // proper peak/valley tracking. Don't use spectral RMS (compressor inflates it).
+    float energy = mic_.getLevel();
 
     // Apply beat-aligned energy boost when rhythm is locked
     if (periodicityStrength_ > activationThreshold) {

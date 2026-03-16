@@ -135,18 +135,20 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
         smoothedEnergy_ += (audio.energy - smoothedEnergy_) * min(1.0f, fallRate);
     }
 
-    // Threshold: energy drives density/brightness. Keep changes modest so
-    // the whole display doesn't pop at once — height change is the primary
-    // visual beat response, not density.
+    // Threshold controls fire density. Lower threshold = more lit pixels.
+    // Energy drives large threshold swings: silence = sparse embers, loud = solid fire.
     float threshold = params_.silenceThreshold
                     - params_.energyThresholdDrop * smoothedEnergy_;
 
-    // Small beat-accent threshold dips (complement the height flare)
-    if (downbeatCoolSuppress_ > 0.0f) threshold -= 0.06f * downbeatCoolSuppress_;
-    if (beat3Suppress_ > 0.0f)        threshold -= 0.03f * beat3Suppress_;
-    if (beat24Suppress_ > 0.0f)       threshold -= 0.015f * beat24Suppress_;
+    // Beat-accent threshold dips: brief density bursts on hits
+    if (downbeatCoolSuppress_ > 0.0f) threshold -= 0.10f * downbeatCoolSuppress_;
+    if (beat3Suppress_ > 0.0f)        threshold -= 0.06f * beat3Suppress_;
+    if (beat24Suppress_ > 0.0f)       threshold -= 0.03f * beat24Suppress_;
 
-    threshold = constrain(threshold, 0.20f, 0.65f);
+    // Pulse (transient hit) drives immediate threshold drop for big visual burst
+    threshold -= 0.15f * audio.pulse;
+
+    threshold = constrain(threshold, 0.10f, 0.65f);
 
     // Noise spatial scales
     float xScale = 0.12f + 0.04f * densityNorm;  // Tongue width (~4 tongues across 32px)
@@ -170,26 +172,33 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
             }
         }
     } else {
-        // Flame height: three additive contributions —
-        //   1. Energy level  (slow background variation, capped at 40% of range)
-        //   2. Phase breath  (guaranteed per-beat oscillation — primary music sync)
-        //   3. Pulse flare   (sharp burst on transient/downbeat events)
-        // Energy is capped so the flame never "locks" at full height between beats;
-        // phase breathing always has room to visibly rise and fall.
+        // Flame height: hybrid audio-reactive + music-synced
+        //
+        // Design principle: raw audio (energy) is the source of truth and ALWAYS
+        // drives flame height. Music mode (phase, rhythm) ENHANCES and synchronizes
+        // but never suppresses the raw audio response.
+        //
+        //   1. Energy (primary): mic level directly drives flame height (full range)
+        //   2. Phase breath (enhancement): when music detected, sync flame to beat
+        //   3. Pulse flare (enhancement): sharp burst on transients
+
+        // Energy drives full range: silence → baseHeight, loud → 1.0
+        float energyHeight = params_.flameBaseHeight
+                           + (1.0f - params_.flameBaseHeight) * smoothedEnergy_;
+
+        // Music enhancement: phase breathing adds on top, scaled by rhythm confidence.
+        // At rhythmStrength=0 (no music), this is zero — pure energy-reactive.
+        // At rhythmStrength=0.85, adds up to beatPulseDepth (0.4) of oscillation.
         float phaseBreath = params_.beatPulseDepth * phasePulse * audio.rhythmStrength;
-        float flameHeight = params_.flameBaseHeight
-                          + (1.0f - params_.flameBaseHeight) * smoothedEnergy_ * 0.4f
-                          + phaseBreath
-                          + pulseFlare_;
+
+        float flameHeight = energyHeight + phaseBreath + pulseFlare_;
         flameHeight = constrain(flameHeight, 0.0f, 1.0f);
 
-        // Beat brightness multiplier: dims to ~50% between beats, peaks at ~160% on beat.
-        // Formula: (1 - 0.6*rs) + 1.3*rs*pp  where rs=rhythmStrength, pp=phasePulse
-        //   on-beat  (pp=1, rs=0.85): 0.49 + 1.105 = 1.60
-        //   mid-beat (pp=0, rs=0.85): 0.49 + 0.000 = 0.49
-        //   organic  (rs=0):          1.00 + 0.000 = 1.00  (no modulation)
-        float brightMult = (1.0f - 0.72f * audio.rhythmStrength)
-                         + 1.3f * audio.rhythmStrength * phasePulse;
+        // Beat brightness: slight enhancement on-beat, never dims below 1.0.
+        // At rhythmStrength=0: brightMult = 1.0 (no modulation).
+        // At rhythmStrength=0.85, on-beat: 1.0 + 0.6 = 1.6 (brighter).
+        // At rhythmStrength=0.85, off-beat: 1.0 + 0.0 = 1.0 (no dimming).
+        float brightMult = 1.0f + 0.7f * audio.rhythmStrength * phasePulse;
 
         // Render zone extends 0.20 above the nominal flame height so tongues can
         // flicker upward past the "expected" boundary. The adaptive threshold prevents
@@ -207,12 +216,14 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
             float heightProgress = constrain(
                 (normalizedY - zoneTop) / max(zoneHeight, 0.001f), 0.0f, 1.0f);
 
-            // Height-adaptive threshold: quadratic rise toward 1.0 near the tip.
-            // At base: localThreshold = threshold (normal density).
-            // At tip:  localThreshold → 1.0 (only the very brightest peaks survive).
-            // This creates natural tongue taper instead of a hard ceiling.
-            float tipFade = (1.0f - heightProgress) * (1.0f - heightProgress);
-            float localThreshold = threshold + (1.0f - threshold) * tipFade;
+            // Height-adaptive threshold: gentle rise toward tip.
+            // At base (heightProgress=1): localThreshold = threshold (full density).
+            // At tip (heightProgress=0): localThreshold rises, creating natural taper.
+            // Using cubic for a gentler curve — fire stays dense through most of the
+            // flame zone, only tapering in the top ~25%.
+            float tipPos = 1.0f - heightProgress;  // 0 at base, 1 at tip
+            float tipFade = tipPos * tipPos * tipPos;  // cubic: gentle taper
+            float localThreshold = threshold + (1.0f - threshold) * 0.6f * tipFade;
 
             for (int x = 0; x < width_; x++) {
                 // Domain warp: gentle horizontal sway, slow time evolution
