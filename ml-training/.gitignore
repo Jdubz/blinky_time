@@ -4,6 +4,7 @@ data/labels/
 data/processed/
 data/processed-deep/
 data/processed-deep-v2/
+data/processed_backup*/
 data/beat_sync/*.npy
 
 # Calibration captures and generated audio (large, reproducible via calibrate_mic.py)

@@ -91,11 +91,9 @@ private:
 
         switch (config_.style) {
             case LEDLayoutStyle::GRID: {
-                // For VERTICAL orientation (like tube light), columns are wired in zigzag
-                int col = ledIndex / config_.ledHeight;
-                int rowInCol = ledIndex % config_.ledHeight;
-                // Odd columns are reversed
-                int row = (col % 2 == 0) ? rowInCol : (config_.ledHeight - 1 - rowInCol);
+                // Row-major mapping: LED index = y * width + x
+                int row = ledIndex / config_.ledWidth;
+                int col = ledIndex % config_.ledWidth;
 
                 cx = config_.padding + col * cellSize + config_.ledSize / 2;
                 cy = config_.padding + row * cellSize + config_.ledSize / 2;

@@ -269,6 +269,7 @@ private:
         static uint8_t interpStorage[2][sizeof(tflite::MicroInterpreter)];
         int slot = (arena == rhythmArena_) ? 1 : 0;
 
+        // cppcheck-suppress constStatement -- placement new, not unused access
         interpreters[slot] = new(interpStorage[slot]) tflite::MicroInterpreter(
             *model, s.resolver, arena, arenaSize, &s.errorReporter);
         *interpreter = interpreters[slot];

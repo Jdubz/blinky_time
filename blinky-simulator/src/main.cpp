@@ -343,15 +343,11 @@ int main(int argc, char* argv[]) {
                   << " (" << audioPattern.getDuration() << " ms)" << std::endl;
     }
 
-    // Create timestamped output folder (<outputDir>/<generator>-<timestamp>/)
-    std::string timestamp = getTimestamp();
-    std::string runDir = config.outputDir + "/" + config.generator + "-" + timestamp;
+    // Output directly to outputDir, overwriting previous results
     createDir(config.outputDir);
-    createDir(runDir);
 
-    // Simple, friendly filenames within the run folder
-    std::string lowResPath = runDir + "/low-res.gif";
-    std::string highResPath = runDir + "/high-res.gif";
+    std::string lowResPath = config.outputDir + "/low-res.gif";
+    std::string highResPath = config.outputDir + "/high-res.gif";
 
     // Layout style based on device
     LEDLayoutStyle layoutStyle = (config.device == "hat") ? LEDLayoutStyle::STRIP : LEDLayoutStyle::GRID;
@@ -456,16 +452,16 @@ int main(int argc, char* argv[]) {
     highResGif.close();
 
     // Write params.json (generator parameters used)
-    std::string paramsJsonPath = runDir + "/params.json";
+    std::string paramsJsonPath = config.outputDir + "/params.json";
     ParamParser::writeJson(paramsJsonPath, config.generator, paramOverrides, allParams);
 
     // Write metrics.json (quantitative visual metrics)
-    std::string metricsJsonPath = runDir + "/metrics.json";
+    std::string metricsJsonPath = config.outputDir + "/metrics.json";
     VisualMetrics visualMetrics = metrics.compute();
     MetricsCalculator::writeJson(metricsJsonPath, visualMetrics);
 
     // Write meta.json (run configuration info)
-    std::string metaJsonPath = runDir + "/meta.json";
+    std::string metaJsonPath = config.outputDir + "/meta.json";
     std::ofstream metaFile(metaJsonPath);
     if (metaFile.is_open()) {
         metaFile << "{\n";
@@ -477,12 +473,12 @@ int main(int argc, char* argv[]) {
         metaFile << "  \"fps\": " << config.fps << ",\n";
         metaFile << "  \"width\": " << (int)deviceConfig.matrix.width << ",\n";
         metaFile << "  \"height\": " << (int)deviceConfig.matrix.height << ",\n";
-        metaFile << "  \"timestamp\": \"" << timestamp << "\"\n";
+        metaFile << "  \"timestamp\": \"" << getTimestamp() << "\"\n";
         metaFile << "}\n";
         metaFile.close();
     }
 
-    std::cout << "Created: " << runDir << "/" << std::endl;
+    std::cout << "Created: " << config.outputDir << "/" << std::endl;
     std::cout << "  low-res.gif (" << GifEncoder::getFileSize(lowResPath) << " bytes)" << std::endl;
     std::cout << "  high-res.gif (" << GifEncoder::getFileSize(highResPath) << " bytes)" << std::endl;
     std::cout << "  params.json" << std::endl;
