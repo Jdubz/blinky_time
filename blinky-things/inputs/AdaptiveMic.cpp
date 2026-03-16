@@ -235,17 +235,20 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
                    rawTrackedLevel < fastAgcThreshold;
 
   // Determine if we're in loud AGC mode (symmetric to fast AGC)
-  // Loud mode: when gain is at/near minimum and signal is persistently high
-  inLoudAgcMode_ = currentHardwareGain <= hwGainMinHeadroom &&
+  // Loud mode: when signal is persistently high and gain is in the upper 1/3 of range.
+  // Accelerates gain reduction when mic is clipping, without overshooting near the floor.
+  int loudAgcGainThreshold = gainMin_ + ((hwGainMaxSignal - gainMin_) / 3);
+  inLoudAgcMode_ = currentHardwareGain >= loudAgcGainThreshold &&
                    rawTrackedLevel > hwLoudThreshold;
 
   // Select calibration period and tracking tau based on mode
-  uint32_t calibPeriod = inFastAgcMode_ ? fastAgcPeriodMs : MicConstants::HW_CALIB_PERIOD_MS;
-  float trackingTau = inFastAgcMode_ ? fastAgcTrackingTau : MicConstants::HW_TRACKING_TAU;
+  bool fastMode = inFastAgcMode_ || inLoudAgcMode_;
+  uint32_t calibPeriod = fastMode ? fastAgcPeriodMs : MicConstants::HW_CALIB_PERIOD_MS;
+  float trackingTau = fastMode ? fastAgcTrackingTau : MicConstants::HW_TRACKING_TAU;
 
-  // Update raw tracking with appropriate tau (faster in fast mode)
-  // Note: This is in addition to the tracking in update() for more responsive fast AGC
-  if (inFastAgcMode_) {
+  // Update raw tracking with appropriate tau (faster in fast/loud mode)
+  // Note: This is in addition to the tracking in update() for more responsive AGC
+  if (fastMode) {
     float alpha = dt / (trackingTau + dt);
     rawTrackedLevel += alpha * (rawInstantLevel - rawTrackedLevel);
   }
