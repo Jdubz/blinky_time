@@ -3,43 +3,27 @@
 #include <math.h>
 
 // ============================================================================
-// Type-safe utility functions
-// These exist instead of Arduino's constrain/max/min macros because:
-// 1. Macros can evaluate arguments multiple times (side effect issues)
-// 2. Templates provide proper type deduction and avoid implicit conversions
-// 3. These are static inline, so no code bloat
+// AdaptiveMic — Fixed-gain microphone with window/range normalization
+//
+// Hardware gain is set once at boot to the platform's optimal level and never
+// changed. All dynamic range adaptation is done via peak/valley tracking.
+// This eliminates competing AGC systems and creates identical signal
+// processing on nRF52840 and ESP32-S3.
 // ============================================================================
+
+template<typename T>
+static inline T maxValue(T a, T b) { return (a > b) ? a : b; }
+
+template<typename T>
+static inline T minValue(T a, T b) { return (a < b) ? a : b; }
 
 template<typename T>
 static inline T constrainValue(T value, T minVal, T maxVal) {
     return (value < minVal) ? minVal : ((value > maxVal) ? maxVal : value);
 }
 
-template<typename T>
-static inline T maxValue(T a, T b) {
-    return (a > b) ? a : b;
-}
-
-template<typename T>
-static inline T minValue(T a, T b) {
-    return (a < b) ? a : b;
-}
-
-// -------- Window/Range and tracking constants --------
-constexpr float MIN_TAU_HARDWARE = 1.0f;      // Minimum hardware tracking tau (1s) to prevent instability
-constexpr float MIN_TAU_RANGE = 0.1f;         // Minimum peak/valley tracking tau (100ms)
-constexpr float MIN_NORMALIZATION_RANGE = 0.01f; // Minimum range to prevent division by zero (peak must be valley + this)
-constexpr float INSTANT_ADAPT_THRESHOLD = 1.3f; // Jump to signal if it exceeds peak * threshold
-
-// Valley tracking constants (for low-noise MEMS microphone)
-constexpr float VALLEY_RELEASE_MULTIPLIER = 4.0f; // Valley releases 4x slower than peak (very slow upward drift)
-constexpr float VALLEY_FLOOR = 0.001f;            // Minimum valley (0.1% of full scale, suits low-noise mic)
-
 // ISR processing constants
-constexpr int ISR_BUFFER_SIZE = 512;              // PDM read buffer size (samples per ISR call)
-
-// Gain limits are now read from IPdmMic::getGainMinDb/MaxDb() in begin()
-// and stored as gainMin_/gainMax_ instance members.
+constexpr int ISR_BUFFER_SIZE = 512;
 
 // -------- Static ISR accumulators --------
 AdaptiveMic* AdaptiveMic::s_instance = nullptr;
@@ -62,12 +46,10 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   _sampleRate = sampleRate;
   s_instance  = this;
 
-  // Query microphone capabilities and select AGC strategy
-  gainMin_     = pdm_.getGainMinDb();
-  gainMax_     = pdm_.getGainMaxDb();
-  agcStrategy_ = pdm_.hasHardwareGain() ? AgcStrategy::HARDWARE : AgcStrategy::SOFTWARE;
-
-  currentHardwareGain = constrainValue(gainInit, gainMin_, gainMax_);
+  // Set hardware gain to platform optimal level and leave it fixed.
+  // nRF52840: gain 40 (hardware PDM, SNR peaks at 25-35, degrades >40)
+  // ESP32-S3: gain 30 (software post-decimation, SNR degrades >30)
+  currentHardwareGain = constrainValue(gainInit, 0, 80);
 
   pdm_.onReceive(AdaptiveMic::onPDMdata);
 
@@ -78,19 +60,13 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
 
   // Initialize state
   level = 0.0f;
-  valleyLevel = VALLEY_FLOOR;  // Start valley very low for low-noise microphone (0.1% of full scale)
-  peakLevel = 0.01f;  // Start peak at 1% of full scale
-  lastHwCalibMs = time_.millis();
+  valleyLevel = MicConstants::VALLEY_FLOOR;
+  peakLevel = 0.01f;
   lastIsrMs = time_.millis();
   pdmAlive = false;
 
-  // Initialize FFT ring buffer
   s_fftWriteIdx = 0;
   s_extFftReadIdx = 0;
-
-  // Initialize AGC state
-  inFastAgcMode_ = false;
-  inLoudAgcMode_ = false;
 
   return true;
 }
@@ -101,13 +77,11 @@ void AdaptiveMic::end() {
 }
 
 void AdaptiveMic::update(float dt) {
-  // Clamp dt to reasonable range
   if (dt < MicConstants::MIN_DT_SECONDS) dt = MicConstants::MIN_DT_SECONDS;
   if (dt > MicConstants::MAX_DT_SECONDS) dt = MicConstants::MAX_DT_SECONDS;
 
-  // On platforms without hardware PDM interrupts (e.g. ESP32), poll() drains
-  // the I2S DMA buffer and fires the onPDMdata callback synchronously.
-  // On nRF52 this is a no-op — the hardware interrupt already fired it.
+  // On ESP32, poll() drains the I2S DMA buffer synchronously.
+  // On nRF52 this is a no-op — the hardware interrupt already fired.
   pdm_.poll();
 
   // Get raw audio samples from ISR
@@ -120,211 +94,50 @@ void AdaptiveMic::update(float dt) {
   pdmAlive = !isMicDead(nowMs, 250);
 
   if (n > 0) {
-    // Normalize raw samples to 0-1 range
-    // avgAbs is average of int16_t samples (0-32768 range)
     float normalized = avgAbs / 32768.0f;
-
-    // Store instantaneous raw level for debugging
     rawInstantLevel = normalized;
 
-    // Track raw input for hardware AGC (PRIMARY gain control)
-    // Hardware gain adapts to keep raw ADC input in optimal range for best SNR
-    float alpha = 1.0f - expf(-dt / maxValue(MicConstants::HW_TRACKING_TAU, MIN_TAU_HARDWARE));
-    rawTrackedLevel += alpha * (normalized - rawTrackedLevel);
-
-    // Window/Range normalization (SECONDARY - maps to 0-1 output)
-    // Track peak with attack/release envelope
+    // Peak tracking with attack/release envelope
     float tau = (normalized > peakLevel) ? peakTau : releaseTau;
-    float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MIN_TAU_RANGE));
+    float peakAlpha = 1.0f - expf(-dt / maxValue(tau, MicConstants::MIN_TAU_RANGE));
     peakLevel += peakAlpha * (normalized - peakLevel);
 
-    // Immediate adaptation: jump to signal if far outside current range
-    // This ensures loud transients are captured immediately without clipping
-    if (normalized > peakLevel * INSTANT_ADAPT_THRESHOLD) {
+    // Instant adaptation for loud transients
+    if (normalized > peakLevel * MicConstants::INSTANT_ADAPT_THRESHOLD) {
       peakLevel = normalized;
     }
 
-    // Valley tracking: Track actual signal floor (minimum) for low-noise microphone
-    // Use asymmetric attack/release: fast attack to new minimums, slow release upward
-    float valleyTau;
-    if (normalized < valleyLevel) {
-      // Fast attack to new minimum (capture quiet signals quickly)
-      valleyTau = peakTau;
-    } else {
-      // Very slow release upward (valley can rise if noise floor increases)
-      // Faster valley tracking in loud mode to prevent compression
-      float releaseMultiplier = inLoudAgcMode_ ? valleyFastTrackRatio : VALLEY_RELEASE_MULTIPLIER;
-      valleyTau = releaseTau * releaseMultiplier;
-    }
-    float valleyAlpha = 1.0f - expf(-dt / maxValue(valleyTau, MIN_TAU_RANGE));
-
-    // Valley tracks toward current signal (with asymmetric response)
+    // Valley tracking: fast attack to new minimums, slow release upward
+    float valleyTau = (normalized < valleyLevel) ? peakTau
+                    : releaseTau * MicConstants::VALLEY_RELEASE_MULTIPLIER;
+    float valleyAlpha = 1.0f - expf(-dt / maxValue(valleyTau, MicConstants::MIN_TAU_RANGE));
     valleyLevel += valleyAlpha * (normalized - valleyLevel);
-    // Low-noise mic: Allow valley to go very low (0.1% of full scale)
-    valleyLevel = maxValue(valleyLevel, VALLEY_FLOOR);
+    valleyLevel = maxValue(valleyLevel, MicConstants::VALLEY_FLOOR);
 
-    // Map current signal to 0-1 range based on peak/valley window
-    // Valley tracking serves as adaptive noise floor - no separate gate needed
-    float range = maxValue(MIN_NORMALIZATION_RANGE, peakLevel - valleyLevel);
+    // Map to 0-1 based on peak/valley window
+    float range = maxValue(MicConstants::MIN_NORMALIZATION_RANGE, peakLevel - valleyLevel);
     float mapped = (normalized - valleyLevel) / range;
     level = clamp01(mapped);
-
-    // NOTE: Onset detection handled by FrameBeatNN or ODF-derived pulse (v67)
-    // AdaptiveMic only provides normalized audio levels
-  }
-
-  if (!pdmAlive) return;
-
-  // Hardware gain adaptation (PRIMARY - optimizes ADC signal quality)
-  // Skip if gain is locked for testing
-  if (!hwGainLocked_) {
-    hardwareCalibrate(nowMs, dt);
   }
 }
 
-void AdaptiveMic::lockHwGain(int gain) {
-  // Lock hardware gain at specific value for testing (disables AGC)
-  hwGainLocked_ = true;
-  currentHardwareGain = constrainValue(gain, gainMin_, gainMax_);
-  pdm_.setGain(currentHardwareGain);
-}
-
-void AdaptiveMic::unlockHwGain() {
-  // Unlock hardware gain and re-enable AGC
-  hwGainLocked_ = false;
-  // Reset calibration timer to trigger immediate recalibration
-  lastHwCalibMs = time_.millis() - MicConstants::HW_CALIB_PERIOD_MS;
-}
-
-// ---------- Private helpers ----------
-
-/**
- * Consume accumulated ISR data atomically
- * Disables interrupts to prevent torn reads of multi-byte values (uint64_t, uint32_t).
- * The critical section is kept minimal (~20 cycles) to minimize interrupt latency.
- */
+// ---------- ISR data consumption ----------
 void AdaptiveMic::consumeISR(float& avgAbs, uint16_t& maxAbsVal, uint32_t& n) {
-  time_.disableInterrupts();  // Begin critical section
+  time_.disableInterrupts();
   uint64_t sum = s_sumAbs;
   uint32_t cnt = s_numSamples;
   uint16_t m   = s_maxAbs;
   s_sumAbs = 0;
   s_numSamples = 0;
   s_maxAbs = 0;
-  time_.enableInterrupts();  // End critical section
+  time_.enableInterrupts();
 
   n = cnt;
   maxAbsVal = m;
   avgAbs = (cnt > 0) ? float(sum) / float(cnt) : 0.0f;
 }
 
-void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
-  // PRIMARY GAIN CONTROL: Adjust hardware gain based on raw ADC input level
-  // Goal: Keep raw input at target level (hwTarget) for best SNR
-  // This ensures high-quality signal into ADC before software processing
-
-  // Determine if we're in fast AGC mode
-  // Fast mode: when signal is persistently low and gain has significant room to grow.
-  // Triggers when gain is in the lower 2/3 of the range — covers startup and
-  // quiet-after-loud recovery without overshooting near the ceiling.
-  // Only meaningful on HARDWARE strategy: pre-decimation gain improves SNR.
-  int fastAgcGainThreshold = gainMin_ + ((hwGainMaxSignal - gainMin_) * 2 / 3);
-  inFastAgcMode_ = (agcStrategy_ == AgcStrategy::HARDWARE) &&
-                   fastAgcEnabled &&
-                   currentHardwareGain <= fastAgcGainThreshold &&
-                   rawTrackedLevel < fastAgcThreshold;
-
-  // Determine if we're in loud AGC mode (symmetric to fast AGC)
-  // Loud mode: when signal is persistently high and gain is in the upper 2/3 of range.
-  // Accelerates gain reduction when mic is clipping. No agcStrategy_ guard — intentionally
-  // active on both HARDWARE and SOFTWARE platforms (ESP32-S3 needs it for startup clipping).
-  // Step sizes use normal-mode values (not fast-mode) to avoid overshoot on gain reduction.
-  int loudAgcGainThreshold = gainMin_ + ((hwGainMaxSignal - gainMin_) / 3);
-  inLoudAgcMode_ = (hwGainMaxSignal > gainMin_) &&
-                   currentHardwareGain >= loudAgcGainThreshold &&
-                   rawTrackedLevel > hwLoudThreshold;
-
-  // Select calibration period and tracking tau based on mode
-  bool fastMode = inFastAgcMode_ || inLoudAgcMode_;
-  uint32_t calibPeriod = fastMode ? fastAgcPeriodMs : MicConstants::HW_CALIB_PERIOD_MS;
-  float trackingTau = fastMode ? fastAgcTrackingTau : MicConstants::HW_TRACKING_TAU;
-
-  // Update raw tracking with appropriate tau (faster in fast/loud mode)
-  // Note: This is in addition to the tracking in update() for more responsive AGC
-  if (fastMode) {
-    float alpha = dt / (trackingTau + dt);
-    rawTrackedLevel += alpha * (rawInstantLevel - rawTrackedLevel);
-  }
-
-  // Use signed arithmetic to handle millis() wraparound at 49.7 days
-  if ((int32_t)(nowMs - lastHwCalibMs) < (int32_t)calibPeriod) return;
-
-  // Calculate error from target (signed: negative = too quiet, positive = too loud)
-  // Dead zone is wider for software-gain platforms to avoid thrashing with coarser steps.
-  float deadZone = (agcStrategy_ == AgcStrategy::SOFTWARE) ? 0.02f : 0.01f;
-  float error = rawTrackedLevel - hwTarget;
-  float errorMagnitude = fabsf(error);
-
-  if (errorMagnitude <= deadZone) {
-    lastHwCalibMs = nowMs;
-    return;
-  }
-
-  // Determine direction: negative error = too quiet → increase gain
-  int direction = (error < 0.0f) ? +1 : -1;
-
-  // Adaptive step size: small frequent adjustments for smooth visual response.
-  // Fast/loud mode uses slightly larger steps to converge quickly at startup.
-  // Normal mode uses small steps every 2s — no visible jumps.
-  int stepSize;
-  if (fastMode) {
-    // Fast/loud mode: converging from way off target
-    if (errorMagnitude > 0.15f) {
-      stepSize = 4;
-    } else if (errorMagnitude > 0.05f) {
-      stepSize = 2;
-    } else {
-      stepSize = 1;
-    }
-  } else if (agcStrategy_ == AgcStrategy::SOFTWARE) {
-    // Software gain: always single steps to avoid clipping
-    stepSize = 1;
-  } else {
-    // Hardware gain, normal mode: gentle single steps every 2s
-    stepSize = (errorMagnitude > 0.10f) ? 2 : 1;
-  }
-
-  int delta = direction * stepSize;
-  int oldGain = currentHardwareGain;
-  // Use full gain range in loud mode to handle extreme SPL
-  // Otherwise enforce headroom minimum to preserve dynamic range
-  int effectiveMinGain = inLoudAgcMode_ ? gainMin_ : hwGainMinHeadroom;
-  // AGC ceiling: applies unconditionally (including loud mode) — harmless since
-  // loud mode drives gain down, never up toward the ceiling.
-  int effectiveMaxGain = (hwGainMaxSignal < gainMax_) ? hwGainMaxSignal : gainMax_;
-  currentHardwareGain = constrainValue(currentHardwareGain + delta, effectiveMinGain, effectiveMaxGain);
-
-  if (currentHardwareGain != oldGain) {
-    pdm_.setGain(currentHardwareGain);
-    // Note: With window/range normalization, no compensation needed
-    // The peak tracker will naturally adapt to the new gain level
-  }
-
-  lastHwCalibMs = nowMs;
-}
-
 // ---------- ISR Callback ----------
-// This callback is invoked by the PDM library when audio data is available.
-// On nRF52840 with Seeeduino mbed core, PDM.onReceive() callbacks run in
-// interrupt context, so interrupts are already disabled during execution.
-//
-// PERFORMANCE NOTES:
-// - Typical execution: 256 samples @ 16kHz = ~1.5-2.0ms per ISR call
-// - Biquad filters: 2 filters × 256 samples × ~20 cycles/filter = ~10k cycles
-// - ARM Cortex-M4 @ 64MHz with FPU: ~0.16ms for biquad processing
-// - Total ISR time: ~0.4-0.6ms (well under 16ms buffer interval)
-// - Critical section (disableInterrupts): <10µs for atomic variable updates
-// - ISR does not block other interrupts except during critical section
 void AdaptiveMic::onPDMdata() {
   if (!s_instance) return;
   int bytesAvailable = s_instance->pdm_.available();
@@ -341,72 +154,47 @@ void AdaptiveMic::onPDMdata() {
 
   for (int i = 0; i < samples; ++i) {
     int16_t s = buffer[i];
-    // Use int32_t to avoid overflow when s == INT16_MIN (-32768)
     uint16_t a = (uint16_t)((s < 0) ? -((int32_t)s) : s);
     localSumAbs += a;
     if (a > localMaxAbs) localMaxAbs = a;
   }
 
-  // Note: We're already in ISR context, so interrupts are disabled.
-  // Direct access to static volatiles is safe here without additional guards.
   s_sumAbs     += localSumAbs;
   s_numSamples += samples;
   if (localMaxAbs > s_maxAbs) s_maxAbs = localMaxAbs;
   s_isrCount++;
 
-  // Copy samples to FFT ring buffer for spectral flux detection
-  // This is a lock-free single-producer (ISR) / single-consumer (main) pattern
+  // Copy samples to FFT ring buffer for spectral analysis
   uint32_t writeIdx = s_fftWriteIdx;
   for (int i = 0; i < samples; ++i) {
     s_fftRing[writeIdx & (FFT_RING_SIZE - 1)] = buffer[i];
     writeIdx++;
   }
-  s_fftWriteIdx = writeIdx;  // Atomic write of final index
+  s_fftWriteIdx = writeIdx;
 
   s_instance->lastIsrMs = s_instance->time_.millis();
 }
 
-// NOTE: Onset detection handled by FrameBeatNN or ODF-derived pulse (v67)
-// AdaptiveMic only provides audio input with level normalization
-
 /**
- * Get samples for external FFT consumers (AudioController → SharedSpectralAnalysis)
- * Provides raw PCM samples from ISR ring buffer for spectral analysis
+ * Get samples from ISR ring buffer for external FFT consumers.
+ * Returns the number of samples actually copied.
  */
 int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
-  if (!buffer || maxCount <= 0) {
-    return 0;
+  uint32_t writeIdx = s_fftWriteIdx;
+  uint32_t available = writeIdx - s_extFftReadIdx;
+  if (available == 0) return 0;
+
+  int toCopy = (int)available;
+  if (toCopy > maxCount) toCopy = maxCount;
+  if (toCopy > FFT_RING_SIZE) {
+    s_extFftReadIdx = writeIdx - FFT_RING_SIZE;
+    toCopy = FFT_RING_SIZE;
   }
+  if (toCopy > maxCount) toCopy = maxCount;
 
-  uint32_t writeIdx = s_fftWriteIdx;  // Snapshot of write position
-  int32_t available = (int32_t)(writeIdx - s_extFftReadIdx);  // Signed for wraparound safety
-
-  // Handle negative values (shouldn't happen, but be defensive)
-  if (available < 0) {
-    available = 0;
+  for (int i = 0; i < toCopy; ++i) {
+    buffer[i] = s_fftRing[(s_extFftReadIdx + i) & (FFT_RING_SIZE - 1)];
   }
-
-  // Limit to ring buffer size to prevent reading stale data if we fell behind
-  if ((uint32_t)available > FFT_RING_SIZE) {
-    // Catch-up: skip ahead to be FFT_RING_SIZE samples behind
-    // Handle early execution case where writeIdx < FFT_RING_SIZE
-    if (writeIdx >= FFT_RING_SIZE) {
-      s_extFftReadIdx = writeIdx - FFT_RING_SIZE;
-    } else {
-      // Early in execution, can't go back a full buffer - start from beginning
-      s_extFftReadIdx = 0;
-    }
-    available = FFT_RING_SIZE;
-  }
-
-  // Limit to requested count
-  int toRead = (available > maxCount) ? maxCount : available;
-
-  // Copy samples to external buffer
-  for (int i = 0; i < toRead; i++) {
-    buffer[i] = s_fftRing[s_extFftReadIdx & (FFT_RING_SIZE - 1)];
-    s_extFftReadIdx++;
-  }
-
-  return toRead;
+  s_extFftReadIdx += toCopy;
+  return toCopy;
 }

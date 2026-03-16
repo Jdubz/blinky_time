@@ -110,8 +110,9 @@ public:
     // Version 70: Persist v65 runtime-only params (pllWarmupBeats, snapHysteresis,
     //   dbEmaAlpha, dbThreshold, dbDecay). Previously tunable via serial but lost on reboot.
     // Version 71: Fix fastAgcPeriodMs/fastAgcTrackingTau defaults to match AdaptiveMic.h
-    //   (5000→1000ms, 5.0→2.0s). Forces devices to pick up corrected AGC defaults.
-    static const uint8_t SETTINGS_VERSION = 71;
+    // Version 72: Remove AGC — hardware gain fixed at platform optimal. StoredMicParams
+    //   reduced to peakTau + releaseTau only. Window/range normalization handles all adaptation.
+    static const uint8_t SETTINGS_VERSION = 72;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -196,18 +197,9 @@ public:
     };
 
     struct StoredMicParams {
-        // Window/Range normalization parameters
+        // Window/Range normalization parameters (v72: AGC removed, only these remain)
         float peakTau;            // Peak adaptation speed (attack time, seconds)
         float releaseTau;         // Peak release speed (release time, seconds)
-        // Hardware AGC parameters
-        float hwTarget;           // Target raw input level (±0.01 dead zone)
-
-        // Fast AGC parameters
-        float fastAgcThreshold;   // Raw level threshold to trigger fast AGC
-        float fastAgcTrackingTau; // Tracking tau in fast mode (seconds)
-        uint16_t fastAgcPeriodMs; // Calibration period in fast mode (ms)
-        bool fastAgcEnabled;      // Enable fast AGC when signal is low
-        uint8_t hwGainMaxSignal;  // Max HW gain for AGC (0-80)
     };
 
     struct StoredMusicParams {
@@ -454,8 +446,8 @@ public:
         "StoredWaterParams size changed! Increment SETTINGS_VERSION and update assertion. (68 bytes = 16 floats + 4 uint8 + padding)");
     static_assert(sizeof(StoredLightningParams) == 36,
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (36 bytes = 7 floats + 7 uint8 + padding)");
-    static_assert(sizeof(StoredMicParams) == 24,
-        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (24 bytes = 5 floats + 1 uint16 + 1 bool + 1 uint8)");
+    static_assert(sizeof(StoredMicParams) == 8,
+        "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     static_assert(sizeof(StoredMusicParams) == 312,
         "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (312 bytes = 66 floats + 7 uint8 + 18 bools + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
