@@ -187,9 +187,9 @@ void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
     settings_.registerFloat("hf_energydrop", &hfp->energyThresholdDrop, "heatfire",
         "Max threshold reduction from energy", 0.1f, 0.6f, heatFireParamChanged);
     settings_.registerFloat("hf_beatpulsedepth", &hfp->beatPulseDepth, "heatfire",
-        "On-beat phase breathing threshold drop", 0.0f, 0.15f, heatFireParamChanged);
+        "Phase breathing height amplitude", 0.0f, 0.5f, heatFireParamChanged);
     settings_.registerFloat("hf_burststrength", &hfp->burstStrength, "heatfire",
-        "Transient pulse threshold drop magnitude", 0.0f, 0.3f, heatFireParamChanged);
+        "Transient pulse height flare", 0.0f, 0.5f, heatFireParamChanged);
     settings_.registerFloat("hf_organictransmin", &hfp->organicTransientMin, "heatfire",
         "Min transient to trigger burst", 0.0f, 1.0f, heatFireParamChanged);
 
@@ -201,7 +201,7 @@ void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
 
     // Animation
     settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
-        "Base noise scroll speed", 0.001f, 0.1f, heatFireParamChanged);
+        "Base noise scroll speed", 0.01f, 0.5f, heatFireParamChanged);
     settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
         "Beat sync depth for scroll speed (0-1)", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_densityscrollboost", &hfp->densityScrollBoost, "heatfire",

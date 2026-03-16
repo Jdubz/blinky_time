@@ -625,6 +625,7 @@ def main():
                     Y_batch = Y_batch[:, :T_trunc].reshape(
                         Y_batch.shape[0], -1, pf, Y_batch.shape[2]
                     ).max(dim=2).values
+                    Y_batch = Y_batch[:, :Y_pred.shape[1]]
                 hard_loss = loss_fn(Y_pred, Y_batch)
 
                 if use_distill and T_batch.numel() > 0:

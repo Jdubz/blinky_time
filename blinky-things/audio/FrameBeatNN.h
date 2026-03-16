@@ -265,6 +265,7 @@ private:
         // MicroInterpreter is placement-new'd into the provided buffer.
         SharedState& s = getShared();
         static tflite::MicroInterpreter* interpreters[2] = {nullptr, nullptr};
+        alignas(alignof(tflite::MicroInterpreter))
         static uint8_t interpStorage[2][sizeof(tflite::MicroInterpreter)];
         int slot = (arena == rhythmArena_) ? 1 : 0;
 

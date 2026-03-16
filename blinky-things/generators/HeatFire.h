@@ -12,23 +12,23 @@
  */
 struct HeatFireParams {
     // Intensity threshold (controls fire size and audio reactivity)
-    float silenceThreshold;      // Noise threshold at silence (0-1). Higher = less fire. Default: 0.60.
-    float energyThresholdDrop;   // Max threshold reduction from energy (0-0.6). Default: 0.45.
-    float beatPulseDepth;        // Phase breathing height amplitude: on-beat flameHeight surge (0-0.5). Default: 0.40.
-    float burstStrength;         // Transient (pulse) threshold drop magnitude (0-0.3). Default: 0.15.
+    float silenceThreshold;      // Noise threshold at silence (0.3-0.8). Higher = less fire. Default: 0.58.
+    float energyThresholdDrop;   // Max threshold reduction from energy (0.1-0.6). Default: 0.22.
+    float beatPulseDepth;        // Phase breathing height amplitude (0-0.5). Default: 0.40.
+    float burstStrength;         // Transient (pulse) height flare (0-0.5). Default: 0.25.
     float organicTransientMin;   // Minimum pulse value to trigger burst (0-1). Default: 0.25.
 
     // Flame shape
-    float flameBaseHeight;       // Flame height fraction at silence (0-1). Default: 0.40.
+    float flameBaseHeight;       // Flame height fraction at silence (0.1-0.8). Default: 0.20.
     float warpStrength;          // Domain warp amplitude — controls lateral sway (0-1). Default: 0.40.
 
     // Animation
-    float noiseSpeed;            // Base noise scroll speed (0.001-0.1). Default: 0.08.
+    float noiseSpeed;            // Base noise scroll speed (0.01-0.5). Default: 0.25.
     float musicBeatDepth;        // Beat sync depth for scroll speed (0-1). Default: 0.95.
     float densityScrollBoost;    // OnsetDensity → extra scroll speed (0-1.0). Default: 0.50.
 
     // Output
-    float brightness;            // Master output brightness scale (0-1). Default: 0.40.
+    float brightness;            // Master output brightness scale (0-1). Default: 0.38.
 
     HeatFireParams() {
         silenceThreshold    = 0.58f;  // Higher threshold = fewer lit pixels = more dark space

@@ -91,9 +91,11 @@ private:
 
         switch (config_.style) {
             case LEDLayoutStyle::GRID: {
-                // Row-major mapping: LED index = y * width + x
-                int row = ledIndex / config_.ledWidth;
-                int col = ledIndex % config_.ledWidth;
+                // Column-major zigzag: matches firmware LEDMapper VERTICAL orientation
+                // Even columns: top to bottom. Odd columns: bottom to top.
+                int col = ledIndex / config_.ledHeight;
+                int rowInCol = ledIndex % config_.ledHeight;
+                int row = (col % 2 == 0) ? rowInCol : (config_.ledHeight - 1 - rowInCol);
 
                 cx = config_.padding + col * cellSize + config_.ledSize / 2;
                 cy = config_.padding + row * cellSize + config_.ledSize / 2;
