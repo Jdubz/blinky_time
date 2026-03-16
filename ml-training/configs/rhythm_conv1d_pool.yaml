@@ -1,0 +1,29 @@
+# Rhythm Conv1D+Pool — downbeat and bar structure detection
+#
+# Long window (192 frames = 3.07s, 1.5+ bars at all EDM tempos) with
+# temporal pooling to compress time dimension before classification.
+# Conv1D preserves temporal locality; AvgPool progressively summarizes.
+# Paired with OnsetNN (onset_conv1d.yaml) for kick/snare detection.
+#
+# Architecture: Conv1D + AvgPool1D + FC head
+#   Conv1D(26->32, k=5) -> AvgPool(4) -> Conv1D(32->48, k=5) -> AvgPool(4)
+#   -> Conv1D(48->32, k=3) -> FC(32->2)
+#   192 frames -> 48 -> 12 output timesteps (16x temporal compression)
+#   ~15K params, ~15 KB INT8, <8ms inference on Cortex-M4F
+#
+# Training: labels are downsampled 16x to match pooled output dimension.
+# Firmware: 192-frame sliding window, takes last output timestep.
+
+model:
+  type: "frame_conv1d_pool"
+  channels: [32, 48, 32]
+  kernel_sizes: [5, 5, 3]
+  pool_sizes: [4, 4, 1]              # Pool after first two conv layers (4x4=16x total)
+  window_frames: 192
+  dropout: 0.1
+  downbeat: true
+
+export:
+  output_header: "../blinky-things/audio/rhythm_model_data.h"
+  c_array_name: "rhythm_model_data"
+  max_model_size_kb: 40

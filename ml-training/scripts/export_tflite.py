@@ -345,6 +345,33 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
     return keras.Model(inputs=inputs, outputs=x, name="frame_beat_conv1d")
 
 
+def build_tf_frame_conv1d_pool(n_mels: int, channels: list[int],
+                               kernel_sizes: list[int], pool_sizes: list[int],
+                               window_frames: int, downbeat: bool) -> keras.Model:
+    """Build TF/Keras equivalent of PyTorch FrameBeatConv1DPool.
+
+    Conv1D with interleaved AveragePooling1D for temporal compression.
+    TFLite ops: Conv2D, Pad, AveragePool2D (Pool1D mapped), Logistic, Quantize, Dequantize.
+    """
+    out_channels = 2 if downbeat else 1
+    inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
+    x = inputs
+
+    for i, (ch, k, pool) in enumerate(zip(channels, kernel_sizes, pool_sizes)):
+        pad = k - 1
+        x = layers.ZeroPadding1D(padding=(pad, 0))(x)
+        x = layers.Conv1D(ch, k, padding="valid", use_bias=True,
+                          activation="relu", name=f"conv{i+1}")(x)
+        if pool > 1:
+            x = layers.AveragePooling1D(pool_size=pool, strides=pool,
+                                        padding="valid", name=f"pool{i+1}")(x)
+
+    x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
+                      name="output_conv")(x)
+
+    return keras.Model(inputs=inputs, outputs=x, name="frame_beat_conv1d_pool")
+
+
 def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
                               channels: list[int]):
     """Transfer FrameBeatConv1D weights from PyTorch to TF/Keras.
@@ -997,6 +1024,50 @@ def main():
         print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
 
         inference_frames = window_frames
+    elif model_type == "frame_conv1d_pool":
+        # --- Frame-level Conv1D with temporal pooling ---
+        channels = cfg["model"]["channels"]
+        kernel_sizes = cfg["model"]["kernel_sizes"]
+        pool_sizes = cfg["model"]["pool_sizes"]
+        window_frames = cfg["model"]["window_frames"]
+        dropout = cfg["model"].get("dropout", 0.1)
+
+        print(f"Building TF model (type=frame_conv1d_pool, channels={channels}, "
+              f"kernels={kernel_sizes}, pools={pool_sizes}, window={window_frames}, "
+              f"downbeat={use_downbeat})...")
+        tf_model = build_tf_frame_conv1d_pool(
+            n_mels=n_mels,
+            channels=channels,
+            kernel_sizes=kernel_sizes,
+            pool_sizes=pool_sizes,
+            window_frames=window_frames,
+            downbeat=use_downbeat,
+        )
+        # Reuse conv1d weight transfer — pooling layers are parameter-free
+        _transfer_conv1d_weights(tf_model, pt_state, channels)
+
+        # Verify weight transfer
+        print("Verifying weight transfer...")
+        from models.beat_conv1d_pool import build_beat_conv1d_pool
+        pt_model = build_beat_conv1d_pool(
+            n_mels=n_mels,
+            channels=channels,
+            kernel_sizes=kernel_sizes,
+            pool_sizes=pool_sizes,
+            dropout=dropout,
+            downbeat=use_downbeat,
+        )
+        pt_model.load_state_dict(pt_state)
+        pt_model.eval()
+
+        test_input = np.random.randn(1, window_frames, n_mels).astype(np.float32)
+        with torch.no_grad():
+            pt_out = pt_model(torch.from_numpy(test_input)).numpy()
+        tf_out = tf_model.predict(test_input, verbose=0)
+        max_diff = np.abs(pt_out - tf_out).max()
+        print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
+
+        inference_frames = window_frames
     else:
         # --- CNN model (causal_cnn or ds_tcn) ---
         inference_frames = args.inference_frames or cfg["training"]["chunk_frames"]
@@ -1055,7 +1126,7 @@ def main():
     tflite_path = str(output_dir / tflite_name)
 
     print(f"Exporting {'INT8' if quantize else 'FP32'} TFLite model...")
-    if model_type in ("frame_fc", "frame_fc_enhanced", "frame_conv1d") and quantize:
+    if model_type in ("frame_fc", "frame_fc_enhanced", "frame_conv1d", "frame_conv1d_pool") and quantize:
         # Frame models need window-based calibration samples
         window_frames = cfg["model"]["window_frames"]
         converter = tf.lite.TFLiteConverter.from_keras_model(tf_model)
