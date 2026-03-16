@@ -385,6 +385,7 @@ def main():
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"]["dropout"],
             downbeat=use_downbeat,
+            sum_head=cfg["model"].get("sum_head", False),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
         from models.beat_conv1d_pool import build_beat_conv1d_pool

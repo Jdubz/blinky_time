@@ -156,19 +156,15 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 4. Get onset strength for rhythm analysis
-    //    OnsetNN inference every frame (sole ODF source).
-    //    RhythmNN inference every 2nd frame (downbeat detection, max 32ms stale).
+    //    NN model discriminates beat onsets from sustained notes/hi-hats/noise.
+    //    Use pure NN ODF when model is ready — mixing with mic_.getLevel()
+    //    degrades beat tracking because mic level fires on all loud audio.
+    //    Falls back to mic level only when no model is loaded.
     float onsetStrength = 0.0f;
 
     if (frameBeatNN_.isReady()) {
         if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
-            onsetStrength = frameBeatNN_.inferOnset(spectral_.getRawMelBands());
-            // RhythmNN: run every 2nd frame (31.25 Hz). inferOnset() already
-            // pushed the mel frame into RhythmNN's window buffer.
-            if (++rhythmFrameCounter_ >= 2) {
-                frameBeatNN_.inferRhythm();
-                rhythmFrameCounter_ = 0;
-            }
+            onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
             spectral_.resetFrameReady();
         } else {
             onsetStrength = mic_.getLevel();
@@ -231,14 +227,13 @@ const AudioControl& AudioController::update(float dt) {
     // Cache NN-active state once per update — used by ODF smoothing, contrast,
     // ACF mean subtraction, and CBSS alpha adaptation.
     nnActive_ = frameBeatNN_.isReady();
-    rhythmActive_ = frameBeatNN_.isRhythmReady();
     frameBeatNN_.setProfileEnabled(nnProfile);
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
-    // Bypass when NN is active — OnsetNN's sliding window already provides
+    // Bypass when NN is active — FrameBeatNN's sliding window already provides
     // temporal context. Additional smoothing blurs activation peaks that the CBSS
     // needs sharp. (madmom/BeatNet don't smooth NN output.)
-    // cppcheck-suppress knownConditionTrueFalse -- nnActive_ is always false until OnsetNN model is loaded
+    // cppcheck-suppress knownConditionTrueFalse -- nnActive_ is always false until NN model is loaded
     if (nnActive_) {
         lastSmoothedOnset_ = onsetStrength;
     } else {
@@ -1764,6 +1759,9 @@ uint16_t AudioController::effectivePulseCooldownMs() const {
 // ===== OUTPUT SYNTHESIS =====
 
 void AudioController::synthesizeEnergy() {
+    // mic_.getLevel() is the adaptive-normalized audio level (0-1).
+    // This is the source of truth for energy — it tracks actual loudness with
+    // proper peak/valley tracking. Don't use spectral RMS (compressor inflates it).
     float energy = mic_.getLevel();
 
     // Apply beat-aligned energy boost when rhythm is locked
@@ -1860,12 +1858,11 @@ void AudioController::updateOnsetDensity(uint32_t nowMs) {
     // Smooth NN downbeat activation with EMA for beat-synchronized sampling.
     // The smoothed value is sampled in detectBeat() when a beat fires, so
     // downbeat only triggers on actual beats (not between beats).
-    // Uses RhythmNN output (separate model from OnsetNN since v69).
-    if (rhythmActive_ && frameBeatNN_.hasDownbeatOutput()) {
+    if (nnActive_ && frameBeatNN_.hasDownbeatOutput()) {
         float rawDownbeat = frameBeatNN_.getLastDownbeat();
         downbeatSmoothed_ = downbeatSmoothed_ * (1.0f - dbEmaAlpha) + rawDownbeat * dbEmaAlpha;
     } else {
-        downbeatSmoothed_ *= 0.9f;  // Decay when no RhythmNN
+        downbeatSmoothed_ *= 0.9f;  // Decay when no downbeat output
     }
     // Note: control_.downbeat is set in detectBeat(), not here.
 }

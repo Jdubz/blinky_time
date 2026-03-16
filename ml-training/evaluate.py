@@ -152,6 +152,7 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"].get("dropout", 0.1),
             downbeat=use_downbeat,
+            sum_head=cfg["model"].get("sum_head", False),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
         from models.beat_conv1d_pool import build_beat_conv1d_pool

@@ -201,7 +201,7 @@ void SerialConsole::registerHeatFireSettings(HeatFireParams* hfp) {
 
     // Animation
     settings_.registerFloat("hf_noisespeed", &hfp->noiseSpeed, "heatfire",
-        "Base noise scroll speed", 0.01f, 0.5f, heatFireParamChanged);
+        "Base noise scroll speed (units/sec)", 1.0f, 30.0f, heatFireParamChanged);
     settings_.registerFloat("hf_musicbeatdepth", &hfp->musicBeatDepth, "heatfire",
         "Beat sync depth for scroll speed (0-1)", 0.0f, 1.0f, heatFireParamChanged);
     settings_.registerFloat("hf_densityscrollboost", &hfp->densityScrollBoost, "heatfire",
@@ -1605,8 +1605,6 @@ void SerialConsole::streamTick() {
             // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
             Serial.print(F(",\"nn\":"));
             Serial.print(audioCtrl_->getFrameBeatNN().isReady() ? 1 : 0);
-            Serial.print(F(",\"nnr\":"));
-            Serial.print(audioCtrl_->getFrameBeatNN().isRhythmReady() ? 1 : 0);
             if (audioCtrl_->getFrameBeatNN().hasDownbeatOutput()) {
                 Serial.print(F(",\"nndb\":"));
                 Serial.print(audioCtrl_->getFrameBeatNN().getLastDownbeat(), 4);

@@ -12,8 +12,8 @@
  */
 struct HeatFireParams {
     // Intensity threshold (controls fire size and audio reactivity)
-    float silenceThreshold;      // Noise threshold at silence (0.3-0.8). Higher = less fire. Default: 0.58.
-    float energyThresholdDrop;   // Max threshold reduction from energy (0.1-0.6). Default: 0.22.
+    float silenceThreshold;      // Noise threshold at silence (0.2-0.6). Higher = less fire. Default: 0.45.
+    float energyThresholdDrop;   // Max threshold reduction from energy (0.1-0.4). Default: 0.30.
     float beatPulseDepth;        // Phase breathing height amplitude (0-0.5). Default: 0.40.
     float burstStrength;         // Transient (pulse) height flare (0-0.5). Default: 0.25.
     float organicTransientMin;   // Minimum pulse value to trigger burst (0-1). Default: 0.25.
@@ -23,7 +23,7 @@ struct HeatFireParams {
     float warpStrength;          // Domain warp amplitude — controls lateral sway (0-1). Default: 0.40.
 
     // Animation
-    float noiseSpeed;            // Base noise scroll speed (0.01-0.5). Default: 0.25.
+    float noiseSpeed;            // Base noise scroll speed in units/sec (1-30). Default: 5.
     float musicBeatDepth;        // Beat sync depth for scroll speed (0-1). Default: 0.95.
     float densityScrollBoost;    // OnsetDensity → extra scroll speed (0-1.0). Default: 0.50.
 
@@ -31,14 +31,14 @@ struct HeatFireParams {
     float brightness;            // Master output brightness scale (0-1). Default: 0.38.
 
     HeatFireParams() {
-        silenceThreshold    = 0.58f;  // Higher threshold = fewer lit pixels = more dark space
-        energyThresholdDrop = 0.22f;  // Modest density variation from energy
+        silenceThreshold    = 0.45f;  // Baseline: ~55% of noise produces fire (visible idle embers)
+        energyThresholdDrop = 0.30f;  // Big density swing: loud music drops to 0.15 (85% lit)
         beatPulseDepth      = 0.40f;  // Per-beat height breathing amplitude (primary music sync)
         burstStrength       = 0.25f;  // Height flare on transient (fraction of display height)
         organicTransientMin = 0.25f;  // Responsive to softer transients
         flameBaseHeight     = 0.20f;  // 20% rest height — room for full phase-breathing range
         warpStrength        = 0.40f;  // Moderate lateral sway
-        noiseSpeed          = 0.25f;  // Scroll speed — fast enough to look like fire
+        noiseSpeed          = 5.0f;   // Scroll speed (units/sec, dt-based) — tuned on 4x15 tube
         musicBeatDepth      = 0.95f;  // Deep beat sync for scroll speed modulation
         densityScrollBoost  = 0.50f;  // 50% faster flicker at max onset density
         brightness          = 0.38f;  // Lower base — beat breathing creates the peaks

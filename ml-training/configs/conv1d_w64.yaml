@@ -1,0 +1,27 @@
+# Single Conv1D W64 — joint beat + downbeat detection
+#
+# Replaces dual-model (OnsetNN + RhythmNN) with single joint model.
+# Beat This! sum head constrains downbeat ≤ beat structurally.
+#
+# Architecture: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->2, k=1)
+#   W64 = 1.024s context (~2 beats at 120 BPM)
+#   ~7K params, ~7 KB INT8, ~26ms inference on Cortex-M4F
+#   Receptive field: 9 frames = 144ms
+#
+# Output: 2 channels
+#   ch0 = sigmoid(beat_logit)               — beat activation (ODF for CBSS)
+#   ch1 = ch0 * sigmoid(downbeat_logit)     — downbeat ≤ beat (sum head)
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 64
+  dropout: 0.1
+  downbeat: true
+  sum_head: true
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 20

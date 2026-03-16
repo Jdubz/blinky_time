@@ -143,7 +143,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Dual-model TFLite NN inference host (OnsetNN + RhythmNN)
+- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Single-model TFLite NN inference (beat + downbeat multi-task)
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
@@ -199,8 +199,7 @@ AdaptiveMic (AGC + normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── OnsetNN (Conv1D, W8, <1ms, every frame) → onset_activation → ODF + pulse
-    ├── RhythmNN (Conv1D+Pool, W192, <8ms, every 2nd frame) → beat + downbeat activation
+    ├── FrameBeatNN (Conv1D W64, ~26ms, every frame) → beat activation (ODF) + downbeat activation
     ↓
 AudioController (CBSS beat tracking + pulse detection)
     ↓
@@ -220,17 +219,16 @@ RenderPipeline → LED Output
    - `SharedSpectralAnalysis.h` - FFT-256 (128 freq bins @ 62.5 Hz), soft-knee compressor → per-bin whitening (v23+)
    - Window/range normalization (0-1 output)
 
-2. **Onset Detection (transitioning to dual-model)**
-   - `FrameBeatNN.h` - Dual-model TFLite NN inference host
-     - **OnsetNN**: Conv1D W8 (128ms), ~4 KB INT8, <1ms, every frame → onset_activation (ODF + pulse)
-     - **RhythmNN**: Conv1D+Pool W192 (3.07s), ~16 KB INT8, <8ms, every 2nd frame → beat + downbeat activation
-   - Firmware scaffold ready (v69), models training. Placeholder stubs compile to no-ops.
+2. **Beat/Downbeat Detection (single Conv1D model)**
+   - `FrameBeatNN.h` - Single-model TFLite NN inference
+     - Conv1D W64 (1.024s), ~7 KB INT8, ~26ms, every frame → beat activation (ODF) + downbeat activation
+     - Beat This! sum head: downbeat output structurally constrained ≤ beat output
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple ODF)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: OnsetNN (Conv1D, <1ms). Falls back to mic level if model fails to load.
+   - ODF source: FrameBeatNN beat activation (Conv1D). Falls back to mic level if model fails to load.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -253,7 +251,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v68)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v71)
    - `SettingsRegistry.h/cpp` - Tunable parameters (v70: ~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -347,15 +345,14 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands)
-3. SharedSpectralAnalysis → OnsetNN (8-frame mel window → Conv1D → onset_activation)
-3b. SharedSpectralAnalysis → RhythmNN (192-frame mel window → Conv1D+Pool → beat + downbeat activation)
-4. OnsetNN onset_activation → ODF value (0-1)
+3. SharedSpectralAnalysis → FrameBeatNN (64-frame mel window → Conv1D → beat + downbeat activation)
+4. Beat activation → ODF value (0-1)
 5. ODF → AudioController OSS buffer (6s history)
 6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
    (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
-9. RhythmNN downbeat_activation → AudioControl.downbeat
+9. FrameBeatNN downbeat_activation → AudioControl.downbeat
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
     onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
 11. Fire generator:
@@ -375,18 +372,17 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Memory:**
 - RAM: ~31 KB audio (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian ~3 KB + ODF buffer ~1.4 KB + dual arenas ~10 KB + mel window buffers ~8 KB).
-- Flash: ~345 KB with dual models (OnsetNN ~4 KB + RhythmNN ~16 KB + TFLite Micro runtime). ~30 KB settings storage.
+- Flash: ~313 KB with single model (~7 KB INT8 + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
 - Microphone + FFT: ~4%
-- OnsetNN inference (62.5 Hz): ~6%
-- RhythmNN inference (31.25 Hz): ~25% amortized
+- FrameBeatNN inference (62.5 Hz): ~26ms per frame (estimated, pending device measurement)
 - Autocorrelation (500ms): ~3% amortized
 - CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
 - LED rendering: ~2%
-- **Total: ~25%** (ample headroom)
+- **Total: TBD** (inference time dominates; device profiling needed to confirm headroom)
 
 ### Safety Architecture (Multi-Layer Defense)
 
@@ -438,7 +434,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
 **In Progress:**
-- Dual-model architecture: firmware scaffold ready (v69), OnsetNN + RhythmNN training on consensus_v5 + cal63 data. Drop in model headers when training completes.
+- Single Conv1D W64 with Beat This! sum head training (conv1d_w64_v1). Replaces abandoned dual-model split.
 - ESP32-S3 mic calibration: profile measured (target_rms_db=-30), training config created
 
 **Planned (Not Started):**
@@ -476,17 +472,16 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 ### Detection Architecture
 **Previous (v68):** FrameBeatNN — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Beat F1=0.491, DB F1=0.238.
-**Current (v69):** Dual-model firmware scaffold ready, models training:
-- **OnsetNN**: Conv1D(26→24,k=3)×2 → Conv1D(24→1,k=1). W8 (128ms), ~4 KB INT8, <1ms, every frame. Kick/snare onset detection.
-- **RhythmNN**: Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → Conv1D(48→32,k=3) → Conv1D(32→2,k=1). W192 (3.07s), ~16 KB INT8, <8ms, every 2nd frame. Downbeat + bar structure.
+**Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
+**Current (v70):** Single Conv1D W64 with Beat This! sum head. Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). ~7 KB INT8, ~26ms inference. Beat activation = ODF, downbeat constrained ≤ beat. Training in progress.
 Fallback if model fails to load: mic_.getLevel() as simple energy ODF.
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 
 ### Key Features
-- **Dual-model NN** (firmware ready, models training): OnsetNN (Conv1D, <1ms, 62.5 Hz) + RhythmNN (Conv1D+Pool, <8ms, 31.25 Hz). Replaces single FC model. Per-tensor INT8 quantization (CMSIS-NN requirement).
+- **Single Conv1D NN** (training in progress): Conv1D W64 with Beat This! sum head, ~7 KB INT8, ~26ms. Multi-task: beat activation (ODF) + downbeat (constrained ≤ beat). Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
-- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 68
+- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 71
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
 - **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better

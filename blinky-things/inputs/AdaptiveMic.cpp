@@ -224,16 +224,14 @@ void AdaptiveMic::hardwareCalibrate(uint32_t nowMs, float dt) {
   // This ensures high-quality signal into ADC before software processing
 
   // Determine if we're in fast AGC mode
-  // Fast mode: when gain is near the AGC ceiling and signal is persistently low.
-  // Threshold is relative to hwGainMaxSignal so it adapts to any ceiling value.
-  int fastAgcGainThreshold = (hwGainMaxSignal > 10) ? (hwGainMaxSignal - 10) : hwGainMaxSignal;
-  // Fast AGC is only meaningful on HARDWARE strategy: pre-decimation gain
-  // actually improves SNR so aggressive seeking is worthwhile. On SOFTWARE
-  // strategy the gain is post-decimation amplitude scaling — chasing it faster
-  // adds no SNR benefit and risks clipping transients.
+  // Fast mode: when signal is persistently low and gain has significant room to grow.
+  // Triggers when gain is in the lower 2/3 of the range — covers startup and
+  // quiet-after-loud recovery without overshooting near the ceiling.
+  // Only meaningful on HARDWARE strategy: pre-decimation gain improves SNR.
+  int fastAgcGainThreshold = gainMin_ + ((hwGainMaxSignal - gainMin_) * 2 / 3);
   inFastAgcMode_ = (agcStrategy_ == AgcStrategy::HARDWARE) &&
                    fastAgcEnabled &&
-                   currentHardwareGain >= fastAgcGainThreshold &&
+                   currentHardwareGain <= fastAgcGainThreshold &&
                    rawTrackedLevel < fastAgcThreshold;
 
   // Determine if we're in loud AGC mode (symmetric to fast AGC)

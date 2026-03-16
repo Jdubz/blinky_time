@@ -42,12 +42,14 @@ class FrameBeatConv1D(nn.Module):
                  channels: list[int] = [32, 48, 32],
                  kernel_sizes: list[int] = [5, 5, 3],
                  dropout: float = 0.1,
-                 downbeat: bool = False):
+                 downbeat: bool = False,
+                 sum_head: bool = False):
         super().__init__()
         assert len(channels) == len(kernel_sizes), \
             f"channels ({len(channels)}) and kernel_sizes ({len(kernel_sizes)}) must match"
 
         self.out_channels = 2 if downbeat else 1
+        self.sum_head = sum_head and downbeat
         self.n_mels = n_mels
         self.channels = channels
         self.kernel_sizes = kernel_sizes
@@ -72,12 +74,21 @@ class FrameBeatConv1D(nn.Module):
         Args:
             x: (batch, time, n_mels)
         Returns:
-            (batch, time, out_channels) with sigmoid activation
+            (batch, time, out_channels) with sigmoid activation.
+            If sum_head: ch0 = beat, ch1 = beat * sigmoid(db_logit)
+            so downbeat is structurally constrained to be ≤ beat.
         """
         x = x.permute(0, 2, 1)  # (batch, n_mels, time)
         x = self.backbone(x)
-        x = self.output_conv(x)
-        x = torch.sigmoid(x)
+        logits = self.output_conv(x)  # (batch, out_channels, time)
+
+        if self.sum_head:
+            beat = torch.sigmoid(logits[:, 0:1, :])
+            db = beat * torch.sigmoid(logits[:, 1:2, :])
+            x = torch.cat([beat, db], dim=1)
+        else:
+            x = torch.sigmoid(logits)
+
         return x.permute(0, 2, 1)  # (batch, time, channels)
 
 
@@ -85,7 +96,8 @@ def build_beat_conv1d(n_mels: int = 26,
                       channels: list[int] = [32, 48, 32],
                       kernel_sizes: list[int] = [5, 5, 3],
                       dropout: float = 0.1,
-                      downbeat: bool = False) -> nn.Module:
+                      downbeat: bool = False,
+                      sum_head: bool = False) -> nn.Module:
     """Build a frame-level Conv1D beat activation model.
 
     Args:
@@ -94,10 +106,11 @@ def build_beat_conv1d(n_mels: int = 26,
         kernel_sizes: Per-layer kernel sizes (e.g. [5, 5, 3])
         dropout: Dropout rate between layers
         downbeat: If True, output 2 channels (beat + downbeat)
+        sum_head: If True, constrain downbeat ≤ beat (Beat This! technique)
     """
     return FrameBeatConv1D(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
-        dropout=dropout, downbeat=downbeat)
+        dropout=dropout, downbeat=downbeat, sum_head=sum_head)
 
 
 def conv1d_model_summary(cfg: dict) -> None:
