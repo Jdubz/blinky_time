@@ -223,12 +223,12 @@ void SerialConsole::registerAudioSettings() {
         "Peak release speed (s)", 1.0f, 30.0f);
 }
 
-// === HARDWARE AGC SETTINGS ===
-// Signal flow: Mic → HW Gain (PRIMARY) → ADC → Window/Range (SECONDARY) → Output
+// === GAIN SETTINGS (v72: AGC removed, hardware gain fixed at platform default) ===
 void SerialConsole::registerAgcSettings() {
     // AGC removed (v72) — hardware gain is fixed at platform optimal level.
     // Window/range normalization handles all dynamic range adaptation.
     // No user-tunable AGC parameters remain.
+    // Function retained for ConfigStorage compatibility.
 }
 
 // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67 — BandFlux pipeline removed)

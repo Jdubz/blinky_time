@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "PlatformDetect.h"
 
 /**
  * PlatformConstants - Hardware-level constants for XIAO BLE Sense (nRF52840)
@@ -77,10 +78,14 @@ namespace Platform {
     // Microphone configuration
     namespace Microphone {
         constexpr uint32_t DEFAULT_SAMPLE_RATE = 16000;  // 16 kHz
-        constexpr int DEFAULT_GAIN = 40;                  // Initial PDM gain (0-80, v56: lowered from 60)
 
-        // Hardware gain limits (nRF52840 PDM hardware range, not user-configurable)
-        constexpr int HW_GAIN_MIN = 0;
-        constexpr int HW_GAIN_MAX = 80;
+        // Platform-specific optimal gain (v72):
+        // nRF52840: hardware PDM, SNR peaks at 25-35, degrades >40
+        // ESP32-S3: software post-decimation, SNR degrades >30
+        #if defined(BLINKY_PLATFORM_ESP32S3)
+        constexpr int DEFAULT_GAIN = 30;
+        #else
+        constexpr int DEFAULT_GAIN = 40;                  // nRF52840 default (v56: lowered from 60)
+        #endif
     }
 }

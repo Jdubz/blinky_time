@@ -49,7 +49,7 @@ bool AdaptiveMic::begin(uint32_t sampleRate, int gainInit) {
   // Set hardware gain to platform optimal level and leave it fixed.
   // nRF52840: gain 40 (hardware PDM, SNR peaks at 25-35, degrades >40)
   // ESP32-S3: gain 30 (software post-decimation, SNR degrades >30)
-  currentHardwareGain = constrainValue(gainInit, 0, 80);
+  currentHardwareGain = constrainValue(gainInit, pdm_.getGainMinDb(), pdm_.getGainMaxDb());
 
   pdm_.onReceive(AdaptiveMic::onPDMdata);
 
@@ -180,16 +180,19 @@ void AdaptiveMic::onPDMdata() {
  * Returns the number of samples actually copied.
  */
 int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
+  if (!buffer || maxCount <= 0) return 0;
+
   uint32_t writeIdx = s_fftWriteIdx;
   uint32_t available = writeIdx - s_extFftReadIdx;
   if (available == 0) return 0;
 
-  int toCopy = (int)available;
-  if (toCopy > maxCount) toCopy = maxCount;
-  if (toCopy > FFT_RING_SIZE) {
+  // If we fell behind by more than a full ring, catch up to avoid stale data
+  if (available > FFT_RING_SIZE) {
     s_extFftReadIdx = writeIdx - FFT_RING_SIZE;
-    toCopy = FFT_RING_SIZE;
+    available = FFT_RING_SIZE;
   }
+
+  int toCopy = (int)available;
   if (toCopy > maxCount) toCopy = maxCount;
 
   for (int i = 0; i < toCopy; ++i) {
