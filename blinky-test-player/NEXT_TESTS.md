@@ -3,16 +3,18 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 13, 2026 (cal63 deployed on all 3 devices, CBSS sweeps done, w64 training)
+**Last Updated:** March 15, 2026 (dual-model training in progress, consensus_v5 labels)
 
 ## Current Config (v70, SETTINGS_VERSION 70)
 
-**ODF source:** FrameBeatNN (frame-level FC, 56.8 KB INT8, per-tensor quantization, ~3ms inference)
-- FC(832→64→32→2), 55K params, 32-frame window (0.5s at 62.5 Hz)
-- Beat + downbeat activation, deployed on all 3 devices (March 12)
-- **Cal63 model** (mel-calibrated at -63 dB RMS) deployed on all 3 devices (March 13). On-device A/B: ~50% stronger ODF, BPM improved 4/6 tracks, downbeat functional.
-- W64 model (64-frame window, 109K params, ~106 KB INT8) training in progress (epoch 16/60).
-- BandFlux/EnsembleDetector fully removed (v67, ~2600 lines, ~24 settings deleted).
+**ODF source (deployed):** Single FrameBeatNN FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s), cal63.
+- Beat + downbeat activation, deployed on all 3 devices.
+- BandFlux/EnsembleDetector fully removed (v67).
+
+**ODF source (in progress):** Dual-model architecture training on consensus_v5 + cal63:
+- **OnsetNN**: Conv1D W8 (128ms), ~4 KB INT8, <1ms, every frame → onset detection (kicks/snares)
+- **RhythmNN**: Conv1D+Pool W192 (3.07s), ~16 KB INT8, <8ms, every 4th frame → beat + downbeat
+- W192 FC was attempted but regressed (F1=0.370 vs 0.491) — FC flattening destroys temporal locality.
 
 **Beat tracking:** CBSS with Bayesian tempo fusion
 - bayesacf=0.8, bayescomb=0.7, bayesft=0, bayesioi=0
