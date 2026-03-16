@@ -156,16 +156,15 @@ const AudioControl& AudioController::update(float dt) {
     }
 
     // 4. Get onset strength for rhythm analysis
-    //    Single NN model: beat activation (ch0) = ODF, downbeat (ch1) cached.
-    //    When NN is ready, use max(nn, micLevel) so the ODF stays responsive
-    //    even if the NN model isn't calibrated for this device's mic.
+    //    NN model discriminates beat onsets from sustained notes/hi-hats/noise.
+    //    Use pure NN ODF when model is ready — mixing with mic_.getLevel()
+    //    degrades beat tracking because mic level fires on all loud audio.
+    //    Falls back to mic level only when no model is loaded.
     float onsetStrength = 0.0f;
 
     if (frameBeatNN_.isReady()) {
         if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
-            float nnOdf = frameBeatNN_.infer(spectral_.getRawMelBands());
-            float micOdf = mic_.getLevel();
-            onsetStrength = max(nnOdf, micOdf);
+            onsetStrength = frameBeatNN_.infer(spectral_.getRawMelBands());
             spectral_.resetFrameReady();
         } else {
             onsetStrength = mic_.getLevel();
