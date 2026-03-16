@@ -37,9 +37,10 @@ PDM Microphone (16kHz, mono)
         |
    BassSpectralAnalysis (Goertzel-12, 31.25 Hz/bin, optional)
         |
-   └── FrameBeatNN (TFLite Micro FC, 56.8 KB INT8, ~60-200µs)
-        → ODF (sole source)
-        → beat_activation + downbeat_activation
+   ├── OnsetNN (Conv1D W8, ~4 KB INT8, <1ms, every frame)
+   │     → onset_activation → ODF (primary) + AudioControl.pulse
+   └── RhythmNN (Conv1D+Pool W192, ~16 KB INT8, <8ms, every 4th frame)
+         → beat_activation + downbeat_activation
         |
    AudioController
    ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
@@ -155,7 +156,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `ensminlevel` | 0.0 | 0.0-0.5 | Noise gate audio level |
 
 **Per-detector commands** (via `set`/`show`):
-*Detector commands removed in v67. BandFlux/EnsembleDetector fully removed. FrameBeatNN is the sole ODF source. See git log v67 for details.*
+*Detector commands removed in v67. BandFlux/EnsembleDetector fully removed. NN models are the sole ODF source (OnsetNN for pulse, RhythmNN for beat/downbeat). See git log v67 for details.*
 
 ### Category: `rhythm` - Beat Tracking (AudioController)
 
@@ -325,9 +326,11 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 ### NN ODF Configuration (March 2026)
 
-**Frame-level FC model** is the sole ODF source (v67). FrameBeatNN processes 32 frames × 26 mel bands through FC(832→64→32→2) to produce beat and downbeat activations at ~60-200µs per inference. 56.8 KB INT8 model with per-tensor quantization.
+**Dual-model architecture** (in progress, March 15): Two specialized Conv1D models replace the single FC model.
+- **OnsetNN**: Conv1D W8 (128ms), ~4 KB INT8, <1ms inference, runs every frame at 62.5 Hz. Detects kick/snare onsets for visual triggers and primary ODF.
+- **RhythmNN**: Conv1D+Pool W192 (3.07s, full-bar context), ~16 KB INT8, <8ms inference, runs every 4th frame at 15.6 Hz. Produces beat + downbeat activation for CBSS and bar tracking.
 
-**Current work:** Mel level calibrated (target_rms_db corrected -35→-63 dB). Retraining with calibrated dataset in progress.
+**Currently deployed:** Single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Cal63 mel calibration (target_rms_db=-63 dB). Consensus v5 labels (7-system).
 
 ### Bayesian Tempo Fusion Defaults (v28+)
 

@@ -1,6 +1,6 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 13, 2026*
+*Last Updated: March 15, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
@@ -8,7 +8,9 @@
 
 **Firmware:** v70 (SETTINGS_VERSION 70). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (always-on, TFLite required). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation. Dimension-independent generator params (v69). All v65 rhythm params persisted (v70).
 
-**NN Model Status:** Frame-level FC model deployed on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). **Mel calibration DONE** — cal63 model trained with corrected target_rms_db=-63 dB. On-device A/B test (6 tracks) shows ~50% stronger ODF activations (mean 0.30 vs 0.20), BPM accuracy improved on 4/6 tracks, and functional downbeat detection (max 0.37-0.57 vs 0.00 on old model). Cal63 deployed on ACM0; ACM1/ACM2 still on old model. W64 model (64-frame window, 109K params, ~106 KB INT8) training in progress.
+**NN Model Status:** Frame-level FC model deployed on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). **Mel calibration DONE** — cal63 model trained with corrected target_rms_db=-63 dB. On-device A/B test (6 tracks) shows ~50% stronger ODF activations (mean 0.30 vs 0.20), BPM accuracy improved on 4/6 tracks, and functional downbeat detection (max 0.37-0.57 vs 0.00 on old model). **W192 FC REGRESSED (March 15)** — Beat F1=0.370, DB F1=0.145 (down from W32's 0.491/0.238). FC architecture structurally cannot handle wide windows; flattening 4992 inputs destroys temporal locality. **Next: dual-model architecture** — separate onset model (Conv1D, W8-16, ~4 KB) and rhythm/downbeat model (Conv1D + temporal pooling, W192, ~30 KB). See "Dual-Model Architecture" section below.
+
+**Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
 **Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Audio processing + FFT + detection + CBSS + generator + LED output consume ~6-7ms, leaving **~10ms for any NN inference**. Mel-spectrogram CNNs can't fit this budget, but FC layers can (~60-200µs).
 
@@ -100,13 +102,13 @@ All frame-level FC options are well within the 10ms per-frame budget.
 
 At 120 BPM, one beat = 0.5s = ~31 frames at 62.5 Hz. The context window should capture at least one full beat interval. Options to explore:
 
-| Window | Frames | Input dim | Coverage at 120 BPM |
-|--------|--------|-----------|---------------------|
-| 0.5s | 32 | 832 | ~1 beat |
-| 0.75s | 48 | 1,248 | ~1.5 beats |
-| 1.0s | 64 | 1,664 | ~2 beats |
+| Window | Frames | Input dim | Coverage at 120 BPM | Beat F1 | DB F1 | Notes |
+|--------|--------|-----------|---------------------|---------|-------|-------|
+| 0.5s | 32 | 832 | ~1 beat | 0.491 | 0.238 | Deployed (cal63) |
+| 1.0s | 64 | 1,664 | ~2 beats | 0.487 | 0.180 | Marginal for downbeat |
+| 3.07s | 192 | 4,992 | ~6 beats (1.5 bars) | 0.370 | 0.145 | **FC REGRESSED** — too many flat inputs |
 
-Larger windows give more context for downbeat detection but increase model size. Start with 32 frames (0.5s) and expand if needed.
+**Conclusion (March 15):** Wider windows are necessary for downbeat (need to see a full 4/4 bar) but FC architecture cannot exploit them. The first FC layer (4992→64) has 319K of the model's 322K total params, and must implicitly encode all temporal relationships through weight correlations. This destroys temporal locality. Conv1D with temporal pooling is the correct architecture for wide windows — preserves local patterns through convolutions, then progressively compresses time dimension via pooling before FC classification.
 
 **Model architecture (initial):**
 
@@ -154,7 +156,10 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 
 - ~~**Phase A (beat activation only):**~~ DONE — FC model deployed, beat+downbeat activation working on all 3 devices.
 - ~~**Phase B (mel calibration):**~~ DONE — calibrated `target_rms_db` from -35 to -63 dB (mel mean 0.52, matching firmware AGC). Cal63 model trained on corrected data. On-device A/B (6 tracks): mean ODF 0.30 vs 0.20 (+50%), BPM accuracy improved 4/6, downbeat activations now functional (max 0.37-0.57 vs 0.00).
-- **Phase C (model architecture iteration):** W64 model training in progress (64-frame window, 109K params, [64,32] hidden, ~106 KB INT8). Conv1D wide evaluated (beat F1=0.500, DB F1=0.217). Configs for 16/32/48/64 frames ready.
+- **Phase C (dual-model architecture):** Single-model FC approach reached its limits — W192 FC regressed severely (0.370 vs W32's 0.491). Onset detection and rhythm/downbeat detection have fundamentally different requirements and are being split into two models:
+  - **Phase C.1 (Onset model):** Conv1D narrow, 8-16 frame window (128-256ms), single `onset_activation` output, ~4 KB INT8, <1ms inference, runs every frame at 62.5 Hz. Purpose: sharp kick/snare detection for visual triggers.
+  - **Phase C.2 (Rhythm model):** Conv1D with AvgPool1D temporal pooling, 192 frame window (3.07s = 1.5+ bars), beat + downbeat activation outputs, ~30 KB INT8, <8ms inference, runs every 4th frame at 15.6 Hz. Purpose: bar structure identification and downbeat detection.
+  - Combined: ~34 KB flash (vs 314 KB single W192 FC), ~10 KB arena (vs 16 KB), both within resource budget.
 - ~~**Phase D (BandFlux removal):**~~ DONE (v67) — Removed EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult. 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved. SETTINGS_VERSION 66→67.
 
 **Research context:**
@@ -162,23 +167,111 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 - Our innovation: using FC instead of CNN/RNN to fit Cortex-M4F compute budget, while following the same frame-level activation → post-processing paradigm
 - No published TinyML beat tracking on Cortex-M class hardware exists (as of March 2026)
 
+#### Dual-Model Architecture (March 15, 2026)
+
+**Rationale:** Onset detection (kicks/snares) and rhythm/downbeat detection have fundamentally different requirements:
+
+| Requirement | Onset Detection | Downbeat Detection |
+|-------------|----------------|-------------------|
+| Window | Short (~100-250ms) | Long (~3s, full 4/4 bar) |
+| Precision | High temporal resolution | Bar-level patterns |
+| Rate | Every frame (62.5 Hz) | Every 4th frame (15.6 Hz) |
+| Output | Single onset_activation | beat_activation + downbeat_activation |
+| Purpose | Visual triggers (sparks, pulses) | Bar structure, measure tracking |
+
+A single model cannot serve both needs. Short windows miss bar structure; wide windows with FC destroy temporal locality (proven by W192 regression).
+
+**Architecture:**
+
+```
+SharedSpectralAnalysis (already runs every frame)
+     │
+     rawMelBands_ (26 bands, 62.5 Hz)
+     │
+     ├── OnsetNN (every frame, <1ms)
+     │       Input: 8-16 frames × 26 mels (128-256ms)
+     │       Architecture: Conv1D(26→24,k=3) → Conv1D(24→24,k=3) → Conv1D(24→1,k=1)
+     │       Output: onset_activation (0-1)
+     │       → OSS buffer (primary ODF for CBSS)
+     │       → AudioControl.pulse (direct onset trigger)
+     │
+     └── RhythmNN (every 4th frame, <8ms)
+             Input: 192 frames × 26 mels (3.07s)
+             Architecture: Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5)
+                           → AvgPool(4) → FC(576→32) → FC(32→2)
+             Output: beat_activation + downbeat_activation (0-1 each)
+             → CBSS beat/downbeat tracking
+             → AudioControl.downbeat, beatInMeasure
+```
+
+**Resource budget:**
+
+| Resource | OnsetNN | RhythmNN | Combined | Budget | Headroom |
+|----------|---------|----------|----------|--------|----------|
+| Flash (model) | ~4 KB | ~30 KB | ~34 KB | ~500 KB | 93% |
+| RAM (arena) | ~2 KB | ~8 KB | ~10 KB | 16 KB | 38% |
+| RAM (window) | ~1.6 KB | ~19.5 KB | ~21 KB | 236 KB | 91% |
+| Inference | <1ms@62.5Hz | <8ms@15.6Hz | — | 10ms/frame | OK |
+
+Combined: 34 KB flash vs 314 KB for the failed W192 FC, with better architectural alignment to each task.
+
+**Input representation research (March 15):**
+- **Mel bands confirmed as correct** — every published SOTA system (BeatNet, Beat This!, madmom, SuperFlux, BTrack) uses mel spectrograms. Raw PCM requires a completely new training pipeline with no proven benefit. Mel bands provide free perceptual compression: kicks → bands 2-4, snares → bands 5-10+.
+- **Temporal resolution:** Current 62.5 Hz frame rate (16ms/frame) is marginal for kick attacks (10-50ms = 1-3 frames). If onset detection proves limited, test hop-128 (125 Hz, 8ms frames) as a firmware-side change.
+
+**Window size research (March 15):**
+- **2-beat window insufficient for downbeat** — model must see a full 4-beat bar to distinguish beat 1 from beats 2/3/4.
+- **W192 (3.07s) is the sweet spot** — covers 1.15-2.3 bars across all EDM tempos (90-180 BPM). W256 has diminishing returns and exceeds flash budget.
+- **FC cannot exploit wide windows** — W192 FC (4992 flat inputs, 322K params) regressed to F1=0.370. First layer alone has 319K params. Conv1D with temporal pooling is the correct architecture.
+
+**Training experiments (planned):**
+
+1. **Onset Conv1D W8/W16** — Match W32 FC beat F1 (0.491) at 1/14th the size
+2. **Rhythm Conv1D+Pool W192** — Downbeat F1 > 0.30 (beat W32 FC baseline of 0.238)
+3. **Conv1D Wide W32 on v5 + cal63** — Honest baseline with corrected data
+
+#### Closed: W192 FC (March 15, 2026)
+
+W192 FC (4992→64→32→2, 322K params, 314 KB INT8): Beat F1=0.370, DB F1=0.145 — severe regression from W32 FC (0.491/0.238). Root cause: FC flattening of 192×26=4992 inputs destroys temporal locality. The first FC layer (4992→64) contains 319K of the model's 322K total parameters and must implicitly encode all temporal relationships through raw weight correlations. Training converged to val_loss=0.497 with only 84.5% accuracy — the model failed to learn meaningful temporal patterns from the flat input. Superseded by dual-model architecture with Conv1D temporal pooling.
+
 ### Priority 2 (new): ESP32-S3 Mic Calibration and Model
 
-**Status: PLANNED**
+**Status: Phase 1 DONE (March 15, 2026) — mic profile measured, training config created. Phase 2 (retrain) pending.**
 
-The XIAO ESP32-S3 Sense uses an MSM381ACT PDM microphone via ESP-IDF I2S PDM-RX. Its frequency response, noise floor, and AGC transfer function differ from the nRF52840's built-in microphone. The nRF52840 cal63 model was trained on mel spectrograms captured at `target_rms_db=-63 dB` through the nRF52840 mic chain. Running that model on ESP32-S3 audio will produce mismatched mel statistics and degraded ODF quality.
+The XIAO ESP32-S3 Sense uses a PDM microphone via ESP-IDF I2S PDM-RX. Its frequency response, noise floor, and AGC transfer function differ from the nRF52840's built-in microphone. The nRF52840 cal63 model was trained on mel spectrograms captured at `target_rms_db=-63 dB` through the nRF52840 mic chain. Running that model on ESP32-S3 audio will produce mismatched mel statistics and degraded ODF quality.
 
-**Required steps:**
+**Calibration results (March 15, 2026):**
 
-1. **Measure ESP32-S3 mic profile** — Record `target_rms_db` on the ESP32-S3 the same way cal63 was measured for nRF52840: play calibration tones, capture raw mel values via `stream` command, find the RMS dB level where firmware mel mean ≈ training mean (~0.52 normalized).
+| Parameter | nRF52840 | ESP32-S3 |
+|-----------|---------|---------|
+| `target_rms_db` | -63 dB | **-30 dB** |
+| Operating mel mean | ~0.52 | ~0.78 |
+| Best SNR gain | gain=30 (hw AGC) | gain=30 (sw gain only) |
+| Band gain range | 0.95–1.04 | 0.93–1.01 (flat) |
+| Noise floor range | 0.58–0.94 | 0.66–1.00 |
 
-2. **Capture training data** — The ESP32-S3 mic has a different frequency response. Ideally record a subset of the training corpus through the actual ESP32-S3 mic (or model the transfer function via impulse response measurement and apply it to existing recordings).
+The ESP32-S3 operates ~0.25 higher mel mean. The software-only AGC (no hardware gain register) converges to a higher operating point (~gain=14–18 during music) vs nRF52840's hardware AGC. Best SNR at gain=30 on both units (27.8–28.7 dB avg across bands 3–25). Above gain=30, SNR degrades (software gain adds noise without pre-decimation amplification).
 
-3. **Train ESP32-S3 model** — Retrain the FC beat/downbeat model with ESP32-S3 mel statistics. Use the same architecture (32-frame window, FC [64,32] → 2 outputs) but with ESP32-calibrated data. Produce a separate `.tflite` / `.h` model artifact for the ESP32-S3 build target.
+**Measured unit-to-unit variation:** Two ESP32-S3 units (ACM0 MAC `11:F8:10`, ACM3 MAC `12:C1:A0`) are < 1 dB apart after confirming identical firmware. The original apparent 3–4 dB divergence was entirely due to firmware version mismatch (one unit was running old firmware with a different streaming rate — 40 Hz vs 21 Hz). Normal MEMS mic manufacturing tolerance is ±1–3 dB per spec; actual measured variation is ≤1 dB between these two units.
 
-4. **Firmware model selection** — Use `#ifdef BLINKY_PLATFORM_ESP32S3` to select the ESP32-S3 model at compile time, keeping the nRF52840 model unchanged.
+**Artifacts:**
+- Mic profile: `ml-training/data/calibration/mic_profile_esp32s3.npz`
+- Gain sweeps: `data/calibration/gain_sweep_ttyACM0_esp32.npz`, `gain_sweep_ttyACM3_esp32.npz`
+- Training config: `ml-training/configs/frame_fc_esp32s3.yaml` (`target_rms_db=-30`, `hw_gain_max=30`)
 
-**Hardware gain note:** The ESP32-S3 I2S PDM-RX slot config has **no hardware gain register** — `amplify_num`, `sd_scale`, `hp_scale` are all absent from `i2s_pdm_rx_slot_config_t` on this SoC (those fields exist only on other ESP32 variants). The full AGC range is applied as software gain in `Esp32PdmMic::setGain()` / `poll()`. The mic profile calibration must account for this — the software gain path has different noise characteristics than the nRF52840 hardware AGC.
+**Remaining steps:**
+
+2. **Train ESP32-S3 model** — Retrain the FC beat/downbeat model with ESP32-calibrated data:
+   ```bash
+   python scripts/prepare_dataset.py --config configs/frame_fc_esp32s3.yaml --augment \
+       --mic-profile data/calibration/mic_profile_esp32s3.npz
+   python train.py --config configs/frame_fc_esp32s3.yaml
+   ```
+   Same architecture (32-frame window, FC [64,32] → 2 outputs). Produces `frame_beat_model_esp32s3_data.h`.
+
+3. **Firmware model selection** — Add `#ifdef BLINKY_PLATFORM_ESP32S3` to select the ESP32-S3 model at compile time, keeping the nRF52840 model unchanged.
+
+**Hardware gain note:** The ESP32-S3 I2S PDM-RX slot config has **no hardware gain register** — confirmed by ESP-IDF source (`soc_caps.h`: `SOC_I2S_SUPPORTS_PDM_RX_HP_FILTER` not defined for S3, `i2s_ll.h`: no gain functions in PDM RX path). The full AGC range is applied as software post-decimation gain in `Esp32PdmMic::setGain()` / `poll()`.
 
 ### ~~Priority 2 (old): BandFlux Removal~~ — COMPLETED (v67)
 

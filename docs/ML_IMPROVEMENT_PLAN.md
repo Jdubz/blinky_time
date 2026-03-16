@@ -14,70 +14,57 @@ downbeats), giving only 40.8% inter-system agreement, and (3) the W32
 context window (0.5s = ~1 beat) is too short to identify downbeat position
 within a bar.
 
-## Current Model: W64 (deployed on ACM0, March 14)
+## Deployed Model: W32 FC (cal63, on all 3 devices)
 
-On-device A/B test (18 tracks, 3 devices): W64 wins 11/18 vs cal63 W32.
-Mean BPM error 19.1% vs 24.6%. Stronger ACF periodicity (0.635 vs 0.471)
-translates to better CBSS tracking. ACM1/ACM2 still on W32 cal63.
+FC(832→64→32→2), 55K params, 56.8 KB INT8, W32 (0.5s). Beat F1=0.491, DB F1=0.238.
+Cal63 mel calibration (-63 dB RMS). Consensus v5 labels (7-system).
 
-## Active Priority: W192 Full-Bar Context Model
+## Active Priority: Dual-Model Architecture
 
-**Status: DATA PREPROCESSING (March 14, 2026)**
+**Status: TRAINING (March 15, 2026)**
 
-**Problem:** Downbeat detection requires seeing a full bar to identify where
-beat 1 falls. W32 (0.5s = 1 beat) and W64 (1s = 2 beats) cannot distinguish
-beat positions within a bar. The model needs to see all 4 beats.
+**Problem:** Single models can't serve both onset detection (needs short window, high precision,
+every frame) and downbeat detection (needs full-bar context, 3+ seconds). W192 FC was attempted
+but regressed severely (Beat F1=0.370, DB F1=0.145) — FC flattening of 4992 inputs destroys
+temporal locality.
 
-**Solution:** W192 = 192 frames = 3.07 seconds at 62.5 Hz.
-- At 120 BPM: 6.1 beats = 1.5 bars
-- At 90 BPM: 4.6 beats = 1.15 bars
-- At 140 BPM: 7.2 beats = 1.8 bars
-- Guarantees full bar visibility at all common EDM tempos (90-180 BPM)
+**Solution:** Two specialized Conv1D models:
 
-**Why W192 and not W128?** W128 (2.05s = 1 bar at 120 BPM) barely covers a
-bar at 120 and falls short at slower tempos. Each training run costs a full
-day — we must avoid iterating through intermediate window sizes. W192 is the
-maximum that fits all hardware budgets comfortably. W256 would work too but
-offers diminishing returns (already 1.5+ bars everywhere).
+**OnsetNN** — kick/snare detection for visual triggers
+- Conv1D(26→24,k=3) × 2 → Conv1D(24→1,k=1,sigmoid)
+- W8 (128ms), ~3.6K params, ~4 KB INT8, <1ms inference, every frame (62.5 Hz)
+- Config: `configs/onset_conv1d.yaml`
+- Feeds OSS buffer as primary ODF and directly drives AudioControl.pulse
 
-### Hardware Budget
+**RhythmNN** — downbeat and bar structure detection
+- Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → Conv1D(48→32,k=3) → Conv1D(32→2,k=1)
+- W192 (3.07s = 1.5+ bars at all tempos), ~16.6K params, ~16 KB INT8, <8ms inference, every 4th frame (15.6 Hz)
+- Config: `configs/rhythm_conv1d_pool.yaml`
+- Conv1D preserves temporal locality; AvgPool1d progressively compresses time (192→48→12)
+- Drives CBSS beat/downbeat tracking, AudioControl.downbeat, beatInMeasure
 
-| Resource | W192 | Budget | Headroom |
-|----------|------|--------|----------|
-| Flash (model) | ~314 KB | ~500 KB | 37% |
-| Flash (total) | ~625 KB | 811 KB | 23% |
-| RAM (mel buffer) | 19.5 KB | 236 KB | 92% |
-| RAM (tensor arena) | ~4 KB | 16 KB | 75% |
-| Inference | ~5ms | 10ms (every 4th frame) | 50% |
+### Resource Budget (Dual Model)
 
-### Training Config
+| Resource | OnsetNN | RhythmNN | Combined | Budget | Headroom |
+|----------|---------|----------|----------|--------|----------|
+| Flash (model) | ~4 KB | ~16 KB | ~20 KB | ~500 KB | 96% |
+| RAM (arena) | ~2 KB | ~8 KB | ~10 KB | 16 KB | 38% |
+| RAM (window) | ~0.8 KB | ~19.5 KB | ~20 KB | 236 KB | 92% |
+| Inference | <1ms@62.5Hz | <8ms@15.6Hz | — | 10ms/frame | OK |
 
-Config: `configs/frame_fc_w192.yaml`
+### Training (in progress)
 
-Critical overrides from base.yaml (learned the hard way):
-- `chunk_frames: 384` (must be >= window_frames=192; 384 gives 50% full-window timesteps)
-- `chunk_stride: 192` (50% overlap)
-- `batch_size: 512` (4096 OOMs — W192 flat tensor is 6× larger than W32)
+Both models training in tmux on consensus_v5 + cal63 data (chunk_frames=384):
+```bash
+tmux attach -t onset    # Conv1D W8, beat-only
+tmux attach -t rhythm   # Conv1D+Pool W192, beat+downbeat
+```
 
-Loss: shift-tolerant BCE (±48ms), SpecAugment, from base.yaml.
+### Closed: W192 FC (March 15, 2026)
 
-### Pipeline Steps
-
-1. ~~**Data reprocessing**~~ — IN PROGRESS (March 14). Old chunk_frames=128 data
-   deleted, reprocessing with chunk_frames=384. ETA ~2.5 hours.
-
-2. **Training** — After reprocessing. `train.py --config configs/frame_fc_w192.yaml
-   --output-dir outputs/w192`. ~60 epochs, batch_size=512.
-
-3. **Export** — `export_tflite.py --config configs/frame_fc_w192.yaml
-   --model outputs/w192/best_model.pt`. ~314 KB INT8.
-
-4. **Deploy + on-device test** — Flash all 3 devices, run 18-track BPM comparison.
-
-### Firmware Changes (Done)
-
-`FrameBeatNN.h`: `MAX_WINDOW_FRAMES` increased from 64 to 192.
-Model auto-detects window size from TFLite input shape — no other firmware changes needed.
+FC(4992→64→32→2), 322K params, 314 KB INT8. Beat F1=0.370, DB F1=0.145.
+First FC layer has 319K/322K params — must learn all temporal correlations through
+raw weight matrices. Superseded by Conv1D+Pool dual-model architecture.
 
 ## Labeling Pipeline
 
@@ -113,10 +100,10 @@ inference + reuse pre-separated Demucs stems. Expected: ~1.6s/track = 64× faste
 Implementation blocked on Demucs batch separation (shared with stem-augmented
 training, see below).
 
-### Next: Consensus v5
+### ~~Next: Consensus v5~~ — DONE (March 15)
 
-After allin1 completes (post-Demucs batch separation), merge all 7 systems into
-consensus_v5. Retrain W192 on improved labels + stem augmentation in a single run.
+Consensus v5 generated with all 7 systems. 6993 labels. base.yaml updated to use v5.
+Dual-model training (OnsetNN + RhythmNN) in progress on v5 data.
 
 ## Training Recipe (all applied via base.yaml)
 

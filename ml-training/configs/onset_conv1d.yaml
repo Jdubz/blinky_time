@@ -1,0 +1,23 @@
+# Onset Conv1D — tiny model for kick/snare detection
+#
+# Short window (8 frames = 128ms), single output (onset_activation only).
+# Designed to run every frame at 62.5 Hz for responsive visual triggers.
+# Paired with RhythmNN (rhythm_conv1d_pool.yaml) for downbeat detection.
+#
+# Architecture: 3-layer causal Conv1D, narrow channels
+#   Conv1D(26->24, k=3) -> Conv1D(24->24, k=3) -> Conv1D(24->1, k=1)
+#   ~1.9K params, ~2 KB INT8, <1ms inference on Cortex-M4F
+#   Receptive field: 5 frames = 80ms (captures full kick transient 10-50ms)
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 24]
+  kernel_sizes: [3, 3]
+  window_frames: 8
+  dropout: 0.1
+  downbeat: false                     # Onset only — single output channel
+
+export:
+  output_header: "../blinky-things/audio/onset_model_data.h"
+  c_array_name: "onset_model_data"
+  max_model_size_kb: 10

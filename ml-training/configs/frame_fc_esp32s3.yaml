@@ -1,0 +1,39 @@
+# Frame-level FC — ESP32-S3 variant
+#
+# Same architecture as frame_fc.yaml but calibrated for the XIAO ESP32-S3 Sense
+# microphone chain (MSM381ACT PDM mic via I2S PDM-RX, software-only AGC).
+#
+# Key differences from nRF52840 (frame_fc.yaml):
+#   target_rms_db: -30 (vs -63) — ESP32-S3 software AGC operates at a much higher
+#     gain, producing mel mean ~0.78 vs nRF52840's ~0.52. Calibrated March 2026.
+#     Measured via rms_mel_sweep.py on 15 EDM tracks: -30 dB → mel mean 0.764,
+#     device measures 0.78 (techno-machine-drum.mp3, gain=14, 2701 frames).
+#   hw_gain_max: 30 — Gain sweep shows SNR peaks at gain=30 on both ESP32-S3 units,
+#     then degrades. Unlike nRF52840 hardware AGC, software gain above 30 adds noise
+#     without improving SNR.
+#   mic_profile: data/calibration/mic_profile_esp32s3.npz — measured March 2026,
+#     gain-aware noise profile from both ESP32-S3 units (ACM0+ACM3, identical firmware).
+#
+# Export target: frame_beat_model_esp32s3_data.h (separate from nRF52840 model)
+# Use #ifdef BLINKY_PLATFORM_ESP32S3 in firmware to select.
+
+model:
+  type: "frame_fc"
+  window_frames: 32         # Sliding window size (32 frames = 512ms at 62.5 Hz)
+  hidden_dims: [64, 32]     # FC hidden layer sizes
+  dropout: 0.1
+  downbeat: true
+
+audio:
+  target_rms_db: -30        # ESP32-S3 calibrated value (vs -63 for nRF52840)
+  # Measured March 2026: device mel mean 0.78 during music playback (gain=14).
+  # rms_mel_sweep.py: -30 dB → mel mean 0.764 on 15 EDM tracks.
+  hw_gain_max: 30           # SNR peaks at gain=30, degrades above (software-gain penalty)
+
+data:
+  mic_profile: "data/calibration/mic_profile_esp32s3.npz"
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_esp32s3_data.h"
+  c_array_name: "frame_beat_model_esp32s3_data"
+  max_model_size_kb: 60

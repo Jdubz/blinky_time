@@ -386,6 +386,16 @@ def main():
             dropout=cfg["model"]["dropout"],
             downbeat=use_downbeat,
         ).to(device)
+    elif model_type == "frame_conv1d_pool":
+        from models.beat_conv1d_pool import build_beat_conv1d_pool
+        model = build_beat_conv1d_pool(
+            n_mels=cfg["audio"]["n_mels"],
+            channels=cfg["model"]["channels"],
+            kernel_sizes=cfg["model"]["kernel_sizes"],
+            pool_sizes=cfg["model"]["pool_sizes"],
+            dropout=cfg["model"]["dropout"],
+            downbeat=use_downbeat,
+        ).to(device)
     else:
         model = build_beat_cnn(
             n_mels=cfg["audio"]["n_mels"],
@@ -416,13 +426,21 @@ def main():
             if num_tempo_bins > 0:
                 features.append(f"Tempo({num_tempo_bins} bins)")
             print(f"  Enhancements: {', '.join(features)}")
-    elif model_type == "frame_conv1d":
+    elif model_type in ("frame_conv1d", "frame_conv1d_pool"):
         print(f"  Channels: {cfg['model']['channels']}")
         print(f"  Kernels: {cfg['model']['kernel_sizes']}")
         rf = 1
         for k in cfg["model"]["kernel_sizes"]:
             rf += k - 1
         print(f"  Receptive field: {rf} frames ({rf / cfg['audio']['frame_rate'] * 1000:.0f} ms)")
+        if model_type == "frame_conv1d_pool":
+            pool_sizes = cfg["model"]["pool_sizes"]
+            pool_factor = 1
+            for p in pool_sizes:
+                pool_factor *= p
+            print(f"  Pool sizes: {pool_sizes} (total {pool_factor}x temporal compression)")
+            wf = cfg["model"]["window_frames"]
+            print(f"  Window: {wf} frames -> {wf // pool_factor} output frames")
 
     # Optimizer + cosine LR schedule
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
@@ -515,6 +533,12 @@ def main():
                 Y_pred = model_out
                 tempo_logits = None
 
+            # Downsample labels for pooling models (output time < input time)
+            if hasattr(model, 'pool_factor') and model.pool_factor > 1:
+                pf = model.pool_factor
+                # Align to last frame in each pool window (causal)
+                Y_batch = Y_batch[:, pf - 1::pf]
+
             hard_loss = loss_fn(Y_pred, Y_batch)
 
             # Tempo auxiliary loss (Bock et al. 2019: +5 F1 from tempo regularization)
@@ -579,6 +603,10 @@ def main():
 
                 model_out = model(X_batch)
                 Y_pred = model_out[0] if isinstance(model_out, tuple) else model_out
+                # Downsample labels for pooling models
+                if hasattr(model, 'pool_factor') and model.pool_factor > 1:
+                    pf = model.pool_factor
+                    Y_batch = Y_batch[:, pf - 1::pf]
                 hard_loss = loss_fn(Y_pred, Y_batch)
 
                 if use_distill and T_batch.numel() > 0:

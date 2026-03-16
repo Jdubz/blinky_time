@@ -143,7 +143,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 ### Key Architecture Components
 
 - **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
-- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Frame-level FC NN beat/downbeat activation (primary ODF)
+- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - TFLite NN inference (currently single model; transitioning to dual OnsetNN + RhythmNN)
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with AGC
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
@@ -199,7 +199,8 @@ AdaptiveMic (AGC + normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── FrameBeatNN (frame-level FC, ~0.2-5ms) → ODF
+    ├── OnsetNN (Conv1D, W8, <1ms, every frame) → onset_activation → ODF + pulse
+    ├── RhythmNN (Conv1D+Pool, W192, <8ms, every 4th frame) → beat + downbeat activation
     ↓
 AudioController (CBSS beat tracking + pulse detection)
     ↓
@@ -219,15 +220,18 @@ RenderPipeline → LED Output
    - `SharedSpectralAnalysis.h` - FFT-256 (128 freq bins @ 62.5 Hz), soft-knee compressor → per-bin whitening (v23+)
    - Window/range normalization (0-1 output)
 
-2. **Onset Detection**
-   - `FrameBeatNN.h` - **Sole ODF**: Frame-level FC neural network (up to 314 KB INT8, ~0.2-5ms inference)
-   - Input: up to 192 frames × 26 raw mel bands (up to 3.07s window). Output: beat_activation + downbeat_activation
+2. **Onset Detection (transitioning to dual-model)**
+   - `FrameBeatNN.h` - TFLite NN inference host (supports FC and Conv1D models)
+   - **Current (deployed):** Single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s)
+   - **In progress:** Dual-model split:
+     - **OnsetNN**: Conv1D W8 (128ms), ~4 KB INT8, <1ms, every frame → onset_activation (ODF + pulse)
+     - **RhythmNN**: Conv1D+Pool W192 (3.07s), ~16 KB INT8, <8ms, every 4th frame → beat + downbeat activation
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple ODF)
 
 3. **Rhythm Tracking (AudioController)**
    - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
    - OSS buffering (6 seconds @ 60 Hz)
-   - ODF source: FrameBeatNN (frame-level FC, ~0.2-5ms). Falls back to mic level if model fails to load.
+   - ODF source: OnsetNN (Conv1D, <1ms) or FrameBeatNN (FC, ~0.2ms). Falls back to mic level if model fails to load.
    - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
    - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
    - CBSS: cumulative beat strength signal with log-Gaussian transition weighting
@@ -344,14 +348,15 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ```
 1. PDM mic samples → AdaptiveMic (normalize 0-1, AGC)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands)
-3. SharedSpectralAnalysis → FrameBeatNN (32-frame mel window → FC layers → beat + downbeat activation)
-4. FrameBeatNN beat_activation → ODF value (0-1)
+3. SharedSpectralAnalysis → OnsetNN (8-frame mel window → Conv1D → onset_activation)
+3b. SharedSpectralAnalysis → RhythmNN (192-frame mel window → Conv1D+Pool → beat + downbeat activation)
+4. OnsetNN onset_activation → ODF value (0-1)
 5. ODF → AudioController OSS buffer (6s history)
 6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
    (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
 7. CBSS backward search → cumulative beat strength signal
 8. Predict+countdown beat detection → deterministic phase
-9. FrameBeatNN downbeat_activation → AudioControl.downbeat
+9. RhythmNN downbeat_activation → AudioControl.downbeat
 10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
     onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
 11. Fire generator:
@@ -370,18 +375,19 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~40 KB base (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian transition matrix ~3 KB + ODF linear buffer ~1.4 KB + 16 KB tensor arena + up to 19.5 KB mel frame buffer for W192).
-- Flash: ~625 KB with W192 model (includes TFLite model + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~31 KB audio (CBSS/OSS ~3 KB + comb filters ~5.3 KB + Bayesian ~3 KB + ODF buffer ~1.4 KB + dual arenas ~10 KB + mel window buffers ~8 KB).
+- Flash: ~345 KB with dual models (OnsetNN ~4 KB + RhythmNN ~16 KB + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
 - Microphone + FFT: ~4%
-- FrameBeatNN inference: <1%
+- OnsetNN inference (62.5 Hz): ~6%
+- RhythmNN inference (15.6 Hz): ~12% amortized
 - Autocorrelation (500ms): ~3% amortized
 - CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
 - LED rendering: ~2%
-- **Total: ~15-20%** (ample headroom)
+- **Total: ~25%** (ample headroom)
 
 ### Safety Architecture (Multi-Layer Defense)
 
@@ -418,7 +424,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioController with CBSS beat tracking
-- ✅ FrameBeatNN (frame-level FC, up to 314 KB INT8, deployed on all devices)
+- ✅ FrameBeatNN (frame-level FC, 56.8 KB INT8, deployed on all devices)
 - ✅ Fire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
@@ -433,9 +439,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
 **In Progress:**
-- NN mel calibration: target_rms_db corrected -35→-63 dB, dataset reprocessing underway
-- Conv1D wide model evaluation (training complete, needs export and comparison)
-- Window size sweep: configs for 16/32/48/64 frames ready to train
+- Dual-model architecture: OnsetNN (Conv1D W8, ~4 KB) + RhythmNN (Conv1D+Pool W192, ~16 KB) training on consensus_v5 + cal63 data
+- ESP32-S3 mic calibration: profile measured (target_rms_db=-30), training config created
 
 **Planned (Not Started):**
 - Bluetooth/BLE support (design doc complete)
@@ -448,6 +453,9 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Closed (beat-synchronous hybrid, March 2026):**
 - FC on accumulated spectral summaries at beat rate (~2 Hz). Circular dependency with CBSS, negligible discriminative power in per-beat features, misaligned with all leading approaches. Superseded by frame-level FC.
+
+**Closed (W192 FC, March 2026):**
+- FC(4992→64→32→2), 322K params, 314 KB INT8. Beat F1=0.370, DB F1=0.145 — severe regression from W32 (0.491/0.238). FC flattening destroys temporal locality for wide windows. Superseded by dual-model Conv1D+Pool architecture.
 
 ## Documentation Guidelines
 
@@ -468,16 +476,16 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-FrameBeatNN — frame-level FC neural network (sole ODF, v67). Up to FC(4992→64→32→2), up to 322K params, up to 314 KB INT8.
-Input: 32 frames × 26 raw mel bands (0.5s window at 62.5 Hz). Output: beat_activation (ODF for CBSS) + downbeat_activation.
-~0.2-5ms inference on Cortex-M4F. Deployed on all 3 devices (March 2026).
+**Deployed:** FrameBeatNN — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Beat F1=0.491, DB F1=0.238.
+**In progress (March 15):** Dual-model architecture:
+- **OnsetNN**: Conv1D(26→24,k=3)×2 → Conv1D(24→1,k=1). W8 (128ms), ~4 KB INT8, <1ms, every frame. Kick/snare onset detection.
+- **RhythmNN**: Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → Conv1D(48→32,k=3) → Conv1D(32→2,k=1). W192 (3.07s), ~16 KB INT8, <8ms, every 4th frame. Downbeat + bar structure.
 Fallback if model fails to load: mic_.getLevel() as simple energy ODF.
-Pulse detection: ODF threshold against running mean with tempo-adaptive cooldown (inlined from removed EnsembleFusion).
 Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
-BandFlux/EnsembleDetector fully removed in v67 (~2600 lines, 10 files deleted).
+Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 
 ### Key Features
-- **FrameBeatNN** (v65+): Frame-level FC neural network, sole ODF source. Per-tensor INT8 quantization (CMSIS-NN requirement). ~0.2-5ms inference at ~15.6 Hz.
+- **Dual-model NN** (in progress): OnsetNN (Conv1D, <1ms, 62.5 Hz) + RhythmNN (Conv1D+Pool, <8ms, 15.6 Hz). Replaces single FC model. Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
 - **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 68
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
