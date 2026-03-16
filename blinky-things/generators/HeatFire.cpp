@@ -75,18 +75,22 @@ void HeatFire::generate(PixelMatrix& matrix, const AudioControl& audio) {
     prevPhase_ = audio.phase;
 
     // Advance noise scroll time — this is the visual "fire speed"
-    // Organic: moderate scroll. Music: faster, phase-modulated.
-    // Both boosted by onset density (more onsets → faster, jitterier flicker).
+    // Audio energy is the primary driver: quiet = slow lazy drift, loud = fast roaring.
+    // Pulse/onset creates sharp speed bursts for responsive hit feel.
+    // Music mode adds phase-synced pulsing on top.
     float phasePulse = audio.phaseToPulse();
     float densityNorm = min(1.0f, audio.onsetDensity / 6.0f);
-    float densityBoost = params_.densityScrollBoost * densityNorm;
 
-    float organicScroll = params_.noiseSpeed * (1.0f + 0.5f * audio.energy + densityBoost);
-    float musicScroll   = params_.noiseSpeed * (1.5f + audio.energy + densityBoost)
-                        * ((1.0f - params_.musicBeatDepth * 0.5f)
-                           + params_.musicBeatDepth * 0.5f * phasePulse);
-    float scrollRate = organicScroll * (1.0f - audio.rhythmStrength)
-                     + musicScroll   * audio.rhythmStrength;
+    // Energy scales speed 0.3x-2x: silence = slow embers, loud = lively roar
+    float energyMult = 0.3f + 1.7f * smoothedEnergy_;
+    // Pulse burst: sharp 1.5x speed kick on transient hits, decays naturally
+    float pulseMult = 1.0f + 0.5f * audio.pulse;
+    // Music phase modulation: scroll accelerates on-beat for rhythmic fire
+    float phaseMod = 1.0f + params_.musicBeatDepth * phasePulse * audio.rhythmStrength;
+    // Density boost: busier music = faster overall flicker
+    float densityMult = 1.0f + params_.densityScrollBoost * densityNorm;
+
+    float scrollRate = params_.noiseSpeed * energyMult * pulseMult * phaseMod * densityMult;
     noiseTime_ += scrollRate * dt;
 
     // Wrap to prevent float precision loss at large values.
