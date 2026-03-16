@@ -2,16 +2,19 @@
 
 Designed for long-context windows (192 frames = 3.07s) where plain FC
 flattening destroys temporal locality. Conv1D preserves local patterns,
-AvgPool1D progressively compresses the time dimension.
+AvgPool1D or strided conv progressively compress the time dimension.
 
 Architecture:
-  Conv1D layers with interleaved AvgPool1D -> per-pooled-timestep output
-  Example: 192 frames -> pool(4) -> 48 -> pool(4) -> 12 output timesteps
+  Conv1D layers with stride or AvgPool1D -> per-pooled-timestep output
+  Example: 192 frames -> stride(4) -> 48 -> stride(4) -> 12 output timesteps
 
 Output time dimension is input_time // product(pool_sizes).
 Labels must be downsampled to match (handled by train.py).
 
-TFLite ops: Conv2D (Conv1D mapped), Pad, AveragePool2D (Pool1D mapped),
+Strided conv mode (pool_sizes used as stride): replaces separate AvgPool ops
+with strided convolutions. Fewer TFLite ops = less dispatch overhead on MCU.
+
+TFLite ops: Conv2D (Conv1D mapped), Pad, [AveragePool2D if not strided],
             Logistic, Quantize, Dequantize
 """
 
@@ -24,6 +27,9 @@ class FrameBeatConv1DPool(nn.Module):
 
     Input:  (batch, time, n_mels)
     Output: (batch, time // pool_factor, out_channels)
+
+    If use_stride=True, pool_sizes are applied as conv strides instead of
+    separate AvgPool ops. This reduces TFLite op count and dispatch overhead.
     """
 
     def __init__(self, n_mels: int = 26,
@@ -31,7 +37,8 @@ class FrameBeatConv1DPool(nn.Module):
                  kernel_sizes: list[int] = [5, 5, 3],
                  pool_sizes: list[int] = [4, 4, 1],
                  dropout: float = 0.1,
-                 downbeat: bool = True):
+                 downbeat: bool = True,
+                 use_stride: bool = False):
         super().__init__()
         assert len(channels) == len(kernel_sizes) == len(pool_sizes), \
             "channels, kernel_sizes, and pool_sizes must have same length"
@@ -41,6 +48,7 @@ class FrameBeatConv1DPool(nn.Module):
         self.channels = channels
         self.kernel_sizes = kernel_sizes
         self.pool_sizes = pool_sizes
+        self.use_stride = use_stride
 
         # Total temporal downsampling factor
         self.pool_factor = 1
@@ -50,13 +58,14 @@ class FrameBeatConv1DPool(nn.Module):
         layers = []
         in_ch = n_mels
         for i, (ch, k, pool) in enumerate(zip(channels, kernel_sizes, pool_sizes)):
-            pad = k - 1  # causal: pad left only
+            stride = pool if use_stride else 1
+            pad = k - 1  # causal: pad left only (same for strided and non-strided)
             layers.append(nn.ConstantPad1d((pad, 0), 0.0))
-            layers.append(nn.Conv1d(in_ch, ch, k, stride=1, padding=0, bias=True))
+            layers.append(nn.Conv1d(in_ch, ch, k, stride=stride, padding=0, bias=True))
             layers.append(nn.ReLU())
             if dropout > 0:
                 layers.append(nn.Dropout(dropout))
-            if pool > 1:
+            if not use_stride and pool > 1:
                 layers.append(nn.AvgPool1d(pool, stride=pool))
             in_ch = ch
 
@@ -83,8 +92,10 @@ def build_beat_conv1d_pool(n_mels: int = 26,
                            kernel_sizes: list[int] = [5, 5, 3],
                            pool_sizes: list[int] = [4, 4, 1],
                            dropout: float = 0.1,
-                           downbeat: bool = True) -> nn.Module:
+                           downbeat: bool = True,
+                           use_stride: bool = False) -> nn.Module:
     """Build a Conv1D+Pool beat/downbeat model."""
     return FrameBeatConv1DPool(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
-        pool_sizes=pool_sizes, dropout=dropout, downbeat=downbeat)
+        pool_sizes=pool_sizes, dropout=dropout, downbeat=downbeat,
+        use_stride=use_stride)

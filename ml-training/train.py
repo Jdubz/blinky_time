@@ -395,6 +395,7 @@ def main():
             pool_sizes=cfg["model"]["pool_sizes"],
             dropout=cfg["model"]["dropout"],
             downbeat=use_downbeat,
+            use_stride=cfg["model"].get("use_stride", False),
         ).to(device)
     else:
         model = build_beat_cnn(
@@ -458,14 +459,20 @@ def main():
     loss_type = args.loss or cfg.get("loss", {}).get("type", "shift_bce")
     shift_tolerance = (args.shift_tolerance if args.shift_tolerance is not None
                        else cfg.get("loss", {}).get("shift_tolerance", 3))
+    # Scale shift tolerance for pooled models: each output frame already spans
+    # pool_factor input frames, so ±3 at 62.5 Hz (±48ms) becomes ±0 at 3.9 Hz
+    pf = getattr(model, 'pool_factor', 1)
+    if pf > 1:
+        shift_tolerance = max(0, shift_tolerance // pf)
     if loss_type == "focal":
         loss_fn = partial(weighted_focal, pos_weight=pos_weight, gamma=args.focal_gamma)
         print(f"Loss: focal (gamma={args.focal_gamma})")
     elif loss_type == "shift_bce":
         loss_fn = partial(shift_tolerant_bce, pos_weight=pos_weight,
                           tolerance_frames=shift_tolerance)
+        effective_rate = cfg['audio']['frame_rate'] / pf
         print(f"Loss: shift-tolerant BCE (±{shift_tolerance} frames = "
-              f"±{shift_tolerance / cfg['audio']['frame_rate'] * 1000:.0f}ms)")
+              f"±{shift_tolerance / effective_rate * 1000:.0f}ms at {effective_rate:.1f} Hz)")
     else:
         loss_fn = partial(weighted_bce, pos_weight=pos_weight)
         print(f"Loss: weighted BCE")
@@ -534,10 +541,17 @@ def main():
                 tempo_logits = None
 
             # Downsample labels for pooling models (output time < input time)
+            # Max-pool over each pool window so any beat within the window is preserved.
+            # Point-sampling (stride) loses ~95% of binary beat labels.
             if hasattr(model, 'pool_factor') and model.pool_factor > 1:
                 pf = model.pool_factor
-                # Align to last frame in each pool window (causal)
-                Y_batch = Y_batch[:, pf - 1::pf]
+                T = Y_batch.shape[1]
+                T_trunc = (T // pf) * pf
+                # (batch, T_trunc, channels) -> (batch, T_trunc//pf, pf, channels) -> max over pf
+                Y_batch = Y_batch[:, :T_trunc].reshape(
+                    Y_batch.shape[0], -1, pf, Y_batch.shape[2]
+                ).max(dim=2).values
+                Y_batch = Y_batch[:, :Y_pred.shape[1]]
 
             hard_loss = loss_fn(Y_pred, Y_batch)
 
@@ -603,10 +617,15 @@ def main():
 
                 model_out = model(X_batch)
                 Y_pred = model_out[0] if isinstance(model_out, tuple) else model_out
-                # Downsample labels for pooling models
+                # Downsample labels for pooling models (max-pool to preserve beats)
                 if hasattr(model, 'pool_factor') and model.pool_factor > 1:
                     pf = model.pool_factor
-                    Y_batch = Y_batch[:, pf - 1::pf]
+                    T = Y_batch.shape[1]
+                    T_trunc = (T // pf) * pf
+                    Y_batch = Y_batch[:, :T_trunc].reshape(
+                        Y_batch.shape[0], -1, pf, Y_batch.shape[2]
+                    ).max(dim=2).values
+                    Y_batch = Y_batch[:, :Y_pred.shape[1]]
                 hard_loss = loss_fn(Y_pred, Y_batch)
 
                 if use_distill and T_batch.numel() > 0:

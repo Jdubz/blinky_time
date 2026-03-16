@@ -16,9 +16,13 @@ struct FrameBeatNN {
     static constexpr int INPUT_MEL_BANDS = 26;
     bool begin()                                    { return false; }
     bool isReady() const                            { return false; }
+    bool isRhythmReady() const                      { return false; }
     bool hasDownbeatOutput() const                  { return false; }
-    float infer(const float*)                       { return 0.0f; }
+    float inferOnset(const float*)                  { return 0.0f; }
+    bool inferRhythm()                              { return false; }
+    float getLastBeat() const                       { return 0.0f; }
     float getLastDownbeat() const                   { return 0.0f; }
+    float getLastRhythmBeat() const                 { return 0.0f; }
     void setProfileEnabled(bool)                    {}
     void printDiagnostics() const                   {}
 };
@@ -539,7 +543,9 @@ private:
 
     // === NN BEAT ACTIVATION ===
     FrameBeatNN frameBeatNN_;
-    bool nnActive_ = false;  // Cached per-update: frameBeatNN_.isReady()
+    bool nnActive_ = false;      // Cached per-update: frameBeatNN_.isReady() (OnsetNN)
+    bool rhythmActive_ = false;  // Cached per-update: frameBeatNN_.isRhythmReady()
+    uint8_t rhythmFrameCounter_ = 0;  // Counts frames for RhythmNN scheduling (every 2nd)
 
     // === RHYTHM TRACKING STATE ===
 

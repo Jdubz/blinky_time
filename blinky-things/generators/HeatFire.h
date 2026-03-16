@@ -5,66 +5,67 @@
 #include "../audio/AudioControl.h"
 
 /**
- * HeatFireParams - Heat buffer fire parameters
+ * HeatFireParams - Noise-field fire parameters
  *
- * All params are device-independent. The heat buffer auto-sizes to
- * width_ x height_ from DeviceConfig.
+ * All params control the scrolling thresholded simplex noise renderer.
+ * No per-device calibration needed — behavior auto-adapts to display size.
  */
 struct HeatFireParams {
-    // Heat injection (bottom row)
-    float baseHeat;              // Base heat injection level (0-1)
-    float audioHeatBoost;        // Energy-driven heat boost multiplier (0-2)
-    float beatHeatPulse;         // Phase modulation depth for injection (0-1)
+    // Intensity threshold (controls fire size and audio reactivity)
+    float silenceThreshold;      // Noise threshold at silence (0.3-0.8). Higher = less fire. Default: 0.58.
+    float energyThresholdDrop;   // Max threshold reduction from energy (0.1-0.6). Default: 0.22.
+    float beatPulseDepth;        // Phase breathing height amplitude (0-0.5). Default: 0.40.
+    float burstStrength;         // Transient (pulse) height flare (0-0.5). Default: 0.25.
+    float organicTransientMin;   // Minimum pulse value to trigger burst (0-1). Default: 0.25.
 
-    // Cooling
-    float baseCooling;           // Base cooling per row per frame (0-0.5, maps to 0-128 uint8)
-    float coolingVariation;      // Noise-driven spatial cooling variation (0-1)
+    // Flame shape
+    float flameBaseHeight;       // Flame height fraction at silence (0.1-0.8). Default: 0.20.
+    float warpStrength;          // Domain warp amplitude — controls lateral sway (0-1). Default: 0.40.
 
-    // Diffusion
-    float diffusionSpread;       // Horizontal drift range for heat propagation (0-3 cells)
+    // Animation
+    float noiseSpeed;            // Base noise scroll speed (0.01-0.5). Default: 0.25.
+    float musicBeatDepth;        // Beat sync depth for scroll speed (0-1). Default: 0.95.
+    float densityScrollBoost;    // OnsetDensity → extra scroll speed (0-1.0). Default: 0.50.
 
-    // Transient response
-    float burstHeat;             // Extra heat injected on pulse (0-1)
-    float organicTransientMin;   // Min pulse to trigger burst (0-1)
-
-    // Audio reactivity
-    float musicBeatDepth;        // Beat sync depth for injection (0-1)
-
-    // Wind
-    float windDrift;             // Audio-reactive horizontal drift bias (0-3 cells)
-
-    // Noise animation
-    float noiseSpeed;            // Base noise evolution speed (0.001-0.1)
-
-    // Output brightness
-    float brightness;            // Master output brightness scale (0-1)
+    // Output
+    float brightness;            // Master output brightness scale (0-1). Default: 0.38.
 
     HeatFireParams() {
-        baseHeat = 0.2f;          // LOW base — audio must drive the fire, not idle heat
-        audioHeatBoost = 3.0f;    // HIGH — energy makes a dramatic difference
-        beatHeatPulse = 0.95f;    // Deep phase breathing (near-silent off-beat)
-        baseCooling = 0.25f;      // Controls flame height: coolingMax = baseCooling*600/height + 1. Higher = shorter.
-        coolingVariation = 0.4f;  // Reserved
-        diffusionSpread = 1.5f;   // Moderate sway
-        burstHeat = 1.0f;         // Full burst on transients — visible flame surge
-        organicTransientMin = 0.25f;
-        musicBeatDepth = 0.95f;   // Deep beat sync (matches particle Fire's musicSpawnPulse)
-        windDrift = 1.2f;         // Audio-reactive lateral movement
-        noiseSpeed = 0.08f;       // Fast noise — tongues flicker like fire, not lava
-        brightness = 0.4f;        // 40% — solid wall of pixels needs less than sparse particles
+        silenceThreshold    = 0.58f;  // Higher threshold = fewer lit pixels = more dark space
+        energyThresholdDrop = 0.22f;  // Modest density variation from energy
+        beatPulseDepth      = 0.40f;  // Per-beat height breathing amplitude (primary music sync)
+        burstStrength       = 0.25f;  // Height flare on transient (fraction of display height)
+        organicTransientMin = 0.25f;  // Responsive to softer transients
+        flameBaseHeight     = 0.20f;  // 20% rest height — room for full phase-breathing range
+        warpStrength        = 0.40f;  // Moderate lateral sway
+        noiseSpeed          = 0.25f;  // Scroll speed — fast enough to look like fire
+        musicBeatDepth      = 0.95f;  // Deep beat sync for scroll speed modulation
+        densityScrollBoost  = 0.50f;  // 50% faster flicker at max onset density
+        brightness          = 0.38f;  // Lower base — beat breathing creates the peaks
     }
 };
 
 /**
- * HeatFire - DOOM-style heat buffer fire generator
+ * HeatFire - Noise-field fire generator
  *
- * Uses per-pixel heat diffusion instead of particles. Each frame:
- * 1. Heat propagates upward: each cell averages from row below with drift and cooling
- * 2. Audio-driven heat injected at bottom row
- * 3. Heat values mapped through fire color palette
+ * Renders fire as a scrolling, thresholded simplex noise field with a vertical
+ * gradient mask. Each frame:
+ *   1. A 2D noise field scrolls upward (scroll speed = audio-modulated noiseSpeed)
+ *   2. A vertical height mask fades fire out toward the top
+ *   3. Pixels above the threshold are lit with the fire color palette
+ *   4. Threshold drops on energy/beat/pulse → fire grows and surges
  *
- * Produces continuous flame tongues that split, merge, and narrow as they rise.
- * Layout-aware: 2D propagation for matrix, 1D for linear strings.
+ * Produces continuous flame tongues that split, merge, and sway organically.
+ * All 7 AudioControl signals consumed:
+ *   energy        → flame height + threshold range + scroll speed + palette blend
+ *   phase         → scroll speed breathing + on-beat threshold dip
+ *   pulse         → transient threshold surge
+ *   downbeat      → max threshold drop + warp expansion + color tint
+ *   rhythmStrength→ organic/music blend for scroll and breathing
+ *   onsetDensity  → scroll speed + tongue width
+ *   beatInMeasure → beat 1/3/2+4 accent threshold patterns + left/right bias
+ *
+ * Layout-aware: 2D gradient for matrix layouts, 1D horizontal for linear strings.
  */
 class HeatFire : public Generator {
 public:
@@ -84,37 +85,16 @@ public:
     HeatFireParams& getParamsMutable() { return params_; }
 
 private:
-    // Noise-field fire: scrolling thresholded noise (primary algorithm)
-    void renderNoiseFireField(PixelMatrix& matrix, const AudioControl& audio);
+    void renderNoiseFireField(PixelMatrix& matrix, const AudioControl& audio, float dt);
 
-    // Map 0-1 intensity through fire color palette
-    uint32_t intensityToFireColor(float intensity) const;
+    // Map 0-1 intensity through dual fire palette (warm/hot blend by paletteBias_)
+    // Mirrors particle Fire's particleColor() for visual consistency.
+    uint32_t intensityToFireColor(float intensity, float gamma) const;
 
-    // Legacy heat buffer (kept for reference)
-    void propagateHeat2D();
-    void propagateHeat1D();
-    void injectHeat(const AudioControl& audio);
-    void updateFlares(const AudioControl& audio);
-    void applyGlow(int x, int y, int z);
-    static uint32_t isqrt(uint32_t n);
-    void renderHeat(PixelMatrix& matrix);
-    uint32_t heatToColor(uint8_t heat) const;
-
-    // Beat detection
+    // Beat detection via phase crossing (phase wraps 0→1 each beat)
     bool beatHappened() const {
         return audio_.phase < 0.2f && prevPhase_ > 0.8f;
     }
-
-    // Heat buffer — values are 0 to NCOLORS-1 (not 0-255)
-    static constexpr uint16_t MAX_HEAT_CELLS = 2048;
-    static constexpr uint8_t NCOLORS = 11;       // Number of colors in fire palette
-    static constexpr uint8_t FLARE_DECAY = 20;   // Vertical decay rate (horizontal is 3× faster)
-    static constexpr uint8_t MAX_FLARES = 32;    // Max simultaneous flares
-    uint8_t heat_[MAX_HEAT_CELLS];
-
-    // Flare state: packed as (z<<16 | y<<8 | x)
-    uint32_t flares_[MAX_FLARES];
-    uint8_t nflare_ = 0;
 
     HeatFireParams params_;
     AudioControl audio_;
@@ -124,20 +104,16 @@ private:
     float prevPhase_;
     uint8_t beatCount_;
 
-    // Downbeat transient state (same decay patterns as particle Fire)
-    float downbeatSpreadMult_;   // Spread widening: 2.5 → 1.0 over 0.5s
-    float downbeatColorShift_;   // White/blue tint: 1.0 → 0.0 over 0.5s
-    float downbeatCoolSuppress_; // Cooling suppression: 1.0 → 0.0 over 0.5s
-    float spawnBias_;            // Left/right injection bias per beat-in-measure
+    // Downbeat transient state (matching particle Fire decay patterns)
+    float downbeatSpreadMult_;   // Warp widening: 2.5 → 1.0 over 0.5s
+    float downbeatCoolSuppress_; // Threshold suppression: 1.0 → 0.0 over 0.5s
+    float beat3Suppress_;        // Beat 3 threshold suppression: 0.5 → 0.0 over 0.4s
+    float beat24Suppress_;       // Beats 2/4 threshold suppression: 0.25 → 0.0 over 0.3s
 
-    // Smoothed audio state (fire has thermal inertia — no instant jumps)
-    float smoothedEnergy_;       // Low-pass filtered energy (~0.5s time constant)
-    float smoothedThreshold_;    // Low-pass filtered threshold (~0.3s time constant)
+    // Smoothed audio state
+    float smoothedEnergy_;       // Low-pass filtered energy (rises ~0.1s, falls ~0.25s)
+    float pulseFlare_;           // Beat/transient height flare: briefly boosts flameHeight
 
-    // Palette state
-    float paletteBias_;          // Smoothed energy*rhythm for warm/hot blend
-
-    // Per-frame computed values (avoid recomputing in inner loops)
-    float effectiveCooling_;
-    float effectiveSpread_;
+    // Palette state (same approach as particle Fire)
+    float paletteBias_;          // Smoothed energy*rhythmStrength for warm/hot palette blend
 };

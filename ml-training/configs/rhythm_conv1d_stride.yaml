@@ -1,0 +1,33 @@
+# Rhythm Conv1D+Stride — optimized for <30ms inference on Cortex-M4F
+#
+# Strided convolutions replace Conv+AvgPool, eliminating 6 TFLite ops
+# (2x ExpandDims + 2x AvgPool2D + 2x Reshape). Fewer ops = less dispatch overhead.
+#
+# Architecture: Conv1D(26->16, k=5, s=4) -> Conv1D(16->24, k=5, s=4) -> Conv1D(24->2, k=1)
+#   192 frames -> 48 -> 12 output timesteps (16x temporal compression)
+#   ~3.5K params, ~3.5 KB INT8
+#
+# MAC budget: ~492K MACs at ~3 cycles/MAC (flash wait states) = ~23ms
+#   + ~5ms framework dispatch (10 ops) = ~28ms total
+#
+# Paired with OnsetNN (onset_conv1d.yaml) for kick/snare detection.
+
+# Override pos_weight for pooled labels (base.yaml values are for full-res)
+training:
+  pos_weight: 1.5             # ~44% positive after 16x max-pool (base: 20.0 for ~4.5%)
+  downbeat_pos_weight: 5.0    # ~12% positive after 16x max-pool (base: 60.0 for ~0.6%)
+
+model:
+  type: "frame_conv1d_pool"
+  channels: [16, 24]
+  kernel_sizes: [5, 5]
+  pool_sizes: [4, 4]               # Applied as strides, not separate pool ops
+  use_stride: true                  # Strided conv instead of Conv+AvgPool
+  window_frames: 192
+  dropout: 0.1
+  downbeat: true
+
+export:
+  output_header: "../blinky-things/audio/rhythm_model_data.h"
+  c_array_name: "rhythm_model_data"
+  max_model_size_kb: 20

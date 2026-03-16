@@ -6,7 +6,7 @@ AudioController provides unified audio analysis and rhythm tracking for LED effe
 
 **Current Version:** AudioController with CBSS Beat Tracking + Frame-Level NN ODF (March 2026)
 **ODF Source:** FrameBeatNN (frame-level FC, 56.8 KB INT8). Non-NN fallback: mic level.
-**Planned:** Dual-model architecture — separate OnsetNN (short window, every frame) + RhythmNN (full-bar window with temporal pooling, every 4th frame). See `IMPROVEMENT_PLAN.md` for details.
+**Planned:** Single Conv1D model with multi-task output (beat + downbeat), replacing dual-model split. See `IMPROVEMENT_PLAN.md` for details.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -81,7 +81,7 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |         Input: 8-16 frames × 26 mels (128-256ms)
       |         Output: onset_activation → OSS buffer (primary ODF) + AudioControl.pulse
       |
-      +--- RhythmNN (every 4th frame, <8ms)
+      +--- RhythmNN (every 2nd frame, <8ms)
       |         Input: 192 frames × 26 mels (3.07s, 1.5+ bars)
       |         Output: beat_activation + downbeat_activation
       |
@@ -250,9 +250,9 @@ Two specialized models replace the single FrameBeatNN:
 - Feeds OSS buffer as primary ODF and directly drives AudioControl.pulse
 
 **RhythmNN** — Bar structure and downbeat detection
-- Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → FC(576→32) → FC(32→2)
+- Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → Conv1D(48→32,k=3) → Conv1D(32→2,k=1)
 - Input: 192 mel frames (3.07s = 1.5+ bars at all EDM tempos), output: beat + downbeat activation
-- ~30 KB INT8, <8ms inference, runs every 4th frame (15.6 Hz)
+- ~16 KB INT8, <8ms inference, runs every 2nd frame (31.25 Hz)
 - Drives CBSS beat/downbeat tracking, AudioControl.downbeat, beatInMeasure
 
 **Why two models:** Onset detection needs short windows with high temporal precision. Downbeat detection needs full-bar context. A single FC model with W192 (3.07s) regressed severely (F1=0.370 vs W32's 0.491) because FC flattening destroys temporal locality. Conv1D with temporal pooling (AvgPool1D) preserves local patterns while progressively compressing the time axis for bar-level classification.

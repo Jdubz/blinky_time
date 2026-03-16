@@ -29,6 +29,7 @@
 #include "config/DeviceConfigLoader.h"       // Runtime device config loading
 #include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
 #include "hal/SafeBootWatchdog.h"            // Hardware WDT + auto-recovery to UF2 bootloader
+#include "audio/FakeAudio.h"                 // Synthetic audio for visual design/debug
 
 // Runtime Device Configuration (v28+)
 // Device config is now loaded from flash at boot time instead of compile-time selection.
@@ -74,13 +75,19 @@ SerialConsole* console = nullptr;  // Serial command interface
 
 uint32_t lastMs = 0;
 bool prevChargingState = false;
+FakeAudio fakeAudio;  // Synthetic 120 BPM audio for visual design/debug ("fakeaudio on/off")
 
 // Helper function for Generator-Effect-Renderer pipeline
 void renderFrame() {
   // Generate -> Effect -> Render -> Display pipeline
   if (pipeline && audioController) {
-    const AudioControl& audio = audioController->getControl();
-    pipeline->render(audio);
+    if (fakeAudio.isEnabled()) {
+      AudioControl fakeCtrl = fakeAudio.getControl();
+      pipeline->render(fakeCtrl);
+    } else {
+      const AudioControl& audio = audioController->getControl();
+      pipeline->render(audio);
+    }
     leds->show();
   }
 }
@@ -317,6 +324,7 @@ void setup() {
   console->setConfigStorage(&configStorage);
   console->setBatteryMonitor(battery);
   console->setAudioController(audioController);
+  console->setFakeAudio(&fakeAudio);
   console->begin();
   SerialConsole::logDebug(F("Serial console initialized"));
 
@@ -358,6 +366,9 @@ void loop() {
   if (audioController) {
     audioController->update(dt);
   }
+
+  // Advance fake audio clock when enabled
+  fakeAudio.update(dt);
 
   // Get pulse from audio control signal for transient logging
   const AudioControl& audio = audioController ? audioController->getControl() : AudioControl{};

@@ -1,4 +1,5 @@
 {
+  "_comment": "windowBpm = naive beat count in seekOffset..windowEnd region (may show octave errors). groundTruthBpm = authoritative median IBI from consensus labels (use for accuracy metrics).",
   "afrobeat-feelgood-groove": {
     "file": "afrobeat-feelgood-groove.mp3",
     "duration": 154.435906,

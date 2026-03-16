@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include "../audio/FakeAudio.h"
 #include "../generators/Fire.h"
 #include "../generators/HeatFire.h"
 #include "../generators/Water.h"
@@ -48,6 +49,11 @@ class HueRotationEffect;
  *   Device Configuration (v28+):
  *     device show         - Display current device config as JSON
  *     device upload <JSON> - Upload device config from JSON string
+ *
+ *   Fake Audio (visual design/debug):
+ *     fakeaudio           - Show current state
+ *     fakeaudio on        - Enable synthetic 120 BPM 4/4 dance pattern
+ *     fakeaudio off       - Disable, resume real microphone input
  *
  *   Generator/Effect Control:
  *     gen list            - List available generators
@@ -129,6 +135,7 @@ public:
     void setAudioVisGenerator(Audio* audioVisGen) { audioVisGenerator_ = audioVisGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
     void setAudioController(AudioController* audioCtrl) { audioCtrl_ = audioCtrl; }
+    void setFakeAudio(FakeAudio* fa) { fakeAudio_ = fa; }
     SettingsRegistry& getSettings() { return settings_; }
 
     // Logging control
@@ -186,6 +193,7 @@ private:
     bool handleEffectCommand(const char* cmd);
     bool handleLogCommand(const char* cmd);
     bool handleDebugCommand(const char* cmd);     // Debug channel control
+    bool handleFakeAudioCommand(const char* cmd); // Synthetic audio for visual debug
     // (handleEnsembleCommand removed v67 — BandFlux pipeline removed; show nn moved to handleBeatTrackingCommand)
     bool handleBeatTrackingCommand(const char* cmd);  // CBSS beat tracking commands
     bool handleDeviceConfigCommand(const char* cmd);  // Device configuration commands (v28+)
@@ -211,6 +219,7 @@ private:
     AdaptiveMic* mic_;
     BatteryMonitor* battery_;
     AudioController* audioCtrl_;
+    FakeAudio* fakeAudio_ = nullptr;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;
 

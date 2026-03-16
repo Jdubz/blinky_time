@@ -4,14 +4,16 @@ data/labels/
 data/processed/
 data/processed-deep/
 data/processed-deep-v2/
+data/processed_backup*/
 data/beat_sync/*.npy
 
 # Calibration captures and generated audio (large, reproducible via calibrate_mic.py)
-data/calibration/**
-data/calibration_esp32s3*/
-# ...but keep distilled mic profiles (small, not reproducible without hardware)
+data/calibration/
+!data/calibration/
+data/calibration/*
 !data/calibration/mic_profile*.npz
 !data/calibration/gain_sweep*.npz
+data/calibration_esp32s3*/
 
 # Demucs separation byproducts (allin1 temp stems and spectrograms).
 # May appear at ml-training/demix/, data/labels/demix/, or other locations
