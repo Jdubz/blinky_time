@@ -192,8 +192,8 @@ void ConfigStorage::loadSettingsDefaults() {
     // Fast AGC parameters (accelerates calibration when signal is persistently low)
     data_.mic.fastAgcEnabled = true;        // Enable fast AGC when gain is high
     data_.mic.fastAgcThreshold = 0.15f;     // Raw level threshold to trigger fast mode
-    data_.mic.fastAgcPeriodMs = 5000;       // 5s calibration period in fast mode
-    data_.mic.fastAgcTrackingTau = 5.0f;    // 5s tracking tau in fast mode
+    data_.mic.fastAgcPeriodMs = 1000;       // 1s calibration period in fast mode (matches AdaptiveMic.h default)
+    data_.mic.fastAgcTrackingTau = 2.0f;    // 2s tracking tau in fast mode (matches AdaptiveMic.h default)
     data_.mic.hwGainMaxSignal = 40;         // AGC ceiling (v56: lowered from 60, sweep shows SNR degrades >35-40)
 
     // AudioController rhythm tracking defaults

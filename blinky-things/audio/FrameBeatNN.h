@@ -77,6 +77,7 @@ public:
         if (outputChannels_ < 1 || outputChannels_ > 4 || totalOutputs < outputChannels_) {
             initError_ = 7; return false;
         }
+        // Assumes output shape [1, T, C] — last C elements are the final frame's activations
         outputOffset_ = totalOutputs - outputChannels_;
 
         memset(windowBuffer_, 0, sizeof(windowBuffer_));
@@ -114,7 +115,7 @@ public:
             int32_t zero_point = input_->params.zero_point;
             int8_t* input_data = input_->data.int8;
             for (int i = 0; i < totalInputs; i++) {
-                int32_t q = static_cast<int32_t>(windowBuffer_[i] / scale + zero_point);
+                int32_t q = static_cast<int32_t>(roundf(windowBuffer_[i] / scale) + zero_point);
                 if (q < -128) q = -128;
                 if (q > 127) q = 127;
                 input_data[i] = static_cast<int8_t>(q);
@@ -230,7 +231,10 @@ private:
     tflite::MicroErrorReporter errorReporter_;
     tflite::MicroMutableOpResolver<OP_RESOLVER_SLOTS> resolver_;
 
+    bool resolverInited_ = false;
+
     void initResolver() {
+        if (resolverInited_) return;
         resolver_.AddFullyConnected();  // FC models
         resolver_.AddConv2D();          // Conv1D mapped to Conv2D
         resolver_.AddPad();             // Causal padding (ZeroPadding1D)
@@ -240,6 +244,7 @@ private:
         resolver_.AddMul();             // Sum head: beat * sigmoid(db_logit)
         resolver_.AddQuantize();
         resolver_.AddDequantize();
+        resolverInited_ = true;
     }
 
     float extractOutput(int channel) const {
@@ -261,10 +266,10 @@ private:
     // --- Model state ---
 
     static constexpr int ARENA_SIZE = 16384;          // 16 KB
-    static constexpr int MAX_WINDOW_FRAMES = 96;      // Max 96 frames (1.536s)
+    static constexpr int MAX_WINDOW_FRAMES = 64;      // Max 64 frames (1.024s) — increase if a wider model is used
 
     alignas(16) uint8_t arena_[ARENA_SIZE];
-    float windowBuffer_[MAX_WINDOW_FRAMES * INPUT_MEL_BANDS];  // 9.75 KB max
+    float windowBuffer_[MAX_WINDOW_FRAMES * INPUT_MEL_BANDS];  // 6.5 KB max (64 * 26 * 4)
     int windowFrames_ = 0;
     int windowFilled_ = 0;
 

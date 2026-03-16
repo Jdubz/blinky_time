@@ -231,10 +231,10 @@ const AudioControl& AudioController::update(float dt) {
     frameBeatNN_.setProfileEnabled(nnProfile);
 
     // Apply ODF smoothing before all consumers (OSS buffer, comb bank, CBSS).
-    // Bypass when NN is active — OnsetNN's sliding window already provides
+    // Bypass when NN is active — FrameBeatNN's sliding window already provides
     // temporal context. Additional smoothing blurs activation peaks that the CBSS
     // needs sharp. (madmom/BeatNet don't smooth NN output.)
-    // cppcheck-suppress knownConditionTrueFalse -- nnActive_ is always false until OnsetNN model is loaded
+    // cppcheck-suppress knownConditionTrueFalse -- nnActive_ is always false until NN model is loaded
     if (nnActive_) {
         lastSmoothedOnset_ = onsetStrength;
     } else {

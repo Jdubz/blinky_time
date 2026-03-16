@@ -251,7 +251,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v68)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v71)
    - `SettingsRegistry.h/cpp` - Tunable parameters (v70: ~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -377,12 +377,12 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **CPU (64 MHz):**
 - Microphone + FFT: ~4%
-- FrameBeatNN inference (62.5 Hz): ~25%
+- FrameBeatNN inference (62.5 Hz): ~26ms per frame (estimated, pending device measurement)
 - Autocorrelation (500ms): ~3% amortized
 - CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
 - LED rendering: ~2%
-- **Total: ~25%** (ample headroom)
+- **Total: TBD** (inference time dominates; device profiling needed to confirm headroom)
 
 ### Safety Architecture (Multi-Layer Defense)
 
@@ -481,7 +481,7 @@ Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 ### Key Features
 - **Single Conv1D NN** (training in progress): Conv1D W64 with Beat This! sum head, ~7 KB INT8, ~26ms. Multi-task: beat activation (ODF) + downbeat (constrained ≤ beat). Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
-- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 68
+- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 71
 - **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
 - **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
 - **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better

@@ -200,7 +200,7 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
 
         // Beat brightness: slight enhancement on-beat, never dims below 1.0.
         // At rhythmStrength=0: brightMult = 1.0 (no modulation).
-        // At rhythmStrength=0.85, on-beat: 1.0 + 0.6 = 1.6 (brighter).
+        // At rhythmStrength=0.85, on-beat: 1.0 + 0.7*0.85 ≈ 1.6 (brighter).
         // At rhythmStrength=0.85, off-beat: 1.0 + 0.0 = 1.0 (no dimming).
         float brightMult = 1.0f + 0.7f * audio.rhythmStrength * phasePulse;
 

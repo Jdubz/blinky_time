@@ -109,7 +109,9 @@ public:
     // Version 69: Dimension-independent generator params (maxParticles/burstSparks float).
     // Version 70: Persist v65 runtime-only params (pllWarmupBeats, snapHysteresis,
     //   dbEmaAlpha, dbThreshold, dbDecay). Previously tunable via serial but lost on reboot.
-    static const uint8_t SETTINGS_VERSION = 70;
+    // Version 71: Fix fastAgcPeriodMs/fastAgcTrackingTau defaults to match AdaptiveMic.h
+    //   (5000→1000ms, 5.0→2.0s). Forces devices to pick up corrected AGC defaults.
+    static const uint8_t SETTINGS_VERSION = 71;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
