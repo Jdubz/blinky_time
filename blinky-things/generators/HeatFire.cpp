@@ -156,6 +156,7 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
 
     if (layout_ == LINEAR_LAYOUT) {
         // 1D strip: simple threshold + contrast
+        float gamma = 1.1f - 0.2f * paletteBias_;
         for (int x = 0; x < width_; x++) {
             float nx = x * xScale;
             float val = SimplexNoise::noise3D_01(nx, noiseTime_, 0.0f) * 0.7f
@@ -163,7 +164,7 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
             if (val > threshold) {
                 float intensity = (val - threshold) / (1.0f - threshold);
                 intensity *= intensity;
-                uint32_t color = intensityToFireColor(intensity);
+                uint32_t color = intensityToFireColor(intensity, gamma);
                 matrix.setPixel(x, 0, (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
             }
         }
@@ -194,6 +195,9 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
         // widespread fire in this extension — only bright peaks poke through.
         float zoneHeight = min(1.0f, flameHeight + 0.20f);
         float zoneTop    = 1.0f - zoneHeight;  // normalizedY where zone begins
+
+        // Hoist gamma out of per-pixel intensityToFireColor — paletteBias_ is constant per frame
+        float gamma = 1.1f - 0.2f * paletteBias_;
 
         for (int y = 0; y < height_; y++) {
             float normalizedY = (float)y / (height_ - 1);  // 0=top, 1=bottom
@@ -229,7 +233,7 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
                     // Creates hard separation between tongue cores and background.
                     intensity = min(1.0f, intensity * intensity * 3.0f);
                     if (intensity > 0.01f) {
-                        uint32_t color = intensityToFireColor(intensity);
+                        uint32_t color = intensityToFireColor(intensity, gamma);
                         // Beat breathing: dims to ~50% between beats, ~160% on beat.
                         // Applied to final color so boost isn't lost to the 1.0 intensity clamp.
                         // Organic mode (rhythmStrength=0): brightMult stays at 1.0.
@@ -250,10 +254,7 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
 // Mirrors particle Fire's particleColor() for visual consistency.
 // ============================================================================
 
-uint32_t HeatFire::intensityToFireColor(float intensity) const {
-    // Audio-driven gamma: paletteBias_ low → gamma 1.1 (more ember detail at low energy)
-    //                     paletteBias_ high → gamma 0.9 (brighter at high energy/rhythm)
-    float gamma = 1.1f - 0.2f * paletteBias_;
+uint32_t HeatFire::intensityToFireColor(float intensity, float gamma) const {
     float normalized = powf(intensity, gamma);
     uint8_t remapped = (uint8_t)(normalized * 255.0f);
 

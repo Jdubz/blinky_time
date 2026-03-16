@@ -89,7 +89,7 @@ private:
 
     // Map 0-1 intensity through dual fire palette (warm/hot blend by paletteBias_)
     // Mirrors particle Fire's particleColor() for visual consistency.
-    uint32_t intensityToFireColor(float intensity) const;
+    uint32_t intensityToFireColor(float intensity, float gamma) const;
 
     // Beat detection via phase crossing (phase wraps 0→1 each beat)
     bool beatHappened() const {

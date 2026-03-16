@@ -43,6 +43,7 @@ public:
      * Initialize both TFLite interpreters and allocate tensors.
      * Must be called once at startup. Either model may fail independently.
      * Returns true if at least OnsetNN initialized successfully.
+     * Call once at startup only — reinit not supported.
      */
     bool begin() {
         if (onsetReady_ || rhythmReady_) return onsetReady_;
@@ -92,13 +93,11 @@ public:
      * Also pushes the frame into RhythmNN's window buffer (no inference).
      */
     float inferOnset(const float* melBands) {
-        // Always buffer into RhythmNN's window (even if RhythmNN isn't ready,
-        // keeps the window filled for when inferRhythm() is called).
-        // Use actual model window size if loaded, otherwise max buffer size.
-        int rhythmBufFrames = (rhythmWindowFrames_ > 0)
-            ? rhythmWindowFrames_ : RHYTHM_MAX_WINDOW_FRAMES;
-        pushFrame(rhythmWindowBuffer_, rhythmWindowFilled_,
-                  rhythmBufFrames, melBands);
+        // Buffer into RhythmNN's window only if loaded (avoids ~20µs/frame wasted memcpy)
+        if (rhythmReady_) {
+            pushFrame(rhythmWindowBuffer_, rhythmWindowFilled_,
+                      rhythmWindowFrames_, melBands);
+        }
 
         if (!onsetReady_) return 0.0f;
 
@@ -264,6 +263,8 @@ private:
         // Each model gets its own interpreter (separate arena, separate state).
         // MicroInterpreter is placement-new'd into the provided buffer.
         SharedState& s = getShared();
+        // NOTE: static storage — only one FrameBeatNN instance supported.
+        // A second instance would corrupt the first's interpreters.
         static tflite::MicroInterpreter* interpreters[2] = {nullptr, nullptr};
         alignas(alignof(tflite::MicroInterpreter))
         static uint8_t interpStorage[2][sizeof(tflite::MicroInterpreter)];

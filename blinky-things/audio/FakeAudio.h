@@ -71,8 +71,9 @@ public:
             if (!wrapped) {
                 fired = (prevTime < t && measureTime_ >= t);
             } else {
-                // Wrapped: check the pre-wrap tail [prevTime, MEASURE_DURATION)
-                // and the post-wrap head [0, measureTime_]
+                // Wrapped: fire if onset is in pre-wrap tail [prevTime, MEASURE_DURATION)
+                // OR in post-wrap head [0, measureTime_]. These are disjoint ranges
+                // because prevTime is near MEASURE_DURATION and measureTime_ is near 0.
                 fired = (t > prevTime) || (t <= measureTime_);
             }
             if (fired) fireOnset(i);

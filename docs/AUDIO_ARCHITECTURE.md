@@ -6,7 +6,7 @@ AudioController provides unified audio analysis and rhythm tracking for LED effe
 
 **Current Version:** AudioController with CBSS Beat Tracking + Frame-Level NN ODF (March 2026)
 **ODF Source:** FrameBeatNN (frame-level FC, 56.8 KB INT8). Non-NN fallback: mic level.
-**Planned:** Dual-model architecture — separate OnsetNN (short window, every frame) + RhythmNN (full-bar window with temporal pooling, every 4th frame). See `IMPROVEMENT_PLAN.md` for details.
+**Planned:** Single Conv1D model with multi-task output (beat + downbeat), replacing dual-model split. See `IMPROVEMENT_PLAN.md` for details.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -81,7 +81,7 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |         Input: 8-16 frames × 26 mels (128-256ms)
       |         Output: onset_activation → OSS buffer (primary ODF) + AudioControl.pulse
       |
-      +--- RhythmNN (every 4th frame, <8ms)
+      +--- RhythmNN (every 2nd frame, <8ms)
       |         Input: 192 frames × 26 mels (3.07s, 1.5+ bars)
       |         Output: beat_activation + downbeat_activation
       |

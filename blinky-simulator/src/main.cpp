@@ -343,7 +343,8 @@ int main(int argc, char* argv[]) {
                   << " (" << audioPattern.getDuration() << " ms)" << std::endl;
     }
 
-    // Output directly to outputDir, overwriting previous results
+    // Output directly to outputDir, overwriting previous results.
+    // Use --output <dir> to write to a different path for A/B comparison.
     createDir(config.outputDir);
 
     std::string lowResPath = config.outputDir + "/low-res.gif";
