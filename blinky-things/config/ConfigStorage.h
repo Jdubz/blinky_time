@@ -6,8 +6,8 @@
 #include "../generators/Lightning.h"
 #include "../inputs/AdaptiveMic.h"
 
-// Forward declarations
-class AudioController;
+// Forward declarations (AudioController removed v74 — replaced by AudioTracker)
+class AudioController;  // Kept for ConfigStorage API compatibility (accepts nullptr)
 
 /**
  * ConfigStorage - Flash-based configuration persistence for nRF52

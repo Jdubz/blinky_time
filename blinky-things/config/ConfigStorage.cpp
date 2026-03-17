@@ -1,6 +1,7 @@
 #include "ConfigStorage.h"
 #include "../tests/SafetyTest.h"
-#include "../audio/AudioController.h"
+// AudioController.h removed v74 — AudioController* params now always nullptr.
+// Forward declaration in ConfigStorage.h is sufficient.
 #include "../inputs/SerialConsole.h"
 
 // Flash storage for nRF52 mbed core
@@ -190,7 +191,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.mic.peakTau = 2.0f;        // 2s peak adaptation
     data_.mic.releaseTau = 5.0f;     // 5s peak release
 
-    // AudioController rhythm tracking defaults
+    // Rhythm tracking defaults (StoredMusicParams — flash layout preserved for version compat)
     data_.music.activationThreshold = 0.4f;
     data_.music.bpmMin = 60.0f;
     data_.music.bpmMax = 200.0f;
@@ -579,7 +580,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
 
     // v72: AGC removed — only window/range normalization params validated
 
-    // AudioController validation (v23+)
+    // StoredMusicParams validation (v23+, kept for flash data integrity)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
     validateFloat(data_.music.bpmMin, 40.0f, 120.0f, F("bpmMin"));
     validateFloat(data_.music.bpmMax, 120.0f, 240.0f, F("bpmMax"));
@@ -823,144 +824,10 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
 
-    // AudioController parameters (v23+)
-    // All rhythm tracking params are now public tunable members
-    if (audioCtrl) {
-        // Basic rhythm parameters
-        audioCtrl->bpmMin = data_.music.bpmMin;
-        audioCtrl->bpmMax = data_.music.bpmMax;
-        audioCtrl->activationThreshold = data_.music.activationThreshold;
-        audioCtrl->cbssAlpha = data_.music.cbssAlpha;
-
-        // Tempo prior width (used by Bayesian static prior)
-        audioCtrl->tempoPriorWidth = data_.music.tempoPriorWidth;
-
-        // Pulse modulation
-        audioCtrl->pulseBoostOnBeat = data_.music.pulseBoostOnBeat;
-        audioCtrl->pulseSuppressOffBeat = data_.music.pulseSuppressOffBeat;
-        audioCtrl->energyBoostOnBeat = data_.music.energyBoostOnBeat;
-
-        // Stability and smoothing
-        audioCtrl->stabilityWindowBeats = data_.music.stabilityWindowBeats;
-        audioCtrl->beatLookaheadMs = data_.music.beatLookaheadMs;
-        audioCtrl->tempoSmoothingFactor = data_.music.tempoSmoothingFactor;
-        audioCtrl->tempoChangeThreshold = data_.music.tempoChangeThreshold;
-
-        // CBSS beat tracking
-        audioCtrl->cbssTightness = data_.music.cbssTightness;
-        audioCtrl->beatConfidenceDecay = data_.music.beatConfidenceDecay;
-        audioCtrl->beatTimingOffset = data_.music.beatTimingOffset;
-        audioCtrl->phaseCorrectionStrength = data_.music.phaseCorrectionStrength;
-        audioCtrl->cbssThresholdFactor = data_.music.cbssThresholdFactor;
-        audioCtrl->cbssContrast = data_.music.cbssContrast;
-        audioCtrl->cbssWarmupBeats = data_.music.cbssWarmupBeats;
-        audioCtrl->onsetSnapWindow = data_.music.onsetSnapWindow;
-
-        // Bayesian tempo fusion (v18+)
-        audioCtrl->bayesLambda = data_.music.bayesLambda;
-        audioCtrl->bayesPriorCenter = data_.music.bayesPriorCenter;
-        audioCtrl->bayesPriorWeight = data_.music.bayesPriorWeight;
-        audioCtrl->bayesAcfWeight = data_.music.bayesAcfWeight;
-        audioCtrl->bayesCombWeight = data_.music.bayesCombWeight;
-        audioCtrl->posteriorFloor = data_.music.posteriorFloor;
-        audioCtrl->disambigNudge = data_.music.disambigNudge;
-        audioCtrl->harmonicTransWeight = data_.music.harmonicTransWeight;
-
-        audioCtrl->odfSmoothWidth = data_.music.odfSmoothWidth;
-        audioCtrl->octaveCheckBeats = data_.music.octaveCheckBeats;
-        audioCtrl->odfMeanSubEnabled = data_.music.odfMeanSubEnabled;
-        audioCtrl->beatBoundaryTempo = data_.music.beatBoundaryTempo;
-        // (unifiedOdf/onsetTrainOdf/odfDiffMode load removed v67 — BandFlux pipeline removed)
-        audioCtrl->adaptiveOdfThresh = data_.music.adaptiveOdfThresh;
-        audioCtrl->odfThreshWindow = data_.music.odfThreshWindow;
-        // (odfSource load removed v64 — experimental alternatives deleted)
-        audioCtrl->densityOctaveEnabled = data_.music.densityOctaveEnabled;
-        audioCtrl->densityMinPerBeat = data_.music.densityMinPerBeat;
-        audioCtrl->densityMaxPerBeat = data_.music.densityMaxPerBeat;
-        audioCtrl->densityPenaltyExp = data_.music.densityPenaltyExp;
-        audioCtrl->densityTarget = data_.music.densityTarget;
-        audioCtrl->downwardCorrectEnabled = data_.music.downwardCorrectEnabled;
-        audioCtrl->octaveCheckEnabled = data_.music.octaveCheckEnabled;
-        // (phaseCheck/PLP load removed v44 — features deleted)
-        audioCtrl->rayleighBpm = data_.music.rayleighBpm;
-        audioCtrl->tempoNudge = data_.music.tempoNudge;
-        audioCtrl->fold32Enabled = data_.music.fold32Enabled;
-        audioCtrl->sesquiCheckEnabled = data_.music.sesquiCheckEnabled;
-        audioCtrl->bidirectionalSnap = data_.music.bidirectionalSnap;
-        // (harmonicSesqui load removed v44 — feature deleted)
-
-        // Percival ACF harmonic pre-enhancement (v45)
-        audioCtrl->percivalEnhance = data_.music.percivalEnhance;
-        audioCtrl->percivalWeight2 = data_.music.percivalWeight2;
-        audioCtrl->percivalWeight4 = data_.music.percivalWeight4;
-
-        // PLL phase correction (v45)
-        audioCtrl->pllEnabled = data_.music.pllEnabled;
-        audioCtrl->pllKp = data_.music.pllKp;
-        audioCtrl->pllKi = data_.music.pllKi;
-
-        // Adaptive CBSS tightness (v45)
-        audioCtrl->adaptiveTightnessEnabled = data_.music.adaptiveTightnessEnabled;
-        audioCtrl->tightnessLowMult = data_.music.tightnessLowMult;
-        audioCtrl->tightnessHighMult = data_.music.tightnessHighMult;
-        audioCtrl->tightnessConfThreshHigh = data_.music.tightnessConfThreshHigh;
-        audioCtrl->tightnessConfThreshLow = data_.music.tightnessConfThreshLow;
-
-        audioCtrl->percivalWeight3 = data_.music.percivalWeight3;
-        // (multiAgent/metrical/template/subbeat load removed v64 — features deleted)
-
-        // Hidden calibration constants (v51)
-        audioCtrl->cbssMeanAlpha = data_.music.cbssMeanAlpha;
-        audioCtrl->harmonic2xThresh = data_.music.harmonic2xThresh;
-        audioCtrl->harmonic15xThresh = data_.music.harmonic15xThresh;
-        audioCtrl->pllSmoother = data_.music.pllSmoother;
-        audioCtrl->beatConfBoost = data_.music.beatConfBoost;
-        audioCtrl->rhythmBlend = data_.music.rhythmBlend;
-        audioCtrl->periodicityBlend = data_.music.periodicityBlend;
-        audioCtrl->onsetDensityBlend = data_.music.onsetDensityBlend;
-        // (subbeatBins/templateHistBars load removed v64 — features deleted)
-        // (nnBeatActivation load removed v68 — always on)
-
-        // (forwardFilter/fwd*/fwdPhaseOnly load removed v64 — forward filter deleted)
-
-        audioCtrl->btrkPipeline = data_.music.btrkPipeline;
-        audioCtrl->btrkThreshWindow = data_.music.btrkThreshWindow;
-        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction load removed v64)
-        audioCtrl->octaveScoreRatio = data_.music.octaveScoreRatio;
-
-        // (particleFilter load removed v64 — PF deleted)
-
-        // Spectral processing (v23+)
-        SharedSpectralAnalysis& spectral = audioCtrl->getSpectral();
-        spectral.whitenEnabled = data_.music.whitenEnabled;
-        spectral.compressorEnabled = data_.music.compressorEnabled;
-        spectral.whitenBassBypass = data_.music.whitenBassBypass;
-        spectral.whitenDecay = data_.music.whitenDecay;
-        spectral.whitenFloor = data_.music.whitenFloor;
-        spectral.compThresholdDb = data_.music.compThresholdDb;
-        spectral.compRatio = data_.music.compRatio;
-        spectral.compKneeDb = data_.music.compKneeDb;
-        spectral.compMakeupDb = data_.music.compMakeupDb;
-        spectral.compAttackTau = data_.music.compAttackTau;
-        spectral.compReleaseTau = data_.music.compReleaseTau;
-
-        // Noise estimation (v56)
-        spectral.noiseEstEnabled = data_.music.noiseEstEnabled;
-        spectral.noiseSmoothAlpha = data_.music.noiseSmoothAlpha;
-        spectral.noiseReleaseFactor = data_.music.noiseReleaseFactor;
-        spectral.noiseOversubtract = data_.music.noiseOversubtract;
-        spectral.noiseFloorRatio = data_.music.noiseFloorRatio;
-
-        // v65 params (persisted v70)
-        audioCtrl->pllWarmupBeats = data_.music.pllWarmupBeats;
-        audioCtrl->snapHysteresis = data_.music.snapHysteresis;
-        audioCtrl->dbEmaAlpha = data_.music.dbEmaAlpha;
-        audioCtrl->dbThreshold = data_.music.dbThreshold;
-        audioCtrl->dbDecay = data_.music.dbDecay;
-
-        // (BandFlux detector load removed v67 — BandFlux pipeline removed)
-        // (BassSpectralAnalysis sync removed v67 — hi-res bass removed)
-    }
+    // AudioController params removed v74 — replaced by AudioTracker.
+    // StoredMusicParams struct preserved in flash layout for version compatibility.
+    // audioCtrl parameter kept for API compatibility (always nullptr).
+    (void)audioCtrl;
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
@@ -1046,147 +913,10 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.mic.peakTau = mic.peakTau;
     data_.mic.releaseTau = mic.releaseTau;
 
-    // NOTE: Detection-specific parameters (transientThreshold, detectionMode, etc.)
-    // were historically handled by EnsembleDetector (removed v67). AdaptiveMic fields
-    // are kept for backward compatibility but detection is now handled by FrameBeatNN.
-
-    // AudioController parameters (v23+)
-    // All rhythm tracking params are now public tunable members
-    if (audioCtrl) {
-        // Basic rhythm parameters
-        data_.music.bpmMin = audioCtrl->bpmMin;
-        data_.music.bpmMax = audioCtrl->bpmMax;
-        data_.music.activationThreshold = audioCtrl->activationThreshold;
-        data_.music.cbssAlpha = audioCtrl->cbssAlpha;
-
-        // Tempo prior width
-        data_.music.tempoPriorWidth = audioCtrl->tempoPriorWidth;
-
-        // Pulse modulation
-        data_.music.pulseBoostOnBeat = audioCtrl->pulseBoostOnBeat;
-        data_.music.pulseSuppressOffBeat = audioCtrl->pulseSuppressOffBeat;
-        data_.music.energyBoostOnBeat = audioCtrl->energyBoostOnBeat;
-
-        // Stability and smoothing
-        data_.music.stabilityWindowBeats = audioCtrl->stabilityWindowBeats;
-        data_.music.beatLookaheadMs = audioCtrl->beatLookaheadMs;
-        data_.music.tempoSmoothingFactor = audioCtrl->tempoSmoothingFactor;
-        data_.music.tempoChangeThreshold = audioCtrl->tempoChangeThreshold;
-
-        // CBSS beat tracking
-        data_.music.cbssTightness = audioCtrl->cbssTightness;
-        data_.music.beatConfidenceDecay = audioCtrl->beatConfidenceDecay;
-        data_.music.beatTimingOffset = audioCtrl->beatTimingOffset;
-        data_.music.phaseCorrectionStrength = audioCtrl->phaseCorrectionStrength;
-        data_.music.cbssThresholdFactor = audioCtrl->cbssThresholdFactor;
-        data_.music.cbssContrast = audioCtrl->cbssContrast;
-        data_.music.cbssWarmupBeats = audioCtrl->cbssWarmupBeats;
-        data_.music.onsetSnapWindow = audioCtrl->onsetSnapWindow;
-
-        // Bayesian tempo fusion (v18+)
-        data_.music.bayesLambda = audioCtrl->bayesLambda;
-        data_.music.bayesPriorCenter = audioCtrl->bayesPriorCenter;
-        data_.music.bayesPriorWeight = audioCtrl->bayesPriorWeight;
-        data_.music.bayesAcfWeight = audioCtrl->bayesAcfWeight;
-        data_.music.bayesCombWeight = audioCtrl->bayesCombWeight;
-        data_.music.posteriorFloor = audioCtrl->posteriorFloor;
-        data_.music.disambigNudge = audioCtrl->disambigNudge;
-        data_.music.harmonicTransWeight = audioCtrl->harmonicTransWeight;
-
-        data_.music.odfSmoothWidth = audioCtrl->odfSmoothWidth;
-        data_.music.octaveCheckBeats = audioCtrl->octaveCheckBeats;
-        data_.music.odfMeanSubEnabled = audioCtrl->odfMeanSubEnabled;
-        data_.music.beatBoundaryTempo = audioCtrl->beatBoundaryTempo;
-        // (unifiedOdf/onsetTrainOdf/odfDiffMode save removed v67 — BandFlux pipeline removed)
-        data_.music.adaptiveOdfThresh = audioCtrl->adaptiveOdfThresh;
-        data_.music.odfThreshWindow = audioCtrl->odfThreshWindow;
-        // (odfSource save removed v64 — experimental alternatives deleted)
-        data_.music.densityOctaveEnabled = audioCtrl->densityOctaveEnabled;
-        data_.music.densityMinPerBeat = audioCtrl->densityMinPerBeat;
-        data_.music.densityMaxPerBeat = audioCtrl->densityMaxPerBeat;
-        data_.music.densityPenaltyExp = audioCtrl->densityPenaltyExp;
-        data_.music.densityTarget = audioCtrl->densityTarget;
-        data_.music.downwardCorrectEnabled = audioCtrl->downwardCorrectEnabled;
-        data_.music.octaveCheckEnabled = audioCtrl->octaveCheckEnabled;
-        // (phaseCheck/PLP save removed v44 — features deleted)
-        data_.music.rayleighBpm = audioCtrl->rayleighBpm;
-        data_.music.tempoNudge = audioCtrl->tempoNudge;
-        data_.music.fold32Enabled = audioCtrl->fold32Enabled;
-        data_.music.sesquiCheckEnabled = audioCtrl->sesquiCheckEnabled;
-        data_.music.bidirectionalSnap = audioCtrl->bidirectionalSnap;
-        // (harmonicSesqui save removed v44 — feature deleted)
-
-        // Percival ACF harmonic pre-enhancement (v45)
-        data_.music.percivalEnhance = audioCtrl->percivalEnhance;
-        data_.music.percivalWeight2 = audioCtrl->percivalWeight2;
-        data_.music.percivalWeight4 = audioCtrl->percivalWeight4;
-
-        // PLL phase correction (v45)
-        data_.music.pllEnabled = audioCtrl->pllEnabled;
-        data_.music.pllKp = audioCtrl->pllKp;
-        data_.music.pllKi = audioCtrl->pllKi;
-
-        // Adaptive CBSS tightness (v45)
-        data_.music.adaptiveTightnessEnabled = audioCtrl->adaptiveTightnessEnabled;
-        data_.music.tightnessLowMult = audioCtrl->tightnessLowMult;
-        data_.music.tightnessHighMult = audioCtrl->tightnessHighMult;
-        data_.music.tightnessConfThreshHigh = audioCtrl->tightnessConfThreshHigh;
-        data_.music.tightnessConfThreshLow = audioCtrl->tightnessConfThreshLow;
-
-        data_.music.percivalWeight3 = audioCtrl->percivalWeight3;
-        // (multiAgent/metrical/template/subbeat save removed v64 — features deleted)
-
-        // Hidden calibration constants (v51)
-        data_.music.cbssMeanAlpha = audioCtrl->cbssMeanAlpha;
-        data_.music.harmonic2xThresh = audioCtrl->harmonic2xThresh;
-        data_.music.harmonic15xThresh = audioCtrl->harmonic15xThresh;
-        data_.music.pllSmoother = audioCtrl->pllSmoother;
-        data_.music.beatConfBoost = audioCtrl->beatConfBoost;
-        data_.music.rhythmBlend = audioCtrl->rhythmBlend;
-        data_.music.periodicityBlend = audioCtrl->periodicityBlend;
-        data_.music.onsetDensityBlend = audioCtrl->onsetDensityBlend;
-        // (subbeatBins/templateHistBars save removed v64 — features deleted)
-        // (nnBeatActivation save removed v68 — always on)
-
-        // (forwardFilter/fwd*/fwdPhaseOnly save removed v64 — forward filter deleted)
-
-        data_.music.btrkPipeline = audioCtrl->btrkPipeline;
-        data_.music.btrkThreshWindow = audioCtrl->btrkThreshWindow;
-        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction save removed v64)
-        data_.music.octaveScoreRatio = audioCtrl->octaveScoreRatio;
-
-        // (particleFilter save removed v64 — PF deleted)
-
-        // Spectral processing (v23+)
-        const SharedSpectralAnalysis& spectral = audioCtrl->getSpectral();
-        data_.music.whitenEnabled = spectral.whitenEnabled;
-        data_.music.compressorEnabled = spectral.compressorEnabled;
-        data_.music.whitenBassBypass = spectral.whitenBassBypass;
-        data_.music.whitenDecay = spectral.whitenDecay;
-        data_.music.whitenFloor = spectral.whitenFloor;
-        data_.music.compThresholdDb = spectral.compThresholdDb;
-        data_.music.compRatio = spectral.compRatio;
-        data_.music.compKneeDb = spectral.compKneeDb;
-        data_.music.compMakeupDb = spectral.compMakeupDb;
-        data_.music.compAttackTau = spectral.compAttackTau;
-        data_.music.compReleaseTau = spectral.compReleaseTau;
-
-        // Noise estimation (v56)
-        data_.music.noiseEstEnabled = spectral.noiseEstEnabled;
-        data_.music.noiseSmoothAlpha = spectral.noiseSmoothAlpha;
-        data_.music.noiseReleaseFactor = spectral.noiseReleaseFactor;
-        data_.music.noiseOversubtract = spectral.noiseOversubtract;
-        data_.music.noiseFloorRatio = spectral.noiseFloorRatio;
-
-        // v65 params (persisted v70)
-        data_.music.pllWarmupBeats = audioCtrl->pllWarmupBeats;
-        data_.music.snapHysteresis = audioCtrl->snapHysteresis;
-        data_.music.dbEmaAlpha = audioCtrl->dbEmaAlpha;
-        data_.music.dbThreshold = audioCtrl->dbThreshold;
-        data_.music.dbDecay = audioCtrl->dbDecay;
-
-        // (BandFlux detector save removed v67 — BandFlux pipeline removed)
-    }
+    // AudioController params removed v74 — replaced by AudioTracker.
+    // StoredMusicParams struct preserved in flash layout for version compatibility.
+    // audioCtrl parameter kept for API compatibility (always nullptr).
+    (void)audioCtrl;
 
     saveToFlash();
     dirty_ = false;

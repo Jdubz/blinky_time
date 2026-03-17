@@ -66,7 +66,6 @@
 // Audio processing implementations
 #include "audio/SharedSpectralAnalysis.cpp"
 #include "audio/CombFilterBank.cpp"
-#include "audio/AudioController.cpp"
 #include "audio/AudioTracker.cpp"
 
 // Test implementations (only when testing enabled)
