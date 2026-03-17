@@ -4,7 +4,11 @@
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
+#ifdef USE_AUDIO_TRACKER
+#include "../audio/AudioTracker.h"
+#else
 #include "../audio/AudioController.h"
+#endif
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../config/DeviceConfigLoader.h"  // v28: Runtime device config loading
@@ -112,7 +116,11 @@ void SerialConsole::registerSettings() {
     registerAudioSettings();
     registerAgcSettings();
     // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67)
+#ifdef USE_AUDIO_TRACKER
+    registerTrackerSettings();
+#else
     registerRhythmSettings();
+#endif
 }
 
 // === FIRE SETTINGS (Particle-based) ===
@@ -233,6 +241,54 @@ void SerialConsole::registerAgcSettings() {
 
 // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67 — BandFlux pipeline removed)
 
+#ifdef USE_AUDIO_TRACKER
+// === TRACKER SETTINGS (AudioTracker — simplified ACF+Comb+PLL) ===
+void SerialConsole::registerTrackerSettings() {
+    if (!audioCtrl_) return;
+
+    // Tempo range
+    settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "tracker",
+        "Minimum detectable BPM", 40.0f, 120.0f, onParamChanged);
+    settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "tracker",
+        "Maximum detectable BPM", 120.0f, 240.0f, onParamChanged);
+    settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "tracker",
+        "Rayleigh prior peak BPM (perceptual bias)", 60.0f, 180.0f, onParamChanged);
+
+    // Comb filter bank
+    settings_.registerFloat("combfeedback", &audioCtrl_->combFeedback, "tracker",
+        "Comb bank resonance strength (0.85-0.98)", 0.85f, 0.98f, onParamChanged);
+
+    // PLL phase tracking
+    settings_.registerFloat("pllkp", &audioCtrl_->pllKp, "tracker",
+        "PLL proportional gain (phase correction speed)", 0.0f, 0.5f, onParamChanged);
+    settings_.registerFloat("pllki", &audioCtrl_->pllKi, "tracker",
+        "PLL integral gain (tempo adaptation speed)", 0.0f, 0.05f, onParamChanged);
+
+    // Rhythm activation
+    settings_.registerFloat("activationthreshold", &audioCtrl_->activationThreshold, "tracker",
+        "Minimum periodicity to activate rhythm mode", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("odfgate", &audioCtrl_->odfGateThreshold, "tracker",
+        "NN output floor gate (suppress noise)", 0.0f, 0.5f, onParamChanged);
+
+    // Tempo smoothing
+    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothing, "tracker",
+        "BPM EMA smoothing factor (higher=slower)", 0.5f, 0.99f, onParamChanged);
+
+    // Pulse modulation
+    settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "tracker",
+        "Pulse boost factor near beat", 1.0f, 3.0f, onParamChanged);
+    settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "tracker",
+        "Pulse suppress factor off-beat", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "tracker",
+        "Energy boost near predicted beats", 0.0f, 1.0f, onParamChanged);
+
+    // NN profiling
+    settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "tracker",
+        "Enable NN inference profiling output");
+}
+#endif
+
+#ifndef USE_AUDIO_TRACKER
 // === RHYTHM TRACKING SETTINGS (AudioController) ===
 void SerialConsole::registerRhythmSettings() {
     // audioCtrl_ guaranteed valid — allocated in setup() before registerSettings()
@@ -488,6 +544,7 @@ void SerialConsole::registerRhythmSettings() {
     settings_.registerFloat("noisefloor", &spectral.noiseFloorRatio, "spectral",
         "Spectral floor ratio (0.001-0.5)", 0.001f, 0.5f);
 }
+#endif  // !USE_AUDIO_TRACKER
 
 void SerialConsole::update() {
     // Handle incoming commands
@@ -771,10 +828,18 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             Serial.print(F("-"));
             Serial.println(audioCtrl_->getBpmMax(), 0);
 
-            // New metrics from research-based improvements
+            // Advanced metrics
             Serial.println(F("--- Advanced Metrics ---"));
             Serial.print(F("Beat Stability: "));
             Serial.println(audioCtrl_->getBeatStability(), 2);
+#ifdef USE_AUDIO_TRACKER
+            Serial.print(F("Comb BPM: "));
+            Serial.println(audioCtrl_->getCombBankBPM(), 1);
+            Serial.print(F("Comb Confidence: "));
+            Serial.println(audioCtrl_->getCombBankConfidence(), 3);
+            Serial.print(F("PLL Integral: "));
+            Serial.println(audioCtrl_->getPllIntegral(), 4);
+#else
             Serial.print(F("Tempo Velocity: "));
             Serial.print(audioCtrl_->getTempoVelocity(), 1);
             Serial.println(F(" BPM/s"));
@@ -788,6 +853,7 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             Serial.print(F(" BPM (best bin conf="));
             Serial.print(audioCtrl_->getBayesBestConf(), 2);
             Serial.println(F(")"));
+#endif
         } else {
             Serial.println(F("Audio controller not available"));
         }
@@ -834,7 +900,11 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 waterGenerator_->getParams(),
                 lightningGenerator_->getParams(),
                 *mic_,
+#ifdef USE_AUDIO_TRACKER
+                nullptr  // AudioTracker persistence added later
+#else
                 audioCtrl_
+#endif
             );
             Serial.println(F("OK"));
         } else {
@@ -850,7 +920,11 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 waterGenerator_->getParamsMutable(),
                 lightningGenerator_->getParamsMutable(),
                 *mic_,
+#ifdef USE_AUDIO_TRACKER
+                nullptr  // AudioTracker persistence added later
+#else
                 audioCtrl_
+#endif
             );
             checkBayesianInteractions();
             Serial.println(F("OK"));
@@ -1088,7 +1162,11 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             waterGenerator_->getParams(),
             lightningGenerator_->getParams(),
             *mic_,
+#ifdef USE_AUDIO_TRACKER
+            nullptr
+#else
             audioCtrl_
+#endif
         );
     } else if (mic_) {
         // Safe mode: generators null, but mic available
@@ -1101,7 +1179,11 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             defaultWater,
             defaultLightning,
             *mic_,
+#ifdef USE_AUDIO_TRACKER
+            nullptr
+#else
             audioCtrl_
+#endif
         );
     } else {
         Serial.println(F("ERROR: Cannot save config - mic not initialized"));
@@ -1131,6 +1213,21 @@ void SerialConsole::restoreDefaults() {
 
     // Restore audio controller defaults
     if (audioCtrl_) {
+#ifdef USE_AUDIO_TRACKER
+        // AudioTracker: restore ~10 tracker params
+        audioCtrl_->bpmMin = 60.0f;
+        audioCtrl_->bpmMax = 200.0f;
+        audioCtrl_->rayleighBpm = 140.0f;
+        audioCtrl_->combFeedback = 0.92f;
+        audioCtrl_->pllKp = 0.15f;
+        audioCtrl_->pllKi = 0.005f;
+        audioCtrl_->activationThreshold = 0.3f;
+        audioCtrl_->odfGateThreshold = 0.25f;
+        audioCtrl_->tempoSmoothing = 0.85f;
+        audioCtrl_->pulseBoostOnBeat = 1.3f;
+        audioCtrl_->pulseSuppressOffBeat = 0.6f;
+        audioCtrl_->energyBoostOnBeat = 0.3f;
+#else
         audioCtrl_->activationThreshold = 0.4f;
         audioCtrl_->cbssAlpha = 0.9f;
         audioCtrl_->cbssTightness = 8.0f;           // v40: raised from 5.0 (+24% avg F1)
@@ -1206,6 +1303,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->energyBoostOnBeat = 0.3f;
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
+#endif  // USE_AUDIO_TRACKER
 
         // Restore spectral processing defaults
         SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
@@ -1919,7 +2017,81 @@ bool SerialConsole::handleFakeAudioCommand(const char* cmd) {
     return true;
 }
 
-// === BEAT TRACKING COMMANDS ===
+#ifdef USE_AUDIO_TRACKER
+// === TRACKER COMMANDS (AudioTracker) ===
+bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
+    if (!audioCtrl_) return false;
+
+    // "show nn" - NN diagnostics
+    if (strcmp(cmd, "show nn") == 0) {
+        audioCtrl_->getFrameBeatNN().printDiagnostics();
+        return true;
+    }
+
+    // "show beat" - tracker state
+    if (strcmp(cmd, "show beat") == 0) {
+        Serial.println(F("=== AudioTracker (ACF+Comb+PLL) ==="));
+        Serial.print(F("BPM: "));
+        Serial.println(audioCtrl_->getCurrentBpm(), 1);
+        Serial.print(F("Phase: "));
+        Serial.println(audioCtrl_->getPllPhase(), 3);
+        Serial.print(F("Periodicity: "));
+        Serial.println(audioCtrl_->getPeriodicityStrength(), 3);
+        Serial.print(F("Beat Count: "));
+        Serial.println(audioCtrl_->getBeatCount());
+        Serial.print(F("Comb BPM: "));
+        Serial.println(audioCtrl_->getCombBankBPM(), 1);
+        Serial.print(F("Comb Confidence: "));
+        Serial.println(audioCtrl_->getCombBankConfidence(), 3);
+        Serial.print(F("PLL Integral: "));
+        Serial.println(audioCtrl_->getPllIntegral(), 4);
+        Serial.print(F("Pulse: "));
+        Serial.println(audioCtrl_->getLastPulseStrength(), 3);
+        Serial.print(F("Onset Density: "));
+        Serial.print(audioCtrl_->getControl().onsetDensity, 1);
+        Serial.println(F(" /s"));
+        Serial.println();
+        return true;
+    }
+
+    // "json rhythm" / "json beat" - JSON output for test automation
+    if (strcmp(cmd, "json rhythm") == 0 || strcmp(cmd, "json beat") == 0) {
+        Serial.print(F("{\"bpm\":"));
+        Serial.print(audioCtrl_->getCurrentBpm(), 1);
+        Serial.print(F(",\"phase\":"));
+        Serial.print(audioCtrl_->getPllPhase(), 3);
+        Serial.print(F(",\"periodicity\":"));
+        Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
+        Serial.print(F(",\"combBpm\":"));
+        Serial.print(audioCtrl_->getCombBankBPM(), 1);
+        Serial.print(F(",\"combConf\":"));
+        Serial.print(audioCtrl_->getCombBankConfidence(), 3);
+        Serial.print(F(",\"beatCount\":"));
+        Serial.print(audioCtrl_->getBeatCount());
+        Serial.print(F(",\"rhythmStrength\":"));
+        Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
+        Serial.print(F(",\"pulse\":"));
+        Serial.print(audioCtrl_->getLastPulseStrength(), 3);
+        Serial.print(F(",\"onsetDensity\":"));
+        Serial.print(audioCtrl_->getControl().onsetDensity, 1);
+        Serial.println(F("}"));
+        return true;
+    }
+
+    // "show spectral" - spectral processing state (shared with AudioController)
+    if (strcmp(cmd, "show spectral") == 0) {
+        const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
+        Serial.println(F("=== Spectral Processing ==="));
+        Serial.print(F("  Compressor: ")); Serial.println(spectral.compressorEnabled ? "on" : "off");
+        Serial.print(F("  Whitening: ")); Serial.println(spectral.whitenEnabled ? "on" : "off");
+        Serial.println();
+        return true;
+    }
+
+    return false;
+}
+#else
+// === BEAT TRACKING COMMANDS (AudioController) ===
 bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
     if (!audioCtrl_) {
         Serial.println(F("Audio controller not available"));
@@ -2117,6 +2289,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     return false;
 }
+#endif  // USE_AUDIO_TRACKER
 
 // === LOGGING HELPERS ===
 void SerialConsole::logDebug(const __FlashStringHelper* msg) {

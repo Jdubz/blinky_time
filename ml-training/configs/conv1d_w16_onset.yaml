@@ -1,0 +1,26 @@
+# Conv1D W16 — onset-only model for AudioTracker
+#
+# Short window (16 frames = 256ms), single output (onset activation only).
+# Same backbone as deployed W64 — just shorter context window.
+# Designed for the AudioTracker refactor: NN handles onset detection,
+# DSP (ACF + Comb + PLL) handles tempo/phase tracking.
+#
+# Architecture: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
+#   ~5K params, ~5 KB INT8, ~7ms inference on Cortex-M4F
+#   Receptive field: 9 frames = 144ms (captures full kick transient 10-50ms)
+#
+# Output: 1 channel
+#   ch0 = sigmoid(onset_logit) — onset activation (kicks/snares)
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false             # Onset only — single output channel
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 10

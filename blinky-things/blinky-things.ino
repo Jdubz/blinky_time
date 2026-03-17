@@ -16,6 +16,9 @@
  * - Bucket Totem: 128 LEDs in 16x8 matrix
  */
 
+// Uncomment to use the simplified ACF+Comb+PLL AudioTracker instead of AudioController.
+// #define USE_AUDIO_TRACKER
+
 // NOTE: Adafruit_NeoPixel must be first. PDM.h is included separately in
 // Nrf52PdmMic.cpp to avoid pinDefinitions.h redefinition (Seeeduino mbed platform bug)
 #include <Adafruit_NeoPixel.h>
@@ -30,6 +33,9 @@
 #include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
 #include "hal/SafeBootWatchdog.h"            // Hardware WDT + auto-recovery to UF2 bootloader
 #include "audio/FakeAudio.h"                 // Synthetic audio for visual design/debug
+#ifdef USE_AUDIO_TRACKER
+#include "audio/AudioTracker.h"              // Simplified ACF+Comb+PLL tracker (v74)
+#endif
 
 // Runtime Device Configuration (v28+)
 // Device config is now loaded from flash at boot time instead of compile-time selection.
@@ -67,7 +73,11 @@ RenderPipeline* pipeline = nullptr;  // Manages generators, effects, and renderi
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
-AudioController* audioController = nullptr;  // Unified audio analysis (owns AdaptiveMic internally)
+#ifdef USE_AUDIO_TRACKER
+AudioTracker* audioController = nullptr;     // Simplified ACF+Comb+PLL tracker
+#else
+AudioController* audioController = nullptr;  // Original CBSS beat tracker
+#endif
 BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
@@ -188,7 +198,11 @@ void setup() {
 
   // Initialize HAL-enabled components - ALWAYS initialize (even in safe mode)
   // Audio and battery monitoring work independently of LED configuration
+#ifdef USE_AUDIO_TRACKER
+  audioController = new(std::nothrow) AudioTracker(DefaultHal::pdm(), DefaultHal::time());
+#else
   audioController = new(std::nothrow) AudioController(DefaultHal::pdm(), DefaultHal::time());
+#endif
   battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
   if (!audioController || !battery) {
     haltWithError(F("ERROR: HAL component allocation failed"));
@@ -284,7 +298,11 @@ void setup() {
           waterGen->getParamsMutable(),
           lightningGen->getParamsMutable(),
           audioController->getMicForTuning(),
+#ifdef USE_AUDIO_TRACKER
+          nullptr  // AudioTracker uses defaults, persistence added later
+#else
           audioController
+#endif
         );
         SerialConsole::logDebug(F("Loaded effect params from flash"));
 
@@ -413,7 +431,11 @@ void loop() {
           waterGen->getParams(),
           lightningGen->getParams(),
           audioController->getMicForTuning(),
+#ifdef USE_AUDIO_TRACKER
+          nullptr  // AudioTracker persistence added later
+#else
           audioController
+#endif
         );
       }
     }
