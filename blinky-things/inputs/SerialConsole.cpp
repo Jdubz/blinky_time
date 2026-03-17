@@ -223,23 +223,12 @@ void SerialConsole::registerAudioSettings() {
         "Peak release speed (s)", 1.0f, 30.0f);
 }
 
-// === HARDWARE AGC SETTINGS ===
-// Signal flow: Mic → HW Gain (PRIMARY) → ADC → Window/Range (SECONDARY) → Output
+// === GAIN SETTINGS (v72: AGC removed, hardware gain fixed at platform default) ===
 void SerialConsole::registerAgcSettings() {
-    if (!mic_) return;
-
-    settings_.registerFloat("hwtarget", &mic_->hwTarget, "agc",
-        "HW target level (raw, ±0.01 dead zone)", 0.05f, 0.9f);
-    settings_.registerBool("fastagc", &mic_->fastAgcEnabled, "agc",
-        "Enable fast AGC for low-level sources");
-    settings_.registerFloat("fastagcthresh", &mic_->fastAgcThreshold, "agc",
-        "Raw level threshold for fast AGC", 0.05f, 0.3f);
-    settings_.registerUint16("fastagcperiod", &mic_->fastAgcPeriodMs, "agc",
-        "Fast AGC calibration period (ms)", 2000, 15000);
-    settings_.registerFloat("fastagctau", &mic_->fastAgcTrackingTau, "agc",
-        "Fast AGC tracking time (s)", 1.0f, 15.0f);
-    settings_.registerUint8("hwgainmax", &mic_->hwGainMaxSignal, "agc",
-        "Max HW gain for AGC (10-80)", 10, 80);
+    // AGC removed (v72) — hardware gain is fixed at platform optimal level.
+    // Window/range normalization handles all dynamic range adaptation.
+    // No user-tunable AGC parameters remain.
+    // Function retained for ConfigStorage compatibility.
 }
 
 // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67 — BandFlux pipeline removed)
@@ -566,6 +555,7 @@ bool SerialConsole::handleSpecialCommand(const char* cmd) {
     if (handleEffectCommand(cmd)) return true;
     if (handleBatteryCommand(cmd)) return true;
     if (handleStreamCommand(cmd)) return true;
+    // cppcheck-suppress knownConditionTrueFalse -- stub for future test commands
     if (handleTestCommand(cmd)) return true;
     if (handleAudioStatusCommand(cmd)) return true;
     if (handleModeCommand(cmd)) return true;
@@ -747,41 +737,9 @@ bool SerialConsole::handleStreamCommand(const char* cmd) {
 
 // === TEST MODE COMMANDS ===
 bool SerialConsole::handleTestCommand(const char* cmd) {
-    if (strncmp(cmd, "test lock hwgain", 16) == 0) {
-        // Ensure command is exact match or followed by space (not "test lock hwgainXYZ")
-        if (cmd[16] != '\0' && cmd[16] != ' ') {
-            return false;
-        }
-        if (!mic_) {
-            Serial.println(F("ERROR: Microphone not available"));
-            return true;
-        }
-        // Parse optional gain value (default to current gain)
-        int gain = mic_->getHwGain();
-        if (strlen(cmd) > 17) {
-            gain = atoi(cmd + 17);
-            if (gain < 0 || gain > 80) {
-                Serial.print(F("WARNING: Gain "));
-                Serial.print(gain);
-                Serial.println(F(" out of range (0-80), will be clamped"));
-            }
-        }
-        mic_->lockHwGain(gain);
-        Serial.print(F("OK locked at "));
-        Serial.println(mic_->getHwGain());
-        return true;
-    }
-
-    if (strcmp(cmd, "test unlock hwgain") == 0) {
-        if (!mic_) {
-            Serial.println(F("ERROR: Microphone not available"));
-            return true;
-        }
-        mic_->unlockHwGain();
-        Serial.println(F("OK unlocked"));
-        return true;
-    }
-
+    // Hardware gain lock/unlock removed (v72) — gain is fixed at platform optimal level.
+    // Stub retained for future test commands.
+    (void)cmd;
     return false;
 }
 
@@ -1165,17 +1123,10 @@ void SerialConsole::restoreDefaults() {
     // which will be applied on next load/save cycle
 
     // Restore mic defaults (window/range normalization)
-    // Note: Transient detection now handled by ODF-derived pulse detection (v67)
+    // v72: AGC removed — only window/range normalization tunables remain
     if (mic_) {
         mic_->peakTau = Defaults::PeakTau;              // 2s peak adaptation
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
-        mic_->hwTarget = 0.20f;                         // Target raw input level (lower = less gain seeking)
-
-        // Fast AGC defaults (enabled by default for better low-level response)
-        mic_->fastAgcEnabled = true;
-        mic_->fastAgcThreshold = 0.15f;
-        mic_->fastAgcPeriodMs = 5000;
-        mic_->fastAgcTrackingTau = 5.0f;
     }
 
     // Restore audio controller defaults

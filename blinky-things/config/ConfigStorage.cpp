@@ -183,18 +183,12 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.lightning.branchIntensityLoss = 40;
 
     // Mic defaults (hardware-primary, window/range normalization)
-    // Window/Range normalization parameters
-    data_.mic.peakTau = 1.0f;        // 1s peak adaptation (fast response)
-    data_.mic.releaseTau = 3.0f;     // 3s peak release (quick recovery)
-    // Hardware AGC parameters (primary - optimizes raw ADC input)
-    data_.mic.hwTarget = 0.20f;      // Target raw input level (v56: lower = less gain seeking)
-
-    // Fast AGC parameters (accelerates calibration when signal is persistently low)
-    data_.mic.fastAgcEnabled = true;        // Enable fast AGC when gain is high
-    data_.mic.fastAgcThreshold = 0.15f;     // Raw level threshold to trigger fast mode
-    data_.mic.fastAgcPeriodMs = 1000;       // 1s calibration period in fast mode (matches AdaptiveMic.h default)
-    data_.mic.fastAgcTrackingTau = 2.0f;    // 2s tracking tau in fast mode (matches AdaptiveMic.h default)
-    data_.mic.hwGainMaxSignal = 40;         // AGC ceiling (v56: lowered from 60, sweep shows SNR degrades >35-40)
+    // Window/Range normalization (v72: AGC removed, gain fixed at platform default)
+    // v72: changed from 1.0/3.0 to 2.0/5.0 — with fixed gain, slower tracking avoids
+    // over-reacting to transients that the AGC would have absorbed. These values match
+    // AdaptiveMic.h defaults and were tested on both nRF52840 and ESP32-S3.
+    data_.mic.peakTau = 2.0f;        // 2s peak adaptation
+    data_.mic.releaseTau = 5.0f;     // 5s peak release
 
     // AudioController rhythm tracking defaults
     data_.music.activationThreshold = 0.4f;
@@ -583,14 +577,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     validateFloat(data_.mic.peakTau, 0.5f, 10.0f, F("peakTau"));
     validateFloat(data_.mic.releaseTau, 1.0f, 30.0f, F("releaseTau"));
 
-    // Validate hardware AGC parameters (expanded - allow full ADC range usage)
-    validateFloat(data_.mic.hwTarget, 0.05f, 0.9f, F("hwTarget"));
-
-    // Validate fast AGC parameters
-    validateFloat(data_.mic.fastAgcThreshold, 0.01f, 0.5f, F("fastAgcThresh"));
-    validateFloat(data_.mic.fastAgcTrackingTau, 0.5f, 30.0f, F("fastAgcTau"));
-    VALIDATE_INT(data_.mic.fastAgcPeriodMs, 500, 30000, F("fastAgcPeriod"));
-    VALIDATE_INT(data_.mic.hwGainMaxSignal, 10, 80, F("hwGainMax"));
+    // v72: AGC removed — only window/range normalization params validated
 
     // AudioController validation (v23+)
     validateFloat(data_.music.activationThreshold, 0.0f, 1.0f, F("musicThresh"));
@@ -832,23 +819,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     lightningParams.branchIntensityLoss = data_.lightning.branchIntensityLoss;
     lightningParams.maxParticles = data_.lightning.maxParticles;
 
-    // Window/Range normalization parameters
+    // Window/Range normalization parameters (v72: AGC removed, only these remain)
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
-    // Hardware AGC parameters (primary - raw input tracking)
-    mic.hwTarget = data_.mic.hwTarget;
-
-    // Fast AGC parameters
-    mic.fastAgcEnabled = data_.mic.fastAgcEnabled;
-    mic.fastAgcThreshold = data_.mic.fastAgcThreshold;
-    mic.fastAgcPeriodMs = data_.mic.fastAgcPeriodMs;
-    mic.fastAgcTrackingTau = data_.mic.fastAgcTrackingTau;
-    // AGC ceiling
-    mic.hwGainMaxSignal = data_.mic.hwGainMaxSignal;
-
-    // NOTE: Detection-specific parameters (transientThreshold, attackMultiplier, etc.)
-    // were historically handled by EnsembleDetector (removed v67). AdaptiveMic now
-    // only handles audio input normalization.
 
     // AudioController parameters (v23+)
     // All rhythm tracking params are now public tunable members
@@ -1069,19 +1042,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.lightning.branchIntensityLoss = lightningParams.branchIntensityLoss;
     data_.lightning.maxParticles = lightningParams.maxParticles;
 
-    // Window/Range normalization parameters
+    // Window/Range normalization (v72: AGC removed)
     data_.mic.peakTau = mic.peakTau;
     data_.mic.releaseTau = mic.releaseTau;
-    // Hardware AGC parameters (primary - raw input tracking)
-    data_.mic.hwTarget = mic.hwTarget;
-
-    // Fast AGC parameters
-    data_.mic.fastAgcEnabled = mic.fastAgcEnabled;
-    data_.mic.fastAgcThreshold = mic.fastAgcThreshold;
-    data_.mic.fastAgcPeriodMs = mic.fastAgcPeriodMs;
-    data_.mic.fastAgcTrackingTau = mic.fastAgcTrackingTau;
-    // AGC ceiling
-    data_.mic.hwGainMaxSignal = mic.hwGainMaxSignal;
 
     // NOTE: Detection-specific parameters (transientThreshold, detectionMode, etc.)
     // were historically handled by EnsembleDetector (removed v67). AdaptiveMic fields

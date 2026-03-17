@@ -257,10 +257,7 @@ public:
     // Get current BPM estimate (for debugging/display)
     float getCurrentBpm() const { return bpm_; }
 
-    // Hardware gain control (for testing)
-    void lockHwGain(int gain);
-    void unlockHwGain();
-    bool isHwGainLocked() const;
+    // Hardware gain (read-only, fixed at platform default since v72)
     int getHwGain() const;
 
     // === TUNING PARAMETERS ===

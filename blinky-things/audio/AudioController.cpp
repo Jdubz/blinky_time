@@ -297,17 +297,7 @@ const AudioControl& AudioController::update(float dt) {
 // ===== CONFIGURATION =====
 // (setDetectorEnabled/Weight/Threshold removed v67 — BandFlux pipeline removed)
 
-void AudioController::lockHwGain(int gain) {
-    mic_.lockHwGain(gain);
-}
-
-void AudioController::unlockHwGain() {
-    mic_.unlockHwGain();
-}
-
-bool AudioController::isHwGainLocked() const {
-    return mic_.isHwGainLocked();
-}
+// lockHwGain/unlockHwGain/isHwGainLocked removed v72 — gain is fixed at platform default
 
 int AudioController::getHwGain() const {
     return mic_.getHwGain();
