@@ -4,9 +4,9 @@
 
 AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output an `AudioControl` struct with 6 parameters.
 
-**Current Version:** AudioController with CBSS Beat Tracking + Frame-Level NN ODF (March 2026)
-**ODF Source:** FrameBeatNN (frame-level FC, 56.8 KB INT8). Non-NN fallback: mic level.
-**Planned:** Single Conv1D model with multi-task output (beat + downbeat), replacing dual-model split. See `IMPROVEMENT_PLAN.md` for details.
+**Current Version:** AudioController with CBSS Beat Tracking + Conv1D W64 NN ODF (March 2026)
+**ODF Source:** FrameBeatNN (Conv1D W64, 15.1 KB INT8, 27ms, Beat F1=0.480, DB F1=0.160). Non-NN fallback: mic level.
+**AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 
 **Evolution:**
 - **v1 (2024)**: PLL-based phase tracking (unreliable with noisy transients)
@@ -46,17 +46,19 @@ struct AudioControl {
 
 ## Architecture
 
-**Current (single model):**
+**Current (single Conv1D model, deployed):**
 ```
 PDM Microphone
       |
-AdaptiveMic (level, transient, spectral flux)
+AdaptiveMic (fixed gain + window/range normalization, AGC removed v72)
       |
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
       |
-      +--- FrameBeatNN (frame-level FC, ~60-200µs)
-      |         Input: sliding window of rawMelBands_ (32 frames × 26 bands)
-      |         Output: beat_activation (ODF for CBSS) + downbeat_activation
+      +--- FrameBeatNN (Conv1D W64, 27ms)
+      |         Input: sliding window of rawMelBands_ (64 frames × 26 bands)
+      |         Output: beat_activation + downbeat_activation (sum head: downbeat ≤ beat)
+      |
+      +--- ODF Information Gate (suppresses weak NN output)
       |
 OSS Buffer (6s @ 60Hz)
       |
@@ -66,32 +68,13 @@ OSS Buffer (6s @ 60Hz)
       |                                                                    |
       +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
       |                                        |
+      +--- Pulse: floor-tracking baseline detection
+      |
+      +--- Energy: hybrid (mic level + bass mel energy + ODF peak-hold)
+      |
 AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure }
       |
-Generators (Fire, Water, Lightning)
-```
-
-**Planned (dual model):**
-```
-SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
-      |
-      rawMelBands_ (26 bands, 62.5 Hz)
-      |
-      +--- OnsetNN (every frame, <1ms)
-      |         Input: 8-16 frames × 26 mels (128-256ms)
-      |         Output: onset_activation → OSS buffer (primary ODF) + AudioControl.pulse
-      |
-      +--- RhythmNN (every 2nd frame, <8ms)
-      |         Input: 192 frames × 26 mels (3.07s, 1.5+ bars)
-      |         Output: beat_activation + downbeat_activation
-      |
-OSS Buffer (6s @ 60Hz)  ← fed by OnsetNN
-      |
-      +--- Autocorrelation (every 250ms) --> Bayesian Tempo Fusion --> Best BPM
-      |                                                                    |
-      +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
-      |                                        |
-AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure }
+Generators (HeatFire, Water, Lightning)
 ```
 
 **Key Design Decisions:**
@@ -229,39 +212,34 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ---
 
-## Detection: FrameBeatNN (Current) / Dual-Model NN (Planned)
+## Detection: FrameBeatNN (Conv1D W64, Deployed)
 
-### Current: Single FrameBeatNN
+### Current: Single Conv1D Model
 
-`FrameBeatNN` is the primary ODF source. It processes a sliding window of raw mel frames (32 frames × 26 bands) every spectral frame. Produces two outputs: **beat activation** (ODF for CBSS) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing — but uses FC layers instead of convolutions for Cortex-M4F feasibility (~3ms vs 79-98ms for CNNs). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
+`FrameBeatNN` is the primary ODF source. It processes a sliding window of raw mel frames (64 frames × 26 bands) every spectral frame. Produces two outputs: **beat activation** (ODF for CBSS, after information gate) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing. Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
-**Architecture:** FC(832→64→32→2), 55K params, 56.8 KB INT8 (per-tensor quantization). Tensor arena ~2 KB, window buffer 3.2 KB.
+**Architecture:** Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1) with Beat This! sum head (downbeat output structurally constrained ≤ beat output). 15.1 KB INT8 (per-tensor quantization). Arena: 7340/32768 bytes. Window buffer: 64×26×4 = 6.7 KB.
 
-**TFLite export note:** Must use per-tensor weight quantization (`_experimental_disable_per_channel=True`). CMSIS-NN FullyConnected kernel does not support per-channel quantization — causes constant zero output.
+**Performance:** Beat F1=0.480, DB F1=0.160 (offline eval). 27ms inference measured on Cortex-M4F @ 64 MHz.
 
-### Planned: Dual-Model NN
+### ODF Information Gate
 
-Two specialized models replace the single FrameBeatNN:
+The NN beat activation passes through an information gate before entering the CBSS pipeline. When NN output is weak (low confidence), the gate suppresses the ODF signal to prevent noise-driven false beats. This improves CBSS tracking during silence and ambient passages.
 
-**OnsetNN** — Kick/snare detection for visual triggers
-- Conv1D(26→24,k=3) → Conv1D(24→24,k=3) → Conv1D(24→1,k=1,sigmoid)
-- Input: 8-16 mel frames (128-256ms), output: onset_activation (0-1)
-- ~4 KB INT8, <1ms inference, runs every frame (62.5 Hz)
-- Feeds OSS buffer as primary ODF and directly drives AudioControl.pulse
+### Pulse Detection
 
-**RhythmNN** — Bar structure and downbeat detection
-- Conv1D(26→32,k=5) → AvgPool(4) → Conv1D(32→48,k=5) → AvgPool(4) → Conv1D(48→32,k=3) → Conv1D(32→2,k=1)
-- Input: 192 mel frames (3.07s = 1.5+ bars at all EDM tempos), output: beat + downbeat activation
-- ~16 KB INT8, <8ms inference, runs every 2nd frame (31.25 Hz)
-- Drives CBSS beat/downbeat tracking, AudioControl.downbeat, beatInMeasure
+Pulse detection (for visual spark effects) is derived from the ODF signal directly in AudioController. Uses floor-tracking baseline detection with tempo-adaptive cooldown (min 40ms, max 150ms). The floor-tracking baseline adapts slowly downward, providing better sensitivity than the previous running-mean threshold approach.
 
-**Why two models:** Onset detection needs short windows with high temporal precision. Downbeat detection needs full-bar context. A single FC model with W192 (3.07s) regressed severely (F1=0.370 vs W32's 0.491) because FC flattening destroys temporal locality. Conv1D with temporal pooling (AvgPool1D) preserves local patterns while progressively compressing the time axis for bar-level classification.
+### Energy Synthesis
 
-### Pulse Detection (v67)
+Energy output is a hybrid blend of three sources:
+- **Mic level**: Raw microphone amplitude (broadband)
+- **Bass mel energy**: Low-frequency mel bands (kick drum emphasis)
+- **ODF peak-hold**: Peak NN activation with slow decay
 
-Pulse detection (for visual spark effects) is derived from the ODF signal directly in AudioController. Simple threshold against running mean with tempo-adaptive cooldown (min 40ms, max 150ms). Replaces the EnsembleFusion cooldown + noise gate removed in v67. With the dual-model architecture, OnsetNN output will replace this threshold-based approach.
+This hybrid approach provides richer energy information than mic level alone, giving generators better audio reactivity.
 
-**Previous approaches (REMOVED):** BandFlux Solo detector (removed v67, ~2600 lines), EnsembleDetector/EnsembleFusion/BassSpectralAnalysis. Mel-spectrogram CNN (v4-v9, 79-98ms, too slow), beat-synchronous hybrid (circular dependency, no discriminative signal). See `IMPROVEMENT_PLAN.md` Closed Investigations.
+**Previous approaches (REMOVED):** BandFlux Solo detector (removed v67, ~2600 lines), EnsembleDetector/EnsembleFusion/BassSpectralAnalysis. Mel-spectrogram CNN (v4-v9, 79-98ms, too slow), beat-synchronous hybrid (circular dependency, no discriminative signal), dual-model architecture (abandoned Mar 16, every published system uses single joint model). See `IMPROVEMENT_PLAN.md` Closed Investigations.
 
 ---
 
@@ -269,23 +247,15 @@ Pulse detection (for visual spark effects) is derived from the ODF signal direct
 
 | Component | RAM | CPU @ 64 MHz | Notes |
 |-----------|-----|-------------|-------|
-| AdaptiveMic + FFT | ~4 KB | ~4% | Microphone processing |
+| AdaptiveMic + FFT | ~4 KB | ~4% | Fixed gain + window/range normalization |
 | OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ 60 Hz |
 | ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
 | CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
 | Autocorrelation buffer | 0.8 KB | - | Correlation storage |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
 | Autocorrelation (250ms) | - | ~3% | Amortized |
-| FrameBeatNN (current) | ~8-16 KB arena + 3.3 KB mel buffer | ~0.1-0.3% | FC model at ~15.6 Hz, ~60-200µs/inference |
-| **Total (current)** | **~20 KB base** | **~15-20%** | +16 KB arena (FrameBeatNN) |
-
-**Projected dual-model resource usage:**
-
-| Component | RAM | CPU @ 64 MHz | Notes |
-|-----------|-----|-------------|-------|
-| OnsetNN (planned) | ~2 KB arena + 1.6 KB mel buffer | ~6% | Conv1D at 62.5 Hz, <1ms/inference |
-| RhythmNN (planned) | ~8 KB arena + 19.5 KB mel buffer | ~12% amortized | Conv1D+Pool at 15.6 Hz, <8ms/inference |
-| **Total (planned)** | **~31 KB** | **~25%** | Replaces FrameBeatNN row above |
+| FrameBeatNN (Conv1D W64) | 7340 bytes arena + 6.7 KB mel buffer | 27ms/frame | Conv1D at 62.5 Hz, 15.1 KB INT8 model |
+| **Total** | **~20 KB globals + 32 KB arena** | **~40-45%** | Inference dominates |
 
 ---
 
