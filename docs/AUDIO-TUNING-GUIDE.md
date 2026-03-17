@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
-**Last Updated:** March 12, 2026
-**Firmware Version:** SETTINGS_VERSION 64 (CBSS + Bayesian Tempo + Frame-Level NN ODF)
+**Last Updated:** March 17, 2026
+**Firmware Version:** SETTINGS_VERSION 73 (AudioTracker: ACF + Comb + PLL + Conv1D W16 onset ODF)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -27,33 +27,23 @@ This document consolidates all audio testing and tuning information for the Blin
 ```
 PDM Microphone (16kHz, mono)
         |
-   Hardware AGC (0-80 gain, targets hwTarget level)
-        |
-   AdaptiveMic (Window/Range normalization)
+   AdaptiveMic (fixed gain + window/range normalization, AGC removed v72)
         |
    SharedSpectralAnalysis (FFT-256)
    ├── Soft-knee compressor (Giannoulis 2012)
    └── Per-bin adaptive whitening (Stowell & Plumbley 2007)
         |
-   BassSpectralAnalysis (Goertzel-12, 31.25 Hz/bin, optional)
+   FrameBeatNN (Conv1D W16, ~7ms, single channel)
+     → onset_activation → ODF
         |
-   ├── OnsetNN (Conv1D W8, ~4 KB INT8, <1ms, every frame)
-   │     → onset_activation → ODF (primary) + AudioControl.pulse
-   └── RhythmNN (Conv1D+Pool W192, ~16 KB INT8, <8ms, every 4th frame)
-         → beat_activation + downbeat_activation
-        |
-   AudioController
-   ├── OSS Buffer (6 seconds, 360 samples @ 60Hz)
-   ├── Autocorrelation (every 250ms) with inverse-lag normalization
-   ├── Bayesian Tempo Fusion (20 bins, 60-180 BPM)
-   │   ├── ACF observation (weight 0.8, harmonic-enhanced v25)
-   │   ├── Comb filter bank (weight 0.7, primary)
-   │   ├── Fourier tempogram (weight 0, disabled v28)
-   │   └── IOI histogram (weight 0, disabled v28)
-   ├── Per-sample ACF harmonic disambiguation (2x + 1.5x + 0.5x checks)
-   ├── CBSS beat tracking (adaptive threshold = 1.0 × running mean)
-   ├── Counter-based beat detection (deterministic phase)
-   └── ODF pre-smoothing (5-point causal moving average)
+   AudioTracker (ACF + Comb + PLL)
+   ├── ODF Information Gate (suppress weak NN output)
+   ├── OSS Buffer (6 seconds, 360 samples @ ~66Hz)
+   ├── Autocorrelation (every 150ms) + Percival harmonic enhancement + Rayleigh prior
+   ├── CombFilterBank (20 IIR resonators, independent tempo validation)
+   ├── PLL free-running sawtooth (onset-gated P+I correction)
+   ├── Pulse: floor-tracking baseline detection
+   └── Energy: hybrid (mic level + bass mel energy + ODF peak-hold)
         |
    AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity }
         |
@@ -62,11 +52,11 @@ PDM Microphone (16kHz, mono)
 
 ### Key Design Decisions
 
-1. **NN ODF**: Frame-level FC model provides learned beat activation (sole ODF since v67). Non-NN fallback: mic level.
-2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization.
-3. **Bayesian tempo fusion**: Unified posterior estimation over 20 tempo bins. Comb filter bank is the primary observation; harmonic-enhanced ACF (weight 0.8, v25) with 4-harmonic comb and Rayleigh prior prevents sub-harmonic lock.
-4. **CBSS beat tracking**: Cumulative Beat Strength Signal with adaptive threshold prevents phantom beats during silence/breakdowns.
-5. **Deterministic phase**: Phase derived from counter: `(now - lastBeat) / period` — no drift or jitter.
+1. **NN ODF**: Conv1D W16 onset-only model provides learned onset activation (sole ODF since v67). Non-NN fallback: mic level. Single output channel (no downbeats).
+2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization. AGC removed v72 — hardware gain fixed at platform optimal.
+3. **ACF + Comb + PLL tempo tracking** (AudioTracker v74): Percival harmonic-enhanced ACF estimates tempo; 20-filter IIR comb bank validates independently; average when within 10% agreement. Replaces Bayesian fusion (removed v74).
+4. **PLL phase tracking**: Free-running sawtooth at estimated BPM with onset-gated proportional+integral correction. Replaces CBSS beat tracking (removed v74).
+5. **ODF information gate**: Suppresses low-confidence NN output before rhythm tracking, preventing noise-driven false beats during silence/breakdowns.
 6. **5-parameter output**: Generators receive `AudioControl` struct with energy, pulse, phase, rhythmStrength, onsetDensity.
 
 ---

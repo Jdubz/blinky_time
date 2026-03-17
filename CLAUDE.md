@@ -154,10 +154,10 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 ### Key Architecture Components
 
 - **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - ACF+Comb+PLL audio analysis (v74, replaces AudioController)
-- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Single Conv1D W64 TFLite NN inference (beat + downbeat multi-task)
+- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Conv1D W16 TFLite NN onset detection (single-channel, 13.4 KB INT8, ~7ms)
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with fixed hardware gain (AGC removed v72)
-- **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity
+- **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity (downbeat/beatInMeasure always 0 — not tracked)
 
 ### Obsolete Documents (Removed)
 
@@ -211,11 +211,11 @@ AdaptiveMic (fixed gain + window/range normalization)
     ↓
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
-    ├── FrameBeatNN (Conv1D W64, 27ms, every frame) → beat activation (ODF) + downbeat activation
+    ├── FrameBeatNN (Conv1D W16, ~7ms, every frame) → onset activation (ODF)
     ↓
 AudioTracker (ODF info gate → ACF tempo + comb bank validation + PLL phase)
     ↓
-AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure}
+AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity}
     ↓
 Generator (Fire/Water/Lightning)
     ↓
@@ -231,18 +231,18 @@ RenderPipeline → LED Output
    - `SharedSpectralAnalysis.h` - FFT-256 (128 freq bins @ 62.5 Hz), soft-knee compressor → per-bin whitening (v23+)
    - Window/range normalization (0-1 output) — sole dynamic range system
 
-2. **Beat/Downbeat Detection (single Conv1D model, deployed)**
+2. **Onset Detection (single Conv1D model, deployed)**
    - `FrameBeatNN.h` - Single-model TFLite NN inference
-     - Conv1D W64 (1.024s), [24,32] channels, 15.1 KB INT8, 27ms measured on device, every frame → beat activation (ODF) + downbeat activation
-     - Beat This! sum head: downbeat output structurally constrained ≤ beat output
-     - Beat F1=0.480, DB F1=0.160 (offline eval)
-     - Arena: 7340/32768 bytes
+     - Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3, every frame → onset activation (ODF)
+     - Single output channel: onset activation
+     - Beat F1=0.477 (offline eval)
+     - Arena: 3404/32768 bytes
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple ODF)
 
 3. **Rhythm Tracking (AudioTracker, v74)**
    - `AudioTracker.h/cpp` - ACF + Comb filter bank + PLL phase tracking (~10 params)
    - OSS buffering (6 seconds @ ~66 Hz)
-   - ODF source: FrameBeatNN beat activation (Conv1D). Falls back to mic level if model fails to load.
+   - ODF source: FrameBeatNN onset activation (Conv1D). Falls back to mic level if model fails to load.
    - ODF information gate: suppresses low-confidence ODF when NN output is weak (prevents noise-driven false beats)
    - ACF tempo estimation: Percival harmonic enhancement (2nd+4th harmonics), Rayleigh prior weighting
    - CombFilterBank: 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation
@@ -357,24 +357,21 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ```
 1. PDM mic samples → AdaptiveMic (fixed gain + window/range normalization)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands)
-3. SharedSpectralAnalysis → FrameBeatNN (64-frame mel window → Conv1D → beat + downbeat activation)
-4. Beat activation → pulse detection (raw ODF) → ODF information gate → ODF value (0-1)
+3. SharedSpectralAnalysis → FrameBeatNN (16-frame mel window → Conv1D → onset activation)
+4. Onset activation → pulse detection (raw ODF) → ODF information gate → ODF value (0-1)
 5. ODF → AudioTracker OSS buffer (6s history @ ~66 Hz)
 6. AudioTracker → ACF every 150ms → Percival harmonic enhancement → Rayleigh-weighted peak → BPM
    Comb filter bank (20 filters) validates independently → average when agreeing within 10%
 7. PLL free-running phase ramp at estimated BPM
 8. Onset-gated PLL correction: strong onsets near beat boundary → proportional+integral phase correction
 9. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
-    onsetDensity=3.2, downbeat=0.0, beatInMeasure=0}
-   (downbeat/beatInMeasure deferred — NN output available but not yet wired)
+    onsetDensity=3.2}
 10. Fire generator:
     - energy → baseline flame height
     - pulse → spark burst intensity
     - phase → breathing effect (0=on-beat)
     - rhythmStrength → blend music/organic mode
     - onsetDensity → content classification (dance=2-6/s, ambient=0-1/s)
-    - downbeat → extra-dramatic effects on bar 1
-    - beatInMeasure → syncopation patterns, accent beats
 12. Fire heat diffusion (matrix propagation)
 13. HueRotationEffect (optional color shift)
 14. RenderPipeline → LED strip output
@@ -383,18 +380,18 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Resource Usage (nRF52840)
 
 **Memory:**
-- RAM: ~20 KB globals + arena 7340/32768 bytes (Conv1D W64 model)
-- Flash: ~359 KB with single model (15.1 KB INT8 + TFLite Micro runtime). ~30 KB settings storage.
+- RAM: ~16 KB globals + arena 3404/32768 bytes (Conv1D W16 model) + 1.6 KB mel buffer
+- Flash: ~345 KB with single model (13.4 KB INT8 + TFLite Micro runtime). ~30 KB settings storage.
 - Available: 256 KB RAM, 1 MB Flash
 
 **CPU (64 MHz):**
 - Microphone + FFT: ~4%
-- FrameBeatNN inference (62.5 Hz): 27ms measured on device
+- FrameBeatNN inference (62.5 Hz): 6.8ms/frame (nRF52840), 5.8ms/frame (ESP32-S3)
 - Autocorrelation (500ms): ~3% amortized
 - CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
 - LED rendering: ~2%
-- **Total: ~40-45%** (inference time dominates but fits within frame budget)
+- **Total: ~20-25%** (much lighter with W16 model)
 
 ### Safety Architecture (Multi-Layer Defense)
 
@@ -431,7 +428,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+Comb+PLL + ODF information gate + pulse baseline tracking
-- ✅ FrameBeatNN (Conv1D W64, 15.1 KB INT8, Beat F1=0.480, DB F1=0.160, deployed on all 7 devices)
+- ✅ FrameBeatNN (Conv1D W16 onset-only, 13.4 KB INT8, Beat F1=0.477, deployed on all 7 devices)
+- ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
 - ✅ Testing infrastructure (MCP + param-tuner + batch A/B test scripts)
@@ -450,7 +448,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
 **Planned (Not Started):**
-- NN model improvements: confidence-weighted loss, tempo auxiliary head, wider windows with Conv1D
+- NN model improvements: confidence-weighted loss, tempo auxiliary head
 - ESP32-S3 platform-specific model (larger compute budget allows bigger model)
 - Bluetooth/BLE support (design doc complete)
 - Dynamic device switching (runtime config)
@@ -490,13 +488,13 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Detection Architecture
 **Previous (v68):** FrameBeatNN — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Beat F1=0.491, DB F1=0.238.
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
-**Current (v73, deployed):** Single Conv1D W64 with Beat This! sum head. Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). 15.1 KB INT8, 27ms inference measured on device. Beat F1=0.480, DB F1=0.160. Arena: 7340/32768 bytes.
+**Current (v75, deployed):** Single Conv1D W16 onset-only. Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Beat F1=0.477. Arena: 3404/32768 bytes.
 Fallback if model fails to load: mic_.getLevel() as simple energy ODF.
-Design goal: trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
+Design goal: onset detection, BPM identification, and pulse/phase alignment. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 
 ### Key Features
-- **Single Conv1D NN** (deployed): Conv1D W64 [24,32] with Beat This! sum head, 15.1 KB INT8, 27ms. Multi-task: beat activation (ODF) + downbeat (constrained ≤ beat). Per-tensor INT8 quantization (CMSIS-NN requirement).
+- **Single Conv1D NN** (deployed): Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (ODF). Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 - **ODF information gate**: Suppresses low-confidence ODF when NN output is weak (prevents noise-driven false beats)
 - **Pulse baseline tracking**: Floor-tracking baseline replaces running-mean threshold for pulse detection

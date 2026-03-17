@@ -1,22 +1,21 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 16, 2026*
+*Last Updated: March 17, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v74 (SETTINGS_VERSION 73). AudioTracker (ACF+Comb+PLL, ~10 params, replaces AudioController's CBSS+Bayesian). Conv1D W64 NN beat/downbeat activation (always-on, TFLite required). ODF information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v74 (SETTINGS_VERSION 73). AudioTracker (ACF+Comb+PLL, ~10 params, replaces AudioController's CBSS+Bayesian). Conv1D W16 onset-only NN activation (always-on, TFLite required, single output channel). 13.4 KB INT8, 6.8ms inference nRF52840, 5.8ms ESP32-S3. Arena: 3404 bytes. ODF information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
 **Known regressions (v74):**
-- **Downbeat/beatInMeasure always 0:** FrameBeatNN produces downbeat activation but AudioTracker doesn't wire it to output yet. Fire's bar-1 effects and syncopation patterns inactive.
 - **AudioTracker params not persisted:** The ~10 tunable params (bpmMin, bpmMax, rayleighBpm, combFeedback, pllKp, pllKi, etc.) revert to defaults on reboot. ConfigStorage integration deferred.
 
-**NN Model Status:** Conv1D W64 with Beat This! sum head deployed on all 7 devices (15.1 KB INT8, per-tensor quantization, 27ms inference measured on device). Beat F1=0.480, DB F1=0.160 (offline eval). Arena: 7340/32768 bytes. Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Sum head constrains downbeat ≤ beat structurally.
+**NN Model Status:** Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). Beat F1=0.477 (offline eval). Single output channel (onset activation only). Arena: 3404 bytes. System focuses on onset/BPM/phase — downbeat detection deferred.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
-**Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Conv1D W64 inference takes 27ms (exceeds single-frame budget but runs every frame with acceptable visual results). Mel-spectrogram CNNs require 79-98ms (too slow).
+**Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Conv1D W16 inference takes 6.8ms on nRF52840 (well within 16.7ms budget — 60fps achieved). Mel-spectrogram CNNs require 79-98ms (too slow).
 
 **Mel-spectrogram model history (CLOSED — all too slow):**
 
@@ -34,7 +33,7 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ### Priority 1: Frame-Level NN Model Improvement
 
-**Status: Conv1D W64 DEPLOYED (March 16, 2026) — Beat F1=0.480, DB F1=0.160**
+**Status: Conv1D W16 ONSET-ONLY DEPLOYED (March 17, 2026) — Beat F1=0.477**
 
 **Problem:** The NN model is deployed and producing non-zero output on device, but beat activations are weak (max ~0.26 at 120 BPM). Root cause: firmware mel values (mean ~0.52) are lower than training data (mean ~0.86) due to AGC level mismatch. The previous deterministic pipeline (BandFlux + CBSS) achieved only ~28% beat F1. Core failures:
 - **Octave errors**: ACF/comb filters have strong sub-harmonic peaks → half/double-time lock (135 BPM gravity well). Hand-tuned octave checks help but are brittle.
@@ -108,8 +107,9 @@ At 120 BPM, one beat = 0.5s = ~31 frames at 62.5 Hz. The context window should c
 
 | Window | Frames | Input dim | Coverage at 120 BPM | Beat F1 | DB F1 | Notes |
 |--------|--------|-----------|---------------------|---------|-------|-------|
+| 0.26s | 16 | 1,664→416 | ~0.5 beats | 0.477 | N/A | **Conv1D W16 DEPLOYED** — 13.4 KB INT8, 6.8ms |
 | 0.5s | 32 | 832 | ~1 beat | 0.491 | 0.238 | FC model (cal63) |
-| 1.0s | 64 | 1,664 | ~2 beats | 0.480 | 0.160 | **Conv1D W64 DEPLOYED** — 15.1 KB INT8, 27ms |
+| 1.0s | 64 | 1,664 | ~2 beats | 0.480 | 0.160 | Conv1D W64 (replaced by W16) — 15.1 KB INT8, 27ms |
 | 1.0s | 64 | 1,664 | ~2 beats | 0.487 | 0.180 | FC W64 (marginal for downbeat) |
 | 3.07s | 192 | 4,992 | ~6 beats (1.5 bars) | 0.370 | 0.145 | **FC REGRESSED** — too many flat inputs |
 
@@ -129,14 +129,14 @@ Output: [beat_prob, downbeat_prob] per frame
 
 **Projected resource usage:**
 
-| Resource | BandFlux (removed v67) | Conv1D W64 (deployed) | Notes |
+| Resource | BandFlux (removed v67) | Conv1D W16 (deployed) | Notes |
 |----------|-------------------|-------------------|-------|
-| ODF quality | ~28% F1 | Beat F1=0.480, DB F1=0.160 | Learned vs hand-tuned |
-| Inference time | <0.1ms @ 62.5 Hz | 27ms @ 62.5 Hz | Conv1D dominates frame budget |
-| Tensor arena | 0 | 7340 bytes (of 32768 allocated) | Conv1D W64 |
-| Mel frame buffer | 0 | ~6.7 KB (64×26×4 bytes) | Ring buffer |
-| Model flash | 0 | 15.1 KB INT8 | Per-tensor quantization |
-| Downbeat | No | Yes (sum head) | Structural constraint: downbeat ≤ beat |
+| ODF quality | ~28% F1 | Beat F1=0.477 | Learned vs hand-tuned |
+| Inference time | <0.1ms @ 62.5 Hz | 6.8ms @ 62.5 Hz (nRF52840) | Well within 16.7ms frame budget |
+| Tensor arena | 0 | 3404 bytes (of 32768 allocated) | Conv1D W16 |
+| Mel frame buffer | 0 | ~1.7 KB (16×26×4 bytes) | Ring buffer |
+| Model flash | 0 | 13.4 KB INT8 | Per-tensor quantization |
+| Downbeat | No | No (onset-only) | System focuses on onset/BPM/phase |
 
 **Training data and labels:**
 
@@ -190,12 +190,14 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 
 ESP32-S3 has ~6.5x more compute budget — platform-specific models are feasible.
 
-**Improving downbeat without wider windows (ranked by viability):**
+**Improving downbeat (DEFERRED — out of scope):**
 
-1. **Tempo auxiliary head during training (BEST)**: Shared backbone predicts tempo via FC branch, stripped at export. Zero firmware cost. +1-5% F1 (Bock 2019, BEAST). Code exists in `beat_fc_enhanced.py`.
-2. **FiLM conditioning (LATER)**: Modulate features by tempo/phase. Train/test mismatch problem — try after beat tracking improves.
-3. **Beat-synchronous mel accumulator (NOT YET)**: Depends on beat quality (~50% F1 makes snapshots noisy). Revisit above 70% beat F1.
-4. **DSP features as extra channels (NO)**: Constant across Conv1D window, useless to convolutions.
+System now focuses on onset/BPM/phase only. Downbeat detection deferred indefinitely. The following approaches remain viable if downbeat is revisited in the future:
+
+1. **Tempo auxiliary head during training**: Shared backbone predicts tempo via FC branch, stripped at export. Zero firmware cost. +1-5% F1 (Bock 2019, BEAST). Code exists in `beat_fc_enhanced.py`.
+2. **FiLM conditioning**: Modulate features by tempo/phase. Train/test mismatch problem — try after beat tracking improves.
+3. **Beat-synchronous mel accumulator**: Depends on beat quality (~50% F1 makes snapshots noisy). Revisit above 70% beat F1.
+4. **DSP features as extra channels**: Constant across Conv1D window, useless to convolutions.
 
 **Input representation:** Mel bands confirmed correct by all SOTA systems. 62.5 Hz frame rate adequate.
 
@@ -205,7 +207,7 @@ W192 FC (4992→64→32→2, 322K params, 314 KB INT8): Beat F1=0.370, DB F1=0.1
 
 ### Priority 2 (new): ESP32-S3 Mic Calibration and Model
 
-**Status: Phase 1 DONE (March 15, 2026) — mic profile measured, training config created. Phase 2 (retrain) pending.**
+**Status: Phase 1 DONE (March 15, 2026) — mic profile measured, training config created. ESP32-S3 PDM mic fixed (JTAG pin conflict + partial DMA read). Phase 2 (retrain with ESP32-calibrated data) pending.**
 
 The XIAO ESP32-S3 Sense uses a PDM microphone via ESP-IDF I2S PDM-RX. Its frequency response, noise floor, and AGC transfer function differ from the nRF52840's built-in microphone. The nRF52840 cal63 model was trained on mel spectrograms captured at `target_rms_db=-63 dB` through the nRF52840 mic chain. Running that model on ESP32-S3 audio will produce mismatched mel statistics and degraded ODF quality.
 
@@ -266,13 +268,13 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0) and `cbsscontrast` (1.0-3.0) across 18 tracks on all 3 devices with cal63 ODF. Neither showed significant improvement over current defaults. Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) confirmed self-compensating. No changes needed.
 
-3. **Downbeat detection quality (F1 ~0.16 offline with Conv1D W64)** — Consensus v5 labels (7-system). Conv1D W64 with sum head deployed but downbeat F1 limited. Next improvements: confidence-weighted loss, tempo auxiliary head during training.
+3. ~~**Downbeat detection (DEFERRED — out of scope)**~~ — System now focuses on onset/BPM/phase only. Downbeat detection deferred indefinitely.
 
 4. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Not improved by CBSS parameter tuning (March 13 sweep). Not a tempo bin resolution issue (47 bins tested v61; ACF already evaluates at full lag resolution). Likely requires better NN ODF discrimination or Rayleigh prior adjustment.
 
 5. **Phase alignment** — CBSS derives phase indirectly from a counter. Sharper NN beat activations give CBSS better signal for phase tracking.
 
-6. ~~**NN inference speed (RESOLVED)**~~ — Conv1D W64 runs 27ms (exceeds single 16.7ms frame budget but acceptable in practice).
+6. ~~**NN inference speed (RESOLVED)**~~ — Conv1D W16 runs 6.8ms on nRF52840, 5.8ms on ESP32-S3 (well within 16.7ms frame budget, 60fps achieved).
 
 7. ~~**Per-channel quantization (RESOLVED March 12)**~~ — Fixed: `_experimental_disable_per_channel=True` in export.
 
@@ -285,9 +287,9 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | **~48%** | Conv1D ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+| **Blinky (ours)** | 2026 | **~48%** | Conv1D W16 ODF + ACF+Comb+PLL (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W64 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 27ms inference. The NN is the sole ODF source, providing a learned beat activation that feeds into CBSS for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W16 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 6.8ms inference (well within frame budget). The NN is the sole ODF source, providing a learned onset activation that feeds into ACF+Comb+PLL for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
 
 ## Known Limitations
 

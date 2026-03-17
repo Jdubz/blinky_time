@@ -3,26 +3,22 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 15, 2026 (dual-model training in progress, consensus_v5 labels)
+**Last Updated:** March 17, 2026 (AudioTracker + Conv1D W16 onset-only deployed, AudioController deleted)
 
-## Current Config (v70, SETTINGS_VERSION 70)
+## Current Config (v74, SETTINGS_VERSION 74)
 
-**ODF source (deployed):** Single FrameBeatNN FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s), cal63.
-- Beat + downbeat activation, deployed on all 3 devices.
-- BandFlux/EnsembleDetector fully removed (v67).
+**ODF source (deployed):** Conv1D W16 onset-only model, ~5 KB INT8, ~7ms inference, single-channel onset activation.
+- Deployed on all 7 devices (3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local).
+- Supersedes W64 Conv1D (27ms, 15.1 KB) and FC W32 (56.8 KB). Dual-model (OnsetNN + RhythmNN) abandoned.
+- BandFlux/EnsembleDetector fully removed (v67). AudioController deleted (v74).
 
-**ODF source (in progress):** Dual-model architecture training on consensus_v5 + cal63:
-- **OnsetNN**: Conv1D W8 (128ms), ~4 KB INT8, <1ms, every frame → onset detection (kicks/snares)
-- **RhythmNN**: Conv1D+Pool W192 (3.07s), ~16 KB INT8, <8ms, every 4th frame → beat + downbeat
-- W192 FC was attempted but regressed (F1=0.370 vs 0.491) — FC flattening destroys temporal locality.
-
-**Beat tracking:** CBSS with Bayesian tempo fusion
-- bayesacf=0.8, bayescomb=0.7, bayesft=0, bayesioi=0
-- cbssthresh=1.0, cbssTightness=8.0, cbsscontrast=2.0 (v66, A/B tested 10-6 win)
-- beatoffset=5, onsetSnapWindow=8
-- densityoctave=1, octavecheck=1 (v32 octave disambiguation)
-- odfmeansub=0 (v32 -- raw ODF preserves ACF structure)
-- pll=1, pllkp=0.15, pllki=0.005 (v45 PLL phase correction)
+**Beat tracking:** AudioTracker (ACF + Comb filter bank + PLL)
+- ~10 parameters (vs ~56 in deleted AudioController)
+- pllkp=0.15, pllki=0.005 (PLL phase correction)
+- rayleighBpm=140 (Rayleigh prior peak)
+- combFeedback=0.92 (comb bank IIR resonance)
+- acfPeriodMs=150 (ACF recomputation interval)
+- tempoSmoothing=0.85 (BPM EMA)
 
 ## SOTA Context (March 2026)
 
@@ -35,9 +31,9 @@ Best online/causal beat tracking systems on standard benchmarks (line-in audio):
 | Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+| **Blinky (ours)** | 2026 | **~28%** | Conv1D W16 ODF + ACF/Comb/PLL (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in ODF quality, not the beat tracking backend. The NN ODF is the biggest lever for improvement.
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in ODF quality, not the beat tracking backend. The NN ODF is the biggest lever for improvement. AudioTracker (ACF+Comb+PLL) replaces CBSS with a simpler, faster backend (~10 params vs ~56).
 
 **Reference tempo resolutions:** madmom uses 82 lag-domain bins (~2.4 BPM at 120 BPM), BTrack uses 41 bins (2 BPM steps), BeatNet uses 300 discrete levels. Our 20 bins (11.5 BPM at 130 BPM) is far coarser than any reference system.
 
@@ -66,17 +62,9 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 5. **Downbeat label ceiling** — Consensus v3 AND-merge improved label quality (65% noisy single-system labels removed), but inter-annotator agreement remains the ceiling. Offline DB F1=0.24. On-device downbeat activations are now functional with cal63 (max 0.37-0.57).
 
-## Priority 1: W64 Model Evaluation
+## ~~Priority 1: W64 Model Evaluation~~ — SUPERSEDED
 
-**Status: TRAINING IN PROGRESS (March 13, 2026)**
-
-64-frame window FC model (1024ms context, ~2 beats at 120 BPM). FC(1664→64→32→2), 109K params, ~106 KB INT8, ~400µs estimated inference. Expected to improve downbeat detection via longer context. Training ~60 epochs (~6 min/epoch, epoch 16/60 at time of writing).
-
-**When training completes:**
-1. Evaluate offline (beat/downbeat F1 on EDM test tracks)
-2. Export to TFLite INT8
-3. Deploy to one device, compare activations vs cal63 (32-frame)
-4. Full on-device A/B test if offline metrics are promising
+W64 Conv1D was deployed (Beat F1=0.480, DB F1=0.160, 15.1 KB INT8, 27ms) but superseded by W16 onset-only model in the AudioTracker architecture pivot. W16 trades longer context for faster inference (~7ms), enabling 60fps. Downbeat detection deferred.
 
 ## ~~Priority 2: CBSS Parameter Re-Tuning~~ — DONE (No Change)
 
@@ -137,8 +125,8 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 |-------|-----------|---------------|-----------|
 | ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Improved NN ODF may help (training) |
 | NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | Fixed in v6+; v9 DS-TCN in progress |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | Open research question |
-| Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs for reliable evaluation | -- |
+| Phase alignment limits F1 | PLL tracks phase via onset-gated correction | **High** | PLL Kp/Ki tuning |
+| Run-to-run variance | Room acoustics, ambient noise | Requires 5+ runs for reliable evaluation | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** -- acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** -- organic mode is correct | -- |
 | trap-electro low F1 | Syncopated kicks challenge causal tracking | **Low** -- energy-reactive acceptable | -- |
