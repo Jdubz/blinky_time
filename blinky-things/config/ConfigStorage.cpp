@@ -217,7 +217,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.phaseCorrectionStrength = 0.0f; // Phase correction toward transients (disabled by default)
     data_.music.cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold (0=off, beat fires only if CBSS > factor*mean)
     data_.music.cbssContrast = 2.0f;          // Power-law ODF contrast before CBSS (2=BTrack square, A/B tested 10-6 win)
-    data_.music.cbssWarmupBeats = 0;          // CBSS warmup: lower alpha for first N beats (0=disabled)
+    data_.music.cbssWarmupBeats = 8;          // CBSS warmup: lower alpha for first 8 beats (faster convergence)
     data_.music.onsetSnapWindow = 8;          // Snap beat to strongest OSS in last N frames (0=disabled)
 
     // Bayesian tempo fusion (v18+, defaults tuned Feb 2026 via 4-device sweep)
@@ -288,9 +288,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.music.harmonic2xThresh = 0.5f;      // ACF half-lag ratio for 2x BPM correction
     data_.music.harmonic15xThresh = 0.6f;     // ACF 2/3-lag ratio for 1.5x BPM correction
     data_.music.pllSmoother = 0.95f;          // PLL phase integral leaky decay
-    data_.music.beatConfBoost = 0.15f;        // Confidence increment per beat fire
+    data_.music.beatConfBoost = 0.25f;        // Confidence increment per beat fire (v72: faster convergence)
     data_.music.rhythmBlend = 0.6f;           // Periodicity weight in rhythmStrength
-    data_.music.periodicityBlend = 0.7f;      // Periodicity strength EMA coefficient
+    data_.music.periodicityBlend = 0.5f;      // Periodicity strength EMA coefficient (v72: faster adaptation)
     data_.music.onsetDensityBlend = 0.7f;    // Onset density EMA coefficient
     // (subbeatBins/templateHistBars removed v64)
     // (nnBeatActivation removed v68 — always on)

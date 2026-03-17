@@ -112,7 +112,9 @@ public:
     // Version 71: Fix fastAgcPeriodMs/fastAgcTrackingTau defaults to match AdaptiveMic.h
     // Version 72: Remove AGC — hardware gain fixed at platform optimal. StoredMicParams
     //   reduced to peakTau + releaseTau only. Window/range normalization handles all adaptation.
-    static const uint8_t SETTINGS_VERSION = 72;
+    // Version 73: Tune CBSS for faster convergence: cbssWarmupBeats 0→8, beatConfBoost
+    //   0.15→0.25, periodicityBlend 0.7→0.5. Fix pulse detection baseline tracking.
+    static const uint8_t SETTINGS_VERSION = 73;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {

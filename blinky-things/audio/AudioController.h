@@ -301,7 +301,7 @@ public:
 
     // === AUTOCORRELATION TIMING ===
     // Controls how often BPM is re-estimated via autocorrelation
-    uint16_t autocorrPeriodMs = 250;  // Run autocorr every N ms (default 250ms for faster adaptation)
+    uint16_t autocorrPeriodMs = 150;  // Run autocorr every 150ms (faster tempo estimation during startup)
 
     // === COMB FILTER BANK (Independent Tempo Validation) ===
     // IIR resonator bank (Scheirer 1998): continuous real-time resonance at candidate
@@ -323,7 +323,7 @@ public:
     float phaseCorrectionStrength = 0.0f; // Phase correction toward transients (0=off, 1=full snap) — disabled: hurts syncopated tracks
     float cbssThresholdFactor = 1.0f;    // CBSS adaptive threshold: beat fires only if CBSS > factor * cbssMean (0=off)
     float cbssContrast = 2.0f;           // Power-law ODF contrast before CBSS (BTrack-style squaring; A/B tested 10-6 win vs 1.0)
-    uint8_t cbssWarmupBeats = 0;         // CBSS warmup: lower alpha for first N beats (0=disabled; tested 8, increased variance 5.5x)
+    uint8_t cbssWarmupBeats = 8;         // CBSS warmup: lower alpha for first 8 beats (gives onsets more weight during initial convergence)
     uint8_t onsetSnapWindow = 8;         // Snap beat anchor to strongest OSS in last N frames (0=disabled; default 8 frames)
 
     // === BEAT-BOUNDARY TEMPO UPDATES (Phase 2.1) ===
@@ -461,9 +461,9 @@ public:
     float harmonic2xThresh = 0.5f;        // ACF ratio at half-lag for 2x BPM correction
     float harmonic15xThresh = 0.6f;       // ACF ratio at 2/3-lag for 1.5x BPM correction
     float pllSmoother = 0.95f;            // PLL phase integral leaky decay (0.8-0.99)
-    float beatConfBoost = 0.15f;          // Confidence increment per beat fire (0.01-0.5)
+    float beatConfBoost = 0.25f;          // Confidence increment per beat fire (0.01-0.5, v72: faster convergence)
     float rhythmBlend = 0.6f;             // Periodicity weight in rhythmStrength (1-x = CBSS)
-    float periodicityBlend = 0.7f;        // Periodicity strength EMA coefficient
+    float periodicityBlend = 0.5f;        // Periodicity strength EMA coefficient (v72: faster adaptation)
     float onsetDensityBlend = 0.7f;       // Onset density EMA coefficient
 
     // === ADVANCED ACCESS (for debugging/tuning only) ===
@@ -531,9 +531,11 @@ private:
 
     // Pulse detection parameters
     static constexpr float PULSE_MIN_LEVEL = 0.025f;    // Noise gate
-    static constexpr float PULSE_THRESHOLD_MULT = 2.0f;  // ODF must exceed mean × this
+    static constexpr float PULSE_THRESHOLD_MULT = 2.0f;  // ODF must exceed baseline × this
     static constexpr uint16_t PULSE_MIN_COOLDOWN_MS = 40;
     static constexpr uint16_t PULSE_MAX_COOLDOWN_MS = 150;
+    float odfBaseline_ = 0.1f;      // Asymmetric-tracking ODF floor for pulse threshold
+    float odfPeakHold_ = 0.0f;      // Peak-hold ODF for energy derivation (fast attack, ~100ms release)
 
     // === NN BEAT ACTIVATION ===
     FrameBeatNN frameBeatNN_;

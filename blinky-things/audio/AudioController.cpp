@@ -173,24 +173,40 @@ const AudioControl& AudioController::update(float dt) {
         onsetStrength = mic_.getLevel();
     }
 
-    // 4b. Simple pulse detection from ODF signal
-    //     Pulse drives visual spark effects only; ODF drives beat tracking separately.
+    // 4a2. ODF information gate (BeatNet-style): suppress noisy NN floor before CBSS.
+    //      NN peaks are 0.5-0.9, floor is 0.08-0.20. Gate floor to near-zero so
+    //      CBSS only sees clean onset spikes. Bypassed when NN is not active.
+    if (nnActive_ && onsetStrength < 0.25f) {
+        onsetStrength = 0.02f;
+    }
+
+    // 4b. Pulse detection from ODF with floor-tracking baseline.
+    //     odfBaseline_ tracks the ODF noise floor with asymmetric alpha:
+    //     slow rise (peaks don't inflate baseline), fast drop (floor drops caught quickly).
+    //     Fixes bug where lastSmoothedOnset_ tracked peaks → threshold went to 1.78 after kicks.
     {
+        // Track ODF baseline (floor, not peaks)
+        if (onsetStrength < odfBaseline_) {
+            odfBaseline_ += (onsetStrength - odfBaseline_) * 0.05f;  // fast drop
+        } else {
+            odfBaseline_ += (onsetStrength - odfBaseline_) * 0.005f; // slow rise
+        }
+
+        // ODF peak-hold for energy derivation (fast attack, ~100ms release)
+        if (onsetStrength > odfPeakHold_) {
+            odfPeakHold_ = onsetStrength;
+        } else {
+            odfPeakHold_ *= 0.85f;  // ~100ms release at 62.5 Hz
+        }
+
         float pulseStrength = 0.0f;
         if (mic_.getLevel() > PULSE_MIN_LEVEL) {
-            float odfVal = onsetStrength;
-            // Detect pulse when ODF exceeds smoothed ODF × threshold and cooldown elapsed.
-            // lastSmoothedOnset_ is the EMA-smoothed ODF; use as baseline for spike detection.
-            float odfMean = (lastSmoothedOnset_ > 0.001f) ? lastSmoothedOnset_ : 0.1f;
+            float pulseThresh = max(0.1f, odfBaseline_ * PULSE_THRESHOLD_MULT);
             uint16_t cooldown = effectivePulseCooldownMs();
-            // Wraparound guard: if nowMs < lastPulseMs_ (uint32 wrap at ~49 days),
-            // reset lastPulseMs_ to allow the next pulse through cleanly.
-            if (nowMs < lastPulseMs_) {
-                lastPulseMs_ = nowMs;
-            }
-            if (odfVal > odfMean * PULSE_THRESHOLD_MULT &&
+            if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
+            if (onsetStrength > pulseThresh &&
                 (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldown)) {
-                pulseStrength = clampf(odfVal, 0.0f, 1.0f);
+                pulseStrength = clampf(onsetStrength, 0.0f, 1.0f);
                 lastPulseMs_ = nowMs;
             }
         }
@@ -1749,19 +1765,26 @@ uint16_t AudioController::effectivePulseCooldownMs() const {
 // ===== OUTPUT SYNTHESIS =====
 
 void AudioController::synthesizeEnergy() {
-    // mic_.getLevel() is the adaptive-normalized audio level (0-1).
-    // This is the source of truth for energy — it tracks actual loudness with
-    // proper peak/valley tracking. Don't use spectral RMS (compressor inflates it).
-    float energy = mic_.getLevel();
+    // Hybrid energy: combine mic level (broadband loudness) with ODF peak-hold
+    // (transient response) and bass mel bands (kick-specific energy).
+    // This gives dramatic flame height variation: silence=0, kicks spike to 0.9+.
+    float micEnergy = mic_.getLevel();
+
+    // Bass-band mel energy (bands 0-7 = ~60-500 Hz, kick/bass region)
+    float bassEnergy = 0.0f;
+    if (spectral_.isFrameReady() || spectral_.hasPreviousFrame()) {
+        const float* mels = spectral_.getRawMelBands();
+        for (int i = 0; i < 8; i++) bassEnergy += mels[i];
+        bassEnergy /= 8.0f;
+    }
+
+    // Blend: 30% mic level (broadband) + 30% bass energy (kick-specific) + 40% ODF peak-hold (transient)
+    float energy = 0.30f * micEnergy + 0.30f * bassEnergy + 0.40f * odfPeakHold_;
 
     // Apply beat-aligned energy boost when rhythm is locked
     if (periodicityStrength_ > activationThreshold) {
-        // Distance from beat: 0 at phase 0 or 1, max 0.5 at phase 0.5
         float distFromBeat = phase_ < 0.5f ? phase_ : (1.0f - phase_);
-        // Convert to proximity: 1.0 at beat, 0.0 at off-beat
         float nearBeat = 1.0f - distFromBeat * 2.0f;
-
-        // Boost near beats
         float beatBoost = nearBeat * energyBoostOnBeat * periodicityStrength_;
         energy *= (1.0f + beatBoost);
     }
