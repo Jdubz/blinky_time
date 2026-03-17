@@ -97,7 +97,7 @@ void CombFilterBank::process(float input) {
 
     // 5. Track resonator history at peak filter for phase extraction
     resonatorHistory_[historyIdx_] = resonatorOutput_[bestIdx];
-    historyIdx_ = (historyIdx_ + 1) % filterLags_[bestIdx];
+    historyIdx_ = (historyIdx_ + 1) % MAX_LAG;
 
     // 6. Compute confidence (peak-to-mean energy ratio)
     float totalEnergy = 0.0f;

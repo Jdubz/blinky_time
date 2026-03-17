@@ -119,6 +119,7 @@ private:
     SharedSpectralAnalysis spectral_;
     FrameBeatNN frameBeatNN_;
     bool nnActive_ = false;
+    uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 
     // === OSS buffer (6 seconds @ ~66 Hz) ===
     static constexpr int OSS_BUFFER_SIZE = 360;

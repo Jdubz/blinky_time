@@ -1701,9 +1701,52 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
     if (strcmp(cmd, "show spectral") == 0) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
         Serial.println(F("=== Spectral Processing ==="));
-        Serial.print(F("  Compressor: ")); Serial.println(spectral.compressorEnabled ? "on" : "off");
-        Serial.print(F("  Whitening: ")); Serial.println(spectral.whitenEnabled ? "on" : "off");
+        Serial.println(F("-- Compressor --"));
+        Serial.print(F("  Enabled: ")); Serial.println(spectral.compressorEnabled ? "yes" : "no");
+        Serial.print(F("  Threshold: ")); Serial.print(spectral.compThresholdDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Ratio: ")); Serial.print(spectral.compRatio, 1); Serial.println(F(":1"));
+        Serial.print(F("  Knee: ")); Serial.print(spectral.compKneeDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Makeup: ")); Serial.print(spectral.compMakeupDb, 1); Serial.println(F(" dB"));
+        Serial.print(F("  Attack: ")); Serial.print(spectral.compAttackTau * 1000.0f, 1); Serial.println(F(" ms"));
+        Serial.print(F("  Release: ")); Serial.print(spectral.compReleaseTau, 2); Serial.println(F(" s"));
+        Serial.print(F("  Frame RMS: ")); Serial.print(spectral.getFrameRmsDb(), 1); Serial.println(F(" dB"));
+        Serial.print(F("  Smoothed Gain: ")); Serial.print(spectral.getSmoothedGainDb(), 2); Serial.println(F(" dB"));
+        Serial.println(F("-- Whitening --"));
+        Serial.print(F("  Enabled: ")); Serial.println(spectral.whitenEnabled ? "yes" : "no");
+        Serial.print(F("  Decay: ")); Serial.println(spectral.whitenDecay, 4);
+        Serial.print(F("  Floor: ")); Serial.println(spectral.whitenFloor, 4);
         Serial.println();
+        return true;
+    }
+
+    // "json spectral" - spectral processing state as JSON (for test automation)
+    if (strcmp(cmd, "json spectral") == 0) {
+        const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
+        Serial.print(F("{\"compEnabled\":"));
+        Serial.print(spectral.compressorEnabled ? 1 : 0);
+        Serial.print(F(",\"compThreshDb\":"));
+        Serial.print(spectral.compThresholdDb, 1);
+        Serial.print(F(",\"compRatio\":"));
+        Serial.print(spectral.compRatio, 1);
+        Serial.print(F(",\"compKneeDb\":"));
+        Serial.print(spectral.compKneeDb, 1);
+        Serial.print(F(",\"compMakeupDb\":"));
+        Serial.print(spectral.compMakeupDb, 1);
+        Serial.print(F(",\"compAttackMs\":"));
+        Serial.print(spectral.compAttackTau * 1000.0f, 2);
+        Serial.print(F(",\"compReleaseS\":"));
+        Serial.print(spectral.compReleaseTau, 2);
+        Serial.print(F(",\"rmsDb\":"));
+        Serial.print(spectral.getFrameRmsDb(), 1);
+        Serial.print(F(",\"gainDb\":"));
+        Serial.print(spectral.getSmoothedGainDb(), 2);
+        Serial.print(F(",\"whitenEnabled\":"));
+        Serial.print(spectral.whitenEnabled ? 1 : 0);
+        Serial.print(F(",\"whitenDecay\":"));
+        Serial.print(spectral.whitenDecay, 4);
+        Serial.print(F(",\"whitenFloor\":"));
+        Serial.print(spectral.whitenFloor, 4);
+        Serial.println(F("}"));
         return true;
     }
 

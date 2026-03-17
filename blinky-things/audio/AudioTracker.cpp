@@ -84,10 +84,11 @@ const AudioControl& AudioTracker::update(float dt) {
     //    Only run NN when a new spectral frame is ready. Between frames,
     //    use last activation. This prevents duplicate ODF values diluting the ACF.
     float odf = 0.0f;
-    if (nnActive_ && (spectral_.isFrameReady() || spectral_.hasPreviousFrame())) {
+    uint32_t currentFrameCount = spectral_.getFrameCount();
+    if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
+        lastSpectralFrameCount_ = currentFrameCount;
         frameBeatNN_.setProfileEnabled(nnProfile);
         odf = frameBeatNN_.infer(spectral_.getRawMelBands());
-        spectral_.resetFrameReady();
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
     } else if (!nnActive_) {
@@ -101,18 +102,19 @@ const AudioControl& AudioTracker::update(float dt) {
         odf = frameBeatNN_.getLastBeat();
     }
 
-    // 5. ODF information gate — suppress noise-driven false beats
-    if (odf < odfGateThreshold) {
-        odf = 0.02f;
-    }
-
     // Track significant audio for silence detection
     if (mic_.getLevel() > 0.05f) {
         lastSignificantAudioMs_ = nowMs;
     }
 
-    // 6. Pulse detection runs every frame (uses raw ODF)
+    // 5. Pulse detection runs every frame (uses raw ODF, before gating)
     updatePulseDetection(odf, dt, nowMs);
+
+    // 6. ODF information gate — suppress noise-driven false beats
+    //    Applied after pulse detection so transient sensitivity is unaffected.
+    if (odf < odfGateThreshold) {
+        odf = 0.02f;
+    }
 
     // 7-8. Feed DSP components only on new spectral frames
     //      Prevents duplicate ODF values from corrupting ACF periodicity.
@@ -130,6 +132,9 @@ const AudioControl& AudioTracker::update(float dt) {
     }
 
     // 9. Periodic ACF for tempo estimation
+    //    First ACF fires after ~1s (ossCount_ >= 60 at ~66 Hz), then every
+    //    acfPeriodMs (~150ms = ~9 frames). The 60-sample minimum ensures
+    //    enough OSS data for meaningful autocorrelation.
     if (ossCount_ >= 60 && (nowMs - lastAcfMs_ >= acfPeriodMs)) {
         lastAcfMs_ = nowMs;
         runAutocorrelation();

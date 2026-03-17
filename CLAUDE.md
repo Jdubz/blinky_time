@@ -142,7 +142,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 
 ### Key Architecture Components
 
-- **AudioController** (`blinky-things/audio/AudioController.h`) - Unified audio analysis
+- **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - ACF+Comb+PLL audio analysis (v74, replaces AudioController)
 - **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Single Conv1D W64 TFLite NN inference (beat + downbeat multi-task)
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with fixed hardware gain (AGC removed v72)

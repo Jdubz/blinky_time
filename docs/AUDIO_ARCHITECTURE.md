@@ -1,10 +1,10 @@
-# Audio-Reactive Architecture (AudioController)
+# Audio-Reactive Architecture (AudioTracker)
 
 ## Overview
 
-AudioController provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with pattern-based beat detection to output an `AudioControl` struct with 6 parameters.
+AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF+Comb+PLL beat/tempo/phase tracking to output an `AudioControl` struct with 7 parameters.
 
-**Current Version:** AudioController with CBSS Beat Tracking + Conv1D W64 NN ODF (March 2026)
+**Current Version:** AudioTracker with ACF+Comb+PLL + Conv1D W64 NN ODF (March 2026)
 **ODF Source:** FrameBeatNN (Conv1D W64, 15.1 KB INT8, 27ms, Beat F1=0.480, DB F1=0.160). Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 
