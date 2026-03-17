@@ -1402,11 +1402,7 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getBeatCount());
             Serial.print(F(",\"q\":"));
             Serial.print(beatEvent);
-            // Precise firmware beat timestamp (millis) for MCP latency reduction
-            if (beatEvent && audioCtrl_->getLastBeatTimeMs() > 0) {
-                Serial.print(F(",\"bt\":"));
-                Serial.print(audioCtrl_->getLastBeatTimeMs());
-            }
+            // Beat timestamp not available in AudioTracker (no discrete beat events)
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
