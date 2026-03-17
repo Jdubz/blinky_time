@@ -3,6 +3,7 @@
 #ifdef BLINKY_PLATFORM_ESP32S3
 
 #include <driver/i2s_pdm.h>
+#include <driver/gpio.h>
 #include <math.h>
 #include <string.h>
 
@@ -10,6 +11,22 @@ static i2s_chan_handle_t rx_handle = nullptr;
 
 bool Esp32PdmMic::begin(int channels, long sampleRate) {
     (void)channels;  // always mono
+
+    // CRITICAL: Release PDM pins from JTAG before I2S init.
+    //
+    // On XIAO ESP32-S3 Sense, the PDM microphone is wired to GPIO42 (CLK) and
+    // GPIO41 (DATA). These are also the JTAG strap pins (MTMS and MTDI).
+    // When compiled with USBMode=hwcdc (usb_mode=1, required for serial on this
+    // board with ESP32 core 3.3.7+), the USB_SERIAL_JTAG peripheral may claim
+    // these pins via IO_MUX during boot. The I2S driver's gpio_set_direction()
+    // silently fails to override the JTAG mux, so i2s_channel_read() returns
+    // zero bytes forever — the mic appears dead while begin() returns true.
+    //
+    // gpio_reset_pin() disconnects the pin from any peripheral (including JTAG),
+    // resets it to GPIO function, and sets it as input. The I2S PDM init that
+    // follows will then successfully claim the pins for PDM CLK/DATA.
+    gpio_reset_pin((gpio_num_t)PDM_CLK_PIN);
+    gpio_reset_pin((gpio_num_t)PDM_DATA_PIN);
 
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
     if (i2s_new_channel(&chan_cfg, NULL, &rx_handle) != ESP_OK) return false;
@@ -35,6 +52,21 @@ bool Esp32PdmMic::begin(int channels, long sampleRate) {
         rx_handle = nullptr;
         return false;
     }
+
+    // Verify data is actually flowing. The DMA fills one buffer every ~15ms
+    // (240 samples at 16 kHz). If no data arrives within 100ms, the pin
+    // release above didn't work or the mic hardware is absent.
+    int16_t verifyBuf[64];
+    size_t bytesRead = 0;
+    esp_err_t err = i2s_channel_read(rx_handle, verifyBuf, sizeof(verifyBuf),
+                                      &bytesRead, 100);
+    if (bytesRead == 0) {
+        i2s_channel_disable(rx_handle);
+        i2s_del_channel(rx_handle);
+        rx_handle = nullptr;
+        return false;
+    }
+
     return true;
 }
 

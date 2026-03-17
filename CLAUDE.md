@@ -7,10 +7,21 @@ Upload safety depends on the platform. ESP32-S3 and nRF52840 use completely diff
 ### ESP32-S3: `arduino-cli upload` is SAFE
 
 ```bash
-arduino-cli compile --upload --fqbn esp32:esp32:XIAO_ESP32S3 -p /dev/ttyACM0 blinky-things
+# MUST use full FQBN with USBMode=hwcdc — see note below
+arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240' -p /dev/ttyACM0 blinky-things
 ```
 
 `arduino-cli upload` on ESP32-S3 calls **esptool**, which talks to the chip's hardware ROM bootloader. The ROM bootloader is burned into silicon and cannot be bricked. esptool verifies every write. If interrupted, the ROM bootloader still works and you just re-flash.
+
+### ESP32-S3: JTAG/PDM Pin Conflict
+
+**GPIO42 (PDM CLK) and GPIO41 (PDM DATA) are also JTAG strap pins (MTMS/MTDI).**
+
+ESP32 core 3.3.7 requires `USBMode=hwcdc` for serial (the default TinyUSB mode has unresolved `HWCDCSerial` linker errors — core bug). This enables the `USB_SERIAL_JTAG` peripheral which may claim GPIO42/41 at boot, silently blocking the PDM microphone.
+
+**Mitigation:** `Esp32PdmMic::begin()` calls `gpio_reset_pin()` on both PDM pins before I2S init, then verifies data flows with a 100ms blocking read. If verification fails, `begin()` returns false and the boot log reports `"Audio controller failed to start"`.
+
+**If the ESP32 core is upgraded**, re-test PDM mic on ESP32-S3. If the TinyUSB linker bug is fixed in a future core version, switch back to the default FQBN (`esp32:esp32:XIAO_ESP32S3`) which avoids the JTAG peripheral entirely.
 
 ### nRF52840: NEVER use `arduino-cli upload`
 
@@ -94,11 +105,11 @@ To check progress: `tmux attach -t training` or `tail -f ml-training/outputs/<ex
 
 ```bash
 # === ESP32-S3 ===
-# Compile only
-arduino-cli compile --fqbn esp32:esp32:XIAO_ESP32S3 blinky-things
+# Compile only (MUST use full FQBN — see JTAG/PDM pin conflict above)
+arduino-cli compile --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240' blinky-things
 
 # Compile + upload (safe — uses esptool)
-arduino-cli compile --upload --fqbn esp32:esp32:XIAO_ESP32S3 -p /dev/ttyACM0 blinky-things
+arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240' -p /dev/ttyACM0 blinky-things
 
 # === nRF52840 ===
 # Compile only (in-tree build, requires TFLite library)

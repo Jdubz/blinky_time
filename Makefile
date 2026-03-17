@@ -19,6 +19,10 @@
 # Configuration
 SKETCH_DIR = blinky-things
 FQBN = Seeeduino:nrf52:xiaonRF52840Sense
+# USBMode=hwcdc required for serial on ESP32 core 3.3.7+ (core bug: TinyUSB mode
+# has unresolved HWCDCSerial refs in chip-debug-report.cpp). This enables the
+# USB_SERIAL_JTAG peripheral which shares GPIO42/41 with the PDM mic — see
+# Esp32PdmMic::begin() for the gpio_reset_pin() workaround.
 ESP32_FQBN = esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240
 BAUD_RATE = 115200
 
