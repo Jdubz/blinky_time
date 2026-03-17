@@ -54,13 +54,16 @@ bool Esp32PdmMic::begin(int channels, long sampleRate) {
     }
 
     // Verify data is actually flowing. The DMA fills one buffer every ~15ms
-    // (240 samples at 16 kHz). If no data arrives within 100ms, the pin
+    // (240 samples at 16 kHz). If no data arrives within 500ms, the pin
     // release above didn't work or the mic hardware is absent.
     int16_t verifyBuf[64];
     size_t bytesRead = 0;
     esp_err_t err = i2s_channel_read(rx_handle, verifyBuf, sizeof(verifyBuf),
-                                      &bytesRead, 100);
+                                      &bytesRead, 500);
+    Serial.printf("[PDM] verify: err=%d bytes=%u handle=%p clk=%d data=%d\n",
+                  (int)err, (unsigned)bytesRead, rx_handle, PDM_CLK_PIN, PDM_DATA_PIN);
     if (bytesRead == 0) {
+        Serial.println("[PDM] FAILED: no data from I2S PDM — mic dead or pin conflict");
         i2s_channel_disable(rx_handle);
         i2s_del_channel(rx_handle);
         rx_handle = nullptr;
