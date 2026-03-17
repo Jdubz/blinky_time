@@ -286,8 +286,7 @@ void setup() {
           fireGen->getParamsMutable(),
           waterGen->getParamsMutable(),
           lightningGen->getParamsMutable(),
-          audioController->getMicForTuning(),
-          nullptr  // AudioTracker: param persistence added later
+          audioController->getMicForTuning()
         );
         SerialConsole::logDebug(F("Loaded effect params from flash"));
 
@@ -415,8 +414,7 @@ void loop() {
           fireGen->getParams(),
           waterGen->getParams(),
           lightningGen->getParams(),
-          audioController->getMicForTuning(),
-          nullptr  // AudioTracker: param persistence added later
+          audioController->getMicForTuning()
         );
       }
     }

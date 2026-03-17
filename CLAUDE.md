@@ -118,7 +118,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 | Document | Purpose |
 |----------|---------|
 | `docs/VISUALIZER_GOALS.md` | **Design philosophy** - visual quality over metrics |
-| `docs/AUDIO_ARCHITECTURE.md` | AudioController architecture (CBSS beat tracking) |
+| `docs/AUDIO_ARCHITECTURE.md` | AudioTracker architecture (ACF+Comb+PLL) |
 | `docs/AUDIO-TUNING-GUIDE.md` | **Main testing guide** - 56 tunable parameters, test procedures |
 | `docs/IMPROVEMENT_PLAN.md` | Current status and roadmap |
 | `docs/GENERATOR_EFFECT_ARCHITECTURE.md` | Generator/Effect/Renderer pattern |
@@ -202,7 +202,7 @@ SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
     ↓
     ├── FrameBeatNN (Conv1D W64, 27ms, every frame) → beat activation (ODF) + downbeat activation
     ↓
-AudioController (ODF info gate → CBSS beat tracking + pulse baseline tracking)
+AudioTracker (ODF info gate → ACF tempo + comb bank validation + PLL phase)
     ↓
 AudioControl {energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure}
     ↓
@@ -228,22 +228,17 @@ RenderPipeline → LED Output
      - Arena: 7340/32768 bytes
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple ODF)
 
-3. **Rhythm Tracking (AudioController)**
-   - `AudioController.h/cpp` - Bayesian tempo fusion + CBSS beat tracking
-   - OSS buffering (6 seconds @ 60 Hz)
+3. **Rhythm Tracking (AudioTracker, v74)**
+   - `AudioTracker.h/cpp` - ACF + Comb filter bank + PLL phase tracking (~10 params)
+   - OSS buffering (6 seconds @ ~66 Hz)
    - ODF source: FrameBeatNN beat activation (Conv1D). Falls back to mic level if model fails to load.
    - ODF information gate: suppresses low-confidence ODF when NN output is weak (prevents noise-driven false beats)
-   - Bayesian tempo fusion: 20-bin posterior (~60-198 BPM), comb filter bank + harmonic-enhanced ACF (0.8, v25). FT/IOI disabled (v28)
-   - Per-sample ACF harmonic disambiguation (2x and 1.5x checks after MAP extraction)
-   - CBSS: cumulative beat strength signal with log-Gaussian transition weighting (tuned for faster convergence)
-   - BTrack-style predict+countdown beat detection with CBSS adaptive threshold (cbssthresh=1.0)
-   - Deterministic phase derivation
-   - Pulse detection: floor-tracking baseline (replaces running-mean threshold)
+   - ACF tempo estimation: Percival harmonic enhancement (2nd+4th harmonics), Rayleigh prior weighting
+   - CombFilterBank: 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation
+   - Tempo selection: ACF primary, comb bank validates (average when within 10% agreement)
+   - PLL phase tracking: free-running sawtooth at estimated BPM, onset-gated proportional+integral correction
+   - Pulse detection: floor-tracking baseline (fast drop, slow rise)
    - Energy synthesis: hybrid mic level + bass mel energy + ODF peak-hold
-   - ODF pre-smoothing (5-point causal moving average)
-   - ODF mean subtraction disabled (v32: raw ODF preserves ACF structure)
-   - Onset-density octave discriminator (v32: penalizes implausible tempos in posterior)
-   - Shadow CBSS octave checker (v32: compares T vs T/2 every 2 beats)
 
 4. **Generators (Visual Effects)**
    - `Fire.cpp/h` - HeatFire: hybrid audio-reactive design, dt-based scroll speed, energy drives full flame height
@@ -352,16 +347,16 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 1. PDM mic samples → AdaptiveMic (fixed gain + window/range normalization)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands)
 3. SharedSpectralAnalysis → FrameBeatNN (64-frame mel window → Conv1D → beat + downbeat activation)
-4. Beat activation → ODF information gate → ODF value (0-1)
-5. ODF → AudioController OSS buffer (6s history)
-6. AudioController → autocorrelation every 250ms → Bayesian tempo fusion
-   (ACF + comb filter bank → 20-bin posterior → harmonic disambig → MAP → BPM)
-7. CBSS backward search → cumulative beat strength signal
-8. Predict+countdown beat detection → deterministic phase
-9. FrameBeatNN downbeat_activation → AudioControl.downbeat
-10. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
-    onsetDensity=3.2, downbeat=0.9, beatInMeasure=1}
-11. Fire generator:
+4. Beat activation → pulse detection (raw ODF) → ODF information gate → ODF value (0-1)
+5. ODF → AudioTracker OSS buffer (6s history @ ~66 Hz)
+6. AudioTracker → ACF every 150ms → Percival harmonic enhancement → Rayleigh-weighted peak → BPM
+   Comb filter bank (20 filters) validates independently → average when agreeing within 10%
+7. PLL free-running phase ramp at estimated BPM
+8. Onset-gated PLL correction: strong onsets near beat boundary → proportional+integral phase correction
+9. Output: AudioControl{energy=0.45, pulse=0.85, phase=0.12, rhythmStrength=0.75,
+    onsetDensity=3.2, downbeat=0.0, beatInMeasure=0}
+   (downbeat/beatInMeasure deferred — NN output available but not yet wired)
+10. Fire generator:
     - energy → baseline flame height
     - pulse → spark burst intensity
     - phase → breathing effect (0=on-beat)
@@ -424,7 +419,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ### Current Status (March 2026)
 
 **Production Ready:**
-- ✅ AudioController with CBSS beat tracking + ODF information gate + pulse baseline tracking
+- ✅ AudioTracker with ACF+Comb+PLL + ODF information gate + pulse baseline tracking
 - ✅ FrameBeatNN (Conv1D W64, 15.1 KB INT8, Beat F1=0.480, DB F1=0.160, deployed on all 7 devices)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
@@ -496,9 +491,7 @@ Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 - **Pulse baseline tracking**: Floor-tracking baseline replaces running-mean threshold for pulse detection
 - **Energy synthesis**: Hybrid mic level + bass mel energy + ODF peak-hold
 - **Spectral conditioning** (v23+): Soft-knee compressor (Giannoulis 2012) → per-bin adaptive whitening
-- **Bayesian tempo fusion**: 20-bin posterior over ~60-198 BPM, comb filter bank + ACF. SETTINGS_VERSION 73
-- **Harmonic disambiguation**: Per-sample ACF check after MAP extraction, prefers 2x or 1.5x BPM when raw ACF is strong
-- **Onset-density octave discriminator** (v32): Gaussian penalty on tempos where transients/beat < 0.5 or > 5.0
-- **Shadow CBSS octave checker** (v32): Every 2 beats, compares CBSS score at T vs T/2; switches if T/2 scores 1.3x better
-- **CBSS beat tracking**: Counter-based beat prediction with deterministic phase derivation, adaptive threshold (tuned for faster convergence)
+- **ACF tempo estimation** (v74): Percival harmonic enhancement (2nd+4th ACF folding), Rayleigh prior weighting (~60-200 BPM)
+- **CombFilterBank** (v74): 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation
+- **PLL phase tracking** (v74): Free-running sawtooth at estimated BPM, onset-gated P+I correction
 - **Tempo-adaptive cooldown**: Shorter cooldown at faster tempos (min 40ms, max 150ms)

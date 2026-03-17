@@ -43,8 +43,9 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     bool nnOk = frameBeatNN_.begin();
     nnActive_ = nnOk && frameBeatNN_.isReady();
 
-    // Initialize onset density window
-    onsetDensityWindowStart_ = 0;
+    // Initialize onset density window to current time to avoid
+    // instant flush on first update (nowMs >> 0 would fire immediately)
+    onsetDensityWindowStart_ = time_.millis();
 
     return true;
 }
@@ -458,7 +459,10 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.onsetDensity = onsetDensity_;
 
     // --- Downbeat / BeatInMeasure ---
-    // Not tracked in this version — deferred to future phase
+    // TODO: Wire FrameBeatNN downbeat activation to control_.downbeat and derive
+    // beatInMeasure from a 4-beat counter. The NN already outputs downbeat activation
+    // (Conv1D W64 sum head), it just needs plumbing through the PLL beat counter.
+    // Without this, Fire's bar-1 dramatic effects and syncopation patterns are inactive.
     control_.downbeat = 0.0f;
     control_.beatInMeasure = 0;
 }

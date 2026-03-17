@@ -29,10 +29,10 @@ struct FrameBeatNN {
  * AudioTracker - Simplified audio analysis with PLL phase tracking
  *
  * Replaces AudioController's 2162-line CBSS system with a ~400-line
- * ACF + Comb + PLL architecture. Targets 60fps (NN W16 ~7ms + DSP ~0.3ms).
+ * ACF + Comb + PLL architecture.
  *
  * Architecture:
- *   PDM Microphone → AdaptiveMic → SharedSpectralAnalysis → FrameBeatNN (W16)
+ *   PDM Microphone → AdaptiveMic → SharedSpectralAnalysis → FrameBeatNN (W64, 27ms)
  *       → onset activation → OSS buffer → ACF (tempo) + Comb bank (validation)
  *       → PLL (smooth phase ramp) → AudioControl output
  *

@@ -1,7 +1,5 @@
 #include "ConfigStorage.h"
 #include "../tests/SafetyTest.h"
-// AudioController.h removed v74 — AudioController* params now always nullptr.
-// Forward declaration in ConfigStorage.h is sufficient.
 #include "../inputs/SerialConsole.h"
 
 // Flash storage for nRF52 mbed core
@@ -531,7 +529,7 @@ void ConfigStorage::end() {
 }
 
 void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
-                                      AdaptiveMic& mic, AudioController* audioCtrl) {
+                                      AdaptiveMic& mic) {
     // Validation helpers — clamp individual bad params to nearest bound.
     // Preserves all other settings instead of wiping everything.
     int fixedCount = 0;
@@ -826,12 +824,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
 
     // AudioController params removed v74 — replaced by AudioTracker.
     // StoredMusicParams struct preserved in flash layout for version compatibility.
-    // audioCtrl parameter kept for API compatibility (always nullptr).
-    (void)audioCtrl;
+    // AudioTracker param persistence deferred (see IMPROVEMENT_PLAN.md).
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                                      const AdaptiveMic& mic, const AudioController* audioCtrl) {
+                                      const AdaptiveMic& mic) {
     // Spawn behavior
     data_.fire.baseSpawnChance = fireParams.baseSpawnChance;
     data_.fire.audioSpawnBoost = fireParams.audioSpawnBoost;
@@ -915,8 +912,6 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
 
     // AudioController params removed v74 — replaced by AudioTracker.
     // StoredMusicParams struct preserved in flash layout for version compatibility.
-    // audioCtrl parameter kept for API compatibility (always nullptr).
-    (void)audioCtrl;
 
     saveToFlash();
     dirty_ = false;
@@ -924,9 +919,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
 }
 
 void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                                const AdaptiveMic& mic, const AudioController* audioCtrl) {
+                                const AdaptiveMic& mic) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, waterParams, lightningParams, mic, audioCtrl);
+        saveConfiguration(fireParams, waterParams, lightningParams, mic);
     }
 }
 

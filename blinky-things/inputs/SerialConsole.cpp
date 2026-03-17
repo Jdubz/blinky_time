@@ -618,8 +618,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 fireGenerator_->getParams(),
                 waterGenerator_->getParams(),
                 lightningGenerator_->getParams(),
-                *mic_,
-                nullptr  // AudioTracker persistence added later
+                *mic_
             );
             Serial.println(F("OK"));
         } else {
@@ -634,8 +633,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 fireGenerator_->getParamsMutable(),
                 waterGenerator_->getParamsMutable(),
                 lightningGenerator_->getParamsMutable(),
-                *mic_,
-                nullptr  // AudioTracker persistence added later
+                *mic_
             );
             checkBayesianInteractions();
             Serial.println(F("OK"));
@@ -872,8 +870,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             fireGenerator_->getParams(),
             waterGenerator_->getParams(),
             lightningGenerator_->getParams(),
-            *mic_,
-            nullptr
+            *mic_
         );
     } else if (mic_) {
         // Safe mode: generators null, but mic available
@@ -885,8 +882,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             defaultFire,
             defaultWater,
             defaultLightning,
-            *mic_,
-            nullptr
+            *mic_
         );
     } else {
         Serial.println(F("ERROR: Cannot save config - mic not initialized"));

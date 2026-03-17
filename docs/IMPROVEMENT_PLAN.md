@@ -6,7 +6,11 @@
 
 ## Current Status
 
-**Firmware:** v73 (SETTINGS_VERSION 73). CBSS beat tracking + Bayesian tempo fusion. Conv1D W64 NN beat/downbeat activation (always-on, TFLite required). Beat-synchronized downbeat and measure counter. ODF information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v74 (SETTINGS_VERSION 73). AudioTracker (ACF+Comb+PLL, ~10 params, replaces AudioController's CBSS+Bayesian). Conv1D W64 NN beat/downbeat activation (always-on, TFLite required). ODF information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+
+**Known regressions (v74):**
+- **Downbeat/beatInMeasure always 0:** FrameBeatNN produces downbeat activation but AudioTracker doesn't wire it to output yet. Fire's bar-1 effects and syncopation patterns inactive.
+- **AudioTracker params not persisted:** The ~10 tunable params (bpmMin, bpmMax, rayleighBpm, combFeedback, pllKp, pllKi, etc.) revert to defaults on reboot. ConfigStorage integration deferred.
 
 **NN Model Status:** Conv1D W64 with Beat This! sum head deployed on all 7 devices (15.1 KB INT8, per-tensor quantization, 27ms inference measured on device). Beat F1=0.480, DB F1=0.160 (offline eval). Arena: 7340/32768 bytes. Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Sum head constrains downbeat ≤ beat structurally.
 

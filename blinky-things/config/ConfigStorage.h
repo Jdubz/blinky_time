@@ -6,8 +6,8 @@
 #include "../generators/Lightning.h"
 #include "../inputs/AdaptiveMic.h"
 
-// Forward declarations (AudioController removed v74 — replaced by AudioTracker)
-class AudioController;  // Kept for ConfigStorage API compatibility (accepts nullptr)
+// AudioController removed v74 — replaced by AudioTracker.
+// ConfigStorage no longer reads/writes audio tracker params (deferred).
 
 /**
  * ConfigStorage - Flash-based configuration persistence for nRF52
@@ -112,8 +112,10 @@ public:
     // Version 71: Fix fastAgcPeriodMs/fastAgcTrackingTau defaults to match AdaptiveMic.h
     // Version 72: Remove AGC — hardware gain fixed at platform optimal. StoredMicParams
     //   reduced to peakTau + releaseTau only. Window/range normalization handles all adaptation.
-    // Version 73: Tune CBSS for faster convergence: cbssWarmupBeats 0→8, beatConfBoost
-    //   0.15→0.25, periodicityBlend 0.7→0.5. Fix pulse detection baseline tracking.
+    // Version 73: AudioController replaced by AudioTracker (ACF+Comb+PLL, ~10 params).
+    //   AudioController's ~56 runtime params no longer read from StoredMusicParams.
+    //   StoredMusicParams struct preserved in flash layout for version compatibility
+    //   (devices with v73 flash won't factory-reset). Pulse baseline tracking fix.
     static const uint8_t SETTINGS_VERSION = 73;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
@@ -474,25 +476,19 @@ public:
     bool isDeviceConfigValid() const { return data_.device.isValid; }
 
     /**
-     * BREAKING CHANGE (v27): API now requires all 3 generator params
-     *
-     * Migration from v26:
-     *   OLD: loadConfiguration(fireParams, mic, audioCtrl)
-     *   NEW: loadConfiguration(fireParams, waterParams, lightningParams, mic, audioCtrl)
-     *
-     * Rationale: Unified particle system requires persisting all generators,
-     * not just Fire. This ensures Water and Lightning settings survive reboots.
+     * Load/save all persisted generator and mic parameters.
+     * AudioTracker params not yet persisted (v74, deferred).
      */
     void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
-                          AdaptiveMic& mic, AudioController* audioCtrl = nullptr);
+                          AdaptiveMic& mic);
     void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                          const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
+                          const AdaptiveMic& mic);
     void factoryReset();
 
     // Auto-save support
     void markDirty() { dirty_ = true; }
     void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                     const AdaptiveMic& mic, const AudioController* audioCtrl = nullptr);
+                     const AdaptiveMic& mic);
 
 private:
     ConfigData data_;
