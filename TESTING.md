@@ -29,8 +29,6 @@ NODE_PATH=node_modules node ../ml-training/tools/ab_test_nnbeat.cjs
 run_test(pattern: "steady-120bpm", port: "/dev/ttyACM0")
 ```
 
-**Let AGC auto-adapt** - Do not lock gain unless specifically testing AGC behavior.
-
 ### Run Unit Tests
 
 ```bash

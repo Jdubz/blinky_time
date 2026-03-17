@@ -4,8 +4,9 @@
 
 AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF+Comb+PLL beat/tempo/phase tracking to output an `AudioControl` struct with 7 parameters.
 
-**Current Version:** AudioTracker with ACF+Comb+PLL + Conv1D W64 NN ODF (March 2026)
-**ODF Source:** FrameBeatNN (Conv1D W64, 15.1 KB INT8, 27ms, Beat F1=0.480, DB F1=0.160). Non-NN fallback: mic level.
+**Current Version:** AudioTracker with decoupled tempo/onset architecture (March 2026)
+**BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF + comb bank → BPM
+**Onset Detection:** FrameBeatNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Used for visual pulse + PLL phase refinement. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 
 **Evolution:**
@@ -13,6 +14,7 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 - **v2 (December 2024)**: Single-hypothesis autocorrelation (robust but slow to adapt)
 - **v3 (January 2026)**: Multi-hypothesis tracking (complex, phase jitter from competing corrections)
 - **v4 (February 2026)**: CBSS beat tracking (deterministic phase, counter-based beats)
+- **v5 (March 2026)**: AudioTracker — ACF+Comb+PLL, replaces AudioController CBSS. ~400 lines, ~10 params (vs ~2100 lines, ~56 params). No CBSS, no Bayesian fusion.
 
 ---
 
@@ -27,8 +29,8 @@ struct AudioControl {
     float phase;          // Beat phase position (0-1)
     float rhythmStrength; // Confidence in rhythm (0-1)
     float onsetDensity;   // Smoothed onsets per second (0-10+)
-    float downbeat;       // Beat-synchronized downbeat activation (0-1)
-    uint8_t beatInMeasure; // Position in measure (1-4, 0=unknown)
+    float downbeat;       // Reserved, always 0.0 (not wired)
+    uint8_t beatInMeasure; // Reserved, always 0 (not wired)
 };
 ```
 
@@ -39,85 +41,110 @@ struct AudioControl {
 | `phase` | Position in beat cycle (0=on-beat) | Pulsing, breathing effects |
 | `rhythmStrength` | Periodicity confidence | Music mode vs organic mode |
 | `onsetDensity` | Smoothed transients/second (EMA) | Content classification (dance=2-6, ambient=0-1) |
-| `downbeat` | Beat-synchronized downbeat (v65, smoothed NN output) | Extra-dramatic effects on bar 1 |
-| `beatInMeasure` | Position in measure (1-4, 0=unknown, v65) | Syncopation patterns, accent beats |
+| `downbeat` | Reserved (always 0.0) | Not currently active |
+| `beatInMeasure` | Reserved (always 0) | Not currently active |
+
+**Note:** The `downbeat` and `beatInMeasure` fields exist in the struct for forward compatibility but are always zero. The system focuses exclusively on onset detection, BPM identification, and pulse/phase alignment.
 
 ---
 
 ## Architecture
 
-**Current (single Conv1D model, deployed):**
 ```
 PDM Microphone
       |
 AdaptiveMic (fixed gain + window/range normalization, AGC removed v72)
       |
-SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands)
+SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectral flux)
       |
-      +--- FrameBeatNN (Conv1D W64, 27ms)
-      |         Input: sliding window of rawMelBands_ (64 frames × 26 bands)
-      |         Output: beat_activation + downbeat_activation (sum head: downbeat ≤ beat)
+      +--- [BPM PATH: spectral flux → tempo estimation]
+      |    Spectral Flux (HWR: sum of positive magnitude changes, NN-independent)
+      |         |
+      |    Contrast sharpening (flux^2.0)
+      |         |
+      |    +--- CombFilterBank (20 parallel IIR filters, Scheirer 1998)
+      |    |         Independent tempo validation (60-198 BPM)
+      |    |
+      |    +--- OSS Buffer (~5.5s @ ~66 Hz, 360 samples, circular)
+      |    |
+      |    +--- Autocorrelation (every 150ms)
+      |              Percival harmonic enhancement (2nd+4th harmonics)
+      |              Rayleigh prior weighting (peak at rayleighBpm)
+      |              ACF primary tempo, comb bank validates (average when within 10%)
+      |              EMA smoothing -> BPM estimate
       |
-      +--- ODF Information Gate (suppresses weak NN output)
+      +--- [ONSET PATH: NN → visual pulse + PLL refinement]
+      |    FrameBeatNN (Conv1D W16, onset-only)
+      |         Input: sliding window of rawMelBands_ (16 frames x 26 bands)
+      |         Output: single onset activation (0-1, kicks/snares)
+      |         |
+      |    ODF Information Gate (suppresses weak NN output)
+      |         |
+      |    +--- Pulse: floor-tracking baseline detection (visual sparks)
+      |    +--- PLL phase refinement (onset-gated P+I correction)
+      |    +--- Energy: hybrid (mic level + bass mel energy + onset peak-hold)
       |
-OSS Buffer (6s @ 60Hz)
-      |
-      +--- Autocorrelation (every 250ms) --> Bayesian Tempo Fusion --> Best BPM
-      |                                                                    |
-      |                                                            beatPeriodSamples_
-      |                                                                    |
-      +--- CBSS Buffer → updateCBSS() → detectBeat() → Counter-based beats
-      |                                        |
-      +--- Pulse: floor-tracking baseline detection
-      |
-      +--- Energy: hybrid (mic level + bass mel energy + ODF peak-hold)
-      |
-AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat, beatInMeasure }
+      +--- [PHASE PATH: PLL → smooth phase ramp]
+           PLL (free-running sawtooth at estimated BPM)
+                |
+AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat=0, beatInMeasure=0 }
       |
 Generators (HeatFire, Water, Lightning)
 ```
 
 **Key Design Decisions:**
 
-1. **CBSS Beat Tracking**: Cumulative Beat Strength Signal combines current onset strength with predicted beat history. Phase is derived deterministically from a counter — no drift, no jitter.
+1. **Decoupled BPM and Onset Paths**: BPM estimation uses spectral flux (NN-independent), not NN onset activation. The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat transients — syncopated kicks, hi-hats, and off-beat snares would corrupt ACF periodicity if used for tempo. Spectral flux is a raw broadband transient signal that preserves periodic structure.
 
-2. **Counter-Based Beat Detection**: Beats are expected at `lastBeat + period`. A search window around the expected time finds local maxima in the CBSS. Forced beats maintain phase during dropouts.
+2. **PLL Phase Tracking**: A free-running sawtooth ramp at the estimated BPM produces perfectly smooth phase output. Only corrected when strong NN onsets align near expected beats (within 25% of period). The PLL bridges the two paths: tempo from spectral flux, phase refinement from NN onsets.
 
-3. **Transients → Pulse Only**: Transient detection drives visual pulse output, NOT beat tracking. Beat tracking is derived from buffered pattern analysis.
+3. **Dual Tempo Estimation**: ACF (autocorrelation) is the primary tempo estimator with Percival harmonic enhancement and Rayleigh prior weighting. CombFilterBank provides independent validation. Both fed by spectral flux. When they agree within 10%, their average is used.
 
-4. **Tempo Prior**: Gaussian prior centered on 120 BPM helps disambiguate half-time/double-time autocorrelation harmonics.
+4. **NN Onset → Visual Pulse Only**: NN onset activation drives visual effects (sparks, flashes) and refines PLL phase, but does not influence tempo estimation. This is the correct use for a signal that fires on every acoustic transient regardless of metrical position.
+
+5. **Tempo Prior**: Rayleigh distribution centered on `rayleighBpm` (default 140 BPM) weights ACF peaks to disambiguate half-time/double-time harmonics.
 
 ---
 
 ## Rhythm Tracking Algorithm
 
-### CBSS Beat Tracking (v4 - Current)
+### ACF + Comb + PLL (v5 - Current)
 
-**Every frame (~60 Hz):**
-1. **Buffer OSS**: Store onset strength in 6-second circular buffer
-2. **Update CBSS**: `CBSS[n] = (1-alpha)*OSS[n] + alpha*max(CBSS[n-2T : n-T/2])`
-3. **Detect Beat**: Search for local maximum in CBSS within window around expected beat time
-4. **Derive Phase**: `phase = (sampleCounter - lastBeatSample) / beatPeriodSamples`
+**Every frame (~62.5 Hz, on new spectral frame):**
+1. **NN Inference**: Feed mel bands to Conv1D W16 model → onset activation (for pulse + PLL)
+2. **Pulse Detection**: Floor-tracking baseline, fire pulse when onset exceeds baseline * 2.0
+3. **Onset Gate**: Suppress onset below `odfGateThreshold` (prevent noise-driven PLL jitter)
+4. **Spectral Flux**: Half-wave rectified magnitude change from SharedSpectralAnalysis (NN-independent)
+5. **Flux Contrast**: Power-law sharpening (`flux^2.0`) to sharpen transient peaks
+6. **Feed Comb Bank**: 20 parallel IIR comb filters on contrast-sharpened spectral flux
+7. **Buffer OSS**: Store contrast-enhanced spectral flux in ~5.5s circular buffer (360 samples)
+8. **PLL Free-Run**: Advance sawtooth phase by `1/beatPeriodFrames` per frame
 
-**Every 250ms:**
-5. **Run Autocorrelation**: Compute correlation across all lags (60-200 BPM range), with inverse-lag normalization (`acf[i] /= lag`) to penalize sub-harmonics
-6. **Apply Tempo Prior**: Weight autocorrelation by Gaussian prior to disambiguate harmonics
-7. **Update Beat Period**: Convert best BPM to `beatPeriodSamples`
+**Every 150ms (acfPeriodMs):**
+9. **Linearize OSS**: Copy circular spectral flux buffer to linear array with mean subtraction
+10. **Compute ACF**: Autocorrelation at lags corresponding to bpmMin-bpmMax range
+11. **Percival Enhancement**: Fold 2nd harmonic (ACF[2L], weight 0.5) and 4th harmonic (ACF[4L], weight 0.25) into fundamental lag L
+12. **Rayleigh Weighting**: Weight each lag by `(L/sigma^2) * exp(-L^2/(2*sigma^2))` where sigma = lag at rayleighBpm
+13. **Peak Selection**: Best weighted lag -> candidate BPM
+14. **Comb Validation**: Compare ACF BPM with comb bank peak BPM. Average when within 10% agreement.
+15. **Smooth Update**: EMA filter on BPM (only when change > 5%)
 
-**Beat Detection Logic:**
-- **Early/late window**: `[T*(1-windowScale), T*(1+windowScale)]` around expected beat
-- **Detection**: CBSS local maximum above adaptive threshold within the window
-- **Forced beat**: If past the late bound with no detection, force a beat (maintains phase during dropouts, reduces confidence)
-- **Confidence**: Increases on real beats (+0.15), decreases on forced beats (*0.9), decays per-frame when no beat (*beatConfidenceDecay)
+**PLL Correction (every frame, NN onset-gated):**
+16. **Detect Strong Onset**: NN onset > baseline * 2.0 and onset > 0.1
+17. **Phase Error**: Distance from nearest beat boundary, centered [-0.5, +0.5]
+18. **Gate**: Only correct if |phase error| < 0.25 (onset near expected beat)
+19. **Proportional**: Pull phase toward beat boundary by `pllKp * phaseError`
+20. **Integral**: Leaky integrator (`0.95 * integral + phaseError`), correct by `pllKi * integral`
 
-### Evolution: Why CBSS?
+### Evolution: Why ACF+Comb+PLL?
 
 | Version | Approach | Strengths | Weaknesses |
 |---------|----------|-----------|------------|
 | **v1 (PLL)** | Event-driven phase locking | Low latency | Jitter from unreliable transients |
 | **v2 (Single Autocorr)** | Pattern-based single tempo | Robust to noise | Slow adaptation, tempo ambiguity |
 | **v3 (Multi-Hypo)** | Multiple concurrent tempos | Handles ambiguity | Competing corrections cause phase jitter |
-| **v4 (CBSS)** | Cumulative beat strength | Deterministic phase, no jitter | Requires good onset detection |
+| **v4 (CBSS)** | Cumulative beat strength | Deterministic phase, no jitter | Complex (~2100 lines, ~56 params) |
+| **v5 (ACF+Comb+PLL)** | ACF tempo + comb validation + PLL phase | Simple (~400 lines, ~10 params), smooth phase | Requires good onset detection |
 
 ---
 
@@ -150,7 +177,7 @@ float breathe = audio.phaseToPulse();
 // Distance from beat (0.0 on-beat, 0.5 off-beat)
 float offBeat = audio.distanceFromBeat();
 
-// Raw phase (0.0 → 1.0 over one beat cycle)
+// Raw phase (0.0 -> 1.0 over one beat cycle)
 float sawPhase = audio.phase;
 ```
 
@@ -168,111 +195,144 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ## Tuning Parameters
 
-### Core Rhythm Parameters (AudioController)
+### Tempo Detection (AudioTracker)
 
-| Parameter | Default | Description | SerialConsole Command |
-|-----------|---------|-------------|----------------------|
-| `activationThreshold` | 0.4 | Periodicity strength to activate rhythm mode | `set activationThreshold 0.4` |
-| `pulseBoostOnBeat` | 1.3 | Boost factor for on-beat transients | `set pulseBoostOnBeat 1.3` |
-| `pulseSuppressOffBeat` | 0.6 | Suppress factor for off-beat transients | `set pulseSuppressOffBeat 0.6` |
-| `energyBoostOnBeat` | 0.3 | Energy boost near predicted beats | `set energyBoostOnBeat 0.3` |
-| `bpmMin` | 60 | Minimum detectable BPM | `set bpmMin 60` |
-| `bpmMax` | 200 | Maximum detectable BPM | `set bpmMax 200` |
+| Parameter | Serial Name | Default | Range | Description |
+|-----------|-------------|---------|-------|-------------|
+| `bpmMin` | `bpmmin` | 60 | 40-120 | Minimum detectable BPM |
+| `bpmMax` | `bpmmax` | 200 | 120-240 | Maximum detectable BPM |
+| `rayleighBpm` | `rayleighbpm` | 140 | 60-180 | Rayleigh prior peak BPM (perceptual bias) |
+| `combFeedback` | `combfeedback` | 0.92 | 0.85-0.98 | Comb bank resonance strength |
+| `tempoSmoothing` | `temposmooth` | 0.85 | 0.5-0.99 | BPM EMA smoothing (higher = slower) |
 
-### CBSS Beat Tracker Parameters
+### Phase Tracking (PLL)
 
-| Parameter | Default | Description | SerialConsole Command |
-|-----------|---------|-------------|----------------------|
-| `cbssAlpha` | 0.9 | CBSS weighting (0.8-0.95, higher = more predictive) | `set cbssalpha 0.9` |
-| `cbssTightness` | 8.0 | Log-Gaussian tightness (higher = stricter tempo) | `set cbsstight 8.0` |
-| `beatConfidenceDecay` | 0.98 | Per-frame confidence decay when no beat | `set beatconfdecay 0.98` |
-| `tempoSnapThreshold` | 0.15 | BPM change ratio to snap vs smooth | `set temposnap 0.15` |
+| Parameter | Serial Name | Default | Range | Description |
+|-----------|-------------|---------|-------|-------------|
+| `pllKp` | `pllkp` | 0.15 | 0.0-0.5 | Proportional gain (phase correction speed) |
+| `pllKi` | `pllki` | 0.005 | 0.0-0.05 | Integral gain (tempo adaptation speed) |
 
-### Tempo Prior Parameters
+### Rhythm Activation
 
-| Parameter | Default | Description | SerialConsole Command |
-|-----------|---------|-------------|----------------------|
-| `tempoPriorCenter` | 120 | Center of Gaussian prior (BPM) | `set tempoprior_center 120` |
-| `tempoPriorWidth` | 40 | Width (sigma) of prior | `set tempoprior_width 40` |
-| `tempoPriorStrength` | 0.3 | Blend: 0=no prior, 1=full prior | `set tempoprior_strength 0.3` |
-| `tempoPriorEnabled` | true | Enable tempo prior weighting | `set tempoprior_enabled 1` |
+| Parameter | Serial Name | Default | Range | Description |
+|-----------|-------------|---------|-------|-------------|
+| `activationThreshold` | `activationthreshold` | 0.3 | 0.0-1.0 | Min periodicity to activate rhythm mode |
+| `odfGateThreshold` | `odfgate` | 0.25 | 0.0-0.5 | NN output floor gate (suppress noise) |
 
-### Octave Disambiguation Parameters (v32)
+### Pulse/Energy Modulation
 
-| Parameter | Default | Description | SerialConsole Command |
-|-----------|---------|-------------|----------------------|
-| `odfMeanSubEnabled` | false | ODF mean subtraction before ACF (disabled: raw ODF +70% F1) | `set odfmeansub 0` |
-| `adaptiveOdfThresh` | false | Local-mean ODF threshold (BTrack-style, marginal benefit) | `set adaptodf 0` |
-| `densityOctaveEnabled` | true | Onset-density octave penalty in Bayesian posterior | `set densityoctave 1` |
-| `densityMinPerBeat` | 0.5 | Min plausible transients per beat | `set densityminpb 0.5` |
-| `densityMaxPerBeat` | 5.0 | Max plausible transients per beat | `set densitymaxpb 5.0` |
-| `octaveCheckEnabled` | true | Shadow CBSS octave checker (T vs T/2 comparison) | `set octavecheck 1` |
-| `octaveCheckBeats` | 2 | Check octave every N beats | `set octavecheckbeats 2` |
-| `octaveScoreRatio` | 1.3 | T/2 must score this much better to switch | `set octavescoreratio 1.3` |
+| Parameter | Serial Name | Default | Range | Description |
+|-----------|-------------|---------|-------|-------------|
+| `pulseBoostOnBeat` | `pulseboost` | 1.3 | 1.0-3.0 | Pulse boost factor near beat |
+| `pulseSuppressOffBeat` | `pulsesuppress` | 0.6 | 0.0-1.0 | Pulse suppress factor off-beat |
+| `energyBoostOnBeat` | `energyboost` | 0.3 | 0.0-1.0 | Energy boost near predicted beats |
+
+### Other
+
+| Parameter | Serial Name | Default | Description |
+|-----------|-------------|---------|-------------|
+| `acfPeriodMs` | N/A (code constant) | 150 | Autocorrelation update interval (ms) |
+| `nnProfile` | `nnprofile` | off | Enable NN inference profiling output |
 
 ---
 
-## Detection: FrameBeatNN (Conv1D W64, Deployed)
+## Onset Detection: FrameBeatNN (Conv1D W16, Deployed)
 
-### Current: Single Conv1D Model
+### Current: Single Conv1D Onset Model
 
-`FrameBeatNN` is the primary ODF source. It processes a sliding window of raw mel frames (64 frames × 26 bands) every spectral frame. Produces two outputs: **beat activation** (ODF for CBSS, after information gate) and **downbeat activation** (drives `AudioControl.downbeat`). Follows the same paradigm as all leading beat trackers (BeatNet, Beat This!, madmom) — frame-level NN activation → post-processing. Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
+`FrameBeatNN` detects acoustic onsets (kicks, snares) from mel spectrograms. Trained on beat-position labels, but with a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output.
 
-**Architecture:** Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1) with Beat This! sum head (downbeat output structurally constrained ≤ beat output). 15.1 KB INT8 (per-tensor quantization). Arena: 7340/32768 bytes. Window buffer: 64×26×4 = 6.7 KB.
+The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and PLL phase refinement). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
-**Performance:** Beat F1=0.480, DB F1=0.160 (offline eval). 27ms inference measured on Cortex-M4F @ 64 MHz.
+**Architecture:** Conv1D onset-only model. 13.4 KB INT8 (per-tensor quantization). Single output channel (onset activation). Arena: 3404 bytes of 32768 allocated.
 
-### ODF Information Gate
+**Performance:** 6.8ms inference on Cortex-M4F @ 64 MHz (nRF52840), 5.8ms on ESP32-S3.
 
-The NN beat activation passes through an information gate before entering the CBSS pipeline. When NN output is weak (low confidence), the gate suppresses the ODF signal to prevent noise-driven false beats. This improves CBSS tracking during silence and ambient passages.
+**Fallback:** If the model fails to load, `mic_.getLevel()` serves as a simple energy-based onset signal.
+
+### Onset Information Gate
+
+The NN onset activation passes through an information gate before use in PLL correction and pulse detection. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false PLL corrections. This improves phase stability during silence and ambient passages.
+
+### Spectral Flux (BPM Signal)
+
+BPM estimation uses half-wave rectified spectral flux from `SharedSpectralAnalysis::getSpectralFlux()`. This is the sum of positive magnitude changes across all FFT bins (skip DC). It peaks at broadband transients and is zero during sustain — providing a clean periodic signal for ACF tempo estimation without NN dependency. Computed from compressed+whitened magnitudes every spectral frame.
 
 ### Pulse Detection
 
-Pulse detection (for visual spark effects) is derived from the ODF signal directly in AudioController. Uses floor-tracking baseline detection with tempo-adaptive cooldown (min 40ms, max 150ms). The floor-tracking baseline adapts slowly downward, providing better sensitivity than the previous running-mean threshold approach.
+Pulse detection (for visual spark effects) is derived from the raw ODF signal (before the information gate, so transient sensitivity is unaffected). Uses floor-tracking baseline detection:
+- **Baseline tracking**: Slow rise (alpha=0.005), fast drop (alpha=0.05) -- peaks don't inflate baseline, but floor drops are caught quickly.
+- **Threshold**: ODF must exceed baseline * 2.0 and mic level must exceed 0.03.
+- **Cooldown**: Tempo-adaptive, shorter at faster tempos (40ms at 200 BPM, 150ms at 60 BPM).
+- **Beat modulation**: When rhythm is active, on-beat pulses are boosted and off-beat pulses are suppressed.
 
 ### Energy Synthesis
 
 Energy output is a hybrid blend of three sources:
-- **Mic level**: Raw microphone amplitude (broadband)
-- **Bass mel energy**: Low-frequency mel bands (kick drum emphasis)
-- **ODF peak-hold**: Peak NN activation with slow decay
+- **Mic level** (30%): Raw microphone amplitude (broadband)
+- **Bass mel energy** (30%): Low-frequency mel bands 1-6 (kick drum emphasis)
+- **ODF peak-hold** (40%): Peak NN activation with ~100ms exponential decay
 
-This hybrid approach provides richer energy information than mic level alone, giving generators better audio reactivity.
+Beat-proximity boost is applied when rhythm is active: energy is increased near predicted beats by up to `energyBoostOnBeat` * `rhythmStrength`.
 
-**Previous approaches (REMOVED):** BandFlux Solo detector (removed v67, ~2600 lines), EnsembleDetector/EnsembleFusion/BassSpectralAnalysis. Mel-spectrogram CNN (v4-v9, 79-98ms, too slow), beat-synchronous hybrid (circular dependency, no discriminative signal), dual-model architecture (abandoned Mar 16, every published system uses single joint model). See `IMPROVEMENT_PLAN.md` Closed Investigations.
+**Previous approaches (REMOVED):** BandFlux Solo detector (removed v67, ~2600 lines), EnsembleDetector/EnsembleFusion/BassSpectralAnalysis. Mel-spectrogram CNN (v4-v9, 79-98ms, too slow). See `IMPROVEMENT_PLAN.md` Closed Investigations.
+
+---
+
+## ESP32-S3 Platform Notes
+
+### JTAG Pin Conflict (Esp32PdmMic)
+
+On XIAO ESP32-S3 Sense, the PDM microphone is wired to GPIO42 (CLK) and GPIO41 (DATA). These are also JTAG strap pins (MTMS and MTDI). When compiled with `USBMode=hwcdc` (required for serial on ESP32 core 3.3.7+), the `USB_SERIAL_JTAG` peripheral can claim these pins via IO_MUX during boot. The I2S driver's `gpio_set_direction()` silently fails to override the JTAG mux, so `i2s_channel_read()` returns zero bytes -- the mic appears dead while `begin()` returns true.
+
+**Fix:** `Esp32PdmMic::begin()` calls `gpio_reset_pin()` on GPIO42 and GPIO41 before I2S initialization. This disconnects the pins from the JTAG peripheral, resets them to GPIO function, and allows the I2S PDM driver to claim them. A verification read (500ms timeout) confirms data is flowing before returning success.
+
+### Software Gain
+
+ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linear multiplier to PCM samples in `poll()`. The firmware uses a fixed gain of 30 (vs nRF52840's hardware gain of 32).
 
 ---
 
 ## Resource Usage
 
-| Component | RAM | CPU @ 64 MHz | Notes |
-|-----------|-----|-------------|-------|
-| AdaptiveMic + FFT | ~4 KB | ~4% | Fixed gain + window/range normalization |
-| OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ 60 Hz |
-| ODF Linear Buffer (360 floats) | 1.4 KB | - | Linearized OSS for ACF (v32) |
-| CBSS Buffer (360 floats) | 1.4 KB | - | Cumulative beat strength |
-| Autocorrelation buffer | 0.8 KB | - | Correlation storage |
-| CombFilterBank (20 filters) | ~5.3 KB | ~1% | Tempo validation (20 bins, 60-198 BPM) |
-| Autocorrelation (250ms) | - | ~3% | Amortized |
-| FrameBeatNN (Conv1D W64) | 7340 bytes arena + 6.7 KB mel buffer | 27ms/frame | Conv1D at 62.5 Hz, 15.1 KB INT8 model |
-| **Total** | **~20 KB globals + 32 KB arena** | **~40-45%** | Inference dominates |
+| Component | RAM | CPU Time | Notes |
+|-----------|-----|----------|-------|
+| AdaptiveMic + FFT + spectral flux | ~4 KB + 4 bytes | ~2ms/frame | Fixed gain + window/range normalization. Spectral flux: 1 float (negligible). |
+| FrameBeatNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
+| OSS Buffer (360 floats) | 1.4 KB | - | ~5.5 seconds @ ~66 Hz, circular. Fed by spectral flux. |
+| ACF computation | ~1.1 KB stack | ~2ms every 150ms | Linearized buffer + correlation |
+| CombFilterBank (20 filters) | ~5.3 KB | ~1ms/frame | 20 x 66 delay line = 5,280 bytes + state |
+| PLL + pulse + output | negligible | <0.1ms/frame | Simple arithmetic |
+| **Total audio budget** | **~13 KB + 32 KB arena** | **~14ms/frame** | Well under 16.7ms frame budget (60 fps) |
+
+**Compared to AudioController (v4, removed):**
+- RAM: ~13 KB vs ~20 KB (saved ~7 KB, mainly from smaller NN window buffer)
+- Code: ~400 lines vs ~2100 lines
+- Parameters: ~10 vs ~56
+- Inference: 6.8ms vs 27ms (W16 vs W64 model)
 
 ---
 
 ## Files
 
 **Core Audio System:**
-- `blinky-things/audio/AudioController.h` - Main controller class + CBSS structures
-- `blinky-things/audio/AudioController.cpp` - Implementation (autocorrelation, CBSS, beat detection)
-- `blinky-things/audio/AudioControl.h` - Output struct definition
-- `blinky-things/audio/SharedSpectralAnalysis.h` - FFT → compressor → whitening → mel bands (owned by AudioController since v67)
-- `blinky-things/audio/FrameBeatNN.h` - TFLite Micro NN beat/downbeat activation
+- `blinky-things/audio/AudioTracker.h` - Main tracker class: ACF + Comb + PLL (~10 tunable params)
+- `blinky-things/audio/AudioTracker.cpp` - Implementation (autocorrelation, PLL, pulse detection, output synthesis)
+- `blinky-things/audio/AudioControl.h` - Output struct definition (7 fields)
+- `blinky-things/audio/CombFilterBank.h` - Comb filter bank header (20 parallel IIR resonators)
+- `blinky-things/audio/CombFilterBank.cpp` - Comb filter bank implementation (Scheirer 1998)
+- `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
+- `blinky-things/audio/FrameBeatNN.h` - TFLite Micro NN onset activation (single Conv1D model)
 - `blinky-things/audio/frame_beat_model_data.h` - INT8 TFLite model weights
 
 **Input Processing:**
-- `blinky-things/inputs/AdaptiveMic.h` - Microphone processing
+- `blinky-things/inputs/AdaptiveMic.h` - Microphone processing (fixed hardware gain)
 - `blinky-things/inputs/SerialConsole.h` - Command interface
-- `blinky-things/inputs/SerialConsole.cpp` - handleBeatTrackingCommand()
+- `blinky-things/inputs/SerialConsole.cpp` - `registerTrackerSettings()`, `handleBeatTrackingCommand()`
+
+**Platform HAL:**
+- `blinky-things/hal/hardware/Esp32PdmMic.h` - ESP32-S3 PDM mic with JTAG pin conflict fix
+- `blinky-things/hal/hardware/Esp32PdmMic.cpp` - `gpio_reset_pin()` fix, software gain, I2S PDM-RX driver
 
 ---
 
@@ -280,10 +340,11 @@ This hybrid approach provides richer energy information than mic level alone, gi
 
 **Beat Tracker Inspection:**
 ```bash
-show beat           # Show CBSS beat tracker state
+show beat           # Show AudioTracker state (BPM, phase, periodicity, comb bank)
 audio               # Show overall audio status + BPM
 json beat           # JSON output of beat tracker state
 json rhythm         # JSON output of rhythm tracking state
+show nn             # Show NN model diagnostics (arena, window, inference time)
 ```
 
 **Debug Control:**
@@ -301,3 +362,4 @@ debug all off       # Disable all debug output
 - `docs/AUDIO-TUNING-GUIDE.md` - Parameter tuning instructions
 - `blinky-test-player/PARAMETER_TUNING_HISTORY.md` - Calibration test results
 - `docs/GENERATOR_EFFECT_ARCHITECTURE.md` - Generator design patterns
+- `docs/VISUALIZER_GOALS.md` - Design philosophy (visual quality over metrics)

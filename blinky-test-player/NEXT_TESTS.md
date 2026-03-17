@@ -3,26 +3,24 @@
 > **See Also:** [docs/AUDIO-TUNING-GUIDE.md](../docs/AUDIO-TUNING-GUIDE.md) for comprehensive testing documentation.
 > **History:** [PARAMETER_TUNING_HISTORY.md](./PARAMETER_TUNING_HISTORY.md) for all calibration results.
 
-**Last Updated:** March 15, 2026 (dual-model training in progress, consensus_v5 labels)
+**Last Updated:** March 17, 2026 (AudioTracker + Conv1D W16 onset-only deployed, AudioController deleted)
 
-## Current Config (v70, SETTINGS_VERSION 70)
+## Current Config (v75, SETTINGS_VERSION 73)
 
-**ODF source (deployed):** Single FrameBeatNN FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s), cal63.
-- Beat + downbeat activation, deployed on all 3 devices.
-- BandFlux/EnsembleDetector fully removed (v67).
+**Onset detection (deployed):** Conv1D W16 onset-only model, ~13 KB INT8, ~7ms inference, single-channel onset activation. Detects acoustic onsets (kicks/snares) — drives visual pulse + PLL phase refinement. Cannot distinguish on-beat from off-beat onsets.
+- Deployed on all 7 devices (3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local).
+- Supersedes W64 Conv1D (27ms, 15.1 KB) and FC W32 (56.8 KB). Dual-model (OnsetNN + RhythmNN) abandoned.
+- BandFlux/EnsembleDetector fully removed (v67). AudioController deleted (v74).
 
-**ODF source (in progress):** Dual-model architecture training on consensus_v5 + cal63:
-- **OnsetNN**: Conv1D W8 (128ms), ~4 KB INT8, <1ms, every frame → onset detection (kicks/snares)
-- **RhythmNN**: Conv1D+Pool W192 (3.07s), ~16 KB INT8, <8ms, every 4th frame → beat + downbeat
-- W192 FC was attempted but regressed (F1=0.370 vs 0.491) — FC flattening destroys temporal locality.
+**BPM estimation:** Spectral flux (HWR, NN-independent) → contrast^2 → OSS buffer → ACF + comb bank validation.
 
-**Beat tracking:** CBSS with Bayesian tempo fusion
-- bayesacf=0.8, bayescomb=0.7, bayesft=0, bayesioi=0
-- cbssthresh=1.0, cbssTightness=8.0, cbsscontrast=2.0 (v66, A/B tested 10-6 win)
-- beatoffset=5, onsetSnapWindow=8
-- densityoctave=1, octavecheck=1 (v32 octave disambiguation)
-- odfmeansub=0 (v32 -- raw ODF preserves ACF structure)
-- pll=1, pllkp=0.15, pllki=0.005 (v45 PLL phase correction)
+**Beat tracking:** AudioTracker (spectral flux → ACF + Comb filter bank + PLL)
+- ~10 parameters (vs ~56 in deleted AudioController)
+- pllkp=0.15, pllki=0.005 (PLL phase correction)
+- rayleighBpm=140 (Rayleigh prior peak)
+- combFeedback=0.92 (comb bank IIR resonance)
+- acfPeriodMs=150 (ACF recomputation interval)
+- tempoSmoothing=0.85 (BPM EMA)
 
 ## SOTA Context (March 2026)
 
@@ -35,9 +33,9 @@ Best online/causal beat tracking systems on standard benchmarks (line-in audio):
 | Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+| **Blinky (ours)** | 2026 | **~28%** | Conv1D W16 ODF + ACF/Comb/PLL (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in ODF quality, not the beat tracking backend. The NN ODF is the biggest lever for improvement.
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in tempo estimation signal quality, not the beat tracking backend. BPM now uses spectral flux (decoupled from NN). NN onset quality still matters for visual pulse and PLL phase refinement. AudioTracker (spectral flux → ACF+Comb+PLL) replaces CBSS with a simpler, faster backend (~10 params vs ~56).
 
 **Reference tempo resolutions:** madmom uses 82 lag-domain bins (~2.4 BPM at 120 BPM), BTrack uses 41 bins (2 BPM steps), BeatNet uses 300 discrete levels. Our 20 bins (11.5 BPM at 130 BPM) is far coarser than any reference system.
 
@@ -60,43 +58,11 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0, 6 steps) and `cbsscontrast` (1.0-3.0, 5 steps) on all 3 devices with cal63 ODF. Neither parameter showed significant improvement over current defaults. cbssthresh: mean error 10.1-11.4 (current 1.0 ≈ 11.0). cbsscontrast: mean error 8.9-11.2 (current 2.0 ≈ 10.8). Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) are self-compensating as expected. **No changes needed.**
 
-3. **~135 BPM gravity well** — Multi-factorial. Not improved by CBSS parameter tuning. Not a tempo bin resolution issue (47 bins tested v61, full-res ACF already evaluates all lags). Likely requires better NN ODF or Rayleigh prior adjustment.
+3. **~135 BPM gravity well** — Multi-factorial. Not improved by CBSS parameter tuning. Not a tempo bin resolution issue (47 bins tested v61, full-res ACF already evaluates all lags). Likely requires Rayleigh prior adjustment or improved spectral flux conditioning.
 
 4. **Phase alignment** — correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. Sharper NN activations help.
 
 5. **Downbeat label ceiling** — Consensus v3 AND-merge improved label quality (65% noisy single-system labels removed), but inter-annotator agreement remains the ceiling. Offline DB F1=0.24. On-device downbeat activations are now functional with cal63 (max 0.37-0.57).
-
-## Priority 1: W64 Model Evaluation
-
-**Status: TRAINING IN PROGRESS (March 13, 2026)**
-
-64-frame window FC model (1024ms context, ~2 beats at 120 BPM). FC(1664→64→32→2), 109K params, ~106 KB INT8, ~400µs estimated inference. Expected to improve downbeat detection via longer context. Training ~60 epochs (~6 min/epoch, epoch 16/60 at time of writing).
-
-**When training completes:**
-1. Evaluate offline (beat/downbeat F1 on EDM test tracks)
-2. Export to TFLite INT8
-3. Deploy to one device, compare activations vs cal63 (32-frame)
-4. Full on-device A/B test if offline metrics are promising
-
-## ~~Priority 2: CBSS Parameter Re-Tuning~~ — DONE (No Change)
-
-**Swept March 13, 2026.** Both `cbssthresh` and `cbsscontrast` tested on all 3 devices (cal63 firmware) across 18 tracks.
-
-cbssthresh (0.5, 0.8, 1.1, 1.4, 1.7, 2.0): Mean err range 10.1-11.4, octave errs 11-13/18. Marginal differences. cbsscontrast (1.0, 1.5, 2.0, 2.5, 3.0): Mean err range 8.9-11.2, octave errs 11-13/18. No clear winner. Current defaults (cbssthresh=1.0, cbsscontrast=2.0) retained.
-
-## ~~Priority 3: Conv1D Wide Model Evaluation~~ — DONE
-
-**Evaluated March 12**: Beat F1=0.500, DB F1=0.217. 24K params, ~24 KB INT8. Nearly matches FC (0.491) at half the model size but ~10.8ms inference (vs ~3ms FC). Superseded by w64 investigation.
-
-## ~~Priority 3: BandFlux Removal~~ — COMPLETED (v67)
-
-Removed in v67 (March 12, 2026). 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved.
-
-## ~~Priority 2: CBSS ODF Contrast~~ — COMPLETED (v66)
-
-**Status: COMPLETED — cbssContrast=2.0 is now the default**
-
-A/B tested cbssContrast=1.0 vs 2.0 (BTrack-style ODF squaring): 10 wins, 6 losses, 2 ties across 3 devices × 18 tracks. Mean BPM error 12.4 vs 12.6. Octave errors 9 vs 9 (unchanged). Default updated to 2.0 in v66.
 
 ## Future: Heydari 1D State Space
 
@@ -113,32 +79,14 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 - **Template+subbeat** (v50): No net benefit (baseline 10 wins, subbeat 8). **Removed from firmware in v64.**
 - **Adaptive tightness, Percival harmonic, bidirectional snap, HMM, particle filter, PLP phase** — all removed as dead code in v64.
 
-## Completed (v50-v64, March 2026)
-
-- v50: Rhythmic pattern templates + subbeat alternation (A/B tested, default OFF)
-- v54: NN beat activation CNN (v2 model, 5L ch32, 33.3 KB INT8)
-- v55: v4 NN model (+36.6% vs v2), full augmentation + mic profile
-- v56: Spectral noise subtraction (A/B tested, hurts -- default OFF)
-- v56: AGC ceiling lowered 60->40, conservative AGC params
-- v57: Forward filter (Krebs/Bock/Widmer 2015, ~860 states, A/B tested -- severe half-time)
-- v58: Hybrid phase tracker (fwdphase=1), NN beat default ON
-- v59: Forward filter Bayesian bias + asymmetric obs model
-- v60: Full 6-parameter sweep of forward filter -- optimized but still 7/18 octave (vs CBSS 4/18). OFF.
-- v61: Tempo bins 20→47 -- tested, no improvement. Reverted to 20 bins.
-- v62: Firmware simplification (removed 6 disabled detectors, -19.5 KB flash, -5.4 KB RAM)
-- v62: v2 consensus labels, training pipeline fixes (binary targets, time-stretch, test exclusion)
-- v64: Dead code removal (forward filter, noise estimation, HMM, particle filter, PLP, adaptive tightness, percival, bisnap, template/subbeat checks, etc.). ConfigStorage 408->296 bytes.
-- v5: Focal loss training -- identical to v4, no benefit
-- v66: cbssContrast=2.0 default (A/B tested 10 wins, 6 losses, 2 ties vs 1.0. Mean error 12.4 vs 12.6)
-
 ## Known Limitations
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Improved NN ODF may help (training) |
+| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Rayleigh prior tuning, spectral flux conditioning |
 | NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | Fixed in v6+; v9 DS-TCN in progress |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | Open research question |
-| Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs for reliable evaluation | -- |
+| Phase alignment limits F1 | PLL tracks phase via onset-gated correction | **High** | PLL Kp/Ki tuning |
+| Run-to-run variance | Room acoustics, ambient noise | Requires 5+ runs for reliable evaluation | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** -- acceptable for visuals | -- |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** -- organic mode is correct | -- |
 | trap-electro low F1 | Syncopated kicks challenge causal tracking | **Low** -- energy-reactive acceptable | -- |

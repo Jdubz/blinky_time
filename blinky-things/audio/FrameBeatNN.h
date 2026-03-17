@@ -1,15 +1,26 @@
 #pragma once
 
 // ============================================================================
-// FrameBeatNN — Single-model TFLite Micro inference for beat/downbeat detection
+// FrameBeatNN — Single-model TFLite Micro inference for onset detection
 // ============================================================================
 //
-// One Conv1D model with multi-task output:
-//   ch0: beat activation    — used as ODF for CBSS beat tracking
-//   ch1: downbeat activation — drives AudioControl.downbeat + beatInMeasure
+// Detects acoustic onsets (kicks, snares) from mel spectrograms.
+// Trained on beat-position labels, but with a 144ms receptive field
+// (Conv1D W16, k=5×2) it can only detect local transients — it cannot
+// distinguish on-beat from off-beat onsets.
+//
+// Current model: Conv1D W16, single output channel (onset activation).
+// Supports up to 4 output channels for future multi-task models.
+//
+// Output is used for:
+//   - Visual pulse detection (sparks, flashes on kicks/snares)
+//   - PLL phase refinement (onset-gated correction near expected beats)
+//   - Energy synthesis (ODF peak-hold blend)
+//
+// NOT used for BPM estimation — spectral flux drives ACF/comb tempo instead.
 //
 // Consumes raw mel bands from SharedSpectralAnalysis::getRawMelBands().
-// Falls back to mic energy as ODF if model fails to load.
+// Falls back to mic energy if model fails to load.
 //
 // ============================================================================
 

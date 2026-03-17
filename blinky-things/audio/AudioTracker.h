@@ -26,19 +26,24 @@ struct FrameBeatNN {
 #include "../hal/interfaces/ISystemTime.h"
 
 /**
- * AudioTracker - Simplified audio analysis with PLL phase tracking
+ * AudioTracker - Audio analysis with decoupled tempo/onset architecture
  *
  * Replaces AudioController's 2162-line CBSS system with a ~400-line
- * ACF + Comb + PLL architecture.
+ * ACF + Comb + PLL architecture with decoupled signal paths:
  *
- * Architecture:
- *   PDM Microphone → AdaptiveMic → SharedSpectralAnalysis → FrameBeatNN (W64, 27ms)
- *       → onset activation → OSS buffer → ACF (tempo) + Comb bank (validation)
- *       → PLL (smooth phase ramp) → AudioControl output
+ *   BPM path:  SharedSpectralAnalysis → spectral flux → OSS buffer
+ *                → ACF (tempo) + Comb bank (validation) → BPM estimate
  *
- * Key design: PLL free-runs at estimated BPM, producing a perfectly smooth
- * phase ramp. Only corrected when strong onsets align with expected beat.
- * No CBSS, no Bayesian fusion, no predict/countdown, no onset snap.
+ *   Onset path: SharedSpectralAnalysis → FrameBeatNN (Conv1D W16, ~7ms)
+ *                → onset activation → pulse detection (visual sparks)
+ *                → PLL phase refinement (onset-gated correction)
+ *
+ *   Phase path: PLL free-running sawtooth at BPM → smooth phase ramp
+ *
+ * Key design: BPM estimation uses spectral flux (NN-independent), not NN
+ * onset activation. The NN detects acoustic onsets (kicks/snares) which
+ * drive visual pulse and refine PLL phase, but cannot distinguish on-beat
+ * from off-beat onsets — so it must not drive tempo estimation.
  *
  * ~10 tunable parameters (vs ~56 in AudioController).
  */
@@ -121,7 +126,7 @@ private:
     bool nnActive_ = false;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 
-    // === OSS buffer (6 seconds @ ~66 Hz) ===
+    // === OSS buffer (~5.5 seconds: 360 samples @ ~66 Hz) ===
     static constexpr int OSS_BUFFER_SIZE = 360;
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;

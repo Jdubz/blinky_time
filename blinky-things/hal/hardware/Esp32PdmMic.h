@@ -10,16 +10,23 @@
  *
  * Uses the raw ESP-IDF I2S PDM-RX driver (not the Arduino ESP_I2S wrapper).
  *
- * Gain: The ESP32-S3 I2S PDM-RX hardware has no accessible gain register
- * (amplify_num, sd_scale, hp_scale are all absent from its slot config struct —
- * those fields exist only on other ESP32 variants). setGain() applies a software
- * linear multiplier to the PCM samples in poll(), covering the full AGC range.
- * This does NOT improve SNR — it is post-decimation amplitude scaling only.
+ * IMPORTANT — two ESP32-S3-specific issues handled in this driver:
+ *
+ *   1. JTAG pin conflict: GPIO42 (PDM CLK) = MTMS, GPIO41 (PDM DATA) = MTDI.
+ *      When compiled with USBMode=hwcdc (required for serial on ESP32 core
+ *      3.3.7+), the USB_SERIAL_JTAG peripheral may claim these pins at boot.
+ *      begin() calls gpio_reset_pin() to release them before I2S init.
+ *
+ *   2. Partial DMA reads: ESP-IDF i2s_channel_read() returns ESP_ERR_TIMEOUT
+ *      when the full requested size isn't read before timeout, but bytesRead
+ *      can be >0 (partial DMA buffer). poll() checks only bytesRead, not err.
+ *
+ * Gain: No hardware PDM gain register on ESP32-S3. setGain() applies a software
+ * linear multiplier to PCM samples in poll(). Does NOT improve SNR.
  *
  * Polling model (vs nRF52 interrupt model):
  *   poll() is called once per frame from AdaptiveMic::update(). It drains
- *   the I2S DMA ring buffer and fires the stored callback, keeping the rest
- *   of the AdaptiveMic pipeline unchanged.
+ *   the I2S DMA ring buffer and fires the stored callback.
  *
  * Hardware: MSM381ACT PDM mic, CLK=GPIO42, DATA=GPIO41
  */
