@@ -126,7 +126,6 @@ private:
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};
-    uint32_t ossTimestamps_[OSS_BUFFER_SIZE] = {0};
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 

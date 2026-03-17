@@ -161,7 +161,6 @@ const AudioControl& AudioTracker::update(float dt) {
 
 void AudioTracker::addOssSample(float odf) {
     ossBuffer_[ossWriteIdx_] = odf;
-    ossTimestamps_[ossWriteIdx_] = time_.millis();
     ossWriteIdx_ = (ossWriteIdx_ + 1) % OSS_BUFFER_SIZE;
     if (ossCount_ < OSS_BUFFER_SIZE) ossCount_++;
 }
@@ -171,8 +170,8 @@ void AudioTracker::addOssSample(float odf) {
 // ============================================================================
 
 void AudioTracker::runAutocorrelation() {
-    // Linearize circular OSS buffer
-    float ossLinear[OSS_BUFFER_SIZE];
+    // Linearize circular OSS buffer (static: avoid 1.4 KB on stack per call)
+    static float ossLinear[OSS_BUFFER_SIZE];
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
         ossLinear[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];

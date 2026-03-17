@@ -11,8 +11,6 @@
  * Key improvements over single comb filter:
  * - Independent tempo detection (doesn't follow autocorrelation)
  * - Proper Scheirer (1998) equation: y[n] = (1-α)·x[n] + α·y[n-L]
- * - Complex phase extraction (not peak detection)
- * - Tempo prior weighting to reduce half-time/double-time confusion
  *
  * Memory: ~5.3 KB total (resonatorDelay_[20][66] = 5,280 bytes + state)
  * CPU: ~2% (20 filters × simple math, phase every 4 frames)
@@ -61,12 +59,6 @@ public:
     float getPeakConfidence() const { return peakConfidence_; }
 
     /**
-     * Get phase at detected tempo (0-1)
-     * Extracted via complex exponential (Fourier method)
-     */
-    float getPhaseAtPeak() const { return peakPhase_; }
-
-    /**
      * Get peak filter index (for debugging)
      */
     int getPeakFilterIndex() const { return peakFilterIdx_; }
@@ -105,15 +97,7 @@ private:
     // Results
     float peakBPM_ = 120.0f;
     float peakConfidence_ = 0.0f;
-    float peakPhase_ = 0.0f;
     int peakFilterIdx_ = NUM_FILTERS / 2;  // Middle filter (approx 120 BPM)
-
-    // Resonator history at peak filter for phase extraction
-    float resonatorHistory_[MAX_LAG] = {0};
-    int historyIdx_ = 0;
-
-    // Frame counter for phase extraction throttling
-    int frameCount_ = 0;
 
     // Frame rate for BPM calculations
     float frameRate_ = 60.0f;
@@ -121,9 +105,4 @@ private:
     // Initialization flag
     bool initialized_ = false;
 
-    /**
-     * Extract phase using complex exponential (Fourier method)
-     * Called every 4 frames to save CPU
-     */
-    void extractPhase();
 };

@@ -23,11 +23,7 @@ void CombFilterBank::reset() {
             resonatorDelay_[i][j] = 0.0f;
         }
     }
-    for (int i = 0; i < MAX_LAG; i++) {
-        resonatorHistory_[i] = 0.0f;
-    }
     writeIdx_ = 0;
-    historyIdx_ = 0;
 
     // Clear resonator state
     for (int i = 0; i < NUM_FILTERS; i++) {
@@ -38,9 +34,7 @@ void CombFilterBank::reset() {
     // Reset results
     peakBPM_ = 120.0f;
     peakConfidence_ = 0.0f;
-    peakPhase_ = 0.0f;
     peakFilterIdx_ = NUM_FILTERS / 2;  // Start near middle (120 BPM)
-    frameCount_ = 0;
 }
 
 void CombFilterBank::process(float input) {
@@ -95,11 +89,7 @@ void CombFilterBank::process(float input) {
     peakFilterIdx_ = bestIdx;
     peakBPM_ = filterBPMs_[bestIdx];
 
-    // 5. Track resonator history at peak filter for phase extraction
-    resonatorHistory_[historyIdx_] = resonatorOutput_[bestIdx];
-    historyIdx_ = (historyIdx_ + 1) % MAX_LAG;
-
-    // 6. Compute confidence (peak-to-mean energy ratio)
+    // 5. Compute confidence (peak-to-mean energy ratio)
     float totalEnergy = 0.0f;
     for (int i = 0; i < NUM_FILTERS; i++) {
         totalEnergy += resonatorEnergy_[i];
@@ -107,54 +97,4 @@ void CombFilterBank::process(float input) {
     float meanEnergy = totalEnergy / NUM_FILTERS;
     float ratio = resonatorEnergy_[bestIdx] / (meanEnergy + 0.001f) - 1.0f;
     peakConfidence_ = ratio > 0.0f ? (ratio > 1.0f ? 1.0f : ratio) : 0.0f;
-
-    // 7. Extract phase every 4 frames to save CPU
-    frameCount_++;
-    if (frameCount_ >= 4) {
-        frameCount_ = 0;
-        extractPhase();
-    }
-}
-
-void CombFilterBank::extractPhase() {
-    int lag = filterLags_[peakFilterIdx_];
-    float omega = 1.0f / static_cast<float>(lag);  // Normalized frequency
-
-    // Complex exponential correlation to extract phase
-    // c = Σ resonator[t] · e^(-j·2π·ω·t)
-    // phase = -angle(c) / 2π
-    float realSum = 0.0f;
-    float imagSum = 0.0f;
-    static constexpr float COMB_TWO_PI = 6.283185307f;
-
-    // Use phasor rotation to avoid per-sample cosf/sinf calls
-    // Initialize phasor at angle=0 (cos=1, sin=0) and rotate by -2π·ω each step
-    float phaseStep = -COMB_TWO_PI * omega;
-    float phasorReal = 1.0f;  // cos(0)
-    float phasorImag = 0.0f;  // sin(0)
-    float rotReal = cosf(phaseStep);
-    float rotImag = sinf(phaseStep);
-
-    for (int i = 0; i < lag; i++) {
-        int idx = (historyIdx_ - 1 - i + MAX_LAG) % MAX_LAG;
-        float sample = resonatorHistory_[idx];
-
-        realSum += sample * phasorReal;
-        imagSum += sample * phasorImag;
-
-        // Rotate phasor: (pR + j·pI) * (rR + j·rI)
-        float newReal = phasorReal * rotReal - phasorImag * rotImag;
-        float newImag = phasorReal * rotImag + phasorImag * rotReal;
-        phasorReal = newReal;
-        phasorImag = newImag;
-    }
-
-    // Compute phase from complex sum
-    float phase = -atan2f(imagSum, realSum) / COMB_TWO_PI;
-
-    // Normalize to [0, 1)
-    if (phase < 0.0f) phase += 1.0f;
-    if (phase >= 1.0f) phase -= 1.0f;
-
-    peakPhase_ = phase;
 }
