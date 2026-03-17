@@ -174,6 +174,38 @@ void SharedSpectralAnalysis::process() {
     // magnitudes. getMagnitudes() returns whitened values after whitenMagnitudes() below.
     computeDerivedFeatures();
 
+    // Compute band-weighted spectral flux from compressed-but-not-whitened magnitudes.
+    // Using compressed (not whitened) magnitudes preserves absolute transient contrast.
+    // Per-bin whitening (running max, 5s decay) would normalize away the peaks
+    // that ACF needs for periodicity detection.
+    //
+    // Band weighting emphasizes rhythmically important frequencies:
+    //   Bass (bins 1-6, 62-375 Hz): kicks — strongest periodic signal
+    //   High (bins 33-128, 2-8 kHz): snares, hi-hats — transient markers
+    //   Mid (bins 7-32, 437-2000 Hz): vocals, pads — less rhythmic
+    if (hasPrevFrame_) {
+        float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
+        for (int i = SpectralConstants::BASS_MIN_BIN; i <= SpectralConstants::BASS_MAX_BIN; i++) {
+            float diff = magnitudes_[i] - prevMagnitudes_[i];
+            if (diff > 0.0f) bassFlux += diff;
+        }
+        for (int i = SpectralConstants::MID_MIN_BIN; i <= SpectralConstants::MID_MAX_BIN; i++) {
+            float diff = magnitudes_[i] - prevMagnitudes_[i];
+            if (diff > 0.0f) midFlux += diff;
+        }
+        for (int i = SpectralConstants::HIGH_MIN_BIN; i < SpectralConstants::NUM_BINS; i++) {
+            float diff = magnitudes_[i] - prevMagnitudes_[i];
+            if (diff > 0.0f) highFlux += diff;
+        }
+        spectralFlux_ = 0.5f * bassFlux + 0.2f * midFlux + 0.3f * highFlux;
+    } else {
+        spectralFlux_ = 0.0f;
+    }
+
+    // Save compressed magnitudes for next frame's flux computation.
+    // Must happen AFTER flux computation, BEFORE whitenMagnitudes().
+    savePrevCompressedMagnitudes();
+
     // --- Pipeline ordering rationale ---
     // Mel bands are computed BEFORE per-bin whitening, intentionally:
     //   1. Mel bands use compressed-but-not-whitened magnitudes as input
@@ -189,21 +221,6 @@ void SharedSpectralAnalysis::process() {
     computeMelBands();
     whitenMelBands();
     whitenMagnitudes();
-
-    // Compute half-wave rectified spectral flux (HWR) from whitened magnitudes.
-    // Only positive magnitude increases count — produces sharp peaks at broadband
-    // transients (kicks, snares), zero during sustain/decay. Used by AudioTracker
-    // as the NN-independent tempo estimation signal for ACF + comb bank.
-    if (hasPrevFrame_) {
-        float flux = 0.0f;
-        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {  // skip DC
-            float diff = magnitudes_[i] - prevMagnitudes_[i];
-            if (diff > 0.0f) flux += diff;
-        }
-        spectralFlux_ = flux;
-    } else {
-        spectralFlux_ = 0.0f;
-    }
 
     // Mark frame as ready
     frameReady_ = true;
@@ -478,16 +495,24 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
 }
 
 void SharedSpectralAnalysis::savePreviousFrame() {
-    // Called at the TOP of process(), before new FFT overwrites magnitudes_.
-    // At this point magnitudes_ still holds the PREVIOUS frame's final state
-    // (compressed + whitened), so prevMagnitudes_ gets the same processing
-    // state as the upcoming frame's magnitudes_ will have after whitenMagnitudes().
-    // This keeps spectral flux computations consistent (both frames whitened).
-    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
-        prevMagnitudes_[i] = magnitudes_[i];
-    }
+    // Called at the TOP of process(), before new FFT overwrites state.
+    // Saves mel bands for mel-domain change detection (whitenMelBands uses these).
+    // NOTE: prevMagnitudes_ is saved separately after applyCompressor() —
+    // see savePrevCompressedMagnitudes(). This gives spectral flux access to
+    // compressed-but-not-whitened magnitudes for sharper transient peaks.
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         prevMelBands_[i] = melBands_[i];
+    }
+}
+
+void SharedSpectralAnalysis::savePrevCompressedMagnitudes() {
+    // Save compressed-but-not-whitened magnitudes for spectral flux computation.
+    // Called AFTER applyCompressor(), BEFORE whitenMagnitudes().
+    // Flux = current_compressed - prev_compressed, so both frames are in the
+    // same domain (compressor-normalized but not whitened). This preserves
+    // absolute transient contrast that per-bin whitening would remove.
+    for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
+        prevMagnitudes_[i] = magnitudes_[i];
     }
 }
 

@@ -335,12 +335,17 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
 
         // Only correct if onset is near expected beat (within ±25% of period)
         if (fabsf(phaseError) < 0.25f) {
+            // Scale correction by onset strength: strong kicks get full
+            // correction, weak onsets get proportionally less. Prevents
+            // marginal transients from pulling phase as much as clear beats.
+            float correctionScale = clampf((odf - 0.1f) / 0.9f, 0.0f, 1.0f);
+
             // Proportional correction: pull phase back toward beat boundary.
             // Negative feedback: subtract error to reduce it.
-            pllPhase_ -= pllKp * phaseError;
+            pllPhase_ -= pllKp * phaseError * correctionScale;
 
             // Integral correction: persistent frequency bias for systematic offset.
-            pllIntegral_ = 0.95f * pllIntegral_ + phaseError;
+            pllIntegral_ = 0.95f * pllIntegral_ + phaseError * correctionScale;
             pllPhase_ -= pllKi * pllIntegral_;
 
             // Keep phase in [0, 1)

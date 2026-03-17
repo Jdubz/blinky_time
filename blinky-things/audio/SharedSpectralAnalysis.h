@@ -302,6 +302,7 @@ private:
     void whitenMelBands();
     void computeDerivedFeatures();
     void savePreviousFrame();
+    void savePrevCompressedMagnitudes();
 
     static bool safeIsFinite(float x) {
         return isfinite(x);
