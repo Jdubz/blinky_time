@@ -10,12 +10,16 @@
  *
  * Uses the raw ESP-IDF I2S PDM-RX driver (not the Arduino ESP_I2S wrapper).
  *
- * IMPORTANT — JTAG pin conflict:
- *   GPIO42 (PDM CLK) = MTMS, GPIO41 (PDM DATA) = MTDI.
- *   When compiled with USBMode=hwcdc (required for serial on ESP32 core 3.3.7+),
- *   the USB_SERIAL_JTAG peripheral may claim these pins at boot. begin() calls
- *   gpio_reset_pin() to release them before I2S init, then verifies data flows
- *   with a blocking read. If verification fails, begin() returns false.
+ * IMPORTANT — two ESP32-S3-specific issues handled in this driver:
+ *
+ *   1. JTAG pin conflict: GPIO42 (PDM CLK) = MTMS, GPIO41 (PDM DATA) = MTDI.
+ *      When compiled with USBMode=hwcdc (required for serial on ESP32 core
+ *      3.3.7+), the USB_SERIAL_JTAG peripheral may claim these pins at boot.
+ *      begin() calls gpio_reset_pin() to release them before I2S init.
+ *
+ *   2. Partial DMA reads: ESP-IDF i2s_channel_read() returns ESP_ERR_TIMEOUT
+ *      when the full requested size isn't read before timeout, but bytesRead
+ *      can be >0 (partial DMA buffer). poll() checks only bytesRead, not err.
  *
  * Gain: No hardware PDM gain register on ESP32-S3. setGain() applies a software
  * linear multiplier to PCM samples in poll(). Does NOT improve SNR.
