@@ -58,8 +58,10 @@ bool Esp32PdmMic::begin(int channels, long sampleRate) {
     // release above didn't work or the mic hardware is absent.
     int16_t verifyBuf[64];
     size_t bytesRead = 0;
-    esp_err_t err = i2s_channel_read(rx_handle, verifyBuf, sizeof(verifyBuf),
-                                      &bytesRead, 500);
+    // Return value intentionally ignored — ESP-IDF returns ESP_ERR_TIMEOUT
+    // for partial reads even when bytesRead > 0. Only bytesRead matters.
+    (void)i2s_channel_read(rx_handle, verifyBuf, sizeof(verifyBuf),
+                           &bytesRead, 500);
     if (bytesRead == 0) {
         i2s_channel_disable(rx_handle);
         i2s_del_channel(rx_handle);
@@ -116,9 +118,11 @@ void Esp32PdmMic::poll() {
     if (!rx_handle) return;
 
     size_t bytesRead = 0;
-    esp_err_t err = i2s_channel_read(rx_handle, staging_,
-                                     STAGING_SIZE * sizeof(int16_t),
-                                     &bytesRead, 1);
+    // Return value intentionally ignored — ESP-IDF returns ESP_ERR_TIMEOUT
+    // for partial reads even when bytesRead > 0. Only bytesRead matters.
+    (void)i2s_channel_read(rx_handle, staging_,
+                           STAGING_SIZE * sizeof(int16_t),
+                           &bytesRead, 1);
 
     // ESP-IDF i2s_channel_read() returns ESP_ERR_TIMEOUT when the requested
     // size wasn't fully read before timeout, but bytesRead may still be >0

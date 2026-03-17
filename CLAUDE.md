@@ -19,7 +19,7 @@ arduino-cli compile --upload --fqbn 'esp32:esp32:XIAO_ESP32S3:USBMode=hwcdc,CDCO
 
 ESP32 core 3.3.7 requires `USBMode=hwcdc` for serial (the default TinyUSB mode has unresolved `HWCDCSerial` linker errors — core bug). This enables the `USB_SERIAL_JTAG` peripheral which may claim GPIO42/41 at boot, silently blocking the PDM microphone.
 
-**Mitigation:** `Esp32PdmMic::begin()` calls `gpio_reset_pin()` on both PDM pins before I2S init, then verifies data flows with a 100ms blocking read. If verification fails, `begin()` returns false and the boot log reports `"Audio controller failed to start"`.
+**Mitigation:** `Esp32PdmMic::begin()` calls `gpio_reset_pin()` on both PDM pins before I2S init, then verifies data flows with a 500ms blocking read. If verification fails, `begin()` returns false and the boot log reports `"Audio controller failed to start"`.
 
 **If the ESP32 core is upgraded**, re-test PDM mic on ESP32-S3. If the TinyUSB linker bug is fixed in a future core version, switch back to the default FQBN (`esp32:esp32:XIAO_ESP32S3`) which avoids the JTAG peripheral entirely.
 
@@ -243,7 +243,7 @@ RenderPipeline → LED Output
 
 3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v75)**
    - `AudioTracker.h/cpp` - Decoupled tempo/onset architecture (~10 params)
-   - **BPM path** (NN-independent): spectral flux → contrast sharpening → OSS buffer (6s @ ~66 Hz) + comb filter bank
+   - **BPM path** (NN-independent): spectral flux → contrast sharpening → OSS buffer (~5.5s, 360 samples @ ~66 Hz) + comb filter bank
      - ACF tempo estimation: Percival harmonic enhancement (2nd+4th harmonics), Rayleigh prior weighting
      - CombFilterBank: 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation
      - Tempo selection: ACF primary, comb bank validates (average when within 10% agreement)
@@ -361,7 +361,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 1. PDM mic samples → AdaptiveMic (fixed gain + window/range normalization)
 2. AdaptiveMic → SharedSpectralAnalysis (FFT-256 → compressor → per-bin whitening → mel bands + spectral flux)
 3. [BPM PATH] Spectral flux (HWR: sum of positive magnitude changes) → contrast²
-4. Contrast-sharpened spectral flux → OSS buffer (6s history @ ~66 Hz) + comb filter bank
+4. Contrast-sharpened spectral flux → OSS buffer (~5.5s, 360 samples @ ~66 Hz) + comb filter bank
 5. ACF every 150ms → Percival harmonic enhancement → Rayleigh-weighted peak → BPM
    Comb filter bank (20 filters) validates independently → average when agreeing within 10%
 6. [ONSET PATH] SharedSpectralAnalysis → FrameBeatNN (16-frame mel window → Conv1D → onset activation)

@@ -126,7 +126,7 @@ private:
     bool nnActive_ = false;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 
-    // === OSS buffer (6 seconds @ ~66 Hz) ===
+    // === OSS buffer (~5.5 seconds: 360 samples @ ~66 Hz) ===
     static constexpr int OSS_BUFFER_SIZE = 360;
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;

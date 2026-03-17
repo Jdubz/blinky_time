@@ -65,7 +65,7 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |    +--- CombFilterBank (20 parallel IIR filters, Scheirer 1998)
       |    |         Independent tempo validation (60-198 BPM)
       |    |
-      |    +--- OSS Buffer (6s @ ~66 Hz, circular)
+      |    +--- OSS Buffer (~5.5s @ ~66 Hz, 360 samples, circular)
       |    |
       |    +--- Autocorrelation (every 150ms)
       |              Percival harmonic enhancement (2nd+4th harmonics)
@@ -117,7 +117,7 @@ Generators (HeatFire, Water, Lightning)
 4. **Spectral Flux**: Half-wave rectified magnitude change from SharedSpectralAnalysis (NN-independent)
 5. **Flux Contrast**: Power-law sharpening (`flux^2.0`) to sharpen transient peaks
 6. **Feed Comb Bank**: 20 parallel IIR comb filters on contrast-sharpened spectral flux
-7. **Buffer OSS**: Store contrast-enhanced spectral flux in 6-second circular buffer
+7. **Buffer OSS**: Store contrast-enhanced spectral flux in ~5.5s circular buffer (360 samples)
 8. **PLL Free-Run**: Advance sawtooth phase by `1/beatPeriodFrames` per frame
 
 **Every 150ms (acfPeriodMs):**
@@ -299,7 +299,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 |-----------|-----|----------|-------|
 | AdaptiveMic + FFT + spectral flux | ~4 KB + 4 bytes | ~2ms/frame | Fixed gain + window/range normalization. Spectral flux: 1 float (negligible). |
 | FrameBeatNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
-| OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ ~66 Hz, circular. Fed by spectral flux. |
+| OSS Buffer (360 floats) | 1.4 KB | - | ~5.5 seconds @ ~66 Hz, circular. Fed by spectral flux. |
 | ACF computation | ~1.1 KB stack | ~2ms every 150ms | Linearized buffer + correlation |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1ms/frame | 20 x 66 delay line = 5,280 bytes + state |
 | PLL + pulse + output | negligible | <0.1ms/frame | Simple arithmetic |

@@ -5,7 +5,7 @@
 
 **Last Updated:** March 17, 2026 (AudioTracker + Conv1D W16 onset-only deployed, AudioController deleted)
 
-## Current Config (v74, SETTINGS_VERSION 74)
+## Current Config (v75, SETTINGS_VERSION 73)
 
 **Onset detection (deployed):** Conv1D W16 onset-only model, ~13 KB INT8, ~7ms inference, single-channel onset activation. Detects acoustic onsets (kicks/snares) — drives visual pulse + PLL phase refinement. Cannot distinguish on-beat from off-beat onsets.
 - Deployed on all 7 devices (3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local).
@@ -64,30 +64,6 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 5. **Downbeat label ceiling** — Consensus v3 AND-merge improved label quality (65% noisy single-system labels removed), but inter-annotator agreement remains the ceiling. Offline DB F1=0.24. On-device downbeat activations are now functional with cal63 (max 0.37-0.57).
 
-## ~~Priority 1: W64 Model Evaluation~~ — SUPERSEDED
-
-W64 Conv1D was deployed (Beat F1=0.480, DB F1=0.160, 15.1 KB INT8, 27ms) but superseded by W16 onset-only model in the AudioTracker architecture pivot. W16 trades longer context for faster inference (~7ms), enabling 60fps. Downbeat detection deferred.
-
-## ~~Priority 2: CBSS Parameter Re-Tuning~~ — DONE (No Change)
-
-**Swept March 13, 2026.** Both `cbssthresh` and `cbsscontrast` tested on all 3 devices (cal63 firmware) across 18 tracks.
-
-cbssthresh (0.5, 0.8, 1.1, 1.4, 1.7, 2.0): Mean err range 10.1-11.4, octave errs 11-13/18. Marginal differences. cbsscontrast (1.0, 1.5, 2.0, 2.5, 3.0): Mean err range 8.9-11.2, octave errs 11-13/18. No clear winner. Current defaults (cbssthresh=1.0, cbsscontrast=2.0) retained.
-
-## ~~Priority 3: Conv1D Wide Model Evaluation~~ — DONE
-
-**Evaluated March 12**: Beat F1=0.500, DB F1=0.217. 24K params, ~24 KB INT8. Nearly matches FC (0.491) at half the model size but ~10.8ms inference (vs ~3ms FC). Superseded by w64 investigation.
-
-## ~~Priority 3: BandFlux Removal~~ — COMPLETED (v67)
-
-Removed in v67 (March 12, 2026). 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved.
-
-## ~~Priority 2: CBSS ODF Contrast~~ — COMPLETED (v66)
-
-**Status: COMPLETED — cbssContrast=2.0 is now the default**
-
-A/B tested cbssContrast=1.0 vs 2.0 (BTrack-style ODF squaring): 10 wins, 6 losses, 2 ties across 3 devices × 18 tracks. Mean BPM error 12.4 vs 12.6. Octave errors 9 vs 9 (unchanged). Default updated to 2.0 in v66.
-
 ## Future: Heydari 1D State Space
 
 **Status: RESEARCH ONLY**
@@ -102,24 +78,6 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 - **Focal loss** (v5): Identical to v4, no benefit.
 - **Template+subbeat** (v50): No net benefit (baseline 10 wins, subbeat 8). **Removed from firmware in v64.**
 - **Adaptive tightness, Percival harmonic, bidirectional snap, HMM, particle filter, PLP phase** — all removed as dead code in v64.
-
-## Completed (v50-v64, March 2026)
-
-- v50: Rhythmic pattern templates + subbeat alternation (A/B tested, default OFF)
-- v54: NN beat activation CNN (v2 model, 5L ch32, 33.3 KB INT8)
-- v55: v4 NN model (+36.6% vs v2), full augmentation + mic profile
-- v56: Spectral noise subtraction (A/B tested, hurts -- default OFF)
-- v56: AGC ceiling lowered 60->40, conservative AGC params
-- v57: Forward filter (Krebs/Bock/Widmer 2015, ~860 states, A/B tested -- severe half-time)
-- v58: Hybrid phase tracker (fwdphase=1), NN beat default ON
-- v59: Forward filter Bayesian bias + asymmetric obs model
-- v60: Full 6-parameter sweep of forward filter -- optimized but still 7/18 octave (vs CBSS 4/18). OFF.
-- v61: Tempo bins 20→47 -- tested, no improvement. Reverted to 20 bins.
-- v62: Firmware simplification (removed 6 disabled detectors, -19.5 KB flash, -5.4 KB RAM)
-- v62: v2 consensus labels, training pipeline fixes (binary targets, time-stretch, test exclusion)
-- v64: Dead code removal (forward filter, noise estimation, HMM, particle filter, PLP, adaptive tightness, percival, bisnap, template/subbeat checks, etc.). ConfigStorage 408->296 bytes.
-- v5: Focal loss training -- identical to v4, no benefit
-- v66: cbssContrast=2.0 default (A/B tested 10 wins, 6 losses, 2 ties vs 1.0. Mean error 12.4 vs 12.6)
 
 ## Known Limitations
 
