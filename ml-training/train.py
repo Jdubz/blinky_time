@@ -151,6 +151,46 @@ def shift_tolerant_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * weights).mean()
 
 
+def confidence_shift_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
+                         pos_weight: torch.Tensor | float,
+                         tolerance_frames: int = 3) -> torch.Tensor:
+    """Shift-tolerant BCE with confidence weighting from soft targets.
+
+    Consensus labels encode per-beat agreement as soft target values
+    (e.g., 2/7 systems → 0.2857, 7/7 → 1.0). The standard shift_tolerant_bce
+    uses y_true > 0.5 to gate shift tolerance, so beats with < 4/7 agreement
+    get no tolerance and push the model toward soft outputs.
+
+    This loss reinterprets soft targets as confidence weights on hard (0/1)
+    targets:
+      - ALL positive frames (y_true > 0) get shift tolerance
+      - Model learns to output sharp 1.0 peaks at all beats
+      - Low-confidence beats reduce gradient magnitude, not target value
+
+    This produces sharper ODF peaks for CBSS beat tracking.
+    """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
+
+    # Split soft targets into binary + confidence
+    is_positive = y_true > 0
+    confidence = torch.where(is_positive, y_true, torch.ones_like(y_true))
+    y_binary = is_positive.float()
+
+    pool_size = 2 * tolerance_frames + 1
+    y_pooled = F.max_pool1d(
+        y_pred.permute(0, 2, 1),
+        kernel_size=pool_size, stride=1, padding=tolerance_frames
+    ).permute(0, 2, 1)
+
+    # Use pooled predictions for ALL positive frames (not just > 0.5)
+    y_effective = torch.where(is_positive, y_pooled, y_pred)
+
+    bce = nn.functional.binary_cross_entropy(y_effective, y_binary, reduction="none")
+    class_weight = y_binary * pw + (1 - y_binary) * 1.0
+    return (bce * class_weight * confidence).mean()
+
+
 def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
                    pos_weight: torch.Tensor | float,
                    gamma: float = 2.0) -> torch.Tensor:
@@ -211,7 +251,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
-    parser.add_argument("--loss", default=None, choices=["bce", "focal", "shift_bce"],
+    parser.add_argument("--loss", default=None,
+                        choices=["bce", "focal", "shift_bce", "confidence_shift_bce"],
                         help="Loss function (default: from config, or shift_bce)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
@@ -386,6 +427,7 @@ def main():
             dropout=cfg["model"]["dropout"],
             downbeat=use_downbeat,
             sum_head=cfg["model"].get("sum_head", False),
+            num_tempo_bins=num_tempo_bins,
         ).to(device)
     elif model_type == "frame_conv1d_pool":
         from models.beat_conv1d_pool import build_beat_conv1d_pool
@@ -435,6 +477,11 @@ def main():
         for k in cfg["model"]["kernel_sizes"]:
             rf += k - 1
         print(f"  Receptive field: {rf} frames ({rf / cfg['audio']['frame_rate'] * 1000:.0f} ms)")
+        if num_tempo_bins > 0:
+            _tc = cfg["model"].get("tempo", {})
+            print(f"  Tempo auxiliary head: {num_tempo_bins} bins "
+                  f"({_tc.get('min_bpm', 60)}-{_tc.get('max_bpm', 200)} BPM, "
+                  f"weight={_tc.get('loss_weight', 0.1)})")
         if model_type == "frame_conv1d_pool":
             pool_sizes = cfg["model"]["pool_sizes"]
             pool_factor = 1
@@ -468,6 +515,12 @@ def main():
     if loss_type == "focal":
         loss_fn = partial(weighted_focal, pos_weight=pos_weight, gamma=args.focal_gamma)
         print(f"Loss: focal (gamma={args.focal_gamma})")
+    elif loss_type == "confidence_shift_bce":
+        loss_fn = partial(confidence_shift_bce, pos_weight=pos_weight,
+                          tolerance_frames=shift_tolerance)
+        effective_rate = cfg['audio']['frame_rate'] / pf
+        print(f"Loss: confidence-weighted shift-tolerant BCE (±{shift_tolerance} frames = "
+              f"±{shift_tolerance / effective_rate * 1000:.0f}ms at {effective_rate:.1f} Hz)")
     elif loss_type == "shift_bce":
         loss_fn = partial(shift_tolerant_bce, pos_weight=pos_weight,
                           tolerance_frames=shift_tolerance)

@@ -1,0 +1,43 @@
+# Conv1D W64 v2 — tempo auxiliary head + confidence-weighted loss
+#
+# Improvements over v1 (deployed Conv1D W64):
+#   1. Tempo auxiliary head (Bock 2019): regularizes hidden features toward
+#      tempo-relevant patterns. Training-only, stripped at export. Zero firmware
+#      cost. Expected +1-5% F1 from literature.
+#   2. Confidence-weighted shift-tolerant BCE: reinterprets consensus soft targets
+#      (strength = system agreement ratio) as confidence weights on hard (0/1)
+#      targets. Fixes bug where beats with < 4/7 agreement got no shift tolerance.
+#      Produces sharper ODF peaks for CBSS.
+#
+# Architecture unchanged from v1 — same firmware model, same inference cost:
+#   Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->2, k=1)
+#   W64 = 1.024s context (~2 beats at 120 BPM)
+#   ~7K params + 660 tempo head params (training only)
+#   15.1 KB INT8, ~27ms inference on Cortex-M4F
+#
+# Output: 2 channels (Beat This! sum head)
+#   ch0 = sigmoid(beat_logit)               — beat activation (ODF for CBSS)
+#   ch1 = ch0 * sigmoid(downbeat_logit)     — downbeat <= beat
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 64
+  dropout: 0.1
+  downbeat: true
+  sum_head: true
+  num_tempo_bins: 20
+  tempo:
+    min_bpm: 60
+    max_bpm: 200
+    loss_weight: 0.1
+
+loss:
+  type: "confidence_shift_bce"
+  shift_tolerance: 3
+
+export:
+  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 20

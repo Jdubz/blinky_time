@@ -36,6 +36,7 @@ class FrameBeatConv1D(nn.Module):
 
     Input:  (batch, time, n_mels)
     Output: (batch, time, out_channels)  — 1 = beat only, 2 = beat + downbeat
+            During training with tempo head: tuple of (predictions, tempo_logits)
     """
 
     def __init__(self, n_mels: int = 26,
@@ -43,7 +44,8 @@ class FrameBeatConv1D(nn.Module):
                  kernel_sizes: list[int] = [5, 5, 3],
                  dropout: float = 0.1,
                  downbeat: bool = False,
-                 sum_head: bool = False):
+                 sum_head: bool = False,
+                 num_tempo_bins: int = 0):
         super().__init__()
         assert len(channels) == len(kernel_sizes), \
             f"channels ({len(channels)}) and kernel_sizes ({len(kernel_sizes)}) must match"
@@ -53,6 +55,7 @@ class FrameBeatConv1D(nn.Module):
         self.n_mels = n_mels
         self.channels = channels
         self.kernel_sizes = kernel_sizes
+        self.num_tempo_bins = num_tempo_bins
 
         layers = []
         in_ch = n_mels
@@ -68,7 +71,13 @@ class FrameBeatConv1D(nn.Module):
         self.backbone = nn.Sequential(*layers)
         self.output_conv = nn.Conv1d(in_ch, self.out_channels, 1, bias=True)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Tempo auxiliary head: training-only, regularizes hidden features
+        # toward tempo-relevant patterns (Bock et al. 2019: +1-5% F1).
+        # Stripped at export — zero inference cost on device.
+        if num_tempo_bins > 0:
+            self.tempo_head = nn.Linear(channels[-1], num_tempo_bins)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Forward pass with causal convolutions.
 
         Args:
@@ -77,19 +86,27 @@ class FrameBeatConv1D(nn.Module):
             (batch, time, out_channels) with sigmoid activation.
             If sum_head: ch0 = beat, ch1 = beat * sigmoid(db_logit)
             so downbeat is structurally constrained to be ≤ beat.
+            During training with tempo head: (predictions, tempo_logits)
         """
         x = x.permute(0, 2, 1)  # (batch, n_mels, time)
-        x = self.backbone(x)
-        logits = self.output_conv(x)  # (batch, out_channels, time)
+        h = self.backbone(x)     # (batch, last_ch, time)
+        logits = self.output_conv(h)  # (batch, out_channels, time)
 
         if self.sum_head:
             beat = torch.sigmoid(logits[:, 0:1, :])
             db = beat * torch.sigmoid(logits[:, 1:2, :])
-            x = torch.cat([beat, db], dim=1)
+            out = torch.cat([beat, db], dim=1)
         else:
-            x = torch.sigmoid(logits)
+            out = torch.sigmoid(logits)
 
-        return x.permute(0, 2, 1)  # (batch, time, channels)
+        out = out.permute(0, 2, 1)  # (batch, time, channels)
+
+        if self.num_tempo_bins > 0 and self.training:
+            h_pooled = h.mean(dim=2)  # (batch, last_ch) — global average pool
+            tempo_logits = self.tempo_head(h_pooled)
+            return out, tempo_logits
+
+        return out
 
 
 def build_beat_conv1d(n_mels: int = 26,
@@ -97,7 +114,8 @@ def build_beat_conv1d(n_mels: int = 26,
                       kernel_sizes: list[int] = [5, 5, 3],
                       dropout: float = 0.1,
                       downbeat: bool = False,
-                      sum_head: bool = False) -> nn.Module:
+                      sum_head: bool = False,
+                      num_tempo_bins: int = 0) -> nn.Module:
     """Build a frame-level Conv1D beat activation model.
 
     Args:
@@ -107,10 +125,12 @@ def build_beat_conv1d(n_mels: int = 26,
         dropout: Dropout rate between layers
         downbeat: If True, output 2 channels (beat + downbeat)
         sum_head: If True, constrain downbeat ≤ beat (Beat This! technique)
+        num_tempo_bins: If > 0, add training-only tempo auxiliary head
     """
     return FrameBeatConv1D(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
-        dropout=dropout, downbeat=downbeat, sum_head=sum_head)
+        dropout=dropout, downbeat=downbeat, sum_head=sum_head,
+        num_tempo_bins=num_tempo_bins)
 
 
 def conv1d_model_summary(cfg: dict) -> None:
