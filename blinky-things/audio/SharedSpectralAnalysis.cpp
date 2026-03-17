@@ -68,6 +68,7 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , frameRmsDb_(-200.0f)
     , totalEnergy_(0.0f)
     , spectralCentroid_(0.0f)
+    , spectralFlux_(0.0f)
     , frameReady_(false)
     , hasPrevFrame_(false)
     , frameCount_(0)
@@ -113,6 +114,7 @@ void SharedSpectralAnalysis::reset() {
     }
     smoothedGainDb_ = 0.0f;
     frameRmsDb_ = -200.0f;
+    spectralFlux_ = 0.0f;
 }
 
 bool SharedSpectralAnalysis::addSamples(const int16_t* samples, int count) {
@@ -187,6 +189,21 @@ void SharedSpectralAnalysis::process() {
     computeMelBands();
     whitenMelBands();
     whitenMagnitudes();
+
+    // Compute half-wave rectified spectral flux (HWR) from whitened magnitudes.
+    // Only positive magnitude increases count — produces sharp peaks at broadband
+    // transients (kicks, snares), zero during sustain/decay. Used by AudioTracker
+    // as the NN-independent tempo estimation signal for ACF + comb bank.
+    if (hasPrevFrame_) {
+        float flux = 0.0f;
+        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {  // skip DC
+            float diff = magnitudes_[i] - prevMagnitudes_[i];
+            if (diff > 0.0f) flux += diff;
+        }
+        spectralFlux_ = flux;
+    } else {
+        spectralFlux_ = 0.0f;
+    }
 
     // Mark frame as ready
     frameReady_ = true;

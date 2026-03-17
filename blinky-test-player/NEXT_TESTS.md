@@ -7,12 +7,14 @@
 
 ## Current Config (v74, SETTINGS_VERSION 74)
 
-**ODF source (deployed):** Conv1D W16 onset-only model, ~5 KB INT8, ~7ms inference, single-channel onset activation.
+**Onset detection (deployed):** Conv1D W16 onset-only model, ~13 KB INT8, ~7ms inference, single-channel onset activation. Detects acoustic onsets (kicks/snares) — drives visual pulse + PLL phase refinement. Cannot distinguish on-beat from off-beat onsets.
 - Deployed on all 7 devices (3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local).
 - Supersedes W64 Conv1D (27ms, 15.1 KB) and FC W32 (56.8 KB). Dual-model (OnsetNN + RhythmNN) abandoned.
 - BandFlux/EnsembleDetector fully removed (v67). AudioController deleted (v74).
 
-**Beat tracking:** AudioTracker (ACF + Comb filter bank + PLL)
+**BPM estimation:** Spectral flux (HWR, NN-independent) → contrast^2 → OSS buffer → ACF + comb bank validation.
+
+**Beat tracking:** AudioTracker (spectral flux → ACF + Comb filter bank + PLL)
 - ~10 parameters (vs ~56 in deleted AudioController)
 - pllkp=0.15, pllki=0.005 (PLL phase correction)
 - rayleighBpm=140 (Rayleigh prior peak)
@@ -33,7 +35,7 @@ Best online/causal beat tracking systems on standard benchmarks (line-in audio):
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
 | **Blinky (ours)** | 2026 | **~28%** | Conv1D W16 ODF + ACF/Comb/PLL (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in ODF quality, not the beat tracking backend. The NN ODF is the biggest lever for improvement. AudioTracker (ACF+Comb+PLL) replaces CBSS with a simpler, faster backend (~10 params vs ~56).
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in tempo estimation signal quality, not the beat tracking backend. BPM now uses spectral flux (decoupled from NN). NN onset quality still matters for visual pulse and PLL phase refinement. AudioTracker (spectral flux → ACF+Comb+PLL) replaces CBSS with a simpler, faster backend (~10 params vs ~56).
 
 **Reference tempo resolutions:** madmom uses 82 lag-domain bins (~2.4 BPM at 120 BPM), BTrack uses 41 bins (2 BPM steps), BeatNet uses 300 discrete levels. Our 20 bins (11.5 BPM at 130 BPM) is far coarser than any reference system.
 
@@ -56,7 +58,7 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0, 6 steps) and `cbsscontrast` (1.0-3.0, 5 steps) on all 3 devices with cal63 ODF. Neither parameter showed significant improvement over current defaults. cbssthresh: mean error 10.1-11.4 (current 1.0 ≈ 11.0). cbsscontrast: mean error 8.9-11.2 (current 2.0 ≈ 10.8). Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) are self-compensating as expected. **No changes needed.**
 
-3. **~135 BPM gravity well** — Multi-factorial. Not improved by CBSS parameter tuning. Not a tempo bin resolution issue (47 bins tested v61, full-res ACF already evaluates all lags). Likely requires better NN ODF or Rayleigh prior adjustment.
+3. **~135 BPM gravity well** — Multi-factorial. Not improved by CBSS parameter tuning. Not a tempo bin resolution issue (47 bins tested v61, full-res ACF already evaluates all lags). Likely requires Rayleigh prior adjustment or improved spectral flux conditioning.
 
 4. **Phase alignment** — correct BPM doesn't translate to correct beat placement. CBSS derives phase indirectly. Sharper NN activations help.
 
@@ -123,7 +125,7 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Improved NN ODF may help (training) |
+| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Rayleigh prior tuning, spectral flux conditioning |
 | NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | Fixed in v6+; v9 DS-TCN in progress |
 | Phase alignment limits F1 | PLL tracks phase via onset-gated correction | **High** | PLL Kp/Ki tuning |
 | Run-to-run variance | Room acoustics, ambient noise | Requires 5+ runs for reliable evaluation | -- |

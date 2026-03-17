@@ -6,12 +6,12 @@
 
 ## Current Status
 
-**Firmware:** v74 (SETTINGS_VERSION 73). AudioTracker (ACF+Comb+PLL, ~10 params, replaces AudioController's CBSS+Bayesian). Conv1D W16 onset-only NN activation (always-on, TFLite required, single output channel). 13.4 KB INT8, 6.8ms inference nRF52840, 5.8ms ESP32-S3. Arena: 3404 bytes. ODF information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v75 (SETTINGS_VERSION 73). AudioTracker with decoupled tempo/onset architecture (~10 params). BPM estimation uses spectral flux (NN-independent) → ACF + comb bank. NN onset detection (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840, 5.8ms ESP32-S3) drives visual pulse + PLL phase refinement only. Onset information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
 **Known regressions (v74):**
 - **AudioTracker params not persisted:** The ~10 tunable params (bpmMin, bpmMax, rayleighBpm, combFeedback, pllKp, pllKi, etc.) revert to defaults on reboot. ConfigStorage integration deferred.
 
-**NN Model Status:** Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). Beat F1=0.477 (offline eval). Single output channel (onset activation only). Arena: 3404 bytes. System focuses on onset/BPM/phase — downbeat detection deferred.
+**NN Model Status:** Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). Beat F1=0.477 (offline eval). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection and PLL phase refinement — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 

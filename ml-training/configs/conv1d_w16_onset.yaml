@@ -1,9 +1,13 @@
-# Conv1D W16 — onset-only model for AudioTracker
+# Conv1D W16 — onset detection model for AudioTracker
 #
 # Short window (16 frames = 256ms), single output (onset activation only).
 # Same backbone as deployed W64 — just shorter context window.
-# Designed for the AudioTracker refactor: NN handles onset detection,
-# DSP (ACF + Comb + PLL) handles tempo/phase tracking.
+# Trained on beat-position labels, but with 144ms RF it detects acoustic
+# onsets (kicks/snares), not metrical beats. The model cannot distinguish
+# on-beat from off-beat transients.
+#
+# In AudioTracker, this model drives visual pulse detection and PLL phase
+# refinement. BPM estimation uses spectral flux (NN-independent).
 #
 # Architecture: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
 #   ~7K params, ~13 KB INT8, ~7ms inference on Cortex-M4F

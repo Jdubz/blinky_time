@@ -6,8 +6,9 @@
 // Subtract minLag (~20) + 1 = 245. Round up for safety.
 static constexpr int MAX_ACF_SIZE = 280;
 
-// ODF contrast exponent (power-law sharpening before OSS buffering).
-// A/B tested 10-6 win at 2.0 vs 1.0 in AudioController v66.
+// Spectral flux contrast exponent (power-law sharpening before OSS buffering).
+// Sharpens transient peaks in the spectral flux signal before ACF/comb processing.
+// A/B tested 10-6 win at 2.0 vs 1.0 in AudioController v66 (originally on NN ODF).
 static constexpr float ODF_CONTRAST = 2.0f;
 
 // Pulse detection constants (matched to AudioController)
@@ -81,9 +82,10 @@ const AudioControl& AudioTracker::update(float dt) {
         spectral_.process();
     }
 
-    // 4. NN inference → onset strength (ODF)
+    // 4. NN inference → onset activation for pulse detection + PLL phase refinement.
     //    Only run NN when a new spectral frame is ready. Between frames,
-    //    use last activation. This prevents duplicate ODF values diluting the ACF.
+    //    use last activation. Note: NN output is NOT used for BPM estimation
+    //    (spectral flux handles that) — it drives visual pulse and PLL correction.
     float odf = 0.0f;
     uint32_t currentFrameCount = spectral_.getFrameCount();
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
@@ -117,19 +119,30 @@ const AudioControl& AudioTracker::update(float dt) {
         odf = 0.02f;
     }
 
-    // 7-8. Feed DSP components only on new spectral frames
-    //      Prevents duplicate ODF values from corrupting ACF periodicity.
+    // 7-8. Feed DSP components only on new spectral frames.
+    //      BPM estimation uses spectral flux (NN-independent broadband transient
+    //      signal) — not NN onset activation. This decouples tempo estimation from
+    //      the NN, which can't distinguish on-beat from off-beat onsets. Syncopated
+    //      kicks, hi-hats, and off-beat transients in NN output would corrupt ACF
+    //      periodicity. Spectral flux is a raw acoustic transient signal that
+    //      preserves the periodic structure ACF needs.
+    //
+    //      NN onset activation is used for:
+    //        - Pulse detection (visual sparks/flashes, step 5 above)
+    //        - PLL phase refinement (onset-gated correction, step 10 below)
+    //        - Energy synthesis (ODF peak-hold, in synthesizeOutputs)
     if (newSpectralFrame) {
-        // Apply ODF contrast (power-law sharpening) before buffering.
+        float flux = spectral_.getSpectralFlux();
+        // Apply contrast sharpening (same power-law as before).
         // Squaring sharpens peaks relative to baseline, improving ACF.
-        float ossInput = odf;
+        float fluxContrast = flux;
         if (ODF_CONTRAST != 1.0f) {
-            ossInput = powf(odf, ODF_CONTRAST);
+            fluxContrast = flux * flux;  // powf(flux, 2.0) == flux * flux
         }
 
         combFilterBank_.feedbackGain = combFeedback;
-        combFilterBank_.process(ossInput);
-        addOssSample(ossInput);
+        combFilterBank_.process(fluxContrast);
+        addOssSample(fluxContrast);
     }
 
     // 9. Periodic ACF for tempo estimation
@@ -177,7 +190,7 @@ void AudioTracker::runAutocorrelation() {
         ossLinear[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
 
-    // Compute mean for mean subtraction (important for NN ODF with non-zero baseline)
+    // Compute mean for mean subtraction (important for spectral flux with non-zero baseline)
     float ossMean = 0.0f;
     for (int i = 0; i < ossCount_; i++) ossMean += ossLinear[i];
     ossMean /= ossCount_;
@@ -458,10 +471,8 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.onsetDensity = onsetDensity_;
 
     // --- Downbeat / BeatInMeasure ---
-    // TODO: Wire FrameBeatNN downbeat activation to control_.downbeat and derive
-    // beatInMeasure from a 4-beat counter. The NN already outputs downbeat activation
-    // (Conv1D W64 sum head), it just needs plumbing through the PLL beat counter.
-    // Without this, Fire's bar-1 dramatic effects and syncopation patterns are inactive.
+    // Not tracked. Current NN (Conv1D W16) is onset-only (single output channel).
+    // A future multi-output model could provide downbeat activation.
     control_.downbeat = 0.0f;
     control_.beatInMeasure = 0;
 }

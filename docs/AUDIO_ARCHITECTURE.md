@@ -4,8 +4,9 @@
 
 AudioTracker provides unified audio analysis and rhythm tracking for LED effects. It combines microphone input processing with ACF+Comb+PLL beat/tempo/phase tracking to output an `AudioControl` struct with 7 parameters.
 
-**Current Version:** AudioTracker with ACF+Comb+PLL + Conv1D W16 NN ODF (March 2026)
-**ODF Source:** FrameBeatNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Non-NN fallback: mic level.
+**Current Version:** AudioTracker with decoupled tempo/onset architecture (March 2026)
+**BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF + comb bank → BPM
+**Onset Detection:** FrameBeatNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Used for visual pulse + PLL phase refinement. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 
 **Evolution:**
@@ -54,34 +55,38 @@ PDM Microphone
       |
 AdaptiveMic (fixed gain + window/range normalization, AGC removed v72)
       |
-SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands)
+SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectral flux)
       |
-      +--- FrameBeatNN (Conv1D W16, onset-only)
+      +--- [BPM PATH: spectral flux → tempo estimation]
+      |    Spectral Flux (HWR: sum of positive magnitude changes, NN-independent)
+      |         |
+      |    Contrast sharpening (flux^2.0)
+      |         |
+      |    +--- CombFilterBank (20 parallel IIR filters, Scheirer 1998)
+      |    |         Independent tempo validation (60-198 BPM)
+      |    |
+      |    +--- OSS Buffer (6s @ ~66 Hz, circular)
+      |    |
+      |    +--- Autocorrelation (every 150ms)
+      |              Percival harmonic enhancement (2nd+4th harmonics)
+      |              Rayleigh prior weighting (peak at rayleighBpm)
+      |              ACF primary tempo, comb bank validates (average when within 10%)
+      |              EMA smoothing -> BPM estimate
+      |
+      +--- [ONSET PATH: NN → visual pulse + PLL refinement]
+      |    FrameBeatNN (Conv1D W16, onset-only)
       |         Input: sliding window of rawMelBands_ (16 frames x 26 bands)
-      |         Output: single onset activation (0-1)
+      |         Output: single onset activation (0-1, kicks/snares)
+      |         |
+      |    ODF Information Gate (suppresses weak NN output)
+      |         |
+      |    +--- Pulse: floor-tracking baseline detection (visual sparks)
+      |    +--- PLL phase refinement (onset-gated P+I correction)
+      |    +--- Energy: hybrid (mic level + bass mel energy + onset peak-hold)
       |
-      +--- ODF Information Gate (suppresses weak NN output)
-      |
-      +--- ODF Contrast (power-law sharpening, exponent 2.0)
-      |
-      +--- CombFilterBank (20 parallel IIR filters, Scheirer 1998)
-      |         Independent tempo validation (60-198 BPM)
-      |
-      +--- OSS Buffer (6s @ ~66 Hz, circular)
-      |
-      +--- Autocorrelation (every 150ms)
-      |         Percival harmonic enhancement (2nd+4th harmonics)
-      |         Rayleigh prior weighting (peak at rayleighBpm)
-      |         ACF primary tempo, comb bank validates (average when within 10%)
-      |         EMA smoothing -> BPM estimate
-      |
-      +--- PLL (free-running sawtooth at estimated BPM)
-      |         Onset-gated proportional + integral phase correction
-      |
-      +--- Pulse: floor-tracking baseline detection
-      |
-      +--- Energy: hybrid (mic level + bass mel energy + ODF peak-hold)
-      |
+      +--- [PHASE PATH: PLL → smooth phase ramp]
+           PLL (free-running sawtooth at estimated BPM)
+                |
 AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity, downbeat=0, beatInMeasure=0 }
       |
 Generators (HeatFire, Water, Lightning)
@@ -89,13 +94,15 @@ Generators (HeatFire, Water, Lightning)
 
 **Key Design Decisions:**
 
-1. **PLL Phase Tracking**: A free-running sawtooth ramp at the estimated BPM produces perfectly smooth phase output. Only corrected when strong onsets align near expected beats (within 25% of period). No CBSS, no Bayesian fusion, no predict/countdown.
+1. **Decoupled BPM and Onset Paths**: BPM estimation uses spectral flux (NN-independent), not NN onset activation. The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat transients — syncopated kicks, hi-hats, and off-beat snares would corrupt ACF periodicity if used for tempo. Spectral flux is a raw broadband transient signal that preserves periodic structure.
 
-2. **Dual Tempo Estimation**: ACF (autocorrelation) is the primary tempo estimator with Percival harmonic enhancement and Rayleigh prior weighting. CombFilterBank provides independent validation. When both agree within 10%, their average is used.
+2. **PLL Phase Tracking**: A free-running sawtooth ramp at the estimated BPM produces perfectly smooth phase output. Only corrected when strong NN onsets align near expected beats (within 25% of period). The PLL bridges the two paths: tempo from spectral flux, phase refinement from NN onsets.
 
-3. **Transients -> Pulse Only**: Transient detection drives visual pulse output, NOT beat tracking. Beat tracking is derived from buffered pattern analysis (ACF + comb bank).
+3. **Dual Tempo Estimation**: ACF (autocorrelation) is the primary tempo estimator with Percival harmonic enhancement and Rayleigh prior weighting. CombFilterBank provides independent validation. Both fed by spectral flux. When they agree within 10%, their average is used.
 
-4. **Tempo Prior**: Rayleigh distribution centered on `rayleighBpm` (default 140 BPM) weights ACF peaks to disambiguate half-time/double-time harmonics.
+4. **NN Onset → Visual Pulse Only**: NN onset activation drives visual effects (sparks, flashes) and refines PLL phase, but does not influence tempo estimation. This is the correct use for a signal that fires on every acoustic transient regardless of metrical position.
+
+5. **Tempo Prior**: Rayleigh distribution centered on `rayleighBpm` (default 140 BPM) weights ACF peaks to disambiguate half-time/double-time harmonics.
 
 ---
 
@@ -104,29 +111,30 @@ Generators (HeatFire, Water, Lightning)
 ### ACF + Comb + PLL (v5 - Current)
 
 **Every frame (~62.5 Hz, on new spectral frame):**
-1. **NN Inference**: Feed mel bands to Conv1D W16 model, get onset activation (ODF)
-2. **Pulse Detection**: Floor-tracking baseline, fire pulse when ODF exceeds baseline * 2.0
-3. **ODF Gate**: Suppress ODF below `odfGateThreshold` (prevent noise-driven false beats)
-4. **ODF Contrast**: Power-law sharpening (`odf^2.0`) to sharpen peaks relative to baseline
-5. **Feed Comb Bank**: 20 parallel IIR comb filters (Scheirer 1998: `y[n] = (1-a)*x[n] + a*y[n-L]`)
-6. **Buffer OSS**: Store contrast-enhanced ODF in 6-second circular buffer
-7. **PLL Free-Run**: Advance sawtooth phase by `1/beatPeriodFrames` per frame
+1. **NN Inference**: Feed mel bands to Conv1D W16 model → onset activation (for pulse + PLL)
+2. **Pulse Detection**: Floor-tracking baseline, fire pulse when onset exceeds baseline * 2.0
+3. **Onset Gate**: Suppress onset below `odfGateThreshold` (prevent noise-driven PLL jitter)
+4. **Spectral Flux**: Half-wave rectified magnitude change from SharedSpectralAnalysis (NN-independent)
+5. **Flux Contrast**: Power-law sharpening (`flux^2.0`) to sharpen transient peaks
+6. **Feed Comb Bank**: 20 parallel IIR comb filters on contrast-sharpened spectral flux
+7. **Buffer OSS**: Store contrast-enhanced spectral flux in 6-second circular buffer
+8. **PLL Free-Run**: Advance sawtooth phase by `1/beatPeriodFrames` per frame
 
 **Every 150ms (acfPeriodMs):**
-8. **Linearize OSS**: Copy circular buffer to linear array with mean subtraction
-9. **Compute ACF**: Autocorrelation at lags corresponding to bpmMin-bpmMax range
-10. **Percival Enhancement**: Fold 2nd harmonic (ACF[2L], weight 0.5) and 4th harmonic (ACF[4L], weight 0.25) into fundamental lag L
-11. **Rayleigh Weighting**: Weight each lag by `(L/sigma^2) * exp(-L^2/(2*sigma^2))` where sigma = lag at rayleighBpm
-12. **Peak Selection**: Best weighted lag -> candidate BPM
-13. **Comb Validation**: Compare ACF BPM with comb bank peak BPM. Average when within 10% agreement.
-14. **Smooth Update**: EMA filter on BPM (only when change > 5%)
+9. **Linearize OSS**: Copy circular spectral flux buffer to linear array with mean subtraction
+10. **Compute ACF**: Autocorrelation at lags corresponding to bpmMin-bpmMax range
+11. **Percival Enhancement**: Fold 2nd harmonic (ACF[2L], weight 0.5) and 4th harmonic (ACF[4L], weight 0.25) into fundamental lag L
+12. **Rayleigh Weighting**: Weight each lag by `(L/sigma^2) * exp(-L^2/(2*sigma^2))` where sigma = lag at rayleighBpm
+13. **Peak Selection**: Best weighted lag -> candidate BPM
+14. **Comb Validation**: Compare ACF BPM with comb bank peak BPM. Average when within 10% agreement.
+15. **Smooth Update**: EMA filter on BPM (only when change > 5%)
 
-**PLL Correction (every frame, onset-gated):**
-15. **Detect Strong Onset**: ODF > baseline * 2.0 and ODF > 0.1
-16. **Phase Error**: Distance from nearest beat boundary, centered [-0.5, +0.5]
-17. **Gate**: Only correct if |phase error| < 0.25 (onset near expected beat)
-18. **Proportional**: Pull phase toward beat boundary by `pllKp * phaseError`
-19. **Integral**: Leaky integrator (`0.95 * integral + phaseError`), correct by `pllKi * integral`
+**PLL Correction (every frame, NN onset-gated):**
+16. **Detect Strong Onset**: NN onset > baseline * 2.0 and onset > 0.1
+17. **Phase Error**: Distance from nearest beat boundary, centered [-0.5, +0.5]
+18. **Gate**: Only correct if |phase error| < 0.25 (onset near expected beat)
+19. **Proportional**: Pull phase toward beat boundary by `pllKp * phaseError`
+20. **Integral**: Leaky integrator (`0.95 * integral + phaseError`), correct by `pllKi * integral`
 
 ### Evolution: Why ACF+Comb+PLL?
 
@@ -228,21 +236,27 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ---
 
-## Detection: FrameBeatNN (Conv1D W16, Deployed)
+## Onset Detection: FrameBeatNN (Conv1D W16, Deployed)
 
 ### Current: Single Conv1D Onset Model
 
-`FrameBeatNN` is the primary ODF source. It processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (ODF for ACF/Comb/PLL tracking). Follows the same paradigm as leading beat trackers (BeatNet, Beat This!, madmom) -- frame-level NN activation followed by post-processing. Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
+`FrameBeatNN` detects acoustic onsets (kicks, snares) from mel spectrograms. Trained on beat-position labels, but with a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output.
+
+The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and PLL phase refinement). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
 **Architecture:** Conv1D onset-only model. 13.4 KB INT8 (per-tensor quantization). Single output channel (onset activation). Arena: 3404 bytes of 32768 allocated.
 
 **Performance:** 6.8ms inference on Cortex-M4F @ 64 MHz (nRF52840), 5.8ms on ESP32-S3.
 
-**Fallback:** If the model fails to load, `mic_.getLevel()` serves as a simple energy-based ODF.
+**Fallback:** If the model fails to load, `mic_.getLevel()` serves as a simple energy-based onset signal.
 
-### ODF Information Gate
+### Onset Information Gate
 
-The NN onset activation passes through an information gate before entering the ACF/Comb pipeline. When NN output is weak (below `odfGateThreshold`), the gate clamps the ODF to a low floor value (0.02) to prevent noise-driven false tempo detection. This improves tracking during silence and ambient passages.
+The NN onset activation passes through an information gate before use in PLL correction and pulse detection. When NN output is weak (below `odfGateThreshold`), the gate clamps the value to a low floor (0.02) to prevent noise-driven false PLL corrections. This improves phase stability during silence and ambient passages.
+
+### Spectral Flux (BPM Signal)
+
+BPM estimation uses half-wave rectified spectral flux from `SharedSpectralAnalysis::getSpectralFlux()`. This is the sum of positive magnitude changes across all FFT bins (skip DC). It peaks at broadband transients and is zero during sustain — providing a clean periodic signal for ACF tempo estimation without NN dependency. Computed from compressed+whitened magnitudes every spectral frame.
 
 ### Pulse Detection
 
@@ -283,9 +297,9 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 
 | Component | RAM | CPU Time | Notes |
 |-----------|-----|----------|-------|
-| AdaptiveMic + FFT | ~4 KB | ~2ms/frame | Fixed gain + window/range normalization |
+| AdaptiveMic + FFT + spectral flux | ~4 KB + 4 bytes | ~2ms/frame | Fixed gain + window/range normalization. Spectral flux: 1 float (negligible). |
 | FrameBeatNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
-| OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ ~66 Hz, circular |
+| OSS Buffer (360 floats) | 1.4 KB | - | 6 seconds @ ~66 Hz, circular. Fed by spectral flux. |
 | ACF computation | ~1.1 KB stack | ~2ms every 150ms | Linearized buffer + correlation |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1ms/frame | 20 x 66 delay line = 5,280 bytes + state |
 | PLL + pulse + output | negligible | <0.1ms/frame | Simple arithmetic |

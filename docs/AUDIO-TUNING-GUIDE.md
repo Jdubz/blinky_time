@@ -1,7 +1,7 @@
 # Audio Tuning Guide
 
 **Last Updated:** March 17, 2026
-**Firmware Version:** SETTINGS_VERSION 73 (AudioTracker: ACF + Comb + PLL + Conv1D W16 onset ODF)
+**Firmware Version:** SETTINGS_VERSION 73 (AudioTracker: spectral flux → ACF + Comb + PLL; Conv1D W16 onset → pulse + PLL refinement)
 
 This document consolidates all audio testing and tuning information for the Blinky audio-reactive LED system.
 
@@ -31,19 +31,21 @@ PDM Microphone (16kHz, mono)
         |
    SharedSpectralAnalysis (FFT-256)
    ├── Soft-knee compressor (Giannoulis 2012)
-   └── Per-bin adaptive whitening (Stowell & Plumbley 2007)
+   ├── Per-bin adaptive whitening (Stowell & Plumbley 2007)
+   └── Spectral flux (HWR: sum of positive magnitude changes, NN-independent)
         |
-   FrameBeatNN (Conv1D W16, ~7ms, single channel)
-     → onset_activation → ODF
-        |
-   AudioTracker (ACF + Comb + PLL)
-   ├── ODF Information Gate (suppress weak NN output)
-   ├── OSS Buffer (6 seconds, 360 samples @ ~66Hz)
-   ├── Autocorrelation (every 150ms) + Percival harmonic enhancement + Rayleigh prior
-   ├── CombFilterBank (20 IIR resonators, independent tempo validation)
-   ├── PLL free-running sawtooth (onset-gated P+I correction)
-   ├── Pulse: floor-tracking baseline detection
-   └── Energy: hybrid (mic level + bass mel energy + ODF peak-hold)
+        ├── [BPM PATH]
+        │   Spectral flux → contrast^2 → CombFilterBank + OSS buffer
+        │   → Autocorrelation (every 150ms) + Percival + Rayleigh → BPM
+        │
+        ├── [ONSET PATH]
+        │   FrameBeatNN (Conv1D W16, ~7ms, single channel)
+        │   → onset_activation → information gate
+        │   → Pulse detection (visual sparks) + PLL phase refinement
+        │   → Energy synthesis (onset peak-hold blend)
+        │
+        └── [PHASE PATH]
+            PLL free-running sawtooth at BPM (onset-gated P+I correction)
         |
    AudioControl { energy, pulse, phase, rhythmStrength, onsetDensity }
         |
@@ -52,12 +54,13 @@ PDM Microphone (16kHz, mono)
 
 ### Key Design Decisions
 
-1. **NN ODF**: Conv1D W16 onset-only model provides learned onset activation (sole ODF since v67). Non-NN fallback: mic level. Single output channel (no downbeats).
-2. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization. AGC removed v72 — hardware gain fixed at platform optimal.
-3. **ACF + Comb + PLL tempo tracking** (AudioTracker v74): Percival harmonic-enhanced ACF estimates tempo; 20-filter IIR comb bank validates independently; average when within 10% agreement. Replaces Bayesian fusion (removed v74).
-4. **PLL phase tracking**: Free-running sawtooth at estimated BPM with onset-gated proportional+integral correction. Replaces CBSS beat tracking (removed v74).
-5. **ODF information gate**: Suppresses low-confidence NN output before rhythm tracking, preventing noise-driven false beats during silence/breakdowns.
-6. **5-parameter output**: Generators receive `AudioControl` struct with energy, pulse, phase, rhythmStrength, onsetDensity.
+1. **Decoupled BPM and onset paths**: BPM estimation uses spectral flux (NN-independent). The NN detects acoustic onsets (kicks/snares) but cannot distinguish on-beat from off-beat — syncopated transients would corrupt ACF periodicity. Spectral flux preserves periodic structure.
+2. **NN onset → visual pulse + PLL refinement**: Conv1D W16 onset model drives visual pulse (sparks/flashes) and refines PLL phase when strong onsets align near expected beats. Non-NN fallback: mic level. Single output channel (no downbeats).
+3. **Spectral conditioning**: Soft-knee compressor normalizes gross signal level; per-bin whitening for spectral normalization. AGC removed v72 — hardware gain fixed at platform optimal.
+4. **ACF + Comb + PLL tempo tracking** (AudioTracker v74): Percival harmonic-enhanced ACF estimates tempo from spectral flux; 20-filter IIR comb bank validates independently; average when within 10% agreement.
+5. **PLL phase tracking**: Free-running sawtooth at estimated BPM. NN onset-gated proportional+integral correction bridges the BPM and onset paths.
+6. **Onset information gate**: Suppresses low-confidence NN output before PLL correction and pulse detection, preventing noise-driven phase jitter during silence/breakdowns.
+7. **5-parameter output**: Generators receive `AudioControl` struct with energy, pulse, phase, rhythmStrength, onsetDensity.
 
 ---
 
@@ -314,13 +317,12 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 ## Current Best Settings
 
-### NN ODF Configuration (March 2026)
+### Onset Detection & BPM Configuration (March 2026)
 
-**Dual-model architecture** (in progress, March 15): Two specialized Conv1D models replace the single FC model.
-- **OnsetNN**: Conv1D W8 (128ms), ~4 KB INT8, <1ms inference, runs every frame at 62.5 Hz. Detects kick/snare onsets for visual triggers and primary ODF.
-- **RhythmNN**: Conv1D+Pool W192 (3.07s, full-bar context), ~16 KB INT8, <8ms inference, runs every 4th frame at 15.6 Hz. Produces beat + downbeat activation for CBSS and bar tracking.
-
-**Currently deployed:** Single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Cal63 mel calibration (target_rms_db=-63 dB). Consensus v5 labels (7-system).
+**Architecture:** Decoupled tempo/onset. BPM uses spectral flux (NN-independent). NN onset used for visual pulse + PLL phase refinement.
+- **BPM signal:** Spectral flux (half-wave rectified magnitude change) → contrast² → ACF + comb bank → BPM
+- **Onset detection:** Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). Beat F1=0.477.
+- **Training data:** Consensus v5 labels (7-system), cal63 mel calibration (target_rms_db=-63 dB).
 
 ### Bayesian Tempo Fusion Defaults (v28+)
 

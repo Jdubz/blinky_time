@@ -218,6 +218,15 @@ public:
      */
     float getSpectralCentroid() const { return spectralCentroid_; }
 
+    /**
+     * Get half-wave rectified spectral flux (HWR).
+     * Sum of positive magnitude changes across all bins (skip DC).
+     * Peaks at broadband transients (kicks, snares), zero during sustain.
+     * Independent of NN — suitable as BPM estimation input signal.
+     * Computed at the end of process() from compressed+whitened magnitudes.
+     */
+    float getSpectralFlux() const { return spectralFlux_; }
+
     // --- Compressor/whitening debug accessors ---
 
     /**
@@ -273,6 +282,7 @@ private:
     // Derived features (computed from raw magnitudes)
     float totalEnergy_;
     float spectralCentroid_;
+    float spectralFlux_;
 
     // State
     bool frameReady_;
