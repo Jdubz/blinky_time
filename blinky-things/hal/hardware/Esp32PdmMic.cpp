@@ -115,10 +115,14 @@ int Esp32PdmMic::read(int16_t* buffer, int maxBytes) {
 void Esp32PdmMic::poll() {
     if (!rx_handle) return;
 
+    // Use 1ms timeout instead of 0. ESP-IDF v5.x i2s_channel_read() with
+    // timeout_ms=0 unreliably returns ESP_ERR_TIMEOUT even when DMA buffers
+    // are ready (FreeRTOS tick resolution issue). 1ms adds negligible latency
+    // at 60 Hz frame rate and catches data reliably.
     size_t bytesRead = 0;
     esp_err_t err = i2s_channel_read(rx_handle, staging_,
                                      STAGING_SIZE * sizeof(int16_t),
-                                     &bytesRead, 0);
+                                     &bytesRead, 1);
     if (err != ESP_OK || bytesRead == 0) return;
 
     stagingCount_ = (int)bytesRead / (int)sizeof(int16_t);
