@@ -120,6 +120,9 @@ void Esp32PdmMic::poll() {
     size_t bytesRead = 0;
     // Return value intentionally ignored — ESP-IDF returns ESP_ERR_TIMEOUT
     // for partial reads even when bytesRead > 0. Only bytesRead matters.
+    // 1ms timeout: DMA fills a buffer every ~15ms at 16kHz/240 samples.
+    // timeout=0 risked missing partial buffers; 1ms drains any available
+    // data without meaningfully impacting frame latency.
     (void)i2s_channel_read(rx_handle, staging_,
                            STAGING_SIZE * sizeof(int16_t),
                            &bytesRead, 1);

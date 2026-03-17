@@ -133,12 +133,10 @@ const AudioControl& AudioTracker::update(float dt) {
     //        - Energy synthesis (ODF peak-hold, in synthesizeOutputs)
     if (newSpectralFrame) {
         float flux = spectral_.getSpectralFlux();
-        // Apply contrast sharpening (same power-law as before).
+        // Apply contrast sharpening (power-law) before buffering.
         // Squaring sharpens peaks relative to baseline, improving ACF.
-        float fluxContrast = flux;
-        if (ODF_CONTRAST != 1.0f) {
-            fluxContrast = flux * flux;  // powf(flux, 2.0) == flux * flux
-        }
+        static_assert(ODF_CONTRAST == 2.0f, "Update flux sharpening if ODF_CONTRAST changes");
+        float fluxContrast = flux * flux;
 
         combFilterBank_.feedbackGain = combFeedback;
         combFilterBank_.process(fluxContrast);

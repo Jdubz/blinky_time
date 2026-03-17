@@ -324,17 +324,19 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 - **Onset detection:** Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). Beat F1=0.477.
 - **Training data:** Consensus v5 labels (7-system), cal63 mel calibration (target_rms_db=-63 dB).
 
-### Bayesian Tempo Fusion Defaults (v28+)
+### AudioTracker Tempo Defaults (v74+)
 
 | Parameter | Command | Default | Role |
 |-----------|---------|---------|------|
-| Comb weight | `bayescomb` | 0.7 | **Primary** observation — Scheirer-style resonators |
-| ACF weight | `bayesacf` | 0.8 | Harmonic-enhanced ACF (4-harmonic comb + Rayleigh prior, v25) |
-| FT weight | `bayesft` | 0.0 | **Disabled v28** — no reference system uses FT for real-time |
-| IOI weight | `bayesioi` | 0.0 | **Disabled v28** — no reference system uses IOI for polyphonic |
-| Lambda | `bayeslambda` | 0.07 | Tighter transitions prevent octave jumps (v25) |
-| Prior weight | `bayespriorw` | 0.0 | Static prior OFF (hurts off-center tempos) |
-| CBSS threshold | `cbssthresh` | 1.0 | Prevents phantom beats during silence |
+| BPM min | `bpmmin` | 60 | Minimum detectable BPM |
+| BPM max | `bpmmax` | 200 | Maximum detectable BPM |
+| Rayleigh BPM | `rayleighbpm` | 140 | Rayleigh prior peak (perceptual tempo bias) |
+| Comb feedback | `combfeedback` | 0.92 | Comb bank IIR resonance strength |
+| Tempo smoothing | `temposmooth` | 0.85 | BPM EMA smoothing (higher = slower) |
+| PLL Kp | `pllkp` | 0.15 | Proportional gain (phase correction speed) |
+| PLL Ki | `pllki` | 0.005 | Integral gain (tempo adaptation speed) |
+| Activation threshold | `activationthreshold` | 0.3 | Min periodicity to activate rhythm mode |
+| ODF gate | `odfgate` | 0.25 | NN output floor gate (suppress noise) |
 
 ### Spectral Pipeline Defaults (v23+)
 
