@@ -6,7 +6,7 @@
 # DSP (ACF + Comb + PLL) handles tempo/phase tracking.
 #
 # Architecture: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
-#   ~5K params, ~5 KB INT8, ~7ms inference on Cortex-M4F
+#   ~7K params, ~13 KB INT8, ~7ms inference on Cortex-M4F
 #   Receptive field: 9 frames = 144ms (captures full kick transient 10-50ms)
 #
 # Output: 1 channel
@@ -23,4 +23,4 @@ model:
 export:
   output_header: "../blinky-things/audio/frame_beat_model_data.h"
   c_array_name: "frame_beat_model_data"
-  max_model_size_kb: 10
+  max_model_size_kb: 15
