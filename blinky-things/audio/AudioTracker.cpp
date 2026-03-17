@@ -235,11 +235,6 @@ void AudioTracker::runAutocorrelation() {
         }
     }
 
-    // Normalize Rayleigh weight for periodicity strength calculation
-    // (bestCorr includes the Rayleigh weight, divide it out for raw correlation)
-    float bestLagF = static_cast<float>(bestLag);
-    float bestRayleighW = (bestLagF / rayleighSigma2) * expf(-bestLagF * bestLagF / (2.0f * rayleighSigma2));
-
     // Compute periodicity strength from unweighted ACF at best lag
     float avgEnergy = signalEnergy / ossCount_;
     if (avgEnergy > 1e-10f && bestLag - minLag < acfSize) {
