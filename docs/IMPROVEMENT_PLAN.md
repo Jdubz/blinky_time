@@ -1,18 +1,22 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 15, 2026*
+*Last Updated: March 16, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v70 (SETTINGS_VERSION 70). CBSS beat tracking + Bayesian tempo fusion. Frame-level FC NN beat/downbeat activation (always-on, TFLite required). Beat-synchronized downbeat and measure counter. Onset snap hysteresis and PLL warmup relaxation. Dimension-independent generator params (v69). All v65 rhythm params persisted (v70).
+**Firmware:** v74 (SETTINGS_VERSION 73). AudioTracker (ACF+Comb+PLL, ~10 params, replaces AudioController's CBSS+Bayesian). Conv1D W64 NN beat/downbeat activation (always-on, TFLite required). ODF information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
-**NN Model Status:** Frame-level FC model deployed on all 3 devices (56.8 KB INT8, per-tensor quantization, ~3ms inference). **Mel calibration DONE** — cal63 model trained with corrected target_rms_db=-63 dB. On-device A/B test (6 tracks) shows ~50% stronger ODF activations (mean 0.30 vs 0.20), BPM accuracy improved on 4/6 tracks, and functional downbeat detection (max 0.37-0.57 vs 0.00 on old model). **W192 FC REGRESSED (March 15)** — Beat F1=0.370, DB F1=0.145 (down from W32's 0.491/0.238). FC architecture structurally cannot handle wide windows; flattening 4992 inputs destroys temporal locality. **Next: dual-model architecture** — separate onset model (Conv1D, W8-16, ~4 KB) and rhythm/downbeat model (Conv1D + temporal pooling, W192, ~30 KB). See "Dual-Model Architecture" section below.
+**Known regressions (v74):**
+- **Downbeat/beatInMeasure always 0:** FrameBeatNN produces downbeat activation but AudioTracker doesn't wire it to output yet. Fire's bar-1 effects and syncopation patterns inactive.
+- **AudioTracker params not persisted:** The ~10 tunable params (bpmMin, bpmMax, rayleighBpm, combFeedback, pllKp, pllKi, etc.) revert to defaults on reboot. ConfigStorage integration deferred.
+
+**NN Model Status:** Conv1D W64 with Beat This! sum head deployed on all 7 devices (15.1 KB INT8, per-tensor quantization, 27ms inference measured on device). Beat F1=0.480, DB F1=0.160 (offline eval). Arena: 7340/32768 bytes. Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Sum head constrains downbeat ≤ beat structurally.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
-**Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Audio processing + FFT + detection + CBSS + generator + LED output consume ~6-7ms, leaving **~10ms for any NN inference**. Mel-spectrogram CNNs can't fit this budget, but FC layers can (~60-200µs).
+**Key constraint:** The LED visualizer runs on a single thread at 60 Hz. Total frame budget is 16.7ms. Conv1D W64 inference takes 27ms (exceeds single-frame budget but runs every frame with acceptable visual results). Mel-spectrogram CNNs require 79-98ms (too slow).
 
 **Mel-spectrogram model history (CLOSED — all too slow):**
 
@@ -30,7 +34,7 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ### Priority 1: Frame-Level NN Model Improvement
 
-**Status: DEPLOYED, CALIBRATION NEEDED (March 12, 2026)**
+**Status: Conv1D W64 DEPLOYED (March 16, 2026) — Beat F1=0.480, DB F1=0.160**
 
 **Problem:** The NN model is deployed and producing non-zero output on device, but beat activations are weak (max ~0.26 at 120 BPM). Root cause: firmware mel values (mean ~0.52) are lower than training data (mean ~0.86) due to AGC level mismatch. The previous deterministic pipeline (BandFlux + CBSS) achieved only ~28% beat F1. Core failures:
 - **Octave errors**: ACF/comb filters have strong sub-harmonic peaks → half/double-time lock (135 BPM gravity well). Hand-tuned octave checks help but are brittle.
@@ -104,8 +108,9 @@ At 120 BPM, one beat = 0.5s = ~31 frames at 62.5 Hz. The context window should c
 
 | Window | Frames | Input dim | Coverage at 120 BPM | Beat F1 | DB F1 | Notes |
 |--------|--------|-----------|---------------------|---------|-------|-------|
-| 0.5s | 32 | 832 | ~1 beat | 0.491 | 0.238 | Deployed (cal63) |
-| 1.0s | 64 | 1,664 | ~2 beats | 0.487 | 0.180 | Marginal for downbeat |
+| 0.5s | 32 | 832 | ~1 beat | 0.491 | 0.238 | FC model (cal63) |
+| 1.0s | 64 | 1,664 | ~2 beats | 0.480 | 0.160 | **Conv1D W64 DEPLOYED** — 15.1 KB INT8, 27ms |
+| 1.0s | 64 | 1,664 | ~2 beats | 0.487 | 0.180 | FC W64 (marginal for downbeat) |
 | 3.07s | 192 | 4,992 | ~6 beats (1.5 bars) | 0.370 | 0.145 | **FC REGRESSED** — too many flat inputs |
 
 **Conclusion (March 15):** Wider windows are necessary for downbeat (need to see a full 4/4 bar) but FC architecture cannot exploit them. The first FC layer (4992→64) has 319K of the model's 322K total params, and must implicitly encode all temporal relationships through weight correlations. This destroys temporal locality. Conv1D with temporal pooling is the correct architecture for wide windows — preserves local patterns through convolutions, then progressively compresses time dimension via pooling before FC classification.
@@ -124,14 +129,14 @@ Output: [beat_prob, downbeat_prob] per frame
 
 **Projected resource usage:**
 
-| Resource | BandFlux (obsolete) | Frame-level FC NN (current) | Notes |
+| Resource | BandFlux (removed v67) | Conv1D W64 (deployed) | Notes |
 |----------|-------------------|-------------------|-------|
-| ODF quality | ~28% F1 | Target >50% F1 | Learned vs hand-tuned |
-| Inference time | <0.1ms @ 62.5 Hz | ~3ms @ 62.5 Hz | Both well within budget |
-| Tensor arena | 0 | ~2 KB | Minimal |
-| Mel frame buffer | 0 | ~3.3 KB (32×26×4 bytes) | Ring buffer |
-| Model flash | 0 | 56.8 KB INT8 | Per-tensor quantization |
-| Downbeat | No | Yes | New capability |
+| ODF quality | ~28% F1 | Beat F1=0.480, DB F1=0.160 | Learned vs hand-tuned |
+| Inference time | <0.1ms @ 62.5 Hz | 27ms @ 62.5 Hz | Conv1D dominates frame budget |
+| Tensor arena | 0 | 7340 bytes (of 32768 allocated) | Conv1D W64 |
+| Mel frame buffer | 0 | ~6.7 KB (64×26×4 bytes) | Ring buffer |
+| Model flash | 0 | 15.1 KB INT8 | Per-tensor quantization |
+| Downbeat | No | Yes (sum head) | Structural constraint: downbeat ≤ beat |
 
 **Training data and labels:**
 
@@ -157,7 +162,7 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 - ~~**Phase A (beat activation only):**~~ DONE — FC model deployed, beat+downbeat activation working on all 3 devices.
 - ~~**Phase B (mel calibration):**~~ DONE — calibrated `target_rms_db` from -35 to -63 dB (mel mean 0.52, matching firmware AGC). Cal63 model trained on corrected data. On-device A/B (6 tracks): mean ODF 0.30 vs 0.20 (+50%), BPM accuracy improved 4/6, downbeat activations now functional (max 0.37-0.57 vs 0.00).
 - ~~**Phase C (dual-model architecture):**~~ ABANDONED (Mar 16). Research showed every published beat/downbeat system uses a single joint model — the dual-model split underperformed the FC baseline on both tasks (OnsetNN Beat F1=0.478 < FC 0.491; RhythmNN DB F1=0.114 < FC 0.238) while using 8.5x more RAM. Reverted to single Conv1D with multi-task output.
-- **Phase C (revised): Single Conv1D W64 with sum head.** Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Beat This! sum head constrains downbeat ≤ beat. W64 (1.024s, ~2 beats) gives modest context increase over W32. ~7K params, ~7 KB INT8, ~26ms inference. Training in progress (conv1d_w64_v1).
+- ~~**Phase C (revised): Single Conv1D W64 with sum head.**~~ DONE — Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Beat This! sum head constrains downbeat ≤ beat. W64 (1.024s, ~2 beats). 15.1 KB INT8, 27ms measured on device. Beat F1=0.480, DB F1=0.160. Deployed on all 7 devices.
 - ~~**Phase D (BandFlux removal):**~~ DONE (v67) — Removed EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult. 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved. SETTINGS_VERSION 66→67.
 
 **Research context (updated March 16, 2026):**
@@ -261,13 +266,13 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0) and `cbsscontrast` (1.0-3.0) across 18 tracks on all 3 devices with cal63 ODF. Neither showed significant improvement over current defaults. Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) confirmed self-compensating. No changes needed.
 
-3. **Downbeat detection quality (F1 ~0.24 offline)** — Consensus v3 labels now use AND-merge (require 2+ system agreement), eliminating 65% of noisy single-system downbeat labels. Cal63 trained on v3. On-device downbeat activations are now functional (max 0.37-0.57), but offline F1 remains limited by label quality ceiling.
+3. **Downbeat detection quality (F1 ~0.16 offline with Conv1D W64)** — Consensus v5 labels (7-system). Conv1D W64 with sum head deployed but downbeat F1 limited. Next improvements: confidence-weighted loss, tempo auxiliary head during training.
 
 4. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Not improved by CBSS parameter tuning (March 13 sweep). Not a tempo bin resolution issue (47 bins tested v61; ACF already evaluates at full lag resolution). Likely requires better NN ODF discrimination or Rayleigh prior adjustment.
 
 5. **Phase alignment** — CBSS derives phase indirectly from a counter. Sharper NN beat activations give CBSS better signal for phase tracking.
 
-6. ~~**NN inference speed (RESOLVED)**~~ — Frame-level FC runs ~3ms, well within 10ms budget.
+6. ~~**NN inference speed (RESOLVED)**~~ — Conv1D W64 runs 27ms (exceeds single 16.7ms frame budget but acceptable in practice).
 
 7. ~~**Per-channel quantization (RESOLVED March 12)**~~ — Fixed: `_experimental_disable_per_channel=True` in export.
 
@@ -280,9 +285,9 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
 | RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
 | BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | **~28%** | NN ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+| **Blinky (ours)** | 2026 | **~48%** | Conv1D ODF + CBSS (mic-in-room, nRF52840) | No comparable embedded NN system exists |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The frame-level FC approach follows the same paradigm (frame-level NN activation → post-processing) but uses FC layers instead of convolutions, achieving ~3ms inference. The NN is now the sole ODF source (BandFlux is obsolete and being removed), providing a learned beat activation that feeds into CBSS for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
+**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W64 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 27ms inference. The NN is the sole ODF source, providing a learned beat activation that feeds into CBSS for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
 
 ## Known Limitations
 

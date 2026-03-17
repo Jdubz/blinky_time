@@ -17,7 +17,7 @@ class Lightning;
 class Audio;
 class AdaptiveMic;
 class BatteryMonitor;
-class AudioController;
+class AudioTracker;
 class RenderPipeline;
 class HueRotationEffect;
 
@@ -134,7 +134,7 @@ public:
     void setHeatFireGenerator(HeatFire* heatFireGen) { heatFireGenerator_ = heatFireGen; }
     void setAudioVisGenerator(Audio* audioVisGen) { audioVisGenerator_ = audioVisGen; }
     void setBatteryMonitor(BatteryMonitor* battery) { battery_ = battery; }
-    void setAudioController(AudioController* audioCtrl) { audioCtrl_ = audioCtrl; }
+    void setAudioController(AudioTracker* audioCtrl) { audioCtrl_ = audioCtrl; }
     void setFakeAudio(FakeAudio* fa) { fakeAudio_ = fa; }
     SettingsRegistry& getSettings() { return settings_; }
 
@@ -179,7 +179,7 @@ private:
     void registerAudioSettings();
     void registerAgcSettings();
     // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67)
-    void registerRhythmSettings();
+    void registerTrackerSettings();
 
     // Command handlers (extracted from handleSpecialCommand for clarity)
     bool handleJsonCommand(const char* cmd);
@@ -218,7 +218,7 @@ private:
     HueRotationEffect* hueEffect_;
     AdaptiveMic* mic_;
     BatteryMonitor* battery_;
-    AudioController* audioCtrl_;
+    AudioTracker* audioCtrl_;
     FakeAudio* fakeAudio_ = nullptr;
     ConfigStorage* configStorage_;
     SettingsRegistry settings_;

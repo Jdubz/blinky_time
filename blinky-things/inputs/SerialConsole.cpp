@@ -4,7 +4,7 @@
 #include "../config/TotemDefaults.h"
 #include "AdaptiveMic.h"
 #include "BatteryMonitor.h"
-#include "../audio/AudioController.h"
+#include "../audio/AudioTracker.h"
 #include "../devices/DeviceConfig.h"
 #include "../config/ConfigStorage.h"
 #include "../config/DeviceConfigLoader.h"  // v28: Runtime device config loading
@@ -112,7 +112,8 @@ void SerialConsole::registerSettings() {
     registerAudioSettings();
     registerAgcSettings();
     // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67)
-    registerRhythmSettings();
+    // (registerRhythmSettings removed v74 — replaced by AudioTracker)
+    registerTrackerSettings();
 }
 
 // === FIRE SETTINGS (Particle-based) ===
@@ -233,261 +234,52 @@ void SerialConsole::registerAgcSettings() {
 
 // (registerTransientSettings/registerDetectionSettings/registerEnsembleSettings removed v67 — BandFlux pipeline removed)
 
-// === RHYTHM TRACKING SETTINGS (AudioController) ===
-void SerialConsole::registerRhythmSettings() {
-    // audioCtrl_ guaranteed valid — allocated in setup() before registerSettings()
+// === TRACKER SETTINGS (AudioTracker — ACF+Comb+PLL, v74) ===
+void SerialConsole::registerTrackerSettings() {
+    if (!audioCtrl_) return;
 
-    // Onset strength signal (OSS) generation
-    settings_.registerBool("combbankenabled", &audioCtrl_->combBankEnabled, "rhythm",
-        "Enable comb filter bank for tempo validation");
-    settings_.registerFloat("combbankfeedback", &audioCtrl_->combBankFeedback, "rhythm",
-        "Comb bank resonance (0.85-0.98)", 0.85f, 0.98f);
-    // (combxvalconf/combxvalcorr removed — comb bank feeds Bayesian fusion directly)
+    // Tempo range
+    settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "tracker",
+        "Minimum detectable BPM", 40.0f, 120.0f, onParamChanged);
+    settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "tracker",
+        "Maximum detectable BPM", 120.0f, 240.0f, onParamChanged);
+    settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "tracker",
+        "Rayleigh prior peak BPM (perceptual bias)", 60.0f, 180.0f, onParamChanged);
 
-    // CBSS beat tracking parameters
-    settings_.registerFloat("cbssalpha", &audioCtrl_->cbssAlpha, "rhythm",
-        "CBSS weighting (0.8-0.95). NN auto-lowers to 0.8 if higher", 0.5f, 0.99f);
-    settings_.registerFloat("cbsstight", &audioCtrl_->cbssTightness, "rhythm",
-        "CBSS log-Gaussian tightness (higher=stricter tempo)", 1.0f, 20.0f);
-    settings_.registerFloat("beatconfdecay", &audioCtrl_->beatConfidenceDecay, "rhythm",
-        "Beat confidence decay per frame", 0.9f, 0.999f);
-    // (temposnap removed — Bayesian fusion handles tempo transitions)
-    settings_.registerFloat("beatoffset", &audioCtrl_->beatTimingOffset, "rhythm",
-        "Beat prediction advance in frames (ODF+CBSS delay compensation)", 0.0f, 15.0f);
-    settings_.registerFloat("phasecorr", &audioCtrl_->phaseCorrectionStrength, "rhythm",
-        "Phase correction toward transients (0=off, 1=full snap)", 0.0f, 1.0f);
-    settings_.registerFloat("cbssthresh", &audioCtrl_->cbssThresholdFactor, "rhythm",
-        "CBSS adaptive threshold factor (0=off, beat fires only if CBSS > factor*mean)", 0.0f, 2.0f);
-    settings_.registerFloat("cbsscontrast", &audioCtrl_->cbssContrast, "rhythm",
-        "Power-law ODF contrast before CBSS (1=off, 2=BTrack square, default 2.0)", 0.5f, 4.0f);
-    settings_.registerUint8("warmupbeats", &audioCtrl_->cbssWarmupBeats, "rhythm",
-        "CBSS warmup beats: lower alpha for first N beats (0=disabled)", 0, 32);
-    settings_.registerUint8("onsetsnap", &audioCtrl_->onsetSnapWindow, "rhythm",
-        "Snap beat to strongest OSS in last N frames (0=disabled, 8=default)", 0, 16);
-    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothingFactor, "rhythm",
-        "Tempo EMA smoothing (0.5=fast, 0.99=slow)", 0.5f, 0.99f);
-    settings_.registerUint8("odfsmooth", &audioCtrl_->odfSmoothWidth, "rhythm",
-        "ODF smooth window (3-11, odd)", 3, 11);
-    // (ioi/ft registrations removed v52 — dead code since v28)
-    settings_.registerBool("odfmeansub", &audioCtrl_->odfMeanSubEnabled, "rhythm",
-        "ODF mean subtraction before ACF. NN auto-enables (smooth baseline)");
-    settings_.registerBool("beatboundary", &audioCtrl_->beatBoundaryTempo, "rhythm",
-        "Defer tempo changes to beat boundaries (BTrack-style, Phase 2.1)");
-    // (unifiedodf removed v67 — BandFlux pipeline removed)
-    // (nnbeat removed v68 — FrameBeatNN always active, no toggle)
-    settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "rhythm",
-        "Enable [NNPROF] per-operator timing output (default off, clutters serial)");
-    settings_.registerBool("adaptodf", &audioCtrl_->adaptiveOdfThresh, "rhythm",
-        "Local-mean ODF threshold before autocorrelation (BTrack-style, v32)");
-    settings_.registerUint8("odfthreshwin", &audioCtrl_->odfThreshWindow, "rhythm",
-        "Adaptive ODF threshold half-window size (samples each side, 5-30)", 5, 30);
-    // (onsettrainodf/odfdiff removed v67 — BandFlux pipeline removed)
-    // (odfsource registration removed v64 — experimental alternatives deleted)
-    settings_.registerBool("densityoctave", &audioCtrl_->densityOctaveEnabled, "rhythm",
-        "Onset-density octave penalty in Bayesian posterior (v32)");
-    settings_.registerFloat("densityminpb", &audioCtrl_->densityMinPerBeat, "rhythm",
-        "Min plausible transients per beat for density octave (0.1-3)", 0.1f, 3.0f);
-    settings_.registerFloat("densitymaxpb", &audioCtrl_->densityMaxPerBeat, "rhythm",
-        "Max plausible transients per beat for density octave (1-20)", 1.0f, 20.0f);
-    settings_.registerFloat("densityexp", &audioCtrl_->densityPenaltyExp, "rhythm",
-        "Density penalty Gaussian exponent (higher=sharper, 1-20)", 1.0f, 20.0f);
-    settings_.registerFloat("densitytarget", &audioCtrl_->densityTarget, "rhythm",
-        "Target transients/beat for density penalty (0=disabled, 1-4 typical)", 0.0f, 10.0f);
-    settings_.registerBool("downwardcorrect", &audioCtrl_->downwardCorrectEnabled, "rhythm",
-        "Downward harmonic correction 3:2/2:1 (experimental, overcorrects mid-tempo)");
-    settings_.registerBool("octavecheck", &audioCtrl_->octaveCheckEnabled, "rhythm",
-        "Shadow CBSS octave checker (v32)");
-    settings_.registerBool("btrkpipeline", &audioCtrl_->btrkPipeline, "rhythm",
-        "BTrack-style tempo pipeline: Viterbi + comb-on-ACF (v33)");
-    settings_.registerUint8("btrkthreshwin", &audioCtrl_->btrkThreshWindow, "rhythm",
-        "Pipeline adaptive threshold half-window (0=off, 1-5 bins each side)", 0, 5);
-    // (fwdfilter/fwdtranssigma/fwdfiltcontrast/fwdfiltlambda/fwdfiltfloor/fwdbayesbias/fwdasymmetry removed v64)
-    // (hmm/fwdphase/hmmcontrast/fwdobslambda/fwdobsfloor/fwdwrapfrac removed v64)
-    // (particlefilter and all pf* registrations removed v64)
-    settings_.registerUint8("octavecheckbeats", &audioCtrl_->octaveCheckBeats, "rhythm",
-        "Check octave every N beats (2-16)", 2, 16);
-    settings_.registerFloat("octavescoreratio", &audioCtrl_->octaveScoreRatio, "rhythm",
-        "CBSS score ratio needed for octave switch (1-5)", 1.0f, 5.0f);
-    // (phasecheck/plpphase/plpstrength/plpminconf registrations removed v44 — features deleted)
-    settings_.registerFloat("rayleighbpm", &audioCtrl_->rayleighBpm, "rhythm",
-        "Rayleigh prior peak BPM (v44)", 60.0f, 180.0f);
-    settings_.registerFloat("temponudge", &audioCtrl_->tempoNudge, "rhythm",
-        "switchTempo posterior mass transfer fraction (v44: 0=none, 1=full swap)", 0.0f, 1.0f);
-    settings_.registerBool("fold32", &audioCtrl_->fold32Enabled, "rhythm",
-        "3:2 octave folding: fold comb evidence from 2L/3 into L (v44)");
-    settings_.registerBool("sesquicheck", &audioCtrl_->sesquiCheckEnabled, "rhythm",
-        "3:2 shadow octave check: test 3T/2 and 2T/3 alternatives (v44)");
-    // bisnap requires onsetSnapWindow > 0 to have any effect (snap logic is skipped when window=0)
-    settings_.registerBool("bisnap", &audioCtrl_->bidirectionalSnap, "rhythm",
-        "Bidirectional onset snap: delay beat 3 frames for forward snap window (v44)");
-    // (harmonicsesqui registration removed v44 — feature deleted)
+    // Comb filter bank
+    settings_.registerFloat("combfeedback", &audioCtrl_->combFeedback, "tracker",
+        "Comb bank resonance strength (0.85-0.98)", 0.85f, 0.98f, onParamChanged);
 
-    // Percival ACF harmonic pre-enhancement (v45)
-    settings_.registerBool("percival", &audioCtrl_->percivalEnhance, "rhythm",
-        "Percival harmonic pre-enhancement: fold 2nd/4th ACF harmonics into fundamental (v45)");
-    settings_.registerFloat("percivalw2", &audioCtrl_->percivalWeight2, "rhythm",
-        "Percival 2nd harmonic fold weight (v45)", 0.0f, 1.0f);
-    settings_.registerFloat("percivalw4", &audioCtrl_->percivalWeight4, "rhythm",
-        "Percival 4th harmonic fold weight (v45)", 0.0f, 1.0f);
+    // PLL phase tracking
+    settings_.registerFloat("pllkp", &audioCtrl_->pllKp, "tracker",
+        "PLL proportional gain (phase correction speed)", 0.0f, 0.5f, onParamChanged);
+    settings_.registerFloat("pllki", &audioCtrl_->pllKi, "tracker",
+        "PLL integral gain (tempo adaptation speed)", 0.0f, 0.05f, onParamChanged);
 
-    // PLL phase correction (v45)
-    settings_.registerBool("pll", &audioCtrl_->pllEnabled, "rhythm",
-        "PLL proportional+integral phase correction at beat fires (v45)");
-    settings_.registerFloat("pllkp", &audioCtrl_->pllKp, "rhythm",
-        "PLL proportional gain (v45)", 0.0f, 1.0f);
-    settings_.registerFloat("pllki", &audioCtrl_->pllKi, "rhythm",
-        "PLL integral gain (v45)", 0.0f, 0.1f);
-    settings_.registerUint8("pllwarmup", &audioCtrl_->pllWarmupBeats, "rhythm",
-        "PLL warmup beats before tightening clamp (v65)", 0, 20);
+    // Rhythm activation
+    settings_.registerFloat("activationthreshold", &audioCtrl_->activationThreshold, "tracker",
+        "Minimum periodicity to activate rhythm mode", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("odfgate", &audioCtrl_->odfGateThreshold, "tracker",
+        "NN output floor gate (suppress noise)", 0.0f, 0.5f, onParamChanged);
 
-    // Onset snap hysteresis (v65)
-    settings_.registerFloat("snaphyst", &audioCtrl_->snapHysteresis, "rhythm",
-        "Snap hysteresis: prefer prev offset if >ratio of best (v65)", 0.0f, 1.0f);
+    // Tempo smoothing
+    settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothing, "tracker",
+        "BPM EMA smoothing factor (higher=slower)", 0.5f, 0.99f, onParamChanged);
 
-    // Downbeat calibration (v65)
-    settings_.registerFloat("dbema", &audioCtrl_->dbEmaAlpha, "rhythm",
-        "Downbeat EMA smoothing alpha (v65)", 0.05f, 0.9f);
-    settings_.registerFloat("dbthresh", &audioCtrl_->dbThreshold, "rhythm",
-        "Smoothed downbeat activation threshold (v65)", 0.1f, 0.9f);
-    settings_.registerFloat("dbdecay", &audioCtrl_->dbDecay, "rhythm",
-        "Per-frame downbeat decay between beats (v65)", 0.5f, 0.99f);
+    // Pulse modulation
+    settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "tracker",
+        "Pulse boost factor near beat", 1.0f, 3.0f, onParamChanged);
+    settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "tracker",
+        "Pulse suppress factor off-beat", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "tracker",
+        "Energy boost near predicted beats", 0.0f, 1.0f, onParamChanged);
 
-    // Adaptive CBSS tightness (v45)
-    settings_.registerBool("adaptight", &audioCtrl_->adaptiveTightnessEnabled, "rhythm",
-        "Adaptive tightness: modulate cbssTightness by onset confidence (v45)");
-    settings_.registerFloat("tightlowmult", &audioCtrl_->tightnessLowMult, "rhythm",
-        "Tightness multiplier when onset confidence HIGH (looser) (v45)", 0.3f, 1.0f);
-    settings_.registerFloat("tighthighmult", &audioCtrl_->tightnessHighMult, "rhythm",
-        "Tightness multiplier when onset confidence LOW (tighter) (v45)", 1.0f, 3.0f);
-    settings_.registerFloat("tightconfhi", &audioCtrl_->tightnessConfThreshHigh, "rhythm",
-        "OSS/mean ratio above this = high onset confidence (v45)", 1.5f, 10.0f);
-    settings_.registerFloat("tightconflo", &audioCtrl_->tightnessConfThreshLow, "rhythm",
-        "OSS/mean ratio below this = low onset confidence (v45)", 0.5f, 3.0f);
-
-    // (multiagent/agentdecay/agentinitbeats removed v64)
-
-    // Anti-harmonic 3rd comb (v48)
-    settings_.registerFloat("percivalw3", &audioCtrl_->percivalWeight3, "rhythm",
-        "3rd harmonic SUBTRACT weight: suppress 3:2 ratio confusion (v48)", 0.0f, 1.0f);
-
-    // (metricalcheck/metricalminratio/metricalcheckbeats removed v64)
-    // (templatecheck/templatescoreratio/templatecheckbeats removed v64)
-    // (subbeatcheck/alternationthresh/subbeatcheckbeats removed v64)
-    // (templateminscore/subbeatbins/templatehistbars removed v64)
-    settings_.registerFloat("cbssmeanalpha", &audioCtrl_->cbssMeanAlpha, "rhythm",
-        "CBSS running mean EMA alpha (v51)", 0.001f, 0.1f);
-    settings_.registerFloat("harm2xthresh", &audioCtrl_->harmonic2xThresh, "rhythm",
-        "ACF half-lag ratio for 2x BPM correction (v51)", 0.1f, 0.9f);
-    settings_.registerFloat("harm15xthresh", &audioCtrl_->harmonic15xThresh, "rhythm",
-        "ACF 2/3-lag ratio for 1.5x BPM correction (v51)", 0.1f, 0.9f);
-    settings_.registerFloat("pllsmoother", &audioCtrl_->pllSmoother, "rhythm",
-        "PLL phase integral leaky decay (v51)", 0.8f, 0.99f);
-    settings_.registerFloat("beatconfboost", &audioCtrl_->beatConfBoost, "rhythm",
-        "Confidence increment per beat fire (v51)", 0.01f, 0.5f);
-    settings_.registerFloat("rhythmblend", &audioCtrl_->rhythmBlend, "rhythm",
-        "Periodicity weight in rhythmStrength (v51)", 0.0f, 1.0f);
-    settings_.registerFloat("periodicityblend", &audioCtrl_->periodicityBlend, "rhythm",
-        "Periodicity strength EMA coefficient (v51)", 0.3f, 0.95f);
-    settings_.registerFloat("onsetdensityblend", &audioCtrl_->onsetDensityBlend, "rhythm",
-        "Onset density EMA coefficient (v51)", 0.3f, 0.95f);
-
-    // (BandFlux detector settings removed v67 — BandFlux pipeline removed)
-
-    // Bayesian tempo fusion weights (v18+)
-    settings_.registerFloat("bayeslambda", &audioCtrl_->bayesLambda, "bayesian",
-        "Transition tightness (0.01=rigid, 1.0=loose)", 0.01f, 1.0f);
-    settings_.registerFloat("bayesprior", &audioCtrl_->bayesPriorCenter, "bayesian",
-        "Static prior center BPM", 60.0f, 200.0f);
-    settings_.registerFloat("bayespriorw", &audioCtrl_->bayesPriorWeight, "bayesian",
-        "Ongoing static prior strength (0=off, 1=std, 2=strong)", 0.0f, 3.0f);
-    settings_.registerFloat("bayesacf", &audioCtrl_->bayesAcfWeight, "bayesian",
-        "Autocorrelation observation weight", 0.0f, 5.0f);
-    // (bayesft/bayesioi registrations removed v52 — dead code since v28)
-    settings_.registerFloat("bayescomb", &audioCtrl_->bayesCombWeight, "bayesian",
-        "Comb filter bank observation weight", 0.0f, 5.0f);
-    settings_.registerFloat("postfloor", &audioCtrl_->posteriorFloor, "bayesian",
-        "Posterior uniform floor to prevent mode lock (0=off)", 0.0f, 0.5f);
-    settings_.registerFloat("disambignudge", &audioCtrl_->disambigNudge, "bayesian",
-        "Posterior nudge when disambiguation corrects (0=off)", 0.0f, 0.5f);
-    settings_.registerFloat("harmonictrans", &audioCtrl_->harmonicTransWeight, "bayesian",
-        "Transition matrix harmonic shortcut weight (0=off)", 0.0f, 1.0f);
-
-    // (Ensemble fusion settings removed v67 — BandFlux pipeline removed)
-
-    // Basic rhythm activation and output modulation
-    settings_.registerFloat("musicthresh", &audioCtrl_->activationThreshold, "rhythm",
-        "Rhythm activation threshold (0-1)", 0.0f, 1.0f);
-    settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "rhythm",
-        "Pulse boost on beat", 1.0f, 2.0f);
-    settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "rhythm",
-        "Pulse suppress off beat", 0.3f, 1.0f);
-    settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "rhythm",
-        "Energy boost on beat", 0.0f, 1.0f);
-    settings_.registerFloat("bpmmin", &audioCtrl_->bpmMin, "rhythm",
-        "Minimum BPM to detect", 40.0f, 120.0f);
-    settings_.registerFloat("bpmmax", &audioCtrl_->bpmMax, "rhythm",
-        "Maximum BPM to detect", 80.0f, 240.0f);
-
-    // Autocorrelation timing
-    settings_.registerUint16("autocorrperiod", &audioCtrl_->autocorrPeriodMs, "rhythm",
-        "Autocorr period (ms)", 100, 1000);
-
-    // (bassbandweight/midbandweight/highbandweight removed v67 — BandFlux pipeline removed)
-
-    // Tempo prior width (used by Bayesian static prior initialization)
-    settings_.registerFloat("priorwidth", &audioCtrl_->tempoPriorWidth, "bayesian",
-        "Prior width (sigma BPM)", 10.0f, 80.0f);
-
-    // Beat stability tracking
-    settings_.registerFloat("stabilitywin", &audioCtrl_->stabilityWindowBeats, "stability",
-        "Stability window (beats)", 4.0f, 16.0f);
-
-    // Beat lookahead (anticipatory effects)
-    settings_.registerFloat("lookahead", &audioCtrl_->beatLookaheadMs, "lookahead",
-        "Beat lookahead (ms)", 0.0f, 200.0f);
-
-    // Continuous tempo estimation
-    settings_.registerFloat("tempochgthresh", &audioCtrl_->tempoChangeThreshold, "tempo",
-        "Tempo change threshold", 0.01f, 0.5f);
-    // (maxbpmchg removed — Bayesian fusion handles tempo stability)
-
-    // Spectral processing (whitening + compressor)
-    SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
-    settings_.registerBool("whitenenabled", &spectral.whitenEnabled, "spectral",
-        "Per-bin spectral whitening");
-    settings_.registerFloat("whitendecay", &spectral.whitenDecay, "spectral",
-        "Whitening peak decay per frame (0.99-0.999)", 0.9f, 0.9999f);
-    settings_.registerFloat("whitenfloor", &spectral.whitenFloor, "spectral",
-        "Whitening noise floor", 0.0001f, 0.1f);
-    settings_.registerBool("whitenbassbypass", &spectral.whitenBassBypass, "spectral",
-        "Skip whitening for bass bins 1-6 (preserve kick contrast, v47)");
-    settings_.registerBool("compenabled", &spectral.compressorEnabled, "spectral",
-        "Soft-knee compressor");
-    settings_.registerFloat("compthresh", &spectral.compThresholdDb, "spectral",
-        "Compressor threshold (dB)", -60.0f, 0.0f);
-    settings_.registerFloat("compratio", &spectral.compRatio, "spectral",
-        "Compression ratio", 1.0f, 20.0f);
-    settings_.registerFloat("compknee", &spectral.compKneeDb, "spectral",
-        "Soft knee width (dB)", 0.0f, 30.0f);
-    settings_.registerFloat("compmakeup", &spectral.compMakeupDb, "spectral",
-        "Makeup gain (dB)", -10.0f, 30.0f);
-    settings_.registerFloat("compattack", &spectral.compAttackTau, "spectral",
-        "Attack time constant (s)", 0.0001f, 0.1f);
-    settings_.registerFloat("comprelease", &spectral.compReleaseTau, "spectral",
-        "Release time constant (s)", 0.01f, 10.0f);
-
-    // Noise estimation (v56: minimum statistics + spectral subtraction)
-    settings_.registerBool("noiseest", &spectral.noiseEstEnabled, "spectral",
-        "Spectral noise subtraction (Martin 2001)");
-    settings_.registerFloat("noisesmooth", &spectral.noiseSmoothAlpha, "spectral",
-        "Noise power smoothing (0.8-0.99)", 0.8f, 0.999f);
-    settings_.registerFloat("noiserelease", &spectral.noiseReleaseFactor, "spectral",
-        "Noise floor release rate (0.99-0.9999)", 0.99f, 0.9999f);
-    settings_.registerFloat("noiseover", &spectral.noiseOversubtract, "spectral",
-        "Oversubtraction factor (1.0-3.0)", 0.5f, 5.0f);
-    settings_.registerFloat("noisefloor", &spectral.noiseFloorRatio, "spectral",
-        "Spectral floor ratio (0.001-0.5)", 0.001f, 0.5f);
+    // NN profiling
+    settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "tracker",
+        "Enable NN inference profiling output");
 }
+
+// (registerRhythmSettings removed v74 — ~250 lines of CBSS/Bayesian settings. See git history.)
 
 void SerialConsole::update() {
     // Handle incoming commands
@@ -771,23 +563,16 @@ bool SerialConsole::handleAudioStatusCommand(const char* cmd) {
             Serial.print(F("-"));
             Serial.println(audioCtrl_->getBpmMax(), 0);
 
-            // New metrics from research-based improvements
+            // Advanced metrics
             Serial.println(F("--- Advanced Metrics ---"));
             Serial.print(F("Beat Stability: "));
             Serial.println(audioCtrl_->getBeatStability(), 2);
-            Serial.print(F("Tempo Velocity: "));
-            Serial.print(audioCtrl_->getTempoVelocity(), 1);
-            Serial.println(F(" BPM/s"));
-            Serial.print(F("Next Beat In: "));
-            uint32_t nowMs = millis();
-            uint32_t nextMs = audioCtrl_->getNextBeatMs();
-            Serial.print(nextMs > nowMs ? (nextMs - nowMs) : 0);
-            Serial.println(F(" ms"));
-            Serial.print(F("Bayesian Prior Center: "));
-            Serial.print(audioCtrl_->bayesPriorCenter, 0);
-            Serial.print(F(" BPM (best bin conf="));
-            Serial.print(audioCtrl_->getBayesBestConf(), 2);
-            Serial.println(F(")"));
+            Serial.print(F("Comb BPM: "));
+            Serial.println(audioCtrl_->getCombBankBPM(), 1);
+            Serial.print(F("Comb Confidence: "));
+            Serial.println(audioCtrl_->getCombBankConfidence(), 3);
+            Serial.print(F("PLL Integral: "));
+            Serial.println(audioCtrl_->getPllIntegral(), 4);
         } else {
             Serial.println(F("Audio controller not available"));
         }
@@ -811,7 +596,7 @@ bool SerialConsole::handleModeCommand(const char* cmd) {
             Serial.print(F("Beat Count: "));
             Serial.println(audioCtrl_->getBeatCount());
         } else {
-            Serial.println(F("AudioController not available"));
+            Serial.println(F("Audio controller not available"));
         }
         if (mic_) {
             Serial.print(F("Audio Level: "));
@@ -833,8 +618,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 fireGenerator_->getParams(),
                 waterGenerator_->getParams(),
                 lightningGenerator_->getParams(),
-                *mic_,
-                audioCtrl_
+                *mic_
             );
             Serial.println(F("OK"));
         } else {
@@ -849,8 +633,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 fireGenerator_->getParamsMutable(),
                 waterGenerator_->getParamsMutable(),
                 lightningGenerator_->getParamsMutable(),
-                *mic_,
-                audioCtrl_
+                *mic_
             );
             checkBayesianInteractions();
             Serial.println(F("OK"));
@@ -1087,8 +870,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             fireGenerator_->getParams(),
             waterGenerator_->getParams(),
             lightningGenerator_->getParams(),
-            *mic_,
-            audioCtrl_
+            *mic_
         );
     } else if (mic_) {
         // Safe mode: generators null, but mic available
@@ -1100,8 +882,7 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             defaultFire,
             defaultWater,
             defaultLightning,
-            *mic_,
-            audioCtrl_
+            *mic_
         );
     } else {
         Serial.println(F("ERROR: Cannot save config - mic not initialized"));
@@ -1129,83 +910,20 @@ void SerialConsole::restoreDefaults() {
         mic_->releaseTau = Defaults::ReleaseTau;        // 5s peak release
     }
 
-    // Restore audio controller defaults
+    // Restore audio tracker defaults
     if (audioCtrl_) {
-        audioCtrl_->activationThreshold = 0.4f;
-        audioCtrl_->cbssAlpha = 0.9f;
-        audioCtrl_->cbssTightness = 8.0f;           // v40: raised from 5.0 (+24% avg F1)
-        audioCtrl_->beatConfidenceDecay = 0.98f;
-        audioCtrl_->bayesLambda = 0.60f;
-        audioCtrl_->bayesPriorCenter = 128.0f;
-        audioCtrl_->bayesPriorWeight = 0.0f;
-        audioCtrl_->bayesAcfWeight = 0.8f;
-        audioCtrl_->bayesCombWeight = 0.7f;
-        audioCtrl_->posteriorFloor = 0.05f;
-        audioCtrl_->disambigNudge = 0.15f;
-        audioCtrl_->harmonicTransWeight = 0.30f;
-        audioCtrl_->cbssThresholdFactor = 1.0f;
-        audioCtrl_->beatBoundaryTempo = true;
-        // (unifiedOdf default removed v67 — BandFlux pipeline removed)
-        audioCtrl_->odfMeanSubEnabled = false;   // v32: raw ODF better than mean-subtracted
-        audioCtrl_->adaptiveOdfThresh = false;
-        audioCtrl_->densityOctaveEnabled = true;  // v32: onset-density octave penalty
-        audioCtrl_->densityMinPerBeat = 0.5f;
-        audioCtrl_->densityMaxPerBeat = 5.0f;
-        audioCtrl_->downwardCorrectEnabled = false; // v41: experimental, overcorrects mid-tempo
-        audioCtrl_->octaveCheckEnabled = true;    // v32: shadow CBSS octave checker
-        audioCtrl_->octaveCheckBeats = 2;         // v32: aggressive (every 2 beats)
-        audioCtrl_->octaveScoreRatio = 1.3f;      // v32: aggressive threshold
-        // (forwardFilter/fwd*/fwdPhaseOnly defaults removed v64 — forward filter deleted)
-        audioCtrl_->btrkPipeline = true;          // v33: BTrack pipeline (Viterbi + comb-on-ACF)
-        audioCtrl_->btrkThreshWindow = 0;         // v33: adaptive threshold OFF (too aggressive with 20 bins)
-        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction defaults removed v64)
-        audioCtrl_->cbssContrast = 2.0f;           // v66: ODF contrast before CBSS (A/B tested 10-6 win)
-        audioCtrl_->cbssWarmupBeats = 0;           // v37: CBSS warmup disabled
-        audioCtrl_->onsetSnapWindow = 8;           // v39: snap beat to strongest OSS in ±8 frames
-        audioCtrl_->odfThreshWindow = 15;          // v35: adaptive ODF threshold half-window
-        // (onsetTrainOdf/odfDiffMode defaults removed v67 — BandFlux pipeline removed)
-        // (odfSource default removed v64 — experimental alternatives deleted)
-        audioCtrl_->densityPenaltyExp = 2.0f;      // v32: density penalty exponent
-        audioCtrl_->densityTarget = 0.0f;          // v32: density target (0=disabled)
-        // (phaseCheck/PLP defaults removed v44 — features deleted)
-
-        // Percival ACF harmonic pre-enhancement (v45)
-        audioCtrl_->percivalEnhance = true;
-        audioCtrl_->percivalWeight2 = 0.5f;
-        audioCtrl_->percivalWeight4 = 0.25f;
-
-        // PLL phase correction (v45)
-        audioCtrl_->pllEnabled = true;
+        audioCtrl_->bpmMin = 60.0f;
+        audioCtrl_->bpmMax = 200.0f;
+        audioCtrl_->rayleighBpm = 140.0f;
+        audioCtrl_->combFeedback = 0.92f;
         audioCtrl_->pllKp = 0.15f;
         audioCtrl_->pllKi = 0.005f;
-
-        // Adaptive CBSS tightness (v45)
-        audioCtrl_->adaptiveTightnessEnabled = true;
-        audioCtrl_->tightnessLowMult = 0.7f;
-        audioCtrl_->tightnessHighMult = 1.3f;
-        audioCtrl_->tightnessConfThreshHigh = 3.0f;
-        audioCtrl_->tightnessConfThreshLow = 1.5f;
-
-        audioCtrl_->percivalWeight3 = 0.0f;
-        // (multiAgent/metrical/template/subbeat defaults removed v64 — features deleted)
-
-        // Hidden calibration constants (v51)
-        audioCtrl_->cbssMeanAlpha = 0.008f;
-        audioCtrl_->harmonic2xThresh = 0.5f;
-        audioCtrl_->harmonic15xThresh = 0.6f;
-        audioCtrl_->pllSmoother = 0.95f;
-        audioCtrl_->beatConfBoost = 0.15f;
-        audioCtrl_->rhythmBlend = 0.6f;
-        audioCtrl_->periodicityBlend = 0.7f;
-        audioCtrl_->onsetDensityBlend = 0.7f;
-        // (subbeatBins/templateHistBars defaults removed v64)
-        // (particleFilter defaults removed v64 — PF deleted)
-        audioCtrl_->tempoSmoothingFactor = 0.85f;
+        audioCtrl_->activationThreshold = 0.3f;
+        audioCtrl_->odfGateThreshold = 0.25f;
+        audioCtrl_->tempoSmoothing = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->pulseSuppressOffBeat = 0.6f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
-        audioCtrl_->bpmMin = 60.0f;
-        audioCtrl_->bpmMax = 200.0f;
 
         // Restore spectral processing defaults
         SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
@@ -1648,7 +1366,7 @@ void SerialConsole::streamTick() {
 
         Serial.print(F("}"));
 
-        // AudioController telemetry (unified rhythm tracking)
+        // AudioTracker telemetry (unified rhythm tracking)
         // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"bt":12345,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2,"db":0.8,"bm":1}
         // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
         // conf = CBSS confidence, bc = beat count, q = beat event (phase wrap)
@@ -1680,11 +1398,7 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getBeatCount());
             Serial.print(F(",\"q\":"));
             Serial.print(beatEvent);
-            // Precise firmware beat timestamp (millis) for MCP latency reduction
-            if (beatEvent && audioCtrl_->getLastBeatTimeMs() > 0) {
-                Serial.print(F(",\"bt\":"));
-                Serial.print(audioCtrl_->getLastBeatTimeMs());
-            }
+            // Beat timestamp not available in AudioTracker (no discrete beat events)
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
@@ -1919,150 +1633,67 @@ bool SerialConsole::handleFakeAudioCommand(const char* cmd) {
     return true;
 }
 
-// === BEAT TRACKING COMMANDS ===
+// === TRACKER COMMANDS (AudioTracker) ===
 bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
-    if (!audioCtrl_) {
-        Serial.println(F("Audio controller not available"));
-        return false;
-    }
+    if (!audioCtrl_) return false;
 
-    // "show nn" - NN beat activation diagnostics (moved from handleEnsembleCommand v67)
+    // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
         audioCtrl_->getFrameBeatNN().printDiagnostics();
-        if (audioCtrl_->getFrameBeatNN().isReady()) {
-            float contrast = audioCtrl_->cbssContrast;
-            float alpha = audioCtrl_->cbssAlpha;
-            bool meanSub = audioCtrl_->odfMeanSubEnabled;
-            Serial.print(F("[NN] params: contrast="));
-            Serial.print(contrast);
-            Serial.print(F(" alpha="));
-            Serial.print((alpha > 0.8f) ? 0.8f : alpha);
-            Serial.print(F(" odfMeanSub=on"));
-            if (!meanSub) Serial.print(F(" (auto)"));
-            Serial.println();
-        }
         return true;
     }
 
-    // === PULSE MODULATION THRESHOLDS (moved from handleEnsembleCommand v67) ===
-    if (strncmp(cmd, "set pulsenear ", 14) == 0) {
-        float value = atof(cmd + 14);
-        if (value >= 0.0f && value <= 0.5f) {
-            audioCtrl_->pulseNearBeatThreshold = value;
-            Serial.print(F("OK pulsenear="));
-            Serial.println(value, 3);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.0-0.5"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show pulsenear") == 0 || strcmp(cmd, "pulsenear") == 0) {
-        Serial.print(F("pulsenear="));
-        Serial.println(audioCtrl_->pulseNearBeatThreshold, 3);
-        return true;
-    }
-    if (strncmp(cmd, "set pulsefar ", 13) == 0) {
-        float value = atof(cmd + 13);
-        if (value >= 0.2f && value <= 0.5f) {
-            audioCtrl_->pulseFarFromBeatThreshold = value;
-            Serial.print(F("OK pulsefar="));
-            Serial.println(value, 3);
-        } else {
-            Serial.println(F("ERROR: Valid range 0.2-0.5"));
-        }
-        return true;
-    }
-    if (strcmp(cmd, "show pulsefar") == 0 || strcmp(cmd, "pulsefar") == 0) {
-        Serial.print(F("pulsefar="));
-        Serial.println(audioCtrl_->pulseFarFromBeatThreshold, 3);
-        return true;
-    }
-
-    // "show beat" - show CBSS beat tracking state
+    // "show beat" - tracker state
     if (strcmp(cmd, "show beat") == 0) {
-        Serial.println(F("=== CBSS Beat Tracker ==="));
+        Serial.println(F("=== AudioTracker (ACF+Comb+PLL) ==="));
         Serial.print(F("BPM: "));
         Serial.println(audioCtrl_->getCurrentBpm(), 1);
         Serial.print(F("Phase: "));
-        Serial.println(audioCtrl_->getControl().phase, 3);
-        Serial.print(F("Confidence: "));
-        Serial.println(audioCtrl_->getCbssConfidence(), 3);
-        Serial.print(F("Beat Count: "));
-        Serial.println(audioCtrl_->getBeatCount());
-        Serial.print(F("Beat Period (samples): "));
-        Serial.println(audioCtrl_->getBeatPeriodSamples());
+        Serial.println(audioCtrl_->getPllPhase(), 3);
         Serial.print(F("Periodicity: "));
         Serial.println(audioCtrl_->getPeriodicityStrength(), 3);
-        Serial.print(F("Stability: "));
-        Serial.println(audioCtrl_->getBeatStability(), 3);
+        Serial.print(F("Beat Count: "));
+        Serial.println(audioCtrl_->getBeatCount());
+        Serial.print(F("Comb BPM: "));
+        Serial.println(audioCtrl_->getCombBankBPM(), 1);
+        Serial.print(F("Comb Confidence: "));
+        Serial.println(audioCtrl_->getCombBankConfidence(), 3);
+        Serial.print(F("PLL Integral: "));
+        Serial.println(audioCtrl_->getPllIntegral(), 4);
+        Serial.print(F("Pulse: "));
+        Serial.println(audioCtrl_->getLastPulseStrength(), 3);
         Serial.print(F("Onset Density: "));
-        Serial.print(audioCtrl_->getOnsetDensity(), 1);
+        Serial.print(audioCtrl_->getControl().onsetDensity, 1);
         Serial.println(F(" /s"));
-        Serial.print(F("Downbeat: "));
-        Serial.println(audioCtrl_->getControl().downbeat, 2);
-        Serial.print(F("Beat in Measure: "));
-        Serial.println(audioCtrl_->getControl().beatInMeasure);
         Serial.println();
         return true;
     }
 
-    // "json rhythm" - output rhythm tracking state as JSON (for test automation)
-    if (strcmp(cmd, "json rhythm") == 0) {
-        Serial.print(F("{\"bpm\":"));
-        Serial.print(audioCtrl_->getCurrentBpm(), 1);
-        Serial.print(F(",\"periodicityStrength\":"));
-        Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-        Serial.print(F(",\"beatStability\":"));
-        Serial.print(audioCtrl_->getBeatStability(), 3);
-        Serial.print(F(",\"tempoVelocity\":"));
-        Serial.print(audioCtrl_->getTempoVelocity(), 2);
-        Serial.print(F(",\"nextBeatMs\":"));
-        Serial.print(audioCtrl_->getNextBeatMs());
-        Serial.print(F(",\"bayesBestConf\":"));
-        Serial.print(audioCtrl_->getBayesBestConf(), 3);
-        Serial.print(F(",\"phase\":"));
-        Serial.print(audioCtrl_->getControl().phase, 3);
-        Serial.print(F(",\"rhythmStrength\":"));
-        Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
-        Serial.print(F(",\"cbssConfidence\":"));
-        Serial.print(audioCtrl_->getCbssConfidence(), 3);
-        Serial.print(F(",\"beatCount\":"));
-        Serial.print(audioCtrl_->getBeatCount());
-        Serial.print(F(",\"onsetDensity\":"));
-        Serial.print(audioCtrl_->getOnsetDensity(), 1);
-        Serial.print(F(",\"downbeat\":"));
-        Serial.print(audioCtrl_->getControl().downbeat, 2);
-        Serial.print(F(",\"beatInMeasure\":"));
-        Serial.print(audioCtrl_->getControl().beatInMeasure);
-        Serial.println(F("}"));
-        return true;
-    }
-
-    // "json beat" - output CBSS beat tracker state as JSON
-    if (strcmp(cmd, "json beat") == 0) {
+    // "json rhythm" / "json beat" - JSON output for test automation
+    if (strcmp(cmd, "json rhythm") == 0 || strcmp(cmd, "json beat") == 0) {
         Serial.print(F("{\"bpm\":"));
         Serial.print(audioCtrl_->getCurrentBpm(), 1);
         Serial.print(F(",\"phase\":"));
-        Serial.print(audioCtrl_->getControl().phase, 3);
+        Serial.print(audioCtrl_->getPllPhase(), 3);
         Serial.print(F(",\"periodicity\":"));
         Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
-        Serial.print(F(",\"confidence\":"));
-        Serial.print(audioCtrl_->getCbssConfidence(), 3);
+        Serial.print(F(",\"combBpm\":"));
+        Serial.print(audioCtrl_->getCombBankBPM(), 1);
+        Serial.print(F(",\"combConf\":"));
+        Serial.print(audioCtrl_->getCombBankConfidence(), 3);
         Serial.print(F(",\"beatCount\":"));
         Serial.print(audioCtrl_->getBeatCount());
-        Serial.print(F(",\"beatPeriod\":"));
-        Serial.print(audioCtrl_->getBeatPeriodSamples());
-        Serial.print(F(",\"stability\":"));
-        Serial.print(audioCtrl_->getBeatStability(), 3);
-        Serial.print(F(",\"downbeat\":"));
-        Serial.print(audioCtrl_->getControl().downbeat, 2);
-        Serial.print(F(",\"beatInMeasure\":"));
-        Serial.print(audioCtrl_->getControl().beatInMeasure);
+        Serial.print(F(",\"rhythmStrength\":"));
+        Serial.print(audioCtrl_->getControl().rhythmStrength, 3);
+        Serial.print(F(",\"pulse\":"));
+        Serial.print(audioCtrl_->getLastPulseStrength(), 3);
+        Serial.print(F(",\"onsetDensity\":"));
+        Serial.print(audioCtrl_->getControl().onsetDensity, 1);
         Serial.println(F("}"));
         return true;
     }
 
-    // "show spectral" - show spectral processing (compressor + whitening) state
+    // "show spectral" - spectral processing state
     if (strcmp(cmd, "show spectral") == 0) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
         Serial.println(F("=== Spectral Processing ==="));

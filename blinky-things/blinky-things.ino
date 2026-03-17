@@ -16,6 +16,8 @@
  * - Bucket Totem: 128 LEDs in 16x8 matrix
  */
 
+// v74: AudioTracker replaces AudioController (ACF+Comb+PLL, ~10 params, 60fps).
+
 // NOTE: Adafruit_NeoPixel must be first. PDM.h is included separately in
 // Nrf52PdmMic.cpp to avoid pinDefinitions.h redefinition (Seeeduino mbed platform bug)
 #include <Adafruit_NeoPixel.h>
@@ -30,6 +32,7 @@
 #include "hal/Uf2BootloaderOverride.h"       // Fix 1200-baud touch → UF2 mode (not serial DFU)
 #include "hal/SafeBootWatchdog.h"            // Hardware WDT + auto-recovery to UF2 bootloader
 #include "audio/FakeAudio.h"                 // Synthetic audio for visual design/debug
+#include "audio/AudioTracker.h"              // Simplified ACF+Comb+PLL tracker (v74)
 
 // Runtime Device Configuration (v28+)
 // Device config is now loaded from flash at boot time instead of compile-time selection.
@@ -67,7 +70,7 @@ RenderPipeline* pipeline = nullptr;  // Manages generators, effects, and renderi
 
 // HAL-enabled components - use pointers to avoid static initialization order fiasco
 // These are initialized in setup() AFTER Arduino runtime is ready
-AudioController* audioController = nullptr;  // Unified audio analysis (owns AdaptiveMic internally)
+AudioTracker* audioController = nullptr;     // ACF+Comb+PLL beat tracker (v74)
 BatteryMonitor* battery = nullptr;
 IMUHelper imu;                     // IMU sensor interface; auto-initializes, uses stub mode if LSM6DS3 not installed
 ConfigStorage configStorage;       // Persistent settings storage
@@ -188,7 +191,7 @@ void setup() {
 
   // Initialize HAL-enabled components - ALWAYS initialize (even in safe mode)
   // Audio and battery monitoring work independently of LED configuration
-  audioController = new(std::nothrow) AudioController(DefaultHal::pdm(), DefaultHal::time());
+  audioController = new(std::nothrow) AudioTracker(DefaultHal::pdm(), DefaultHal::time());
   battery = new(std::nothrow) BatteryMonitor(DefaultHal::gpio(), DefaultHal::adc(), DefaultHal::time());
   if (!audioController || !battery) {
     haltWithError(F("ERROR: HAL component allocation failed"));
@@ -283,8 +286,7 @@ void setup() {
           fireGen->getParamsMutable(),
           waterGen->getParamsMutable(),
           lightningGen->getParamsMutable(),
-          audioController->getMicForTuning(),
-          audioController
+          audioController->getMicForTuning()
         );
         SerialConsole::logDebug(F("Loaded effect params from flash"));
 
@@ -313,7 +315,7 @@ void setup() {
     SerialConsole::logDebug(F("Battery monitor initialized"));
   }
 
-  // Note: Rhythm tracking is now handled internally by AudioController
+  // Rhythm tracking handled internally by AudioTracker (ACF+Comb+PLL)
 
   // Initialize serial console for interactive settings management
   // Uses RenderPipeline for generator/effect switching
@@ -412,8 +414,7 @@ void loop() {
           fireGen->getParams(),
           waterGen->getParams(),
           lightningGen->getParams(),
-          audioController->getMicForTuning(),
-          audioController
+          audioController->getMicForTuning()
         );
       }
     }

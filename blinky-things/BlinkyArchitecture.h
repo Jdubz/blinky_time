@@ -50,7 +50,7 @@
 
 // Audio processing
 #include "audio/AudioControl.h"
-#include "audio/AudioController.h"
+#include "audio/AudioTracker.h"
 
 // Testing (for development/debugging)
 #ifdef ENABLE_TESTING
