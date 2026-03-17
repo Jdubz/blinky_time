@@ -60,10 +60,7 @@ bool Esp32PdmMic::begin(int channels, long sampleRate) {
     size_t bytesRead = 0;
     esp_err_t err = i2s_channel_read(rx_handle, verifyBuf, sizeof(verifyBuf),
                                       &bytesRead, 500);
-    Serial.printf("[PDM] verify: err=%d bytes=%u handle=%p clk=%d data=%d\n",
-                  (int)err, (unsigned)bytesRead, rx_handle, PDM_CLK_PIN, PDM_DATA_PIN);
     if (bytesRead == 0) {
-        Serial.println("[PDM] FAILED: no data from I2S PDM — mic dead or pin conflict");
         i2s_channel_disable(rx_handle);
         i2s_del_channel(rx_handle);
         rx_handle = nullptr;
@@ -123,14 +120,10 @@ void Esp32PdmMic::poll() {
                                      STAGING_SIZE * sizeof(int16_t),
                                      &bytesRead, 1);
 
-    // Periodic diagnostic: log i2s_channel_read result every ~2s
-    static uint32_t diagCount = 0;
-    if (++diagCount % 120 == 1) {
-        Serial.printf("[PDM] poll: err=%d bytes=%u handle=%p\n",
-                      (int)err, (unsigned)bytesRead, rx_handle);
-    }
-
-    if (err != ESP_OK || bytesRead == 0) return;
+    // ESP-IDF i2s_channel_read() returns ESP_ERR_TIMEOUT when the requested
+    // size wasn't fully read before timeout, but bytesRead may still be >0
+    // (partial DMA buffer). Only discard if truly no data arrived.
+    if (bytesRead == 0) return;
 
     stagingCount_ = (int)bytesRead / (int)sizeof(int16_t);
 
