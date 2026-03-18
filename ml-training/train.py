@@ -191,6 +191,33 @@ def confidence_shift_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
     return (bce * class_weight * confidence).mean()
 
 
+def asymmetric_focal_bce(y_pred: torch.Tensor, y_true: torch.Tensor,
+                         pos_weight: torch.Tensor | float,
+                         gamma_pos: float = 0.5,
+                         gamma_neg: float = 2.0) -> torch.Tensor:
+    """Asymmetric Focal Loss for onset detection (Imoto & Mishima 2022).
+
+    Low gamma_pos preserves gradient for ALL onset frames.
+    High gamma_neg aggressively suppresses easy negative (silence) frames.
+    """
+    y_pred = y_pred.clamp(1e-7, 1.0 - 1e-7)
+    pw = _broadcast_pos_weight(pos_weight, y_true)
+    bce = F.binary_cross_entropy(y_pred, y_true, reduction='none')
+    is_positive = y_true > 0.5
+
+    # Asymmetric focusing: different gamma for positive vs negative
+    pt = torch.where(is_positive, y_pred, 1 - y_pred)
+    gamma = torch.where(is_positive,
+                        torch.tensor(gamma_pos, device=y_pred.device),
+                        torch.tensor(gamma_neg, device=y_pred.device))
+    focal_weight = (1 - pt) ** gamma
+
+    # Class weight for positive examples
+    class_weight = torch.where(is_positive, pw, 1.0)
+
+    return (bce * focal_weight * class_weight).mean()
+
+
 def weighted_focal(y_pred: torch.Tensor, y_true: torch.Tensor,
                    pos_weight: torch.Tensor | float,
                    gamma: float = 2.0) -> torch.Tensor:
@@ -252,7 +279,8 @@ def main():
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto")
     parser.add_argument("--loss", default=None,
-                        choices=["bce", "focal", "shift_bce", "confidence_shift_bce"],
+                        choices=["bce", "focal", "shift_bce", "confidence_shift_bce",
+                                 "asymmetric_focal"],
                         help="Loss function (default: from config, or shift_bce)")
     parser.add_argument("--focal-gamma", type=float, default=2.0,
                         help="Focal loss gamma (default: 2.0)")
@@ -428,6 +456,7 @@ def main():
             downbeat=use_downbeat,
             sum_head=cfg["model"].get("sum_head", False),
             num_tempo_bins=num_tempo_bins,
+            freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
         from models.onset_conv1d_pool import build_onset_conv1d_pool
@@ -512,7 +541,14 @@ def main():
     pf = getattr(model, 'pool_factor', 1)
     if pf > 1:
         shift_tolerance = max(0, shift_tolerance // pf)
-    if loss_type == "focal":
+    if loss_type == "asymmetric_focal":
+        loss_cfg = cfg.get("loss", {})
+        gamma_pos = loss_cfg.get("gamma_pos", 0.5)
+        gamma_neg = loss_cfg.get("gamma_neg", 2.0)
+        loss_fn = partial(asymmetric_focal_bce, pos_weight=pos_weight,
+                          gamma_pos=gamma_pos, gamma_neg=gamma_neg)
+        print(f"Loss: asymmetric focal (gamma_pos={gamma_pos}, gamma_neg={gamma_neg})")
+    elif loss_type == "focal":
         loss_fn = partial(weighted_focal, pos_weight=pos_weight, gamma=args.focal_gamma)
         print(f"Loss: focal (gamma={args.focal_gamma})")
     elif loss_type == "confidence_shift_bce":
@@ -541,6 +577,12 @@ def main():
     if use_spec_augment:
         print(f"SpecAugment: {sa_num_freq} freq masks (max {sa_max_freq} bands), "
               f"{sa_num_time} time masks (max {sa_max_time} frames)")
+
+    # Online mixup config (SpecMix 2021, DCASE 2024)
+    use_mixup = cfg.get("training", {}).get("mixup", False)
+    mixup_alpha = cfg.get("training", {}).get("mixup_alpha", 0.4)
+    if use_mixup:
+        print(f"Mixup: Beta({mixup_alpha}, {mixup_alpha}), p=0.5")
 
     # Training loop
     steps_per_epoch = len(train_loader)
@@ -583,6 +625,13 @@ def main():
             if use_spec_augment:
                 X_batch = spec_augment(X_batch, sa_num_freq, sa_max_freq,
                                        sa_num_time, sa_max_time)
+
+            # Online mixup augmentation (SpecMix 2021, DCASE 2024)
+            if use_mixup and np.random.random() < 0.5:
+                lam = np.random.beta(mixup_alpha, mixup_alpha)
+                idx = torch.randperm(X_batch.size(0), device=X_batch.device)
+                X_batch = lam * X_batch + (1 - lam) * X_batch[idx]
+                Y_batch = lam * Y_batch + (1 - lam) * Y_batch[idx]
 
             optimizer.zero_grad()
             model_out = model(X_batch)

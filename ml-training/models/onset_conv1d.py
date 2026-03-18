@@ -45,7 +45,8 @@ class FrameOnsetConv1D(nn.Module):
                  dropout: float = 0.1,
                  downbeat: bool = False,
                  sum_head: bool = False,
-                 num_tempo_bins: int = 0):
+                 num_tempo_bins: int = 0,
+                 freq_pos_encoding: bool = False):
         super().__init__()
         assert len(channels) == len(kernel_sizes), \
             f"channels ({len(channels)}) and kernel_sizes ({len(kernel_sizes)}) must match"
@@ -56,6 +57,12 @@ class FrameOnsetConv1D(nn.Module):
         self.channels = channels
         self.kernel_sizes = kernel_sizes
         self.num_tempo_bins = num_tempo_bins
+        self.freq_pos_encoding = freq_pos_encoding
+
+        # Frequency positional encoding (FAC, ICASSP 2024)
+        # Learnable per-band vector helps discriminate kicks (low) from hi-hats (high)
+        if freq_pos_encoding:
+            self.freq_pos = nn.Parameter(torch.zeros(1, 1, n_mels))
 
         layers = []
         in_ch = n_mels
@@ -88,6 +95,9 @@ class FrameOnsetConv1D(nn.Module):
             so downbeat is structurally constrained to be ≤ onset.
             During training with tempo head: (predictions, tempo_logits)
         """
+        if self.freq_pos_encoding:
+            x = x + self.freq_pos  # Add frequency position encoding
+
         x = x.permute(0, 2, 1)  # (batch, n_mels, time)
         h = self.backbone(x)     # (batch, last_ch, time)
         logits = self.output_conv(h)  # (batch, out_channels, time)
@@ -115,7 +125,8 @@ def build_onset_conv1d(n_mels: int = 26,
                       dropout: float = 0.1,
                       downbeat: bool = False,
                       sum_head: bool = False,
-                      num_tempo_bins: int = 0) -> nn.Module:
+                      num_tempo_bins: int = 0,
+                      freq_pos_encoding: bool = False) -> nn.Module:
     """Build a frame-level Conv1D onset activation model.
 
     Args:
@@ -126,11 +137,12 @@ def build_onset_conv1d(n_mels: int = 26,
         downbeat: If True, output 2 channels (onset + downbeat)
         sum_head: If True, constrain downbeat ≤ onset (Beat This! technique)
         num_tempo_bins: If > 0, add training-only tempo auxiliary head
+        freq_pos_encoding: If True, add learnable frequency position vector
     """
     return FrameOnsetConv1D(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
         dropout=dropout, downbeat=downbeat, sum_head=sum_head,
-        num_tempo_bins=num_tempo_bins)
+        num_tempo_bins=num_tempo_bins, freq_pos_encoding=freq_pos_encoding)
 
 
 def conv1d_model_summary(cfg: dict) -> None:
