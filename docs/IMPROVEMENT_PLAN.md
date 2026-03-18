@@ -1,15 +1,14 @@
 # Blinky Time - Improvement Plan
 
-*Last Updated: March 17, 2026*
+*Last Updated: March 18, 2026*
 
 > **Historical content (v28-v64 detailed writeups, parameter sweeps, A/B test data)** archived via git history. See commit history for `docs/IMPROVEMENT_PLAN.md` prior to this date.
 
 ## Current Status
 
-**Firmware:** v75 (SETTINGS_VERSION 73). AudioTracker with decoupled tempo/onset architecture (~10 params). BPM estimation uses spectral flux (NN-independent) → ACF + comb bank. NN onset detection (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840, 5.8ms ESP32-S3) drives visual pulse + PLL phase refinement only. Onset information gate, pulse baseline tracking, hybrid energy synthesis. AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). HeatFire hybrid audio-reactive design. 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
+**Firmware:** v76 (SETTINGS_VERSION 75). AudioTracker with decoupled tempo/onset architecture, subdivision-aware PLL correction, cosine confidence modulation. BPM estimation uses spectral flux (NN-independent) → ACF + comb bank. NN onset detection (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840, 5.8ms ESP32-S3) drives visual pulse + PLL phase refinement only. ~35 tunable params persisted to flash (v74+). AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
-**Known regressions (v74):**
-- **AudioTracker params not persisted:** The ~10 tunable params (bpmMin, bpmMax, rayleighBpm, combFeedback, pllKp, pllKi, etc.) revert to defaults on reboot. ConfigStorage integration deferred.
+**Key discovery (March 18):** The model is a **good onset detector** (Onset F1=0.738 vs librosa onset labels) — the previously reported "Beat F1=0.477" was measuring the wrong thing. Firmware phase alignment is the visual bottleneck, not model quality.
 
 **NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). Onset F1=0.477 (offline eval, measured against beat-position labels). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection and PLL phase refinement — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
@@ -31,69 +30,72 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ## Active Priorities
 
-### Priority 1: Phase Grid Alignment (v76)
+### Priority 1: Phase Grid Alignment (v76) — IMPLEMENTED
 
-**Status: DESIGNED (March 18, 2026) — see `docs/PHASE_CONFIDENCE_ARCHITECTURE.md`**
+**Status: DEPLOYED on ESP32-S3 display (March 18, 2026). Pending: flash blinkyhost, A/B test.**
 
-**The primary visual bottleneck is phase alignment, not BPM accuracy.** Octave errors (half/double time) are visually acceptable — events still land on beat grid subdivisions and look musical. Phase misalignment (events between subdivisions) looks random and breaks immersion.
+See `docs/PHASE_CONFIDENCE_ARCHITECTURE.md` for full design.
 
-**Critical bug found:** The PLL correction window (`pllNearBeatWindow = 0.25`) only corrects near phase 0.0. At half-time BPM, real beats also land at phase 0.5 — OUTSIDE the correction window. Every other beat gets no PLL correction, 0.6x pulse suppression, and zero energy boost. This is the single biggest phase alignment issue.
+Phase alignment is the primary visual bottleneck. Octave errors (half/double time) are acceptable — events still land on beat grid subdivisions. Phase misalignment (events between subdivisions) looks random.
 
-**Fix (v76 Phase 1 — highest priority):**
-- Make PLL correction subdivision-aware: correct at phase 0.0, 0.5, 0.25, 0.75
-- Make energy boost and pulse modulation subdivision-aware
-- Replace binary boost/suppress with cosine proximity confidence curve
-- Add onset grid classification (ON_BEAT/EIGHTH/SIXTEENTH/OFF_GRID)
-- ~60 lines changed, negligible RAM/CPU cost
+**Implemented (SETTINGS_VERSION 74→75):**
+- ✅ Subdivision-aware PLL correction: corrects at phase 0.0 AND 0.5 (8th notes), not just phase 0. Fixes half-time anti-phase bug.
+- ✅ Subdivision-aware energy boost: fires at all 8th-note positions.
+- ✅ Cosine proximity confidence modulation: smooth falloff replaces binary boost/suppress.
+- ✅ rhythmStrength gate: no modulation when uncertain, full when confident.
+- ✅ New tunable params: conffloor (0.4), confactivation (0.3), conffullmod (0.7), subdivtol (0.10).
+- ✅ Parameter sweep defaults applied: odfContrast 2.0→1.25, combFeedback 0.92→0.855, rayleighBpm 140→130.
 
-**Fix (v76 Phase 2):**
-- PLL density-scaled correction (sparse content → trust onsets more, busy → less)
-- Confidence modulation gated by rhythmStrength (no modulation when uncertain)
+**Remaining:**
+- [ ] Flash blinkyhost (3 nRF52840 + 2 ESP32-S3) with v76 firmware
+- [ ] A/B test v76 vs v75 on blinkyhost (18 tracks, phase alignment metric)
+- [ ] Visual assessment on ESP32-S3 display with music
+- [ ] Update blinky-console settingsMetadata.ts for new params
 
-**Fix (v76 Phase 3):**
-- ConfigStorage + SerialConsole integration for new params
+### Priority 2: NN Training Improvements (When Retrained)
 
-### Priority 2: NN Onset Detection Quality
+**Status: NOT URGENT — model is already Onset F1=0.738. Retrain when firmware phase is validated.**
 
-**Status: Conv1D W16 ONSET-ONLY DEPLOYED (March 17, 2026) — Onset F1=0.477 (vs beat labels)**
+**Key discovery (March 18):** Evaluating the W16 model against librosa onset labels (not beat labels) revealed it's already a good onset detector. Previously reported "Beat F1=0.477" was measuring onset-vs-beat alignment — the wrong metric.
 
-FrameOnsetNN detects acoustic onsets (kicks/snares), not metrical beats. The 144ms receptive field cannot distinguish on-beat from off-beat transients. Trained on beat-position labels from 7-system consensus. F1 measured against beat positions, not onset ground truth.
+| Metric | F1 | What it measures |
+|--------|-----|-----------------|
+| vs Beat labels (old) | 0.445 | onset-to-metrical-grid alignment |
+| **vs Onset labels (correct)** | **0.738** | acoustic transient detection |
 
-**Key insight:** The model's actual onset detection quality has never been measured. "Onset F1=0.477" measures how often kick/snare onsets align with consensus beat positions — not onset precision/recall. Generating true onset labels (via librosa.onset.onset_detect or manual annotation) would give us a real quality metric.
+**High-impact techniques to include in next training run** (all code exists, never activated):
 
-**Previous approach (beat-synchronous hybrid, ABANDONED March 11):** A beat-rate FC classifier on accumulated spectral summaries. Abandoned because:
-1. **Circular dependency**: If CBSS is unreliable (~28% F1), features extracted at beat boundaries are noisy. The NN can't reliably correct the tracker that produced its inputs.
-2. **No discriminative signal**: Label quality analysis showed Cohen's d < 0.13 between downbeat and non-downbeat beat-level features. A linear classifier gains 0% over majority-class baseline. Per-beat spectral summaries don't carry downbeat information.
-3. **Outlier approach**: ALL leading beat/downbeat trackers (BeatNet, Beat This!, madmom, TCN) use frame-level NNs. Only Krebs 2016 used beat-level features — with bidirectional GRU (impossible in real-time), two feature streams, 4 subdivisions, and DBN post-processing. Even then, F1 drops from 90.4% to 77.3% with estimated beats, showing high sensitivity to beat tracker errors.
+1. **Knowledge distillation** (+2-5% F1) — Beat This! soft labels as teacher. `generate_teacher_labels.py` and `distillation_loss()` already implemented. Train with `--distill`, alpha=0.3, temperature=2.0. **Highest expected ROI.**
 
-**New approach: Frame-level FC on raw mel frames.** Process a sliding window of raw mel frames through FC layers to produce per-frame beat and downbeat activations. This matches the proven paradigm used by all successful systems, avoids the circular dependency, and is computationally feasible because FC inference is fast (~60-200µs vs 79-98ms for convolutions).
+2. **Online mixup augmentation** (+1-3% F1) — Batch-level feature+label mixing, Beta(0.4, 0.4). ~15 lines in training loop. Complementary to existing SpecAugment. Source: SpecMix (2021), DCASE 2024.
 
-**Architecture: Frame-Level FC Beat Activation**
+3. **Frequency positional encoding** (+1-3% F1) — Learnable 26-dim vector added to mel input before first conv. Helps discriminate kicks (low bands) from hi-hats (high bands). 26 extra params, negligible compute. Source: FAC (ICASSP 2024).
 
-```
-SharedSpectralAnalysis (already runs every frame, no additional cost)
-     │
-     ├── rawMelBands_ (26 bands, 62.5 Hz, pre-compression, pre-whitening)
-     │         │
-     │    Mel frame ring buffer (last N frames, ~N×26 floats)
-     │         │
-     │    FrameOnsetNN inference (every Kth frame, ~15.6 Hz):
-     │         │  Input:  N frames × 26 mel bands = N×26 floats (flattened)
-     │         │  Model:  FC hidden layers → 2 outputs
-     │         │  Output: [beat_activation, downbeat_activation]
-     │         │
-     │         ├── beat_activation → replaces BandFlux as ODF for CBSS
-     │         │     Higher quality ODF → better tempo estimation → better phase
-     │         │
-     │         └── downbeat_activation → AudioControl.downbeat
-     │               Smoothed and thresholded for bar boundary detection
-     │
-     ├── NN onset activation → CBSS → beat detection (replaces BandFlux ODF)
-     │
-     └── AudioControl (all fields, with NN-driven ODF + downbeat)
-```
+4. **Asymmetric focal loss** (+1-3% F1) — Split gamma into gamma_pos=0.5 (preserve onset gradients), gamma_neg=2.0 (suppress silence). Addresses 96% class imbalance. Source: Imoto & Mishima (2022).
 
-**Why frame-level FC works on Cortex-M4F:**
+5. **Fix nRF52840 gain calibration** — Update `hw_gain_max` to 32 in base.yaml. Current mic_profile.npz has gain=30 but devices run at gain=32. Minor impact but should be fixed before any retrain.
+
+**Not worth pursuing:**
+- Self-supervised pretraining (BYOL-A, Audio-MAE): models too large for MCU, no transfer path
+- Curriculum learning: inconsistent evidence, moderate effort
+- Wider windows (W32/W64): architecture already validated as W16-optimal for onset detection
+- Onset-specific labels for training: beat-position labels work well enough (model learns onset patterns from them regardless)
+
+### Priority 3: Test Metric Alignment
+
+**Status: PARTIALLY DONE. Onset labels generated, sweep scoring fixed. Phase metric needed.**
+
+- ✅ Onset labels generated for all 18 EDM test tracks (.onsets.json)
+- ✅ Octave error penalty removed from param_sweep_multidev.cjs scoring
+- [ ] Add phase-grid-alignment metric to sweep tooling: measure onset-to-subdivision distance, not BPM accuracy
+- [ ] Update evaluate.py to report onset F1 alongside beat F1
+- [ ] Add phase alignment visualization (onset time vs grid position scatter plot)
+
+### Architecture History (Collapsed — see git log for details)
+
+**FC → Conv1D → W16 onset-only journey (Feb-March 2026):** Beat-synchronous hybrid abandoned (circular dependency). Frame-level FC deployed (Beat F1=0.491). Conv1D W64 deployed (0.480, 27ms). W192 FC regressed (0.370, flattening destroys locality). Dual-model abandoned (every published system uses single joint). Conv1D W16 onset-only deployed (Onset F1=0.738, 6.8ms). BandFlux fully removed (v67). See git history for `IMPROVEMENT_PLAN.md` for detailed writeups.
+
+**Why frame-level works on Cortex-M4F:**
 
 The mel-spectrogram CNN was slow (79-98ms) because of Conv2D operations — CMSIS-NN still requires 37ms for convolutions, plus overhead from Pad, SpaceToBatch, residual Add requantization. FC layers have none of this overhead:
 
