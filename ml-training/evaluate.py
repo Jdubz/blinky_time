@@ -279,6 +279,19 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             "f1": float(scores),
         }
 
+        # Onset-level evaluation (if .onsets.json exists alongside .beats.json)
+        onset_path = label_path.parent / f"{audio_path.stem}.onsets.json"
+        if onset_path.exists():
+            with open(onset_path) as f:
+                onset_data = json.load(f)
+            ref_onsets = np.array(onset_data["onsets"])
+            if len(ref_onsets) > 0 and len(est_beats) > 0:
+                onset_f1 = mir_eval.beat.f_measure(ref_onsets, est_beats, f_measure_threshold=0.07)
+            else:
+                onset_f1 = 0.0
+            result["onset_f1"] = float(onset_f1)
+            result["ref_onsets"] = len(ref_onsets)
+
         # Downbeat evaluation
         if has_downbeat:
             ref_downbeats = np.array([
@@ -306,7 +319,8 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         db_str = f", DB F1={result['db_f1']:.3f}" if has_downbeat else ""
         acf_err_str = f"{lag_err:.1f}f" if np.isfinite(lag_err) else "n/a"
         acf_str = f", ACF ratio={acf_metrics['acf_peak_ratio']:.3f} prom={acf_metrics['acf_peak_prominence']:.2f} err={acf_err_str}"
-        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){db_str}{acf_str}")
+        onset_str = f", onsetF1={result['onset_f1']:.3f}" if "onset_f1" in result else ""
+        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{db_str}{acf_str}")
 
         # Save activation plot
         _plot_activation(activations, ref_beats, est_beats, frame_rate,
@@ -318,6 +332,11 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         f1s = [r["f1"] for r in all_results]
         print(f"\nAggregate Beat: mean F1={np.mean(f1s):.3f}, median={np.median(f1s):.3f}, "
               f"min={np.min(f1s):.3f}, max={np.max(f1s):.3f}")
+
+        onset_f1s = [r["onset_f1"] for r in all_results if "onset_f1" in r]
+        if onset_f1s:
+            print(f"Aggregate Onset: mean F1={np.mean(onset_f1s):.3f}, median={np.median(onset_f1s):.3f}, "
+                  f"min={np.min(onset_f1s):.3f}, max={np.max(onset_f1s):.3f}")
 
         db_f1s = [r["db_f1"] for r in all_results if "db_f1" in r]
         if db_f1s:
