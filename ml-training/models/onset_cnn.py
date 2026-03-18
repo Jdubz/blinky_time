@@ -1,11 +1,11 @@
-"""Causal 1D CNN for beat activation detection.
+"""Causal 1D CNN for onset activation detection.
 
 Designed to run on XIAO nRF52840 Sense (Cortex-M4F @ 64 MHz, 256 KB RAM)
 via TFLite Micro + CMSIS-NN.
 
 Two architecture variants:
-  BeatCNN: Standard dilated causal conv layers (v1-v8)
-  DSTCNBeatCNN: Depthwise separable TCN with residual connections (v9+)
+  OnsetCNN: Standard dilated causal conv layers (v1-v8, formerly BeatCNN)
+  DSTCNOnsetCNN: Depthwise separable TCN with residual connections (v9+, formerly DSTCNBeatCNN)
 
 Receptive field depends on dilation config:
   [1,2,4] = 15 frames (240ms), [1,2,4,8,16] = 63 frames (1008ms).
@@ -19,11 +19,11 @@ import torch
 import torch.nn as nn
 
 
-class BeatCNN(nn.Module):
-    """Causal 1D CNN for beat (and optional downbeat) activation.
+class OnsetCNN(nn.Module):
+    """Causal 1D CNN for onset (and optional downbeat) activation.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels)  — 1 = beat only, 2 = beat + downbeat
+    Output: (batch, time, out_channels)  — 1 = onset only, 2 = onset + downbeat
     """
 
     def __init__(self, n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
@@ -115,8 +115,8 @@ class DSConvBlock(nn.Module):
         return x
 
 
-class DSTCNBeatCNN(nn.Module):
-    """Depthwise Separable Temporal Convolutional Network for beat activation.
+class DSTCNOnsetCNN(nn.Module):
+    """Depthwise Separable Temporal Convolutional Network for onset activation.
 
     Replaces standard Conv1D layers with depthwise separable convolutions for
     ~2.7x fewer MACs. Optional residual skip connections improve gradient flow.
@@ -177,12 +177,12 @@ class DSTCNBeatCNN(nn.Module):
         return x.permute(0, 2, 1)
 
 
-def build_beat_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
+def build_onset_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
                    dilations: list[int] = [1, 2, 4], dropout: float = 0.1,
                    chunk_frames: int = 128, downbeat: bool = False,
                    model_type: str = "causal_cnn",
                    residual: bool = False) -> nn.Module:
-    """Build a beat activation model.
+    """Build an onset activation model.
 
     Args:
         model_type: "causal_cnn" (v1-v8) or "ds_tcn" (v9+, depthwise separable)
@@ -192,17 +192,17 @@ def build_beat_cnn(n_mels: int = 26, channels: int = 32, kernel_size: int = 3,
     models are dynamic in the time dimension.
     """
     if model_type == "ds_tcn":
-        return DSTCNBeatCNN(n_mels=n_mels, channels=channels, kernel_size=kernel_size,
+        return DSTCNOnsetCNN(n_mels=n_mels, channels=channels, kernel_size=kernel_size,
                             dilations=dilations, dropout=dropout, downbeat=downbeat,
                             residual=residual)
-    return BeatCNN(n_mels=n_mels, channels=channels, kernel_size=kernel_size,
+    return OnsetCNN(n_mels=n_mels, channels=channels, kernel_size=kernel_size,
                    dilations=dilations, dropout=dropout, downbeat=downbeat)
 
 
 def model_summary(cfg: dict) -> None:
     """Print model summary and parameter count."""
     model_type = cfg["model"].get("type", "causal_cnn")
-    model = build_beat_cnn(
+    model = build_onset_cnn(
         n_mels=cfg["audio"]["n_mels"],
         channels=cfg["model"]["channels"],
         kernel_size=cfg["model"]["kernel_size"],

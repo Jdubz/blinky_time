@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate beat activation model offline (PyTorch, GPU-accelerated).
+"""Evaluate onset activation model offline (PyTorch, GPU-accelerated).
 
 Computes per-track and aggregate metrics:
   - Frame-level: precision, recall, F1 (at threshold)
@@ -27,7 +27,7 @@ import mir_eval
 import numpy as np
 import torch
 
-from models.beat_cnn import build_beat_cnn
+from models.onset_cnn import build_onset_cnn
 from scripts.audio import (
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
@@ -123,7 +123,7 @@ def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
 
 
 def _load_model(model_path: str, cfg: dict, device: torch.device):
-    """Load a trained beat activation model (CNN, DS-TCN, or frame FC)."""
+    """Load a trained onset activation model (CNN, DS-TCN, or frame FC)."""
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
 
     # Handle both bare state_dict and full checkpoint
@@ -136,8 +136,8 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
 
     model_type = cfg["model"].get("type", "causal_cnn")
     if model_type == "frame_fc":
-        from models.beat_fc import build_beat_fc
-        model = build_beat_fc(
+        from models.onset_fc import build_onset_fc
+        model = build_onset_fc(
             n_mels=cfg["audio"]["n_mels"],
             window_frames=cfg["model"]["window_frames"],
             hidden_dims=cfg["model"]["hidden_dims"],
@@ -145,18 +145,19 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             downbeat=use_downbeat,
         ).to(device)
     elif model_type == "frame_conv1d":
-        from models.beat_conv1d import build_beat_conv1d
-        model = build_beat_conv1d(
+        from models.onset_conv1d import build_onset_conv1d
+        model = build_onset_conv1d(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"].get("dropout", 0.1),
             downbeat=use_downbeat,
             sum_head=cfg["model"].get("sum_head", False),
+            num_tempo_bins=cfg["model"].get("num_tempo_bins", 0),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
-        from models.beat_conv1d_pool import build_beat_conv1d_pool
-        model = build_beat_conv1d_pool(
+        from models.onset_conv1d_pool import build_onset_conv1d_pool
+        model = build_onset_conv1d_pool(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
@@ -166,7 +167,7 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             use_stride=cfg["model"].get("use_stride", False),
         ).to(device)
     else:
-        model = build_beat_cnn(
+        model = build_onset_cnn(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_size=cfg["model"]["kernel_size"],
@@ -544,7 +545,7 @@ def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate beat activation model")
+    parser = argparse.ArgumentParser(description="Evaluate onset activation model")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--model", default="outputs/best_model.pt")
     parser.add_argument("--audio-dir", default=None, help="Evaluate on full tracks")

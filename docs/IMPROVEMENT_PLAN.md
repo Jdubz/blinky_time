@@ -11,7 +11,7 @@
 **Known regressions (v74):**
 - **AudioTracker params not persisted:** The ~10 tunable params (bpmMin, bpmMax, rayleighBpm, combFeedback, pllKp, pllKi, etc.) revert to defaults on reboot. ConfigStorage integration deferred.
 
-**NN Model Status:** Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). Beat F1=0.477 (offline eval). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection and PLL phase refinement — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). Onset F1=0.477 (offline eval, measured against beat-position labels). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection and PLL phase refinement — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
@@ -33,7 +33,7 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ### Priority 1: Frame-Level NN Model Improvement
 
-**Status: Conv1D W16 ONSET-ONLY DEPLOYED (March 17, 2026) — Beat F1=0.477**
+**Status: Conv1D W16 ONSET-ONLY DEPLOYED (March 17, 2026) — Onset F1=0.477**
 
 **Problem:** The NN model is deployed and producing non-zero output on device, but beat activations are weak (max ~0.26 at 120 BPM). Root cause: firmware mel values (mean ~0.52) are lower than training data (mean ~0.86) due to AGC level mismatch. The previous deterministic pipeline (BandFlux + CBSS) achieved only ~28% beat F1. Core failures:
 - **Octave errors**: ACF/comb filters have strong sub-harmonic peaks → half/double-time lock (135 BPM gravity well). Hand-tuned octave checks help but are brittle.
@@ -60,7 +60,7 @@ SharedSpectralAnalysis (already runs every frame, no additional cost)
      │         │
      │    Mel frame ring buffer (last N frames, ~N×26 floats)
      │         │
-     │    FrameBeatNN inference (every Kth frame, ~15.6 Hz):
+     │    FrameOnsetNN inference (every Kth frame, ~15.6 Hz):
      │         │  Input:  N frames × 26 mel bands = N×26 floats (flattened)
      │         │  Model:  FC hidden layers → 2 outputs
      │         │  Output: [beat_activation, downbeat_activation]
@@ -71,7 +71,7 @@ SharedSpectralAnalysis (already runs every frame, no additional cost)
      │         └── downbeat_activation → AudioControl.downbeat
      │               Smoothed and thresholded for bar boundary detection
      │
-     ├── NN beat activation → CBSS → beat detection (replaces BandFlux ODF)
+     ├── NN onset activation → CBSS → beat detection (replaces BandFlux ODF)
      │
      └── AudioControl (all fields, with NN-driven ODF + downbeat)
 ```
@@ -107,7 +107,7 @@ At 120 BPM, one beat = 0.5s = ~31 frames at 62.5 Hz. The context window should c
 
 | Window | Frames | Input dim | Coverage at 120 BPM | Beat F1 | DB F1 | Notes |
 |--------|--------|-----------|---------------------|---------|-------|-------|
-| 0.26s | 16 | 1,664→416 | ~0.5 beats | 0.477 | N/A | **Conv1D W16 DEPLOYED** — 13.4 KB INT8, 6.8ms |
+| 0.26s | 16 | 1,664→416 | ~0.5 beats | 0.477 | N/A | **Conv1D W16 DEPLOYED (FrameOnsetNN)** — 13.4 KB INT8, 6.8ms |
 | 0.5s | 32 | 832 | ~1 beat | 0.491 | 0.238 | FC model (cal63) |
 | 1.0s | 64 | 1,664 | ~2 beats | 0.480 | 0.160 | Conv1D W64 (replaced by W16) — 15.1 KB INT8, 27ms |
 | 1.0s | 64 | 1,664 | ~2 beats | 0.487 | 0.180 | FC W64 (marginal for downbeat) |
@@ -131,7 +131,7 @@ Output: [beat_prob, downbeat_prob] per frame
 
 | Resource | BandFlux (removed v67) | Conv1D W16 (deployed) | Notes |
 |----------|-------------------|-------------------|-------|
-| ODF quality | ~28% F1 | Beat F1=0.477 | Learned vs hand-tuned |
+| ODF quality | ~28% F1 | Onset F1=0.477 | Learned vs hand-tuned |
 | Inference time | <0.1ms @ 62.5 Hz | 6.8ms @ 62.5 Hz (nRF52840) | Well within 16.7ms frame budget |
 | Tensor arena | 0 | 3404 bytes (of 32768 allocated) | Conv1D W16 |
 | Mel frame buffer | 0 | ~1.7 KB (16×26×4 bytes) | Ring buffer |
@@ -153,9 +153,9 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 
 1. **Mel frame ring buffer (~50 lines)** — Simple circular buffer of raw mel frames. SharedSpectralAnalysis already computes rawMelBands_ every frame; just store the last N frames. Replaces SpectralAccumulator (which accumulated between beats).
 
-2. **FrameBeatNN (~150 lines, replaces BeatSyncNN)** — TFLite Micro FC inference. Input: flattened mel frame window. Output: beat_activation + downbeat_activation. Runs every Kth frame (K=4 for 15.6 Hz). Much simpler than BeatActivationNN (no sliding mel buffer management, no multi-channel output).
+2. **FrameOnsetNN (~150 lines, replaces BeatSyncNN)** — TFLite Micro inference. Input: mel frame window. Output: onset activation. Runs every frame at 62.5 Hz. Much simpler than BeatActivationNN (no sliding mel buffer management, no multi-channel output).
 
-3. **AudioController.cpp (~30 lines changed)** — Replace BandFlux ODF with NN beat activation. NN downbeat output feeds `control_.downbeat`. Fallback to BandFlux when NN not compiled.
+3. **AudioController.cpp (~30 lines changed)** — Replace BandFlux ODF with NN onset activation. NN downbeat output feeds `control_.downbeat`. Fallback to BandFlux when NN not compiled.
 
 **Phased implementation:**
 
@@ -238,7 +238,7 @@ The ESP32-S3 operates ~0.25 higher mel mean. The software-only AGC (no hardware 
        --mic-profile data/calibration/mic_profile_esp32s3.npz
    python train.py --config configs/frame_fc_esp32s3.yaml
    ```
-   Same architecture (32-frame window, FC [64,32] → 2 outputs). Produces `frame_beat_model_esp32s3_data.h`.
+   Same architecture (32-frame window, FC [64,32] → 2 outputs). Produces `frame_onset_model_esp32s3_data.h`.
 
 3. **Firmware model selection** — Add `#ifdef BLINKY_PLATFORM_ESP32S3` to select the ESP32-S3 model at compile time, keeping the nRF52840 model unchanged.
 
@@ -272,7 +272,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 4. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Not improved by CBSS parameter tuning (March 13 sweep). Not a tempo bin resolution issue (47 bins tested v61; ACF already evaluates at full lag resolution). Likely requires better NN ODF discrimination or Rayleigh prior adjustment.
 
-5. **Phase alignment** — CBSS derives phase indirectly from a counter. Sharper NN beat activations give CBSS better signal for phase tracking.
+5. **Phase alignment** — CBSS derives phase indirectly from a counter. Sharper NN onset activations give CBSS better signal for phase tracking.
 
 6. ~~**NN inference speed (RESOLVED)**~~ — Conv1D W16 runs 6.8ms on nRF52840, 5.8ms on ESP32-S3 (well within 16.7ms frame budget, 60fps achieved).
 
@@ -296,7 +296,7 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
 | ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** | Not CBSS params or bin count. Rayleigh prior or NN ODF quality. |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | P1 NN ODF (sharper beat activations improve CBSS phase) |
+| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | P1 NN ODF (sharper onset activations improve CBSS phase) |
 | Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs | -- |
 | DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** | Acceptable for visuals |
 | deep-ambience low F1 | Soft ambient onsets below threshold | **None** | Organic mode is correct |

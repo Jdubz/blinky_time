@@ -1303,9 +1303,9 @@ void SerialConsole::streamTick() {
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"beat":<float>,"db":<float>,"bpm":<float>}
-    // "mel" = getRawMelBands() — the exact input to FrameBeatNN::infer()
-    // "beat" = NN beat activation output (0 if NN not loaded)
+    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"db":<float>,"bpm":<float>}
+    // "mel" = getRawMelBands() — the exact input to FrameOnsetNN::infer()
+    // "onset" = NN onset activation output (0 if NN not loaded)
     // "db" = NN downbeat activation (0 if no downbeat head)
     // "bpm" = current estimated tempo
     if (streamNN_ && audioCtrl_) {
@@ -1329,10 +1329,10 @@ void SerialConsole::streamTick() {
             // Previously it was ifdef-guarded; non-NN builds emitted "nn":0 via #else.
             // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
             Serial.print(F(",\"nn\":"));
-            Serial.print(audioCtrl_->getFrameBeatNN().isReady() ? 1 : 0);
-            if (audioCtrl_->getFrameBeatNN().hasDownbeatOutput()) {
+            Serial.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
+            if (audioCtrl_->getFrameOnsetNN().hasDownbeatOutput()) {
                 Serial.print(F(",\"nndb\":"));
-                Serial.print(audioCtrl_->getFrameBeatNN().getLastDownbeat(), 4);
+                Serial.print(audioCtrl_->getFrameOnsetNN().getLastDownbeat(), 4);
             }
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
@@ -1695,7 +1695,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
-        audioCtrl_->getFrameBeatNN().printDiagnostics();
+        audioCtrl_->getFrameOnsetNN().printDiagnostics();
         return true;
     }
 

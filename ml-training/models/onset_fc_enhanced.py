@@ -54,11 +54,11 @@ class SqueezeExcitation(nn.Module):
         return x * s.unsqueeze(-2)  # broadcast over time
 
 
-class EnhancedBeatFC(nn.Module):
+class EnhancedOnsetFC(nn.Module):
     """Enhanced frame-level FC with optional SE, Conv1D, multi-window, and tempo head.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels) beat/downbeat activations
+    Output: (batch, time, out_channels) onset/downbeat activations
             Optionally also returns tempo logits for auxiliary loss.
 
     All enhancements are optional and independently configured.
@@ -217,15 +217,15 @@ class EnhancedBeatFC(nn.Module):
         return out
 
 
-def build_beat_fc_enhanced(n_mels: int = 26, window_frames: int = 32,
+def build_onset_fc_enhanced(n_mels: int = 26, window_frames: int = 32,
                             hidden_dims: list[int] | None = None,
                             dropout: float = 0.1, downbeat: bool = False,
                             se_ratio: int = 0, conv_channels: int = 0,
                             conv_kernel: int = 5, short_window: int = 0,
                             short_hidden: int = 0,
                             num_tempo_bins: int = 0) -> nn.Module:
-    """Build an enhanced frame-level FC beat activation model."""
-    return EnhancedBeatFC(
+    """Build an enhanced frame-level FC onset activation model."""
+    return EnhancedOnsetFC(
         n_mels=n_mels, window_frames=window_frames,
         hidden_dims=hidden_dims, dropout=dropout, downbeat=downbeat,
         se_ratio=se_ratio, conv_channels=conv_channels,
@@ -240,7 +240,7 @@ def enhanced_model_summary(cfg: dict) -> None:
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-    model = build_beat_fc_enhanced(
+    model = build_onset_fc_enhanced(
         n_mels=cfg["audio"]["n_mels"],
         window_frames=cfg["model"]["window_frames"],
         hidden_dims=cfg["model"]["hidden_dims"],
@@ -266,7 +266,7 @@ def enhanced_model_summary(cfg: dict) -> None:
     if model.num_tempo_bins > 0:
         features.append(f"Tempo({model.num_tempo_bins} bins)")
 
-    print(f"EnhancedBeatFC: {total_params:,} params ({trainable:,} trainable)")
+    print(f"EnhancedOnsetFC: {total_params:,} params ({trainable:,} trainable)")
     print(f"  Features: {', '.join(features) if features else 'none (baseline FC)'}")
 
     int8_size_kb = total_params / 1024

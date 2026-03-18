@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the beat activation CNN (PyTorch, GPU-accelerated).
+"""Train the onset activation CNN (PyTorch, GPU-accelerated).
 
 Usage:
     python train.py --config configs/default.yaml
@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, RandomSampler
-from models.beat_cnn import build_beat_cnn
+from models.onset_cnn import build_onset_cnn
 from scripts.audio import load_config
 
 
@@ -395,8 +395,8 @@ def main():
     model_type = cfg["model"].get("type", "causal_cnn")
     num_tempo_bins = cfg["model"].get("num_tempo_bins", 0)
     if model_type == "frame_fc":
-        from models.beat_fc import build_beat_fc
-        model = build_beat_fc(
+        from models.onset_fc import build_onset_fc
+        model = build_onset_fc(
             n_mels=cfg["audio"]["n_mels"],
             window_frames=cfg["model"]["window_frames"],
             hidden_dims=cfg["model"]["hidden_dims"],
@@ -404,8 +404,8 @@ def main():
             downbeat=use_downbeat,
         ).to(device)
     elif model_type == "frame_fc_enhanced":
-        from models.beat_fc_enhanced import build_beat_fc_enhanced
-        model = build_beat_fc_enhanced(
+        from models.onset_fc_enhanced import build_onset_fc_enhanced
+        model = build_onset_fc_enhanced(
             n_mels=cfg["audio"]["n_mels"],
             window_frames=cfg["model"]["window_frames"],
             hidden_dims=cfg["model"]["hidden_dims"],
@@ -419,8 +419,8 @@ def main():
             num_tempo_bins=num_tempo_bins,
         ).to(device)
     elif model_type == "frame_conv1d":
-        from models.beat_conv1d import build_beat_conv1d
-        model = build_beat_conv1d(
+        from models.onset_conv1d import build_onset_conv1d
+        model = build_onset_conv1d(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
@@ -430,8 +430,8 @@ def main():
             num_tempo_bins=num_tempo_bins,
         ).to(device)
     elif model_type == "frame_conv1d_pool":
-        from models.beat_conv1d_pool import build_beat_conv1d_pool
-        model = build_beat_conv1d_pool(
+        from models.onset_conv1d_pool import build_onset_conv1d_pool
+        model = build_onset_conv1d_pool(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
@@ -441,7 +441,7 @@ def main():
             use_stride=cfg["model"].get("use_stride", False),
         ).to(device)
     else:
-        model = build_beat_cnn(
+        model = build_onset_cnn(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_size=cfg["model"]["kernel_size"],

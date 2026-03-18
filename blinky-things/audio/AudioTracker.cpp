@@ -36,8 +36,8 @@ bool AudioTracker::begin(uint32_t sampleRate) {
     spectral_.begin();
     combFilterBank_.init(OSS_FRAME_RATE);
 
-    bool nnOk = frameBeatNN_.begin();
-    nnActive_ = nnOk && frameBeatNN_.isReady();
+    bool nnOk = frameOnsetNN_.begin();
+    nnActive_ = nnOk && frameOnsetNN_.isReady();
 
     // Initialize onset density window to current time to avoid
     // instant flush on first update (nowMs >> 0 would fire immediately)
@@ -85,8 +85,8 @@ const AudioControl& AudioTracker::update(float dt) {
     uint32_t currentFrameCount = spectral_.getFrameCount();
     if (nnActive_ && currentFrameCount > lastSpectralFrameCount_) {
         lastSpectralFrameCount_ = currentFrameCount;
-        frameBeatNN_.setProfileEnabled(nnProfile);
-        odf = frameBeatNN_.infer(spectral_.getRawMelBands());
+        frameOnsetNN_.setProfileEnabled(nnProfile);
+        odf = frameOnsetNN_.infer(spectral_.getRawMelBands());
         odf = clampf(odf, 0.0f, 1.0f);
         newSpectralFrame = true;
     } else if (!nnActive_) {
@@ -97,7 +97,7 @@ const AudioControl& AudioTracker::update(float dt) {
         // NN active but no new spectral frame — skip OSS/comb update
         // to avoid duplicate samples in the ACF buffer.
         // Still run PLL (free-running) and output synthesis.
-        odf = frameBeatNN_.getLastBeat();
+        odf = frameOnsetNN_.getLastOnset();
     }
 
     // Track significant audio for silence detection

@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-// FrameBeatNN — Single-model TFLite Micro inference for onset detection
+// FrameOnsetNN — Single-model TFLite Micro inference for onset detection
 // ============================================================================
 //
 // Detects acoustic onsets (kicks, snares) from mel spectrograms.
@@ -30,9 +30,9 @@
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
-#include "frame_beat_model_data.h"
+#include "frame_onset_model_data.h"
 
-class FrameBeatNN {
+class FrameOnsetNN {
 public:
     static constexpr int INPUT_MEL_BANDS = 26;
 
@@ -46,16 +46,16 @@ public:
 
         initResolver();
 
-        if (frame_beat_model_data_len < 100) {
+        if (frame_onset_model_data_len < 100) {
             initError_ = 4;  // Placeholder model
             return false;
         }
 
-        model_ = tflite::GetModel(frame_beat_model_data);
+        model_ = tflite::GetModel(frame_onset_model_data);
         if (model_ == nullptr) { initError_ = 1; return false; }
         if (model_->version() != TFLITE_SCHEMA_VERSION) { initError_ = 2; return false; }
 
-        // NOTE: static storage — only one FrameBeatNN instance supported.
+        // NOTE: static storage — only one FrameOnsetNN instance supported.
         alignas(alignof(tflite::MicroInterpreter))
         static uint8_t interpStorage[sizeof(tflite::MicroInterpreter)];
         interpreter_ = new(interpStorage) tflite::MicroInterpreter(
@@ -98,7 +98,7 @@ public:
     }
 
     /**
-     * Feed one frame of mel bands, run inference, return beat activation [0,1].
+     * Feed one frame of mel bands, run inference, return onset activation [0,1].
      * Downbeat result cached — access via getLastDownbeat().
      */
     float infer(const float* melBands) {
@@ -155,12 +155,12 @@ public:
         }
 
         // Extract outputs
-        lastBeat_ = extractOutput(0);
+        lastOnset_ = extractOutput(0);
         if (outputChannels_ >= 2) {
             lastDownbeat_ = extractOutput(1);
         }
 
-        return lastBeat_;
+        return lastOnset_;
     }
 
     // --- Status ---
@@ -170,7 +170,7 @@ public:
 
     // --- Output accessors ---
 
-    float getLastBeat() const { return lastBeat_; }
+    float getLastOnset() const { return lastOnset_; }
     float getLastDownbeat() const { return lastDownbeat_; }
 
     // --- Profiling ---
@@ -210,8 +210,8 @@ public:
             Serial.print(output_->params.scale, 8);
             Serial.print(F(" ozp="));
             Serial.print(output_->params.zero_point);
-            Serial.print(F("\n  beat="));
-            Serial.print(lastBeat_, 4);
+            Serial.print(F("\n  onset="));
+            Serial.print(lastOnset_, 4);
             if (outputChannels_ >= 2) {
                 Serial.print(F(" db="));
                 Serial.print(lastDownbeat_, 4);
@@ -293,7 +293,7 @@ private:
     TfLiteTensor* output_ = nullptr;
     int outputChannels_ = 1;
     int outputOffset_ = 0;
-    float lastBeat_ = 0.0f;
+    float lastOnset_ = 0.0f;
     float lastDownbeat_ = 0.0f;
     bool ready_ = false;
     int initError_ = 0;

@@ -3,13 +3,13 @@
 // SHA256 prefix: 81f8cf014eaa2477
 // Exported: 2026-03-17T16:21:58Z
 
-#ifndef FRAME_BEAT_MODEL_DATA_H
-#define FRAME_BEAT_MODEL_DATA_H
+#ifndef FRAME_ONSET_MODEL_DATA_H
+#define FRAME_ONSET_MODEL_DATA_H
 
-#define FRAME_BEAT_MODEL_DATA_HASH "81f8cf014eaa2477"
-#define FRAME_BEAT_MODEL_DATA_SIZE 13736
+#define FRAME_ONSET_MODEL_DATA_HASH "81f8cf014eaa2477"
+#define FRAME_ONSET_MODEL_DATA_SIZE 13736
 
-alignas(8) static const unsigned char frame_beat_model_data[] = {
+alignas(8) static const unsigned char frame_onset_model_data[] = {
   0x1c, 0x00, 0x00, 0x00, 0x54, 0x46, 0x4c, 0x33, 0x14, 0x00, 0x20, 0x00,
   0x1c, 0x00, 0x18, 0x00, 0x14, 0x00, 0x10, 0x00, 0x0c, 0x00, 0x00, 0x00,
   0x08, 0x00, 0x04, 0x00, 0x14, 0x00, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00,
@@ -1157,6 +1157,6 @@ alignas(8) static const unsigned char frame_beat_model_data[] = {
   0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x22,
 };
 
-static const unsigned int frame_beat_model_data_len = 13736;
+static const unsigned int frame_onset_model_data_len = 13736;
 
-#endif // FRAME_BEAT_MODEL_DATA_H
+#endif // FRAME_ONSET_MODEL_DATA_H

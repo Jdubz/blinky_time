@@ -5,15 +5,15 @@
 #include "../hal/PlatformDetect.h"
 
 #if defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)
-#include "FrameBeatNN.h"
+#include "FrameOnsetNN.h"
 #else
-struct FrameBeatNN {
+struct FrameOnsetNN {
     static constexpr int INPUT_MEL_BANDS = 26;
     bool begin()                                    { return false; }
     bool isReady() const                            { return false; }
     bool hasDownbeatOutput() const                  { return false; }
     float infer(const float*)                       { return 0.0f; }
-    float getLastBeat() const                       { return 0.0f; }
+    float getLastOnset() const                       { return 0.0f; }
     float getLastDownbeat() const                   { return 0.0f; }
     void setProfileEnabled(bool)                    {}
     void printDiagnostics() const                   {}
@@ -34,7 +34,7 @@ struct FrameBeatNN {
  *   BPM path:  SharedSpectralAnalysis → spectral flux → OSS buffer
  *                → ACF (tempo) + Comb bank (validation) → BPM estimate
  *
- *   Onset path: SharedSpectralAnalysis → FrameBeatNN (Conv1D W16, ~7ms)
+ *   Onset path: SharedSpectralAnalysis → FrameOnsetNN (Conv1D W16, ~7ms)
  *                → onset activation → pulse detection (visual sparks)
  *                → PLL phase refinement (onset-gated correction)
  *
@@ -63,7 +63,7 @@ public:
     const AdaptiveMic& getMic() const { return mic_; }
     SharedSpectralAnalysis& getSpectral() { return spectral_; }
     const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
-    const FrameBeatNN& getFrameBeatNN() const { return frameBeatNN_; }
+    const FrameOnsetNN& getFrameOnsetNN() const { return frameOnsetNN_; }
     float getCurrentBpm() const { return bpm_; }
     int getHwGain() const;
 
@@ -84,7 +84,7 @@ public:
     float getBeatStability() const { return periodicityStrength_; }
     float getTempoVelocity() const { return 0.0f; }
     uint32_t getNextBeatMs() const { return 0; }
-    uint32_t getLastBeatTimeMs() const { return 0; }
+    uint32_t getLastOnsetTimeMs() const { return 0; }
     float getCbssConfidence() const { return periodicityStrength_; }
     float getCurrentCBSS() const { return 0.0f; }
     float getLastOnsetStrength() const { return lastPulseStrength_; }
@@ -154,7 +154,7 @@ private:
     ISystemTime& time_;
     AdaptiveMic mic_;
     SharedSpectralAnalysis spectral_;
-    FrameBeatNN frameBeatNN_;
+    FrameOnsetNN frameOnsetNN_;
     bool nnActive_ = false;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 

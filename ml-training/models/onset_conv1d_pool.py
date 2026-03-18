@@ -22,8 +22,8 @@ import torch
 import torch.nn as nn
 
 
-class FrameBeatConv1DPool(nn.Module):
-    """Causal Conv1D with temporal pooling for long-context beat/downbeat.
+class FrameOnsetConv1DPool(nn.Module):
+    """Causal Conv1D with temporal pooling for long-context onset/downbeat.
 
     Input:  (batch, time, n_mels)
     Output: (batch, time // pool_factor, out_channels)
@@ -87,15 +87,15 @@ class FrameBeatConv1DPool(nn.Module):
         return x.permute(0, 2, 1)  # (batch, time_pooled, channels)
 
 
-def build_beat_conv1d_pool(n_mels: int = 26,
+def build_onset_conv1d_pool(n_mels: int = 26,
                            channels: list[int] = [32, 48, 32],
                            kernel_sizes: list[int] = [5, 5, 3],
                            pool_sizes: list[int] = [4, 4, 1],
                            dropout: float = 0.1,
                            downbeat: bool = True,
                            use_stride: bool = False) -> nn.Module:
-    """Build a Conv1D+Pool beat/downbeat model."""
-    return FrameBeatConv1DPool(
+    """Build a Conv1D+Pool onset/downbeat model."""
+    return FrameOnsetConv1DPool(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
         pool_sizes=pool_sizes, dropout=dropout, downbeat=downbeat,
         use_stride=use_stride)

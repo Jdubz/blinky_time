@@ -25,6 +25,6 @@ model:
   downbeat: false             # Onset only — single output channel
 
 export:
-  output_header: "../blinky-things/audio/frame_beat_model_data.h"
+  output_header: "../blinky-things/audio/frame_onset_model_data.h"
   c_array_name: "frame_beat_model_data"
   max_model_size_kb: 15

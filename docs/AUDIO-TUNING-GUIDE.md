@@ -39,7 +39,7 @@ PDM Microphone (16kHz, mono)
         │   → Autocorrelation (every 150ms) + Percival + Rayleigh → BPM
         │
         ├── [ONSET PATH]
-        │   FrameBeatNN (Conv1D W16, ~7ms, single channel)
+        │   FrameOnsetNN (Conv1D W16, ~7ms, single channel)
         │   → onset_activation → information gate
         │   → Pulse detection (visual sparks) + PLL phase refinement
         │   → Energy synthesis (onset peak-hold blend)
@@ -105,7 +105,7 @@ Batch A/B test scripts compare two firmware configurations across all 18 EDM tra
 **Critical: Always seek to middle of track.** EDM tracks typically have 15-30s intros with no beat. Playing from the start wastes most of the test window on intro/buildup. All scripts use `ffprobe` to get track duration and `ffplay -ss` to seek to the center minus half the play duration. This ensures the beat-tracking section of the track is captured.
 
 **Available scripts:**
-- `ab_test_nnbeat.cjs` — NN Beat ODF comparison (BandFlux removed in v67; historical data only)
+- `ab_test_nnbeat.cjs` — NN Onset ODF comparison (BandFlux removed in v67; historical data only)
 - `ab_test_noiseest.cjs` — Baseline vs spectral noise subtraction (default OFF in v64; settings still exposed)
 
 ```bash
@@ -219,7 +219,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 | `compattack` | 0.001 | 0.0001-0.1 s | Attack time constant (effectively instantaneous at 62.5 fps) |
 | `comprelease` | 2.0 | 0.01-10.0 s | Release time constant |
 
-### Category: `nn` (1 parameter) - NN Beat Activation
+### Category: `nn` (1 parameter) - NN Onset Detection
 
 | Command | Default | Range | Description |
 |---------|---------|-------|-------------|
@@ -321,7 +321,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 **Architecture:** Decoupled tempo/onset. BPM uses spectral flux (NN-independent). NN onset used for visual pulse + PLL phase refinement.
 - **BPM signal:** Spectral flux (half-wave rectified magnitude change) → contrast² → ACF + comb bank → BPM
-- **Onset detection:** Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). Beat F1=0.477.
+- **Onset detection:** FrameOnsetNN, Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). Onset F1=0.477 (measured against beat-position labels).
 - **Training data:** Consensus v5 labels (7-system), cal63 mel calibration (target_rms_db=-63 dB).
 
 ### AudioTracker Tempo Defaults (v74+)

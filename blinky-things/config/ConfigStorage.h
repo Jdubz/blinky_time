@@ -99,15 +99,15 @@ public:
     //   multi-agent, template/subbeat/metrical checks, ODF sources 1-5, legacy spectral flux.
     //   All A/B tested: zero or negative benefit vs CBSS baseline. Saves ~1500 lines, ~40 KB flash.
     //   Devices on v61 or earlier will factory-reset on first boot with v64 firmware.
-    // Version 65: Replace BeatActivationNN/BeatSyncNN/SpectralAccumulator with FrameBeatNN.
+    // Version 65: Replace BeatActivationNN/BeatSyncNN/SpectralAccumulator with FrameOnsetNN.
     //   Mel-CNN (79-98ms) and beat-sync hybrid both closed. Frame-level FC approach.
     // Version 66: cbssContrast default 1.0→2.0 (A/B tested 10-6 win). Bump forces
     //   devices with saved v65 settings to pick up the new default on first boot.
     // Version 67: Removed BandFlux/EnsembleDetector pipeline (StoredBandFluxParams removed,
-    //   unifiedOdf/onsetTrainOdf/odfDiffMode removed from StoredMusicParams). FrameBeatNN is
+    //   unifiedOdf/onsetTrainOdf/odfDiffMode removed from StoredMusicParams). FrameOnsetNN is
     //   sole ODF source. Pulse detection inlined in AudioController.
     // Version 68: Removed nnBeatActivation toggle and ENABLE_NN_BEAT_ACTIVATION ifdef.
-    //   FrameBeatNN is always compiled in and always active. TFLite is a required dependency.
+    //   FrameOnsetNN is always compiled in and always active. TFLite is a required dependency.
     // Version 69: Dimension-independent generator params (maxParticles/burstSparks float).
     // Version 70: Persist v65 runtime-only params (pllWarmupBeats, snapHysteresis,
     //   dbEmaAlpha, dbThreshold, dbDecay). Previously tunable via serial but lost on reboot.
@@ -344,7 +344,7 @@ public:
         float onsetDensityBlend;        // Onset density EMA coefficient
         // (subbeatBins/templateHistBars removed v64 — associated features removed)
 
-        // (nnBeatActivation removed v68 — FrameBeatNN always active, no toggle needed)
+        // (nnBeatActivation removed v68 — FrameOnsetNN always active, no toggle needed)
 
         // Spectral noise estimation (v56)
         bool noiseEstEnabled;           // Enable minimum statistics noise subtraction
@@ -364,7 +364,7 @@ public:
         uint8_t pllWarmupBeats;         // PLL warmup beats before tightening clamp (0-32)
     };
 
-    // (StoredBandFluxParams removed v67 — BandFlux pipeline removed, FrameBeatNN is sole ODF source)
+    // (StoredBandFluxParams removed v67 — BandFlux pipeline removed, FrameOnsetNN is sole ODF source)
 
     /**
      * StoredDeviceConfig - Serializable device configuration for flash storage
