@@ -266,13 +266,19 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothing, "tracker",
         "BPM EMA smoothing factor (higher=slower)", 0.5f, 0.99f, onParamChanged);
 
-    // Pulse modulation
+    // Phase-aware onset confidence modulation (v75/v76)
     settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "tracker",
-        "Pulse boost factor near beat", 1.0f, 3.0f, onParamChanged);
-    settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "tracker",
-        "Pulse suppress factor off-beat", 0.0f, 1.0f, onParamChanged);
+        "Pulse boost factor for on-grid onsets", 1.0f, 3.0f, onParamChanged);
+    settings_.registerFloat("conffloor", &audioCtrl_->confFloor, "tracker",
+        "Min confidence for off-grid onsets (0=suppress, 1=passthrough)", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "tracker",
-        "Energy boost near predicted beats", 0.0f, 1.0f, onParamChanged);
+        "Energy boost near beat subdivisions", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("confactivation", &audioCtrl_->confActivation, "tracker",
+        "rhythmStrength below this: no phase modulation", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("conffullmod", &audioCtrl_->confFullModulation, "tracker",
+        "rhythmStrength above this: full phase modulation", 0.1f, 1.0f, onParamChanged);
+    settings_.registerFloat("subdivtol", &audioCtrl_->subdivTolerance, "tracker",
+        "Phase distance for near-subdivision (at 120 BPM, 0.10=50ms)", 0.02f, 0.20f, onParamChanged);
 
     // NN profiling
     settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "tracker",
@@ -978,7 +984,7 @@ void SerialConsole::restoreDefaults() {
         audioCtrl_->odfGateThreshold = 0.25f;
         audioCtrl_->tempoSmoothing = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
-        audioCtrl_->pulseSuppressOffBeat = 0.6f;
+        audioCtrl_->confFloor = 0.4f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
 
         // Restore spectral processing defaults

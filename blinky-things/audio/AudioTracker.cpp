@@ -324,35 +324,36 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
         beatCount_++;
     }
 
-    // Onset-gated PLL correction:
-    // Only correct when a strong onset aligns with expected beat (within ±25%).
-    // Phase 0 = on-beat. An onset at phase 0.1 means our clock ran ahead (beat
-    // was later than predicted). Correct by pulling phase back toward 0.
+    // Subdivision-aware PLL correction (v76):
+    // Correct phase when a strong onset lands near ANY beat grid subdivision,
+    // not just phase 0. This fixes the half-time anti-phase bug where beats at
+    // phase 0.5 got no correction (outside the old ±0.25 window at phase 0).
+    //
+    // Octave errors don't matter visually — half/double time still looks musical
+    // because events align with grid subdivisions. Phase alignment is what matters.
     bool isStrongOnset = (odf > odfBaseline_ * pulseThresholdMult) && (odf > pllOnsetFloor);
 
     if (isStrongOnset) {
-        // Phase error: distance from nearest beat boundary.
-        // Positive = we're past the beat (clock ahead), negative = before the beat.
-        float phaseError = pllPhase_;
-        if (phaseError > 0.5f) phaseError -= 1.0f;  // Center: [-0.5, +0.5]
+        // Compute phase error relative to nearest 8th-note subdivision.
+        // subdivPhase wraps pllPhase_ into [0, 1) within each half-beat.
+        // At phase 0.0 → subdivError=0 (on quarter), phase 0.5 → subdivError=0 (on 8th).
+        float subdivPhase = fmodf(pllPhase_ * 2.0f, 1.0f);
+        float subdivError = subdivPhase > 0.5f ? (subdivPhase - 1.0f) : subdivPhase;
 
-        // Only correct if onset is near expected beat (within ±25% of period)
-        if (fabsf(phaseError) < pllNearBeatWindow) {
-            // Scale correction by onset strength: strong kicks get full
-            // correction, weak onsets get proportionally less. Prevents
-            // marginal transients from pulling phase as much as clear beats.
+        // Correction window scales with subdivision: ±0.125 in beat phase (±0.25 in subdiv phase)
+        if (fabsf(subdivError) < pllNearBeatWindow) {
             float correctionScale = clampf(
                 (odf - pllOnsetFloor) / (1.0f - pllOnsetFloor), 0.0f, 1.0f);
 
-            // Proportional correction: pull phase back toward beat boundary.
-            // Negative feedback: subtract error to reduce it.
-            pllPhase_ -= pllKp * phaseError * correctionScale;
+            // Map subdivision error back to beat-phase correction.
+            // subdivError is in subdivision space; divide by 2 to get beat-phase.
+            float beatPhaseCorrection = subdivError * 0.5f;
 
-            // Integral correction: persistent frequency bias for systematic offset.
-            pllIntegral_ = pllIntegralDecay * pllIntegral_ + phaseError * correctionScale;
+            pllPhase_ -= pllKp * beatPhaseCorrection * correctionScale;
+
+            pllIntegral_ = pllIntegralDecay * pllIntegral_ + beatPhaseCorrection * correctionScale;
             pllPhase_ -= pllKi * pllIntegral_;
 
-            // Keep phase in [0, 1)
             if (pllPhase_ < 0.0f) pllPhase_ += 1.0f;
             if (pllPhase_ >= 1.0f) pllPhase_ -= 1.0f;
         }
@@ -425,23 +426,46 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
 
     float rawEnergy = energyMicWeight * micLevel + energyMelWeight * bassMelEnergy + energyOdfWeight * odfPeakHold_;
 
-    // Beat-proximity boost
-    float phaseDistance = pllPhase_ < 0.5f ? pllPhase_ : (1.0f - pllPhase_);
-    float nearBeat = 1.0f - (phaseDistance / energyBoostWindow);
+    // Subdivision-aware beat-proximity boost (v76):
+    // Boost energy near ANY grid subdivision (quarter + 8th notes), not just phase 0.
+    // This fixes energy suppression on every other beat at half-time BPM.
+    float subdivPhase = fmodf(pllPhase_ * 2.0f, 1.0f);  // 0=on subdivision, 0.5=max distance
+    float gridDistance = subdivPhase < 0.5f ? subdivPhase : (1.0f - subdivPhase);  // [0, 0.5]
+    float nearBeat = 1.0f - (gridDistance / (energyBoostWindow * 0.5f));
     if (nearBeat < 0.0f) nearBeat = 0.0f;
     rawEnergy *= (1.0f + nearBeat * energyBoostOnBeat * periodicityStrength_);
 
     control_.energy = clampf(rawEnergy, 0.0f, 1.0f);
 
-    // --- Pulse ---
+    // --- Pulse (phase-aware confidence modulation, v76) ---
+    // Replace binary boost/suppress with continuous cosine proximity curve.
+    // Octave errors are acceptable — events on ANY subdivision look musical.
+    // When rhythmStrength is low, all onsets pass through unmodulated (organic mode).
     float pulse = lastPulseStrength_;
-    if (periodicityStrength_ > activationThreshold) {
-        if (phaseDistance < pulseNearBeatThreshold) {
-            pulse *= pulseBoostOnBeat;
-        } else if (phaseDistance > pulseFarFromBeatThreshold) {
-            pulse *= pulseSuppressOffBeat;
+
+    if (pulse > 0.0f) {
+        // Cosine proximity: 1.0 at grid center, decays to confFloor at max distance.
+        // gridDistance is [0, 0.5] — normalize to [0, 1] for cosine.
+        float normalizedDist = gridDistance * 2.0f;  // [0, 1]
+        if (normalizedDist > 1.0f) normalizedDist = 1.0f;
+        float proximityMult = confFloor + (1.0f - confFloor) *
+                              0.5f * (1.0f + cosf(normalizedDist * 3.14159f));
+
+        // On-grid boost: when close to a subdivision, boost above 1.0
+        if (gridDistance < subdivTolerance) {
+            proximityMult *= pulseBoostOnBeat;
         }
+
+        // rhythmStrength gate: blend between passthrough and modulated.
+        // Below confActivation: all onsets pass through (gate=0, mult=1.0).
+        // Above confFullModulation: full phase-based modulation (gate=1).
+        float gate = clampf((periodicityStrength_ - confActivation) /
+                            (confFullModulation - confActivation + 0.001f), 0.0f, 1.0f);
+        float confMult = 1.0f + gate * (proximityMult - 1.0f);
+
+        pulse *= confMult;
     }
+
     control_.pulse = clampf(pulse, 0.0f, 1.0f);
 
     // --- Phase ---

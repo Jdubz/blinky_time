@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 74;
+    static const uint8_t SETTINGS_VERSION = 75;  // v75: phase-aware confidence modulation (replaces binary pulse boost/suppress)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -450,12 +450,13 @@ public:
         float activationThreshold;
         float odfGateThreshold;
 
-        // Pulse modulation
+        // Phase-aware onset confidence modulation (v76, replaces binary boost/suppress)
         float pulseBoostOnBeat;
-        float pulseSuppressOffBeat;
+        float confFloor;              // was pulseSuppressOffBeat
         float energyBoostOnBeat;
-        float pulseNearBeatThreshold;
-        float pulseFarFromBeatThreshold;
+        float confActivation;         // was pulseNearBeatThreshold
+        float confFullModulation;     // was pulseFarFromBeatThreshold
+        float subdivTolerance;        // NEW v75: phase distance for "near subdivision"
 
         // Spectral flux contrast
         float odfContrast;
@@ -517,8 +518,8 @@ public:
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     static_assert(sizeof(StoredMusicParams) == 312,
         "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (312 bytes = 66 floats + 7 uint8 + 18 bools + padding)");
-    static_assert(sizeof(StoredTrackerParams) == 136,
-        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 33 floats + 1 uint16 + padding)");
+    static_assert(sizeof(StoredTrackerParams) == 140,
+        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (140 bytes = 34 floats + 1 uint16 + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");

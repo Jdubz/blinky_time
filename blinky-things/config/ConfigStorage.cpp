@@ -348,10 +348,11 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.activationThreshold = 0.3f;
     data_.tracker.odfGateThreshold = 0.20f;
     data_.tracker.pulseBoostOnBeat = 1.3f;
-    data_.tracker.pulseSuppressOffBeat = 0.6f;
+    data_.tracker.confFloor = 0.4f;           // v75: min confidence for off-grid onsets
     data_.tracker.energyBoostOnBeat = 0.3f;
-    data_.tracker.pulseNearBeatThreshold = 0.2f;
-    data_.tracker.pulseFarFromBeatThreshold = 0.3f;
+    data_.tracker.confActivation = 0.3f;      // v75: rhythmStrength below this = no modulation
+    data_.tracker.confFullModulation = 0.7f;  // v75: rhythmStrength above this = full modulation
+    data_.tracker.subdivTolerance = 0.10f;    // v75: phase distance for "near subdivision"
     data_.tracker.odfContrast = 2.0f;
     data_.tracker.pulseThresholdMult = 2.0f;
     data_.tracker.pulseMinLevel = 0.03f;
@@ -875,10 +876,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.activationThreshold, 0.0f, 1.0f, F("tracker.actThresh"));
         validateFloat(data_.tracker.odfGateThreshold, 0.0f, 0.5f, F("tracker.odfGate"));
         validateFloat(data_.tracker.pulseBoostOnBeat, 1.0f, 3.0f, F("tracker.pulseBoost"));
-        validateFloat(data_.tracker.pulseSuppressOffBeat, 0.0f, 1.0f, F("tracker.pulseSupp"));
+        validateFloat(data_.tracker.confFloor, 0.0f, 1.0f, F("tracker.confFloor"));
         validateFloat(data_.tracker.energyBoostOnBeat, 0.0f, 1.0f, F("tracker.energyBoost"));
-        validateFloat(data_.tracker.pulseNearBeatThreshold, 0.0f, 0.5f, F("tracker.pulseNear"));
-        validateFloat(data_.tracker.pulseFarFromBeatThreshold, 0.0f, 0.5f, F("tracker.pulseFar"));
+        validateFloat(data_.tracker.confActivation, 0.0f, 1.0f, F("tracker.confAct"));
+        validateFloat(data_.tracker.confFullModulation, 0.1f, 1.0f, F("tracker.confFull"));
+        validateFloat(data_.tracker.subdivTolerance, 0.02f, 0.20f, F("tracker.subdivTol"));
         validateFloat(data_.tracker.odfContrast, 0.1f, 4.0f, F("tracker.odfContrast"));
         validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
         validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
@@ -912,10 +914,11 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->activationThreshold = data_.tracker.activationThreshold;
         tracker->odfGateThreshold = data_.tracker.odfGateThreshold;
         tracker->pulseBoostOnBeat = data_.tracker.pulseBoostOnBeat;
-        tracker->pulseSuppressOffBeat = data_.tracker.pulseSuppressOffBeat;
+        tracker->confFloor = data_.tracker.confFloor;
         tracker->energyBoostOnBeat = data_.tracker.energyBoostOnBeat;
-        tracker->pulseNearBeatThreshold = data_.tracker.pulseNearBeatThreshold;
-        tracker->pulseFarFromBeatThreshold = data_.tracker.pulseFarFromBeatThreshold;
+        tracker->confActivation = data_.tracker.confActivation;
+        tracker->confFullModulation = data_.tracker.confFullModulation;
+        tracker->subdivTolerance = data_.tracker.subdivTolerance;
         tracker->odfContrast = data_.tracker.odfContrast;
         tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
         tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
@@ -1038,10 +1041,11 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.activationThreshold = tracker->activationThreshold;
         data_.tracker.odfGateThreshold = tracker->odfGateThreshold;
         data_.tracker.pulseBoostOnBeat = tracker->pulseBoostOnBeat;
-        data_.tracker.pulseSuppressOffBeat = tracker->pulseSuppressOffBeat;
+        data_.tracker.confFloor = tracker->confFloor;
         data_.tracker.energyBoostOnBeat = tracker->energyBoostOnBeat;
-        data_.tracker.pulseNearBeatThreshold = tracker->pulseNearBeatThreshold;
-        data_.tracker.pulseFarFromBeatThreshold = tracker->pulseFarFromBeatThreshold;
+        data_.tracker.confActivation = tracker->confActivation;
+        data_.tracker.confFullModulation = tracker->confFullModulation;
+        data_.tracker.subdivTolerance = tracker->subdivTolerance;
         data_.tracker.odfContrast = tracker->odfContrast;
         data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
         data_.tracker.pulseMinLevel = tracker->pulseMinLevel;

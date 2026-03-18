@@ -31,18 +31,35 @@ The v9 DS-TCN was designed to be faster via depthwise separable convolutions (2.
 
 ## Active Priorities
 
-### Priority 1: Frame-Level NN Model Improvement
+### Priority 1: Phase Grid Alignment (v76)
 
-**Status: Conv1D W16 ONSET-ONLY DEPLOYED (March 17, 2026) — Onset F1=0.477**
+**Status: DESIGNED (March 18, 2026) — see `docs/PHASE_CONFIDENCE_ARCHITECTURE.md`**
 
-**Problem:** The NN model is deployed and producing non-zero output on device, but beat activations are weak (max ~0.26 at 120 BPM). Root cause: firmware mel values (mean ~0.52) are lower than training data (mean ~0.86) due to AGC level mismatch. The previous deterministic pipeline (BandFlux + CBSS) achieved only ~28% beat F1. Core failures:
-- **Octave errors**: ACF/comb filters have strong sub-harmonic peaks → half/double-time lock (135 BPM gravity well). Hand-tuned octave checks help but are brittle.
-- **Phase drift**: CBSS derives phase from a counter. Slight BPM error accumulates phase offset. PLL correction is conservative to avoid jitter.
-- **False beats during breakdowns**: CBSS forces beats when no onset is detected, maintaining phase through silence but triggering false visuals.
-- **Slow tempo adaptation**: Bayesian fusion with conservative transitions takes 4-8 seconds to lock a new tempo after a transition.
-- **Downbeat detection**: F1 ~0.33 offline. No reliable spectral downbeat detection.
+**The primary visual bottleneck is phase alignment, not BPM accuracy.** Octave errors (half/double time) are visually acceptable — events still land on beat grid subdivisions and look musical. Phase misalignment (events between subdivisions) looks random and breaks immersion.
 
-Mel-spectrogram CNN models that could improve ODF quality require 79-98ms inference — 8-10× over budget. However, **FC layers on the same mel input are 100-1000× cheaper** than convolutions.
+**Critical bug found:** The PLL correction window (`pllNearBeatWindow = 0.25`) only corrects near phase 0.0. At half-time BPM, real beats also land at phase 0.5 — OUTSIDE the correction window. Every other beat gets no PLL correction, 0.6x pulse suppression, and zero energy boost. This is the single biggest phase alignment issue.
+
+**Fix (v76 Phase 1 — highest priority):**
+- Make PLL correction subdivision-aware: correct at phase 0.0, 0.5, 0.25, 0.75
+- Make energy boost and pulse modulation subdivision-aware
+- Replace binary boost/suppress with cosine proximity confidence curve
+- Add onset grid classification (ON_BEAT/EIGHTH/SIXTEENTH/OFF_GRID)
+- ~60 lines changed, negligible RAM/CPU cost
+
+**Fix (v76 Phase 2):**
+- PLL density-scaled correction (sparse content → trust onsets more, busy → less)
+- Confidence modulation gated by rhythmStrength (no modulation when uncertain)
+
+**Fix (v76 Phase 3):**
+- ConfigStorage + SerialConsole integration for new params
+
+### Priority 2: NN Onset Detection Quality
+
+**Status: Conv1D W16 ONSET-ONLY DEPLOYED (March 17, 2026) — Onset F1=0.477 (vs beat labels)**
+
+FrameOnsetNN detects acoustic onsets (kicks/snares), not metrical beats. The 144ms receptive field cannot distinguish on-beat from off-beat transients. Trained on beat-position labels from 7-system consensus. F1 measured against beat positions, not onset ground truth.
+
+**Key insight:** The model's actual onset detection quality has never been measured. "Onset F1=0.477" measures how often kick/snare onsets align with consensus beat positions — not onset precision/recall. Generating true onset labels (via librosa.onset.onset_detect or manual annotation) would give us a real quality metric.
 
 **Previous approach (beat-synchronous hybrid, ABANDONED March 11):** A beat-rate FC classifier on accumulated spectral summaries. Abandoned because:
 1. **Circular dependency**: If CBSS is unreliable (~28% F1), features extracted at beat boundaries are noisy. The NN can't reliably correct the tracker that produced its inputs.
@@ -264,19 +281,15 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. ~~**Mel level mismatch (RESOLVED March 13)**~~ — Fixed by retraining with `target_rms_db=-63` (cal63 model). On-device ODF activations now ~50% stronger (mean 0.30 vs 0.20). Deployed on ACM0.
+1. **Phase alignment — THE PRIMARY BOTTLENECK.** PLL correction and pulse modulation only operate near phase 0.0. At half-time BPM, real beats at phase 0.5 get no correction/boost. This is a design flaw (asymmetric octave handling). Fix: subdivision-aware PLL correction and modulation (v76 Phase 1). See `docs/PHASE_CONFIDENCE_ARCHITECTURE.md`.
 
-2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0) and `cbsscontrast` (1.0-3.0) across 18 tracks on all 3 devices with cal63 ODF. Neither showed significant improvement over current defaults. Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) confirmed self-compensating. No changes needed.
+2. **Onset/phase circular reliability problem.** The NN detects onsets but can't tell if they're on-beat. The DSP estimates BPM/phase but the PLL needs on-beat onsets to correct. Neither bootstraps the other. Fix: confidence modulation — modulate onset visual impact by phase agreement instead of correcting timing (v76 Phase 2).
 
-3. ~~**Downbeat detection (DEFERRED — out of scope)**~~ — System now focuses on onset/BPM/phase only. Downbeat detection deferred indefinitely.
+3. ~~**~135 BPM gravity well**~~ — **LOW PRIORITY.** Octave errors are visually acceptable (half/double time still looks rhythmic). Phase grid alignment matters; octave accuracy does not. Literature A/B tests (March 18) running on blinkyhost — may improve BPM as a side effect but this is not the visual priority.
 
-4. **~135 BPM gravity well** — Multi-factorial: training data BPM bias (33.5% at 120-140), Bayesian prior, comb filter harmonic structure, ACF sub-harmonic peaks. Not improved by CBSS parameter tuning (March 13 sweep). Not a tempo bin resolution issue (47 bins tested v61; ACF already evaluates at full lag resolution). Likely requires better NN ODF discrimination or Rayleigh prior adjustment.
-
-5. **Phase alignment** — CBSS derives phase indirectly from a counter. Sharper NN onset activations give CBSS better signal for phase tracking.
-
-6. ~~**NN inference speed (RESOLVED)**~~ — Conv1D W16 runs 6.8ms on nRF52840, 5.8ms on ESP32-S3 (well within 16.7ms frame budget, 60fps achieved).
-
-7. ~~**Per-channel quantization (RESOLVED March 12)**~~ — Fixed: `_experimental_disable_per_channel=True` in export.
+4. ~~**Mel level mismatch (RESOLVED March 13)**~~ — Fixed with cal63 model.
+5. ~~**Downbeat detection (DEFERRED)**~~ — System focuses on onset/BPM/phase only.
+6. ~~**NN inference speed (RESOLVED)**~~ — 6.8ms nRF52840, 5.8ms ESP32-S3.
 
 ## SOTA Context (March 2026)
 
@@ -295,12 +308,13 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** | Not CBSS params or bin count. Rayleigh prior or NN ODF quality. |
-| Phase alignment limits F1 | CBSS derives phase indirectly | **High** | P1 NN ODF (sharper onset activations improve CBSS phase) |
-| Run-to-run variance | Room acoustics, ambient noise, AGC state | Requires 5+ runs | -- |
-| DnB half-time detection | Both librosa and firmware detect ~117 vs ~170 | **None** | Acceptable for visuals |
-| deep-ambience low F1 | Soft ambient onsets below threshold | **None** | Organic mode is correct |
-| trap-electro low F1 | Syncopated kicks challenge causal tracking | **Low** | Energy-reactive acceptable |
+| PLL half-time anti-phase | Correction window only at phase 0, not subdivisions | **High** — every other beat dimmed | v76 Phase 1: subdivision-aware PLL |
+| Onset/phase circular reliability | NN can't classify on/off-beat; PLL needs on-beat onsets | **High** — phase drift on syncopated content | v76 Phase 2: confidence modulation |
+| ~135 BPM gravity well | Multi-factorial (prior, harmonics, band weighting) | **Low** — octave errors look fine visually | Low priority; phase alignment matters more |
+| Run-to-run variance | Room acoustics, ambient noise | Requires 5+ runs for reliable eval | -- |
+| DnB half-time detection | librosa and firmware both detect ~117 vs ~170 | **None** — acceptable for visuals | -- |
+| deep-ambience low F1 | Soft ambient onsets below threshold | **None** — organic mode is correct | -- |
+| trap-electro low F1 | Syncopated kicks challenge causal tracking | **Low** — energy-reactive acceptable | -- |
 
 ## Closed Investigations (v28-v65)
 

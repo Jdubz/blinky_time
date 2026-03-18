@@ -107,12 +107,15 @@ public:
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
 
-    // Pulse modulation (keep from AudioController for generator compatibility)
-    float pulseBoostOnBeat = 1.3f;
-    float pulseSuppressOffBeat = 0.6f;
-    float energyBoostOnBeat = 0.3f;
-    float pulseNearBeatThreshold = 0.2f;
-    float pulseFarFromBeatThreshold = 0.3f;
+    // Phase-aware onset confidence modulation (v76)
+    // Replaces binary boost/suppress with subdivision-aware cosine proximity curve.
+    // Phase alignment matters; octave errors don't (half/double time still looks musical).
+    float pulseBoostOnBeat = 1.3f;         // Max boost for confident on-grid onsets
+    float energyBoostOnBeat = 0.3f;        // Energy boost near beat subdivisions
+    float confFloor = 0.4f;                // Min confidence for maximally off-grid onsets (0=suppress, 1=passthrough)
+    float confActivation = 0.3f;           // rhythmStrength below this: no modulation (all onsets passthrough)
+    float confFullModulation = 0.7f;       // rhythmStrength above this: full phase-based modulation
+    float subdivTolerance = 0.10f;         // Phase distance for "near subdivision" (at 120 BPM, 0.10 = 50ms)
 
     // NN profiling
     bool nnProfile = false;
