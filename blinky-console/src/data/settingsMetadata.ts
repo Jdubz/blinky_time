@@ -408,8 +408,7 @@ export const settingsMetadata: Record<string, SettingMetadata> = {
   // Tempo range
   bpmmin: {
     displayName: 'Minimum BPM',
-    tooltip:
-      'Minimum detectable BPM (40-120). Lower bound of tempo detection range. Default: 60.',
+    tooltip: 'Minimum detectable BPM (40-120). Lower bound of tempo detection range. Default: 60.',
     unit: 'BPM',
   },
   bpmmax: {
