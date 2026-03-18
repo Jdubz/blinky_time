@@ -450,7 +450,7 @@ public:
         float activationThreshold;
         float odfGateThreshold;
 
-        // Phase-aware onset confidence modulation (v76, replaces binary boost/suppress)
+        // Phase-aware onset confidence modulation (v75, replaces binary boost/suppress)
         float pulseBoostOnBeat;
         float confFloor;              // was pulseSuppressOffBeat
         float energyBoostOnBeat;

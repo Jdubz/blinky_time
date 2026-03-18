@@ -324,7 +324,7 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
         beatCount_++;
     }
 
-    // Subdivision-aware PLL correction (v76):
+    // Subdivision-aware PLL correction (v75):
     // Correct phase when a strong onset lands near ANY beat grid subdivision,
     // not just phase 0. This fixes the half-time anti-phase bug where beats at
     // phase 0.5 got no correction (outside the old ±0.25 window at phase 0).
@@ -340,8 +340,9 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
         float subdivPhase = fmodf(pllPhase_ * 2.0f, 1.0f);
         float subdivError = subdivPhase > 0.5f ? (subdivPhase - 1.0f) : subdivPhase;
 
-        // Correction window scales with subdivision: ±0.125 in beat phase (±0.25 in subdiv phase)
-        if (fabsf(subdivError) < pllNearBeatWindow) {
+        // pllNearBeatWindow is in beat-phase units (0.25 = ±25% of beat period).
+        // subdivError is in subdivision space (2x compressed), so scale window accordingly.
+        if (fabsf(subdivError) < pllNearBeatWindow * 2.0f) {
             float correctionScale = clampf(
                 (odf - pllOnsetFloor) / (1.0f - pllOnsetFloor), 0.0f, 1.0f);
 
@@ -426,7 +427,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
 
     float rawEnergy = energyMicWeight * micLevel + energyMelWeight * bassMelEnergy + energyOdfWeight * odfPeakHold_;
 
-    // Subdivision-aware beat-proximity boost (v76):
+    // Subdivision-aware beat-proximity boost (v75):
     // Boost energy near ANY grid subdivision (quarter + 8th notes), not just phase 0.
     // This fixes energy suppression on every other beat at half-time BPM.
     float subdivPhase = fmodf(pllPhase_ * 2.0f, 1.0f);  // 0=on subdivision, 0.5=max distance

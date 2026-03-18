@@ -266,7 +266,7 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothing, "tracker",
         "BPM EMA smoothing factor (higher=slower)", 0.5f, 0.99f, onParamChanged);
 
-    // Phase-aware onset confidence modulation (v75/v76)
+    // Phase-aware onset confidence modulation (v75)
     settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "tracker",
         "Pulse boost factor for on-grid onsets", 1.0f, 3.0f, onParamChanged);
     settings_.registerFloat("conffloor", &audioCtrl_->confFloor, "tracker",

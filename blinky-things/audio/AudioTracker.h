@@ -107,7 +107,7 @@ public:
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
 
-    // Phase-aware onset confidence modulation (v76)
+    // Phase-aware onset confidence modulation (v75)
     // Replaces binary boost/suppress with subdivision-aware cosine proximity curve.
     // Phase alignment matters; octave errors don't (half/double time still looks musical).
     float pulseBoostOnBeat = 1.3f;         // Max boost for confident on-grid onsets
