@@ -168,7 +168,9 @@ public:
     const float* getPhases() const { return phases_; }
 
     /**
-     * Get previous frame magnitudes (for spectral flux computation)
+     * Get previous frame magnitudes (compressed-but-not-whitened).
+     * Saved after applyCompressor(), before whitenMagnitudes().
+     * Used internally for spectral flux computation.
      */
     const float* getPrevMagnitudes() const { return prevMagnitudes_; }
 
@@ -219,11 +221,12 @@ public:
     float getSpectralCentroid() const { return spectralCentroid_; }
 
     /**
-     * Get half-wave rectified spectral flux (HWR).
-     * Sum of positive magnitude changes across all bins (skip DC).
+     * Get band-weighted half-wave rectified spectral flux (HWR).
+     * Computed from compressed-but-not-whitened magnitudes (after soft-knee
+     * compressor, before per-bin whitening) to preserve absolute transient
+     * contrast. Weighted: bass 50% (bins 1-6), mid 20% (7-32), high 30% (33-127).
      * Peaks at broadband transients (kicks, snares), zero during sustain.
-     * Independent of NN — suitable as BPM estimation input signal.
-     * Computed at the end of process() from compressed+whitened magnitudes.
+     * Independent of NN — drives ACF + comb bank for BPM estimation.
      */
     float getSpectralFlux() const { return spectralFlux_; }
 
@@ -259,7 +262,6 @@ private:
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
     float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Pre-compressor mel bands (noise-subtracted if enabled, no whitening) for NN + calibration
-    float prevMelBands_[SpectralConstants::NUM_MEL_BANDS];
 
     // Mel-band whitening: per-band running maximum for adaptive normalization
     // Applied to mel bands (not raw magnitudes) because:
@@ -301,7 +303,7 @@ private:
     void computeRawMelBands();
     void whitenMelBands();
     void computeDerivedFeatures();
-    void savePreviousFrame();
+    void savePrevCompressedMagnitudes();
 
     static bool safeIsFinite(float x) {
         return isfinite(x);

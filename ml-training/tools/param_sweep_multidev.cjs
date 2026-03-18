@@ -114,15 +114,40 @@ function loadManifest() {
   return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
 }
 
-function getGroundTruthBpm(trackName) {
+// Cache parsed label files to avoid triple-reading per track
+const _trackMetaCache = {};
+function loadTrackMeta(trackName) {
+  if (_trackMetaCache[trackName] !== undefined) return _trackMetaCache[trackName];
   const beatsPath = path.join(musicDir, trackName + '.beats.json');
-  if (!fs.existsSync(beatsPath)) return null;
+  if (!fs.existsSync(beatsPath)) { _trackMetaCache[trackName] = null; return null; }
   const data = JSON.parse(fs.readFileSync(beatsPath, 'utf-8'));
+  _trackMetaCache[trackName] = data;
+  return data;
+}
+
+function getGroundTruthBpm(trackName) {
+  const data = loadTrackMeta(trackName);
+  if (!data) return null;
+
+  // Use explicit bpm field if available (manually verified ground truth).
+  // Falls back to mean IBI computation from consensus hits.
+  if (data.bpm && typeof data.bpm === 'number') return data.bpm;
+
   const beats = data.hits.filter(h => h.expectTrigger !== false).map(h => h.time);
   if (beats.length < 3) return null;
   const ibis = [];
   for (let i = 1; i < beats.length; i++) ibis.push(beats[i] - beats[i - 1]);
   return 60.0 / (ibis.reduce((a, b) => a + b) / ibis.length);
+}
+
+function isAmbiguousTrack(trackName) {
+  const data = loadTrackMeta(trackName);
+  return data ? !!data.bpm_ambiguous : false;
+}
+
+function isLowQualityTrack(trackName) {
+  const data = loadTrackMeta(trackName);
+  return data ? (data.quality_score !== undefined ? data.quality_score : 1.0) < 0.5 : false;
 }
 
 function collectBpmMultiDevice(ports, trackPath, seekOffset, playDurationMs) {
@@ -282,6 +307,8 @@ async function main() {
       const entry = manifest[name];
       const trackPath = path.join(musicDir, name + '.mp3');
       const trueBpm = getGroundTruthBpm(name);
+      const ambiguous = isAmbiguousTrack(name);
+      const lowQuality = isLowQualityTrack(name);
 
       const multi = await collectBpmMultiDevice(ports, trackPath, entry.seekOffset, durationMs);
       await sleep(2000);
@@ -293,12 +320,22 @@ async function main() {
         const devResult = analyzeBpm(multi[`dev${di}`] || []);
         const err = classifyError(devResult.mean, trueBpm);
 
+        // For ambiguous tracks (half-time/double-time equally valid),
+        // don't count half/double as octave errors.
+        // err.ratio is selected from exact values [0.5, 2/3, 1.0, 3/2, 2.0]
+        // in classifyError(), so strict equality is safe here.
+        if (ambiguous && err.octave && (err.ratio === 0.5 || err.ratio === 2.0)) {
+          err.octave = false;
+        }
+
+        const skip = lowQuality;  // exclude from aggregate stats
         sweepResultsMap[value].push({
           track: name, trueBpm, aggMean: devResult.mean, perDevice: [devResult.mean],
-          error: err.error, octave: err.octave
+          error: err.error, octave: err.octave, skip, ambiguous
         });
 
-        logParts.push(`v=${value}:${devResult.mean.toFixed(0)}${err.octave ? '!' : ''}`);
+        const suffix = skip ? '~' : (err.octave ? '!' : '');
+        logParts.push(`v=${value}:${devResult.mean.toFixed(0)}${suffix}`);
       }
 
       console.log(`  [${ti + 1}/${tracks.length}] ${name.substring(0, 25).padEnd(27)} ${logParts.join('  ')}`);
@@ -315,30 +352,34 @@ async function main() {
   console.log('Value'.padEnd(10) + 'Mean Err'.padEnd(12) + 'Octave Errs'.padEnd(14) + 'Tracks OK'.padEnd(12) + 'Best Tracks');
   console.log('-'.repeat(100));
 
-  let bestValue = sweepValues[0], bestMeanErr = Infinity;
+  let bestValue = sweepValues[0], bestScore = Infinity;
 
   for (let vi = 0; vi < sweepValues.length; vi++) {
     const value = sweepValues[vi];
     const vr = sweepResults[vi].tracks;
-    const errors = vr.filter(t => t.error !== null).map(t => t.error);
-    const octaveCount = vr.filter(t => t.octave).length;
+    // Exclude low-quality tracks from aggregate stats
+    const valid = vr.filter(t => !t.skip);
+    const errors = valid.filter(t => t.error !== null).map(t => t.error);
+    const octaveCount = valid.filter(t => t.octave).length;
     const meanErr = errors.length > 0 ? errors.reduce((a, b) => a + b) / errors.length : Infinity;
-    const tracksOk = vr.filter(t => !t.octave && t.error !== null && t.error < 10).length;
+    const tracksOk = valid.filter(t => !t.octave && t.error !== null && t.error < 10).length;
 
     // Score: prioritize low octave errors, then low mean error
     const score = meanErr + octaveCount * 5;  // 5 BPM penalty per octave error
-    if (score < bestMeanErr + (sweepResults[sweepValues.indexOf(bestValue)] ?
-        sweepResults[sweepValues.indexOf(bestValue)].tracks.filter(t => t.octave).length * 5 : 0)) {
+    if (score < bestScore) {
+      bestScore = score;
       bestValue = value;
-      bestMeanErr = meanErr;
     }
 
+    const skipped = vr.filter(t => t.skip).length;
+    const suffix = skipped > 0 ? ` (${skipped} skipped)` : '';
     console.log(
       `${value}`.padEnd(10) +
       `${meanErr.toFixed(1)}`.padEnd(12) +
-      `${octaveCount}/${vr.length}`.padEnd(14) +
-      `${tracksOk}/${vr.length}`.padEnd(12) +
-      vr.filter(t => !t.octave && t.error < 5).map(t => t.track.substring(0, 15)).join(', ')
+      `${octaveCount}/${valid.length}`.padEnd(14) +
+      `${tracksOk}/${valid.length}`.padEnd(12) +
+      valid.filter(t => !t.octave && t.error < 5).map(t => t.track.substring(0, 15)).join(', ') +
+      suffix
     );
   }
 

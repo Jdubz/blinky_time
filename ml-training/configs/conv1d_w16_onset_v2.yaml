@@ -1,0 +1,40 @@
+# Conv1D W16 v2 — onset detection with tempo auxiliary head + confidence loss
+#
+# Improvements over v1:
+#   1. Tempo auxiliary head (Bock 2019): regularizes features toward tempo-
+#      relevant patterns. Training-only — stripped at export, zero device cost.
+#   2. Confidence-weighted shift-tolerant BCE: consensus label strengths
+#      (system agreement ratio) used as per-beat gradient weights. High-
+#      confidence beats (7/7 agreement) get full gradient, low-confidence
+#      (2/7) get reduced gradient. Produces sharper onset peaks.
+#
+# Architecture unchanged: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
+#   ~7K params, ~13 KB INT8, ~7ms inference on Cortex-M4F
+#   Receptive field: 9 frames = 144ms
+#
+# Output: 1 channel
+#   ch0 = sigmoid(onset_logit) — onset activation (kicks/snares)
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false             # Onset only — single output channel
+  num_tempo_bins: 300         # Tempo auxiliary head (Bock 2019, +1-5% F1)
+  tempo:
+    min_bpm: 60
+    max_bpm: 200
+    loss_weight: 0.1          # 10% of total loss
+
+loss:
+  type: "confidence_shift_bce"  # Use consensus strengths as confidence weights
+  shift_tolerance: 3            # ±3 frames = ±48ms
+
+export:
+  # Export to distinct path — manually rename to frame_beat_model_data.h
+  # after offline validation confirms improvement over v1.
+  output_header: "../blinky-things/audio/frame_beat_model_data_v2.h"
+  c_array_name: "frame_beat_model_data"
+  max_model_size_kb: 15
