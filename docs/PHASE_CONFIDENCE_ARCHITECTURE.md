@@ -24,16 +24,28 @@ Onsets arrive when they arrive — you cannot move them forward in time, and the
 When confidence is low, all onsets pass through at full strength (energy-driven organic mode).
 When confidence is high, on-beat onsets get boosted and off-beat onsets get attenuated.
 
+## Key Insight: Octave Errors Don't Matter
+
+**Half-time and double-time BPM both look fine visually.** A pulse at 60 BPM (half of 120) still
+aligns with the beat grid — it fires every other beat, which looks intentional. A pulse at 240 BPM
+fires on every 8th note, which is still rhythmically locked. The confusion between a 1/4 note and
+an 1/8 note is not a visual problem.
+
+**What matters is phase alignment with the beat grid.** Events landing on ANY subdivision (1/4, 1/8,
+1/16) of the actual tempo look musical. Events landing between subdivisions look random and break
+immersion. The 135 BPM gravity well is therefore LOW priority — it causes octave errors, not phase
+errors. Phase alignment is the primary bottleneck.
+
 ## Reliability Assessment
 
 | Signal | Reliable For | Unreliable For |
 |--------|-------------|----------------|
 | **NN onset timing** | Detection: "a transient happened" | Classification: "was it on a beat?" |
-| **DSP phase (ACF+PLL)** | Stability: smooth free-running sawtooth | Convergence: correct BPM, 135 gravity well |
+| **DSP phase (ACF+PLL)** | Stability: smooth free-running sawtooth | Convergence: correct BPM octave (but octave errors are acceptable) |
 | **rhythmStrength** | Distinguishing music from silence/ambient | Fine-grained genre classification |
 | **onsetDensity** | Sparse vs busy content discrimination | Precise genre classification |
 
-**Conclusion:** DSP phase should be advisory, not authoritative. The default is "onset fires, visual reacts." Phase confidence adds musical intelligence on top — it modulates, never gates.
+**Conclusion:** DSP phase should be advisory, not authoritative. The default is "onset fires, visual reacts." Phase confidence adds musical intelligence on top — it modulates, never gates. BPM octave accuracy is low priority — phase grid alignment is what determines visual quality.
 
 ## Architecture
 
