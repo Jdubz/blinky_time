@@ -50,7 +50,7 @@ Tracks like ambient, trap, or machine-drum scoring low Beat F1 may actually repr
 ### What Doesn't Matter (Much)
 
 1. **Beat F1 on ambient tracks** — Low F1 is correct if the system goes organic
-2. **Exact BPM accuracy** — Half-time or double-time still looks rhythmic
+2. **BPM octave accuracy** — Half-time or double-time still looks rhythmic because events still align with beat grid subdivisions (1/4, 1/8, 1/16 notes). A stable half-time BPM is vastly preferable to a jittery correct BPM. **Octave errors are NOT a visual problem — phase alignment is.**
 3. **Transient F1 on sparse content** — Missing quiet onsets is fine
 4. **Per-track beat offset** — 50-80ms variation is invisible at LED update rates
 

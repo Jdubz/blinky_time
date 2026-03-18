@@ -154,7 +154,7 @@ make uf2-check UPLOAD_PORT=/dev/ttyACM0
 ### Key Architecture Components
 
 - **AudioTracker** (`blinky-things/audio/AudioTracker.h`) - Decoupled tempo/onset: spectral flux → ACF+Comb → BPM; NN onset → pulse + PLL phase refinement
-- **FrameBeatNN** (`blinky-things/audio/FrameBeatNN.h`) - Conv1D W16 TFLite NN onset detection (single-channel, 13.4 KB INT8, ~7ms). Detects kicks/snares, not metrical beats.
+- **FrameOnsetNN** (`blinky-things/audio/FrameOnsetNN.h`) - Conv1D W16 TFLite NN onset detection (single-channel, 13.4 KB INT8, ~7ms). Detects acoustic onsets (kicks/snares), not metrical beats.
 - **SharedSpectralAnalysis** (`blinky-things/audio/SharedSpectralAnalysis.h`) - FFT → compressor → whitening → mel bands + spectral flux (HWR)
 - **AdaptiveMic** (`blinky-things/inputs/AdaptiveMic.h`) - Microphone input with fixed hardware gain (AGC removed v72)
 - **AudioControl struct** (`blinky-things/audio/AudioControl.h`) - Output: energy, pulse, phase, rhythmStrength, onsetDensity (downbeat/beatInMeasure always 0 — not tracked)
@@ -212,7 +212,7 @@ AdaptiveMic (fixed gain + window/range normalization)
 SharedSpectralAnalysis (FFT-256 → compressor → whitening → mel bands + spectral flux)
     ↓
     ├── [BPM] Spectral flux (HWR) → contrast² → OSS buffer → ACF + comb bank → BPM
-    ├── [ONSET] FrameBeatNN (Conv1D W16, ~7ms) → onset activation → pulse + PLL refinement
+    ├── [ONSET] FrameOnsetNN (Conv1D W16, ~7ms) → onset activation → pulse + PLL refinement
     ↓
 AudioTracker (decoupled: spectral flux → tempo, NN onset → pulse + PLL phase)
     ↓
@@ -233,12 +233,13 @@ RenderPipeline → LED Output
    - Window/range normalization (0-1 output) — sole dynamic range system
 
 2. **Onset Detection (single Conv1D model, deployed)**
-   - `FrameBeatNN.h` - Single-model TFLite NN inference for acoustic onset detection
+   - `FrameOnsetNN.h` - Single-model TFLite NN inference for acoustic onset detection
      - Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3
      - Single output channel: onset activation (kicks/snares — cannot distinguish on-beat from off-beat)
-     - Beat F1=0.477 (offline eval)
+     - Onset F1=0.738 vs librosa onset labels / 0.477 vs beat-position labels (model is a good onset detector; beat F1 was the wrong metric)
      - Arena: 3404/32768 bytes
      - Used for: visual pulse, PLL phase refinement, energy peak-hold. NOT used for BPM estimation.
+     - Note: "Onset F1" is measured against beat-position labels, so it reflects how often NN-detected onsets align with metrical beats. The NN itself detects acoustic onsets, not beats.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
 3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v75)**
@@ -247,7 +248,7 @@ RenderPipeline → LED Output
      - ACF tempo estimation: Percival harmonic enhancement (2nd+4th harmonics), Rayleigh prior weighting
      - CombFilterBank: 20 parallel IIR comb filters (Scheirer 1998), independent tempo validation
      - Tempo selection: ACF primary, comb bank validates (average when within 10% agreement)
-   - **Onset path** (NN-driven): FrameBeatNN → onset activation → pulse detection + PLL phase refinement
+   - **Onset path** (NN-driven): FrameOnsetNN → onset activation → pulse detection + PLL phase refinement
      - Onset information gate: suppresses low-confidence NN output (prevents noise-driven PLL jitter)
      - Pulse detection: floor-tracking baseline (fast drop, slow rise)
      - PLL phase correction: onset-gated proportional+integral (only when onset near expected beat)
@@ -266,7 +267,7 @@ RenderPipeline → LED Output
    - Effect chaining supported
 
 6. **Configuration & Persistence**
-   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v73)
+   - `ConfigStorage.h/cpp` - Flash-based storage (SETTINGS_VERSION: v75)
    - `SettingsRegistry.h/cpp` - Tunable parameters (~30 after BandFlux removal)
    - Runtime validation (min/max bounds)
    - Factory reset capability
@@ -364,7 +365,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 4. Contrast-sharpened spectral flux → OSS buffer (~5.5s, 360 samples @ ~66 Hz) + comb filter bank
 5. ACF every 150ms → Percival harmonic enhancement → Rayleigh-weighted peak → BPM
    Comb filter bank (20 filters) validates independently → average when agreeing within 10%
-6. [ONSET PATH] SharedSpectralAnalysis → FrameBeatNN (16-frame mel window → Conv1D → onset activation)
+6. [ONSET PATH] SharedSpectralAnalysis → FrameOnsetNN (16-frame mel window → Conv1D → onset activation)
 7. Onset activation → pulse detection (raw onset, before gate) → onset information gate
 8. [PHASE PATH] PLL free-running phase ramp at estimated BPM
 9. Onset-gated PLL correction: strong NN onsets near beat boundary → proportional+integral phase correction
@@ -390,7 +391,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **CPU (64 MHz):**
 - Microphone + FFT: ~4%
-- FrameBeatNN inference (62.5 Hz): 6.8ms/frame (nRF52840), 5.8ms/frame (ESP32-S3)
+- FrameOnsetNN inference (62.5 Hz): 6.8ms/frame (nRF52840), 5.8ms/frame (ESP32-S3)
 - Autocorrelation (500ms): ~3% amortized
 - CBSS + beat detection: ~1%
 - Fire generator: ~5-8%
@@ -432,7 +433,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+Comb+PLL + ODF information gate + pulse baseline tracking
-- ✅ FrameBeatNN (Conv1D W16 onset-only, 13.4 KB INT8, Beat F1=0.477, deployed on all 7 devices)
+- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, Onset F1=0.738 vs onset labels, deployed on all 7 devices)
 - ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
@@ -447,7 +448,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 **Removed (v64-v72):**
 - v64: Forward filter, particle filter, HMM phase tracker, multi-agent beat tracking, template/subbeat/metrical octave checks, ODF sources 1-5, legacy spectral flux (~1500 lines)
 - v67: EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult (~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved)
-- v68: Removed ENABLE_NN_BEAT_ACTIVATION ifdef and nnBeatActivation runtime toggle. FrameBeatNN always compiled in and active. TFLite is a required dependency.
+- v68: Removed ENABLE_NN_BEAT_ACTIVATION ifdef and nnBeatActivation runtime toggle. FrameOnsetNN always compiled in and active. TFLite is a required dependency.
 - v72: AGC removed. Hardware gain fixed at platform optimal. Window/range normalization is sole dynamic range system.
 - Spectral noise subtraction (`noiseest=0`): still in SharedSpectralAnalysis, default OFF
 
@@ -466,7 +467,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - FC on accumulated spectral summaries at beat rate (~2 Hz). Circular dependency with CBSS, negligible discriminative power in per-beat features, misaligned with all leading approaches. Superseded by frame-level FC.
 
 **Closed (W192 FC, March 2026):**
-- FC(4992→64→32→2), 322K params, 314 KB INT8. Beat F1=0.370, DB F1=0.145 — severe regression from W32 (0.491/0.238). FC flattening destroys temporal locality for wide windows.
+- FC(4992→64→32→2), 322K params, 314 KB INT8. Onset F1=0.370, DB F1=0.145 — severe regression from W32 (0.491/0.238). FC flattening destroys temporal locality for wide windows.
 
 **Closed (Dual-model architecture, March 2026):**
 - OnsetNN + RhythmNN split abandoned. Every published beat/downbeat system uses a single joint model. Split underperformed FC baseline on both tasks. Superseded by single Conv1D W64 with Beat This! sum head.
@@ -490,17 +491,18 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-**Previous (v68):** FrameBeatNN — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Beat F1=0.491, DB F1=0.238.
+**Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Onset F1=0.491, DB F1=0.238.
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
-**Current (v75, deployed):** Decoupled tempo/onset architecture. BPM uses spectral flux (NN-independent). NN onset (Conv1D W16) drives visual pulse + PLL phase refinement.
-- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Beat F1=0.477. Arena: 3404/32768 bytes.
+**Current (v75, deployed):** Decoupled tempo/onset architecture. BPM uses spectral flux (NN-independent). NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse + PLL phase refinement.
+- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Onset F1=0.738 vs librosa onset labels (0.477 vs beat-position labels). Arena: 3404/32768 bytes.
+- The model is a good onset detector. "Beat F1=0.477" was the wrong metric — it measured onset-vs-beat alignment. Against actual onset labels (librosa.onset.onset_detect), F1=0.738.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLL phase alignment. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.
 
 ### Key Features
 - **Decoupled BPM/onset** (v75): BPM estimation uses spectral flux (HWR, NN-independent). NN onset used for visual pulse + PLL phase refinement only. Prevents syncopated/off-beat transients from corrupting ACF periodicity.
-- **Single Conv1D NN** (deployed): Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
+- **Single Conv1D NN** (deployed): FrameOnsetNN, Conv1D W16 [24,32] onset-only, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Per-tensor INT8 quantization (CMSIS-NN requirement).
 - **Spectral flux** (v75): Half-wave rectified magnitude change from SharedSpectralAnalysis. Peaks at broadband transients, zero during sustain. NN-independent BPM signal for ACF + comb bank.
 - **AGC removed** (v72): Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 - **Onset information gate**: Suppresses low-confidence NN output (prevents noise-driven PLL jitter)

@@ -8,13 +8,13 @@ describe('SettingsPanel', () => {
     { name: 'intensity', value: 0.75, type: 'float', cat: 'fire', min: 0, max: 1 },
     { name: 'speed', value: 100, type: 'uint8', cat: 'fire', min: 0, max: 255 },
     { name: 'enabled', value: true, type: 'bool', cat: 'audio', min: 0, max: 1 },
-    { name: 'agcattack', value: 0.1, type: 'float', cat: 'agc', min: 0.01, max: 5.0 },
+    { name: 'conffloor', value: 0.4, type: 'float', cat: 'tracker', min: 0, max: 1.0 },
   ];
 
   const mockSettingsByCategory: SettingsByCategory = {
     fire: mockSettings.filter(s => s.cat === 'fire'),
     audio: mockSettings.filter(s => s.cat === 'audio'),
-    agc: mockSettings.filter(s => s.cat === 'agc'),
+    tracker: mockSettings.filter(s => s.cat === 'tracker'),
   };
 
   const defaultProps = {
@@ -103,7 +103,7 @@ describe('SettingsPanel', () => {
       render(<SettingsPanel {...defaultProps} />);
       expect(screen.getByText('Fire Generator')).toBeInTheDocument();
       expect(screen.getByText('Audio Processing')).toBeInTheDocument();
-      expect(screen.getByText('Auto-Gain Control')).toBeInTheDocument();
+      expect(screen.getByText('Audio Tracker')).toBeInTheDocument();
     });
 
     it('renders categories in correct order', () => {
@@ -111,9 +111,9 @@ describe('SettingsPanel', () => {
       const categoryTitles = screen.getAllByRole('heading', { level: 3 });
       const titles = categoryTitles.map(h => h.textContent);
 
-      // audio, agc, fire is the expected order (pipeline flow)
-      expect(titles.indexOf('Audio Processing')).toBeLessThan(titles.indexOf('Auto-Gain Control'));
-      expect(titles.indexOf('Auto-Gain Control')).toBeLessThan(titles.indexOf('Fire Generator'));
+      // audio, tracker, fire is the expected order (pipeline flow)
+      expect(titles.indexOf('Audio Processing')).toBeLessThan(titles.indexOf('Audio Tracker'));
+      expect(titles.indexOf('Audio Tracker')).toBeLessThan(titles.indexOf('Fire Generator'));
     });
   });
 
@@ -135,14 +135,14 @@ describe('SettingsPanel', () => {
       expect(screen.getByText('intensity')).toBeInTheDocument();
       expect(screen.getByText('speed')).toBeInTheDocument();
       expect(screen.getByText('enabled')).toBeInTheDocument();
-      // agcattack has metadata, so displays as "Peak Attack"
-      expect(screen.getByText('Peak Attack')).toBeInTheDocument();
+      // conffloor has metadata, so displays as "Confidence Floor"
+      expect(screen.getByText('Confidence Floor')).toBeInTheDocument();
     });
 
     it('displays current values for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
       expect(screen.getByDisplayValue('0.75')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('0.1')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('0.4')).toBeInTheDocument();
     });
 
     it('displays current values for integer settings', () => {
@@ -177,8 +177,8 @@ describe('SettingsPanel', () => {
       // Advance timers for debounce
       await vi.advanceTimersByTimeAsync(150);
 
-      // inputs[0] is now agcattack due to category reordering (audio → agc → fire)
-      expect(onSettingChange).toHaveBeenCalledWith('agcattack', 0.5);
+      // inputs[0] is conffloor due to category ordering (audio → tracker → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('conffloor', 0.5);
     });
 
     it('debounces rapid input changes', async () => {
@@ -192,15 +192,15 @@ describe('SettingsPanel', () => {
       fireEvent.change(inputs[0], { target: { value: '0.1' } });
       fireEvent.change(inputs[0], { target: { value: '0.2' } });
       fireEvent.change(inputs[0], { target: { value: '0.3' } });
-      fireEvent.change(inputs[0], { target: { value: '0.4' } });
+      fireEvent.change(inputs[0], { target: { value: '0.5' } });
 
       // Advance timers for debounce
       await vi.advanceTimersByTimeAsync(150);
 
       // Should only call once with the final value
       expect(onSettingChange).toHaveBeenCalledTimes(1);
-      // inputs[0] is now agcattack due to category reordering (audio → agc → fire)
-      expect(onSettingChange).toHaveBeenCalledWith('agcattack', 0.4);
+      // inputs[0] is conffloor due to category ordering (audio → tracker → fire)
+      expect(onSettingChange).toHaveBeenCalledWith('conffloor', 0.5);
     });
 
     it('disables controls when disabled prop is true', () => {
@@ -224,28 +224,28 @@ describe('SettingsPanel', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const inputs = screen.getAllByRole('spinbutton');
-      // inputs[0] is agcattack due to category reordering (audio → agc → fire)
-      const agcattackInput = inputs[0];
+      // inputs[0] is conffloor due to category ordering (audio → tracker → fire)
+      const conffloorInput = inputs[0];
 
-      expect(agcattackInput).toHaveAttribute('min', '0.01');
-      expect(agcattackInput).toHaveAttribute('max', '5');
+      expect(conffloorInput).toHaveAttribute('min', '0');
+      expect(conffloorInput).toHaveAttribute('max', '1');
     });
 
     it('uses correct step for float settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const inputs = screen.getAllByRole('spinbutton');
-      // inputs[0] is agcattack (float type)
-      const agcattackInput = inputs[0];
+      // inputs[0] is conffloor (float type)
+      const conffloorInput = inputs[0];
 
-      expect(agcattackInput).toHaveAttribute('step', '0.01');
+      expect(conffloorInput).toHaveAttribute('step', '0.01');
     });
 
     it('uses correct step for integer settings', () => {
       render(<SettingsPanel {...defaultProps} />);
 
       const inputs = screen.getAllByRole('spinbutton');
-      // inputs[2] is speed (uint8 type) due to category reordering (audio → agc → fire)
+      // inputs[2] is speed (uint8 type) due to category ordering (audio → tracker → fire)
       const speedInput = inputs[2];
 
       expect(speedInput).toHaveAttribute('step', '1');

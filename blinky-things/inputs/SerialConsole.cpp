@@ -266,13 +266,19 @@ void SerialConsole::registerTrackerSettings() {
     settings_.registerFloat("temposmooth", &audioCtrl_->tempoSmoothing, "tracker",
         "BPM EMA smoothing factor (higher=slower)", 0.5f, 0.99f, onParamChanged);
 
-    // Pulse modulation
+    // Phase-aware onset confidence modulation (v75)
     settings_.registerFloat("pulseboost", &audioCtrl_->pulseBoostOnBeat, "tracker",
-        "Pulse boost factor near beat", 1.0f, 3.0f, onParamChanged);
-    settings_.registerFloat("pulsesuppress", &audioCtrl_->pulseSuppressOffBeat, "tracker",
-        "Pulse suppress factor off-beat", 0.0f, 1.0f, onParamChanged);
+        "Pulse boost factor for on-grid onsets", 1.0f, 3.0f, onParamChanged);
+    settings_.registerFloat("conffloor", &audioCtrl_->confFloor, "tracker",
+        "Min confidence for off-grid onsets (0=suppress, 1=passthrough)", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("energyboost", &audioCtrl_->energyBoostOnBeat, "tracker",
-        "Energy boost near predicted beats", 0.0f, 1.0f, onParamChanged);
+        "Energy boost near beat subdivisions", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("confactivation", &audioCtrl_->confActivation, "tracker",
+        "rhythmStrength below this: no phase modulation", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("conffullmod", &audioCtrl_->confFullModulation, "tracker",
+        "rhythmStrength above this: full phase modulation", 0.1f, 1.0f, onParamChanged);
+    settings_.registerFloat("subdivtol", &audioCtrl_->subdivTolerance, "tracker",
+        "Phase distance for near-subdivision (at 120 BPM, 0.10=50ms)", 0.02f, 0.20f, onParamChanged);
 
     // NN profiling
     settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "tracker",
@@ -970,15 +976,19 @@ void SerialConsole::restoreDefaults() {
     if (audioCtrl_) {
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
-        audioCtrl_->rayleighBpm = 140.0f;
-        audioCtrl_->combFeedback = 0.92f;
+        audioCtrl_->rayleighBpm = 130.0f;
+        audioCtrl_->combFeedback = 0.855f;
         audioCtrl_->pllKp = 0.15f;
         audioCtrl_->pllKi = 0.005f;
         audioCtrl_->activationThreshold = 0.3f;
-        audioCtrl_->odfGateThreshold = 0.25f;
+        audioCtrl_->odfGateThreshold = 0.20f;
         audioCtrl_->tempoSmoothing = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
-        audioCtrl_->pulseSuppressOffBeat = 0.6f;
+        audioCtrl_->confFloor = 0.4f;
+        audioCtrl_->confActivation = 0.3f;
+        audioCtrl_->confFullModulation = 0.7f;
+        audioCtrl_->subdivTolerance = 0.10f;
+        audioCtrl_->odfContrast = 1.25f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
 
         // Restore spectral processing defaults
@@ -1303,10 +1313,10 @@ void SerialConsole::streamTick() {
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"beat":<float>,"db":<float>,"bpm":<float>}
-    // "mel" = getRawMelBands() — the exact input to FrameBeatNN::infer()
-    // "beat" = NN beat activation output (0 if NN not loaded)
-    // "db" = NN downbeat activation (0 if no downbeat head)
+    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"nn":<0|1>,"nndb":<float>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>}
+    // "onset" = raw ODF (NN onset activation or mic level fallback)
+    // "nn" = 1 if NN loaded, 0 if stub/fallback
+    // "nndb" = NN downbeat activation (only present if model has downbeat head)
     // "bpm" = current estimated tempo
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();
@@ -1329,10 +1339,10 @@ void SerialConsole::streamTick() {
             // Previously it was ifdef-guarded; non-NN builds emitted "nn":0 via #else.
             // The stub's isReady() returns false, so the value is still 0 in non-NN builds.
             Serial.print(F(",\"nn\":"));
-            Serial.print(audioCtrl_->getFrameBeatNN().isReady() ? 1 : 0);
-            if (audioCtrl_->getFrameBeatNN().hasDownbeatOutput()) {
+            Serial.print(audioCtrl_->getFrameOnsetNN().isReady() ? 1 : 0);
+            if (audioCtrl_->getFrameOnsetNN().hasDownbeatOutput()) {
                 Serial.print(F(",\"nndb\":"));
-                Serial.print(audioCtrl_->getFrameBeatNN().getLastDownbeat(), 4);
+                Serial.print(audioCtrl_->getFrameOnsetNN().getLastDownbeat(), 4);
             }
             Serial.print(F(",\"bpm\":"));
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
@@ -1695,7 +1705,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
 
     // "show nn" - NN diagnostics
     if (strcmp(cmd, "show nn") == 0) {
-        audioCtrl_->getFrameBeatNN().printDiagnostics();
+        audioCtrl_->getFrameOnsetNN().printDiagnostics();
         return true;
     }
 

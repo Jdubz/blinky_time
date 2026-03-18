@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate beat activation model offline (PyTorch, GPU-accelerated).
+"""Evaluate onset activation model offline (PyTorch, GPU-accelerated).
 
 Computes per-track and aggregate metrics:
   - Frame-level: precision, recall, F1 (at threshold)
@@ -27,7 +27,7 @@ import mir_eval
 import numpy as np
 import torch
 
-from models.beat_cnn import build_beat_cnn
+from models.onset_cnn import build_onset_cnn
 from scripts.audio import (
     build_mel_filterbank_torch as _build_mel_filterbank,
     firmware_mel_spectrogram_torch as firmware_mel_spectrogram,
@@ -123,7 +123,7 @@ def compute_acf_tempo_quality(activations: np.ndarray, ref_beats: np.ndarray,
 
 
 def _load_model(model_path: str, cfg: dict, device: torch.device):
-    """Load a trained beat activation model (CNN, DS-TCN, or frame FC)."""
+    """Load a trained onset activation model (CNN, DS-TCN, or frame FC)."""
     checkpoint = torch.load(model_path, map_location=device, weights_only=True)
 
     # Handle both bare state_dict and full checkpoint
@@ -136,8 +136,8 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
 
     model_type = cfg["model"].get("type", "causal_cnn")
     if model_type == "frame_fc":
-        from models.beat_fc import build_beat_fc
-        model = build_beat_fc(
+        from models.onset_fc import build_onset_fc
+        model = build_onset_fc(
             n_mels=cfg["audio"]["n_mels"],
             window_frames=cfg["model"]["window_frames"],
             hidden_dims=cfg["model"]["hidden_dims"],
@@ -145,18 +145,19 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             downbeat=use_downbeat,
         ).to(device)
     elif model_type == "frame_conv1d":
-        from models.beat_conv1d import build_beat_conv1d
-        model = build_beat_conv1d(
+        from models.onset_conv1d import build_onset_conv1d
+        model = build_onset_conv1d(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
             dropout=cfg["model"].get("dropout", 0.1),
             downbeat=use_downbeat,
             sum_head=cfg["model"].get("sum_head", False),
+            num_tempo_bins=cfg["model"].get("num_tempo_bins", 0),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
-        from models.beat_conv1d_pool import build_beat_conv1d_pool
-        model = build_beat_conv1d_pool(
+        from models.onset_conv1d_pool import build_onset_conv1d_pool
+        model = build_onset_conv1d_pool(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_sizes=cfg["model"]["kernel_sizes"],
@@ -166,7 +167,7 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             use_stride=cfg["model"].get("use_stride", False),
         ).to(device)
     else:
-        model = build_beat_cnn(
+        model = build_onset_cnn(
             n_mels=cfg["audio"]["n_mels"],
             channels=cfg["model"]["channels"],
             kernel_size=cfg["model"]["kernel_size"],
@@ -278,6 +279,19 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             "f1": float(scores),
         }
 
+        # Onset-level evaluation (if .onsets.json exists alongside .beats.json)
+        onset_path = label_path.parent / f"{audio_path.stem}.onsets.json"
+        if onset_path.exists():
+            with open(onset_path) as f:
+                onset_data = json.load(f)
+            ref_onsets = np.array(onset_data["onsets"])
+            if len(ref_onsets) > 0 and len(est_beats) > 0:
+                onset_f1 = mir_eval.beat.f_measure(ref_onsets, est_beats, f_measure_threshold=0.07)
+            else:
+                onset_f1 = 0.0
+            result["onset_f1"] = float(onset_f1)
+            result["ref_onsets"] = len(ref_onsets)
+
         # Downbeat evaluation
         if has_downbeat:
             ref_downbeats = np.array([
@@ -305,7 +319,8 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         db_str = f", DB F1={result['db_f1']:.3f}" if has_downbeat else ""
         acf_err_str = f"{lag_err:.1f}f" if np.isfinite(lag_err) else "n/a"
         acf_str = f", ACF ratio={acf_metrics['acf_peak_ratio']:.3f} prom={acf_metrics['acf_peak_prominence']:.2f} err={acf_err_str}"
-        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){db_str}{acf_str}")
+        onset_str = f", onsetF1={result['onset_f1']:.3f}" if "onset_f1" in result else ""
+        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{db_str}{acf_str}")
 
         # Save activation plot
         _plot_activation(activations, ref_beats, est_beats, frame_rate,
@@ -317,6 +332,11 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         f1s = [r["f1"] for r in all_results]
         print(f"\nAggregate Beat: mean F1={np.mean(f1s):.3f}, median={np.median(f1s):.3f}, "
               f"min={np.min(f1s):.3f}, max={np.max(f1s):.3f}")
+
+        onset_f1s = [r["onset_f1"] for r in all_results if "onset_f1" in r]
+        if onset_f1s:
+            print(f"Aggregate Onset: mean F1={np.mean(onset_f1s):.3f}, median={np.median(onset_f1s):.3f}, "
+                  f"min={np.min(onset_f1s):.3f}, max={np.max(onset_f1s):.3f}")
 
         db_f1s = [r["db_f1"] for r in all_results if "db_f1" in r]
         if db_f1s:
@@ -544,7 +564,7 @@ def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate beat activation model")
+    parser = argparse.ArgumentParser(description="Evaluate onset activation model")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--model", default="outputs/best_model.pt")
     parser.add_argument("--audio-dir", default=None, help="Evaluate on full tracks")

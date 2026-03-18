@@ -1,4 +1,4 @@
-"""Frame-level 1D Conv model for beat/downbeat activation.
+"""Frame-level 1D Conv model for onset/downbeat activation.
 
 Designed for XIAO nRF52840 Sense (Cortex-M4F @ 64 MHz, 256 KB RAM)
 via TFLite Micro. Target inference: 3-8ms per frame for 32-frame window.
@@ -16,7 +16,7 @@ Receptive field with [k=5, k=5, k=3]: 11 frames (176ms at 62.5 Hz)
 TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Quantize, Dequantize
 
 Training: processes full 128-frame chunks with causal padding,
-producing per-frame predictions — same interface as BeatCNN/FrameBeatFC.
+producing per-frame predictions — same interface as OnsetCNN/FrameOnsetFC.
 
 Firmware: processes N-frame sliding window, takes last output timestep.
 """
@@ -28,14 +28,14 @@ import torch
 import torch.nn as nn
 
 
-class FrameBeatConv1D(nn.Module):
-    """Causal 1D Conv for beat (and optional downbeat) activation.
+class FrameOnsetConv1D(nn.Module):
+    """Causal 1D Conv for onset (and optional downbeat) activation.
 
     No BatchNorm, no dilation. Variable channel widths and kernel sizes
     per layer for flexible architecture search.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels)  — 1 = beat only, 2 = beat + downbeat
+    Output: (batch, time, out_channels)  — 1 = onset only, 2 = onset + downbeat
             During training with tempo head: tuple of (predictions, tempo_logits)
     """
 
@@ -45,7 +45,8 @@ class FrameBeatConv1D(nn.Module):
                  dropout: float = 0.1,
                  downbeat: bool = False,
                  sum_head: bool = False,
-                 num_tempo_bins: int = 0):
+                 num_tempo_bins: int = 0,
+                 freq_pos_encoding: bool = False):
         super().__init__()
         assert len(channels) == len(kernel_sizes), \
             f"channels ({len(channels)}) and kernel_sizes ({len(kernel_sizes)}) must match"
@@ -56,6 +57,12 @@ class FrameBeatConv1D(nn.Module):
         self.channels = channels
         self.kernel_sizes = kernel_sizes
         self.num_tempo_bins = num_tempo_bins
+        self.freq_pos_encoding = freq_pos_encoding
+
+        # Frequency positional encoding (FAC, ICASSP 2024)
+        # Learnable per-band vector helps discriminate kicks (low) from hi-hats (high)
+        if freq_pos_encoding:
+            self.freq_pos = nn.Parameter(torch.zeros(1, 1, n_mels))
 
         layers = []
         in_ch = n_mels
@@ -84,18 +91,21 @@ class FrameBeatConv1D(nn.Module):
             x: (batch, time, n_mels)
         Returns:
             (batch, time, out_channels) with sigmoid activation.
-            If sum_head: ch0 = beat, ch1 = beat * sigmoid(db_logit)
-            so downbeat is structurally constrained to be ≤ beat.
+            If sum_head: ch0 = onset, ch1 = onset * sigmoid(db_logit)
+            so downbeat is structurally constrained to be ≤ onset.
             During training with tempo head: (predictions, tempo_logits)
         """
+        if self.freq_pos_encoding:
+            x = x + self.freq_pos  # Add frequency position encoding
+
         x = x.permute(0, 2, 1)  # (batch, n_mels, time)
         h = self.backbone(x)     # (batch, last_ch, time)
         logits = self.output_conv(h)  # (batch, out_channels, time)
 
         if self.sum_head:
-            beat = torch.sigmoid(logits[:, 0:1, :])
-            db = beat * torch.sigmoid(logits[:, 1:2, :])
-            out = torch.cat([beat, db], dim=1)
+            onset = torch.sigmoid(logits[:, 0:1, :])
+            db = onset * torch.sigmoid(logits[:, 1:2, :])
+            out = torch.cat([onset, db], dim=1)
         else:
             out = torch.sigmoid(logits)
 
@@ -109,33 +119,35 @@ class FrameBeatConv1D(nn.Module):
         return out
 
 
-def build_beat_conv1d(n_mels: int = 26,
+def build_onset_conv1d(n_mels: int = 26,
                       channels: list[int] = [32, 48, 32],
                       kernel_sizes: list[int] = [5, 5, 3],
                       dropout: float = 0.1,
                       downbeat: bool = False,
                       sum_head: bool = False,
-                      num_tempo_bins: int = 0) -> nn.Module:
-    """Build a frame-level Conv1D beat activation model.
+                      num_tempo_bins: int = 0,
+                      freq_pos_encoding: bool = False) -> nn.Module:
+    """Build a frame-level Conv1D onset activation model.
 
     Args:
         n_mels: Number of mel bands (must match firmware, default 26)
         channels: Per-layer channel widths (e.g. [32, 48, 32])
         kernel_sizes: Per-layer kernel sizes (e.g. [5, 5, 3])
         dropout: Dropout rate between layers
-        downbeat: If True, output 2 channels (beat + downbeat)
-        sum_head: If True, constrain downbeat ≤ beat (Beat This! technique)
+        downbeat: If True, output 2 channels (onset + downbeat)
+        sum_head: If True, constrain downbeat ≤ onset (Beat This! technique)
         num_tempo_bins: If > 0, add training-only tempo auxiliary head
+        freq_pos_encoding: If True, add learnable frequency position vector
     """
-    return FrameBeatConv1D(
+    return FrameOnsetConv1D(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
         dropout=dropout, downbeat=downbeat, sum_head=sum_head,
-        num_tempo_bins=num_tempo_bins)
+        num_tempo_bins=num_tempo_bins, freq_pos_encoding=freq_pos_encoding)
 
 
 def conv1d_model_summary(cfg: dict) -> None:
     """Print Conv1D model summary and parameter count."""
-    model = build_beat_conv1d(
+    model = build_onset_conv1d(
         n_mels=cfg["audio"]["n_mels"],
         channels=cfg["model"]["channels"],
         kernel_sizes=cfg["model"]["kernel_sizes"],
@@ -145,7 +157,7 @@ def conv1d_model_summary(cfg: dict) -> None:
     total_params = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     out_ch = model.out_channels
-    print(f"FrameBeatConv1D: {total_params} params ({trainable} trainable)")
+    print(f"FrameOnsetConv1D: {total_params} params ({trainable} trainable)")
 
     int8_size_kb = total_params / 1024
     print(f"INT8 model size estimate: {int8_size_kb:.1f} KB")

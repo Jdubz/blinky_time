@@ -18,7 +18,7 @@ from pathlib import Path
 os.environ.setdefault("TF_USE_LEGACY_KERAS", "1")
 os.environ["CUDA_VISIBLE_DEVICES"] = ""  # TF export runs on CPU (TF GPU is broken)
 
-# Ensure ml-training root is on path (for "from models.beat_cnn import ...")
+# Ensure ml-training root is on path (for "from models.onset_cnn import ...")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
@@ -30,12 +30,12 @@ import torch
 from scripts.audio import load_config
 
 
-def build_tf_beat_cnn(n_mels: int, channels: int, kernel_size: int,
+def build_tf_onset_cnn(n_mels: int, channels: int, kernel_size: int,
                       dilations: list[int], chunk_frames: int,
                       downbeat: bool, fuse_bn: bool = False,
                       model_type: str = "causal_cnn",
                       residual: bool = False) -> keras.Model:
-    """Build TF/Keras equivalent of PyTorch BeatCNN or DSTCNBeatCNN.
+    """Build TF/Keras equivalent of PyTorch OnsetCNN or DSTCNOnsetCNN.
 
     If fuse_bn=True, BatchNorm is omitted (weights will be fused into Conv
     by transfer_pytorch_weights). This eliminates expensive unfused ADD/MUL
@@ -67,13 +67,13 @@ def build_tf_beat_cnn(n_mels: int, channels: int, kernel_size: int,
     x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
                       name="output_conv")(x)
 
-    return keras.Model(inputs=inputs, outputs=x, name="beat_cnn")
+    return keras.Model(inputs=inputs, outputs=x, name="onset_cnn")
 
 
 def _build_tf_ds_tcn(n_mels: int, channels: int, kernel_size: int,
                      dilations: list[int], chunk_frames: int,
                      downbeat: bool, fuse_bn: bool, residual: bool) -> keras.Model:
-    """Build TF/Keras equivalent of DSTCNBeatCNN.
+    """Build TF/Keras equivalent of DSTCNOnsetCNN.
 
     Depthwise separable blocks: ZeroPad → DepthwiseConv1D → [BN] → ReLU →
                                 Conv1D(1×1) → [BN] → ReLU → [+ residual]
@@ -229,9 +229,9 @@ def _fuse_bn_into_depthwise(pt_w, gamma, beta, mean, var, bn_eps=1e-5):
 
 def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
                               dilations: list[int], fuse_bn: bool):
-    """Transfer DSTCNBeatCNN weights to TF/Keras equivalent.
+    """Transfer DSTCNOnsetCNN weights to TF/Keras equivalent.
 
-    DSTCNBeatCNN PyTorch state_dict key layout:
+    DSTCNOnsetCNN PyTorch state_dict key layout:
       input_conv.weight, input_conv.bias  (bias redundant with BN, TODO: remove)
       input_bn.weight, input_bn.bias, input_bn.running_mean, input_bn.running_var
       blocks.0.dw_conv.weight          (no bias)
@@ -323,7 +323,7 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
                           kernel_sizes: list[int], window_frames: int,
                           downbeat: bool,
                           sum_head: bool = False) -> keras.Model:
-    """Build TF/Keras equivalent of PyTorch FrameBeatConv1D.
+    """Build TF/Keras equivalent of PyTorch FrameOnsetConv1D.
 
     Causal Conv1D layers with ReLU fused into Conv ops (no separate ReLU op).
     No BatchNorm — no fusion needed. ZeroPadding1D for causal padding.
@@ -348,25 +348,25 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
         # Raw logits (no activation on conv)
         logits = layers.Conv1D(out_channels, 1, padding="valid",
                                activation=None, name="output_conv")(x)
-        # Beat = sigmoid(logit_0)
-        beat_logit = logits[:, :, 0:1]
+        # Onset = sigmoid(logit_0)
+        onset_logit = logits[:, :, 0:1]
         db_logit = logits[:, :, 1:2]
-        beat = layers.Activation("sigmoid", name="beat_sigmoid")(beat_logit)
+        onset = layers.Activation("sigmoid", name="onset_sigmoid")(onset_logit)
         db_gate = layers.Activation("sigmoid", name="db_sigmoid")(db_logit)
-        db = layers.Multiply(name="db_multiply")([beat, db_gate])
-        x = layers.Concatenate(axis=-1, name="output_concat")([beat, db])
+        db = layers.Multiply(name="db_multiply")([onset, db_gate])
+        x = layers.Concatenate(axis=-1, name="output_concat")([onset, db])
     else:
         x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
                           name="output_conv")(x)
 
-    return keras.Model(inputs=inputs, outputs=x, name="frame_beat_conv1d")
+    return keras.Model(inputs=inputs, outputs=x, name="frame_onset_conv1d")
 
 
 def build_tf_frame_conv1d_pool(n_mels: int, channels: list[int],
                                kernel_sizes: list[int], pool_sizes: list[int],
                                window_frames: int, downbeat: bool,
                                use_stride: bool = False) -> keras.Model:
-    """Build TF/Keras equivalent of PyTorch FrameBeatConv1DPool.
+    """Build TF/Keras equivalent of PyTorch FrameOnsetConv1DPool.
 
     Conv1D with interleaved AveragePooling1D or strided conv for temporal compression.
     Strided mode uses fewer TFLite ops (no separate AvgPool), reducing dispatch overhead.
@@ -388,12 +388,12 @@ def build_tf_frame_conv1d_pool(n_mels: int, channels: list[int],
     x = layers.Conv1D(out_channels, 1, padding="valid", activation="sigmoid",
                       name="output_conv")(x)
 
-    return keras.Model(inputs=inputs, outputs=x, name="frame_beat_conv1d_pool")
+    return keras.Model(inputs=inputs, outputs=x, name="frame_onset_conv1d_pool")
 
 
 def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
                               channels: list[int]):
-    """Transfer FrameBeatConv1D weights from PyTorch to TF/Keras.
+    """Transfer FrameOnsetConv1D weights from PyTorch to TF/Keras.
 
     No BatchNorm to worry about — just transpose Conv1D weights.
     Extracts Conv1d layers by name pattern (backbone.N.weight) rather than
@@ -453,13 +453,13 @@ def conv1d_representative_dataset_gen(data_path: Path, window_frames: int,
 
 def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
                       downbeat: bool) -> keras.Model:
-    """Build TF/Keras equivalent of PyTorch FrameBeatFC.
+    """Build TF/Keras equivalent of PyTorch FrameOnsetFC.
 
     Takes flat input (1, window_frames * n_mels) — no Reshape op needed in
     TFLite. Firmware writes window buffer as flat array, so shapes match.
 
     TFLite ops: FullyConnected (with fused ReLU/Logistic), Quantize, Dequantize.
-    All already in FrameBeatNN.h resolver (5 slots).
+    All already in FrameOnsetNN.h resolver (5 slots).
     """
     out_channels = 2 if downbeat else 1
     input_dim = window_frames * n_mels
@@ -472,12 +472,12 @@ def build_tf_frame_fc(n_mels: int, window_frames: int, hidden_dims: list[int],
 
     x = layers.Dense(out_channels, activation="sigmoid", name="output")(x)
 
-    return keras.Model(inputs=inputs, outputs=x, name="frame_beat_fc")
+    return keras.Model(inputs=inputs, outputs=x, name="frame_onset_fc")
 
 
 def _transfer_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
                          hidden_dims: list[int]):
-    """Transfer FrameBeatFC weights from PyTorch to TF/Keras.
+    """Transfer FrameOnsetFC weights from PyTorch to TF/Keras.
 
     Extracts Linear layer weights by name pattern (backbone.N.weight/bias)
     rather than assuming a fixed stride through the state_dict. This is
@@ -525,7 +525,7 @@ def build_tf_frame_fc_enhanced(n_mels: int, window_frames: int,
                                 se_ratio: int = 0, conv_channels: int = 0,
                                 conv_kernel: int = 5, short_window: int = 0,
                                 short_hidden: int = 0) -> keras.Model:
-    """Build TF/Keras equivalent of PyTorch EnhancedBeatFC.
+    """Build TF/Keras equivalent of PyTorch EnhancedOnsetFC.
 
     Input is flat (1, window_frames * n_mels) to match firmware buffer.
     Reshapes internally when needed for SE/Conv1D operations.
@@ -606,12 +606,12 @@ def build_tf_frame_fc_enhanced(n_mels: int, window_frames: int,
     # --- Output ---
     out = layers.Dense(out_channels, activation="sigmoid", name="output")(h)
 
-    return keras.Model(inputs=inputs, outputs=out, name="enhanced_beat_fc")
+    return keras.Model(inputs=inputs, outputs=out, name="enhanced_onset_fc")
 
 
 def _transfer_enhanced_fc_weights(tf_model: keras.Model, pt_state_dict: dict,
                                    cfg: dict):
-    """Transfer EnhancedBeatFC weights from PyTorch to TF/Keras."""
+    """Transfer EnhancedOnsetFC weights from PyTorch to TF/Keras."""
     # SE block
     if cfg["model"].get("se_ratio", 0) > 0:
         for name_pt, name_tf in [("se.fc1", "se_fc1"), ("se.fc2", "se_fc2")]:
@@ -938,8 +938,8 @@ def main():
 
         # Verify weight transfer
         print("Verifying weight transfer...")
-        from models.beat_fc_enhanced import build_beat_fc_enhanced
-        pt_model = build_beat_fc_enhanced(
+        from models.onset_fc_enhanced import build_onset_fc_enhanced
+        pt_model = build_onset_fc_enhanced(
             n_mels=n_mels, window_frames=window_frames,
             hidden_dims=hidden_dims,
             dropout=cfg["model"].get("dropout", 0.1),
@@ -983,8 +983,8 @@ def main():
 
         # Verify weight transfer
         print("Verifying weight transfer...")
-        from models.beat_fc import build_beat_fc
-        pt_model = build_beat_fc(
+        from models.onset_fc import build_onset_fc
+        pt_model = build_onset_fc(
             n_mels=n_mels,
             window_frames=window_frames,
             hidden_dims=hidden_dims,
@@ -1027,8 +1027,8 @@ def main():
 
         # Verify weight transfer
         print("Verifying weight transfer...")
-        from models.beat_conv1d import build_beat_conv1d
-        pt_model = build_beat_conv1d(
+        from models.onset_conv1d import build_onset_conv1d
+        pt_model = build_onset_conv1d(
             n_mels=n_mels,
             channels=channels,
             kernel_sizes=kernel_sizes,
@@ -1073,8 +1073,8 @@ def main():
 
         # Verify weight transfer
         print("Verifying weight transfer...")
-        from models.beat_conv1d_pool import build_beat_conv1d_pool
-        pt_model = build_beat_conv1d_pool(
+        from models.onset_conv1d_pool import build_onset_conv1d_pool
+        pt_model = build_onset_conv1d_pool(
             n_mels=n_mels,
             channels=channels,
             kernel_sizes=kernel_sizes,
@@ -1103,7 +1103,7 @@ def main():
         fuse_bn = not args.no_fuse_bn
         print(f"Building TF model (type={model_type}, inference_frames={inference_frames}, "
               f"downbeat={use_downbeat}, fuse_bn={fuse_bn}, residual={residual})...")
-        tf_model = build_tf_beat_cnn(
+        tf_model = build_tf_onset_cnn(
             n_mels=n_mels,
             channels=cfg["model"]["channels"],
             kernel_size=cfg["model"]["kernel_size"],
@@ -1120,7 +1120,7 @@ def main():
 
         # Verify weight transfer
         print("Verifying weight transfer...")
-        from models.beat_cnn import build_beat_cnn as build_pt_cnn
+        from models.onset_cnn import build_onset_cnn as build_pt_cnn
         pt_model = build_pt_cnn(
             n_mels=n_mels,
             channels=cfg["model"]["channels"],

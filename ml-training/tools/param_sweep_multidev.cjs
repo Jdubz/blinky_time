@@ -168,7 +168,11 @@ function collectBpmMultiDevice(ports, trackPath, seekOffset, playDurationMs) {
           try {
             const obj = JSON.parse(line);
             if (obj.m && obj.m.bpm) {
-              readings[devId].push({ time: Date.now(), bpm: obj.m.bpm });
+              readings[devId].push({
+                time: Date.now(), bpm: obj.m.bpm,
+                ph: obj.m.ph || 0, p: obj.m.p || 0,
+                str: obj.m.str || 0, e: obj.m.e || 0
+              });
             }
           } catch (e) { /* skip */ }
         }
@@ -204,6 +208,30 @@ function analyzeBpm(readings) {
   const mean = bpms.reduce((a, b) => a + b) / bpms.length;
   const variance = bpms.reduce((a, b) => a + (b - mean) ** 2, 0) / bpms.length;
   return { mean, std: Math.sqrt(variance), count: settled.length };
+}
+
+/**
+ * Phase alignment metric: what fraction of strong pulses land near a beat grid subdivision?
+ * This measures visual quality directly — phase-aligned pulses look musical, off-grid look random.
+ * Octave errors don't affect this metric (half/double time still lands on subdivisions).
+ */
+function analyzePhaseAlignment(readings, tolerancePhase = 0.10) {
+  const startTime = readings[0] ? readings[0].time + settleMs : 0;
+  const settled = readings.filter(r => r.time >= startTime);
+  if (settled.length === 0) return { onGrid: 0, total: 0, pct: 0 };
+
+  // Only analyze frames where a pulse actually fired (p > 0.1)
+  const pulseFrames = settled.filter(r => r.p > 0.1);
+  if (pulseFrames.length === 0) return { onGrid: 0, total: 0, pct: 0 };
+
+  let onGrid = 0;
+  for (const r of pulseFrames) {
+    // Distance to nearest 8th-note subdivision (phase 0.0 or 0.5)
+    const subdivPhase = (r.ph * 2) % 1.0;
+    const gridDist = subdivPhase < 0.5 ? subdivPhase : (1.0 - subdivPhase);
+    if (gridDist < tolerancePhase) onGrid++;
+  }
+  return { onGrid, total: pulseFrames.length, pct: pulseFrames.length > 0 ? (100 * onGrid / pulseFrames.length) : 0 };
 }
 
 function classifyError(detected, actual) {
@@ -317,25 +345,27 @@ async function main() {
       let logParts = [];
       for (let di = 0; di < batch.length; di++) {
         const value = batch[di];
-        const devResult = analyzeBpm(multi[`dev${di}`] || []);
+        const devReadings = multi[`dev${di}`] || [];
+        const devResult = analyzeBpm(devReadings);
         const err = classifyError(devResult.mean, trueBpm);
+        const phaseAlign = analyzePhaseAlignment(devReadings);
 
         // For ambiguous tracks (half-time/double-time equally valid),
         // don't count half/double as octave errors.
-        // err.ratio is selected from exact values [0.5, 2/3, 1.0, 3/2, 2.0]
-        // in classifyError(), so strict equality is safe here.
         if (ambiguous && err.octave && (err.ratio === 0.5 || err.ratio === 2.0)) {
           err.octave = false;
         }
 
-        const skip = lowQuality;  // exclude from aggregate stats
+        const skip = lowQuality;
         sweepResultsMap[value].push({
           track: name, trueBpm, aggMean: devResult.mean, perDevice: [devResult.mean],
-          error: err.error, octave: err.octave, skip, ambiguous
+          error: err.error, octave: err.octave, skip, ambiguous,
+          phaseAlignPct: phaseAlign.pct, phaseOnGrid: phaseAlign.onGrid, phasePulses: phaseAlign.total
         });
 
+        const phaseSuffix = phaseAlign.total > 0 ? ` ${phaseAlign.pct.toFixed(0)}%ph` : '';
         const suffix = skip ? '~' : (err.octave ? '!' : '');
-        logParts.push(`v=${value}:${devResult.mean.toFixed(0)}${suffix}`);
+        logParts.push(`v=${value}:${devResult.mean.toFixed(0)}${suffix}${phaseSuffix}`);
       }
 
       console.log(`  [${ti + 1}/${tracks.length}] ${name.substring(0, 25).padEnd(27)} ${logParts.join('  ')}`);
@@ -349,8 +379,8 @@ async function main() {
   console.log('\n' + '='.repeat(100));
   console.log(`SWEEP SUMMARY: ${paramName} [${paramMin} → ${paramMax}]`);
   console.log('='.repeat(100));
-  console.log('Value'.padEnd(10) + 'Mean Err'.padEnd(12) + 'Octave Errs'.padEnd(14) + 'Tracks OK'.padEnd(12) + 'Best Tracks');
-  console.log('-'.repeat(100));
+  console.log('Value'.padEnd(10) + 'Mean Err'.padEnd(12) + 'Phase Align'.padEnd(13) + 'Octave Errs'.padEnd(14) + 'Tracks OK'.padEnd(12) + 'Best Tracks');
+  console.log('-'.repeat(110));
 
   let bestValue = sweepValues[0], bestScore = Infinity;
 
@@ -362,28 +392,36 @@ async function main() {
     const errors = valid.filter(t => t.error !== null).map(t => t.error);
     const octaveCount = valid.filter(t => t.octave).length;
     const meanErr = errors.length > 0 ? errors.reduce((a, b) => a + b) / errors.length : Infinity;
-    const tracksOk = valid.filter(t => !t.octave && t.error !== null && t.error < 10).length;
+    // Count tracks with low error (octave errors are acceptable — half/double time still rhythmic)
+    const tracksOk = valid.filter(t => t.error !== null && t.error < 10).length;
 
-    // Score: prioritize low octave errors, then low mean error
-    const score = meanErr + octaveCount * 5;  // 5 BPM penalty per octave error
+    // Score: mean BPM error only. Octave errors (half/double time) are visually
+    // acceptable — events still align with beat grid subdivisions. Phase alignment
+    // matters; octave accuracy does not. See VISUALIZER_GOALS.md.
+    const score = meanErr;
     if (score < bestScore) {
       bestScore = score;
       bestValue = value;
     }
+
+    // Phase alignment: mean % of pulses landing on grid subdivisions
+    const phaseAligns = valid.filter(t => t.phasePulses > 0).map(t => t.phaseAlignPct);
+    const meanPhaseAlign = phaseAligns.length > 0 ? phaseAligns.reduce((a, b) => a + b) / phaseAligns.length : 0;
 
     const skipped = vr.filter(t => t.skip).length;
     const suffix = skipped > 0 ? ` (${skipped} skipped)` : '';
     console.log(
       `${value}`.padEnd(10) +
       `${meanErr.toFixed(1)}`.padEnd(12) +
+      `${meanPhaseAlign.toFixed(0)}%`.padEnd(13) +
       `${octaveCount}/${valid.length}`.padEnd(14) +
       `${tracksOk}/${valid.length}`.padEnd(12) +
-      valid.filter(t => !t.octave && t.error < 5).map(t => t.track.substring(0, 15)).join(', ') +
+      valid.filter(t => t.error !== null && t.error < 5).map(t => t.track.substring(0, 15)).join(', ') +
       suffix
     );
   }
 
-  console.log('-'.repeat(100));
+  console.log('-'.repeat(110));
   console.log(`Recommended: ${paramName} = ${bestValue} (lowest combined score)`);
 
   // Save full results

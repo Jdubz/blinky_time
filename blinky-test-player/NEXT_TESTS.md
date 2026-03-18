@@ -49,7 +49,7 @@ All tests: 18 EDM tracks, blinkyhost.local, middle-of-track seeking, `NODE_PATH=
 
 | Feature | Wins | Losses | Ties | Mean Err | Octave Errs | Verdict |
 |---------|:----:|:------:|:----:|:--------:|:-----------:|---------|
-| NN beat (nnbeat=1) | **11** | 7 | 0 | **14.8** vs 15.6 | 7 vs 7 | Default ON |
+| NN onset (nnbeat=1) | **11** | 7 | 0 | **14.8** vs 15.6 | 7 vs 7 | Default ON |
 | Forward filter (fwdfilter=1) | 13 | 5 | 0 | **9.3** vs 15.4 | **17/18** | **REMOVED v64** |
 | Fwd filter optimized (6-param) | -- | -- | -- | **12.5** vs 14.5 | **7/18** vs 4/18 | **REMOVED v64** |
 | Hybrid phase (fwdphase=1) | 8 | 6 | 4 | 14.9 vs 14.8 | same | **REMOVED v64** |
@@ -70,7 +70,7 @@ making it harder to distinguish fundamental from half-time. May contribute to 13
 ```
 # Test: set percival2 1.0 && set percival4 1.0
 # Control: percival2=0.5, percival4=0.25 (current)
-# Metric: BPM accuracy, octave errors (expect improvement on half-time-locked tracks)
+# Metric: BPM accuracy, phase alignment (octave errors are acceptable — see bottleneck #3)
 ```
 
 ### 2. ODF Contrast Exponent: 2.0 → 1.0 or 0.5
@@ -123,7 +123,7 @@ at 140 vs 120), but should be retested after other parameter changes.
 ```
 # Test: set rayleighbpm 120
 # Control: rayleighbpm=140 (current)
-# Metric: BPM accuracy, octave errors (retest after other params settled)
+# Metric: BPM accuracy, phase alignment (retest after other params settled; octave errors acceptable)
 ```
 
 ### Literature Agreement (No Change Needed)
@@ -159,9 +159,9 @@ at 140 vs 120), but should be retested after other parameter changes.
 
 2. ~~**CBSS parameter re-tuning (RESOLVED March 13)**~~ — Swept `cbssthresh` (0.5-2.0, 6 steps) and `cbsscontrast` (1.0-3.0, 5 steps) on all 3 devices with cal63 ODF. Neither parameter showed significant improvement over current defaults. cbssthresh: mean error 10.1-11.4 (current 1.0 ≈ 11.0). cbsscontrast: mean error 8.9-11.2 (current 2.0 ≈ 10.8). Ratio-based params (cbssTightness, onsetSnapWindow, adaptiveTightness) are self-compensating as expected. **No changes needed.**
 
-3. **~135 BPM gravity well** — Multi-factorial. Not improved by CBSS parameter tuning. Not a tempo bin resolution issue (47 bins tested v61, full-res ACF already evaluates all lags). Literature review (Mar 17) identified three likely contributors: Percival harmonic weights too low (test #1), ODF contrast exponent opposite of literature (test #2), bass-heavy spectral flux weighting without precedent (test #3). See "Literature-Validated A/B Tests" above.
+3. **~135 BPM gravity well** — **LOW PRIORITY.** Octave errors (half/double time) are not visually problematic — a pulse at half-time or double-time still aligns with the beat grid and looks musical. The gravity well produces octave-related errors, not phase errors. See VISUALIZER_GOALS.md: "A stable wrong BPM looks fine visually." Literature A/B tests may improve BPM accuracy as a side effect, but this is not a visual priority.
 
-4. **Phase alignment** — correct BPM doesn't translate to correct beat placement. PLL tracks phase via onset-gated correction. PLL params (Kp/Ki/window/decay) now tunable and persisted (v74). PLL design is architecturally novel (no literature precedent), so parameter sweep is the path forward.
+4. **Phase alignment — THE PRIMARY BOTTLENECK.** Phase grid alignment is what makes visuals look musical. Events landing on any subdivision (1/4, 1/8, 1/16) look correct regardless of BPM octave. Events landing between subdivisions look random. PLL tracks phase via onset-gated correction. PLL params (Kp/Ki/window/decay) now tunable and persisted (v74). PLL design is architecturally novel (no literature precedent), so parameter sweep is the path forward. See `docs/PHASE_CONFIDENCE_ARCHITECTURE.md` for the v76 redesign.
 
 5. **Downbeat label ceiling** — Consensus v3 AND-merge improved label quality (65% noisy single-system labels removed), but inter-annotator agreement remains the ceiling. Offline DB F1=0.24. On-device downbeat activations are now functional with cal63 (max 0.37-0.57).
 
@@ -184,7 +184,7 @@ Heydari et al. (ICASSP 2022) showed a 1D probabilistic state space with "jump-ba
 
 | Issue | Root Cause | Visual Impact | Next Step |
 |-------|-----------|---------------|-----------|
-| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Medium** -- tracks lock to ~132 BPM | Literature A/B tests #1-#3 above |
+| ~135 BPM gravity well | Multi-factorial (data bias, prior, comb harmonics) | **Low** -- octave errors look fine visually (half/double time still rhythmic) | Low priority; phase alignment matters more |
 | NN eval inflated | Test set data leakage (18 tracks in training data) | Unknown | Fixed in v6+; v9 DS-TCN in progress |
 | Phase alignment limits F1 | PLL tracks phase via onset-gated correction | **High** | PLL param sweep (Kp/Ki/window now tunable v74) |
 | Run-to-run variance | Room acoustics, ambient noise | Requires 5+ runs for reliable evaluation | -- |

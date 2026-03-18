@@ -1,0 +1,32 @@
+# Conv1D W16 v3 — onset detection with all improvements
+#
+# Improvements over v1/v2:
+#   1. Knowledge distillation from Beat This! soft labels (alpha=0.3, T=2.0)
+#   2. Online mixup augmentation (Beta(0.4,0.4), p=0.5)
+#   3. Frequency positional encoding (26-dim learnable, FAC 2024)
+#   4. Asymmetric focal loss (gamma_pos=0.5, gamma_neg=2.0)
+#
+# Architecture unchanged: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false
+  freq_pos_encoding: true   # NEW: frequency positional encoding
+
+loss:
+  type: "asymmetric_focal"   # NEW: asymmetric focal loss
+  gamma_pos: 0.5
+  gamma_neg: 2.0
+
+training:
+  mixup: true               # NEW: online mixup
+  mixup_alpha: 0.4          # Beta distribution parameter
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v3.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15

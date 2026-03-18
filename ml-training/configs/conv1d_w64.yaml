@@ -9,8 +9,8 @@
 #   Receptive field: 9 frames = 144ms
 #
 # Output: 2 channels
-#   ch0 = sigmoid(beat_logit)               — beat activation (ODF for CBSS)
-#   ch1 = ch0 * sigmoid(downbeat_logit)     — downbeat ≤ beat (sum head)
+#   ch0 = sigmoid(onset_logit)               — onset activation (ODF for CBSS)
+#   ch1 = ch0 * sigmoid(downbeat_logit)     — downbeat ≤ onset (sum head)
 
 model:
   type: "frame_conv1d"

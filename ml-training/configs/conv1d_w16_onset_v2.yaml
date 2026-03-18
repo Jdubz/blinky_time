@@ -33,8 +33,8 @@ loss:
   shift_tolerance: 3            # ±3 frames = ±48ms
 
 export:
-  # Export to distinct path — manually rename to frame_beat_model_data.h
+  # Export to distinct path — manually rename to frame_onset_model_data.h
   # after offline validation confirms improvement over v1.
-  output_header: "../blinky-things/audio/frame_beat_model_data_v2.h"
-  c_array_name: "frame_beat_model_data"
+  output_header: "../blinky-things/audio/frame_onset_model_data_v2.h"
+  c_array_name: "frame_onset_model_data"
   max_model_size_kb: 15

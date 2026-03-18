@@ -1,19 +1,19 @@
-"""Frame-level FC model for beat/downbeat activation.
+"""Frame-level FC model for onset/downbeat activation.
 
 Designed for XIAO nRF52840 Sense (Cortex-M4F @ 64 MHz, 256 KB RAM)
 via TFLite Micro. Runs every spectral frame (~62.5 Hz), ~60-200us
 per inference.
 
 Architecture: sliding window of N raw mel frames x 26 bands
-  -> flatten -> FC hidden layers -> beat_activation + downbeat_activation
+  -> flatten -> FC hidden layers -> onset_activation + downbeat_activation
 
 TFLite ops needed: FullyConnected, ReLU, Logistic, Quantize, Dequantize
-(all already in FrameBeatNN.h resolver — no Reshape needed since firmware
+(all already in FrameOnsetNN.h resolver — no Reshape needed since firmware
  feeds flat window buffer directly).
 
 Training: unfolds 128-frame chunks into overlapping causal windows,
 producing per-frame predictions (batch, time, out_channels) — same
-interface as BeatCNN, so loss functions and evaluation work unchanged.
+interface as OnsetCNN, so loss functions and evaluation work unchanged.
 
 Firmware: single flat window input -> single prediction.
 """
@@ -26,11 +26,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class FrameBeatFC(nn.Module):
-    """Frame-level FC for beat (and optional downbeat) activation.
+class FrameOnsetFC(nn.Module):
+    """Frame-level FC for onset (and optional downbeat) activation.
 
     Input:  (batch, time, n_mels)
-    Output: (batch, time, out_channels)  — 1 = beat only, 2 = beat + downbeat
+    Output: (batch, time, out_channels)  — 1 = onset only, 2 = onset + downbeat
 
     Maintains a causal sliding window of `window_frames` mel frames.
     During training, all timesteps are processed in parallel via unfolding.
@@ -88,26 +88,26 @@ class FrameBeatFC(nn.Module):
         return torch.sigmoid(out)
 
 
-def build_beat_fc(n_mels: int = 26, window_frames: int = 32,
+def build_onset_fc(n_mels: int = 26, window_frames: int = 32,
                   hidden_dims: list[int] | None = None, dropout: float = 0.1,
                   downbeat: bool = False) -> nn.Module:
-    """Build a frame-level FC beat activation model.
+    """Build a frame-level FC onset activation model.
 
     Args:
         n_mels: Number of mel bands (must match firmware, default 26)
         window_frames: Sliding window size in frames (e.g. 32 = 512ms at 62.5 Hz)
         hidden_dims: List of hidden layer sizes (e.g. [64, 32])
         dropout: Dropout rate between hidden layers
-        downbeat: If True, output 2 channels (beat + downbeat)
+        downbeat: If True, output 2 channels (onset + downbeat)
     """
-    return FrameBeatFC(n_mels=n_mels, window_frames=window_frames,
+    return FrameOnsetFC(n_mels=n_mels, window_frames=window_frames,
                        hidden_dims=hidden_dims, dropout=dropout,
                        downbeat=downbeat)
 
 
 def fc_model_summary(cfg: dict) -> None:
     """Print FC model summary and parameter count."""
-    model = build_beat_fc(
+    model = build_onset_fc(
         n_mels=cfg["audio"]["n_mels"],
         window_frames=cfg["model"]["window_frames"],
         hidden_dims=cfg["model"]["hidden_dims"],
@@ -117,7 +117,7 @@ def fc_model_summary(cfg: dict) -> None:
     total_params = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     out_ch = 2 if cfg["model"].get("downbeat", False) else 1
-    print(f"FrameBeatFC: {total_params} params ({trainable} trainable)")
+    print(f"FrameOnsetFC: {total_params} params ({trainable} trainable)")
 
     int8_size_kb = total_params / 1024
     print(f"INT8 model size estimate: {int8_size_kb:.1f} KB")

@@ -17,10 +17,10 @@ A sophisticated LED fire effect controller for wearable art installations, desig
 - **Unified Architecture** - Generator→Effect→Renderer pipeline supporting matrix, linear, and custom layouts
 
 ### Audio Analysis
-- **🎵 CBSS Beat Tracking** - Counter-based beat prediction with deterministic phase
-- **🧠 NN Beat Detection** - Frame-level FC neural network for beat and downbeat activation (~3ms inference on Cortex-M4F)
-- **🎤 Advanced AGC** - Hardware + software automatic gain control
-- **📊 Rhythm Tracking** - Autocorrelation with Bayesian tempo fusion (60-200 BPM range)
+- **🧠 NN Onset Detection** - Conv1D neural network for acoustic onset detection (kicks/snares, ~7ms inference)
+- **🎵 AudioTracker** - Decoupled tempo/onset: spectral flux ACF + comb bank BPM, PLL phase tracking
+- **🎤 Adaptive Microphone** - Fixed hardware gain with window/range normalization (AGC removed v72)
+- **📊 Phase Confidence** - Subdivision-aware onset modulation with cosine proximity curve
 - **50+ Tunable Parameters** - Comprehensive audio parameter system
 
 ### System Features

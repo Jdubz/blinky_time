@@ -1,0 +1,47 @@
+# Conv1D W16 v4 — "kitchen sink" onset detection
+#
+# All proven improvements combined in one run:
+#   1. Frequency positional encoding (26-dim learnable, FAC 2024) — from v3
+#   2. Online mixup augmentation (Beta(0.4,0.4), p=0.5) — from v3
+#   3. Asymmetric focal loss (gamma_pos=0.5, gamma_neg=2.0) — from v3
+#   4. Knowledge distillation from Beat This! soft labels (alpha=0.3, T=2.0)
+#
+# Architecture unchanged: Conv1D(26->24, k=5) -> Conv1D(24->32, k=5) -> Conv1D(32->1, k=1)
+#   ~7K params, ~13 KB INT8, ~7ms inference on Cortex-M4F
+#   Receptive field: 9 frames = 144ms
+#
+# Output: 1 channel
+#   ch0 = sigmoid(onset_logit) — onset activation (kicks/snares)
+#
+# Train with:
+#   python train.py --config configs/conv1d_w16_onset_v4.yaml \
+#     --distill data/processed/Y_teacher_train.npy \
+#     --output-dir outputs/conv1d_w16_onset_v4
+
+model:
+  type: "frame_conv1d"
+  channels: [24, 32]
+  kernel_sizes: [5, 5]
+  window_frames: 16
+  dropout: 0.1
+  downbeat: false
+  freq_pos_encoding: true       # Learnable frequency positional encoding
+
+loss:
+  type: "asymmetric_focal"      # Asymmetric focal loss
+  gamma_pos: 0.5                # Light suppression of easy positives (keep onset sensitivity)
+  gamma_neg: 2.0                # Strong suppression of easy negatives (reduce noise)
+
+training:
+  mixup: true                   # Online mixup augmentation
+  mixup_alpha: 0.4              # Beta distribution parameter
+
+# Knowledge distillation parameters (requires --distill CLI flag, see header)
+distillation:
+  alpha: 0.3                    # (1-alpha)*hard_loss + alpha*soft_loss
+  temperature: 2.0              # Softening temperature for dark knowledge transfer
+
+export:
+  output_header: "../blinky-things/audio/frame_onset_model_data_v4.h"
+  c_array_name: "frame_onset_model_data"
+  max_model_size_kb: 15

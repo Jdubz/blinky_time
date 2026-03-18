@@ -23,7 +23,7 @@ audio:
   # AGC ceiling — must agree with firmware AdaptiveMic.h hwGainMaxSignal.
   # Gain sweep calibration shows SNR peaks at 25-35, degrades above 40.
   # prepare_dataset.py uses this to cap gain-aware noise augmentation.
-  hw_gain_max: 40           # Firmware default: 40 (AdaptiveMic.h v56)
+  hw_gain_max: 32           # Firmware fixed gain: nRF52840=32, ESP32-S3=30 (AGC removed v72)
   # Spectral noise subtraction (Martin 2001 min-statistics, firmware v56)
   # Applied to FFT magnitudes before mel projection. Mirrors firmware
   # SharedSpectralAnalysis::estimateAndSubtractNoise().

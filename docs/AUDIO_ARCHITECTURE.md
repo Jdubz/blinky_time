@@ -6,7 +6,7 @@ AudioTracker provides unified audio analysis and rhythm tracking for LED effects
 
 **Current Version:** AudioTracker with decoupled tempo/onset architecture (March 2026)
 **BPM Signal:** Spectral flux (half-wave rectified, NN-independent) → OSS buffer → ACF + comb bank → BPM
-**Onset Detection:** FrameBeatNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Used for visual pulse + PLL phase refinement. Non-NN fallback: mic level.
+**Onset Detection:** FrameOnsetNN (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3). Single output: onset activation. Detects acoustic onsets (kicks/snares), not metrical beats. Used for visual pulse + PLL phase refinement. Non-NN fallback: mic level.
 **AGC:** Removed (v72). Hardware gain fixed at platform optimal (nRF52840: 32, ESP32-S3: 30). Window/range normalization is sole dynamic range system.
 
 **Evolution:**
@@ -74,7 +74,7 @@ SharedSpectralAnalysis (FFT-256 -> compressor -> whitening -> mel bands + spectr
       |              EMA smoothing -> BPM estimate
       |
       +--- [ONSET PATH: NN → visual pulse + PLL refinement]
-      |    FrameBeatNN (Conv1D W16, onset-only)
+      |    FrameOnsetNN (Conv1D W16, onset-only)
       |         Input: sliding window of rawMelBands_ (16 frames x 26 bands)
       |         Output: single onset activation (0-1, kicks/snares)
       |         |
@@ -236,11 +236,11 @@ float output = organic * (1.0f - blend) + synced * blend;
 
 ---
 
-## Onset Detection: FrameBeatNN (Conv1D W16, Deployed)
+## Onset Detection: FrameOnsetNN (Conv1D W16, Deployed)
 
 ### Current: Single Conv1D Onset Model
 
-`FrameBeatNN` detects acoustic onsets (kicks, snares) from mel spectrograms. Trained on beat-position labels, but with a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output.
+`FrameOnsetNN` detects acoustic onsets (kicks, snares) from mel spectrograms. Trained on beat-position labels, but with a 144ms receptive field it can only detect local transients — it cannot distinguish on-beat from off-beat onsets. This is why BPM estimation uses spectral flux instead of NN output. The distinction is critical: beats are metrical grid positions (abstract, periodic), while onsets are acoustic transients (concrete, irregular). The NN detects onsets.
 
 The model processes a sliding window of raw mel frames (16 frames x 26 bands = 256ms) every spectral frame. Produces a single output: **onset activation** (used for visual pulse detection and PLL phase refinement). Uses raw mel bands (pre-compression, pre-whitening), decoupled from firmware signal processing parameters. Always compiled in (TFLite is a required dependency since v68).
 
@@ -303,7 +303,7 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 | Component | RAM | CPU Time | Notes |
 |-----------|-----|----------|-------|
 | AdaptiveMic + FFT + spectral flux | ~4 KB + 4 bytes | ~2ms/frame | Fixed gain + window/range normalization. Spectral flux: 1 float (negligible). |
-| FrameBeatNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
+| FrameOnsetNN (Conv1D W16) | 3404 bytes arena + 1.7 KB window buffer | 6.8ms/frame (nRF52840) | 16 frames x 26 bands x 4 bytes = 1,664 bytes. 13.4 KB model in flash. |
 | OSS Buffer (360 floats) | 1.4 KB | - | ~5.5 seconds @ ~66 Hz, circular. Fed by spectral flux. |
 | ACF computation | ~1.1 KB stack | ~2ms every 150ms | Linearized buffer + correlation |
 | CombFilterBank (20 filters) | ~5.3 KB | ~1ms/frame | 20 x 66 delay line = 5,280 bytes + state |
@@ -327,8 +327,8 @@ ESP32-S3 has no hardware PDM gain register. `setGain()` applies a software linea
 - `blinky-things/audio/CombFilterBank.h` - Comb filter bank header (20 parallel IIR resonators)
 - `blinky-things/audio/CombFilterBank.cpp` - Comb filter bank implementation (Scheirer 1998)
 - `blinky-things/audio/SharedSpectralAnalysis.h` - FFT -> compressor -> whitening -> mel bands
-- `blinky-things/audio/FrameBeatNN.h` - TFLite Micro NN onset activation (single Conv1D model)
-- `blinky-things/audio/frame_beat_model_data.h` - INT8 TFLite model weights
+- `blinky-things/audio/FrameOnsetNN.h` - TFLite Micro NN onset activation (single Conv1D model)
+- `blinky-things/audio/frame_onset_model_data.h` - INT8 TFLite model weights
 
 **Input Processing:**
 - `blinky-things/inputs/AdaptiveMic.h` - Microphone processing (fixed hardware gain)

@@ -51,7 +51,7 @@ struct AudioControl {
     // === DOWNBEAT ===
     // Downbeat activation (0.0 - 1.0), synchronized with beat detection.
     // Only fires on actual beats (not between beats). Smoothed from NN output.
-    // Only meaningful when FrameBeatNN has a multi-output model loaded.
+    // Only meaningful when FrameOnsetNN has a multi-output model loaded.
     // Use for: Extra-dramatic effects every 4 beats (e.g., burst of sparks on bar 1)
     float downbeat = 0.0f;
 

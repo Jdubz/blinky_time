@@ -100,6 +100,7 @@ function SettingControl({ setting, onChange, disabled }: SettingControlProps) {
 // Category display names (architecture-based)
 const categoryNames: Record<string, string> = {
   audio: 'Audio Processing',
+  tracker: 'Audio Tracker',
   agc: 'Auto-Gain Control',
   transient: 'Transient Detection',
   detection: 'Detection Algorithms',
@@ -135,6 +136,7 @@ const categoryDescriptions: Record<string, string> = {
 // Category order for display (input processing → detection → musical analysis → generators → effects)
 const categoryOrder = [
   'audio',
+  'tracker',
   'agc',
   'transient',
   'detection',

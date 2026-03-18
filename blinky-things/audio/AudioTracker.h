@@ -5,15 +5,15 @@
 #include "../hal/PlatformDetect.h"
 
 #if defined(BLINKY_PLATFORM_NRF52840) || defined(BLINKY_PLATFORM_ESP32S3)
-#include "FrameBeatNN.h"
+#include "FrameOnsetNN.h"
 #else
-struct FrameBeatNN {
+struct FrameOnsetNN {
     static constexpr int INPUT_MEL_BANDS = 26;
     bool begin()                                    { return false; }
     bool isReady() const                            { return false; }
     bool hasDownbeatOutput() const                  { return false; }
     float infer(const float*)                       { return 0.0f; }
-    float getLastBeat() const                       { return 0.0f; }
+    float getLastOnset() const                       { return 0.0f; }
     float getLastDownbeat() const                   { return 0.0f; }
     void setProfileEnabled(bool)                    {}
     void printDiagnostics() const                   {}
@@ -34,7 +34,7 @@ struct FrameBeatNN {
  *   BPM path:  SharedSpectralAnalysis → spectral flux → OSS buffer
  *                → ACF (tempo) + Comb bank (validation) → BPM estimate
  *
- *   Onset path: SharedSpectralAnalysis → FrameBeatNN (Conv1D W16, ~7ms)
+ *   Onset path: SharedSpectralAnalysis → FrameOnsetNN (Conv1D W16, ~7ms)
  *                → onset activation → pulse detection (visual sparks)
  *                → PLL phase refinement (onset-gated correction)
  *
@@ -63,7 +63,7 @@ public:
     const AdaptiveMic& getMic() const { return mic_; }
     SharedSpectralAnalysis& getSpectral() { return spectral_; }
     const SharedSpectralAnalysis& getSpectral() const { return spectral_; }
-    const FrameBeatNN& getFrameBeatNN() const { return frameBeatNN_; }
+    const FrameOnsetNN& getFrameOnsetNN() const { return frameOnsetNN_; }
     float getCurrentBpm() const { return bpm_; }
     int getHwGain() const;
 
@@ -84,7 +84,7 @@ public:
     float getBeatStability() const { return periodicityStrength_; }
     float getTempoVelocity() const { return 0.0f; }
     uint32_t getNextBeatMs() const { return 0; }
-    uint32_t getLastBeatTimeMs() const { return 0; }
+    uint32_t getLastOnsetTimeMs() const { return 0; }
     float getCbssConfidence() const { return periodicityStrength_; }
     float getCurrentCBSS() const { return 0.0f; }
     float getLastOnsetStrength() const { return lastPulseStrength_; }
@@ -98,8 +98,8 @@ public:
     // === Tunable parameters (~10 total) ===
     float bpmMin = 60.0f;
     float bpmMax = 200.0f;
-    float rayleighBpm = 140.0f;
-    float combFeedback = 0.92f;
+    float rayleighBpm = 130.0f;
+    float combFeedback = 0.855f;
     float pllKp = 0.15f;
     float pllKi = 0.005f;
     float activationThreshold = 0.3f;
@@ -107,19 +107,22 @@ public:
     float tempoSmoothing = 0.85f;
     uint16_t acfPeriodMs = 150;
 
-    // Pulse modulation (keep from AudioController for generator compatibility)
-    float pulseBoostOnBeat = 1.3f;
-    float pulseSuppressOffBeat = 0.6f;
-    float energyBoostOnBeat = 0.3f;
-    float pulseNearBeatThreshold = 0.2f;
-    float pulseFarFromBeatThreshold = 0.3f;
+    // Phase-aware onset confidence modulation (v75)
+    // Replaces binary boost/suppress with subdivision-aware cosine proximity curve.
+    // Phase alignment matters; octave errors don't (half/double time still looks musical).
+    float pulseBoostOnBeat = 1.3f;         // Max boost for confident on-grid onsets
+    float energyBoostOnBeat = 0.3f;        // Energy boost near beat subdivisions
+    float confFloor = 0.4f;                // Min confidence for maximally off-grid onsets (0=suppress, 1=passthrough)
+    float confActivation = 0.3f;           // rhythmStrength below this: no modulation (all onsets passthrough)
+    float confFullModulation = 0.7f;       // rhythmStrength above this: full phase-based modulation
+    float subdivTolerance = 0.10f;         // Phase distance for "near subdivision" (at 120 BPM, 0.10 = 50ms)
 
     // NN profiling
     bool nnProfile = false;
 
     // === Newly exposed tuning constants (v74) ===
     // Spectral flux contrast (power-law sharpening before ACF/comb)
-    float odfContrast = 2.0f;
+    float odfContrast = 1.25f;
 
     // Pulse detection thresholds
     float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
@@ -154,7 +157,7 @@ private:
     ISystemTime& time_;
     AdaptiveMic mic_;
     SharedSpectralAnalysis spectral_;
-    FrameBeatNN frameBeatNN_;
+    FrameOnsetNN frameOnsetNN_;
     bool nnActive_ = false;
     uint32_t lastSpectralFrameCount_ = 0;  // Track new frames via getFrameCount()
 

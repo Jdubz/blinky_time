@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract mel spectrograms and beat activation targets from labeled audio.
+"""Extract mel spectrograms and onset activation targets from labeled audio.
 
 Replicates the firmware's SharedSpectralAnalysis mel pipeline (raw path, v56+):
   - 16 kHz sample rate
@@ -129,10 +129,10 @@ def _binary_targets(times: np.ndarray, n_frames: int,
     return targets
 
 
-def make_beat_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
+def make_onset_targets(beat_times: np.ndarray, n_frames: int, frame_rate: float,
                       sigma: float, target_type: str = "gaussian",
                       strengths: np.ndarray | None = None) -> np.ndarray:
-    """Create beat activation targets (binary or Gaussian-smoothed).
+    """Create onset activation targets (binary or Gaussian-smoothed).
 
     If target_type is "binary" and strengths is provided, uses per-beat
     strength values as targets instead of 1.0.
@@ -441,7 +441,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             if mic_profile is not None:
                 mel = _apply_mic_profile(mel, mic_profile, rng)
             n_frames = mel.shape[0]
-            targets = make_beat_targets(src_beats, n_frames, frame_rate, sigma,
+            targets = make_onset_targets(src_beats, n_frames, frame_rate, sigma,
                                         target_type=target_type,
                                         strengths=src_strengths)
 
@@ -526,7 +526,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     if mic_profile is not None:
                         mel = _apply_mic_profile(mel, mic_profile, rng)
                     n_frames = mel.shape[0]
-                    targets = make_beat_targets(beat_times, n_frames, frame_rate,
+                    targets = make_onset_targets(beat_times, n_frames, frame_rate,
                                                 sigma, target_type=target_type,
                                                 strengths=beat_strengths)
                     stem_result = {
@@ -576,7 +576,7 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Prepare dataset for beat activation CNN")
+    parser = argparse.ArgumentParser(description="Prepare dataset for onset activation CNN")
     parser.add_argument("--config", default="configs/default.yaml", help="Config file path")
     parser.add_argument("--augment", action="store_true", help="Apply acoustic environment augmentation")
     parser.add_argument("--audio-dir", default=None, help="Override audio directory from config")
