@@ -117,6 +117,37 @@ public:
     // NN profiling
     bool nnProfile = false;
 
+    // === Newly exposed tuning constants (v74) ===
+    // Spectral flux contrast (power-law sharpening before ACF/comb)
+    float odfContrast = 2.0f;
+
+    // Pulse detection thresholds
+    float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
+    float pulseMinLevel = 0.03f;       // Minimum mic level to allow pulse
+
+    // PLL tuning constants
+    float pllOnsetFloor = 0.1f;        // ODF values below this get zero PLL correction
+    float pllNearBeatWindow = 0.25f;   // Phase distance (0-0.5) for onset-gated correction
+    float pllIntegralDecay = 0.95f;    // Leaky integrator decay rate
+    float pllSilenceDecay = 0.99f;     // Integral decay during silence
+
+    // Percival ACF harmonic enhancement weights
+    float percivalWeight2 = 0.5f;      // 2nd harmonic fold weight
+    float percivalWeight4 = 0.25f;     // 4th harmonic fold weight
+
+    // ODF baseline tracking rates
+    float baselineFastDrop = 0.05f;    // Fast drop rate for floor tracking
+    float baselineSlowRise = 0.005f;   // Slow rise rate for floor tracking
+
+    // ODF peak-hold decay
+    float odfPeakHoldDecay = 0.85f;    // Peak-hold release rate (~100ms at 62.5Hz)
+
+    // Energy synthesis blend weights
+    float energyMicWeight = 0.30f;     // Broadband mic level weight
+    float energyMelWeight = 0.30f;     // Bass mel energy weight
+    float energyOdfWeight = 0.40f;     // ODF peak-hold transient weight
+    float energyBoostWindow = 0.25f;   // Phase distance for beat-proximity boost
+
 private:
     // === Audio input ===
     ISystemTime& time_;

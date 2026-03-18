@@ -7,9 +7,8 @@
 // Weights emphasize rhythmically informative frequencies for BPM estimation.
 // Each band's raw flux is normalized by its bin count before weighting,
 // so these weights represent actual emphasis (not bin-count-scaled contribution).
-static constexpr float BASS_FLUX_WEIGHT = 0.5f;  // bins 1-6: kicks
-static constexpr float MID_FLUX_WEIGHT  = 0.2f;  // bins 7-32: vocals, pads
-static constexpr float HIGH_FLUX_WEIGHT = 0.3f;  // bins 33-127: snares, hi-hats
+// Band flux weights moved to SharedSpectralAnalysis public members (v74) for tuning.
+// Previous hardcoded values: BASS=0.5, MID=0.2, HIGH=0.3
 static constexpr float BASS_BIN_COUNT = static_cast<float>(
     SpectralConstants::BASS_MAX_BIN - SpectralConstants::BASS_MIN_BIN + 1);  // 6
 static constexpr float MID_BIN_COUNT = static_cast<float>(
@@ -208,9 +207,9 @@ void SharedSpectralAnalysis::process() {
         // Normalize each band by its bin count so the weights reflect
         // actual emphasis rather than bin-count dominance (bass=6, mid=26,
         // high=95 bins — without normalization, high band would dominate).
-        spectralFlux_ = BASS_FLUX_WEIGHT * (bassFlux / BASS_BIN_COUNT)
-                       + MID_FLUX_WEIGHT * (midFlux / MID_BIN_COUNT)
-                       + HIGH_FLUX_WEIGHT * (highFlux / HIGH_BIN_COUNT);
+        spectralFlux_ = bassFluxWeight * (bassFlux / BASS_BIN_COUNT)
+                       + midFluxWeight * (midFlux / MID_BIN_COUNT)
+                       + highFluxWeight * (highFlux / HIGH_BIN_COUNT);
     } else {
         spectralFlux_ = 0.0f;
     }

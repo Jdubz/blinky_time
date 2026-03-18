@@ -104,6 +104,11 @@ public:
                                      // spectral normalizer (not audio output). Slow release preserves
                                      // transient dynamics while compressing sustained level differences.
 
+    // Spectral flux band weights (v74: exposed for tuning, was hardcoded)
+    float bassFluxWeight = 0.5f;   // Bins 1-6: kicks (62-375 Hz)
+    float midFluxWeight  = 0.2f;   // Bins 7-32: vocals/pads (437-2000 Hz)
+    float highFluxWeight = 0.3f;   // Bins 33-127: snares/hi-hats (2-8 kHz)
+
     /**
      * Add samples to the analysis buffer
      * @param samples Pointer to int16_t sample buffer

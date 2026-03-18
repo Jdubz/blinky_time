@@ -6,8 +6,10 @@
 #include "../generators/Lightning.h"
 #include "../inputs/AdaptiveMic.h"
 
+class AudioTracker;
+
 // AudioController removed v74 — replaced by AudioTracker.
-// ConfigStorage no longer reads/writes audio tracker params (deferred).
+// AudioTracker params persisted via StoredTrackerParams (v74).
 
 /**
  * ConfigStorage - Flash-based configuration persistence for nRF52
@@ -116,7 +118,10 @@ public:
     //   AudioController's ~56 runtime params no longer read from StoredMusicParams.
     //   StoredMusicParams struct preserved in flash layout for version compatibility
     //   (devices with v73 flash won't factory-reset). Pulse baseline tracking fix.
-    static const uint8_t SETTINGS_VERSION = 73;
+    // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
+    //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
+    //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
+    static const uint8_t SETTINGS_VERSION = 74;
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -423,6 +428,63 @@ public:
         // Total: ~160 bytes (see static_assert enforcing sizeof(StoredDeviceConfig) <= 160)
     };
 
+    // AudioTracker params (v74: first persisted, previously serial-only)
+    struct StoredTrackerParams {
+        // Core tempo params
+        float bpmMin;
+        float bpmMax;
+        float rayleighBpm;
+        float combFeedback;
+        float tempoSmoothing;
+        uint16_t acfPeriodMs;
+
+        // PLL
+        float pllKp;
+        float pllKi;
+        float pllOnsetFloor;
+        float pllNearBeatWindow;
+        float pllIntegralDecay;
+        float pllSilenceDecay;
+
+        // Rhythm activation
+        float activationThreshold;
+        float odfGateThreshold;
+
+        // Pulse modulation
+        float pulseBoostOnBeat;
+        float pulseSuppressOffBeat;
+        float energyBoostOnBeat;
+        float pulseNearBeatThreshold;
+        float pulseFarFromBeatThreshold;
+
+        // Spectral flux contrast
+        float odfContrast;
+
+        // Pulse detection
+        float pulseThresholdMult;
+        float pulseMinLevel;
+
+        // Percival ACF
+        float percivalWeight2;
+        float percivalWeight4;
+
+        // ODF baseline tracking
+        float baselineFastDrop;
+        float baselineSlowRise;
+        float odfPeakHoldDecay;
+
+        // Energy synthesis
+        float energyMicWeight;
+        float energyMelWeight;
+        float energyOdfWeight;
+        float energyBoostWindow;
+
+        // Spectral flux band weights
+        float bassFluxWeight;
+        float midFluxWeight;
+        float highFluxWeight;
+    };
+
     struct ConfigData {
         uint16_t magic;
         uint8_t deviceVersion;          // Version for device config (rarely changes)
@@ -433,6 +495,7 @@ public:
         StoredLightningParams lightning;
         StoredMicParams mic;
         StoredMusicParams music;
+        StoredTrackerParams tracker;
         // (StoredBandFluxParams bandflux removed v67)
         uint8_t brightness;
     };
@@ -459,8 +522,8 @@ public:
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     // ConfigData: allocated in last 4KB flash page (4096 bytes available).
     // Tight bound catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 800,
-        "ConfigData exceeds 800 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes.");
+    static_assert(sizeof(ConfigData) <= 960,
+        "ConfigData exceeds 960 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes.");
 
     ConfigStorage();
     void begin();
@@ -476,19 +539,19 @@ public:
     bool isDeviceConfigValid() const { return data_.device.isValid; }
 
     /**
-     * Load/save all persisted generator and mic parameters.
-     * AudioTracker params not yet persisted (v74, deferred).
+     * Load/save all persisted generator, mic, and tracker parameters.
+     * AudioTracker params persisted v74 (StoredTrackerParams).
      */
     void loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
-                          AdaptiveMic& mic);
+                          AdaptiveMic& mic, AudioTracker* tracker = nullptr);
     void saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                          const AdaptiveMic& mic);
+                          const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
     void factoryReset();
 
     // Auto-save support
     void markDirty() { dirty_ = true; }
     void saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                     const AdaptiveMic& mic);
+                     const AdaptiveMic& mic, AudioTracker* tracker = nullptr);
 
 private:
     ConfigData data_;

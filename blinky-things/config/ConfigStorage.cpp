@@ -1,6 +1,7 @@
 #include "ConfigStorage.h"
 #include "../tests/SafetyTest.h"
 #include "../inputs/SerialConsole.h"
+#include "../audio/AudioTracker.h"
 
 // Flash storage for nRF52 mbed core
 #if defined(ARDUINO_ARCH_MBED) || defined(TARGET_NAME) || defined(MBED_CONF_TARGET_NAME)
@@ -331,6 +332,42 @@ void ConfigStorage::loadSettingsDefaults() {
 
     // (BandFlux detector defaults removed v67 — BandFlux pipeline removed)
 
+    // AudioTracker defaults (v74)
+    data_.tracker.bpmMin = 60.0f;
+    data_.tracker.bpmMax = 200.0f;
+    data_.tracker.rayleighBpm = 140.0f;
+    data_.tracker.combFeedback = 0.92f;
+    data_.tracker.tempoSmoothing = 0.85f;
+    data_.tracker.acfPeriodMs = 150;
+    data_.tracker.pllKp = 0.15f;
+    data_.tracker.pllKi = 0.005f;
+    data_.tracker.pllOnsetFloor = 0.1f;
+    data_.tracker.pllNearBeatWindow = 0.25f;
+    data_.tracker.pllIntegralDecay = 0.95f;
+    data_.tracker.pllSilenceDecay = 0.99f;
+    data_.tracker.activationThreshold = 0.3f;
+    data_.tracker.odfGateThreshold = 0.20f;
+    data_.tracker.pulseBoostOnBeat = 1.3f;
+    data_.tracker.pulseSuppressOffBeat = 0.6f;
+    data_.tracker.energyBoostOnBeat = 0.3f;
+    data_.tracker.pulseNearBeatThreshold = 0.2f;
+    data_.tracker.pulseFarFromBeatThreshold = 0.3f;
+    data_.tracker.odfContrast = 2.0f;
+    data_.tracker.pulseThresholdMult = 2.0f;
+    data_.tracker.pulseMinLevel = 0.03f;
+    data_.tracker.percivalWeight2 = 0.5f;
+    data_.tracker.percivalWeight4 = 0.25f;
+    data_.tracker.baselineFastDrop = 0.05f;
+    data_.tracker.baselineSlowRise = 0.005f;
+    data_.tracker.odfPeakHoldDecay = 0.85f;
+    data_.tracker.energyMicWeight = 0.30f;
+    data_.tracker.energyMelWeight = 0.30f;
+    data_.tracker.energyOdfWeight = 0.40f;
+    data_.tracker.energyBoostWindow = 0.25f;
+    data_.tracker.bassFluxWeight = 0.5f;
+    data_.tracker.midFluxWeight = 0.2f;
+    data_.tracker.highFluxWeight = 0.3f;
+
     data_.brightness = 100;
 }
 
@@ -422,6 +459,7 @@ bool ConfigStorage::loadFromFlash() {
         memcpy(&data_.lightning, &temp.lightning, sizeof(StoredLightningParams));
         memcpy(&data_.mic, &temp.mic, sizeof(StoredMicParams));
         memcpy(&data_.music, &temp.music, sizeof(StoredMusicParams));
+        memcpy(&data_.tracker, &temp.tracker, sizeof(StoredTrackerParams));
         // (StoredBandFluxParams memcpy removed v67 — struct removed)
         data_.brightness = temp.brightness;
         SerialConsole::logDebug(F("Settings loaded from flash"));
@@ -529,7 +567,7 @@ void ConfigStorage::end() {
 }
 
 void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& waterParams, LightningParams& lightningParams,
-                                      AdaptiveMic& mic) {
+                                      AdaptiveMic& mic, AudioTracker* tracker) {
     // Validation helpers — clamp individual bad params to nearest bound.
     // Preserves all other settings instead of wiping everything.
     int fixedCount = 0;
@@ -727,8 +765,6 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         fixedCount++;
     }
 
-    #undef VALIDATE_INT
-
     if (fixedCount > 0) {
         Serial.print(F("[WARN] Fixed "));
         Serial.print(fixedCount);
@@ -822,13 +858,88 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
     mic.peakTau = data_.mic.peakTau;
     mic.releaseTau = data_.mic.releaseTau;
 
-    // AudioController params removed v74 — replaced by AudioTracker.
-    // StoredMusicParams struct preserved in flash layout for version compatibility.
-    // AudioTracker param persistence deferred (see IMPROVEMENT_PLAN.md).
+    // AudioTracker params (v74)
+    if (tracker) {
+        // Validate tracker params
+        validateFloat(data_.tracker.bpmMin, 40.0f, 120.0f, F("tracker.bpmMin"));
+        validateFloat(data_.tracker.bpmMax, 120.0f, 240.0f, F("tracker.bpmMax"));
+        validateFloat(data_.tracker.rayleighBpm, 60.0f, 180.0f, F("tracker.rayleighBpm"));
+        validateFloat(data_.tracker.combFeedback, 0.85f, 0.98f, F("tracker.combFeedback"));
+        validateFloat(data_.tracker.tempoSmoothing, 0.5f, 0.99f, F("tracker.tempoSmooth"));
+        validateFloat(data_.tracker.pllKp, 0.0f, 0.5f, F("tracker.pllKp"));
+        validateFloat(data_.tracker.pllKi, 0.0f, 0.05f, F("tracker.pllKi"));
+        validateFloat(data_.tracker.pllOnsetFloor, 0.0f, 0.5f, F("tracker.pllOnsetFloor"));
+        validateFloat(data_.tracker.pllNearBeatWindow, 0.05f, 0.5f, F("tracker.pllNearBeatWin"));
+        validateFloat(data_.tracker.pllIntegralDecay, 0.8f, 0.999f, F("tracker.pllIntDecay"));
+        validateFloat(data_.tracker.pllSilenceDecay, 0.9f, 0.9999f, F("tracker.pllSilDecay"));
+        validateFloat(data_.tracker.activationThreshold, 0.0f, 1.0f, F("tracker.actThresh"));
+        validateFloat(data_.tracker.odfGateThreshold, 0.0f, 0.5f, F("tracker.odfGate"));
+        validateFloat(data_.tracker.pulseBoostOnBeat, 1.0f, 3.0f, F("tracker.pulseBoost"));
+        validateFloat(data_.tracker.pulseSuppressOffBeat, 0.0f, 1.0f, F("tracker.pulseSupp"));
+        validateFloat(data_.tracker.energyBoostOnBeat, 0.0f, 1.0f, F("tracker.energyBoost"));
+        validateFloat(data_.tracker.pulseNearBeatThreshold, 0.0f, 0.5f, F("tracker.pulseNear"));
+        validateFloat(data_.tracker.pulseFarFromBeatThreshold, 0.0f, 0.5f, F("tracker.pulseFar"));
+        validateFloat(data_.tracker.odfContrast, 1.0f, 4.0f, F("tracker.odfContrast"));
+        validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
+        validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
+        validateFloat(data_.tracker.percivalWeight2, 0.0f, 1.0f, F("tracker.percival2"));
+        validateFloat(data_.tracker.percivalWeight4, 0.0f, 1.0f, F("tracker.percival4"));
+        validateFloat(data_.tracker.baselineFastDrop, 0.01f, 0.2f, F("tracker.blFastDrop"));
+        validateFloat(data_.tracker.baselineSlowRise, 0.001f, 0.05f, F("tracker.blSlowRise"));
+        validateFloat(data_.tracker.odfPeakHoldDecay, 0.5f, 0.99f, F("tracker.odfPkDecay"));
+        validateFloat(data_.tracker.energyMicWeight, 0.0f, 1.0f, F("tracker.eMicW"));
+        validateFloat(data_.tracker.energyMelWeight, 0.0f, 1.0f, F("tracker.eMelW"));
+        validateFloat(data_.tracker.energyOdfWeight, 0.0f, 1.0f, F("tracker.eOdfW"));
+        validateFloat(data_.tracker.energyBoostWindow, 0.05f, 0.5f, F("tracker.eBoostWin"));
+        validateFloat(data_.tracker.bassFluxWeight, 0.0f, 1.0f, F("tracker.bassFluxW"));
+        validateFloat(data_.tracker.midFluxWeight, 0.0f, 1.0f, F("tracker.midFluxW"));
+        validateFloat(data_.tracker.highFluxWeight, 0.0f, 1.0f, F("tracker.highFluxW"));
+        VALIDATE_INT(data_.tracker.acfPeriodMs, 50, 500, F("tracker.acfPeriod"));
+
+        // Copy to AudioTracker
+        tracker->bpmMin = data_.tracker.bpmMin;
+        tracker->bpmMax = data_.tracker.bpmMax;
+        tracker->rayleighBpm = data_.tracker.rayleighBpm;
+        tracker->combFeedback = data_.tracker.combFeedback;
+        tracker->tempoSmoothing = data_.tracker.tempoSmoothing;
+        tracker->acfPeriodMs = data_.tracker.acfPeriodMs;
+        tracker->pllKp = data_.tracker.pllKp;
+        tracker->pllKi = data_.tracker.pllKi;
+        tracker->pllOnsetFloor = data_.tracker.pllOnsetFloor;
+        tracker->pllNearBeatWindow = data_.tracker.pllNearBeatWindow;
+        tracker->pllIntegralDecay = data_.tracker.pllIntegralDecay;
+        tracker->pllSilenceDecay = data_.tracker.pllSilenceDecay;
+        tracker->activationThreshold = data_.tracker.activationThreshold;
+        tracker->odfGateThreshold = data_.tracker.odfGateThreshold;
+        tracker->pulseBoostOnBeat = data_.tracker.pulseBoostOnBeat;
+        tracker->pulseSuppressOffBeat = data_.tracker.pulseSuppressOffBeat;
+        tracker->energyBoostOnBeat = data_.tracker.energyBoostOnBeat;
+        tracker->pulseNearBeatThreshold = data_.tracker.pulseNearBeatThreshold;
+        tracker->pulseFarFromBeatThreshold = data_.tracker.pulseFarFromBeatThreshold;
+        tracker->odfContrast = data_.tracker.odfContrast;
+        tracker->pulseThresholdMult = data_.tracker.pulseThresholdMult;
+        tracker->pulseMinLevel = data_.tracker.pulseMinLevel;
+        tracker->percivalWeight2 = data_.tracker.percivalWeight2;
+        tracker->percivalWeight4 = data_.tracker.percivalWeight4;
+        tracker->baselineFastDrop = data_.tracker.baselineFastDrop;
+        tracker->baselineSlowRise = data_.tracker.baselineSlowRise;
+        tracker->odfPeakHoldDecay = data_.tracker.odfPeakHoldDecay;
+        tracker->energyMicWeight = data_.tracker.energyMicWeight;
+        tracker->energyMelWeight = data_.tracker.energyMelWeight;
+        tracker->energyOdfWeight = data_.tracker.energyOdfWeight;
+        tracker->energyBoostWindow = data_.tracker.energyBoostWindow;
+
+        // Spectral flux weights go to SharedSpectralAnalysis via tracker accessor
+        tracker->getSpectral().bassFluxWeight = data_.tracker.bassFluxWeight;
+        tracker->getSpectral().midFluxWeight = data_.tracker.midFluxWeight;
+        tracker->getSpectral().highFluxWeight = data_.tracker.highFluxWeight;
+    }
+
+    #undef VALIDATE_INT
 }
 
 void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                                      const AdaptiveMic& mic) {
+                                      const AdaptiveMic& mic, AudioTracker* tracker) {
     // Spawn behavior
     data_.fire.baseSpawnChance = fireParams.baseSpawnChance;
     data_.fire.audioSpawnBoost = fireParams.audioSpawnBoost;
@@ -910,8 +1021,43 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
     data_.mic.peakTau = mic.peakTau;
     data_.mic.releaseTau = mic.releaseTau;
 
-    // AudioController params removed v74 — replaced by AudioTracker.
-    // StoredMusicParams struct preserved in flash layout for version compatibility.
+    // AudioTracker params (v74)
+    if (tracker) {
+        data_.tracker.bpmMin = tracker->bpmMin;
+        data_.tracker.bpmMax = tracker->bpmMax;
+        data_.tracker.rayleighBpm = tracker->rayleighBpm;
+        data_.tracker.combFeedback = tracker->combFeedback;
+        data_.tracker.tempoSmoothing = tracker->tempoSmoothing;
+        data_.tracker.acfPeriodMs = tracker->acfPeriodMs;
+        data_.tracker.pllKp = tracker->pllKp;
+        data_.tracker.pllKi = tracker->pllKi;
+        data_.tracker.pllOnsetFloor = tracker->pllOnsetFloor;
+        data_.tracker.pllNearBeatWindow = tracker->pllNearBeatWindow;
+        data_.tracker.pllIntegralDecay = tracker->pllIntegralDecay;
+        data_.tracker.pllSilenceDecay = tracker->pllSilenceDecay;
+        data_.tracker.activationThreshold = tracker->activationThreshold;
+        data_.tracker.odfGateThreshold = tracker->odfGateThreshold;
+        data_.tracker.pulseBoostOnBeat = tracker->pulseBoostOnBeat;
+        data_.tracker.pulseSuppressOffBeat = tracker->pulseSuppressOffBeat;
+        data_.tracker.energyBoostOnBeat = tracker->energyBoostOnBeat;
+        data_.tracker.pulseNearBeatThreshold = tracker->pulseNearBeatThreshold;
+        data_.tracker.pulseFarFromBeatThreshold = tracker->pulseFarFromBeatThreshold;
+        data_.tracker.odfContrast = tracker->odfContrast;
+        data_.tracker.pulseThresholdMult = tracker->pulseThresholdMult;
+        data_.tracker.pulseMinLevel = tracker->pulseMinLevel;
+        data_.tracker.percivalWeight2 = tracker->percivalWeight2;
+        data_.tracker.percivalWeight4 = tracker->percivalWeight4;
+        data_.tracker.baselineFastDrop = tracker->baselineFastDrop;
+        data_.tracker.baselineSlowRise = tracker->baselineSlowRise;
+        data_.tracker.odfPeakHoldDecay = tracker->odfPeakHoldDecay;
+        data_.tracker.energyMicWeight = tracker->energyMicWeight;
+        data_.tracker.energyMelWeight = tracker->energyMelWeight;
+        data_.tracker.energyOdfWeight = tracker->energyOdfWeight;
+        data_.tracker.energyBoostWindow = tracker->energyBoostWindow;
+        data_.tracker.bassFluxWeight = tracker->getSpectral().bassFluxWeight;
+        data_.tracker.midFluxWeight = tracker->getSpectral().midFluxWeight;
+        data_.tracker.highFluxWeight = tracker->getSpectral().highFluxWeight;
+    }
 
     saveToFlash();
     dirty_ = false;
@@ -919,9 +1065,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
 }
 
 void ConfigStorage::saveIfDirty(const FireParams& fireParams, const WaterParams& waterParams, const LightningParams& lightningParams,
-                                const AdaptiveMic& mic) {
+                                const AdaptiveMic& mic, AudioTracker* tracker) {
     if (dirty_ && (millis() - lastSaveMs_ > 5000)) {  // Debounce: save at most every 5 seconds
-        saveConfiguration(fireParams, waterParams, lightningParams, mic);
+        saveConfiguration(fireParams, waterParams, lightningParams, mic, tracker);
     }
 }
 
