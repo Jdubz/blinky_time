@@ -236,7 +236,7 @@ RenderPipeline → LED Output
    - `FrameOnsetNN.h` - Single-model TFLite NN inference for acoustic onset detection
      - Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3
      - Single output channel: onset activation (kicks/snares — cannot distinguish on-beat from off-beat)
-     - Onset F1=0.477 (offline eval, measured against beat-position labels — see note below)
+     - Onset F1=0.738 vs librosa onset labels / 0.477 vs beat-position labels (model is a good onset detector; beat F1 was the wrong metric)
      - Arena: 3404/32768 bytes
      - Used for: visual pulse, PLL phase refinement, energy peak-hold. NOT used for BPM estimation.
      - Note: "Onset F1" is measured against beat-position labels, so it reflects how often NN-detected onsets align with metrical beats. The NN itself detects acoustic onsets, not beats.
@@ -433,7 +433,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+Comb+PLL + ODF information gate + pulse baseline tracking
-- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, Onset F1=0.477, deployed on all 7 devices)
+- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, Onset F1=0.738 vs onset labels, deployed on all 7 devices)
 - ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
@@ -494,8 +494,8 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 **Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Onset F1=0.491, DB F1=0.238.
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
 **Current (v75, deployed):** Decoupled tempo/onset architecture. BPM uses spectral flux (NN-independent). NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse + PLL phase refinement.
-- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Onset F1=0.477 (measured against beat-position labels). Arena: 3404/32768 bytes.
-- Note on "Onset F1": The NN is trained on beat-position labels but only learns onset patterns due to its tiny 144ms context window. F1 is measured against those beat labels, so it reflects onset-vs-beat alignment, not onset detection accuracy per se.
+- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Onset F1=0.738 vs librosa onset labels (0.477 vs beat-position labels). Arena: 3404/32768 bytes.
+- The model is a good onset detector. "Beat F1=0.477" was the wrong metric — it measured onset-vs-beat alignment. Against actual onset labels (librosa.onset.onset_detect), F1=0.738.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLL phase alignment. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.

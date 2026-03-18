@@ -9,10 +9,38 @@
 # Each test plays all 18 EDM tracks TWICE (baseline + test), ~21 min per test.
 # Total: ~1h 45min for all 5 tests.
 
-set -e
+set -eo pipefail
 
 PORTS="/dev/ttyACM1,/dev/ttyACM2,/dev/ttyACM4"
 RESULTS_DIR="../ml-training/tools/results/literature_tests_$(date +%Y%m%d_%H%M%S)"
+
+# Reset all sweep params to defaults on exit (prevents contaminated state)
+reset_all_params() {
+  echo "Resetting all devices to defaults..."
+  NODE_PATH=node_modules node -e "
+const {SerialPort} = require('serialport');
+async function reset() {
+  for (const p of '$PORTS'.split(',')) {
+    try {
+      const s = new SerialPort({path: p, baudRate: 115200});
+      await new Promise(r => s.on('open', r));
+      s.write('set percival2 0.5\n');
+      s.write('set percival4 0.25\n');
+      s.write('set odfcontrast 1.25\n');
+      s.write('set bassflux 0.5\n');
+      s.write('set midflux 0.2\n');
+      s.write('set highflux 0.3\n');
+      s.write('set combfeedback 0.855\n');
+      s.write('set rayleighbpm 130\n');
+      await new Promise(r => setTimeout(r, 500));
+      s.close();
+    } catch(e) { console.error('Reset failed for ' + p + ': ' + e.message); }
+  }
+}
+reset().then(() => process.exit(0));
+" 2>&1 || echo "WARNING: Reset failed — check device params manually"
+}
+trap reset_all_params EXIT
 mkdir -p "$RESULTS_DIR"
 
 echo "============================================"

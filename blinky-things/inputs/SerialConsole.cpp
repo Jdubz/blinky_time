@@ -976,15 +976,19 @@ void SerialConsole::restoreDefaults() {
     if (audioCtrl_) {
         audioCtrl_->bpmMin = 60.0f;
         audioCtrl_->bpmMax = 200.0f;
-        audioCtrl_->rayleighBpm = 140.0f;
-        audioCtrl_->combFeedback = 0.92f;
+        audioCtrl_->rayleighBpm = 130.0f;
+        audioCtrl_->combFeedback = 0.855f;
         audioCtrl_->pllKp = 0.15f;
         audioCtrl_->pllKi = 0.005f;
         audioCtrl_->activationThreshold = 0.3f;
-        audioCtrl_->odfGateThreshold = 0.25f;
+        audioCtrl_->odfGateThreshold = 0.20f;
         audioCtrl_->tempoSmoothing = 0.85f;
         audioCtrl_->pulseBoostOnBeat = 1.3f;
         audioCtrl_->confFloor = 0.4f;
+        audioCtrl_->confActivation = 0.3f;
+        audioCtrl_->confFullModulation = 0.7f;
+        audioCtrl_->subdivTolerance = 0.10f;
+        audioCtrl_->odfContrast = 1.25f;
         audioCtrl_->energyBoostOnBeat = 0.3f;
 
         // Restore spectral processing defaults
@@ -1309,10 +1313,10 @@ void SerialConsole::streamTick() {
 
     // NN diagnostic stream: fires every spectral frame (~62.5 Hz)
     // Outputs the exact mel bands fed to the NN + NN output for offline validation.
-    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"db":<float>,"bpm":<float>}
-    // "mel" = getRawMelBands() — the exact input to FrameOnsetNN::infer()
-    // "onset" = NN onset activation output (0 if NN not loaded)
-    // "db" = NN downbeat activation (0 if no downbeat head)
+    // Format: {"type":"NN","ts":<ms>,"mel":[26 floats],"onset":<float>,"nn":<0|1>,"nndb":<float>,"bpm":<float>,"phase":<float>,"rstr":<float>,"lvl":<float>,"gain":<float>}
+    // "onset" = raw ODF (NN onset activation or mic level fallback)
+    // "nn" = 1 if NN loaded, 0 if stub/fallback
+    // "nndb" = NN downbeat activation (only present if model has downbeat head)
     // "bpm" = current estimated tempo
     if (streamNN_ && audioCtrl_) {
         const SharedSpectralAnalysis& spectral = audioCtrl_->getSpectral();

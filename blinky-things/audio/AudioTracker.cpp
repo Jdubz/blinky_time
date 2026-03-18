@@ -446,8 +446,7 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     if (pulse > 0.0f) {
         // Cosine proximity: 1.0 at grid center, decays to confFloor at max distance.
         // gridDistance is [0, 0.5] — normalize to [0, 1] for cosine.
-        float normalizedDist = gridDistance * 2.0f;  // [0, 1]
-        if (normalizedDist > 1.0f) normalizedDist = 1.0f;
+        float normalizedDist = gridDistance * 2.0f;  // [0, 1] (always <= 1.0, defensive clamp)
         float proximityMult = confFloor + (1.0f - confFloor) *
                               0.5f * (1.0f + cosf(normalizedDist * 3.14159f));
 
