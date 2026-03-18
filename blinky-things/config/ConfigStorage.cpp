@@ -335,8 +335,8 @@ void ConfigStorage::loadSettingsDefaults() {
     // AudioTracker defaults (v74)
     data_.tracker.bpmMin = 60.0f;
     data_.tracker.bpmMax = 200.0f;
-    data_.tracker.rayleighBpm = 140.0f;
-    data_.tracker.combFeedback = 0.92f;
+    data_.tracker.rayleighBpm = 130.0f;
+    data_.tracker.combFeedback = 0.855f;
     data_.tracker.tempoSmoothing = 0.85f;
     data_.tracker.acfPeriodMs = 150;
     data_.tracker.pllKp = 0.15f;
@@ -353,7 +353,7 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.confActivation = 0.3f;      // v75: rhythmStrength below this = no modulation
     data_.tracker.confFullModulation = 0.7f;  // v75: rhythmStrength above this = full modulation
     data_.tracker.subdivTolerance = 0.10f;    // v75: phase distance for "near subdivision"
-    data_.tracker.odfContrast = 2.0f;
+    data_.tracker.odfContrast = 1.25f;
     data_.tracker.pulseThresholdMult = 2.0f;
     data_.tracker.pulseMinLevel = 0.03f;
     data_.tracker.percivalWeight2 = 0.5f;

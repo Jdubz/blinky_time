@@ -98,8 +98,8 @@ public:
     // === Tunable parameters (~10 total) ===
     float bpmMin = 60.0f;
     float bpmMax = 200.0f;
-    float rayleighBpm = 140.0f;
-    float combFeedback = 0.92f;
+    float rayleighBpm = 130.0f;
+    float combFeedback = 0.855f;
     float pllKp = 0.15f;
     float pllKi = 0.005f;
     float activationThreshold = 0.3f;
@@ -122,7 +122,7 @@ public:
 
     // === Newly exposed tuning constants (v74) ===
     // Spectral flux contrast (power-law sharpening before ACF/comb)
-    float odfContrast = 2.0f;
+    float odfContrast = 1.25f;
 
     // Pulse detection thresholds
     float pulseThresholdMult = 2.0f;   // Baseline multiplier for pulse fire
