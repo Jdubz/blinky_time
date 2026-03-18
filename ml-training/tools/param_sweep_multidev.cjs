@@ -147,7 +147,7 @@ function isAmbiguousTrack(trackName) {
 
 function isLowQualityTrack(trackName) {
   const data = loadTrackMeta(trackName);
-  return data ? (data.quality_score || 1.0) < 0.5 : false;
+  return data ? (data.quality_score !== undefined ? data.quality_score : 1.0) < 0.5 : false;
 }
 
 function collectBpmMultiDevice(ports, trackPath, seekOffset, playDurationMs) {
@@ -352,7 +352,7 @@ async function main() {
   console.log('Value'.padEnd(10) + 'Mean Err'.padEnd(12) + 'Octave Errs'.padEnd(14) + 'Tracks OK'.padEnd(12) + 'Best Tracks');
   console.log('-'.repeat(100));
 
-  let bestValue = sweepValues[0], bestMeanErr = Infinity;
+  let bestValue = sweepValues[0], bestScore = Infinity;
 
   for (let vi = 0; vi < sweepValues.length; vi++) {
     const value = sweepValues[vi];
@@ -366,10 +366,9 @@ async function main() {
 
     // Score: prioritize low octave errors, then low mean error
     const score = meanErr + octaveCount * 5;  // 5 BPM penalty per octave error
-    if (score < bestMeanErr + (sweepResults[sweepValues.indexOf(bestValue)] ?
-        sweepResults[sweepValues.indexOf(bestValue)].tracks.filter(t => !t.skip && t.octave).length * 5 : 0)) {
+    if (score < bestScore) {
+      bestScore = score;
       bestValue = value;
-      bestMeanErr = meanErr;
     }
 
     const skipped = vr.filter(t => t.skip).length;

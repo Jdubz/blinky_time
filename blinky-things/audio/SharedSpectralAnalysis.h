@@ -168,7 +168,9 @@ public:
     const float* getPhases() const { return phases_; }
 
     /**
-     * Get previous frame magnitudes (for spectral flux computation)
+     * Get previous frame magnitudes (compressed-but-not-whitened).
+     * Saved after applyCompressor(), before whitenMagnitudes().
+     * Used internally for spectral flux computation.
      */
     const float* getPrevMagnitudes() const { return prevMagnitudes_; }
 
@@ -260,7 +262,6 @@ private:
     float prevMagnitudes_[SpectralConstants::NUM_BINS];
     float melBands_[SpectralConstants::NUM_MEL_BANDS];   // Whitened mel bands (SpectralFlux, Novelty use these)
     float rawMelBands_[SpectralConstants::NUM_MEL_BANDS]; // Pre-compressor mel bands (noise-subtracted if enabled, no whitening) for NN + calibration
-    float prevMelBands_[SpectralConstants::NUM_MEL_BANDS];
 
     // Mel-band whitening: per-band running maximum for adaptive normalization
     // Applied to mel bands (not raw magnitudes) because:
@@ -302,7 +303,6 @@ private:
     void computeRawMelBands();
     void whitenMelBands();
     void computeDerivedFeatures();
-    void savePreviousFrame();
     void savePrevCompressedMagnitudes();
 
     static bool safeIsFinite(float x) {

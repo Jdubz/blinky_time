@@ -3,6 +3,20 @@
 #include <arduinoFFT.h>
 #include <math.h>
 
+// Band-weighted spectral flux constants.
+// Weights emphasize rhythmically informative frequencies for BPM estimation.
+// Each band's raw flux is normalized by its bin count before weighting,
+// so these weights represent actual emphasis (not bin-count-scaled contribution).
+static constexpr float BASS_FLUX_WEIGHT = 0.5f;  // bins 1-6: kicks
+static constexpr float MID_FLUX_WEIGHT  = 0.2f;  // bins 7-32: vocals, pads
+static constexpr float HIGH_FLUX_WEIGHT = 0.3f;  // bins 33-127: snares, hi-hats
+static constexpr float BASS_BIN_COUNT = static_cast<float>(
+    SpectralConstants::BASS_MAX_BIN - SpectralConstants::BASS_MIN_BIN + 1);  // 6
+static constexpr float MID_BIN_COUNT = static_cast<float>(
+    SpectralConstants::MID_MAX_BIN - SpectralConstants::MID_MIN_BIN + 1);    // 26
+static constexpr float HIGH_BIN_COUNT = static_cast<float>(
+    SpectralConstants::NUM_BINS - SpectralConstants::HIGH_MIN_BIN);           // 95
+
 // Pre-computed mel filterbank bin boundaries
 // Generated for 26 mel bands from 60-8000 Hz at 16kHz/256-point FFT
 // Each band is a triangular filter spanning [start, center, end] bins
@@ -61,7 +75,6 @@ SharedSpectralAnalysis::SharedSpectralAnalysis()
     , prevMagnitudes_{}
     , melBands_{}
     , rawMelBands_{}
-    , prevMelBands_{}
     , melRunningMax_{}
     , binRunningMax_{}
     , smoothedGainDb_(0.0f)
@@ -102,7 +115,6 @@ void SharedSpectralAnalysis::reset() {
     for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
         melBands_[i] = 0.0f;
         rawMelBands_[i] = 0.0f;
-        prevMelBands_[i] = 0.0f;
         melRunningMax_[i] = 0.0f;
     }
     for (int i = 0; i < SpectralConstants::NUM_BINS; i++) {
@@ -130,9 +142,6 @@ void SharedSpectralAnalysis::process() {
     if (sampleCount_ < SpectralConstants::FFT_SIZE) {
         return;  // Not enough samples
     }
-
-    // Save previous frame data before overwriting
-    savePreviousFrame();
 
     // Copy samples to vReal_, starting from oldest sample in ring buffer
     for (int i = 0; i < SpectralConstants::FFT_SIZE; i++) {
@@ -183,11 +192,6 @@ void SharedSpectralAnalysis::process() {
     //   Bass (bins 1-6, 62-375 Hz): kicks — strongest periodic signal
     //   High (bins 33-127, 2-8 kHz): snares, hi-hats — transient markers
     //   Mid (bins 7-32, 437-2000 Hz): vocals, pads — less rhythmic
-    // Band weights: emphasize rhythmically informative frequencies.
-    static constexpr float BASS_FLUX_WEIGHT = 0.5f;  // bins 1-6: kicks
-    static constexpr float MID_FLUX_WEIGHT  = 0.2f;  // bins 7-32: vocals, pads
-    static constexpr float HIGH_FLUX_WEIGHT = 0.3f;  // bins 33-127: snares, hi-hats
-
     if (hasPrevFrame_) {
         float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
         for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {  // skip DC
@@ -201,9 +205,12 @@ void SharedSpectralAnalysis::process() {
                     highFlux += diff;
             }
         }
-        spectralFlux_ = BASS_FLUX_WEIGHT * bassFlux
-                       + MID_FLUX_WEIGHT * midFlux
-                       + HIGH_FLUX_WEIGHT * highFlux;
+        // Normalize each band by its bin count so the weights reflect
+        // actual emphasis rather than bin-count dominance (bass=6, mid=26,
+        // high=95 bins — without normalization, high band would dominate).
+        spectralFlux_ = BASS_FLUX_WEIGHT * (bassFlux / BASS_BIN_COUNT)
+                       + MID_FLUX_WEIGHT * (midFlux / MID_BIN_COUNT)
+                       + HIGH_FLUX_WEIGHT * (highFlux / HIGH_BIN_COUNT);
     } else {
         spectralFlux_ = 0.0f;
     }
@@ -498,14 +505,6 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
     } else {
         spectralCentroid_ = 0.0f;
     }
-}
-
-void SharedSpectralAnalysis::savePreviousFrame() {
-    // Called at the TOP of process(), before new FFT overwrites state.
-    // NOTE: prevMagnitudes_ is saved separately after applyCompressor() —
-    // see savePrevCompressedMagnitudes(). This gives spectral flux access to
-    // compressed-but-not-whitened magnitudes for sharper transient peaks.
-    // prevMelBands_ intentionally not saved — no current consumer.
 }
 
 void SharedSpectralAnalysis::savePrevCompressedMagnitudes() {
