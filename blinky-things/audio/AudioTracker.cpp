@@ -130,7 +130,16 @@ const AudioControl& AudioTracker::update(float dt) {
         float flux = spectral_.getSpectralFlux();
         // Apply contrast sharpening (power-law) before buffering.
         // Squaring sharpens peaks relative to baseline, improving ACF.
-        float fluxContrast = (odfContrast == 2.0f) ? flux * flux : powf(flux, odfContrast);
+        float fluxContrast;
+        if (odfContrast == 2.0f) {
+            fluxContrast = flux * flux;
+        } else if (odfContrast == 1.0f) {
+            fluxContrast = flux;
+        } else if (odfContrast == 0.5f) {
+            fluxContrast = sqrtf(flux);
+        } else {
+            fluxContrast = powf(flux, odfContrast);
+        }
 
         combFilterBank_.feedbackGain = combFeedback;
         combFilterBank_.process(fluxContrast);

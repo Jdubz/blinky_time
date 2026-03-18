@@ -517,6 +517,8 @@ public:
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     static_assert(sizeof(StoredMusicParams) == 312,
         "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (312 bytes = 66 floats + 7 uint8 + 18 bools + padding)");
+    static_assert(sizeof(StoredTrackerParams) == 136,
+        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (136 bytes = 33 floats + 1 uint16 + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");

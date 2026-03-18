@@ -41,7 +41,7 @@ namespace SpectralConstants {
     constexpr int MID_MIN_BIN = 7;     // 437.5 Hz
     constexpr int MID_MAX_BIN = 32;    // 2 kHz
     constexpr int HIGH_MIN_BIN = 33;   // 2.0625 kHz
-    constexpr int HIGH_MAX_BIN = 128;  // 8 kHz
+    constexpr int HIGH_MAX_BIN = 127;  // 8 kHz (last usable bin = NUM_BINS - 1)
 }
 
 /**
@@ -104,7 +104,9 @@ public:
                                      // spectral normalizer (not audio output). Slow release preserves
                                      // transient dynamics while compressing sustained level differences.
 
-    // Spectral flux band weights (v74: exposed for tuning, was hardcoded)
+    // Spectral flux band weights (v74: exposed for tuning, was hardcoded).
+    // Each band's raw flux is normalized by bin count before weighting.
+    // Not auto-normalized — setting all to 0.0 silences spectral flux and kills BPM.
     float bassFluxWeight = 0.5f;   // Bins 1-6: kicks (62-375 Hz)
     float midFluxWeight  = 0.2f;   // Bins 7-32: vocals/pads (437-2000 Hz)
     float highFluxWeight = 0.3f;   // Bins 33-127: snares/hi-hats (2-8 kHz)

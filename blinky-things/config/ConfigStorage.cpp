@@ -879,7 +879,7 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.energyBoostOnBeat, 0.0f, 1.0f, F("tracker.energyBoost"));
         validateFloat(data_.tracker.pulseNearBeatThreshold, 0.0f, 0.5f, F("tracker.pulseNear"));
         validateFloat(data_.tracker.pulseFarFromBeatThreshold, 0.0f, 0.5f, F("tracker.pulseFar"));
-        validateFloat(data_.tracker.odfContrast, 1.0f, 4.0f, F("tracker.odfContrast"));
+        validateFloat(data_.tracker.odfContrast, 0.1f, 4.0f, F("tracker.odfContrast"));
         validateFloat(data_.tracker.pulseThresholdMult, 1.0f, 5.0f, F("tracker.pulseThrMult"));
         validateFloat(data_.tracker.pulseMinLevel, 0.0f, 0.2f, F("tracker.pulseMinLvl"));
         validateFloat(data_.tracker.percivalWeight2, 0.0f, 1.0f, F("tracker.percival2"));

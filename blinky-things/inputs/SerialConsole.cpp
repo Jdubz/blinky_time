@@ -281,7 +281,7 @@ void SerialConsole::registerTrackerSettings() {
     // === Newly exposed tuning constants (v74) ===
     // Spectral flux contrast
     settings_.registerFloat("odfcontrast", &audioCtrl_->odfContrast, "tracker",
-        "Spectral flux contrast exponent (power-law sharpening)", 1.0f, 4.0f, onParamChanged);
+        "Spectral flux contrast exponent (power-law sharpening)", 0.1f, 4.0f, onParamChanged);
 
     // Pulse detection
     settings_.registerFloat("pulsethreshmult", &audioCtrl_->pulseThresholdMult, "tracker",

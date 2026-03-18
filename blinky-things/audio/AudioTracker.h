@@ -142,7 +142,8 @@ public:
     // ODF peak-hold decay
     float odfPeakHoldDecay = 0.85f;    // Peak-hold release rate (~100ms at 62.5Hz)
 
-    // Energy synthesis blend weights
+    // Energy synthesis blend weights (should sum to ~1.0 for expected behavior;
+    // not auto-normalized — setting all low under-drives energy, all high over-drives)
     float energyMicWeight = 0.30f;     // Broadband mic level weight
     float energyMelWeight = 0.30f;     // Bass mel energy weight
     float energyOdfWeight = 0.40f;     // ODF peak-hold transient weight
