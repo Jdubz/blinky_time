@@ -127,9 +127,36 @@ Key properties:
 - **Off-beat onsets still visible**: `confFloor` (0.4) ensures off-beat transients still produce 40% visual response
 - **No mode switching**: continuous blend, never jarring transitions
 
+### PLL Subdivision-Aware Correction (Critical Fix)
+
+**The current PLL has a phase alignment bug.** The correction window (`pllNearBeatWindow = 0.25`)
+only corrects near phase 0.0. At half-time BPM (e.g., estimated 60 instead of true 120):
+- Real beats hit at phase 0.0 AND 0.5
+- Beats at phase 0.5 are OUTSIDE the ±0.25 window — no correction, pulse suppressed to 0.6x, energy boost zero
+- Result: permanent anti-phase lock to every other beat
+
+This is asymmetric: double-time works fine (beats hit near phase 0 every other cycle), but
+half-time permanently loses every other beat. **This is the single biggest phase alignment issue.**
+
+**Fix:** Make PLL correction subdivision-aware. Instead of correcting only near phase 0.0,
+correct near ANY beat grid subdivision (0.0, 0.5, 0.25, 0.75):
+
+```cpp
+float subdivPhase = fmodf(pllPhase_ * subdivLevel, 1.0f);
+float subdivError = subdivPhase > 0.5f ? (subdivPhase - 1.0f) : subdivPhase;
+if (fabsf(subdivError) < pllNearBeatWindow / subdivLevel) {
+    // Apply correction at 1/subdivLevel strength (subdivisions get less trust)
+    float subdivScale = 1.0f / subdivLevel;  // quarter=1.0, eighth=0.5
+    pllPhase_ -= pllKp * subdivError * correctionScale * subdivScale;
+}
+```
+
+With `subdivLevel = 2` (eighth notes), the PLL corrects at both phase 0.0 and 0.5.
+Half-time beats at phase 0.5 now get corrected, fixing the anti-phase lock.
+
 ### PLL Density-Scaled Correction
 
-The PLL onset-gated correction should consider onset density:
+The PLL onset-gated correction should also consider onset density:
 
 - **Low density** (< 1.5 onsets/sec): sparse content. Onsets are more likely meaningful (isolated kicks). Trust them more for phase correction → scale correction up 1.3x.
 - **High density** (> 4.0 onsets/sec): busy/syncopated content. Onsets may be off-beat. Trust them less → scale correction down 0.5x.
@@ -185,24 +212,31 @@ Changes NN input from 26 mel bands to 30 features per frame.
 
 ## Implementation Plan
 
-### Phase 1: Core confidence modulation
-- Modify `AudioTracker::synthesizeOutputs()` — replace two-threshold pulse logic
+### Phase 1: PLL subdivision-aware correction (HIGHEST PRIORITY)
+- Modify `AudioTracker::updatePll()` — correct at all grid subdivisions, not just phase 0
+- Modify `AudioTracker::synthesizeOutputs()` — energy boost and pulse modulation at all subdivisions
+- This fixes the half-time anti-phase bug: the single biggest phase alignment issue
+- ~30 lines changed. Immediate visual improvement on half-time-locked tracks.
+
+### Phase 2: Confidence modulation
+- Replace two-threshold pulse logic with cosine proximity curve
 - Add `computeSubdivisionPhase()`, `classifyOnset()`, `computePhaseConfidence()`
 - Add `onsetGridClass` and `onsetPhaseConfidence` to AudioControl
 - ~60 lines added, ~15 modified. No new files. Negligible RAM/CPU.
 
-### Phase 2: PLL density scaling
+### Phase 3: PLL density scaling
 - Modify `AudioTracker::updatePll()` — scale correction by onset density
 - ~15 lines added.
 
-### Phase 3: ConfigStorage + SerialConsole
-- Add 9 new params to StoredTrackerParams, increment SETTINGS_VERSION 74→75
+### Phase 4: ConfigStorage + SerialConsole
+- Add new params to StoredTrackerParams, increment SETTINGS_VERSION 74→75
 - Register in SerialConsole, add validation in ConfigStorage
 
-### Phase 4: A/B testing
+### Phase 5: A/B testing
 - Test against v75 on blinkyhost (3 devices, 18 EDM tracks)
 - Sweep `confFloor` (0.2, 0.4, 0.6) and `subdivLevel` (1, 2)
 - Visual assessment on actual LED devices
+- **New metric: phase grid alignment** (fraction of onsets within ±50ms of any subdivision)
 
 ## Architectural Principles
 

@@ -362,10 +362,13 @@ async function main() {
     const errors = valid.filter(t => t.error !== null).map(t => t.error);
     const octaveCount = valid.filter(t => t.octave).length;
     const meanErr = errors.length > 0 ? errors.reduce((a, b) => a + b) / errors.length : Infinity;
-    const tracksOk = valid.filter(t => !t.octave && t.error !== null && t.error < 10).length;
+    // Count tracks with low error (octave errors are acceptable — half/double time still rhythmic)
+    const tracksOk = valid.filter(t => t.error !== null && t.error < 10).length;
 
-    // Score: prioritize low octave errors, then low mean error
-    const score = meanErr + octaveCount * 5;  // 5 BPM penalty per octave error
+    // Score: mean BPM error only. Octave errors (half/double time) are visually
+    // acceptable — events still align with beat grid subdivisions. Phase alignment
+    // matters; octave accuracy does not. See VISUALIZER_GOALS.md.
+    const score = meanErr;
     if (score < bestScore) {
       bestScore = score;
       bestValue = value;
