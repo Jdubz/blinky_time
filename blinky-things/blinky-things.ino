@@ -286,7 +286,8 @@ void setup() {
           fireGen->getParamsMutable(),
           waterGen->getParamsMutable(),
           lightningGen->getParamsMutable(),
-          audioController->getMicForTuning()
+          audioController->getMicForTuning(),
+          audioController
         );
         SerialConsole::logDebug(F("Loaded effect params from flash"));
 
@@ -414,7 +415,8 @@ void loop() {
           fireGen->getParams(),
           waterGen->getParams(),
           lightningGen->getParams(),
-          audioController->getMicForTuning()
+          audioController->getMicForTuning(),
+          audioController
         );
       }
     }

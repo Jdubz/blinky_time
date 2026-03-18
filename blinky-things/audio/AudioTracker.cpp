@@ -6,18 +6,9 @@
 // Subtract minLag (~20) + 1 = 245. Round up for safety.
 static constexpr int MAX_ACF_SIZE = 280;
 
-// Spectral flux contrast exponent (power-law sharpening before OSS buffering).
-// Sharpens transient peaks in the spectral flux signal before ACF/comb processing.
-// A/B tested 10-6 win at 2.0 vs 1.0 in AudioController v66 (originally on NN ODF).
-static constexpr float ODF_CONTRAST = 2.0f;
-
-// Pulse detection constants (matched to AudioController)
-static constexpr float PULSE_THRESHOLD_MULT = 2.0f;
-static constexpr float PULSE_MIN_LEVEL = 0.03f;
-
-// PLL onset-strength scaling: ODF values below this floor get zero correction,
-// above it scales linearly to 1.0. Shared with the isStrongOnset gate (line ~328).
-static constexpr float PLL_ONSET_FLOOR = 0.1f;
+// Constants moved to AudioTracker public members (v74) for tuning via serial console.
+// Previous hardcoded values: ODF_CONTRAST=2.0, PULSE_THRESHOLD_MULT=2.0,
+// PULSE_MIN_LEVEL=0.03, PLL_ONSET_FLOOR=0.1
 
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
@@ -139,8 +130,16 @@ const AudioControl& AudioTracker::update(float dt) {
         float flux = spectral_.getSpectralFlux();
         // Apply contrast sharpening (power-law) before buffering.
         // Squaring sharpens peaks relative to baseline, improving ACF.
-        static_assert(ODF_CONTRAST == 2.0f, "Update flux sharpening if ODF_CONTRAST changes");
-        float fluxContrast = flux * flux;
+        float fluxContrast;
+        if (odfContrast == 2.0f) {
+            fluxContrast = flux * flux;
+        } else if (odfContrast == 1.0f) {
+            fluxContrast = flux;
+        } else if (odfContrast == 0.5f) {
+            fluxContrast = sqrtf(flux);
+        } else {
+            fluxContrast = powf(flux, odfContrast);
+        }
 
         combFilterBank_.feedbackGain = combFeedback;
         combFilterBank_.process(fluxContrast);
@@ -299,13 +298,13 @@ void AudioTracker::percivalEnhance(float* acf, int minLag, int maxLag,
         // 2nd harmonic: ACF[2L] folds into ACF[L]
         int harm2Idx = lag * 2 - minLag;
         if (harm2Idx >= 0 && harm2Idx < acfSize) {
-            acf[lagIdx] += 0.5f * acf[harm2Idx];
+            acf[lagIdx] += percivalWeight2 * acf[harm2Idx];
         }
 
         // 4th harmonic: ACF[4L] folds into ACF[L]
         int harm4Idx = lag * 4 - minLag;
         if (harm4Idx >= 0 && harm4Idx < acfSize) {
-            acf[lagIdx] += 0.25f * acf[harm4Idx];
+            acf[lagIdx] += percivalWeight4 * acf[harm4Idx];
         }
     }
 }
@@ -329,7 +328,7 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
     // Only correct when a strong onset aligns with expected beat (within ±25%).
     // Phase 0 = on-beat. An onset at phase 0.1 means our clock ran ahead (beat
     // was later than predicted). Correct by pulling phase back toward 0.
-    bool isStrongOnset = (odf > odfBaseline_ * PULSE_THRESHOLD_MULT) && (odf > PLL_ONSET_FLOOR);
+    bool isStrongOnset = (odf > odfBaseline_ * pulseThresholdMult) && (odf > pllOnsetFloor);
 
     if (isStrongOnset) {
         // Phase error: distance from nearest beat boundary.
@@ -338,19 +337,19 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
         if (phaseError > 0.5f) phaseError -= 1.0f;  // Center: [-0.5, +0.5]
 
         // Only correct if onset is near expected beat (within ±25% of period)
-        if (fabsf(phaseError) < 0.25f) {
+        if (fabsf(phaseError) < pllNearBeatWindow) {
             // Scale correction by onset strength: strong kicks get full
             // correction, weak onsets get proportionally less. Prevents
             // marginal transients from pulling phase as much as clear beats.
             float correctionScale = clampf(
-                (odf - PLL_ONSET_FLOOR) / (1.0f - PLL_ONSET_FLOOR), 0.0f, 1.0f);
+                (odf - pllOnsetFloor) / (1.0f - pllOnsetFloor), 0.0f, 1.0f);
 
             // Proportional correction: pull phase back toward beat boundary.
             // Negative feedback: subtract error to reduce it.
             pllPhase_ -= pllKp * phaseError * correctionScale;
 
             // Integral correction: persistent frequency bias for systematic offset.
-            pllIntegral_ = 0.95f * pllIntegral_ + phaseError * correctionScale;
+            pllIntegral_ = pllIntegralDecay * pllIntegral_ + phaseError * correctionScale;
             pllPhase_ -= pllKi * pllIntegral_;
 
             // Keep phase in [0, 1)
@@ -361,7 +360,7 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
 
     // Decay integral during silence (prevent wind-up)
     if (nowMs - lastSignificantAudioMs_ > 2000) {
-        pllIntegral_ *= 0.99f;
+        pllIntegral_ *= pllSilenceDecay;
     }
 }
 
@@ -374,21 +373,21 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     // Slow rise (peaks don't inflate baseline), fast drop (floor drops caught quickly).
     // Uses fixed alpha, not dt-based exponential, to match proven AudioController behavior.
     if (odf < odfBaseline_) {
-        odfBaseline_ += (odf - odfBaseline_) * 0.05f;   // fast drop
+        odfBaseline_ += (odf - odfBaseline_) * baselineFastDrop;   // fast drop
     } else {
-        odfBaseline_ += (odf - odfBaseline_) * 0.005f;  // slow rise
+        odfBaseline_ += (odf - odfBaseline_) * baselineSlowRise;   // slow rise
     }
 
     // ODF peak hold for energy synthesis (fast attack, ~100ms release at 62.5 Hz)
     if (odf > odfPeakHold_) {
         odfPeakHold_ = odf;
     } else {
-        odfPeakHold_ *= 0.85f;
+        odfPeakHold_ *= odfPeakHoldDecay;
     }
 
     // Pulse detection: fire when ODF exceeds baseline threshold
-    float pulseThreshold = odfBaseline_ * PULSE_THRESHOLD_MULT;
-    if (pulseThreshold < 0.1f) pulseThreshold = 0.1f;  // Absolute floor (matched to AudioController)
+    float pulseThreshold = odfBaseline_ * pulseThresholdMult;
+    if (pulseThreshold < pllOnsetFloor) pulseThreshold = pllOnsetFloor;
 
     // Tempo-adaptive cooldown: shorter at faster tempos
     float bpmNorm = clampf((bpm_ - 60.0f) / 140.0f, 0.0f, 1.0f);
@@ -398,7 +397,7 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
     if (nowMs < lastPulseMs_) lastPulseMs_ = nowMs;
 
     float pulseStrength = 0.0f;
-    if (mic_.getLevel() > PULSE_MIN_LEVEL &&
+    if (mic_.getLevel() > pulseMinLevel &&
         odf > pulseThreshold &&
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
         pulseStrength = clampf(odf, 0.0f, 1.0f);
@@ -424,11 +423,11 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         bassMelEnergy /= 6.0f;
     }
 
-    float rawEnergy = 0.30f * micLevel + 0.30f * bassMelEnergy + 0.40f * odfPeakHold_;
+    float rawEnergy = energyMicWeight * micLevel + energyMelWeight * bassMelEnergy + energyOdfWeight * odfPeakHold_;
 
     // Beat-proximity boost
     float phaseDistance = pllPhase_ < 0.5f ? pllPhase_ : (1.0f - pllPhase_);
-    float nearBeat = 1.0f - (phaseDistance / 0.25f);
+    float nearBeat = 1.0f - (phaseDistance / energyBoostWindow);
     if (nearBeat < 0.0f) nearBeat = 0.0f;
     rawEnergy *= (1.0f + nearBeat * energyBoostOnBeat * periodicityStrength_);
 

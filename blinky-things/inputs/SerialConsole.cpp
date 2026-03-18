@@ -277,6 +277,59 @@ void SerialConsole::registerTrackerSettings() {
     // NN profiling
     settings_.registerBool("nnprofile", &audioCtrl_->nnProfile, "tracker",
         "Enable NN inference profiling output");
+
+    // === Newly exposed tuning constants (v74) ===
+    // Spectral flux contrast
+    settings_.registerFloat("odfcontrast", &audioCtrl_->odfContrast, "tracker",
+        "Spectral flux contrast exponent (power-law sharpening)", 0.1f, 4.0f, onParamChanged);
+
+    // Pulse detection
+    settings_.registerFloat("pulsethreshmult", &audioCtrl_->pulseThresholdMult, "tracker",
+        "Pulse baseline threshold multiplier", 1.0f, 5.0f, onParamChanged);
+    settings_.registerFloat("pulseminlevel", &audioCtrl_->pulseMinLevel, "tracker",
+        "Minimum mic level for pulse detection", 0.0f, 0.2f, onParamChanged);
+
+    // PLL tuning
+    settings_.registerFloat("pllonsetfloor", &audioCtrl_->pllOnsetFloor, "tracker",
+        "ODF floor for PLL correction scaling", 0.0f, 0.5f, onParamChanged);
+    settings_.registerFloat("pllnearbeatwin", &audioCtrl_->pllNearBeatWindow, "tracker",
+        "PLL phase correction window (0-0.5)", 0.05f, 0.5f, onParamChanged);
+    settings_.registerFloat("pllintdecay", &audioCtrl_->pllIntegralDecay, "tracker",
+        "PLL integral leaky decay rate", 0.8f, 0.999f, onParamChanged);
+    settings_.registerFloat("pllsildecay", &audioCtrl_->pllSilenceDecay, "tracker",
+        "PLL integral decay during silence", 0.9f, 0.9999f, onParamChanged);
+
+    // Percival ACF harmonic enhancement
+    settings_.registerFloat("percival2", &audioCtrl_->percivalWeight2, "tracker",
+        "ACF 2nd harmonic fold weight", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("percival4", &audioCtrl_->percivalWeight4, "tracker",
+        "ACF 4th harmonic fold weight", 0.0f, 1.0f, onParamChanged);
+
+    // ODF baseline tracking
+    settings_.registerFloat("blfastdrop", &audioCtrl_->baselineFastDrop, "tracker",
+        "ODF baseline fast drop rate", 0.01f, 0.2f, onParamChanged);
+    settings_.registerFloat("blslowrise", &audioCtrl_->baselineSlowRise, "tracker",
+        "ODF baseline slow rise rate", 0.001f, 0.05f, onParamChanged);
+    settings_.registerFloat("odfpkdecay", &audioCtrl_->odfPeakHoldDecay, "tracker",
+        "ODF peak-hold decay rate", 0.5f, 0.99f, onParamChanged);
+
+    // Energy synthesis
+    settings_.registerFloat("emicweight", &audioCtrl_->energyMicWeight, "tracker",
+        "Energy: mic level weight", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("emelweight", &audioCtrl_->energyMelWeight, "tracker",
+        "Energy: bass mel weight", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("eodfweight", &audioCtrl_->energyOdfWeight, "tracker",
+        "Energy: ODF peak-hold weight", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("eboostwindow", &audioCtrl_->energyBoostWindow, "tracker",
+        "Energy: beat-proximity boost window", 0.05f, 0.5f, onParamChanged);
+
+    // Spectral flux band weights (on SharedSpectralAnalysis, accessed via tracker)
+    settings_.registerFloat("bassflux", &audioCtrl_->getSpectral().bassFluxWeight, "tracker",
+        "Spectral flux: bass band weight (62-375Hz)", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("midflux", &audioCtrl_->getSpectral().midFluxWeight, "tracker",
+        "Spectral flux: mid band weight (437-2000Hz)", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("highflux", &audioCtrl_->getSpectral().highFluxWeight, "tracker",
+        "Spectral flux: high band weight (2-8kHz)", 0.0f, 1.0f, onParamChanged);
 }
 
 // (registerRhythmSettings removed v74 — ~250 lines of CBSS/Bayesian settings. See git history.)
@@ -618,7 +671,8 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 fireGenerator_->getParams(),
                 waterGenerator_->getParams(),
                 lightningGenerator_->getParams(),
-                *mic_
+                *mic_,
+                audioCtrl_
             );
             Serial.println(F("OK"));
         } else {
@@ -633,7 +687,8 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 fireGenerator_->getParamsMutable(),
                 waterGenerator_->getParamsMutable(),
                 lightningGenerator_->getParamsMutable(),
-                *mic_
+                *mic_,
+                audioCtrl_
             );
             checkBayesianInteractions();
             Serial.println(F("OK"));
@@ -870,7 +925,8 @@ void SerialConsole::uploadDeviceConfig(const char* jsonStr) {
             fireGenerator_->getParams(),
             waterGenerator_->getParams(),
             lightningGenerator_->getParams(),
-            *mic_
+            *mic_,
+            audioCtrl_
         );
     } else if (mic_) {
         // Safe mode: generators null, but mic available
