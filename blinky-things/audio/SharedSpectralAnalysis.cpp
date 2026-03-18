@@ -181,23 +181,29 @@ void SharedSpectralAnalysis::process() {
     //
     // Band weighting emphasizes rhythmically important frequencies:
     //   Bass (bins 1-6, 62-375 Hz): kicks — strongest periodic signal
-    //   High (bins 33-128, 2-8 kHz): snares, hi-hats — transient markers
+    //   High (bins 33-127, 2-8 kHz): snares, hi-hats — transient markers
     //   Mid (bins 7-32, 437-2000 Hz): vocals, pads — less rhythmic
+    // Band weights: emphasize rhythmically informative frequencies.
+    static constexpr float BASS_FLUX_WEIGHT = 0.5f;  // bins 1-6: kicks
+    static constexpr float MID_FLUX_WEIGHT  = 0.2f;  // bins 7-32: vocals, pads
+    static constexpr float HIGH_FLUX_WEIGHT = 0.3f;  // bins 33-127: snares, hi-hats
+
     if (hasPrevFrame_) {
         float bassFlux = 0.0f, midFlux = 0.0f, highFlux = 0.0f;
-        for (int i = SpectralConstants::BASS_MIN_BIN; i <= SpectralConstants::BASS_MAX_BIN; i++) {
+        for (int i = 1; i < SpectralConstants::NUM_BINS; i++) {  // skip DC
             float diff = magnitudes_[i] - prevMagnitudes_[i];
-            if (diff > 0.0f) bassFlux += diff;
+            if (diff > 0.0f) {
+                if (i <= SpectralConstants::BASS_MAX_BIN)
+                    bassFlux += diff;
+                else if (i <= SpectralConstants::MID_MAX_BIN)
+                    midFlux += diff;
+                else
+                    highFlux += diff;
+            }
         }
-        for (int i = SpectralConstants::MID_MIN_BIN; i <= SpectralConstants::MID_MAX_BIN; i++) {
-            float diff = magnitudes_[i] - prevMagnitudes_[i];
-            if (diff > 0.0f) midFlux += diff;
-        }
-        for (int i = SpectralConstants::HIGH_MIN_BIN; i < SpectralConstants::NUM_BINS; i++) {
-            float diff = magnitudes_[i] - prevMagnitudes_[i];
-            if (diff > 0.0f) highFlux += diff;
-        }
-        spectralFlux_ = 0.5f * bassFlux + 0.2f * midFlux + 0.3f * highFlux;
+        spectralFlux_ = BASS_FLUX_WEIGHT * bassFlux
+                       + MID_FLUX_WEIGHT * midFlux
+                       + HIGH_FLUX_WEIGHT * highFlux;
     } else {
         spectralFlux_ = 0.0f;
     }
@@ -496,13 +502,10 @@ void SharedSpectralAnalysis::computeDerivedFeatures() {
 
 void SharedSpectralAnalysis::savePreviousFrame() {
     // Called at the TOP of process(), before new FFT overwrites state.
-    // Saves mel bands for mel-domain change detection (whitenMelBands uses these).
     // NOTE: prevMagnitudes_ is saved separately after applyCompressor() —
     // see savePrevCompressedMagnitudes(). This gives spectral flux access to
     // compressed-but-not-whitened magnitudes for sharper transient peaks.
-    for (int i = 0; i < SpectralConstants::NUM_MEL_BANDS; i++) {
-        prevMelBands_[i] = melBands_[i];
-    }
+    // prevMelBands_ intentionally not saved — no current consumer.
 }
 
 void SharedSpectralAnalysis::savePrevCompressedMagnitudes() {

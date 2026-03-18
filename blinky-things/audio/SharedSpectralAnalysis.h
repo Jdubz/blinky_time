@@ -219,11 +219,12 @@ public:
     float getSpectralCentroid() const { return spectralCentroid_; }
 
     /**
-     * Get half-wave rectified spectral flux (HWR).
-     * Sum of positive magnitude changes across all bins (skip DC).
+     * Get band-weighted half-wave rectified spectral flux (HWR).
+     * Computed from compressed-but-not-whitened magnitudes (after soft-knee
+     * compressor, before per-bin whitening) to preserve absolute transient
+     * contrast. Weighted: bass 50% (bins 1-6), mid 20% (7-32), high 30% (33-127).
      * Peaks at broadband transients (kicks, snares), zero during sustain.
-     * Independent of NN — suitable as BPM estimation input signal.
-     * Computed at the end of process() from compressed+whitened magnitudes.
+     * Independent of NN — drives ACF + comb bank for BPM estimation.
      */
     float getSpectralFlux() const { return spectralFlux_; }
 

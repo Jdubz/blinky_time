@@ -15,6 +15,10 @@ static constexpr float ODF_CONTRAST = 2.0f;
 static constexpr float PULSE_THRESHOLD_MULT = 2.0f;
 static constexpr float PULSE_MIN_LEVEL = 0.03f;
 
+// PLL onset-strength scaling: ODF values below this floor get zero correction,
+// above it scales linearly to 1.0. Shared with the isStrongOnset gate (line ~328).
+static constexpr float PLL_ONSET_FLOOR = 0.1f;
+
 static inline float clampf(float v, float lo, float hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -325,7 +329,7 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
     // Only correct when a strong onset aligns with expected beat (within ±25%).
     // Phase 0 = on-beat. An onset at phase 0.1 means our clock ran ahead (beat
     // was later than predicted). Correct by pulling phase back toward 0.
-    bool isStrongOnset = (odf > odfBaseline_ * PULSE_THRESHOLD_MULT) && (odf > 0.1f);
+    bool isStrongOnset = (odf > odfBaseline_ * PULSE_THRESHOLD_MULT) && (odf > PLL_ONSET_FLOOR);
 
     if (isStrongOnset) {
         // Phase error: distance from nearest beat boundary.
@@ -338,7 +342,8 @@ void AudioTracker::updatePll(float odf, uint32_t nowMs) {
             // Scale correction by onset strength: strong kicks get full
             // correction, weak onsets get proportionally less. Prevents
             // marginal transients from pulling phase as much as clear beats.
-            float correctionScale = clampf((odf - 0.1f) / 0.9f, 0.0f, 1.0f);
+            float correctionScale = clampf(
+                (odf - PLL_ONSET_FLOOR) / (1.0f - PLL_ONSET_FLOOR), 0.0f, 1.0f);
 
             // Proportional correction: pull phase back toward beat boundary.
             // Negative feedback: subtract error to reduce it.

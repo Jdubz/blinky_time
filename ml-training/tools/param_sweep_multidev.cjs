@@ -114,10 +114,20 @@ function loadManifest() {
   return JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
 }
 
-function getGroundTruthBpm(trackName) {
+// Cache parsed label files to avoid triple-reading per track
+const _trackMetaCache = {};
+function loadTrackMeta(trackName) {
+  if (_trackMetaCache[trackName] !== undefined) return _trackMetaCache[trackName];
   const beatsPath = path.join(musicDir, trackName + '.beats.json');
-  if (!fs.existsSync(beatsPath)) return null;
+  if (!fs.existsSync(beatsPath)) { _trackMetaCache[trackName] = null; return null; }
   const data = JSON.parse(fs.readFileSync(beatsPath, 'utf-8'));
+  _trackMetaCache[trackName] = data;
+  return data;
+}
+
+function getGroundTruthBpm(trackName) {
+  const data = loadTrackMeta(trackName);
+  if (!data) return null;
 
   // Use explicit bpm field if available (manually verified ground truth).
   // Falls back to mean IBI computation from consensus hits.
@@ -131,17 +141,13 @@ function getGroundTruthBpm(trackName) {
 }
 
 function isAmbiguousTrack(trackName) {
-  const beatsPath = path.join(musicDir, trackName + '.beats.json');
-  if (!fs.existsSync(beatsPath)) return false;
-  const data = JSON.parse(fs.readFileSync(beatsPath, 'utf-8'));
-  return !!data.bpm_ambiguous;
+  const data = loadTrackMeta(trackName);
+  return data ? !!data.bpm_ambiguous : false;
 }
 
 function isLowQualityTrack(trackName) {
-  const beatsPath = path.join(musicDir, trackName + '.beats.json');
-  if (!fs.existsSync(beatsPath)) return false;
-  const data = JSON.parse(fs.readFileSync(beatsPath, 'utf-8'));
-  return (data.quality_score || 1.0) < 0.5;
+  const data = loadTrackMeta(trackName);
+  return data ? (data.quality_score || 1.0) < 0.5 : false;
 }
 
 function collectBpmMultiDevice(ports, trackPath, seekOffset, playDurationMs) {
@@ -315,7 +321,9 @@ async function main() {
         const err = classifyError(devResult.mean, trueBpm);
 
         // For ambiguous tracks (half-time/double-time equally valid),
-        // don't count half/double as octave errors
+        // don't count half/double as octave errors.
+        // err.ratio is selected from exact values [0.5, 2/3, 1.0, 3/2, 2.0]
+        // in classifyError(), so strict equality is safe here.
         if (ambiguous && err.octave && (err.ratio === 0.5 || err.ratio === 2.0)) {
           err.octave = false;
         }
