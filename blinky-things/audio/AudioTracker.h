@@ -79,21 +79,11 @@ public:
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
 
-    // Compatibility stubs for SerialConsole commands that reference
-    // AudioController-specific metrics. Return sensible defaults.
-    float getBeatStability() const { return periodicityStrength_; }
-    float getTempoVelocity() const { return 0.0f; }
-    uint32_t getNextBeatMs() const { return 0; }
-    uint32_t getLastOnsetTimeMs() const { return 0; }
-    float getCbssConfidence() const { return periodicityStrength_; }
-    float getCurrentCBSS() const { return 0.0f; }
+    // (AudioController compatibility stubs removed — v64-v74 dead code cleanup)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
-    float getTimeToNextBeat() const { return 0.0f; }
-    bool wasLastBeatPredicted() const { return false; }
-    int getBayesBestBin() const { return 0; }
-    float getBayesBestConf() const { return 0.0f; }
-    float getBayesCombObs() const { return 0.0f; }
-    float getBeatPeriodSamples() const { return beatPeriodFrames_; }
+    float getPatternConfidence() const { return patternConfidence_; }
+    float getIoiConfidence() const { return ioiConfidence_; }
+    float getIoiPeakBpm() const { return ioiPeakBpm_; }
 
     // === Tunable parameters (~10 total) ===
     float bpmMin = 60.0f;
