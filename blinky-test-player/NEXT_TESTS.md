@@ -153,6 +153,43 @@ at 140 vs 120), but should be retested after other parameter changes.
 - **Comb bank variable alpha:** Scheirer 1998 and Klapuri 2006 both advocate per-lag alpha so all
   filters have equal decay time. Could be a future enhancement if fixed alpha proves limiting.
 
+## Pattern Memory Test Suite (v77)
+
+**Status: READY TO RUN** (test infrastructure built, firmware compiles on both platforms)
+
+Tests IOI histogram, bar histogram, template matching, LRU cache, fill tolerance, and cold start boost against 8 EDM tracks (~18 min total playback). Ground truth derived from consensus beat/onset labels.
+
+### Prerequisites
+1. Flash updated firmware (v77 with `json pattern` + `reset pattern` serial commands)
+2. Generate ground truth: `python3 ml-training/tools/derive_pattern_ground_truth.py --music-dir blinky-test-player/music/edm`
+
+### Run
+```bash
+cd blinky-test-player
+NODE_PATH=node_modules node ../ml-training/tools/pattern_memory_test.cjs \
+    --ports /dev/ttyACM0 --music-dir music/edm
+
+# Subset for iteration:
+NODE_PATH=node_modules node ../ml-training/tools/pattern_memory_test.cjs \
+    --ports /dev/ttyACM0 --tracks dnb-energetic-breakbeat,techno-minimal-emotion
+```
+
+### Metrics & Pass Criteria
+
+| # | Metric | Pass | Test Tracks |
+|---|--------|------|-------------|
+| 1 | IOI precision (median err, octave-tolerant) | < 5 BPM | All 8 |
+| 2 | Cold start (bars until pc > 0.3) | ≤ 4 bars | techno-minimal-emotion, amapiano-vibez, breakbeat-background |
+| 3 | Fill tolerance (min pc during fills) | ≥ 0.2 | dubstep-edm-halftime, reggaeton-fuego-lento, techno-dub-groove |
+| 4 | Cache save (entries when pc > 0.6) | ≥ 1 | All tracks reaching pc > 0.6 |
+| 5 | Cache restore (bars to recover after drop) | ≤ 8 bars | dnb-energetic-breakbeat, amapiano-vibez |
+| 6 | Template stability (% same tmpl in steady sections) | > 70% | techno-minimal-emotion, breakbeat-background, reggaeton-fuego-lento |
+
+### Files
+- `ml-training/tools/derive_pattern_ground_truth.py` — offline label analysis → per-track `.pattern_gt.json`
+- `ml-training/tools/pattern_memory_test.cjs` — full-track playback + device telemetry + analysis
+- Firmware: `json pattern`, `reset pattern` serial commands in `handleBeatTrackingCommand()`
+
 ## Current Bottlenecks
 
 1. ~~**Mel level mismatch (RESOLVED March 13)**~~ — Fixed with cal63 model (target_rms_db=-63 dB). ODF activations ~50% stronger on device.

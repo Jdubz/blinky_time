@@ -336,6 +336,22 @@ void SerialConsole::registerTrackerSettings() {
         "Spectral flux: mid band weight (437-2000Hz)", 0.0f, 1.0f, onParamChanged);
     settings_.registerFloat("highflux", &audioCtrl_->getSpectral().highFluxWeight, "tracker",
         "Spectral flux: high band weight (2-8kHz)", 0.0f, 1.0f, onParamChanged);
+
+    // Pattern memory (v77)
+    settings_.registerFloat("patlearn", &audioCtrl_->patternLearnRate, "pattern",
+        "Pattern histogram EMA learn rate", 0.01f, 0.5f, onParamChanged);
+    settings_.registerFloat("patdecay", &audioCtrl_->patternDecayRate, "pattern",
+        "Bar bin per-frame decay (0.9995 = ~22s half-life)", 0.990f, 0.9999f, onParamChanged);
+    settings_.registerFloat("ioidecay", &audioCtrl_->ioiDecayRate, "pattern",
+        "IOI bin per-frame decay (0.999 = ~11s half-life)", 0.990f, 0.9999f, onParamChanged);
+    settings_.registerFloat("patgain", &audioCtrl_->patternGain, "pattern",
+        "Pattern prediction onset boost strength", 0.0f, 1.0f, onParamChanged);
+    settings_.registerFloat("patanticipation", &audioCtrl_->anticipationGain, "pattern",
+        "Anticipatory energy pre-ramp gain", 0.0f, 0.5f, onParamChanged);
+    settings_.registerFloat("patlookahead", &audioCtrl_->patternLookahead, "pattern",
+        "Phase lookahead fraction for anticipation", 0.0f, 0.15f, onParamChanged);
+    settings_.registerBool("patenabled", &audioCtrl_->patternEnabled, "pattern",
+        "Pattern memory master enable (A/B testing)");
 }
 
 // (registerRhythmSettings removed v74 — ~250 lines of CBSS/Bayesian settings. See git history.)
@@ -377,7 +393,7 @@ void SerialConsole::handleCommand(const char* cmd) {
         // Sync effect settings to actual effect after any settings change
         syncEffectSettings();
         // Warn about dangerous parameter interactions
-        checkBayesianInteractions();
+
         return;
     }
 
@@ -696,7 +712,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 *mic_,
                 audioCtrl_
             );
-            checkBayesianInteractions();
+    
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -706,7 +722,7 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
 
     if (strcmp(cmd, "defaults") == 0) {
         restoreDefaults();
-        checkBayesianInteractions();
+
         Serial.println(F("OK"));
         return true;
     }
@@ -1301,11 +1317,6 @@ void SerialConsole::syncEffectSettings() {
     hueEffect_->setRotationSpeed(effectRotationSpeed_);
 }
 
-void SerialConsole::checkBayesianInteractions() {
-    // audioCtrl_ guaranteed valid — allocated in setup() before any commands
-    // (FT/IOI interaction warning removed v52 — FT/IOI dead code removed)
-}
-
 void SerialConsole::streamTick() {
     if (!streamEnabled_ && !streamNN_) return;
 
@@ -1439,7 +1450,8 @@ void SerialConsole::streamTick() {
         // conf = periodicity strength, bc = beat count, q = beat event (phase wrap)
         // e = energy, p = pulse (visual trigger), oss = onset strength
         // od = onset density (onsets/sec), db = downbeat (0), bm = beat in measure (0)
-        // Debug mode adds: ps = periodicity, pc = pattern confidence
+        // Debug mode adds: ps = periodicity, pc = pattern confidence,
+        // ic = IOI confidence, ib = IOI peak BPM, be = bar entropy
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
 
@@ -1477,12 +1489,18 @@ void SerialConsole::streamTick() {
             Serial.print(F(",\"bm\":"));
             Serial.print(audio.beatInMeasure);
 
-            // Debug mode: add tempo diagnostics
+            // Debug mode: add tempo + pattern diagnostics
             if (streamDebug_) {
                 Serial.print(F(",\"ps\":"));
                 Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
                 Serial.print(F(",\"pc\":"));
                 Serial.print(audioCtrl_->getPatternConfidence(), 3);
+                Serial.print(F(",\"ic\":"));
+                Serial.print(audioCtrl_->getIoiConfidence(), 3);
+                Serial.print(F(",\"ib\":"));
+                Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
+                Serial.print(F(",\"be\":"));
+                Serial.print(audioCtrl_->getBarEntropy(), 3);
             }
 
             Serial.print(F("}"));
@@ -1744,6 +1762,116 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         Serial.print(F(",\"onsetDensity\":"));
         Serial.print(audioCtrl_->getControl().onsetDensity, 1);
         Serial.println(F("}"));
+        return true;
+    }
+
+    // "json pattern" - compact JSON for test automation (v77+)
+    if (strcmp(cmd, "json pattern") == 0) {
+        Serial.print(F("{\"pc\":"));
+        Serial.print(audioCtrl_->getPatternConfidence(), 3);
+        Serial.print(F(",\"ic\":"));
+        Serial.print(audioCtrl_->getIoiConfidence(), 3);
+        Serial.print(F(",\"ib\":"));
+        Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
+        Serial.print(F(",\"im\":"));
+        Serial.print(audioCtrl_->getIoiPeakMs(), 1);
+        Serial.print(F(",\"be\":"));
+        Serial.print(audioCtrl_->getBarEntropy(), 3);
+        Serial.print(F(",\"bars\":"));
+        Serial.print(audioCtrl_->getPatternBarsAccumulated());
+        Serial.print(F(",\"tmpl\":"));
+        Serial.print(audioCtrl_->getBestTemplateIndex());
+        Serial.print(F(",\"tsim\":"));
+        Serial.print(audioCtrl_->getBestTemplateSimilarity(), 3);
+        Serial.print(F(",\"cache\":"));
+        Serial.print(audioCtrl_->getCacheEntryCount());
+        Serial.print(F(",\"restore\":"));
+        Serial.print(audioCtrl_->isCacheRestoreActive() ? 1 : 0);
+        Serial.print(F(",\"rbl\":"));
+        Serial.print(audioCtrl_->getCacheRestoreBarsLeft());
+        Serial.print(F(",\"bb\":["));
+        const float* bb = audioCtrl_->getBarBins();
+        for (int i = 0; i < audioCtrl_->getBarBinCount(); i++) {
+            if (i > 0) Serial.print(F(","));
+            Serial.print(bb[i], 3);
+        }
+        Serial.println(F("]}"));
+        return true;
+    }
+
+    // "reset pattern" - zero all pattern memory state (for test automation, v77+)
+    if (strcmp(cmd, "reset pattern") == 0) {
+        audioCtrl_->resetPatternMemory();
+        Serial.println(F("OK"));
+        return true;
+    }
+
+    // "show pattern" - pattern memory state (v77+)
+    if (strcmp(cmd, "show pattern") == 0) {
+        Serial.println(F("=== Pattern Memory ==="));
+        Serial.println(F("-- Phase A: IOI Histogram --"));
+        Serial.print(F("  IOI Peak: "));
+        Serial.print(audioCtrl_->getIoiPeakMs(), 1);
+        Serial.print(F(" ms ("));
+        Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
+        Serial.println(F(" BPM)"));
+        Serial.print(F("  IOI Confidence: "));
+        Serial.println(audioCtrl_->getIoiConfidence(), 3);
+        Serial.print(F("  ACF BPM: "));
+        Serial.println(audioCtrl_->getCurrentBpm(), 1);
+        Serial.println(F("-- Phase B: Bar Histogram --"));
+        Serial.print(F("  Enabled: "));
+        Serial.println(audioCtrl_->patternEnabled ? F("yes") : F("no"));
+        Serial.print(F("  Pattern Confidence: "));
+        Serial.println(audioCtrl_->getPatternConfidence(), 3);
+        Serial.print(F("  Bar Entropy: "));
+        Serial.println(audioCtrl_->getBarEntropy(), 3);
+        Serial.print(F("  Bars Accumulated: "));
+        Serial.println(audioCtrl_->getPatternBarsAccumulated());
+        Serial.print(F("  Bar Bins: ["));
+        const float* bins = audioCtrl_->getBarBins();
+        for (int i = 0; i < audioCtrl_->getBarBinCount(); i++) {
+            if (i > 0) Serial.print(F(","));
+            Serial.print(bins[i], 2);
+        }
+        Serial.println(F("]"));
+
+        // Template match state
+        Serial.println(F("-- Template Match --"));
+        {
+            static const char* const templateNames[] = {
+                "4otf", "backbeat", "halftime", "breakbeat",
+                "8thnote", "dnb", "dembow", "sparse"
+            };
+            int idx = audioCtrl_->getBestTemplateIndex();
+            Serial.print(F("  Template: "));
+            if (idx >= 0 && idx < 8) {
+                Serial.print(templateNames[idx]);
+            } else {
+                Serial.print(F("none"));
+            }
+            Serial.print(F(" (idx="));
+            Serial.print(idx);
+            Serial.print(F(", sim="));
+            Serial.print(audioCtrl_->getBestTemplateSimilarity(), 3);
+            Serial.println(F(")"));
+        }
+
+        // Cache state
+        Serial.println(F("-- Pattern Cache --"));
+        Serial.print(F("  Entries: "));
+        Serial.print(audioCtrl_->getCacheEntryCount());
+        Serial.println(F("/4"));
+        Serial.print(F("  Restore: "));
+        if (audioCtrl_->isCacheRestoreActive()) {
+            Serial.print(F("active ("));
+            Serial.print(audioCtrl_->getCacheRestoreBarsLeft());
+            Serial.println(F(" bars left)"));
+        } else {
+            Serial.println(F("inactive"));
+        }
+
+        Serial.println();
         return true;
     }
 
