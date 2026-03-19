@@ -11,7 +11,7 @@
 #   cd blinky-test-player
 #   bash ../ml-training/tools/pattern_param_sweep.sh /dev/ttyACM1
 
-set -e
+set -eo pipefail
 
 PORT="${1:-/dev/ttyACM1}"
 MUSIC_DIR="music/edm"
@@ -50,6 +50,9 @@ declare -a CONFIGS=(
     "0.15 0.10 0.4"   # fast rise + slow decay + moderate threshold
 )
 
+# Pre-check: test script must exist
+[[ -f ../ml-training/tools/pattern_memory_test.cjs ]] || { echo "ERROR: pattern_memory_test.cjs not found (run from blinky-test-player/)"; exit 1; }
+
 echo "=== Pattern Memory Parameter Sweep ==="
 echo "Port: $PORT"
 echo "Tracks: $TRACKS"
@@ -73,10 +76,17 @@ for i in "${!CONFIGS[@]}"; do
         --ports "$PORT" --tracks "$TRACKS" --music-dir "$MUSIC_DIR" \
         2>&1 | tee "$RESULTS_DIR/${CONFIG_NAME}.log"
 
-    # Copy results JSON
-    LATEST=$(ls -t tuning-results/pattern-memory-*.json | head -1)
-    if [ -n "$LATEST" ]; then
-        cp "$LATEST" "$RESULTS_DIR/${CONFIG_NAME}.json"
+    # Copy results JSON (non-fatal if no files are present)
+    shopt -s nullglob
+    JSON_CANDIDATES=(tuning-results/pattern-memory-*.json)
+    shopt -u nullglob
+    if [ "${#JSON_CANDIDATES[@]}" -gt 0 ]; then
+        LATEST=$(ls -t "${JSON_CANDIDATES[@]}" 2>/dev/null | head -1 || true)
+        if [ -n "$LATEST" ]; then
+            cp "$LATEST" "$RESULTS_DIR/${CONFIG_NAME}.json"
+        fi
+    else
+        echo "Warning: no pattern-memory JSON found for config ${CONFIG_NAME}, skipping copy." >&2
     fi
 
     echo ""
@@ -95,6 +105,6 @@ echo ""
 echo "=== Summary ==="
 for f in "$RESULTS_DIR"/*.log; do
     name=$(basename "$f" .log)
-    pass=$(grep "Tests passed:" "$f" | grep -oP '\d+/\d+' || echo "?/?")
+    pass=$(grep "Tests passed:" "$f" | grep -oE '[0-9]+/[0-9]+' || echo "?/?")
     echo "  $name: $pass"
 done

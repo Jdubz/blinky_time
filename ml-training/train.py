@@ -407,7 +407,15 @@ def main():
     if beat_pos_weight <= 0:
         beat_pos_weight = auto_pw
     if downbeat_pos_weight <= 0:
-        downbeat_pos_weight = beat_pos_weight * 4
+        if has_db and db_train_path is not None and Path(db_train_path).exists():
+            y_db_sample = np.load(db_train_path, mmap_mode='r')[:sample_size]
+            db_pos_mean = y_db_sample.mean()
+            downbeat_pos_weight = (1 - db_pos_mean) / max(db_pos_mean, 1e-10)
+            print(f"  Downbeat positive ratio: mean={db_pos_mean:.4f}")
+            print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (auto)")
+        else:
+            # Heuristic: downbeats occur ~1/4 as often as beats
+            downbeat_pos_weight = beat_pos_weight * 4
     print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
     print(f"  pos_weight: {beat_pos_weight:.1f} (auto={auto_pw:.1f})")
 

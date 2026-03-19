@@ -264,7 +264,9 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             labels = json.load(f)
         ref_beats = np.array([h["time"] for h in labels["hits"] if h.get("expectTrigger", True)])
 
-        # Peak-pick activations to get estimated beat times
+        # Peak-pick activations to get estimated onset times.
+        # Named est_beats for legacy JSON compatibility, but these are onset
+        # detections (the model outputs onset activation, not a beat grid).
         est_beats = _peak_pick(activations, threshold, frame_rate)
 
         # Beat-level F1 using mir_eval (±70ms tolerance)
