@@ -301,9 +301,38 @@ This creates a subtle pre-flash glow before confident beats. The lights appear t
 6. **ConfigStorage + SerialConsole** — params + `show pattern` debug command (~40 lines)
 7. **A/B testing** on blinkyhost
 
-## Future: Template Bank
+## Reference Implementations
 
+Research identified several proven systems with directly applicable techniques:
+
+| System | Key Technique | Memory | Real-Time | Source |
+|--------|--------------|--------|-----------|--------|
+| **Beat-and-Tempo-Tracking** (Krzyzaniak) | Predicted beat signal via Gaussian overlap-add | ~4 KB | Yes (embedded Linux) | [GitHub](https://github.com/michaelkrzyzaniak/Beat-and-Tempo-Tracking) |
+| **Real-Time PLP** (TISMIR 2024) | Causal PLP with circular buffers + beat lookahead | ~5 KB | Yes (50 Hz) | [Paper](https://transactions.ismir.net/articles/10.5334/tismir.189) |
+| **BeatNet** (ISMIR 2021) | Particle filter (1500 particles) over bar state space | ~6 KB | Yes (50 fps) | [GitHub](https://github.com/mjhydri/BeatNet) |
+| **madmom bar pointer** (Krebs 2015) | HMM with bar-position state space + pattern vocab | ~20 KB | Marginal | [GitHub](https://github.com/CPJKU/madmom) |
+| **Essentia BpmHistogram** | Novelty ACF → Gaussian-smoothed BPM histogram → sinusoid synthesis | ~10 KB | Offline | [GitHub](https://github.com/MTG/essentia) |
+
+**Most applicable for our system:**
+
+1. **Predicted beat signal** (from BTT library): Overlap-add Gaussian bumps at predicted future onset positions. ~1-4 KB. The system can trigger visual effects BEFORE the onset arrives. Proven on embedded. ~100 lines of C.
+
+2. **IOI histogram** (universal): Every system above uses inter-onset intervals as the primary tempo discovery mechanism. Our Phase A approach aligns with the field consensus.
+
+3. **Decaying Gaussian tempo histogram** (from BTT): Replace binary ACF-vs-comb comparison with a decaying accumulator that builds tempo evidence over time. More robust than single-frame ACF peak. ~1 KB.
+
+4. **BeatNet-style information gate**: Already implemented as our `odfGateThreshold = 0.20` (BeatNet uses 0.4). Confirms our architecture.
+
+## Future Extensions
+
+### Template Bank
 Pre-computed histograms for common patterns (four-on-the-floor, breakbeat, half-time, dembow, etc.). 8 templates × 64 bytes = 512 bytes flash. Cosine similarity matching. Enables faster cold-start and genre-aware behavior. Defer until core system is validated.
+
+### Predicted Beat Signal (from BTT Library)
+Overlap-add Gaussian bumps at predicted onset positions to create a future-looking onset curve. Visual effects can anticipate beats by reading ahead in this curve. Implementation: ~4 KB buffer at 62.5 Hz, ~100 lines of C. Defer until bar-position histogram is validated.
+
+### Lightweight Particle Filter (from BeatNet)
+200 particles × 4 bytes = 800 bytes. Joint (phase, tempo) state space. Could replace or augment the PLL for pattern-level inference. Defer — current PLL + IOI + histogram may be sufficient.
 
 ## Key Design Principles
 
