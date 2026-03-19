@@ -154,8 +154,8 @@ def process_track(args):
 def main():
     parser = argparse.ArgumentParser(description="Generate kick-weighted onset targets")
     parser.add_argument("--audio-dir", type=str,
-                        default="/mnt/storage/blinky-ml-data/audio",
-                        help="Directory containing audio files")
+                        default="/mnt/storage/blinky-ml-data/audio/combined",
+                        help="Directory containing audio files (flat namespace)")
     parser.add_argument("--output-dir", type=str,
                         default="/mnt/storage/blinky-ml-data/labels/kick_weighted",
                         help="Output directory for weighted onset labels")
@@ -171,19 +171,20 @@ def main():
     labels_dir = Path(args.labels_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find all audio files (recursive — audio may be in subdirectories)
+    # Find audio files (non-recursive — combined/ is a flat namespace)
     audio_files = sorted(
-        f for f in audio_dir.rglob("*")
+        f for f in audio_dir.iterdir()
         if f.suffix.lower() in (".mp3", ".wav", ".flac", ".ogg")
     )
     print(f"Found {len(audio_files)} audio files in {audio_dir}")
 
-    # Build stem→path map, only keep tracks that have consensus labels
+    # Build stem→path map, only keep tracks that have consensus labels.
+    # Label files are named like "000397.beats.json" or "3618176.LOFI.beats.json".
+    # Audio stems match: "000397" or "3618176.LOFI".
     label_stems = set(f.stem.replace(".beats", "") for f in labels_dir.glob("*.beats.json"))
     audio_by_stem = {}
     for af in audio_files:
-        # Handle stems like "000397.LOFI" → "000397"
-        stem = af.stem.split(".")[0]
+        stem = af.stem  # Full stem: "000397" or "3618176.LOFI"
         if stem in label_stems and stem not in audio_by_stem:
             audio_by_stem[stem] = af
     print(f"Matched {len(audio_by_stem)} audio files to consensus labels")
