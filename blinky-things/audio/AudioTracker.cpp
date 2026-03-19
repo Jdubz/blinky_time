@@ -163,7 +163,24 @@ const AudioControl& AudioTracker::update(float dt) {
         periodicityStrength_ *= 0.998f;  // ~0.5s half-life at 62.5 Hz
     }
 
-    // 12. Output synthesis
+    // 12. Pattern memory: decay bins + periodic IOI analysis + bar stats
+    if (patternEnabled) {
+        decayPatternBins();
+
+        // IOI analysis every ~500ms (piggyback on ACF timing)
+        if (ossCount_ >= 60 && (nowMs - lastAcfMs_ < acfPeriodMs + 10)) {
+            updateIoiAnalysis();
+        }
+
+        // Bar-boundary stats (approximate: when PLL beat count mod 4 changes)
+        uint32_t currentBarMs = (uint32_t)(ioiPeakMs_ * 4.0f);
+        if (currentBarMs > 0 && nowMs - lastBarBoundaryMs_ >= currentBarMs) {
+            lastBarBoundaryMs_ = nowMs;
+            computePatternStats();
+        }
+    }
+
+    // 13. Output synthesis
     synthesizeOutputs(dt, nowMs);
 
     return control_;
@@ -404,8 +421,143 @@ void AudioTracker::updatePulseDetection(float odf, float dt, uint32_t nowMs) {
         (nowMs - lastPulseMs_) > static_cast<uint32_t>(cooldownMs)) {
         pulseStrength = clampf(odf, 0.0f, 1.0f);
         lastPulseMs_ = nowMs;
+
+        // Record onset for pattern memory (Phase A: IOI, Phase B: bar histogram)
+        recordOnsetForPattern(pulseStrength, nowMs);
     }
     lastPulseStrength_ = pulseStrength;
+}
+
+// ============================================================================
+// Pattern Memory (v77): IOI histogram + bar-position prediction
+// ============================================================================
+
+void AudioTracker::recordOnsetForPattern(float strength, uint32_t nowMs) {
+    if (!patternEnabled) return;
+
+    // Store timestamp in circular buffer
+    onsetTimes_[onsetWriteIdx_] = nowMs;
+    onsetWriteIdx_ = (onsetWriteIdx_ + 1) % ONSET_BUF_SIZE;
+    if (onsetBufCount_ < ONSET_BUF_SIZE) onsetBufCount_++;
+
+    // Phase A: compute IOIs against recent onsets (not just previous one)
+    // This captures intervals at multiple subdivision levels
+    int maxBack = (onsetBufCount_ < 8) ? onsetBufCount_ - 1 : 8;
+    for (int back = 1; back <= maxBack; back++) {
+        int prevIdx = (onsetWriteIdx_ - 1 - back + ONSET_BUF_SIZE) % ONSET_BUF_SIZE;
+        float ioiMs = (float)(nowMs - onsetTimes_[prevIdx]);
+        if (ioiMs >= IOI_MIN_MS && ioiMs <= IOI_MAX_MS) {
+            int bin = (int)((ioiMs - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
+            if (bin >= 0 && bin < IOI_BINS) {
+                ioiBins_[bin] += strength * patternLearnRate;
+            }
+        }
+    }
+
+    // Phase B: update bar histogram (only when IOI is confident)
+    updateBarHistogram(strength, nowMs);
+}
+
+void AudioTracker::updateIoiAnalysis() {
+    // Find strongest IOI peak in the 250-1000ms range (60-240 BPM)
+    float bestVal = 0;
+    int bestBin = -1;
+    // 250ms = bin (250-100)*128/1500 = 12.8 → 13
+    // 1000ms = bin (1000-100)*128/1500 = 76.8 → 76
+    for (int i = 13; i <= 76; i++) {
+        if (ioiBins_[i] > bestVal) {
+            bestVal = ioiBins_[i];
+            bestBin = i;
+        }
+    }
+
+    if (bestBin >= 0 && bestVal > 0.01f) {
+        ioiPeakMs_ = IOI_MIN_MS + bestBin * (IOI_MAX_MS - IOI_MIN_MS) / IOI_BINS;
+        ioiPeakBpm_ = 60000.0f / ioiPeakMs_;
+        ioiPeakStrength_ = bestVal;
+
+        // Check agreement with ACF BPM (within 10% or at octave)
+        float acfBeatPeriodMs = 60000.0f / bpm_;
+        float ratio = ioiPeakMs_ / acfBeatPeriodMs;
+        bool agrees = (fabsf(ratio - 1.0f) < 0.10f) ||
+                      (fabsf(ratio - 0.5f) < 0.10f) ||
+                      (fabsf(ratio - 2.0f) < 0.10f);
+
+        if (agrees) {
+            ioiConfidence_ = fminf(ioiConfidence_ + 0.05f, 1.0f);
+        } else {
+            ioiConfidence_ *= 0.9f;
+        }
+    } else {
+        ioiConfidence_ *= 0.95f;
+    }
+}
+
+void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
+    if (ioiConfidence_ < 0.5f) return;  // Phase B inactive until Phase A confident
+
+    // Project onset onto bar grid using IOI peak as beat period
+    float barPeriodMs = ioiPeakMs_ * 4.0f;  // 4 beats per bar
+    if (barPeriodMs < 400.0f) barPeriodMs = ioiPeakMs_ * 2.0f;  // Adjust for fast tempos
+    float barPhase = fmodf((float)nowMs / barPeriodMs, 1.0f);
+    int bin = (int)(barPhase * BAR_BINS) % BAR_BINS;
+
+    barBins_[bin] = barBins_[bin] * (1.0f - patternLearnRate) + strength * patternLearnRate;
+}
+
+void AudioTracker::computePatternStats() {
+    patternBarsAccumulated_++;
+
+    // Shannon entropy of bar histogram (normalized to [0, 1])
+    float sum = 0;
+    for (int i = 0; i < BAR_BINS; i++) sum += barBins_[i];
+    if (sum < 1e-6f) { barEntropy_ = 1.0f; patternConfidence_ *= 0.9f; return; }
+
+    float H = 0;
+    for (int i = 0; i < BAR_BINS; i++) {
+        float p = barBins_[i] / sum;
+        if (p > 1e-6f) H -= p * log2f(p);
+    }
+    barEntropy_ = H / 4.0f;  // log2(16) = 4.0
+
+    // Confidence: grows slowly when entropy is low, decays fast when high
+    float entropyGate = 1.0f - barEntropy_;
+    float peakSum = 0;
+    // Find top-4 bins for peak strength
+    float top[4] = {0};
+    for (int i = 0; i < BAR_BINS; i++) {
+        float v = barBins_[i];
+        for (int j = 0; j < 4; j++) {
+            if (v > top[j]) {
+                for (int k = 3; k > j; k--) top[k] = top[k-1];
+                top[j] = v;
+                break;
+            }
+        }
+    }
+    peakSum = top[0] + top[1] + top[2] + top[3];
+    float target = entropyGate * clampf(peakSum / 1.0f, 0.0f, 1.0f);
+    float alpha = (target > patternConfidence_) ? 0.05f : 0.15f;
+    patternConfidence_ += (target - patternConfidence_) * alpha;
+}
+
+float AudioTracker::predictOnsetStrength(uint32_t nowMs) {
+    if (!patternEnabled || patternConfidence_ < 0.3f || ioiConfidence_ < 0.5f) return 0.0f;
+
+    float barPeriodMs = ioiPeakMs_ * 4.0f;
+    if (barPeriodMs < 400.0f) barPeriodMs = ioiPeakMs_ * 2.0f;
+    float barPhase = fmodf((float)nowMs / barPeriodMs, 1.0f);
+    int bin = (int)(barPhase * BAR_BINS) % BAR_BINS;
+    float frac = barPhase * BAR_BINS - floorf(barPhase * BAR_BINS);
+    int nextBin = (bin + 1) % BAR_BINS;
+    return (barBins_[bin] * (1.0f - frac) + barBins_[nextBin] * frac) * patternConfidence_;
+}
+
+void AudioTracker::decayPatternBins() {
+    // IOI bins: decay faster (tempo can change)
+    for (int i = 0; i < IOI_BINS; i++) ioiBins_[i] *= 0.999f;
+    // Bar bins: decay slower (pattern persists through breakdowns)
+    for (int i = 0; i < BAR_BINS; i++) barBins_[i] *= patternDecayRate;
 }
 
 // ============================================================================
@@ -436,6 +588,13 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     if (nearBeat < 0.0f) nearBeat = 0.0f;
     rawEnergy *= (1.0f + nearBeat * energyBoostOnBeat * periodicityStrength_);
 
+    // Anticipatory energy: subtle pre-glow before predicted onsets
+    if (patternEnabled && anticipationGain > 0.0f) {
+        uint32_t lookaheadMs = (uint32_t)(patternLookahead * ioiPeakMs_);
+        float anticipation = predictOnsetStrength(nowMs + lookaheadMs);
+        rawEnergy += anticipation * anticipationGain;
+    }
+
     control_.energy = clampf(rawEnergy, 0.0f, 1.0f);
 
     // --- Pulse (phase-aware confidence modulation, v76) ---
@@ -464,6 +623,13 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         float confMult = 1.0f + gate * (proximityMult - 1.0f);
 
         pulse *= confMult;
+
+        // Pattern prediction boost: onsets at historically active bar positions
+        // get extra confidence. Only active when pattern is established.
+        float prediction = predictOnsetStrength(nowMs);
+        if (prediction > 0.0f) {
+            pulse *= (1.0f + prediction * patternGain);
+        }
     }
 
     control_.pulse = clampf(pulse, 0.0f, 1.0f);
