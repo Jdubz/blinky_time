@@ -719,6 +719,10 @@ def main():
         val_loss = 0.0
         val_correct = 0
         val_total = 0
+        # Precision/recall accumulators (interpretable across label types)
+        val_tp = 0
+        val_fp = 0
+        val_fn = 0
 
         with torch.no_grad():
             for X_batch, Y_batch, T_batch in val_loader:
@@ -751,18 +755,31 @@ def main():
                 val_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
                 val_total += Y_batch.numel()
 
+                # Precision/recall on first channel (onset/beat)
+                pred_pos = Y_pred[:, :, 0] > 0.5
+                ref_pos = Y_batch[:, :, 0] > 0.5
+                val_tp += (pred_pos & ref_pos).sum().item()
+                val_fp += (pred_pos & ~ref_pos).sum().item()
+                val_fn += (~pred_pos & ref_pos).sum().item()
+
         val_loss /= len(val_ds)
         val_acc = val_correct / val_total
+        val_precision = val_tp / max(val_tp + val_fp, 1)
+        val_recall = val_tp / max(val_tp + val_fn, 1)
+        val_f1 = 2 * val_precision * val_recall / max(val_precision + val_recall, 1e-10)
 
         epoch_elapsed = time.time() - epoch_start
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch+1}/{epochs} - loss: {train_loss:.4f} - acc: {train_acc:.4f} "
-              f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} - lr: {current_lr:.2e} "
-              f"- {epoch_elapsed:.0f}s")
+              f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} "
+              f"- P: {val_precision:.3f} R: {val_recall:.3f} F1: {val_f1:.3f} "
+              f"- lr: {current_lr:.2e} - {epoch_elapsed:.0f}s")
 
         log_rows.append({
             "epoch": epoch + 1, "loss": train_loss, "binary_accuracy": train_acc,
-            "val_loss": val_loss, "val_binary_accuracy": val_acc, "lr": current_lr,
+            "val_loss": val_loss, "val_binary_accuracy": val_acc,
+            "val_precision": val_precision, "val_recall": val_recall, "val_f1": val_f1,
+            "lr": current_lr,
         })
 
         # Checkpointing
@@ -805,6 +822,9 @@ def main():
     print(f"Best epoch: {best_epoch['epoch']}")
     print(f"  val_loss: {best_epoch['val_loss']:.4f}")
     print(f"  val_binary_accuracy: {best_epoch['val_binary_accuracy']:.4f}")
+    print(f"  val_precision: {best_epoch['val_precision']:.4f}")
+    print(f"  val_recall: {best_epoch['val_recall']:.4f}")
+    print(f"  val_f1: {best_epoch['val_f1']:.4f}")
 
 
 if __name__ == "__main__":

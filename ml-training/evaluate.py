@@ -293,6 +293,37 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             result["onset_f1"] = float(onset_f1)
             result["ref_onsets"] = len(ref_onsets)
 
+        # Kick-weighted onset evaluation: overall F1 + per-instrument recall
+        # Overall F1 against all annotated onsets captures both false positives
+        # (detections where no onset exists) and missed onsets correctly.
+        # Per-instrument recall shows selectivity (v5 should suppress hihats).
+        kw_path = audio_path.parent / "kick_weighted" / f"{audio_path.stem}.kick_weighted.json"
+        if kw_path.exists():
+            with open(kw_path) as f:
+                kw_data = json.load(f)
+            # Overall F1: all annotated onsets vs model detections
+            all_ref_onsets = np.array([o["time"] for o in kw_data["onsets"]])
+            if len(all_ref_onsets) > 0 and len(est_beats) > 0:
+                kw_f1 = mir_eval.beat.f_measure(
+                    all_ref_onsets, est_beats, f_measure_threshold=0.07)
+            else:
+                kw_f1 = 0.0
+            result["kw_onset_f1"] = float(kw_f1)
+            result["kw_ref_onsets"] = len(all_ref_onsets)
+            # Per-instrument recall breakdown
+            for onset_type in ("kick", "snare", "hihat"):
+                ref_typed = np.array([o["time"] for o in kw_data["onsets"]
+                                      if o["type"] == onset_type])
+                if len(ref_typed) > 0 and len(est_beats) > 0:
+                    hits = 0
+                    for ref_t in ref_typed:
+                        if np.min(np.abs(est_beats - ref_t)) <= 0.07:
+                            hits += 1
+                    typed_recall = hits / len(ref_typed)
+                else:
+                    typed_recall = 0.0
+                result[f"{onset_type}_recall"] = float(typed_recall)
+
         # Downbeat evaluation
         if has_downbeat:
             ref_downbeats = np.array([
@@ -321,7 +352,12 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         acf_err_str = f"{lag_err:.1f}f" if np.isfinite(lag_err) else "n/a"
         acf_str = f", ACF ratio={acf_metrics['acf_peak_ratio']:.3f} prom={acf_metrics['acf_peak_prominence']:.2f} err={acf_err_str}"
         onset_str = f", onsetF1={result['onset_f1']:.3f}" if "onset_f1" in result else ""
-        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{db_str}{acf_str}")
+        kw_str = ""
+        if "kw_onset_f1" in result:
+            kw_str = (f", kwF1={result['kw_onset_f1']:.3f} "
+                      f"kick={result['kick_recall']:.3f} snare={result['snare_recall']:.3f} "
+                      f"hihat={result['hihat_recall']:.3f}")
+        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{kw_str}{db_str}{acf_str}")
 
         # Save activation plot
         _plot_activation(activations, ref_beats, est_beats, frame_rate,
@@ -339,6 +375,20 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             f1s = [r["f1"] for r in all_results]
             print(f"\nAggregate (vs beat labels, not onset): mean F1={np.mean(f1s):.3f}, median={np.median(f1s):.3f}, "
                   f"min={np.min(f1s):.3f}, max={np.max(f1s):.3f}")
+
+        # Kick-weighted onset metrics
+        kw_f1s = [r["kw_onset_f1"] for r in all_results if "kw_onset_f1" in r]
+        if kw_f1s:
+            print(f"Aggregate KW Onset F1: mean={np.mean(kw_f1s):.3f}, "
+                  f"median={np.median(kw_f1s):.3f}, "
+                  f"min={np.min(kw_f1s):.3f}, max={np.max(kw_f1s):.3f}")
+        for onset_type in ("kick", "snare", "hihat"):
+            key = f"{onset_type}_recall"
+            typed_vals = [r[key] for r in all_results if key in r]
+            if typed_vals:
+                print(f"  {onset_type.capitalize():>6} recall: mean={np.mean(typed_vals):.3f}, "
+                      f"median={np.median(typed_vals):.3f}, "
+                      f"min={np.min(typed_vals):.3f}, max={np.max(typed_vals):.3f}")
 
         db_f1s = [r["db_f1"] for r in all_results if "db_f1" in r]
         if db_f1s:
