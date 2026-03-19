@@ -30,14 +30,14 @@
 
 Best online/causal beat tracking systems on standard benchmarks (line-in audio):
 
-| System | Year | Beat F1 | Architecture | Notes |
-|--------|:----:|:-------:|-------------|-------|
-| BEAST | 2024 | **80.0%** | Streaming Transformer (9 layers, 1024 dim) | SOTA, too large for MCU |
-| BeatNet+ | 2024 | ~78% | CRNN + 2-level particle filter (1500 particles) | Microphone-capable |
-| Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
-| RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
-| BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | **~28%** | Conv1D W16 ODF + ACF/Comb/PLL (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+| System | Year | Architecture | Notes |
+|--------|:----:|-------------|-------|
+| BEAST | 2024 | Streaming Transformer (9 layers, 1024 dim) | SOTA, too large for MCU |
+| BeatNet+ | 2024 | CRNN + 2-level particle filter (1500 particles) | Microphone-capable |
+| Novel-1D | 2022 | 1D state space (jump-back reward) | 30x faster than 2D |
+| RNN-PLP | 2024 | RNN + PLP oscillator bank | Zero-latency, lightweight |
+| BTrack | 2012 | ACF + CBSS (our baseline architecture) | Embedded-friendly |
+| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF/Comb/PLL (mic-in-room, nRF52840) | All Onsets F1=0.681 (v1), 0.787 (v3) |
 
 **Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (RNN/CRNN/Transformer). Our gap is primarily in tempo estimation signal quality, not the beat tracking backend. BPM now uses spectral flux (decoupled from NN). NN onset quality still matters for visual pulse and PLL phase refinement. AudioTracker (spectral flux → ACF+Comb+PLL) replaces CBSS with a simpler, faster backend (~10 params vs ~56).
 

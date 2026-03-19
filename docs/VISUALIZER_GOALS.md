@@ -35,7 +35,7 @@ Not every genre needs beat-sync. The `rhythmStrength` blend handles this automat
 | Complex/syncopated | Partial music mode, energy + occasional bursts on strong accents |
 | Silence | Pure organic with minimal activity |
 
-Tracks like ambient, trap, or machine-drum scoring low Beat F1 may actually represent **correct visual behavior** — the system appropriately avoids beat-chasing on content where confident beat tracking isn't possible.
+Tracks like ambient, trap, or machine-drum scoring low onset F1 may actually represent **correct visual behavior** — the system appropriately avoids beat-chasing on content where confident beat tracking isn't possible.
 
 ## Evaluation Criteria
 
@@ -49,7 +49,7 @@ Tracks like ambient, trap, or machine-drum scoring low Beat F1 may actually repr
 
 ### What Doesn't Matter (Much)
 
-1. **Beat F1 on ambient tracks** — Low F1 is correct if the system goes organic
+1. **Onset F1 on ambient tracks** — Low F1 is correct if the system goes organic
 2. **BPM octave accuracy** — Half-time or double-time still looks rhythmic because events still align with beat grid subdivisions (1/4, 1/8, 1/16 notes). A stable half-time BPM is vastly preferable to a jittery correct BPM. **Octave errors are NOT a visual problem — phase alignment is.**
 3. **Transient F1 on sparse content** — Missing quiet onsets is fine
 4. **Per-track beat offset** — 50-80ms variation is invisible at LED update rates
@@ -57,7 +57,7 @@ Tracks like ambient, trap, or machine-drum scoring low Beat F1 may actually repr
 ### Track Category Expectations
 
 **High priority (should work well):**
-- Four-on-the-floor dance/techno: Beat F1 > 0.6, stable BPM
+- Four-on-the-floor dance/techno: Kick onset F1 > 0.6, stable BPM
 - Music with strong kicks/snares: Transient precision > 0.8
 
 **Medium priority (should degrade gracefully):**
@@ -67,6 +67,10 @@ Tracks like ambient, trap, or machine-drum scoring low Beat F1 may actually repr
 **Low priority (organic mode is correct):**
 - Ambient/drone: Pure organic, no beat tracking expected
 - Silence: Minimal activity
+
+### Onset Density Target
+
+For smooth visuals, aim for **2-4 major onset events per bar** (kicks and snares). Raw onset detection may produce 5-7 events/second including hi-hats and cymbals — these must be suppressed. Hi-hats and cymbals should NOT drive the visual pulse; they create overly busy, jittery effects. The onset information gate and pulse baseline tracking handle this suppression in firmware.
 
 ### Testing Priorities (Ordered by Visual Impact)
 

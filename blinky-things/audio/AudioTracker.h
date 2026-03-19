@@ -79,21 +79,11 @@ public:
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
 
-    // Compatibility stubs for SerialConsole commands that reference
-    // AudioController-specific metrics. Return sensible defaults.
-    float getBeatStability() const { return periodicityStrength_; }
-    float getTempoVelocity() const { return 0.0f; }
-    uint32_t getNextBeatMs() const { return 0; }
-    uint32_t getLastOnsetTimeMs() const { return 0; }
-    float getCbssConfidence() const { return periodicityStrength_; }
-    float getCurrentCBSS() const { return 0.0f; }
+    // (AudioController compatibility stubs removed — v64-v74 dead code cleanup)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
-    float getTimeToNextBeat() const { return 0.0f; }
-    bool wasLastBeatPredicted() const { return false; }
-    int getBayesBestBin() const { return 0; }
-    float getBayesBestConf() const { return 0.0f; }
-    float getBayesCombObs() const { return 0.0f; }
-    float getBeatPeriodSamples() const { return beatPeriodFrames_; }
+    float getPatternConfidence() const { return patternConfidence_; }
+    float getIoiConfidence() const { return ioiConfidence_; }
+    float getIoiPeakBpm() const { return ioiPeakBpm_; }
 
     // === Tunable parameters (~10 total) ===
     float bpmMin = 60.0f;
@@ -152,6 +142,15 @@ public:
     float energyOdfWeight = 0.40f;     // ODF peak-hold transient weight
     float energyBoostWindow = 0.25f;   // Phase distance for beat-proximity boost
 
+    // Pattern memory (v77): IOI histogram discovers tempo from onset intervals,
+    // bar histogram reveals repeating pattern for prediction. See PATTERN_HISTOGRAM_DESIGN.md.
+    float patternLearnRate = 0.15f;    // EMA alpha for histogram update
+    float patternDecayRate = 0.9995f;  // Per-frame global decay (half-life ~22s)
+    float patternGain = 0.3f;          // Prediction boost strength for onset confidence
+    float anticipationGain = 0.1f;     // Energy pre-ramp before predicted onsets
+    float patternLookahead = 0.05f;    // Phase lookahead (fraction of beat)
+    bool patternEnabled = true;        // Master enable for A/B testing
+
 private:
     // === Audio input ===
     ISystemTime& time_;
@@ -199,6 +198,32 @@ private:
     // === Silence detection ===
     uint32_t lastSignificantAudioMs_ = 0;
 
+    // === Pattern memory (v77) ===
+    // Phase A: IOI histogram — discovers tempo from raw onset intervals
+    static constexpr int ONSET_BUF_SIZE = 64;
+    static constexpr int IOI_BINS = 128;          // 100-1600ms range (~12ms per bin)
+    static constexpr float IOI_MIN_MS = 100.0f;
+    static constexpr float IOI_MAX_MS = 1600.0f;
+    // Beat-range IOI bins: 250ms (240 BPM) to 1000ms (60 BPM)
+    static constexpr int IOI_BEAT_LOW = (int)((250.0f - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
+    static constexpr int IOI_BEAT_HIGH = (int)((1000.0f - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
+    uint32_t onsetTimes_[ONSET_BUF_SIZE] = {0};
+    uint8_t onsetWriteIdx_ = 0;
+    uint8_t onsetBufCount_ = 0;
+    float ioiBins_[IOI_BINS] = {0};
+    float ioiPeakMs_ = 500.0f;                   // Dominant IOI (ms)
+    float ioiPeakBpm_ = 120.0f;                  // BPM from IOI peak
+    float ioiPeakStrength_ = 0.0f;
+    float ioiConfidence_ = 0.0f;                  // Agreement between IOI and ACF
+
+    // Phase B: Bar-position histogram — 16 bins (16th-note resolution)
+    static constexpr int BAR_BINS = 16;
+    float barBins_[BAR_BINS] = {0};
+    float barEntropy_ = 1.0f;
+    float patternConfidence_ = 0.0f;
+    uint16_t patternBarsAccumulated_ = 0;
+    uint32_t lastBarBoundaryMs_ = 0;
+
     // === Output ===
     AudioControl control_;
 
@@ -208,6 +233,14 @@ private:
     void updatePulseDetection(float odf, float dt, uint32_t nowMs);
     void updatePll(float odf, uint32_t nowMs);
     void synthesizeOutputs(float dt, uint32_t nowMs);
+
+    // Pattern memory methods
+    void recordOnsetForPattern(float strength, uint32_t nowMs);
+    void updateIoiAnalysis();
+    void updateBarHistogram(float strength, uint32_t nowMs);
+    void computePatternStats();
+    float predictOnsetStrength(uint32_t nowMs);
+    void decayPatternBins();
 
     // Percival harmonic enhancement on ACF
     void percivalEnhance(float* acf, int minLag, int maxLag, int harmonicMaxLag, int acfSize);

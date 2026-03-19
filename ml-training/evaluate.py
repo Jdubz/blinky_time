@@ -154,6 +154,7 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             downbeat=use_downbeat,
             sum_head=cfg["model"].get("sum_head", False),
             num_tempo_bins=cfg["model"].get("num_tempo_bins", 0),
+            freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
         from models.onset_conv1d_pool import build_onset_conv1d_pool
@@ -329,14 +330,15 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
 
     # Aggregate
     if all_results:
-        f1s = [r["f1"] for r in all_results]
-        print(f"\nAggregate Beat: mean F1={np.mean(f1s):.3f}, median={np.median(f1s):.3f}, "
-              f"min={np.min(f1s):.3f}, max={np.max(f1s):.3f}")
-
         onset_f1s = [r["onset_f1"] for r in all_results if "onset_f1" in r]
         if onset_f1s:
-            print(f"Aggregate Onset: mean F1={np.mean(onset_f1s):.3f}, median={np.median(onset_f1s):.3f}, "
+            print(f"\nAggregate Onset: mean F1={np.mean(onset_f1s):.3f}, median={np.median(onset_f1s):.3f}, "
                   f"min={np.min(onset_f1s):.3f}, max={np.max(onset_f1s):.3f}")
+        else:
+            # Fallback: no onset labels available, show beat-position F1 with caveat
+            f1s = [r["f1"] for r in all_results]
+            print(f"\nAggregate (vs beat labels, not onset): mean F1={np.mean(f1s):.3f}, median={np.median(f1s):.3f}, "
+                  f"min={np.min(f1s):.3f}, max={np.max(f1s):.3f}")
 
         db_f1s = [r["db_f1"] for r in all_results if "db_f1" in r]
         if db_f1s:

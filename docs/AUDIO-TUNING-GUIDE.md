@@ -321,7 +321,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 **Architecture:** Decoupled tempo/onset. BPM uses spectral flux (NN-independent). NN onset used for visual pulse + PLL phase refinement.
 - **BPM signal:** Spectral flux (half-wave rectified magnitude change) → contrast² → ACF + comb bank → BPM
-- **Onset detection:** FrameOnsetNN, Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). Onset F1=0.477 (measured against beat-position labels).
+- **Onset detection:** FrameOnsetNN, Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation (kicks/snares). v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666).
 - **Training data:** Consensus v5 labels (7-system), cal63 mel calibration (target_rms_db=-63 dB).
 
 ### AudioTracker Tempo Defaults (v74+)
@@ -361,7 +361,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 ### Pre-Bayesian Baseline (Feb 21, 2026) — BandFlux Solo, beatoffset=5
 
-| Track | Beat F1 | BPM Acc | Transient F1 |
+| Track | On-device F1 | BPM Acc | Transient F1 |
 |-------|:-------:|:-------:|:------------:|
 | trance-party | 0.775 | 0.993 | 0.774 |
 | minimal-01 | 0.695 | 0.959 | 0.544 |
@@ -378,7 +378,7 @@ NODE_PATH=./node_modules node ../ml-training/tools/ab_test_nnbeat.cjs \
 
 Defaults (v22): bayesacf=0.3, bayescomb=0.7, bayesft=0, bayesioi=0, bayeslambda=0.15, cbssthresh=1.0
 
-**Average Beat F1: 0.519** (+10% vs pre-Bayesian 0.472)
+**Average on-device F1: 0.519** (+10% vs pre-Bayesian 0.472)
 
 ### Bayesian v24 (Feb 26, 2026) — FT/IOI re-enabled after spectral processing
 
@@ -427,7 +427,7 @@ run_music_test(
 )
 ```
 
-**Record:** Beat F1, BPM accuracy, transient F1 for each track.
+**Record:** Onset F1, BPM accuracy, transient F1 for each track.
 
 ### Phase 2: Bayesian Weight Tuning (if needed)
 
