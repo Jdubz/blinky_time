@@ -5,9 +5,8 @@
 // ============================================================================
 //
 // Detects acoustic onsets (kicks, snares) from mel spectrograms.
-// Trained on beat-position labels, but with a 144ms receptive field
-// (Conv1D W16, k=5×2) it can only detect local transients — it cannot
-// distinguish on-beat from off-beat onsets.
+// With a 144ms receptive field (Conv1D W16, k=5x2) it can only detect
+// local transients — it cannot distinguish on-beat from off-beat onsets.
 //
 // Current model: Conv1D W16, single output channel (onset activation).
 // Supports up to 4 output channels for future multi-task models.

@@ -236,10 +236,10 @@ RenderPipeline → LED Output
    - `FrameOnsetNN.h` - Single-model TFLite NN inference for acoustic onset detection
      - Conv1D W16 (256ms), [24,32] channels, 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3
      - Single output channel: onset activation (kicks/snares — cannot distinguish on-beat from off-beat)
-     - Onset F1=0.738 vs librosa onset labels / 0.477 vs beat-position labels (model is a good onset detector; beat F1 was the wrong metric)
+     - v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704)
+     - v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806)
      - Arena: 3404/32768 bytes
      - Used for: visual pulse, PLL phase refinement, energy peak-hold. NOT used for BPM estimation.
-     - Note: "Onset F1" is measured against beat-position labels, so it reflects how often NN-detected onsets align with metrical beats. The NN itself detects acoustic onsets, not beats.
    - Non-NN fallback: `mic_.getLevel()` (energy envelope as simple onset signal)
 
 3. **Tempo Estimation & Rhythm Tracking (AudioTracker, v75)**
@@ -433,7 +433,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 
 **Production Ready:**
 - ✅ AudioTracker with ACF+Comb+PLL + ODF information gate + pulse baseline tracking
-- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, Onset F1=0.738 vs onset labels, deployed on all 7 devices)
+- ✅ FrameOnsetNN (Conv1D W16 onset-only, 13.4 KB INT8, All Onsets F1=0.681, deployed on all 7 devices)
 - ✅ ESP32-S3 PDM mic fix (proper I2S configuration)
 - ✅ HeatFire/Water/Lightning generators
 - ✅ Web UI (React + WebSerial)
@@ -467,7 +467,7 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 - FC on accumulated spectral summaries at beat rate (~2 Hz). Circular dependency with CBSS, negligible discriminative power in per-beat features, misaligned with all leading approaches. Superseded by frame-level FC.
 
 **Closed (W192 FC, March 2026):**
-- FC(4992→64→32→2), 322K params, 314 KB INT8. Onset F1=0.370, DB F1=0.145 — severe regression from W32 (0.491/0.238). FC flattening destroys temporal locality for wide windows.
+- FC(4992→64→32→2), 322K params, 314 KB INT8. Severe regression from W32. FC flattening destroys temporal locality for wide windows.
 
 **Closed (Dual-model architecture, March 2026):**
 - OnsetNN + RhythmNN split abandoned. Every published beat/downbeat system uses a single joint model. Split underperformed FC baseline on both tasks. Superseded by single Conv1D W64 with Beat This! sum head.
@@ -491,11 +491,10 @@ run_test(pattern: "steady-120bpm", port: "COM11")
 ## Current Audio System (March 2026)
 
 ### Detection Architecture
-**Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s). Onset F1=0.491, DB F1=0.238.
+**Previous (v68):** FrameOnsetNN (then named FrameBeatNN) — single FC model, FC(832→64→32→2), 56.8 KB INT8, W32 (0.5s).
 **Previous (v69):** Dual-model (OnsetNN + RhythmNN) — abandoned Mar 16. Every published system uses single joint model; split underperformed FC baseline.
 **Current (v75, deployed):** Decoupled tempo/onset architecture. BPM uses spectral flux (NN-independent). NN onset detection (FrameOnsetNN, Conv1D W16) drives visual pulse + PLL phase refinement.
-- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. Onset F1=0.738 vs librosa onset labels (0.477 vs beat-position labels). Arena: 3404/32768 bytes.
-- The model is a good onset detector. "Beat F1=0.477" was the wrong metric — it measured onset-vs-beat alignment. Against actual onset labels (librosa.onset.onset_detect), F1=0.738.
+- Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→1,k=1). 13.4 KB INT8, 6.8ms nRF52840 / 5.8ms ESP32-S3. Single output: onset activation. v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666). v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773). Arena: 3404/32768 bytes.
 - Fallback if model fails to load: mic_.getLevel() as simple energy onset signal.
 - Design goal: onset detection for visual pulse, spectral-flux-based BPM, PLL phase alignment. No downbeat tracking. Trigger on kicks and snares only; hi-hats/cymbals create overly busy visuals. See [VISUALIZER_GOALS.md](docs/VISUALIZER_GOALS.md) for the full design philosophy.
 - Training data: consensus_v5 labels (7-system), cal63 mel calibration.

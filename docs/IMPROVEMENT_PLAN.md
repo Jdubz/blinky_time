@@ -8,9 +8,7 @@
 
 **Firmware:** v76 (SETTINGS_VERSION 75). AudioTracker with decoupled tempo/onset architecture, subdivision-aware PLL correction, cosine confidence modulation. BPM estimation uses spectral flux (NN-independent) → ACF + comb bank. NN onset detection (Conv1D W16, 13.4 KB INT8, 6.8ms nRF52840, 5.8ms ESP32-S3) drives visual pulse + PLL phase refinement only. ~35 tunable params persisted to flash (v74+). AGC removed (v72) — fixed hardware gain (nRF52840: 32, ESP32-S3: 30). 7 devices: 3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local.
 
-**Key discovery (March 18):** The model is a **good onset detector** (Onset F1=0.738 vs librosa onset labels) — the previously reported "Beat F1=0.477" was measuring the wrong thing. Firmware phase alignment is the visual bottleneck, not model quality.
-
-**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). Onset F1=0.477 (offline eval, measured against beat-position labels). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection and PLL phase refinement — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
+**NN Model Status:** FrameOnsetNN Conv1D W16 onset-only model deployed on all 7 devices (13.4 KB INT8, per-tensor quantization, 6.8ms inference nRF52840, 5.8ms ESP32-S3). v1 deployed: All Onsets F1=0.681 (Kick 0.607, Snare 0.666, HiHat 0.704). v3 pending: All Onsets F1=0.787 (Kick 0.688, Snare 0.773, HiHat 0.806). Single output channel (onset activation only). Arena: 3404 bytes. NN output used for visual pulse detection and PLL phase refinement — NOT for BPM estimation (spectral flux handles that). Downbeat detection deferred.
 
 **Labels:** Training data upgraded to consensus_v5 (7-system: beat_this, madmom, essentia, librosa, demucs_beats, beatnet, allin1) with BPM-aware downbeat grid correction and quarantine of 1753 uncorrectable tracks. 75.3% of tracks have perfect every-4th-beat downbeat grids.
 
@@ -54,14 +52,16 @@ Phase alignment is the primary visual bottleneck. Octave errors (half/double tim
 
 ### Priority 2: NN Training Improvements (When Retrained)
 
-**Status: NOT URGENT — model is already Onset F1=0.738. Retrain when firmware phase is validated.**
+**Status: NOT URGENT — v1 model already All Onsets F1=0.681. v3 reaches 0.787. Retrain when firmware phase is validated.**
 
-**Key discovery (March 18):** Evaluating the W16 model against librosa onset labels (not beat labels) revealed it's already a good onset detector. Previously reported "Beat F1=0.477" was measuring onset-vs-beat alignment — the wrong metric.
+**Onset detection quality (v1 deployed / v3 pending):**
 
-| Metric | F1 | What it measures |
-|--------|-----|-----------------|
-| vs Beat labels (old) | 0.445 | onset-to-metrical-grid alignment |
-| **vs Onset labels (correct)** | **0.738** | acoustic transient detection |
+| Metric | v1 (deployed) | v3 (pending) |
+|--------|:------------:|:------------:|
+| All Onsets F1 | 0.681 | **0.787** |
+| Kick F1 (<200 Hz) | 0.607 | **0.688** |
+| Snare F1 (200-4k Hz) | 0.666 | **0.773** |
+| HiHat F1 (>4k Hz) | 0.704 | **0.806** |
 
 **High-impact techniques to include in next training run** (all code exists, never activated):
 
@@ -79,7 +79,7 @@ Phase alignment is the primary visual bottleneck. Octave errors (half/double tim
 - Self-supervised pretraining (BYOL-A, Audio-MAE): models too large for MCU, no transfer path
 - Curriculum learning: inconsistent evidence, moderate effort
 - Wider windows (W32/W64): architecture already validated as W16-optimal for onset detection
-- Onset-specific labels for training: beat-position labels work well enough (model learns onset patterns from them regardless)
+- Onset-specific labels for training: current labels work well enough (model learns onset patterns regardless)
 
 ### Priority 3: Test Metric Alignment
 
@@ -88,12 +88,12 @@ Phase alignment is the primary visual bottleneck. Octave errors (half/double tim
 - ✅ Onset labels generated for all 18 EDM test tracks (.onsets.json)
 - ✅ Octave error penalty removed from param_sweep_multidev.cjs scoring
 - [ ] Add phase-grid-alignment metric to sweep tooling: measure onset-to-subdivision distance, not BPM accuracy
-- [ ] Update evaluate.py to report onset F1 alongside beat F1
+- [x] Update evaluate.py aggregate to show onset F1 as primary metric
 - [ ] Add phase alignment visualization (onset time vs grid position scatter plot)
 
 ### Architecture History (Collapsed — see git log for details)
 
-**FC → Conv1D → W16 onset-only journey (Feb-March 2026):** Beat-synchronous hybrid abandoned (circular dependency). Frame-level FC deployed (Beat F1=0.491). Conv1D W64 deployed (0.480, 27ms). W192 FC regressed (0.370, flattening destroys locality). Dual-model abandoned (every published system uses single joint). Conv1D W16 onset-only deployed (Onset F1=0.738, 6.8ms). BandFlux fully removed (v67). See git history for `IMPROVEMENT_PLAN.md` for detailed writeups.
+**FC → Conv1D → W16 onset-only journey (Feb-March 2026):** Beat-synchronous hybrid abandoned (circular dependency). Frame-level FC deployed. Conv1D W64 deployed (27ms). W192 FC regressed (flattening destroys locality). Dual-model abandoned (every published system uses single joint). Conv1D W16 onset-only deployed (All Onsets F1=0.681, 6.8ms). BandFlux fully removed (v67). See git history for `IMPROVEMENT_PLAN.md` for detailed writeups.
 
 **Why frame-level works on Cortex-M4F:**
 
@@ -124,13 +124,13 @@ All frame-level FC options are well within the 10ms per-frame budget.
 
 At 120 BPM, one beat = 0.5s = ~31 frames at 62.5 Hz. The context window should capture at least one full beat interval. Options to explore:
 
-| Window | Frames | Input dim | Coverage at 120 BPM | Beat F1 | DB F1 | Notes |
-|--------|--------|-----------|---------------------|---------|-------|-------|
-| 0.26s | 16 | 1,664→416 | ~0.5 beats | 0.477 | N/A | **Conv1D W16 DEPLOYED (FrameOnsetNN)** — 13.4 KB INT8, 6.8ms |
-| 0.5s | 32 | 832 | ~1 beat | 0.491 | 0.238 | FC model (cal63) |
-| 1.0s | 64 | 1,664 | ~2 beats | 0.480 | 0.160 | Conv1D W64 (replaced by W16) — 15.1 KB INT8, 27ms |
-| 1.0s | 64 | 1,664 | ~2 beats | 0.487 | 0.180 | FC W64 (marginal for downbeat) |
-| 3.07s | 192 | 4,992 | ~6 beats (1.5 bars) | 0.370 | 0.145 | **FC REGRESSED** — too many flat inputs |
+| Window | Frames | Input dim | Coverage at 120 BPM | Notes |
+|--------|--------|-----------|---------------------|-------|
+| 0.26s | 16 | 1,664→416 | ~0.5 beats | **Conv1D W16 DEPLOYED (FrameOnsetNN)** — 13.4 KB INT8, 6.8ms, All Onsets F1=0.681 |
+| 0.5s | 32 | 832 | ~1 beat | FC model (cal63) |
+| 1.0s | 64 | 1,664 | ~2 beats | Conv1D W64 (replaced by W16) — 15.1 KB INT8, 27ms |
+| 1.0s | 64 | 1,664 | ~2 beats | FC W64 (marginal for downbeat) |
+| 3.07s | 192 | 4,992 | ~6 beats (1.5 bars) | **FC REGRESSED** — too many flat inputs |
 
 **Conclusion (March 15):** Wider windows are necessary for downbeat (need to see a full 4/4 bar) but FC architecture cannot exploit them. The first FC layer (4992→64) has 319K of the model's 322K total params, and must implicitly encode all temporal relationships through weight correlations. This destroys temporal locality. Conv1D with temporal pooling is the correct architecture for wide windows — preserves local patterns through convolutions, then progressively compresses time dimension via pooling before FC classification.
 
@@ -150,7 +150,7 @@ Output: [beat_prob, downbeat_prob] per frame
 
 | Resource | BandFlux (removed v67) | Conv1D W16 (deployed) | Notes |
 |----------|-------------------|-------------------|-------|
-| ODF quality | ~28% F1 | Onset F1=0.477 | Learned vs hand-tuned |
+| ODF quality | ~28% F1 | All Onsets F1=0.681 | Learned vs hand-tuned |
 | Inference time | <0.1ms @ 62.5 Hz | 6.8ms @ 62.5 Hz (nRF52840) | Well within 16.7ms frame budget |
 | Tensor arena | 0 | 3404 bytes (of 32768 allocated) | Conv1D W16 |
 | Mel frame buffer | 0 | ~1.7 KB (16×26×4 bytes) | Ring buffer |
@@ -180,8 +180,8 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 
 - ~~**Phase A (beat activation only):**~~ DONE — FC model deployed, beat+downbeat activation working on all 3 devices.
 - ~~**Phase B (mel calibration):**~~ DONE — calibrated `target_rms_db` from -35 to -63 dB (mel mean 0.52, matching firmware AGC). Cal63 model trained on corrected data. On-device A/B (6 tracks): mean ODF 0.30 vs 0.20 (+50%), BPM accuracy improved 4/6, downbeat activations now functional (max 0.37-0.57 vs 0.00).
-- ~~**Phase C (dual-model architecture):**~~ ABANDONED (Mar 16). Research showed every published beat/downbeat system uses a single joint model — the dual-model split underperformed the FC baseline on both tasks (OnsetNN Beat F1=0.478 < FC 0.491; RhythmNN DB F1=0.114 < FC 0.238) while using 8.5x more RAM. Reverted to single Conv1D with multi-task output.
-- ~~**Phase C (revised): Single Conv1D W64 with sum head.**~~ DONE — Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Beat This! sum head constrains downbeat ≤ beat. W64 (1.024s, ~2 beats). 15.1 KB INT8, 27ms measured on device. Beat F1=0.480, DB F1=0.160. Deployed on all 7 devices.
+- ~~**Phase C (dual-model architecture):**~~ ABANDONED (Mar 16). Research showed every published beat/downbeat system uses a single joint model — the dual-model split underperformed the FC baseline on both tasks while using 8.5x more RAM. Reverted to single Conv1D with multi-task output.
+- ~~**Phase C (revised): Single Conv1D W64 with sum head.**~~ DONE — Conv1D(26→24,k=5) → Conv1D(24→32,k=5) → Conv1D(32→2,k=1). Beat This! sum head constrains downbeat ≤ beat. W64 (1.024s, ~2 beats). 15.1 KB INT8, 27ms measured on device. Deployed on all 7 devices.
 - ~~**Phase D (BandFlux removal):**~~ DONE (v67) — Removed EnsembleDetector, BandFlux, EnsembleFusion, BassSpectralAnalysis, IDetector, DetectionResult. 10 files deleted, ~2600 lines, ~24 settings, ~22 KB flash, ~2 KB RAM saved. SETTINGS_VERSION 66→67.
 
 **Research context (updated March 16, 2026):**
@@ -193,7 +193,7 @@ The training pipeline from `prepare_dataset.py` → `train.py` produces frame-le
 #### Closed: Dual-Model Architecture (March 15-16, 2026)
 
 **Attempted and abandoned.** Dual-model split (OnsetNN W8 + RhythmNN W192) was architecturally wrong:
-- OnsetNN (Beat F1=0.478) < FC baseline (0.491) — W8 too short to distinguish beats from non-beats
+- OnsetNN underperformed FC baseline — W8 too short to distinguish beats from non-beats
 - RhythmNN (DB F1=0.114) < FC baseline (0.238) — 16x pooled labels lost 94.6% of beat labels (bug), plus 74ms inference (over budget)
 - Combined 8.5x more RAM than FC for worse results on both tasks
 - Every published system uses single joint model — no literature support for the split
@@ -215,14 +215,14 @@ System now focuses on onset/BPM/phase only. Downbeat detection deferred indefini
 
 1. **Tempo auxiliary head during training**: Shared backbone predicts tempo via FC branch, stripped at export. Zero firmware cost. +1-5% F1 (Bock 2019, BEAST). Code exists in `beat_fc_enhanced.py`.
 2. **FiLM conditioning**: Modulate features by tempo/phase. Train/test mismatch problem — try after beat tracking improves.
-3. **Beat-synchronous mel accumulator**: Depends on beat quality (~50% F1 makes snapshots noisy). Revisit above 70% beat F1.
+3. **Beat-synchronous mel accumulator**: Depends on beat quality. Revisit when phase alignment is reliable.
 4. **DSP features as extra channels**: Constant across Conv1D window, useless to convolutions.
 
 **Input representation:** Mel bands confirmed correct by all SOTA systems. 62.5 Hz frame rate adequate.
 
 #### Closed: W192 FC (March 15, 2026)
 
-W192 FC (4992→64→32→2, 322K params, 314 KB INT8): Beat F1=0.370, DB F1=0.145 — severe regression from W32 FC (0.491/0.238). Root cause: FC flattening of 192×26=4992 inputs destroys temporal locality. The first FC layer (4992→64) contains 319K of the model's 322K total parameters and must implicitly encode all temporal relationships through raw weight correlations. Training converged to val_loss=0.497 with only 84.5% accuracy — the model failed to learn meaningful temporal patterns from the flat input. Superseded by dual-model architecture with Conv1D temporal pooling.
+W192 FC (4992→64→32→2, 322K params, 314 KB INT8): severe regression from W32 FC. Root cause: FC flattening of 192×26=4992 inputs destroys temporal locality. The first FC layer (4992→64) contains 319K of the model's 322K total parameters and must implicitly encode all temporal relationships through raw weight correlations. Training converged to val_loss=0.497 with only 84.5% accuracy — the model failed to learn meaningful temporal patterns from the flat input. Superseded by dual-model architecture with Conv1D temporal pooling.
 
 ### Priority 2 (new): ESP32-S3 Mic Calibration and Model
 
@@ -295,16 +295,18 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## SOTA Context (March 2026)
 
-| System | Year | Beat F1 | Architecture | Notes |
-|--------|:----:|:-------:|-------------|-------|
-| BEAST | 2024 | **80.0%** | Streaming Transformer (9 layers, 1024 dim) | SOTA, too large for MCU |
-| BeatNet+ | 2024 | ~78% | CRNN + 2-level particle filter (1500 particles) | Microphone-capable |
-| Novel-1D | 2022 | 76.5% | 1D state space (jump-back reward) | 30x faster than 2D |
-| RNN-PLP | 2024 | 74.7% | RNN + PLP oscillator bank | Zero-latency, lightweight |
-| BTrack | 2012 | ~55% | ACF + CBSS (our baseline architecture) | Embedded-friendly |
-| **Blinky (ours)** | 2026 | **~48%** | Conv1D W16 ODF + ACF+Comb+PLL (mic-in-room, nRF52840) | No comparable embedded NN system exists |
+| System | Year | Architecture | Notes |
+|--------|:----:|-------------|-------|
+| BEAST | 2024 | Streaming Transformer (9 layers, 1024 dim) | SOTA, too large for MCU |
+| BeatNet+ | 2024 | CRNN + 2-level particle filter (1500 particles) | Microphone-capable |
+| Novel-1D | 2022 | 1D state space (jump-back reward) | 30x faster than 2D |
+| RNN-PLP | 2024 | RNN + PLP oscillator bank | Zero-latency, lightweight |
+| BTrack | 2012 | ACF + CBSS (our baseline architecture) | Embedded-friendly |
+| **Blinky (ours)** | 2026 | Conv1D W16 ODF + ACF+Comb+PLL (mic-in-room, nRF52840) | All Onsets F1=0.681 (v1), 0.787 (v3) |
 
-**Key insight:** SOTA systems achieve 75-80% F1 with strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W16 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 6.8ms inference (well within frame budget). The NN is the sole ODF source, providing a learned onset activation that feeds into ACF+Comb+PLL for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
+**Note:** SOTA table previously listed Beat F1 (onset-vs-metrical-grid alignment). This metric is not comparable to our onset F1. SOTA systems are evaluated on line-in audio with standardized beat annotations; our system detects acoustic onsets through a microphone in a room.
+
+**Key insight:** SOTA systems use strong neural frontends (CNN, CRNN, Transformer) that require 79ms+ on our hardware. The Conv1D W16 approach follows the same paradigm (frame-level NN activation → post-processing) but uses lightweight Conv1D layers, achieving 6.8ms inference (well within frame budget). The NN is the sole ODF source, providing a learned onset activation that feeds into ACF+Comb+PLL for tempo/phase tracking. Using raw mel bands as the stable interface decouples the NN from firmware signal processing parameters.
 
 ## Known Limitations
 
