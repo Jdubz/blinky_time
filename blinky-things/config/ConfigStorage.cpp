@@ -231,6 +231,15 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.midFluxWeight = 0.2f;
     data_.tracker.highFluxWeight = 0.3f;
 
+    // Pattern memory (v77)
+    data_.tracker.patternLearnRate = 0.15f;
+    data_.tracker.patternDecayRate = 0.9995f;
+    data_.tracker.ioiDecayRate = 0.999f;
+    data_.tracker.patternGain = 0.3f;
+    data_.tracker.anticipationGain = 0.1f;
+    data_.tracker.patternLookahead = 0.05f;
+    data_.tracker.patternEnabled = 1;
+
     data_.brightness = 100;
 }
 
@@ -374,7 +383,10 @@ void ConfigStorage::saveToFlash() {
 
     // Delete existing file if present
     if (InternalFS.exists(CONFIG_FILENAME)) {
-        InternalFS.remove(CONFIG_FILENAME);
+        if (!InternalFS.remove(CONFIG_FILENAME)) {
+            SerialConsole::logError(F("Failed to remove old config file"));
+            return;
+        }
     }
 
     // Write config to file
@@ -577,6 +589,12 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         // Validate tracker params
         validateFloat(data_.tracker.bpmMin, 40.0f, 120.0f, F("tracker.bpmMin"));
         validateFloat(data_.tracker.bpmMax, 120.0f, 240.0f, F("tracker.bpmMax"));
+        // Cross-field: ensure bpmMin < bpmMax after individual clamping
+        if (data_.tracker.bpmMin >= data_.tracker.bpmMax) {
+            data_.tracker.bpmMin = 60.0f;
+            data_.tracker.bpmMax = 200.0f;
+            fixedCount++;
+        }
         validateFloat(data_.tracker.rayleighBpm, 60.0f, 180.0f, F("tracker.rayleighBpm"));
         validateFloat(data_.tracker.combFeedback, 0.85f, 0.98f, F("tracker.combFeedback"));
         validateFloat(data_.tracker.tempoSmoothing, 0.5f, 0.99f, F("tracker.tempoSmooth"));
@@ -610,6 +628,14 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.midFluxWeight, 0.0f, 1.0f, F("tracker.midFluxW"));
         validateFloat(data_.tracker.highFluxWeight, 0.0f, 1.0f, F("tracker.highFluxW"));
         VALIDATE_INT(data_.tracker.acfPeriodMs, 50, 500, F("tracker.acfPeriod"));
+
+        // Pattern memory (v77)
+        validateFloat(data_.tracker.patternLearnRate, 0.01f, 0.5f, F("tracker.patLearn"));
+        validateFloat(data_.tracker.patternDecayRate, 0.990f, 0.9999f, F("tracker.patDecay"));
+        validateFloat(data_.tracker.ioiDecayRate, 0.990f, 0.9999f, F("tracker.ioiDecay"));
+        validateFloat(data_.tracker.patternGain, 0.0f, 1.0f, F("tracker.patGain"));
+        validateFloat(data_.tracker.anticipationGain, 0.0f, 0.5f, F("tracker.patAnticipation"));
+        validateFloat(data_.tracker.patternLookahead, 0.0f, 0.15f, F("tracker.patLookahead"));
 
         // Copy to AudioTracker
         tracker->bpmMin = data_.tracker.bpmMin;
@@ -649,6 +675,15 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->getSpectral().bassFluxWeight = data_.tracker.bassFluxWeight;
         tracker->getSpectral().midFluxWeight = data_.tracker.midFluxWeight;
         tracker->getSpectral().highFluxWeight = data_.tracker.highFluxWeight;
+
+        // Pattern memory (v77)
+        tracker->patternLearnRate = data_.tracker.patternLearnRate;
+        tracker->patternDecayRate = data_.tracker.patternDecayRate;
+        tracker->ioiDecayRate = data_.tracker.ioiDecayRate;
+        tracker->patternGain = data_.tracker.patternGain;
+        tracker->anticipationGain = data_.tracker.anticipationGain;
+        tracker->patternLookahead = data_.tracker.patternLookahead;
+        tracker->patternEnabled = (data_.tracker.patternEnabled != 0);
     }
 
     #undef VALIDATE_INT
@@ -774,6 +809,15 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.bassFluxWeight = tracker->getSpectral().bassFluxWeight;
         data_.tracker.midFluxWeight = tracker->getSpectral().midFluxWeight;
         data_.tracker.highFluxWeight = tracker->getSpectral().highFluxWeight;
+
+        // Pattern memory (v77)
+        data_.tracker.patternLearnRate = tracker->patternLearnRate;
+        data_.tracker.patternDecayRate = tracker->patternDecayRate;
+        data_.tracker.ioiDecayRate = tracker->ioiDecayRate;
+        data_.tracker.patternGain = tracker->patternGain;
+        data_.tracker.anticipationGain = tracker->anticipationGain;
+        data_.tracker.patternLookahead = tracker->patternLookahead;
+        data_.tracker.patternEnabled = tracker->patternEnabled ? 1 : 0;
     }
 
     saveToFlash();

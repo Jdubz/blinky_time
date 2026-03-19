@@ -214,7 +214,7 @@ void HeatFire::renderNoiseFireField(PixelMatrix& matrix, const AudioControl& aud
         float gamma = 1.1f - 0.2f * paletteBias_;
 
         for (int y = 0; y < height_; y++) {
-            float normalizedY = (float)y / (height_ - 1);  // 0=top, 1=bottom
+            float normalizedY = (height_ > 1) ? (float)y / (height_ - 1) : 0.0f;  // 0=top, 1=bottom
 
             // heightProgress: 0.0 at zone top (flame tip region), 1.0 at bottom (base)
             float heightProgress = constrain(

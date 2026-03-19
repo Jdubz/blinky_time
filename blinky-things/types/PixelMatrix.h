@@ -35,6 +35,7 @@ private:
     RGB* pixels_;
     int width_;
     int height_;
+    mutable RGB fallbackPixel_;  // Per-instance fallback for OOB getPixel() calls
 
 public:
     PixelMatrix(int width, int height);

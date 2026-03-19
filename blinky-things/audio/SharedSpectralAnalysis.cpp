@@ -351,7 +351,9 @@ void SharedSpectralAnalysis::computeMelBandsFrom(const float* inputMagnitudes, f
 
         // Log compression: 10 * log10(energy + epsilon)
         // Map [-60, 0] dB to [0, 1]
-        const float epsilon = 1e-10f;
+        // Floor at 1e-7 (not 1e-10) to stay above ARM Cortex-M4 denormal range
+        // (~1.2e-38). Values below 1e-7 map to < -70 dB which clamps to 0 anyway.
+        const float epsilon = 1e-7f;
         float logEnergy = 10.0f * log10f(bandEnergy + epsilon);
         logEnergy = (logEnergy + 60.0f) / 60.0f;
 
