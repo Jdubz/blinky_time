@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 75;  // v75: phase-aware confidence modulation (replaces binary pulse boost/suppress)
+    static const uint8_t SETTINGS_VERSION = 76;  // v76: remove StoredMusicParams (312 bytes dead AudioController params)
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -211,158 +211,10 @@ public:
         float releaseTau;         // Peak release speed (release time, seconds)
     };
 
-    struct StoredMusicParams {
-        // Basic rhythm parameters
-        float activationThreshold;
-        float bpmMin;
-        float bpmMax;
-        float cbssAlpha;       // CBSS weighting (0.8-0.95, higher = more predictive)
-
-        // Tempo prior width (used by Bayesian static prior)
-        float tempoPriorWidth;     // Width (sigma) of prior
-
-        // Pulse modulation
-        float pulseBoostOnBeat;      // Boost factor for on-beat transients
-        float pulseSuppressOffBeat;  // Suppress factor for off-beat transients
-        float energyBoostOnBeat;     // Energy boost near predicted beats
-
-        // Stability and smoothing
-        float stabilityWindowBeats;   // Number of beats for stability tracking
-        float beatLookaheadMs;        // How far ahead to predict beats (ms)
-        float tempoSmoothingFactor;   // Higher = smoother tempo changes
-        float tempoChangeThreshold;   // Min BPM change ratio to trigger update
-
-        // CBSS beat tracking
-        float cbssTightness;            // Log-Gaussian tightness (higher=stricter tempo)
-        float beatConfidenceDecay;      // Per-frame confidence decay when no beat detected
-        float beatTimingOffset;         // Beat prediction advance in frames (ODF+CBSS delay compensation)
-        float phaseCorrectionStrength;  // Phase correction toward transients (0=off, 1=full snap)
-        float cbssThresholdFactor;      // CBSS adaptive threshold: beat fires only if CBSS > factor * mean (0=off)
-        float cbssContrast;             // Power-law ODF contrast before CBSS (v66: default 2.0=BTrack-style square, 1.0=linear)
-        uint8_t cbssWarmupBeats;        // CBSS warmup beats: lower alpha for first N beats (v37: 0=disabled)
-        uint8_t onsetSnapWindow;       // Snap beat to strongest OSS in last N frames (v37: 4, 0=disabled)
-
-        // Bayesian tempo fusion (v18)
-        float bayesLambda;              // Transition tightness (0.01=rigid, 1.0=loose)
-        float bayesPriorCenter;         // Static prior center BPM (Gaussian)
-        float bayesPriorWeight;         // Ongoing static prior strength (0=off, 1=standard, 2=strong)
-        float bayesAcfWeight;           // Autocorrelation observation weight
-        // (bayesFtWeight/bayesIoiWeight removed v52 — dead code since v28)
-        float bayesCombWeight;          // Comb filter bank observation weight
-        float posteriorFloor;           // Posterior uniform floor (0=off, 0.05=5% mixing)
-        float disambigNudge;            // Posterior nudge on disambiguation correction (0=off)
-        float harmonicTransWeight;      // Transition matrix harmonic shortcut weight (0=off, 0.3=default)
-
-        // Onset-density octave discriminator (v31)
-        float densityMinPerBeat;        // Min plausible transients per beat (0.5)
-        float densityMaxPerBeat;        // Max plausible transients per beat (5.0)
-        float octaveScoreRatio;         // Shadow CBSS score ratio for octave switch (1.5)
-
-        uint8_t odfSmoothWidth;         // ODF smooth window (3-11, odd)
-        uint8_t octaveCheckBeats;       // Check octave every N beats (4)
-        // (ioiEnabled/ftEnabled removed v52 — dead code since v28)
-        bool odfMeanSubEnabled;         // Enable ODF mean subtraction before autocorrelation
-        bool beatBoundaryTempo;         // Defer tempo changes to beat boundaries (v28)
-        // (unifiedOdf removed v67 — BandFlux pipeline removed)
-        bool adaptiveOdfThresh;         // Local-mean ODF threshold before autocorrelation (v31)
-        uint8_t odfThreshWindow;        // Adaptive ODF threshold half-window (samples each side, 5-30)
-        // (onsetTrainOdf removed v67 — BandFlux pipeline removed)
-        // (odfDiffMode removed v67 — BandFlux pipeline removed)
-        // (odfSource removed v64 — experimental alternatives 1-5 never used)
-        bool densityOctaveEnabled;      // Onset-density octave penalty (v31)
-        float densityPenaltyExp;        // Density penalty Gaussian exponent (v35)
-        float densityTarget;            // Target transients/beat (0=disabled, v35)
-        bool downwardCorrectEnabled;    // Downward harmonic correction 3:2/2:1 (v41: disabled by default)
-        bool octaveCheckEnabled;        // Shadow CBSS octave check (v31)
-        // (phaseCheck fields removed v44 — net-negative)
-        // (plpCorrectionStrength/plpMinConfidence removed v44 — zero effect)
-
-        // 128 BPM gravity well fixes (v44)
-        float rayleighBpm;              // Rayleigh prior peak BPM (60-180, default 120)
-        float tempoNudge;               // switchTempo posterior mass transfer (0-1, default 0.8)
-
-        // (plpPhaseEnabled removed v44 — zero effect)
-
-        bool btrkPipeline;              // BTrack-style tempo pipeline (v33: Viterbi + comb-on-ACF)
-        uint8_t btrkThreshWindow;       // Adaptive threshold half-window (0=off, 1-5)
-        // (barPointerHmm/hmmContrast/fwdObsLambda/fwdObsFloor/fwdWrapFraction removed v64 — HMM phase tracker never outperformed CBSS)
-        // (particleFilterEnabled and all pf* params removed v64 — never outperformed CBSS)
-
-        // Spectral processing (v23+)
-        bool whitenEnabled;             // Per-bin spectral whitening
-        bool compressorEnabled;         // Soft-knee compressor
-        bool whitenBassBypass;          // Skip whitening for bass bins 1-6 (v47)
-        float whitenDecay;              // Peak decay per frame (~5s at 0.997)
-        float whitenFloor;              // Noise floor for whitening
-        float compThresholdDb;          // Compressor threshold (dB)
-        float compRatio;                // Compression ratio (e.g., 3:1)
-        float compKneeDb;              // Soft knee width (dB)
-        float compMakeupDb;            // Makeup gain (dB)
-        float compAttackTau;           // Attack time constant (seconds)
-        float compReleaseTau;          // Release time constant (seconds)
-
-        // 128 BPM gravity well fixes (v44)
-        bool fold32Enabled;             // 3:2 octave folding (v44)
-        bool sesquiCheckEnabled;        // 3:2 shadow octave check (v44)
-        bool bidirectionalSnap;         // Bidirectional onset snap (v44)
-        // (harmonicSesqui removed v44 — catastrophic on fast tracks)
-
-        // Percival ACF harmonic pre-enhancement (v45)
-        float percivalWeight2;          // 2nd harmonic fold weight (0-1, default 0.5)
-        float percivalWeight4;          // 4th harmonic fold weight (0-1, default 0.25)
-        bool percivalEnhance;           // Enable harmonic pre-enhancement
-
-        // PLL phase correction (v45)
-        float pllKp;                    // Proportional gain (0-1, default 0.15)
-        float pllKi;                    // Integral gain (0-0.1, default 0.005)
-        bool pllEnabled;                // Enable PLL phase correction
-
-        // Adaptive CBSS tightness (v45)
-        float tightnessLowMult;         // Multiplier when onset confidence HIGH (0.3-1.0)
-        float tightnessHighMult;        // Multiplier when onset confidence LOW (1.0-3.0)
-        float tightnessConfThreshHigh;  // OSS/mean ratio for high confidence (1.5-10)
-        float tightnessConfThreshLow;   // OSS/mean ratio for low confidence (0.5-3.0)
-        bool adaptiveTightnessEnabled;  // Enable adaptive tightness
-
-        // Anti-harmonic 3rd comb (v48)
-        float percivalWeight3;          // 3rd harmonic SUBTRACT weight (0-1, default 0)
-
-        // (multiAgentEnabled/agentDecay/agentInitBeats removed v64 — never outperformed single CBSS)
-        // (metricalCheckEnabled/metricalMinRatio/metricalCheckBeats removed v64 — no octave disambiguation benefit)
-        // (templateCheckEnabled/templateScoreRatio/templateCheckBeats removed v64 — A/B tested: baseline wins 10/18)
-        // (subbeatCheckEnabled/alternationThresh/subbeatCheckBeats removed v64 — A/B tested: no net benefit)
-
-        // Hidden constants exposed (v51)
-        // (templateMinScore removed v64 — associated feature removed)
-        float cbssMeanAlpha;            // CBSS running mean EMA alpha
-        float harmonic2xThresh;         // ACF half-lag ratio for 2x BPM correction
-        float harmonic15xThresh;        // ACF 2/3-lag ratio for 1.5x BPM correction
-        float pllSmoother;              // PLL phase integral leaky decay
-        float beatConfBoost;            // Confidence increment per beat fire
-        float rhythmBlend;              // Periodicity weight in rhythmStrength
-        float periodicityBlend;         // Periodicity strength EMA coefficient
-        float onsetDensityBlend;        // Onset density EMA coefficient
-        // (subbeatBins/templateHistBars removed v64 — associated features removed)
-
-        // (nnBeatActivation removed v68 — FrameOnsetNN always active, no toggle needed)
-
-        // Spectral noise estimation (v56)
-        bool noiseEstEnabled;           // Enable minimum statistics noise subtraction
-        float noiseSmoothAlpha;         // Power smoothing coefficient (0.9-0.99)
-        float noiseReleaseFactor;       // Noise floor release rate (0.99-0.9999)
-        float noiseOversubtract;        // Oversubtraction factor (1.0-3.0)
-        float noiseFloorRatio;          // Spectral floor as fraction of original (0.001-0.5)
-
-        // (forwardFilterEnabled and all fwd* params removed v64 — A/B tested: severe half-time bias, 17/18 octave errors)
-        // (fwdPhaseOnly removed v64 — phase tracker removed, no benefit)
-
-        // v65 params (persisted v70) — previously runtime-only, now survive reboot
-        float snapHysteresis;           // Onset snap hysteresis (0-1, prefer previous snap if >this × best)
-        float dbEmaAlpha;               // Downbeat EMA smoothing alpha (0-1)
-        float dbThreshold;              // Smoothed downbeat activation threshold (0-1)
-        float dbDecay;                  // Per-frame downbeat decay between beats (0-1)
-        uint8_t pllWarmupBeats;         // PLL warmup beats before tightening clamp (0-32)
-    };
+    // StoredMusicParams REMOVED v76.
+    // Was 312 bytes of AudioController params (CBSS, Bayesian, octave checks, etc.).
+    // AudioController replaced by AudioTracker in v74. All active params now in StoredTrackerParams.
+    // See git history for full struct definition (v23-v75).
 
     // (StoredBandFluxParams removed v67 — BandFlux pipeline removed, FrameOnsetNN is sole ODF source)
 
@@ -495,7 +347,7 @@ public:
         StoredWaterParams water;
         StoredLightningParams lightning;
         StoredMicParams mic;
-        StoredMusicParams music;
+        // (StoredMusicParams removed v76 — 312 bytes of dead AudioController params)
         StoredTrackerParams tracker;
         // (StoredBandFluxParams bandflux removed v67)
         uint8_t brightness;
@@ -516,8 +368,7 @@ public:
         "StoredLightningParams size changed! Increment SETTINGS_VERSION and update assertion. (36 bytes = 7 floats + 7 uint8 + padding)");
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
-    static_assert(sizeof(StoredMusicParams) == 312,
-        "StoredMusicParams size changed! Increment SETTINGS_VERSION and update assertion. (312 bytes = 66 floats + 7 uint8 + 18 bools + padding)");
+    // (StoredMusicParams static_assert removed v76 — struct deleted)
     static_assert(sizeof(StoredTrackerParams) == 140,
         "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (140 bytes = 34 floats + 1 uint16 + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
@@ -525,8 +376,8 @@ public:
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");
     // ConfigData: allocated in last 4KB flash page (4096 bytes available).
     // Tight bound catches accidental struct bloat. Raise when genuinely needed + bump SETTINGS_VERSION.
-    static_assert(sizeof(ConfigData) <= 960,
-        "ConfigData exceeds 960 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes.");
+    static_assert(sizeof(ConfigData) <= 650,
+        "ConfigData exceeds 650 bytes! Update this limit or reduce struct sizes. Flash page is 4096 bytes. (v76: ~312 bytes saved by removing StoredMusicParams)");
 
     ConfigStorage();
     void begin();
