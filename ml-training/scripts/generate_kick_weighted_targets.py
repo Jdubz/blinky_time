@@ -47,8 +47,11 @@ HIHAT_LOW = 4000
 HIHAT_HIGH = 8000
 
 # Target weights per onset type
+# Kicks and snares are equally important — both are primary visual events.
+# Snares cut through the mix ("the talking drum") and drive accents just
+# as strongly as kicks drive the downbeat.
 KICK_WEIGHT = 1.0
-SNARE_WEIGHT = 0.5
+SNARE_WEIGHT = 1.0
 HIHAT_WEIGHT = 0.0
 
 SR = 16000

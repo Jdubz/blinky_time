@@ -1,8 +1,8 @@
 # Conv1D W16 v5 — kick/snare-focused onset detection
 #
-# Key change from v3/v4: kick-weighted training targets
+# Key change from v3/v4: kick/snare-weighted training targets
 #   - Kick onsets (<200 Hz) → target 1.0 (fire strongly)
-#   - Snare onsets (200-4k Hz) → target 0.5 (moderate response)
+#   - Snare onsets (200-4k Hz) → target 1.0 (equally important — cuts through mix)
 #   - Hi-hat/cymbal onsets (>4k Hz) → target 0.0 (suppress)
 #
 # This produces the 2-4 major events per bar needed for smooth LED
