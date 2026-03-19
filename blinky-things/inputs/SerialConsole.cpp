@@ -712,7 +712,6 @@ bool SerialConsole::handleConfigCommand(const char* cmd) {
                 *mic_,
                 audioCtrl_
             );
-    
             Serial.println(F("OK"));
         } else {
             Serial.println(F("ERROR"));
@@ -1839,6 +1838,7 @@ bool SerialConsole::handleBeatTrackingCommand(const char* cmd) {
         // Template match state
         Serial.println(F("-- Template Match --"));
         {
+            // Order must match AudioTracker::templates_[]
             static const char* const templateNames[] = {
                 "4otf", "backbeat", "halftime", "breakbeat",
                 "8thnote", "dnb", "dembow", "sparse"

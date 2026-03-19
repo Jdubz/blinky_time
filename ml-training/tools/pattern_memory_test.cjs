@@ -451,8 +451,9 @@ async function main() {
     console.log(`Devices: ${portPaths.length}, Tracks: ${trackList.length}`);
     console.log(`Music dir: ${musicDir}\n`);
 
-    // Open port(s)
+    // Open port(s) — tracked in activePorts for SIGINT cleanup
     const ports = [];
+    activePorts = ports;
     for (const pp of portPaths) {
         try {
             const port = await openPort(pp);
@@ -599,16 +600,29 @@ async function main() {
     console.log(`Results: ${resultsPath}\n`);
 
     // Close ports
-    for (const { port: p } of ports) {
-        p.close();
-    }
-
+    closePorts(ports);
     releaseAudioLock();
     process.exit(passCount === totalTests ? 0 : 1);
 }
 
+function closePorts(ports) {
+    for (const { port: p } of ports) {
+        try { p.close(); } catch (_) { /* best effort */ }
+    }
+}
+
+// Guarantee cleanup on crash or SIGINT (prevents port lock blocking firmware flashing)
+let activePorts = [];
+process.on('SIGINT', () => {
+    console.error('\nInterrupted — closing ports...');
+    closePorts(activePorts);
+    releaseAudioLock();
+    process.exit(130);
+});
+
 main().catch(e => {
     console.error('Fatal error:', e);
+    closePorts(activePorts);
     releaseAudioLock();
     process.exit(2);
 });

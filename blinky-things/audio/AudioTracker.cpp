@@ -271,8 +271,10 @@ const AudioControl& AudioTracker::update(float dt) {
         uint32_t currentBarMs = (uint32_t)(ioiPeakMs_ * 4.0f);
         if (currentBarMs > 0 && nowMs - lastBarBoundaryMs_ >= currentBarMs) {
             lastBarBoundaryMs_ += currentBarMs;
-            // Re-sync if more than half a bar behind (tempo change or startup)
-            if (nowMs - lastBarBoundaryMs_ > currentBarMs / 2) {
+            // Re-sync if accumulator drifted too far (tempo change or startup).
+            // Behind: more than half a bar late. Ahead: BPM was overestimated.
+            if (nowMs - lastBarBoundaryMs_ > currentBarMs / 2
+                || lastBarBoundaryMs_ > nowMs + currentBarMs / 2) {
                 lastBarBoundaryMs_ = nowMs;
             }
             computePatternStats();
@@ -361,8 +363,8 @@ void AudioTracker::runAutocorrelation() {
         float lagF = static_cast<float>(lag);
 
         // Compute Rayleigh weight directly per lag (no comb bin lookup).
-        // Early-exit when exponent < -20 to avoid denormalized floats
-        // (expf(-20) ≈ 2e-9; ARM Cortex-M4 stalls on denormals).
+        // Early-exit when weight contribution is negligible (expf(-20) ≈ 2e-9);
+        // avoids unnecessary expf() calls for lags far outside the Rayleigh peak.
         float expArg = -lagF * lagF / (2.0f * rayleighSigma2);
         if (expArg < -20.0f) continue;
         float rayleighW = (lagF / rayleighSigma2) * expf(expArg);
@@ -402,7 +404,7 @@ void AudioTracker::runAutocorrelation() {
     //
     // Octave disambiguation: fold IOI BPM to nearest octave of ACF BPM before
     // nudging. Prevents subdivisions (8th/16th notes) from pulling BPM to 2x/4x.
-    if (patternEnabled && ioiConfidence_ > 0.5f) {
+    if (patternEnabled && ioiConfidence_ > 0.65f) {
         float foldedIoiBpm = ioiPeakBpm_;
         // Fold down: if IOI is at 4x, quarter it; if 2x, halve it
         while (foldedIoiBpm > newBpm * 1.5f && foldedIoiBpm > bpmMin) {
@@ -415,7 +417,9 @@ void AudioTracker::runAutocorrelation() {
 
         float ioiDiff = fabsf(foldedIoiBpm - newBpm) / newBpm;
         if (ioiDiff > 0.10f) {
-            float ioiWeight = ioiConfidence_ * 0.3f;
+            // Cap nudge at 15% unless very high confidence (>0.8 → up to 24%)
+            float maxWeight = (ioiConfidence_ > 0.8f) ? 0.3f : 0.15f;
+            float ioiWeight = fminf(ioiConfidence_ * 0.3f, maxWeight);
             newBpm = newBpm * (1.0f - ioiWeight) + foldedIoiBpm * ioiWeight;
         }
     }
@@ -722,7 +726,7 @@ void AudioTracker::computePatternStats() {
         patternConfidence_ = fminf(patternConfidence_ + boost, 1.0f);
     }
 
-    // Step 5b: Save snapshot of bins while confidence is healthy.
+    // Step 6: Save snapshot of bins while confidence is healthy.
     // Used by cachePatternRestore() — at the downward crossing through 0.3,
     // current barBins_ are contaminated by the new section. prevGoodBins_
     // preserves the last high-confidence state for meaningful cache matching.
@@ -730,7 +734,7 @@ void AudioTracker::computePatternStats() {
         memcpy(prevGoodBins_, barBins_, sizeof(float) * BAR_BINS);
     }
 
-    // Step 6: Cache save (upward confidence crossing through 0.6)
+    // Step 7: Cache save (upward confidence crossing through 0.6)
     // Guard: require > 8 bars of data to avoid saving undercooked patterns
     // from cold start boost (which can push confidence above 0.6 in 4 bars).
     if (patternConfidence_ >= 0.6f && prevPatternConfidence_ < 0.6f
@@ -738,12 +742,12 @@ void AudioTracker::computePatternStats() {
         cachePatternSave();
     }
 
-    // Step 7: Cache restore trigger (downward confidence crossing through 0.3)
+    // Step 8: Cache restore trigger (downward confidence crossing through 0.3)
     if (patternConfidence_ < 0.3f && prevPatternConfidence_ >= 0.3f) {
         cachePatternRestore();
     }
 
-    // Step 8: Update prevPatternConfidence_
+    // Step 9: Update prevPatternConfidence_
     prevPatternConfidence_ = patternConfidence_;
 }
 

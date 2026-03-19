@@ -2,8 +2,8 @@
   "track": "trance-goa-mantra",
   "groundTruthBpm": 139.6,
   "duration": 104.39,
-  "barCount": 84,
-  "barPeriodMs": 1236.5,
+  "barCount": 78,
+  "barPeriodMs": 1332.9,
   "bars": [
     {
       "index": 0,
@@ -88,117 +88,77 @@
     {
       "index": 10,
       "startTime": 17.48,
-      "endTime": 17.92,
-      "onsetCount": 2,
+      "endTime": 19.22,
+      "onsetCount": 11,
       "isFill": false,
-      "densityRatio": 0.21
+      "densityRatio": 1.16
     },
     {
       "index": 11,
-      "startTime": 17.92,
-      "endTime": 19.22,
-      "onsetCount": 9,
+      "startTime": 19.22,
+      "endTime": 20.96,
+      "onsetCount": 11,
       "isFill": false,
-      "densityRatio": 1.12
+      "densityRatio": 1.07
     },
     {
       "index": 12,
-      "startTime": 19.22,
-      "endTime": 19.66,
-      "onsetCount": 3,
+      "startTime": 20.96,
+      "endTime": 22.7,
+      "onsetCount": 10,
       "isFill": false,
-      "densityRatio": 0.38
+      "densityRatio": 0.93
     },
     {
       "index": 13,
-      "startTime": 19.66,
-      "endTime": 20.96,
-      "onsetCount": 8,
+      "startTime": 22.7,
+      "endTime": 24.44,
+      "onsetCount": 11,
       "isFill": false,
-      "densityRatio": 1.19
+      "densityRatio": 0.98
     },
     {
       "index": 14,
-      "startTime": 20.96,
-      "endTime": 21.4,
-      "onsetCount": 2,
+      "startTime": 24.44,
+      "endTime": 26.18,
+      "onsetCount": 11,
       "isFill": false,
-      "densityRatio": 0.36
+      "densityRatio": 1.02
     },
     {
       "index": 15,
-      "startTime": 21.4,
-      "endTime": 22.7,
-      "onsetCount": 8,
-      "isFill": false,
-      "densityRatio": 1.45
-    },
-    {
-      "index": 16,
-      "startTime": 22.7,
-      "endTime": 23.14,
-      "onsetCount": 2,
-      "isFill": false,
-      "densityRatio": 0.38
-    },
-    {
-      "index": 17,
-      "startTime": 23.14,
-      "endTime": 24.44,
-      "onsetCount": 9,
-      "isFill": false,
-      "densityRatio": 1.8
-    },
-    {
-      "index": 18,
-      "startTime": 24.44,
-      "endTime": 24.88,
-      "onsetCount": 2,
-      "isFill": false,
-      "densityRatio": 0.38
-    },
-    {
-      "index": 19,
-      "startTime": 24.88,
-      "endTime": 26.18,
-      "onsetCount": 9,
-      "isFill": false,
-      "densityRatio": 1.71
-    },
-    {
-      "index": 20,
       "startTime": 26.18,
       "endTime": 27.92,
       "onsetCount": 9,
       "isFill": false,
-      "densityRatio": 1.64
+      "densityRatio": 0.84
     },
     {
-      "index": 21,
+      "index": 16,
       "startTime": 27.92,
       "endTime": 29.66,
       "onsetCount": 9,
       "isFill": false,
-      "densityRatio": 1.24
+      "densityRatio": 0.88
     },
     {
-      "index": 22,
+      "index": 17,
       "startTime": 29.66,
       "endTime": 30.526,
       "onsetCount": 4,
       "isFill": false,
-      "densityRatio": 0.55
+      "densityRatio": 0.4
     },
     {
-      "index": 23,
+      "index": 18,
       "startTime": 30.526,
       "endTime": 31.4,
       "onsetCount": 5,
       "isFill": false,
-      "densityRatio": 0.65
+      "densityRatio": 0.61
     },
     {
-      "index": 24,
+      "index": 19,
       "startTime": 31.4,
       "endTime": 32.268,
       "onsetCount": 5,
@@ -206,7 +166,7 @@
       "densityRatio": 0.74
     },
     {
-      "index": 25,
+      "index": 20,
       "startTime": 32.268,
       "endTime": 33.14,
       "onsetCount": 6,
@@ -214,7 +174,7 @@
       "densityRatio": 1.04
     },
     {
-      "index": 26,
+      "index": 21,
       "startTime": 33.14,
       "endTime": 34.01,
       "onsetCount": 4,
@@ -222,7 +182,7 @@
       "densityRatio": 0.8
     },
     {
-      "index": 27,
+      "index": 22,
       "startTime": 34.01,
       "endTime": 34.869,
       "onsetCount": 6,
@@ -230,7 +190,7 @@
       "densityRatio": 1.2
     },
     {
-      "index": 28,
+      "index": 23,
       "startTime": 34.869,
       "endTime": 35.75,
       "onsetCount": 4,
@@ -238,7 +198,7 @@
       "densityRatio": 0.76
     },
     {
-      "index": 29,
+      "index": 24,
       "startTime": 35.75,
       "endTime": 36.61,
       "onsetCount": 6,
@@ -246,7 +206,7 @@
       "densityRatio": 1.2
     },
     {
-      "index": 30,
+      "index": 25,
       "startTime": 36.61,
       "endTime": 37.48,
       "onsetCount": 4,
@@ -254,7 +214,7 @@
       "densityRatio": 0.8
     },
     {
-      "index": 31,
+      "index": 26,
       "startTime": 37.48,
       "endTime": 38.35,
       "onsetCount": 5,
@@ -262,7 +222,7 @@
       "densityRatio": 1.0
     },
     {
-      "index": 32,
+      "index": 27,
       "startTime": 38.35,
       "endTime": 39.22,
       "onsetCount": 4,
@@ -270,7 +230,7 @@
       "densityRatio": 0.84
     },
     {
-      "index": 33,
+      "index": 28,
       "startTime": 39.22,
       "endTime": 40.09,
       "onsetCount": 6,
@@ -278,7 +238,7 @@
       "densityRatio": 1.26
     },
     {
-      "index": 34,
+      "index": 29,
       "startTime": 40.09,
       "endTime": 40.96,
       "onsetCount": 4,
@@ -286,7 +246,7 @@
       "densityRatio": 0.84
     },
     {
-      "index": 35,
+      "index": 30,
       "startTime": 40.96,
       "endTime": 41.835,
       "onsetCount": 4,
@@ -294,7 +254,7 @@
       "densityRatio": 0.84
     },
     {
-      "index": 36,
+      "index": 31,
       "startTime": 41.835,
       "endTime": 42.7,
       "onsetCount": 4,
@@ -302,7 +262,7 @@
       "densityRatio": 0.89
     },
     {
-      "index": 37,
+      "index": 32,
       "startTime": 42.7,
       "endTime": 43.57,
       "onsetCount": 6,
@@ -310,7 +270,7 @@
       "densityRatio": 1.33
     },
     {
-      "index": 38,
+      "index": 33,
       "startTime": 43.57,
       "endTime": 44.44,
       "onsetCount": 6,
@@ -318,7 +278,7 @@
       "densityRatio": 1.33
     },
     {
-      "index": 39,
+      "index": 34,
       "startTime": 44.44,
       "endTime": 45.31,
       "onsetCount": 5,
@@ -326,7 +286,7 @@
       "densityRatio": 1.0
     },
     {
-      "index": 40,
+      "index": 35,
       "startTime": 45.31,
       "endTime": 47.05,
       "onsetCount": 11,
@@ -334,7 +294,7 @@
       "densityRatio": 2.1
     },
     {
-      "index": 41,
+      "index": 36,
       "startTime": 47.05,
       "endTime": 47.92,
       "onsetCount": 6,
@@ -342,7 +302,7 @@
       "densityRatio": 0.86
     },
     {
-      "index": 42,
+      "index": 37,
       "startTime": 47.92,
       "endTime": 48.79,
       "onsetCount": 6,
@@ -350,7 +310,7 @@
       "densityRatio": 0.86
     },
     {
-      "index": 43,
+      "index": 38,
       "startTime": 48.79,
       "endTime": 50.53,
       "onsetCount": 12,
@@ -358,7 +318,7 @@
       "densityRatio": 1.71
     },
     {
-      "index": 44,
+      "index": 39,
       "startTime": 50.53,
       "endTime": 52.26,
       "onsetCount": 10,
@@ -366,7 +326,7 @@
       "densityRatio": 1.14
     },
     {
-      "index": 45,
+      "index": 40,
       "startTime": 52.26,
       "endTime": 54.0,
       "onsetCount": 10,
@@ -374,7 +334,7 @@
       "densityRatio": 1.18
     },
     {
-      "index": 46,
+      "index": 41,
       "startTime": 54.0,
       "endTime": 55.74,
       "onsetCount": 8,
@@ -382,7 +342,7 @@
       "densityRatio": 0.84
     },
     {
-      "index": 47,
+      "index": 42,
       "startTime": 55.74,
       "endTime": 57.48,
       "onsetCount": 9,
@@ -390,7 +350,7 @@
       "densityRatio": 0.9
     },
     {
-      "index": 48,
+      "index": 43,
       "startTime": 57.48,
       "endTime": 59.22,
       "onsetCount": 6,
@@ -398,7 +358,7 @@
       "densityRatio": 0.65
     },
     {
-      "index": 49,
+      "index": 44,
       "startTime": 59.22,
       "endTime": 60.09,
       "onsetCount": 3,
@@ -406,7 +366,7 @@
       "densityRatio": 0.36
     },
     {
-      "index": 50,
+      "index": 45,
       "startTime": 60.09,
       "endTime": 60.96,
       "onsetCount": 4,
@@ -414,7 +374,7 @@
       "densityRatio": 0.62
     },
     {
-      "index": 51,
+      "index": 46,
       "startTime": 60.96,
       "endTime": 61.83,
       "onsetCount": 3,
@@ -422,7 +382,7 @@
       "densityRatio": 0.55
     },
     {
-      "index": 52,
+      "index": 47,
       "startTime": 61.83,
       "endTime": 62.7,
       "onsetCount": 5,
@@ -430,7 +390,7 @@
       "densityRatio": 1.25
     },
     {
-      "index": 53,
+      "index": 48,
       "startTime": 62.7,
       "endTime": 63.57,
       "onsetCount": 4,
@@ -438,7 +398,7 @@
       "densityRatio": 1.07
     },
     {
-      "index": 54,
+      "index": 49,
       "startTime": 63.57,
       "endTime": 64.44,
       "onsetCount": 5,
@@ -446,7 +406,7 @@
       "densityRatio": 1.25
     },
     {
-      "index": 55,
+      "index": 50,
       "startTime": 64.44,
       "endTime": 65.31,
       "onsetCount": 3,
@@ -454,7 +414,7 @@
       "densityRatio": 0.71
     },
     {
-      "index": 56,
+      "index": 51,
       "startTime": 65.31,
       "endTime": 66.18,
       "onsetCount": 5,
@@ -462,7 +422,7 @@
       "densityRatio": 1.18
     },
     {
-      "index": 57,
+      "index": 52,
       "startTime": 66.18,
       "endTime": 67.05,
       "onsetCount": 4,
@@ -470,7 +430,7 @@
       "densityRatio": 0.94
     },
     {
-      "index": 58,
+      "index": 53,
       "startTime": 67.05,
       "endTime": 67.92,
       "onsetCount": 4,
@@ -478,7 +438,7 @@
       "densityRatio": 0.94
     },
     {
-      "index": 59,
+      "index": 54,
       "startTime": 67.92,
       "endTime": 68.79,
       "onsetCount": 3,
@@ -486,7 +446,7 @@
       "densityRatio": 0.75
     },
     {
-      "index": 60,
+      "index": 55,
       "startTime": 68.79,
       "endTime": 69.66,
       "onsetCount": 3,
@@ -494,7 +454,7 @@
       "densityRatio": 0.75
     },
     {
-      "index": 61,
+      "index": 56,
       "startTime": 69.66,
       "endTime": 71.394,
       "onsetCount": 7,
@@ -502,7 +462,7 @@
       "densityRatio": 2.0
     },
     {
-      "index": 62,
+      "index": 57,
       "startTime": 71.394,
       "endTime": 72.27,
       "onsetCount": 5,
@@ -510,7 +470,7 @@
       "densityRatio": 1.18
     },
     {
-      "index": 63,
+      "index": 58,
       "startTime": 72.27,
       "endTime": 73.14,
       "onsetCount": 6,
@@ -518,7 +478,7 @@
       "densityRatio": 1.33
     },
     {
-      "index": 64,
+      "index": 59,
       "startTime": 73.14,
       "endTime": 74.01,
       "onsetCount": 3,
@@ -526,7 +486,7 @@
       "densityRatio": 0.57
     },
     {
-      "index": 65,
+      "index": 60,
       "startTime": 74.01,
       "endTime": 74.88,
       "onsetCount": 6,
@@ -534,7 +494,7 @@
       "densityRatio": 1.14
     },
     {
-      "index": 66,
+      "index": 61,
       "startTime": 74.88,
       "endTime": 76.61,
       "onsetCount": 10,
@@ -542,7 +502,7 @@
       "densityRatio": 2.0
     },
     {
-      "index": 67,
+      "index": 62,
       "startTime": 76.61,
       "endTime": 78.35,
       "onsetCount": 8,
@@ -550,7 +510,7 @@
       "densityRatio": 1.28
     },
     {
-      "index": 68,
+      "index": 63,
       "startTime": 78.35,
       "endTime": 80.09,
       "onsetCount": 10,
@@ -558,7 +518,7 @@
       "densityRatio": 1.48
     },
     {
-      "index": 69,
+      "index": 64,
       "startTime": 80.09,
       "endTime": 81.83,
       "onsetCount": 8,
@@ -566,7 +526,7 @@
       "densityRatio": 0.94
     },
     {
-      "index": 70,
+      "index": 65,
       "startTime": 81.83,
       "endTime": 83.57,
       "onsetCount": 10,
@@ -574,7 +534,7 @@
       "densityRatio": 1.11
     },
     {
-      "index": 71,
+      "index": 66,
       "startTime": 83.57,
       "endTime": 85.31,
       "onsetCount": 6,
@@ -582,7 +542,7 @@
       "densityRatio": 0.67
     },
     {
-      "index": 72,
+      "index": 67,
       "startTime": 85.31,
       "endTime": 87.05,
       "onsetCount": 8,
@@ -590,7 +550,7 @@
       "densityRatio": 0.94
     },
     {
-      "index": 73,
+      "index": 68,
       "startTime": 87.05,
       "endTime": 88.79,
       "onsetCount": 8,
@@ -598,7 +558,7 @@
       "densityRatio": 1.0
     },
     {
-      "index": 74,
+      "index": 69,
       "startTime": 88.79,
       "endTime": 90.527,
       "onsetCount": 9,
@@ -606,7 +566,7 @@
       "densityRatio": 1.12
     },
     {
-      "index": 75,
+      "index": 70,
       "startTime": 90.527,
       "endTime": 92.268,
       "onsetCount": 8,
@@ -614,7 +574,7 @@
       "densityRatio": 1.03
     },
     {
-      "index": 76,
+      "index": 71,
       "startTime": 92.268,
       "endTime": 94.0,
       "onsetCount": 8,
@@ -622,39 +582,31 @@
       "densityRatio": 0.97
     },
     {
-      "index": 77,
+      "index": 72,
       "startTime": 94.0,
-      "endTime": 94.01,
-      "onsetCount": 0,
-      "isFill": false,
-      "densityRatio": 0.0
-    },
-    {
-      "index": 78,
-      "startTime": 94.01,
       "endTime": 95.75,
       "onsetCount": 6,
       "isFill": false,
-      "densityRatio": 0.96
+      "densityRatio": 0.73
     },
     {
-      "index": 79,
+      "index": 73,
       "startTime": 95.75,
       "endTime": 97.49,
       "onsetCount": 8,
       "isFill": false,
-      "densityRatio": 1.45
+      "densityRatio": 1.03
     },
     {
-      "index": 80,
+      "index": 74,
       "startTime": 97.49,
       "endTime": 99.2,
       "onsetCount": 1,
       "isFill": false,
-      "densityRatio": 0.18
+      "densityRatio": 0.13
     },
     {
-      "index": 81,
+      "index": 75,
       "startTime": 99.2,
       "endTime": 100.92,
       "onsetCount": 0,
@@ -662,7 +614,7 @@
       "densityRatio": 0.0
     },
     {
-      "index": 82,
+      "index": 76,
       "startTime": 100.92,
       "endTime": 102.72,
       "onsetCount": 0,
@@ -670,9 +622,9 @@
       "densityRatio": 0.0
     },
     {
-      "index": 83,
+      "index": 77,
       "startTime": 102.72,
-      "endTime": 103.957,
+      "endTime": 104.053,
       "onsetCount": 0,
       "isFill": false,
       "densityRatio": 0.0
@@ -680,7 +632,7 @@
   ],
   "fills": [
     {
-      "barIndex": 40,
+      "barIndex": 35,
       "startTime": 45.31,
       "endTime": 47.05,
       "densityRatio": 2.1
@@ -690,26 +642,38 @@
   "sections": [
     {
       "startBar": 0,
-      "endBar": 39,
-      "avgDensity": 6.15,
+      "endBar": 31,
+      "avgDensity": 7.16,
       "label": "dense_A"
     },
     {
-      "startBar": 40,
-      "endBar": 47,
-      "avgDensity": 9.0,
+      "startBar": 32,
+      "endBar": 43,
+      "avgDensity": 7.92,
       "label": "dense_A"
     },
     {
-      "startBar": 48,
-      "endBar": 79,
-      "avgDensity": 5.81,
+      "startBar": 44,
+      "endBar": 59,
+      "avgDensity": 4.19,
+      "label": "moderate"
+    },
+    {
+      "startBar": 60,
+      "endBar": 71,
+      "avgDensity": 8.25,
       "label": "dense_A"
     },
     {
-      "startBar": 80,
-      "endBar": 83,
-      "avgDensity": 0.25,
+      "startBar": 72,
+      "endBar": 75,
+      "avgDensity": 3.75,
+      "label": "moderate"
+    },
+    {
+      "startBar": 76,
+      "endBar": 77,
+      "avgDensity": 0.0,
       "label": "sparse"
     }
   ],
@@ -742,7 +706,7 @@
         10,
         11
       ],
-      "similarity": 0.947
+      "similarity": 0.994
     },
     {
       "firstBars": [
@@ -757,7 +721,7 @@
         14,
         15
       ],
-      "similarity": 0.954
+      "similarity": 0.973
     },
     {
       "firstBars": [
@@ -771,6 +735,96 @@
         17,
         18,
         19
+      ],
+      "similarity": 0.867
+    },
+    {
+      "firstBars": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "repeatBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "similarity": 0.915
+    },
+    {
+      "firstBars": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "repeatBars": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "similarity": 0.924
+    },
+    {
+      "firstBars": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "repeatBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "similarity": 0.927
+    },
+    {
+      "firstBars": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "repeatBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "similarity": 0.944
+    },
+    {
+      "firstBars": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "repeatBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "similarity": 0.916
+    },
+    {
+      "firstBars": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "repeatBars": [
+        40,
+        41,
+        42,
+        43
       ],
       "similarity": 0.933
     },
@@ -782,102 +836,12 @@
         3
       ],
       "repeatBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "similarity": 0.936
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "similarity": 0.988
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "similarity": 0.998
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "similarity": 0.992
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "similarity": 0.983
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "similarity": 0.907
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
         44,
         45,
         46,
         47
       ],
-      "similarity": 0.976
+      "similarity": 0.984
     },
     {
       "firstBars": [
@@ -892,7 +856,7 @@
         50,
         51
       ],
-      "similarity": 0.875
+      "similarity": 0.988
     },
     {
       "firstBars": [
@@ -907,7 +871,7 @@
         54,
         55
       ],
-      "similarity": 0.927
+      "similarity": 0.968
     },
     {
       "firstBars": [
@@ -922,7 +886,7 @@
         58,
         59
       ],
-      "similarity": 0.937
+      "similarity": 0.898
     },
     {
       "firstBars": [
@@ -937,7 +901,7 @@
         62,
         63
       ],
-      "similarity": 0.996
+      "similarity": 0.995
     },
     {
       "firstBars": [
@@ -952,7 +916,7 @@
         66,
         67
       ],
-      "similarity": 0.923
+      "similarity": 0.988
     },
     {
       "firstBars": [
@@ -967,22 +931,7 @@
         70,
         71
       ],
-      "similarity": 0.927
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.968
+      "similarity": 0.982
     },
     {
       "firstBars": [
@@ -997,7 +946,7 @@
         10,
         11
       ],
-      "similarity": 0.897
+      "similarity": 0.991
     },
     {
       "firstBars": [
@@ -1012,7 +961,7 @@
         14,
         15
       ],
-      "similarity": 0.907
+      "similarity": 0.99
     },
     {
       "firstBars": [
@@ -1027,7 +976,7 @@
         18,
         19
       ],
-      "similarity": 0.874
+      "similarity": 0.924
     },
     {
       "firstBars": [
@@ -1042,7 +991,7 @@
         22,
         23
       ],
-      "similarity": 0.926
+      "similarity": 0.965
     },
     {
       "firstBars": [
@@ -1057,7 +1006,7 @@
         26,
         27
       ],
-      "similarity": 0.99
+      "similarity": 0.968
     },
     {
       "firstBars": [
@@ -1072,7 +1021,7 @@
         30,
         31
       ],
-      "similarity": 0.988
+      "similarity": 0.965
     },
     {
       "firstBars": [
@@ -1086,96 +1035,6 @@
         33,
         34,
         35
-      ],
-      "similarity": 0.978
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "similarity": 0.99
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "similarity": 0.953
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "similarity": 0.989
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "similarity": 0.93
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "similarity": 0.963
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        56,
-        57,
-        58,
-        59
       ],
       "similarity": 0.966
     },
@@ -1187,12 +1046,102 @@
         7
       ],
       "repeatBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "similarity": 0.967
+    },
+    {
+      "firstBars": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "repeatBars": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "similarity": 0.966
+    },
+    {
+      "firstBars": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "repeatBars": [
+        44,
+        45,
+        46,
+        47
+      ],
+      "similarity": 0.989
+    },
+    {
+      "firstBars": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "repeatBars": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "similarity": 0.985
+    },
+    {
+      "firstBars": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "repeatBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "similarity": 0.977
+    },
+    {
+      "firstBars": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "repeatBars": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "similarity": 0.936
+    },
+    {
+      "firstBars": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "repeatBars": [
         60,
         61,
         62,
         63
       ],
-      "similarity": 0.976
+      "similarity": 0.992
     },
     {
       "firstBars": [
@@ -1207,7 +1156,7 @@
         66,
         67
       ],
-      "similarity": 0.952
+      "similarity": 0.981
     },
     {
       "firstBars": [
@@ -1222,37 +1171,7 @@
         70,
         71
       ],
-      "similarity": 0.963
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
       "similarity": 0.995
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.856
     },
     {
       "firstBars": [
@@ -1267,7 +1186,7 @@
         14,
         15
       ],
-      "similarity": 0.963
+      "similarity": 0.988
     },
     {
       "firstBars": [
@@ -1281,6 +1200,66 @@
         17,
         18,
         19
+      ],
+      "similarity": 0.886
+    },
+    {
+      "firstBars": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "repeatBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "similarity": 0.945
+    },
+    {
+      "firstBars": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "repeatBars": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "similarity": 0.947
+    },
+    {
+      "firstBars": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "repeatBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "similarity": 0.941
+    },
+    {
+      "firstBars": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "repeatBars": [
+        32,
+        33,
+        34,
+        35
       ],
       "similarity": 0.938
     },
@@ -1292,72 +1271,12 @@
         11
       ],
       "repeatBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "similarity": 0.952
-    },
-    {
-      "firstBars": [
-        8,
-        9,
-        10,
-        11
-      ],
-      "repeatBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "similarity": 0.95
-    },
-    {
-      "firstBars": [
-        8,
-        9,
-        10,
-        11
-      ],
-      "repeatBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "similarity": 0.948
-    },
-    {
-      "firstBars": [
-        8,
-        9,
-        10,
-        11
-      ],
-      "repeatBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "similarity": 0.942
-    },
-    {
-      "firstBars": [
-        8,
-        9,
-        10,
-        11
-      ],
-      "repeatBars": [
         36,
         37,
         38,
         39
       ],
-      "similarity": 0.881
+      "similarity": 0.95
     },
     {
       "firstBars": [
@@ -1372,7 +1291,7 @@
         42,
         43
       ],
-      "similarity": 0.874
+      "similarity": 0.955
     },
     {
       "firstBars": [
@@ -1387,7 +1306,7 @@
         46,
         47
       ],
-      "similarity": 0.927
+      "similarity": 0.98
     },
     {
       "firstBars": [
@@ -1402,7 +1321,7 @@
         50,
         51
       ],
-      "similarity": 0.818
+      "similarity": 0.98
     },
     {
       "firstBars": [
@@ -1417,7 +1336,7 @@
         54,
         55
       ],
-      "similarity": 0.835
+      "similarity": 0.973
     },
     {
       "firstBars": [
@@ -1432,7 +1351,7 @@
         58,
         59
       ],
-      "similarity": 0.877
+      "similarity": 0.925
     },
     {
       "firstBars": [
@@ -1447,7 +1366,22 @@
         62,
         63
       ],
-      "similarity": 0.92
+      "similarity": 0.996
+    },
+    {
+      "firstBars": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.983
     },
     {
       "firstBars": [
@@ -1462,22 +1396,7 @@
         70,
         71
       ],
-      "similarity": 0.835
-    },
-    {
-      "firstBars": [
-        8,
-        9,
-        10,
-        11
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.876
+      "similarity": 0.991
     },
     {
       "firstBars": [
@@ -1492,7 +1411,7 @@
         18,
         19
       ],
-      "similarity": 0.995
+      "similarity": 0.938
     },
     {
       "firstBars": [
@@ -1507,7 +1426,7 @@
         22,
         23
       ],
-      "similarity": 0.869
+      "similarity": 0.982
     },
     {
       "firstBars": [
@@ -1522,7 +1441,7 @@
         26,
         27
       ],
-      "similarity": 0.943
+      "similarity": 0.983
     },
     {
       "firstBars": [
@@ -1537,7 +1456,7 @@
         30,
         31
       ],
-      "similarity": 0.943
+      "similarity": 0.976
     },
     {
       "firstBars": [
@@ -1552,7 +1471,7 @@
         34,
         35
       ],
-      "similarity": 0.919
+      "similarity": 0.922
     },
     {
       "firstBars": [
@@ -1567,7 +1486,7 @@
         38,
         39
       ],
-      "similarity": 0.887
+      "similarity": 0.952
     },
     {
       "firstBars": [
@@ -1582,7 +1501,7 @@
         42,
         43
       ],
-      "similarity": 0.867
+      "similarity": 0.989
     },
     {
       "firstBars": [
@@ -1597,7 +1516,37 @@
         46,
         47
       ],
-      "similarity": 0.898
+      "similarity": 0.962
+    },
+    {
+      "firstBars": [
+        12,
+        13,
+        14,
+        15
+      ],
+      "repeatBars": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "similarity": 0.971
+    },
+    {
+      "firstBars": [
+        12,
+        13,
+        14,
+        15
+      ],
+      "repeatBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "similarity": 0.99
     },
     {
       "firstBars": [
@@ -1612,7 +1561,7 @@
         58,
         59
       ],
-      "similarity": 0.819
+      "similarity": 0.972
     },
     {
       "firstBars": [
@@ -1627,7 +1576,7 @@
         62,
         63
       ],
-      "similarity": 0.95
+      "similarity": 0.977
     },
     {
       "firstBars": [
@@ -1642,7 +1591,7 @@
         66,
         67
       ],
-      "similarity": 0.821
+      "similarity": 0.982
     },
     {
       "firstBars": [
@@ -1652,12 +1601,12 @@
         15
       ],
       "repeatBars": [
-        72,
-        73,
-        74,
-        75
+        68,
+        69,
+        70,
+        71
       ],
-      "similarity": 0.866
+      "similarity": 0.998
     },
     {
       "firstBars": [
@@ -1671,240 +1620,105 @@
         21,
         22,
         23
-      ],
-      "similarity": 0.818
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "similarity": 0.909
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "similarity": 0.915
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "similarity": 0.887
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "similarity": 0.859
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "similarity": 0.819
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "similarity": 0.855
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "similarity": 0.935
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.806
-    },
-    {
-      "firstBars": [
-        16,
-        17,
-        18,
-        19
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.826
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "similarity": 0.957
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "similarity": 0.953
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "similarity": 0.965
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "similarity": 0.918
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "similarity": 0.906
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        44,
-        45,
-        46,
-        47
       ],
       "similarity": 0.971
     },
     {
       "firstBars": [
-        20,
-        21,
-        22,
-        23
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "similarity": 0.984
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "similarity": 0.99
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "similarity": 0.883
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "similarity": 0.872
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "similarity": 0.969
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        44,
+        45,
+        46,
+        47
+      ],
+      "similarity": 0.891
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
       ],
       "repeatBars": [
         48,
@@ -1912,14 +1726,14 @@
         50,
         51
       ],
-      "similarity": 0.94
+      "similarity": 0.914
     },
     {
       "firstBars": [
-        20,
-        21,
-        22,
-        23
+        16,
+        17,
+        18,
+        19
       ],
       "repeatBars": [
         52,
@@ -1927,14 +1741,14 @@
         54,
         55
       ],
-      "similarity": 0.94
+      "similarity": 0.956
     },
     {
       "firstBars": [
-        20,
-        21,
-        22,
-        23
+        16,
+        17,
+        18,
+        19
       ],
       "repeatBars": [
         56,
@@ -1946,6 +1760,186 @@
     },
     {
       "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "similarity": 0.876
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.924
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
+        68,
+        69,
+        70,
+        71
+      ],
+      "similarity": 0.938
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "similarity": 0.996
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "similarity": 0.984
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "similarity": 0.89
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "similarity": 0.949
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "similarity": 0.994
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        44,
+        45,
+        46,
+        47
+      ],
+      "similarity": 0.919
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "similarity": 0.928
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "similarity": 0.971
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "similarity": 0.989
+    },
+    {
+      "firstBars": [
         20,
         21,
         22,
@@ -1957,7 +1951,22 @@
         62,
         63
       ],
-      "similarity": 0.901
+      "similarity": 0.928
+    },
+    {
+      "firstBars": [
+        20,
+        21,
+        22,
+        23
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.941
     },
     {
       "firstBars": [
@@ -1971,66 +1980,6 @@
         69,
         70,
         71
-      ],
-      "similarity": 0.94
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.935
-    },
-    {
-      "firstBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "repeatBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "similarity": 0.995
-    },
-    {
-      "firstBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "repeatBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "similarity": 0.985
-    },
-    {
-      "firstBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "repeatBars": [
-        36,
-        37,
-        38,
-        39
       ],
       "similarity": 0.973
     },
@@ -2042,12 +1991,57 @@
         27
       ],
       "repeatBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "similarity": 0.996
+    },
+    {
+      "firstBars": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "repeatBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "similarity": 0.906
+    },
+    {
+      "firstBars": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "repeatBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "similarity": 0.933
+    },
+    {
+      "firstBars": [
+        24,
+        25,
+        26,
+        27
+      ],
+      "repeatBars": [
         40,
         41,
         42,
         43
       ],
-      "similarity": 0.958
+      "similarity": 0.996
     },
     {
       "firstBars": [
@@ -2062,7 +2056,7 @@
         46,
         47
       ],
-      "similarity": 0.993
+      "similarity": 0.931
     },
     {
       "firstBars": [
@@ -2077,7 +2071,7 @@
         50,
         51
       ],
-      "similarity": 0.922
+      "similarity": 0.946
     },
     {
       "firstBars": [
@@ -2092,7 +2086,7 @@
         54,
         55
       ],
-      "similarity": 0.945
+      "similarity": 0.983
     },
     {
       "firstBars": [
@@ -2107,7 +2101,7 @@
         58,
         59
       ],
-      "similarity": 0.961
+      "similarity": 0.989
     },
     {
       "firstBars": [
@@ -2122,7 +2116,7 @@
         62,
         63
       ],
-      "similarity": 0.974
+      "similarity": 0.934
     },
     {
       "firstBars": [
@@ -2137,7 +2131,7 @@
         66,
         67
       ],
-      "similarity": 0.904
+      "similarity": 0.957
     },
     {
       "firstBars": [
@@ -2152,37 +2146,7 @@
         70,
         71
       ],
-      "similarity": 0.945
-    },
-    {
-      "firstBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
       "similarity": 0.979
-    },
-    {
-      "firstBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.823
     },
     {
       "firstBars": [
@@ -2197,7 +2161,7 @@
         34,
         35
       ],
-      "similarity": 0.996
+      "similarity": 0.916
     },
     {
       "firstBars": [
@@ -2212,7 +2176,7 @@
         38,
         39
       ],
-      "similarity": 0.985
+      "similarity": 0.908
     },
     {
       "firstBars": [
@@ -2226,81 +2190,6 @@
         41,
         42,
         43
-      ],
-      "similarity": 0.926
-    },
-    {
-      "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "similarity": 0.988
-    },
-    {
-      "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "similarity": 0.905
-    },
-    {
-      "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "similarity": 0.946
-    },
-    {
-      "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "similarity": 0.957
-    },
-    {
-      "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
-        60,
-        61,
-        62,
-        63
       ],
       "similarity": 0.989
     },
@@ -2312,12 +2201,12 @@
         31
       ],
       "repeatBars": [
-        64,
-        65,
-        66,
-        67
+        44,
+        45,
+        46,
+        47
       ],
-      "similarity": 0.918
+      "similarity": 0.938
     },
     {
       "firstBars": [
@@ -2325,6 +2214,336 @@
         29,
         30,
         31
+      ],
+      "repeatBars": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "similarity": 0.958
+    },
+    {
+      "firstBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "repeatBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "similarity": 0.988
+    },
+    {
+      "firstBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "repeatBars": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "similarity": 0.98
+    },
+    {
+      "firstBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "repeatBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "similarity": 0.932
+    },
+    {
+      "firstBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.967
+    },
+    {
+      "firstBars": [
+        28,
+        29,
+        30,
+        31
+      ],
+      "repeatBars": [
+        68,
+        69,
+        70,
+        71
+      ],
+      "similarity": 0.977
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "similarity": 0.922
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "similarity": 0.885
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        44,
+        45,
+        46,
+        47
+      ],
+      "similarity": 0.988
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "similarity": 0.97
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "similarity": 0.92
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "similarity": 0.838
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "similarity": 0.962
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.942
+    },
+    {
+      "firstBars": [
+        32,
+        33,
+        34,
+        35
+      ],
+      "repeatBars": [
+        68,
+        69,
+        70,
+        71
+      ],
+      "similarity": 0.943
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "repeatBars": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "similarity": 0.926
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "repeatBars": [
+        44,
+        45,
+        46,
+        47
+      ],
+      "similarity": 0.937
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "repeatBars": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "similarity": 0.909
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "repeatBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "similarity": 0.907
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "repeatBars": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "similarity": 0.897
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "repeatBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "similarity": 0.948
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.9
+    },
+    {
+      "firstBars": [
+        36,
+        37,
+        38,
+        39
       ],
       "repeatBars": [
         68,
@@ -2336,351 +2555,51 @@
     },
     {
       "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.979
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "similarity": 0.985
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
         40,
         41,
         42,
         43
-      ],
-      "similarity": 0.903
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
       ],
       "repeatBars": [
         44,
         45,
         46,
         47
+      ],
+      "similarity": 0.924
+    },
+    {
+      "firstBars": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "repeatBars": [
+        48,
+        49,
+        50,
+        51
+      ],
+      "similarity": 0.944
+    },
+    {
+      "firstBars": [
+        40,
+        41,
+        42,
+        43
+      ],
+      "repeatBars": [
+        52,
+        53,
+        54,
+        55
       ],
       "similarity": 0.987
     },
     {
       "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "similarity": 0.913
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "similarity": 0.958
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "similarity": 0.967
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "similarity": 0.98
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.906
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        68,
-        69,
-        70,
-        71
-      ],
-      "similarity": 0.958
-    },
-    {
-      "firstBars": [
-        32,
-        33,
-        34,
-        35
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.977
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "similarity": 0.902
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "similarity": 0.977
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "similarity": 0.911
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "similarity": 0.967
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "similarity": 0.961
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "similarity": 0.983
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.963
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        68,
-        69,
-        70,
-        71
-      ],
-      "similarity": 0.967
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.991
-    },
-    {
-      "firstBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "repeatBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "similarity": 0.956
-    },
-    {
-      "firstBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "repeatBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "similarity": 0.938
-    },
-    {
-      "firstBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "repeatBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "similarity": 0.912
-    },
-    {
-      "firstBars": [
         40,
         41,
         42,
@@ -2692,7 +2611,7 @@
         58,
         59
       ],
-      "similarity": 0.932
+      "similarity": 0.995
     },
     {
       "firstBars": [
@@ -2707,7 +2626,7 @@
         62,
         63
       ],
-      "similarity": 0.884
+      "similarity": 0.937
     },
     {
       "firstBars": [
@@ -2722,7 +2641,7 @@
         66,
         67
       ],
-      "similarity": 0.848
+      "similarity": 0.962
     },
     {
       "firstBars": [
@@ -2737,37 +2656,7 @@
         70,
         71
       ],
-      "similarity": 0.912
-    },
-    {
-      "firstBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.943
-    },
-    {
-      "firstBars": [
-        40,
-        41,
-        42,
-        43
-      ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.936
+      "similarity": 0.982
     },
     {
       "firstBars": [
@@ -2782,7 +2671,7 @@
         50,
         51
       ],
-      "similarity": 0.959
+      "similarity": 0.992
     },
     {
       "firstBars": [
@@ -2796,36 +2685,6 @@
         53,
         54,
         55
-      ],
-      "similarity": 0.976
-    },
-    {
-      "firstBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "repeatBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "similarity": 0.987
-    },
-    {
-      "firstBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "repeatBars": [
-        60,
-        61,
-        62,
-        63
       ],
       "similarity": 0.957
     },
@@ -2837,12 +2696,42 @@
         47
       ],
       "repeatBars": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "similarity": 0.883
+    },
+    {
+      "firstBars": [
+        44,
+        45,
+        46,
+        47
+      ],
+      "repeatBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "similarity": 0.992
+    },
+    {
+      "firstBars": [
+        44,
+        45,
+        46,
+        47
+      ],
+      "repeatBars": [
         64,
         65,
         66,
         67
       ],
-      "similarity": 0.901
+      "similarity": 0.978
     },
     {
       "firstBars": [
@@ -2857,37 +2746,7 @@
         70,
         71
       ],
-      "similarity": 0.976
-    },
-    {
-      "firstBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.991
-    },
-    {
-      "firstBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.841
+      "similarity": 0.977
     },
     {
       "firstBars": [
@@ -2916,120 +2775,30 @@
         57,
         58,
         59
-      ],
-      "similarity": 0.986
-    },
-    {
-      "firstBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "repeatBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "similarity": 0.844
-    },
-    {
-      "firstBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.827
-    },
-    {
-      "firstBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "repeatBars": [
-        68,
-        69,
-        70,
-        71
-      ],
-      "similarity": 0.98
-    },
-    {
-      "firstBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.955
-    },
-    {
-      "firstBars": [
-        48,
-        49,
-        50,
-        51
-      ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.896
-    },
-    {
-      "firstBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "repeatBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "similarity": 0.995
-    },
-    {
-      "firstBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "repeatBars": [
-        60,
-        61,
-        62,
-        63
       ],
       "similarity": 0.91
     },
     {
       "firstBars": [
-        52,
-        53,
-        54,
-        55
+        48,
+        49,
+        50,
+        51
+      ],
+      "repeatBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "similarity": 0.987
+    },
+    {
+      "firstBars": [
+        48,
+        49,
+        50,
+        51
       ],
       "repeatBars": [
         64,
@@ -3037,35 +2806,20 @@
         66,
         67
       ],
-      "similarity": 0.903
+      "similarity": 0.995
     },
     {
       "firstBars": [
-        52,
-        53,
-        54,
-        55
+        48,
+        49,
+        50,
+        51
       ],
       "repeatBars": [
         68,
         69,
         70,
         71
-      ],
-      "similarity": 1.0
-    },
-    {
-      "firstBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
       ],
       "similarity": 0.985
     },
@@ -3077,12 +2831,72 @@
         55
       ],
       "repeatBars": [
-        76,
-        77,
-        78,
-        79
+        56,
+        57,
+        58,
+        59
       ],
-      "similarity": 0.848
+      "similarity": 0.972
+    },
+    {
+      "firstBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "repeatBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "similarity": 0.963
+    },
+    {
+      "firstBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.992
+    },
+    {
+      "firstBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "repeatBars": [
+        68,
+        69,
+        70,
+        71
+      ],
+      "similarity": 0.993
+    },
+    {
+      "firstBars": [
+        52,
+        53,
+        54,
+        55
+      ],
+      "repeatBars": [
+        72,
+        73,
+        74,
+        75
+      ],
+      "similarity": 0.83
     },
     {
       "firstBars": [
@@ -3097,7 +2911,7 @@
         62,
         63
       ],
-      "similarity": 0.914
+      "similarity": 0.9
     },
     {
       "firstBars": [
@@ -3112,7 +2926,7 @@
         66,
         67
       ],
-      "similarity": 0.877
+      "similarity": 0.937
     },
     {
       "firstBars": [
@@ -3126,105 +2940,15 @@
         69,
         70,
         71
-      ],
-      "similarity": 0.995
-    },
-    {
-      "firstBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
-      ],
-      "similarity": 0.983
-    },
-    {
-      "firstBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.846
-    },
-    {
-      "firstBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.945
-    },
-    {
-      "firstBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "repeatBars": [
-        68,
-        69,
-        70,
-        71
-      ],
-      "similarity": 0.91
-    },
-    {
-      "firstBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
       ],
       "similarity": 0.96
     },
     {
       "firstBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "repeatBars": [
-        68,
-        69,
-        70,
-        71
-      ],
-      "similarity": 0.903
-    },
-    {
-      "firstBars": [
-        64,
-        65,
-        66,
-        67
+        56,
+        57,
+        58,
+        59
       ],
       "repeatBars": [
         72,
@@ -3232,52 +2956,67 @@
         74,
         75
       ],
-      "similarity": 0.946
+      "similarity": 0.803
     },
     {
       "firstBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "repeatBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "similarity": 0.981
+    },
+    {
+      "firstBars": [
+        60,
+        61,
+        62,
+        63
+      ],
+      "repeatBars": [
         68,
         69,
         70,
         71
-      ],
-      "repeatBars": [
-        72,
-        73,
-        74,
-        75
       ],
       "similarity": 0.985
     },
     {
       "firstBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "repeatBars": [
         68,
         69,
         70,
         71
       ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.848
+      "similarity": 0.991
     },
     {
       "firstBars": [
+        64,
+        65,
+        66,
+        67
+      ],
+      "repeatBars": [
         72,
         73,
         74,
         75
       ],
-      "repeatBars": [
-        76,
-        77,
-        78,
-        79
-      ],
-      "similarity": 0.86
+      "similarity": 0.821
     }
   ]
 }

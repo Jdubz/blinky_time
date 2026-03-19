@@ -218,7 +218,16 @@ def process_track(track_name, music_dir, manifest_entry):
         print(f"  SKIP {track_name}: insufficient downbeats ({len(bar_starts)})")
         return None
 
-    # Compute bar period
+    # Filter out short bars from downbeat label jitter (< 50% of median IBI)
+    bar_ibis_raw = [bar_starts[i + 1] - bar_starts[i] for i in range(len(bar_starts) - 1)]
+    median_ibi = sorted(bar_ibis_raw)[len(bar_ibis_raw) // 2]
+    min_bar_dur = median_ibi * 0.5
+    bar_starts = [bar_starts[0]] + [
+        bar_starts[i + 1] for i in range(len(bar_starts) - 1)
+        if bar_ibis_raw[i] >= min_bar_dur
+    ]
+
+    # Compute bar period (barPeriodMs = mean inter-downbeat interval, not necessarily 4 beats)
     bar_ibis = [bar_starts[i + 1] - bar_starts[i] for i in range(len(bar_starts) - 1)]
     bar_period_ms = (sum(bar_ibis) / len(bar_ibis)) * 1000.0
 

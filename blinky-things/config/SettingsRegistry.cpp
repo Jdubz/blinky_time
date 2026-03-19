@@ -403,7 +403,7 @@ void SettingsRegistry::printCategories() {
 
     static constexpr uint8_t MAX_CATEGORIES = 16;
     const char* categories[MAX_CATEGORIES];
-    uint8_t counts[16] = {0};
+    uint8_t counts[MAX_CATEGORIES] = {0};
     uint8_t numCategories = 0;
 
     for (uint8_t i = 0; i < numSettings_; i++) {

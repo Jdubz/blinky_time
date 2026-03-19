@@ -2,8 +2,8 @@
   "track": "techno-minimal-emotion",
   "groundTruthBpm": 128.9,
   "duration": 120.08,
-  "barCount": 71,
-  "barPeriodMs": 1694.2,
+  "barCount": 65,
+  "barPeriodMs": 1838.4,
   "bars": [
     {
       "index": 0,
@@ -480,98 +480,50 @@
     {
       "index": 59,
       "startTime": 107.86,
-      "endTime": 108.785,
-      "onsetCount": 7,
+      "endTime": 110.66,
+      "onsetCount": 19,
       "isFill": false,
-      "densityRatio": 0.61
+      "densityRatio": 1.65
     },
     {
       "index": 60,
-      "startTime": 108.785,
-      "endTime": 110.66,
-      "onsetCount": 12,
-      "isFill": false,
-      "densityRatio": 1.2
-    },
-    {
-      "index": 61,
       "startTime": 110.66,
       "endTime": 112.54,
       "onsetCount": 12,
       "isFill": false,
-      "densityRatio": 1.26
+      "densityRatio": 0.92
     },
     {
-      "index": 62,
+      "index": 61,
       "startTime": 112.54,
       "endTime": 113.48,
       "onsetCount": 7,
       "isFill": false,
-      "densityRatio": 0.72
+      "densityRatio": 0.56
+    },
+    {
+      "index": 62,
+      "startTime": 113.48,
+      "endTime": 115.82,
+      "onsetCount": 18,
+      "isFill": false,
+      "densityRatio": 1.57
     },
     {
       "index": 63,
-      "startTime": 113.48,
-      "endTime": 114.41,
-      "onsetCount": 8,
+      "startTime": 115.82,
+      "endTime": 117.7,
+      "onsetCount": 14,
       "isFill": false,
-      "densityRatio": 0.84
+      "densityRatio": 1.0
     },
     {
       "index": 64,
-      "startTime": 114.41,
-      "endTime": 115.82,
-      "onsetCount": 10,
-      "isFill": false,
-      "densityRatio": 1.03
-    },
-    {
-      "index": 65,
-      "startTime": 115.82,
-      "endTime": 116.285,
-      "onsetCount": 4,
-      "isFill": false,
-      "densityRatio": 0.43
-    },
-    {
-      "index": 66,
-      "startTime": 116.285,
-      "endTime": 116.75,
-      "onsetCount": 4,
-      "isFill": false,
-      "densityRatio": 0.55
-    },
-    {
-      "index": 67,
-      "startTime": 116.75,
-      "endTime": 117.7,
-      "onsetCount": 6,
-      "isFill": false,
-      "densityRatio": 0.92
-    },
-    {
-      "index": 68,
       "startTime": 117.7,
-      "endTime": 118.16,
-      "onsetCount": 4,
+      "endTime": 119.538,
+      "onsetCount": 12,
       "isFill": false,
-      "densityRatio": 0.67
-    },
-    {
-      "index": 69,
-      "startTime": 118.16,
-      "endTime": 118.631,
-      "onsetCount": 3,
-      "isFill": false,
-      "densityRatio": 0.67
-    },
-    {
-      "index": 70,
-      "startTime": 118.631,
-      "endTime": 120.085,
-      "onsetCount": 6,
-      "isFill": false,
-      "densityRatio": 1.41
+      "densityRatio": 0.94
     }
   ],
   "fills": [
@@ -598,8 +550,8 @@
     },
     {
       "startBar": 52,
-      "endBar": 70,
-      "avgDensity": 9.32,
+      "endBar": 64,
+      "avgDensity": 13.54,
       "label": "dense_A"
     }
   ],
@@ -812,7 +764,7 @@
         58,
         59
       ],
-      "similarity": 0.964
+      "similarity": 0.954
     },
     {
       "firstBars": [
@@ -827,22 +779,7 @@
         62,
         63
       ],
-      "similarity": 0.974
-    },
-    {
-      "firstBars": [
-        0,
-        1,
-        2,
-        3
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.926
+      "similarity": 0.955
     },
     {
       "firstBars": [
@@ -1037,7 +974,7 @@
         58,
         59
       ],
-      "similarity": 0.958
+      "similarity": 0.944
     },
     {
       "firstBars": [
@@ -1053,21 +990,6 @@
         63
       ],
       "similarity": 0.965
-    },
-    {
-      "firstBars": [
-        4,
-        5,
-        6,
-        7
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.916
     },
     {
       "firstBars": [
@@ -1247,7 +1169,7 @@
         58,
         59
       ],
-      "similarity": 0.971
+      "similarity": 0.975
     },
     {
       "firstBars": [
@@ -1262,22 +1184,7 @@
         62,
         63
       ],
-      "similarity": 0.986
-    },
-    {
-      "firstBars": [
-        8,
-        9,
-        10,
-        11
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.942
+      "similarity": 0.914
     },
     {
       "firstBars": [
@@ -1442,7 +1349,7 @@
         58,
         59
       ],
-      "similarity": 0.963
+      "similarity": 0.808
     },
     {
       "firstBars": [
@@ -1457,22 +1364,7 @@
         62,
         63
       ],
-      "similarity": 0.949
-    },
-    {
-      "firstBars": [
-        12,
-        13,
-        14,
-        15
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.869
+      "similarity": 0.878
     },
     {
       "firstBars": [
@@ -1602,12 +1494,27 @@
         19
       ],
       "repeatBars": [
+        56,
+        57,
+        58,
+        59
+      ],
+      "similarity": 0.887
+    },
+    {
+      "firstBars": [
+        16,
+        17,
+        18,
+        19
+      ],
+      "repeatBars": [
         60,
         61,
         62,
         63
       ],
-      "similarity": 0.838
+      "similarity": 0.926
     },
     {
       "firstBars": [
@@ -1742,7 +1649,7 @@
         58,
         59
       ],
-      "similarity": 0.966
+      "similarity": 0.937
     },
     {
       "firstBars": [
@@ -1757,22 +1664,7 @@
         62,
         63
       ],
-      "similarity": 0.974
-    },
-    {
-      "firstBars": [
-        20,
-        21,
-        22,
-        23
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.914
+      "similarity": 0.951
     },
     {
       "firstBars": [
@@ -1892,7 +1784,7 @@
         58,
         59
       ],
-      "similarity": 0.97
+      "similarity": 0.955
     },
     {
       "firstBars": [
@@ -1907,22 +1799,7 @@
         62,
         63
       ],
-      "similarity": 0.977
-    },
-    {
-      "firstBars": [
-        24,
-        25,
-        26,
-        27
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.935
+      "similarity": 0.954
     },
     {
       "firstBars": [
@@ -2022,42 +1899,12 @@
         31
       ],
       "repeatBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "similarity": 0.95
-    },
-    {
-      "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
         60,
         61,
         62,
         63
       ],
-      "similarity": 0.939
-    },
-    {
-      "firstBars": [
-        28,
-        29,
-        30,
-        31
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.837
+      "similarity": 0.839
     },
     {
       "firstBars": [
@@ -2147,7 +1994,7 @@
         58,
         59
       ],
-      "similarity": 0.852
+      "similarity": 0.918
     },
     {
       "firstBars": [
@@ -2162,7 +2009,7 @@
         62,
         63
       ],
-      "similarity": 0.884
+      "similarity": 0.944
     },
     {
       "firstBars": [
@@ -2237,7 +2084,7 @@
         58,
         59
       ],
-      "similarity": 0.964
+      "similarity": 0.954
     },
     {
       "firstBars": [
@@ -2252,22 +2099,7 @@
         62,
         63
       ],
-      "similarity": 0.974
-    },
-    {
-      "firstBars": [
-        36,
-        37,
-        38,
-        39
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.926
+      "similarity": 0.955
     },
     {
       "firstBars": [
@@ -2327,7 +2159,7 @@
         58,
         59
       ],
-      "similarity": 0.848
+      "similarity": 0.899
     },
     {
       "firstBars": [
@@ -2342,7 +2174,7 @@
         62,
         63
       ],
-      "similarity": 0.884
+      "similarity": 0.928
     },
     {
       "firstBars": [
@@ -2387,7 +2219,7 @@
         58,
         59
       ],
-      "similarity": 0.986
+      "similarity": 0.877
     },
     {
       "firstBars": [
@@ -2402,22 +2234,7 @@
         62,
         63
       ],
-      "similarity": 0.981
-    },
-    {
-      "firstBars": [
-        44,
-        45,
-        46,
-        47
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.911
+      "similarity": 0.9
     },
     {
       "firstBars": [
@@ -2447,7 +2264,7 @@
         58,
         59
       ],
-      "similarity": 0.816
+      "similarity": 0.85
     },
     {
       "firstBars": [
@@ -2462,7 +2279,7 @@
         62,
         63
       ],
-      "similarity": 0.871
+      "similarity": 0.823
     },
     {
       "firstBars": [
@@ -2477,7 +2294,7 @@
         58,
         59
       ],
-      "similarity": 0.975
+      "similarity": 0.929
     },
     {
       "firstBars": [
@@ -2492,22 +2309,7 @@
         62,
         63
       ],
-      "similarity": 0.979
-    },
-    {
-      "firstBars": [
-        52,
-        53,
-        54,
-        55
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.922
+      "similarity": 0.947
     },
     {
       "firstBars": [
@@ -2522,37 +2324,7 @@
         62,
         63
       ],
-      "similarity": 0.992
-    },
-    {
-      "firstBars": [
-        56,
-        57,
-        58,
-        59
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.96
-    },
-    {
-      "firstBars": [
-        60,
-        61,
-        62,
-        63
-      ],
-      "repeatBars": [
-        64,
-        65,
-        66,
-        67
-      ],
-      "similarity": 0.94
+      "similarity": 0.901
     }
   ]
 }
