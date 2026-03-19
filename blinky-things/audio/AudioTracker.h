@@ -182,6 +182,9 @@ public:
     float patternGain = 0.3f;          // Prediction boost strength for onset confidence
     float anticipationGain = 0.1f;     // Energy pre-ramp before predicted onsets
     float patternLookahead = 0.05f;    // Phase lookahead (fraction of beat)
+    float confidenceRise = 0.05f;      // Confidence EMA alpha when rising
+    float confidenceDecay = 0.15f;     // Confidence EMA alpha when falling
+    float histogramMinStrength = 0.5f; // Min onset strength for bar histogram (filters hi-hats)
     bool patternEnabled = true;        // Master enable for A/B testing
 
 private:

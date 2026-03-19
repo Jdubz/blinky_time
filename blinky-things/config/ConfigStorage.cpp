@@ -238,6 +238,9 @@ void ConfigStorage::loadSettingsDefaults() {
     data_.tracker.patternGain = 0.3f;
     data_.tracker.anticipationGain = 0.1f;
     data_.tracker.patternLookahead = 0.05f;
+    data_.tracker.confidenceRise = 0.05f;
+    data_.tracker.confidenceDecay = 0.15f;
+    data_.tracker.histogramMinStrength = 0.5f;
     data_.tracker.patternEnabled = 1;
 
     data_.brightness = 100;
@@ -636,6 +639,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         validateFloat(data_.tracker.patternGain, 0.0f, 1.0f, F("tracker.patGain"));
         validateFloat(data_.tracker.anticipationGain, 0.0f, 0.5f, F("tracker.patAnticipation"));
         validateFloat(data_.tracker.patternLookahead, 0.0f, 0.15f, F("tracker.patLookahead"));
+        validateFloat(data_.tracker.confidenceRise, 0.01f, 0.5f, F("tracker.patRise"));
+        validateFloat(data_.tracker.confidenceDecay, 0.01f, 0.5f, F("tracker.patFall"));
+        validateFloat(data_.tracker.histogramMinStrength, 0.1f, 0.9f, F("tracker.patMinStren"));
 
         // Copy to AudioTracker
         tracker->bpmMin = data_.tracker.bpmMin;
@@ -683,6 +689,9 @@ void ConfigStorage::loadConfiguration(FireParams& fireParams, WaterParams& water
         tracker->patternGain = data_.tracker.patternGain;
         tracker->anticipationGain = data_.tracker.anticipationGain;
         tracker->patternLookahead = data_.tracker.patternLookahead;
+        tracker->confidenceRise = data_.tracker.confidenceRise;
+        tracker->confidenceDecay = data_.tracker.confidenceDecay;
+        tracker->histogramMinStrength = data_.tracker.histogramMinStrength;
         tracker->patternEnabled = (data_.tracker.patternEnabled != 0);
     }
 
@@ -817,6 +826,9 @@ void ConfigStorage::saveConfiguration(const FireParams& fireParams, const WaterP
         data_.tracker.patternGain = tracker->patternGain;
         data_.tracker.anticipationGain = tracker->anticipationGain;
         data_.tracker.patternLookahead = tracker->patternLookahead;
+        data_.tracker.confidenceRise = tracker->confidenceRise;
+        data_.tracker.confidenceDecay = tracker->confidenceDecay;
+        data_.tracker.histogramMinStrength = tracker->histogramMinStrength;
         data_.tracker.patternEnabled = tracker->patternEnabled ? 1 : 0;
     }
 

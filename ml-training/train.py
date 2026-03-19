@@ -326,8 +326,8 @@ def main():
     epochs = args.epochs or cfg["training"]["epochs"]
     batch_size = args.batch_size or cfg["training"]["batch_size"]
     lr = args.lr or cfg["training"]["learning_rate"]
-    beat_pos_weight = cfg["training"]["pos_weight"]
-    downbeat_pos_weight = cfg["training"].get("downbeat_pos_weight", beat_pos_weight * 4)
+    beat_pos_weight = cfg["training"].get("pos_weight", 0)  # 0 = auto-calculate from data
+    downbeat_pos_weight = cfg["training"].get("downbeat_pos_weight", 0)
     use_downbeat = cfg["model"].get("downbeat", False)
 
     if args.device is None or args.device == "auto":
@@ -395,14 +395,33 @@ def main():
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
-    # Diagnostic: measure actual positive ratio for pos_weight verification
+    # Auto-calculate pos_weight from actual data positive ratio.
+    # Manual overrides in config are fragile — the correct value depends entirely
+    # on the label type (consensus beats vs kick-weighted onsets have very different
+    # positive ratios). Auto-calculation is always correct.
     sample_size = min(10000, len(train_ds))
-    y_sample = np.load(data_dir / "Y_train.npy", mmap_mode='r')[:sample_size]
+    y_all = np.load(data_dir / "Y_train.npy", mmap_mode='r')
+    rng = np.random.default_rng(cfg["training"].get("seed", 42))
+    sample_idx = rng.choice(len(y_all), size=sample_size, replace=False)
+    y_sample = y_all[sample_idx]
     pos_ratio_binary = (y_sample > 0.5).mean()
     pos_ratio_mean = y_sample.mean()
-    suggested_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
+    auto_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
+    if beat_pos_weight <= 0:
+        beat_pos_weight = auto_pw
+    if downbeat_pos_weight <= 0:
+        if has_db and db_train_path is not None and Path(db_train_path).exists():
+            y_db_sample = np.load(db_train_path, mmap_mode='r')[:sample_size]
+            db_pos_mean = y_db_sample.mean()
+            downbeat_pos_weight = (1 - db_pos_mean) / max(db_pos_mean, 1e-10)
+            print(f"  Downbeat positive ratio: mean={db_pos_mean:.4f}")
+            print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (auto)")
+        else:
+            # Heuristic: downbeats occur ~1/4 as often as beats
+            downbeat_pos_weight = beat_pos_weight * 4
+            print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (heuristic 4x beat)")
     print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
-    print(f"  Suggested pos_weight: {suggested_pw:.1f} (configured: {beat_pos_weight})")
+    print(f"  pos_weight: {beat_pos_weight:.1f} (auto={auto_pw:.1f})")
 
     num_workers = args.num_workers if args.num_workers is not None else cfg["training"].get("num_workers", 4)
     subsample = args.subsample if args.subsample is not None else cfg["training"].get("subsample", 1.0)
@@ -712,6 +731,10 @@ def main():
         val_loss = 0.0
         val_correct = 0
         val_total = 0
+        # Precision/recall accumulators (interpretable across label types)
+        val_tp = 0
+        val_fp = 0
+        val_fn = 0
 
         with torch.no_grad():
             for X_batch, Y_batch, T_batch in val_loader:
@@ -744,18 +767,31 @@ def main():
                 val_correct += ((Y_pred > 0.5) == (Y_batch > 0.5)).float().sum().item()
                 val_total += Y_batch.numel()
 
+                # Precision/recall on first channel (onset/beat)
+                pred_pos = Y_pred[:, :, 0] > 0.5
+                ref_pos = Y_batch[:, :, 0] > 0.5
+                val_tp += (pred_pos & ref_pos).sum().item()
+                val_fp += (pred_pos & ~ref_pos).sum().item()
+                val_fn += (~pred_pos & ref_pos).sum().item()
+
         val_loss /= len(val_ds)
         val_acc = val_correct / val_total
+        val_precision = val_tp / max(val_tp + val_fp, 1)
+        val_recall = val_tp / max(val_tp + val_fn, 1)
+        val_f1 = 2 * val_precision * val_recall / max(val_precision + val_recall, 1e-10)
 
         epoch_elapsed = time.time() - epoch_start
         current_lr = optimizer.param_groups[0]["lr"]
         print(f"Epoch {epoch+1}/{epochs} - loss: {train_loss:.4f} - acc: {train_acc:.4f} "
-              f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} - lr: {current_lr:.2e} "
-              f"- {epoch_elapsed:.0f}s")
+              f"- val_loss: {val_loss:.4f} - val_acc: {val_acc:.4f} "
+              f"- P: {val_precision:.3f} R: {val_recall:.3f} F1: {val_f1:.3f} "
+              f"- lr: {current_lr:.2e} - {epoch_elapsed:.0f}s")
 
         log_rows.append({
             "epoch": epoch + 1, "loss": train_loss, "binary_accuracy": train_acc,
-            "val_loss": val_loss, "val_binary_accuracy": val_acc, "lr": current_lr,
+            "val_loss": val_loss, "val_binary_accuracy": val_acc,
+            "val_precision": val_precision, "val_recall": val_recall, "val_f1": val_f1,
+            "lr": current_lr,
         })
 
         # Checkpointing
@@ -798,6 +834,9 @@ def main():
     print(f"Best epoch: {best_epoch['epoch']}")
     print(f"  val_loss: {best_epoch['val_loss']:.4f}")
     print(f"  val_binary_accuracy: {best_epoch['val_binary_accuracy']:.4f}")
+    print(f"  val_precision: {best_epoch['val_precision']:.4f}")
+    print(f"  val_recall: {best_epoch['val_recall']:.4f}")
+    print(f"  val_f1: {best_epoch['val_f1']:.4f}")
 
 
 if __name__ == "__main__":
