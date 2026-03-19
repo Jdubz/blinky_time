@@ -361,14 +361,34 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
     audio_gpu = torch.from_numpy(audio_np).to(device)
 
-    # Load beat labels
-    with open(label_path) as f:
-        labels = json.load(f)
-    hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]
-    beat_times = np.array([h["time"] for h in hits])
-    beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
+    # Load labels — either kick-weighted onset labels or consensus beat labels.
+    # Kick-weighted labels teach the model to fire strongly on kicks, moderately
+    # on snares, and not at all on hi-hats (see generate_kick_weighted_targets.py).
+    labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
+    kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
 
-    downbeat_times = np.array([
+    if labels_type == "kick_weighted" and kick_weighted_dir:
+        kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
+        if kw_path.exists():
+            with open(kw_path) as f:
+                kw_data = json.load(f)
+            beat_times = np.array([o["time"] for o in kw_data["onsets"]])
+            beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
+        else:
+            # Fall back to consensus labels if kick-weighted not available
+            with open(label_path) as f:
+                labels = json.load(f)
+            hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]
+            beat_times = np.array([h["time"] for h in hits])
+            beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
+    else:
+        with open(label_path) as f:
+            labels = json.load(f)
+        hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]
+        beat_times = np.array([h["time"] for h in hits])
+        beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
+
+    downbeat_times = np.array([]) if labels_type == "kick_weighted" else np.array([
         h["time"] for h in hits if h.get("isDownbeat", False)
     ]) if use_downbeat else np.array([])
 
