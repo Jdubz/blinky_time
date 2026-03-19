@@ -204,6 +204,9 @@ private:
     static constexpr int IOI_BINS = 128;          // 100-1600ms range (~12ms per bin)
     static constexpr float IOI_MIN_MS = 100.0f;
     static constexpr float IOI_MAX_MS = 1600.0f;
+    // Beat-range IOI bins: 250ms (240 BPM) to 1000ms (60 BPM)
+    static constexpr int IOI_BEAT_LOW = (int)((250.0f - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
+    static constexpr int IOI_BEAT_HIGH = (int)((1000.0f - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
     uint32_t onsetTimes_[ONSET_BUF_SIZE] = {0};
     uint8_t onsetWriteIdx_ = 0;
     uint8_t onsetBufCount_ = 0;

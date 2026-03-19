@@ -18,7 +18,7 @@
 #   ~7K params, ~13 KB INT8, ~7ms inference on Cortex-M4F
 #
 # Output: 1 channel
-#   ch0 = sigmoid(onset_logit) — onset activation (kicks=high, snares=medium, hihats=low)
+#   ch0 = sigmoid(onset_logit) — onset activation (kicks=high, snares=high, hihats=low)
 #
 # Prerequisites:
 #   1. Generate kick-weighted labels:
@@ -42,7 +42,7 @@ model:
 labels:
   labels_type: "kick_weighted"
   kick_weighted_dir: "/mnt/storage/blinky-ml-data/labels/kick_weighted"
-  target_type: "binary"           # Use per-onset weights directly (kick=1.0, snare=0.5, hihat=0.0)
+  target_type: "binary"           # Use per-onset weights directly (kick=1.0, snare=1.0, hihat=0.0)
 
 loss:
   type: "asymmetric_focal"

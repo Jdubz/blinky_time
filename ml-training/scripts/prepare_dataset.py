@@ -362,8 +362,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     audio_gpu = torch.from_numpy(audio_np).to(device)
 
     # Load labels — either kick-weighted onset labels or consensus beat labels.
-    # Kick-weighted labels teach the model to fire strongly on kicks, moderately
-    # on snares, and not at all on hi-hats (see generate_kick_weighted_targets.py).
+    # Kick-weighted labels teach the model to fire strongly on kicks and snares
+    # (equally important), and not at all on hi-hats (see generate_kick_weighted_targets.py).
     labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
     kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
 
@@ -376,6 +376,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
         else:
             # Fall back to consensus labels if kick-weighted not available
+            import logging
+            logging.warning(f"Kick-weighted labels not found for {audio_path.stem}, falling back to consensus")
             with open(label_path) as f:
                 labels = json.load(f)
             hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]

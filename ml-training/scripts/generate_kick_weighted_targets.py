@@ -3,10 +3,10 @@
 
 Creates per-track target arrays where:
   - Kick onsets (<200 Hz) get target = 1.0
-  - Snare onsets (200-4000 Hz) get target = 0.5 (secondary visual events)
+  - Snare onsets (200-4000 Hz) get target = 1.0 (equally important as kicks)
   - Hi-hat/cymbal onsets (>4000 Hz) get target = 0.0 (suppress)
 
-This teaches the NN to fire strongly on kicks, moderately on snares,
+This teaches the NN to fire strongly on kicks and snares (equally important),
 and not at all on hi-hats — producing the 2-4 major events per bar
 density target needed for smooth LED animations.
 
@@ -28,8 +28,6 @@ Output format (per track):
 
 import argparse
 import json
-import os
-import sys
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -209,7 +207,8 @@ def main():
         if existing:
             kicks = snares = hihats = 0
             for f in existing:
-                data = json.load(open(f))
+                with open(f) as fh:
+                    data = json.load(fh)
                 kicks += data["kick_count"]
                 snares += data["snare_count"]
                 hihats += data["hihat_count"]
@@ -236,15 +235,19 @@ def main():
     all_files = list(output_dir.glob("*.kick_weighted.json"))
     kicks = snares = hihats = 0
     for f in all_files:
-        data = json.load(open(f))
+        with open(f) as fh:
+            data = json.load(fh)
         kicks += data["kick_count"]
         snares += data["snare_count"]
         hihats += data["hihat_count"]
     total = kicks + snares + hihats
     print(f"Total labels: {len(all_files)} tracks")
-    print(f"  Kicks:  {kicks} ({100*kicks/total:.0f}%)")
-    print(f"  Snares: {snares} ({100*snares/total:.0f}%)")
-    print(f"  HiHats: {hihats} ({100*hihats/total:.0f}%)")
+    if total > 0:
+        print(f"  Kicks:  {kicks} ({100*kicks/total:.0f}%)")
+        print(f"  Snares: {snares} ({100*snares/total:.0f}%)")
+        print(f"  HiHats: {hihats} ({100*hihats/total:.0f}%)")
+    else:
+        print("  No onsets found in any track")
 
 
 if __name__ == "__main__":
