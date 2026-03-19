@@ -716,7 +716,12 @@ def main():
 
     # Find paired audio + label files (non-recursive — audio_dir should be flat)
     audio_extensions = {".mp3", ".wav", ".flac", ".ogg"}
-    audio_files = sorted(f for f in audio_dir.iterdir() if f.suffix.lower() in audio_extensions)
+    subdirs = [d for d in audio_dir.iterdir() if d.is_dir()]
+    if subdirs:
+        print(f"WARNING: audio_dir has {len(subdirs)} subdirectories that will be ignored "
+              f"(iterdir is non-recursive). Use audio/combined/ for flat namespace.",
+              file=sys.stderr)
+    audio_files = sorted(f for f in audio_dir.iterdir() if f.is_file() and f.suffix.lower() in audio_extensions)
 
     pairs = []
     seen_stems = set()

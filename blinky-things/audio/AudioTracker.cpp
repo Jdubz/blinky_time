@@ -16,7 +16,7 @@ static inline float clampf(float v, float lo, float hi) {
     return v;
 }
 
-// Static constexpr member definitions
+// Static constexpr member definitions (required in C++14; remove if upgrading to C++17)
 constexpr float AudioTracker::CACHE_BLEND_RATES[4];
 
 // ============================================================================
@@ -575,13 +575,14 @@ void AudioTracker::recordOnsetForPattern(float strength, uint32_t nowMs) {
     // This captures intervals at multiple subdivision levels
     int maxBack = (onsetBufCount_ < 8) ? onsetBufCount_ - 1 : 8;
     for (int back = 1; back <= maxBack; back++) {
+        // onsetWriteIdx_ was just incremented, so -1 is the slot just written,
+        // -1-back is 'back' slots before it in the circular buffer.
         int prevIdx = (onsetWriteIdx_ - 1 - back + ONSET_BUF_SIZE) % ONSET_BUF_SIZE;
         float ioiMs = (float)(nowMs - onsetTimes_[prevIdx]);
         if (ioiMs >= IOI_MIN_MS && ioiMs <= IOI_MAX_MS) {
             int bin = (int)((ioiMs - IOI_MIN_MS) * IOI_BINS / (IOI_MAX_MS - IOI_MIN_MS));
-            if (bin >= 0 && bin < IOI_BINS) {
-                ioiBins_[bin] += strength * patternLearnRate;
-            }
+            bin = (bin < 0) ? 0 : (bin >= IOI_BINS ? IOI_BINS - 1 : bin);
+            ioiBins_[bin] += strength * patternLearnRate;
         }
     }
 

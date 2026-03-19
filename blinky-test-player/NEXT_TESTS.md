@@ -5,17 +5,17 @@
 
 **Last Updated:** March 17, 2026 (AudioTracker + Conv1D W16 onset-only deployed, AudioController deleted)
 
-## Current Config (v75, SETTINGS_VERSION 74)
+## Current Config (v77, SETTINGS_VERSION 77)
 
 **Onset detection (deployed):** Conv1D W16 onset-only model, ~13 KB INT8, ~7ms inference, single-channel onset activation. Detects acoustic onsets (kicks/snares) — drives visual pulse + PLL phase refinement. Cannot distinguish on-beat from off-beat onsets.
 - Deployed on all 7 devices (3 nRF52840 + 2 ESP32-S3 on blinkyhost, 1 nRF52840 tube + 1 ESP32-S3 display local).
 - Supersedes W64 Conv1D (27ms, 15.1 KB) and FC W32 (56.8 KB). Dual-model (OnsetNN + RhythmNN) abandoned.
-- BandFlux/EnsembleDetector fully removed (v67). AudioController deleted (v74).
+- BandFlux/EnsembleDetector fully removed (v67). AudioController deleted (v75).
 
 **BPM estimation:** Spectral flux (HWR, NN-independent) → contrast^2 → OSS buffer → ACF + comb bank validation.
 
 **Beat tracking:** AudioTracker (spectral flux → ACF + Comb filter bank + PLL)
-- ~35 tunable parameters persisted via ConfigStorage (v74, was serial-only)
+- ~35 tunable parameters persisted via ConfigStorage (v77)
 - pllkp=0.15, pllki=0.005 (PLL phase correction)
 - rayleighBpm=140 (Rayleigh prior peak)
 - combFeedback=0.92 (comb bank IIR resonance)
