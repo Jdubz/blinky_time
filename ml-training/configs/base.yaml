@@ -55,7 +55,7 @@ training:
   num_workers: 4            # DataLoader workers
   pos_weight: 0              # 0 = auto-calculate from data (recommended). Manual override error-prone
                              # across label types: consensus ~2.8%, kick-weighted ~8.9%.
-  downbeat_pos_weight: 0    # 0 = auto (4x beat pos_weight)
+  downbeat_pos_weight: 0    # 0 = auto from Y_db_train.npy (falls back to 4x beat if absent)
   patience: 10               # Early stopping: stop after N epochs with no val_loss improvement
   min_quality: 0.0            # Minimum label quality_score to include track (0.0 = no filtering)
   val_split: 0.15

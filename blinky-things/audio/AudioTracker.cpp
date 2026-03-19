@@ -677,7 +677,10 @@ void AudioTracker::computePatternStats() {
     // Step 1: Progressive cache blend (if restore in progress)
     cacheProgressiveBlend();
 
-    // Step 2: Shannon entropy of bar histogram (normalized to [0, 1])
+    // Step 2: Shannon entropy of bar histogram (normalized to [0, 1]).
+    // Note: barEntropy_ is no longer used in the confidence pipeline (replaced by
+    // peak-to-mean ratio in Step 4), but is retained for serial diagnostics
+    // (getBarEntropy() is streamed via SerialConsole).
     float sum = 0;
     for (int i = 0; i < BAR_BINS; i++) sum += barBins_[i];
     if (sum < 1e-6f) {

@@ -399,6 +399,7 @@ def main():
     # Manual overrides in config are fragile — the correct value depends entirely
     # on the label type (consensus beats vs kick-weighted onsets have very different
     # positive ratios). Auto-calculation is always correct.
+    # Note: samples first 10K rows — assumes prepare_dataset.py shuffled the data.
     sample_size = min(10000, len(train_ds))
     y_sample = np.load(data_dir / "Y_train.npy", mmap_mode='r')[:sample_size]
     pos_ratio_binary = (y_sample > 0.5).mean()
@@ -416,6 +417,7 @@ def main():
         else:
             # Heuristic: downbeats occur ~1/4 as often as beats
             downbeat_pos_weight = beat_pos_weight * 4
+            print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (heuristic 4x beat)")
     print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
     print(f"  pos_weight: {beat_pos_weight:.1f} (auto={auto_pw:.1f})")
 

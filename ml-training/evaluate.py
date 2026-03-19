@@ -312,16 +312,22 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                 kw_f1 = 0.0
             result["kw_onset_f1"] = float(kw_f1)
             result["kw_ref_onsets"] = len(all_ref_onsets)
-            # Per-instrument recall breakdown
+            # Per-instrument recall breakdown (vectorized via searchsorted)
+            est_sorted = np.sort(est_beats)
             for onset_type in ("kick", "snare", "hihat"):
                 ref_typed = np.array([o["time"] for o in kw_data["onsets"]
                                       if o["type"] == onset_type])
-                if len(ref_typed) > 0 and len(est_beats) > 0:
-                    hits = 0
-                    for ref_t in ref_typed:
-                        if np.min(np.abs(est_beats - ref_t)) <= 0.07:
-                            hits += 1
-                    typed_recall = hits / len(ref_typed)
+                if len(ref_typed) > 0 and len(est_sorted) > 0:
+                    # For each ref onset, find nearest detection via binary search
+                    idx = np.searchsorted(est_sorted, ref_typed)
+                    # Check distance to nearest neighbor on both sides
+                    dists = np.full(len(ref_typed), np.inf)
+                    valid_right = idx < len(est_sorted)
+                    dists[valid_right] = np.abs(est_sorted[idx[valid_right]] - ref_typed[valid_right])
+                    valid_left = idx > 0
+                    left_dist = np.abs(est_sorted[idx[valid_left] - 1] - ref_typed[valid_left])
+                    dists[valid_left] = np.minimum(dists[valid_left], left_dist)
+                    typed_recall = float(np.mean(dists <= 0.07))
                 else:
                     typed_recall = 0.0
                 result[f"{onset_type}_recall"] = float(typed_recall)
