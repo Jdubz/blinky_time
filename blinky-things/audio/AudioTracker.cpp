@@ -657,7 +657,7 @@ void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
     // Hi-hats/cymbals fire at every 8th/16th note position, making the
     // histogram uniform and destroying pattern structure. Kicks and snares
     // are the events that define phrasing (4otf, backbeat, halftime, etc.).
-    if (strength < 0.5f) return;
+    if (strength < histogramMinStrength) return;
 
     // Project onset onto bar grid using IOI peak as beat period.
     // NOTE: This is a time-based approximation, not beat-synchronized.
@@ -710,16 +710,16 @@ void AudioTracker::computePatternStats() {
     // Map peak-to-mean [1, 4] → target [0, 1]. At 1x (uniform) target=0,
     // at 4x+ (strong beats) target=1. Typical 4otf pattern peaks at 2-3x.
     float target = clampf((peakToMean - 1.0f) / 3.0f, 0.0f, 1.0f);
-    float riseAlpha = 0.05f;
-    float decayAlpha = 0.15f;
+    float rise = confidenceRise;
+    float decay = confidenceDecay;
 
     // Fill tolerance: when template core is intact (>0.75 similarity),
     // halve decay rate. Fill onsets raised entropy but the core pattern is intact.
     if (bestTemplateSim_ > 0.75f) {
-        decayAlpha *= 0.5f;
+        decay *= 0.5f;
     }
 
-    float alpha = (target > patternConfidence_) ? riseAlpha : decayAlpha;
+    float alpha = (target > patternConfidence_) ? rise : decay;
     patternConfidence_ += (target - patternConfidence_) * alpha;
 
     // Step 5: Cold start boost (first 4 bars, template match >0.70)

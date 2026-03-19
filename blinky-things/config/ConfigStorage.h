@@ -121,7 +121,7 @@ public:
     // Version 74: AudioTracker params persisted (StoredTrackerParams added to ConfigData).
     //   Previously serial-only (~15 params). Also exposes hardcoded PLL/pulse/energy
     //   constants as tunable params (~18 new params). Total: ~35 tracker params persisted.
-    static const uint8_t SETTINGS_VERSION = 77;  // v77: add pattern memory params (patternLearnRate, patternDecayRate, ioiDecayRate, patternGain, anticipationGain, patternLookahead, patternEnabled)
+    static const uint8_t SETTINGS_VERSION = 78;  // v78: add confidenceRise, confidenceDecay, histogramMinStrength for pattern memory tuning
 
     // Fields ordered by size to minimize padding (floats, uint16, uint8/int8)
     struct StoredFireParams {
@@ -337,13 +337,16 @@ public:
         float midFluxWeight;
         float highFluxWeight;
 
-        // Pattern memory (v77)
+        // Pattern memory (v77, extended v78)
         float patternLearnRate;
         float patternDecayRate;
         float ioiDecayRate;
         float patternGain;
         float anticipationGain;
         float patternLookahead;
+        float confidenceRise;       // v78
+        float confidenceDecay;      // v78
+        float histogramMinStrength; // v78
         uint8_t patternEnabled;  // bool stored as uint8_t for struct packing
     };
 
@@ -378,8 +381,8 @@ public:
     static_assert(sizeof(StoredMicParams) == 8,
         "StoredMicParams size changed! Increment SETTINGS_VERSION and update assertion. (8 bytes = 2 floats)");
     // (StoredMusicParams static_assert removed v76 — struct deleted)
-    static_assert(sizeof(StoredTrackerParams) == 168,
-        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (168 bytes = 40 floats + 1 uint16 + 1 uint8 + padding)");
+    static_assert(sizeof(StoredTrackerParams) == 180,
+        "StoredTrackerParams size changed! Increment SETTINGS_VERSION and update assertion. (180 bytes = 43 floats + 1 uint16 + 1 uint8 + padding)");
     // (StoredBandFluxParams static_assert removed v67 — struct removed)
     static_assert(sizeof(StoredDeviceConfig) <= 160,
         "StoredDeviceConfig size changed! Increment DEVICE_VERSION and update assertion. (Limit: 160 bytes)");

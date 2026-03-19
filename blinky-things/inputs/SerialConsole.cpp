@@ -350,6 +350,12 @@ void SerialConsole::registerTrackerSettings() {
         "Anticipatory energy pre-ramp gain", 0.0f, 0.5f, onParamChanged);
     settings_.registerFloat("patlookahead", &audioCtrl_->patternLookahead, "pattern",
         "Phase lookahead fraction for anticipation", 0.0f, 0.15f, onParamChanged);
+    settings_.registerFloat("patrise", &audioCtrl_->confidenceRise, "pattern",
+        "Confidence EMA rise alpha (higher = faster lock-on)", 0.01f, 0.5f, onParamChanged);
+    settings_.registerFloat("patfall", &audioCtrl_->confidenceDecay, "pattern",
+        "Confidence EMA decay alpha (higher = faster drop)", 0.01f, 0.5f, onParamChanged);
+    settings_.registerFloat("patminstren", &audioCtrl_->histogramMinStrength, "pattern",
+        "Min onset strength for bar histogram (filters hi-hats)", 0.1f, 0.9f, onParamChanged);
     settings_.registerBool("patenabled", &audioCtrl_->patternEnabled, "pattern",
         "Pattern memory master enable (A/B testing)");
 }
