@@ -29,6 +29,7 @@ Usage:
 import argparse
 import gc
 import json
+import math
 import shutil
 import sys
 import tempfile
@@ -369,20 +370,15 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
     if labels_type == "kick_weighted" and kick_weighted_dir:
         kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
-        if kw_path.exists():
-            with open(kw_path) as f:
-                kw_data = json.load(f)
-            beat_times = np.array([o["time"] for o in kw_data["onsets"]])
-            beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
-        else:
-            # Fall back to consensus labels if kick-weighted not available
-            import logging
-            logging.warning(f"Kick-weighted labels not found for {audio_path.stem}, falling back to consensus")
-            with open(label_path) as f:
-                labels = json.load(f)
-            hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]
-            beat_times = np.array([h["time"] for h in hits])
-            beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
+        if not kw_path.exists():
+            raise FileNotFoundError(
+                f"Kick-weighted labels missing for {audio_path.stem}: {kw_path}\n"
+                f"Run: python scripts/generate_kick_weighted_targets.py"
+            )
+        with open(kw_path) as f:
+            kw_data = json.load(f)
+        beat_times = np.array([o["time"] for o in kw_data["onsets"]])
+        beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
     else:
         with open(label_path) as f:
             labels = json.load(f)
@@ -443,15 +439,44 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
         # Pitch-shifted variants (original speed only, clean audio)
         # Beat times don't change with pitch shift — only key/timbre changes.
+        #
+        # We avoid torchaudio.functional.pitch_shift because its internal
+        # resample step builds a sinc kernel proportional to orig_freq * new_freq / GCD².
+        # With exact semitone ratios the GCD is 1-2, creating 0.5-1.3 GB kernels
+        # that OOM on 10 GB GPUs. Instead: phase_vocoder + resample with a rounded
+        # frequency ratio (GCD increases ~1000x, kernel drops to < 2 KB, <0.35% error).
         if augment and speed == 1.0:
             for semitones in pitch_shifts:
                 if semitones == 0:
-                    continue  # Already covered by clean variant
+                    continue
                 try:
-                    shifted = torchaudio.functional.pitch_shift(
-                        src_audio.unsqueeze(0), sr, semitones
-                    ).squeeze(0)
+                    rate = 2 ** (semitones / 12)
+                    # Phase vocoder: time-stretch without changing pitch
+                    n_fft = 512
+                    hop = n_fft // 4
+                    freq_bins = n_fft // 2 + 1
+                    spec = torch.stft(src_audio, n_fft=n_fft, hop_length=hop,
+                                      return_complex=True)
+                    phase_advance = torch.linspace(
+                        0, math.pi * hop, freq_bins, device=device)[..., None]
+                    stretched_spec = torchaudio.functional.phase_vocoder(
+                        spec.unsqueeze(0), rate, phase_advance)
+                    stretched = torch.istft(stretched_spec.squeeze(0), n_fft=n_fft,
+                                           hop_length=hop)
+                    # Resample back to original length (restores duration, shifts pitch).
+                    # Round source freq to nearest 100 for large GCD → tiny sinc kernel.
+                    orig_freq = round(int(sr / rate) / 100) * 100
+                    if orig_freq < 100:
+                        orig_freq = 100
+                    shifted = torchaudio.functional.resample(
+                        stretched.unsqueeze(0), orig_freq, sr).squeeze(0)
+                    # Trim or pad to original length
+                    if len(shifted) > len(src_audio):
+                        shifted = shifted[:len(src_audio)]
+                    elif len(shifted) < len(src_audio):
+                        shifted = torch.nn.functional.pad(shifted, (0, len(src_audio) - len(shifted)))
                     variants.append((f"pitch{semitones:+d}st", shifted))
+                    del spec, stretched_spec, stretched
                 except Exception as e:
                     import logging
                     logging.warning(f"Pitch shift {semitones:+d}st failed for "
@@ -689,12 +714,22 @@ def main():
     n_fft = cfg["audio"]["n_fft"]
     window = torch.hamming_window(n_fft, periodic=False).to(device)
 
-    # Find paired audio + label files
+    # Find paired audio + label files (non-recursive — audio_dir should be flat)
     audio_extensions = {".mp3", ".wav", ".flac", ".ogg"}
-    audio_files = sorted(f for f in audio_dir.rglob("*") if f.suffix.lower() in audio_extensions)
+    subdirs = [d for d in audio_dir.iterdir() if d.is_dir()]
+    if subdirs:
+        print(f"WARNING: audio_dir has {len(subdirs)} subdirectories that will be ignored "
+              f"(iterdir is non-recursive). Use audio/combined/ for flat namespace.",
+              file=sys.stderr)
+    audio_files = sorted(f for f in audio_dir.iterdir() if f.is_file() and f.suffix.lower() in audio_extensions)
 
     pairs = []
+    seen_stems = set()
     for af in audio_files:
+        if af.stem in seen_stems:
+            print(f"WARNING: Duplicate stem '{af.stem}' — skipping {af}", file=sys.stderr)
+            continue
+        seen_stems.add(af.stem)
         label_candidates = [
             af.parent / f"{af.stem}.beats.json",
             labels_dir / f"{af.stem}.beats.json",

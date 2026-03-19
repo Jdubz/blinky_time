@@ -345,7 +345,8 @@ void SettingsRegistry::printAll() {
     Serial.println(F("=== ALL SETTINGS ==="));
 
     // Collect unique categories
-    const char* categories[16];
+    static constexpr uint8_t MAX_CATEGORIES = 16;
+    const char* categories[MAX_CATEGORIES];
     uint8_t numCategories = 0;
 
     for (uint8_t i = 0; i < numSettings_; i++) {
@@ -357,7 +358,7 @@ void SettingsRegistry::printAll() {
                 break;
             }
         }
-        if (!found && numCategories < 16) {
+        if (!found && numCategories < MAX_CATEGORIES) {
             categories[numCategories++] = cat;
         }
     }
@@ -400,8 +401,9 @@ void SettingsRegistry::printCategory(const char* category) {
 void SettingsRegistry::printCategories() {
     Serial.println(F("=== CATEGORIES ==="));
 
-    const char* categories[16];
-    uint8_t counts[16] = {0};
+    static constexpr uint8_t MAX_CATEGORIES = 16;
+    const char* categories[MAX_CATEGORIES];
+    uint8_t counts[MAX_CATEGORIES] = {0};
     uint8_t numCategories = 0;
 
     for (uint8_t i = 0; i < numSettings_; i++) {
@@ -414,7 +416,7 @@ void SettingsRegistry::printCategories() {
                 break;
             }
         }
-        if (!found && numCategories < 16) {
+        if (!found && numCategories < MAX_CATEGORIES) {
             categories[numCategories] = cat;
             counts[numCategories] = 1;
             numCategories++;
@@ -444,7 +446,8 @@ void SettingsRegistry::printHelp() {
     Serial.println(F("=== AVAILABLE SETTINGS ==="));
 
     // Collect unique categories
-    const char* categories[16];
+    static constexpr uint8_t MAX_CATEGORIES = 16;
+    const char* categories[MAX_CATEGORIES];
     uint8_t numCategories = 0;
 
     for (uint8_t i = 0; i < numSettings_; i++) {
@@ -456,7 +459,7 @@ void SettingsRegistry::printHelp() {
                 break;
             }
         }
-        if (!found && numCategories < 16) {
+        if (!found && numCategories < MAX_CATEGORIES) {
             categories[numCategories++] = cat;
         }
     }

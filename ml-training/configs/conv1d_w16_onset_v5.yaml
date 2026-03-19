@@ -21,12 +21,13 @@
 #   ch0 = sigmoid(onset_logit) — onset activation (kicks=high, snares=high, hihats=low)
 #
 # Prerequisites:
-#   1. Generate kick-weighted labels:
-#      python scripts/generate_kick_weighted_targets.py \
-#        --audio-dir /mnt/storage/blinky-ml-data/audio \
-#        --output-dir /mnt/storage/blinky-ml-data/labels/kick_weighted
+#   1. Generate kick-weighted labels (uses combined/ audio dir):
+#      python scripts/generate_kick_weighted_targets.py
 #
-#   2. Train:
+#   2. Prepare dataset:
+#      python scripts/prepare_dataset.py --config configs/conv1d_w16_onset_v5.yaml --augment
+#
+#   3. Train:
 #      python train.py --config configs/conv1d_w16_onset_v5.yaml \
 #        --output-dir outputs/conv1d_w16_onset_v5
 

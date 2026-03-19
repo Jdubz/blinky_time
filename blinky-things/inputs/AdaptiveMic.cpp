@@ -182,7 +182,12 @@ void AdaptiveMic::onPDMdata() {
 int AdaptiveMic::getSamplesForExternal(int16_t* buffer, int maxCount) {
   if (!buffer || maxCount <= 0) return 0;
 
+  // Snapshot write index with interrupts disabled to prevent ISR from
+  // advancing s_fftWriteIdx mid-read (same pattern as consumeISR).
+  time_.disableInterrupts();
   uint32_t writeIdx = s_fftWriteIdx;
+  time_.enableInterrupts();
+
   uint32_t available = writeIdx - s_extFftReadIdx;
   if (available == 0) return 0;
 

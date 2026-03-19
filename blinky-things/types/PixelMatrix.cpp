@@ -69,19 +69,21 @@ PixelMatrix& PixelMatrix::operator=(const PixelMatrix& other) {
 
 RGB& PixelMatrix::getPixel(int x, int y) {
     BLINKY_ASSERT(pixels_ && isValidCoordinate(x, y), "PixelMatrix::getPixel OOB");
-    static RGB fallback;
+    // Use a per-instance fallback pixel instead of static local to avoid
+    // shared-state bugs when multiple OOB calls return references to the
+    // same static. The fallback is reset to black on each OOB access.
     if (!pixels_ || !isValidCoordinate(x, y)) {
-        fallback = RGB(0, 0, 0);
-        return fallback;
+        fallbackPixel_ = RGB(0, 0, 0);
+        return fallbackPixel_;
     }
     return pixels_[y * width_ + x];
 }
 
 const RGB& PixelMatrix::getPixel(int x, int y) const {
     BLINKY_ASSERT(pixels_ && isValidCoordinate(x, y), "PixelMatrix::getPixel const OOB");
-    static RGB fallback;
     if (!pixels_ || !isValidCoordinate(x, y)) {
-        return fallback;
+        fallbackPixel_ = RGB(0, 0, 0);
+        return fallbackPixel_;
     }
     return pixels_[y * width_ + x];
 }

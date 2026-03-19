@@ -104,7 +104,7 @@ export:
 
 # Data paths (bulk data on /mnt/storage, processed data local for fast training)
 data:
-  audio_dir: "/mnt/storage/blinky-ml-data/audio"
+  audio_dir: "/mnt/storage/blinky-ml-data/audio/combined"
   labels_dir: "/mnt/storage/blinky-ml-data/labels/consensus_v5"
   processed_dir: "data/processed"
   rir_dir: "/mnt/storage/blinky-ml-data/rir/processed"

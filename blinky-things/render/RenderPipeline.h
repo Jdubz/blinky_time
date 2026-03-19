@@ -75,12 +75,8 @@ public:
     AudioParams* getAudioVisParams();
     HeatFireParams* getHeatFireParams();
 
-    // Apply parameters after modification
-    void applyFireParams();
-    void applyWaterParams();
-    void applyLightningParams();
-    void applyAudioVisParams();
-    void applyHeatFireParams();
+    // No apply*Params() needed — get*Params() returns mutable pointers,
+    // modifications take effect immediately.
 
     // Effect parameter access
     HueRotationEffect* getHueRotationEffect() { return hueRotation_; }

@@ -29,7 +29,7 @@ public:
         }
         // Bounce off right edge
         if (p->x >= width) {
-            p->x = width - 0.001f;
+            p->x = width - 0.001f;  // Tiny offset prevents re-triggering on next frame
             p->vx = -p->vx * damping_;
         }
         // Bounce off top edge
@@ -39,7 +39,7 @@ public:
         }
         // Bounce off bottom edge
         if (p->y >= height) {
-            p->y = height - 0.001f;
+            p->y = height - 0.001f;  // Tiny offset prevents re-triggering on next frame
             p->vy = -p->vy * damping_;
         }
     }

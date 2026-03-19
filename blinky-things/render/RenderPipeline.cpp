@@ -191,27 +191,8 @@ HeatFireParams* RenderPipeline::getHeatFireParams() {
     return heatFire_ ? &heatFire_->getParamsMutable() : nullptr;
 }
 
-// Apply methods - params are modified in-place, so these are no-ops
-// Kept for API consistency if future implementations need explicit apply
-void RenderPipeline::applyFireParams() {
-    // Parameters modified via getFireParams() take effect immediately
-}
-
-void RenderPipeline::applyWaterParams() {
-    // Parameters modified via getWaterParams() take effect immediately
-}
-
-void RenderPipeline::applyLightningParams() {
-    // Parameters modified via getLightningParams() take effect immediately
-}
-
-void RenderPipeline::applyAudioVisParams() {
-    // Parameters modified via getAudioVisParams() take effect immediately
-}
-
-void RenderPipeline::applyHeatFireParams() {
-    // Parameters modified via getHeatFireParams() take effect immediately
-}
+// apply*Params() removed — get*Params() returns mutable pointers,
+// so parameter modifications take effect immediately with no sync step.
 
 // Static helpers for listing options
 const char* RenderPipeline::getGeneratorNameByIndex(int index) {

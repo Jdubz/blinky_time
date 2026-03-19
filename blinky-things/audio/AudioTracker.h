@@ -25,6 +25,21 @@ struct FrameOnsetNN {
 #include "../hal/interfaces/IPdmMic.h"
 #include "../hal/interfaces/ISystemTime.h"
 
+// Pattern template: expected bar histogram shape for common rhythmic patterns.
+// Static const, stored in flash only (~544 bytes total for 8 templates).
+struct PatternTemplate {
+    float bins[16];       // Expected histogram shape (BAR_BINS=16)
+    uint16_t fillMask;    // Bitmask: 1 = fill-prone position (ignored in core matching)
+};
+
+// LRU cache entry: snapshot of a learned bar histogram for section recall.
+struct PatternCacheEntry {
+    float bins[16];       // Snapshot of barBins when cached (BAR_BINS=16)
+    float bpm;            // BPM at time of caching
+    uint8_t age;          // LRU counter (0 = most recently used)
+    bool valid;
+};
+
 /**
  * AudioTracker - Audio analysis with decoupled tempo/onset architecture
  *
@@ -84,6 +99,23 @@ public:
     float getPatternConfidence() const { return patternConfidence_; }
     float getIoiConfidence() const { return ioiConfidence_; }
     float getIoiPeakBpm() const { return ioiPeakBpm_; }
+    float getIoiPeakMs() const { return ioiPeakMs_; }
+    float getBarEntropy() const { return barEntropy_; }
+    uint16_t getPatternBarsAccumulated() const { return patternBarsAccumulated_; }
+    const float* getBarBins() const { return barBins_; }
+    static constexpr int getBarBinCount() { return BAR_BINS; }
+
+    // Pattern memory reset (for test automation)
+    void resetPatternMemory();
+
+    // Template matching accessors
+    int getBestTemplateIndex() const { return bestTemplateIdx_; }
+    float getBestTemplateSimilarity() const { return bestTemplateSim_; }
+
+    // Cache accessors
+    int getCacheEntryCount() const;
+    bool isCacheRestoreActive() const { return cacheRestoreActive_; }
+    int getCacheRestoreBarsLeft() const { return cacheRestoreBarsLeft_; }
 
     // === Tunable parameters (~10 total) ===
     float bpmMin = 60.0f;
@@ -145,7 +177,8 @@ public:
     // Pattern memory (v77): IOI histogram discovers tempo from onset intervals,
     // bar histogram reveals repeating pattern for prediction. See PATTERN_HISTOGRAM_DESIGN.md.
     float patternLearnRate = 0.15f;    // EMA alpha for histogram update
-    float patternDecayRate = 0.9995f;  // Per-frame global decay (half-life ~22s)
+    float patternDecayRate = 0.9995f;  // Per-frame bar bin decay (half-life ~22s)
+    float ioiDecayRate = 0.999f;       // Per-frame IOI bin decay (half-life ~11s)
     float patternGain = 0.3f;          // Prediction boost strength for onset confidence
     float anticipationGain = 0.1f;     // Energy pre-ramp before predicted onsets
     float patternLookahead = 0.05f;    // Phase lookahead (fraction of beat)
@@ -219,10 +252,28 @@ private:
     // Phase B: Bar-position histogram — 16 bins (16th-note resolution)
     static constexpr int BAR_BINS = 16;
     float barBins_[BAR_BINS] = {0};
+    float prevGoodBins_[BAR_BINS] = {0};   // Snapshot from last high-confidence state (for cache restore matching)
     float barEntropy_ = 1.0f;
     float patternConfidence_ = 0.0f;
+    float prevPatternConfidence_ = 0.0f;   // For detecting confidence crossings
     uint16_t patternBarsAccumulated_ = 0;
     uint32_t lastBarBoundaryMs_ = 0;
+
+    // Template matching state
+    int bestTemplateIdx_ = -1;
+    float bestTemplateSim_ = 0.0f;
+    static constexpr int NUM_TEMPLATES = 8;
+    static const PatternTemplate templates_[NUM_TEMPLATES];
+
+    // LRU pattern cache (4 entries, ~280 bytes RAM)
+    static constexpr int CACHE_SIZE = 4;
+    PatternCacheEntry cache_[CACHE_SIZE] = {};  // zero-initialized (valid=false)
+
+    // Cache restore state
+    bool cacheRestoreActive_ = false;
+    int cacheRestoreBarsLeft_ = 0;
+    int cacheRestoreIdx_ = -1;
+    static constexpr float CACHE_BLEND_RATES[4] = {0.40f, 0.20f, 0.10f, 0.05f};
 
     // === Output ===
     AudioControl control_;
@@ -241,6 +292,13 @@ private:
     void computePatternStats();
     float predictOnsetStrength(uint32_t nowMs);
     void decayPatternBins();
+
+    // Template matching + cache methods
+    float templateCosineSimilarity(const float* observed, const PatternTemplate& tmpl) const;
+    void matchTemplates();
+    void cachePatternSave();
+    void cachePatternRestore();
+    void cacheProgressiveBlend();
 
     // Percival harmonic enhancement on ACF
     void percivalEnhance(float* acf, int minLag, int maxLag, int harmonicMaxLag, int acfSize);

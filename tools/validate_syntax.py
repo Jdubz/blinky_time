@@ -9,44 +9,31 @@ import re
 import sys
 from pathlib import Path
 
+def _strip_comments(content):
+    """Remove C/C++ comments and string literals for accurate brace/paren counting."""
+    # Remove single-line comments
+    result = re.sub(r'//.*', '', content)
+    # Remove multi-line comments
+    result = re.sub(r'/\*.*?\*/', '', result, flags=re.DOTALL)
+    # Remove string literals
+    result = re.sub(r'"[^"\\]*(?:\\.[^"\\]*)*"', '', result)
+    return result
+
+
 def check_file_syntax(filepath):
     """Check a single file for common syntax issues"""
     issues = []
-    
+
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-            
-        lines = content.split('\n')
-        
-        # Check for common issues
-        brace_count = 0
-        paren_count = 0
-        
-        for i, line in enumerate(lines, 1):
-            stripped = line.strip()
-            
-            # Skip comments and empty lines
-            if stripped.startswith('//') or stripped.startswith('/*') or not stripped:
-                continue
-                
-            # Count braces and parentheses
-            brace_count += line.count('{') - line.count('}')
-            paren_count += line.count('(') - line.count(')')
-            
-            # Check for missing semicolons on non-preprocessor lines
-            if (not stripped.startswith('#') and 
-                not stripped.endswith('{') and 
-                not stripped.endswith('}') and
-                not stripped.endswith(',') and
-                not stripped.endswith(';') and
-                not stripped.endswith('*/') and
-                not ('(' in stripped and ')' in stripped) and
-                len(stripped) > 0):
-                # This might be missing a semicolon
-                if not any(keyword in stripped for keyword in ['if', 'for', 'while', 'switch', 'class', 'struct', 'enum']):
-                    issues.append(f"Line {i}: Possible missing semicolon: {stripped}")
-        
+
+        # Use comment-stripped content for structural checks
+        cleaned = _strip_comments(content)
+
+        brace_count = cleaned.count('{') - cleaned.count('}')
+        paren_count = cleaned.count('(') - cleaned.count(')')
+
         # Check final brace/paren balance
         if brace_count != 0:
             issues.append(f"Unbalanced braces: {brace_count} extra opening braces")
