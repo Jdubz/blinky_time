@@ -326,8 +326,8 @@ def main():
     epochs = args.epochs or cfg["training"]["epochs"]
     batch_size = args.batch_size or cfg["training"]["batch_size"]
     lr = args.lr or cfg["training"]["learning_rate"]
-    beat_pos_weight = cfg["training"]["pos_weight"]
-    downbeat_pos_weight = cfg["training"].get("downbeat_pos_weight", beat_pos_weight * 4)
+    beat_pos_weight = cfg["training"].get("pos_weight", 0)  # 0 = auto-calculate from data
+    downbeat_pos_weight = cfg["training"].get("downbeat_pos_weight", 0)
     use_downbeat = cfg["model"].get("downbeat", False)
 
     if args.device is None or args.device == "auto":
@@ -395,14 +395,21 @@ def main():
 
     print(f"Train: {len(train_ds)} chunks, Val: {len(val_ds)} chunks")
 
-    # Diagnostic: measure actual positive ratio for pos_weight verification
+    # Auto-calculate pos_weight from actual data positive ratio.
+    # Manual overrides in config are fragile — the correct value depends entirely
+    # on the label type (consensus beats vs kick-weighted onsets have very different
+    # positive ratios). Auto-calculation is always correct.
     sample_size = min(10000, len(train_ds))
     y_sample = np.load(data_dir / "Y_train.npy", mmap_mode='r')[:sample_size]
     pos_ratio_binary = (y_sample > 0.5).mean()
     pos_ratio_mean = y_sample.mean()
-    suggested_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
+    auto_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
+    if beat_pos_weight <= 0:
+        beat_pos_weight = auto_pw
+    if downbeat_pos_weight <= 0:
+        downbeat_pos_weight = beat_pos_weight * 4
     print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
-    print(f"  Suggested pos_weight: {suggested_pw:.1f} (configured: {beat_pos_weight})")
+    print(f"  pos_weight: {beat_pos_weight:.1f} (auto={auto_pw:.1f})")
 
     num_workers = args.num_workers if args.num_workers is not None else cfg["training"].get("num_workers", 4)
     subsample = args.subsample if args.subsample is not None else cfg["training"].get("subsample", 1.0)

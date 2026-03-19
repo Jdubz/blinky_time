@@ -653,12 +653,16 @@ void AudioTracker::updateIoiAnalysis() {
 void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
     if (ioiConfidence_ < 0.5f) return;  // Phase B inactive until Phase A confident
 
+    // Only accumulate strong onsets (kicks/snares) into the bar histogram.
+    // Hi-hats/cymbals fire at every 8th/16th note position, making the
+    // histogram uniform and destroying pattern structure. Kicks and snares
+    // are the events that define phrasing (4otf, backbeat, halftime, etc.).
+    if (strength < 0.5f) return;
+
     // Project onset onto bar grid using IOI peak as beat period.
     // NOTE: This is a time-based approximation, not beat-synchronized.
     // Under tempo drift, the histogram smears across bins until the new
-    // tempo stabilizes and the old bins decay. Acceptable for initial
-    // implementation; a beat-synchronized projection would require
-    // accurate downbeat detection (which we don't have).
+    // tempo stabilizes and the old bins decay.
     float barPeriodMs = ioiPeakMs_ * 4.0f;
     float elapsed = (float)(nowMs - lastBarBoundaryMs_);
     float barPhase = fmodf(elapsed / barPeriodMs, 1.0f);
@@ -693,22 +697,19 @@ void AudioTracker::computePatternStats() {
     // Step 3: Template matching
     matchTemplates();
 
-    // Step 4: Confidence update — with fill tolerance
-    float entropyGate = 1.0f - barEntropy_;
-    // Find top-4 bins for peak strength
-    float top[4] = {0};
+    // Step 4: Confidence update — peak-to-mean ratio measures pattern structure.
+    // Entropy was too sensitive: even 5x variation between bins gave entropy ~0.97,
+    // killing confidence. Peak-to-mean directly measures how peaked the histogram
+    // is vs uniform noise: 1.0 = flat (no pattern), 4.0+ = strong peaks (kick/snare).
+    float maxBin = 0.0f;
+    float meanBin = sum / BAR_BINS;
     for (int i = 0; i < BAR_BINS; i++) {
-        float v = barBins_[i];
-        for (int j = 0; j < 4; j++) {
-            if (v > top[j]) {
-                for (int k = 3; k > j; k--) top[k] = top[k-1];
-                top[j] = v;
-                break;
-            }
-        }
+        if (barBins_[i] > maxBin) maxBin = barBins_[i];
     }
-    float peakSum = top[0] + top[1] + top[2] + top[3];
-    float target = entropyGate * clampf(peakSum, 0.0f, 1.0f);
+    float peakToMean = (meanBin > 1e-6f) ? (maxBin / meanBin) : 0.0f;
+    // Map peak-to-mean [1, 4] → target [0, 1]. At 1x (uniform) target=0,
+    // at 4x+ (strong beats) target=1. Typical 4otf pattern peaks at 2-3x.
+    float target = clampf((peakToMean - 1.0f) / 3.0f, 0.0f, 1.0f);
     float riseAlpha = 0.05f;
     float decayAlpha = 0.15f;
 
