@@ -36,6 +36,17 @@ set_param() {
     "
 }
 
+# Reset device to baseline on exit (normal or failure)
+cleanup() {
+    echo ""
+    echo "Resetting parameters to baseline..."
+    set_param "$PORT" "patrise" "0.05" || true
+    set_param "$PORT" "patfall" "0.15" || true
+    set_param "$PORT" "patminstren" "0.5" || true
+    echo "Parameters reset to baseline."
+}
+trap cleanup EXIT
+
 # Sweep configs: [patrise, patfall, patminstren]
 # Baseline: 0.05, 0.15, 0.5
 declare -a CONFIGS=(
@@ -91,11 +102,6 @@ for i in "${!CONFIGS[@]}"; do
 
     echo ""
 done
-
-# Reset to baseline
-set_param "$PORT" "patrise" "0.05"
-set_param "$PORT" "patfall" "0.15"
-set_param "$PORT" "patminstren" "0.5"
 
 echo "=== Sweep Complete ==="
 echo "Results in: $RESULTS_DIR"
