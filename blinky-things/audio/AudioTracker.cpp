@@ -495,9 +495,13 @@ void AudioTracker::updateIoiAnalysis() {
 void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
     if (ioiConfidence_ < 0.5f) return;  // Phase B inactive until Phase A confident
 
-    // Project onset onto bar grid using IOI peak as beat period
-    // barPeriodMs is always >= 400ms (ioiPeakMs_ >= IOI_MIN_MS=100, * 4 = 400)
-    float barPeriodMs = ioiPeakMs_ * 4.0f;  // 4 beats per bar
+    // Project onset onto bar grid using IOI peak as beat period.
+    // NOTE: This is a time-based approximation, not beat-synchronized.
+    // Under tempo drift, the histogram smears across bins until the new
+    // tempo stabilizes and the old bins decay. Acceptable for initial
+    // implementation; a beat-synchronized projection would require
+    // accurate downbeat detection (which we don't have).
+    float barPeriodMs = ioiPeakMs_ * 4.0f;
     float elapsed = (float)(nowMs - lastBarBoundaryMs_);
     float barPhase = fmodf(elapsed / barPeriodMs, 1.0f);
     int bin = (int)(barPhase * BAR_BINS) % BAR_BINS;
@@ -506,7 +510,7 @@ void AudioTracker::updateBarHistogram(float strength, uint32_t nowMs) {
 }
 
 void AudioTracker::computePatternStats() {
-    patternBarsAccumulated_++;
+    if (patternBarsAccumulated_ < 0xFFFF) patternBarsAccumulated_++;  // Saturate to avoid wrap
 
     // Shannon entropy of bar histogram (normalized to [0, 1])
     float sum = 0;
@@ -555,9 +559,12 @@ float AudioTracker::predictOnsetStrength(uint32_t nowMs) {
 }
 
 void AudioTracker::decayPatternBins() {
-    // IOI bins: decay faster (tempo can change)
+    // IOI bins: decay per frame (0.999^62.5 ≈ 0.94/sec, half-life ~11s).
+    // Runs every frame at 62.5 Hz — intentionally faster than bar bins
+    // because tempo can change quickly (breakdowns, DJ transitions).
     for (int i = 0; i < IOI_BINS; i++) ioiBins_[i] *= 0.999f;
-    // Bar bins: decay slower (pattern persists through breakdowns)
+    // Bar bins: decay slower (patternDecayRate=0.9995, half-life ~22s at 62.5 Hz).
+    // Pattern persists through breakdowns.
     for (int i = 0; i < BAR_BINS; i++) barBins_[i] *= patternDecayRate;
 }
 
@@ -589,11 +596,19 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     if (nearBeat < 0.0f) nearBeat = 0.0f;
     rawEnergy *= (1.0f + nearBeat * energyBoostOnBeat * periodicityStrength_);
 
-    // Anticipatory energy: subtle pre-glow before predicted onsets
-    if (patternEnabled && anticipationGain > 0.0f) {
-        uint32_t lookaheadMs = (uint32_t)(patternLookahead * ioiPeakMs_);
-        float anticipation = predictOnsetStrength(nowMs + lookaheadMs);
-        rawEnergy += anticipation * anticipationGain;
+    // Pattern prediction (computed once, used for both anticipatory energy and pulse boost)
+    float patternPrediction = 0.0f;
+    if (patternEnabled) {
+        patternPrediction = predictOnsetStrength(nowMs);
+        // Anticipatory energy: subtle pre-glow before predicted onsets.
+        // patternLookahead=0.05 = 5% of beat period (~25ms at 120 BPM).
+        // Intentionally subtle — this is a "lights know what's coming" effect,
+        // not a full pre-flash. Increase to 0.12-0.15 for more visible anticipation.
+        if (anticipationGain > 0.0f) {
+            uint32_t lookaheadMs = (uint32_t)(patternLookahead * ioiPeakMs_);
+            float lookaheadPrediction = predictOnsetStrength(nowMs + lookaheadMs);
+            rawEnergy += lookaheadPrediction * anticipationGain;
+        }
     }
 
     control_.energy = clampf(rawEnergy, 0.0f, 1.0f);
@@ -626,10 +641,9 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
         pulse *= confMult;
 
         // Pattern prediction boost: onsets at historically active bar positions
-        // get extra confidence. Only active when pattern is established.
-        float prediction = predictOnsetStrength(nowMs);
-        if (prediction > 0.0f) {
-            pulse *= (1.0f + prediction * patternGain);
+        // get extra confidence. Uses cached prediction from above.
+        if (patternPrediction > 0.0f) {
+            pulse *= (1.0f + patternPrediction * patternGain);
         }
     }
 
