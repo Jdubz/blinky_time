@@ -68,7 +68,7 @@ public:
     float getBpmMin() const { return bpmMin; }
     float getBpmMax() const { return bpmMax; }
 
-    // (AudioController compatibility stubs removed — v64-v74 dead code cleanup)
+    // Alias for JSON audio stream ("onset" field)
     float getLastOnsetStrength() const { return lastPulseStrength_; }
     float getPatternConfidence() const { return patternConfidence_; }
     float getIoiConfidence() const { return ioiConfidence_; }
@@ -148,6 +148,7 @@ private:
     static constexpr float OSS_FRAME_RATE = 66.0f;
     static constexpr float OSS_FRAMES_PER_MIN = OSS_FRAME_RATE * 60.0f;
     float ossBuffer_[OSS_BUFFER_SIZE] = {0};
+    float ossLinear_[OSS_BUFFER_SIZE] = {0};  // Linearized OSS (shared by ACF + PLP)
     int ossWriteIdx_ = 0;
     int ossCount_ = 0;
 
@@ -169,6 +170,7 @@ private:
     float plpConfidence_ = 0.0f;                // Dual-source agreement confidence
     float plpPulseValue_ = 0.5f;               // Current pattern value at phase position
     float plpBassPeriod_ = 33.0f;              // Bass ACF dominant period (frames)
+    float cachedBassEnergy_ = 0.0f;            // Cached bass mel energy (shared by PLP + energy synthesis)
     uint16_t beatCount_ = 0;                    // Beat counter (increments on phase wrap)
 
     // === Pulse detection ===

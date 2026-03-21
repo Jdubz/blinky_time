@@ -125,15 +125,10 @@ const AudioControl& AudioTracker::update(float dt) {
     // 5. Pulse detection runs every frame (uses raw ODF, before gating)
     updatePulseDetection(odf, dt, nowMs);
 
-    // 6. ODF information gate — removed (v76).
-
-    // 7-8. Feed DSP components only on new spectral frames.
-    //      BPM estimation uses spectral flux (NN-independent broadband transient
-    //      signal) — not NN onset activation. NN onset drives visual pulse only.
+    // 6. Feed DSP components only on new spectral frames.
     if (newSpectralFrame) {
         float flux = spectral_.getSpectralFlux();
-        // Apply contrast sharpening (power-law) before buffering.
-        // Squaring sharpens peaks relative to baseline, improving ACF.
+        // Contrast sharpening (power-law) before buffering — sharpens peaks for ACF.
         float fluxContrast;
         if (odfContrast == 2.0f) {
             fluxContrast = flux * flux;
@@ -144,22 +139,17 @@ const AudioControl& AudioTracker::update(float dt) {
         } else {
             fluxContrast = powf(flux, odfContrast);
         }
-
-        // Clamp contrast-sharpened flux to [0, 1] before feeding DSP components.
-        // Spectral flux can exceed 1.0 if band weights are set high; squaring
-        // amplifies the overshoot and degrades ACF normalization.
         fluxContrast = clampf(fluxContrast, 0.0f, 1.0f);
-
         addOssSample(fluxContrast);
 
-        // Bass energy for PLP dual-source analysis
-        float bassEnergy = 0.0f;
+        // Cache bass energy (used by PLP dual-source AND energy synthesis)
+        cachedBassEnergy_ = 0.0f;
         const float* mel = spectral_.getMelBands();
         if (mel) {
-            for (int i = 1; i <= 6; i++) bassEnergy += mel[i];
-            bassEnergy /= 6.0f;
+            for (int i = 1; i <= 6; i++) cachedBassEnergy_ += mel[i];
+            cachedBassEnergy_ /= 6.0f;
         }
-        addBassSample(bassEnergy);
+        addBassSample(cachedBassEnergy_);
     }
 
     // 9. Periodic ACF for tempo estimation + IOI analysis
@@ -225,16 +215,15 @@ void AudioTracker::addOssSample(float odf) {
 // ============================================================================
 
 void AudioTracker::runAutocorrelation() {
-    // Linearize circular OSS buffer (static: avoid 1.4 KB on stack per call)
-    static float ossLinear[OSS_BUFFER_SIZE];
+    // Linearize circular OSS buffer into class member (shared with updatePlpAnalysis)
     int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
     for (int i = 0; i < ossCount_; i++) {
-        ossLinear[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
+        ossLinear_[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
     }
 
     // Compute mean for mean subtraction (important for spectral flux with non-zero baseline)
     float ossMean = 0.0f;
-    for (int i = 0; i < ossCount_; i++) ossMean += ossLinear[i];
+    for (int i = 0; i < ossCount_; i++) ossMean += ossLinear_[i];
     ossMean /= ossCount_;
 
     // Lag range from BPM limits
@@ -251,7 +240,7 @@ void AudioTracker::runAutocorrelation() {
     float acf[MAX_ACF_SIZE];  // Fixed size on stack
     float signalEnergy = 0.0f;
     for (int i = 0; i < ossCount_; i++) {
-        float v = ossLinear[i] - ossMean;
+        float v = ossLinear_[i] - ossMean;
         signalEnergy += v * v;
     }
 
@@ -261,7 +250,7 @@ void AudioTracker::runAutocorrelation() {
         int count = ossCount_ - lag;
         if (count <= 0) { acf[lagIdx] = 0.0f; continue; }
         for (int i = 0; i < count; i++) {
-            sum += (ossLinear[i] - ossMean) * (ossLinear[i + lag] - ossMean);
+            sum += (ossLinear_[i] - ossMean) * (ossLinear_[i + lag] - ossMean);
         }
         acf[lagIdx] = sum / count;
     }
@@ -347,19 +336,14 @@ void AudioTracker::updatePlpAnalysis() {
     if (ossCount_ < patLen * 2) return;
 
     // --- 2. Epoch-fold OSS buffer to extract average pattern ---
-    // Linearize circular buffer (reuse static from runAutocorrelation)
-    static float ossLinear[OSS_BUFFER_SIZE];
-    int startIdx = (ossWriteIdx_ - ossCount_ + OSS_BUFFER_SIZE) % OSS_BUFFER_SIZE;
-    for (int i = 0; i < ossCount_; i++) {
-        ossLinear[i] = ossBuffer_[(startIdx + i) % OSS_BUFFER_SIZE];
-    }
+    // ossLinear_ already populated by runAutocorrelation() (called just before us)
 
     // Fold and average
     float patternAccum[MAX_PATTERN_LEN] = {0};
     int epochs = 0;
     for (int offset = ossCount_ - patLen; offset >= 0; offset -= patLen) {
         for (int j = 0; j < patLen; j++) {
-            patternAccum[j] += ossLinear[offset + j];
+            patternAccum[j] += ossLinear_[offset + j];
         }
         epochs++;
     }
@@ -460,7 +444,7 @@ void AudioTracker::updatePlpAnalysis() {
             for (int j = 0; j < patLen; j++) {
                 int sigIdx = ossCount_ - patLen + j;
                 int patIdx = (j + offset) % patLen;
-                sum += ossLinear[sigIdx] * plpPattern_[patIdx];
+                sum += ossLinear_[sigIdx] * plpPattern_[patIdx];
             }
             if (sum > bestCorr) {
                 bestCorr = sum;
@@ -732,18 +716,9 @@ void AudioTracker::decayPatternBins() {
 
 void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     // --- Energy ---
-    // Hybrid: mic level + bass mel energy + ODF peak-hold
+    // Hybrid: mic level + bass mel energy (cached) + ODF peak-hold
     float micLevel = mic_.getLevel();
-    float bassMelEnergy = 0.0f;
-    const float* melBands = spectral_.getMelBands();
-    if (melBands) {
-        for (int i = 1; i <= 6; i++) {
-            bassMelEnergy += melBands[i];
-        }
-        bassMelEnergy /= 6.0f;
-    }
-
-    float rawEnergy = energyMicWeight * micLevel + energyMelWeight * bassMelEnergy + energyOdfWeight * odfPeakHold_;
+    float rawEnergy = energyMicWeight * micLevel + energyMelWeight * cachedBassEnergy_ + energyOdfWeight * odfPeakHold_;
 
     // Beat-proximity energy boost via PLP pulse (replaces subdivision-aware proximity)
     rawEnergy *= (1.0f + plpPulseValue_ * 0.3f * plpConfidence_);

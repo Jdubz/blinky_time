@@ -1305,7 +1305,7 @@ void SerialConsole::streamTick() {
                 if (i > 0) Serial.print(',');
                 Serial.print(mel[i], 4);
             }
-            // onset = raw ODF fed into CBSS (NN activation or mic level fallback)
+            // onset = last pulse strength (NN activation or mic level fallback)
             Serial.print(F("],\"onset\":"));
             Serial.print(audioCtrl_->getLastOnsetStrength(), 4);
             // Note (v65): "nn" field is now always present in both NN and non-NN builds.
