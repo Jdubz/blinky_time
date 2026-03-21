@@ -1095,9 +1095,11 @@ void AudioTracker::synthesizeOutputs(float dt, uint32_t nowMs) {
     control_.plpPulse = plpPulseValue_;
 
     // --- Rhythm Strength ---
-    // Blend ACF periodicity, comb bank confidence, and PLP dual-source agreement
+    // Base: ACF periodicity + comb bank confidence (proven formula).
+    // PLP confidence can only boost, never drag down.
     float combConf = combFilterBank_.getPeakConfidence();
-    float strength = periodicityStrength_ * 0.4f + combConf * 0.3f + plpConfidence_ * 0.3f;
+    float baseStrength = periodicityStrength_ * 0.6f + combConf * 0.4f;
+    float strength = (plpConfidence_ > baseStrength) ? plpConfidence_ : baseStrength;
 
     // Soft activation gate (quadratic falloff below threshold)
     if (strength < activationThreshold) {
