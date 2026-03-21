@@ -133,6 +133,6 @@ export interface TimestampedMusicState {
   bpm: number;
   phase: number;
   confidence: number;
-  oss?: number;     // Smoothed onset strength
-  cbss?: number;    // Current CBSS value
+  oss?: number;       // Raw onset strength
+  plpPulse?: number;  // PLP extracted pattern value (0-1)
 }

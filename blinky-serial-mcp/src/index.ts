@@ -253,7 +253,7 @@ interface DeviceRunScore {
   // Adjusted raw data
   adjustedDetections: Array<{ timestampMs: number; type: string; strength: number }>;
   adjustedBeatEvents: Array<{ timestampMs: number; bpm: number; type: string; predicted?: boolean }>;
-  adjustedMusicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; cbss?: number }>;
+  adjustedMusicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; plpPulse?: number }>;
 }
 
 /**
@@ -1696,13 +1696,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
         };
 
-        // Add debug info if available
-        if (lastSample && (lastSample.sb !== undefined || lastSample.mb !== undefined)) {
+        // Add PLP debug info if available
+        if (lastSample && lastSample.pp !== undefined) {
           response.debug = {
-            stableBeats: lastSample.sb,
-            missedBeats: lastSample.mb,
-            peakEnergy: lastSample.pe !== undefined ? parseFloat(lastSample.pe.toFixed(4)) : null,
-            errorIntegral: lastSample.ei !== undefined ? parseFloat(lastSample.ei.toFixed(3)) : null,
+            plpPulse: parseFloat(lastSample.pp.toFixed(3)),
+            periodicityStrength: lastSample.ps !== undefined ? parseFloat(lastSample.ps.toFixed(3)) : null,
+            patternConfidence: lastSample.pc !== undefined ? parseFloat(lastSample.pc.toFixed(3)) : null,
           };
         }
 
