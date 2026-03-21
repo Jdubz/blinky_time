@@ -28,7 +28,7 @@ Replace the PLL with three complementary signal sources operating at different t
 
 ### 1. Predominant Local Pulse (PLP) — replaces PLL
 
-**Paper:** Meier, Chiu & Muller, "A Real-Time Beat Tracking System with Zero Latency and Enhanced Confidence Signals", TISMIR 2024. Open-source: github.com/groupmm/real_time_plp
+**Paper:** Meier, Chiu & Muller, "A Real-Time Beat Tracking System with Zero Latency and Enhanced Confidence Signals", TISMIR 2024. Open-source: [github.com/groupmm/real_time_plp](https://github.com/groupmm/real_time_plp)
 
 **Concept:** Instead of maintaining a free-running oscillator with onset corrections, PLP creates a smooth pulse signal by convolving the onset/flux signal with half-wave sinusoidal kernels at the detected tempo and overlap-adding them into a buffer.
 
