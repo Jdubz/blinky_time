@@ -79,7 +79,7 @@ export class DeviceSession {
           phase: state.ph,
           confidence: state.conf,
           oss: state.oss,
-          cbss: state.cb,
+          plpPulse: state.pp,
         });
       }
     });

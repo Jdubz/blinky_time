@@ -1461,6 +1461,8 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getLastOnsetStrength(), 3);
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
+            Serial.print(F(",\"pp\":"));
+            Serial.print(audio.plpPulse, 3);
             Serial.print(F(",\"db\":"));
             Serial.print(audio.downbeat, 2);
             Serial.print(F(",\"bm\":"));

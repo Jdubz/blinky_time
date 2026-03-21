@@ -266,7 +266,7 @@ function scoreDeviceRun(
     duration: number;
     startTime: number;
     transients: Array<{ timestampMs: number; type: string; strength: number }>;
-    musicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; cbss?: number }>;
+    musicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; plpPulse?: number }>;
     beatEvents: Array<{ timestampMs: number; bpm: number; type: string; predicted?: boolean }>;
   },
   audioStartTime: number,
@@ -407,6 +407,54 @@ function scoreDeviceRun(
     }
   }
 
+  // PLP accuracy metrics
+  const plpValues = activeStates.filter(s => s.plpPulse !== undefined).map(s => s.plpPulse!);
+  let plpAtTransient = 0;
+  let plpAutoCorr = 0;
+  let plpPeakiness = 0;
+  let plpMean = 0;
+
+  if (plpValues.length > 0) {
+    plpMean = plpValues.reduce((s, v) => s + v, 0) / plpValues.length;
+    const plpMax = Math.max(...plpValues);
+    plpPeakiness = plpMean > 0.01 ? plpMax / plpMean : 0;
+
+    // PLP value at transient times: for each transient, find nearest music state
+    const transientPlpValues: number[] = [];
+    for (const det of detections) {
+      let bestState: (typeof activeStates)[0] | null = null;
+      let bestDist = Infinity;
+      for (const s of activeStates) {
+        const dist = Math.abs(s.timestampMs - det.timestampMs);
+        if (dist < bestDist) { bestDist = dist; bestState = s; }
+        if (dist > 200) break;  // early exit, states are sorted by time
+      }
+      if (bestState && bestState.plpPulse !== undefined && bestDist < 100) {
+        transientPlpValues.push(bestState.plpPulse);
+      }
+    }
+    if (transientPlpValues.length > 0) {
+      plpAtTransient = transientPlpValues.reduce((s, v) => s + v, 0) / transientPlpValues.length;
+    }
+
+    // PLP autocorrelation at detected BPM lag
+    if (avgBpm > 0 && plpValues.length > 10) {
+      const streamRate = plpValues.length / (audioDurationSec || 1);
+      const bpmLag = Math.round(streamRate * 60 / avgBpm);
+      if (bpmLag > 0 && bpmLag < plpValues.length / 2) {
+        let sumXY = 0, sumX2 = 0;
+        const n = plpValues.length - bpmLag;
+        for (let i = 0; i < n; i++) {
+          const x = plpValues[i] - plpMean;
+          const y = plpValues[i + bpmLag] - plpMean;
+          sumXY += x * y;
+          sumX2 += x * x;
+        }
+        plpAutoCorr = sumX2 > 0 ? sumXY / sumX2 : 0;
+      }
+    }
+  }
+
   // Diagnostics
   const transientBeatOffsets: number[] = [];
   detections.forEach((det) => {
@@ -493,6 +541,12 @@ function scoreDeviceRun(
       avgConfidence: Math.round(avgConf * 100) / 100,
       phaseStability: Math.round(phaseStability * 1000) / 1000,
       activationMs: activeStates.length > 0 ? activeStates[0].timestampMs : null,
+    },
+    plp: {
+      atTransient: Math.round(plpAtTransient * 1000) / 1000,  // avg PLP pulse when transients fire (1.0 = perfect alignment)
+      autoCorr: Math.round(plpAutoCorr * 1000) / 1000,        // autocorrelation at BPM lag (1.0 = perfectly periodic)
+      peakiness: Math.round(plpPeakiness * 100) / 100,        // peak/mean ratio (1.0 = flat/cosine, >2 = strong pattern)
+      mean: Math.round(plpMean * 1000) / 1000,                // average PLP value (0.5 = cosine fallback)
     },
     diagnostics: {
       transientRate: audioDurationSec > 0 ? detections.length / audioDurationSec : 0,
