@@ -207,6 +207,131 @@ Generator migration is estimated at 60-70% of total implementation effort (Phase
 2. Map band energies to distinct visual parameters per generator
 3. Tune visual response curves
 
+## Serial Stream Changes
+
+### Current music stream format (`{"m":{...}}` at ~20 Hz)
+
+| Field | Key | Source | PLP Impact |
+|-------|-----|--------|------------|
+| Rhythm active | `a` | periodicityStrength > threshold | Unchanged |
+| BPM | `bpm` | ACF + comb bank | Unchanged |
+| Phase | `ph` | PLL sawtooth 0→1 | **Replace with plpPulse** |
+| Rhythm strength | `str` | 60% periodicity + 40% comb | **Replace with plpConfidence** |
+| Periodicity | `conf` | ACF peak ratio | Unchanged |
+| Beat count | `bc` | PLL phase wrap counter | **Remove** (PLP has no discrete wraps) |
+| Beat event | `q` | Phase wrap >0.8→<0.2 | **Replace** (see below) |
+| Energy | `e` | mic + bass mel + onset peak-hold | Unchanged |
+| Pulse | `p` | NN onset strength | Unchanged |
+| Onset strength | `oss` | Raw NN activation | Unchanged |
+| Onset density | `od` | Onsets/sec rolling window | **Replace with nPVI** |
+| Downbeat | `db` | Always 0 | Remove |
+| Beat in measure | `bm` | Always 0 | Remove |
+
+### New/changed fields
+
+| Field | Key | Source | Purpose |
+|-------|-----|--------|---------|
+| PLP pulse | `ph` | PLP buffer readout | Reuse key for backward compat; semantics change from sawtooth to smooth sinusoidal wave (0-1, peaks at periodic positions) |
+| PLP confidence | `str` | PLP peak amplitude | Reuse key; semantics change from periodicity blend to PLP-derived confidence |
+| Beat event | `q` | PLP peak detection | 1 when plpPulse crosses threshold downward (peak just passed); replaces phase-wrap detection |
+| Onset regularity | `nPVI` | nPVI computation | New field. 0=metronomic, 100+=irregular |
+| Bass energy | `eBass` | Mel bands 1-6 EMA | New field. 0-1 |
+| Mid energy | `eMid` | Mel bands 7-20 EMA | New field. 0-1 |
+| Brightness | `bright` | Spectral centroid EMA | New field (Phase 3 stretch). 0-1 |
+
+### Backward compatibility strategy
+
+Reuse `ph` and `str` keys with changed semantics rather than adding new keys. Test scripts that read these fields will get PLP values instead of PLL values — which is the intent. Scripts that depend on sawtooth-specific behavior (phase wrap detection at >0.8→<0.2) need updating.
+
+### Diagnostic commands
+
+| Command | Current | After PLP |
+|---------|---------|-----------|
+| `show beat` | PLL state (phase, integral, beat count) | Alias to `show plp`; show plpPulse, plpConfidence, buffer fill |
+| `show plp` | (new) | PLP buffer state, confidence, nPVI, band energies |
+| `json rhythm` | BPM, phase, periodicity, combBpm | Replace phase with plpPulse, add plpConfidence, nPVI |
+| `json plp` | (new) | Compact: plpPulse, plpConfidence, nPVI, eBass, eMid, brightness |
+| `show bands` | (new) | Per-band energy envelopes (4 bands) |
+
+## Testing Infrastructure Changes
+
+### Ground truth — no changes needed
+
+The `.beats.json` files contain beat times, strengths, and downbeat flags from 7-system consensus. These are audio-content labels, not system-dependent. The `track_manifest.json` provides seek offsets, BPM, and quality metadata. All remain valid for PLP testing.
+
+The `kick_weighted/*.kick_weighted.json` files provide per-instrument onset labels. These are also audio-content labels and remain valid.
+
+### Test script impact
+
+| Script | Stream Fields Used | PLP Impact | Required Changes |
+|--------|-------------------|------------|-----------------|
+| `ab_test_multidev.cjs` | `m.bpm` only | None | None (BPM path unchanged) |
+| `model_compare_multidev.cjs` | `m.bpm` only | None | None |
+| `param_sweep_multidev.cjs` | `m.bpm`, `m.ph`, `m.p`, `m.str`, `m.e` | Phase alignment metric changes | Update phase alignment formula (PLP peaks near 1.0, not sawtooth wrap) |
+| `phase_downbeat_eval.cjs` | `m.ph`, `m.bpm`, `m.str`, `m.db`, `m.q` | Major: phase error and beat event semantics change | Rewrite beat detection (PLP peak detection replaces phase wrap); disable downbeat metrics |
+
+### New test metrics
+
+**1. PLP pulse periodicity** (replaces phase consistency)
+
+Autocorrelate the streamed `ph` (plpPulse) signal at the detected BPM lag. The ACF peak height measures how periodic the PLP output is. Target: > 0.5 for rhythmic music. This is the primary success metric — it directly measures whether the visualization pulses in time with the music's dominant rhythm.
+
+```
+plpPeriodicity = ACF(plpPulse, lag=framerate*60/bpm) / ACF(plpPulse, lag=0)
+```
+
+**2. Visual onset accuracy** (unchanged)
+
+Do `audio.pulse` spikes coincide with audible kick/snare transients? Measured via kick-weighted onset F1 (existing metric, unchanged by PLP).
+
+**3. Band energy responsiveness** (new)
+
+Cross-correlate streamed `eBass` with ground-truth bass amplitude envelope (extracted offline from test tracks via bandpass filter + RMS). Peak correlation and lag measure responsiveness. Target: peak correlation > 0.7, lag < 50ms.
+
+**4. nPVI accuracy** (new, calibration only)
+
+Compare streamed `nPVI` values across the 18 EDM test tracks. Four-on-the-floor tracks (techno-minimal-01, techno-deep-ambience) should show low nPVI (<30). Breakbeat/syncopated tracks (breakbeat-drive, garage-uk-2step) should show high nPVI (>60). This calibrates the nPVI thresholds for electronic music.
+
+### Settle time
+
+Current: 12 seconds (OSS buffer 5.5s + ACF convergence 3-5s + margin). PLP convergence depends on the overlap-add buffer filling with enough periodic kernels — likely similar to ACF convergence (a few beat periods). Start with 12 seconds and adjust if PLP converges faster.
+
+## Parameters
+
+### Removed (12 PLL/phase parameters)
+
+| Serial Name | Parameter | Reason |
+|-------------|-----------|--------|
+| `pllkp` | PLL proportional gain | PLL removed |
+| `pllki` | PLL integral gain | PLL removed |
+| `pllonsetfloor` | PLL onset floor | PLL removed |
+| `pllnearbeat` | PLL correction window | PLL removed |
+| `pllintdecay` | PLL integral decay | PLL removed |
+| `pllsildecay` | PLL silence decay | PLL removed |
+| `pulseboost` | On-beat pulse boost | Phase modulation removed |
+| `conffloor` | Off-beat confidence floor | Phase modulation removed |
+| `energyboost` | On-beat energy boost | Phase modulation removed |
+| `confactivation` | Rhythm activation threshold | Replaced by plpConfidence |
+| `conffullmod` | Full modulation threshold | Replaced by plpConfidence |
+| `subdivtol` | Subdivision tolerance | Phase modulation removed |
+| `odfgate` | ODF information gate | Already deprecated (v76) |
+
+### New (estimated 8-12 PLP/band/nPVI parameters)
+
+| Serial Name | Parameter | Default | Range | Purpose | Needs Sweep? |
+|-------------|-----------|---------|-------|---------|-------------|
+| `plpbufsize` | PLP buffer frames | 256 | 128-512 | Overlap-add buffer length | No (set once based on BPM range) |
+| `plpnovgain` | Novelty scaling | 1.0 | 0.1-5.0 | Spectral flux gain into PLP kernels | Yes |
+| `plpconfalpha` | Confidence EMA | 0.2 | 0.05-0.5 | Smoothing for plpConfidence | Maybe |
+| `plpactivation` | Music mode threshold | 0.3 | 0.0-1.0 | plpConfidence below this → organic mode | Yes |
+| `bassalpha` | Bass energy EMA | 0.3 | 0.1-0.5 | Smoothing for 60-300 Hz band | Maybe |
+| `midalpha` | Mid energy EMA | 0.3 | 0.1-0.5 | Smoothing for 300-4k Hz band | Maybe |
+| `npvirate` | nPVI update interval | 500 | 250-1000 | Milliseconds between nPVI updates | No |
+| `npvimin` | nPVI min intervals | 4 | 2-16 | Minimum IOIs for stable estimate | No |
+| `centroidalpha` | Brightness EMA | 0.01 | 0.001-0.1 | Slow timbral evolution smoothing | No |
+
+Parameters marked "Needs Sweep" should be tested with `param_sweep_multidev.cjs` using the PLP periodicity metric as the optimization target.
+
 ## Success Metrics
 
 Instead of phase consistency (which measures lock to beat grid — something we've shown is unachievable), measure:
