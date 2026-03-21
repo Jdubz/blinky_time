@@ -2,6 +2,7 @@
 data/audio/
 data/labels/
 data/processed/
+data/mel_cache/
 data/processed-deep/
 data/processed-deep-v2/
 data/processed_backup*/

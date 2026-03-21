@@ -155,6 +155,7 @@ def _load_model(model_path: str, cfg: dict, device: torch.device):
             sum_head=cfg["model"].get("sum_head", False),
             num_tempo_bins=cfg["model"].get("num_tempo_bins", 0),
             freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
+            num_output_channels=cfg["model"].get("num_output_channels", 0),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
         from models.onset_conv1d_pool import build_onset_conv1d_pool
@@ -221,8 +222,9 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
 
         # Run model on overlapping chunks, average predictions
         n_frames = mel.shape[0]
-        activations = np.zeros(n_frames, dtype=np.float32)
-        db_activations = np.zeros(n_frames, dtype=np.float32) if has_downbeat else None
+        n_out_ch = model.out_channels
+        # Accumulate all output channels
+        all_activations = np.zeros((n_frames, n_out_ch), dtype=np.float32)
         counts = np.zeros(n_frames, dtype=np.float32)
 
         stride = chunk_frames // 2
@@ -241,7 +243,6 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                 pred = model(chunk.unsqueeze(0))[0]  # (time or time//pf, channels)
 
                 if pool_factor > 1:
-                    # Upsample pooled output back to input resolution
                     pred_np = pred.cpu().numpy()
                     pred_np = np.repeat(pred_np, pool_factor, axis=0)
                     actual_len = min(chunk_frames, n_frames - start)
@@ -250,14 +251,15 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                     actual_len = min(chunk_frames, n_frames - start)
                     pred_np = pred[:actual_len].cpu().numpy()
 
-                activations[start:start + actual_len] += pred_np[:, 0]
-                if has_downbeat:
-                    db_activations[start:start + actual_len] += pred_np[:, 1]
+                all_activations[start:start + actual_len] += pred_np
                 counts[start:start + actual_len] += 1
 
-        activations /= np.maximum(counts, 1)
-        if has_downbeat:
-            db_activations /= np.maximum(counts, 1)
+        all_activations /= np.maximum(counts, 1)[:, np.newaxis]
+
+        # Extract channel activations
+        activations = all_activations[:, 0]  # ch0: onset (or kick for instrument models)
+        db_activations = all_activations[:, 1] if has_downbeat else None
+        is_instrument_model = n_out_ch >= 3 and not has_downbeat
 
         # Load ground truth beats
         with open(label_path) as f:
@@ -332,6 +334,38 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                     typed_recall = 0.0
                 result[f"{onset_type}_recall"] = float(typed_recall)
 
+        # Per-channel instrument evaluation (3-channel models: kick/snare/hihat)
+        if is_instrument_model and kw_path.exists():
+            channel_names = cfg["model"].get("output_channel_names", ["kick", "snare", "hihat"])
+            for ch_idx, ch_name in enumerate(channel_names[:n_out_ch]):
+                ch_act = all_activations[:, ch_idx]
+                ch_est = _peak_pick(ch_act, threshold, frame_rate)
+                # Evaluate this channel against its corresponding instrument type
+                ref_typed = np.array([o["time"] for o in kw_data["onsets"]
+                                      if o["type"] == ch_name])
+                if len(ref_typed) > 0 and len(ch_est) > 0:
+                    ch_f1 = mir_eval.beat.f_measure(
+                        ref_typed, ch_est, f_measure_threshold=0.07)
+                else:
+                    ch_f1 = 0.0
+                result[f"{ch_name}_ch_f1"] = float(ch_f1)
+                result[f"{ch_name}_ch_est"] = len(ch_est)
+                result[f"{ch_name}_ch_ref"] = len(ref_typed)
+
+            # Combined onset: max(kick, snare) — what firmware would use
+            combined_act = np.maximum(all_activations[:, 0], all_activations[:, 1])
+            combined_est = _peak_pick(combined_act, threshold, frame_rate)
+            # F1 against kick+snare onsets only (no hihats)
+            ref_kick_snare = np.array([o["time"] for o in kw_data["onsets"]
+                                       if o["type"] in ("kick", "snare")])
+            if len(ref_kick_snare) > 0 and len(combined_est) > 0:
+                combined_f1 = mir_eval.beat.f_measure(
+                    ref_kick_snare, combined_est, f_measure_threshold=0.07)
+            else:
+                combined_f1 = 0.0
+            result["combined_kick_snare_f1"] = float(combined_f1)
+            result["combined_est"] = len(combined_est)
+
         # Downbeat evaluation
         if has_downbeat:
             ref_downbeats = np.array([
@@ -365,7 +399,11 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
             kw_str = (f", kwF1={result['kw_onset_f1']:.3f} "
                       f"kick={result['kick_recall']:.3f} snare={result['snare_recall']:.3f} "
                       f"hihat={result['hihat_recall']:.3f}")
-        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{kw_str}{db_str}{acf_str}")
+        inst_str = ""
+        if is_instrument_model and "kick_ch_f1" in result:
+            inst_str = (f", ch: kick={result['kick_ch_f1']:.3f} snare={result['snare_ch_f1']:.3f} "
+                        f"hihat={result['hihat_ch_f1']:.3f} combined={result['combined_kick_snare_f1']:.3f}")
+        print(f"  {audio_path.stem}: F1={scores:.3f} (ref={len(ref_beats)}, est={len(est_beats)}){onset_str}{kw_str}{inst_str}{db_str}{acf_str}")
 
         # Save activation plot
         _plot_activation(activations, ref_beats, est_beats, frame_rate,
@@ -397,6 +435,20 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
                 print(f"  {onset_type.capitalize():>6} recall: mean={np.mean(typed_vals):.3f}, "
                       f"median={np.median(typed_vals):.3f}, "
                       f"min={np.min(typed_vals):.3f}, max={np.max(typed_vals):.3f}")
+
+        # Per-channel instrument F1 (3-channel models)
+        for ch_name in ("kick", "snare", "hihat"):
+            key = f"{ch_name}_ch_f1"
+            ch_vals = [r[key] for r in all_results if key in r]
+            if ch_vals:
+                print(f"  {ch_name.capitalize():>6} channel F1: mean={np.mean(ch_vals):.3f}, "
+                      f"median={np.median(ch_vals):.3f}, "
+                      f"min={np.min(ch_vals):.3f}, max={np.max(ch_vals):.3f}")
+        combined_vals = [r["combined_kick_snare_f1"] for r in all_results
+                         if "combined_kick_snare_f1" in r]
+        if combined_vals:
+            print(f"Aggregate Combined (kick+snare) F1: mean={np.mean(combined_vals):.3f}, "
+                  f"median={np.median(combined_vals):.3f}")
 
         db_f1s = [r["db_f1"] for r in all_results if "db_f1" in r]
         if db_f1s:
@@ -503,7 +555,9 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
         mel = firmware_mel_spectrogram(audio_gpu, cfg, mel_fb, window)
 
         n_frames = mel.shape[0]
-        activations = np.zeros(n_frames, dtype=np.float32)
+        n_out_ch = model.out_channels
+        is_inst = n_out_ch >= 3 and not has_downbeat
+        all_act = np.zeros((n_frames, n_out_ch), dtype=np.float32)
         counts = np.zeros(n_frames, dtype=np.float32)
         stride = chunk_frames // 2
         mel_tensor = torch.from_numpy(mel).float().to(device)
@@ -522,12 +576,17 @@ def sweep_thresholds(model_path: str, audio_dir: Path, cfg: dict,
 
                 if pool_factor > 1:
                     pred_np = np.repeat(pred.cpu().numpy(), pool_factor, axis=0)
-                    activations[start:start + actual_len] += pred_np[:actual_len, 0]
+                    all_act[start:start + actual_len] += pred_np[:actual_len]
                 else:
-                    activations[start:start + actual_len] += pred[:actual_len, 0].cpu().numpy()
+                    all_act[start:start + actual_len] += pred[:actual_len].cpu().numpy()
                 counts[start:start + actual_len] += 1
 
-        activations /= np.maximum(counts, 1)
+        all_act /= np.maximum(counts, 1)[:, np.newaxis]
+        # For instrument models, sweep on combined kick+snare; else use ch0
+        if is_inst:
+            activations = np.maximum(all_act[:, 0], all_act[:, 1])
+        else:
+            activations = all_act[:, 0]
 
         with open(label_path) as f:
             labels = json.load(f)
@@ -589,20 +648,31 @@ def evaluate_validation_set(model_path: str, cfg: dict, output_dir: Path,
         Y_val = Y_val[:, pool_factor - 1::pool_factor]
         Y_val = Y_val[:, :Y_pred_all.shape[1]]
 
-    Y_pred_beat = Y_pred_all[:, :, 0]
-    _print_frame_metrics("Beat", Y_pred_beat, Y_val)
+    num_output_channels = cfg["model"].get("num_output_channels", 0)
+    multichannel_targets = Y_val.ndim == 3 and Y_val.shape[2] > 1
 
-    if has_downbeat:
-        db_val_path = data_dir / "Y_db_val.npy"
-        if db_val_path.exists():
-            Y_db_val = np.load(db_val_path)
-            if pool_factor > 1:
-                Y_db_val = Y_db_val[:, pool_factor - 1::pool_factor]
-                Y_db_val = Y_db_val[:, :Y_pred_all.shape[1]]
-            Y_pred_db = Y_pred_all[:, :, 1]
-            _print_frame_metrics("Downbeat", Y_pred_db, Y_db_val)
-        else:
-            print("\nNo Y_db_val.npy found — skipping downbeat frame metrics")
+    if multichannel_targets:
+        # Per-channel frame metrics for instrument models
+        channel_names = cfg["model"].get("output_channel_names",
+                                         [f"ch{i}" for i in range(Y_val.shape[2])])
+        for ch_idx in range(min(Y_pred_all.shape[2], Y_val.shape[2])):
+            ch_name = channel_names[ch_idx] if ch_idx < len(channel_names) else f"ch{ch_idx}"
+            _print_frame_metrics(ch_name.capitalize(), Y_pred_all[:, :, ch_idx], Y_val[:, :, ch_idx])
+    else:
+        Y_pred_beat = Y_pred_all[:, :, 0]
+        _print_frame_metrics("Beat", Y_pred_beat, Y_val)
+
+        if has_downbeat:
+            db_val_path = data_dir / "Y_db_val.npy"
+            if db_val_path.exists():
+                Y_db_val = np.load(db_val_path)
+                if pool_factor > 1:
+                    Y_db_val = Y_db_val[:, pool_factor - 1::pool_factor]
+                    Y_db_val = Y_db_val[:, :Y_pred_all.shape[1]]
+                Y_pred_db = Y_pred_all[:, :, 1]
+                _print_frame_metrics("Downbeat", Y_pred_db, Y_db_val)
+            else:
+                print("\nNo Y_db_val.npy found — skipping downbeat frame metrics")
 
 
 def _print_frame_metrics(label: str, Y_pred: np.ndarray, Y_ref: np.ndarray):

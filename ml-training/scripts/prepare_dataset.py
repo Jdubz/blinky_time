@@ -28,6 +28,7 @@ Usage:
 
 import argparse
 import gc
+import hashlib
 import json
 import math
 import shutil
@@ -44,6 +45,44 @@ from tqdm import tqdm
 
 # Ensure ml-training root is on sys.path for `from scripts.audio import ...`
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def compute_mel_cache_key(cfg: dict, augment: bool, seed: int,
+                          mic_profile_path: str | None = None,
+                          rir_dir: str | None = None,
+                          stems_dir: str | None = None,
+                          stem_variants: list | None = None) -> str:
+    """Compute a hash key for mel cache based on audio + augmentation config.
+
+    Labels, targets, and training params are NOT included — those only affect
+    target generation, not mel extraction. This allows reusing cached mels
+    when only labels change.
+    """
+    cache_fields = {
+        "audio": cfg.get("audio", {}),
+        "augmentation": cfg.get("augmentation", {}),
+        "augment_enabled": augment,
+        "seed": seed,
+        "rir_dir": str(rir_dir) if rir_dir else None,
+        "stems_dir": str(stems_dir) if stems_dir else None,
+        "stem_variants": stem_variants,
+    }
+    # Hash mic profile content (not path) so moving the file doesn't invalidate
+    if mic_profile_path and Path(mic_profile_path).exists():
+        with open(mic_profile_path, "rb") as f:
+            cache_fields["mic_profile_hash"] = hashlib.sha256(f.read()).hexdigest()[:12]
+    canonical = json.dumps(cache_fields, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:12]
+
+
+def _file_rng(seed: int, track_stem: str) -> np.random.Generator:
+    """Create a deterministic per-file RNG from global seed + track name.
+
+    This makes each track's augmentation reproducible regardless of processing
+    order, enabling mel caching across runs.
+    """
+    track_hash = int(hashlib.md5(track_stem.encode()).hexdigest()[:8], 16)
+    return np.random.default_rng(seed ^ track_hash)
 
 from scripts.audio import (
     build_mel_filterbank_torch as _build_mel_filterbank,
@@ -150,6 +189,26 @@ def make_downbeat_targets(downbeat_times: np.ndarray, n_frames: int,
     if target_type == "binary":
         return _binary_targets(downbeat_times, n_frames, frame_rate)
     return _gaussian_targets(downbeat_times, n_frames, frame_rate, sigma)
+
+
+INSTRUMENT_CHANNELS = {"kick": 0, "snare": 1, "hihat": 2}
+
+
+def make_instrument_targets(beat_times: np.ndarray, beat_types: list[str],
+                            n_frames: int, frame_rate: float) -> np.ndarray:
+    """Create 3-channel per-instrument binary targets (kick/snare/hihat).
+
+    Returns (n_frames, 3) array where each channel is an independent binary
+    target for one instrument type. Multiple channels can be 1 at the same
+    frame if two instruments coincide (e.g., kick+snare on beat 1).
+    """
+    targets = np.zeros((n_frames, 3), dtype=np.float32)
+    for t, inst_type in zip(beat_times, beat_types):
+        frame_idx = round(t * frame_rate)
+        ch = INSTRUMENT_CHANNELS.get(inst_type)
+        if ch is not None and 0 <= frame_idx < n_frames:
+            targets[frame_idx, ch] = 1.0
+    return targets
 
 
 def _pink_noise_gpu(n: int, rng: np.random.Generator,
@@ -320,7 +379,8 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                  window: torch.Tensor,
                  mic_profile: dict | None = None,
                  stems_dir: Path | None = None,
-                 stem_variants: list[str] | None = None) -> list[dict]:
+                 stem_variants: list[str] | None = None,
+                 mel_cache_dir: Path | None = None) -> list[dict]:
     """Process one audio file into (features, targets) pairs.
 
     Audio loaded with librosa (resampling consistency), then moved to GPU
@@ -368,7 +428,24 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
     labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
     kick_weighted_dir = cfg.get("labels", {}).get("kick_weighted_dir", "")
 
-    if labels_type == "kick_weighted" and kick_weighted_dir:
+    if labels_type == "instrument" and kick_weighted_dir:
+        # Per-instrument onset targets: 3 channels (kick/snare/hihat).
+        # Each channel gets an independent binary target from the kick_weighted
+        # label type field. The model learns to classify onset type, and the
+        # firmware can choose which channels to use for visual pulse.
+        kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
+        if not kw_path.exists():
+            raise FileNotFoundError(
+                f"Kick-weighted labels missing for {audio_path.stem}: {kw_path}\n"
+                f"Run: python scripts/generate_kick_weighted_targets.py"
+            )
+        with open(kw_path) as f:
+            kw_data = json.load(f)
+        # Build per-instrument time/type arrays (used later by make_instrument_targets)
+        beat_times = np.array([o["time"] for o in kw_data["onsets"]])
+        beat_types = [o["type"] for o in kw_data["onsets"]]
+        beat_strengths = None  # not used for instrument targets
+    elif labels_type == "kick_weighted" and kick_weighted_dir:
         kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
         if not kw_path.exists():
             raise FileNotFoundError(
@@ -379,6 +456,29 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
             kw_data = json.load(f)
         beat_times = np.array([o["time"] for o in kw_data["onsets"]])
         beat_strengths = np.array([o["weight"] for o in kw_data["onsets"]])
+    elif labels_type == "consensus_kick_weighted" and kick_weighted_dir:
+        # Consensus beats for timing accuracy, kick_weighted for instrument type.
+        # Each consensus beat is matched to the nearest kick_weighted onset within
+        # ±70ms. Kicks/snares keep weight 1.0, hihats get weight 0.0 (suppress),
+        # unmatched beats keep their consensus strength (musically important).
+        with open(label_path) as f:
+            labels = json.load(f)
+        hits = [h for h in labels["hits"] if h.get("expectTrigger", True)]
+        beat_times = np.array([h["time"] for h in hits])
+        beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
+
+        kw_path = Path(kick_weighted_dir) / f"{audio_path.stem}.kick_weighted.json"
+        if kw_path.exists() and len(beat_times) > 0:
+            with open(kw_path) as f:
+                kw_data = json.load(f)
+            kw_times = np.array([o["time"] for o in kw_data["onsets"]])
+            kw_types = [o["type"] for o in kw_data["onsets"]]
+            if len(kw_times) > 0:
+                for i, bt in enumerate(beat_times):
+                    nearest_idx = int(np.argmin(np.abs(kw_times - bt)))
+                    if abs(kw_times[nearest_idx] - bt) <= 0.07:
+                        if kw_types[nearest_idx] == "hihat":
+                            beat_strengths[i] = 0.0
     else:
         with open(label_path) as f:
             labels = json.load(f)
@@ -386,7 +486,7 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
         beat_times = np.array([h["time"] for h in hits])
         beat_strengths = np.array([h.get("strength", 1.0) for h in hits])
 
-    downbeat_times = np.array([]) if labels_type == "kick_weighted" else np.array([
+    downbeat_times = np.array([]) if labels_type in ("kick_weighted", "instrument") else np.array([
         h["time"] for h in hits if h.get("isDownbeat", False)
     ]) if use_downbeat else np.array([])
 
@@ -451,18 +551,23 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     continue
                 try:
                     rate = 2 ** (semitones / 12)
-                    # Phase vocoder: time-stretch without changing pitch
+                    # Run pitch shift on CPU to avoid GPU OOM on long tracks.
+                    # The augmented variants list holds ~10 GPU tensors; adding
+                    # STFT workspace on top exceeds 10 GB for tracks > 5 min.
+                    # CPU pitch shift takes ~1s/track — negligible vs GPU savings.
+                    src_cpu = src_audio.cpu()
                     n_fft = 512
                     hop = n_fft // 4
                     freq_bins = n_fft // 2 + 1
-                    spec = torch.stft(src_audio, n_fft=n_fft, hop_length=hop,
-                                      return_complex=True)
+                    win = torch.hann_window(n_fft)
+                    spec = torch.stft(src_cpu, n_fft=n_fft, hop_length=hop,
+                                      window=win, return_complex=True)
                     phase_advance = torch.linspace(
-                        0, math.pi * hop, freq_bins, device=device)[..., None]
+                        0, math.pi * hop, freq_bins)[..., None]
                     stretched_spec = torchaudio.functional.phase_vocoder(
                         spec.unsqueeze(0), rate, phase_advance)
                     stretched = torch.istft(stretched_spec.squeeze(0), n_fft=n_fft,
-                                           hop_length=hop)
+                                           hop_length=hop, window=win)
                     # Resample back to original length (restores duration, shifts pitch).
                     # Round source freq to nearest 100 for large GCD → tiny sinc kernel.
                     orig_freq = round(int(sr / rate) / 100) * 100
@@ -475,22 +580,37 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                         shifted = shifted[:len(src_audio)]
                     elif len(shifted) < len(src_audio):
                         shifted = torch.nn.functional.pad(shifted, (0, len(src_audio) - len(shifted)))
-                    variants.append((f"pitch{semitones:+d}st", shifted))
-                    del spec, stretched_spec, stretched
+                    variants.append((f"pitch{semitones:+d}st", shifted.to(device)))
+                    del src_cpu, spec, stretched_spec, stretched
                 except Exception as e:
                     import logging
                     logging.warning(f"Pitch shift {semitones:+d}st failed for "
                                     f"{audio_path.name}: {e}")
 
         for aug_name, aug_audio in variants:
-            mel = firmware_mel_spectrogram(aug_audio, cfg, mel_fb, window)
-            # Apply mic transfer function if calibration profile provided.
-            if mic_profile is not None:
-                mel = _apply_mic_profile(mel, mic_profile, rng)
+            cache_key = f"{speed:.2f}_{aug_name}"
+            cached_path = (mel_cache_dir / audio_path.stem / f"{cache_key}.npy"
+                           if mel_cache_dir else None)
+
+            if cached_path and cached_path.exists():
+                mel = np.load(cached_path)
+            else:
+                mel = firmware_mel_spectrogram(aug_audio, cfg, mel_fb, window)
+                # Apply mic transfer function if calibration profile provided.
+                if mic_profile is not None:
+                    mel = _apply_mic_profile(mel, mic_profile, rng)
+                if cached_path:
+                    cached_path.parent.mkdir(parents=True, exist_ok=True)
+                    np.save(cached_path, mel)
+
             n_frames = mel.shape[0]
-            targets = make_onset_targets(src_beats, n_frames, frame_rate, sigma,
-                                        target_type=target_type,
-                                        strengths=src_strengths)
+            if labels_type == "instrument":
+                targets = make_instrument_targets(
+                    src_beats, beat_types, n_frames, frame_rate)
+            else:
+                targets = make_onset_targets(src_beats, n_frames, frame_rate, sigma,
+                                            target_type=target_type,
+                                            strengths=src_strengths)
 
             result = {
                 "mel": mel,
@@ -508,7 +628,15 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
 
             # Spectral conditioning variant (only for original speed, clean)
             if augment and aug_name == "clean" and speed == 1.0:
-                conditioned_mel = apply_spectral_conditioning(mel)
+                cond_cache_key = f"{speed:.2f}_conditioned"
+                cond_cached = (mel_cache_dir / audio_path.stem / f"{cond_cache_key}.npy"
+                               if mel_cache_dir else None)
+                if cond_cached and cond_cached.exists():
+                    conditioned_mel = np.load(cond_cached)
+                else:
+                    conditioned_mel = apply_spectral_conditioning(mel)
+                    if cond_cached:
+                        np.save(cond_cached, conditioned_mel)
                 cond_result = {
                     "mel": conditioned_mel,
                     "target": targets,
@@ -568,10 +696,19 @@ def process_file(audio_path: Path, label_path: Path, cfg: dict,
                     target_rms = 10 ** (target_rms_db / 20)
                     stem_np = stem_np * (target_rms / rms)
 
-                    stem_gpu = torch.from_numpy(stem_np).to(device)
-                    mel = firmware_mel_spectrogram(stem_gpu, cfg, mel_fb, window)
-                    if mic_profile is not None:
-                        mel = _apply_mic_profile(mel, mic_profile, rng)
+                    stem_cache_key = f"1.00_stem_{variant_name}"
+                    stem_cached = (mel_cache_dir / audio_path.stem / f"{stem_cache_key}.npy"
+                                   if mel_cache_dir else None)
+                    if stem_cached and stem_cached.exists():
+                        mel = np.load(stem_cached)
+                    else:
+                        stem_gpu = torch.from_numpy(stem_np).to(device)
+                        mel = firmware_mel_spectrogram(stem_gpu, cfg, mel_fb, window)
+                        if mic_profile is not None:
+                            mel = _apply_mic_profile(mel, mic_profile, rng)
+                        if stem_cached:
+                            stem_cached.parent.mkdir(parents=True, exist_ok=True)
+                            np.save(stem_cached, mel)
                     n_frames = mel.shape[0]
                     targets = make_onset_targets(beat_times, n_frames, frame_rate,
                                                 sigma, target_type=target_type,
@@ -600,7 +737,9 @@ def chunk_data(mel: np.ndarray, target: np.ndarray,
 
     if n_frames < chunk_frames:
         pad_mel = np.zeros((chunk_frames, mel.shape[1]), dtype=mel.dtype)
-        pad_target = np.zeros(chunk_frames, dtype=target.dtype)
+        # Target may be 1D (n_frames,) or 2D (n_frames, channels) for instrument models
+        target_shape = (chunk_frames,) + target.shape[1:]
+        pad_target = np.zeros(target_shape, dtype=target.dtype)
         pad_mel[:n_frames] = mel
         pad_target[:n_frames] = target
         if has_downbeat:
@@ -644,6 +783,10 @@ def main():
                              "Options: drums, no_vocals, drums_bass (default: drums)")
     parser.add_argument("--seed", default=None, type=int, help="Random seed for augmentation")
     parser.add_argument("--device", default=None, help="Device: cuda, cpu, or auto (default: auto)")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Disable mel spectrogram caching (recompute everything)")
+    parser.add_argument("--clear-cache", action="store_true",
+                        help="Clear existing mel cache before starting")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -713,6 +856,24 @@ def main():
     mel_fb = _build_mel_filterbank(cfg, device)
     n_fft = cfg["audio"]["n_fft"]
     window = torch.hamming_window(n_fft, periodic=False).to(device)
+
+    # Mel cache: reuse computed mels when only labels change
+    mel_cache_dir = None
+    if not args.no_cache:
+        cache_key = compute_mel_cache_key(
+            cfg, args.augment, seed,
+            mic_profile_path=args.mic_profile,
+            rir_dir=str(rir_dir) if rir_dir else None,
+            stems_dir=str(stems_dir) if stems_dir else None,
+            stem_variants=stem_variant_list,
+        )
+        mel_cache_dir = Path("data/mel_cache") / cache_key
+        if args.clear_cache and mel_cache_dir.exists():
+            shutil.rmtree(mel_cache_dir)
+            print(f"Cleared mel cache: {mel_cache_dir}")
+        mel_cache_dir.mkdir(parents=True, exist_ok=True)
+        cached_count = sum(1 for d in mel_cache_dir.iterdir() if d.is_dir())
+        print(f"Mel cache: {mel_cache_dir} ({cached_count} tracks cached)")
 
     # Find paired audio + label files (non-recursive — audio_dir should be flat)
     audio_extensions = {".mp3", ".wav", ".flac", ".ogg"}
@@ -811,11 +972,15 @@ def main():
 
         for i, (audio_path, label_path) in enumerate(tqdm(split_pairs, desc=split_name)):
             try:
+                # Per-file deterministic RNG for reproducible augmentation
+                # (enables mel caching across runs regardless of processing order)
+                file_rng = _file_rng(seed, audio_path.stem)
                 results = process_file(audio_path, label_path, cfg, args.augment,
-                                       rir_dir, rng, device, mel_fb, window,
+                                       rir_dir, file_rng, device, mel_fb, window,
                                        mic_profile=mic_profile,
                                        stems_dir=stems_dir,
-                                       stem_variants=stem_variant_list)
+                                       stem_variants=stem_variant_list,
+                                       mel_cache_dir=mel_cache_dir)
                 for r in results:
                     mel_chunks, target_chunks, db_chunks = chunk_data(
                         r["mel"], r["target"], chunk_frames, chunk_stride,
@@ -860,9 +1025,13 @@ def main():
         X_out = np.lib.format.open_memmap(
             str(output_dir / f"X_{split_name}.npy"), mode='w+',
             dtype=np.float32, shape=(total, chunk_frames, n_mels))
+        # Detect Y shape from first shard: 1D (chunk_frames,) or 2D (chunk_frames, channels)
+        y_first = np.load(shard_dir / "Y_0.npy", mmap_mode='r')
+        y_shape = (total,) + y_first.shape[1:]  # (total, chunk_frames) or (total, chunk_frames, 3)
+        del y_first
         Y_out = np.lib.format.open_memmap(
             str(output_dir / f"Y_{split_name}.npy"), mode='w+',
-            dtype=np.float32, shape=(total, chunk_frames))
+            dtype=np.float32, shape=y_shape)
 
         has_db = (shard_dir / "D_0.npy").exists()
         D_out = None
@@ -908,12 +1077,67 @@ def main():
     print(f"  Train: {len(X_train)} chunks {X_train.shape}")
     print(f"  Val:   {len(X_val)} chunks {X_val.shape}")
 
-    # Compute positive ratios from a sample (avoid loading full memmap)
-    sample_idx = np.arange(min(10000, len(Y_train)))
-    print(f"  Positive ratio (sample): {Y_train[sample_idx].mean():.3f} (train)")
+    # === Post-prep validation ===
+    # Catches silent data corruption before burning GPU hours on training.
+    print("\n--- Post-prep validation ---")
+    issues = []
+
+    # 1. Positive ratio sanity check
+    sample_size = min(50000, len(Y_train))
+    val_sample_size = min(50000, len(Y_val))
+    sample_rng = np.random.default_rng(42)
+    train_idx = sample_rng.choice(len(Y_train), size=sample_size, replace=False)
+    val_idx = sample_rng.choice(len(Y_val), size=val_sample_size, replace=False)
+    train_pos = (Y_train[train_idx] > 0.5).mean()
+    val_pos = (Y_val[val_idx] > 0.5).mean()
+    print(f"  Positive ratio: train={train_pos:.4f}, val={val_pos:.4f}")
+    if train_pos < 0.005:
+        issues.append(f"Train positive ratio suspiciously low ({train_pos:.4f}) — labels may be wrong")
+    if train_pos > 0.30:
+        issues.append(f"Train positive ratio suspiciously high ({train_pos:.4f}) — labels may be wrong")
+    if abs(train_pos - val_pos) > train_pos * 0.5:
+        issues.append(f"Train/val positive ratio mismatch: {train_pos:.4f} vs {val_pos:.4f}")
+
+    # 2. Mel range check (should be [0, 1] from log compression mapping)
+    mel_sample = X_train[train_idx[:1000]]
+    mel_min, mel_max = mel_sample.min(), mel_sample.max()
+    mel_mean = mel_sample.mean()
+    print(f"  Mel range: [{mel_min:.3f}, {mel_max:.3f}], mean={mel_mean:.3f}")
+    if mel_min < -0.1 or mel_max > 1.1:
+        issues.append(f"Mel values out of [0,1] range: [{mel_min:.3f}, {mel_max:.3f}]")
+    if mel_mean < 0.01 or mel_mean > 0.95:
+        issues.append(f"Mel mean suspicious ({mel_mean:.3f}) — may be clipped or empty")
+
+    # 3. Check augmentation variant count (detect silently skipped augmentations)
+    expected_variants_per_track = 1  # clean only
+    if args.augment:
+        # clean + 4 gain + 3 noise + lowpass + bass-boost + conditioned = 11
+        expected_variants_per_track = 11
+        ts = cfg.get("augmentation", {}).get("time_stretch_factors", [])
+        ps = cfg.get("augmentation", {}).get("pitch_shift_semitones", [])
+        expected_variants_per_track += len(ps)  # pitch shifts
+        expected_variants_per_track += len(ts)  # time stretches (clean only each)
+    actual_per_track = len(X_train) / max(len(train_pairs), 1) / (chunk_frames / chunk_stride)
+    print(f"  Variants/track: expected~{expected_variants_per_track}, "
+          f"actual~{actual_per_track:.1f} chunks/track/stride")
+
+    # 4. Check for NaN/Inf
+    if np.any(~np.isfinite(mel_sample)):
+        issues.append("NaN or Inf detected in mel spectrograms!")
+
     if (output_dir / "Y_db_train.npy").exists():
         Y_db = np.load(output_dir / "Y_db_train.npy", mmap_mode='r')
-        print(f"  Downbeat ratio (sample): {Y_db[sample_idx].mean():.3f} (train)")
+        db_pos = (Y_db[train_idx] > 0.5).mean()
+        print(f"  Downbeat ratio: {db_pos:.4f}")
+
+    if issues:
+        print(f"\n  VALIDATION FAILED — {len(issues)} issue(s):")
+        for issue in issues:
+            print(f"    ✗ {issue}")
+        print("\n  Fix the issues above before training. Use --no-cache to force recompute.")
+        sys.exit(1)
+    else:
+        print("  All checks passed.")
 
 
 if __name__ == "__main__":

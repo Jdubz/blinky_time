@@ -46,12 +46,15 @@ class FrameOnsetConv1D(nn.Module):
                  downbeat: bool = False,
                  sum_head: bool = False,
                  num_tempo_bins: int = 0,
-                 freq_pos_encoding: bool = False):
+                 freq_pos_encoding: bool = False,
+                 num_output_channels: int = 0):
         super().__init__()
         assert len(channels) == len(kernel_sizes), \
             f"channels ({len(channels)}) and kernel_sizes ({len(kernel_sizes)}) must match"
 
-        self.out_channels = 2 if downbeat else 1
+        # num_output_channels > 0 overrides the downbeat-based channel count.
+        # Used for instrument-aware models (e.g., 3 channels: kick/snare/hihat).
+        self.out_channels = num_output_channels if num_output_channels > 0 else (2 if downbeat else 1)
         self.sum_head = sum_head and downbeat
         self.n_mels = n_mels
         self.channels = channels
@@ -126,7 +129,8 @@ def build_onset_conv1d(n_mels: int = 26,
                       downbeat: bool = False,
                       sum_head: bool = False,
                       num_tempo_bins: int = 0,
-                      freq_pos_encoding: bool = False) -> nn.Module:
+                      freq_pos_encoding: bool = False,
+                      num_output_channels: int = 0) -> nn.Module:
     """Build a frame-level Conv1D onset activation model.
 
     Args:
@@ -138,11 +142,13 @@ def build_onset_conv1d(n_mels: int = 26,
         sum_head: If True, constrain downbeat ≤ onset (Beat This! technique)
         num_tempo_bins: If > 0, add training-only tempo auxiliary head
         freq_pos_encoding: If True, add learnable frequency position vector
+        num_output_channels: If > 0, override output channel count (e.g., 3 for kick/snare/hihat)
     """
     return FrameOnsetConv1D(
         n_mels=n_mels, channels=channels, kernel_sizes=kernel_sizes,
         dropout=dropout, downbeat=downbeat, sum_head=sum_head,
-        num_tempo_bins=num_tempo_bins, freq_pos_encoding=freq_pos_encoding)
+        num_tempo_bins=num_tempo_bins, freq_pos_encoding=freq_pos_encoding,
+        num_output_channels=num_output_channels)
 
 
 def conv1d_model_summary(cfg: dict) -> None:

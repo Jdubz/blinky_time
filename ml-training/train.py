@@ -45,6 +45,9 @@ class MemmapBeatDataset(Dataset):
         if self.Y_db is not None:
             y_db = torch.from_numpy(self.Y_db[idx].copy()).float()
             y_out = torch.stack([y, y_db], dim=-1)
+        elif y.dim() == 2:
+            # Multi-channel targets (e.g., instrument model: chunk_frames × 3)
+            y_out = y
         else:
             y_out = y.unsqueeze(-1)
 
@@ -302,6 +305,9 @@ def main():
                              "Each epoch sees a different random subset. Default: from config, or 1.0")
     parser.add_argument("--num-workers", type=int, default=None,
                         help="DataLoader workers (default: from config, or 4)")
+    parser.add_argument("--finetune", default=None,
+                        help="Path to pretrained model weights. Loads weights and trains with 10x lower LR. "
+                             "For quick experiments: test new labels/loss without full training from scratch.")
     parser.add_argument("--allow-foreground", action="store_true",
                         help="Allow running outside tmux/screen (not recommended)")
     args = parser.parse_args()
@@ -404,24 +410,49 @@ def main():
     rng = np.random.default_rng(cfg["training"].get("seed", 42))
     sample_idx = rng.choice(len(y_all), size=sample_size, replace=False)
     y_sample = y_all[sample_idx]
-    pos_ratio_binary = (y_sample > 0.5).mean()
-    pos_ratio_mean = y_sample.mean()
-    auto_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
-    if beat_pos_weight <= 0:
-        beat_pos_weight = auto_pw
-    if downbeat_pos_weight <= 0:
-        if has_db and db_train_path is not None and Path(db_train_path).exists():
-            y_db_sample = np.load(db_train_path, mmap_mode='r')[:sample_size]
-            db_pos_mean = y_db_sample.mean()
-            downbeat_pos_weight = (1 - db_pos_mean) / max(db_pos_mean, 1e-10)
-            print(f"  Downbeat positive ratio: mean={db_pos_mean:.4f}")
-            print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (auto)")
+
+    # Detect multi-channel targets (e.g., instrument model: N × T × 3)
+    num_output_channels = cfg["model"].get("num_output_channels", 0)
+    multichannel_targets = y_sample.ndim == 3 and y_sample.shape[2] > 1
+
+    if multichannel_targets:
+        # Per-channel auto pos_weight for instrument/multi-output models.
+        n_ch = y_sample.shape[2]
+        channel_names = cfg["model"].get("output_channel_names", [f"ch{i}" for i in range(n_ch)])
+        auto_pws = []
+        for ch in range(n_ch):
+            ch_mean = y_sample[:, :, ch].mean()
+            ch_pw = (1 - ch_mean) / max(ch_mean, 1e-10)
+            auto_pws.append(ch_pw)
+            print(f"  {channel_names[ch] if ch < len(channel_names) else f'ch{ch}'}: "
+                  f"positive ratio={ch_mean:.4f}, auto pos_weight={ch_pw:.1f}")
+        # Config can override with a list, e.g., pos_weight: [10.0, 8.0, 5.0]
+        cfg_pw = cfg["training"].get("pos_weight", 0)
+        if isinstance(cfg_pw, list) and len(cfg_pw) == n_ch:
+            per_channel_pw = cfg_pw
+            print(f"  pos_weight: {per_channel_pw} (from config)")
         else:
-            # Heuristic: downbeats occur ~1/4 as often as beats
-            downbeat_pos_weight = beat_pos_weight * 4
-            print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (heuristic 4x beat)")
-    print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
-    print(f"  pos_weight: {beat_pos_weight:.1f} (auto={auto_pw:.1f})")
+            per_channel_pw = auto_pws
+            print(f"  pos_weight: auto {[f'{pw:.1f}' for pw in auto_pws]}")
+    else:
+        pos_ratio_binary = (y_sample > 0.5).mean()
+        pos_ratio_mean = y_sample.mean()
+        auto_pw = (1 - pos_ratio_mean) / max(pos_ratio_mean, 1e-10)
+        if beat_pos_weight <= 0:
+            beat_pos_weight = auto_pw
+        if downbeat_pos_weight <= 0:
+            if has_db and db_train_path is not None and Path(db_train_path).exists():
+                y_db_sample = np.load(db_train_path, mmap_mode='r')[:sample_size]
+                db_pos_mean = y_db_sample.mean()
+                downbeat_pos_weight = (1 - db_pos_mean) / max(db_pos_mean, 1e-10)
+                print(f"  Downbeat positive ratio: mean={db_pos_mean:.4f}")
+                print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (auto)")
+            else:
+                # Heuristic: downbeats occur ~1/4 as often as beats
+                downbeat_pos_weight = beat_pos_weight * 4
+                print(f"  downbeat_pos_weight: {downbeat_pos_weight:.1f} (heuristic 4x beat)")
+        print(f"  Positive ratio: {pos_ratio_binary:.4f} (>0.5), mean={pos_ratio_mean:.4f}")
+        print(f"  pos_weight: {beat_pos_weight:.1f} (auto={auto_pw:.1f})")
 
     num_workers = args.num_workers if args.num_workers is not None else cfg["training"].get("num_workers", 4)
     subsample = args.subsample if args.subsample is not None else cfg["training"].get("subsample", 1.0)
@@ -476,6 +507,7 @@ def main():
             sum_head=cfg["model"].get("sum_head", False),
             num_tempo_bins=num_tempo_bins,
             freq_pos_encoding=cfg["model"].get("freq_pos_encoding", False),
+            num_output_channels=cfg["model"].get("num_output_channels", 0),
         ).to(device)
     elif model_type == "frame_conv1d_pool":
         from models.onset_conv1d_pool import build_onset_conv1d_pool
@@ -500,6 +532,20 @@ def main():
             model_type=model_type,
             residual=cfg["model"].get("residual", False),
         ).to(device)
+
+    # Load pretrained weights for fine-tuning
+    if args.finetune:
+        ft_path = Path(args.finetune)
+        if not ft_path.exists():
+            print(f"ERROR: Finetune model not found: {ft_path}", file=sys.stderr)
+            sys.exit(1)
+        ft_state = torch.load(ft_path, map_location=device, weights_only=True)
+        if isinstance(ft_state, dict) and "state_dict" in ft_state:
+            ft_state = ft_state["state_dict"]
+        model.load_state_dict(ft_state)
+        # Reduce LR 10x for fine-tuning (pretrained features, just adjusting to new labels)
+        lr = lr / 10
+        print(f"Fine-tuning from {ft_path} (LR reduced to {lr:.1e})")
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model ({model_type}): {total_params:,} params")
@@ -545,7 +591,10 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps)
 
     # Build per-channel pos_weight tensor
-    if use_downbeat:
+    if multichannel_targets:
+        pos_weight = torch.tensor(per_channel_pw, dtype=torch.float32, device=device)
+        print(f"Pos weights (per-channel): {per_channel_pw}")
+    elif use_downbeat:
         pos_weight = torch.tensor([beat_pos_weight, downbeat_pos_weight], device=device)
         print(f"Pos weights: beat={beat_pos_weight}, downbeat={downbeat_pos_weight}")
     else:

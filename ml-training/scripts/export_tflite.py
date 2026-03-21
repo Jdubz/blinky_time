@@ -322,7 +322,9 @@ def _transfer_ds_tcn_weights(tf_model: keras.Model, pt_state_dict: dict,
 def build_tf_frame_conv1d(n_mels: int, channels: list[int],
                           kernel_sizes: list[int], window_frames: int,
                           downbeat: bool,
-                          sum_head: bool = False) -> keras.Model:
+                          sum_head: bool = False,
+                          freq_pos_encoding: bool = False,
+                          num_output_channels: int = 0) -> keras.Model:
     """Build TF/Keras equivalent of PyTorch FrameOnsetConv1D.
 
     Causal Conv1D layers with ReLU fused into Conv ops (no separate ReLU op).
@@ -332,11 +334,27 @@ def build_tf_frame_conv1d(n_mels: int, channels: list[int],
       ch0 = sigmoid(logit_0)  (beat)
       ch1 = ch0 * sigmoid(logit_1)  (downbeat ≤ beat)
 
-    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Mul, Quantize, Dequantize.
+    If freq_pos_encoding: adds a learnable per-mel-band bias before convolutions
+    (FAC positional encoding, helps discriminate kicks from hi-hats).
+
+    TFLite ops: Conv2D (Conv1D mapped), Pad, Reshape, Logistic, Mul, Add, Quantize, Dequantize.
     """
-    out_channels = 2 if downbeat else 1
+    out_channels = num_output_channels if num_output_channels > 0 else (2 if downbeat else 1)
     inputs = keras.Input(shape=(window_frames, n_mels), name="mel_input")
     x = inputs
+
+    if freq_pos_encoding:
+        # Learnable frequency position vector (1, 1, n_mels), broadcast-added
+        # to input before convolutions. Folded into the first Conv1D bias at
+        # weight transfer time. The folding is exact for all output timesteps
+        # past the causal padding boundary (t >= k-1), which includes the
+        # firmware's inference position (last frame of the window).
+        #
+        # For the first k-1 output timesteps, the folded bias slightly
+        # over-adds freq_pos (assumes full kernel window sees freq_pos, but
+        # padded zeros don't). This is a minor approximation that only affects
+        # chunk-boundary frames in offline evaluation, not firmware inference.
+        pass  # freq_pos folded into conv1 bias during _transfer_conv1d_weights
 
     for i, (ch, k) in enumerate(zip(channels, kernel_sizes)):
         pad = k - 1
@@ -392,13 +410,31 @@ def build_tf_frame_conv1d_pool(n_mels: int, channels: list[int],
 
 
 def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
-                              channels: list[int]):
+                              channels: list[int],
+                              freq_pos_encoding: bool = False):
     """Transfer FrameOnsetConv1D weights from PyTorch to TF/Keras.
 
     No BatchNorm to worry about — just transpose Conv1D weights.
     Extracts Conv1d layers by name pattern (backbone.N.weight) rather than
     assuming a fixed stride, robust to changes in non-parametric layers.
     """
+    # Frequency position encoding: fold into first Conv1D bias.
+    # conv(x + fp) = conv(x) + conv(fp). Since fp is constant across time,
+    # conv(fp) is a constant per output channel: sum_k sum_in W[c,in,k]*fp[in].
+    # This is exact for all timesteps past the causal padding boundary.
+    freq_pos_bias_delta = None
+    if freq_pos_encoding and "freq_pos" in pt_state_dict:
+        freq_pos_val = pt_state_dict["freq_pos"].numpy().squeeze()  # (n_mels,)
+        # Get first conv's PT weights: (out_ch, in_ch, k)
+        first_conv_key = sorted(
+            [k for k in pt_state_dict if k.startswith("backbone.") and k.endswith(".weight")],
+            key=lambda k: int(k.split(".")[1])
+        )[0]
+        first_w = pt_state_dict[first_conv_key].numpy()  # (out_ch, n_mels, k)
+        # Bias delta: for each output channel, sum W * fp over all kernel positions and input channels
+        # W shape: (out_ch, in_ch, k), fp shape: (in_ch,)
+        # delta[c] = sum_k sum_in W[c, in, k] * fp[in] = sum_k (W[c,:,k] @ fp)
+        freq_pos_bias_delta = np.einsum('oik,i->o', first_w, freq_pos_val)
     # Find all Conv1d layers in backbone by scanning for .weight keys
     backbone_conv_keys = sorted(
         [k for k in pt_state_dict if k.startswith("backbone.") and k.endswith(".weight")],
@@ -413,6 +449,9 @@ def _transfer_conv1d_weights(tf_model: keras.Model, pt_state_dict: dict,
         b_key = w_key.replace(".weight", ".bias")
         pt_w = pt_state_dict[w_key].numpy()  # (out, in, k)
         pt_b = pt_state_dict[b_key].numpy()
+        # Fold freq_pos into first conv bias
+        if i == 0 and freq_pos_bias_delta is not None:
+            pt_b = pt_b + freq_pos_bias_delta
         tf_w = np.transpose(pt_w, (2, 1, 0))  # (k, in, out)
         tf_layer = tf_model.get_layer(f"conv{i+1}")
         expected_shape = tuple(tf_layer.get_weights()[0].shape)
@@ -1011,10 +1050,13 @@ def main():
         window_frames = cfg["model"]["window_frames"]
         dropout = cfg["model"].get("dropout", 0.1)
         sum_head = cfg["model"].get("sum_head", False)
+        freq_pos_encoding = cfg["model"].get("freq_pos_encoding", False)
 
         print(f"Building TF model (type=frame_conv1d, channels={channels}, "
               f"kernels={kernel_sizes}, window={window_frames}, "
-              f"downbeat={use_downbeat}, sum_head={sum_head})...")
+              f"downbeat={use_downbeat}, sum_head={sum_head}, "
+              f"freq_pos={freq_pos_encoding})...")
+        num_output_channels = cfg["model"].get("num_output_channels", 0)
         tf_model = build_tf_frame_conv1d(
             n_mels=n_mels,
             channels=channels,
@@ -1022,8 +1064,11 @@ def main():
             window_frames=window_frames,
             downbeat=use_downbeat,
             sum_head=sum_head,
+            freq_pos_encoding=freq_pos_encoding,
+            num_output_channels=num_output_channels,
         )
-        _transfer_conv1d_weights(tf_model, pt_state, channels)
+        _transfer_conv1d_weights(tf_model, pt_state, channels,
+                                 freq_pos_encoding=freq_pos_encoding)
 
         # Verify weight transfer
         print("Verifying weight transfer...")
@@ -1035,6 +1080,8 @@ def main():
             dropout=dropout,
             downbeat=use_downbeat,
             sum_head=sum_head,
+            freq_pos_encoding=freq_pos_encoding,
+            num_output_channels=num_output_channels,
         )
         pt_model.load_state_dict(pt_state)
         pt_model.eval()
@@ -1044,7 +1091,15 @@ def main():
             pt_out = pt_model(torch.from_numpy(test_input)).numpy()
         tf_out = tf_model.predict(test_input, verbose=0)
         max_diff = np.abs(pt_out - tf_out).max()
-        print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
+        # When freq_pos is folded into conv bias, early timesteps (within the
+        # causal padding boundary) have a small approximation error. Compare
+        # the last frame (firmware inference position) separately.
+        last_diff = np.abs(pt_out[:, -1:, :] - tf_out[:, -1:, :]).max()
+        if freq_pos_encoding and max_diff > 0.001:
+            print(f"  PT vs TF max diff: {max_diff:.6f} (freq_pos bias folding, "
+                  f"last frame diff: {last_diff:.6f} {'OK' if last_diff < 0.001 else 'WARNING'})")
+        else:
+            print(f"  PT vs TF max diff: {max_diff:.6f} {'OK' if max_diff < 0.001 else 'WARNING'}")
 
         inference_frames = window_frames
     elif model_type == "frame_conv1d_pool":
