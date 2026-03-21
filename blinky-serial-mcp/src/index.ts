@@ -250,10 +250,16 @@ interface DeviceRunScore {
     transientBeatOffsets: number[];
     beatEventOffsets: number[];
   };
+  plp: {
+    atTransient: number;  // avg PLP pulse when transients fire (1.0 = perfect alignment)
+    autoCorr: number;     // autocorrelation at BPM lag (1.0 = perfectly periodic)
+    peakiness: number;    // peak/mean ratio (1.0 = flat, >2 = strong pattern)
+    mean: number;         // average PLP value (0.5 = cosine fallback)
+  };
   // Adjusted raw data
   adjustedDetections: Array<{ timestampMs: number; type: string; strength: number }>;
   adjustedBeatEvents: Array<{ timestampMs: number; bpm: number; type: string; predicted?: boolean }>;
-  adjustedMusicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; oss?: number; plpPulse?: number }>;
+  adjustedMusicStates: Array<{ timestampMs: number; active: boolean; bpm: number; phase: number; confidence: number; plpPulse?: number }>;
 }
 
 /**
