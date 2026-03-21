@@ -2,6 +2,11 @@
 // Model size: 13888 bytes (13.6 KB)
 // SHA256 prefix: 6832e15c5415c0af
 // Exported: 2026-03-20T20:50:56Z
+//
+// NOTE: 3-channel instrument model (kick/snare/hihat). Firmware currently
+// reads only channel 0 (kick) via FrameOnsetNN::extractOutput(0). To use
+// all 3 channels, firmware needs updating to combine kick+snare for the
+// onset signal. See RFC_MUSICAL_PATTERN_VISUALIZATION.md.
 
 #ifndef FRAME_ONSET_MODEL_DATA_V8_H
 #define FRAME_ONSET_MODEL_DATA_V8_H

@@ -349,6 +349,7 @@ Instead of phase consistency (which measures lock to beat grid — something we'
 4. **nPVI stability:** nPVI requires at least 4-8 inter-onset intervals for a stable estimate. At 2-4 onsets/second (typical for EDM), that's 2-4 seconds of onset history. The existing 64-slot onset timestamp buffer covers ~16-32 seconds at typical density — more than sufficient. nPVI should be updated every ~500ms (not every frame) to smooth the output.
 5. **nPVI threshold calibration:** The proposed ranges (0-25=metronomic, 25-60=regular, etc.) are from speech prosody literature. Electronic music may cluster differently. Treat these as starting points and calibrate with on-device testing across the 18 EDM test tracks.
 6. **Settings version bump:** New AudioControl layout requires SETTINGS_VERSION increment (v75 → v76) and factory reset on all 7 devices. The `odfGateThreshold` parameter should be fully removed at that time.
+7. **Stream format versioning:** Reusing `ph` and `str` keys with changed semantics will silently break consumers (blinky-console, test scripts). Options: (a) add a `"v":2` field to the stream JSON so consumers can detect the format, (b) use new key names with a deprecation period, or (c) accept the break since all consumers are internal and updated in the same PR. Recommend (a) — minimal cost, prevents silent breakage.
 
 ## References
 

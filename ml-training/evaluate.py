@@ -337,6 +337,8 @@ def evaluate_on_tracks(model_path: str, audio_dir: Path, cfg: dict,
         # Per-channel instrument evaluation (3-channel models: kick/snare/hihat)
         if is_instrument_model and kw_path.exists():
             channel_names = cfg["model"].get("output_channel_names", ["kick", "snare", "hihat"])
+            assert len(channel_names) >= n_out_ch, (
+                f"output_channel_names has {len(channel_names)} entries but model has {n_out_ch} outputs")
             for ch_idx, ch_name in enumerate(channel_names[:n_out_ch]):
                 ch_act = all_activations[:, ch_idx]
                 ch_est = _peak_pick(ch_act, threshold, frame_rate)

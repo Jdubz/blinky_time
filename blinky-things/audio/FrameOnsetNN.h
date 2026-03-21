@@ -29,6 +29,8 @@
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
+// Only ONE model header can be active per build. Versioned headers
+// (frame_onset_model_data_v3.h, etc.) are copied to this path at build time.
 #include "frame_onset_model_data.h"
 
 class FrameOnsetNN {
