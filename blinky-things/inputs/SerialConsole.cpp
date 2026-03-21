@@ -1420,15 +1420,13 @@ void SerialConsole::streamTick() {
 
         Serial.print(F("}"));
 
-        // AudioTracker telemetry (unified rhythm tracking)
-        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"str":0.82,"conf":0.75,"bc":42,"q":0,"bt":12345,"e":0.5,"p":0.8,"cb":0.12,"oss":0.05,"ttb":18,"bp":1,"od":3.2,"db":0.8,"bm":1}
-        // Music stream format (v77):
-        // a = rhythm active, bpm = tempo, ph = phase, str = rhythm strength
-        // conf = periodicity strength, bc = beat count, q = beat event (phase wrap)
-        // e = energy, p = pulse (visual trigger), oss = onset strength
-        // od = onset density (onsets/sec), db = downbeat (0), bm = beat in measure (0)
-        // Debug mode adds: ps = periodicity, pc = pattern confidence,
-        // ic = IOI confidence, ib = IOI peak BPM, be = bar entropy
+        // AudioTracker music stream (v79 — PLP architecture)
+        // Format: "m":{"a":1,"bpm":125.3,"ph":0.45,"pp":0.82,"str":0.72,"q":0,"e":0.5,"p":0.8,"od":3.2}
+        // a = rhythm active, bpm = tempo, ph = PLP phase (0-1)
+        // pp = PLP pulse (extracted pattern value), str = rhythm strength
+        // q = beat event (phase wrap), e = energy, p = pulse (transient), od = onset density
+        // Debug adds: conf = ACF periodicity, pc = pattern confidence,
+        // ic = IOI confidence, ib = IOI peak BPM
         if (audioCtrl_) {
             const AudioControl& audio = audioCtrl_->getControl();
 
@@ -1444,33 +1442,22 @@ void SerialConsole::streamTick() {
             Serial.print(audioCtrl_->getCurrentBpm(), 1);
             Serial.print(F(",\"ph\":"));
             Serial.print(currentPhase, 2);
+            Serial.print(F(",\"pp\":"));
+            Serial.print(audio.plpPulse, 3);
             Serial.print(F(",\"str\":"));
             Serial.print(audio.rhythmStrength, 2);
-            Serial.print(F(",\"conf\":"));
-            Serial.print(audioCtrl_->getPeriodicityStrength(), 2);
-            Serial.print(F(",\"bc\":"));
-            Serial.print(audioCtrl_->getBeatCount());
             Serial.print(F(",\"q\":"));
             Serial.print(beatEvent);
-            // Beat timestamp not available in AudioTracker (no discrete beat events)
             Serial.print(F(",\"e\":"));
             Serial.print(audio.energy, 2);
             Serial.print(F(",\"p\":"));
             Serial.print(audio.pulse, 2);
-            Serial.print(F(",\"oss\":"));
-            Serial.print(audioCtrl_->getLastOnsetStrength(), 3);
             Serial.print(F(",\"od\":"));
             Serial.print(audioCtrl_->getOnsetDensity(), 1);
-            Serial.print(F(",\"pp\":"));
-            Serial.print(audio.plpPulse, 3);
-            Serial.print(F(",\"db\":"));
-            Serial.print(audio.downbeat, 2);
-            Serial.print(F(",\"bm\":"));
-            Serial.print(audio.beatInMeasure);
 
-            // Debug mode: add tempo + pattern diagnostics
+            // Debug mode: add diagnostics
             if (streamDebug_) {
-                Serial.print(F(",\"ps\":"));
+                Serial.print(F(",\"conf\":"));
                 Serial.print(audioCtrl_->getPeriodicityStrength(), 3);
                 Serial.print(F(",\"pc\":"));
                 Serial.print(audioCtrl_->getPatternConfidence(), 3);
@@ -1478,8 +1465,6 @@ void SerialConsole::streamTick() {
                 Serial.print(audioCtrl_->getIoiConfidence(), 3);
                 Serial.print(F(",\"ib\":"));
                 Serial.print(audioCtrl_->getIoiPeakBpm(), 1);
-                Serial.print(F(",\"be\":"));
-                Serial.print(audioCtrl_->getBarEntropy(), 3);
             }
 
             Serial.print(F("}"));

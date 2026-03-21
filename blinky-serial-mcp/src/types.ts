@@ -27,27 +27,21 @@ export interface AudioSample {
 }
 
 export interface MusicModeState {
+  // Always present in stream
   a: number;      // Active (0 or 1)
   bpm: number;    // Tempo (BPM)
   ph: number;     // Phase (0-1, PLP-driven)
+  pp?: number;    // PLP pulse (0-1, extracted energy pattern value)
   str: number;    // Rhythm strength (0-1)
-  conf: number;   // ACF periodicity confidence (0-1)
-  bc: number;     // Beat count (phase wraps)
   q: number;      // Beat event (0 or 1, phase wrap)
-  bt?: number;    // Firmware millis() timestamp of last beat (only when q=1)
   e: number;      // Energy (0-1)
   p: number;      // Pulse (0-1, transient strength)
-  pp?: number;    // PLP pulse (0-1, extracted pattern value at current phase)
-  // Observability fields (always present in stream)
-  oss?: number;   // Raw onset strength
   od?: number;    // Onset density (onsets/sec)
-  bp?: number;    // Beat was predicted (0=fallback, 1=predicted)
-  // Debug fields (only present in debug stream mode)
-  ps?: number;    // Periodicity strength (raw autocorrelation peak)
+  // Debug-only fields (stream debug mode)
+  conf?: number;  // ACF periodicity strength
   pc?: number;    // Pattern confidence
   ic?: number;    // IOI confidence
   ib?: number;    // IOI peak BPM
-  be?: number;    // Bar entropy
 }
 
 export interface LedTelemetry {

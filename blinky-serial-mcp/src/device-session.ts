@@ -65,10 +65,8 @@ export class DeviceSession {
     this.serial.on('music', (state: MusicModeState) => {
       this.lastMusicState = state;
 
-      // Establish firmware time offset from first beat event in music stream (bt field when q=1)
-      if (this.firmwareTimeOffset === null && state.bt !== undefined && state.bt > 0) {
-        this.firmwareTimeOffset = Date.now() - state.bt;
-      }
+      // Note: firmware beat timestamps (bt field) removed in v79 stream cleanup.
+      // Beat timing uses host-side Date.now() timestamps.
 
       if (this._testStartTime !== null) {
         const timestampMs = Date.now() - this._testStartTime;
@@ -77,27 +75,19 @@ export class DeviceSession {
           active: state.a === 1,
           bpm: state.bpm,
           phase: state.ph,
-          confidence: state.conf,
-          oss: state.oss,
+          confidence: state.str,
           plpPulse: state.pp,
         });
       }
     });
 
-    this.serial.on('beat', (beat: { type: string; bpm: number; predicted?: boolean; bt?: number }) => {
+    this.serial.on('beat', (beat: { type: string; bpm: number }) => {
       if (this._testStartTime !== null) {
-        let timestampMs: number;
-        // Use firmware-precise beat timestamp when available
-        if (beat.bt !== undefined && beat.bt > 0 && this.firmwareTimeOffset !== null) {
-          timestampMs = (beat.bt + this.firmwareTimeOffset) - this._testStartTime;
-        } else {
-          timestampMs = Date.now() - this._testStartTime;
-        }
+        const timestampMs = Date.now() - this._testStartTime;
         this.beatEventBuffer.push({
           timestampMs,
           bpm: beat.bpm,
           type: beat.type as 'quarter',
-          predicted: beat.predicted,
         });
       }
     });
