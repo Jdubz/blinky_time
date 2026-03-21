@@ -1646,11 +1646,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ? bpmValues.reduce((sum, b) => sum + Math.pow(b - avgBpm, 2), 0) / bpmValues.length : 0;
         const bpmStdDev = Math.sqrt(bpmVariance);
 
-        // Confidence statistics
-        const confValues = activeStates.map(s => s.conf);
+        // Confidence statistics (use str for rhythm strength, conf is debug-only)
+        const confValues = activeStates.map(s => s.str);
         const avgConf = confValues.length > 0
           ? confValues.reduce((a, b) => a + b, 0) / confValues.length : 0;
-        const finalConf = samples.length > 0 ? samples[samples.length - 1].conf : 0;
+        const finalConf = samples.length > 0 ? samples[samples.length - 1].str : 0;
 
         // Stability assessment
         let stability: string;
@@ -1697,7 +1697,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (lastSample && lastSample.pp !== undefined) {
           response.debug = {
             plpPulse: parseFloat(lastSample.pp.toFixed(3)),
-            periodicityStrength: lastSample.ps !== undefined ? parseFloat(lastSample.ps.toFixed(3)) : null,
+            periodicityStrength: lastSample.conf !== undefined ? parseFloat(lastSample.conf.toFixed(3)) : null,
             patternConfidence: lastSample.pc !== undefined ? parseFloat(lastSample.pc.toFixed(3)) : null,
           };
         }
