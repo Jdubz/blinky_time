@@ -325,6 +325,21 @@ def main():
 
     cfg = load_config(args.config)
 
+    # Validate labels_type vs num_output_channels consistency.
+    # instrument labels produce 3-channel targets; the model must match.
+    labels_type = cfg.get("labels", {}).get("labels_type", "consensus")
+    num_output_channels = cfg["model"].get("num_output_channels", 0)
+    if labels_type == "instrument" and num_output_channels != 3:
+        print(f"ERROR: labels_type='instrument' produces 3-channel targets but "
+              f"num_output_channels={num_output_channels}. Set num_output_channels: 3 in config.",
+              file=sys.stderr)
+        sys.exit(1)
+    if num_output_channels == 3 and labels_type != "instrument":
+        print(f"ERROR: num_output_channels=3 but labels_type='{labels_type}'. "
+              f"Set labels_type: 'instrument' to generate 3-channel targets.",
+              file=sys.stderr)
+        sys.exit(1)
+
     data_dir = Path(args.data_dir or cfg["data"]["processed_dir"])
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

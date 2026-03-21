@@ -300,7 +300,7 @@ public:
 
         // Rhythm activation
         float activationThreshold;
-        float odfGateThreshold;
+        float odfGateThreshold;     // DEPRECATED v76: gate removed, field kept for struct layout compat. Not read by AudioTracker::update().
 
         // Phase-aware onset confidence modulation (v75, replaces binary boost/suppress)
         float pulseBoostOnBeat;

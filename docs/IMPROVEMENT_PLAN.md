@@ -283,9 +283,9 @@ Heydari et al. (ICASSP 2022) — 1D probabilistic state space with "jump-back re
 
 ## Current Bottlenecks
 
-1. **Phase alignment — THE PRIMARY BOTTLENECK.** PLL correction and pulse modulation only operate near phase 0.0. At half-time BPM, real beats at phase 0.5 get no correction/boost. This is a design flaw (asymmetric octave handling). Fix: subdivision-aware PLL correction and modulation (v76 Phase 1). See `docs/PHASE_CONFIDENCE_ARCHITECTURE.md`.
+1. **Phase alignment — PLL REPLACED BY PLP.** On-device A/B testing (March 20) measured phase consistency of 0.035-0.042 across ALL models (v1, v3, v7, v8) — essentially random. Root cause: onset-gated PLL cannot converge because the NN can't distinguish on-beat from off-beat onsets (chicken-and-egg). The ODF information gate was also starving the PLL (fixed, but phase still didn't lock). **Decision: replace PLL with Predominant Local Pulse (PLP, Meier 2024).** PLP creates a smooth pulse signal via sinusoidal kernel overlap-add — phase emerges from constructive interference without requiring onset-beat discrimination. See `docs/RFC_MUSICAL_PATTERN_VISUALIZATION.md`.
 
-2. **Onset/phase circular reliability problem.** The NN detects onsets but can't tell if they're on-beat. The DSP estimates BPM/phase but the PLL needs on-beat onsets to correct. Neither bootstraps the other. Fix: confidence modulation — modulate onset visual impact by phase agreement instead of correcting timing (v76 Phase 2).
+2. **Onset/phase circular reliability problem — RESOLVED by architecture change.** PLP doesn't depend on onset-beat classification. It uses spectral flux periodicity (same ACF input) to synthesize a smooth pulse. The NN onset detector continues to drive visual sparks/flashes independently.
 
 3. ~~**~135 BPM gravity well**~~ — **LOW PRIORITY.** Octave errors are visually acceptable (half/double time still looks rhythmic). Phase grid alignment matters; octave accuracy does not. Literature A/B tests (March 18) running on blinkyhost — may improve BPM as a side effect but this is not the visual priority.
 

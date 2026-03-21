@@ -29,8 +29,9 @@
 #include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
-// Only ONE model header can be active per build. Versioned headers
-// (frame_onset_model_data_v3.h, etc.) are copied to this path at build time.
+// Only ONE model header can be active per build. To deploy a versioned model:
+//   cp blinky-things/audio/frame_onset_model_data_v3.h blinky-things/audio/frame_onset_model_data.h
+// The export_tflite.py script writes directly to this path by default.
 #include "frame_onset_model_data.h"
 
 class FrameOnsetNN {
