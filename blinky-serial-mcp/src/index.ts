@@ -1390,7 +1390,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           if (musicState.a === 1) {
             musicActiveCount++;
             bpmSum += musicState.bpm;
-            confSum += musicState.conf;
+            confSum += musicState.str;
           }
           if (musicState.q === 1) beatCount++;
         };
